@@ -31,12 +31,15 @@ function worktreeMatches(w, repo, q) {
 // worktreeGroups: repositories with the rows the filter keeps, biggest
 // first (the list is where disk comes back). filter.state is '' (all) or a
 // state; filter.stale keeps stale rows only; filter.q is the search text.
-function worktreeGroups(rep, filter) {
+// term is the header search box's text (lowercased): a row stays only if its
+// branch, path, repository, state or reasons contain it.
+function worktreeGroups(rep, filter, term) {
   const f = filter || {};
   const groups = [];
   for (const repo of (rep && rep.repos) || []) {
     const rows = (repo.worktrees || []).filter(w => w.state !== 'main'
-      && (!f.state || w.state === f.state) && (!f.stale || w.stale) && worktreeMatches(w, repo, f.q));
+      && (!f.state || w.state === f.state) && (!f.stale || w.stale) && worktreeMatches(w, repo, f.q)
+      && matchesSearch(term, w.branch, w.path, repo.path, w.state, w.reasons));
     if (rows.length) groups.push({ repo, rows });
   }
   // A repository that could not be read (moved, deleted) comes first: its
@@ -457,9 +460,11 @@ function worktreeRemovalHTML(rm) {
   return `<p class="wt-removal wt-removal-failed" role="alert">${text}</p>`;
 }
 
-// worktreeRowHTML: one worktree. Remove on every row that can be removed:
-// state remove runs git worktree remove, review and keep move the folder to
-// the Trash (disabled, with the reason, when the daemon would refuse). Prune
+// worktreeRowHTML: one worktree. Remove on every row that can be removed,
+// in one of three looks: state remove (confirmed safe) is a solid red Remove
+// that runs git worktree remove; review and keep (not confirmed) are an amber
+// outlined Remove… that moves the folder to the Trash; a row the daemon would
+// refuse is a greyed Remove, disabled, with the reason. Prune
 // only on state prune; the daemon enforces the same rules again on the
 // request. Ask <harness> only for live eligible sessions; Ask advisor on
 // review and keep. Discuss on every row the daemon can inspect. A running
@@ -475,17 +480,19 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable) {
       + (w.reconnect ? `<button type="button" class="btn btn-sm" data-action="worktree-reconnect" data-path="${escapeHTML(w.path)}" data-repo="${escapeHTML(w.reconnect)}">Reconnect</button>` : '')
       + `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-trash-orphan" data-path="${escapeHTML(w.path)}">Move to Trash</button>`;
   } else if (w.state === 'remove') {
+    const safe = 'Safe to remove' + ((w.reasons || [])[0] ? ': ' + w.reasons[0] : '');
     action = removal && removal.state === 'running'
       ? '<button type="button" class="btn btn-danger btn-sm" disabled>Removing…</button>'
-      : `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-remove" data-path="${escapeHTML(w.path)}" data-branch="${escapeHTML(branch)}">${removal && removal.state === 'failed' ? 'Try again' : 'Remove'}</button>`;
+      : `<button type="button" class="btn btn-danger-solid btn-sm" data-action="worktree-remove" data-path="${escapeHTML(w.path)}" data-branch="${escapeHTML(branch)}" title="${escapeHTML(safe)}">${removal && removal.state === 'failed' ? 'Try again' : 'Remove'}</button>`;
   } else if (w.state === 'prune') {
     action = `<button type="button" class="btn btn-sm" data-action="worktree-prune" data-repo="${escapeHTML(repo.path)}">Prune</button>`;
   } else if (w.state === 'review' || w.state === 'keep') {
     const busy = ask && ask.status === 'running' ? ' disabled' : '';
     const block = worktreeTrashBlock(w);
+    const unsure = 'Not confirmed safe' + ((w.reasons || []).length ? ': ' + w.reasons.join('; ') : '') + '. Moves the folder to the Trash; the branch stays in git';
     action = (block
-      ? `<button type="button" class="btn btn-danger btn-sm" disabled title="${escapeHTML('Cannot remove: ' + block)}">Remove</button>`
-      : `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-review-trash" data-path="${escapeHTML(w.path)}" title="Move the folder to the Trash; the branch stays in git">Remove</button>`)
+      ? `<button type="button" class="btn btn-sm" disabled title="${escapeHTML('Cannot remove: ' + block)}">Remove</button>`
+      : `<button type="button" class="btn btn-warn-outline btn-sm" data-action="worktree-review-trash" data-path="${escapeHTML(w.path)}" title="${escapeHTML(unsure)}">Remove…</button>`)
       + (askable ? `<button type="button" class="btn btn-primary btn-sm" data-action="worktree-ask" data-path="${escapeHTML(w.path)}" title="Ask active ${escapeHTML(askable)} agent"${busy}>Ask ${escapeHTML(askable)}</button>` : '')
       + `<button type="button" class="btn btn-sm" data-action="worktree-advise" data-path="${escapeHTML(w.path)}" title="Get a local advisory note; no agent is resumed">Ask advisor</button>`;
   }
@@ -517,10 +524,41 @@ function removableRows(repo, removals) {
     && !((removals || {})[w.path] && removals[w.path].state === 'running'));
 }
 
-// worktreeGroupHTML: one repository block with its rows and a Hide button.
-// Two or more removable rows add Remove all with their count and size.
-// advice, asks and removals map a worktree path to its advisor note, latest
-// ask and latest removal.
+// worktreeAdvisable: a row the local advisor can write a note for (git still
+// records it and it is not main or prune).
+function worktreeAdvisable(w) {
+  return !w.orphan && (w.state === 'keep' || w.state === 'review' || w.state === 'remove');
+}
+
+// worktreeGroupAsksHTML: Ask advisor about all (a group with a keep, review
+// or remove row) and Discuss all (a group with a non-main row), beside Hide
+// repo.
+function worktreeGroupAsksHTML(g) {
+  // The daemon asks about every row of the repository, not the rows a filter
+  // leaves visible: count and offer from all of them.
+  const all = g.repo.worktrees || [];
+  const advisable = all.filter(worktreeAdvisable).length;
+  const discussable = all.filter(w => w.state !== 'main').length;
+  const repo = escapeHTML(g.repo.path);
+  return (advisable
+      ? `<button type="button" class="link-btn wt-group-ask" data-action="worktree-advise-all" data-repo="${repo}" title="Ask the local advisor for a note on each keep, review and remove worktree of this repository, one at a time">Ask advisor about all ${advisable}</button>` : '')
+    + (discussable
+      ? `<button type="button" class="link-btn wt-group-ask" data-action="worktree-discuss-all" data-repo="${repo}" title="Ask the Agent tab about this repository's worktrees">Discuss all ${discussable}</button>` : '');
+}
+
+// worktreeGroupAskText: the toast after a group ask the advisor took. The
+// daemon names the rows it covers and how many it left out (40 at a time).
+function worktreeGroupAskText(res) {
+  const n = Number(res && res.rows) || 0;
+  const skipped = Number(res && res.skipped) || 0;
+  return `Asking the advisor about ${n} worktree${n === 1 ? '' : 's'}, one at a time — notes appear under each row as it answers`
+    + (skipped ? ` (${skipped} more not asked: 40 at a time)` : '');
+}
+
+// worktreeGroupHTML: one repository block with its rows, the group asks and a
+// Hide button. Two or more removable rows add Remove all with their count and
+// size. advice, asks and removals map a worktree path to its advisor note,
+// latest ask and latest removal.
 function worktreeGroupHTML(g, advice, asks, removals, askable) {
   const meta = [g.repo.default_branch, g.repo.source].filter(Boolean).join(' · ');
   return `<section class="wt-repo">
@@ -530,7 +568,7 @@ function worktreeGroupHTML(g, advice, asks, removals, askable) {
       ${g.repo.size_bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.repo.size_bytes))}</span>` : ''}
       ${g.repo.error
         ? `<span class="wt-repo-error">${escapeHTML(g.repo.error)} — the folders below still point to it</span>`
-        : worktreeRemoveAllHTML(g.repo, removals)
+        : worktreeRemoveAllHTML(g.repo, removals) + worktreeGroupAsksHTML(g)
           + `<button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>`}
     </div>
     ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path], (removals || {})[w.path], (askable || {})[w.path])).join('')}
@@ -554,22 +592,29 @@ function worktreeFilterHTML(counts, filter) {
 }
 
 // worktreesSummaryText: the scan line under the header. A cached scan
-// names its age; a background rescan says so.
-function worktreesSummaryText(rep, nowMs) {
+// names its age; a background rescan says so. shown is the rows the panel
+// filter and the header search leave visible; fewer than the report holds
+// adds "N shown" (the counts above stay the report's).
+function worktreesSummaryText(rep, nowMs, shown) {
   if (!rep) return '';
   const s = rep.summary || {};
   const age = rep.cached && fmtAge(rep.generated_at, nowMs);
   const when = rep.cached ? (age ? `scanned ${age} ago` : 'cached scan') : `scanned in ${(Number(rep.duration_ms || 0) / 1000).toFixed(1)}s`;
   const n = (v, one, many) => `${v || 0} ${v === 1 ? one : many}`;
-  return `${n(s.repos, 'repo', 'repos')} · ${n(s.worktrees, 'worktree', 'worktrees')} · stale after ${rep.stale_days || 0} idle days · ${when}`
+  const hidden = shown != null && shown < worktreeStateCounts(rep).all ? ` · ${shown} shown` : '';
+  return `${n(s.repos, 'repo', 'repos')} · ${n(s.worktrees, 'worktree', 'worktrees')} · stale after ${rep.stale_days || 0} idle days · ${when}${hidden}`
     + (rep.refreshing ? ' · refreshing…' : '');
 }
+
+// WORKTREE_LEGEND: what the three Remove looks mean, under the summary.
+const WORKTREE_LEGEND = 'Remove: confirmed safe · Remove…: not confirmed, goes to the Trash · greyed: blocked';
 
 function renderWorktrees() {
   const SA = window.SA;
   const container = document.getElementById('worktrees-container');
   const pills = document.getElementById('worktree-pills');
   const summary = document.getElementById('worktrees-summary');
+  const legend = document.getElementById('worktrees-legend');
   const disk = document.getElementById('worktrees-disk');
   const errors = document.getElementById('worktrees-errors');
   const reclaim = document.getElementById('worktrees-reclaim');
@@ -591,13 +636,20 @@ function renderWorktrees() {
       : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${escapeHTML(state.error || 'No scan yet.')}</span></div>`;
     if (pills) pills.innerHTML = '';
     if (summary) summary.textContent = '';
+    if (legend) legend.hidden = true;
     if (disk) disk.innerHTML = '';
     if (errors) errors.hidden = true;
     return;
   }
   const counts = worktreeStateCounts(rep);
+  const groups = worktreeGroups(rep, state.filter, SA.globalSearchTerm ? SA.globalSearchTerm() : '');
+  const shown = groups.reduce((n, g) => n + g.rows.length, 0);
   if (pills) pills.innerHTML = worktreeFilterHTML(counts, state.filter);
-  if (summary) summary.textContent = worktreesSummaryText(rep) + (state.loading ? ' · rescanning…' : '');
+  if (summary) summary.textContent = worktreesSummaryText(rep, undefined, shown) + (state.loading ? ' · rescanning…' : '');
+  if (legend) {
+    legend.textContent = WORKTREE_LEGEND;
+    legend.hidden = counts.all === 0;
+  }
   if (disk) {
     disk.innerHTML = worktreeDiskHTML(rep);
     applyInlineMetrics(disk);
@@ -607,7 +659,6 @@ function renderWorktrees() {
     errors.hidden = list.length === 0;
     errors.innerHTML = list.map(e => `<li>${escapeHTML(e)}</li>`).join('');
   }
-  const groups = worktreeGroups(rep, state.filter);
   container.innerHTML = groups.length
     ? groups.map(g => worktreeGroupHTML(g, rep.advice, rep.asks, rep.removals, rep.askable)).join('')
     : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${counts.all ? 'No worktree matches this filter.' : 'No linked worktrees found. Add a repository above if one is missing.'}</span></div>`;
@@ -630,12 +681,15 @@ function clutterKindLabel(kind) {
 }
 
 // clutterGroups: items the filter keeps, grouped by project, biggest group
-// first; items keep the daemon's biggest-first order.
-function clutterGroups(rep, filter) {
+// first; items keep the daemon's biggest-first order. term is the header
+// search box's text (lowercased): an item stays only if its path, project or
+// kind contains it.
+function clutterGroups(rep, filter, term) {
   const f = filter || {};
   const byProject = new Map();
   for (const it of (rep && rep.items) || []) {
     if (f.kind && it.kind !== f.kind) continue;
+    if (!matchesSearch(term, it.path, it.project, it.kind, clutterKindLabel(it.kind))) continue;
     const key = it.project || '';
     if (!byProject.has(key)) byProject.set(key, { project: key, items: [], bytes: 0 });
     const g = byProject.get(key);
@@ -737,8 +791,9 @@ function renderClutter() {
   }
   if (pills) pills.innerHTML = clutterPillsHTML(rep, state.filter);
   if (summary) summary.textContent = clutterSummaryText(rep) + (state.loading ? ' · rescanning…' : '');
-  const groups = clutterGroups(rep, state.filter);
+  const term = SA.globalSearchTerm ? SA.globalSearchTerm() : '';
+  const groups = clutterGroups(rep, state.filter, term);
   container.innerHTML = groups.length
     ? groups.map(g => clutterGroupHTML(g, state.expanded, rep.advice)).join('')
-    : '<div class="empty"><svg class="icon"><use href="#i-server"/></svg><span>Nothing to clear.</span></div>';
+    : `<div class="empty"><svg class="icon"><use href="#i-server"/></svg><span>${term && (rep.items || []).length ? 'No clutter matches the search.' : 'Nothing to clear.'}</span></div>`;
 }

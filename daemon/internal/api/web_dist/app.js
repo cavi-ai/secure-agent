@@ -2246,10 +2246,11 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // Discuss: the daemon writes the question from the worktree's fresh facts
-  // and the local model answers in the Agent tab's conversation.
-  window.discussWorktree = async function(path) {
+  // (a repository's, from its cached report) and the local model answers in
+  // the Agent tab's conversation. target is {path} or {repo}.
+  async function discussWorktreeTarget(target) {
     try {
-      const res = await agentFetch('/agent/worktree', { method: 'POST', body: { path } });
+      const res = await agentFetch('/agent/worktree', { method: 'POST', body: target });
       if (res && res.message && res.message.id) {
         const chat = agentState.chat || (agentState.chat = { messages: [] });
         agentState.readVersion.chat = (agentState.readVersion.chat || 0) + 1;
@@ -2261,13 +2262,29 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     switchTab('agent');
-  };
+  }
+  window.discussWorktree = path => discussWorktreeTarget({ path });
+  window.discussWorktreeGroup = repo => discussWorktreeTarget({ repo });
 
   // Ask the local advisor for a note. The note is looked up on every GET, so
   // a few cheap re-reads of the cached report pick it up when the model
-  // answers; no rescan.
+  // answers; no rescan. A group ask answers one row after another, so it
+  // reads for longer.
   const WORKTREE_NOTE_POLLS = 6;
+  // A group ask's notes arrive one by one (about 5-15 s each, up to 40 rows).
+  const WORKTREE_GROUP_NOTE_POLLS = 60;
   const WORKTREE_NOTE_EVERY_MS = 10000;
+  async function pollWorktreeNotes(polls, answered) {
+    for (let i = 0; i < polls; i++) {
+      await new Promise(res => setTimeout(res, WORKTREE_NOTE_EVERY_MS));
+      const g = await apiFetch('/worktrees', { timeoutMs: WORKTREE_TIMEOUT_MS });
+      if (!g.ok) break;
+      const rep = await g.json();
+      worktreesState.report = rep;
+      markDirty('worktrees');
+      if (answered(rep.advice || {})) break;
+    }
+  }
   window.adviseWorktree = async function(path) {
     try {
       const { r, text, json } = await postWorktree('/worktrees/advise', { path });
@@ -2277,15 +2294,29 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
       showToast('Asked the local advisor — the note appears under the row when it answers', 'info');
-      for (let i = 0; i < WORKTREE_NOTE_POLLS; i++) {
-        await new Promise(res => setTimeout(res, WORKTREE_NOTE_EVERY_MS));
-        const g = await apiFetch('/worktrees', { timeoutMs: WORKTREE_TIMEOUT_MS });
-        if (!g.ok) break;
-        const rep = await g.json();
-        worktreesState.report = rep;
-        markDirty('worktrees');
-        if (rep.advice && rep.advice[path]) break;
+      await pollWorktreeNotes(WORKTREE_NOTE_POLLS, advice => advice[path]);
+    } catch (err) {
+      showToast('Failed to ask the advisor: ' + (err.message || err), 'danger');
+    }
+  };
+
+  // Ask the advisor about a whole repository: the daemon answers 202 with the
+  // number of rows it will work through, and the notes arrive row by row.
+  window.adviseWorktreeGroup = async function(repo) {
+    try {
+      const askedAt = Date.now() - 1000; // stored note times may be whole seconds
+      const { r, text, json } = await postWorktree('/worktrees/advise', { repo });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      if (!json || !json.queued) {
+        showToast('The advisor is off or busy — no note queued', 'info');
+        return;
       }
+      showToast(worktreeGroupAskText(json), 'info');
+      // The daemon hands the advisor one row at a time; poll the rows it
+      // named until each has a note taken after this ask.
+      const paths = json.paths || [];
+      await pollWorktreeNotes(WORKTREE_GROUP_NOTE_POLLS, advice => paths.length > 0
+        && paths.every(p => advice[p] && Date.parse(advice[p].created_at) >= askedAt));
     } catch (err) {
       showToast('Failed to ask the advisor: ' + (err.message || err), 'danger');
     }
@@ -4147,6 +4178,14 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'worktree-advise':
         e.preventDefault();
         window.adviseWorktree(d.path);
+        break;
+      case 'worktree-advise-all':
+        e.preventDefault();
+        window.adviseWorktreeGroup(d.repo);
+        break;
+      case 'worktree-discuss-all':
+        e.preventDefault();
+        window.discussWorktreeGroup(d.repo);
         break;
       case 'worktree-ask':
         e.preventDefault();

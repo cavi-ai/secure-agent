@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -190,9 +192,219 @@ func (a *API) worktreeNotes(rep worktreehunter.ScanReport) map[string]model.Advi
 	return notes
 }
 
-// handleWorktreeAdvise queues one worktree ({"path"}) for an advisory note
-// from the local model. The note is displayed beside the row; it never
-// changes the verdict or what Remove accepts.
+// groupAdviseMaxRows bounds one group ask; the rest are skipped.
+const groupAdviseMaxRows = 40
+
+// A group ask hands the advisor one note at a time and waits for it, so the
+// advisor's queue, shared with flag triage and guard recommendations, never
+// holds more than one of them. Variables so a test can shorten them.
+var (
+	// groupAdviseTimeout bounds the background run of one group ask.
+	groupAdviseTimeout = time.Hour
+	// groupAdviseNoteWait bounds the wait for one note; an on-request
+	// advisor call has a 5-minute deadline, plus its time in the queue.
+	groupAdviseNoteWait = 6 * time.Minute
+	// groupAdvisePoll is how often the store is read for that note.
+	groupAdvisePoll = 2 * time.Second
+)
+
+// worktreeTarget decodes {"path"} or {"repo"}: exactly one, absolute. A
+// refusal is already answered.
+func worktreeTarget(w http.ResponseWriter, r *http.Request) (path, repo string, ok bool) {
+	var req struct {
+		Path string `json:"path"`
+		Repo string `json:"repo"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Path == "") == (req.Repo == "") ||
+		(req.Path != "" && !filepath.IsAbs(req.Path)) || (req.Repo != "" && !filepath.IsAbs(req.Repo)) {
+		http.Error(w, `Invalid payload: {"path"} or {"repo"} (absolute)`, http.StatusBadRequest)
+		return "", "", false
+	}
+	if req.Repo != "" {
+		return "", filepath.Clean(req.Repo), true
+	}
+	return req.Path, "", true
+}
+
+// reportRepo finds a repository in a report by its main worktree path.
+func reportRepo(rep worktreehunter.ScanReport, path string) (worktreehunter.RepoReport, bool) {
+	for _, repo := range rep.Repos {
+		if repo.Path == path {
+			return repo, true
+		}
+	}
+	return worktreehunter.RepoReport{}, false
+}
+
+// groupAdvisePaths lists the rows a group ask covers: keep, review and
+// remove rows git still records, at most groupAdviseMaxRows; skipped counts
+// the rest.
+func groupAdvisePaths(repo worktreehunter.RepoReport) (paths []string, skipped int) {
+	for _, wt := range repo.Worktrees {
+		if wt.Orphan || (wt.State != worktreehunter.StateKeep && wt.State != worktreehunter.StateReview && wt.State != worktreehunter.StateRemove) {
+			continue
+		}
+		if len(paths) == groupAdviseMaxRows {
+			skipped++
+			continue
+		}
+		paths = append(paths, wt.Path)
+	}
+	return paths, skipped
+}
+
+// startGroupAdvise marks a repository's group ask as running; false when any
+// group ask already is (one at a time keeps the advisor's queue short).
+func (a *API) startGroupAdvise(repo string) bool {
+	a.groupAdviseMu.Lock()
+	defer a.groupAdviseMu.Unlock()
+	if len(a.groupAdvise) > 0 {
+		return false
+	}
+	if a.groupAdvise == nil {
+		a.groupAdvise = map[string]bool{}
+	}
+	a.groupAdvise[repo] = true
+	return true
+}
+
+func (a *API) finishGroupAdvise(repo string) {
+	a.groupAdviseMu.Lock()
+	defer a.groupAdviseMu.Unlock()
+	delete(a.groupAdvise, repo)
+}
+
+// adviseRepo asks the advisor about every keep, review and remove row of a
+// repository in the cached report. The first row is handed over before the
+// answer, so an advisor that is off or busy says so (200, queued 0) as a
+// single ask does; the rest follow in the background, each once the previous
+// note is stored (adviseRest). 202 lists the paths it covers.
+func (a *API) adviseRepo(w http.ResponseWriter, r *http.Request, repoPath string) {
+	repo, ok := reportRepo(a.worktrees.Report(r.Context(), false), repoPath)
+	if !ok {
+		http.Error(w, "repository is not in the worktree report", http.StatusNotFound)
+		return
+	}
+	paths, skipped := groupAdvisePaths(repo)
+	if len(paths) == 0 {
+		http.Error(w, "the repository has no keep, review or remove worktree to ask about", http.StatusConflict)
+		return
+	}
+	if !a.startGroupAdvise(repo.Path) {
+		http.Error(w, "an advisor group ask is already running", http.StatusConflict)
+		return
+	}
+	var subject string
+	var at time.Time
+	next := 0
+	for next < len(paths) && subject == "" {
+		s, t, queued, err := a.askWorktreeNote(r.Context(), paths[next])
+		next++
+		if err != nil {
+			log.Printf("api: group advice for %s: skipped %s: %v", repo.Path, paths[next-1], err)
+			continue
+		}
+		if !queued {
+			a.finishGroupAdvise(repo.Path)
+			writeJSON(w, map[string]any{"status": "ok", "queued": 0, "rows": len(paths), "skipped": skipped})
+			return
+		}
+		subject, at = s, t
+	}
+	if subject == "" {
+		a.finishGroupAdvise(repo.Path)
+		http.Error(w, "none of the repository's worktrees could be inspected", http.StatusConflict)
+		return
+	}
+	if skipped > 0 {
+		log.Printf("api: group advice for %s: asking about %d of %d worktrees", repo.Path, len(paths), len(paths)+skipped)
+	}
+	go a.adviseRest(repo.Path, subject, at, paths[next:])
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]any{"status": "accepted", "queued": 1, "rows": len(paths), "skipped": skipped, "paths": paths})
+}
+
+// lifetime is the serving context, or Background before the API serves
+// (tests drive handlers directly).
+func (a *API) lifetime() context.Context {
+	a.groupAdviseMu.Lock()
+	defer a.groupAdviseMu.Unlock()
+	if a.life == nil {
+		return context.Background()
+	}
+	return a.life
+}
+
+// askWorktreeNote inspects one worktree and hands it to the advisor: the
+// note's subject, when it was asked, and whether the advisor took it.
+func (a *API) askWorktreeNote(ctx context.Context, path string) (subject string, at time.Time, queued bool, err error) {
+	adv, err := a.worktrees.AdviceRequest(ctx, path)
+	if err != nil {
+		return "", time.Time{}, false, err
+	}
+	at = time.Now()
+	return advisor.WorktreeSubjectID(adv.Path, adv.Head), at, a.worktreeAdvisor(adv), nil
+}
+
+// adviseRest works through a group ask after its first note: it waits for
+// the previous note, then asks about the next row. It stops when the
+// advisor turns a row away (off or busy), at daemon shutdown or after
+// groupAdviseTimeout, and never takes the daemon down with it.
+func (a *API) adviseRest(repo, subject string, at time.Time, paths []string) {
+	defer a.finishGroupAdvise(repo)
+	defer func() {
+		if p := recover(); p != nil {
+			log.Printf("api: group advice for %s stopped: panic: %v", repo, p)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(a.lifetime(), groupAdviseTimeout)
+	defer cancel()
+	for _, p := range paths {
+		if !a.waitWorktreeNote(ctx, subject, at) {
+			log.Printf("api: group advice for %s stopped: %v", repo, ctx.Err())
+			return
+		}
+		s, t, queued, err := a.askWorktreeNote(ctx, p)
+		if err != nil {
+			log.Printf("api: group advice for %s: skipped %s: %v", repo, p, err)
+			if ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+		if !queued {
+			log.Printf("api: group advice for %s stopped: the advisor is off or busy", repo)
+			return
+		}
+		subject, at = s, t
+	}
+}
+
+// waitWorktreeNote waits until the note for subject asked at at is stored,
+// or groupAdviseNoteWait passes (a failed call stores nothing; the run moves
+// on). False only when ctx ends.
+func (a *API) waitWorktreeNote(ctx context.Context, subject string, at time.Time) bool {
+	deadline := time.Now().Add(groupAdviseNoteWait)
+	// Stored times may be whole seconds.
+	since := at.Truncate(time.Second)
+	for time.Now().Before(deadline) {
+		if v, ok := a.store.AdvisorVerdictFor(subject, "worktree"); ok && !v.CreatedAt.Before(since) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(groupAdvisePoll):
+		}
+	}
+	return ctx.Err() == nil
+}
+
+// handleWorktreeAdvise queues one worktree ({"path"}) or every keep, review
+// and remove row of a repository ({"repo"}) for an advisory note from the
+// local model. The note is displayed beside the row; it never changes the
+// verdict or what Remove accepts.
 func (a *API) handleWorktreeAdvise(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -203,14 +415,15 @@ func (a *API) handleWorktreeAdvise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limitBody(w, r)
-	var req struct {
-		Path string `json:"path"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !filepath.IsAbs(req.Path) {
-		http.Error(w, `Invalid payload: {"path"} (absolute)`, http.StatusBadRequest)
+	path, repo, ok := worktreeTarget(w, r)
+	if !ok {
 		return
 	}
-	adv, err := a.worktrees.AdviceRequest(r.Context(), req.Path)
+	if repo != "" {
+		a.adviseRepo(w, r, repo)
+		return
+	}
+	adv, err := a.worktrees.AdviceRequest(r.Context(), path)
 	switch {
 	case errors.Is(err, worktreehunter.ErrNotWorktree):
 		http.Error(w, err.Error(), http.StatusNotFound)

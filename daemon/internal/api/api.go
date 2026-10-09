@@ -169,16 +169,21 @@ type Status struct {
 type StatusFunc func() Status
 
 type API struct {
-	socketPath       string
-	configPath       string
-	store            *store.Store
-	killer           Killer
-	statusFn         StatusFunc
-	hermes           func() collect.HermesStatus
-	sightings        func(since time.Time) map[string]int
-	routing          func() RoutingInfo
-	worktrees        *worktreehunter.Hunter
-	worktreeAdvisor  func(model.WorktreeAdviceRequest) bool
+	socketPath      string
+	configPath      string
+	store           *store.Store
+	killer          Killer
+	statusFn        StatusFunc
+	hermes          func() collect.HermesStatus
+	sightings       func(since time.Time) map[string]int
+	routing         func() RoutingInfo
+	worktrees       *worktreehunter.Hunter
+	worktreeAdvisor func(model.WorktreeAdviceRequest) bool
+	groupAdviseMu   sync.Mutex
+	groupAdvise     map[string]bool // repositories with a group advisor ask running
+	// life is the serving context: work a handler starts in the background
+	// (a group advisor ask) ends with the daemon, not with the request.
+	life             context.Context
 	egressAdvisor    func(store.EgressEpisode) bool
 	clutter          *clutter.Clutter
 	asker            *agentask.Asker
@@ -852,6 +857,11 @@ func ListenUnixSocket(path string) (net.Listener, error) {
 // ServeListener owns the already-bound listener and closes it on every exit.
 func (a *API) ServeListener(ctx context.Context, listener net.Listener) (serveErr error) {
 	defer listener.Close()
+	a.groupAdviseMu.Lock()
+	if a.life == nil {
+		a.life = ctx
+	}
+	a.groupAdviseMu.Unlock()
 	requestCtx, cancelRequests := context.WithCancel(ctx)
 	server := &http.Server{
 		Handler:     a.gate(a.peerChk, a.buildMux()),

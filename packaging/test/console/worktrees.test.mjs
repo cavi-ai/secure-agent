@@ -14,6 +14,12 @@ vm.createContext(ctx);
 for (const f of ['lib.js', 'tab-worktrees.js']) {
   vm.runInContext(readFileSync(path.join(webDist, f), 'utf8'), ctx, { filename: f });
 }
+const { worktreeGroupAskText } = ctx;
+test('worktreeGroupAskText: how many rows, one at a time, and how many were left out', () => {
+  assert.equal(worktreeGroupAskText({ rows: 3, skipped: 0 }), 'Asking the advisor about 3 worktrees, one at a time — notes appear under each row as it answers');
+  assert.equal(worktreeGroupAskText({ rows: 1 }), 'Asking the advisor about 1 worktree, one at a time — notes appear under each row as it answers');
+  assert.equal(worktreeGroupAskText({ rows: 40, skipped: 3 }), 'Asking the advisor about 40 worktrees, one at a time — notes appear under each row as it answers (3 more not asked: 40 at a time)');
+});
 const { worktreeStateCounts, worktreeGroups, worktreeRowHTML, worktreeGroupHTML, worktreePathLabel, worktreeFilterHTML, worktreesSummaryText, worktreeDiskHTML, worktreeSizeLabel, fmtDisk,
   clutterGroups, clutterItemHTML, clutterGroupHTML, clutterPillsHTML, clutterSummaryText,
   worktreeMatches, niceBytesCeil, removableEverywhere, reclaimTilesHTML, reclaimChartHTML, cleanupHistoryHTML, cleanupKind, cleanupEntryTitle,
@@ -91,7 +97,7 @@ test('Remove on review and keep rows: enabled, opens the Trash confirmation; blo
   const repo = { path: REPO };
   const row = extra => ({ path: REPO + '/.worktrees/x', branch: 'feat/x', state: 'keep', idle_days: 1, reasons: ['1 uncommitted change'], ...extra });
   const enabled = worktreeRowHTML(row(), repo);
-  assert.match(enabled, /<button type="button" class="btn btn-danger btn-sm" data-action="worktree-review-trash" data-path="\/Users\/x\/code\/app\/\.worktrees\/x"[^>]*>Remove<\/button>/);
+  assert.match(enabled, /<button type="button" class="btn btn-warn-outline btn-sm" data-action="worktree-review-trash" data-path="\/Users\/x\/code\/app\/\.worktrees\/x"[^>]*>Remove…<\/button>/);
   assert.ok(!enabled.includes('worktree-remove"'), 'not git worktree remove');
   const blocked = {
     'an agent session is live here': { in_use: true },
@@ -102,7 +108,7 @@ test('Remove on review and keep rows: enabled, opens the Trash confirmation; blo
   };
   for (const [why, extra] of Object.entries(blocked)) {
     const html = worktreeRowHTML(row(extra), repo);
-    assert.match(html, new RegExp(`<button type="button" class="btn btn-danger btn-sm" disabled title="Cannot remove: ${why}">Remove</button>`), why);
+    assert.match(html, new RegExp(`<button type="button" class="btn btn-sm" disabled title="Cannot remove: ${why}">Remove</button>`), why);
     assert.ok(!html.includes('worktree-review-trash'), why);
   }
   // A state-remove row keeps git worktree remove; prune and orphan rows are unchanged.
@@ -110,6 +116,119 @@ test('Remove on review and keep rows: enabled, opens the Trash confirmation; blo
   assert.ok(done.includes('data-action="worktree-remove"') && !done.includes('worktree-review-trash'));
   const orphan = worktreeRowHTML(row({ state: 'review', orphan: true }), repo);
   assert.ok(orphan.includes('worktree-trash-orphan') && !orphan.includes('worktree-review-trash') && !orphan.includes('worktree-discuss'));
+});
+
+test('Remove has three looks: solid red when confirmed safe, amber outline when not confirmed, greyed when blocked', () => {
+  const repo = { path: REPO };
+  const row = extra => ({ path: REPO + '/.worktrees/x', branch: 'feat/x', state: 'keep', idle_days: 1, reasons: ['1 uncommitted change', 'ignored files that only live here: .env (17 B)'], ...extra });
+  const confirmed = worktreeRowHTML(row({ state: 'remove', reasons: ['merged into origin/main (squash)', 'idle 22 days'] }), repo);
+  assert.match(confirmed, /<button type="button" class="btn btn-danger-solid btn-sm" data-action="worktree-remove" data-path="\/Users\/x\/code\/app\/\.worktrees\/x" data-branch="feat\/x" title="Safe to remove: merged into origin\/main \(squash\)">Remove<\/button>/);
+  const uncertain = worktreeRowHTML(row(), repo);
+  assert.match(uncertain, /<button type="button" class="btn btn-warn-outline btn-sm" data-action="worktree-review-trash" data-path="\/Users\/x\/code\/app\/\.worktrees\/x" title="Not confirmed safe: 1 uncommitted change; ignored files that only live here: \.env \(17 B\)\. Moves the folder to the Trash; the branch stays in git">Remove…<\/button>/);
+  const review = worktreeRowHTML(row({ state: 'review' }), repo);
+  assert.ok(review.includes('class="btn btn-warn-outline btn-sm" data-action="worktree-review-trash"') && review.includes('>Remove…</button>'));
+  const blocked = worktreeRowHTML(row({ locked: true }), repo);
+  assert.match(blocked, /<button type="button" class="btn btn-sm" disabled title="Cannot remove: it is locked; unlock it first">Remove<\/button>/);
+  // One look per case: the classes never cross over.
+  assert.ok(!confirmed.includes('btn-warn-outline') && !confirmed.includes('btn btn-danger '));
+  assert.ok(!uncertain.includes('btn-danger'));
+  assert.ok(!blocked.includes('btn-danger') && !blocked.includes('btn-warn-outline'));
+  // A failed removal can be retried with the same look; a reason is escaped in the title.
+  assert.match(worktreeRowHTML(row({ state: 'remove' }), repo, null, null, { state: 'failed', error: 'x' }), /class="btn btn-danger-solid btn-sm" data-action="worktree-remove"[^>]*>Try again<\/button>/);
+  assert.ok(worktreeRowHTML(row({ reasons: ['a "quoted" <b>reason</b>'] }), repo).includes('title="Not confirmed safe: a &quot;quoted&quot; &lt;b&gt;reason&lt;/b&gt;. Moves'));
+  assert.ok(worktreeRowHTML(row({ state: 'remove', reasons: [] }), repo).includes('title="Safe to remove"'));
+});
+
+test('styles: the Remove looks use existing color tokens; every .btn greys out when disabled; the legend is muted', () => {
+  const css = readFileSync(path.join(webDist, 'style.css'), 'utf8');
+  const rule = sel => (css.match(new RegExp('(?:^|\\n)' + sel.replace(/[.[\]():]/g, '\\$&') + '\\s*\\{([^}]*)\\}')) || [])[1] || '';
+  const solid = rule('.btn-danger-solid');
+  assert.ok(solid.includes('background: var(--bad)') && solid.includes('border-color: var(--bad)') && /color: var\(--bg-0\)/.test(solid), solid);
+  const outline = rule('.btn-warn-outline');
+  assert.ok(outline.includes('background: transparent') && outline.includes('border-color: var(--warn)') && /(^|[ ;])color: var\(--warn\)/.test(outline), outline);
+  assert.match(css, /\.btn:disabled, \.btn\[disabled\] \{ opacity: 0\.45; cursor: not-allowed; \}/);
+  assert.ok(rule('.wt-legend').includes('color: var(--tx-3)'));
+  const html = readFileSync(path.join(webDist, 'index.html'), 'utf8');
+  assert.ok(html.includes('<p class="wt-legend" id="worktrees-legend" hidden></p>'));
+  assert.equal(vm.runInContext('WORKTREE_LEGEND', ctx), 'Remove: confirmed safe · Remove…: not confirmed, goes to the Trash · greyed: blocked');
+});
+
+test('worktreeGroups: the header search keeps rows matching branch, path, repository, state or reasons; empty matches all', () => {
+  const rows = (term, filter) => [...worktreeGroups(report(), filter || {}, term).flatMap(g => g.rows.map(r => r.state + ':' + (r.branch || '(detached)')))];
+  assert.deepEqual(rows(''), ['remove:feat/done', 'prune:feat/gone', 'keep:(detached)', 'review:feat/"q"']);
+  assert.equal(rows(undefined).length, 4);
+  assert.deepEqual(rows('feat/done'), ['remove:feat/done'], 'branch');
+  assert.deepEqual(rows('.codex'), ['keep:(detached)'], 'path');
+  assert.deepEqual(rows('/code/lib'), ['keep:(detached)', 'review:feat/"q"'], 'repository path');
+  assert.deepEqual(rows('ignored files'), ['review:feat/"q"'], 'reasons');
+  assert.deepEqual(rows('prune'), ['prune:feat/gone'], 'state');
+  assert.deepEqual(rows('squash'), ['remove:feat/done'], 'reasons of another repository');
+  assert.deepEqual(rows('no such text'), []);
+  assert.equal(worktreeGroups(report(), {}, 'feat/done').length, 1, 'a repository left empty is dropped');
+  // The panel's own filter and the header search both apply.
+  assert.deepEqual(rows('feat', { state: 'review' }), ['review:feat/"q"']);
+  assert.deepEqual(rows('feat/done', { state: 'review' }), []);
+  assert.deepEqual(rows('ignored', { stale: true }), ['review:feat/"q"']);
+});
+
+test('summary: "N shown" appears when the panel filter or the header search hides rows, and not otherwise', () => {
+  const rep = report();
+  assert.equal(worktreesSummaryText(rep, undefined, 4), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s');
+  assert.equal(worktreesSummaryText(rep), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s');
+  assert.equal(worktreesSummaryText(rep, undefined, 1), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s · 1 shown');
+  assert.equal(worktreesSummaryText(rep, undefined, 0), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s · 0 shown');
+  assert.equal(worktreesSummaryText({ ...rep, refreshing: true }, undefined, 2), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s · 2 shown · refreshing…');
+  // The pill counts stay the report's, whatever the search leaves.
+  assert.equal(worktreeStateCounts(rep).all, 4);
+});
+
+test('clutterGroups: the header search keeps items whose path, project or kind contains it; empty matches all', () => {
+  const items = (term, filter) => [...clutterGroups(clutterReport(), filter || {}, term).flatMap(g => g.items.map(i => i.name))];
+  assert.equal(items('').length, 4);
+  assert.equal(items(undefined).length, 4);
+  assert.deepEqual(items('node_modules'), ['node_modules'], 'path');
+  assert.deepEqual(items('/users/x/code/app'), ['.tmp', 'node_modules'], 'project');
+  assert.deepEqual(items('tool-cache'), ['go build', 'Hugging Face models'], 'kind');
+  assert.deepEqual(items('build output'), ['node_modules'], 'kind label');
+  assert.deepEqual(items('huggingface'), ['Hugging Face models']);
+  assert.deepEqual(items('nothing here'), []);
+  assert.deepEqual(items('node', { kind: 'tmp' }), [], 'the kind pill and the search both apply');
+  assert.deepEqual([...clutterGroups(clutterReport(), {}, 'node_modules').map(g => g.project)], [REPO]);
+});
+
+test('group asks: offered and counted over every row of the repository, not the rows a filter leaves', () => {
+  const rep = report();
+  const lib = rep.repos[1];
+  const head = html => html.split('class="wt-row')[0];
+  const advisable = lib.worktrees.filter(w => !w.orphan && ['keep', 'review', 'remove'].includes(w.state)).length;
+  const discussable = lib.worktrees.filter(w => w.state !== 'main').length;
+  assert.ok(advisable > 1 && discussable > 1);
+  const full = head(worktreeGroupHTML({ repo: lib, rows: lib.worktrees }));
+  assert.ok(full.includes(`<button type="button" class="link-btn wt-group-ask" data-action="worktree-advise-all" data-repo="${lib.path}"`)
+    && full.includes(`>Ask advisor about all ${advisable}</button>`));
+  assert.ok(full.includes(`<button type="button" class="link-btn wt-group-ask" data-action="worktree-discuss-all" data-repo="${lib.path}"`)
+    && full.includes(`>Discuss all ${discussable}</button>`));
+  assert.ok(full.indexOf('worktree-advise-all') < full.indexOf('worktree-discuss-all') && full.indexOf('worktree-discuss-all') < full.indexOf('worktree-hide'), 'beside Hide repo, before it');
+  // A filter that leaves one row visible: the buttons still name every row they act on.
+  const filtered = head(worktreeGroupHTML({ repo: lib, rows: lib.worktrees.slice(-1) }));
+  assert.ok(filtered.includes(`>Ask advisor about all ${advisable}</button>`) && filtered.includes(`>Discuss all ${discussable}</button>`));
+  // Only main and prune rows: nothing to ask the advisor, the prune row to discuss.
+  const pruneOnly = { path: '/p', worktrees: [{ path: '/p', state: 'main', reasons: [] }, { path: '/p/.w/g', state: 'prune', reasons: [] }] };
+  const p = head(worktreeGroupHTML({ repo: pruneOnly, rows: pruneOnly.worktrees.slice(1) }));
+  assert.ok(!p.includes('worktree-advise-all') && p.includes('>Discuss all 1</button>'));
+  // Only a main row: neither.
+  const mainOnly = { path: '/m', worktrees: [{ path: '/m', state: 'main', reasons: [] }] };
+  const m = head(worktreeGroupHTML({ repo: mainOnly, rows: [] }));
+  assert.ok(!m.includes('worktree-advise-all') && !m.includes('worktree-discuss-all'));
+  // An orphan is not askable.
+  const orphanOnly = { path: '/o', worktrees: [{ path: '/o/w', state: 'review', orphan: true, reasons: [] }] };
+  assert.ok(!head(worktreeGroupHTML({ repo: orphanOnly, rows: orphanOnly.worktrees })).includes('worktree-advise-all'));
+  // The repository path is escaped; an unreadable repository offers neither.
+  const odd = { path: '/x/"<b>"', worktrees: [{ path: '/x/"<b>"/w', state: 'keep', reasons: [] }] };
+  assert.ok(head(worktreeGroupHTML({ repo: odd, rows: odd.worktrees })).includes('data-repo="/x/&quot;&lt;b&gt;&quot;"'));
+  const lost = { ...odd, error: 'repository not found' };
+  const lostHead = head(worktreeGroupHTML({ repo: lost, rows: lost.worktrees }));
+  assert.ok(!lostHead.includes('worktree-advise-all') && !lostHead.includes('worktree-discuss-all'));
 });
 
 test('worktreeTrashConfirm: the folder, what goes with it, what stays in git, and what the Trash keeps', () => {

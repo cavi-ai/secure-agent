@@ -1,13 +1,17 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -582,5 +586,231 @@ func TestWorktreeOrphanEndpoints(t *testing.T) {
 		if !apiroutes.IsMutation(http.MethodPost, p) || !apiroutes.ConsoleAllowed(http.MethodPost, p) {
 			t.Fatalf("%s must be a console-admitted mutation", p)
 		}
+	}
+}
+
+// A group ask answers 202 at once with the row counts; one background run
+// hands every keep, review and remove row of the cached report to the
+// advisor, and a second ask for the same repository waits for it.
+func TestWorktreeAdviseWholeRepository(t *testing.T) {
+	home, _, repo, clean, dirty, gone := worktreeFixture(t)
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	var mu sync.Mutex
+	var queued []model.WorktreeAdviceRequest
+	answer, panicOn := true, 0
+	hunter := worktreehunter.New(st, home, worktreehunter.Options{})
+	a := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: hunter,
+		WorktreeAdvisor: func(r model.WorktreeAdviceRequest) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			queued = append(queued, r)
+			if len(queued) == panicOn {
+				panic("advisor hook failed")
+			}
+			return answer
+		}})
+	oldPoll := groupAdvisePoll
+	groupAdvisePoll = 5 * time.Millisecond
+	t.Cleanup(func() { groupAdvisePoll = oldPoll })
+	// note stores the i-th request's note, as the advisor does when it answers.
+	note := func(i int) {
+		mu.Lock()
+		r := queued[i]
+		mu.Unlock()
+		if err := st.PutAdvisorVerdict(advisor.WorktreeSubjectID(r.Path, r.Head), "worktree",
+			model.AdvisorVerdict{Assessment: "keep", Rationale: "x", CreatedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mux := a.buildMux()
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return rec
+	}
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(queued)
+	}
+	waitFor := func(what string, ok func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(20 * time.Second); !ok(); time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+	idle := func() bool {
+		a.groupAdviseMu.Lock()
+		defer a.groupAdviseMu.Unlock()
+		return len(a.groupAdvise) == 0
+	}
+	if rec := do(http.MethodPost, "/worktrees/repos", `{"path":"`+repo+`"}`); rec.Code != http.StatusOK {
+		t.Fatalf("add repo: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := do(http.MethodGet, "/worktrees?refresh=1", ""); rec.Code != http.StatusOK {
+		t.Fatalf("scan: %d %s", rec.Code, rec.Body.String())
+	}
+
+	for _, c := range []struct {
+		body string
+		want int
+	}{
+		{`{"repo":"relative"}`, http.StatusBadRequest},
+		{`{"repo":"` + repo + `","path":"` + dirty + `"}`, http.StatusBadRequest},
+		{`{}`, http.StatusBadRequest},
+		{`{"repo":"/no/such/repo"}`, http.StatusNotFound},
+	} {
+		if rec := do(http.MethodPost, "/worktrees/advise", c.body); rec.Code != c.want {
+			t.Fatalf("advise %s: %d %s, want %d", c.body, rec.Code, rec.Body.String(), c.want)
+		}
+	}
+	if count() != 0 {
+		t.Fatalf("refused asks reached the advisor: %+v", queued)
+	}
+
+	rec := do(http.MethodPost, "/worktrees/advise", `{"repo":"`+repo+`"}`)
+	var out struct {
+		Status  string   `json:"status"`
+		Queued  int      `json:"queued"`
+		Rows    int      `json:"rows"`
+		Skipped int      `json:"skipped"`
+		Paths   []string `json:"paths"`
+	}
+	if rec.Code != http.StatusAccepted || json.Unmarshal(rec.Body.Bytes(), &out) != nil || out.Status != "accepted" || out.Queued != 1 ||
+		out.Rows != 2 || out.Skipped != 0 || len(out.Paths) != 2 {
+		t.Fatalf("group ask: %d %s, want 202 accepted queued 1 rows 2 skipped 0 (clean and dirty; gone is prune)", rec.Code, rec.Body.String())
+	}
+	// The first row is handed over before the answer; the next waits for its
+	// note, so the advisor's shared queue never holds more than one.
+	if count() != 1 {
+		t.Fatalf("rows asked before the answer = %d, want 1", count())
+	}
+	// Longer than one inspection of the next row takes.
+	for deadline := time.Now().Add(1500 * time.Millisecond); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if count() != 1 {
+			t.Fatalf("the second row was asked before the first note: %d", count())
+		}
+	}
+	if rec := do(http.MethodPost, "/worktrees/advise", `{"repo":"`+repo+`"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("second group ask while the first runs: %d %s, want 409", rec.Code, rec.Body.String())
+	}
+	note(0)
+	waitFor("the second row", func() bool { return count() == 2 })
+	note(1)
+	waitFor("the run to end", idle)
+	got := map[string]string{}
+	for _, q := range queued {
+		got[q.Path] = q.State
+	}
+	if len(got) != 2 || got[clean] != "remove" || got[dirty] != "keep" || got[gone] != "" {
+		t.Fatalf("advisor requests = %v, want clean (remove) and dirty (keep)", got)
+	}
+
+	// An advisor that is off or busy says so at once, as a single ask does,
+	// and leaves no run behind.
+	mu.Lock()
+	answer = false
+	mu.Unlock()
+	if rec := do(http.MethodPost, "/worktrees/advise", `{"repo":"`+repo+`"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"queued":0`) || !idle() {
+		t.Fatalf("advisor off: %d %s idle=%v, want 200 queued 0 and no run", rec.Code, rec.Body.String(), idle())
+	}
+	if count() != 3 {
+		t.Fatalf("advisor off: %d asks, want the one refused", count())
+	}
+
+	// A panic in the background run ends that run, never the daemon.
+	mu.Lock()
+	answer, panicOn = true, 5
+	mu.Unlock()
+	if rec := do(http.MethodPost, "/worktrees/advise", `{"repo":"`+repo+`"}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("group ask after the run ended: %d %s", rec.Code, rec.Body.String())
+	}
+	note(3)
+	waitFor("the panicking run to end", func() bool { return count() == 5 && idle() })
+
+	// With only the prune row left, nothing is askable.
+	for _, p := range []string{clean, dirty} {
+		if out, err := exec.Command("git", "-C", repo, "worktree", "remove", "--force", p).CombinedOutput(); err != nil {
+			t.Fatalf("git worktree remove: %v %s", err, out)
+		}
+	}
+	// A hunter on a new store has no cached scan, so it reads the folders as
+	// they are now.
+	st2 := testStore(t)
+	t.Cleanup(func() { st2.Close() })
+	fresh := New(Deps{Store: st2, Status: func() Status { return Status{Running: true} }, Worktrees: worktreehunter.New(st2, home, worktreehunter.Options{}),
+		WorktreeAdvisor: func(model.WorktreeAdviceRequest) bool { return true }}).buildMux()
+	rec = httptest.NewRecorder()
+	fresh.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/repos", strings.NewReader(`{"path":"`+repo+`"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("add repo: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	fresh.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/advise", strings.NewReader(`{"repo":"`+repo+`"}`)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("group ask with no askable rows: %d %s, want 409", rec.Code, rec.Body.String())
+	}
+
+	unwired := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: hunter}).buildMux()
+	rec = httptest.NewRecorder()
+	unwired.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/advise", strings.NewReader(`{"repo":"`+repo+`"}`)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("group ask without an advisor: %d, want 503", rec.Code)
+	}
+}
+
+// A group ask covers keep, review and remove rows git still records, at most
+// 40; the rest are counted as skipped.
+// One group ask runs at a time across repositories, so the advisor's shared
+// queue holds at most one of its notes.
+func TestGroupAdviseOneAtATime(t *testing.T) {
+	a := &API{}
+	if !a.startGroupAdvise("/a") || a.startGroupAdvise("/b") || a.startGroupAdvise("/a") {
+		t.Fatal("a second group ask started while one runs")
+	}
+	a.finishGroupAdvise("/a")
+	if !a.startGroupAdvise("/b") {
+		t.Fatal("a group ask could not start after the last one finished")
+	}
+}
+
+// A group ask's background run ends with the daemon: it runs under the
+// serving context, not the request's.
+func TestGroupAdviseRunsUnderTheServingContext(t *testing.T) {
+	a := &API{}
+	if a.lifetime().Err() != nil {
+		t.Fatal("before serving, the lifetime is Background")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = a.ServeListener(ctx, ln)
+	if a.lifetime().Err() == nil {
+		t.Fatal("the lifetime is not the serving context")
+	}
+}
+
+func TestGroupAdvisePathsCapsAndSkipsUnaskableRows(t *testing.T) {
+	repo := worktreehunter.RepoReport{Path: "/r", Worktrees: []worktreehunter.Worktree{
+		{Path: "/r", State: worktreehunter.StateMain},
+		{Path: "/r/gone", State: worktreehunter.StatePrune},
+		{Path: "/r/orphan", State: worktreehunter.StateReview, Orphan: true},
+	}}
+	states := []string{worktreehunter.StateKeep, worktreehunter.StateReview, worktreehunter.StateRemove}
+	for i := range 43 {
+		repo.Worktrees = append(repo.Worktrees, worktreehunter.Worktree{Path: fmt.Sprintf("/r/w%02d", i), State: states[i%3]})
+	}
+	paths, skipped := groupAdvisePaths(repo)
+	if len(paths) != groupAdviseMaxRows || skipped != 3 || paths[0] != "/r/w00" || paths[len(paths)-1] != "/r/w39" {
+		t.Fatalf("paths = %d (%v … %v), skipped %d; want 40 askable rows in report order and 3 skipped", len(paths), paths[0], paths[len(paths)-1], skipped)
+	}
+	if p, s := groupAdvisePaths(worktreehunter.RepoReport{Worktrees: repo.Worktrees[:3]}); len(p) != 0 || s != 0 {
+		t.Fatalf("main, prune and orphan rows are not askable: %v %d", p, s)
 	}
 }
