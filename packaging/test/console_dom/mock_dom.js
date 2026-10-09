@@ -1273,6 +1273,19 @@
       const body = { rows, has_earlier: !before, next_cursor: before ? '' : 'earlier' };
       return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
     }
+    const outcomesMatch = p.match(/^\/sessions\/([^/]+)\/outcomes$/);
+    if (outcomesMatch) {
+      const sid = decodeURIComponent(outcomesMatch[1]);
+      if (window.__resultsFail) return { ok: false, status: 503, json: async () => ({}) };
+      const own = sid === 'sess-claude-1';
+      const body = { session_id: sid, observed_at: iso(0), history: {
+        evidence: Object.fromEntries(['reviews', 'incidents', 'interventions'].map(k => [k, { available: true, at_limit: false, limit: 100 }])),
+        reviews: own ? [{ id: 'synthetic-review', revision: 2, context: { rule: 'sensitive-read-then-connect' }, decision: { action: 'acknowledge', revision: 1, at: iso(90000) }, assessment: { residual_risk: 'possible-exposure' }, evidence_available: false }] : [],
+        interventions: own ? [{ id: 'synthetic-control', kind: 'pause', status: 'applied', verification: window.__resultsUpdate ? 'observed' : 'pending', requested_at: iso(60000), limits: ['Synthetic receipt; captured targets only.'] }] : [],
+        incidents: own ? [{ id: 'synthetic-incident', remediation: { steps: [{ id: 'synthetic-step', item: { name: 'Synthetic key', action: 'Revoke key' }, status: 'reported', verification: 'unverified', reported_at: iso(30000), newer_evidence: true }] } }] : [],
+      } };
+      return { ok: true, status: 200, json: async () => body };
+    }
     const overviewMatch = p.match(/^\/sessions\/([^/]+)\/overview$/);
     if (overviewMatch) {
       const sid = decodeURIComponent(overviewMatch[1]);
@@ -1697,6 +1710,24 @@
   // Auto-action: select a session in the session-first rail so the trace
   // waterfall renders. The Sessions tab is not the default, and the rail
   // only renders on screen, so open it before selecting.
+  if (MODE.includes('resultsdemo')) {
+    setTimeout(async () => {
+      openTab('sessions');
+      await window.selectSession('sess-claude-1');
+      await window.setSessionView('results');
+      const summary = document.querySelector('#session-detail .resource-action-result summary');
+      if (summary) { summary.parentElement.open = true; summary.focus(); }
+      window.__resultsUpdate = true;
+      window.SA.refreshSessionOverview(true);
+      setTimeout(() => {
+        const current = document.querySelector('#session-detail .resource-action-result summary');
+        document.body.dataset.resultsFocus = String(!!current && current.parentElement.open && document.activeElement === current && current.textContent.includes('Resource samples observed'));
+        const detail = document.querySelector('#session-detail');
+        document.body.dataset.resultsFits = String(detail.scrollWidth <= detail.clientWidth && document.documentElement.scrollWidth <= innerWidth);
+        if (MODE.includes('resultsstale')) { window.__resultsFail = true; window.SA.refreshSessionOverview(true); }
+      }, 500);
+    }, 2000);
+  }
   if (MODE.includes('overviewdemo')) {
     setTimeout(() => document.querySelector('#session-daily [data-session="sess-claude-1"]')?.click(), 3500);
     setTimeout(() => {

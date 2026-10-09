@@ -217,23 +217,10 @@ func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr
 	var flagErr error
 	rep.Flags, flagErr = s.QueryFlagsResult(FlagFilter{SessionID: id, Limit: reportFlagLimit})
 	rep.Evidence.Flags = ReportSourceEvidence{Available: flagErr == nil, AtLimit: len(rep.Flags) >= reportFlagLimit, Limit: reportFlagLimit}
-	page, reviewErr := s.ListSessionFindingReviews(id)
-	if reviewErr == nil && !page.Degraded {
-		rep.Reviews = page.Reviews
-		for i := range rep.Reviews {
-			// An export is history, not a current permission/action surface.
-			rep.Reviews[i].AvailableScopes = nil
-		}
-	}
-	rep.Evidence.Reviews = ReportSourceEvidence{Available: reviewErr == nil && !page.Degraded, AtLimit: len(rep.Reviews) >= 100, Limit: 100}
-	var interventionErr error
-	rep.Interventions, interventionErr = s.RecentInterventions(id, 200)
-	rep.InterventionsAvailable = interventionErr == nil
-	rep.Evidence.Interventions = ReportSourceEvidence{Available: interventionErr == nil, AtLimit: len(rep.Interventions) >= 200, Limit: 200}
-	var incidentErr error
-	rep.Incidents, incidentErr = s.SessionIncidents(id)
-	rep.IncidentsAvailable = incidentErr == nil
-	rep.Evidence.Incidents = ReportSourceEvidence{Available: incidentErr == nil, AtLimit: len(rep.Incidents) >= 100, Limit: 100}
+	history := s.SessionOutcomes(id)
+	rep.Reviews, rep.Incidents, rep.Interventions = history.Reviews, history.Incidents, history.Interventions
+	rep.Evidence.Reviews, rep.Evidence.Incidents, rep.Evidence.Interventions = history.Evidence.Reviews, history.Evidence.Incidents, history.Evidence.Interventions
+	rep.IncidentsAvailable, rep.InterventionsAvailable = history.Evidence.Incidents.Available, history.Evidence.Interventions.Available
 	if rep.Flags == nil {
 		rep.Flags = []model.Flag{}
 	}

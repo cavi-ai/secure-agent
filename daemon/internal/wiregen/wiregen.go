@@ -60,6 +60,7 @@ func WireTypes() []any {
 		api.AgentSummary{},
 		api.CoverageStatus{},
 		api.SessionOverview{},
+		api.SessionOutcomes{},
 		api.Posture{},
 		api.PostureItem{},
 		api.AttentionGroup{},

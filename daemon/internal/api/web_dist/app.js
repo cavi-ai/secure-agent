@@ -381,9 +381,11 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionMemoryGeneration++;
     sessionTimelineRequest++;
     sessionOverviewGeneration++;
+    sessionOutcomesGeneration++;
     sessionMemoryState = { ...sessionMemoryState, loading: false, loadingEarlier: false };
     sessionOverviewState = { loading: false, error: 'unavailable' };
     sessionOverviewRefreshAgain = false;
+    sessionOutcomesState = { loading: false, error: 'unavailable' };
     if (liveUpdates) liveUpdates.stop();
     showSessionEnded();
   }
@@ -2836,6 +2838,8 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionMemoryState: { get() { return sessionMemoryState; } },
     sessionOverview: { get() { return sessionOverview; } },
     sessionOverviewState: { get() { return sessionOverviewState; } },
+    sessionOutcomes: { get() { return sessionOutcomes; } },
+    sessionOutcomesState: { get() { return sessionOutcomesState; } },
   });
 
   // The generation invalidates late responses when selection changes; it
@@ -2861,7 +2865,40 @@ document.addEventListener('DOMContentLoaded', () => {
   let sessionOverviewGeneration = 0;
   let sessionOverviewAt = 0;
   let sessionOverviewRefreshAgain = false;
-  window.SA.refreshSessionOverview = force => { if (selectedSessionId) loadSessionOverview(selectedSessionId, force); };
+  let sessionOutcomes = null;
+  let sessionOutcomesState = { loading: false, error: '' };
+  let sessionOutcomesGeneration = 0;
+  let sessionOutcomesAt = 0;
+  window.SA.refreshSessionOverview = force => {
+    if (selectedSessionId) {
+      loadSessionOverview(selectedSessionId, force);
+      if (sessionView === 'results') loadSessionOutcomes(selectedSessionId, force);
+    }
+  };
+  async function loadSessionOutcomes(id, force = true) {
+    if (!id || id !== selectedSessionId || sessionOutcomesState.loading) return;
+    if (!force && Date.now() - sessionOutcomesAt < 5000) return;
+    sessionOutcomesAt = Date.now();
+    const generation = sessionOutcomesGeneration;
+    sessionOutcomesState = { loading: true, error: sessionOutcomesState.error };
+    renderNow(['sessions']);
+    try {
+      const response = await apiFetch('/sessions/' + encodeURIComponent(id) + '/outcomes');
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const data = await response.json();
+      if (generation !== sessionOutcomesGeneration || id !== selectedSessionId) return;
+      if (!validSessionOutcomes(data, id)) throw new Error('Invalid response');
+      if (sessionOutcomes) for (const key of ['reviews', 'incidents', 'interventions']) {
+        if (!data.history.evidence[key].available) data.history[key] = sessionOutcomes.history[key];
+      }
+      sessionOutcomes = data;
+      sessionOutcomesState = { loading: false, error: '' };
+    } catch {
+      if (generation !== sessionOutcomesGeneration || id !== selectedSessionId) return;
+      sessionOutcomesState = { loading: false, error: 'unavailable' };
+    }
+    renderNow(['sessions']);
+  }
   async function loadSessionOverview(id, force = true) {
     if (!id || id !== selectedSessionId) return;
     if (sessionOverviewState.loading) { if (force) sessionOverviewRefreshAgain = true; return; }
@@ -2897,6 +2934,10 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionOverviewState = { loading: false, error: '' };
     sessionOverviewAt = 0;
     sessionOverviewRefreshAgain = false;
+    sessionOutcomesGeneration++;
+    sessionOutcomes = null;
+    sessionOutcomesState = { loading: false, error: '' };
+    sessionOutcomesAt = 0;
   }
   function takeSessionReveal() {
     const reveal = sessionReveal;
@@ -2926,7 +2967,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   async function loadSelectedSession(id) {
     const history = sessionView === 'trace'
-      ? loadSessionTimeline(id, true).catch(() => {}) : loadSessionMemory(id);
+      ? loadSessionTimeline(id, true).catch(() => {}) : sessionView === 'results' ? loadSessionOutcomes(id) : loadSessionMemory(id);
     await Promise.all([history, loadSessionOverview(id)]);
     renderNow(['sessions']);
   }
@@ -3069,15 +3110,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (latest) latest.hidden = true;
   };
   window.showCurrentSessionStatus = function() {
+    if (sessionView === 'results') { window.setSessionView('memory').then(window.showCurrentSessionStatus); return; }
     const body = document.querySelector('#session-detail .session-detail-body');
     if (body) body.scrollTop = 0;
     document.querySelector('#session-detail .sd-current-head h4')?.focus({ preventScroll: true });
   };
   window.setSessionView = async function(view) {
-    if (view !== 'memory' && view !== 'trace') return;
+    if (!['memory', 'trace', 'results'].includes(view)) return;
     sessionView = view;
     renderNow(['sessions']);
-    if (view === 'trace' && selectedSessionId) {
+    if (view === 'results' && selectedSessionId) {
+      await loadSessionOutcomes(selectedSessionId);
+    } else if (view === 'trace' && selectedSessionId) {
       try { await loadSessionTimeline(selectedSessionId, true); } catch { /* trace retries on next activation */ }
       renderNow(['sessions']);
     } else if (view === 'memory' && selectedSessionId && !sessionMemoryPage.rows.length) {
@@ -4660,6 +4704,9 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'session-overview-retry':
         if (selectedSessionId) loadSessionOverview(selectedSessionId);
         break;
+      case 'session-outcomes-retry':
+        if (selectedSessionId) loadSessionOutcomes(selectedSessionId);
+        break;
       case 'session-findings':
         timelineSession = d.id;
         timelinePids = null;
@@ -5084,7 +5131,7 @@ document.addEventListener('DOMContentLoaded', () => {
           // Trace continues to follow event deltas while visible.
           if (selectedSessionId && e.session_id === selectedSessionId) {
             if (sessionView === 'trace') loadSessionTimeline(selectedSessionId).then(() => markDirty('sessions'));
-            else if (Date.now() - sessionMemoryAt >= 2000) loadSessionMemory(selectedSessionId);
+            else if (sessionView === 'memory' && Date.now() - sessionMemoryAt >= 2000) loadSessionMemory(selectedSessionId);
           }
         } catch { sparkBump(1, 0); /* unparseable frame still counts */ }
         markDirty('events');
