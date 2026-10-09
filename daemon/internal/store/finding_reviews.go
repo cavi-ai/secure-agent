@@ -424,6 +424,19 @@ func (s *Store) ListFindingReviews(after string, limit int) (page ReviewPage, er
 }
 
 func (s *Store) ListFindingReviewsState(after string, limit int, state string) (page ReviewPage, err error) {
+	return s.listFindingReviews(after, limit, state, "")
+}
+
+// ListSessionFindingReviews reads the newest retained reviews for one exact
+// session, including reported closure. It does not change review or permission.
+func (s *Store) ListSessionFindingReviews(sessionID string) (ReviewPage, error) {
+	if sessionID == "" {
+		return ReviewPage{}, fmt.Errorf("session identity required")
+	}
+	return s.listFindingReviews("", 100, "", sessionID)
+}
+
+func (s *Store) listFindingReviews(after string, limit int, state, sessionID string) (page ReviewPage, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer func() {
@@ -434,7 +447,13 @@ func (s *Store) ListFindingReviewsState(after string, limit int, state string) (
 	}()
 	limit = min(max(limit, 1), 100)
 	page.Reviews = []model.ReviewRecord{}
-	rows, err := s.db.Query(`SELECT id,state,record_json FROM finding_reviews WHERE id>? AND (?='' OR state=?) ORDER BY id LIMIT ?`, after, state, state, limit+1)
+	query := `SELECT id,state,record_json FROM finding_reviews WHERE id>? AND (?='' OR state=?) ORDER BY id LIMIT ?`
+	args := []any{after, state, state, limit + 1}
+	if sessionID != "" {
+		query = `SELECT id,state,record_json FROM finding_reviews WHERE session_id=? ORDER BY last_seen DESC,id DESC LIMIT ?`
+		args = []any{sessionID, limit + 1}
+	}
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		page.Degraded = true
 		return

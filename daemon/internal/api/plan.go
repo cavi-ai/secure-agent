@@ -422,6 +422,10 @@ func (a *API) planSessionLines(t planTarget, add func(string, ...any)) {
 	if !ok {
 		return
 	}
+	if rep.Evidence != nil && !rep.Evidence.Events.Available {
+		add("session activity history unavailable; counts and timeline are unknown")
+		return
+	}
 	s := rep.Session
 	where := s.Workspace
 	if s.Repo != "" {
