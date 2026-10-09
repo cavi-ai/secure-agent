@@ -431,8 +431,38 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
 
         await state.performFetch()
         XCTAssertNil(state.pendingRetriage["rt-2"])
-        XCTAssertTrue(state.advisorNotice?.contains("didn't answer") == true,
+        XCTAssertTrue(state.advisorNotice?.contains("new verdict") == true,
                       "timeout must explain itself, got: \(state.advisorNotice ?? "nil")")
+    }
+
+    func testRetriageWaitsForItsActiveTaskBeyondLegacyTimeout() async throws {
+        let stub = StubDaemonClient()
+        stub.flags = [flag("rt-active", 3)]
+        stub.status = try JSONDecoder().decode(StatusResponse.self, from: Data(#"{"running":true,"uptime":"1m","active_agents":1,"advisor_health":{"enabled":true,"state":"inspecting","active_kind":"flag","active_subject":"rt-active","elapsed_ms":100000,"timeout_ms":120000}}"#.utf8))
+        let (state, _) = makeState(stub)
+        await state.performFetch()
+        await state.retriageFlagWithFeedback(stub.flags[0])
+        state.agePendingRetriageForTesting(id: "rt-active")
+        await state.performFetch()
+        XCTAssertNotNil(state.pendingRetriage["rt-active"])
+        XCTAssertNil(state.advisorNotice)
+    }
+
+    func testRetriageRecognizesFreshIdenticalVerdict() async throws {
+        let stub = StubDaemonClient()
+        func reviewed(_ timestamp: String) throws -> FlagModel {
+            let json = "{\"assessment\":\"benign\",\"rationale\":\"routine\",\"created_at\":\"\(timestamp)\"}"
+            let verdict = try JSONDecoder().decode(AdvisorVerdictModel.self, from: Data(json.utf8))
+            return FlagModel(id:"rt-same",rule:"proxy-secret-leak",severity:3,ts:"",pid:1,agent:"claude",evidence:[],advisor:verdict)
+        }
+        stub.flags = [try reviewed("2026-10-09T20:00:00Z")]
+        let (state, _) = makeState(stub)
+        await state.performFetch()
+        await state.retriageFlagWithFeedback(stub.flags[0])
+        stub.flags = [try reviewed("2026-10-09T20:02:00Z")]
+        await state.performFetch()
+        XCTAssertNil(state.pendingRetriage["rt-same"])
+        XCTAssertEqual(state.advisorNotice, "Advisor verdict updated for proxy-secret-leak")
     }
 
     func testDismissFlagLeavesUnactedList() async {

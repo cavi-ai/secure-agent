@@ -521,7 +521,7 @@ public final class AppState: ObservableObject {
 
     private static func advisorSignature(_ v: AdvisorVerdictModel?) -> String {
         guard let v else { return "" }
-        return "\(v.assessment ?? "")|\(v.suggestedAction ?? "")|\(v.rationale)"
+        return "\(v.createdAt ?? "")|\(v.assessment ?? "")|\(v.suggestedAction ?? "")|\(v.rationale)"
     }
 
     private func reconcilePendingRetriage(flags: [FlagModel]) {
@@ -535,13 +535,14 @@ public final class AppState: ObservableObject {
                 retriageBaseline.removeValue(forKey: id)
                 advisorNotice = "Advisor verdict updated for \(current?.rule ?? "the flag")"
                 changed = true
-            } else if Date().timeIntervalSince(requestedAt) > Self.retriageTimeout {
+            } else if Date().timeIntervalSince(requestedAt) > Self.retriageTimeout,
+                      advisorHealth?.isReviewing(flagID: id) != true {
                 pendingRetriage.removeValue(forKey: id)
                 retriageBaseline.removeValue(forKey: id)
                 let offline = advisorHealth?.circuitOpen == true
                 advisorNotice = offline
                     ? "Advisor is offline (circuit open) — check the local model server in Settings → Secure Agent"
-                    : "Advisor didn't answer within 90s — the model server may be busy or down"
+                    : "Advisor hasn't returned a new verdict — check its current status"
                 changed = true
             }
         }

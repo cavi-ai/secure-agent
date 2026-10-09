@@ -34,9 +34,10 @@ Host: unix
 }
 ```
 
-`advisor_health` also includes `state` (`idle`, `answering`, `inspecting`, or
+`advisor_health` also includes `state` (`idle`, `preparing`, `answering`, `inspecting`, or
 `paused`), `active_kind`, `active_subject`, `active_tool`, `elapsed_ms`,
-`last_duration_ms`, `input_bytes` (serialized message bytes), `tool_calls`, and
+`timeout_ms` (the active task's time budget), `last_duration_ms`, `input_bytes`
+(complete serialized request bytes), `tool_calls`, and
 `retry_at` while paused. These fields describe activity, not enforcement.
 
 `advisor_health` reports the local triage advisor's live state: `circuit_open`

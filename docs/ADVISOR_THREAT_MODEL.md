@@ -74,10 +74,16 @@ One task permits at most four model requests and six tool calls. Each request
 is bounded to 32 KiB, each tool result to 8 KiB, and each model response to
 256 KiB. Oversized mandatory context is refused rather than silently truncated.
 Repeated tool results are reused only within that task and discarded afterward.
-The triage deadline covers the entire exchange (default 60 seconds); explicitly
+The triage deadline starts before evidence preparation and covers the entire
+exchange (default 60 seconds); explicitly
 requested plans and notes have at least five minutes. These are byte and time
 bounds, not tokenizer or model-server memory guarantees. Fresh conversations
 do not unload a shared model or flush its server-side KV cache.
+
+Live advisor status distinguishes preparation, model waiting and tool inspection,
+including elapsed time and the active task's time budget. A re-triage remains
+pending while the daemon reports that specific flag review as active. A newly
+timestamped verdict counts as a completed review even when its wording is unchanged.
 
 `advisor.classifier_endpoint` optionally enables a loopback `/v1/systemone`
 service, with `classifier_model` defaulting to `kev-latest`. The classifier
