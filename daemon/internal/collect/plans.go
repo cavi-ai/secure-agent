@@ -18,14 +18,16 @@ type PlanWindow struct {
 
 // PlanSnapshot is the latest plan headroom one harness home reported.
 type PlanSnapshot struct {
-	Harness   string       `json:"harness"`
-	Home      string       `json:"home"`      // CodexHomeLabel of the home
-	HomePath  string       `json:"home_path"` // the home directory RecordPlan is keyed by
-	PlanType  string       `json:"plan_type"`
-	LimitID   string       `json:"limit_id"`
-	Windows   []PlanWindow `json:"windows"` // primary first, then secondary when reported
-	Unlimited bool         `json:"unlimited"`
-	SeenAt    time.Time    `json:"seen_at"` // timestamp of the line that carried it
+	Harness    string       `json:"harness"`
+	Home       string       `json:"home"`      // CodexHomeLabel of the home
+	HomePath   string       `json:"home_path"` // the home directory RecordPlan is keyed by
+	PlanType   string       `json:"plan_type"`
+	LimitID    string       `json:"limit_id"`
+	Windows    []PlanWindow `json:"windows"` // primary first, then secondary when reported
+	Unlimited  bool         `json:"unlimited"`
+	SeenAt     time.Time    `json:"seen_at"`               // timestamp of the line that carried it
+	AccountKey string       `json:"account_key,omitempty"` // opaque identity fingerprint, never a credential
+	Homes      []string     `json:"homes,omitempty"`       // homes sharing this account/limit snapshot
 }
 
 // plans holds the newest snapshot per home directory; the daemon saves them
@@ -38,6 +40,9 @@ var plans = struct {
 
 // RecordPlan keeps s as home's snapshot unless the one held was seen later.
 func RecordPlan(home string, s PlanSnapshot) {
+	if s.Harness == "codex" && s.AccountKey == "" {
+		s.AccountKey, _ = codexPlanIdentity(home)
+	}
 	plans.mu.Lock()
 	defer plans.mu.Unlock()
 	if old, ok := plans.byHome[home]; ok && old.SeenAt.After(s.SeenAt) {
@@ -45,6 +50,7 @@ func RecordPlan(home string, s PlanSnapshot) {
 	}
 	s.HomePath = home
 	s.Windows = slices.Clone(s.Windows)
+	s.Homes = slices.Clone(s.Homes)
 	plans.byHome[home] = s
 	plans.version++
 }
@@ -65,6 +71,7 @@ func Plans() []PlanSnapshot {
 	out := make([]PlanSnapshot, 0, len(plans.byHome))
 	for _, s := range plans.byHome {
 		s.Windows = slices.Clone(s.Windows)
+		s.Homes = slices.Clone(s.Homes)
 		out = append(out, s)
 	}
 	plans.mu.Unlock()

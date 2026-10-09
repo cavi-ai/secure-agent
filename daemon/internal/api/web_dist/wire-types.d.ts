@@ -814,6 +814,8 @@ export interface PlanSnapshot {
   windows: PlanWindow[];
   unlimited: boolean;
   seen_at: string;
+  account_key?: string;
+  homes?: string[];
 }
 
 export interface ReportCount {

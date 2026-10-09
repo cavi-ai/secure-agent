@@ -152,6 +152,34 @@ func getCosts(t *testing.T, mux http.Handler, path string) store.CostReport {
 	return rep
 }
 
+func TestColdCostCacheReturnsWithoutWaitingAndSharesComputation(t *testing.T) {
+	c := costCache[int]{}
+	release := make(chan struct{})
+	t.Cleanup(c.bg.Wait)
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	var computed atomic.Int32
+	for range 16 {
+		v, at, refreshing := c.get("cold", true, func() int {
+			computed.Add(1)
+			<-release
+			return 42
+		})
+		if v != 0 || !at.IsZero() || !refreshing {
+			t.Fatalf("cold request waited or invented data: %d %v %v", v, at, refreshing)
+		}
+	}
+	// No request waits for the blocked computation; exactly one runs.
+	once.Do(func() { close(release) })
+	c.bg.Wait()
+	if computed.Load() != 1 {
+		t.Fatalf("cold requests started %d computations", computed.Load())
+	}
+	if v, _, refreshing := c.get("cold", true, func() int { return 99 }); v != 42 || refreshing {
+		t.Fatal("completed cold report was not reused")
+	}
+}
+
 func TestCostsCachedAnswersAtOnceAndRefreshesInTheBackground(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
@@ -169,9 +197,11 @@ func TestCostsCachedAnswersAtOnceAndRefreshesInTheBackground(t *testing.T) {
 	mux := a.buildMux()
 
 	first := getCosts(t, mux, "/costs?cached=1")
-	if first.Total.Calls != 1 || first.Refreshing || first.GeneratedAt != now.UTC().Format(time.RFC3339) {
-		t.Fatalf("first cached=1 request computes and waits: %+v", first)
+	if !first.Refreshing || first.GeneratedAt != "" || first.Rows == nil || first.By != "repo" {
+		t.Fatalf("cold cached request must return an uncomputed refreshing report: %+v", first)
 	}
+	a.costs.bg.Wait()
+	first = getCosts(t, mux, "/costs?cached=1")
 	call()
 	clock = clock.Add(costCacheTTL)
 	stale := getCosts(t, mux, "/costs?cached=1")
@@ -204,7 +234,7 @@ func TestCostsCacheSurvivesARestart(t *testing.T) {
 	call()
 	before := newCostsTestAPI(t, st)
 	before.costs.now = func() time.Time { return now }
-	saved := getCosts(t, before.buildMux(), "/costs?by=model&cached=1")
+	saved := getCosts(t, before.buildMux(), "/costs?by=model")
 	before.costs.bg.Wait()
 	call()
 
@@ -228,7 +258,7 @@ func TestCostsCacheSurvivesARestart(t *testing.T) {
 	// A saved row that does not decode is ignored.
 	st.PutScanCache(costsCacheName, []byte("{"), now)
 	broken := newCostsTestAPI(t, st)
-	if rep := getCosts(t, broken.buildMux(), "/costs?by=model&cached=1"); rep.Total.Calls != 2 || rep.Refreshing {
+	if rep := getCosts(t, broken.buildMux(), "/costs?by=model"); rep.Total.Calls != 2 || rep.Refreshing {
 		t.Fatalf("corrupt saved reports: %+v", rep)
 	}
 }
@@ -242,12 +272,12 @@ func TestCostCacheConcurrentAndBounded(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			v, _, _ := c.get("k", i%2 == 0, func() any {
+			v, at, refreshing := c.get("k", i%2 == 0, func() any {
 				computed.Add(1)
 				<-release
 				return 42
 			})
-			if v != 42 {
+			if v != 42 && !(i%2 == 0 && v == nil && at.IsZero() && refreshing) {
 				t.Errorf("value = %v", v)
 			}
 		}()

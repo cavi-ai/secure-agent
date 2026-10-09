@@ -244,11 +244,11 @@ for (const report of spendReports) {
     await f.ctx.loadSpend(false);
     assert.deepEqual(f.ctx.telemetryData[report.field], report.empty);
     assert.equal(f.ctx.reportHealth.failures([report.key]).length, 0);
-    assert.equal(f.retries.length, 0);
+    assert.equal(f.retries.length, 1, 'failed refresh schedules one bounded retry before valid recovery');
   });
 }
 
-test('first-load malformed spend reports are unavailable and cannot arm cache polling', async () => {
+test('first-load malformed spend reports remain unavailable while a bounded retry is scheduled', async () => {
   const f = fixture(async path => response(path === '/costs/plans' ? [] : { total: 'bad', refreshing: true }));
   enableSpend(f);
   f.ctx.telemetryData.costs = null;
@@ -257,7 +257,8 @@ test('first-load malformed spend reports are unavailable and cannot arm cache po
     assert.equal(f.ctx.reportHealth.failures([report.key])[0]?.state, 'unavailable');
     assert.ok(f.ctx.telemetryData[report.field] == null);
   }
-  assert.equal(f.retries.length, 0);
+  assert.equal(f.retries.length, 1);
+  assert.equal(f.ctx.telemetryData.spendRefresh.delayed, true);
 });
 
 test('valid refreshing spend cache retains its bounded retry cadence', async () => {
@@ -277,11 +278,12 @@ test('spend responses arriving after shutdown cannot render or arm another retry
   enableSpend(f);
   const prior = f.ctx.telemetryData.costs;
   const load = f.ctx.loadSpend(false);
+  const rendersBeforeShutdown = f.renders.length;
   f.ctx.endSession();
   waiting.resolve(response({ refreshing: true, total: 99 }));
   await load;
   assert.equal(f.ctx.telemetryData.costs, prior);
-  assert.equal(f.renders.length, 0);
+  assert.equal(f.renders.length, rendersBeforeShutdown);
   assert.equal(f.retries.length, 0);
 });
 

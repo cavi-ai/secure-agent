@@ -81,22 +81,29 @@ test('spendHintText: calls, then plan and unpriced only when non-zero', () => {
   assert.equal(spendHintText(undefined), '');
 });
 
-test('spendCacheText: the notice while a shown report a minute old or more refreshes, with the oldest one\'s age', () => {
+test('spendCacheText: quiet refresh notice retains the oldest saved report age', () => {
   const now = Date.parse('2026-09-25T12:00:00Z');
   const at = ms => new Date(now - ms).toISOString();
   assert.equal(spendCacheText([{ refreshing: false, generated_at: at(9 * 3600000) }, null], now), '');
   assert.equal(spendCacheText([], now), '');
   assert.equal(spendCacheText(undefined, now), '');
-  // The console's own 30 s refresh: no notice.
-  assert.equal(spendCacheText([{ refreshing: true, generated_at: at(30000) }], now), '');
-  assert.equal(spendUpdating({ refreshing: true, generated_at: at(30000) }, now), false);
+  assert.equal(spendCacheText([{ refreshing: true, generated_at: at(30000) }], now), 'Refreshing usage… · saved 30s ago');
+  assert.equal(spendUpdating({ refreshing: true, generated_at: at(30000) }, now), true);
   assert.equal(spendUpdating({ refreshing: true, generated_at: at(60000) }, now), true);
   assert.equal(spendUpdating(null, now), false);
   assert.equal(spendCacheText([{ refreshing: true, generated_at: at(3 * 3600000) }, { refreshing: true, generated_at: at(5 * 60000) }], now),
-    'Updating usage cache… (cached 3h ago)');
+    'Refreshing usage… · saved 3h ago');
   assert.equal(spendCacheText([{ refreshing: false, generated_at: at(9 * 3600000) }, { refreshing: true, generated_at: at(5 * 60000) }], now),
-    'Updating usage cache… (cached 5m ago)');
-  assert.equal(spendCacheText([{ refreshing: true }], now), 'Updating usage cache…');
+    'Refreshing usage… · saved 5m ago');
+  assert.equal(spendCacheText([{ refreshing: true }], now), 'Refreshing usage…');
+});
+
+test('shared account row has one quota and stable account/limit identity', () => {
+  const plan = { harness:'codex', plan_type:'pro', home:'shared account', account_key:'opaque', limit_id:'codex',
+    homes:['codex','agent'], windows:[{window_minutes:10080,used_percent:47}] };
+  assert.equal(spendPlanItems([plan])[0].key,'plan:opaque:codex');
+  assert.match(planLineText(plan),/Codex Pro · shared by 2 homes · weekly 47% used/);
+  assert.equal((joined(spendPlanItems([plan])).match(/hbar-track/g)||[]).length,1);
 });
 
 // A local Friday 3:10 PM, so the expected clock holds in any TZ.

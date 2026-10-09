@@ -34,6 +34,8 @@ type scanCacheStore interface {
 // again in the background. With st set, the reports are saved under saveAs
 // after each computation and restored on first use, so a restarted daemon
 // answers from them.
+// A cold stale request starts the same background computation and returns a
+// zero value with a zero timestamp; callers distinguish it from computed data.
 type costCache[T any] struct {
 	now    func() time.Time // nil: time.Now
 	st     scanCacheStore   // nil: memory only
@@ -90,7 +92,7 @@ func (c *costCache[T]) get(key string, stale bool, compute func() T) (val T, at 
 			c.mu.Unlock()
 			return val, at, false
 		}
-		if has && stale {
+		if stale {
 			if e.flight == nil {
 				f := c.startLocked(e)
 				c.bg.Add(1)

@@ -44,6 +44,11 @@ def check(name, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f" — {detail}" if detail and not ok else ""))
 
 
+def pre(dom_text, pid):
+    m = re.search(r'<pre id="%s"[^>]*>(.*?)</pre>' % pid, dom_text, re.S)
+    return m.group(1) if m else ""
+
+
 def log_rows(dom_text):
     """The history rows in a dump, keyed by data-row-key."""
     rows = {}
@@ -160,6 +165,7 @@ def main():
                     help="also write {sessions,agents,agent}-{dark,light}.png and overview-dark.png of the mock-rendered tabs to DIR")
     ap.add_argument('--session-workbench-only', action='store_true', help='run bounded Sessions workbench interaction probes only')
     ap.add_argument('--auth-recovery-only', action='store_true', help='run console access recovery probes only')
+    ap.add_argument('--spend-only', action='store_true', help='run bounded spend cache and refresh probes only')
     args = ap.parse_args()
     chrome = find_chrome()
     if not chrome:
@@ -171,6 +177,34 @@ def main():
     try:
         build_harness(tmp)
         srv, origin = serve_with_csp(tmp)
+        if args.spend_only:
+            cached = dump_dom(chrome, tmp, '?spendcachedemo', origin)
+            check('spend: saved rows remain visible during a quiet cache refresh',
+                  'notice=Refreshing usage… · saved 3h ago' in html.unescape(pre(cached, 'spend-cache-probe')))
+            check('spend: fresh data replaces cached data and clears the indicator',
+                  'id="count-spend">$37.67<' in cached
+                  and 'id="spend-cache" class="spend-cache" role="status" hidden=""' in cached)
+            delayed = dump_dom(chrome, tmp, '?spendshape', origin)
+            check('spend: delayed refresh retains totals and rows without warning banners',
+                  'Refresh delayed · showing saved usage' in delayed
+                  and 'id="count-spend">$36.67<' in delayed and 'api-service' in delayed
+                  and 'Spend detail: Stale' not in delayed and 'Spend plans: Stale' not in delayed)
+            first = dump_dom(chrome, tmp, '?spendshape&firstload', origin)
+            check('spend: unavailable first response retries without claiming empty computed usage',
+                  'Usage is taking longer to load · retrying…' in first
+                  and 'Refreshing usage…' in first and 'No priced model calls' not in first)
+            recovered = dump_dom(chrome, tmp, '?spendshape&recover', origin)
+            check('spend: valid recovery clears the delayed state',
+                  'Refresh delayed' in pre(recovered, 'spend-shape-before-recovery')
+                  and 'id="spend-cache" class="spend-cache" role="status" hidden=""' in recovered
+                  and 'id="count-spend">$36.67<' in recovered)
+            cold = dump_dom(chrome, tmp, '?spendslowdemo', origin)
+            check('spend: cold loading leaves sibling panels available',
+                  html.unescape(pre(cold, 'spend-slow-probe')) == 'agents=3 spend=Refreshing usage…')
+            print(f'\n{len(passed)} passed, {len(failed)} failed')
+            if failed:
+                sys.exit(1)
+            return
         if not args.session_workbench_only:
             for label, query, size in [('memory', '?authrecover&authhistory', (1280, 800)),
                                        ('trace', '?authrecover&authtrace', (900, 768))]:
@@ -513,10 +547,6 @@ def main():
         check("spend tile shows the 24h total", 'id="count-spend">$36.67<' in dom)
         check("spend tile sub-line counts calls and unpriced calls",
               'id="hint-spend">40 calls · 2 unpriced<' in dom)
-        def pre(dom_text, pid):
-            m = re.search(r'<pre id="%s"[^>]*>(.*?)</pre>' % pid, dom_text, re.S)
-            return m.group(1) if m else ""
-
         def spend_card_of(d):
             return d.split('id="spend-card"', 1)[1].split('</section>', 1)[0]
         spend_key_re = r'<span class="spend-key" title="[^"]*">([^<]+)</span>'
@@ -569,7 +599,7 @@ def main():
               (re.search(r'data-hscroll="[^"]*"', dom_spendphone) or [None])[0])
         cache_probe = html.unescape(pre(dom_spendcache, "spend-cache-probe"))
         check("spend: a report from the usage cache shows at once with the updating notice and its age",
-              cache_probe == "notice=Updating usage cache… (cached 3h ago) hint=40 calls · 2 unpriced · updating…",
+              cache_probe == "notice=Refreshing usage… · saved 3h ago hint=40 calls · 2 unpriced · updating…",
               f"probe={cache_probe!r}")
         cache_q = html.unescape(pre(dom_spendcache, "mock-costs")).split("\n")
         check("spend: the card re-reads until the fresh report lands, then the notice goes",
@@ -579,7 +609,7 @@ def main():
               f"queries={cache_q}")
         slow_probe = html.unescape(pre(dom_spendslow, "spend-slow-probe"))
         check("spend: a report computed cold never holds the first render of the other panels",
-              slow_probe == "agents=3 spend=Loading spend…" and 'id="count-spend">$36.67<' in dom_spendslow,
+              slow_probe == "agents=3 spend=Refreshing usage…" and 'id="count-spend">$36.67<' in dom_spendslow,
               f"probe={slow_probe!r}")
         agents_view = dom.split('id="agents-container"', 1)[1].split('id="fleet-col"', 1)[0]
         agent_groups = re.findall(r'<details class="agent-group" data-harness="([^"]+)"', agents_view)
@@ -834,20 +864,19 @@ def main():
             return match.group(0) if match else ""
         resource_health = health_notice(dom_health, "resources")
         spend_health = health_notice(dom_spendshape, "spend|spend card|spend plans")
-        check("malformed spend reports retain totals, rows and plan headroom with independent stale warnings",
-              all(label + ": Stale" in spend_health for label in ("Spend", "Spend detail", "Spend plans"))
-              and "Invalid response" in spend_health and "hidden" not in spend_health
+        check("delayed spend refresh retains totals, rows and plan headroom with a quiet status",
+              not spend_health and "Refresh delayed · showing saved usage" in dom_spendshape
               and 'id="count-spend">$36.67<' in dom_spendshape
               and "api-service" in spend_card_of(dom_spendshape) and "shape-plan" in spend_card_of(dom_spendshape))
         first_spend = health_notice(dom_spendshapefirst, "spend|spend card|spend plans")
-        check("first-load malformed spend reports show unavailable without inventing empty results",
-              all(label + ": Unavailable" in first_spend for label in ("Spend", "Spend detail", "Spend plans"))
-              and "Loading spend…" in spend_card_of(dom_spendshapefirst)
+        check("first-load malformed spend reports retry quietly without inventing empty results",
+              not first_spend and "Usage is taking longer to load · retrying…" in dom_spendshapefirst
+              and "Refreshing usage…" in spend_card_of(dom_spendshapefirst)
               and "No priced model calls" not in spend_card_of(dom_spendshapefirst)
               and 'id="count-agents">3<' in dom_spendshapefirst)
-        check("valid spend recovery clears malformed-response warnings",
-              "Stale" in pre(dom_spendshaperecover, "spend-shape-before-recovery")
-              and "hidden" in health_notice(dom_spendshaperecover, "spend|spend card|spend plans")
+        check("valid spend recovery clears the delayed refresh status",
+              "Refresh delayed" in pre(dom_spendshaperecover, "spend-shape-before-recovery")
+              and 'id="spend-cache" class="spend-cache" role="status" hidden=""' in dom_spendshaperecover
               and 'id="count-spend">$36.67<' in dom_spendshaperecover)
         for report in ("resources", "audit", "notification rules", "recurring egress"):
             check(f"malformed {report} containers retain prior results with a stale warning",
