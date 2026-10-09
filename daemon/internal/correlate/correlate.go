@@ -86,6 +86,9 @@ type Correlator struct {
 	// same keychain file or leaking to the same host every few minutes is
 	// ONE pattern, not a new incident per fire.
 	lastFire map[string]time.Time
+	// Rejection undo records belong only to flags from the latest Observe.
+	// They are discarded on persistence resolution or the next observation.
+	persistenceUndo map[string][]func()
 	// allowlistOverrides supplies user-approved hosts (console suggestions) on
 	// top of the config allowlist. Nil until wired.
 	allowlistOverrides func(agent string) []string
@@ -306,7 +309,7 @@ var repeatWindows = map[string]time.Duration{
 // the rule's repeat window. Returns false (and records the fire) when a
 // repeat within the window was already flagged — the caller drops it.
 // Callers hold c.mu.
-func (c *Correlator) shouldFlag(rule string, pid int32, subject string, ts time.Time, window time.Duration) bool {
+func (c *Correlator) shouldFlag(flagID, rule string, pid int32, subject string, ts time.Time, window time.Duration) bool {
 	if c.lastFire == nil {
 		c.lastFire = map[string]time.Time{}
 	}
@@ -314,6 +317,14 @@ func (c *Correlator) shouldFlag(rule string, pid int32, subject string, ts time.
 	if last, ok := c.lastFire[key]; ok && ts.Sub(last) < window {
 		return false
 	}
+	previous, existed := c.lastFire[key]
+	c.recordPersistenceUndoLocked(flagID, func() {
+		if existed {
+			c.lastFire[key] = previous
+		} else {
+			delete(c.lastFire, key)
+		}
+	})
 	c.lastFire[key] = ts
 	// Bound the map: prune entries past 4x the largest window.
 	if len(c.lastFire) > 1024 {
@@ -328,6 +339,7 @@ func (c *Correlator) shouldFlag(rule string, pid int32, subject string, ts time.
 
 func (c *Correlator) Observe(e event.Event) []model.Flag {
 	c.mu.Lock()
+	c.persistenceUndo = nil
 	flags := c.observeLocked(e)
 	c.stampProcessLocked(flags)
 	repeats, onRepeat := c.repeats, c.onRepeat
@@ -393,7 +405,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 			c.mutedCount++
 			return nil
 		}
-		if !c.shouldFlag(ruleName, e.PID, e.RemoteHost, e.TS, repeatWindows[ruleName]) {
+		if !c.shouldFlag(flagID, ruleName, e.PID, e.RemoteHost, e.TS, repeatWindows[ruleName]) {
 			return nil
 		}
 		return []model.Flag{
@@ -473,10 +485,10 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 				c.mutedCount++
 				return nil
 			}
-			if !c.shouldFlag("keychain-security-cli", e.PID, "", e.TS, repeatWindows["keychain-security-cli"]) {
+			flagID := hashFlagID("keychain-security-cli", e.PID, e.TS)
+			if !c.shouldFlag(flagID, "keychain-security-cli", e.PID, "", e.TS, repeatWindows["keychain-security-cli"]) {
 				return nil
 			}
-			flagID := hashFlagID("keychain-security-cli", e.PID, e.TS)
 			flags = append(flags, model.Flag{
 				ID:        flagID,
 				Rule:      "keychain-security-cli",
@@ -501,11 +513,12 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 		// escalating its permissions — screen recording, accessibility, and
 		// automation grants are the classic over-reach targets. Severity 3:
 		// there is no benign reason for an agent process to be here.
-		if !c.shouldFlag("tcc-tamper", e.PID, e.Detail, e.TS, repeatWindows["tcc-tamper"]) {
+		flagID := hashFlagID("tcc-tamper", e.PID, e.TS)
+		if !c.shouldFlag(flagID, "tcc-tamper", e.PID, e.Detail, e.TS, repeatWindows["tcc-tamper"]) {
 			return nil
 		}
 		flags = append(flags, model.Flag{
-			ID:        hashFlagID("tcc-tamper", e.PID, e.TS),
+			ID:        flagID,
 			Rule:      "tcc-tamper",
 			Severity:  3,
 			TS:        e.TS,
@@ -581,7 +594,8 @@ func (c *Correlator) secretInTranscriptLocked(e event.Event) []model.Flag {
 		c.mutedCount++
 		return nil
 	}
-	if !c.shouldFlag(rule, 0, e.Path+"|"+ruleID, e.TS, repeatWindows[rule]) {
+	flagID := hashFlagID(rule+"|"+e.Path+"|"+ruleID, 0, e.TS)
+	if !c.shouldFlag(flagID, rule, 0, e.Path+"|"+ruleID, e.TS, repeatWindows[rule]) {
 		return nil
 	}
 	severity := 2
@@ -605,7 +619,7 @@ func (c *Correlator) secretInTranscriptLocked(e event.Event) []model.Flag {
 		evidence = append(evidence, testValueEvidence(signals, e.TS))
 	}
 	return []model.Flag{{
-		ID:        hashFlagID(rule+"|"+e.Path+"|"+ruleID, 0, e.TS),
+		ID:        flagID,
 		Rule:      rule,
 		Severity:  severity,
 		TS:        e.TS,
@@ -651,11 +665,12 @@ func (c *Correlator) keychainAccessLocked(e event.Event, agent string) []model.F
 	// one routine access pattern floods the critical list with
 	// dozens of identical rows — the operator's "ignore" looked
 	// broken because the NEXT fire was a new flag id.
-	if !c.shouldFlag("keychain-access", e.PID, e.Path, e.TS, keychainRepeatWindow) {
+	flagID := hashFlagID("keychain-access", e.PID, e.TS)
+	if !c.shouldFlag(flagID, "keychain-access", e.PID, e.Path, e.TS, keychainRepeatWindow) {
 		return nil
 	}
 	return []model.Flag{{
-		ID:        hashFlagID("keychain-access", e.PID, e.TS),
+		ID:        flagID,
 		Rule:      "keychain-access",
 		Severity:  1,
 		TS:        e.TS,

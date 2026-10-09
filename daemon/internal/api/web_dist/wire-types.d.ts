@@ -504,6 +504,7 @@ export interface Status {
   fleet_configured?: boolean;
   unacted_flags_24h: number;
   bus_drops?: number;
+  delta_drops?: number;
   bus_drop_at?: string;
   bus_dropping?: boolean;
   storage_health?: WriteHealth;

@@ -267,10 +267,17 @@ func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID 
 	}
 	id := hashFlagID(readConnectRule, rootPID, reads[0].at)
 	for _, key := range keys {
+		previous, existed := c.folded[key]
+		c.recordPersistenceUndoLocked(id, func() {
+			if existed {
+				c.folded[key] = previous
+			} else {
+				delete(c.folded, key)
+			}
+		})
 		c.foldLocked(key, id, e.TS, severity)
 	}
-	c.markReadConsumedLocked(rootPID, e.PID)
-	c.markConnConsumedLocked(rootPID, e.PID)
+	c.consumeFlagEvidenceLocked(id, rootPID, e.PID)
 	return []model.Flag{{
 		ID:        id,
 		Rule:      readConnectRule,
