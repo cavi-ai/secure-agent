@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,50 @@ func (allowlistProcSource) Info(pid int32) (agents.ProcInfo, bool) {
 		return agents.ProcInfo{PID: 42, PPID: 1, Exe: "/usr/local/bin/cursor-agent"}, true
 	}
 	return agents.ProcInfo{}, false
+}
+
+func TestAllowlistLoadFailurePreservesUninspectedEgress(t *testing.T) {
+	for _, method := range []string{http.MethodPost, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "allowlist.json")
+			const original = `{"cursor":["old.example.com"],`
+			if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := config.Load("/nonexistent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tagger := agents.New(cfg, allowlistProcSource{})
+			tagger.Refresh()
+			cr := correlate.New(tagger, sensitive.New(cfg), cfg)
+			cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: time.Now(), RemoteHost: "new.example.com", RemotePort: 443})
+			if cr.UninspectedEgressCount() != 1 {
+				t.Fatal("fixture must contain one uninspected endpoint")
+			}
+			st := testStore(t)
+			a := newTestAPI("", st, nil, nil)
+			a.allowlist = correlate.NewAllowlistStore(path)
+			a.correlator = cr
+			body := `{"agent":"cursor","host":"new.example.com"}`
+			r := httptest.NewRequest(method, "/allowlist", strings.NewReader(body))
+			w := httptest.NewRecorder()
+			a.handleAllowlistAdd(w, r)
+			if w.Code != http.StatusInternalServerError {
+				t.Fatalf("status = %d, want 500; body = %s", w.Code, w.Body.String())
+			}
+			if cr.UninspectedEgressCount() != 1 {
+				t.Fatal("failed approval removed the uninspected endpoint")
+			}
+			if audit := st.RecentAudit(10); len(audit) != 0 {
+				t.Fatalf("failed edit recorded success: %+v", audit)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != original {
+				t.Fatalf("policy changed: %q, error = %v", got, err)
+			}
+		})
+	}
 }
 
 func TestAllowlistSuggestApproveRoundTrip(t *testing.T) {
