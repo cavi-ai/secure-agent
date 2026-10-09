@@ -168,6 +168,7 @@ def main():
     ap.add_argument('--spend-only', action='store_true', help='run bounded spend cache and refresh probes only')
     ap.add_argument('--session-results-only', action='store_true', help='run bounded session result and stale-read probes only')
     ap.add_argument('--context-handoff-only', action='store_true', help='run native record handoff probes only')
+    ap.add_argument('--session-permissions-only', action='store_true', help='run bounded decision permission drawer probes only')
     args = ap.parse_args()
     chrome = find_chrome()
     if not chrome:
@@ -179,6 +180,20 @@ def main():
     try:
         build_harness(tmp)
         srv, origin = serve_with_csp(tmp)
+        if args.session_permissions_only or not (args.context_handoff_only or args.session_results_only or args.spend_only or args.auth_recovery_only or args.session_workbench_only):
+            for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+                dom = dump_dom(chrome, tmp, '?permissionsdemo', origin, window_size=size)
+                receipt = re.search(r'data-permissions-probe="([^"]+)"', dom)
+                state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+                check(f'session permissions ({label}): receipt produced', bool(state), str(state))
+                for name in ('scoped', 'entryFocus', 'refreshFocus', 'refreshScroll', 'stale', 'cancel', 'revoked', 'fits', 'back', 'selectionCloses'):
+                    result = state.get(name)
+                    check(f'session permissions ({label}): {name}', result is True, str(result))
+            if args.session_permissions_only:
+                print(f'\n{len(passed)} passed, {len(failed)} failed')
+                if failed:
+                    raise SystemExit(1)
+                return
         if args.context_handoff_only:
             for label, query, size in [('cold', '?contexthandoff&cold', (1280, 800)),
                                        ('reused narrow', '?contexthandoff', (375, 800))]:

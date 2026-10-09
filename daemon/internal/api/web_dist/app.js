@@ -386,6 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionOverviewState = { loading: false, error: 'unavailable' };
     sessionOverviewRefreshAgain = false;
     sessionOutcomesState = { loading: false, error: 'unavailable' };
+    window.SA.invalidateSessionPermissions?.();
     if (liveUpdates) liveUpdates.stop();
     showSessionEnded();
   }
@@ -2961,6 +2962,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (visible.length || transition) sessionSelectionInitialized = true;
       const id = initialSessionId(visible, selectedSessionId);
       if (id !== selectedSessionId) {
+        window.SA.closeSessionPermissions?.();
         selectedSessionId = id;
         resetSessionMemory();
         sessionTimeline = [];
@@ -3085,6 +3087,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.selectSession = async function(id) {
     if (!id) return;
     const changed = selectedSessionId !== id;
+    if (changed) window.SA.closeSessionPermissions?.();
     selectedSessionId = id;
     sessionSelectionInitialized = true;
     sessionReveal = true;
@@ -3423,6 +3426,105 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     history.replaceState(null, '', location.pathname + location.search + hash);
   }
+
+  // Permissions from one saved decision stay in its session. Reads and
+  // confirmations are scoped to this drawer and authentication generation.
+  let sessionPermissions = null;
+  function currentSessionPermissions(st) {
+    return !!st && st === sessionPermissions && !sessionEnded && !drawer.hidden &&
+      drawerMode === 'permissions' && st.seq === drawerSeq && st.auth === handoffGeneration &&
+      st.receipt.sessionID === selectedSessionId;
+  }
+  function renderSessionPermissions(st) {
+    const top = drawerBody.scrollTop;
+    const focused = drawerBody.contains(document.activeElement) ? document.activeElement : null;
+    const partKey = focused?.closest('[data-session-part]')?.dataset.sessionPart;
+    const disclosures = new Map(Array.from(drawerBody.querySelectorAll('[data-session-part]'), part =>
+      [part.dataset.sessionPart, Array.from(part.querySelectorAll('details'), d => d.open)]));
+    patchSessionDetail(drawerBody, 'permissions:' + st.receipt.reviewID, sessionPermissionsHTML(st.receipt, st));
+    for (const part of drawerBody.querySelectorAll('[data-session-part]')) {
+      const saved = disclosures.get(part.dataset.sessionPart);
+      if (saved) Array.from(part.querySelectorAll('details')).forEach((d, i) => { d.open = !!saved[i]; });
+      if (partKey === part.dataset.sessionPart && focused && !focused.isConnected) {
+        const target = Array.from(part.querySelectorAll('button, summary')).find(el =>
+          focused.tagName === 'SUMMARY' ? el.tagName === 'SUMMARY' : el.dataset.action === focused.dataset.action);
+        (target || btnDrawerClose)?.focus({ preventScroll: true });
+      }
+    }
+    drawerBody.scrollTop = top;
+  }
+  window.SA.closeSessionPermissions = () => {
+    if (drawerMode === 'permissions') closeDrawer();
+  };
+  window.SA.invalidateSessionPermissions = () => {
+    if (drawerMode !== 'permissions' || !sessionPermissions) return;
+    Object.assign(sessionPermissions, { loading: false, busy: '', error: 'unavailable' });
+    renderSessionPermissions(sessionPermissions);
+  };
+  window.openSessionPermissions = async function(reviewID, sessionID) {
+    const receipt = sessionPermissionReceipt(sessionOutcomes, reviewID, sessionID);
+    if (!drawer || !receipt || sessionID !== selectedSessionId || sessionEnded) return;
+    drawerMode = 'permissions';
+    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
+    openDrawer({ title: 'Decision permissions', icon: 'doc',
+      back: { label: 'session result', reopen: closeDrawer },
+      onClose: () => { if (drawerMode === 'permissions') drawerMode = null; sessionPermissions = null; } });
+    sessionPermissions = { receipt, seq: drawerSeq, auth: handoffGeneration, rows: null,
+      loading: false, error: '', busy: '', mutationError: false, revoked: new Set() };
+    btnDrawerClose?.focus({ preventScroll: true });
+    await window.refreshSessionPermissions();
+  };
+  window.refreshSessionPermissions = async function() {
+    const st = sessionPermissions;
+    if (!currentSessionPermissions(st) || st.loading || st.busy) return;
+    st.loading = true;
+    renderSessionPermissions(st);
+    try {
+      const response = await apiFetch('/decision-scopes');
+      if (!response.ok) throw new Error('Permissions unavailable');
+      const rows = await response.json();
+      if (!validPermissionRecords(rows)) throw new Error('Invalid permission records');
+      if (!currentSessionPermissions(st)) return;
+      Object.assign(st, { rows: rows.filter(r => st.receipt.ids.includes(r.id)), error: '',
+        mutationError: false, readAt: new Date().toISOString() });
+    } catch {
+      if (!currentSessionPermissions(st)) return;
+      st.error = 'unavailable';
+    }
+    if (!currentSessionPermissions(st)) return;
+    st.loading = false;
+    renderSessionPermissions(st);
+    window.saAnnounce(st.error ? 'Permission status unavailable. Last known records retained.' : 'Permission records loaded.');
+  };
+  window.revokeSessionPermission = async function(id) {
+    const st = sessionPermissions;
+    if (!currentSessionPermissions(st) || st.loading || st.busy || st.error || st.mutationError || st.revoked.has(id)) return;
+    const record = st.rows?.find(r => r.id === id);
+    if (!st.receipt.ids.includes(id) || !record || !permissionRecordState(record).revoke) return;
+    st.busy = id;
+    const consequence = record.operation === 'read-connect' ? 'Future matching activity is evaluated under remaining expectations and policies.' : 'Future guard requests are evaluated under remaining permissions and policies.';
+    const confirmed = await window.saConfirm(`Revoke this saved scope for ${record.resource_path}${record.destination ? ' → ' + record.destination : ''}? ${consequence} This does not undo previous access or remediate past exposure.`, { title: 'Revoke permission', okLabel: 'Revoke permission' });
+    if (!currentSessionPermissions(st)) return;
+    if (!confirmed) { st.busy = ''; renderSessionPermissions(st); return; }
+    renderSessionPermissions(st);
+    btnDrawerClose?.focus({ preventScroll: true });
+    try {
+      const response = await apiFetch('/decision-scopes?id=' + encodeURIComponent(id), { method: 'DELETE' });
+      if (!response.ok) throw new Error('Revocation unavailable');
+      const result = await response.json();
+      if (result?.revoked !== true || result.id !== id) throw new Error('Revocation confirmation unavailable');
+      if (!currentSessionPermissions(st)) return;
+      st.revoked.add(id);
+      st.busy = '';
+      window.saAnnounce('Permission revocation saved. The original decision and remaining risk are retained.');
+      await window.refreshSessionPermissions();
+    } catch {
+      if (!currentSessionPermissions(st)) return;
+      Object.assign(st, { busy: '', mutationError: true });
+      renderSessionPermissions(st);
+      window.saAnnounce('Revocation confirmation unavailable. Refresh permissions before retrying.');
+    }
+  };
 
   // Uninspected-egress drill-down: the count in the firewall panel becomes a
   // list the operator can act on (allow the endpoint, read the advisor's
@@ -4755,6 +4857,15 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'session-outcomes-retry':
         if (selectedSessionId) loadSessionOutcomes(selectedSessionId);
+        break;
+      case 'session-permissions':
+        window.openSessionPermissions(d.review, d.session);
+        break;
+      case 'session-permissions-refresh':
+        window.refreshSessionPermissions();
+        break;
+      case 'session-permission-revoke':
+        window.revokeSessionPermission(d.id);
         break;
       case 'session-findings':
         timelineSession = d.id;

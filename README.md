@@ -243,6 +243,8 @@ Inspects what your agents send to their APIs and catches secrets leaving where t
 
 **See decisions and results in the session.** The Results view keeps saved reviews, process-control receipts, and reported incident actions together. Applied controls, later observations, and unverified external actions remain distinct. Source failures retain the last known receipts with a retry message; bounded and expired history stay visible as limits.
 
+**Inspect the permissions from a decision.** View permissions in Results opens only the scope IDs saved with that decision, with their exact resources, recipients, expiry, and revocation records. Missing records have unknown status; failed refreshes retain labeled last-known data and disable revocation. Revocation requires confirmation and a matching saved response. It does not undo past access or remaining exposure, and other permissions or legacy policies may still allow access. Back returns to the same session result.
+
 **Monitor by default; earn enforcement.** Every rule runs in `monitor` mode: leaks are reported, nothing is blocked. Promote a rule to blocking once you trust it, in `~/.config/secure-agent/config.yaml`:
 
 ```yaml

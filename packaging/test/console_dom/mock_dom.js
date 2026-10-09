@@ -1116,6 +1116,22 @@
     fetchCount++;
     stamp('fetch-count', String(fetchCount));
     const p = String(path).split('?')[0];
+    if (MODE.includes('permissionsdemo') && p === '/decision-scopes') {
+      if (opts?.method === 'DELETE') {
+        const id = new URLSearchParams(String(path).split('?')[1]).get('id');
+        window.__permissionDeletes = (window.__permissionDeletes || 0) + 1;
+        if (id !== 'synthetic-scope') throw new Error('Wrong permission target');
+        window.__permissionRevoked = iso(0);
+        return { ok: true, json: async () => ({ revoked: true, id }) };
+      }
+      if (window.__permissionsFail) return { ok: false, status: 503 };
+      const scope = id => ({ id, kind: 'exact', agent: 'claude', session_id: 'sess-claude-1',
+        workspace: '/synthetic/workspace', reader_exe: '/synthetic/tool', resource_path: '/synthetic/workspace/credentials',
+        operation: 'read-connect', destination: 'example.test:443', rule_id: 'sensitive-read-then-connect',
+        created_at: iso(60000), expires_at: new Date(now + 86400000).toISOString(),
+        revoked_at: id === 'synthetic-scope' ? window.__permissionRevoked : undefined });
+      return { ok: true, json: async () => [scope('synthetic-scope'), scope('unrelated-permission')] };
+    }
     if (MODE.includes('contexthandoff') && p.startsWith('/flags/') && p.endsWith('/explain')) {
       const id = decodeURIComponent(p.split('/')[2]);
       const flag = data['/flags'].find(f => f.id === id);
@@ -1298,7 +1314,7 @@
       const own = sid === 'sess-claude-1';
       const body = { session_id: sid, observed_at: iso(0), history: {
         evidence: Object.fromEntries(['reviews', 'incidents', 'interventions'].map(k => [k, { available: true, at_limit: false, limit: 100 }])),
-        reviews: own ? [{ id: 'synthetic-review', revision: 2, context: { rule: 'sensitive-read-then-connect' }, decision: { action: 'acknowledge', revision: 1, at: iso(90000) }, assessment: { residual_risk: 'possible-exposure' }, evidence_available: false }] : [],
+        reviews: own ? [{ id: 'synthetic-review', revision: 2, context: { rule: 'sensitive-read-then-connect' }, decision: { action: MODE.includes('permissionsdemo') ? 'expect' : 'acknowledge', revision: 1, at: iso(90000), ...(MODE.includes('permissionsdemo') ? { scope_ids: ['synthetic-scope', 'expired-record'] } : {}) }, assessment: { residual_risk: 'possible-exposure' }, evidence_available: false }] : [],
         interventions: own ? [{ id: 'synthetic-control', kind: 'pause', status: 'applied', verification: window.__resultsUpdate ? 'observed' : 'pending', requested_at: iso(60000), limits: ['Synthetic receipt; captured targets only.'] }] : [],
         incidents: own ? [{ id: 'synthetic-incident', remediation: { steps: [{ id: 'synthetic-step', item: { name: 'Synthetic key', action: 'Revoke key' }, status: 'reported', verification: 'unverified', reported_at: iso(30000), newer_evidence: true }] } }] : [],
       } };
@@ -1566,6 +1582,46 @@
   if (MODE.includes('notokenrecover')) {
     setTimeout(() => { location.hash = 'ct=test-token&tab=sessions'; }, 2000);
   }
+  if (MODE.includes('permissionsdemo')) {
+    setTimeout(async () => {
+      const receipt = {};
+      const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+      await window.filterTimelineToSession('sess-claude-1');
+      await window.setSessionView('results');
+      const opener = document.querySelector('[data-action="session-permissions"]');
+      opener.focus(); opener.click(); await tick();
+      const body = document.getElementById('drawer-body');
+      receipt.scoped = body.textContent.includes('example.test:443') && body.textContent.includes('Current status unknown')
+        && !body.textContent.includes('unrelated-permission');
+      receipt.entryFocus = document.activeElement === document.getElementById('btn-drawer-close');
+      const details = body.querySelector('details'); details.open = true;
+      const summary = details.querySelector('summary'); summary.focus();
+      body.scrollTop = 120; const top = body.scrollTop;
+      await window.refreshSessionPermissions();
+      receipt.refreshFocus = document.activeElement === body.querySelector('details summary') && body.querySelector('details').open;
+      receipt.refreshScroll = Math.abs(top - body.scrollTop) < 2;
+      window.__permissionsFail = true;
+      await window.refreshSessionPermissions();
+      receipt.stale = body.textContent.includes('Last known permission records') && body.textContent.includes('example.test:443')
+        && !body.querySelector('[data-action="session-permission-revoke"]');
+      window.__permissionsFail = false; await window.refreshSessionPermissions();
+      const revoke = body.querySelector('[data-action="session-permission-revoke"]');
+      revoke.focus(); revoke.click(); await tick();
+      document.getElementById('confirm-cancel').click(); await tick();
+      receipt.cancel = !window.__permissionDeletes && document.activeElement === revoke;
+      revoke.click(); await tick(); document.getElementById('confirm-ok').click(); await tick(); await tick();
+      receipt.revoked = window.__permissionDeletes === 1 && body.textContent.includes('Revocation saved')
+        && !body.querySelector('[data-action="session-permission-revoke"]');
+      receipt.fits = document.documentElement.scrollWidth <= innerWidth;
+      document.getElementById('btn-drawer-back').click();
+      receipt.back = document.getElementById('drawer').hidden && window.SA.selectedSessionId === 'sess-claude-1'
+        && window.SA.sessionView === 'results' && document.activeElement === opener;
+      opener.click(); await tick(); await window.selectSession('sess-codex-3');
+      receipt.selectionCloses = document.getElementById('drawer').hidden;
+      document.body.dataset.permissionsProbe = JSON.stringify(receipt);
+    }, 2500);
+  }
+
   if (MODE.includes('contexthandoff')) {
     const receipt = {};
     if (!MODE.includes('cold')) setTimeout(() => {
