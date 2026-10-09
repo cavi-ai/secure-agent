@@ -249,6 +249,11 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite: %w", err)
 	}
+	if dbPath == "" {
+		// A :memory: database belongs to one connection. Additional pooled
+		// connections would have neither its schema nor its stored evidence.
+		db.SetMaxOpenConns(1)
+	}
 
 	if err := initializeSchema(db); err != nil {
 		db.Close()
