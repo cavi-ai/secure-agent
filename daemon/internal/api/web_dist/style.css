@@ -1160,7 +1160,7 @@ body.is-ended .masthead-right { display: none !important; }
 
 /* ---------- Home: needs-you list, coverage gap, findings log ---------- */
 #tab-home {
-  container-type: inline-size; display: flex; flex-direction: column; gap: 12px;
+  container-type: inline-size;
   --log-cols: 64px 132px minmax(0, 1fr) 52px 64px 112px 16px;
 }
 #tab-home > * { max-width: 1320px; width: 100%; }

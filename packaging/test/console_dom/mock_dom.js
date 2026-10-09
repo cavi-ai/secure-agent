@@ -1394,7 +1394,7 @@
   }
   // History rows are closed until opened. Unless a mode asks for closed rows
   // (logsclosed, or burstdemo which counts renders), press every row head once
-  // as it renders, so the cards behind the rows are in the DOM the checks read.
+  // as it renders, so the bodies behind the rows are in the DOM the checks read.
   if (!MODE.includes('logsclosed') && !MODE.includes('burstdemo')) {
     const pressed = new Set();
     new MutationObserver(() => {
@@ -2919,6 +2919,7 @@
         checks.draftPreserved = input.value.startsWith('Keep this draft.') && input.value.includes('SSH');
         checks.noOverflow = document.documentElement.scrollWidth <= innerWidth + 1;
         checks.composerVisible = document.getElementById('agent-send').getBoundingClientRect().bottom <= innerHeight + 1;
+        checks.homeHidden = getComputedStyle(document.getElementById('tab-home')).display === 'none';
         document.querySelector('[data-action="goto-tab"][data-tab="home"].agent-posture-link').click();
         checks.alertsReachable = document.querySelector('.tab-btn[data-tab="home"]').getAttribute('aria-selected') === 'true'
           && getComputedStyle(document.querySelector('.statstrip')).display !== 'none';

@@ -1212,8 +1212,7 @@ def main():
         coverage = attention.split('id="coverage-center"', 1)[1].split('id="home-spend"', 1)[0]
         check("Needs you shows the api-service session's decisions as flat rows with its memory, CPU and process count",
               'attention-group' not in dom and "api-service" in decisions
-              and "5.5 GB memory" in decisions and "132.5% CPU" in decisions
-              and "<dt>Processes</dt><dd>2</dd>" in decisions)
+              and "5.5 GB memory · 132.5% CPU · 2 processes" in decisions)
         pat_need = dom_pattern.split('id="attention-center"', 1)[-1].split('id="coverage-center"', 1)[0]
         pat_row = log_rows(dom_pattern).get("pattern:codex|keychain-access|/Users/dev/Library/Keychains/login.keychain-db", "")
         check("a pattern never reaches Needs you; it is one history row with its count",
