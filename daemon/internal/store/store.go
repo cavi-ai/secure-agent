@@ -1570,14 +1570,27 @@ func (s *Store) IncidentIDForFlag(flagID string) (string, bool) {
 // aggregation key — one incident per rule+session+subject; repeat flags
 // become its evidence instead of minting duplicate reports.
 func (s *Store) FindOpenIncident(rule, sessionID, subject string) (string, bool) {
+	id, found, _ := s.FindOpenIncidentResult(rule, sessionID, subject)
+	return id, found
+}
+
+// FindOpenIncidentResult distinguishes a missing aggregation target from an
+// unavailable or invalid stored identity. Callers creating reports must use it.
+func (s *Store) FindOpenIncidentResult(rule, sessionID, subject string) (id string, found bool, readErr error) {
+	defer func() { s.noteRead("incident lookup", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var id string
 	err := s.db.QueryRow(findOpenIncidentSQL, rule, sessionID, subject).Scan(&id)
-	if err != nil {
-		return "", false
+	if err == sql.ErrNoRows {
+		return "", false, nil
 	}
-	return id, true
+	if err != nil {
+		return "", false, err
+	}
+	if id == "" {
+		return "", false, fmt.Errorf("invalid open incident identity")
+	}
+	return id, true, nil
 }
 
 // AggregateIntoIncident folds another flag into an existing incident: bumps

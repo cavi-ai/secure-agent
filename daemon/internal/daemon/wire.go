@@ -477,7 +477,12 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				// become its evidence. The 323-identical-flags storm becomes
 				// one incident with a count, not 323 reports.
 				subject := intel.SubjectForFlag(fl)
-				if openID, found := st.FindOpenIncident(fl.Rule, fl.SessionID, subject); found {
+				openID, found, lookupErr := st.FindOpenIncidentResult(fl.Rule, fl.SessionID, subject)
+				if lookupErr != nil {
+					log.Printf("store: open incident lookup failed: %v", lookupErr)
+					continue
+				}
+				if found {
 					if updated, ok := st.AggregateIntoIncident(openID, fl.ID, fl.TS); ok && deltas != nil {
 						deltas.Publish(api.Delta{Type: "incident", Data: updated})
 					}
