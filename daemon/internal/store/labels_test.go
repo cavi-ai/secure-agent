@@ -22,6 +22,51 @@ func lbl(rule, agent, pattern, label, source string) model.OperatorLabel {
 	return model.OperatorLabel{Kind: "flag", Rule: rule, Agent: agent, Pattern: pattern, Label: label, Source: source, CreatedAt: time.Now()}
 }
 
+func TestOperatorLabelRetentionFailureRollsBackJudgment(t *testing.T) {
+	s := labelStore(t)
+	_, err := s.db.Exec(`WITH RECURSIVE labels(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM labels WHERE n < ?)
+  INSERT INTO operator_labels (kind, rule, agent, pattern, label, reason, source, created_at)
+  SELECT 'flag', 'r', 'codex', '/fixture', 'ok', '', 'mark', '2026-10-09T00:00:00Z' FROM labels`, maxOperatorLabels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`CREATE TRIGGER reject_label_prune BEFORE DELETE ON operator_labels BEGIN SELECT RAISE(ABORT, 'fixture prune failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutOperatorLabelResult(lbl("r", "codex", "/fixture", "not_ok", "mark")); err == nil {
+		t.Fatal("retention failure was reported as a saved judgment")
+	}
+	var count, notOK int
+	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(label='not_ok'),0) FROM operator_labels`).Scan(&count, &notOK); err != nil {
+		t.Fatal(err)
+	}
+	if count != maxOperatorLabels || notOK != 0 {
+		t.Fatalf("partial label write: count=%d not_ok=%d", count, notOK)
+	}
+	if _, err := s.db.Exec(`DROP TRIGGER reject_label_prune`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutOperatorLabelResult(lbl("r", "codex", "/fixture", "not_ok", "mark")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(label='not_ok'),0) FROM operator_labels`).Scan(&count, &notOK); err != nil {
+		t.Fatal(err)
+	}
+	if count != maxOperatorLabels || notOK != 1 {
+		t.Fatalf("retention retry: count=%d not_ok=%d", count, notOK)
+	}
+}
+
+func TestOperatorLabelResultReportsClosedStore(t *testing.T) {
+	s := labelStore(t)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutOperatorLabelResult(lbl("r", "codex", "/fixture", "ok", "mark")); err == nil {
+		t.Fatal("closed store reported a saved judgment")
+	}
+}
+
 // Similar labels rank the exact case first, then the same agent and
 // pattern, the same rule and agent, the same pattern, the same rule.
 func TestSimilarLabelsRanking(t *testing.T) {

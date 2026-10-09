@@ -1,28 +1,48 @@
 package store
 
 import (
+	"fmt"
 	"log"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
-// PutOperatorLabel stores one operator judgment, keeping the newest
-// maxOperatorLabels.
+// PutOperatorLabel records best-effort feedback from another control action.
+// Explicit operator judgments use PutOperatorLabelResult to observe failures.
 func (s *Store) PutOperatorLabel(l model.OperatorLabel) {
+	if err := s.PutOperatorLabelResult(l); err != nil {
+		log.Printf("store: operator label: %v", err)
+	}
+}
+
+// PutOperatorLabelResult commits one judgment and trims history atomically,
+// keeping the newest maxOperatorLabels. An error leaves history unchanged.
+func (s *Store) PutOperatorLabelResult(l model.OperatorLabel) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { s.noteWrite("operator labels", err) }()
 	if l.CreatedAt.IsZero() {
 		l.CreatedAt = time.Now()
 	}
-	if _, err := s.db.Exec(`INSERT INTO operator_labels (kind, rule, agent, pattern, label, reason, source, created_at)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin operator label write: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO operator_labels (kind, rule, agent, pattern, label, reason, source, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, l.Kind, l.Rule, l.Agent, l.Pattern, l.Label, l.Reason, l.Source,
 		l.CreatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
-		log.Printf("store: operator label: %v", err)
-		return
+		return fmt.Errorf("insert operator label: %w", err)
 	}
-	_, _ = s.db.Exec(`DELETE FROM operator_labels WHERE id NOT IN
-		(SELECT id FROM operator_labels ORDER BY id DESC LIMIT ?)`, maxOperatorLabels)
+	if _, err := tx.Exec(`DELETE FROM operator_labels WHERE id NOT IN
+		(SELECT id FROM operator_labels ORDER BY id DESC LIMIT ?)`, maxOperatorLabels); err != nil {
+		return fmt.Errorf("trim operator labels: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit operator label write: %w", err)
+	}
+	return nil
 }
 
 // SimilarLabels returns up to limit labels sharing the rule or the pattern,
