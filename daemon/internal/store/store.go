@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -2412,41 +2413,64 @@ type IncidentWorkflow struct {
 // forward-only: open → acknowledged → resolved. Re-resolving is allowed (note
 // is replaced); acknowledged_at is stamped only the first time.
 func (s *Store) SetIncidentStatus(id, status, note string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	_, updated, err := s.SetIncidentStatusResult(id, status, note)
+	return updated, err
+}
 
-	var res sql.Result
-	var err error
+// ErrInvalidIncidentStatus distinguishes invalid input from storage failure.
+var ErrInvalidIncidentStatus = errors.New("invalid incident status")
+
+// SetIncidentStatusResult returns the workflow read in the same transaction as
+// the update. An unreadable result or failed commit leaves no successful update.
+func (s *Store) SetIncidentStatusResult(id, status, note string) (workflow IncidentWorkflow, updated bool, writeErr error) {
+	var query string
+	var args []any
 	switch status {
 	case "acknowledged":
-		res, err = s.db.Exec(
-			`UPDATE incidents SET status='acknowledged',
-				acknowledged_at=COALESCE(acknowledged_at, ?)
-			 WHERE id = ? OR flag_id = ?`,
-			time.Now().UTC().Format(time.RFC3339Nano), id, id)
+		query = `UPDATE incidents SET status='acknowledged',
+			acknowledged_at=COALESCE(acknowledged_at, ?)
+			WHERE id = ? OR flag_id = ?`
+		args = []any{time.Now().UTC().Format(time.RFC3339Nano), id, id}
 	case "resolved":
-		res, err = s.db.Exec(
-			`UPDATE incidents SET status='resolved', resolved_at=?, resolution_note=?
-			 WHERE id = ? OR flag_id = ?`,
-			time.Now().UTC().Format(time.RFC3339Nano), note, id, id)
+		query = `UPDATE incidents SET status='resolved', resolved_at=?, resolution_note=?
+			WHERE id = ? OR flag_id = ?`
+		args = []any{time.Now().UTC().Format(time.RFC3339Nano), note, id, id}
 	case "open":
-		res, err = s.db.Exec(
-			`UPDATE incidents SET status='open', acknowledged_at=NULL, resolved_at=NULL, resolution_note=NULL
-			 WHERE id = ? OR flag_id = ?`, id, id)
+		query = `UPDATE incidents SET status='open', acknowledged_at=NULL, resolved_at=NULL, resolution_note=NULL
+			WHERE id = ? OR flag_id = ?`
+		args = []any{id, id}
 	default:
-		return false, fmt.Errorf("invalid status %q (open|acknowledged|resolved)", status)
+		return IncidentWorkflow{}, false, fmt.Errorf("%w %q (open|acknowledged|resolved)", ErrInvalidIncidentStatus, status)
 	}
+	defer func() { s.noteWrite("incident workflows", writeErr) }()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
 	if err != nil {
-		return false, err
+		return IncidentWorkflow{}, false, err
 	}
-	// changes() is per-connection state and database/sql pools connections, so
-	// a follow-up SELECT changes() can land on a different connection and
-	// report 0 — RowsAffected() comes back with the UPDATE's own result.
+	defer tx.Rollback()
+	res, err := tx.Exec(query, args...)
+	if err != nil {
+		return IncidentWorkflow{}, false, err
+	}
 	changed, err := res.RowsAffected()
 	if err != nil {
-		return false, err
+		return IncidentWorkflow{}, false, err
 	}
-	return changed > 0, nil
+	if changed == 0 {
+		return IncidentWorkflow{}, false, nil
+	}
+	wf, err := scanIncidentWorkflow(tx.QueryRow(
+		`SELECT status, acknowledged_at, resolved_at, resolution_note FROM incidents WHERE id = ? OR flag_id = ?`, id, id))
+	s.noteRead("incident workflows", err)
+	if err != nil {
+		return IncidentWorkflow{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return IncidentWorkflow{}, false, err
+	}
+	return wf, true, nil
 }
 
 // IncidentStatus returns the workflow state for one incident.
@@ -2462,26 +2486,32 @@ func (s *Store) IncidentStatusResult(id string) (workflow IncidentWorkflow, foun
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var wf IncidentWorkflow
-	var ack, res, note sql.NullString
-	err := s.db.QueryRow(
-		`SELECT status, acknowledged_at, resolved_at, resolution_note FROM incidents WHERE id = ? OR flag_id = ?`, id, id,
-	).Scan(&wf.Status, &ack, &res, &note)
+	wf, err := scanIncidentWorkflow(s.db.QueryRow(
+		`SELECT status, acknowledged_at, resolved_at, resolution_note FROM incidents WHERE id = ? OR flag_id = ?`, id, id))
 	if err == sql.ErrNoRows {
 		return IncidentWorkflow{Status: "unknown"}, false, nil
 	}
 	if err != nil {
 		return IncidentWorkflow{Status: "unknown"}, false, err
 	}
+	return wf, true, nil
+}
+
+func scanIncidentWorkflow(row *sql.Row) (IncidentWorkflow, error) {
+	var wf IncidentWorkflow
+	var ack, res, note sql.NullString
+	if err := row.Scan(&wf.Status, &ack, &res, &note); err != nil {
+		return IncidentWorkflow{}, err
+	}
 	switch wf.Status {
 	case "open", "acknowledged", "resolved":
 	default:
-		return IncidentWorkflow{Status: "unknown"}, false, fmt.Errorf("invalid incident workflow status")
+		return IncidentWorkflow{}, fmt.Errorf("invalid incident workflow status")
 	}
 	wf.AcknowledgedAt = ack.String
 	wf.ResolvedAt = res.String
 	wf.ResolutionNote = note.String
-	return wf, true, nil
+	return wf, nil
 }
 
 // ReclassifyReadConnectSeverity changes only unresolved weak correlations.

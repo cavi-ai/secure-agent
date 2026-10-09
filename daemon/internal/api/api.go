@@ -1230,9 +1230,13 @@ func (a *API) handleIncidentStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `Invalid payload: {"id","status":"open|acknowledged|resolved","note":"..."}`, http.StatusBadRequest)
 		return
 	}
-	ok, err := a.store.SetIncidentStatus(req.ID, req.Status, req.Note)
+	wf, ok, err := a.store.SetIncidentStatusResult(req.ID, req.Status, req.Note)
+	if errors.Is(err, store.ErrInvalidIncidentStatus) {
+		http.Error(w, "Invalid incident status: open|acknowledged|resolved", http.StatusBadRequest)
+		return
+	}
 	if err != nil {
-		http.Error(w, fmt.Sprintf("status update failed: %v", err), http.StatusBadRequest)
+		http.Error(w, "Incident status update unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if !ok {
@@ -1240,7 +1244,6 @@ func (a *API) handleIncidentStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.store.PutAudit(store.AuditEntry{Action: "incident-status", Rule: req.ID, ToMode: req.Status, Detail: req.Note})
-	wf, _ := a.store.IncidentStatus(req.ID)
 	writeJSON(w, map[string]any{"status": "ok", "workflow": wf})
 }
 
