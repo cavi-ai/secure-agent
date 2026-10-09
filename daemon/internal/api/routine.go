@@ -65,10 +65,22 @@ func routineExpectable(f model.Flag, reader, area, home string) bool {
 // by reader and area, whichever agent raised them. A group is kept when it
 // holds routineMin flags and spans agents or files; most flags first.
 func (a *API) routineGroups(since time.Time) []model.RoutineGroup {
+	groups, _ := a.routineGroupsResult(since)
+	return groups
+}
+
+func (a *API) routineGroupsResult(since time.Time) ([]model.RoutineGroup, error) {
 	if a.store == nil {
-		return []model.RoutineGroup{}
+		return []model.RoutineGroup{}, nil
 	}
-	flags := a.store.QueryFlags(store.FlagFilter{Rule: readConnectRule, Unacted: true, Since: since.UTC().Format(time.RFC3339), Limit: patternFlagLimit})
+	flags, err := a.store.QueryFlagsResult(store.FlagFilter{Rule: readConnectRule, Unacted: true, Since: since.UTC().Format(time.RFC3339), Limit: patternFlagLimit})
+	if err != nil {
+		return nil, err
+	}
+	return a.routineGroupsOf(flags), nil
+}
+
+func (a *API) routineGroupsOf(flags []model.Flag) []model.RoutineGroup {
 	sort.SliceStable(flags, func(i, j int) bool { return flags[i].TS.After(flags[j].TS) })
 	home := strings.TrimRight(explainHome(), "/")
 	type group struct {

@@ -61,29 +61,38 @@ func (a *API) currentSnapshot() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return a.snapshotWithSessions(sessions, events), nil
+	return a.snapshotWithSessions(sessions, events)
 }
 
-func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Event) Snapshot {
+func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Event) (Snapshot, error) {
 	incidents := a.store.RecentIncidents(10)
 	out := make([]snapshotIncident, 0, len(incidents))
 	for i := range incidents {
 		wf, _ := a.store.IncidentStatus(incidents[i].ID)
 		out = append(out, snapshotIncident{IncidentReport: incidents[i], Workflow: wf})
 	}
-	flags := a.store.QueryFlags(store.FlagFilter{
+	flags, err := a.store.QueryFlagsResult(store.FlagFilter{
 		Unacted: true,
 		Since:   time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
 		Limit:   200,
 	})
+	if err != nil {
+		return Snapshot{}, err
+	}
 	for i := range flags {
 		flags[i].Title = humanFlagTitle(flags[i].Rule)
 		flags[i].ReviewID, _ = a.store.FindingReviewID(flags[i].ID)
 	}
 	a.stampExplains(flags)
 	since := time.Now().Add(-24 * time.Hour)
-	patterns := a.computePatterns(since, patternDefaultMin)
-	routine := a.routineGroups(since)
+	patterns, err := a.computePatternsResult(since, patternDefaultMin)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	routine, err := a.routineGroupsResult(since)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	reviews, reviewErr := a.store.ListFindingReviews("", 100)
 	if reviewErr != nil {
 		reviews.Degraded = true
@@ -100,7 +109,7 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 		Suggestions: a.suggestionList(),
 		Mutes:       a.mutePairs(),
 		Sessions:    sessions,
-	}
+	}, nil
 }
 
 func (a *API) mutePairs() []MutePair {

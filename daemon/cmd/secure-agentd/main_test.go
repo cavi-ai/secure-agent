@@ -243,10 +243,17 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	// first (same contract as TestFullBusCorrelatorStorePipeline), then
 	// assert the unix API serves the flag.
 	deadline := time.Now().Add(5 * time.Second)
-	for len(st.RecentFlags(10)) == 0 && time.Now().Before(deadline) {
+	readFlags := func() []model.Flag {
+		flags, err := st.QueryFlagsResult(store.FlagFilter{Limit: 10})
+		if err != nil {
+			t.Fatalf("flag read failed: %v", err)
+		}
+		return flags
+	}
+	for len(readFlags()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if len(st.RecentFlags(10)) == 0 {
+	if len(readFlags()) == 0 {
 		events := st.RecentEvents(50)
 		evData, _ := json.MarshalIndent(events, "", "  ")
 		t.Fatalf("correlator never wrote a flag\nEVENTS:\n%s", string(evData))

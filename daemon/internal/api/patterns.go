@@ -39,14 +39,27 @@ func (a *API) handlePatterns(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("hours must be 1..%d and min at least 2", patternMaxHours), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, a.computePatterns(time.Now().Add(-time.Duration(hours)*time.Hour), minCount))
+	patterns, err := a.computePatternsResult(time.Now().Add(-time.Duration(hours)*time.Hour), minCount)
+	if err != nil {
+		http.Error(w, "flag data unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, patterns)
 }
 
 // computePatterns groups the flags raised since `since` by agent, rule and
 // served subject, keeps groups of at least min flags, most open first.
 func (a *API) computePatterns(since time.Time, min int) []model.Pattern {
-	flags := a.store.QueryFlags(store.FlagFilter{Since: since.UTC().Format(time.RFC3339), Limit: patternFlagLimit})
-	return a.patternsOf(flags, since, time.Now(), min)
+	patterns, _ := a.computePatternsResult(since, min)
+	return patterns
+}
+
+func (a *API) computePatternsResult(since time.Time, min int) ([]model.Pattern, error) {
+	flags, err := a.store.QueryFlagsResult(store.FlagFilter{Since: since.UTC().Format(time.RFC3339), Limit: patternFlagLimit})
+	if err != nil {
+		return nil, err
+	}
+	return a.patternsOf(flags, since, time.Now(), min), nil
 }
 
 func (a *API) patternsOf(flags []model.Flag, since, now time.Time, minCount int) []model.Pattern {

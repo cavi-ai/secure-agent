@@ -12,8 +12,8 @@ import (
 )
 
 // A store whose stamps include 'now' (which datetime() refuses inside an
-// index) or malformed text still opens and keeps working; only the
-// retention-order indexes are skipped.
+// index) or malformed text still opens and accepts writes/retention; only the
+// retention-order indexes are skipped. Flag reads reject malformed timestamps.
 func TestOpenSurvivesStampsTheTimeIndexesRefuse(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "e.db")
 	raw, err := sql.Open("sqlite", path)
@@ -39,12 +39,24 @@ func TestOpenSurvivesStampsTheTimeIndexesRefuse(t *testing.T) {
 		t.Fatalf("Open with a 'now' stamp: %v", err)
 	}
 	defer s.Close()
-	s.PutFlag(model.Flag{ID: "f-new", Rule: "r", Severity: 2, Agent: "claude", TS: time.Date(2026, 10, 7, 13, 0, 0, 0, time.UTC)})
-	if got := s.QueryFlags(FlagFilter{Limit: 10}); len(got) != 4 {
-		t.Fatalf("QueryFlags after open = %d flags, want 4: %+v", len(got), got)
+	if _, err := s.PutFlag(model.Flag{ID: "f-new", Rule: "r", Severity: 2, Agent: "claude", TS: time.Date(2026, 10, 7, 13, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := s.db.QueryRow("SELECT count(*) FROM flags").Scan(&count); err != nil || count != 4 {
+		t.Fatalf("flags retained after open: count=%d err=%v", count, err)
+	}
+	if got, err := s.QueryFlagsResult(FlagFilter{Limit: 10}); err == nil || got != nil {
+		t.Fatalf("malformed timestamps returned as valid flags: %+v, %v", got, err)
 	}
 	if _, err := s.db.Exec(trimFlagsSQL, 2); err != nil {
 		t.Fatalf("trim without the time index: %v", err)
+	}
+	if _, err := s.db.Exec("UPDATE flags SET ts='2026-10-07T12:00:00Z' WHERE ts='now' OR ts='garbage'"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.QueryFlagsResult(FlagFilter{Limit: 10}); err != nil || len(got) != 2 {
+		t.Fatalf("read after timestamp repair: %+v, %v", got, err)
 	}
 }
 
