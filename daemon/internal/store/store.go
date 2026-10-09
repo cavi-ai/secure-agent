@@ -1515,7 +1515,7 @@ func (s *Store) GetIncident(id string) (report *model.IncidentReport, readErr er
 		// Resolve the report identity first so an alias cannot shadow it.
 		err = s.db.QueryRow(`SELECT id, report_json FROM incidents
 			WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
-			ORDER BY datetime(created_at) DESC, id DESC LIMIT 1`, id, id).Scan(&storedID, &reportJSON)
+			ORDER BY `+timestampOrderExpr("created_at")+` DESC, id DESC LIMIT 1`, id, id).Scan(&storedID, &reportJSON)
 	}
 	if err != nil {
 		return nil, err
@@ -1557,7 +1557,7 @@ func (s *Store) IncidentIDForFlag(flagID string) (string, bool) {
 	err := s.db.QueryRow(
 		`SELECT id FROM incidents
 		 WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
-		 ORDER BY datetime(created_at) DESC LIMIT 1`,
+		 ORDER BY `+timestampOrderExpr("created_at")+` DESC, id DESC LIMIT 1`,
 		flagID, flagID,
 	).Scan(&id)
 	if err != nil {
