@@ -2,6 +2,8 @@ package firewall
 
 import (
 	"encoding/base64"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +27,57 @@ func TestRegistryMatchesRegisteredSecretAcrossEncodings(t *testing.T) {
 	enc := []byte("blob=" + base64Std(secret))
 	if got := r.Match(enc); len(got) == 0 {
 		t.Fatal("base64-wrapped secret should match")
+	}
+}
+
+type ingestCountingReader struct {
+	io.Reader
+	bytesRead int
+}
+
+func (r *ingestCountingReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.bytesRead += n
+	return n, err
+}
+
+func TestIngestSourceReadLimit(t *testing.T) {
+	const prefix = "FIRST=first-fixture-value\n"
+	for _, size := range []int{maxIngestBytes - 1, maxIngestBytes, maxIngestBytes + 1, 2 * maxIngestBytes} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			// Short comment lines exercise the total limit independently of the
+			// per-line scanner limit. A valid prefix must never escape on overflow.
+			padding := size - len(prefix)
+			input := io.MultiReader(strings.NewReader(prefix), strings.NewReader(strings.Repeat("#\n", padding/2)), strings.NewReader(strings.Repeat("#", padding%2)))
+			reader := &ingestCountingReader{Reader: input}
+			fps, err := scanIngestSource("fixture.env", reader, []byte("salt"), 1)
+			if size > maxIngestBytes {
+				if err == nil || fps != nil {
+					t.Errorf("oversized source returned %d fingerprints and error %v", len(fps), err)
+				}
+				if reader.bytesRead > maxIngestBytes+1 {
+					t.Errorf("read %d bytes beyond budget %d", reader.bytesRead, maxIngestBytes+1)
+				}
+			} else if err != nil || len(fps) != 1 || fps[0].HMAC != Fingerprint([]byte("salt"), "first-fixture-value") {
+				t.Errorf("source within limit: %d fingerprints, %v", len(fps), err)
+			}
+		})
+	}
+}
+
+func TestIngestPreservesIDsAcrossSources(t *testing.T) {
+	dir := t.TempDir()
+	var sources []string
+	for _, key := range []string{"FIRST", "SECOND"} {
+		path := filepath.Join(dir, key+".env")
+		if err := os.WriteFile(path, []byte(key+"=fixture-value-for-"+key+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sources = append(sources, path)
+	}
+	fps, err := Ingest(sources, []byte("salt"))
+	if err != nil || len(fps) != 2 || fps[0].ID != "fp-1" || fps[1].ID != "fp-2" {
+		t.Fatalf("fingerprint identity across sources: %+v, %v", fps, err)
 	}
 }
 
