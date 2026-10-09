@@ -628,7 +628,8 @@ def main():
         check("collector-down FDA deep link", 'data-action="open-fda"' in dom and "Full Disk Access" in dom)
         check("advisor posture line separates opinion from evidence and risk off Home",
               "Advisor opinion: 1 of 2 triaged critical flags may be benign. Evidence and risk are unchanged." in dom_tab)
-        check("incident narrative rendered", "advisor-narrative" in dom and "Rotate the key first" in dom)
+        check("incident narrative rendered in its row's body", "Rotate the key first" in log_rows(dom).get("incident:inc-20260907-6033-a1b2", ""),
+              sorted(k for k in log_rows(dom) if k.startswith("incident:")))
 
         # --- allowlist suggestions ---
         check("egress suggestion rendered", "fw-suggestion" in dom and "registry.npmjs.org" in dom)
@@ -1570,7 +1571,7 @@ def main():
         check("patterns: History shows the storm as one row, its body with the count, summary, 24 bars and open count",
               len(pat_cards) == 1 and "323×" in pat_cards[0][1]
               and "codex touched the login keychain 323 times" in pat_cards[0][1]
-              and len(re.findall(r'<i class="h\d"></i>', pat_cards[0][1])) == 24
+              and len(re.findall(r'<i class="h\d"></i>', (re.search(r'<span class="pattern-bars" role="img"[^>]*>(.*?)</span>', pat_cards[0][1], re.S) or [None, ""])[1])) == 24
               and '<b class="pattern-open">323 open</b>' in pat_cards[0][1]
               and 'data-row-key="flag:flag-6"' not in pat_flags and 'data-row-key="flag:flag-7"' not in pat_flags
               and all(f'data-action="open-flag" data-id="{fid}"' in pat_cards[0][1] for fid in ("flag-6", "flag-7")),

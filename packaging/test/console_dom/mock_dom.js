@@ -2825,7 +2825,7 @@
   // still up at dump time.
   if (MODE.includes('explainact')) {
     setTimeout(() => openTab('findings'), 4000);
-    setTimeout(() => document.querySelector('#flags-list .finding[data-flag-id="flag-2"] .finding-actions button')?.click(), 9000);
+    setTimeout(() => document.querySelector('#flags-list .row-body[data-flag-id="flag-2"] .body-actions button')?.click(), 9000);
   }
   // routinedemo: gh read hosts.yml under three agents — one routine decision
   // ahead of the agent groups; Treat as routine is confirmed and sends the
@@ -2848,7 +2848,7 @@
       const card = document.querySelector(`#flags-list [data-routine-key="${CSS.escape(key)}"]`);
       const queued = !!document.querySelector(`#attention-list [data-routine-key="${CSS.escape(key)}"]`);
       const count = (document.querySelector('#flags-list .log-row[data-row-key^="routine:"] .c-count') || {}).textContent;
-      stamp('routine-before', card ? `queued=${queued} count=${count} buttons=${card.querySelectorAll('.attention-actions > button').length}` : 'missing');
+      stamp('routine-before', card ? `queued=${queued} count=${count} buttons=${card.querySelectorAll('.body-actions > button').length}` : 'missing');
       card?.querySelector('[data-action-id="expect-all"]')?.click();
       setTimeout(() => document.getElementById('confirm-ok')?.click(), 300);
     }, 4000);
@@ -2871,8 +2871,8 @@
     };
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
-      const card = document.querySelector('#flags-list .finding[data-flag-id="flag-1"]');
-      stamp('org-allow-card', card ? `bar=${card.querySelectorAll('.finding-actions > button').length} org=${card.querySelectorAll('[data-action="explain-allow-org"][data-org="Google"]').length} hosts=${card.querySelectorAll('[data-action-id="allow-host"]').length}` : 'missing');
+      const card = document.querySelector('#flags-list .row-body[data-flag-id="flag-1"]');
+      stamp('org-allow-card', card ? `bar=${card.querySelectorAll('.body-actions > button').length} org=${card.querySelectorAll('[data-action="explain-allow-org"][data-org="Google"]').length} hosts=${card.querySelectorAll('[data-action-id="allow-host"]').length}` : 'missing');
       card?.querySelector('[data-action="explain-allow-org"]')?.click();
     }, 9000);
   }
@@ -2881,7 +2881,7 @@
   // request served for that action, not just whichever renders first.
   if (MODE.includes('allowpathact')) {
     setTimeout(() => openTab('findings'), 4000);
-    setTimeout(() => document.querySelector('#flags-list .finding[data-flag-id="flag-2"] [data-action-id="allow-path"]')?.click(), 9000);
+    setTimeout(() => document.querySelector('#flags-list .row-body[data-flag-id="flag-2"] [data-action-id="allow-path"]')?.click(), 9000);
   }
   // Exercise the actual workspace controls without sending chat or commands.
   if (MODE.includes('agentworkspace')) {

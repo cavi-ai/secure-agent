@@ -330,7 +330,10 @@ function needView(item, ctx) {
         items: [
           { label: 'Keep running', attrs: `data-action="resource-control" data-id="${id}" data-decision="dismiss"`, bar: true },
           { label: `Apply ${String(item.action).replaceAll('_', ' ')}`, attrs: `data-action="resource-control" data-id="${id}" data-decision="apply" data-intervention="${escapeHTML(item.action)}"`, kind: 'danger', bar: true },
-        ] };
+        ],
+        body: () => `<dl class="finding-facts"><dt>Session</dt><dd>${escapeHTML(g.label || '')}</dd>`
+          + `<dt>Memory</dt><dd>${escapeHTML(g.rssBytes ? fmtRSS(g.rssBytes) : '')}</dd><dt>CPU</dt><dd>${escapeHTML(g.cpuPercent ? fmtCPU(g.cpuPercent) : '')}</dd>`
+          + `<dt>Processes</dt><dd>${Number(g.processCount) || 0}</dd></dl>` };
     case 'incident': {
       const inc = ctx.incidents.get(item.id);
       return { ...v, word: 'incident', why: [item.title, item.status].filter(Boolean).join(' · '), at: inc ? inc.timestamp : '',
