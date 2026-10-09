@@ -1462,21 +1462,20 @@ func (s *Store) PutIncident(inc model.IncidentReport) (writeErr error) {
 	defer s.mu.Unlock()
 
 	inc.Remediation = nil
+	if inc.AggregateCount == 0 {
+		inc.AggregateCount = 1
+	}
 	data, err := json.Marshal(inc)
 	if err != nil {
 		return fmt.Errorf("marshal incident: %w", err)
 	}
 
 	tsStr := inc.Timestamp.UTC().Format(time.RFC3339Nano)
-	count := inc.AggregateCount
-	if count == 0 {
-		count = 1
-	}
 	flagIDs, _ := json.Marshal([]string{inc.FlagID})
 	result, err := s.db.Exec(
 		`INSERT OR REPLACE INTO incidents (id, flag_id, pid, risk, report_json, created_at, rule, session_id, subject, aggregate_count, last_flag_at, flag_ids, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
 		inc.ID, inc.FlagID, inc.PID, string(inc.Risk), string(data), tsStr,
-		inc.Rule, inc.SessionID, inc.Subject, count, tsStr, string(flagIDs),
+		inc.Rule, inc.SessionID, inc.Subject, inc.AggregateCount, tsStr, string(flagIDs),
 	)
 	if err != nil {
 		return fmt.Errorf("insert incident: %w", err)
