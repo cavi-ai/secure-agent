@@ -1220,17 +1220,42 @@ func (s *Store) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict
 
 // attachAdvisorLocked joins stored verdicts onto flags (caller holds mu).
 func (s *Store) attachAdvisorLocked(flags []model.Flag) {
+	if len(flags) == 0 {
+		return
+	}
+	var readErr error
 	for i := range flags {
-		v, ok := s.advisorVerdictLocked(flags[i].ID, "flag")
+		v, ok, err := s.advisorVerdictResultLocked(flags[i].ID, "flag")
+		if readErr == nil {
+			readErr = err
+		}
 		if ok {
 			vv := v
 			flags[i].Advisor = &vv
 		}
 	}
+	s.noteRead(advisorReadKind("flag"), readErr)
 }
 
 // advisorVerdictLocked fetches one verdict (caller holds mu).
 func (s *Store) advisorVerdictLocked(subjectID, kind string) (model.AdvisorVerdict, bool) {
+	v, found, err := s.advisorVerdictResultLocked(subjectID, kind)
+	s.noteRead(advisorReadKind(kind), err)
+	return v, found
+}
+
+// Separate health by subject kind so an unrelated successful lookup cannot
+// clear a failing flag or incident enrichment read.
+func advisorReadKind(kind string) string {
+	switch kind {
+	case "flag", "incident", "guard", "worktree", "host", "egress", "project":
+		return kind + " advisor verdicts"
+	default:
+		return "advisor verdicts"
+	}
+}
+
+func (s *Store) advisorVerdictResultLocked(subjectID, kind string) (model.AdvisorVerdict, bool, error) {
 	var v model.AdvisorVerdict
 	var conf sql.NullFloat64
 	var assessment, action, modelName, created sql.NullString
@@ -1239,8 +1264,20 @@ func (s *Store) advisorVerdictLocked(subjectID, kind string) (model.AdvisorVerdi
 		`SELECT assessment, confidence, rationale, suggested_action, model, created_at
 		 FROM advisor_verdicts WHERE subject_id = ? AND kind = ?`, subjectID, kind,
 	).Scan(&assessment, &conf, &rationale, &action, &modelName, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.AdvisorVerdict{}, false, nil
+	}
 	if err != nil {
-		return v, false
+		return model.AdvisorVerdict{}, false, err
+	}
+	if math.IsNaN(conf.Float64) || math.IsInf(conf.Float64, 0) {
+		return model.AdvisorVerdict{}, false, fmt.Errorf("invalid advisor confidence")
+	}
+	if created.String != "" {
+		v.CreatedAt, err = time.Parse(time.RFC3339Nano, created.String)
+		if err != nil {
+			return model.AdvisorVerdict{}, false, fmt.Errorf("invalid advisor timestamp: %w", err)
+		}
 	}
 	v.Assessment = assessment.String
 	if conf.Valid {
@@ -1249,8 +1286,7 @@ func (s *Store) advisorVerdictLocked(subjectID, kind string) (model.AdvisorVerdi
 	v.Rationale = rationale
 	v.SuggestedAction = action.String
 	v.Model = modelName.String
-	v.CreatedAt, _ = time.Parse(time.RFC3339Nano, created.String)
-	return v, true
+	return v, true, nil
 }
 
 func (s *Store) RecentEvents(limit int) []event.Event {
@@ -1737,19 +1773,36 @@ func (s *Store) LastEventTimes(pids []int32) map[int32]string {
 
 // AdvisorVerdictFor fetches one stored verdict (public read; absent = false).
 func (s *Store) AdvisorVerdictFor(subjectID, kind string) (model.AdvisorVerdict, bool) {
+	v, found, _ := s.AdvisorVerdictResultFor(subjectID, kind)
+	return v, found
+}
+
+// AdvisorVerdictResultFor distinguishes absent advice from unavailable or
+// malformed stored advice without returning a partial verdict.
+func (s *Store) AdvisorVerdictResultFor(subjectID, kind string) (v model.AdvisorVerdict, found bool, readErr error) {
+	defer func() { s.noteRead(advisorReadKind(kind), readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.advisorVerdictLocked(subjectID, kind)
+	return s.advisorVerdictResultLocked(subjectID, kind)
 }
 
 // attachNarrativesLocked joins advisor narratives onto incidents (caller
 // holds mu).
 func (s *Store) attachNarrativesLocked(list []model.IncidentReport) {
+	if len(list) == 0 {
+		return
+	}
+	var readErr error
 	for i := range list {
-		if v, ok := s.advisorVerdictLocked(list[i].ID, "incident"); ok {
+		v, ok, err := s.advisorVerdictResultLocked(list[i].ID, "incident")
+		if readErr == nil {
+			readErr = err
+		}
+		if ok {
 			list[i].AdvisorNarrative = v.Rationale
 		}
 	}
+	s.noteRead(advisorReadKind("incident"), readErr)
 }
 
 // PutAudit records a policy/control change. The store stamps the timestamp so

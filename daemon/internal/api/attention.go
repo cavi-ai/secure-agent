@@ -327,6 +327,7 @@ func (a *API) attentionQueueWithReadHealth(st Status, patterns []model.Pattern, 
 		}
 	}
 	flags, flagErr := a.attentionFlagsResult()
+	failedReads = append(failedReads, a.advisorReadFailures("flag")...)
 	if flagErr != nil {
 		failedReads = append(failedReads, "flags")
 	}
@@ -461,6 +462,7 @@ func (a *API) attentionQueueWithReadHealth(st Status, patterns []model.Pattern, 
 	// Open incidents of high or critical risk; lower-risk ones stay in the
 	// findings history.
 	incidents, incidentErr := a.store.RecentIncidentsResult(25)
+	failedReads = append(failedReads, a.advisorReadFailures("incident")...)
 	if incidentErr != nil {
 		failedReads = append(failedReads, "incidents")
 	}
