@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 )
@@ -117,19 +118,34 @@ const maxIngestLineBytes = 1 << 20 // 1 MiB
 // detection layer off while the status page says it's up.
 // A scan error rejects the entire result, even if earlier lines or other sources
 // yielded fingerprints: a partial replacement would drop unread secrets.
+// Devices and pipes are rejected rather than treated as empty secret files.
 func Ingest(sources []string, salt []byte) ([]config.Fingerprint, error) {
 	var out []config.Fingerprint
 	var failed []string
 	n := 0
 	for _, src := range sources {
-		if fi, err := os.Stat(src); err != nil || fi.IsDir() || fi.Size() > maxIngestBytes {
+		fi, err := os.Stat(src)
+		if err != nil || fi.IsDir() || fi.Size() > maxIngestBytes {
 			failed = append(failed, src)
 			continue
 		}
-		f, err := os.Open(src)
+		if !fi.Mode().IsRegular() {
+			return nil, fmt.Errorf("ingest source %s: must be a regular file", src)
+		}
+		// Non-blocking open prevents a replacement FIFO from stalling before
+		// we can verify the opened file. It has no effect on regular-file reads.
+		f, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			failed = append(failed, src)
 			continue
+		}
+		opened, statErr := f.Stat()
+		if statErr != nil || !opened.Mode().IsRegular() {
+			f.Close()
+			if statErr != nil {
+				return nil, fmt.Errorf("stat ingest source %s: %w", src, statErr)
+			}
+			return nil, fmt.Errorf("ingest source %s: must be a regular file", src)
 		}
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 0, 64*1024), maxIngestLineBytes)

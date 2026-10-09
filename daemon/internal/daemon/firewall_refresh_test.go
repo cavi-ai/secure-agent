@@ -11,6 +11,61 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 )
 
+func TestFirewallIngestPreservesRegistryWhenSourceBecomesDevice(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "fixture.env")
+	const value = "original-fixture-value"
+	const replacement = "replacement-fixture-value"
+	if err := os.WriteFile(source, []byte("FIXTURE="+value+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stack := setupFirewall(config.Config{Firewall: config.FirewallConfig{
+		Mode:     "block",
+		Registry: config.RegistryConfig{SaltRef: filepath.Join(dir, "salt")},
+	}})
+	if stack.Engine == nil {
+		t.Fatal("engine initialization failed")
+	}
+	if _, err := stack.Sources.Add(source); err != nil {
+		t.Fatal(err)
+	}
+	if labels, err := stack.Ingest(); err != nil || len(labels) != 1 {
+		t.Fatalf("initial ingestion: %v, %v", labels, err)
+	}
+	path := filepath.Join(dir, "firewall-fingerprints.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(os.DevNull, source); err != nil {
+		t.Fatal(err)
+	}
+	if labels, err := stack.Ingest(); err == nil || len(labels) != 0 {
+		t.Errorf("device ingestion succeeded: %v, %v", labels, err)
+	}
+	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, before) {
+		t.Error("device ingestion changed persisted fingerprints")
+	}
+	if len(stack.Engine.ScanText(value)) != 1 {
+		t.Error("device ingestion removed active detection")
+	}
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte("FIXTURE="+replacement+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if labels, err := stack.Ingest(); err != nil || len(labels) != 1 {
+		t.Fatalf("repaired source ingestion: %v, %v", labels, err)
+	}
+	if len(stack.Engine.ScanText(replacement)) != 1 || len(stack.Engine.ScanText(value)) != 0 {
+		t.Fatal("repaired source did not replace active fingerprints")
+	}
+}
+
 func TestFirewallIngestPreservesRegistryOnPartialScan(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "fixture.env")
