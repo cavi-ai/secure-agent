@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -26,11 +27,22 @@ func WriteResourceControl(path string, policy ResourceControlConfig) error {
 		return fmt.Errorf("read resource policy config: %w", err)
 	}
 	if len(bytes.TrimSpace(existing)) > 0 {
-		if err := yaml.Unmarshal(existing, &doc); err != nil {
+		decoder := yaml.NewDecoder(bytes.NewReader(existing))
+		if err := decoder.Decode(&doc); err != nil && err != io.EOF {
 			return fmt.Errorf("existing config is malformed YAML: %w", err)
 		}
+		var extra yaml.Node
+		if err := decoder.Decode(&extra); err != io.EOF {
+			if err != nil {
+				return fmt.Errorf("existing config has malformed trailing YAML: %w", err)
+			}
+			return fmt.Errorf("existing config must contain a single YAML document")
+		}
 	}
-	root := resourceDocRoot(&doc)
+	root, err := resourceDocRoot(&doc)
+	if err != nil {
+		return err
+	}
 	var value yaml.Node
 	if err := value.Encode(policy); err != nil {
 		return fmt.Errorf("encode resource policy: %w", err)
@@ -49,14 +61,23 @@ func WriteResourceControl(path string, policy ResourceControlConfig) error {
 	return nil
 }
 
-func resourceDocRoot(doc *yaml.Node) *yaml.Node {
+func resourceDocRoot(doc *yaml.Node) (*yaml.Node, error) {
 	if doc.Kind == 0 {
 		doc.Kind = yaml.DocumentNode
 	}
-	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+	if len(doc.Content) == 0 {
 		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode}}
 	}
-	return doc.Content[0]
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("existing config must be a YAML mapping")
+	}
+	// Decoding only the root keys rejects duplicates without interpreting or
+	// replacing unrelated values, including an old resource policy being fixed.
+	var fields map[string]yaml.Node
+	if err := doc.Content[0].Decode(&fields); err != nil {
+		return nil, fmt.Errorf("existing config has invalid mapping keys: %w", err)
+	}
+	return doc.Content[0], nil
 }
 
 func setResourceMappingValue(m *yaml.Node, key string, value *yaml.Node) {
