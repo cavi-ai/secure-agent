@@ -1098,6 +1098,33 @@ test('explainLines: null without explain', () => {
   assert.equal(ctx.explainLines({ id: 'x', rule: 'r', agent: 'a', pid: 1, evidence: [] }, EXPLAIN_NOW), null);
 });
 
+test('assessment keeps reviewed critical risk and separates conflicting advice', () => {
+  const f = explainFlag({ assessment: {
+    evidence_basis: ['model-visible-read'], risk: 'critical', control: 'unknown',
+    residual_risk: 'model-exposure', review_state: 'reviewed', reason: 'Model-visible sensitive read.',
+    limits: ['No payload match established.'], advice: { assessment: 'benign', rationale: 'Routine traffic.' },
+  } });
+  const l = ctx.explainLines(f, EXPLAIN_NOW);
+  assert.equal(l.cls, 'disp-critical');
+  assert.equal(l.state, 'Critical risk');
+  assert.equal(l.what, 'Model-visible sensitive read.');
+  assert.equal(l.why, '', 'do not repeat the same observation on the card');
+  const html = ctx.assessmentHTML(f.explain.assessment);
+  assert.match(html, /Reviewed/);
+  assert.match(html, /Model exposure/);
+  assert.match(html, /Control outcome unknown/);
+  assert.match(html, /Advisor opinion/);
+  assert.match(html, /No payload match established/);
+});
+
+test('unknown assessment does not inherit legacy benign presentation or recommend permission', () => {
+  const f = explainFlag({ assessment: { risk: 'unknown', review_state: 'unreviewed', reason: 'Evidence incomplete.', limits: [] },
+    actions: [{ id: 'allow-host', label: 'Allow endpoint', recommended: true, body: { host: 'example.com' } }] });
+  assert.equal(ctx.explainLines(f).state, 'Risk unknown');
+  assert.equal(ctx.explainLines(f).cls, 'disp-warning');
+  assert.doesNotMatch(ctx.explainActionsHTML(f), /action-recommended/);
+});
+
 test('explainActionsHTML: recommended and Dismiss on the bar, the rest under More; no pid, no IPv6 label; allow-path offered', () => {
   const host = '2600:1f10:4a1b::fd73';
   const f = explainFlag({ actions: [

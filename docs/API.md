@@ -285,9 +285,13 @@ Host: unix
 
 #### Explanation stamping
 
-`GET /flags` stamps `explain` (below) on the first **25 unacknowledged** flags of the response, without network lookups (endpoint identity comes from the CIDR/suffix tables and the reverse-DNS cache only). Acknowledged flags and rows past the cap stay raw. `/snapshot` stamps its `flags` the same way.
+`GET /flags` stamps `explain` (below) on the first **25 flags**, including acknowledged history, without network lookups (endpoint identity comes from the CIDR/suffix tables and the reverse-DNS cache only). Rows past the cap stay raw; their individual explain route remains available. `/snapshot` stamps its `flags` the same way.
 
 ### 2a. `GET /flags/{id}/explain`
+
+`explain.assessment` separates detector evidence from workflow and optional advice. Its fields are `evidence_basis`, `risk` (`informational`, `review`, `high`, `critical`, `unknown`), `control`, `residual_risk`, `review_state`, optional `recommendation_id`, `reason`, `limits`, and optional `advice`. Acknowledgment changes `review_state` to `reviewed`; it does not remove exposure, lower risk, or verify remediation. Legacy incident closure is user-reported. The existing `disposition` and action `recommended` fields remain for older consumers; current clients use the assessment and its recommendation ID.
+
+For sensitive-read/connection findings, OS reads and model-visible tool reads are distinct. A later connection by the reader or its descendant is stronger than sibling timing, but neither proves that file bytes were transmitted. Unsupported or legacy text stays qualified as unknown; it cannot establish a payload match. `control` remains `unknown` until evidence establishes the operation's actual outcome. Optional advisor opinion never changes detector enforcement or the current risk projection. Patterns and routine groups carry the same assessment for their strongest member, with review state derived separately from open members.
 
 Returns one flag (with `title` and `advisor`) plus `explain`, the daemon's plain-language reading of it. Destinations may take one bounded reverse-DNS lookup. `404` for an unknown id or any other shape under `/flags/`; `405` for a non-GET. Console-admitted on the proxy listener in exactly this shape (non-empty id, not `.`/`..`). `POST /flags/acknowledge` is a separate exact route and is unaffected.
 

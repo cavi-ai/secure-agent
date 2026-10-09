@@ -70,8 +70,8 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
         content.body = Self.redactedBody(for: flag)
         content.categoryIdentifier = Self.flagCategory
         content.userInfo = ["pid": Int(flag.pid), "agent": flag.agent, "rule": flag.rule]
-        content.interruptionLevel = flag.severity >= 3 ? .timeSensitive : .active
-        content.sound = flag.severity >= 3 ? .defaultCritical : .default
+        content.interruptionLevel = flag.assessmentSeverity >= 3 ? .timeSensitive : .active
+        content.sound = flag.assessmentSeverity >= 3 ? .defaultCritical : .default
 
         let request = UNNotificationRequest(identifier: flag.id, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in

@@ -230,7 +230,7 @@ test('a filtered findings view that has not loaded does not claim zero matches o
     seenAgents: new Set(), seenRules: new Set(), syncSelect() {}, isFlagsFiltered: () => true };
   ctx.renderFlags();
   assert.equal(badge.textContent, '—');
-  assert.match(list.innerHTML, /have not loaded yet/);
+  assert.match(list.innerHTML, /not loaded yet/);
   assert.doesNotMatch(list.innerHTML, /No flags|pattern-card/);
 });
 

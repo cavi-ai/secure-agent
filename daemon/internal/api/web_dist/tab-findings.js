@@ -113,11 +113,11 @@ function needHTML(item, age) {
     ]);
   } else if (item.kind === 'flag') {
     what = (l && l.what) || item.detail || '';
-    why = (l && l.why) || (item.disposition && item.disposition.why) || '';
+    why = (l && (l.why || l.state)) || (item.disposition && item.disposition.why) || '';
     if (flag && l) {
       const plan = { label: 'What to do', attrs: `data-action="open-plan" data-subject="flag:${id}"`, lead: true };
       actions = explainActionsHTML(flag, [plan, ...retriageItems], 1);
-      detail = factChipsHTML(flag, l.who) + findingFactsHTML(flag);
+      detail = factChipsHTML(flag, l.who) + assessmentHTML(flag.explain.assessment) + findingFactsHTML(flag);
     } else {
       actions = actionBarHTML([bar('Dismiss', `data-action="dismiss-flag" data-id="${id}"`, 'ghost'), ...retriageItems]);
     }
@@ -125,10 +125,12 @@ function needHTML(item, age) {
     what = `${pattern.title || item.title} — ${Number(pattern.count) || 0}×`;
     why = pattern.summary || item.detail || '';
     actions = patternActionsHTML(pattern, 1);
+    detail = assessmentHTML(pattern.assessment);
   } else if (routine) {
     why = routine.summary || item.detail || '';
     what = item.title || 'Recurring read';
     actions = routineActionsHTML(routine, 1);
+    detail = assessmentHTML(routine.assessment);
   }
   const key = `need:${item.kind}:${item.id}`;
   const expandable = !!detail;
@@ -186,6 +188,21 @@ function logWhen(iso, nowMs) {
   return `${PATTERN_MONTHS[t.getMonth()]} ${t.getDate()}`;
 }
 
+// historyVerdict: the Verdict column — the observed risk, then the review
+// state once reviewed; the legacy disposition only when no assessment is served.
+function historyVerdict(a, legacy) {
+  const d = assessmentDisplay(a, legacy);
+  if (!a || (a.review_state !== 'reviewed' && a.review_state !== 'closed-reported')) return d;
+  return { state: d.state, text: d.text + ' · ' + (a.review_state === 'reviewed' ? 'Reviewed' : 'Closure reported'), why: d.why };
+}
+
+// historyCritical: critical observed risk (or an unknown risk at detector
+// severity 3) sorts first, whether or not it has been reviewed.
+function historyCritical(a, legacy, severity) {
+  if (a) return a.risk === 'critical' || (a.risk === 'unknown' && (Number(severity) >= 3 || (legacy || {}).state === 'critical'));
+  return (legacy || {}).state === 'critical';
+}
+
 function logKey(row) { return row.kind + ':' + row.key; }
 
 // logRowHTML: one history row — a select box and a head button over the
@@ -222,7 +239,7 @@ function incidentCardHTML(inc, SA) {
   const wf = inc.workflow || {};
   const status = wf.status || 'open';
   const statusChip = status === 'resolved'
-    ? `<span class="workflow-chip resolved">resolved</span>`
+    ? `<span class="workflow-chip resolved">closure reported</span>`
     : status === 'acknowledged'
       ? `<span class="workflow-chip acked">ack</span>`
       : '';
@@ -243,11 +260,11 @@ function incidentCardHTML(inc, SA) {
       </div>
       <div class="incident-summary">${escapeHTML(inc.summary)}</div>
       ${inspectionVisible(SA.t.status, SA.t.audit).advisor && inc.advisor_narrative ? `<div class="advisor-narrative"><svg class="icon"><use href="#i-agent"/></svg><span>${escapeHTML(inc.advisor_narrative)}</span></div>` : ''}
-      ${wf.resolution_note ? `<div class="incident-note">Resolution: ${escapeHTML(wf.resolution_note)}</div>` : ''}
+      ${wf.resolution_note ? `<div class="incident-note">Reported resolution: ${escapeHTML(wf.resolution_note)}</div>` : ''}
       <div class="incident-actions">
         <button class="btn btn-ghost" data-action="open-incident" data-id="${escapeHTML(inc.id)}"><svg class="icon"><use href="#i-doc"/></svg><span>View report</span></button>
         ${status === 'open' ? `<button class="btn btn-ghost" data-action="incident-status" data-id="${escapeHTML(inc.id)}" data-status="acknowledged"><svg class="icon"><use href="#i-history"/></svg><span>Acknowledge</span></button>` : ''}
-        ${status !== 'resolved' ? `<button class="btn btn-ghost" data-action="incident-status" data-id="${escapeHTML(inc.id)}" data-status="resolved"><svg class="icon"><use href="#i-shield"/></svg><span>Resolve</span></button>` : ''}
+        ${status !== 'resolved' ? `<button class="btn btn-ghost" data-action="incident-status" data-id="${escapeHTML(inc.id)}" data-status="resolved"><svg class="icon"><use href="#i-shield"/></svg><span>Report resolved</span></button>` : ''}
       </div>
       <div class="rotate-list">
         ${(inc.rotate_list || []).map(item => `
@@ -281,7 +298,7 @@ function renderIncidents() {
       title: [inc.rule, inc.subject].filter(Boolean).join(' — '), sub: '',
       count: Number(inc.aggregate_count) || 1, hourly: null,
       critical: risk === 'CRITICAL', reviewed: true,
-      disposition: { state: risk === 'CRITICAL' ? 'critical' : risk === 'HIGH' ? 'warning' : 'acknowledged', text: `${inc.risk || ''} · ${status}` },
+      disposition: { state: risk === 'CRITICAL' ? 'critical' : risk === 'HIGH' ? 'warning' : 'acknowledged', text: `${inc.risk || ''} · ${status === 'resolved' ? 'closure reported' : status}` },
       detail: () => incidentCardHTML(inc, SA),
     };
   }).sort((a, b) => (Number(b.critical) - Number(a.critical)) || (Date.parse(b.last) || 0) - (Date.parse(a.last) || 0));
@@ -352,9 +369,9 @@ function renderFlags() {
   SA.syncSelect('flags-agent', SA.seenAgents);
   SA.syncSelect('flags-rule', SA.seenRules);
 
-  if (SA.isFlagsFiltered() && SA.t.flagsView === null) {
+  if (SA.t.flagsView === null) {
     badge.textContent = '—';
-    container.innerHTML = '<div class="loading">Filtered findings have not loaded yet.</div>';
+    container.innerHTML = '<div class="loading">Finding history has not loaded yet.</div>';
     return;
   }
 
@@ -381,7 +398,7 @@ function renderFlags() {
     paintHistoryBulk(SA);
     const msg = SA.sessionScopeOn()
       ? `No flags for ${SA.sessionScopeTag()} in the loaded window`
-      : SA.isFlagsFiltered() ? 'No flags match the current filter' : 'No security flags — agent egress looks clean';
+      : SA.isFlagsFiltered() ? 'No flags match the current filter' : 'No findings in the loaded window';
     container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>${msg}</span></div>`;
     return;
   }
@@ -442,27 +459,30 @@ function renderFlags() {
     </div>`;
   };
   const rows = patterns.map(p => {
-    const d = p.disposition || {};
+    const d = historyVerdict(p.assessment, p.disposition);
     return {
       kind: 'pattern', key: p.key, last: p.last, agent: p.agent, title: p.title || ruleTitle(p.rule),
       sub: (p.subject || {}).label || '', count: Number(p.count) || 0, hourly: p.hourly,
-      critical: d.state === 'critical', reviewed: !!p.dismissed || !(Number(p.unacked) > 0),
+      critical: historyCritical(p.assessment, p.disposition, 0), reviewed: !!p.dismissed || !(Number(p.unacked) > 0),
       disposition: d, detail: () => patternHTML(p, now, { flags: SA.t.flags, expanded: SA.expanded }),
     };
   }).concat(flags.map(f => {
     const l = explainLines(f, now);
-    const d = (f.explain || {}).disposition || (f.severity >= 3 ? { state: 'critical', text: 'Act now' } : { state: 'warning', text: 'Needs a look' });
+    const ex = f.explain || {};
+    const legacy = ex.disposition || (f.severity >= 3 ? { state: 'critical', text: 'Act now' } : { state: 'warning', text: 'Needs a look' });
+    const d = historyVerdict(ex.assessment, legacy);
     return {
       kind: 'flag', key: f.id, last: f.ts, agent: f.agent, title: f.title || ruleTitle(f.rule),
-      sub: ((f.explain || {}).subject || {}).display || (l && l.what) || '', count: 1, hourly: null,
-      critical: d.state === 'critical', reviewed: !!f.acknowledged || d.state === 'acknowledged',
+      sub: (ex.subject || {}).display || (l && l.what) || '', count: 1, hourly: null,
+      critical: historyCritical(ex.assessment, legacy, f.severity), reviewed: !!f.acknowledged || (ex.disposition || {}).state === 'acknowledged',
       disposition: d, detail: () => cardHTML(f, 0),
     };
   })).concat(routines.map(rg => {
-    const d = rg.disposition || {};
+    const d = historyVerdict(rg.assessment, rg.disposition);
     return {
       kind: 'routine', key: rg.key, last: '', agent: (rg.agents || [])[0] || '', title: rg.summary || 'Recurring read',
-      sub: '', count: Number(rg.count) || 0, hourly: null, critical: d.state === 'critical', reviewed: d.state === 'acknowledged',
+      sub: '', count: Number(rg.count) || 0, hourly: null, critical: historyCritical(rg.assessment, rg.disposition, 0),
+      reviewed: (rg.disposition || {}).state === 'acknowledged' || (rg.assessment || {}).review_state === 'reviewed',
       disposition: d, detail: () => routineHTML(rg),
     };
   })).sort((a, b) => (Number(b.critical) - Number(a.critical)) || (Date.parse(b.last) || 0) - (Date.parse(a.last) || 0));
@@ -560,7 +580,8 @@ function findingHTML(f, l, chainHTML, toolsHTML) {
       </header>
       <p class="finding-what">${escapeHTML(l.what)}</p>
       ${factChipsHTML(f, '')}
-      <p class="finding-verdict">${escapeHTML(l.verdict)}</p>
+      <p class="finding-verdict">${escapeHTML(ex.assessment ? l.state : l.verdict)}</p>
+      ${assessmentHTML(ex.assessment)}
       ${labelsLineHTML(ex.labels)}
       <div class="finding-actions">${explainActionsHTML(f, [{ label: 'What to do', attrs: `data-action="open-plan" data-subject="flag:${escapeHTML(f.id)}"` }])}</div>
       <details class="finding-details"><summary>Details</summary>
@@ -581,7 +602,7 @@ const ROUTINE_CONSOLE_ACTIONS = ['expect-all', 'dismiss-all'];
 // chips; Treat as routine and Dismiss all as buttons. The click handler
 // reads every request from the served group (key + action id).
 function routineHTML(rg) {
-  const d = rg.disposition || {};
+  const d = assessmentDisplay(rg.assessment, rg.disposition);
   const dests = rg.destinations || [];
   const more = (Number(rg.destination_count) || 0) - dests.length;
   const chips = [
@@ -596,6 +617,7 @@ function routineHTML(rg) {
           <div class="attention-reason">
             <div class="decision-head">${d.text ? `<span class="disp-badge">${escapeHTML(d.text)}</span>` : ''}<strong class="finding-what">${escapeHTML(rg.summary)}</strong></div>
             <div class="facts">${chips}</div>
+            ${assessmentHTML(rg.assessment)}
           </div>
           <div class="attention-actions">${routineActionsHTML(rg)}</div>
         </div>`;
@@ -604,7 +626,7 @@ function routineHTML(rg) {
 // routineActionsHTML: the routine group's served actions on an action bar;
 // max caps the bar.
 function routineActionsHTML(rg, max) {
-  const acts = (rg.actions || []).filter(a => a && ROUTINE_CONSOLE_ACTIONS.includes(a.id));
+  const acts = assessmentActions(rg.actions, rg.assessment).filter(a => a && ROUTINE_CONSOLE_ACTIONS.includes(a.id));
   const attrs = a => `data-action="routine-act" data-routine-key="${escapeHTML(rg.key)}" data-action-id="${escapeHTML(a.id)}"`;
   return actionBarHTML(actionItems(acts, [], attrs, a => a.label || a.id), max);
 }
@@ -622,7 +644,7 @@ function routineAfterOptimistic(t, key, ids) {
       return n ? patternAfterDismiss(p, n) : p;
     }),
     flags: (t.flags || []).filter(f => !done.has(f.id)),
-    flagsView: t.flagsView === null ? null : (t.flagsView || []).filter(f => !done.has(f.id)),
+    flagsView: t.flagsView === null ? null : (t.flagsView || []).map(f => done.has(f.id) ? reviewedFlag(f) : f),
     posture: mapPostureAttention(t.posture, it => ((it.kind === 'routine' && it.id === key)
       || (it.kind === 'flag' && done.has(it.id))) ? null : it),
   };
@@ -670,7 +692,7 @@ function patternsInView(patterns, opts) {
 function patternAfterDismiss(p, n) {
   const unacked = Math.max(0, (Number(p.unacked) || 0) - (Number(n) || 0));
   if (unacked > 0) return { ...p, unacked };
-  return { ...p, unacked: 0, dismissed: true, disposition: { state: 'acknowledged', text: 'Reviewed', why: p.title || '' } };
+  return { ...p, unacked: 0, dismissed: true, ...(p.assessment ? { assessment: { ...p.assessment, review_state: 'reviewed' } } : {}), disposition: { state: 'acknowledged', text: 'Reviewed', why: p.title || '' } };
 }
 
 // The attention queue and finding cards are different snapshots. A local
@@ -683,7 +705,7 @@ function patternAfterOptimisticDismiss(t, key, submitted) {
   return {
     patterns: (t.patterns || []).map(x => x.key === key ? updated : x),
     flags: (t.flags || []).filter(f => !ids.has(f.id)),
-    flagsView: t.flagsView === null ? null : (t.flagsView || []).filter(f => !ids.has(f.id)),
+    flagsView: t.flagsView === null ? null : (t.flagsView || []).map(f => ids.has(f.id) ? reviewedFlag(f) : f),
     posture: mapPostureAttention(t.posture, it => ((it.kind === 'flag' && ids.has(it.id))
       || (it.kind === 'pattern' && it.id === key && updated.dismissed)) ? null : it),
   };
@@ -724,7 +746,7 @@ function patternActionLabel(p, a) {
 // click handler reads the request from the served pattern (key + action id
 // + host). A card dismissed in place keeps its choices, disabled.
 function patternActionsHTML(p, max) {
-  const acts = (p.actions || []).filter(a => a && PATTERN_CONSOLE_ACTIONS.includes(a.id))
+  const acts = assessmentActions(p.actions, p.assessment).filter(a => a && PATTERN_CONSOLE_ACTIONS.includes(a.id))
     .map(a => (p.dismissed ? { ...a, disabled: true } : a));
   const attrs = a => {
     const host = a.body && typeof a.body.host === 'string' ? a.body.host : '';
@@ -741,7 +763,7 @@ function patternActionsHTML(p, max) {
 // the console's opened-list keys.
 function patternHTML(p, nowMs, opts) {
   const o = opts || {};
-  const d = p.disposition || {};
+  const d = assessmentDisplay(p.assessment, p.disposition);
   const count = Number(p.count) || 0;
   const open = p.dismissed ? 0 : Number(p.unacked) || 0;
   const covered = new Set(p.flag_ids || []);
@@ -768,6 +790,7 @@ function patternHTML(p, nowMs, opts) {
         <span class="pattern-cadence-text">${p.cadence ? escapeHTML(p.cadence) + ' · ' : ''}<b class="pattern-open">${open} open</b></span>
       </div>
       <p class="finding-verdict">${escapeHTML((d.text || '') + (d.why ? ': ' + d.why : ''))}</p>
+      ${assessmentHTML(p.assessment)}
       <div class="finding-actions">${patternActionsHTML(p)}</div>
       <details class="finding-details pattern-flags"><summary>Individual flags (${Number(p.flags ?? count) || 0})</summary>
         ${rows.length ? `<ul class="pattern-flag-list">${cap.shown.map(row).join('')}</ul>${cap.more}`

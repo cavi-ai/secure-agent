@@ -34,6 +34,7 @@ func WireTypes() []any {
 		event.Event{},
 		model.Session{},
 		model.Flag{},
+		model.FindingAssessment{},
 		model.Pattern{},
 		model.RoutineGroup{},
 		model.FileDetail{},

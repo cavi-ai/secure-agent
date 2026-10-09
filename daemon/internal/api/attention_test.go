@@ -142,20 +142,50 @@ func TestAttentionGroupsAcknowledgedFlagsExcluded(t *testing.T) {
 	}
 }
 
-// Only a critical flag is queued, carrying its disposition; a likely-benign
-// one stays out.
+// Legacy advice remains readable without lowering a detector's priority.
 func TestAttentionGroupsFlagDisposition(t *testing.T) {
 	a := attentionAPI(t, []resource.Session{mkResourceSession(1, "claude", "/w")})
 	a.store.PutFlag(model.Flag{ID: "fp", Rule: "sensitive-read-then-connect", Severity: 3, TS: time.Now(), PID: 1, Agent: "claude"})
 	a.store.PutAdvisorVerdict("fp", "flag", model.AdvisorVerdict{Assessment: "benign", Confidence: 0.93, Rationale: "Own config.", CreatedAt: time.Now()})
 	a.store.PutFlag(model.Flag{ID: "real", Rule: "tcc-tamper", Severity: 3, TS: time.Now(), PID: 1, Agent: "claude"})
 	groups := attentionGroups(a)
-	if len(groups) != 1 || len(groups[0].Items) != 1 {
-		t.Fatalf("groups = %+v, want one group with the critical flag only", groups)
+	if len(groups) != 1 || len(groups[0].Items) != 2 {
+		t.Fatalf("groups = %+v, want one group with both flags", groups)
 	}
-	it := groups[0].Items[0]
-	if it.ID != "real" || it.Priority != 2 || it.Title != "Critical finding" || it.Disposition == nil || it.Disposition.State != "critical" {
-		t.Fatalf("item = %+v, want the critical finding", it)
+	first, second := groups[0].Items[0], groups[0].Items[1]
+	if first.ID != "real" || first.Priority != 2 || first.Title != "Critical finding" || first.Disposition == nil || first.Disposition.State != "critical" {
+		t.Fatalf("first item = %+v, want the critical finding", first)
+	}
+	if second.ID != "fp" || second.Priority != 2 || second.Assessment == nil || second.Assessment.Risk != "unknown" || second.Disposition == nil || second.Disposition.State != "benign-likely" {
+		t.Fatalf("second item = %+v, want separate risk and advice without lowered priority", second)
+	}
+}
+
+// A flag is queued only when its observed risk is critical (or unknown at
+// detector severity 3): same-reader and sibling timing leads stay in history,
+// and an advisor verdict never removes a critical one.
+func TestAttentionQueuesOnlyCriticalAssessedRisk(t *testing.T) {
+	a := attentionAPI(t, []resource.Session{mkResourceSession(1, "claude", "/w")})
+	put := func(id string, change func(*model.Flag)) {
+		f := assessmentReadConnect()
+		f.ID, f.PID = id, 1
+		f.Evidence[0].Label = "/w/" + id + ".env"
+		change(&f)
+		a.store.PutFlag(f)
+	}
+	put("sibling", func(f *model.Flag) {})
+	put("same-reader", func(f *model.Flag) { f.Evidence[1].PID = 10 })
+	put("model-visible", func(f *model.Flag) { f.Evidence[0].Sub = "agent tool read" })
+	a.store.PutAdvisorVerdict("model-visible", "flag", model.AdvisorVerdict{Assessment: "benign", Confidence: 0.93, Rationale: "Own config.", CreatedAt: time.Now()})
+	groups := attentionGroups(a)
+	var ids []string
+	for _, g := range groups {
+		for _, it := range g.Items {
+			ids = append(ids, it.ID)
+		}
+	}
+	if len(ids) != 1 || ids[0] != "model-visible" {
+		t.Fatalf("queued = %v, want only the model-visible read", ids)
 	}
 }
 

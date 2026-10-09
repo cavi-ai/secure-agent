@@ -111,6 +111,18 @@ export interface Disposition {
   why: string;
 }
 
+export interface FindingAssessment {
+  evidence_basis: string[];
+  risk: string;
+  control: string;
+  residual_risk: string;
+  review_state: string;
+  recommendation_id?: string;
+  reason: string;
+  limits: string[];
+  advice?: AdvisorVerdict;
+}
+
 export interface ExplainAction {
   id: string;
   label: string;
@@ -132,6 +144,7 @@ export interface FlagExplain {
   egress?: ExplainEgress[];
   context?: ExplainContext;
   disposition: Disposition;
+  assessment?: FindingAssessment;
   actions: ExplainAction[];
   labels?: LabelSummary;
 }
@@ -190,6 +203,7 @@ export interface Pattern {
   processes: PatternProcess[];
   destinations?: PatternDestination[];
   disposition: Disposition;
+  assessment?: FindingAssessment;
   summary: string;
   actions: ExplainAction[];
   flag_ids: string[];
@@ -206,6 +220,7 @@ export interface RoutineGroup {
   destination_count: number;
   expectable: number;
   disposition: Disposition;
+  assessment?: FindingAssessment;
   summary: string;
   actions: ExplainAction[];
   flag_ids: string[];
@@ -523,6 +538,7 @@ export interface AttentionItem {
   hosts?: string[];
   advisor?: AdvisorVerdict;
   disposition?: Disposition;
+  assessment?: FindingAssessment;
 }
 
 export interface AttentionGroup {

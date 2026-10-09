@@ -328,7 +328,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sessionEnded) return;
     document.querySelectorAll('[data-reports]').forEach(el => {
       const keys = el.dataset.reports.split('|').filter(key =>
-        (key !== 'flags' || isFlagsFiltered()) && (key !== 'events' || isEventsFiltered()));
+        (key !== 'flags' || isFlagsFiltered() || homeGroupOpen('findings')) && (key !== 'events' || isEventsFiltered()));
       const failures = reportHealth.failures(keys);
       const text = consoleReportHealthText(failures);
       if (el.textContent !== text) el.textContent = text;
@@ -575,15 +575,16 @@ document.addEventListener('DOMContentLoaded', () => {
   function syncHistoryViews() {
     const changed = [];
     for (const [name, filtered] of [['flags', isFlagsFiltered()], ['events', isEventsFiltered()]]) {
-      const scope = filtered ? JSON.stringify(filters[name]) : null;
+      const requested = filtered || (name === 'flags' && homeGroupOpen('findings'));
+      const scope = requested ? JSON.stringify(filters[name]) : null;
       const view = name + 'View';
       if (scope !== historyScopes[name]) {
         historyScopes[name] = scope;
-        telemetryData[view] = filtered ? null : telemetryData[name];
+        telemetryData[view] = requested ? null : telemetryData[name];
         reportHealth.reset(name);
         failedEndpoints.delete(name);
         changed.push(name);
-      } else if (!filtered) telemetryData[view] = telemetryData[name];
+      } else if (!requested) telemetryData[view] = telemetryData[name];
     }
     if (changed.length) {
       renderReportHealth();
@@ -1527,6 +1528,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('details.home-group').forEach(d => d.addEventListener('toggle', () => {
     persistHomeGroups();
     if (!d.open) return;
+    if (d.dataset.group === 'findings') fetchTelemetry();
     PANELS.forEach(([name]) => { if (PANEL_VIEW[name] === 'home:' + d.dataset.group) dirtyPanels.add(name); });
     renderDirty();
   }));
@@ -1724,10 +1726,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (obsolete()) return;
     syncHistoryViews();
     sparkIngestEvents(telemetryData.events);
-    if (isFlagsFiltered()) {
+    if (isFlagsFiltered() || homeGroupOpen('findings')) {
       const v = await grab('flags', flagsQuery());
       if (obsolete()) return;
-      if (v) telemetryData.flagsView = (v || []).filter(f => !f.acknowledged);
+      if (v) telemetryData.flagsView = v || [];
     }
     if (isEventsFiltered()) {
       const v = await grab('events', eventsQuery());
@@ -2042,7 +2044,7 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify(body)
       });
       if (!r.ok) throw new Error(await r.text());
-      showToast(status === 'resolved' ? 'Incident resolved' : 'Incident acknowledged', 'success');
+      showToast(status === 'resolved' ? 'Incident closure recorded as reported' : 'Incident acknowledged', 'success');
       cardNote(`#incidents-container [data-action="open-incident"][data-id="${cssq(id)}"]`, '.incident-card', 'incidents-container', status);
       fetchTelemetry();
     } catch (err) {
@@ -2518,15 +2520,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  // Dismiss ONE flag (acknowledge): reviewed-and-done — the flag leaves the
-  // list, the rule keeps watching. The missing middle ground between "kill
-  // the agent" and "suppress the class".
-  // The flag leaves flags, flagsView and the attention queue; revert() puts
-  // it back.
+  // Acknowledge one finding: remove its pending decision while retaining its
+  // reviewed facts in history. The rule keeps watching; revert restores both.
   function stageDropFlag(id) {
     return stage(['flags', 'flagsView', 'posture'], ['flags', 'attention', 'posture', 'chart-flags', 'status', 'tab-badges'], () => {
       telemetryData.flags = (telemetryData.flags || []).filter(x => x.id !== id);
-      if (telemetryData.flagsView !== null) telemetryData.flagsView = (telemetryData.flagsView || []).filter(x => x.id !== id);
+      if (telemetryData.flagsView !== null) telemetryData.flagsView = (telemetryData.flagsView || []).map(x => x.id === id ? reviewedFlag(x) : x);
       mapAttentionItems(it => (it.kind === 'flag' && it.id === id ? null : it));
     });
   }
@@ -2966,7 +2965,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <dl class="finding-facts"><dt>Raised</dt><dd>${escapeHTML(new Date(f.ts).toLocaleString())}</dd><dt>Process</dt><dd>PID ${Number(f.pid) || 0}</dd>
         <dt>Session</dt><dd>${escapeHTML(f.session_id || 'unknown')}</dd><dt>Workspace</dt><dd>${escapeHTML(f.workspace || 'unknown')}</dd><dt>Flag ID</dt><dd>${escapeHTML(f.id)}</dd></dl>
       ${reading ? `<p class="finding-what">${escapeHTML(reading.what || '')}</p>${factChipsHTML(f, '')}<p class="finding-verdict">${escapeHTML(reading.verdict || '')}</p>` : ''}
-      ${advisor}<h4>Recorded evidence</h4>${evidence ? `<ul class="plan-list">${evidence}</ul>` : '<p>No evidence rows were recorded for this flag.</p>'}
+      ${f.explain?.assessment ? assessmentHTML(f.explain.assessment) : advisor}<h4>Recorded evidence</h4>${evidence ? `<ul class="plan-list">${evidence}</ul>` : '<p>No evidence rows were recorded for this flag.</p>'}
       <div class="flag-actions-row">${f.explain
         ? explainActionsHTML(f, telemetryData.status && telemetryData.status.advisor_enabled ? [{ label: 'Re-run advisor', attrs: `data-action="retriage" data-id="${escapeHTML(f.id)}"` }] : [])
         : `<button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(f.id)}">Dismiss flag</button>`}</div>
@@ -4709,7 +4708,15 @@ document.addEventListener('DOMContentLoaded', () => {
       // one reconcile 2 s after the last frame of a burst, so a storm folds
       // into its pattern card instead of standing as rows until the poll.
       flag: (msg) => {
-        try { telemetryData.flags = upsertById(telemetryData.flags, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
+        try {
+          const flag = JSON.parse(msg.data);
+          telemetryData.flags = upsertById(telemetryData.flags, flag);
+          // Unfiltered history receives the delta immediately without losing
+          // reviewed rows. Filtered history waits for its scoped response.
+          if (!isFlagsFiltered() && telemetryData.flagsView !== null) {
+            telemetryData.flagsView = upsertById(telemetryData.flagsView, flag);
+          }
+        } catch { /* next reconcile repairs */ }
         markDirty('flags', 'attention', 'chart-flags', 'status', 'tab-badges');
       },
       incident: (msg) => {

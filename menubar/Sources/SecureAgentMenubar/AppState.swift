@@ -277,10 +277,15 @@ public final class AppState: ObservableObject {
         }
     }
 
-    /// What a refetch must change to be worth a re-render: ids, acknowledged
-    /// and served disposition state.
+    /// Refresh when review, evidence, risk or advice changes for the same ID.
     static func flagsSignature(_ flags: [FlagModel]) -> [String] {
-        flags.map { "\($0.id)|\($0.acknowledged == true)|\($0.explain?.disposition.state ?? "")" }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return flags.map {
+            let assessment = $0.explain?.assessment
+            let encoded = assessment.flatMap { try? encoder.encode($0) }.map { String(decoding: $0, as: UTF8.self) } ?? ""
+            return "\($0.id)|\($0.acknowledged == true)|\($0.explain?.disposition.state ?? "")|\(encoded)"
+        }
     }
 
     private func scheduleTimer(_ interval: TimeInterval) {
@@ -430,9 +435,10 @@ public final class AppState: ObservableObject {
     /// default severity bar. Severity-1 informational flags (routine
     /// keychain-db opens) are silent unless the operator opts in.
     public func shouldNotify(for flag: FlagModel) -> Bool {
+        guard flag.acknowledged != true else { return false }
         if let scoped = workspaceScopeNotify(for: flag) { return scoped }
         if let override = notifyOverrides[flag.rule] { return override }
-        return flag.severity >= notifyDefaultMinSeverity
+        return flag.assessmentSeverity >= notifyDefaultMinSeverity
     }
 
     /// Longest-matching workspace scope for this flag's rule, if any. Prefix
@@ -554,7 +560,7 @@ public final class AppState: ObservableObject {
         for flag in flags where shouldNotify(for: flag) {
             if notifiedFlagIDs.insert(flag.id).inserted {
                 notify(flag)
-                if flag.severity >= 3 { sawCritical = true }
+                if flag.assessmentSeverity >= 3 { sawCritical = true }
             }
         }
         if sawCritical { onNewCriticalFlag?() }
@@ -1379,14 +1385,11 @@ public final class AppState: ObservableObject {
     public var uninspectedEgress: Int { status?.uninspectedEgress ?? 0 }
 
     /// Flags that still need a decision: not acknowledged and critical by
-    /// the served disposition (severity >= 3 when the flag has no explain).
-    /// Warning and likely-benign flags stay in the console's history.
+    /// observed risk (detector severity >= 3 when the risk is unknown).
+    /// Review state and advisor verdicts do not enter; lower risks stay in
+    /// the console's history.
     public var unactedFlags: [FlagModel] {
-        flags.filter { flag in
-            guard flag.acknowledged != true else { return false }
-            if let disposition = flag.explain?.disposition.state { return disposition == "critical" }
-            return flag.severity >= 3
-        }
+        flags.filter { $0.acknowledged != true && $0.assessmentSeverity >= 3 }
     }
 
     /// Incidents that still need attention: not resolved. The status icon used
@@ -1401,7 +1404,7 @@ public final class AppState: ObservableObject {
     /// can never disagree ("the menu bar warning is always there no matter
     /// what" — it was counting long-handled flags).
     public var unactedCriticals: [FlagModel] {
-        flags.filter { $0.acknowledged != true && $0.severity >= 3 }
+        flags.filter { $0.acknowledged != true && $0.assessmentSeverity >= 3 }
     }
 
     /// The one predicate the icon, hero and badge read: the daemon's /posture

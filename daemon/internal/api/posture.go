@@ -124,7 +124,7 @@ func (a *API) postureWith(patterns []model.Pattern, routine []model.RoutineGroup
 	switch {
 	case posture.NeedsYou == 0 && !hasMonitoringGap(posture.CoverageItems):
 		posture.State = "all-clear"
-		posture.Summary = "All clear — agents monitored, no action needed."
+		posture.Summary = "No pending decisions. See finding history and incidents for remaining risk."
 	case posture.NeedsYou == 0:
 		posture.State = "attention"
 		posture.Summary = "No decisions pending. Monitoring coverage needs attention."

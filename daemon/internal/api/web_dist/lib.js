@@ -1003,17 +1003,50 @@ function explainLines(flag, nowMs) {
   const age = fmtAge(flag.ts, nowMs);
   const meta = [eg && ex.subject ? fmtGap(eg.gap_seconds) + ' gap' : '', age ? age + ' ago' : '']
     .filter(Boolean).join(' · ');
-  const d = ex.disposition || {};
+  const d = assessmentDisplay(ex.assessment, ex.disposition);
   return {
-    who, meta, what: ex.what || '',
-    verdict: (d.text || '') + (d.why ? ': ' + d.why : ''),
-    state: d.text || '', why: d.why || '',
+    who, meta, what: ex.assessment ? ex.assessment.reason || '' : ex.what || '',
+    verdict: (d.text || '') + (!ex.assessment && d.why ? ': ' + d.why : ''),
+    state: d.text || '', why: ex.assessment ? '' : d.why || '',
     cls: DISPOSITION_CLASS[d.state] || 'disp-warning',
   };
 }
 
-// egressByOrg: a flag's destinations grouped by organization (name, or the
-// host when neither is known), in served order.
+function assessmentDisplay(a, legacy) {
+  if (!a) return legacy || {};
+  const labels = { critical: 'Critical risk', high: 'High risk', review: 'Needs review', informational: 'Informational', unknown: 'Risk unknown' };
+  return { state: a.risk === 'critical' ? 'critical' : a.risk === 'informational' ? 'benign-likely' : 'warning',
+    text: labels[a.risk] || 'Risk unknown', why: a.reason || '' };
+}
+
+function assessmentActions(actions, a) {
+  return a ? (actions || []).map(x => ({ ...x, recommended: !!a.recommendation_id && x.id === a.recommendation_id })) : (actions || []);
+}
+
+function reviewedFlag(f) {
+  if (!f.explain) return { ...f, acknowledged: true };
+  return { ...f, acknowledged: true, explain: { ...f.explain,
+    ...(f.explain.assessment ? { assessment: { ...f.explain.assessment, review_state: 'reviewed' } } : {}),
+    disposition: { state: 'acknowledged', text: 'Reviewed', why: f.title || '' } } };
+}
+
+function assessmentHTML(a) {
+  if (!a) return '';
+  const reviews = { unreviewed: 'Unreviewed', reviewed: 'Reviewed', 'closed-reported': 'Closure reported' };
+  const controls = { unknown: 'Control outcome unknown', blocked: 'Blocked', allowed: 'Allowed', 'observed-only': 'Observed only' };
+  const residual = { unknown: 'Exposure unknown', 'possible-exposure': 'Possible exposure', 'model-exposure': 'Model exposure',
+    'none-established': 'No exposure established', 'transmission-attempt': 'Transmission attempt', 'external-remediation-required': 'External remediation required' };
+  const bases = { 'os-read': 'OS file read', 'model-visible-read': 'Model-visible tool read', 'same-tree-connect': 'Reader or descendant connection',
+    'sibling-connect': 'Sibling connection timing', 'legacy-text': 'Legacy text evidence' };
+  const facts = [reviews[a.review_state] || 'Review state unknown', residual[a.residual_risk] || 'Exposure unknown', controls[a.control] || 'Control outcome unknown'];
+  const limits = [...(a.evidence_basis || []).map(b => bases[b] || b), ...(a.limits || [])];
+  const advice = a.advice;
+  return `<div class="finding-assessment"><p class="assessment-state">${facts.map(escapeHTML).join(' · ')}</p>`
+    + (limits.length ? `<details class="assessment-limits"><summary>Evidence and limits</summary><ul>${limits.map(l => `<li>${escapeHTML(l)}</li>`).join('')}</ul></details>` : '')
+    + (advice ? `<p class="assessment-advice">Advisor opinion: ${escapeHTML(advice.assessment || 'unrated')}${advice.confidence != null ? ` (${Math.round(Number(advice.confidence) * 100)}%)` : ''} · ${escapeHTML(advice.rationale || '')}</p>` : '') + '</div>';
+}
+
+// A flag's destinations grouped by organization (or host), in served order.
 function egressByOrg(flag) {
   const groups = new Map();
   for (const e of ((flag && flag.explain && flag.explain.egress) || [])) {
@@ -1129,7 +1162,7 @@ function explainActionsHTML(flag, extra, max) {
   if (!ex) return '';
   const fid = escapeHTML(flag.id);
   const hostOf = a => (a.body && typeof a.body.host === 'string' ? a.body.host : '');
-  const acts = (ex.actions || []).filter(a => a && EXPLAIN_CONSOLE_ACTIONS.includes(a.id));
+  const acts = assessmentActions(ex.actions, ex.assessment).filter(a => a && EXPLAIN_CONSOLE_ACTIONS.includes(a.id));
   const orgs = egressByOrg(flag);
   const orgOf = host => { for (const [org, list] of orgs) if (list.some(e => e.host === host)) return org; return host; };
   const allows = new Map();

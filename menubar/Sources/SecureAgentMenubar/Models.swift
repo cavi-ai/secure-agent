@@ -680,7 +680,7 @@ public struct NotifyScopeModel: Codable, Sendable {
     public let notify: Bool
 }
 
-public struct AdvisorVerdictModel: Codable, Sendable {
+public struct AdvisorVerdictModel: Codable, Sendable, Equatable {
     public let assessment: String?
     public let confidence: Double?
     public let rationale: String
@@ -805,11 +805,13 @@ public struct FlagExplain: Codable, Sendable, Equatable {
     public let what: String
     public let disposition: FlagDisposition
     public let actions: [FlagExplainAction]
+    public let assessment: FindingAssessmentModel?
 
-    public init(what: String, disposition: FlagDisposition, actions: [FlagExplainAction]) {
+    public init(what: String, disposition: FlagDisposition, actions: [FlagExplainAction], assessment: FindingAssessmentModel? = nil) {
         self.what = what
         self.disposition = disposition
         self.actions = actions
+        self.assessment = assessment
     }
 
     public init(from decoder: Decoder) throws {
@@ -817,15 +819,73 @@ public struct FlagExplain: Codable, Sendable, Equatable {
         what = try c.decodeIfPresent(String.self, forKey: .what) ?? ""
         disposition = try c.decode(FlagDisposition.self, forKey: .disposition)
         actions = try c.decodeIfPresent([FlagExplainAction].self, forKey: .actions) ?? []
+        assessment = try c.decodeIfPresent(FindingAssessmentModel.self, forKey: .assessment)
     }
 
-    private enum CodingKeys: String, CodingKey { case what, disposition, actions }
+    private enum CodingKeys: String, CodingKey { case what, disposition, actions, assessment }
 
     /// The action the daemon recommends, if any.
-    public var recommended: FlagExplainAction? { actions.first { $0.recommended == true } }
+    public var recommended: FlagExplainAction? {
+        if let assessment {
+            return actions.first { $0.id == assessment.recommendationID }
+        }
+        return actions.first { $0.recommended == true }
+    }
 }
 
-/// The one verdict every surface renders for a flag.
+/// Daemon-owned risk, evidence limits, review state and optional opinion.
+public struct FindingAssessmentModel: Codable, Sendable, Equatable {
+    public let evidenceBasis: [String]
+    public let risk: String
+    public let control: String
+    public let residualRisk: String
+    public let reviewState: String
+    public let recommendationID: String?
+    public let reason: String
+    public let limits: [String]
+    public let advice: AdvisorVerdictModel?
+
+    enum CodingKeys: String, CodingKey {
+        case risk, control, reason, limits, advice
+        case evidenceBasis = "evidence_basis", residualRisk = "residual_risk"
+        case reviewState = "review_state", recommendationID = "recommendation_id"
+    }
+
+    public var riskLabel: String {
+        switch risk {
+        case "critical": return "Critical risk"
+        case "high": return "High risk"
+        case "review": return "Needs review"
+        case "informational": return "Informational"
+        default: return "Risk unknown"
+        }
+    }
+
+    public var summaryLines: [String] {
+        let review = ["reviewed": "Reviewed", "unreviewed": "Unreviewed", "closed-reported": "Closure reported"][reviewState] ?? "Review state unknown"
+        let residual = ["possible-exposure": "Possible exposure", "model-exposure": "Model exposure", "none-established": "No exposure established",
+                        "transmission-attempt": "Transmission attempt", "external-remediation-required": "External remediation required"][residualRisk] ?? "Exposure unknown"
+        let outcome = ["blocked": "Blocked", "allowed": "Allowed", "observed-only": "Observed only"][control] ?? "Control outcome unknown"
+        var lines = ["\(riskLabel) · \(review)", "\(residual) · \(outcome)", reason]
+        if !limits.isEmpty { lines.append(limits.joined(separator: " ")) }
+        if let advice { lines.append("Advisor opinion: \(advice.assessment ?? "unrated") · \(advice.rationale)") }
+        return lines.filter { !$0.isEmpty }
+    }
+}
+
+extension FlagModel {
+    /// Preserve the detector priority when evidence cannot be classified.
+    public var assessmentSeverity: Int {
+        switch explain?.assessment?.risk {
+        case "critical": return 3
+        case "high", "review": return 2
+        case "informational": return 1
+        default: return severity
+        }
+    }
+}
+
+/// Legacy combined verdict, retained for compatibility with older daemons.
 public struct FlagDisposition: Codable, Sendable, Equatable {
     /// acknowledged | benign-likely | warning | critical
     public let state: String
