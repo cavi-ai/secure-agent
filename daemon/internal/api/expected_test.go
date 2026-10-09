@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +14,51 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
+
+func TestExpectedLoadFailureHasNoMutationSideEffects(t *testing.T) {
+	for _, content := range []string{`[{"agent":"claude"},`, `null`} {
+		for _, operation := range []string{"add", "add-all", "remove"} {
+			t.Run(content+"/"+operation, func(t *testing.T) {
+				a := expectedTestAPI(t)
+				path := filepath.Join(t.TempDir(), "expected.json")
+				if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				a.expected = correlate.NewExpectStore(path)
+				f := ghFlag("fixture", time.Now(), ghRead("sensitive read", 900, "GitHub"), "evil.example.com")
+				a.store.PutFlag(f)
+				call(t, a, "GET", "/expected", "") // Exercise the cached load failure.
+				method, endpoint, body := "POST", "/expected", `{"flag_id":"fixture"}`
+				if operation == "add-all" {
+					body = `{"flag_ids":["fixture"]}`
+				}
+				if operation == "remove" {
+					method, body = "DELETE", ""
+					endpoint += "?key=" + url.QueryEscape(correlate.ReadConnectKey("claude", "gh", ghHosts, "evil.example.com"))
+				}
+				w := call(t, a, method, endpoint, body)
+				if w.Code != 500 {
+					t.Fatalf("status = %d: %s", w.Code, w.Body)
+				}
+				if got, _ := a.store.GetFlag(f.ID); got.Acknowledged {
+					t.Fatal("failed edit acknowledged the flag")
+				}
+				if labels := a.store.SimilarLabels(readConnectRule, "claude", ghHosts, 5); len(labels) != 0 {
+					t.Fatalf("failed edit wrote labels: %+v", labels)
+				}
+				if audit := a.store.RecentAudit(10); len(audit) != 0 {
+					t.Fatalf("failed edit wrote audit: %+v", audit)
+				}
+				if len(a.expected.List()) != 0 {
+					t.Fatal("failed edit applied an exception")
+				}
+				if got, err := os.ReadFile(path); err != nil || string(got) != content {
+					t.Fatalf("policy changed: %q, %v", got, err)
+				}
+			})
+		}
+	}
+}
 
 func expectedTestAPI(t *testing.T) *API {
 	t.Helper()
