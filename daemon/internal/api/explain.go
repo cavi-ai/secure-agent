@@ -102,7 +102,11 @@ func (a *API) lookupFlagResult(id string) (model.Flag, bool, error) {
 	if err != nil || !found {
 		return f, found, err
 	}
-	if v, ok := a.store.AdvisorVerdictFor(f.ID, "flag"); ok {
+	v, ok, err := a.store.AdvisorVerdictResultFor(f.ID, "flag")
+	if err != nil {
+		return model.Flag{}, false, err
+	}
+	if ok {
 		f.Advisor = &v
 	}
 	return f, true, nil

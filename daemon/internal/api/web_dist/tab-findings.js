@@ -300,7 +300,8 @@ function incidentBodyHTML(inc, ctx, actions = true) {
       + (ctx.advisor && inc.advisor_narrative ? `<p class="body-note">${escapeHTML(inc.advisor_narrative)}</p>` : '')
       + (wf.resolution_note ? `<p class="body-note">Reported resolution: ${escapeHTML(wf.resolution_note)}</p>` : ''),
     actions: actions ? actionBarHTML(incidentActionItems(inc)) : '',
-    evidenceLabel: 'Secrets to rotate', evidence: rotate,
+    evidenceLabel: inc.remediation && (inc.remediation.steps || []).length ? 'Remediation steps' : 'Secrets to rotate',
+    evidence: incidentRemediationHTML(inc.id, inc.remediation, actions) || rotate,
   });
 }
 

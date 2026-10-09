@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -17,6 +18,10 @@ func TestPlanTargetReadFailuresRejectDecisionsAndRecover(t *testing.T) {
 		{"flag:f1", `UPDATE flags SET evidence='invalid' WHERE id='f1'`, `UPDATE flags SET evidence='null' WHERE id='f1'`},
 		{"incident:i1", `UPDATE incidents SET report_json='invalid' WHERE id='i1'`, ""},
 		{"incident:i1", `UPDATE flags SET evidence='invalid' WHERE id='f1'`, `UPDATE flags SET evidence='null' WHERE id='f1'`},
+		{"file:/w/test.txt", `UPDATE flags SET evidence='invalid /w/test.txt' WHERE id='f1'`, `UPDATE flags SET evidence='[{"Label":"/w/test.txt"}]' WHERE id='f1'`},
+		{"file:/w/test.txt", `UPDATE flags SET ts='invalid' WHERE id='f1'`, ""},
+		{"file:/w/test.txt", `UPDATE incidents SET report_json='invalid /w/test.txt' WHERE id='i1'`, ""},
+		{"file:/w/test.txt", `UPDATE events SET pid='invalid'`, `UPDATE events SET pid=1`},
 	} {
 		t.Run(tc.subject+tc.damage, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "targets.db")
@@ -25,11 +30,15 @@ func TestPlanTargetReadFailuresRejectDecisionsAndRecover(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer st.Close()
-			if _, err := st.PutFlag(model.Flag{ID: "f1", Rule: "secret-in-transcript", Agent: "codex", PID: 1, TS: time.Now(), Severity: 3}); err != nil {
+			flag := model.Flag{ID: "f1", Rule: "secret-in-transcript", Agent: "codex", PID: 1, TS: time.Now(), Severity: 3, Evidence: []model.EvidenceItem{{Label: "/w/test.txt"}}}
+			if _, err := st.PutFlag(flag); err != nil {
 				t.Fatal(err)
 			}
-			inc := model.IncidentReport{ID: "i1", FlagID: "f1", Rule: "secret-in-transcript", Agent: "codex", Timestamp: time.Now()}
+			inc := model.IncidentReport{ID: "i1", FlagID: "f1", Rule: "secret-in-transcript", Agent: "codex", Timestamp: time.Now(), TouchedFiles: []string{"/w/test.txt"}}
 			if err := st.PutIncident(inc); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.PutEvent(event.Event{Kind: event.KindFileOpen, TS: time.Now(), PID: 1, Path: "/w/test.txt", SessionID: "s1"}); err != nil {
 				t.Fatal(err)
 			}
 			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
@@ -63,6 +72,9 @@ func TestPlanTargetReadFailuresRejectDecisionsAndRecover(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
+				if _, err := db.Exec("UPDATE flags SET ts=? WHERE id='f1'", flag.TS.UTC().Format(time.RFC3339Nano)); err != nil {
+					t.Fatal(err)
+				}
 				if err := st.PutIncident(inc); err != nil {
 					t.Fatal(err)
 				}
@@ -82,7 +94,7 @@ func TestPlanTargetReadFailuresRejectDecisionsAndRecover(t *testing.T) {
 
 func TestMissingPlanTargetsRemainNotFound(t *testing.T) {
 	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
-	for _, subject := range []string{"flag:missing", "incident:missing"} {
+	for _, subject := range []string{"flag:missing", "incident:missing", "file:/w/missing.txt"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			if code, _ := planCall(t, a, method, subject); code != http.StatusNotFound {
 				t.Errorf("%s %s: %d", method, subject, code)

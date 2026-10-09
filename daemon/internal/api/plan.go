@@ -119,8 +119,15 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 		return planTarget{}, false, nil
 	}
 	if t.path != "" {
-		t.findings = a.store.PathFindings(t.path, fileListLimit)
-		t.accesses = a.store.PathAccesses(t.path, fileListLimit)
+		var err error
+		t.findings, err = a.store.PathFindingsResult(t.path, fileListLimit)
+		if err != nil {
+			return planTarget{}, false, err
+		}
+		t.accesses, err = a.store.PathAccessesResult(t.path, fileListLimit)
+		if err != nil {
+			return planTarget{}, false, err
+		}
 	}
 	if kind == "file" {
 		if len(t.findings) == 0 && len(t.accesses) == 0 {
@@ -235,7 +242,12 @@ func (a *API) servePlan(w http.ResponseWriter, subject string) {
 	}
 	resp.Labels = labels
 	resp.AdvisorReady, resp.Reason = a.planReady()
-	if p, ok := a.store.AdvisorPlanFor(subject); ok {
+	p, found, err := a.store.AdvisorPlanResultFor(subject)
+	if err != nil {
+		http.Error(w, "Advisor plan unavailable; retry", http.StatusServiceUnavailable)
+		return
+	}
+	if found {
 		resp.Plan = &p
 		resp.Status = "ready"
 		if p.EvidenceKey != planEvidenceKey(t) {

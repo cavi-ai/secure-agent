@@ -161,6 +161,8 @@ func initializeSchema(db *sql.DB) error {
 		worktreeReposSchema,
 		cleanupLogSchema,
 		findingReviewsSchema,
+		interventionsSchema,
+		`CREATE INDEX IF NOT EXISTS idx_interventions_session ON interventions(session_id,requested_at);`,
 		agentAsksSchema,
 		scanCacheSchema,
 	}
@@ -174,6 +176,16 @@ func initializeSchema(db *sql.DB) error {
 		}
 		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("failed to init db schema: %w", err)
+		}
+	}
+	// NULL preserves legacy incidents as having no operator step reports.
+	var remediationN int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('incidents') WHERE name='remediation_json'`).Scan(&remediationN); err != nil {
+		return err
+	}
+	if remediationN == 0 {
+		if _, err := tx.Exec(`ALTER TABLE incidents ADD COLUMN remediation_json TEXT`); err != nil {
+			return fmt.Errorf("migrate incident remediation: %w", err)
 		}
 	}
 	// Older resource tables retain their original rows and family key. A

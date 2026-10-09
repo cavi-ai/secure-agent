@@ -351,6 +351,23 @@ func (a *Analyzer) GenerateMarkdown(report model.IncidentReport) string {
 	}
 
 	sb.WriteString("## 📋 Priority \"Rotate-This\" Remediation Checklist\n\n")
+	if report.Remediation != nil {
+		for _, step := range report.Remediation.Steps {
+			status := "Pending"
+			if step.Status == "reported" {
+				status = "Reported completed"
+			}
+			sb.WriteString(fmt.Sprintf("- %s: %s · Unverified", step.Item.Name, status))
+			if step.ReportedAt != nil {
+				sb.WriteString(" · " + step.ReportedAt.UTC().Format(time.RFC3339Nano))
+			}
+			if step.NewerEvidence {
+				sb.WriteString(" · New evidence since this report; review again")
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\nReports record operator work; external credential changes remain unverified. Step reports do not resolve the incident.\n\n")
+	}
 	if len(report.RotateList) == 0 {
 		sb.WriteString("_No specific credential remediation items were identified. This does not establish that no credential was exposed; rotation or revocation is external work._\n\n")
 	} else {

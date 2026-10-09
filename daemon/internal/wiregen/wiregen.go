@@ -20,6 +20,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/playbook"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
@@ -73,6 +74,7 @@ func WireTypes() []any {
 		collect.PlanSnapshot{},
 		collect.PlanWindow{},
 		store.SessionReport{},
+		resource.Snapshot{},
 		store.ReportCount{},
 		store.ReportModel{},
 		store.ReportLine{},

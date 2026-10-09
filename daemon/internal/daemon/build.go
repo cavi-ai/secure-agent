@@ -333,7 +333,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		ProjectAdvisor: projectAdvisor,
 	})
 
-	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, st))
+	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, procSource, st))
 
 	// Fleet heartbeat: posture + liveness pushed to every sink at boot, on a
 	// ticker, and on posture-state transitions. Always armed — enrolling a
@@ -628,6 +628,9 @@ func buildResourceStack(cfg config.Config, st *store.Store, tagger *agents.Tagge
 	episodes := newResourceEpisodeWriter(st)
 	control := resource.NewController(resourcePolicy(cfg.ResourceControl), nil)
 	control.SetPolicySet(resourcePolicySet(cfg.ResourceControl))
+	if err := control.SetReceiptStore(st); err != nil {
+		log.Printf("resources: action history unavailable: %v", err)
+	}
 	now := time.Now()
 	observeResources(tracker, tagger, st, now)
 	control.Observe(tracker.Snapshot(), now)
@@ -796,9 +799,9 @@ func buildResourcePolicyUpdater(configPath string, resourceControl *resource.Con
 	}
 }
 
-// makeResourceExecutor revalidates every target against a baseline snapshot:
-// a pid that left the session or was recycled is refused. Audited.
-func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, st *store.Store) func(resource.ControlAction) error {
+// makeResourceExecutor revalidates attribution and live start identity before
+// process calls, narrowing the PID reuse window. Every attempt is audited.
+func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, procSource agents.ProcSource, st *store.Store) func(resource.ControlAction) error {
 	return func(action resource.ControlAction) error {
 		var affected int
 		baseline := tagger.TaggedPIDs()
@@ -809,6 +812,10 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, st *store.S
 			}
 			fresh, ok := tagger.TaggedPIDs()[pid]
 			if !ok || !fresh.StartedAt.Equal(original.StartedAt) {
+				return fmt.Errorf("pid %d identity changed before intervention", pid)
+			}
+			live, ok := procSource.Info(pid)
+			if !ok || original.StartedAt.IsZero() || !live.StartTime.Equal(original.StartedAt) {
 				return fmt.Errorf("pid %d identity changed before intervention", pid)
 			}
 			return nil
@@ -823,6 +830,9 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, st *store.S
 			}
 			for pid, info := range baseline {
 				if normalizedActionRoot(info) == rootPID {
+					if err := revalidate(pid); err != nil {
+						return err
+					}
 					expectedStarts[pid] = info.StartedAt
 				}
 			}
@@ -858,6 +868,9 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, st *store.S
 				return err
 			}
 		})
+		if err != nil && action.Kind == string(resource.ActionTerminate) && affected > 0 {
+			err = &resource.PartialActionError{Cause: err}
+		}
 		detail := fmt.Sprintf("session=%s root_pid=%d action=%s processes=%d", action.SessionKey, action.RootPID, action.Kind, affected)
 		if err != nil {
 			detail += " error=" + err.Error()

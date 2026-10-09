@@ -49,8 +49,16 @@ func evidencePath(p string) (string, bool) {
 
 // isEvidencePath reports whether a stored flag, incident or agent-session
 // file event names p.
-func (a *API) isEvidencePath(p string) bool {
-	return len(a.store.PathFindings(p, 1)) > 0 || len(a.store.PathAccesses(p, 1)) > 0
+func (a *API) isEvidencePath(p string) (bool, error) {
+	findings, err := a.store.PathFindingsResult(p, 1)
+	if err != nil {
+		return false, err
+	}
+	if len(findings) > 0 {
+		return true, nil
+	}
+	accesses, err := a.store.PathAccessesResult(p, 1)
+	return len(accesses) > 0, err
 }
 
 // handleFileDetail serves GET /files/detail?path=: what the daemon knows
@@ -65,8 +73,16 @@ func (a *API) handleFileDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path must be absolute and clean", http.StatusBadRequest)
 		return
 	}
-	findings := a.store.PathFindings(p, fileListLimit)
-	accesses := a.store.PathAccesses(p, fileListLimit)
+	findings, err := a.store.PathFindingsResult(p, fileListLimit)
+	if err != nil {
+		http.Error(w, "File evidence unavailable; retry", http.StatusServiceUnavailable)
+		return
+	}
+	accesses, err := a.store.PathAccessesResult(p, fileListLimit)
+	if err != nil {
+		http.Error(w, "File evidence unavailable; retry", http.StatusServiceUnavailable)
+		return
+	}
 	if len(findings) == 0 && len(accesses) == 0 {
 		http.Error(w, "no stored evidence names this path", http.StatusNotFound)
 		return
@@ -344,7 +360,12 @@ func (a *API) fileAction(w http.ResponseWriter, r *http.Request, action, flag st
 		http.Error(w, "path must be absolute and clean", http.StatusBadRequest)
 		return
 	}
-	if !a.isEvidencePath(p) {
+	known, err := a.isEvidencePath(p)
+	if err != nil {
+		http.Error(w, "File evidence unavailable; retry", http.StatusServiceUnavailable)
+		return
+	}
+	if !known {
 		http.Error(w, "no stored evidence names this path", http.StatusNotFound)
 		return
 	}

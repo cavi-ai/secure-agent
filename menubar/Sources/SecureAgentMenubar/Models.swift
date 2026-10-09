@@ -3,11 +3,32 @@ import Foundation
 public struct ResourceSnapshotModel: Codable, Sendable {
     public let host: HostPressureModel?
     public let sessions: [ResourceSessionModel]?
+	public let interventions: [ResourceOutcomeModel]?
 
-    public init(host: HostPressureModel?, sessions: [ResourceSessionModel]? = nil) {
+    public init(host: HostPressureModel?, sessions: [ResourceSessionModel]? = nil, interventions: [ResourceOutcomeModel]? = nil) {
         self.host = host
         self.sessions = sessions
+		self.interventions = interventions
     }
+}
+
+public struct ResourceOutcomeModel: Codable, Sendable, Identifiable {
+ public let id: String
+ public let kind: String
+ public let status: String
+ public let verification: String
+ public let verifiedBy: String?
+ public let limits: [String]?
+ public let error: String?
+ enum CodingKeys: String, CodingKey {
+  case id, kind, status, verification, limits, error
+  case verifiedBy = "verified_by"
+ }
+ public var summary: String {
+  let application = ["requested":"requested", "applied":"applied", "partial":"partially applied", "failed":"failed", "cancelled":"cancelled"][status] ?? "application unknown"
+  let observed = verification == "verified" && verifiedBy == "captured-family-absent" ? "captured family absent" : verification == "observed" ? "resource samples observed" : verification == "pending" ? "observing up to 3 samples / 15 seconds" : "verification unknown"
+  return "\(kind.replacingOccurrences(of: "_", with: " ").capitalized) · \(application) · \(observed)"
+ }
 }
 
 public struct ResourceSessionModel: Codable, Sendable {
@@ -1091,6 +1112,35 @@ public struct RotateItemModel: Codable, Identifiable, Sendable {
     }
 }
 
+public struct IncidentRemediationModel: Codable, Sendable {
+    public let revision: Int
+    public let evidenceRevision: String
+    public let steps: [IncidentRemediationStepModel]
+    enum CodingKeys: String, CodingKey {
+        case revision, steps
+        case evidenceRevision = "evidence_revision"
+    }
+    public var summary: String {
+        let reported = steps.filter { $0.status == "reported" }.count
+        let newer = steps.contains { $0.newerEvidence }
+        return "\(reported) of \(steps.count) steps reported completed · Unverified" + (newer ? ". New evidence since a report; review again." : "")
+    }
+}
+
+public struct IncidentRemediationStepModel: Codable, Sendable, Identifiable {
+    public let id: String
+    public let item: RotateItemModel
+    public let status: String
+    public let verification: String
+    public let reportedAt: String?
+    public let newerEvidence: Bool
+    enum CodingKeys: String, CodingKey {
+        case id, item, status, verification
+        case reportedAt = "reported_at"
+        case newerEvidence = "newer_evidence"
+    }
+}
+
 public struct IncidentWorkflowModel: Codable, Sendable {
     public let status: String // "open" | "acknowledged" | "resolved"
 }
@@ -1120,6 +1170,8 @@ public struct IncidentReportModel: Codable, Identifiable, Sendable {
     /// The local advisor's plain-English account; display-only, escaped.
     public let advisorNarrative: String?
 
+    public let remediation: IncidentRemediationModel?
+
     enum CodingKeys: String, CodingKey {
         case id
         case flagId = "flag_id"
@@ -1138,9 +1190,10 @@ public struct IncidentReportModel: Codable, Identifiable, Sendable {
         case aggregateCount = "aggregate_count"
         case lastFlagAt = "last_flag_at"
         case advisorNarrative = "advisor_narrative"
+        case remediation
     }
 
-    public init(id: String, flagId: String, pid: Int32, agent: String, timestamp: String, rule: String, summary: String, risk: String, touchedFiles: [String], connections: [String], rotateList: [RotateItemModel], workflow: IncidentWorkflowModel? = nil, sessionId: String? = nil, subject: String? = nil, aggregateCount: Int? = nil, lastFlagAt: String? = nil, advisorNarrative: String? = nil) {
+    public init(id: String, flagId: String, pid: Int32, agent: String, timestamp: String, rule: String, summary: String, risk: String, touchedFiles: [String], connections: [String], rotateList: [RotateItemModel], workflow: IncidentWorkflowModel? = nil, sessionId: String? = nil, subject: String? = nil, aggregateCount: Int? = nil, lastFlagAt: String? = nil, advisorNarrative: String? = nil, remediation: IncidentRemediationModel? = nil) {
         self.id = id
         self.flagId = flagId
         self.pid = pid
@@ -1158,5 +1211,6 @@ public struct IncidentReportModel: Codable, Identifiable, Sendable {
         self.aggregateCount = aggregateCount
         self.lastFlagAt = lastFlagAt
         self.advisorNarrative = advisorNarrative
+        self.remediation = remediation
     }
 }

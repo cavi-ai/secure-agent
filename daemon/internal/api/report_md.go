@@ -57,6 +57,30 @@ func renderSessionMarkdown(rep store.SessionReport) string {
 		countOrMore(len(rep.Files), store.ReportTopN), countOrMore(len(rep.Hosts), store.ReportTopN),
 		len(rep.Guard), len(rep.Flags), len(rep.SecretHits))
 
+	b.WriteString("\n## Incident remediation\n")
+	if !rep.IncidentsAvailable {
+		b.WriteString("Incident remediation history unavailable; reported work is unknown.\n")
+	}
+	for _, inc := range rep.Incidents {
+		if inc.Remediation == nil {
+			continue
+		}
+		for _, step := range inc.Remediation.Steps {
+			status := "pending"
+			if step.Status == "reported" {
+				status = "reported completed"
+			}
+			fmt.Fprintf(&b, "- Incident %s · %s · %s · credential verification: unverified", mdCode(inc.ID), mdText(step.Item.Name), status)
+			if step.ReportedAt != nil {
+				fmt.Fprintf(&b, " · reported at %s", step.ReportedAt.UTC().Format(time.RFC3339Nano))
+			}
+			if step.NewerEvidence {
+				b.WriteString(" · new evidence since this report; review again")
+			}
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("Step reports do not establish credential safety or incident resolution.\n")
 	b.WriteString("\n## Models\n")
 	if len(rep.Models) == 0 {
 		b.WriteString("none\n")
@@ -110,6 +134,35 @@ func renderSessionMarkdown(rep store.SessionReport) string {
 		}
 	}
 
+	// Application and verification remain independent in exported history.
+	b.WriteString("\n## Resource interventions\n")
+	if !rep.InterventionsAvailable {
+		b.WriteString("Intervention history unavailable; outcomes are unknown.\n")
+	} else if len(rep.Interventions) == 0 {
+		b.WriteString("none recorded\n")
+	}
+	for _, r := range rep.Interventions {
+		fmt.Fprintf(&b, "- %s · application: %s · verification: %s · source: %s\n", mdText(r.Kind), mdText(r.Status), mdText(r.Verification), mdText(orDash(r.VerifiedBy)))
+		if r.Error != "" {
+			fmt.Fprintf(&b, "  - %s\n", mdText(r.Error))
+		}
+		for _, sample := range r.After {
+			fmt.Fprintf(&b, "  - observed %s · captured family present: %t", sample.At.Format(time.RFC3339), sample.CapturedFamilyPresent)
+			if sample.RSSBytes != nil {
+				fmt.Fprintf(&b, " · RSS %d bytes", *sample.RSSBytes)
+			}
+			if sample.CPUPercent != nil {
+				fmt.Fprintf(&b, " · CPU %.1f%%", *sample.CPUPercent)
+			}
+			if sample.HostCapacity != "" {
+				fmt.Fprintf(&b, " · host capacity %s", mdText(sample.HostCapacity))
+			}
+			b.WriteString("\n")
+		}
+		for _, limit := range r.Limits {
+			fmt.Fprintf(&b, "  - %s\n", mdText(limit))
+		}
+	}
 	b.WriteString("\n## Secret hits\n")
 	if len(rep.SecretHits) == 0 {
 		b.WriteString("none\n")

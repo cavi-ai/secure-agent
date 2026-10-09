@@ -85,6 +85,7 @@ var Table = []Route{
 	{Path: "/events/stream", Console: true},
 	{Path: "/incidents", Console: true},
 	{Path: "/incidents/status", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/incidents/remediation", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/audit", Console: true},
 	{Path: "/allowlist/suggestions", Console: true},
 	{Path: "/allowlist", Console: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},

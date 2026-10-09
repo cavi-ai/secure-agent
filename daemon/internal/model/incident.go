@@ -60,4 +60,29 @@ type IncidentReport struct {
 	// display text only — untrusted content, always rendered escaped.
 	AdvisorNarrative string                 `json:"advisor_narrative,omitempty"`
 	PayloadOutcomes  *PayloadOutcomeSummary `json:"payload_outcomes,omitempty"`
+	// Remediation is a store-owned projection, separate from source evidence.
+	Remediation *IncidentRemediation `json:"remediation,omitempty"`
+}
+
+type IncidentRemediation struct {
+	Revision         int                       `json:"revision"`
+	EvidenceRevision string                    `json:"evidence_revision"`
+	Steps            []IncidentRemediationStep `json:"steps"`
+}
+
+type IncidentRemediationStep struct {
+	ID            string     `json:"id"`
+	Item          RotateItem `json:"item"`
+	Status        string     `json:"status"` // pending | reported; never technical verification
+	Verification  string     `json:"verification"`
+	ReportedAt    *time.Time `json:"reported_at,omitempty"`
+	NewerEvidence bool       `json:"newer_evidence"`
+}
+
+type IncidentRemediationRequest struct {
+	ID               string `json:"id"`
+	StepID           string `json:"step_id"`
+	ExpectedRevision int    `json:"expected_revision"`
+	ExpectedEvidence string `json:"expected_evidence"`
+	Status           string `json:"status"`
 }

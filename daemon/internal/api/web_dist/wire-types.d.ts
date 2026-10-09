@@ -433,6 +433,21 @@ export interface PayloadOutcomeSummary {
   unknown: number;
 }
 
+export interface IncidentRemediationStep {
+  id: string;
+  item: RotateItem;
+  status: string;
+  verification: string;
+  reported_at?: string;
+  newer_evidence: boolean;
+}
+
+export interface IncidentRemediation {
+  revision: number;
+  evidence_revision: string;
+  steps: IncidentRemediationStep[];
+}
+
 export interface IncidentReport {
   id: string;
   flag_id: string;
@@ -451,6 +466,7 @@ export interface IncidentReport {
   rotate_list: RotateItem[];
   advisor_narrative?: string;
   payload_outcomes?: PayloadOutcomeSummary;
+  remediation?: IncidentRemediation;
 }
 
 export interface BudgetStatus {
@@ -685,6 +701,42 @@ export interface Violation {
   limit: number;
 }
 
+export interface InterventionSample {
+  at: string;
+  rss_bytes?: number;
+  cpu_percent?: number;
+  host_available_bytes?: number;
+  host_cpu_percent?: number;
+  host_capacity?: string;
+  captured_family_present: boolean;
+}
+
+export interface ProcessIdentity {
+  pid: number;
+  started_at: string;
+}
+
+export interface InterventionReceipt {
+  id: string;
+  session_id?: string;
+  session_key: string;
+  source_id?: string;
+  revision: number;
+  kind: string;
+  root_pid: number;
+  root_started_at: string;
+  requested_at: string;
+  applied_at: string;
+  status: string;
+  verification: string;
+  verified_by?: string;
+  error?: string;
+  before: InterventionSample;
+  after: InterventionSample[];
+  targets: ProcessIdentity[];
+  limits: string[];
+}
+
 export interface SessionControl {
   mode: string;
   state: string;
@@ -699,6 +751,7 @@ export interface SessionControl {
   next_action_at?: string;
   applied_actions?: string[];
   paused?: boolean;
+  result?: InterventionReceipt;
 }
 
 export interface SessionResources {
@@ -852,6 +905,10 @@ export interface ReportLine {
 }
 
 export interface SessionReport {
+  incidents: IncidentReport[];
+  incidents_available: boolean;
+  interventions: InterventionReceipt[];
+  interventions_available: boolean;
   session: Session;
   duration_s: number;
   events: number;
@@ -870,6 +927,126 @@ export interface SessionReport {
   secret_hits: ReportLine[];
   flags: Flag[];
   timeline: ReportLine[];
+}
+
+export interface HostSnapshot {
+  total_memory_bytes?: number;
+  free_memory_bytes?: number;
+  available_memory_bytes?: number;
+  compressed_memory_bytes?: number;
+  used_memory_bytes?: number;
+  agent_memory_bytes?: number;
+  non_agent_memory_bytes?: number;
+  swap_total_bytes?: number;
+  swap_used_bytes?: number;
+  headroom_percent?: number;
+  agent_memory_percent?: number;
+  system_cpu_percent?: number;
+  agent_cpu_percent?: number;
+  non_agent_cpu_percent?: number;
+  load_1?: number;
+  logical_cpu_count?: number;
+  memory_pressure: string;
+  thermal_state: string;
+  headroom_score: number;
+  headroom_limiter?: string;
+  capacity: string;
+}
+
+export interface EpisodeActivity {
+  at: string;
+  ended_at: string;
+  kind: string;
+  pid: number;
+  process?: string;
+  summary: string;
+  ref?: string;
+}
+
+export interface EpisodeCorrelation {
+  summary: string;
+  confidence: string;
+  from: string;
+  to: string;
+  rss_delta_bytes: number;
+  activity_count: number;
+}
+
+export interface Episode {
+  id?: number;
+  session_id?: string;
+  captured_at: string;
+  severity: string;
+  diagnosis_codes: string[];
+  activity_status?: string;
+  activities?: EpisodeActivity[];
+  correlations?: EpisodeCorrelation[];
+  host?: HostSnapshot;
+  session: Session;
+}
+
+export interface InterventionStepSnapshot {
+  action: string;
+  after_seconds: number;
+  nice?: number;
+}
+
+export interface WorkspacePolicySnapshot {
+  cwd_prefix: string;
+  mode: string;
+  max_rss_bytes?: number;
+  max_cpu_percent?: number;
+  sustain_seconds: number;
+  cooldown_seconds: number;
+  interventions?: InterventionStepSnapshot[];
+}
+
+export interface PendingAction {
+  id: string;
+  session_key: string;
+  root_pid: number;
+  name: string;
+  workspace?: string;
+  created_at: string;
+  violations: Violation[];
+  action: string;
+  nice?: number;
+  context_key: string;
+}
+
+export interface BudgetSummary {
+  mode: string;
+  enforced: boolean;
+  over_budget: number;
+  approval: number;
+  contained: number;
+  paused: number;
+}
+
+export interface ControlSnapshot {
+  mode: string;
+  max_rss_bytes?: number;
+  max_cpu_percent?: number;
+  sustain_seconds: number;
+  cooldown_seconds: number;
+  workspace_overrides: WorkspacePolicySnapshot[];
+  pending: PendingAction[];
+  interventions?: InterventionStepSnapshot[];
+  budget: BudgetSummary;
+}
+
+export interface Snapshot {
+  observed_at: string;
+  host?: HostSnapshot;
+  rss_bytes: number;
+  cpu_percent?: number;
+  process_count: number;
+  session_count: number;
+  infra_count?: number;
+  sessions: Session[];
+  episodes: Episode[];
+  control?: ControlSnapshot;
+  interventions?: InterventionReceipt[];
 }
 
 export interface DoctorSummary {

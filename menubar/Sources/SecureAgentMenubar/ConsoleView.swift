@@ -49,6 +49,21 @@ struct ConsoleView: View {
             if showsHero { hero }
             if let pending = state.pendingGuard, state.connected { guardDecisionCard(pending) }
             if !state.agentRoots.isEmpty { sessionCards }
+            if let incident = state.incidents.first(where: { $0.remediation?.steps.contains { $0.status == "reported" } == true }), let remediation = incident.remediation {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Incident remediation · \(incident.agent)").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                    Text(remediation.summary).font(.system(size: 11)).fixedSize(horizontal: false, vertical: true)
+                    Button("Review remediation") { state.openDashboard(tab: "incidents") }.font(.system(size: 11))
+                }
+            }
+            if let result = state.resources?.interventions?.last {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Last resource action").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                    Text(result.summary).font(.system(size: 11)).fixedSize(horizontal: false, vertical: true)
+                    if let error = result.error { Text(error).font(.system(size: 10)).foregroundStyle(Color.warn) }
+                    Text("Observed effects do not establish recovery or task completion.").font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            }
         }
     }
 

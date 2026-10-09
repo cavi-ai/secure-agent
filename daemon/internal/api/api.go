@@ -697,6 +697,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/events/stream":                a.handleEventStream,
 		"/incidents":                    a.handleIncidents,
 		"/incidents/status":             a.handleIncidentStatus,
+		"/incidents/remediation":        a.handleIncidentRemediation,
 		"/audit":                        a.handleAudit,
 		"/allowlist/suggestions":        a.handleAllowlistSuggestions,
 		"/allowlist":                    a.handleAllowlistAdd,
