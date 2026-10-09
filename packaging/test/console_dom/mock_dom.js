@@ -1484,13 +1484,21 @@
       receipt.rejectedHandoff = document.querySelector('main').inert && !document.getElementById('session-ended').hidden
         && !sessionStorage.getItem('sa.console-token') && !location.hash.includes('ct=');
     }, 3500);
-    setTimeout(() => { location.hash = 'ct=replacement-token'; }, 4000);
+    setTimeout(() => {
+      // Force a metadata render during recovery, as elapsed-time labels do
+      // when they cross a minute boundary.
+      data['/sessions'].find(s => s.id === selected).started_at = iso(3600000);
+      location.hash = 'ct=replacement-token';
+    }, 4000);
     setTimeout(() => {
       receipt.resumed = !document.body.classList.contains('is-paused') && !document.querySelector('main').inert
         && document.getElementById('session-ended').hidden && window.__sse.readyState === 1;
-      receipt.context = selected === window.SA.selectedSessionId && window.SA.activeTab === 'sessions'
-        && window.SA.sessionView === (MODE.includes('authtrace') ? 'trace' : 'memory')
-        && document.activeElement === focused && Math.abs(top - body.scrollTop) < 2;
+      receipt.contextSelection = selected === window.SA.selectedSessionId;
+      receipt.contextTab = window.SA.activeTab === 'sessions';
+      receipt.contextView = window.SA.sessionView === (MODE.includes('authtrace') ? 'trace' : 'memory');
+      receipt.contextFocus = document.activeElement === document.querySelector('#session-detail details.session-metadata summary');
+      receipt.metadataReplaced = !focused.isConnected;
+      receipt.contextScroll = Math.abs(top - body.scrollTop) < 2;
       receipt.noReplay = authRecoveryMutations === 1;
       receipt.stripped = !location.hash.includes('ct=');
       receipt.sameDocument = body === document.querySelector('#session-detail .session-detail-body');

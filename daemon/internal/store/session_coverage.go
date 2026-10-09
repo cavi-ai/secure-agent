@@ -28,7 +28,9 @@ func (s *Store) SessionCoverageSince(pids []int32, since, until time.Time) (out 
 		return nil, fmt.Errorf("too many coverage roots")
 	}
 	query, args := sessionCoverageQuery(pids, since, until)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// Include brief connection/scheduler contention in the report-read budget.
+	// Keep the read within the console's request timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

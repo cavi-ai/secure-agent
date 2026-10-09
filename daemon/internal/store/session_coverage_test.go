@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,47 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
+
+func TestSessionCoverageSurvivesBriefConnectionContention(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "coverage.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+	if err := s.UpsertSession(model.Session{ID: "s", Harness: "claude", RootPID: 42, StartedAt: now.Add(-time.Hour), LastSeenAt: now, Status: model.SessionActive}); err != nil {
+		t.Fatal(err)
+	}
+	s.db.SetMaxOpenConns(1)
+	// Occupy the SQLite connection briefly, as another evidence read
+	// or write can do while the coverage snapshot is waiting for its turn.
+	conn, err := s.db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	type result struct {
+		facts []SessionCoverageFact
+		err   error
+	}
+	read := make(chan result, 1)
+	go func() {
+		facts, err := s.SessionCoverageSince([]int32{42}, now.Add(-time.Hour), now)
+		read <- result{facts, err}
+	}()
+	time.Sleep(150 * time.Millisecond)
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-read:
+		if got.err != nil || len(got.facts) != 1 || got.facts[0].ID != "s" {
+			t.Fatalf("coverage after brief contention: %+v, err=%v", got.facts, got.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("coverage read did not finish after releasing the connection")
+	}
+}
 
 // Each newest-event lookup seeks idx_events_session_activity; no lookup walks
 // a session's events or sorts them.

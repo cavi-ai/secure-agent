@@ -119,8 +119,15 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 		return planTarget{}, false, nil
 	}
 	if t.path != "" {
-		t.findings = a.store.PathFindings(t.path, fileListLimit)
-		t.accesses = a.store.PathAccesses(t.path, fileListLimit)
+		var err error
+		t.findings, err = a.store.PathFindingsResult(t.path, fileListLimit)
+		if err != nil {
+			return planTarget{}, false, err
+		}
+		t.accesses, err = a.store.PathAccessesResult(t.path, fileListLimit)
+		if err != nil {
+			return planTarget{}, false, err
+		}
 	}
 	if kind == "file" {
 		if len(t.findings) == 0 && len(t.accesses) == 0 {
