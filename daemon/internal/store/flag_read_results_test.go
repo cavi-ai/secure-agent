@@ -80,6 +80,28 @@ func TestFlagReadAcceptsLegacyNullableFields(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].ID != "legacy" || got[0].Process != nil || got[0].LastSeen != nil {
 		t.Fatalf("nullable flag read: %+v, %v", got, err)
 	}
+	flag, found, err := s.GetFlagResult("legacy")
+	if err != nil || !found || flag.ID != "legacy" || flag.Process != nil || flag.LastSeen != nil {
+		t.Fatalf("nullable flag detail: %+v, %v, %v", flag, found, err)
+	}
+}
+
+func TestGetFlagResultDistinguishesMissingAndUnavailable(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if flag, found, err := s.GetFlagResult("missing"); err != nil || found || flag.ID != "" {
+		t.Fatalf("missing flag: %+v, %v, %v", flag, found, err)
+	}
+	s.Close()
+	if flag, found, err := s.GetFlagResult("missing"); err == nil || found || flag.ID != "" {
+		t.Fatalf("unavailable flag: %+v, %v, %v", flag, found, err)
+	}
+	if h := s.WriteHealth(); h.ReadFailures != 1 || !slices.Equal(h.ReadActive, []string{"flag detail"}) {
+		t.Fatalf("flag detail read health: %+v", h)
+	}
 }
 
 func TestFlagCursorFailureDiscardsEarlierValidRows(t *testing.T) {

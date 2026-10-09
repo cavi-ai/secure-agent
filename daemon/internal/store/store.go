@@ -917,6 +917,26 @@ func (s *Store) GetFlag(id string) (model.Flag, bool) {
 	return s.getFlagLocked(id)
 }
 
+// GetFlagResult distinguishes a missing flag from a failed or malformed
+// read, using the same validation as the flag list.
+func (s *Store) GetFlagResult(id string) (fl model.Flag, found bool, readErr error) {
+	defer func() { s.noteRead("flag detail", readErr) }()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process, repeats, last_seen FROM flags WHERE id = ?`, id)
+	if err != nil {
+		return model.Flag{}, false, err
+	}
+	flags, err := scanFlagsResult(rows)
+	if err != nil {
+		return model.Flag{}, false, err
+	}
+	if len(flags) == 0 {
+		return model.Flag{}, false, nil
+	}
+	return flags[0], true, nil
+}
+
 func (s *Store) getFlagLocked(id string) (model.Flag, bool) {
 	row := s.db.QueryRow(
 		`SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process, repeats, last_seen FROM flags WHERE id = ?`, id)

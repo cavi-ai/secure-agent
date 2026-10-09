@@ -80,7 +80,11 @@ func (a *API) handleLabels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("label must be ok or not_ok, source mark or kill, reason at most %d characters", labelReasonMax), http.StatusBadRequest)
 		return
 	}
-	t, ok := a.resolvePlanTarget(req.Subject)
+	t, ok, err := a.resolvePlanTarget(req.Subject)
+	if err != nil {
+		http.Error(w, "Subject data unavailable; retry", http.StatusServiceUnavailable)
+		return
+	}
 	if !ok {
 		http.Error(w, "no stored flag, incident or evidence file matches this subject", http.StatusNotFound)
 		return

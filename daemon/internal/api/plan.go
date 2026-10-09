@@ -2,8 +2,10 @@ package api
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -66,28 +68,43 @@ type planTarget struct {
 
 // resolvePlanTarget maps "flag:<id>", "incident:<id>" or "file:<path>" onto
 // stored data; false when the subject names nothing stored.
-func (a *API) resolvePlanTarget(subject string) (planTarget, bool) {
+func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 	kind, id, ok := strings.Cut(subject, ":")
 	if !ok || id == "" {
-		return planTarget{}, false
+		return planTarget{}, false, nil
 	}
 	t := planTarget{subject: subject, kind: kind}
 	switch kind {
 	case "flag":
-		f, ok := a.store.GetFlag(id)
+		f, ok, err := a.store.GetFlagResult(id)
+		if err != nil {
+			return planTarget{}, false, err
+		}
 		if !ok {
-			return planTarget{}, false
+			return planTarget{}, false, nil
 		}
 		t.flag = &f
 		t.path = flagEvidencePath(f)
 	case "incident":
 		inc, err := a.store.GetIncident(id)
-		if err != nil || inc == nil {
-			return planTarget{}, false
+		if errors.Is(err, sql.ErrNoRows) {
+			return planTarget{}, false, nil
+		}
+		if err != nil {
+			return planTarget{}, false, err
+		}
+		if inc == nil {
+			return planTarget{}, false, nil
 		}
 		t.incident = inc
-		if f, ok := a.store.GetFlag(inc.FlagID); ok {
-			t.flag = &f
+		if inc.FlagID != "" {
+			f, ok, err := a.store.GetFlagResult(inc.FlagID)
+			if err != nil {
+				return planTarget{}, false, err
+			}
+			if ok {
+				t.flag = &f
+			}
 		}
 		if i := slices.IndexFunc(inc.TouchedFiles, func(p string) bool { return strings.HasPrefix(p, "/") }); i >= 0 {
 			t.path = inc.TouchedFiles[i]
@@ -95,11 +112,11 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool) {
 	case "file":
 		p, ok := evidencePath(id)
 		if !ok {
-			return planTarget{}, false
+			return planTarget{}, false, nil
 		}
 		t.path = p
 	default:
-		return planTarget{}, false
+		return planTarget{}, false, nil
 	}
 	if t.path != "" {
 		t.findings = a.store.PathFindings(t.path, fileListLimit)
@@ -107,16 +124,24 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool) {
 	}
 	if kind == "file" {
 		if len(t.findings) == 0 && len(t.accesses) == 0 {
-			return planTarget{}, false
+			return planTarget{}, false, nil
 		}
 		for _, f := range t.findings {
 			if f.Kind == "flag" && t.flag == nil {
-				if fl, ok := a.store.GetFlag(f.ID); ok {
+				fl, ok, err := a.store.GetFlagResult(f.ID)
+				if err != nil {
+					return planTarget{}, false, err
+				}
+				if ok {
 					t.flag = &fl
 				}
 			}
 			if f.Kind == "incident" && t.incident == nil {
-				if inc, err := a.store.GetIncident(f.ID); err == nil && inc != nil {
+				inc, err := a.store.GetIncident(f.ID)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return planTarget{}, false, err
+				}
+				if inc != nil {
 					t.incident = inc
 				}
 			}
@@ -130,7 +155,7 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool) {
 	case len(t.accesses) > 0:
 		t.sessionID = t.accesses[0].SessionID
 	}
-	return t, true
+	return t, true, nil
 }
 
 // flagEvidencePath is the first absolute path a flag's evidence names.
@@ -193,7 +218,11 @@ func (a *API) handleAdvisorPlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) servePlan(w http.ResponseWriter, subject string) {
-	t, ok := a.resolvePlanTarget(subject)
+	t, ok, err := a.resolvePlanTarget(subject)
+	if err != nil {
+		http.Error(w, "Subject data unavailable; retry", http.StatusServiceUnavailable)
+		return
+	}
 	if !ok {
 		http.Error(w, "no stored flag, incident or evidence file matches this subject", http.StatusNotFound)
 		return
@@ -223,7 +252,11 @@ func (a *API) servePlan(w http.ResponseWriter, subject string) {
 }
 
 func (a *API) requestPlan(w http.ResponseWriter, subject string) {
-	t, ok := a.resolvePlanTarget(subject)
+	t, ok, err := a.resolvePlanTarget(subject)
+	if err != nil {
+		http.Error(w, "Subject data unavailable; retry", http.StatusServiceUnavailable)
+		return
+	}
 	if !ok {
 		http.Error(w, "no stored flag, incident or evidence file matches this subject", http.StatusNotFound)
 		return
