@@ -29,6 +29,14 @@ const bars = html => {
 // needRow: one queue item rendered as its closed row.
 const needRow = (ctx, sa, item) => ctx.needRowHTML(ctx.needView(item, ctx.homeContext(sa)), false, Date.now());
 
+test('incident dismissal is available even when detail is outside the telemetry snapshot', () => {
+  const item = {kind: 'incident', id: 'older', status: 'open', title: 'Critical incident'};
+  const {ctx, sa} = load({needs_you: 1, groups: [group([item])]});
+  const html = needRow(ctx, sa, {...item, group: group([item])});
+  assert.deepEqual(bars(html).bar, ['View report', 'Dismiss']);
+  assert.match(html, /data-id="older" data-status="acknowledged"/);
+});
+
 test('an empty queue hides the needs panel and the Home badge', () => {
   const { ctx, nodes, badges, patched } = load({ state: 'all-clear', needs_you: 0, items: [], groups: [], coverage_items: [] });
   ctx.renderAttention();

@@ -46,6 +46,43 @@ func TestDismissPushesAllClearPosture(t *testing.T) {
 	}
 }
 
+func TestIncidentDismissalPushesPostureAndRetainsReport(t *testing.T) {
+	st := testStore(t)
+	st.PutIncident(model.IncidentReport{ID: "test-incident", Rule: "secret-in-transcript", Agent: "codex", Risk: model.RiskCritical, Timestamp: time.Now(), Summary: "Test fixture"})
+	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a.deltaHub = NewDeltaHub()
+	ch := a.deltaHub.Subscribe()
+	defer a.deltaHub.Unsubscribe(ch)
+	a.PublishPostureIfChanged()
+	if p := (<-ch).Data.(Posture); p.NeedsYou != 1 {
+		t.Fatalf("initial posture: %+v", p)
+	}
+	w := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(w, httptest.NewRequest("POST", "/incidents/status", strings.NewReader(`{"id":"test-incident","status":"acknowledged"}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("dismiss: %d %s", w.Code, w.Body.String())
+	}
+	select {
+	case d := <-ch:
+		if p := d.Data.(Posture); p.NeedsYou != 0 {
+			t.Fatalf("dismissed incident remains: %+v", p)
+		}
+	default:
+		t.Fatal("incident dismissal did not push posture")
+	}
+	fresh := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	if p := fresh.computePosture(); p.NeedsYou != 0 {
+		t.Fatalf("fresh API restored dismissed incident: %+v", p)
+	}
+	wf, found, err := st.IncidentStatusResult("test-incident")
+	if err != nil || !found || wf.Status != "acknowledged" {
+		t.Fatalf("saved workflow: %+v %v %v", wf, found, err)
+	}
+	if inc, err := st.GetIncident("test-incident"); err != nil || inc.Summary != "Test fixture" {
+		t.Fatalf("report lost: %+v %v", inc, err)
+	}
+}
+
 func TestDecisionPushesPostureAtUnchangedCount(t *testing.T) {
 	st := testStore(t)
 	st.PutFlag(model.Flag{ID: "a", Rule: "transcript-secret-leak", Severity: 3, TS: time.Now()})

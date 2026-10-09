@@ -12,6 +12,17 @@ const ctx = {};
 vm.runInNewContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), ctx, { filename: 'lib.js' });
 const { planHTML, planSlotHTML } = ctx;
 
+test('incident report places decisions and advisor between the summary and evidence', () => {
+  const markdown = '# Report\n\n- **Summary**: Test fixture\n\n## Rotation checklist\n\nEvidence';
+  const html = ctx.incidentReportHTML('a"b', {status: 'open'}, markdown);
+  assert.ok(html.indexOf('Test fixture') < html.indexOf('>Dismiss</button>'));
+  assert.ok(html.indexOf('Mark as routine') < html.indexOf('data-plan-subject='));
+  assert.ok(html.indexOf('data-plan-subject=') < html.indexOf('Rotation checklist'));
+  assert.match(html, /data-id="a&quot;b"/);
+  assert.ok(!ctx.incidentReportHTML('a', {status:'acknowledged'}, markdown).includes('>Dismiss</button>'));
+  assert.ok(!ctx.incidentReportHTML('a', {status:'resolved'}, markdown).includes('>Report resolved</button>'));
+});
+
 const now = Date.parse('2026-09-23T20:00:00Z');
 const playbook = {
   rule: 'secret-in-transcript', title: 'Secret in an agent transcript', why: 'A secret <appeared>.',

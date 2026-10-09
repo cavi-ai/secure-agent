@@ -2072,8 +2072,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Posture headline: the one-glance answer, plus clickable jump-off points
   // into the panels below (drill-down without leaving the page).
 
-  // Incident workflow: acknowledge keeps it visible but marked seen; resolve
-  // closes it with a note. Both hit /incidents/status and refresh.
+  // Dismissal removes an incident from Needs you while retaining its report.
+  // Resolution records the operator's note. Both refresh the saved workflow.
   window.setIncidentStatus = async function(id, status) {
     const body = { id, status };
     if (status === 'resolved') {
@@ -2086,8 +2086,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const revert = stage(['incidents', 'posture'], ['incidents', 'attention', 'posture', 'status'], () => {
       telemetryData.incidents = (telemetryData.incidents || []).map(inc => inc.id !== id ? inc
         : { ...inc, workflow: { ...(inc.workflow || {}), status, ...(body.note ? { resolution_note: body.note } : {}) } });
-      // resolved leaves the queue; acknowledged stays, marked seen.
-      mapAttentionItems(it => (it.kind !== 'incident' || it.id !== id ? it : status === 'resolved' ? null : { ...it, status }));
+      mapAttentionItems(it => (it.kind !== 'incident' || it.id !== id ? it : status === 'open' ? { ...it, status } : null));
     });
     try {
       const r = await apiFetch('/incidents/status', {
@@ -2095,7 +2094,12 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify(body)
       });
       if (!r.ok) throw new Error(await r.text());
-      showToast(status === 'resolved' ? 'Incident closure recorded as reported' : 'Incident acknowledged', 'success');
+      const result = await r.json();
+      if (drawerMode === 'incident' && drawerIncident === id) {
+        const actions = drawerBody.querySelector('.incident-workflow-actions');
+        if (actions) actions.innerHTML = incidentWorkflowHTML(id, result.workflow);
+      }
+      showToast(status === 'resolved' ? 'Incident closure recorded as reported' : 'Incident dismissed from Needs you', 'success');
       cardNote(`#incidents-container [data-action="open-incident"][data-id="${cssq(id)}"]`, '.log-row', 'incidents-container', status);
       fetchTelemetry();
     } catch (err) {
@@ -3023,13 +3027,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const seq = drawerSeq;
 
     try {
-      const res = await apiFetch(`/incidents?id=${encodeURIComponent(incidentId)}&format=markdown`);
+      const url = `/incidents?id=${encodeURIComponent(incidentId)}`;
+      const [res, detail] = await Promise.all([apiFetch(url + '&format=markdown'), apiFetch(url)]);
       if (seq !== drawerSeq) return;
-      if (res.ok) {
-        const text = await res.text();
+      if (res.ok && detail.ok) {
+        const [text, report] = await Promise.all([res.text(), detail.json()]);
         if (seq !== drawerSeq) return;
         currentRawMarkdown = text;
-        drawerBody.innerHTML = linkEvidencePaths(parseMarkdownToHTML(text)) + planSlotHTML('incident:' + incidentId);
+        drawerBody.innerHTML = incidentReportHTML(incidentId, report.workflow, text);
         loadPlanSlot('incident:' + incidentId);
       } else {
         drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Failed to load the incident report.</span></div>`;
