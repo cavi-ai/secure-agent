@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,38 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 )
+
+func TestNotifyRulesRejectInvalidPersistedPolicy(t *testing.T) {
+	for _, workspace := range []string{"", "/repo"} {
+		for _, notify := range []string{"true", "null"} {
+			t.Run(workspace+"/"+notify, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "notify.json")
+				const original = `{"existing":false,`
+				if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				st := testStore(t)
+				a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+				a.notifyRules = correlate.NewNotifyRuleStore(path)
+				a.notifyScopes = correlate.NewNotifyScopeStore(path)
+				body := fmt.Sprintf(`{"rule":"proxy-secret-leak","workspace":%q,"notify":%s}`, workspace, notify)
+				r := httptest.NewRequest(http.MethodPost, "/notify/rules", strings.NewReader(body))
+				w := httptest.NewRecorder()
+				a.handleNotifyRules(w, r)
+				if w.Code != http.StatusInternalServerError {
+					t.Fatalf("status = %d, want 500; body = %s", w.Code, w.Body.String())
+				}
+				got, err := os.ReadFile(path)
+				if err != nil || string(got) != original {
+					t.Fatalf("policy changed: %q, err = %v", got, err)
+				}
+				if entries := st.RecentAudit(10); len(entries) != 0 {
+					t.Fatalf("failed edit recorded as successful audit: %+v", entries)
+				}
+			})
+		}
+	}
+}
 
 // The drill-down behind the posture warning: the operator clicks "N
 // endpoints reached without inspection" and gets the actual list.
