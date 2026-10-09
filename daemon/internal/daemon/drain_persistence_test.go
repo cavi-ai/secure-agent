@@ -37,7 +37,10 @@ func newPersistenceFixture(t *testing.T) persistenceFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	db, err := sql.Open("sqlite", path)
+	// Recovery changes triggers while the drain's asynchronous egress
+	// projection can still be writing. Match the production store's bounded
+	// busy timeout on every fixture connection rather than failing immediately.
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(3000)")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package correlate
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -76,23 +77,42 @@ func (s *MuteStore) Muted(rule, host, agent string) bool {
 }
 
 func (s *MuteStore) loadLocked() map[string][]Mute {
-	out := map[string][]Mute{}
-	data, err := os.ReadFile(s.path)
+	out, err := s.readLocked()
 	if err != nil {
-		return out
-	}
-	if err := json.Unmarshal(data, &out); err != nil {
-		log.Printf("correlate: WARNING: mute file %s is corrupt (%v); dispositions are NOT applied until it is fixed", s.path, err)
+		log.Printf("correlate: WARNING: cannot load mutes (%v); dispositions are NOT applied until it is fixed", err)
 		return map[string][]Mute{}
 	}
 	return out
+}
+
+// readLocked keeps a missing policy distinct from one that cannot be loaded,
+// so edits never replace unreadable or corrupt operator dispositions.
+func (s *MuteStore) readLocked() (map[string][]Mute, error) {
+	data, err := os.ReadFile(s.path)
+	if os.IsNotExist(err) {
+		return map[string][]Mute{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read mute policy %s: %w", s.path, err)
+	}
+	var out map[string][]Mute
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode mute policy %s: %w", s.path, err)
+	}
+	if out == nil {
+		return nil, fmt.Errorf("mute policy %s must be a JSON object", s.path)
+	}
+	return out, nil
 }
 
 // Add records a disposition; an empty agent mutes every agent. Idempotent.
 func (s *MuteStore) Add(rule, host, agent string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m := s.loadLocked()
+	m, err := s.readLocked()
+	if err != nil {
+		return err
+	}
 	want := Mute{Host: host, Agent: agent}
 	for _, e := range m[rule] {
 		if e == want {
@@ -107,7 +127,10 @@ func (s *MuteStore) Add(rule, host, agent string) error {
 func (s *MuteStore) Remove(rule, host, agent string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m := s.loadLocked()
+	m, err := s.readLocked()
+	if err != nil {
+		return err
+	}
 	drop := Mute{Host: host, Agent: agent}
 	entries := m[rule]
 	out := entries[:0]
