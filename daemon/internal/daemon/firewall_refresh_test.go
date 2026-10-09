@@ -11,6 +11,64 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 )
 
+func TestFirewallIngestPreservesRegistryOnPartialScan(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "fixture.env")
+	const first = "first-fixture-value"
+	const second = "second-fixture-value"
+	const replacement = "replacement-fixture-value"
+	valid := "FIRST=" + first + "\nSECOND=" + second + "\n"
+	if err := os.WriteFile(source, []byte(valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stack := setupFirewall(config.Config{Firewall: config.FirewallConfig{
+		Mode:     "block",
+		Registry: config.RegistryConfig{SaltRef: filepath.Join(dir, "salt"), IngestSources: []string{source}},
+	}})
+	if stack.Engine == nil {
+		t.Fatal("engine initialization failed")
+	}
+	if labels, err := stack.Ingest(); err != nil || len(labels) != 2 {
+		t.Fatalf("initial ingestion: %v, %v", labels, err)
+	}
+	path := filepath.Join(dir, "firewall-fingerprints.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := "FIRST=" + first + "\n#" + strings.Repeat("x", 1<<20) + "\nSECOND=" + second + "\n"
+	if err := os.WriteFile(source, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if labels, err := stack.Ingest(); err == nil || len(labels) != 0 {
+		t.Errorf("partial ingestion succeeded: %v, %v", labels, err)
+	}
+	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, before) {
+		t.Error("partial ingestion changed persisted fingerprints")
+	}
+	for _, value := range []string{first, second} {
+		if len(stack.Engine.ScanText(value)) != 1 {
+			t.Errorf("partial ingestion removed detection for %q", value)
+		}
+	}
+	if err := os.WriteFile(source, []byte("REPLACEMENT="+replacement+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if labels, err := stack.Ingest(); err != nil || len(labels) != 1 {
+		t.Fatalf("repaired source ingestion: %v, %v", labels, err)
+	}
+	if len(stack.Engine.ScanText(replacement)) != 1 || len(stack.Engine.ScanText(first)) != 0 || len(stack.Engine.ScanText(second)) != 0 {
+		t.Fatal("repaired source did not replace live fingerprints")
+	}
+	salt, err := firewall.LoadSalt(filepath.Join(dir, "salt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fps, err := firewall.NewFingerprintStore(path).LoadStrict(); err != nil || len(fps) != 1 || fps[0].HMAC != firewall.Fingerprint(salt, replacement) {
+		t.Fatalf("repaired source fingerprints not persisted: %+v, %v", fps, err)
+	}
+}
+
 func TestFirewallRejectsFingerprintOperationsWithoutEngine(t *testing.T) {
 	dir := t.TempDir()
 	saltPath := filepath.Join(dir, "salt")

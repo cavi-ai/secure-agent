@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -71,5 +72,51 @@ func TestIngestZeroSourcesIsNotAnError(t *testing.T) {
 	}
 	if len(fps) != 0 {
 		t.Fatalf("expected 0 fingerprints, got %d", len(fps))
+	}
+}
+
+func TestIngestRejectsPartialScans(t *testing.T) {
+	for _, scenario := range []string{"valid-prefix", "healthy-source-first", "healthy-source-last"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir := t.TempDir()
+			broken := filepath.Join(dir, "broken.env")
+			healthy := filepath.Join(dir, "healthy.env")
+			const value = "fixture-value-for-ingestion"
+			content := strings.Repeat("x", maxIngestLineBytes+1) + "\nAFTER=" + value + "\n"
+			sources := []string{broken}
+			switch scenario {
+			case "valid-prefix":
+				content = "BEFORE=" + value + "\n" + content
+			case "healthy-source-first":
+				sources = []string{healthy, broken}
+			case "healthy-source-last":
+				sources = []string{broken, healthy}
+			}
+			if err := os.WriteFile(broken, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(healthy, []byte("HEALTHY="+value+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			fps, err := Ingest(sources, []byte("salt"))
+			if err == nil || fps != nil {
+				t.Fatalf("partial scan returned %d fingerprints and error %v", len(fps), err)
+			}
+			if !strings.Contains(err.Error(), broken) || strings.Contains(err.Error(), value) {
+				t.Fatalf("scan error must identify the source without its value: %v", err)
+			}
+		})
+	}
+}
+
+func TestIngestAllowsMissingOptionalSource(t *testing.T) {
+	dir := t.TempDir()
+	healthy := filepath.Join(dir, "healthy.env")
+	if err := os.WriteFile(healthy, []byte("FIXTURE=fixture-value-for-ingestion\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fps, err := Ingest([]string{filepath.Join(dir, "missing.env"), healthy}, []byte("salt"))
+	if err != nil || len(fps) != 1 {
+		t.Fatalf("missing optional source prevented healthy ingestion: %d fingerprints, %v", len(fps), err)
 	}
 }
