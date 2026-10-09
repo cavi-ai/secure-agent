@@ -287,6 +287,14 @@ Host: unix
 
 `GET /flags` stamps `explain` (below) on the first **25 flags**, including acknowledged history, without network lookups (endpoint identity comes from the CIDR/suffix tables and the reverse-DNS cache only). Rows past the cap stay raw; their individual explain route remains available. `/snapshot` stamps its `flags` the same way.
 
+#### Durable reviews
+
+`GET /reviews?limit=100&after={cursor}&state={state}` returns `reviews`, an optional `next` cursor, and `degraded`. States are `unreviewed`, `reviewed`, and `closed_reported`; omit `state` for history. Each page contains at most 100 records. Review records link detector flags and incident reports; they contain no copied payloads or permission grants. A served flag's optional `review_id` identifies its matching projection. Missing or stale projections fall back to source findings.
+
+`POST /reviews/decision` accepts `{"id":"review-id","revision":1,"action":"acknowledge"}` or action `close_reported`. The decision and source acknowledgment are atomic. Identical requests return the same receipt. HTTP 409 means the evidence changed: refresh the facts and require a new explicit choice. HTTP 404 means the review or its source evidence is unavailable. These routes exclude agent peers and use the existing operator/console mutation gate.
+
+Repeated read/connect evidence updates one review only when the stored session identity and exact reader/resource/destination coordinates match. Counts and timestamps do not reopen it; stronger evidence or identity promotion does. Unknown attribution remains source-specific. A new destination or port creates a separate review. Review and reported closure preserve observed risk and never verify remediation. Legacy receipts are labeled with their source; absent historical timestamps are not invented. Expired source evidence remains explicitly unavailable.
+
 ### 2a. `GET /flags/{id}/explain`
 
 `explain.assessment` separates detector evidence from workflow and optional advice. Its fields are `evidence_basis`, `risk` (`informational`, `review`, `high`, `critical`, `unknown`), `control`, `residual_risk`, `review_state`, optional `recommendation_id`, `reason`, `limits`, and optional `advice`. Acknowledgment changes `review_state` to `reviewed`; it does not remove exposure, lower risk, or verify remediation. Legacy incident closure is user-reported. The existing `disposition` and action `recommended` fields remain for older consumers; current clients use the assessment and its recommendation ID.

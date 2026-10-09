@@ -93,6 +93,7 @@ function renderAttention() {
   const routineByKey = new Map((SA.t.routine || []).map(r => [r.key, r]));
   const now = Date.now();
   const itemHTML = item => {
+    if (item.kind === 'review' && item.review) return reviewHTML(item.review, SA.reviewDrafts && SA.reviewDrafts.get(item.id));
     const rg = item.kind === 'routine' ? routineByKey.get(item.id) : null;
     if (rg) return routineHTML(rg);
     const p = item.kind === 'pattern' ? patternsByKey.get(item.id) : null;
@@ -291,16 +292,24 @@ function renderFlags() {
     return v === 'all' ? '' : v;
   };
   const scopedFlags = scopedBySession(SA.t.flagsView || [], SA.timelineSession, SA.timelinePids);
-  const patterns = patternsInView(allPatterns, {
+  const reviewPage = SA.t.reviews || {reviews:[]};
+  const reviews = (reviewPage.reviews || []).filter(r => (!SA.timelineSession || r.context.session_id === SA.timelineSession)
+    && (!selected('flags-agent') || r.agent === selected('flags-agent')) && (!selected('flags-rule') || r.context.rule === selected('flags-rule'))
+    && matchesSearch(SA.globalSearchTerm(), r.agent, r.context.rule, r.context.resources, r.context.destinations, r.context.workspace)
+    && (selected('flags-severity') !== '3' || r.assessment.risk === 'critical' || (r.assessment.risk === 'unknown' && r.severity >= 3))
+    && (!selected('flags-window') || Date.parse(r.last_seen) >= Date.now() - ({'1h':3600000,'24h':86400000,'7d':604800000}[selected('flags-window')] || Infinity)));
+  const representedReviews = new Set(reviewPage.degraded ? [] : reviews.map(r => r.id));
+  const represented = new Set(scopedFlags.filter(f => f.review_id && representedReviews.has(f.review_id)).map(f => f.id));
+  const patterns = patternsInView(allPatterns.filter(p => !(p.flag_ids || []).some(id => represented.has(id))), {
     term: SA.globalSearchTerm(), agent: selected('flags-agent'), rule: selected('flags-rule'),
     session: SA.timelineSession, pids: SA.timelinePids, flags: scopedFlags, filtered: SA.isFlagsFiltered(),
   });
-  const flags = uncoveredFlags(scopedFlags
+  const flags = uncoveredFlags(scopedFlags.filter(f => !represented.has(f.id))
     .filter(f => matchesSearch(SA.globalSearchTerm(), f.agent, f.rule, f.evidence, f.sessionId, f.workspace)), patterns);
   SA.paintSessionChip('flags-session-filter', 'flags-session-filter-id', patterns.length + flags.length);
-  badge.textContent = patterns.length + flags.length;
+  badge.textContent = patterns.length + flags.length + reviews.length;
 
-  if (flags.length === 0 && patterns.length === 0) {
+  if (flags.length === 0 && patterns.length === 0 && reviews.length === 0 && !reviewPage.next && !SA.reviewCursor) {
     const msg = SA.sessionScopeOn()
       ? `No flags for ${SA.sessionScopeTag()} in the loaded window`
       : SA.isFlagsFiltered() ? 'No flags match the current filter' : 'No findings in the loaded window';
@@ -374,6 +383,10 @@ function renderFlags() {
     const hash = l ? html.replace(metaHTML(l.meta), metaHTML('')) : html;
     return { key: 'flag:' + f.id, priority: findingPriority(f), html, hash, meta: l ? l.meta : null };
   })).sort((a, b) => b.priority - a.priority);
+  parts.unshift(...reviews.map(r => ({key:'review:'+r.id, priority:3, html:reviewHTML(r, SA.reviewDrafts && SA.reviewDrafts.get(r.id))})));
+  if (reviewPage.degraded) parts.unshift({key:'review-degraded',html:'<p role="alert">Review storage is degraded. Original findings remain available below.</p>'});
+  if (reviewPage.next) parts.push({key:'review-next',html:`<button class="btn btn-ghost" data-action="review-page" data-after="${escapeHTML(reviewPage.next)}">Next reviews</button>`});
+  if (SA.reviewCursor) parts.push({key:'review-first',html:'<button class="btn btn-ghost" data-action="review-page">First reviews</button>'});
 
   // Dispositions: muted (rule, host, agent) rows, visible so the quiet is
   // deliberate and reversible. The list node persists; its rows patch one by

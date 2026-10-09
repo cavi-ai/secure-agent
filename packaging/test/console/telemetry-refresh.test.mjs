@@ -24,6 +24,7 @@ function fixture(fetch) {
     sessionEnded: false, SS_TOKEN_KEY: 'fixture',
     telemetryFetchGen: 0, telemetrySlowGen: 0,
     historyScopes: { flags: null, events: null },
+    reviewCursor: '',
     filters: { flags: { agent: 'all', rule: 'all', minsev: 'all', since: 'all' }, events: { kind: 'all', since: 'all' } },
     sessionStorage: { removeItem() {} },
     liveUpdates: { stop: () => stops++ }, sparkTimer: 1,
@@ -55,6 +56,17 @@ function fixture(fetch) {
   return { ctx, requests, renders, connections, failures, retries, stops: () => stops, ended: () => ended };
 }
 const snapshot = () => response({ status: { uptime: 'new' }, flags: [], events: [] });
+
+test('paginated reviews refresh without replacing the resource response', async () => {
+  const resources = {host:{total_memory_bytes:123},sessions:[]};
+  const page = {reviews:[],degraded:false};
+  const f = fixture(async path => path === '/snapshot' ? snapshot() : path === '/resources' ? response(resources)
+    : path.startsWith('/reviews?') ? response(page) : response([]));
+  f.ctx.reviewCursor = 'cursor';
+  await f.ctx.fetchTelemetry({slow:true});
+  assert.deepEqual(f.ctx.telemetryData.resources,resources);
+  assert.deepEqual(f.ctx.telemetryData.reviews,page);
+});
 
 test('open finding history loads reviewed exposure independently of the pending snapshot', async () => {
   const reviewed = { id: 'reviewed', acknowledged: true, explain: { assessment: { risk: 'critical', residual_risk: 'model-exposure', review_state: 'reviewed' } } };

@@ -100,6 +100,7 @@ type Store struct {
 	db                     *sql.DB
 	flagMirror             *flagMirror
 	insertCount            uint64
+	reviewWrites           uint64
 	guardDecisionWrites    atomic.Uint64
 	// Test seam for the identity-to-insert boundary; nil in production.
 	resourceEpisodeAfterLookup func()
@@ -276,6 +277,9 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 	if mirror != nil && mirror.file == nil {
 		s.noteWrite("flag mirror", fmt.Errorf("mirror unavailable"))
 	}
+	if err := s.backfillFindingReviews(); err != nil {
+		s.noteWrite("finding reviews", err)
+	}
 	return s, nil
 }
 
@@ -329,6 +333,10 @@ func (s *Store) PutFlag(fl model.Flag) (result WriteResult, err error) {
 		return result, err
 	}
 	result.Changed = true
+	if fl.Rule == "sensitive-read-then-connect" {
+		_, reviewErr := s.observeFindingReviewLocked(fl, model.AssessFinding(fl))
+		result.HealthChanged = s.noteWrite("finding reviews", reviewErr) || result.HealthChanged
+	}
 	s.bumpRollupLocked(fmt.Sprintf("flag:s%d", fl.Severity), fl.TS)
 
 	// Retention: flags are insert-only like events and must be capped too, or
@@ -778,6 +786,9 @@ func (s *Store) AcknowledgeFlag(id string) bool {
 		return false
 	}
 	n, _ := res.RowsAffected()
+	if n > 0 {
+		s.syncLegacyReviewsLocked([]string{id})
+	}
 	return n > 0
 }
 
@@ -824,6 +835,7 @@ func (s *Store) AcknowledgeFlagsReason(ids []string, reason string) int {
 		log.Printf("store: acknowledge flags commit: %v", err)
 		return 0
 	}
+	s.syncLegacyReviewsLocked(ids)
 	return n
 }
 
@@ -877,12 +889,22 @@ func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
 		return false
 	}
 	n, _ := res.RowsAffected()
+	if n == 1 {
+		if f, ok := s.getFlagLocked(id); ok && f.Rule == "sensitive-read-then-connect" {
+			_, reviewErr := s.observeFindingReviewLocked(f, model.AssessFinding(f))
+			s.noteWrite("finding reviews", reviewErr)
+		}
+	}
 	return n == 1
 }
 
 func (s *Store) GetFlag(id string) (model.Flag, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.getFlagLocked(id)
+}
+
+func (s *Store) getFlagLocked(id string) (model.Flag, bool) {
 	row := s.db.QueryRow(
 		`SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process, repeats, last_seen FROM flags WHERE id = ?`, id)
 	var fl model.Flag
@@ -912,6 +934,7 @@ func (s *Store) GetFlagWithAdvisor(id string) (model.Flag, bool) {
 	if !ok {
 		return fl, false
 	}
+	fl.ReviewID, _ = s.FindingReviewID(id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	flags := []model.Flag{fl}

@@ -419,6 +419,9 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				if flagErr != nil || !flagWrite.Changed {
 					continue
 				}
+				if stored, ok := st.GetFlagWithAdvisor(fl.ID); ok {
+					fl = stored
+				}
 				if deltas != nil {
 					deltas.Publish(api.Delta{Type: "flag", Data: fl})
 				}

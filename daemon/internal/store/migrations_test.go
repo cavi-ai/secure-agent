@@ -114,7 +114,7 @@ func TestOpenRejectsFutureSchema(t *testing.T) {
 	}
 }
 
-func TestSchemaBridgeKeepsLegacyDatabasesAtVersionTwo(t *testing.T) {
+func TestReviewSchemaUpgradesLegacyDatabasesToVersionThree(t *testing.T) {
 	for _, version := range []int{0, 1, 2} {
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 			path := migrationFixture(t, fmt.Sprintf(`CREATE TABLE events (id INTEGER PRIMARY KEY, kind INT, ts TEXT, pid INT, exe_path TEXT, path TEXT, remote_host TEXT, remote_port INT, detail TEXT);
@@ -126,8 +126,8 @@ func TestSchemaBridgeKeepsLegacyDatabasesAtVersionTwo(t *testing.T) {
 				}
 				var actualVersion int
 				var detail string
-				if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&actualVersion); err != nil || actualVersion != 2 {
-					t.Fatalf("bridge advanced legacy database to %d: %v", actualVersion, err)
+				if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&actualVersion); err != nil || actualVersion != 3 {
+					t.Fatalf("review migration version %d: %v", actualVersion, err)
 				}
 				if err := s.db.QueryRow(`SELECT detail FROM events WHERE id=1`).Scan(&detail); err != nil || detail != "preserved" {
 					t.Fatalf("bridge lost legacy evidence: %q, %v", detail, err)

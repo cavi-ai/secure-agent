@@ -254,6 +254,7 @@ func TestGateDispositionEndpointsPolicy(t *testing.T) {
 	for _, tc := range []struct{ path, body string }{
 		{"/mute", `{"rule":"keychain-access","host":"*"}`},
 		{"/flags/acknowledge", `{"flag_id":"abc123"}`},
+		{"/reviews/decision", `{"id":"abc123","revision":1,"action":"acknowledge"}`},
 		{"/allowlist", `{"agent":"cursor","host":"example.com"}`},
 		{"/advisor/retriage", `{"flag_id":"abc123"}`},
 		{"/resources/control", `{"id":"resource-1","decision":"dismiss"}`},
@@ -318,6 +319,7 @@ func TestGateDispositionEndpointsAsPinnedUI(t *testing.T) {
 	for _, tc := range []struct{ path, body string }{
 		{"/mute", `{"rule":"keychain-access","host":"*"}`},
 		{"/flags/acknowledge", `{"flag_id":"abc123"}`},
+		{"/reviews/decision", `{"id":"abc123","revision":1,"action":"acknowledge"}`},
 		{"/allowlist", `{"agent":"cursor","host":"example.com"}`},
 		{"/resources/control", `{"id":"resource-1","decision":"dismiss"}`},
 		{"/guard/path-allow", `{"agent":"claude","rule_id":"env-file","path":"/x/.env"}`},
