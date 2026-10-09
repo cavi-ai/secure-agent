@@ -4,11 +4,76 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 )
+
+func TestFirewallRejectsFingerprintOperationsWithoutEngine(t *testing.T) {
+	dir := t.TempDir()
+	saltPath := filepath.Join(dir, "salt")
+	salt, err := firewall.LoadSalt(saltPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const originalValue = "previous-fixture-value"
+	const nextValue = "new-fixture-value"
+	path := filepath.Join(dir, "firewall-fingerprints.json")
+	fps := []config.Fingerprint{{ID: "persisted", Type: firewall.TypeEnvValue, Len: len(originalValue), HMAC: firewall.Fingerprint(salt, originalValue)}}
+	if err := firewall.NewFingerprintStore(path).Save(fps); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(dir, "fixture.env")
+	if err := os.WriteFile(source, []byte("FIXTURE="+nextValue+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Firewall: config.FirewallConfig{
+		Mode:     "block",
+		Patterns: []config.PatternConfig{{ID: "broken-rule", Re: "[", Mode: "block"}},
+		Registry: config.RegistryConfig{SaltRef: saltPath, IngestSources: []string{source}},
+	}}
+	stack := setupFirewall(cfg)
+	if stack.Engine != nil {
+		t.Fatal("invalid pattern unexpectedly built an engine")
+	}
+	if err := stack.Reload(); err == nil || !strings.Contains(err.Error(), "broken-rule") {
+		t.Errorf("reload did not report initialization failure: %v", err)
+	}
+	if labels, err := stack.Ingest(); err == nil || len(labels) != 0 || !strings.Contains(err.Error(), "broken-rule") {
+		t.Errorf("ingest did not report initialization failure: %v, %v", labels, err)
+	}
+	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, before) {
+		t.Fatal("failed ingest replaced persisted fingerprints")
+	}
+	// Correcting the pattern and restarting restores the preserved registry
+	// and allows a new successful ingestion to replace it.
+	cfg.Firewall.Patterns[0].Re = `fixture-pattern-[0-9]+`
+	restarted := setupFirewall(cfg)
+	if restarted.Engine == nil {
+		t.Fatal("repaired pattern did not build an engine")
+	}
+	if got := restarted.Engine.ScanText(originalValue); len(got) != 1 || got[0].RuleID != "persisted" {
+		t.Fatalf("preserved registry was not restored: %+v", got)
+	}
+	if err := restarted.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if labels, err := restarted.Ingest(); err != nil || len(labels) != 1 {
+		t.Fatalf("ingest after restart: %v, %v", labels, err)
+	}
+	if len(restarted.Engine.ScanText(nextValue)) != 1 || len(restarted.Engine.ScanText(originalValue)) != 0 {
+		t.Fatal("successful ingest did not replace the live registry")
+	}
+	if got, err := firewall.NewFingerprintStore(path).LoadStrict(); err != nil || len(got) != 1 || got[0].HMAC != firewall.Fingerprint(salt, nextValue) {
+		t.Fatalf("successful ingest not persisted: %+v, %v", got, err)
+	}
+}
 
 func TestFirewallRejectsFingerprintOperationsWithoutSalt(t *testing.T) {
 	for _, failure := range []string{"truncated", "unreadable"} {
