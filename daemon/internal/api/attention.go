@@ -303,6 +303,9 @@ func (a *API) attentionQueueWithReadHealth(st Status, patterns []model.Pattern, 
 	}
 	patternAdded := map[int]bool{}
 	reviewPage, reviewErr := a.store.ListFindingReviewsState("", 100, "unreviewed")
+	if reviewErr != nil {
+		failedReads = append(failedReads, "finding reviews")
+	}
 	coveredReviews := map[string]bool{}
 	if reviewErr == nil {
 		for _, r := range reviewPage.Reviews {
@@ -329,11 +332,17 @@ func (a *API) attentionQueueWithReadHealth(st Status, patterns []model.Pattern, 
 	}
 	for _, f := range flags {
 		if f.Rule == readConnectRule && reviewErr == nil {
-			if id, err := a.store.FindingReviewID(f.ID); err == nil && id != "" {
+			id, err := a.store.FindingReviewID(f.ID)
+			if err != nil {
+				failedReads = append(failedReads, "finding reviews")
+			} else if id != "" {
 				if coveredReviews[id] {
 					continue
 				}
-				if r, ok, err := a.store.GetFindingReview(id); err == nil && ok && r.Context.Attribution == "stored-session" && r.ReviewState != "unreviewed" {
+				r, ok, err := a.store.GetFindingReview(id)
+				if err != nil {
+					failedReads = append(failedReads, "finding reviews")
+				} else if ok && r.Context.Attribution == "stored-session" && r.ReviewState != "unreviewed" {
 					continue
 				}
 			}
@@ -457,8 +466,14 @@ func (a *API) attentionQueueWithReadHealth(st Status, patterns []model.Pattern, 
 	}
 	for _, inc := range incidents {
 		if reviewErr == nil {
-			if id, err := a.store.FindingReviewID(inc.FlagID); err == nil && id != "" {
-				if r, ok, err := a.store.GetFindingReview(id); err == nil && ok && r.Context.Attribution == "stored-session" {
+			id, err := a.store.FindingReviewID(inc.FlagID)
+			if err != nil {
+				failedReads = append(failedReads, "finding reviews")
+			} else if id != "" {
+				r, ok, err := a.store.GetFindingReview(id)
+				if err != nil {
+					failedReads = append(failedReads, "finding reviews")
+				} else if ok && r.Context.Attribution == "stored-session" {
 					continue
 				}
 			}

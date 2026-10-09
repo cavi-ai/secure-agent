@@ -81,6 +81,49 @@ func reviewFlag(id string) model.Flag {
 		Evidence: []model.EvidenceItem{{Kind: "read", Label: "/work/credentials", Sub: "sensitive read", PID: 42, Exe: "agent", TS: at.Format(time.RFC3339Nano)}, {Kind: "connect", Label: "203.0.113.5:443", Sub: "egress", PID: 42, TS: at.Add(time.Second).Format(time.RFC3339Nano)}}}
 }
 
+func TestReviewReadHealthFailureMissingAndRecovery(t *testing.T) {
+	s := reviewStore(t)
+	f := reviewFlag("source-health")
+	if _, err := s.PutFlag(f); err != nil {
+		t.Fatal(err)
+	}
+	r := onlyReview(t, s)
+	if _, err := s.db.Exec("ALTER TABLE finding_review_members RENAME TO unavailable_members"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.FindingReviewID(f.ID); err == nil {
+		t.Fatal("unavailable membership query reported success")
+	}
+	h := s.WriteHealth()
+	if h.ReadFailures != 1 || len(h.ReadActive) != 1 || h.ReadActive[0] != "finding reviews" {
+		t.Errorf("membership failure was not recorded: %+v", h)
+	}
+	if _, err := s.db.Exec("ALTER TABLE unavailable_members RENAME TO finding_review_members"); err != nil {
+		t.Fatal(err)
+	}
+	if id, err := s.FindingReviewID(f.ID); err != nil || id != r.ID {
+		t.Fatalf("membership recovery: %q %v", id, err)
+	}
+	if h := s.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 0 {
+		t.Errorf("membership recovery health: %+v", h)
+	}
+	if _, err := s.db.Exec("UPDATE finding_reviews SET record_json='invalid' WHERE id=?", r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.GetFindingReview(r.ID); err == nil {
+		t.Fatal("malformed record reported success")
+	}
+	if _, err := s.db.Exec("DELETE FROM finding_reviews WHERE id=?", r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := s.GetFindingReview(r.ID); err != nil || found {
+		t.Fatalf("healthy missing row: found=%v err=%v", found, err)
+	}
+	if h := s.WriteHealth(); h.ReadFailures != 2 || len(h.ReadActive) != 0 {
+		t.Errorf("healthy missing row did not clear stale warning: %+v", h)
+	}
+}
+
 func onlyReview(t *testing.T, s *Store) model.ReviewRecord {
 	t.Helper()
 	p, err := s.ListFindingReviews("", 100)
