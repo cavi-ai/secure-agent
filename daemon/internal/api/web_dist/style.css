@@ -2174,9 +2174,14 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
   .agent-page .app { padding-top: 12px; padding-bottom: 12px; gap: 10px; }
   .agent-workspace-head { padding: 12px; gap: 8px; }
   .agent-msg { max-width: 100%; }
-  .agent-thread { padding: 16px; gap: 22px; }
+  /* Keep vertical breathing room inside the scroll content so it cannot
+     impose a minimum height that pushes the fixed composer out of view. */
+  .agent-thread { padding: 0 16px; gap: 22px; }
+  .agent-thread > :first-child { margin-top: 16px; }
+  .agent-thread > :last-child { margin-bottom: 16px; }
   .agent-chat-foot { padding: 10px 12px 16px; }
-  .agent-quick { font-size: 0.7rem; padding: 7px 9px; }
+  .agent-quick-commands { flex-wrap: nowrap; overflow-x: auto; }
+  .agent-quick { flex: none; font-size: 0.7rem; padding: 7px 9px; }
   .agent-local-label { font-size: 0.65rem; }
   .agent-composer .agent-composer-row { gap: 8px; }
   .agent-key-hint, .agent-send-key { display: none; }
