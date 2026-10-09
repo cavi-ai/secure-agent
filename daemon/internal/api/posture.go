@@ -16,7 +16,7 @@ import (
 
 // PostureItem is one thing the operator may need to act on.
 type PostureItem struct {
-	Kind      string `json:"kind"` // flag | incident | guard_pending | recurring_egress | resource_pressure | coverage kinds
+	Kind      string `json:"kind"` // flag | incident | guard_pending | resource_pressure | coverage kinds
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Severity  int    `json:"severity"` // 3 critical, 2 high, 1 medium, 0 info
@@ -69,7 +69,7 @@ func (a *API) PublishPostureIfChanged() { a.publishFreshPosture(false) }
 
 // PublishPosture pushes the recomputed posture after a decision even at an
 // unchanged count: the items differ, and counts also move without a publish
-// (a connection turning recurring, an incident aging, the 24 h window).
+// (the 24 h window).
 func (a *API) PublishPosture() { a.publishFreshPosture(true) }
 
 func (a *API) publishFreshPosture(force bool) {

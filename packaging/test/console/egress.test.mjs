@@ -130,24 +130,24 @@ test('groupUninspected tolerates no rows', () => {
   assert.equal(g.unknown.length + g.vendors.length + g.carriers.length + g.apps.length, 0);
 });
 
-test('Egress warning counts pending egress decisions, never raw coverage observations', () => {
+test('the Egress tab paints no badge for coverage observations or recurring connections', () => {
   const badge = {};
   const container = { querySelector: () => null };
   ctx.document = { getElementById: id => id === 'firewall-container' ? container : badge };
   ctx.patchList = () => {};
-  let count;
+  const painted = [];
   ctx.window = { SA: {
     t: { status: { uninspected_egress: 11 }, posture: {
       needs_you: 0, items: [], coverage_items: [{ kind: 'uninspected_egress' }]
     } },
-    setTabBadge: (id, n) => { assert.equal(id, 'egress'); count = n; },
+    setTabBadge: (id, n) => painted.push([id, n]),
     prevFwStats: null, reducedMotion: true,
   } };
   ctx.renderFirewall();
-  assert.equal(count, 0, 'coverage alone must not paint a warning');
-  ctx.window.SA.t.posture.items = [{ kind: 'recurring_egress' }, { kind: 'guard_pending' }];
+  ctx.window.SA.t.posture.items = [{ kind: 'guard_pending' }];
   ctx.renderFirewall();
-  assert.equal(count, 1, 'an actual egress decision must remain discoverable');
+  assert.deepEqual(painted.filter(([id]) => id === 'egress'), []);
+  assert.equal(typeof ctx.egressAttentionCount, 'undefined');
 });
 
 test('infrastructure-only endpoint list presents coverage without implying findings', () => {
@@ -214,23 +214,15 @@ test('an expectation clears the episodes it covers before the daemon answers', (
       ep('e3', 'cdn.example.com', 443),
       ep('e4', 'api.example.com', 443, { ...scope, agent: 'codex' }),
     ],
-    posture: { state: 'attention', needs_you: 4,
-      items: ['e1', 'e2', 'e3', 'e4'].map(id => ({ kind: 'recurring_egress', id })),
-      groups: [{ key: 'agent:claude', items: ['e1', 'e2', 'e3'].map(id => ({ kind: 'recurring_egress', id })) },
-        { key: 'agent:codex', items: [{ kind: 'recurring_egress', id: 'e4' }] }] },
   };
   const ids = rows => rows.filter(r => r.expected && !r.candidate).map(r => r.id);
 
   const dest = ctx.egressAfterExpect(t, 'e1', 'destination');
   assert.deepEqual(ids(dest.egressEpisodes), ['e1', 'e2'], 'same agent, host, protocol and port');
-  assert.deepEqual(dest.posture.items.map(it => it.id), ['e3', 'e4']);
-  assert.equal(dest.posture.needs_you, 2);
 
   const broad = ctx.egressAfterExpect(t, 'e1', 'scope');
   assert.deepEqual(ids(broad.egressEpisodes), ['e1', 'e3'], 'same agent and complete scope');
-  assert.deepEqual(broad.posture.items.map(it => it.id), ['e2', 'e4']);
 
   const gone = ctx.egressAfterExpect(t, 'missing', 'destination');
   assert.equal(gone.egressEpisodes, t.egressEpisodes);
-  assert.equal(gone.posture, t.posture);
 });

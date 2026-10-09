@@ -29,6 +29,13 @@ final class HeroModelTests: XCTestCase {
                                               actions: actions))
     }
 
+    /// A served flag whose daemon assessment carries `risk`, with a legacy
+    /// disposition that may disagree with it.
+    private func assessed(_ id: String, risk: String, disposition: String = "critical", acked: Bool = false) throws -> FlagModel {
+        let json = #"{"id":"\#(id)","rule":"sensitive-read-then-connect","severity":3,"ts":"","pid":901,"agent":"cursor","evidence":[],"acknowledged":\#(acked),"explain":{"what":"w","disposition":{"state":"\#(disposition)","text":"t","why":""},"actions":[],"assessment":{"evidence_basis":[],"risk":"\#(risk)","control":"unknown","residual_risk":"unknown","review_state":"unreviewed","reason":"r","limits":[]}}}"#
+        return try JSONDecoder().decode(FlagModel.self, from: Data(json.utf8))
+    }
+
     private func posture(_ state: String, _ summary: String) -> PostureModel {
         PostureModel(state: state, needsYou: state == "all-clear" ? 0 : 1, summary: summary, connected: true)
     }
@@ -58,20 +65,26 @@ final class HeroModelTests: XCTestCase {
         XCTAssertNil(hero.action)
     }
 
-    /// The reported lie: a 93 %-benign severity-3 flag read "Action needed"
-    /// while /posture and the console said attention.
-    func testBenignLikelyCriticalSeverityFollowsPosture() {
-        let s = state(flags: [served("b1", disposition: "benign-likely", text: "Likely benign (advisor 93 %)", rec: "allow-host")])
-        s.seedPostureForTesting(posture("attention", "1 item needs you — first: Finding, likely benign."))
+    /// A severity-3 flag whose observed risk is high is not a hero flag; the hero follows posture.
+    func testBenignLikelyFlagIsNotHeroFlag() throws {
+        let s = state(flags: [try assessed("b1", risk: "high", disposition: "benign-likely")])
+        s.seedPostureForTesting(posture("attention", "No decisions pending. Monitoring coverage needs attention."))
         let hero = ConsoleView(state: s, scrollable: false).heroModel
         XCTAssertNotEqual(hero.title, "Action needed")
         XCTAssertEqual(hero.title, "Needs a look")
         XCTAssertEqual(hero.color, .warn)
-        XCTAssertEqual(hero.subtitle, "1 item needs you — first: Finding, likely benign.")
-        XCTAssertEqual(hero.flag?.id, "b1")
+        XCTAssertNil(hero.flag)
+    }
+
+    /// A critical served flag names itself in the hero and runs its recommended action in place.
+    func testCriticalServedFlagIsHeroFlag() {
+        let s = state(flags: [served("c1", disposition: "critical", text: "Act now", rec: "allow-host")])
+        s.seedPostureForTesting(posture("critical", "Agent read a secret, then connected out — act now."))
+        let hero = ConsoleView(state: s, scrollable: false).heroModel
+        XCTAssertEqual(hero.flag?.id, "c1")
         XCTAssertEqual(hero.flagLines, ["Agent read a secret, then connected out",
                                         "Cursor read a sensitive file, then reached api.example.com.",
-                                        "Likely benign (advisor 93 %)"])
+                                        "Act now"])
         XCTAssertEqual(hero.buttonLabel, "Allow api.example.com for cursor")
         guard case .perform(let a) = hero.action else {
             XCTFail("recommended allow-host must run in place")
@@ -108,10 +121,17 @@ final class HeroModelTests: XCTestCase {
         attention.seedPostureForTesting(posture("attention", "No decisions pending. Monitoring coverage needs attention."))
         XCTAssertTrue(ConsoleView(state: attention, scrollable: false).showsHero)
 
-        let flagged = state(flags: [flag(id: "f1", sev: 2, acked: false)])
+        let flagged = state(flags: [flag(id: "f1", sev: 3, acked: false)])
         flagged.seedPostureForTesting(posture("all-clear", "All clear — agents monitored, no action needed."))
         XCTAssertNotNil(flagged.heroFlag)
         XCTAssertTrue(ConsoleView(state: flagged, scrollable: false).showsHero)
+    }
+
+    func testWarningFlagIsNotHeroFlag() {
+        let warned = state(flags: [flag(id: "w1", sev: 2, acked: false)])
+        warned.seedPostureForTesting(posture("all-clear", "All clear — agents monitored, no action needed."))
+        XCTAssertNil(warned.heroFlag)
+        XCTAssertFalse(ConsoleView(state: warned, scrollable: false).showsHero)
     }
 
     func testNoPendingDecisionsDoesNotClaimProtection() {
@@ -123,16 +143,17 @@ final class HeroModelTests: XCTestCase {
         XCTAssertEqual(hero.subtitle, "All clear — agents monitored, no action needed.")
     }
 
-    /// critical > warning > benign-likely, whatever the list order.
-    func testTopFlagByDispositionPrecedence() {
-        let s = state(flags: [served("b", disposition: "benign-likely", text: "Likely benign (advisor 90 %)"),
-                              served("w", disposition: "warning", text: "Needs a look"),
-                              served("c", sev: 2, disposition: "critical", text: "Act now"),
-                              served("a", disposition: "acknowledged", text: "Reviewed", acked: true)])
+    /// Only a critical observed risk is a hero flag, whatever the list order,
+    /// the legacy disposition or the review state.
+    func testHeroFlagIsOnlyServedCritical() throws {
+        let s = state(flags: [try assessed("b", risk: "high", disposition: "benign-likely"),
+                              try assessed("w", risk: "review", disposition: "warning"),
+                              try assessed("c", risk: "critical", disposition: "benign-likely"),
+                              try assessed("a", risk: "critical", disposition: "acknowledged", acked: true)])
         XCTAssertEqual(s.heroFlag?.id, "c")
-        let noCritical = state(flags: [served("b", disposition: "benign-likely", text: "x"),
-                                       served("w", disposition: "warning", text: "y")])
-        XCTAssertEqual(noCritical.heroFlag?.id, "w")
+        let noCritical = state(flags: [try assessed("b", risk: "high", disposition: "benign-likely"),
+                                       try assessed("w", risk: "review", disposition: "warning")])
+        XCTAssertNil(noCritical.heroFlag)
     }
 
     func testPickerAllowHostPerforms() {
@@ -159,11 +180,11 @@ final class HeroModelTests: XCTestCase {
         XCTAssertEqual(AppState.heroAction(for: flag(id: "old", sev: 3, acked: false)), .openConsole(tab: "findings"))
     }
 
-    func testUnactedFlagWithoutPostureNeedsALook() {
+    func testWarningFlagWithoutPostureQueuesNothing() {
         let s = state(flags: [flag(id: "f1", sev: 2, acked: false), flag(id: "f2", sev: 2, acked: true)])
         let hero = ConsoleView(state: s, scrollable: false).heroModel
-        XCTAssertEqual(hero.title, "Needs a look")
-        XCTAssertEqual(hero.flag?.id, "f1")
+        XCTAssertEqual(hero.title, "No pending decisions")
+        XCTAssertNil(hero.flag)
     }
 
     func testCriticalUnactedWithoutPostureStillEscalates() {

@@ -6,6 +6,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Console and menu bar: Home and the hero list only decisions that need you; warnings and recurring connections stay in the findings history, now a compact log.
+
 ### Fixed
 - Credential reads by the owning program, directory opens, and files an agent wrote itself no longer raise sensitive-read findings.
 

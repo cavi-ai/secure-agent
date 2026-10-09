@@ -150,7 +150,7 @@ func TestAttentionGroupsFlagDisposition(t *testing.T) {
 	a.store.PutFlag(model.Flag{ID: "real", Rule: "tcc-tamper", Severity: 3, TS: time.Now(), PID: 1, Agent: "claude"})
 	groups := attentionGroups(a)
 	if len(groups) != 1 || len(groups[0].Items) != 2 {
-		t.Fatalf("groups = %+v, want one group with two flag items", groups)
+		t.Fatalf("groups = %+v, want one group with both flags", groups)
 	}
 	first, second := groups[0].Items[0], groups[0].Items[1]
 	if first.ID != "real" || first.Priority != 2 || first.Title != "Critical finding" || first.Disposition == nil || first.Disposition.State != "critical" {
@@ -158,6 +158,34 @@ func TestAttentionGroupsFlagDisposition(t *testing.T) {
 	}
 	if second.ID != "fp" || second.Priority != 2 || second.Assessment == nil || second.Assessment.Risk != "unknown" || second.Disposition == nil || second.Disposition.State != "benign-likely" {
 		t.Fatalf("second item = %+v, want separate risk and advice without lowered priority", second)
+	}
+}
+
+// A flag is queued only when its observed risk is critical (or unknown at
+// detector severity 3): same-reader and sibling timing leads stay in history,
+// and an advisor verdict never removes a critical one.
+func TestAttentionQueuesOnlyCriticalAssessedRisk(t *testing.T) {
+	a := attentionAPI(t, []resource.Session{mkResourceSession(1, "claude", "/w")})
+	put := func(id string, change func(*model.Flag)) {
+		f := assessmentReadConnect()
+		f.ID, f.PID = id, 1
+		f.Evidence[0].Label = "/w/" + id + ".env"
+		change(&f)
+		a.store.PutFlag(f)
+	}
+	put("sibling", func(f *model.Flag) {})
+	put("same-reader", func(f *model.Flag) { f.Evidence[1].PID = 10 })
+	put("model-visible", func(f *model.Flag) { f.Evidence[0].Sub = "agent tool read" })
+	a.store.PutAdvisorVerdict("model-visible", "flag", model.AdvisorVerdict{Assessment: "benign", Confidence: 0.93, Rationale: "Own config.", CreatedAt: time.Now()})
+	groups := attentionGroups(a)
+	var ids []string
+	for _, g := range groups {
+		for _, it := range g.Items {
+			ids = append(ids, it.ID)
+		}
+	}
+	if len(ids) != 1 || ids[0] != "model-visible" {
+		t.Fatalf("queued = %v, want only the model-visible read", ids)
 	}
 }
 
@@ -235,8 +263,11 @@ func TestAttentionGroupsCoverEveryPostureItem(t *testing.T) {
 			t.Fatalf("item %s %q is in groups %v, want exactly one", it.Kind, it.ID, keys)
 		}
 	}
-	if keys := groupOf["flag|high"]; len(keys) != 1 || keys[0] == machineGroupKey {
-		t.Fatalf("severity-2 flag groups = %v, want one agent group", keys)
+	if keys := groupOf["flag|crit"]; len(keys) != 1 || keys[0] == machineGroupKey {
+		t.Fatalf("critical flag groups = %v, want one agent group", keys)
+	}
+	if keys := groupOf["flag|high"]; len(keys) != 0 {
+		t.Fatalf("severity-2 flag groups = %v, want none", keys)
 	}
 	coverage := map[string]bool{}
 	for _, it := range p.CoverageItems {
@@ -247,26 +278,18 @@ func TestAttentionGroupsCoverEveryPostureItem(t *testing.T) {
 			t.Fatalf("missing %s from coverage: %+v", kind, p.CoverageItems)
 		}
 	}
-	if p.NeedsYou != 2 {
-		t.Fatalf("needs_you=%d, want two actionable flags", p.NeedsYou)
+	if p.NeedsYou != 1 {
+		t.Fatalf("needs_you=%d, want the one critical flag", p.NeedsYou)
 	}
 }
 
-// A severity-2 flag ranks below the critical findings and carries its
-// disposition and rule title.
-func TestAttentionSeverityTwoFlagPriority(t *testing.T) {
+// A warning flag is not queued: needs_you is 0 and posture is all-clear.
+func TestAttentionWarningFlagIsNotQueued(t *testing.T) {
 	a := attentionAPI(t, []resource.Session{mkResourceSession(1, "claude", "/w")})
 	a.store.PutFlag(model.Flag{ID: "high", Rule: "keychain-access", Severity: 2, TS: time.Now(), PID: 1, Agent: "claude"})
-	groups := attentionGroups(a)
-	if len(groups) != 1 || len(groups[0].Items) != 1 {
-		t.Fatalf("groups = %+v, want one group with the flag", groups)
-	}
-	it := groups[0].Items[0]
-	if it.Kind != "flag" || it.ID != "high" || it.Priority != 1 || it.Title != "Agent touched the keychain" {
-		t.Fatalf("item = %+v, want priority 1 titled by the rule", it)
-	}
-	if it.Disposition == nil || it.Disposition.State != model.DispositionWarning {
-		t.Fatalf("disposition = %+v, want warning", it.Disposition)
+	p := a.computePosture()
+	if p.NeedsYou != 0 || len(p.Items) != 0 || len(p.Groups) != 0 || p.State != "all-clear" {
+		t.Fatalf("posture = %+v, want an empty queue and all-clear", p)
 	}
 }
 
@@ -333,25 +356,13 @@ func TestAttentionRecurringEgressRequiresAnOperatorDecision(t *testing.T) {
 		}
 	}
 	p := a.computePosture()
-	if p.NeedsYou != 1 || len(p.Groups) != 1 || p.Groups[0].Key != "agent:claude" {
-		t.Fatalf("posture = %+v, want one agent-level decision without guessed session", p)
-	}
-	it := p.Groups[0].Items[0]
-	if it.Kind != "recurring_egress" || it.Action != "scope" || it.Count != 5 || it.ID == "" {
-		t.Fatalf("recurring decision = %+v", it)
-	}
-	if _, err := a.store.CreateExpectedEgressRule(store.ExpectedEgressRule{
-		Agent: scope.Agent, Kind: "scope", ExePath: scope.ExePath, Harness: scope.Harness, Workspace: scope.Workspace,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if got := a.computePosture().NeedsYou; got != 0 {
-		t.Fatalf("expected activity still has %d pending decisions", got)
+	if p.NeedsYou != 0 || len(p.Items) != 0 || len(p.Groups) != 0 || p.State != "all-clear" {
+		t.Fatalf("posture = %+v, want a recurring connection out of the queue", p)
 	}
 }
 
 // An incident's risk sets its headline severity: critical 3 (posture
-// critical), high 2; only other risks age into severity 1.
+// critical), high 2; lower risks, however old, are not queued.
 func TestAttentionIncidentSeverityPreservesRisk(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
@@ -363,7 +374,7 @@ func TestAttentionIncidentSeverityPreservesRisk(t *testing.T) {
 	}{
 		{"fresh critical", model.RiskCritical, now, 3, "Critical incident"},
 		{"fresh high", model.RiskHigh, now, 2, "Open incident"},
-		{"aging medium", model.RiskMedium, now.Add(-80 * time.Hour), 1, "Aging incident"},
+		{"aging medium", model.RiskMedium, now.Add(-80 * time.Hour), 0, ""},
 		{"aging critical", model.RiskCritical, now.Add(-80 * time.Hour), 3, "Critical incident"},
 	}
 	for _, tc := range cases {
@@ -377,6 +388,12 @@ func TestAttentionIncidentSeverityPreservesRisk(t *testing.T) {
 				if p.Items[i].Kind == "incident" && p.Items[i].ID == "inc-1" {
 					headline = &p.Items[i]
 				}
+			}
+			if tc.severity == 0 {
+				if headline != nil || p.NeedsYou != 0 {
+					t.Fatalf("headline = %+v, needs_you = %d, want the incident out of the queue", headline, p.NeedsYou)
+				}
+				return
 			}
 			if headline == nil || headline.Severity != tc.severity {
 				t.Fatalf("headline = %+v, want severity %d\nitems=%+v", headline, tc.severity, p.Items)

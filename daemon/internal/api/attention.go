@@ -12,16 +12,17 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
-// Attention queue: computed once here and served from /posture. Every signal
-// that needs the operator is appended once as a headline item (Items) and
-// once as an item in exactly one group, so needs_you, the console hero and
-// the Attention tab count the same set.
+// Attention queue: computed once here and served from /posture. A signal is
+// queued only when the operator must act: a pending guard prompt, a pending
+// resource intervention, an open high or critical incident, or a flag,
+// pattern or routine group whose disposition is critical. Each is appended
+// once as a headline item (Items) and once as an item in exactly one group,
+// so needs_you, the console hero and the menubar count the same set.
 
-// AttentionItem priorities (higher first): guard 5, resource 4, incident 3
-// (1 for an aging incident below high risk), flag and pattern 2 (1 when
-// likely benign or below critical), recurring egress 1.
+// AttentionItem priorities (higher first): guard 5, resource 4, incident 3,
+// critical flag, pattern and routine 2.
 type AttentionItem struct {
-	Kind      string                `json:"kind"` // resource | guard | incident | flag | pattern | routine | recurring_egress
+	Kind      string                `json:"kind"` // resource | guard | incident | flag | pattern | routine
 	Priority  int                   `json:"priority"`
 	ID        string                `json:"id,omitempty"`
 	Action    string                `json:"action,omitempty"`
@@ -78,10 +79,10 @@ type attentionSession struct {
 }
 
 // attentionFlags is the one flag query behind the queue: unacknowledged
-// flags of severity 2 or more raised in the last 24h.
+// flags of severity 3 (critical) raised in the last 24h.
 func (a *API) attentionFlags() []model.Flag {
 	var out []model.Flag
-	for _, f := range a.store.QueryFlags(store.FlagFilter{MinSeverity: 2, Limit: 25, Unacted: true}) {
+	for _, f := range a.store.QueryFlags(store.FlagFilter{MinSeverity: 3, Limit: 25, Unacted: true}) {
 		if isRecent(f.TS, 24*time.Hour) {
 			out = append(out, f)
 		}
@@ -245,18 +246,6 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 		}
 		return g
 	}
-	agentGroup := func(agent string) *AttentionGroup {
-		key := "agent:" + firstNonEmpty([]string{agent, "unattributed"})
-		if g := groups[key]; g != nil {
-			return g
-		}
-		g := &AttentionGroup{
-			Key: key, Label: firstNonEmpty([]string{agent, "Unattributed"}) + " activity",
-			Agent: firstNonEmpty([]string{agent, "unknown"}), Items: []AttentionItem{},
-		}
-		groups[key] = g
-		return g
-	}
 	facts := map[string]*agentGroupFacts{}
 	factsFor := func(g *AttentionGroup) *agentGroupFacts {
 		if !strings.HasPrefix(g.Key, "agent:") {
@@ -273,13 +262,12 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 		g.Items = append(g.Items, item)
 	}
 
-	// Flags — the security signal. Unacted only: a flag the operator already
-	// reviewed/dismissed must not keep demanding attention. Headline severity
-	// follows the disposition: an advisor-confirmed benign flag is a queue
-	// item, not a "critical — act now". Flags a routine group covers are ONE
-	// routine item in the routine group, whichever agents raised them; flags
-	// a pattern covers are ONE pattern item (headline and group), in the
-	// group of its newest flag.
+	// Flags — the security signal. Unacted only, and only when the
+	// disposition is critical: warning and benign-likely flags stay in the
+	// findings history. Flags a routine group covers are ONE routine item in
+	// the routine group, whichever agents raised them; flags a pattern covers
+	// are ONE pattern item (headline and group), in the group of its newest
+	// flag.
 	routineOf := map[string]int{}
 	for i, rg := range routine {
 		for _, id := range rg.FlagIDs {
@@ -299,20 +287,19 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 			if !routineAdded[i] {
 				routineAdded[i] = true
 				rg := routine[i]
-				g := groups[routineGroupKey]
-				if g == nil {
-					g = &AttentionGroup{Key: routineGroupKey, Label: "Recurring across agents", Items: []AttentionItem{},
-						Summary: "The same process reading the same files under several agents"}
-					groups[routineGroupKey] = g
-				}
 				d := rg.Disposition
 				severity := f.Severity
 				if rg.Assessment != nil {
 					severity = assessmentSeverity(*rg.Assessment, 0)
 				}
-				priority := 1
-				if severity >= 3 {
-					priority = 2
+				if severity < 3 {
+					continue
+				}
+				g := groups[routineGroupKey]
+				if g == nil {
+					g = &AttentionGroup{Key: routineGroupKey, Label: "Recurring across agents", Items: []AttentionItem{},
+						Summary: "The same process reading the same files under several agents"}
+					groups[routineGroupKey] = g
 				}
 				add(g, PostureItem{
 					Kind: "routine", ID: rg.Key,
@@ -321,7 +308,7 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 					Detail:    rg.Summary,
 					Timestamp: f.TS.UTC().Format(time.RFC3339),
 				}, AttentionItem{
-					Kind: "routine", Priority: priority, ID: rg.Key,
+					Kind: "routine", Priority: 2, ID: rg.Key,
 					Count: rg.Count, Title: "Recurring read", Detail: rg.Summary,
 					Disposition: &d, Assessment: rg.Assessment, Rule: readConnectRule,
 				})
@@ -337,9 +324,8 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 				if p.Assessment != nil {
 					severity = assessmentSeverity(*p.Assessment, 0)
 				}
-				priority := 1
-				if severity >= 3 {
-					priority = 2
+				if severity < 3 {
+					continue
 				}
 				g := groupFor(f.Agent, f.PID)
 				if gf := factsFor(g); gf != nil {
@@ -352,7 +338,7 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 					Detail:    p.Summary,
 					Timestamp: p.Last.UTC().Format(time.RFC3339),
 				}, AttentionItem{
-					Kind: "pattern", Priority: priority, ID: p.Key,
+					Kind: "pattern", Priority: 2, ID: p.Key,
 					Count: p.Count, Title: p.Title, Detail: p.Summary,
 					Disposition: &d, Assessment: p.Assessment, Rule: p.Rule,
 				})
@@ -362,6 +348,9 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 		d := dispositionFor(f)
 		assessment := assessmentForFlag(f)
 		severity := assessmentSeverity(assessment, f.Severity)
+		if severity < 3 {
+			continue
+		}
 		detail := f.Rule
 		if len(f.Evidence) > 0 {
 			detail = f.Rule + " — " + f.Evidence[0].String()
@@ -369,11 +358,6 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 		item := AttentionItem{
 			Kind: "flag", Priority: 2, ID: f.ID,
 			Title: "Critical finding", Detail: detail, Disposition: &d, Assessment: &assessment,
-		}
-		switch {
-		case severity < 3:
-			item.Priority = 1
-			item.Title = humanFlagTitle(f.Rule)
 		}
 		g := groupFor(f.Agent, f.PID)
 		if gf := factsFor(g); gf != nil {
@@ -409,37 +393,14 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 		}
 	}
 
-	// A repeated connection is a decision only when the episode is recurring,
-	// attributable, and not already covered by an expected-egress rule. One
-	// episode may span ended sessions; keep it at agent level rather than
-	// assigning it to whichever session happens to be live now.
-	for _, e := range a.egressCandidates() {
-		action := ""
-		scopeText := "Activity scope is incomplete; only this destination can be expected."
-		if e.ScopeComplete {
-			action = "scope"
-			scopeText = fmt.Sprintf("All destinations for %s · %s · %s", e.Scope.ExePath, e.Scope.Harness, e.Scope.Workspace)
-		}
-		detail := fmt.Sprintf("%d calls to %s:%d (%s) on a recurring schedule.", e.Count, e.Host, e.Port, e.Protocol)
-		add(agentGroup(e.Scope.Agent), PostureItem{
-			Kind: "recurring_egress", ID: e.ID, Title: "Recurring connection needs review",
-			Severity: 1, Detail: detail, Timestamp: e.LastSeen.UTC().Format(time.RFC3339),
-		}, AttentionItem{
-			Kind: "recurring_egress", Priority: 1, ID: e.ID, Action: action,
-			Title: "Recurring connection", Detail: detail, ScopeText: scopeText, Count: e.Count,
-		})
-	}
-
-	// Incidents not yet resolved: critical ones (severity 3) and high ones
-	// (severity 2) keep their risk; any other open more than 72h is a queue
-	// item going stale, not a finding.
+	// Open incidents of high or critical risk; lower-risk ones stay in the
+	// findings history.
 	for _, inc := range a.store.RecentIncidents(25) {
 		wf, _ := a.store.IncidentStatus(inc.ID)
 		status := firstNonEmpty([]string{wf.Status, "open"})
 		critical := inc.Risk == model.RiskCritical
 		high := inc.Risk == model.RiskHigh
-		aging := !critical && !high && time.Since(inc.Timestamp) > 72*time.Hour
-		if status != "open" || (!critical && !high && !aging) {
+		if status != "open" || (!critical && !high) {
 			continue
 		}
 		detail := firstNonEmpty([]string{inc.Summary, inc.Rule, "A security incident needs review."})
@@ -453,16 +414,9 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 			Kind: "incident", Priority: 3, ID: inc.ID,
 			Title: "Open incident", Detail: detail, Status: status,
 		}
-		switch {
-		case critical:
+		if critical {
 			headline.Severity = 3
 			item.Title = "Critical incident"
-		case aging:
-			headline.Title = "Aging incident: " + humanFlagTitle(inc.Rule)
-			headline.Severity = 1
-			headline.Detail = "open more than 3 days — resolve or acknowledge"
-			item.Priority = 1
-			item.Title = "Aging incident"
 		}
 		add(groupFor(inc.Agent, inc.PID), headline, item)
 	}
