@@ -53,19 +53,23 @@ type firewallStack struct {
 
 // setupFirewall builds the engine and its persisted overrides (salt, rule
 // modes, registered fingerprints, user ingest sources). Degradations are
-// loud, never silent: a missing salt disables fingerprinting with an ERROR
+// loud, never silent: an unavailable salt disables fingerprinting with an ERROR
 // log; a failed engine logs and leaves Engine nil (the daemon still runs).
 func setupFirewall(cfg config.Config) *firewallStack {
 	stateDir := filepath.Dir(cfg.Firewall.Registry.SaltRef)
 
 	fwSalt, saltErr := firewall.LoadSalt(cfg.Firewall.Registry.SaltRef)
+	fwConfig := cfg.Firewall
 	if saltErr != nil {
 		// Loud degradation: the fingerprint layer is OFF, not silently broken.
 		// (A silently rotated salt orphans every registered fingerprint while
 		// the status page still says the firewall is up.)
 		log.Printf("ERROR: firewall salt unavailable, known-secret fingerprinting disabled: %v", saltErr)
+		// Keep typed detection available, but never populate the registry with
+		// fingerprints keyed by an unavailable installation salt.
+		fwConfig.Registry.Fingerprints = nil
 	}
-	fwEngine, fwErr := firewall.NewEngine(cfg.Firewall, fwSalt)
+	fwEngine, fwErr := firewall.NewEngine(fwConfig, fwSalt)
 	if fwErr != nil {
 		log.Printf("Failed to initialize firewall engine: %v", fwErr)
 	}
@@ -90,12 +94,15 @@ func setupFirewall(cfg config.Config) *firewallStack {
 	// the active registry behind a newer successfully persisted snapshot.
 	var fingerprintMu sync.Mutex
 	applyFingerprints := func(fps []config.Fingerprint) {
-		combined := append(append([]config.Fingerprint{}, cfg.Firewall.Registry.Fingerprints...), fps...)
+		combined := append(append([]config.Fingerprint{}, fwConfig.Registry.Fingerprints...), fps...)
 		if fwEngine != nil {
 			fwEngine.SetFingerprints(combined)
 		}
 	}
 	reload := func() error {
+		if saltErr != nil {
+			return fmt.Errorf("firewall fingerprint salt unavailable: %w", saltErr)
+		}
 		fingerprintMu.Lock()
 		defer fingerprintMu.Unlock()
 		fps, err := fpStore.LoadStrict()
@@ -112,6 +119,9 @@ func setupFirewall(cfg config.Config) *firewallStack {
 	// ingest scans the configured secret sources, registers their HMAC
 	// fingerprints, and applies them live. Triggered by `secure-agent fingerprint`.
 	ingest := func() ([]string, error) {
+		if saltErr != nil {
+			return nil, fmt.Errorf("firewall fingerprint salt unavailable: %w", saltErr)
+		}
 		fingerprintMu.Lock()
 		defer fingerprintMu.Unlock()
 		// Effective sources are computed at call time: the config defaults plus
