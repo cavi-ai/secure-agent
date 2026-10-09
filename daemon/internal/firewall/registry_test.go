@@ -30,6 +30,34 @@ func TestRegistryMatchesRegisteredSecretAcrossEncodings(t *testing.T) {
 	}
 }
 
+func TestRegistryMaskTokensUsesOriginalTokenSpans(t *testing.T) {
+	salt := []byte("test-salt")
+	const short = "fixture-alpha"
+	const long = short + "-plus"
+	const unicode = "clé-fixture-123"
+	r := NewRegistry(salt, []config.Fingerprint{
+		{ID: "short", Len: len(short), HMAC: Fingerprint(salt, short)},
+		{ID: "long", Len: len(long), HMAC: Fingerprint(salt, long)},
+		{ID: "unicode", Len: len(unicode), HMAC: Fingerprint(salt, unicode)},
+	})
+	for _, tc := range []struct{ name, input, want string }{
+		{"short-before-long", short + " " + long, "[REDACTED:short] [REDACTED:long]"},
+		{"long-before-short", long + " " + short, "[REDACTED:long] [REDACTED:short]"},
+		{"substring-after-hit", short + " prefix-" + short + "-suffix", "[REDACTED:short] prefix-" + short + "-suffix"},
+		{"substring-before-hit", "prefix-" + short + "-suffix " + short, "prefix-" + short + "-suffix [REDACTED:short]"},
+		{"repeated", short + "," + short + ";" + long, "[REDACTED:short],[REDACTED:short];[REDACTED:long]"},
+		{"unicode-and-delimiters", "début={\"clé\":\"" + unicode + "\"}\r\n", "début={\"clé\":\"[REDACTED:unicode]\"}\r\n"},
+		{"no-hit", "prefix-" + short + "-suffix", "prefix-" + short + "-suffix"},
+		{"empty", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := r.MaskTokens(tc.input); got != tc.want {
+				t.Fatalf("masked text = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 type ingestCountingReader struct {
 	io.Reader
 	bytesRead int

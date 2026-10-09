@@ -47,15 +47,39 @@ func (r *Registry) MaskTokens(text string) string {
 	if len(r.byHMAC) == 0 {
 		return text
 	}
-	for _, tok := range strings.FieldsFunc(text, isTokenBreak) {
+	var masked strings.Builder
+	start, written := -1, 0
+	maskToken := func(end int) {
+		tok := text[start:end]
 		if _, ok := r.byLen[len(tok)]; !ok {
-			continue
+			return
 		}
 		if fp, ok := r.byHMAC[Fingerprint(r.salt, tok)]; ok {
-			text = strings.ReplaceAll(text, tok, "[REDACTED:"+fp.ID+"]")
+			masked.WriteString(text[written:start])
+			masked.WriteString("[REDACTED:" + fp.ID + "]")
+			written = end
 		}
 	}
-	return text
+	// Match spans in the original input so one replacement cannot change a
+	// later token or text that only contains a matching token as a substring.
+	for i, ch := range text {
+		if isTokenBreak(ch) {
+			if start >= 0 {
+				maskToken(i)
+				start = -1
+			}
+		} else if start < 0 {
+			start = i
+		}
+	}
+	if start >= 0 {
+		maskToken(len(text))
+	}
+	if written == 0 {
+		return text
+	}
+	masked.WriteString(text[written:])
+	return masked.String()
 }
 
 // Match tokenizes each normalized view of data and reports any token whose
