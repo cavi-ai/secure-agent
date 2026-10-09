@@ -44,6 +44,16 @@ def check(name, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f" — {detail}" if detail and not ok else ""))
 
 
+def log_rows(dom_text):
+    """The history rows in a dump, keyed by data-row-key."""
+    rows = {}
+    for chunk in dom_text.split('<li class="log-row')[1:]:
+        key = re.search(r'data-row-key="([^"]+)"', chunk)
+        if key:
+            rows[key.group(1)] = chunk
+    return rows
+
+
 def find_chrome():
     if os.environ.get("CHROME_BIN"):
         return os.environ["CHROME_BIN"]
@@ -308,6 +318,9 @@ def main():
         dom_patternphone = dump_dom(chrome, tmp, "?phonedemo&patterndemo")
         dom_patternstream = dump_dom(chrome, tmp, "?patterndemo&patternstream")
         dom_attnkeep = dump_dom(chrome, tmp, "?patterndemo&attnkeep")
+        dom_patternbig = dump_dom(chrome, tmp, "?patternbigdemo&logsclosed")
+        dom_bulk = dump_dom(chrome, tmp, "?bulkdemo&logsclosed")
+        dom_empty = dump_dom(chrome, tmp, "?emptyposture")
         dom_posturemore = dump_dom(chrome, tmp, "?posturemoredemo")
         dom_fold = dump_dom(chrome, tmp, "?folddemo")
         dom_procwidth = dump_dom(chrome, tmp, "?procwidthdemo", window_size=(1440, 900))
@@ -576,7 +589,8 @@ def main():
               'class="toast ' in dom_toast)
         check("vendor-key promote banner",
               'data-action="promote-vendor-keys"' in dom and "1 vendor-key rule" in dom)
-        check("incident workflow chip (ack)", 'class="workflow-chip acked"' in dom)
+        check("incident workflow chip (ack)",
+              'class="workflow-chip acked"' in dom and '<span class="c-verdict-text">CRITICAL · acknowledged</span>' in dom)
         check("secret sources rendered (config+user)",
               dom.count('class="source-item"') == 2 and "CONFIG" in dom and "USER" in dom)
 
@@ -587,7 +601,10 @@ def main():
         check("chain node: payload inspection", "payload inspection" in dom)
         check("chain node: egress destination", "logs.example.com:443" in dom)
         check("chain verdict node", "cn-verdict-bad" in dom and "Critical flag raised" in dom)
-        check("second flag collapsed", 'flag-card sev3">' in dom)
+        history_rows = re.findall(r'<li class="log-row[^"]*" data-row-key="(flag:[^"]+)"', dom)
+        check("history lists every flag as one log row, the critical ones first",
+              sorted(history_rows) == ["flag:flag-1", "flag:flag-2", "flag:flag-3"] and history_rows[-1] == "flag:flag-3",
+              f"rows={history_rows}")
         flag1_card = dom.split('class="flag-card', 1)[1].split('class="flag-card', 1)[0]
         flags_region = dom.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
         check("legacy card evidence rows render as text, not [object Object]",
@@ -1180,8 +1197,8 @@ def main():
               "api-service@main" in sessions and "data-pipeline@feat/etl" in sessions and ">auth<" in sessions)
         check("session card selects the session trace",
               'data-action="select-session" data-id="sess-claude-1"' in sessions)
-        check("egress tab warning stays hidden when posture has no egress decisions",
-              re.search(r'id="tab-badge-egress"[^>]*hidden', dom) is not None)
+        check("the Egress tab carries no decision badge: recurring egress is never queued",
+              'id="tab-badge-egress"' not in dom and 'data-kind="recurring_egress"' not in dom)
         needs_you = int(re.search(r"needs_you: (\d+),", open(MOCK).read()).group(1))
         check("home tab badge shows needs-you count",
               f'id="tab-badge-home">{needs_you}<' in dom)
@@ -1193,24 +1210,28 @@ def main():
         attention = dom.split('id="attention-center"', 1)[1].split('id="security-findings-grid"', 1)[0]
         decisions = attention.split('id="coverage-center"', 1)[0]
         coverage = attention.split('id="coverage-center"', 1)[1].split('id="home-spend"', 1)[0]
-        check("attention center groups the whole api-service session",
-              'class="attention-group' in attention and "api-service" in attention
-              and "5.5 GB" in attention and "132.5%" in attention and "<b>2</b> processes" in attention)
-        codex_group = (re.search(r'<article class="attention-group[^"]*">((?:(?!</article>).)*codex activity.*?)</article>', dom_pattern, re.S) or [None, ""])[1]
-        check("attention: an agent-level group names its processes and sessions, not the generic sentence",
-              '<span class="attention-workspace">2 processes (codex 0.46.0 via Terminal.app) across 2 sessions, all exited</span>' in codex_group
-              and "safely attributed" not in dom, f"group={codex_group[:300]!r}")
-        check("attention center unifies all actionable signal types",
-              all(label in decisions for label in ("Guard decision", "Resource pressure", "Critical incident", "Critical finding")))
+        check("Needs you shows the api-service session's decisions as flat rows with its memory, CPU and process count",
+              'attention-group' not in dom and "api-service" in decisions
+              and "5.5 GB memory" in decisions and "132.5% CPU" in decisions
+              and "<dt>Processes</dt><dd>2</dd>" in decisions)
+        pat_need = dom_pattern.split('id="attention-center"', 1)[-1].split('id="coverage-center"', 1)[0]
+        pat_row = log_rows(dom_pattern).get("pattern:codex|keychain-access|/Users/dev/Library/Keychains/login.keychain-db", "")
+        check("a pattern never reaches Needs you; it is one history row with its count",
+              'pattern-card' not in pat_need and 'data-kind="pattern"' not in pat_need and "codex activity" not in dom_pattern
+              and '<span class="c-count">323×</span>' in pat_row, f"row={pat_row[:200]!r}")
+        need_kinds = re.findall(r'<li class="need [^"]*" data-kind="(\w+)"', decisions)
+        check("Needs you unifies guard, resource, incident and critical-finding rows, highest priority first",
+              need_kinds == ["guard", "resource", "incident", "flag", "flag", "flag"], f"kinds={need_kinds}")
         check("Home keeps coverage outside the decisions count",
               'id="badge-coverage-count">2<' in coverage
               and 'File monitoring is off' in coverage
               and '2 connections bypassed inspection' in coverage
               and 'Uninspected egress' not in decisions)
-        check("Home with only coverage gaps has an honest zero-decision state",
-              'id="badge-attention-count">0<' in dom_coverage
-              and 'No pending decisions' in dom_coverage
+        check("Home with only coverage gaps hides Needs you and shows the gap",
+              re.search(r'<section[^>]*id="attention-center"[^>]*\bhidden', dom_coverage) is not None
+              and 'No pending decisions' not in dom_coverage.split('id="attention-center"', 1)[-1].split('id="home-spend"', 1)[0]
               and 'id="posture-state">Monitoring needs attention<' in dom_coverage
+              and 'id="coverage-center" hidden' not in dom_coverage
               and 'id="badge-coverage-count">2<' in dom_coverage)
         check("attention resource actions target the full session",
               'data-action="resource-control" data-id="resource-1" data-decision="apply"' in attention)
@@ -1227,8 +1248,8 @@ def main():
               resolve_probe == f"badge={needs_you - 1} tab={needs_you - 1} queued=false", f"probe={resolve_probe!r}")
         expect_before = (re.search(r'<pre id="expect-before"[^>]*>(.*?)</pre>', dom_expect, re.S) or [None, ""])[1]
         expect_probe = (re.search(r'<pre id="expect-probe"[^>]*>(.*?)</pre>', dom_expect, re.S) or [None, ""])[1]
-        check("an expected connection leaves Egress and the banner before the daemon answers",
-              expect_before == f"listed=true needs={needs_you + 1}"
+        check("an expected connection leaves Egress before the daemon answers; the banner and Needs you count never held it",
+              expect_before == f"choices=true listed=false needs={needs_you}"
               and expect_probe == f"choices=false listed=false needs={needs_you}",
               f"before={expect_before!r} probe={expect_probe!r}")
         check("posture flag item opens Home with Findings history",
@@ -1481,8 +1502,8 @@ def main():
               f"card={org_card!r} requests={org_reqs!r}")
         routine_before = pre(dom_routine, "routine-before")
         routine_after = pre(dom_routine, "routine-after")
-        check("routine: gh across three agents is one decision first in the queue; Treat as routine sends the served ids and the card leaves before the answer",
-              routine_before == "first=true buttons=2"
+        check("routine: gh across three agents is one history row, never a decision; Treat as routine sends the served ids and the row leaves before the answer",
+              routine_before == "queued=false count=145× buttons=2"
               and routine_after == f"card=false needs={needs_you}"
               and 'POST /expected body={"flag_ids":["r1","r2"]}' in pre(dom_routine, "mock-requests"),
               f"before={routine_before!r} after={routine_after!r} requests={pre(dom_routine, 'mock-requests')!r}")
@@ -1493,19 +1514,14 @@ def main():
               and '<article class="finding disp-benign" data-flag-id="flag-2">' in flags_fail
               and 'class="toast danger"' in dom_explainfail, f"requests={fail_reqs!r}")
 
-        attn = dom_explain.split('id="attention-center"', 1)[-1].split('id="security-findings-grid"', 1)[0]
-        attn_groups = re.findall(r'<article class="attention-group([^"]*)">(.*?)</article>', attn, re.S)
-        flag2_groups = [(cls, body) for cls, body in attn_groups if 'data-flag-id="flag-2"' in body]
-        check("attention: the flag item shows who, what, verdict and the served actions; benign-likely is not urgent",
-              len(flag2_groups) == 1 and "urgent" not in flag2_groups[0][0]
-              and 'class="attention-item kind-flag finding-item disp-benign"' in flag2_groups[0][1]
-              and "cursor · web-app@main" in flag2_groups[0][1]
-              and "Cursor read AWS credentials (~/.aws/credentials), then reached Cloudflare 3 s later." in flag2_groups[0][1]
-              and '<span class="disp-badge">Likely benign (advisor 93 %)</span>' in flag2_groups[0][1]
-              and '<p class="finding-why">Cloudflare fronts' in flag2_groups[0][1]
-              and 'data-action="explain-act" data-flag-id="flag-2" data-action-id="allow-host"' in flag2_groups[0][1]
-              and 'data-action="dismiss-flag" data-id="flag-2"' not in flag2_groups[0][1],
-              f"groups={[c for c, _ in attn_groups]}")
+        attn = dom_explain.split('id="attention-center"', 1)[-1].split('id="coverage-center"', 1)[0]
+        flag2_row = log_rows(dom_explain).get("flag:flag-2", "")
+        check("attention: a benign-likely explained finding is not a decision; it is a history row with its verdict",
+              'flag-2' not in attn
+              and 'Sensitive file read near an outside connection' in flag2_row
+              and '<span class="c-verdict-text">Likely benign (advisor 93 %)</span>' in flag2_row
+              and 'data-action="explain-act" data-flag-id="flag-2" data-action-id="allow-host"' in flag2_row,
+              f"row={flag2_row[:200]!r}")
         probe = pre(dom_detailsprobe, "details-probe")
         ages = re.match(r"kept (.+) \| (.+)$", probe)
         check("finding card: an open Details survives re-renders while the age ticks in place",
@@ -1540,7 +1556,7 @@ def main():
         check("attention badge and tab badge equal posture.needs_you; coverage stays separate",
               attention_badge == str(needs_you) and tab_badge == str(needs_you)
               and '<strong>File monitoring is off</strong>' in coverage and 'data-action="open-fda"' in coverage
-              and 'data-action="dismiss-flag" data-id="flag-5"' in attention,
+              and 'data-id="flag-3"' not in attention and 'data-row-key="flag:flag-3"' in dom,
               f"badge={attention_badge!r} tab={tab_badge!r} needs_you={needs_you}")
 
         # --- patterns: a repeating finding is one card ---
@@ -1550,20 +1566,18 @@ def main():
         check("GitHub approval posts the served exact scope and reconciles to reviewed",
               'POST /expected body={"flag_id":"gh-flag","path":"/Users/dev/.config/gh/hosts.yml","host":"140.82.114.6"}' in pre(dom_ghapprove, "mock-requests")
               and '<b class="pattern-open">0 open</b>' in dom_ghapprove)
-        pat_attn = dom_pattern.split('id="attention-center"', 1)[-1].split('id="security-findings-grid"', 1)[0]
-        pat_cards = re.findall(r'<article class="finding pattern-card [^"]*" data-pattern-key="([^"]+)">(.*?)</article>', pat_attn, re.S)
+        pat_flags = dom_pattern.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+        pat_cards = re.findall(r'<article class="finding pattern-card [^"]*" data-pattern-key="([^"]+)">(.*?)</article>', pat_flags, re.S)
         # Covered flags are intentionally clickable inside the disclosure;
-        # only a separate top-level flag card would be a duplicate.
-        pat_attn_standalone = re.sub(r'<article class="finding pattern-card [^"]*"[^>]*>.*?</article>', '', pat_attn, flags=re.S)
-        check("patterns: Attention shows the storm as one pattern card with its count, summary, 24 bars and open count",
+        # only a separate top-level flag row would be a duplicate.
+        check("patterns: History shows the storm as one row, its card with the count, summary, 24 bars and open count",
               len(pat_cards) == 1 and "323×" in pat_cards[0][1]
               and "codex touched the login keychain 323 times" in pat_cards[0][1]
               and len(re.findall(r'<i class="h\d"></i>', pat_cards[0][1])) == 24
               and '<b class="pattern-open">323 open</b>' in pat_cards[0][1]
-              and 'data-id="flag-6"' not in pat_attn_standalone and 'data-id="flag-7"' not in pat_attn_standalone
+              and 'data-row-key="flag:flag-6"' not in pat_flags and 'data-row-key="flag:flag-7"' not in pat_flags
               and all(f'data-action="open-flag" data-id="{fid}"' in pat_cards[0][1] for fid in ("flag-6", "flag-7")),
               f"cards={len(pat_cards)}")
-        pat_flags = dom_pattern.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
         pat_standalone = re.sub(r'<article class="finding pattern-card [^"]*"[^>]*>.*?</article>', '', pat_flags, flags=re.S)
         check("patterns: critical individual flags lead warnings without duplicating covered flags",
               'data-pattern-key="codex|keychain-access|' in pat_flags
@@ -1584,8 +1598,25 @@ def main():
         check("patterns: a streamed flag the pattern covers folds into its one card after the debounced reconcile",
               stream == "mid cards=1 covered=0 row=1 | end cards=1 covered=1 row=0", f"probe={stream!r}")
         keep = pre(dom_attnkeep, "attn-probe")
-        check("attention: an open pattern disclosure and a focused button survive a group RSS change",
-              keep.startswith("open=true focus=true metrics=") and "memory" in keep, f"probe={keep!r}")
+        check("history: an open pattern disclosure and a focused button survive a session RSS change; Needs you shows the new memory and never the pattern",
+              keep.startswith("open=true focus=true queued=false metrics=") and "700 MB memory" in keep, f"probe={keep!r}")
+
+        big_rows = log_rows(dom_patternbig)
+        big_pattern = [k for k in big_rows if k.startswith("pattern:")]
+        check("a 61-flag pattern is exactly one history row reading 61×",
+              len(big_pattern) == 1 and '<span class="c-count">61×</span>' in big_rows[big_pattern[0]]
+              and not [k for k in big_rows if k.startswith("flag:kc-")], f"rows={list(big_rows)[:6]}")
+        bulk_reqs = pre(dom_bulk, "mock-requests")
+        check("bulk Mark reviewed on two selected rows asks one confirm and sends one dismiss per row",
+              pre(dom_bulk, "bulk-probe") == "confirms=1" and bulk_reqs.count("POST /flags/acknowledge") == 2
+              and 'body={"flag_id":"flag-1"}' in bulk_reqs and 'body={"flag_id":"flag-3"}' in bulk_reqs,
+              f"probe={pre(dom_bulk, 'bulk-probe')!r} requests={bulk_reqs!r}")
+        empty_need = dom_empty.split('id="attention-center"', 1)[-1].split('id="home-spend"', 1)[0]
+        check("empty posture: Needs you, the Monitoring gap and the Home tab badge are all hidden",
+              re.search(r'<section[^>]*id="attention-center"[^>]*\bhidden', dom_empty) is not None
+              and re.search(r'id="coverage-center"[^>]*\bhidden', dom_empty) is not None
+              and re.search(r'id="tab-badge-home"[^>]*\bhidden', dom_empty) is not None
+              and 'No pending decisions' not in empty_need and 'class="need ' not in empty_need)
 
         # --- worktrees: the hunter's report, one row per worktree ---
         def wt_block(dom_text):

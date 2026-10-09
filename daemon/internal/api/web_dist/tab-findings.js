@@ -475,7 +475,7 @@ function renderFlags() {
       kind: 'flag', key: f.id, last: f.ts, agent: f.agent, title: f.title || ruleTitle(f.rule),
       sub: (ex.subject || {}).display || (l && l.what) || '', count: 1, hourly: null,
       critical: historyCritical(ex.assessment, legacy, f.severity), reviewed: !!f.acknowledged || (ex.disposition || {}).state === 'acknowledged',
-      disposition: d, detail: () => cardHTML(f, 0),
+      meta: l ? l.meta : null, disposition: d, detail: () => cardHTML(f, 0),
     };
   })).concat(routines.map(rg => {
     const d = historyVerdict(rg.assessment, rg.disposition);
@@ -492,7 +492,14 @@ function renderFlags() {
   SA.historyRows = new Map(cap.shown.filter(r => !r.reviewed).map(r => [logKey(r), r]));
   for (const k of Array.from(SA.historySelected)) if (!SA.historyRows.has(k)) SA.historySelected.delete(k);
 
-  const parts = cap.shown.map(r => ({ key: logKey(r), html: logRowHTML(r, SA, now), hash: logRowHTML(r, SA, now, false) }));
+  // The age in an open card's meta ticks without rebuilding the row (so an
+  // open Details and a focused button survive): the hash leaves it out and
+  // the text is set in place after patching.
+  const parts = cap.shown.map(r => {
+    const hash = logRowHTML(r, SA, now, false);
+    return { key: logKey(r), html: logRowHTML(r, SA, now), meta: r.meta,
+      hash: r.meta ? hash.replace(metaHTML(r.meta), metaHTML('')) : hash };
+  });
   if (cap.more) parts.push({ key: 'more', html: `<li class="log-more">${cap.more}</li>` });
 
   // Dispositions: muted (rule, host, agent) rows, visible so the quiet is
@@ -506,6 +513,12 @@ function renderFlags() {
     patchList(muteList, [{ key: 'head', html: '<div class="mute-head">Muted</div>' }]
       .concat(mutes.map(m => ({ key: `${m.rule}|${m.host}|${m.agent || ''}`, html: muteRowHTML(m) }))),
     { key: p => p.key, html: p => p.html });
+  }
+  const metaByKey = new Map(parts.filter(p => p.meta).map(p => [p.key, p.meta]));
+  for (const el of container.children) {
+    const m = metaByKey.get(el._saKey);
+    const span = m !== undefined && el.querySelector('.finding-meta');
+    if (span && span.textContent !== m) span.textContent = m;
   }
   paintHistoryBulk(SA);
 }
