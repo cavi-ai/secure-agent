@@ -35,20 +35,20 @@ final class GuardTests: XCTestCase {
 
     // MARK: - advisor config YAML helpers
 
-    func testAdvisorConfigEnableAppendsBlockWhenAbsent() {
-        let out = SetupManager.advisorConfigUpdating("proxy_enabled: true\n", enabled: true)
+    func testAdvisorConfigEnableAppendsBlockWhenAbsent() throws {
+        let out = try SetupManager.advisorConfigUpdating("proxy_enabled: true\n", enabled: true)
         XCTAssertTrue(SetupManager.advisorConfigIsEnabled(out))
         XCTAssertTrue(out.contains("proxy_enabled: true")) // untouched
         XCTAssertTrue(out.contains("endpoint: \"http://127.0.0.1:8080\""))
     }
 
-    func testAdvisorConfigFlipsEnabledLineOnly() {
+    func testAdvisorConfigFlipsEnabledLineOnly() throws {
         let yaml = "proxy_enabled: true\nadvisor:\n  enabled: false\n  endpoint: \"http://127.0.0.1:8080\"\n  model: \"qwen\"\n"
-        let out = SetupManager.advisorConfigUpdating(yaml, enabled: true)
+        let out = try SetupManager.advisorConfigUpdating(yaml, enabled: true)
         XCTAssertTrue(SetupManager.advisorConfigIsEnabled(out))
         XCTAssertTrue(out.contains("model: \"qwen\"")) // other keys preserved
         // and flipping back works
-        let off = SetupManager.advisorConfigUpdating(out, enabled: false)
+        let off = try SetupManager.advisorConfigUpdating(out, enabled: false)
         XCTAssertFalse(SetupManager.advisorConfigIsEnabled(off))
     }
 
@@ -79,8 +79,8 @@ final class GuardTests: XCTestCase {
         XCTAssertEqual(c2.model, "mlx-community/Qwen3.5-9B-MLX-4bit")
     }
 
-    func testAdvisorConfigSettingManagedWritesManagedBlock() {
-        let out = SetupManager.advisorConfigSetting("proxy_enabled: true\n", mode: .managed, endpoint: nil,
+    func testAdvisorConfigSettingManagedWritesManagedBlock() throws {
+        let out = try SetupManager.advisorConfigSetting("proxy_enabled: true\n", mode: .managed, endpoint: nil,
                                                     model: "mlx-community/Qwen3-4B-4bit")
         XCTAssertTrue(out.contains("managed: true"))
         XCTAssertTrue(out.contains("managed_model: \"mlx-community/Qwen3-4B-4bit\""))
@@ -89,9 +89,9 @@ final class GuardTests: XCTestCase {
         XCTAssertTrue(out.contains("proxy_enabled: true"))
     }
 
-    func testAdvisorConfigSettingExistingReplacesOldBlock() {
+    func testAdvisorConfigSettingExistingReplacesOldBlock() throws {
         let old = "advisor:\n  enabled: true\n  endpoint: \"http://127.0.0.1:8080\"\n  model: \"old\"\nfirewall:\n  mode: monitor\n"
-        let out = SetupManager.advisorConfigSetting(old, mode: .existing,
+        let out = try SetupManager.advisorConfigSetting(old, mode: .existing,
                                                     endpoint: "http://127.0.0.1:11434", model: "qwen3:4b")
         XCTAssertTrue(out.contains("endpoint: \"http://127.0.0.1:11434\""))
         XCTAssertTrue(out.contains("model: \"qwen3:4b\""))

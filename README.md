@@ -355,7 +355,10 @@ advisor:
   enabled: false                     # flip to true once a local model is serving
   endpoint: "http://127.0.0.1:8080"  # must be loopback
   model: ""                          # e.g. "qwen3-4b-instruct"
-  timeout_ms: 8000                   # per triage call; plans and notes you ask for get at least 5 minutes
+  timeout_ms: 60000                  # whole triage task; requested plans/notes get at least 5 minutes
+  classifier_endpoint: ""           # optional local Kev service, e.g. http://127.0.0.1:8009
+  classifier_model: "kev-latest"
+  debug: false                       # metadata-only task/tool logs, applied live
 ```
 
 ### 🤖 Secure Agent chat
@@ -389,6 +392,13 @@ worktree from the console's System tab or `secure-agent worktrees advise`,
 and a short cleanup plan for a project's worktrees and clutter from the same tab
 or `secure-agent cleanup advise`; neither changes a verdict or an action. The advisor is async and fails silent:
 if the model is down, nothing changes except the absence of verdicts.
+
+Each advisor task starts with fresh context and can call read-only tools for
+its evidence, its finding's session activity, and similar operator judgments.
+An optional local classifier helps choose which context to inspect; its output
+cannot clear findings or change enforcement. The Agent page reports the active
+task, evidence tool, elapsed time, queue depth and retry state. See
+[advisor boundaries](docs/ADVISOR_THREAT_MODEL.md) for context and cache limits.
 
 ---
 

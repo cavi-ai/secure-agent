@@ -249,6 +249,30 @@ worktrees:
 
 Changes take effect live within one poll cycle.
 
+### `advisor` (Map)
+
+The wizard's **Local Advisor** step and **Settings → Analysis → Advisor tools
+and diagnostics** configure these fields. Saves apply live; changing the model
+preserves the timeout, classifier and debug settings.
+
+```yaml
+advisor:
+  enabled: false
+  endpoint: "http://127.0.0.1:8080" # existing local server
+  model: ""                       # the server's served chat model
+  timeout_ms: 60000                # whole triage task, including tools and loading
+  classifier_endpoint: ""         # optional running Kev service, e.g. http://127.0.0.1:8009
+  classifier_model: "kev-latest"
+  debug: false                    # request sizes, tool names and timings only
+```
+
+Endpoints must be loopback. The optional classifier uses `/v1/systemone`; its
+hints do not change enforcement. The connection check verifies `/v1/models`,
+not accuracy. Debug entries appear in `~/Library/Logs/secure-agent/daemon-err.log`,
+which **Open daemon log** opens. Evidence, prompts and replies are excluded.
+See [advisor boundaries](ADVISOR_THREAT_MODEL.md) for managed-model setup and
+context/tool budgets.
+
 ### `system_agent` (Map)
 
 The system agent behind the console's Agent tab: a chat with a model on your local Ollama that proposes work for Claude Code, Codex, OpenClaw or Hermes Agent and dispatches it against the same Ollama. Off by default. See [SYSTEM_AGENT.md](SYSTEM_AGENT.md).

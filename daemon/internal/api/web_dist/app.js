@@ -1341,6 +1341,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const enabled = !!(st && st.enabled);
     const stateEl = document.getElementById('agent-state');
     if (stateEl) stateEl.textContent = agentState.error || agentStateText(st);
+    const advisorStateEl = document.getElementById('advisor-state');
+    if (advisorStateEl) advisorStateEl.textContent = advisorStateText(telemetryData.status && telemetryData.status.advisor_health);
     const unavailable = !enabled || !!(st && st.reason) || agentBusy();
     const feedback = document.getElementById('agent-feedback');
     if (feedback) { feedback.hidden = !agentState.sendError; feedback.textContent = agentState.sendError; }

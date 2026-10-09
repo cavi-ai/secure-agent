@@ -272,6 +272,10 @@ struct OnboardingView: View {
                         Text(note).font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    Divider()
+                    DisclosureGroup("Timeout, classifier and debug logs") {
+                        AdvisorOptionsView()
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)

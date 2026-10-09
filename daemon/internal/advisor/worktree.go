@@ -119,12 +119,12 @@ func parseWorktreeAdvice(content string) (model.AdvisorVerdict, error) {
 		Rationale      string  `json:"rationale"`
 	}
 	if err := json.Unmarshal([]byte(c), &v); err != nil {
-		return model.AdvisorVerdict{}, fmt.Errorf("worktree note not strict JSON: %w (content head: %.120s)", err, c)
+		return model.AdvisorVerdict{}, fmt.Errorf("worktree note not strict JSON")
 	}
 	switch v.Recommendation {
 	case "remove", "review", "keep":
 	default:
-		return model.AdvisorVerdict{}, fmt.Errorf("unknown recommendation %q", v.Recommendation)
+		return model.AdvisorVerdict{}, fmt.Errorf("unknown recommendation")
 	}
 	if strings.TrimSpace(v.Rationale) == "" {
 		return model.AdvisorVerdict{}, fmt.Errorf("empty rationale")

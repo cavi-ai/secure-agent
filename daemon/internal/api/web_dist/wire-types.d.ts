@@ -525,6 +525,15 @@ export interface HealthSnapshot {
   last_error?: string;
   queue_depth: number;
   model?: string;
+  state: string;
+  active_kind?: string;
+  active_subject?: string;
+  active_tool?: string;
+  elapsed_ms?: number;
+  last_duration_ms?: number;
+  input_bytes?: number;
+  tool_calls?: number;
+  retry_at: string;
 }
 
 export interface WriteHealth {

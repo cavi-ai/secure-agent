@@ -86,6 +86,25 @@ final class SettingsLayoutTests: XCTestCase {
         view.displayIfNeeded()
     }
 
+    func testAdvisorOptionsExpandInNativeSettings() async throws {
+        _ = NSApplication.shared
+        let priorTab = SettingsNavigation.shared.tab
+        SettingsNavigation.shared.tab = .analysis
+        defer { SettingsNavigation.shared.tab = priorTab }
+        let controller = NSHostingController(rootView: SettingsView(state: .preview(), advisorOptionsExpanded: true))
+        let window = NSWindow(contentViewController: controller)
+        window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: 760, height: 520))
+        let hosting = try XCTUnwrap(window.contentView as? NSHostingView<SettingsView>)
+        defer { window.orderOut(nil); window.close() }
+        window.makeKeyAndOrderFront(nil)
+        await settle(hosting)
+        scrollDetailToEnd(hosting)
+        await settle(hosting)
+        assertHorizontalFit(hosting, window: window)
+        try snapshot(hosting, name: "advisor-options-expanded")
+    }
+
     private func pumpNativeRunLoop() {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
     }

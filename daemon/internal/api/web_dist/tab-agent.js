@@ -39,6 +39,23 @@ function agentStateText(status) {
   return `${status.model} on Ollama ${status.ollama_version || ''}`.trim() + ' · stays on this machine';
 }
 
+// Show the advisor's current work separately from interactive chat.
+function advisorStateText(health, now = Date.now()) {
+  if (!health || !health.enabled) return 'Advisor off';
+  const queue = `${Math.max(0, Number(health.queue_depth) || 0)} queued`;
+  if (health.state === 'paused' || health.circuit_open) {
+    const retry = Date.parse(health.retry_at);
+    return 'Advisor paused after failed requests' + (Number.isFinite(retry) ? ` · retry in ${Math.max(0, Math.ceil((retry - now) / 1000))}s` : '') + ` · ${queue}`;
+  }
+  const tools = { inspect_current_evidence: 'finding evidence', inspect_session_activity: 'session activity', inspect_operator_history: 'operator history', classify_current_evidence: 'local classification' };
+  if (health.state === 'inspecting') return `Advisor inspecting ${tools[health.active_tool] || 'recorded evidence'} · ${queue}`;
+  if (health.state === 'answering') {
+    const kinds = { flag: 'flag', incident: 'incident', plan: 'plan', host: 'destination', guard: 'blocked access', worktree: 'worktree', project: 'cleanup', egress: 'egress' };
+    return `Advisor reviewing ${kinds[health.active_kind] || 'evidence'} · waiting for local model · ${Math.max(0, Math.floor((Number(health.elapsed_ms) || 0) / 1000))}s · ${queue}`;
+  }
+  return `Advisor idle · ${queue}` + (health.last_duration_ms ? ` · last review ${Math.round(health.last_duration_ms / 1000)}s` : '');
+}
+
 // agentOffHTML: what the tab shows while system_agent.enabled is false.
 function agentOffHTML() {
   return `<div class="agent-off">
