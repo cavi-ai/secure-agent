@@ -69,6 +69,59 @@ func TestScanMatchesTypedPattern(t *testing.T) {
 	}
 }
 
+func TestMaskPatternsUsesDetectionBoundaries(t *testing.T) {
+	d := testDetector(t)
+	const key = "AKIAIOSFODNN7EXAMPLE"
+	for _, tc := range []struct{ input, want string }{
+		{"prefix" + key, "prefix" + key},
+		{"prefix" + key + " " + key, "prefix" + key + " [REDACTED:aws-key]"},
+		{key + " " + key, "[REDACTED:aws-key] [REDACTED:aws-key]"},
+		{`{"text":"\n` + key + `"}`, `{"text":"\n[REDACTED:aws-key]"}`},
+	} {
+		if got := d.MaskPatterns(tc.input); got != tc.want {
+			t.Errorf("masked %q as %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestMaskPatternsCoversOverlappingOriginalMatches(t *testing.T) {
+	for _, pats := range [][]config.PatternConfig{
+		{{ID: "short", Re: "fixture-alpha"}, {ID: "long", Re: "fixture-alpha-plus"}},
+		{{ID: "long", Re: "fixture-alpha-plus"}, {ID: "short", Re: "fixture-alpha"}},
+		{{ID: "first", Re: "fixture-alpha fixture-beta"}, {ID: "second", Re: "fixture-beta fixture-gamma"}},
+		{{ID: "first", Re: "fixture-beta fixture-gamma"}, {ID: "second", Re: "fixture-alpha fixture-beta"}},
+	} {
+		d, err := NewDetector(pats, config.EntropyConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := "before fixture-alpha-plus after"
+		if pats[0].ID == "first" {
+			input = "before fixture-alpha fixture-beta fixture-gamma after"
+		}
+		if got := d.ScanPatterns(input); len(got) != 2 {
+			t.Fatalf("expected both overlapping rules to detect the input: %+v", got)
+		}
+		want := "before [REDACTED:" + pats[0].ID + "] after"
+		if got := d.MaskPatterns(input); got != want {
+			t.Errorf("masked overlapping matches as %q, want %q", got, want)
+		}
+	}
+}
+
+func TestMaskPatternsDoesNotRewriteInsertedMarkers(t *testing.T) {
+	d, err := NewDetector([]config.PatternConfig{
+		{ID: "fixture-beta", Re: "fixture-alpha"},
+		{ID: "second", Re: "fixture-beta"},
+	}, config.EntropyConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.MaskPatterns("fixture-alpha fixture-beta"); got != "[REDACTED:fixture-beta] [REDACTED:second]" {
+		t.Fatalf("inserted marker was rewritten: %q", got)
+	}
+}
+
 func TestScanNoFalsePositiveOnProse(t *testing.T) {
 	d := testDetector(t)
 	if hits := d.Scan("the quick brown fox writes some ordinary words"); len(hits) != 0 {
