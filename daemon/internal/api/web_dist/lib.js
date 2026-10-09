@@ -364,13 +364,29 @@ function incidentWorkflowHTML(id, workflow = {}) {
 // The generated report starts with identity and summary, then level-two
 // evidence sections. Keep the copied Markdown intact while placing decisions
 // and the advisor immediately after that introduction.
-function incidentReportHTML(id, workflow, markdown) {
+function incidentRemediationHTML(id, remediation, actions = true) {
+  if (!remediation || !(remediation.steps || []).length) return '';
+  const rows = remediation.steps.map(step => {
+    const item = step.item || {};
+    const reported = step.status === 'reported';
+    const attrs = `data-action="incident-remediation" data-id="${escapeHTML(id)}" data-step-id="${escapeHTML(step.id)}" data-revision="${escapeHTML(remediation.revision)}" data-evidence="${escapeHTML(remediation.evidence_revision)}"`;
+    return `<div class="endpoint-section"><strong>${escapeHTML(item.name)}</strong>`
+      + (item.path ? `<p class="body-note">${escapeHTML(item.path)}</p>` : '')
+      + `<p>${escapeHTML(item.action)}</p><p>${reported ? 'Reported completed' : 'Pending'} · Unverified${reported && step.reported_at ? ` · ${escapeHTML(step.reported_at)}` : ''}</p>`
+      + (step.newer_evidence ? '<p class="body-note">New evidence since this report; review the incident again.</p>' : '')
+      + (actions ? `<button class="btn btn-ghost btn-sm" ${attrs} data-status="${reported ? 'pending' : 'reported'}">${reported ? 'Mark pending' : 'Report step completed'}</button>` : '') + '</div>';
+  }).join('');
+  return `<section class="incident-remediation"><h4>Remediation steps</h4><p class="body-note">Reports record work you completed. External credential changes remain unverified; reporting a step does not resolve the incident.</p>${rows}</section>`;
+}
+
+function incidentReportHTML(id, workflow, markdown, remediation) {
   const text = String(markdown || '');
   const split = text.search(/^## /m);
   const intro = split < 0 ? text : text.slice(0, split);
   const evidence = split < 0 ? '' : text.slice(split);
   return linkEvidencePaths(parseMarkdownToHTML(intro))
     + `<section class="endpoint-section incident-workflow-actions">${incidentWorkflowHTML(id, workflow)}</section>`
+    + incidentRemediationHTML(id, remediation)
     + `<div class="endpoint-actions">${markButtonsHTML('incident:' + id)}</div>`
     + planSlotHTML('incident:' + id)
     + linkEvidencePaths(parseMarkdownToHTML(evidence));

@@ -2160,6 +2160,36 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  const incidentRemediationInFlight = new Set();
+  window.reportIncidentStep = async function(id, stepId, revision, evidence, status) {
+    if (incidentRemediationInFlight.has(id)) return;
+    incidentRemediationInFlight.add(id);
+    const buttons = Array.from(document.querySelectorAll('[data-action="incident-remediation"]')).filter(button => button.dataset.id === id);
+    buttons.forEach(button => { button.disabled = true; });
+    try {
+      const r = await apiFetch('/incidents/remediation', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, step_id: stepId, expected_revision: revision, expected_evidence: evidence, status })
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const result = await r.json();
+      if (!result.incident || !result.incident.remediation) throw new Error('Saved remediation result unavailable');
+      if (drawerMode === 'incident' && drawerIncident === id) {
+        const section = drawerBody.querySelector('.incident-remediation');
+        if (section) section.outerHTML = incidentRemediationHTML(id, result.incident.remediation);
+      }
+      showToast(status === 'reported' ? 'Step recorded as reported; credential verification remains unavailable' : 'Step marked pending', 'success');
+      fetchTelemetry();
+    } catch (err) {
+      showToast('Failed to record remediation: ' + err.message, 'danger');
+      fetchTelemetry();
+      if (drawerMode === 'incident' && drawerIncident === id) window.openIncidentReport(id);
+    } finally {
+      incidentRemediationInFlight.delete(id);
+      buttons.forEach(button => { button.disabled = false; });
+    }
+  };
+
   // Worktree actions. The daemon re-inspects before removing and answers 409
   // with the fresh verdict when the worktree is no longer removable.
   async function postWorktree(path, body) {
@@ -3089,7 +3119,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const [text, report] = await Promise.all([res.text(), detail.json()]);
         if (seq !== drawerSeq) return;
         currentRawMarkdown = text;
-        drawerBody.innerHTML = incidentReportHTML(incidentId, report.workflow, text);
+        incidentId = report.incident && report.incident.id || incidentId;
+        drawerIncident = incidentId;
+        drawerBody.innerHTML = incidentReportHTML(incidentId, report.workflow, text, report.incident && report.incident.remediation);
         loadPlanSlot('incident:' + incidentId);
       } else {
         drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Failed to load the incident report.</span></div>`;
@@ -4481,6 +4513,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'incident-status':
         window.setIncidentStatus(d.id, d.status);
+        break;
+      case 'incident-remediation':
+        window.reportIncidentStep(d.id, d.stepId, Number(d.revision), d.evidence, d.status);
         break;
       case 'open-file':
         e.preventDefault();

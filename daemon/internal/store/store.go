@@ -1456,6 +1456,7 @@ func (s *Store) PutIncident(inc model.IncidentReport) (writeErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	inc.Remediation = nil
 	data, err := json.Marshal(inc)
 	if err != nil {
 		return fmt.Errorf("marshal incident: %w", err)
@@ -1510,6 +1511,9 @@ func (s *Store) GetIncident(id string) (report *model.IncidentReport, readErr er
 
 	inc, err := decodeIncidentReport(storedID, reportJSON)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.attachIncidentRemediationLocked(inc); err != nil {
 		return nil, err
 	}
 	if v, ok := s.advisorVerdictLocked(inc.ID, "incident"); ok {
@@ -1660,6 +1664,10 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.In
 		return model.IncidentReport{}, false
 	}
 	s.noteWrite("incident aggregation", nil)
+	if err := s.attachIncidentRemediationLocked(inc); err != nil {
+		s.noteRead("incidents", err)
+		return model.IncidentReport{}, false
+	}
 	return *inc, true
 }
 
@@ -1685,6 +1693,11 @@ func (s *Store) RecentIncidentsResult(limit int) (out []model.IncidentReport, re
 	list, err := scanIncidentsResult(rows)
 	if err != nil {
 		return nil, err
+	}
+	for i := range list {
+		if err := s.attachIncidentRemediationLocked(&list[i]); err != nil {
+			return nil, err
+		}
 	}
 	s.attachNarrativesLocked(list)
 	return list, nil

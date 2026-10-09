@@ -476,6 +476,16 @@
   //   tokenseed    — pre-seed sessionStorage (simulates a RELOADED tab: no
   //                  #ct fragment, token must come from storage).
   const MODE = location.search;
+  if (MODE.includes('incidentremediation')) {
+    const inc = data['/incidents'][0];
+    const item = {id:'key',name:'Fixture credential',category:'ENV_SECRETS',path:'/workspace/.env',risk:'HIGH',description:'Fixture only',action:'Revoke the affected credential in its provider console'};
+    inc.rotate_list = [item];
+    inc.remediation = {revision:1,evidence_revision:'fixture-evidence',steps:[
+      {id:'fixture-reported',item,status:'reported',verification:'unverified',reported_at:iso(10000),newer_evidence:true},
+      {id:'fixture-pending',item:{...item,name:'Second fixture credential',path:'/workspace/second/.env'},status:'pending',verification:'unverified',newer_evidence:false}
+    ]};
+    setTimeout(async () => { await window.openIncidentReport('fixture-source-alias'); stamp('incident-remediation-probe', document.querySelector('.incident-remediation [data-action]')?.dataset.id || 'missing'); }, 500);
+  }
   if (MODE.includes('resourceoutcomes')) {
     data['/resources'].interventions = [
       {id:'fixture-partial',kind:'pause',status:'partial',verification:'unknown',error:'One captured process could not be resumed.',before:{rss_bytes:8000000000,cpu_percent:140,host_capacity:'constrained'},after:[],limits:['Pause may stop growth without freeing memory. Resume may be needed.']},
@@ -1175,6 +1185,17 @@
       }
       reqLog.push(line);
       stamp('mock-requests', reqLog.join('\n'));
+      if (MODE.includes('incidentremediation') && p === '/incidents/remediation') {
+        const req = JSON.parse(opts.body);
+        const inc = data['/incidents'][0];
+        if (req.id !== inc.id || req.expected_revision !== inc.remediation.revision || req.expected_evidence !== inc.remediation.evidence_revision) return {ok:false,status:409,text:async()=> 'Incident changed'};
+        const step = inc.remediation.steps.find(step => step.id === req.step_id);
+        step.status = req.status;
+        step.reported_at = req.status === 'reported' ? iso(0) : undefined;
+        step.newer_evidence = false;
+        inc.remediation.revision++;
+        return {ok:true,status:200,json:async()=>({incident:inc})};
+      }
       if (MODE.includes('resolvedemo') && p === '/incidents/status') {
         const text = id => (document.getElementById(id) || {}).textContent;
         const queued = !!document.querySelector('#attention-center [data-id="inc-20260907-6033-a1b2"]');
@@ -1315,6 +1336,11 @@
       const md = '# Incident\n\n## Blast Radius Activity\n\n### Accessed Files\n' +
         '- `/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl`\n\n### Egress Connections\n- `api.openai.com:443`\n';
       return { ok: true, status: 200, json: async () => { throw new SyntaxError('not JSON'); }, text: async () => md };
+    }
+    // removecadence: the gap between starting a removal and the next
+    if (MODE.includes('incidentremediation') && p === '/incidents' && new URLSearchParams(String(path).split('?')[1] || '').get('id')) {
+      const incident = data['/incidents'][0];
+      return {ok:true,status:200,json:async()=>({incident,workflow:incident.workflow || {status:'open'}})};
     }
     // removecadence: the gap between starting a removal and the next
     // /worktrees read lands on <pre id="remove-cadence">.

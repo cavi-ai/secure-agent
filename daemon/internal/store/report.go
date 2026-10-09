@@ -44,6 +44,8 @@ type ReportLine struct {
 // its timeline. It carries names, paths, hosts, model ids, rule ids and
 // counts — never content.
 type SessionReport struct {
+	Incidents              []model.IncidentReport      `json:"incidents"`
+	IncidentsAvailable     bool                        `json:"incidents_available"`
 	Interventions          []model.InterventionReceipt `json:"interventions"`
 	InterventionsAvailable bool                        `json:"interventions_available"`
 	Session                model.Session               `json:"session"`
@@ -191,6 +193,9 @@ func (s *Store) SessionReport(id string) (SessionReport, bool) {
 	var interventionErr error
 	rep.Interventions, interventionErr = s.RecentInterventions(id, 200)
 	rep.InterventionsAvailable = interventionErr == nil
+	var incidentErr error
+	rep.Incidents, incidentErr = s.SessionIncidents(id)
+	rep.IncidentsAvailable = incidentErr == nil
 	if rep.Flags == nil {
 		rep.Flags = []model.Flag{}
 	}
