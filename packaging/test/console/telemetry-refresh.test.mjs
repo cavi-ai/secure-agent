@@ -10,7 +10,8 @@ function source(begin, end) {
   return app.slice(start, finish);
 }
 function response(body, status = 200) {
-  return { status, ok: status === 200, json: async () => body };
+  return { status, ok: status === 200, json: async () => body,
+    clone: () => ({ json: async () => status === 403 ? { error: 'console token required' } : body }) };
 }
 function deferred() {
   let resolve;
@@ -22,8 +23,10 @@ function fixture(fetch) {
   let stops = 0, ended = 0;
   const ctx = {
     window: { SA: {} },
-    sessionEnded: false, SS_TOKEN_KEY: 'fixture',
+    sessionEnded: false, SS_TOKEN_KEY: 'fixture', consoleToken: 'fixture', lastSnapshotAt: 0, cancelDialog: null,
     telemetryFetchGen: 0, telemetrySlowGen: 0,
+    sessionMemoryGeneration: 0, sessionTimelineRequest: 0, sessionOverviewGeneration: 0,
+    sessionMemoryState: {}, sessionOverviewState: {}, sessionOverviewRefreshAgain: false,
     historyScopes: { flags: null, events: null },
     reviewCursor: '',
     filters: { flags: { agent: 'all', rule: 'all', minsev: 'all', since: 'all' }, events: { kind: 'all', since: 'all' } },
@@ -47,10 +50,14 @@ function fixture(fetch) {
     spendCardPath: () => '/costs?card'
   };
   vm.createContext(ctx);
+  const authContext = vm.createContext({ AbortController, DOMException, Headers, setTimeout, clearTimeout });
+  vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/console-auth.js', import.meta.url), 'utf8'), authContext);
+  ctx.consoleAuth = authContext.createConsoleAuth({ token: 'fixture', fetchImpl: ctx.apiFetch, onRejected: () => ctx.endSession() });
+  ctx.apiFetch = ctx.consoleAuth.fetch;
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/report-health.js', import.meta.url), 'utf8'), ctx);
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/telemetry-validation.js', import.meta.url), 'utf8'), ctx);
   ctx.reportHealth = ctx.createConsoleReportHealth();
-  vm.runInContext(source('  function endSession()', '  function setConnState(') +
+  vm.runInContext(source('  function endSession()', '  let handoffGeneration') +
     source('  function reportSucceeded(', '  // parseUptimeSec reads') +
     source('  function syncHistoryViews()', '  function flagsQuery()') +
     source('  async function fetchTelemetry(', '  // Every panel is a candidate:'), ctx);

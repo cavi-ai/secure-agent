@@ -10,6 +10,42 @@ import XCTest
 ///     the focus-or-open scripts target an existing tab instead.
 final class ConsoleAccessTests: XCTestCase {
 
+    @MainActor
+    func testReconnectReadsCurrentStatusInsteadOfReopeningAStalePort() async {
+        let client = StubDaemonClient()
+        client.status = StatusResponse(running: true, uptime: "1m", activeAgents: 0, agents: [],
+                                       proxyEnabled: true, proxyPort: 8443, uninspectedEgress: 0, firewallStats: nil)
+        let state = AppState(client: client)
+        await state.performFetch()
+        client.status = StatusResponse(running: true, uptime: "2m", activeAgents: 0, agents: [],
+                                       proxyEnabled: false, proxyPort: 0, uninspectedEgress: 0, firewallStats: nil)
+        await state.reconnectConsole()
+        XCTAssertTrue(state.connected)
+        XCTAssertEqual(state.status?.proxyPort, 0)
+        XCTAssertEqual(state.lastError, "The inspection proxy is off")
+    }
+
+    @MainActor
+    func testReconnectDecodeFailureDoesNotClaimTheDaemonIsDown() async {
+        let client = StubDaemonClient()
+        let state = AppState(client: client)
+        await state.performFetch()
+        client.statusError = DaemonClientError.decode("fixture malformed status")
+        await state.reconnectConsole()
+        XCTAssertTrue(state.connected)
+        XCTAssertTrue(state.lastError?.contains("daemon answered unexpectedly") == true)
+    }
+
+    func testReconnectURLHasNoCallerControlledHandoff() throws {
+        XCTAssertTrue(ConsoleOpener.isReconnectURL(try XCTUnwrap(URL(string: "secure-agent://console/reconnect"))))
+        for value in ["https://console/reconnect", "secure-agent://console/reconnect/",
+                      "secure-agent://console/reconnect?return=https://example.com",
+                      "secure-agent://console/reconnect#ct=caller", "secure-agent://user@console/reconnect",
+                      "secure-agent://console:8443/reconnect", "secure-agent://other/reconnect"] {
+            XCTAssertFalse(ConsoleOpener.isReconnectURL(try XCTUnwrap(URL(string: value))), value)
+        }
+    }
+
     // MARK: proxy_enabled writer
 
     func testProxyEnableReplacesTopLevelKeyOnly() {

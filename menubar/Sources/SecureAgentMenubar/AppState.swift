@@ -904,7 +904,7 @@ public final class AppState: ObservableObject {
         // browser error page.
         guard dashboardUnavailableReason == nil, let port = status?.proxyPort, port > 0 else { return }
         // The console's telemetry endpoints require the console token (a
-        // credential agents never hold). Pass it as a query param; the page
+        // credential agents never hold). Pass it as a fragment; the page
         // lifts it into memory and sends it as a header on every fetch.
         var query = ""
         if let token = try? String(contentsOfFile: NSHomeDirectory() + "/.config/secure-agent/console-token",
@@ -921,12 +921,54 @@ public final class AppState: ObservableObject {
             if let file {
                 query += "&file=\(DaemonClient.urlQueryEscape(file))"
             }
+        } else {
+            lastError = "The console credential could not be read. Restart Secure Agent and try Open console again."
+            onChange?()
+            return
         }
         if let url = URL(string: "http://127.0.0.1:\(port)/dashboard/\(query)") {
             // Focus an already-open console tab instead of spawning a
             // duplicate dead-end tab on every click.
             ConsoleOpener.openOrFocus(url: url, match: ConsoleOpener.tabMatch(port: port))
         }
+    }
+
+    private var isReconnectingConsole = false
+
+    /// Re-read daemon status before the handoff, including when the browser
+    /// launched the app. This does not enable a proxy the user has turned off.
+    func reconnectConsole() async {
+        guard !isReconnectingConsole else { return }
+        isReconnectingConsole = true
+        defer { isReconnectingConsole = false }
+        lastError = nil
+        for attempt in 0..<15 {
+            if Task.isCancelled { return }
+            do {
+                let current = try await client.fetchStatus()
+                status = current
+                connected = true
+                if let reason = dashboardUnavailableReason {
+                    lastError = reason
+                    onChange?()
+                } else {
+                    openDashboard()
+                }
+                return
+            } catch {
+                if let failure = error as? DaemonClientError, case .transport = failure {
+                    // The daemon may still be starting; retry only transport failures.
+                } else {
+                    lastError = "Console access could not be confirmed: \(error.localizedDescription)"
+                    onChange?()
+                    return
+                }
+            }
+            if attempt < 14 { try? await Task.sleep(nanoseconds: 500_000_000) }
+        }
+        connected = false
+        lastError = "The daemon is not responding. Open Secure Agent settings to restart it, then try Reconnect again."
+        onChange?()
     }
 
     @Published public private(set) var isEnablingConsole = false

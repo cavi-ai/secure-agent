@@ -110,17 +110,18 @@
       </div>
     </header>
 
-    <!-- Honest ended state: without a console token (or after a 403) this is
-         the only thing on the page. -->
-    <section class="session-ended-page" id="session-ended" role="alert" hidden>
-      <h1>Console session ended.</h1>
-      <p>Open it again from the Secure Agent menu bar.</p>
+    <section class="session-ended-page" id="session-ended" role="alert" aria-labelledby="console-access-title" hidden>
+      <h1 id="console-access-title">Reconnect this console</h1>
+      <p id="console-access-reason">Open Secure Agent to connect this tab securely.</p>
+      <a class="btn btn-primary" id="console-reconnect" href="secure-agent://console/reconnect">Reconnect with Secure Agent</a>
+      <p class="console-recovery-help">If the app doesn’t open, choose Open console in the Secure Agent menu bar.</p>
     </section>
 
     <!-- Offline banner (shown when the daemon is unreachable) -->
     <div class="offline-banner" id="offline-banner" hidden>
       <svg class="icon"><use href="#i-alert"/></svg>
       <span>Can't reach the Secure Agent daemon — showing the last known state and retrying…</span>
+      <button class="btn btn-ghost btn-sm" id="btn-retry-connection" type="button">Retry now</button>
     </div>
 
     <!-- Posture headline: one line answering "do I need to look?" -->
@@ -804,6 +805,7 @@
   <script src="tab-worktrees.js"></script>
   <script src="tab-agent.js"></script>
   <script src="live-updates.js"></script>
+  <script src="console-auth.js"></script>
   <script src="report-health.js"></script>
   <script src="telemetry-validation.js"></script>
   <script src="app.js"></script>

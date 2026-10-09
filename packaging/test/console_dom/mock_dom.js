@@ -476,6 +476,9 @@
   //   tokenseed    — pre-seed sessionStorage (simulates a RELOADED tab: no
   //                  #ct fragment, token must come from storage).
   const MODE = location.search;
+  let authRecoveryExpired = false;
+  let authRecoveryMutations = 0;
+  let networkRecoveryUnreachable = false;
   if (MODE.includes('filteredscope')) {
     data['/flags'].push({ ...data['/flags'][0], id: 'history-broad-only', ts: iso(2 * 3600000) });
     data['/events'].push({ ...data['/events'][0], ts: iso(2 * 3600000), detail: 'Broad-only history row' });
@@ -1074,15 +1077,22 @@
     fetchCount++;
     stamp('fetch-count', String(fetchCount));
     const p = String(path).split('?')[0];
+    if (MODE.includes('authrecover') && opts?.method === 'POST') authRecoveryMutations++;
     // Failure modes apply to API paths only (assets are served statically).
-    if (MODE.includes('netfail')) {
+    if (MODE.includes('netfail') || networkRecoveryUnreachable) {
       throw new TypeError('Failed to fetch');
     }
-    const token = (opts && opts.headers && opts.headers['X-SecureAgent-Console-Token']) || '';
+    const token = opts?.headers?.get?.('X-SecureAgent-Console-Token') || opts?.headers?.['X-SecureAgent-Console-Token'] || '';
+    if (MODE.includes('permissiondeny') && p === '/reviews/decision') {
+      const body = { error: 'method not permitted for the console token' };
+      return { ok: false, status: 403, clone: () => ({ json: async () => body }), json: async () => body, text: async () => JSON.stringify(body) };
+    }
     if (MODE.includes('authfail') || (MODE.includes('authmixed') && p === '/guard/pending')
-        || (MODE.includes('spendauth') && p === '/costs') || (REQUIRE_TOKEN && token !== 'test-token')) {
+        || (MODE.includes('spendauth') && p === '/costs') || (authRecoveryExpired && token !== 'replacement-token')
+        || (REQUIRE_TOKEN && token !== 'test-token')) {
       return {
         ok: false, status: 403,
+        clone: () => ({ json: async () => ({ error: 'console token required' }) }),
         json: async () => ({ error: 'console token required' }),
         text: async () => '{"error":"console token required"}'
       };
@@ -1210,7 +1220,7 @@
       };
     }
     // Dense workbench pages exercise real scroll anchoring and focus continuity.
-    if (MODE.includes('sessionworkbench') && /^\/sessions\/[^/]+\/memory$/.test(p)) {
+    if ((MODE.includes('sessionworkbench') || MODE.includes('authhistory')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
       const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
       const start = before ? -30 : 0;
       const rows = Array.from({ length: before ? 30 : 90 }, (_, i) => ({ id: 'wb-row-' + (start + i),
@@ -1305,8 +1315,8 @@
           ? { ...body, refreshing: true, generated_at: iso(3 * 3600000) }
           : { ...body, generated_at: iso(0), total: { ...body.total, cost_usd: body.total.cost_usd + 1 } };
       }
-      // spendslowdemo: every /costs answer takes 6 s (a report computed cold).
-      if (MODE.includes('spendslowdemo')) await new Promise(r => setTimeout(r, 6000));
+      // A cold report resolves after the first-render probe, within the 5s request deadline.
+      if (MODE.includes('spendslowdemo')) await new Promise(r => setTimeout(r, 3000));
     }
     return {
       ok: body !== undefined,
@@ -1422,6 +1432,69 @@
     if (group && !group.open) group.open = true;
     return r;
   };
+
+  if (MODE.includes('authrecover')) {
+    let body, focused, top, selected;
+    const receipt = {};
+    setTimeout(async () => {
+      openTab('sessions');
+      await window.selectSession('sess-claude-1');
+      if (MODE.includes('authtrace')) await window.setSessionView('trace');
+      body = document.querySelector('#session-detail .session-detail-body');
+      body.scrollTop = 220;
+      focused = document.querySelector('#session-detail details.session-metadata summary');
+      focused.focus({ preventScroll: true });
+      top = body.scrollTop;
+      selected = window.SA.selectedSessionId;
+      window.saConfirm('Fixture action awaiting confirmation').then(value => { receipt.dialogCancelled = value === false; });
+      authRecoveryExpired = true;
+      // An action is rejected; recovery must never replay it.
+      await window.reviewAct('fixture-review', 1, 'dismiss');
+      receipt.paused = document.body.classList.contains('is-paused') && document.querySelector('main').inert
+        && !document.querySelector('main').hidden && window.__sse.readyState === 2;
+      receipt.retained = body === document.querySelector('#session-detail .session-detail-body')
+        && top === body.scrollTop && selected === window.SA.selectedSessionId;
+      receipt.actionable = document.getElementById('console-reconnect').getAttribute('href') === 'secure-agent://console/reconnect';
+    }, 2000);
+    setTimeout(() => { location.hash = 'ct=invalid-replacement'; }, 3000);
+    setTimeout(() => {
+      receipt.rejectedHandoff = document.querySelector('main').inert && !document.getElementById('session-ended').hidden
+        && !sessionStorage.getItem('sa.console-token') && !location.hash.includes('ct=');
+    }, 3500);
+    setTimeout(() => { location.hash = 'ct=replacement-token'; }, 4000);
+    setTimeout(() => {
+      receipt.resumed = !document.body.classList.contains('is-paused') && !document.querySelector('main').inert
+        && document.getElementById('session-ended').hidden && window.__sse.readyState === 1;
+      receipt.context = selected === window.SA.selectedSessionId && window.SA.activeTab === 'sessions'
+        && window.SA.sessionView === (MODE.includes('authtrace') ? 'trace' : 'memory')
+        && document.activeElement === focused && Math.abs(top - body.scrollTop) < 2;
+      receipt.noReplay = authRecoveryMutations === 1;
+      receipt.stripped = !location.hash.includes('ct=');
+      receipt.sameDocument = body === document.querySelector('#session-detail .session-detail-body');
+      document.body.dataset.authRecovery = JSON.stringify(receipt);
+    }, 7000);
+  }
+
+  if (MODE.includes('notokenrecover')) {
+    setTimeout(() => { location.hash = 'ct=test-token&tab=sessions'; }, 2000);
+  }
+
+  if (MODE.includes('networkrecover')) {
+    setTimeout(() => { networkRecoveryUnreachable = true; document.getElementById('btn-refresh').click(); }, 2000);
+    setTimeout(() => {
+      stamp('network-retained', String(document.getElementById('count-agents').textContent === '3'
+        && document.getElementById('offline-banner').textContent.includes('Last connected at')));
+      networkRecoveryUnreachable = false;
+      document.getElementById('btn-retry-connection').click();
+    }, 3000);
+    setTimeout(() => stamp('network-recovered', String(document.getElementById('offline-banner').hidden
+      && document.getElementById('session-ended').hidden)), 5000);
+  }
+  if (MODE.includes('permissiondeny')) {
+    setTimeout(() => window.reviewAct('fixture-review', 1, 'dismiss'), 2000);
+    setTimeout(() => stamp('permission-retained', String(document.getElementById('session-ended').hidden
+      && window.__sse.readyState === 1 && !!sessionStorage.getItem('sa.console-token'))), 4000);
+  }
 
   // Auto-action: the plain default dump (no query string, no hash — every
   // other dump adds one or the other) is the one many checks below read for
