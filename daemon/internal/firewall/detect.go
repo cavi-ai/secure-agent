@@ -5,6 +5,7 @@ import (
 	"math"
 	"regexp"
 	"regexp/syntax"
+	"sort"
 	"strings"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -58,13 +59,53 @@ func (d *Detector) scan(text string, partial bool) []Hit {
 }
 
 // MaskPatterns replaces every typed-pattern match in text with
-// [REDACTED:<pattern id>].
+// [REDACTED:<pattern id>], using the same token boundaries as detection.
+// Overlapping matches are covered in full with the first configured rule's marker.
 func (d *Detector) MaskPatterns(text string) string {
 	text = redact.PrivateKeys(text)
-	for _, p := range d.patterns {
-		text = p.re.ReplaceAllLiteralString(text, "[REDACTED:"+p.id+"]")
+	type maskSpan struct {
+		start, end, order int
+		id                string
 	}
-	return text
+	var spans []maskSpan
+	for order, p := range d.patterns {
+		for _, span := range tokenStartSpans(p.re, text) {
+			spans = append(spans, maskSpan{start: span[0], end: span[1], order: order, id: p.id})
+		}
+	}
+	if len(spans) == 0 {
+		return text
+	}
+	sort.Slice(spans, func(i, j int) bool {
+		if spans[i].start != spans[j].start {
+			return spans[i].start < spans[j].start
+		}
+		return spans[i].order < spans[j].order
+	})
+	var masked strings.Builder
+	written := 0
+	current := spans[0]
+	writeSpan := func() {
+		masked.WriteString(text[written:current.start])
+		masked.WriteString("[REDACTED:" + current.id + "]")
+		written = current.end
+	}
+	for _, next := range spans[1:] {
+		if next.start < current.end {
+			if next.end > current.end {
+				current.end = next.end
+			}
+			if next.order < current.order {
+				current.order, current.id = next.order, next.id
+			}
+			continue
+		}
+		writeSpan()
+		current = next
+	}
+	writeSpan()
+	masked.WriteString(text[written:])
+	return masked.String()
 }
 
 // ScanPatterns returns the typed-pattern hits only; the entropy layer is

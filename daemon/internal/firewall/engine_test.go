@@ -286,6 +286,19 @@ func TestMaskPreservesDistinctFingerprintMarkers(t *testing.T) {
 	}
 }
 
+func TestMaskCoversOverlappingPatternMatches(t *testing.T) {
+	e, err := NewEngine(config.FirewallConfig{Patterns: []config.PatternConfig{
+		{ID: "short", Re: "fixture-alpha"}, {ID: "long", Re: "fixture-alpha-plus"},
+	}}, []byte("salt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	masked, clean := e.Mask("before fixture-alpha-plus after")
+	if !clean || masked != "before [REDACTED:short] after" {
+		t.Fatalf("overlapping pattern mask = %q, clean=%v", masked, clean)
+	}
+}
+
 func TestMaskWithholdsEntirePrivateKeyBody(t *testing.T) {
 	e, err := NewEngine(config.FirewallConfig{Patterns: []config.PatternConfig{
 		{ID: "private-key", Type: TypePrivateKey, Re: `-----BEGIN [A-Z ]*PRIVATE KEY-----`},
