@@ -12,7 +12,20 @@ import (
 )
 
 func TestSessionCoverageSurvivesBriefConnectionContention(t *testing.T) {
-	s, err := Open(filepath.Join(t.TempDir(), "coverage.db"), "")
+	for _, backend := range []string{"disk", "memory"} {
+		t.Run(backend, func(t *testing.T) {
+			testSessionCoverageConnectionContention(t, backend == "memory")
+		})
+	}
+}
+
+func testSessionCoverageConnectionContention(t *testing.T, inMemory bool) {
+	t.Helper()
+	dbPath := ""
+	if !inMemory {
+		dbPath = filepath.Join(t.TempDir(), "coverage.db")
+	}
+	s, err := Open(dbPath, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +34,9 @@ func TestSessionCoverageSurvivesBriefConnectionContention(t *testing.T) {
 	if err := s.UpsertSession(model.Session{ID: "s", Harness: "claude", RootPID: 42, StartedAt: now.Add(-time.Hour), LastSeenAt: now, Status: model.SessionActive}); err != nil {
 		t.Fatal(err)
 	}
-	s.db.SetMaxOpenConns(1)
+	if !inMemory {
+		s.db.SetMaxOpenConns(1)
+	}
 	// Occupy the SQLite connection briefly, as another evidence read
 	// or write can do while the coverage snapshot is waiting for its turn.
 	conn, err := s.db.Conn(context.Background())
@@ -49,6 +64,28 @@ func TestSessionCoverageSurvivesBriefConnectionContention(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("coverage read did not finish after releasing the connection")
+	}
+}
+
+func TestInMemoryStoresKeepSessionEvidenceIsolated(t *testing.T) {
+	now := time.Now()
+	stores := make([]*Store, 0, 2)
+	for _, id := range []string{"first", "second"} {
+		s, err := Open("", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		if err := s.UpsertSession(model.Session{ID: id, Harness: "claude", RootPID: 42, StartedAt: now.Add(-time.Hour), LastSeenAt: now, Status: model.SessionActive}); err != nil {
+			t.Fatal(err)
+		}
+		stores = append(stores, s)
+	}
+	for i, id := range []string{"first", "second"} {
+		facts, err := stores[i].SessionCoverageSince([]int32{42}, now.Add(-time.Hour), now)
+		if err != nil || len(facts) != 1 || facts[0].ID != id {
+			t.Fatalf("store %s: facts=%+v, err=%v", id, facts, err)
+		}
 	}
 }
 
