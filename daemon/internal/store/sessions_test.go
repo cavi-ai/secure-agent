@@ -328,8 +328,13 @@ func TestOpenMigratesOldEventsTableForCallIndex(t *testing.T) {
 	// And the upsert works end to end on the migrated table.
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: time.Now(), SessionID: "s", CallID: "c1", ToolStatus: "running"})
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: time.Now(), SessionID: "s", CallID: "c1", ToolStatus: "ok"})
-	if n := len(st.QueryEvents(EventFilter{})); n != 1 {
+	kind := int(event.KindToolCall)
+	if n := len(st.QueryEvents(EventFilter{Kind: &kind})); n != 1 {
 		t.Fatalf("events=%d want 1 after upsert on migrated table", n)
+	}
+	rows, err := st.QueryEventsResult(EventFilter{})
+	if err != nil || len(rows) != 2 || rows[1].Path != "/Users/x/.ssh/id_rsa" {
+		t.Fatalf("legacy nullable event lost: %+v, %v", rows, err)
 	}
 }
 

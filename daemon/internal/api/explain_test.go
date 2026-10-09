@@ -546,7 +546,10 @@ func TestFlagsListStampsExplainOnFirst25IncludingHistory(t *testing.T) {
 	if len(flags) != 28 || stamped != 25 {
 		t.Fatalf("flags = %d, stamped = %d, want 28 and 25", len(flags), stamped)
 	}
-	snap := a.currentSnapshot()
+	snap, err := a.currentSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
 	stamped = 0
 	for _, f := range snap.Flags {
 		if f.Explain != nil {

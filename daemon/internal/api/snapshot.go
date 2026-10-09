@@ -43,19 +43,27 @@ func (a *API) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	sessions, err := a.store.ListSessionsResult(store.SessionFilter{Limit: 100})
+	snapshot, err := a.currentSnapshot()
 	if err != nil {
-		http.Error(w, "session data unavailable", http.StatusServiceUnavailable)
+		http.Error(w, "snapshot data unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, a.snapshotWithSessions(sessions))
+	writeJSON(w, snapshot)
 }
 
-func (a *API) currentSnapshot() Snapshot {
-	return a.snapshotWithSessions(a.store.ListSessions(store.SessionFilter{Limit: 100}))
+func (a *API) currentSnapshot() (Snapshot, error) {
+	sessions, err := a.store.ListSessionsResult(store.SessionFilter{Limit: 100})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	events, err := a.store.QueryEventsResult(store.EventFilter{Limit: 50})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return a.snapshotWithSessions(sessions, events), nil
 }
 
-func (a *API) snapshotWithSessions(sessions []model.Session) Snapshot {
+func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Event) Snapshot {
 	incidents := a.store.RecentIncidents(10)
 	out := make([]snapshotIncident, 0, len(incidents))
 	for i := range incidents {
@@ -80,7 +88,7 @@ func (a *API) snapshotWithSessions(sessions []model.Session) Snapshot {
 		Patterns:    patterns,
 		Routine:     routine,
 		Incidents:   out,
-		Events:      priceClassed(a.store.QueryEvents(store.EventFilter{Limit: 50})),
+		Events:      priceClassed(events),
 		Posture:     a.postureWith(patterns, routine),
 		Suggestions: a.suggestionList(),
 		Mutes:       a.mutePairs(),
