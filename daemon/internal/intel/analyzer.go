@@ -86,23 +86,29 @@ func (a *Analyzer) Analyze(flag model.Flag, events []event.Event) model.Incident
 		flag.Rule, flag.Agent, flag.PID, strings.Join(flag.EvidenceStrings(), ", "))
 
 	report := model.IncidentReport{
-		ID:           incID,
-		FlagID:       flag.ID,
-		PID:          flag.PID,
-		Agent:        flag.Agent,
-		Timestamp:    flag.TS,
-		Rule:         flag.Rule,
-		Summary:      summary,
-		Risk:         model.RiskMedium,
-		TouchedFiles: make([]string, 0),
-		Connections:  make([]string, 0),
-		RotateList:   make([]model.RotateItem, 0),
+		ID:              incID,
+		FlagID:          flag.ID,
+		PID:             flag.PID,
+		Agent:           flag.Agent,
+		Timestamp:       flag.TS,
+		Rule:            flag.Rule,
+		Summary:         summary,
+		Risk:            model.RiskMedium,
+		TouchedFiles:    make([]string, 0),
+		Connections:     make([]string, 0),
+		RotateList:      make([]model.RotateItem, 0),
+		PayloadOutcomes: model.PayloadOutcomeForFinding(flag),
 	}
 
 	filesSeen := make(map[string]bool)
 	connsSeen := make(map[string]bool)
 
 	for _, ev := range events {
+		// The proxy has no process identity. A nearby event from another
+		// process cannot identify the credential involved in its payload.
+		if flag.PID == 0 && (flag.SessionID == "" || ev.SessionID != flag.SessionID) {
+			continue
+		}
 		// Attribute only this agent's activity near the incident. When the flag
 		// carries a PID, an event must share it: a zero-PID event cannot be
 		// attributed and must not widen the blast radius to every process.
@@ -336,10 +342,17 @@ func (a *Analyzer) GenerateMarkdown(report model.IncidentReport) string {
 	sb.WriteString(fmt.Sprintf("- **Agent**: `%s` (PID: %d)\n", report.Agent, report.PID))
 	sb.WriteString(fmt.Sprintf("- **Trigger Rule**: `%s`\n", report.Rule))
 	sb.WriteString(fmt.Sprintf("- **Summary**: %s\n\n", report.Summary))
+	outcomes := report.PayloadOutcomes
+	if outcomes == nil && report.Rule == "proxy-secret-leak" {
+		outcomes = &model.PayloadOutcomeSummary{Unknown: max(1, report.AggregateCount)}
+	}
+	if outcomes != nil {
+		sb.WriteString("## Local proxy control results\n\n" + outcomes.Summary() + "\n\n")
+	}
 
 	sb.WriteString("## 📋 Priority \"Rotate-This\" Remediation Checklist\n\n")
 	if len(report.RotateList) == 0 {
-		sb.WriteString("_No high-risk credentials directly detected for automatic rotation._\n\n")
+		sb.WriteString("_No specific credential remediation items were identified. This does not establish that no credential was exposed; rotation or revocation is external work._\n\n")
 	} else {
 		for i, rot := range report.RotateList {
 			sb.WriteString(fmt.Sprintf("### %d. %s [%s]\n", i+1, rot.Name, rot.Risk))

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -102,6 +103,11 @@ func renderSessionMarkdown(rep store.SessionReport) string {
 	}
 	for _, f := range rep.Flags {
 		fmt.Fprintf(&b, "- severity %d · %s · %s\n", f.Severity, mdText(f.Rule), f.TS.Local().Format("2006-01-02 15:04:05"))
+		a := model.AssessFinding(f)
+		fmt.Fprintf(&b, "  - review: %s · control: %s · residual risk: %s\n  - %s\n", mdText(a.ReviewState), mdText(a.Control), mdText(a.ResidualRisk), mdText(a.Reason))
+		for _, limit := range a.Limits {
+			fmt.Fprintf(&b, "  - %s\n", mdText(limit))
+		}
 	}
 
 	b.WriteString("\n## Secret hits\n")

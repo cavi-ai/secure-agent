@@ -296,7 +296,8 @@ function incidentBodyHTML(inc, ctx, actions = true) {
     + `<strong>${escapeHTML(item.name)}</strong> (${escapeHTML(item.category)})</span></div>`).join('');
   return bodyHTML(`data-incident-id="${escapeHTML(inc.id)}"`, {
     lead: inc.summary,
-    parts: (ctx.advisor && inc.advisor_narrative ? `<p class="body-note">${escapeHTML(inc.advisor_narrative)}</p>` : '')
+    parts: payloadOutcomeHTML(inc.payload_outcomes || (inc.rule === 'proxy-secret-leak' ? { unknown: inc.aggregate_count || 1 } : null))
+      + (ctx.advisor && inc.advisor_narrative ? `<p class="body-note">${escapeHTML(inc.advisor_narrative)}</p>` : '')
       + (wf.resolution_note ? `<p class="body-note">Reported resolution: ${escapeHTML(wf.resolution_note)}</p>` : ''),
     actions: actions ? actionBarHTML(incidentActionItems(inc)) : '',
     evidenceLabel: 'Secrets to rotate', evidence: rotate,

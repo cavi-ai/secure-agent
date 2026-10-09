@@ -22,6 +22,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/injection"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
 const (
@@ -645,7 +646,10 @@ func (ps *ProxyServer) inspectRequest(r *http.Request, host string) (blocked boo
 			continue
 		}
 		d := fmt.Sprintf("proxy-secret-leak:%s", f.Hit.RuleID)
-		ps.publishHit(host, d)
+		layers := map[firewall.Layer]string{firewall.LayerFingerprint: "fingerprint", firewall.LayerPattern: "pattern", firewall.LayerEntropy: "entropy"}
+		fields := map[firewall.Field]string{firewall.FieldAuthHeader: "auth-header", firewall.FieldOtherHeader: "other-header", firewall.FieldQuery: "query", firewall.FieldBody: "body"}
+		actions := map[firewall.Action]string{firewall.ActionAllow: "allow", firewall.ActionWouldBlock: "would-block", firewall.ActionBlock: "block"}
+		ps.publishProxyHit(host, d, &model.PayloadEvidence{Layer: layers[f.Hit.Layer], Field: fields[f.Ctx.Field], Verdict: "leak", FindingAction: actions[f.Verdict.Action], RequestAction: actions[dec.Action]})
 		if detail == "" {
 			detail = d
 		}
@@ -729,6 +733,10 @@ func writeRawResponse(w io.Writer, status int, statusText, body string, keepAliv
 }
 
 func (ps *ProxyServer) publishHit(host, detail string) {
+	ps.publishProxyHit(host, detail, nil)
+}
+
+func (ps *ProxyServer) publishProxyHit(host, detail string, payload *model.PayloadEvidence) {
 	hostOnly := host
 	port := 443
 	if h, pStr, err := net.SplitHostPort(host); err == nil {
@@ -744,5 +752,6 @@ func (ps *ProxyServer) publishHit(host, detail string) {
 		RemoteHost: hostOnly,
 		RemotePort: port,
 		Detail:     detail,
+		Payload:    payload,
 	})
 }
