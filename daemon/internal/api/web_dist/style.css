@@ -1058,6 +1058,8 @@ body {
 }
 .offline-banner .icon { font-size: 1.05rem; flex: none; }
 .offline-banner[hidden] { display: none; }
+.offline-banner span { flex: 1; }
+.offline-banner .btn { flex: none; }
 
 /* ---------- tabs ---------- */
 /* Sticky over the content, opaque so rows do not show through. The negative
@@ -1171,7 +1173,7 @@ body {
 .policy-decision.allow { color: var(--ok); }
 .policy-decision.deny { color: var(--bad); }
 
-/* Ended session: the only thing on the page. */
+/* Access recovery keeps the cached workspace mounted and disables its controls. */
 .session-ended-page {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 8px; min-height: 60vh; text-align: center; padding: 24px 16px;
@@ -1179,6 +1181,14 @@ body {
 .session-ended-page[hidden] { display: none; }
 .session-ended-page h1 { margin: 0; font-size: 1.3rem; color: var(--tx-1); }
 .session-ended-page p { margin: 0; color: var(--tx-2); }
+.session-ended-page .console-recovery-help { max-width: 36em; font-size: .82rem; }
+body.is-paused .session-ended-page {
+  position: fixed; z-index: 1000; top: 50%; left: 50%; min-height: 0;
+  transform: translate(-50%, -50%); width: min(560px, calc(100vw - 32px));
+  background: var(--bg-1); padding: 32px; border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: var(--sh-2);
+}
+body.is-paused .app > :not(.masthead):not(#session-ended) { opacity: .45; }
 body.is-ended .app > :not(.masthead):not(#session-ended),
 body.is-ended .masthead-right { display: none !important; }
 .tabpanel { display: flex; flex-direction: column; gap: 18px; animation: rise .2s var(--ease) both; }

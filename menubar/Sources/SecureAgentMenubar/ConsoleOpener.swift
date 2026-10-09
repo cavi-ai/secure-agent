@@ -9,6 +9,12 @@ import AppKit
 /// open, because a duplicate tab is bad but no tab is worse.
 enum ConsoleOpener {
 
+    /// The browser can request a fresh handoff, never supply a credential,
+    /// target port or return URL. Those come only from the local daemon.
+    static func isReconnectURL(_ url: URL) -> Bool {
+        url.absoluteString == "secure-agent://console/reconnect"
+    }
+
     /// The URL substring identifying a console tab (loopback dashboard).
     static func tabMatch(port: Int) -> String { "127.0.0.1:\(port)/dashboard" }
 

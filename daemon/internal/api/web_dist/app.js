@@ -7,20 +7,12 @@ document.addEventListener('DOMContentLoaded', () => {
   //
   // The fragment is lifted, kept for the life of the TAB in sessionStorage,
   // and stripped from the address bar. Without the sessionStorage copy a
-  // single reload lost the token (fragments don't survive navigation) and the
+  // single reload lost the token and the
   // console sat behind a wall of 403s showing "can't reach the daemon"
   // forever. sessionStorage (not localStorage): the token dies with the tab
-  // and never touches disk-backed storage.
+  // rather than being retained across browser sessions.
   const SS_TOKEN_KEY = 'sa.console-token';
   const hashParams = new URLSearchParams(location.hash.slice(1));
-  // The menu bar loads a fresh #ct= into an existing console tab (a tab
-  // whose session ended included): keep the new token and start over.
-  window.addEventListener('hashchange', () => {
-    const fresh = new URLSearchParams(location.hash.slice(1)).get('ct');
-    if (!fresh) return;
-    try { sessionStorage.setItem(SS_TOKEN_KEY, fresh); } catch { /* private mode: the reload reads the hash */ }
-    location.reload();
-  });
   let consoleToken = hashParams.get('ct') || '';
   if (consoleToken) {
     try { sessionStorage.setItem(SS_TOKEN_KEY, consoleToken); } catch { /* private mode: memory only */ }
@@ -34,35 +26,31 @@ document.addEventListener('DOMContentLoaded', () => {
   } else {
     try { consoleToken = sessionStorage.getItem(SS_TOKEN_KEY) || ''; } catch { consoleToken = ''; }
   }
-  // Honest ended state: without a token nothing else paints — no posture,
-  // no counts, no panels, no fetches, no stream. Only the menu bar can mint
-  // a session.
+  const pausedElements = new Map();
+  let recoveryFocus = null;
+  // A rejected credential pauses the existing view. A tab without a
+  // credential at boot has no cached data to display.
   function showSessionEnded() {
-    document.body.classList.add('is-ended');
+    const cached = booted;
+    document.body.classList.add(cached ? 'is-paused' : 'is-ended');
     const ended = document.getElementById('session-ended');
+    recoveryFocus = document.activeElement;
     document.querySelectorAll('.app > *, .masthead-right, #drawer, #confirm-layer').forEach(el => {
-      if (el !== ended && !el.classList.contains('masthead')) el.hidden = true;
+      if (el !== ended && !el.classList.contains('masthead')) {
+        pausedElements.set(el, { inert: el.inert, hidden: el.hidden });
+        el.inert = true;
+        if (!cached) el.hidden = true;
+      }
     });
+    const reason = document.getElementById('console-access-reason');
+    if (reason) reason.textContent = cached
+      ? 'Console access expired. Your view is preserved; live updates and actions are paused.'
+      : 'Open Secure Agent to connect this tab securely.';
     if (ended) ended.hidden = false;
+    document.getElementById('console-reconnect')?.focus({ preventScroll: true });
   }
-  if (consoleBootState(hashParams.get('ct'), consoleToken) === 'ended') {
-    showSessionEnded();
-    return;
-  }
-  const authHeaders = consoleToken ? { 'X-SecureAgent-Console-Token': consoleToken } : {};
-
-  // Every request carries a timeout: a hung endpoint must not wedge the whole
-  // refresh cycle (Promise.all resolves only as fast as its slowest member).
-  const FETCH_TIMEOUT_MS = 5000;
-  // opts.timeoutMs raises it for the few calls that do real work on request
-  // (a worktree scan reads every repository).
-  const apiFetch = (path, opts = {}) => {
-    const { timeoutMs, ...init } = opts;
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), timeoutMs || FETCH_TIMEOUT_MS);
-    return fetch(path, { ...init, signal: ctl.signal, headers: { ...authHeaders, ...(init.headers || {}) } })
-      .finally(() => clearTimeout(timer));
-  };
+  const consoleAuth = createConsoleAuth({ token: consoleToken, onRejected: endSession });
+  const apiFetch = consoleAuth.fetch;
 
   const btnRefresh = document.getElementById('btn-refresh');
   const drawer = document.getElementById('drawer');
@@ -160,8 +148,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const confirmInputEl = document.getElementById('confirm-input');
   const confirmOkEl = document.getElementById('confirm-ok');
   const confirmCancelEl = document.getElementById('confirm-cancel');
+  let cancelDialog = null;
 
   function saDialog({ title, message, okLabel, withInput, placeholder, danger }) {
+    if (sessionEnded) return Promise.resolve(withInput ? null : false);
+    if (cancelDialog) cancelDialog();
+    const opener = document.activeElement;
     if (!confirmLayer) {
       const text = withInput ? window.prompt(message, '') : null;
       return Promise.resolve(withInput ? text : window.confirm(message));
@@ -181,10 +173,13 @@ document.addEventListener('DOMContentLoaded', () => {
         confirmOkEl.removeEventListener('click', okHandler);
         confirmCancelEl.removeEventListener('click', cancelHandler);
         confirmLayer.hidden = true;
+        cancelDialog = null;
+        if (opener?.isConnected) opener.focus({ preventScroll: true });
         resolve(value);
       };
       const okHandler = () => finish(withInput ? (confirmInputEl.value || '') : true);
       const cancelHandler = () => finish(withInput ? null : false);
+      cancelDialog = cancelHandler;
       confirmOkEl.addEventListener('click', okHandler, { once: true });
       confirmCancelEl.addEventListener('click', cancelHandler, { once: true });
     });
@@ -226,6 +221,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchTelemetry({ full: true });
     showToast('Refreshing telemetry data...', 'info');
   });
+  document.getElementById('btn-retry-connection')?.addEventListener('click', () => fetchTelemetry({ full: true }));
 
   const btnAddSource = document.getElementById('btn-add-source');
   const sourceInput = document.getElementById('source-input');
@@ -304,12 +300,11 @@ document.addEventListener('DOMContentLoaded', () => {
   //  - 'unreachable':  network-level failure — the daemon or its proxy
   //                    listener is gone; the last known state stays visible.
   //  - 'invalid-response': the daemon replied with malformed telemetry.
-  // A 403 ends the session: the token is missing or rotated, only the menu bar can
-  // mint a fresh session, and the page switches to the ended state
-  // (endSession).
+  // A credential challenge pauses access until the app hands off a fresh token.
   let connState = 'ok';
-  let sessionEnded = false;
+  let sessionEnded = !consoleToken;
   let liveUpdates = null;
+  let lastSnapshotAt = 0;
   // Fast refreshes supersede fast state without starving slower reports.
   let telemetryFetchGen = 0;
   let telemetrySlowGen = 0;
@@ -366,22 +361,78 @@ document.addEventListener('DOMContentLoaded', () => {
     banner.hidden = false;
     if (text) text.textContent = connState === 'invalid-response'
       ? "The daemon returned invalid telemetry — showing the last known state and retrying…"
-      : "Can't reach the Secure Agent daemon — showing the last known state and retrying…";
+      : (lastSnapshotAt ? `Can't reach Secure Agent. Last connected at ${new Date(lastSnapshotAt).toLocaleTimeString()} — retrying automatically.`
+        : 'Waiting for Secure Agent. No live data received — retrying automatically.');
   }
 
-  // endSession: a 403 means the token is dead. Drop it, stop every timer and
-  // the stream, and show only the ended state; nothing retries.
+  // Credential rejection stops delivery. No mutation is queued or replayed.
   function endSession() {
+    consoleToken = '';
+    consoleAuth.replaceToken('');
+    try { sessionStorage.removeItem(SS_TOKEN_KEY); } catch { /* private mode */ }
     if (sessionEnded) return;
     sessionEnded = true;
-    try { sessionStorage.removeItem(SS_TOKEN_KEY); } catch { /* private mode */ }
+    if (cancelDialog) cancelDialog();
     clearInterval(sparkTimer);
     clearTimeout(spendPollTimer);
     spendPollTimer = null;
     spendGen++; // invalidate spend responses already in flight
+    sessionMemoryGeneration++;
+    sessionTimelineRequest++;
+    sessionOverviewGeneration++;
+    sessionMemoryState = { ...sessionMemoryState, loading: false, loadingEarlier: false };
+    sessionOverviewState = { loading: false, error: 'unavailable' };
+    sessionOverviewRefreshAgain = false;
     if (liveUpdates) liveUpdates.stop();
     showSessionEnded();
   }
+
+  let handoffGeneration = 0;
+  window.addEventListener('hashchange', async () => {
+    const handoff = new URLSearchParams(location.hash.slice(1));
+    const fresh = handoff.get('ct');
+    if (!fresh) return;
+    const generation = ++handoffGeneration;
+    endSession();
+    consoleToken = fresh;
+    consoleAuth.replaceToken(fresh);
+    try { sessionStorage.setItem(SS_TOKEN_KEY, fresh); } catch { /* memory only */ }
+    // Strip the credential immediately. A general reopen keeps the current
+    // route; an explicit drill-down from the menu bar takes its requested tab.
+    let route = activeTab === 'sessions' ? 'sessions/' + activeSub : activeTab;
+    try { route = sessionStorage.getItem('sa.console-tab') || route; } catch { /* memory only */ }
+    route = handoff.get('tab') || route || 'home';
+    history.replaceState(null, '', location.pathname + location.search + '#' + route);
+    const reason = document.getElementById('console-access-reason');
+    reason.textContent = 'Checking the connection. Your view is preserved; actions remain paused.';
+    try {
+      const response = await apiFetch('/snapshot');
+      if (!response.ok || !isConsoleReport('snapshot', await response.json())) throw new Error('Connection unavailable');
+    } catch {
+      if (generation === handoffGeneration) reason.textContent = 'Could not reconnect. Check that Secure Agent is running, then choose Reconnect again.';
+      return;
+    }
+    if (generation !== handoffGeneration) return;
+    sessionEnded = false;
+    document.body.classList.remove('is-ended', 'is-paused');
+    document.getElementById('session-ended').hidden = true;
+    for (const [el, previous] of pausedElements) {
+      el.inert = previous.inert;
+      el.hidden = previous.hidden;
+    }
+    pausedElements.clear();
+    if (handoff.has('tab')) switchTab(route, { skipHash: true });
+    if (recoveryFocus?.isConnected) recoveryFocus.focus({ preventScroll: true });
+    telemetryFetchGen++;
+    telemetrySlowGen++;
+    if (liveUpdates) liveUpdates.stop();
+    startLiveUpdates();
+    clearInterval(sparkTimer);
+    sparkTimer = setInterval(() => { sparkAdvance(); drawSpark(); }, 1000);
+    if (selectedSessionId) loadSelectedSession(selectedSessionId);
+    const file = handoff.get('file');
+    if (file) window.openFileDetail(file);
+  });
 
   function setConnState(next) {
     connState = next;
@@ -470,7 +521,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (rate) rate.textContent = `${sparkBuckets[SPARK_BUCKETS - 1]}/s`;
   }
 
-  const sparkTimer = setInterval(() => { sparkAdvance(); drawSpark(); }, 1000);
+  let sparkTimer = consoleToken ? setInterval(() => { sparkAdvance(); drawSpark(); }, 1000) : null;
 
   // Count events the poll path surfaced that SSE didn't announce (fallback
   // mode), so the sparkline stays honest when push is unavailable.
@@ -1153,7 +1204,6 @@ document.addEventListener('DOMContentLoaded', () => {
     markDirty('policy');
     const get = async (path) => {
       const r = await apiFetch(path);
-      if (r.status === 403) { endSession(); throw new Error('session ended'); }
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
       return (await r.json()) || [];
     };
@@ -1241,7 +1291,6 @@ document.addEventListener('DOMContentLoaded', () => {
       init.body = JSON.stringify(opts.body);
     }
     const r = await apiFetch(path, init);
-    if (r.status === 403) { endSession(); throw new Error('session ended'); }
     const text = await r.text();
     if (!r.ok) throw new Error(text.trim() || String(r.status));
     try { return JSON.parse(text); } catch { return null; }
@@ -1658,8 +1707,7 @@ document.addEventListener('DOMContentLoaded', () => {
   switchTab(initialTab, { skipHash: true });
 
   async function fetchTelemetry(opts) {
-    // grab(): one fetch with honest failure semantics. 403 = the session is
-    // dead (drives the ended state). Other failures mark that report stale
+    // The shared request gate handles credential rejection. Other failures mark that report stale
     // or unavailable; snapshot failure also changes the connection status.
     // A failed endpoint NEVER overwrites the panel's last good data.
     if (sessionEnded) return;
@@ -1684,7 +1732,6 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const r = await apiFetch(path);
         if (sessionEnded) return null;
-        if (r.status === 403) { endSession(); return null; }
         if (!ownsResult()) return null;
         if (!r.ok) { noteEndpointFailure(key); reportFailed(key, `HTTP ${r.status}`); return null; }
         const value = await r.json();
@@ -1712,6 +1759,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (current()) {
       if (guardPending) telemetryData.guardPending = guardPending || [];
       if (snap) {
+        lastSnapshotAt = Date.now();
         const status = snap.status;
         if (status) {
           const up = parseUptimeSec(status.uptime);
@@ -1837,7 +1885,6 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const r = await apiFetch(path);
         if (sessionEnded) return null;
-        if (r.status === 403) { endSession(); return null; }
         if (!ownsResult(key)) return null;
         if (!r.ok) { noteEndpointFailure(key); reportFailed(key, `HTTP ${r.status}`); return null; }
         const value = await r.json();
@@ -2917,9 +2964,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!force && Date.now() - sessionTimelineAt < 2000) return;
     sessionTimelineAt = Date.now();
     const request = ++sessionTimelineRequest;
-    const r = await apiFetch('/sessions/' + encodeURIComponent(id) + '/timeline?limit=500');
-    const rows = r.ok ? (await r.json()) || [] : [];
-    if (id === selectedSessionId && generation === sessionMemoryGeneration && request === sessionTimelineRequest && sessionView === 'trace') sessionTimeline = rows;
+    try {
+      const r = await apiFetch('/sessions/' + encodeURIComponent(id) + '/timeline?limit=500');
+      if (!r.ok) return;
+      const rows = (await r.json()) || [];
+      if (id === selectedSessionId && generation === sessionMemoryGeneration && request === sessionTimelineRequest && sessionView === 'trace') sessionTimeline = rows;
+    } catch { /* retain the last trace while access is paused or unavailable */ }
   }
   // Export: copy the session's markdown report. Safari only honours a
   // clipboard write started inside the click, so where ClipboardItem exists
@@ -4967,6 +5017,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (i >= 0) list[i] = item; else list.unshift(item);
     return list;
   };
+  function startLiveUpdates() {
   liveUpdates = createConsoleLiveUpdates({
     refresh: fetchTelemetry,
     streamURL: '/events/stream' + (consoleToken ? '?ct=' + encodeURIComponent(consoleToken) : ''),
@@ -5027,4 +5078,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
   liveUpdates.start();
+  }
+  if (sessionEnded) showSessionEnded();
+  else startLiveUpdates();
 });

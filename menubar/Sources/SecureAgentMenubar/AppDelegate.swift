@@ -13,6 +13,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     /// A repair URL that arrives before launch finishes waits for it.
     private var launched = false
     private var telemetryRepairRequested = false
+    private var consoleReconnectRequested = false
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         // The Dock is the durable fallback control when macOS hides a status
@@ -72,6 +73,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         state.onChange = { [weak self] in self?.updateStatusIcon() }
         state.onNewCriticalFlag = { [weak self] in self?.flashStatusBadge() }
         state.start()
+        if consoleReconnectRequested {
+            consoleReconnectRequested = false
+            reconnectConsole()
+        }
 
         Task {
             await SetupManager.shared.reapplyClaudeRouting()
@@ -87,11 +92,25 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     /// `secure-agent://telemetry/repair`, from `secure-agent telemetry repair`:
     /// re-register the file-telemetry helper now.
     public func application(_ application: NSApplication, open urls: [URL]) {
+        if urls.contains(where: ConsoleOpener.isReconnectURL) {
+            if launched { reconnectConsole() }
+            else { consoleReconnectRequested = true }
+        }
         guard urls.contains(where: ESAutopilot.isRepairURL) else { return }
         if launched {
             SetupManager.shared.reregisterESService()
         } else {
             telemetryRepairRequested = true
+        }
+    }
+
+    private func reconnectConsole() {
+        Task {
+            await state.reconnectConsole()
+            if state.lastError != nil {
+                SettingsWindowController.shared.show()
+                NSApp.activate(ignoringOtherApps: true)
+            }
         }
     }
 

@@ -70,7 +70,7 @@ def find_chrome():
 def build_harness(tmp):
     """Harness page = real index.html with mock_dom.js injected between lib.js
     and app.js. Real assets are symlinked so relative paths resolve."""
-    for f in ("index.html", "style.css", "lib.js", "live-updates.js", "report-health.js", "telemetry-validation.js", "app.js",
+    for f in ("index.html", "style.css", "lib.js", "live-updates.js", "console-auth.js", "report-health.js", "telemetry-validation.js", "app.js",
               "tab-overview.js", "tab-sessions.js", "tab-agents.js", "tab-egress.js", "tab-findings.js",
               "tab-worktrees.js", "tab-agent.js", "theme-init.js", "icon.svg"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))
@@ -159,6 +159,7 @@ def main():
     ap.add_argument("--screenshot", metavar="DIR",
                     help="also write {sessions,agents,agent}-{dark,light}.png and overview-dark.png of the mock-rendered tabs to DIR")
     ap.add_argument('--session-workbench-only', action='store_true', help='run bounded Sessions workbench interaction probes only')
+    ap.add_argument('--auth-recovery-only', action='store_true', help='run console access recovery probes only')
     args = ap.parse_args()
     chrome = find_chrome()
     if not chrome:
@@ -170,6 +171,31 @@ def main():
     try:
         build_harness(tmp)
         srv, origin = serve_with_csp(tmp)
+        if not args.session_workbench_only:
+            for label, query, size in [('memory', '?authrecover&authhistory', (1280, 800)),
+                                       ('trace', '?authrecover&authtrace', (900, 768))]:
+                recovery_dom = dump_dom(chrome, tmp, query, origin, window_size=size)
+                receipt = re.search(r'data-auth-recovery="([^"]+)"', recovery_dom)
+                state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+                check(f'console recovery ({label}): receipt produced', bool(state), str(state))
+                for name, result in state.items():
+                    check(f'console recovery ({label}): {name}', result is True, str(result))
+            first_connect = dump_dom(chrome, tmp, '?notokenrecover', origin)
+            check('credential handoff connects an initially unauthenticated tab without reload',
+                  'id="count-agents">3<' in first_connect and 'class="is-ended"' not in first_connect
+                  and re.search(r'<section[^>]*id="session-ended"[^>]*\bhidden\b', first_connect) is not None)
+            network_recovery = dump_dom(chrome, tmp, '?networkrecover', origin)
+            check('connection failure retains cached data with a last-connected time; Retry now reconnects',
+                  '<pre id="network-retained" hidden="">true</pre>' in network_recovery
+                  and '<pre id="network-recovered" hidden="">true</pre>' in network_recovery)
+            permission_denial = dump_dom(chrome, tmp, '?permissiondeny', origin)
+            check('permission denial retains console authentication and its live stream',
+                  '<pre id="permission-retained" hidden="">true</pre>' in permission_denial)
+        if args.auth_recovery_only:
+            print(f"\n{len(passed)} passed, {len(failed)} failed")
+            if failed:
+                raise SystemExit(1)
+            return
         for label, size in [('desktop', (1280, 800)), ('narrow', (900, 768))]:
             workbench_dom = dump_dom(chrome, tmp, '?sessionworkbench', origin, window_size=size)
             receipt = re.search(r'data-session-workbench="([^"]+)"', workbench_dom)
@@ -892,9 +918,9 @@ def main():
               '<pre id="race-old-returned" hidden="">yes</pre>' in dom_refreshrace
               and 'id="count-agents">3<' in dom_refreshrace)
         check("auth-expired shows the ended state, not 'daemon down'",
-              'id="session-ended" role="alert">' in dom_authfail
-              and "Console session ended." in dom_authfail
-              and "Open it again from the Secure Agent menu bar." in dom_authfail
+              re.search(r'<section[^>]*id="session-ended"[^>]*>', dom_authfail) is not None
+              and "Reconnect this console" in dom_authfail
+              and 'href="secure-agent://console/reconnect"' in dom_authfail
               and "Can&#x27;t reach the Secure Agent daemon" not in dom_authfail.split('id="session-ended"', 1)[1].split('</section>', 1)[0])
         check("a 403 hides the posture, counts and panels and closes the stream",
               'class="is-ended"' in dom_authfail
@@ -909,15 +935,16 @@ def main():
                   and re.search(r'<main[^>]*\bhidden\b', expired) is not None
                   and '<pre id="sse-state" hidden="">closed</pre>' in expired)
         check("no token at load: only the ended state, no posture, zero fetches, no stream",
-              'id="session-ended" role="alert">' in dom_notoken
+              re.search(r'<section[^>]*id="session-ended"[^>]*>', dom_notoken) is not None
               and re.search(r'<section class="posture" id="posture-banner"[^>]*\bhidden\b', dom_notoken) is not None
               and re.search(r'<section class="statstrip"[^>]*\bhidden\b', dom_notoken) is not None
               and nt_fetches == "0" and 'id="sse-state"' not in dom_notoken,
               f"fetches={nt_fetches}")
         check("a token at load: the console renders, the ended state stays hidden",
-              'id="session-ended" role="alert" hidden' in dom and 'id="count-agents">3<' in dom)
+              re.search(r'<section[^>]*id="session-ended"[^>]*\bhidden\b', dom) is not None and 'id="count-agents">3<' in dom)
         check("unreachable shows the retry banner",
-              "reach the Secure Agent daemon" in dom_netfail)
+              "Waiting for Secure Agent. No live data received" in dom_netfail
+              and 'id="btn-retry-connection"' in dom_netfail)
         check("unreachable sets Disconnected chip",
               'id="status-text">Disconnected<' in dom_netfail)
         check("token survives reload via sessionStorage (no #ct fragment)",
