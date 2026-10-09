@@ -108,12 +108,26 @@ func (a *API) publishPosture(gen uint64, p Posture, force bool) {
 func (a *API) computePosture() Posture {
 	since := time.Now().Add(-24 * time.Hour)
 	patterns, patternErr := a.computePatternsResult(since, patternDefaultMin)
+	failedReads := a.advisorReadFailures("flag")
 	routine, routineErr := a.routineGroupsResult(since)
-	var failedReads []string
+	failedReads = append(failedReads, a.advisorReadFailures("flag")...)
 	if patternErr != nil || routineErr != nil {
 		failedReads = append(failedReads, "flags")
 	}
 	return a.postureWithReadHealth(patterns, routine, failedReads)
+}
+
+// Preserve optional-enrichment faults in this calculation even if a later,
+// narrower query reads only subjects whose advice is healthy.
+func (a *API) advisorReadFailures(kind string) []string {
+	if a.store == nil {
+		return nil
+	}
+	label := kind + " advisor verdicts"
+	if slices.Contains(a.store.WriteHealth().ReadActive, label) {
+		return []string{label}
+	}
+	return nil
 }
 
 // postureWith is computePosture over the 24 h patterns and routine groups

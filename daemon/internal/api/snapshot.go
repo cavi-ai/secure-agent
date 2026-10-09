@@ -89,6 +89,7 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 	if err != nil {
 		return Snapshot{}, err
 	}
+	failedReads := a.advisorReadFailures("incident")
 	flags, err := a.store.QueryFlagsResult(store.FlagFilter{
 		Unacted: true,
 		Since:   time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
@@ -97,6 +98,7 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 	if err != nil {
 		return Snapshot{}, err
 	}
+	failedReads = append(failedReads, a.advisorReadFailures("flag")...)
 	for i := range flags {
 		flags[i].Title = humanFlagTitle(flags[i].Rule)
 		flags[i].ReviewID, _ = a.store.FindingReviewID(flags[i].ID)
@@ -107,10 +109,12 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 	if err != nil {
 		return Snapshot{}, err
 	}
+	failedReads = append(failedReads, a.advisorReadFailures("flag")...)
 	routine, err := a.routineGroupsResult(since)
 	if err != nil {
 		return Snapshot{}, err
 	}
+	failedReads = append(failedReads, a.advisorReadFailures("flag")...)
 	reviews, reviewErr := a.store.ListFindingReviews("", 100)
 	if reviewErr != nil {
 		reviews.Degraded = true
@@ -123,7 +127,7 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 		Routine:     routine,
 		Incidents:   out,
 		Events:      priceClassed(events),
-		Posture:     a.postureWith(patterns, routine),
+		Posture:     a.postureWithReadHealth(patterns, routine, failedReads),
 		Suggestions: a.suggestionList(),
 		Mutes:       a.mutePairs(),
 		Sessions:    sessions,
