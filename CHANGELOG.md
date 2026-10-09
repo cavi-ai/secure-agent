@@ -36,7 +36,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Findings: `test-value` evidence for secrets that look like test values.
 - Pricing: Claude Sonnet 5.5.
 - Proxy: the proxy URL's user part selects `inspect` or `tunnel`.
-- Settings → Secure Agent → Chat: **Review new findings automatically** (`system_agent.auto_review`).
+- Settings → Secure Agent → Chat: **Review new findings automatically** (`system_agent.auto_review`), with editable minimum severity and finding types, and explanations of new findings, batch timing and confirmation requirements.
 - Settings → Secure Agent → Traffic: route Claude Code through Secure Agent's proxy.
 - Status: per-harness trace and guard support.
 - Status: `proxy_tunneled`, `proxy_decrypted`, `es_service.newest_event_at` and `lag_seconds`.

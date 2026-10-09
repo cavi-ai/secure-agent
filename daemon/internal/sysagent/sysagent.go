@@ -144,6 +144,25 @@ func (a *Agent) AutoReview() bool {
 	return c.Enabled && c.AutoReview
 }
 
+// AutoReviewFinding applies the current policy to a finding. Call both when
+// enqueueing and before dispatch so live edits also apply to waiting batches.
+func (a *Agent) AutoReviewFinding(f model.Flag) bool {
+	c := a.config()
+	minimum := c.AutoReviewMinSeverity
+	if minimum == 0 {
+		minimum = 2
+	}
+	if !c.Enabled || !c.AutoReview || f.Acknowledged || f.Severity < minimum {
+		return false
+	}
+	for _, rule := range c.AutoReviewExcludedRules {
+		if rule == f.Rule {
+			return false
+		}
+	}
+	return true
+}
+
 // HarnessStatus is one harness as the console shows it.
 type HarnessStatus struct {
 	ID        string `json:"id"`

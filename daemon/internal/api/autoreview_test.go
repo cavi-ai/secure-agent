@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -25,11 +27,12 @@ type scheduledFlush struct {
 // flush scheduler. release, when non-nil, holds every model answer until
 // closed.
 type autoReviewRig struct {
-	a     *API
-	agent *sysagent.Agent
-	st    *store.Store
-	mu    sync.Mutex
-	sched []scheduledFlush
+	a        *API
+	agent    *sysagent.Agent
+	st       *store.Store
+	mu       sync.Mutex
+	sched    []scheduledFlush
+	endpoint string
 }
 
 func newAutoReviewRig(t *testing.T, enabled, autoReview bool, release chan struct{}) *autoReviewRig {
@@ -51,7 +54,7 @@ func newAutoReviewRig(t *testing.T, enabled, autoReview bool, release chan struc
 	st := testStore(t)
 	agent := sysagent.New(st, t.TempDir(), func(s string) (string, bool) { return s, true })
 	agent.SetConfig(config.SystemAgentConfig{Enabled: enabled, Endpoint: ollama.URL, TimeoutMinutes: 1, AutoReview: autoReview})
-	rig := &autoReviewRig{a: New(Deps{Store: st, SysAgent: agent}), agent: agent, st: st}
+	rig := &autoReviewRig{a: New(Deps{Store: st, SysAgent: agent}), agent: agent, st: st, endpoint: ollama.URL}
 	at := time.Now()
 	rig.a.autoReview.now = func() time.Time { return at }
 	rig.a.autoReview.schedule = func(d time.Duration, f func()) {
@@ -174,5 +177,71 @@ func TestAutoReviewKeepsTheBatchWhileTheAgentIsBusy(t *testing.T) {
 	got := r.reviews()
 	if len(got) != 2 || strings.Join(got[1].FlagIDs, ",") != "f2" {
 		t.Fatalf("reviews = %d, last carries %v; want f2 reviewed after the retry", len(got), got[len(got)-1].FlagIDs)
+	}
+}
+
+// Exercise the persisted policy through the actual queue and local review path.
+func (r *autoReviewRig) policy(t *testing.T, yaml string) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("system_agent:\n  enabled: true\n  auto_review: true\n  endpoint: "+r.endpoint+"\n"+yaml), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadStrict(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.agent.SetConfig(cfg.SystemAgent)
+}
+
+func TestAutoReviewUsesConfiguredEligibility(t *testing.T) {
+	r := newAutoReviewRig(t, true, true, nil)
+	r.policy(t, "  auto_review_min_severity: 3\n  auto_review_excluded_rules: [secret-in-transcript]\n")
+	excluded := r.flag("excluded", 3, false)
+	low := r.flag("low", 2, false)
+	low.Rule = "proxy-secret-leak"
+	r.st.PutFlag(low)
+	included := r.flag("included", 3, false)
+	included.Rule = "proxy-secret-leak"
+	r.st.PutFlag(included)
+	for _, f := range []model.Flag{excluded, low, included} {
+		r.a.NoteNewFlag(f)
+	}
+	r.scheduled()[0].f()
+	r.agent.Wait()
+	got := r.reviews()
+	if len(got) != 1 || strings.Join(got[0].FlagIDs, ",") != "included" {
+		t.Fatalf("reviews = %+v, want only included", got)
+	}
+}
+
+func TestAutoReviewRechecksPolicyBeforeSending(t *testing.T) {
+	r := newAutoReviewRig(t, true, true, nil)
+	r.a.NoteNewFlag(r.flag("excluded", 3, false))
+	r.a.NoteNewFlag(r.flag("low", 2, false))
+	keep := r.flag("keep", 3, false)
+	keep.Rule = "proxy-secret-leak"
+	r.st.PutFlag(keep)
+	r.a.NoteNewFlag(keep)
+	r.policy(t, "  auto_review_min_severity: 3\n  auto_review_excluded_rules:\n    - secret-in-transcript\n")
+	r.scheduled()[0].f()
+	r.agent.Wait()
+	got := r.reviews()
+	if len(got) != 1 || strings.Join(got[0].FlagIDs, ",") != "keep" {
+		t.Fatalf("reviews = %+v, want only keep after policy change", got)
+	}
+}
+
+func TestAutoReviewCanIncludeInformationalFindings(t *testing.T) {
+	r := newAutoReviewRig(t, true, true, nil)
+	r.policy(t, "  auto_review_min_severity: 1\n")
+	r.a.NoteNewFlag(r.flag("info", 1, false))
+	if len(r.scheduled()) != 1 {
+		t.Fatal("informational finding did not queue")
+	}
+	r.scheduled()[0].f()
+	r.agent.Wait()
+	if got := r.reviews(); len(got) != 1 || strings.Join(got[0].FlagIDs, ",") != "info" {
+		t.Fatalf("reviews = %+v", got)
 	}
 }

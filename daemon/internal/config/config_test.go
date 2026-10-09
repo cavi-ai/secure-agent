@@ -659,8 +659,8 @@ func TestSystemAgentKey(t *testing.T) {
 	if c, err = Load(p); err != nil {
 		t.Fatal(err)
 	}
-	want := SystemAgentConfig{Enabled: true, Endpoint: "http://localhost:11500", Model: "qwen3", HarnessModel: "qwen3-coder", TimeoutMinutes: 30, AutoReview: true}
-	if c.SystemAgent != want {
+	want := SystemAgentConfig{Enabled: true, Endpoint: "http://localhost:11500", Model: "qwen3", HarnessModel: "qwen3-coder", TimeoutMinutes: 30, AutoReview: true, AutoReviewMinSeverity: 2}
+	if !reflect.DeepEqual(c.SystemAgent, want) {
 		t.Fatalf("system_agent = %+v, want %+v", c.SystemAgent, want)
 	}
 	for _, bad := range []string{
@@ -670,6 +670,9 @@ func TestSystemAgentKey(t *testing.T) {
 		"system_agent:\n  enabled: true\n  endpoint: \"http://localhost#remote\"\n",
 		"system_agent:\n  timeout_minutes: -1\n",
 		"system_agent:\n  timeout_minutes: 241\n",
+		"system_agent:\n  auto_review_min_severity: -1\n",
+		"system_agent:\n  auto_review_min_severity: 4\n",
+		"system_agent:\n  auto_review_excluded_rules: [\"\"]\n",
 	} {
 		if err := os.WriteFile(p, []byte(bad), 0o644); err != nil {
 			t.Fatal(err)

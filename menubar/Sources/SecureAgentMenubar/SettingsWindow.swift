@@ -618,6 +618,7 @@ struct SettingsView: View {
     private var chatPane: some View {
         Form {
             chatSection
+            automaticReviewSection
             setupError
         }
         .formStyle(.grouped)
@@ -655,14 +656,58 @@ struct SettingsView: View {
             ))
             Text("Chat with Ollama on this Mac. Shell commands require your confirmation before they run.")
                 .font(.caption).foregroundStyle(.secondary)
+            Button("Open Secure Agent chat") { state.openDashboard(tab: "agent") }
+                .disabled(state.dashboardUnavailableReason != nil)
+        }
+    }
+
+    private var automaticReviewSection: some View {
+        Section("Automatic finding review") {
             Toggle("Review new findings automatically", isOn: Binding(
                 get: { setup.systemAgentAutoReview },
                 set: { setup.setSystemAgentAutoReview($0) }
             ))
             .disabled(!setup.systemAgentEnabled)
-            Text("New findings go to the review queue on their own, batched and at most one review every 10 minutes. Reviews flag test, dummy and sample values such as published example keys, placeholders and Kubernetes or Docker defaults.")
+            Text("Local Ollama reviews a masked evidence summary and saves a recommendation. Review does not run commands, dismiss findings or change protection. Commands and harness dispatches require your separate confirmation.")
                 .font(.caption).foregroundStyle(.secondary)
-            Button("Open Secure Agent chat") { state.openDashboard(tab: "agent") }
+
+            Text("A new finding is a newly recorded security observation, such as a secret in agent traffic or a transcript, Keychain access, or a suspected prompt injection. Repeats grouped into an existing finding do not trigger another review. Turning this on does not review older findings.")
+                .font(.caption).foregroundStyle(.secondary)
+
+            Picker("Minimum detector severity", selection: Binding(
+                get: { setup.autoReviewPolicy.minimumSeverity },
+                set: { setup.setAutoReviewMinimumSeverity($0) }
+            )) {
+                Text("Informational and above (1+)").tag(1)
+                Text("Warning and above (2+, default)").tag(2)
+                Text("Critical only (3)").tag(3)
+            }
+            .disabled(!setup.autoReviewPolicyAvailable)
+
+            DisclosureGroup("Finding types (\(Self.autoReviewRules.filter { !setup.autoReviewPolicy.excludedRules.contains($0.id) }.count) of \(Self.autoReviewRules.count) included)") {
+                ForEach(Self.autoReviewRules, id: \.id) { rule in
+                    Toggle(rule.label, isOn: Binding(
+                        get: { !setup.autoReviewPolicy.excludedRules.contains(rule.id) },
+                        set: { setup.setAutoReviewRule(rule.id, included: $0) }
+                    ))
+                }
+            }
+            .disabled(!setup.autoReviewPolicyAvailable)
+
+            Text("Only unacknowledged findings that meet both choices qualify. Changes are saved automatically and apply to future findings and batches still waiting. Previously skipped findings can be sent for review manually.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("To change what is detected, use File Guard or Egress Firewall under Protection. These choices control automatic review; notification choices are separate.")
+                .font(.caption).foregroundStyle(.secondary)
+
+            DisclosureGroup("Review timing and test-value evidence") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("A batch waits 2 minutes after its first finding. Reviews are at least 10 minutes apart, with up to 10 findings each. A busy agent retries later. Acknowledged or newly excluded findings are skipped before sending.")
+                    Text("The model considers sample keys, placeholders and test-value evidence; test context alone does not prove a value is safe.")
+                }
+                .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Button("Open Agent review queue") { state.openDashboard(tab: "agent") }
                 .disabled(state.dashboardUnavailableReason != nil)
         }
     }
@@ -812,6 +857,13 @@ struct SettingsView: View {
         ("tcc-tamper", "Privacy permissions (TCC) tamper", "hand.raised"),
         ("proxy-prompt-injection", "Prompt injection in a response", "exclamationmark.bubble"),
         ("secret-in-transcript", "Secret appeared in an agent transcript", "doc.text.magnifyingglass"),
+    ]
+
+    // Review also covers inspection failures and the generic proxy finding;
+    // these do not have notification overrides in the existing alert pane.
+    private static let autoReviewRules: [(id: String, label: String, symbol: String)] = notifyRules + [
+        ("proxy-inspection-incomplete", "Agent request could not be fully inspected", "exclamationmark.shield"),
+        ("proxy-payload-inspection", "Other agent traffic inspection finding", "network"),
     ]
 
     /// Three-state picker backed by the daemon's override store: "default" is

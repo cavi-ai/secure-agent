@@ -17,6 +17,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
@@ -509,5 +510,15 @@ func TestWatchConfigAppliesSystemAgent(t *testing.T) {
 	waitFor(t, 5*time.Second, func() bool {
 		s := agent.Status(context.Background())
 		return s.Enabled && s.Endpoint == "http://127.0.0.1:1"
+	})
+	// Eligibility edits reload independently of the enable/endpoint fields.
+	src += "  auto_review: true\n  auto_review_min_severity: 3\n  auto_review_excluded_rules: [secret-in-transcript]\n"
+	if err := os.WriteFile(cfgPath, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, func() bool {
+		return agent.AutoReviewFinding(model.Flag{Rule: "proxy-secret-leak", Severity: 3}) &&
+			!agent.AutoReviewFinding(model.Flag{Rule: "proxy-secret-leak", Severity: 2}) &&
+			!agent.AutoReviewFinding(model.Flag{Rule: "secret-in-transcript", Severity: 3})
 	})
 }
