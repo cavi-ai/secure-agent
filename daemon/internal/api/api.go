@@ -950,7 +950,11 @@ func (a *API) serveSessionTimeline(w http.ResponseWriter, r *http.Request, id st
 	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
 		f.Limit = n
 	}
-	events := a.store.QueryEvents(f)
+	events, err := a.store.QueryEventsResult(f)
+	if err != nil {
+		http.Error(w, "event data unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	// QueryEvents returns newest-first; a timeline reads oldest-first.
 	slices.Reverse(events)
 	writeJSON(w, events)
@@ -1089,8 +1093,12 @@ func (a *API) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if pid := queryInt(q.Get("pid"), 0); pid > 0 {
 		f.PID = int32(pid)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(priceClassed(a.store.QueryEvents(f)))
+	events, err := a.store.QueryEventsResult(f)
+	if err != nil {
+		http.Error(w, "event data unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, priceClassed(events))
 }
 
 // priceClassed stamps each model_call row with its price class, so the
