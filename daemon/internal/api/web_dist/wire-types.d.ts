@@ -880,6 +880,20 @@ export interface PlanSnapshot {
   homes?: string[];
 }
 
+export interface ReportSourceEvidence {
+  available: boolean;
+  at_limit: boolean;
+  limit: number;
+}
+
+export interface ReportEvidence {
+  events: ReportSourceEvidence;
+  flags: ReportSourceEvidence;
+  reviews: ReportSourceEvidence;
+  incidents: ReportSourceEvidence;
+  interventions: ReportSourceEvidence;
+}
+
 export interface ReportCount {
   key: string;
   count: number;
@@ -905,6 +919,8 @@ export interface ReportLine {
 }
 
 export interface SessionReport {
+  evidence?: ReportEvidence;
+  reviews: ReviewRecord[];
   incidents: IncidentReport[];
   incidents_available: boolean;
   interventions: InterventionReceipt[];

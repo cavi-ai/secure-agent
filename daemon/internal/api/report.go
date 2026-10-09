@@ -16,10 +16,17 @@ func (a *API) serveSessionReport(w http.ResponseWriter, r *http.Request, id stri
 		http.Error(w, "format must be json or md", http.StatusBadRequest)
 		return
 	}
-	rep, ok := a.store.SessionReport(id)
+	rep, ok, err := a.store.SessionReportResult(id)
+	if err != nil {
+		http.Error(w, "session report unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	if !ok {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
+	}
+	if rep.Evidence != nil && rep.Evidence.Partial() {
+		w.Header().Set("X-Secure-Agent-Report-State", "partial")
 	}
 	if format == "md" {
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
