@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -106,19 +107,40 @@ func (a *API) publishPosture(gen uint64, p Posture, force bool) {
 // second source of truth.
 func (a *API) computePosture() Posture {
 	since := time.Now().Add(-24 * time.Hour)
-	return a.postureWith(a.computePatterns(since, patternDefaultMin), a.routineGroups(since))
+	patterns, patternErr := a.computePatternsResult(since, patternDefaultMin)
+	routine, routineErr := a.routineGroupsResult(since)
+	var failedReads []string
+	if patternErr != nil || routineErr != nil {
+		failedReads = append(failedReads, "flags")
+	}
+	return a.postureWithReadHealth(patterns, routine, failedReads)
 }
 
 // postureWith is computePosture over the 24 h patterns and routine groups
 // the caller already computed.
 func (a *API) postureWith(patterns []model.Pattern, routine []model.RoutineGroup) Posture {
-	st := a.evidenceStatus(a.statusFn())
+	return a.postureWithReadHealth(patterns, routine, nil)
+}
+
+func (a *API) postureWithReadHealth(patterns []model.Pattern, routine []model.RoutineGroup, failedReads []string) Posture {
+	st := a.statusFn()
 	posture := Posture{
 		Generated: time.Now().UTC().Format(time.RFC3339Nano),
 		Connected: st.Running,
 	}
-	posture.Items, posture.Groups = a.attentionQueue(st, patterns, routine)
+	var attentionFailures []string
+	posture.Items, posture.Groups, attentionFailures = a.attentionQueueWithReadHealth(st, patterns, routine)
+	failedReads = append(failedReads, attentionFailures...)
 	posture.NeedsYou = len(posture.Items)
+	// Capture current health after all reads, including same-pass recovery.
+	st = a.evidenceStatus(st)
+	if len(failedReads) > 0 && st.StorageHealth != nil {
+		h := *st.StorageHealth
+		h.ReadActive = append(slices.Clone(h.ReadActive), failedReads...)
+		slices.Sort(h.ReadActive)
+		h.ReadActive = slices.Compact(h.ReadActive)
+		st.StorageHealth = &h
+	}
 	posture.CoverageItems = a.coverageItems(st)
 	posture.CoverageCount = len(posture.CoverageItems)
 	switch {
