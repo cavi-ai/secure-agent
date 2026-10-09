@@ -1567,8 +1567,6 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.In
 		s.noteWrite("incident aggregation", err)
 		return model.IncidentReport{}, false
 	}
-	flagIDs = append(flagIDs, flagID)
-	count++
 	tsStr := ts.UTC().Format(time.RFC3339Nano)
 
 	var inc *model.IncidentReport
@@ -1580,6 +1578,39 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.In
 		s.noteWrite("incident aggregation", fmt.Errorf("null incident report"))
 		return model.IncidentReport{}, false
 	}
+	for _, existing := range flagIDs {
+		if existing == flagID {
+			return *inc, true
+		}
+	}
+	if inc.Rule == "proxy-secret-leak" {
+		if inc.PayloadOutcomes == nil {
+			// Historic reports do not establish any of their control outcomes.
+			inc.PayloadOutcomes = &model.PayloadOutcomeSummary{Unknown: count}
+		}
+		var source model.Flag
+		var evidence string
+		err := s.db.QueryRow(`SELECT rule, evidence FROM flags WHERE id = ?`, flagID).Scan(&source.Rule, &evidence)
+		if err != nil && err != sql.ErrNoRows {
+			s.noteWrite("incident aggregation", err)
+			return model.IncidentReport{}, false
+		}
+		if err == nil {
+			if err := json.Unmarshal([]byte(evidence), &source.Evidence); err != nil {
+				s.noteWrite("incident aggregation", err)
+				return model.IncidentReport{}, false
+			}
+		}
+		outcome := model.PayloadOutcomeForFinding(source)
+		if outcome == nil {
+			outcome = &model.PayloadOutcomeSummary{Unknown: 1}
+		}
+		inc.PayloadOutcomes.Blocked += outcome.Blocked
+		inc.PayloadOutcomes.ObservedOnly += outcome.ObservedOnly
+		inc.PayloadOutcomes.Unknown += outcome.Unknown
+	}
+	flagIDs = append(flagIDs, flagID)
+	count++
 	inc.AggregateCount = count
 	t := ts.UTC()
 	inc.LastFlagAt = &t

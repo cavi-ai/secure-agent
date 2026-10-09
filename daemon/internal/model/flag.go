@@ -24,6 +24,9 @@ type EvidenceItem struct {
 	// Owners: read items, the orgs credential_owners names for the file;
 	// empty when none is on record.
 	Owners []string `json:"owners,omitempty"`
+	// Payload is producer-owned local request-gate evidence. Legacy prose
+	// cannot supply it; it never contains matched values.
+	Payload *PayloadEvidence `json:"payload,omitempty"`
 }
 
 // UnmarshalJSON accepts the legacy bare-string form too.

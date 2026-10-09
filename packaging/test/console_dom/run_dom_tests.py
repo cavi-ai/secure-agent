@@ -211,6 +211,7 @@ def main():
         dom_csp = dump_dom(chrome, tmp, "?cspdemo&raildemo", origin)
         dom_themefirst = dump_dom(chrome, tmp, "?themefirst", origin)
         dom = dump_dom(chrome, tmp)
+        dom_payload = dump_dom(chrome, tmp, "?payloadoutcomes&tab=findings", origin)
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
         dom_guard = dump_dom(chrome, tmp, "?guarddemo")
         dom_resolve = dump_dom(chrome, tmp, "?resolvedemo")
@@ -662,6 +663,14 @@ def main():
               'data-action="promote-vendor-keys"' in dom and "1 vendor-key rule" in dom)
         check("incident row reads its risk and workflow (ack)",
               '<span class="c-verdict-text">CRITICAL · acknowledged</span>' in dom)
+        payload_row = log_rows(dom_payload).get("incident:inc-20260907-6033-a1b2", "")
+        check("payload incident preserves mixed results after reported resolution",
+              "2 blocked before forwarding" in payload_row
+              and "1 observed only" in payload_row and "3 outcome unknown" in payload_row
+              and "Operator reported credential revocation" in payload_row
+              and "revocation are not verified" in payload_row)
+        check("payload finding names the local forwarding gate and registered match",
+              "Blocked before forwarding" in dom_payload and "Registered secret fingerprint" in dom_payload)
         check("secret sources rendered (config+user)",
               dom.count('class="source-item"') == 2 and "CONFIG" in dom and "USER" in dom)
 

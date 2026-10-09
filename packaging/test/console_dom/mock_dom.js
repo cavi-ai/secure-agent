@@ -476,6 +476,23 @@
   //   tokenseed    — pre-seed sessionStorage (simulates a RELOADED tab: no
   //                  #ct fragment, token must come from storage).
   const MODE = location.search;
+  if (MODE.includes('payloadoutcomes')) {
+    Object.assign(data['/incidents'][0], {
+      rule: 'proxy-secret-leak',
+      summary: 'Fixture: an outbound payload matched a registered secret fingerprint.',
+      rotate_list: [], advisor_narrative: '', aggregate_count: 6,
+      payload_outcomes: { blocked: 2, observed_only: 1, unknown: 3 },
+      workflow: { status: 'resolved', resolution_note: 'Operator reported credential revocation.' },
+    });
+    Object.assign(data['/flags'][0], {
+      rule: 'proxy-secret-leak', title: 'Outbound payload matched a secret',
+      explain: { what: '', disposition: { state: 'critical', text: 'Critical risk', why: '' }, actions: [],
+        assessment: { evidence_basis: ['fingerprint-payload'], risk: 'critical', review_state: 'reviewed',
+          control: 'blocked', residual_risk: 'transmission-attempt',
+          reason: 'Fixture: the local proxy rejected this request before forwarding.',
+          limits: ['Earlier exposure and external credential revocation are not verified.'] } },
+    });
+  }
   let authRecoveryExpired = false;
   let authRecoveryMutations = 0;
   let networkRecoveryUnreachable = false;

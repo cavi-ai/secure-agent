@@ -17,6 +17,36 @@ func AssessFinding(f Flag) FindingAssessment {
 	if f.Acknowledged {
 		a.ReviewState = "reviewed"
 	}
+	if f.Rule == "proxy-secret-leak" {
+		for _, e := range f.Evidence {
+			if e.Kind != "violation" || e.Sub != "payload inspection" || e.Payload == nil || !e.Payload.IsLeak() {
+				continue
+			}
+			p := e.Payload
+			a.EvidenceBasis = []string{p.Layer + "-payload"}
+			a.Risk, a.ResidualRisk, a.Control = "critical", "transmission-attempt", "observed-only"
+			match := "A typed secret pattern"
+			if p.Layer == "fingerprint" {
+				match = "A registered secret fingerprint"
+			}
+			field := map[string]string{"auth-header": "authorization header", "other-header": "header", "query": "query string", "body": "body"}[p.Field]
+			a.Reason = match + " matched an inspected outbound request " + field + ". The local proxy observed this attempt without blocking it."
+			a.Limits = []string{"This result covers this request at this local proxy. Earlier exposure and external credential revocation are not verified."}
+			if p.RequestAction == "block" {
+				a.Control = "blocked"
+				a.Reason = match + " matched an inspected outbound request " + field + ". The local proxy rejected this request before forwarding."
+				if p.FindingAction == "would-block" {
+					a.Limits = append(a.Limits, "This match's rule was monitor-only; another match blocked the request.")
+				}
+			} else {
+				a.Limits = append(a.Limits, "Monitor-only observation does not establish whether forwarding succeeded or the recipient accepted the request.")
+			}
+			if p.Layer == "pattern" {
+				a.Limits = append(a.Limits, "A typed pattern match may be a false positive.")
+			}
+			return a
+		}
+	}
 	var reads, conns []EvidenceItem
 	for _, e := range f.Evidence {
 		switch {

@@ -397,7 +397,12 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 			ruleName = "proxy-inspection-incomplete"
 			severity = 2
 		}
-		flagID := hashFlagID(ruleName, e.PID, e.TS)
+		subject := e.RemoteHost
+		if ruleName == "proxy-secret-leak" && e.Payload != nil && e.Payload.IsLeak() {
+			p := e.Payload
+			subject = fmt.Sprintf("%s:%d|%s|%s|%s|%s|%s|%s", e.RemoteHost, e.RemotePort, e.SessionID, e.Detail, p.Layer, p.Field, p.FindingAction, p.RequestAction)
+		}
+		flagID := hashFlagID(ruleName+"|"+subject, e.PID, e.TS)
 		agentName := "proxy"
 		if info, isAgent := c.tagger.Tag(e.PID); isAgent {
 			agentName = info.Name
@@ -408,7 +413,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 			c.mutedCount++
 			return nil
 		}
-		if !c.shouldFlag(flagID, ruleName, e.PID, e.RemoteHost, e.TS, repeatWindows[ruleName]) {
+		if !c.shouldFlag(flagID, ruleName, e.PID, subject, e.TS, repeatWindows[ruleName]) {
 			return nil
 		}
 		return []model.Flag{
@@ -421,10 +426,11 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 				Agent:     agentName,
 				SessionID: e.SessionID,
 				Evidence: []model.EvidenceItem{{
-					Kind:  "violation",
-					Label: e.Detail,
-					Sub:   "payload inspection",
-					Text:  fmt.Sprintf("Local proxy detected security violation '%s' while connecting to %s:%d", e.Detail, e.RemoteHost, e.RemotePort),
+					Kind:    "violation",
+					Label:   e.Detail,
+					Sub:     "payload inspection",
+					Text:    fmt.Sprintf("Local proxy detected security violation '%s' while connecting to %s:%d", e.Detail, e.RemoteHost, e.RemotePort),
+					Payload: e.Payload,
 				}, {
 					Kind:  "connect",
 					Label: fmt.Sprintf("%s:%d", e.RemoteHost, e.RemotePort),

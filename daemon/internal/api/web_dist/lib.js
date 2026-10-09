@@ -1085,18 +1085,27 @@ function reviewedFlag(f) {
 
 function assessmentHTML(a) {
   if (!a) return '';
+  const payload = (a.evidence_basis || []).some(b => b === 'fingerprint-payload' || b === 'pattern-payload');
   const reviews = { unreviewed: 'Unreviewed', reviewed: 'Reviewed', 'closed-reported': 'Closure reported' };
-  const controls = { unknown: 'Control outcome unknown', blocked: 'Blocked', allowed: 'Allowed', 'observed-only': 'Observed only' };
+  const controls = { unknown: 'Control outcome unknown', blocked: payload ? 'Blocked before forwarding' : 'Blocked', allowed: 'Allowed', 'observed-only': payload ? 'Observed only; delivery unknown' : 'Observed only' };
   const residual = { unknown: 'Exposure unknown', 'possible-exposure': 'Possible exposure', 'model-exposure': 'Model exposure',
     'none-established': 'No exposure established', 'transmission-attempt': 'Transmission attempt', 'external-remediation-required': 'External remediation required' };
   const bases = { 'os-read': 'OS file read', 'model-visible-read': 'Model-visible tool read', 'same-tree-connect': 'Reader or descendant connection',
-    'sibling-connect': 'Sibling connection timing', 'legacy-text': 'Legacy text evidence' };
+    'sibling-connect': 'Sibling connection timing', 'legacy-text': 'Legacy text evidence',
+    'fingerprint-payload': 'Registered secret fingerprint', 'pattern-payload': 'Typed secret pattern' };
   const facts = [reviews[a.review_state] || 'Review state unknown', residual[a.residual_risk] || 'Exposure unknown', controls[a.control] || 'Control outcome unknown'];
   const limits = [...(a.evidence_basis || []).map(b => bases[b] || b), ...(a.limits || [])];
   const advice = a.advice;
   return `<div class="finding-assessment"><p class="assessment-state">${facts.map(escapeHTML).join(' · ')}</p>`
     + (limits.length ? `<details class="assessment-limits"><summary>Evidence and limits</summary><ul>${limits.map(l => `<li>${escapeHTML(l)}</li>`).join('')}</ul></details>` : '')
     + (advice ? `<p class="assessment-advice">Advisor opinion: ${escapeHTML(advice.assessment || 'unrated')}${advice.confidence != null ? ` (${Math.round(Number(advice.confidence) * 100)}%)` : ''} · ${escapeHTML(advice.rationale || '')}</p>` : '') + '</div>';
+}
+
+function payloadOutcomeHTML(outcomes) {
+  if (!outcomes) return '';
+  const count = n => Number.isSafeInteger(n) && n >= 0 ? n : 0;
+  return `<p class="body-note">Recorded payload findings: ${count(outcomes.blocked)} blocked before forwarding; ${count(outcomes.observed_only)} observed only; ${count(outcomes.unknown)} outcome unknown.</p>`
+    + '<details class="assessment-limits"><summary>Control result limits</summary><p>These counts cover recorded findings, not every request. Observation does not establish delivery. Earlier exposure and external credential revocation are not verified.</p></details>';
 }
 
 // A flag's destinations grouped by organization (or host), in served order.

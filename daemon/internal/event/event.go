@@ -1,6 +1,9 @@
 package event
 
-import "time"
+import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"time"
+)
 
 type Kind int
 
@@ -80,6 +83,9 @@ type Event struct {
 	RemotePort int    `json:"remote_port,omitempty"`
 	// Transcript/plugin events:
 	Detail string `json:"detail,omitempty"` // rule id or short label; NEVER a secret value
+	// Payload rides on the bus into durable flag evidence. The event table
+	// keeps its existing schema; the flag owns the persisted request outcome.
+	Payload *model.PayloadEvidence `json:"payload,omitempty"`
 	// Offset is the byte offset of the transcript line a transcript hit was
 	// found on.
 	Offset int64 `json:"offset,omitempty"`

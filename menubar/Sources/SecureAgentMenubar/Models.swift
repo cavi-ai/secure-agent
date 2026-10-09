@@ -916,7 +916,8 @@ public struct FindingAssessmentModel: Codable, Sendable, Equatable {
         let review = ["reviewed": "Reviewed", "unreviewed": "Unreviewed", "closed-reported": "Closure reported"][reviewState] ?? "Review state unknown"
         let residual = ["possible-exposure": "Possible exposure", "model-exposure": "Model exposure", "none-established": "No exposure established",
                         "transmission-attempt": "Transmission attempt", "external-remediation-required": "External remediation required"][residualRisk] ?? "Exposure unknown"
-        let outcome = ["blocked": "Blocked", "allowed": "Allowed", "observed-only": "Observed only"][control] ?? "Control outcome unknown"
+        let payload = evidenceBasis.contains("fingerprint-payload") || evidenceBasis.contains("pattern-payload")
+        let outcome = ["blocked": payload ? "Blocked before forwarding" : "Blocked", "allowed": "Allowed", "observed-only": payload ? "Observed only; delivery unknown" : "Observed only"][control] ?? "Control outcome unknown"
         var lines = ["\(riskLabel) · \(review)", "\(residual) · \(outcome)", reason]
         if !limits.isEmpty { lines.append(limits.joined(separator: " ")) }
         if let advice { lines.append("Advisor opinion: \(advice.assessment ?? "unrated") · \(advice.rationale)") }
