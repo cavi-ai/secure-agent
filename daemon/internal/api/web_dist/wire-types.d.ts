@@ -530,6 +530,7 @@ export interface HealthSnapshot {
   active_subject?: string;
   active_tool?: string;
   elapsed_ms?: number;
+  timeout_ms?: number;
   last_duration_ms?: number;
   input_bytes?: number;
   tool_calls?: number;

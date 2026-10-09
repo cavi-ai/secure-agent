@@ -40,6 +40,15 @@ function agentStateText(status) {
 }
 
 // Show the advisor's current work separately from interactive chat.
+function advisorVerdictSignature(v) {
+  return v ? JSON.stringify([v.created_at || '', v.assessment || '', v.suggested_action || '', v.rationale || '']) : '';
+}
+
+function advisorRetriageIsActive(health, id) {
+  return !!(health && health.enabled && !health.circuit_open && health.active_kind === 'flag' && health.active_subject === id
+    && ['preparing', 'answering', 'inspecting'].includes(health.state));
+}
+
 function advisorStateText(health, now = Date.now()) {
   if (!health || !health.enabled) return 'Advisor off';
   const queue = `${Math.max(0, Number(health.queue_depth) || 0)} queued`;
@@ -47,11 +56,15 @@ function advisorStateText(health, now = Date.now()) {
     const retry = Date.parse(health.retry_at);
     return 'Advisor paused after failed requests' + (Number.isFinite(retry) ? ` · retry in ${Math.max(0, Math.ceil((retry - now) / 1000))}s` : '') + ` · ${queue}`;
   }
+  const elapsed = Math.max(0, Math.floor((Number(health.elapsed_ms) || 0) / 1000));
+  const timeout = Number(health.timeout_ms);
+  const timing = `${elapsed}s` + (Number.isFinite(timeout) && timeout > 0 ? ` of ${Math.ceil(timeout / 1000)}s limit` : '');
   const tools = { inspect_current_evidence: 'finding evidence', inspect_session_activity: 'session activity', inspect_operator_history: 'operator history', classify_current_evidence: 'local classification' };
-  if (health.state === 'inspecting') return `Advisor inspecting ${tools[health.active_tool] || 'recorded evidence'} · ${queue}`;
+  if (health.state === 'preparing') return `Advisor preparing evidence · ${timing} · ${queue}`;
+  if (health.state === 'inspecting') return `Advisor inspecting ${tools[health.active_tool] || 'recorded evidence'} · ${timing} · ${queue}`;
   if (health.state === 'answering') {
     const kinds = { flag: 'flag', incident: 'incident', plan: 'plan', host: 'destination', guard: 'blocked access', worktree: 'worktree', project: 'cleanup', egress: 'egress' };
-    return `Advisor reviewing ${kinds[health.active_kind] || 'evidence'} · waiting for local model · ${Math.max(0, Math.floor((Number(health.elapsed_ms) || 0) / 1000))}s · ${queue}`;
+    return `Advisor reviewing ${kinds[health.active_kind] || 'evidence'} · waiting for local model · ${timing} · ${queue}`;
   }
   return `Advisor idle · ${queue}` + (health.last_duration_ms ? ` · last review ${Math.round(health.last_duration_ms / 1000)}s` : '');
 }

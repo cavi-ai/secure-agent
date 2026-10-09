@@ -181,10 +181,6 @@ func (s *Subscriber) completeWithTools(ctx context.Context, client *http.Client,
 		if inputBytes > maxContextBytes {
 			return "", fmt.Errorf("advisor context exceeds %d-byte task budget", maxContextBytes)
 		}
-		s.mu.Lock()
-		s.inputBytes = inputBytes
-		s.activeTool = ""
-		s.mu.Unlock()
 		reqBody := chatRequest{Model: s.cfg.Model, Messages: messages, Tools: tools, ChatTemplateKwargs: map[string]any{"enable_thinking": false}, Temperature: 0, MaxTokens: min(maxTokens, 4096)}
 		if strings.Contains(s.cfg.Endpoint, ":11434") || strings.Contains(strings.ToLower(s.cfg.Endpoint), "ollama") {
 			reqBody.Think = ptr(false)
@@ -196,6 +192,9 @@ func (s *Subscriber) completeWithTools(ctx context.Context, client *http.Client,
 		if len(body) > maxContextBytes {
 			return "", fmt.Errorf("advisor request exceeds %d-byte task budget", maxContextBytes)
 		}
+		s.mu.Lock()
+		s.inputBytes, s.activeTool, s.activeState = len(body), "", "answering"
+		s.mu.Unlock()
 		s.debugf("request bytes=%d round=%d tool_calls=%d", len(body), round+1, calls)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(s.cfg.Endpoint, "/")+"/v1/chat/completions", bytes.NewReader(body))
 		if err != nil {

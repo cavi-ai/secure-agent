@@ -1070,7 +1070,7 @@
       setTimeout(() => {
         const f = data['/flags'].find(x => x.id === body.flag_id);
         if (f) {
-          f.advisor = { assessment: 'benign', confidence: 0.9, rationale: 're-triage complete: routine vendor traffic', suggested_action: 'none' };
+          f.advisor = { assessment: 'benign', confidence: 0.9, rationale: 're-triage complete: routine vendor traffic', suggested_action: 'none', created_at: iso(0) };
           // The daemon publishes the updated flag on the stream.
           if (window.__sse) window.__sse.emit('flag', f);
         }
@@ -2043,11 +2043,19 @@
   // Auto-action: re-run the advisor on the first flag — the pending state
   // must show, then the fresh verdict must land and replace the chip.
   if (location.search.includes('retriagedemo')) {
+    data['/flags'].find(x => x.id === 'flag-1').advisor = { assessment: 'benign', confidence: 0.9, rationale: 're-triage complete: routine vendor traffic', suggested_action: 'none', created_at: iso(120000) };
     // Findings is opened first, as a user must: hidden panels do not render.
     setTimeout(() => {
       openTab('findings');
       document.querySelector('[data-action="retriage"][data-id="flag-1"]').click();
     }, 4000);
+    setTimeout(() => {
+      const receipt = document.createElement('pre');
+      receipt.id = 'retriage-complete';
+      receipt.hidden = true;
+      receipt.textContent = String(!!window.SA && !window.SA.pendingRetriage.has('flag-1'));
+      document.body.appendChild(receipt);
+    }, 9000);
   }
   // Advisor-down variant: the circuit breaker is open — retriage must render
   // as an honest "Advisor offline" state, not a clickable dead button.

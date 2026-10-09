@@ -1842,9 +1842,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     renderReportHealth(); // Filter changes can hide a failed filtered report.
+    telemetryData.connected = !!(snap && snap.status);
     reconcileRetriage();
 
-    telemetryData.connected = !!(snap && snap.status);
     const invalidSnapshot = reportHealth.failures(['snapshot']).some(report => report.error === 'Invalid response');
     setConnState(telemetryData.connected ? 'ok' : invalidSnapshot ? 'invalid-response' : 'unreachable');
 
@@ -2662,11 +2662,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // the menubar's flow.
   const pendingRetriage = new Map();
   const RETRIAGE_TIMEOUT_MS = 90000;
-  const advisorSig = (v) => v ? `${v.assessment || ''}|${v.suggested_action || ''}|${v.rationale || ''}` : '';
+  const advisorSig = advisorVerdictSignature;
 
   function reconcileRetriage() {
     if (!pendingRetriage.size) return;
-    const health = telemetryData.status && telemetryData.status.advisor_health;
+    const health = telemetryData.connected && telemetryData.status && telemetryData.status.advisor_health;
     for (const [id, p] of pendingRetriage) {
       const f = (telemetryData.flags || []).find(x => x.id === id);
       if (f && advisorSig(f.advisor) !== p.baseline) {
@@ -2675,11 +2675,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (drawerMode === 'flag' && drawerFlag === id && drawer && !drawer.hidden) {
           window.openFlagDetail(id, { back: drawerBack });
         }
-      } else if (Date.now() - p.at > RETRIAGE_TIMEOUT_MS) {
+      } else if (Date.now() - p.at > RETRIAGE_TIMEOUT_MS && !advisorRetriageIsActive(health, id)) {
         pendingRetriage.delete(id);
         showToast(health && health.circuit_open
           ? 'Advisor is offline (verdicts paused) — check the local model server'
-          : "Advisor didn't answer within 90s — the model server may be busy or down", 'danger');
+          : "Advisor hasn't returned a new verdict — check its current status", health && health.circuit_open ? 'danger' : 'info');
       }
     }
   }

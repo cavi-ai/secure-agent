@@ -1490,6 +1490,9 @@ def main():
         check("re-triage verdict lands and replaces the chip",
               "re-triage complete: routine vendor traffic" in dom_retriage
               and "advisor: benign" in dom_retriage)
+        check("fresh identical re-triage verdict clears pending and reports completion",
+              pre(dom_retriage, 'retriage-complete') == 'true'
+              and 'POST /advisor/retriage' in dom_retriage)
         check("advisor offline renders honest disabled state",
               "Advisor offline" in dom_advdown
               and 'data-action="retriage" data-id="flag-1"' not in dom_advdown)
