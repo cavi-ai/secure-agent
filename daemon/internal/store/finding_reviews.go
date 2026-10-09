@@ -318,6 +318,7 @@ func observeReviewTx(tx *sql.Tx, f model.Flag, a model.FindingAssessment) (r mod
 func (s *Store) GetFindingReview(id string) (r model.ReviewRecord, ok bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { s.noteRead("finding reviews", err) }()
 	r, err = reviewFromRow(s.db.QueryRow(`SELECT record_json FROM finding_reviews WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, false, nil
@@ -325,7 +326,6 @@ func (s *Store) GetFindingReview(id string) (r model.ReviewRecord, ok bool, err 
 	if err == nil {
 		err = s.reviewLinksLocked(&r)
 	}
-	s.noteRead("finding reviews", err)
 	return r, err == nil, err
 }
 
@@ -455,10 +455,11 @@ func (s *Store) ListFindingReviewsState(after string, limit int, state string) (
 }
 
 // FindingReviewID resolves coverage without returning bounded history links.
-func (s *Store) FindingReviewID(flagID string) (string, error) {
+func (s *Store) FindingReviewID(flagID string) (id string, readErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var id, key string
+	defer func() { s.noteRead("finding reviews", readErr) }()
+	var key string
 	err := s.db.QueryRow(`SELECT review_id,source_key FROM finding_review_members WHERE flag_id=?`, flagID).Scan(&id, &key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
