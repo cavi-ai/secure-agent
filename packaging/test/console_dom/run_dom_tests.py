@@ -590,14 +590,12 @@ def main():
               'class="toast ' in dom_toast)
         check("vendor-key promote banner",
               'data-action="promote-vendor-keys"' in dom and "1 vendor-key rule" in dom)
-        check("incident workflow chip (ack)",
-              'class="workflow-chip acked"' in dom and '<span class="c-verdict-text">CRITICAL · acknowledged</span>' in dom)
+        check("incident row reads its risk and workflow (ack)",
+              '<span class="c-verdict-text">CRITICAL · acknowledged</span>' in dom)
         check("secret sources rendered (config+user)",
               dom.count('class="source-item"') == 2 and "CONFIG" in dom and "USER" in dom)
 
         # --- evidence chain ---
-        first_card = dom.split('class="flag-card', 1)[1]
-        check("first flag auto-expanded", first_card.startswith(' sev3 expanded'), first_card[:60])
         check("chain rendered with 3 nodes", dom.count("chain-node") >= 3)
         check("chain node: payload inspection", "payload inspection" in dom)
         check("chain node: egress destination", "logs.example.com:443" in dom)
@@ -606,9 +604,9 @@ def main():
         check("history lists every flag as one log row, the critical ones first",
               sorted(history_rows) == ["flag:flag-1", "flag:flag-2", "flag:flag-3"] and history_rows[-1] == "flag:flag-3",
               f"rows={history_rows}")
-        flag1_card = dom.split('class="flag-card', 1)[1].split('class="flag-card', 1)[0]
+        flag1_card = log_rows(dom).get("flag:flag-1", "")
         flags_region = dom.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
-        check("legacy card evidence rows render as text, not [object Object]",
+        check("an unexplained flag's evidence rows render as text, not [object Object]",
               '<div>proxy-secret-leak: anthropic-key (payload inspection)</div>' in flag1_card
               and '<div>logs.example.com:443 (destination)</div>' in flag1_card
               and "[object Object]" not in flags_region)
@@ -890,7 +888,7 @@ def main():
               'id="fleet-panel" style="display: none;"' in dom_nofleet
               and "ci-runner-02" not in dom_nofleet)
         check("panels after fleet still render (crash isolation)",
-              dom.count('class="flag-card') == 3
+              len([k for k in log_rows(dom) if k.startswith("flag:")]) == 3
               and dom.count('class="timeline-item') > 0
               and dom.count('class="audit-item') == 2)
 
@@ -1218,7 +1216,7 @@ def main():
         pat_need = dom_pattern.split('id="attention-center"', 1)[-1].split('id="coverage-center"', 1)[0]
         pat_row = log_rows(dom_pattern).get("pattern:codex|keychain-access|/Users/dev/Library/Keychains/login.keychain-db", "")
         check("a pattern never reaches Needs you; it is one history row with its count",
-              'pattern-card' not in pat_need and 'data-kind="pattern"' not in pat_need and "codex activity" not in dom_pattern
+              'data-pattern-key' not in pat_need and 'data-kind="pattern"' not in pat_need and "codex activity" not in dom_pattern
               and '<span class="c-count">323×</span>' in pat_row, f"row={pat_row[:200]!r}")
         need_kinds = re.findall(r'<li class="need [^"]*" data-kind="(\w+)"', decisions)
         check("Needs you unifies guard, resource, incident and critical-finding rows, highest priority first",
@@ -1315,10 +1313,10 @@ def main():
         check("allow removes the suggestion from the list",
               "fw-suggestion" not in dom_allow,
               "suggestion still rendered after Allow")
-        check("dismiss removes the flag card",
-              dom_dismiss.count('class="flag-card') == 2
-              and 'data-id="flag-3"' not in dom_dismiss,
-              f"cards={dom_dismiss.count('class=\"flag-card')}")
+        dismiss_rows = [k for k in log_rows(dom_dismiss) if k.startswith("flag:")]
+        check("dismiss removes the flag's row",
+              len(dismiss_rows) == 2 and 'data-id="flag-3"' not in dom_dismiss,
+              f"rows={dismiss_rows}")
         check("re-triage verdict lands and replaces the chip",
               "re-triage complete: routine vendor traffic" in dom_retriage
               and "advisor: benign" in dom_retriage)
@@ -1413,7 +1411,7 @@ def main():
               ' open=""' in infra_tag and 'data-probe="1"' in infra_tag, f"tag={infra_tag}")
 
         flags_focus = dom_focus.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
-        check("burst: a focused flag-card button keeps identity and focus",
+        check("burst: a focused history row head keeps identity and focus",
               'data-probe="1"' in flags_focus and pre(dom_focus, "focus-probe") == "kept",
               f"probe={pre(dom_focus, 'focus-probe')!r}")
 
@@ -1452,30 +1450,29 @@ def main():
         def visible(markup):
             return re.sub(r"<[^>]*>", " ", markup)
 
-        card = (re.search(r'<article class="finding [^"]*" data-flag-id="flag-2">.*?</article>', dom_explain, re.S)
-                or [""])[0]
-        head = (re.search(r"<header[^>]*>(.*?)</header>", card, re.S) or [None, ""])[1]
+        card = log_rows(dom_explain).get("flag:flag-2", "")
+        head = (re.search(r'<button type="button" class="log-head".*?</button>', card, re.S) or [""])[0]
         outside = re.sub(r"<details.*?</details>", "", card, flags=re.S)
-        check("finding card: header shows the title, never the rule id; no pid or IPv6 outside Details",
+        check("finding row: the head shows the title, never the rule id; no pid or IPv6 outside Evidence",
               card != "" and "Sensitive file read near an outside connection" in head
               and "sensitive-read-then-connect" not in visible(head)
               and not re.search(r"\bpid\b", visible(outside), re.I) and "6033" not in visible(outside)
               and "2606:" not in visible(outside), f"card={card[:240]!r}")
-        check("finding card carries no inline handlers or styles",
+        check("finding row carries no inline handlers or styles",
               card != "" and " onclick=" not in card and " style=" not in card)
         buttons = re.findall(r'<button class="btn ([a-z-]+) btn-sm" data-action="explain-act" '
                              r'data-flag-id="flag-2" data-action-id="([a-z-]+)"', card)
         menu = re.findall(r'<button class="act-menu-item( danger)?" data-action="explain-act" '
                           r'data-flag-id="flag-2" data-action-id="([a-z-]+)"', card)
-        check("finding card: who, what and verdict lines; the recommended action leads the bar, the rest sit under More",
-              "cursor · web-app@main" in head and "3 s gap" in head
-              and '<p class="finding-what">Cursor read AWS credentials (~/.aws/credentials), then reached Cloudflare 3 s later.</p>' in card
-              and '<p class="finding-verdict">Likely benign (advisor 93 %): Cloudflare fronts the package registry this project installs from.</p>' in card
+        check("finding row: who, what and verdict; the recommended action leads the bar, the rest sit under More",
+              ">cursor · web-app@main</span>" in card
+              and '<p class="body-lead">Cursor read AWS credentials (~/.aws/credentials), then reached Cloudflare 3 s later.</p>' in card
+              and '<p class="body-verdict">Likely benign (advisor 93 %): Cloudflare fronts the package registry this project installs from.</p>' in card
               and buttons == [("btn-primary", "allow-host"), ("btn-ghost", "dismiss")]
               and menu == [("", "allow-path"), (" danger", "kill")],
               f"buttons={buttons} menu={menu}")
-        details = (re.search(r'<details class="finding-details">(.*?)</details>', card, re.S) or [None, ""])[1]
-        check("finding card: Details is closed by default and holds the chain, pid, full address and ISO timestamp",
+        details = (re.search(r'<details class="body-evidence">(.*?)</details></div>', card, re.S) or [None, ""])[1]
+        check("finding row: Evidence is closed by default and holds the chain, pid, full address and ISO timestamp",
               details != "" and 'class="chain"' in details and "2026-09-22T16:05:01Z" in details
               and "6033" in details and "[2606:4700::6810:84e5]:443" in details
               and "/Users/dev/.aws/credentials" in details, f"details={details[:200]!r}")
@@ -1512,7 +1509,7 @@ def main():
         flags_fail = dom_explainfail.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
         check("finding card: a failed allow puts the card back and toasts danger",
               'POST /allowlist' in fail_reqs and 'POST /flags/acknowledge' not in fail_reqs
-              and '<article class="finding disp-benign" data-flag-id="flag-2">' in flags_fail
+              and '<div class="row-body" data-flag-id="flag-2">' in flags_fail
               and 'class="toast danger"' in dom_explainfail, f"requests={fail_reqs!r}")
 
         attn = dom_explain.split('id="attention-center"', 1)[-1].split('id="coverage-center"', 1)[0]
@@ -1524,14 +1521,12 @@ def main():
               and 'data-action="explain-act" data-flag-id="flag-2" data-action-id="allow-host"' in flag2_row,
               f"row={flag2_row[:200]!r}")
         probe = pre(dom_detailsprobe, "details-probe")
-        ages = re.match(r"kept (.+) \| (.+)$", probe)
-        check("finding card: an open Details survives re-renders while the age ticks in place",
-              ages is not None and ages.group(1) != ages.group(2) and ages.group(2).endswith(" ago"),
-              f"probe={probe!r}")
-        check("finding card: flags without explain keep the legacy card",
-              dom_explain.count('class="flag-card') == 2
-              and "proxy-secret-leak — cursor (PID 6033)" in dom_explain
-              and 'data-action="dismiss-flag" data-id="flag-3"' in dom_explain)
+        check("finding row: an open Evidence section survives a burst of re-renders",
+              probe == "kept", f"probe={probe!r}")
+        flag3 = log_rows(dom_explain).get("flag:flag-3", "")
+        check("finding row: a flag without explain opens to its evidence lines and the console's Dismiss and Kill",
+              'class="flag-evidence"' in flag3 and 'data-action="dismiss-flag" data-id="flag-3"' in flag3
+              and 'data-action="kill"' in flag3, f"row={flag3[:200]!r}")
 
         # --- navigation: sticky tabs, drawer back-stack, scope bar, one count ---
         sticky = pre(dom_sticky, "sticky-probe")
@@ -1568,10 +1563,11 @@ def main():
               'POST /expected body={"flag_id":"gh-flag","path":"/Users/dev/.config/gh/hosts.yml","host":"140.82.114.6"}' in pre(dom_ghapprove, "mock-requests")
               and '<b class="pattern-open">0 open</b>' in dom_ghapprove)
         pat_flags = dom_pattern.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
-        pat_cards = re.findall(r'<article class="finding pattern-card [^"]*" data-pattern-key="([^"]+)">(.*?)</article>', pat_flags, re.S)
+        pat_rows = log_rows(pat_flags)
+        pat_cards = [(k, v) for k, v in pat_rows.items() if k.startswith("pattern:")]
         # Covered flags are intentionally clickable inside the disclosure;
         # only a separate top-level flag row would be a duplicate.
-        check("patterns: History shows the storm as one row, its card with the count, summary, 24 bars and open count",
+        check("patterns: History shows the storm as one row, its body with the count, summary, 24 bars and open count",
               len(pat_cards) == 1 and "323×" in pat_cards[0][1]
               and "codex touched the login keychain 323 times" in pat_cards[0][1]
               and len(re.findall(r'<i class="h\d"></i>', pat_cards[0][1])) == 24
@@ -1579,7 +1575,7 @@ def main():
               and 'data-row-key="flag:flag-6"' not in pat_flags and 'data-row-key="flag:flag-7"' not in pat_flags
               and all(f'data-action="open-flag" data-id="{fid}"' in pat_cards[0][1] for fid in ("flag-6", "flag-7")),
               f"cards={len(pat_cards)}")
-        pat_standalone = re.sub(r'<article class="finding pattern-card [^"]*"[^>]*>.*?</article>', '', pat_flags, flags=re.S)
+        pat_standalone = "".join(v for k, v in pat_rows.items() if not k.startswith("pattern:"))
         check("patterns: critical individual flags lead warnings without duplicating covered flags",
               'data-pattern-key="codex|keychain-access|' in pat_flags
               and pat_flags.index('data-id="flag-1"') < pat_flags.index('data-pattern-key=') < pat_flags.index('data-id="flag-3"')
@@ -1587,9 +1583,9 @@ def main():
               and "(PID 40844)" not in pat_flags and "(PID 51364)" not in pat_flags
               and 'data-id="flag-3"' in pat_flags)
         pat_reqs = pre(dom_patternact, "mock-requests")
-        check("patterns: dismiss-all posts the served flag_ids and the card shows 0 open",
+        check("patterns: dismiss-all posts the served flag_ids and the row shows 0 open",
               'POST /flags/acknowledge body={"flag_ids":["flag-7","flag-6"]}' in pat_reqs
-              and re.search(r'<article class="finding pattern-card [^"]*"[^>]*>.*?<b class="pattern-open">0 open</b>', dom_patternact, re.S) is not None
+              and re.search(r'<div class="row-body" data-pattern-key="[^"]+">.*?<b class="pattern-open">0 open</b>', dom_patternact, re.S) is not None
               and '<b class="pattern-open">323 open</b>' not in dom_patternact,
               f"requests={pat_reqs!r}")
         check("patterns: the page still fits a 375px phone, the pattern card's tab included",
@@ -1608,9 +1604,9 @@ def main():
               len(big_pattern) == 1 and '<span class="c-count">61×</span>' in big_rows[big_pattern[0]]
               and not [k for k in big_rows if k.startswith("flag:kc-")], f"rows={list(big_rows)[:6]}")
         bulk_reqs = pre(dom_bulk, "mock-requests")
-        check("bulk Mark reviewed on two selected rows asks one confirm and sends one dismiss per row",
-              pre(dom_bulk, "bulk-probe") == "confirms=1" and bulk_reqs.count("POST /flags/acknowledge") == 2
-              and 'body={"flag_id":"flag-1"}' in bulk_reqs and 'body={"flag_id":"flag-3"}' in bulk_reqs,
+        check("bulk Mark reviewed on two selected rows asks one confirm and sends one acknowledge batch",
+              pre(dom_bulk, "bulk-probe") == "confirms=1" and bulk_reqs.count("POST /flags/acknowledge") == 1
+              and re.search(r'POST /flags/acknowledge body=\{"flag_ids":\["flag-[13]","flag-[13]"\]\}', bulk_reqs) is not None,
               f"probe={pre(dom_bulk, 'bulk-probe')!r} requests={bulk_reqs!r}")
         empty_need = dom_empty.split('id="attention-center"', 1)[-1].split('id="home-spend"', 1)[0]
         check("empty posture: Needs you, the Monitoring gap and the Home tab badge are all hidden",

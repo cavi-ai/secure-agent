@@ -1116,11 +1116,10 @@ const ACTION_BAR_LABELS = { expect: 'Mark expected', 'expect-file': 'Mark as tes
 // actionBarHTML: a decision's choices — the bar items (at most three, in
 // order) as buttons, every other one in a More menu, danger last and set
 // apart. item: {label, attrs, title, kind: 'primary' | 'ghost' | 'danger',
-// bar, disabled}; attrs is markup the caller built from escaped values. max
-// caps the bar (default ACTION_BAR_MAX).
-function actionBarHTML(items, max = ACTION_BAR_MAX) {
+// bar, disabled}; attrs is markup the caller built from escaped values.
+function actionBarHTML(items) {
   const list = (items || []).filter(Boolean);
-  const bar = list.filter(i => i.bar).slice(0, max);
+  const bar = list.filter(i => i.bar).slice(0, ACTION_BAR_MAX);
   const rest = list.filter(i => !bar.includes(i));
   const extra = i => (i.title ? ` title="${escapeHTML(i.title)}"` : '') + (i.disabled ? ' disabled' : '');
   const out = bar.map(i => `<button class="btn btn-${i.kind || 'ghost'} btn-sm" ${i.attrs}${extra(i)}>${escapeHTML(i.label)}</button>`);
@@ -1145,21 +1144,32 @@ function actionItems(acts, extra, attrs, label) {
     title: a.consequence || '', attrs: a.attrs || attrs(a), disabled: a.disabled,
     kind: a.id === 'kill' ? 'danger' : a.recommended ? 'primary' : 'ghost',
     bar: !!a.recommended || ACTION_BAR_IDS.includes(a.id),
-  })).concat((extra || []).map(e => ({ ...e, id: 'console', recommended: false, kind: e.kind || 'ghost', bar: false, lead: !!e.lead })));
+  })).concat((extra || []).map(e => ({ ...e, id: 'console', recommended: false, kind: e.kind || 'ghost', bar: false })));
   return items.sort((x, y) => (Number(y.recommended) - Number(x.recommended)) || (rank(x.id) - rank(y.id)));
 }
 
+// leadOnly: the items with exactly one bar button — the recommended item,
+// else fallback, else the first item. fallback joins the list either way.
+function leadOnly(items, fallback) {
+  const list = fallback ? [...items, fallback] : items;
+  const lead = list.find(i => i.recommended) || fallback || list[0];
+  return list.map(i => ({ ...i, bar: i === lead }));
+}
+
 // explainActionsHTML: an explained flag's served actions on an action bar.
+function explainActionsHTML(flag, extra) {
+  return actionBarHTML(explainActionItems(flag, extra));
+}
+
+// explainActionItems: an explained flag's served actions as bar items.
 // allow-host collapses to one choice per destination organization; it
 // allows each of the organization's hosts exactly, as the served actions
 // would one by one. The click handler reads every request from the served
 // explanation (flag id + action id + host or organization), never from the
 // markup. extra: console items for the menu (re-run advisor, what to do).
-// max caps the bar: the recommended action (else the extra item marked
-// lead) is then its only button and every other choice sits under More.
-function explainActionsHTML(flag, extra, max) {
+function explainActionItems(flag, extra) {
   const ex = flag && flag.explain;
-  if (!ex) return '';
+  if (!ex) return [];
   const fid = escapeHTML(flag.id);
   const hostOf = a => (a.body && typeof a.body.host === 'string' ? a.body.host : '');
   const acts = assessmentActions(ex.actions, ex.assessment).filter(a => a && EXPLAIN_CONSOLE_ACTIONS.includes(a.id));
@@ -1179,11 +1189,7 @@ function explainActionsHTML(flag, extra, max) {
   }));
   const attrs = a => `data-action="explain-act" data-flag-id="${fid}" data-action-id="${escapeHTML(a.id)}"`
     + (hostOf(a) ? ` data-host="${escapeHTML(hostOf(a))}"` : '');
-  const items = actionItems(merged, extra, attrs, a => (a.attrs ? a.label : explainActionLabel(flag, a)));
-  if (max === undefined) return actionBarHTML(items);
-  const lead = items.find(i => i.recommended) || items.find(i => i.lead);
-  for (const i of items) i.bar = i === lead;
-  return actionBarHTML(items, max);
+  return actionItems(merged, extra, attrs, a => (a.attrs ? a.label : explainActionLabel(flag, a)));
 }
 
 // ---------- agent families ----------

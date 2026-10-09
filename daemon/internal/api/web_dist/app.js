@@ -2045,7 +2045,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       if (!r.ok) throw new Error(await r.text());
       showToast(status === 'resolved' ? 'Incident closure recorded as reported' : 'Incident acknowledged', 'success');
-      cardNote(`#incidents-container [data-action="open-incident"][data-id="${cssq(id)}"]`, '.incident-card', 'incidents-container', status);
+      cardNote(`#incidents-container [data-action="open-incident"][data-id="${cssq(id)}"]`, '.log-row', 'incidents-container', status);
       fetchTelemetry();
     } catch (err) {
       revert();
@@ -2529,9 +2529,7 @@ document.addEventListener('DOMContentLoaded', () => {
       mapAttentionItems(it => (it.kind === 'flag' && it.id === id ? null : it));
     });
   }
-  // quiet: no toast and no refetch (the bulk review reports once); resolves
-  // true when the daemon accepted the dismissal.
-  window.dismissFlag = async function(id, quiet) {
+  window.dismissFlag = async function(id) {
     const revert = stageDropFlag(id);
     try {
       const res = await apiFetch('/flags/acknowledge', {
@@ -2539,40 +2537,45 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify({ flag_id: id })
       });
       if (!res.ok) throw new Error(await res.text());
-      if (drawerMode === 'flag' && drawerFlag === id) closeDrawer();
-      if (quiet) return true;
       showToast('Flag dismissed — the rule keeps watching', 'info');
+      if (drawerMode === 'flag' && drawerFlag === id) closeDrawer();
       cardNote('', '', 'flags-list', 'dismissed');
       fetchTelemetry();
-      return true;
     } catch (err) {
       revert();
-      if (!quiet) showToast(`Failed to dismiss flag: ${err.message || err}`, 'danger');
-      return false;
+      showToast(`Failed to dismiss flag: ${err.message || err}`, 'danger');
     }
   };
 
-  // Marks every ticked history row reviewed behind one confirmation, one
-  // request at a time, and reports once. A pattern whose dismiss-all is no
-  // longer served counts as skipped.
+  // Marks every ticked history row reviewed behind one confirmation: the
+  // rows' flag ids in acknowledge batches of 500, one optimistic update, one
+  // toast. A failure puts every row back.
   window.historyBulkReview = async function() {
     const rows = Array.from(historySelected).map(k => (window.SA.historyRows || new Map()).get(k)).filter(Boolean);
-    if (!rows.length) return;
+    const ids = [...new Set(rows.flatMap(r => r.flagIds))];
+    if (!ids.length) return;
     const n = rows.length;
     if (!await window.saConfirm(`Mark ${n} finding${n === 1 ? '' : 's'} reviewed? They stay in history; rules keep watching.`,
       { title: 'Mark reviewed', okLabel: 'Mark reviewed', danger: false })) return;
-    let done = 0;
-    let skipped = 0;
-    for (const r of rows) {
-      let ok = false;
-      if (r.kind === 'flag') ok = await window.dismissFlag(r.key, true);
-      else if (r.kind === 'pattern') ok = await window.patternAct(r.key, 'dismiss-all', undefined, true);
-      else if (r.kind === 'routine') ok = await window.routineAct(r.key, 'dismiss-all', true);
-      if (ok) done++; else skipped++;
+    const revert = stage(['routine', 'patterns', 'flags', 'flagsView', 'posture'], ['flags', 'attention', 'posture', 'chart-flags', 'status', 'tab-badges'], () => {
+      Object.assign(telemetryData, reviewedAfterOptimistic(telemetryData, ids));
+    });
+    try {
+      for (let i = 0; i < ids.length; i += 500) {
+        const res = await apiFetch('/flags/acknowledge', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ flag_ids: ids.slice(i, i + 500) })
+        });
+        if (!res.ok) throw new Error(await res.text());
+      }
+    } catch (err) {
+      revert();
+      showToast(`Mark reviewed failed: ${err.message || err}`, 'danger');
+      return;
     }
     historySelected.clear();
     syncHistoryChecks();
-    showToast(`Marked ${done} reviewed${skipped ? ` (${skipped} skipped)` : ''}`, skipped ? 'info' : 'success');
+    showToast(`Marked ${n} reviewed — the rules keep watching`, 'success');
     fetchTelemetry();
   };
 
@@ -3635,11 +3638,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // A routine group's served action: Treat as routine (confirmed; every
   // exact pair its flags cite is expected) or Dismiss all. The group and its
   // flags leave the page before the request; a failure puts them back.
-  window.routineAct = async function(key, actionId, quiet) {
+  window.routineAct = async function(key, actionId) {
     const rg = (telemetryData.routine || []).find(r => r.key === key);
     const a = rg && (rg.actions || []).find(x => x.id === actionId);
     if (!a) {
-      if (quiet) return false;
       showToast('That action is no longer offered — the list is refreshing.', 'info');
       fetchTelemetry();
       return;
@@ -3656,11 +3658,9 @@ document.addEventListener('DOMContentLoaded', () => {
       out = await res.json().catch(() => ({}));
     } catch (err) {
       revert();
-      if (quiet) return false;
       showToast(`${a.label} failed: ${err.message || err}`, 'danger');
       return;
     }
-    if (quiet) return true;
     showToast(a.id === 'expect-all'
       ? `${Number(out.added) || 0} exact reads marked expected; ${Number(out.acknowledged) || 0} flags reviewed`
       : `Dismissed ${ids.length} flags — the rules keep watching`, 'success');
@@ -3720,12 +3720,11 @@ document.addEventListener('DOMContentLoaded', () => {
       Object.assign(telemetryData, patternAfterOptimisticDismiss(telemetryData, key, submitted));
     });
   }
-  window.patternAct = async function(key, actionId, host, quiet) {
+  window.patternAct = async function(key, actionId, host) {
     const p = (telemetryData.patterns || []).find(x => x.key === key);
     const a = p && !p.dismissed && (p.actions || []).find(x => x.id === actionId
       && (!host || (x.body && x.body.host) === host));
     if (!a) {
-      if (quiet) return false;
       showToast('That action is no longer offered for this pattern — the list is refreshing.', 'info');
       fetchTelemetry();
       return;
@@ -3767,13 +3766,11 @@ document.addEventListener('DOMContentLoaded', () => {
           await send(a.method, a.path, body);
         } catch (err) {
           revert();
-          if (quiet) return false;
           showToast(`Failed to dismiss the pattern: ${err.message || err}`, 'danger');
           return;
         }
-        if (quiet) return true;
         showToast(`Dismissed ${openIds.length} flag${openIds.length === 1 ? '' : 's'} — the rule keeps watching`, 'info');
-        cardNote(`[data-pattern-key="${cssq(key)}"] .pattern-open`, '.pattern-card', 'flags-list', 'dismissed');
+        cardNote(`[data-pattern-key="${cssq(key)}"] .pattern-open`, '.log-row', 'flags-list', 'dismissed');
         fetchTelemetry();
         return;
       }
@@ -3996,12 +3993,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // A drawer opened from inside the open drawer can go back to it.
     const back = () => (el.closest('#drawer') ? currentDrawerBack() : null);
     switch (d.action) {
-      case 'toggle-need':
-      case 'toggle-log-row': {
+      case 'toggle-row': {
         e.preventDefault();
-        const open = !expandedLists.has(d.key);
-        if (open) expandedLists.add(d.key); else expandedLists.delete(d.key);
-        renderNow(d.action === 'toggle-need' ? ['attention'] : ['flags', 'incidents']);
+        if (!expandedLists.delete(d.key)) expandedLists.add(d.key);
+        renderNow(d.key.startsWith('need:') ? ['attention'] : ['flags', 'incidents']);
         break;
       }
       case 'history-select':
@@ -4467,12 +4462,6 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         window.openFDASettings();
         break;
-      case 'toggle-flag': {
-        const card = el.parentElement;
-        card.classList.toggle('expanded');
-        el.setAttribute('aria-expanded', card.classList.contains('expanded'));
-        break;
-      }
     }
   });
 

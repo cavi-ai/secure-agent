@@ -26,6 +26,8 @@ const bars = html => {
   const labels = s => [...s.matchAll(/<button[^>]*>([^<]+)<\/button>/g)].map(m => m[1]);
   return { bar: labels(bar.split('<div class="need-actions">')[1] || ''), more: labels(menu) };
 };
+// needRow: one queue item rendered as its closed row.
+const needRow = (ctx, sa, item) => ctx.needRowHTML(ctx.needView(item, ctx.homeContext(sa)), false, Date.now());
 
 test('an empty queue hides the needs panel and the Home badge', () => {
   const { ctx, nodes, badges, patched } = load({ state: 'all-clear', needs_you: 0, items: [], groups: [], coverage_items: [] });
@@ -44,8 +46,8 @@ test('a queued item shows the panel with its count', () => {
 });
 
 test('a guard prompt has Allow once and Deny on the row and the rules under More', () => {
-  const { ctx } = load({ needs_you: 1, groups: [group([guardItem])] });
-  const html = ctx.needHTML({ ...guardItem, group: group([guardItem]) }, '');
+  const { ctx, sa } = load({ needs_you: 1, groups: [group([guardItem])] });
+  const html = needRow(ctx, sa, { ...guardItem, group: group([guardItem]) });
   const { bar, more } = bars(html);
   assert.deepEqual(bar, ['Allow once', 'Deny']);
   assert.deepEqual(more, ['Allow rule', 'Deny rule']);
@@ -69,8 +71,8 @@ test('a critical flag has one row button, the recommended action, and the rest u
       { id: 'allow-host', label: 'Allow api.example.com', consequence: 'c', method: 'POST', path: '/allowlist', body: { agent: 'codex', host: 'api.example.com' }, recommended: true },
     ] } };
   const item = { kind: 'flag', priority: 2, id: 'f1', title: 'Critical finding', detail: 'x' };
-  const { ctx } = load({}, { flags: [flag] });
-  const html = ctx.needHTML({ ...item, group: group([item]) }, '');
+  const { ctx, sa } = load({}, { flags: [flag] });
+  const html = needRow(ctx, sa, { ...item, group: group([item]) });
   const { bar, more } = bars(html);
   assert.deepEqual(bar, ['Allow api.example.com']);
   assert.ok(more.includes('Dismiss') && more.includes('What to do'));
@@ -83,8 +85,36 @@ test('without a recommended action What to do is the one row button', () => {
     what: 'w', disposition: { state: 'critical', text: 'Act now', why: 'y' },
     actions: [{ id: 'dismiss', label: 'Dismiss', consequence: 'c', method: 'POST', path: '/flags/acknowledge', body: {} }] } };
   const item = { kind: 'flag', priority: 2, id: 'f2', title: 'Critical finding', detail: 'x' };
-  const { ctx } = load({}, { flags: [flag] });
-  const { bar, more } = bars(ctx.needHTML({ ...item, group: group([item]) }, ''));
+  const { ctx, sa } = load({}, { flags: [flag] });
+  const { bar, more } = bars(needRow(ctx, sa, { ...item, group: group([item]) }));
   assert.deepEqual(bar, ['What to do']);
   assert.deepEqual(more, ['Dismiss']);
+});
+
+test('leadOnly: the recommended item leads, else the fallback, else the first; the fallback always joins', () => {
+  const { ctx } = load({});
+  const lead = items => [...items.filter(i => i.bar).map(i => i.label)];
+  const a = { label: 'A', bar: true }, b = { label: 'B', bar: true, recommended: true }, plan = { label: 'Plan' };
+  assert.deepEqual(lead(ctx.leadOnly([a, b], plan)), ['B']);
+  assert.deepEqual([...ctx.leadOnly([a, b], plan).map(i => i.label)], ['A', 'B', 'Plan']);
+  assert.deepEqual(lead(ctx.leadOnly([a], plan)), ['Plan']);
+  assert.deepEqual(lead(ctx.leadOnly([a, { label: 'C', bar: true }])), ['A']);
+});
+
+test('reviewedAfterOptimistic: reviewed ids leave the live lists, patterns drop their open counts, fully covered routine groups and their items leave', () => {
+  const { ctx } = load({});
+  const t = {
+    flags: [{ id: 'f1' }, { id: 'f2' }, { id: 'f3' }], flagsView: [{ id: 'f1' }, { id: 'f3' }],
+    patterns: [{ key: 'p', flag_ids: ['f1', 'f2'], unacked: 2 }],
+    routine: [{ key: 'r', flag_ids: ['f1', 'f2'] }, { key: 'r2', flag_ids: ['f2', 'f3'] }],
+    posture: { needs_you: 3, items: [{ kind: 'flag', id: 'f1' }, { kind: 'routine', id: 'r' }, { kind: 'routine', id: 'r2' }],
+      groups: [{ key: 'g', items: [{ kind: 'flag', id: 'f1' }, { kind: 'routine', id: 'r' }, { kind: 'routine', id: 'r2' }] }] },
+  };
+  const next = ctx.reviewedAfterOptimistic(t, ['f1', 'f2']);
+  assert.deepEqual([...next.flags.map(f => f.id)], ['f3']);
+  assert.equal(next.flagsView.find(f => f.id === 'f1').acknowledged, true);
+  assert.equal(next.patterns[0].dismissed, true);
+  assert.deepEqual([...next.routine.map(r => r.key)], ['r2']);
+  assert.equal(next.posture.needs_you, 1);
+  assert.equal(t.flags.length, 3, 'the saved snapshot is untouched');
 });

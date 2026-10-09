@@ -2644,13 +2644,12 @@
       });
     }, 4300);
   }
-  // focusburst: Findings open, flag-2's head button probed and focused, then a
+  // focusburst: Findings open, flag-2's row head probed and focused, then a
   // burst; <pre id="focus-probe"> says whether that node kept focus.
   if (MODE.includes('focusburst')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
-      const card = document.querySelector('#flags-list [data-id="flag-2"]');
-      const btn = card && card.closest('.flag-card').querySelector('.flag-head');
+      const btn = document.querySelector('#flags-list .log-row[data-row-key="flag:flag-2"] .log-head');
       if (btn) { btn.dataset.probe = '1'; btn.focus(); }
       burst();
       setTimeout(() => stamp('focus-probe', btn && btn.isConnected && document.activeElement === btn ? 'kept' : 'lost'), 2600);
@@ -2671,7 +2670,7 @@
   }
   // rawmute: Home's Findings history open (openTab('findings')), focus the
   // blog.example.com unmute button in its Muted ledger, then press flag-3's
-  // raw-card "Dismiss this flag class". The POST lands in the /mute fixture,
+  // "Dismiss this flag class". The POST lands in the /mute fixture,
   // so the re-render adds a codex-scoped row beside the focused one.
   // <pre id="mute-focus-probe"> says whether focus stayed.
   if (MODE.includes('rawmute')) {
@@ -2680,7 +2679,7 @@
       const un = document.querySelector('#flags-list [data-action="unmute"][data-host="blog.example.com"]');
       if (un) { un.dataset.probe = '1'; un.focus(); }
       const dismiss = document.querySelector('#flags-list [data-action="dismiss-flag"][data-id="flag-3"]');
-      const mute = dismiss && dismiss.closest('.flag-card').querySelector('[data-action="mute-rule"]');
+      const mute = dismiss && dismiss.closest('.row-body').querySelector('[data-action="mute-rule"]');
       if (mute) mute.click();
       setTimeout(() => stamp('mute-focus-probe',
         `${un && un.isConnected && document.activeElement === un ? 'kept' : 'lost'} rows=${document.querySelectorAll('#flags-list .mute-row').length}`), 2600);
@@ -2692,27 +2691,24 @@
     setTimeout(() => openTab('egress'), 4000);
     setTimeout(() => document.querySelector('.fw-suggestion [data-action="allow-host"]').click(), 9000);
   }
-  // detailsprobe (with explaindemo): flag-2 raised seconds ago, so its age
-  // changes on every render; Findings open, its Details opened and probed,
-  // then a burst. <pre id="details-probe"> says whether that node stayed
-  // connected and open, and its meta before | after.
+  // detailsprobe (with explaindemo): flag-2 raised seconds ago; Findings
+  // open, its row's Evidence opened and probed, then a burst. <pre
+  // id="details-probe"> says whether that node stayed connected and open.
   if (MODE.includes('detailsprobe')) {
     data['/flags'].find(f => f.id === 'flag-2').ts = new Date(Date.now() - 5000).toISOString();
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
-      const d = document.querySelector('#flags-list .finding[data-flag-id="flag-2"] details.finding-details');
-      const meta = () => (d && d.closest('.finding') ? d.closest('.finding').querySelector('.finding-meta').textContent : '');
-      const before = meta();
+      const d = document.querySelector('#flags-list .row-body[data-flag-id="flag-2"] details.body-evidence');
       if (d) { d.open = true; d.dataset.probe = '1'; }
       burst();
-      setTimeout(() => stamp('details-probe', d && d.isConnected && d.open ? `kept ${before} | ${meta()}` : `lost found=${!!d} connected=${!!(d && d.isConnected)} open=${!!(d && d.open)}`), 2600);
+      setTimeout(() => stamp('details-probe', d && d.isConnected && d.open ? 'kept' : `lost found=${!!d} connected=${!!(d && d.isConnected)} open=${!!(d && d.open)}`), 2600);
     }, 4300);
   }
-  // patternact (with patterndemo): Findings open, press the pattern card's
-  // dismiss-all in its history row.
+  // patternact (with patterndemo): Findings open, press the pattern row's
+  // dismiss-all.
   if (MODE.includes('patternact')) {
     setTimeout(() => openTab('findings'), 4000);
-    setTimeout(() => document.querySelector('#flags-list .pattern-card [data-action-id="dismiss-all"]')?.click(), 9000);
+    setTimeout(() => document.querySelector('#flags-list .row-body[data-pattern-key] [data-action-id="dismiss-all"]')?.click(), 9000);
   }
   // patternstream (with patterndemo): Findings open, then a third keychain
   // flag on the stream that the daemon folds into the codex pattern.
@@ -2733,9 +2729,9 @@
       window.__sse.emit('flag', f);
       const probe = () => {
         const list = document.getElementById('flags-list');
-        const cards = list ? list.querySelectorAll('.pattern-card') : [];
+        const cards = list ? list.querySelectorAll('.log-row[data-row-key^="pattern:"]') : [];
         const covered = cards.length === 1 && [...cards[0].querySelectorAll('.pattern-flag-list code')].some(c => c.textContent === 'flag-8');
-        const row = list && list.querySelector('.flag-card [data-id="flag-8"], .finding:not(.pattern-card)[data-flag-id="flag-8"]');
+        const row = list && list.querySelector('.log-row[data-row-key="flag:flag-8"]');
         return `cards=${cards.length} covered=${covered ? 1 : 0} row=${row ? 1 : 0}`;
       };
       let mid = '';
@@ -2751,16 +2747,16 @@
   if (MODE.includes('attnkeep')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
-      const card = document.querySelector('#flags-list .pattern-card');
-      const d = card && card.querySelector('details');
-      const btn = card && card.querySelector('.finding-actions button');
+      const card = document.querySelector('#flags-list .row-body[data-pattern-key]');
+      const d = card && card.querySelector('details.body-evidence');
+      const btn = card && card.querySelector('.body-actions button');
       if (d) d.open = true;
       if (btn) btn.focus();
       data['/posture'].groups.find(g => g.key.startsWith('session:5821')).rssBytes = 734003200;
       window.__sse.emit('posture', data['/posture']);
       setTimeout(() => {
         const why = document.querySelector('#attention-list .need[data-kind="resource"] .need-why');
-        const queued = !!document.querySelector('#attention-list .pattern-card');
+        const queued = !!document.querySelector('#attention-list [data-kind="pattern"]');
         stamp('attn-probe', `open=${!!(d && d.isConnected && d.open)} focus=${!!(btn && document.activeElement === btn)} queued=${queued} metrics=${why ? why.textContent : ''}`);
       }, 3600);
     }, 4500);

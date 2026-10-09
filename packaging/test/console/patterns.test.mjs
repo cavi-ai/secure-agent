@@ -14,7 +14,9 @@ vm.createContext(ctx);
 for (const f of ['lib.js', 'tab-findings.js']) {
   vm.runInContext(readFileSync(path.join(webDist, f), 'utf8'), ctx, { filename: f });
 }
-const { patternHTML, uncoveredFlags, patternsInView, patternAfterDismiss, patternAfterOptimisticDismiss } = ctx;
+const { uncoveredFlags, patternsInView, patternAfterDismiss, patternAfterOptimisticDismiss } = ctx;
+// patternBody: a pattern row's open body with the loaded flags and opened lists.
+const patternBody = (p, now, opts = {}) => ctx.patternBodyHTML(p, { now, SA: { t: { flags: opts.flags || [] }, expanded: opts.expanded || new Set() } });
 
 const KEY = 'codex|keychain-access|/Users/x/Library/Keychains/login.keychain-db';
 const hourly = Array.from({ length: 24 }, (_, i) => (i === 3 ? 323 : 0));
@@ -38,7 +40,7 @@ const flag = (id) => ({ id, agent: 'codex', rule: 'keychain-access', pid: 40844,
 
 test('grouped findings expose approval, local review and file inspection', () => {
   const ids = ['expect', 'expect-file', 'review-local', 'inspect-file', 'dismiss-all'];
-  const html = patternHTML(pattern({ actions: ids.map(id => ({ id, label: id, consequence: 'Review scope', body: { flag_id: 'f1', host: 'api.github.com' } })) }), Date.now(), {});
+  const html = patternBody(pattern({ actions: ids.map(id => ({ id, label: id, consequence: 'Review scope', body: { flag_id: 'f1', host: 'api.github.com' } })) }), Date.now(), {});
   assert.deepEqual([...html.matchAll(/data-action-id="([a-z-]+)"/g)].map(m => m[1]),
     ['expect', 'expect-file', 'dismiss-all', 'inspect-file', 'review-local']);
   const bar = html.split('<details class="act-more">')[0];
@@ -49,7 +51,7 @@ test('grouped findings expose approval, local review and file inspection', () =>
 
 test('a critical individual finding leads a repeated warning card', () => {
   let keys;
-  const list = {children: []};
+  const list = {children: [], querySelectorAll: () => []};
   ctx.document = {getElementById: id => id === 'flags-list' ? list : {value: 'all'}};
   ctx.SA = {t: {flags: [], flagsView: [{...flag('urgent'), severity: 3}], patterns: [pattern()], routine: [], status: {}, audit: []},
     seenAgents: new Set(), seenRules: new Set(), syncSelect: () => {}, globalSearchTerm: () => '',
@@ -63,7 +65,7 @@ test('a critical individual finding leads a repeated warning card', () => {
 
 test('a 61-flag pattern is one history row reading 61×, closed until opened', () => {
   let rows;
-  const list = {children: []};
+  const list = {children: [], querySelectorAll: () => []};
   ctx.document = {getElementById: id => id === 'flags-list' ? list : {value: 'all'}};
   const sa = {t: {flags: [], flagsView: [], patterns: [pattern({ count: 61, unacked: 61 })], routine: [], status: {}, audit: []},
     seenAgents: new Set(), seenRules: new Set(), syncSelect: () => {}, globalSearchTerm: () => '',
@@ -78,18 +80,18 @@ test('a 61-flag pattern is one history row reading 61×, closed until opened', (
   assert.match(rows[0].html, /<div class="log-detail" id="[^"]+" hidden><\/div>/);
   sa.expanded.add('log:pattern:' + KEY);
   ctx.renderFlags();
-  assert.match(rows[0].html, /class="finding pattern-card/);
+  assert.match(rows[0].html, /<div class="row-body" data-pattern-key=/);
 });
 
-test('patternHTML: 24 bars, count, summary, open count; actions in served order, recommended first', () => {
-  const html = patternHTML(pattern(), Date.parse('2026-09-23T12:00:00Z'), {});
+test('patternBody: 24 bars, count, summary, open count; actions in served order, recommended first', () => {
+  const html = patternBody(pattern(), Date.parse('2026-09-23T12:00:00Z'), {});
   assert.equal((html.match(/<i class="h\d"><\/i>/g) || []).length, 24);
   assert.match(html, /<i class="h8"><\/i>/);
-  assert.match(html, /class="finding pattern-card disp-warning" data-pattern-key="codex\|keychain-access\|\/Users\/x\/Library\/Keychains\/login\.keychain-db"/);
-  assert.match(html, /<span class="pattern-meta">323× · /);
+  assert.match(html, /<div class="row-body" data-pattern-key="codex\|keychain-access\|\/Users\/x\/Library\/Keychains\/login\.keychain-db">/);
+  assert.match(html, /<span class="pattern-cadence-text">323× · /);
   assert.ok(html.includes('codex touched the login keychain 323 times on Sep 12 between 03:00 and 03:08 (2 processes, 1 session), in bursts a few seconds apart.'));
   assert.ok(html.includes('in bursts a few seconds apart · <b class="pattern-open">323 open</b>'));
-  assert.ok(html.includes('<p class="finding-verdict">Needs a look: Agent touched the keychain</p>'));
+  assert.ok(html.includes('<p class="body-verdict">Needs a look: Agent touched the keychain</p>'));
   const ids = [...html.matchAll(/data-action="explain-act" data-pattern-key="[^"]+" data-action-id="([a-z-]+)"/g)].map(m => m[1]);
   assert.deepEqual(ids, ['kill', 'dismiss-all', 'mute-class'], 'recommended and Dismiss all on the bar, the rest under More');
   assert.match(html, /<button class="btn btn-danger btn-sm" data-action="explain-act"[^>]*>Kill codex<\/button>/);
@@ -98,30 +100,30 @@ test('patternHTML: 24 bars, count, summary, open count; actions in served order,
   assert.ok(html.includes('<summary>Individual flags (323)</summary>'));
 });
 
-test('patternHTML: the card names its processes and launchers, escaped; none when the daemon served none', () => {
-  const html = patternHTML(pattern({ processes: [
+test('patternBody: the card names its processes and launchers, escaped; none when the daemon served none', () => {
+  const html = patternBody(pattern({ processes: [
     { name: 'claude', launcher: 'Claude.app › claude-code 2.1.281', count: 2 },
     { name: '<b>x</b>', count: 1 }] }), Date.parse('2026-09-12T04:00:00Z'), {});
-  assert.match(html, /<p class="pattern-processes">claude-code 2\.1\.281 via Claude\.app ×2 · &lt;b&gt;x&lt;\/b&gt; ×1<\/p>/);
-  assert.ok(!patternHTML(pattern({}), Date.parse('2026-09-12T04:00:00Z'), {}).includes('pattern-processes'));
+  assert.match(html, /<p class="body-note pattern-processes">claude-code 2\.1\.281 via Claude\.app ×2 · &lt;b&gt;x&lt;\/b&gt; ×1<\/p>/);
+  assert.ok(!patternBody(pattern({}), Date.parse('2026-09-12T04:00:00Z'), {}).includes('pattern-processes'));
 });
 
-test('patternHTML: a pattern dismissed in place shows 0 open and disabled buttons', () => {
-  const html = patternHTML(pattern({ dismissed: true, unacked: 0, disposition: { state: 'acknowledged', text: 'Reviewed', why: '' } }), Date.now(), {});
+test('patternBody: a pattern dismissed in place shows 0 open and disabled buttons', () => {
+  const html = patternBody(pattern({ dismissed: true, unacked: 0, disposition: { state: 'acknowledged', text: 'Reviewed', why: '' } }), Date.now(), {});
   assert.ok(html.includes('<b class="pattern-open">0 open</b>'));
-  assert.match(html, /disp-acknowledged/);
+  assert.ok(html.includes('<p class="body-verdict">Reviewed</p>'));
   const buttons = html.match(/<button [^>]*data-action="explain-act"[^>]*>/g) || [];
   assert.equal(buttons.length, 3);
   assert.ok(buttons.every(b => b.includes(' disabled')));
 });
 
-test('patternHTML: the covered flags behind Details, first 10 then Show more', () => {
+test('patternBody: the covered flags behind Details, first 10 then Show more', () => {
   const flags = Array.from({ length: 12 }, (_, i) => flag('k' + i)).concat([flag('other')]);
-  const html = patternHTML(pattern(), Date.now(), { flags });
+  const html = patternBody(pattern(), Date.now(), { flags });
   assert.equal((html.match(/<li>/g) || []).length, 10);
   assert.ok(!html.includes('<code>other</code>'));
   assert.match(html, /data-action="show-more" data-key="pattern:codex\|keychain-access\|[^"]+">Show 2 more</);
-  const open = patternHTML(pattern(), Date.now(), { flags, expanded: new Set(['pattern:' + KEY]) });
+  const open = patternBody(pattern(), Date.now(), { flags, expanded: new Set(['pattern:' + KEY]) });
   assert.equal((open.match(/<li>/g) || []).length, 12);
   assert.match(html, /<button type="button" class="pattern-flag-link" data-action="open-flag" data-id="k0"/);
 });
@@ -163,14 +165,14 @@ test('patternsInView: a covered flag from a sixth session or pid admits the patt
 
 test('patternAfterDismiss: a capped dismiss-all of 500 ids leaves 2 of 502 open and the card not dismissed', () => {
   const after = patternAfterDismiss(pattern({ count: 502, unacked: 502 }), 500);
-  const html = patternHTML(after, Date.now(), {});
+  const html = patternBody(after, Date.now(), {});
   assert.ok(html.includes('<b class="pattern-open">2 open</b>'));
   assert.ok(!after.dismissed);
   assert.ok(!/disabled/.test(html));
-  assert.match(html, /disp-warning/);
+  assert.ok(html.includes('<p class="body-verdict">Needs a look: Agent touched the keychain</p>'));
   const rest = patternAfterDismiss(after, 2);
   assert.equal(rest.dismissed, true);
-  assert.ok(patternHTML(rest, Date.now(), {}).includes('<b class="pattern-open">0 open</b>'));
+  assert.ok(patternBody(rest, Date.now(), {}).includes('<b class="pattern-open">0 open</b>'));
 });
 
 test('pattern dismissal updates findings and attention together without changing the saved snapshot', () => {
@@ -200,17 +202,17 @@ test('muteRowHTML: an agent-scoped mute names its agent and carries it on the un
   assert.ok(ctx.muteRowHTML({ rule: 'r', host: 'h', agent: '<b>x</b>' }).includes('&lt;b&gt;x&lt;/b&gt;'));
 });
 
-test('patternHTML: the served agent-scoped mute label is the button text', () => {
+test('patternBody: the served agent-scoped mute label is the button text', () => {
   const actions = pattern().actions.map(a => a.id === 'mute-class'
     ? { ...a, label: 'Mute keychain access for codex', body: { rule: 'keychain-access', host: '*', agent: 'codex' } }
     : a);
-  const html = patternHTML(pattern({ actions }), Date.parse('2026-09-23T12:00:00Z'), {});
+  const html = patternBody(pattern({ actions }), Date.parse('2026-09-23T12:00:00Z'), {});
   assert.match(html, /data-action-id="mute-class"[^>]*>Mute keychain access for codex<\/button>/);
 });
 
-test('patternHTML: the flag list counts flags, not occurrences folded into them', () => {
-  const html = patternHTML(pattern({ count: 23, flags: 1 }), Date.parse('2026-09-23T12:00:00Z'), {});
-  assert.match(html, /<span class="pattern-meta">23× · /);
+test('patternBody: the flag list counts flags, not occurrences folded into them', () => {
+  const html = patternBody(pattern({ count: 23, flags: 1 }), Date.parse('2026-09-23T12:00:00Z'), {});
+  assert.match(html, /<span class="pattern-cadence-text">23× · /);
   assert.ok(html.includes('<summary>Individual flags (1)</summary>'));
 });
 
@@ -231,7 +233,7 @@ test('a filtered findings view that has not loaded does not claim zero matches o
   ctx.renderFlags();
   assert.equal(badge.textContent, '—');
   assert.match(list.innerHTML, /not loaded yet/);
-  assert.doesNotMatch(list.innerHTML, /No flags|pattern-card/);
+  assert.doesNotMatch(list.innerHTML, /No flags|row-body/);
 });
 
 test('an optimistic pattern dismissal preserves an unloaded filtered view', () => {
@@ -255,17 +257,17 @@ const routine = (over) => ({
   ...over,
 });
 
-test('routineHTML: one decision with the reader, file, agents and destinations as chips and two buttons', () => {
-  const html = ctx.routineHTML(routine());
-  assert.match(html, /<div class="attention-item kind-routine finding-item disp-warning" data-routine-key="routine\|gh\|\/Users\/x\/\.config">/);
-  assert.match(html, /<span class="disp-badge">Needs a look<\/span><strong class="finding-what">gh read ~\/\.config\/gh\/hosts\.yml, then connected to GitHub/);
+test('routineBodyHTML: the summary, the reader, file, agents and destinations as chips, and two buttons', () => {
+  const html = ctx.routineBodyHTML(routine());
+  assert.match(html, /<div class="row-body" data-routine-key="routine\|gh\|\/Users\/x\/\.config">/);
+  assert.match(html, /<p class="body-lead">gh read ~\/\.config\/gh\/hosts\.yml, then connected to GitHub/);
   for (const chip of ['>gh</span>', '>~/.config/gh/hosts.yml</span>', '>claude, codex, openclaw</span>', '>GitHub</span>', '>lb-140-82-112-21-iad.github.com</span>', '>+3 more</span>']) {
     assert.ok(html.includes(chip), chip);
   }
   assert.match(html, /<button class="btn btn-ghost btn-sm" data-action="routine-act" data-routine-key="routine\|gh\|\/Users\/x\/\.config" data-action-id="expect-all" title="c1">Treat as routine<\/button>/);
   assert.match(html, /data-action-id="dismiss-all" title="c2">Dismiss all 220<\/button>/);
   assert.ok(!html.includes('act-more'), 'two choices need no menu');
-  const files = ctx.routineHTML(routine({ area: '~/.docker', files: 2, reader: '', actions: [routine().actions[1]] }));
+  const files = ctx.routineBodyHTML(routine({ area: '~/.docker', files: 2, reader: '', actions: [routine().actions[1]] }));
   assert.ok(files.includes('>~/.docker · 2 files</span>'));
   assert.ok(!files.includes('i-terminal'), 'no reader chip without a recorded reader');
   assert.ok(!files.includes('expect-all'));
