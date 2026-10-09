@@ -178,6 +178,7 @@ type configWatchDeps struct {
 	// immediate flag delta (see verdictPublishingSink in wire.go).
 	deltaHub       *api.DeltaHub
 	postureChanged func()
+	advisorMask    func(string) (string, bool)
 }
 
 // watchConfig polls config.yaml and re-configures the advisor stack, the
@@ -223,7 +224,7 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 		if key := advisorConfigKey(data.Advisor); key != lastAdvisorKey {
 			lastAdvisorKey = key
 			// Store transfers worker and managed-process ownership to the new stack.
-			deps.stk.Store(setupAdvisor(data, deps.st, deps.deltaHub, deps.postureChanged))
+			deps.stk.Store(setupAdvisor(data, deps.st, deps.deltaHub, deps.postureChanged, deps.advisorMask))
 			log.Printf("advisor config applied live (enabled=%v mode=%s model=%q)",
 				data.Advisor.Enabled, map[bool]string{true: "managed", false: "existing"}[data.Advisor.Managed], data.Advisor.Model)
 		}
@@ -353,7 +354,7 @@ func resourceConfigKey(c config.ResourceControlConfig) string {
 // only swaps when something meaningful changed (not on every file touch).
 func advisorConfigKey(a config.AdvisorConfig) string {
 	return a.Endpoint + "|" + a.Model + "|" + a.ManagedModel + "|" +
-		boolStr(a.Enabled) + "|" + boolStr(a.Managed) + "|" + a.Timeout.String()
+		boolStr(a.Enabled) + "|" + boolStr(a.Managed) + "|" + a.Timeout.String() + "|" + a.ClassifierEndpoint + "|" + a.ClassifierModel
 }
 
 // fleetConfigKey fingerprints the fleet-relevant config (webhooks, identity,

@@ -231,6 +231,16 @@ func TestAdvisorConfigKeyDistinguishesFields(t *testing.T) {
 	if advisorConfigKey(a) == advisorConfigKey(c) {
 		t.Fatal("key must differ when enabled changes")
 	}
+	for _, change := range []func(*config.AdvisorConfig){
+		func(v *config.AdvisorConfig) { v.ClassifierEndpoint = "http://127.0.0.1:8009" },
+		func(v *config.AdvisorConfig) { v.ClassifierModel = "local-decision" },
+	} {
+		d := a
+		change(&d)
+		if advisorConfigKey(a) == advisorConfigKey(d) {
+			t.Fatal("classifier change must reload the advisor")
+		}
+	}
 }
 
 func boolYAML(b bool) string {

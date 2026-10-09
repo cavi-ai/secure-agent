@@ -61,6 +61,32 @@ home is a trust failure. The advisor therefore speaks **loopback HTTP only**.
 HMAC; evidence strings are paths/hosts, not payloads. The model endpoint
 being loopback means even this metadata never leaves the machine.
 
+## Evidence tools and resource bounds
+
+Each task starts a fresh conversation. The model may inspect the supplied
+snapshot, up to five similar operator judgments, and its finding's own recorded
+session metadata and top eight tools, file paths and hosts. Tools accept no
+arguments: the daemon binds the finding and session, so the model cannot choose
+another subject, read arbitrary files or execute commands. Firewall masking is
+applied before model requests and tool output cross the model boundary.
+
+One task permits at most four model requests and six tool calls. Each request
+is bounded to 32 KiB, each tool result to 8 KiB, and each model response to
+256 KiB. Oversized mandatory context is refused rather than silently truncated.
+Repeated tool results are reused only within that task and discarded afterward.
+The triage deadline covers the entire exchange (default 60 seconds); explicitly
+requested plans and notes have at least five minutes. These are byte and time
+bounds, not tokenizer or model-server memory guarantees. Fresh conversations
+do not unload a shared model or flush its server-side KV cache.
+
+`advisor.classifier_endpoint` optionally enables a loopback `/v1/systemone`
+service, with `classifier_model` defaulting to `kev-latest`. The classifier
+suggests session context, operator history, sufficient context or unknown.
+Its probabilities are unvalidated hints for this workload, never security
+verdicts. Calls have a five-second deadline and a bounded response. Unavailable
+or invalid output lets the main advisor inspect evidence directly. The daemon
+does not configure or clear the classifier server's cache.
+
 ## Trust posture of a verdict
 
 A verdict is a *prioritization hint*, not a finding. The deterministic

@@ -159,11 +159,14 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		otlpExp.SessionSpan(sess)
 	}
 
+	// Build the firewall before either agent receives its masking policy.
+	fw := setupFirewall(cfg)
+
 	// Local triage advisor (opt-in): flags/incidents are offered to it from
 	// the drain loop; it never touches the enforcement path.
 	advisorStk := &advisorStackHolder{}
 	c.advisor = advisorStk
-	advisorStk.Store(setupAdvisor(cfg, st, deltaHub, postureHook.run))
+	advisorStk.Store(setupAdvisor(cfg, st, deltaHub, postureHook.run, sysAgentMask(fw.Engine)))
 
 	// Operator price table from config.yaml, applied before any collector
 	// emits a model call; the config watcher re-applies it on change.
@@ -192,10 +195,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// Periodic process tagger refresh: 5s while idle, 1s while agents live.
 	go runResourceLoop(ctx, tagger, resolver, resourceTracker, resourceControl, resourceEpisodes, st, cfg.DBPath, supReg, plans)
 
-	// Firewall engine + persisted overrides, used by the proxy for egress
-	// inspection and surfaced as per-rule stats in status.
-	fw := setupFirewall(cfg)
-
+	// Persisted overrides are used by the proxy and surfaced in status.
 	allowlistStore, muteStore, expectStore := wireEgressOverrides(cfg, correlator, advisorStk)
 	correlator.SetScopedExpected(func(requests []model.DecisionScope, pid int32) bool {
 		if len(requests) == 0 {
@@ -352,7 +352,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,
 			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer, resourceControl: resourceControl,
 			initialConfig: &cfg, worktrees: hunter, sysAgent: sysAgent, tagger: tagger, fleetOn: fleetOn,
-			deltaHub: deltaHub, postureChanged: postureHook.run,
+			deltaHub: deltaHub, postureChanged: postureHook.run, advisorMask: sysAgentMask(fw.Engine),
 		})
 	}
 	postureHook.fn = apiServer.PublishPostureIfChanged

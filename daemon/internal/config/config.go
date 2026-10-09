@@ -237,12 +237,14 @@ type ResourceControlOverride struct {
 
 // AdvisorYAML is the on-disk shape of the local advisor config.
 type AdvisorYAML struct {
-	Enabled      bool   `yaml:"enabled"`
-	Endpoint     string `yaml:"endpoint"`
-	Model        string `yaml:"model"`
-	TimeoutMS    int    `yaml:"timeout_ms"`
-	Managed      bool   `yaml:"managed"`
-	ManagedModel string `yaml:"managed_model"`
+	Enabled            bool   `yaml:"enabled"`
+	Endpoint           string `yaml:"endpoint"`
+	Model              string `yaml:"model"`
+	TimeoutMS          int    `yaml:"timeout_ms"`
+	Managed            bool   `yaml:"managed"`
+	ManagedModel       string `yaml:"managed_model"`
+	ClassifierEndpoint string `yaml:"classifier_endpoint"`
+	ClassifierModel    string `yaml:"classifier_model"`
 }
 
 // AdvisorConfig configures the local triage advisor. Disabled unless
@@ -251,12 +253,14 @@ type AdvisorYAML struct {
 // Managed mode: the daemon spawns/supervises the model server itself and
 // computes the endpoint — Endpoint is ignored (and must not be set).
 type AdvisorConfig struct {
-	Enabled      bool
-	Endpoint     string
-	Model        string
-	Timeout      time.Duration
-	Managed      bool
-	ManagedModel string
+	Enabled            bool
+	Endpoint           string
+	Model              string
+	Timeout            time.Duration
+	Managed            bool
+	ManagedModel       string
+	ClassifierEndpoint string
+	ClassifierModel    string
 }
 
 // SystemAgentConfig configures the system agent behind the console's Agent
@@ -544,12 +548,14 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 		},
 		SystemAgent: raw.SystemAgent,
 		Advisor: AdvisorConfig{
-			Enabled:      raw.Advisor.Enabled,
-			Endpoint:     raw.Advisor.Endpoint,
-			Model:        raw.Advisor.Model,
-			Timeout:      time.Duration(raw.Advisor.TimeoutMS) * time.Millisecond,
-			Managed:      raw.Advisor.Managed,
-			ManagedModel: raw.Advisor.ManagedModel,
+			Enabled:            raw.Advisor.Enabled,
+			Endpoint:           raw.Advisor.Endpoint,
+			Model:              raw.Advisor.Model,
+			Timeout:            time.Duration(raw.Advisor.TimeoutMS) * time.Millisecond,
+			Managed:            raw.Advisor.Managed,
+			ManagedModel:       raw.Advisor.ManagedModel,
+			ClassifierEndpoint: raw.Advisor.ClassifierEndpoint,
+			ClassifierModel:    raw.Advisor.ClassifierModel,
 		},
 	}
 	cfg.Pricing, cfg.PricingSkipped = parsePricing(raw.Pricing)
@@ -617,6 +623,9 @@ func validPrice(v float64) bool { return v > 0 && !math.IsInf(v, 0) }
 // runtime. A non-positive sample interval reaches time.NewTicker, which panics
 // — the supervisor then recovers a permanently crash-looping collector.
 func (c Config) Validate() error {
+	if c.Advisor.ClassifierEndpoint != "" && !loopback.ValidEndpoint(c.Advisor.ClassifierEndpoint) {
+		return fmt.Errorf("advisor.classifier_endpoint must be loopback")
+	}
 	if c.NetSampleInterval <= 0 {
 		return fmt.Errorf("net_sample_interval_ms must be positive, got %d", c.NetSampleInterval.Milliseconds())
 	}

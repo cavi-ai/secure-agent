@@ -17,7 +17,6 @@
 package advisor
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -36,11 +35,14 @@ import (
 
 // Config controls the advisor. Disabled unless explicitly opted in.
 type Config struct {
-	Enabled   bool
-	Endpoint  string        // e.g. http://127.0.0.1:8080 — loopback enforced
-	Model     string        // served model name, sent in the chat request
-	Timeout   time.Duration // per-request deadline
-	QueueSize int           // bounded backlog; drop-oldest beyond it
+	Enabled            bool
+	Endpoint           string                      // e.g. http://127.0.0.1:8080 — loopback enforced
+	Model              string                      // served model name, sent in the chat request
+	Timeout            time.Duration               // total triage task deadline, including tools
+	QueueSize          int                         // bounded backlog; drop-oldest beyond it
+	Mask               func(string) (string, bool) // firewall masking before any model/tool boundary
+	ClassifierEndpoint string                      // optional loopback /v1/systemone service
+	ClassifierModel    string
 }
 
 // Sink persists verdicts and answers trend lookups. *store.Store satisfies it.
@@ -78,7 +80,8 @@ type chatRequest struct {
 	MaxTokens          int            `json:"max_tokens"`
 	// Think disables reasoning-trace generation on Ollama reasoning models
 	// (qwen3 et al). omitempty + pointer so non-Ollama requests omit it.
-	Think *bool `json:"think,omitempty"`
+	Think *bool          `json:"think,omitempty"`
+	Tools []functionTool `json:"tools,omitempty"`
 }
 
 type chatMessage struct {
@@ -88,7 +91,9 @@ type chatMessage struct {
 	// These models routinely leave Content empty and put their whole answer —
 	// including the JSON we asked for — in Reasoning when the token budget
 	// runs out mid-thought. Both fields are parsed; Content wins.
-	Reasoning string `json:"reasoning,omitempty"`
+	Reasoning  string     `json:"reasoning,omitempty"`
+	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 type chatResponse struct {
@@ -120,10 +125,17 @@ type Subscriber struct {
 	onRequest *http.Client
 	queue     chan task
 
-	mu          sync.Mutex
-	failures    int
-	circuitOpen time.Time // zero = closed
-	lastErr     string    // last triage failure — the "why" behind a paused advisor
+	mu             sync.Mutex
+	failures       int
+	circuitOpen    time.Time // zero = closed
+	lastErr        string    // last triage failure — the "why" behind a paused advisor
+	activeKind     string
+	activeSubject  string
+	activeTool     string
+	startedAt      time.Time
+	lastDurationMS int64
+	inputBytes     int
+	toolCalls      int
 
 	// Re-triage idempotency: a flag is re-triaged at most once per cooldown
 	// window regardless of how many times the operator (or UI) asks. The
@@ -147,11 +159,20 @@ const (
 // silent circuit-open state made "re-run the advisor" look like a dead
 // button.
 type HealthSnapshot struct {
-	Enabled     bool   `json:"enabled"`
-	CircuitOpen bool   `json:"circuit_open,omitempty"`
-	LastError   string `json:"last_error,omitempty"`
-	QueueDepth  int    `json:"queue_depth"`
-	Model       string `json:"model,omitempty"`
+	Enabled        bool      `json:"enabled"`
+	CircuitOpen    bool      `json:"circuit_open,omitempty"`
+	LastError      string    `json:"last_error,omitempty"`
+	QueueDepth     int       `json:"queue_depth"`
+	Model          string    `json:"model,omitempty"`
+	State          string    `json:"state"`
+	ActiveKind     string    `json:"active_kind,omitempty"`
+	ActiveSubject  string    `json:"active_subject,omitempty"`
+	ActiveTool     string    `json:"active_tool,omitempty"`
+	ElapsedMS      int64     `json:"elapsed_ms,omitempty"`
+	LastDurationMS int64     `json:"last_duration_ms,omitempty"`
+	InputBytes     int       `json:"input_bytes,omitempty"`
+	ToolCalls      int       `json:"tool_calls,omitempty"`
+	RetryAt        time.Time `json:"retry_at,omitzero"`
 }
 
 // Health reports the current snapshot. Nil-receiver safe: a disabled (or
@@ -162,13 +183,26 @@ func (s *Subscriber) Health() HealthSnapshot {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return HealthSnapshot{
+	h := HealthSnapshot{
 		Enabled:     true,
 		CircuitOpen: s.circuitOpenLocked(),
 		LastError:   s.lastErr,
 		QueueDepth:  len(s.queue),
 		Model:       s.cfg.Model,
+		State:       "idle", ActiveKind: s.activeKind, ActiveSubject: s.activeSubject,
+		ActiveTool: s.activeTool, LastDurationMS: s.lastDurationMS, InputBytes: s.inputBytes, ToolCalls: s.toolCalls,
 	}
+	if h.CircuitOpen {
+		h.State = "paused"
+		h.RetryAt = s.circuitOpen.Add(breakerCooldown)
+	} else if !s.startedAt.IsZero() {
+		h.State = "answering"
+		h.ElapsedMS = time.Since(s.startedAt).Milliseconds()
+		if s.activeTool != "" {
+			h.State = "inspecting"
+		}
+	}
+	return h
 }
 
 // New builds a subscriber. Returns nil when disabled or misconfigured (with
@@ -182,11 +216,13 @@ func New(cfg Config, sink Sink) *Subscriber {
 		log.Printf("advisor: DISABLED — endpoint %q is not loopback; the advisor may only talk to this machine", cfg.Endpoint)
 		return nil
 	}
+	if cfg.ClassifierEndpoint != "" && !IsLoopbackEndpoint(cfg.ClassifierEndpoint) {
+		log.Printf("advisor: DISABLED — classifier endpoint must be loopback")
+		return nil
+	}
 	if cfg.Timeout <= 0 {
-		// Reasoning models (qwen3 et al) routinely take 20-40s for a
-		// triage call, and a cold model load adds 30-60s of first-request
-		// latency. 8s guaranteed an empty-verdict circuit-open loop on any
-		// local reasoning model.
+		// Cold loading and tool exchanges need more time than the old 8s
+		// default. Operators can set a longer bound for larger local models.
 		cfg.Timeout = 60 * time.Second
 	}
 	if cfg.QueueSize <= 0 {
@@ -213,14 +249,13 @@ func New(cfg Config, sink Sink) *Subscriber {
 // TriageForTest runs the flag triage synchronously and returns the verdict —
 // test-only: production paths go through the queue + process().
 func (s *Subscriber) TriageForTest(fl model.Flag) (model.AdvisorVerdict, error) {
-	return s.triageFlag(context.Background(), fl)
+	return s.triageFlag(context.WithValue(context.Background(), reviewScopeKey{}, task{kind: "flag", subjectID: fl.ID, flag: fl}), fl)
 }
 
 // RetriageCooldown: one re-triage per flag per window. Rapid clicking (or
 // a UI retry loop) cannot flood the model queue; repeated requests within
 // the window are idempotent no-ops that report "already queued/recent".
-// debugAdvisorRequests: set SECURE_AGENT_ADVISOR_DEBUG=1 to log the exact
-// request body per call (never secrets — prompts only).
+// debugAdvisorRequests logs request sizes and round counts, never prompt text.
 var debugAdvisorRequests = os.Getenv("SECURE_AGENT_ADVISOR_DEBUG") != ""
 
 const RetriageCooldown = 30 * time.Second
@@ -376,6 +411,18 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 	if s.circuitIsOpen() {
 		return
 	}
+	s.mu.Lock()
+	s.activeKind, s.activeSubject, s.startedAt = t.kind, t.subjectID, time.Now()
+	s.activeTool, s.inputBytes, s.toolCalls = "", 0, 0
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.lastDurationMS = time.Since(s.startedAt).Milliseconds()
+		s.activeKind, s.activeSubject, s.activeTool = "", "", ""
+		s.startedAt = time.Time{}
+		s.mu.Unlock()
+	}()
+	ctx = context.WithValue(ctx, reviewScopeKey{}, t)
 	if t.kind == "plan" {
 		p, err := s.writePlan(ctx, t.plan)
 		if err != nil {
@@ -485,65 +532,7 @@ func (s *Subscriber) chatOnRequest(ctx context.Context, system, user string, max
 }
 
 func (s *Subscriber) complete(ctx context.Context, client *http.Client, system, user string, maxTokens int) (string, error) {
-	// Reasoning models (qwen3 et al) burn budget thinking before answering;
-	// with a tight budget the content arrives EMPTY (all tokens spent on the
-	// trace). Ollama's OpenAI-compatible endpoint accepts the native
-	// "think" field to disable it — verified against qwen3: content comes
-	// back clean and the JSON parses first try. Sent only to endpoints we
-	// know are Ollama; strict OpenAI-compat servers would reject the
-	// unknown field with a 400.
-	reqBody := chatRequest{
-		Model: s.cfg.Model,
-		Messages: []chatMessage{
-			{Role: "system", Content: system},
-			{Role: "user", Content: user},
-		},
-		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
-		Temperature:        0,
-		MaxTokens:          maxTokens,
-	}
-	if strings.Contains(s.cfg.Endpoint, ":11434") || strings.Contains(strings.ToLower(s.cfg.Endpoint), "ollama") {
-		reqBody.Think = ptr(false)
-	}
-	body, _ := json.Marshal(reqBody)
-	if debugAdvisorRequests {
-		log.Printf("advisor request body (tail): ...%.300s", body[len(body)-min(300, len(body)):])
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimSuffix(s.cfg.Endpoint, "/")+"/v1/chat/completions",
-		bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("advisor endpoint returned %s", resp.Status)
-	}
-	var out chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("advisor response undecodable: %w", err)
-	}
-	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("advisor returned no choices")
-	}
-	msg := out.Choices[0].Message
-	content := strings.TrimSpace(msg.Content)
-	// Reasoning models (qwen3 etc.) spend tokens on a thinking trace; when
-	// the budget runs out mid-thought, content is empty but the trace holds
-	// the work. Prefer content; fall back to reasoning, whose JSON block is
-	// extracted by parseVerdict's existing <think> handling + JSON scan.
-	if content == "" && msg.Reasoning != "" {
-		content = msg.Reasoning
-	}
-	if content == "" && out.Choices[0].FinishReason == "length" {
-		return "", fmt.Errorf("model exhausted the token budget on reasoning without answering (reasoning model? raise max_tokens)")
-	}
-	return content, nil
+	return s.completeWithTools(ctx, client, system, user, maxTokens)
 }
 
 const triageSystem = `You are a local security triage advisor embedded in an egress monitor for AI coding agents. You assess ONE security flag at a time.

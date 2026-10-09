@@ -584,7 +584,7 @@ func (v *verdictPublishingSink) PutAdvisorVerdict(subjectID, kind string, verdic
 // supervised alongside the subscriber in main. deltaHub/postureChanged are
 // nil in tests that don't care about the immediate-verdict delta; the sink
 // then falls back to the bare store, matching prior behavior.
-func setupAdvisor(cfg config.Config, st *store.Store, deltaHub *api.DeltaHub, postureChanged func()) advisorStack {
+func setupAdvisor(cfg config.Config, st *store.Store, deltaHub *api.DeltaHub, postureChanged func(), masks ...func(string) (string, bool)) advisorStack {
 	endpoint := cfg.Advisor.Endpoint
 	model := cfg.Advisor.Model
 	var managed *exec.Cmd
@@ -597,14 +597,21 @@ func setupAdvisor(cfg config.Config, st *store.Store, deltaHub *api.DeltaHub, po
 		managed, endpoint, model = cmd, ep, cfg.Advisor.ManagedModel
 	}
 	var sink advisor.Sink = st
+	mask := sysAgentMask(nil)
+	if len(masks) > 0 && masks[0] != nil {
+		mask = masks[0]
+	}
 	if deltaHub != nil {
 		sink = &verdictPublishingSink{Store: st, deltaHub: deltaHub, postureChanged: postureChanged}
 	}
 	sub := advisor.New(advisor.Config{
-		Enabled:  cfg.Advisor.Enabled,
-		Endpoint: endpoint,
-		Model:    model,
-		Timeout:  cfg.Advisor.Timeout,
+		Enabled:            cfg.Advisor.Enabled,
+		Endpoint:           endpoint,
+		Model:              model,
+		Timeout:            cfg.Advisor.Timeout,
+		Mask:               mask,
+		ClassifierEndpoint: cfg.Advisor.ClassifierEndpoint,
+		ClassifierModel:    cfg.Advisor.ClassifierModel,
 	}, sink)
 	if sub != nil {
 		log.Printf("advisor: local triage enabled via %s (model %q)", endpoint, model)

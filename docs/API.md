@@ -34,6 +34,11 @@ Host: unix
 }
 ```
 
+`advisor_health` also includes `state` (`idle`, `answering`, `inspecting`, or
+`paused`), `active_kind`, `active_subject`, `active_tool`, `elapsed_ms`,
+`last_duration_ms`, `input_bytes` (serialized message bytes), `tool_calls`, and
+`retry_at` while paused. These fields describe activity, not enforcement.
+
 `advisor_health` reports the local triage advisor's live state: `circuit_open`
 means the model server has failed repeatedly and verdicts are paused
 (`last_error` says why) — the UIs render this so advisor actions never look
