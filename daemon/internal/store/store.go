@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1238,15 +1239,26 @@ func eventQuery(f EventFilter) (string, []any) {
 }
 
 func (s *Store) QueryEvents(f EventFilter) []event.Event {
+	rows, _ := s.QueryEventsResult(f)
+	return rows
+}
+
+// QueryEventsResult distinguishes a successful empty history from failed or
+// incomplete reads. Decode and cursor errors never return partial evidence.
+func (s *Store) QueryEventsResult(f EventFilter) (out []event.Event, readErr error) {
+	defer func() { s.noteRead("events", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	q, args := eventQuery(f)
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
-		log.Printf("store: query events error: %v", err)
-		return nil
+		return nil, err
 	}
+	return scanEventsResult(rows)
+}
+
+func scanEventsResult(rows *sql.Rows) ([]event.Event, error) {
 	defer rows.Close()
 
 	events := []event.Event{}
@@ -1254,29 +1266,45 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 		var e event.Event
 		var kindInt int
 		var tsStr string
+		var exePath, sessionID, path, remoteHost, detail sql.NullString
+		var remotePort sql.NullInt64
 		var tool, toolStatus, modelName, callID, provider sql.NullString
 		var durMs, tokIn, tokOut sql.NullInt64
 		var cost sql.NullFloat64
-		if err := rows.Scan(&kindInt, &tsStr, &e.PID, &e.ExePath, &e.SessionID, &e.Path, &e.RemoteHost, &e.RemotePort, &e.Detail,
-			&tool, &toolStatus, &durMs, &modelName, &tokIn, &tokOut, &cost, &callID, &provider); err == nil {
-			e.Kind = event.Kind(kindInt)
-			e.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
-			e.ToolName = tool.String
-			e.ToolStatus = toolStatus.String
-			e.DurationMs = durMs.Int64
-			e.Model = modelName.String
-			e.Provider = provider.String
-			e.TokensIn = tokIn.Int64
-			e.TokensOut = tokOut.Int64
-			e.CostUSD = cost.Float64
-			e.CallID = callID.String
-			events = append(events, e)
+		if err := rows.Scan(&kindInt, &tsStr, &e.PID, &exePath, &sessionID, &path, &remoteHost, &remotePort, &detail,
+			&tool, &toolStatus, &durMs, &modelName, &tokIn, &tokOut, &cost, &callID, &provider); err != nil {
+			return nil, err
 		}
+		var err error
+		e.TS, err = time.Parse(time.RFC3339Nano, tsStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid event timestamp: %w", err)
+		}
+		if math.IsNaN(cost.Float64) || math.IsInf(cost.Float64, 0) {
+			return nil, fmt.Errorf("non-finite event cost")
+		}
+		e.Kind = event.Kind(kindInt)
+		e.ExePath = exePath.String
+		e.SessionID = sessionID.String
+		e.Path = path.String
+		e.RemoteHost = remoteHost.String
+		e.RemotePort = int(remotePort.Int64)
+		e.Detail = detail.String
+		e.ToolName = tool.String
+		e.ToolStatus = toolStatus.String
+		e.DurationMs = durMs.Int64
+		e.Model = modelName.String
+		e.Provider = provider.String
+		e.TokensIn = tokIn.Int64
+		e.TokensOut = tokOut.Int64
+		e.CostUSD = cost.Float64
+		e.CallID = callID.String
+		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("store: events cursor error (result may be truncated): %v", err)
+		return nil, err
 	}
-	return events
+	return events, nil
 }
 
 // maxFlagQuery bounds QueryFlags above normalizeLimit's 1000 so a pattern

@@ -1110,13 +1110,13 @@ The headline answer — *"do I need to look at this machine, and what first?"*:
 }
 ```
 
-Flag items take their `severity` from the flag's disposition (`critical` 3, `warning` 2, `benign-likely` 1) and their `detail` starts with the disposition text (`"Likely benign (advisor 93 %) — …"`), so an advisor-confirmed benign flag yields `attention`, never `critical`. In `groups`, flag items carry `disposition`; a `benign-likely` flag has priority 1 and title "Finding, likely benign".
+The queue holds only decisions: a pending guard prompt, a pending resource intervention, an open high or critical incident, and a flag, pattern or routine group whose disposition is `critical`. Warning and `benign-likely` flags and patterns, recurring egress candidates and lower-risk incidents are not queued; they stay in `/flags`, `/patterns`, `/incidents` and `/egress/episodes`. Flag items take their `severity` and `detail` prefix from the flag's disposition; in `groups`, flag items carry `disposition`.
 
-Item kinds: `flag` (recent ≤24h, severity ≥2, human-titled), `pattern` (the flags one `/patterns` row covers, as one item: `id` = pattern `key`, `detail` = its `summary`; in `groups` also `count`, `rule`, `disposition`; the covered flags have no `flag` items), `guard_pending` (unresolved prompts), `collector_down` (dead/abandoned monitors), `collector_silent`, `harness_uncovered` and `guard_hook_unregistered` (coverage gaps while agents run), `uninspected_egress` (connections that bypassed the firewall, one item per group that carries them), `recurring_egress` (a recurring, attributable egress episode no expected-egress rule covers; `action` is `scope` when its activity scope is complete, `scopeText` says what saving it covers), `incident` (unresolved critical/high, or open more than 72h), `resource_pressure` (a pending resource intervention). Derived live — never a second source of truth.
+Item kinds: `flag` (recent ≤24h, critical disposition, human-titled), `pattern` (the flags one `/patterns` row covers, as one item: `id` = pattern `key`, `detail` = its `summary`; in `groups` also `count`, `rule`, `disposition`; the covered flags have no `flag` items), `guard_pending` (unresolved prompts), `collector_down` (dead/abandoned monitors), `collector_silent`, `harness_uncovered` and `guard_hook_unregistered` (coverage gaps while agents run), `uninspected_egress` (connections that bypassed the firewall, one item per group that carries them), `incident` (unresolved critical/high), `resource_pressure` (a pending resource intervention). Derived live — never a second source of truth.
 
 `coverage_items` (counted in `coverage_count`) hold monitoring gaps (`collector_down`, `collector_silent`, `harness_uncovered`, `guard_hook_unregistered`) and the `uninspected_egress` note. With `needs_you` 0, a gap makes `state` `attention`; the egress note alone leaves it `all-clear`.
 
-Invariant: every item in `items` appears in exactly one of `groups`, and the group item counts sum to `needs_you` (= `len(items)`). Groups are agent sessions (`session:<key>`), agent buckets (`agent:<name>`; `summary` names the processes and sessions behind their findings, e.g. `"3 processes (claude-code 2.1.281 via Claude.app) across 3 sessions, all exited"`), and `machine` (`agent: ""`, `label: "This machine"`), which holds the agent-less items: dead or silent collectors, missing hooks, and the machine-wide uninspected item when no agent group carries egress. Group item priorities: guard 5, resource 4, incident 3 (aging below high risk 1), flag 2 (severity 2 or likely benign 1), pattern 2 (below critical 1), machine 2 (1 below severity 2), egress 1.
+Invariant: every item in `items` appears in exactly one of `groups`, and the group item counts sum to `needs_you` (= `len(items)`). Groups are agent sessions (`session:<key>`), agent buckets (`agent:<name>`; `summary` names the processes and sessions behind their findings, e.g. `"3 processes (claude-code 2.1.281 via Claude.app) across 3 sessions, all exited"`), and `machine` (`agent: ""`, `label: "This machine"`), which holds the agent-less items: dead or silent collectors, missing hooks, and the machine-wide uninspected item when no agent group carries egress. Group item priorities: guard 5, resource 4, incident 3, flag, pattern and routine 2.
 
 ### `GET /events/stream` (SSE)
 
@@ -1202,7 +1202,7 @@ Each agent's outbound connections grouped by activity scope and destination (`ho
 ```
 
 - `recurring` — at least 5 connections, and the last 4 gaps are each 1 minute or more and within 2× of each other.
-- `candidate` — recurring, attributed to a known agent, and not covered by an expected-egress rule; candidates come first and are Home's `recurring_egress` decisions.
+- `candidate` — recurring, attributed to a known agent, and not covered by an expected-egress rule; candidates come first and are listed on the Egress tab, not in the Home queue.
 - At most 100 non-candidate episodes are listed; episodes idle for 7 days are dropped.
 - `advisor_inference` is present only when the advisor assessed the episode's current evidence; the console labels it as an inference.
 
@@ -1219,7 +1219,7 @@ Operator decisions taken from an observed episode. The request names only the ep
 - `POST /expected-egress {"episode_id", "kind": "scope"}` — expects every destination of that agent's executable, harness and workspace; only for an episode with `scope_complete`.
 - `DELETE /expected-egress?id=<32 hex>` — revokes a rule.
 
-Creates and revokes are audited (`expected-egress-create`, `expected-egress-revoke`). A rule only clears the Home decision: the proxy, guard, correlator, incidents and flags never consult it. NoAgent; POST and DELETE are mutations (pinned UI or owner).
+Creates and revokes are audited (`expected-egress-create`, `expected-egress-revoke`). A rule only clears the episode's candidate flag on the Egress tab: the proxy, guard, correlator, incidents and flags never consult it. NoAgent; POST and DELETE are mutations (pinned UI or owner).
 
 ### `GET|POST /notify/rules`
 

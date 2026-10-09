@@ -26,6 +26,9 @@ func TestReviewRoutesAndRevisionConflict(t *testing.T) {
 		t.Fatalf("review route=%d %s", rr.Code, rr.Body.String())
 	}
 	r := page.Reviews[0]
+	if groups := attentionGroups(a); len(groups) != 0 {
+		t.Fatalf("non-critical review entered Home decisions: %+v", groups)
+	}
 	request := func(rev int64) *httptest.ResponseRecorder {
 		b, _ := json.Marshal(model.ReviewDecisionRequest{ID: r.ID, Revision: rev, Action: "acknowledge"})
 		out := httptest.NewRecorder()

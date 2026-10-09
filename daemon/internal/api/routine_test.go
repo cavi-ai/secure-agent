@@ -122,19 +122,37 @@ func TestRoutineExpectsOnlyTheGroupsReads(t *testing.T) {
 	}
 }
 
-// The attention queue shows a routine group once, in the routine group,
-// ahead of agent groups of equal priority; its flags leave the agent groups.
-func TestAttentionFoldsRoutineAcrossAgents(t *testing.T) {
+// A routine group of OS reads assesses below critical, whatever the detector
+// severity: it is not queued and needs_you is 0.
+func TestAttentionOSReadRoutineIsNotQueued(t *testing.T) {
 	a := expectedTestAPI(t)
 	now := time.Now()
 	gh := ghRead("sensitive read", 900, "GitHub")
 	for i, agent := range []string{"claude", "codex", "openclaw"} {
 		f := agentFlag(ghFlag(fmt.Sprintf("gh%d", i), now.Add(time.Duration(i)*time.Minute), gh, "140.82.114.6"), agent)
-		f.Severity = 2
+		f.Severity = 3
 		a.store.PutFlag(f)
 	}
-	other := ghFlag("solo", now, model.EvidenceItem{Kind: "read", Label: "/Users/dev/work/.env", Sub: "sensitive read", PID: 900, Exe: "/bin/cat"}, "api.example.com")
-	other.Severity = 2
+	p := a.computePosture()
+	if p.NeedsYou != 0 || len(p.Items) != 0 || len(p.Groups) != 0 || p.State != "all-clear" {
+		t.Fatalf("posture = %+v, want an empty queue and all-clear", p)
+	}
+}
+
+// The attention queue shows a routine group of model-visible reads once, in
+// the routine group, ahead of agent groups of equal priority; its flags leave
+// the agent groups.
+func TestAttentionFoldsRoutineAcrossAgents(t *testing.T) {
+	a := expectedTestAPI(t)
+	now := time.Now()
+	gh := ghRead("agent tool read", 900, "GitHub")
+	for i, agent := range []string{"claude", "codex", "openclaw"} {
+		f := agentFlag(ghFlag(fmt.Sprintf("gh%d", i), now.Add(time.Duration(i)*time.Minute), gh, "140.82.114.6"), agent)
+		f.Severity = 3
+		a.store.PutFlag(f)
+	}
+	other := ghFlag("solo", now, model.EvidenceItem{Kind: "read", Label: "/Users/dev/work/.env", Sub: "agent tool read", PID: 900, Exe: "/bin/cat"}, "api.example.com")
+	other.Severity = 3
 	a.store.PutFlag(other)
 
 	groups := attentionGroups(a)
@@ -142,7 +160,7 @@ func TestAttentionFoldsRoutineAcrossAgents(t *testing.T) {
 		t.Fatalf("groups = %+v, want the routine group first with one item", groups)
 	}
 	it := groups[0].Items[0]
-	if it.Kind != "routine" || it.ID != "routine|gh|/Users/dev/.config" || it.Count != 3 || it.Disposition == nil {
+	if it.Kind != "routine" || it.ID != "routine|tool|/Users/dev/.config" || it.Count != 3 || it.Disposition == nil {
 		t.Fatalf("routine item = %+v", it)
 	}
 	for _, g := range groups[1:] {

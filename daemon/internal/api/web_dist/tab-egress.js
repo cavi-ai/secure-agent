@@ -14,7 +14,6 @@ function renderFirewall() {
   const anyBlock = rules.some(r => stats[r].mode === 'block');
   badge.textContent = anyBlock ? 'enforcing' : 'monitor';
   badge.className = 'badge' + (anyBlock ? ' badge-ok' : '');
-  SA.setTabBadge('egress', egressAttentionCount(SA.t.posture));
 
   if (rules.length === 0 && uninspected === 0) {
     container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>`;
@@ -197,7 +196,6 @@ function egressAfterExpect(t, episodeId, kind) {
   const ids = new Set(rows.filter(covers).map(r => r.id));
   return {
     egressEpisodes: rows.map(r => ids.has(r.id) ? { ...r, expected: true, candidate: false } : r),
-    posture: mapPostureAttention(t.posture, it => (it.kind === 'recurring_egress' && ids.has(it.id) ? null : it)),
   };
 }
 

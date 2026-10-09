@@ -13,13 +13,21 @@ function render(status, posture = {}) {
   return nodes;
 }
 
+const harnesses = {proxy_enabled: false, coverage: {harnesses: [
+  {name: 'codex', trace_supported: true, trace_last_seen: '2026-10-05T12:00:00Z', guard_supported: false},
+  {name: '<unknown>', trace_supported: false, guard_supported: false},
+]}};
+
+test('the monitoring-gap panel stays hidden while harnesses exist but no gap does', () => {
+  const nodes = render(harnesses, {coverage_count: 0, coverage_items: []});
+  assert.equal(nodes.get('coverage-center').hidden, true);
+});
+
 test('coverage distinguishes harness capabilities and activity from payload inspection', () => {
-  const nodes = render({proxy_enabled: false, coverage: {harnesses: [
-    {name: 'codex', trace_supported: true, trace_last_seen: '2026-10-05T12:00:00Z', guard_supported: false},
-    {name: '<unknown>', trace_supported: false, guard_supported: false},
-  ]}});
+  const nodes = render(harnesses, {coverage_count: 1, coverage_items: [{kind: 'collector_silent', title: 'Silent', detail: 'No events'}]});
   assert.equal(nodes.get('coverage-center').hidden, false);
   const html = nodes.get('coverage-list').innerHTML;
+  assert.match(html, /<details class="coverage-harness"><summary>Per-agent coverage<\/summary>/);
   assert.match(html, /codex/);
   assert.match(html, /Trace: activity observed/);
   assert.match(html, /Guard: not supported/);

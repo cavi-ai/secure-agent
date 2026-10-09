@@ -42,21 +42,6 @@ func egressCandidate(e store.EgressEpisode, ruleID string) bool {
 	return e.Recurring && e.Scope.Agent != "" && e.Scope.Agent != "unknown" && ruleID == ""
 }
 
-// egressCandidates are Home's recurring-connection decisions, newest first.
-func (a *API) egressCandidates() []store.EgressEpisode {
-	if a.store == nil {
-		return nil
-	}
-	match := a.store.ExpectedEgressMatcher()
-	var out []store.EgressEpisode
-	for _, e := range a.store.ListRecurringEgressEpisodes() {
-		if egressCandidate(e, match(e)) {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
 // egressEpisodeViews serves the read API: candidates first, then up to 100
 // other episodes.
 func (a *API) egressEpisodeViews() []egressEpisodeView {

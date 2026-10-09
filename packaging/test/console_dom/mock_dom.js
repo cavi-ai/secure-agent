@@ -203,12 +203,13 @@
       }]
     },
     // The daemon's invariant: every item sits in exactly one group and the
-    // group items sum to needs_you (= items.length).
+    // group items sum to needs_you (= items.length). Warning findings, patterns
+    // and recurring egress are never queued.
     '/posture': {
       state: 'critical',
-      needs_you: 7,
+      needs_you: 6,
       coverage_count: 2,
-      summary: '7 decisions pending — first: proxy-secret-leak — cursor sent an anthropic-key to logs.example.com — act now.',
+      summary: '6 decisions pending — first: proxy-secret-leak — cursor sent an anthropic-key to logs.example.com — act now.',
       coverage_items: [
         { severity: 2, kind: 'collector_down', id: 'eslogger', title: 'File monitoring is off', detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' },
         { severity: 1, kind: 'uninspected_egress', id: 'uninspected-egress', title: '2 connections bypassed inspection' }
@@ -217,7 +218,6 @@
         { severity: 3, kind: 'flag', id: 'flag-1', title: 'proxy-secret-leak — cursor sent an anthropic-key to logs.example.com' },
         { severity: 3, kind: 'flag', id: 'flag-2', title: 'Sensitive file read near an outside connection' },
         { severity: 3, kind: 'flag', id: 'flag-4', title: 'Agent modified macOS privacy permissions (TCC)' },
-        { severity: 2, kind: 'flag', id: 'flag-5', title: 'Agent touched the keychain' },
         { severity: 1, kind: 'guard_pending', id: 'guard-1', title: 'claude wants .env' },
         { severity: 3, kind: 'incident', id: 'inc-20260907-6033-a1b2', title: 'sensitive-read-then-connect — cursor (PID 6033)' },
         { severity: 1, kind: 'resource_pressure', id: 'resource-1', title: 'Resource pressure: api-service' }
@@ -250,10 +250,7 @@
             { kind: 'flag', priority: 2, id: 'flag-2',
               title: 'Critical finding', detail: 'sensitive-read-then-connect — credentials then egress' },
             { kind: 'flag', priority: 2, id: 'flag-4',
-              title: 'Critical finding', detail: 'tcc-tamper — modified TCC service' },
-            { kind: 'flag', priority: 1, id: 'flag-5',
-              title: 'Agent touched the keychain', detail: 'keychain-access — security find-generic-password',
-              disposition: { state: 'warning', text: 'Needs a look' } }
+              title: 'Critical finding', detail: 'tcc-tamper — modified TCC service' }
           ]
         }
       ]
@@ -487,18 +484,15 @@
     });
   }
   const REQUIRE_TOKEN = MODE.includes('requiretoken');
-  // expectdemo: episode-routine is a pending decision; Egress → Expect this
-  // destination must clear it before POST /expected-egress answers.
+  // expectdemo: Egress → Expect this destination retires the episode's
+  // choices before POST /expected-egress answers; the posture queue is not
+  // touched, since recurring egress is never a decision.
   if (MODE.includes('expectdemo')) {
-    const post = data['/posture'];
-    post.items.unshift({ severity: 1, kind: 'recurring_egress', id: 'episode-routine', title: 'Recurring connection needs review: updates.example.com' });
-    post.groups.push({ key: 'agent:claude', label: 'claude activity', agent: 'claude', items: [
-      { kind: 'recurring_egress', priority: 1, id: 'episode-routine', title: 'Recurring connection', detail: '5 calls to updates.example.com:443 (tcp) on a recurring schedule.' }] });
-    post.needs_you = post.items.length;
     setTimeout(() => {
       openTab('egress');
       const listed = document.getElementById('posture-items').textContent.includes('updates.example.com');
-      stamp('expect-before', `listed=${listed} needs=${window.SA.t.posture.needs_you}`);
+      const choices = !!document.querySelector('#recurring-egress-container [data-action="expect-egress"][data-episode-id="episode-routine"]');
+      stamp('expect-before', `choices=${choices} listed=${listed} needs=${window.SA.t.posture.needs_you}`);
       document.querySelector('[data-action="expect-egress"][data-episode-id="episode-routine"][data-kind="destination"]').click();
       setTimeout(() => document.getElementById('confirm-ok').click(), 300);
     }, 4000);
@@ -506,7 +500,7 @@
 
   // explaindemo: flag-2 carries the daemon's served explanation (the S2
   // shape: Cloudflare over IPv6, advisor benign at 0.93, allow-host
-  // recommended) and its attention item the benign-likely disposition.
+  // recommended) and no queue item.
   // flag-1 and flag-3 stay raw, as rows from an older daemon or past the
   // 25-flag cap do.
   if (MODE.includes('explaindemo')) {
@@ -546,19 +540,16 @@
         ]
       }
     });
-    for (const g of data['/posture'].groups) {
-      for (const it of g.items) {
-        if (it.kind === 'flag' && it.id === 'flag-2') {
-          Object.assign(it, { priority: 1, title: 'Finding, likely benign',
-            detail: 'Likely benign (advisor 93 %) — sensitive-read-then-connect — credentials then egress',
-            disposition: f2.explain.disposition });
-        }
-      }
-    }
+    // A benign-likely finding is not a decision: the daemon drops it from the
+    // queue.
+    const post = data['/posture'];
+    for (const g of post.groups) g.items = g.items.filter(it => !(it.kind === 'flag' && it.id === 'flag-2'));
+    post.groups = post.groups.filter(g => g.items.length > 0);
+    post.items = post.items.filter(it => !(it.kind === 'flag' && it.id === 'flag-2'));
+    post.needs_you = post.items.length;
   }
   // patterndemo: a 323-flag codex keychain storm served as one pattern
-  // covering fixture flags flag-6 and flag-7; /posture carries one pattern
-  // item for it in the codex group instead of flag items.
+  // covering fixture flags flag-6 and flag-7; the queue never holds it.
   const PATTERN_KEY = 'codex|keychain-access|/Users/dev/Library/Keychains/login.keychain-db';
   if (MODE.includes('patterndemo')) {
     // Findings is opened first, as a user must: hidden panels do not render.
@@ -586,20 +577,54 @@
       ],
       flag_ids: ['flag-7', 'flag-6']
     }];
-    const post = data['/posture'];
-    post.groups.push({ key: 'agent:codex', label: 'codex activity', agent: 'codex',
-      summary: '2 processes (codex 0.46.0 via Terminal.app) across 2 sessions, all exited', items: [] });
-    post.items.push({ severity: 2, kind: 'pattern', id: PATTERN_KEY, title: 'Agent touched the keychain — 323×' });
-    post.needs_you = post.items.length;
-    post.groups.find(g => g.key === 'agent:codex').items.unshift({
-      kind: 'pattern', priority: 1, id: PATTERN_KEY, count: 323, rule: 'keychain-access',
-      title: 'Agent touched the keychain', detail: data['/patterns'][0].summary,
-      disposition: data['/patterns'][0].disposition
-    });
   }
   // ?theme=dark|light pins the console theme (screenshots); app.js reads it
   // from the same storage key the masthead toggle writes.
   const theme = new URLSearchParams(MODE).get('theme');
+  // patternbigdemo: sixty-one keychain flags served as one pattern that covers
+  // them all.
+  if (MODE.includes('patternbigdemo')) {
+    setTimeout(() => openTab('findings'), 1500);
+    const ids = Array.from({ length: 61 }, (_, i) => `kc-${i + 1}`);
+    for (const id of ids) {
+      data['/flags'].push({ id, rule: 'keychain-access', severity: 2, ts: iso(60000), pid: 40844, agent: 'codex',
+        session_id: 'sess-codex-9', title: 'Agent touched the keychain',
+        evidence: [{ kind: 'keychain', label: '/Users/dev/Library/Keychains/login.keychain-db', sub: 'keychain access' }] });
+    }
+    data['/patterns'] = [{
+      key: PATTERN_KEY, agent: 'codex', rule: 'keychain-access', title: 'Agent touched the keychain',
+      subject: { kind: 'keychain', label: '~/Library/Keychains/login.keychain-db', sub: 'keychain' },
+      count: 61, unacked: 61, first: iso(9 * 60000), last: iso(60000),
+      hourly: Array.from({ length: 24 }, (_, i) => (i === 23 ? 61 : 0)),
+      pids: [40844], pid_count: 1, sessions: ['sess-codex-9'], session_count: 1,
+      disposition: { state: 'warning', text: 'Needs a look', why: 'Agent touched the keychain' },
+      summary: 'codex touched the login keychain 61 times.', actions: [], flag_ids: ids
+    }];
+  }
+  // bulkdemo: tick two history rows, press Mark reviewed, accept the confirm.
+  // <pre id="bulk-probe"> counts the confirms asked; mock-requests holds the
+  // dismiss calls.
+  if (MODE.includes('bulkdemo')) {
+    let confirms = 0;
+    setTimeout(() => openTab('findings'), 1500);
+    setTimeout(() => {
+      const ask = window.saConfirm;
+      window.saConfirm = (...args) => { confirms++; return ask(...args); };
+    }, 2000);
+    setTimeout(() => {
+      for (const id of ['flag-1', 'flag-3']) document.querySelector(`#flags-list .log-check[data-row-key="flag:${id}"]`).click();
+      document.querySelector('#flags-bulk [data-action="history-bulk-review"]').click();
+      setTimeout(() => document.getElementById('confirm-ok').click(), 300);
+      setTimeout(() => stamp('bulk-probe', `confirms=${confirms}`), 3000);
+    }, 4000);
+  }
+  // emptyposture: nothing pending and no coverage gap.
+  if (MODE.includes('emptyposture')) {
+    Object.assign(data['/posture'], {
+      state: 'all-clear', needs_you: 0, coverage_count: 0, coverage_items: [], items: [], groups: [],
+      summary: 'Agents monitored, no action needed'
+    });
+  }
   if (MODE.includes('ghdemo')) {
     setTimeout(() => openTab('findings'), 1500);
     const key = 'claude|sensitive-read-then-connect|/Users/dev/.config/gh/hosts.yml';
@@ -1071,7 +1096,7 @@
         try { host = JSON.parse(opts.body).host; } catch { /* ignored */ }
         line += ' row=' + (document.querySelector(`#firewall-container [data-action="allowlist-remove"][data-host="${host}"]`) ? 1 : 0);
       }
-      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('ghdemo') || MODE.includes('rawmute') || MODE.includes('orgallowdemo') || MODE.includes('routinedemo')) && opts.body) line += ' body=' + opts.body;
+      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('ghdemo') || MODE.includes('rawmute') || MODE.includes('orgallowdemo') || MODE.includes('routinedemo') || MODE.includes('bulkdemo')) && opts.body) line += ' body=' + opts.body;
       if (MODE.includes('rawmute') && p === '/mute' && opts.method === 'POST') data['/mute'].push(JSON.parse(opts.body));
       if (p === '/expected' && opts.method === 'DELETE') {
         line = `${opts.method} ${String(path)}`;
@@ -1086,7 +1111,7 @@
         stamp('resolve-probe', `badge=${text('badge-attention-count')} tab=${text('tab-badge-home')} queued=${queued}`);
       }
       if (MODE.includes('routinedemo') && p === '/expected') {
-        const card = document.querySelector('#attention-list [data-routine-key="routine|gh|/Users/dev/.config"]');
+        const card = document.querySelector('#flags-list [data-routine-key="routine|gh|/Users/dev/.config"]');
         stamp('routine-after', `card=${!!card} needs=${window.SA.t.posture.needs_you}`);
       }
       if (MODE.includes('expectdemo') && p === '/expected-egress') {
@@ -1366,6 +1391,20 @@
       if (findings) findings.open = false;
       if (trends) trends.open = false;
     }, 1500);
+  }
+  // History rows are closed until opened. Unless a mode asks for closed rows
+  // (logsclosed, or burstdemo which counts renders), press every row head once
+  // as it renders, so the bodies behind the rows are in the DOM the checks read.
+  if (!MODE.includes('logsclosed') && !MODE.includes('burstdemo')) {
+    const pressed = new Set();
+    new MutationObserver(() => {
+      document.querySelectorAll('.log-head[aria-expanded="false"]').forEach(b => {
+        const k = b.dataset.key;
+        if (pressed.has(k)) return;
+        pressed.add(k);
+        b.click();
+      });
+    }).observe(document, { childList: true, subtree: true });
   }
 
   // Auto-action: exercise the session drill-down like a user click would.
@@ -2226,14 +2265,15 @@
   // past the viewport, and posts it back; the result lands on
   // <body data-hscroll="sessions:N,agents:N,resources:N"> (N in px, 0 = fits).
   if (MODE.includes('phoneframe')) {
-    // Content inside a horizontal scroller (the Sessions sub-view control)
-    // is clipped by it, so the scroller's own box is what must fit.
+    // Content inside a horizontal scroller (the Sessions sub-view control) or
+    // an ellipsised log title is clipped by it, so the clipping box is what
+    // must fit.
     const measure = (tab) => {
       const panel = document.getElementById('tab-' + openTab(tab).tab);
       const width = document.documentElement.clientWidth;
       let past = 0;
       for (const el of [panel, ...panel.querySelectorAll('*')]) {
-        if (el.parentElement && el.parentElement.closest('.subtabs')) continue;
+        if (el.parentElement && el.parentElement.closest('.subtabs, .c-title')) continue;
         const box = el.getBoundingClientRect();
         if (box.width) past = Math.max(past, box.right - width);
       }
@@ -2604,13 +2644,12 @@
       });
     }, 4300);
   }
-  // focusburst: Findings open, flag-2's head button probed and focused, then a
+  // focusburst: Findings open, flag-2's row head probed and focused, then a
   // burst; <pre id="focus-probe"> says whether that node kept focus.
   if (MODE.includes('focusburst')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
-      const card = document.querySelector('#flags-list [data-id="flag-2"]');
-      const btn = card && card.closest('.flag-card').querySelector('.flag-head');
+      const btn = document.querySelector('#flags-list .log-row[data-row-key="flag:flag-2"] .log-head');
       if (btn) { btn.dataset.probe = '1'; btn.focus(); }
       burst();
       setTimeout(() => stamp('focus-probe', btn && btn.isConnected && document.activeElement === btn ? 'kept' : 'lost'), 2600);
@@ -2631,7 +2670,7 @@
   }
   // rawmute: Home's Findings history open (openTab('findings')), focus the
   // blog.example.com unmute button in its Muted ledger, then press flag-3's
-  // raw-card "Dismiss this flag class". The POST lands in the /mute fixture,
+  // "Dismiss this flag class". The POST lands in the /mute fixture,
   // so the re-render adds a codex-scoped row beside the focused one.
   // <pre id="mute-focus-probe"> says whether focus stayed.
   if (MODE.includes('rawmute')) {
@@ -2640,7 +2679,7 @@
       const un = document.querySelector('#flags-list [data-action="unmute"][data-host="blog.example.com"]');
       if (un) { un.dataset.probe = '1'; un.focus(); }
       const dismiss = document.querySelector('#flags-list [data-action="dismiss-flag"][data-id="flag-3"]');
-      const mute = dismiss && dismiss.closest('.flag-card').querySelector('[data-action="mute-rule"]');
+      const mute = dismiss && dismiss.closest('.row-body').querySelector('[data-action="mute-rule"]');
       if (mute) mute.click();
       setTimeout(() => stamp('mute-focus-probe',
         `${un && un.isConnected && document.activeElement === un ? 'kept' : 'lost'} rows=${document.querySelectorAll('#flags-list .mute-row').length}`), 2600);
@@ -2652,27 +2691,24 @@
     setTimeout(() => openTab('egress'), 4000);
     setTimeout(() => document.querySelector('.fw-suggestion [data-action="allow-host"]').click(), 9000);
   }
-  // detailsprobe (with explaindemo): flag-2 raised seconds ago, so its age
-  // changes on every render; Findings open, its Details opened and probed,
-  // then a burst. <pre id="details-probe"> says whether that node stayed
-  // connected and open, and its meta before | after.
+  // detailsprobe (with explaindemo): flag-2 raised seconds ago; Findings
+  // open, its row's Evidence opened and probed, then a burst. <pre
+  // id="details-probe"> says whether that node stayed connected and open.
   if (MODE.includes('detailsprobe')) {
     data['/flags'].find(f => f.id === 'flag-2').ts = new Date(Date.now() - 5000).toISOString();
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
-      const d = document.querySelector('#flags-list .finding[data-flag-id="flag-2"] details');
-      const meta = () => (d && d.closest('.finding') ? d.closest('.finding').querySelector('.finding-meta').textContent : '');
-      const before = meta();
+      const d = document.querySelector('#flags-list .row-body[data-flag-id="flag-2"] details.body-evidence');
       if (d) { d.open = true; d.dataset.probe = '1'; }
       burst();
-      setTimeout(() => stamp('details-probe', d && d.isConnected && d.open ? `kept ${before} | ${meta()}` : 'lost'), 2600);
+      setTimeout(() => stamp('details-probe', d && d.isConnected && d.open ? 'kept' : `lost found=${!!d} connected=${!!(d && d.isConnected)} open=${!!(d && d.open)}`), 2600);
     }, 4300);
   }
-  // patternact (with patterndemo): Findings open, press the pattern card's
-  // dismiss-all in the Attention queue.
+  // patternact (with patterndemo): Findings open, press the pattern row's
+  // dismiss-all.
   if (MODE.includes('patternact')) {
     setTimeout(() => openTab('findings'), 4000);
-    setTimeout(() => document.querySelector('#attention-list .pattern-card [data-action-id="dismiss-all"]')?.click(), 9000);
+    setTimeout(() => document.querySelector('#flags-list .row-body[data-pattern-key] [data-action-id="dismiss-all"]')?.click(), 9000);
   }
   // patternstream (with patterndemo): Findings open, then a third keychain
   // flag on the stream that the daemon folds into the codex pattern.
@@ -2693,9 +2729,9 @@
       window.__sse.emit('flag', f);
       const probe = () => {
         const list = document.getElementById('flags-list');
-        const cards = list ? list.querySelectorAll('.pattern-card') : [];
+        const cards = list ? list.querySelectorAll('.log-row[data-row-key^="pattern:"]') : [];
         const covered = cards.length === 1 && [...cards[0].querySelectorAll('.pattern-flag-list code')].some(c => c.textContent === 'flag-8');
-        const row = list && list.querySelector('.flag-card [data-id="flag-8"], .finding:not(.pattern-card)[data-flag-id="flag-8"]');
+        const row = list && list.querySelector('.log-row[data-row-key="flag:flag-8"]');
         return `cards=${cards.length} covered=${covered ? 1 : 0} row=${row ? 1 : 0}`;
       };
       let mid = '';
@@ -2703,25 +2739,25 @@
       setTimeout(() => stamp('pattern-stream-probe', `mid ${mid} | end ${probe()}`), 2600);
     }, 4500);
   }
-  // attnkeep (with patterndemo): Findings open, the codex pattern card's
+  // attnkeep (with patterndemo): Findings open, the codex pattern row's
   // Individual flags opened and its first button focused, then a posture
-  // frame with a new codex RSS, read after the 3 s focus hold lets the
-  // panel render. <pre id="attn-probe"> says whether both survived and what
-  // the group's metrics read.
+  // frame with a new api-service RSS, read after the 3 s focus hold lets the
+  // panel render. <pre id="attn-probe"> says whether both survived, the
+  // api-service need's memory text, and that the pattern stays out of the queue.
   if (MODE.includes('attnkeep')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
-      const card = document.querySelector('#attention-list .pattern-card');
-      const d = card && card.querySelector('details');
-      const btn = card && card.querySelector('.finding-actions button');
+      const card = document.querySelector('#flags-list .row-body[data-pattern-key]');
+      const d = card && card.querySelector('details.body-evidence');
+      const btn = card && card.querySelector('.body-actions button');
       if (d) d.open = true;
       if (btn) btn.focus();
-      data['/posture'].groups.find(g => g.key === 'agent:codex').rssBytes = 734003200;
+      data['/posture'].groups.find(g => g.key.startsWith('session:5821')).rssBytes = 734003200;
       window.__sse.emit('posture', data['/posture']);
       setTimeout(() => {
-        const group = card && card.closest('.attention-group');
-        const metrics = group ? group.querySelector('.attention-metrics').textContent : '';
-        stamp('attn-probe', `open=${!!(d && d.isConnected && d.open)} focus=${!!(btn && document.activeElement === btn)} metrics=${metrics}`);
+        const why = document.querySelector('#attention-list .need[data-kind="resource"] .need-why');
+        const queued = !!document.querySelector('#attention-list [data-kind="pattern"]');
+        stamp('attn-probe', `open=${!!(d && d.isConnected && d.open)} focus=${!!(btn && document.activeElement === btn)} queued=${queued} metrics=${why ? why.textContent : ''}`);
       }, 3600);
     }, 4500);
   }
@@ -2789,13 +2825,14 @@
   // still up at dump time.
   if (MODE.includes('explainact')) {
     setTimeout(() => openTab('findings'), 4000);
-    setTimeout(() => document.querySelector('#flags-list .finding[data-flag-id="flag-2"] .finding-actions button')?.click(), 9000);
+    setTimeout(() => document.querySelector('#flags-list .row-body[data-flag-id="flag-2"] .body-actions button')?.click(), 9000);
   }
   // routinedemo: gh read hosts.yml under three agents — one routine decision
   // ahead of the agent groups; Treat as routine is confirmed and sends the
   // served flag ids; the card leaves before the daemon answers.
   if (MODE.includes('routinedemo')) {
     const key = 'routine|gh|/Users/dev/.config';
+    setTimeout(() => openTab('findings'), 1500);
     data['/routine'] = [{
       key, reader: 'gh', area: '~/.config/gh/hosts.yml', files: 1, count: 145, agents: ['claude', 'codex', 'openclaw'],
       destinations: [{ org: 'GitHub', host: '140.82.114.6', count: 140 }], destination_count: 3, expectable: 143,
@@ -2807,14 +2844,11 @@
       ],
       flag_ids: ['r1', 'r2', 'r3'],
     }];
-    const post = data['/posture'];
-    post.items.unshift({ severity: 2, kind: 'routine', id: key, title: 'Recurring read — 145×' });
-    post.groups.unshift({ key: 'routine', label: 'Recurring across agents', agent: '', summary: 'The same process reading the same files under several agents',
-      items: [{ kind: 'routine', priority: 1, id: key, title: 'Recurring read', count: 145 }] });
-    post.needs_you = post.items.length;
     setTimeout(() => {
-      const card = document.querySelector(`#attention-list [data-routine-key="${CSS.escape(key)}"]`);
-      stamp('routine-before', card ? `first=${document.querySelector('#attention-list .attention-group').contains(card)} buttons=${card.querySelectorAll('.attention-actions > button').length}` : 'missing');
+      const card = document.querySelector(`#flags-list [data-routine-key="${CSS.escape(key)}"]`);
+      const queued = !!document.querySelector(`#attention-list [data-routine-key="${CSS.escape(key)}"]`);
+      const count = (document.querySelector('#flags-list .log-row[data-row-key^="routine:"] .c-count') || {}).textContent;
+      stamp('routine-before', card ? `queued=${queued} count=${count} buttons=${card.querySelectorAll('.body-actions > button').length}` : 'missing');
       card?.querySelector('[data-action-id="expect-all"]')?.click();
       setTimeout(() => document.getElementById('confirm-ok')?.click(), 300);
     }, 4000);
@@ -2837,8 +2871,8 @@
     };
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
-      const card = document.querySelector('#flags-list .finding[data-flag-id="flag-1"]');
-      stamp('org-allow-card', card ? `bar=${card.querySelectorAll('.finding-actions > button').length} org=${card.querySelectorAll('[data-action="explain-allow-org"][data-org="Google"]').length} hosts=${card.querySelectorAll('[data-action-id="allow-host"]').length}` : 'missing');
+      const card = document.querySelector('#flags-list .row-body[data-flag-id="flag-1"]');
+      stamp('org-allow-card', card ? `bar=${card.querySelectorAll('.body-actions > button').length} org=${card.querySelectorAll('[data-action="explain-allow-org"][data-org="Google"]').length} hosts=${card.querySelectorAll('[data-action-id="allow-host"]').length}` : 'missing');
       card?.querySelector('[data-action="explain-allow-org"]')?.click();
     }, 9000);
   }
@@ -2847,7 +2881,7 @@
   // request served for that action, not just whichever renders first.
   if (MODE.includes('allowpathact')) {
     setTimeout(() => openTab('findings'), 4000);
-    setTimeout(() => document.querySelector('#flags-list .finding[data-flag-id="flag-2"] [data-action-id="allow-path"]')?.click(), 9000);
+    setTimeout(() => document.querySelector('#flags-list .row-body[data-flag-id="flag-2"] [data-action-id="allow-path"]')?.click(), 9000);
   }
   // Exercise the actual workspace controls without sending chat or commands.
   if (MODE.includes('agentworkspace')) {
@@ -2885,6 +2919,7 @@
         checks.draftPreserved = input.value.startsWith('Keep this draft.') && input.value.includes('SSH');
         checks.noOverflow = document.documentElement.scrollWidth <= innerWidth + 1;
         checks.composerVisible = document.getElementById('agent-send').getBoundingClientRect().bottom <= innerHeight + 1;
+        checks.homeHidden = getComputedStyle(document.getElementById('tab-home')).display === 'none';
         document.querySelector('[data-action="goto-tab"][data-tab="home"].agent-posture-link').click();
         checks.alertsReachable = document.querySelector('.tab-btn[data-tab="home"]').getAttribute('aria-selected') === 'true'
           && getComputedStyle(document.querySelector('.statstrip')).display !== 'none';

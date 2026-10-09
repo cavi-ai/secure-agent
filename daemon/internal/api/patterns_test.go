@@ -267,7 +267,7 @@ func TestAttentionPatternReplacesFlagItems(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		id := fmt.Sprintf("p%d", i)
 		covered[id] = true
-		a.store.PutFlag(keychainFlag(id, "codex", 1, now.Add(-time.Duration(i+1)*time.Second), 2))
+		a.store.PutFlag(keychainFlag(id, "codex", 1, now.Add(-time.Duration(i+1)*time.Second), 3))
 	}
 	a.store.PutFlag(model.Flag{ID: "tcc", Rule: "tcc-tamper", Severity: 3, TS: now, PID: 1, Agent: "codex"})
 
@@ -290,7 +290,7 @@ func TestAttentionPatternReplacesFlagItems(t *testing.T) {
 	}
 	want := "codex|keychain-access|" + loginKeychain
 	if len(patternItems) != 1 || patternItems[0].ID != want || patternItems[0].Count != 4 || patternItems[0].Rule != "keychain-access" ||
-		patternItems[0].Disposition == nil || patternItems[0].Disposition.State != model.DispositionWarning || !strings.Contains(patternItems[0].Detail, "4 times") {
+		patternItems[0].Disposition == nil || patternItems[0].Disposition.State != model.DispositionCritical || !strings.Contains(patternItems[0].Detail, "4 times") {
 		t.Fatalf("pattern items = %+v", patternItems)
 	}
 	for _, it := range flagItems {
@@ -312,6 +312,19 @@ func TestAttentionPatternReplacesFlagItems(t *testing.T) {
 	}
 	if headline != 1 {
 		t.Fatalf("headline pattern items = %d, want 1\nitems=%+v", headline, p.Items)
+	}
+}
+
+// A warning pattern is not a decision: it is not queued and needs_you is 0.
+func TestAttentionWarningPatternIsNotQueued(t *testing.T) {
+	a := attentionAPI(t, []resource.Session{mkResourceSession(1, "codex", "/w")})
+	now := time.Now()
+	for i := 0; i < 4; i++ {
+		a.store.PutFlag(keychainFlag(fmt.Sprintf("w%d", i), "codex", 1, now.Add(-time.Duration(i+1)*time.Second), 2))
+	}
+	p := a.computePosture()
+	if p.NeedsYou != 0 || len(p.Items) != 0 || len(p.Groups) != 0 || p.State != "all-clear" {
+		t.Fatalf("posture = %+v, want an empty queue and all-clear", p)
 	}
 }
 

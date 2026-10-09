@@ -48,7 +48,7 @@ func TestDismissPushesAllClearPosture(t *testing.T) {
 
 func TestDecisionPushesPostureAtUnchangedCount(t *testing.T) {
 	st := testStore(t)
-	st.PutFlag(model.Flag{ID: "a", Rule: "transcript-secret-leak", Severity: 2, TS: time.Now()})
+	st.PutFlag(model.Flag{ID: "a", Rule: "transcript-secret-leak", Severity: 3, TS: time.Now()})
 	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
 	a.deltaHub = NewDeltaHub()
 	ch := a.deltaHub.Subscribe()
@@ -57,7 +57,7 @@ func TestDecisionPushesPostureAtUnchangedCount(t *testing.T) {
 	<-ch
 	// A second finding lands without a publish; dismissing the first leaves
 	// one item, the count last published.
-	st.PutFlag(model.Flag{ID: "b", Rule: "transcript-secret-leak", Severity: 2, TS: time.Now()})
+	st.PutFlag(model.Flag{ID: "b", Rule: "transcript-secret-leak", Severity: 3, TS: time.Now()})
 	w := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(w, httptest.NewRequest("POST", "/flags/acknowledge", strings.NewReader(`{"flag_id":"a"}`)))
 	if w.Code != 200 {

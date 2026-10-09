@@ -565,12 +565,6 @@ function attentionCount(posture) {
   return (posture && Number(posture.needs_you)) || 0;
 }
 
-// Coverage observations are informational. Only the daemon's pending
-// egress decisions belong in the Egress tab's attention badge.
-function egressAttentionCount(posture) {
-  return ((posture && posture.items) || []).filter(item => item.kind === 'recurring_egress').length;
-}
-
 // Drawer back-stack: a drawer opened from inside another carries back
 // ({ label, reopen }); the head shows "‹ label" before the title and the
 // click re-runs the previous opener, so that drawer re-renders from live
@@ -1154,15 +1148,28 @@ function actionItems(acts, extra, attrs, label) {
   return items.sort((x, y) => (Number(y.recommended) - Number(x.recommended)) || (rank(x.id) - rank(y.id)));
 }
 
+// leadOnly: the items with exactly one bar button — the recommended item,
+// else fallback, else the first item. fallback joins the list either way.
+function leadOnly(items, fallback) {
+  const list = fallback ? [...items, fallback] : items;
+  const lead = list.find(i => i.recommended) || fallback || list[0];
+  return list.map(i => ({ ...i, bar: i === lead }));
+}
+
 // explainActionsHTML: an explained flag's served actions on an action bar.
+function explainActionsHTML(flag, extra) {
+  return actionBarHTML(explainActionItems(flag, extra));
+}
+
+// explainActionItems: an explained flag's served actions as bar items.
 // allow-host collapses to one choice per destination organization; it
 // allows each of the organization's hosts exactly, as the served actions
 // would one by one. The click handler reads every request from the served
 // explanation (flag id + action id + host or organization), never from the
 // markup. extra: console items for the menu (re-run advisor, what to do).
-function explainActionsHTML(flag, extra) {
+function explainActionItems(flag, extra) {
   const ex = flag && flag.explain;
-  if (!ex) return '';
+  if (!ex) return [];
   const fid = escapeHTML(flag.id);
   const hostOf = a => (a.body && typeof a.body.host === 'string' ? a.body.host : '');
   const acts = assessmentActions(ex.actions, ex.assessment).filter(a => a && EXPLAIN_CONSOLE_ACTIONS.includes(a.id));
@@ -1182,7 +1189,7 @@ function explainActionsHTML(flag, extra) {
   }));
   const attrs = a => `data-action="explain-act" data-flag-id="${fid}" data-action-id="${escapeHTML(a.id)}"`
     + (hostOf(a) ? ` data-host="${escapeHTML(hostOf(a))}"` : '');
-  return actionBarHTML(actionItems(merged, extra, attrs, a => (a.attrs ? a.label : explainActionLabel(flag, a))));
+  return actionItems(merged, extra, attrs, a => (a.attrs ? a.label : explainActionLabel(flag, a)));
 }
 
 // ---------- agent families ----------
@@ -1201,20 +1208,6 @@ function familyTitle(name) {
 function capFirst(word) {
   const s = String(word || '');
   return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-// attentionSubtitle: the line under an attention group's name — its
-// workspace, or for an agent-level group the processes and sessions behind
-// it (the daemon's summary). A workspace of "/" says nothing, so the group
-// renders no subtitle ('').
-function attentionSubtitle(group) {
-  const g = group || {};
-  const ws = String(g.workspace || '').trim();
-  if (ws === '/') return '';
-  if (ws) return ws;
-  if (g.key === 'machine') return 'Monitoring gaps no agent session owns';
-  if (g.summary) return String(g.summary);
-  return 'Not tied to one live session';
 }
 
 // processLabel reads a flag's process snapshot as "<harness> via <app>":
@@ -2068,7 +2061,7 @@ function policyListHTML(kind, rows, st) {
   return `<div class="policy-list" data-policy="${kind}">${grouped}</div>`;
 }
 // Durable review actions are revision-bound; none creates a permission.
-function reviewHTML(r, draft) {
+function reviewHTML(r, draft, actions = true) {
   const c = r.context || {}, a = r.assessment || {};
   const state = r.review_state || 'unreviewed';
   const action = decision => `data-action="review-decision" data-id="${escapeHTML(r.id)}" data-revision="${Number(r.revision)}" data-decision="${decision}"`;
@@ -2081,7 +2074,7 @@ function reviewHTML(r, draft) {
     ${assessmentHTML(a)}
     ${r.evidence_flag_available ? `<button class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${escapeHTML(r.evidence_flag_id)}">View supporting evidence</button>` : '<p>The source supporting this assessment has expired. The recorded risk remains in history.</p>'}
     ${draft && draft.conflict ? `<p role="alert">Evidence changed. Your ${escapeHTML(draft.action.replaceAll('_', ' '))} choice is retained. Review the new facts and choose again.</p>` : ''}
-    ${r.evidence_available ? `<div class="attention-actions">${state === 'unreviewed' ? `<button class="btn btn-primary btn-sm" ${action('acknowledge')}>Mark reviewed</button>` : ''}${state !== 'closed_reported' ? `<button class="btn btn-ghost btn-sm" ${action('close_reported')}>Report closure</button>` : ''}</div>` : '<p>Source evidence has expired. Risk and review history remain; closure has not been verified.</p>'}
+    ${r.evidence_available ? (actions ? `<div class="attention-actions">${state === 'unreviewed' ? `<button class="btn btn-primary btn-sm" ${action('acknowledge')}>Mark reviewed</button>` : ''}${state !== 'closed_reported' ? `<button class="btn btn-ghost btn-sm" ${action('close_reported')}>Report closure</button>` : ''}</div>` : '') : '<p>Source evidence has expired. Risk and review history remain; closure has not been verified.</p>'}
     <details><summary>Evidence and review history</summary><p>${r.decision ? `${escapeHTML(r.decision.action.replaceAll('_', ' '))} · revision ${Number(r.decision.revision)} · ${escapeHTML(r.decision.at)}` : 'No decision receipt recorded.'}</p>${links}${incidents}</details>
   </article>`;
 }

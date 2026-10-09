@@ -489,16 +489,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // KPI tween: animate numeric transitions, flash green/rose on change.
   const kpiPrev = {};
-  // markZero flags an element whose numeric value is zero, so CSS can drop
-  // its severity colour (a red "0 flags" is noise, not a warning). A CLASS,
-  // not a data attribute: the class sits before the id in the markup, so the
-  // exact `id="count-flags">N<` shape stays intact for tests and tooling.
-  function markZero(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.toggle('is-zero', String(el.textContent).trim() === '0');
-  }
-
   function setKpi(id, val) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -921,7 +911,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const agents = (t.status && t.status.agents) || [];
     const trees = t.status && t.status.trees;
     setTabBadge('home', attentionCount(t.posture));
-    setTabBadge('egress', egressAttentionCount(t.posture));
     setTabBadge('processes', groupAgentsByHarness(agents).filter(g => !g.infra).length);
     setTabBadge('sessions', t.sessions && t.sessions.length
       ? groupSessionsByHarness(t.sessions, trees, agents).reduce((n, g) => n + (g.infra ? 0 : familySize(g.live)), 0)
@@ -1637,7 +1626,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // home, sessions, egress are tab badges; the sessions and processes
   // counts also sit on their sub-view buttons.
   const BADGE_ELS = {
-    home: ['tab-badge-home'], egress: ['tab-badge-egress'],
+    home: ['tab-badge-home'],
     sessions: ['tab-badge-sessions', 'subtab-badge-board'], processes: ['subtab-badge-processes']
   };
   function setTabBadge(id, n) {
@@ -1941,9 +1930,12 @@ document.addEventListener('DOMContentLoaded', () => {
       // Inline in the stat strip, so keep it to one short phrase.
       hint.textContent = s.infra_count ? `+${s.infra_count} infra` : '';
     }
-    setKpi('count-flags', s.unacted_flags_24h != null
+    const flags24h = s.unacted_flags_24h != null
       ? s.unacted_flags_24h
-      : unactedLast24h(telemetryData.flags, Date.now()).length);
+      : unactedLast24h(telemetryData.flags, Date.now()).length;
+    setKpi('count-flags', flags24h);
+    const fact = document.getElementById('home-findings-fact');
+    if (fact) fact.textContent = `${flags24h} in 24 h`;
     const openInc = (telemetryData.incidents || []).filter(inc => !inc.workflow || inc.workflow.status !== 'resolved');
     const inc24 = openInc.filter(inc => {
       const t = Date.parse(inc.timestamp);
@@ -1953,9 +1945,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const proxyEvents = telemetryData.events.filter(e => e.kind === 9 || (e.detail && e.detail.includes('proxy')));
     setKpi('count-proxy', proxyEvents.length);
-    // Severity colour only when the count is real: a red 0 reads as a bug.
-    markZero('count-flags');
-    markZero('count-incidents');
     if (chip && s.bus_drops) chip.title = s.bus_drops + ' event bus drops';
   }
 
@@ -1968,6 +1957,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // cappedList keys the operator expanded ("events", "agents:<harness>",
   // "family-procs:<family key>"); re-renders keep those lists whole.
   const expandedLists = new Set();
+  // Findings-history rows ticked for a bulk review, by row key.
+  const historySelected = new Set();
+  function syncHistoryChecks() {
+    document.querySelectorAll('#flags-list .log-check').forEach(c => { c.checked = historySelected.has(c.dataset.rowKey); });
+  }
 
   // Harness filter shared by the Sessions and Agents tabs: pill states
   // (harness key → false when switched off), the text filter, and the
@@ -2089,7 +2083,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       if (!r.ok) throw new Error(await r.text());
       showToast(status === 'resolved' ? 'Incident closure recorded as reported' : 'Incident acknowledged', 'success');
-      cardNote(`#incidents-container [data-action="open-incident"][data-id="${cssq(id)}"]`, '.incident-card', 'incidents-container', status);
+      cardNote(`#incidents-container [data-action="open-incident"][data-id="${cssq(id)}"]`, '.log-row', 'incidents-container', status);
       fetchTelemetry();
     } catch (err) {
       revert();
@@ -2591,6 +2585,52 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // Revision-bound records use their captured revisions; source-only rows
+  // keep the legacy acknowledgment batches. Refresh after a partial failure
+  // so successful earlier decisions remain visible without retrying a choice.
+  window.historyBulkReview = async function() {
+    const rows = Array.from(historySelected).map(k => (window.SA.historyRows || new Map()).get(k)).filter(Boolean);
+    const ids = [...new Set(rows.flatMap(r => r.flagIds))];
+    const reviews = rows.filter(r => r.review).map(r => r.review);
+    if (!ids.length && !reviews.length) return;
+    const n = rows.length;
+    if (!await window.saConfirm(`Mark ${n} finding${n === 1 ? '' : 's'} reviewed? They stay in history; rules keep watching.`,
+      { title: 'Mark reviewed', okLabel: 'Mark reviewed', danger: false })) return;
+    const revert = stage(['routine', 'patterns', 'flags', 'flagsView', 'posture'], ['flags', 'attention', 'posture', 'chart-flags', 'status', 'tab-badges'], () => {
+      Object.assign(telemetryData, reviewedAfterOptimistic(telemetryData, ids));
+    });
+    try {
+      for (const review of reviews) {
+        const res = await apiFetch('/reviews/decision', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: review.id, revision: review.revision, action: 'acknowledge' })
+        });
+        if (res.status === 409) {
+          reviewDrafts.set(review.id, { action: 'acknowledge', conflict: true });
+          throw new Error('Evidence changed. Review the new facts and choose again.');
+        }
+        if (!res.ok) throw new Error(await res.text());
+      }
+      for (let i = 0; i < ids.length; i += 500) {
+        const res = await apiFetch('/flags/acknowledge', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ flag_ids: ids.slice(i, i + 500) })
+        });
+        if (!res.ok) throw new Error(await res.text());
+      }
+    } catch (err) {
+      revert();
+      showToast(`Mark reviewed failed: ${err.message || err}`, 'danger');
+      await fetchTelemetry();
+      markDirty(['flags', 'attention']);
+      return;
+    }
+    historySelected.clear();
+    syncHistoryChecks();
+    showToast(`Marked ${n} reviewed — the rules keep watching`, 'success');
+    fetchTelemetry();
+  };
+
   // pid → agent name for human-readable timeline rows (a bare PID is the
   // ambiguous-process complaint; the name is what the operator recognizes).
   function agentNameFor(pid) {
@@ -2614,6 +2654,8 @@ document.addEventListener('DOMContentLoaded', () => {
     expanded: expandedLists,
     reviewDrafts,
     get reviewCursor() { return reviewCursor; },
+    historySelected,
+    historyRows: new Map(),
     harnessFilter,
     setTabBadge,
     paintSessionChip,
@@ -3149,8 +3191,8 @@ document.addEventListener('DOMContentLoaded', () => {
   window.resolveGuardPrompt = async function(id, verdict, scope) {
     const action = verdict === 'allow'
       ? (scope === 'always' ? 'allow every future path matched by this rule' : 'allow this request once')
-      : 'deny this request and remember the rule';
-    if (!await saConfirm(`Apply guard decision: ${action}?`, { title: 'Guard decision', okLabel: 'Apply' })) return;
+      : (scope === 'always' ? 'deny every future path matched by this rule' : 'deny this request once');
+    if (scope !== 'once' && !await saConfirm(`Apply guard decision: ${action}?`, { title: 'Guard decision', okLabel: 'Apply' })) return;
     const revert = stage(['guardPending', 'posture'], ['attention', 'posture', 'tab-badges'], () => {
       telemetryData.guardPending = (telemetryData.guardPending || []).filter(x => x.id !== id);
       mapAttentionItems(it => (it.kind === 'guard' && it.id === id ? null : it));
@@ -3782,7 +3824,7 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
         showToast(`Dismissed ${openIds.length} flag${openIds.length === 1 ? '' : 's'} — the rule keeps watching`, 'info');
-        cardNote(`[data-pattern-key="${cssq(key)}"] .pattern-open`, '.pattern-card', 'flags-list', 'dismissed');
+        cardNote(`[data-pattern-key="${cssq(key)}"] .pattern-open`, '.log-row', 'flags-list', 'dismissed');
         fetchTelemetry();
         return;
       }
@@ -4005,14 +4047,32 @@ document.addEventListener('DOMContentLoaded', () => {
     // A drawer opened from inside the open drawer can go back to it.
     const back = () => (el.closest('#drawer') ? currentDrawerBack() : null);
     switch (d.action) {
-      case 'attention-expand': {
+      case 'toggle-row': {
         e.preventDefault();
-        const list = document.getElementById('attention-list');
-        const expanded = list.classList.toggle('expanded');
-        el.setAttribute('aria-expanded', String(expanded));
-        el.textContent = expanded ? 'Show fewer decisions' : 'View all decisions';
+        if (!expandedLists.delete(d.key)) expandedLists.add(d.key);
+        renderNow(d.key.startsWith('need:') ? ['attention'] : ['flags', 'incidents']);
         break;
       }
+      case 'history-select':
+        if (el.checked) historySelected.add(d.rowKey); else historySelected.delete(d.rowKey);
+        paintHistoryBulk(window.SA);
+        break;
+      case 'history-select-all':
+        historySelected.clear();
+        if (el.checked) for (const k of (window.SA.historyRows || new Map()).keys()) historySelected.add(k);
+        syncHistoryChecks();
+        paintHistoryBulk(window.SA);
+        break;
+      case 'history-bulk-clear':
+        e.preventDefault();
+        historySelected.clear();
+        syncHistoryChecks();
+        paintHistoryBulk(window.SA);
+        break;
+      case 'history-bulk-review':
+        e.preventDefault();
+        window.historyBulkReview();
+        break;
       case 'expect-egress':
         e.preventDefault();
         saveExpectedEgress(d.episodeId, d.kind);
@@ -4212,6 +4272,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (d.key === 'events') renderNow(['events']);
         else if (String(d.key).startsWith('agents:')) renderNow(['agents']);
         else if (String(d.key).startsWith('pattern:')) renderNow(['attention', 'flags']);
+        else if (d.key === 'history') renderNow(['flags']);
+        else if (d.key === 'history-incidents') renderNow(['incidents']);
         else if (d.key === 'spend') renderNow(['spend']);
         else fillFamilyDrawer();
         break;
@@ -4460,12 +4522,6 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         window.openFDASettings();
         break;
-      case 'toggle-flag': {
-        const card = el.parentElement;
-        card.classList.toggle('expanded');
-        el.setAttribute('aria-expanded', card.classList.contains('expanded'));
-        break;
-      }
     }
   });
 
