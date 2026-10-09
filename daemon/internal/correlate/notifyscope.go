@@ -1,9 +1,7 @@
 package correlate
 
 import (
-	"encoding/json"
 	"log"
-	"os"
 	"strings"
 	"sync"
 
@@ -58,13 +56,9 @@ func (s *NotifyScopeStore) Load() map[string]bool {
 }
 
 func (s *NotifyScopeStore) loadLocked() map[string]bool {
-	raw := map[string]bool{}
-	data, err := os.ReadFile(s.path)
+	raw, err := readNotifyOverrides(s.path)
 	if err != nil {
-		return raw
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		log.Printf("correlate: WARNING: notify-scopes file %s is corrupt (%v); workspace scopes are NOT applied until it is fixed", s.path, err)
+		log.Printf("correlate: WARNING: cannot load notify-scopes (%v); workspace scopes are NOT applied until it is fixed", err)
 		return map[string]bool{}
 	}
 	out := make(map[string]bool, len(raw))
@@ -80,7 +74,10 @@ func (s *NotifyScopeStore) loadLocked() map[string]bool {
 func (s *NotifyScopeStore) Set(workspace, rule string, notify bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m := s.loadLocked()
+	m, err := readNotifyOverrides(s.path)
+	if err != nil {
+		return err
+	}
 	key := scopeKey(workspace, rule)
 	if cur, ok := m[key]; ok && cur == notify {
 		return nil
@@ -93,7 +90,10 @@ func (s *NotifyScopeStore) Set(workspace, rule string, notify bool) error {
 func (s *NotifyScopeStore) Clear(workspace, rule string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m := s.loadLocked()
+	m, err := readNotifyOverrides(s.path)
+	if err != nil {
+		return err
+	}
 	key := scopeKey(workspace, rule)
 	if _, ok := m[key]; !ok {
 		return nil
