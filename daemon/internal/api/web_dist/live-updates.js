@@ -45,6 +45,9 @@ function createConsoleLiveUpdates({ refresh, streamURL, handlers = {}, EventSour
         if (stopped) return;
         failures = 0;
         stopPolling();
+        // Every connection may have missed deltas, including the initial
+        // snapshot-to-subscription window. Refresh once the stream is live.
+        refreshFull();
       };
       source.onerror = () => {
         if (stopped) return;

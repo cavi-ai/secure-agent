@@ -139,6 +139,9 @@ type Status struct {
 	// buffer was full. Zero is healthy; growth under N-agent bursts is the
 	// hot-path signal to surface.
 	BusDrops uint64 `json:"bus_drops,omitempty"`
+	// DeltaDrops counts missed live-update deliveries before a slow subscriber
+	// was disconnected. Clients reconcile from snapshots; stored evidence remains.
+	DeltaDrops uint64 `json:"delta_drops,omitempty"`
 	// BusDropAt is when the last drop happened; BusDropping is true within
 	// collect.LossWindow of it.
 	BusDropAt     *time.Time         `json:"bus_drop_at,omitempty"`
@@ -1007,6 +1010,9 @@ func (a *API) currentStatus() Status {
 
 // Shared monitoring facts for status, posture, and Doctor.
 func (a *API) evidenceStatus(st Status) Status {
+	if a.deltaHub != nil {
+		st.DeltaDrops = a.deltaHub.Dropped()
+	}
 	if a.otlpDropped != nil {
 		st.OTLPDropped = a.otlpDropped()
 	}
