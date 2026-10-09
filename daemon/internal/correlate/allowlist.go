@@ -2,6 +2,7 @@ package correlate
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -32,16 +33,32 @@ func (s *AllowlistStore) Load() map[string][]string {
 }
 
 func (s *AllowlistStore) loadLocked() map[string][]string {
-	out := map[string][]string{}
-	data, err := os.ReadFile(s.path)
+	out, err := s.readLocked()
 	if err != nil {
-		return out
-	}
-	if err := json.Unmarshal(data, &out); err != nil {
-		log.Printf("correlate: WARNING: allowlist-override file %s is corrupt (%v); user-approved hosts are NOT applied until it is fixed", s.path, err)
+		log.Printf("correlate: WARNING: cannot load allowlist overrides (%v); user-approved hosts are NOT applied until it is fixed", err)
 		return map[string][]string{}
 	}
 	return out
+}
+
+// readLocked distinguishes missing policy from failed loads so edits never
+// overwrite unreadable or corrupt operator approvals.
+func (s *AllowlistStore) readLocked() (map[string][]string, error) {
+	data, err := os.ReadFile(s.path)
+	if os.IsNotExist(err) {
+		return map[string][]string{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read allowlist policy %s: %w", s.path, err)
+	}
+	var out map[string][]string
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode allowlist policy %s: %w", s.path, err)
+	}
+	if out == nil {
+		return nil, fmt.Errorf("allowlist policy %s must be a JSON object", s.path)
+	}
+	return out, nil
 }
 
 // Allows reports whether host is approved for agent, by the same match rule
@@ -61,7 +78,10 @@ func (s *AllowlistStore) Allows(agent, host string) bool {
 func (s *AllowlistStore) Add(agent, host string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m := s.loadLocked()
+	m, err := s.readLocked()
+	if err != nil {
+		return err
+	}
 	for _, h := range m[agent] {
 		if h == host {
 			return nil
@@ -77,7 +97,10 @@ func (s *AllowlistStore) Add(agent, host string) error {
 func (s *AllowlistStore) Remove(agent, host string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m := s.loadLocked()
+	m, err := s.readLocked()
+	if err != nil {
+		return err
+	}
 	hosts := m[agent]
 	kept := hosts[:0]
 	for _, h := range hosts {

@@ -9,6 +9,44 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
+func TestAllowlistMutationsPreserveInvalidPolicy(t *testing.T) {
+	for _, content := range []string{`{"cursor":["old.example.com"],`, `null`, `{"cursor":true}`} {
+		for _, operation := range []string{"add", "remove"} {
+			t.Run(content+"/"+operation, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "allowlist.json")
+				if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				s := NewAllowlistStore(path)
+				var err error
+				if operation == "add" {
+					err = s.Add("cursor", "new.example.com")
+				} else {
+					err = s.Remove("cursor", "old.example.com")
+				}
+				if err == nil {
+					t.Error("invalid policy mutation must fail")
+				}
+				got, readErr := os.ReadFile(path)
+				if readErr != nil || string(got) != content {
+					t.Fatalf("invalid policy changed: got %q, read error = %v", got, readErr)
+				}
+			})
+		}
+	}
+}
+
+func TestAllowlistMutationsReportReadErrors(t *testing.T) {
+	// Reading a directory fails regardless of the test process's privileges.
+	s := NewAllowlistStore(t.TempDir())
+	if err := s.Add("cursor", "new.example.com"); err == nil {
+		t.Error("add must report unreadable policy")
+	}
+	if err := s.Remove("cursor", "old.example.com"); err == nil {
+		t.Error("remove must report unreadable policy")
+	}
+}
+
 func TestUninspectedSummaryCounts(t *testing.T) {
 	c := newTestCorrelator(t)
 	// Recent base: the summary prunes entries silent past the retention, so a
