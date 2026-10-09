@@ -337,29 +337,17 @@ func (s *Store) ListEgressEpisodes(limit int) []EgressEpisode {
 	if limit > maxEgressQuery {
 		limit = maxEgressQuery
 	}
-	return s.listEgressEpisodes(limit, 0)
+	return s.listEgressEpisodes(limit)
 }
 
 // ListEgressEpisodesForReview reads the entire bounded projection so an older
 // unresolved candidate cannot be hidden by newer one-off connections.
 func (s *Store) ListEgressEpisodesForReview() []EgressEpisode {
-	return s.listEgressEpisodes(maxEgressEpisodes, 0)
+	return s.listEgressEpisodes(maxEgressEpisodes)
 }
 
-// ListRecurringEgressEpisodes is ListEgressEpisodesForReview narrowed to the
-// recurring episodes, newest first.
-func (s *Store) ListRecurringEgressEpisodes() []EgressEpisode {
-	var out []EgressEpisode
-	for _, e := range s.listEgressEpisodes(maxEgressEpisodes, minRecurringCount) {
-		if e.Recurring {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-func (s *Store) listEgressEpisodes(limit, minCount int) []EgressEpisode {
-	rows, err := s.db.Query(`SELECT id,agent,exe_path,harness,workspace,host,protocol,port,count,first_seen_ns,last_seen_ns,intervals_json,session_ids_json FROM egress_episodes WHERE last_seen_ns>=? AND count>=? ORDER BY last_seen_ns DESC, id DESC LIMIT ?`, time.Now().Add(-egressIdleExpiry).UnixNano(), minCount, limit)
+func (s *Store) listEgressEpisodes(limit int) []EgressEpisode {
+	rows, err := s.db.Query(`SELECT id,agent,exe_path,harness,workspace,host,protocol,port,count,first_seen_ns,last_seen_ns,intervals_json,session_ids_json FROM egress_episodes WHERE last_seen_ns>=? ORDER BY last_seen_ns DESC, id DESC LIMIT ?`, time.Now().Add(-egressIdleExpiry).UnixNano(), limit)
 	if err != nil {
 		return nil
 	}

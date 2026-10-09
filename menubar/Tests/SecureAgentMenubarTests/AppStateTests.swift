@@ -447,14 +447,14 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
         XCTAssertEqual(state.unactedFlags.map(\.id), ["d-2"])
     }
 
-    func testInformationalFlagsNeverDemandAction() async {
-        // Severity-1 (routine keychain-db opens) queues silently — it must
-        // not occupy the popover's needs-a-decision list.
+    func testOnlyCriticalFlagsDemandAction() async {
+        // Informational and warning flags stay in the console's history —
+        // they must not occupy the popover's needs-a-decision list.
         let stub = StubDaemonClient()
-        stub.flags = [flag("kc-info", 1), flag("warn", 2)]
+        stub.flags = [flag("kc-info", 1), flag("warn", 2), flag("crit", 3)]
         let (state, _) = makeState(stub)
         await state.performFetch()
-        XCTAssertEqual(state.unactedFlags.map(\.id), ["warn"])
+        XCTAssertEqual(state.unactedFlags.map(\.id), ["crit"])
     }
 
     func testTransportErrorClearsAllDaemonState() async {

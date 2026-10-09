@@ -122,9 +122,8 @@ func TestRoutineExpectsOnlyTheGroupsReads(t *testing.T) {
 	}
 }
 
-// The attention queue shows a routine group once, in the routine group,
-// ahead of agent groups of equal priority; its flags leave the agent groups.
-func TestAttentionFoldsRoutineAcrossAgents(t *testing.T) {
+// A warning routine group is not queued and needs_you is 0.
+func TestAttentionWarningRoutineIsNotQueued(t *testing.T) {
 	a := expectedTestAPI(t)
 	now := time.Now()
 	gh := ghRead("sensitive read", 900, "GitHub")
@@ -133,8 +132,26 @@ func TestAttentionFoldsRoutineAcrossAgents(t *testing.T) {
 		f.Severity = 2
 		a.store.PutFlag(f)
 	}
+	p := a.computePosture()
+	if p.NeedsYou != 0 || len(p.Items) != 0 || len(p.Groups) != 0 || p.State != "all-clear" {
+		t.Fatalf("posture = %+v, want an empty queue and all-clear", p)
+	}
+}
+
+// The attention queue shows a critical routine group once, in the routine
+// group, ahead of agent groups of equal priority; its flags leave the agent
+// groups.
+func TestAttentionFoldsRoutineAcrossAgents(t *testing.T) {
+	a := expectedTestAPI(t)
+	now := time.Now()
+	gh := ghRead("sensitive read", 900, "GitHub")
+	for i, agent := range []string{"claude", "codex", "openclaw"} {
+		f := agentFlag(ghFlag(fmt.Sprintf("gh%d", i), now.Add(time.Duration(i)*time.Minute), gh, "140.82.114.6"), agent)
+		f.Severity = 3
+		a.store.PutFlag(f)
+	}
 	other := ghFlag("solo", now, model.EvidenceItem{Kind: "read", Label: "/Users/dev/work/.env", Sub: "sensitive read", PID: 900, Exe: "/bin/cat"}, "api.example.com")
-	other.Severity = 2
+	other.Severity = 3
 	a.store.PutFlag(other)
 
 	groups := attentionGroups(a)

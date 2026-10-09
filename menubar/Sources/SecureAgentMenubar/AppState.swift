@@ -1247,23 +1247,9 @@ public final class AppState: ObservableObject {
         return .openConsole(tab: "findings")
     }
 
-    /// Precedence of served dispositions: critical > warning > benign-likely.
-    static func dispositionRank(_ flag: FlagModel) -> Int {
-        switch flag.explain?.disposition.state {
-        case "critical": return 0
-        case "warning": return 1
-        case "benign-likely": return 2
-        default: return 3
-        }
-    }
-
-    /// The flag the hero names: unacted, highest served disposition, newest
-    /// within a tier (/flags is newest first).
-    public var heroFlag: FlagModel? {
-        unactedFlags.enumerated()
-            .min { (Self.dispositionRank($0.element), $0.offset) < (Self.dispositionRank($1.element), $1.offset) }?
-            .element
-    }
+    /// The flag the hero names: the newest unacted critical one (/flags is
+    /// newest first).
+    public var heroFlag: FlagModel? { unactedFlags.first }
 
     /// The in-place action the hero ran last and how it went.
     public struct InPlaceAction: Equatable {
@@ -1392,13 +1378,15 @@ public final class AppState: ObservableObject {
 
     public var uninspectedEgress: Int { status?.uninspectedEgress ?? 0 }
 
-    /// Flags that still need a decision: not acknowledged, not covered by
-    /// an incident row (the popover shows those as incident rows instead —
-    /// one problem, one row), and not INFORMATIONAL (severity 1 — routine
-    /// keychain-db opens queue silently in the console, they never demand
-    /// a decision here).
+    /// Flags that still need a decision: not acknowledged and critical by
+    /// the served disposition (severity >= 3 when the flag has no explain).
+    /// Warning and likely-benign flags stay in the console's history.
     public var unactedFlags: [FlagModel] {
-        flags.filter { $0.acknowledged != true && $0.severity >= 2 }
+        flags.filter { flag in
+            guard flag.acknowledged != true else { return false }
+            if let disposition = flag.explain?.disposition.state { return disposition == "critical" }
+            return flag.severity >= 3
+        }
     }
 
     /// Incidents that still need attention: not resolved. The status icon used

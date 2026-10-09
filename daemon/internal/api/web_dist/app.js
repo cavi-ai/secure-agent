@@ -454,16 +454,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // KPI tween: animate numeric transitions, flash green/rose on change.
   const kpiPrev = {};
-  // markZero flags an element whose numeric value is zero, so CSS can drop
-  // its severity colour (a red "0 flags" is noise, not a warning). A CLASS,
-  // not a data attribute: the class sits before the id in the markup, so the
-  // exact `id="count-flags">N<` shape stays intact for tests and tooling.
-  function markZero(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.toggle('is-zero', String(el.textContent).trim() === '0');
-  }
-
   function setKpi(id, val) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -885,7 +875,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const agents = (t.status && t.status.agents) || [];
     const trees = t.status && t.status.trees;
     setTabBadge('home', attentionCount(t.posture));
-    setTabBadge('egress', egressAttentionCount(t.posture));
     setTabBadge('processes', groupAgentsByHarness(agents).filter(g => !g.infra).length);
     setTabBadge('sessions', t.sessions && t.sessions.length
       ? groupSessionsByHarness(t.sessions, trees, agents).reduce((n, g) => n + (g.infra ? 0 : familySize(g.live)), 0)
@@ -1600,7 +1589,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // home, sessions, egress are tab badges; the sessions and processes
   // counts also sit on their sub-view buttons.
   const BADGE_ELS = {
-    home: ['tab-badge-home'], egress: ['tab-badge-egress'],
+    home: ['tab-badge-home'],
     sessions: ['tab-badge-sessions', 'subtab-badge-board'], processes: ['subtab-badge-processes']
   };
   function setTabBadge(id, n) {
@@ -1901,9 +1890,12 @@ document.addEventListener('DOMContentLoaded', () => {
       // Inline in the stat strip, so keep it to one short phrase.
       hint.textContent = s.infra_count ? `+${s.infra_count} infra` : '';
     }
-    setKpi('count-flags', s.unacted_flags_24h != null
+    const flags24h = s.unacted_flags_24h != null
       ? s.unacted_flags_24h
-      : unactedLast24h(telemetryData.flags, Date.now()).length);
+      : unactedLast24h(telemetryData.flags, Date.now()).length;
+    setKpi('count-flags', flags24h);
+    const fact = document.getElementById('home-findings-fact');
+    if (fact) fact.textContent = `${flags24h} in 24 h`;
     const openInc = (telemetryData.incidents || []).filter(inc => !inc.workflow || inc.workflow.status !== 'resolved');
     const inc24 = openInc.filter(inc => {
       const t = Date.parse(inc.timestamp);
@@ -1913,9 +1905,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const proxyEvents = telemetryData.events.filter(e => e.kind === 9 || (e.detail && e.detail.includes('proxy')));
     setKpi('count-proxy', proxyEvents.length);
-    // Severity colour only when the count is real: a red 0 reads as a bug.
-    markZero('count-flags');
-    markZero('count-incidents');
     if (chip && s.bus_drops) chip.title = s.bus_drops + ' event bus drops';
   }
 
@@ -1928,6 +1917,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // cappedList keys the operator expanded ("events", "agents:<harness>",
   // "family-procs:<family key>"); re-renders keep those lists whole.
   const expandedLists = new Set();
+  // Findings-history rows ticked for a bulk review, by row key.
+  const historySelected = new Set();
+  function syncHistoryChecks() {
+    document.querySelectorAll('#flags-list .log-check').forEach(c => { c.checked = historySelected.has(c.dataset.rowKey); });
+  }
 
   // Harness filter shared by the Sessions and Agents tabs: pill states
   // (harness key → false when switched off), the text filter, and the
@@ -2536,7 +2530,9 @@ document.addEventListener('DOMContentLoaded', () => {
       mapAttentionItems(it => (it.kind === 'flag' && it.id === id ? null : it));
     });
   }
-  window.dismissFlag = async function(id) {
+  // quiet: no toast and no refetch (the bulk review reports once); resolves
+  // true when the daemon accepted the dismissal.
+  window.dismissFlag = async function(id, quiet) {
     const revert = stageDropFlag(id);
     try {
       const res = await apiFetch('/flags/acknowledge', {
@@ -2544,14 +2540,41 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify({ flag_id: id })
       });
       if (!res.ok) throw new Error(await res.text());
-      showToast('Flag dismissed — the rule keeps watching', 'info');
       if (drawerMode === 'flag' && drawerFlag === id) closeDrawer();
+      if (quiet) return true;
+      showToast('Flag dismissed — the rule keeps watching', 'info');
       cardNote('', '', 'flags-list', 'dismissed');
       fetchTelemetry();
+      return true;
     } catch (err) {
       revert();
-      showToast(`Failed to dismiss flag: ${err.message || err}`, 'danger');
+      if (!quiet) showToast(`Failed to dismiss flag: ${err.message || err}`, 'danger');
+      return false;
     }
+  };
+
+  // Marks every ticked history row reviewed behind one confirmation, one
+  // request at a time, and reports once. A pattern whose dismiss-all is no
+  // longer served counts as skipped.
+  window.historyBulkReview = async function() {
+    const rows = Array.from(historySelected).map(k => (window.SA.historyRows || new Map()).get(k)).filter(Boolean);
+    if (!rows.length) return;
+    const n = rows.length;
+    if (!await window.saConfirm(`Mark ${n} finding${n === 1 ? '' : 's'} reviewed? They stay in history; rules keep watching.`,
+      { title: 'Mark reviewed', okLabel: 'Mark reviewed', danger: false })) return;
+    let done = 0;
+    let skipped = 0;
+    for (const r of rows) {
+      let ok = false;
+      if (r.kind === 'flag') ok = await window.dismissFlag(r.key, true);
+      else if (r.kind === 'pattern') ok = await window.patternAct(r.key, 'dismiss-all', undefined, true);
+      else if (r.kind === 'routine') ok = await window.routineAct(r.key, 'dismiss-all', true);
+      if (ok) done++; else skipped++;
+    }
+    historySelected.clear();
+    syncHistoryChecks();
+    showToast(`Marked ${done} reviewed${skipped ? ` (${skipped} skipped)` : ''}`, skipped ? 'info' : 'success');
+    fetchTelemetry();
   };
 
   // pid → agent name for human-readable timeline rows (a bare PID is the
@@ -2575,6 +2598,8 @@ document.addEventListener('DOMContentLoaded', () => {
     agentGroupOpen,
     agentTreeOpen,
     expanded: expandedLists,
+    historySelected,
+    historyRows: new Map(),
     harnessFilter,
     setTabBadge,
     paintSessionChip,
@@ -3110,8 +3135,8 @@ document.addEventListener('DOMContentLoaded', () => {
   window.resolveGuardPrompt = async function(id, verdict, scope) {
     const action = verdict === 'allow'
       ? (scope === 'always' ? 'allow every future path matched by this rule' : 'allow this request once')
-      : 'deny this request and remember the rule';
-    if (!await saConfirm(`Apply guard decision: ${action}?`, { title: 'Guard decision', okLabel: 'Apply' })) return;
+      : (scope === 'always' ? 'deny every future path matched by this rule' : 'deny this request once');
+    if (scope !== 'once' && !await saConfirm(`Apply guard decision: ${action}?`, { title: 'Guard decision', okLabel: 'Apply' })) return;
     const revert = stage(['guardPending', 'posture'], ['attention', 'posture', 'tab-badges'], () => {
       telemetryData.guardPending = (telemetryData.guardPending || []).filter(x => x.id !== id);
       mapAttentionItems(it => (it.kind === 'guard' && it.id === id ? null : it));
@@ -3611,10 +3636,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // A routine group's served action: Treat as routine (confirmed; every
   // exact pair its flags cite is expected) or Dismiss all. The group and its
   // flags leave the page before the request; a failure puts them back.
-  window.routineAct = async function(key, actionId) {
+  window.routineAct = async function(key, actionId, quiet) {
     const rg = (telemetryData.routine || []).find(r => r.key === key);
     const a = rg && (rg.actions || []).find(x => x.id === actionId);
     if (!a) {
+      if (quiet) return false;
       showToast('That action is no longer offered — the list is refreshing.', 'info');
       fetchTelemetry();
       return;
@@ -3631,9 +3657,11 @@ document.addEventListener('DOMContentLoaded', () => {
       out = await res.json().catch(() => ({}));
     } catch (err) {
       revert();
+      if (quiet) return false;
       showToast(`${a.label} failed: ${err.message || err}`, 'danger');
       return;
     }
+    if (quiet) return true;
     showToast(a.id === 'expect-all'
       ? `${Number(out.added) || 0} exact reads marked expected; ${Number(out.acknowledged) || 0} flags reviewed`
       : `Dismissed ${ids.length} flags — the rules keep watching`, 'success');
@@ -3693,11 +3721,12 @@ document.addEventListener('DOMContentLoaded', () => {
       Object.assign(telemetryData, patternAfterOptimisticDismiss(telemetryData, key, submitted));
     });
   }
-  window.patternAct = async function(key, actionId, host) {
+  window.patternAct = async function(key, actionId, host, quiet) {
     const p = (telemetryData.patterns || []).find(x => x.key === key);
     const a = p && !p.dismissed && (p.actions || []).find(x => x.id === actionId
       && (!host || (x.body && x.body.host) === host));
     if (!a) {
+      if (quiet) return false;
       showToast('That action is no longer offered for this pattern — the list is refreshing.', 'info');
       fetchTelemetry();
       return;
@@ -3739,9 +3768,11 @@ document.addEventListener('DOMContentLoaded', () => {
           await send(a.method, a.path, body);
         } catch (err) {
           revert();
+          if (quiet) return false;
           showToast(`Failed to dismiss the pattern: ${err.message || err}`, 'danger');
           return;
         }
+        if (quiet) return true;
         showToast(`Dismissed ${openIds.length} flag${openIds.length === 1 ? '' : 's'} — the rule keeps watching`, 'info');
         cardNote(`[data-pattern-key="${cssq(key)}"] .pattern-open`, '.pattern-card', 'flags-list', 'dismissed');
         fetchTelemetry();
@@ -3966,14 +3997,34 @@ document.addEventListener('DOMContentLoaded', () => {
     // A drawer opened from inside the open drawer can go back to it.
     const back = () => (el.closest('#drawer') ? currentDrawerBack() : null);
     switch (d.action) {
-      case 'attention-expand': {
+      case 'toggle-need':
+      case 'toggle-log-row': {
         e.preventDefault();
-        const list = document.getElementById('attention-list');
-        const expanded = list.classList.toggle('expanded');
-        el.setAttribute('aria-expanded', String(expanded));
-        el.textContent = expanded ? 'Show fewer decisions' : 'View all decisions';
+        const open = !expandedLists.has(d.key);
+        if (open) expandedLists.add(d.key); else expandedLists.delete(d.key);
+        renderNow(d.action === 'toggle-need' ? ['attention'] : ['flags', 'incidents']);
         break;
       }
+      case 'history-select':
+        if (el.checked) historySelected.add(d.rowKey); else historySelected.delete(d.rowKey);
+        paintHistoryBulk(window.SA);
+        break;
+      case 'history-select-all':
+        historySelected.clear();
+        if (el.checked) for (const k of (window.SA.historyRows || new Map()).keys()) historySelected.add(k);
+        syncHistoryChecks();
+        paintHistoryBulk(window.SA);
+        break;
+      case 'history-bulk-clear':
+        e.preventDefault();
+        historySelected.clear();
+        syncHistoryChecks();
+        paintHistoryBulk(window.SA);
+        break;
+      case 'history-bulk-review':
+        e.preventDefault();
+        window.historyBulkReview();
+        break;
       case 'expect-egress':
         e.preventDefault();
         saveExpectedEgress(d.episodeId, d.kind);
@@ -4173,6 +4224,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (d.key === 'events') renderNow(['events']);
         else if (String(d.key).startsWith('agents:')) renderNow(['agents']);
         else if (String(d.key).startsWith('pattern:')) renderNow(['attention', 'flags']);
+        else if (d.key === 'history') renderNow(['flags']);
+        else if (d.key === 'history-incidents') renderNow(['incidents']);
         else if (d.key === 'spend') renderNow(['spend']);
         else fillFamilyDrawer();
         break;

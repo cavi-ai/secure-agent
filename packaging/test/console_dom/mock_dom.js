@@ -1365,6 +1365,14 @@
       if (findings) findings.open = false;
       if (trends) trends.open = false;
     }, 1500);
+    // History rows are closed until opened: open the group, expand every row
+    // so the cards behind them render, then close the group again.
+    setTimeout(() => {
+      const findings = document.getElementById('home-findings');
+      if (findings) findings.open = true;
+      document.querySelectorAll('.log-head[aria-expanded="false"]').forEach(b => b.click());
+      setTimeout(() => { if (findings) findings.open = false; }, 400);
+    }, 1800);
   }
 
   // Auto-action: exercise the session drill-down like a user click would.

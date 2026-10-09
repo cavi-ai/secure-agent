@@ -9,7 +9,7 @@ function renderCoverage() {
   if (!panel || !list) return;
   const items = p.coverage_items || [];
   const harnesses = (status.coverage && status.coverage.harnesses) || [];
-  panel.hidden = items.length === 0 && harnesses.length === 0;
+  panel.hidden = items.length === 0;
   if (badge) badge.textContent = Number(p.coverage_count) || items.length;
   if (panel.hidden) return;
   list.innerHTML = items.map(it => {
@@ -23,174 +23,217 @@ function renderCoverage() {
             ? '<span class="coverage-guidance">Run Doctor to review lost telemetry. Restarting cannot restore missing evidence.</span>'
         : '<span class="coverage-guidance">Check Setup &amp; Permissions in the menu bar</span>';
     return `<div class="coverage-row"><span><strong>${escapeHTML(it.title)}</strong><span>${escapeHTML(it.detail || '')}</span></span>${action}</div>`;
-  }).join('') + harnesses.map(h => {
+  }).join('') + (harnesses.length ? `<details class="coverage-harness"><summary>Per-agent coverage</summary>${harnesses.map(h => {
     const trace = !h.trace_supported ? 'not supported' : h.trace_last_seen ? 'activity observed in 24h' : 'supported; no activity observed in 24h';
     const guard = !h.guard_supported ? 'not supported' : h.hook_last_seen ? 'hook activity observed in 24h' : 'supported; no hook activity observed in 24h';
     return `<div class="coverage-row"><span><strong>${escapeHTML(h.name)}</strong><span>Trace: ${escapeHTML(trace)} · Guard: ${escapeHTML(guard)}</span></span></div>`;
-  }).join('') + (harnesses.length ? `<p class="coverage-guidance">${status.proxy_enabled
+  }).join('')}<p class="coverage-guidance">${status.proxy_enabled
     ? 'Payload inspection covers connections routed through the proxy; review Egress for coverage.'
-    : 'Payload inspection is off (proxy disabled).'} Recent harness activity does not prove every current session is guarded.</p>` : '');
+    : 'Payload inspection is off (proxy disabled).'} Recent harness activity does not prove every current session is guarded.</p></details>` : '');
+}
+
+// ---------- Home: the needs-you list ----------
+
+// needsItems: the daemon's queue flattened to one list, carrying each item's
+// group; highest priority first, served order within a priority.
+function needsItems(posture) {
+  const out = [];
+  for (const g of (posture && posture.groups) || []) {
+    for (const it of g.items || []) out.push({ ...it, group: g });
+  }
+  return out.map((it, i) => [it, i]).sort((a, b) => (b[0].priority - a[0].priority) || (a[1] - b[1])).map(x => x[0]);
+}
+
+const NEED_KIND_WORD = { guard: 'guard', resource: 'resource', incident: 'incident' };
+
+function needDomID(item) {
+  return 'need-' + item.kind + '-' + String(item.id).replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
+function needTimestamp(item, SA) {
+  if (item.kind === 'flag') {
+    const f = (SA.t.flags || []).find(x => x.id === item.id);
+    return f ? f.ts : '';
+  }
+  if (item.kind === 'incident') {
+    const inc = (SA.t.incidents || []).find(x => x.id === item.id);
+    return inc ? inc.timestamp : '';
+  }
+  return '';
+}
+
+// needHTML: one decision row — what the agent wants, why, and the one or two
+// choices. age is the ticking suffix of the meta, set in place after patching.
+function needHTML(item, age) {
+  const SA = window.SA;
+  const group = item.group || {};
+  const agent = group.agent || '';
+  const id = escapeHTML(item.id);
+  const workspaceBase = String(group.workspace || '').split('/').filter(Boolean).pop() || '';
+  const flag = item.kind === 'flag' ? (SA.t.flags || []).find(f => f.id === item.id) : null;
+  const l = flag ? explainLines(flag) : null;
+  const pattern = item.kind === 'pattern' ? (SA.t.patterns || []).find(p => p.key === item.id) : null;
+  const routine = item.kind === 'routine' ? (SA.t.routine || []).find(r => r.key === item.id) : null;
+  const advisorHealth = (SA.t.status && SA.t.status.advisor_health) || null;
+  const advisorVisible = !!(SA.t.status && SA.t.status.advisor_enabled);
+  const advisorOffline = !!(advisorHealth && advisorHealth.circuit_open);
+  const retriageItems = !advisorVisible ? [] : advisorOffline
+    ? [{ label: 'Advisor offline', attrs: '', disabled: true, title: `Advisor offline — verdicts paused (${advisorHealth.last_error || 'model server unreachable'})` }]
+    : [{ label: 'Re-run advisor', attrs: `data-action="retriage" data-id="${id}"` }];
+  const bar = (label, attrs, kind) => ({ label, attrs, kind, bar: true });
+  const menu = (label, attrs, kind) => ({ label, attrs, kind });
+
+  let what = item.detail || item.title || '';
+  let why = '';
+  let actions = '';
+  let detail = '';
+  const sev = item.kind === 'guard' || item.kind === 'resource' ? 'sev-warn' : 'sev-bad';
+  const word = NEED_KIND_WORD[item.kind] || 'critical';
+  if (item.kind === 'guard') {
+    why = [`${agent || 'The agent'} is paused until you answer`, item.scopeText, workspaceBase].filter(Boolean).join(' · ');
+    const a = (verdict, scope) => `data-action="guard-resolve" data-id="${id}" data-verdict="${verdict}" data-scope="${scope}"`;
+    actions = actionBarHTML([
+      bar('Allow once', a('allow', 'once'), 'ghost'), bar('Deny', a('deny', 'once'), 'danger'),
+      menu('Allow rule', a('allow', 'always')), menu('Deny rule', a('deny', 'always')),
+    ]);
+    detail = `<dl class="finding-facts"><dt>Path</dt><dd>${escapeHTML(item.path || '')}</dd><dt>Rule</dt><dd>${escapeHTML(item.rule || '')}</dd><dt>Scope</dt><dd>${escapeHTML(item.scopeText || '')}</dd></dl>`
+      + (item.advisor ? advisorAdviceHTML(item.advisor) : '');
+  } else if (item.kind === 'resource') {
+    why = [group.label, group.rssBytes ? `${fmtRSS(group.rssBytes)} memory` : '', group.cpuPercent ? `${fmtCPU(group.cpuPercent)} CPU` : ''].filter(Boolean).join(' · ');
+    actions = actionBarHTML([
+      bar('Keep running', `data-action="resource-control" data-id="${id}" data-decision="dismiss"`, 'ghost'),
+      bar(`Apply ${String(item.action).replaceAll('_', ' ')}`, `data-action="resource-control" data-id="${id}" data-decision="apply" data-intervention="${escapeHTML(item.action)}"`, 'danger'),
+    ]);
+    detail = `<dl class="finding-facts"><dt>Session</dt><dd>${escapeHTML(group.label || '')}</dd><dt>Memory</dt><dd>${escapeHTML(group.rssBytes ? fmtRSS(group.rssBytes) : '')}</dd><dt>CPU</dt><dd>${escapeHTML(group.cpuPercent ? fmtCPU(group.cpuPercent) : '')}</dd><dt>Processes</dt><dd>${Number(group.processCount) || 0}</dd></dl>`;
+  } else if (item.kind === 'incident') {
+    why = [item.title, item.status].filter(Boolean).join(' · ');
+    actions = actionBarHTML([
+      bar('View report', `data-action="open-incident" data-id="${id}"`, 'ghost'),
+      item.status === 'open' ? menu('Acknowledge', `data-action="incident-status" data-id="${id}" data-status="acknowledged"`) : null,
+    ]);
+  } else if (item.kind === 'flag') {
+    what = (l && l.what) || item.detail || '';
+    why = (l && l.why) || (item.disposition && item.disposition.why) || '';
+    if (flag && l) {
+      const plan = { label: 'What to do', attrs: `data-action="open-plan" data-subject="flag:${id}"`, lead: true };
+      actions = explainActionsHTML(flag, [plan, ...retriageItems], 1);
+      detail = factChipsHTML(flag, l.who) + findingFactsHTML(flag);
+    } else {
+      actions = actionBarHTML([bar('Dismiss', `data-action="dismiss-flag" data-id="${id}"`, 'ghost'), ...retriageItems]);
+    }
+  } else if (pattern) {
+    what = `${pattern.title || item.title} — ${Number(pattern.count) || 0}×`;
+    why = pattern.summary || item.detail || '';
+    actions = patternActionsHTML(pattern, 1);
+  } else if (routine) {
+    why = routine.summary || item.detail || '';
+    what = item.title || 'Recurring read';
+    actions = routineActionsHTML(routine, 1);
+  }
+  const key = `need:${item.kind}:${item.id}`;
+  const expandable = !!detail;
+  const open = expandable && SA.expanded.has(key);
+  const dom = needDomID(item);
+  const meta = `<span class="need-meta">${escapeHTML(word)}<span class="need-age">${age ? ' · ' + escapeHTML(age) : ''}</span>${expandable ? '<svg class="icon need-chev" aria-hidden="true"><use href="#i-arrow"/></svg>' : ''}</span>`;
+  const headInner = `${harnessChipHTML(agent)}<span class="need-what" title="${escapeHTML(what)}">${escapeHTML(what)}</span><span class="need-why">${escapeHTML(why)}</span>${meta}`;
+  const head = expandable
+    ? `<button type="button" class="need-head" data-action="toggle-need" data-key="${escapeHTML(key)}" aria-expanded="${open}" aria-controls="${dom}">${headInner}</button>`
+    : `<div class="need-head">${headInner}</div>`;
+  return `<li class="need ${sev}${open ? ' open' : ''}" data-kind="${escapeHTML(item.kind)}">
+      ${head}
+      <div class="need-actions">${actions}</div>
+      ${expandable ? `<div class="need-detail" id="${dom}"${open ? '' : ' hidden'}>${detail}</div>` : ''}
+    </li>`;
 }
 
 function renderAttention() {
   const SA = window.SA;
-  const container = document.getElementById('attention-list');
+  const panel = document.getElementById('attention-center');
+  const list = document.getElementById('attention-list');
   const badge = document.getElementById('badge-attention-count');
-  const footer = document.getElementById('attention-footer');
-  if (!container) return;
+  if (!list) return;
   renderCoverage();
-  // The daemon serves the grouped queue on /posture — one derivation, no
-  // client-side regrouping that could disagree with the menubar. The count
-  // is the hero's needs_you, which the daemon keeps equal to the groups.
-  const groups = (SA.t.posture && SA.t.posture.groups) || [];
+  // The daemon serves the queue on /posture — one derivation, no client-side
+  // regrouping that could disagree with the menubar. The count is the hero's
+  // needs_you, which the daemon keeps equal to the items.
   const count = attentionCount(SA.t.posture);
   if (badge) badge.textContent = count;
   SA.setTabBadge('home', count);
-  if (!groups.length) {
-    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No pending decisions</span></div>`;
-    if (footer) footer.hidden = true;
-    return;
-  }
-  if (footer) footer.hidden = groups.length <= 3 && groups.every(g => g.items.length <= 2);
-
-  const advisorHealth = (SA.t.status && SA.t.status.advisor_health) || null;
-  const advisorVisible = !!(SA.t.status && SA.t.status.advisor_enabled);
-  const advisorOffline = !!(advisorHealth && advisorHealth.circuit_open);
-
-  const actions = item => {
-    if (item.kind === 'guard') return `
-      <button class="btn btn-primary btn-sm" data-action="guard-resolve" data-id="${escapeHTML(item.id)}" data-verdict="allow" data-scope="once">Allow once</button>
-      <button class="btn btn-ghost btn-sm" data-action="guard-resolve" data-id="${escapeHTML(item.id)}" data-verdict="allow" data-scope="always">Allow rule</button>
-      <button class="btn btn-danger btn-sm" data-action="guard-resolve" data-id="${escapeHTML(item.id)}" data-verdict="deny" data-scope="always">Deny rule</button>`;
-    if (item.kind === 'resource') return `
-      <button class="btn btn-danger btn-sm" data-action="resource-control" data-id="${escapeHTML(item.id)}" data-decision="apply" data-intervention="${escapeHTML(item.action)}">Apply ${escapeHTML(String(item.action).replaceAll('_', ' '))}</button>
-      <button class="btn btn-ghost btn-sm" data-action="resource-control" data-id="${escapeHTML(item.id)}" data-decision="dismiss">Keep running</button>`;
-    if (item.kind === 'incident') return `
-      <button class="btn btn-ghost btn-sm" data-action="open-incident" data-id="${escapeHTML(item.id)}">View report</button>
-      ${item.status === 'open' ? `<button class="btn btn-ghost btn-sm" data-action="incident-status" data-id="${escapeHTML(item.id)}" data-status="acknowledged">Acknowledge</button>` : ''}`;
-    if (item.kind === 'flag') return `
-      <button class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(item.id)}">Dismiss</button>
-      ${retriage(item)}`;
-    if (item.kind === 'recurring_egress') return `
-      <button class="btn btn-ghost btn-sm" data-action="expect-egress" data-episode-id="${escapeHTML(item.id)}" data-kind="destination">Expect destination</button>
-      ${item.action === 'scope' ? `<button class="btn btn-ghost btn-sm" data-action="expect-egress" data-episode-id="${escapeHTML(item.id)}" data-kind="scope">Expect activity scope</button>` : ''}
-      <button class="btn btn-ghost btn-sm" data-action="goto-tab" data-tab="egress">Review evidence</button>`;
-    return '';
-  };
-  const retriage = item => !advisorVisible ? '' : advisorOffline
-    ? `<button class="btn btn-ghost btn-sm" disabled title="Advisor offline — verdicts paused (${escapeHTML(advisorHealth.last_error || 'model server unreachable')})">Advisor offline</button>`
-    : `<button class="btn btn-ghost btn-sm" data-action="retriage" data-id="${escapeHTML(item.id)}">Re-run advisor</button>`;
-  // The same choice as a More-menu item on an explained finding.
-  const retriageItems = item => !advisorVisible ? [] : advisorOffline
-    ? [{ label: 'Advisor offline', attrs: '', disabled: true, title: `Advisor offline — verdicts paused (${advisorHealth.last_error || 'model server unreachable'})` }]
-    : [{ label: 'Re-run advisor', attrs: `data-action="retriage" data-id="${escapeHTML(item.id)}"` }];
-
-  // A flag item whose flag the daemon explained renders the finding card's
-  // lines — who, what, verdict — and its served actions; a pattern item
-  // renders its pattern card, a routine item its routine group.
-  const flagsById = new Map((SA.t.flags || []).map(f => [f.id, f]));
-  const patternsByKey = new Map((SA.t.patterns || []).map(p => [p.key, p]));
-  const routineByKey = new Map((SA.t.routine || []).map(r => [r.key, r]));
+  if (panel) panel.hidden = count === 0;
+  const items = needsItems(SA.t.posture);
   const now = Date.now();
-  const itemHTML = item => {
-    const rg = item.kind === 'routine' ? routineByKey.get(item.id) : null;
-    if (rg) return routineHTML(rg);
-    const p = item.kind === 'pattern' ? patternsByKey.get(item.id) : null;
-    if (p) return patternHTML(p, now, { flags: SA.t.flags, expanded: SA.expanded });
-    const f = item.kind === 'flag' ? flagsById.get(item.id) : null;
-    const l = f && explainLines(f);
-    if (l) return `
-        <div class="attention-item kind-flag finding-item ${l.cls}">
-          <div class="attention-reason">
-            <div class="decision-head">${l.state ? `<span class="disp-badge">${escapeHTML(l.state)}</span>` : ''}<strong class="finding-what">${escapeHTML(l.what)}</strong></div>
-            ${factChipsHTML(f, l.who)}
-            ${l.why ? `<p class="finding-why">${escapeHTML(l.why)}</p>` : ''}
-          </div>
-          <div class="attention-actions">${explainActionsHTML(f, retriageItems(item))}</div>
-        </div>`;
-    return `
-        <div class="attention-item kind-${escapeHTML(item.kind)}">
-          <div class="attention-reason">
-            <div class="decision-head"><span class="attention-kind">${escapeHTML(item.title)}</span><strong>${escapeHTML(item.detail)}</strong></div>
-            ${item.scopeText ? `<p class="finding-why">${escapeHTML(item.scopeText)}</p>` : ''}
-            ${item.advisor ? advisorAdviceHTML(item.advisor) : ''}
-          </div>
-          <div class="attention-actions">${actions(item)}</div>
-        </div>`;
-  };
-
-  let wrap = container.firstElementChild;
-  if (!wrap || !wrap.classList.contains('attention-groups')) {
-    container.innerHTML = '<div class="attention-groups"></div>';
-    wrap = container.firstElementChild;
-  }
-  // The group node is keyed on its identity; urgency, the metrics and the
-  // item count update in place and the items patch inside it, so an open
-  // pattern <details> or a focused button survives a memory or CPU tick.
-  const groupKey = group => group.key || group.label;
-  patchList(wrap, groups, { key: groupKey,
-    hash: group => JSON.stringify([group.key, group.label, group.agent, group.workspace, group.summary]),
-    html: group => `<article class="attention-group">
-      <header class="attention-group-head">
-        <div class="attention-identity">
-          <span class="attention-agent">${escapeHTML(group.key === 'routine' ? 'recurring' : group.agent || 'machine')}</span>
-          <strong>${escapeHTML(group.agent && group.label === group.agent ? familyTitle(group.agent) : group.label)}</strong>
-          ${attentionSubtitle(group) ? `<span class="attention-workspace">${escapeHTML(attentionSubtitle(group))}</span>` : ''}
-        </div>
-        <div class="attention-metrics"></div>
-        <span class="attention-total"></span>
-      </header>
-      <div class="attention-items"></div>
-    </article>` });
-  const nodes = new Map(Array.from(wrap.children).map(n => [n._saKey, n]));
-  for (const group of groups) {
-    const node = nodes.get(String(groupKey(group)));
-    if (!node) continue;
-    node.classList.toggle('urgent', !!(group.items[0] && group.items[0].priority >= 4));
-    const metrics = [
-      group.rssBytes ? `<span><b>${escapeHTML(fmtRSS(group.rssBytes))}</b> memory</span>` : '',
-      group.cpuPercent ? `<span><b>${escapeHTML(fmtCPU(group.cpuPercent))}</b> CPU</span>` : '',
-      group.processCount ? `<span><b>${Number(group.processCount)}</b> process${group.processCount === 1 ? '' : 'es'}</span>` : '',
-    ].filter(Boolean).join('');
-    const m = node.querySelector('.attention-metrics');
-    if (m._saHTML !== metrics) { m.innerHTML = metrics; m._saHTML = metrics; }
-    const total = `${group.items.length} item${group.items.length === 1 ? '' : 's'}`;
-    const t = node.querySelector('.attention-total');
-    if (t.textContent !== total) t.textContent = total;
-    patchList(node.querySelector('.attention-items'), group.items, { key: item => item.kind + ':' + item.id, html: itemHTML });
+  const ageOf = it => fmtAge(needTimestamp(it, SA), now);
+  patchList(list, items, {
+    key: it => it.kind + ':' + it.id,
+    html: it => needHTML(it, ageOf(it)),
+    hash: it => needHTML(it, ''),
+  });
+  for (const el of list.children) {
+    const it = items.find(x => x.kind + ':' + x.id === el._saKey);
+    const span = it && el.querySelector('.need-age');
+    const age = it ? ageOf(it) : '';
+    if (span && span.textContent !== (age ? ' · ' + age : '')) span.textContent = age ? ' · ' + age : '';
   }
 }
 
-function renderIncidents() {
-  const SA = window.SA;
+// ---------- Home: findings history ----------
 
-  const container = document.getElementById('incidents-container');
-  const badge = document.getElementById('badge-incidents-count');
-  const incidents = scopedBySession(SA.t.incidents || [], SA.timelineSession, SA.timelinePids);
+function logWhen(iso, nowMs) {
+  const t = new Date(iso);
+  if (isNaN(t)) return '';
+  const pad = n => String(n).padStart(2, '0');
+  if (t.toDateString() === new Date(nowMs || Date.now()).toDateString()) return pad(t.getHours()) + ':' + pad(t.getMinutes());
+  return `${PATTERN_MONTHS[t.getMonth()]} ${t.getDate()}`;
+}
 
-  badge.textContent = incidents.length;
+function logKey(row) { return row.kind + ':' + row.key; }
 
-  if (incidents.length === 0) {
-    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-incident"/></svg><span>No incidents — nothing to contain right now</span></div>`;
-    return;
-  }
+// logRowHTML: one history row — a select box and a head button over the
+// columns; the detail holds the existing card and builds only while open.
+function logRowHTML(row, SA, nowMs, withSelection = true) {
+  const rk = logKey(row);
+  const openKey = 'log:' + rk;
+  const open = SA.expanded.has(openKey);
+  const dom = 'log-' + rk.replace(/[^A-Za-z0-9_-]/g, '_');
+  const d = row.disposition || {};
+  const cls = DISPOSITION_CLASS[d.state] || 'disp-warning';
+  const verdict = d.text || '';
+  const finding = escapeHTML(row.title) + (row.sub ? ` <span class="c-sub-text">· ${escapeHTML(row.sub)}</span>` : '');
+  const selectable = !row.reviewed;
+  const bars = row.hourly ? `<span class="pattern-bars log-bars${row.critical ? ' crit' : ''}" aria-hidden="true">${patternBarsHTML(row.hourly)}</span>` : '';
+  return `<li class="log-row${row.critical ? ' crit' : ''}${open ? ' open' : ''}" data-row-key="${escapeHTML(rk)}">
+      <div class="log-line">
+        <input type="checkbox" class="log-check" data-action="history-select" data-row-key="${escapeHTML(rk)}" aria-label="Select: ${escapeHTML(row.title)}"${withSelection && SA.historySelected.has(rk) ? ' checked' : ''}${selectable ? '' : ' disabled'}>
+        <button type="button" class="log-head" data-action="toggle-log-row" data-key="${escapeHTML(openKey)}" aria-expanded="${open}" aria-controls="${dom}">
+          <span class="c-when">${escapeHTML(logWhen(row.last, nowMs))}</span>
+          <span class="c-agent">${harnessChipHTML(row.agent)}<span>${escapeHTML(row.agent || '')}</span></span>
+          <span class="c-finding"><span class="c-title" title="${escapeHTML(row.title + (row.sub ? ' · ' + row.sub : ''))}">${finding}</span><span class="c-sub">${escapeHTML([row.agent, row.count > 1 ? row.count + '×' : '', logWhen(row.last, nowMs), verdict].filter(Boolean).join(' · '))}</span></span>
+          <span class="c-count">${row.count > 1 ? row.count + '×' : '1'}</span>
+          <span class="c-bars">${bars}</span>
+          <span class="c-verdict"><i class="vdot ${cls}" aria-hidden="true"></i><span class="c-verdict-text">${escapeHTML(verdict)}</span></span>
+          <svg class="icon log-chev" aria-hidden="true"><use href="#i-arrow"/></svg>
+        </button>
+      </div>
+      <div class="log-detail" id="${dom}"${open ? '' : ' hidden'}>${open ? row.detail() : ''}</div>
+    </li>`;
+}
 
-  patchList(container, incidents, { key: inc => inc.id, html: inc => {
-    const wf = inc.workflow || {};
-    const status = wf.status || 'open';
-    const statusChip = status === 'resolved'
-      ? `<span class="workflow-chip resolved">resolved</span>`
-      : status === 'acknowledged'
-        ? `<span class="workflow-chip acked">ack</span>`
-        : '';
-    const riskClass = (inc.risk || '').toUpperCase() === 'CRITICAL' ? 'high'
-      : (inc.risk || '').toUpperCase() === 'HIGH' ? 'high' : '';
-    // Aggregated incidents read as one row with a repeat count — the flag
-    // storm is evidence, not 323 cards.
-    const countChip = (inc.aggregate_count || 0) > 1
-      ? `<span class="workflow-chip">×${Number(inc.aggregate_count)} flags</span>`
+function incidentCardHTML(inc, SA) {
+  const wf = inc.workflow || {};
+  const status = wf.status || 'open';
+  const statusChip = status === 'resolved'
+    ? `<span class="workflow-chip resolved">resolved</span>`
+    : status === 'acknowledged'
+      ? `<span class="workflow-chip acked">ack</span>`
       : '';
-    return `
+  const riskClass = (inc.risk || '').toUpperCase() === 'CRITICAL' ? 'high'
+    : (inc.risk || '').toUpperCase() === 'HIGH' ? 'high' : '';
+  // Aggregated incidents read as one row with a repeat count — the flag
+  // storm is evidence, not 323 cards.
+  const countChip = (inc.aggregate_count || 0) > 1
+    ? `<span class="workflow-chip">×${Number(inc.aggregate_count)} flags</span>`
+    : '';
+  return `
     <div class="incident-card ${status === 'resolved' ? 'is-resolved' : ''}">
       <div class="incident-header">
         <span class="risk-tag ${riskClass}"><svg class="icon"><use href="#i-alert"/></svg>${escapeHTML(inc.risk)}</span>
@@ -213,8 +256,39 @@ function renderIncidents() {
           </div>
         `).join('')}
       </div>
-    </div>
-  `;} });
+    </div>`;
+}
+
+function renderIncidents() {
+  const SA = window.SA;
+  const container = document.getElementById('incidents-container');
+  const badge = document.getElementById('badge-incidents-count');
+  const incidents = scopedBySession(SA.t.incidents || [], SA.timelineSession, SA.timelinePids);
+
+  badge.textContent = incidents.length;
+
+  if (incidents.length === 0) {
+    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-incident"/></svg><span>No incidents — nothing to contain right now</span></div>`;
+    return;
+  }
+
+  const now = Date.now();
+  const rows = incidents.map(inc => {
+    const status = (inc.workflow || {}).status || 'open';
+    const risk = String(inc.risk || '').toUpperCase();
+    return {
+      kind: 'incident', key: inc.id, last: inc.timestamp, agent: inc.agent || '',
+      title: [inc.rule, inc.subject].filter(Boolean).join(' — '), sub: '',
+      count: Number(inc.aggregate_count) || 1, hourly: null,
+      critical: risk === 'CRITICAL', reviewed: true,
+      disposition: { state: risk === 'CRITICAL' ? 'critical' : risk === 'HIGH' ? 'warning' : 'acknowledged', text: `${inc.risk || ''} · ${status}` },
+      detail: () => incidentCardHTML(inc, SA),
+    };
+  }).sort((a, b) => (Number(b.critical) - Number(a.critical)) || (Date.parse(b.last) || 0) - (Date.parse(a.last) || 0));
+  const cap = cappedList(rows, 50, null, 'history-incidents', SA.expanded);
+  const parts = cap.shown.map(r => ({ key: logKey(r), html: logRowHTML(r, SA, now) }));
+  if (cap.more) parts.push({ key: 'more', html: `<li class="log-more">${cap.more}</li>` });
+  patchList(container, parts, { key: p => p.key, html: p => p.html });
 }
 
 function renderAudit() {
@@ -296,10 +370,15 @@ function renderFlags() {
   });
   const flags = uncoveredFlags(scopedFlags
     .filter(f => matchesSearch(SA.globalSearchTerm(), f.agent, f.rule, f.evidence, f.sessionId, f.workspace)), patterns);
-  SA.paintSessionChip('flags-session-filter', 'flags-session-filter-id', patterns.length + flags.length);
-  badge.textContent = patterns.length + flags.length;
+  const agentSel = selected('flags-agent');
+  const routines = (SA.sessionScopeOn() || SA.isFlagsFiltered() || selected('flags-rule')) ? [] : (SA.t.routine || []).filter(rg =>
+    (!agentSel || (rg.agents || []).includes(agentSel)) && matchesSearch(SA.globalSearchTerm(), rg.reader, rg.area, rg.summary, (rg.agents || []).join(' ')));
+  SA.paintSessionChip('flags-session-filter', 'flags-session-filter-id', patterns.length + flags.length + routines.length);
+  badge.textContent = patterns.length + flags.length + routines.length;
 
-  if (flags.length === 0 && patterns.length === 0) {
+  if (flags.length === 0 && patterns.length === 0 && routines.length === 0) {
+    SA.historyRows = new Map();
+    paintHistoryBulk(SA);
     const msg = SA.sessionScopeOn()
       ? `No flags for ${SA.sessionScopeTag()} in the loaded window`
       : SA.isFlagsFiltered() ? 'No flags match the current filter' : 'No security flags — agent egress looks clean';
@@ -362,23 +441,45 @@ function renderFlags() {
       </div></div>
     </div>`;
   };
-  const parts = patterns.map(p => ({
-    key: 'pattern:' + p.key, priority: findingPriority(p), html: patternHTML(p, now, { flags: SA.t.flags, expanded: SA.expanded }),
-  })).concat(flags.map((f, i) => {
-    const html = cardHTML(f, i);
-    // The age in a finding's meta ticks without rebuilding the card (so an
-    // open Details and a focused button survive): the hash leaves it out and
-    // the text is set in place below. Verdict and actions stay in the hash.
+  const rows = patterns.map(p => {
+    const d = p.disposition || {};
+    return {
+      kind: 'pattern', key: p.key, last: p.last, agent: p.agent, title: p.title || ruleTitle(p.rule),
+      sub: (p.subject || {}).label || '', count: Number(p.count) || 0, hourly: p.hourly,
+      critical: d.state === 'critical', reviewed: !!p.dismissed || !(Number(p.unacked) > 0),
+      disposition: d, detail: () => patternHTML(p, now, { flags: SA.t.flags, expanded: SA.expanded }),
+    };
+  }).concat(flags.map(f => {
     const l = explainLines(f, now);
-    const hash = l ? html.replace(metaHTML(l.meta), metaHTML('')) : html;
-    return { key: 'flag:' + f.id, priority: findingPriority(f), html, hash, meta: l ? l.meta : null };
-  })).sort((a, b) => b.priority - a.priority);
+    const d = (f.explain || {}).disposition || (f.severity >= 3 ? { state: 'critical', text: 'Act now' } : { state: 'warning', text: 'Needs a look' });
+    return {
+      kind: 'flag', key: f.id, last: f.ts, agent: f.agent, title: f.title || ruleTitle(f.rule),
+      sub: ((f.explain || {}).subject || {}).display || (l && l.what) || '', count: 1, hourly: null,
+      critical: d.state === 'critical', reviewed: !!f.acknowledged || d.state === 'acknowledged',
+      disposition: d, detail: () => cardHTML(f, 0),
+    };
+  })).concat(routines.map(rg => {
+    const d = rg.disposition || {};
+    return {
+      kind: 'routine', key: rg.key, last: '', agent: (rg.agents || [])[0] || '', title: rg.summary || 'Recurring read',
+      sub: '', count: Number(rg.count) || 0, hourly: null, critical: d.state === 'critical', reviewed: d.state === 'acknowledged',
+      disposition: d, detail: () => routineHTML(rg),
+    };
+  })).sort((a, b) => (Number(b.critical) - Number(a.critical)) || (Date.parse(b.last) || 0) - (Date.parse(a.last) || 0));
+  const cap = cappedList(rows, 50, null, 'history', SA.expanded);
+
+  // Selection lives on the visible open rows only.
+  SA.historyRows = new Map(cap.shown.filter(r => !r.reviewed).map(r => [logKey(r), r]));
+  for (const k of Array.from(SA.historySelected)) if (!SA.historyRows.has(k)) SA.historySelected.delete(k);
+
+  const parts = cap.shown.map(r => ({ key: logKey(r), html: logRowHTML(r, SA, now), hash: logRowHTML(r, SA, now, false) }));
+  if (cap.more) parts.push({ key: 'more', html: `<li class="log-more">${cap.more}</li>` });
 
   // Dispositions: muted (rule, host, agent) rows, visible so the quiet is
   // deliberate and reversible. The list node persists; its rows patch one by
   // one, so a change leaves the other rows (and a focused unmute) in place.
   const mutes = SA.t.mutes || [];
-  if (mutes.length > 0) parts.push({ key: 'mutes', html: '<div class="mute-list"></div>' });
+  if (mutes.length > 0) parts.push({ key: 'mutes', html: '<li class="mute-list"></li>' });
   patchList(container, parts, { key: p => p.key, html: p => p.html, hash: p => p.hash || p.html });
   const muteList = Array.from(container.children).find(el => el._saKey === 'mutes');
   if (muteList) {
@@ -386,20 +487,27 @@ function renderFlags() {
       .concat(mutes.map(m => ({ key: `${m.rule}|${m.host}|${m.agent || ''}`, html: muteRowHTML(m) }))),
     { key: p => p.key, html: p => p.html });
   }
-  const metaById = new Map(parts.filter(p => p.meta !== null && p.meta !== undefined).map(p => [p.key, p.meta]));
-  for (const el of container.children) {
-    const m = metaById.get(el._saKey);
-    const span = m !== undefined && el.querySelector('.finding-meta');
-    if (span && span.textContent !== m) span.textContent = m;
-  }
+  paintHistoryBulk(SA);
 }
 
-function findingPriority(f) {
-  const state = (f.disposition || (f.explain || {}).disposition || {}).state;
-  if (f.acknowledged || state === 'acknowledged') return 0;
-  if (state === 'benign-likely') return 1;
-  if (state === 'critical' || (!state && f.severity >= 3)) return 3;
-  return 2;
+// paintHistoryBulk: the selection bar and the header checkbox follow the
+// visible open rows and the selection.
+function paintHistoryBulk(SA) {
+  const bulk = document.getElementById('flags-bulk');
+  const all = document.getElementById('flags-select-all');
+  const n = SA.historySelected.size;
+  if (bulk) {
+    bulk.hidden = n === 0;
+    bulk.innerHTML = n === 0 ? '' : `<span>${n} selected</span>`
+      + `<button type="button" class="btn btn-ghost btn-sm" data-action="history-bulk-review">Mark reviewed</button>`
+      + `<button type="button" class="btn btn-ghost btn-sm" data-action="history-bulk-clear">Clear</button>`;
+  }
+  if (all) {
+    const open = SA.historyRows ? SA.historyRows.size : 0;
+    all.disabled = open === 0;
+    all.checked = open > 0 && n === open;
+    all.indeterminate = n > 0 && n < open;
+  }
 }
 
 // muteRowHTML: one disposition in the Muted list — rule, host, and the agent
@@ -417,10 +525,9 @@ function metaHTML(meta) {
   return `<span class="finding-meta">${escapeHTML(meta)}</span>`;
 }
 
-// findingHTML: the finding card for a flag the daemon explained — who, what,
-// the one verdict and the served actions; the raw evidence chain, pid,
-// session, ISO timestamps and full path/addresses sit behind Details.
-function findingHTML(f, l, chainHTML, toolsHTML) {
+// findingFactsHTML: the raw facts behind an explained flag — rule, file,
+// destinations, pid, session, timestamps — as a definition list.
+function findingFactsHTML(f) {
   const ex = f.explain;
   const c = ex.context || {};
   const s = ex.subject || {};
@@ -433,6 +540,16 @@ function findingHTML(f, l, chainHTML, toolsHTML) {
     ['PID', f.pid], ['Session', f.session_id || c.session_id], ['Raised', f.ts],
     ['Tool', c.tool ? c.tool + (c.tool_at ? ' at ' + c.tool_at : '') : ''], ['Model', c.model],
   ].filter(([, v]) => v !== undefined && v !== null && v !== '');
+  return `<dl class="finding-facts">${facts.map(([k, v]) => `<dt>${escapeHTML(k)}</dt><dd>${k === 'File'
+    ? `<button type="button" class="file-link" data-action="open-file" data-path="${escapeHTML(v)}">${escapeHTML(v)}</button>`
+    : escapeHTML(v)}</dd>`).join('')}</dl>`;
+}
+
+// findingHTML: the finding card for a flag the daemon explained — who, what,
+// the one verdict and the served actions; the raw evidence chain, pid,
+// session, ISO timestamps and full path/addresses sit behind Details.
+function findingHTML(f, l, chainHTML, toolsHTML) {
+  const ex = f.explain;
   return `
     <article class="finding ${l.cls}" data-flag-id="${escapeHTML(f.id)}">
       <header class="finding-head">
@@ -448,9 +565,7 @@ function findingHTML(f, l, chainHTML, toolsHTML) {
       <div class="finding-actions">${explainActionsHTML(f, [{ label: 'What to do', attrs: `data-action="open-plan" data-subject="flag:${escapeHTML(f.id)}"` }])}</div>
       <details class="finding-details"><summary>Details</summary>
         ${chainHTML}
-        <dl class="finding-facts">${facts.map(([k, v]) => `<dt>${escapeHTML(k)}</dt><dd>${k === 'File'
-          ? `<button type="button" class="file-link" data-action="open-file" data-path="${escapeHTML(v)}">${escapeHTML(v)}</button>`
-          : escapeHTML(v)}</dd>`).join('')}</dl>
+        ${findingFactsHTML(f)}
         ${toolsHTML ? `<div class="flag-actions-row">${toolsHTML}</div>` : ''}
         <div class="flag-actions-row">${markButtonsHTML('flag:' + f.id)}</div>
       </details>
@@ -476,16 +591,22 @@ function routineHTML(rg) {
     ...dests.map(x => `<span class="fact fact-dest" title="${escapeHTML(x.host)} · cited by ${Number(x.count)} flag${Number(x.count) === 1 ? '' : 's'}"><svg class="icon"><use href="#i-globe"/></svg>${escapeHTML(x.org || x.host)}</span>`),
     more > 0 ? `<span class="fact">+${more} more</span>` : '',
   ].filter(Boolean).join('');
-  const acts = (rg.actions || []).filter(a => a && ROUTINE_CONSOLE_ACTIONS.includes(a.id));
-  const attrs = a => `data-action="routine-act" data-routine-key="${escapeHTML(rg.key)}" data-action-id="${escapeHTML(a.id)}"`;
   return `
         <div class="attention-item kind-routine finding-item ${DISPOSITION_CLASS[d.state] || 'disp-warning'}" data-routine-key="${escapeHTML(rg.key)}">
           <div class="attention-reason">
             <div class="decision-head">${d.text ? `<span class="disp-badge">${escapeHTML(d.text)}</span>` : ''}<strong class="finding-what">${escapeHTML(rg.summary)}</strong></div>
             <div class="facts">${chips}</div>
           </div>
-          <div class="attention-actions">${actionBarHTML(actionItems(acts, [], attrs, a => a.label || a.id))}</div>
+          <div class="attention-actions">${routineActionsHTML(rg)}</div>
         </div>`;
+}
+
+// routineActionsHTML: the routine group's served actions on an action bar;
+// max caps the bar.
+function routineActionsHTML(rg, max) {
+  const acts = (rg.actions || []).filter(a => a && ROUTINE_CONSOLE_ACTIONS.includes(a.id));
+  const attrs = a => `data-action="routine-act" data-routine-key="${escapeHTML(rg.key)}" data-action-id="${escapeHTML(a.id)}"`;
+  return actionBarHTML(actionItems(acts, [], attrs, a => a.label || a.id), max);
 }
 
 // routineAfterOptimistic: the state once a routine group's ids were
@@ -602,7 +723,7 @@ function patternActionLabel(p, a) {
 // the exact expectation and Dismiss all as buttons, the rest under More. The
 // click handler reads the request from the served pattern (key + action id
 // + host). A card dismissed in place keeps its choices, disabled.
-function patternActionsHTML(p) {
+function patternActionsHTML(p, max) {
   const acts = (p.actions || []).filter(a => a && PATTERN_CONSOLE_ACTIONS.includes(a.id))
     .map(a => (p.dismissed ? { ...a, disabled: true } : a));
   const attrs = a => {
@@ -610,7 +731,7 @@ function patternActionsHTML(p) {
     return `data-action="explain-act" data-pattern-key="${escapeHTML(p.key)}" data-action-id="${escapeHTML(a.id)}"`
       + (host ? ` data-host="${escapeHTML(host)}"` : '');
   };
-  return actionBarHTML(actionItems(acts, [], attrs, a => patternActionLabel(p, a)));
+  return actionBarHTML(actionItems(acts, [], attrs, a => patternActionLabel(p, a)), max);
 }
 
 // patternHTML: one repeating finding — title, count and window; the served

@@ -565,12 +565,6 @@ function attentionCount(posture) {
   return (posture && Number(posture.needs_you)) || 0;
 }
 
-// Coverage observations are informational. Only the daemon's pending
-// egress decisions belong in the Egress tab's attention badge.
-function egressAttentionCount(posture) {
-  return ((posture && posture.items) || []).filter(item => item.kind === 'recurring_egress').length;
-}
-
 // Drawer back-stack: a drawer opened from inside another carries back
 // ({ label, reopen }); the head shows "‹ label" before the title and the
 // click re-runs the previous opener, so that drawer re-renders from live
@@ -1089,10 +1083,11 @@ const ACTION_BAR_LABELS = { expect: 'Mark expected', 'expect-file': 'Mark as tes
 // actionBarHTML: a decision's choices — the bar items (at most three, in
 // order) as buttons, every other one in a More menu, danger last and set
 // apart. item: {label, attrs, title, kind: 'primary' | 'ghost' | 'danger',
-// bar, disabled}; attrs is markup the caller built from escaped values.
-function actionBarHTML(items) {
+// bar, disabled}; attrs is markup the caller built from escaped values. max
+// caps the bar (default ACTION_BAR_MAX).
+function actionBarHTML(items, max = ACTION_BAR_MAX) {
   const list = (items || []).filter(Boolean);
-  const bar = list.filter(i => i.bar).slice(0, ACTION_BAR_MAX);
+  const bar = list.filter(i => i.bar).slice(0, max);
   const rest = list.filter(i => !bar.includes(i));
   const extra = i => (i.title ? ` title="${escapeHTML(i.title)}"` : '') + (i.disabled ? ' disabled' : '');
   const out = bar.map(i => `<button class="btn btn-${i.kind || 'ghost'} btn-sm" ${i.attrs}${extra(i)}>${escapeHTML(i.label)}</button>`);
@@ -1117,7 +1112,7 @@ function actionItems(acts, extra, attrs, label) {
     title: a.consequence || '', attrs: a.attrs || attrs(a), disabled: a.disabled,
     kind: a.id === 'kill' ? 'danger' : a.recommended ? 'primary' : 'ghost',
     bar: !!a.recommended || ACTION_BAR_IDS.includes(a.id),
-  })).concat((extra || []).map(e => ({ ...e, id: 'console', recommended: false, kind: e.kind || 'ghost', bar: false })));
+  })).concat((extra || []).map(e => ({ ...e, id: 'console', recommended: false, kind: e.kind || 'ghost', bar: false, lead: !!e.lead })));
   return items.sort((x, y) => (Number(y.recommended) - Number(x.recommended)) || (rank(x.id) - rank(y.id)));
 }
 
@@ -1127,7 +1122,9 @@ function actionItems(acts, extra, attrs, label) {
 // would one by one. The click handler reads every request from the served
 // explanation (flag id + action id + host or organization), never from the
 // markup. extra: console items for the menu (re-run advisor, what to do).
-function explainActionsHTML(flag, extra) {
+// max caps the bar: the recommended action (else the extra item marked
+// lead) is then its only button and every other choice sits under More.
+function explainActionsHTML(flag, extra, max) {
   const ex = flag && flag.explain;
   if (!ex) return '';
   const fid = escapeHTML(flag.id);
@@ -1149,7 +1146,11 @@ function explainActionsHTML(flag, extra) {
   }));
   const attrs = a => `data-action="explain-act" data-flag-id="${fid}" data-action-id="${escapeHTML(a.id)}"`
     + (hostOf(a) ? ` data-host="${escapeHTML(hostOf(a))}"` : '');
-  return actionBarHTML(actionItems(merged, extra, attrs, a => (a.attrs ? a.label : explainActionLabel(flag, a))));
+  const items = actionItems(merged, extra, attrs, a => (a.attrs ? a.label : explainActionLabel(flag, a)));
+  if (max === undefined) return actionBarHTML(items);
+  const lead = items.find(i => i.recommended) || items.find(i => i.lead);
+  for (const i of items) i.bar = i === lead;
+  return actionBarHTML(items, max);
 }
 
 // ---------- agent families ----------
@@ -1168,20 +1169,6 @@ function familyTitle(name) {
 function capFirst(word) {
   const s = String(word || '');
   return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-// attentionSubtitle: the line under an attention group's name — its
-// workspace, or for an agent-level group the processes and sessions behind
-// it (the daemon's summary). A workspace of "/" says nothing, so the group
-// renders no subtitle ('').
-function attentionSubtitle(group) {
-  const g = group || {};
-  const ws = String(g.workspace || '').trim();
-  if (ws === '/') return '';
-  if (ws) return ws;
-  if (g.key === 'machine') return 'Monitoring gaps no agent session owns';
-  if (g.summary) return String(g.summary);
-  return 'Not tied to one live session';
 }
 
 // processLabel reads a flag's process snapshot as "<harness> via <app>":

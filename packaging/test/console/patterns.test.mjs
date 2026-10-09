@@ -51,13 +51,34 @@ test('a critical individual finding leads a repeated warning card', () => {
   let keys;
   const list = {children: []};
   ctx.document = {getElementById: id => id === 'flags-list' ? list : {value: 'all'}};
-  ctx.SA = {t: {flags: [], flagsView: [{...flag('urgent'), severity: 3}], patterns: [pattern()], status: {}, audit: []},
+  ctx.SA = {t: {flags: [], flagsView: [{...flag('urgent'), severity: 3}], patterns: [pattern()], routine: [], status: {}, audit: []},
     seenAgents: new Set(), seenRules: new Set(), syncSelect: () => {}, globalSearchTerm: () => '',
-    paintSessionChip: () => {}, isFlagsFiltered: () => false, pendingRetriage: new Set(), expanded: new Set()};
+    paintSessionChip: () => {}, isFlagsFiltered: () => false, sessionScopeOn: () => false,
+    pendingRetriage: new Set(), expanded: new Set(), historySelected: new Set()};
   ctx.window.SA = ctx.SA;
   ctx.patchList = (_node, rows) => {keys = rows.map(r => r.key)};
   ctx.renderFlags();
   assert.equal(keys[0], 'flag:urgent');
+});
+
+test('a 61-flag pattern is one history row reading 61×, closed until opened', () => {
+  let rows;
+  const list = {children: []};
+  ctx.document = {getElementById: id => id === 'flags-list' ? list : {value: 'all'}};
+  const sa = {t: {flags: [], flagsView: [], patterns: [pattern({ count: 61, unacked: 61 })], routine: [], status: {}, audit: []},
+    seenAgents: new Set(), seenRules: new Set(), syncSelect: () => {}, globalSearchTerm: () => '',
+    paintSessionChip: () => {}, isFlagsFiltered: () => false, sessionScopeOn: () => false,
+    pendingRetriage: new Set(), expanded: new Set(), historySelected: new Set()};
+  ctx.window.SA = ctx.SA = sa;
+  ctx.patchList = (_node, parts) => {rows = parts};
+  ctx.renderFlags();
+  assert.equal(rows.length, 1);
+  assert.equal((rows[0].html.match(/<li class="log-row/g) || []).length, 1);
+  assert.match(rows[0].html, /<span class="c-count">61×<\/span>/);
+  assert.match(rows[0].html, /<div class="log-detail" id="[^"]+" hidden><\/div>/);
+  sa.expanded.add('log:pattern:' + KEY);
+  ctx.renderFlags();
+  assert.match(rows[0].html, /class="finding pattern-card/);
 });
 
 test('patternHTML: 24 bars, count, summary, open count; actions in served order, recommended first', () => {

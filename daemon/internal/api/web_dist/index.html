@@ -145,11 +145,11 @@
         <span class="ss-label">agents</span>
         <span class="ss-hint" id="hint-agents"></span>
       </div>
-      <div class="ss-item ss-crit">
+      <div class="ss-item">
         <span class="ss-num" id="count-flags">0</span>
-        <span class="ss-label">flags · 24h</span>
+        <span class="ss-label">findings · 24h</span>
       </div>
-      <div class="ss-item ss-warn">
+      <div class="ss-item">
         <span class="ss-num" id="count-incidents">0</span>
         <span class="ss-label">incidents · 24h</span>
       </div>
@@ -189,7 +189,6 @@
       </button>
       <button class="tab-btn" data-tab="egress" role="tab" aria-selected="false" aria-controls="tab-egress">
         <svg class="icon"><use href="#i-shield"/></svg><span>Egress</span>
-        <span class="tab-badge tab-badge-warn" id="tab-badge-egress" hidden></span>
       </button>
       <button class="tab-btn" data-tab="system" role="tab" aria-selected="false" aria-controls="tab-system">
         <svg class="icon"><use href="#i-server"/></svg><span>System</span>
@@ -209,26 +208,14 @@
     <main>
       <!-- Home: decisions and coverage first; detail opens on demand. -->
       <div class="tabpanel" id="tab-home" role="tabpanel">
-        <section class="panel attention-panel" id="attention-center">
-          <div class="panel-head attention-head">
-            <div>
-              <span class="attention-eyebrow">Decisions</span>
-              <h2><svg class="icon"><use href="#i-alert"/></svg>Pending decisions</h2>
-              <p>Choices grouped by the complete agent session they affect.</p>
-            </div>
-            <span class="badge badge-amber" id="badge-attention-count">0</span>
-          </div>
+        <section class="needs" id="attention-center" aria-labelledby="needs-title" hidden>
+          <h2 class="needs-title" id="needs-title">Needs you <span class="needs-count" id="badge-attention-count">0</span></h2>
           <p class="report-health" data-reports="snapshot|guard decisions" role="status" hidden></p>
-          <div class="panel-body" id="attention-list">
-            <div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No decisions waiting</span></div>
-          </div>
-          <div class="attention-footer" id="attention-footer" hidden>
-            <button type="button" class="btn btn-ghost btn-sm" id="attention-expand" data-action="attention-expand" aria-expanded="false" aria-controls="attention-list">View all decisions</button>
-          </div>
+          <ol class="needs-list" id="attention-list"></ol>
         </section>
         <section class="panel coverage-panel" id="coverage-center" hidden>
           <div class="panel-head">
-            <div><span class="attention-eyebrow">Coverage</span><h2><svg class="icon"><use href="#i-shield"/></svg>Monitoring setup</h2></div>
+            <h2>Monitoring gap</h2>
             <span class="badge" id="badge-coverage-count">0</span>
           </div>
           <p class="report-health" data-reports="snapshot" role="status" hidden></p>
@@ -264,13 +251,13 @@
         </details>
 
         <details class="home-group" id="home-findings" data-group="findings">
-          <summary><svg class="icon"><use href="#i-alert"/></svg>Findings history</summary>
-          <div class="grid" id="security-findings-grid">
+          <summary><svg class="icon"><use href="#i-alert"/></svg>Findings history<span class="home-group-fact" id="home-findings-fact"></span></summary>
+          <div class="history" id="security-findings-grid">
             <div class="col">
                 <section class="panel">
                   <div class="panel-head">
                     <h2><svg class="icon"><use href="#i-alert"/></svg>Security flags</h2>
-                    <span class="badge badge-amber" id="badge-flags-count">0</span>
+                    <span class="badge" id="badge-flags-count">0</span>
                     <button class="btn btn-ghost btn-sm" data-action="export" data-what="flags" title="Download the current flags as JSON"><svg class="icon"><use href="#i-doc"/></svg><span>Export</span></button>
                   </div>
                   <div class="panel-body">
@@ -279,14 +266,14 @@
                         session <b id="flags-session-filter-id"></b>
                         <button class="session-clear" id="flags-session-clear" title="Show all sessions"><svg class="icon"><use href="#i-close"/></svg></button>
                       </span>
-                      <select id="flags-agent" class="select"><option value="all">All agents</option></select>
-                      <select id="flags-rule" class="select"><option value="all">All rules</option></select>
-                      <select id="flags-severity" class="select">
+                      <select id="flags-agent" class="select select-sm"><option value="all">All agents</option></select>
+                      <select id="flags-rule" class="select select-sm"><option value="all">All rules</option></select>
+                      <select id="flags-severity" class="select select-sm">
                         <option value="all">Any severity</option>
                         <option value="2">Warning &amp; up</option>
                         <option value="3">Critical only</option>
                       </select>
-                      <select id="flags-window" class="select">
+                      <select id="flags-window" class="select select-sm">
                         <option value="all">All time</option>
                         <option value="1h">Last hour</option>
                         <option value="24h">Last 24h</option>
@@ -294,9 +281,11 @@
                       </select>
                     </div>
                     <p class="report-health" data-reports="snapshot|flags" role="status" hidden></p>
-                    <div id="flags-list">
-                      <div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No security correlation flags active</span></div>
-                    </div>
+                    <div class="log-bulk" id="flags-bulk" role="status" hidden></div>
+                    <div class="log-header"><input type="checkbox" class="log-check" id="flags-select-all" data-action="history-select-all" aria-label="Select all open findings"><span>Newest critical first</span></div>
+                    <ul class="log" id="flags-list">
+                      <li class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No security correlation flags active</span></li>
+                    </ul>
                   </div>
                 </section>
             </div>
@@ -304,12 +293,14 @@
                 <section class="panel">
                   <div class="panel-head">
                     <h2><svg class="icon"><use href="#i-incident"/></svg>Incidents &amp; auto-rotation</h2>
-                    <span class="badge badge-rose" id="badge-incidents-count">0</span>
+                    <span class="badge" id="badge-incidents-count">0</span>
                     <button class="btn btn-ghost btn-sm" data-action="export" data-what="incidents" title="Download the current incidents as JSON"><svg class="icon"><use href="#i-doc"/></svg><span>Export</span></button>
                   </div>
                   <p class="report-health" data-reports="snapshot" role="status" hidden></p>
-                  <div class="panel-body" id="incidents-container">
-                    <div class="empty"><svg class="icon"><use href="#i-incident"/></svg><span>No containment incidents recorded</span></div>
+                  <div class="panel-body">
+                    <ul class="log" id="incidents-container">
+                      <li class="empty"><svg class="icon"><use href="#i-incident"/></svg><span>No containment incidents recorded</span></li>
+                    </ul>
                   </div>
                 </section>
             </div>
