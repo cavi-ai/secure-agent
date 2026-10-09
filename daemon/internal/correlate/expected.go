@@ -2,6 +2,7 @@ package correlate
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -57,6 +58,7 @@ type ExpectStore struct {
 	path    string
 	mu      sync.Mutex
 	loaded  bool
+	loadErr error
 	entries map[string]*ExpectedPattern
 }
 
@@ -73,25 +75,47 @@ func NewExpectStore(path string) *ExpectStore {
 	return &ExpectStore{path: path}
 }
 
-func (s *ExpectStore) loadLocked() {
+func (s *ExpectStore) loadLocked() error {
 	if s.loaded {
-		return
+		return s.loadErr
 	}
 	s.loaded = true
+	s.loadErr = nil
 	s.entries = map[string]*ExpectedPattern{}
 	data, err := os.ReadFile(s.path)
+	if os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
-		return
+		s.loadErr = fmt.Errorf("read expected patterns: %w", err)
+		log.Printf("correlate: WARNING: %v; no expected patterns are applied", s.loadErr)
+		return s.loadErr
 	}
 	var disk []expectedOnDisk
-	if err := json.Unmarshal(data, &disk); err != nil {
-		log.Printf("correlate: WARNING: expected-patterns file %s is corrupt (%v); none are applied until it is fixed", s.path, err)
-		return
+	err = json.Unmarshal(data, &disk)
+	if err == nil && disk == nil {
+		err = fmt.Errorf("expected a JSON array, got null")
+	}
+	if err != nil {
+		s.loadErr = fmt.Errorf("decode expected patterns %s: %w", s.path, err)
+		log.Printf("correlate: WARNING: %v; no expected patterns are applied", s.loadErr)
+		return s.loadErr
 	}
 	for _, d := range disk {
 		key := ReadConnectKey(d.Agent, d.Reader, d.Path, d.Dest)
 		s.entries[key] = &ExpectedPattern{Scope: d.Scope, Key: key, Agent: d.Agent, Reader: d.Reader, Path: d.Path, Dest: d.Dest, CreatedAt: d.CreatedAt}
 	}
+	return nil
+}
+
+// Failed loads stay cached on the event path. An edit retries the load so
+// operators can repair the file without restarting, and never overwrites a
+// policy that could not be read or decoded.
+func (s *ExpectStore) loadForEditLocked() error {
+	if s.loadErr != nil {
+		s.loaded = false
+	}
+	return s.loadLocked()
 }
 
 func (s *ExpectStore) saveLocked() error {
@@ -129,7 +153,9 @@ func (s *ExpectStore) List() []ExpectedPattern {
 func (s *ExpectStore) Add(p ExpectedPattern) (ExpectedPattern, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.loadLocked()
+	if err := s.loadForEditLocked(); err != nil {
+		return ExpectedPattern{}, err
+	}
 	if e, ok := s.entries[ReadConnectKey(p.Agent, p.Reader, p.Path, p.Dest)]; ok {
 		return *e, nil
 	}
@@ -145,7 +171,9 @@ func (s *ExpectStore) Add(p ExpectedPattern) (ExpectedPattern, error) {
 func (s *ExpectStore) AddAll(ps []ExpectedPattern) ([]ExpectedPattern, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.loadLocked()
+	if err := s.loadForEditLocked(); err != nil {
+		return nil, err
+	}
 	return s.addLocked(ps)
 }
 
@@ -176,7 +204,9 @@ func (s *ExpectStore) addLocked(ps []ExpectedPattern) ([]ExpectedPattern, error)
 func (s *ExpectStore) Remove(key string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.loadLocked()
+	if err := s.loadForEditLocked(); err != nil {
+		return false, err
+	}
 	e, ok := s.entries[key]
 	if !ok {
 		return false, nil

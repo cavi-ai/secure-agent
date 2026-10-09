@@ -1,6 +1,7 @@
 package correlate
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,100 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
+
+func TestExpectStoreRejectsEditsAfterLoadFailure(t *testing.T) {
+	p := ExpectedPattern{Agent: "claude", Reader: "gh", Path: "/u/hosts.yml", Dest: "example.com"}
+	key := ReadConnectKey(p.Agent, p.Reader, p.Path, p.Dest)
+	edits := map[string]func(*ExpectStore) error{
+		"add":     func(s *ExpectStore) error { _, err := s.Add(p); return err },
+		"add-all": func(s *ExpectStore) error { _, err := s.AddAll([]ExpectedPattern{p}); return err },
+		"remove":  func(s *ExpectStore) error { _, err := s.Remove(key); return err },
+	}
+	for name, content := range map[string]string{"corrupt": `[{"agent":"claude"},`, "null": `null`, "object": `{}`, "wrong-type": `[{"agent":1}]`, "unreadable": ""} {
+		for editName, edit := range edits {
+			t.Run(name+"/"+editName, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "expected.json")
+				if name == "unreadable" {
+					if err := os.Mkdir(path, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				s := NewExpectStore(path)
+				if len(s.List()) != 0 || s.Has(key) || s.Match([]string{key}, time.Now()) {
+					t.Fatal("failed load applied an exception")
+				}
+				if err := edit(s); err == nil {
+					t.Fatal("edit succeeded after a failed load")
+				}
+				if len(s.List()) != 0 || s.Has(key) {
+					t.Fatal("failed edit changed in-memory policy")
+				}
+				if name == "unreadable" {
+					if info, err := os.Stat(path); err != nil || !info.IsDir() {
+						t.Fatalf("policy directory changed: %v", err)
+					}
+				} else if got, err := os.ReadFile(path); err != nil || string(got) != content {
+					t.Fatalf("policy changed: %q, %v", got, err)
+				}
+			})
+		}
+	}
+}
+
+func TestExpectStoreRetriesFailedLoadBeforeEditing(t *testing.T) {
+	old := ExpectedPattern{Agent: "claude", Reader: "gh", Path: "/u/hosts.yml", Dest: "old.example.com", CreatedAt: time.Unix(1, 0).UTC()}
+	newPattern := old
+	newPattern.Dest = "new.example.com"
+	oldKey := ReadConnectKey(old.Agent, old.Reader, old.Path, old.Dest)
+	for _, operation := range []string{"add", "add-all", "remove"} {
+		t.Run(operation, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "expected.json")
+			if err := os.WriteFile(path, []byte("{broken"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			s := NewExpectStore(path)
+			if len(s.List()) != 0 {
+				t.Fatal("corrupt policy loaded")
+			}
+			data, err := json.Marshal([]ExpectedPattern{old})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// Event matching stays in memory even while the file is repaired.
+			if s.Has(oldKey) {
+				t.Fatal("read path unexpectedly reloaded the policy")
+			}
+			switch operation {
+			case "add":
+				_, err = s.Add(newPattern)
+			case "add-all":
+				_, err = s.AddAll([]ExpectedPattern{newPattern})
+			case "remove":
+				var removed bool
+				removed, err = s.Remove(oldKey)
+				if !removed {
+					t.Fatal("repaired entry was not removed")
+				}
+			}
+			if err != nil {
+				t.Fatalf("edit after repair: %v", err)
+			}
+			got := NewExpectStore(path).List()
+			if operation == "remove" {
+				if len(got) != 0 {
+					t.Fatalf("removal not persisted: %+v", got)
+				}
+			} else if len(got) != 2 || !s.Has(oldKey) || !got[0].CreatedAt.Equal(old.CreatedAt) {
+				t.Fatalf("repaired policy was overwritten: %+v", got)
+			}
+		})
+	}
+}
 
 func TestExpectStorePersistsAndMatchesEveryKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "expected.json")
