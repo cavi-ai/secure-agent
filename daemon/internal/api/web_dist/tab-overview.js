@@ -770,6 +770,70 @@ function renderSessionStrip() {
   el.innerHTML = sessionStripHTML(top, all.length, Date.now(), SA.t.flags);
 }
 
+// Reading state belongs to a session and a mode, not to a telemetry render.
+const sessionReadingState = new Map();
+function sessionReadingHistory(sessionId, mode) {
+  const key = sessionId + '|' + mode;
+  const detail = document.getElementById('session-detail');
+  const body = detail?._sessionReadingKey === key ? detail.querySelector('.session-detail-body') : null;
+  if (body?.getClientRects().length) return body.scrollHeight - body.clientHeight - body.scrollTop >= 64;
+  // Back hides the pane; zero geometry must not replace its saved reading state.
+  return sessionReadingState.get(key)?.nearLatest === false;
+}
+
+function renderSessionDetail(detail, selected, trees, emptyHTML) {
+  const SA = window.SA;
+  const key = SA.selectedSessionId + '|' + SA.sessionView;
+  const oldBody = detail.querySelector('.session-detail-body');
+  const oldKey = detail._sessionReadingKey;
+  const oldSession = detail._sessionSelectedId;
+  const focused = detail.contains(document.activeElement) ? document.activeElement : null;
+  const focusKey = focused && (focused.tagName === 'SUMMARY' ? 'summary'
+    : focused.dataset.action ? '[data-action="' + focused.dataset.action + '"]' + (focused.dataset.view ? '[data-view="' + focused.dataset.view + '"]' : '') : focused.tagName === 'H3' ? 'h3' : null);
+  if (oldBody && oldKey && oldBody.getClientRects().length && detail._sessionReadingVisible !== false) {
+    const bounds = oldBody.getBoundingClientRect();
+    const anchor = Array.from(oldBody.querySelectorAll('[data-row-id]')).find(row => row.getBoundingClientRect().bottom > bounds.top);
+    const prev = sessionReadingState.get(oldKey) || {};
+    sessionReadingState.set(oldKey, { ...prev, top: oldBody.scrollTop,
+      nearLatest: oldBody.scrollHeight - oldBody.clientHeight - oldBody.scrollTop < 64,
+      anchor: anchor?.dataset.rowId, offset: anchor ? anchor.getBoundingClientRect().top - bounds.top : 0,
+      first: oldBody.querySelector('[data-row-id]')?.dataset.rowId,
+      detailsOpen: !!detail.querySelector('details.session-metadata')?.open });
+  }
+  const html = selected ? sessionDetailHTML(selected, SA.sessionTimeline || [], trees) : emptyHTML;
+  if (detail._sessionMarkup !== html) {
+    detail.innerHTML = html;
+    detail._sessionMarkup = html;
+    applyInlineMetrics(detail);
+  }
+  detail._sessionReadingKey = key;
+  detail._sessionSelectedId = SA.selectedSessionId;
+  const body = detail.querySelector('.session-detail-body');
+  detail._sessionReadingVisible = !!body?.getClientRects().length;
+  if (!body) return;
+  const state = sessionReadingState.get(key) || {};
+  const metadata = detail.querySelector('details.session-metadata');
+  if (metadata) metadata.open = !!state.detailsOpen;
+  const rows = Array.from(body.querySelectorAll('[data-row-id]'));
+  const loaded = SA.sessionView === 'trace' ? !!SA.sessionTimeline?.length : !!SA.sessionMemoryPage?.rows.length;
+  const prepended = state.first && rows.length && rows[0].dataset.rowId !== state.first && rows.some(row => row.dataset.rowId === state.first);
+  if (!detail._sessionReadingVisible) return;
+  if ((!state.loaded && loaded) || (state.nearLatest && !prepended)) body.scrollTop = body.scrollHeight;
+  else {
+    body.scrollTop = state.top || 0;
+    const anchor = state.anchor && rows.find(row => row.dataset.rowId === state.anchor);
+    if (anchor) body.scrollTop += anchor.getBoundingClientRect().top - body.getBoundingClientRect().top - state.offset;
+  }
+  sessionReadingState.set(key, { ...state, loaded: state.loaded || loaded });
+  const updateLatest = () => {
+    const latest = detail.querySelector('[data-action="session-latest"]');
+    if (latest) latest.hidden = body.scrollHeight - body.clientHeight - body.scrollTop < 64;
+  };
+  if (!body._sessionScrollBound) { body.addEventListener('scroll', updateLatest, { passive: true }); body._sessionScrollBound = true; }
+  updateLatest();
+  if (focusKey && oldSession === SA.selectedSessionId && !focused.isConnected) detail.querySelector(focusKey)?.focus({ preventScroll: true });
+}
+
 function renderSessionBoard() {
   const SA = window.SA;
 
@@ -791,7 +855,10 @@ function renderSessionBoard() {
   // daemon provides it; process-tree grouping is the fallback for older
   // daemons.
   const durable = SA.t.sessions;
-  const useDurable = !!(durable && durable.length);
+  const useDurable = Array.isArray(durable);
+  const panel = document.getElementById('session-board-panel');
+  if (panel) panel.classList.toggle('session-workbench', useDurable);
+  if (useDurable) SA.scheduleSessionWorkbenchHeight();
 
   if (useDurable) {
     if (legacy) legacy.hidden = true;
@@ -810,7 +877,10 @@ function renderSessionBoard() {
       applyInlineMetrics(pills);
     }
     const shown = applySessionFilters(groups, filter);
-    const sessionGroups = shown.filter(g => !g.infra);
+    SA.reconcileSessionSelection(shown);
+    const reveal = SA.takeSessionReveal();
+    const sessionGroups = stableSessionOrder(shown.filter(g => !g.infra), rail._sessionGroupOrder, g => g.key);
+    rail._sessionGroupOrder = sessionGroups.map(g => g.key);
     const infra = shown.find(g => g.infra);
     // A group's open state is DOM state: patchList keeps an unchanged group's
     // node and carries open across a rebuilt one.
@@ -819,32 +889,53 @@ function renderSessionBoard() {
     // hashes by key and whether it has an ended tail: its counts change in
     // place (syncSessionGroupShell), never by rebuilding the group.
     const parts = sessionGroups.length
-      ? sessionGroups.map(g => ({ key: 'group:' + g.key, group: g, shell: `group:${g.key}|${g.ended.length ? 'ended' : ''}`, html: sessionGroupHTML(g, true, !!SA.endedSessionsOpen[g.key]) }))
+      ? sessionGroups.map(g => ({ key: 'group:' + g.key, group: g, shell: `group:${g.key}|${g.ended.length ? 'ended' : ''}`, html: sessionGroupHTML(g, visibleSessionMembers([g]).some(s => s.id === SA.selectedSessionId), !!SA.endedSessionsOpen[g.key]) }))
       : [{ key: filtered ? 'empty:nomatch' : 'empty:quiet', html: filtered ? noMatch : quiet }];
     if (infra) parts.push({ key: 'infra', html: sessionInfraGroupHTML(infra, false) });
+    const railTop = rail.scrollTop;
+    const railFocus = rail.contains(document.activeElement) ? document.activeElement : null;
+    const railFocusId = railFocus?.dataset.id;
     patchList(rail, parts, { key: p => p.key, html: p => p.html, hash: p => p.shell || p.html });
     const rowOpts = { key: r => r.key, html: r => r.html };
+    const rowOrders = rail._sessionRowOrders || (rail._sessionRowOrders = new Map());
+    const childOrders = rail._sessionChildOrders || (rail._sessionChildOrders = new Map());
     for (const p of parts) {
       if (!p.group) continue;
       const node = Array.from(rail.children).find(n => n._saKey === p.key);
       if (!node) continue;
+      if (reveal && visibleSessionMembers([p.group]).some(s => s.id === SA.selectedSessionId)) {
+        node.open = true;
+        if (visibleSessionMembers([{ ...p.group, live: [] }]).some(s => s.id === SA.selectedSessionId)) SA.endedSessionsOpen[p.group.key] = true;
+        for (const bucket of ['live', 'ended']) {
+          const titleOf = s => { const t = liveTreeFor(s, trees); return sessionTitle(s, t && t.root.cwd); };
+          for (const row of collapseSessionFamilies(p.group[bucket], p.group.key, titleOf)) {
+            if (row.dup && row.sessions.some(s => s.id === SA.selectedSessionId)) SA.sessionDupOpen[bucket + '|' + row.key] = true;
+          }
+        }
+      }
       syncSessionGroupShell(node, p.group, !!SA.endedSessionsOpen[p.group.key]);
-      const rows = (fams, bucket) => sessionRailRows(fams, p.group.key, trees, SA.selectedSessionId, SA.sessionDupOpen, bucket);
+      const rows = (fams, bucket) => {
+        for (const family of fams) {
+          const familyKey = p.group.key + '|' + bucket + '|' + family.session.id;
+          family.children = stableSessionOrder(family.children, childOrders.get(familyKey), child => child.id);
+          childOrders.set(familyKey, family.children.map(child => child.id));
+        }
+        const list = sessionRailRows(fams, p.group.key, trees, SA.selectedSessionId, SA.sessionDupOpen, bucket);
+        const orderKey = p.group.key + '|' + bucket;
+        const ordered = stableSessionOrder(list, rowOrders.get(orderKey), row => row.key);
+        rowOrders.set(orderKey, ordered.map(row => row.key));
+        return ordered;
+      };
       patchList(node.querySelector('.session-rows'), rows(p.group.live, 'live'), rowOpts);
       patchList(node.querySelector('.session-ended-body'), rows(p.group.ended, 'ended'), rowOpts);
     }
-    // Detail: the selected session's trace waterfall.
+    rail.scrollTop = railTop;
+    if (railFocusId && !railFocus.isConnected) Array.from(rail.querySelectorAll('[data-action="select-session"]')).find(el => el.dataset.id === railFocusId)?.focus({ preventScroll: true });
     const selected = durable.find(s => s.id === SA.selectedSessionId);
-    if (detail) {
-      if (selected) {
-        detail.innerHTML = sessionDetailHTML(selected, SA.sessionTimeline || [], trees);
-        applyInlineMetrics(detail);
-      } else if (SA.selectedSessionId) {
-        detail.innerHTML = `<div class="empty"><span>Session no longer listed</span></div>`;
-      } else {
-        detail.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>Select a session to see its trace</span></div>`;
-      }
-    }
+    const emptyDetail = SA.selectedSessionId
+      ? `<div class="empty"><span>Session unavailable. It is no longer listed. <button type="button" class="link-btn" data-action="session-list">Back to sessions</button></span></div>`
+      : filtered ? noMatch : `<div class="empty"><span>No sessions available. Start an agent session, then refresh.</span></div>`;
+    if (detail) renderSessionDetail(detail, selected, trees, emptyDetail);
     return;
   }
 

@@ -48,3 +48,20 @@ test('memory page has explicit empty, loading and error states', () => {
   assert.match(context.sessionMemoryHTML({ rows: [] }, { error: 'not available' }), /data-action="memory-retry"/);
   assert.match(context.sessionMemoryHTML({ rows: [{ id: 'a', at: '2026-09-26T10:00:00Z', kind: 'activity', title: 'A' }], has_earlier: true, next_cursor: 'x' }, { loadingEarlier: true }), /Loading earlier/);
 });
+
+
+test('retained memory errors name latest or earlier operation and provide the reachable retry action', () => {
+  const rows = [{ id: 'retained', at: '2026-09-26T10:00:00Z', kind: 'activity', title: 'Retained activity' }];
+  const latest = context.sessionMemoryHTML({ rows, has_earlier: false }, { error: 'latest' });
+  assert.match(latest, /Could not refresh memory/);
+  assert.match(latest, /data-action="memory-retry"/);
+  assert.doesNotMatch(latest, /Could not load earlier|data-action="memory-earlier"/);
+  assert.match(latest, /Retained activity/);
+  const earlier = context.sessionMemoryHTML({ rows, has_earlier: true, next_cursor: 'older' }, { error: 'earlier' });
+  assert.match(earlier, /Could not load earlier/);
+  assert.match(earlier, /data-action="memory-earlier"/);
+  assert.match(earlier, /Retained activity/);
+  const unavailableEarlier = context.sessionMemoryHTML({ rows, has_earlier: false }, { error: 'earlier' });
+  assert.match(unavailableEarlier, /data-action="memory-retry"/);
+  assert.doesNotMatch(unavailableEarlier, /Use Load earlier to retry/);
+});

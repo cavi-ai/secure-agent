@@ -723,6 +723,33 @@ function applySessionFilters(groups, opts) {
   return out;
 }
 
+// Visible family members include folded children; disclosure state does not
+// change which sessions match the operator's filters.
+function visibleSessionMembers(groups) {
+  return (groups || []).filter(g => !g.infra).flatMap(g =>
+    [...g.live, ...g.ended].flatMap(f => [f.session, ...f.children]));
+}
+
+function initialSessionId(sessions, persisted) {
+  if (sessions.some(s => s.id === persisted)) return persisted;
+  const rank = s => s.status === 'ended' ? 2 : s.status === 'idle' ? 1 : 0;
+  const seen = s => Date.parse(s.last_seen_at || s.started_at || '') || 0;
+  return [...sessions].sort((a, b) => rank(a) - rank(b) || seen(b) - seen(a)
+    || String(a.id).localeCompare(String(b.id)))[0]?.id || '';
+}
+
+// Keep surviving rows in their previous order; append newly visible rows in
+// the server-derived order. Membership changes never reshuffle survivors.
+function stableSessionOrder(items, previous, key) {
+  const byKey = new Map(items.map(item => [String(key(item)), item]));
+  const ordered = [];
+  for (const id of previous || []) {
+    if (byKey.has(id)) { ordered.push(byKey.get(id)); byKey.delete(id); }
+  }
+  for (const item of items) if (byKey.delete(String(key(item)))) ordered.push(item);
+  return ordered;
+}
+
 // familySize: sessions in a list of families, sub-sessions included.
 function familySize(fams) {
   return (fams || []).reduce((n, f) => n + 1 + f.children.length, 0);
