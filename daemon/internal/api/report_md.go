@@ -20,6 +20,8 @@ const (
 // sections read "none". Times are daemon-local.
 func renderSessionMarkdown(rep store.SessionReport) string {
 	var b strings.Builder
+	eventsAvailable := rep.Evidence == nil || rep.Evidence.Events.Available
+	flagsAvailable := rep.Evidence == nil || rep.Evidence.Flags.Available
 	sess := rep.Session
 	where := sess.Repo
 	switch {
@@ -47,15 +49,76 @@ func renderSessionMarkdown(rep store.SessionReport) string {
 		toolErrors += t.Errors
 	}
 	b.WriteString("\n## Summary\n")
-	fmt.Fprintf(&b, "- Turns %d · tool calls %d (%d errors) · model calls %d · tokens %d in / %d out · cost %s",
-		rep.Turns, rep.ToolCalls, toolErrors, rep.ModelCalls, rep.TokensIn, rep.TokensOut, fmtUSD(rep.CostUSD))
-	if rep.Unpriced > 0 {
-		fmt.Fprintf(&b, " (%d unpriced)", rep.Unpriced)
+	if eventsAvailable {
+		fmt.Fprintf(&b, "- Turns %d · tool calls %d (%d errors) · model calls %d · tokens %d in / %d out · cost %s",
+			rep.Turns, rep.ToolCalls, toolErrors, rep.ModelCalls, rep.TokensIn, rep.TokensOut, fmtUSD(rep.CostUSD))
+		if rep.Unpriced > 0 {
+			fmt.Fprintf(&b, " (%d unpriced)", rep.Unpriced)
+		}
+		b.WriteString("\n")
+	} else {
+		b.WriteString("- Activity totals unavailable; usage, spend, files, connections, guard decisions, and secret hits are unknown.\n")
 	}
-	b.WriteString("\n")
-	fmt.Fprintf(&b, "- Files touched %s · hosts contacted %s · guard decisions %d · findings %d · secret hits %d\n",
-		countOrMore(len(rep.Files), store.ReportTopN), countOrMore(len(rep.Hosts), store.ReportTopN),
-		len(rep.Guard), len(rep.Flags), len(rep.SecretHits))
+	findings := "unknown"
+	if flagsAvailable {
+		findings = strconv.Itoa(len(rep.Flags))
+	}
+	if eventsAvailable {
+		fmt.Fprintf(&b, "- Files touched %s · hosts contacted %s · guard decisions %d · findings %s · secret hits %d\n",
+			countOrMore(len(rep.Files), store.ReportTopN), countOrMore(len(rep.Hosts), store.ReportTopN),
+			len(rep.Guard), findings, len(rep.SecretHits))
+	} else {
+		fmt.Fprintf(&b, "- Findings %s\n", findings)
+	}
+
+	b.WriteString("\n## Evidence and limits\n")
+	b.WriteString("Recorded history only; unobserved or expired evidence is not proof of inactivity. This export does not establish task completion.\n")
+	if rep.Evidence == nil {
+		b.WriteString("Source availability was not recorded; completeness is unknown.\n")
+	} else {
+		for _, source := range []struct {
+			label    string
+			evidence store.ReportSourceEvidence
+		}{
+			{"Activity", rep.Evidence.Events}, {"Findings", rep.Evidence.Flags}, {"Review decisions", rep.Evidence.Reviews},
+			{"Incidents", rep.Evidence.Incidents}, {"Resource interventions", rep.Evidence.Interventions},
+		} {
+			if !source.evidence.Available {
+				fmt.Fprintf(&b, "- %s unavailable; missing history remains unknown.\n", source.label)
+			}
+			if source.evidence.AtLimit {
+				fmt.Fprintf(&b, "- %s reached the export limit of %d rows; more history may be omitted.\n", source.label, source.evidence.Limit)
+			}
+		}
+	}
+
+	b.WriteString("\n## Review decisions\n")
+	if rep.Evidence != nil && !rep.Evidence.Reviews.Available {
+		b.WriteString("Review decision history unavailable; saved decisions are unknown.\n")
+	} else if len(rep.Reviews) == 0 {
+		b.WriteString("none recorded\n")
+	}
+	for _, review := range rep.Reviews {
+		fmt.Fprintf(&b, "- Review %s · revision %d · review: %s · risk: %s · control: %s · residual risk: %s\n",
+			mdCode(review.ID), review.Revision, mdText(review.ReviewState), mdText(review.Assessment.Risk), mdText(review.Assessment.Control), mdText(review.Assessment.ResidualRisk))
+		if !review.EvidenceAvailable {
+			b.WriteString("  - Source evidence unavailable; the retained review is historical.\n")
+		} else if !review.EvidenceFlagAvailable {
+			b.WriteString("  - Assessment source evidence unavailable; the retained assessment cannot be rechecked.\n")
+		}
+		if decision := review.Decision; decision != nil {
+			fmt.Fprintf(&b, "  - Latest saved decision: %s · revision %d · %s\n", mdText(decision.Action), decision.Revision, decision.At.UTC().Format(time.RFC3339Nano))
+			if decision.Revision != review.Revision {
+				b.WriteString("  - This decision applies to an earlier revision; it does not cover the current evidence.\n")
+			}
+			for _, id := range decision.ScopeIDs {
+				fmt.Fprintf(&b, "  - Saved scope %s; current permission is not established by this export.\n", mdCode(id))
+			}
+		}
+	}
+	if len(rep.Reviews) > 0 {
+		b.WriteString("Review and reported closure do not verify mitigation.\n")
+	}
 
 	b.WriteString("\n## Incident remediation\n")
 	if !rep.IncidentsAvailable {
@@ -82,7 +145,9 @@ func renderSessionMarkdown(rep store.SessionReport) string {
 	}
 	b.WriteString("Step reports do not establish credential safety or incident resolution.\n")
 	b.WriteString("\n## Models\n")
-	if len(rep.Models) == 0 {
+	if !eventsAvailable {
+		b.WriteString("unavailable; activity history could not be read\n")
+	} else if len(rep.Models) == 0 {
 		b.WriteString("none\n")
 	} else {
 		b.WriteString("| model | calls | tokens in | tokens out | cost |\n|---|---:|---:|---:|---:|\n")
@@ -99,7 +164,9 @@ func renderSessionMarkdown(rep store.SessionReport) string {
 	}
 
 	b.WriteString("\n## Tools\n")
-	if len(rep.Tools) == 0 {
+	if !eventsAvailable {
+		b.WriteString("unavailable; activity history could not be read\n")
+	} else if len(rep.Tools) == 0 {
 		b.WriteString("none\n")
 	} else {
 		b.WriteString("| tool | calls | errors | time |\n|---|---:|---:|---:|\n")
@@ -109,12 +176,22 @@ func renderSessionMarkdown(rep store.SessionReport) string {
 	}
 
 	b.WriteString("\n## Files touched\n")
-	writeCounts(&b, rep.Files, mdFilesShown, true)
+	if eventsAvailable {
+		writeCounts(&b, rep.Files, mdFilesShown, true)
+	} else {
+		b.WriteString("unavailable; activity history could not be read\n")
+	}
 	b.WriteString("\n## Network\n")
-	writeCounts(&b, rep.Hosts, len(rep.Hosts), false)
+	if eventsAvailable {
+		writeCounts(&b, rep.Hosts, len(rep.Hosts), false)
+	} else {
+		b.WriteString("unavailable; activity history could not be read\n")
+	}
 
 	b.WriteString("\n## Guard decisions\n")
-	if len(rep.Guard) == 0 {
+	if !eventsAvailable {
+		b.WriteString("unavailable; activity history could not be read\n")
+	} else if len(rep.Guard) == 0 {
 		b.WriteString("none\n")
 	}
 	for _, g := range rep.Guard {
@@ -122,7 +199,9 @@ func renderSessionMarkdown(rep store.SessionReport) string {
 	}
 
 	b.WriteString("\n## Findings\n")
-	if len(rep.Flags) == 0 {
+	if !flagsAvailable {
+		b.WriteString("unavailable; finding history could not be read\n")
+	} else if len(rep.Flags) == 0 {
 		b.WriteString("none\n")
 	}
 	for _, f := range rep.Flags {
@@ -164,7 +243,9 @@ func renderSessionMarkdown(rep store.SessionReport) string {
 		}
 	}
 	b.WriteString("\n## Secret hits\n")
-	if len(rep.SecretHits) == 0 {
+	if !eventsAvailable {
+		b.WriteString("unavailable; activity history could not be read\n")
+	} else if len(rep.SecretHits) == 0 {
 		b.WriteString("none\n")
 	}
 	for _, h := range rep.SecretHits {
@@ -172,7 +253,9 @@ func renderSessionMarkdown(rep store.SessionReport) string {
 	}
 
 	b.WriteString("\n## Timeline\n")
-	if len(rep.Timeline) == 0 {
+	if !eventsAvailable {
+		b.WriteString("unavailable; activity history could not be read\n")
+	} else if len(rep.Timeline) == 0 {
 		b.WriteString("none\n")
 	}
 	shown := min(len(rep.Timeline), mdTimelineShown)

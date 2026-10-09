@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"math"
@@ -45,6 +46,8 @@ type ReportLine struct {
 // its timeline. It carries names, paths, hosts, model ids, rule ids and
 // counts — never content.
 type SessionReport struct {
+	Evidence               *ReportEvidence             `json:"evidence,omitempty"`
+	Reviews                []model.ReviewRecord        `json:"reviews"`
 	Incidents              []model.IncidentReport      `json:"incidents"`
 	IncidentsAvailable     bool                        `json:"incidents_available"`
 	Interventions          []model.InterventionReceipt `json:"interventions"`
@@ -85,8 +88,8 @@ func (s *Store) SessionReport(id string) (SessionReport, bool) {
 	return rep, ok
 }
 
-// SessionReportResult distinguishes missing sessions from unavailable or
-// malformed core evidence. Optional receipts retain their availability flags.
+// SessionReportResult distinguishes unavailable identity from a missing session.
+// Source failures retain independently readable sections with explicit limits.
 func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr error) {
 	defer func() { s.noteRead("session reports", readErr) }()
 	sess, ok, err := s.GetSessionResult(id)
@@ -95,14 +98,6 @@ func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr
 	}
 	if !ok {
 		return SessionReport{}, false, nil
-	}
-	events, err := s.sessionEventsOldestFirstResult(id)
-	if err != nil {
-		return SessionReport{}, false, err
-	}
-	flags, err := s.QueryFlagsResult(FlagFilter{SessionID: id, Limit: reportFlagLimit})
-	if err != nil {
-		return SessionReport{}, false, err
 	}
 	rep := SessionReport{
 		Session:    sess,
@@ -114,6 +109,8 @@ func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr
 		SecretHits: []ReportLine{},
 		Flags:      []model.Flag{},
 		Timeline:   []ReportLine{},
+		Reviews:    []model.ReviewRecord{},
+		Evidence:   &ReportEvidence{},
 	}
 	end := sess.LastSeenAt
 	if sess.EndedAt != nil {
@@ -127,6 +124,8 @@ func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr
 	models := map[string]*ReportModel{}
 	files := map[string]int{}
 	hosts := map[string]int{}
+	events, eventErr := s.sessionEventsOldestFirst(id)
+	rep.Evidence.Events = ReportSourceEvidence{Available: eventErr == nil, AtLimit: len(events) >= reportEventCap, Limit: reportEventCap}
 	for _, e := range events {
 		rep.Events++
 		ts := e.TS.UTC().Format(time.RFC3339)
@@ -215,51 +214,70 @@ func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr
 	})
 	rep.Files = topCounts(files, ReportTopN)
 	rep.Hosts = topCounts(hosts, ReportTopN)
-	rep.Flags = flags
+	var flagErr error
+	rep.Flags, flagErr = s.QueryFlagsResult(FlagFilter{SessionID: id, Limit: reportFlagLimit})
+	rep.Evidence.Flags = ReportSourceEvidence{Available: flagErr == nil, AtLimit: len(rep.Flags) >= reportFlagLimit, Limit: reportFlagLimit}
+	page, reviewErr := s.ListSessionFindingReviews(id)
+	if reviewErr == nil && !page.Degraded {
+		rep.Reviews = page.Reviews
+		for i := range rep.Reviews {
+			// An export is history, not a current permission/action surface.
+			rep.Reviews[i].AvailableScopes = nil
+		}
+	}
+	rep.Evidence.Reviews = ReportSourceEvidence{Available: reviewErr == nil && !page.Degraded, AtLimit: len(rep.Reviews) >= 100, Limit: 100}
 	var interventionErr error
 	rep.Interventions, interventionErr = s.RecentInterventions(id, 200)
 	rep.InterventionsAvailable = interventionErr == nil
+	rep.Evidence.Interventions = ReportSourceEvidence{Available: interventionErr == nil, AtLimit: len(rep.Interventions) >= 200, Limit: 200}
 	var incidentErr error
 	rep.Incidents, incidentErr = s.SessionIncidents(id)
 	rep.IncidentsAvailable = incidentErr == nil
+	rep.Evidence.Incidents = ReportSourceEvidence{Available: incidentErr == nil, AtLimit: len(rep.Incidents) >= 100, Limit: 100}
 	if rep.Flags == nil {
 		rep.Flags = []model.Flag{}
+	}
+	if rep.Incidents == nil {
+		rep.Incidents = []model.IncidentReport{}
+	}
+	if rep.Interventions == nil {
+		rep.Interventions = []model.InterventionReceipt{}
 	}
 	return rep, true, nil
 }
 
 // sessionEventsOldestFirst reads up to reportEventCap of one session's events
 // in time order (insertion order breaks ties).
-func (s *Store) sessionEventsOldestFirstResult(id string) ([]event.Event, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT kind, ts, path, remote_host, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd
+func (s *Store) sessionEventsOldestFirst(id string) (out []event.Event, readErr error) {
+	defer func() { s.noteRead("session report events", readErr) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `SELECT kind, ts, COALESCE(path,''), COALESCE(remote_host,''), COALESCE(detail,''), tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd
 		FROM events WHERE session_id = ? ORDER BY julianday(ts) ASC, id ASC LIMIT ?`, id, reportEventCap)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []event.Event
+	out = []event.Event{}
 	for rows.Next() {
 		var e event.Event
 		var kind int
 		var ts string
-		var path, host, detail, tool, toolStatus, modelName sql.NullString
+		var tool, toolStatus, modelName sql.NullString
 		var durMs, tokIn, tokOut sql.NullInt64
 		var cost sql.NullFloat64
-		if err := rows.Scan(&kind, &ts, &path, &host, &detail,
+		if err := rows.Scan(&kind, &ts, &e.Path, &e.RemoteHost, &e.Detail,
 			&tool, &toolStatus, &durMs, &modelName, &tokIn, &tokOut, &cost); err != nil {
 			return nil, err
 		}
 		e.Kind = event.Kind(kind)
 		e.TS, err = time.Parse(time.RFC3339Nano, ts)
 		if err != nil {
-			return nil, errors.New("invalid session report event timestamp")
+			return nil, errors.New("invalid session event timestamp")
 		}
 		if math.IsInf(cost.Float64, 0) || math.IsNaN(cost.Float64) {
 			return nil, errors.New("nonfinite session report event cost")
 		}
-		e.Path, e.RemoteHost, e.Detail = path.String, host.String, detail.String
 		e.ToolName, e.ToolStatus, e.Model = tool.String, toolStatus.String, modelName.String
 		e.DurationMs, e.TokensIn, e.TokensOut, e.CostUSD = durMs.Int64, tokIn.Int64, tokOut.Int64, cost.Float64
 		out = append(out, e)

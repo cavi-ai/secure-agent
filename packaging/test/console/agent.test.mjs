@@ -19,6 +19,14 @@ const { agentStateText, agentOffHTML, agentMessageHTML, agentThreadItems, agentP
 
 const XSS = '<img src=x onerror=alert(1)>';
 
+test('advisor progress distinguishes waiting, inspection, paused retry and idle without exposing raw errors', () => {
+  assert.match(ctx.advisorStateText({enabled:true,state:'answering',active_kind:'flag',elapsed_ms:12000,queue_depth:2}), /flag.*12s.*2 queued/);
+  assert.match(ctx.advisorStateText({enabled:true,state:'inspecting',active_tool:'inspect_session_activity'}), /session activity/);
+  assert.match(ctx.advisorStateText({enabled:true,state:'paused',retry_at:'2026-10-09T20:05:00Z',last_error:'PRIVATE FAILURE'},Date.parse('2026-10-09T20:04:00Z')), /retry in 60s/);
+  assert.doesNotMatch(ctx.advisorStateText({enabled:true,state:'paused',last_error:'PRIVATE FAILURE'}), /PRIVATE FAILURE/);
+  assert.match(ctx.advisorStateText({enabled:true,state:'idle',last_duration_ms:2300}), /last review 2s/);
+});
+
 test('quick commands prepare a reviewable prompt and reject unknown command ids', () => {
   assert.match(ctx.agentQuickPrompt('ssh'), /SSH/);
   assert.match(ctx.agentQuickPrompt('signing'), /signing/);

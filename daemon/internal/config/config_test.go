@@ -51,6 +51,23 @@ func TestOverlayMergesOverDefaults(t *testing.T) {
 	}
 }
 
+func TestAdvisorClassifierOverlayStaysLocal(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("advisor:\n  classifier_endpoint: http://127.0.0.1:8009\n  classifier_model: local-decision\n  timeout_ms: 120000\n  debug: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil || c.Advisor.ClassifierEndpoint != "http://127.0.0.1:8009" || c.Advisor.ClassifierModel != "local-decision" || c.Advisor.Timeout.Milliseconds() != 120000 || !c.Advisor.Debug {
+		t.Fatalf("classifier overlay not applied: %+v %v", c.Advisor, err)
+	}
+	if err := os.WriteFile(p, []byte("advisor:\n  classifier_endpoint: https://example.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatal("remote classifier overlay accepted")
+	}
+}
+
 func TestOverlayRejectsNonPositiveSampleInterval(t *testing.T) {
 	// time.NewTicker panics on a non-positive duration; validate at load so the
 	// supervisor doesn't recover a permanently crash-looping collector.

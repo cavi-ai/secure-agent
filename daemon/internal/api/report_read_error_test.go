@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -58,8 +59,30 @@ func TestSessionReportReadFailuresRejectReportsAndPlans(t *testing.T) {
 			for _, format := range []string{"json", "md"} {
 				w := httptest.NewRecorder()
 				a.serveSessionReport(w, httptest.NewRequest(http.MethodGet, "/sessions/s1/report?format="+format, nil), "s1")
-				if w.Code != http.StatusServiceUnavailable {
-					t.Errorf("%s report: %d %s", format, w.Code, w.Body.String())
+				if tc.name == "session" {
+					if w.Code != http.StatusServiceUnavailable {
+						t.Errorf("%s unavailable identity: %d %s", format, w.Code, w.Body.String())
+					}
+					continue
+				}
+				if w.Code != http.StatusOK || w.Header().Get("X-Secure-Agent-Report-State") != "partial" {
+					t.Fatalf("%s unavailable source: %d %s", format, w.Code, w.Body.String())
+				}
+				if format == "json" {
+					var rep store.SessionReport
+					if err := json.Unmarshal(w.Body.Bytes(), &rep); err != nil {
+						t.Fatal(err)
+					}
+					if rep.Evidence == nil {
+						t.Fatal("missing source availability")
+					}
+					if tc.name == "flag" {
+						if rep.Evidence.Flags.Available || len(rep.Flags) != 0 || rep.Events != 2 {
+							t.Fatalf("partial flags or lost activity: %+v", rep)
+						}
+					} else if rep.Evidence.Events.Available || rep.Events != 0 || len(rep.Timeline) != 0 || len(rep.Flags) != 1 {
+						t.Fatalf("partial activity or lost flags: %+v", rep)
+					}
 				}
 			}
 			if code, _ := planCall(t, a, http.MethodPost, "incident:i1"); code != http.StatusServiceUnavailable {

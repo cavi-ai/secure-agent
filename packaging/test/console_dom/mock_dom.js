@@ -3272,6 +3272,8 @@
         checks.draftPreserved = input.value.startsWith('Keep this draft.') && input.value.includes('SSH');
         checks.noOverflow = document.documentElement.scrollWidth <= innerWidth + 1;
         checks.composerVisible = document.getElementById('agent-send').getBoundingClientRect().bottom <= innerHeight + 1;
+        checks.composerFootVisible = document.querySelector('.agent-chat-foot').getBoundingClientRect().bottom <= innerHeight + 1;
+        checks.advisorVisible = document.getElementById('advisor-state').getBoundingClientRect().height > 0;
         checks.homeHidden = getComputedStyle(document.getElementById('tab-home')).display === 'none';
         document.querySelector('[data-action="goto-tab"][data-tab="home"].agent-posture-link').click();
         checks.alertsReachable = document.querySelector('.tab-btn[data-tab="home"]').getAttribute('aria-selected') === 'true'

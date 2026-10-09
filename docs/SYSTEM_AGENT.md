@@ -176,7 +176,9 @@ Inspect the plan's task and folder before dispatching it.
   network. The daemon removes inherited environment variables before a
   headless local command, but files accessible to the account remain so.
 - The model itself has no file or shell tools. It sees the system prompt,
-  relevant skill text and the last 20 masked conversation messages. Local
+  relevant skill text and a suffix of the last 20 masked conversation messages,
+  bounded to 32 KiB of serialized context. Older complete turns are omitted
+  with an explicit notice; each activity analysis starts from its own snapshot. Local
   command output and harness plans are not fed back as model instructions.
 - Commands can start once per proposal. Headless output is bounded and
   masked before storage. Local actions, handoff dispatches and plan deletions

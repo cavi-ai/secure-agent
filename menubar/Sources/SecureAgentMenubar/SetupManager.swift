@@ -35,6 +35,8 @@ public final class SetupManager: ObservableObject {
     /// Local advisor: whether a model server answers on the loopback endpoint
     /// and whether the daemon config has the advisor enabled.
     @Published public private(set) var advisorEnabled = false
+    @Published private(set) var advisorPreferences = AdvisorPreferences()
+    @Published private(set) var advisorPreferencesError: String?
     @Published public private(set) var systemAgentEnabled = false
     /// system_agent.auto_review: new findings go to the agent's review queue.
     @Published public private(set) var systemAgentAutoReview = false
@@ -221,6 +223,10 @@ public final class SetupManager: ObservableObject {
             report(error)
         }
         advisorPersisted = Self.advisorConfig(configYAML())
+        do {
+            advisorPreferences = try AdvisorPreferences.read(configYAML())
+            advisorPreferencesError = nil
+        } catch { advisorPreferencesError = error.localizedDescription }
         disabledAgents = Self.disabledAgents(configYAML())
         advisorDiscovery = (try? await DaemonClient().fetchAdvisorDiscover())
             ?? AdvisorDiscovery(servers: [], managedModels: [])
@@ -340,7 +346,7 @@ public final class SetupManager: ObservableObject {
     /// Writes are atomic — a torn config would be a loud daemon error.
     public func setAdvisorEnabled(_ enabled: Bool) {
         do {
-            let updated = Self.advisorConfigUpdating(configYAML(), enabled: enabled)
+            let updated = try Self.advisorConfigUpdating(configYAML(), enabled: enabled)
             let dir = (configPath as NSString).deletingLastPathComponent
             try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
             try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
@@ -401,11 +407,10 @@ public final class SetupManager: ObservableObject {
     /// Write the full advisor block for one of the two first-class paths:
     /// managed (daemon spawns the model server; no endpoint in the file) or
     /// existing (loopback endpoint + model from the discovery dropdowns).
-    /// Atomic write; the restart note tells the user the daemon needs a
-    /// relaunch to pick it up.
+    /// Atomic write; the daemon applies changes live.
     public func setAdvisorConfig(mode: AdvisorMode, endpoint: String?, model: String) {
         do {
-            let updated = Self.advisorConfigSetting(configYAML(), mode: mode, endpoint: endpoint, model: model)
+            let updated = try Self.advisorConfigSetting(configYAML(), mode: mode, endpoint: endpoint, model: model)
             let dir = (configPath as NSString).deletingLastPathComponent
             try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
             try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
@@ -431,52 +436,29 @@ public final class SetupManager: ObservableObject {
         setAdvisorConfig(mode: c.mode, endpoint: c.endpoint, model: c.model)
     }
 
-    /// Replace the whole advisor block (or append one) with the given path
-    /// config, preserving every other byte of the user's config.yaml. Pure
-    /// and line-based like the other helpers: block = `advisor:` up to the
-    /// next top-level key.
-    public nonisolated static func advisorConfigSetting(_ yaml: String, mode: AdvisorMode, endpoint: String?, model: String) -> String {
-        // Strip any existing advisor block.
-        let lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var kept: [String] = []
-        var inAdvisor = false
-        for line in lines {
-            if line.hasPrefix("advisor:") { inAdvisor = true; continue }
-            if inAdvisor && !line.hasPrefix(" ") && !line.hasPrefix("#") && !line.trimmingCharacters(in: .whitespaces).isEmpty {
-                inAdvisor = false
-            }
-            if !inAdvisor { kept.append(line) }
+    /// Update model fields without discarding timeout, classifier, debug or future fields.
+    public nonisolated static func advisorConfigSetting(_ yaml: String, mode: AdvisorMode, endpoint: String?, model: String) throws -> String {
+        try AdvisorPreferences.settingModel(yaml, managed: mode == .managed, endpoint: endpoint, model: model)
+    }
+
+    func saveAdvisorPreferences(_ preferences: AdvisorPreferences) throws {
+        let updated = try preferences.updating(configYAML())
+        try fm.createDirectory(atPath: (configPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+        advisorPreferences = preferences
+        advisorPreferencesError = nil
+        advisorNote = "Advisor settings saved — applied live."
+    }
+
+    func openAdvisorLog() {
+        let logURL = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/secure-agent/daemon-err.log")
+        guard fm.fileExists(atPath: logURL.path) else {
+            advisorNote = "No daemon log yet. Start Secure Agent, then open the log."
+            return
         }
-        var base = kept.joined(separator: "\n")
-        while base.hasSuffix("\n\n") { base.removeLast() }
-
-        let block: String
-        switch mode {
-        case .managed:
-            block = """
-
-            # Local advisor (managed): the daemon spawns and supervises the model
-            # server itself — no endpoint needed. Loopback-only, enforced in code.
-            advisor:
-              enabled: true
-              managed: true
-              managed_model: "\(model)"
-              timeout_ms: 8000
-            """
-        case .existing:
-            block = """
-
-            # Local advisor (existing server): a locally served model triages flags
-            # and writes incident narratives. Loopback-only, enforced in code.
-            advisor:
-              enabled: true
-              endpoint: "\(endpoint ?? advisorEndpoint)"
-              model: "\(model)"
-              timeout_ms: 8000
-            """
+        if !NSWorkspace.shared.open(logURL) {
+            advisorNote = "The log could not be opened. It is at ~/Library/Logs/secure-agent/daemon-err.log."
         }
-        if !base.isEmpty && !base.hasSuffix("\n") { base += "\n" }
-        return base + block + "\n"
     }
 
     /// True when the YAML has an advisor block with `enabled: true`.
@@ -597,45 +579,8 @@ public final class SetupManager: ObservableObject {
 
     /// Return the YAML with advisor.enabled set. Appends the full block when
     /// the advisor key is absent; preserves all other content byte-for-byte.
-    public nonisolated static func advisorConfigUpdating(_ yaml: String, enabled: Bool) -> String {
-        let value = enabled ? "true" : "false"
-        var lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var inAdvisor = false
-        var blockStart = -1
-        var blockEnd = lines.count
-        for (i, s) in lines.enumerated() {
-            if s.hasPrefix("advisor:") { inAdvisor = true; blockStart = i; continue }
-            if inAdvisor && !s.hasPrefix(" ") && !s.hasPrefix("#") && !s.trimmingCharacters(in: .whitespaces).isEmpty {
-                blockEnd = i
-                break
-            }
-        }
-        if blockStart >= 0 {
-            for i in blockStart..<blockEnd {
-                let t = lines[i].trimmingCharacters(in: .whitespaces)
-                if t.hasPrefix("enabled:") {
-                    let indent = lines[i].hasPrefix(" ") ? String(lines[i].prefix(while: { $0 == " " })) : ""
-                    lines[i] = "\(indent)enabled: \(value)"
-                    return lines.joined(separator: "\n")
-                }
-            }
-            // Block exists but no enabled key: insert right after `advisor:`.
-            lines.insert("  enabled: \(value)", at: blockStart + 1)
-            return lines.joined(separator: "\n")
-        }
-        var block = """
-
-        # Local triage advisor (opt-in): a locally served model triages flags and
-        # writes incident narratives. Loopback-only, enforced in code.
-        # See docs/ADVISOR_THREAT_MODEL.md.
-        advisor:
-          enabled: \(value)
-          endpoint: "\(advisorEndpoint)"
-          model: ""
-          timeout_ms: 8000
-        """
-        if !yaml.isEmpty && !yaml.hasSuffix("\n") { block = "\n" + block }
-        return yaml + block + "\n"
+    public nonisolated static func advisorConfigUpdating(_ yaml: String, enabled: Bool) throws -> String {
+        try AdvisorPreferences.settingEnabled(yaml, enabled: enabled)
     }
 
     // MARK: - Legacy LaunchAgent migration

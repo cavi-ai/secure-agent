@@ -525,6 +525,15 @@ export interface HealthSnapshot {
   last_error?: string;
   queue_depth: number;
   model?: string;
+  state: string;
+  active_kind?: string;
+  active_subject?: string;
+  active_tool?: string;
+  elapsed_ms?: number;
+  last_duration_ms?: number;
+  input_bytes?: number;
+  tool_calls?: number;
+  retry_at: string;
 }
 
 export interface WriteHealth {
@@ -871,6 +880,20 @@ export interface PlanSnapshot {
   homes?: string[];
 }
 
+export interface ReportSourceEvidence {
+  available: boolean;
+  at_limit: boolean;
+  limit: number;
+}
+
+export interface ReportEvidence {
+  events: ReportSourceEvidence;
+  flags: ReportSourceEvidence;
+  reviews: ReportSourceEvidence;
+  incidents: ReportSourceEvidence;
+  interventions: ReportSourceEvidence;
+}
+
 export interface ReportCount {
   key: string;
   count: number;
@@ -896,6 +919,8 @@ export interface ReportLine {
 }
 
 export interface SessionReport {
+  evidence?: ReportEvidence;
+  reviews: ReviewRecord[];
   incidents: IncidentReport[];
   incidents_available: boolean;
   interventions: InterventionReceipt[];

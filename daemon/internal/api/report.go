@@ -25,6 +25,9 @@ func (a *API) serveSessionReport(w http.ResponseWriter, r *http.Request, id stri
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
+	if rep.Evidence != nil && rep.Evidence.Partial() {
+		w.Header().Set("X-Secure-Agent-Report-State", "partial")
+	}
 	if format == "md" {
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		_, _ = io.WriteString(w, renderSessionMarkdown(rep))

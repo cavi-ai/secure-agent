@@ -117,14 +117,10 @@ func (a *Agent) reply(cfg config.SystemAgentConfig, user model.SysAgentMessage) 
 		history = plain
 	}
 	picked := selectSkills(recentUserText(history, 3), promptSkills)
-	msgs := []chatMessage{{Role: "system", Content: a.systemPrompt(user, picked)}}
-	for _, h := range history {
-		switch h.Role {
-		case "user":
-			msgs = append(msgs, chatMessage{Role: "user", Content: h.Content})
-		case "assistant":
-			msgs = append(msgs, chatMessage{Role: "assistant", Content: h.Content})
-		}
+	msgs, err := boundedChatContext(a.systemPrompt(user, picked), history)
+	if err != nil {
+		a.note("The local model did not answer: " + err.Error() + "." + keptHint)
+		return
 	}
 	answer, usage, err := chat(ctx, a.client, cfg.Endpoint, modelName, msgs)
 	if err != nil {

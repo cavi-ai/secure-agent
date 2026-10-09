@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestSessionReportResultRejectsPartialEvidenceAndRecovers(t *testing.T) {
+func TestSessionReportResultMarksUnavailableSourcesAndRecovers(t *testing.T) {
 	for _, tc := range []struct{ name, damage, repair string }{
 		{"event scan", `UPDATE events SET duration_ms='invalid' WHERE tool='Bash'`, `UPDATE events SET duration_ms=0`},
 		{"event timestamp", `UPDATE events SET ts='invalid' WHERE tool='Bash'`, ""},
@@ -23,11 +23,24 @@ func TestSessionReportResultRejectsPartialEvidenceAndRecovers(t *testing.T) {
 				t.Fatal(err)
 			}
 			rep, found, err := s.SessionReportResult("s1")
-			if err == nil || found || !reflect.DeepEqual(rep, SessionReport{}) {
-				t.Fatalf("partial report: %+v, %v, %v", rep, found, err)
+			if tc.name == "cost overflow" {
+				if err == nil || found || !reflect.DeepEqual(rep, SessionReport{}) {
+					t.Fatalf("nonfinite aggregate escaped: %+v, %v, %v", rep, found, err)
+				}
+			} else {
+				if err != nil || !found || rep.Evidence == nil {
+					t.Fatalf("available identity lost: %+v, %v, %v", rep, found, err)
+				}
+				if tc.name == "flag" {
+					if rep.Evidence.Flags.Available || len(rep.Flags) != 0 || rep.Events != 15 {
+						t.Fatalf("partial flags or lost activity: %+v", rep)
+					}
+				} else if rep.Evidence.Events.Available || rep.Events != 0 || len(rep.Timeline) != 0 || len(rep.Flags) != 1 {
+					t.Fatalf("partial activity or lost flags: %+v", rep)
+				}
 			}
 			h := s.WriteHealth()
-			if !slices.Contains(h.ReadActive, "session reports") || h.ReadFailures == 0 || h.Failures != 0 {
+			if len(h.ReadActive) == 0 || h.ReadFailures == 0 || h.Failures != 0 {
 				t.Fatalf("report fault health: %+v", h)
 			}
 			failures := h.ReadFailures

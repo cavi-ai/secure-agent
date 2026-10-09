@@ -236,6 +236,8 @@ Inspects what your agents send to their APIs and catches secrets leaving where t
 
 **See the control result.** New payload findings distinguish registered fingerprints from typed pattern matches and show the resolved request outcome: **Blocked before forwarding** or **Observed only; delivery unknown**. A monitor-only match can share a request that another rule blocked. Incident reports preserve mixed outcomes as counts of recorded findings, and session exports retain review state, control results, and evidence limits. Older findings retain an unknown outcome. Acknowledgment or reported resolution does not prove credential revocation, repair earlier exposure, or establish remote delivery.
 
+**Export recorded session history.** Session reports include the latest saved review decisions, the evidence revisions they apply to, residual risk, and intervention/remediation results. Missing source history and export limits are explicit. Copying a partial report shows a warning; an export does not establish task completion or current permission.
+
 **Monitor by default; earn enforcement.** Every rule runs in `monitor` mode: leaks are reported, nothing is blocked. Promote a rule to blocking once you trust it, in `~/.config/secure-agent/config.yaml`:
 
 ```yaml
@@ -355,7 +357,10 @@ advisor:
   enabled: false                     # flip to true once a local model is serving
   endpoint: "http://127.0.0.1:8080"  # must be loopback
   model: ""                          # e.g. "qwen3-4b-instruct"
-  timeout_ms: 8000                   # per triage call; plans and notes you ask for get at least 5 minutes
+  timeout_ms: 60000                  # whole triage task; requested plans/notes get at least 5 minutes
+  classifier_endpoint: ""           # optional local Kev service, e.g. http://127.0.0.1:8009
+  classifier_model: "kev-latest"
+  debug: false                       # metadata-only task/tool logs, applied live
 ```
 
 ### 🤖 Secure Agent chat
@@ -389,6 +394,13 @@ worktree from the console's System tab or `secure-agent worktrees advise`,
 and a short cleanup plan for a project's worktrees and clutter from the same tab
 or `secure-agent cleanup advise`; neither changes a verdict or an action. The advisor is async and fails silent:
 if the model is down, nothing changes except the absence of verdicts.
+
+Each advisor task starts with fresh context and can call read-only tools for
+its evidence, its finding's session activity, and similar operator judgments.
+An optional local classifier helps choose which context to inspect; its output
+cannot clear findings or change enforcement. The Agent page reports the active
+task, evidence tool, elapsed time, queue depth and retry state. See
+[advisor boundaries](docs/ADVISOR_THREAT_MODEL.md) for context and cache limits.
 
 ---
 

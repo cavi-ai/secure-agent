@@ -1341,6 +1341,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const enabled = !!(st && st.enabled);
     const stateEl = document.getElementById('agent-state');
     if (stateEl) stateEl.textContent = agentState.error || agentStateText(st);
+    const advisorStateEl = document.getElementById('advisor-state');
+    if (advisorStateEl) advisorStateEl.textContent = advisorStateText(telemetryData.status && telemetryData.status.advisor_health);
     const unavailable = !enabled || !!(st && st.reason) || agentBusy();
     const feedback = document.getElementById('agent-feedback');
     if (feedback) { feedback.hidden = !agentState.sendError; feedback.textContent = agentState.sendError; }
@@ -3010,9 +3012,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // clipboard write started inside the click, so where ClipboardItem exists
   // the write starts now with the report body still loading.
   window.copySessionReport = function(id) {
+    let partial = false;
     const text = apiFetch('/sessions/' + encodeURIComponent(id) + '/report?format=md').then(async r => {
       const body = await r.text();
       if (!r.ok) throw new Error((body || '').trim() || 'HTTP ' + r.status);
+      partial = r.headers && r.headers.get('X-Secure-Agent-Report-State') === 'partial';
       return body;
     });
     const clip = navigator.clipboard;
@@ -3025,7 +3029,7 @@ document.addEventListener('DOMContentLoaded', () => {
       write = Promise.reject(new Error('no clipboard'));
     }
     Promise.all([text, write]).then(
-      () => showToast('Session report copied (markdown)', 'success'),
+      () => showToast(partial ? 'Partial session report copied — review its evidence and limits' : 'Session report copied (markdown)', partial ? 'warning' : 'success'),
       err => showToast('Export failed: ' + ((err && err.message) || err), 'danger'));
   };
   window.selectSession = async function(id) {

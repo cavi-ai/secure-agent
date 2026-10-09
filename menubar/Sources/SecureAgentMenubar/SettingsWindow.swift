@@ -160,15 +160,17 @@ struct SettingsView: View {
     @ObservedObject private var nav = SettingsNavigation.shared
     @State private var recommendationsExpanded = false
     @State private var advisorSelectionInitialized = false
+    @State private var advisorOptionsExpanded = false
     @State private var ruleEdit: ProtectionRuleEdit?
     @State private var removal: ProtectionRuleEdit?
     @State private var confirmRemoval = false
     @State private var policyError: String?
     @State private var guardModeOverrides: [String: String]?
 
-    init(state: AppState, protection: ProtectionSettings? = nil) {
+    init(state: AppState, protection: ProtectionSettings? = nil, advisorOptionsExpanded: Bool = false) {
         self.state = state
         _protection = StateObject(wrappedValue: protection ?? ProtectionSettings())
+        _advisorOptionsExpanded = State(initialValue: advisorOptionsExpanded)
     }
 
     var body: some View {
@@ -1113,6 +1115,14 @@ struct SettingsView: View {
                 }
                 HStack {
                     Button("Recheck servers") { Task { await setup.refreshState() } }
+                }
+            }
+
+            Section {
+                DisclosureGroup("Advisor tools and diagnostics", isExpanded: $advisorOptionsExpanded) {
+                    Text("Reviews start fresh with bounded context and read-only evidence tools. Tool calls never execute commands or change protection.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    AdvisorOptionsView()
                 }
             }
 
