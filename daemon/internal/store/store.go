@@ -93,13 +93,14 @@ var (
 var pruneMinInterval = 30 * time.Second
 
 type Store struct {
-	writeHealth         writeHealth
-	mu                  sync.Mutex
-	egressMu            sync.Mutex // serializes episode read-modify-write without blocking event state
-	db                  *sql.DB
-	flagMirror          *flagMirror
-	insertCount         uint64
-	guardDecisionWrites atomic.Uint64
+	egressProjectionHealth egressProjectionHealth
+	writeHealth            writeHealth
+	mu                     sync.Mutex
+	egressMu               sync.Mutex // serializes episode read-modify-write without blocking event state
+	db                     *sql.DB
+	flagMirror             *flagMirror
+	insertCount            uint64
+	guardDecisionWrites    atomic.Uint64
 	// Test seam for the identity-to-insert boundary; nil in production.
 	resourceEpisodeAfterLookup func()
 	// openID is the newest event id when the store opened: rows above it

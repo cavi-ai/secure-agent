@@ -227,12 +227,19 @@ func (s *Store) recordEgressObservation(ctx context.Context, o EgressObservation
 	}
 	intervals, _ := json.Marshal(e.Intervals)
 	sessions, _ := json.Marshal(e.SessionIDs)
-	_, err = tx.ExecContext(ctx, `INSERT INTO egress_episodes (id,agent,exe_path,harness,workspace,host,protocol,port,count,first_seen_ns,last_seen_ns,intervals_json,session_ids_json)
+	result, err := tx.ExecContext(ctx, `INSERT INTO egress_episodes (id,agent,exe_path,harness,workspace,host,protocol,port,count,first_seen_ns,last_seen_ns,intervals_json,session_ids_json)
 	 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET count=excluded.count, first_seen_ns=excluded.first_seen_ns,
 	 last_seen_ns=excluded.last_seen_ns, intervals_json=excluded.intervals_json, session_ids_json=excluded.session_ids_json`,
 		id, o.Scope.Agent, o.Scope.ExePath, o.Scope.Harness, o.Scope.Workspace, o.Host, o.Protocol, o.Port, e.Count, first, last, string(intervals), string(sessions))
 	if err != nil {
 		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return errors.New("egress observation was not persisted")
 	}
 	cutoff := time.Now().Add(-egressIdleExpiry).UnixNano()
 	if _, err := tx.ExecContext(ctx, `DELETE FROM egress_episodes WHERE last_seen_ns < ?`, cutoff); err != nil {
