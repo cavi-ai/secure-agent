@@ -288,8 +288,13 @@ func (a *API) requestPlan(w http.ResponseWriter, subject string) {
 		_ = json.NewEncoder(w).Encode(resp)
 		return
 	}
+	context, err := a.planContext(t, resp.Playbook, labels.Similar)
+	if err != nil {
+		http.Error(w, "Rule history unavailable; retry", http.StatusServiceUnavailable)
+		return
+	}
 	req := advisor.PlanRequest{SubjectID: subject, EvidenceKey: planEvidenceKey(t),
-		Context: a.planContext(t, resp.Playbook, labels.Similar), Offered: a.offeredActions(t)}
+		Context: context, Offered: a.offeredActions(t)}
 	if !a.plan.Enqueue(req) {
 		resp.Status, resp.AdvisorReady = "disabled", false
 		resp.Reason = "the advisor did not take the request: it is paused or its queue is full"
@@ -333,7 +338,15 @@ func (a *API) offeredActions(t planTarget) []string {
 // planContext renders the local context for one plan as labeled lines. It
 // holds evidence labels, the session, the masked excerpt, history, local
 // policy and the playbook; never a secret value.
-func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.OperatorLabel) []string {
+func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.OperatorLabel) ([]string, error) {
+	var d7, d30 int
+	if t.rule != "" {
+		var err error
+		d7, d30, err = a.store.RuleCountsResult(t.rule, t.agent, time.Now())
+		if err != nil {
+			return nil, err
+		}
+	}
 	var c []string
 	add := func(format string, args ...any) { c = append(c, fmt.Sprintf(format, args...)) }
 
@@ -388,7 +401,6 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.Ope
 		}
 	}
 	if t.rule != "" {
-		d7, d30 := a.store.RuleCounts(t.rule, t.agent, time.Now())
 		add("history: rule %s fired %d times for this agent in the last 7 days, %d in 30 days", t.rule, d7, d30)
 	}
 	if a.mutes != nil {
@@ -417,7 +429,7 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.Ope
 	for _, s := range pb.Prevent {
 		add("PLAYBOOK prevent: (%s) %s: %s", s.Kind, s.Step, s.Detail)
 	}
-	return c
+	return c, nil
 }
 
 // planSessionLines adds the session summary and the timeline leading up to
