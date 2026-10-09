@@ -1439,24 +1439,42 @@ func (s *Store) PutIncident(inc model.IncidentReport) (writeErr error) {
 	return nil
 }
 
-func (s *Store) GetIncident(id string) (*model.IncidentReport, error) {
+func (s *Store) GetIncident(id string) (report *model.IncidentReport, readErr error) {
+	defer func() {
+		if readErr == sql.ErrNoRows {
+			s.noteRead("incidents", nil)
+		} else {
+			s.noteRead("incidents", readErr)
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var reportJSON string
-	err := s.db.QueryRow(`SELECT report_json FROM incidents WHERE id = ? OR flag_id = ?`, id, id).Scan(&reportJSON)
+	var storedID, reportJSON string
+	err := s.db.QueryRow(`SELECT id, report_json FROM incidents WHERE id = ? OR flag_id = ?`, id, id).Scan(&storedID, &reportJSON)
 	if err != nil {
 		return nil, err
 	}
 
-	var inc model.IncidentReport
-	if err := json.Unmarshal([]byte(reportJSON), &inc); err != nil {
+	inc, err := decodeIncidentReport(storedID, reportJSON)
+	if err != nil {
 		return nil, err
 	}
 	if v, ok := s.advisorVerdictLocked(inc.ID, "incident"); ok {
 		inc.AdvisorNarrative = v.Rationale
 	}
-	return &inc, nil
+	return inc, nil
+}
+
+func decodeIncidentReport(id, reportJSON string) (*model.IncidentReport, error) {
+	var inc *model.IncidentReport
+	if err := json.Unmarshal([]byte(reportJSON), &inc); err != nil {
+		return nil, err
+	}
+	if inc == nil || inc.ID == "" || inc.ID != id {
+		return nil, fmt.Errorf("invalid incident report identity")
+	}
+	return inc, nil
 }
 
 // IncidentIDForFlag returns the incident a flag opened or was aggregated
@@ -1563,34 +1581,54 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.In
 }
 
 func (s *Store) RecentIncidents(limit int) []model.IncidentReport {
+	incidents, _ := s.RecentIncidentsResult(limit)
+	return incidents
+}
+
+// RecentIncidentsResult returns no partial history after query, scan, report
+// decode or cursor failure. Resolved reports remain outside the active set.
+func (s *Store) RecentIncidentsResult(limit int) (out []model.IncidentReport, readErr error) {
+	defer func() { s.noteRead("incidents", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Resolved incidents stay in the audit trail but leave the active set:
 	// the operator dismissed them, so they must not keep rendering as
 	// critical rows in the popover.
-	rows, err := s.db.Query(`SELECT report_json FROM incidents WHERE status != 'resolved' ORDER BY datetime(created_at) DESC, created_at DESC LIMIT ?`, normalizeLimit(limit))
+	rows, err := s.db.Query(recentIncidentsQuery, normalizeLimit(limit))
 	if err != nil {
-		log.Printf("store: query incidents error: %v", err)
-		return nil
+		return nil, err
 	}
+	list, err := scanIncidentsResult(rows)
+	if err != nil {
+		return nil, err
+	}
+	s.attachNarrativesLocked(list)
+	return list, nil
+}
+
+// Include NULL status so an unreadable workflow cannot silently hide a report.
+const recentIncidentsQuery = `SELECT id, report_json FROM incidents WHERE (status IS NULL OR status != 'resolved') ORDER BY datetime(created_at) DESC, created_at DESC LIMIT ?`
+
+func scanIncidentsResult(rows *sql.Rows) ([]model.IncidentReport, error) {
 	defer rows.Close()
 
 	list := []model.IncidentReport{}
 	for rows.Next() {
-		var reportJSON string
-		if err := rows.Scan(&reportJSON); err == nil {
-			var inc model.IncidentReport
-			if err := json.Unmarshal([]byte(reportJSON), &inc); err == nil {
-				list = append(list, inc)
-			}
+		var id, reportJSON string
+		if err := rows.Scan(&id, &reportJSON); err != nil {
+			return nil, err
 		}
+		inc, err := decodeIncidentReport(id, reportJSON)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, *inc)
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("store: incidents cursor error (result may be truncated): %v", err)
+		return nil, err
 	}
-	s.attachNarrativesLocked(list)
-	return list
+	return list, nil
 }
 
 // CriticalFlagsMissingAdvisor returns recent severity-3 flags that have no
@@ -2413,6 +2451,14 @@ func (s *Store) SetIncidentStatus(id, status, note string) (bool, error) {
 
 // IncidentStatus returns the workflow state for one incident.
 func (s *Store) IncidentStatus(id string) (IncidentWorkflow, bool) {
+	wf, found, _ := s.IncidentStatusResult(id)
+	return wf, found
+}
+
+// IncidentStatusResult distinguishes a missing row from an unavailable or
+// malformed workflow. Missing rows are healthy reads, not storage failures.
+func (s *Store) IncidentStatusResult(id string) (workflow IncidentWorkflow, found bool, readErr error) {
+	defer func() { s.noteRead("incident workflows", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2421,13 +2467,21 @@ func (s *Store) IncidentStatus(id string) (IncidentWorkflow, bool) {
 	err := s.db.QueryRow(
 		`SELECT status, acknowledged_at, resolved_at, resolution_note FROM incidents WHERE id = ? OR flag_id = ?`, id, id,
 	).Scan(&wf.Status, &ack, &res, &note)
+	if err == sql.ErrNoRows {
+		return IncidentWorkflow{Status: "unknown"}, false, nil
+	}
 	if err != nil {
-		return IncidentWorkflow{Status: "unknown"}, false
+		return IncidentWorkflow{Status: "unknown"}, false, err
+	}
+	switch wf.Status {
+	case "open", "acknowledged", "resolved":
+	default:
+		return IncidentWorkflow{Status: "unknown"}, false, fmt.Errorf("invalid incident workflow status")
 	}
 	wf.AcknowledgedAt = ack.String
 	wf.ResolvedAt = res.String
 	wf.ResolutionNote = note.String
-	return wf, wf.Status != ""
+	return wf, true, nil
 }
 
 // ReclassifyReadConnectSeverity changes only unresolved weak correlations.

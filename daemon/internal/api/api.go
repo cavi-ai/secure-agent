@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1141,7 +1142,11 @@ func (a *API) handleIncidents(w http.ResponseWriter, r *http.Request) {
 	if id != "" {
 		inc, err := a.store.GetIncident(id)
 		if err != nil {
-			http.Error(w, "Incident not found", http.StatusNotFound)
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, "Incident not found", http.StatusNotFound)
+			} else {
+				http.Error(w, "incident data unavailable", http.StatusServiceUnavailable)
+			}
 			return
 		}
 		format := r.URL.Query().Get("format")
@@ -1152,8 +1157,11 @@ func (a *API) handleIncidents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// The report plus its workflow state, so UIs can render one object.
-		wf, _ := a.store.IncidentStatus(inc.ID)
-		w.Header().Set("Content-Type", "application/json")
+		wf, found, err := a.store.IncidentStatusResult(inc.ID)
+		if err != nil || !found {
+			http.Error(w, "incident data unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		writeJSON(w, map[string]any{"incident": inc, "workflow": wf})
 		return
 	}
@@ -1164,16 +1172,10 @@ func (a *API) handleIncidents(w http.ResponseWriter, r *http.Request) {
 			limit = parsed
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	incidents := a.store.RecentIncidents(limit)
-	type withStatus struct {
-		model.IncidentReport
-		Workflow store.IncidentWorkflow `json:"workflow"`
-	}
-	out := make([]withStatus, 0, len(incidents))
-	for i := range incidents {
-		wf, _ := a.store.IncidentStatus(incidents[i].ID)
-		out = append(out, withStatus{IncidentReport: incidents[i], Workflow: wf})
+	out, err := a.incidentListResult(limit)
+	if err != nil {
+		http.Error(w, "incident data unavailable", http.StatusServiceUnavailable)
+		return
 	}
 	writeJSON(w, out)
 }
