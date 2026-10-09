@@ -3,9 +3,12 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +24,9 @@ func TestSessionReportReadFailuresRejectReportsAndPlans(t *testing.T) {
 		{"event timestamp", `UPDATE events SET ts='invalid' WHERE detail='bad'`, ""},
 		{"event query", `ALTER TABLE events RENAME TO unavailable_events`, `ALTER TABLE unavailable_events RENAME TO events`},
 		{"flag", `UPDATE flags SET evidence='invalid' WHERE id='f1'`, `UPDATE flags SET evidence=NULL WHERE id='f1'`},
+		{"token input overflow", fmt.Sprintf(`UPDATE events SET kind=%d, tokens_in=%d`, event.KindModelCall, int64(math.MaxInt64)), `UPDATE events SET tokens_in=0`},
+		{"token output overflow", fmt.Sprintf(`UPDATE events SET kind=%d, tokens_out=%d`, event.KindModelCall, int64(math.MaxInt64)), `UPDATE events SET tokens_out=0`},
+		{"tool duration overflow", fmt.Sprintf(`UPDATE events SET kind=%d, tool='Bash', duration_ms=%d`, event.KindToolCall, int64(math.MaxInt64)), `UPDATE events SET duration_ms=0`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "report.db")
@@ -59,9 +65,9 @@ func TestSessionReportReadFailuresRejectReportsAndPlans(t *testing.T) {
 			for _, format := range []string{"json", "md"} {
 				w := httptest.NewRecorder()
 				a.serveSessionReport(w, httptest.NewRequest(http.MethodGet, "/sessions/s1/report?format="+format, nil), "s1")
-				if tc.name == "session" {
+				if tc.name == "session" || strings.HasSuffix(tc.name, "overflow") {
 					if w.Code != http.StatusServiceUnavailable {
-						t.Errorf("%s unavailable identity: %d %s", format, w.Code, w.Body.String())
+						t.Errorf("%s unavailable report: %d %s", format, w.Code, w.Body.String())
 					}
 					continue
 				}
