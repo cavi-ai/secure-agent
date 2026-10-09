@@ -66,25 +66,32 @@ func (r *Registry) Match(data []byte) []Hit {
 	seen := map[string]struct{}{}
 	var hits []Hit
 	for _, view := range Normalize(data) {
-		for _, tok := range strings.FieldsFunc(view, isTokenBreak) {
-			if _, ok := r.byLen[len(tok)]; !ok {
-				continue
+		for _, hit := range r.matchTokens(view) {
+			if _, dup := seen[hit.RuleID]; !dup {
+				seen[hit.RuleID] = struct{}{}
+				hits = append(hits, hit)
 			}
-			h := Fingerprint(r.salt, tok)
-			fp, ok := r.byHMAC[h]
-			if !ok {
-				continue
-			}
-			if _, dup := seen[fp.ID]; dup {
-				continue
-			}
-			seen[fp.ID] = struct{}{}
-			st := fp.Type
-			if st == "" {
-				st = TypeEnvValue
-			}
-			hits = append(hits, Hit{RuleID: fp.ID, SecretType: st, Layer: LayerFingerprint, Confidence: 1.0})
 		}
+	}
+	return hits
+}
+
+// matchTokens accepts an already-normalized view; it does not decode again.
+func (r *Registry) matchTokens(view string) []Hit {
+	var hits []Hit
+	for _, tok := range strings.FieldsFunc(view, isTokenBreak) {
+		if _, ok := r.byLen[len(tok)]; !ok {
+			continue
+		}
+		fp, ok := r.byHMAC[Fingerprint(r.salt, tok)]
+		if !ok {
+			continue
+		}
+		st := fp.Type
+		if st == "" {
+			st = TypeEnvValue
+		}
+		hits = append(hits, Hit{RuleID: fp.ID, SecretType: st, Layer: LayerFingerprint, Confidence: 1.0})
 	}
 	return hits
 }

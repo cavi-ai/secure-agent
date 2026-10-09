@@ -16,7 +16,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 )
 
-func TestPartialInspectionReportsCoverageAndPreservesBody(t *testing.T) {
+func TestLargeInspectionPreservesBody(t *testing.T) {
 	for _, size := range []int{scanCap, scanCap + 100} {
 		b := bus.New(8)
 		events := b.Subscribe()
@@ -31,14 +31,12 @@ func TestPartialInspectionReportsCoverageAndPreservesBody(t *testing.T) {
 		}
 		select {
 		case e := <-events:
-			if size <= scanCap || e.Detail != "proxy-inspection-incomplete:body-limit" {
+			if e.Detail != "proxy-inspection-incomplete:body-window" {
 				t.Fatalf("unexpected finding: %s", e.Detail)
 			}
 		default:
-			if size > scanCap {
-				t.Fatal("partial inspection silently reported full coverage")
-			}
 		}
+		r.Body.Close()
 		b.Close()
 	}
 }

@@ -167,6 +167,12 @@ func (e *Engine) ScanText(text string) []Hit {
 // context, and resolves the strongest action. Callers treat the returned
 // Decision as authoritative and otherwise fail open.
 func (e *Engine) Inspect(req Request) Decision {
+	dec := e.inspect(req)
+	e.tally(dec.Findings)
+	return dec
+}
+
+func (e *Engine) inspect(req Request) Decision {
 	var findings []Finding
 
 	scanField := func(text string, field Field) {
@@ -199,6 +205,5 @@ func (e *Engine) Inspect(req Request) Decision {
 			action = f.Verdict.Action
 		}
 	}
-	e.tally(findings)
 	return Decision{Action: action, Findings: findings}
 }
