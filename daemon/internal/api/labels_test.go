@@ -35,6 +35,66 @@ func TestLabelsRouteIsNoAgent(t *testing.T) {
 	}
 }
 
+func TestAdvisorPlanRejectsUnavailableLabelHistoryAndRecovers(t *testing.T) {
+	for _, fault := range []string{"missing table", "invalid timestamp"} {
+		t.Run(fault, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "history.db")
+			st, err := store.Open(path, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			st.PutFlag(model.Flag{ID: "f1", Rule: "secret-in-transcript", Agent: "codex", TS: time.Now(), Severity: 3})
+			for i := 0; i < 3; i++ {
+				if err := st.PutOperatorLabelResult(model.OperatorLabel{Kind: "flag", Rule: "secret-in-transcript", Agent: "codex", Label: "ok", Source: "mark"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+			rec := &planRecorder{ready: true, pending: map[string]bool{}}
+			a.plan = rec.funcs()
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			breakSQL, restoreSQL := `ALTER TABLE operator_labels RENAME TO saved_operator_labels`, `ALTER TABLE saved_operator_labels RENAME TO operator_labels`
+			if fault == "invalid timestamp" {
+				breakSQL = `UPDATE operator_labels SET created_at='invalid' WHERE id=1`
+				restoreSQL = `UPDATE operator_labels SET created_at='2026-10-09T00:00:00Z' WHERE id=1`
+			}
+			if _, err := db.Exec(breakSQL); err != nil {
+				t.Fatal(err)
+			}
+			for _, method := range []string{http.MethodGet, http.MethodPost} {
+				code, _ := planCall(t, a, method, "flag:f1")
+				if code != http.StatusServiceUnavailable {
+					t.Errorf("%s plan with failed history: %d, want 503", method, code)
+				}
+			}
+			if len(rec.reqs) != 0 {
+				t.Errorf("enqueued %d plans with unavailable history", len(rec.reqs))
+			}
+			if health := st.WriteHealth(); len(health.ReadActive) == 0 {
+				t.Error("unavailable operator history was absent from storage health")
+			}
+			if _, err := db.Exec(restoreSQL); err != nil {
+				t.Fatal(err)
+			}
+			code, resp := planCall(t, a, http.MethodGet, "flag:f1")
+			if code != http.StatusOK || resp.Labels == nil || resp.Labels.Summary.OK != 3 || len(resp.Labels.Similar) != 3 {
+				t.Fatalf("recovered history: %d %+v", code, resp.Labels)
+			}
+			if code, _ := planCall(t, a, http.MethodPost, "flag:f1"); code != http.StatusAccepted {
+				t.Fatalf("recovered plan request: %d", code)
+			}
+			if health := st.WriteHealth(); len(health.ReadActive) != 0 {
+				t.Fatalf("recovered reads retained active faults: %+v", health)
+			}
+		})
+	}
+}
+
 func TestExplicitLabelsReportFailedWriteAndAllowRetry(t *testing.T) {
 	for _, subject := range []string{"flag:f1", "incident:i1"} {
 		t.Run(subject, func(t *testing.T) {

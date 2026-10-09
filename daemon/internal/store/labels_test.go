@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,34 @@ func labelStore(t *testing.T) *Store {
 
 func lbl(rule, agent, pattern, label, source string) model.OperatorLabel {
 	return model.OperatorLabel{Kind: "flag", Rule: rule, Agent: agent, Pattern: pattern, Label: label, Source: source, CreatedAt: time.Now()}
+}
+
+func TestSimilarLabelsRejectPartialCorruptHistory(t *testing.T) {
+	s := labelStore(t)
+	s.PutOperatorLabel(lbl("r", "codex", "/fixture", "ok", "mark"))
+	s.PutOperatorLabel(lbl("r", "codex", "/fixture", "not_ok", "mark"))
+	badTimestamp := "malformed-timestamp-fixture"
+	if _, err := s.db.Exec(`UPDATE operator_labels SET created_at=? WHERE id=1`, badTimestamp); err != nil {
+		t.Fatal(err)
+	}
+	if labels, err := s.SimilarLabelsResult("r", "codex", "/fixture", 5); err == nil || len(labels) != 0 || strings.Contains(err.Error(), badTimestamp) {
+		t.Fatalf("corrupt history was not safely rejected: labels=%+v err=%v", labels, err)
+	}
+	if got := s.SimilarLabels("r", "codex", "/fixture", 5); len(got) != 0 {
+		t.Fatalf("corrupt history returned partial labels: %+v", got)
+	}
+}
+
+func TestOperatorLabelReadFailuresReachHealth(t *testing.T) {
+	s := labelStore(t)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.LabelSummary("codex", "/fixture", "r")
+	s.SimilarLabels("r", "codex", "/fixture", 5)
+	if health := s.WriteHealth(); len(health.ReadActive) != 2 {
+		t.Fatalf("label reads hid storage failures: %+v", health)
+	}
 }
 
 func TestOperatorLabelRetentionFailureRollsBackJudgment(t *testing.T) {

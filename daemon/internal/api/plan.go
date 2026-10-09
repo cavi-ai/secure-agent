@@ -199,7 +199,12 @@ func (a *API) servePlan(w http.ResponseWriter, subject string) {
 		return
 	}
 	resp := PlanResponse{Subject: subject, Status: "none", Playbook: playbook.For(t.rule), Flag: a.planFlag(t)}
-	resp.Labels = a.labelContext(t, a.offeredActions(t))
+	labels, err := a.labelContext(t, a.offeredActions(t))
+	if err != nil {
+		http.Error(w, "Operator history unavailable; retry", http.StatusServiceUnavailable)
+		return
+	}
+	resp.Labels = labels
 	resp.AdvisorReady, resp.Reason = a.planReady()
 	if p, ok := a.store.AdvisorPlanFor(subject); ok {
 		resp.Plan = &p
@@ -224,7 +229,12 @@ func (a *API) requestPlan(w http.ResponseWriter, subject string) {
 		return
 	}
 	resp := PlanResponse{Subject: subject, Playbook: playbook.For(t.rule), Flag: a.planFlag(t)}
-	resp.Labels = a.labelContext(t, a.offeredActions(t))
+	labels, err := a.labelContext(t, a.offeredActions(t))
+	if err != nil {
+		http.Error(w, "Operator history unavailable; retry", http.StatusServiceUnavailable)
+		return
+	}
+	resp.Labels = labels
 	resp.AdvisorReady, resp.Reason = a.planReady()
 	if !resp.AdvisorReady {
 		resp.Status = "disabled"
@@ -234,7 +244,7 @@ func (a *API) requestPlan(w http.ResponseWriter, subject string) {
 		return
 	}
 	req := advisor.PlanRequest{SubjectID: subject, EvidenceKey: planEvidenceKey(t),
-		Context: a.planContext(t, resp.Playbook), Offered: a.offeredActions(t)}
+		Context: a.planContext(t, resp.Playbook, labels.Similar), Offered: a.offeredActions(t)}
 	if !a.plan.Enqueue(req) {
 		resp.Status, resp.AdvisorReady = "disabled", false
 		resp.Reason = "the advisor did not take the request: it is paused or its queue is full"
@@ -278,7 +288,7 @@ func (a *API) offeredActions(t planTarget) []string {
 // planContext renders the local context for one plan as labeled lines. It
 // holds evidence labels, the session, the masked excerpt, history, local
 // policy and the playbook; never a secret value.
-func (a *API) planContext(t planTarget, pb playbook.Playbook) []string {
+func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.OperatorLabel) []string {
 	var c []string
 	add := func(format string, args ...any) { c = append(c, fmt.Sprintf(format, args...)) }
 
@@ -354,8 +364,7 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook) []string {
 			add("local policy: hosts allowed for %s: %s", t.agent, strings.Join(hosts, ", "))
 		}
 	}
-	rule, agent, pattern := labelKeys(t)
-	c = append(c, labelLines(a.store.SimilarLabels(rule, agent, pattern, labelSimilarLimit), time.Now())...)
+	c = append(c, labelLines(labels, time.Now())...)
 	add("PLAYBOOK why: %s", pb.Why)
 	for _, n := range pb.Now {
 		add("PLAYBOOK now: %s", n)
