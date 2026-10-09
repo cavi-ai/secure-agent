@@ -6,7 +6,66 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
+
+func TestLegacyIncidentWorkflowDefault(t *testing.T) {
+	path := migrationFixture(t, `CREATE TABLE incidents (id TEXT PRIMARY KEY, flag_id TEXT, pid INT, risk TEXT, report_json TEXT, created_at TEXT, status TEXT, acknowledged_at TEXT, resolved_at TEXT, resolution_note TEXT);
+	INSERT INTO incidents VALUES ('legacy','f',42,'high','{"id":"legacy"}','2026-10-07T00:00:00Z',NULL,NULL,NULL,NULL);
+	INSERT INTO incidents VALUES ('resolved','r',42,'high','{"id":"resolved"}','2026-10-07T00:00:00Z','resolved',NULL,'2026-10-08T00:00:00Z','preserved');
+	INSERT INTO incidents VALUES ('ambiguous','a',42,'high','{"id":"ambiguous"}','2026-10-07T00:00:00Z',NULL,'2026-10-08T00:00:00Z',NULL,NULL);
+	INSERT INTO incidents VALUES ('invalid','x',42,'high','{"id":"invalid"}','2026-10-07T00:00:00Z','invalid',NULL,NULL,NULL);`)
+	for range 2 {
+		s, err := Open(path, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var status, report string
+		if err := s.db.QueryRow(`SELECT status, report_json FROM incidents WHERE id='legacy'`).Scan(&status, &report); err != nil || status != "open" || report != `{"id":"legacy"}` {
+			t.Fatalf("legacy report: %q %q %v", status, report, err)
+		}
+		var note string
+		if err := s.db.QueryRow(`SELECT status, resolution_note FROM incidents WHERE id='resolved'`).Scan(&status, &note); err != nil || status != "resolved" || note != "preserved" {
+			t.Fatalf("operator decision changed: %q %q %v", status, note, err)
+		}
+		if _, _, err := s.IncidentStatusResult("ambiguous"); err == nil {
+			t.Fatal("ambiguous workflow became readable")
+		}
+		if _, _, err := s.IncidentStatusResult("invalid"); err == nil {
+			t.Fatal("invalid workflow became readable")
+		}
+		if err := s.PutIncident(model.IncidentReport{ID: "new", FlagID: "new-flag", Timestamp: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+		wf, found, err := s.IncidentStatusResult("new")
+		if err != nil || !found || wf.Status != "open" {
+			t.Fatalf("new legacy-schema incident: %+v %v %v", wf, found, err)
+		}
+		s.Close()
+	}
+}
+
+func TestDefaultSchemaNullIncidentRemainsUnavailable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.db")
+	s, err := Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO incidents(id,status,report_json) VALUES ('corrupt',NULL,'{"id":"corrupt"}')`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s, err = Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, _, err := s.IncidentStatusResult("corrupt"); err == nil {
+		t.Fatal("corrupt current-schema workflow became readable")
+	}
+}
 
 func migrationFixture(t *testing.T, schema string) string {
 	t.Helper()
