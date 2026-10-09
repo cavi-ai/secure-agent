@@ -268,6 +268,24 @@ func TestMaskRedactsHitsAndReportsWhatRemains(t *testing.T) {
 	}
 }
 
+func TestMaskPreservesDistinctFingerprintMarkers(t *testing.T) {
+	e := testEngine(t)
+	const short = "fixture-alpha"
+	const long = short + "-plus"
+	e.SetFingerprints([]config.Fingerprint{
+		{ID: "short", Type: TypeEnvValue, Len: len(short), HMAC: Fingerprint([]byte("salt"), short)},
+		{ID: "long", Type: TypeEnvValue, Len: len(long), HMAC: Fingerprint([]byte("salt"), long)},
+	})
+	input := short + " " + long
+	if got := e.ScanText(input); len(got) != 2 {
+		t.Fatalf("expected two distinct fingerprint hits: %+v", got)
+	}
+	masked, clean := e.Mask(input)
+	if !clean || masked != "[REDACTED:short] [REDACTED:long]" {
+		t.Fatalf("fingerprint markers = %q, clean=%v", masked, clean)
+	}
+}
+
 func TestMaskWithholdsEntirePrivateKeyBody(t *testing.T) {
 	e, err := NewEngine(config.FirewallConfig{Patterns: []config.PatternConfig{
 		{ID: "private-key", Type: TypePrivateKey, Re: `-----BEGIN [A-Z ]*PRIVATE KEY-----`},
