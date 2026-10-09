@@ -70,7 +70,7 @@ test('streaming starts once, keeps the slow refresh, and stops cleanly', () => {
   assert.equal(f.streams[0].url, '/events/stream?ct=fixture');
   f.streams[0].open();
   f.timers.tick(30000);
-  assert.deepEqual(f.calls, ['full', 'full']);
+  assert.deepEqual(f.calls, ['full', 'full', 'full']);
   f.controller.stop();
   f.controller.stop();
   f.controller.start();
@@ -104,7 +104,22 @@ test('repeated stream errors fall back once and an open resets the failure count
   stream.open();
   for (let i = 0; i < 5; i++) stream.error();
   f.timers.tick(2000);
-  assert.equal(f.calls.length, 2, 'opening resets failures and cancels polling');
+  assert.equal(f.calls.length, 3, 'opening reconciles, resets failures and cancels polling');
+});
+
+test('each stream open reconciles missed deltas immediately', () => {
+  const f = fixture();
+  f.controller.start();
+  const stream = f.streams[0];
+  stream.open();
+  assert.deepEqual(f.calls, ['full', 'full']);
+  stream.readyState = 0;
+  stream.error();
+  stream.open();
+  assert.deepEqual(f.calls, ['full', 'full', 'full']);
+  f.controller.stop();
+  stream.open();
+  assert.equal(f.calls.length, 3, 'queued opens after shutdown must not refresh');
 });
 
 test('a hard-closed stream immediately enables polling', () => {
