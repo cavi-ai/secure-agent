@@ -984,42 +984,80 @@ func flagQuery(f FlagFilter) (string, []any) {
 }
 
 func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
+	flags, _ := s.QueryFlagsResult(f)
+	return flags
+}
+
+// QueryFlagsResult never returns partial flags after a query, decode or
+// cursor error. Nullable optional fields in older schemas remain valid.
+func (s *Store) QueryFlagsResult(f FlagFilter) (out []model.Flag, readErr error) {
+	defer func() { s.noteRead("flags", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	q, args := flagQuery(f)
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
-		log.Printf("store: query flags error: %v", err)
-		return nil
+		return nil, err
 	}
+	flags, err := scanFlagsResult(rows)
+	if err != nil {
+		return nil, err
+	}
+	s.attachAdvisorLocked(flags)
+	return flags, nil
+}
+
+func scanFlagsResult(rows *sql.Rows) ([]model.Flag, error) {
 	defer rows.Close()
 
 	flags := []model.Flag{}
 	for rows.Next() {
 		var fl model.Flag
-		var tsStr, evStr string
-		var sessionID, workspace sql.NullString
+		var tsStr string
+		var rule, agent, evStr, sessionID, workspace sql.NullString
 		var ack, ackReason, proc, lastSeen sql.NullString
 		var repeats sql.NullInt64
-		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &workspace, &evStr, &ack, &ackReason, &proc, &repeats, &lastSeen); err == nil {
-			setFlagRepeats(&fl, repeats, lastSeen)
-			fl.SessionID = sessionID.String
-			fl.Workspace = workspace.String
-			fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
-			fl.Acknowledged = ack.String != ""
-			fl.AckReason = ackReason.String
-			fl.Process = decodeFlagProcess(proc.String)
-			_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
-			flags = append(flags, fl)
+		if err := rows.Scan(&fl.ID, &rule, &fl.Severity, &tsStr, &fl.PID, &agent, &sessionID, &workspace, &evStr, &ack, &ackReason, &proc, &repeats, &lastSeen); err != nil {
+			return nil, err
 		}
+		var err error
+		fl.TS, err = time.Parse(time.RFC3339Nano, tsStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid flag timestamp: %w", err)
+		}
+		if lastSeen.String != "" {
+			ts, err := time.Parse(time.RFC3339Nano, lastSeen.String)
+			if err != nil {
+				return nil, fmt.Errorf("invalid flag repeat timestamp: %w", err)
+			}
+			fl.LastSeen = &ts
+		}
+		if evStr.String != "" {
+			if err := json.Unmarshal([]byte(evStr.String), &fl.Evidence); err != nil {
+				return nil, fmt.Errorf("invalid flag evidence: %w", err)
+			}
+		}
+		if proc.String != "" {
+			var p model.FlagProcess
+			if err := json.Unmarshal([]byte(proc.String), &p); err != nil {
+				return nil, fmt.Errorf("invalid flag process: %w", err)
+			}
+			if p.Name != "" {
+				fl.Process = &p
+			}
+		}
+		fl.Rule, fl.Agent = rule.String, agent.String
+		fl.Repeats = int(repeats.Int64)
+		fl.SessionID, fl.Workspace = sessionID.String, workspace.String
+		fl.Acknowledged, fl.AckReason = ack.String != "", ackReason.String
+		flags = append(flags, fl)
 	}
 	// A mid-cursor error must not be served as a complete history.
 	if err := rows.Err(); err != nil {
-		log.Printf("store: flags cursor error (result may be truncated): %v", err)
+		return nil, err
 	}
-	s.attachAdvisorLocked(flags)
-	return flags
+	return flags, nil
 }
 
 // rollupBucket is the UTC hour key for the rollup table.

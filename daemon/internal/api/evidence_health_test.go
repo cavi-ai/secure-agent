@@ -165,8 +165,15 @@ func TestStorageFailureVisibleInStatusPostureAndDoctor(t *testing.T) {
 		t.Fatalf("status hides failed evidence write: %s", w.Body.String())
 	}
 	p := a.computePosture()
-	if p.State != "attention" || p.NeedsYou != 0 || p.CoverageCount != 1 || p.CoverageItems[0].Kind != "storage_loss" {
+	if p.State != "attention" || p.NeedsYou != 0 || p.CoverageCount != 2 {
 		t.Fatalf("posture hides storage failure: %+v", p)
+	}
+	kinds := map[string]bool{}
+	for _, item := range p.CoverageItems {
+		kinds[item.Kind] = true
+	}
+	if !kinds["storage_loss"] || !kinds["storage_read_failure"] {
+		t.Fatalf("posture must report read and write failures separately: %+v", p)
 	}
 	report := a.doctorReport(time.Now())
 	for _, c := range report.Checks {

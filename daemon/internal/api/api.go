@@ -1070,8 +1070,11 @@ func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
 	// ?unacted=1 excludes acknowledged flags — reviewed rows must not bury
 	// the open ones inside a limit window full of handled noise.
 	f.Unacted = q.Get("unacted") == "1" || q.Get("unacted") == "true"
-	w.Header().Set("Content-Type", "application/json")
-	flags := a.store.QueryFlags(f)
+	flags, err := a.store.QueryFlagsResult(f)
+	if err != nil {
+		http.Error(w, "flag data unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	// Stamp the rule title so clients render the daemon's words instead of
 	// keeping their own copies of the rule→title table.
 	for i := range flags {
@@ -1079,7 +1082,7 @@ func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
 		flags[i].ReviewID, _ = a.store.FindingReviewID(flags[i].ID)
 	}
 	a.stampExplains(flags)
-	json.NewEncoder(w).Encode(flags)
+	writeJSON(w, flags)
 }
 
 func (a *API) handleEvents(w http.ResponseWriter, r *http.Request) {
