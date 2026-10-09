@@ -10,6 +10,34 @@ import XCTest
 ///     the focus-or-open scripts target an existing tab instead.
 final class ConsoleAccessTests: XCTestCase {
 
+    func testRecordHandoffKeepsCredentialsInTheFragmentAndEncodesIdentifiers() throws {
+        let id = "session +&?#/π"
+        let url = try XCTUnwrap(ConsoleOpener.dashboardURL(port: 8443, token: "fixture+&token",
+                                                          destination: .flag(id: "flag&other=1", sessionID: id)))
+        XCTAssertEqual(url.host, "127.0.0.1")
+        XCTAssertEqual(url.port, 8443)
+        XCTAssertTrue(url.absoluteString.hasPrefix("http://127.0.0.1:8443/dashboard/#"))
+        XCTAssertNil(url.query)
+        let fragment = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedFragment)
+        let params = try XCTUnwrap(URLComponents(string: "https://fixture.invalid/?" + fragment)?.queryItems)
+        XCTAssertEqual(params.first { $0.name == "ct" }?.value, "fixture+&token")
+        XCTAssertEqual(params.first { $0.name == "tab" }?.value, "sessions")
+        XCTAssertEqual(params.first { $0.name == "session" }?.value, id)
+        XCTAssertEqual(params.first { $0.name == "flag" }?.value, "flag&other=1")
+        XCTAssertFalse(fragment.contains("session +"))
+    }
+
+    func testRecordHandoffUsesDurableIdentityWithoutPidGuessing() {
+        XCTAssertEqual(ConsoleDestination.session(for: AgentSummaryModel(pid: 7, name: "claude", sessionID: "durable")), .session("durable"))
+        XCTAssertNil(ConsoleDestination.session(for: AgentSummaryModel(pid: 7, name: "claude")))
+        XCTAssertNil(ConsoleDestination.session(for: AgentSummaryModel(pid: 7, name: "claude", sessionID: "")))
+        XCTAssertEqual(ConsoleDestination.flag(id: "f", sessionID: nil).tab, "findings")
+        XCTAssertEqual(ConsoleDestination.incident(id: "i", sessionID: "s").tab, "sessions")
+        XCTAssertNil(ConsoleOpener.dashboardURL(port: 0, token: "fixture"))
+        XCTAssertNil(ConsoleOpener.dashboardURL(port: 65536, token: "fixture"))
+        XCTAssertNil(ConsoleOpener.dashboardURL(port: 8443, token: ""))
+    }
+
     @MainActor
     func testReconnectReadsCurrentStatusInsteadOfReopeningAStalePort() async {
         let client = StubDaemonClient()

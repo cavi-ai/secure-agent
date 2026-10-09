@@ -16,6 +16,8 @@ function controller(persisted = '') {
   const tasks = [];
   const panel = { dataset: {} };
   const context = { Date, URLSearchParams, AbortController, console,
+    activeTab: 'sessions', activeSub: 'board', location: { pathname: '/dashboard/', search: '', hash: '' },
+    history: { replaceState(_state, _title, url) { context.location.hash = url.slice(url.indexOf('#')); } },
     sessionStorage: { getItem: k => storage.get(k), setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k) },
     window: { SA: {}, addEventListener() {}, matchMedia: () => ({ matches: false }) },
     document: { getElementById: id => id === 'session-board-panel' ? panel : null, querySelectorAll: () => [], querySelector: () => null },

@@ -898,6 +898,10 @@ public final class AppState: ObservableObject {
     }
 
     public func openDashboard(tab: String? = nil, file: String? = nil) {
+        openDashboard(tab: tab, file: file, destination: nil)
+    }
+
+    func openDashboard(tab: String? = nil, file: String? = nil, destination: ConsoleDestination?) {
         // The console is served on the proxy's loopback HTTP port (and on the
         // unix API). Only open it when the daemon is connected and the proxy
         // is actually running — a stale port from a dead daemon opens a
@@ -906,27 +910,14 @@ public final class AppState: ObservableObject {
         // The console's telemetry endpoints require the console token (a
         // credential agents never hold). Pass it as a fragment; the page
         // lifts it into memory and sends it as a header on every fetch.
-        var query = ""
-        if let token = try? String(contentsOfFile: NSHomeDirectory() + "/.config/secure-agent/console-token",
+        guard let token = try? String(contentsOfFile: NSHomeDirectory() + "/.config/secure-agent/console-token",
                                    encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
-           !token.isEmpty {
-            // Hand off via fragment: fragments are never sent to the server,
-            // so the token stays out of the wire, access logs, and Referer.
-            // The console page lifts it into memory and strips it from the
-            // address bar. An optional tab deep-link rides alongside.
-            query = "#ct=\(DaemonClient.urlQueryEscape(token))"
-            if let tab {
-                query += "&tab=\(DaemonClient.urlQueryEscape(tab))"
-            }
-            if let file {
-                query += "&file=\(DaemonClient.urlQueryEscape(file))"
-            }
-        } else {
+              !token.isEmpty else {
             lastError = "The console credential could not be read. Restart Secure Agent and try Open console again."
             onChange?()
             return
         }
-        if let url = URL(string: "http://127.0.0.1:\(port)/dashboard/\(query)") {
+        if let url = ConsoleOpener.dashboardURL(port: port, token: token, tab: tab, file: file, destination: destination) {
             // Focus an already-open console tab instead of spawning a
             // duplicate dead-end tab on every click.
             ConsoleOpener.openOrFocus(url: url, match: ConsoleOpener.tabMatch(port: port))

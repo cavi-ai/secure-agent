@@ -62,7 +62,7 @@ test('group approval sends the selected served endpoint without a stale flag loo
 
 test('opening an older finding makes its served actions immediately clickable', async () => {
   const begin = app.indexOf('  window.openFlagDetail = async function(');
-  const finish = app.indexOf('  // Deep link from the menubar', begin);
+  const finish = app.indexOf('  async function openConsoleContext(', begin);
   assert.ok(begin >= 0 && finish > begin, 'flag drawer handler is present');
   const cache = new Map();
   const flag = { id: 'older-flag', title: 'File access', rule: 'sensitive-read', agent: 'codex',

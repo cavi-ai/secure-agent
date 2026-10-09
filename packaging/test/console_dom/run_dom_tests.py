@@ -167,6 +167,7 @@ def main():
     ap.add_argument('--auth-recovery-only', action='store_true', help='run console access recovery probes only')
     ap.add_argument('--spend-only', action='store_true', help='run bounded spend cache and refresh probes only')
     ap.add_argument('--session-results-only', action='store_true', help='run bounded session result and stale-read probes only')
+    ap.add_argument('--context-handoff-only', action='store_true', help='run native record handoff probes only')
     args = ap.parse_args()
     chrome = find_chrome()
     if not chrome:
@@ -178,6 +179,19 @@ def main():
     try:
         build_harness(tmp)
         srv, origin = serve_with_csp(tmp)
+        if args.context_handoff_only:
+            for label, query, size in [('cold', '?contexthandoff&cold', (1280, 800)),
+                                       ('reused narrow', '?contexthandoff', (375, 800))]:
+                dom = dump_dom(chrome, tmp, query, origin, window_size=size)
+                receipt = re.search(r'data-context-handoff="([^"]+)"', dom)
+                state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+                check(f'context handoff ({label}): receipt produced', bool(state), str(state))
+                for name, result in state.items():
+                    check(f'context handoff ({label}): {name}', result is True, str(result))
+            print(f'\n{len(passed)} passed, {len(failed)} failed')
+            if failed:
+                raise SystemExit(1)
+            return
         if args.session_results_only or not (args.spend_only or args.auth_recovery_only or args.session_workbench_only):
             for label, query, size in [('desktop', '?resultsdemo', (1280, 800)), ('narrow stale', '?resultsdemo&resultsstale', (375, 800))]:
                 dom = dump_dom(chrome, tmp, query, origin, window_size=size)

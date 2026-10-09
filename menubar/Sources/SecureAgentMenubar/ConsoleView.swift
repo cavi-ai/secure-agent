@@ -53,7 +53,7 @@ struct ConsoleView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Incident remediation · \(incident.agent)").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
                     Text(remediation.summary).font(.system(size: 11)).fixedSize(horizontal: false, vertical: true)
-                    Button("Review remediation") { state.openDashboard(tab: "incidents") }.font(.system(size: 11))
+                    Button("Review remediation") { state.openDashboard(destination: .incident(id: incident.id, sessionID: incident.sessionId)) }.font(.system(size: 11))
                 }
             }
             if let result = state.resources?.interventions?.last {
@@ -230,8 +230,8 @@ struct ConsoleView: View {
                     switch action {
                     case .perform(let a):
                         Task { await state.performInPlace(a, on: flag) }
-                    case .openConsole(let tab):
-                        state.openDashboard(tab: tab)
+                    case .openConsole:
+                        state.openDashboard(destination: .flag(id: flag.id, sessionID: flag.sessionId))
                     }
                 } label: {
                     Text(label).font(.system(size: 11, weight: .semibold))
@@ -243,7 +243,7 @@ struct ConsoleView: View {
                 .help(Self.actionHelp(action))
             }
             if case .perform = action {
-                Button { state.openDashboard(tab: "findings") } label: {
+                Button { state.openDashboard(destination: .flag(id: flag.id, sessionID: flag.sessionId)) } label: {
                     Text("Open console").font(.system(size: 10)).foregroundStyle(Color.brand)
                 }
                 .buttonStyle(.plain)
@@ -421,36 +421,44 @@ struct ConsoleView: View {
 
     /// One session card: harness glyph, project@branch-ish label, elapsed,
     /// memory, a heartbeat that actually moves, and terminate. Tapping opens
-    /// the session's trace in the console.
+    /// the same durable session in the console.
     private func sessionCard(_ row: AppState.AgentRow) -> some View {
         let agent = row.agent
         let rss = row.familyRSSBytes.flatMap(ByteCount.short)
         let seen = relativeTime(row.familyLastSeenAt ?? agent.lastSeenAt ?? "")
         let working = seen?.hasSuffix("s") ?? false
         return HStack(spacing: 8) {
-            AgentIdentity.tile(agent.name, size: 18, fontSize: 9)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
-                    Text(agent.cardTitle)
-                        .font(.system(size: 12, weight: .semibold))
-                        .lineLimit(1).truncationMode(.middle)
-                    HeartbeatDot(active: working)
-                }
-                HStack(spacing: 6) {
-                    Text(agent.name).font(.system(size: 9)).foregroundStyle(.secondary)
-                    if !agent.repoBranch.isEmpty {
-                        Text(agent.repoBranch).font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
-                            .lineLimit(1).truncationMode(.middle)
+            Button { state.openDashboard(tab: "sessions", destination: ConsoleDestination.session(for: agent)) } label: {
+                HStack(spacing: 8) {
+                    AgentIdentity.tile(agent.name, size: 18, fontSize: 9)
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 5) {
+                            Text(agent.cardTitle)
+                                .font(.system(size: 12, weight: .semibold))
+                                .lineLimit(1).truncationMode(.middle)
+                            HeartbeatDot(active: working)
+                        }
+                        HStack(spacing: 6) {
+                            Text(agent.name).font(.system(size: 9)).foregroundStyle(.secondary)
+                            if !agent.repoBranch.isEmpty {
+                                Text(agent.repoBranch).font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                                    .lineLimit(1).truncationMode(.middle)
+                            }
+                            if let seen { Text(seen).font(.system(size: 9, design: .monospaced)).foregroundStyle(working ? Color.ok : Color.tertiaryText) }
+                            if let rss { Text(rss).font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary) }
+                            if agent.isOrphanLike {
+                                Image(systemName: "questionmark.square").font(.system(size: 8)).foregroundStyle(Color.warn)
+                                    .help("parent already exited")
+                            }
+                        }
                     }
-                    if let seen { Text(seen).font(.system(size: 9, design: .monospaced)).foregroundStyle(working ? Color.ok : Color.tertiaryText) }
-                    if let rss { Text(rss).font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary) }
-                    if agent.isOrphanLike {
-                        Image(systemName: "questionmark.square").font(.system(size: 8)).foregroundStyle(Color.warn)
-                            .help("parent already exited")
-                    }
+                    Spacer(minLength: 0)
                 }
+                .contentShape(Rectangle())
             }
-            Spacer(minLength: 0)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(agent.name) session in \(agent.cardTitle)")
+            .help(agent.sessionID?.isEmpty == false ? "Open this session in the console" : "Session identity unavailable — open the session list")
             Button { state.kill(pid: agent.pid) } label: {
                 Image(systemName: "power")
                     .font(.system(size: 10, weight: .semibold))
@@ -465,7 +473,6 @@ struct ConsoleView: View {
         .background(Color.primary.opacity(0.03))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
-        .onTapGesture { state.openDashboard(tab: "sessions") }
     }
 
     // MARK: header

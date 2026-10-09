@@ -9,7 +9,10 @@ import ServiceManagement
 /// it can never outlive the visible menu bar app.
 @MainActor
 public final class SetupManager: ObservableObject {
-    public static let shared = SetupManager()
+    public static let shared = SetupManager(deferAutomaticTelemetry:
+        !AppPreferences.shared.bool(forKey: "setupWizardDismissed") ||
+        AppPreferences.shared.bool(forKey: firstUseTelemetryConsentKey))
+    static let firstUseTelemetryConsentKey = "firstUseTelemetryRequiresConsent"
 
     public static let daemonLabel = "com.cavi-ai.secure-agentd"
     /// The privileged Endpoint Security collector: a LaunchDaemon shipped in
@@ -30,7 +33,10 @@ public final class SetupManager: ObservableObject {
     /// Nil failure alone is not a pass: no check has run until results exist.
     @Published public private(set) var hookSelfTestFailure: String?
     @Published public private(set) var hookSelfTestRunning = false
+    @Published private(set) var hookSelfTestHarness: String?
     @Published public private(set) var hookProbeResults: [CoverageProbeReceiptModel] = []
+    @Published private(set) var firstUseState = FirstUseSetupState()
+    private var deferAutomaticTelemetry: Bool
     @Published public private(set) var lastError: String?
     /// Local advisor: whether a model server answers on the loopback endpoint
     /// and whether the daemon config has the advisor enabled.
@@ -173,12 +179,15 @@ public final class SetupManager: ObservableObject {
          plistPresent: (() -> Bool)? = nil,
          openPane: ((ESSettingsPane) -> Void)? = nil,
          launchdProbe: (@Sendable () -> LaunchdProbe)? = nil,
-         appURL: URL = Bundle.main.bundleURL) {
+         appURL: URL = Bundle.main.bundleURL,
+         deferAutomaticTelemetry: Bool = false) {
         self.esService = esService
         self.appURL = appURL
         esLocationAllowed = AppIdentity.isInstalledCopy(appURL)
         esLaunchdProbe = launchdProbe ?? { SetupManager.esLaunchdJob() }
         prefs = defaults
+        self.deferAutomaticTelemetry = deferAutomaticTelemetry
+        if deferAutomaticTelemetry { defaults.set(true, forKey: Self.firstUseTelemetryConsentKey) }
         esMemory = ESAutopilotMemory(
             defaults: defaults,
             build: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "")
@@ -202,6 +211,14 @@ public final class SetupManager: ObservableObject {
             hookProbeResults = status.coverage?.probes ?? []
         }
         isDaemonRunning = DaemonSupervisor.shared.isRunning || (status?.running ?? false)
+        var installed: Set<String> = []
+        for harness in ["claude", "cursor"] where Self.selectedHooksInstalled(harness: harness, home: home) { installed.insert(harness) }
+        firstUseState = FirstUseSetupState(
+            daemonAvailable: status?.running == true, installedHarnesses: installed,
+            configuredHarnesses: Set(["claude", "cursor"].filter { fm.fileExists(atPath: "\(home)/.\($0)") }),
+            activeHarnesses: Set((status?.agents ?? []).filter { $0.kind != "infra" }.map(\.name)),
+            probes: status?.coverage?.probes ?? [], sessions: status?.coverage?.sessions ?? [],
+            sessionsUnavailable: status?.coverage == nil || status?.coverage?.sessionsStale == true || status?.coverage?.sessionsTruncated == true)
         refreshESState()
         claudeRoutingApplied = ClaudeRouting.isApplied(at: Self.claudeSettingsPath)
         // ALL harnesses must carry the hook — `contains` used to announce
@@ -234,12 +251,15 @@ public final class SetupManager: ObservableObject {
             ?? AdvisorDiscovery(servers: [], managedModels: [])
     }
 
-    /// The only mandatory setup step is installing the harness hooks; the daemon
-    /// starts automatically with the app. FDA, login item, and the CLI are
-    /// optional extras and do not force the wizard open.
+    /// Setup for one supported harness is enough; unrelated harnesses and
+    /// optional capabilities do not keep first-use setup pending.
     public var needsSetup: Bool {
-        isBundled && !areHooksInstalled
+        isBundled && firstUseState.installedHarnesses.isEmpty
     }
+
+    #if DEBUG
+    func seedFirstUseForTesting(_ state: FirstUseSetupState) { firstUseState = state }
+    #endif
 
     // MARK: - Local advisor
 
@@ -679,6 +699,80 @@ public final class SetupManager: ObservableObject {
         try Self.registerCursorHooks(at: Self.cursorHooksPath, command: Self.cursorHookCommand)
     }
 
+    public func installHooks(for harness: String) throws {
+        guard let source = bundledHooksDir else { throw SetupError.notBundled }
+        lastError = nil
+        try Self.installSelectedHooks(harness: harness, bundledDir: source, home: home)
+    }
+
+    /// A selected path must never install into unrelated harnesses. Validate
+    /// registration before replacing scripts, then use atomic file writes.
+    nonisolated static func installSelectedHooks(harness: String, bundledDir: String, home: String) throws {
+        guard FirstUseSetupState.supportsHook(harness) else {
+            throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "This harness has no supported guard hook."])
+        }
+        let fm = FileManager.default
+        let settings = "\(home)/.\(harness)/" + (harness == "claude" ? "settings.json" : "hooks.json")
+        var original: Data?
+        if harness == "cursor" { (_, original) = try cursorHookConfig(at: settings) }
+        else if let data = fm.contents(atPath: settings), !data.isEmpty {
+            guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw NSError(domain: "SetupManager", code: 3, userInfo: [NSLocalizedDescriptionKey: "Claude settings.json is not valid JSON; installed hooks were left unchanged."])
+            }
+            guard root["disableAllHooks"] == nil || root["disableAllHooks"] as? Bool == false else {
+                throw NSError(domain: "SetupManager", code: 3, userInfo: [NSLocalizedDescriptionKey: "Claude has disabled hooks. Enable hooks in Claude settings before installing this path."])
+            }
+            let registration = root["hooks"] as? [String: Any]
+            guard (root["hooks"] == nil || registration != nil),
+                  ["PreToolUse", "PostToolUse"].allSatisfy({ event in
+                      guard let groups = registration?[event] else { return true }
+                      guard let groups = groups as? [[String: Any]] else { return false }
+                      return groups.allSatisfy { $0["hooks"] == nil || $0["hooks"] is [[String: Any]] }
+                  }) else {
+                throw NSError(domain: "SetupManager", code: 3, userInfo: [NSLocalizedDescriptionKey: "Claude hook settings have an unsupported structure; installed hooks were left unchanged."])
+            }
+            original = data
+        }
+        if let original, !fm.fileExists(atPath: settings + ".bak-secure-agent") {
+            try original.write(to: URL(fileURLWithPath: settings + ".bak-secure-agent"), options: .atomic)
+        }
+        let target = "\(home)/.\(harness)/hooks"
+        let hooks = try hookFileNames(in: bundledDir)
+        try fm.createDirectory(atPath: target, withIntermediateDirectories: true)
+        for hook in hooks {
+            try Data(contentsOf: URL(fileURLWithPath: "\(bundledDir)/\(hook)"))
+                .write(to: URL(fileURLWithPath: "\(target)/\(hook)"), options: .atomic)
+        }
+        let command = selectedHookCommand(harness: harness, home: home)
+        if harness == "claude" { try registerClaudeHooks(at: settings, command: command) }
+        else { try registerCursorHooks(at: settings, command: command) }
+    }
+
+    nonisolated static func selectedHookCommand(harness: String, home: String) -> String {
+        "python3 '" + "\(home)/.\(harness)/hooks/secret_guard.py".replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    nonisolated static func selectedHooksInstalled(harness: String, home: String) -> Bool {
+        guard FirstUseSetupState.supportsHook(harness) else { return false }
+        let fm = FileManager.default
+        let dir = "\(home)/.\(harness)/hooks"
+        guard ["secret_guard.py", "activity_log.py", "injection_scan.py", "guard-rules.json"].allSatisfy({ fm.fileExists(atPath: "\(dir)/\($0)") }) else { return false }
+        let command = selectedHookCommand(harness: harness, home: home)
+        if harness == "cursor" { return cursorHooksRegistered(at: "\(home)/.cursor/hooks.json", command: command) }
+        let path = "\(home)/.claude/settings.json"
+        guard let data = fm.contents(atPath: path),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (root["disableAllHooks"] == nil || root["disableAllHooks"] as? Bool == false),
+              let hooks = root["hooks"] as? [String: Any] else { return false }
+        // Existing installations used the unquoted canonical command. Accept
+        // that spelling only when the path contains no shell metacharacters.
+        let legacySafe = home.rangeOfCharacter(from: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/_-." ).inverted) == nil
+        let commands = legacySafe ? [command, "python3 \(dir)/secret_guard.py"] : [command]
+        return ["PreToolUse", "PostToolUse"].allSatisfy { event in
+            commands.contains { groupsContainGuard(hooks[event] as? [[String: Any]] ?? [], command: $0) }
+        }
+    }
+
     /// Brings already-installed hook copies up to the bundled versions so an
     /// app update reaches the scripts the harnesses run. Only targets that
     /// already carry the guard are refreshed; settings.json is not touched.
@@ -748,12 +842,14 @@ public final class SetupManager: ObservableObject {
             }
             root = dict
             // Backup before any mutation of a file we don't own.
-            try? data.write(to: URL(fileURLWithPath: path + ".bak-secure-agent"), options: .atomic)
+            if !fm.fileExists(atPath: path + ".bak-secure-agent") {
+                try data.write(to: URL(fileURLWithPath: path + ".bak-secure-agent"), options: .atomic)
+            }
         }
         var hooks = root["hooks"] as? [String: Any] ?? [:]
         for eventName in ["PreToolUse", "PostToolUse"] {
             var groups = hooks[eventName] as? [[String: Any]] ?? []
-            if !Self.groupsContainGuard(groups) {
+            if !Self.groupsContainGuard(groups, command: command) {
                 groups.append([
                     "matcher": "*",
                     "hooks": [["type": "command", "command": command]],
@@ -809,9 +905,14 @@ public final class SetupManager: ObservableObject {
         }
     }
 
-    private nonisolated static func groupsContainGuard(_ groups: [[String: Any]]) -> Bool {
+    private nonisolated static func groupsContainGuard(_ groups: [[String: Any]], command: String? = nil) -> Bool {
         for group in groups {
             for h in group["hooks"] as? [[String: Any]] ?? [] {
+                if let command {
+                    if h["command"] as? String == command && h["type"] as? String == "command" &&
+                        (group["matcher"] == nil || group["matcher"] as? String == "*") { return true }
+                    continue
+                }
                 if let cmd = h["command"] as? String, cmd.contains("/.claude/hooks/secret_guard.py") {
                     return true
                 }
@@ -897,22 +998,25 @@ public final class SetupManager: ObservableObject {
     }
 
     /// Run the self-test and publish the outcome to the wizard UI.
-    public func runHookSelfTest() async {
+    public func runHookSelfTest(harness: String? = nil) async {
         guard !hookSelfTestRunning else { return }
         hookSelfTestRunning = true
-        hookProbeResults = []
+        hookSelfTestHarness = harness
+        hookProbeResults.removeAll { harness == nil || $0.harness == harness }
         defer { hookSelfTestRunning = false }
-        hookSelfTestFailure = await selfTestHooks()
+        hookSelfTestFailure = await selfTestHooks(harness: harness)
+        await refreshState()
     }
 
     /// Fire a synthetic guarded tool call through the installed hook and check
     /// it answers. A green check here means: python3 present, hook executable,
     /// protocol intact — the whole chain a silent failure would otherwise hide.
     /// Returns nil on success, or a human-readable reason on failure.
-    public func selfTestHooks() async -> String? {
+    public func selfTestHooks(harness: String? = nil) async -> String? {
         let client = DaemonClient()
         let home = fm.homeDirectoryForCurrentUser.path
-        let harnesses = ["claude", "cursor"].filter { fm.fileExists(atPath: "\(home)/.\($0)/hooks/secret_guard.py") }
+        let candidates: [String] = ["claude", "cursor"]
+        let harnesses = candidates.filter { (harness == nil || $0 == harness) && fm.fileExists(atPath: "\(home)/.\($0)/hooks/secret_guard.py") }
         guard !harnesses.isEmpty else { return "Install Claude or Cursor hooks to check the guard path. Other agents retain their supported observational coverage." }
         var failures: [String] = []
         for harness in harnesses {
@@ -1069,6 +1173,8 @@ public final class SetupManager: ObservableObject {
     /// in-bundle collector daemon.
     public func installESCollector() throws {
         lastError = nil
+        deferAutomaticTelemetry = false
+        prefs.set(false, forKey: Self.firstUseTelemetryConsentKey)
         esMemory.userDisabled = false
         try registerESService()
         refreshESState()
@@ -1111,7 +1217,7 @@ public final class SetupManager: ObservableObject {
         let stage = currentESStage()
         if stage != esStage { esStage = stage }
         runESAutopilot()
-        repairStuckESJob()
+        if !deferAutomaticTelemetry { repairStuckESJob() }
         manageESPoll()
     }
 
@@ -1119,6 +1225,7 @@ public final class SetupManager: ObservableObject {
     /// suppresses it (attempted this launch, pane opened for this build), so
     /// the follow-up step after a registration terminates.
     private func runESAutopilot() {
+        guard !deferAutomaticTelemetry else { return }
         let action = ESAutopilot.decide(stage: esStage, userDisabled: esMemory.userDisabled,
                                         attemptedThisLaunch: esRegisterAttemptedThisLaunch,
                                         panesOpenedForBuild: esMemory.panesOpenedForBuild)
@@ -1180,7 +1287,7 @@ public final class SetupManager: ObservableObject {
     /// Polls once a second while the stage waits on a System Settings switch
     /// and the user has not removed file telemetry; stops otherwise.
     private func manageESPoll() {
-        let wanted = esStage.awaitsUser && !esMemory.userDisabled
+        let wanted = esStage.awaitsUser && !esMemory.userDisabled && !deferAutomaticTelemetry
         if wanted, esPollTask == nil {
             esPollTask = Task { [weak self] in
                 while !Task.isCancelled {

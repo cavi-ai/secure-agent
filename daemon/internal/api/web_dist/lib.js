@@ -2048,7 +2048,7 @@ const SESSIONS_SUB_ALIASES = { worktrees: 'system' };
 // isConsoleRoute: whether id (a tab, "sessions/<sub>", an old tab id, with
 // or without "#") names a console view.
 function isConsoleRoute(id) {
-  const head = String(id || '').replace(/^#/, '').split('/')[0];
+  const head = String(id || '').replace(/^#/, '').split('?')[0].split('/')[0];
   return CONSOLE_TABS.includes(head) || Object.prototype.hasOwnProperty.call(TAB_ALIASES, head);
 }
 
@@ -2056,7 +2056,7 @@ function isConsoleRoute(id) {
 // sub-view ('board' by default, '' on other tabs); focus 'attention' scrolls
 // the attention panel into view. Unknown → Home.
 function resolveConsoleRoute(id) {
-  const [head, rest] = String(id || '').replace(/^#/, '').split('/');
+  const [head, rest] = String(id || '').replace(/^#/, '').split('?')[0].split('/');
   if (Object.prototype.hasOwnProperty.call(TAB_ALIASES, head)) {
     const a = TAB_ALIASES[head];
     return { tab: a.tab, sub: a.tab === 'sessions' ? a.sub : '', focus: a.focus || '' };
@@ -2078,6 +2078,28 @@ function routeKey(r) {
 // and "#sessions" for the board.
 function consoleRouteHash(r) {
   return '#' + (r.tab === 'sessions' && r.sub && r.sub !== 'board' ? 'sessions/' + r.sub : r.tab);
+}
+
+// A native handoff and its credential-free reload form carry identifiers,
+// never API paths or external destinations. At most one detail opens.
+function consoleContextFromHash(hash) {
+  const raw = String(hash || '').replace(/^#/, '');
+  const split = raw.indexOf('?');
+  const params = new URLSearchParams(split >= 0 ? raw.slice(split + 1) : raw);
+  const route = params.get('tab') || (split >= 0 ? raw.slice(0, split) : raw);
+  const flag = params.get('flag') || '';
+  const incident = flag ? '' : params.get('incident') || '';
+  return { route: isConsoleRoute(route) ? route : '', session: params.get('session') || '',
+    flag, incident, file: flag || incident ? '' : params.get('file') || '' };
+}
+
+function consoleContextHash(context) {
+  const hash = consoleRouteHash(resolveConsoleRoute(context.route));
+  const params = new URLSearchParams();
+  for (const key of ['session', 'flag', 'incident', 'file']) {
+    if (context[key]) params.set(key, context[key]);
+  }
+  return hash + (params.size ? '?' + params.toString() : '');
 }
 
 // consoleBootState: 'ended' when the page has no console token — none in
