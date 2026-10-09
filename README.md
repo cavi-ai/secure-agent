@@ -149,6 +149,8 @@ File telemetry, additional hook scripts, traffic routing, secret registration, g
 
 Everything is also manageable later from the menu bar icon (**Setup & Permissions…**, **Settings…**, **Uninstall…**, **Open console**, **Ask Agent**). Secure Agent appears in the Dock, opens the setup flow on first use, and opens Settings on subsequent launches. Click the Dock icon to reopen Settings after closing its window; quit the app to stop its child daemon.
 
+Session cards in the menu bar open that same session in the console. Finding and remediation links open the selected evidence or incident, with a return to its session when the daemon knows that identity. Missing records stay unavailable; links never substitute a new process with the same PID. The console retains record identifiers when removing the handoff credential from the address bar.
+
 The UI has a separate menu bar identity in this update. Saved Secure Agent preferences and monitoring data remain in their existing locations. Allow **Secure Agent** in System Settings → Menu Bar; another application's menu bar setting should not be required. Review any macOS notification, Login Items or Full Disk Access prompt through the native Setup flow.
 
 On macOS Tahoe, Control Center can incorrectly associate a status item with the application that launched it. If Secure Agent is allowed but its icon is missing, check **System Settings → Menu Bar → Allow in the Menu Bar** for the launcher as well. Enabling that launcher can restore the shield without restarting the monitor. Reinstalling the app or recreating its status item does not change the launcher's permission. Secure Agent keeps its Dock control available and limits recovery to one attempt for each observed loss of its AppKit item or window.

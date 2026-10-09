@@ -718,6 +718,12 @@
   if (MODE.includes('tokenseed') || !MODE.includes('notoken')) {
     try { sessionStorage.setItem('sa.console-token', 'test-token'); } catch { /* ignored */ }
   }
+  if (MODE.includes('contexthandoff')) {
+    data['/flags'].find(f => f.id === 'flag-2').session_id = 'sess-claude-1';
+    sessionStorage.setItem('sa.selected-session', 'sess-codex-3');
+    sessionStorage.setItem('sa.harness-filter', JSON.stringify({ harnesses: {claude:false,codex:false}, text:'unrelated', liveOnly:true }));
+    if (MODE.includes('cold')) location.hash = 'ct=test-token&tab=sessions&session=sess-claude-1&flag=flag-2';
+  }
   // Policy lists (GET /guard/rules, /guard/path-allow; /mute is above).
   data['/guard/rules'] = [
     { id: 1, agent: 'claude', rule_id: 'env-file', decision: 'allow', source: 'prompt', created_at: '2026-09-20T10:00:00Z' },
@@ -1110,6 +1116,18 @@
     fetchCount++;
     stamp('fetch-count', String(fetchCount));
     const p = String(path).split('?')[0];
+    if (MODE.includes('contexthandoff') && p.startsWith('/flags/') && p.endsWith('/explain')) {
+      const id = decodeURIComponent(p.split('/')[2]);
+      const flag = data['/flags'].find(f => f.id === id);
+      return {ok:!!flag,status:flag?200:404,json:async()=>flag,text:async()=>flag?JSON.stringify(flag):'flag unavailable'};
+    }
+    if (MODE.includes('contexthandoff') && p === '/incidents' && !String(path).includes('format=markdown')) {
+      const id = new URLSearchParams(String(path).split('?')[1] || '').get('id');
+      if (id) {
+        const incident = data['/incidents'].find(i => i.id === id);
+        return {ok:!!incident,status:incident?200:404,json:async()=>({incident,workflow:incident?.workflow})};
+      }
+    }
     if (MODE.includes('authrecover') && opts?.method === 'POST') authRecoveryMutations++;
     // Failure modes apply to API paths only (assets are served statically).
     if (MODE.includes('netfail') || networkRecoveryUnreachable) {
@@ -1547,6 +1565,42 @@
 
   if (MODE.includes('notokenrecover')) {
     setTimeout(() => { location.hash = 'ct=test-token&tab=sessions'; }, 2000);
+  }
+  if (MODE.includes('contexthandoff')) {
+    const receipt = {};
+    if (!MODE.includes('cold')) setTimeout(() => {
+      location.hash = 'ct=test-token&tab=sessions&session=sess-claude-1&flag=flag-2';
+    }, 1500);
+    setTimeout(() => {
+      receipt.session = window.SA.selectedSessionId === 'sess-claude-1' && window.SA.activeTab === 'sessions';
+      receipt.flag = document.getElementById('drawer-body').textContent.includes('flag-2');
+      receipt.stripped = !location.hash.includes('ct=') && location.hash.includes('flag=flag-2');
+      receipt.filter = !window.SA.harnessFilter.harnesses.claude && window.SA.harnessFilter.text === ''
+        && window.SA.harnessFilter.harnesses.codex === false;
+      document.getElementById('btn-drawer-back')?.click();
+    }, 3000);
+    setTimeout(async () => {
+      receipt.back = document.getElementById('drawer').hidden && window.SA.selectedSessionId === 'sess-claude-1'
+        && location.hash.includes('session=sess-claude-1') && !location.hash.includes('flag=');
+      await window.selectSession('sess-claude-sub');
+      receipt.selectionRoute = location.hash.includes('session=sess-claude-sub');
+      location.hash = 'ct=test-token&tab=sessions&session=sess-cursor-2&incident=inc-20260907-6033-a1b2';
+    }, 4000);
+    setTimeout(() => {
+      receipt.incident = window.SA.selectedSessionId === 'sess-cursor-2'
+        && document.getElementById('drawer-title-text').textContent.includes('inc-20260907-6033-a1b2')
+        && document.getElementById('drawer-body').textContent.includes('Blast Radius Activity');
+      receipt.ended = document.getElementById('session-detail').textContent.includes('web-app')
+        && window.SA.harnessFilter.liveOnly === false;
+      location.hash = 'ct=test-token&tab=sessions&session=expired-session&flag=expired-flag';
+    }, 6000);
+    setTimeout(() => {
+      receipt.missing = window.SA.selectedSessionId === 'expired-session'
+        && document.getElementById('session-detail').textContent.includes('Session unavailable')
+        && document.getElementById('drawer-body').textContent.includes('flag unavailable');
+      receipt.noPidFallback = !document.getElementById('session-detail').textContent.includes('api-service');
+      document.body.dataset.contextHandoff = JSON.stringify(receipt);
+    }, 8500);
   }
 
   if (MODE.includes('networkrecover')) {

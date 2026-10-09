@@ -13,15 +13,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // rather than being retained across browser sessions.
   const SS_TOKEN_KEY = 'sa.console-token';
   const hashParams = new URLSearchParams(location.hash.slice(1));
+  const initialContext = consoleContextFromHash(location.hash);
+  let pendingConsoleContext = Object.values(initialContext).some(Boolean) ? initialContext : null;
   let consoleToken = hashParams.get('ct') || '';
   if (consoleToken) {
     try { sessionStorage.setItem(SS_TOKEN_KEY, consoleToken); } catch { /* private mode: memory only */ }
     if (window.history.replaceState) {
-      // Strip the token from the address bar but PRESERVE a tab deep-link
-      // (#ct=…&tab=egress → #egress) — the hero's "open the drill-down"
-      // depends on it surviving the handoff.
-      const tab = hashParams.get('tab');
-      history.replaceState(null, '', location.pathname + location.search + (tab ? '#' + tab : ''));
+      // Retain only the route and record identifiers. The credential never
+      // survives in a reload link, address-bar history or drawer context.
+      history.replaceState(null, '', location.pathname + location.search + (pendingConsoleContext ? consoleContextHash(initialContext) : ''));
     }
   } else {
     try { consoleToken = sessionStorage.getItem(SS_TOKEN_KEY) || ''; } catch { consoleToken = ''; }
@@ -404,8 +404,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // route; an explicit drill-down from the menu bar takes its requested tab.
     let route = activeTab === 'sessions' ? 'sessions/' + activeSub : activeTab;
     try { route = sessionStorage.getItem('sa.console-tab') || route; } catch { /* memory only */ }
-    route = handoff.get('tab') || route || 'home';
-    history.replaceState(null, '', location.pathname + location.search + '#' + route);
+    const context = consoleContextFromHash(location.hash);
+    route = context.route || route || 'home';
+    if (context.route || context.session || context.flag || context.incident || context.file) {
+      pendingConsoleContext = { ...context, route };
+    }
+    history.replaceState(null, '', location.pathname + location.search + consoleContextHash(pendingConsoleContext || { route }));
     const reason = document.getElementById('console-access-reason');
     reason.textContent = 'Checking the connection. Your view is preserved; actions remain paused.';
     try {
@@ -432,9 +436,7 @@ document.addEventListener('DOMContentLoaded', () => {
     startLiveUpdates();
     clearInterval(sparkTimer);
     sparkTimer = setInterval(() => { sparkAdvance(); drawSpark(); }, 1000);
-    if (selectedSessionId) loadSelectedSession(selectedSessionId);
-    const file = handoff.get('file');
-    if (file) window.openFileDetail(file);
+    if (selectedSessionId && !pendingConsoleContext?.session) loadSelectedSession(selectedSessionId);
   });
 
   function setConnState(next) {
@@ -1853,6 +1855,13 @@ document.addEventListener('DOMContentLoaded', () => {
     else markDirty(...PANELS.map(p => p[0]).filter(n => (slow || !SLOW_ONLY.has(n)) && n !== 'notify'));
     if (resources) fillFamilyDrawer();
     if (window.SA && window.SA.refreshSessionOverview) window.SA.refreshSessionOverview(!!(opts && opts.full));
+    // Apply once, only after authenticated telemetry succeeds. A newer
+    // credential handoff invalidates an opener awaiting session data.
+    if (snap && pendingConsoleContext && current()) {
+      const context = pendingConsoleContext;
+      pendingConsoleContext = null;
+      await openConsoleContext(context, handoffGeneration);
+    }
   }
 
   // Every panel is a candidate: initial load, Refresh, and actions that
@@ -3081,6 +3090,9 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionReveal = true;
     sessionPane = 'detail';
     try { sessionStorage.setItem(SESSION_SELECTION_KEY, id); } catch { /* memory only */ }
+    if (activeTab === 'sessions' && activeSub === 'board') {
+      history.replaceState(null, '', location.pathname + location.search + consoleContextHash({ route: 'sessions', session: id }));
+    }
     if (changed) { resetSessionMemory(); sessionTimeline = []; }
     renderNow(['sessions']);
     if (window.matchMedia('(max-width: 900px)').matches) {
@@ -3371,9 +3383,46 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  // Deep link from the menubar: #ct=…&file=<path> opens that file's drawer.
-  const deepFile = hashParams.get('file');
-  if (deepFile) window.openFileDetail(deepFile);
+  async function openConsoleContext(context, generation) {
+    const current = () => !sessionEnded && generation === handoffGeneration;
+    if (!current()) return;
+    if (context.session) {
+      // A saved filter must not hide the record explicitly requested by the
+      // operator. Reset only when it would exclude this session.
+      const session = (telemetryData.sessions || []).find(s => s.id === context.session);
+      const groups = groupSessionsByHarness(telemetryData.sessions || [], [], telemetryData.agents || []);
+      if (session && !visibleSessionMembers(applySessionFilters(groups, harnessFilter)).some(s => s.id === session.id)) {
+        const group = groups.find(g => visibleSessionMembers([g]).some(s => s.id === session.id));
+        if (!sessionMatchesText(session, harnessFilter.text)) harnessFilter.text = '';
+        if (group) delete harnessFilter.harnesses[group.key];
+        if (session.status === 'ended') harnessFilter.liveOnly = false;
+        harnessFilterChanged();
+      }
+      switchTab('sessions');
+      await window.selectSession(context.session);
+    } else if (context.route) switchTab(context.route, { skipHash: true });
+    if (!current()) return;
+    if (context.session && (selectedSessionId !== context.session || activeTab !== 'sessions' || activeSub !== 'board')) return;
+    const hash = consoleContextHash(context);
+    const returnToSession = () => {
+      closeDrawer();
+      window.filterTimelineToSession(context.session);
+      history.replaceState(null, '', location.pathname + location.search + consoleContextHash({ route: 'sessions', session: context.session }));
+    };
+    const back = context.session ? { label: 'session', reopen: returnToSession } : undefined;
+    if (context.flag) window.openFlagDetail(context.flag, { back });
+    else if (context.incident) window.openIncidentReport(context.incident, { back });
+    else if (context.file) window.openFileDetail(context.file);
+    if (context.flag || context.incident || context.file) {
+      const onClose = drawerOnClose;
+      drawerOnClose = () => {
+        if (onClose) onClose();
+        if (location.hash === hash) history.replaceState(null, '', location.pathname + location.search
+          + consoleContextHash({ route: context.route, session: context.session }));
+      };
+    }
+    history.replaceState(null, '', location.pathname + location.search + hash);
+  }
 
   // Uninspected-egress drill-down: the count in the firewall panel becomes a
   // list the operator can act on (allow the endpoint, read the advisor's
