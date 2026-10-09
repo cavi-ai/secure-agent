@@ -371,7 +371,11 @@ func (a *API) fileAction(w http.ResponseWriter, r *http.Request, action, flag st
 	}
 	fi, err := os.Stat(p)
 	if err != nil {
-		http.Error(w, "the file no longer exists", http.StatusGone)
+		if os.IsNotExist(err) {
+			http.Error(w, "the file no longer exists", http.StatusGone)
+		} else {
+			http.Error(w, "could not inspect the file", http.StatusServiceUnavailable)
+		}
 		return
 	}
 	if flag == "-t" && fi.IsDir() {
