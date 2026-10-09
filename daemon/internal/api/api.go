@@ -144,10 +144,11 @@ type Status struct {
 	DeltaDrops uint64 `json:"delta_drops,omitempty"`
 	// BusDropAt is when the last drop happened; BusDropping is true within
 	// collect.LossWindow of it.
-	BusDropAt     *time.Time         `json:"bus_drop_at,omitempty"`
-	BusDropping   bool               `json:"bus_dropping,omitempty"`
-	StorageHealth *store.WriteHealth `json:"storage_health,omitempty"`
-	OTLPDropped   uint64             `json:"otlp_dropped,omitempty"`
+	BusDropAt              *time.Time                    `json:"bus_drop_at,omitempty"`
+	BusDropping            bool                          `json:"bus_dropping,omitempty"`
+	StorageHealth          *store.WriteHealth            `json:"storage_health,omitempty"`
+	EgressProjectionHealth *store.EgressProjectionHealth `json:"egress_projection_health,omitempty"`
+	OTLPDropped            uint64                        `json:"otlp_dropped,omitempty"`
 
 	// Coverage reports how many running harnesses the daemon is actually
 	// seeing ("seeing 2 of 3 harnesses") — liveness is not coverage.
@@ -1037,6 +1038,8 @@ func (a *API) evidenceStatus(st Status) Status {
 	if a.store != nil {
 		h := a.store.WriteHealth()
 		st.StorageHealth = &h
+		projection := a.store.EgressProjectionHealth()
+		st.EgressProjectionHealth = &projection
 	}
 	return st
 }

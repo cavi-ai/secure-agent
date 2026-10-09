@@ -94,6 +94,15 @@ func (a *API) attentionFlags() []model.Flag {
 // while agents are active, silent collectors and missing hooks.
 func (a *API) machineAttentionItems(st Status) []PostureItem {
 	var items []PostureItem
+	if h := st.EgressProjectionHealth; h != nil && (h.QueueDrops > 0 || h.WriteFailures > 0) {
+		detail := fmt.Sprintf("%d observations missed the summary queue; %d summary writes failed since daemon start. Recurring egress summaries may be incomplete. Connection evidence has separate storage health.", h.QueueDrops, h.WriteFailures)
+		if h.WriteFailing {
+			detail += " Summary writes are still failing."
+		} else if h.WriteFailures > 0 {
+			detail += " New summary writes have recovered."
+		}
+		items = append(items, PostureItem{Kind: "projection_loss", ID: "egress", Severity: 2, Title: "Recurring egress summary missed activity", Detail: detail})
+	}
 	if st.OTLPDropped > 0 {
 		items = append(items, PostureItem{Kind: "export_loss", ID: "otlp", Severity: 2, Title: "Trace export lost spans", Detail: fmt.Sprintf("%d spans could not be exported since daemon start. Local evidence is retained separately.", st.OTLPDropped)})
 	}

@@ -336,7 +336,10 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 	go func() {
 		defer close(projectionDone)
 		for observation := range projection {
-			_ = st.RecordEgressObservation(observation)
+			err := st.RecordEgressObservation(observation)
+			if st.NoteEgressProjectionWrite(err) && postureChanged != nil {
+				postureChanged()
+			}
 		}
 	}()
 	go func() {
@@ -375,10 +378,7 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 						observation.Scope.Workspace = sess.Workspace
 					}
 				}
-				select {
-				case projection <- observation:
-				default:
-				}
+				enqueueEgressProjection(projection, observation, st)
 			}
 			guardLifecycle := e.Kind == event.KindGuardPrompt || e.Kind == event.KindGuardResolved
 			if deltas != nil && (eventSaved || guardLifecycle) {
@@ -475,6 +475,20 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 		}
 	}()
 	return drainDone
+}
+
+// enqueueEgressProjection never waits for SQLite or a consumer. The caller
+// owns queue closure after event draining; dropped observations affect only
+// the recurring-egress summary and have separate health accounting. Queue loss
+// appears on the next health refresh; do not compute a DB-backed posture here.
+func enqueueEgressProjection(queue chan<- store.EgressObservation, observation store.EgressObservation, st *store.Store) bool {
+	select {
+	case queue <- observation:
+		return true
+	default:
+		st.NoteEgressProjectionDrop()
+		return false
+	}
 }
 
 // advisorStack bundles the advisor subscriber and, in managed mode, the model

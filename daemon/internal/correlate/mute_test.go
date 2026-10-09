@@ -10,6 +10,44 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
+func TestMuteMutationsPreserveInvalidPolicy(t *testing.T) {
+	for _, content := range []string{`{"existing":["old.example.com"],`, `null`, `{"existing":true}`} {
+		for _, operation := range []string{"add", "remove"} {
+			t.Run(content+"/"+operation, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "muted.json")
+				if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				s := NewMuteStore(path)
+				var err error
+				if operation == "add" {
+					err = s.Add("keychain-access", "*", "cursor")
+				} else {
+					err = s.Remove("keychain-access", "*", "cursor")
+				}
+				if err == nil {
+					t.Error("mutation of invalid policy must fail")
+				}
+				got, readErr := os.ReadFile(path)
+				if readErr != nil || string(got) != content {
+					t.Fatalf("invalid policy changed: got %q, read error = %v", got, readErr)
+				}
+			})
+		}
+	}
+}
+
+func TestMuteMutationsReportReadErrors(t *testing.T) {
+	// Directories fail to read even if the test process has root privileges.
+	s := NewMuteStore(t.TempDir())
+	if err := s.Add("keychain-access", "*", "cursor"); err == nil {
+		t.Error("add must report unreadable policy")
+	}
+	if err := s.Remove("keychain-access", "*", "cursor"); err == nil {
+		t.Error("remove must report unreadable policy")
+	}
+}
+
 func TestMuteSuppressesFlagAndCounts(t *testing.T) {
 	c := newTestCorrelator(t)
 	c.SetMuteChecker(func(rule, host, agent string) bool {
