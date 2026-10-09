@@ -433,6 +433,21 @@ export interface PayloadOutcomeSummary {
   unknown: number;
 }
 
+export interface IncidentRemediationStep {
+  id: string;
+  item: RotateItem;
+  status: string;
+  verification: string;
+  reported_at?: string;
+  newer_evidence: boolean;
+}
+
+export interface IncidentRemediation {
+  revision: number;
+  evidence_revision: string;
+  steps: IncidentRemediationStep[];
+}
+
 export interface IncidentReport {
   id: string;
   flag_id: string;
@@ -451,6 +466,7 @@ export interface IncidentReport {
   rotate_list: RotateItem[];
   advisor_narrative?: string;
   payload_outcomes?: PayloadOutcomeSummary;
+  remediation?: IncidentRemediation;
 }
 
 export interface BudgetStatus {
@@ -880,6 +896,8 @@ export interface ReportLine {
 }
 
 export interface SessionReport {
+  incidents: IncidentReport[];
+  incidents_available: boolean;
   interventions: InterventionReceipt[];
   interventions_available: boolean;
   session: Session;

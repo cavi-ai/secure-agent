@@ -42,8 +42,8 @@ As AI coding agents (Claude Code, Cursor, Codex, Antigravity, Pi, Qwen Code, ope
 - **Monitoring coverage and evidence health**
   Home lists a decision only when you must act: a pending guard prompt or resource intervention, an open high or critical incident, or a critical finding. Everything else stays in the Findings history log. Coverage shows each live session's supported paths and its own observations, joined by session identity and process start time. A sibling session's activity, a handshake, and an inspection failure cannot count as guard or inspection evidence. Payload inspection remains dependent on proxy routing and reliable attribution. Setup can check each installed Claude or Cursor hook's inert round trip to the daemon; that manual check does not prove a running agent invokes the hook or change guard policy. Configuration changes invalidate the result. Dropped event deliveries and failed core evidence writes appear in posture and Doctor. Successful writes clear the active storage fault for that operation, while the failure count remains for the daemon run: recovery cannot restore missing evidence. The native app keeps last-known data when an endpoint fails, marks it stale, and requires a successful refresh of that endpoint to clear the warning.
 
-- 🚨 **Rotation Advisory & Incident Containment (Read-Only)**  
-  Analyzes compromised secret exposures, categorizes risk severity (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`), assesses blast radius, and generates ordered step-by-step remediation checklists with copy-paste shell commands via `/incidents` and a native Swift UI remediation modal — advisory only, no rotation is performed automatically.
+- 🚨 **Incident Remediation**
+  Incident reports list suggested remediation steps and recorded control outcomes. Report individual steps completed or mark them pending in the console; these reports remain unverified and do not resolve the incident. Later evidence is shown beside earlier reports. Credential rotation and revocation are external work and are never performed automatically.
 
 - 🌐 **Opt-In Local MITM Proxy & Payload Inspection (`127.0.0.1:8443`)**  
   Features an inline HTTP/HTTPS proxy server with dynamic TLS certificate generation (`CAManager`) that inspects request streams for outbound credential leaks (`redact.Detect`) and response streams for prompt injection attacks (`injection.Detect`).
@@ -406,6 +406,7 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 | `/flags` | `GET` | Returns recent security correlation flags (accepts optional `?limit=N`). |
 | `/events` | `GET` | Returns recent raw system events (accepts optional `?limit=N`). |
 | `/incidents` | `GET` | Returns rotation intel postmortem reports & checklists (`?id=ID`, `?format=markdown`). |
+| `/incidents/remediation` | `POST` | Records reported/pending remediation steps against the viewed incident evidence and revision. |
 | `/kill` | `POST` | Terminate an agent process tree by PID (`{"pid": 12345}`). |
 | `/worktrees` | `GET` | Every git worktree found, with a remove/review/keep/prune verdict and its reasons (`?refresh=1` rescans). |
 | `/worktrees/repos` | `POST` | Add a repository to the worktree hunter's saved list, or hide it (`{"path": "...", "hidden": true}`). |

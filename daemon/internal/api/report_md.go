@@ -57,6 +57,30 @@ func renderSessionMarkdown(rep store.SessionReport) string {
 		countOrMore(len(rep.Files), store.ReportTopN), countOrMore(len(rep.Hosts), store.ReportTopN),
 		len(rep.Guard), len(rep.Flags), len(rep.SecretHits))
 
+	b.WriteString("\n## Incident remediation\n")
+	if !rep.IncidentsAvailable {
+		b.WriteString("Incident remediation history unavailable; reported work is unknown.\n")
+	}
+	for _, inc := range rep.Incidents {
+		if inc.Remediation == nil {
+			continue
+		}
+		for _, step := range inc.Remediation.Steps {
+			status := "pending"
+			if step.Status == "reported" {
+				status = "reported completed"
+			}
+			fmt.Fprintf(&b, "- Incident %s · %s · %s · credential verification: unverified", mdCode(inc.ID), mdText(step.Item.Name), status)
+			if step.ReportedAt != nil {
+				fmt.Fprintf(&b, " · reported at %s", step.ReportedAt.UTC().Format(time.RFC3339Nano))
+			}
+			if step.NewerEvidence {
+				b.WriteString(" · new evidence since this report; review again")
+			}
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("Step reports do not establish credential safety or incident resolution.\n")
 	b.WriteString("\n## Models\n")
 	if len(rep.Models) == 0 {
 		b.WriteString("none\n")
