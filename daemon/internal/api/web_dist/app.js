@@ -1995,6 +1995,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function harnessFilterChanged() {
     try { sessionStorage.setItem(HARNESS_FILTER_KEY, JSON.stringify(harnessFilter)); } catch { /* private mode */ }
     syncHarnessFilterControls();
+    sessionFilterTransition = true;
     renderSessionBoard();
     renderAgents();
   }
@@ -2699,6 +2700,9 @@ document.addEventListener('DOMContentLoaded', () => {
     historySelected,
     historyRows: new Map(),
     harnessFilter,
+    reconcileSessionSelection,
+    takeSessionReveal,
+    scheduleSessionWorkbenchHeight,
     setTabBadge,
     paintSessionChip,
     sessionScopeOn,
@@ -2745,23 +2749,94 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // The generation invalidates late responses when selection changes; it
   // also protects an earlier-page request from writing into another session.
+  const SESSION_SELECTION_KEY = 'sa.selected-session';
   let selectedSessionId = '';
+  try { selectedSessionId = sessionStorage.getItem(SESSION_SELECTION_KEY) || ''; } catch { /* memory only */ }
+  let sessionSelectionInitialized = false;
+  let sessionFilterTransition = false;
+  let sessionReveal = false;
+  let sessionPane = 'detail';
   let sessionView = 'memory';
   let sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
   let sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
   let sessionMemoryGeneration = 0;
+  let sessionMemoryAt = 0;
+  let sessionMemoryHistoryLoaded = false;
   let sessionTimeline = [];
   let sessionTimelineAt = 0;
+  let sessionTimelineRequest = 0;
   function resetSessionMemory() {
     sessionMemoryGeneration++;
+    sessionMemoryHistoryLoaded = false;
+    sessionMemoryAt = 0;
     sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
     sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
-    sessionView = 'memory';
+    sessionTimelineAt = 0;
+  }
+  function takeSessionReveal() {
+    const reveal = sessionReveal;
+    sessionReveal = false;
+    return reveal;
+  }
+  function reconcileSessionSelection(groups) {
+    const visible = visibleSessionMembers(groups);
+    const transition = sessionFilterTransition;
+    sessionFilterTransition = false;
+    if (!sessionSelectionInitialized || transition) {
+      if (visible.length || transition) sessionSelectionInitialized = true;
+      const id = initialSessionId(visible, selectedSessionId);
+      if (id !== selectedSessionId) {
+        selectedSessionId = id;
+        resetSessionMemory();
+        sessionTimeline = [];
+        try { id ? sessionStorage.setItem(SESSION_SELECTION_KEY, id) : sessionStorage.removeItem(SESSION_SELECTION_KEY); } catch { /* memory only */ }
+        if (id) queueMicrotask(() => loadSelectedSession(id));
+      } else if (id && !sessionMemoryState.loading && !sessionMemoryPage.rows.length && !sessionTimeline.length) {
+        queueMicrotask(() => loadSelectedSession(id));
+      }
+      sessionReveal = !!id;
+    }
+    const panel = document.getElementById('session-board-panel');
+    if (panel) panel.dataset.pane = sessionPane;
+  }
+  async function loadSelectedSession(id) {
+    if (sessionView === 'trace') {
+      try { await loadSessionTimeline(id, true); } catch { /* trace retries on activation */ }
+      renderNow(['sessions']);
+    } else await loadSessionMemory(id);
+  }
+  let sessionHeightFrame = 0;
+  function scheduleSessionWorkbenchHeight() {
+    if (sessionHeightFrame) return;
+    sessionHeightFrame = requestAnimationFrame(() => {
+      sessionHeightFrame = 0;
+      const panel = document.getElementById('session-board-panel');
+      if (!panel || !panel.classList.contains('session-workbench') || !panel.getClientRects().length) return;
+      const body = panel.querySelector('.session-detail-body');
+      const followLatest = body && body.scrollHeight - body.clientHeight - body.scrollTop < 64;
+      const bottom = parseFloat(getComputedStyle(document.querySelector('.app') || document.body).paddingBottom) || 16;
+      const height = Math.floor((window.visualViewport?.height || window.innerHeight) - panel.getBoundingClientRect().top - bottom);
+      // Very short windows use document scrolling so controls remain reachable.
+      panel.classList.toggle('session-workbench-short', height < 320);
+      const value = Math.max(320, height) + 'px';
+      if (panel.style.getPropertyValue('--session-workbench-height') !== value) panel.style.setProperty('--session-workbench-height', value);
+      // Sizing changes the scroll range after the initial detail render.
+      if (followLatest) body.scrollTop = body.scrollHeight;
+      const latest = panel.querySelector('[data-action="session-latest"]');
+      if (latest && body) latest.hidden = body.scrollHeight - body.clientHeight - body.scrollTop < 64;
+    });
+  }
+  window.addEventListener('resize', scheduleSessionWorkbenchHeight);
+  window.visualViewport?.addEventListener('resize', scheduleSessionWorkbenchHeight);
+  if (typeof ResizeObserver !== 'undefined') {
+    const observer = new ResizeObserver(scheduleSessionWorkbenchHeight);
+    for (const el of document.querySelectorAll('.masthead, .tab-nav, .subtabs, #session-board-panel .session-toolbar')) observer.observe(el);
   }
   async function loadSessionMemory(sessionID, before) {
     if (!sessionID || sessionID !== selectedSessionId) return;
-    const generation = sessionMemoryGeneration;
-    if (before && sessionMemoryState.loadingEarlier) return;
+    if (sessionMemoryState.loadingEarlier || (!before && sessionMemoryState.loading)) return;
+    const generation = ++sessionMemoryGeneration;
+    sessionMemoryAt = Date.now();
     sessionMemoryState = { ...sessionMemoryState, loading: !before, loadingEarlier: !!before, error: '' };
     renderNow(['sessions']);
     try {
@@ -2772,6 +2847,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (generation !== sessionMemoryGeneration || sessionID !== selectedSessionId) return;
       const incoming = Array.isArray(page.rows) ? page.rows : [];
       if (before) {
+        sessionMemoryHistoryLoaded = true;
         const seen = new Set((sessionMemoryPage.rows || []).map(row => row.id));
         const older = incoming.filter(row => {
           if (seen.has(row.id)) return false;
@@ -2779,24 +2855,30 @@ document.addEventListener('DOMContentLoaded', () => {
           return true;
         });
         sessionMemoryPage = { rows: [...older, ...sessionMemoryPage.rows], has_earlier: !!page.has_earlier, next_cursor: page.next_cursor || '' };
+      } else if (sessionMemoryHistoryLoaded || sessionReadingHistory(sessionID, 'memory')) {
+        const merged = new Map(sessionMemoryPage.rows.map(row => [row.id, row]));
+        for (const row of incoming) merged.set(row.id, row);
+        sessionMemoryPage = { ...sessionMemoryPage, rows: [...merged.values()].sort((a, b) => String(a.at).localeCompare(String(b.at)) || String(a.id).localeCompare(String(b.id))) };
       } else {
         sessionMemoryPage = { rows: incoming, has_earlier: !!page.has_earlier, next_cursor: page.next_cursor || '' };
       }
       sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
     } catch {
       if (generation !== sessionMemoryGeneration || sessionID !== selectedSessionId) return;
-      sessionMemoryState = { loading: false, loadingEarlier: false, error: 'unavailable' };
+      sessionMemoryState = { loading: false, loadingEarlier: false, error: before ? 'earlier' : 'latest' };
     }
     renderNow(['sessions']);
   }
   async function loadSessionTimeline(id, force) {
-    if (!id) { sessionTimeline = []; return; }
+    if (!id || id !== selectedSessionId) return;
+    const generation = sessionMemoryGeneration;
     // Throttle refetches: deltas for the selected session arrive per event.
     if (!force && Date.now() - sessionTimelineAt < 2000) return;
     sessionTimelineAt = Date.now();
+    const request = ++sessionTimelineRequest;
     const r = await apiFetch('/sessions/' + encodeURIComponent(id) + '/timeline?limit=500');
     const rows = r.ok ? (await r.json()) || [] : [];
-    if (id === selectedSessionId) sessionTimeline = rows;
+    if (id === selectedSessionId && generation === sessionMemoryGeneration && request === sessionTimelineRequest && sessionView === 'trace') sessionTimeline = rows;
   }
   // Export: copy the session's markdown report. Safari only honours a
   // clipboard write started inside the click, so where ClipboardItem exists
@@ -2821,11 +2903,40 @@ document.addEventListener('DOMContentLoaded', () => {
       err => showToast('Export failed: ' + ((err && err.message) || err), 'danger'));
   };
   window.selectSession = async function(id) {
-    selectedSessionId = (selectedSessionId === id) ? '' : id;
-    resetSessionMemory();
-    sessionTimeline = [];
-    renderAll();
-    if (selectedSessionId) await loadSessionMemory(selectedSessionId);
+    if (!id) return;
+    const changed = selectedSessionId !== id;
+    selectedSessionId = id;
+    sessionSelectionInitialized = true;
+    sessionReveal = true;
+    sessionPane = 'detail';
+    try { sessionStorage.setItem(SESSION_SELECTION_KEY, id); } catch { /* memory only */ }
+    if (changed) { resetSessionMemory(); sessionTimeline = []; }
+    renderNow(['sessions']);
+    if (window.matchMedia('(max-width: 900px)').matches) {
+      document.querySelector('#session-detail h3')?.focus({ preventScroll: true });
+    }
+    if (changed || (!sessionMemoryPage.rows.length && !sessionTimeline.length)) await loadSelectedSession(id);
+  };
+  window.showSessionList = function() {
+    // Capture the current reading position before narrow CSS hides detail.
+    renderNow(['sessions']);
+    sessionPane = 'list';
+    const panel = document.getElementById('session-board-panel');
+    if (panel) panel.dataset.pane = sessionPane;
+    const detail = document.getElementById('session-detail');
+    if (detail) detail._sessionReadingVisible = false;
+    const rail = document.getElementById('session-rail');
+    const scroll = rail?.scrollTop || 0;
+    const selected = Array.from(rail?.querySelectorAll('[data-action="select-session"]') || []).find(el => el.dataset.id === selectedSessionId);
+    const target = selected?.getClientRects().length ? selected : rail;
+    target?.focus({ preventScroll: true });
+    if (rail) rail.scrollTop = scroll;
+  };
+  window.jumpToLatestSession = function() {
+    const body = document.querySelector('#session-detail .session-detail-body');
+    if (body) body.scrollTop = body.scrollHeight;
+    const latest = document.querySelector('#session-detail [data-action="session-latest"]');
+    if (latest) latest.hidden = true;
   };
   window.setSessionView = async function(view) {
     if (view !== 'memory' && view !== 'trace') return;
@@ -2834,6 +2945,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (view === 'trace' && selectedSessionId) {
       try { await loadSessionTimeline(selectedSessionId, true); } catch { /* trace retries on next activation */ }
       renderNow(['sessions']);
+    } else if (view === 'memory' && selectedSessionId && !sessionMemoryPage.rows.length) {
+      await loadSessionMemory(selectedSessionId);
     }
   };
   window.loadEarlierSessionMemory = function() {
@@ -4016,7 +4129,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // "View session in timeline" (finding cards, Attention): open the session
   // in the Sessions tab — its rail card selected, its memory loaded — and keep
   // Events, Flags and Incidents scoped to it for the Events tab. Selects
-  // outright: selectSession toggles, which would close an already-open one.
+  // outright and preserves the chosen Memory/Trace mode.
   window.filterTimelineToSession = async function(sid) {
     timelineSession = sid;
     timelinePids = null;
@@ -4026,11 +4139,8 @@ document.addEventListener('DOMContentLoaded', () => {
     renderFlags();
     renderIncidents();
     paintScopeBar();
-    selectedSessionId = sid;
-    resetSessionMemory();
-    sessionTimeline = [];
     switchTab('sessions');
-    await loadSessionMemory(sid);
+    await window.selectSession(sid);
     if (selectedSessionId !== sid) return;
     renderNow(['sessions']);
     const card = document.querySelector(`#session-rail [data-action="select-session"][data-id="${cssq(sid)}"]`);
@@ -4380,6 +4490,12 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'select-session':
         window.selectSession(d.id);
+        break;
+      case 'session-list':
+        window.showSessionList();
+        break;
+      case 'session-latest':
+        window.jumpToLatestSession();
         break;
       case 'session-view':
         window.setSessionView(d.view);
@@ -4802,8 +4918,9 @@ document.addEventListener('DOMContentLoaded', () => {
           if (!isEventsFiltered()) telemetryData.eventsView = telemetryData.events;
           if (e.kind === 9) flashFirewallPanel(); // proxy-hit
           // Trace continues to follow event deltas while visible.
-          if (sessionView === 'trace' && selectedSessionId && e.session_id === selectedSessionId) {
-            loadSessionTimeline(selectedSessionId).then(() => markDirty('sessions'));
+          if (selectedSessionId && e.session_id === selectedSessionId) {
+            if (sessionView === 'trace') loadSessionTimeline(selectedSessionId).then(() => markDirty('sessions'));
+            else if (Date.now() - sessionMemoryAt >= 2000) loadSessionMemory(selectedSessionId);
           }
         } catch { sparkBump(1, 0); /* unparseable frame still counts */ }
         markDirty('events');

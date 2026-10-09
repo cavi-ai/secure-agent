@@ -1209,6 +1209,16 @@
         text: async () => JSON.stringify(body)
       };
     }
+    // Dense workbench pages exercise real scroll anchoring and focus continuity.
+    if (MODE.includes('sessionworkbench') && /^\/sessions\/[^/]+\/memory$/.test(p)) {
+      const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
+      const start = before ? -30 : 0;
+      const rows = Array.from({ length: before ? 30 : 90 }, (_, i) => ({ id: 'wb-row-' + (start + i),
+        at: new Date(now - (100 - start - i) * 60000).toISOString(), kind: 'activity',
+        title: 'Activity ' + (start + i), detail: 'Retained workbench activity with useful reading content.' }));
+      const body = { rows, has_earlier: !before, next_cursor: before ? '' : 'earlier' };
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+    }
     // Session memory: newest page first; the earlier cursor prepends one row.
     const memMatch = p.match(/^\/sessions\/([^/]+)\/memory$/);
     if (memMatch) {
@@ -1456,6 +1466,89 @@
   }
   if (location.search.includes('sessiondemo')) {
     setTimeout(() => window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77'), 4000);
+  }
+  if (MODE.includes('sessionworkbench')) {
+    for (let i = 0; i < 80; i++) data['/sessions'].push({ id: 'wb-session-' + i, harness: 'codex', repo: 'workbench-' + i,
+      workspace: '/Users/dev/workbench-' + i, branch: 'main', status: 'idle', started_at: iso(3600000), last_seen_at: iso(120000 + i * 1000) });
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(async () => {
+      const receipt = {};
+      const wait = () => new Promise(resolve => setTimeout(resolve, 120));
+      const rail = () => document.getElementById('session-rail');
+      const detail = () => document.getElementById('session-detail');
+      const body = () => detail().querySelector('.session-detail-body');
+      const panel = () => document.getElementById('session-board-panel');
+      const near = () => body().scrollHeight - body().clientHeight - body().scrollTop < 64;
+      try {
+        const first = window.SA.selectedSessionId;
+        receipt.initial = first === 'sess-codex-3' && detail().querySelectorAll('.sm-row').length === 90 && near();
+        await window.selectSession(first);
+        receipt.repeat = window.SA.selectedSessionId === first && detail().querySelectorAll('.sm-row').length === 90;
+        body().scrollTop = 440;
+        const metadata = detail().querySelector('details.session-metadata');
+        metadata.open = true;
+        metadata.querySelector('summary').focus({ preventScroll: true });
+        const top = body().scrollTop;
+        renderSessionBoard();
+        receipt.history = Math.abs(body().scrollTop - top) < 2;
+        receipt.details = detail().querySelector('details.session-metadata').open;
+        receipt.focus = document.activeElement === detail().querySelector('details.session-metadata summary');
+        window.SA.sessionMemoryPage.rows.push({ id: 'new-activity', at: new Date(now).toISOString(), kind: 'activity', title: 'New activity' });
+        renderSessionBoard();
+        receipt.updateHistory = Math.abs(body().scrollTop - top) < 2 && !detail().querySelector('[data-action="session-latest"]').hidden;
+        detail().querySelector('[data-action="session-latest"]').click();
+        receipt.latest = near();
+        body().scrollTop = 180;
+        const bounds = body().getBoundingClientRect();
+        const anchor = Array.from(body().querySelectorAll('[data-row-id]')).find(row => row.getBoundingClientRect().bottom > bounds.top);
+        const offset = anchor.getBoundingClientRect().top - bounds.top;
+        await window.loadEarlierSessionMemory();
+        const replacement = Array.from(body().querySelectorAll('[data-row-id]')).find(row => row.dataset.rowId === anchor.dataset.rowId);
+        receipt.earlier = detail().querySelectorAll('.sm-row').length === 121 && Math.abs(replacement.getBoundingClientRect().top - body().getBoundingClientRect().top - offset) < 2;
+        const group = rail().querySelector('[data-harness="codex"]');
+        group.open = false;
+        renderSessionBoard();
+        receipt.collapse = !rail().querySelector('[data-harness="codex"]').open;
+        await window.selectSession(first);
+        receipt.reveal = rail().querySelector('[data-harness="codex"]').open;
+        const order = Array.from(rail().querySelectorAll('[data-action="select-session"]'), row => row.dataset.id).join(',');
+        window.SA.t.sessions = window.SA.t.sessions.map(session => session.id === 'wb-session-79' ? { ...session, last_seen_at: new Date(now + 60000).toISOString() } : session);
+        renderSessionBoard();
+        receipt.order = Array.from(rail().querySelectorAll('[data-action="select-session"]'), row => row.dataset.id).join(',') === order;
+        detail().querySelector('[data-view="trace"]').focus({ preventScroll: true });
+        await window.setSessionView('trace');
+        receipt.modeFocus = document.activeElement === detail().querySelector('[data-view="trace"]');
+        receipt.trace = window.SA.sessionView === 'trace' && detail().querySelector('[data-view="trace"]').getAttribute('aria-pressed') === 'true';
+        await window.setSessionView('memory');
+        receipt.memory = detail().querySelectorAll('.sm-row').length === 121;
+        rail().scrollTop = 300;
+        body().scrollTop = 320;
+        const readingTop = body().scrollTop;
+        window.showSessionList();
+        const listTop = rail().scrollTop;
+        renderSessionBoard();
+        receipt.back = panel().dataset.pane === 'list' && rail().scrollTop === listTop && document.activeElement?.dataset.id === first;
+        await window.selectSession(first);
+        receipt.backReading = Math.abs(body().scrollTop - readingTop) < 2;
+        const input = document.getElementById('session-cwd-filter');
+        input.value = 'workbench-79'; input.dispatchEvent(new Event('input', { bubbles: true }));
+        await wait();
+        receipt.filterReplacement = window.SA.selectedSessionId === 'wb-session-79';
+        input.value = 'no-workbench-matches'; input.dispatchEvent(new Event('input', { bubbles: true }));
+        await wait();
+        receipt.filterEmpty = window.SA.selectedSessionId === '' && detail().textContent.includes('No sessions match') && !!detail().querySelector('[data-action="clear-harness-filter"]');
+        detail().querySelector('[data-action="clear-harness-filter"]').click();
+        await wait();
+        const selected = window.SA.selectedSessionId;
+        window.SA.t.sessions = window.SA.t.sessions.filter(session => session.id !== selected);
+        renderSessionBoard();
+        receipt.unavailable = window.SA.selectedSessionId === selected && detail().textContent.includes('Session unavailable');
+        await window.selectSession('sess-claude-1');
+        receipt.narrowFocus = !window.matchMedia('(max-width: 900px)').matches || document.activeElement === detail().querySelector('h3');
+        receipt.height = parseFloat(panel().style.getPropertyValue('--session-workbench-height')) > 0;
+      } catch (error) { receipt.error = String(error.stack || error); }
+      document.body.dataset.sessionWorkbench = JSON.stringify(receipt);
+    }, 4000);
   }
   // Auto-action: select a session in the session-first rail so the trace
   // waterfall renders. The Sessions tab is not the default, and the rail
@@ -2651,6 +2744,7 @@
       rail().querySelector('[data-action="toggle-ended-sessions"][data-harness="codex"]')?.click();
       setTimeout(() => fold('ended')?.click(), 200);
       setTimeout(() => {
+        window.showSessionList();
         const group = rail().querySelector('details.session-group[data-harness="codex"]');
         const btn = fold('live');
         if (group) group.dataset.probe = '1';

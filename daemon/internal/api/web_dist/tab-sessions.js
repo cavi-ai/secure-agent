@@ -21,12 +21,13 @@ function sessionRailCardHTML(s, trees, selectedId, nested, label) {
   const pulse = status === 'active' ? '<span class="sc-pulse active" aria-hidden="true"></span>' : '';
   const seen = s.last_seen_at ? fmtAge(s.last_seen_at, Date.now()) + ' ago' : '';
   const selected = s.id === selectedId;
-  const title = label || sessionTitle(s, tree && tree.root.cwd);
+  const identity = sessionTitle(s, tree && tree.root.cwd);
+  const title = label || identity;
   const kill = tree && status !== 'ended'
     ? `<button type="button" class="btn btn-danger btn-sm sc-kill" data-action="kill" data-pid="${escapeHTML(tree.root.pid)}" data-started="${escapeHTML(tree.root.started_at || '')}" data-family="${escapeHTML(s.harness || '')}" title="Terminate" aria-label="Terminate ${escapeHTML(title)}"><svg class="icon"><use href="#i-power"/></svg></button>`
     : '';
   return `<div class="session-card ${escapeHTML(status)}${selected ? ' selected' : ''}${nested ? ' nested' : ''}">
-    <button type="button" class="sc-main" data-action="select-session" data-id="${escapeHTML(s.id)}" aria-pressed="${selected}">
+    <button type="button" class="sc-main" data-action="select-session" data-id="${escapeHTML(s.id)}" aria-pressed="${selected}" title="${escapeHTML(identity)}" aria-label="${escapeHTML(label ? identity + ', ' + title : identity)}">
       <span class="sc-head">${pulse}<span class="sc-label">${escapeHTML(title)}</span></span>
       <span class="sc-meta"><span class="sc-state ${escapeHTML(status)}">${escapeHTML(status)}</span>${seen ? `<span>${escapeHTML(seen)}</span>` : ''}${rss ? `<span>${escapeHTML(rss)}</span>` : ''}</span>
     </button>${kill}
@@ -45,7 +46,7 @@ function sessionGroupHTML(g, open, endedOpen) {
       </div>`
     : '';
   return `<details class="session-group" data-harness="${escapeHTML(g.key)}"${open ? ' open' : ''}>
-    <summary class="session-group-head">${harnessChipHTML(g.key, { label: true })}<span class="session-group-counts">${escapeHTML(sessionGroupCounts(g))}</span></summary>
+    <summary class="session-group-head">${harnessChipHTML(g.key, { label: true })}<span class="session-group-counts">${escapeHTML(sessionGroupCounts(g))}</span><svg class="icon session-group-disclosure" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
     <div class="session-group-body"><div class="session-rows"></div>${ended}</div>
   </details>`;
 }
@@ -109,7 +110,7 @@ function sessionDupRowHTML(r, trees, selectedId, open, bucket) {
 function sessionInfraGroupHTML(g, open) {
   const rows = g.items.map(it => `<div class="infra-row">${harnessChipHTML(it.key, { label: true })}<span class="agent-meta-item">${escapeHTML(fmtRSS(it.rss) || '—')}</span></div>`).join('');
   return `<details class="session-group infra" data-harness="infra"${open ? ' open' : ''}>
-    <summary class="session-group-head"><span class="session-group-title">Infrastructure</span><span class="session-group-counts">${escapeHTML(fmtRSS(g.rss) || '—')}</span></summary>
+    <summary class="session-group-head"><span class="session-group-title">Infrastructure</span><span class="session-group-counts">${escapeHTML(fmtRSS(g.rss) || '—')}</span><svg class="icon session-group-disclosure" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
     <div class="session-group-body">${rows}</div>
   </details>`;
 }
@@ -121,23 +122,30 @@ function sessionMemoryHTML(page, state) {
   const sourceNames = { activity: 'Activity', 'guard-audit': 'Guard', flag: 'Flag', incident: 'Incident', guard: 'Guard', resource: 'Resource' };
   const loading = !!(state && state.loading);
   const error = !!(state && state.error);
+  let lastDay = null;
   const rowHTML = rows.map(row => {
     const source = Object.prototype.hasOwnProperty.call(sourceNames, row.kind) ? sourceNames[row.kind] : 'Activity';
     const date = new Date(row.at);
     const pad = n => String(n).padStart(2, '0');
-    const time = Number.isNaN(date.getTime()) ? 'Time unavailable'
-      : `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${fmtTime(date)}`;
+    const validTime = !Number.isNaN(date.getTime());
+    const day = validTime ? `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` : 'Date unavailable';
+    const time = validTime ? fmtTime(date) : 'Time unavailable';
+    const fullTime = validTime ? `${day} ${time}` : time;
+    const dayHTML = day !== lastDay ? `<div class="sm-day">${escapeHTML(day)}</div>` : '';
+    lastDay = day;
     const severity = row.severity ? `<span class="sm-chip">${escapeHTML(row.severity)}</span>` : '';
     const status = row.status ? `<span class="sm-chip">${escapeHTML(row.status)}</span>` : '';
-    return `<article class="sm-row">
-      <div class="sm-marker"><span class="sm-source">${source}</span><time datetime="${escapeHTML(row.at)}">${escapeHTML(time)}</time></div>
+    return `${dayHTML}<article class="sm-row" data-row-id="${escapeHTML(row.id || '')}">
+      <div class="sm-marker"><time datetime="${escapeHTML(row.at)}" title="${escapeHTML(fullTime)}" aria-label="${escapeHTML(fullTime)}">${escapeHTML(time)}</time><span class="sm-source">${source}</span></div>
       <div class="sm-content"><strong>${escapeHTML(row.title)}</strong>${row.detail ? `<p>${escapeHTML(row.detail)}</p>` : ''}<div class="sm-chips">${severity}${status}</div></div>
     </article>`;
   }).join('');
   const earlier = page && page.has_earlier && page.next_cursor
     ? `<button type="button" class="btn btn-sm btn-ghost sm-earlier" data-action="memory-earlier"${state && state.loadingEarlier ? ' disabled' : ''}>${state && state.loadingEarlier ? 'Loading earlier…' : 'Load earlier'}</button>` : '';
   const message = error && !rows.length ? '<div class="sm-state" role="alert">Memory unavailable. <button type="button" class="link-btn" data-action="memory-retry">Retry</button></div>'
-    : error ? '<div class="sm-state" role="alert">Could not load earlier. Use Load earlier to retry.</div>'
+    : error && state.error === 'earlier' && page && page.has_earlier && page.next_cursor
+      ? '<div class="sm-state" role="alert">Could not load earlier. Use Load earlier to retry.</div>'
+    : error ? `<div class="sm-state" role="alert">${state.error === 'earlier' ? 'Could not load earlier.' : 'Could not refresh memory.'} <button type="button" class="link-btn" data-action="memory-retry">Retry</button></div>`
     : loading && !rows.length ? '<div class="sm-state" role="status">Loading memory…</div>'
     : !rows.length ? '<div class="sm-state">No retained memory for this session. Older activity may have expired.</div>' : '';
   return `<div class="session-memory">${earlier}${message}<div class="sm-list">${rowHTML}</div></div>`;
@@ -158,18 +166,29 @@ function sessionDetailHTML(sess, events, trees) {
     sess.started_at ? 'started ' + fmtAge(sess.started_at, Date.now()) + ' ago' : '',
     sess.ended_at ? 'ended ' + fmtAge(sess.ended_at, Date.now()) + ' ago' : '',
   ].filter(Boolean).map(escapeHTML).join(' · ');
-  return `<div class="session-detail-head">
+  return `<div class="session-detail-chrome">
+    <div class="session-detail-head">
+      <button type="button" class="btn btn-sm btn-ghost sd-back" data-action="session-list">Back to sessions</button>
       ${harnessChipHTML(sess.harness)}
-      <h3>${escapeHTML(title)}</h3>
-      <span class="sd-harness">${escapeHTML(harnessMeta(sess.harness).label)}</span>
-      ${sess.confidence ? `<span class="ss-chip sd-conf" title="How this session was identified">${escapeHTML(sess.confidence)}</span>` : ''}
-      ${path ? `<button type="button" class="sd-path" data-action="copy-path" data-path="${escapeHTML(path)}" title="${escapeHTML(path)} — click to copy">${escapeHTML(middleTruncate(path, 48))}</button>` : ''}
-      <button type="button" class="btn btn-sm btn-ghost sd-export" data-action="copy-report" data-id="${escapeHTML(sess.id)}" title="Copy this session's report as markdown"><svg class="icon"><use href="#i-copy"/></svg>Export</button>
-      ${meta ? `<span class="sd-meta">${meta}</span>` : ''}
+      <h3 tabindex="-1">${escapeHTML(title)}</h3>
+      <button type="button" class="btn btn-sm btn-ghost sd-export" data-action="copy-report" data-id="${escapeHTML(sess.id)}" title="Copy this session's report as markdown"><svg class="icon"><use href="#i-copy"/></svg>Copy report</button>
     </div>
-    <div class="sd-view-switch" role="group" aria-label="Session detail view">
-      <button type="button" class="sd-view${window.SA.sessionView === 'memory' ? ' active' : ''}" data-action="session-view" data-view="memory" aria-pressed="${window.SA.sessionView === 'memory'}">Memory</button>
-      <button type="button" class="sd-view${window.SA.sessionView === 'trace' ? ' active' : ''}" data-action="session-view" data-view="trace" aria-pressed="${window.SA.sessionView === 'trace'}">Trace</button>
+    <div class="sd-detail-controls">
+      <div class="sd-view-switch" role="group" aria-label="Session detail view">
+        <button type="button" class="sd-view${window.SA.sessionView === 'memory' ? ' active' : ''}" data-action="session-view" data-view="memory" aria-pressed="${window.SA.sessionView === 'memory'}">Memory</button>
+        <button type="button" class="sd-view${window.SA.sessionView === 'trace' ? ' active' : ''}" data-action="session-view" data-view="trace" aria-pressed="${window.SA.sessionView === 'trace'}">Trace</button>
+      </div>
+      <button type="button" class="btn btn-sm btn-ghost sd-latest" data-action="session-latest" hidden>Jump to latest</button>
+      <details class="session-metadata" data-session-details>
+        <summary>Details</summary>
+        <div class="sd-metadata-body">
+          <span class="sd-harness">${escapeHTML(harnessMeta(sess.harness).label)}</span>
+          ${sess.confidence ? `<span class="ss-chip sd-conf" title="How this session was identified">${escapeHTML(sess.confidence)}</span>` : ''}
+          ${path ? `<button type="button" class="sd-path" data-action="copy-path" data-path="${escapeHTML(path)}" title="${escapeHTML(path)} — click to copy">${escapeHTML(path)}</button>` : ''}
+          ${meta ? `<span class="sd-meta">${meta}</span>` : ''}
+        </div>
+      </details>
     </div>
-    ${window.SA.sessionView === 'trace' ? sessionWaterfallHTML(events) : sessionMemoryHTML(window.SA.sessionMemoryPage, window.SA.sessionMemoryState)}`;
+    </div>
+    <div class="session-detail-body">${window.SA.sessionView === 'trace' ? sessionWaterfallHTML(events) : sessionMemoryHTML(window.SA.sessionMemoryPage, window.SA.sessionMemoryState)}</div>`;
 }

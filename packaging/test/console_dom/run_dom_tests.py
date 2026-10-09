@@ -158,6 +158,7 @@ def main():
     ap = argparse.ArgumentParser(description="DOM-level console tests")
     ap.add_argument("--screenshot", metavar="DIR",
                     help="also write {sessions,agents,agent}-{dark,light}.png and overview-dark.png of the mock-rendered tabs to DIR")
+    ap.add_argument('--session-workbench-only', action='store_true', help='run bounded Sessions workbench interaction probes only')
     args = ap.parse_args()
     chrome = find_chrome()
     if not chrome:
@@ -169,6 +170,18 @@ def main():
     try:
         build_harness(tmp)
         srv, origin = serve_with_csp(tmp)
+        for label, size in [('desktop', (1280, 800)), ('narrow', (900, 768))]:
+            workbench_dom = dump_dom(chrome, tmp, '?sessionworkbench', origin, window_size=size)
+            receipt = re.search(r'data-session-workbench="([^"]+)"', workbench_dom)
+            state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+            check(f'sessions workbench ({label}): interaction receipt produced', bool(state), str(state))
+            for name, result in state.items():
+                check(f'sessions workbench ({label}): {name}', result is True, str(result))
+        if args.session_workbench_only:
+            print(f"\n{len(passed)} passed, {len(failed)} failed")
+            if failed:
+                raise SystemExit(1)
+            return
         dom_csp = dump_dom(chrome, tmp, "?cspdemo&raildemo", origin)
         dom_themefirst = dump_dom(chrome, tmp, "?themefirst", origin)
         dom = dump_dom(chrome, tmp)
@@ -343,9 +356,10 @@ def main():
         check("sessions rail renders one group per live harness, newest first, infra last",
               rail_groups == ["codex", "claude", "infra"], f"groups={rail_groups}")
         check("group head carries mark, display name and counts",
-              'data-harness="claude" open=""' in rail
-              and '<span class="harness-label">Claude Code</span>' in rail
-              and '1 active · 1 idle · 1 ended' in rail)
+              '<span class="harness-label">Claude Code</span>' in rail
+              and '1 active · 1 idle · 1 ended' in rail
+              and 'data-harness="codex" open=""' in rail
+              and 'class="session-card active selected"' in rail)
         logo_refs = set(re.findall(r'<use href="#(logo-[a-z-]+)"', rail))
         check("harness marks resolve to sprite symbols",
               logo_refs >= {"logo-claude", "logo-codex", "logo-ollama"}
@@ -367,7 +381,7 @@ def main():
               'data-action="kill" data-pid="5821"' in rail
               and 'data-action="kill"' not in rail.split('class="session-ended-body"', 1)[1].split('</details>', 1)[0])
         check("count strip shows sessions, harnesses and coverage",
-              'id="session-count-strip">Sessions 3 · Harnesses 2 · seeing 2/3<' in dom)
+              re.search(r'id="session-count-strip"[^>]*>Sessions 3 · Harnesses 2 · seeing 2/3<', dom) is not None)
         check("one filter pill per live harness",
               re.findall(r'data-action="toggle-harness" data-harness="([^"]+)" aria-pressed="true"',
                          dom.split('id="session-harness-pills"', 1)[1].split('</div>', 1)[0]) == ["codex", "claude"])
@@ -386,15 +400,17 @@ def main():
               (re.search(r'data-hscroll="[^"]*"', dom_memory_phone) or [None])[0])
         detail_head = dom_rail.split('class="session-detail-head"', 1)[1].split('class="wf', 1)[0]
         check("detail head: mark, repo@branch, harness, confidence, copyable path",
-              '<h3>api-service@main</h3>' in detail_head and '#logo-claude' in detail_head
+              re.search(r'<h3[^>]*>api-service@main</h3>', detail_head) is not None and '#logo-claude' in detail_head
               and '<span class="sd-harness">Claude Code</span>' in detail_head
               and '>hook</span>' in detail_head
               and 'data-action="copy-path" data-path="/Users/dev/workspace/api-service"' in detail_head)
-        check("detail head carries the Export button next to the path",
-              'data-action="copy-path"' in detail_head
-              and detail_head.index('data-action="copy-path"')
-              < detail_head.index('data-action="copy-report" data-id="sess-claude-1"')
-              and '>Export</button>' in detail_head)
+        detail_chrome = dom_rail.split('class="session-detail-chrome"', 1)[1].split('class="session-detail-body"', 1)[0]
+        metadata = detail_chrome.split('class="session-metadata"', 1)[1].split('</details>', 1)[0]
+        check("detail chrome keeps Copy report reachable and the copyable path in expandable Details",
+              'data-action="copy-report" data-id="sess-claude-1"' in detail_chrome.split('class="sd-detail-controls"', 1)[0]
+              and '>Copy report</button>' in detail_chrome
+              and '<summary>Details</summary>' in metadata
+              and 'data-action="copy-path" data-path="/Users/dev/workspace/api-service"' in metadata)
         clip = (re.search(r'data-clipboard="([^"]*)"', dom_export) or [None, ""])[1]
         check("Export copies the markdown session report and toasts",
               clip.startswith("# claude · api-service@main") and "## Summary" in clip
@@ -413,7 +429,7 @@ def main():
               memory_detail[:700])
         check("late response from previous selection cannot replace Memory",
               'data-memory-race="B"' in dom_memory_race
-              and '<h3>data-pipeline@feat/etl</h3>' in dom_memory_race.split('id="session-detail"', 1)[1]
+              and re.search(r'<h3[^>]*>data-pipeline@feat/etl</h3>', dom_memory_race.split('id="session-detail"', 1)[1]) is not None
               and 'A-only memory' not in dom_memory_race.split('id="session-detail"', 1)[1],
               dom_memory_race.split('id="session-detail"', 1)[1][:700])
         check("Trace refetches after an event arrives while Memory is active",
@@ -1365,7 +1381,7 @@ def main():
               'class="tab-btn active" data-tab="sessions"' in dom_sesslink
               and re.search(r'<div class="session-card active selected">\s*<button type="button" class="sc-main" '
                             r'data-action="select-session" data-id="sess-claude-1" aria-pressed="true"', link_rail) is not None
-              and '<h3>api-service@main</h3>' in dom_sesslink.split('id="session-detail"', 1)[1]
+              and re.search(r'<h3[^>]*>api-service@main</h3>', dom_sesslink.split('id="session-detail"', 1)[1]) is not None
               and 'class="wf-bar' in dom_sesslink)
         check("session chip appears", 'id="session-filter" class="session-filter"' in dom_session
               or ('id="session-filter"' in dom_session and "hidden" not in

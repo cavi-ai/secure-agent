@@ -365,19 +365,16 @@
           <button type="button" class="subtab-btn" data-subtab="events" role="tab" aria-selected="false" aria-controls="sub-events">Events</button>
         </div>
         <div class="subview" id="sub-board" role="tabpanel">
-        <section class="panel" id="session-board-panel">
-          <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-agent"/></svg>Sessions</h2>
-            <span class="badge" id="badge-session-count">0</span>
-          </div>
-          <div class="harness-filter" role="group" aria-label="Filter sessions">
+        <section class="panel" id="session-board-panel" data-pane="detail">
+          <div class="harness-filter session-toolbar" role="group" aria-label="Filter sessions">
+            <span class="badge" id="badge-session-count" aria-label="Session count">0</span>
+            <div class="session-count-strip" id="session-count-strip" role="status"></div>
             <div class="harness-pills" id="session-harness-pills"></div>
             <input type="search" id="session-cwd-filter" class="input harness-filter-text" placeholder="Filter by repo, branch, or folder…" aria-label="Filter sessions by repo, branch, or folder" autocomplete="off" spellcheck="false">
             <label class="switch"><input type="checkbox" id="session-live-only" checked><span>Live only</span></label>
           </div>
-          <div class="session-count-strip" id="session-count-strip"></div>
           <div class="session-split">
-            <div class="session-rail" id="session-rail" role="listbox" aria-label="Sessions"></div>
+            <div class="session-rail" id="session-rail" role="region" aria-label="Sessions" tabindex="-1"></div>
             <div class="session-detail" id="session-detail">
               <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>
             </div>
