@@ -242,7 +242,12 @@ func (a *API) servePlan(w http.ResponseWriter, subject string) {
 	}
 	resp.Labels = labels
 	resp.AdvisorReady, resp.Reason = a.planReady()
-	if p, ok := a.store.AdvisorPlanFor(subject); ok {
+	p, found, err := a.store.AdvisorPlanResultFor(subject)
+	if err != nil {
+		http.Error(w, "Advisor plan unavailable; retry", http.StatusServiceUnavailable)
+		return
+	}
+	if found {
 		resp.Plan = &p
 		resp.Status = "ready"
 		if p.EvidenceKey != planEvidenceKey(t) {

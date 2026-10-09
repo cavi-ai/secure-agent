@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -39,18 +41,44 @@ func (s *Store) PutAdvisorPlan(subject string, p model.AdvisorPlan) (writeErr er
 
 // AdvisorPlanFor returns the stored plan for subject.
 func (s *Store) AdvisorPlanFor(subject string) (model.AdvisorPlan, bool) {
+	p, found, _ := s.AdvisorPlanResultFor(subject)
+	return p, found
+}
+
+// AdvisorPlanResultFor distinguishes healthy absence from an unavailable or
+// malformed stored plan. Failed reads never return partial plan content.
+func (s *Store) AdvisorPlanResultFor(subject string) (plan model.AdvisorPlan, found bool, readErr error) {
+	defer func() { s.noteRead("advisor plans", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var data string
-	if err := s.db.QueryRow(`SELECT plan_json FROM advisor_plans WHERE subject_id = ?`, subject).Scan(&data); err != nil {
-		return model.AdvisorPlan{}, false
+	var created sql.NullString
+	err := s.db.QueryRow(`SELECT plan_json, created_at FROM advisor_plans WHERE subject_id = ?`, subject).Scan(&data, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.AdvisorPlan{}, false, nil
 	}
-	var p model.AdvisorPlan
+	if err != nil {
+		return model.AdvisorPlan{}, false, err
+	}
+	var p *model.AdvisorPlan
 	if err := json.Unmarshal([]byte(data), &p); err != nil {
-		log.Printf("store: advisor plan %s: %v", subject, err)
-		return model.AdvisorPlan{}, false
+		return model.AdvisorPlan{}, false, err
 	}
-	return p, true
+	if p == nil {
+		return model.AdvisorPlan{}, false, fmt.Errorf("null advisor plan")
+	}
+	// Older optional index timestamps may be absent. When present, they must
+	// agree with the JSON timestamp used to serve this plan.
+	if created.String != "" {
+		at, err := time.Parse(time.RFC3339Nano, created.String)
+		if err != nil {
+			return model.AdvisorPlan{}, false, fmt.Errorf("invalid advisor plan timestamp: %w", err)
+		}
+		if !at.Equal(p.CreatedAt) {
+			return model.AdvisorPlan{}, false, fmt.Errorf("advisor plan timestamp mismatch")
+		}
+	}
+	return *p, true, nil
 }
 
 // RuleCounts counts flags of rule raised for agent in the 7 and 30 days
