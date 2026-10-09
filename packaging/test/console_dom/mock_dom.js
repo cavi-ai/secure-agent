@@ -486,6 +486,18 @@
       summary: 'No decisions pending. Monitoring coverage needs attention.'
     });
   }
+  if (MODE.includes('sessionvisibility')) {
+    Object.assign(data['/posture'], {state: 'all-clear', needs_you: 0, items: [], groups: [], coverage_count: 0, coverage_items: []});
+    const path = state => ({supported: true, state, detail: 'This session only; other requests may be unobserved.'});
+    data['/status'].coverage = {
+      harnesses_active: 1, harnesses_seen: 1,
+      sessions: [
+        {session_id: 'session-observed', harness: 'claude', workspace: '/work/observed', root_pid: 101, identity_basis: 'hook', guard: path('observed'), trace: path('observed'), payload: path('unattributed')},
+        {session_id: 'session-silent', harness: 'claude', workspace: '/work/<silent>', root_pid: 102, identity_basis: 'hook', guard: path('not-observed'), trace: path('not-observed'), payload: path('off')},
+      ],
+      probes: [{harness: 'claude', hook_path: '/Users/dev/.claude/hooks/secret_guard.py', checked_at: iso(60000), state: 'changed', detail: 'Configuration changed. Run the check again.'}],
+    };
+  }
   const REQUIRE_TOKEN = MODE.includes('requiretoken');
   // expectdemo: Egress → Expect this destination retires the episode's
   // choices before POST /expected-egress answers; the posture queue is not

@@ -2,6 +2,10 @@
 // lists render one row per thing from a view; a row's detail body renders
 // only while the row is open.
 
+function coveragePathLabel(p) {
+  return ({observed: 'activity observed', 'not-observed': 'not observed', unsupported: 'not supported', unattributed: 'session identity unresolved', stale: 'last-known data; refresh failed', off: 'proxy off'})[(p || {}).state] || 'unknown';
+}
+
 function renderCoverage() {
   const status = window.SA.t.status || {};
   const p = window.SA.t.posture || {};
@@ -11,8 +15,10 @@ function renderCoverage() {
   if (!panel || !list) return;
   const items = p.coverage_items || [];
   const harnesses = (status.coverage && status.coverage.harnesses) || [];
-  panel.hidden = items.length === 0;
-  if (badge) badge.textContent = Number(p.coverage_count) || items.length;
+  const sessions = (status.coverage && status.coverage.sessions) || [];
+  const probes = (status.coverage && status.coverage.probes) || [];
+  panel.hidden = items.length === 0 && sessions.length === 0 && probes.length === 0;
+  if (badge) badge.textContent = items.length ? Number(p.coverage_count) || items.length : `${sessions.length} sessions`;
   if (panel.hidden) return;
   list.innerHTML = items.map(it => {
     const action = it.kind === 'uninspected_egress'
@@ -25,7 +31,15 @@ function renderCoverage() {
             ? '<span class="coverage-guidance">Run Doctor to review lost telemetry. Restarting cannot restore missing evidence.</span>'
         : '<span class="coverage-guidance">Check Setup &amp; Permissions in the menu bar</span>';
     return `<div class="coverage-row"><span><strong>${escapeHTML(it.title)}</strong><span>${escapeHTML(it.detail || '')}</span></span>${action}</div>`;
-  }).join('') + (harnesses.length ? `<details class="coverage-harness"><summary>Per-agent coverage</summary>${harnesses.map(h => {
+  }).join('') + (sessions.length ? `<details class="coverage-harness"><summary>Per-session coverage · ${sessions.length}</summary>${sessions.map(s => {
+    const path = (name, p = {}) => {
+      p = p || {};
+      return `<span>${name}: ${escapeHTML(coveragePathLabel(p))}${p.last_seen ? ` · ${escapeHTML(p.last_seen)}` : ''}</span><span class="coverage-guidance">${escapeHTML(p.detail || '')}</span>`;
+    };
+    return `<details class="coverage-session" data-session-id="${escapeHTML(s.session_id || '')}"><summary>${escapeHTML(s.workspace || s.harness || 'Unresolved session')} · Guard: ${escapeHTML(coveragePathLabel(s.guard))}</summary><div class="coverage-row"><span><strong>${escapeHTML(s.harness || '')}${s.session_id ? '' : ' · session identity unresolved'}</strong>${path('Trace', s.trace)}${path('Guard', s.guard)}${path('Payload inspection', s.payload)}</span></div></details>`;
+  }).join('')}<p class="coverage-guidance">Observations belong to each session. An installed-hook check and activity in another session do not prove this session is protected.</p>${status.coverage.sessions_truncated ? '<p class="coverage-guidance">More sessions are running than this list can show. Coverage for the remaining sessions is not shown.</p>' : ''}</details>` : '')
+  + (probes.length ? `<details class="coverage-harness"><summary>Installed hook checks</summary>${probes.map(p => `<div class="coverage-row"><span><strong>${escapeHTML(p.harness)} · ${escapeHTML(p.state)}</strong><span>${escapeHTML(p.hook_path)}</span><span>Checked ${escapeHTML(p.checked_at)}</span><span>${escapeHTML(p.detail)}</span></span></div>`).join('')}</details>` : '')
+  + (harnesses.length ? `<details class="coverage-harness"><summary>Per-agent coverage</summary>${harnesses.map(h => {
     const trace = !h.trace_supported ? 'not supported' : h.trace_last_seen ? 'activity observed in 24h' : 'supported; no activity observed in 24h';
     const guard = !h.guard_supported ? 'not supported' : h.hook_last_seen ? 'hook activity observed in 24h' : 'supported; no hook activity observed in 24h';
     return `<div class="coverage-row"><span><strong>${escapeHTML(h.name)}</strong><span>Trace: ${escapeHTML(trace)} · Guard: ${escapeHTML(guard)}</span></span></div>`;

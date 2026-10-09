@@ -515,10 +515,40 @@ export interface HarnessCoverage {
   trace_last_seen?: string;
 }
 
+export interface CoveragePath {
+  supported: boolean;
+  state: string;
+  last_seen?: string;
+  detail: string;
+}
+
+export interface SessionCoverage {
+  session_id?: string;
+  harness: string;
+  workspace?: string;
+  root_pid: number;
+  identity_basis: string;
+  guard: CoveragePath;
+  trace: CoveragePath;
+  payload: CoveragePath;
+}
+
+export interface CoverageProbeReceipt {
+  harness: string;
+  hook_path: string;
+  checked_at: string;
+  state: string;
+  detail: string;
+}
+
 export interface CoverageStatus {
   harnesses_active: number;
   harnesses_seen: number;
   harnesses?: HarnessCoverage[];
+  sessions?: SessionCoverage[];
+  sessions_stale?: boolean;
+  sessions_truncated?: boolean;
+  probes?: CoverageProbeReceipt[];
 }
 
 export interface Health {

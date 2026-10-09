@@ -374,11 +374,59 @@ public struct HealthModel: Codable, Identifiable, Sendable {
 public struct CoverageModel: Codable, Sendable {
     public let harnessesActive: Int
     public let harnessesSeen: Int
+	public let sessions: [SessionCoverageModel]?
+	public let sessionsStale: Bool?
+	public let sessionsTruncated: Bool?
+	public let probes: [CoverageProbeReceiptModel]?
 
     enum CodingKeys: String, CodingKey {
         case harnessesActive = "harnesses_active"
         case harnessesSeen = "harnesses_seen"
+		case sessions, probes
+		case sessionsStale = "sessions_stale"
+		case sessionsTruncated = "sessions_truncated"
     }
+}
+
+public struct CoveragePathModel: Codable, Sendable {
+    public let supported: Bool
+    public let state: String
+    public let lastSeen: String?
+    public let detail: String
+    enum CodingKeys: String, CodingKey { case supported, state, detail; case lastSeen = "last_seen" }
+}
+
+public struct SessionCoverageModel: Codable, Sendable {
+    public let sessionID: String?
+    public let harness: String
+    public let workspace: String?
+    public let rootPID: Int32
+    public let identityBasis: String
+    public let guardPath: CoveragePathModel
+    public let trace: CoveragePathModel
+    public let payload: CoveragePathModel
+    enum CodingKeys: String, CodingKey {
+        case harness, workspace, trace, payload
+        case sessionID = "session_id", rootPID = "root_pid", identityBasis = "identity_basis", guardPath = "guard"
+    }
+}
+
+public struct CoverageProbeChallengeModel: Codable, Sendable {
+    public let id: String
+    public let harness: String
+    public let hookPath: String
+    public let path: String
+    public let expiresAt: String
+    enum CodingKeys: String, CodingKey { case id, harness, path; case hookPath = "hook_path", expiresAt = "expires_at" }
+}
+
+public struct CoverageProbeReceiptModel: Codable, Sendable {
+    public let harness: String
+    public let hookPath: String
+    public let checkedAt: String
+    public let state: String
+    public let detail: String
+    enum CodingKeys: String, CodingKey { case harness, state, detail; case hookPath = "hook_path", checkedAt = "checked_at" }
 }
 
 public struct StatusResponse: Codable, Sendable {

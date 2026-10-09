@@ -51,6 +51,41 @@ Each `trees[].root` whose pid roots a recorded session carries that session's
 `session_id`, `workspace`, `repo`, `branch` and `origin` (the spawning agent,
 as on `/sessions`); each is omitted when empty.
 
+`coverage.sessions` separates observations for each live root. It includes
+`session_id` only when harness, root PID and process start time match one
+live durable session. `guard`, `trace` and `payload` each expose `supported`,
+`state`, optional `last_seen`, and `detail`. States are `observed`,
+`not-observed`, `unsupported`, `unattributed`, `off` and `stale`. An
+observation is not a claim that the entire session is protected. The current
+proxy hit stream normally lacks session identity, so machine-level inspection
+matches cannot establish session inspection. `sessions_stale` marks a failed
+refresh; `sessions_truncated` reports that more than 128 live roots exist.
+Older daemons omit these additive fields.
+
+### Installed-hook check: `POST /coverage/probe`
+
+Pinned UI/console mutation, unavailable to agent peers. Start with
+`{"harness":"claude"}` or `{"harness":"cursor"}`. The reply includes an
+ephemeral `id`, canonical installed `hook_path`, inert `path`, and
+`expires_at`. The UI invokes that hook with a `PreToolUse` Read payload for
+the supplied path and `secure_agent_probe` set to the ID. The hook uses
+`POST /guard/decision` with `probe_id` to obtain an inert deny receipt. A
+probe can never authorize a real path or create session evidence.
+
+Complete with `{"id":"<challenge-id>","passed":true}` only after verifying
+the hook exited successfully and returned the matching deny receipt. Use
+`passed:false` for a failed hook invocation. A claimed pass without a daemon
+receipt, expired challenge or wrong fixture returns 409; replay after
+completion returns 404. Missing installed dependencies return 503. Only
+Claude and Cursor are supported; other harnesses return 400.
+
+The receipt contains `harness`, `hook_path`, `checked_at`, `state` and
+`detail`. `/status.coverage.probes` exposes these manual results separately
+from session activity. A passed receipt becomes `changed` when checked files
+change or become unreadable, and `expired` after 24 hours. Restart clears
+receipts. The check does not exercise resource policy or prove the harness's
+hook registration executes automatically.
+
 ### Resource telemetry: `GET /resources`
 
 Returns a point-in-time rollup of resources attributed to tagged agent process

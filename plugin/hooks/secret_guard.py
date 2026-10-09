@@ -538,13 +538,18 @@ except ValueError:
     PROMPT_DEADLINE_S = 45.0
 
 
-def _guard_query(agent, tool, path, rule_id, deadline_s, workspace=""):
+def _guard_query(agent, tool, path, rule_id, deadline_s, workspace="", probe_id=""):
     """POST /guard/decision over the unix socket; return the decision dict or
     None if the daemon is unreachable. Own deadline < harness timeout. The
     workspace rides along so the advisor can judge whether the access is
     routine for this project rather than in the abstract."""
-    body = json.dumps({"agent": agent, "tool": tool, "path": path, "rule_id": rule_id,
-                       "workspace": workspace, "session_id": session_id()})
+    payload = {"agent": agent, "tool": tool, "path": path, "rule_id": rule_id,
+               "workspace": workspace}
+    if probe_id:
+        payload["probe_id"] = probe_id
+    else:
+        payload["session_id"] = session_id()
+    body = json.dumps(payload)
     req = ("POST /guard/decision HTTP/1.1\r\nHost: localhost\r\n"
            "Content-Type: application/json\r\nConnection: close\r\n"
            f"Content-Length: {len(body)}\r\n\r\n{body}")
@@ -1027,6 +1032,28 @@ def main() -> int:
         return 0
 
     _PAYLOAD = data if isinstance(data, dict) else {}
+
+    if "secure_agent_probe" in _PAYLOAD:
+        # A UI-armed, inert communication check. It can only deny, never
+        # authorize a real operation. It emits no audit/activity/session rows
+        # and does not override or exercise the operator's resource policy.
+        probe_id = str(_PAYLOAD.get("secure_agent_probe") or "")
+        path = str((_PAYLOAD.get("tool_input") or {}).get("file_path") or "")
+        valid = (re.fullmatch(r"[0-9a-f]{64}", probe_id) is not None
+                 and _PAYLOAD.get("hook_event_name") == "PreToolUse"
+                 and _PAYLOAD.get("tool_name") == "Read"
+                 and path == f"/secure-agent-probe/{probe_id}/inert.txt")
+        answer = _guard_query(runtime(), "Read", path, "coverage-probe", 3,
+                              probe_id=probe_id) if valid else None
+        response = {"permission": "deny", "hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "permissionDecision": "deny",
+            "permissionDecisionReason": "Inert Secure Agent setup check; no file is read."}}
+        if (isinstance(answer, dict) and answer.get("verdict") == "deny"
+                and answer.get("reason") == "coverage-probe"
+                and answer.get("probe_id") == probe_id):
+            response["secure_agent_probe"] = probe_id
+        emit(response)
+        return 0
 
     event = str(data.get("hook_event_name") or data.get("event") or "")
     if event in {"PostToolUse", "postToolUse"}:

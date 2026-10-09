@@ -112,6 +112,16 @@ public final class DaemonClient: Sendable {
         try await getDecodable("/doctor")
     }
 
+    public func startCoverageProbe(harness: String) async throws -> CoverageProbeChallengeModel {
+        let body = try JSONSerialization.data(withJSONObject: ["harness": harness])
+        return try JSONDecoder().decode(CoverageProbeChallengeModel.self, from: await request(method: "POST", path: "/coverage/probe", body: body))
+    }
+
+    public func finishCoverageProbe(id: String, passed: Bool) async throws -> CoverageProbeReceiptModel {
+        let body = try JSONSerialization.data(withJSONObject: ["id": id, "passed": passed])
+        return try JSONDecoder().decode(CoverageProbeReceiptModel.self, from: await request(method: "POST", path: "/coverage/probe", body: body))
+    }
+
     /// GET /routing/claude — the environment that routes Claude Code through
     /// the proxy (carries the proxy token; NoAgent).
     public func fetchRouting() async throws -> RoutingInfo {

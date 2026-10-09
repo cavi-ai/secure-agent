@@ -27,10 +27,10 @@ public final class SetupManager: ObservableObject {
 
     @Published public private(set) var isDaemonRunning = false
     @Published public private(set) var areHooksInstalled = false
-    /// Result of the onboarding hook self-test: nil = passed, string = the
-    /// human-readable failure. Not part of needsSetup — it is a diagnostic.
+    /// Nil failure alone is not a pass: no check has run until results exist.
     @Published public private(set) var hookSelfTestFailure: String?
     @Published public private(set) var hookSelfTestRunning = false
+    @Published public private(set) var hookProbeResults: [CoverageProbeReceiptModel] = []
     @Published public private(set) var lastError: String?
     /// Local advisor: whether a model server answers on the loopback endpoint
     /// and whether the daemon config has the advisor enabled.
@@ -193,6 +193,9 @@ public final class SetupManager: ObservableObject {
 
     public func refreshState() async {
         let status = try? await DaemonClient().fetchStatus()
+        if let status, !hookSelfTestRunning {
+            hookProbeResults = status.coverage?.probes ?? []
+        }
         isDaemonRunning = DaemonSupervisor.shared.isRunning || (status?.running ?? false)
         refreshESState()
         claudeRoutingApplied = ClaudeRouting.isApplied(at: Self.claudeSettingsPath)
@@ -863,7 +866,9 @@ public final class SetupManager: ObservableObject {
 
     /// Run the self-test and publish the outcome to the wizard UI.
     public func runHookSelfTest() async {
+        guard !hookSelfTestRunning else { return }
         hookSelfTestRunning = true
+        hookProbeResults = []
         defer { hookSelfTestRunning = false }
         hookSelfTestFailure = await selfTestHooks()
     }
@@ -873,22 +878,39 @@ public final class SetupManager: ObservableObject {
     /// protocol intact — the whole chain a silent failure would otherwise hide.
     /// Returns nil on success, or a human-readable reason on failure.
     public func selfTestHooks() async -> String? {
-        // Prefer the Claude install; any target with the hook works.
-        let hookPath = Self.hookTargets
-            .map { "\($0)/secret_guard.py" }
-            .first { fm.fileExists(atPath: $0) }
-        guard let hook = hookPath else {
-            return "secret_guard.py is not installed"
+        let client = DaemonClient()
+        let home = fm.homeDirectoryForCurrentUser.path
+        let harnesses = ["claude", "cursor"].filter { fm.fileExists(atPath: "\(home)/.\($0)/hooks/secret_guard.py") }
+        guard !harnesses.isEmpty else { return "Install Claude or Cursor hooks to check the guard path. Other agents retain their supported observational coverage." }
+        var failures: [String] = []
+        for harness in harnesses {
+            do {
+                let challenge = try await client.startCoverageProbe(harness: harness)
+                var env = ProcessInfo.processInfo.environment
+                env["SECURE_AGENT_PROBE_ID"] = challenge.id
+                env["SECURE_AGENT_HARNESS"] = harness
+                env["SECURE_AGENT_SOCK"] = client.socketPath
+                let failure = await Self.selfTestHook(at: challenge.hookPath, environment: env)
+                let receipt = try await client.finishCoverageProbe(id: challenge.id, passed: failure == nil)
+                hookProbeResults.append(receipt)
+                if let failure { failures.append("\(harness): \(failure)") }
+                else if receipt.state != "passed" { failures.append("\(harness): \(receipt.detail)") }
+            } catch {
+                failures.append("\(harness): the daemon check could not complete. Restart Secure Agent and recheck installed hooks.")
+            }
         }
-        return await Self.selfTestHook(at: hook)
+        return failures.isEmpty ? nil : failures.joined(separator: "\n")
     }
 
     /// Runs the guard at hook with a harmless Read and checks it answers allow.
     /// environment replaces the inherited one when set (tests point the
     /// activity log at a temporary file).
     nonisolated static func selfTestHook(at hook: String, environment: [String: String]? = nil) async -> String? {
-        let payload = #"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/tmp/secure-agent-self-test-allow.txt"}}"#
-        guard let stdinData = payload.data(using: .utf8) else { return "internal: payload encoding" }
+        let probeID = environment?["SECURE_AGENT_PROBE_ID"]
+        let path = probeID.map { "/secure-agent-probe/\($0)/inert.txt" } ?? "/tmp/secure-agent-self-test-allow.txt"
+        var payload: [String: Any] = ["hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": ["file_path": path]]
+        if let probeID { payload["secure_agent_probe"] = probeID }
+        guard let stdinData = try? JSONSerialization.data(withJSONObject: payload) else { return "internal: payload encoding" }
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -924,11 +946,16 @@ public final class SetupManager: ObservableObject {
         }
         let errText = String(data: await errData, encoding: .utf8) ?? ""
         let out = String(data: await outData, encoding: .utf8) ?? ""
+        guard p.terminationStatus == 0 else { return "hook exited unsuccessfully; the check did not pass" }
         guard let json = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any] else {
             if let lastError = errText.split(separator: "\n").last {
                 return "hook produced no JSON: \(lastError)"
             }
             return "hook produced no JSON (python3 missing or hook crashed)"
+        }
+        if let probeID {
+            return json["permission"] as? String == "deny" && json["secure_agent_probe"] as? String == probeID
+                ? nil : "hook did not return the daemon's inert deny receipt"
         }
         if json["permission"] as? String == "allow" {
             return nil
