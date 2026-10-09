@@ -401,6 +401,7 @@ func (a *API) handleAgentRecommendations(w http.ResponseWriter, r *http.Request)
 type AgentChat struct {
 	Messages []model.SysAgentMessage `json:"messages"`
 	Chatting bool                    `json:"chatting"`
+	Work     model.SysAgentWork      `json:"work"`
 }
 
 // sysAgentReady answers 503 when the daemon was built without the agent.
@@ -455,7 +456,7 @@ func (a *API) handleAgentChat(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, AgentChat{Messages: a.sysAgent.Messages(200), Chatting: a.sysAgent.Chatting()})
+		writeJSON(w, AgentChat{Messages: a.sysAgent.Messages(200), Chatting: a.sysAgent.Chatting(), Work: a.sysAgent.Work()})
 	case http.MethodPost:
 		limitBody(w, r)
 		var in sysagent.ChatInput

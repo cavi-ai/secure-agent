@@ -40,6 +40,7 @@ public final class SetupManager: ObservableObject {
     @Published public private(set) var systemAgentEnabled = false
     /// system_agent.auto_review: new findings go to the agent's review queue.
     @Published public private(set) var systemAgentAutoReview = false
+    @Published public private(set) var systemAgentDebug = false
     @Published private(set) var autoReviewPolicy = AutoReviewPolicy()
     @Published private(set) var autoReviewPolicyAvailable = true
     /// Last-persisted advisor config (mode/endpoint/model) — the Settings
@@ -215,6 +216,7 @@ public final class SetupManager: ObservableObject {
         advisorEnabled = Self.advisorConfigIsEnabled(configYAML())
         systemAgentEnabled = Self.systemAgentConfigIsEnabled(configYAML())
         systemAgentAutoReview = Self.systemAgentConfigIsEnabled(configYAML(), key: "auto_review")
+        systemAgentDebug = Self.systemAgentConfigIsEnabled(configYAML(), key: "debug")
         do {
             autoReviewPolicy = try AutoReviewPolicy.read(configYAML())
             autoReviewPolicyAvailable = true
@@ -274,7 +276,45 @@ public final class SetupManager: ObservableObject {
         }
     }
 
-    /// Change automatic-review eligibility without touching detector settings.
+    /// Update metadata-only diagnostics without changing other agent settings.
+    public func setSystemAgentDebug(_ on: Bool) {
+        do {
+            let updated = try Self.systemAgentDebugUpdating(configYAML(), enabled: on)
+            try fm.createDirectory(atPath: (configPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            systemAgentDebug = on
+        } catch { report(error) }
+    }
+
+    /// Refuse ambiguous structures instead of rewriting unrelated configuration.
+    public nonisolated static func systemAgentDebugUpdating(_ yaml: String, enabled: Bool) throws -> String {
+        let lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let headers = lines.indices.filter { lines[$0].hasPrefix("system_agent:") }
+        let candidates = lines.indices.filter { lines[$0].range(of: #"^["']?system_agent["']?\s*:"#, options: .regularExpression) != nil }
+        guard headers.count <= 1, candidates == headers, !lines.contains(where: { ["---", "..."].contains($0.trimmingCharacters(in: .whitespaces)) }) else {
+            throw NSError(domain: "SystemAgentSettings", code: 1, userInfo: [NSLocalizedDescriptionKey: "The system_agent configuration is ambiguous; edit it in Config."])
+        }
+        if let start = headers.first {
+            let header = lines[start].split(separator: "#", maxSplits: 1).first.map(String.init) ?? ""
+            guard header.trimmingCharacters(in: .whitespaces) == "system_agent:" else {
+                throw NSError(domain: "SystemAgentSettings", code: 1, userInfo: [NSLocalizedDescriptionKey: "Expand the system_agent mapping in Config before changing debug logging."])
+            }
+            var seen = false
+            for line in lines.dropFirst(start + 1) {
+                if !line.isEmpty && !line.hasPrefix(" ") && !line.hasPrefix("#") { break }
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("debug:") {
+                    let value = trimmed.dropFirst(6).split(separator: "#", maxSplits: 1).first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
+                    guard !seen, line.hasPrefix("  debug:"), ["true", "false"].contains(value) else {
+                        throw NSError(domain: "SystemAgentSettings", code: 1, userInfo: [NSLocalizedDescriptionKey: "The debug value is ambiguous; edit it in Config."])
+                    }
+                    seen = true
+                }
+            }
+        }
+        return systemAgentConfigUpdating(yaml, key: "debug", enabled: enabled)
+    }
+
     /// Re-read the current file so other settings and unknown rule IDs survive.
     func setAutoReviewMinimumSeverity(_ severity: Int) {
         updateAutoReviewPolicy { $0.minimumSeverity = severity }
@@ -451,14 +491,22 @@ public final class SetupManager: ObservableObject {
     }
 
     func openAdvisorLog() {
+        if let error = openDaemonLog() { advisorNote = error }
+    }
+
+    func openSystemAgentLog() {
+        if let error = openDaemonLog() { lastError = error }
+    }
+
+    private func openDaemonLog() -> String? {
         let logURL = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/secure-agent/daemon-err.log")
         guard fm.fileExists(atPath: logURL.path) else {
-            advisorNote = "No daemon log yet. Start Secure Agent, then open the log."
-            return
+            return "No daemon log yet. Start Secure Agent, then open the log."
         }
         if !NSWorkspace.shared.open(logURL) {
-            advisorNote = "The log could not be opened. It is at ~/Library/Logs/secure-agent/daemon-err.log."
+            return "The log could not be opened. It is at ~/Library/Logs/secure-agent/daemon-err.log."
         }
+        return nil
     }
 
     /// True when the YAML has an advisor block with `enabled: true`.

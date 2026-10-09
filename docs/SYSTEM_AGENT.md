@@ -107,6 +107,56 @@ procedures selected by keyword. Click a skill in the console to read it.
 Commands and answers are masked by the firewall before storage or display;
 unmaskable secrets are refused.
 
+## Read tools and fresh chat
+
+Each reply starts a new model request with relevant built-in skills, a bounded
+suffix of conversation, and a newly captured findings index. Ordinary chat can
+inspect up to eight recent findings; selected-finding analysis is restricted to
+its selected IDs (at most 30). Worktree questions retain their daemon-built
+worktree snapshot and do not acquire unrelated finding access.
+
+The model can request four read-only tools:
+
+Models explicitly listed without tool capability retain ordinary chat from the
+supplied context and are told not to claim tool inspection. Older servers that
+omit capability metadata use the compatible tool protocol.
+
+- `inspect_skill`: an exact built-in procedure ID; no filesystem paths.
+- `inspect_snapshot`: the findings index captured for this reply.
+- `inspect_finding`: evidence for an ID in that index.
+- `inspect_session_activity`: recorded metadata, counts and top eight tool,
+  file and destination groups for a session linked to those findings. Commands,
+  transcripts and file contents are excluded. Source availability and limits
+  accompany the counts; missing sections are not evidence of zero activity.
+
+Evidence is masked before reaching the model and is treated as untrusted data,
+never as instructions or permission. Missing, unreadable and oversized evidence
+is explicitly unavailable. These tools cannot execute a shell command, change
+protection, modify a record or dispatch a harness. Command proposals still need
+the existing separate confirmation.
+
+The initial conversation and procedures are bounded to 16 KiB, leaving room for
+read-tool exchanges. Each entire serialized model request is at most 32 KiB;
+each result is at most 8 KiB and each model response at most 256 KiB. A reply has
+at most four model rounds and six read calls within one five-minute deadline.
+Captured finding bodies retain at most 32 KiB. Result reuse lasts only for this
+reply (at most six bounded results); no tool transcripts or result cache are
+persisted. Oversized or unfinished exchanges stop without creating a command
+proposal from an incomplete answer.
+
+**New chat** asks for confirmation before clearing the ordinary conversation.
+Plans, runs and analysis recommendations remain. The next message starts with
+fresh skills and a new snapshot. This resets daemon chat context; it does not
+flush or cap the separate model server's KV/prefix cache, which must be managed
+in that server's configuration.
+
+The existing pending chat indicator shows snapshot preparation, the inspected
+tool, elapsed time and read-call count. Completed replies distinguish executed
+read calls from historical tool requests that were not executed. Enable
+**Settings → Secure Agent → Chat → Tools and diagnostics → System agent debug
+logging** for metadata-only daemon logs, then use **Open daemon log**. Prompts,
+evidence, arguments and replies are excluded; logging can be changed live.
+
 Private-key envelopes are masked in full, including their contents. Headless
 stdout, stderr, and answer files are bounded to 1 MiB each. Oversized captures
 are withheld because truncation can remove the context needed for safe masking;
@@ -175,9 +225,10 @@ Inspect the plan's task and folder before dispatching it.
   a review gate, **not a sandbox**. It can read/write files and use the
   network. The daemon removes inherited environment variables before a
   headless local command, but files accessible to the account remain so.
-- The model itself has no file or shell tools. It sees the system prompt,
-  relevant skill text and a suffix of the last 20 masked conversation messages,
-  bounded to 32 KiB of serialized context. Older complete turns are omitted
+- The model has only scoped read tools for recorded evidence and built-in
+  procedures. It sees the system prompt, relevant skill text and a suffix of
+  the last 20 masked conversation messages, initially bounded to 16 KiB;
+  requests including read-tool exchanges are bounded to 32 KiB. Older complete turns are omitted
   with an explicit notice; each activity analysis starts from its own snapshot. Local
   command output and harness plans are not fed back as model instructions.
 - Commands can start once per proposal. Headless output is bounded and

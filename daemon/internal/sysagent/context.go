@@ -9,6 +9,9 @@ import (
 
 const chatContextBytes = 32768
 
+// Reserve transport space for tool schemas, calls and one evidence result.
+const initialChatContextBytes = 16384
+
 // Bound the whole serialized context, not just message count. Keep the newest
 // user-led suffix; never fabricate a summary of omitted conversation.
 func boundedChatContext(system string, history []model.SysAgentMessage) ([]chatMessage, error) {
@@ -33,7 +36,7 @@ func boundedChatContext(system string, history []model.SysAgentMessage) ([]chatM
 		if err != nil {
 			return nil, err
 		}
-		if len(body) <= chatContextBytes && len(turns) > 0 {
+		if len(body) <= initialChatContextBytes && len(turns) > 0 {
 			return msgs, nil
 		}
 		if len(turns) <= 1 {

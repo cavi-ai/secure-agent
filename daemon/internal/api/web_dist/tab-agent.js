@@ -198,7 +198,8 @@ function agentMessageHTML(m, status, runs, activity) {
     u.prompt_tokens_per_second ? `${Number(u.prompt_tokens_per_second).toFixed(1)} input tokens/s` : '',
     u.output_tokens_per_second ? `${Number(u.output_tokens_per_second).toFixed(1)} output tokens/s` : '',
     u.elapsed_ms ? `${(Number(u.elapsed_ms) / 1000).toFixed(1)}s reply` : '',
-    u.tool_calls ? `${Number(u.tool_calls)} tool requests (not executed)` : 'no model tool calls',
+    u.read_tool_calls ? `${Number(u.read_tool_calls)} read tool calls`
+      : u.tool_calls ? `${Number(u.tool_calls)} tool requests (not executed)` : 'no model tool calls',
   ].filter(Boolean).join(' · ') : '';
   return `<div class="agent-msg assistant">${agentTextHTML(m.content, true)}${stats ? `<div class="agent-msg-meta">${stats}</div>` : ''}${skills}${agentLocalCommandHTML(m, (runs || []).find(r => r.id === m.local_run_id), activity)}${agentProposalHTML(m, status)}</div>`;
 }
@@ -209,8 +210,13 @@ function agentThreadItems(chat, status, runs, activity = {}) {
   const items = ((chat && chat.messages) || []).filter(m => m.origin !== 'analysis')
     .map(m => ({ key: 'm' + m.id, html: agentMessageHTML(m, status, runs, activity) }));
   if (activity.sending || (chat && chat.chatting)) {
-    const label = activity.sending ? 'Sending your message…' : 'Waiting for local Ollama…';
-    items.push({ key: 'pending', html: `<div class="agent-msg agent-pending" role="status" aria-live="polite">${agentSpinnerHTML()}<span>${label}</span></div>` });
+    const work = chat && chat.work;
+    const tools = { inspect_snapshot: 'findings snapshot', inspect_skill: 'built-in procedure', inspect_finding: 'finding evidence', inspect_session_activity: 'related session activity' };
+    const progress = work && work.state === 'inspecting' ? `Inspecting ${tools[work.active_tool] || 'recorded evidence'}…`
+      : work && work.state === 'preparing' ? 'Preparing skills and snapshot…' : 'Waiting for local Ollama…';
+    const label = activity.sending ? 'Sending your message…' : progress;
+    const timing = work && Number(work.elapsed_ms) > 0 ? ` · ${Math.floor(Number(work.elapsed_ms) / 1000)}s · ${Number(work.tool_calls) || 0} read calls` : '';
+    items.push({ key: 'pending', html: `<div class="agent-msg agent-pending" role="status" aria-live="polite">${agentSpinnerHTML()}<span>${label}${timing}</span></div>` });
   }
   return items;
 }

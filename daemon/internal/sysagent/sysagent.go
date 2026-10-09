@@ -95,11 +95,13 @@ type Agent struct {
 	now          func() time.Time
 	client       *http.Client
 
-	mu       sync.Mutex
-	cfg      config.SystemAgentConfig
-	chatting bool
-	running  int64 // run id of the headless run in flight
-	wg       sync.WaitGroup
+	mu          sync.Mutex
+	cfg         config.SystemAgentConfig
+	chatting    bool
+	work        model.SysAgentWork
+	workStarted time.Time
+	running     int64 // run id of the headless run in flight
+	wg          sync.WaitGroup
 }
 
 // New builds the agent. stateDir holds pinned harness configs and terminal
@@ -307,6 +309,25 @@ func (a *Agent) Wait() { a.wg.Wait() }
 
 // Messages returns the newest limit chat messages, oldest first.
 func (a *Agent) Messages(limit int) []model.SysAgentMessage { return a.st.SysAgentMessages(limit) }
+
+// Work reports current reply activity without another model-server probe.
+func (a *Agent) Work() model.SysAgentWork {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	w := a.work
+	if a.chatting {
+		w.ElapsedMS = max(0, a.now().Sub(a.workStarted).Milliseconds())
+	} else {
+		w.State = "idle"
+	}
+	return w
+}
+
+func (a *Agent) setWork(state, tool string, round, calls, bytes int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.work.State, a.work.ActiveTool, a.work.Round, a.work.ToolCalls, a.work.InputBytes = state, tool, round, calls, bytes
+}
 
 func (a *Agent) Recommendations(limit int) []model.SysAgentMessage {
 	return a.st.SysAgentRecommendations(limit)
