@@ -108,3 +108,95 @@ func TestDrainLoopIncidentPublicationRequiresPersistence(t *testing.T) {
 		now = now.Add(time.Hour)
 	}
 }
+
+func TestDrainLoopIncidentLookupFailureDoesNotCreateDuplicate(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "events.db")
+	st, err := store.Open(dbPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cfg, _ := config.Load("/nonexistent")
+	tagger := agents.New(cfg, fakeProcSource{})
+	tagger.Refresh()
+	now := time.Now()
+	var incidentID string
+	for _, phase := range []string{"initial", "failed", "recovered"} {
+		if phase == "failed" {
+			// SQLite permits NULL in a TEXT PRIMARY KEY. The stored report
+			// still exists, but scanning its identity must fail.
+			if _, err := db.Exec(`UPDATE incidents SET id=NULL WHERE id=?`, incidentID); err != nil {
+				t.Fatal(err)
+			}
+		} else if phase == "recovered" {
+			if _, err := db.Exec(`UPDATE incidents SET id=? WHERE id IS NULL`, incidentID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		hub := api.NewDeltaHub()
+		deltas := hub.Subscribe()
+		b := bus.New(64)
+		postureCalls := 0
+		done := startDrainLoop(b.Subscribe(), st, correlate.New(tagger, sensitive.New(cfg), cfg), nil,
+			session.NewResolver(st, tagger), tagger, hub, nil,
+			func() { postureCalls++ }, nil, nil)
+		b.Publish(event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"})
+		b.Publish(event.Event{Kind: event.KindConnOpen, TS: now.Add(time.Millisecond), PID: 500, RemoteHost: "evil.example.com", RemotePort: 443})
+		b.Close()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("drain loop did not finish")
+		}
+		hub.Close()
+		var reports []model.IncidentReport
+		flags := 0
+		for delta := range deltas {
+			if delta.Type == "incident" {
+				reports = append(reports, delta.Data.(model.IncidentReport))
+			} else if delta.Type == "flag" {
+				flags++
+			}
+		}
+		if flags != 1 || postureCalls == 0 {
+			t.Fatalf("%s: flag or posture publication stopped: flags=%d posture=%d", phase, flags, postureCalls)
+		}
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM incidents`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("%s: lookup created duplicate incidents: count=%d", phase, count)
+		}
+		if phase == "failed" {
+			if len(reports) != 0 {
+				t.Fatalf("lookup failure published an incident: %+v", reports)
+			}
+			health := st.WriteHealth()
+			if health.ReadFailures != 1 || len(health.ReadActive) != 1 || health.ReadActive[0] != "incident lookup" {
+				t.Fatalf("lookup failure hidden: %+v", health)
+			}
+		} else {
+			if len(reports) != 1 {
+				t.Fatalf("%s: expected one persisted incident delta, got %+v", phase, reports)
+			}
+			if phase == "initial" {
+				incidentID = reports[0].ID
+			} else if reports[0].ID != incidentID || reports[0].AggregateCount != 2 {
+				t.Fatalf("recovery did not aggregate into the original report: %+v", reports[0])
+			}
+			if phase == "recovered" {
+				health := st.WriteHealth()
+				if health.ReadFailures != 1 || len(health.ReadActive) != 0 {
+					t.Fatalf("lookup health did not recover: %+v", health)
+				}
+			}
+		}
+		now = now.Add(time.Hour)
+	}
+}
