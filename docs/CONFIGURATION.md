@@ -261,9 +261,15 @@ system_agent:
   harness_model: ""                    # model dispatched harnesses run; "" = model
   timeout_minutes: 30                  # bound on one headless dispatch (0-240; 0 = 30)
   auto_review: false                   # send new findings to the review queue on their own
+  auto_review_min_severity: 2           # detector severity: 1 informational, 2 warning, 3 critical; 0 = 2
+  auto_review_excluded_rules: []        # exact finding rule IDs to leave out of automatic review
 ```
 
-`auto_review` (Settings → Secure Agent → Chat → Review new findings automatically) sends each new finding of severity 2 or more to the review queue without a click: a burst is one review two minutes after its first finding, reviews go out at least ten minutes apart with at most ten findings each, and a finding acknowledged meanwhile is left out.
+`auto_review` (Settings → Secure Agent → Chat → Review new findings automatically) sends newly stored, unacknowledged findings that meet the severity cutoff and are not excluded to the local agent review queue. Settings exposes the cutoff and finding-type choices. These choices affect automatic review only; detection, protection and notification settings remain independent.
+
+A “new” finding is a newly stored finding, not every observed event. Repeated activity folded into an existing finding does not queue it again, and enabling review does not scan the existing backlog. A batch waits two minutes after its first eligible finding, reviews go out at least ten minutes apart with at most ten findings each, and a busy agent retries later. The current policy is checked again before sending: acknowledged findings and findings that no longer qualify are skipped. Relaxing the policy applies to future findings; previously skipped findings can be sent manually.
+
+Ollama receives a bounded, masked evidence summary and returns a recommendation linked to the findings. This toggle does not execute commands, dismiss findings or change protection. Local commands and harness dispatches require separate user confirmation. Published samples and placeholder credentials are evidence for review, not an automatic dismissal rule.
 
 An enabled agent with a non-loopback endpoint is a validation error. Changes take effect live within one poll cycle.
 

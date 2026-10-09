@@ -278,6 +278,11 @@ type SystemAgentConfig struct {
 	// AutoReview sends new findings to the agent's review queue without a
 	// click (batched and spaced; see api.NoteNewFlag).
 	AutoReview bool `yaml:"auto_review"`
+	// AutoReviewMinSeverity is the detector severity cutoff (0 = 2).
+	AutoReviewMinSeverity int `yaml:"auto_review_min_severity"`
+	// AutoReviewExcludedRules excludes exact finding rule IDs from automatic
+	// review only; detection, notifications and manual review are unchanged.
+	AutoReviewExcludedRules []string `yaml:"auto_review_excluded_rules"`
 }
 
 // RetentionYAML is the on-disk shape of event retention. Zero values fall
@@ -560,6 +565,9 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 	if cfg.SystemAgent.TimeoutMinutes == 0 {
 		cfg.SystemAgent.TimeoutMinutes = 30
 	}
+	if cfg.SystemAgent.AutoReviewMinSeverity == 0 {
+		cfg.SystemAgent.AutoReviewMinSeverity = 2
+	}
 	cfg.Firewall.Registry.SaltRef = expandPath(cfg.Firewall.Registry.SaltRef)
 	cfg.Firewall.Registry.IngestSources = expandPaths(cfg.Firewall.Registry.IngestSources)
 
@@ -659,6 +667,14 @@ func (c Config) Validate() error {
 	}
 	if c.SystemAgent.TimeoutMinutes < 0 || c.SystemAgent.TimeoutMinutes > 240 {
 		return fmt.Errorf("system_agent.timeout_minutes must be 0-240, got %d", c.SystemAgent.TimeoutMinutes)
+	}
+	if c.SystemAgent.AutoReviewMinSeverity < 0 || c.SystemAgent.AutoReviewMinSeverity > 3 {
+		return fmt.Errorf("system_agent.auto_review_min_severity must be 1-3 (0 uses 2), got %d", c.SystemAgent.AutoReviewMinSeverity)
+	}
+	for _, rule := range c.SystemAgent.AutoReviewExcludedRules {
+		if strings.TrimSpace(rule) == "" {
+			return fmt.Errorf("system_agent.auto_review_excluded_rules must contain nonempty rule IDs")
+		}
 	}
 	return nil
 }

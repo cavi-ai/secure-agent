@@ -38,6 +38,8 @@ public final class SetupManager: ObservableObject {
     @Published public private(set) var systemAgentEnabled = false
     /// system_agent.auto_review: new findings go to the agent's review queue.
     @Published public private(set) var systemAgentAutoReview = false
+    @Published private(set) var autoReviewPolicy = AutoReviewPolicy()
+    @Published private(set) var autoReviewPolicyAvailable = true
     /// Last-persisted advisor config (mode/endpoint/model) — the Settings
     /// tab's restore source so the advisor persists across restarts.
     @Published public private(set) var advisorPersisted: (mode: String?, endpoint: String?, model: String?) = (nil, nil, nil)
@@ -211,6 +213,13 @@ public final class SetupManager: ObservableObject {
         advisorEnabled = Self.advisorConfigIsEnabled(configYAML())
         systemAgentEnabled = Self.systemAgentConfigIsEnabled(configYAML())
         systemAgentAutoReview = Self.systemAgentConfigIsEnabled(configYAML(), key: "auto_review")
+        do {
+            autoReviewPolicy = try AutoReviewPolicy.read(configYAML())
+            autoReviewPolicyAvailable = true
+        } catch {
+            autoReviewPolicyAvailable = false
+            report(error)
+        }
         advisorPersisted = Self.advisorConfig(configYAML())
         disabledAgents = Self.disabledAgents(configYAML())
         advisorDiscovery = (try? await DaemonClient().fetchAdvisorDiscover())
@@ -254,6 +263,36 @@ public final class SetupManager: ObservableObject {
             try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
             try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
             systemAgentAutoReview = on
+        } catch {
+            report(error)
+        }
+    }
+
+    /// Change automatic-review eligibility without touching detector settings.
+    /// Re-read the current file so other settings and unknown rule IDs survive.
+    func setAutoReviewMinimumSeverity(_ severity: Int) {
+        updateAutoReviewPolicy { $0.minimumSeverity = severity }
+    }
+
+    func setAutoReviewRule(_ rule: String, included: Bool) {
+        updateAutoReviewPolicy { policy in
+            policy.excludedRules.removeAll { $0 == rule }
+            if !included { policy.excludedRules.append(rule) }
+        }
+    }
+
+    private func updateAutoReviewPolicy(_ change: (inout AutoReviewPolicy) -> Void) {
+        do {
+            let yaml = fm.fileExists(atPath: configPath)
+                ? try String(contentsOfFile: configPath, encoding: .utf8) : ""
+            var policy = try AutoReviewPolicy.read(yaml)
+            change(&policy)
+            let updated = try policy.updating(yaml)
+            let dir = (configPath as NSString).deletingLastPathComponent
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            autoReviewPolicy = policy
+            autoReviewPolicyAvailable = true
         } catch {
             report(error)
         }

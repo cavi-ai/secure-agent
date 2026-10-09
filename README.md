@@ -364,7 +364,9 @@ system_agent:
   endpoint: "http://127.0.0.1:11434"
   model: ""                   # first chat-capable installed model, or pin a model name
   harness_model: ""           # defaults to the chat model; pin a tool-calling model for dispatches
-  auto_review: false          # review new findings without a click (batched, at most every 10 minutes)
+  auto_review: false          # queue local recommendations; commands still require confirmation
+  auto_review_min_severity: 2 # minimum detector severity (1 informational, 2 warning, 3 critical)
+  auto_review_excluded_rules: [] # finding rule IDs excluded from automatic review
 ```
 
 Each local command proposal shows its exact shell text, folder and mode before

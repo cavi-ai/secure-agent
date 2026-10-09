@@ -10,8 +10,8 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 )
 
-// Automatic review: with system_agent.auto_review on, each new finding of
-// severity 2 or more joins a batch the local agent reviews without a click.
+// Automatic review: with system_agent.auto_review on, each new finding that
+// meets the configured severity and type joins a batch for local review.
 // A burst is one review: the batch waits autoReviewDelay after its first
 // finding. Reviews go out at least autoReviewGap apart and carry at most
 // autoReviewBatch findings, so the local model is never flooded. A busy
@@ -46,7 +46,7 @@ func newAutoReviewer() *autoReviewer {
 // NoteNewFlag offers a newly raised flag for automatic review. Non-blocking;
 // a no-op unless the agent is enabled with auto_review on.
 func (a *API) NoteNewFlag(fl model.Flag) {
-	if a.sysAgent == nil || a.autoReview == nil || fl.Severity < 2 || fl.Acknowledged || !a.sysAgent.AutoReview() {
+	if a.sysAgent == nil || a.autoReview == nil || !a.sysAgent.AutoReviewFinding(fl) {
 		return
 	}
 	r := a.autoReview
@@ -91,7 +91,7 @@ func (a *API) flushAutoReview() {
 
 	var flags []model.Flag
 	for _, id := range ids {
-		if f, ok := a.store.GetFlagWithAdvisor(id); ok && !f.Acknowledged {
+		if f, ok := a.store.GetFlagWithAdvisor(id); ok && a.sysAgent.AutoReviewFinding(f) {
 			flags = append(flags, f)
 		}
 	}
