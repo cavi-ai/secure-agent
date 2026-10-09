@@ -612,6 +612,7 @@ func setupAdvisor(cfg config.Config, st *store.Store, deltaHub *api.DeltaHub, po
 		Mask:               mask,
 		ClassifierEndpoint: cfg.Advisor.ClassifierEndpoint,
 		ClassifierModel:    cfg.Advisor.ClassifierModel,
+		Debug:              cfg.Advisor.Debug,
 	}, sink)
 	if sub != nil {
 		log.Printf("advisor: local triage enabled via %s (model %q)", endpoint, model)

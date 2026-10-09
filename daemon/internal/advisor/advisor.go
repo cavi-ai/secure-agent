@@ -43,6 +43,7 @@ type Config struct {
 	Mask               func(string) (string, bool) // firewall masking before any model/tool boundary
 	ClassifierEndpoint string                      // optional loopback /v1/systemone service
 	ClassifierModel    string
+	Debug              bool // metadata-only diagnostics, never prompts or replies
 }
 
 // Sink persists verdicts and answers trend lookups. *store.Store satisfies it.
@@ -415,12 +416,16 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 	s.activeKind, s.activeSubject, s.startedAt = t.kind, t.subjectID, time.Now()
 	s.activeTool, s.inputBytes, s.toolCalls = "", 0, 0
 	s.mu.Unlock()
+	s.debugf("task start kind=%s queued=%d", t.kind, len(s.queue))
+	completed := false
 	defer func() {
 		s.mu.Lock()
 		s.lastDurationMS = time.Since(s.startedAt).Milliseconds()
 		s.activeKind, s.activeSubject, s.activeTool = "", "", ""
 		s.startedAt = time.Time{}
+		duration, bytes, calls := s.lastDurationMS, s.inputBytes, s.toolCalls
 		s.mu.Unlock()
+		s.debugf("task end kind=%s completed=%t duration_ms=%d input_bytes=%d tool_calls=%d", t.kind, completed, duration, bytes, calls)
 	}()
 	ctx = context.WithValue(ctx, reviewScopeKey{}, t)
 	if t.kind == "plan" {
@@ -434,6 +439,7 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 		s.lastErr = ""
 		s.mu.Unlock()
 		p.Model = s.cfg.Model
+		completed = true
 		p.CreatedAt = time.Now().UTC()
 		p.EvidenceKey = t.plan.EvidenceKey
 		if err := s.sink.PutAdvisorPlan(t.subjectID, p); err != nil {
@@ -470,6 +476,7 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 	s.lastErr = ""
 	s.mu.Unlock()
 	verdict.Model = s.cfg.Model
+	completed = true
 	verdict.CreatedAt = time.Now().UTC()
 	if err := s.sink.PutAdvisorVerdict(t.subjectID, t.kind, verdict); err != nil {
 		// Storage health owns this fault; a successful model response must not
@@ -743,12 +750,12 @@ func parseVerdict(content string) (model.AdvisorVerdict, error) {
 		SuggestedAction string  `json:"suggested_action"`
 	}
 	if err := json.Unmarshal([]byte(c), &v); err != nil {
-		return model.AdvisorVerdict{}, fmt.Errorf("verdict not strict JSON: %w (content head: %.120s)", err, c)
+		return model.AdvisorVerdict{}, fmt.Errorf("verdict not strict JSON")
 	}
 	switch v.Assessment {
 	case "benign", "suspicious", "malicious":
 	default:
-		return model.AdvisorVerdict{}, fmt.Errorf("unknown assessment %q", v.Assessment)
+		return model.AdvisorVerdict{}, fmt.Errorf("unknown assessment")
 	}
 	v.SuggestedAction = normalizeAction(v.SuggestedAction)
 	if v.Rationale == "" {

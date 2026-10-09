@@ -93,12 +93,12 @@ func parsePlan(content string, offered []string) (model.AdvisorPlan, error) {
 		Confidence float64          `json:"confidence"`
 	}
 	if err := json.Unmarshal([]byte(c), &raw); err != nil {
-		return model.AdvisorPlan{}, fmt.Errorf("plan not strict JSON: %w (content head: %.120s)", err, c)
+		return model.AdvisorPlan{}, fmt.Errorf("plan not strict JSON")
 	}
 	switch raw.Risk {
 	case "low", "medium", "high":
 	default:
-		return model.AdvisorPlan{}, fmt.Errorf("plan risk %q is not low, medium or high", raw.Risk)
+		return model.AdvisorPlan{}, fmt.Errorf("plan risk is not low, medium or high")
 	}
 	p := model.AdvisorPlan{
 		Summary:   strings.TrimSpace(raw.Summary),

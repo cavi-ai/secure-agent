@@ -151,6 +151,7 @@ advisor:
   timeout_ms: 60000                 # includes cold model load and the bounded tool loop
   classifier_endpoint: ""          # optional loopback Kev /v1/systemone service
   classifier_model: "kev-latest"
+  debug: false                     # task/tool sizes and timings; excludes all prompt/reply text
   # Managed mode: the daemon spawns + supervises the model server itself
   # (endpoint derived; do not set one). Path B instead: leave managed false
   # and point endpoint at a server you already run (Ollama/MLX/llama.cpp).

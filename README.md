@@ -356,6 +356,7 @@ advisor:
   timeout_ms: 60000                  # whole triage task; requested plans/notes get at least 5 minutes
   classifier_endpoint: ""           # optional local Kev service, e.g. http://127.0.0.1:8009
   classifier_model: "kev-latest"
+  debug: false                       # metadata-only task/tool logs, applied live
 ```
 
 ### 🤖 Secure Agent chat

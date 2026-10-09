@@ -234,6 +234,7 @@ func TestAdvisorConfigKeyDistinguishesFields(t *testing.T) {
 	for _, change := range []func(*config.AdvisorConfig){
 		func(v *config.AdvisorConfig) { v.ClassifierEndpoint = "http://127.0.0.1:8009" },
 		func(v *config.AdvisorConfig) { v.ClassifierModel = "local-decision" },
+		func(v *config.AdvisorConfig) { v.Debug = true },
 	} {
 		d := a
 		change(&d)

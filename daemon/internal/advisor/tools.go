@@ -196,9 +196,7 @@ func (s *Subscriber) completeWithTools(ctx context.Context, client *http.Client,
 		if len(body) > maxContextBytes {
 			return "", fmt.Errorf("advisor request exceeds %d-byte task budget", maxContextBytes)
 		}
-		if debugAdvisorRequests {
-			log.Printf("advisor request: %d bytes, round %d, %d tool calls", len(body), round+1, calls)
-		}
+		s.debugf("request bytes=%d round=%d tool_calls=%d", len(body), round+1, calls)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(s.cfg.Endpoint, "/")+"/v1/chat/completions", bytes.NewReader(body))
 		if err != nil {
 			return "", err
@@ -260,6 +258,7 @@ func (s *Subscriber) completeWithTools(ctx context.Context, client *http.Client,
 				return "", fmt.Errorf("advisor requested an unavailable tool")
 			}
 			calls++
+			s.debugf("tool name=%s call=%d", call.Function.Name, calls)
 			s.mu.Lock()
 			s.activeTool = call.Function.Name
 			s.toolCalls = calls
@@ -279,4 +278,10 @@ func (s *Subscriber) completeWithTools(ctx context.Context, client *http.Client,
 		}
 	}
 	return "", fmt.Errorf("advisor model round budget exhausted")
+}
+
+func (s *Subscriber) debugf(format string, args ...any) {
+	if s.cfg.Debug || debugAdvisorRequests {
+		log.Printf("advisor debug: "+format, args...)
+	}
 }

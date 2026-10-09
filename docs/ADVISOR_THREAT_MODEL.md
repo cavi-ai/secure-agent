@@ -87,6 +87,19 @@ verdicts. Calls have a five-second deadline and a bounded response. Unavailable
 or invalid output lets the main advisor inspect evidence directly. The daemon
 does not configure or clear the classifier server's cache.
 
+The setup wizard's **Local Advisor** step and **Settings → Analysis → Advisor
+tools and diagnostics** share controls for the timeout, optional classifier
+endpoint/model, connection check and debug logging. Changing the analysis
+model preserves these settings and other advisor fields. Unsupported YAML
+shapes are refused instead of rewritten.
+
+`advisor.debug: true` applies live and writes `advisor debug:` entries for task
+start/end, model request sizes/rounds and validated tool names. Prompt text,
+evidence and model replies are excluded, including malformed reply excerpts.
+**Open daemon log** opens `~/Library/Logs/secure-agent/daemon-err.log`. The
+classifier check only verifies the served model list; it does not evaluate
+routing accuracy or start a server. Turning debug off stops these extra entries.
+
 ## Trust posture of a verdict
 
 A verdict is a *prioritization hint*, not a finding. The deterministic

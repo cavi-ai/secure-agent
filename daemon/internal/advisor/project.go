@@ -100,7 +100,7 @@ func parseProjectPlan(content string) (model.AdvisorVerdict, error) {
 		Steps   []string `json:"steps"`
 	}
 	if err := json.Unmarshal([]byte(c), &v); err != nil {
-		return model.AdvisorVerdict{}, fmt.Errorf("project plan not strict JSON: %w (content head: %.120s)", err, c)
+		return model.AdvisorVerdict{}, fmt.Errorf("project plan not strict JSON")
 	}
 	var steps []string
 	for _, st := range v.Steps {

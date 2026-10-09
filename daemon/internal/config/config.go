@@ -245,6 +245,7 @@ type AdvisorYAML struct {
 	ManagedModel       string `yaml:"managed_model"`
 	ClassifierEndpoint string `yaml:"classifier_endpoint"`
 	ClassifierModel    string `yaml:"classifier_model"`
+	Debug              bool   `yaml:"debug"`
 }
 
 // AdvisorConfig configures the local triage advisor. Disabled unless
@@ -261,6 +262,7 @@ type AdvisorConfig struct {
 	ManagedModel       string
 	ClassifierEndpoint string
 	ClassifierModel    string
+	Debug              bool
 }
 
 // SystemAgentConfig configures the system agent behind the console's Agent
@@ -556,6 +558,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 			ManagedModel:       raw.Advisor.ManagedModel,
 			ClassifierEndpoint: raw.Advisor.ClassifierEndpoint,
 			ClassifierModel:    raw.Advisor.ClassifierModel,
+			Debug:              raw.Advisor.Debug,
 		},
 	}
 	cfg.Pricing, cfg.PricingSkipped = parsePricing(raw.Pricing)

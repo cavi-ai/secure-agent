@@ -1,9 +1,11 @@
 package advisor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,32 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
+
+func TestDebugLogsContainMetadataAndExcludePromptAndReplyText(t *testing.T) {
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(previous)
+	previousDebug := debugAdvisorRequests
+	debugAdvisorRequests = false
+	defer func() { debugAdvisorRequests = previousDebug }()
+	stub := &chatStub{content: "private-fixture-reply"}
+	srv := newStubServer(t, stub)
+	s := New(Config{Enabled: true, Endpoint: srv.URL, Debug: true}, &memSink{})
+	for i := 0; i < 3; i++ {
+		s.process(context.Background(), task{kind: "flag", flag: model.Flag{Rule: "private-fixture-rule", Evidence: []model.EvidenceItem{{Text: "private-fixture-evidence"}}}})
+	}
+	output := logs.String()
+	if !strings.Contains(output, "advisor debug: request bytes=") || !strings.Contains(output, "completed=false") || strings.Contains(output, "private-fixture") {
+		t.Fatalf("diagnostic log leaked content or omitted metadata: %s", output)
+	}
+	logs.Reset()
+	s = New(Config{Enabled: true, Endpoint: srv.URL}, &memSink{})
+	_, _ = s.chat(context.Background(), "private-fixture-system", "private-fixture-user", 100)
+	if strings.Contains(logs.String(), "advisor debug:") {
+		t.Fatal("debug metadata was logged while disabled")
+	}
+}
 
 type scopedTestSink struct {
 	memSink
