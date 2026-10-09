@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -73,5 +74,64 @@ func TestPathAccessesAreSessionFileEvents(t *testing.T) {
 	}
 	if got := s.PathAccesses("/w/none", 20); got == nil || len(got) != 0 {
 		t.Fatalf("no accesses: got %#v, want empty non-nil", got)
+	}
+}
+
+func TestPathReadResultsDiscardPartialRowsAndRecover(t *testing.T) {
+	for _, operation := range []string{"path findings", "path accesses"} {
+		t.Run(operation, func(t *testing.T) {
+			s := fileTestStore(t)
+			p := "/w/test.txt"
+			now := time.Now()
+			if _, err := s.PutFlag(model.Flag{ID: "f1", TS: now, Evidence: []model.EvidenceItem{{Label: p}}}); err != nil {
+				t.Fatal(err)
+			}
+			inc := model.IncidentReport{ID: "i1", Timestamp: now, TouchedFiles: []string{p}}
+			if err := s.PutIncident(inc); err != nil {
+				t.Fatal(err)
+			}
+			for _, pid := range []int32{1, 2} {
+				if _, err := s.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now, PID: pid, Path: p, SessionID: "s1"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			read := func() (int, bool, error) {
+				if operation == "path findings" {
+					got, err := s.PathFindingsResult(p, 20)
+					return len(got), got == nil, err
+				}
+				got, err := s.PathAccessesResult(p, 20)
+				return len(got), got == nil, err
+			}
+			damage := "UPDATE incidents SET report_json='invalid /w/test.txt'"
+			if operation == "path accesses" {
+				damage = "UPDATE events SET pid='invalid' WHERE pid=1"
+			}
+			if _, err := s.db.Exec(damage); err != nil {
+				t.Fatal(err)
+			}
+			if count, isNil, err := read(); err == nil || count != 0 || !isNil {
+				t.Fatalf("partial result: count=%d nil=%v err=%v", count, isNil, err)
+			}
+			if h := s.WriteHealth(); h.ReadFailures != 1 || !slices.Equal(h.ReadActive, []string{operation}) || h.Failures != 0 {
+				t.Fatalf("read failure health: %+v", h)
+			}
+			if err := s.PutIncident(inc); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.db.Exec("UPDATE events SET pid=1 WHERE pid='invalid'"); err != nil {
+				t.Fatal(err)
+			}
+			if count, isNil, err := read(); err != nil || count != 2 || isNil {
+				t.Fatalf("recovered result: count=%d nil=%v err=%v", count, isNil, err)
+			}
+			if h := s.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 0 {
+				t.Fatalf("recovery health: %+v", h)
+			}
+			s.Close()
+			if count, isNil, err := read(); err == nil || count != 0 || !isNil {
+				t.Fatalf("unavailable result: count=%d nil=%v err=%v", count, isNil, err)
+			}
+		})
 	}
 }
