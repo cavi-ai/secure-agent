@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -100,6 +101,7 @@ func (r *Registry) matchTokens(view string) []Hit {
 // maxIngestBytes caps the size of a single source file we will scan. Sources
 // are user-supplied paths; a runaway file (a huge log pointed at by mistake)
 // must not stall an ingest. Real secret files (.env, credentials) are tiny.
+// The read is bounded too: a file can grow after the initial size check.
 const maxIngestBytes = 10 << 20 // 10 MiB
 
 // maxIngestLineBytes caps one source line. The default bufio.Scanner limit is
@@ -122,7 +124,6 @@ const maxIngestLineBytes = 1 << 20 // 1 MiB
 func Ingest(sources []string, salt []byte) ([]config.Fingerprint, error) {
 	var out []config.Fingerprint
 	var failed []string
-	n := 0
 	for _, src := range sources {
 		fi, err := os.Stat(src)
 		if err != nil || fi.IsDir() || fi.Size() > maxIngestBytes {
@@ -147,42 +148,57 @@ func Ingest(sources []string, salt []byte) ([]config.Fingerprint, error) {
 			}
 			return nil, fmt.Errorf("ingest source %s: must be a regular file", src)
 		}
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, 64*1024), maxIngestLineBytes)
-		for sc.Scan() {
-			line := strings.TrimSpace(sc.Text())
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			eq := strings.IndexByte(line, '=')
-			if eq <= 0 {
-				continue
-			}
-			key := strings.TrimSpace(line[:eq])
-			val := strings.Trim(strings.TrimSpace(line[eq+1:]), `"'`)
-			if len(val) < 8 { // ignore trivially short / empty values
-				continue
-			}
-			n++
-			out = append(out, config.Fingerprint{
-				ID:    "fp-" + strconv.Itoa(n),
-				Type:  TypeEnvValue,
-				Len:   len(val),
-				Label: key + " (" + src + ")",
-				HMAC:  Fingerprint(salt, val),
-			})
-			// Note: val is a string — zeroing it is a no-op. The plaintext only
-			// lives in `line`/`val` for the duration of this iteration; nothing
-			// persists it (the fingerprint carries HMAC, type, length, label).
-		}
-		scanErr := sc.Err()
+		fps, scanErr := scanIngestSource(src, f, salt, len(out)+1)
 		f.Close()
 		if scanErr != nil {
-			return nil, fmt.Errorf("ingest source %s: scan error: %w", src, scanErr)
+			return nil, scanErr
 		}
+		out = append(out, fps...)
 	}
 	if len(out) == 0 && len(failed) > 0 {
 		return nil, fmt.Errorf("ingest produced zero fingerprints and every source failed (%s); refusing to return an empty set that would purge the registered fingerprints", strings.Join(failed, ", "))
+	}
+	return out, nil
+}
+
+// scanIngestSource parses one opened source. firstID preserves numbering across
+// the complete source list; callers own the reader's lifetime.
+func scanIngestSource(src string, reader io.Reader, salt []byte, firstID int) ([]config.Fingerprint, error) {
+	var out []config.Fingerprint
+	// One extra byte distinguishes a source exactly at the limit from an
+	// oversized source. Reaching the artificial EOF must reject all results.
+	limited := &io.LimitedReader{R: reader, N: maxIngestBytes + 1}
+	sc := bufio.NewScanner(limited)
+	sc.Buffer(make([]byte, 0, 64*1024), maxIngestLineBytes)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		if eq <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eq])
+		val := strings.Trim(strings.TrimSpace(line[eq+1:]), `"'`)
+		if len(val) < 8 { // ignore trivially short / empty values
+			continue
+		}
+		out = append(out, config.Fingerprint{
+			ID:    "fp-" + strconv.Itoa(firstID+len(out)),
+			Type:  TypeEnvValue,
+			Len:   len(val),
+			Label: key + " (" + src + ")",
+			HMAC:  Fingerprint(salt, val),
+		})
+		// The returned fingerprint carries HMAC, type, length, and label;
+		// it does not retain the plaintext value.
+	}
+	if limited.N == 0 {
+		return nil, fmt.Errorf("ingest source %s: exceeds %d bytes", src, maxIngestBytes)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("ingest source %s: scan error: %w", src, err)
 	}
 	return out, nil
 }
