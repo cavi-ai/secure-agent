@@ -1509,7 +1509,14 @@ func (s *Store) GetIncident(id string) (report *model.IncidentReport, readErr er
 	defer s.mu.Unlock()
 
 	var storedID, reportJSON string
-	err := s.db.QueryRow(`SELECT id, report_json FROM incidents WHERE id = ? OR flag_id = ?`, id, id).Scan(&storedID, &reportJSON)
+	err := s.db.QueryRow(`SELECT id, report_json FROM incidents WHERE id = ?`, id).Scan(&storedID, &reportJSON)
+	if err == sql.ErrNoRows {
+		// Flag aliases include evidence aggregated after the initial report.
+		// Resolve the report identity first so an alias cannot shadow it.
+		err = s.db.QueryRow(`SELECT id, report_json FROM incidents
+			WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
+			ORDER BY datetime(created_at) DESC, id DESC LIMIT 1`, id, id).Scan(&storedID, &reportJSON)
+	}
 	if err != nil {
 		return nil, err
 	}

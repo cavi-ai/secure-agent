@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,50 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
+
+func TestIncidentReadResolvesAggregatedFlags(t *testing.T) {
+	st := testStore(t)
+	now := time.Now()
+	if err := st.PutIncident(model.IncidentReport{ID: "incident", FlagID: "first", Timestamp: now, Summary: "Aggregated report"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.AggregateIntoIncident("incident", "second", now); !ok {
+		t.Fatal("could not aggregate second flag")
+	}
+	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	for _, id := range []string{"incident", "first", "second"} {
+		w := httptest.NewRecorder()
+		a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/incidents?id="+id, nil))
+		if w.Code != 200 {
+			t.Errorf("lookup %s: %d %s", id, w.Code, w.Body.String())
+			continue
+		}
+		var got struct {
+			Incident model.IncidentReport `json:"incident"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Incident.ID != "incident" || got.Incident.AggregateCount != 2 {
+			t.Errorf("lookup %s returned wrong report: %+v", id, got.Incident)
+		}
+	}
+	// A report identity takes priority over an older report's flag alias.
+	if err := st.PutIncident(model.IncidentReport{ID: "first", FlagID: "other-flag", Timestamp: now}); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/incidents?id=first", nil))
+	var got struct {
+		Incident model.IncidentReport `json:"incident"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("report identity lookup: %d %s", w.Code, w.Body.String())
+	}
+	if w.Code != 200 || got.Incident.ID != "first" {
+		t.Fatalf("report identity lost to flag alias: %d %+v", w.Code, got.Incident)
+	}
+}
 
 func TestIncidentReadFailuresRejectPartialResponsesAndRecover(t *testing.T) {
 	for _, payload := range []string{"invalid", "null", "{}", `{"id":"other"}`, `{"id":"bad","timestamp":"invalid"}`} {
