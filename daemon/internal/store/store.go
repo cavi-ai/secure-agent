@@ -289,29 +289,46 @@ func refreshPlannerStats(db *sql.DB) {
 	}
 }
 
-func (s *Store) PutFlag(fl model.Flag) {
+// PutFlag reports the SQLite outcome. A mirror failure remains independently
+// visible in write health and does not invalidate a successfully saved row.
+func (s *Store) PutFlag(fl model.Flag) (result WriteResult, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	evJSON, _ := json.Marshal(fl.Evidence)
+	evJSON, err := json.Marshal(fl.Evidence)
+	if err != nil {
+		result.HealthChanged = s.noteWrite("flags", err)
+		return result, err
+	}
 	tsStr := fl.TS.UTC().Format(time.RFC3339Nano)
 	var procJSON sql.NullString
 	if fl.Process != nil {
-		if b, err := json.Marshal(fl.Process); err == nil {
-			procJSON = sql.NullString{String: string(b), Valid: true}
+		b, marshalErr := json.Marshal(fl.Process)
+		if marshalErr != nil {
+			result.HealthChanged = s.noteWrite("flags", marshalErr)
+			return result, marshalErr
 		}
+		procJSON = sql.NullString{String: string(b), Valid: true}
 	}
 
-	_, err := s.db.Exec(
+	res, err := s.db.Exec(
 		`INSERT OR REPLACE INTO flags (id, rule, severity, ts, pid, agent, session_id, workspace, evidence, process) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		fl.ID, fl.Rule, fl.Severity, tsStr, fl.PID, fl.Agent, fl.SessionID, fl.Workspace, string(evJSON), procJSON,
 	)
-	s.noteWrite("flags", err)
+	if err == nil {
+		var n int64
+		n, err = res.RowsAffected()
+		if err == nil && n == 0 {
+			err = fmt.Errorf("flag write affected no rows")
+		}
+	}
+	result.HealthChanged = s.noteWrite("flags", err)
 	if err != nil {
 		log.Printf("store: failed to insert flag %s: %v", fl.ID, err)
-	} else {
-		s.bumpRollupLocked(fmt.Sprintf("flag:s%d", fl.Severity), fl.TS)
+		return result, err
 	}
+	result.Changed = true
+	s.bumpRollupLocked(fmt.Sprintf("flag:s%d", fl.Severity), fl.TS)
 
 	// Retention: flags are insert-only like events and must be capped too, or
 	// an always-on daemon on a noisy host grows the DB without limit.
@@ -319,19 +336,21 @@ func (s *Store) PutFlag(fl model.Flag) {
 
 	if s.flagMirror != nil {
 		err := s.flagMirror.append(fl)
-		s.noteWrite("flag mirror", err)
+		result.HealthChanged = s.noteWrite("flag mirror", err) || result.HealthChanged
 		if err != nil {
 			log.Printf("store: flag mirror write failed: %v", err)
 		}
 	}
+	return result, nil
 }
 
-func (s *Store) PutEvent(e event.Event) {
+// PutEvent reports whether SQLite changed a row. Intentional deduplication
+// returns an unchanged result; it cannot clear an outstanding write fault.
+func (s *Store) PutEvent(e event.Event) (result WriteResult, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	tsStr := e.TS.UTC().Format(time.RFC3339Nano)
-	var err error
 	var res sql.Result
 	switch {
 	case e.CallID != "" && e.Kind == event.KindModelCall:
@@ -393,10 +412,23 @@ func (s *Store) PutEvent(e event.Event) {
 			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), nullStr(e.Provider), e.Record,
 		)
 	}
-	s.noteWrite("events", err)
+	var n int64
+	if err == nil {
+		n, err = res.RowsAffected()
+		if err == nil && n == 0 {
+			var stored bool
+			stored, err = s.eventNoopStoredLocked(e, tsStr)
+			if err == nil && !stored {
+				err = fmt.Errorf("event write affected no rows without a stored duplicate")
+			}
+		}
+	}
 	if err != nil {
+		result.HealthChanged = s.noteWrite("events", err)
 		log.Printf("store: failed to insert event: %v", err)
-	} else if n, _ := res.RowsAffected(); n > 0 {
+	} else if n > 0 {
+		result.Changed = true
+		result.HealthChanged = s.noteWrite("events", nil)
 		s.bumpRollupLocked("event:"+e.Kind.String(), e.TS)
 	}
 
@@ -420,6 +452,7 @@ func (s *Store) PutEvent(e event.Event) {
 		refreshPlannerStats(s.db)
 		s.lastPrune = time.Now()
 	}
+	return result, err
 }
 
 func (s *Store) PruneEvents() {

@@ -292,6 +292,7 @@ def main():
         dom_wtremovable = dump_dom(chrome, tmp, "?tab=worktrees&removeremovabledemo")
         dom_wthistory = dump_dom(chrome, tmp, "?tab=worktrees&historydemo")
         dom_wtday = dump_dom(chrome, tmp, "?tab=worktrees&reclaimdaydemo")
+        dom_wtday_midnight = dump_dom(chrome, tmp, "?tab=worktrees&reclaimdaydemo&cleanupmidnight")
         dom_wtsearch = dump_dom(chrome, tmp, "?tab=worktrees&wtsearchdemo")
         dom_wtadopt = dump_dom(chrome, tmp, "?tab=worktrees&adoptdemo")
         dom_wtcadence = dump_dom(chrome, tmp, "?tab=worktrees&removecadence")
@@ -1822,12 +1823,13 @@ def main():
               and "2 entries · 3.0 GB freed" in hx and "Moved an orphan folder" not in hx
               and 'data-kind="removed" aria-pressed="true"' in hx,
               hx_all[:300])
-        hd = dom_wtday.split('id="drawer-body"', 1)[-1].split('id="drawer-foot"', 1)[0]
-        check("worktrees: a chart column shows its numbers on hover and opens the history at that day",
-              "1.0 GB freed by 1 cleanup50 MB moved to the Trash by 1 cleanup" in pre(dom_wtday, "reclaim-tip-probe")
-              and "2 entries · 1.0 GB freed · 50 MB moved to the Trash" in hd and 'data-action="history-day" data-day=""' in hd
-              and "feat/old" not in hd,
-              f"tip={pre(dom_wtday, 'reclaim-tip-probe')!r} {hd[:200]}")
+        for clock, day_dom in [("current time", dom_wtday), ("midnight", dom_wtday_midnight)]:
+            hd = day_dom.split('id="drawer-body"', 1)[-1].split('id="drawer-foot"', 1)[0]
+            check(f"worktrees: a chart column shows its numbers on hover and opens the history at that day ({clock})",
+                  "1.0 GB freed by 1 cleanup50 MB moved to the Trash by 1 cleanup" in pre(day_dom, "reclaim-tip-probe")
+                  and "2 entries · 1.0 GB freed · 50 MB moved to the Trash" in hd and 'data-action="history-day" data-day=""' in hd
+                  and "feat/old" not in hd,
+                  f"tip={pre(day_dom, 'reclaim-tip-probe')!r} {hd[:200]}")
         ws = wt_block(dom_wtsearch)
         check("worktrees: the search box keeps rows whose branch, folder or repository matches, any case",
               ws.count('class="wt-row') == 1 and ".worktrees/evidence" in ws,

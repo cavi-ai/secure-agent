@@ -2,6 +2,7 @@ package correlate
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -32,23 +33,42 @@ func (s *NotifyRuleStore) Load() map[string]bool {
 }
 
 func (s *NotifyRuleStore) loadLocked() map[string]bool {
-	out := map[string]bool{}
-	data, err := os.ReadFile(s.path)
+	out, err := readNotifyOverrides(s.path)
 	if err != nil {
-		return out
-	}
-	if err := json.Unmarshal(data, &out); err != nil {
-		log.Printf("correlate: WARNING: notify-rules file %s is corrupt (%v); overrides are NOT applied until it is fixed", s.path, err)
+		log.Printf("correlate: WARNING: cannot load notify-rules (%v); overrides are NOT applied until it is fixed", err)
 		return map[string]bool{}
 	}
 	return out
+}
+
+// readNotifyOverrides distinguishes an absent policy from one that cannot be
+// loaded. Mutations must never replace unreadable or corrupt operator policy.
+func readNotifyOverrides(path string) (map[string]bool, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return map[string]bool{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read notification policy %s: %w", path, err)
+	}
+	var out map[string]bool
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode notification policy %s: %w", path, err)
+	}
+	if out == nil {
+		return nil, fmt.Errorf("notification policy %s must be a JSON object", path)
+	}
+	return out, nil
 }
 
 // Set records an override. Idempotent.
 func (s *NotifyRuleStore) Set(rule string, notify bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m := s.loadLocked()
+	m, err := readNotifyOverrides(s.path)
+	if err != nil {
+		return err
+	}
 	if cur, ok := m[rule]; ok && cur == notify {
 		return nil
 	}
@@ -61,7 +81,10 @@ func (s *NotifyRuleStore) Set(rule string, notify bool) error {
 func (s *NotifyRuleStore) Clear(rule string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m := s.loadLocked()
+	m, err := readNotifyOverrides(s.path)
+	if err != nil {
+		return err
+	}
 	if _, ok := m[rule]; !ok {
 		return nil
 	}

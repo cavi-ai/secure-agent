@@ -6,7 +6,8 @@
 //   sessiondemo — after 4s, filter the timeline to session 7f3a9c21…
 //   exportdemo  — with raildemo: stub the clipboard, click Export at 9s
 (() => {
-  const now = Date.now();
+  const now = new URLSearchParams(location.search).has('cleanupmidnight')
+    ? new Date().setHours(0, 0, 0, 0) : Date.now();
   const iso = (msAgo) => new Date(now - msAgo).toISOString();
   let bookCleanup = () => {};
 
@@ -1936,10 +1937,18 @@
   // Cleanup ledger: three rows (one older than the charted days); the daily
   // series is bucketed from the rows by local day, like the daemon's, and a
   // removal the mock completes books a row (bookCleanup).
+  // Anchor to local noon so the paired rows share a calendar day even when
+  // the suite starts at midnight or crosses a daylight-saving transition.
+  const cleanupISO = (daysAgo, minute = 0) => {
+    const d = new Date(now);
+    d.setDate(d.getDate() - daysAgo);
+    d.setHours(12, minute, 0, 0);
+    return d.toISOString();
+  };
   const ledgerEntries = [
-    { id: 3, ts: iso(2 * 86400000), action: 'worktree-remove', path: WT_REPO + '/.worktrees/shipped', repo: WT_REPO, bytes: 1073741824, detail: 'branch feat/shipped kept; merged into origin/main (squash)' },
-    { id: 2, ts: iso(2 * 86400000 + 60000), action: 'trash:orphan-worktree', path: '/Users/dev/.cursor/worktrees/api-service/ab', repo: WT_REPO, bytes: 52428800 },
-    { id: 1, ts: iso(40 * 86400000), action: 'worktree-remove', path: WT_REPO + '/.worktrees/old', repo: WT_REPO, bytes: 2147483648, detail: '<b>branch</b> feat/old kept' },
+    { id: 3, ts: cleanupISO(2, 1), action: 'worktree-remove', path: WT_REPO + '/.worktrees/shipped', repo: WT_REPO, bytes: 1073741824, detail: 'branch feat/shipped kept; merged into origin/main (squash)' },
+    { id: 2, ts: cleanupISO(2), action: 'trash:orphan-worktree', path: '/Users/dev/.cursor/worktrees/api-service/ab', repo: WT_REPO, bytes: 52428800 },
+    { id: 1, ts: cleanupISO(40), action: 'worktree-remove', path: WT_REPO + '/.worktrees/old', repo: WT_REPO, bytes: 2147483648, detail: '<b>branch</b> feat/old kept' },
   ];
   const ledgerTotals = { bytes: 3221225472, count: 2, bytes_30d: 1073741824, count_30d: 1, trashed_bytes: 52428800, trashed_count: 1 };
   bookCleanup = (e) => {
