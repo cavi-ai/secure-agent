@@ -2022,18 +2022,27 @@ function policyListHTML(kind, rows, st) {
     path: 'No file exceptions yet. Always allow this file, on a finding, adds one here.',
     mute: 'No muted flag classes. Stop flagging this, on a finding, adds one here.',
     expected: 'No expected secret reads. Expected, on a read-then-connect finding, adds one here.',
+    scope: 'No scoped permissions. Choose a session or timed permission on a recorded finding or guard prompt.',
   };
   if (!rows.length) return `<div class="empty"><span>${EMPTY[kind]}</span></div>`;
   const row = (main, sub, meta) => `<div class="policy-row"><div class="policy-row-main">${main}</div>`
     + `<div class="policy-row-sub">${sub}</div>${meta ? `<span class="policy-row-meta">${meta}</span>` : ''}</div>`;
   const when = r => r.created_at ? escapeHTML(String(r.created_at).slice(0, 10)) : '';
   const items = rows.map(r => {
+    if (kind === 'scope') {
+      const revoked = !!r.revoked_at, expired = r.expires_at && Date.parse(r.expires_at) <= Date.now();
+      const lifetime = revoked ? 'Revoked' : expired ? 'Expired' : r.kind === 'session' ? `Until session ${r.session_id} ends` : `Expires ${r.expires_at}`;
+      const recipient = r.destination ? ` → ${r.destination}` : '';
+      return row(`<b>${escapeHTML(r.agent)}</b> · ${escapeHTML(r.operation)} <code>${escapeHTML(r.resource_path)}</code>${escapeHTML(recipient)}`,
+        `${escapeHTML(r.workspace)} · executable path ${escapeHTML(r.reader_exe)} (observed, not signature verified) · ${escapeHTML(lifetime)}`,
+        revoked || expired ? '' : `<button class="btn btn-ghost btn-sm" data-action="revoke-scope" data-id="${escapeHTML(r.id)}">Revoke</button>`);
+    }
     if (kind === 'guard') {
       return row(`<span class="policy-decision ${r.decision === 'deny' ? 'deny' : 'allow'}">${escapeHTML(r.decision || '')}</span> `
-        + `<b>${escapeHTML(r.rule_id || '')}</b> for ${escapeHTML(r.agent || '')}`, escapeHTML(r.source || ''), when(r));
+        + `<b>${escapeHTML(r.rule_id || '')}</b> for ${escapeHTML(r.agent || '')}`, `Legacy policy · no expiry · ${escapeHTML(r.source || '')}`, when(r));
     }
     if (kind === 'path') {
-      return row(`<code>${escapeHTML(r.path || '')}</code>`, `${escapeHTML(r.rule_id || '')} for ${escapeHTML(r.agent || '')}`, when(r));
+      return row(`<code>${escapeHTML(r.path || '')}</code>`, `Legacy policy · includes descendants · no expiry · ${escapeHTML(r.rule_id || '')} for ${escapeHTML(r.agent || '')}`, when(r));
     }
     if (kind === 'expected') {
       if (r.scope === 'file') return row(`<b>Non-secret file</b> <code>${escapeHTML(r.path || '')}</code>`,
@@ -2043,7 +2052,7 @@ function policyListHTML(kind, rows, st) {
       const reader = r.reader === 'tool'  ? 'an agent tool' : (r.reader || '');
       const hits = Number(r.hits) || 0;
       return row(`<b>${escapeHTML(reader)}</b> reads <code>${escapeHTML(r.path || '')}</code>, then reaches <b>${escapeHTML(r.dest || '')}</b>`,
-        `${escapeHTML(r.agent || '')} · ${legacy ? 'Legacy provider exception is inactive; review an exact host' : hits + ' since the daemon started'}`,
+        `${escapeHTML(r.agent || '')} · legacy policy · no expiry · ${legacy ? 'Legacy provider exception is inactive; review an exact host' : hits + ' since the daemon started'}`,
         `${when(r)} <button class="source-remove" title="Forget: flag this pattern again" data-action="forget-expected" data-key="${escapeHTML(r.key || '')}"><svg class="icon"><use href="#i-close"/></svg></button>`);
     }
     const scope = (r.host === '*' ? 'all hosts' : escapeHTML(r.host || '')) + ' · ' + (r.agent ? escapeHTML(r.agent) : 'all agents');
@@ -2061,6 +2070,14 @@ function policyListHTML(kind, rows, st) {
   return `<div class="policy-list" data-policy="${kind}">${grouped}</div>`;
 }
 // Durable review actions are revision-bound; none creates a permission.
+function permissionChoiceLabel(choice, prefix = 'Expected') {
+  return `${prefix} ${choice.kind === 'once' ? 'once' : choice.kind === 'session' ? 'for this session' : choice.expiry === '7d' ? 'for 7 days' : 'for 24 hours'}`;
+}
+function reviewPermissionItems(r) {
+  if (!r.evidence_available || r.review_state === 'closed_reported' || r.decision && r.decision.action === 'expect' && r.decision.revision === r.revision) return [];
+  return (r.available_scopes || [{kind:'once'}]).map(choice => ({label:permissionChoiceLabel(choice),
+    attrs:`data-action="review-decision" data-id="${escapeHTML(r.id)}" data-revision="${Number(r.revision)}" data-decision="expect" data-scope="${escapeHTML(choice.kind)}"${choice.expiry ? ` data-expiry="${escapeHTML(choice.expiry)}"` : ''}`}));
+}
 function reviewHTML(r, draft, actions = true) {
   const c = r.context || {}, a = r.assessment || {};
   const state = r.review_state || 'unreviewed';
@@ -2072,9 +2089,12 @@ function reviewHTML(r, draft, actions = true) {
     <p class="finding-why">${escapeHTML(r.agent || 'Unknown agent')} · ${Number(r.count)} occurrences · evidence revision ${Number(r.revision)}${r.reviewed_revision ? ` · reviewed revision ${Number(r.reviewed_revision)}` : ''}</p>
     <p class="finding-why">${escapeHTML((c.destinations || []).join(', ') || 'Destination unknown')} · ${escapeHTML(c.session_id || 'Session unknown; this source only')}${c.workspace ? ` · ${escapeHTML(c.workspace)}` : ''}</p>
     ${assessmentHTML(a)}
+    <p>Expected once records this review only. Future permissions count matching observed activity as expected; they do not bypass firewall or payload checks. They use the recorded executable path, workspace, file and exact endpoint. Executable signatures are not verified. Revoke in Policies.</p>
+    ${(r.available_scopes || []).some(s => s.kind !== 'once') ? '' : '<p>Future permission is unavailable because session, workspace, executable or recipient identity is incomplete or the session has ended.</p>'}
     ${r.evidence_flag_available ? `<button class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${escapeHTML(r.evidence_flag_id)}">View supporting evidence</button>` : '<p>The source supporting this assessment has expired. The recorded risk remains in history.</p>'}
     ${draft && draft.conflict ? `<p role="alert">Evidence changed. Your ${escapeHTML(draft.action.replaceAll('_', ' '))} choice is retained. Review the new facts and choose again.</p>` : ''}
     ${r.evidence_available ? (actions ? `<div class="attention-actions">${state === 'unreviewed' ? `<button class="btn btn-primary btn-sm" ${action('acknowledge')}>Mark reviewed</button>` : ''}${state !== 'closed_reported' ? `<button class="btn btn-ghost btn-sm" ${action('close_reported')}>Report closure</button>` : ''}</div>` : '') : '<p>Source evidence has expired. Risk and review history remain; closure has not been verified.</p>'}
+    ${actions ? `<div class="attention-actions">${reviewPermissionItems(r).map(item => `<button class="btn btn-ghost btn-sm" ${item.attrs}>${item.label}</button>`).join('')}</div>` : ''}
     <details><summary>Evidence and review history</summary><p>${r.decision ? `${escapeHTML(r.decision.action.replaceAll('_', ' '))} · revision ${Number(r.decision.revision)} · ${escapeHTML(r.decision.at)}` : 'No decision receipt recorded.'}</p>${links}${incidents}</details>
   </article>`;
 }

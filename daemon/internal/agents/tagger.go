@@ -275,6 +275,38 @@ func (t *Tagger) ParentPID(pid int32) (int32, bool) {
 	return 0, false
 }
 
+// LiveFamily verifies the cached attribution against the process source now.
+// A kernel peer PID alone is insufficient: its ancestry and the root's start
+// time must still agree, preventing PID reuse from inheriting permission.
+func (t *Tagger) LiveFamily(pid int32) (AgentInfo, bool) {
+	info, ok := t.Tag(pid)
+	if !ok || info.RootPID <= 0 {
+		return AgentInfo{}, false
+	}
+	root, ok := t.Tag(info.RootPID)
+	if !ok || root.StartedAt.IsZero() {
+		return AgentInfo{}, false
+	}
+	seen := map[int32]bool{}
+	for steps := 0; pid > 0 && steps < 64 && !seen[pid]; steps++ {
+		seen[pid] = true
+		p, live := t.ps.Info(pid)
+		if !live {
+			return AgentInfo{}, false
+		}
+		if pid == root.PID {
+			if !p.StartTime.Equal(root.StartedAt) || p.Exe == "" || p.CWD == "" {
+				return AgentInfo{}, false
+			}
+			root.ExePath = p.Exe
+			root.CWD = p.CWD
+			return root, true
+		}
+		pid = p.PPID
+	}
+	return AgentInfo{}, false
+}
+
 // Alive reports whether pid exists: in the last process table, or, when one
 // sample missed it, in the process source. The cache is not touched.
 func (t *Tagger) Alive(pid int32) bool {

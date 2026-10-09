@@ -233,7 +233,8 @@
             { kind: 'guard', priority: 5, id: 'guard-1', title: 'Guard decision',
               detail: 'Read wants access to /workspace/api-service/.env',
               rule: 'cloud-creds', path: '/workspace/api-service/.env',
-              scopeText: 'Allow Always approves every path under rule "cloud-creds" for agent "claude", not just this one.' },
+              available_scopes: [{kind:'once'},{kind:'session'},{kind:'exact',expiry:'24h'},{kind:'exact',expiry:'7d'}],
+              scopeText: 'Future permissions cover this file, tool, workspace and observed executable path. Revoke in Policies.' },
             { kind: 'resource', priority: 4, id: 'resource-1', action: 'pause',
               title: 'Resource pressure', detail: 'Memory grew 1.4 GB in 15 minutes.' },
           ]
@@ -330,6 +331,7 @@
     '/expected': [
       { key: 'claude|gh|/Users/dev/.config/gh/hosts.yml|GitHub', agent: 'claude', reader: 'gh', path: '/Users/dev/.config/gh/hosts.yml', dest: 'GitHub', hits: 4, created_at: '2026-09-25T10:00:00Z' }
     ],
+    '/decision-scopes': [],
     '/egress/uninspected': [
       { agent: 'cursor', host: 'registry.npmjs.org', count: 14, first_seen: iso(86400000), last_seen: iso(300000), session_id: 'sess-cursor-2', assessment: 'benign', rationale: 'npm registry is routine for JS projects', identity: { kind: 'hostname', name: 'registry.npmjs.org' } },
       { agent: 'claude', host: 'statsig.example.com', count: 3, first_seen: iso(7200000), last_seen: iso(900000), session_id: 'sess-claude-1', identity: { kind: 'hostname', name: 'statsig.example.com' } },
@@ -410,7 +412,8 @@
     '/guard/pending': [{
       id: 'guard-1', agent: 'claude', tool: 'Read', path: '/workspace/api-service/.env',
       rule_id: 'cloud-creds', ts: iso(30000),
-      scope_text: 'Allow Always approves every path under rule "cloud-creds" for agent "claude", not just this one.'
+      available_scopes: [{kind:'once'},{kind:'session'},{kind:'exact',expiry:'24h'},{kind:'exact',expiry:'7d'}],
+      scope_text: 'Future permissions cover this file, tool, workspace and observed executable path. Revoke in Policies.'
     }],
     '/stats/rollup': (() => {
       const pts = [];
@@ -961,6 +964,13 @@
       data['/posture'].groups = (data['/posture'].groups || []).filter(g => g.items.length > 0);
       data['/posture'].items = data['/posture'].items.filter(item => !(item.kind === 'guard_pending' && item.id === body.id));
       data['/posture'].needs_you = data['/posture'].items.length;
+      return {status:'ok',resolved:true};
+    }
+    if (p === '/reviews/decision') {
+      const receipt={id:body.id,revision:body.revision,action:body.action,at:iso(0),scope_ids:['scope-browser']};
+      const review=data['/reviews'].reviews[0];review.review_state='reviewed';review.decision=receipt;
+      data['/decision-scopes']=[{id:'scope-browser',kind:body.scope.kind,agent:'claude',session_id:'sess-claude-1',workspace:'/Users/dev/workspace/api-service',reader_exe:'/usr/bin/cat',rule_id:'sensitive-read-then-connect',resource_path:'/work/.env',operation:'read-connect',destination:'api.example.com:443',created_at:iso(0),expires_at:new Date(now+86400000).toISOString(),identity_basis:'observed-session'}];
+      return receipt;
     }
     if (p === '/advisor/assess-host') {
       // Cached verdict for a known host; a fresh (unknown) host queues.
@@ -1096,12 +1106,17 @@
         try { host = JSON.parse(opts.body).host; } catch { /* ignored */ }
         line += ' row=' + (document.querySelector(`#firewall-container [data-action="allowlist-remove"][data-host="${host}"]`) ? 1 : 0);
       }
-      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('ghdemo') || MODE.includes('rawmute') || MODE.includes('orgallowdemo') || MODE.includes('routinedemo') || MODE.includes('bulkdemo')) && opts.body) line += ' body=' + opts.body;
+      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('ghdemo') || MODE.includes('rawmute') || MODE.includes('orgallowdemo') || MODE.includes('routinedemo') || MODE.includes('bulkdemo') || MODE.includes('scopedpermission')) && opts.body) line += ' body=' + opts.body;
       if (MODE.includes('rawmute') && p === '/mute' && opts.method === 'POST') data['/mute'].push(JSON.parse(opts.body));
       if (p === '/expected' && opts.method === 'DELETE') {
         line = `${opts.method} ${String(path)}`;
         const key = new URLSearchParams(String(path).split('?')[1] || '').get('key');
         data['/expected'] = data['/expected'].filter(e => e.key !== key);
+      }
+      if (p === '/decision-scopes' && opts.method === 'DELETE') {
+        line=`DELETE ${String(path)}`;
+        const id=new URLSearchParams(String(path).split('?')[1]||'').get('id');
+        const scope=data['/decision-scopes'].find(s=>s.id===id);if(scope)scope.revoked_at=iso(0);
       }
       reqLog.push(line);
       stamp('mock-requests', reqLog.join('\n'));
@@ -1157,6 +1172,7 @@
         suggestions: data['/allowlist/suggestions'],
         mutes: data['/mute'],
         sessions: data['/sessions']
+        ,reviews:data['/reviews'] || {reviews:[],degraded:false}
       };
       if (MODE.includes('refreshrace') && ++snapshotReads === 1) {
         body = JSON.parse(JSON.stringify(body));
@@ -2813,6 +2829,16 @@
     }, 1000);
   }
   // policylists: the Policy tab, opened once telemetry has landed.
+  if (MODE.includes('scopedpermission')) {
+    data['/reviews']={reviews:[{id:'review-scope',revision:3,review_state:'unreviewed',count:1,evidence_available:true,evidence_flag_available:false,
+      context:{rule:'sensitive-read-then-connect',session_id:'sess-claude-1',workspace:'/Users/dev/workspace/api-service',resources:['/work/.env'],destinations:['api.example.com:443']},
+      available_scopes:[{kind:'once'},{kind:'session'},{kind:'exact',expiry:'24h'},{kind:'exact',expiry:'7d'}],source_ids:['flag-1'],incident_ids:[],assessment:{risk:'high',control:'observed',reason:'Recorded read and connection'}}],degraded:false};
+    setTimeout(()=>openTab('findings'),4000);
+    setTimeout(()=>document.querySelector('#flags-list [data-decision="expect"][data-scope="exact"][data-expiry="24h"]')?.click(),7000);
+    setTimeout(()=>document.getElementById('confirm-ok')?.click(),7500);
+    setTimeout(()=>openTab('policy'),8500);
+    if (MODE.includes('revokescope')) setTimeout(()=>document.querySelector('#policy-scopes [data-action="revoke-scope"]')?.click(),10000);
+  }
   if (MODE.includes('policylists')) {
     setTimeout(() => openTab('policy'), 4000);
   }

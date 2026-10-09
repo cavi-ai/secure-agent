@@ -355,6 +355,32 @@ func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
 		return err
 	}
 	r.EvidenceFlagAvailable = available == 1
+	r.AvailableScopes = nil
+	if r.EvidenceAvailable && r.ReviewState != "closed_reported" && (r.Decision == nil || r.Decision.Action != "expect" || r.Decision.Revision != r.Revision) {
+		r.AvailableScopes = []model.ScopeChoice{{Kind: "once"}}
+		complete := true
+		for _, id := range r.SourceIDs {
+			f, ok := s.getFlagLocked(id)
+			coordinates, e := model.ReadConnectScopes(f)
+			if !ok || e != nil {
+				complete = false
+				break
+			}
+			for _, g := range coordinates {
+				model.ScopeChoice{Kind: "session"}.Apply(&g, time.Now().UTC())
+				if g.Validate() != nil || !scopeSession(s.db, g) {
+					complete = false
+					break
+				}
+			}
+			if !complete {
+				break
+			}
+		}
+		if complete {
+			r.AvailableScopes = append(r.AvailableScopes, model.ScopeChoice{Kind: "session"}, model.ScopeChoice{Kind: "exact", Expiry: "24h"}, model.ScopeChoice{Kind: "exact", Expiry: "7d"})
+		}
+	}
 	rows, err = s.db.Query(`SELECT id FROM incidents WHERE flag_id IN (SELECT flag_id FROM finding_review_members WHERE review_id=?)
  UNION SELECT id FROM incidents WHERE COALESCE(rule,'')=? AND COALESCE(session_id,'')=? AND EXISTS(SELECT 1 FROM json_each(flag_ids) WHERE value IN (SELECT flag_id FROM finding_review_members WHERE review_id=?)) ORDER BY id LIMIT 100`, r.ID, r.Context.Rule, r.Context.SessionID, r.ID)
 	if err != nil {
@@ -446,7 +472,8 @@ func (s *Store) FindingReviewID(flagID string) (string, error) {
 }
 
 func (s *Store) DecideFindingReview(req model.ReviewDecisionRequest) (receipt model.ReviewDecisionReceipt, err error) {
-	if req.Revision < 1 || (req.Action != "acknowledge" && req.Action != "close_reported") {
+	if req.Revision < 1 || (req.Action != "acknowledge" && req.Action != "close_reported" && req.Action != "expect") ||
+		(req.Action == "expect" && (req.Scope == nil || req.Scope.Validate() != nil)) || (req.Action != "expect" && req.Scope != nil) {
 		return receipt, fmt.Errorf("invalid review decision")
 	}
 	s.mu.Lock()
@@ -492,6 +519,19 @@ func (s *Store) DecideFindingReview(req model.ReviewDecisionRequest) (receipt mo
 	if err == nil {
 		receipt = model.ReviewDecisionReceipt{ID: req.ID, Revision: req.Revision, Action: req.Action}
 		receipt.At, _ = time.Parse(time.RFC3339Nano, at)
+		if req.Action == "expect" {
+			var choice, ids string
+			if err = tx.QueryRow(`SELECT choice_json,ids_json FROM decision_scope_receipts WHERE review_id=? AND revision=?`, req.ID, req.Revision).Scan(&choice, &ids); err != nil {
+				return receipt, err
+			}
+			b, _ := json.Marshal(req.Scope)
+			if choice != string(b) {
+				return receipt, ErrReviewConflict
+			}
+			if err = json.Unmarshal([]byte(ids), &receipt.ScopeIDs); err != nil {
+				return receipt, err
+			}
+		}
 		return receipt, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -501,6 +541,11 @@ func (s *Store) DecideFindingReview(req model.ReviewDecisionRequest) (receipt mo
 		return receipt, ErrReviewConflict
 	}
 	receipt = model.ReviewDecisionReceipt{ID: req.ID, Revision: req.Revision, Action: req.Action, At: time.Now().UTC()}
+	if req.Action == "expect" {
+		if err = createReviewScopesTx(tx, req, sources, &receipt); err != nil {
+			return receipt, err
+		}
+	}
 	if _, err = tx.Exec(`UPDATE flags SET acknowledged=COALESCE(NULLIF(acknowledged,''),?) WHERE id IN (SELECT flag_id FROM finding_review_members WHERE review_id=?)`, receipt.At.Format(time.RFC3339Nano), req.ID); err != nil {
 		return
 	}

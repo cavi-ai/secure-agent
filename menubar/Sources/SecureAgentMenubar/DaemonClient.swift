@@ -174,7 +174,12 @@ public final class DaemonClient: Sendable {
 
     public func resolveGuard(_ req: GuardResolveRequest) async throws {
         let data = try JSONEncoder().encode(req)
-        _ = try await request(method: "POST", path: "/guard/resolve", body: data)
+		let response = try await request(method: "POST", path: "/guard/resolve", body: data)
+		struct Receipt: Decodable { let resolved: Bool }
+		let receipt = try JSONDecoder().decode(Receipt.self, from: response)
+		guard receipt.resolved else {
+			throw NSError(domain: "GuardDecision", code: 409, userInfo: [NSLocalizedDescriptionKey: "Request unavailable for this decision; refresh requests and permissions."])
+		}
     }
 
     public func fetchGuardRules() async throws -> [GuardRuleModel] {

@@ -2,6 +2,17 @@ import XCTest
 @testable import SecureAgentMenubar
 
 final class GuardTests: XCTestCase {
+	func testScopedChoicesAndExplicitExpiry() throws {
+		let json = #"{"id":"p","agent":"codex","tool":"Read","path":"/work/.env","rule_id":"env","ts":"now","workspace":"/work","session_id":"session","reader_exe":"/bin/codex","available_scopes":[{"kind":"once"},{"kind":"session"},{"kind":"exact","expiry":"24h"},{"kind":"exact","expiry":"7d"}]}"#
+		let pending = try JSONDecoder().decode(GuardPending.self, from: Data(json.utf8))
+		XCTAssertEqual(pending.readerExe,"/bin/codex")
+		XCTAssertEqual(pending.workspace,"/work")
+		XCTAssertEqual(pending.availableScopes?.map { $0.kind },["once","session","exact","exact"])
+		let data = try JSONEncoder().encode(GuardResolveRequest(id:"p",verdict:"allow",scope:"exact",expiry:"24h"))
+		let request = try XCTUnwrap(JSONSerialization.jsonObject(with:data) as? [String:String])
+		XCTAssertEqual(request["expiry"],"24h")
+		XCTAssertEqual(request["scope"],"exact")
+	}
     func testDecodePending() throws {
         let json = #"[{"id":"p1","agent":"claude","tool":"Read","path":"/Users/x/.aws/credentials","rule_id":"cloud-creds","ts":"2026-09-01T00:00:00Z"}]"#
         let items = try JSONDecoder().decode([GuardPending].self, from: Data(json.utf8))

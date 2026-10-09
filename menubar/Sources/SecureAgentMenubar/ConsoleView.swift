@@ -353,10 +353,14 @@ struct ConsoleView: View {
                 Button { Task { await state.resolvePendingGuard(verdict: "allow", scope: "once") } } label: {
                     Text("Allow Once").font(.system(size: 11, weight: .semibold))
                 }.buttonStyle(.bordered).controlSize(.small).tint(.brand)
-                Button { Task { await state.resolvePendingGuard(verdict: "allow", scope: "always") } } label: {
-                    Text("Allow Always").font(.system(size: 11))
-                }.buttonStyle(.bordered).controlSize(.small)
-                Button { Task { await state.resolvePendingGuard(verdict: "deny", scope: "always") } } label: {
+				if let scopes = p.availableScopes, scopes.contains(where: { $0.kind != "once" }) {
+					Menu("Future access") {
+						ForEach(scopes.filter { $0.kind != "once" }) { choice in
+							Button(choice.label) { Task { await state.resolvePendingGuard(verdict: "allow", scope: choice.kind, expiry: choice.expiry) } }
+						}
+					}.controlSize(.small)
+				}
+                Button { Task { await state.resolvePendingGuard(verdict: "deny", scope: "once") } } label: {
                     Text("Deny").font(.system(size: 11, weight: .semibold))
                 }.buttonStyle(.borderedProminent).controlSize(.small).tint(.bad)
             }

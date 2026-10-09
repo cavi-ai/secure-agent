@@ -68,6 +68,34 @@ func TestResolveProcessTreeTier(t *testing.T) {
 	}
 }
 
+func TestPermissionIdentityRequiresLiveResolvedFamily(t *testing.T) {
+	started := time.Now().Add(-time.Hour)
+	procs := fakeProcs{100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: "/repo", StartTime: started}, 200: {PID: 200, PPID: 100, Exe: "/usr/bin/python3", CWD: "/repo", StartTime: started.Add(time.Second)}}
+	r, st := testResolver(t, procs)
+	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now()}
+	id := r.Resolve(&e)
+	if g, ok := r.PermissionIdentity(200, id); !ok || g.ReaderExe != "/usr/local/bin/claude" || g.SessionID != id {
+		t.Fatal("live peer was not bound to observed harness", g, ok)
+	}
+	if _, ok := r.PermissionIdentity(200, "other-existing-id"); ok {
+		t.Fatal("supplied session ID overrode resolver")
+	}
+	p := procs[100]
+	p.StartTime = p.StartTime.Add(time.Second)
+	procs[100] = p
+	if _, ok := r.PermissionIdentity(200, id); ok {
+		t.Fatal("PID reuse inherited permission")
+	}
+	p.StartTime = started
+	procs[100] = p
+	if err := st.EndSession(id, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.PermissionIdentity(200, id); ok {
+		t.Fatal("ended session retained permission identity")
+	}
+}
+
 // A tagged child process (a shell the harness spawned, in another cwd) joins
 // its harness's session: one row, keyed, rooted and scoped on the harness.
 func TestChildProcessJoinsHarnessSession(t *testing.T) {

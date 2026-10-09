@@ -205,7 +205,8 @@ type API struct {
 	fwSources     *firewall.SourceStore
 	fwBaseSources []string
 
-	guardBroker *guard.Broker
+	guardBroker   *guard.Broker
+	guardIdentity func(int32, string) (model.DecisionScope, bool)
 
 	correlator   *correlate.Correlator
 	allowlist    *correlate.AllowlistStore
@@ -307,7 +308,8 @@ type Deps struct {
 	Firewall FirewallControl
 
 	// Directory guard (optional).
-	Guard *guard.Broker
+	Guard         *guard.Broker
+	GuardIdentity func(int32, string) (model.DecisionScope, bool)
 
 	// Correlator-derived stores (optional).
 	Correlator   *correlate.Correlator
@@ -405,6 +407,7 @@ func New(d Deps) *API {
 		fwSources:       d.Firewall.Sources,
 		fwBaseSources:   d.Firewall.BaseSources,
 		guardBroker:     d.Guard,
+		guardIdentity:   d.GuardIdentity,
 		correlator:      d.Correlator,
 		allowlist:       d.Allowlist,
 		mutes:           d.Mutes,
@@ -676,6 +679,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/flags":                        a.handleFlags,
 		"/reviews":                      a.handleReviews,
 		"/reviews/decision":             a.handleReviewDecision,
+		"/decision-scopes":              a.handleDecisionScopes,
 		"/flags/":                       a.handleFlagExplain,
 		"/events":                       a.handleEvents,
 		"/events/stream":                a.handleEventStream,

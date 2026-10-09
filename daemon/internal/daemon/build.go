@@ -197,6 +197,19 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	fw := setupFirewall(cfg)
 
 	allowlistStore, muteStore, expectStore := wireEgressOverrides(cfg, correlator, advisorStk)
+	correlator.SetScopedExpected(func(requests []model.DecisionScope, pid int32) bool {
+		if len(requests) == 0 {
+			return false
+		}
+		identity, ok := resolver.PermissionIdentity(pid, requests[0].SessionID)
+		if !ok || identity.Agent != requests[0].Agent {
+			return false
+		}
+		for i := range requests {
+			requests[i].Workspace = identity.Workspace
+		}
+		return st.MatchDecisionScopes(requests)
+	})
 	st.SetAllowlistSource(allowlistStore.Load)
 
 	var proxyServer *proxy.ProxyServer
@@ -279,20 +292,21 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			Sources:     fw.Sources,
 			BaseSources: fw.BaseSources,
 		},
-		Guard:        guardBroker,
-		Correlator:   correlator,
-		Allowlist:    allowlistStore,
-		Mutes:        muteStore,
-		Expected:     expectStore,
-		NotifyRules:  notifyRuleStore,
-		NotifyScopes: notifyScopeStore,
-		Retriage:     retriageFuncs,
-		Plan:         planFuncs,
-		HostAssess:   hostAssessFuncs,
-		GuardAdvisor: guardAdvisor,
-		PeerChecker:  api.NewPeerChecker(),
-		AgentPIDs:    agentPIDSet,
-		UIPID:        uiPID,
+		Guard:         guardBroker,
+		GuardIdentity: resolver.PermissionIdentity,
+		Correlator:    correlator,
+		Allowlist:     allowlistStore,
+		Mutes:         muteStore,
+		Expected:      expectStore,
+		NotifyRules:   notifyRuleStore,
+		NotifyScopes:  notifyScopeStore,
+		Retriage:      retriageFuncs,
+		Plan:          planFuncs,
+		HostAssess:    hostAssessFuncs,
+		GuardAdvisor:  guardAdvisor,
+		PeerChecker:   api.NewPeerChecker(),
+		AgentPIDs:     agentPIDSet,
+		UIPID:         uiPID,
 		IsAgentPID: func(pid int32) bool {
 			_, isAgent := tagger.Tag(pid)
 			return isAgent

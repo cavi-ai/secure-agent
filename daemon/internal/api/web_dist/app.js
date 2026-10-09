@@ -401,12 +401,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const reviewDrafts = new Map();
   let reviewCursor = '';
   let reviewPageSeq = 0;
-  window.reviewAct = async function(id, revision, action) {
-    reviewDrafts.set(id, { action, conflict: false });
+  window.reviewAct = async function(id, revision, action, scope) {
+    if (scope && scope.kind !== 'once' && !await window.saConfirm('Count future activity as expected only for the recorded executable path, workspace, file and exact endpoint? ' + (scope.kind === 'session' ? 'This ends with the current session.' : `Expires after ${scope.expiry === '7d' ? '7 days' : '24 hours'}.`) + ' Firewall and payload checks remain active. Revoke in Policies.', {title:'Expected activity',okLabel:'Save permission'})) return;
+    reviewDrafts.set(id, { action, scope, conflict: false });
     try {
-      const res = await apiFetch('/reviews/decision', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({id,revision,action}) });
+      const res = await apiFetch('/reviews/decision', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({id,revision,action,...(scope ? {scope} : {})}) });
       if (res.status === 409) {
-        reviewDrafts.set(id, { action, conflict: true });
+        reviewDrafts.set(id, { action, scope, conflict: true });
         await fetchTelemetry();
         markDirty('flags', 'attention');
         showToast('Evidence changed. Review the new facts and choose again.', 'info');
@@ -1144,7 +1145,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Policy lists are not telemetry either: they load when the Policy tab
   // opens and on its Refresh, never on the refresh cycle.
-  const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, loading: false, error: '' };
+  const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null, loading: false, error: '' };
   async function loadPolicy() {
     if (policyState.loading) return;
     policyState.loading = true;
@@ -1157,8 +1158,8 @@ document.addEventListener('DOMContentLoaded', () => {
       return (await r.json()) || [];
     };
     try {
-      const [rules, paths, mutes, expected] = await Promise.all([get('/guard/rules'), get('/guard/path-allow'), get('/mute'), get('/expected')]);
-      Object.assign(policyState, { guardRules: rules, pathAllows: paths, mutes, expected });
+      const [rules, paths, mutes, expected, scopes] = await Promise.all([get('/guard/rules'), get('/guard/path-allow'), get('/mute'), get('/expected'), get('/decision-scopes')]);
+      Object.assign(policyState, { guardRules: rules, pathAllows: paths, mutes, expected, scopes });
     } catch (err) {
       policyState.error = "Couldn't load the policy lists: " + (err.message || err);
     } finally {
@@ -1178,7 +1179,17 @@ document.addEventListener('DOMContentLoaded', () => {
     put('policy-path-allows', 'badge-path-allows', st.pathAllows, policyListHTML('path', st.pathAllows, st));
     put('policy-mutes', 'badge-mutes', st.mutes, policyListHTML('mute', st.mutes, st));
     put('policy-expected', 'badge-expected', st.expected, policyListHTML('expected', st.expected, st));
+    put('policy-scopes', 'badge-scopes', st.scopes, policyListHTML('scope', st.scopes, st));
   }
+
+  window.revokeScope = async function(id) {
+    try {
+      const res = await apiFetch('/decision-scopes?id=' + encodeURIComponent(id), {method:'DELETE'});
+      if (!res.ok) throw new Error(await res.text());
+      await loadPolicy();
+      showToast('Permission revoked. The next matching request will be evaluated again.', 'success');
+    } catch (err) { showToast(`Revocation could not be saved: ${err}`, 'danger'); }
+  };
 
   // Agent tab: the system agent's status, chat, plans and runs load when
   // the tab opens and after each action. While the model answers or a
@@ -3188,11 +3199,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  window.resolveGuardPrompt = async function(id, verdict, scope) {
+  window.resolveGuardPrompt = async function(id, verdict, scope, expiry) {
     const action = verdict === 'allow'
-      ? (scope === 'always' ? 'allow every future path matched by this rule' : 'allow this request once')
+      ? (scope === 'always' ? 'allow every future path matched by this rule' : scope === 'session' ? 'allow this file and tool in this session until it ends' : scope === 'exact' ? `allow this file and tool in this workspace for ${expiry === '7d' ? '7 days' : '24 hours'}` : 'allow this request once')
       : (scope === 'always' ? 'deny every future path matched by this rule' : 'deny this request once');
-    if (scope !== 'once' && !await saConfirm(`Apply guard decision: ${action}?`, { title: 'Guard decision', okLabel: 'Apply' })) return;
+    if (scope !== 'once' && !await saConfirm(`Apply guard decision: ${action}? Executable identity uses its observed path. File approvals do not authorize network access. Revoke in Policies.`, { title: 'Guard decision', okLabel: 'Apply' })) return;
     const revert = stage(['guardPending', 'posture'], ['attention', 'posture', 'tab-badges'], () => {
       telemetryData.guardPending = (telemetryData.guardPending || []).filter(x => x.id !== id);
       mapAttentionItems(it => (it.kind === 'guard' && it.id === id ? null : it));
@@ -3200,10 +3211,12 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const res = await apiFetch('/guard/resolve', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, verdict, scope })
+        body: JSON.stringify({ id, verdict, scope, ...(expiry ? {expiry} : {}) })
       });
       if (!res.ok) throw new Error(await res.text());
-      showToast(`Guard request ${verdict === 'allow' ? 'allowed' : 'denied'}${scope === 'always' ? ' for this rule' : ' once'}.`, 'success');
+      const receipt = await res.json();
+      if (!receipt.resolved) throw new Error('This request is unavailable for that decision. Refresh requests and permissions.');
+      showToast(`Guard decision saved: ${action}.`, 'success');
       cardNote('', '', 'attention-list', verdict === 'allow' ? 'allowed' : 'denied');
       fetchTelemetry({ slow: false });
     } catch (err) {
@@ -4284,7 +4297,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'guard-resolve':
         e.preventDefault();
-        window.resolveGuardPrompt(d.id, d.verdict, d.scope);
+        window.resolveGuardPrompt(d.id, d.verdict, d.scope, d.expiry);
         break;
       case 'edit-resource-policy':
         window.openResourcePolicyEditor();
@@ -4378,7 +4391,10 @@ document.addEventListener('DOMContentLoaded', () => {
         window.dismissFlag(d.id);
         break;
       case 'review-decision':
-        window.reviewAct(d.id, Number(d.revision), d.decision);
+        window.reviewAct(d.id, Number(d.revision), d.decision, d.scope ? {kind:d.scope,...(d.expiry ? {expiry:d.expiry} : {})} : undefined);
+        break;
+      case 'revoke-scope':
+        window.revokeScope(d.id);
         break;
       case 'review-page':
         window.loadReviewPage(d.after);
