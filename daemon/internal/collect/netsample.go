@@ -27,8 +27,12 @@ type connKey struct {
 	Port int
 }
 
+// SocketConnection is a process's remote TCP endpoint. It allows callers to
+// implement SocketLister, including deterministic integration fixtures.
+type SocketConnection = connKey
+
 type SocketLister interface {
-	SocketsFor(pid int32) []connKey
+	SocketsFor(pid int32) []SocketConnection
 }
 
 type NetSampler struct {
