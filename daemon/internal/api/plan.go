@@ -118,21 +118,24 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 	default:
 		return planTarget{}, false, nil
 	}
-	if t.path != "" {
-		var err error
-		t.findings, err = a.store.PathFindingsResult(t.path, fileListLimit)
+	if t.path != "" && kind != "file" {
+		// A flag or incident may name a path and still resolve when no file
+		// row is stored. A read error still fails the resolve.
+		findings, accesses, _, err := a.fileEvidence(t.path, fileListLimit)
 		if err != nil {
 			return planTarget{}, false, err
 		}
-		t.accesses, err = a.store.PathAccessesResult(t.path, fileListLimit)
-		if err != nil {
-			return planTarget{}, false, err
-		}
+		t.findings, t.accesses = findings, accesses
 	}
 	if kind == "file" {
-		if len(t.findings) == 0 && len(t.accesses) == 0 {
+		findings, accesses, gate, err := a.fileEvidence(t.path, fileListLimit)
+		if err != nil {
+			return planTarget{}, false, err
+		}
+		if gate == fileEvidenceMissing {
 			return planTarget{}, false, nil
 		}
+		t.findings, t.accesses = findings, accesses
 		for _, f := range t.findings {
 			if f.Kind == "flag" && t.flag == nil {
 				fl, ok, err := a.store.GetFlagResult(f.ID)

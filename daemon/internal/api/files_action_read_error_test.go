@@ -21,6 +21,8 @@ func TestFileActionsRejectUnreadableEvidenceAndRecover(t *testing.T) {
 		{"finding query", "ALTER TABLE flags RENAME TO unavailable_flags", "ALTER TABLE unavailable_flags RENAME TO flags", true},
 		{"access scan", "UPDATE events SET pid='invalid'", "UPDATE events SET pid=1", false},
 		{"access query", "ALTER TABLE events RENAME TO unavailable_events", "ALTER TABLE unavailable_events RENAME TO events", false},
+		{"access scan with finding", "UPDATE events SET pid='invalid'", "UPDATE events SET pid=1", true},
+		{"access query with finding", "ALTER TABLE events RENAME TO unavailable_events", "ALTER TABLE unavailable_events RENAME TO events", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "actions.db")
