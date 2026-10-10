@@ -1481,7 +1481,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .posture-state { font: 700 0.95rem/1.2 var(--font); color: var(--tx-1); }
 .posture-summary { font: 400 0.76rem/1.4 var(--font); color: var(--tx-2); }
 .posture-health { margin-top: 4px; font: 400 0.76rem/1.4 var(--font); color: var(--tx-2); }
-.posture-health[hidden] { display: none; }
+.posture-health[hidden], #posture-retry[hidden] { display: none; }
 .posture-items { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; min-width: 0; }
 .posture-items li { font: 400 0.74rem/1.5 var(--font); color: var(--tx-2); display: flex; gap: 8px; align-items: baseline; }
 .posture-items li .sev { font-weight: 700; flex: none; }

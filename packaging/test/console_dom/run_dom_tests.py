@@ -1045,10 +1045,12 @@ def main():
         check("a failed snapshot retains critical posture with a visible freshness warning and Retry",
               dom_query(dom_malformed).has(None, {'id': 'posture-banner', 'data-state': 'critical'})
               and 'Status stale — last complete telemetry' in dom_malformed
+              and pre(dom_malformed, 'posture-visibility') == 'health=true retry=true'
               and f'id="tabs-posture-text">{retained_decisions} need you · refresh failed<' in dom_malformed
               and not dom_query(dom_malformed).has(None, {'id': 'posture-retry', 'hidden': ''}))
         check("snapshot recovery clears the primary freshness warning and Retry",
               dom_query(dom_malformedrecover).has(None, {'id': 'posture-health', 'hidden': ''})
+              and pre(dom_malformedrecover, 'posture-visibility') == 'health=false retry=false'
               and dom_query(dom_malformedrecover).has(None, {'id': 'posture-retry', 'hidden': ''})
               and f'id="tabs-posture-text">{retained_decisions} need you<' in dom_malformedrecover)
         check("valid hot responses recover from malformed containers",
