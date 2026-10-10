@@ -55,16 +55,20 @@ const (
 		FROM flags WHERE rule = ? AND agent = ?`
 	// reattributeFlagsSQL seeks idx_flags_pid.
 	reattributeFlagsSQL = `UPDATE flags SET agent = ? WHERE pid = ? AND agent LIKE 'untagged:%' AND datetime(ts) >= datetime(?)`
-	// trimIncidentsSQL deletes only the oldest incidents past the cap through
-	// idx_incidents_time.
-	trimIncidentsSQL = `DELETE FROM incidents WHERE rowid IN (
-		SELECT rowid FROM incidents ORDER BY datetime(created_at), created_at
-		LIMIT max(0, (SELECT COUNT(*) FROM incidents) - ?))`
 	// hostFirstSeenSQL seeks idx_events_host; the advisor runs it for each
 	// flag, host and egress episode it triages. The partial index is usable
 	// only when the statement repeats the index's empty-host exclusion.
 	hostFirstSeenSQL = `SELECT MIN(ts) FROM events WHERE remote_host = ? AND remote_host != ''`
 )
+
+// Incident retention and active lists use the same instant and identity order.
+// The index keeps pruning bounded to an index walk rather than a table sort.
+var trimIncidentsSQL = `DELETE FROM incidents WHERE rowid IN (
+	SELECT rowid FROM incidents ORDER BY ` + timestampOrderExpr("created_at") + `, id
+	LIMIT max(0, (SELECT COUNT(*) FROM incidents) - ?))`
+
+var incidentRetentionIndexSQL = `CREATE INDEX IF NOT EXISTS idx_incidents_instant_time ON incidents(` + timestampOrderExpr("created_at") + `, id);
+	DROP INDEX IF EXISTS idx_incidents_time;`
 
 // findOpenIncidentSQL seeks idx_incidents_open_key; it runs for every new flag.
 // Preserve nanoseconds and normalize offsets before choosing the newest target.
