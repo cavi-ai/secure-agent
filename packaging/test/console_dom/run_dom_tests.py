@@ -243,7 +243,7 @@ def main():
         if args.context_handoff_only:
             for label, query, size in [('cold', '?contexthandoff&cold', (1280, 800)),
                                        ('reused narrow', '?contexthandoff', (375, 800))]:
-                dom = dump_dom(chrome, tmp, query, origin, window_size=size)
+                dom = dump_dom(chrome, tmp, query, origin, window_size=size, fixture=payload_cases.context_handoff())
                 receipt = re.search(r'data-context-handoff="([^"]+)"', dom)
                 state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
                 check(f'context handoff ({label}): receipt produced', bool(state), str(state))
@@ -324,7 +324,7 @@ def main():
                 raise SystemExit(1)
             return
         for label, size in [('desktop', (1280, 800)), ('narrow', (900, 768))]:
-            workbench_dom = dump_dom(chrome, tmp, '?sessionworkbench', origin, window_size=size)
+            workbench_dom = dump_dom(chrome, tmp, '?sessionworkbench', origin, window_size=size, fixture=payload_cases.session_workbench())
             receipt = re.search(r'data-session-workbench="([^"]+)"', workbench_dom)
             state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
             check(f'sessions workbench ({label}): interaction receipt produced', bool(state), str(state))
@@ -454,7 +454,7 @@ def main():
         dom_evtrace = dump_dom(chrome, tmp, "?tab=events", fixture=payload_cases.trace_events())
         dom_duptrace = dump_dom(chrome, tmp, "?tab=events", fixture=payload_cases.duplicate_trace_events())
         dom_evorder = dump_dom(chrome, tmp, "?tab=events", fixture=payload_cases.unordered_events())
-        dom_sesslink = dump_dom(chrome, tmp, "?sessionlinkdemo")
+        dom_sesslink = dump_dom(chrome, tmp, "?sessionlinkdemo", fixture=payload_cases.session_link())
         dom_sticky = dump_dom(chrome, tmp, "?stickydemo")
         dom_drawerback = dump_dom(chrome, tmp, "?drawerbackdemo")
         dom_wt = dump_dom(chrome, tmp, "?tab=worktrees")

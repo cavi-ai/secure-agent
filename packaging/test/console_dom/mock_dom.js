@@ -125,7 +125,6 @@
     try { sessionStorage.setItem('sa.console-token', 'test-token'); } catch { /* ignored */ }
   }
   if (scenarios.has('contexthandoff')) {
-    data['/flags'].find(f => f.id === 'flag-2').session_id = 'sess-claude-1';
     sessionStorage.setItem('sa.selected-session', 'sess-codex-3');
     sessionStorage.setItem('sa.harness-filter', JSON.stringify({ harnesses: {claude:false,codex:false}, text:'unrelated', liveOnly:true }));
     if (scenarios.has('cold')) location.hash = 'ct=test-token&tab=sessions&session=sess-claude-1&flag=flag-2';
@@ -1317,7 +1316,6 @@
   // sessionlinkdemo: flag-1 belongs to the durable session sess-claude-1;
   // open Findings, then click its "View session in timeline".
   if (scenarios.has('sessionlinkdemo')) {
-    data['/flags'].find(f => f.id === 'flag-1').session_id = 'sess-claude-1';
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('[data-action="filter-session"][data-session="sess-claude-1"]')?.click(), 5000);
     setTimeout(() => document.querySelector('[data-action="session-view"][data-view="trace"]')?.click(), 6000);
@@ -1329,8 +1327,6 @@
     }, 4000);
   }
   if (scenarios.has('sessionworkbench')) {
-    for (let i = 0; i < 80; i++) data['/sessions'].push({ id: 'wb-session-' + i, harness: 'codex', repo: 'workbench-' + i,
-      workspace: '/Users/dev/workbench-' + i, branch: 'main', status: 'idle', started_at: iso(3600000), last_seen_at: iso(120000 + i * 1000) });
     setTimeout(() => openTab('sessions'), 1500);
     setTimeout(async () => {
       const receipt = {};
@@ -1707,9 +1703,17 @@
   // form is static DOM outside the patched list, and 'notify' now holds
   // focus (PANEL_EL) the same as any other panel.
   if (scenarios.has('notifyfocusdemo')) {
-    setTimeout(() => {
+    setTimeout(async () => {
       openTab('policy');
-      const input = document.getElementById('notify-scope-path');
+      let input = document.getElementById('notify-scope-path');
+      for (let attempt = 0; !input && attempt < 50; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        input = document.getElementById('notify-scope-path');
+      }
+      if (!input) {
+        stamp('notify-focus-probe', 'input-unavailable');
+        return;
+      }
       input.focus();
       input.value = 'in-progress-edit';
       input.dataset.probe = '1';

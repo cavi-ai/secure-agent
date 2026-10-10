@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -35,6 +36,9 @@ type ExpectedEgressRule struct {
 	CreatedAt time.Time  `json:"created_at"`
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 }
+
+// ErrInvalidExpectedEgressRule identifies rejected rule input.
+var ErrInvalidExpectedEgressRule = errors.New("invalid expected egress rule")
 
 func canonicalExpectedRule(rule ExpectedEgressRule) (ExpectedEgressRule, error) {
 	rule.Agent = strings.TrimSpace(rule.Agent)
@@ -75,6 +79,17 @@ func canonicalExpectedRule(rule ExpectedEgressRule) (ExpectedEgressRule, error) 
 	return rule, nil
 }
 
+// validateExpectedRuleIdentity checks the key fields written by the rule creator.
+func validateExpectedRuleIdentity(rule ExpectedEgressRule) error {
+	canonical, err := canonicalExpectedRule(rule)
+	if err != nil || canonical.ID != rule.ID || canonical.Agent != rule.Agent ||
+		canonical.Host != rule.Host || canonical.Protocol != rule.Protocol || canonical.Port != rule.Port ||
+		canonical.ExePath != rule.ExePath || canonical.Harness != rule.Harness || canonical.Workspace != rule.Workspace {
+		return errors.New("invalid stored expected egress rule identity")
+	}
+	return nil
+}
+
 func scanExpectedRule(scanner interface{ Scan(...any) error }) (ExpectedEgressRule, error) {
 	var r ExpectedEgressRule
 	var created string
@@ -82,6 +97,9 @@ func scanExpectedRule(scanner interface{ Scan(...any) error }) (ExpectedEgressRu
 	err := scanner.Scan(&r.ID, &r.Agent, &r.Kind, &r.Host, &r.Protocol, &r.Port, &r.ExePath, &r.Harness, &r.Workspace, &r.Rationale, &r.CreatedBy, &created, &revoked)
 	if err != nil {
 		return r, err
+	}
+	if err := validateExpectedRuleIdentity(r); err != nil {
+		return ExpectedEgressRule{}, err
 	}
 	r.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
 	if err != nil {
@@ -97,12 +115,13 @@ func scanExpectedRule(scanner interface{ Scan(...any) error }) (ExpectedEgressRu
 	return r, nil
 }
 
-func (s *Store) CreateExpectedEgressRule(rule ExpectedEgressRule) (ExpectedEgressRule, error) {
+func (s *Store) CreateExpectedEgressRule(rule ExpectedEgressRule) (out ExpectedEgressRule, writeErr error) {
 	var err error
 	rule, err = canonicalExpectedRule(rule)
 	if err != nil {
-		return rule, err
+		return rule, fmt.Errorf("%w: %v", ErrInvalidExpectedEgressRule, err)
 	}
+	defer func() { s.noteWrite("expected egress create", writeErr) }()
 	s.egressMu.Lock()
 	defer s.egressMu.Unlock()
 	var existing ExpectedEgressRule
@@ -120,10 +139,15 @@ func (s *Store) CreateExpectedEgressRule(rule ExpectedEgressRule) (ExpectedEgres
 	return rule, err
 }
 
-func (s *Store) RevokeExpectedEgressRule(id string) error {
+func (s *Store) RevokeExpectedEgressRule(id string) (writeErr error) {
 	if id == "" {
 		return errors.New("missing rule id")
 	}
+	defer func() {
+		if !errors.Is(writeErr, sql.ErrNoRows) {
+			s.noteWrite("expected egress revoke", writeErr)
+		}
+	}()
 	s.egressMu.Lock()
 	defer s.egressMu.Unlock()
 	result, err := s.db.Exec(`UPDATE expected_egress_rules SET revoked_at=? WHERE id=? AND revoked_at IS NULL`, time.Now().UTC().Format(time.RFC3339Nano), id)
@@ -216,6 +240,9 @@ func (s *Store) ExpectedEgressMatcherResult() (match func(EgressEpisode) string,
 	for rows.Next() {
 		var r ExpectedEgressRule
 		if err := rows.Scan(&r.ID, &r.Agent, &r.Kind, &r.Host, &r.Protocol, &r.Port, &r.ExePath, &r.Harness, &r.Workspace); err != nil {
+			return nil, err
+		}
+		if err := validateExpectedRuleIdentity(r); err != nil {
 			return nil, err
 		}
 		rules = append(rules, r)

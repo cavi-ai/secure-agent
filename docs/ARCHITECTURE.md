@@ -196,6 +196,11 @@ unchanged enrichment payload or a concurrent update does not clear a write fault
 Incident aggregation reports a separate write fault and emits an updated report
 only after persistence succeeds. Malformed saved evidence is left unchanged;
 missing rows and updates that change no row do not clear an active fault.
+Incident detail, aggregation, workflow, and remediation share one identity
+resolver: an exact report ID wins, otherwise the newest linked flag alias wins.
+Open-incident lookup and absorption run in one transaction. A failed absorption
+returns an error, retains the original evidence, and prevents duplicate creation;
+an unchanged replay returns the durable report without incrementing its count.
 New incidents enter the live feed, fleet delivery, and advisor queue only after
 their insertion succeeds. Insertion and serialization failures still refresh
 posture through the evidence-health tracker while flag collection continues.
