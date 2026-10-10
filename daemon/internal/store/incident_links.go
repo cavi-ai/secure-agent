@@ -36,14 +36,43 @@ func (s *Store) IncidentIDsForFlags(flagIDs []string) (map[string]string, error)
 	return links, readErr
 }
 
+// incidentRowQueryer is the subset of *sql.DB and *sql.Tx that can resolve one
+// incident identity. Callers hold Store.mu.
+type incidentRowQueryer interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// resolveIncidentRowLocked selects the exact incident id first. An alias cannot
+// shadow that row. Otherwise it selects the newest incident whose opening
+// flag_id or aggregated flag_ids contains the key.
+func (s *Store) resolveIncidentRowLocked(q incidentRowQueryer, key string) (id, reportJSON string, err error) {
+	id, err = resolveIncidentWorkflowID(q, key)
+	if err != nil {
+		return id, reportJSON, err
+	}
+	err = q.QueryRow(`SELECT report_json FROM incidents WHERE id = ?`, id).Scan(&reportJSON)
+	return id, reportJSON, err
+}
+
+// resolveIncidentWorkflowID follows incident detail identity precedence: an
+// exact report ID wins; otherwise the newest report linked to the flag wins.
+// Updates use their transaction here so selection and mutation stay together.
+func resolveIncidentWorkflowID(q interface{ QueryRow(string, ...any) *sql.Row }, id string) (string, error) {
+	var storedID string
+	err := q.QueryRow(`SELECT id FROM incidents WHERE id = ?`, id).Scan(&storedID)
+	if err == sql.ErrNoRows {
+		err = q.QueryRow(`SELECT id FROM incidents
+			WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
+			ORDER BY `+timestampOrderExpr("created_at")+` DESC, id DESC LIMIT 1`, id, id).Scan(&storedID)
+	}
+	return storedID, err
+}
+
 func (s *Store) incidentIDForFlagLocked(flagID string) (string, bool, error) {
 	if flagID == "" {
 		return "", false, nil
 	}
-	var id, raw string
-	err := s.db.QueryRow(`SELECT id,report_json FROM incidents
-		WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
-		ORDER BY `+timestampOrderExpr("created_at")+` DESC, id DESC LIMIT 1`, flagID, flagID).Scan(&id, &raw)
+	id, raw, err := s.resolveIncidentRowLocked(s.db, flagID)
 	if err == sql.ErrNoRows {
 		return "", false, nil
 	}

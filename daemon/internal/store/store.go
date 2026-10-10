@@ -1532,15 +1532,7 @@ func (s *Store) GetIncident(id string) (report *model.IncidentReport, readErr er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var storedID, reportJSON string
-	err := s.db.QueryRow(`SELECT id, report_json FROM incidents WHERE id = ?`, id).Scan(&storedID, &reportJSON)
-	if err == sql.ErrNoRows {
-		// Flag aliases include evidence aggregated after the initial report.
-		// Resolve the report identity first so an alias cannot shadow it.
-		err = s.db.QueryRow(`SELECT id, report_json FROM incidents
-			WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
-			ORDER BY `+timestampOrderExpr("created_at")+` DESC, id DESC LIMIT 1`, id, id).Scan(&storedID, &reportJSON)
-	}
+	storedID, reportJSON, err := s.resolveIncidentRowLocked(s.db, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1601,6 +1593,22 @@ func (s *Store) FindOpenIncidentResult(rule, sessionID, subject string) (id stri
 		return "", false, fmt.Errorf("invalid open incident identity")
 	}
 	return id, true, nil
+}
+
+// AbsorbOpenIncident folds flagID into the open incident for rule, session, and
+// subject. A lookup failure is returned. When an open incident exists, handled
+// is true even if aggregation does not persist, so the caller does not mint
+// another report. When none exists, handled is false and err is nil.
+func (s *Store) AbsorbOpenIncident(rule, sessionID, subject, flagID string, ts time.Time) (model.IncidentReport, bool, error) {
+	id, found, err := s.FindOpenIncidentResult(rule, sessionID, subject)
+	if err != nil {
+		return model.IncidentReport{}, false, err
+	}
+	if !found {
+		return model.IncidentReport{}, false, nil
+	}
+	report, _ := s.AggregateIntoIncident(id, flagID, ts)
+	return report, true, nil
 }
 
 // AggregateIntoIncident folds another flag into an existing incident: bumps
@@ -2584,8 +2592,10 @@ func (s *Store) SetIncidentStatus(id, status, note string) (bool, error) {
 // ErrInvalidIncidentStatus distinguishes invalid input from storage failure.
 var ErrInvalidIncidentStatus = errors.New("invalid incident status")
 
-// SetIncidentStatusResult returns the workflow read in the same transaction as
-// the update. An unreadable result or failed commit leaves no successful update.
+// SetIncidentStatusResult resolves the same incident identity as lookup inside
+// the update transaction, then returns the workflow read in that transaction.
+// An unreadable result or failed commit leaves no successful update. Zero
+// matching rows are not an error.
 func (s *Store) SetIncidentStatusResult(id, status, note string) (workflow IncidentWorkflow, updated bool, writeErr error) {
 	var query string
 	var args []any
@@ -2671,20 +2681,6 @@ func (s *Store) IncidentStatusResult(id string) (workflow IncidentWorkflow, foun
 		return IncidentWorkflow{Status: "unknown"}, false, err
 	}
 	return wf, true, nil
-}
-
-// resolveIncidentWorkflowID follows incident detail identity precedence: an
-// exact report ID wins; otherwise the newest report linked to the flag wins.
-// Updates use their transaction here so selection and mutation stay together.
-func resolveIncidentWorkflowID(q interface{ QueryRow(string, ...any) *sql.Row }, id string) (string, error) {
-	var storedID string
-	err := q.QueryRow(`SELECT id FROM incidents WHERE id = ?`, id).Scan(&storedID)
-	if err == sql.ErrNoRows {
-		err = q.QueryRow(`SELECT id FROM incidents
-			WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
-			ORDER BY `+timestampOrderExpr("created_at")+` DESC, id DESC LIMIT 1`, id, id).Scan(&storedID)
-	}
-	return storedID, err
 }
 
 func scanIncidentWorkflow(row *sql.Row) (IncidentWorkflow, error) {
