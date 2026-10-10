@@ -34,7 +34,12 @@ func (a *API) handleEgressEpisodes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, map[string]any{"episodes": a.egressEpisodeViews(), "non_candidate_limit": 100})
+	episodes, err := a.egressEpisodeViews()
+	if err != nil {
+		http.Error(w, "egress episodes unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, map[string]any{"episodes": episodes, "non_candidate_limit": 100})
 }
 
 // egressCandidate: a recurring, attributable episode that no expected-egress
@@ -45,27 +50,31 @@ func egressCandidate(e store.EgressEpisode, ruleID string) bool {
 
 // egressEpisodeViews serves the read API: candidates first, then up to 100
 // other episodes.
-func (a *API) egressEpisodeViews() []egressEpisodeView {
+func (a *API) egressEpisodeViews() ([]egressEpisodeView, error) {
 	if a.store == nil {
-		return []egressEpisodeView{}
+		return []egressEpisodeView{}, nil
 	}
 	return readEgressEpisodeViews(a.store)
 }
 
 type egressEpisodeStore interface {
 	ExpectedEgressMatcher() func(store.EgressEpisode) string
-	ListEgressEpisodesForReview() []store.EgressEpisode
+	ListEgressEpisodesForReviewResult() ([]store.EgressEpisode, error)
 	AdvisorVerdictsFor([]string, string) (map[string]model.AdvisorVerdict, error)
 }
 
-func readEgressEpisodeViews(st egressEpisodeStore) []egressEpisodeView {
+func readEgressEpisodeViews(st egressEpisodeStore) ([]egressEpisodeView, error) {
 	candidates := make([]egressEpisodeView, 0)
 	other := make([]egressEpisodeView, 0, 100)
 	if st == nil {
-		return other
+		return other, nil
+	}
+	episodes, err := st.ListEgressEpisodesForReviewResult()
+	if err != nil {
+		return nil, err
 	}
 	match := st.ExpectedEgressMatcher()
-	for _, e := range st.ListEgressEpisodesForReview() {
+	for _, e := range episodes {
 		if !e.Recurring && len(other) >= 100 {
 			continue
 		}
@@ -90,7 +99,7 @@ func readEgressEpisodeViews(st egressEpisodeStore) []egressEpisodeView {
 			view.AdvisorInference = &egressInference{PossiblePurpose: v.Rationale, Confidence: v.Confidence, CreatedAt: v.CreatedAt}
 		}
 	}
-	return views
+	return views, nil
 }
 
 func (a *API) handleEgressEpisodeSubpath(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +117,11 @@ func (a *API) handleEgressEpisodeSubpath(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
-	e, ok := a.store.GetEgressEpisode(parts[0])
+	e, ok, err := a.store.GetEgressEpisodeResult(parts[0])
+	if err != nil {
+		http.Error(w, "egress episode unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	if !ok {
 		http.NotFound(w, r)
 		return

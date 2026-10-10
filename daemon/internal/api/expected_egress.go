@@ -43,7 +43,11 @@ func (a *API) handleExpectedEgress(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid rule kind", http.StatusBadRequest)
 			return
 		}
-		episode, ok := a.store.GetEgressEpisode(req.EpisodeID)
+		episode, ok, err := a.store.GetEgressEpisodeResult(req.EpisodeID)
+		if err != nil {
+			http.Error(w, "egress episode unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		if !ok {
 			http.Error(w, "episode not found", http.StatusNotFound)
 			return
