@@ -2974,6 +2974,13 @@
         checks.noOverflow = document.documentElement.scrollWidth <= innerWidth + 1;
         checks.composerVisible = document.getElementById('agent-send').getBoundingClientRect().bottom <= innerHeight + 1;
         checks.composerFootVisible = document.querySelector('.agent-chat-foot').getBoundingClientRect().bottom <= innerHeight + 1;
+        const foot = document.querySelector('.agent-chat-foot');
+        checks.composerFootContained = foot.getBoundingClientRect().bottom <= chat.getBoundingClientRect().bottom + 1;
+        foot.scrollTop = foot.scrollHeight;
+        const newChat = foot.querySelector('[data-action="agent-clear"]').getBoundingClientRect();
+        const footBounds = foot.getBoundingClientRect();
+        checks.composerFootReachable = newChat.top >= footBounds.top && newChat.bottom <= footBounds.bottom;
+        foot.scrollTop = 0;
         checks.advisorVisible = document.getElementById('advisor-state').getBoundingClientRect().height > 0;
         checks.homeHidden = getComputedStyle(document.getElementById('tab-home')).display === 'none';
         document.querySelector('[data-action="goto-tab"][data-tab="home"].agent-posture-link').click();
