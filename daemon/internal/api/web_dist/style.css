@@ -902,6 +902,8 @@ body {
 .drawer-actions { display: flex; gap: 8px; }
 .drawer-actions .btn[hidden] { display: none; }
 .drawer-body { padding: 20px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+/* This pane restores its own reading position across loading/status changes. */
+.drawer-body:has([data-session-part="permissions-head"]) { overflow-anchor: none; }
 .drawer-foot {
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 14px 20px; border-top: 1px solid var(--line);
