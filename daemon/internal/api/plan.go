@@ -444,7 +444,7 @@ func (a *API) planSessionLines(t planTarget, add func(string, ...any)) error {
 	if !ok {
 		return nil
 	}
-	if rep.Evidence != nil && (!rep.Evidence.Events.Available || !rep.Evidence.Flags.Available) {
+	if rep.Evidence.PlanCoreUnavailable() {
 		return errors.New("session report core evidence unavailable")
 	}
 	s := rep.Session
