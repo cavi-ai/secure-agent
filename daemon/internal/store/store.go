@@ -1632,6 +1632,11 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.In
 	}
 	for _, existing := range flagIDs {
 		if existing == flagID {
+			if err := s.attachIncidentRemediationLocked(inc); err != nil {
+				s.noteRead("incidents", err)
+				return model.IncidentReport{}, false
+			}
+			s.noteRead("incidents", nil)
 			return *inc, true
 		}
 	}
@@ -1692,6 +1697,7 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.In
 		s.noteRead("incidents", err)
 		return model.IncidentReport{}, false
 	}
+	s.noteRead("incidents", nil)
 	return *inc, true
 }
 
