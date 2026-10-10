@@ -193,7 +193,7 @@ func (s *Store) SessionIncidents(sessionID string) (out []model.IncidentReport, 
 	defer func() { s.noteRead("incident remediation", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT id,report_json FROM incidents WHERE session_id=? ORDER BY created_at DESC,id DESC LIMIT 100`, sessionID)
+	rows, err := s.db.Query(`SELECT id,report_json FROM incidents WHERE session_id=? ORDER BY `+timestampOrderExpr("created_at")+` DESC,id DESC LIMIT 100`, sessionID)
 	if err != nil {
 		return nil, err
 	}
