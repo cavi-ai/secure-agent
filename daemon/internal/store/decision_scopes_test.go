@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"testing"
@@ -126,12 +127,26 @@ func TestScopeDoesNotCrossSession(t *testing.T) {
 func TestScopeExpiry(t *testing.T) {
 	s, g := scopeFixture(t)
 	g.Kind = "exact"
-	g.ExpiresAt = time.Now().Add(100 * time.Millisecond)
+	g.ExpiresAt = g.CreatedAt.Add(24 * time.Hour)
 	saveScope(t, s, g)
 	if !s.MatchDecisionScopes([]model.DecisionScope{g}) {
 		t.Fatal("grant not initially active")
 	}
-	time.Sleep(time.Until(g.ExpiresAt))
+	// Persist an expired grant rather than racing database work against a
+	// short wall-clock deadline. Keep it valid so expiry causes the rejection.
+	expired := g
+	expired.CreatedAt = g.CreatedAt.Add(-48 * time.Hour)
+	expired.ExpiresAt = g.CreatedAt.Add(-24 * time.Hour)
+	if err := expired.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(expired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE decision_scopes SET record_json=? WHERE id=?`, string(raw), g.ID); err != nil {
+		t.Fatal(err)
+	}
 	if s.MatchDecisionScopes([]model.DecisionScope{g}) {
 		t.Fatal("cached grant survived expiry")
 	}
