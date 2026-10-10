@@ -175,6 +175,45 @@ def resource_families(now_ms=None):
     ]}
 
 
+def many_events(now_ms=None):
+    now, iso = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/events", "path": [], "append": [
+        {"kind": 0, "ts": iso(40000 + i * 1000), "pid": 5821,
+         "path": f"/Users/dev/workspace/api-service/src/m{i}.ts"}
+        for i in range(114)
+    ]}]}
+
+
+def trace_events(now_ms=None):
+    now, iso = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/events", "path": [], "append": [
+        {"kind": 14, "ts": iso(90000), "pid": 0, "session_id": "sess-claude-1",
+         "model": "claude-sonnet-4-5", "tokens_in": 12000, "tokens_out": 340,
+         "cost_usd": 0.0412, "price_class": "priced"},
+        {"kind": 12, "ts": iso(91000), "pid": 0, "session_id": "sess-claude-1",
+         "tool": "Bash", "tool_status": "ok", "duration_ms": 2500, "call_id": "c-1"},
+    ]}]}
+
+
+def duplicate_trace_events(now_ms=None):
+    now, iso = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/events", "path": [], "append": [
+        {"kind": 12, "ts": iso(92000), "pid": 0, "session_id": "sess-claude-1",
+         "tool": "Read", "tool_status": "ok", "duration_ms": 10, "call_id": "dup-1"},
+        {"kind": 12, "ts": iso(92000), "pid": 0, "session_id": "sess-claude-1",
+         "tool": "Write", "tool_status": "ok", "duration_ms": 20, "call_id": "dup-2"},
+    ]}]}
+
+
+def unordered_events(now_ms=None):
+    now, iso = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/events", "path": [], "value": [
+        {"kind": 0, "ts": iso(1000), "pid": 5821, "path": "/Users/dev/workspace/api-service/src/new.ts"},
+        {"kind": 0, "ts": iso(4 * 30 * 86400000), "pid": 5821, "path": "/Users/dev/workspace/api-service/src/old.ts"},
+        {"kind": 0, "ts": iso(2000), "pid": 5821, "path": "/Users/dev/workspace/api-service/src/mid.ts"},
+    ]}]}
+
+
 def payload_outcomes(now_ms=None):
     now, iso = _clock(now_ms)
     payloads = {}
