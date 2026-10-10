@@ -33,41 +33,12 @@
     ]};
     setTimeout(async () => { await window.openIncidentReport('fixture-source-alias'); stamp('incident-remediation-probe', document.querySelector('.incident-remediation [data-action]')?.dataset.id || 'missing'); }, 500);
   }
-  if (scenarios.has('payloadoutcomes')) {
-    Object.assign(data['/incidents'][0], {
-      rule: 'proxy-secret-leak',
-      summary: 'Fixture: an outbound payload matched a registered secret fingerprint.',
-      rotate_list: [], advisor_narrative: '', aggregate_count: 6,
-      payload_outcomes: { blocked: 2, observed_only: 1, unknown: 3 },
-      workflow: { status: 'resolved', resolution_note: 'Operator reported credential revocation.' },
-    });
-    Object.assign(data['/flags'][0], {
-      rule: 'proxy-secret-leak', title: 'Outbound payload matched a secret',
-      explain: { what: '', disposition: { state: 'critical', text: 'Critical risk', why: '' }, actions: [],
-        assessment: { evidence_basis: ['fingerprint-payload'], risk: 'critical', review_state: 'reviewed',
-          control: 'blocked', residual_risk: 'transmission-attempt',
-          reason: 'Fixture: the local proxy rejected this request before forwarding.',
-          limits: ['Earlier exposure and external credential revocation are not verified.'] } },
-    });
-  }
   let authRecoveryExpired = false;
   let authRecoveryMutations = 0;
   let networkRecoveryUnreachable = false;
   if (scenarios.has('filteredscope')) {
     data['/flags'].push({ ...data['/flags'][0], id: 'history-broad-only', ts: iso(2 * 3600000) });
     data['/events'].push({ ...data['/events'][0], ts: iso(2 * 3600000), detail: 'Broad-only history row' });
-  }
-  if (scenarios.has('sessionvisibility')) {
-    Object.assign(data['/posture'], {state: 'all-clear', needs_you: 0, items: [], groups: [], coverage_count: 0, coverage_items: []});
-    const path = state => ({supported: true, state, detail: 'This session only; other requests may be unobserved.'});
-    data['/status'].coverage = {
-      harnesses_active: 1, harnesses_seen: 1,
-      sessions: [
-        {session_id: 'session-observed', harness: 'claude', workspace: '/work/observed', root_pid: 101, identity_basis: 'hook', guard: path('observed'), trace: path('observed'), payload: path('unattributed')},
-        {session_id: 'session-silent', harness: 'claude', workspace: '/work/<silent>', root_pid: 102, identity_basis: 'hook', guard: path('not-observed'), trace: path('not-observed'), payload: path('off')},
-      ],
-      probes: [{harness: 'claude', hook_path: '/Users/dev/.claude/hooks/secret_guard.py', checked_at: iso(60000), state: 'changed', detail: 'Configuration changed. Run the check again.'}],
-    };
   }
   const REQUIRE_TOKEN = scenarios.has('requiretoken');
   // expectdemo: Egress → Expect this destination retires the episode's
@@ -89,104 +60,16 @@
   // recommended) and no queue item.
   // flag-1 and flag-3 stay raw, as rows from an older daemon or past the
   // 25-flag cap do.
-  if (scenarios.has('explaindemo')) {
-    // Findings is opened first, as a user must: hidden panels do not render.
-    setTimeout(() => openTab('findings'), 1500);
-    const cfHost = '2606:4700::6810:84e5';
-    const f2 = data['/flags'].find(f => f.id === 'flag-2');
-    Object.assign(f2, {
-      title: 'Sensitive file read near an outside connection',
-      ts: '2026-09-22T16:05:01Z',
-      evidence: [
-        { kind: 'read', label: '/Users/dev/.aws/credentials', sub: 'sensitive read', ts: '2026-09-22T16:04:58Z' },
-        { kind: 'connect', label: `[${cfHost}]:443`, sub: 'egress', ts: '2026-09-22T16:05:01Z' }
-      ],
-      advisor: { assessment: 'benign', confidence: 0.93, rationale: 'Cloudflare fronts the package registry this project installs from.', suggested_action: 'allow-host' },
-      explain: {
-        what: 'Cursor read AWS credentials (~/.aws/credentials), then reached Cloudflare 3 s later.',
-        subject: { path: '/Users/dev/.aws/credentials', display: '~/.aws/credentials', basename: 'credentials',
-          category: 'aws_credentials', category_label: 'AWS credentials', rule: 'cloud-creds', owner_label: 'home directory' },
-        egress: [{ host: cfHost, port: 443, org: 'Cloudflare', kind: 'ipv6', allowlisted: false, gap_seconds: 3 }],
-        context: { session_id: '7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77', harness: 'cursor', repo: 'web-app', branch: 'main',
-          tool: 'Read', tool_status: 'ok', tool_at: '2026-09-22T16:04:57Z' },
-        disposition: { state: 'benign-likely', text: 'Likely benign (advisor 93 %)', why: 'Cloudflare fronts the package registry this project installs from.' },
-        actions: [
-          { id: 'allow-host', label: `Allow ${cfHost} (Cloudflare) for cursor`, recommended: true,
-            consequence: `Future connections from cursor to ${cfHost} are trusted and stop being flagged.`,
-            method: 'POST', path: '/allowlist', body: { agent: 'cursor', host: cfHost } },
-          { id: 'allow-path', label: 'Always allow this file for cursor',
-            consequence: 'cursor may open ~/.aws/credentials without a guard prompt; other files under the cloud-creds rule still ask.',
-            method: 'POST', path: '/guard/path-allow', body: { agent: 'cursor', rule_id: 'cloud-creds', path: '/Users/dev/.aws/credentials' } },
-          { id: 'dismiss', label: 'Dismiss this flag',
-            consequence: 'The flag is marked reviewed and stops counting as needing action; the rule keeps watching for the next one.',
-            method: 'POST', path: '/flags/acknowledge', body: { flag_id: 'flag-2' } },
-          { id: 'kill', label: 'Kill cursor (pid 6033)',
-            consequence: 'The agent process tree is terminated now; unsaved work in it is lost.',
-            method: 'POST', path: '/kill', body: { pid: 6033 } }
-        ]
-      }
-    });
-    // A benign-likely finding is not a decision: the daemon drops it from the
-    // queue.
-    const post = data['/posture'];
-    for (const g of post.groups) g.items = g.items.filter(it => !(it.kind === 'flag' && it.id === 'flag-2'));
-    post.groups = post.groups.filter(g => g.items.length > 0);
-    post.items = post.items.filter(it => !(it.kind === 'flag' && it.id === 'flag-2'));
-    post.needs_you = post.items.length;
-  }
+  if (scenarios.has('explaindemo')) setTimeout(() => openTab('findings'), 1500);
   // patterndemo: a 323-flag codex keychain storm served as one pattern
   // covering fixture flags flag-6 and flag-7; the queue never holds it.
-  const PATTERN_KEY = 'codex|keychain-access|/Users/dev/Library/Keychains/login.keychain-db';
-  if (scenarios.has('patterndemo')) {
-    // Findings is opened first, as a user must: hidden panels do not render.
-    setTimeout(() => openTab('findings'), 1500);
-    const kc = (id, pid, msAgo) => ({
-      id, rule: 'keychain-access', severity: 2, ts: iso(msAgo), pid, agent: 'codex', session_id: 'sess-codex-9',
-      title: 'Agent touched the keychain',
-      evidence: [{ kind: 'keychain', label: '/Users/dev/Library/Keychains/login.keychain-db', sub: 'keychain access' }]
-    });
-    data['/flags'].push(kc('flag-6', 40844, 120000), kc('flag-7', 51364, 60000));
-    data['/patterns'] = [{
-      key: PATTERN_KEY, agent: 'codex', rule: 'keychain-access', title: 'Agent touched the keychain',
-      subject: { kind: 'keychain', label: '~/Library/Keychains/login.keychain-db', sub: 'keychain' },
-      count: 323, unacked: 323, first: iso(9 * 60000), last: iso(60000),
-      median_gap_s: 1.4, bursts: 320, cadence: 'in bursts a few seconds apart',
-      hourly: Array.from({ length: 24 }, (_, i) => (i === 23 ? 323 : 0)),
-      pids: [40844, 51364], pid_count: 2, sessions: ['sess-codex-9'], session_count: 1,
-      disposition: { state: 'warning', text: 'Needs a look', why: 'Agent touched the keychain' },
-      summary: 'codex touched the login keychain 323 times between 03:00 and 03:08 (2 processes, 1 session), in bursts a few seconds apart.',
-      actions: [
-        { id: 'mute-class', label: 'Dismiss this flag class', method: 'POST', path: '/mute',
-          consequence: '"Agent touched the keychain" stops raising flags for every agent.', body: { rule: 'keychain-access', host: '*' } },
-        { id: 'dismiss-all', label: 'Dismiss all 2 open', method: 'POST', path: '/flags/acknowledge',
-          consequence: 'These flags are marked reviewed.', body: { flag_ids: ['flag-7', 'flag-6'] } }
-      ],
-      flag_ids: ['flag-7', 'flag-6']
-    }];
-  }
+  if (scenarios.has('patterndemo')) setTimeout(() => openTab('findings'), 1500);
   // ?theme=dark|light pins the console theme (screenshots); app.js reads it
   // from the same storage key the masthead toggle writes.
   const theme = new URLSearchParams(location.search).get('theme');
   // patternbigdemo: sixty-one keychain flags served as one pattern that covers
   // them all.
-  if (scenarios.has('patternbigdemo')) {
-    setTimeout(() => openTab('findings'), 1500);
-    const ids = Array.from({ length: 61 }, (_, i) => `kc-${i + 1}`);
-    for (const id of ids) {
-      data['/flags'].push({ id, rule: 'keychain-access', severity: 2, ts: iso(60000), pid: 40844, agent: 'codex',
-        session_id: 'sess-codex-9', title: 'Agent touched the keychain',
-        evidence: [{ kind: 'keychain', label: '/Users/dev/Library/Keychains/login.keychain-db', sub: 'keychain access' }] });
-    }
-    data['/patterns'] = [{
-      key: PATTERN_KEY, agent: 'codex', rule: 'keychain-access', title: 'Agent touched the keychain',
-      subject: { kind: 'keychain', label: '~/Library/Keychains/login.keychain-db', sub: 'keychain' },
-      count: 61, unacked: 61, first: iso(9 * 60000), last: iso(60000),
-      hourly: Array.from({ length: 24 }, (_, i) => (i === 23 ? 61 : 0)),
-      pids: [40844], pid_count: 1, sessions: ['sess-codex-9'], session_count: 1,
-      disposition: { state: 'warning', text: 'Needs a look', why: 'Agent touched the keychain' },
-      summary: 'codex touched the login keychain 61 times.', actions: [], flag_ids: ids
-    }];
-  }
+  if (scenarios.has('patternbigdemo')) setTimeout(() => openTab('findings'), 1500);
   // bulkdemo: tick two history rows, press Mark reviewed, accept the confirm.
   // <pre id="bulk-probe"> counts the confirms asked; mock-requests holds the
   // dismiss calls.
@@ -207,19 +90,6 @@
   // emptyposture: nothing pending and no coverage gap.
   if (scenarios.has('ghdemo')) {
     setTimeout(() => openTab('findings'), 1500);
-    const key = 'claude|sensitive-read-then-connect|/Users/dev/.config/gh/hosts.yml';
-    data['/flags'].push({id: 'gh-flag', rule: 'sensitive-read-then-connect', severity: 2, agent: 'claude', pid: 301,
-      evidence: [{kind: 'read', label: '/Users/dev/.config/gh/hosts.yml', exe: '/opt/homebrew/bin/gh'}]});
-    data['/patterns'] = [{key, agent: 'claude', rule: 'sensitive-read-then-connect', title: 'Sensitive file read near an outside connection',
-      count: 81, flags: 30, unacked: 1, first: iso(600000), last: iso(1000), hourly: [], flag_ids: ['gh-flag'],
-      disposition: {state: 'warning', text: 'Needs a look', why: 'Recorded evidence does not establish credential use.'},
-      summary: 'gh read ~/.config/gh/hosts.yml near a GitHub connection.', actions: [
-        {id: 'expect', label: 'Expected: gh → 140.82.114.6', consequence: 'Approve only this reader, file, and endpoint. Other evidence stays open.',
-          method: 'POST', path: '/expected', body: {flag_id: 'gh-flag', path: '/Users/dev/.config/gh/hosts.yml', host: '140.82.114.6'}},
-        {id: 'review-local', label: 'Send to local agent review', body: {flag_ids: ['gh-flag']}},
-        {id: 'inspect-file', label: 'Inspect file details', body: {path: '/Users/dev/.config/gh/hosts.yml'}},
-        {id: 'dismiss-all', label: 'Dismiss all 1 open', method: 'POST', path: '/flags/acknowledge', body: {flag_ids: ['gh-flag']}}
-      ]}];
     if (scenarios.has('ghapprove')) {
       setTimeout(() => document.querySelector('#flags-list [data-action-id="expect"]')?.click(), 9000);
       setTimeout(() => document.getElementById('confirm-ok')?.click(), 9500);
