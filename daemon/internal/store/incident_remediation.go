@@ -189,6 +189,8 @@ func (s *Store) ReportIncidentRemediation(req model.IncidentRemediationRequest) 
 	return inc, nil
 }
 
+// SessionIncidents rejects partial history when a report's session identity
+// disagrees with the storage scope used to select it.
 func (s *Store) SessionIncidents(sessionID string) (out []model.IncidentReport, readErr error) {
 	defer func() { s.noteRead("incident remediation", readErr) }()
 	s.mu.Lock()
@@ -202,6 +204,9 @@ func (s *Store) SessionIncidents(sessionID string) (out []model.IncidentReport, 
 		return nil, err
 	}
 	for i := range list {
+		if list[i].SessionID != sessionID {
+			return nil, fmt.Errorf("incident session identity mismatch")
+		}
 		if err := s.attachIncidentRemediationLocked(&list[i]); err != nil {
 			return nil, err
 		}
