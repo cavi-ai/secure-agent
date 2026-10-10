@@ -4,47 +4,41 @@ All notable changes to `secure-agent` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.3.0] - Unreleased
 
 ### Added
-- Settings: add, edit, and remove File Guard paths and Egress Firewall patterns, with validation and persistent saves.
-- API: `{"repo"}` on `POST /worktrees/advise` and `POST /agent/worktree` covers a whole repository.
-- Worktrees: **Ask advisor about all** and **Discuss all** on each repository group, counted over every row; the advisor gets one note at a time.
-- Worktrees: a legend under the summary names the three Remove looks.
-
-### Changed
-- Providers: show only harness names and prioritize Codex, Cursor, OpenClaw, and Hermes.
-- Console and menu bar: Home and the hero list only decisions that need you; warnings and recurring connections stay in the findings history, now a compact log.
-- Worktrees: **Remove** is solid red when confirmed safe, **Remove…** is an amber outline when not confirmed (goes to the Trash), and a blocked row is greyed.
-- Console: disabled buttons are dimmed.
-
-### Fixed
-- Credential reads by the owning program, directory opens, and files an agent wrote itself no longer raise sensitive-read findings.
-- Console: the header search filters the System tab's worktrees and clutter.
-
-## [1.3.0] - 2026-10-08
-
-### Added
-- API: `GET /routing/claude`, `POST /agent/worktree`, and `flag_ids` on `POST /expected`.
+- Advisor: read-only evidence tools and optional local classification for context routing.
+- Chat: read tools for built-in skills, findings and session activity, with tool progress; **New chat** resets the context.
 - CLI: `secure-agent telemetry repair`.
-- Console: the same reads across agents are one decision with **Treat as routine** and **Dismiss all**.
-- Console: a System tab for worktrees and clutter replaces Sessions → Cleanup.
+- Console: a System tab for worktrees and clutter, filtered by the header search, replaces Sessions → Cleanup.
 - Console: a notice on any report that failed to refresh.
+- Console: the same reads across agents are one decision with **Treat as routine** and **Dismiss all** (`flag_ids` on `POST /expected`).
 - Cursor: Secure Agent's tool hooks run beside the user's hooks.
+- Findings: evidence, control, residual risk and review state shown apart; reviews are saved per evidence revision, reopen on stronger evidence and keep the risk (`/reviews`).
 - Findings: send selected findings to the local agent's review queue.
 - Findings: agent-scoped `.env` exceptions for test and non-secret files.
 - Findings: `test-value` evidence for secrets that look like test values.
+- Guard and findings: **Allow once** by default; session, 24-hour and 7-day permissions cover one file, workspace or endpoint and are revoked under Policy (`/decision-scopes`).
+- Incidents: **Dismiss** in Needs you; **Mark as routine** and the advisor above the report's evidence.
+- Incidents: reported remediation in the console, menu bar and exports, flagged when newer evidence arrives.
 - Pricing: Claude Sonnet 5.5.
 - Proxy: the proxy URL's user part selects `inspect` or `tunnel`.
-- Settings → Secure Agent → Chat: **Review new findings automatically** (`system_agent.auto_review`), with editable minimum severity and finding types, and explanations of new findings, batch timing and confirmation requirements.
-- Settings → Secure Agent → Traffic: route Claude Code through Secure Agent's proxy.
-- Status: per-harness trace and guard support.
+- Resources: intervention results in the console, menu bar and session export; an approval acts only on the process it was captured for.
+- Session reports: saved review decisions with their evidence revision and residual risk; copying a partial report warns.
+- Sessions: Home opens a session's requests, findings, coverage and machine impact (`GET /sessions/{id}/overview`).
+- Sessions: a Results view of saved decisions, revocable permission scopes, process-control outcomes and reported remediation.
+- Sessions: Memory pages through retained activity, ended sessions included, with event and time filters and **Earlier**, **Newer** and **Latest**, and opens finding evidence and incident reports.
+- Settings → File Guard and Egress Firewall: add, edit and remove paths and patterns, validated and saved (`/guard/config`, `/firewall/patterns`).
+- Settings → Secure Agent → Analysis: request timeout, classifier connection check, metadata-only debug logs, and queue, retry and timing diagnostics.
+- Settings → Secure Agent → Chat: **Review new findings automatically** (`system_agent.auto_review`), with editable minimum severity and finding types.
+- Settings → Secure Agent → Traffic: route Claude Code through Secure Agent's proxy (`GET /routing/claude`).
+- Setup: first use walks through Choose, Enable and Result for one harness, with an inert installed-hook check that shows the hook's error (`POST /coverage/probe`).
+- Status: per-harness trace and guard support, and guard, trace and payload observations per live session.
 - Status: `proxy_tunneled`, `proxy_decrypted`, `es_service.newest_event_at` and `lag_seconds`.
-- Status, posture and Doctor: dropped telemetry and failed evidence writes.
+- Status, posture and Doctor: dropped telemetry, failed evidence reads and writes, lost OTLP spans, egress summary loss and incomplete proxy inspection; spool loss and bus drops fail only while they grow.
 - Telemetry Doctor: recovery steps and **Open hook setup**.
-- Test Hooks: a failure shows the hook's error.
-- Worktrees: **Discuss** asks the Agent tab about a worktree.
-- Worktrees: **Remove** sends confirmed review and keep rows to the Trash unless work would be lost.
+- Worktrees: **Discuss** asks the Agent tab about a worktree; **Ask advisor about all** and **Discuss all** cover a repository (`POST /agent/worktree`, `repo` on `POST /worktrees/advise`).
+- Worktrees: **Remove** for confirmed rows and amber **Remove…** to the Trash for keep and review rows, greyed while work would be lost or a rebase, merge or cherry-pick is in progress, with a legend.
 - Worktrees: merges are detected by content, also after a history rewrite.
 
 ### Changed
@@ -55,34 +49,43 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: one **Allow** per destination organization replaces one per address.
 - Console: findings show their file and destinations as chips.
 - Console: the page fills wide windows, with decision groups two-up.
+- Console: disabled buttons are dimmed.
+- Console: the session view, filters, scroll and focus survive Back and Forward, drawers and expired credentials, which pause controls until the console reconnects.
+- Console and menu bar: Home and the hero list only decisions that need you; warnings and recurring connections stay in the findings history, now a compact log.
 - Dependencies: `modernc.org/sqlite` 1.60.1.
 - Egress: infra apps' endpoints count as `uninspected_infra`.
 - Egress: the warning badge counts pending decisions.
 - Findings: critical findings sort first.
-- Findings: `gh` credential-helper reads for GitHub count as routine.
 - Findings: temporal and parent-process correlations labeled apart from direct activity.
 - Findings: weak historical findings stay at review severity.
 - Findings: repeats fold across restarts.
 - Findings: expected reads are scoped to exact hosts.
 - Findings: destination mutes match structured evidence.
 - Findings: `.env` evidence shows variable names only.
+- Findings and incidents: a payload finding shows whether its request was blocked, only observed, or unknown.
 - Install: one copy, `/Applications/Secure Agent.app`.
+- Menu bar: sessions, findings and incidents open in the console at that record.
 - Performance: snapshots, posture and store lookups do about half the work.
 - Posture: uninspected egress alone is all-clear.
+- Sessions: a compact navigator and activity ledger; narrow windows switch between list and detail.
+- Sessions: a tool call with no result is marked `incomplete` after 24 hours.
 - Settings: a sidebar of pages under Protection, Alerts, Monitoring, Secure Agent and General.
 - Settings → Egress Firewall: rules grouped by secret type, with **Block all** and **Monitor all**.
 - Settings → Exceptions: muted flags grouped by rule, beside allowed files.
 - Settings → File Guard and Notifications: mode menus replace segmented controls.
-- Settings → Providers: every daemon harness listed with its mark, toggles applied without a restart.
+- Settings → Providers: every daemon harness by name with its mark, Codex, Cursor, OpenClaw and Hermes first, toggles applied without a restart.
+- Spend: saved spend shows at once while it refreshes; one quota per shared Codex account.
 - Worktrees: the live-session button reads **Ask <harness>**.
 - Worktrees: the advisor sees the merge verdict and the default branch's side.
 
 ### Fixed
+- Advisor: re-triage stays pending until its verdict lands, with elapsed time and task limits.
+- API: failed or partial evidence reads and unsaved operator decisions return 503 and show in storage health; **Open** and **Reveal** answer 410 only for a deleted file.
 - App: daemon restart retries are bounded.
 - Build: `make` stops when a binary's commit stamp is not HEAD.
 - Chat: **Enter** cannot send twice.
 - Chat: drafts survive failed sends.
-- Console: an authentication rejection ends the session.
+- Console: a live-update stream that falls behind reconnects and reloads.
 - Console: the connecting process is identified once per connection, on macOS 14 too.
 - Console: an unidentified connecting process gets 503 instead of ending the session.
 - Console: an older refresh or headline never replaces newer data.
@@ -92,7 +95,6 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Costs: one model call per Claude API call, with stored duplicates removed.
 - Daemon: startup fails when the control API cannot be served.
 - Daemon: one daemon per store.
-- Doctor and posture: spool loss and bus drops fail only while they grow.
 - Doctor: `config` reports start-only changes, unreadable overlays and skipped reloads.
 - Doctor: trace coverage counts only sessions seen since boot.
 - Doctor: a running ES service with an earlier exit passes.
@@ -102,10 +104,16 @@ All notable changes to `secure-agent` are documented here. The format follows
 - File telemetry: a helper launchd will not start is re-registered, also from Doctor.
 - File telemetry: events from exited processes join the parent's session.
 - Findings: approval, review and file inspection buttons on grouped findings.
+- Findings: no sensitive-read finding for a credential read by its owning program (`credential_owners` `programs`), a directory open, or a file the agent wrote.
+- Findings: a finding whose write fails is raised on its next occurrence.
+- Firewall: fingerprint reloads and ingestion leave the registry unchanged when a source, the salt or the engine fails.
 - Fleet: `/status` and `/fleet` share one live `fleet_configured`.
+- Fleet: security alerts keep delivery capacity when traces fill the queue.
 - Forensic archive: kept when rotation fails.
+- Incidents: a report opens from any aggregated flag and keeps its newest evidence time, original flag and saved remediation; a duplicate never replaces it.
 - Menu bar: a hidden status item is recreated once per loss.
 - OpenCode: history read in bounded pages.
+- Policy files: an edit fails and leaves the file intact while a notification, mute, allowlist, expected-pattern, firewall or resource policy file is unreadable.
 - Pricing: stored calls priced when a price is added.
 - Resource episodes: include the session's tool calls, model calls and late file events.
 - Routing: the proxy URL carries the token.
@@ -128,8 +136,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Worktrees: repository text cannot close the advisor's evidence block.
 
 ### Security
+- Build: Go 1.26.9 standard-library security fixes.
+- Firewall: masking hides every detected fingerprint and pattern span in full, overlaps included.
 - Guard hooks: `guard-rules.json` bundled and installed beside `secret_guard.py`.
 - Guard: a prompt is withdrawn when its hook stops waiting.
+- Proxy: request bodies up to 64 MiB are inspected before forwarding, including gzip, URL, JSON and base64 forms.
 - Redaction: one rule set for the daemon, activity log and guard audit.
 
 ## [1.2.0] - 2026-09-30
