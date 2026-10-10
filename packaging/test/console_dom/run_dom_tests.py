@@ -186,9 +186,9 @@ def main():
                 receipt = re.search(r'data-permissions-probe="([^"]+)"', dom)
                 state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
                 check(f'session permissions ({label}): receipt produced', bool(state), str(state))
-                for name in ('scoped', 'entryFocus', 'refreshFocus', 'refreshScroll', 'stale', 'cancel', 'revoked', 'fits', 'back', 'selectionCloses'):
+                for name in ('scoped', 'entryFocus', 'refreshFocus', 'refreshScroll', 'compactScroll', 'stale', 'cancel', 'revoked', 'fits', 'back', 'selectionCloses'):
                     result = state.get(name)
-                    check(f'session permissions ({label}): {name}', result is True, str(state.get('scrollMismatch', result)) if name == 'refreshScroll' else str(result))
+                    check(f'session permissions ({label}): {name}', result is True, str(state.get('scrollMismatch', result)) if name in ('refreshScroll', 'compactScroll') else str(result))
             if args.session_permissions_only:
                 print(f'\n{len(passed)} passed, {len(failed)} failed')
                 if failed:

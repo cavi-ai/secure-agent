@@ -336,7 +336,9 @@ function sessionPermissionsHTML(receipt, state) {
     const saved = st.revoked?.has(id) ? '<p role="status">Revocation saved. Other permissions or expectations may still apply; past exposure and the saved decision remain.</p>' : '';
     if (!record) return `<section class="policy-row" data-session-part="permission:${escapeHTML(id)}"><div class="policy-row-main"><b>Current status unknown</b><p>Permission ${escapeHTML(id)}</p><p>The record is unavailable. This does not establish revocation or expiry.</p>${saved}</div></section>`;
     const status = permissionRecordState(record);
-    const revoke = status.revoke && !st.loading && !st.busy && !st.error && !st.mutationError && !st.revoked?.has(id);
+    // Keep the action's height while a read/save is pending, so short drawers
+    // do not clamp their reading position to zero. The action stays disabled.
+    const revoke = status.revoke && !st.error && !st.mutationError && !st.revoked?.has(id);
     const operation = record.operation === 'read-connect' ? 'Expected read/connect activity' : record.operation?.startsWith('guard:') ? 'Guarded ' + record.operation.slice(6) + ' access' : 'Operation unavailable';
     const effect = record.operation === 'read-connect' ? 'Marks this matching read/connect pattern expected. It does not grant network access.' : record.operation?.startsWith('guard:') ? 'Allows matching guarded tool access when the daemon validates the recorded identity and scope.' : 'Permission effect unknown.';
     return `<section class="policy-row" data-session-part="permission:${escapeHTML(id)}"><div class="policy-row-main">
@@ -346,7 +348,7 @@ function sessionPermissionsHTML(receipt, state) {
       <p>Workspace ${escapeHTML(record.workspace || 'unavailable')}<br>Executable path ${escapeHTML(record.reader_exe || 'unavailable')} (observed, not signature verified)</p>
       <p>Created ${escapeHTML(record.created_at || 'unavailable')}${record.expires_at ? `<br>Expires ${escapeHTML(record.expires_at)}` : ''}${record.revoked_at ? `<br>Revoked ${escapeHTML(record.revoked_at)}` : ''}</p>${saved}
       <details data-session-details><summary>Permission identifiers</summary><p>${escapeHTML(id)}<br>Rule ${escapeHTML(record.rule_id || 'unavailable')}<br>Originating session ${escapeHTML(record.session_id || 'unavailable')}</p></details>
-      ${revoke ? `<button type="button" class="btn btn-ghost btn-sm" data-action="session-permission-revoke" data-id="${escapeHTML(id)}">Revoke this permission</button>` : ''}
+      ${revoke ? `<button type="button" class="btn btn-ghost btn-sm" data-action="session-permission-revoke" data-id="${escapeHTML(id)}"${st.loading || st.busy ? ' disabled' : ''}>Revoke this permission</button>` : ''}
     </div></section>`;
   }).join('');
 }

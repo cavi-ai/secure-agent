@@ -40,6 +40,18 @@ function controller() {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+test('pending refresh retains a disabled action without permitting a revocation request', async () => {
+  const t = controller();
+  const open = t.c.window.openSessionPermissions('review-a', 'session-a');
+  t.answer(0, [scope()]); await open;
+  const refresh = t.c.window.refreshSessionPermissions();
+  assert.match(t.body.innerHTML, /data-action="session-permission-revoke" data-id="scope-a" disabled/);
+  await t.c.window.revokeSessionPermission('scope-a');
+  assert.equal(t.requests.length, 2, 'only initial and refresh reads were issued');
+  t.answer(1, [scope()]); await refresh;
+  assert.match(t.body.innerHTML, /data-action="session-permission-revoke" data-id="scope-a">/);
+});
+
 test('Results links the exact saved decision and session instead of the global policy page', () => {
   const c = context();
   const evidence = Object.fromEntries(['reviews', 'interventions', 'incidents'].map(key => [key, { available: true }]));

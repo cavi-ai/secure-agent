@@ -1604,6 +1604,16 @@
       receipt.refreshFocus = document.activeElement === body.querySelector('details summary') && body.querySelector('details').open;
       receipt.refreshScroll = Math.abs(top - body.scrollTop) < 2;
       if (!receipt.refreshScroll) receipt.scrollMismatch = { before: top, after: body.scrollTop, width: innerWidth, height: innerHeight };
+      const savedStyle = body.style.cssText;
+      body.style.boxSizing = 'border-box'; body.style.flex = 'none';
+      body.style.height = (body.scrollHeight - 5) + 'px';
+      body.scrollTop = 120; const compactTop = body.scrollTop;
+      window.__permissionDelayedRead = true;
+      await window.refreshSessionPermissions();
+      window.__permissionDelayedRead = false;
+      receipt.compactScroll = compactTop > 0 && Math.abs(compactTop - body.scrollTop) < 2;
+      if (!receipt.compactScroll) receipt.scrollMismatch = { before: compactTop, after: body.scrollTop, width: innerWidth, height: innerHeight };
+      body.style.cssText = savedStyle;
       window.__permissionsFail = true;
       await window.refreshSessionPermissions();
       receipt.stale = body.textContent.includes('Last known permission records') && body.textContent.includes('example.test:443')
