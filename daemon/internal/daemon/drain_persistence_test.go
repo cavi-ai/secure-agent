@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,8 +74,13 @@ func (f persistenceFixture) drain(t *testing.T, events ...event.Event) ([]api.De
 	close(input)
 	var offered []model.Flag
 	var health []store.WriteHealth
+	var healthMu sync.Mutex
 	cr := correlate.New(f.tagger, sensitive.New(f.cfg), f.cfg, correlate.Hooks{})
-	done := runEventIngest(input, ingestDeps{Store: f.store, Correlator: cr, Resolver: session.NewResolver(f.store, f.tagger), Tagger: f.tagger, Deltas: hub, PostureChanged: func() { health = append(health, f.store.WriteHealth()) }, NewFlag: func(fl model.Flag) { offered = append(offered, fl) }}).Done()
+	done := runEventIngest(input, ingestDeps{Store: f.store, Correlator: cr, Resolver: session.NewResolver(f.store, f.tagger), Tagger: f.tagger, Deltas: hub, PostureChanged: func() {
+		healthMu.Lock()
+		defer healthMu.Unlock()
+		health = append(health, f.store.WriteHealth())
+	}, NewFlag: func(fl model.Flag) { offered = append(offered, fl) }}).Done()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
