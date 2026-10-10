@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
 const interventionsSchema = `CREATE TABLE IF NOT EXISTS interventions (
@@ -71,7 +72,7 @@ func (s *Store) RecentInterventions(sessionID string, limit int) (_ []model.Inte
 	defer cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	query := `SELECT receipt_json FROM interventions`
+	query := `SELECT id,session_id,session_key,requested_at,revision,receipt_json FROM interventions`
 	args := []any{}
 	if sessionID != "" {
 		query += ` WHERE session_id=?`
@@ -86,15 +87,29 @@ func (s *Store) RecentInterventions(sessionID string, limit int) (_ []model.Inte
 	defer rows.Close()
 	out := []model.InterventionReceipt{}
 	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
+		var id, storedSessionID, sessionKey, requestedAt, raw string
+		var revision int64
+		if err := rows.Scan(&id, &storedSessionID, &sessionKey, &requestedAt, &revision, &raw); err != nil {
 			return nil, err
 		}
-		var r model.InterventionReceipt
+		var r *model.InterventionReceipt
 		if err := json.Unmarshal([]byte(raw), &r); err != nil {
 			return nil, err
 		}
-		out = append(out, r)
+		if r == nil || r.ID == "" || r.ID != id || r.SessionID != storedSessionID || r.SessionKey != sessionKey || r.Revision < 1 || r.Revision != revision {
+			return nil, fmt.Errorf("invalid intervention receipt identity")
+		}
+		indexedAt, err := time.Parse(time.RFC3339Nano, requestedAt)
+		if err != nil || !indexedAt.Equal(r.RequestedAt) {
+			return nil, fmt.Errorf("invalid intervention receipt timestamp")
+		}
+		out = append(out, *r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
