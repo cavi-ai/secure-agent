@@ -473,11 +473,15 @@
       }
       if (window.__permissionsFail) return { ok: false, status: 503 };
       if (window.__permissionDelayedRead) await new Promise(resolve => setTimeout(resolve, 50));
-      const scope = id => ({ id, kind: 'exact', agent: 'claude', session_id: 'sess-claude-1',
+      const scope = id => {
+        const revoked = id === 'synthetic-scope' ? window.__permissionRevoked : undefined;
+        return { id, kind: 'exact', agent: 'claude', session_id: 'sess-claude-1',
         workspace: '/synthetic/workspace', reader_exe: '/synthetic/tool', resource_path: '/synthetic/workspace/credentials',
         operation: 'read-connect', destination: 'example.test:443', rule_id: 'sensitive-read-then-connect',
         created_at: iso(60000), expires_at: new Date(now + 86400000).toISOString(),
-        revoked_at: id === 'synthetic-scope' ? window.__permissionRevoked : undefined });
+        revoked_at: revoked,
+        applicability: revoked ? { label: 'Revoked', revoke: false } : { label: 'Timed permission', revoke: true } };
+      };
       return { ok: true, json: async () => [scope('synthetic-scope'), scope('unrelated-permission')] };
     }
     if ((scenarios.has('contexthandoff') || scenarios.has('investigationdemo')) && p.startsWith('/flags/') && p.endsWith('/explain')) {

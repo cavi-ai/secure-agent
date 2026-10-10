@@ -359,20 +359,12 @@ function validPermissionRecords(rows) {
     new Set(rows.map(r => r.id)).size === rows.length;
 }
 
-function permissionRecordState(scope, now = Date.now()) {
-  if (scope.revoked_at) return { label: Number.isFinite(Date.parse(scope.revoked_at)) && Date.parse(scope.revoked_at) <= now
-    ? 'Revoked' : 'Revocation time unavailable or in the future; applicability unknown', revoke: false };
-  const created = Date.parse(scope.created_at);
-  if (!Number.isFinite(created) || created > now) return { label: 'Creation time unavailable or in the future; applicability unknown', revoke: false };
-  if (scope.operation !== 'read-connect' && !scope.operation?.startsWith('guard:')) return { label: 'Operation unavailable; applicability unknown', revoke: false };
-  if (scope.kind === 'exact') {
-    const expires = Date.parse(scope.expires_at);
-    if (!Number.isFinite(expires) || expires <= created) return { label: 'Expiry unavailable; applicability unknown', revoke: false };
-    if (expires <= now) return { label: 'Expired', revoke: false };
-    return { label: 'Timed permission', revoke: true };
+function permissionApplicability(record) {
+  const applicability = record && record.applicability;
+  if (!applicability || typeof applicability.label !== 'string' || !applicability.label || typeof applicability.revoke !== 'boolean') {
+    return { label: 'Applicability unknown', revoke: false };
   }
-  return scope.kind === 'session' ? { label: 'Session permission', revoke: true }
-    : { label: 'Permission kind unavailable; applicability unknown', revoke: false };
+  return { label: applicability.label, revoke: applicability.revoke };
 }
 
 function sessionPermissionsHTML(receipt, state) {
@@ -392,7 +384,7 @@ function sessionPermissionsHTML(receipt, state) {
     const record = st.rows?.find(r => r.id === id);
     const saved = st.revoked?.has(id) ? '<p role="status">Revocation saved. Other permissions or expectations may still apply; past exposure and the saved decision remain.</p>' : '';
     if (!record) return `<section class="policy-row" data-session-part="permission:${escapeHTML(id)}"><div class="policy-row-main"><b>Current status unknown</b><p>Permission ${escapeHTML(id)}</p><p>The record is unavailable. This does not establish revocation or expiry.</p>${saved}</div></section>`;
-    const status = permissionRecordState(record);
+    const status = permissionApplicability(record);
     // Keep the action's height while a read/save is pending, so short drawers
     // do not clamp their reading position to zero. The action stays disabled.
     const revoke = status.revoke && !st.error && !st.mutationError && !st.revoked?.has(id);
