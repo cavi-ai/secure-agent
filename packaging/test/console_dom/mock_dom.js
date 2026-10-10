@@ -691,6 +691,8 @@
     const overviewMatch = p.match(/^\/sessions\/([^/]+)\/overview$/);
     if (overviewMatch) {
       const sid = decodeURIComponent(overviewMatch[1]);
+      if (window.__overviewHold) await new Promise(resolve => { window.__releaseOverview = resolve; });
+      if (window.__overviewFail) return { ok: false, status: 503, json: async () => ({}) };
       if (scenarios.has('overviewrace') && sid === 'sess-claude-1') await new Promise(resolve => setTimeout(resolve, 1800));
       if (scenarios.has('overviewstale') && window.__overviewFailed) return { ok: false, status: 503, json: async () => ({}) };
       const own = sid === 'sess-claude-1';
@@ -699,6 +701,7 @@
         findings: own ? [{ id: scenarios.has('investigationdemo') ? 'flag-2' : 'f1', title: 'Own session finding', assessment: { risk: 'high', review_state: 'reviewed', residual_risk: 'model-exposure', control: 'observed-only', reason: 'A tool-visible read remains observed after review.', limits: ['No captured payload proves forwarding.'] } }, ...(window.__overviewExtra ? [{ id: 'new-finding', title: 'New observation', assessment: { risk: 'review', review_state: 'unreviewed', residual_risk: 'unknown' } }] : [])] : [], findings_truncated: false,
         coverage: { session_id: sid, guard: { state: own ? 'observed' : 'not-observed', detail: 'Only this session reports count; not every call is proven guarded.' }, trace: { state: 'observed', detail: 'Attributed tool activity.' }, payload: { state: 'unattributed', detail: 'Other traffic may be uninspected.' } },
         resources: own ? { key: data['/resources'].sessions.find(f => f.root_pid === 5821)?.key, rss_bytes: 536870912, cpu_percent: 25, process_count: 2, diagnoses: [], control: { state: 'observing' } } : null };
+      if (window.__overviewMalformed) body.requests = [null];
       return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
     }
     // Session memory: newest page first; the earlier cursor prepends one row.
@@ -1371,6 +1374,29 @@
         window.__traceFail = false;
         detail().querySelector('[data-action="trace-retry"]').click(); await wait();
         receipt.traceRetryRecovered = !window.SA.sessionTimelineState.error && detail().querySelector('.wf').textContent === saved;
+        window.__overviewFail = true;
+        await window.selectSession('wb-session-0');
+        const status = () => detail().querySelector('.sd-current-head');
+        receipt.statusUnavailable = status().textContent.includes('Current session status unavailable') && !status().textContent.includes('Last known');
+        const statusRetry = status().querySelector('[data-action="session-overview-retry"]');
+        statusRetry.focus({ preventScroll: true });
+        receipt.statusRetryFocus = document.activeElement === statusRetry && !statusRetry.disabled;
+        window.__overviewFail = false;
+        statusRetry.click(); await wait();
+        receipt.statusRecovered = !window.SA.sessionOverviewState.error && !status().querySelector('[data-action="session-overview-retry"]');
+        await window.selectSession('sess-claude-1');
+        const savedFinding = detail().querySelector('.sd-finding').textContent;
+        window.__overviewMalformed = true;
+        window.SA.refreshSessionOverview(true); await wait();
+        receipt.statusMalformed = status().textContent.includes('Last known session status') && detail().querySelector('.sd-finding').textContent === savedFinding
+          && detail().querySelector('.sd-request').disabled;
+        window.__overviewMalformed = false;
+        window.__overviewHold = true;
+        status().querySelector('[data-action="session-overview-retry"]').click(); await wait();
+        receipt.statusRetryPending = status().querySelector('[data-action="session-overview-retry"]').disabled && detail().querySelector('.sd-request').disabled;
+        window.__overviewHold = false; window.__releaseOverview(); await wait();
+        receipt.statusRetryRecovered = !window.SA.sessionOverviewState.error && !status().querySelector('[data-action="session-overview-retry"]')
+          && !detail().querySelector('.sd-request').disabled && detail().querySelector('.sd-finding').textContent === savedFinding;
       } catch (error) { receipt.error = String(error.stack || error); }
       document.body.dataset.sessionWorkbench = JSON.stringify(receipt);
     }, 4000);

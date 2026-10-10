@@ -11,7 +11,7 @@ const session = (id, status = 'active', last_seen_at = '2026-10-09T10:00:00Z') =
 const groups = (...sessions) => [{ key: 'codex', live: sessions.map(s => ({ session: s, children: [] })), ended: [] }];
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const traceEvent = (session_id, id = 'saved') => ({ id, session_id, kind: 12, ts: '2026-10-09T10:00:00Z', tool: id, tool_status: 'ok', duration_ms: 10 });
-function controller(persisted = '') {
+function controller(persisted = '', manualOverview = false) {
   const storage = new Map([['sa.selected-session', persisted]]);
   const requests = [];
   const tasks = [];
@@ -25,7 +25,7 @@ function controller(persisted = '') {
     queueMicrotask: cb => tasks.push(cb), requestAnimationFrame: () => 1,
     renderNow() {}, showToast() {}, sessionReadingHistory: () => false,
     apiFetch: url => {
-      if (url.endsWith('/overview')) return Promise.resolve({ ok: true, json: async () => ({ session_id: decodeURIComponent(url.split('/')[2]), requests: [], findings: [] }) });
+      if (url.endsWith('/overview') && !manualOverview) return Promise.resolve({ ok: true, json: async () => ({ session_id: decodeURIComponent(url.split('/')[2]), requests: [], findings: [] }) });
       const d = deferred(); requests.push({ url, ...d }); return d.promise;
     },
   };
@@ -39,10 +39,12 @@ function controller(persisted = '') {
     get memory() { return sessionMemoryPage; }, get memoryState() { return sessionMemoryState; }, get trace() { return sessionTimeline; },
     get traceState() { return typeof sessionTimelineState === 'undefined' ? undefined : sessionTimelineState; },
     get results() { return sessionOutcomes; }, get resultState() { return sessionOutcomesState; },
+    get overview() { return sessionOverview; }, get overviewState() { return sessionOverviewState; },
     reconcile: reconcileSessionSelection, reveal: takeSessionReveal,
     filter() { sessionFilterTransition = true; },
     refresh: loadSessionMemory, traceRefresh: loadSessionTimeline,
     resultRefresh: loadSessionOutcomes,
+    overviewRefresh: loadSessionOverview,
   };`, context);
   return { context, panel, state: context.window.testState, actions: context.window, requests,
     flush: () => { for (const task of tasks.splice(0)) task(); },
@@ -50,6 +52,46 @@ function controller(persisted = '') {
   };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('malformed current status retains prior facts and keeps access decisions unavailable until recovery', async () => {
+  const c = controller('', true);
+  const selected = c.actions.selectSession('a');
+  const saved = { session_id: 'a', observed_at: '2026-10-10T06:00:00Z', requests: [{ kind: 'guard', id: 'g', detail: 'Recorded request' }],
+    findings: [{ id: 'f', title: 'Recorded finding', assessment: { risk: 'high', limits: ['Retained evidence'] } }],
+    findings_truncated: false, coverage: null, resources: null };
+  c.answer(0, { rows: [] }); c.answer(1, saved); await selected;
+  assert.equal(c.state.overview, saved);
+  const invalid = [
+    { ...saved, requests: [null] },
+    { ...saved, requests: [{ kind: 'guard', id: 'g', available_scopes: {} }] },
+    { ...saved, findings: [{ id: 'f', assessment: { limits: {} } }] },
+    { ...saved, coverage: { session_id: 'b', guard: {}, trace: {}, payload: {} } },
+    { ...saved, resources: { key: 'r', rss_bytes: 'unknown', diagnoses: [] } },
+  ];
+  for (const data of invalid) {
+    const read = c.state.overviewRefresh('a');
+    c.answer(c.requests.length - 1, data); await read;
+    assert.equal(c.state.overview, saved);
+    assert.equal(c.state.overviewState.error, 'unavailable');
+  }
+  const retry = c.state.overviewRefresh('a');
+  assert.equal(c.state.overviewState.loading, true);
+  assert.equal(c.state.overviewState.error, 'unavailable');
+  const recovered = { ...saved, requests: [], findings: [] };
+  c.answer(c.requests.length - 1, recovered); await retry;
+  assert.equal(c.state.overview, recovered);
+  assert.equal(c.state.overviewState.error, '');
+});
+
+test('obsolete current-status failures cannot mark a newly selected session stale', async () => {
+  const c = controller('', true);
+  const a = c.actions.selectSession('a'); c.answer(0, { rows: [] });
+  const b = c.actions.selectSession('b'); c.answer(2, { rows: [] });
+  c.answer(3, { session_id: 'b', requests: [], findings: [] }); await b;
+  c.requests[1].resolve({ ok: false, status: 503 }); await a;
+  assert.equal(c.state.overview.session_id, 'b');
+  assert.equal(c.state.overviewState.error, '');
+});
 
 const outcomes = (session_id, id = 'saved') => ({ session_id, history: {
   reviews: [], incidents: [], interventions: [{ id, requested_at: '2026-10-09T10:00:00Z', status: 'failed', verification: 'unknown' }],
