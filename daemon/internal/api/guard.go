@@ -169,16 +169,21 @@ func (a *API) handleGuardPending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pending := a.guardBroker.Pending()
-	// Attach the advisor's recommendation, when one has landed. Advisory only:
-	// the human still resolves; this just shows the model's read inline.
-	for i := range pending {
-		if v, ok := a.store.AdvisorVerdictFor(advisor.GuardSubjectID(pending[i].Agent, pending[i].RuleID, pending[i].Path, pending[i].Tool), "guard"); ok {
-			pending[i].Advisor = &v
+	if a.store != nil {
+		subjectIDs := make([]string, len(pending))
+		for i, p := range pending {
+			subjectIDs[i] = advisor.GuardSubjectID(p.Agent, p.RuleID, p.Path, p.Tool)
+		}
+		// Optional advice may be partial; retain read health for the whole batch.
+		verdicts, _ := a.store.AdvisorVerdictsFor(subjectIDs, "guard")
+		// Advisory only: the human still resolves the prompt.
+		for i := range pending {
+			if v, ok := verdicts[subjectIDs[i]]; ok {
+				pending[i].Advisor = &v
+			}
 		}
 	}
-	// Broker.Pending() ranges a map, whose iteration order is unspecified —
-	// sort oldest-first so the menubar always prompts the longest-waiting
-	// request first instead of a random one.
+	// Keep the API response oldest-first by timestamp.
 	sort.Slice(pending, func(i, j int) bool { return pending[i].TS < pending[j].TS })
 	writeJSON(w, pending)
 }
