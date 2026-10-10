@@ -1041,6 +1041,18 @@ def main():
               and "The daemon returned invalid telemetry" in dom_malformed
               and 'id="status-text">Telemetry unavailable<' in dom_malformed)
         hot_recovered = health_notice(dom_malformedrecover, "snapshot|guard decisions")
+        retained_decisions = json.loads(html.unescape(pre(dom_malformed, "fixture-posture")))["needs_you"]
+        check("a failed snapshot retains critical posture with a visible freshness warning and Retry",
+              dom_query(dom_malformed).has(None, {'id': 'posture-banner', 'data-state': 'critical'})
+              and 'Status stale — last complete telemetry' in dom_malformed
+              and pre(dom_malformed, 'posture-visibility') == 'health=true retry=true'
+              and f'id="tabs-posture-text">{retained_decisions} need you · refresh failed<' in dom_malformed
+              and not dom_query(dom_malformed).has(None, {'id': 'posture-retry', 'hidden': ''}))
+        check("snapshot recovery clears the primary freshness warning and Retry",
+              dom_query(dom_malformedrecover).has(None, {'id': 'posture-health', 'hidden': ''})
+              and pre(dom_malformedrecover, 'posture-visibility') == 'health=false retry=false'
+              and dom_query(dom_malformedrecover).has(None, {'id': 'posture-retry', 'hidden': ''})
+              and f'id="tabs-posture-text">{retained_decisions} need you<' in dom_malformedrecover)
         check("valid hot responses recover from malformed containers",
               pre(dom_malformedrecover, "malformed-before-recovery").startswith("3 ")
               and "Stale" in pre(dom_malformedrecover, "malformed-before-recovery")
@@ -1081,6 +1093,11 @@ def main():
               and dom_query(dom_netfail).has(None, {'id': 'btn-retry-connection'}))
         check("unreachable sets Disconnected chip",
               'id="status-text">Disconnected<' in dom_netfail)
+        check("unavailable first telemetry cannot show a green primary status",
+              dom_query(dom_netfail).has(None, {'id': 'posture-banner', 'data-state': 'unknown'})
+              and 'id="posture-state">Telemetry unavailable<' in dom_netfail
+              and 'id="tabs-posture-text">Telemetry unavailable<' in dom_netfail
+              and 'No complete telemetry snapshot has loaded' in dom_netfail)
         check("token survives reload via sessionStorage (no #ct fragment)",
               'id="count-agents">3<' in dom_tokenseed
               and 'id="offline-banner" hidden' in dom_tokenseed)
@@ -1446,6 +1463,7 @@ def main():
               re.search(r'<section[^>]*id="attention-center"[^>]*\bhidden', dom_coverage) is not None
               and 'No pending decisions' not in dom_coverage.split('id="attention-center"', 1)[-1].split('id="home-spend"', 1)[0]
               and 'id="posture-state">Monitoring needs attention<' in dom_coverage
+              and 'id="tabs-posture-text">Monitoring gap<' in dom_coverage
               and 'id="coverage-center" hidden' not in dom_coverage
               and 'id="badge-coverage-count">2<' in dom_coverage)
         check("attention resource actions target the full session",

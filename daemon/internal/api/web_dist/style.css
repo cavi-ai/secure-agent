@@ -1087,6 +1087,7 @@ body {
 .tabs-posture .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
 .tabs-posture[data-state="attention"] .dot { background: var(--warn); }
 .tabs-posture[data-state="critical"] .dot { background: var(--bad); }
+.tabs-posture[data-state="unknown"] .dot { background: var(--tx-3); }
 .scope-bar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
   padding: 7px 12px; border-radius: var(--r-md);
@@ -1470,12 +1471,17 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 }
 .posture[data-state="attention"] { background: linear-gradient(180deg, rgba(245, 158, 11, 0.08), transparent); border-color: rgba(245, 158, 11, 0.35); }
 .posture[data-state="critical"] { background: linear-gradient(180deg, rgba(244, 63, 94, 0.10), transparent); border-color: rgba(244, 63, 94, 0.45); }
-.posture-main { display: flex; align-items: center; gap: 12px; flex: none; }
+.posture[data-state="unknown"] { background: var(--bg-1); }
+.posture-main { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
+.posture-main > div { min-width: 0; }
 .posture-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); }
 .posture[data-state="attention"] .posture-dot { background: #f59e0b; box-shadow: 0 0 8px #f59e0b; }
 .posture[data-state="critical"] .posture-dot { background: var(--bad); box-shadow: 0 0 10px var(--bad); animation: pulse-opacity 1.6s ease-in-out infinite; }
+.posture[data-state="unknown"] .posture-dot { background: var(--tx-3); box-shadow: none; }
 .posture-state { font: 700 0.95rem/1.2 var(--font); color: var(--tx-1); }
 .posture-summary { font: 400 0.76rem/1.4 var(--font); color: var(--tx-2); }
+.posture-health { margin-top: 4px; font: 400 0.76rem/1.4 var(--font); color: var(--tx-2); }
+.posture-health[hidden], #posture-retry[hidden] { display: none; }
 .posture-items { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; min-width: 0; }
 .posture-items li { font: 400 0.74rem/1.5 var(--font); color: var(--tx-2); display: flex; gap: 8px; align-items: baseline; }
 .posture-items li .sev { font-weight: 700; flex: none; }
@@ -1486,8 +1492,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .posture-items li a:hover { text-decoration: underline; }
 .posture-items[hidden] { display: none; }
 .posture-items li.posture-more { padding-left: 16px; }
-/* Phone: the headline does not shrink (flex: none), so side by side the items
-   list collapses to a sliver and its words spill past the viewport; stack. */
+/* Phone: stack the headline and observations so both retain reading space. */
 @media (max-width: 560px) {
   .posture { flex-direction: column; gap: 10px; }
 }
