@@ -384,6 +384,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionOverviewGeneration++;
     sessionOutcomesGeneration++;
     sessionMemoryState = { ...sessionMemoryState, loading: false, loadingEarlier: false };
+    sessionTimelineState = { ...sessionTimelineState, loading: false, error: 'unavailable' };
     sessionOverviewState = { loading: false, error: 'unavailable' };
     sessionOverviewRefreshAgain = false;
     sessionOutcomesState = { loading: false, error: 'unavailable' };
@@ -2888,6 +2889,7 @@ document.addEventListener('DOMContentLoaded', () => {
     selectedResourceKey: { get() { return selectedResourceKey; }, set(v) { selectedResourceKey = v; } },
     selectedSessionId: { get() { return selectedSessionId; }, set(v) { selectedSessionId = v; } },
     sessionTimeline: { get() { return sessionTimeline; }, set(v) { sessionTimeline = v; } },
+    sessionTimelineState: { get() { return sessionTimelineState; } },
     sessionView: { get() { return sessionView; } },
     sessionMemoryPage: { get() { return sessionMemoryPage; } },
     sessionMemoryState: { get() { return sessionMemoryState; } },
@@ -2913,6 +2915,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let sessionMemoryAt = 0;
   let sessionMemoryHistoryLoaded = false;
   let sessionTimeline = [];
+  let sessionTimelineState = { loading: false, loaded: false, error: '' };
   let sessionTimelineAt = 0;
   let sessionTimelineRequest = 0;
   let sessionOverview = null;
@@ -2984,6 +2987,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
     sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
     sessionTimelineAt = 0;
+    sessionTimelineState = { loading: false, loaded: false, error: '' };
     sessionOverviewGeneration++;
     sessionOverview = null;
     sessionOverviewState = { loading: false, error: '' };
@@ -3099,13 +3103,29 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!force && Date.now() - sessionTimelineAt < 2000) return;
     sessionTimelineAt = Date.now();
     const request = ++sessionTimelineRequest;
+    const current = () => id === selectedSessionId && generation === sessionMemoryGeneration
+      && request === sessionTimelineRequest && sessionView === 'trace';
+    sessionTimelineState = { ...sessionTimelineState, loading: true };
+    renderNow(['sessions']);
     try {
       const r = await apiFetch('/sessions/' + encodeURIComponent(id) + '/timeline?limit=500');
-      if (!r.ok) return;
-      const rows = (await r.json()) || [];
-      if (id === selectedSessionId && generation === sessionMemoryGeneration && request === sessionTimelineRequest && sessionView === 'trace') sessionTimeline = rows;
-    } catch { /* retain the last trace while access is paused or unavailable */ }
+      if (!r.ok) throw new Error('Trace unavailable');
+      const rows = await r.json();
+      if (!validSessionTrace(rows, id)) throw new Error('Invalid session trace');
+      if (!current()) return;
+      sessionTimeline = rows;
+      sessionTimelineState = { loading: false, loaded: true, error: '' };
+    } catch {
+      if (!current()) return;
+      sessionTimelineState = { ...sessionTimelineState, loading: false, error: 'unavailable' };
+    }
+    if (current()) renderNow(['sessions']);
   }
+  window.retrySessionTrace = function() {
+    if (selectedSessionId && sessionView === 'trace' && !sessionTimelineState.loading) {
+      return loadSessionTimeline(selectedSessionId, true);
+    }
+  };
   // Export: copy the session's markdown report. Safari only honours a
   // clipboard write started inside the click, so where ClipboardItem exists
   // the write starts now with the report body still loading.
@@ -5036,6 +5056,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'memory-retry':
         if (selectedSessionId) loadSessionMemory(selectedSessionId);
+        break;
+      case 'trace-retry':
+        window.retrySessionTrace();
         break;
       case 'session-overview-retry':
         if (selectedSessionId) loadSessionOverview(selectedSessionId);

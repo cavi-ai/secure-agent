@@ -10,6 +10,7 @@ const app = readFileSync(path.join(web, 'app.js'), 'utf8');
 const session = (id, status = 'active', last_seen_at = '2026-10-09T10:00:00Z') => ({ id, status, last_seen_at });
 const groups = (...sessions) => [{ key: 'codex', live: sessions.map(s => ({ session: s, children: [] })), ended: [] }];
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+const traceEvent = (session_id, id = 'saved') => ({ id, session_id, kind: 12, ts: '2026-10-09T10:00:00Z', tool: id, tool_status: 'ok', duration_ms: 10 });
 function controller(persisted = '') {
   const storage = new Map([['sa.selected-session', persisted]]);
   const requests = [];
@@ -36,6 +37,7 @@ function controller(persisted = '') {
   vm.runInContext(logic + actions + `\nwindow.testState = {
     get selected() { return selectedSessionId; }, get mode() { return sessionView; },
     get memory() { return sessionMemoryPage; }, get memoryState() { return sessionMemoryState; }, get trace() { return sessionTimeline; },
+    get traceState() { return typeof sessionTimelineState === 'undefined' ? undefined : sessionTimelineState; },
     get results() { return sessionOutcomes; }, get resultState() { return sessionOutcomesState; },
     reconcile: reconcileSessionSelection, reveal: takeSessionReveal,
     filter() { sessionFilterTransition = true; },
@@ -133,11 +135,11 @@ test('repeat selection retains selection, memory and mode; selecting another ses
   assert.equal(c.requests.length, 1);
   assert.equal(c.state.memory.rows[0].id, 'row-a');
   const trace = c.actions.setSessionView('trace');
-  c.answer(1, [{ id: 'trace-a' }]); await trace;
+  c.answer(1, [traceEvent('a', 'trace-a')]); await trace;
   const next = c.actions.selectSession('b');
   assert.equal(c.state.mode, 'trace');
   assert.match(c.requests[2].url, /\/sessions\/b\/timeline/);
-  c.answer(2, [{ id: 'trace-b' }]); await next;
+  c.answer(2, [traceEvent('b', 'trace-b')]); await next;
   assert.equal(c.state.trace[0].id, 'trace-b');
   const memory = c.actions.setSessionView('memory');
   assert.match(c.requests[3].url, /\/sessions\/b\/memory/);
@@ -155,10 +157,89 @@ test('late Memory and Trace responses cannot overwrite a subsequent selection, i
   const traceB = c.actions.setSessionView('trace');
   const traceA = c.actions.selectSession('a');
   const backB = c.actions.selectSession('b');
-  c.answer(4, [{ id: 'fresh-b' }]); await backB;
-  c.answer(2, [{ id: 'old-b' }]); await traceB;
-  c.answer(3, [{ id: 'late-a' }]); await traceA;
+  c.answer(4, [traceEvent('b', 'fresh-b')]); await backB;
+  c.answer(2, [traceEvent('b', 'old-b')]); await traceB;
+  c.answer(3, [traceEvent('a', 'late-a')]); await traceA;
   assert.equal(c.state.trace[0].id, 'fresh-b');
+});
+
+test('Trace identifies a first-load failure and retries without claiming an empty history', async () => {
+  const c = controller();
+  const select = c.actions.selectSession('a'); c.answer(0, { rows: [] }); await select;
+  const open = c.actions.setSessionView('trace');
+  assert.equal(c.state.traceState?.loading, true);
+  c.requests[1].resolve({ ok: false, status: 503 }); await open;
+  assert.equal(c.state.traceState.error, 'unavailable');
+  assert.equal(c.state.traceState.loaded, false);
+  const retry = c.actions.retrySessionTrace(); c.answer(2, []); await retry;
+  assert.equal(c.state.traceState.error, '');
+  assert.equal(c.state.traceState.loaded, true);
+  assert.equal(c.state.trace.length, 0);
+});
+
+test('Trace retains last loaded rows on failed or malformed reads and recovers with valid empty history', async () => {
+  const c = controller();
+  const select = c.actions.selectSession('a'); c.answer(0, { rows: [] }); await select;
+  const open = c.actions.setSessionView('trace'); c.answer(1, [traceEvent('a')]); await open;
+  for (const bad of [null, {}, [null], [traceEvent('b')], [{ ...traceEvent('a'), ts: 'invalid' }],
+    [{ ...traceEvent('a'), kind: '12' }], [{ ...traceEvent('a'), cost_usd: '1.0' }],
+    [{ ...traceEvent('a'), duration_ms: Infinity }], Array.from({ length: 501 }, () => traceEvent('a'))]) {
+    const refresh = c.state.traceRefresh('a', true); c.answer(c.requests.length - 1, bad); await refresh;
+    assert.equal(c.state.trace?.[0]?.id, 'saved');
+    assert.equal(c.state.traceState?.error, 'unavailable');
+    assert.equal(c.state.traceState.loaded, true);
+    assert.equal(c.state.traceState.loading, false);
+  }
+  const failure = c.state.traceRefresh('a', true);
+  c.requests.at(-1).resolve({ ok: false, status: 503 }); await failure;
+  assert.equal(c.state.trace[0].id, 'saved');
+  assert.equal(c.state.traceState.error, 'unavailable');
+  const retry = c.actions.retrySessionTrace();
+  assert.equal(c.actions.retrySessionTrace(), undefined, 'repeated retry while loading makes no new request');
+  c.answer(c.requests.length - 1, []); await retry;
+  assert.equal(c.state.trace.length, 0);
+  assert.equal(c.state.traceState.loaded, true);
+  assert.equal(c.state.traceState.error, '');
+});
+
+test('Trace selection resets availability and an obsolete failure cannot mark the new session stale', async () => {
+  const c = controller();
+  const select = c.actions.selectSession('a'); c.answer(0, { rows: [] }); await select;
+  const open = c.actions.setSessionView('trace'); c.answer(1, [traceEvent('a')]); await open;
+  const old = c.state.traceRefresh('a', true);
+  const next = c.actions.selectSession('b');
+  assert.equal(c.state.traceState?.loaded, false);
+  assert.equal(c.state.trace.length, 0);
+  c.answer(3, [traceEvent('b', 'new')]); await next;
+  c.requests[2].resolve({ ok: false, status: 503 }); await old;
+  assert.equal(c.state.trace[0].id, 'new');
+  assert.equal(c.state.traceState.error, '');
+  assert.equal(c.state.traceState.loading, false);
+});
+
+test('Trace rendering distinguishes unavailable, stale, empty and bounded history', () => {
+  const c = controller();
+  c.context.window.SA.sessionView = 'trace';
+  const render = (rows, state) => {
+    c.context.window.SA.sessionTimelineState = state;
+    return c.context.sessionDetailHTML({ id: 'a', harness: 'codex', status: 'ended' }, rows, []);
+  };
+  const failed = render([], { loaded: false, loading: false, error: 'unavailable' });
+  assert.match(failed, /Trace unavailable/);
+  assert.match(failed, /data-action="trace-retry"/);
+  assert.doesNotMatch(failed, /No trace events/);
+  const busy = render([], { loaded: false, loading: true, error: '' });
+  assert.match(busy, /Loading trace/);
+  assert.doesNotMatch(busy, /No trace events/);
+  assert.doesNotMatch(render([traceEvent('a')], { loaded: true, loading: true, error: '' }), /Loading trace/,
+    'routine background reads do not flash a loading notice over healthy history');
+  const stale = render([traceEvent('a', 'SavedTool')], { loaded: true, loading: false, error: 'unavailable' });
+  assert.match(stale, /last successfully loaded/);
+  assert.match(stale, /SavedTool/);
+  const full = render(Array.from({ length: 500 }, () => traceEvent('a')), { loaded: true, loading: false, error: '' });
+  assert.match(full, /500.*earlier history may be omitted/i);
+  assert.match(full, /data-action="session-events" data-id="a"/);
+  assert.match(render([], { loaded: true, loading: false, error: '' }), /No trace events/);
 });
 
 test('Back pane survives refresh; loading earlier deduplicates and a latest refresh retains loaded history', async () => {
