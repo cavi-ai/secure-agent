@@ -173,6 +173,12 @@ func assessmentRank(a model.FindingAssessment) int {
 	return a.DetectorSeverity
 }
 
+// nextAssessmentOutranks chooses both the stored assessment and its evidence flag.
+func nextAssessmentOutranks(stored, next model.FindingAssessment) bool {
+	nextRank, storedRank := assessmentRank(next), assessmentRank(stored)
+	return nextRank > storedRank || (nextRank == storedRank && stored.Risk == "unknown" && next.Risk != "unknown")
+}
+
 // mergeReviewAssessment retains the strongest observed facts, including late
 // arrivals. Advice, timestamps, count and workflow are not semantic evidence.
 func mergeReviewAssessment(old, next model.FindingAssessment) (model.FindingAssessment, bool) {
@@ -180,7 +186,7 @@ func mergeReviewAssessment(old, next model.FindingAssessment) (model.FindingAsse
 	slices.Sort(basis)
 	basis = slices.Compact(basis)
 	chosen := old
-	if assessmentRank(next) > assessmentRank(old) || (assessmentRank(next) == assessmentRank(old) && old.Risk == "unknown" && next.Risk != "unknown") {
+	if nextAssessmentOutranks(old, next) {
 		chosen = next
 	}
 	if next.Control != "unknown" && next.Control != "" {
@@ -290,7 +296,7 @@ func observeReviewTx(tx *sql.Tx, f model.Flag, a model.FindingAssessment) (r mod
 		if !f.Acknowledged && r.Decision == nil && r.ReviewState == "reviewed" {
 			r.ReviewState = "unreviewed"
 		}
-		if assessmentRank(a) > assessmentRank(r.Assessment) || (assessmentRank(a) == assessmentRank(r.Assessment) && r.Assessment.Risk == "unknown" && a.Risk != "unknown") {
+		if nextAssessmentOutranks(r.Assessment, a) {
 			r.EvidenceFlagID = f.ID
 		}
 		merged, changed := mergeReviewAssessment(r.Assessment, a)
