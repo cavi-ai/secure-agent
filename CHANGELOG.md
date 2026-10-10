@@ -13,6 +13,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Worktrees: a legend under the summary names the three Remove looks.
 
 ### Changed
+- Documentation: migrate detailed README guidance into user guides; add first-session, coverage and troubleshooting pages, generated CLI/configuration/API references, structured navigation and a verified documentation artifact build.
 - Providers: show only harness names and prioritize Codex, Cursor, OpenClaw, and Hermes.
 - Console and menu bar: Home and the hero list only decisions that need you; warnings and recurring connections stay in the findings history, now a compact log.
 - Worktrees: **Remove** is solid red when confirmed safe, **Remove…** is an amber outline when not confirmed (goes to the Trash), and a blocked row is greyed.

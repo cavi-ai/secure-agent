@@ -1,0 +1,58 @@
+{
+  "sections": [
+    {
+      "title": "Start here",
+      "pages": [
+        {"title": "Overview", "path": "README.md"},
+        {"title": "Documentation", "path": "docs/README.md"},
+        {"title": "Getting started", "path": "docs/GETTING_STARTED.md"},
+        {"title": "Your first observed session", "path": "docs/FIRST_SESSION.md"}
+      ]
+    },
+    {
+      "title": "Guides",
+      "pages": [
+        {"title": "Console and CLI", "path": "docs/USAGE.md"},
+        {"title": "File and egress protection", "path": "docs/PROTECTION.md"},
+        {"title": "Local chat and commands", "path": "docs/SYSTEM_AGENT.md"},
+        {"title": "Fleet", "path": "docs/FLEET.md"},
+        {"title": "Troubleshooting", "path": "docs/TROUBLESHOOTING.md"}
+      ]
+    },
+    {
+      "title": "Concepts",
+      "pages": [
+        {"title": "Coverage and evidence", "path": "docs/CONCEPTS.md"},
+        {"title": "Architecture", "path": "docs/ARCHITECTURE.md"}
+      ]
+    },
+    {
+      "title": "Reference",
+      "pages": [
+        {"title": "Configuration", "path": "docs/CONFIGURATION.md"},
+        {"title": "API contracts", "path": "docs/API.md"},
+        {"title": "CLI commands", "path": "docs/reference/CLI.md"},
+        {"title": "Default configuration", "path": "docs/reference/DEFAULTS.md"},
+        {"title": "API route registry", "path": "docs/reference/ROUTES.md"}
+      ]
+    },
+    {
+      "title": "Security",
+      "pages": [
+        {"title": "Security policy", "path": "SECURITY.md"},
+        {"title": "Guard threat model", "path": "docs/GUARD_THREAT_MODEL.md"},
+        {"title": "Firewall threat model", "path": "docs/FIREWALL_THREAT_MODEL.md"},
+        {"title": "Advisor threat model", "path": "docs/ADVISOR_THREAT_MODEL.md"}
+      ]
+    },
+    {
+      "title": "Development and releases",
+      "pages": [
+        {"title": "Development", "path": "docs/DEVELOPMENT.md"},
+        {"title": "Contributing", "path": "CONTRIBUTING.md"},
+        {"title": "Documentation artifacts", "path": "docs/CONSUMER.md"},
+        {"title": "Changelog", "path": "CHANGELOG.md"}
+      ]
+    }
+  ]
+}

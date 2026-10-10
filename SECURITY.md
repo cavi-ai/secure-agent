@@ -32,9 +32,9 @@ To help us triage and investigate the issue efficiently, please include:
 
 ## 🛡️ Security & Privacy Practices in `secure-agent`
 
-- **Redaction**: All secret values (passwords, private keys, API tokens, JWTs) detected in agent transcripts or event streams are redacted in memory using Layer-5 patterns (`[REDACTED]`).
-- **Local Isolation**: The daemon API binds strictly to a local Unix domain socket with restricted permissions (`0600`).
-- **No Telemetry Phone-Home**: `secure-agent` operates entirely on your local machine. No system logs or audit traces are transmitted to external servers.
+- **Redaction**: Detected secret values are masked with `[REDACTED]` before inclusion in stored/displayed evidence and local model context. Detection has limits: an unregistered value that matches no pattern can be missed. See [secret handling](docs/FIREWALL_THREAT_MODEL.md#handling-of-secret-material).
+- **Local access**: The daemon's Unix socket is owner-scoped (`0600`) with peer authorization. An enabled loopback proxy also serves the console API behind a separate console token; some routes further refuse agent processes. See [API authentication](docs/API.md#peer-authentication--endpoint-roles).
+- **External destinations**: Fleet webhooks and OTLP export are opt-in and send selected telemetry to configured destinations. Local chat and advisor calls require loopback model endpoints. Routed agent requests still go to their original upstream destinations. Review [configuration](docs/CONFIGURATION.md) and the [advisor threat model](docs/ADVISOR_THREAT_MODEL.md) for the scope of each path.
 
 ---
 

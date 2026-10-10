@@ -1,10 +1,12 @@
 # secure-agent Architecture Specification
 
+[Documentation](README.md) · [Project home](../README.md)
+
 This document provides a detailed overview of the internal architecture of `secure-agent`, including daemon telemetry collection, event bus pub/sub, sliding-window correlation, harness plugin gating, and the native Swift menu bar interface.
 
 ---
 
-## 🏛️ System Overview
+## System Overview
 
 `secure-agent` consists of three core components:
 
@@ -56,6 +58,47 @@ This document provides a detailed overview of the internal architecture of `secu
 ```
 
 ---
+
+### Hook and telemetry data flow
+
+```mermaid
+flowchart TD
+    subgraph Harness ["AI Agent Harness (Claude Code / Cursor)"]
+        H1["PreToolUse Hook\n(Secret Guard)"] --> H2["Tool Execution"]
+        H2 --> H3["PostToolUse Hook\n(Injection Scanner)"]
+        H1 -->|JSONL Audit| LOG["~/.local/state/secure-agent/activity.jsonl"]
+    end
+
+    subgraph OS_Telemetry ["macOS Subsystems"]
+        ES["eslogger\n(open, exec, rename, unlink, tcc_modify)"]
+        LP["lsof\n(Socket Sampler)"]
+    end
+
+    subgraph Daemon ["secure-agentd (Go Daemon)"]
+        C1["File Watch Collector"]
+        C2["Net Socket Sampler"]
+        C3["Process Tagger"]
+        C4["Transcript & Log Scanner"]
+
+        ES --> C1
+        LP --> C2
+        LOG --> C4
+
+        C1 --> BUS["Event Bus\n(Non-blocking Pub/Sub)"]
+        C2 --> BUS
+        C3 --> BUS
+        C4 --> BUS
+
+        BUS --> CORR["Sliding-Window\nCorrelation Engine"]
+        CORR --> STORE["Store Engine\n(SQLite + JSONL)"]
+        STORE --> API["Unix Socket API\n(~/.config/secure-agent/daemon.sock)"]
+    end
+
+    subgraph UI ["User Interface"]
+        API --> MENUBAR["Swift Menu Bar App\n(Status, Flags & Kill Switch)"]
+        API --> CLI["curl / CLI Tools"]
+    end
+```
 
 ## 1. Go Telemetry Daemon (`daemon/`)
 

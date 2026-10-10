@@ -1,5 +1,7 @@
 # Local Advisor — Threat Model & Guarantees
 
+[Documentation](README.md) · [Project home](../README.md)
+
 The local advisor is an **opt-in, advisory-only** layer that asks a locally
 served model (MLX or any OpenAI-compatible loopback server) for a second
 opinion on flags and incidents. This document is the honest accounting of the

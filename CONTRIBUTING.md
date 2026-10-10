@@ -1,102 +1,56 @@
 # Contributing to secure-agent
 
-Thank you for your interest in contributing to `secure-agent`! We welcome bug reports, feature requests, documentation improvements, and code contributions from the open-source community.
+Bug reports, documentation improvements and code contributions are welcome. Start with [Development](docs/DEVELOPMENT.md) for toolchain requirements, builds, signing, tests and the repository layout. For product setup, use [Getting started](docs/GETTING_STARTED.md).
 
-This document provides guidelines and workflows for contributing to `secure-agent`.
+## Local setup
 
----
-
-## 📋 Code of Conduct & Core Principles
-
-- **Developer Velocity + Security**: Monitoring must be fast, resilient, and non-intrusive. Telemetry collection should never block agent execution or introduce significant CPU/memory overhead.
-- **Pure Go Daemon**: The core daemon (`daemon/`) must remain pure Go (`CGO_ENABLED=0`) to ensure cross-architecture portability and ease of compilation.
-- **Fail-Safe Gating**: Plugin hooks must execute defensively within tight latency budgets (<100ms) and handle malformed JSON payloads gracefully without crashing harness sessions.
-- **Redaction & Privacy**: Never commit private credentials, tokens, or live Keychain data. All test fixtures must use `[REDACTED]` placeholders or dummy mock data.
-
----
-
-## 🛠️ Prerequisites & Local Setup
-
-Ensure you have the following installed on your macOS development environment:
-
-- **Go**: 1.22 or newer
-- **Swift**: 6.0 / Xcode Command Line Tools (macOS 14+)
-- **Python**: 3.10 or newer
-
-### Setup Workflow
-
-1. **Fork and clone the repository**:
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/secure-agent.git
-   cd secure-agent
-   ```
-
-2. **Verify existing test suites**:
-   ```bash
-   go test ./...
-   python3 plugin/hooks/test_secret_guard.py
-   python3 plugin/hooks/test_injection_scan.py
-   python3 plugin/hooks/test_activity_log.py
-   swift test --package-path menubar
-   ./packaging/test/e2e_smoke.sh
-   ```
-
----
-
-## 🧩 Component Standards
-
-### 1. Go Telemetry Daemon (`daemon/`)
-
-- Located in `daemon/cmd/secure-agentd` and `daemon/internal/`.
-- **Pure Go**: Do not introduce `cgo` dependencies.
-- **Non-blocking Pub/Sub**: The central event bus (`daemon/internal/bus`) uses non-blocking channel dispatch so slow consumers or storage writes do not back-pressure low-level monitoring.
-- **Storage Safety**: Database writes (`SQLite` and `JSONL`) are best-effort; database errors must degrade gracefully to log warnings without terminating event collection.
-
-### 2. Python Plugin Hooks (`plugin/hooks/`)
-
-- Located in `plugin/hooks/`.
-- **Dual Protocol Support**: Hooks must emit compatible responses for both Claude Code (`decision: "block"`, `reason: "..."`) and Cursor (`permission: "deny"`, `user_message: "..."`).
-- **Latency Budget**: Hooks run on every tool call. Maintain sub-50ms execution times.
-- **Test Coverage**: Any new regex pattern or rule in `secret_guard.py` or `injection_scan.py` must include corresponding `ALLOW` and `DENY` test cases in `test_secret_guard.py` / `test_injection_scan.py`.
-
-### 3. Swift Menu Bar (`menubar/`)
-
-- Located in `menubar/`.
-- **Decoupled Architecture**: The Swift app is a pure view layer that polls the daemon's Unix domain socket API (`/status`, `/flags`, `/events`). It contains no threat detection logic.
-- **Graceful Offline Mode**: If the daemon socket is absent or restarting, the menu bar app must cleanly transition to a "Daemon Offline" status without crashing.
-
----
-
-## 🧪 Testing Your Changes
-
-Before submitting a Pull Request, verify that all test suites pass cleanly:
+Fork the repository and clone your fork:
 
 ```bash
-# 1. Run Go unit & integration tests
-go test -v ./...
-
-# 2. Run Python plugin hook tests
-python3 plugin/hooks/test_secret_guard.py
-python3 plugin/hooks/test_injection_scan.py
-python3 plugin/hooks/test_activity_log.py
-
-# 3. Run Swift menu bar package tests
-swift test --package-path menubar
-
-# 4. Run end-to-end smoke test
-./packaging/test/e2e_smoke.sh
+git clone https://github.com/YOUR_USERNAME/secure-agent.git
+cd secure-agent
+git checkout -b feat/my-change
 ```
 
----
+Use the Go version declared in `go.mod` (currently 1.26.9). macOS app builds and Swift tests require Swift 6 and the macOS 27.0 SDK, selected by `packaging/swift_macos.sh`; deployment targets macOS 14+. Python 3.10+ runs the hooks; Node.js and Chrome/Chromium run the console tests. Follow the [development validation commands](docs/DEVELOPMENT.md#run-validation), including `make app` before the aggregate `make test` bundle check.
 
-## 📥 Submitting a Pull Request
+## Component standards
 
-1. Create a descriptive feature branch:
-   ```bash
-   git checkout -b feat/my-new-feature
-   ```
-2. Commit your changes following conventional commit syntax (`feat: ...`, `fix: ...`, `docs: ...`, `chore: ...`).
-3. Ensure all test suites pass locally.
-4. Push your branch and open a Pull Request against `main`.
+### Go daemon
 
-Thank you for helping secure the future of autonomous AI code agents!
+- Keep production binaries pure Go (`CGO_ENABLED=0`).
+- Keep event-bus publication non-blocking. Slow subscribers and storage must not stall low-level collection.
+- Keep telemetry storage writes best-effort, with explicit evidence-health reporting when records are dropped or reads/writes fail. Do not return an empty successful result for unavailable evidence.
+- Preserve authoritative persistence before applying process controls or changing protection. Telemetry's best-effort path does not authorize best-effort approval state.
+- Preserve session and process-start identity when joining evidence or applying an action.
+
+### Python harness hooks
+
+- Keep Claude Code and Cursor response protocols compatible (`decision: "block"` / `reason` and `permission: "deny"` / `user_message`).
+- Keep ordinary hook work lightweight. Interactive prompts deliberately wait for a decision up to their deadline; do not treat that path as a sub-100 ms operation.
+- Handle malformed payloads and daemon failures according to the [guard failure posture](docs/GUARD_THREAT_MODEL.md#failure-posture).
+- Add focused allow/deny regression cases for changed rules and patterns. Preserve hard denials protecting credential material and the guard's enforcement plane.
+
+### Native app and web console
+
+- Keep threat detection in the daemon. The Swift app presents state, manages setup and invokes supported controls.
+- Consume SSE updates with the existing polling fallback. Preserve last-known data with a stale warning when an endpoint fails; clear the warning only after that source refreshes successfully.
+- Keep user approvals scoped to the captured evidence and process family. Missing records and incomplete outcomes must remain explicit.
+- Edit embedded console assets in `daemon/internal/api/web_dist/`, their canonical source.
+
+### Privacy and documentation
+
+- Never commit credentials, tokens, private keys or private machine paths. Use `[REDACTED]` or synthetic fixtures.
+- Keep private plans, specs, discussions, scratch notes and generated evidence out of commits.
+- Update the relevant user guide and reference when behavior changes. Use the [documentation index](docs/README.md) to find the owning page.
+- Regenerate CLI/configuration/API inventories with `make docs-reference`, then run `make docs-check docs-test docs`. Keep every published page in `docs/navigation.json`.
+- Keep version history in [CHANGELOG.md](CHANGELOG.md); do not turn the README into release notes.
+
+## Submit a pull request
+
+1. Keep the change focused and include regression coverage for changed behavior.
+2. Run the relevant component checks and required repository gates. Report failed, unavailable or pending checks accurately.
+3. Use conventional commit titles such as `feat:`, `fix:`, `docs:` or `chore:` and preserve repository signing requirements.
+4. Inspect the diff for private artifacts and accidental sensitive data, then push the branch and open a pull request against `main` using the [PR template](.github/PULL_REQUEST_TEMPLATE.md).
+
+Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
