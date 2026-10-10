@@ -214,6 +214,54 @@ def unordered_events(now_ms=None):
     ]}]}
 
 
+def grouped_sessions(now_ms=None, *, ended=False, sidecar=False):
+    now, iso = _clock(now_ms)
+    mb = 1024 ** 2
+    workspace = "/Users/dev/.openclaw/workspace-demo-app"
+    sessions = [{
+        "id": f"sess-dup-{i}", "harness": "codex", "workspace": workspace,
+        "repo": "demo-app", "branch": "main", "origin": "quill (openclaw)",
+        "started_at": iso(i * 600000), "last_seen_at": iso(20000 + i * 1000),
+        "status": "active" if i == 2 else "idle", "confidence": "transcript",
+    } for i in range(1, 6)]
+    families = []
+    for i in range(1, 4):
+        pid = 8300 + i
+        sessions.append({
+            "id": f"sess-marg-{i}", "harness": "codex", "workspace": "/Users/dev/.openclaw",
+            "origin": "fennel (openclaw)", "root_pid": pid, "started_at": iso(i * 900000),
+            "last_seen_at": iso(25000 + i * 1000), "status": "active", "confidence": "transcript",
+        })
+        families.append({
+            "key": f"{pid}:1789470000000000000", "name": "codex", "root_pid": pid,
+            "root_started_at": "2026-09-09T13:00:00Z", "workspace": "/Users/dev/.openclaw",
+            "last_seen_at": iso(30000), "rss_bytes": 100 * i * mb, "cpu_percent": i,
+            "process_count": i, "orphan_count": 0,
+            "processes": [{"pid": pid, "ppid": 1, "name": "codex", "rss_bytes": 100 * i * mb, "cpu_percent": i}],
+            "samples": [], "diagnoses": [],
+        })
+    if ended:
+        sessions.extend({
+            "id": f"sess-dup-{i}", "harness": "codex", "workspace": workspace,
+            "repo": "demo-app", "branch": "main", "origin": "quill (openclaw)",
+            "started_at": iso(i * 600000), "last_seen_at": iso(40000 + i * 1000),
+            "ended_at": iso(40000 + i * 1000), "status": "ended", "confidence": "transcript",
+        } for i in (6, 7))
+    if sidecar:
+        families.append({
+            "key": "8400:1789470000000000000", "name": "codex", "root_pid": 8400,
+            "root_started_at": "2026-09-09T13:00:00Z", "workspace": "/Users/dev/workspace/etl-sidecar",
+            "last_seen_at": iso(30000), "rss_bytes": 50 * mb, "cpu_percent": 2,
+            "process_count": 1, "orphan_count": 0,
+            "processes": [{"pid": 8400, "ppid": 1, "name": "codex", "rss_bytes": 50 * mb, "cpu_percent": 2}],
+            "samples": [], "diagnoses": [],
+        })
+    return {"now": now, "patches": [
+        {"route": "/sessions", "path": [], "append": sessions},
+        {"route": "/resources", "path": ["sessions"], "append": families},
+    ]}
+
+
 def payload_outcomes(now_ms=None):
     now, iso = _clock(now_ms)
     payloads = {}
