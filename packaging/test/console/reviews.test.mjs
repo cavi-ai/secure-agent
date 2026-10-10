@@ -27,7 +27,7 @@ test('stale review decision retains choice, refreshes facts and never retries',a
  const end=app.indexOf('  // Review pagination',start);
  assert.ok(start>=0&&end>start,'review handler exists');
  const calls=[],drafts=new Map();let refreshed=0;
- const ctx={window:{},reviewDrafts:drafts,apiFetch:async(url,opts)=>{calls.push([url,JSON.parse(opts.body)]);return{ok:false,status:409}},showToast:()=>{},fetchTelemetry:async()=>{refreshed++},markDirty:()=>{}};
+ const ctx={window:{},beginAttentionWrite:()=>()=>{},reviewDrafts:drafts,apiFetch:async(url,opts)=>{calls.push([url,JSON.parse(opts.body)]);return{ok:false,status:409}},showToast:()=>{},fetchTelemetry:async()=>{refreshed++},markDirty:()=>{}};
  vm.runInNewContext(app.slice(start,end),ctx);
  await ctx.window.reviewAct('context',1,'acknowledge');
  assert.equal(calls.length,1);assert.deepEqual(calls[0],['/reviews/decision',{id:'context',revision:1,action:'acknowledge'}]);
@@ -50,7 +50,13 @@ test('Home review row keeps revision-bound actions and its evidence detail',()=>
  const view=ctx.needView({kind:'review',id:record.id,review:record,group:{agent:'codex'}},ctx.homeContext(sa));
  const html=ctx.needRowHTML(view,true,Date.now());
  assert.match(html,/data-action="review-decision" data-id="context" data-revision="2" data-decision="acknowledge"/);
- assert.match(html,/View supporting evidence/);assert.match(html,/Model-visible read/);
+ assert.match(html,/data-action="select-attention" data-need-kind="review" data-need-id="context"/);assert.match(html,/Model-visible read/);
+ const start=app.indexOf('  function selectAttention('),end=app.indexOf('  function attentionSignature',start);
+ let inspector; Object.assign(ctx,{attentionItems:()=>[{kind:'review',id:record.id,review:record,group:{agent:'codex'}}],
+  drawerBody:{querySelectorAll:()=>[]},attentionGeneration:0,attentionSignature:()=> 'fixture',btnDrawerCopy:{hidden:false},openDrawer:options=>{inspector=options},renderAttention:()=>{}});
+ vm.runInContext(app.slice(start,end),ctx);ctx.selectAttention('review:context');
+ assert.match(inspector.body,/View supporting evidence/);assert.match(inspector.body,/Model-visible read/);
+ assert.match(inspector.foot,/data-revision="2"/);assert.equal(inspector.attentionOrigin.key,'review:context');
  assert.equal((html.match(/>Mark reviewed</g)||[]).length,1);
 });
 

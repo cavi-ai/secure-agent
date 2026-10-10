@@ -41,16 +41,16 @@ test('every old tab id resolves to its new tab[/sub]', () => {
   const want = {
     overview: 'home', findings: 'home', agents: 'sessions/processes', resources: 'sessions/resources',
     history: 'sessions/resources', worktrees: 'system', cleanup: 'system', clutter: 'system', events: 'sessions/events',
-    sessions: 'sessions/board', egress: 'egress', system: 'system',
+    sessions: 'sessions/board', egress: 'protection/traffic', policy: 'protection/rules', system: 'system',
   };
   for (const [id, route] of Object.entries(want)) assert.equal(key(id), route, id);
   assert.equal(resolveConsoleRoute('findings').focus, 'attention');
   assert.equal(resolveConsoleRoute('overview').focus, '');
 });
 
-test('System is a tab after Egress; the Cleanup sub-view left Sessions and its old routes land on System', () => {
+test('System follows grouped Protection; the Cleanup sub-view left Sessions and its old routes land on System', () => {
   const tabs = vm.runInContext('CONSOLE_TABS', ctx);
-  assert.deepEqual([...tabs], ['home', 'sessions', 'egress', 'system', 'policy', 'agent']);
+  assert.deepEqual([...tabs], ['home', 'sessions', 'protection', 'system', 'agent']);
   assert.deepEqual([...vm.runInContext('SESSIONS_SUBS', ctx)], ['board', 'processes', 'resources', 'events']);
   // Saved views, the stored tab and bookmarks kept "sessions/worktrees".
   for (const id of ['sessions/worktrees', '#sessions/worktrees', 'worktrees', 'cleanup', 'clutter', 'system']) {
@@ -62,11 +62,18 @@ test('System is a tab after Egress; the Cleanup sub-view left Sessions and its o
 });
 
 test('new ids, sub-view hashes and unknown ids', () => {
-  for (const id of ['home', 'egress', 'system', 'policy']) assert.equal(key(id), id);
+  for (const id of ['home', 'system']) assert.equal(key(id), id);
   assert.equal(key('#sessions/events'), 'sessions/events');
   assert.equal(key('sessions/processes'), 'sessions/processes');
   assert.equal(key('sessions/nope'), 'sessions/board');
-  assert.equal(key('policy/x'), 'policy');
+  assert.equal(key('policy/x'), 'protection/rules');
+  assert.equal(key('#protection'), 'protection/traffic');
+  assert.equal(key('#protection/nope'), 'protection/traffic');
+  for (const view of ['traffic', 'rules', 'sources', 'audit']) {
+    const r = resolveConsoleRoute('protection/' + view);
+    assert.equal(key(consoleRouteHash(r)), 'protection/' + view);
+    assert.equal(isConsoleRoute(consoleRouteHash(r)), true);
+  }
   for (const id of ['', 'nope', 'file=%2Fx', 'toString', '__proto__', undefined, null]) assert.equal(key(id), 'home', String(id));
   assert.equal(isConsoleRoute('agents'), true);
   assert.equal(isConsoleRoute('#sessions/worktrees'), true);
@@ -111,4 +118,54 @@ test('policy lists: rows escaped, empty states say what fills them, loading and 
   assert.ok(expected.includes('<b>an agent tool</b> reads') && expected.includes('codex · legacy policy · no expiry · 0 since the daemon started'));
   assert.ok(policyListHTML('guard', null, {}).includes('Loading'));
   assert.ok(policyListHTML('guard', null, { error: 'boom <x>' }).includes('boom &lt;x&gt;'));
+});
+
+
+test('Protection subviews retain selected ARIA and visibility without receiving Sessions listeners', () => {
+  const source = readFileSync(path.join(webDist, 'app.js'), 'utf8');
+  const start = source.indexOf('  function switchTab(');
+  const end = source.indexOf('  // Tab badges:', start);
+  assert.ok(start >= 0 && end > start);
+  const make = (id, dataset = {}) => ({
+    id, dataset, hidden: false, attributes: {}, listeners: [],
+    classList: { values: new Set(), toggle(name, on) { on ? this.values.add(name) : this.values.delete(name); } },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    addEventListener(name, action) { this.listeners.push(action); },
+  });
+  const primary = ['home', 'sessions', 'protection', 'system', 'agent'].map(tab => make('tab-button-' + tab, {tab}));
+  const sections = ['traffic', 'rules', 'sources', 'audit'].map(view => make('protection-' + view, {protectionSection:view}));
+  const protection = sections.map(section => make('protection-tab-' + section.dataset.protectionSection, {protectionView:section.dataset.protectionSection}));
+  const sessions = ['board', 'processes', 'resources', 'events'].map(subtab => make('session-tab-' + subtab, {subtab}));
+  const panels = ['home', 'sessions', 'egress', 'policy', 'system', 'agent'].map(tab => make('tab-' + tab));
+  const nav = make('protection-nav');
+  const document = {
+    body: make('body'),
+    querySelectorAll(selector) {
+      return ({'.tab-btn':primary, '.tabpanel':panels, '[data-protection-section]':sections,
+        '[data-protection-view]':protection, '.subtab-btn[data-subtab]':sessions,
+        '.subtab-btn':[...sessions, ...protection], '.subview':[]})[selector] || [];
+    },
+    getElementById(id) { return id === nav.id ? nav : null; },
+  };
+  const runtime = {document, window:{history:{}}, sessionStorage:{setItem(){}},
+    activeTab:'home', activeSub:'board', activeProtection:'traffic', attentionSelection:null,
+    PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){}};
+  vm.createContext(runtime);
+  vm.runInContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), runtime);
+  vm.runInContext(source.slice(start, end), runtime);
+  assert.equal(sessions.every(button => button.listeners.length === 1), true);
+  assert.equal(protection.every(button => button.listeners.length === 0), true, 'Sessions handlers must not bind to Protection buttons');
+  for (const [route, view] of [['egress','traffic'], ['policy','rules'], ['protection/sources','sources'], ['protection/audit','audit']]) {
+    runtime.switchTab(route);
+    assert.equal(runtime.activeTab, 'protection');
+    assert.equal(nav.hidden, false);
+    assert.deepEqual(sections.filter(section => !section.hidden).map(section => section.dataset.protectionSection), [view]);
+    assert.deepEqual(protection.filter(button => button.attributes['aria-selected'] === 'true').map(button => button.dataset.protectionView), [view]);
+    assert.deepEqual(protection.filter(button => button.classList.values.has('active')).map(button => button.dataset.protectionView), [view]);
+  }
+  sessions.find(button => button.dataset.subtab === 'events').listeners[0]();
+  assert.equal(runtime.activeTab, 'sessions');
+  assert.equal(runtime.activeSub, 'events');
+  assert.equal(nav.hidden, true);
+  assert.equal(protection.every(button => button.attributes['aria-selected'] === 'false'), true);
 });

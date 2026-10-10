@@ -86,12 +86,124 @@ document.addEventListener('DOMContentLoaded', () => {
   let drawerSeq = 0;
   const drawerHead = drawer && drawer.querySelector('.drawer-head');
   const drawerTitleEl = document.getElementById('drawer-title');
+  let attentionSelection = null;
+  let attentionGeneration = 0;
+  const attentionWrites = new Set();
+  let drawerModal = false;
+  const drawerInert = new Map();
+  // Match the CSS dock breakpoints, including browser viewport emulation.
+  const drawerDockMedia = window.matchMedia?.('(min-width: 1180px)');
+  const drawerWideDockMedia = window.matchMedia?.('(min-width: 1340px)');
+  function syncDrawerMode() {
+    if (!drawer || sessionEnded) return;
+    const wide = drawer.classList.contains('resource-policy');
+    const media = wide ? drawerWideDockMedia : drawerDockMedia;
+    const docked = media ? media.matches : (document.documentElement?.clientWidth || window.innerWidth) >= (wide ? 1340 : 1180);
+    const modal = !drawer.hidden && !docked;
+    drawerModal = modal;
+    drawer.setAttribute('role', modal ? 'dialog' : 'complementary');
+    drawer.setAttribute('aria-labelledby', 'drawer-title');
+    if (modal) drawer.setAttribute('aria-modal', 'true'); else drawer.removeAttribute('aria-modal');
+    drawer.dataset.modal = String(modal);
+    if (modal) {
+      document.querySelectorAll('.app > *').forEach(el => {
+        if (el.contains(drawer) || el.id === 'confirm-layer' || el.id === 'session-ended') return;
+        if (!drawerInert.has(el)) drawerInert.set(el, el.inert);
+        el.inert = true;
+      });
+    } else {
+      for (const [el, previous] of drawerInert) el.inert = previous;
+      drawerInert.clear();
+    }
+  }
+  window.addEventListener('resize', syncDrawerMode);
+  drawerDockMedia?.addEventListener('change', syncDrawerMode);
+  drawerWideDockMedia?.addEventListener('change', syncDrawerMode);
 
-  function openDrawer({ title, icon, body, foot, variant, onClose, back }) {
+  function attentionItems() { return needsItems(telemetryData.posture); }
+  function selectAttention(key, { focus = false } = {}) {
+    const items = attentionItems();
+    const item = items.find(it => `${it.kind}:${it.id}` === key);
+    if (!item) return;
+    const origin = { key, order: items.map(it => `${it.kind}:${it.id}`), generation: ++attentionGeneration };
+    const view = needView(item, homeContext(window.SA));
+    origin.signature = attentionSignature(item);
+    drawerMode = 'attention';
+    btnDrawerCopy.hidden = true;
+    openDrawer({ title: item.title || view.word, icon: 'shield', attentionOrigin: origin,
+      body: `<div class="panel-body attention-inspector"><p class="finding-why">${escapeHTML(view.agent)}</p><h3>${escapeHTML(view.what)}</h3><p>${escapeHTML(view.why)}</p>${view.body ? view.body() : `<p>${escapeHTML(item.detail || '')}</p>`}</div>`,
+      foot: actionBarHTML(view.items), onClose: () => { drawerMode = null; } });
+    drawerBody.querySelectorAll('details.body-evidence').forEach(part => { part.open = true; });
+    renderAttention();
+    if (focus) btnDrawerClose?.focus({ preventScroll: true });
+  }
+  function attentionSignature(item) {
+    const ctx = homeContext(window.SA);
+    return JSON.stringify([item, ctx.flags.get(item.id), ctx.patterns.get(item.id), ctx.routine.get(item.id), ctx.incidents.get(item.id), reviewDrafts.get(item.id)]);
+  }
+  function refreshAttentionInspector(item) {
+    if (drawerMode !== 'attention' || !attentionSelection) return;
+    const signature = attentionSignature(item);
+    if (attentionSelection.signature === signature) return;
+    attentionSelection.signature = signature;
+    const view = needView(item, homeContext(window.SA));
+    const focused = drawer.contains(document.activeElement) ? document.activeElement : null;
+    const action = focused?.dataset.action, id = focused?.dataset.id;
+    drawerTitle.textContent = item.title || view.word;
+    drawerBody.innerHTML = `<div class="panel-body attention-inspector"><p class="finding-why">${escapeHTML(view.agent)}</p><h3>${escapeHTML(view.what)}</h3><p>${escapeHTML(view.why)}</p>${view.body ? view.body() : `<p>${escapeHTML(item.detail || '')}</p>`}</div>`;
+    drawerBody.querySelectorAll('details.body-evidence').forEach(part => { part.open = true; });
+    drawerFoot.innerHTML = actionBarHTML(view.items);
+    drawerFoot.hidden = !view.items.length;
+    if (focused && !focused.isConnected) {
+      const replacement = Array.from(drawer.querySelectorAll('[data-action]')).find(b => b.dataset.action === action && b.dataset.id === id);
+      (replacement || btnDrawerClose)?.focus({ preventScroll: true });
+    }
+  }
+  function reconcileAttention({ previous, focus = false } = {}) {
+    if (!attentionSelection || drawer.hidden || sessionEnded || attentionWrites.size) return;
+    const items = attentionItems();
+    const next = nextAttentionKey(attentionSelection.key, previous || attentionSelection.order, items);
+    if (next === attentionSelection.key) {
+      attentionSelection.order = items.map(it => `${it.kind}:${it.id}`);
+      refreshAttentionInspector(items.find(it => `${it.kind}:${it.id}` === next));
+      return;
+    }
+    if (next) {
+      selectAttention(next, { focus });
+      window.saAnnounce('Showing the next item that needs you.');
+    } else {
+      attentionSelection = null;
+      attentionGeneration++;
+      drawerMode = 'attention-empty';
+      openDrawer({ title: 'Needs you', icon: 'shield', body: '<div class="empty" role="status"><span>No items need your attention. New requests will appear in the queue.</span></div>', foot: '' });
+      if (focus) btnDrawerClose?.focus({ preventScroll: true });
+      window.saAnnounce('No items need your attention.');
+    }
+  }
+  function beginAttentionWrite() {
+    const selection = attentionSelection;
+    const ticket = { selection, seq: drawerSeq, auth: handoffGeneration, order: attentionItems().map(it => `${it.kind}:${it.id}`) };
+    attentionWrites.add(ticket);
+    const pausedButtons = new Map();
+    if (selection) drawer.querySelectorAll('button[data-action]').forEach(b => { pausedButtons.set(b, b.disabled); b.disabled = true; });
+    const finish = (success) => {
+      attentionWrites.delete(ticket);
+      if (!selection || attentionSelection !== selection || ticket.seq !== drawerSeq || ticket.auth !== handoffGeneration || sessionEnded) return false;
+      for (const [button, disabled] of pausedButtons) button.disabled = disabled;
+      if (success) reconcileAttention({ previous: ticket.order, focus: true });
+      return true;
+    };
+    finish.isCurrent = () => ticket.seq === drawerSeq && ticket.auth === handoffGeneration && !sessionEnded;
+    return finish;
+  }
+
+
+  function openDrawer({ title, icon, body, foot, variant, onClose, back, attentionOrigin }) {
     if (!drawer) return false;
     // A drawer opened from inside the open one keeps the original opener, so
     // closing still returns focus to the page.
     if (drawer.hidden) drawerOpener = document.activeElement;
+    attentionSelection = attentionOrigin || back?.attentionOrigin || null;
     drawerOnClose = onClose || null;
     drawerBack = back || null;
     drawerSeq++;
@@ -103,7 +215,8 @@ document.addEventListener('DOMContentLoaded', () => {
     drawerFoot.hidden = !foot;
     drawer.className = 'drawer' + (variant ? ' ' + variant : '');
     drawer.hidden = false;
-    if (back?.sessionReturn) btnDrawerClose?.focus({ preventScroll: true });
+    syncDrawerMode();
+    if (drawerModal || back?.sessionReturn) btnDrawerClose?.focus({ preventScroll: true });
     // Reserve room so the panel docks beside the content instead of covering
     // it — this is an inspector, not a modal.
     const app = document.querySelector('.app');
@@ -117,6 +230,10 @@ document.addEventListener('DOMContentLoaded', () => {
   function closeDrawer() {
     if (!drawer || drawer.hidden) return;
     drawer.hidden = true;
+    drawerSeq++;
+    attentionSelection = null;
+    attentionGeneration++;
+    syncDrawerMode();
     drawerBody.innerHTML = '';
     drawerFoot.innerHTML = '';
     drawerFoot.hidden = true;
@@ -126,7 +243,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (app) app.classList.remove('drawer-open', 'drawer-wide');
     const fn = drawerOnClose;
     drawerOnClose = null;
-    if (drawerOpener && typeof drawerOpener.focus === 'function') drawerOpener.focus();
+    if (drawerOpener?.isConnected && typeof drawerOpener.focus === 'function') drawerOpener.focus();
+    else document.querySelector('#attention-list .need-head')?.focus({ preventScroll: true });
     drawerOpener = null;
     if (fn) fn();
   }
@@ -135,7 +253,14 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnDrawerClose) btnDrawerClose.addEventListener('click', closeDrawer);
   if (drawer) {
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && drawer && !drawer.hidden) closeDrawer();
+      if (sessionEnded) return;
+      if (e.key === 'Escape' && drawer && !drawer.hidden && (!confirmLayer || confirmLayer.hidden)) closeDrawer();
+      if (e.key === 'Tab' && drawerModal && !drawer.hidden && (!confirmLayer || confirmLayer.hidden)) {
+        const controls = Array.from(drawer.querySelectorAll('button, input, select, textarea, a[href], summary, [tabindex="0"]')).filter(el => !el.disabled && !el.hidden && el.getClientRects().length);
+        const first = controls[0], last = controls[controls.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+      }
     });
   }
 
@@ -275,7 +400,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const SPEND_VIEW_KEY = 'sa.spend-view';
   const SPEND_BY = ['repo', 'provider', 'model', 'day'];
   const SPEND_SINCE = ['24h', '7d', '30d'];
-  let spendView = { by: 'repo', since: '24h' };
+  let spendView = { by: 'day', since: '7d' };
   try {
     const saved = JSON.parse(sessionStorage.getItem(SPEND_VIEW_KEY) || '{}') || {};
     if (SPEND_BY.includes(saved.by)) spendView.by = saved.by;
@@ -291,6 +416,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // older one's answer.
   const SPEND_POLL_MS = 2000;
   const SPEND_POLLS = 30;
+  let spendDayGen = 0;
   let spendGen = 0;
   let spendPollTimer = null;
   let spendPolls = 0;
@@ -378,6 +504,7 @@ document.addEventListener('DOMContentLoaded', () => {
     clearInterval(sparkTimer);
     clearTimeout(spendPollTimer);
     spendPollTimer = null;
+    spendDayGen++;
     spendGen++; // invalidate spend responses already in flight
     sessionMemoryGeneration++;
     sessionTimelineRequest++;
@@ -433,6 +560,7 @@ document.addEventListener('DOMContentLoaded', () => {
       el.hidden = previous.hidden;
     }
     pausedElements.clear();
+    syncDrawerMode();
     if (handoff.has('tab')) switchTab(route, { skipHash: true });
     if (recoveryFocus?.isConnected) recoveryFocus.focus({ preventScroll: true });
     telemetryFetchGen++;
@@ -464,11 +592,13 @@ document.addEventListener('DOMContentLoaded', () => {
   let reviewPageSeq = 0;
   window.reviewAct = async function(id, revision, action, scope) {
     if (scope && scope.kind !== 'once' && !await window.saConfirm('Count future activity as expected only for the recorded executable path, workspace, file and exact endpoint? ' + (scope.kind === 'session' ? 'This ends with the current session.' : `Expires after ${scope.expiry === '7d' ? '7 days' : '24 hours'}.`) + ' Firewall and payload checks remain active. Revoke in Policies.', {title:'Expected activity',okLabel:'Save permission'})) return;
+    const finishAttention = beginAttentionWrite();
     reviewDrafts.set(id, { action, scope, conflict: false });
     try {
       const res = await apiFetch('/reviews/decision', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({id,revision,action,...(scope ? {scope} : {})}) });
       if (res.status === 409) {
         reviewDrafts.set(id, { action, scope, conflict: true });
+        finishAttention(false);
         await fetchTelemetry();
         markDirty('flags', 'attention');
         showToast('Evidence changed. Review the new facts and choose again.', 'info');
@@ -477,8 +607,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       reviewDrafts.delete(id);
       await fetchTelemetry();
+      finishAttention(true);
       markDirty('flags', 'attention');
-    } catch (err) { showToast(`Could not save review: ${err}`, 'danger'); }
+    } catch (err) { finishAttention(false); showToast(`Could not save review: ${err}`, 'danger'); }
   };
   // Review pagination is explicit; each response is bounded to 100 records.
   window.loadReviewPage = async function(after) {
@@ -759,7 +890,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function currentViewSnapshot(name) {
     return {
       name,
-      tab: routeKey({ tab: activeTab, sub: activeSub }),
+      tab: routeKey({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeSub }),
       search: (document.getElementById('global-search') || {}).value || '',
       flags: { ...filters.flags },
       events: { ...filters.events },
@@ -897,9 +1028,9 @@ document.addEventListener('DOMContentLoaded', () => {
     sessions: 'sessions/board', agents: 'sessions/processes', fleet: 'sessions/processes',
     resources: 'sessions/resources', history: 'sessions/resources',
     events: 'sessions/events',
-    endpoints: 'egress', 'recurring-egress': 'egress', firewall: 'egress', sources: 'egress',
+    endpoints: 'protection/traffic', 'recurring-egress': 'protection/traffic', firewall: 'protection/rules', sources: 'protection/sources',
     worktrees: 'system', clutter: 'system',
-    notify: 'policy', policy: 'policy', 'expected-egress': 'policy', audit: 'policy', agent: 'agent'
+    notify: 'protection/rules', policy: 'protection/rules', 'expected-egress': 'protection/rules', audit: 'protection/audit', agent: 'agent'
   };
   // A panel is on screen when its tab is active, its sub-view is the open
   // one, and its Home group is expanded.
@@ -908,7 +1039,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!v) return true;
     const [route, group] = v.split(':');
     const [tab, sub] = route.split('/');
-    if (tab !== activeTab || (sub && sub !== activeSub)) return false;
+    if (tab !== activeTab || (sub && sub !== (tab === 'protection' ? activeProtection : activeSub))) return false;
     return !group || homeGroupOpen(group);
   }
   // Panel → the element whose focused control holds its render.
@@ -1006,6 +1137,7 @@ document.addEventListener('DOMContentLoaded', () => {
     paintScopeBar();
   }
 
+  let activeProtection = 'traffic';
   let activeTab = 'home';
   let activeSub = 'board';
 
@@ -1641,7 +1773,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Home groups: closed by default, open state kept for the tab. A panel
+  // Home groups: markup supplies defaults; saved booleans restore the tab. A panel
   // in a closed group does not render; opening the group renders it.
   const HOME_GROUPS_KEY = 'sa.home-groups';
   function homeGroupOpen(group) {
@@ -1655,8 +1787,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   try {
     const saved = JSON.parse(sessionStorage.getItem(HOME_GROUPS_KEY) || '{}') || {};
-    document.querySelectorAll('details.home-group').forEach(d => { if (saved[d.dataset.group]) d.open = true; });
-  } catch { /* private mode or corrupt value: groups stay closed */ }
+    document.querySelectorAll('details.home-group').forEach(d => {
+      if (typeof saved[d.dataset.group] === 'boolean') d.open = saved[d.dataset.group];
+    });
+  } catch { /* private mode or corrupt value: retain markup defaults */ }
   document.querySelectorAll('details.home-group').forEach(d => d.addEventListener('toggle', () => {
     persistHomeGroups();
     if (!d.open) return;
@@ -1674,13 +1808,22 @@ document.addEventListener('DOMContentLoaded', () => {
     activeTab = r.tab;
     document.body.classList.toggle('agent-page', activeTab === 'agent');
     if (r.tab === 'sessions') activeSub = r.sub;
+    if (r.tab === 'protection') activeProtection = r.sub;
+    if (from === 'home' && activeTab !== 'home' && attentionSelection) closeDrawer();
     document.querySelectorAll('.tab-btn').forEach(b => {
       const on = b.dataset.tab === activeTab;
       b.classList.toggle('active', on);
       b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
-    document.querySelectorAll('.tabpanel').forEach(p => { p.hidden = p.id !== 'tab-' + activeTab; });
-    document.querySelectorAll('.subtab-btn').forEach(b => {
+    document.querySelectorAll('.tabpanel').forEach(p => { p.hidden = activeTab === 'protection' ? !['tab-egress', 'tab-policy'].includes(p.id) : p.id !== 'tab-' + activeTab; });
+    const protectionNav = document.getElementById('protection-nav');
+    if (protectionNav) protectionNav.hidden = activeTab !== 'protection';
+    document.querySelectorAll('[data-protection-section]').forEach(p => { p.hidden = activeTab !== 'protection' || p.dataset.protectionSection !== activeProtection; });
+    document.querySelectorAll('[data-protection-view]').forEach(b => {
+      const on = activeTab === 'protection' && b.dataset.protectionView === activeProtection;
+      b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on));
+    });
+    document.querySelectorAll('.subtab-btn[data-subtab]').forEach(b => {
       const on = b.dataset.subtab === activeSub;
       b.classList.toggle('active', on);
       b.setAttribute('aria-selected', on ? 'true' : 'false');
@@ -1688,10 +1831,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.subview').forEach(v => { v.hidden = v.id !== 'sub-' + activeSub; });
     const group = opts.group && document.getElementById('home-' + opts.group);
     if (group && activeTab === 'home' && !group.open) group.open = true;
-    const key = routeKey({ tab: activeTab, sub: activeSub });
+    const key = routeKey({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeSub });
     try { sessionStorage.setItem('sa.console-tab', key); } catch { /* private mode */ }
     if (!opts.skipHash && window.history.replaceState) {
-      history.replaceState(null, '', location.pathname + location.search + consoleRouteHash({ tab: activeTab, sub: activeSub }));
+      history.replaceState(null, '', location.pathname + location.search + consoleRouteHash({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeSub }));
     }
     PANELS.forEach(([name]) => { if (panelOnScreen(name)) dirtyPanels.add(name); });
     renderDirty();
@@ -1707,7 +1850,7 @@ document.addEventListener('DOMContentLoaded', () => {
       && (!worktreesState.ledger || Date.now() - worktreesState.ledgerAt > WORKTREE_STALE_MS)) {
       loadLedger();
     }
-    if (activeTab === 'policy' && from !== 'policy') loadPolicy();
+    if (activeTab === 'protection' && activeProtection === 'rules') loadPolicy();
     if (activeTab === 'agent' && from !== 'agent') loadAgent();
     const focus = r.focus === 'attention' ? document.getElementById('attention-center') : group;
     if (focus && focus.scrollIntoView) focus.scrollIntoView({ behavior: 'auto', block: 'start' });
@@ -1715,8 +1858,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // The Sessions tab reopens its last sub-view.
   document.querySelectorAll('.tab-btn').forEach(b =>
-    b.addEventListener('click', () => switchTab(b.dataset.tab === 'sessions' ? 'sessions/' + activeSub : b.dataset.tab)));
-  document.querySelectorAll('.subtab-btn').forEach(b =>
+    b.addEventListener('click', () => switchTab(b.dataset.tab === 'sessions' ? 'sessions/' + activeSub : b.dataset.tab === 'protection' ? 'protection/' + activeProtection : b.dataset.tab)));
+  document.querySelectorAll('.subtab-btn[data-subtab]').forEach(b =>
     b.addEventListener('click', () => switchTab('sessions/' + b.dataset.subtab)));
 
   // Tab badges: the "something needs you here" signal for hidden panels.
@@ -1940,6 +2083,7 @@ document.addEventListener('DOMContentLoaded', () => {
     clearTimeout(spendPollTimer);
     spendPollTimer = null;
     const cardPath = spendCardPath();
+    const cardTZ = Number(new URLSearchParams(cardPath.split('?')[1]).get('tz'));
     telemetryData.spendRefresh = { loading: true, delayed: false };
     if (now) renderNow(['spend']); else markDirty('spend');
     const ownsResult = key => !sessionEnded && gen === spendGen && (key !== 'spend card' || cardPath === spendCardPath());
@@ -1968,7 +2112,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sessionEnded || gen !== spendGen) return;
     if (costs) telemetryData.costs = costs;
     if (costPlans) telemetryData.costPlans = costPlans;
-    if (costsCard && cardPath === spendCardPath()) telemetryData.costsCard = costsCard;
+    if (costsCard && cardPath === spendCardPath()) {
+      telemetryData.costsCard = costsCard;
+      telemetryData.costsCardTZ = cardTZ;
+      if (telemetryData.spendDay) {
+        if (!spendDayWindow(telemetryData.spendDay, costsCard, cardTZ)) resetSpendDay();
+        else loadSpendDay();
+      }
+    }
     telemetryData.spendRefresh = { loading: false,
       delayed: reportHealth.failures(['spend', 'spend card', 'spend plans']).length > 0 };
     if (now) renderNow(['spend']); else markDirty('spend');
@@ -1976,6 +2127,46 @@ document.addEventListener('DOMContentLoaded', () => {
     if (spendPolls >= SPEND_POLLS) return; // the slow cycle keeps asking
     spendPolls++;
     spendPollTimer = setTimeout(() => loadSpend(false), SPEND_POLL_MS);
+  }
+
+  function resetSpendDay(focus = false) {
+    const day = telemetryData.spendDay;
+    spendDayGen++;
+    telemetryData.spendDay = '';
+    telemetryData.spendDayReport = null;
+    telemetryData.spendDayRefresh = {};
+    renderNow(['spend']);
+    if (focus) Array.from(document.querySelectorAll('[data-action="select-spend-day"]')).find(button => button.dataset.day === day)?.focus({ preventScroll: true });
+  }
+  async function loadSpendDay() {
+    const day = telemetryData.spendDay;
+    const range = spendDayWindow(day, telemetryData.costsCard, telemetryData.costsCardTZ);
+    if (!range || sessionEnded) return;
+    const gen = ++spendDayGen, auth = handoffGeneration;
+    const owns = () => !sessionEnded && auth === handoffGeneration && gen === spendDayGen && day === telemetryData.spendDay;
+    const params = new URLSearchParams({ since: range.since, until: range.until, by: 'repo', tz: String(range.tz), cached: '1' });
+    telemetryData.spendDayRefresh = { loading: true };
+    renderNow(['spend']);
+    try {
+      const res = await apiFetch('/costs?' + params);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const report = await res.json();
+      if (!owns()) return;
+      if (!isConsoleReport('spend card', report)) throw new Error('Invalid usage response');
+      if (report.by !== 'repo' || Date.parse(report.since) !== Date.parse(range.since) || Date.parse(report.until) !== Date.parse(range.until)) throw new Error('Usage response does not match the selected day');
+      telemetryData.spendDayReport = report;
+      telemetryData.spendDayRefresh = { loading: false, delayed: !!report.refreshing };
+    } catch (err) {
+      if (!owns()) return;
+      telemetryData.spendDayRefresh = { loading: false, delayed: true, error: 'Could not load this day: ' + (err.message || err) };
+    }
+    if (owns()) renderNow(['spend']);
+  }
+  function selectSpendDay(day) {
+    if (!spendDayWindow(day, telemetryData.costsCard, telemetryData.costsCardTZ)) return;
+    telemetryData.spendDay = day;
+    telemetryData.spendDayReport = null;
+    loadSpendDay();
   }
 
   // Spend card controls: a change saves the view, clears the card and loads
@@ -1988,6 +2179,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const by = spendBySel && spendBySel.value, since = spendSinceSel && spendSinceSel.value;
     spendView = { by: SPEND_BY.includes(by) ? by : 'repo', since: SPEND_SINCE.includes(since) ? since : '24h' };
     try { sessionStorage.setItem(SPEND_VIEW_KEY, JSON.stringify(spendView)); } catch { /* private mode */ }
+    resetSpendDay();
     telemetryData.costsCard = null;
     reportHealth.reset('spend card'); // The new query has no retained card yet.
     renderReportHealth();
@@ -2126,14 +2318,19 @@ document.addEventListener('DOMContentLoaded', () => {
   // (mutations assign new values, never edit in place) and returns revert(),
   // which restores a key only if nothing (SSE, reconcile) replaced it since.
   function stage(keys, panels, mutate) {
+    const finishAttention = keys.includes('posture') ? beginAttentionWrite() : null;
     const before = keys.map(k => telemetryData[k]);
     mutate();
     const after = keys.map(k => telemetryData[k]);
     renderNow(panels);
-    return () => {
+    const revert = () => {
       keys.forEach((k, i) => { if (telemetryData[k] === after[i]) telemetryData[k] = before[i]; });
+      finishAttention?.(false);
       renderNow(panels);
     };
+    revert.commit = () => finishAttention?.(true);
+    revert.isCurrent = () => !finishAttention || finishAttention.isCurrent();
+    return revert;
   }
   // posture.groups is the attention queue: map its items, drop empty groups;
   // a dropped item leaves posture.items and needs_you with it.
@@ -2207,7 +2404,8 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       if (!r.ok) throw new Error(await r.text());
       const result = await r.json();
-      if (drawerMode === 'incident' && drawerIncident === id) {
+      revert.commit?.();
+      if (revert.isCurrent?.() !== false && drawerMode === 'incident' && drawerIncident === id) {
         const actions = drawerBody.querySelector('.incident-workflow-actions');
         if (actions) actions.innerHTML = incidentWorkflowHTML(id, result.workflow);
       }
@@ -2765,8 +2963,9 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify({ flag_id: id })
       });
       if (!res.ok) throw new Error(await res.text());
+      revert.commit?.();
       showToast('Flag dismissed — the rule keeps watching', 'info');
-      if (drawerMode === 'flag' && drawerFlag === id) closeDrawer();
+      if (revert.isCurrent?.() !== false && !attentionSelection && drawerMode === 'flag' && drawerFlag === id) closeDrawer();
       cardNote('', '', 'flags-list', 'dismissed');
       fetchTelemetry();
     } catch (err) {
@@ -2815,6 +3014,7 @@ document.addEventListener('DOMContentLoaded', () => {
       markDirty(['flags', 'attention']);
       return;
     }
+    revert.commit?.();
     historySelected.clear();
     syncHistoryChecks();
     showToast(`Marked ${n} reviewed — the rules keep watching`, 'success');
@@ -2848,6 +3048,8 @@ document.addEventListener('DOMContentLoaded', () => {
     historyRows: new Map(),
     harnessFilter,
     reconcileSessionSelection,
+    reconcileAttention,
+    get attentionKey() { return attentionSelection?.key || ''; },
     takeSessionReveal,
     scheduleSessionWorkbenchHeight,
     setTabBadge,
@@ -3770,8 +3972,12 @@ document.addEventListener('DOMContentLoaded', () => {
   function currentDrawerBack() {
     if (!drawer || drawer.hidden) return null;
     const back = drawerBack || undefined;
-    const wrap = target => ({ ...target, sessionReturn: back?.sessionReturn });
+    const wrap = target => ({ ...target, sessionReturn: back?.sessionReturn, attentionOrigin: attentionSelection || back?.attentionOrigin });
     switch (drawerMode) {
+      case 'attention': {
+        const key = attentionSelection?.key;
+        return wrap({ label: 'Needs you', reopen: () => selectAttention(key) });
+      }
       case 'uninspected':
         return wrap({ label: 'Uninspected egress', reopen: () => window.openUninspected({ back }) });
       case 'endpoint': {
@@ -3867,6 +4073,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		body: JSON.stringify({ id, decision, session_key: sessionKey || '' })
       });
       if (!res.ok) throw new Error(await res.text());
+      revert.commit?.();
       showToast(decision === 'dismiss' ? 'Session kept running for the cooldown window.' : decision === 'resume' ? 'Session resumed.' : 'Intervention applied.', 'success');
       cardNote('', '', activeTab === 'sessions' && activeSub === 'resources' ? 'resource-board' : 'attention-list', decision === 'dismiss' ? 'kept running' : decision === 'resume' ? 'resumed' : 'applied');
       fetchTelemetry({ slow: true });
@@ -3894,6 +4101,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!res.ok) throw new Error(await res.text());
       const receipt = await res.json();
       if (!receipt.resolved) throw new Error('This request is unavailable for that decision. Refresh requests and permissions.');
+      revert.commit?.();
       showToast(`Guard decision saved: ${action}.`, 'success');
       cardNote('', '', 'attention-list', verdict === 'allow' ? 'allowed' : 'denied');
       if (selectedSessionId) loadSessionOverview(selectedSessionId);
@@ -4137,6 +4345,7 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast(`Could not save expectation: ${err}`, 'danger');
       return;
     }
+    revert.commit?.();
     showToast('Expected connection saved. Security detection remains active.', 'success');
     await fetchTelemetry({ slow: true });
   }
@@ -4287,7 +4496,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const body = a.body || {};
     switch (a.id) {
       case 'inspect-file':
-        return window.openFileDetail(body.path);
+        return window.openFileDetail(body.path, { back: currentDrawerBack() });
 
       case 'review-local':
         return window.analyzeAgentActivity(body.flag_ids);
@@ -4310,10 +4519,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         return;
       case 'open-incident':
-        return window.openIncidentReport(new URLSearchParams(String(a.path).split('?')[1] || '').get('id') || '');
+        return window.openIncidentReport(new URLSearchParams(String(a.path).split('?')[1] || '').get('id') || '', { back: currentDrawerBack() });
       case 'mute-rule-host':
       case 'mute-class':
-        if (await window.muteFlag(body.rule, body.host, body.agent)) stageDropFlag(f.id);
+        if (await window.muteFlag(body.rule, body.host, body.agent)) { const done = stageDropFlag(f.id); done.commit?.(); }
         return;
       case 'allow-host': {
         const revertAllow = stageAllow(body.agent, [body.host]);
@@ -4340,7 +4549,8 @@ document.addEventListener('DOMContentLoaded', () => {
           fetchTelemetry();
           return;
         }
-        if (drawerMode === 'flag' && drawerFlag === f.id) closeDrawer();
+        revertDrop.commit?.();
+    if (revertDrop.isCurrent?.() !== false && !attentionSelection && drawerMode === 'flag' && drawerFlag === f.id) closeDrawer();
         showToast(`Allowlisted ${body.host} for ${body.agent}`, 'success');
         cardNote('', '', 'flags-list', 'allowlisted');
         fetchTelemetry();
@@ -4370,7 +4580,8 @@ document.addEventListener('DOMContentLoaded', () => {
           fetchTelemetry();
           return;
         }
-        if (drawerMode === 'flag' && drawerFlag === f.id) closeDrawer();
+        revertDrop.commit?.();
+    if (revertDrop.isCurrent?.() !== false && !attentionSelection && drawerMode === 'flag' && drawerFlag === f.id) closeDrawer();
         showToast(`Allowed ${body.path} for ${body.agent}`, 'success');
         fetchTelemetry();
         return;
@@ -4407,6 +4618,7 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast(`${a.label} failed: ${err.message || err}`, 'danger');
       return;
     }
+    revert.commit?.();
     showToast(a.id === 'expect-all'
       ? `${Number(out.added) || 0} exact reads marked expected; ${Number(out.acknowledged) || 0} flags reviewed`
       : `Dismissed ${ids.length} flags — the rules keep watching`, 'success');
@@ -4450,7 +4662,8 @@ document.addEventListener('DOMContentLoaded', () => {
       fetchTelemetry();
       return;
     }
-    if (drawerMode === 'flag' && drawerFlag === f.id) closeDrawer();
+    revertDrop.commit?.();
+    if (revertDrop.isCurrent?.() !== false && !attentionSelection && drawerMode === 'flag' && drawerFlag === f.id) closeDrawer();
     showToast(`Allowlisted ${ok} of ${acts.length} ${org} addresses for ${agent}`, ok === acts.length ? 'success' : 'warn');
     cardNote('', '', 'flags-list', 'allowlisted');
     fetchTelemetry();
@@ -4486,7 +4699,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const openIds = (dismiss && dismiss.body && dismiss.body.flag_ids) || [];
     switch (a.id) {
       case 'inspect-file':
-        return window.openFileDetail(body.path);
+        return window.openFileDetail(body.path, { back: currentDrawerBack() });
       case 'review-local':
         return window.analyzeAgentActivity(body.flag_ids);
       case 'expect':
@@ -4504,7 +4717,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.killProcess(Number(body.pid), body.started_at, p.agent);
       case 'mute-rule-host':
       case 'mute-class':
-        if (await window.muteFlag(body.rule, body.host, body.agent)) stagePatternDone(key);
+        if (await window.muteFlag(body.rule, body.host, body.agent)) { const done = stagePatternDone(key); done.commit?.(); }
         return;
       case 'dismiss-all': {
         const revert = stagePatternDone(key, openIds);
@@ -4515,6 +4728,7 @@ document.addEventListener('DOMContentLoaded', () => {
           showToast(`Failed to dismiss the pattern: ${err.message || err}`, 'danger');
           return;
         }
+        revert.commit?.();
         showToast(`Dismissed ${openIds.length} flag${openIds.length === 1 ? '' : 's'} — the rule keeps watching`, 'info');
         cardNote(`[data-pattern-key="${cssq(key)}"] .pattern-open`, '.log-row', 'flags-list', 'dismissed');
         fetchTelemetry();
@@ -4541,6 +4755,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
           }
         }
+        revert.commit?.();
         showToast(`Allowlisted ${body.host} for ${body.agent}`, 'success');
         fetchTelemetry();
         return;
@@ -4739,8 +4954,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const d = el.dataset;
-    // A drawer opened from inside the open drawer can go back to it.
-    const back = () => (el.closest('#drawer') ? currentDrawerBack() : sessionDrawerBack(el));
+    // Queue drill-downs keep their queue origin; historical openers do not.
+    const back = () => {
+      if (el.closest('#drawer')) return currentDrawerBack();
+      const row = el.closest('#attention-list [data-need-key]');
+      if (row && activeTab === 'home') {
+        const key = row.dataset.needKey;
+        const origin = { key, order: attentionItems().map(it => `${it.kind}:${it.id}`), generation: ++attentionGeneration };
+        return { label: 'Needs you', attentionOrigin: origin, reopen: () => selectAttention(key) };
+      }
+      return sessionDrawerBack(el);
+    };
     switch (d.action) {
       case 'toggle-row': {
         e.preventDefault();
@@ -5171,6 +5395,22 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'clear-scope':
         e.preventDefault();
         window.clearTimelineSession();
+        break;
+      case 'select-spend-day':
+        e.preventDefault();
+        selectSpendDay(d.day);
+        break;
+      case 'reset-spend-day':
+        e.preventDefault();
+        resetSpendDay(true);
+        break;
+      case 'goto-protection':
+        e.preventDefault();
+        switchTab('protection/' + d.protectionView);
+        break;
+      case 'select-attention':
+        e.preventDefault();
+        selectAttention(d.needKind + ':' + d.needId);
         break;
       case 'goto-tab':
         e.preventDefault();

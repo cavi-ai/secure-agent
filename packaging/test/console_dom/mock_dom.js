@@ -9,6 +9,13 @@
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
   let bookCleanup = () => {};
+  if (scenarios.has('attentionremodel')) {
+    const ids = scenarios.has('attentionfinal') ? ['flag-1'] : ['flag-1', 'flag-2'];
+    const items = ids.map(id => ({kind:'flag', id, priority:2, title:'Fixture attention ' + id, detail:'Recorded fixture evidence'}));
+    data['/posture'] = {...data['/posture'], needs_you:items.length, items,
+      groups:[{key:'fixture-attention',agent:'codex',items}]};
+  }
+
 
   // ---------- failure-mode simulation ----------
   // These modes reproduce the exact "trouble connecting" regressions:
@@ -121,6 +128,10 @@
     sessionStorage.setItem('sa.selected-session', 'sess-codex-3');
     sessionStorage.setItem('sa.harness-filter', JSON.stringify({ harnesses: {claude:false,codex:false}, text:'unrelated', liveOnly:true }));
     if (scenarios.has('cold')) location.hash = 'ct=test-token&tab=sessions&session=sess-claude-1&flag=flag-2';
+  }
+  // Saved views are explicit fixtures; an unseeded tab exercises the product default.
+  if (scenarios.has('savedspendrepo')) {
+    try { sessionStorage.setItem('sa.spend-view', JSON.stringify({ by: 'repo', since: '24h' })); } catch { /* ignored */ }
   }
   // spenddaydemo: a tab whose saved Spend view is by day over 7d (a reload).
   if (scenarios.has('spenddaydemo')) {
@@ -336,6 +347,12 @@
     if (p === '/flags/acknowledge') {
       const ids = new Set(body.flag_ids || [body.flag_id]);
       data['/flags'] = data['/flags'].filter(f => !ids.has(f.id));
+      if (scenarios.has('attentionremodel')) {
+        const post = data['/posture'];
+        post.groups = post.groups.map(g => ({...g,items:g.items.filter(it => it.kind !== 'flag' || !ids.has(it.id))})).filter(g => g.items.length);
+        post.items = post.items.filter(it => it.kind !== 'flag' || !ids.has(it.id));
+        post.needs_you = post.items.length;
+      }
       // A pattern whose open flags were all acknowledged is served at 0
       // open without its dismiss-all, and leaves the attention queue.
       for (const pat of data['/patterns'] || []) {
@@ -628,6 +645,10 @@
       if (p === '/agent/chat' && scenarios.has('agentlatency')) {
         await new Promise(resolve => setTimeout(resolve, 30000));
       }
+      if (scenarios.has('attentionremodel') && p === '/flags/acknowledge') {
+        await new Promise(resolve => setTimeout(resolve, 600));
+        if (scenarios.has('attentionfail')) return {ok:false,status:503,text:async()=> 'Fixture write failed'};
+      }
       const out = handlePost(p, opts, String(path));
       return {
         ok: true, status: 200,
@@ -786,8 +807,23 @@
     // /costs answers by its `by` query; every /costs query lands, in order,
     // on <pre id="mock-costs">.
     if (p === '/costs') {
-      const by = new URLSearchParams(String(path).split('?')[1] || '').get('by');
+      const params = new URLSearchParams(String(path).split('?')[1] || '');
+      const by = params.get('by');
       if (by && data['/costs?by=' + by]) body = data['/costs?by=' + by];
+      if (scenarios.has('remodelusage') && body) {
+        const tz = Number(params.get('tz') || 0);
+        if (by === 'day') {
+          const last = Date.parse(body.until) + tz * 60000;
+          body = {...body, rows:body.rows.map((row,i) => ({...row,key:new Date(last - (body.rows.length - 1 - i) * 86400000).toISOString().slice(0,10)}))};
+          data['/costs?by=day'] = body;
+        } else if (params.get('until') && params.get('since')) {
+          const day = new Date(Date.parse(params.get('since')) + tz * 60000).toISOString().slice(0,10);
+          const row = data['/costs?by=day'].rows.find(r => r.key === day);
+          const total = row ? {...row,key:''} : {key:'',calls:0,cost_usd:0};
+          body = {...body,by:'repo',since:params.get('since'),until:params.get('until'),total,
+            rows:row ? [{...row,key:'fixture-repo'}] : []};
+        }
+      }
       costLog.push(String(path).split('?')[1] || '');
       stamp('mock-costs', costLog.join('\n'));
       // spendcachedemo: the first two rounds (tile + card each) answer from
@@ -914,7 +950,9 @@
   const openTab = (id) => {
     const r = resolveConsoleRoute(id);
     document.querySelector(`.tab-btn[data-tab="${r.tab}"]`).click();
-    if (r.sub) document.querySelector(`.subtab-btn[data-subtab="${r.sub}"]`).click();
+    if (r.sub) document.querySelector(r.tab === 'protection'
+      ? `[data-action="goto-protection"][data-protection-view="${r.sub}"]`
+      : `.subtab-btn[data-subtab="${r.sub}"]`).click();
     const group = document.getElementById({ findings: 'home-findings', overview: 'home-trends' }[id] || '');
     if (group && !group.open) group.open = true;
     return r;
@@ -1231,10 +1269,16 @@
   // each panel's dirty bit is cleared by an on-screen render before the
   // dump. A panel's rendered DOM persists after switching away (only the
   // `hidden` attribute toggles), so the tour then lands back on Home with
-  // both groups closed — the boot-default checks (active tab, closed
-  // groups, hidden tabpanels) read the same dump and must still see it.
+  // Findings and Trends closed, Usage open — the boot-default checks
+  // read the same dump and must still see those defaults.
   if (location.search === '' && location.hash === '') {
     setTimeout(() => {
+      stamp('spend-default-view', `by=${document.getElementById('spend-by').value} since=${document.getElementById('spend-since').value}`);
+      for (const kind of ['guard', 'resource']) {
+        document.querySelector(`#attention-list [data-action="select-attention"][data-need-kind="${kind}"]`)?.click();
+        stamp(`attention-${kind}-content`, document.getElementById('drawer-body').innerHTML + document.getElementById('drawer-foot').innerHTML);
+        document.getElementById('btn-drawer-close').click();
+      }
       openTab('findings');
       openTab('overview');
       openTab('system');
@@ -1244,6 +1288,8 @@
       openTab('sessions/board');
       openTab('egress');
       openTab('policy');
+      openTab('protection/sources');
+      openTab('protection/audit');
       openTab('home');
       const findings = document.getElementById('home-findings');
       const trends = document.getElementById('home-trends');
@@ -1512,6 +1558,7 @@
   // opens first — accept it.
   if (scenarios.has('guarddemo')) {
     const clickResolve = () => {
+      document.querySelector('#attention-list [data-action="select-attention"][data-need-kind="guard"]')?.click();
       const btn = document.querySelector('[data-action="guard-resolve"][data-scope="once"]');
       if (btn) btn.click();
     };
@@ -2143,12 +2190,13 @@
   }
   // Auto-action: demote a blocking rule — it must flip back to Promote.
   if (scenarios.has('demotedemo')) {
-    // The firewall rule list lives on the Egress tab, not the default Home tab.
-    setTimeout(() => openTab('egress'), 1500);
+    // The firewall rule list lives in Protection / Rules.
+    setTimeout(() => openTab('protection/rules'), 1500);
     setTimeout(() => document.querySelector('[data-action="demote"][data-rule="aws-key"]').click(), 4000);
   }
   // Auto-action: remove an allowlist entry — the row must leave the list.
   if (scenarios.has('allowlistdemo')) {
+    setTimeout(() => openTab('protection/rules'), 1500);
     setTimeout(() => document.querySelector('[data-action="allowlist-remove"]').click(), 4000);
   }
 
@@ -2186,22 +2234,69 @@
   // past the viewport, and posts it back; the result lands on
   // <body data-hscroll="sessions:N,agents:N,resources:N"> (N in px, 0 = fits).
   if (scenarios.has('phoneframe')) {
-    // Content inside a horizontal scroller (the Sessions sub-view control) or
-    // an ellipsised log title is clipped by it, so the clipping box is what
-    // must fit.
-    const measure = (tab) => {
-      const panel = document.getElementById('tab-' + openTab(tab).tab);
-      const width = document.documentElement.clientWidth;
-      let past = 0;
-      for (const el of [panel, ...panel.querySelectorAll('*')]) {
-        if (el.parentElement && el.parentElement.closest('.subtabs, .c-title')) continue;
+    // Measure each box's visible extent after all ancestor clips. The clipping
+    // containers still get measured themselves, and page overflow is independent.
+    const horizontalOverflow = (root, doc = document) => {
+      const width = doc.documentElement.clientWidth;
+      let past = Math.max(0, doc.documentElement.scrollWidth - width);
+      for (const el of [root, ...root.querySelectorAll('*')]) {
         const box = el.getBoundingClientRect();
-        if (box.width) past = Math.max(past, box.right - width);
+        if (!box.width || !box.height) continue;
+        let left = box.left, right = box.right;
+        for (let ancestor = el.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          const overflow = doc.defaultView.getComputedStyle(ancestor).overflowX;
+          if (!['auto', 'scroll', 'hidden', 'clip'].includes(overflow)) continue;
+          const bounds = ancestor.getBoundingClientRect();
+          const clipLeft = bounds.left + ancestor.clientLeft;
+          left = Math.max(left, clipLeft);
+          right = Math.min(right, clipLeft + ancestor.clientWidth);
+        }
+        if (right > left) past = Math.max(past, right - width);
       }
-      past = Math.max(past, document.documentElement.scrollWidth - width);
-      return `${tab}:${Math.round(past)}`;
+      return Math.round(past);
+    };
+    const measure = (tab) => `${tab}:${horizontalOverflow(document.getElementById('tab-' + openTab(tab).tab))}`;
+    const overflowGuard = () => {
+      // An isolated real document keeps these negative controls independent of
+      // console layout and removes every injected box before the console probe.
+      const frame = document.createElement('iframe');
+      Object.assign(frame.style, {position:'fixed',left:'0',top:'0',width:document.documentElement.clientWidth + 'px',height:'20px',border:'0',visibility:'hidden'});
+      document.body.append(frame);
+      const doc = frame.contentDocument;
+      if (!doc || !doc.body) { frame.remove(); return {unavailable:true}; }
+      doc.body.style.margin = '0';
+      const width = doc.documentElement.clientWidth;
+      const container = doc.createElement('div');
+      Object.assign(container.style, {position:'absolute',left:'0',top:'0',width:'100px',height:'10px'});
+      const child = doc.createElement('div');
+      Object.assign(child.style, {width:width + 60 + 'px',height:'5px'});
+      container.append(child);
+      doc.body.append(container);
+      const checks = {};
+      for (const mode of ['auto','scroll','hidden','clip']) {
+        container.style.overflowX = mode;
+        checks[mode] = horizontalOverflow(container, doc) === 0;
+      }
+      container.style.overflowX = 'visible';
+      container.style.overflowY = 'visible';
+      checks.unclipped = horizontalOverflow(container, doc) >= 60;
+      container.style.overflowX = 'hidden';
+      container.style.width = width + 24 + 'px';
+      checks.container = horizontalOverflow(container, doc) >= 24;
+      container.remove();
+      const wide = doc.createElement('div');
+      Object.assign(wide.style, {width:width + 24 + 'px',height:'5px'});
+      const small = doc.createElement('div');
+      Object.assign(small.style, {width:'20px',height:'5px'});
+      doc.body.append(wide, small);
+      checks.document = doc.documentElement.scrollWidth > width && horizontalOverflow(small, doc) >= 24;
+      frame.remove();
+      return checks;
     };
     setTimeout(() => {
+      const guards = overflowGuard();
+      document.body.dataset.overflowGuard = JSON.stringify(guards);
+      parent.postMessage({overflowGuard:guards}, '*');
       const sessions = measure('sessions');
       setTimeout(() => {
         const agents = measure('agents');
@@ -2217,7 +2312,11 @@
             }, 200);
           }
           // patterndemo: the Attention/Flags tab holding the pattern card.
-          const done = findings => parent.postMessage({ hscroll: `${sessions},${agents},${resources}${findings}` }, '*');
+          const done = findings => {
+            const hscroll = `${sessions},${agents},${resources}${findings}`;
+            document.body.dataset.hscroll = hscroll;
+            parent.postMessage({hscroll}, '*');
+          };
           if (scenarios.has('patterndemo')) setTimeout(() => done(',' + measure('findings')), 300);
           else if (scenarios.has('spenddaydemo')) setTimeout(() => done(',' + measure('overview')), 300);
           else done('');
@@ -2228,6 +2327,7 @@
     addEventListener('message', (e) => {
       if (e.data && e.data.hscroll) document.body.dataset.hscroll = e.data.hscroll;
       if (e.data && e.data.headroom) document.body.dataset.headroom = e.data.headroom;
+      if (e.data && e.data.overflowGuard) document.body.dataset.overflowGuard = JSON.stringify(e.data.overflowGuard);
     });
     document.addEventListener('DOMContentLoaded', () => {
       const frame = document.createElement('iframe');
@@ -2284,6 +2384,7 @@
   // Egress fold: 2 rules with hits stay listed, 20 quiet rules fold into one
   // row; the open fold survives an SSE-driven refetch that changes its count.
   if (scenarios.has('folddemo')) {
+    setTimeout(() => openTab('egress'), 1200);
     const fold = () => document.querySelector('#firewall-container > details.fw-fold');
     const probe = () => {
       const c = document.getElementById('firewall-container');
@@ -2293,7 +2394,7 @@
         + `open=${d && d.open ? 1 : 0} rebuilt=${d && d.dataset.before ? 0 : 1}`;
     };
     let focusedPromote = null;
-    setTimeout(() => openTab('egress'), 1500);
+    setTimeout(() => openTab('protection/rules'), 1500);
     setTimeout(() => {
       stamp('fold-before', probe());
       const d = fold();
@@ -2574,10 +2675,10 @@
         `${un && un.isConnected && document.activeElement === un ? 'kept' : 'lost'} rows=${document.querySelectorAll('#flags-list .mute-row').length}`), 2600);
     }, 4300);
   }
-  // actdemo: Egress open, allow the suggested host late enough that the
+  // actdemo: Protection / Rules open, allow the suggested host late enough that the
   // inline note and the toast are still up at dump time (4s each).
   if (scenarios.has('actdemo')) {
-    setTimeout(() => openTab('egress'), 4000);
+    setTimeout(() => openTab('protection/rules'), 4000);
     setTimeout(() => document.querySelector('.fw-suggestion [data-action="allow-host"]').click(), 9000);
   }
   // detailsprobe (with explaindemo): flag-2 raised seconds ago; Findings
@@ -2804,4 +2905,68 @@
       }, 500);
     }, 4000);
   }
+
+  // These probes exercise the real console DOM; timers are bounded once per fixture.
+  if (scenarios.has('attentionremodel')) setTimeout(() => {
+    const checks = {};
+    document.querySelector('#attention-list [data-action="select-attention"][data-need-id="flag-1"]')?.click();
+    checks.initial = window.SA.attentionKey === 'flag:flag-1';
+    checks.evidenceOpen = !!document.querySelector('#drawer-body details.body-evidence[open]');
+    const dialog = document.getElementById('drawer');
+    const label = document.getElementById(dialog.getAttribute('aria-labelledby'));
+    checks.named = !!label && dialog.contains(label) && !!label.textContent.trim();
+    checks.modal = matchMedia('(min-width: 1180px)').matches || (document.getElementById('drawer').getAttribute('aria-modal') === 'true' && document.querySelector('.app > main')?.inert);
+    if (scenarios.has('layoutwide')) window.openResourcePolicyEditor();
+    const layoutProbe = () => {
+      const root = document.getElementById('drawer');
+      const panel = root.querySelector('.drawer-panel');
+      const main = document.querySelector('.app > main');
+      if (root.hidden || !main || !panel) return;
+      const rect = node => {
+        const b = node.getBoundingClientRect();
+        return {left:b.left,top:b.top,right:b.right,bottom:b.bottom,width:b.width,height:b.height};
+      };
+      const panelRect = rect(panel), mainRect = rect(main);
+      const modal = root.getAttribute('aria-modal') === 'true';
+      const title = document.getElementById(root.getAttribute('aria-labelledby'));
+      stamp('remodel-layout-probe', JSON.stringify({width:document.documentElement.clientWidth,innerWidth,media1180:matchMedia('(min-width: 1180px)').matches,media1340:matchMedia('(min-width: 1340px)').matches,wide:root.classList.contains('resource-policy'),
+        modal,inert:main.inert,drawer:panelRect,main:mainRect,overflow:document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+        named:!!title && root.contains(title) && !!title.textContent.trim(),
+        contentFit:modal ? !!main.inert : mainRect.right <= panelRect.left + 1}));
+    };
+    const recordLayout = () => requestAnimationFrame(layoutProbe);
+    window.addEventListener('resize', recordLayout);
+    matchMedia('(min-width: 1180px)').addEventListener('change', recordLayout);
+    matchMedia('(min-width: 1340px)').addEventListener('change', recordLayout);
+    layoutProbe();
+    if (!scenarios.has('layoutwide')) document.querySelector('#drawer-foot [data-action="dismiss-flag"]')?.click();
+    setTimeout(() => {
+      checks.pendingRetained = scenarios.has('layoutwide') || window.SA.attentionKey === 'flag:flag-1';
+      if (scenarios.has('attentionrace')) document.querySelector('#attention-list [data-action="select-attention"][data-need-id="flag-2"]')?.click();
+    }, 100);
+    setTimeout(() => {
+      checks.final = scenarios.has('layoutwide') ? document.getElementById('drawer').classList.contains('resource-policy') : scenarios.has('attentionfail') ? window.SA.attentionKey === 'flag:flag-1'
+        : scenarios.has('attentionfinal') ? !window.SA.attentionKey && !document.querySelector('#drawer-foot [data-action]') && document.getElementById('drawer-body').textContent.includes('No items need your attention')
+        : window.SA.attentionKey === 'flag:flag-2';
+      checks.focus = document.activeElement.id === 'btn-drawer-close' || scenarios.has('attentionfail') || scenarios.has('attentionrace');
+      stamp('attention-remodel-probe', JSON.stringify(checks));
+      layoutProbe();
+    }, 1300);
+  }, 1200);
+  if (scenarios.has('remodelusage')) setTimeout(() => {
+    const checks = {};
+    const day = document.querySelector('[data-action="select-spend-day"]');
+    day?.focus(); day?.click();
+    setTimeout(() => {
+      const report = window.SA.t.spendDayReport;
+      const chartRow = window.SA.t.costsCard?.rows.find(r => r.key === window.SA.t.spendDay);
+      checks.selected = !!day && window.SA.t.spendDay === day.dataset.day;
+      checks.matches = !!report && !!chartRow && report.total.cost_usd === chartRow.cost_usd && report.total.calls === chartRow.calls;
+      checks.focus = document.activeElement.dataset.day === day?.dataset.day;
+      checks.detail = !!document.querySelector('.spend-day-inspector [data-action="reset-spend-day"]');
+      document.querySelector('[data-action="reset-spend-day"]')?.click();
+      checks.reset = !window.SA.t.spendDay && !document.querySelector('[data-action="select-spend-day"][aria-pressed="true"]');
+      stamp('usage-remodel-probe', JSON.stringify(checks));
+    }, 500);
+  }, 1500);
 })();
