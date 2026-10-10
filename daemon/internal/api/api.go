@@ -999,7 +999,7 @@ func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
 	}
 	// Stamp the rule title so clients render the daemon's words instead of
 	// keeping their own copies of the rule→title table.
-	stampFindingReviewIDs(a.store, flags)
+	_ = stampFindingReviewIDs(a.store, flags)
 	for i := range flags {
 		flags[i].Title = humanFlagTitle(flags[i].Rule)
 	}

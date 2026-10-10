@@ -14,15 +14,13 @@ type findingReviewStore interface {
 }
 
 type findingReviewIDStore interface {
-	FindingReviewID(string) (string, error)
+	AttachFindingReviewIDs([]model.Flag) error
 }
 
 // Flags and snapshots share the same review linkage. Optional enrichment
 // retains the store's read-health accounting without hiding the finding row.
-func stampFindingReviewIDs(st findingReviewIDStore, flags []model.Flag) {
-	for i := range flags {
-		flags[i].ReviewID, _ = st.FindingReviewID(flags[i].ID)
-	}
+func stampFindingReviewIDs(st findingReviewIDStore, flags []model.Flag) error {
+	return st.AttachFindingReviewIDs(flags)
 }
 
 type reviewResult struct {
