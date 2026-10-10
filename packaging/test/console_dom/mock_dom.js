@@ -485,7 +485,7 @@
       const flag = data['/flags'].find(f => f.id === id);
       return {ok:!!flag,status:flag?200:404,json:async()=>flag,text:async()=>flag?JSON.stringify(flag):'flag unavailable'};
     }
-    if (scenarios.has('contexthandoff') && p === '/incidents' && !String(path).includes('format=markdown')) {
+    if ((scenarios.has('contexthandoff') || scenarios.has('investigationdemo')) && p === '/incidents' && !String(path).includes('format=markdown')) {
       const id = new URLSearchParams(String(path).split('?')[1] || '').get('id');
       if (id) {
         const incident = data['/incidents'].find(i => i.id === id);
@@ -700,6 +700,15 @@
         await new Promise(resolve => setTimeout(resolve, 1800));
       }
       const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
+      if (scenarios.has('investigationdemo') && sid === 'sess-claude-1') {
+        const rows = Array.from({ length: 40 }, (_, i) => ({ id: 'memory-activity-' + i, kind: 'activity', at: iso((60 - i) * 60000), title: 'Synthetic retained activity ' + i }));
+        rows.splice(25, 0,
+          { id: 'flag:display-row', kind: 'flag', source_id: 'flag-2', at: iso(350000), title: 'Synthetic finding source' },
+          { id: 'incident:display-row', kind: 'incident', source_id: data['/incidents'][0].id, at: iso(340000), title: 'Synthetic incident source' },
+          { id: 'flag:expired-row', kind: 'flag', source_id: 'expired-memory-flag', at: iso(330000), title: 'Synthetic expired finding' },
+          { id: 'incident:expired-row', kind: 'incident', source_id: 'expired-memory-incident', at: iso(320000), title: 'Synthetic expired incident' });
+        return { ok: true, status: 200, json: async () => ({ rows, has_earlier: false }) };
+      }
       const body = sid === 'sess-claude-1'
         ? before === 'older'
           ? { rows: [
@@ -739,6 +748,9 @@
     }
     // Incident report as markdown: its Accessed Files paths become file links.
     if (p === '/incidents' && String(path).includes('format=markdown')) {
+      if (scenarios.has('investigationdemo') && !data['/incidents'].some(i => i.id === new URLSearchParams(String(path).split('?')[1]).get('id'))) {
+        return { ok: false, status: 404 };
+      }
       const md = '# Incident\n\n## Blast Radius Activity\n\n### Accessed Files\n' +
         '- `/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl`\n\n### Egress Connections\n- `api.openai.com:443`\n';
       return { ok: true, status: 200, json: async () => { throw new SyntaxError('not JSON'); }, text: async () => md };
@@ -1009,6 +1021,31 @@
         receipt.evidenceEntry = document.getElementById('btn-drawer-back').textContent.includes('session');
         document.getElementById('btn-drawer-back').click();
         receipt.evidenceBack = document.getElementById('drawer').hidden && document.activeElement === evidence;
+        const memorySource = body().querySelector('.sm-source-link[data-action="open-flag"]');
+        memorySource.scrollIntoView({ block: 'center' }); memorySource.focus({ preventScroll: true });
+        const memoryTop = body().scrollTop;
+        memorySource.click(); await tick();
+        receipt.memoryFinding = document.getElementById('drawer-body').textContent.includes('Flag IDflag-2')
+          && document.getElementById('btn-drawer-back').textContent.includes('session');
+        document.getElementById('btn-drawer-back').click();
+        receipt.memoryFindingBack = window.SA.sessionView === 'memory' && document.activeElement === memorySource
+          && memoryTop > 0 && Math.abs(body().scrollTop - memoryTop) < 2;
+        const incidentSource = body().querySelector('.sm-source-link[data-action="open-incident"]');
+        incidentSource.click(); await tick();
+        receipt.memoryIncident = document.getElementById('drawer-title').textContent.includes(incidentSource.dataset.id)
+          && document.getElementById('drawer-body').textContent.includes('Blast Radius Activity');
+        document.getElementById('btn-drawer-back').click();
+        receipt.memoryIncidentBack = document.activeElement === incidentSource && Math.abs(body().scrollTop - memoryTop) < 2;
+        for (const kind of ['flag', 'incident']) {
+          const missing = body().querySelector('.sm-source-link[data-id="expired-memory-' + kind + '"]');
+          missing.click(); await tick();
+          receipt['memoryMissing' + kind] = document.getElementById('drawer-body').textContent.includes('no longer available')
+            && !document.getElementById('drawer-body').querySelector('[data-action]');
+          document.getElementById('btn-drawer-back').click();
+          receipt['memoryMissingBack' + kind] = document.activeElement === missing && window.SA.sessionView === 'memory';
+        }
+        receipt.memoryReadOnly = !document.getElementById('mock-requests')?.textContent;
+        body().scrollTop = resourceTop;
         resources.click(); await tick(); document.querySelector('#drawer-body [data-action="family-events"]').click(); await tick();
         receipt.familyEvents = window.SA.sessionInvestigationReturn && document.querySelector('#scope-bar [data-action="session-investigation-return"]')
           && !document.getElementById('sub-events').hidden;
@@ -1123,7 +1160,7 @@
     setTimeout(() => {
       receipt.missing = window.SA.selectedSessionId === 'expired-session'
         && document.getElementById('session-detail').textContent.includes('Session unavailable')
-        && document.getElementById('drawer-body').textContent.includes('flag unavailable');
+        && document.getElementById('drawer-body').textContent.includes('Finding evidence is no longer available');
       receipt.noPidFallback = !document.getElementById('session-detail').textContent.includes('api-service');
       document.body.dataset.contextHandoff = JSON.stringify(receipt);
     }, 8500);

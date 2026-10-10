@@ -3199,7 +3199,10 @@ document.addEventListener('DOMContentLoaded', () => {
         drawerBody.innerHTML = incidentReportHTML(incidentId, report.workflow, text, report.incident && report.incident.remediation);
         loadPlanSlot('incident:' + incidentId);
       } else {
-        drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Failed to load the incident report.</span></div>`;
+        const message = res.status === 404 || detail.status === 404
+          ? 'This incident report is no longer available. Its source may have expired; the retained session summary does not replace the report.'
+          : 'Failed to load the incident report.';
+        drawerBody.innerHTML = `<div class="empty" role="status"><svg class="icon"><use href="#i-doc"/></svg><span>${message}</span></div>`;
       }
     } catch (err) {
       if (seq !== drawerSeq) return;
@@ -3370,6 +3373,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const seq = drawerSeq;
     try {
       const res = await apiFetch(`/flags/${encodeURIComponent(id)}/explain`);
+      if (res.status === 404) throw new Error('Finding evidence is no longer available. Its source may have expired; the retained session summary does not replace the evidence.');
       if (!res.ok) throw new Error((await res.text()).trim() || 'flag unavailable');
       const f = await res.json();
       if (seq !== drawerSeq) return;

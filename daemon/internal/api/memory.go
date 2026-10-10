@@ -17,6 +17,7 @@ type memoryRow struct {
 	ID       string    `json:"id"`
 	At       time.Time `json:"at"`
 	Kind     string    `json:"kind"`
+	SourceID string    `json:"source_id,omitempty"`
 	Title    string    `json:"title"`
 	Detail   string    `json:"detail,omitempty"`
 	Severity string    `json:"severity,omitempty"`
@@ -208,6 +209,11 @@ func memoryRSSLabel(bytes uint64) string {
 
 func presentMemoryFact(f store.MemoryFact) memoryRow {
 	r := memoryRow{ID: f.ID, At: f.At, Kind: f.Kind}
+	// Only these retained sources have a record inspector. Display row IDs
+	// remain separate; older clients can continue rendering the summary alone.
+	if (f.Kind == "flag" || f.Kind == "incident") && safeMemoryID(f.SourceID) {
+		r.SourceID = f.SourceID
+	}
 	switch f.Kind {
 	case "activity":
 		r.Title = "Activity: " + f.EventKind.String()

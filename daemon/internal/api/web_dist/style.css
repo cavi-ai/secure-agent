@@ -1730,6 +1730,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .sm-marker time { font: 11px/1.4 var(--mono); font-variant-numeric: tabular-nums; color: var(--tx-3); overflow-wrap: anywhere; }
 .sm-content { display: grid; grid-template-columns: minmax(110px, .75fr) minmax(0, 1.4fr) auto; align-items: baseline; gap: 4px 10px; min-width: 0; overflow-wrap: anywhere; }
 .sm-content strong { font-size: 13px; line-height: 1.4; font-weight: 600; color: var(--tx-1); }
+.sm-source-link { font: inherit; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
 .sm-content p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--tx-2); }
 .sm-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .sm-chips:empty { display: none; }

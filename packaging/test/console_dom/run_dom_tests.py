@@ -219,7 +219,7 @@ def main():
                 dom = dump_dom(chrome, tmp, '?investigationdemo', origin, window_size=size)
                 receipt = re.search(r'data-investigation-probe="([^"]+)"', dom)
                 state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
-                for name in ('resourceEntry', 'resourceBack', 'evidenceEntry', 'evidenceBack', 'familyEvents', 'eventsBack', 'findings', 'clearRetainsReturn', 'findingsBack', 'forward', 'returnButton', 'fits', 'selectionCloses'):
+                for name in ('resourceEntry', 'resourceBack', 'evidenceEntry', 'evidenceBack', 'memoryFinding', 'memoryFindingBack', 'memoryIncident', 'memoryIncidentBack', 'memoryMissingflag', 'memoryMissingBackflag', 'memoryMissingincident', 'memoryMissingBackincident', 'memoryReadOnly', 'familyEvents', 'eventsBack', 'findings', 'clearRetainsReturn', 'findingsBack', 'forward', 'returnButton', 'fits', 'selectionCloses'):
                     check(f'session investigation ({label}): {name}', state.get(name) is True, str(state))
             if args.session_investigation_only:
                 print(f'\n{len(passed)} passed, {len(failed)} failed')
