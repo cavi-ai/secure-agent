@@ -87,7 +87,7 @@ func TestInfraAppEgressLeavesTheHeadline(t *testing.T) {
 	}
 	tg := agents.New(cfg, infraAppSource{})
 	tg.Refresh()
-	c := New(tg, sensitive.New(cfg), cfg)
+	c := New(tg, sensitive.New(cfg), cfg, Hooks{})
 	now := time.Now()
 	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 300, TS: now, RemoteHost: "203.0.113.9", RemotePort: 443})
 	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: now, RemoteHost: "203.0.113.5", RemotePort: 443})

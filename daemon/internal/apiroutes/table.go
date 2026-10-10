@@ -14,8 +14,22 @@ import (
 	"strings"
 )
 
+//go:generate go run ../../cmd/genroutes -out ../api/routes_generated.go
+
+// Leaf describes one dynamic sub-resource and its typed binding. Empty Handler
+// means the family handler performs its own ID validation and dispatch.
+type Leaf struct {
+	Path     string
+	Handler  string
+	Response string
+}
+
 // Route describes one API endpoint's path and its two derived classifications.
 type Route struct {
+	// Handler names an API method (API.name) or a package-level handler.
+	Handler string
+	// Response names a Go wire type; empty for streams or dynamic envelopes.
+	Response string
 	// Path is the exact mux pattern. A trailing slash marks a subtree (see
 	// Prefix) served by a single handler.
 	Path string
@@ -24,7 +38,7 @@ type Route struct {
 	Prefix bool
 	// Leaves are the sub-resources a Prefix route serves ("timeline", "report",
 	// and "memory" for /sessions/{id}/…, "explain" for /flags/{id}/explain).
-	Leaves []string
+	Leaves []Leaf
 	// Console is true when the console token admits this path on the proxy
 	// listener (the browser console's same-origin telemetry surface).
 	Console bool
@@ -67,96 +81,96 @@ type Route struct {
 
 // Table is the canonical API surface, ordered as registered.
 var Table = []Route{
-	{Path: "/status", Console: true},
-	{Path: "/sessions", Console: true},
-	{Path: "/sessions/", Prefix: true, Leaves: []string{"timeline", "report", "memory", "overview", "outcomes"}, Console: true},
-	{Path: "/resources", Console: true},
-	{Path: "/resources/episodes", Console: true},
-	{Path: "/resources/control", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/resources/policy", Console: true, MutatingMethods: []string{"PUT"}},
-	{Path: "/snapshot", Console: true},
-	{Path: "/posture", Console: true},
-	{Path: "/flags", Console: true},
-	{Path: "/reviews", Console: true, NoAgent: true},
-	{Path: "/reviews/decision", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/decision-scopes", Console: true, NoAgent: true, MutatingMethods: []string{"DELETE"}, ConsoleMethods: []string{"GET", "DELETE"}},
-	{Path: "/flags/", Prefix: true, Leaves: []string{"explain"}, Console: true},
-	{Path: "/events", Console: true},
-	{Path: "/events/stream", Console: true},
-	{Path: "/incidents", Console: true},
-	{Path: "/incidents/status", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/incidents/remediation", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/audit", Console: true},
-	{Path: "/allowlist/suggestions", Console: true},
-	{Path: "/allowlist", Console: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
-	{Path: "/egress/uninspected", Console: true},
-	{Path: "/egress/endpoint", Console: true},
-	{Path: "/egress/episodes", Console: true, NoAgent: true},
-	{Path: "/egress/episodes/", Prefix: true, Leaves: []string{"assess"}, Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/expected-egress", Console: true, NoAgent: true, MutatingMethods: []string{"POST", "DELETE"}},
-	{Path: "/notify/rules", Console: true, ConsoleMethods: []string{"POST"}},
-	{Path: "/guard/path-allow", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/mute", Console: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
-	{Path: "/expected", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
-	{Path: "/advisor/retriage", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/advisor/assess-host", Console: true, ConsoleMethods: []string{"POST"}},
-	{Path: "/flags/acknowledge", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/patterns", Console: true},
-	{Path: "/firewall/patterns", NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/guard/config", NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/ui/open-fda", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/ui/open-config", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/stats/rollup", Console: true},
-	{Path: "/costs", Console: true},
-	{Path: "/costs/unpriced", Console: true},
-	{Path: "/costs/plans", Console: true},
-	{Path: "/doctor", Console: true},
-	{Path: "/coverage/probe", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/routing/claude", NoAgent: true},
-	{Path: "/worktrees", Console: true, NoAgent: true},
-	{Path: "/worktrees/repos", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/worktrees/remove", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/worktrees/advise", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/worktrees/reveal", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/worktrees/reconnect", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/worktrees/trash", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/worktrees/review-trash", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/cleanup/ledger", Console: true, NoAgent: true},
-	{Path: "/worktrees/ask", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/worktrees/asks", Console: true, NoAgent: true},
-	{Path: "/cleanup", Console: true, NoAgent: true},
-	{Path: "/cleanup/trash", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/cleanup/clean", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/cleanup/advise", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/advisor/discover"},
-	{Path: "/fleet", Console: true},
-	{Path: "/kill", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/firewall/mode", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/firewall/fingerprints/reload", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/firewall/fingerprints/ingest", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/firewall/sources", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/guard/decision", Decide: true},
-	{Path: "/guard/pending", Console: true},
-	{Path: "/guard/resolve", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/guard/rules", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/debug/pprof/", Prefix: true, Console: false, OwnerOnly: true},
-	{Path: "/files/detail", Console: true, NoAgent: true},
-	{Path: "/files/reveal", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/files/open", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/advisor/plan", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/labels", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/status", Handler: "API.handleStatus", Response: "api.Status", Console: true},
+	{Path: "/sessions", Handler: "API.handleSessions", Response: "[]model.Session", Console: true},
+	{Path: "/sessions/", Handler: "API.handleSessionSubpath", Prefix: true, Leaves: []Leaf{{Path: "timeline", Handler: "serveSessionTimeline", Response: "[]event.Event"}, {Path: "report", Handler: "serveSessionReport", Response: "store.SessionReport"}, {Path: "memory", Handler: "serveSessionMemory", Response: "api.memoryResponse"}, {Path: "overview", Handler: "serveSessionOverview", Response: "api.SessionOverview"}, {Path: "outcomes", Handler: "serveSessionOutcomes", Response: "api.SessionOutcomes"}}, Console: true},
+	{Path: "/resources", Handler: "API.handleResources", Response: "resource.Snapshot", Console: true},
+	{Path: "/resources/episodes", Handler: "API.handleResourceEpisodes", Console: true},
+	{Path: "/resources/control", Handler: "API.handleResourceControl", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/resources/policy", Handler: "API.handleResourcePolicy", Console: true, MutatingMethods: []string{"PUT"}},
+	{Path: "/snapshot", Handler: "API.handleSnapshot", Response: "api.Snapshot", Console: true},
+	{Path: "/posture", Handler: "API.handlePosture", Response: "api.Posture", Console: true},
+	{Path: "/flags", Handler: "API.handleFlags", Response: "[]model.Flag", Console: true},
+	{Path: "/reviews", Handler: "API.handleReviews", Response: "store.ReviewPage", Console: true, NoAgent: true},
+	{Path: "/reviews/decision", Handler: "API.handleReviewDecision", Response: "model.ReviewDecisionReceipt", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/decision-scopes", Handler: "API.handleDecisionScopes", Console: true, NoAgent: true, MutatingMethods: []string{"DELETE"}, ConsoleMethods: []string{"GET", "DELETE"}},
+	{Path: "/flags/", Handler: "API.handleFlagExplain", Prefix: true, Leaves: []Leaf{{Path: "explain", Response: "model.Flag"}}, Console: true},
+	{Path: "/events", Handler: "API.handleEvents", Response: "[]event.Event", Console: true},
+	{Path: "/events/stream", Handler: "API.handleEventStream", Console: true},
+	{Path: "/incidents", Handler: "API.handleIncidents", Console: true},
+	{Path: "/incidents/status", Handler: "API.handleIncidentStatus", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/incidents/remediation", Handler: "API.handleIncidentRemediation", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/audit", Handler: "API.handleAudit", Console: true},
+	{Path: "/allowlist/suggestions", Handler: "API.handleAllowlistSuggestions", Console: true},
+	{Path: "/allowlist", Handler: "API.handleAllowlistAdd", Console: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
+	{Path: "/egress/uninspected", Handler: "API.handleUninspectedEgress", Console: true},
+	{Path: "/egress/endpoint", Handler: "API.handleEndpointDetail", Console: true},
+	{Path: "/egress/episodes", Handler: "API.handleEgressEpisodes", Console: true, NoAgent: true},
+	{Path: "/egress/episodes/", Handler: "API.handleEgressEpisodeSubpath", Prefix: true, Leaves: []Leaf{{Path: "assess"}}, Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/expected-egress", Handler: "API.handleExpectedEgress", Console: true, NoAgent: true, MutatingMethods: []string{"POST", "DELETE"}},
+	{Path: "/notify/rules", Handler: "API.handleNotifyRules", Console: true, ConsoleMethods: []string{"POST"}},
+	{Path: "/guard/path-allow", Handler: "API.handleGuardPathAllow", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/mute", Handler: "API.handleMute", Console: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
+	{Path: "/expected", Handler: "API.handleExpected", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
+	{Path: "/advisor/retriage", Handler: "API.handleAdvisorRetriage", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/advisor/assess-host", Handler: "API.handleAdvisorAssessHost", Console: true, ConsoleMethods: []string{"POST"}},
+	{Path: "/flags/acknowledge", Handler: "API.handleFlagAcknowledge", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/patterns", Handler: "API.handlePatterns", Response: "[]model.Pattern", Console: true},
+	{Path: "/firewall/patterns", Handler: "API.handleFirewallPatterns", NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/guard/config", Handler: "API.handleGuardConfig", NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/ui/open-fda", Handler: "API.handleOpenFDA", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/ui/open-config", Handler: "API.handleOpenConfig", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/stats/rollup", Handler: "API.handleRollup", Console: true},
+	{Path: "/costs", Handler: "API.handleCosts", Response: "store.CostReport", Console: true},
+	{Path: "/costs/unpriced", Handler: "API.handleCostsUnpriced", Console: true},
+	{Path: "/costs/plans", Handler: "API.handleCostsPlans", Console: true},
+	{Path: "/doctor", Handler: "API.handleDoctor", Response: "api.DoctorReport", Console: true},
+	{Path: "/coverage/probe", Handler: "API.handleCoverageProbe", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/routing/claude", Handler: "API.handleRoutingClaude", NoAgent: true},
+	{Path: "/worktrees", Handler: "API.handleWorktrees", Console: true, NoAgent: true},
+	{Path: "/worktrees/repos", Handler: "API.handleWorktreeRepos", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/worktrees/remove", Handler: "API.handleWorktreeRemove", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/worktrees/advise", Handler: "API.handleWorktreeAdvise", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/worktrees/reveal", Handler: "API.handleWorktreeReveal", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/worktrees/reconnect", Handler: "API.handleWorktreeReconnect", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/worktrees/trash", Handler: "API.handleWorktreeTrash", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/worktrees/review-trash", Handler: "API.handleWorktreeReviewTrash", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/cleanup/ledger", Handler: "API.handleCleanupLedger", Console: true, NoAgent: true},
+	{Path: "/worktrees/ask", Handler: "API.handleWorktreeAsk", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/worktrees/asks", Handler: "API.handleWorktreeAsks", Console: true, NoAgent: true},
+	{Path: "/cleanup", Handler: "API.handleCleanup", Console: true, NoAgent: true},
+	{Path: "/cleanup/trash", Handler: "API.handleCleanupTrash", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/cleanup/clean", Handler: "API.handleCleanupClean", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/cleanup/advise", Handler: "API.handleCleanupAdvise", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/advisor/discover", Handler: "API.handleAdvisorDiscover"},
+	{Path: "/fleet", Handler: "API.handleFleet", Response: "api.FleetNodeStatus", Console: true},
+	{Path: "/kill", Handler: "API.handleKill", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/firewall/mode", Handler: "API.handleFirewallMode", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/firewall/fingerprints/reload", Handler: "API.handleFingerprintReload", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/firewall/fingerprints/ingest", Handler: "API.handleFingerprintIngest", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/firewall/sources", Handler: "API.handleFirewallSources", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/guard/decision", Handler: "API.handleGuardDecision", Decide: true},
+	{Path: "/guard/pending", Handler: "API.handleGuardPending", Console: true},
+	{Path: "/guard/resolve", Handler: "API.handleGuardResolve", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/guard/rules", Handler: "API.handleGuardRules", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/debug/pprof/", Handler: "handlePprof", Prefix: true, Console: false, OwnerOnly: true},
+	{Path: "/files/detail", Handler: "API.handleFileDetail", Response: "model.FileDetail", Console: true, NoAgent: true},
+	{Path: "/files/reveal", Handler: "API.handleFileReveal", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/files/open", Handler: "API.handleFileOpen", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/advisor/plan", Handler: "API.handleAdvisorPlan", Response: "api.PlanResponse", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/labels", Handler: "API.handleLabels", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	// The system agent (console Agent tab): chat, plans and dispatch. NoAgent
 	// throughout — a harness dispatch must never be reachable by an agent.
-	{Path: "/agent/status", Console: true, NoAgent: true},
-	{Path: "/agent/skills", Console: true, NoAgent: true},
-	{Path: "/agent/chat", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
-	{Path: "/agent/analyze", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/agent/recommendations", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/agent/worktree", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/agent/actions", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/agent/plans", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
-	{Path: "/agent/dispatch", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/agent/runs", Console: true, NoAgent: true},
+	{Path: "/agent/status", Handler: "API.handleAgentStatus", Console: true, NoAgent: true},
+	{Path: "/agent/skills", Handler: "API.handleAgentSkills", Console: true, NoAgent: true},
+	{Path: "/agent/chat", Handler: "API.handleAgentChat", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
+	{Path: "/agent/analyze", Handler: "API.handleAgentAnalyze", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/agent/recommendations", Handler: "API.handleAgentRecommendations", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/agent/worktree", Handler: "API.handleAgentWorktree", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/agent/actions", Handler: "API.handleAgentActions", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/agent/plans", Handler: "API.handleAgentPlans", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
+	{Path: "/agent/dispatch", Handler: "API.handleAgentDispatch", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/agent/runs", Handler: "API.handleAgentRuns", Console: true, NoAgent: true},
 }
 
 // ConsoleAllowed reports whether the console token admits (method, path) on
@@ -181,7 +195,7 @@ func ConsoleAllowed(method, path string) bool {
 			}
 			rest := strings.TrimPrefix(path, r.Path)
 			parts := strings.SplitN(rest, "/", 2)
-			matched = len(parts) == 2 && parts[0] != "" && parts[0] != "." && parts[0] != ".." && slices.Contains(r.Leaves, parts[1])
+			matched = len(parts) == 2 && parts[0] != "" && parts[0] != "." && parts[0] != ".." && slices.ContainsFunc(r.Leaves, func(leaf Leaf) bool { return leaf.Path == parts[1] })
 		} else {
 			matched = r.Path == path
 		}
@@ -246,7 +260,7 @@ func routeMatches(r Route, path string) bool {
 	}
 	rest := strings.TrimPrefix(path, r.Path)
 	parts := strings.SplitN(rest, "/", 2)
-	return len(parts) == 2 && parts[0] != "" && parts[0] != "." && parts[0] != ".." && slices.Contains(r.Leaves, parts[1])
+	return len(parts) == 2 && parts[0] != "" && parts[0] != "." && parts[0] != ".." && slices.ContainsFunc(r.Leaves, func(leaf Leaf) bool { return leaf.Path == parts[1] })
 }
 
 // IsDecide reports whether (method, path) is the agent-facing guard decision.

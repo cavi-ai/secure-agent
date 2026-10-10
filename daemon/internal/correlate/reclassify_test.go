@@ -109,7 +109,7 @@ func newFamilyCorrelator(t *testing.T) *Correlator {
 	}
 	tg := agents.New(cfg, familyProcSource{})
 	tg.Refresh()
-	return New(tg, sensitive.New(cfg), cfg)
+	return New(tg, sensitive.New(cfg), cfg, Hooks{})
 }
 
 func TestReadConnectSeverityTracksCausalStrength(t *testing.T) {

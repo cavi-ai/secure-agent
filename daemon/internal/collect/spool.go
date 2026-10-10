@@ -144,10 +144,15 @@ type ESServiceSnapshot struct {
 
 // SpoolState renders the spool facts for humans ("3.2 MB, updated 12 min ago").
 func (s ESServiceSnapshot) SpoolState() string {
+	return s.SpoolStateAt(time.Now())
+}
+
+// SpoolStateAt renders the snapshot relative to a captured observation time.
+func (s ESServiceSnapshot) SpoolStateAt(now time.Time) string {
 	if s.SpoolSize == 0 && s.SpoolMtime.IsZero() {
 		return "absent"
 	}
-	return fmt.Sprintf("%d bytes, updated %s ago", s.SpoolSize, time.Since(s.SpoolMtime).Round(time.Second))
+	return fmt.Sprintf("%d bytes, updated %s ago", s.SpoolSize, now.Sub(s.SpoolMtime).Round(time.Second))
 }
 
 // ESServiceProbe is the function posture calls to read the root service's

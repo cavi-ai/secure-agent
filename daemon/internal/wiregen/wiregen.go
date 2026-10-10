@@ -16,11 +16,9 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/clutter"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
-	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/playbook"
-	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
@@ -31,15 +29,10 @@ import (
 // boundary into clients. Adding a field anywhere here changes the generated
 // file — the drift test fails until it's regenerated.
 func WireTypes() []any {
-	return []any{
-		event.Event{},
-		model.Session{},
-		model.Flag{},
+	return append(api.RouteWireTypes(), []any{
 		model.FindingAssessment{},
 		model.ReviewContext{}, model.ReviewRecord{}, model.ReviewDecisionRequest{}, model.ReviewDecisionReceipt{}, store.ReviewPage{},
-		model.Pattern{},
 		model.RoutineGroup{},
-		model.FileDetail{},
 		model.FileFinding{},
 		model.FileAccess{},
 		model.FileHit{},
@@ -49,19 +42,14 @@ func WireTypes() []any {
 		model.LabelSummary{},
 		model.LabelSuggestion{},
 		model.LabelContext{},
-		api.PlanResponse{},
 		playbook.Playbook{},
 		playbook.Step{},
 		model.IncidentReport{},
 		model.RotateItem{},
 		model.AdvisorVerdict{},
 		model.NodeStatus{},
-		api.Status{},
 		api.AgentSummary{},
 		api.CoverageStatus{},
-		api.SessionOverview{},
-		api.SessionOutcomes{},
-		api.Posture{},
 		api.PostureItem{},
 		api.AttentionGroup{},
 		api.AttentionItem{},
@@ -71,15 +59,11 @@ func WireTypes() []any {
 		advisor.Recommendation{},
 		advisor.DiscoveredServer{},
 		store.CostRow{},
-		store.CostReport{},
 		collect.PlanSnapshot{},
 		collect.PlanWindow{},
-		store.SessionReport{},
-		resource.Snapshot{},
 		store.ReportCount{},
 		store.ReportModel{},
 		store.ReportLine{},
-		api.DoctorReport{},
 		api.DoctorCheck{},
 		api.UninspectedEndpoint{},
 		api.EndpointDetail{},
@@ -112,7 +96,7 @@ func WireTypes() []any {
 		sysagent.HarnessStatus{},
 		sysagent.SkillInfo{},
 		sysagent.Skill{},
-	}
+	}...)
 }
 
 // Generate renders the .d.ts for the full wire-type set.
@@ -134,7 +118,7 @@ func TypeScript(types ...any) string {
 }
 
 func emitTS(t reflect.Type, out *strings.Builder, emitted map[string]bool) {
-	for t.Kind() == reflect.Pointer {
+	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct || t == timeType || emitted[t.Name()] {

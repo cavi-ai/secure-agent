@@ -118,7 +118,6 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	c.resourceEpisodes = resourceEpisodes
 
 	classifier := sensitive.New(cfg)
-	correlator := correlate.New(tagger, classifier, cfg)
 
 	// Session resolver: attributes every event to a durable session at
 	// ingest (hook handshake > transcript > process tree).
@@ -126,18 +125,45 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	repairStoredRows(st)
 	reclassifyReadFlags(st, classifier, cfg.CredentialOwners)
+	// Construct every correlator hook before event ingestion starts. The advisor
+	// holder resolves the current subscriber after startup and on hot reload.
+	deltaHub := api.NewDeltaHub()
+	c.deltaHub = deltaHub
+	advisorStk := &advisorStackHolder{}
+	c.advisor = advisorStk
+	allowlistStore, muteStore, expectStore := loadEgressOverrides(cfg)
+	correlator := correlate.New(tagger, classifier, cfg, correlate.Hooks{
+		AllowlistOverrides: func(agent string) []string { return allowlistStore.Load()[agent] },
+		Muted:              muteStore.Muted,
+		Expected:           expectStore.Match,
+		OnRepeat:           foldFlagRepeat(st, deltaHub),
+		OpenFlag:           func(id string) bool { f, ok := st.GetFlag(id); return ok && !f.Acknowledged },
+		OpenReadFlags:      st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: 1024}),
+		OnUninspected: func(agent, host string) {
+			if sub := advisorStk.Load().Sub; sub != nil {
+				sub.EnqueueHost(agent, host)
+			}
+		},
+		ScopedExpected: func(requests []model.DecisionScope, pid int32) bool {
+			if len(requests) == 0 {
+				return false
+			}
+			identity, ok := resolver.PermissionIdentity(pid, requests[0].SessionID)
+			if !ok || identity.Agent != requests[0].Agent {
+				return false
+			}
+			for i := range requests {
+				requests[i].Workspace = identity.Workspace
+			}
+			return st.MatchDecisionScopes(requests)
+		},
+	})
+	st.SetAllowlistSource(allowlistStore.Load)
+	tagger.SetOnTagged(reattributeUntaggedFlags(st, deltaHub, time.Now))
 	if n := st.RejudgeRecords(correlator.SensitiveFile); n > 0 {
 		log.Printf("store: cleared the record mark on %d file rows that are not secret reads", n)
 	}
 
-	// Typed deltas: SSE clients patch state from these; /snapshot is for
-	// initial load and reconciliation only.
-	deltaHub := api.NewDeltaHub()
-	c.deltaHub = deltaHub
-	tagger.SetOnTagged(reattributeUntaggedFlags(st, deltaHub, time.Now))
-	correlator.SetOnRepeat(foldFlagRepeat(st, deltaHub))
-	correlator.SetOpenFlagChecker(func(id string) bool { f, ok := st.GetFlag(id); return ok && !f.Acknowledged })
-	correlator.RestoreOpenReadFlags(st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: 1024}))
 	// postureHook is armed once the API server exists (it owns posture).
 	postureHook := &postureHookHolder{}
 	// newFlagHook is armed with the API's automatic review once it exists.
@@ -164,8 +190,6 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	// Local triage advisor (opt-in): flags/incidents are offered to it from
 	// the drain loop; it never touches the enforcement path.
-	advisorStk := &advisorStackHolder{}
-	c.advisor = advisorStk
 	advisorStk.Store(setupAdvisor(cfg, st, deltaHub, postureHook.run, sysAgentMask(fw.Engine)))
 
 	// Operator price table from config.yaml, applied before any collector
@@ -187,30 +211,16 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	// Drain bus and correlate/persist (drainDone closes once every delivered
 	// event has had its persistence attempted — shutdown waits for it).
-	c.drainDone = startDrainLoop(b.Subscribe(), st, correlator, fleetPub, resolver, tagger, deltaHub, otlpExp,
-		func() { postureHook.run() },
-		func() *advisor.Subscriber { return advisorStk.Load().Sub },
-		newFlagHook.run)
+	c.drainDone = runEventIngest(b.Subscribe(), ingestDeps{
+		Store: st, Correlator: correlator, Fleet: fleetPub, Resolver: resolver,
+		Tagger: tagger, Deltas: deltaHub, OTLP: otlpExp,
+		PostureChanged: postureHook.run,
+		Advisor:        func() *advisor.Subscriber { return advisorStk.Load().Sub },
+		NewFlag:        newFlagHook.run,
+	}).Done()
 
 	// Periodic process tagger refresh: 5s while idle, 1s while agents live.
 	go runResourceLoop(ctx, tagger, resolver, resourceTracker, resourceControl, resourceEpisodes, st, cfg.DBPath, supReg, plans)
-
-	// Persisted overrides are used by the proxy and surfaced in status.
-	allowlistStore, muteStore, expectStore := wireEgressOverrides(cfg, correlator, advisorStk)
-	correlator.SetScopedExpected(func(requests []model.DecisionScope, pid int32) bool {
-		if len(requests) == 0 {
-			return false
-		}
-		identity, ok := resolver.PermissionIdentity(pid, requests[0].SessionID)
-		if !ok || identity.Agent != requests[0].Agent {
-			return false
-		}
-		for i := range requests {
-			requests[i].Workspace = identity.Workspace
-		}
-		return st.MatchDecisionScopes(requests)
-	})
-	st.SetAllowlistSource(allowlistStore.Load)
 
 	var proxyServer *proxy.ProxyServer
 	if cfg.ProxyEnabled {
@@ -718,23 +728,13 @@ func runResourceLoop(ctx context.Context, tagger *agents.Tagger, resolver *sessi
 	}
 }
 
-// wireEgressOverrides attaches allowlist/mute stores to the correlator and
-// arms advisor pre-assessment. The hook resolves the subscriber per call:
-// hot-reload swaps the stack, and a stale capture panics on nil.
-func wireEgressOverrides(cfg config.Config, correlator *correlate.Correlator, advisorStk *advisorStackHolder) (*correlate.AllowlistStore, *correlate.MuteStore, *correlate.ExpectStore) {
+// loadEgressOverrides creates persisted policy readers without mutating a
+// running correlator. Hooks capture these readers at construction.
+func loadEgressOverrides(cfg config.Config) (*correlate.AllowlistStore, *correlate.MuteStore, *correlate.ExpectStore) {
 	stateDir := filepath.Dir(cfg.Firewall.Registry.SaltRef)
-	allowlistStore := correlate.NewAllowlistStore(filepath.Join(stateDir, "allowlist-overrides.json"))
-	correlator.SetAllowlistOverrides(func(agent string) []string { return allowlistStore.Load()[agent] })
-	muteStore := correlate.NewMuteStore(filepath.Join(stateDir, "muted.json"))
-	correlator.SetMuteChecker(muteStore.Muted)
-	expectStore := correlate.NewExpectStore(filepath.Join(stateDir, "expected.json"))
-	correlator.SetExpected(expectStore.Match)
-	correlator.SetOnUninspected(func(agent, host string) {
-		if sub := advisorStk.Load().Sub; sub != nil {
-			sub.EnqueueHost(agent, host)
-		}
-	})
-	return allowlistStore, muteStore, expectStore
+	return correlate.NewAllowlistStore(filepath.Join(stateDir, "allowlist-overrides.json")),
+		correlate.NewMuteStore(filepath.Join(stateDir, "muted.json")),
+		correlate.NewExpectStore(filepath.Join(stateDir, "expected.json"))
 }
 
 // buildAdvisorHooks wires the advisor-facing API closures; each resolves

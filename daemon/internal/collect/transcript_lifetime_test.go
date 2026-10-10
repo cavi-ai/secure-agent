@@ -80,7 +80,7 @@ func TestTranscriptRetiresDeletedParserState(t *testing.T) {
 			ts.tailFile(source.path, offsets, nil)
 		}
 	}
-	if len(ts.tracers) != count || len(ts.codexTracers) != count || len(ts.cursorTracers) != count || len(ts.agyTracers) != count || len(ts.rolloutIDs) != count {
+	if len(ts.trace.files) != 4*count || len(ts.rolloutIDs) != count {
 		t.Fatal("fixtures did not create each harness's parser and identity state")
 	}
 	if err := ts.saveOffsets(offsets); err != nil {
@@ -96,8 +96,8 @@ func TestTranscriptRetiresDeletedParserState(t *testing.T) {
 		return nil
 	}
 	resolveTranscriptState(t, ts)
-	if len(ts.tracers)+len(ts.codexTracers)+len(ts.cursorTracers)+len(ts.agyTracers)+len(ts.rolloutIDs) != 0 {
-		t.Fatalf("deleted sources retained state: claude=%d codex=%d cursor=%d agy=%d identities=%d", len(ts.tracers), len(ts.codexTracers), len(ts.cursorTracers), len(ts.agyTracers), len(ts.rolloutIDs))
+	if len(ts.trace.files)+len(ts.rolloutIDs) != 0 {
+		t.Fatalf("deleted sources retained state: parsers=%d identities=%d", len(ts.trace.files), len(ts.rolloutIDs))
 	}
 	if remaining := ts.loadOffsets(); len(remaining) != 0 {
 		t.Fatalf("deleted checkpoints retained: %v", remaining)
@@ -115,12 +115,12 @@ func TestTranscriptRetainsInactiveParserAndCheckpoint(t *testing.T) {
 	offsets := map[string]int64{}
 	appendTranscriptEvents(t, ts, sub, offsets, path, codexMetaLine)
 	appendTranscriptEvents(t, ts, sub, offsets, path, codexSettingsLine)
-	tracer, checkpoint := ts.codexTracers[path], offsets[path]
+	tracer, checkpoint := ts.trace.files[path], offsets[path]
 	if err := ts.saveOffsets(offsets); err != nil {
 		t.Fatal(err)
 	}
 	resolveTranscriptState(t, ts)
-	if ts.codexTracers[path] != tracer || ts.loadOffsets()[path] != checkpoint || ts.RolloutSession(path) != "019f58e8-6230" {
+	if ts.trace.files[path] != tracer || ts.loadOffsets()[path] != checkpoint || ts.RolloutSession(path) != "019f58e8-6230" {
 		t.Fatal("inactive but present source lost parser, checkpoint or identity")
 	}
 	events := appendTranscriptEvents(t, ts, sub, offsets, path, codexTokenLine)
@@ -141,7 +141,7 @@ func TestTranscriptRetiresDeletedSourceAfterPendingDelivery(t *testing.T) {
 	ts.OffsetStatePath = filepath.Join(home, "offsets.json")
 	offsets := map[string]int64{}
 	ts.tailFile(path, offsets, nil)
-	tracer := ts.tracers[path]
+	tracer := ts.trace.files[path]
 	if ts.pending[path] == nil || tracer == nil {
 		t.Fatal("fixture did not stage a blocked transcript line")
 	}
@@ -160,7 +160,7 @@ func TestTranscriptRetiresDeletedSourceAfterPendingDelivery(t *testing.T) {
 			deleted = true
 		} else if ts.pending[path] == nil {
 			cancel() // this resolve must retire the now-delivered source
-		} else if ts.tracers[path] != tracer {
+		} else if ts.trace.files[path] != tracer {
 			t.Fatal("retired parser before staged events were delivered")
 		}
 		return nil
@@ -176,7 +176,7 @@ func TestTranscriptRetiresDeletedSourceAfterPendingDelivery(t *testing.T) {
 	if ts.pending[path] != nil {
 		t.Fatal("delivered line stayed pending")
 	}
-	if ts.tracers[path] != nil || len(ts.loadOffsets()) != 0 {
+	if ts.trace.files[path] != nil || len(ts.loadOffsets()) != 0 {
 		t.Fatal("deleted source retained state after delivery")
 	}
 }
@@ -223,7 +223,7 @@ func TestTranscriptStatFailureRetainsState(t *testing.T) {
 	offsets := map[string]int64{}
 	ts.tailFile(path, offsets, nil)
 	<-sub
-	tracer := ts.tracers[path]
+	tracer := ts.trace.files[path]
 	if err := ts.saveOffsets(offsets); err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestTranscriptStatFailureRetainsState(t *testing.T) {
 		t.Skip("execution identity bypasses directory permissions")
 	}
 	resolveTranscriptState(t, ts)
-	if ts.tracers[path] != tracer || ts.loadOffsets()[path] != offsets[path] {
+	if ts.trace.files[path] != tracer || ts.loadOffsets()[path] != offsets[path] {
 		t.Fatal("an inaccessible source was treated as deleted")
 	}
 	if err := os.Chmod(parent, 0o700); err != nil {

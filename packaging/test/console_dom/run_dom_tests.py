@@ -21,6 +21,8 @@ import json
 import os
 import html
 from html.parser import HTMLParser
+from urllib.parse import parse_qsl
+from dom_query import query as dom_query, starts_with
 import re
 import shutil
 import subprocess
@@ -45,18 +47,12 @@ def check(name, ok, detail=""):
 
 
 def pre(dom_text, pid):
-    m = re.search(r'<pre id="%s"[^>]*>(.*?)</pre>' % pid, dom_text, re.S)
-    return m.group(1) if m else ""
+    node = dom_query(dom_text).find('pre', {'id': pid})
+    return node.inner_html if node else ''
 
 
 def log_rows(dom_text):
-    """The history rows in a dump, keyed by data-row-key."""
-    rows = {}
-    for chunk in dom_text.split('<li class="log-row')[1:]:
-        key = re.search(r'data-row-key="([^"]+)"', chunk)
-        if key:
-            rows[key.group(1)] = chunk
-    return rows
+    return {node.attrs['data-row-key']: node.html for node in dom_query(dom_text).find_all('li', {'class': 'log-row', 'data-row-key': None})}
 
 
 def find_chrome():
@@ -80,10 +76,12 @@ def build_harness(tmp):
               "tab-worktrees.js", "tab-agent.js", "theme-init.js", "icon.svg"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))
     os.symlink(MOCK, os.path.join(tmp, "mock_dom.js"))
+    os.symlink(os.path.join(os.path.dirname(MOCK), "fixtures.js"), os.path.join(tmp, "fixtures.js"))
+    write_fixture(tmp, "")
     html = open(os.path.join(WEB_DIST, "index.html")).read()
     needle = '<script src="lib.js"></script>'
     assert needle in html, "lib.js script tag not found in index.html"
-    html = html.replace(needle, needle + '\n  <script src="mock_dom.js"></script>')
+    html = html.replace(needle, needle + '\n  <script src="fixture-config.js"></script>\n  <script src="fixtures.js"></script>\n  <script src="mock_dom.js"></script>')
     with open(os.path.join(tmp, "harness.html"), "w") as f:
         f.write(html)
 
@@ -119,16 +117,35 @@ def serve_with_csp(tmp):
     return srv, f"http://127.0.0.1:{srv.server_address[1]}"
 
 
-def dump_dom(chrome, tmp, query="", origin=None, window_size=None, reduced_motion=False):
+def write_fixture(tmp, query_string, fixture=None):
+    # Legacy interaction probes select named scenarios. Payloads and scripted
+    # responses are test-owned and can be declared without a driver edit.
+    scenarios = []
+    for key, value in parse_qsl(query_string.split('#', 1)[0].lstrip('?'), keep_blank_values=True):
+        scenarios.append(key)
+        if value:
+            scenarios.append(f"{key}={value}")
+    spec = {"scenarios": scenarios, **(fixture or {})}
+    with open(os.path.join(tmp, "fixture-config.js"), "w") as stream:
+        stream.write("window.CONSOLE_TEST = " + json.dumps(spec) + ";\n"
+                     "if (window.parent !== window) {\n"
+                     "  window.CONSOLE_TEST.scenarios = Array.from(new URLSearchParams(location.search), "
+                     "([key, value]) => value ? [key, key + '=' + value] : [key]).flat();\n"
+                     "}\n")
+
+
+def dump_dom(chrome, tmp, query="", origin=None, window_size=None, reduced_motion=False, fixture=None):
+    write_fixture(tmp, query, fixture)
     url = f"{origin or 'file://' + tmp}/harness.html{query}"
     size = [f"--window-size={window_size[0]},{window_size[1]}"] if window_size else []
     # Exercise both motion modes explicitly, independent of host accessibility settings.
     motion = "--force-prefers-reduced-motion" if reduced_motion else "--force-prefers-no-reduced-motion"
-    out = subprocess.run(
-        [chrome, "--headless=new", "--disable-gpu", "--no-sandbox", *size, motion,
-         "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), "--dump-dom", url],
-        capture_output=True, text=True, timeout=120,
-    )
+    with tempfile.TemporaryDirectory(prefix="chrome-profile-", dir=tmp) as profile:
+        out = subprocess.run(
+            [chrome, f"--user-data-dir={profile}", "--no-first-run", "--disable-background-networking", "--headless=new", "--disable-gpu", "--no-sandbox", *size, motion,
+             "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), "--dump-dom", url],
+            capture_output=True, text=True, timeout=120,
+        )
     if out.returncode != 0:
         print(out.stderr[-2000:], file=sys.stderr)
         raise SystemExit(f"chrome --dump-dom failed ({out.returncode}): {url}")
@@ -146,14 +163,16 @@ SHOTS = (
 )
 
 
-def screenshot(chrome, origin, query, path):
-    out = subprocess.run(
-        [chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
-         f"--window-size={SHOT_SIZE[0]},{SHOT_SIZE[1]}",
-         "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), f"--screenshot={path}",
-         f"{origin}/harness.html{query}"],
-        capture_output=True, text=True, timeout=120,
-    )
+def screenshot(chrome, origin, query, path, tmp):
+    write_fixture(tmp, query)
+    with tempfile.TemporaryDirectory(prefix="chrome-profile-", dir=tmp) as profile:
+        out = subprocess.run(
+            [chrome, f"--user-data-dir={profile}", "--no-first-run", "--disable-background-networking", "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
+             f"--window-size={SHOT_SIZE[0]},{SHOT_SIZE[1]}",
+             "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), f"--screenshot={path}",
+             f"{origin}/harness.html{query}"],
+            capture_output=True, text=True, timeout=120,
+        )
     if out.returncode != 0 or not os.path.isfile(path) or os.path.getsize(path) == 0:
         print(out.stderr[-2000:], file=sys.stderr)
         raise SystemExit(f"chrome --screenshot failed: {path}")
@@ -215,8 +234,8 @@ def main():
                       all(text in detail for text in ['Reviewed', 'revision 1', 'newer evidence', 'possible-exposure',
                                                      'Source evidence unavailable', 'Applied', 'Resource samples observed',
                                                      'External action reported', 'unverified']))
-                check(f'session results ({label}): update preserves focused open receipt', 'data-results-focus="true"' in dom)
-                check(f'session results ({label}): layout fits viewport', 'data-results-fits="true"' in dom)
+                check(f'session results ({label}): update preserves focused open receipt', dom_query(dom).has(None, {'data-results-focus': 'true'}))
+                check(f'session results ({label}): layout fits viewport', dom_query(dom).has(None, {'data-results-fits': 'true'}))
                 if 'stale' in label:
                     check('session results: failed refresh retains receipts with a visible retry', 'Last known results' in detail and 'Retry results' in detail)
             if args.session_results_only:
@@ -230,7 +249,7 @@ def main():
                   'notice=Refreshing usage… · saved 3h ago' in html.unescape(pre(cached, 'spend-cache-probe')))
             check('spend: fresh data replaces cached data and clears the indicator',
                   'id="count-spend">$37.67<' in cached
-                  and 'id="spend-cache" class="spend-cache" role="status" hidden=""' in cached)
+                  and dom_query(cached).has(None, {'id': 'spend-cache', 'class': 'spend-cache', 'role': 'status', 'hidden': ''}))
             delayed = dump_dom(chrome, tmp, '?spendshape', origin)
             check('spend: delayed refresh retains totals and rows without warning banners',
                   'Refresh delayed · showing saved usage' in delayed
@@ -243,7 +262,7 @@ def main():
             recovered = dump_dom(chrome, tmp, '?spendshape&recover', origin)
             check('spend: valid recovery clears the delayed state',
                   'Refresh delayed' in pre(recovered, 'spend-shape-before-recovery')
-                  and 'id="spend-cache" class="spend-cache" role="status" hidden=""' in recovered
+                  and dom_query(recovered).has(None, {'id': 'spend-cache', 'class': 'spend-cache', 'role': 'status', 'hidden': ''})
                   and 'id="count-spend">$36.67<' in recovered)
             cold = dump_dom(chrome, tmp, '?spendslowdemo', origin)
             check('spend: cold loading leaves sibling panels available',
@@ -263,7 +282,7 @@ def main():
                     check(f'console recovery ({label}): {name}', result is True, str(result))
             first_connect = dump_dom(chrome, tmp, '?notokenrecover', origin)
             check('credential handoff connects an initially unauthenticated tab without reload',
-                  'id="count-agents">3<' in first_connect and 'class="is-ended"' not in first_connect
+                  'id="count-agents">3<' in first_connect and not dom_query(first_connect).has(None, {'class': 'is-ended'})
                   and re.search(r'<section[^>]*id="session-ended"[^>]*\bhidden\b', first_connect) is not None)
             network_recovery = dump_dom(chrome, tmp, '?networkrecover', origin)
             check('connection failure retains cached data with a last-connected time; Retry now reconnects',
@@ -293,7 +312,7 @@ def main():
         dom_themefirst = dump_dom(chrome, tmp, "?themefirst", origin)
         dom = dump_dom(chrome, tmp)
         dom_payload = dump_dom(chrome, tmp, "?payloadoutcomes&tab=findings", origin)
-        dom_resource_results = dump_dom(chrome, tmp, "?resourceoutcomes&tab=resources", origin)
+        dom_resource_results = dump_dom(chrome, tmp, "?resourceoutcomes&tab=resources", origin, fixture={'patches': [{'route': '/resources', 'path': ['interventions'], 'value': [{'id': 'fixture-partial', 'kind': 'pause', 'status': 'partial', 'verification': 'unknown', 'error': 'One captured process could not be resumed.', 'before': {'rss_bytes': 8000000000, 'cpu_percent': 140, 'host_capacity': 'constrained'}, 'after': [], 'limits': ['Pause may stop growth without freeing memory. Resume may be needed.']}, {'id': 'fixture-termination', 'kind': 'terminate', 'status': 'applied', 'verification': 'verified', 'verified_by': 'captured-family-absent', 'before': {'rss_bytes': 8000000000, 'host_capacity': 'constrained'}, 'after': [{'captured_family_present': False, 'host_capacity': 'ample', 'host_available_bytes': 12000000000}], 'limits': ['Verification covers only the captured process family. Observations do not establish causation or task completion.']}]}]})
         check("resource results: partial application remains unknown with resume recourse", "Partially applied" in dom_resource_results and "Verification unknown" in dom_resource_results and "Resume may be needed" in dom_resource_results)
         check("resource results: termination verification names captured family limits", "Captured family absent" in dom_resource_results and "Verification covers only the captured process family" in dom_resource_results and "causation or task completion" in dom_resource_results)
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
@@ -338,7 +357,7 @@ def main():
         dom_trends = dump_dom(chrome, tmp, "?trendsprobe")
         dom_hiddenrender = dump_dom(chrome, tmp, "?hiddenrenderprobe")
         dom_policylists = dump_dom(chrome, tmp, "?policylists")
-        dom_policyempty = dump_dom(chrome, tmp, "?policylists&emptypolicy")
+        dom_policyempty = dump_dom(chrome, tmp, "?policylists&emptypolicy", fixture={'payloads': {'/guard/rules': [], '/guard/path-allow': [], '/mute': [], '/expected': []}})
         dom_forget = dump_dom(chrome, tmp, "?policylists&forgetexpected")
         dom_scoped = dump_dom(chrome, tmp, "?scopedpermission")
         dom_scoped_revoke = dump_dom(chrome, tmp, "?scopedpermission&revokescope")
@@ -362,7 +381,7 @@ def main():
         dom_pill = dump_dom(chrome, tmp, "?pilldemo")
         dom_quiet = dump_dom(chrome, tmp, "?quietdemo")
         dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
-        dom_coverage = dump_dom(chrome, tmp, "?coveragedemo")
+        dom_coverage = dump_dom(chrome, tmp, "?coveragedemo", fixture={'patches': [{'route': '/posture', 'path': ['state'], 'value': 'attention'}, {'route': '/posture', 'path': ['needs_you'], 'value': 0}, {'route': '/posture', 'path': ['items'], 'value': []}, {'route': '/posture', 'path': ['groups'], 'value': []}, {'route': '/posture', 'path': ['summary'], 'value': 'No decisions pending. Monitoring coverage needs attention.'}]})
         dom_session_coverage = dump_dom(chrome, tmp, "?sessionvisibility")
         dom_phone = dump_dom(chrome, tmp, "?phonedemo")
         dom_memory_phone = dump_dom(chrome, tmp, "?phonedemo&memorydemo")
@@ -455,15 +474,15 @@ def main():
         dom_attnkeep = dump_dom(chrome, tmp, "?patterndemo&attnkeep")
         dom_patternbig = dump_dom(chrome, tmp, "?patternbigdemo&logsclosed")
         dom_bulk = dump_dom(chrome, tmp, "?bulkdemo&logsclosed")
-        dom_empty = dump_dom(chrome, tmp, "?emptyposture")
+        dom_empty = dump_dom(chrome, tmp, "?emptyposture", fixture={'patches': [{'route': '/posture', 'path': ['state'], 'value': 'all-clear'}, {'route': '/posture', 'path': ['needs_you'], 'value': 0}, {'route': '/posture', 'path': ['coverage_count'], 'value': 0}, {'route': '/posture', 'path': ['coverage_items'], 'value': []}, {'route': '/posture', 'path': ['items'], 'value': []}, {'route': '/posture', 'path': ['groups'], 'value': []}, {'route': '/posture', 'path': ['summary'], 'value': 'Agents monitored, no action needed'}]})
         dom_posturemore = dump_dom(chrome, tmp, "?posturemoredemo")
         dom_fold = dump_dom(chrome, tmp, "?folddemo")
         dom_procwidth = dump_dom(chrome, tmp, "?procwidthdemo", window_size=(1440, 900))
 
         # --- session-first tab (P3) ---
         rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
-        check("session rail renders durable sessions", dom.count('class="session-card') >= 2,
-              f"cards={dom.count('class=\"session-card')}")
+        check("session rail renders durable sessions", len(dom_query(dom).find_all(None, {'class': 'session-card'})) >= 2,
+              f"cards={len(dom_query(dom).find_all(None, {'class': 'session-card'}))}")
         check("rail titles are repo@branch, not harness · repo",
               '>api-service@main<' in rail and 'claude · ' not in rail)
         check("ended session marked", 'session-card ended' in dom)
@@ -475,8 +494,8 @@ def main():
         check("group head carries mark, display name and counts",
               '<span class="harness-label">Claude Code</span>' in rail
               and '1 active · 1 idle · 1 ended' in rail
-              and 'data-harness="codex" open=""' in rail
-              and 'class="session-card active selected"' in rail)
+              and dom_query(rail).has(None, {'data-harness': 'codex', 'open': ''})
+              and dom_query(rail).has(None, {'class': 'session-card active selected'}))
         logo_refs = set(re.findall(r'<use href="#(logo-[a-z-]+)"', rail))
         check("harness marks resolve to sprite symbols",
               logo_refs >= {"logo-claude", "logo-codex", "logo-ollama"}
@@ -486,16 +505,16 @@ def main():
               claude_group.index('data-id="sess-claude-1"') < claude_group.index('session-card idle nested')
               < claude_group.index('data-id="sess-claude-sub"'))
         check("ended tail is collapsed by default",
-              '<div class="session-ended">' in claude_group
+              dom_query(claude_group).has('div', {'class': 'session-ended'})
               and 'data-action="toggle-ended-sessions" data-harness="claude" aria-expanded="false">Ended (1)' in claude_group)
         infra_group = rail.split('data-harness="infra"', 1)[1]
         check("infra sits in the last group, collapsed, with RSS totals only",
-              '<details class="session-group infra" data-harness="infra">' in rail
+              dom_query(rail).has('details', {'class': 'session-group infra', 'data-harness': 'infra'})
               and "Ollama" in infra_group and "782 MB" in infra_group
               and "session-card" not in infra_group and "sess-ollama-4" not in rail)
-        check("live only hides a harness with nothing running", 'data-harness="cursor"' not in rail)
+        check("live only hides a harness with nothing running", not dom_query(rail).has(None, {'data-harness': 'cursor'}))
         check("live cards carry kill, ended cards do not",
-              'data-action="kill" data-pid="5821"' in rail
+              dom_query(rail).has(None, {'data-action': 'kill', 'data-pid': '5821'})
               and 'data-action="kill"' not in rail.split('class="session-ended-body"', 1)[1].split('</details>', 1)[0])
         check("count strip shows sessions, harnesses and coverage",
               re.search(r'id="session-count-strip"[^>]*>Sessions 3 · Harnesses 2 · seeing 2/3<', dom) is not None)
@@ -504,45 +523,45 @@ def main():
                          dom.split('id="session-harness-pills"', 1)[1].split('</div>', 1)[0]) == ["codex", "claude"])
         pill_rail = dom_pill.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
         check("a switched-off pill hides its group",
-              'data-harness="claude"' not in pill_rail and 'data-harness="codex"' in pill_rail
-              and 'class="harness-pill off" data-action="toggle-harness" data-harness="claude" aria-pressed="false"' in dom_pill)
+              not dom_query(pill_rail).has(None, {'data-harness': 'claude'}) and dom_query(pill_rail).has(None, {'data-harness': 'codex'})
+              and dom_query(dom_pill).has(None, {'class': 'harness-pill off', 'data-action': 'toggle-harness', 'data-harness': 'claude', 'aria-pressed': 'false'}))
         check("empty rail says all quiet", "All quiet. Nothing is running." in dom_quiet)
         check("filter that hides everything offers to clear it",
-              "No sessions match" in dom_nomatch and 'data-action="clear-harness-filter"' in dom_nomatch)
+              "No sessions match" in dom_nomatch and dom_query(dom_nomatch).has(None, {'data-action': 'clear-harness-filter'}))
         check("the page, posture banner included, fits a 375px phone on Sessions, Agents and Resources",
-              'data-hscroll="sessions:0,agents:0,resources:0"' in dom_phone,
+              dom_query(dom_phone).has(None, {'data-hscroll': 'sessions:0,agents:0,resources:0'}),
               (re.search(r'data-hscroll="[^"]*"', dom_phone) or [None])[0])
         check("Memory detail fits a 375px phone without horizontal page overflow",
-              'data-hscroll="sessions:0,agents:0,resources:0"' in dom_memory_phone,
+              dom_query(dom_memory_phone).has(None, {'data-hscroll': 'sessions:0,agents:0,resources:0'}),
               (re.search(r'data-hscroll="[^"]*"', dom_memory_phone) or [None])[0])
         detail_head = dom_rail.split('class="session-detail-head"', 1)[1].split('class="wf', 1)[0]
         check("detail head: mark, repo@branch, harness, confidence, copyable path",
               re.search(r'<h3[^>]*>api-service@main</h3>', detail_head) is not None and '#logo-claude' in detail_head
               and '<span class="sd-harness">Claude Code</span>' in detail_head
               and '>hook</span>' in detail_head
-              and 'data-action="copy-path" data-path="/Users/dev/workspace/api-service"' in detail_head)
+              and dom_query(detail_head).has(None, {'data-action': 'copy-path', 'data-path': '/Users/dev/workspace/api-service'}))
         detail_chrome = dom_rail.split('class="session-detail-chrome"', 1)[1].split('class="session-detail-body"', 1)[0]
         metadata = detail_chrome.split('class="session-metadata"', 1)[1].split('</details>', 1)[0]
         check("detail chrome keeps Copy report reachable and the copyable path in expandable Details",
               'data-action="copy-report" data-id="sess-claude-1"' in detail_chrome.split('class="sd-detail-controls"', 1)[0]
               and '>Copy report</button>' in detail_chrome
               and '<summary>Details</summary>' in metadata
-              and 'data-action="copy-path" data-path="/Users/dev/workspace/api-service"' in metadata)
+              and dom_query(metadata).has(None, {'data-action': 'copy-path', 'data-path': '/Users/dev/workspace/api-service'}))
         clip = (re.search(r'data-clipboard="([^"]*)"', dom_export) or [None, ""])[1]
         check("Export copies the markdown session report and toasts",
               clip.startswith("# claude · api-service@main") and "## Summary" in clip
               and 'class="toast success">Session report copied (markdown)<' in dom_export,
               f"clipboard={clip[:60]!r}")
         check("rail selection renders trace waterfall",
-              'class="wf-bar' in dom_rail and 'Bash' in dom_rail,
+              dom_query(dom_rail).has(None, {'class': 'wf-bar'}) and 'Bash' in dom_rail,
               "no waterfall bars in raildemo")
         memory_detail = dom_memory.split('id="session-detail"', 1)[1].split('id="session-board"', 1)[0]
         check("Memory opens first and earlier rows prepend once",
-              'data-action="session-view" data-view="memory" aria-pressed="true"' in dom_memory
+              dom_query(dom_memory).has(None, {'data-action': 'session-view', 'data-view': 'memory', 'aria-pressed': 'true'})
               and memory_detail.count('Earlier activity') == 1
               and memory_detail.count('Recent activity') == 1
               and memory_detail.index('Earlier activity') < memory_detail.index('Recent activity')
-              and 'data-action="memory-earlier"' not in memory_detail,
+              and not dom_query(memory_detail).has(None, {'data-action': 'memory-earlier'}),
               memory_detail[:700])
         current = dom_overview.split('id="session-detail"', 1)[1].split('id="session-board"', 1)[0]
         check("Home session opens its current controls, evidence, and observed coverage",
@@ -550,7 +569,7 @@ def main():
               and 'Reviewed' in current and 'Model exposure' in current
               and 'Other traffic may be uninspected.' in current
               and current.index('Current session status') < current.index('class="session-memory"'))
-        check("Home session opens current status in the workbench viewport", 'data-overview-visible="true"' in dom_overview)
+        check("Home session opens current status in the workbench viewport", dom_query(dom_overview).has(None, {'data-overview-visible': 'true'}))
         stale = dom_overview_stale.split('id="session-detail"', 1)[1].split('id="session-board"', 1)[0]
         check("failed overview refresh preserves facts with disabled controls and a visible stale warning",
               'Last known session status' in stale and 'Own session finding' in stale
@@ -559,17 +578,17 @@ def main():
         check("late session overview cannot overwrite the newly selected session",
               re.search(r'<h3[^>]*>data-pipeline@feat/etl</h3>', race) is not None and 'Own session finding' not in race
               and 'Read wants access to .env' not in race)
-        check("new findings preserve the focused guard control", 'data-overview-focus="true"' in dom_overview_focus)
-        check("session guard decision uses the existing handler and refreshes its result", 'data-overview-resolved="true"' in dom_overview_decision)
-        check("session findings history retains scope and returns to the same session", 'data-overview-scoped="true"' in dom_overview_return and 'data-overview-returned="true"' in dom_overview_return)
+        check("new findings preserve the focused guard control", dom_query(dom_overview_focus).has(None, {'data-overview-focus': 'true'}))
+        check("session guard decision uses the existing handler and refreshes its result", dom_query(dom_overview_decision).has(None, {'data-overview-resolved': 'true'}))
+        check("session findings history retains scope and returns to the same session", dom_query(dom_overview_return).has(None, {'data-overview-scoped': 'true'}) and dom_query(dom_overview_return).has(None, {'data-overview-returned': 'true'}))
         check("late response from previous selection cannot replace Memory",
-              'data-memory-race="B"' in dom_memory_race
+              dom_query(dom_memory_race).has(None, {'data-memory-race': 'B'})
               and re.search(r'<h3[^>]*>data-pipeline@feat/etl</h3>', dom_memory_race.split('id="session-detail"', 1)[1]) is not None
               and 'A-only memory' not in dom_memory_race.split('id="session-detail"', 1)[1],
               dom_memory_race.split('id="session-detail"', 1)[1][:700])
         check("Trace refetches after an event arrives while Memory is active",
-              'data-trace-was-cached="true"' in dom_trace_reactivation
-              and 'data-trace-reactivated="true"' in dom_trace_reactivation,
+              dom_query(dom_trace_reactivation).has(None, {'data-trace-was-cached': 'true'})
+              and dom_query(dom_trace_reactivation).has(None, {'data-trace-reactivated': 'true'}),
               (re.search(r'data-trace-(?:was-cached|reactivated)="[^"]*"', dom_trace_reactivation) or [None])[0])
         check("waterfall carries model usage row",
               "claude-sonnet-4-5" in dom_rail and "46.2k in" in dom_rail)
@@ -589,7 +608,7 @@ def main():
 
         # --- telemetry wiring ---
         check("version badge comes from /status", 'id="app-version">v9.9.9-domtest<' in dom)
-        check("posture banner is critical", 'id="posture-banner" data-state="critical"' in dom)
+        check("posture banner is critical", dom_query(dom).has(None, {'id': 'posture-banner', 'data-state': 'critical'}))
         check("posture headline rendered", 'id="posture-state">Critical<' in dom)
         check("KPI agents count", 'id="count-agents">3<' in dom)
         check("KPI flags are unacted last 24h", 'id="count-flags">2<' in dom)
@@ -645,7 +664,7 @@ def main():
         check("spend: a slow refresh keeps the list row nodes",
               len(keep) > 1 and keep[1] == "list same=true refetched=true", f"probe={keep}")
         check("spend: the Overview tab with the day bars fits a 375px phone",
-              'data-hscroll="sessions:0,agents:0,resources:0,overview:0"' in dom_spendphone,
+              dom_query(dom_spendphone).has(None, {'data-hscroll': 'sessions:0,agents:0,resources:0,overview:0'}),
               (re.search(r'data-hscroll="[^"]*"', dom_spendphone) or [None])[0])
         cache_probe = html.unescape(pre(dom_spendcache, "spend-cache-probe"))
         check("spend: a report from the usage cache shows at once with the updating notice and its age",
@@ -655,7 +674,7 @@ def main():
         check("spend: the card re-reads until the fresh report lands, then the notice goes",
               len(cache_q) == 6 and 'id="count-spend">$37.67<' in dom_spendcache
               and 'id="hint-spend">40 calls · 2 unpriced<' in dom_spendcache
-              and 'id="spend-cache" class="spend-cache" role="status" hidden=""' in dom_spendcache,
+              and dom_query(dom_spendcache).has(None, {'id': 'spend-cache', 'class': 'spend-cache', 'role': 'status', 'hidden': ''}),
               f"queries={cache_q}")
         slow_probe = html.unescape(pre(dom_spendslow, "spend-slow-probe"))
         check("spend: a report computed cold never holds the first render of the other panels",
@@ -679,7 +698,7 @@ def main():
               'PID 5822' in agents_view.split('<details class="session-helpers agent-tree" data-pid="5821"', 1)[1].split('</details>', 1)[0])
         pill_agents = dom_pill.split('id="agents-container"', 1)[1].split('id="fleet-col"', 1)[0]
         check("a switched-off pill hides the harness in Agents too (shared state)",
-              'data-harness="claude"' not in pill_agents and 'data-harness="codex"' in pill_agents
+              not dom_query(pill_agents).has(None, {'data-harness': 'claude'}) and dom_query(pill_agents).has(None, {'data-harness': 'codex'})
               and 'class="harness-pill off" data-action="toggle-harness" data-harness="claude"'
               in dom_pill.split('id="agent-harness-pills"', 1)[1].split('</div>', 1)[0])
         check("claude instance pid", "PID 5821" in dom)
@@ -696,9 +715,9 @@ def main():
 
         # --- reversible enforcement (block is not a ratchet) ---
         check("blocking rule shows demote button",
-              'data-action="demote" data-rule="aws-key"' in dom)
+              dom_query(dom).has(None, {'data-action': 'demote', 'data-rule': 'aws-key'}))
         check("demote flips the rule back to promote",
-              'data-action="promote" data-rule="aws-key"' in dom_demote)
+              dom_query(dom_demote).has(None, {'data-action': 'promote', 'data-rule': 'aws-key'}))
         check("allowlist entries render with remove",
               "Allowed endpoints" in dom and "artifacts.example.com" in dom)
         check("remove drops the allowlist row",
@@ -713,7 +732,7 @@ def main():
         uninsp_unknown = dom_uninsp.split('class="uninspected-expl"', 1)[-1].split("Vendor APIs", 1)[0]
         check("drill-down rolls vendor APIs up per agent and vendor",
               "Vendor APIs" in dom_uninsp and "openclaw → Anthropic" in dom_uninsp and "94×" in dom_uninsp
-              and 'data-action="bulk-allow" data-agent="openclaw" data-hosts="2607:6bc0::10"' in dom_uninsp)
+              and dom_query(dom_uninsp).has(None, {'data-action': 'bulk-allow', 'data-agent': 'openclaw', 'data-hosts': '2607:6bc0::10'}))
         check("unknown section does not list vendor endpoints",
               "2607:6bc0::10" not in uninsp_unknown and "statsig.example.com" in uninsp_unknown)
         check("unknown section keeps cloud hosts, named",
@@ -721,13 +740,13 @@ def main():
         check("egress rows show first-seen and session",
               "first seen" in dom_uninsp and "session " in dom_uninsp)
         check("egress bulk allow groups same-suffix hosts",
-              'data-action="bulk-allow" data-agent="claude"' in dom_uninsp and "Allow all 2" in dom_uninsp)
+              dom_query(dom_uninsp).has(None, {'data-action': 'bulk-allow', 'data-agent': 'claude'}) and "Allow all 2" in dom_uninsp)
         check("egress explains what the list is and what to do",
               "What this is:" in dom_uninsp and "What to do:" in dom_uninsp)
         check("egress rows carry a plain Allow action",
-              'data-action="allow-host"' in dom_uninsp and ">Allow</span>" in dom_uninsp)
+              dom_query(dom_uninsp).has(None, {'data-action': 'allow-host'}) and ">Allow</span>" in dom_uninsp)
         check("egress rows offer on-demand advisor assessment",
-              'data-action="assess-host" data-agent="claude"' in dom_uninsp
+              dom_query(dom_uninsp).has(None, {'data-action': 'assess-host', 'data-agent': 'claude'})
               and "Ask the advisor" in dom_uninsp)
         check("egress rows with a verdict show the advisor chip",
               'advisor-chip adv-benign' in dom_uninsp)
@@ -736,11 +755,11 @@ def main():
         # the drawer is ordinary DOM and toasts are a top-layer popover, so a
         # toast can no longer fall behind the overlay.
         check("drawer is open for the drill-down",
-              'id="drawer" class="drawer"' in dom_toast and 'id="drawer" class="drawer" hidden' not in dom_toast)
+              dom_query(dom_toast).has(None, {'id': 'drawer', 'class': 'drawer'}) and 'id="drawer" class="drawer" hidden' not in dom_toast)
         check("toast rendered while the drawer is open",
-              'class="toast ' in dom_toast)
+              dom_query(dom_toast).has(None, {'class': 'toast '}))
         check("vendor-key promote banner",
-              'data-action="promote-vendor-keys"' in dom and "1 vendor-key rule" in dom)
+              dom_query(dom).has(None, {'data-action': 'promote-vendor-keys'}) and "1 vendor-key rule" in dom)
         check("incident row reads its risk and workflow (ack)",
               '<span class="c-verdict-text">CRITICAL · acknowledged</span>' in dom)
         payload_row = log_rows(dom_payload).get("incident:inc-20260907-6033-a1b2", "")
@@ -752,7 +771,7 @@ def main():
         check("payload finding names the local forwarding gate and registered match",
               "Blocked before forwarding" in dom_payload and "Registered secret fingerprint" in dom_payload)
         check("secret sources rendered (config+user)",
-              dom.count('class="source-item"') == 2 and "CONFIG" in dom and "USER" in dom)
+              len(dom_query(dom).find_all(None, {'class': 'source-item'})) == 2 and "CONFIG" in dom and "USER" in dom)
 
         # --- evidence chain ---
         check("chain rendered with 3 nodes", dom.count("chain-node") >= 3)
@@ -783,8 +802,8 @@ def main():
         check("advisor chip rationale in tooltip", "first time this session" in dom)
         check("agent last-active rendered", "active " in dom and " ago" in dom)
         check("stale process marked", " stale" in dom)
-        check("flag card kill action", 'data-action="kill" data-pid="6033"' in dom)
-        check("collector-down FDA deep link", 'data-action="open-fda"' in dom and "Full Disk Access" in dom)
+        check("flag card kill action", dom_query(dom).has(None, {'data-action': 'kill', 'data-pid': '6033'}))
+        check("collector-down FDA deep link", dom_query(dom).has(None, {'data-action': 'open-fda'}) and "Full Disk Access" in dom)
         check("advisor posture line separates opinion from evidence and risk off Home",
               "Advisor opinion: 1 of 2 triaged critical flags may be benign. Evidence and risk are unchanged." in dom_tab)
         check("incident narrative rendered in its row's body", "Rotate the key first" in log_rows(dom).get("incident:inc-20260907-6033-a1b2", ""),
@@ -794,30 +813,30 @@ def main():
         check("egress suggestion rendered", "fw-suggestion" in dom and "registry.npmjs.org" in dom)
         check("suggestion advisor chip", 'advisor-chip adv-benign' in dom and "advisor: benign" in dom)
         check("suggestion allow button is delegated",
-              'data-action="allow-host" data-agent="cursor" data-host="registry.npmjs.org"' in dom)
+              dom_query(dom).has(None, {'data-action': 'allow-host', 'data-agent': 'cursor', 'data-host': 'registry.npmjs.org'}))
 
         # --- activity rollup chart ---
-        rects_ev = dom.count('class="act-ev"')
+        rects_ev = len(dom_query(dom).find_all(None, {'class': 'act-ev'}))
         check("activity chart draws event bars", rects_ev > 10, f"rects={rects_ev}")
-        check("activity chart marks the flag hour", 'class="act-fl"' in dom)
-        check("activity chart zero-fills empty hours", 'class="act-zero"' in dom)
+        check("activity chart marks the flag hour", dom_query(dom).has(None, {'class': 'act-fl'}))
+        check("activity chart zero-fills empty hours", dom_query(dom).has(None, {'class': 'act-zero'}))
 
         # --- dispositions (mute) ---
         check("mute action on advisor-benign flag",
-              'data-action="mute-flag" data-rule="sensitive-read-then-connect" data-host="logs.example.com"' in dom)
+              dom_query(dom).has(None, {'data-action': 'mute-flag', 'data-rule': 'sensitive-read-then-connect', 'data-host': 'logs.example.com'}))
         check("mutes list rendered with unmute",
-              'data-action="unmute" data-rule="proxy-prompt-injection" data-host="blog.example.com"' in dom)
+              dom_query(dom).has(None, {'data-action': 'unmute', 'data-rule': 'proxy-prompt-injection', 'data-host': 'blog.example.com'}))
         check("rule-level mute renders as all hosts", "keychain-security-cli · all hosts" in dom)
         check("keychain flag carries class-dismiss action",
-              'data-action="mute-rule" data-rule="keychain-access"' in dom)
+              dom_query(dom).has(None, {'data-action': 'mute-rule', 'data-rule': 'keychain-access'}))
 
         # --- uninspected-egress drill-down ---
         check("uninspected warning is a clickable drill-down",
-              'data-action="open-uninspected"' in dom)
+              dom_query(dom).has(None, {'data-action': 'open-uninspected'}))
         # --- screen hygiene: the banner summarises, the queue lists ---
         check("Home: the posture banner lists no items; the attention queue lists them",
               re.search(r'<ul class="posture-items" id="posture-items" hidden(="")?></ul>', dom) is not None
-              and 'class="posture-item"' not in dom and 'data-action="guard-resolve" data-id="guard-1"' in dom)
+              and not dom_query(dom).has(None, {'class': 'posture-item'}) and dom_query(dom).has(None, {'data-action': 'guard-resolve', 'data-id': 'guard-1'}))
         posture_egress = (re.search(r'<pre id="posture-egress"[^>]*>([^<]*)<', dom_posturemore) or [None, ""])[1]
         check("Egress: the posture banner lists 3 content rows (2 items + the advisor line) and \"and 4 more\"",
               posture_egress == "items=2 more=and 4 more hidden=0", posture_egress)
@@ -837,12 +856,12 @@ def main():
         endpoints = dom_fold.split('id="endpoints-container"', 1)[-1].split('id="firewall-panel"', 1)[0]
         check("Egress: the endpoints list is the first panel, inline, with a vendor rollup and row actions",
               dom_fold.index('id="endpoints-panel"') < dom_fold.index('id="firewall-panel"')
-              and 'class="egress-vendor"' in endpoints and 'data-action="bulk-allow" data-agent="openclaw"' in endpoints
-              and 'data-action="allow-host"' in endpoints and 'data-action="endpoint-detail"' in endpoints
+              and dom_query(endpoints).has(None, {'class': 'egress-vendor'}) and dom_query(endpoints).has(None, {'data-action': 'bulk-allow', 'data-agent': 'openclaw'})
+              and dom_query(endpoints).has(None, {'data-action': 'allow-host'}) and dom_query(endpoints).has(None, {'data-action': 'endpoint-detail'})
               and 'id="endpoints-title">Connection coverage · last 24 h<' in dom_fold)
         firewall = dom_fold.split('id="firewall-container"', 1)[-1].split('id="sources-container"', 1)[0]
         check("Egress: the firewall panel has no view-endpoints link",
-              'data-action="open-uninspected"' not in firewall and "fw-uninspected" not in dom_fold
+              not dom_query(firewall).has(None, {'data-action': 'open-uninspected'}) and "fw-uninspected" not in dom_fold
               and "hit-a" in firewall)
         proc_width = (re.search(r'<pre id="proc-width"[^>]*>([^<]*)<', dom_procwidth) or [None, ""])[1]
         pw = re.match(r"panel=(\d+) content=(\d+) viewport=(\d+)", proc_width)
@@ -852,7 +871,7 @@ def main():
         check("drill-down lists endpoint host", "registry.npmjs.org" in dom_uninsp
               and "statsig.example.com" in dom_uninsp)
         check("drill-down allow action delegated",
-              'data-action="allow-host" data-agent="cursor" data-host="registry.npmjs.org"' in dom_uninsp)
+              dom_query(dom_uninsp).has(None, {'data-action': 'allow-host', 'data-agent': 'cursor', 'data-host': 'registry.npmjs.org'}))
         check("drill-down explains the blind spot", "bypassing the inspection proxy" in dom_uninsp)
         keepopen = (re.search(r'<pre id="keepopen"[^>]*>([^<]*)<', dom_keepopen) or [None, ""])[1]
         check("drill-down vendor disclosure stays open across an Allow refill",
@@ -862,29 +881,29 @@ def main():
 
         # --- evidence file: an incident's accessed file opens the file drawer ---
         check("incident Accessed Files path is a file link",
-              'id="file-link"' in dom_file and "rollout-2026-09-23T12-53-26-demo.jsonl" in dom_file)
+              dom_query(dom_file).has(None, {'id': 'file-link'}) and "rollout-2026-09-23T12-53-26-demo.jsonl" in dom_file)
         check("file drawer shows the masked excerpt, never an unmasked value",
               "Around the secret" in dom_file and "[REDACTED:fp1]" in dom_file)
         check("file drawer offers Reveal in Finder and Open in editor",
-              'data-action="file-reveal"' in dom_file and 'data-action="file-open"' in dom_file)
+              dom_query(dom_file).has(None, {'data-action': 'file-reveal'}) and dom_query(dom_file).has(None, {'data-action': 'file-open'}))
         check("file drawer lists findings, agent access and the session",
-              "Agent access" in dom_file and "api-service@main" in dom_file and 'data-action="open-incident"' in dom_file)
+              "Agent access" in dom_file and "api-service@main" in dom_file and dom_query(dom_file).has(None, {'data-action': 'open-incident'}))
         check("file drawer goes back to the incident report",
-              'id="btn-drawer-back"' in dom_file and "Incident report" in dom_file)
+              dom_query(dom_file).has(None, {'id': 'btn-drawer-back'}) and "Incident report" in dom_file)
         check("file drawer shows the advisor plan and the playbook",
               "What to do" in dom_file and "Codex printed an API key from an env dump." in dom_file
-              and "Playbook: Secret in an agent transcript" in dom_file and 'data-action-id="dismiss"' in dom_file)
-        check("finding cards offer What to do", 'data-action="open-plan" data-subject="flag:flag-2"' in dom_explain)
+              and "Playbook: Secret in an agent transcript" in dom_file and dom_query(dom_file).has(None, {'data-action-id': 'dismiss'}))
+        check("finding cards offer What to do", dom_query(dom_explain).has(None, {'data-action': 'open-plan', 'data-subject': 'flag:flag-2'}))
         check("finding cards offer Mark as routine / not ok",
-              'data-action="mark-label" data-subject="flag:flag-2" data-label="ok"' in dom_explain)
+              dom_query(dom_explain).has(None, {'data-action': 'mark-label', 'data-subject': 'flag:flag-2', 'data-label': 'ok'}))
         check("file drawer shows the operator's history and suggestion",
               "Your history" in dom_file and "You marked similar cases 3 as routine." in dom_file
               and "You marked this 3 times as routine for codex." in dom_file and "my own test key" in dom_file)
         check("menubar deep link #file= opens the file drawer",
-              'data-action="file-reveal"' in dom_filedeep and "Around the secret" in dom_filedeep)
+              dom_query(dom_filedeep).has(None, {'data-action': 'file-reveal'}) and "Around the secret" in dom_filedeep)
         # --- endpoint evidence: an unattributed IPv6 must be identifiable ---
         check("endpoint Evidence opens a detail drawer",
-              'id="drawer" class="drawer"' in dom_endpoint and "2600:1901:0:9e23::" in dom_endpoint)
+              dom_query(dom_endpoint).has(None, {'id': 'drawer', 'class': 'drawer'}) and "2600:1901:0:9e23::" in dom_endpoint)
         check("endpoint detail names the owner, not a bare address",
               "Google Cloud address" in dom_endpoint)
         check("endpoint detail shows which agent and session reached it",
@@ -893,17 +912,17 @@ def main():
               "Recent connections" in dom_endpoint and ":443" in dom_endpoint)
 
         # --- notification preferences ---
-        check("notify bell present", 'id="btn-notify"' in dom)
+        check("notify bell present", dom_query(dom).has(None, {'id': 'btn-notify'}))
         check("notify popover renders rules", "Keychain file access" in dom_notify
-              and 'data-notify-rule="keychain-access"' in dom_notify)
+              and dom_query(dom_notify).has(None, {'data-notify-rule': 'keychain-access'}))
         check("notify override pre-selected (never)",
-              'data-notify-rule="keychain-access"' in dom_notify and
+              dom_query(dom_notify).has(None, {'data-notify-rule': 'keychain-access'}) and
               'value="never" selected' in dom_notify.split('data-notify-rule="keychain-access"')[1][:300])
         check("notify popover lists workspace scopes",
               "Per-workspace scopes" in dom_notify
-              and 'data-action="notify-scope-remove" data-rule="proxy-secret-leak" data-workspace="/Users/dev/work/prod"' in dom_notify)
+              and dom_query(dom_notify).has(None, {'data-action': 'notify-scope-remove', 'data-rule': 'proxy-secret-leak', 'data-workspace': '/Users/dev/work/prod'}))
         check("notify popover offers adding a workspace scope",
-              'id="notify-scope-path"' in dom_notify and 'data-action="notify-scope-add"' in dom_notify)
+              dom_query(dom_notify).has(None, {'id': 'notify-scope-path'}) and dom_query(dom_notify).has(None, {'data-action': 'notify-scope-add'}))
         nfp = pre(dom_notifyfocus, "notify-focus-probe")
         check("notify add-scope input survives a reconcile that changes notifyCfg: same node, value and focus",
               nfp == "same=true value=in-progress-edit focused=true probe=1", f"probe={nfp!r}")
@@ -926,7 +945,7 @@ def main():
               and 'id="count-agents">3<' in dom_spendshapefirst)
         check("valid spend recovery clears the delayed refresh status",
               "Refresh delayed" in pre(dom_spendshaperecover, "spend-shape-before-recovery")
-              and 'id="spend-cache" class="spend-cache" role="status" hidden=""' in dom_spendshaperecover
+              and dom_query(dom_spendshaperecover).has(None, {'id': 'spend-cache', 'class': 'spend-cache', 'role': 'status', 'hidden': ''})
               and 'id="count-spend">$36.67<' in dom_spendshaperecover)
         for report in ("resources", "audit", "notification rules", "recurring egress"):
             check(f"malformed {report} containers retain prior results with a stale warning",
@@ -1008,10 +1027,10 @@ def main():
         check("auth-expired shows the ended state, not 'daemon down'",
               re.search(r'<section[^>]*id="session-ended"[^>]*>', dom_authfail) is not None
               and "Reconnect this console" in dom_authfail
-              and 'href="secure-agent://console/reconnect"' in dom_authfail
+              and dom_query(dom_authfail).has(None, {'href': 'secure-agent://console/reconnect'})
               and "Can&#x27;t reach the Secure Agent daemon" not in dom_authfail.split('id="session-ended"', 1)[1].split('</section>', 1)[0])
         check("a 403 hides the posture, counts and panels and closes the stream",
-              'class="is-ended"' in dom_authfail
+              dom_query(dom_authfail).has(None, {'class': 'is-ended'})
               and re.search(r'<section class="posture" id="posture-banner"[^>]*\bhidden\b', dom_authfail) is not None
               and re.search(r'<main[^>]*\bhidden\b', dom_authfail) is not None
               and '<pre id="sse-state" hidden="">closed</pre>' in dom_authfail,
@@ -1019,20 +1038,20 @@ def main():
         nt_fetches = (re.search(r'<pre id="fetch-count"[^>]*>(\d+)</pre>', dom_notoken) or [None, "missing"])[1]
         for label, expired in (("guard", dom_authmixed), ("spend", dom_spendauth)):
             check(f"{label} endpoint 403 ends the console even when snapshot succeeds",
-                  'class="is-ended"' in expired
+                  dom_query(expired).has(None, {'class': 'is-ended'})
                   and re.search(r'<main[^>]*\bhidden\b', expired) is not None
                   and '<pre id="sse-state" hidden="">closed</pre>' in expired)
         check("no token at load: only the ended state, no posture, zero fetches, no stream",
               re.search(r'<section[^>]*id="session-ended"[^>]*>', dom_notoken) is not None
               and re.search(r'<section class="posture" id="posture-banner"[^>]*\bhidden\b', dom_notoken) is not None
               and re.search(r'<section class="statstrip"[^>]*\bhidden\b', dom_notoken) is not None
-              and nt_fetches == "0" and 'id="sse-state"' not in dom_notoken,
+              and nt_fetches == "0" and not dom_query(dom_notoken).has(None, {'id': 'sse-state'}),
               f"fetches={nt_fetches}")
         check("a token at load: the console renders, the ended state stays hidden",
               re.search(r'<section[^>]*id="session-ended"[^>]*\bhidden\b', dom) is not None and 'id="count-agents">3<' in dom)
         check("unreachable shows the retry banner",
               "Waiting for Secure Agent. No live data received" in dom_netfail
-              and 'id="btn-retry-connection"' in dom_netfail)
+              and dom_query(dom_netfail).has(None, {'id': 'btn-retry-connection'}))
         check("unreachable sets Disconnected chip",
               'id="status-text">Disconnected<' in dom_netfail)
         check("token survives reload via sessionStorage (no #ct fragment)",
@@ -1043,55 +1062,55 @@ def main():
         check("fleet card renders the local node object",
               "ci-runner-02" in dom and "darwin/arm64" in dom)
         check("fleet panel visible when a collector is configured",
-              'id="fleet-panel">' in dom)
+              dom_query(dom).has(None, {'id': 'fleet-panel'}))
         check("fleet panel hides when no collector is configured",
-              'id="fleet-panel" style="display: none;"' in dom_nofleet
+              dom_query(dom_nofleet).has(None, {'id': 'fleet-panel', 'style': 'display: none;'})
               and "ci-runner-02" not in dom_nofleet)
         check("panels after fleet still render (crash isolation)",
               len([k for k in log_rows(dom) if k.startswith("flag:")]) == 3
-              and dom.count('class="timeline-item') > 0
-              and dom.count('class="audit-item') == 2)
+              and len(dom_query(dom).find_all(None, {'class': 'timeline-item'})) > 0
+              and len(dom_query(dom).find_all(None, {'class': 'audit-item'})) == 2)
 
         # --- tabs (console IA) ---
         tab_ids = re.findall(r'class="tab-btn[^"]*" data-tab="(\w+)"', dom)
         tab_labels = re.findall(r'data-tab="\w+" role="tab"[^>]*>\s*<svg[^>]*>.*?</svg><span>([^<]+)</span>', dom, re.S)
         check("tab bar renders exactly six tabs, Home first, System after Egress, Agent last",
-              dom.count('class="tab-btn') == 6 and tab_ids == ["home", "sessions", "egress", "system", "policy", "agent"]
+              len(dom_query(dom).find_all(None, {'class': 'tab-btn'})) == 6 and tab_ids == ["home", "sessions", "egress", "system", "policy", "agent"]
               and tab_labels == ["Home", "Sessions", "Egress", "System", "Policy", "Agent"], f"ids={tab_ids} labels={tab_labels}")
         check("Sessions has no Cleanup sub-view; its panels live in the System tab",
-              'data-subtab="worktrees"' not in dom and 'id="sub-worktrees"' not in dom
+              not dom_query(dom).has(None, {'data-subtab': 'worktrees'}) and not dom_query(dom).has(None, {'id': 'sub-worktrees'})
               and dom.index('id="tab-system"') < dom.index('id="worktrees-container"') < dom.index('id="clutter-container"') < dom.index('id="tab-policy"')
               and dom.index('id="tab-egress"') < dom.index('id="tab-system"'))
         check("the attention panel lives in Home, first",
               dom.index('id="tab-home"') < dom.index('id="attention-center"') < dom.index('id="spend-card"')
               < dom.index('id="home-findings"') < dom.index('id="home-trends"') < dom.index('id="tab-sessions"'))
         check("home tab active by default",
-              'class="tab-btn active" data-tab="home"' in dom)
+              dom_query(dom).has(None, {'class': 'tab-btn active', 'data-tab': 'home'}))
         check("non-active panels hidden",
               'id="tab-sessions" role="tabpanel" hidden' in dom
               and 'id="tab-egress" role="tabpanel" hidden' in dom
               and 'id="tab-system" role="tabpanel" hidden' in dom
               and 'id="tab-policy" role="tabpanel" hidden' in dom)
         check("home panel visible",
-              'id="tab-home" role="tabpanel">' in dom)
+              dom_query(dom).has(None, {'id': 'tab-home', 'role': 'tabpanel'}))
         check("home groups are closed by default",
-              '<details class="home-group" id="home-spend" data-group="spend">' in dom
-              and '<details class="home-group" id="home-findings" data-group="findings">' in dom
-              and '<details class="home-group" id="home-trends" data-group="trends">' in dom)
+              dom_query(dom).has('details', {'class': 'home-group', 'id': 'home-spend', 'data-group': 'spend'})
+              and dom_query(dom).has('details', {'class': 'home-group', 'id': 'home-findings', 'data-group': 'findings'})
+              and dom_query(dom).has('details', {'class': 'home-group', 'id': 'home-trends', 'data-group': 'trends'}))
         check("hash #agents opens Sessions on the Processes sub-view",
-              'class="tab-btn active" data-tab="sessions"' in dom_hashagents
-              and 'class="subtab-btn active" data-subtab="processes"' in dom_hashagents
-              and 'id="sub-processes" role="tabpanel">' in dom_hashagents
+              dom_query(dom_hashagents).has(None, {'class': 'tab-btn active', 'data-tab': 'sessions'})
+              and dom_query(dom_hashagents).has(None, {'class': 'subtab-btn active', 'data-subtab': 'processes'})
+              and dom_query(dom_hashagents).has(None, {'id': 'sub-processes', 'role': 'tabpanel'})
               and 'id="sub-board" role="tabpanel" hidden' in dom_hashagents
-              and 'id="tab-sessions" role="tabpanel">' in dom_hashagents)
+              and dom_query(dom_hashagents).has(None, {'id': 'tab-sessions', 'role': 'tabpanel'}))
         for old_hash, dom_old in (("#sessions/worktrees", dom_hashsessionswt), ("#worktrees", dom_hashworktrees)):
             check(f"hash {old_hash} opens the System tab",
-                  'class="tab-btn active" data-tab="system"' in dom_old
-                  and 'id="tab-system" role="tabpanel">' in dom_old
+                  dom_query(dom_old).has(None, {'class': 'tab-btn active', 'data-tab': 'system'})
+                  and dom_query(dom_old).has(None, {'id': 'tab-system', 'role': 'tabpanel'})
                   and 'id="tab-sessions" role="tabpanel" hidden' in dom_old)
         check("hash #findings opens Home",
-              'class="tab-btn active" data-tab="home"' in dom_hashfindings
-              and 'id="tab-home" role="tabpanel">' in dom_hashfindings)
+              dom_query(dom_hashfindings).has(None, {'class': 'tab-btn active', 'data-tab': 'home'})
+              and dom_query(dom_hashfindings).has(None, {'id': 'tab-home', 'role': 'tabpanel'}))
         trends = (re.search(r'<pre id="trends-probe"[^>]*>(.*?)</pre>', dom_trends, re.S) or [None, ""])[1]
         tm = re.match(r"closed\(open=false\):activity=(\d+),chart-flags=(\d+),chart-memory=(\d+) \| opened:activity=(\d+),chart-flags=(\d+),chart-memory=(\d+)$", trends)
         check("Trends closed: its chart panels render 0 times through a burst, then render when opened",
@@ -1137,7 +1156,7 @@ def main():
         def policy_rows(kind):
             return policy_counter.counts.get(kind, -1)
         check("Policy lists guard decisions, file exceptions and muted classes from their endpoints",
-              'class="tab-btn active" data-tab="policy"' in dom_policylists
+              dom_query(dom_policylists).has(None, {'class': 'tab-btn active', 'data-tab': 'policy'})
               and policy_rows("guard") == 2 and policy_rows("path") == 1 and policy_rows("mute") == 2
               and 'id="badge-guard-rules">2<' in dom_policylists and 'id="badge-path-allows">1<' in dom_policylists
               and '.env.example</code>' in dom_policylists and "keychain-security-cli" in dom_policylists.split('data-policy="mute"', 1)[-1],
@@ -1148,7 +1167,7 @@ def main():
         check("Policy lists expected secret reads with a Forget button",
               policy_rows("expected") == 1 and 'id="badge-expected">1<' in dom_policylists
               and "<b>gh</b> reads <code>/Users/dev/.config/gh/hosts.yml</code>, then reaches <b>GitHub</b>" in dom_policylists
-              and 'data-action="forget-expected"' in dom_policylists,
+              and dom_query(dom_policylists).has(None, {'data-action': 'forget-expected'}),
               f"expected={policy_rows('expected')}")
         forget_reqs = pre(dom_forget, "mock-requests")
         scoped_reqs = pre(dom_scoped, "mock-requests")
@@ -1157,20 +1176,20 @@ def main():
               and '"scope":{"kind":"exact","expiry":"24h"}' in scoped_reqs)
         check("scoped permission shows the exact endpoint and executable with revocation",
               'api.example.com:443' in dom_scoped and '/usr/bin/cat' in dom_scoped
-              and 'data-action="revoke-scope" data-id="scope-browser"' in dom_scoped)
+              and dom_query(dom_scoped).has(None, {'data-action': 'revoke-scope', 'data-id': 'scope-browser'}))
         check("scoped permission revoke uses its ID and updates the visible state",
               'DELETE /decision-scopes?id=scope-browser' in pre(dom_scoped_revoke,"mock-requests")
               and 'Revoked' in dom_scoped_revoke
-              and 'data-action="revoke-scope" data-id="scope-browser"' not in dom_scoped_revoke)
+              and not dom_query(dom_scoped_revoke).has(None, {'data-action': 'revoke-scope', 'data-id': 'scope-browser'}))
         check("Forget deletes the expected pattern and the list reloads without it",
               "DELETE /expected?key=claude%7Cgh%7C%2FUsers%2Fdev%2F.config%2Fgh%2Fhosts.yml%7CGitHub" in forget_reqs
               and 'id="badge-expected">0<' in dom_forget and "No expected secret reads." in dom_forget,
               f"requests={forget_reqs!r}")
         check("notification rules live in the Policy tab; the bell links there",
               dom.index('id="tab-policy"') < dom.index('id="notify-rules-list"')
-              and 'id="btn-notify" data-action="goto-tab" data-tab="policy"' in dom
+              and dom_query(dom).has(None, {'id': 'btn-notify', 'data-action': 'goto-tab', 'data-tab': 'policy'})
               and dom.index('id="tab-policy"') < dom.index('id="audit-panel"'))
-        check("resource mission control is present", 'id="resource-mission-control"' in dom)
+        check("resource mission control is present", dom_query(dom).has(None, {'id': 'resource-mission-control'}))
         # The live Resources tab ends where the History tab begins: the flight
         # recorder moved out, so it must NOT be inside the resource view.
         resource_view = dom.split('id="resource-mission-control"', 1)[1].split('id="history-panel"', 1)[0]
@@ -1179,20 +1198,20 @@ def main():
               "Machine headroom" in resource_view and "25 / 100" in resource_view
               and "4.0 GB available" in resource_view)
         check("headroom hint explains the score is the tightest limit",
-              'class="headroom-hint"' in resource_view
-              and 'aria-label="What machine headroom means"' in resource_view
+              dom_query(resource_view).has(None, {'class': 'headroom-hint'})
+              and dom_query(resource_view).has(None, {'aria-label': 'What machine headroom means'})
               and "tightest limit, not free RAM" in resource_view
               and "Under 15 is critical" in resource_view)
         phone_headroom = re.search(r'data-headroom="(\d+):true"', dom_headroomphone)
         check("headroom hint fits its panel at desktop and phone widths",
-              'data-inside="true"' in dom_headroomwide and 'data-width="380"' in dom_headroomwide
+              dom_query(dom_headroomwide).has(None, {'data-inside': 'true'}) and dom_query(dom_headroomwide).has(None, {'data-width': '380'})
               and phone_headroom is not None and 250 <= int(phone_headroom.group(1)) <= 320
-              and 'data-hscroll="sessions:0,agents:0,resources:0"' in dom_headroomphone)
+              and dom_query(dom_headroomphone).has(None, {'data-hscroll': 'sessions:0,agents:0,resources:0'}))
         check("live resources exclude the flight recorder",
               "Pressure flight recorder" not in resource_view)
         check("agent and non-agent memory are separated",
               "Agents 34.4%" in resource_view and "Other 40.6%" in resource_view
-              and 'class="resource-host-segment agent"' in resource_view)
+              and dom_query(resource_view).has(None, {'class': 'resource-host-segment agent'}))
         check("whole-machine CPU swap and thermal context are visible",
               "75.0% total" in resource_view and "58.4% other" in resource_view
               and "2.0 GB / 8.0 GB" in resource_view and "Nominal" in resource_view)
@@ -1216,23 +1235,23 @@ def main():
               "Host at capture" in history_view and "1.0 GB available" in history_view
               and "Critical pressure" in history_view and "Serious thermal" in history_view)
         check("resource pressure chart includes activity markers",
-              'class="resource-activity-marker' in history_view
+              dom_query(history_view).has(None, {'class': 'resource-activity-marker'})
               and "Bash tool ran" in history_view
               and "connected to api.openai.com:443" in history_view)
         check("historical resource evidence stays scoped to its captured lifetime",
               "Scoped to this captured process lifetime" in history_view
-              and 'data-action="filter-pids" data-pids="4412,4419,4420"' not in history_view)
+              and not dom_query(history_view).has(None, {'data-action': 'filter-pids', 'data-pids': '4412,4419,4420'}))
         check("resource trend SVG is rendered",
-              'class="resource-spark"' in resource_view and 'points="' in resource_view)
+              dom_query(resource_view).has(None, {'class': 'resource-spark'}) and dom_query(resource_view).has(None, {'points': None}))
         check("resource action opens the family in place",
-              'data-action="view-family" data-key="5821:1789480800000000000"' in resource_view
-              and 'data-action="filter-pids"' not in resource_view)
+              dom_query(resource_view).has(None, {'data-action': 'view-family', 'data-key': '5821:1789480800000000000'})
+              and not dom_query(resource_view).has(None, {'data-action': 'filter-pids'}))
         check("resource policy mode and grace are visible",
               "prompt</b> machine policy" in resource_view and "30s grace" in resource_view)
         check("resource policy source is visible on sessions",
               "workspace policy · /Users/dev/workspace" in resource_view)
         check("resource policy editor opens with the active document",
-              'id="drawer" class="drawer resource-policy"' in dom_policy
+              dom_query(dom_policy).has(None, {'id': 'drawer', 'class': 'drawer resource-policy'})
               and "Resource policy editor" in dom_policy and "Machine default" in dom_policy)
         check("resource intervention ladder is visible",
               "notify → lower priority → pause → terminate" in resource_view)
@@ -1240,13 +1259,13 @@ def main():
               'data-step-action="lower_priority" checked' in dom_policy
               and 'data-step-action="pause" checked' in dom_policy)
         check("policy editor adds the selected session workspace",
-              'value="/Users/dev/workspace/api-service"' in dom_policy)
+              dom_query(dom_policy).has(None, {'value': '/Users/dev/workspace/api-service'}))
         # --- resources v2: strip, needs attention, harness groups, family drawer ---
         board = dom_fam.split('id="resource-board"', 1)[1].split('id="history-panel"', 1)[0]
         check("resources: the machine strip renders four tiles",
-              'class="machine-strip' in board and board.count('class="machine-tile') == 4,
-              f"tiles={board.count('class=\"machine-tile')}")
-        attn = board.split('class="needs-attention"', 1)[1].split('</section>', 1)[0] if 'class="needs-attention"' in board else ''
+              dom_query(board).has(None, {'class': 'machine-strip'}) and len(dom_query(board).find_all(None, {'class': 'machine-tile'})) == 4,
+              f"tiles={len(dom_query(board).find_all(None, {'class': 'machine-tile'}))}")
+        attn = board.split('class="needs-attention"', 1)[1].split('</section>', 1)[0] if dom_query(board).has(None, {'class': 'needs-attention'}) else ''
         attn_keys = re.findall(r'class="resource-session-card needs-attention-card[^"]*" data-key="([^"]+)"', attn)
         check("resources: needs attention holds exactly the two diagnosed families, highest impact first",
               attn_keys == ["5821:1789480800000000000", "6033:1789484400000000000"], f"keys={attn_keys}")
@@ -1254,53 +1273,53 @@ def main():
         check("resources: infra is the one trailing group",
               bool(fam_groups) and fam_groups[-1] == (" infra", "infra") and sum(1 for g in fam_groups if g[0]) == 1,
               f"groups={fam_groups}")
-        infra_grp = board.split('data-harness="infra"', 1)[1] if 'data-harness="infra"' in board else ''
+        infra_grp = board.split('data-harness="infra"', 1)[1] if dom_query(board).has(None, {'data-harness': 'infra'}) else ''
         check("resources: infra families sit in Infrastructure and are not counted as families",
               all(f'data-key="{p}:1789470000000000000"' in infra_grp for p in (7001, 7100, 7200))
               and '9 families' in board and '12 families' not in board)
-        oc_grp = board.split('data-harness="openclaw"', 1)[1].split('<details', 1)[0] if 'data-harness="openclaw"' in board else ''
-        oc_kids = oc_grp.split('class="family-children"', 1)[1] if 'class="family-children"' in oc_grp else ''
-        codex_grp = board.split('data-harness="codex"', 1)[1].split('<details', 1)[0] if 'data-harness="codex"' in board else ''
+        oc_grp = board.split('data-harness="openclaw"', 1)[1].split('<details', 1)[0] if dom_query(board).has(None, {'data-harness': 'openclaw'}) else ''
+        oc_kids = oc_grp.split('class="family-children"', 1)[1] if dom_query(oc_grp).has(None, {'class': 'family-children'}) else ''
+        codex_grp = board.split('data-harness="codex"', 1)[1].split('<details', 1)[0] if dom_query(board).has(None, {'data-harness': 'codex'}) else ''
         check("resources: orchestrated children nest under their OpenClaw parent, not as codex rows",
               'data-key="8100:1789470000000000000"' in oc_grp.split('class="family-children"', 1)[0]
-              and 'data-key="8201:1789470000000000000"' in oc_kids and 'data-key="8202:1789470000000000000"' in oc_kids
+              and dom_query(oc_kids).has(None, {'data-key': '8201:1789470000000000000'}) and dom_query(oc_kids).has(None, {'data-key': '8202:1789470000000000000'})
               and '8201:' not in codex_grp and 'Codex · demo-app@main' in oc_kids)
         check("resources: rows and cards carry names, never root PID",
               'root PID' not in board and 'Claude Code · api-service@main' in board
               and 'Codex · data-pipeline@feat/etl' in board)
         check("resources: a group opens by default only when a family in it needs attention",
-              '<details class="family-group" data-harness="claude" open=""' in board
-              and '<details class="family-group" data-harness="codex">' in board
-              and '<details class="family-group infra" data-harness="infra">' in board)
+              dom_query(board).has('details', {'class': 'family-group', 'data-harness': 'claude', 'open': ''})
+              and dom_query(board).has('details', {'class': 'family-group', 'data-harness': 'codex'})
+              and dom_query(board).has('details', {'class': 'family-group infra', 'data-harness': 'infra'}))
         check("resources: policy line sits below the groups",
-              'data-harness="infra"' in board and 'class="resource-policy"' in board
+              dom_query(board).has(None, {'data-harness': 'infra'}) and dom_query(board).has(None, {'class': 'resource-policy'})
               and board.index('data-harness="infra"') < board.index('class="resource-policy"'))
         fam_drawer = dom_fam.split('<div id="drawer"', 1)[1].split('id="confirm-layer"', 1)[0]
         fam_probe = (re.search(r'<pre id="family-probe"[^>]*>(.*?)</pre>', dom_fam, re.S) or [None, ""])[1]
         check("View family opens the drawer with the family name; the tab stays Resources",
-              dom_fam.count('<div id="drawer" class="drawer">') == 1
+              len(dom_query(dom_fam).find_all('div', {'id': 'drawer', 'class': 'drawer'})) == 1
               and 'id="drawer-title-text">Codex · data-pipeline@feat/etl<' in fam_drawer
-              and 'class="tab-btn active" data-tab="sessions"' in dom_fam
-              and 'class="subtab-btn active" data-subtab="resources"' in dom_fam)
+              and dom_query(dom_fam).has(None, {'class': 'tab-btn active', 'data-tab': 'sessions'})
+              and dom_query(dom_fam).has(None, {'class': 'subtab-btn active', 'data-subtab': 'resources'}))
         check("family drawer: the process table shows 12 rows and Show 8 more, then expands in place",
-              fam_probe == "rows=12 more=Show 8 more" and fam_drawer.count('class="family-proc-row') == 20
-              and 'data-action="show-more"' not in fam_drawer, f"probe={fam_probe!r} rows={fam_drawer.count('class=\"family-proc-row')}")
+              fam_probe == "rows=12 more=Show 8 more" and len(dom_query(fam_drawer).find_all(None, {'class': 'family-proc-row'})) == 20
+              and not dom_query(fam_drawer).has(None, {'data-action': 'show-more'}), f"probe={fam_probe!r} rows={len(dom_query(fam_drawer).find_all(None, {'class': 'family-proc-row'}))}")
         check("family drawer: leftover marked, recent activity and findings scoped to the family",
               'family-proc-row orphan' in fam_drawer and 'Bash → pytest -q' in fam_drawer
               and 'npm install' not in fam_drawer and 'Keychain file access' in fam_drawer)
         check("family drawer: footer offers Terminate orphans and Terminate family on the root",
-              'data-action="kill-family-orphans" data-key="4412:1789470000000000000"' in fam_drawer
-              and 'Terminate orphans (1)' in fam_drawer and 'data-action="kill" data-pid="4412"' in fam_drawer)
+              dom_query(fam_drawer).has(None, {'data-action': 'kill-family-orphans', 'data-key': '4412:1789470000000000000'})
+              and 'Terminate orphans (1)' in fam_drawer and dom_query(fam_drawer).has(None, {'data-action': 'kill', 'data-pid': '4412'}))
         ev_scoped = dom_famev.split('id="events-container"', 1)[1].split('</section>', 1)[0]
         ev_pids = set(int(x) for x in re.findall(r'<span class="pid" title="PID (\d+)"', ev_scoped))
         check("Open in Events switches to Events scoped to the family pids",
-              'class="subtab-btn active" data-subtab="events"' in dom_famev
+              dom_query(dom_famev).has(None, {'class': 'subtab-btn active', 'data-subtab': 'events'})
               and len(ev_pids) >= 2 and ev_pids <= set(range(4412, 4432)), f"pids={sorted(ev_pids)}")
         ev_cap = dom_evcap.split('id="events-container"', 1)[1].split('</section>', 1)[0]
         check("Events tab shows the newest 50 rows and a Show more button",
-              ev_cap.count('class="timeline-item') == 50
+              len(dom_query(ev_cap).find_all(None, {'class': 'timeline-item'})) == 50
               and re.search(r'data-action="show-more" data-key="events"[^>]*>Show \d+ more<', ev_cap) is not None,
-              f"rows={ev_cap.count('class=\"timeline-item')}")
+              f"rows={len(dom_query(ev_cap).find_all(None, {'class': 'timeline-item'}))}")
         ev_trace = dom_evtrace.split('id="events-container"', 1)[1].split('</section>', 1)[0]
         check("Events rows name trace kinds: MODEL and TOOL with their session, never PID 0",
               '>MODEL<' in ev_trace and '>TOOL<' in ev_trace and 'Bash · ok · 2.5s' in ev_trace
@@ -1309,8 +1328,8 @@ def main():
               f"model={'>MODEL<' in ev_trace} tool={'>TOOL<' in ev_trace} pid0={'PID 0' in ev_trace}")
         ev_dup = dom_duptrace.split('id="events-container"', 1)[1].split('</section>', 1)[0]
         check("Events: two tool calls at the same ts with different call ids render as two rows",
-              ev_dup.count('class="timeline-item') >= 2 and 'Read · ok' in ev_dup and 'Write · ok' in ev_dup,
-              f"rows={ev_dup.count('class=\"timeline-item')}")
+              len(dom_query(ev_dup).find_all(None, {'class': 'timeline-item'})) >= 2 and 'Read · ok' in ev_dup and 'Write · ok' in ev_dup,
+              f"rows={len(dom_query(ev_dup).find_all(None, {'class': 'timeline-item'}))}")
         ev_order = dom_evorder.split('id="events-container"', 1)[1].split('</section>', 1)[0]
         # The SSE stub drips unrelated live rows (kinds 5/8/9) into every dump
         # regardless of fixture; keep only this fixture's three file rows and
@@ -1325,15 +1344,15 @@ def main():
         check("policy editor exposes automatic containment warning",
 		      "applies every enabled intervention automatically" in dom_policy)
         check("terminate policy save requires explicit confirmation",
-		      'id="confirm-message"' in dom_policy
+		      dom_query(dom_policy).has(None, {'id': 'confirm-message'})
 		      and "Terminate mode will automatically apply the enabled intervention ladder to entire agent sessions" in dom_policy
 		      and 'id="confirm-title">Enable terminate mode<' in dom_policy)
         check("resource approval contains the whole session",
-              'data-action="resource-control" data-id="resource-1" data-decision="apply" data-intervention="pause"' in resource_view)
+              dom_query(resource_view).has(None, {'data-action': 'resource-control', 'data-id': 'resource-1', 'data-decision': 'apply', 'data-intervention': 'pause'}))
         check("resource approval can keep the session running",
-              'data-action="resource-control" data-id="resource-1" data-decision="dismiss"' in resource_view)
+              dom_query(resource_view).has(None, {'data-action': 'resource-control', 'data-id': 'resource-1', 'data-decision': 'dismiss'}))
         check("paused resource session can resume",
-              'data-action="resource-control" data-session="6033:1789484400000000000" data-decision="resume"' in resource_view)
+              dom_query(resource_view).has(None, {'data-action': 'resource-control', 'data-session': '6033:1789484400000000000', 'data-decision': 'resume'}))
         check("resource intervention failure is visible",
               "Intervention failed: rollback failed: permission denied" in resource_view)
         check("sessions panel lives in the sessions tab",
@@ -1344,9 +1363,9 @@ def main():
         overview = dom.split('id="home-trends"', 1)[1].split('id="tab-sessions"', 1)[0]
         # Trends is charts-only: the activity chart plus the two ranked-bar
         # charts. Lists (sessions/agents/flags/events) live elsewhere.
-        check("trends lead with the activity chart", 'id="activity-chart"' in overview)
-        check("trends have the findings-by-rule chart", 'id="chart-flags"' in overview)
-        check("trends have the memory-by-family chart", 'id="chart-memory"' in overview)
+        check("trends lead with the activity chart", dom_query(overview).has(None, {'id': 'activity-chart'}))
+        check("trends have the findings-by-rule chart", dom_query(overview).has(None, {'id': 'chart-flags'}))
+        check("trends have the memory-by-family chart", dom_query(overview).has(None, {'id': 'chart-memory'}))
         mem_bars = dom_memfam.split('id="chart-memory"', 1)[1].split('</section>', 1)[0].split('class="hbar-row"')[1:]
         mem_badge = re.search(r'id="chart-mem-total">(\d+)<', dom_memfam)
         check("memory by family: three sessions on one root are one bar carrying 3 sessions",
@@ -1357,19 +1376,19 @@ def main():
               mem_badge is not None and mem_infra == 1 and int(mem_badge.group(1)) == len(mem_bars) - mem_infra == 3,
               f"{mem_badge.group(0) if mem_badge else 'no badge'} infra={mem_infra}")
         check("trends carry no list panels",
-              'id="session-strip"' not in overview and 'id="events-container"' not in overview
-              and 'id="resource-board"' not in overview)
-        check("session board has project filter", 'id="session-cwd-filter"' in dom)
+              not dom_query(overview).has(None, {'id': 'session-strip'}) and not dom_query(overview).has(None, {'id': 'events-container'})
+              and not dom_query(overview).has(None, {'id': 'resource-board'}))
+        check("session board has project filter", dom_query(dom).has(None, {'id': 'session-cwd-filter'}))
         sessions = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
-        check("session rail lists live cards and the ended tail", sessions.count('class="session-card') == 4,
-              f"cards={sessions.count('class=\"session-card')}")
+        check("session rail lists live cards and the ended tail", len(dom_query(sessions).find_all(None, {'class': 'session-card'})) == 4,
+              f"cards={len(dom_query(sessions).find_all(None, {'class': 'session-card'}))}")
         check("session cards labeled by repo@branch or folder",
               "api-service@main" in sessions and "data-pipeline@feat/etl" in sessions and ">auth<" in sessions)
         check("session card selects the session trace",
-              'data-action="select-session" data-id="sess-claude-1"' in sessions)
+              dom_query(sessions).has(None, {'data-action': 'select-session', 'data-id': 'sess-claude-1'}))
         check("the Egress tab carries no decision badge: recurring egress is never queued",
-              'id="tab-badge-egress"' not in dom and 'data-kind="recurring_egress"' not in dom)
-        needs_you = int(re.search(r"needs_you: (\d+),", open(MOCK).read()).group(1))
+              not dom_query(dom).has(None, {'id': 'tab-badge-egress'}) and not dom_query(dom).has(None, {'data-kind': 'recurring_egress'}))
+        needs_you = json.loads(html.unescape(pre(dom, "fixture-posture")))["needs_you"]
         check("home tab badge shows needs-you count",
               f'id="tab-badge-home">{needs_you}<' in dom)
         check("sessions and processes counts sit on the sub-view buttons; the Sessions tab keeps the live count",
@@ -1386,7 +1405,7 @@ def main():
         pat_need = dom_pattern.split('id="attention-center"', 1)[-1].split('id="coverage-center"', 1)[0]
         pat_row = log_rows(dom_pattern).get("pattern:codex|keychain-access|/Users/dev/Library/Keychains/login.keychain-db", "")
         check("a pattern never reaches Needs you; it is one history row with its count",
-              'data-pattern-key' not in pat_need and 'data-kind="pattern"' not in pat_need and "codex activity" not in dom_pattern
+              'data-pattern-key' not in pat_need and not dom_query(pat_need).has(None, {'data-kind': 'pattern'}) and "codex activity" not in dom_pattern
               and '<span class="c-count">323×</span>' in pat_row, f"row={pat_row[:200]!r}")
         need_kinds = re.findall(r'<li class="need [^"]*" data-kind="(\w+)"', decisions)
         check("Needs you unifies guard, resource, incident and critical-finding rows, highest priority first",
@@ -1403,13 +1422,13 @@ def main():
               and 'id="coverage-center" hidden' not in dom_coverage
               and 'id="badge-coverage-count">2<' in dom_coverage)
         check("attention resource actions target the full session",
-              'data-action="resource-control" data-id="resource-1" data-decision="apply"' in attention)
+              dom_query(attention).has(None, {'data-action': 'resource-control', 'data-id': 'resource-1', 'data-decision': 'apply'}))
         check("session coverage remains available without a global monitoring gap",
               'Per-session coverage · 2' in dom_session_coverage
               and re.search(r'id="coverage-center"[^>]*\bhidden', dom_session_coverage) is None)
         check("same-agent sessions keep independent guard evidence and closed details",
-              'data-session-id="session-observed"' in dom_session_coverage
-              and 'data-session-id="session-silent"' in dom_session_coverage
+              dom_query(dom_session_coverage).has(None, {'data-session-id': 'session-observed'})
+              and dom_query(dom_session_coverage).has(None, {'data-session-id': 'session-silent'})
               and '/work/observed · Guard: activity observed' in dom_session_coverage
               and '/work/&lt;silent&gt; · Guard: not observed' in dom_session_coverage
               and re.search(r'<details[^>]*class="coverage-session"[^>]*\bopen', dom_session_coverage) is None)
@@ -1418,15 +1437,15 @@ def main():
               and 'claude · changed' in dom_session_coverage
               and 'Configuration changed. Run the check again.' in dom_session_coverage)
         check("attention guard actions expose bounded choices",
-              'data-action="guard-resolve" data-id="guard-1" data-verdict="allow" data-scope="once"' in attention
-              and 'data-action="guard-resolve" data-id="guard-1" data-verdict="deny" data-scope="once"' in attention
-              and 'data-scope="exact" data-expiry="24h"' in attention
-              and 'data-scope="always"' not in attention)
+              dom_query(attention).has(None, {'data-action': 'guard-resolve', 'data-id': 'guard-1', 'data-verdict': 'allow', 'data-scope': 'once'})
+              and dom_query(attention).has(None, {'data-action': 'guard-resolve', 'data-id': 'guard-1', 'data-verdict': 'deny', 'data-scope': 'once'})
+              and dom_query(attention).has(None, {'data-scope': 'exact', 'data-expiry': '24h'})
+              and not dom_query(attention).has(None, {'data-scope': 'always'}))
         check("attention keeps scope disclosure compact", "Future access requires a chosen limit" in attention)
-        check("coverage egress opens endpoint evidence", 'data-action="open-uninspected"' in coverage)
+        check("coverage egress opens endpoint evidence", dom_query(coverage).has(None, {'data-action': 'open-uninspected'}))
         check("resolved guard request leaves the attention queue",
               f'id="tab-badge-home">{needs_you - 1}<' in dom_guard
-              and 'data-action="guard-resolve" data-id="guard-1"' not in dom_guard)
+              and not dom_query(dom_guard).has(None, {'data-action': 'guard-resolve', 'data-id': 'guard-1'}))
         resolve_probe = (re.search(r'<pre id="resolve-probe"[^>]*>(.*?)</pre>', dom_resolve, re.S) or [None, ""])[1]
         check("resolved incident leaves the attention count before reconciliation",
               resolve_probe == f"badge={needs_you - 1} tab={needs_you - 1} queued=false", f"probe={resolve_probe!r}")
@@ -1437,9 +1456,9 @@ def main():
               and expect_probe == f"choices=false listed=false needs={needs_you}",
               f"before={expect_before!r} probe={expect_probe!r}")
         check("posture flag item opens Home with Findings history",
-              'data-action="goto-tab" data-tab="home" data-group="findings"' in dom_tab)
+              dom_query(dom_tab).has(None, {'data-action': 'goto-tab', 'data-tab': 'home', 'data-group': 'findings'}))
         check("tab switch reveals the target panel",
-              'id="tab-egress" role="tabpanel">' in dom_tab
+              dom_query(dom_tab).has(None, {'id': 'tab-egress', 'role': 'tabpanel'})
               and 'id="tab-home" role="tabpanel" hidden' in dom_tab)
         recurring = dom_tab.split('id="recurring-egress-container"', 1)[-1].split('id="endpoints-panel"', 1)[0]
         check("Egress explains scheduled calls as observed facts and labeled advisor inference",
@@ -1448,21 +1467,21 @@ def main():
               and 'Advisor inference' in recurring
               and 'Possibly an update check' in recurring)
         check("Egress offers broad scope only with complete attribution",
-              'data-episode-id="episode-routine" data-kind="scope"' in recurring
-              and 'data-episode-id="episode-ambiguous" data-kind="destination"' in recurring
-              and 'data-episode-id="episode-ambiguous" data-kind="scope"' not in recurring)
+              dom_query(recurring).has(None, {'data-episode-id': 'episode-routine', 'data-kind': 'scope'})
+              and dom_query(recurring).has(None, {'data-episode-id': 'episode-ambiguous', 'data-kind': 'destination'})
+              and not dom_query(recurring).has(None, {'data-episode-id': 'episode-ambiguous', 'data-kind': 'scope'}))
         check("Egress opens linked session and can revoke an expected episode",
-              'data-action="filter-session" data-session="sess-claude-1"' in recurring
-              and 'data-action="revoke-expected-egress" data-id="expected-older"' in recurring
+              dom_query(recurring).has(None, {'data-action': 'filter-session', 'data-session': 'sess-claude-1'})
+              and dom_query(recurring).has(None, {'data-action': 'revoke-expected-egress', 'data-id': 'expected-older'})
               and 'First ' in recurring and 'Last ' in recurring)
         check("Policy lists reversible expected connections",
               'old.example.com:443' in dom_policylists
-              and 'data-action="revoke-expected-egress" data-id="expected-older"' in dom_policylists)
+              and dom_query(dom_policylists).has(None, {'data-action': 'revoke-expected-egress', 'data-id': 'expected-older'}))
         # Sessions holds one sub-view at a time.
         check("resources and events are separate sub-views",
               'id="sub-resources" role="tabpanel" hidden' in dom
               and 'id="sub-events" role="tabpanel" hidden' in dom
-              and 'class="subtabs" role="tablist"' in dom)
+              and dom_query(dom).has(None, {'class': 'subtabs', 'role': 'tablist'}))
         check("pressure history sits in the Resources sub-view",
               dom.index('id="sub-resources"') < dom.index('id="history-panel"') < dom.index('id="sub-events"'))
         check("resource panel lives in the resources sub-view",
@@ -1476,23 +1495,23 @@ def main():
               and dom.index('id="events-container"') < dom.index('id="tab-egress"'))
 
         # --- saved views, search, export (P5) ---
-        check("saved-view menu is present", 'id="btn-views"' in dom and 'id="views-pop"' in dom)
+        check("saved-view menu is present", dom_query(dom).has(None, {'id': 'btn-views'}) and dom_query(dom).has(None, {'id': 'views-pop'}))
         check("a saved view appears in the list",
-              'data-action="apply-view" data-name="Prod leaks"' in dom_view)
-        check("global search box is present", 'id="global-search"' in dom)
+              dom_query(dom_view).has(None, {'data-action': 'apply-view', 'data-name': 'Prod leaks'}))
+        check("global search box is present", dom_query(dom).has(None, {'id': 'global-search'}))
         check("export actions are wired",
-              'data-action="export" data-what="flags"' in dom
-              and 'data-action="export" data-what="incidents"' in dom)
+              dom_query(dom).has(None, {'data-action': 'export', 'data-what': 'flags'})
+              and dom_query(dom).has(None, {'data-action': 'export', 'data-what': 'incidents'}))
         # The search term narrows the events panel: "npm" must drop rows that
         # do not mention it (the drip includes non-npm events).
         check("search narrows the panel",
-              dom_view.count('class="timeline-item') <= dom.count('class="timeline-item'))
+              len(dom_query(dom_view).find_all(None, {'class': 'timeline-item'})) <= len(dom_query(dom).find_all(None, {'class': 'timeline-item'})))
 
         # --- action feedback loops (the "nothing happens" regressions) ---
         check("flag card carries per-flag dismiss",
-              'data-action="dismiss-flag" data-id="flag-1"' in dom)
+              dom_query(dom).has(None, {'data-action': 'dismiss-flag', 'data-id': 'flag-1'}))
         check("flag card carries re-run advisor",
-              'data-action="retriage" data-id="flag-1"' in dom)
+              dom_query(dom).has(None, {'data-action': 'retriage', 'data-id': 'flag-1'}))
         check("keychain flag shows benign context",
               "usually routine" in dom)
         check("allow removes the suggestion from the list",
@@ -1500,7 +1519,7 @@ def main():
               "suggestion still rendered after Allow")
         dismiss_rows = [k for k in log_rows(dom_dismiss) if k.startswith("flag:")]
         check("dismiss removes the flag's row",
-              len(dismiss_rows) == 2 and 'data-id="flag-3"' not in dom_dismiss,
+              len(dismiss_rows) == 2 and not dom_query(dom_dismiss).has(None, {'data-id': 'flag-3'}),
               f"rows={dismiss_rows}")
         check("re-triage verdict lands and replaces the chip",
               "re-triage complete: routine vendor traffic" in dom_retriage
@@ -1510,29 +1529,29 @@ def main():
               and 'POST /advisor/retriage' in dom_retriage)
         check("advisor offline renders honest disabled state",
               "Advisor offline" in dom_advdown
-              and 'data-action="retriage" data-id="flag-1"' not in dom_advdown)
+              and not dom_query(dom_advdown).has(None, {'data-action': 'retriage', 'data-id': 'flag-1'}))
         check("timeline rows carry agent names, not bare PIDs",
               "cursor · PID 6033" in dom or "claude · PID 5821" in dom)
 
         # --- structural security: no inline handlers anywhere ---
-        check("zero inline onclick handlers in rendered DOM", " onclick=" not in dom)
+        check("zero inline onclick handlers in rendered DOM", not dom_query(dom).has(None, {'onclick': None}))
 
         # --- session drill-down (auto-action run) ---
         link_rail = dom_sesslink.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
         check("View session in timeline opens the session in the Sessions tab: card selected, trace rendered",
-              'class="tab-btn active" data-tab="sessions"' in dom_sesslink
+              dom_query(dom_sesslink).has(None, {'class': 'tab-btn active', 'data-tab': 'sessions'})
               and re.search(r'<div class="session-card active selected">\s*<button type="button" class="sc-main" '
                             r'data-action="select-session" data-id="sess-claude-1" aria-pressed="true"', link_rail) is not None
               and re.search(r'<h3[^>]*>api-service@main</h3>', dom_sesslink.split('id="session-detail"', 1)[1]) is not None
-              and 'class="wf-bar' in dom_sesslink)
-        check("session chip appears", 'id="session-filter" class="session-filter"' in dom_session
-              or ('id="session-filter"' in dom_session and "hidden" not in
+              and dom_query(dom_sesslink).has(None, {'class': 'wf-bar'}))
+        check("session chip appears", dom_query(dom_session).has(None, {'id': 'session-filter', 'class': 'session-filter'})
+              or (dom_query(dom_session).has(None, {'id': 'session-filter'}) and "hidden" not in
                   dom_session.split('id="session-filter"')[1][:80]))
         check("session chip count", "7f3a9c21 · 2" in dom_session)
         check("session scopes findings list",
-              'id="flags-session-filter"' in dom_session
+              dom_query(dom_session).has(None, {'id': 'flags-session-filter'})
               and "hidden" not in dom_session.split('id="flags-session-filter"')[1][:80])
-        session_rows = dom_session.count('class="timeline-item')
+        session_rows = len(dom_query(dom_session).find_all(None, {'class': 'timeline-item'}))
         check("timeline filtered to 2 session events", session_rows == 2, f"rows={session_rows}")
 
         # --- render engine: dirty, visible panels only; patch in place ---
@@ -1596,11 +1615,11 @@ def main():
         infra_tag = re.search(r'<details class="session-group infra"[^>]*>', dom_railburst)
         infra_tag = infra_tag.group(0) if infra_tag else ""
         check("burst: an opened rail <details> is the same node and still open",
-              ' open=""' in infra_tag and 'data-probe="1"' in infra_tag, f"tag={infra_tag}")
+              dom_query(infra_tag).has(None, {'open': ''}) and dom_query(infra_tag).has(None, {'data-probe': '1'}), f"tag={infra_tag}")
 
         flags_focus = dom_focus.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
         check("burst: a focused history row head keeps identity and focus",
-              'data-probe="1"' in flags_focus and pre(dom_focus, "focus-probe") == "kept",
+              dom_query(flags_focus).has(None, {'data-probe': '1'}) and pre(dom_focus, "focus-probe") == "kept",
               f"probe={pre(dom_focus, 'focus-probe')!r}")
 
         mem_probe = re.match(r"renders=(\d+) kept=(\d+)/(\d+)$", pre(dom_memprobe, "mem-probe"))
@@ -1611,7 +1630,7 @@ def main():
 
         flags_click = dom_click.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
         check("burst: a click spanning renders lands (POST /flags/acknowledge, card gone)",
-              "POST /flags/acknowledge" in pre(dom_click, "mock-requests") and 'data-id="flag-3"' not in flags_click,
+              "POST /flags/acknowledge" in pre(dom_click, "mock-requests") and not dom_query(flags_click).has(None, {'data-id': 'flag-3'}),
               f"requests={pre(dom_click, 'mock-requests')!r}")
 
         raw_reqs = pre(dom_rawmute, "mock-requests")
@@ -1625,13 +1644,13 @@ def main():
         act_row = dom_act.split("registry.npmjs.org · cursor", 1)[-1].split("</div>", 1)[0] \
             if "registry.npmjs.org · cursor" in dom_act else ""
         check("act in place: allowlist row on screen when the request leaves, with an inline note",
-              "POST /allowlist row=1" in pre(dom_act, "mock-requests") and 'class="card-note"' in act_row,
+              "POST /allowlist row=1" in pre(dom_act, "mock-requests") and dom_query(act_row).has(None, {'class': 'card-note'}),
               f"requests={pre(dom_act, 'mock-requests')!r} row={act_row[:160]!r}")
         check("act in place: a failed allow reverts the row and toasts danger",
               "POST /allowlist row=1" in pre(dom_actfail, "mock-requests")
               and "registry.npmjs.org · cursor" not in dom_actfail
-              and 'class="toast danger"' in dom_actfail
-              and 'data-action="allow-host" data-agent="cursor" data-host="registry.npmjs.org"' in dom_actfail,
+              and dom_query(dom_actfail).has(None, {'class': 'toast danger'})
+              and dom_query(dom_actfail).has(None, {'data-action': 'allow-host', 'data-agent': 'cursor', 'data-host': 'registry.npmjs.org'}),
               f"requests={pre(dom_actfail, 'mock-requests')!r}")
 
         # --- finding card v2: the daemon's served explanation ---
@@ -1647,7 +1666,7 @@ def main():
               and not re.search(r"\bpid\b", visible(outside), re.I) and "6033" not in visible(outside)
               and "2606:" not in visible(outside), f"card={card[:240]!r}")
         check("finding row carries no inline handlers or styles",
-              card != "" and " onclick=" not in card and " style=" not in card)
+              card != "" and not dom_query(card).has(None, {'onclick': None}) and not dom_query(card).has(None, {'style': None}))
         buttons = re.findall(r'<button class="btn ([a-z-]+) btn-sm" data-action="explain-act" '
                              r'data-flag-id="flag-2" data-action-id="([a-z-]+)"', card)
         menu = re.findall(r'<button class="act-menu-item( danger)?" data-action="explain-act" '
@@ -1661,7 +1680,7 @@ def main():
               f"buttons={buttons} menu={menu}")
         details = (re.search(r'<details class="body-evidence">(.*?)</details></div>', card, re.S) or [None, ""])[1]
         check("finding row: Evidence is closed by default and holds the chain, pid, full address and ISO timestamp",
-              details != "" and 'class="chain"' in details and "2026-09-22T16:05:01Z" in details
+              details != "" and dom_query(details).has(None, {'class': 'chain'}) and "2026-09-22T16:05:01Z" in details
               and "6033" in details and "[2606:4700::6810:84e5]:443" in details
               and "/Users/dev/.aws/credentials" in details, f"details={details[:200]!r}")
 
@@ -1671,7 +1690,7 @@ def main():
               'POST /allowlist' in act_reqs
               and 'body={"agent":"cursor","host":"2606:4700::6810:84e5"}' in act_reqs
               and 'POST /flags/acknowledge' in act_reqs
-              and 'data-flag-id="flag-2"' not in flags_act
+              and not dom_query(flags_act).has(None, {'data-flag-id': 'flag-2'})
               and 'class="card-note">allowlisted<' in dom_explainact, f"requests={act_reqs!r}")
         allowpath_reqs = pre(dom_allowpathact, "mock-requests")
         check("finding card: the allow-path action (not the first/recommended button) sends its own served request",
@@ -1697,8 +1716,8 @@ def main():
         flags_fail = dom_explainfail.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
         check("finding card: a failed allow puts the card back and toasts danger",
               'POST /allowlist' in fail_reqs and 'POST /flags/acknowledge' not in fail_reqs
-              and '<div class="row-body" data-flag-id="flag-2">' in flags_fail
-              and 'class="toast danger"' in dom_explainfail, f"requests={fail_reqs!r}")
+              and dom_query(flags_fail).has('div', {'class': 'row-body', 'data-flag-id': 'flag-2'})
+              and dom_query(dom_explainfail).has(None, {'class': 'toast danger'}), f"requests={fail_reqs!r}")
 
         attn = dom_explain.split('id="attention-center"', 1)[-1].split('id="coverage-center"', 1)[0]
         flag2_row = log_rows(dom_explain).get("flag:flag-2", "")
@@ -1706,15 +1725,15 @@ def main():
               'flag-2' not in attn
               and 'Sensitive file read near an outside connection' in flag2_row
               and '<span class="c-verdict-text">Likely benign (advisor 93 %)</span>' in flag2_row
-              and 'data-action="explain-act" data-flag-id="flag-2" data-action-id="allow-host"' in flag2_row,
+              and dom_query(flag2_row).has(None, {'data-action': 'explain-act', 'data-flag-id': 'flag-2', 'data-action-id': 'allow-host'}),
               f"row={flag2_row[:200]!r}")
         probe = pre(dom_detailsprobe, "details-probe")
         check("finding row: an open Evidence section survives a burst of re-renders",
               probe == "kept", f"probe={probe!r}")
         flag3 = log_rows(dom_explain).get("flag:flag-3", "")
         check("finding row: a flag without explain opens to its evidence lines and the console's Dismiss and Kill",
-              'class="flag-evidence"' in flag3 and 'data-action="dismiss-flag" data-id="flag-3"' in flag3
-              and 'data-action="kill"' in flag3, f"row={flag3[:200]!r}")
+              dom_query(flag3).has(None, {'class': 'flag-evidence'}) and dom_query(flag3).has(None, {'data-action': 'dismiss-flag', 'data-id': 'flag-3'})
+              and dom_query(flag3).has(None, {'data-action': 'kill'}), f"row={flag3[:200]!r}")
 
         # --- navigation: sticky tabs, drawer back-stack, scope bar, one count ---
         sticky = pre(dom_sticky, "sticky-probe")
@@ -1739,8 +1758,8 @@ def main():
         tab_badge = (re.search(r'id="tab-badge-home"[^>]*>(\d+)<', dom) or [None, ""])[1]
         check("attention badge and tab badge equal posture.needs_you; coverage stays separate",
               attention_badge == str(needs_you) and tab_badge == str(needs_you)
-              and '<strong>File monitoring is off</strong>' in coverage and 'data-action="open-fda"' in coverage
-              and 'data-id="flag-3"' not in attention and 'data-row-key="flag:flag-3"' in dom,
+              and '<strong>File monitoring is off</strong>' in coverage and dom_query(coverage).has(None, {'data-action': 'open-fda'})
+              and not dom_query(attention).has(None, {'data-id': 'flag-3'}) and dom_query(dom).has(None, {'data-row-key': 'flag:flag-3'}),
               f"badge={attention_badge!r} tab={tab_badge!r} needs_you={needs_you}")
 
         # --- patterns: a repeating finding is one card ---
@@ -1760,16 +1779,16 @@ def main():
               and "codex touched the login keychain 323 times" in pat_cards[0][1]
               and len(re.findall(r'<i class="h\d"></i>', (re.search(r'<span class="pattern-bars" role="img"[^>]*>(.*?)</span>', pat_cards[0][1], re.S) or [None, ""])[1])) == 24
               and '<b class="pattern-open">323 open</b>' in pat_cards[0][1]
-              and 'data-row-key="flag:flag-6"' not in pat_flags and 'data-row-key="flag:flag-7"' not in pat_flags
+              and not dom_query(pat_flags).has(None, {'data-row-key': 'flag:flag-6'}) and not dom_query(pat_flags).has(None, {'data-row-key': 'flag:flag-7'})
               and all(f'data-action="open-flag" data-id="{fid}"' in pat_cards[0][1] for fid in ("flag-6", "flag-7")),
               f"cards={len(pat_cards)}")
         pat_standalone = "".join(v for k, v in pat_rows.items() if not k.startswith("pattern:"))
         check("patterns: critical individual flags lead warnings without duplicating covered flags",
-              'data-pattern-key="codex|keychain-access|' in pat_flags
+              dom_query(pat_flags).has(None, {'data-pattern-key': starts_with('codex|keychain-access|')})
               and pat_flags.index('data-id="flag-1"') < pat_flags.index('data-pattern-key=') < pat_flags.index('data-id="flag-3"')
               and not any(f'data-id="{fid}"' in pat_standalone or f'data-flag-id="{fid}"' in pat_standalone for fid in ("flag-6", "flag-7"))
               and "(PID 40844)" not in pat_flags and "(PID 51364)" not in pat_flags
-              and 'data-id="flag-3"' in pat_flags)
+              and dom_query(pat_flags).has(None, {'data-id': 'flag-3'}))
         pat_reqs = pre(dom_patternact, "mock-requests")
         check("patterns: dismiss-all posts the served flag_ids and the row shows 0 open",
               'POST /flags/acknowledge body={"flag_ids":["flag-7","flag-6"]}' in pat_reqs
@@ -1777,7 +1796,7 @@ def main():
               and '<b class="pattern-open">323 open</b>' not in dom_patternact,
               f"requests={pat_reqs!r}")
         check("patterns: the page still fits a 375px phone, the pattern card's tab included",
-              'data-hscroll="sessions:0,agents:0,resources:0,findings:0"' in dom_patternphone,
+              dom_query(dom_patternphone).has(None, {'data-hscroll': 'sessions:0,agents:0,resources:0,findings:0'}),
               (re.search(r'data-hscroll="[^"]*"', dom_patternphone) or [None])[0])
         stream = pre(dom_patternstream, "pattern-stream-probe")
         check("patterns: a streamed flag the pattern covers folds into its one card after the debounced reconcile",
@@ -1801,7 +1820,7 @@ def main():
               re.search(r'<section[^>]*id="attention-center"[^>]*\bhidden', dom_empty) is not None
               and re.search(r'id="coverage-center"[^>]*\bhidden', dom_empty) is not None
               and re.search(r'id="tab-badge-home"[^>]*\bhidden', dom_empty) is not None
-              and 'No pending decisions' not in empty_need and 'class="need ' not in empty_need)
+              and 'No pending decisions' not in empty_need and not dom_query(empty_need).has(None, {'class': 'need '}))
 
         # --- worktrees: the hunter's report, one row per worktree ---
         def wt_block(dom_text):
@@ -1810,11 +1829,11 @@ def main():
         def cl_block(dom_text):
             return dom_text.split('id="clutter-container"', 1)[-1].split('id="tab-policy"', 1)[0]
         wt = wt_block(dom_wt)
-        wt_rows = wt.count('class="wt-row')
-        wt_remove = wt.count('data-action="worktree-remove"')
-        wt_prune = wt.count('data-action="worktree-prune"')
+        wt_rows = len(dom_query(wt).find_all(None, {'class': 'wt-row'}))
+        wt_remove = len(dom_query(wt).find_all(None, {'data-action': 'worktree-remove'}))
+        wt_prune = len(dom_query(wt).find_all(None, {'data-action': 'worktree-prune'}))
         check("worktrees: the System tab opens and renders a row per non-main worktree with its state",
-              'class="tab-btn active" data-tab="system"' in dom_wt and 'data-subtab="worktrees"' not in dom_wt
+              dom_query(dom_wt).has(None, {'class': 'tab-btn active', 'data-tab': 'system'}) and not dom_query(dom_wt).has(None, {'data-subtab': 'worktrees'})
               and dom_wt.index('data-tab="egress" role="tab"') < dom_wt.index('data-tab="system" role="tab"') < dom_wt.index('data-tab="policy" role="tab"')
               and wt_rows == 4
               and all(f'class="wt-row wt-{s}"' in wt for s in ("remove", "review", "keep", "prune"))
@@ -1822,7 +1841,7 @@ def main():
               f"rows={wt_rows}")
         check("worktrees: git Remove only on the remove row, Prune only on the prune row",
               wt_remove == 1 and wt_prune == 1
-              and 'data-action="worktree-remove" data-path="/Users/dev/workspace/api-service/.worktrees/done"' in wt,
+              and dom_query(wt).has(None, {'data-action': 'worktree-remove', 'data-path': '/Users/dev/workspace/api-service/.worktrees/done'}),
               f"remove={wt_remove} prune={wt_prune}")
         check("worktrees: reasons render as text, paths inside the repo read relative",
               "&lt;b&gt;not bold&lt;/b&gt;" in wt and "<b>not bold</b>" not in wt
@@ -1835,25 +1854,25 @@ def main():
         check("worktrees: the advisor note renders escaped under its row and ends in Discuss; Ask advisor sits on review and keep rows only",
               '<p class="wt-advice"><b>Advisor: review</b> 60% · &lt;i&gt;look&lt;/i&gt; at .tmp before removing '
               '<button type="button" class="link-btn" data-action="worktree-discuss" data-path="/Users/dev/workspace/api-service/.worktrees/evidence">Discuss</button></p>' in wt
-              and wt.count('data-action="worktree-advise"') == 2)
+              and len(dom_query(wt).find_all(None, {'data-action': 'worktree-advise'})) == 2)
         check("worktrees: Discuss sits on the remove, review and keep rows and the note, not on the prune row",
-              wt.count('data-action="worktree-discuss"') == 4
-              and 'data-action="worktree-discuss" data-path="/Users/dev/workspace/api-service/.worktrees/gone"' not in wt)
+              len(dom_query(wt).find_all(None, {'data-action': 'worktree-discuss'})) == 4
+              and not dom_query(wt).has(None, {'data-action': 'worktree-discuss', 'data-path': '/Users/dev/workspace/api-service/.worktrees/gone'}))
         check("worktrees: Ask <harness> appears only for the active agent; no review drawer button remains",
-              wt.count('data-action="worktree-ask"') == 1
-              and 'class="btn btn-primary btn-sm" data-action="worktree-ask"' in wt and '>Ask codex</button>' in wt
+              len(dom_query(wt).find_all(None, {'data-action': 'worktree-ask'})) == 1
+              and dom_query(wt).has(None, {'class': 'btn btn-primary btn-sm', 'data-action': 'worktree-ask'}) and '>Ask codex</button>' in wt
               and 'Ask the agent' not in wt
-              and 'data-action="worktree-review"' not in wt
+              and not dom_query(wt).has(None, {'data-action': 'worktree-review'})
               and '<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://github.com/o/r/pull/9 ($0.21)</p>' in wt)
         check("worktrees: review and keep rows carry Remove; the row with a live agent session is disabled and says why",
-              wt.count('data-action="worktree-review-trash"') == 1
-              and 'data-action="worktree-review-trash" data-path="/Users/dev/workspace/api-service/.worktrees/evidence"' in wt
+              len(dom_query(wt).find_all(None, {'data-action': 'worktree-review-trash'})) == 1
+              and dom_query(wt).has(None, {'data-action': 'worktree-review-trash', 'data-path': '/Users/dev/workspace/api-service/.worktrees/evidence'})
               and wt.count('>Remove</button>') == 2 and wt.count('>Remove…</button>') == 1
               and 'disabled="" title="Cannot remove: an agent session is live here">Remove</button>' in wt)
         check("worktrees: Remove has three looks: solid red when confirmed safe, amber outline when not confirmed, greyed when blocked; a legend explains them",
               '<button type="button" class="btn btn-danger-solid btn-sm" data-action="worktree-remove" data-path="/Users/dev/workspace/api-service/.worktrees/done" data-branch="feat/done" title="Safe to remove: merged into origin/main (squash)">Remove</button>' in wt
-              and '<button type="button" class="btn btn-warn-outline btn-sm" data-action="worktree-review-trash" data-path="/Users/dev/workspace/api-service/.worktrees/evidence"' in wt
-              and 'title="Not confirmed safe: ignored files that only live here: .tmp/ (3 files, 1.2 MB); ' in wt
+              and dom_query(wt).has('button', {'type': 'button', 'class': 'btn btn-warn-outline btn-sm', 'data-action': 'worktree-review-trash', 'data-path': '/Users/dev/workspace/api-service/.worktrees/evidence'})
+              and dom_query(wt).has(None, {'title': starts_with('Not confirmed safe: ignored files that only live here: .tmp/ (3 files, 1.2 MB); ')})
               and 'not bold' in wt and '. Moves the folder to the Trash; the branch stays in git">Remove…</button>' in wt
               and '<button type="button" class="btn btn-sm" disabled="" title="Cannot remove: an agent session is live here">Remove</button>' in wt
               and 'btn btn-danger btn-sm" data-action="worktree-review-trash"' not in wt
@@ -1862,8 +1881,8 @@ def main():
               '<p class="wt-legend" id="worktrees-legend">Remove: confirmed safe · Remove…: not confirmed, goes to the Trash · greyed: blocked</p>' in dom_wt
               and '<p class="wt-legend" id="worktrees-legend" hidden' not in dom_wt)
         check("worktrees: the repository group offers Ask advisor about all and Discuss all beside Hide repo, counted over every row",
-              wt.count('data-action="worktree-advise-all" data-repo="/Users/dev/workspace/api-service"') == 1
-              and wt.count('data-action="worktree-discuss-all" data-repo="/Users/dev/workspace/api-service"') == 1
+              len(dom_query(wt).find_all(None, {'data-action': 'worktree-advise-all', 'data-repo': '/Users/dev/workspace/api-service'})) == 1
+              and len(dom_query(wt).find_all(None, {'data-action': 'worktree-discuss-all', 'data-repo': '/Users/dev/workspace/api-service'})) == 1
               and '>Ask advisor about all 3</button>' in wt and '>Discuss all 4</button>' in wt
               and wt.index('worktree-advise-all') < wt.index('worktree-discuss-all') < wt.index('data-action="worktree-hide"'))
         check("worktrees: Remove on a review row confirms what goes to the Trash and what stays in git, with no drawer",
@@ -1876,18 +1895,18 @@ def main():
         dw_agent = dom_wtdiscuss.split('id="tab-agent"', 1)[-1].split('id="drawer"', 1)[0]
         check("worktrees: Discuss posts the worktree to the agent, opens the Agent tab and shows the question as a card",
               'POST /agent/worktree' in pre(dom_wtdiscuss, 'mock-requests')
-              and 'class="tab-btn active" data-tab="agent"' in dom_wtdiscuss
+              and dom_query(dom_wtdiscuss).has(None, {'class': 'tab-btn active', 'data-tab': 'agent'})
               and dw_agent.count('agent-worktree-card') == 1
               and '<b>Can I delete this worktree?</b>' in dw_agent
               and 'branch feat/evidence' in dw_agent and 'Only ignored scratch files would be lost.' in dw_agent)
         check("worktrees: Discuss with the agent off toasts the server's text and stays on System",
               'class="toast danger">the system agent is off: set system_agent.enabled: true in the config file<' in dom_wtdiscussoff
-              and 'class="tab-btn active" data-tab="system"' in dom_wtdiscussoff)
+              and dom_query(dom_wtdiscussoff).has(None, {'class': 'tab-btn active', 'data-tab': 'system'}))
         check("worktrees: reviewed folder leaves the list after explicit Trash confirmation",
               'POST /worktrees/review-trash' in pre(dom_wtreviewtrash, 'mock-requests')
               and '.worktrees/evidence' not in wt_block(dom_wtreviewtrash))
         check("worktrees: the disk card shows the volume and what worktrees occupy",
-              "512.0 GB free of 2.0 TB" in dom_wt and 'data-w="75"' in dom_wt
+              "512.0 GB free of 2.0 TB" in dom_wt and dom_query(dom_wt).has(None, {'data-w': '75'})
               and "<b>Worktrees</b> 1.5 GB" in dom_wt
               and '<span class="wt-size">1.5 GB</span>' in wt)
 
@@ -1906,12 +1925,12 @@ def main():
               and "50 MB" in tile(dom_wt, "rc-trash"),
               rc[:600])
         check("worktrees: the reclaimed chart has a column per day; only days with cleanups are buttons, labeled with their numbers",
-              rc.count('class="rc-col"') == 30 and rc.count('data-action="reclaim-day"') == 1
-              and 'aria-label="Space reclaimed per day, last 30 days"' in rc
+              len(dom_query(rc).find_all(None, {'class': 'rc-col'})) == 30 and len(dom_query(rc).find_all(None, {'data-action': 'reclaim-day'})) == 1
+              and dom_query(rc).has(None, {'aria-label': 'Space reclaimed per day, last 30 days'})
               and ': 1.0 GB freed by 1 cleanup, 50 MB moved to the Trash by 1 cleanup"' in rc
-              and 'class="rc-seg rc-seg-trash" data-h="5"' in rc
+              and dom_query(rc).has(None, {'class': 'rc-seg rc-seg-trash', 'data-h': '5'})
               and "<span>2.0 GB</span><span>1.0 GB</span><span>0</span>" in rc,
-              f"cols={rc.count('class=\"rc-col\"')} days={rc.count('data-action=\"reclaim-day\"')}")
+              f"cols={len(dom_query(rc).find_all(None, {'class': 'rc-col'}))} days={len(dom_query(rc).find_all(None, {'data-action': 'reclaim-day'}))}")
         check("worktrees: an old cached scan shows at once and the tab re-reads until the rescan lands",
               "gone-since" not in wt_block(dom_wtrefresh) and "refreshing…" not in dom_wtrefresh
               and "scanned in 4.2s" in dom_wtrefresh)
@@ -1920,14 +1939,14 @@ def main():
               and "<b>Worktrees</b> 1.5 GB" in dom_wtsizing)
         cl = cl_block(dom_wt)
         check("clutter: items grouped by project with kind, size, idle; Trash and Run only where the item offers them",
-              cl.count('class="wt-row cl-row') == 3
+              len(dom_query(cl).find_all(None, {'class': 'wt-row cl-row'})) == 3
               and 'data-action="clutter-trash" data-path="/Users/dev/workspace/api-service/.tmp">Move to Trash</button>' in cl
               and 'data-action="clutter-clean" data-name="go build" title="go clean -cache">Run go clean -cache</button>' in cl
-              and cl.count('data-action="clutter-trash"') + cl.count('data-action="clutter-clean"') == 2
+              and len(dom_query(cl).find_all(None, {'data-action': 'clutter-trash'})) + len(dom_query(cl).find_all(None, {'data-action': 'clutter-clean'})) == 2
               and "&lt;i&gt;downloaded&lt;/i&gt; models" in cl and "<i>downloaded</i>" not in cl
               and '<span class="wt-repo-path" title="This machine">This machine</span>' in cl)
         check("clutter: each project has Ask advisor; its plan renders escaped under the header with one step per line",
-              cl.count('data-action="clutter-advise"') == 2
+              len(dom_query(cl).find_all(None, {'data-action': 'clutter-advise'})) == 2
               and 'data-action="clutter-advise" data-project="machine">Ask advisor</button>' in cl
               and '<div class="wt-advice cl-plan"><b>Advisor:</b> &lt;b&gt;Old&lt;/b&gt; scratch holds most of it.'
                   '<ol><li>Move .tmp to the Trash</li><li>Ask the agent about feat/x</li></ol></div>' in cl
@@ -1941,7 +1960,7 @@ def main():
               "POST /cleanup/trash" in pre(dom_clutter, "mock-requests") and "/api-service/.tmp" not in clr
               and "1.0 MB moved to the Trash by cleanups" in dom_clutter)
         wtr = wt_block(dom_wtremove)
-        wtr_rows = wtr.count('class="wt-row')
+        wtr_rows = len(dom_query(wtr).find_all(None, {'class': 'wt-row'}))
         wt_reqs = pre(dom_wtremove, "mock-requests")
         check("worktrees: Remove starts a background removal after the dialog; when it lands the row leaves and the tiles move",
               "POST /worktrees/remove" in wt_reqs and ".worktrees/done" not in wtr and wtr_rows == 3
@@ -1951,14 +1970,14 @@ def main():
               f"requests={wt_reqs!r} rows={wtr_rows}")
 
         def toast_block(dom_text):
-            return dom_text.split('id="removal-toast"', 1)[-1].split('</ul>', 1)[0] if 'id="removal-toast"' in dom_text else ''
-        tr = dom_wtremove.split('id="removal-toast"', 1)[-1].split('id="drawer"', 1)[0] if 'id="removal-toast"' in dom_wtremove else ''
+            return dom_text.split('id="removal-toast"', 1)[-1].split('</ul>', 1)[0] if dom_query(dom_text).has(None, {'id': 'removal-toast'}) else ''
+        tr = dom_wtremove.split('id="removal-toast"', 1)[-1].split('id="drawer"', 1)[0] if dom_query(dom_wtremove).has(None, {'id': 'removal-toast'}) else ''
         check("worktrees: when the removal lands its toast names what it reclaimed and links the history",
-              'class="toast toast-sticky removal-toast success"' in dom_wtremove
+              dom_query(dom_wtremove).has(None, {'class': 'toast toast-sticky removal-toast success'})
               and '<p class="rt-title" role="status">Removed feat/done</p>' in tr
               and '<p class="rt-sub">1.5 GB reclaimed</p>' in tr
               and 'data-action="worktrees-history">View cleanup history</button>' in tr
-              and 'aria-valuenow="100"' in tr,
+              and dom_query(tr).has(None, {'aria-valuenow': '100'}),
               tr[:400])
         wtb = wt_block(dom_wtbatch)
         batch_posts = pre(dom_wtbatch, "mock-requests").count("POST /worktrees/remove")
@@ -1971,7 +1990,7 @@ def main():
               wto.index('/Users/dev/gone-app') < wto.index('/Users/dev/workspace/api-service')
               and 'repository not found (moved or deleted) — the folders below still point to it' in wto
               and 'data-action="worktree-reveal" data-path="/Users/dev/.cursor/worktrees/gone-app/ctnj">Open folder</button>' in wto
-              and 'data-action="worktree-trash-orphan"' in wto
+              and dom_query(wto).has(None, {'data-action': 'worktree-trash-orphan'})
               and "1 folder still points to it (listed first below)" in dom_wtorphan)
         wtot = wt_block(dom_wtorphantrash)
         check("worktrees: Move to Trash on an orphan posts /worktrees/trash after the dialog and the group and its error leave",
@@ -1980,17 +1999,17 @@ def main():
         wtg = wt_block(dom_wtremoving)
         tg = toast_block(dom_wtremoving)
         check("worktrees: while a removal runs a toast follows it: phase, size and files, time in the phase, the bar",
-              'class="toast toast-sticky removal-toast info"' in dom_wtremoving
+              dom_query(dom_wtremoving).has(None, {'class': 'toast toast-sticky removal-toast info'})
               and '<p class="rt-title" role="status">Removing feat/done</p>' in tg
               and '<span class="rt-step">deleting · 1.5 GB · 184,203 files</span>' in tg
-              and 'role="progressbar"' in tg and 'aria-valuenow="50"' in tg and "rt-bar-running" in tg
-              and '<span class="rt-elapsed" data-since="' in tg and "s</span>" in tg,
+              and dom_query(tg).has(None, {'role': 'progressbar'}) and dom_query(tg).has(None, {'aria-valuenow': '50'}) and "rt-bar-running" in tg
+              and dom_query(tg).has('span', {'class': 'rt-elapsed', 'data-since': None}) and "s</span>" in tg,
               tg[:600])
         check("worktrees: while a removal runs its row shows the phase marks, step and size, and Remove is disabled",
               '<span class="wt-steps" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span>'
               '<b>Removing…</b> deleting · 1.5 GB · 184,203 files</p>' in wtg
               and '<button type="button" class="btn btn-danger btn-sm" disabled="">Removing…</button>' in wtg
-              and 'data-action="worktree-remove"' not in wtg)
+              and not dom_query(wtg).has(None, {'data-action': 'worktree-remove'}))
         wtf = wt_block(dom_wtremovefail)
         check("worktrees: a failed removal keeps the row with the error as text and offers Try again",
               '.worktrees/done' in wtf
@@ -1998,12 +2017,12 @@ def main():
               and '>Try again</button>' in wtf)
         tf = toast_block(dom_wtremovefail)
         check("worktrees: a failed removal's toast stays with the error as text",
-              'class="toast toast-sticky removal-toast danger"' in dom_wtremovefail
+              dom_query(dom_wtremovefail).has(None, {'class': 'toast toast-sticky removal-toast danger'})
               and '<p class="rt-title" role="status">Not removed: feat/done</p>' in tf
               and 'git worktree: &lt;b&gt;fatal&lt;/b&gt; could not remove' in tf and "<b>fatal</b>" not in tf
               and "rt-bar-failed" in tf,
               tf[:400])
-        tb = dom_wtbatch.split('id="removal-toast"', 1)[-1].split('id="drawer"', 1)[0] if 'id="removal-toast"' in dom_wtbatch else ''
+        tb = dom_wtbatch.split('id="removal-toast"', 1)[-1].split('id="drawer"', 1)[0] if dom_query(dom_wtbatch).has(None, {'id': 'removal-toast'}) else ''
         check("worktrees: Remove all runs under one toast that ends with the count and bytes",
               '<p class="rt-title" role="status">Removed 3 of 3 worktrees</p>' in tb and "4.5 GB reclaimed" in tb,
               tb[:300])
@@ -2021,19 +2040,19 @@ def main():
               and "Moved an orphan folder to the Trash" in hx_all
               and "&lt;b&gt;branch&lt;/b&gt; feat/old kept" in hx_all and "<b>branch</b>" not in hx_all
               and "2 entries · 3.0 GB freed" in hx and "Moved an orphan folder" not in hx
-              and 'data-kind="removed" aria-pressed="true"' in hx,
+              and dom_query(hx).has(None, {'data-kind': 'removed', 'aria-pressed': 'true'}),
               hx_all[:300])
         for clock, day_dom in [("current time", dom_wtday), ("midnight", dom_wtday_midnight)]:
             hd = day_dom.split('id="drawer-body"', 1)[-1].split('id="drawer-foot"', 1)[0]
             check(f"worktrees: a chart column shows its numbers on hover and opens the history at that day ({clock})",
                   "1.0 GB freed by 1 cleanup50 MB moved to the Trash by 1 cleanup" in pre(day_dom, "reclaim-tip-probe")
-                  and "2 entries · 1.0 GB freed · 50 MB moved to the Trash" in hd and 'data-action="history-day" data-day=""' in hd
+                  and "2 entries · 1.0 GB freed · 50 MB moved to the Trash" in hd and dom_query(hd).has(None, {'data-action': 'history-day', 'data-day': None})
                   and "feat/old" not in hd,
                   f"tip={pre(day_dom, 'reclaim-tip-probe')!r} {hd[:200]}")
         ws = wt_block(dom_wtsearch)
         check("worktrees: the search box keeps rows whose branch, folder or repository matches, any case",
-              ws.count('class="wt-row') == 1 and ".worktrees/evidence" in ws,
-              f"rows={ws.count('class=\"wt-row')}")
+              len(dom_query(ws).find_all(None, {'class': 'wt-row'})) == 1 and ".worktrees/evidence" in ws,
+              f"rows={len(dom_query(ws).find_all(None, {'class': 'wt-row'}))}")
         def gd(pid):
             try:
                 return json.loads(html.unescape(pre(dom_wtgroup, pid)) or "{}")
@@ -2061,7 +2080,7 @@ def main():
               gd_reqs)
         check("worktrees: Discuss all posts the repository and opens the Agent tab on the group question",
               'POST /agent/worktree body={"repo":"/Users/dev/workspace/api-service"}' in gd_reqs
-              and 'class="tab-btn active" data-tab="agent"' in dom_wtgroup
+              and dom_query(dom_wtgroup).has(None, {'class': 'tab-btn active', 'data-tab': 'agent'})
               and gd_agent.count("agent-worktree-card") == 1
               and "<b>Which of these worktrees in this repository can I delete?</b>" in gd_agent
               and "feat/evidence · review · merged: no" in gd_agent,
@@ -2089,32 +2108,32 @@ def main():
             for name, result in checks.items():
                 check(f"agent workspace ({viewport}): {name}", result is True)
         check("agent: the tab opens with the conversation, plans, runs and the model state",
-              'class="tab-btn active" data-tab="agent"' in dom_agent
-              and agent_count(dom_agent, "agent-msg ") == 5 and ag.count('class="agent-plan" data-plan=') == 2
-              and ag.count('class="agent-run" data-run=') == 2
+              dom_query(dom_agent).has(None, {'class': 'tab-btn active', 'data-tab': 'agent'})
+              and agent_count(dom_agent, "agent-msg ") == 5 and len(dom_query(ag).find_all(None, {'class': 'agent-plan', 'data-plan': None})) == 2
+              and len(dom_query(ag).find_all(None, {'class': 'agent-run', 'data-run': None})) == 2
               and 'qwen3:latest on Ollama 0.15.1 · stays on this machine' in ag)
         check("agent: message text, proposal tasks, plan titles and run output render escaped",
               "<img src=x" not in ag and "&lt;img src=x onerror=alert(1)&gt;" in ag)
         check("agent: local chat and optional harness handoff are separate; unavailable harnesses are marked for later",
-              'Local Ollama · no harness' in ag and 'id="agent-handoff-panel"' in ag
+              'Local Ollama · no harness' in ag and dom_query(ag).has(None, {'id': 'agent-handoff-panel'})
               and 'id="agent-harness"' not in ag.split('id="agent-composer"', 1)[1].split('</form>', 1)[0]
               and '<option value="openclaw">OpenClaw (plan for later)</option>' in ag
               and '<option value="codex">Codex</option>' in ag and '<option value="pi">Pi runner (plan for later)</option>' in ag
               and ag.count("<option ") == 5)
         check("agent: a plan whose harness cannot run says why and its dispatch buttons are disabled",
               'agent-plan-reason">OpenClaw is not installed where the daemon can find it (openclaw)</div>' in ag
-              and 'data-plan="2" data-mode="headless" disabled=""' in ag)
+              and dom_query(ag).has(None, {'data-plan': '2', 'data-mode': 'headless', 'disabled': ''}))
         check("agent: a proposal offers Save plan and dispatch; a saved one names its plan",
               'data-action="agent-save-proposal" data-message="2">Save plan</button>' in ag
               and 'Saved as plan #2' in ag)
         check("agent: a manual terminal dispatch offers its command to copy",
-              "data-action=\"agent-copy\" data-text=\"sh '/Users/dev/.config/secure-agent/sysagent/terminal-1-1.sh'\"" in ag)
+              dom_query(ag).has(None, {'data-action': 'agent-copy', 'data-text': "sh '/Users/dev/.config/secure-agent/sysagent/terminal-1-1.sh'"}))
         check("agent: harnesses show ready or the reason; skills are listed",
-              ag.count('badge badge-ok">ready</span>') == 2 and 'data-action="agent-skill" data-skill="signing"' in ag)
+              ag.count('badge badge-ok">ready</span>') == 2 and dom_query(ag).has(None, {'data-action': 'agent-skill', 'data-skill': 'signing'}))
         ago = agent_block(dom_agentoff)
         check("agent: off, the tab says how to turn it on and the composer is disabled",
               'Secure Agent chat is off' in ago and 'system_agent:\n  enabled: true' in ago
-              and '<textarea id="agent-input"' in ago and ago.split('<textarea id="agent-input"', 1)[1].split('>', 1)[0].count('disabled') == 1)
+              and dom_query(ago).has('textarea', {'id': 'agent-input'}) and ago.split('<textarea id="agent-input"', 1)[1].split('>', 1)[0].count('disabled') == 1)
         for label, progress_dom, expected, animation in [
             ("delivery", dom_agentlatency, "Sending your message", "spin"),
             ("Ollama wait", dom_agentthinking, "Waiting for local Ollama", "spin"),
@@ -2135,24 +2154,24 @@ def main():
         check("agent: a message sent from the composer gets a direct local command proposal",
               "POST /agent/chat" in pre(dom_agentchat, "mock-requests")
               and "Keep my Git token in the keychain" in agc and "git config --global credential.helper osxkeychain" in agc
-              and 'data-action="agent-run-local"' in agc
+              and dom_query(agc).has(None, {'data-action': 'agent-run-local'})
               and "The local model is answering" not in agc and agent_count(dom_agentchat, "agent-msg ") == 7)
         agl = agent_block(dom_agentlocal)
         check("agent: confirmed local command runs once and its output stays expanded in chat",
               "POST /agent/actions" in pre(dom_agentlocal, "mock-requests")
-              and 'Git credential helper configured.' in agl and 'data-action="agent-run-local"' not in agl
-              and agl.count('class="agent-run" data-run=') == 3
+              and 'Git credential helper configured.' in agl and not dom_query(agl).has(None, {'data-action': 'agent-run-local'})
+              and len(dom_query(agl).find_all(None, {'class': 'agent-run', 'data-run': None})) == 3
               and 'agent-inline-output' in agl.split('class="agent-chat-foot"', 1)[0]
               and 'Completed · exit 0' in agl.split('class="agent-chat-foot"', 1)[0]
-              and '<aside class="agent-inspector" id="agent-side" aria-label="Agent tools" hidden=' in agl)
+              and dom_query(agl).has('aside', {'class': 'agent-inspector', 'id': 'agent-side', 'aria-label': 'Agent tools', 'hidden': None}))
         agd = agent_block(dom_agentdispatch)
         reqs = pre(dom_agentdispatch, "mock-requests")
         check("agent: Run headless dispatches after the dialog; the run lands under Runs and finishes",
               "POST /agent/dispatch" in reqs and 'Credentials now live in the keychain.' in agd
-              and agd.count('class="agent-run" data-run=') == 3 and 'badge badge-ok">done</span>' in agd.split('id="agent-runs"', 1)[1])
+              and len(dom_query(agd).find_all(None, {'class': 'agent-run', 'data-run': None})) == 3 and 'badge badge-ok">done</span>' in agd.split('id="agent-runs"', 1)[1])
         check("agent: Save plan on a proposal saves it and the reply names the plan",
-              "POST /agent/plans" in reqs and agd.count('class="agent-plan" data-plan=') == 3
-              and agd.count("Saved as plan #") == 2 and 'data-action="agent-save-proposal"' not in agd)
+              "POST /agent/plans" in reqs and len(dom_query(agd).find_all(None, {'class': 'agent-plan', 'data-plan': None})) == 3
+              and agd.count("Saved as plan #") == 2 and not dom_query(agd).has(None, {'data-action': 'agent-save-proposal'}))
 
         if args.screenshot:
             shot_dir = os.path.abspath(args.screenshot)
@@ -2160,7 +2179,7 @@ def main():
             for name, query, themes in SHOTS:
                 for theme in themes:
                     path = os.path.join(shot_dir, f"{name}-{theme}.png")
-                    screenshot(chrome, origin, f"{query}&theme={theme}", path)
+                    screenshot(chrome, origin, f"{query}&theme={theme}", path, tmp)
                     print(f"  shot  {path}")
     finally:
         if srv:

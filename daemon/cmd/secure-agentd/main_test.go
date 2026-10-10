@@ -60,7 +60,7 @@ func TestFullBusCorrelatorStorePipeline(t *testing.T) {
 	tg.Refresh()
 
 	cl := sensitive.New(cfg)
-	cr := correlate.New(tg, cl, cfg)
+	cr := correlate.New(tg, cl, cfg, correlate.Hooks{})
 
 	sub := b.Subscribe()
 	done := make(chan struct{})
@@ -169,7 +169,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	tg.Refresh()
 
 	cl := sensitive.New(cfg)
-	cr := correlate.New(tg, cl, cfg)
+	cr := correlate.New(tg, cl, cfg, correlate.Hooks{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
