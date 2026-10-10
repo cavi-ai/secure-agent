@@ -1066,7 +1066,7 @@ def main():
         check("malformed snapshot and guard containers retain last-good metrics with persistent warnings",
               pre(dom_malformed, "malformed-returned") == "yes"
               and 'id="count-agents">3<' in dom_malformed
-              and "Live telemetry: Stale" in hot_health
+              and "Live telemetry:" not in hot_health
               and "Guard decisions: Unavailable" in hot_health and "Invalid response" in hot_health
               and "hidden" not in hot_health
               and "The daemon returned invalid telemetry" in dom_malformed
@@ -1079,6 +1079,11 @@ def main():
               and pre(dom_malformed, 'posture-visibility') == 'health=true retry=true'
               and f'id="tabs-posture-text">{retained_decisions} need you · refresh failed<' in dom_malformed
               and not dom_query(dom_malformed).has(None, {'id': 'posture-retry', 'hidden': ''}))
+        check("snapshot failure is not repeated in panels while the independent guard failure remains visible",
+              dom_malformed.count('Status stale — last complete telemetry') == 1
+              and all('Live telemetry:' not in node.inner_html for node in dom_query(dom_malformed).find_all(None, {'class': 'report-health'}))
+              and all('hidden' in node.attrs for node in dom_query(dom_malformed).find_all(None, {'data-reports': 'snapshot'}))
+              and 'Guard decisions: Unavailable' in hot_health)
         check("snapshot recovery clears the primary freshness warning and Retry",
               dom_query(dom_malformedrecover).has(None, {'id': 'posture-health', 'hidden': ''})
               and pre(dom_malformedrecover, 'posture-visibility') == 'health=false retry=false'
@@ -1086,7 +1091,7 @@ def main():
               and f'id="tabs-posture-text">{retained_decisions} need you<' in dom_malformedrecover)
         check("valid hot responses recover from malformed containers",
               pre(dom_malformedrecover, "malformed-before-recovery").startswith("3 ")
-              and "Stale" in pre(dom_malformedrecover, "malformed-before-recovery")
+              and "Status stale — last complete telemetry" in pre(dom_malformedrecover, "malformed-before-recovery")
               and 'id="count-agents">3<' in dom_malformedrecover
               and "hidden" in hot_recovered and "Invalid response" not in hot_recovered)
 

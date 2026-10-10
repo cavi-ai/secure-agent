@@ -436,22 +436,34 @@ document.addEventListener('DOMContentLoaded', () => {
   let telemetryFetchGen = 0;
   let telemetrySlowGen = 0;
   let prevUptimeSec = 0;
-  // Endpoints that failed in the last cycle — each failure surfaces ONCE as a
-  // toast so a dying endpoint can't silently blank its panel.
+  // Deduplicate report failure toasts until the next successful read. Snapshot
+  // failures have a persistent headline instead of a second transient alert.
   const failedEndpoints = new Set();
   const reportHealth = createConsoleReportHealth();
 
   function noteEndpointFailure(key) {
     if (failedEndpoints.has(key)) return;
     failedEndpoints.add(key);
+    if (key === 'snapshot' && hasSnapshotHeadline()) return;
     showToast(`Couldn't load ${key} — will keep retrying`, 'danger');
   }
 
+  function hasSnapshotHeadline() {
+    const banner = document.getElementById('posture-banner');
+    return !!(banner && !banner.hidden && document.getElementById('posture-health'));
+  }
+  function renderSnapshotHealth() {
+    if (sessionEnded || !window.SA || !hasSnapshotHeadline()) return;
+    renderPosture();
+    paintTabsPosture();
+  }
   function renderReportHealth() {
     if (sessionEnded) return;
+    const snapshotInHeadline = hasSnapshotHeadline() && !document.getElementById('posture-health').hidden;
     document.querySelectorAll('[data-reports]').forEach(el => {
       const keys = el.dataset.reports.split('|').filter(key =>
         !['spend', 'spend card', 'spend plans'].includes(key)
+        && (key !== 'snapshot' || !snapshotInHeadline)
         && (key !== 'flags' || isFlagsFiltered() || homeGroupOpen('findings')) && (key !== 'events' || isEventsFiltered()));
       const failures = reportHealth.failures(keys);
       const text = consoleReportHealthText(failures);
@@ -462,10 +474,12 @@ document.addEventListener('DOMContentLoaded', () => {
   function reportSucceeded(key) {
     reportHealth.success(key);
     failedEndpoints.delete(key);
+    if (key === 'snapshot') renderSnapshotHealth();
     renderReportHealth();
   }
   function reportFailed(key, reason) {
     reportHealth.failure(key, reason);
+    if (key === 'snapshot') renderSnapshotHealth();
     renderReportHealth();
   }
 
