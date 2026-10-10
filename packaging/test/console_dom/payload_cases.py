@@ -23,6 +23,31 @@ def disabled_agent(now_ms=None):
     return {"now": now, "patches": [{"route": "/agent/status", "path": ["enabled"], "value": False}]}
 
 
+def context_handoff(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": [
+        {"route": "/flags", "path": [{"id": "flag-2"}, "session_id"], "value": "sess-claude-1"},
+    ]}
+
+
+def session_link(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": [
+        {"route": "/flags", "path": [{"id": "flag-1"}, "session_id"], "value": "sess-claude-1"},
+    ]}
+
+
+def session_workbench(now_ms=None):
+    now, iso = _clock(now_ms)
+    return {"now": now, "patches": [
+        {"route": "/sessions", "path": [], "append": [{
+            "id": f"wb-session-{i}", "harness": "codex", "repo": f"workbench-{i}",
+            "workspace": f"/Users/dev/workbench-{i}", "branch": "main", "status": "idle",
+            "started_at": iso(3600000), "last_seen_at": iso(120000 + i * 1000),
+        } for i in range(80)]},
+    ]}
+
+
 def quiet_sessions(now_ms=None):
     now, _ = _clock(now_ms)
     return {"now": now, "patches": [
