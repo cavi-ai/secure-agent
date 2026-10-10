@@ -762,10 +762,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const pill = document.getElementById('tabs-posture');
     const text = document.getElementById('tabs-posture-text');
     if (!pill || !text) return;
-    const p = telemetryData.posture;
-    const n = attentionCount(p);
-    pill.dataset.state = (p && p.state) || 'all-clear';
-    text.textContent = n ? `${n} need${n === 1 ? 's' : ''} you` : 'All clear';
+    const view = consolePosturePresentation(telemetryData.posture, window.SA?.postureHealth);
+    pill.dataset.state = view.state;
+    text.textContent = view.pill;
   }
   const tabsBar = document.getElementById('tabs-bar');
   function syncTabsStuck() {
@@ -1918,7 +1917,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const value = await r.json();
         if (!ownsResult()) return null;
         if (!isConsoleReport(key, value)) { reportFailed(key, 'Invalid response'); return null; }
-        reportSucceeded(key);
+        if (key !== 'snapshot') reportSucceeded(key);
         return value;
       } catch {
         if (ownsResult()) reportFailed(key, 'Request failed or response unreadable');
@@ -1962,6 +1961,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (snap.suggestions) telemetryData.suggestions = snap.suggestions || [];
         if (snap.mutes) telemetryData.mutes = snap.mutes || [];
         if (snap.sessions) telemetryData.sessions = snap.sessions || [];
+        // Clear the snapshot failure only after its data has been published.
+        reportSucceeded('snapshot');
       }
     }
 
@@ -3079,6 +3080,7 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (el.matches('details.agent-tree')) agentTreeOpen[el.dataset.pid] = el.open;
   }, true);
   Object.defineProperties(window.SA, {
+    postureHealth: { get() { return { lastSnapshotAt, error: reportHealth.failures(['snapshot'])[0]?.error || '' }; } },
     activeTab: { get() { return activeTab; } },
     timelineSession: { get() { return timelineSession; }, set(v) { timelineSession = v; } },
     timelinePids: { get() { return timelinePids; }, set(v) { timelinePids = v; } },
@@ -5386,6 +5388,9 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'goto-top':
         e.preventDefault();
         window.scrollTo({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
+        break;
+      case 'retry-posture':
+        fetchTelemetry({ full: true });
         break;
       case 'clear-scope':
         e.preventDefault();

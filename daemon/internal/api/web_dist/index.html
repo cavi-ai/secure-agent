@@ -125,15 +125,17 @@
     </div>
 
     <!-- Posture headline: one line answering "do I need to look?" -->
-    <section class="posture" id="posture-banner" data-state="all-clear">
+    <section class="posture" id="posture-banner" data-state="unknown">
       <div class="posture-main">
         <span class="posture-dot" aria-hidden="true"></span>
         <div>
-          <div class="posture-state" id="posture-state">All clear</div>
-          <div class="posture-summary" id="posture-summary">Agents monitored, no action needed</div>
+          <div class="posture-state" id="posture-state">Waiting for telemetry</div>
+          <div class="posture-summary" id="posture-summary"></div>
+          <div class="posture-health" id="posture-health" role="status">Waiting for a complete telemetry snapshot.</div>
         </div>
       </div>
       <ul class="posture-items" id="posture-items"></ul>
+      <button type="button" class="btn btn-ghost btn-sm" id="posture-retry" data-action="retry-posture" hidden>Retry</button>
       <a class="btn btn-ghost btn-sm agent-posture-link" href="#home" data-action="goto-tab" data-tab="home">Review alerts</a>
     </section>
 
@@ -196,7 +198,7 @@
         <svg class="icon"><use href="#i-chat"/></svg><span>Agent</span>
       </button>
     </nav>
-    <button type="button" class="tabs-posture" id="tabs-posture" data-action="goto-top" title="Back to top" data-state="all-clear" hidden><span class="dot" aria-hidden="true"></span><span id="tabs-posture-text">All clear</span></button>
+      <button type="button" class="tabs-posture" id="tabs-posture" data-action="goto-top" title="Back to top" data-state="unknown" hidden><span class="dot" aria-hidden="true"></span><span id="tabs-posture-text">Waiting for telemetry</span></button>
     </div>
     <div class="scope-bar" id="scope-bar" role="status" hidden></div>
     </div>

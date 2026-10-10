@@ -1100,29 +1100,28 @@ function renderPosture() {
   const stateEl = document.getElementById('posture-state');
   const summaryEl = document.getElementById('posture-summary');
   const itemsEl = document.getElementById('posture-items');
+  const healthEl = document.getElementById('posture-health');
+  const retryEl = document.getElementById('posture-retry');
   const p = SA.t.posture;
-  if (!banner || !p) return;
+  if (!banner) return;
+  const view = consolePosturePresentation(p, SA.postureHealth);
 
-  banner.dataset.state = p.state || 'all-clear';
+  banner.dataset.state = view.state;
   // Announce escalations only (not every re-render): the screen-reader
   // equivalent of the eye catching a banner turn red.
   const prevState = banner.dataset.announcedState || '';
-  const nextState = p.state || 'all-clear';
-  if (nextState !== prevState && nextState !== 'all-clear') {
-    (window.saAnnounce || function(){})((nextState === 'critical' ? 'Critical: ' : 'Attention: ') + (p.summary || ''));
+  const nextState = view.state;
+  if (nextState !== prevState && (nextState === 'critical' || nextState === 'attention')) {
+    (window.saAnnounce || function(){})((nextState === 'critical' ? 'Critical: ' : 'Attention: ') + view.summary);
   }
   banner.dataset.announcedState = nextState;
-  if (p.state === 'all-clear') {
-    stateEl.textContent = 'No pending decisions';
-    summaryEl.textContent = 'Agents monitored, no action needed';
-  } else if (p.state === 'critical') {
-    stateEl.textContent = 'Critical';
-  } else if (!Number(p.needs_you) && Number(p.coverage_count)) {
-    stateEl.textContent = 'Monitoring needs attention';
-  } else {
-    stateEl.textContent = 'Needs attention';
+  stateEl.textContent = view.title;
+  summaryEl.textContent = view.summary;
+  if (healthEl) {
+    healthEl.textContent = view.health;
+    healthEl.hidden = !view.health;
   }
-  summaryEl.textContent = p.summary || '';
+  if (retryEl) retryEl.hidden = !view.retry;
 
   // The fatigue reducer: when the local advisor has triaged the critical
   // flags and some read benign, say so at the one-glance level.
@@ -1134,7 +1133,7 @@ function renderPosture() {
   const extra = criticals.length > 0
     ? [`<li class="posture-advisor"><span class="sev s1">●</span><span>Advisor opinion: ${benignCount} of ${criticals.length} triaged critical flags may be benign. Evidence and risk are unchanged.</span></li>`]
     : [];
-  const html = postureItemsHTML(p.items, SA.activeTab, extra);
+  const html = postureItemsHTML(p?.items, SA.activeTab, extra);
   itemsEl.innerHTML = html;
   itemsEl.hidden = !html;
 }

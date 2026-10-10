@@ -902,9 +902,13 @@
         stamp('malformed-before-recovery', document.getElementById('count-agents').textContent + ' ' +
           Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
         malformedRecovered = true;
-        document.getElementById('btn-refresh').click();
+        document.getElementById('posture-retry').click();
       }, 6000);
     }
+    setTimeout(() => {
+      const visible = id => document.getElementById(id).getClientRects().length > 0;
+      stamp('posture-visibility', `health=${visible('posture-health')} retry=${visible('posture-retry')}`);
+    }, 11000);
   }
 
   if (scenarios.has('healthdemo')) {
