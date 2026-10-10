@@ -61,17 +61,18 @@ const (
 	trimIncidentsSQL = `DELETE FROM incidents WHERE rowid IN (
 		SELECT rowid FROM incidents ORDER BY datetime(created_at), created_at
 		LIMIT max(0, (SELECT COUNT(*) FROM incidents) - ?))`
-	// findOpenIncidentSQL seeks idx_incidents_open_key; it runs for every
-	// new flag.
-	findOpenIncidentSQL = `SELECT id FROM incidents
-		 WHERE COALESCE(rule,'') = ? AND COALESCE(session_id,'') = ? AND COALESCE(subject,'') = ?
-		   AND COALESCE(status,'open') != 'resolved'
-		 ORDER BY datetime(created_at) DESC LIMIT 1`
 	// hostFirstSeenSQL seeks idx_events_host; the advisor runs it for each
 	// flag, host and egress episode it triages. The partial index is usable
 	// only when the statement repeats the index's empty-host exclusion.
 	hostFirstSeenSQL = `SELECT MIN(ts) FROM events WHERE remote_host = ? AND remote_host != ''`
 )
+
+// findOpenIncidentSQL seeks idx_incidents_open_key; it runs for every new flag.
+// Preserve nanoseconds and normalize offsets before choosing the newest target.
+var findOpenIncidentSQL = `SELECT id FROM incidents
+	 WHERE COALESCE(rule,'') = ? AND COALESCE(session_id,'') = ? AND COALESCE(subject,'') = ?
+	   AND COALESCE(status,'open') != 'resolved'
+	 ORDER BY ` + timestampOrderExpr("created_at") + ` DESC, id DESC LIMIT 1`
 
 // Harness activity (hook and trace events) behind every /status, /snapshot
 // and /posture: idx_events_trace_activity covers only those kinds, and the
