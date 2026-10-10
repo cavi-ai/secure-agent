@@ -58,7 +58,7 @@ func (a *API) egressEpisodeViews() ([]egressEpisodeView, error) {
 }
 
 type egressEpisodeStore interface {
-	ExpectedEgressMatcher() func(store.EgressEpisode) string
+	ExpectedEgressMatcherResult() (func(store.EgressEpisode) string, error)
 	ListEgressEpisodesForReviewResult() ([]store.EgressEpisode, error)
 	AdvisorVerdictsFor([]string, string) (map[string]model.AdvisorVerdict, error)
 }
@@ -73,7 +73,10 @@ func readEgressEpisodeViews(st egressEpisodeStore) ([]egressEpisodeView, error) 
 	if err != nil {
 		return nil, err
 	}
-	match := st.ExpectedEgressMatcher()
+	match, err := st.ExpectedEgressMatcherResult()
+	if err != nil {
+		return nil, err
+	}
 	for _, e := range episodes {
 		if !e.Recurring && len(other) >= 100 {
 			continue

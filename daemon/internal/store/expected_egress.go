@@ -141,30 +141,37 @@ func (s *Store) RevokeExpectedEgressRule(id string) error {
 }
 
 func (s *Store) ListExpectedEgressRules() []ExpectedEgressRule {
-	out := make([]ExpectedEgressRule, 0)
-	read := func(query string) bool {
+	rules, _ := s.ListExpectedEgressRulesResult()
+	return rules
+}
+
+// ListExpectedEgressRulesResult rejects incomplete rule lists.
+func (s *Store) ListExpectedEgressRulesResult() (out []ExpectedEgressRule, readErr error) {
+	defer func() { s.noteRead("expected egress rules", readErr) }()
+	out = make([]ExpectedEgressRule, 0)
+	read := func(query string) error {
 		rows, err := s.db.Query(query)
 		if err != nil {
-			return false
+			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			r, err := scanExpectedRule(rows)
 			if err != nil {
-				return false
+				return err
 			}
 			out = append(out, r)
 		}
-		return rows.Err() == nil
+		return rows.Err()
 	}
 	columns := `SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at FROM expected_egress_rules`
-	if !read(columns + ` WHERE revoked_at IS NULL ORDER BY created_at DESC,id DESC`) {
-		return nil
+	if err := read(columns + ` WHERE revoked_at IS NULL ORDER BY created_at DESC,id DESC`); err != nil {
+		return nil, err
 	}
-	if !read(columns + ` WHERE revoked_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 500`) {
-		return nil
+	if err := read(columns + ` WHERE revoked_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 500`); err != nil {
+		return nil, err
 	}
-	return out
+	return out, nil
 }
 
 // ExpectedEgressMatch only classifies informational candidates. It is never
@@ -189,22 +196,32 @@ func (s *Store) ExpectedEgressMatchingRuleID(o EgressObservation) string {
 // ExpectedEgressMatchingRuleID for any number of stored episodes, whose
 // scope, host and protocol were normalized when they were recorded.
 func (s *Store) ExpectedEgressMatcher() func(EgressEpisode) string {
+	match, err := s.ExpectedEgressMatcherResult()
+	if err != nil {
+		return func(EgressEpisode) string { return "" }
+	}
+	return match
+}
+
+// ExpectedEgressMatcherResult rejects failed reads before classifying episodes.
+func (s *Store) ExpectedEgressMatcherResult() (match func(EgressEpisode) string, readErr error) {
+	defer func() { s.noteRead("expected egress matcher", readErr) }()
 	var rules []ExpectedEgressRule
 	rows, err := s.db.Query(`SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace FROM expected_egress_rules
 	 WHERE revoked_at IS NULL ORDER BY CASE WHEN kind='destination' THEN 0 ELSE 1 END, created_at DESC, id DESC`)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var r ExpectedEgressRule
-			if rows.Scan(&r.ID, &r.Agent, &r.Kind, &r.Host, &r.Protocol, &r.Port, &r.ExePath, &r.Harness, &r.Workspace) != nil {
-				rules = nil
-				break
-			}
-			rules = append(rules, r)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r ExpectedEgressRule
+		if err := rows.Scan(&r.ID, &r.Agent, &r.Kind, &r.Host, &r.Protocol, &r.Port, &r.ExePath, &r.Harness, &r.Workspace); err != nil {
+			return nil, err
 		}
-		if rows.Err() != nil {
-			rules = nil
-		}
+		rules = append(rules, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return func(e EgressEpisode) string {
 		if e.Scope.Agent == "" {
@@ -226,5 +243,5 @@ func (s *Store) ExpectedEgressMatcher() func(EgressEpisode) string {
 			}
 		}
 		return ""
-	}
+	}, nil
 }

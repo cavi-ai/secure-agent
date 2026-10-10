@@ -24,7 +24,12 @@ func (a *API) handleExpectedEgress(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, map[string]any{"rules": a.store.ListExpectedEgressRules()})
+		rules, err := a.store.ListExpectedEgressRulesResult()
+		if err != nil {
+			http.Error(w, "expected egress rules unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, map[string]any{"rules": rules})
 	case http.MethodPost:
 		r.Body = http.MaxBytesReader(w, r.Body, 4096)
 		var req expectedEgressRequest
