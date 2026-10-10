@@ -36,6 +36,12 @@ Retry the named failed source. Secure Agent retains last-known data after some r
 
 Check the configured loopback model server and model, then the Agent page's retry state. Detection and enforcement continue independently of the advisor. See [Local chat](SYSTEM_AGENT.md) and the [advisor configuration](CONFIGURATION.md#advisor-map).
 
+## Expected connections are unavailable
+
+Retry the failed Egress source before relying on its last-known list. Episode and expectation reads return HTTP 503 when storage is unavailable or a saved rule's identity is inconsistent. This does not establish that there are no connections or no saved expectations.
+
+For a rejected expectation, refresh the episode and check its observed identity. Exact-destination rules reject loopback destinations and invalid transports; activity-scope rules need a complete executable, harness and workspace. The API accepts only an observed episode ID and the rule kind. A missing episode or an already-revoked rule returns 404. Do not edit the database to bypass validation; persistent failures belong in a reproducible issue with the version and failing endpoint, using redacted details. See [Review recurring connections](PROTECTION.md#review-recurring-connections).
+
 ## A fleet read request returns 401
 
 Send the collector's configured read token as a bearer credential. Enrollment secrets sign node events; they are not collector read tokens. Keep a remote collector behind TLS, and configure read authentication before exposing it beyond loopback. See [Fleet](FLEET.md).
