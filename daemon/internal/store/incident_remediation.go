@@ -87,8 +87,12 @@ func projectIncidentRemediation(inc *model.IncidentReport, raw string) (remediat
 }
 
 func (s *Store) attachIncidentRemediationLocked(inc *model.IncidentReport) error {
+	return attachIncidentRemediation(s.db, inc)
+}
+
+func attachIncidentRemediation(q incidentRowQueryer, inc *model.IncidentReport) error {
 	var raw string
-	if err := s.db.QueryRow(`SELECT COALESCE(remediation_json,'') FROM incidents WHERE id=?`, inc.ID).Scan(&raw); err != nil {
+	if err := q.QueryRow(`SELECT COALESCE(remediation_json,'') FROM incidents WHERE id=?`, inc.ID).Scan(&raw); err != nil {
 		return err
 	}
 	_, err := projectIncidentRemediation(inc, raw)
@@ -117,11 +121,15 @@ func (s *Store) ReportIncidentRemediation(req model.IncidentRemediationRequest) 
 		return nil, err
 	}
 	defer tx.Rollback()
-	var reportJSON, raw string
-	if err := tx.QueryRowContext(ctx, `SELECT report_json,COALESCE(remediation_json,'') FROM incidents WHERE id=?`, req.ID).Scan(&reportJSON, &raw); err != nil {
+	storedID, err := resolveIncidentID(tx, req.ID)
+	if err != nil {
 		return nil, err
 	}
-	inc, err := decodeIncidentReport(req.ID, reportJSON)
+	var reportJSON, raw string
+	if err := tx.QueryRowContext(ctx, `SELECT report_json,COALESCE(remediation_json,'') FROM incidents WHERE id=?`, storedID).Scan(&reportJSON, &raw); err != nil {
+		return nil, err
+	}
+	inc, err := decodeIncidentReport(storedID, reportJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +170,7 @@ func (s *Store) ReportIncidentRemediation(req model.IncidentRemediationRequest) 
 	if err != nil {
 		return nil, err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE incidents SET remediation_json=? WHERE id=? AND COALESCE(remediation_json,'')=? AND report_json=?`, string(data), req.ID, raw, reportJSON)
+	res, err := tx.ExecContext(ctx, `UPDATE incidents SET remediation_json=? WHERE id=? AND COALESCE(remediation_json,'')=? AND report_json=?`, string(data), storedID, raw, reportJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +182,7 @@ func (s *Store) ReportIncidentRemediation(req model.IncidentRemediationRequest) 
 		return nil, ErrStaleIncidentRemediation
 	}
 	// Read the stored result before commit: malformed writes must roll back.
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(remediation_json,'') FROM incidents WHERE id=?`, req.ID).Scan(&raw); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(remediation_json,'') FROM incidents WHERE id=?`, storedID).Scan(&raw); err != nil {
 		return nil, err
 	}
 	if raw != string(data) {
@@ -187,29 +195,4 @@ func (s *Store) ReportIncidentRemediation(req model.IncidentRemediationRequest) 
 		return nil, err
 	}
 	return inc, nil
-}
-
-// SessionIncidents rejects partial history when a report's session identity
-// disagrees with the storage scope used to select it.
-func (s *Store) SessionIncidents(sessionID string) (out []model.IncidentReport, readErr error) {
-	defer func() { s.noteRead("incident remediation", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT id,report_json FROM incidents WHERE session_id=? ORDER BY `+timestampOrderExpr("created_at")+` DESC,id DESC LIMIT 100`, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	list, err := scanIncidentsResult(rows)
-	if err != nil {
-		return nil, err
-	}
-	for i := range list {
-		if list[i].SessionID != sessionID {
-			return nil, fmt.Errorf("incident session identity mismatch")
-		}
-		if err := s.attachIncidentRemediationLocked(&list[i]); err != nil {
-			return nil, err
-		}
-	}
-	return list, nil
 }
