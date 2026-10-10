@@ -81,6 +81,8 @@ python3 packaging/test/console_dom/run_dom_tests.py
 
 The DOM runner uses an installed Chrome or Chromium binary with `--dump-dom`; set `CHROME_BIN` if it is not found automatically. Swift builds and tests require the selected macOS 27 SDK; an older SDK does not satisfy that gate. Bundle layout checks require a built app: run `make app` before `make test` or the standalone bundle check.
 
+On macOS, run the E2E script from Terminal, or grant the app launching it Local Network access in System Settings > Privacy & Security. Its network fixture opens an on-machine TCP connection through a non-loopback interface because the daemon excludes loopback from egress collection. macOS local-network privacy can block that probe when launched by an app without permission, including an editor or agent app; the fixture then fails before the product assertions can run.
+
 The source installer changes `/Applications` and launches the app. Unit tests and builds do not require installing over your running app. Use a temporary config/socket when running a test daemon rather than replacing your personal monitoring state.
 
 ## Repository layout
