@@ -134,6 +134,10 @@ func TestIncidentAggregationRejectsCorruptEvidence(t *testing.T) {
 		{"replayed mismatched report identity", "report_json", `{"id":"other"}`, "first"},
 		{"flag IDs syntax", "flag_ids", "[", "second"},
 		{"flag IDs object", "flag_ids", "{}", "second"},
+		{"flag IDs null", "flag_ids", "null", "second"},
+		{"replayed flag IDs null", "flag_ids", "null", "first"},
+		{"null flag ID", "flag_ids", `["first",null]`, "second"},
+		{"replayed null flag ID", "flag_ids", `["first",null]`, "first"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := Open("", "")
@@ -171,5 +175,26 @@ func TestIncidentAggregationRejectsCorruptEvidence(t *testing.T) {
 				t.Fatalf("corrupt evidence failure hidden: %+v", h)
 			}
 		})
+	}
+}
+
+func TestIncidentAggregationAcceptsLegacyMissingFlagIDs(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+	if err := s.PutIncident(model.IncidentReport{ID: "incident", FlagID: "first", Timestamp: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE incidents SET flag_ids=NULL WHERE id='incident'`); err != nil {
+		t.Fatal(err)
+	}
+	if report, ok := s.AggregateIntoIncident("incident", "second", now); !ok || report.ID != "incident" || report.AggregateCount != 2 {
+		t.Fatalf("legacy evidence failed to aggregate: %+v, %v", report, ok)
+	}
+	if id, ok := s.IncidentIDForFlag("second"); !ok || id != "incident" {
+		t.Fatal("legacy aggregation did not save the new evidence link")
 	}
 }
