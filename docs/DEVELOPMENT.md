@@ -46,7 +46,7 @@ make dmg   # signs, notarizes, and staples both the app and the DMG
 
 ## Run validation
 
-For documentation, run `make docs-check docs-test docs`. After changing CLI help, embedded defaults or API route metadata, run `make docs-reference` first and include the generated reference diff. See [Documentation artifacts](CONSUMER.md) for archive builds, release identity and the host contract.
+For documentation, run `make docs-check docs-test docs-archive`. After changing CLI help, embedded defaults or API route metadata, run `make docs-reference` first and include the generated reference diff. CI retains a downloadable docs preview; the release workflow attaches verified docs assets to published stable product releases. See [Documentation artifacts](CONSUMER.md) for previews, release delivery and the host contract.
 
 `make lint` runs Go vet and formatting checks. `make test` runs the local aggregate suite. The commands below let you run each component directly; CI also checks Linux builds, Go races, dependency vulnerabilities, packaging helpers, personal paths and secret scanning. See the [workflow](../.github/workflows/ci.yml) for its exact commands.
 
