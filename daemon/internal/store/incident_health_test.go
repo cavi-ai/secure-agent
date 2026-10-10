@@ -126,11 +126,14 @@ func TestIncidentAggregationFailureAndRecovery(t *testing.T) {
 }
 
 func TestIncidentAggregationRejectsCorruptEvidence(t *testing.T) {
-	for _, tc := range []struct{ name, column, payload string }{
-		{"report syntax", "report_json", "{"},
-		{"null report", "report_json", "null"},
-		{"flag IDs syntax", "flag_ids", "["},
-		{"flag IDs object", "flag_ids", "{}"},
+	for _, tc := range []struct{ name, column, payload, flagID string }{
+		{"report syntax", "report_json", "{", "second"},
+		{"null report", "report_json", "null", "second"},
+		{"missing report identity", "report_json", `{}`, "second"},
+		{"mismatched report identity", "report_json", `{"id":"other"}`, "second"},
+		{"replayed mismatched report identity", "report_json", `{"id":"other"}`, "first"},
+		{"flag IDs syntax", "flag_ids", "[", "second"},
+		{"flag IDs object", "flag_ids", "{}", "second"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := Open("", "")
@@ -139,7 +142,12 @@ func TestIncidentAggregationRejectsCorruptEvidence(t *testing.T) {
 			}
 			defer s.Close()
 			now := time.Now()
-			s.PutIncident(model.IncidentReport{ID: "incident", FlagID: "first", Timestamp: now, AggregateCount: 1})
+			if err := s.PutIncident(model.IncidentReport{ID: "incident", FlagID: "first", Timestamp: now, AggregateCount: 1}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.PutIncident(model.IncidentReport{ID: "other", FlagID: "other", Timestamp: now}); err != nil {
+				t.Fatal(err)
+			}
 			if _, err := s.db.Exec("UPDATE incidents SET "+tc.column+" = ? WHERE id = 'incident'", tc.payload); err != nil {
 				t.Fatal(err)
 			}
@@ -147,7 +155,7 @@ func TestIncidentAggregationRejectsCorruptEvidence(t *testing.T) {
 			if err := s.db.QueryRow("SELECT report_json, flag_ids FROM incidents WHERE id = 'incident'").Scan(&beforeReport, &beforeIDs); err != nil {
 				t.Fatal(err)
 			}
-			if report, ok := s.AggregateIntoIncident("incident", "second", now); ok || report.ID != "" {
+			if report, ok := s.AggregateIntoIncident("incident", tc.flagID, now); ok || report.ID != "" {
 				t.Fatalf("corrupt evidence reported aggregation success: %+v, %v", report, ok)
 			}
 			var afterReport, afterIDs string

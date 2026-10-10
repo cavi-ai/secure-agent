@@ -1621,13 +1621,9 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.In
 	}
 	tsStr := ts.UTC().Format(time.RFC3339Nano)
 
-	var inc *model.IncidentReport
-	if err := json.Unmarshal([]byte(reportJSON), &inc); err != nil {
+	inc, err := decodeIncidentReport(id, reportJSON)
+	if err != nil {
 		s.noteWrite("incident aggregation", err)
-		return model.IncidentReport{}, false
-	}
-	if inc == nil {
-		s.noteWrite("incident aggregation", fmt.Errorf("null incident report"))
 		return model.IncidentReport{}, false
 	}
 	for _, existing := range flagIDs {
