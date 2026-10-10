@@ -1631,8 +1631,6 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.In
 		}
 		flagIDs[i] = *storedID
 	}
-	tsStr := ts.UTC().Format(time.RFC3339Nano)
-
 	inc, err := decodeIncidentReport(id, reportJSON)
 	if err != nil {
 		s.noteWrite("incident aggregation", err)
@@ -1678,7 +1676,14 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.In
 	count++
 	inc.AggregateCount = count
 	t := ts.UTC()
+	if inc.Timestamp.After(t) {
+		t = inc.Timestamp.UTC()
+	}
+	if inc.LastFlagAt != nil && inc.LastFlagAt.After(t) {
+		t = inc.LastFlagAt.UTC()
+	}
 	inc.LastFlagAt = &t
+	tsStr := t.Format(time.RFC3339Nano)
 	data, err := json.Marshal(inc)
 	if err != nil {
 		s.noteWrite("incident aggregation", err)
