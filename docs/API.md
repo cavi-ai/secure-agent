@@ -1347,8 +1347,11 @@ Each agent's outbound connections grouped by activity scope and destination (`ho
 
 - `recurring` — at least 5 connections, and the last 4 gaps are each 1 minute or more and within 2× of each other.
 - `candidate` — recurring, attributed to a known agent, and not covered by an expected-egress rule; candidates come first and are listed on the Egress tab, not in the Home queue.
+- `expected_rule_id` — present when a saved active rule explains the episode. An exact-destination rule takes precedence over an activity-scope rule.
 - At most 100 non-candidate episodes are listed; episodes idle for 7 days are dropped.
 - `advisor_inference` is present only when the advisor assessed the episode's current evidence; the console labels it as an inference.
+
+Failed episode or rule reads, including invalid stored rule identities, return `503`; they do not return an empty successful history or classify traffic using a partial rule list.
 
 `POST /egress/episodes/{id}/assess` queues an advisor assessment for a candidate: `{"status": "queued"}`, or `{"status": "cached"}` when the current evidence is already assessed. Non-candidates return `409`; no advisor returns `503`.
 
@@ -1362,6 +1365,17 @@ Operator decisions taken from an observed episode. The request names only the ep
 - `POST /expected-egress {"episode_id", "kind": "destination"}` — expects that agent's exact host, protocol and port. Loopback destinations are refused.
 - `POST /expected-egress {"episode_id", "kind": "scope"}` — expects every destination of that agent's executable, harness and workspace; only for an episode with `scope_complete`.
 - `DELETE /expected-egress?id=<32 hex>` — revokes a rule.
+
+POST accepts exactly one JSON object containing only `episode_id` and `kind`, with a 4096-byte body limit. Do not send a caller-selected host, agent or workspace. Destination rules require an observed non-loopback host, `tcp` or `udp`, and a port from 1 through 65535. Scope rules require the observed agent, executable, harness and workspace to form a complete scope. Repeating an active expectation returns the existing rule; saving a revoked expectation reactivates it with a new creation timestamp.
+
+| Status | Meaning |
+|---|---|
+| `200` | GET returns rules, POST returns the saved rule, or DELETE returns `{"status":"revoked","id":"…"}`. |
+| `400` | Invalid JSON, extra fields or trailing JSON, invalid rule kind, unavailable agent identity, invalid observed destination/scope, or an invalid DELETE rule ID. |
+| `404` | POST's episode was not found, or DELETE's rule was missing or already revoked. |
+| `503` | Store unavailable, read/write failed, or saved rule identity was inconsistent. |
+
+DELETE IDs must be 32 lowercase hexadecimal characters. Rejected or failed mutations do not emit success audits. An unavailable rule list is an error, not an empty set of expectations.
 
 Creates and revokes are audited (`expected-egress-create`, `expected-egress-revoke`). A rule only clears the episode's candidate flag on the Egress tab: the proxy, guard, correlator, incidents and flags never consult it. NoAgent; POST and DELETE are mutations (pinned UI or owner).
 
