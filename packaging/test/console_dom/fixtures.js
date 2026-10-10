@@ -575,7 +575,7 @@
     Object.assign(fixture.data, structuredClone(fixture.payloads));
     for (const patch of fixture.patches) {
       const {route, path} = patch;
-      const operations = ['value', 'append', 'remove'].filter(key => Object.hasOwn(patch, key));
+      const operations = ['value', 'append', 'insert', 'remove'].filter(key => Object.hasOwn(patch, key));
       if (!Object.hasOwn(fixture.data, route) || !Array.isArray(path) || operations.length !== 1) throw new Error('Invalid fixture patch');
       let target = fixture.data;
       const keys = [route, ...path];
@@ -585,6 +585,10 @@
       }
       const key = selectorKey(target, keys.at(-1));
       if (operations[0] === 'value') target[key] = structuredClone(patch.value);
+      else if (operations[0] === 'insert') {
+        if (!Array.isArray(target) || !Number.isInteger(key) || key < 0 || key > target.length || !Array.isArray(patch.insert)) throw new Error('Invalid fixture patch insert');
+        target.splice(key, 0, ...structuredClone(patch.insert));
+      }
       else if (operations[0] === 'append') {
         if (!Array.isArray(target[key]) || !Array.isArray(patch.append)) throw new Error('Invalid fixture patch append');
         target[key].push(...structuredClone(patch.append));

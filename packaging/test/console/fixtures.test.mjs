@@ -7,6 +7,34 @@ const context = { window: {}, Date, structuredClone };
 vm.runInNewContext(readFileSync(new URL('../console_dom/fixtures.js', import.meta.url), 'utf8'), context);
 const { create, apply } = context.window.ConsoleFixtures;
 
+test('insert patches preserve array order and isolate inserted rows', () => {
+  const rows = [{ kind: 8, detail: 'inserted', evidence: [] }];
+  const fixture = create({ now: 0, patches: [{ route: '/events', path: [3], insert: rows }] });
+  const original = structuredClone(fixture.data['/events']);
+  apply(fixture);
+  assert.deepEqual(structuredClone(fixture.data['/events'].slice(0, 3)), original.slice(0, 3));
+  assert.deepEqual(structuredClone(fixture.data['/events'].slice(4)), original.slice(3));
+  fixture.data['/events'][3].evidence.push('changed');
+  assert.equal(rows[0].evidence.length, 0);
+  const end = create({ now: 0 });
+  end.patches = [{ route: '/events', path: [end.data['/events'].length], insert: rows }];
+  apply(end);
+  assert.equal(end.data['/events'].at(-1).detail, 'inserted');
+});
+
+test('insert patches reject invalid destinations without changing the payload', () => {
+  for (const patch of [
+    ...[-1, 0.5, 999, '0'].map(index => ({ route: '/events', path: [index], insert: [] })),
+    { route: '/status', path: ['version'], insert: [] },
+    { route: '/events', path: [0], insert: {} },
+  ]) {
+    const fixture = create({ now: 0, patches: [patch] });
+    const original = structuredClone(fixture.data);
+    assert.throws(() => apply(fixture), /Invalid fixture patch insert/);
+    assert.deepEqual(structuredClone(fixture.data), original);
+  }
+});
+
 test('System defaults exist without the driver and isolate nested worktree and clutter mutations', () => {
   const one = create({ now: 0 });
   const two = create({ now: 0 });

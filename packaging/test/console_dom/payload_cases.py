@@ -97,6 +97,84 @@ def batch_worktrees(now_ms=None, *, multiple_repos=False):
     return {"now": now, "patches": patches}
 
 
+def shared_root_sessions(now_ms=None):
+    now, iso = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/sessions", "path": [], "append": [
+        {"id": f"sess-claude-{n}", "harness": "claude", "workspace": "/Users/dev/workspace/api-service",
+         "repo": "api-service", "branch": "main", "root_pid": 5821,
+         "started_at": "2026-09-09T14:10:00Z", "last_seen_at": iso(45000), "status": "active", "confidence": "hook"}
+        for n in (5, 6)
+    ]}]}
+
+
+def postmortem_resources(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": _fields("/resources", [], {
+        "rss_bytes": 0, "cpu_percent": 0, "process_count": 0, "session_count": 0, "sessions": [],
+    })}
+
+
+def resource_families(now_ms=None):
+    now, iso = _clock(now_ms)
+    gb, mb = 1024 ** 3, 1024 ** 2
+
+    def family(pid, name, workspace, rss, cpu, **extra):
+        return {
+            "key": f"{pid}:1789470000000000000", "name": name, "root_pid": pid,
+            "root_started_at": "2026-09-09T13:00:00Z", "workspace": workspace,
+            "last_seen_at": iso(30000), "rss_bytes": rss, "cpu_percent": cpu,
+            "process_count": 1, "orphan_count": 0,
+            "processes": [{"pid": pid, "ppid": 1, "name": name, "rss_bytes": rss,
+                           "cpu_percent": cpu, "started_at": "2026-09-09T13:00:00Z"}],
+            "samples": [{"at": iso(1800000), "rss_bytes": int(rss * 0.8 + 0.5), "cpu_percent": cpu},
+                        {"at": iso(0), "rss_bytes": rss, "cpu_percent": cpu}],
+            "diagnoses": [], **extra,
+        }
+
+    processes = [{"pid": 4412, "ppid": 1, "name": "codex", "rss_bytes": 400 * mb,
+                  "cpu_percent": 6, "started_at": "2026-09-09T13:00:00Z"}]
+    processes.extend({
+        "pid": 4412 + i, "ppid": 777 if i == 19 else 4412, "name": "node" if i % 2 else "rg",
+        "rss_bytes": (40 + i) * mb, "cpu_percent": i / 2, "started_at": "2026-09-09T13:05:00Z",
+        **({"is_orphan": True} if i == 19 else {}),
+    } for i in range(1, 20))
+    families = [
+        family(4412, "codex", "/Users/dev/workspace/data-pipeline", sum(p["rss_bytes"] for p in processes),
+               15.5, processes=processes, process_count=20, orphan_count=1),
+        family(8100, "openclaw", "/Users/dev/.openclaw", 300 * mb, 2),
+        family(8201, "codex", "/Users/dev/.openclaw/workspace-demo-app", 700 * mb, 12),
+        family(8202, "codex", "/Users/dev/.openclaw/workspace-bot", 250 * mb, 4),
+        family(5950, "claude", "/Users/dev/dev", 180 * mb, 1),
+        family(4500, "codex", "/Users/dev/scratch", 120 * mb, 0.5),
+        family(9100, "opencode", "/Users/dev/workspace/web-console", 90 * mb, 0.2),
+        family(7001, "ollama", "/", 10 * gb, 3, kind="infra"),
+        family(7100, "lm-studio", "/Applications/LM Studio.app", 3 * gb, 1, kind="infra"),
+        family(7200, "cursor-ide", "/Applications/Cursor.app", 2 * gb, 4, kind="infra"),
+    ]
+    return {"now": now, "patches": [
+        {"route": "/resources", "path": ["sessions"], "append": families},
+        *_fields("/resources", [], {"session_count": 9, "infra_count": 3}),
+        {"route": "/sessions", "path": [], "append": [
+            {"id": "sess-openclaw-1", "harness": "openclaw", "workspace": "/Users/dev/.openclaw", "root_pid": 8100,
+             "started_at": "2026-09-09T12:00:00Z", "last_seen_at": iso(15000), "status": "active", "confidence": "process-tree"},
+            {"id": "sess-oc-career", "harness": "codex", "workspace": "/Users/dev/.openclaw/workspace-demo-app",
+             "repo": "demo-app", "branch": "main", "root_pid": 8201, "parent_id": "sess-openclaw-1",
+             "started_at": "2026-09-09T12:10:00Z", "last_seen_at": iso(16000), "status": "active", "confidence": "transcript"},
+            {"id": "sess-oc-bot", "harness": "codex", "workspace": "/Users/dev/.openclaw/workspace-bot",
+             "root_pid": 8202, "parent_id": "sess-openclaw-1", "started_at": "2026-09-09T12:20:00Z",
+             "last_seen_at": iso(17000), "status": "active", "confidence": "transcript"},
+        ]},
+        {"route": "/events", "path": [3], "insert": [
+            {"kind": 8, "ts": iso(8000), "pid": 4413, "detail": "Bash → pytest -q"},
+            {"kind": 5, "ts": iso(9000), "pid": 4412, "remote_host": "api.openai.com", "remote_port": 443},
+        ]},
+        {"route": "/flags", "path": [], "append": [{
+            "id": "flag-5", "rule": "keychain-access", "agent": "codex", "pid": 4415, "severity": 2, "ts": iso(60000),
+            "evidence": [{"kind": "keychain", "label": "/Users/dev/Library/Keychains/login.keychain-db", "sub": "keychain access"}],
+        }]},
+    ]}
+
+
 def payload_outcomes(now_ms=None):
     now, iso = _clock(now_ms)
     payloads = {}
