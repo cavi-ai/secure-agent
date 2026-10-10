@@ -33,12 +33,14 @@ public final class DaemonSupervisor: ObservableObject {
     private let retryDelay: TimeInterval
     private let maxRetryDelay: TimeInterval
     private let terminationTimeout: TimeInterval
+    private let uptime: @Sendable () -> TimeInterval
 
     init(pathProvider: @escaping () -> String? = { bundledDaemonPath(in: Bundle.main.bundleURL) },
          logDir: String = NSHomeDirectory() + "/Library/Logs/secure-agent",
          maxRestarts: Int = 5, stableRunDuration: TimeInterval = 60,
          retryDelay: TimeInterval = 1, maxRetryDelay: TimeInterval = 16,
-         terminationTimeout: TimeInterval = 10) {
+         terminationTimeout: TimeInterval = 10,
+         uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.pathProvider = pathProvider
         self.logDir = logDir
         self.maxRestarts = maxRestarts
@@ -46,6 +48,7 @@ public final class DaemonSupervisor: ObservableObject {
         self.retryDelay = retryDelay
         self.maxRetryDelay = maxRetryDelay
         self.terminationTimeout = terminationTimeout
+        self.uptime = uptime
     }
 
     public var isRunning: Bool { process?.isRunning ?? false }
@@ -114,15 +117,16 @@ public final class DaemonSupervisor: ObservableObject {
             try? out?.close()
             try? err?.close()
         }
+        let uptime = self.uptime
         p.terminationHandler = { [weak self] proc in
-            let exitedAt = ProcessInfo.processInfo.systemUptime
+            let exitedAt = uptime()
             Task { @MainActor in self?.handleExit(proc, exitedAt: exitedAt) }
         }
 
         do {
             try p.run()
             process = p
-            startedAt = ProcessInfo.processInfo.systemUptime
+            startedAt = uptime()
             NSLog("[secure-agent] daemon started (pid \(p.processIdentifier))")
         } catch {
             process = nil
