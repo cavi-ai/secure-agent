@@ -2593,16 +2593,15 @@ func (s *Store) SetIncidentStatusResult(id, status, note string) (workflow Incid
 	case "acknowledged":
 		query = `UPDATE incidents SET status='acknowledged',
 			acknowledged_at=COALESCE(acknowledged_at, ?)
-			WHERE id = ? OR flag_id = ?`
-		args = []any{time.Now().UTC().Format(time.RFC3339Nano), id, id}
+			WHERE id = ?`
+		args = []any{time.Now().UTC().Format(time.RFC3339Nano)}
 	case "resolved":
 		query = `UPDATE incidents SET status='resolved', resolved_at=?, resolution_note=?
-			WHERE id = ? OR flag_id = ?`
-		args = []any{time.Now().UTC().Format(time.RFC3339Nano), note, id, id}
+			WHERE id = ?`
+		args = []any{time.Now().UTC().Format(time.RFC3339Nano), note}
 	case "open":
 		query = `UPDATE incidents SET status='open', acknowledged_at=NULL, resolved_at=NULL, resolution_note=NULL
-			WHERE id = ? OR flag_id = ?`
-		args = []any{id, id}
+			WHERE id = ?`
 	default:
 		return IncidentWorkflow{}, false, fmt.Errorf("%w %q (open|acknowledged|resolved)", ErrInvalidIncidentStatus, status)
 	}
@@ -2614,7 +2613,16 @@ func (s *Store) SetIncidentStatusResult(id, status, note string) (workflow Incid
 		return IncidentWorkflow{}, false, err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(query, args...)
+	storedID, err := resolveIncidentWorkflowID(tx, id)
+	if err == sql.ErrNoRows {
+		s.noteRead("incident workflows", nil)
+		return IncidentWorkflow{}, false, nil
+	}
+	if err != nil {
+		s.noteRead("incident workflows", err)
+		return IncidentWorkflow{}, false, err
+	}
+	res, err := tx.Exec(query, append(args, storedID)...)
 	if err != nil {
 		return IncidentWorkflow{}, false, err
 	}
@@ -2626,7 +2634,7 @@ func (s *Store) SetIncidentStatusResult(id, status, note string) (workflow Incid
 		return IncidentWorkflow{}, false, nil
 	}
 	wf, err := scanIncidentWorkflow(tx.QueryRow(
-		`SELECT status, acknowledged_at, resolved_at, resolution_note FROM incidents WHERE id = ? OR flag_id = ?`, id, id))
+		`SELECT status, acknowledged_at, resolved_at, resolution_note FROM incidents WHERE id = ?`, storedID))
 	s.noteRead("incident workflows", err)
 	if err != nil {
 		return IncidentWorkflow{}, false, err
@@ -2650,15 +2658,33 @@ func (s *Store) IncidentStatusResult(id string) (workflow IncidentWorkflow, foun
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	wf, err := scanIncidentWorkflow(s.db.QueryRow(
-		`SELECT status, acknowledged_at, resolved_at, resolution_note FROM incidents WHERE id = ? OR flag_id = ?`, id, id))
+	storedID, err := resolveIncidentWorkflowID(s.db, id)
 	if err == sql.ErrNoRows {
 		return IncidentWorkflow{Status: "unknown"}, false, nil
 	}
 	if err != nil {
 		return IncidentWorkflow{Status: "unknown"}, false, err
 	}
+	wf, err := scanIncidentWorkflow(s.db.QueryRow(
+		`SELECT status, acknowledged_at, resolved_at, resolution_note FROM incidents WHERE id = ?`, storedID))
+	if err != nil {
+		return IncidentWorkflow{Status: "unknown"}, false, err
+	}
 	return wf, true, nil
+}
+
+// resolveIncidentWorkflowID follows incident detail identity precedence: an
+// exact report ID wins; otherwise the newest report linked to the flag wins.
+// Updates use their transaction here so selection and mutation stay together.
+func resolveIncidentWorkflowID(q interface{ QueryRow(string, ...any) *sql.Row }, id string) (string, error) {
+	var storedID string
+	err := q.QueryRow(`SELECT id FROM incidents WHERE id = ?`, id).Scan(&storedID)
+	if err == sql.ErrNoRows {
+		err = q.QueryRow(`SELECT id FROM incidents
+			WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
+			ORDER BY `+timestampOrderExpr("created_at")+` DESC, id DESC LIMIT 1`, id, id).Scan(&storedID)
+	}
+	return storedID, err
 }
 
 func scanIncidentWorkflow(row *sql.Row) (IncidentWorkflow, error) {
