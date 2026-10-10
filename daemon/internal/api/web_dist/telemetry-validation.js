@@ -49,7 +49,8 @@ function isConsoleReport(key, value) {
   if (key === 'guard decisions') {
     return rows(value) && value.every(row => typeof row.id === 'string' && row.id.length > 0);
   }
-  if (key === 'flags' || key === 'events') return rows(value);
+  if (key === 'events') return rows(value) || validEventHistoryPage(value);
+  if (key === 'flags') return rows(value);
   if (key === 'reviews') return record(value) && rows(value.reviews);
   if (key !== 'snapshot') return value !== null && typeof value === 'object';
 

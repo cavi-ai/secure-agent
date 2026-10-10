@@ -35,6 +35,8 @@ function controller() {
     forward() { if (index + 1 < entries.length) { c.location.hash = '#' + entries[++index].url.split('#').slice(1).join('#'); listeners.popstate({ state: entries[index].state }); } },
   };
   vm.createContext(c);
+  vm.runInContext(readFileSync(new URL('event-history.js', web), 'utf8'), c);
+  c.eventHistoryPage = c.createEventHistoryPage();
   vm.runInContext(readFileSync(new URL('lib.js', web), 'utf8'), c);
   vm.runInContext(app.slice(start, end), c);
   return { c, opener, body, rail, entries, listeners };
@@ -111,6 +113,19 @@ test('changed authentication or selection invalidates an old return target and l
     assert.equal(c.activeTab, tab);
     assert.notEqual(c.focused, 'opener');
   }
+});
+
+test('Back and Forward preserve the event page and its frozen filter boundary', () => {
+  const { c, opener } = controller();
+  c.window.openSessionEvents('a', opener);
+  Object.assign(c.eventHistoryPage, { cursor: 'older', trail: [''], next: 'oldest', since: 'fixed-time', paged: true });
+  c.history.back();
+  assert.equal(c.eventHistoryPage.cursor, '');
+  c.history.forward();
+  assert.equal(c.eventHistoryPage.cursor, 'older');
+  assert.equal(c.eventHistoryPage.since, 'fixed-time');
+  assert.deepEqual(Array.from(c.eventHistoryPage.trail), ['']);
+  assert.equal(c.eventHistoryPage.next, 'oldest');
 });
 
 test('drawer Back stays local and restores logical focus after its source element is replaced', () => {

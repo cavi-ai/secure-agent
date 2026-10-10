@@ -170,6 +170,7 @@ function eventWho(e, sessions, agentName) {
 // one row: tool_call keys on its own call id, turn and model_call key on
 // session + ts + model + tokens. Every other kind keeps the default shape.
 function eventKey(e) {
+  if (typeof e.record_id === 'string') return 'recorded:' + e.record_id;
   const k = Number(e.kind);
   if (k === 12) return `12|${e.session_id || ''}|${e.call_id || ''}`;
   if (k === 13 || k === 14) {

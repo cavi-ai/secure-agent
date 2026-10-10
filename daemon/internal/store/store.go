@@ -1302,9 +1302,21 @@ func (s *Store) RecentEvents(limit int) []event.Event {
 // eventQuery builds QueryEvents' statement. A host filter repeats the index's
 // empty-host exclusion so it seeks idx_events_host.
 func eventQuery(f EventFilter) (string, []any) {
-	q := `SELECT kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail,
-		tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id, provider FROM events WHERE 1=1`
+	return eventRecordQuery(f, false, 0)
+}
+
+func eventRecordQuery(f EventFilter, withID bool, beforeID int64) (string, []any) {
+	columns := `kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail,
+		tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id, provider`
+	if withID {
+		columns = "id, " + columns
+	}
+	q := "SELECT " + columns + " FROM events WHERE 1=1"
 	var args []any
+	if beforeID > 0 {
+		q += " AND id < ?"
+		args = append(args, beforeID)
+	}
 	if f.Kind != nil {
 		q += " AND kind = ?"
 		args = append(args, *f.Kind)
@@ -1359,48 +1371,59 @@ func scanEventsResult(rows *sql.Rows) ([]event.Event, error) {
 
 	events := []event.Event{}
 	for rows.Next() {
-		var e event.Event
-		var kindInt int
-		var tsStr string
-		var exePath, sessionID, path, remoteHost, detail sql.NullString
-		var remotePort sql.NullInt64
-		var tool, toolStatus, modelName, callID, provider sql.NullString
-		var durMs, tokIn, tokOut sql.NullInt64
-		var cost sql.NullFloat64
-		if err := rows.Scan(&kindInt, &tsStr, &e.PID, &exePath, &sessionID, &path, &remoteHost, &remotePort, &detail,
-			&tool, &toolStatus, &durMs, &modelName, &tokIn, &tokOut, &cost, &callID, &provider); err != nil {
+		e, err := scanEvent(rows)
+		if err != nil {
 			return nil, err
 		}
-		var err error
-		e.TS, err = time.Parse(time.RFC3339Nano, tsStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid event timestamp: %w", err)
-		}
-		if math.IsNaN(cost.Float64) || math.IsInf(cost.Float64, 0) {
-			return nil, fmt.Errorf("non-finite event cost")
-		}
-		e.Kind = event.Kind(kindInt)
-		e.ExePath = exePath.String
-		e.SessionID = sessionID.String
-		e.Path = path.String
-		e.RemoteHost = remoteHost.String
-		e.RemotePort = int(remotePort.Int64)
-		e.Detail = detail.String
-		e.ToolName = tool.String
-		e.ToolStatus = toolStatus.String
-		e.DurationMs = durMs.Int64
-		e.Model = modelName.String
-		e.Provider = provider.String
-		e.TokensIn = tokIn.Int64
-		e.TokensOut = tokOut.Int64
-		e.CostUSD = cost.Float64
-		e.CallID = callID.String
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return events, nil
+}
+
+// Both projections use one checked decoder. An optional leading destination
+// reads the durable row ID without adding store identity to bus events.
+func scanEvent(rows *sql.Rows, leading ...any) (event.Event, error) {
+	var e event.Event
+	var kindInt int
+	var tsStr string
+	var exePath, sessionID, path, remoteHost, detail sql.NullString
+	var remotePort sql.NullInt64
+	var tool, toolStatus, modelName, callID, provider sql.NullString
+	var durMs, tokIn, tokOut sql.NullInt64
+	var cost sql.NullFloat64
+	destinations := append(leading, &kindInt, &tsStr, &e.PID, &exePath, &sessionID, &path, &remoteHost, &remotePort, &detail,
+		&tool, &toolStatus, &durMs, &modelName, &tokIn, &tokOut, &cost, &callID, &provider)
+	if err := rows.Scan(destinations...); err != nil {
+		return event.Event{}, err
+	}
+	var err error
+	e.TS, err = time.Parse(time.RFC3339Nano, tsStr)
+	if err != nil {
+		return event.Event{}, fmt.Errorf("invalid event timestamp: %w", err)
+	}
+	if math.IsNaN(cost.Float64) || math.IsInf(cost.Float64, 0) {
+		return event.Event{}, fmt.Errorf("non-finite event cost")
+	}
+	e.Kind = event.Kind(kindInt)
+	e.ExePath = exePath.String
+	e.SessionID = sessionID.String
+	e.Path = path.String
+	e.RemoteHost = remoteHost.String
+	e.RemotePort = int(remotePort.Int64)
+	e.Detail = detail.String
+	e.ToolName = tool.String
+	e.ToolStatus = toolStatus.String
+	e.DurationMs = durMs.Int64
+	e.Model = modelName.String
+	e.Provider = provider.String
+	e.TokensIn = tokIn.Int64
+	e.TokensOut = tokOut.Int64
+	e.CostUSD = cost.Float64
+	e.CallID = callID.String
+	return e, nil
 }
 
 // maxFlagQuery bounds QueryFlags above normalizeLimit's 1000 so a pattern

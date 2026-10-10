@@ -387,6 +387,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionOverviewState = { loading: false, error: 'unavailable' };
     sessionOverviewRefreshAgain = false;
     sessionOutcomesState = { loading: false, error: 'unavailable' };
+    eventHistoryPage = createEventHistoryPage();
     window.SA.invalidateSessionPermissions?.();
     window.SA.clearSessionInvestigation?.();
     if (liveUpdates) liveUpdates.stop();
@@ -670,6 +671,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const f = filters.events;
     return !!timelineSession || f.kind !== 'all' || f.since !== 'all';
   }
+  let eventHistoryPage = createEventHistoryPage();
   function eventsHistoryScope() {
     return JSON.stringify({ ...filters.events, session: timelineSession || '' });
   }
@@ -681,6 +683,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const view = name + 'View';
       if (scope !== historyScopes[name]) {
         historyScopes[name] = scope;
+        if (name === 'events') eventHistoryPage = createEventHistoryPage(sinceParam(filters.events.since));
         telemetryData[view] = requested ? null : telemetryData[name];
         reportHealth.reset(name);
         failedEndpoints.delete(name);
@@ -707,11 +710,28 @@ document.addEventListener('DOMContentLoaded', () => {
     const f = filters.events, p = new URLSearchParams();
     if (timelineSession) p.set('session_id', timelineSession);
     if (f.kind !== 'all') p.set('kind', f.kind);
-    const since = sinceParam(f.since);
+    const since = timelineSession ? eventHistoryPage.since || sinceParam(f.since) : sinceParam(f.since);
     if (since) p.set('since', since);
     p.set('limit', '200');
+    if (timelineSession) {
+      p.set('page', '1');
+      const cursor = eventHistoryPage.pending?.cursor ?? eventHistoryPage.cursor;
+      if (cursor) p.set('before', cursor);
+    }
     return '/events?' + p.toString();
   }
+
+  window.pageSessionEvents = async function(direction) {
+    const page = eventHistoryPage;
+    if (sessionEnded || !timelineSession || !requestEventHistoryPage(eventHistoryPage, direction)) return;
+    suppressFreshOnce = true;
+    renderEvents();
+    await fetchTelemetry({ slow: false });
+    if (!sessionEnded && page === eventHistoryPage) {
+      suppressFreshOnce = true;
+      renderNow(['events']);
+    }
+  };
 
   function wireFilter(id, obj, key) {
     const el = document.getElementById(id);
@@ -1847,9 +1867,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (isEventsFiltered()) {
       const scope = eventsHistoryScope();
-      const v = await grab('events', eventsQuery(), () => current() && scope === eventsHistoryScope());
+      const page = eventHistoryPage;
+      const cursor = page.pending?.cursor ?? page.cursor;
+      const session = timelineSession;
+      page.loading = true;
+      const ownsPage = () => current() && scope === eventsHistoryScope() && page === eventHistoryPage
+        && cursor === (page.pending?.cursor ?? page.cursor);
+      const v = await grab('events', eventsQuery(), ownsPage);
       if (obsolete()) return;
-      if (v) telemetryData.eventsView = v || [];
+      if (ownsPage()) {
+        if (v && (Array.isArray(v) || validEventHistoryPage(v, session))) {
+          telemetryData.eventsView = session ? acceptEventHistoryPage(page, v) : v;
+          page.loading = false;
+        } else {
+          if (v) reportFailed('events', 'Event page does not match this session');
+          failEventHistoryPage(page);
+        }
+      }
     }
 
     renderReportHealth(); // Filter changes can hide a failed filtered report.
@@ -2846,6 +2880,7 @@ document.addEventListener('DOMContentLoaded', () => {
     timelineSession: { get() { return timelineSession; }, set(v) { timelineSession = v; } },
     timelinePids: { get() { return timelinePids; }, set(v) { timelinePids = v; } },
     timelinePidLabel: { get() { return timelinePidLabel; }, set(v) { timelinePidLabel = v; } },
+    eventHistoryPage: { get() { return eventHistoryPage; } },
     prevFwStats: { get() { return prevFwStats; }, set(v) { prevFwStats = v; } },
     prevEventKeys: { get() { return prevEventKeys; }, set(v) { prevEventKeys = v; } },
     firstEventRender: { get() { return firstEventRender; }, set(v) { firstEventRender = v; } },
@@ -3605,17 +3640,21 @@ document.addEventListener('DOMContentLoaded', () => {
       railTop: document.querySelector('#session-rail')?.scrollTop || 0, pageY: window.scrollY || 0,
       opener: el, target: { ...el.dataset },
       scope: { session: timelineSession, pids: timelinePids && [...timelinePids], label: timelinePidLabel,
-        events: { ...filters.events } } };
+        events: { ...filters.events }, page: copyEventHistoryPage(eventHistoryPage) } };
   }
   function restoreSessionReturn(st) {
     if (!validSessionReturn(st)) return;
-    if (sessionInvestigation?.id === st.id && st.active) st.destination.events = { ...filters.events };
+    if (sessionInvestigation?.id === st.id && st.active) {
+      st.destination.events = { ...filters.events };
+      st.destination.page = copyEventHistoryPage(eventHistoryPage);
+    }
     closeDrawer();
     if (sessionInvestigation?.id === st.id) sessionInvestigation.active = false;
     sessionView = st.view;
     timelineSession = st.scope.session; timelinePids = st.scope.pids; timelinePidLabel = st.scope.label;
     applySessionEventFilters(st.scope.events);
     syncHistoryViews();
+    eventHistoryPage = copyEventHistoryPage(st.scope.page);
     suppressFreshOnce = true;
     renderEvents(); renderFlags(); renderIncidents(); paintScopeBar();
     switchTab('sessions', { skipHash: true });
@@ -3641,6 +3680,7 @@ document.addEventListener('DOMContentLoaded', () => {
     timelinePids = st.destination.pids; timelinePidLabel = st.destination.label;
     applySessionEventFilters(st.destination.events);
     syncHistoryViews();
+    if (st.destination.page) eventHistoryPage = copyEventHistoryPage(st.destination.page);
     suppressFreshOnce = true;
     renderEvents(); renderFlags(); renderIncidents(); paintScopeBar();
     switchTab(st.destination.route, { group: st.destination.group, skipHash: true });
@@ -5017,6 +5057,12 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'session-events':
         window.openSessionEvents(d.id, el);
+        break;
+      case 'event-history-earlier':
+      case 'event-history-newer':
+      case 'event-history-latest':
+        e.preventDefault();
+        window.pageSessionEvents(d.action.slice('event-history-'.length));
         break;
       case 'session-investigation-return':
         window.returnToSessionInvestigation();

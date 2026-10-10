@@ -1013,6 +1013,10 @@ func (a *API) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	if q.Has("page") {
+		a.serveEventPage(w, r)
+		return
+	}
 	f := store.EventFilter{
 		Since:     q.Get("since"),
 		SessionID: q.Get("session_id"),

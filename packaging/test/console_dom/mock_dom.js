@@ -527,6 +527,15 @@
         { kind: 0, ts: iso(7200000), session_id: 'sess-cursor-2', path: '/synthetic/retained-file.go' },
         { kind: 5, ts: iso(7100000), session_id: 'sess-cursor-2', remote_host: 'recorded.example.invalid', remote_port: 443 },
       ] : q.has('session_id') ? [] : data['/events'];
+      if (q.get('page') === '1' && q.get('session_id') === 'sess-cursor-2') {
+        const records = [...retained, ...Array.from({ length: 448 }, (_, i) => ({ kind: 0, ts: iso(7300000 + i * 1000), session_id: 'sess-cursor-2', path: '/synthetic/older-' + i + '.go' }))]
+          .map((event, i) => ({ id: String(450 - i), event }))
+          .filter(row => (!q.has('kind') || String(row.event.kind) === q.get('kind'))
+            && (!q.has('since') || new Date(row.event.ts) >= new Date(q.get('since')))
+            && (!q.has('before') || Number(row.id) < Number(q.get('before'))));
+        const rows = records.slice(0, 200), has_earlier = records.length > 200;
+        return { ok: true, status: 200, json: async () => ({ session_id: 'sess-cursor-2', rows, has_earlier, ...(has_earlier ? { next_cursor: rows.at(-1).id } : {}) }) };
+      }
       const rows = retained.filter(row => (!q.has('kind') || String(row.kind) === q.get('kind'))
         && (!q.has('since') || new Date(row.ts) >= new Date(q.get('since'))));
       return { ok: true, status: 200, json: async () => rows };
@@ -978,6 +987,21 @@
         receipt.recordedRows = events().includes('/synthetic/retained-file.go') && events().includes('recorded.example.invalid') && !events().includes('logs.example.com');
         if (!receipt.recordedRows) receipt.eventsText = events();
         receipt.limitVisible = !document.getElementById('events-scope-note').hidden && document.getElementById('events-scope-note').textContent.includes('Up to 200');
+        const page = () => window.SA.eventHistoryPage;
+        const rows = () => window.SA.t.eventsView;
+        const nav = async direction => { const button = document.querySelector('[data-action="event-history-' + direction + '"]'); await painted(() => !button.disabled); button.click(); await painted(() => !page().pending && !page().loading); await tick(); };
+        receipt.pageBound = !document.getElementById('events-history-controls').hidden && rows().length === 200;
+        window.__activityFail = true; await nav('earlier');
+        receipt.failedPage = page().cursor === '' && rows()[0].record_id === '450' && !document.getElementById('events-history-error').hidden;
+        if (!receipt.failedPage) receipt.failedState = { page: { ...page() }, first: rows()[0].record_id, hidden: document.getElementById('events-history-error').hidden };
+        window.__activityFail = false; await nav('earlier');
+        receipt.earlierPage = page().trail.length === 1 && rows().length === 200 && rows()[0].record_id === '250' && !events().includes('/synthetic/retained-file.go');
+        if (!receipt.earlierPage) receipt.earlierState = { page: { ...page() }, first: rows()[0].record_id, count: rows().length, retained: events().includes('/synthetic/retained-file.go') };
+        await nav('earlier');
+        receipt.lastPage = rows().length === 50 && document.querySelector('[data-action="event-history-earlier"]').disabled && document.getElementById('events-history-page').textContent.includes('End of retained records');
+        if (!receipt.lastPage) receipt.lastState = { page: { ...page() }, first: rows()[0].record_id, count: rows().length, label: document.getElementById('events-history-page').textContent };
+        await nav('newer'); receipt.newerPage = page().trail.length === 1 && rows()[0].record_id === '250';
+        await nav('latest'); receipt.latestPage = page().trail.length === 0 && rows()[0].record_id === '450';
         const filter = document.getElementById('event-filter'); filter.value = '0'; filter.dispatchEvent(new Event('change', { bubbles: true }));
         await painted(() => events().includes('/synthetic/retained-file.go') && !events().includes('recorded.example.invalid'));
         receipt.kindFilter = events().includes('/synthetic/retained-file.go') && !events().includes('recorded.example.invalid');
@@ -986,11 +1010,14 @@
         receipt.staleRetained = events().includes('/synthetic/retained-file.go') && Array.from(document.querySelectorAll('.report-health:not([hidden])')).some(el => el.textContent.includes('Stale — showing data last refreshed'));
         if (!receipt.kindFilter || !receipt.staleRetained) receipt.filterState = { events: events(), reports: Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent) };
         window.__activityFail = false;
+        await nav('earlier'); const savedCursor = page().cursor;
         await pop(() => document.querySelector('#scope-bar [data-action="session-investigation-return"]').click());
         receipt.returnContext = window.SA.sessionView === 'results' && window.SA.selectedSessionId === 'sess-cursor-2' && document.activeElement?.dataset.action === 'session-events';
         receipt.returnFilters = filter.value === 'all';
         await pop(() => history.forward());
         receipt.forwardFilters = filter.value === '0' && window.SA.timelineSession === 'sess-cursor-2';
+        await painted(() => !page().loading && rows()?.length === 200);
+        receipt.forwardPage = page().cursor === savedCursor && page().trail.length === 1 && !events().includes('/synthetic/retained-file.go');
         await pop(() => history.back());
         receipt.fits = document.documentElement.scrollWidth <= innerWidth;
       } catch (err) { receipt.error = String(err); }
