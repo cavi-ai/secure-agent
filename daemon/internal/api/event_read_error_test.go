@@ -35,7 +35,7 @@ func TestEventReadFailureDoesNotReturnSuccessfulPartialData(t *testing.T) {
 				t.Fatal(err)
 			}
 			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
-			for _, url := range []string{"/events", "/sessions/bad/timeline", "/snapshot"} {
+			for _, url := range []string{"/events", "/events?page=1&session_id=bad", "/sessions/bad/timeline", "/snapshot"} {
 				w := httptest.NewRecorder()
 				a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", url, nil))
 				if w.Code != 503 {
@@ -43,13 +43,13 @@ func TestEventReadFailureDoesNotReturnSuccessfulPartialData(t *testing.T) {
 				}
 			}
 			h := st.WriteHealth()
-			if h.ReadFailures != 3 || !slices.Equal(h.ReadActive, []string{"events"}) || h.Failures != 0 {
+			if h.ReadFailures != 4 || !slices.Equal(h.ReadActive, []string{"events"}) || h.Failures != 0 {
 				t.Fatalf("event read failure hidden or confused with lost writes: %+v", h)
 			}
 			if _, err := db.Exec("UPDATE events SET pid=1, cost_usd=0, ts=? WHERE session_id='bad'", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 				t.Fatal(err)
 			}
-			for _, url := range []string{"/events", "/sessions/bad/timeline", "/snapshot", "/sessions/empty/timeline"} {
+			for _, url := range []string{"/events", "/events?page=1&session_id=bad", "/sessions/bad/timeline", "/snapshot", "/sessions/empty/timeline"} {
 				w := httptest.NewRecorder()
 				a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", url, nil))
 				if w.Code != 200 {
@@ -60,7 +60,7 @@ func TestEventReadFailureDoesNotReturnSuccessfulPartialData(t *testing.T) {
 				}
 			}
 			h = st.WriteHealth()
-			if h.ReadFailures != 3 || len(h.ReadActive) != 0 {
+			if h.ReadFailures != 4 || len(h.ReadActive) != 0 {
 				t.Fatalf("incorrect read recovery: %+v", h)
 			}
 		})
@@ -71,7 +71,7 @@ func TestEventEndpointsRejectClosedDatabase(t *testing.T) {
 	st := testStore(t)
 	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
 	st.Close()
-	for _, url := range []string{"/events", "/sessions/any/timeline"} {
+	for _, url := range []string{"/events", "/events?page=1&session_id=any", "/sessions/any/timeline"} {
 		w := httptest.NewRecorder()
 		a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", url, nil))
 		if w.Code != 503 {

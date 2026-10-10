@@ -29,7 +29,7 @@ function fixture(fetch) {
     sessionMemoryGeneration: 0, sessionTimelineRequest: 0, sessionOverviewGeneration: 0, sessionOutcomesGeneration: 0,
     sessionMemoryState: {}, sessionOverviewState: {}, sessionOverviewRefreshAgain: false, sessionOutcomesState: {},
     historyScopes: { flags: null, events: null }, timelineSession: null,
-    reviewCursor: '',
+    reviewCursor: '', sinceParam: () => '',
     filters: { flags: { agent: 'all', rule: 'all', minsev: 'all', since: 'all' }, events: { kind: 'all', since: 'all' } },
     sessionStorage: { removeItem() {} },
     liveUpdates: { stop: () => stops++ }, sparkTimer: 1,
@@ -51,6 +51,8 @@ function fixture(fetch) {
     spendCardPath: () => '/costs?card'
   };
   vm.createContext(ctx);
+  vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/event-history.js', import.meta.url), 'utf8'), ctx);
+  ctx.eventHistoryPage = ctx.createEventHistoryPage();
   const authContext = vm.createContext({ AbortController, DOMException, Headers, setTimeout, clearTimeout });
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/console-auth.js', import.meta.url), 'utf8'), authContext);
   ctx.consoleAuth = authContext.createConsoleAuth({ token: 'fixture', fetchImpl: ctx.apiFetch, onRejected: () => ctx.endSession() });
@@ -65,6 +67,30 @@ function fixture(fetch) {
   return { ctx, requests, renders, connections, failures, retries, stops: () => stops, ended: () => ended };
 }
 const snapshot = () => response({ status: { uptime: 'new' }, flags: [], events: [] });
+
+test('failed or foreign page navigation retains rows and only a successful page advances the cursor', async () => {
+  let mode = 'first';
+  const f = fixture(async path => path === '/snapshot' ? snapshot() : path.startsWith('/events?')
+    ? mode === 'failed' ? response({}, 503) : response({ session_id: mode === 'foreign' ? 'b' : 'a',
+      rows: [{ id: mode === 'first' ? '3' : '2', event: { session_id: mode === 'foreign' ? 'b' : 'a', kind: 0 } }],
+      has_earlier: true, next_cursor: mode === 'first' ? 'older' : 'oldest' }) : response([]));
+  f.ctx.timelineSession = 'a'; f.ctx.isEventsFiltered = () => true;
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.telemetryData.eventsView[0].record_id, '3');
+  for (mode of ['failed', 'foreign']) {
+    assert.equal(f.ctx.requestEventHistoryPage(f.ctx.eventHistoryPage, 'earlier'), true);
+    await f.ctx.fetchTelemetry({ slow: false });
+    assert.equal(f.ctx.telemetryData.eventsView[0].record_id, '3');
+    assert.equal(f.ctx.eventHistoryPage.cursor, '');
+    assert.match(f.ctx.eventHistoryPage.error, /current page is retained/);
+    assert.equal(f.ctx.reportHealth.failures(['events'])[0].state, 'stale');
+  }
+  mode = 'earlier'; f.ctx.requestEventHistoryPage(f.ctx.eventHistoryPage, 'earlier');
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.telemetryData.eventsView[0].record_id, '2');
+  assert.equal(f.ctx.eventHistoryPage.cursor, 'older');
+  assert.equal(f.ctx.reportHealth.failures(['events']).length, 0);
+});
 
 test('record handoff waits for valid telemetry and opens once', async () => {
   let available = false;

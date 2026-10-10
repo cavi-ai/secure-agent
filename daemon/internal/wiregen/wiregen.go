@@ -96,6 +96,7 @@ func WireTypes() []any {
 		sysagent.HarnessStatus{},
 		sysagent.SkillInfo{},
 		sysagent.Skill{},
+		api.EventPage{},
 	}...)
 }
 

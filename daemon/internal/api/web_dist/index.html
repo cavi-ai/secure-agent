@@ -473,6 +473,13 @@
           </div>
           <p class="report-health" data-reports="snapshot|events" role="status" hidden></p>
           <p id="events-scope-note" class="events-scope-note" hidden></p>
+          <div id="events-history-controls" class="events-history-controls" hidden>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="event-history-newer">Newer records</button>
+            <span id="events-history-page" role="status"></span>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="event-history-earlier">Earlier records</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="event-history-latest">Latest records</button>
+            <p id="events-history-error" role="status" hidden></p>
+          </div>
           <div class="panel-body timeline" id="events-container">
             <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No system events logged</span></div>
           </div>
@@ -798,6 +805,7 @@
   <div id="a11y-live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <script src="lib.js"></script>
+  <script src="event-history.js"></script>
   <script src="tab-overview.js"></script>
   <script src="tab-sessions.js"></script>
   <script src="tab-agents.js"></script>

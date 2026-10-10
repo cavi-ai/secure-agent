@@ -1731,6 +1731,8 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .sm-content { display: grid; grid-template-columns: minmax(110px, .75fr) minmax(0, 1.4fr) auto; align-items: baseline; gap: 4px 10px; min-width: 0; overflow-wrap: anywhere; }
 .sm-content strong { font-size: 13px; line-height: 1.4; font-weight: 600; color: var(--tx-1); }
 .sm-source-link { font: inherit; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
+.events-history-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 16px 8px; }
+.events-history-controls p { flex-basis: 100%; margin: 0; color: var(--tx-2); }
 .sm-content p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--tx-2); }
 .sm-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .sm-chips:empty { display: none; }

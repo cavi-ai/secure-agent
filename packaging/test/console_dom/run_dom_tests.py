@@ -72,7 +72,7 @@ def find_chrome():
 def build_harness(tmp):
     """Harness page = real index.html with mock_dom.js injected between lib.js
     and app.js. Real assets are symlinked so relative paths resolve."""
-    for f in ("index.html", "style.css", "lib.js", "live-updates.js", "console-auth.js", "report-health.js", "telemetry-validation.js", "app.js",
+    for f in ("index.html", "style.css", "lib.js", "event-history.js", "live-updates.js", "console-auth.js", "report-health.js", "telemetry-validation.js", "app.js",
               "tab-overview.js", "tab-sessions.js", "tab-agents.js", "tab-egress.js", "tab-findings.js",
               "tab-worktrees.js", "tab-agent.js", "theme-init.js", "icon.svg"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))
@@ -207,7 +207,7 @@ def main():
                 dom = dump_dom(chrome, tmp, '?activitydemo', origin, window_size=size)
                 receipt = re.search(r'data-activity-probe="([^"]+)"', dom)
                 state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
-                for name in ('endedEntry', 'outsideSnapshot', 'scopedRead', 'recordedRows', 'limitVisible', 'kindFilter', 'staleRetained', 'returnContext', 'returnFilters', 'forwardFilters', 'fits'):
+                for name in ('endedEntry', 'outsideSnapshot', 'scopedRead', 'recordedRows', 'limitVisible', 'kindFilter', 'staleRetained', 'returnContext', 'returnFilters', 'forwardFilters', 'pageBound', 'failedPage', 'earlierPage', 'lastPage', 'newerPage', 'latestPage', 'forwardPage', 'fits'):
                     check(f'session activity ({label}): {name}', state.get(name) is True, str(state))
             if args.session_activity_only:
                 print(f'\n{len(passed)} passed, {len(failed)} failed')

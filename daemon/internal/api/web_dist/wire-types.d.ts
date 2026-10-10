@@ -1534,3 +1534,15 @@ export interface Skill {
   body: string;
 }
 
+export interface recordedEventRow {
+  id: string;
+  event: Event;
+}
+
+export interface EventPage {
+  session_id: string;
+  rows: recordedEventRow[];
+  has_earlier: boolean;
+  next_cursor?: string;
+}
+

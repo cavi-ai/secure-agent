@@ -1071,7 +1071,21 @@ function renderEvents() {
   const note = document.getElementById('events-scope-note');
   if (note) {
     note.hidden = !SA.timelineSession;
-    note.textContent = SA.timelineSession ? 'Up to 200 matching retained events for this session. Activity outside recorded coverage is unknown.' : '';
+    note.textContent = SA.timelineSession ? 'Up to 200 matching retained events per page. Pages follow recording order; event times may differ. Activity outside recorded coverage is unknown.' : '';
+  }
+  const controls = document.getElementById('events-history-controls');
+  const page = SA.eventHistoryPage;
+  if (controls) {
+    controls.hidden = !SA.timelineSession || !page?.paged;
+    if (page) {
+      const busy = page.loading || !!page.pending;
+      controls.querySelector('[data-action="event-history-newer"]').disabled = busy || !page.trail.length;
+      controls.querySelector('[data-action="event-history-earlier"]').disabled = busy || !page.next;
+      controls.querySelector('[data-action="event-history-latest"]').disabled = busy || !page.cursor;
+      document.getElementById('events-history-page').textContent = `${busy ? 'Loading · ' : ''}Page ${page.trail.length + 1} · ${allEvents.length} records${!page.next && page.paged ? ' · End of retained records' : ''}`;
+      const error = document.getElementById('events-history-error');
+      error.hidden = !page.error; error.textContent = page.error;
+    }
   }
   let events = allEvents;
   if (SA.timelineSession) events = filterEventsBySession(allEvents, SA.timelineSession);
