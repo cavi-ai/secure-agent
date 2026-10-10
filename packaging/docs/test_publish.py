@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -17,7 +18,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         # A synthetic commit in a disposable fixture repository. Product tags,
         # signatures, hooks and history are never touched by these tests.
@@ -33,13 +34,14 @@ class ReleaseDocumentationTests(unittest.TestCase):
         self.manifest, self.epoch = build.identity("1.2.3", "v1.2.3")
         self.directory = self.root / "dist/content"
         self.directory.mkdir(parents=True)
-        (self.directory / "README.md").write_text("# Fixture documentation\n")
-        nav = {"sections": [{"title": "Start", "pages": [{"title": "Overview", "path": "README.md"}]}]}
+        (self.directory / "readme.md").write_text("# Fixture documentation\n")
+        nav = {"title": "Secure Agent", "version": "1.2.3", "sections": [{"title": "Start", "pages": [{"title": "Overview", "path": "readme.md"}]}]}
         (self.directory / "navigation.json").write_text(json.dumps(nav))
         self.seal()
         self.archive = build.archive(self.directory, self.manifest, self.epoch)
         self.sidecar = Path(str(self.archive) + ".sha256")
-        self.assets = [self.archive, self.sidecar]
+        self.envelope = self.archive.with_name("secure-agent-docs-v1.2.3.release.json")
+        self.assets = [self.archive, self.sidecar, self.envelope]
 
     def git(self, *args, body=None):
         return subprocess.run(["git", "-C", str(self.root), *args], input=body,
@@ -67,6 +69,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
         self.seal()
         self.archive.unlink()
         self.sidecar.unlink()
+        self.envelope.unlink()
         build.archive(self.directory, self.manifest, self.epoch)
         with self.assertRaisesRegex(ValueError, "checked-out product tag"):
             publish.verify_release("v1.2.3")
@@ -84,10 +87,10 @@ class ReleaseDocumentationTests(unittest.TestCase):
             publish.verify_release("v1.2.3")
 
     def test_unsafe_or_duplicate_archive_entries_are_rejected(self):
-        for name, kind in [("../escape", tarfile.REGTYPE), ("docs/secure-agent/v1.2.3/link", tarfile.SYMTYPE), ("docs/secure-agent/v9.9.9/README.md", tarfile.REGTYPE), ("duplicate", tarfile.REGTYPE)]:
+        for name, kind in [("../escape", tarfile.REGTYPE), ("docs/secure-agent/v1.2.3/link", tarfile.SYMTYPE), ("docs/secure-agent/v9.9.9/readme.md", tarfile.REGTYPE), ("duplicate", tarfile.REGTYPE)]:
             with self.subTest(name=name):
                 with tarfile.open(self.archive, "w:gz") as archive:
-                    names = ["docs/secure-agent/v1.2.3/README.md"] * 2 if name == "duplicate" else [name]
+                    names = ["docs/secure-agent/v1.2.3/readme.md"] * 2 if name == "duplicate" else [name]
                     for entry in names:
                         info = tarfile.TarInfo(entry)
                         info.type, info.size = kind, 0
@@ -102,7 +105,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
                    "assets": [{"name": name} for name in existing], **state}
         calls = []
 
-        def command(*args):
+        def command(*args, **kwargs):
             calls.append(args)
             if args[:2] == ("release", "view"):
                 return json.dumps(release)
@@ -120,7 +123,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
         with remote:
             publish.publish("v1.2.3", "example/product", self.assets)
         uploads = [call for call in calls if call[:2] == ("release", "upload")]
-        self.assertEqual(uploads, [("release", "upload", "v1.2.3", str(self.sidecar), "--repo", "example/product")])
+        self.assertEqual(uploads, [("release", "upload", "v1.2.3", str(self.sidecar), str(self.envelope), "--repo", "example/product")])
 
     def test_identical_assets_are_an_idempotent_noop(self):
         remote, calls = self.remote({asset.name: asset.read_bytes() for asset in self.assets})
@@ -158,6 +161,54 @@ class ReleaseDocumentationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "download unavailable"):
                 publish.publish("v1.2.3", "example/product", self.assets)
             self.assertFalse(any(call.args[:2] == ("release", "upload") for call in remote.call_args_list))
+
+    def test_envelope_and_archive_provenance_must_match(self):
+        envelope = json.loads(self.envelope.read_text())
+        envelope["artifact"]["sha256"] = "a" * 64
+        self.envelope.write_text(json.dumps(envelope))
+        with self.assertRaisesRegex(ValueError, "release envelope"):
+            publish.verify_release("v1.2.3")
+        with tarfile.open(self.archive) as source:
+            members = [(member, source.extractfile(member).read()) for member in source]
+        with tarfile.open(self.archive, "w:gz", format=tarfile.USTAR_FORMAT) as target:
+            for member, body in members:
+                if member.name == "cavi-release.json":
+                    metadata = json.loads(body)
+                    metadata["commit"] = "b" * 40
+                    body = json.dumps(metadata).encode()
+                    member.size = len(body)
+                target.addfile(member, io.BytesIO(body))
+        self.checksum()
+        with self.assertRaisesRegex(ValueError, "cavi-release.json"):
+            publish.verify_release("v1.2.3")
+
+    def test_notification_requires_publication_and_dispatch_token_before_remote_calls(self):
+        for args in [["--notify-cavi-home"], ["--publish", "--repo", "cavi-ai/secure-agent", "--notify-cavi-home"], ["--publish", "--repo", "example/product"]]:
+            with patch.dict(os.environ, {}, clear=True), patch.object(sys, "argv", ["publish.py", "--tag", "v1.2.3", *args]), patch.object(publish, "gh") as remote:
+                with self.assertRaises(SystemExit):
+                    publish.main()
+                remote.assert_not_called()
+
+    def test_notification_follows_successful_publication_and_uses_verified_envelope(self):
+        remote, calls = self.remote()
+        with remote as gh, patch.dict(os.environ, {"CONSUMER_DISPATCH_TOKEN": "fixture-token"}), patch.object(sys, "argv", ["publish.py", "--tag", "v1.2.3", "--repo", "cavi-ai/secure-agent", "--publish", "--notify-cavi-home"]):
+            publish.main()
+            request = gh.call_args
+        self.assertEqual(calls[-2][:2], ("release", "upload"))
+        self.assertEqual(request.args, ("api", "--method", "POST", "repos/cavi-ai/cavi-home/dispatches", "--input", "-"))
+        self.assertEqual(json.loads(request.kwargs["body"]), {"event_type": "cavi-oss-release", "client_payload": json.loads(self.envelope.read_text())})
+        self.assertEqual(request.kwargs["token"], "fixture-token")
+
+    def test_failed_publication_does_not_dispatch_and_failed_dispatch_is_an_error(self):
+        argv = ["publish.py", "--tag", "v1.2.3", "--repo", "cavi-ai/secure-agent", "--publish", "--notify-cavi-home"]
+        with patch.dict(os.environ, {"CONSUMER_DISPATCH_TOKEN": "fixture-token"}), patch.object(sys, "argv", argv):
+            with patch.object(publish, "publish", side_effect=ValueError("upload failed")), patch.object(publish, "notify_cavi_home") as notify:
+                with self.assertRaisesRegex(ValueError, "upload failed"):
+                    publish.main()
+                notify.assert_not_called()
+            with patch.object(publish, "publish"), patch.object(publish, "gh", side_effect=ValueError("dispatch failed")):
+                with self.assertRaisesRegex(ValueError, "dispatch failed"):
+                    publish.main()
 
 
 if __name__ == "__main__":

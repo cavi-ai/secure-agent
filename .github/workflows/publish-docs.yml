@@ -23,6 +23,9 @@ on:
         required: false
         default: false
         type: boolean
+    secrets:
+      CONSUMER_DISPATCH_TOKEN:
+        required: false
 
 permissions: {}
 
@@ -63,6 +66,7 @@ jobs:
           path: |
             dist/secure-agent-docs-*.tar.gz
             dist/secure-agent-docs-*.tar.gz.sha256
+            dist/secure-agent-docs-*.release.json
           if-no-files-found: error
           retention-days: 14
 
@@ -92,4 +96,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DOCS_REPOSITORY: ${{ github.repository }}
-        run: python3 packaging/docs/publish.py --tag "$DOCS_TAG" --repo "$DOCS_REPOSITORY" --publish
+          DOCS_NOTIFY_CAVI_HOME: ${{ vars.DOCS_NOTIFY_CAVI_HOME }}
+          CONSUMER_DISPATCH_TOKEN: ${{ secrets.CONSUMER_DISPATCH_TOKEN }}
+        run: |
+          options=()
+          if [[ "$DOCS_NOTIFY_CAVI_HOME" == "true" ]]; then
+            options+=(--notify-cavi-home)
+          fi
+          python3 packaging/docs/publish.py --tag "$DOCS_TAG" --repo "$DOCS_REPOSITORY" --publish "${options[@]}"
