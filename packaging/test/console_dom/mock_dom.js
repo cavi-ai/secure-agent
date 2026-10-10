@@ -746,6 +746,7 @@
     // Session timeline: /sessions/<id>/timeline
     const tlMatch = p.match(/^\/sessions\/([^/]+)\/timeline/);
     if (tlMatch) {
+      if (window.__traceFail) return { ok: false, status: 503 };
       const sid = decodeURIComponent(tlMatch[1]);
       const sess = (data['/sessions'] || []).find(s => s.id === sid);
       const body = sess ? (scenarios.has('tracereactivation') ? [...(sess._timeline || [])] : (sess._timeline || [])) : null;
@@ -1319,10 +1320,14 @@
         window.SA.t.sessions = window.SA.t.sessions.map(session => session.id === 'wb-session-79' ? { ...session, last_seen_at: new Date(now + 60000).toISOString() } : session);
         renderSessionBoard();
         receipt.order = Array.from(rail().querySelectorAll('[data-action="select-session"]'), row => row.dataset.id).join(',') === order;
+        data['/sessions'].find(session => session.id === first)._timeline = Array.from({ length: 500 }, (_, i) => ({
+          kind: 12, session_id: first, ts: iso(600000 - i * 1000), tool: 'RetainedTrace' + i, tool_status: 'ok', duration_ms: 100,
+        }));
         detail().querySelector('[data-view="trace"]').focus({ preventScroll: true });
         await window.setSessionView('trace');
         receipt.modeFocus = document.activeElement === detail().querySelector('[data-view="trace"]');
         receipt.trace = window.SA.sessionView === 'trace' && detail().querySelector('[data-view="trace"]').getAttribute('aria-pressed') === 'true';
+        receipt.traceLimit = detail().querySelectorAll('.wf-row').length === 500 && detail().textContent.includes('earlier history may be omitted');
         await window.setSessionView('memory');
         receipt.memory = detail().querySelectorAll('.sm-row').length === 121;
         rail().scrollTop = 300;
@@ -1350,6 +1355,22 @@
         await window.selectSession('sess-claude-1');
         receipt.narrowFocus = !window.matchMedia('(max-width: 900px)').matches || document.activeElement === detail().querySelector('h3');
         receipt.height = parseFloat(panel().style.getPropertyValue('--session-workbench-height')) > 0;
+        window.__traceFail = true;
+        await window.setSessionView('trace');
+        receipt.traceUnavailable = detail().textContent.includes('Trace unavailable') && !detail().textContent.includes('No trace events') && !detail().querySelector('.wf');
+        window.__traceFail = false;
+        const retry = detail().querySelector('[data-action="trace-retry"]');
+        retry.focus({ preventScroll: true });
+        receipt.traceRetryFocus = document.activeElement === retry && !retry.disabled;
+        retry.click(); await wait();
+        receipt.traceRecovered = window.SA.sessionTimelineState.loaded && !window.SA.sessionTimelineState.error && !!detail().querySelector('.wf') && !detail().querySelector('[data-action="trace-retry"]');
+        const saved = detail().querySelector('.wf').textContent;
+        window.__traceFail = true;
+        await window.setSessionView('trace');
+        receipt.traceStale = detail().textContent.includes('last successfully loaded') && detail().querySelector('.wf').textContent === saved;
+        window.__traceFail = false;
+        detail().querySelector('[data-action="trace-retry"]').click(); await wait();
+        receipt.traceRetryRecovered = !window.SA.sessionTimelineState.error && detail().querySelector('.wf').textContent === saved;
       } catch (error) { receipt.error = String(error.stack || error); }
       document.body.dataset.sessionWorkbench = JSON.stringify(receipt);
     }, 4000);

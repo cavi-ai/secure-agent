@@ -161,6 +161,26 @@ function sessionMemoryHTML(page, state) {
 // identity confidence, workspace path (click copies), Export (copies the
 // markdown report from GET /sessions/{id}/report), then Memory by default.
 // Trace keeps the existing waterfall and timeline endpoint.
+function validSessionTrace(rows, id) {
+  return Array.isArray(rows) && rows.length <= 500 && rows.every(row => row && typeof row === 'object'
+    && !Array.isArray(row) && row.session_id === id && Number.isInteger(row.kind) && row.kind >= 0
+    && typeof row.ts === 'string' && Number.isFinite(Date.parse(row.ts))
+    && ['duration_ms', 'tokens_in', 'tokens_out', 'cost_usd'].every(key => row[key] === undefined
+      || (typeof row[key] === 'number' && Number.isFinite(row[key]))));
+}
+
+function sessionTraceHTML(events, state) {
+  const loaded = state?.loaded || events.length > 0;
+  const retry = `<button type="button" class="link-btn" data-action="trace-retry"${state?.loading ? ' disabled' : ''}>Retry trace</button>`;
+  const message = state?.error ? `Trace unavailable.${loaded ? ' Showing the last successfully loaded history; it may be out of date.' : ''} ${retry}`
+    : state?.loading && !loaded ? 'Loading trace…' : '';
+  const text = message || (!loaded ? 'Loading trace…' : '');
+  const notice = `<div class="sm-state" data-session-part="trace-health" role="status"${text ? '' : ' hidden'}>${text}</div>`;
+  if (!loaded) return notice;
+  const limit = events.length === 500 ? '<p class="sm-state" data-session-part="trace-limit">This view contains the latest 500 retained event records; earlier history may be omitted. Use View session events to browse retained records.</p>' : '';
+  return notice + limit + sessionWaterfallHTML(events);
+}
+
 // Durable IDs are the entry point; live process counts and setup checks do
 // not substitute for a session's own record.
 function sessionDailyHTML(sessions, coverage) {
@@ -397,5 +417,5 @@ function sessionDetailHTML(sess, events, trees) {
       </details>
     </div>
     </div>
-    <div class="session-detail-body">${window.SA.sessionView === 'results' ? sessionOutcomesHTML(window.SA.sessionOutcomes, window.SA.sessionOutcomesState) : sessionOverviewHTML(window.SA.sessionOverview, window.SA.sessionOverviewState) + (window.SA.sessionView === 'trace' ? sessionWaterfallHTML(events) : sessionMemoryHTML(window.SA.sessionMemoryPage, window.SA.sessionMemoryState))}</div>`;
+    <div class="session-detail-body">${window.SA.sessionView === 'results' ? sessionOutcomesHTML(window.SA.sessionOutcomes, window.SA.sessionOutcomesState) : sessionOverviewHTML(window.SA.sessionOverview, window.SA.sessionOverviewState) + (window.SA.sessionView === 'trace' ? sessionTraceHTML(events, window.SA.sessionTimelineState) : sessionMemoryHTML(window.SA.sessionMemoryPage, window.SA.sessionMemoryState))}</div>`;
 }
