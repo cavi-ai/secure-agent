@@ -8,6 +8,30 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
+func TestReportEvidencePartialAndPlanGate(t *testing.T) {
+	ev := ReportEvidence{
+		Events:        ReportSourceEvidence{Available: true},
+		Flags:         ReportSourceEvidence{Available: true},
+		Reviews:       ReportSourceEvidence{Available: true, AtLimit: true, Limit: 1},
+		Incidents:     ReportSourceEvidence{Available: true},
+		Interventions: ReportSourceEvidence{Available: true},
+	}
+	if !ev.Partial() {
+		t.Fatal("at-limit reviews are a partial export")
+	}
+	if ev.PlanCoreUnavailable() {
+		t.Fatal("at-limit reviews trip the plan gate")
+	}
+	ev.Events.Available = false
+	if !ev.PlanCoreUnavailable() {
+		t.Fatal("unavailable events leave the plan gate closed")
+	}
+	var missing *ReportEvidence
+	if missing.PlanCoreUnavailable() {
+		t.Fatal("nil evidence trips the plan gate")
+	}
+}
+
 func reportJSON(t *testing.T, rep SessionReport) map[string]any {
 	t.Helper()
 	raw, err := json.Marshal(rep)
