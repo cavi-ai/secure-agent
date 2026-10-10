@@ -442,11 +442,6 @@
   const slowShapeReads = {};
   let slowShapeRecovered = false;
   let spendShapeBad = scenarios.has('firstload');
-  if (scenarios.has('spendshape')) {
-    data['/costs/plans'] = { plans: [{ harness: 'codex', home: 'shape-plan', home_path: '/workspace/shape-plan',
-      plan_type: 'pro', limit_id: 'codex', unlimited: false, seen_at: iso(0),
-      windows: [{ used_percent: 25, window_minutes: 300, resets_at: '' }] }] };
-  }
   window.ConsoleFixtures.apply(fixture);
   stamp('fixture-posture', JSON.stringify(data['/posture']));
   const fixtureReads = {};
@@ -1624,19 +1619,6 @@
       stamp('spend-slow-probe', `agents=${document.getElementById('count-agents').textContent} `
         + `spend=${document.getElementById('spend-card').textContent.trim()}`);
     }, 3000);
-  }
-  // No-spend variant: an empty /costs report — the tile reads an em dash and
-  // the card shows its empty state.
-  if (scenarios.has('nocostsdemo')) {
-    data['/costs'] = { ...data['/costs'], total: { key: '', calls: 0, sessions: 0, tokens_in: 0, tokens_out: 0, cost_usd: 0, unpriced_calls: 0 }, rows: [] };
-  }
-  // plansdemo: /costs/plans reports a Codex Pro weekly window and the 24h
-  // total counts plan calls — the Spend card heads its rows with the plan
-  // line and bar; the stat strip says how many calls ran on plans.
-  if (scenarios.has('plansdemo')) {
-    data['/costs/plans'] = { plans: [{ harness: 'codex', home: 'codex', plan_type: 'pro', limit_id: 'codex',
-      windows: [{ window_minutes: 10080, used_percent: 52, resets_at: iso(-3 * 24 * 3600000) }], unlimited: false, seen_at: iso(0) }] };
-    data['/costs'] = { ...data['/costs'], total: { ...data['/costs'].total, plan_calls: 12 } };
   }
   // memfamilydemo: three claude sessions share root 5821 — Memory by family
   // shows one bar for that family with its session count, and the badge
