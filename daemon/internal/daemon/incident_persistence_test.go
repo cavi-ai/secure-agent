@@ -59,8 +59,9 @@ func TestDrainLoopIncidentPublicationRequiresPersistence(t *testing.T) {
 		hub := api.NewDeltaHub()
 		deltas := hub.Subscribe()
 		b := bus.New(64)
-		postureCalls, advisorCalls := 0, 0
-		done := runEventIngest(b.Subscribe(), ingestDeps{Store: st, Correlator: correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{}), Fleet: pub, Resolver: session.NewResolver(st, tagger), Tagger: tagger, Deltas: hub, PostureChanged: func() { postureCalls++ }, Advisor: func() *advisor.Subscriber { advisorCalls++; return nil }}).Done()
+		var postureCalls atomic.Int32
+		advisorCalls := 0
+		done := runEventIngest(b.Subscribe(), ingestDeps{Store: st, Correlator: correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{}), Fleet: pub, Resolver: session.NewResolver(st, tagger), Tagger: tagger, Deltas: hub, PostureChanged: func() { postureCalls.Add(1) }, Advisor: func() *advisor.Subscriber { advisorCalls++; return nil }}).Done()
 		b.Publish(event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"})
 		b.Publish(event.Event{Kind: event.KindConnOpen, TS: now.Add(time.Millisecond), PID: 500, RemoteHost: "evil.example.com", RemotePort: 443})
 		b.Close()
@@ -81,8 +82,8 @@ func TestDrainLoopIncidentPublicationRequiresPersistence(t *testing.T) {
 				flagDeltas++
 			}
 		}
-		if flagDeltas != 1 || postureCalls == 0 {
-			t.Fatalf("incident failure stalled flag or posture publication: flags=%d posture=%d", flagDeltas, postureCalls)
+		if flagDeltas != 1 || postureCalls.Load() == 0 {
+			t.Fatalf("incident failure stalled flag or posture publication: flags=%d posture=%d", flagDeltas, postureCalls.Load())
 		}
 		h := st.WriteHealth()
 		if !recovering {
@@ -139,11 +140,11 @@ func TestDrainLoopIncidentLookupFailureDoesNotCreateDuplicate(t *testing.T) {
 		hub := api.NewDeltaHub()
 		deltas := hub.Subscribe()
 		b := bus.New(64)
-		postureCalls := 0
+		var postureCalls atomic.Int32
 		done := runEventIngest(b.Subscribe(), ingestDeps{
 			Store: st, Correlator: correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{}),
 			Resolver: session.NewResolver(st, tagger), Tagger: tagger, Deltas: hub,
-			PostureChanged: func() { postureCalls++ },
+			PostureChanged: func() { postureCalls.Add(1) },
 		}).Done()
 		b.Publish(event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"})
 		b.Publish(event.Event{Kind: event.KindConnOpen, TS: now.Add(time.Millisecond), PID: 500, RemoteHost: "evil.example.com", RemotePort: 443})
@@ -163,8 +164,8 @@ func TestDrainLoopIncidentLookupFailureDoesNotCreateDuplicate(t *testing.T) {
 				flags++
 			}
 		}
-		if flags != 1 || postureCalls == 0 {
-			t.Fatalf("%s: flag or posture publication stopped: flags=%d posture=%d", phase, flags, postureCalls)
+		if flags != 1 || postureCalls.Load() == 0 {
+			t.Fatalf("%s: flag or posture publication stopped: flags=%d posture=%d", phase, flags, postureCalls.Load())
 		}
 		var count int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM incidents`).Scan(&count); err != nil {

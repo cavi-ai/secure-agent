@@ -31,6 +31,7 @@ func TestPostureReadFailureVisibleOnFirstPassAndRecovery(t *testing.T) {
 				incident := model.IncidentReport{ID: "incident", FlagID: "flag", Risk: model.RiskLow, Timestamp: time.Now()}
 				flag := model.Flag{ID: "flag", Rule: "keychain-access", Severity: 1, PID: 1, TS: time.Now()}
 				label := "incidents"
+				var savedReport string
 				switch damage {
 				case "noncritical flag":
 					label = "flags"
@@ -42,6 +43,9 @@ func TestPostureReadFailureVisibleOnFirstPassAndRecovery(t *testing.T) {
 					}
 				default:
 					if err := st.PutIncident(incident); err != nil {
+						t.Fatal(err)
+					}
+					if err := db.QueryRow("SELECT report_json FROM incidents WHERE id='incident'").Scan(&savedReport); err != nil {
 						t.Fatal(err)
 					}
 					q := "UPDATE incidents SET report_json='invalid'"
@@ -102,7 +106,7 @@ func TestPostureReadFailureVisibleOnFirstPassAndRecovery(t *testing.T) {
 					if _, err := st.PutFlag(flag); err != nil {
 						t.Fatal(err)
 					}
-				} else if err := st.PutIncident(incident); err != nil {
+				} else if _, err := db.Exec("UPDATE incidents SET report_json=?, status='open' WHERE id='incident'", savedReport); err != nil {
 					t.Fatal(err)
 				}
 				p = read()

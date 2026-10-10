@@ -17,7 +17,7 @@ func TestLegacyIncidentWorkflowDefault(t *testing.T) {
 	INSERT INTO incidents VALUES ('resolved','r',42,'high','{"id":"resolved"}','2026-10-07T00:00:00Z','resolved',NULL,'2026-10-08T00:00:00Z','preserved');
 	INSERT INTO incidents VALUES ('ambiguous','a',42,'high','{"id":"ambiguous"}','2026-10-07T00:00:00Z',NULL,'2026-10-08T00:00:00Z',NULL,NULL);
 	INSERT INTO incidents VALUES ('invalid','x',42,'high','{"id":"invalid"}','2026-10-07T00:00:00Z','invalid',NULL,NULL,NULL);`)
-	for range 2 {
+	for pass := range 2 {
 		s, err := Open(path, "")
 		if err != nil {
 			t.Fatal(err)
@@ -36,10 +36,11 @@ func TestLegacyIncidentWorkflowDefault(t *testing.T) {
 		if _, _, err := s.IncidentStatusResult("invalid"); err == nil {
 			t.Fatal("invalid workflow became readable")
 		}
-		if err := s.PutIncident(model.IncidentReport{ID: "new", FlagID: "new-flag", Timestamp: time.Now()}); err != nil {
+		id := fmt.Sprintf("new-%d", pass)
+		if err := s.PutIncident(model.IncidentReport{ID: id, FlagID: "new-flag", Timestamp: time.Now()}); err != nil {
 			t.Fatal(err)
 		}
-		wf, found, err := s.IncidentStatusResult("new")
+		wf, found, err := s.IncidentStatusResult(id)
 		if err != nil || !found || wf.Status != "open" {
 			t.Fatalf("new legacy-schema incident: %+v %v %v", wf, found, err)
 		}

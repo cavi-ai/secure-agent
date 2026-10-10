@@ -1450,8 +1450,9 @@ func nullFloat(f float64) any {
 	return f
 }
 
-// PutIncident returns nil only after the report is persisted. Retention pruning
-// remains best-effort and does not invalidate a successful insertion.
+// PutIncident creates a report and rejects existing identities without changing
+// their evidence or operator bookkeeping. Retention pruning remains best-effort
+// and does not invalidate a successful insertion.
 func (s *Store) PutIncident(inc model.IncidentReport) (writeErr error) {
 	defer func() {
 		s.noteWrite("incidents", writeErr)
@@ -1474,7 +1475,7 @@ func (s *Store) PutIncident(inc model.IncidentReport) (writeErr error) {
 	tsStr := inc.Timestamp.UTC().Format(time.RFC3339Nano)
 	flagIDs, _ := json.Marshal([]string{inc.FlagID})
 	result, err := s.db.Exec(
-		`INSERT OR REPLACE INTO incidents (id, flag_id, pid, risk, report_json, created_at, rule, session_id, subject, aggregate_count, last_flag_at, flag_ids, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
+		`INSERT INTO incidents (id, flag_id, pid, risk, report_json, created_at, rule, session_id, subject, aggregate_count, last_flag_at, flag_ids, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
 		inc.ID, inc.FlagID, inc.PID, string(inc.Risk), string(data), tsStr,
 		inc.Rule, inc.SessionID, inc.Subject, inc.AggregateCount, tsStr, string(flagIDs),
 	)

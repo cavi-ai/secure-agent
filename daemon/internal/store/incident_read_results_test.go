@@ -25,6 +25,10 @@ func TestIncidentReadResultsDiscardPartialRowsAndRecover(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			var savedReport string
+			if err := s.db.QueryRow("SELECT report_json FROM incidents WHERE id='bad'").Scan(&savedReport); err != nil {
+				t.Fatal(err)
+			}
 			if _, err := s.db.Exec("UPDATE incidents SET report_json=? WHERE id='bad'", payload); err != nil {
 				t.Fatal(err)
 			}
@@ -39,7 +43,7 @@ func TestIncidentReadResultsDiscardPartialRowsAndRecover(t *testing.T) {
 			if h.ReadFailures != 2 || !slices.Equal(h.ReadActive, []string{"incidents"}) || h.Failures != 0 {
 				t.Fatalf("read failure health: %+v", h)
 			}
-			if err := s.PutIncident(bad); err != nil {
+			if _, err := s.db.Exec("UPDATE incidents SET report_json=? WHERE id='bad'", savedReport); err != nil {
 				t.Fatal(err)
 			}
 			got, err = s.RecentIncidentsResult(10)

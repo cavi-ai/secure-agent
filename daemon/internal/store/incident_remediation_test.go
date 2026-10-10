@@ -72,6 +72,76 @@ func mustJSONForRemediationTest(t *testing.T, value any) string {
 	return string(raw)
 }
 
+func TestIncidentCreationRejectsExistingIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.db")
+	st, err := Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now().UTC()
+	inc := model.IncidentReport{ID: "incident", FlagID: "first", Timestamp: now, RotateList: []model.RotateItem{{ID: "key", Name: "Key", Action: "Revoke affected key"}}}
+	if err := st.PutIncident(inc); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.AggregateIntoIncident(inc.ID, "second", now.Add(time.Minute)); !ok {
+		t.Fatal("could not aggregate second flag")
+	}
+	saved, err := st.GetIncident(inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := saved.Remediation
+	if _, err := st.ReportIncidentRemediation(model.IncidentRemediationRequest{ID: inc.ID, StepID: view.Steps[0].ID, ExpectedRevision: view.Revision, ExpectedEvidence: view.EvidenceRevision, Status: "reported"}); err != nil {
+		t.Fatal(err)
+	}
+	saved, err = st.GetIncident(inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf, updated, err := st.SetIncidentStatusResult(inc.ID, "resolved", "Handled")
+	if err != nil || !updated {
+		t.Fatalf("could not resolve incident: %+v %v", wf, err)
+	}
+	inc.Summary = "replacement"
+	if err := st.PutIncident(inc); err == nil {
+		t.Error("duplicate incident creation reported success")
+	}
+	assertSaved := func(s *Store) {
+		t.Helper()
+		if report, err := s.GetIncident(inc.ID); err != nil || !reflect.DeepEqual(report, saved) {
+			t.Errorf("duplicate creation changed evidence or remediation: %+v %v", report, err)
+		}
+		if got, ok := s.IncidentStatus(inc.ID); !ok || got != wf {
+			t.Errorf("duplicate creation changed workflow: %+v %v", got, ok)
+		}
+		if id, ok := s.IncidentIDForFlag("second"); !ok || id != inc.ID {
+			t.Error("duplicate creation removed aggregated evidence link")
+		}
+	}
+	assertSaved(st)
+	if h := st.WriteHealth(); h.Failures != 1 || len(h.Active) != 1 || h.Active[0] != "incidents" {
+		t.Errorf("duplicate creation failure hidden: %+v", h)
+	}
+	other := inc
+	other.ID, other.FlagID = "other", "third"
+	if err := st.PutIncident(other); err != nil {
+		t.Fatal(err)
+	}
+	if h := st.WriteHealth(); h.Failures != 1 || len(h.Active) != 0 {
+		t.Errorf("successful creation did not clear fault: %+v", h)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	assertSaved(reopened)
+}
+
 func TestIncidentRemediationSurvivesReopenAndDoesNotTransferToChangedStep(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.db")
 	st, err := Open(path, "")

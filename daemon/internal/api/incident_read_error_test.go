@@ -76,6 +76,10 @@ func TestIncidentReadFailuresRejectPartialResponsesAndRecover(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			var savedReport string
+			if err := db.QueryRow("SELECT report_json FROM incidents WHERE id='bad'").Scan(&savedReport); err != nil {
+				t.Fatal(err)
+			}
 			if _, err := db.Exec("UPDATE incidents SET report_json=? WHERE id='bad'", payload); err != nil {
 				t.Fatal(err)
 			}
@@ -87,7 +91,7 @@ func TestIncidentReadFailuresRejectPartialResponsesAndRecover(t *testing.T) {
 					t.Errorf("%s hides failed incident read: %d %s", url, w.Code, w.Body.String())
 				}
 			}
-			if err := st.PutIncident(bad); err != nil {
+			if _, err := db.Exec("UPDATE incidents SET report_json=? WHERE id='bad'", savedReport); err != nil {
 				t.Fatal(err)
 			}
 			for _, url := range []string{"/incidents", "/incidents?id=bad", "/incidents?id=flag-bad&format=md", "/snapshot"} {

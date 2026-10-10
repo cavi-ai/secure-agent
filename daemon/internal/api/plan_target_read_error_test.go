@@ -49,6 +49,10 @@ func TestPlanTargetReadFailuresRejectDecisionsAndRecover(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
+			var savedReport string
+			if err := db.QueryRow("SELECT report_json FROM incidents WHERE id='i1'").Scan(&savedReport); err != nil {
+				t.Fatal(err)
+			}
 			if _, err := db.Exec(tc.damage); err != nil {
 				t.Fatal(err)
 			}
@@ -75,7 +79,7 @@ func TestPlanTargetReadFailuresRejectDecisionsAndRecover(t *testing.T) {
 				if _, err := db.Exec("UPDATE flags SET ts=? WHERE id='f1'", flag.TS.UTC().Format(time.RFC3339Nano)); err != nil {
 					t.Fatal(err)
 				}
-				if err := st.PutIncident(inc); err != nil {
+				if _, err := db.Exec("UPDATE incidents SET report_json=? WHERE id='i1'", savedReport); err != nil {
 					t.Fatal(err)
 				}
 			}
