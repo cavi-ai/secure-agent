@@ -264,16 +264,16 @@ def main():
             check('spend: fresh data replaces cached data and clears the indicator',
                   'id="count-spend">$37.67<' in cached
                   and dom_query(cached).has(None, {'id': 'spend-cache', 'class': 'spend-cache', 'role': 'status', 'hidden': ''}))
-            delayed = dump_dom(chrome, tmp, '?spendshape', origin)
+            delayed = dump_dom(chrome, tmp, '?spendshape', origin, fixture=payload_cases.delayed_spend())
             check('spend: delayed refresh retains totals and rows without warning banners',
                   'Refresh delayed · showing saved usage' in delayed
                   and 'id="count-spend">$36.67<' in delayed and 'api-service' in delayed
                   and 'Spend detail: Stale' not in delayed and 'Spend plans: Stale' not in delayed)
-            first = dump_dom(chrome, tmp, '?spendshape&firstload', origin)
+            first = dump_dom(chrome, tmp, '?spendshape&firstload', origin, fixture=payload_cases.delayed_spend())
             check('spend: unavailable first response retries without claiming empty computed usage',
                   'Usage is taking longer to load · retrying…' in first
                   and 'Refreshing usage…' in first and 'No priced model calls' not in first)
-            recovered = dump_dom(chrome, tmp, '?spendshape&recover', origin)
+            recovered = dump_dom(chrome, tmp, '?spendshape&recover', origin, fixture=payload_cases.delayed_spend())
             check('spend: valid recovery clears the delayed state',
                   'Refresh delayed' in pre(recovered, 'spend-shape-before-recovery')
                   and dom_query(recovered).has(None, {'id': 'spend-cache', 'class': 'spend-cache', 'role': 'status', 'hidden': ''})
@@ -399,18 +399,18 @@ def main():
         dom_session_coverage = dump_dom(chrome, tmp, "?sessionvisibility", fixture=payload_cases.session_coverage())
         dom_phone = dump_dom(chrome, tmp, "?phonedemo")
         dom_memory_phone = dump_dom(chrome, tmp, "?phonedemo&memorydemo")
-        dom_nocosts = dump_dom(chrome, tmp, "?nocostsdemo")
+        dom_nocosts = dump_dom(chrome, tmp, fixture=payload_cases.empty_spend())
         dom_memfam = dump_dom(chrome, tmp, "?memfamilydemo")
         dom_memprobe = dump_dom(chrome, tmp, "?memprobe")
         dom_spend = dump_dom(chrome, tmp, "?spenddemo")
-        dom_plans = dump_dom(chrome, tmp, "?plansdemo")
+        dom_plans = dump_dom(chrome, tmp, fixture=payload_cases.spend_plans())
         dom_spendday = dump_dom(chrome, tmp, "?spenddaydemo")
         dom_spendphone = dump_dom(chrome, tmp, "?phonedemo&spenddaydemo")
         dom_spendkeep = dump_dom(chrome, tmp, "?tab=overview&spenddaydemo&spendkeepdemo")
         dom_spendcache = dump_dom(chrome, tmp, "?spendcachedemo")
-        dom_spendshape = dump_dom(chrome, tmp, "?spendshape")
-        dom_spendshapefirst = dump_dom(chrome, tmp, "?spendshape&firstload")
-        dom_spendshaperecover = dump_dom(chrome, tmp, "?spendshape&recover")
+        dom_spendshape = dump_dom(chrome, tmp, "?spendshape", fixture=payload_cases.delayed_spend())
+        dom_spendshapefirst = dump_dom(chrome, tmp, "?spendshape&firstload", fixture=payload_cases.delayed_spend())
+        dom_spendshaperecover = dump_dom(chrome, tmp, "?spendshape&recover", fixture=payload_cases.delayed_spend())
         dom_spendslow = dump_dom(chrome, tmp, "?spendslowdemo")
         dom_events = dump_dom(chrome, tmp, "?tab=events")
         dom_burst = dump_dom(chrome, tmp, "?burstdemo")

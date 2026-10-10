@@ -23,6 +23,40 @@ def disabled_agent(now_ms=None):
     return {"now": now, "patches": [{"route": "/agent/status", "path": ["enabled"], "value": False}]}
 
 
+def empty_spend(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": [
+        {"route": "/costs", "path": ["total"], "value": {
+            "key": "", "calls": 0, "sessions": 0, "tokens_in": 0,
+            "tokens_out": 0, "cost_usd": 0, "unpriced_calls": 0,
+        }},
+        {"route": "/costs", "path": ["rows"], "value": []},
+    ]}
+
+
+def spend_plans(now_ms=None):
+    now, iso = _clock(now_ms)
+    return {"now": now, "patches": [
+        {"route": "/costs/plans", "path": ["plans"], "value": [{
+            "harness": "codex", "home": "codex", "plan_type": "pro", "limit_id": "codex",
+            "windows": [{"window_minutes": 10080, "used_percent": 52, "resets_at": iso(-3 * 24 * 3600000)}],
+            "unlimited": False, "seen_at": iso(0),
+        }]},
+        {"route": "/costs", "path": ["total", "plan_calls"], "value": 12},
+    ]}
+
+
+def delayed_spend(now_ms=None):
+    now, iso = _clock(now_ms)
+    return {"now": now, "patches": [
+        {"route": "/costs/plans", "path": ["plans"], "value": [{
+            "harness": "codex", "home": "shape-plan", "home_path": "/workspace/shape-plan",
+            "plan_type": "pro", "limit_id": "codex", "unlimited": False, "seen_at": iso(0),
+            "windows": [{"used_percent": 25, "window_minutes": 300, "resets_at": ""}],
+        }]},
+    ]}
+
+
 def payload_outcomes(now_ms=None):
     now, iso = _clock(now_ms)
     payloads = {}
