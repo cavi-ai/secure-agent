@@ -55,7 +55,7 @@ func (a *API) egressEpisodeViews() []egressEpisodeView {
 type egressEpisodeStore interface {
 	ExpectedEgressMatcher() func(store.EgressEpisode) string
 	ListEgressEpisodesForReview() []store.EgressEpisode
-	AdvisorVerdictFor(string, string) (model.AdvisorVerdict, bool)
+	AdvisorVerdictsFor([]string, string) (map[string]model.AdvisorVerdict, error)
 }
 
 func readEgressEpisodeViews(st egressEpisodeStore) []egressEpisodeView {
@@ -71,16 +71,26 @@ func readEgressEpisodeViews(st egressEpisodeStore) []egressEpisodeView {
 		}
 		ruleID := match(e)
 		view := egressEpisodeView{ID: e.ID, Observed: e, Expected: ruleID != "", ExpectedRuleID: ruleID, Candidate: egressCandidate(e, ruleID)}
-		if v, ok := st.AdvisorVerdictFor(advisor.EgressSubjectID(e.ID), "egress"); ok && v.Assessment == advisor.EgressEvidenceKey(e) {
-			view.AdvisorInference = &egressInference{PossiblePurpose: v.Rationale, Confidence: v.Confidence, CreatedAt: v.CreatedAt}
-		}
 		if view.Candidate {
 			candidates = append(candidates, view)
 		} else if len(other) < 100 {
 			other = append(other, view)
 		}
 	}
-	return append(candidates, other...)
+	views := append(candidates, other...)
+	subjectIDs := make([]string, len(views))
+	for i, view := range views {
+		subjectIDs[i] = advisor.EgressSubjectID(view.ID)
+	}
+	// Optional advice may be partial; the store retains health for the whole batch.
+	verdicts, _ := st.AdvisorVerdictsFor(subjectIDs, "egress")
+	for i := range views {
+		view := &views[i]
+		if v, ok := verdicts[subjectIDs[i]]; ok && v.Assessment == advisor.EgressEvidenceKey(view.Observed) {
+			view.AdvisorInference = &egressInference{PossiblePurpose: v.Rationale, Confidence: v.Confidence, CreatedAt: v.CreatedAt}
+		}
+	}
+	return views
 }
 
 func (a *API) handleEgressEpisodeSubpath(w http.ResponseWriter, r *http.Request) {
