@@ -166,9 +166,13 @@ struct ConsoleView: View {
         let subtitle: String
         let flag: FlagModel?
         let action: AppState.HeroAction?
+        var item: PostureItemModel? = nil
 
         /// Served title, then `explain.what`, then the disposition text.
         var flagLines: [String] {
+            if let item, let assessment = item.assessment {
+                return ([item.title] + assessment.summaryLines).filter { $0 != subtitle }
+            }
             guard let flag else { return [] }
             let title = (flag.title?.isEmpty == false) ? flag.title! : flag.rule
             let assessment = flag.explain?.assessment
@@ -205,6 +209,19 @@ struct ConsoleView: View {
             }
             if let flag = m.flag {
                 heroFlagBlock(flag, lines: m.flagLines, action: m.action, label: m.buttonLabel)
+            } else if let item = m.item {
+                ForEach(Array(m.flagLines.enumerated()), id: \.offset) { _, line in
+                    Text(line).font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Button("Open in console") {
+                    switch item.kind {
+                    case "flag": state.openDashboard(destination: .flag(id: item.id, sessionID: nil))
+                    case "incident": state.openDashboard(destination: .incident(id: item.id, sessionID: nil))
+                    default: state.openDashboard(tab: "home")
+                    }
+                }
+                .buttonStyle(.borderedProminent).tint(Color.brand).controlSize(.small)
             }
         }
         .padding(12)
@@ -226,6 +243,9 @@ struct ConsoleView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let action, let label, state.connected {
+                Text(Self.actionHelp(action))
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Button {
                     switch action {
                     case .perform(let a):
@@ -287,7 +307,8 @@ struct ConsoleView: View {
                              flag: nil, action: nil)
         }
         let top = state.heroFlag
-        let action = top.map(AppState.heroAction(for:))
+        let item = state.posture?.criticalItem
+        let action = top.map(AppState.heroAction(for:)) ?? (item == nil ? nil : .openConsole(tab: "home"))
 		if let warning = state.staleDataWarning, state.posture?.state != "critical" {
 			return HeroModel(icon: "exclamationmark.triangle.fill", color: .warn, title: "Monitoring data is stale",
 						 subtitle: warning, flag: top, action: action)
@@ -296,8 +317,8 @@ struct ConsoleView: View {
         let subtitle = summary.isEmpty ? monitoredLine : summary
         switch state.posture?.state ?? fallbackPostureState {
         case "critical":
-            return HeroModel(icon: "exclamationmark.shield.fill", color: .bad, title: "Action needed",
-                             subtitle: subtitle, flag: top, action: action)
+            return HeroModel(icon: "exclamationmark.shield.fill", color: .bad, title: "Urgent review",
+                             subtitle: subtitle, flag: top, action: action, item: item)
         case "attention":
             return HeroModel(icon: "exclamationmark.triangle.fill", color: .warn, title: "Needs a look",
                              subtitle: subtitle, flag: top, action: action)

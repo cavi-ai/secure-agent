@@ -48,7 +48,7 @@ test('failed refresh retains critical severity, decisions and evidence with a vi
   f.paint();
   assert.equal(f.nodes.get('posture-banner').dataset.state, 'critical');
   assert.equal(f.nodes.get('tabs-posture').dataset.state, 'critical');
-  assert.equal(f.nodes.get('posture-state').textContent, 'Critical');
+  assert.equal(f.nodes.get('posture-state').textContent, 'Urgent review');
   assert.equal(f.nodes.get('posture-summary').textContent, 'Two decisions need review');
   assert.match(f.nodes.get('posture-items').innerHTML, /Synthetic retained decision/);
   assert.match(f.nodes.get('posture-health').textContent, /Status stale.*last complete telemetry/);
@@ -83,7 +83,7 @@ test('critical SSE observations remain visible before a complete snapshot has lo
   const f = fixture({ state: 'critical', needs_you: 1, summary: 'Known observation needs review' },
     { lastSnapshotAt: 0, error: 'HTTP 503' });
   f.paint();
-  assert.equal(f.nodes.get('posture-state').textContent, 'Critical');
+  assert.equal(f.nodes.get('posture-state').textContent, 'Urgent review');
   assert.equal(f.nodes.get('tabs-posture-text').textContent, '1 needs you · refresh failed');
   assert.match(f.nodes.get('posture-health').textContent, /No complete telemetry snapshot/);
 });

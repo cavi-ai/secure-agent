@@ -34,7 +34,7 @@ test('snapshot failure updates the headline immediately and does not repeat acro
   const f = fixture();
   f.ctx.noteEndpointFailure('snapshot');
   f.ctx.reportFailed('snapshot', 'HTTP 503');
-  assert.equal(f.nodes.get('posture-state').textContent, 'Critical');
+  assert.equal(f.nodes.get('posture-state').textContent, 'Urgent review');
   assert.equal(f.nodes.get('posture-health').hidden, false);
   assert.match(f.nodes.get('posture-health').textContent, /Status stale/);
   assert.equal(f.nodes.get('tabs-posture-text').textContent, '1 needs you · refresh failed');

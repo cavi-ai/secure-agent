@@ -1251,6 +1251,10 @@ button.need-head:hover .need-what { text-decoration: underline; text-decoration-
 [aria-expanded="true"] > .need-meta > .need-chev, [aria-expanded="true"] > .log-chev { transform: rotate(90deg); }
 .need-actions { display: flex; align-items: center; gap: 8px; }
 .need-actions:empty { display: none; }
+.need-assessed .need-head, .need-assessment, .need-consequence { grid-column: 1 / -1; }
+.need-assessed .need-what, .need-assessed .need-why { white-space: normal; overflow-wrap: anywhere; }
+.need-assessment { padding-left: 30px; }
+.need-consequence { margin: 0; padding-left: 30px; font: 400 0.8rem/1.4 var(--font); color: var(--tx-2); overflow-wrap: anywhere; }
 .need-detail { grid-column: 1 / -1; display: grid; gap: 10px; padding: 4px 0 4px 30px; }
 .need-detail[hidden], .log-detail[hidden] { display: none; }
 

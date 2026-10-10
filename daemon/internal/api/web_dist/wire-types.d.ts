@@ -792,6 +792,7 @@ export interface PostureItem {
   severity: number;
   detail?: string;
   ts?: string;
+  assessment?: FindingAssessment;
 }
 
 export interface AttentionGroup {

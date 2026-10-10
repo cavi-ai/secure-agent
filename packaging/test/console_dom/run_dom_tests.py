@@ -647,7 +647,7 @@ def main():
         # --- telemetry wiring ---
         check("version badge comes from /status", 'id="app-version">v9.9.9-domtest<' in dom)
         check("posture banner is critical", dom_query(dom).has(None, {'id': 'posture-banner', 'data-state': 'critical'}))
-        check("posture headline rendered", 'id="posture-state">Critical<' in dom)
+        check("posture headline rendered", 'id="posture-state">Urgent review<' in dom)
         check("KPI agents count", 'id="count-agents">3<' in dom)
         check("KPI flags are unacted last 24h", 'id="count-flags">2<' in dom)
         check("KPI incidents count", 'id="count-incidents">1<' in dom)
@@ -1542,8 +1542,9 @@ def main():
               expect_before == f"choices=true listed=false needs={needs_you}"
               and expect_probe == f"choices=false listed=false needs={needs_you}",
               f"before={expect_before!r} probe={expect_probe!r}")
-        check("posture flag item opens Home with Findings history",
-              dom_query(dom_tab).has(None, {'data-action': 'goto-tab', 'data-tab': 'home', 'data-group': 'findings'}))
+        posture_list = dom_query(dom_tab).find(None, {'id': 'posture-items'})
+        check("posture flag item targets its recorded evidence",
+              posture_list is not None and dom_query(posture_list.html).has('a', {'data-action': 'open-flag', 'data-id': 'flag-1'}))
         check("tab switch reveals the target panel",
               dom_query(dom_tab).has(None, {'class': 'tab-btn active', 'data-tab': 'protection'})
               and dom_query(dom_tab).has(None, {'data-protection-view': 'traffic', 'aria-selected': 'true', 'class': 'active'})
