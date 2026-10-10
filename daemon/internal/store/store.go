@@ -1614,10 +1614,22 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.In
 		}
 		return model.IncidentReport{}, false
 	}
-	var flagIDs []string
-	if err := json.Unmarshal([]byte(flagIDsRaw), &flagIDs); err != nil {
+	var storedFlagIDs []*string
+	if err := json.Unmarshal([]byte(flagIDsRaw), &storedFlagIDs); err != nil {
 		s.noteWrite("incident aggregation", err)
 		return model.IncidentReport{}, false
+	}
+	if storedFlagIDs == nil {
+		s.noteWrite("incident aggregation", fmt.Errorf("null incident flag evidence"))
+		return model.IncidentReport{}, false
+	}
+	flagIDs := make([]string, len(storedFlagIDs))
+	for i, storedID := range storedFlagIDs {
+		if storedID == nil {
+			s.noteWrite("incident aggregation", fmt.Errorf("null incident flag identity"))
+			return model.IncidentReport{}, false
+		}
+		flagIDs[i] = *storedID
 	}
 	tsStr := ts.UTC().Format(time.RFC3339Nano)
 
