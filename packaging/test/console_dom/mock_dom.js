@@ -1238,7 +1238,10 @@
     setTimeout(() => document.querySelector('[data-action="session-view"][data-view="trace"]')?.click(), 6000);
   }
   if (scenarios.has('sessiondemo')) {
-    setTimeout(() => window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77'), 4000);
+    setTimeout(async () => {
+      await window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77');
+      openTab('events');
+    }, 4000);
   }
   if (scenarios.has('sessionworkbench')) {
     for (let i = 0; i < 80; i++) data['/sessions'].push({ id: 'wb-session-' + i, harness: 'codex', repo: 'workbench-' + i,
