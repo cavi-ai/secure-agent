@@ -1935,7 +1935,7 @@
       setTimeout(() => document.querySelector('#session-detail [data-action="session-findings"]')?.click(), 5500);
       setTimeout(() => {
         document.body.dataset.overviewScoped = String(window.SA.activeTab === 'home' && window.SA.timelineSession === 'sess-claude-1');
-        document.querySelector('#scope-bar [data-action="filter-session"]')?.click();
+        document.querySelector('#scope-bar [data-action="session-investigation-return"]').click();
       }, 7000);
       setTimeout(() => { document.body.dataset.overviewReturned = String(window.SA.activeTab === 'sessions' && window.SA.selectedSessionId === 'sess-claude-1'); }, 9000);
     }
