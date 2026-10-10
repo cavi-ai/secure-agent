@@ -224,23 +224,35 @@ func (a *API) handleAdvisorPlan(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *API) servePlan(w http.ResponseWriter, subject string) {
+// planSubject is the shared start of a plan read or request: the stored
+// subject, its playbook and flag, and the operator's labels. It writes the
+// HTTP error and returns false when that subject cannot be served.
+func (a *API) planSubject(w http.ResponseWriter, subject string) (planTarget, PlanResponse, bool) {
 	t, ok, err := a.resolvePlanTarget(subject)
 	if err != nil {
 		http.Error(w, "Subject data unavailable; retry", http.StatusServiceUnavailable)
-		return
+		return planTarget{}, PlanResponse{}, false
 	}
 	if !ok {
 		http.Error(w, "no stored flag, incident or evidence file matches this subject", http.StatusNotFound)
-		return
+		return planTarget{}, PlanResponse{}, false
 	}
-	resp := PlanResponse{Subject: subject, Status: "none", Playbook: playbook.For(t.rule), Flag: a.planFlag(t)}
+	resp := PlanResponse{Subject: subject, Playbook: playbook.For(t.rule), Flag: a.planFlag(t)}
 	labels, err := a.labelContext(t, a.offeredActions(t))
 	if err != nil {
 		http.Error(w, "Operator history unavailable; retry", http.StatusServiceUnavailable)
-		return
+		return planTarget{}, PlanResponse{}, false
 	}
 	resp.Labels = labels
+	return t, resp, true
+}
+
+func (a *API) servePlan(w http.ResponseWriter, subject string) {
+	t, resp, ok := a.planSubject(w, subject)
+	if !ok {
+		return
+	}
+	resp.Status = "none"
 	resp.AdvisorReady, resp.Reason = a.planReady()
 	p, found, err := a.store.AdvisorPlanResultFor(subject)
 	if err != nil {
@@ -264,22 +276,10 @@ func (a *API) servePlan(w http.ResponseWriter, subject string) {
 }
 
 func (a *API) requestPlan(w http.ResponseWriter, subject string) {
-	t, ok, err := a.resolvePlanTarget(subject)
-	if err != nil {
-		http.Error(w, "Subject data unavailable; retry", http.StatusServiceUnavailable)
-		return
-	}
+	t, resp, ok := a.planSubject(w, subject)
 	if !ok {
-		http.Error(w, "no stored flag, incident or evidence file matches this subject", http.StatusNotFound)
 		return
 	}
-	resp := PlanResponse{Subject: subject, Playbook: playbook.For(t.rule), Flag: a.planFlag(t)}
-	labels, err := a.labelContext(t, a.offeredActions(t))
-	if err != nil {
-		http.Error(w, "Operator history unavailable; retry", http.StatusServiceUnavailable)
-		return
-	}
-	resp.Labels = labels
 	resp.AdvisorReady, resp.Reason = a.planReady()
 	if !resp.AdvisorReady {
 		resp.Status = "disabled"
@@ -288,7 +288,7 @@ func (a *API) requestPlan(w http.ResponseWriter, subject string) {
 		_ = json.NewEncoder(w).Encode(resp)
 		return
 	}
-	context, err := a.planContext(t, resp.Playbook, labels.Similar)
+	context, err := a.planContext(t, resp.Playbook, resp.Labels.Similar)
 	if err != nil {
 		http.Error(w, "Plan context unavailable; retry", http.StatusServiceUnavailable)
 		return
