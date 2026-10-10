@@ -85,6 +85,40 @@ func TestSessionOutcomesRetainReceiptsWithoutReadingActivity(t *testing.T) {
 	if len(out.History.Interventions) != 1 || out.History.Interventions[0].ID != "owned-control" || out.History.Interventions[0].Status != "failed" {
 		t.Fatalf("lost or cross-session process result: %+v", out.History.Interventions)
 	}
+	var originalReceipt string
+	if err := db.QueryRow(`SELECT receipt_json FROM interventions WHERE id='owned-control'`).Scan(&originalReceipt); err != nil {
+		t.Fatal(err)
+	}
+	for _, damage := range []string{`'null'`, `json_set(receipt_json,'$.session_id','other')`, `json_set(receipt_json,'$.revision',99)`} {
+		if _, err := db.Exec(`UPDATE interventions SET receipt_json=` + damage + ` WHERE id='owned-control'`); err != nil {
+			t.Fatal(err)
+		}
+		w = httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest("GET", "/sessions/owned/outcomes", nil))
+		if w.Code != 200 {
+			t.Fatalf("corrupt receipt outcomes: %d", w.Code)
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.History.Evidence.Interventions.Available || len(out.History.Interventions) != 0 || !out.History.Evidence.Incidents.Available || len(out.History.Incidents) != 1 || !out.History.Evidence.Reviews.Available || len(out.History.Reviews) != 1 {
+			t.Fatalf("corrupt receipt escaped or erased readable siblings: %+v", out)
+		}
+		if _, err := db.Exec(`UPDATE interventions SET receipt_json=? WHERE id='owned-control'`, originalReceipt); err != nil {
+			t.Fatal(err)
+		}
+		w = httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest("GET", "/sessions/owned/outcomes", nil))
+		if w.Code != 200 {
+			t.Fatalf("recovered receipt outcomes: %d", w.Code)
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if !out.History.Evidence.Interventions.Available || len(out.History.Interventions) != 1 || out.History.Interventions[0].ID != "owned-control" {
+			t.Fatalf("receipt recovery: %+v", out)
+		}
+	}
 	if _, err := db.Exec(`ALTER TABLE interventions RENAME TO unavailable_interventions`); err != nil {
 		t.Fatal(err)
 	}
