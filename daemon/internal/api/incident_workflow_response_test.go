@@ -30,6 +30,9 @@ func TestIncidentStatusFailureRollsBackAndRecovers(t *testing.T) {
 			if err := st.PutIncident(model.IncidentReport{ID: "incident", FlagID: "flag", Timestamp: time.Now()}); err != nil {
 				t.Fatal(err)
 			}
+			if _, ok := st.AggregateIntoIncident("incident", "repeat", time.Now()); !ok {
+				t.Fatal("could not aggregate repeat flag")
+			}
 			trigger := `CREATE TRIGGER fail_workflow AFTER UPDATE ON incidents BEGIN UPDATE incidents SET status=NULL WHERE id=NEW.id; END`
 			if failure == "write" {
 				trigger = `CREATE TRIGGER fail_workflow BEFORE UPDATE ON incidents BEGIN SELECT RAISE(ABORT, 'private-error-marker'); END`
@@ -44,7 +47,7 @@ func TestIncidentStatusFailureRollsBackAndRecovers(t *testing.T) {
 				a.buildMux().ServeHTTP(w, httptest.NewRequest("POST", "/incidents/status", strings.NewReader(payload)))
 				return w
 			}
-			w := post(`{"id":"flag","status":"resolved","note":"reviewed"}`)
+			w := post(`{"id":"repeat","status":"resolved","note":"reviewed"}`)
 			if w.Code != 503 || strings.Contains(w.Body.String(), "private-error-marker") {
 				t.Errorf("failed workflow must be unavailable without raw storage errors: %d %s", w.Code, w.Body.String())
 			}
@@ -65,7 +68,7 @@ func TestIncidentStatusFailureRollsBackAndRecovers(t *testing.T) {
 			if _, err := db.Exec("DROP TRIGGER fail_workflow"); err != nil {
 				t.Fatal(err)
 			}
-			w = post(`{"id":"flag","status":"resolved","note":"reviewed"}`)
+			w = post(`{"id":"repeat","status":"resolved","note":"reviewed"}`)
 			if w.Code != 200 {
 				t.Fatalf("recovery: %d %s", w.Code, w.Body.String())
 			}
