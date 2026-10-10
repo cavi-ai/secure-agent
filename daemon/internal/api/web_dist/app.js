@@ -3571,7 +3571,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const st = sessionPermissions;
     if (!currentSessionPermissions(st) || st.loading || st.busy || st.error || st.mutationError || st.revoked.has(id)) return;
     const record = st.rows?.find(r => r.id === id);
-    if (!st.receipt.ids.includes(id) || !record || !permissionRecordState(record).revoke) return;
+    if (!st.receipt.ids.includes(id) || !record || !permissionApplicability(record).revoke) return;
     st.busy = id;
     const consequence = record.operation === 'read-connect' ? 'Future matching activity is evaluated under remaining expectations and policies.' : 'Future guard requests are evaluated under remaining permissions and policies.';
     const confirmed = await window.saConfirm(`Revoke this saved scope for ${record.resource_path}${record.destination ? ' → ' + record.destination : ''}? ${consequence} This does not undo previous access or remediate past exposure.`, { title: 'Revoke permission', okLabel: 'Revoke permission' });
