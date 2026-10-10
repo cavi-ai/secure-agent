@@ -1125,6 +1125,7 @@
         return { ok: true, json: async () => ({ revoked: true, id }) };
       }
       if (window.__permissionsFail) return { ok: false, status: 503 };
+      if (window.__permissionDelayedRead) await new Promise(resolve => setTimeout(resolve, 50));
       const scope = id => ({ id, kind: 'exact', agent: 'claude', session_id: 'sess-claude-1',
         workspace: '/synthetic/workspace', reader_exe: '/synthetic/tool', resource_path: '/synthetic/workspace/credentials',
         operation: 'read-connect', destination: 'example.test:443', rule_id: 'sensitive-read-then-connect',
@@ -1597,9 +1598,12 @@
       const details = body.querySelector('details'); details.open = true;
       const summary = details.querySelector('summary'); summary.focus();
       body.scrollTop = 120; const top = body.scrollTop;
+      window.__permissionDelayedRead = true;
       await window.refreshSessionPermissions();
+      window.__permissionDelayedRead = false;
       receipt.refreshFocus = document.activeElement === body.querySelector('details summary') && body.querySelector('details').open;
       receipt.refreshScroll = Math.abs(top - body.scrollTop) < 2;
+      if (!receipt.refreshScroll) receipt.scrollMismatch = { before: top, after: body.scrollTop, width: innerWidth, height: innerHeight };
       window.__permissionsFail = true;
       await window.refreshSessionPermissions();
       receipt.stale = body.textContent.includes('Last known permission records') && body.textContent.includes('example.test:443')
