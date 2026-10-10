@@ -1547,22 +1547,8 @@ func decodeIncidentReport(id, reportJSON string) (*model.IncidentReport, error) 
 // IncidentIDForFlag returns the incident a flag opened or was aggregated
 // into (newest first).
 func (s *Store) IncidentIDForFlag(flagID string) (string, bool) {
-	if flagID == "" {
-		return "", false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var id string
-	err := s.db.QueryRow(
-		`SELECT id FROM incidents
-		 WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
-		 ORDER BY `+timestampOrderExpr("created_at")+` DESC, id DESC LIMIT 1`,
-		flagID, flagID,
-	).Scan(&id)
-	if err != nil {
-		return "", false
-	}
-	return id, true
+	id, found, _ := s.IncidentIDForFlagResult(flagID)
+	return id, found
 }
 
 // FindOpenIncident returns the open (unresolved) incident matching the
