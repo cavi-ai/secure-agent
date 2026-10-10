@@ -109,18 +109,7 @@ type TranscriptScanner struct {
 	// for hitDedupeWindow. The tail loop is single-goroutine, so no lock.
 	hitSeen map[string]time.Time
 
-	// tracers hold per-file Claude trace state (open tool_use ids). The
-	// scanner's tail loop is single-goroutine, so no lock.
-	tracers map[string]*ClaudeTracer
-	// codexTracers hold per-file Codex rollout state (call_id pairing,
-	// session id from session_meta).
-	codexTracers map[string]*CodexTracer
-	// cursorTracers hold per-file Cursor transcript state (session id from
-	// the filename; Cursor has no pairing or usage to track).
-	cursorTracers map[string]*CursorTracer
-	// agyTracers hold per-file Antigravity transcript state (session id from
-	// the brain directory; tools + turns only).
-	agyTracers map[string]*AGYTracer
+	trace jsonlTracers
 
 	// rolloutIDs maps a codex rollout path to the session id its session_meta
 	// names, for the open-rollout joiner, which runs on its own goroutine.
@@ -306,45 +295,6 @@ func (ts *TranscriptScanner) transcriptHits(line, path, harness, sessionID strin
 		}
 	}
 	return hits
-}
-
-// harnessForPath names the harness whose transcript layout the path matches,
-// by its agent name in the config (Antigravity's CLI is agy, its agent is
-// antigravity); "unknown" for hook activity logs and other tailed files.
-func harnessForPath(p string) string {
-	switch {
-	case IsClaudeTranscriptPath(p):
-		return "claude"
-	case IsCodexRolloutPath(p):
-		return "codex"
-	case IsCursorTranscriptPath(p):
-		return "cursor"
-	case IsAGYTranscriptPath(p):
-		return "antigravity"
-	}
-	return "unknown"
-}
-
-// knownSession returns the session id a tracer already holds for path. A
-// Claude record that emits nothing (a repeat of a call already emitted) falls
-// through to the plain scan and keeps its session this way.
-func (ts *TranscriptScanner) knownSession(p string) string {
-	if t := ts.tracers[p]; t != nil {
-		return t.Session()
-	}
-	if t := ts.codexTracers[p]; t != nil {
-		id, _ := t.Session()
-		return id
-	}
-	if t := ts.cursorTracers[p]; t != nil {
-		id, _ := t.Session()
-		return id
-	}
-	if t := ts.agyTracers[p]; t != nil {
-		id, _ := t.Session()
-		return id
-	}
-	return ""
 }
 
 // parsePluginLine recognizes a hook activity record ({"tool": ...}).
@@ -670,10 +620,7 @@ func (ts *TranscriptScanner) noteSource(p string, stamp transcriptSource) {
 }
 
 func (ts *TranscriptScanner) resetSource(p string) {
-	delete(ts.tracers, p)
-	delete(ts.codexTracers, p)
-	delete(ts.cursorTracers, p)
-	delete(ts.agyTracers, p)
+	ts.trace.Reset(p)
 	ts.rolloutMu.Lock()
 	delete(ts.rolloutIDs, p)
 	ts.rolloutMu.Unlock()
@@ -830,78 +777,20 @@ func (ts *TranscriptScanner) eventsForLine(p, line string, lineStart, offset int
 		}
 		return []event.Event{e}
 	}
-	if IsClaudeTranscriptPath(p) {
-		tracer := ts.tracers[p]
-		if tracer == nil {
-			tracer = NewClaudeTracer()
-			if ts.tracers == nil {
-				ts.tracers = map[string]*ClaudeTracer{}
+	r := ts.trace.Parse(p, line, offset, source)
+	if r.Parsed {
+		s := r.Session
+		if s.Harness == "codex" {
+			if s.ID != "" {
+				ts.noteRolloutSession(p, s.ID)
+				if ts.OnCodexSessionSeen != nil {
+					ts.OnCodexSessionSeen(s.ID, s.Workspace, s.Origin, s.At)
+				}
 			}
-			ts.tracers[p] = tracer
+		} else if s.ID != "" && ts.OnSessionSeen != nil {
+			ts.OnSessionSeen(s.ID, s.Harness, s.Workspace, s.At)
 		}
-		if evs, cwd, ok := tracer.ParseLine(line); ok {
-			if ts.OnSessionSeen != nil {
-				ts.OnSessionSeen(evs[0].SessionID, "claude", cwd, evs[0].TS)
-			}
-			return append(evs, ts.transcriptHits(line, p, "claude", evs[0].SessionID, lineStart)...)
-		}
+		return append(r.Events, ts.transcriptHits(line, p, harnessForPath(p), ts.trace.Session(p), lineStart)...)
 	}
-	if IsCodexRolloutPath(p) {
-		tracer := ts.codexTracers[p]
-		if tracer == nil {
-			tracer = NewCodexTracer(p)
-			if offset > 0 {
-				tracer.Prime(io.NewSectionReader(source, 0, offset))
-			}
-			if ts.codexTracers == nil {
-				ts.codexTracers = map[string]*CodexTracer{}
-			}
-			ts.codexTracers[p] = tracer
-		}
-		if evs, ok := tracer.ParseLine(line); ok || len(evs) > 0 {
-			sid, cwd := tracer.Session()
-			if sid != "" {
-				ts.noteRolloutSession(p, sid)
-			}
-			if sid != "" && ts.OnCodexSessionSeen != nil {
-				ts.OnCodexSessionSeen(sid, cwd, CodexOrigin(p), time.Now())
-			}
-			return append(evs, ts.transcriptHits(line, p, "codex", sid, lineStart)...)
-		}
-	}
-	if IsCursorTranscriptPath(p) {
-		tracer := ts.cursorTracers[p]
-		if tracer == nil {
-			tracer = NewCursorTracer(p)
-			if ts.cursorTracers == nil {
-				ts.cursorTracers = map[string]*CursorTracer{}
-			}
-			ts.cursorTracers[p] = tracer
-		}
-		if evs, ok := tracer.ParseLine(line); ok {
-			sid, ws := tracer.Session()
-			if sid != "" && ts.OnSessionSeen != nil {
-				ts.OnSessionSeen(sid, "cursor", ws, evs[0].TS)
-			}
-			return append(evs, ts.transcriptHits(line, p, "cursor", sid, lineStart)...)
-		}
-	}
-	if IsAGYTranscriptPath(p) {
-		tracer := ts.agyTracers[p]
-		if tracer == nil {
-			tracer = NewAGYTracer(p)
-			if ts.agyTracers == nil {
-				ts.agyTracers = map[string]*AGYTracer{}
-			}
-			ts.agyTracers[p] = tracer
-		}
-		if evs, ok := tracer.ParseLine(line); ok {
-			sid, ws := tracer.Session()
-			if sid != "" && ts.OnSessionSeen != nil {
-				ts.OnSessionSeen(sid, "antigravity", ws, evs[0].TS)
-			}
-			return append(evs, ts.transcriptHits(line, p, "antigravity", sid, lineStart)...)
-		}
-	}
-	return ts.scanLine(line, p, harnessForPath(p), ts.knownSession(p), lineStart)
+	return ts.scanLine(line, p, harnessForPath(p), ts.trace.Session(p), lineStart)
 }

@@ -25,7 +25,7 @@ func TestUninspectedEgressRows(t *testing.T) {
 	}
 	tg := agents.New(cfg, allowlistProcSource{})
 	tg.Refresh()
-	cr := correlate.New(tg, sensitive.New(cfg), cfg)
+	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 	first := time.Now().Add(-time.Hour)
 	cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: first, RemoteHost: "160.79.104.10", RemotePort: 443, SessionID: "sess-a"})
 	cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: time.Now(), RemoteHost: "160.79.104.10", RemotePort: 443, SessionID: "sess-b"})
@@ -93,7 +93,7 @@ func TestSuggestionListSkipsVendor(t *testing.T) {
 	}
 	tg := agents.New(cfg, allowlistProcSource{})
 	tg.Refresh()
-	cr := correlate.New(tg, sensitive.New(cfg), cfg)
+	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 	for i := 0; i < minSuggestionCount; i++ {
 		for _, h := range []string{"160.79.104.10", "34.120.1.1"} {
 			cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: time.Now(), RemoteHost: h, RemotePort: 443})
@@ -135,7 +135,7 @@ func TestInfraAppRowsCarryKindAndAreNotSuggested(t *testing.T) {
 	}
 	tg := agents.New(cfg, infraAppProcSource{})
 	tg.Refresh()
-	cr := correlate.New(tg, sensitive.New(cfg), cfg)
+	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 	for i := 0; i < minSuggestionCount; i++ {
 		for _, pid := range []int32{42, 77} {
 			cr.Observe(event.Event{Kind: event.KindConnOpen, PID: pid, TS: time.Now(), RemoteHost: "34.120.1.1", RemotePort: 443})

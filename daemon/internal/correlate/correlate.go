@@ -116,16 +116,39 @@ type Correlator struct {
 	lastEviction     time.Time
 }
 
-func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Config) *Correlator {
-	return &Correlator{
-		tagger:      tagger,
-		classifier:  classifier,
-		cfg:         cfg,
-		marks:       make(map[int32][]readMark),
-		owned:       make(map[int32][]ownMark),
-		conns:       make(map[int32][]connMark),
-		uninspected: make(map[string]*uninspectedEntry),
+// Hooks are installed before the first Observe call. Callbacks keep their
+// existing concurrency contract: OnUninspected must only enqueue while the
+// correlator lock is held; OnRepeat runs after Observe releases that lock.
+type Hooks struct {
+	AllowlistOverrides func(string) []string
+	Muted              func(rule, host, agent string) bool
+	OnUninspected      func(agent, host string)
+	OnRepeat           func(string, time.Time)
+	Expected           func([]string, time.Time) bool
+	ScopedExpected     func([]model.DecisionScope, int32) bool
+	OpenFlag           func(string) bool
+	OpenReadFlags      []model.Flag
+}
+
+func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Config, hooks Hooks) *Correlator {
+	c := &Correlator{
+		tagger:             tagger,
+		classifier:         classifier,
+		cfg:                cfg,
+		marks:              make(map[int32][]readMark),
+		owned:              make(map[int32][]ownMark),
+		conns:              make(map[int32][]connMark),
+		uninspected:        make(map[string]*uninspectedEntry),
+		allowlistOverrides: hooks.AllowlistOverrides,
+		isMuted:            hooks.Muted,
+		onUninspected:      hooks.OnUninspected,
+		onRepeat:           hooks.OnRepeat,
+		isExpected:         hooks.Expected,
+		isScopedExpected:   hooks.ScopedExpected,
+		isOpenFlag:         hooks.OpenFlag,
 	}
+	c.RestoreOpenReadFlags(hooks.OpenReadFlags)
+	return c
 }
 
 // UninspectedSummary is one agent+host pair observed bypassing inspection.

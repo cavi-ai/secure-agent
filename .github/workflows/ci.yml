@@ -150,6 +150,8 @@ jobs:
         run: ./packaging/test/check_console_css.sh
       - name: console js unit tests
         run: node --test 'packaging/test/console/*.test.mjs'
+      - name: console DOM query unit tests
+        run: python3 -m unittest discover -s packaging/test/console_dom -p 'test_*.py'
       - name: console dom tests (headless chrome)
         run: python3 packaging/test/console_dom/run_dom_tests.py
 

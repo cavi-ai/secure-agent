@@ -387,7 +387,7 @@ func TestPostureSingleESItemWhenProbeFails(t *testing.T) {
 		ESService:  &collect.ESServiceSnapshot{State: "spawn scheduled (last exit 1)", SpoolMtime: time.Now().Add(-8 * 24 * time.Hour)},
 	}
 	count := 0
-	for _, it := range silentCollectorItems(st) {
+	for _, it := range silentCollectorItems(time.Now(), st) {
 		if it.ID == "eslogger" {
 			count++
 		}
@@ -398,7 +398,7 @@ func TestPostureSingleESItemWhenProbeFails(t *testing.T) {
 	// Healthy probe + silent tailer: the tailer silence still surfaces.
 	st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now()}
 	count = 0
-	for _, it := range silentCollectorItems(st) {
+	for _, it := range silentCollectorItems(time.Now(), st) {
 		if it.ID == "eslogger" {
 			count++
 		}
@@ -413,7 +413,7 @@ func TestPostureSingleESItemWhenProbeFails(t *testing.T) {
 // helper keeps the generic not-writing detail.
 func TestESServiceItemsNamesRegrantAfterHelperReplaced(t *testing.T) {
 	now := time.Now()
-	replaced := esServiceItems(collect.ESServiceSnapshot{
+	replaced := esServiceItems(time.Now(), collect.ESServiceSnapshot{
 		State: "running", SpoolSize: 10, SpoolMtime: now.Add(-2 * time.Hour), HelperMtime: now.Add(-time.Hour),
 	})
 	if len(replaced) != 1 || replaced[0].Kind != "collector_silent" {
@@ -428,7 +428,7 @@ func TestESServiceItemsNamesRegrantAfterHelperReplaced(t *testing.T) {
 		t.Fatalf("user-facing detail must name the app, not the launchd label: %q", d)
 	}
 
-	unchanged := esServiceItems(collect.ESServiceSnapshot{
+	unchanged := esServiceItems(time.Now(), collect.ESServiceSnapshot{
 		State: "running", SpoolSize: 10, SpoolMtime: now.Add(-2 * time.Hour), HelperMtime: now.Add(-3 * time.Hour),
 	})
 	if len(unchanged) != 1 {
@@ -439,13 +439,13 @@ func TestESServiceItemsNamesRegrantAfterHelperReplaced(t *testing.T) {
 	}
 
 	// launchd keeps an earlier exit code after a restart: still running.
-	restarted := esServiceItems(collect.ESServiceSnapshot{
+	restarted := esServiceItems(time.Now(), collect.ESServiceSnapshot{
 		State: "running (last exit 1)", SpoolSize: 10, SpoolMtime: now.Add(-2 * time.Hour), HelperMtime: now.Add(-time.Hour),
 	})
 	if len(restarted) != 1 || !strings.Contains(restarted[0].Detail, "helper binary was replaced after the last write") {
 		t.Fatalf("restarted helper: items = %+v, want the re-grant item, not a failing service", restarted)
 	}
-	if fresh := esServiceItems(collect.ESServiceSnapshot{State: "running (last exit 1)", SpoolSize: 10, SpoolMtime: now}); len(fresh) != 0 {
+	if fresh := esServiceItems(time.Now(), collect.ESServiceSnapshot{State: "running (last exit 1)", SpoolSize: 10, SpoolMtime: now}); len(fresh) != 0 {
 		t.Fatalf("restarted helper writing now: items = %+v, want none", fresh)
 	}
 }
@@ -469,12 +469,12 @@ func TestESServiceRefusedNamesReregister(t *testing.T) {
 	}
 
 	stale := time.Now().Add(-8 * time.Minute)
-	items := esServiceItems(collect.ESServiceSnapshot{State: "spawn scheduled (last exit 78: EX_CONFIG)", SpoolSize: 10, SpoolMtime: stale})
+	items := esServiceItems(time.Now(), collect.ESServiceSnapshot{State: "spawn scheduled (last exit 78: EX_CONFIG)", SpoolSize: 10, SpoolMtime: stale})
 	if len(items) != 1 || !strings.Contains(items[0].Detail, "78: EX_CONFIG") || !strings.Contains(items[0].Detail, "Re-register") ||
 		!strings.Contains(items[0].Detail, "/var/log/secure-agent-esd.log") {
 		t.Fatalf("refused service: items = %+v, want one failing item naming the exit code, Re-register and the log", items)
 	}
-	plain := esServiceItems(collect.ESServiceSnapshot{State: "spawn scheduled", SpoolSize: 10, SpoolMtime: stale})
+	plain := esServiceItems(time.Now(), collect.ESServiceSnapshot{State: "spawn scheduled", SpoolSize: 10, SpoolMtime: stale})
 	if len(plain) != 1 || strings.Contains(plain[0].Detail, "Re-register") {
 		t.Fatalf("spawn scheduled without an exit: items = %+v, want one failing item without Re-register", plain)
 	}
@@ -489,23 +489,23 @@ func TestESServiceRefusedNamesReregister(t *testing.T) {
 func timeAt(t time.Time) *time.Time { return &t }
 
 func TestESServiceItemsFlooding(t *testing.T) {
-	shortBurst := esServiceItems(collect.ESServiceSnapshot{
+	shortBurst := esServiceItems(time.Now(), collect.ESServiceSnapshot{
 		State: "running", SpoolMtime: time.Now(), Flooding: true, UnparsedShare: 0, FloodingSince: timeAt(time.Now().Add(-5 * time.Second)),
 	})
 	if len(shortBurst) != 0 {
 		t.Fatalf("Flooding=true, FloodingSince=5s ago: items = %+v, want none — a short burst is normal load", shortBurst)
 	}
-	sustained := esServiceItems(collect.ESServiceSnapshot{
+	sustained := esServiceItems(time.Now(), collect.ESServiceSnapshot{
 		State: "running", SpoolMtime: time.Now(), Flooding: true, UnparsedShare: 0, FloodingSince: timeAt(time.Now().Add(-2 * time.Minute)),
 	})
 	if len(sustained) != 1 || sustained[0].Title != "File monitoring is falling behind" {
 		t.Fatalf("Flooding=true, FloodingSince=2m ago: items = %+v, want one falling-behind item", sustained)
 	}
-	unparsed := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), UnparsedShare: 0.9})
+	unparsed := esServiceItems(time.Now(), collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), UnparsedShare: 0.9})
 	if len(unparsed) != 1 || unparsed[0].Title != "File monitoring writer is flooding" {
 		t.Fatalf("UnparsedShare=0.9: items = %+v, want one flooding item", unparsed)
 	}
-	ok := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), UnparsedShare: 0.1})
+	ok := esServiceItems(time.Now(), collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), UnparsedShare: 0.1})
 	if len(ok) != 0 {
 		t.Fatalf("UnparsedShare=0.1: items = %+v, want none", ok)
 	}
@@ -514,15 +514,15 @@ func TestESServiceItemsFlooding(t *testing.T) {
 // File events stored with their event time but delivered hours later read as
 // a late monitor, not a healthy one; a stale spool's last lag does not.
 func TestESServiceItemsLagging(t *testing.T) {
-	late := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), NewestEventAt: timeAt(time.Now().Add(-2 * time.Hour)), LagSeconds: 7200})
+	late := esServiceItems(time.Now(), collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), NewestEventAt: timeAt(time.Now().Add(-2 * time.Hour)), LagSeconds: 7200})
 	if len(late) != 1 || late[0].Title != "File monitoring is running late" || late[0].Severity != 2 || !strings.Contains(late[0].Detail, "delivery is 2h0m0s behind") {
 		t.Fatalf("lag 2h: items = %+v, want one running-late item", late)
 	}
-	onTime := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), NewestEventAt: timeAt(time.Now()), LagSeconds: 119})
+	onTime := esServiceItems(time.Now(), collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), NewestEventAt: timeAt(time.Now()), LagSeconds: 119})
 	if len(onTime) != 0 {
 		t.Fatalf("lag 119s: items = %+v, want none", onTime)
 	}
-	idle := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now().Add(-10 * time.Minute), NewestEventAt: timeAt(time.Now().Add(-2 * time.Hour)), LagSeconds: 7200})
+	idle := esServiceItems(time.Now(), collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now().Add(-10 * time.Minute), NewestEventAt: timeAt(time.Now().Add(-2 * time.Hour)), LagSeconds: 7200})
 	if len(idle) != 0 {
 		t.Fatalf("spool idle 10 min: items = %+v, want none", idle)
 	}
@@ -532,11 +532,11 @@ func TestESServiceItemsLagging(t *testing.T) {
 // stops, the verdict yields to the service's real state.
 func TestESServiceItemsStaleFloodYieldsToServiceState(t *testing.T) {
 	idle := time.Now().Add(-10 * time.Minute)
-	off := esServiceItems(collect.ESServiceSnapshot{State: "not-loaded", SpoolMtime: idle, Flooding: true, UnparsedShare: 0.99})
+	off := esServiceItems(time.Now(), collect.ESServiceSnapshot{State: "not-loaded", SpoolMtime: idle, Flooding: true, UnparsedShare: 0.99})
 	if len(off) != 1 || off[0].Title != "File monitoring is off" || !strings.Contains(off[0].Detail, "Full Disk Access") {
 		t.Fatalf("not-loaded after a flood: items = %+v, want one File monitoring is off item", off)
 	}
-	quiet := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: idle, Flooding: true, UnparsedShare: 0.99})
+	quiet := esServiceItems(time.Now(), collect.ESServiceSnapshot{State: "running", SpoolMtime: idle, Flooding: true, UnparsedShare: 0.99})
 	if len(quiet) != 0 {
 		t.Fatalf("running, spool idle 10 min, stale flood stats: items = %+v, want none", quiet)
 	}

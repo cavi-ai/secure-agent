@@ -65,7 +65,7 @@ func TestMuteFlowAcknowledgesExistingFlags(t *testing.T) {
 
 	mutes := correlate.NewMuteStore(dir + "/muted.json")
 	a := newTestAPI(dir+"/d.sock", st, nil, nil)
-	a.correlator = correlate.New(nil, nil, config.Config{})
+	a.correlator = correlate.New(nil, nil, config.Config{}, correlate.Hooks{})
 	a.mutes = mutes // correlator nil-safe? use New(nil)
 	if a.mutes == nil {
 		t.Fatal("mute store not set")

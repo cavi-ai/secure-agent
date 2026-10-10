@@ -99,7 +99,7 @@ func TestDeltaLossIsSeparateFromEvidenceLoss(t *testing.T) {
 	if w.Code != 200 || status.DeltaDrops != 1 || status.BusDrops != 0 || status.BusDropping {
 		t.Fatalf("live delivery loss conflated with evidence loss: %s", w.Body.String())
 	}
-	for _, item := range a.machineAttentionItems(status) {
+	for _, item := range machineAttentionItems(time.Now(), status, guardHookUnregisteredItem(status)) {
 		if item.Kind == "event_loss" || item.Kind == "storage_loss" {
 			t.Fatalf("false evidence loss: %+v", item)
 		}

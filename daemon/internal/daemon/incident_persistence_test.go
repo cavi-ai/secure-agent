@@ -60,9 +60,7 @@ func TestDrainLoopIncidentPublicationRequiresPersistence(t *testing.T) {
 		deltas := hub.Subscribe()
 		b := bus.New(64)
 		postureCalls, advisorCalls := 0, 0
-		done := startDrainLoop(b.Subscribe(), st, correlate.New(tagger, sensitive.New(cfg), cfg), pub,
-			session.NewResolver(st, tagger), tagger, hub, nil,
-			func() { postureCalls++ }, func() *advisor.Subscriber { advisorCalls++; return nil }, nil)
+		done := runEventIngest(b.Subscribe(), ingestDeps{Store: st, Correlator: correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{}), Fleet: pub, Resolver: session.NewResolver(st, tagger), Tagger: tagger, Deltas: hub, PostureChanged: func() { postureCalls++ }, Advisor: func() *advisor.Subscriber { advisorCalls++; return nil }}).Done()
 		b.Publish(event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"})
 		b.Publish(event.Event{Kind: event.KindConnOpen, TS: now.Add(time.Millisecond), PID: 500, RemoteHost: "evil.example.com", RemotePort: 443})
 		b.Close()

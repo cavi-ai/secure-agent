@@ -231,7 +231,7 @@ func TestAttentionGroupsCoverEveryPostureItem(t *testing.T) {
 	}
 	tg := agents.New(cfg, twoAgentProcs{})
 	tg.Refresh()
-	cr := correlate.New(tg, sensitive.New(cfg), cfg)
+	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 	now := time.Now()
 	cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: now.Add(-time.Hour), RemoteHost: "one.example.com", RemotePort: 443})
 	cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 43, TS: now.Add(-time.Hour), RemoteHost: "two.example.com", RemotePort: 443})
@@ -304,7 +304,7 @@ func TestAttentionEgressCoverageSkipsCarriers(t *testing.T) {
 	tg.Refresh()
 	now := time.Now()
 	build := func(hosts ...string) (*API, *correlate.Correlator) {
-		cr := correlate.New(tg, sensitive.New(cfg), cfg)
+		cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 		for _, h := range hosts {
 			cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: now.Add(-time.Hour), RemoteHost: h, RemotePort: 443})
 		}

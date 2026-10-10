@@ -59,7 +59,7 @@ func TestFullBusCorrelatorStorePipeline(t *testing.T) {
 	tg.Refresh()
 
 	cl := sensitive.New(cfg)
-	cr := correlate.New(tg, cl, cfg)
+	cr := correlate.New(tg, cl, cfg, correlate.Hooks{})
 
 	sub := b.Subscribe()
 	done := make(chan struct{})
@@ -156,7 +156,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	tg.Refresh()
 
 	cl := sensitive.New(cfg)
-	cr := correlate.New(tg, cl, cfg)
+	cr := correlate.New(tg, cl, cfg, correlate.Hooks{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -266,8 +266,9 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	// Retain the accepted peer until sampling finishes. An unread channel
 	// becomes unreachable after its sender exits, allowing the connection's
 	// finalizer to close it before lsof observes an established socket.
+	var serverConn net.Conn
 	select {
-	case serverConn := <-connCh:
+	case serverConn = <-connCh:
 		if serverConn == nil {
 			t.Fatal("fixture failed to accept connection")
 		}
@@ -275,6 +276,10 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("fixture connection was not accepted")
 	}
+	if serverConn.RemoteAddr().String() != cliConn.LocalAddr().String() {
+		t.Fatalf("fixture accepted a different connection: server peer %s, client %s", serverConn.RemoteAddr(), cliConn.LocalAddr())
+	}
+	t.Logf("fixture listener %s; client %s; accepted peer %s", l.Addr(), cliConn.LocalAddr(), serverConn.RemoteAddr())
 
 	// Correlator writes asynchronously via netsample. Wait on the store
 	// first (same contract as TestFullBusCorrelatorStorePipeline), then
@@ -339,14 +344,23 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 }
 
 // listenNonLoopback finds a non-loopback IPv4 that actually self-connects:
-// interface lists include down links and VPN utuns whose addresses answer
-// nothing. Each candidate is proven with a bounded probe dial; the winning
-// listener is returned ready for the fixture's real connection.
+// Point-to-point VPN interfaces can accept a self-dial and immediately close
+// it, leaving no established socket for the sampler. Use active interfaces
+// without loopback or point-to-point routing, then prove a bounded self-dial.
 func listenNonLoopback(t *testing.T) (net.Listener, error) {
 	t.Helper()
-	addrs, err := net.InterfaceAddrs()
+	interfaces, err := net.Interfaces()
 	if err != nil {
-		t.Skipf("no interface addrs: %v", err)
+		t.Skipf("no interfaces: %v", err)
+	}
+	var addrs []net.Addr
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&(net.FlagLoopback|net.FlagPointToPoint) != 0 {
+			continue
+		}
+		if rows, err := iface.Addrs(); err == nil {
+			addrs = append(addrs, rows...)
+		}
 	}
 	for _, a := range addrs {
 		ipNet, ok := a.(*net.IPNet)

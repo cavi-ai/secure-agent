@@ -26,12 +26,9 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
-	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
-	"github.com/cavi-ai/secure-agent/daemon/internal/otlp"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
-	"github.com/cavi-ai/secure-agent/daemon/internal/session"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
@@ -338,19 +335,6 @@ func noteFileFeed(st *store.Store, e event.Event) {
 	}
 }
 
-// startDrainLoop consumes the bus, persisting events and correlating flags →
-// incidents → fleet webhooks. The returned channel closes once every delivered
-// event has had its persistence attempted. Shutdown waits for these attempts
-// rather than abandoning the final events/flags/incident around a kill or quit.
-// adv may be nil (advisor disabled); when set, new flags/incidents are also
-// offered for advisory triage — enqueueing is non-blocking and drop-safe.
-// newFlag, when set, is offered each new flag after it is stored (the
-// local agent's automatic review).
-// advGet resolves the CURRENT advisor per event: config hot-reload swaps
-// the stack while the drain loop is mid-event, and a nil getter result
-// (advisor disabled) must drop routing without touching the loop itself.
-// foldFlagRepeat stores a repeat the correlator folded into an open flag and
-// pushes the updated flag to the console.
 func foldFlagRepeat(st *store.Store, deltas *api.DeltaHub) func(string, time.Time) {
 	return func(id string, at time.Time) {
 		if !st.BumpFlagRepeat(id, at) {
@@ -360,160 +344,6 @@ func foldFlagRepeat(st *store.Store, deltas *api.DeltaHub) func(string, time.Tim
 			deltas.Publish(api.Delta{Type: "flag", Data: fl})
 		}
 	}
-}
-
-func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, res *session.Resolver, tagger *agents.Tagger, deltas *api.DeltaHub, otlpExp *otlp.Exporter, postureChanged func(), advGet func() *advisor.Subscriber, newFlag func(model.Flag)) <-chan struct{} {
-	analyzer := intel.NewAnalyzer()
-	drainDone := make(chan struct{})
-	// Episode projection has its own bounded queue. SQLite contention can drop
-	// an informational observation, but cannot stall event publication or flags.
-	projection := make(chan store.EgressObservation, 128)
-	projectionDone := make(chan struct{})
-	go func() {
-		defer close(projectionDone)
-		for observation := range projection {
-			err := st.RecordEgressObservation(observation)
-			if st.NoteEgressProjectionWrite(err) && postureChanged != nil {
-				postureChanged()
-			}
-		}
-	}()
-	go func() {
-		defer close(drainDone)
-		defer func() { close(projection); <-projectionDone }()
-		for e := range sub {
-			// Attribute before anything else: the stored event, the flags it
-			// triggers, and the incident all carry the session id.
-			res.Resolve(&e)
-			flags := cr.Observe(e)
-			// File activity outside every agent family is kept only as the
-			// evidence of a flag it raised: system-wide opens (indexers,
-			// builds, the daemon itself) outnumber agent file activity by
-			// orders of magnitude and would push it out of the per-kind
-			// row budget.
-			if len(flags) == 0 && isUnattributedFileEvent(e) {
-				noteFileFeed(st, e)
-				continue
-			}
-			e.Record = len(flags) > 0 || cr.SensitiveFile(e)
-			eventWrite, eventErr := st.PutEvent(e)
-			eventSaved := eventErr == nil && eventWrite.Changed
-			healthChanged := eventWrite.HealthChanged
-			noteFileFeed(st, e)
-			if e.Kind == event.KindConnOpen && e.RemoteHost != "" && e.RemotePort > 0 {
-				observation := store.EgressObservation{SessionID: e.SessionID, Host: e.RemoteHost, Protocol: "tcp", Port: e.RemotePort, At: e.TS}
-				if tagger != nil {
-					if info, ok := tagger.Tag(e.PID); ok {
-						observation.Scope.Agent = info.Name
-						observation.Scope.ExePath = info.ExePath
-					}
-				}
-				if e.SessionID != "" {
-					if sess, ok := st.GetSession(e.SessionID); ok {
-						observation.Scope.Harness = sess.Harness
-						observation.Scope.Workspace = sess.Workspace
-					}
-				}
-				enqueueEgressProjection(projection, observation, st)
-			}
-			guardLifecycle := e.Kind == event.KindGuardPrompt || e.Kind == event.KindGuardResolved
-			if deltas != nil && (eventSaved || guardLifecycle) {
-				// Guard lifecycle keeps its own delta names (the menubar's
-				// instant prompt path keys on them); everything else is a
-				// generic typed event for timeline/console patching.
-				kind := "event"
-				if e.Kind == event.KindGuardPrompt || e.Kind == event.KindGuardResolved {
-					kind = e.Kind.String()
-				}
-				de := e
-				de.PriceClass = collect.EventPriceClass(e)
-				deltas.Publish(api.Delta{Type: kind, Data: de})
-			}
-			// Traces cross the fleet wire too (opt-in per sink): a collector
-			// showing cross-node sessions needs the tool/model calls, not just
-			// the security events. Lossy by design — the publisher's in-flight
-			// cap drops trace overflow before it can starve flags.
-			if eventSaved && isTraceKind(e.Kind) {
-				if pub != nil {
-					pub.Publish(fleet.EventTrace, e)
-				}
-				otlpExp.TraceEvent(e)
-			}
-			for _, fl := range flags {
-				if fl.SessionID == "" {
-					fl.SessionID = e.SessionID
-				}
-				// Stamp the workspace so per-workspace notification scopes can
-				// key on it without re-resolving the session later.
-				if fl.Workspace == "" && fl.SessionID != "" {
-					fl.Workspace = res.WorkspaceFor(fl.SessionID)
-				}
-				log.Printf("FLAG TRIGGERED [%d]: %s (pid %d agent %s)", fl.Severity, fl.Rule, fl.PID, fl.Agent)
-				flagWrite, flagErr := st.PutFlag(fl)
-				healthChanged = healthChanged || flagWrite.HealthChanged
-				cr.ResolvePersistence(fl.ID, flagErr == nil && flagWrite.Changed)
-				if flagErr != nil || !flagWrite.Changed {
-					continue
-				}
-				if stored, ok := st.GetFlagWithAdvisor(fl.ID); ok {
-					fl = stored
-				}
-				if deltas != nil {
-					deltas.Publish(api.Delta{Type: "flag", Data: fl})
-				}
-				if pub != nil {
-					pub.Publish(fleet.EventFlag, fl)
-				}
-				if advGet != nil {
-					if adv := advGet(); adv != nil {
-						adv.EnqueueFlag(fl)
-					}
-				}
-				if newFlag != nil {
-					newFlag(fl)
-				}
-
-				// Incidents aggregate: one per rule+session+subject, flags
-				// become its evidence. The 323-identical-flags storm becomes
-				// one incident with a count, not 323 reports.
-				subject := intel.SubjectForFlag(fl)
-				if openID, found := st.FindOpenIncident(fl.Rule, fl.SessionID, subject); found {
-					if updated, ok := st.AggregateIntoIncident(openID, fl.ID, fl.TS); ok && deltas != nil {
-						deltas.Publish(api.Delta{Type: "incident", Data: updated})
-					}
-					if postureChanged != nil {
-						postureChanged()
-					}
-					continue
-				}
-
-				recentEvs := st.RecentEvents(100)
-				report := analyzer.Analyze(fl, recentEvs)
-				report.SessionID = fl.SessionID
-				report.Subject = subject
-				report.AggregateCount = 1
-				if err := st.PutIncident(report); err != nil {
-					continue
-				}
-				if deltas != nil {
-					deltas.Publish(api.Delta{Type: "incident", Data: report})
-				}
-				log.Printf("INCIDENT CREATED [%s]: %s (Risk: %s, %d rotate items)", report.ID, report.Summary, report.Risk, len(report.RotateList))
-				if pub != nil {
-					pub.Publish(fleet.EventIncident, report)
-				}
-				if advGet != nil {
-					if adv := advGet(); adv != nil {
-						adv.EnqueueIncident(report)
-					}
-				}
-			}
-			if (healthChanged || len(flags) > 0 || guardLifecycle) && postureChanged != nil {
-				postureChanged()
-			}
-		}
-	}()
-	return drainDone
 }
 
 // enqueueEgressProjection never waits for SQLite or a consumer. The caller

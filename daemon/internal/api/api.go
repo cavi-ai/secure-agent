@@ -677,99 +677,6 @@ func (a *API) handleNotifyRules(w http.ResponseWriter, r *http.Request) {
 // allow-list and the peer-role gate); this map supplies the handler. A test
 // (TestRouteTableMatchesHandlers) asserts the two agree, so a route can no
 // longer be added to one list and forgotten in another.
-func (a *API) routes() map[string]http.HandlerFunc {
-	return map[string]http.HandlerFunc{
-		"/status":                       a.handleStatus,
-		"/sessions":                     a.handleSessions,
-		"/sessions/":                    a.handleSessionSubpath,
-		"/resources":                    a.handleResources,
-		"/resources/episodes":           a.handleResourceEpisodes,
-		"/resources/control":            a.handleResourceControl,
-		"/resources/policy":             a.handleResourcePolicy,
-		"/snapshot":                     a.handleSnapshot,
-		"/posture":                      a.handlePosture,
-		"/flags":                        a.handleFlags,
-		"/reviews":                      a.handleReviews,
-		"/reviews/decision":             a.handleReviewDecision,
-		"/decision-scopes":              a.handleDecisionScopes,
-		"/flags/":                       a.handleFlagExplain,
-		"/events":                       a.handleEvents,
-		"/events/stream":                a.handleEventStream,
-		"/incidents":                    a.handleIncidents,
-		"/incidents/status":             a.handleIncidentStatus,
-		"/incidents/remediation":        a.handleIncidentRemediation,
-		"/audit":                        a.handleAudit,
-		"/allowlist/suggestions":        a.handleAllowlistSuggestions,
-		"/allowlist":                    a.handleAllowlistAdd,
-		"/egress/uninspected":           a.handleUninspectedEgress,
-		"/egress/endpoint":              a.handleEndpointDetail,
-		"/egress/episodes":              a.handleEgressEpisodes,
-		"/egress/episodes/":             a.handleEgressEpisodeSubpath,
-		"/expected-egress":              a.handleExpectedEgress,
-		"/notify/rules":                 a.handleNotifyRules,
-		"/guard/path-allow":             a.handleGuardPathAllow,
-		"/mute":                         a.handleMute,
-		"/expected":                     a.handleExpected,
-		"/advisor/retriage":             a.handleAdvisorRetriage,
-		"/advisor/assess-host":          a.handleAdvisorAssessHost,
-		"/flags/acknowledge":            a.handleFlagAcknowledge,
-		"/patterns":                     a.handlePatterns,
-		"/ui/open-fda":                  a.handleOpenFDA,
-		"/ui/open-config":               a.handleOpenConfig,
-		"/stats/rollup":                 a.handleRollup,
-		"/costs":                        a.handleCosts,
-		"/costs/unpriced":               a.handleCostsUnpriced,
-		"/costs/plans":                  a.handleCostsPlans,
-		"/doctor":                       a.handleDoctor,
-		"/routing/claude":               a.handleRoutingClaude,
-		"/worktrees":                    a.handleWorktrees,
-		"/worktrees/repos":              a.handleWorktreeRepos,
-		"/worktrees/remove":             a.handleWorktreeRemove,
-		"/worktrees/advise":             a.handleWorktreeAdvise,
-		"/worktrees/reveal":             a.handleWorktreeReveal,
-		"/worktrees/reconnect":          a.handleWorktreeReconnect,
-		"/worktrees/trash":              a.handleWorktreeTrash,
-		"/worktrees/review-trash":       a.handleWorktreeReviewTrash,
-		"/cleanup/ledger":               a.handleCleanupLedger,
-		"/cleanup":                      a.handleCleanup,
-		"/worktrees/ask":                a.handleWorktreeAsk,
-		"/worktrees/asks":               a.handleWorktreeAsks,
-		"/cleanup/trash":                a.handleCleanupTrash,
-		"/cleanup/clean":                a.handleCleanupClean,
-		"/cleanup/advise":               a.handleCleanupAdvise,
-		"/advisor/discover":             a.handleAdvisorDiscover,
-		"/fleet":                        a.handleFleet,
-		"/kill":                         a.handleKill,
-		"/firewall/mode":                a.handleFirewallMode,
-		"/firewall/patterns":            a.handleFirewallPatterns,
-		"/guard/config":                 a.handleGuardConfig,
-		"/firewall/fingerprints/reload": a.handleFingerprintReload,
-		"/firewall/fingerprints/ingest": a.handleFingerprintIngest,
-		"/firewall/sources":             a.handleFirewallSources,
-		"/guard/decision":               a.handleGuardDecision,
-		"/coverage/probe":               a.handleCoverageProbe,
-		"/guard/pending":                a.handleGuardPending,
-		"/guard/resolve":                a.handleGuardResolve,
-		"/guard/rules":                  a.handleGuardRules,
-		"/debug/pprof/":                 handlePprof,
-		"/files/detail":                 a.handleFileDetail,
-		"/files/reveal":                 a.handleFileReveal,
-		"/files/open":                   a.handleFileOpen,
-		"/advisor/plan":                 a.handleAdvisorPlan,
-		"/labels":                       a.handleLabels,
-		"/agent/status":                 a.handleAgentStatus,
-		"/agent/skills":                 a.handleAgentSkills,
-		"/agent/chat":                   a.handleAgentChat,
-		"/agent/analyze":                a.handleAgentAnalyze,
-		"/agent/recommendations":        a.handleAgentRecommendations,
-		"/agent/worktree":               a.handleAgentWorktree,
-		"/agent/actions":                a.handleAgentActions,
-		"/agent/plans":                  a.handleAgentPlans,
-		"/agent/dispatch":               a.handleAgentDispatch,
-		"/agent/runs":                   a.handleAgentRuns,
-	}
-}
-
 // buildMux registers every API route on a fresh mux, driven by apiroutes.Table
 // so the mux, the peer-role gate and the console allow-list cannot drift.
 // Serve() wraps it with the peer-credential gate for the unix socket;
@@ -957,18 +864,7 @@ func (a *API) handleSessionSubpath(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	switch parts[1] {
-	case "timeline":
-		a.serveSessionTimeline(w, r, parts[0])
-	case "report":
-		a.serveSessionReport(w, r, parts[0])
-	case "memory":
-		a.serveSessionMemory(w, r, parts[0])
-	case "overview":
-		a.serveSessionOverview(w, r, parts[0])
-	case "outcomes":
-		a.serveSessionOutcomes(w, r, parts[0])
-	default:
+	if !a.handleSessionSubpathLeaf(w, r, parts[0], parts[1]) {
 		http.Error(w, "not found", http.StatusNotFound)
 	}
 }
@@ -981,13 +877,11 @@ func (a *API) serveSessionTimeline(w http.ResponseWriter, r *http.Request, id st
 	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
 		f.Limit = n
 	}
-	events, err := a.store.QueryEventsResult(f)
+	events, err := sessionTimeline(a.store, id, f.Limit)
 	if err != nil {
 		http.Error(w, "event data unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	// QueryEvents returns newest-first; a timeline reads oldest-first.
-	slices.Reverse(events)
 	writeJSON(w, events)
 }
 
@@ -1105,9 +999,9 @@ func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
 	}
 	// Stamp the rule title so clients render the daemon's words instead of
 	// keeping their own copies of the rule→title table.
+	stampFindingReviewIDs(a.store, flags)
 	for i := range flags {
 		flags[i].Title = humanFlagTitle(flags[i].Rule)
-		flags[i].ReviewID, _ = a.store.FindingReviewID(flags[i].ID)
 	}
 	a.stampExplains(flags)
 	writeJSON(w, flags)
