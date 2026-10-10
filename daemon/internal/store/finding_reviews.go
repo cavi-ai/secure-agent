@@ -493,21 +493,55 @@ func (s *Store) FindingReviewID(flagID string) (id string, readErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer func() { s.noteRead("finding reviews", readErr) }()
-	var key string
+	return s.findingReviewIDLocked(flagID)
+}
+
+// AttachFindingReviewIDs preserves core flags and valid sibling links while
+// reporting a failed enrichment once for the whole batch.
+func (s *Store) AttachFindingReviewIDs(flags []model.Flag) error {
+	if len(flags) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var readErr error
+	for i := range flags {
+		id, err := s.findingReviewIDLocked(flags[i].ID)
+		flags[i].ReviewID = id
+		if readErr == nil {
+			readErr = err
+		}
+	}
+	s.noteRead("finding reviews", readErr)
+	return readErr
+}
+
+func (s *Store) findingReviewIDLocked(flagID string) (string, error) {
+	var id, key string
 	err := s.db.QueryRow(`SELECT review_id,source_key FROM finding_review_members WHERE flag_id=?`, flagID).Scan(&id, &key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
-	if err == nil {
-		f, found, flagErr := s.getFlagResultLocked(flagID)
-		if flagErr != nil {
-			return "", flagErr
-		}
-		if !found || model.ReviewEvidenceKey(f, model.AssessFinding(f)) != key {
-			return "", nil
-		}
+	if err != nil {
+		return "", err
 	}
-	return id, err
+	f, found, err := s.getFlagResultLocked(flagID)
+	if err != nil {
+		return "", err
+	}
+	if !found || model.ReviewEvidenceKey(f, model.AssessFinding(f)) != key {
+		return "", nil
+	}
+	// Membership alone is not a usable link: the canonical target must still
+	// exist and satisfy the same identity/state checks as review detail reads.
+	r, err := reviewFromRow(s.db.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errors.New("finding review link target missing")
+	}
+	if err != nil {
+		return "", err
+	}
+	return r.ID, nil
 }
 
 func (s *Store) DecideFindingReview(req model.ReviewDecisionRequest) (receipt model.ReviewDecisionReceipt, err error) {

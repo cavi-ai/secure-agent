@@ -99,7 +99,10 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 		return Snapshot{}, err
 	}
 	failedReads = append(failedReads, a.advisorReadFailures("flag")...)
-	stampFindingReviewIDs(a.store, flags)
+	reviewLinkErr := stampFindingReviewIDs(a.store, flags)
+	if reviewLinkErr != nil {
+		failedReads = append(failedReads, "finding reviews")
+	}
 	for i := range flags {
 		flags[i].Title = humanFlagTitle(flags[i].Rule)
 	}
@@ -116,7 +119,7 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 	}
 	failedReads = append(failedReads, a.advisorReadFailures("flag")...)
 	reviews, reviewErr := a.store.ListFindingReviews("", 100)
-	if reviewErr != nil {
+	if reviewErr != nil || reviewLinkErr != nil {
 		reviews.Degraded = true
 	}
 	return Snapshot{

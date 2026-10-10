@@ -960,10 +960,10 @@ func (s *Store) GetFlagWithAdvisor(id string) (model.Flag, bool) {
 	if !ok {
 		return fl, false
 	}
-	fl.ReviewID, _ = s.FindingReviewID(id)
+	flags := []model.Flag{fl}
+	_ = s.AttachFindingReviewIDs(flags)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	flags := []model.Flag{fl}
 	s.attachAdvisorLocked(flags)
 	return flags[0], true
 }
