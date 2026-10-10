@@ -245,6 +245,8 @@ Inspects what your agents send to their APIs and catches secrets leaving where t
 
 **Inspect the permissions from a decision.** View permissions in Results opens only the scope IDs saved with that decision, with their exact resources, recipients, expiry, and revocation records. Missing records have unknown status; failed refreshes retain labeled last-known data and disable revocation. Revocation requires confirmation and a matching saved response. It does not undo past access or remaining exposure, and other permissions or legacy policies may still allow access. Back returns to the same session result.
 
+**Return to the session after investigating.** Session evidence and resource drawers keep a session Back link. Findings history and resource Events preserve the originating view, reading position, and evidence filters through Back to session and browser Back/Forward. Clearing evidence filters retains the return path; changing sessions or credentials discards the old context.
+
 **Monitor by default; earn enforcement.** Every rule runs in `monitor` mode: leaks are reported, nothing is blocked. Promote a rule to blocking once you trust it, in `~/.config/secure-agent/config.yaml`:
 
 ```yaml

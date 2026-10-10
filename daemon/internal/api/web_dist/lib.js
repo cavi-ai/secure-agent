@@ -588,17 +588,19 @@ function scopedBySession(items, sessionId, pids) {
 
 // Scope bar under the tabs: names the session (or process family) Events,
 // Flags and Incidents are narrowed to, with its counts; '' when unscoped.
-function scopeBarHTML({ session, pids, pidLabel, events, flags }) {
+function scopeBarHTML({ session, pids, pidLabel, events, flags, returnToSession }) {
   const n = Number(events) || 0;
   const m = Number(flags) || 0;
   const counts = ` · ${n} event${n === 1 ? '' : 's'} · ${m} flag${m === 1 ? '' : 's'}`;
   const clear = '<button type="button" class="btn btn-ghost btn-sm" data-action="clear-scope">Clear</button>';
-  if (session) return `<span>Scoped to session <b>${escapeHTML(sessionShort(session))}</b>${counts}</span><span class="scope-actions"><button type="button" class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${escapeHTML(session)}">Back to session</button>${clear}</span>`;
+  const back = returnToSession ? '<button type="button" class="btn btn-ghost btn-sm" data-action="session-investigation-return">Back to session</button>'
+    : session ? `<button type="button" class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${escapeHTML(session)}">Back to session</button>` : '';
+  if (session) return `<span>Scoped to session <b>${escapeHTML(sessionShort(session))}</b>${counts}</span><span class="scope-actions">${back}${clear}</span>`;
   if (pids && pids.length) {
     const k = pids.length;
-    return `<span>Scoped to <b>${escapeHTML(pidLabel || 'PID ' + pids[0])}</b> (${k} process${k === 1 ? '' : 'es'})${counts}</span>${clear}`;
+    return `<span>Scoped to <b>${escapeHTML(pidLabel || 'PID ' + pids[0])}</b> (${k} process${k === 1 ? '' : 'es'})${counts}</span><span class="scope-actions">${back}${clear}</span>`;
   }
-  return '';
+  return returnToSession ? `<span>Evidence filters cleared</span><span class="scope-actions">${back}</span>` : '';
 }
 
 // The Attention badge counts what the hero counts: /posture needs_you, which
