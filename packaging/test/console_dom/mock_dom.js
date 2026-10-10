@@ -485,7 +485,7 @@
       const flag = data['/flags'].find(f => f.id === id);
       return {ok:!!flag,status:flag?200:404,json:async()=>flag,text:async()=>flag?JSON.stringify(flag):'flag unavailable'};
     }
-    if (scenarios.has('contexthandoff') && p === '/incidents' && !String(path).includes('format=markdown')) {
+    if ((scenarios.has('contexthandoff') || scenarios.has('investigationdemo')) && p === '/incidents' && !String(path).includes('format=markdown')) {
       const id = new URLSearchParams(String(path).split('?')[1] || '').get('id');
       if (id) {
         const incident = data['/incidents'].find(i => i.id === id);
@@ -517,6 +517,18 @@
       const rows = p === '/flags'
         ? [{ ...data['/flags'][0], id: 'history-filtered-match' }]
         : [{ ...data['/events'][0], kind: 8, detail: 'Filtered-history match' }];
+      return { ok: true, status: 200, json: async () => rows };
+    }
+    if (scenarios.has('activitydemo') && p === '/events') {
+      const q = new URLSearchParams(String(path).split('?')[1] || '');
+      window.__activityQueries = [...(window.__activityQueries || []), String(path)];
+      if (window.__activityFail) return { ok: false, status: 503 };
+      const retained = q.get('session_id') === 'sess-cursor-2' ? [
+        { kind: 0, ts: iso(7200000), session_id: 'sess-cursor-2', path: '/synthetic/retained-file.go' },
+        { kind: 5, ts: iso(7100000), session_id: 'sess-cursor-2', remote_host: 'recorded.example.invalid', remote_port: 443 },
+      ] : q.has('session_id') ? [] : data['/events'];
+      const rows = retained.filter(row => (!q.has('kind') || String(row.kind) === q.get('kind'))
+        && (!q.has('since') || new Date(row.ts) >= new Date(q.get('since'))));
       return { ok: true, status: 200, json: async () => rows };
     }
     if (scenarios.has('malformeddemo') && !malformedRecovered && p === '/guard/pending') {
@@ -688,6 +700,15 @@
         await new Promise(resolve => setTimeout(resolve, 1800));
       }
       const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
+      if (scenarios.has('investigationdemo') && sid === 'sess-claude-1') {
+        const rows = Array.from({ length: 40 }, (_, i) => ({ id: 'memory-activity-' + i, kind: 'activity', at: iso((60 - i) * 60000), title: 'Synthetic retained activity ' + i }));
+        rows.splice(25, 0,
+          { id: 'flag:display-row', kind: 'flag', source_id: 'flag-2', at: iso(350000), title: 'Synthetic finding source' },
+          { id: 'incident:display-row', kind: 'incident', source_id: data['/incidents'][0].id, at: iso(340000), title: 'Synthetic incident source' },
+          { id: 'flag:expired-row', kind: 'flag', source_id: 'expired-memory-flag', at: iso(330000), title: 'Synthetic expired finding' },
+          { id: 'incident:expired-row', kind: 'incident', source_id: 'expired-memory-incident', at: iso(320000), title: 'Synthetic expired incident' });
+        return { ok: true, status: 200, json: async () => ({ rows, has_earlier: false }) };
+      }
       const body = sid === 'sess-claude-1'
         ? before === 'older'
           ? { rows: [
@@ -727,6 +748,9 @@
     }
     // Incident report as markdown: its Accessed Files paths become file links.
     if (p === '/incidents' && String(path).includes('format=markdown')) {
+      if (scenarios.has('investigationdemo') && !data['/incidents'].some(i => i.id === new URLSearchParams(String(path).split('?')[1]).get('id'))) {
+        return { ok: false, status: 404 };
+      }
       const md = '# Incident\n\n## Blast Radius Activity\n\n### Accessed Files\n' +
         '- `/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl`\n\n### Egress Connections\n- `api.openai.com:443`\n';
       return { ok: true, status: 200, json: async () => { throw new SyntaxError('not JSON'); }, text: async () => md };
@@ -929,6 +953,50 @@
   if (scenarios.has('notokenrecover')) {
     setTimeout(() => { location.hash = 'ct=test-token&tab=sessions'; }, 2000);
   }
+  if (scenarios.has('activitydemo')) {
+    setTimeout(async () => {
+      const receipt = {};
+      const tick = () => new Promise(resolve => setTimeout(resolve, 50));
+      const painted = async predicate => {
+        for (let i = 0; i < 20; i++) { if (predicate()) return; await tick(); }
+        throw new Error('Activity view did not paint the expected read result');
+      };
+      const pop = async action => {
+        const event = new Promise(resolve => window.addEventListener('popstate', () => setTimeout(resolve, 0), { once: true }));
+        action(); await event;
+      };
+      const events = () => document.getElementById('events-container').textContent;
+      try {
+        await window.filterTimelineToSession('sess-cursor-2');
+        await window.setSessionView('results');
+        const detail = document.getElementById('session-detail');
+        const opener = detail.querySelector('[data-action="session-events"]');
+        receipt.endedEntry = !!opener && !detail.querySelector('[data-action="view-family"]');
+        receipt.outsideSnapshot = !window.SA.t.events.some(row => row.path === '/synthetic/retained-file.go');
+        opener.click(); await painted(() => events().includes('/synthetic/retained-file.go'));
+        receipt.scopedRead = window.__activityQueries.some(path => new URLSearchParams(path.split('?')[1]).get('session_id') === 'sess-cursor-2');
+        receipt.recordedRows = events().includes('/synthetic/retained-file.go') && events().includes('recorded.example.invalid') && !events().includes('logs.example.com');
+        if (!receipt.recordedRows) receipt.eventsText = events();
+        receipt.limitVisible = !document.getElementById('events-scope-note').hidden && document.getElementById('events-scope-note').textContent.includes('Up to 200');
+        const filter = document.getElementById('event-filter'); filter.value = '0'; filter.dispatchEvent(new Event('change', { bubbles: true }));
+        await painted(() => events().includes('/synthetic/retained-file.go') && !events().includes('recorded.example.invalid'));
+        receipt.kindFilter = events().includes('/synthetic/retained-file.go') && !events().includes('recorded.example.invalid');
+        window.__activityFail = true; document.getElementById('btn-refresh').click();
+        await painted(() => Array.from(document.querySelectorAll('.report-health:not([hidden])')).some(el => el.textContent.includes('Stale — showing data last refreshed')));
+        receipt.staleRetained = events().includes('/synthetic/retained-file.go') && Array.from(document.querySelectorAll('.report-health:not([hidden])')).some(el => el.textContent.includes('Stale — showing data last refreshed'));
+        if (!receipt.kindFilter || !receipt.staleRetained) receipt.filterState = { events: events(), reports: Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent) };
+        window.__activityFail = false;
+        await pop(() => document.querySelector('#scope-bar [data-action="session-investigation-return"]').click());
+        receipt.returnContext = window.SA.sessionView === 'results' && window.SA.selectedSessionId === 'sess-cursor-2' && document.activeElement?.dataset.action === 'session-events';
+        receipt.returnFilters = filter.value === 'all';
+        await pop(() => history.forward());
+        receipt.forwardFilters = filter.value === '0' && window.SA.timelineSession === 'sess-cursor-2';
+        await pop(() => history.back());
+        receipt.fits = document.documentElement.scrollWidth <= innerWidth;
+      } catch (err) { receipt.error = String(err); }
+      document.body.dataset.activityProbe = JSON.stringify(receipt);
+    }, 2500);
+  }
   if (scenarios.has('investigationdemo')) {
     setTimeout(async () => {
       const receipt = {};
@@ -953,6 +1021,31 @@
         receipt.evidenceEntry = document.getElementById('btn-drawer-back').textContent.includes('session');
         document.getElementById('btn-drawer-back').click();
         receipt.evidenceBack = document.getElementById('drawer').hidden && document.activeElement === evidence;
+        const memorySource = body().querySelector('.sm-source-link[data-action="open-flag"]');
+        memorySource.scrollIntoView({ block: 'center' }); memorySource.focus({ preventScroll: true });
+        const memoryTop = body().scrollTop;
+        memorySource.click(); await tick();
+        receipt.memoryFinding = document.getElementById('drawer-body').textContent.includes('Flag IDflag-2')
+          && document.getElementById('btn-drawer-back').textContent.includes('session');
+        document.getElementById('btn-drawer-back').click();
+        receipt.memoryFindingBack = window.SA.sessionView === 'memory' && document.activeElement === memorySource
+          && memoryTop > 0 && Math.abs(body().scrollTop - memoryTop) < 2;
+        const incidentSource = body().querySelector('.sm-source-link[data-action="open-incident"]');
+        incidentSource.click(); await tick();
+        receipt.memoryIncident = document.getElementById('drawer-title').textContent.includes(incidentSource.dataset.id)
+          && document.getElementById('drawer-body').textContent.includes('Blast Radius Activity');
+        document.getElementById('btn-drawer-back').click();
+        receipt.memoryIncidentBack = document.activeElement === incidentSource && Math.abs(body().scrollTop - memoryTop) < 2;
+        for (const kind of ['flag', 'incident']) {
+          const missing = body().querySelector('.sm-source-link[data-id="expired-memory-' + kind + '"]');
+          missing.click(); await tick();
+          receipt['memoryMissing' + kind] = document.getElementById('drawer-body').textContent.includes('no longer available')
+            && !document.getElementById('drawer-body').querySelector('[data-action]');
+          document.getElementById('btn-drawer-back').click();
+          receipt['memoryMissingBack' + kind] = document.activeElement === missing && window.SA.sessionView === 'memory';
+        }
+        receipt.memoryReadOnly = !document.getElementById('mock-requests')?.textContent;
+        body().scrollTop = resourceTop;
         resources.click(); await tick(); document.querySelector('#drawer-body [data-action="family-events"]').click(); await tick();
         receipt.familyEvents = window.SA.sessionInvestigationReturn && document.querySelector('#scope-bar [data-action="session-investigation-return"]')
           && !document.getElementById('sub-events').hidden;
@@ -1067,7 +1160,7 @@
     setTimeout(() => {
       receipt.missing = window.SA.selectedSessionId === 'expired-session'
         && document.getElementById('session-detail').textContent.includes('Session unavailable')
-        && document.getElementById('drawer-body').textContent.includes('flag unavailable');
+        && document.getElementById('drawer-body').textContent.includes('Finding evidence is no longer available');
       receipt.noPidFallback = !document.getElementById('session-detail').textContent.includes('api-service');
       document.body.dataset.contextHandoff = JSON.stringify(receipt);
     }, 8500);
@@ -1145,7 +1238,10 @@
     setTimeout(() => document.querySelector('[data-action="session-view"][data-view="trace"]')?.click(), 6000);
   }
   if (scenarios.has('sessiondemo')) {
-    setTimeout(() => window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77'), 4000);
+    setTimeout(async () => {
+      await window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77');
+      openTab('events');
+    }, 4000);
   }
   if (scenarios.has('sessionworkbench')) {
     for (let i = 0; i < 80; i++) data['/sessions'].push({ id: 'wb-session-' + i, harness: 'codex', repo: 'workbench-' + i,

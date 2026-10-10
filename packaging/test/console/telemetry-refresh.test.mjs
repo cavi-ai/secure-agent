@@ -28,7 +28,7 @@ function fixture(fetch) {
     pendingConsoleContext: null, handoffGeneration: 0, openConsoleContext: async () => {},
     sessionMemoryGeneration: 0, sessionTimelineRequest: 0, sessionOverviewGeneration: 0, sessionOutcomesGeneration: 0,
     sessionMemoryState: {}, sessionOverviewState: {}, sessionOverviewRefreshAgain: false, sessionOutcomesState: {},
-    historyScopes: { flags: null, events: null },
+    historyScopes: { flags: null, events: null }, timelineSession: null,
     reviewCursor: '',
     filters: { flags: { agent: 'all', rule: 'all', minsev: 'all', since: 'all' }, events: { kind: 'all', since: 'all' } },
     sessionStorage: { removeItem() {} },
@@ -60,7 +60,7 @@ function fixture(fetch) {
   ctx.reportHealth = ctx.createConsoleReportHealth();
   vm.runInContext(source('  function endSession()', '  let handoffGeneration') +
     source('  function reportSucceeded(', '  // parseUptimeSec reads') +
-    source('  function syncHistoryViews()', '  function flagsQuery()') +
+    source('  function eventsHistoryScope()', '  function flagsQuery()') +
     source('  async function fetchTelemetry(', '  // Every panel is a candidate:'), ctx);
   return { ctx, requests, renders, connections, failures, retries, stops: () => stops, ended: () => ended };
 }
@@ -82,6 +82,21 @@ test('record handoff waits for valid telemetry and opens once', async () => {
   await f.ctx.fetchTelemetry({ slow: false });
   assert.deepEqual(opened, [[target, 2]]);
   assert.equal(f.ctx.pendingConsoleContext, null);
+});
+
+test('a late session Events response cannot populate a different scope without a new fetch generation', async () => {
+  const pending = deferred();
+  const f = fixture(path => path === '/snapshot' ? Promise.resolve(snapshot())
+    : path.startsWith('/events?') ? pending.promise : Promise.resolve(response([])));
+  f.ctx.timelineSession = 'a';
+  f.ctx.isEventsFiltered = () => true;
+  const read = f.ctx.fetchTelemetry({ slow: false });
+  while (!f.requests.some(path => path.startsWith('/events?'))) await new Promise(resolve => setImmediate(resolve));
+  f.ctx.timelineSession = 'b';
+  f.ctx.syncHistoryViews();
+  pending.resolve(response([{ kind: 0, ts: '2026-10-08T12:00:00Z', session_id: 'a', path: '/workspace/a.go' }]));
+  await read;
+  assert.equal(f.ctx.telemetryData.eventsView, null);
 });
 
 test('superseded telemetry cannot consume a newer record handoff', async () => {

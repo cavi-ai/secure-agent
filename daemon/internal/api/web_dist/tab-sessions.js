@@ -135,9 +135,15 @@ function sessionMemoryHTML(page, state) {
     lastDay = day;
     const severity = row.severity ? `<span class="sm-chip">${escapeHTML(row.severity)}</span>` : '';
     const status = row.status ? `<span class="sm-chip">${escapeHTML(row.status)}</span>` : '';
+    const sourceID = typeof row.source_id === 'string' && /^[a-zA-Z0-9_.:-]{1,128}$/.test(row.source_id) ? row.source_id : '';
+    const action = row.kind === 'flag' ? 'open-flag' : row.kind === 'incident' ? 'open-incident' : '';
+    const label = row.kind === 'flag' ? 'View finding evidence' : 'View incident report';
+    const title = sourceID && action
+      ? `<button type="button" class="link-btn sm-source-link" data-action="${action}" data-id="${escapeHTML(sourceID)}" aria-label="${label}: ${escapeHTML(row.title)}" title="${label}">${escapeHTML(row.title)}</button>`
+      : escapeHTML(row.title);
     return `${dayHTML}<article class="sm-row" data-row-id="${escapeHTML(row.id || '')}">
       <div class="sm-marker"><time datetime="${escapeHTML(row.at)}" title="${escapeHTML(fullTime)}" aria-label="${escapeHTML(fullTime)}">${escapeHTML(time)}</time><span class="sm-source">${source}</span></div>
-      <div class="sm-content"><strong>${escapeHTML(row.title)}</strong>${row.detail ? `<p>${escapeHTML(row.detail)}</p>` : ''}<div class="sm-chips">${severity}${status}</div></div>
+      <div class="sm-content"><strong>${title}</strong>${row.detail ? `<p>${escapeHTML(row.detail)}</p>` : ''}<div class="sm-chips">${severity}${status}</div></div>
     </article>`;
   }).join('');
   const earlier = page && page.has_earlier && page.next_cursor
@@ -379,6 +385,7 @@ function sessionDetailHTML(sess, events, trees) {
       </div>
       <button type="button" class="btn btn-sm btn-ghost sd-latest" data-action="session-latest" hidden>Jump to latest</button>
       <button type="button" class="btn btn-sm btn-ghost" data-action="session-status">Current status</button>
+      <button type="button" class="btn btn-sm btn-ghost" data-action="session-events" data-id="${escapeHTML(sess.id)}" title="Inspect retained file, connection, and tool events attributed to this session">View session events</button>
       <details class="session-metadata" data-session-details>
         <summary>Details</summary>
         <div class="sd-metadata-body">

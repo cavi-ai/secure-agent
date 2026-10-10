@@ -551,6 +551,7 @@ export interface memoryRow {
   id: string;
   at: string;
   kind: string;
+  source_id?: string;
   title: string;
   detail?: string;
   severity?: string;

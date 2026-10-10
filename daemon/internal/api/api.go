@@ -1014,8 +1014,9 @@ func (a *API) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	f := store.EventFilter{
-		Since: q.Get("since"),
-		Limit: queryInt(q.Get("limit"), 50),
+		Since:     q.Get("since"),
+		SessionID: q.Get("session_id"),
+		Limit:     queryInt(q.Get("limit"), 50),
 	}
 	if kStr := q.Get("kind"); kStr != "" {
 		if k, err := strconv.Atoi(kStr); err == nil {

@@ -49,6 +49,30 @@ test('memory page has explicit empty, loading and error states', () => {
   assert.match(context.sessionMemoryHTML({ rows: [{ id: 'a', at: '2026-09-26T10:00:00Z', kind: 'activity', title: 'A' }], has_earlier: true, next_cursor: 'x' }, { loadingEarlier: true }), /Loading earlier/);
 });
 
+test('memory finding and incident titles open the exact supplied source, independently of display row IDs', () => {
+  const rows = [
+    { id: 'flag:display-only', source_id: 'finding-original', kind: 'flag', title: 'Sensitive read', at: '2026-09-26T10:00:00Z' },
+    { id: 'incident:display-only', source_id: 'incident-original', kind: 'incident', title: 'Reported exposure', at: '2026-09-26T10:01:00Z' },
+  ];
+  const html = context.sessionMemoryHTML({ rows }, {});
+  assert.match(html, /<button type="button"[^>]+data-action="open-flag" data-id="finding-original"[^>]*>Sensitive read<\/button>/);
+  assert.match(html, /<button type="button"[^>]+data-action="open-incident" data-id="incident-original"[^>]*>Reported exposure<\/button>/);
+  assert.doesNotMatch(html, /data-id="(?:flag|incident):display-only"/);
+});
+
+test('memory never invents source links for old summaries, unsupported sources or invalid identifiers', () => {
+  for (const row of [
+    { id: 'flag:looks-like-an-id', kind: 'flag' },
+    ...['activity', 'guard-audit', 'guard', 'resource', 'unknown', 'constructor'].map(kind => ({ kind, source_id: 'valid-id' })),
+    ...['', null, {}, '<img src=x onerror=alert(1)>', 'a'.repeat(129)].map(source_id => ({ kind: 'flag', source_id })),
+  ]) {
+    const html = context.sessionMemoryHTML({ rows: [{ ...row, title: 'Retained summary', at: '2026-09-26T10:00:00Z' }] }, {});
+    assert.doesNotMatch(html, /data-action="open-(?:flag|incident)"/);
+    assert.match(html, /Retained summary/);
+    assert.doesNotMatch(html, /<img/);
+  }
+});
+
 
 test('retained memory errors name latest or earlier operation and provide the reachable retry action', () => {
   const rows = [{ id: 'retained', at: '2026-09-26T10:00:00Z', kind: 'activity', title: 'Retained activity' }];

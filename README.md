@@ -247,6 +247,10 @@ Inspects what your agents send to their APIs and catches secrets leaving where t
 
 **Return to the session after investigating.** Session evidence and resource drawers keep a session Back link. Findings history and resource Events preserve the originating view, reading position, and evidence filters through Back to session and browser Back/Forward. Clearing evidence filters retains the return path; changing sessions or credentials discards the old context.
 
+Finding and incident titles in session Memory open their retained evidence or report directly. Back returns to the same Memory view, reading position, and title. Missing sources are labeled unavailable; a retained summary does not reconstruct expired evidence.
+
+**Inspect recorded session activity.** View session events reads up to 200 matching retained events for that session, including ended sessions without a live process family. Event and time filters query retained records directly. The window does not establish complete coverage; older activity may have expired. Back restores the originating session view and event filters.
+
 **Monitor by default; earn enforcement.** Every rule runs in `monitor` mode: leaks are reported, nothing is blocked. Promote a rule to blocking once you trust it, in `~/.config/secure-agent/config.yaml`:
 
 ```yaml

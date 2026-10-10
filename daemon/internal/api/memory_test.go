@@ -52,6 +52,42 @@ func TestMemoryPresenterStructuredSummaries(t *testing.T) {
 	}
 }
 
+func TestMemorySourceReferences(t *testing.T) {
+	for _, tc := range []struct {
+		kind, sourceID, want string
+	}{
+		{"flag", "finding-123", "finding-123"},
+		{"incident", "incident-123", "incident-123"},
+		{"flag", "", ""},
+		{"flag", "<script>private</script>", ""},
+		{"incident", strings.Repeat("a", 129), ""},
+		{"activity", "event-123", ""},
+		{"guard-audit", "event-123", ""},
+		{"guard", "decision-123", ""},
+		{"resource", "123", ""},
+		{"unknown", "finding-123", ""},
+	} {
+		t.Run(tc.kind+"/"+tc.sourceID, func(t *testing.T) {
+			row := presentMemoryFact(store.MemoryFact{ID: tc.kind + ":display-id", Kind: tc.kind, SourceID: tc.sourceID})
+			var wire map[string]any
+			data, err := json.Marshal(row)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &wire); err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == "" {
+				if _, present := wire["source_id"]; present {
+					t.Fatalf("unsupported or invalid source exposed: %s", data)
+				}
+			} else if wire["source_id"] != tc.want {
+				t.Fatalf("source_id = %v, want %q (never the display ID)", wire["source_id"], tc.want)
+			}
+		})
+	}
+}
+
 func TestMemoryRSSLabelFractionBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		bytes uint64
@@ -106,6 +142,9 @@ func TestSessionMemoryRedaction(t *testing.T) {
 	}
 	var direct, resources int
 	for _, row := range out.Rows {
+		if row.Kind == "flag" && row.SourceID != "f1" || row.Kind == "incident" && row.SourceID != "i1" {
+			t.Fatalf("memory lost its retained source identity: %+v", row)
+		}
 		if row.Kind == "guard-audit" {
 			direct++
 		}

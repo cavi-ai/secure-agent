@@ -40,3 +40,10 @@ test('Home uses durable active sessions and links to their exact record', () => 
   assert.match(ctx.sessionDailyHTML(null, null), /Session data unavailable/);
   assert.match(ctx.sessionDailyHTML([], null), /No live sessions/);
 });
+
+test('retained activity remains reachable when a session has no live resource family', () => {
+  ctx.window.SA.sessionView = 'results';
+  const html = ctx.sessionDetailHTML({ id: 'ended', status: 'ended', harness: 'codex' }, [], []);
+  assert.ok(!html.includes('data-action="view-family"'));
+  assert.match(html, /data-action="session-events" data-id="ended"/);
+});
