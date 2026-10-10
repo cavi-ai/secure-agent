@@ -130,6 +130,10 @@
     sessionStorage.setItem('sa.harness-filter', JSON.stringify({ harnesses: {claude:false,codex:false}, text:'unrelated', liveOnly:true }));
     if (scenarios.has('cold')) location.hash = 'ct=test-token&tab=sessions&session=sess-claude-1&flag=flag-2';
   }
+  // Saved views are explicit fixtures; an unseeded tab exercises the product default.
+  if (scenarios.has('savedspendrepo')) {
+    try { sessionStorage.setItem('sa.spend-view', JSON.stringify({ by: 'repo', since: '24h' })); } catch { /* ignored */ }
+  }
   // spenddaydemo: a tab whose saved Spend view is by day over 7d (a reload).
   if (scenarios.has('spenddaydemo')) {
     try { sessionStorage.setItem('sa.spend-view', JSON.stringify({ by: 'day', since: '7d' })); } catch { /* ignored */ }
@@ -947,7 +951,9 @@
   const openTab = (id) => {
     const r = resolveConsoleRoute(id);
     document.querySelector(`.tab-btn[data-tab="${r.tab}"]`).click();
-    if (r.sub) document.querySelector(`.subtab-btn[data-subtab="${r.sub}"]`).click();
+    if (r.sub) document.querySelector(r.tab === 'protection'
+      ? `[data-action="goto-protection"][data-protection-view="${r.sub}"]`
+      : `.subtab-btn[data-subtab="${r.sub}"]`).click();
     const group = document.getElementById({ findings: 'home-findings', overview: 'home-trends' }[id] || '');
     if (group && !group.open) group.open = true;
     return r;
@@ -1264,10 +1270,16 @@
   // each panel's dirty bit is cleared by an on-screen render before the
   // dump. A panel's rendered DOM persists after switching away (only the
   // `hidden` attribute toggles), so the tour then lands back on Home with
-  // both groups closed — the boot-default checks (active tab, closed
-  // groups, hidden tabpanels) read the same dump and must still see it.
+  // Findings and Trends closed, Usage open — the boot-default checks
+  // read the same dump and must still see those defaults.
   if (location.search === '' && location.hash === '') {
     setTimeout(() => {
+      stamp('spend-default-view', `by=${document.getElementById('spend-by').value} since=${document.getElementById('spend-since').value}`);
+      for (const kind of ['guard', 'resource']) {
+        document.querySelector(`#attention-list [data-action="select-attention"][data-need-kind="${kind}"]`)?.click();
+        stamp(`attention-${kind}-content`, document.getElementById('drawer-body').innerHTML + document.getElementById('drawer-foot').innerHTML);
+        document.getElementById('btn-drawer-close').click();
+      }
       openTab('findings');
       openTab('overview');
       openTab('system');
@@ -1277,6 +1289,8 @@
       openTab('sessions/board');
       openTab('egress');
       openTab('policy');
+      openTab('protection/sources');
+      openTab('protection/audit');
       openTab('home');
       const findings = document.getElementById('home-findings');
       const trends = document.getElementById('home-trends');
@@ -1548,6 +1562,7 @@
   // opens first — accept it.
   if (scenarios.has('guarddemo')) {
     const clickResolve = () => {
+      document.querySelector('#attention-list [data-action="select-attention"][data-need-kind="guard"]')?.click();
       const btn = document.querySelector('[data-action="guard-resolve"][data-scope="once"]');
       if (btn) btn.click();
     };
@@ -2171,12 +2186,13 @@
   }
   // Auto-action: demote a blocking rule — it must flip back to Promote.
   if (scenarios.has('demotedemo')) {
-    // The firewall rule list lives on the Egress tab, not the default Home tab.
-    setTimeout(() => openTab('egress'), 1500);
+    // The firewall rule list lives in Protection / Rules.
+    setTimeout(() => openTab('protection/rules'), 1500);
     setTimeout(() => document.querySelector('[data-action="demote"][data-rule="aws-key"]').click(), 4000);
   }
   // Auto-action: remove an allowlist entry — the row must leave the list.
   if (scenarios.has('allowlistdemo')) {
+    setTimeout(() => openTab('protection/rules'), 1500);
     setTimeout(() => document.querySelector('[data-action="allowlist-remove"]').click(), 4000);
   }
 
@@ -2312,6 +2328,7 @@
   // Egress fold: 2 rules with hits stay listed, 20 quiet rules fold into one
   // row; the open fold survives an SSE-driven refetch that changes its count.
   if (scenarios.has('folddemo')) {
+    setTimeout(() => openTab('egress'), 1200);
     const fold = () => document.querySelector('#firewall-container > details.fw-fold');
     const probe = () => {
       const c = document.getElementById('firewall-container');
@@ -2321,7 +2338,7 @@
         + `open=${d && d.open ? 1 : 0} rebuilt=${d && d.dataset.before ? 0 : 1}`;
     };
     let focusedPromote = null;
-    setTimeout(() => openTab('egress'), 1500);
+    setTimeout(() => openTab('protection/rules'), 1500);
     setTimeout(() => {
       stamp('fold-before', probe());
       const d = fold();
@@ -2602,10 +2619,10 @@
         `${un && un.isConnected && document.activeElement === un ? 'kept' : 'lost'} rows=${document.querySelectorAll('#flags-list .mute-row').length}`), 2600);
     }, 4300);
   }
-  // actdemo: Egress open, allow the suggested host late enough that the
+  // actdemo: Protection / Rules open, allow the suggested host late enough that the
   // inline note and the toast are still up at dump time (4s each).
   if (scenarios.has('actdemo')) {
-    setTimeout(() => openTab('egress'), 4000);
+    setTimeout(() => openTab('protection/rules'), 4000);
     setTimeout(() => document.querySelector('.fw-suggestion [data-action="allow-host"]').click(), 9000);
   }
   // detailsprobe (with explaindemo): flag-2 raised seconds ago; Findings

@@ -1823,7 +1823,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const on = activeTab === 'protection' && b.dataset.protectionView === activeProtection;
       b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on));
     });
-    document.querySelectorAll('.subtab-btn').forEach(b => {
+    document.querySelectorAll('.subtab-btn[data-subtab]').forEach(b => {
       const on = b.dataset.subtab === activeSub;
       b.classList.toggle('active', on);
       b.setAttribute('aria-selected', on ? 'true' : 'false');
@@ -1859,7 +1859,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // The Sessions tab reopens its last sub-view.
   document.querySelectorAll('.tab-btn').forEach(b =>
     b.addEventListener('click', () => switchTab(b.dataset.tab === 'sessions' ? 'sessions/' + activeSub : b.dataset.tab === 'protection' ? 'protection/' + activeProtection : b.dataset.tab)));
-  document.querySelectorAll('.subtab-btn').forEach(b =>
+  document.querySelectorAll('.subtab-btn[data-subtab]').forEach(b =>
     b.addEventListener('click', () => switchTab('sessions/' + b.dataset.subtab)));
 
   // Tab badges: the "something needs you here" signal for hidden panels.
