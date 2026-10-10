@@ -516,6 +516,48 @@
       workdir: '/Users/dev/workspace/api-service', status: 'done', exit_code: 0, command: 'env codex exec <task>', output: 'Logged out. ' + AGENT_XSS }
   ];
 
+  // Worktree hunter report: a row per state; one reason carries markup that
+  // must render as text.
+  const WT_REPO = '/Users/dev/workspace/api-service';
+  data['/worktrees'] = {
+    generated_at: iso(0), duration_ms: 4200, cached: false, stale_days: 14,
+    summary: { repos: 1, worktrees: 4, remove: 1, review: 1, keep: 1, prune: 1, stale: 2, size_bytes: 1612709888, removable_bytes: 1610612736 },
+    volumes: [{ mount: '/Volumes/Work', total_bytes: 2199023255552, free_bytes: 549755813888 }],
+    reclaimed: { bytes: 3221225472, count: 3, bytes_30d: 1073741824, count_30d: 1 },
+    repos: [{
+      path: WT_REPO, source: 'session', default_branch: 'origin/main', size_bytes: 1612709888, worktrees: [
+        { path: WT_REPO, branch: 'main', state: 'main', reasons: ['main worktree of the repository'], idle_days: 0 },
+        { path: WT_REPO + '/.worktrees/done', branch: 'feat/done', state: 'remove', stale: true, last_activity: iso(21 * 86400000), idle_days: 21, size_bytes: 1610612736, reasons: ['merged into origin/main (squash)'] },
+        { path: WT_REPO + '/.worktrees/evidence', branch: 'feat/evidence', head: '123abc', state: 'review', last_activity: iso(3600000), idle_days: 0, reasons: ['ignored files that only live here: .tmp/ (3 files, 1.2 MB)', '<b>not bold</b>'] },
+        { path: '/Users/dev/.codex/worktrees/ab12/api-service', branch: '', detached: true, state: 'keep', in_use: true, last_activity: iso(60000), idle_days: 0, reasons: ['2 uncommitted changes', 'an agent session is live here'] },
+        { path: WT_REPO + '/.worktrees/gone', branch: 'feat/gone', state: 'prune', stale: true, idle_days: 0, reasons: ['directory is gone; git still lists it'] }
+      ]
+    }],
+    errors: [],
+    advice: {
+      [WT_REPO + '/.worktrees/evidence']: { assessment: 'review', confidence: 0.6, rationale: '<i>look</i> at .tmp before removing' }
+    },
+    askable: { ['/Users/dev/.codex/worktrees/ab12/api-service']: 'codex' },
+    asks: {
+      [WT_REPO + '/.worktrees/evidence']: { harness: 'claude', status: 'answered', verdict: 'pr', detail: 'https://github.com/o/r/pull/9', cost_usd: 0.21 }
+    }
+  };
+
+  // Clutter inventory: a repo .tmp, a tool cache with a clean command and a
+  // list-only one whose note carries markup that must render as text.
+  data['/cleanup'] = {
+    generated_at: iso(0), sizing: false,
+    items: [
+      { id: 'tool-cache:/Users/dev/Library/Caches/go-build', kind: 'tool-cache', name: 'go build', path: '/Users/dev/Library/Caches/go-build', size_bytes: 8589934592, last_touched: iso(86400000), idle_days: 1, action: 'clean', command: 'go clean -cache' },
+      { id: 'tmp:' + WT_REPO + '/.tmp', kind: 'tmp', name: '.tmp', path: WT_REPO + '/.tmp', project: WT_REPO, size_bytes: 1048576, last_touched: iso(22 * 86400000), idle_days: 22, action: 'trash' },
+      { id: 'tool-cache:/Users/dev/.cache/huggingface', kind: 'tool-cache', name: 'Hugging Face models', path: '/Users/dev/.cache/huggingface', size_bytes: 1024, action: 'none', note: '<i>downloaded</i> models' },
+    ],
+    kinds: [{ kind: 'tmp', bytes: 1048576, count: 1 }, { kind: 'tool-cache', bytes: 8589935616, count: 2 }],
+    projects: [],
+    reclaimed: { bytes: 0, count: 0, bytes_30d: 0, count_30d: 0, trashed_bytes: 0, trashed_count: 0 },
+    advice: { [WT_REPO]: { rationale: '<b>Old</b> scratch holds most of it.', suggested_action: 'Move .tmp to the Trash\nAsk the agent about feat/x' } },
+  };
+
     return { now, iso, data, scenarios, payloads: spec.payloads || {}, patches: spec.patches || [], responses: spec.responses || {} };
   };
   const matches = (row, selector) => Object.entries(selector).every(([key, value]) => row?.[key] === value);

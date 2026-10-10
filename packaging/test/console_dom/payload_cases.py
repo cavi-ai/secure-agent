@@ -57,6 +57,46 @@ def delayed_spend(now_ms=None):
     ]}
 
 
+def orphan_worktrees(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": [
+        {"route": "/worktrees", "path": ["repos"], "append": [{
+            "path": "/Users/dev/gone-app", "error": "repository not found (moved or deleted)",
+            "size_bytes": 0, "worktrees": [{
+                "path": "/Users/dev/.cursor/worktrees/gone-app/ctnj", "state": "review", "orphan": True,
+                "reasons": ["directory is not registered with git; its files are the only copy"],
+            }],
+        }]},
+        {"route": "/worktrees", "path": ["errors"], "value": [
+            "/Users/dev/gone-app: repository not found (moved or deleted); 1 folder still points to it (listed first below)",
+        ]},
+    ]}
+
+
+def batch_worktrees(now_ms=None, *, multiple_repos=False):
+    now, iso = _clock(now_ms)
+    repo = "/Users/dev/workspace/api-service"
+
+    def removable(path, branch):
+        return {"path": path, "branch": branch, "state": "remove", "stale": True,
+                "last_activity": iso(21 * 86400000), "idle_days": 21, "size_bytes": 1610612736,
+                "reasons": ["merged into origin/main (squash)"]}
+
+    patches = [{"route": "/worktrees", "path": ["repos", {"path": repo}, "worktrees"], "append": [
+        removable(repo + "/.worktrees/old-a", "feat/old-a"),
+        removable(repo + "/.worktrees/old-b", "feat/old-b"),
+    ]}]
+    if multiple_repos:
+        other = "/Users/dev/workspace/web-app"
+        patches.append({"route": "/worktrees", "path": ["repos"], "append": [{
+            "path": other, "size_bytes": 1610612736, "worktrees": [
+                {"path": other, "branch": "main", "state": "main", "reasons": []},
+                removable(other + "/.worktrees/landed", "feat/landed"),
+            ],
+        }]})
+    return {"now": now, "patches": patches}
+
+
 def payload_outcomes(now_ms=None):
     now, iso = _clock(now_ms)
     payloads = {}

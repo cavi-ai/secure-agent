@@ -7,6 +7,34 @@ const context = { window: {}, Date, structuredClone };
 vm.runInNewContext(readFileSync(new URL('../console_dom/fixtures.js', import.meta.url), 'utf8'), context);
 const { create, apply } = context.window.ConsoleFixtures;
 
+test('System defaults exist without the driver and isolate nested worktree and clutter mutations', () => {
+  const one = create({ now: 0 });
+  const two = create({ now: 0 });
+  const repo = one.data['/worktrees'].repos[0];
+  assert.deepEqual(structuredClone(repo.worktrees.map(row => row.state)), ['main', 'remove', 'review', 'keep', 'prune']);
+  assert.equal(one.data['/cleanup'].items.length, 3);
+  const original = structuredClone(two.data);
+  repo.worktrees[1].reasons.push('changed');
+  one.data['/worktrees'].advice[repo.worktrees[2].path].rationale = 'changed';
+  one.data['/cleanup'].items[0].command = 'changed';
+  one.data['/cleanup'].kinds.pop();
+  one.data['/cleanup'].advice[repo.path].rationale = 'changed';
+  assert.deepEqual(structuredClone(two.data), original);
+});
+
+test('System patches select a nested repository and preserve the other worktrees', () => {
+  const rows = [{ path: '/fixture/extra', reasons: ['test-owned'] }];
+  const fixture = create({ now: 0, patches: [{
+    route: '/worktrees', path: ['repos', { path: '/Users/dev/workspace/api-service' }, 'worktrees'], append: rows,
+  }] });
+  const original = structuredClone(fixture.data['/worktrees'].repos[0].worktrees);
+  apply(fixture);
+  const worktrees = fixture.data['/worktrees'].repos[0].worktrees;
+  assert.deepEqual(structuredClone(worktrees.slice(0, -1)), original);
+  worktrees.at(-1).reasons.push('changed');
+  assert.deepEqual(rows[0].reasons, ['test-owned']);
+});
+
 test('policy and Agent defaults are available without the browser driver and isolate mutations', () => {
   const one = create({ now: 0 });
   const two = create({ now: 0 });
