@@ -2970,7 +2970,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const overview = await response.json();
       if (generation !== sessionOverviewGeneration || id !== selectedSessionId) return;
-      if (!overview || overview.session_id !== id || !Array.isArray(overview.requests) || !Array.isArray(overview.findings)) throw new Error('Invalid response');
+      if (!validSessionOverview(overview, id)) throw new Error('Invalid response');
       sessionOverview = overview;
       sessionOverviewState = { loading: false, error: '' };
     } catch {

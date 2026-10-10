@@ -206,11 +206,42 @@ function renderSessionDaily() {
   if (el._saHTML !== html) { el.innerHTML = html; el._saHTML = html; }
 }
 
+// Validate the fields consumed by the current-status view before replacing
+// its last successful response. Unknown assessment values remain unknown.
+function validSessionOverview(data, id) {
+  const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const text = (v, names) => names.every(k => v[k] === undefined || typeof v[k] === 'string');
+  const number = (v, names) => names.every(k => v[k] === undefined || (typeof v[k] === 'number' && Number.isFinite(v[k]) && v[k] >= 0));
+  const rows = (v, test) => v == null || (Array.isArray(v) && v.every(test));
+  const strings = v => rows(v, s => typeof s === 'string');
+  const time = v => v === undefined || (typeof v === 'string' && Number.isFinite(Date.parse(v)));
+  const assessment = a => record(a) && text(a, ['risk', 'review_state', 'control', 'residual_risk', 'reason'])
+    && strings(a.evidence_basis) && strings(a.limits)
+    && (a.advice == null || (record(a.advice) && text(a.advice, ['assessment', 'rationale']) && number(a.advice, ['confidence'])));
+  if (!record(data) || data.session_id !== id || !time(data.observed_at)
+    || !Array.isArray(data.requests) || !Array.isArray(data.findings) || data.findings.length > 20
+    || (data.findings_truncated !== undefined && typeof data.findings_truncated !== 'boolean')) return false;
+  if (!data.requests.every(r => record(r) && r.kind === 'guard' && typeof r.id === 'string' && r.id.length > 0
+    && text(r, ['title', 'detail', 'path', 'rule', 'scopeText', 'reader_exe'])
+    && rows(r.available_scopes, c => record(c) && typeof c.kind === 'string' && text(c, ['expiry'])))) return false;
+  if (!data.findings.every(f => record(f) && typeof f.id === 'string' && f.id.length > 0
+    && text(f, ['title']) && time(f.at) && assessment(f.assessment))) return false;
+  if (data.coverage != null && (!record(data.coverage) || data.coverage.session_id !== id
+    || !['guard', 'trace', 'payload'].every(k => record(data.coverage[k]) && typeof data.coverage[k].state === 'string'
+      && typeof data.coverage[k].detail === 'string' && text(data.coverage[k], ['last_seen'])
+      && (data.coverage[k].supported === undefined || typeof data.coverage[k].supported === 'boolean')))) return false;
+  const r = data.resources;
+  return r == null || (record(r) && typeof r.key === 'string' && r.key.length > 0 && time(r.observed_at)
+    && number(r, ['rss_bytes', 'cpu_percent', 'process_count'])
+    && rows(r.diagnoses, d => record(d) && text(d, ['summary']))
+    && (r.control == null || (record(r.control) && text(r.control, ['state', 'last_error']))));
+}
+
 function sessionOverviewHTML(data, state) {
   state = state || {};
-  const retry = '<button type="button" class="link-btn" data-action="session-overview-retry">Retry current status</button>';
-  const status = state.error ? `Last known session status. Refresh failed; requests and measurements may have changed. ${retry}`
-    : !data ? state.loading ? 'Loading current session status…' : `Current session status unavailable. ${retry}` : '';
+  const retry = `<button type="button" class="link-btn" data-action="session-overview-retry"${state.loading ? ' disabled' : ''}>${state.loading ? 'Retrying current status…' : 'Retry current status'}</button>`;
+  const status = !data ? state.loading && !state.error ? 'Loading current session status…' : `Current session status unavailable. ${retry}`
+    : state.error ? `Last known session status. Refresh failed; requests and measurements may have changed. ${retry}` : '';
   const head = `<div class="sd-current-head" data-session-part="current-head"><h4 tabindex="-1">Current session status</h4>${status ? `<p class="sd-current-status" role="status">${status}</p>` : ''}</div>`;
   if (!data) return head;
   const disabled = state.error ? ' disabled' : '';
