@@ -2371,23 +2371,6 @@
   // reports the row's patchList key, whether it stayed open and the selected
   // cards. With tab=resources the families fold the same way.
   if (scenarios.has('dupdemo')) {
-    const MB = 1024 ** 2;
-    for (let i = 1; i <= 5; i++) {
-      data['/sessions'].push({ id: `sess-dup-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-demo-app',
-        repo: 'demo-app', branch: 'main', origin: 'quill (openclaw)',
-        started_at: new Date(now - i * 600000).toISOString(), last_seen_at: iso(20000 + i * 1000),
-        status: i === 2 ? 'active' : 'idle', confidence: 'transcript' });
-    }
-    for (let i = 1; i <= 3; i++) {
-      const pid = 8300 + i;
-      data['/sessions'].push({ id: `sess-marg-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw', origin: 'fennel (openclaw)',
-        root_pid: pid, started_at: new Date(now - i * 900000).toISOString(), last_seen_at: iso(25000 + i * 1000),
-        status: 'active', confidence: 'transcript' });
-      data['/resources'].sessions.push({ key: `${pid}:1789470000000000000`, name: 'codex', root_pid: pid,
-        root_started_at: '2026-09-09T13:00:00Z', workspace: '/Users/dev/.openclaw', last_seen_at: iso(30000),
-        rss_bytes: 100 * i * MB, cpu_percent: i, process_count: i, orphan_count: 0,
-        processes: [{ pid, ppid: 1, name: 'codex', rss_bytes: 100 * i * MB, cpu_percent: i }], samples: [], diagnoses: [] });
-    }
     if (!scenarios.has('tab=resources') && !scenarios.has('foldpatch')) {
       const quill = 'group:codex|demo-app@main · quill';
       setTimeout(() => openTab('sessions'), 4000);
@@ -2417,12 +2400,6 @@
   // 3 s focus hold. <pre id="fold-probe">: focus kept, the group the same
   // open node, each fold's aria-expanded, the head counts around it.
   if (scenarios.has('dupdemo') && scenarios.has('foldpatch')) {
-    for (let i = 6; i <= 7; i++) {
-      data['/sessions'].push({ id: `sess-dup-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-demo-app',
-        repo: 'demo-app', branch: 'main', origin: 'quill (openclaw)',
-        started_at: new Date(now - i * 600000).toISOString(), last_seen_at: iso(40000 + i * 1000),
-        ended_at: iso(40000 + i * 1000), status: 'ended', confidence: 'transcript' });
-    }
     const quill = 'group:codex|demo-app@main · quill';
     const rail = () => document.getElementById('session-rail');
     const fold = (bucket) => rail().querySelector(`[data-action="toggle-session-dup"][data-bucket="${bucket}"][data-key="${quill}"]`);
@@ -2454,10 +2431,6 @@
   // memory and CPU change. <pre id="family-probe">: focus kept, the group the
   // same open node, the fold still expanded, the head counts.
   if (scenarios.has('dupdemo') && scenarios.has('familypatch')) {
-    data['/resources'].sessions.push({ key: '8400:1789470000000000000', name: 'codex', root_pid: 8400,
-      root_started_at: '2026-09-09T13:00:00Z', workspace: '/Users/dev/workspace/etl-sidecar', last_seen_at: iso(30000),
-      rss_bytes: 50 * 1024 ** 2, cpu_percent: 2, process_count: 1, orphan_count: 0,
-      processes: [{ pid: 8400, ppid: 1, name: 'codex', rss_bytes: 50 * 1024 ** 2, cpu_percent: 2 }], samples: [], diagnoses: [] });
     const marg = 'group:codex|Codex · fennel';
     setTimeout(() => {
       const board = document.getElementById('resource-board');
