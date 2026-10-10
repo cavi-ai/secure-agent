@@ -119,6 +119,40 @@ func TestSessionOutcomesRetainReceiptsWithoutReadingActivity(t *testing.T) {
 			t.Fatalf("receipt recovery: %+v", out)
 		}
 	}
+	var originalIncident string
+	if err := db.QueryRow(`SELECT report_json FROM incidents WHERE id='owned-incident'`).Scan(&originalIncident); err != nil {
+		t.Fatal(err)
+	}
+	for _, damage := range []string{`json_set(report_json,'$.session_id','other')`, `json_remove(report_json,'$.session_id')`, `json_set(report_json,'$.session_id',NULL)`} {
+		if _, err := db.Exec(`UPDATE incidents SET report_json=` + damage + ` WHERE id='owned-incident'`); err != nil {
+			t.Fatal(err)
+		}
+		w = httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest("GET", "/sessions/owned/outcomes", nil))
+		if w.Code != 200 {
+			t.Fatalf("corrupt incident outcomes: %d", w.Code)
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.History.Evidence.Incidents.Available || len(out.History.Incidents) != 0 || !out.History.Evidence.Interventions.Available || len(out.History.Interventions) != 1 || !out.History.Evidence.Reviews.Available || len(out.History.Reviews) != 1 {
+			t.Fatalf("mismatched incident escaped or erased readable siblings: %+v", out)
+		}
+		if _, err := db.Exec(`UPDATE incidents SET report_json=? WHERE id='owned-incident'`, originalIncident); err != nil {
+			t.Fatal(err)
+		}
+		w = httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest("GET", "/sessions/owned/outcomes", nil))
+		if w.Code != 200 {
+			t.Fatalf("recovered incident outcomes: %d", w.Code)
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if !out.History.Evidence.Incidents.Available || len(out.History.Incidents) != 1 || out.History.Incidents[0].ID != "owned-incident" || out.History.Incidents[0].Remediation.Steps[0].Status != "reported" {
+			t.Fatalf("incident recovery lost saved remediation: %+v", out)
+		}
+	}
 	if _, err := db.Exec(`ALTER TABLE interventions RENAME TO unavailable_interventions`); err != nil {
 		t.Fatal(err)
 	}
