@@ -2234,22 +2234,69 @@
   // past the viewport, and posts it back; the result lands on
   // <body data-hscroll="sessions:N,agents:N,resources:N"> (N in px, 0 = fits).
   if (scenarios.has('phoneframe')) {
-    // Content inside a horizontal scroller (the Sessions sub-view control) or
-    // an ellipsised log title is clipped by it, so the clipping box is what
-    // must fit.
-    const measure = (tab) => {
-      const panel = document.getElementById('tab-' + openTab(tab).tab);
-      const width = document.documentElement.clientWidth;
-      let past = 0;
-      for (const el of [panel, ...panel.querySelectorAll('*')]) {
-        if (el.parentElement && el.parentElement.closest('.subtabs, .c-title')) continue;
+    // Measure each box's visible extent after all ancestor clips. The clipping
+    // containers still get measured themselves, and page overflow is independent.
+    const horizontalOverflow = (root, doc = document) => {
+      const width = doc.documentElement.clientWidth;
+      let past = Math.max(0, doc.documentElement.scrollWidth - width);
+      for (const el of [root, ...root.querySelectorAll('*')]) {
         const box = el.getBoundingClientRect();
-        if (box.width) past = Math.max(past, box.right - width);
+        if (!box.width || !box.height) continue;
+        let left = box.left, right = box.right;
+        for (let ancestor = el.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          const overflow = doc.defaultView.getComputedStyle(ancestor).overflowX;
+          if (!['auto', 'scroll', 'hidden', 'clip'].includes(overflow)) continue;
+          const bounds = ancestor.getBoundingClientRect();
+          const clipLeft = bounds.left + ancestor.clientLeft;
+          left = Math.max(left, clipLeft);
+          right = Math.min(right, clipLeft + ancestor.clientWidth);
+        }
+        if (right > left) past = Math.max(past, right - width);
       }
-      past = Math.max(past, document.documentElement.scrollWidth - width);
-      return `${tab}:${Math.round(past)}`;
+      return Math.round(past);
+    };
+    const measure = (tab) => `${tab}:${horizontalOverflow(document.getElementById('tab-' + openTab(tab).tab))}`;
+    const overflowGuard = () => {
+      // An isolated real document keeps these negative controls independent of
+      // console layout and removes every injected box before the console probe.
+      const frame = document.createElement('iframe');
+      Object.assign(frame.style, {position:'fixed',left:'0',top:'0',width:document.documentElement.clientWidth + 'px',height:'20px',border:'0',visibility:'hidden'});
+      document.body.append(frame);
+      const doc = frame.contentDocument;
+      if (!doc || !doc.body) { frame.remove(); return {unavailable:true}; }
+      doc.body.style.margin = '0';
+      const width = doc.documentElement.clientWidth;
+      const container = doc.createElement('div');
+      Object.assign(container.style, {position:'absolute',left:'0',top:'0',width:'100px',height:'10px'});
+      const child = doc.createElement('div');
+      Object.assign(child.style, {width:width + 60 + 'px',height:'5px'});
+      container.append(child);
+      doc.body.append(container);
+      const checks = {};
+      for (const mode of ['auto','scroll','hidden','clip']) {
+        container.style.overflowX = mode;
+        checks[mode] = horizontalOverflow(container, doc) === 0;
+      }
+      container.style.overflowX = 'visible';
+      container.style.overflowY = 'visible';
+      checks.unclipped = horizontalOverflow(container, doc) >= 60;
+      container.style.overflowX = 'hidden';
+      container.style.width = width + 24 + 'px';
+      checks.container = horizontalOverflow(container, doc) >= 24;
+      container.remove();
+      const wide = doc.createElement('div');
+      Object.assign(wide.style, {width:width + 24 + 'px',height:'5px'});
+      const small = doc.createElement('div');
+      Object.assign(small.style, {width:'20px',height:'5px'});
+      doc.body.append(wide, small);
+      checks.document = doc.documentElement.scrollWidth > width && horizontalOverflow(small, doc) >= 24;
+      frame.remove();
+      return checks;
     };
     setTimeout(() => {
+      const guards = overflowGuard();
+      document.body.dataset.overflowGuard = JSON.stringify(guards);
+      parent.postMessage({overflowGuard:guards}, '*');
       const sessions = measure('sessions');
       setTimeout(() => {
         const agents = measure('agents');
@@ -2265,7 +2312,11 @@
             }, 200);
           }
           // patterndemo: the Attention/Flags tab holding the pattern card.
-          const done = findings => parent.postMessage({ hscroll: `${sessions},${agents},${resources}${findings}` }, '*');
+          const done = findings => {
+            const hscroll = `${sessions},${agents},${resources}${findings}`;
+            document.body.dataset.hscroll = hscroll;
+            parent.postMessage({hscroll}, '*');
+          };
           if (scenarios.has('patterndemo')) setTimeout(() => done(',' + measure('findings')), 300);
           else if (scenarios.has('spenddaydemo')) setTimeout(() => done(',' + measure('overview')), 300);
           else done('');
@@ -2276,6 +2327,7 @@
     addEventListener('message', (e) => {
       if (e.data && e.data.hscroll) document.body.dataset.hscroll = e.data.hscroll;
       if (e.data && e.data.headroom) document.body.dataset.headroom = e.data.headroom;
+      if (e.data && e.data.overflowGuard) document.body.dataset.overflowGuard = JSON.stringify(e.data.overflowGuard);
     });
     document.addEventListener('DOMContentLoaded', () => {
       const frame = document.createElement('iframe');

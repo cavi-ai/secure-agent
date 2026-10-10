@@ -561,6 +561,14 @@ def main():
         check("the page, posture banner included, fits a 375px phone on Sessions, Agents and Resources",
               dom_query(dom_phone).has(None, {'data-hscroll': 'sessions:0,agents:0,resources:0'}),
               (re.search(r'data-hscroll="[^"]*"', dom_phone) or [None])[0])
+        guard_node = dom_query(dom_phone).find(None, {'data-overflow-guard': None})
+        try:
+            overflow_guard = json.loads(guard_node.attrs['data-overflow-guard']) if guard_node else {}
+        except (ValueError, TypeError):
+            overflow_guard = {}
+        for mode in ('auto', 'scroll', 'hidden', 'clip', 'unclipped', 'container', 'document'):
+            check(f"phone overflow probe: {mode} clipping or overflow control",
+                  overflow_guard.get(mode) is True, str(overflow_guard))
         check("Memory detail fits a 375px phone without horizontal page overflow",
               dom_query(dom_memory_phone).has(None, {'data-hscroll': 'sessions:0,agents:0,resources:0'}),
               (re.search(r'data-hscroll="[^"]*"', dom_memory_phone) or [None])[0])
