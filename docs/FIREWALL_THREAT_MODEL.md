@@ -1,5 +1,7 @@
 # Egress Secret-Leak Firewall — Threat Model
 
+[Documentation](README.md) · [Project home](../README.md)
+
 This document states plainly what the firewall defends against, what it does not,
 and the trust assumptions it makes. An honest boundary is part of the security
 guarantee: a tool that overstates its coverage is worse than one that names its

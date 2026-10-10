@@ -1,5 +1,7 @@
 # Directory Guard — Threat Model & Known Limits
 
+[Documentation](README.md) · [Project home](../README.md)
+
 The Directory Guard (PreToolUse hook + daemon prompt broker) is a
 **bar-raising** layer, not a complete seal. This document is the honest
 accounting of what it stops, what it structurally cannot, and which failure

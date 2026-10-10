@@ -1,5 +1,7 @@
 # secure-agent Unix Socket API Specification
 
+[Documentation](README.md) · [Project home](../README.md)
+
 The `secure-agentd` daemon exposes an HTTP API over a local Unix domain socket.
 
 - **Default Socket Path**: `~/.config/secure-agent/daemon.sock`
@@ -7,7 +9,50 @@ The `secure-agentd` daemon exposes an HTTP API over a local Unix domain socket.
 
 ---
 
-## 📡 Endpoints
+## Endpoint quick reference
+
+The [generated route registry](reference/ROUTES.md) lists the current canonical routes and access classifications. The sections below describe request and response contracts.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/status` | `GET` | Returns daemon running state, uptime, active agent count, and proxy status. |
+| `/resources` | `GET` | Returns attributed session-family RSS, CPU, process topology, history, diagnoses, and reclaim estimates. |
+| `/resources/control` | `POST` | Applies or dismisses a pending resource action, or resumes a paused session family. |
+| `/flags` | `GET` | Returns recent security correlation flags (accepts optional `?limit=N`). |
+| `/events` | `GET` | Returns recent raw system events (accepts optional `?limit=N`). |
+| `/incidents` | `GET` | Returns incident reports and remediation checklists (`?id=ID`, `?format=markdown`). |
+| `/incidents/remediation` | `POST` | Records reported/pending remediation steps against the viewed incident evidence and revision. |
+| `/kill` | `POST` | Terminate an agent process tree by PID (`{"pid": 12345}`). |
+| `/worktrees` | `GET` | Every git worktree found, with a remove/review/keep/prune verdict and its reasons (`?refresh=1` rescans). |
+| `/worktrees/repos` | `POST` | Add a repository to the worktree hunter's saved list, or hide it (`{"path": "...", "hidden": true}`). |
+| `/worktrees/remove` | `POST` | Remove a worktree whose fresh verdict is `remove` (`{"path": "..."}`), or prune missing ones (`{"repo": "...", "prune": true}`). |
+| `/worktrees/review-trash` | `POST` | Move a `keep` or `review` row's folder to Trash and unregister it; fresh facts must still match, and a live session, lock, loose commits, conflicts or partly staged files refuse it. |
+| `/worktrees/advise` | `POST` | Ask the local advisor for a note on one worktree (`{"path": "..."}`); advisory only. |
+| `/worktrees/reveal`, `/worktrees/reconnect`, `/worktrees/trash` | `POST` | For a folder whose repository moved or was deleted: open it in Finder, link it again with `git worktree repair`, or move it to the Trash. |
+| `/cleanup/ledger` | `GET` | What cleanups removed and the bytes each gave back, with all-time and 30-day totals. |
+| `/cleanup` | `GET` | `.tmp` and `.quarantine` folders, build output, tool and app caches: size, last touched, project, how to clear. |
+| `/cleanup/trash`, `/cleanup/clean` | `POST` | Move one item to the Trash, or run a tool cache's own clean command. |
+| `/cleanup/advise` | `POST` | Ask the local advisor for a cleanup plan for one project (`{"project": "<repo path or machine>"}`); advisory only. |
+| `/worktrees/ask` | `POST` | Ask a currently active, identified agent in a keep/review worktree to open a PR for its work or say the worktree can go (`GET /worktrees/asks` lists answers). |
+| `/agent/status`, `/agent/skills`, `/agent/runs` | `GET` | The system agent's model and harness readiness, its skills, and its dispatches. |
+| `/agent/chat` | `GET`, `POST`, `DELETE` | Direct Ollama conversation; `POST {"message","workdir"}` sends one (the reply lands asynchronously). A harness field is rejected. |
+| `/agent/analyze` | `POST` | Build a bounded, masked local summary from stored flags, evidence, and operator actions and ask Ollama for an advisory recommendation. No command runs. |
+| `/agent/worktree` | `POST` | Ask the chat about one worktree (`{"path"}`): the question carries the checker's facts and the repository data as untrusted evidence; follow-ups keep it in context. |
+| `/agent/recommendations` | `GET`, `POST` | Review queued analysis replies; `POST {"message_id","state":"dismissed"}` dismisses a pending item. |
+| `/agent/actions` | `POST` | Start the exact local command stored on an assistant message: `{"message_id":123}`. The caller cannot supply command text. |
+| `/agent/plans` | `GET`, `POST`, `DELETE` | Plans with whether each can run now; save a reply's proposal (`{"message_id"}`) or write one. |
+| `/agent/dispatch` | `POST` | Run a plan's harness on the local Ollama: `{"plan_id","mode":"headless|terminal"}`. |
+
+Query the owner-scoped Unix socket from a terminal:
+
+```bash
+curl --unix-socket "$HOME/.config/secure-agent/daemon.sock" http://unix/status
+curl --unix-socket "$HOME/.config/secure-agent/daemon.sock" 'http://unix/flags?limit=10'
+```
+
+The browser console uses a separate token on the proxy listener. See [peer authentication](#peer-authentication--endpoint-roles) and [console access](#console-access-on-the-proxy-port) before integrating a client.
+
+## Endpoints
 
 ### 1. `GET /status`
 
@@ -473,6 +518,7 @@ A model call carries `model`, `tokens_in`, `tokens_out`, `cost_usd` and `price_c
 - `kind` *(optional, integer)*: Only events of this kind.
 - `pid` *(optional, integer)*: Only events for this pid; values `<= 0` are ignored.
 - `since` *(optional, string)*: Only events with `ts` at or after this timestamp.
+- `session_id` *(optional, string)*: Only events attributed to this session. Without `page`, the response remains the event array below.
 
 #### Request
 ```http
@@ -515,6 +561,43 @@ Host: unix
 | `model`, `provider`, `tokens_in`, `tokens_out`, `cost_usd` | Model call fields (kind `14`). A Claude model call also carries `call_id`: the API message id, one row per call. |
 | `price_class` | `priced`, `plan`, `local`, `unknown-model` or `unpriced-model`; computed when served, never stored. |
 
+#### Paged session events
+
+Use `GET /events?page=1&session_id=SESSION_ID` to read retained records in pages. This opt-in response is an envelope rather than the legacy event array. It supports ended sessions without a live process family.
+
+| Parameter | Contract |
+|---|---|
+| `page` | Required value `1` to select pagination |
+| `session_id` | Required, nonempty, at most 512 bytes |
+| `limit` | Positive integer; defaults to 200 and is capped at 200 |
+| `kind`, `pid` | Optional nonnegative integers |
+| `since` | Optional RFC 3339 timestamp, including fractional seconds; normalized to UTC |
+| `before` | Opaque `next_cursor` from a previous page; retain the same session, kind, PID and time filters |
+
+```json
+{
+  "session_id": "sess-example",
+  "rows": [
+    {
+      "id": "42",
+      "event": {
+        "kind": 0,
+        "ts": "2026-10-10T00:00:00Z",
+        "pid": 1234,
+        "session_id": "sess-example",
+        "path": "/Users/dev/project/README.md"
+      }
+    }
+  ],
+  "has_earlier": true,
+  "next_cursor": "<opaque cursor>"
+}
+```
+
+The example cursor is a placeholder; use the value returned by the daemon. Row IDs are decimal strings ordered by retained database identity descending, not occurrence time or causal order. Continue with `before=next_cursor` while `has_earlier` is true. When false, `next_cursor` is omitted. Retention can remove older records; reaching the last page does not establish complete historical coverage.
+
+Duplicate page parameters, malformed filters, invalid cursors and cursors from a different filter scope return `400`. Unavailable event data returns `503`, preserving the distinction between failed reads and an empty page.
+
 ---
 
 ### 4. `POST /kill`
@@ -550,7 +633,7 @@ Kill failed: process not found
 
 ---
 
-## 🛠️ Accessing via `curl`
+## Accessing via `curl`
 
 To query the API from the command line:
 
@@ -814,7 +897,7 @@ GET /sessions/{id}/report?format=json|md
 The markdown form:
 
 ```
-# <harness> · <repo>@<branch, or the workspace> — <started, local> → <ended | live> (<duration>)
+# harness> · <repo>@<branch, or the workspace> — <started, local> → <ended | live> (<duration>)
 Session `<id>` · <status> · identity: <confidence>
 
 ## Summary
@@ -949,7 +1032,7 @@ Read-level. CLI: `secure-agent worktrees [--state S] [--repo R] [--stale] [--ref
 
 Adds the repository containing `path` to the saved list (source `manual`, unhiding it), or hides it from reports with `"hidden": true`.
 
-```json
+```jsonl
 {"path": "/Users/me/code/app/sub/dir"}
 {"path": "/Users/me/code/app", "hidden": true}
 ```
@@ -960,7 +1043,7 @@ Adds the repository containing `path` to the saved list (source `manual`, unhidi
 
 Removes one worktree, or prunes a repository's entries for worktrees whose directory is gone.
 
-```json
+```jsonl
 {"path": "/Users/me/code/app/.worktrees/done"}
 {"path": "/Users/me/code/app/.worktrees/done", "async": true}
 {"repo": "/Users/me/code/app", "prune": true}
@@ -1055,7 +1138,7 @@ The console's Agent tab (see [SYSTEM_AGENT.md](SYSTEM_AGENT.md)). Every route is
 | `/agent/dispatch` | `POST` | `{"plan_id","mode","workdir","model"}` (the last three optional; kept on the plan) | `202 {"run":{...}}` with `status` `running` (headless; poll `/agent/runs`), `opened` (a Terminal window opened) or `manual` (`detail` holds `sh '<script>'` to run). `400` missing folder, `404` unknown plan, `409` off, harness not ready (the plan keeps the reason in `note`) or a headless run already in flight. |
 | `/agent/runs` | `GET` | — | Runs newest first: `{"id","plan_id","ts","finished_at","title","harness","mode","model","workdir","status":"running|done|failed|timeout|opened|manual","exit_code","command","output","detail"}`. |
 
-## 🔐 Peer authentication & endpoint roles
+## Peer authentication & endpoint roles
 
 Every connection is identified with macOS `LOCAL_PEEREPID` / `LOCAL_PEERCRED` (kernel-attested; not forgeable):
 
@@ -1071,7 +1154,7 @@ Every connection is identified with macOS `LOCAL_PEEREPID` / `LOCAL_PEERCRED` (k
 
 `GET /debug/pprof/` (Go runtime profiles: `heap`, `goroutine`, `profile?seconds=N`, `trace`, …) is served on the unix socket only, to the Owner role (and the pinned menubar app); agents and foreign peers get 403, and the proxy listener never serves it.
 
-## 🖥️ Web dashboard
+## Web dashboard
 
 The embedded console is served at both:
 
@@ -1082,7 +1165,7 @@ Both routes send `Content-Security-Policy`, `X-Frame-Options: DENY`, `X-Content-
 
 ---
 
-## 🛰️ Fleet oversight
+## Fleet oversight
 
 Downstream collectors consume events from many nodes three ways:
 
@@ -1140,7 +1223,7 @@ re-deriving it from raw flags.
 
 Hook-stamped `session_id` (env `CLAUDE_SESSION_ID`, or a per-run uuid) flows through `events`, `flags`, and incident evidence, so one agent run can be followed end-to-end even after PIDs recycle.
 
-## 📁 Per-project guard policies
+## Per-project guard policies
 
 ```yaml
 directory_guard:
@@ -1153,7 +1236,7 @@ Resolution per tool call: first entry whose `cwd_prefix` contains the agent's wo
 
 ---
 
-## 🧭 Operator UX endpoints
+## Operator UX endpoints
 
 ### `GET /posture`
 
@@ -1289,7 +1372,7 @@ Per-rule notification overrides, layered over the default policy
 opens are silent). Both UIs (menu bar app and web console) read this store,
 so one choice silences both surfaces.
 
-```json
+```http
 GET /notify/rules
 {"default_min_severity": 3, "overrides": {"keychain-access": false}}
 ```
@@ -1350,13 +1433,30 @@ DELETE /mute?rule=keychain-access&host=*&agent=codex
 
 ---
 
-## 📥 Reference collector (`cmd/secure-agent-collector`)
+## Additional operator routes
+
+These routes share the [peer and console authorization rules](#peer-authentication--endpoint-roles). Mutation admission does not bypass a route's agent restrictions.
+
+| Endpoint | Method | Contract |
+|---|---|---|
+| `/resources/episodes` | `GET` | Returns the 20 most recent stored resource episodes when storage is attached; otherwise returns the current resource snapshot's episodes. |
+| `/decision-scopes` | `GET` | Lists persisted decision scopes. Returns 503 when permissions cannot be read; agent peers are refused. |
+| `/decision-scopes?id=<id>` | `DELETE` | Revokes one persisted scope. Returns `{"revoked":true,"id":"<id>"}` only after saving; invalid IDs return 400, absent IDs 404, and failed persistence 503. Agent peers are refused. Revocation does not undo prior access or revoke other policies. |
+| `/allowlist/suggestions` | `GET` | Returns current allowlist suggestions without saving an exception. |
+| `/advisor/retriage` | `POST` | `{"flag_id":"<id>"}` queues a fresh advisory verdict. Returns `{"status":"ok","queued":true|false}`; cooldown may make it a no-op. An absent flag returns 404; an unavailable advisor returns 503. |
+| `/advisor/assess-host` | `POST` | `{"agent":"claude","host":"example.com"}` queues an advisory host assessment and can return the current cached `verdict`. `queued` reports whether a task was queued. It changes no enforcement. An unavailable advisor returns 503. |
+| `/stats/rollup?hours=24` | `GET` | Returns stored rollups for the requested positive hour range; defaults to 24 and caps at 744 hours. Retention still limits the underlying records. |
+| `/ui/open-fda` | `POST` | Opens the macOS Full Disk Access settings pane; it does not grant the permission. |
+| `/ui/open-config` | `POST` | Opens the configured overlay in a text editor, creating a private empty overlay if absent. Rejects a symlink or non-regular file; agent peers are refused. Opening the editor is macOS-only (501 otherwise). |
+
+## Reference collector (`cmd/secure-agent-collector`)
 
 Stdlib-only reference implementation of the consumer side. Run:
 
 ```bash
 make collector
-printf '<node-id>=<secret>\n' > secrets.txt
+umask 077
+printf '%s\n' '<node-id>=<secret>' > secrets.txt
 ./bin/secure-agent-collector -addr 127.0.0.1:9445 -store <dir> -config secrets.txt
 ```
 
@@ -1371,6 +1471,8 @@ printf '<node-id>=<secret>\n' > secrets.txt
 | `GET /healthz` | Liveness. |
 
 Secrets come from a flat file (`node_id=secret` lines) or `-secrets n1=a,n2=b`. Store: append-only JSONL per node, `0600` in a `0700` directory, replayed into the rollup at startup behind a small `envelopeLog` interface — a SQLite backend can replace it without touching rollup semantics (the production-grade trajectory: retention, TLS, alerting).
+
+Read endpoints (`/fleet`, `/fleet/rules`, `/fleet/sessions`, `/nodes/*` and `/`) require `Authorization: Bearer <token>` when `-read-token` or `SECURE_AGENT_COLLECTOR_READ_TOKEN` is configured. Without that setting they are unauthenticated; keep the default loopback bind unless read access is protected. `/healthz` remains unauthenticated. The collector serves HTTP, so remote deployments need a TLS frontend. Secrets are loaded at startup; restart after provisioning a node. See [Fleet setup](FLEET.md).
 
 The e2e smoke test provisions a collector, configures a node webhook, triggers a real flag, and asserts verified flag **and status-heartbeat** envelopes land in the store — the fleet contract cannot regress silently.
 

@@ -1,5 +1,7 @@
 # Secure Agent — Local Ollama Chat and Confirmed Actions
 
+[Documentation](README.md) · [Project home](../README.md)
+
 The console's **Agent** tab chats directly with a model on your own Ollama.
 For local work, the model may propose one exact shell command, folder and mode.
 The daemon stores that proposal as data; you review and confirm it before it
