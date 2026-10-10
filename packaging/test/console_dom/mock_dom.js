@@ -9,6 +9,13 @@
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
   let bookCleanup = () => {};
+  if (scenarios.has('attentionremodel')) {
+    const ids = scenarios.has('attentionfinal') ? ['flag-1'] : ['flag-1', 'flag-2'];
+    const items = ids.map(id => ({kind:'flag', id, priority:2, title:'Fixture attention ' + id, detail:'Recorded fixture evidence'}));
+    data['/posture'] = {...data['/posture'], needs_you:items.length, items,
+      groups:[{key:'fixture-attention',agent:'codex',items}]};
+  }
+
 
   // ---------- failure-mode simulation ----------
   // These modes reproduce the exact "trouble connecting" regressions:
@@ -337,6 +344,12 @@
     if (p === '/flags/acknowledge') {
       const ids = new Set(body.flag_ids || [body.flag_id]);
       data['/flags'] = data['/flags'].filter(f => !ids.has(f.id));
+      if (scenarios.has('attentionremodel')) {
+        const post = data['/posture'];
+        post.groups = post.groups.map(g => ({...g,items:g.items.filter(it => it.kind !== 'flag' || !ids.has(it.id))})).filter(g => g.items.length);
+        post.items = post.items.filter(it => it.kind !== 'flag' || !ids.has(it.id));
+        post.needs_you = post.items.length;
+      }
       // A pattern whose open flags were all acknowledged is served at 0
       // open without its dismiss-all, and leaves the attention queue.
       for (const pat of data['/patterns'] || []) {
@@ -629,6 +642,10 @@
       if (p === '/agent/chat' && scenarios.has('agentlatency')) {
         await new Promise(resolve => setTimeout(resolve, 30000));
       }
+      if (scenarios.has('attentionremodel') && p === '/flags/acknowledge') {
+        await new Promise(resolve => setTimeout(resolve, 600));
+        if (scenarios.has('attentionfail')) return {ok:false,status:503,text:async()=> 'Fixture write failed'};
+      }
       const out = handlePost(p, opts, String(path));
       return {
         ok: true, status: 200,
@@ -787,8 +804,23 @@
     // /costs answers by its `by` query; every /costs query lands, in order,
     // on <pre id="mock-costs">.
     if (p === '/costs') {
-      const by = new URLSearchParams(String(path).split('?')[1] || '').get('by');
+      const params = new URLSearchParams(String(path).split('?')[1] || '');
+      const by = params.get('by');
       if (by && data['/costs?by=' + by]) body = data['/costs?by=' + by];
+      if (scenarios.has('remodelusage') && body) {
+        const tz = Number(params.get('tz') || 0);
+        if (by === 'day') {
+          const last = Date.parse(body.until) + tz * 60000;
+          body = {...body, rows:body.rows.map((row,i) => ({...row,key:new Date(last - (body.rows.length - 1 - i) * 86400000).toISOString().slice(0,10)}))};
+          data['/costs?by=day'] = body;
+        } else if (params.get('until') && params.get('since')) {
+          const day = new Date(Date.parse(params.get('since')) + tz * 60000).toISOString().slice(0,10);
+          const row = data['/costs?by=day'].rows.find(r => r.key === day);
+          const total = row ? {...row,key:''} : {key:'',calls:0,cost_usd:0};
+          body = {...body,by:'repo',since:params.get('since'),until:params.get('until'),total,
+            rows:row ? [{...row,key:'fixture-repo'}] : []};
+        }
+      }
       costLog.push(String(path).split('?')[1] || '');
       stamp('mock-costs', costLog.join('\n'));
       // spendcachedemo: the first two rounds (tile + card each) answer from
@@ -2796,4 +2828,68 @@
       }, 500);
     }, 4000);
   }
+
+  // These probes exercise the real console DOM; timers are bounded once per fixture.
+  if (scenarios.has('attentionremodel')) setTimeout(() => {
+    const checks = {};
+    document.querySelector('#attention-list [data-action="select-attention"][data-need-id="flag-1"]')?.click();
+    checks.initial = window.SA.attentionKey === 'flag:flag-1';
+    checks.evidenceOpen = !!document.querySelector('#drawer-body details.body-evidence[open]');
+    const dialog = document.getElementById('drawer');
+    const label = document.getElementById(dialog.getAttribute('aria-labelledby'));
+    checks.named = !!label && dialog.contains(label) && !!label.textContent.trim();
+    checks.modal = matchMedia('(min-width: 1180px)').matches || (document.getElementById('drawer').getAttribute('aria-modal') === 'true' && document.querySelector('.app > main')?.inert);
+    if (scenarios.has('layoutwide')) window.openResourcePolicyEditor();
+    const layoutProbe = () => {
+      const root = document.getElementById('drawer');
+      const panel = root.querySelector('.drawer-panel');
+      const main = document.querySelector('.app > main');
+      if (root.hidden || !main || !panel) return;
+      const rect = node => {
+        const b = node.getBoundingClientRect();
+        return {left:b.left,top:b.top,right:b.right,bottom:b.bottom,width:b.width,height:b.height};
+      };
+      const panelRect = rect(panel), mainRect = rect(main);
+      const modal = root.getAttribute('aria-modal') === 'true';
+      const title = document.getElementById(root.getAttribute('aria-labelledby'));
+      stamp('remodel-layout-probe', JSON.stringify({width:document.documentElement.clientWidth,innerWidth,media1180:matchMedia('(min-width: 1180px)').matches,media1340:matchMedia('(min-width: 1340px)').matches,wide:root.classList.contains('resource-policy'),
+        modal,inert:main.inert,drawer:panelRect,main:mainRect,overflow:document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+        named:!!title && root.contains(title) && !!title.textContent.trim(),
+        contentFit:modal ? !!main.inert : mainRect.right <= panelRect.left + 1}));
+    };
+    const recordLayout = () => requestAnimationFrame(layoutProbe);
+    window.addEventListener('resize', recordLayout);
+    matchMedia('(min-width: 1180px)').addEventListener('change', recordLayout);
+    matchMedia('(min-width: 1340px)').addEventListener('change', recordLayout);
+    layoutProbe();
+    if (!scenarios.has('layoutwide')) document.querySelector('#drawer-foot [data-action="dismiss-flag"]')?.click();
+    setTimeout(() => {
+      checks.pendingRetained = scenarios.has('layoutwide') || window.SA.attentionKey === 'flag:flag-1';
+      if (scenarios.has('attentionrace')) document.querySelector('#attention-list [data-action="select-attention"][data-need-id="flag-2"]')?.click();
+    }, 100);
+    setTimeout(() => {
+      checks.final = scenarios.has('layoutwide') ? document.getElementById('drawer').classList.contains('resource-policy') : scenarios.has('attentionfail') ? window.SA.attentionKey === 'flag:flag-1'
+        : scenarios.has('attentionfinal') ? !window.SA.attentionKey && !document.querySelector('#drawer-foot [data-action]') && document.getElementById('drawer-body').textContent.includes('No items need your attention')
+        : window.SA.attentionKey === 'flag:flag-2';
+      checks.focus = document.activeElement.id === 'btn-drawer-close' || scenarios.has('attentionfail') || scenarios.has('attentionrace');
+      stamp('attention-remodel-probe', JSON.stringify(checks));
+      layoutProbe();
+    }, 1300);
+  }, 1200);
+  if (scenarios.has('remodelusage')) setTimeout(() => {
+    const checks = {};
+    const day = document.querySelector('[data-action="select-spend-day"]');
+    day?.focus(); day?.click();
+    setTimeout(() => {
+      const report = window.SA.t.spendDayReport;
+      const chartRow = window.SA.t.costsCard?.rows.find(r => r.key === window.SA.t.spendDay);
+      checks.selected = !!day && window.SA.t.spendDay === day.dataset.day;
+      checks.matches = !!report && !!chartRow && report.total.cost_usd === chartRow.cost_usd && report.total.calls === chartRow.calls;
+      checks.focus = document.activeElement.dataset.day === day?.dataset.day;
+      checks.detail = !!document.querySelector('.spend-day-inspector [data-action="reset-spend-day"]');
+      document.querySelector('[data-action="reset-spend-day"]')?.click();
+      checks.reset = !window.SA.t.spendDay && !document.querySelector('[data-action="select-spend-day"][aria-pressed="true"]');
+      stamp('usage-remodel-probe', JSON.stringify(checks));
+    }, 500);
+  }, 1500);
 })();

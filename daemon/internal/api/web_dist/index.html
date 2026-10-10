@@ -94,7 +94,7 @@
           </div>
         </div>
         <div class="notify-wrap">
-          <button class="btn btn-ghost btn-icon" id="btn-notify" data-action="goto-tab" data-tab="policy" title="Notification preferences (Policy)">
+          <button class="btn btn-ghost btn-icon" id="btn-notify" data-action="goto-protection" data-protection-view="rules" title="Notification preferences (Protection)">
             <svg class="icon"><use href="#i-bell"/></svg>
           </button>
         </div>
@@ -170,10 +170,7 @@
       </div>
     </section>
 
-    <!-- Primary navigation, by question: "what needs me?" (Home), "what ran,
-         and what is it costing?" (Sessions), "where is traffic going?"
-         (Egress), "what is left on this machine?" (System), "what have I
-         decided?" (Policy). -->
+    <!-- Primary navigation groups observed traffic and its rules under Protection. -->
     <!-- The tab bar stays on screen while the page scrolls: once stuck it
          carries the posture pill (back to top), and the scope bar under it
          says when Events, Flags and Incidents are narrowed to one session. -->
@@ -188,15 +185,13 @@
         <svg class="icon"><use href="#i-agent"/></svg><span>Sessions</span>
         <span class="tab-badge" id="tab-badge-sessions" hidden></span>
       </button>
-      <button class="tab-btn" data-tab="egress" role="tab" aria-selected="false" aria-controls="tab-egress">
-        <svg class="icon"><use href="#i-shield"/></svg><span>Egress</span>
+      <button class="tab-btn" data-tab="protection" role="tab" aria-selected="false" aria-controls="tab-egress tab-policy">
+        <svg class="icon"><use href="#i-shield"/></svg><span>Protection</span>
       </button>
       <button class="tab-btn" data-tab="system" role="tab" aria-selected="false" aria-controls="tab-system">
         <svg class="icon"><use href="#i-server"/></svg><span>System</span>
       </button>
-      <button class="tab-btn" data-tab="policy" role="tab" aria-selected="false" aria-controls="tab-policy">
-        <svg class="icon"><use href="#i-doc"/></svg><span>Policy</span>
-      </button>
+
       <button class="tab-btn" data-tab="agent" role="tab" aria-selected="false" aria-controls="tab-agent">
         <svg class="icon"><use href="#i-chat"/></svg><span>Agent</span>
       </button>
@@ -214,11 +209,7 @@
           <p class="report-health" data-reports="snapshot|guard decisions" role="status" hidden></p>
           <ol class="needs-list" id="attention-list"></ol>
         </section>
-        <section class="panel session-daily-panel" aria-labelledby="session-daily-title">
-          <div class="panel-head"><h2 id="session-daily-title">Your sessions</h2><button type="button" class="btn btn-ghost btn-sm" data-action="goto-tab" data-tab="sessions">View all sessions</button></div>
-          <p class="report-health" data-reports="sessions" role="status" hidden></p>
-          <div class="panel-body" id="session-daily"><p>Loading sessions…</p></div>
-        </section>
+
         <section class="panel coverage-panel" id="coverage-center" hidden>
           <div class="panel-head">
             <h2>Monitoring gap</h2>
@@ -227,33 +218,40 @@
           <p class="report-health" data-reports="snapshot" role="status" hidden></p>
           <div class="panel-body" id="coverage-list"></div>
         </section>
-        <details class="home-group" id="home-spend" data-group="spend">
-          <summary><svg class="icon"><use href="#i-activity"/></svg>Spend detail</summary>
-        <section class="panel chart-panel">
-          <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-activity"/></svg>Spend</h2>
-            <div class="spend-controls">
-              <span id="spend-cache" class="spend-cache" role="status" hidden></span>
-              <select id="spend-by" class="select select-sm" aria-label="Group spend by">
-                <option value="repo">By repo</option>
-                <option value="provider">By provider</option>
-                <option value="model">By model</option>
-                <option value="day">By day</option>
-              </select>
-              <select id="spend-since" class="select select-sm" aria-label="Spend window">
-                <option value="24h">24h</option>
-                <option value="7d">7d</option>
-                <option value="30d">30d</option>
-              </select>
-            </div>
-          </div>
-          <div class="panel-body">
-            <div id="spend-card" class="spend-card">
-              <div class="empty"><span>Loading spend…</span></div>
-            </div>
-          </div>
-        </section>
-        </details>
+        <div class="home-support">
+          <section class="panel session-daily-panel" aria-labelledby="session-daily-title">
+            <div class="panel-head"><h2 id="session-daily-title">Your sessions</h2><button type="button" class="btn btn-ghost btn-sm" data-action="goto-tab" data-tab="sessions">View all sessions</button></div>
+            <p class="report-health" data-reports="sessions" role="status" hidden></p>
+            <div class="panel-body" id="session-daily"><p>Loading sessions…</p></div>
+          </section>
+          <details class="home-group" id="home-spend" data-group="spend" open>
+            <summary><svg class="icon"><use href="#i-activity"/></svg>Usage</summary>
+            <section class="panel chart-panel">
+              <div class="panel-head">
+                <h2><svg class="icon"><use href="#i-activity"/></svg>Daily usage</h2>
+                <div class="spend-controls">
+                  <span id="spend-cache" class="spend-cache" role="status" hidden></span>
+                  <select id="spend-by" class="select select-sm" aria-label="Group spend by">
+                    <option value="repo">By repo</option>
+                    <option value="provider">By provider</option>
+                    <option value="model">By model</option>
+                    <option value="day">By day</option>
+                  </select>
+                  <select id="spend-since" class="select select-sm" aria-label="Spend window">
+                    <option value="24h">24h</option>
+                    <option value="7d">7d</option>
+                    <option value="30d">30d</option>
+                  </select>
+                </div>
+              </div>
+              <div class="panel-body">
+                <div id="spend-card" class="spend-card">
+                  <div class="empty"><span>Loading spend…</span></div>
+                </div>
+              </div>
+            </section>
+          </details>
+        </div>
 
         <details class="home-group" id="home-findings" data-group="findings">
           <summary><svg class="icon"><use href="#i-alert"/></svg>Findings history<span class="home-group-fact" id="home-findings-fact"></span></summary>
@@ -487,58 +485,53 @@
         </div>
       </div>
 
-      <!-- Egress: "where is traffic going, and what must never leave?" -->
+      <nav class="subtabs protection-nav" id="protection-nav" role="tablist" aria-label="Protection views" hidden>
+        <button type="button" class="subtab-btn active" id="protection-tab-traffic" data-action="goto-protection" data-protection-view="traffic" role="tab" aria-selected="true" aria-controls="protection-traffic">Traffic</button>
+        <button type="button" class="subtab-btn" id="protection-tab-rules" data-action="goto-protection" data-protection-view="rules" role="tab" aria-selected="false" aria-controls="protection-rules">Rules &amp; permissions</button>
+        <button type="button" class="subtab-btn" id="protection-tab-sources" data-action="goto-protection" data-protection-view="sources" role="tab" aria-selected="false" aria-controls="protection-sources">Secret sources</button>
+        <button type="button" class="subtab-btn" id="protection-tab-audit" data-action="goto-protection" data-protection-view="audit" role="tab" aria-selected="false" aria-controls="protection-audit">Audit</button>
+      </nav>
+
+      <!-- Protection retains the existing renderer targets and legacy routes. -->
       <div class="tabpanel" id="tab-egress" role="tabpanel" hidden>
-        <section class="panel" id="recurring-egress-panel">
-          <div class="panel-head">
-            <div><h2><svg class="icon"><use href="#i-history"/></svg>Recurring activity</h2><p>Observed connection schedules and their possible purpose.</p></div>
-            <span class="badge" id="badge-recurring-egress">0</span>
-          </div>
-          <p class="report-health" data-reports="recurring egress" role="status" hidden></p>
-          <div class="panel-body" id="recurring-egress-container">
-            <div class="empty"><span>No recurring connection pattern observed yet</span></div>
-          </div>
-        </section>
-        <section class="panel" id="endpoints-panel">
-          <div class="panel-head">
-            <div><h2><svg class="icon"><use href="#i-globe"/></svg><span id="endpoints-title">Connection coverage · last 24 h</span></h2><p id="endpoints-summary"></p></div>
-          </div>
-          <p class="report-health" data-reports="uninspected egress" role="status" hidden></p>
-          <div class="panel-body" id="endpoints-container">
-            <div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No uninspected endpoints in the last 24h — the blind spot is closed</span></div>
-          </div>
-        </section>
-        <div class="grid">
-          <div class="col">
-            <section class="panel" id="firewall-panel">
-              <div class="panel-head">
-                <h2><svg class="icon"><use href="#i-shield"/></svg>Egress firewall</h2>
-                <span class="badge" id="badge-firewall-mode">monitor</span>
+        <div class="protection-view" id="protection-traffic" data-protection-section="traffic" role="tabpanel" aria-labelledby="protection-tab-traffic">
+          <section class="panel" id="recurring-egress-panel">
+            <div class="panel-head">
+              <div><h2><svg class="icon"><use href="#i-history"/></svg>Recurring activity</h2><p>Observed connection schedules and their possible purpose.</p></div>
+              <span class="badge" id="badge-recurring-egress">0</span>
+            </div>
+            <p class="report-health" data-reports="recurring egress" role="status" hidden></p>
+            <div class="panel-body" id="recurring-egress-container">
+              <div class="empty"><span>No recurring connection pattern observed yet</span></div>
+            </div>
+          </section>
+          <section class="panel" id="endpoints-panel">
+            <div class="panel-head">
+              <div><h2><svg class="icon"><use href="#i-globe"/></svg><span id="endpoints-title">Connection coverage · last 24 h</span></h2><p id="endpoints-summary"></p></div>
+            </div>
+            <p class="report-health" data-reports="uninspected egress" role="status" hidden></p>
+            <div class="panel-body" id="endpoints-container">
+              <div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No uninspected endpoints in the last 24h — the blind spot is closed</span></div>
+            </div>
+          </section>
+        </div>
+        <div class="protection-view" id="protection-sources" data-protection-section="sources" role="tabpanel" aria-labelledby="protection-tab-sources" hidden>
+          <section class="panel">
+            <div class="panel-head">
+              <h2><svg class="icon"><use href="#i-key"/></svg>Secret sources</h2>
+              <span class="badge" id="badge-sources-count">0</span>
+            </div>
+            <div class="panel-body" id="sources-container">
+              <div class="source-add">
+                <input type="text" id="source-input" class="input" placeholder="~/.aws/credentials, ~/.config/gh/hosts.yml…" autocomplete="off" spellcheck="false">
+                <button class="btn btn-primary" id="btn-add-source"><svg class="icon"><use href="#i-arrow"/></svg><span>Add</span></button>
               </div>
-              <p class="report-health" data-reports="snapshot|allowlist" role="status" hidden></p>
-              <div class="panel-body" id="firewall-container">
-                <div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>
+              <p class="report-health" data-reports="firewall sources" role="status" hidden></p>
+              <div id="sources-list">
+                <div class="empty"><svg class="icon"><use href="#i-key"/></svg><span>No secret files watched yet — add the credential files whose keys must never leave</span></div>
               </div>
-            </section>
-          </div>
-          <div class="col">
-            <section class="panel">
-              <div class="panel-head">
-                <h2><svg class="icon"><use href="#i-key"/></svg>Secret sources</h2>
-                <span class="badge" id="badge-sources-count">0</span>
-              </div>
-              <div class="panel-body" id="sources-container">
-                <div class="source-add">
-                  <input type="text" id="source-input" class="input" placeholder="~/.aws/credentials, ~/.config/gh/hosts.yml…" autocomplete="off" spellcheck="false">
-                  <button class="btn btn-primary" id="btn-add-source"><svg class="icon"><use href="#i-arrow"/></svg><span>Add</span></button>
-                </div>
-                <p class="report-health" data-reports="firewall sources" role="status" hidden></p>
-                <div id="sources-list">
-                  <div class="empty"><svg class="icon"><use href="#i-key"/></svg><span>No secret files watched yet — add the credential files whose keys must never leave</span></div>
-                </div>
-              </div>
-            </section>
-          </div>
+            </div>
+          </section>
         </div>
       </div>
 
@@ -588,84 +581,96 @@
         </section>
       </div>
 
-      <!-- Policy: what the operator has decided — notification rules, guard
-           decisions, file exceptions, muted flag classes, and the audit of
-           every change. The lists are read-only here. -->
+      <!-- Protection rules and audit retain their existing renderer targets. -->
       <div class="tabpanel" id="tab-policy" role="tabpanel" hidden>
-        <section class="panel" id="expected-egress-panel">
-          <div class="panel-head"><h2><svg class="icon"><use href="#i-globe"/></svg>Expected connections</h2><span class="badge" id="badge-expected-egress">0</span></div>
-          <p class="report-health" data-reports="expected egress" role="status" hidden></p>
-          <div class="panel-body" id="expected-egress-container"><div class="empty"><span>No expected connections saved</span></div></div>
-        </section>
-        <section class="panel" id="notify-pop">
-          <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-bell"/></svg>Notifications</h2>
+        <div class="protection-view" id="protection-rules" data-protection-section="rules" role="tabpanel" aria-labelledby="protection-tab-rules" hidden>
+          <section class="panel" id="firewall-panel">
+            <div class="panel-head">
+              <h2><svg class="icon"><use href="#i-shield"/></svg>Egress firewall</h2>
+              <span class="badge" id="badge-firewall-mode">monitor</span>
+            </div>
+            <p class="report-health" data-reports="snapshot|allowlist" role="status" hidden></p>
+            <div class="panel-body" id="firewall-container">
+              <div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>
+            </div>
+          </section>
+          <section class="panel" id="expected-egress-panel">
+            <div class="panel-head"><h2><svg class="icon"><use href="#i-globe"/></svg>Expected connections</h2><span class="badge" id="badge-expected-egress">0</span></div>
+            <p class="report-health" data-reports="expected egress" role="status" hidden></p>
+            <div class="panel-body" id="expected-egress-container"><div class="empty"><span>No expected connections saved</span></div></div>
+          </section>
+          <div class="grid protection-rule-grid">
+            <div class="col">
+              <section class="panel" id="policy-guard-panel">
+                <div class="panel-head">
+                  <h2><svg class="icon"><use href="#i-shield"/></svg>Guard decisions</h2>
+                  <span class="badge" id="badge-guard-rules">0</span>
+                  <button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh" title="Reload the policy lists"><svg class="icon"><use href="#i-refresh"/></svg><span>Refresh</span></button>
+                </div>
+                <div class="panel-body" id="policy-guard-rules">
+                  <div class="loading">Loading guard decisions…</div>
+                </div>
+              </section>
+              <section class="panel" id="policy-path-panel">
+                <div class="panel-head">
+                  <h2><svg class="icon"><use href="#i-doc"/></svg>File exceptions</h2>
+                  <span class="badge" id="badge-path-allows">0</span>
+                </div>
+                <div class="panel-body" id="policy-path-allows">
+                  <div class="loading">Loading file exceptions…</div>
+                </div>
+              </section>
+              <section class="panel" id="policy-mute-panel">
+                <div class="panel-head">
+                  <h2><svg class="icon"><use href="#i-bell"/></svg>Muted flag classes</h2>
+                  <span class="badge" id="badge-mutes">0</span>
+                </div>
+                <div class="panel-body" id="policy-mutes">
+                  <div class="loading">Loading muted flag classes…</div>
+                </div>
+              </section>
+              <section class="panel" id="policy-expected-panel">
+                <div class="panel-head">
+                  <h2><svg class="icon"><use href="#i-key"/></svg>Expected secret reads</h2>
+                  <span class="badge" id="badge-expected">0</span>
+                </div>
+                <div class="panel-body" id="policy-expected">
+                  <div class="loading">Loading expected secret reads…</div>
+                </div>
+              </section>
+              <section class="panel">
+                <div class="panel-head"><h2>Scoped permissions</h2><span class="badge" id="badge-scopes">0</span></div>
+                <div class="panel-body" id="policy-scopes"><div class="loading">Loading permissions…</div></div>
+              </section>
+            </div>
+            <div class="col">
+              <section class="panel" id="notify-pop">
+                <div class="panel-head">
+                  <h2><svg class="icon"><use href="#i-bell"/></svg>Notifications</h2>
+                </div>
+                <div class="panel-body">
+                  <div class="notify-pop-sub">Default: only critical flags notify. Strongest rule first: a workspace scope beats a per-rule override, which beats the default. Applies to the menu bar app and this console.</div>
+                  <p class="report-health" data-reports="notification rules" role="status" hidden></p>
+                  <div id="notify-rules-list"></div>
+                  <div class="notify-pop-head notify-scope-head">Per-workspace scopes</div>
+                  <div class="notify-pop-sub">Page me for a rule only in one repo (or silence it there), matched by path prefix. Example: always notify for <code>proxy-secret-leak</code> under <code>/Users/me/work/prod</code>.</div>
+                  <div id="notify-scopes-list"></div>
+                </div>
+              </section>
+            </div>
           </div>
-          <div class="panel-body">
-            <div class="notify-pop-sub">Default: only critical flags notify. Strongest rule first: a workspace scope beats a per-rule override, which beats the default. Applies to the menu bar app and this console.</div>
-            <p class="report-health" data-reports="notification rules" role="status" hidden></p>
-            <div id="notify-rules-list"></div>
-            <div class="notify-pop-head notify-scope-head">Per-workspace scopes</div>
-            <div class="notify-pop-sub">Page me for a rule only in one repo (or silence it there), matched by path prefix. Example: always notify for <code>proxy-secret-leak</code> under <code>/Users/me/work/prod</code>.</div>
-            <div id="notify-scopes-list"></div>
-          </div>
-        </section>
-        <div class="grid">
-          <div class="col">
-            <section class="panel" id="policy-guard-panel">
-              <div class="panel-head">
-                <h2><svg class="icon"><use href="#i-shield"/></svg>Guard decisions</h2>
-                <span class="badge" id="badge-guard-rules">0</span>
-                <button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh" title="Reload the policy lists"><svg class="icon"><use href="#i-refresh"/></svg><span>Refresh</span></button>
-              </div>
-              <div class="panel-body" id="policy-guard-rules">
-                <div class="loading">Loading guard decisions…</div>
-              </div>
-            </section>
-            <section class="panel" id="policy-path-panel">
-              <div class="panel-head">
-                <h2><svg class="icon"><use href="#i-doc"/></svg>File exceptions</h2>
-                <span class="badge" id="badge-path-allows">0</span>
-              </div>
-              <div class="panel-body" id="policy-path-allows">
-                <div class="loading">Loading file exceptions…</div>
-              </div>
-            </section>
-            <section class="panel" id="policy-mute-panel">
-              <div class="panel-head">
-                <h2><svg class="icon"><use href="#i-bell"/></svg>Muted flag classes</h2>
-                <span class="badge" id="badge-mutes">0</span>
-              </div>
-              <div class="panel-body" id="policy-mutes">
-                <div class="loading">Loading muted flag classes…</div>
-              </div>
-            </section>
-            <section class="panel" id="policy-expected-panel">
-              <div class="panel-head">
-                <h2><svg class="icon"><use href="#i-key"/></svg>Expected secret reads</h2>
-                <span class="badge" id="badge-expected">0</span>
-              </div>
-              <div class="panel-body" id="policy-expected">
-                <div class="loading">Loading expected secret reads…</div>
-              </div>
-            </section>
-			<section class="panel">
-			  <div class="panel-head"><h2>Scoped permissions</h2><span class="badge" id="badge-scopes">0</span></div>
-			  <div class="panel-body" id="policy-scopes"><div class="loading">Loading permissions…</div></div>
-			</section>
-          </div>
-          <div class="col">
-            <section class="panel" id="audit-panel">
-              <div class="panel-head">
-                <h2><svg class="icon"><use href="#i-history"/></svg>Policy audit</h2>
-                <span class="badge" id="badge-audit-count">0</span>
-              </div>
-              <p class="report-health" data-reports="audit" role="status" hidden></p>
-              <div class="panel-body timeline" id="audit-container">
-                <div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>No policy changes yet — promotions and secret registrations are logged here</span></div>
-              </div>
-            </section>
-          </div>
+        </div>
+        <div class="protection-view" id="protection-audit" data-protection-section="audit" role="tabpanel" aria-labelledby="protection-tab-audit" hidden>
+          <section class="panel" id="audit-panel">
+            <div class="panel-head">
+              <h2><svg class="icon"><use href="#i-history"/></svg>Policy audit</h2>
+              <span class="badge" id="badge-audit-count">0</span>
+            </div>
+            <p class="report-health" data-reports="audit" role="status" hidden></p>
+            <div class="panel-body timeline" id="audit-container">
+              <div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>No policy changes yet — promotions and secret registrations are logged here</span></div>
+            </div>
+          </section>
         </div>
       </div>
 
@@ -759,18 +764,14 @@
       </div>
     </main>
   </div>
-  <!-- Right-side docked inspector. NOT a modal: no scrim, no dimming, no
-       focus trap — the page behind stays fully visible and interactive, so it
-       never "changes the foreground/background". Plain DOM styled only from
-       our tokens, so it can never disagree with the page theme the way a
-       native <dialog>'s system-scheme backdrop did. -->
+  <!-- Inspector docks when space permits; smaller viewports use a modal detail pane. -->
   <div id="drawer" class="drawer" hidden>
     <aside class="drawer-panel" role="complementary" aria-labelledby="drawer-title">
       <header class="drawer-head">
         <h3 id="drawer-title"><svg class="icon"><use href="#i-doc"/></svg><span id="drawer-title-text">Details</span></h3>
         <div class="drawer-actions">
           <button class="btn btn-ghost" id="btn-drawer-copy" hidden><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button>
-          <button class="btn btn-icon" id="btn-drawer-close" title="Close"><svg class="icon"><use href="#i-close"/></svg></button>
+          <button type="button" class="btn btn-ghost" id="btn-drawer-close" title="Close details" aria-label="Close details"><svg class="icon"><use href="#i-close"/></svg><span>Close</span></button>
         </div>
       </header>
       <div class="drawer-body" id="drawer-body"></div>

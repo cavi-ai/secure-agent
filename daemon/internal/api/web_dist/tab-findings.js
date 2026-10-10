@@ -400,13 +400,11 @@ function needRowHTML(v, open, nowMs) {
     + `${v.body ? '<svg class="icon need-chev" aria-hidden="true"><use href="#i-arrow"/></svg>' : ''}</span>`;
   const inner = `${harnessChipHTML(v.agent)}<span class="need-what" title="${escapeHTML(v.what)}">${escapeHTML(v.what)}</span>`
     + `<span class="need-why">${escapeHTML(v.why)}</span>${meta}`;
-  const head = v.body
-    ? `<button type="button" class="need-head" data-action="toggle-row" data-key="need:${escapeHTML(v.key)}" aria-expanded="${open}" aria-controls="${dom}">${inner}</button>`
-    : `<div class="need-head">${inner}</div>`;
-  return `<li class="need ${v.sev}${open ? ' open' : ''}" data-kind="${escapeHTML(v.kind)}">${head}`
-    + `<div class="need-actions">${actionBarHTML(v.items)}</div>`
-    + (v.body ? `<div class="need-detail" id="${dom}"${open ? '' : ' hidden'}>${open ? v.body() : ''}</div>` : '')
-    + '</li>';
+  const [kind, ...id] = v.key.split(':');
+  const selected = !!v.selected;
+  const head = `<button type="button" class="need-head" data-action="select-attention" data-need-kind="${escapeHTML(kind)}" data-need-id="${escapeHTML(id.join(':'))}" aria-pressed="${selected}">${inner}</button>`;
+  return `<li class="need need-row ${v.sev}${selected ? ' is-selected' : ''}" data-kind="${escapeHTML(v.kind)}" data-need-key="${escapeHTML(v.key)}">${head}`
+    + `<div class="need-actions">${actionBarHTML(v.items)}</div></li>`;
 }
 
 function renderAttention() {
@@ -415,6 +413,7 @@ function renderAttention() {
   const list = document.getElementById('attention-list');
   const badge = document.getElementById('badge-attention-count');
   if (!list) return;
+  SA.reconcileAttention?.();
   renderCoverage();
   // The daemon serves the queue on /posture; needs_you counts its items, the
   // same set the menubar shows.
@@ -423,7 +422,7 @@ function renderAttention() {
   SA.setTabBadge('home', count);
   if (panel) panel.hidden = count === 0;
   const ctx = homeContext(SA);
-  const views = needsItems(SA.t.posture).map(it => needView(it, ctx));
+  const views = needsItems(SA.t.posture).map(it => ({ ...needView(it, ctx), selected: SA.attentionKey === `${it.kind}:${it.id}` }));
   patchList(list, views, { key: v => v.key, html: v => needRowHTML(v, SA.expanded.has('need:' + v.key), ctx.now) });
 }
 

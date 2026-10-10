@@ -610,8 +610,8 @@ function renderSpend() {
     return;
   }
   const rows = Array.isArray(card.rows) ? card.rows : [];
-  if (!rows.some(row => Number(row.cost_usd) > 0 || Number(row.plan_calls) > 0)) {
-    body.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No priced model calls in this window.</span></div>`;
+  if (!rows.some(row => Number(row.calls) > 0 || Number(row.cost_usd) > 0)) {
+    body.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No model calls in this window.</span></div>`;
     return;
   }
   // Keyed through patchList so the slow refresh keeps unchanged rows and
@@ -619,14 +619,91 @@ function renderSpend() {
   const day = card.by === 'day';
   const cls = day ? 'spend-bars' : 'spend-list';
   let wrap = body.firstElementChild;
-  if (!wrap || body.childElementCount !== 1 || wrap.className !== cls) {
-    body.innerHTML = `<div class="${cls}"></div>`;
+  if (!wrap || body.childElementCount !== (day ? 2 : 1) || wrap.className !== cls) {
+    body.innerHTML = `<div class="${cls}"></div>${day ? '<div class="spend-day-inspector"></div>' : ''}`;
     wrap = body.firstElementChild;
   }
   const left = wrap.scrollLeft;
-  const items = day ? spendDayItems(rows) : spendListItems(rows, 8, { by: card.by, expanded: SA.expanded });
+  const focusedDay = wrap.contains(document.activeElement) ? document.activeElement.dataset.day : null;
+  const items = day ? spendDayItems(rows, SA.t.spendDay) : spendListItems(rows, 8, { by: card.by, expanded: SA.expanded });
   patchList(wrap, items, { key: i => i.key, html: i => i.html });
+  if (focusedDay) Array.from(wrap.children).find(node => node.dataset.day === focusedDay)?.focus({ preventScroll: true });
   wrap.scrollLeft = left;
+  if (day) {
+    const inspector = wrap.nextElementSibling;
+    const selected = rows.find(row => row.key === SA.t.spendDay);
+    const html = selected ? spendDayDetailHTML(selected, card, SA.t.costsCardTZ, SA.t.spendDayReport, SA.t.spendDayRefresh, SA.expanded) : '';
+    if (inspector._saMarkup !== html) {
+      const resetFocused = inspector.contains(document.activeElement) && document.activeElement.dataset.action === 'reset-spend-day';
+      inspector.innerHTML = html;
+      inspector._saMarkup = html;
+      if (resetFocused) inspector.querySelector('[data-action="reset-spend-day"]')?.focus({ preventScroll: true });
+    }
+  }
+}
+
+// Match the server's fixed-offset day buckets, including truncated boundary
+// days. Do not use local Date midnights: across DST they differ from /costs.
+function spendDayWindow(day, report, tzMinutes) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day || '')) || !report) return null;
+  const midnight = Date.parse(`${day}T00:00:00Z`);
+  if (!Number.isFinite(midnight) || new Date(midnight).toISOString().slice(0, 10) !== day) return null;
+  const tz = Number(tzMinutes);
+  if (tzMinutes === undefined || tzMinutes === null || !Number.isInteger(tz) || Math.abs(tz) > 840) return null;
+  const start = midnight - tz * 60000;
+  const end = start + 86400000;
+  const since = Math.max(start, Date.parse(report.since));
+  const until = Math.min(end, Date.parse(report.until));
+  if (!Number.isFinite(since) || !Number.isFinite(until) || since >= until) return null;
+  return { since: new Date(since).toISOString(), until: new Date(until).toISOString(), tz, partial: since !== start || until !== end };
+}
+
+function spendOffsetLabel(tz) {
+  const minutes = Math.abs(tz);
+  return `UTC${tz < 0 ? '−' : '+'}${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+}
+
+function spendDayRangeText(day, range) {
+  if (!range) return 'Time range unavailable';
+  if (!range.partial) return `Day grouped at ${spendOffsetLabel(range.tz)}`;
+  const clock = timestamp => {
+    const local = new Date(Date.parse(timestamp) + range.tz * 60000).toISOString();
+    // The exclusive end at next midnight is the end of the selected day.
+    if (local.slice(0, 10) !== day && local.slice(11, 19) === '00:00:00') return '24:00';
+    const time = local.slice(11, 19);
+    return time.endsWith(':00') ? time.slice(0, 5) : time;
+  };
+  return `Partial day · ${clock(range.since)}–${clock(range.until)} · ${spendOffsetLabel(range.tz)}`;
+}
+
+function spendDayDetailHTML(row, card, tz, report, state, expanded) {
+  state = state || {};
+  const range = spendDayWindow(row.key, card, tz);
+  // Never show a saved breakdown belonging to another day or report window.
+  const matching = range && report && Date.parse(report.since) === Date.parse(range.since)
+    && Date.parse(report.until) === Date.parse(range.until) && report.by === 'repo';
+  const available = matching && (!report.refreshing || report.generated_at || Number(report.total && report.total.calls));
+  const status = !range ? 'Day breakdown unavailable: chart time range is missing.'
+    : state.error ? `Day breakdown unavailable: ${state.error}`
+    : state.delayed ? (available ? 'Refresh delayed · showing saved breakdown' : 'Day breakdown unavailable · refresh delayed')
+    : state.loading || (matching && report.refreshing) ? (available ? spendCacheText([report]) || 'Refreshing day breakdown…' : 'Loading day breakdown…')
+    : !available ? 'Day breakdown unavailable.' : '';
+  const rows = available && Array.isArray(report.rows) ? report.rows : [];
+  const breakdown = available ? `<h4>By repository</h4><div class="spend-list">${spendListItems(rows, 8, { by: 'repo', expanded }).map(item => item.html).join('') || '<p>No model calls recorded for this day.</p>'}</div>` : '';
+  return `<section class="spend-day-detail" aria-label="Selected day usage">
+    <div class="spend-day-detail-head"><h3>${escapeHTML(row.key)}</h3><button type="button" class="btn btn-ghost btn-sm" data-action="reset-spend-day">Clear selection</button></div>
+    <p class="spend-day-range">${escapeHTML(spendDayRangeText(row.key, range))}</p>
+    <p class="spend-day-summary"><strong>${escapeHTML(spendRowCost(row))}</strong> · ${escapeHTML(spendHintText(row) || '0 calls')}${Number(row.local_calls) ? ` · ${Number(row.local_calls)} local` : ''}</p>
+    ${status ? `<p class="spend-day-status" role="status">${escapeHTML(status)}</p>` : ''}${breakdown}
+  </section>`;
+}
+
+function spendRowCost(row, compact) {
+  const calls = Number(row.calls) || 0;
+  if (calls && Number(row.plan_calls) === calls) return 'plan';
+  if (!Number(row.cost_usd) && calls && Number(row.unpriced_calls) === calls) return 'unpriced';
+  if (!Number(row.cost_usd) && calls && Number(row.local_calls) === calls) return 'local';
+  return compact ? fmtUSDCompact(row.cost_usd) : fmtUSD(row.cost_usd);
 }
 
 // spendUpdating: whether a /costs report is shown while the daemon
@@ -708,14 +785,14 @@ function spendListItems(rows, n, opts) {
   const list = rows || [];
   const row = r => {
     const calls = Number(r.calls) || 0;
-    const onPlan = calls > 0 && Number(r.plan_calls) === calls;
     const unknown = opts.by === 'provider' && r.key === '(unknown)';
     return `<div class="spend-row">
       <span class="spend-key" title="${escapeHTML(r.key)}">${escapeHTML(r.key)}</span>
       ${unknown ? '<span class="spend-hint">provider not recorded</span>' : ''}
       ${r.harness ? harnessChipHTML(r.harness) : ''}
       <span class="spend-calls">${calls} call${calls === 1 ? '' : 's'}</span>
-      <span class="spend-cost">${onPlan ? 'plan' : escapeHTML(fmtUSD(r.cost_usd))}</span>
+      <span class="spend-cost">${escapeHTML(spendRowCost(r))}</span>
+      ${Number(r.unpriced_calls) ? `<span class="spend-hint">${Number(r.unpriced_calls)} unpriced</span>` : ''}
     </div>`;
   };
   const cap = cappedList(topCostRows({ rows: list }, list.length), n, null, 'spend', opts.expanded);
@@ -728,7 +805,7 @@ function spendListItems(rows, n, opts) {
 // { key: "day:<YYYY-MM-DD>", html } — one column per row in ascending key
 // order, bar height by share of the costliest day, a "Mon 23" label and the
 // cost under the bar; calls in the title.
-function spendDayItems(rows) {
+function spendDayItems(rows, selectedDay) {
   const list = [...(rows || [])].sort((a, b) => {
     const x = String(a.key), y = String(b.key);
     return x < y ? -1 : x > y ? 1 : 0;
@@ -736,15 +813,14 @@ function spendDayItems(rows) {
   const max = Math.max(0, ...list.map(r => Number(r.cost_usd) || 0));
   return list.map(r => {
     const cost = Number(r.cost_usd) || 0;
-    const calls = Number(r.calls) || 0;
     const pct = max > 0 ? (cost / max) * 100 : 0;
     const label = spendDayLabel(r.key);
-    const title = `${r.key} · ${fmtUSD(cost)} · ${calls} call${calls === 1 ? '' : 's'}`;
-    return { key: `day:${r.key}`, html: `<div class="spend-day" title="${escapeHTML(title)}">
+    const title = `${r.key} · ${spendRowCost(r)} · ${spendHintText(r) || '0 calls'}${Number(r.local_calls) ? ` · ${Number(r.local_calls)} local` : ''}`;
+    return { key: `day:${r.key}`, html: `<button type="button" class="spend-day" data-action="select-spend-day" data-day="${escapeHTML(r.key)}" aria-pressed="${r.key === selectedDay}" aria-label="${escapeHTML(title)}" title="${escapeHTML(title)}">
       <span class="spend-day-track"><span class="spend-day-bar" data-h="${pct.toFixed(1)}"></span></span>
-      <span class="spend-day-cost">${escapeHTML(fmtUSDCompact(cost))}</span>
+      <span class="spend-day-cost">${escapeHTML(spendRowCost(r, true))}</span>
       <span class="spend-day-label">${escapeHTML(label)}</span>
-    </div>` };
+    </button>` };
   });
 }
 

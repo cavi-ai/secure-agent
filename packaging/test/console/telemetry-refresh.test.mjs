@@ -22,7 +22,7 @@ function fixture(fetch) {
   const requests = [], renders = [], connections = [], failures = [], retries = [];
   let stops = 0, ended = 0;
   const ctx = {
-    window: { SA: {} },
+    window: { SA: {} }, URLSearchParams,
     sessionEnded: false, SS_TOKEN_KEY: 'fixture', consoleToken: 'fixture', lastSnapshotAt: 0, cancelDialog: null,
     telemetryFetchGen: 0, telemetrySlowGen: 0,
     pendingConsoleContext: null, handoffGeneration: 0, openConsoleContext: async () => {},
@@ -48,7 +48,7 @@ function fixture(fetch) {
     booted: true, PANELS: [['flags'], ['notify'], ['resources'], ['audit']], SLOW_ONLY: new Set(['resources', 'audit']), notifyCfgHash: '',
     markDirty: (...panels) => renders.push(panels), renderAll: () => renders.push('all'),
     fillFamilyDrawer() {}, renderNow: panels => renders.push(panels),
-    spendGen: 0, spendPollTimer: 2, spendPolls: 0, SPEND_POLLS: 30, SPEND_POLL_MS: 2000,
+    spendDayGen: 0, resetSpendDay() {}, spendGen: 0, spendPollTimer: 2, spendPolls: 0, SPEND_POLLS: 30, SPEND_POLL_MS: 2000,
     spendCardPath: () => '/costs?card'
   };
   vm.createContext(ctx);
@@ -767,4 +767,54 @@ test('changing a filter after applying a saved view updates the active query', (
   change();
   assert.match(queries.at(-1), /agent=codex/);
   assert.equal(f.ctx.filters.flags.agent, 'codex');
+});
+
+function enableDaySelection(f) {
+  vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/lib.js', import.meta.url), 'utf8'), f.ctx);
+  vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/tab-overview.js', import.meta.url), 'utf8'), f.ctx);
+  vm.runInContext(source('  function resetSpendDay(', '  // Spend card controls:'), f.ctx);
+  f.ctx.telemetryData.costsCard = { by: 'day', since: '2026-10-07T04:00:00.000Z', until: '2026-10-10T12:00:00.000Z', rows: [
+    { key: '2026-10-08', calls: 2, cost_usd: 8 }, { key: '2026-10-09', calls: 3, cost_usd: 9 }] };
+  f.ctx.telemetryData.costsCardTZ = -240;
+}
+function dayResponse(path, cost) {
+  const q = new URLSearchParams(path.split('?')[1]);
+  return response({ by: 'repo', since: q.get('since'), until: q.get('until'), total: { calls: 2, cost_usd: cost }, rows: [{ key: 'fixture-repo', calls: 2, cost_usd: cost }] });
+}
+for (const race of ['new selection', 'clear', 'auth replacement']) {
+  test('delayed day response cannot publish after ' + race, async () => {
+    const old = deferred();
+    let oldPath;
+    const f = fixture(path => { if (!oldPath) { oldPath = path; return old.promise; } return Promise.resolve(dayResponse(path, 9)); });
+    enableDaySelection(f);
+    f.ctx.selectSpendDay('2026-10-08');
+    await new Promise(resolve => setImmediate(resolve));
+    if (race === 'new selection') f.ctx.selectSpendDay('2026-10-09');
+    else if (race === 'clear') f.ctx.resetSpendDay();
+    else f.ctx.handoffGeneration++;
+    old.resolve(dayResponse(oldPath, 8));
+    await new Promise(resolve => setImmediate(resolve));
+    if (race === 'new selection') {
+      assert.equal(f.ctx.telemetryData.spendDay, '2026-10-09');
+      assert.equal(f.ctx.telemetryData.spendDayReport.total.cost_usd, 9);
+    } else assert.equal(f.ctx.telemetryData.spendDayReport, null);
+    const q = new URLSearchParams(oldPath.split('?')[1]);
+    assert.equal(q.get('since'), '2026-10-08T04:00:00.000Z');
+    assert.equal(q.get('until'), '2026-10-09T04:00:00.000Z');
+    assert.equal(q.get('tz'), '-240');
+  });
+}
+
+test('a different-range report cannot claim to be the selected day and refresh retains selection', async () => {
+  let wrong = true;
+  const f = fixture(path => Promise.resolve(wrong ? response({by:'repo',since:'2026-10-07T04:00:00Z',until:'2026-10-10T12:00:00Z',total:{calls:8,cost_usd:50},rows:[]}) : dayResponse(path,8)));
+  enableDaySelection(f);
+  f.ctx.selectSpendDay('2026-10-08');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.ctx.telemetryData.spendDayReport, null);
+  assert.match(f.ctx.telemetryData.spendDayRefresh.error, /does not match/);
+  wrong = false;
+  await f.ctx.loadSpendDay();
+  assert.equal(f.ctx.telemetryData.spendDay, '2026-10-08');
+  assert.equal(f.ctx.telemetryData.spendDayReport.total.cost_usd, 8);
 });
