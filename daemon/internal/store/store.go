@@ -1761,7 +1761,7 @@ func (s *Store) RecentIncidentsResult(limit int) (out []model.IncidentReport, re
 }
 
 // Include NULL status so an unreadable workflow cannot silently hide a report.
-const recentIncidentsQuery = `SELECT id, report_json FROM incidents WHERE (status IS NULL OR status != 'resolved') ORDER BY datetime(created_at) DESC, created_at DESC LIMIT ?`
+var recentIncidentsQuery = `SELECT id, report_json FROM incidents WHERE (status IS NULL OR status != 'resolved') ORDER BY ` + timestampOrderExpr("created_at") + ` DESC, id DESC LIMIT ?`
 
 func scanIncidentsResult(rows *sql.Rows) ([]model.IncidentReport, error) {
 	defer rows.Close()

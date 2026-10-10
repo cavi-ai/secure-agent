@@ -141,7 +141,7 @@ func TestIncidentCursorFailureDiscardsEarlierValidRows(t *testing.T) {
 		}
 	}
 	q := strings.Replace(recentIncidentsQuery, "report_json", "CASE WHEN id='bad' THEN json_extract('invalid','$') ELSE report_json END", 1)
-	q = strings.Replace(q, "ORDER BY datetime(created_at) DESC, created_at DESC", "ORDER BY rowid DESC", 1)
+	q = strings.Replace(q, "ORDER BY "+timestampOrderExpr("created_at")+" DESC, id DESC", "ORDER BY rowid DESC", 1)
 	rows, err := s.db.Query(q, 10)
 	if err != nil {
 		t.Fatal(err)
