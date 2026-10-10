@@ -69,6 +69,24 @@ function fixture(fetch) {
 }
 const snapshot = () => response({ status: { uptime: 'new' }, flags: [], events: [] });
 
+test('snapshot recovery clears its failure only after the replacement data is published', async () => {
+  const guard = deferred();
+  const f = fixture(path => path === '/snapshot' ? Promise.resolve(snapshot()) : guard.promise);
+  f.ctx.reportHealth.success('snapshot');
+  f.ctx.reportHealth.failure('snapshot', 'HTTP 503');
+  const prior = f.ctx.telemetryData.status;
+  const read = f.ctx.fetchTelemetry({ slow: false });
+  await new Promise(setImmediate);
+  assert.equal(f.ctx.telemetryData.status, prior);
+  assert.equal(f.ctx.lastSnapshotAt, 0);
+  assert.equal(f.ctx.reportHealth.failures(['snapshot'])[0].error, 'HTTP 503');
+  guard.resolve(response([]));
+  await read;
+  assert.equal(f.ctx.telemetryData.status.uptime, 'new');
+  assert.ok(f.ctx.lastSnapshotAt > 0);
+  assert.equal(f.ctx.reportHealth.failures(['snapshot']).length, 0);
+});
+
 test('failed or foreign page navigation retains rows and only a successful page advances the cursor', async () => {
   let mode = 'first';
   const f = fixture(async path => path === '/snapshot' ? snapshot() : path.startsWith('/events?')
