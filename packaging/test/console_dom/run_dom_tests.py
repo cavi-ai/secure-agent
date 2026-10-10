@@ -468,7 +468,7 @@ def main():
         dom_agent = dump_dom(chrome, tmp, "?tab=agent", origin)
         dom_agentworkspace = dump_dom(chrome, tmp, "?tab=agent&agentworkspace", origin, window_size=(1280, 900))
         dom_agentworkspace_mobile = dump_dom(chrome, tmp, "?tab=agent&agentworkspace", origin, window_size=(390, 844))
-        dom_agentoff = dump_dom(chrome, tmp, "?tab=agent&agentoff", origin)
+        dom_agentoff = dump_dom(chrome, tmp, "?tab=agent", origin, fixture=payload_cases.disabled_agent())
         dom_agentchat = dump_dom(chrome, tmp, "?tab=agent&agentchat", origin)
         dom_agentlocal = dump_dom(chrome, tmp, "?tab=agent&agentlocal", origin)
         dom_agentlatency = dump_dom(chrome, tmp, "?tab=agent&agentlatency", origin)
