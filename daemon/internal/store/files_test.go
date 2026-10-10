@@ -90,6 +90,10 @@ func TestPathReadResultsDiscardPartialRowsAndRecover(t *testing.T) {
 			if err := s.PutIncident(inc); err != nil {
 				t.Fatal(err)
 			}
+			var savedReport string
+			if err := s.db.QueryRow("SELECT report_json FROM incidents WHERE id='i1'").Scan(&savedReport); err != nil {
+				t.Fatal(err)
+			}
 			for _, pid := range []int32{1, 2} {
 				if _, err := s.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now, PID: pid, Path: p, SessionID: "s1"}); err != nil {
 					t.Fatal(err)
@@ -116,7 +120,7 @@ func TestPathReadResultsDiscardPartialRowsAndRecover(t *testing.T) {
 			if h := s.WriteHealth(); h.ReadFailures != 1 || !slices.Equal(h.ReadActive, []string{operation}) || h.Failures != 0 {
 				t.Fatalf("read failure health: %+v", h)
 			}
-			if err := s.PutIncident(inc); err != nil {
+			if _, err := s.db.Exec("UPDATE incidents SET report_json=? WHERE id='i1'", savedReport); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := s.db.Exec("UPDATE events SET pid=1 WHERE pid='invalid'"); err != nil {
