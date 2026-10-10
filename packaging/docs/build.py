@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import posixpath
 from pathlib import Path
 import re
 import shutil
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 REFERENCE = ROOT / "docs/reference"
 FENCES = re.compile(r"^```([^\n]*)\n(.*?)^```\s*$", re.M | re.S)
 LINKS = re.compile(r"(!?\[[^\]\n]*\]\()([^\n)]+)(\))|(<img\b[^>]*\bsrc=\")([^\"]+)(\")")
-SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?")
+SEMVER = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?")
 
 
 def run(*args, input=None):
@@ -171,9 +172,18 @@ def identity(version=None, tag=None):
             "stableAlias": "/docs/secure-agent" if release else None}, epoch
 
 
+def artifact_path(path):
+    relative = path.relative_to(ROOT).as_posix().lower().replace("_", "-")
+    if not re.fullmatch(r"[a-z0-9./-]+", relative):
+        raise ValueError(f"documentation artifact path must use portable ASCII: {relative}")
+    return relative
+
+
 def populate(directory, manifest, nav):
     pages = documents() + [ROOT / "LICENSE"]
     included = set(pages)
+    if len({artifact_path(page) for page in pages}) != len(pages):
+        raise ValueError("documentation artifact paths collide after normalization")
     assets = set()
     for page in pages:
         text = page.read_text()
@@ -181,11 +191,15 @@ def populate(directory, manifest, nav):
         def rewrite(match):
             target = match.group(2) or match.group(5)
             dest = destination(page, target)
+            fragment = urlsplit(target).fragment
+            if dest and (dest in included or dest.is_relative_to(ROOT / "assets")):
+                target = posixpath.relpath(artifact_path(dest), posixpath.dirname(artifact_path(page)) or ".")
+                if fragment:
+                    target += "#" + fragment
             if dest and dest not in included:
                 if dest.is_relative_to(ROOT / "assets"):
                     assets.add(dest)
                 else:
-                    fragment = urlsplit(target).fragment
                     target = "https://github.com/cavi-ai/secure-agent/blob/" + manifest["source"]["commit"] + "/" + quote(dest.relative_to(ROOT).as_posix()) + ("#" + fragment if fragment else "")
             return (match.group(1) or match.group(4)) + target + (match.group(3) or match.group(6))
 
@@ -195,13 +209,20 @@ def populate(directory, manifest, nav):
             parts.extend([LINKS.sub(rewrite, text[cursor:fence.start()]), fence.group()])
             cursor = fence.end()
         parts.append(LINKS.sub(rewrite, text[cursor:]))
-        output = directory / page.relative_to(ROOT)
+        output = directory / artifact_path(page)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text("".join(parts))
+    if len({artifact_path(path) for path in included | assets}) != len(included | assets):
+        raise ValueError("documentation artifact paths collide after normalization")
     for asset in assets:
-        dest = directory / asset.relative_to(ROOT)
+        dest = directory / artifact_path(asset)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(asset, dest)
+    nav = {"title": "Secure Agent", "version": manifest["version"], "sections": [
+        {"title": section["title"], "pages": [
+            {**page, "path": artifact_path(ROOT / page["path"])} for page in section["pages"]
+        ]} for section in nav["sections"]
+    ]}
     (directory / "navigation.json").write_text(json.dumps(nav, indent=2) + "\n")
     manifest = {**manifest, "contentSha256": digest(directory)}
     (directory / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -211,6 +232,8 @@ def verify(directory):
     directory = directory.resolve()
     if any(path.is_symlink() for path in directory.rglob("*")):
         raise ValueError("documentation artifacts cannot contain symbolic links")
+    if any(not re.fullmatch(r"[a-z0-9./-]+", path.relative_to(directory).as_posix()) for path in directory.rglob("*") if path.is_file()):
+        raise ValueError("documentation artifacts require lowercase portable paths")
     manifest = json.loads((directory / "manifest.json").read_text())
     if manifest.get("schemaVersion") != 1 or manifest.get("product") != "secure-agent" or manifest.get("package") != "secure-agent":
         raise ValueError("invalid documentation manifest identity")
@@ -229,6 +252,8 @@ def verify(directory):
     if digest(directory) != manifest["contentSha256"]:
         raise ValueError("documentation content digest mismatch")
     nav = json.loads((directory / "navigation.json").read_text())
+    if nav.get("title") != "Secure Agent" or nav.get("version") != manifest["version"]:
+        raise ValueError("artifact navigation identity does not match manifest")
     listed = []
     for section in nav["sections"]:
         if not section["title"] or not section["pages"]:
@@ -262,20 +287,41 @@ def write_immutable(path, content):
     path.write_bytes(content)
 
 
+def release_metadata(manifest):
+    if not manifest["release"]:
+        raise ValueError("development docs have no release envelope")
+    return {"schemaVersion": 1, "slug": "secure-agent", "kind": "product-docs",
+            "version": manifest["version"], "tag": manifest["release"]["tag"],
+            "repository": "cavi-ai/secure-agent", "commit": manifest["release"]["commit"]}
+
+
+def release_envelope(manifest, archive_name, archive_sha256):
+    metadata = release_metadata(manifest)
+    return {**metadata, "artifact": {
+        "url": f"https://github.com/{metadata['repository']}/releases/download/{metadata['tag']}/{archive_name}",
+        "sha256": archive_sha256, "format": "tar.gz"}}
+
+
 def archive(directory, manifest, epoch):
     prefix = f"docs/secure-agent/v{manifest['version']}"
     stream = io.BytesIO()
     with gzip.GzipFile(fileobj=stream, mode="wb", filename="", mtime=0) as compressed:
-        with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as tar:
-            for path in sorted(p for p in directory.rglob("*") if p.is_file()):
-                body = path.read_bytes()
-                info = tarfile.TarInfo(prefix + "/" + path.relative_to(directory).as_posix())
+        with tarfile.open(fileobj=compressed, mode="w", format=tarfile.USTAR_FORMAT) as tar:
+            entries = {prefix + "/" + path.relative_to(directory).as_posix(): path.read_bytes()
+                       for path in directory.rglob("*") if path.is_file()}
+            if manifest["release"]:
+                entries["cavi-release.json"] = (json.dumps(release_metadata(manifest), indent=2) + "\n").encode()
+            for name, body in sorted(entries.items()):
+                info = tarfile.TarInfo(name)
                 info.size, info.mtime, info.mode = len(body), epoch, 0o644
                 tar.addfile(info, io.BytesIO(body))
     payload = stream.getvalue()
     path = ROOT / "dist" / f"secure-agent-docs-v{manifest['version']}.tar.gz"
     write_immutable(path, payload)
     write_immutable(Path(str(path) + ".sha256"), (hashlib.sha256(payload).hexdigest() + "  " + path.name + "\n").encode())
+    if manifest["release"]:
+        envelope = release_envelope(manifest, path.name, hashlib.sha256(payload).hexdigest())
+        write_immutable(path.with_name(path.name.removesuffix(".tar.gz") + ".release.json"), (json.dumps(envelope, indent=2) + "\n").encode())
     return path
 
 
