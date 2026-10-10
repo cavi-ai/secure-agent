@@ -127,7 +127,10 @@ func TestEgressEpisodesPrioritizesOlderCandidate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	views := newTestAPI("", st, nil, nil).egressEpisodeViews()
+	views, err := newTestAPI("", st, nil, nil).egressEpisodeViews()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(views) != 101 || !views[0].Candidate || views[0].Observed.Host != "203.0.113.1" {
 		t.Fatalf("older candidate not prioritized: count=%d first=%+v", len(views), views[0])
 	}

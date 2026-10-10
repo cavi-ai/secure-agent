@@ -331,9 +331,22 @@ func scanEgressEpisode(scanner interface{ Scan(...any) error }) (EgressEpisode, 
 }
 
 func (s *Store) GetEgressEpisode(id string) (EgressEpisode, bool) {
+	e, found, _ := s.GetEgressEpisodeResult(id)
+	return e, found
+}
+
+// GetEgressEpisodeResult distinguishes missing evidence from failed reads.
+func (s *Store) GetEgressEpisodeResult(id string) (episode EgressEpisode, found bool, readErr error) {
+	defer func() { s.noteRead("egress episode detail", readErr) }()
 	row := s.db.QueryRow(`SELECT id,agent,exe_path,harness,workspace,host,protocol,port,count,first_seen_ns,last_seen_ns,intervals_json,session_ids_json FROM egress_episodes WHERE id=? AND last_seen_ns>=?`, id, time.Now().Add(-egressIdleExpiry).UnixNano())
 	e, err := scanEgressEpisode(row)
-	return e, err == nil
+	if errors.Is(err, sql.ErrNoRows) {
+		return EgressEpisode{}, false, nil
+	}
+	if err != nil {
+		return EgressEpisode{}, false, err
+	}
+	return e, true, nil
 }
 
 // ListEgressEpisodes returns newest-first rows under a fixed query cap.
@@ -350,22 +363,37 @@ func (s *Store) ListEgressEpisodes(limit int) []EgressEpisode {
 // ListEgressEpisodesForReview reads the entire bounded projection so an older
 // unresolved candidate cannot be hidden by newer one-off connections.
 func (s *Store) ListEgressEpisodesForReview() []EgressEpisode {
-	return s.listEgressEpisodes(maxEgressEpisodes)
+	episodes, _ := s.ListEgressEpisodesForReviewResult()
+	return episodes
+}
+
+// ListEgressEpisodesForReviewResult rejects incomplete core review evidence.
+func (s *Store) ListEgressEpisodesForReviewResult() ([]EgressEpisode, error) {
+	return s.listEgressEpisodesResult(maxEgressEpisodes)
 }
 
 func (s *Store) listEgressEpisodes(limit int) []EgressEpisode {
+	episodes, _ := s.listEgressEpisodesResult(limit)
+	return episodes
+}
+
+func (s *Store) listEgressEpisodesResult(limit int) (out []EgressEpisode, readErr error) {
+	defer func() { s.noteRead("egress episodes", readErr) }()
 	rows, err := s.db.Query(`SELECT id,agent,exe_path,harness,workspace,host,protocol,port,count,first_seen_ns,last_seen_ns,intervals_json,session_ids_json FROM egress_episodes WHERE last_seen_ns>=? ORDER BY last_seen_ns DESC, id DESC LIMIT ?`, time.Now().Add(-egressIdleExpiry).UnixNano(), limit)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
-	out := make([]EgressEpisode, 0, min(limit, 128))
+	out = make([]EgressEpisode, 0, min(limit, 128))
 	for rows.Next() {
 		e, err := scanEgressEpisode(rows)
 		if err != nil {
-			return out
+			return nil, err
 		}
 		out = append(out, e)
 	}
-	return out
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
