@@ -1366,13 +1366,20 @@ func (a *API) uninspectedRows(since time.Time, limit int) []UninspectedEndpoint 
 			t := e.FirstSeen
 			ep.FirstSeen = &t
 		}
-		if v, ok := a.store.AdvisorVerdictFor("host:"+e.Agent+"|"+e.Host, "host"); ok {
-			ep.Assessment = v.Assessment
-			ep.Rationale = v.Rationale
-		}
 		out = append(out, ep)
 		if len(out) >= limit {
 			break
+		}
+	}
+	ids := make([]string, len(out))
+	for i, ep := range out {
+		ids[i] = "host:" + ep.Agent + "|" + ep.Host
+	}
+	verdicts, _ := a.store.AdvisorVerdictsFor(ids, "host")
+	for i, id := range ids {
+		if v, ok := verdicts[id]; ok {
+			out[i].Assessment = v.Assessment
+			out[i].Rationale = v.Rationale
 		}
 	}
 	return out
