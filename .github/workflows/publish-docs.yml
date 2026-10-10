@@ -1,0 +1,95 @@
+name: Publish product documentation
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact existing product tag (vX.Y.Z)
+        required: true
+        type: string
+      publish:
+        description: Attach docs to the existing published stable release
+        required: true
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      publish:
+        required: false
+        default: false
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: product-docs-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name != 'release' || !github.event.release.prerelease
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      DOCS_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          ref: ${{ env.DOCS_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5
+        with:
+          python-version: "3.11"
+      - name: Check and archive the tagged documentation
+        run: |
+          make docs-check docs-test
+          python3 packaging/docs/build.py archive --version "${DOCS_TAG#v}" --release-tag "$DOCS_TAG"
+          python3 packaging/docs/publish.py --tag "$DOCS_TAG"
+      - name: Retain the verified release documentation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: secure-agent-docs-${{ env.DOCS_TAG }}
+          path: |
+            dist/secure-agent-docs-*.tar.gz
+            dist/secure-agent-docs-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    if: github.event_name == 'release' || inputs.publish
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      DOCS_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          ref: ${{ env.DOCS_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: secure-agent-docs-${{ env.DOCS_TAG }}
+          path: dist
+      - name: Attach immutable docs assets to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOCS_REPOSITORY: ${{ github.repository }}
+        run: python3 packaging/docs/publish.py --tag "$DOCS_TAG" --repo "$DOCS_REPOSITORY" --publish

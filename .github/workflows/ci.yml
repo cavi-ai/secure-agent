@@ -31,7 +31,16 @@ jobs:
         with:
           python-version: "3.11"
       - name: Validate documentation and build artifact
-        run: make docs-check docs-test docs
+        run: make docs-check docs-test docs-archive
+      - name: Retain documentation preview
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (SHA-pinned)
+        with:
+          name: secure-agent-docs-preview-${{ github.sha }}
+          path: |
+            dist/secure-agent-docs-*.tar.gz
+            dist/secure-agent-docs-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
 
   go:
     name: Go vet + test + fmt

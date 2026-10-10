@@ -18,7 +18,7 @@ make docs-archive    # also write the archive and SHA-256 sidecar under dist/
 
 The generator reads `secure-agent help`, the embedded default YAML and the canonical Go API route registry. It does not start the daemon, load personal configuration or contact an agent. Checks validate local Markdown links and heading anchors, navigation coverage, shell syntax, JSON examples and YAML syntax. Illustrative envelopes with an explicit ellipsis are excluded from JSON parsing. YAML parsing does not establish that every illustrated value is suitable for a particular deployment.
 
-Generated route metadata is an access-policy inventory, not a full HTTP schema. Request and response details remain in [API](API.md). When behavior changes, update its guide and reference contract, run `make docs-reference`, and include the generated diff with the change. CI runs the checks, pipeline tests and a development build.
+Generated route metadata is an access-policy inventory, not a full HTTP schema. Request and response details remain in [API](API.md). When behavior changes, update its guide and reference contract, run `make docs-reference`, and include the generated diff with the change. CI runs the checks, pipeline tests and a development archive build. Download `secure-agent-docs-preview-<commit>` from the CI run's Artifacts section to inspect its archive and checksum. Preview artifacts are retained for 14 days and advertise no stable public alias.
 
 ## Development and release identity
 
@@ -64,4 +64,14 @@ Match the version, tag and source commit against the intended GitHub release bef
 
 Build timestamps default to the source commit's timestamp. `SOURCE_DATE_EPOCH` can supply the release build epoch. Archive file order, permissions, owner metadata and gzip timestamps are normalized. Rebuilding with the same inputs and epoch produces the same bytes. Existing archives and sidecars can be reused only when their bytes match; a different immutable artifact is refused.
 
-Uploading archives, wiring a host and promoting aliases are separate release operations. This pipeline produces and checks the artifacts locally and in CI.
+## Release delivery
+
+The [Publish product documentation workflow](../.github/workflows/publish-docs.yml) checks out the exact product tag, verifies its clean source identity, builds the archive and retains it as a workflow artifact. When a stable GitHub release is published, it attaches the archive and sidecar to that existing release. Prerelease events are excluded.
+
+For a preview, run the workflow manually with an existing `vX.Y.Z` tag and leave **publish** off. This verifies the tagged archive without uploading release assets. To attach docs to an existing published stable release, enable **publish**. Older tags that lack this tooling are unsupported; the workflow does not use newer docs as a substitute for their source.
+
+Release pipelines that create releases with `GITHUB_TOKEN` must call this reusable workflow explicitly, because those release events do not trigger another workflow. Supply `tag` and `publish: true`, with `contents: write` available to the called workflow. The docs workflow creates no tags or releases.
+
+The publication helper rechecks the archive checksum, safe extraction, content digest and tag/commit identity before contacting GitHub. It refuses drafts, prereleases, differently named releases and remote tags that no longer resolve to the verified commit. Existing archive and sidecar bytes must match exactly; identical assets are reused, missing assets are uploaded, and differing assets are never overwritten. A failed download is an error, not permission to replace an asset.
+
+Host ingestion and stable-alias promotion remain separate operations under the contract above; attaching release assets does not publish a hosted documentation site.
