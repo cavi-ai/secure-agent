@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1621,6 +1622,9 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.In
 	if err != nil {
 		s.noteWrite("incident aggregation", err)
 		return model.IncidentReport{}, false
+	}
+	if inc.FlagID != "" && !slices.Contains(flagIDs, inc.FlagID) {
+		flagIDs = append(flagIDs, inc.FlagID)
 	}
 	for _, existing := range flagIDs {
 		if existing == flagID {

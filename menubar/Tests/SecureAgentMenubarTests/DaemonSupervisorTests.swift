@@ -3,6 +3,19 @@ import Foundation
 import XCTest
 @testable import SecureAgentMenubar
 
+private final class SteppingUptime: @unchecked Sendable {
+    private let lock = NSLock()
+    private var next: TimeInterval = 0
+
+    func read() -> TimeInterval {
+        lock.lock()
+        defer { lock.unlock() }
+        let value = next
+        next += 0.3
+        return value
+    }
+}
+
 @MainActor
 final class DaemonSupervisorTests: XCTestCase {
     private func fixture(_ body: String, prefix: String = "") throws -> (dir: URL, script: String, starts: URL) {
@@ -64,10 +77,13 @@ final class DaemonSupervisorTests: XCTestCase {
     }
 
     func testRepeatedFailuresAcrossWindowStillExhaustBudget() async throws {
-        let f = try fixture("/bin/sleep 0.3\nexit 1")
+        let f = try fixture("exit 1")
+        // Successive clock reads are 0.3 seconds apart. The full sequence
+        // crosses 0.5 seconds without any individual run becoming stable.
+        let clock = SteppingUptime()
         let supervisor = DaemonSupervisor(pathProvider: { f.script }, logDir: f.dir.path,
                                           maxRestarts: 2, stableRunDuration: 0.5,
-                                          retryDelay: 0.01, maxRetryDelay: 0.02)
+                                          retryDelay: 0.01, maxRetryDelay: 0.02, uptime: clock.read)
         defer { supervisor.stop(); try? FileManager.default.removeItem(at: f.dir) }
         supervisor.start()
         let abandoned = await waitUntil({ supervisor.gaveUpRestarting }, timeout: 3)
