@@ -459,13 +459,39 @@
 
     return { now, iso, data, scenarios, payloads: spec.payloads || {}, patches: spec.patches || [], responses: spec.responses || {} };
   };
+  const matches = (row, selector) => Object.entries(selector).every(([key, value]) => row?.[key] === value);
+  const selectorKey = (target, key) => {
+    if (key !== null && typeof key === 'object') {
+      if (!Array.isArray(target) || Array.isArray(key) || !Object.keys(key).length) throw new Error('Invalid fixture patch selector');
+      const indices = target.flatMap((row, index) => matches(row, key) ? [index] : []);
+      if (indices.length !== 1) throw new Error('Fixture patch selector must match exactly one row');
+      return indices[0];
+    }
+    if (typeof key !== 'string' && typeof key !== 'number') throw new Error('Invalid fixture patch path');
+    return key;
+  };
   const apply = fixture => {
     Object.assign(fixture.data, structuredClone(fixture.payloads));
-    for (const {route, path, value} of fixture.patches) {
-      if (!(route in fixture.data) || !Array.isArray(path) || !path.length) throw new Error('Invalid fixture patch');
-      let target = fixture.data[route];
-      for (const key of path.slice(0, -1)) target = target[key];
-      target[path.at(-1)] = structuredClone(value);
+    for (const patch of fixture.patches) {
+      const {route, path} = patch;
+      const operations = ['value', 'append', 'remove'].filter(key => Object.hasOwn(patch, key));
+      if (!Object.hasOwn(fixture.data, route) || !Array.isArray(path) || operations.length !== 1) throw new Error('Invalid fixture patch');
+      let target = fixture.data;
+      const keys = [route, ...path];
+      for (const part of keys.slice(0, -1)) {
+        target = target[selectorKey(target, part)];
+        if (!target || typeof target !== 'object') throw new Error('Invalid fixture patch path');
+      }
+      const key = selectorKey(target, keys.at(-1));
+      if (operations[0] === 'value') target[key] = structuredClone(patch.value);
+      else if (operations[0] === 'append') {
+        if (!Array.isArray(target[key]) || !Array.isArray(patch.append)) throw new Error('Invalid fixture patch append');
+        target[key].push(...structuredClone(patch.append));
+      } else {
+        if (!Array.isArray(target[key]) || !patch.remove || typeof patch.remove !== 'object' || Array.isArray(patch.remove) || !Object.keys(patch.remove).length) throw new Error('Invalid fixture patch remove');
+        if (!target[key].some(row => matches(row, patch.remove))) throw new Error('Fixture patch remove must match at least one row');
+        target[key] = target[key].filter(row => !matches(row, patch.remove));
+      }
     }
   };
   window.ConsoleFixtures = { create, apply };
