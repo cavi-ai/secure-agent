@@ -123,68 +123,11 @@
     sessionStorage.setItem('sa.harness-filter', JSON.stringify({ harnesses: {claude:false,codex:false}, text:'unrelated', liveOnly:true }));
     if (scenarios.has('cold')) location.hash = 'ct=test-token&tab=sessions&session=sess-claude-1&flag=flag-2';
   }
-  // Policy lists (GET /guard/rules, /guard/path-allow; /mute is above).
-  data['/guard/rules'] = [
-    { id: 1, agent: 'claude', rule_id: 'env-file', decision: 'allow', source: 'prompt', created_at: '2026-09-20T10:00:00Z' },
-    { id: 2, agent: 'codex', rule_id: 'ssh-keys', decision: 'deny', source: 'onboarding', created_at: '2026-09-21T10:00:00Z' },
-  ];
-  data['/guard/path-allow'] = [
-    { agent: 'claude', rule_id: 'env-file', path: '/Users/dev/workspace/api-service/.env.example', created_at: '2026-09-22T10:00:00Z' },
-  ];
   // spenddaydemo: a tab whose saved Spend view is by day over 7d (a reload).
   if (scenarios.has('spenddaydemo')) {
     try { sessionStorage.setItem('sa.spend-view', JSON.stringify({ by: 'day', since: '7d' })); } catch { /* ignored */ }
   }
 
-  // System agent (Agent tab). agentoff: system_agent.enabled is false.
-  const AGENT_XSS = '<img src=x onerror=alert(1)>';
-  data['/agent/status'] = {
-    enabled: !scenarios.has('agentoff'), endpoint: 'http://127.0.0.1:11434', reachable: true, ollama_version: '0.15.1',
-    model: 'qwen3:latest', harness_model: 'qwen3-coder', models: ['qwen3:latest', 'qwen3-coder:latest'],
-    harnesses: [
-      { id: 'claude', label: 'Claude Code', bin: 'claude', path: '/opt/homebrew/bin/claude', installed: true, ready: true },
-      { id: 'codex', label: 'Codex', bin: 'codex', path: '/opt/homebrew/bin/codex', installed: true, ready: true },
-      { id: 'openclaw', label: 'OpenClaw', bin: 'openclaw', installed: false, ready: false, reason: 'OpenClaw is not installed where the daemon can find it (openclaw)' },
-      { id: 'hermes', label: 'Hermes Agent', bin: 'hermes', installed: false, ready: false, reason: 'Hermes Agent is not installed where the daemon can find it (hermes)' },
-      { id: 'pi', label: 'Pi runner', bin: 'pi', installed: false, ready: false, reason: 'Pi runner is not installed where the daemon can find it (pi)' }
-    ],
-    skills: [
-      { id: 'ssh', title: 'SSH keys and the SSH agent', summary: 'Create, load and authorize an SSH key.' },
-      { id: 'git', title: 'Git identity and credentials', summary: 'Credentials in the keychain or gh.' },
-      { id: 'signing', title: 'Commit and tag signing', summary: 'Sign commits and tags.' },
-      { id: 'claude', title: 'Claude Code — sign-in, settings and local models', summary: 'Claude Code sign-in.' },
-      { id: 'codex', title: 'Codex CLI — sign-in, config and local models', summary: 'Codex sign-in.' },
-      { id: 'openclaw', title: 'OpenClaw — onboarding, provider auth and local models', summary: 'OpenClaw auth.' },
-      { id: 'hermes', title: 'Hermes Agent — providers, keys and local models', summary: 'Hermes auth.' }
-    ],
-    chatting: false, terminal: true, home: '/Users/dev'
-  };
-  data['/agent/skills'] = data['/agent/status'].skills.map(k => ({ ...k, keywords: [k.id], body: 'Rules\n- ' + k.id + ' body ' + AGENT_XSS }));
-  data['/agent/recommendations'] = [];
-  data['/agent/chat'] = { chatting: false, messages: [
-    { id: 1, ts: iso(600000), role: 'user', content: 'Set up SSH commit signing ' + AGENT_XSS, harness: 'codex', workdir: '/Users/dev/workspace/api-service' },
-    { id: 2, ts: iso(590000), role: 'assistant', content: 'Signing needs your passphrase, so this runs in a terminal.', skills: ['signing', 'ssh'],
-      proposal: { title: 'Sign commits with SSH', harness: 'codex', mode: 'terminal', workdir: '/Users/dev/workspace/api-service',
-        task: 'Configure SSH commit signing ' + AGENT_XSS, steps: ['git config --global gpg.format ssh', 'gh ssh-key add --type signing'], skills: ['signing'] } },
-    { id: 3, ts: iso(300000), role: 'user', content: 'Log OpenClaw into my provider', harness: 'openclaw', workdir: '' },
-    { id: 4, ts: iso(290000), role: 'assistant', content: 'OpenClaw is not installed, so I saved this for later.', skills: ['openclaw'], plan_id: 2,
-      proposal: { title: 'OpenClaw provider login', harness: 'openclaw', mode: 'terminal', workdir: '/Users/dev', task: 'openclaw models auth login --provider x', steps: [], skills: ['openclaw'] } },
-    { id: 5, ts: iso(200000), role: 'note', content: 'The local model did not answer: timeout. Your message is kept.' }
-  ] };
-  data['/agent/plans'] = [
-    { id: 2, created_at: iso(290000), source: 'agent', message_id: 4, title: 'OpenClaw provider login', harness: 'openclaw', mode: 'terminal',
-      workdir: '/Users/dev', task: 'openclaw models auth login --provider x', steps: [], skills: ['openclaw'], status: 'saved',
-      note: 'OpenClaw is not installed where the daemon can find it (openclaw)', ready: false, reason: 'OpenClaw is not installed where the daemon can find it (openclaw)' },
-    { id: 1, created_at: iso(900000), source: 'operator', title: 'Rotate the Codex login ' + AGENT_XSS, harness: 'codex', mode: 'headless',
-      workdir: '/Users/dev/workspace/api-service', task: 'codex logout, then codex login', steps: [], skills: ['codex'], status: 'saved', ready: true }
-  ];
-  data['/agent/runs'] = [
-    { id: 2, plan_id: 1, ts: iso(120000), title: 'Rotate the Codex login', harness: 'codex', mode: 'terminal', model: 'qwen3-coder',
-      workdir: '/Users/dev/workspace/api-service', status: 'manual', exit_code: 0, command: 'env CODEX_OSS_BASE_URL=http://127.0.0.1:11434/v1 codex --oss <task>',
-      detail: "Run it in a terminal: sh '/Users/dev/.config/secure-agent/sysagent/terminal-1-1.sh'" },
-    { id: 1, plan_id: 1, ts: iso(3600000), finished_at: iso(3500000), title: 'Rotate the Codex login', harness: 'codex', mode: 'headless', model: 'qwen3-coder',
-      workdir: '/Users/dev/workspace/api-service', status: 'done', exit_code: 0, command: 'env codex exec <task>', output: 'Logged out. ' + AGENT_XSS }
-  ];
   let agentSeq = 100;
   const agentPost = (p, opts, full, body) => {
     const chat = data['/agent/chat'];

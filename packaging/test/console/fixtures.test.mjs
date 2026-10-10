@@ -7,6 +7,37 @@ const context = { window: {}, Date, structuredClone };
 vm.runInNewContext(readFileSync(new URL('../console_dom/fixtures.js', import.meta.url), 'utf8'), context);
 const { create, apply } = context.window.ConsoleFixtures;
 
+test('policy and Agent defaults are available without the browser driver and isolate mutations', () => {
+  const one = create({ now: 0 });
+  const two = create({ now: 0 });
+  assert.equal(one.data['/guard/rules'][0].decision, 'allow');
+  assert.equal(one.data['/guard/path-allow'][0].rule_id, 'env-file');
+  assert.equal(one.data['/agent/status'].enabled, true);
+  assert.equal(one.data['/agent/chat'].messages.length, 5);
+  assert.equal(one.data['/agent/plans'].length, 2);
+  assert.equal(one.data['/agent/runs'].length, 2);
+  assert.equal(one.data['/agent/recommendations'].length, 0);
+  assert.match(one.data['/agent/skills'][0].body, /<img src=x onerror=alert\(1\)>/);
+  const original = structuredClone(two.data);
+  one.data['/guard/rules'][0].decision = 'deny';
+  one.data['/guard/path-allow'].pop();
+  one.data['/agent/status'].skills[0].title = 'Changed';
+  one.data['/agent/skills'][0].keywords.push('changed');
+  one.data['/agent/chat'].messages[1].proposal.steps.push('changed');
+  one.data['/agent/plans'][0].skills.push('changed');
+  one.data['/agent/runs'].pop();
+  one.data['/agent/recommendations'].push({ id: 'changed' });
+  assert.deepEqual(structuredClone(two.data), original);
+  assert.equal(one.data['/agent/skills'][0].title, original['/agent/skills'][0].title);
+});
+
+test('Agent availability is declared by the case, independent of interaction names', () => {
+  const fixture = create({ now: 0, patches: [{ route: '/agent/status', path: ['enabled'], value: false }] });
+  apply(fixture);
+  assert.equal(fixture.data['/agent/status'].enabled, false);
+  assert.equal(create({ now: 0, scenarios: ['agentoff'] }).data['/agent/status'].enabled, true);
+});
+
 test('declared payloads and patches are isolated between cases', () => {
   const payload = { state: 'all-clear', needs_you: 0, items: [] };
   const one = create({ now: 0, payloads: { '/posture': payload }, patches: [{ route: '/status', path: ['version'], value: 'fixture' }] });

@@ -1,4 +1,4 @@
-"""Wire payloads owned by the finding and coverage DOM cases.
+"""Wire payloads owned by individual console DOM cases.
 
 The browser driver handles interactions; these fixtures declare their data.
 Relative timestamps share the same explicit clock as the browser baseline.
@@ -16,6 +16,11 @@ def _clock(now_ms):
 
 def _fields(route, path, values):
     return [{"route": route, "path": [*path, field], "value": value} for field, value in values.items()]
+
+
+def disabled_agent(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/agent/status", "path": ["enabled"], "value": False}]}
 
 
 def payload_outcomes(now_ms=None):
