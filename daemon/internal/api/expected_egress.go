@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -73,7 +74,11 @@ func (a *API) handleExpectedEgress(w http.ResponseWriter, r *http.Request) {
 		}
 		saved, err := a.store.CreateExpectedEgressRule(rule)
 		if err != nil {
-			http.Error(w, "invalid observed destination or scope", http.StatusBadRequest)
+			if errors.Is(err, store.ErrInvalidExpectedEgressRule) {
+				http.Error(w, "invalid observed destination or scope", http.StatusBadRequest)
+			} else {
+				http.Error(w, "expected egress rule unavailable", http.StatusServiceUnavailable)
+			}
 			return
 		}
 		a.store.PutAudit(store.AuditEntry{Action: "expected-egress-create", Rule: saved.ID, ToMode: saved.Kind, Detail: "operator decision from observed episode"})
@@ -85,7 +90,11 @@ func (a *API) handleExpectedEgress(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := a.store.RevokeExpectedEgressRule(id); err != nil {
-			http.Error(w, "rule not found", http.StatusNotFound)
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, "rule not found", http.StatusNotFound)
+			} else {
+				http.Error(w, "expected egress rule unavailable", http.StatusServiceUnavailable)
+			}
 			return
 		}
 		a.store.PutAudit(store.AuditEntry{Action: "expected-egress-revoke", Rule: id, ToMode: "revoked", Detail: "operator decision"})
