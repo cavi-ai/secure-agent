@@ -99,9 +99,9 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 		return Snapshot{}, err
 	}
 	failedReads = append(failedReads, a.advisorReadFailures("flag")...)
+	stampFindingReviewIDs(a.store, flags)
 	for i := range flags {
 		flags[i].Title = humanFlagTitle(flags[i].Rule)
-		flags[i].ReviewID, _ = a.store.FindingReviewID(flags[i].ID)
 	}
 	a.stampExplains(flags)
 	since := time.Now().Add(-24 * time.Hour)

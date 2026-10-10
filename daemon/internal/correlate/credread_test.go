@@ -41,7 +41,7 @@ func newTwoRootCorrelator(t *testing.T) *Correlator {
 	}
 	tg := agents.New(cfg, twoRootSource{})
 	tg.Refresh()
-	return New(tg, sensitive.New(cfg), cfg)
+	return New(tg, sensitive.New(cfg), cfg, Hooks{})
 }
 
 const (

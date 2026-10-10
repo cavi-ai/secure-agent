@@ -52,9 +52,9 @@ type Sink interface {
 	// TrendFor supplies the week-over-week context that makes triage more
 	// than a one-shot guess: is this rule/host routine on this machine?
 	TrendFor(rule, host string) model.TrendContext
-	// CriticalFlagsMissingAdvisor feeds the startup backfill: flags that
+	// CriticalFlagsMissingAdvisorResult feeds the startup backfill: flags that
 	// fired while the advisor was off and have no verdict yet.
-	CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.Flag
+	CriticalFlagsMissingAdvisorResult(since time.Time, limit int) ([]model.Flag, error)
 	// PutAdvisorPlan stores a plan keyed by its subject.
 	PutAdvisorPlan(subject string, p model.AdvisorPlan) error
 	// SimilarLabels returns the operator's judgments on cases like this
@@ -393,8 +393,15 @@ const (
 // critical flags that fired while the advisor was off — the triage queue
 // should never show "no verdict" just because the flag predates the opt-in.
 func (s *Subscriber) Run(ctx context.Context) error {
-	for _, fl := range s.sink.CriticalFlagsMissingAdvisor(time.Now().Add(-backfillWindow), backfillLimit) {
-		s.EnqueueFlag(fl)
+	flags, err := s.sink.CriticalFlagsMissingAdvisorResult(time.Now().Add(-backfillWindow), backfillLimit)
+	if err != nil {
+		// A failed historical read must not restart the live worker or admit
+		// partial history. Store read health records the failure separately.
+		log.Printf("advisor: startup backfill unavailable: %v", err)
+	} else {
+		for _, fl := range flags {
+			s.EnqueueFlag(fl)
+		}
 	}
 	for {
 		select {

@@ -46,7 +46,7 @@ func TestAllowlistLoadFailurePreservesUninspectedEgress(t *testing.T) {
 			}
 			tagger := agents.New(cfg, allowlistProcSource{})
 			tagger.Refresh()
-			cr := correlate.New(tagger, sensitive.New(cfg), cfg)
+			cr := correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{})
 			cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: time.Now(), RemoteHost: "new.example.com", RemotePort: 443})
 			if cr.UninspectedEgressCount() != 1 {
 				t.Fatal("fixture must contain one uninspected endpoint")
@@ -87,7 +87,7 @@ func TestAllowlistSuggestApproveRoundTrip(t *testing.T) {
 	}
 	tg := agents.New(cfg, allowlistProcSource{})
 	tg.Refresh()
-	cr := correlate.New(tg, sensitive.New(cfg), cfg)
+	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 	al := correlate.NewAllowlistStore(filepath.Join(dir, "allowlist-overrides.json"))
 	cr.SetAllowlistOverrides(func(agent string) []string { return al.Load()[agent] })
 
@@ -188,7 +188,7 @@ func TestMuteEndpointRoundTrip(t *testing.T) {
 	}
 	tg := agents.New(cfg, allowlistProcSource{})
 	tg.Refresh()
-	cr := correlate.New(tg, sensitive.New(cfg), cfg)
+	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 	ms := correlate.NewMuteStore(filepath.Join(dir, "muted.json"))
 	cr.SetMuteChecker(ms.Muted)
 
@@ -279,7 +279,7 @@ func TestAllowlistListAndRemove(t *testing.T) {
 	}
 	tagger := agents.New(cfg, allowlistProcSource{})
 	tagger.Refresh()
-	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
+	cr := correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{})
 	alStore := correlate.NewAllowlistStore(filepath.Join(dir, "allow.json"))
 
 	st := testStore(t)

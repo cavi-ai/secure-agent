@@ -2089,7 +2089,9 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .agent-recommendation .agent-actions label { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--tx-2); }
 .agent-actions .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 .agent-saved { font-size: 0.74rem; color: var(--ok); }
-.agent-chat-foot { flex-shrink: 0; width: 100%; max-width: 860px; align-self: center; padding: 12px clamp(16px, 4vw, 40px) 18px; }
+/* Keep composer controls inside the chat when browser chrome, wrapping, or
+   font metrics leave less room; overflow remains reachable by scrolling. */
+.agent-chat-foot { flex-shrink: 0; width: 100%; max-width: 860px; max-height: 100%; overflow-y: auto; overscroll-behavior: contain; align-self: center; padding: 12px clamp(16px, 4vw, 40px) 18px; }
 .agent-quick-commands { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .agent-quick { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--tx-2); font: 500 0.75rem var(--font); cursor: pointer; }
 .agent-quick:hover { color: var(--tx-1); border-color: var(--line-2); background: var(--bg-2); }

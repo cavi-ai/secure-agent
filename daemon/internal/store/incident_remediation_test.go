@@ -3,11 +3,65 @@ package store
 import (
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
+
+func TestIncidentAggregationReplayRetainsRemediation(t *testing.T) {
+	st, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now()
+	inc := model.IncidentReport{ID: "incident", FlagID: "first", Timestamp: now, RotateList: []model.RotateItem{{ID: "key", Name: "Key", Action: "Revoke affected key"}}}
+	if err := st.PutIncident(inc); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.AggregateIntoIncident(inc.ID, "second", now.Add(time.Second)); !ok {
+		t.Fatal("could not aggregate second flag")
+	}
+	before, err := st.GetIncident(inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := before.Remediation
+	saved, err := st.ReportIncidentRemediation(model.IncidentRemediationRequest{ID: inc.ID, StepID: view.Steps[0].ID, ExpectedRevision: view.Revision, ExpectedEvidence: view.EvidenceRevision, Status: "reported"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flagID := range []string{"first", "second"} {
+		replayed, ok := st.AggregateIntoIncident(inc.ID, flagID, now.Add(time.Hour))
+		if !ok || replayed.AggregateCount != 2 || replayed.LastFlagAt == nil || !replayed.LastFlagAt.Equal(now.Add(time.Second)) {
+			t.Fatalf("replay changed evidence: %+v ok=%v", replayed, ok)
+		}
+		if !reflect.DeepEqual(replayed.Remediation, saved.Remediation) {
+			t.Errorf("replay lost saved remediation: got=%+v want=%+v", replayed.Remediation, saved.Remediation)
+		}
+	}
+	// Unreadable bookkeeping must not escape as a successful empty view.
+	if _, err := st.db.Exec(`UPDATE incidents SET remediation_json='null' WHERE id=?`, inc.ID); err != nil {
+		t.Fatal(err)
+	}
+	if report, ok := st.AggregateIntoIncident(inc.ID, "second", now); ok || report.ID != "" {
+		t.Fatal("replay hid unreadable remediation")
+	}
+	if h := st.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 1 || h.ReadActive[0] != "incidents" {
+		t.Errorf("replay read fault hidden: %+v", h)
+	}
+	if _, err := st.db.Exec(`UPDATE incidents SET remediation_json='' WHERE id=?`, inc.ID); err != nil {
+		t.Fatal(err)
+	}
+	if report, ok := st.AggregateIntoIncident(inc.ID, "second", now); !ok || report.Remediation == nil || report.Remediation.Steps[0].Status != "pending" {
+		t.Fatalf("replay did not recover: %+v ok=%v", report, ok)
+	}
+	if h := st.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 0 {
+		t.Errorf("replay health did not recover: %+v", h)
+	}
+}
 
 func mustJSONForRemediationTest(t *testing.T, value any) string {
 	t.Helper()

@@ -185,7 +185,7 @@ func TestDispositionsRecordLabels(t *testing.T) {
 	}
 	tg := agents.New(cfg, allowlistProcSource{})
 	tg.Refresh()
-	a.correlator = correlate.New(tg, sensitive.New(cfg), cfg)
+	a.correlator = correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 	if w := postJSON(a.handleAllowlistAdd, "/allowlist", map[string]string{"agent": "codex", "host": "api.openai.com"}); w.Code != http.StatusOK {
 		t.Fatalf("allowlist: %d %s", w.Code, w.Body.String())
 	}

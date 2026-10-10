@@ -37,7 +37,7 @@ func newTestCorrelator(t *testing.T) *Correlator {
 	tg := agents.New(cfg, ps)
 	tg.Refresh()
 	cl := sensitive.New(cfg)
-	return New(tg, cl, cfg)
+	return New(tg, cl, cfg, Hooks{})
 }
 
 // The store keeps sensitive file events past the row cap; trust-store reads,
@@ -158,7 +158,7 @@ func TestUntaggedLabelVersionBasename(t *testing.T) {
 	}
 	observe := func(cfg config.Config, pid int32, exe string) string {
 		t.Helper()
-		c := New(agents.New(cfg, fakeProcSource{}), sensitive.New(cfg), cfg)
+		c := New(agents.New(cfg, fakeProcSource{}), sensitive.New(cfg), cfg, Hooks{})
 		flags := c.Observe(event.Event{Kind: event.KindFileOpen, PID: pid, TS: time.Unix(1_700_000_000, 0),
 			ExePath: exe, Path: "/Users/x/Library/Keychains/login.keychain-db"})
 		if len(flags) != 1 || flags[0].Rule != "keychain-access" {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -45,19 +46,32 @@ func egressCandidate(e store.EgressEpisode, ruleID string) bool {
 // egressEpisodeViews serves the read API: candidates first, then up to 100
 // other episodes.
 func (a *API) egressEpisodeViews() []egressEpisodeView {
+	if a.store == nil {
+		return []egressEpisodeView{}
+	}
+	return readEgressEpisodeViews(a.store)
+}
+
+type egressEpisodeStore interface {
+	ExpectedEgressMatcher() func(store.EgressEpisode) string
+	ListEgressEpisodesForReview() []store.EgressEpisode
+	AdvisorVerdictFor(string, string) (model.AdvisorVerdict, bool)
+}
+
+func readEgressEpisodeViews(st egressEpisodeStore) []egressEpisodeView {
 	candidates := make([]egressEpisodeView, 0)
 	other := make([]egressEpisodeView, 0, 100)
-	if a.store == nil {
+	if st == nil {
 		return other
 	}
-	match := a.store.ExpectedEgressMatcher()
-	for _, e := range a.store.ListEgressEpisodesForReview() {
+	match := st.ExpectedEgressMatcher()
+	for _, e := range st.ListEgressEpisodesForReview() {
 		if !e.Recurring && len(other) >= 100 {
 			continue
 		}
 		ruleID := match(e)
 		view := egressEpisodeView{ID: e.ID, Observed: e, Expected: ruleID != "", ExpectedRuleID: ruleID, Candidate: egressCandidate(e, ruleID)}
-		if v, ok := a.store.AdvisorVerdictFor(advisor.EgressSubjectID(e.ID), "egress"); ok && v.Assessment == advisor.EgressEvidenceKey(e) {
+		if v, ok := st.AdvisorVerdictFor(advisor.EgressSubjectID(e.ID), "egress"); ok && v.Assessment == advisor.EgressEvidenceKey(e) {
 			view.AdvisorInference = &egressInference{PossiblePurpose: v.Rationale, Confidence: v.Confidence, CreatedAt: v.CreatedAt}
 		}
 		if view.Candidate {

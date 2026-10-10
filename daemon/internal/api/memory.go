@@ -323,17 +323,10 @@ func (a *API) serveSessionMemory(w http.ResponseWriter, r *http.Request, id stri
 			return
 		}
 	}
-	facts, earlier, err := a.store.QuerySessionMemory(id, before, limit)
+	response, err := sessionMemory(a.store, id, before, limit)
 	if err != nil {
 		http.Error(w, "memory unavailable", http.StatusInternalServerError)
 		return
-	}
-	response := memoryResponse{Rows: make([]memoryRow, 0, len(facts)), HasEarlier: earlier}
-	for _, f := range facts {
-		response.Rows = append(response.Rows, presentMemoryFact(f))
-	}
-	if earlier && len(facts) > 0 {
-		response.NextCursor = encodeMemoryCursor(facts[0])
 	}
 	writeJSON(w, response)
 }

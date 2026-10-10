@@ -65,7 +65,7 @@ func TestUninspectedEgressEndpoint(t *testing.T) {
 	}
 	tg := agents.New(cfg, allowlistProcSource{})
 	tg.Refresh()
-	cr := correlate.New(tg, sensitive.New(cfg), cfg)
+	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 
 	now := time.Now()
 	// Fresh endpoint (inside the window) and a stale one (outside it).

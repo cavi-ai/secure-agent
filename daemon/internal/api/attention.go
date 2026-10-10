@@ -9,7 +9,6 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
-	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 // Attention queue: computed once here and served from /posture. A signal is
@@ -81,30 +80,9 @@ type attentionSession struct {
 	control      *resource.SessionControl
 }
 
-// attentionFlags is the one flag query behind the queue: unacknowledged
-// flags of severity 3 (critical) raised in the last 24h.
-func (a *API) attentionFlags() []model.Flag {
-	flags, _ := a.attentionFlagsResult()
-	return flags
-}
-
-func (a *API) attentionFlagsResult() ([]model.Flag, error) {
-	flags, err := a.store.QueryFlagsResult(store.FlagFilter{MinSeverity: 3, Limit: 25, Unacted: true})
-	if err != nil {
-		return nil, err
-	}
-	var out []model.Flag
-	for _, f := range flags {
-		if isRecent(f.TS, 24*time.Hour) {
-			out = append(out, f)
-		}
-	}
-	return out, nil
-}
-
 // machineAttentionItems are the signals no agent owns: dead collectors, and
 // while agents are active, silent collectors and missing hooks.
-func (a *API) machineAttentionItems(st Status) []PostureItem {
+func machineAttentionItems(now time.Time, st Status, hookGap *PostureItem) []PostureItem {
 	var items []PostureItem
 	if h := st.EgressProjectionHealth; h != nil && (h.QueueDrops > 0 || h.WriteFailures > 0) {
 		detail := fmt.Sprintf("%d observations missed the summary queue; %d summary writes failed since daemon start. Recurring egress summaries may be incomplete. Connection evidence has separate storage health.", h.QueueDrops, h.WriteFailures)
@@ -151,32 +129,27 @@ func (a *API) machineAttentionItems(st Status) []PostureItem {
 	// reporting green while blind (both audited live: the eslogger spool
 	// untouched for days, zero hook events for 17h, all "healthy").
 	if st.ActiveAgents > 0 {
-		items = append(items, silentCollectorItems(st)...)
+		items = append(items, silentCollectorItems(now, st)...)
 		if st.Coverage != nil {
 			items = append(items, harnessUncoveredItems(st.Coverage.Harnesses)...)
 		}
-		if item := guardHookUnregisteredItem(st); item != nil {
-			items = append(items, *item)
+		if hookGap != nil {
+			items = append(items, *hookGap)
 		}
 	}
 	return items
 }
 
-// attentionQueue returns the headline items and the grouped queue from one
-// pass. Signals without a PID join a live session only when the agent name
-// identifies exactly one; ambiguous work stays in an agent-level group.
-func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []model.RoutineGroup) ([]PostureItem, []AttentionGroup) {
-	items, groups, _ := a.attentionQueueWithReadHealth(st, patterns, routine)
-	return items, groups
+type attentionQueueResult struct {
+	Items  []PostureItem
+	Groups []AttentionGroup
 }
 
-// Keep failures from this calculation even if a later, narrower query succeeds.
-// Known decisions remain actionable while coverage reports incomplete reads.
-func (a *API) attentionQueueWithReadHealth(st Status, patterns []model.Pattern, routine []model.RoutineGroup) ([]PostureItem, []AttentionGroup, []string) {
-	var failedReads []string
+func deriveAttention(in postureInputs) attentionQueueResult {
+	st, patterns, routine := in.Status, in.Patterns, in.Routine
 	var sessions []attentionSession
-	if a.resources != nil {
-		for _, s := range a.resources().Sessions {
+	if len(in.Resources) > 0 {
+		for _, s := range in.Resources {
 			sess := attentionSession{
 				key:          firstNonEmpty([]string{s.Key, fmt.Sprint(s.RootPID)}),
 				agent:        s.Name,
@@ -302,50 +275,28 @@ func (a *API) attentionQueueWithReadHealth(st Status, patterns []model.Pattern, 
 		}
 	}
 	patternAdded := map[int]bool{}
-	reviewPage, reviewErr := a.store.ListFindingReviewsState("", 100, "unreviewed")
-	if reviewErr != nil {
-		failedReads = append(failedReads, "finding reviews")
-	}
 	coveredReviews := map[string]bool{}
-	if reviewErr == nil {
-		for _, r := range reviewPage.Reviews {
-			if !r.EvidenceAvailable || r.Context.Attribution != "stored-session" {
-				continue
-			}
-			coveredReviews[r.ID] = true
-			severity := assessmentSeverity(r.Assessment, r.Severity)
-			if severity < 3 {
-				continue
-			}
-			key := "session:" + r.Context.SessionID
-			g := groups[key]
-			if g == nil {
-				g = &AttentionGroup{Key: key, Label: firstNonEmpty([]string{cwdBase(r.Context.Workspace), r.Agent, "Session"}), Agent: r.Agent, Workspace: r.Context.Workspace, Summary: "Recorded session " + r.Context.SessionID, Items: []AttentionItem{}}
-				groups[key] = g
-			}
-			add(g, PostureItem{Kind: "review", ID: r.ID, Title: humanFlagTitle(r.Context.Rule), Severity: severity, Detail: r.Assessment.Reason, Timestamp: r.LastSeen.UTC().Format(time.RFC3339)}, AttentionItem{Kind: "review", ID: r.ID, Priority: 1 + severity/3, Title: humanFlagTitle(r.Context.Rule), Detail: r.Assessment.Reason, Count: r.Count, Assessment: &r.Assessment, Review: &r})
+	for _, r := range in.Reviews {
+		if !r.EvidenceAvailable || r.Context.Attribution != "stored-session" {
+			continue
 		}
+		coveredReviews[r.ID] = true
+		severity := assessmentSeverity(r.Assessment, r.Severity)
+		if severity < 3 {
+			continue
+		}
+		key := "session:" + r.Context.SessionID
+		g := groups[key]
+		if g == nil {
+			g = &AttentionGroup{Key: key, Label: firstNonEmpty([]string{cwdBase(r.Context.Workspace), r.Agent, "Session"}), Agent: r.Agent, Workspace: r.Context.Workspace, Summary: "Recorded session " + r.Context.SessionID, Items: []AttentionItem{}}
+			groups[key] = g
+		}
+		add(g, PostureItem{Kind: "review", ID: r.ID, Title: humanFlagTitle(r.Context.Rule), Severity: severity, Detail: r.Assessment.Reason, Timestamp: r.LastSeen.UTC().Format(time.RFC3339)}, AttentionItem{Kind: "review", ID: r.ID, Priority: 1 + severity/3, Title: humanFlagTitle(r.Context.Rule), Detail: r.Assessment.Reason, Count: r.Count, Assessment: &r.Assessment, Review: &r})
 	}
-	flags, flagErr := a.attentionFlagsResult()
-	failedReads = append(failedReads, a.advisorReadFailures("flag")...)
-	if flagErr != nil {
-		failedReads = append(failedReads, "flags")
-	}
-	for _, f := range flags {
-		if f.Rule == readConnectRule && reviewErr == nil {
-			id, err := a.store.FindingReviewID(f.ID)
-			if err != nil {
-				failedReads = append(failedReads, "finding reviews")
-			} else if id != "" {
-				if coveredReviews[id] {
-					continue
-				}
-				r, ok, err := a.store.GetFindingReview(id)
-				if err != nil {
-					failedReads = append(failedReads, "finding reviews")
-				} else if ok && r.Context.Attribution == "stored-session" && r.ReviewState != "unreviewed" {
-					continue
-				}
+	for _, f := range in.Flags {
+		if f.Rule == readConnectRule {
+			if r, ok := in.FlagReviews[f.ID]; ok && (coveredReviews[r.ID] || r.Context.Attribution == "stored-session" && r.ReviewState != "unreviewed") {
+				continue
 			}
 		}
 		if i, ok := routineOf[f.ID]; ok {
@@ -438,54 +389,36 @@ func (a *API) attentionQueueWithReadHealth(st Status, patterns []model.Pattern, 
 	}
 
 	// Guard prompts waiting — the operator is actively being asked.
-	if a.guardBroker != nil {
-		for _, p := range a.guardBroker.Pending() {
-			tool := firstNonEmpty([]string{p.Tool, "Tool"})
-			path := firstNonEmpty([]string{p.Path, "a protected path"})
-			add(groupFor(p.Agent, 0), PostureItem{
-				Kind: "guard_pending", ID: p.ID,
-				Title:     p.Agent + " wants " + humanPath(p.Path),
-				Severity:  1,
-				Detail:    "Rule: " + p.RuleID,
-				Timestamp: p.TS,
-			}, AttentionItem{
-				Kind: "guard", Priority: 5, ID: p.ID,
-				Title:  "Guard decision",
-				Detail: tool + " wants access to " + path,
-				Rule:   p.RuleID, Path: p.Path,
-				ScopeText: p.ScopeText, Advisor: p.Advisor,
-				AvailableScopes: p.AvailableScopes, ReaderExe: p.ReaderExe,
-			})
-		}
+	for _, p := range in.Pending {
+		tool := firstNonEmpty([]string{p.Tool, "Tool"})
+		path := firstNonEmpty([]string{p.Path, "a protected path"})
+		add(groupFor(p.Agent, 0), PostureItem{
+			Kind: "guard_pending", ID: p.ID,
+			Title:     p.Agent + " wants " + humanPath(p.Path),
+			Severity:  1,
+			Detail:    "Rule: " + p.RuleID,
+			Timestamp: p.TS,
+		}, AttentionItem{
+			Kind: "guard", Priority: 5, ID: p.ID,
+			Title:  "Guard decision",
+			Detail: tool + " wants access to " + path,
+			Rule:   p.RuleID, Path: p.Path,
+			ScopeText: p.ScopeText, Advisor: p.Advisor,
+			AvailableScopes: p.AvailableScopes, ReaderExe: p.ReaderExe,
+		})
 	}
 
 	// Open incidents of high or critical risk; lower-risk ones stay in the
 	// findings history.
-	incidents, incidentErr := a.store.RecentIncidentsResult(25)
-	failedReads = append(failedReads, a.advisorReadFailures("incident")...)
-	if incidentErr != nil {
-		failedReads = append(failedReads, "incidents")
-	}
-	for _, inc := range incidents {
-		if reviewErr == nil {
-			id, err := a.store.FindingReviewID(inc.FlagID)
-			if err != nil {
-				failedReads = append(failedReads, "finding reviews")
-			} else if id != "" {
-				r, ok, err := a.store.GetFindingReview(id)
-				if err != nil {
-					failedReads = append(failedReads, "finding reviews")
-				} else if ok && r.Context.Attribution == "stored-session" {
-					continue
-				}
-			}
-		}
-		wf, found, err := a.store.IncidentStatusResult(inc.ID)
-		if err != nil || !found {
-			failedReads = append(failedReads, "incident workflows")
+	for _, inc := range in.Incidents {
+		if r, ok := in.FlagReviews[inc.FlagID]; ok && r.Context.Attribution == "stored-session" {
 			continue
 		}
-		status := firstNonEmpty([]string{wf.Status, "open"})
+		status, found := in.IncidentStates[inc.ID]
+		if !found {
+			continue
+		}
+		status = firstNonEmpty([]string{status, "open"})
 		critical := inc.Risk == model.RiskCritical
 		high := inc.Risk == model.RiskHigh
 		if status != "open" || (!critical && !high) {
@@ -566,7 +499,7 @@ func (a *API) attentionQueueWithReadHealth(st Status, patterns []model.Pattern, 
 		}
 		return out[i].Label < out[j].Label
 	})
-	return items, out, failedReads
+	return attentionQueueResult{Items: items, Groups: out}
 }
 
 func cwdBase(cwd string) string {

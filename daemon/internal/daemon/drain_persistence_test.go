@@ -73,10 +73,8 @@ func (f persistenceFixture) drain(t *testing.T, events ...event.Event) ([]api.De
 	close(input)
 	var offered []model.Flag
 	var health []store.WriteHealth
-	cr := correlate.New(f.tagger, sensitive.New(f.cfg), f.cfg)
-	done := startDrainLoop(input, f.store, cr, nil, session.NewResolver(f.store, f.tagger), f.tagger, hub, nil,
-		func() { health = append(health, f.store.WriteHealth()) }, nil,
-		func(fl model.Flag) { offered = append(offered, fl) })
+	cr := correlate.New(f.tagger, sensitive.New(f.cfg), f.cfg, correlate.Hooks{})
+	done := runEventIngest(input, ingestDeps{Store: f.store, Correlator: cr, Resolver: session.NewResolver(f.store, f.tagger), Tagger: f.tagger, Deltas: hub, PostureChanged: func() { health = append(health, f.store.WriteHealth()) }, NewFlag: func(fl model.Flag) { offered = append(offered, fl) }}).Done()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
@@ -162,7 +160,7 @@ func TestDrainDuplicateModelObservationDoesNotPublishNewRow(t *testing.T) {
 func TestDrainFlagRecoveryUsesSameCorrelator(t *testing.T) {
 	f := newPersistenceFixture(t)
 	f.exec(t, `CREATE TRIGGER reject_flag BEFORE INSERT ON flags BEGIN SELECT RAISE(ABORT, 'injected failure'); END`)
-	cr := correlate.New(f.tagger, sensitive.New(f.cfg), f.cfg)
+	cr := correlate.New(f.tagger, sensitive.New(f.cfg), f.cfg, correlate.Hooks{})
 	cr.SetOpenFlagChecker(func(id string) bool {
 		flag, ok := f.store.GetFlag(id)
 		return ok && !flag.Acknowledged
@@ -170,9 +168,7 @@ func TestDrainFlagRecoveryUsesSameCorrelator(t *testing.T) {
 	input := make(chan event.Event, 4)
 	health := make(chan store.WriteHealth, 4)
 	var offered []model.Flag
-	done := startDrainLoop(input, f.store, cr, nil, session.NewResolver(f.store, f.tagger), f.tagger, nil, nil,
-		func() { health <- f.store.WriteHealth() }, nil,
-		func(flag model.Flag) { offered = append(offered, flag) })
+	done := runEventIngest(input, ingestDeps{Store: f.store, Correlator: cr, Resolver: session.NewResolver(f.store, f.tagger), Tagger: f.tagger, PostureChanged: func() { health <- f.store.WriteHealth() }, NewFlag: func(flag model.Flag) { offered = append(offered, flag) }}).Done()
 	now := time.Now().UTC()
 	input <- event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"}
 	conn := event.Event{Kind: event.KindConnOpen, TS: now.Add(time.Second), PID: 500, RemoteHost: "evil.example.com", RemotePort: 443}
@@ -224,9 +220,7 @@ func TestDrainExportsOnlySavedRowsAndRoutesOnlySavedFlags(t *testing.T) {
 			input <- event.Event{Kind: event.KindConnOpen, TS: now.Add(time.Second), PID: 500, RemoteHost: "evil.example.com", RemotePort: 443}
 			close(input)
 			routed := 0
-			done := startDrainLoop(input, f.store, correlate.New(f.tagger, sensitive.New(f.cfg), f.cfg), pub,
-				session.NewResolver(f.store, f.tagger), f.tagger, nil, nil, nil,
-				func() *advisor.Subscriber { routed++; return nil }, nil)
+			done := runEventIngest(input, ingestDeps{Store: f.store, Correlator: correlate.New(f.tagger, sensitive.New(f.cfg), f.cfg, correlate.Hooks{}), Fleet: pub, Resolver: session.NewResolver(f.store, f.tagger), Tagger: f.tagger, Advisor: func() *advisor.Subscriber { routed++; return nil }}).Done()
 			select {
 			case <-done:
 			case <-time.After(3 * time.Second):

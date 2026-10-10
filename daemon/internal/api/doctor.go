@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
-	"github.com/cavi-ai/secure-agent/daemon/internal/session"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -176,32 +175,10 @@ func (a *API) doctorFacts(now time.Time) doctorFacts {
 			}
 		}
 	}
-	f.sessionsTotal, f.sessionsNamed, f.sessionsWithWorkspace, f.sessionsWRepo = a.store.SessionIdentityStats(f.boot)
-	gitWorkspaces := map[string]bool{}
-	workspaceRows, err := a.store.DoctorWorkspaceRepos(f.boot)
-	f.repoQueryError = err != nil
-	for _, row := range workspaceRows {
-		eligible, ok := gitWorkspaces[row[0]]
-		if !ok {
-			eligible = session.IsGitWorkspace(row[0])
-			gitWorkspaces[row[0]] = eligible
-		}
-		if eligible {
-			f.sessionsWithGitWorkspace++
-			if row[1] != "" {
-				f.sessionsGitWRepo++
-			}
-		}
-	}
-	f.sessionsLastHour = a.store.SessionsCreatedSince(now.Add(-time.Hour))
-	f.sessionsByHarness = a.store.SessionsByHarness(f.boot)
+	gatherDoctorStoreFacts(&f, a.store)
 	if a.sightings != nil {
 		f.seenByHarness = a.sightings(f.boot)
 	}
-	f.traceByHarness = a.store.TraceRowsWrittenByHarness()
-	f.dupePairs, f.idless = a.store.ToolCallStats(f.boot)
-	f.claudePriced, f.claudeUnpriced, f.allUnpriced, f.allCalls = a.store.PricingStats()
-	f.retention = a.store.RetentionReport()
 	if a.hermes != nil {
 		h := a.hermes()
 		f.hermes = &h
@@ -242,11 +219,11 @@ func checkFileTelemetry(f doctorFacts) (string, string) {
 	switch {
 	case es.Losing:
 		return doctorFail, esLossDetail(*es)
-	case esServiceFlooding(*es):
+	case esServiceFlooding(f.now, *es):
 		return doctorFail, esFloodingDetail(*es)
-	case esServiceLagging(*es):
+	case esServiceLagging(f.now, *es):
 		return doctorFail, esLaggingDetail(*es)
-	case esServiceBehind(*es):
+	case esServiceBehind(f.now, *es):
 		// No warning level exists (doctorPass/doctorFail/doctorSkip only):
 		// a sustained burst still fails the check, but with the behind
 		// detail, not the garbage one.
@@ -284,7 +261,7 @@ func checkCollectors(f doctorFacts) (string, string) {
 	}
 	// Silence only means blindness while agents are active (as in posture).
 	if f.st.ActiveAgents > 0 {
-		for _, it := range silentCollectorItems(f.st) {
+		for _, it := range silentCollectorItems(f.now, f.st) {
 			silent = append(silent, it.ID)
 		}
 	}

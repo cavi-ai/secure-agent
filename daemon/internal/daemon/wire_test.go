@@ -132,7 +132,7 @@ func TestBuildStatusFn(t *testing.T) {
 	time.Sleep(time.Millisecond)
 	source.cpu = 2 * time.Second
 	tagger.Refresh()
-	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
+	cr := correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{})
 	reg := supervise.NewRegistry()
 
 	fn := buildStatusFn(nil, tagger, cr, nil, reg, nil, time.Now().Add(-2*time.Second),
@@ -299,7 +299,7 @@ func TestInfraFamiliesAreCountedSeparately(t *testing.T) {
 		}
 	}
 
-	fn := buildStatusFn(nil, tagger, correlate.New(tagger, sensitive.New(cfg), cfg), nil,
+	fn := buildStatusFn(nil, tagger, correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{}), nil,
 		supervise.NewRegistry(), st, time.Now(),
 		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{} }, nil, nil)
 	status := fn()
@@ -402,13 +402,12 @@ func TestStartDrainLoopPersistsAndCloses(t *testing.T) {
 	if !st.ExpectedEgressMatch(store.EgressObservation{Scope: store.EgressScope{Agent: info.Name}, Host: "evil.example.com", Protocol: "tcp", Port: 443}) {
 		t.Fatal("expected-egress rule not active")
 	}
-	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
+	cr := correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{})
 
 	b := bus.New(64)
 	res := session.NewResolver(st, tagger)
 	var offered []model.Flag // the local agent's automatic review hook
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, tagger, nil, nil, nil, nil,
-		func(fl model.Flag) { offered = append(offered, fl) })
+	done := runEventIngest(b.Subscribe(), ingestDeps{Store: st, Correlator: cr, Fleet: fleet.NewPublisher(), Resolver: res, Tagger: tagger, NewFlag: func(fl model.Flag) { offered = append(offered, fl) }}).Done()
 
 	now := time.Now()
 	b.Publish(event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"})
@@ -451,11 +450,11 @@ func TestDrainLoopMarksRecordRows(t *testing.T) {
 	cfg, _ := config.Load("/nonexistent")
 	tagger := agents.New(cfg, fakeProcSource{})
 	tagger.Refresh()
-	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
+	cr := correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{})
 
 	b := bus.New(64)
 	res := session.NewResolver(st, tagger)
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, tagger, nil, nil, nil, nil, nil)
+	done := runEventIngest(b.Subscribe(), ingestDeps{Store: st, Correlator: cr, Fleet: fleet.NewPublisher(), Resolver: res, Tagger: tagger}).Done()
 
 	now := time.Now()
 	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, Path: "/Users/x/project/main.go"})
@@ -509,11 +508,11 @@ func TestDrainLoopDropsUnattributedFileEvents(t *testing.T) {
 	cfg, _ := config.Load("/nonexistent")
 	tagger := agents.New(cfg, fakeProcSource{})
 	tagger.Refresh()
-	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
+	cr := correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{})
 
 	b := bus.New(64)
 	res := session.NewResolver(st, tagger)
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, tagger, nil, nil, nil, nil, nil)
+	done := runEventIngest(b.Subscribe(), ingestDeps{Store: st, Correlator: cr, Fleet: fleet.NewPublisher(), Resolver: res, Tagger: tagger}).Done()
 
 	now := time.Now()
 	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, Path: "/Users/x/project/main.go"})
@@ -735,9 +734,9 @@ func TestDrainLoopAdvancesTheFileFeedClock(t *testing.T) {
 	cfg, _ := config.Load("/nonexistent")
 	tagger := agents.New(cfg, fakeProcSource{})
 	tagger.Refresh()
-	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
+	cr := correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{})
 	b := bus.New(64)
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), session.NewResolver(st, tagger), tagger, nil, nil, nil, nil, nil)
+	done := runEventIngest(b.Subscribe(), ingestDeps{Store: st, Correlator: cr, Fleet: fleet.NewPublisher(), Resolver: session.NewResolver(st, tagger), Tagger: tagger}).Done()
 	b.Publish(event.Event{Kind: event.KindFileOpen, TS: captured.Add(-time.Hour), PID: 9999, Path: "/tmp/unrelated"})
 	b.Close()
 	<-done
@@ -746,7 +745,7 @@ func TestDrainLoopAdvancesTheFileFeedClock(t *testing.T) {
 	}
 
 	b = bus.New(64)
-	done = startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), session.NewResolver(st, tagger), tagger, nil, nil, nil, nil, nil)
+	done = runEventIngest(b.Subscribe(), ingestDeps{Store: st, Correlator: cr, Fleet: fleet.NewPublisher(), Resolver: session.NewResolver(st, tagger), Tagger: tagger}).Done()
 	b.Publish(event.Event{Kind: event.KindFileOpen, TS: captured.Add(time.Second), PID: 9999, Path: "/tmp/unrelated"})
 	b.Close()
 	<-done

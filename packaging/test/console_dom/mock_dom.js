@@ -6,461 +6,9 @@
 //   sessiondemo — after 4s, filter the timeline to session 7f3a9c21…
 //   exportdemo  — with raildemo: stub the clipboard, click Export at 9s
 (() => {
-  const now = new URLSearchParams(location.search).has('cleanupmidnight')
-    ? new Date().setHours(0, 0, 0, 0) : Date.now();
-  const iso = (msAgo) => new Date(now - msAgo).toISOString();
+  const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
+  const { now, iso, data, scenarios } = fixture;
   let bookCleanup = () => {};
-
-  const data = {
-    // Durable sessions (the P1 spine) — drives the session-first rail.
-    '/sessions': [
-      {
-        id: 'sess-claude-1', harness: 'claude', workspace: '/Users/dev/workspace/api-service',
-        repo: 'api-service', branch: 'main', root_pid: 5821,
-        started_at: '2026-09-09T14:00:00Z', last_seen_at: iso(60000),
-        status: 'active', confidence: 'hook',
-        _timeline: [
-          { kind: 12, ts: iso(120000), session_id: 'sess-claude-1', tool: 'Bash', tool_status: 'ok', duration_ms: 31000 },
-          { kind: 12, ts: iso(60000), session_id: 'sess-claude-1', tool: 'Read', tool_status: 'error', duration_ms: 400 },
-          { kind: 14, ts: iso(90000), session_id: 'sess-claude-1', model: 'claude-sonnet-4-5', tokens_in: 46220, tokens_out: 812, cost_usd: 0.0002 },
-          { kind: 5, ts: iso(30000), session_id: 'sess-claude-1', remote_host: 'api.anthropic.com', remote_port: 443 }
-        ]
-      },
-      {
-        id: 'sess-cursor-2', harness: 'cursor', workspace: '/Users/dev/projects/web-app',
-        repo: '', branch: '', root_pid: 6033,
-        started_at: '2026-09-09T15:00:00Z', ended_at: '2026-09-09T17:30:00Z', last_seen_at: iso(3600000),
-        status: 'ended', confidence: 'process-tree'
-      },
-      // Sub-agent of sess-claude-1: nests under its parent in the rail.
-      {
-        id: 'sess-claude-sub', harness: 'claude', parent_id: 'sess-claude-1',
-        workspace: '/Users/dev/workspace/api-service/packages/auth',
-        started_at: '2026-09-09T14:05:00Z', last_seen_at: iso(90000),
-        status: 'idle', confidence: 'hook'
-      },
-      // Finished claude run: the collapsed ended tail of the claude group.
-      {
-        id: 'sess-claude-0', harness: 'claude', workspace: '/Users/dev/workspace/docs-site',
-        repo: 'docs-site', branch: 'main',
-        started_at: '2026-09-09T09:00:00Z', ended_at: '2026-09-09T11:00:00Z', last_seen_at: iso(7200000),
-        status: 'ended', confidence: 'hook'
-      },
-      {
-        id: 'sess-codex-3', harness: 'codex', workspace: '/Users/dev/workspace/data-pipeline',
-        repo: 'data-pipeline', branch: 'feat/etl', root_pid: 4412,
-        started_at: '2026-09-09T13:00:00Z', last_seen_at: iso(20000),
-        status: 'active', confidence: 'transcript'
-      },
-      // Local model server: infra, never a rail card.
-      {
-        id: 'sess-ollama-4', harness: 'ollama', workspace: '/', root_pid: 7001,
-        started_at: '2026-09-09T08:00:00Z', last_seen_at: iso(5000),
-        status: 'active', confidence: 'process-tree'
-      }
-    ],
-    '/status': {
-      running: true,
-      version: 'v9.9.9-domtest',
-      uptime: '4h 12m 8s',
-      active_agents: 3,
-      infra_count: 1,
-      coverage: { harnesses_active: 3, harnesses_seen: 2 },
-      agents: [
-        { pid: 5821, name: 'claude', cwd: '/Users/dev/workspace/api-service', ppid: 1, root_pid: 5821, started_at: '2026-09-09T14:00:00Z', last_seen_at: iso(60000), rss_bytes: 120000000, cpu_percent: 14.5, repo: 'api-service', branch: 'main', workspace: '/Users/dev/workspace/api-service' },
-        { pid: 5822, name: 'claude', ppid: 5821, root_pid: 5821, started_at: '2026-09-09T14:01:00Z', last_seen_at: iso(120000), rss_bytes: 40000000 },
-        { pid: 6033, name: 'cursor', cwd: '/Users/dev/projects/web-app', ppid: 1, root_pid: 6033, started_at: '2026-09-09T15:00:00Z', last_seen_at: iso(3600000), rss_bytes: 89000000, is_orphan: true },
-        { pid: 4412, name: 'codex', cwd: '/Users/dev/workspace/data-pipeline', ppid: 1, root_pid: 4412, started_at: '2026-09-09T13:00:00Z', last_seen_at: iso(20000), rss_bytes: 210000000, cpu_percent: 22, repo: 'data-pipeline', branch: 'feat/etl', workspace: '/Users/dev/workspace/data-pipeline' },
-        { pid: 7001, name: 'ollama', kind: 'infra', ppid: 1, root_pid: 7001, started_at: '2026-09-09T08:00:00Z', last_seen_at: iso(5000), rss_bytes: 820000000, cpu_percent: 3 }
-      ],
-      // Live process trees, joined to sessions by root pid (RSS, kill).
-      trees: [
-        { root: { pid: 5821, name: 'claude', kind: 'agent', cwd: '/Users/dev/workspace/api-service', started_at: '2026-09-09T14:00:00Z' }, children: [{ pid: 5822, name: 'claude' }], rss_bytes: 160000000, cpu_percent: 16, last_seen_at: iso(60000) },
-        { root: { pid: 4412, name: 'codex', kind: 'agent', cwd: '/Users/dev/workspace/data-pipeline', started_at: '2026-09-09T13:00:00Z' }, children: [], rss_bytes: 210000000, cpu_percent: 22, last_seen_at: iso(20000) },
-        { root: { pid: 6033, name: 'cursor', kind: 'agent', cwd: '/Users/dev/projects/web-app', started_at: '2026-09-09T15:00:00Z', is_orphan: true }, children: [], rss_bytes: 89000000, last_seen_at: iso(3600000) },
-        { root: { pid: 7001, name: 'ollama', kind: 'infra', started_at: '2026-09-09T08:00:00Z' }, children: [], rss_bytes: 820000000, cpu_percent: 3, last_seen_at: iso(5000) }
-      ],
-      proxy_enabled: true,
-      proxy_port: 8443,
-      uninspected_egress: 2,
-      advisor_enabled: true,
-      fleet_configured: true,
-      unacted_flags_24h: 2,
-      advisor_health: { enabled: true, queue_depth: 0, model: 'qwen3:8b' },
-      firewall_stats: {
-        'anthropic-key':  { type: 'vendor-key', mode: 'monitor', would_block: 5, blocked: 0, legit: 12 },
-        'aws-key':        { type: 'cloud-key', mode: 'block',   would_block: 2, blocked: 1, legit: 0 },
-        'db-conn-string': { type: 'env-value', mode: 'monitor', would_block: 1, blocked: 0, legit: 0 }
-      }
-    },
-    '/resources': {
-      observed_at: iso(0),
-      host: {
-        total_memory_bytes: 17179869184,
-        free_memory_bytes: 2147483648,
-        available_memory_bytes: 4294967296,
-        compressed_memory_bytes: 1073741824,
-        used_memory_bytes: 12884901888,
-        agent_memory_bytes: 5905580032,
-        non_agent_memory_bytes: 6979321856,
-        swap_total_bytes: 8589934592,
-        swap_used_bytes: 2147483648,
-        headroom_percent: 25,
-        agent_memory_percent: 34.4,
-        system_cpu_percent: 75,
-        agent_cpu_percent: 16.6,
-        non_agent_cpu_percent: 58.4,
-        load_1: 5.5,
-        logical_cpu_count: 8,
-        memory_pressure: 'normal',
-        thermal_state: 'nominal',
-        headroom_score: 25,
-        capacity: 'constrained'
-      },
-      rss_bytes: 5995580032,
-      cpu_percent: 142.5,
-      process_count: 3,
-      session_count: 2,
-      control: {
-        mode: 'prompt', max_rss_bytes: 4294967296, max_cpu_percent: 100,
-        sustain_seconds: 30, cooldown_seconds: 300,
-		interventions: [{ action: 'notify', after_seconds: 0 }, { action: 'lower_priority', after_seconds: 30, nice: 10 }, { action: 'pause', after_seconds: 60 }, { action: 'terminate', after_seconds: 120 }],
-        workspace_overrides: [{ cwd_prefix: '/Users/dev/workspace', mode: 'observe', max_rss_bytes: 6442450944, max_cpu_percent: 200, sustain_seconds: 60, cooldown_seconds: 600 }],
-		pending: [{ id: 'resource-1', session_key: '5821:1789480800000000000', root_pid: 5821, action: 'pause' }]
-      },
-      sessions: [
-        {
-          key: '5821:1789480800000000000', name: 'claude', workspace: '/Users/dev/workspace/api-service',
-          root_pid: 5821, root_started_at: '2026-09-09T14:00:00Z', last_seen_at: iso(60000),
-          rss_bytes: 5905580032, cpu_percent: 132.5, process_count: 2, orphan_count: 0,
-          estimated_reclaim_bytes: 1610612736,
-          control: {
-            mode: 'prompt', state: 'approval-required', pending_id: 'resource-1',
-			next_action: 'pause', last_action: 'lower_priority', applied_actions: ['notify', 'lower_priority'],
-            policy_source: 'workspace', policy_scope: '/Users/dev/workspace',
-            violations: [{ metric: 'rss_bytes', actual: 5905580032, limit: 4294967296 }]
-          },
-          processes: [
-            { pid: 5821, ppid: 1, name: 'claude', cwd: '/Users/dev/workspace/api-service', rss_bytes: 4294967296, cpu_percent: 92.5 },
-            { pid: 5822, ppid: 5821, name: 'claude', rss_bytes: 1610612736, cpu_percent: 40 }
-          ],
-          samples: [
-            { at: iso(900000), rss_bytes: 4400000000, cpu_percent: 82 },
-            { at: iso(450000), rss_bytes: 5100000000, cpu_percent: 110 },
-            { at: iso(0), rss_bytes: 5905580032, cpu_percent: 132.5 }
-          ],
-          diagnoses: [{
-            code: 'rapid-growth', severity: 'warning',
-            summary: 'Memory grew 1.4 GB in 15 minutes.',
-            evidence: ['15-minute growth: 1505580032 bytes (34.2%)'],
-            threshold: '15-minute growth >= 1 GiB and >= 25%', confidence: 'high',
-            estimated_reclaim_bytes: 1505580032
-          }]
-        },
-        {
-          key: '6033:1789484400000000000', name: 'cursor', workspace: '/Users/dev/projects/web-app',
-          root_pid: 6033, root_started_at: '2026-09-09T15:00:00Z', last_seen_at: iso(3600000),
-          rss_bytes: 90000000, cpu_percent: 10, process_count: 1, orphan_count: 1,
-		  control: { mode: 'prompt', state: 'paused', policy_source: 'default', paused: true, last_action: 'pause', last_error: 'rollback failed: permission denied', violations: [] },
-          processes: [{ pid: 6033, ppid: 1, name: 'cursor', cwd: '/Users/dev/projects/web-app', rss_bytes: 90000000, cpu_percent: 10, is_orphan: true }],
-          samples: [{ at: iso(0), rss_bytes: 90000000, cpu_percent: 10 }],
-          diagnoses: [{ code: 'orphan-drift', severity: 'warning', summary: 'Attributed processes remain after their parent disappeared.' }]
-        }
-      ],
-      episodes: [{
-        id: 7, captured_at: iso(1800000), severity: 'critical', diagnosis_codes: ['heavy-memory', 'runaway-child'],
-        host: {
-          total_memory_bytes: 17179869184, available_memory_bytes: 1073741824,
-          memory_pressure: 'critical', thermal_state: 'serious',
-          headroom_score: 6, capacity: 'critical'
-        },
-        correlations: [{
-          summary: 'Memory rose 3.0 GiB in 10m while node started.', confidence: 'observed-correlation',
-          from: iso(2400000), to: iso(1800000), rss_delta_bytes: 3221225472, activity_count: 3
-        }],
-        activities: [
-          { at: iso(2250000), kind: 'tool', pid: 4412, process: 'codex', summary: 'Bash tool ran' },
-          { at: iso(2100000), kind: 'process-start', pid: 4419, process: 'node', summary: 'node started' },
-          { at: iso(1950000), kind: 'network', pid: 4419, process: 'node', summary: 'connected to api.openai.com:443' }
-        ],
-        session: {
-          key: '4412:1789470000000000000', name: 'codex', workspace: '/Users/dev/workspace/data-pipeline',
-          root_pid: 4412, rss_bytes: 7516192768, cpu_percent: 88, process_count: 3,
-          processes: [
-            { pid: 4412, name: 'codex', rss_bytes: 1073741824, cpu_percent: 18 },
-            { pid: 4419, ppid: 4412, name: 'node', rss_bytes: 5905580032, cpu_percent: 65 },
-            { pid: 4420, ppid: 4412, name: 'rg', rss_bytes: 536870912, cpu_percent: 5 }
-          ],
-          samples: [
-            { at: iso(2400000), rss_bytes: 4294967296, cpu_percent: 42 },
-            { at: iso(1800000), rss_bytes: 7516192768, cpu_percent: 88 }
-          ],
-          diagnoses: [{
-            code: 'runaway-child', severity: 'critical', summary: 'One child process dominated session memory.',
-            evidence: ['PID 4419: 5905580032 bytes (79%)']
-          }]
-        }
-      }]
-    },
-    // The daemon's invariant: every item sits in exactly one group and the
-    // group items sum to needs_you (= items.length). Warning findings, patterns
-    // and recurring egress are never queued.
-    '/posture': {
-      state: 'critical',
-      needs_you: 6,
-      coverage_count: 2,
-      summary: '6 decisions pending — first: proxy-secret-leak — cursor sent an anthropic-key to logs.example.com — act now.',
-      coverage_items: [
-        { severity: 2, kind: 'collector_down', id: 'eslogger', title: 'File monitoring is off', detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' },
-        { severity: 1, kind: 'uninspected_egress', id: 'uninspected-egress', title: '2 connections bypassed inspection' }
-      ],
-      items: [
-        { severity: 3, kind: 'flag', id: 'flag-1', title: 'proxy-secret-leak — cursor sent an anthropic-key to logs.example.com' },
-        { severity: 3, kind: 'flag', id: 'flag-2', title: 'Sensitive file read near an outside connection' },
-        { severity: 3, kind: 'flag', id: 'flag-4', title: 'Agent modified macOS privacy permissions (TCC)' },
-        { severity: 1, kind: 'guard_pending', id: 'guard-1', title: 'claude wants .env' },
-        { severity: 3, kind: 'incident', id: 'inc-20260907-6033-a1b2', title: 'sensitive-read-then-connect — cursor (PID 6033)' },
-        { severity: 1, kind: 'resource_pressure', id: 'resource-1', title: 'Resource pressure: api-service' }
-      ],
-      // The attention tab renders this served queue verbatim — the daemon
-      // groups it; the console never re-derives it.
-      groups: [
-        {
-          key: 'session:5821:1789480800000000000', label: 'api-service', agent: 'claude',
-          workspace: '/Users/dev/workspace/api-service', rootPid: 5821, pids: [5821, 5822],
-          rssBytes: 5905580032, cpuPercent: 132.5, processCount: 2,
-          items: [
-            { kind: 'guard', priority: 5, id: 'guard-1', title: 'Guard decision',
-              detail: 'Read wants access to /workspace/api-service/.env',
-              rule: 'cloud-creds', path: '/workspace/api-service/.env',
-              available_scopes: [{kind:'once'},{kind:'session'},{kind:'exact',expiry:'24h'},{kind:'exact',expiry:'7d'}],
-              scopeText: 'Future permissions cover this file, tool, workspace and observed executable path. Revoke in Policies.' },
-            { kind: 'resource', priority: 4, id: 'resource-1', action: 'pause',
-              title: 'Resource pressure', detail: 'Memory grew 1.4 GB in 15 minutes.' },
-          ]
-        },
-        {
-          key: 'session:6033:1789484400000000000', label: 'web-app', agent: 'cursor',
-          workspace: '/Users/dev/projects/web-app', rootPid: 6033, pids: [6033],
-          rssBytes: 90000000, cpuPercent: 10, processCount: 1,
-          items: [
-            { kind: 'incident', priority: 3, id: 'inc-20260907-6033-a1b2', status: 'open',
-              title: 'Critical incident', detail: 'Credential read followed by network access.' },
-            { kind: 'flag', priority: 2, id: 'flag-1',
-              title: 'Critical finding', detail: 'proxy-secret-leak — anthropic-key in request body' },
-            { kind: 'flag', priority: 2, id: 'flag-2',
-              title: 'Critical finding', detail: 'sensitive-read-then-connect — credentials then egress' },
-            { kind: 'flag', priority: 2, id: 'flag-4',
-              title: 'Critical finding', detail: 'tcc-tamper — modified TCC service' }
-          ]
-        }
-      ]
-    },
-    '/flags': [
-      {
-        id: 'flag-1',
-        rule: 'proxy-secret-leak', agent: 'cursor', pid: 6033, severity: 3,
-        session_id: 'b81d4fae-7dec-11d0-a765-00a0c91e6bf6',
-        evidence: [
-          { kind: 'violation', label: 'proxy-secret-leak: anthropic-key', sub: 'payload inspection' },
-          { kind: 'connect', label: 'logs.example.com:443', sub: 'destination' }
-        ],
-        advisor: { assessment: 'suspicious', confidence: 0.7, rationale: 'host is not a known vendor; first time this session', suggested_action: 'review once' }
-      },
-      {
-        id: 'flag-2',
-        rule: 'sensitive-read-then-connect', agent: 'cursor', pid: 6033, severity: 3,
-        session_id: '7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77',
-        evidence: [
-          { kind: 'read', label: '~/.aws/credentials', sub: 'sensitive read', ts: '2026-09-07T16:04:57Z' },
-          { kind: 'connect', label: 'logs.example.com:443', sub: 'egress', ts: '2026-09-07T16:05:01Z' }
-        ],
-        advisor: { assessment: 'benign', confidence: 0.8, rationale: 'registry host matches this project\'s normal workflow', suggested_action: 'none' }
-      },
-      {
-        id: 'flag-3',
-        rule: 'keychain-access', agent: 'codex', pid: 9012, severity: 1,
-        evidence: [{ kind: 'keychain', label: '/Users/dev/Library/Keychains/login.keychain-db', sub: 'keychain access', ts: '2026-09-07T15:55:00Z' }]
-      }
-    ],
-    '/incidents': [
-      {
-        id: 'inc-20260907-6033-a1b2',
-        rule: 'sensitive-read-then-connect', agent: 'cursor', pid: 6033,
-        risk: 'CRITICAL',
-        summary: 'Agent read ~/.aws/credentials, then opened a connection to an unrecognized host.',
-        rotate_list: [{ name: 'AWS_ACCESS_KEY', category: 'cloud' }],
-        workflow: { status: 'acknowledged' },
-        advisor_narrative: 'Cursor read the AWS credentials file and seconds later connected to an unrecognized host — a classic exfiltration shape. Rotate the key first, then review the session.'
-      }
-    ],
-    '/events': [
-      { kind: 9, ts: iso(4000),  pid: 6033, detail: 'proxy-secret-leak: anthropic-key', session_id: 'b81d4fae-7dec-11d0-a765-00a0c91e6bf6' },
-      { kind: 8, ts: iso(6000),  pid: 5821, detail: 'Read ~/.aws/credentials', session_id: '7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77' },
-      { kind: 5, ts: iso(7000),  pid: 6033, remote_host: 'logs.example.com', remote_port: 443, session_id: '7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77' },
-      { kind: 8, ts: iso(21000), pid: 5821, detail: 'Bash → npm install' },
-      { kind: 5, ts: iso(29000), pid: 5821, remote_host: 'api.anthropic.com', remote_port: 443 },
-      { kind: 9, ts: iso(34000), pid: 5821, detail: 'proxy-scan: POST /v1/messages (clean)' }
-    ],
-    // REAL /fleet shape: a single node-status OBJECT, not an array. (The old
-    // array fixture let the console assume .map was safe — it crashed on the
-    // real endpoint and took half the page down with it.)
-    '/fleet': {
-      hostname: 'ci-runner-02', os: 'darwin', arch: 'arm64', version: 'v9.9.9-domtest',
-      running: true, uptime: '4h 12m 8s', active_agents: 3, recent_flags: 2,
-      proxy_enabled: true, proxy_port: 8443, fleet_configured: true
-    },
-    '/audit': [
-      { ts: iso(300000), action: 'rule-mode', rule: 'aws-key', from_mode: 'monitor', to_mode: 'block', detail: '' },
-      { ts: iso(3600000), action: 'fingerprint-ingest', detail: 'registered 6 secrets from ~/.aws/credentials' }
-    ],
-    '/firewall/sources': [
-      { source: '~/.aws/credentials', origin: 'config' },
-      { source: '~/workspace/api-service/.env.production', origin: 'user' }
-    ],
-    '/allowlist/suggestions': [
-      { agent: 'cursor', host: 'registry.npmjs.org', count: 14, assessment: 'benign', confidence: 0.9, rationale: 'npm registry is routine for JS projects' }
-    ],
-    '/allowlist': [
-      { agent: 'cursor', host: 'artifacts.example.com' }
-    ],
-    '/mute': [
-      { rule: 'proxy-prompt-injection', host: 'blog.example.com' },
-      { rule: 'keychain-security-cli', host: '*' }
-    ],
-    '/expected': [
-      { key: 'claude|gh|/Users/dev/.config/gh/hosts.yml|GitHub', agent: 'claude', reader: 'gh', path: '/Users/dev/.config/gh/hosts.yml', dest: 'GitHub', hits: 4, created_at: '2026-09-25T10:00:00Z' }
-    ],
-    '/decision-scopes': [],
-    '/egress/uninspected': [
-      { agent: 'cursor', host: 'registry.npmjs.org', count: 14, first_seen: iso(86400000), last_seen: iso(300000), session_id: 'sess-cursor-2', assessment: 'benign', rationale: 'npm registry is routine for JS projects', identity: { kind: 'hostname', name: 'registry.npmjs.org' } },
-      { agent: 'claude', host: 'statsig.example.com', count: 3, first_seen: iso(7200000), last_seen: iso(900000), session_id: 'sess-claude-1', identity: { kind: 'hostname', name: 'statsig.example.com' } },
-      { agent: 'claude', host: 'telemetry.example.com', count: 5, first_seen: iso(5400000), last_seen: iso(600000), session_id: 'sess-claude-1', identity: { kind: 'hostname', name: 'telemetry.example.com' } },
-      { agent: 'cursor', host: '2606:4700:4408::ac40:9bd1', count: 56, last_seen: iso(600000), infra: 'Cloudflare', identity: { kind: 'ipv6', org: 'Cloudflare', class: 'cloud', ip: '2606:4700:4408::ac40:9bd1' } },
-      { agent: 'codex', host: 'ec2-98-90-104-193.compute-1.amazonaws.com', count: 11, last_seen: iso(700000), infra: 'AWS', identity: { kind: 'hostname', name: 'ec2-98-90-104-193.compute-1.amazonaws.com', org: 'AWS', class: 'cloud' } },
-      { agent: 'claude', host: '2600:1901:0:9e23::', count: 2, last_seen: iso(400000), identity: { kind: 'ipv6', org: 'Google Cloud', class: 'cloud', ip: '2600:1901:0:9e23::' } },
-      { agent: 'openclaw', host: '2607:6bc0::10', count: 94, first_seen: iso(3600000), last_seen: iso(60000), identity: { kind: 'ipv6', org: 'Anthropic', class: 'vendor', ip: '2607:6bc0::10' } }
-    ],
-    '/egress/episodes': { episodes: [
-      { id: 'episode-routine', candidate: true, expected: false,
-        observed: { id: 'episode-routine', host: 'updates.example.com', protocol: 'tcp', port: 443,
-          count: 5, first_seen: iso(7200000), last_seen: iso(60000),
-          intervals: [1800000000000, 1770000000000, 1830000000000, 1800000000000],
-          session_ids: ['sess-claude-1'], recurring: true, scope_complete: true,
-          scope: { agent: 'claude', exe_path: '/Applications/Claude.app', harness: 'claude', workspace: '/Users/dev/workspace/api-service' } },
-        advisor_inference: { possible_purpose: 'Possibly an update check', confidence: 'medium', created_at: iso(120000) } },
-      { id: 'episode-ambiguous', candidate: true, expected: false,
-        observed: { id: 'episode-ambiguous', host: '203.0.113.4', protocol: 'tcp', port: 443,
-          count: 5, first_seen: iso(7200000), last_seen: iso(60000),
-          intervals: [1800000000000, 1800000000000, 1800000000000, 1800000000000],
-          session_ids: [], recurring: true, scope_complete: false,
-          scope: { agent: 'codex', exe_path: '/usr/local/bin/codex', harness: '', workspace: '' } } },
-      { id: 'episode-expected', candidate: false, expected: true, expected_rule_id: 'expected-older',
-        observed: { id: 'episode-expected', host: 'old.example.com', protocol: 'tcp', port: 443,
-          count: 5, first_seen: iso(7200000), last_seen: iso(60000),
-          intervals: [1800000000000, 1800000000000, 1800000000000, 1800000000000],
-          session_ids: [], recurring: true, scope_complete: false,
-          scope: { agent: 'cursor', exe_path: '', harness: '', workspace: '' } } }
-    ] },
-    '/expected-egress': { rules: [
-      { id: 'expected-older', agent: 'cursor', kind: 'destination', host: 'old.example.com', port: 443,
-        protocol: 'tcp', rationale: 'Routine update', created_by: 'local-operator',
-        created_at: iso(86400000), revoked_at: null }
-    ] },
-    '/advisor/plan': {
-      subject: 'file:/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl',
-      status: 'ready', advisor_ready: true,
-      playbook: { rule: 'secret-in-transcript', title: 'Secret in an agent transcript', why: 'A secret appeared in text the agent saw.',
-        now: ['Rotate the secret.'], prevent: [{ kind: 'guard-rule', step: 'Deny commands that print secrets', detail: 'Refuse env for this agent.' }], actions: ['open-incident', 'dismiss'] },
-      plan: { summary: 'Codex printed an API key from an env dump.', why: ['A tool call ran env.'], risk: 'high',
-        prevent: [{ kind: 'agent-instruction', step: 'Tell codex not to echo keys', detail: 'Add a line to AGENTS.md.' }],
-        behavior: ['Reference keys by variable name.'], remediate: ['Rotate the key.'], actions: ['dismiss'], confidence: 0.8,
-        model: 'qwen3.8:27b-mlx', created_at: iso(120000) },
-      labels: { summary: { ok: 3, not_ok: 0 }, similar: [{ label: 'ok', source: 'mark', pattern: '/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl', reason: 'my own test key', created_at: iso(86400000) }],
-        suggestion: { label: 'ok', text: 'You marked this 3 times as routine for codex.', action_id: 'dismiss' } },
-      flag: { id: 'flag-t1', agent: 'codex', rule: 'secret-in-transcript', explain: { actions: [
-        { id: 'dismiss', label: 'Dismiss this flag', consequence: 'marks it reviewed', method: 'POST', path: '/flags/acknowledge', body: { flag_id: 'flag-t1' } }] } }
-    },
-    '/files/detail': {
-      path: '/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl',
-      display: '~/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl',
-      exists: true, size: 2400000, mod_time: iso(600000), owned_by_user: true,
-      subject: { path: '/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl', category: 'transcript', category_label: 'agent transcript', owner_label: 'Codex transcript' },
-      session: { id: 'sess-codex-1', harness: 'codex', workspace: '/Users/dev/workspace/api-service', repo: 'api-service', branch: 'main' },
-      findings: [
-        { kind: 'flag', id: 'flag-t1', rule: 'secret-in-transcript', severity: 3, ts: iso(500000), agent: 'codex', evidence_kind: 'transcript', evidence_rule: 'fp1', offset: 4096 },
-        { kind: 'incident', id: 'inc-file-1', rule: 'secret-in-transcript', risk: 'high', ts: iso(500000), agent: 'codex', status: 'open' }
-      ],
-      accesses: [{ kind: 'file-write', ts: iso(520000), pid: 4242, exe_path: '/usr/local/bin/codex', session_id: 'sess-codex-1' }],
-      hits: [{ flag_id: 'flag-t1', rule: 'fp1', offset: 4096, ts: iso(500000) }],
-      excerpt: '{"type":"function_call_output","output":"TOKEN=[REDACTED:fp1] ok"}'
-    },
-    '/egress/endpoint': {
-      host: '2600:1901:0:9e23::',
-      identity: { kind: 'ipv6', org: 'Google Cloud' },
-      agents: ['claude'],
-      count: 2, first_seen: iso(7200000), last_seen: iso(400000),
-      sessions: [{ id: 'sess-claude-1', harness: 'claude', workspace: '/Users/dev/workspace/api-service', repo: 'api-service', branch: 'main' }],
-      events: [{ ts: iso(400000), remote_port: 443, session_id: 'sess-claude-1' }],
-      allowed: []
-    },
-    '/notify/rules': {
-      default_min_severity: 3,
-      overrides: { 'keychain-access': false },
-      scopes: [{ workspace: '/Users/dev/work/prod', rule: 'proxy-secret-leak', notify: true }]
-    },
-    '/guard/pending': [{
-      id: 'guard-1', agent: 'claude', tool: 'Read', path: '/workspace/api-service/.env',
-      rule_id: 'cloud-creds', ts: iso(30000),
-      available_scopes: [{kind:'once'},{kind:'session'},{kind:'exact',expiry:'24h'},{kind:'exact',expiry:'7d'}],
-      scope_text: 'Future permissions cover this file, tool, workspace and observed executable path. Revoke in Policies.'
-    }],
-    '/stats/rollup': (() => {
-      const pts = [];
-      const bucket = (h) => new Date(Math.floor((now - h * 3600000) / 3600000) * 3600000).toISOString().slice(0, 13);
-      for (let h = 0; h < 24; h++) {
-        pts.push({ bucket: bucket(h), kind: 'event:tool', count: (h * 7) % 9 });
-      }
-      pts.push({ bucket: bucket(2), kind: 'flag:s3', count: 1 });
-      return pts;
-    })(),
-    // /costs (24h, by repo): six rows, deliberately unsorted; the top 5 by
-    // cost render, and the 0-cost 'docs' row (fewer calls) is dropped.
-    '/costs': {
-      since: iso(24 * 3600000), until: iso(0), by: 'repo',
-      total: { key: '', calls: 40, sessions: 7, tokens_in: 912000, tokens_out: 48000, cost_usd: 36.674, unpriced_calls: 2 },
-      rows: [
-        { key: 'web-console', harness: 'codex', calls: 9, sessions: 2, tokens_in: 210000, tokens_out: 9000, cost_usd: 8.124, unpriced_calls: 0 },
-        { key: 'docs', harness: 'claude', calls: 1, sessions: 1, tokens_in: 1000, tokens_out: 100, cost_usd: 0, unpriced_calls: 0 },
-        { key: 'api-service', harness: 'claude', calls: 18, sessions: 2, tokens_in: 560000, tokens_out: 30000, cost_usd: 24.5, unpriced_calls: 0 },
-        { key: 'scratch', harness: 'cursor', calls: 3, sessions: 1, tokens_in: 20000, tokens_out: 1900, cost_usd: 0.85, unpriced_calls: 0 },
-        { key: '(no repo)', calls: 2, sessions: 1, tokens_in: 1000, tokens_out: 0, cost_usd: 0, unpriced_calls: 2 },
-        { key: 'infra-tools', harness: 'opencode', calls: 7, sessions: 1, tokens_in: 120000, tokens_out: 7000, cost_usd: 3.2, unpriced_calls: 0 }
-      ]
-    },
-    // /costs/plans: no plan headroom reported (plansdemo fills it).
-    '/costs/plans': { plans: [] },
-    // /costs keyed by the query's `by` (the fetch stub below): the Spend
-    // card's provider and day views.
-    '/costs?by=provider': {
-      since: iso(24 * 3600000), until: iso(0), by: 'provider',
-      total: { key: '', calls: 40, sessions: 7, tokens_in: 912000, tokens_out: 48000, cost_usd: 36.674, unpriced_calls: 2 },
-      rows: [
-        { key: 'anthropic', harness: 'claude', calls: 21, sessions: 3, tokens_in: 600000, tokens_out: 32000, cost_usd: 28.35, unpriced_calls: 0 },
-        { key: 'openai-codex', harness: 'codex', calls: 9, sessions: 2, tokens_in: 210000, tokens_out: 9000, cost_usd: 8.124, unpriced_calls: 0 },
-        { key: 'openai', harness: 'opencode', calls: 7, sessions: 1, tokens_in: 100000, tokens_out: 7000, cost_usd: 0.2, unpriced_calls: 0 },
-        { key: '(unknown)', harness: 'codex', calls: 3, sessions: 1, tokens_in: 2000, tokens_out: 0, cost_usd: 0, unpriced_calls: 3 }
-      ]
-    },
-    '/costs?by=day': {
-      since: iso(7 * 24 * 3600000), until: iso(0), by: 'day',
-      total: { key: '', calls: 70, sessions: 12, tokens_in: 4000000, tokens_out: 200000, cost_usd: 2194.1, unpriced_calls: 0 },
-      rows: ['2026-09-17', '2026-09-18', '2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23'].map((key, i) => ({
-        key, harness: 'claude', calls: 10, sessions: 2, tokens_in: 500000, tokens_out: 25000,
-        cost_usd: [120.5, 210, 88.25, 0, 335.84, 676.54, 449.74][i], unpriced_calls: 0
-      }))
-    }
-  };
 
   // ---------- failure-mode simulation ----------
   // These modes reproduce the exact "trouble connecting" regressions:
@@ -475,8 +23,7 @@
   //                  token-persistence flow is exercised for real.
   //   tokenseed    — pre-seed sessionStorage (simulates a RELOADED tab: no
   //                  #ct fragment, token must come from storage).
-  const MODE = location.search;
-  if (MODE.includes('incidentremediation')) {
+  if (scenarios.has('incidentremediation')) {
     const inc = data['/incidents'][0];
     const item = {id:'key',name:'Fixture credential',category:'ENV_SECRETS',path:'/workspace/.env',risk:'HIGH',description:'Fixture only',action:'Revoke the affected credential in its provider console'};
     inc.rotate_list = [item];
@@ -486,13 +33,7 @@
     ]};
     setTimeout(async () => { await window.openIncidentReport('fixture-source-alias'); stamp('incident-remediation-probe', document.querySelector('.incident-remediation [data-action]')?.dataset.id || 'missing'); }, 500);
   }
-  if (MODE.includes('resourceoutcomes')) {
-    data['/resources'].interventions = [
-      {id:'fixture-partial',kind:'pause',status:'partial',verification:'unknown',error:'One captured process could not be resumed.',before:{rss_bytes:8000000000,cpu_percent:140,host_capacity:'constrained'},after:[],limits:['Pause may stop growth without freeing memory. Resume may be needed.']},
-      {id:'fixture-termination',kind:'terminate',status:'applied',verification:'verified',verified_by:'captured-family-absent',before:{rss_bytes:8000000000,host_capacity:'constrained'},after:[{captured_family_present:false,host_capacity:'ample',host_available_bytes:12000000000}],limits:['Verification covers only the captured process family. Observations do not establish causation or task completion.']}
-    ];
-  }
-  if (MODE.includes('payloadoutcomes')) {
+  if (scenarios.has('payloadoutcomes')) {
     Object.assign(data['/incidents'][0], {
       rule: 'proxy-secret-leak',
       summary: 'Fixture: an outbound payload matched a registered secret fingerprint.',
@@ -512,17 +53,11 @@
   let authRecoveryExpired = false;
   let authRecoveryMutations = 0;
   let networkRecoveryUnreachable = false;
-  if (MODE.includes('filteredscope')) {
+  if (scenarios.has('filteredscope')) {
     data['/flags'].push({ ...data['/flags'][0], id: 'history-broad-only', ts: iso(2 * 3600000) });
     data['/events'].push({ ...data['/events'][0], ts: iso(2 * 3600000), detail: 'Broad-only history row' });
   }
-  if (MODE.includes('coveragedemo')) {
-    Object.assign(data['/posture'], {
-      state: 'attention', needs_you: 0, items: [], groups: [],
-      summary: 'No decisions pending. Monitoring coverage needs attention.'
-    });
-  }
-  if (MODE.includes('sessionvisibility')) {
+  if (scenarios.has('sessionvisibility')) {
     Object.assign(data['/posture'], {state: 'all-clear', needs_you: 0, items: [], groups: [], coverage_count: 0, coverage_items: []});
     const path = state => ({supported: true, state, detail: 'This session only; other requests may be unobserved.'});
     data['/status'].coverage = {
@@ -534,11 +69,11 @@
       probes: [{harness: 'claude', hook_path: '/Users/dev/.claude/hooks/secret_guard.py', checked_at: iso(60000), state: 'changed', detail: 'Configuration changed. Run the check again.'}],
     };
   }
-  const REQUIRE_TOKEN = MODE.includes('requiretoken');
+  const REQUIRE_TOKEN = scenarios.has('requiretoken');
   // expectdemo: Egress → Expect this destination retires the episode's
   // choices before POST /expected-egress answers; the posture queue is not
   // touched, since recurring egress is never a decision.
-  if (MODE.includes('expectdemo')) {
+  if (scenarios.has('expectdemo')) {
     setTimeout(() => {
       openTab('egress');
       const listed = document.getElementById('posture-items').textContent.includes('updates.example.com');
@@ -554,7 +89,7 @@
   // recommended) and no queue item.
   // flag-1 and flag-3 stay raw, as rows from an older daemon or past the
   // 25-flag cap do.
-  if (MODE.includes('explaindemo')) {
+  if (scenarios.has('explaindemo')) {
     // Findings is opened first, as a user must: hidden panels do not render.
     setTimeout(() => openTab('findings'), 1500);
     const cfHost = '2606:4700::6810:84e5';
@@ -602,7 +137,7 @@
   // patterndemo: a 323-flag codex keychain storm served as one pattern
   // covering fixture flags flag-6 and flag-7; the queue never holds it.
   const PATTERN_KEY = 'codex|keychain-access|/Users/dev/Library/Keychains/login.keychain-db';
-  if (MODE.includes('patterndemo')) {
+  if (scenarios.has('patterndemo')) {
     // Findings is opened first, as a user must: hidden panels do not render.
     setTimeout(() => openTab('findings'), 1500);
     const kc = (id, pid, msAgo) => ({
@@ -631,10 +166,10 @@
   }
   // ?theme=dark|light pins the console theme (screenshots); app.js reads it
   // from the same storage key the masthead toggle writes.
-  const theme = new URLSearchParams(MODE).get('theme');
+  const theme = new URLSearchParams(location.search).get('theme');
   // patternbigdemo: sixty-one keychain flags served as one pattern that covers
   // them all.
-  if (MODE.includes('patternbigdemo')) {
+  if (scenarios.has('patternbigdemo')) {
     setTimeout(() => openTab('findings'), 1500);
     const ids = Array.from({ length: 61 }, (_, i) => `kc-${i + 1}`);
     for (const id of ids) {
@@ -655,7 +190,7 @@
   // bulkdemo: tick two history rows, press Mark reviewed, accept the confirm.
   // <pre id="bulk-probe"> counts the confirms asked; mock-requests holds the
   // dismiss calls.
-  if (MODE.includes('bulkdemo')) {
+  if (scenarios.has('bulkdemo')) {
     let confirms = 0;
     setTimeout(() => openTab('findings'), 1500);
     setTimeout(() => {
@@ -670,13 +205,7 @@
     }, 4000);
   }
   // emptyposture: nothing pending and no coverage gap.
-  if (MODE.includes('emptyposture')) {
-    Object.assign(data['/posture'], {
-      state: 'all-clear', needs_you: 0, coverage_count: 0, coverage_items: [], items: [], groups: [],
-      summary: 'Agents monitored, no action needed'
-    });
-  }
-  if (MODE.includes('ghdemo')) {
+  if (scenarios.has('ghdemo')) {
     setTimeout(() => openTab('findings'), 1500);
     const key = 'claude|sensitive-read-then-connect|/Users/dev/.config/gh/hosts.yml';
     data['/flags'].push({id: 'gh-flag', rule: 'sensitive-read-then-connect', severity: 2, agent: 'claude', pid: 301,
@@ -691,7 +220,7 @@
         {id: 'inspect-file', label: 'Inspect file details', body: {path: '/Users/dev/.config/gh/hosts.yml'}},
         {id: 'dismiss-all', label: 'Dismiss all 1 open', method: 'POST', path: '/flags/acknowledge', body: {flag_ids: ['gh-flag']}}
       ]}];
-    if (MODE.includes('ghapprove')) {
+    if (scenarios.has('ghapprove')) {
       setTimeout(() => document.querySelector('#flags-list [data-action-id="expect"]')?.click(), 9000);
       setTimeout(() => document.getElementById('confirm-ok')?.click(), 9500);
     }
@@ -702,7 +231,7 @@
   // ?themefirst (served under the CSP): store 'light', reload once, then
   // record data-theme as it stands when this script runs — after
   // theme-init.js, before app.js.
-  if (MODE.includes('themefirst')) {
+  if (scenarios.has('themefirst')) {
     let seeded = null;
     try { seeded = sessionStorage.getItem('sa-themefirst'); } catch { /* ignored */ }
     if (!seeded) {
@@ -715,14 +244,14 @@
   }
   // Every mode but notoken runs as a tab that holds a console token (the
   // console shows only the ended state without one).
-  if (MODE.includes('tokenseed') || !MODE.includes('notoken')) {
+  if (scenarios.has('tokenseed') || !scenarios.has('notoken')) {
     try { sessionStorage.setItem('sa.console-token', 'test-token'); } catch { /* ignored */ }
   }
-  if (MODE.includes('contexthandoff')) {
+  if (scenarios.has('contexthandoff')) {
     data['/flags'].find(f => f.id === 'flag-2').session_id = 'sess-claude-1';
     sessionStorage.setItem('sa.selected-session', 'sess-codex-3');
     sessionStorage.setItem('sa.harness-filter', JSON.stringify({ harnesses: {claude:false,codex:false}, text:'unrelated', liveOnly:true }));
-    if (MODE.includes('cold')) location.hash = 'ct=test-token&tab=sessions&session=sess-claude-1&flag=flag-2';
+    if (scenarios.has('cold')) location.hash = 'ct=test-token&tab=sessions&session=sess-claude-1&flag=flag-2';
   }
   // Policy lists (GET /guard/rules, /guard/path-allow; /mute is above).
   data['/guard/rules'] = [
@@ -732,21 +261,15 @@
   data['/guard/path-allow'] = [
     { agent: 'claude', rule_id: 'env-file', path: '/Users/dev/workspace/api-service/.env.example', created_at: '2026-09-22T10:00:00Z' },
   ];
-  if (MODE.includes('emptypolicy')) {
-    data['/guard/rules'] = [];
-    data['/guard/path-allow'] = [];
-    data['/mute'] = [];
-    data['/expected'] = [];
-  }
   // spenddaydemo: a tab whose saved Spend view is by day over 7d (a reload).
-  if (MODE.includes('spenddaydemo')) {
+  if (scenarios.has('spenddaydemo')) {
     try { sessionStorage.setItem('sa.spend-view', JSON.stringify({ by: 'day', since: '7d' })); } catch { /* ignored */ }
   }
 
   // System agent (Agent tab). agentoff: system_agent.enabled is false.
   const AGENT_XSS = '<img src=x onerror=alert(1)>';
   data['/agent/status'] = {
-    enabled: !MODE.includes('agentoff'), endpoint: 'http://127.0.0.1:11434', reachable: true, ollama_version: '0.15.1',
+    enabled: !scenarios.has('agentoff'), endpoint: 'http://127.0.0.1:11434', reachable: true, ollama_version: '0.15.1',
     model: 'qwen3:latest', harness_model: 'qwen3-coder', models: ['qwen3:latest', 'qwen3-coder:latest'],
     harnesses: [
       { id: 'claude', label: 'Claude Code', bin: 'claude', path: '/opt/homebrew/bin/claude', installed: true, ready: true },
@@ -804,7 +327,7 @@
         chat.messages.push({ id: ++agentSeq, ts: iso(0), role: 'assistant', content: 'Review this local command.', skills: ['git'],
           local_command: { command: 'git config --global credential.helper osxkeychain', mode: 'headless', workdir: '/Users/dev' } });
         chat.chatting = false;
-      }, MODE.includes('agentthinking') ? 30000 : 1500);
+      }, scenarios.has('agentthinking') ? 30000 : 1500);
       return { message: m };
     }
     if (p === '/agent/worktree') {
@@ -867,18 +390,18 @@
   };
   // agentchat: the Agent tab open, a message typed and sent through the
   // real composer; the direct Ollama reply lands 1.5s later.
-  if (['agentchat', 'agentlocal', 'agentlatency', 'agentthinking', 'agentreject'].some(m => MODE.includes(m))) {
+  if (['agentchat', 'agentlocal', 'agentlatency', 'agentthinking', 'agentreject'].some(m => scenarios.has(m))) {
     setTimeout(() => {
       document.getElementById('agent-workdir').value = '/Users/dev';
       document.getElementById('agent-input').value = 'Keep my Git token in the keychain';
-      if (['agentlatency', 'agentthinking', 'agentreject'].some(m => MODE.includes(m))) {
+      if (['agentlatency', 'agentthinking', 'agentreject'].some(m => scenarios.has(m))) {
         const input = document.getElementById('agent-input');
         input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
         input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
       } else document.getElementById('agent-composer').requestSubmit();
     }, 3000);
   }
-  if (['agentlatency', 'agentthinking', 'agentreject'].some(m => MODE.includes(m))) {
+  if (['agentlatency', 'agentthinking', 'agentreject'].some(m => scenarios.has(m))) {
     setTimeout(() => {
       const spinner = document.querySelector('#agent-thread .agent-spinner');
       document.body.dataset.agentFeedbackState = JSON.stringify({
@@ -891,7 +414,7 @@
       });
     }, 6000);
   }
-  if (MODE.includes('agentlocal')) {
+  if (scenarios.has('agentlocal')) {
     setTimeout(() => {
       const run = document.querySelector('#agent-thread [data-action="agent-run-local"]');
       if (run) run.click();
@@ -903,7 +426,7 @@
   }
   // agentdispatch: Run headless on the ready plan, confirmed; the run
   // finishes 1.5s later. Then Save plan on the first proposal.
-  if (MODE.includes('agentdispatch')) {
+  if (scenarios.has('agentdispatch')) {
     setTimeout(() => {
       document.querySelector('#agent-plans [data-plan="1"] [data-action="agent-dispatch"][data-mode="headless"]').click();
       setTimeout(() => {
@@ -951,7 +474,7 @@
       return { status: 'ok', result: { path: body.path, bytes: 1258291, trash_path: '/Users/dev/.Trash/evidence' } };
     }
     if (p === '/worktrees/remove') {
-      if (MODE.includes('removecadence')) window.__removePostedAt = Date.now();
+      if (scenarios.has('removecadence')) window.__removePostedAt = Date.now();
       // The daemon removes in the background: running now, the outcome
       // lands in GET /worktrees removals (removerunning: never finishes;
       // removefaildemo: git fails).
@@ -959,9 +482,9 @@
       const running = { path: body.path, state: 'running', phase: 'deleting', step: 'deleting', started_at: iso(0), step_at: iso(0),
         bytes: 1610612736, files: 184203 };
       rep.removals = { ...(rep.removals || {}), [body.path]: running };
-      if (!MODE.includes('removerunning')) {
+      if (!scenarios.has('removerunning')) {
         setTimeout(() => {
-          if (MODE.includes('removefaildemo')) {
+          if (scenarios.has('removefaildemo')) {
             rep.removals[body.path] = { ...running, state: 'failed', step: '', finished_at: iso(0),
               error: 'git worktree: <b>fatal</b> could not remove (the worktree is still on disk and registered with git)' };
             return;
@@ -1105,18 +628,34 @@
   let malformedSnapshotReads = 0;
   const slowShapeReads = {};
   let slowShapeRecovered = false;
-  let spendShapeBad = MODE.includes('firstload');
-  if (MODE.includes('spendshape')) {
+  let spendShapeBad = scenarios.has('firstload');
+  if (scenarios.has('spendshape')) {
     data['/costs/plans'] = { plans: [{ harness: 'codex', home: 'shape-plan', home_path: '/workspace/shape-plan',
       plan_type: 'pro', limit_id: 'codex', unlimited: false, seen_at: iso(0),
       windows: [{ used_percent: 25, window_minutes: 300, resets_at: '' }] }] };
   }
+  window.ConsoleFixtures.apply(fixture);
+  stamp('fixture-posture', JSON.stringify(data['/posture']));
+  const fixtureReads = {};
   stamp('fetch-count', '0');
   window.fetch = async (path, opts) => {
     fetchCount++;
     stamp('fetch-count', String(fetchCount));
     const p = String(path).split('?')[0];
-    if (MODE.includes('permissionsdemo') && p === '/decision-scopes') {
+    const scripted = fixture.responses[String(path)] || fixture.responses[p];
+    if (scripted) {
+      const index = fixtureReads[p] || 0;
+      fixtureReads[p] = index + 1;
+      const response = scripted[Math.min(index, scripted.length - 1)];
+      if (response.delay_ms) await new Promise(resolve => setTimeout(resolve, response.delay_ms));
+      if (response.error) throw new TypeError(response.error);
+      return new Response(JSON.stringify(response.body), {status: response.status || 200, headers: {'Content-Type': 'application/json'}});
+    }
+    if (Object.hasOwn(fixture.payloads, String(path)) || Object.hasOwn(fixture.payloads, p)) {
+      return new Response(JSON.stringify(data[String(path)] ?? data[p]), {status: 200, headers: {'Content-Type': 'application/json'}});
+    }
+    if (scenarios.has('authrecover') && opts?.method === 'POST') authRecoveryMutations++;
+    if (scenarios.has('permissionsdemo') && p === '/decision-scopes') {
       if (opts?.method === 'DELETE') {
         const id = new URLSearchParams(String(path).split('?')[1]).get('id');
         window.__permissionDeletes = (window.__permissionDeletes || 0) + 1;
@@ -1133,30 +672,29 @@
         revoked_at: id === 'synthetic-scope' ? window.__permissionRevoked : undefined });
       return { ok: true, json: async () => [scope('synthetic-scope'), scope('unrelated-permission')] };
     }
-    if ((MODE.includes('contexthandoff') || MODE.includes('investigationdemo')) && p.startsWith('/flags/') && p.endsWith('/explain')) {
+    if ((scenarios.has('contexthandoff') || scenarios.has('investigationdemo')) && p.startsWith('/flags/') && p.endsWith('/explain')) {
       const id = decodeURIComponent(p.split('/')[2]);
       const flag = data['/flags'].find(f => f.id === id);
       return {ok:!!flag,status:flag?200:404,json:async()=>flag,text:async()=>flag?JSON.stringify(flag):'flag unavailable'};
     }
-    if (MODE.includes('contexthandoff') && p === '/incidents' && !String(path).includes('format=markdown')) {
+    if (scenarios.has('contexthandoff') && p === '/incidents' && !String(path).includes('format=markdown')) {
       const id = new URLSearchParams(String(path).split('?')[1] || '').get('id');
       if (id) {
         const incident = data['/incidents'].find(i => i.id === id);
         return {ok:!!incident,status:incident?200:404,json:async()=>({incident,workflow:incident?.workflow})};
       }
     }
-    if (MODE.includes('authrecover') && opts?.method === 'POST') authRecoveryMutations++;
     // Failure modes apply to API paths only (assets are served statically).
-    if (MODE.includes('netfail') || networkRecoveryUnreachable) {
+    if (scenarios.has('netfail') || networkRecoveryUnreachable) {
       throw new TypeError('Failed to fetch');
     }
     const token = opts?.headers?.get?.('X-SecureAgent-Console-Token') || opts?.headers?.['X-SecureAgent-Console-Token'] || '';
-    if (MODE.includes('permissiondeny') && p === '/reviews/decision') {
+    if (scenarios.has('permissiondeny') && p === '/reviews/decision') {
       const body = { error: 'method not permitted for the console token' };
       return { ok: false, status: 403, clone: () => ({ json: async () => body }), json: async () => body, text: async () => JSON.stringify(body) };
     }
-    if (MODE.includes('authfail') || (MODE.includes('authmixed') && p === '/guard/pending')
-        || (MODE.includes('spendauth') && p === '/costs') || (authRecoveryExpired && token !== 'replacement-token')
+    if (scenarios.has('authfail') || (scenarios.has('authmixed') && p === '/guard/pending')
+        || (scenarios.has('spendauth') && p === '/costs') || (authRecoveryExpired && token !== 'replacement-token')
         || (REQUIRE_TOKEN && token !== 'test-token')) {
       return {
         ok: false, status: 403,
@@ -1165,7 +703,7 @@
         text: async () => '{"error":"console token required"}'
       };
     }
-    if (MODE.includes('filteredscope') && p === (MODE.includes('historyflags') ? '/flags' : '/events')) {
+    if (scenarios.has('filteredscope') && p === (scenarios.has('historyflags') ? '/flags' : '/events')) {
       if (historyRecovered) return { ok: true, status: 200, json: async () => [] };
       if (++historyReads > 1) return { ok: false, status: 503, json: async () => ({}) };
       const rows = p === '/flags'
@@ -1173,25 +711,25 @@
         : [{ ...data['/events'][0], kind: 8, detail: 'Filtered-history match' }];
       return { ok: true, status: 200, json: async () => rows };
     }
-    if (MODE.includes('malformeddemo') && !malformedRecovered && p === '/guard/pending') {
+    if (scenarios.has('malformeddemo') && !malformedRecovered && p === '/guard/pending') {
       return { ok: true, status: 200, json: async () => ({ error: 'not a list' }) };
     }
-    if (MODE.includes('spendshape') && spendShapeBad && (p === '/costs' || p === '/costs/plans')) {
+    if (scenarios.has('spendshape') && spendShapeBad && (p === '/costs' || p === '/costs/plans')) {
       return { ok: true, status: 200, json: async () => p === '/costs'
         ? { total: [], rows: [null], refreshing: true } : { plans: [{ windows: [null] }] } };
     }
-    if (MODE.includes('slowshape') && !slowShapeRecovered) {
+    if (scenarios.has('slowshape') && !slowShapeRecovered) {
       const malformed = {
         '/resources': { sessions: [{ samples: {} }] },
         '/audit': { error: 'not a list' },
         '/notify/rules': { scopes: {} },
         '/egress/episodes': { episodes: {} }
       };
-      if (p in malformed && ((slowShapeReads[p] = (slowShapeReads[p] || 0) + 1) > 1 || MODE.includes('firstload'))) {
+      if (p in malformed && ((slowShapeReads[p] = (slowShapeReads[p] || 0) + 1) > 1 || scenarios.has('firstload'))) {
         return { ok: true, status: 200, json: async () => malformed[p] };
       }
     }
-    if (MODE.includes('healthdemo') && !healthRecovered) {
+    if (scenarios.has('healthdemo') && !healthRecovered) {
       const read = healthReads[p] = (healthReads[p] || 0) + 1;
       if (p === '/audit') return { ok: false, status: 503, json: async () => ({}) };
       if (read > 1 && p === '/resources') throw new TypeError('Failed to fetch');
@@ -1206,8 +744,8 @@
         try { host = JSON.parse(opts.body).host; } catch { /* ignored */ }
         line += ' row=' + (document.querySelector(`#firewall-container [data-action="allowlist-remove"][data-host="${host}"]`) ? 1 : 0);
       }
-      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('ghdemo') || MODE.includes('rawmute') || MODE.includes('orgallowdemo') || MODE.includes('routinedemo') || MODE.includes('bulkdemo') || MODE.includes('scopedpermission') || MODE.includes('groupdemo')) && opts.body) line += ' body=' + opts.body;
-      if (MODE.includes('rawmute') && p === '/mute' && opts.method === 'POST') data['/mute'].push(JSON.parse(opts.body));
+      if ((scenarios.has('explaindemo') || scenarios.has('patterndemo') || scenarios.has('ghdemo') || scenarios.has('rawmute') || scenarios.has('orgallowdemo') || scenarios.has('routinedemo') || scenarios.has('bulkdemo') || scenarios.has('scopedpermission') || scenarios.has('groupdemo')) && opts.body) line += ' body=' + opts.body;
+      if (scenarios.has('rawmute') && p === '/mute' && opts.method === 'POST') data['/mute'].push(JSON.parse(opts.body));
       if (p === '/expected' && opts.method === 'DELETE') {
         line = `${opts.method} ${String(path)}`;
         const key = new URLSearchParams(String(path).split('?')[1] || '').get('key');
@@ -1220,7 +758,7 @@
       }
       reqLog.push(line);
       stamp('mock-requests', reqLog.join('\n'));
-      if (MODE.includes('incidentremediation') && p === '/incidents/remediation') {
+      if (scenarios.has('incidentremediation') && p === '/incidents/remediation') {
         const req = JSON.parse(opts.body);
         const inc = data['/incidents'][0];
         if (req.id !== inc.id || req.expected_revision !== inc.remediation.revision || req.expected_evidence !== inc.remediation.evidence_revision) return {ok:false,status:409,text:async()=> 'Incident changed'};
@@ -1231,31 +769,31 @@
         inc.remediation.revision++;
         return {ok:true,status:200,json:async()=>({incident:inc})};
       }
-      if (MODE.includes('resolvedemo') && p === '/incidents/status') {
+      if (scenarios.has('resolvedemo') && p === '/incidents/status') {
         const text = id => (document.getElementById(id) || {}).textContent;
         const queued = !!document.querySelector('#attention-center [data-id="inc-20260907-6033-a1b2"]');
         stamp('resolve-probe', `badge=${text('badge-attention-count')} tab=${text('tab-badge-home')} queued=${queued}`);
       }
-      if (MODE.includes('routinedemo') && p === '/expected') {
+      if (scenarios.has('routinedemo') && p === '/expected') {
         const card = document.querySelector('#flags-list [data-routine-key="routine|gh|/Users/dev/.config"]');
         stamp('routine-after', `card=${!!card} needs=${window.SA.t.posture.needs_you}`);
       }
-      if (MODE.includes('expectdemo') && p === '/expected-egress') {
+      if (scenarios.has('expectdemo') && p === '/expected-egress') {
         const choices = !!document.querySelector('#recurring-egress-container [data-action="expect-egress"][data-episode-id="episode-routine"]');
         const listed = (document.getElementById('posture-items') || {}).textContent.includes('updates.example.com');
         stamp('expect-probe', `choices=${choices} listed=${listed} needs=${window.SA.t.posture.needs_you}`);
       }
       // postfail: POST /allowlist answers 500 (the act-in-place revert path).
-      if (MODE.includes('postfail') && p === '/allowlist') {
+      if (scenarios.has('postfail') && p === '/allowlist') {
         return { ok: false, status: 500, json: async () => ({}), text: async () => 'mock failure' };
       }
-      if (p === '/agent/chat' && MODE.includes('agentreject')) {
+      if (p === '/agent/chat' && scenarios.has('agentreject')) {
         return { ok: false, status: 503, text: async () => 'Model unavailable' };
       }
-      if (p === '/agent/worktree' && MODE.includes('discussoff')) {
+      if (p === '/agent/worktree' && scenarios.has('discussoff')) {
         return { ok: false, status: 409, text: async () => 'the system agent is off: set system_agent.enabled: true in the config file' };
       }
-      if (p === '/agent/chat' && MODE.includes('agentlatency')) {
+      if (p === '/agent/chat' && scenarios.has('agentlatency')) {
         await new Promise(resolve => setTimeout(resolve, 30000));
       }
       const out = handlePost(p, opts, String(path));
@@ -1266,7 +804,7 @@
       };
     }
     if (p === '/snapshot') {
-      if (MODE.includes('malformeddemo') && !malformedRecovered && ++malformedSnapshotReads > 1) {
+      if (scenarios.has('malformeddemo') && !malformedRecovered && ++malformedSnapshotReads > 1) {
         stamp('malformed-returned', 'yes');
         return { ok: true, status: 200, json: async () => ({
           status: { ...data['/status'], active_agents: 99 }, flags: { error: 'not a list' }
@@ -1285,7 +823,7 @@
         sessions: data['/sessions']
         ,reviews:data['/reviews'] || {reviews:[],degraded:false}
       };
-      if (MODE.includes('refreshrace') && ++snapshotReads === 1) {
+      if (scenarios.has('refreshrace') && ++snapshotReads === 1) {
         body = JSON.parse(JSON.stringify(body));
         body.status.active_agents = 1;
         body.status.agents = body.status.agents.slice(0, 1);
@@ -1299,7 +837,7 @@
       };
     }
     // Dense workbench pages exercise real scroll anchoring and focus continuity.
-    if ((MODE.includes('sessionworkbench') || MODE.includes('authhistory')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
+    if ((scenarios.has('sessionworkbench') || scenarios.has('authhistory')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
       const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
       const start = before ? -30 : 0;
       const rows = Array.from({ length: before ? 30 : 90 }, (_, i) => ({ id: 'wb-row-' + (start + i),
@@ -1315,7 +853,7 @@
       const own = sid === 'sess-claude-1';
       const body = { session_id: sid, observed_at: iso(0), history: {
         evidence: Object.fromEntries(['reviews', 'incidents', 'interventions'].map(k => [k, { available: true, at_limit: false, limit: 100 }])),
-        reviews: own ? [{ id: 'synthetic-review', revision: 2, context: { rule: 'sensitive-read-then-connect' }, decision: { action: MODE.includes('permissionsdemo') ? 'expect' : 'acknowledge', revision: 1, at: iso(90000), ...(MODE.includes('permissionsdemo') ? { scope_ids: ['synthetic-scope', 'expired-record'] } : {}) }, assessment: { residual_risk: 'possible-exposure' }, evidence_available: false }] : [],
+        reviews: own ? [{ id: 'synthetic-review', revision: 2, context: { rule: 'sensitive-read-then-connect' }, decision: { action: scenarios.has('permissionsdemo') ? 'expect' : 'acknowledge', revision: 1, at: iso(90000), ...(scenarios.has('permissionsdemo') ? { scope_ids: ['synthetic-scope', 'expired-record'] } : {}) }, assessment: { residual_risk: 'possible-exposure' }, evidence_available: false }] : [],
         interventions: own ? [{ id: 'synthetic-control', kind: 'pause', status: 'applied', verification: window.__resultsUpdate ? 'observed' : 'pending', requested_at: iso(60000), limits: ['Synthetic receipt; captured targets only.'] }] : [],
         incidents: own ? [{ id: 'synthetic-incident', remediation: { steps: [{ id: 'synthetic-step', item: { name: 'Synthetic key', action: 'Revoke key' }, status: 'reported', verification: 'unverified', reported_at: iso(30000), newer_evidence: true }] } }] : [],
       } };
@@ -1324,12 +862,12 @@
     const overviewMatch = p.match(/^\/sessions\/([^/]+)\/overview$/);
     if (overviewMatch) {
       const sid = decodeURIComponent(overviewMatch[1]);
-      if (MODE.includes('overviewrace') && sid === 'sess-claude-1') await new Promise(resolve => setTimeout(resolve, 1800));
-      if (MODE.includes('overviewstale') && window.__overviewFailed) return { ok: false, status: 503, json: async () => ({}) };
+      if (scenarios.has('overviewrace') && sid === 'sess-claude-1') await new Promise(resolve => setTimeout(resolve, 1800));
+      if (scenarios.has('overviewstale') && window.__overviewFailed) return { ok: false, status: 503, json: async () => ({}) };
       const own = sid === 'sess-claude-1';
       const prompt = data['/guard/pending'].find(p => p.id === 'guard-1');
       const body = { session_id: sid, observed_at: iso(0), requests: own && prompt ? [{ kind: 'guard', id: prompt.id, detail: 'Read wants access to .env', path: prompt.path, scopeText: prompt.scope_text, available_scopes: prompt.available_scopes }] : [],
-        findings: own ? [{ id: MODE.includes('investigationdemo') ? 'flag-2' : 'f1', title: 'Own session finding', assessment: { risk: 'high', review_state: 'reviewed', residual_risk: 'model-exposure', control: 'observed-only', reason: 'A tool-visible read remains observed after review.', limits: ['No captured payload proves forwarding.'] } }, ...(window.__overviewExtra ? [{ id: 'new-finding', title: 'New observation', assessment: { risk: 'review', review_state: 'unreviewed', residual_risk: 'unknown' } }] : [])] : [], findings_truncated: false,
+        findings: own ? [{ id: scenarios.has('investigationdemo') ? 'flag-2' : 'f1', title: 'Own session finding', assessment: { risk: 'high', review_state: 'reviewed', residual_risk: 'model-exposure', control: 'observed-only', reason: 'A tool-visible read remains observed after review.', limits: ['No captured payload proves forwarding.'] } }, ...(window.__overviewExtra ? [{ id: 'new-finding', title: 'New observation', assessment: { risk: 'review', review_state: 'unreviewed', residual_risk: 'unknown' } }] : [])] : [], findings_truncated: false,
         coverage: { session_id: sid, guard: { state: own ? 'observed' : 'not-observed', detail: 'Only this session reports count; not every call is proven guarded.' }, trace: { state: 'observed', detail: 'Attributed tool activity.' }, payload: { state: 'unattributed', detail: 'Other traffic may be uninspected.' } },
         resources: own ? { key: data['/resources'].sessions.find(f => f.root_pid === 5821)?.key, rss_bytes: 536870912, cpu_percent: 25, process_count: 2, diagnoses: [], control: { state: 'observing' } } : null };
       return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
@@ -1338,7 +876,7 @@
     const memMatch = p.match(/^\/sessions\/([^/]+)\/memory$/);
     if (memMatch) {
       const sid = decodeURIComponent(memMatch[1]);
-      if (MODE.includes('memoryrace') && sid === 'sess-claude-1') {
+      if (scenarios.has('memoryrace') && sid === 'sess-claude-1') {
         await new Promise(resolve => setTimeout(resolve, 1800));
       }
       const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
@@ -1348,7 +886,7 @@
               { id: 'activity:older', at: '2026-09-09T13:00:00Z', kind: 'activity', title: 'Earlier activity' },
               { id: 'activity:recent', at: '2026-09-09T14:30:00Z', kind: 'activity', title: 'Recent activity' }
             ], has_earlier: false }
-          : { rows: [{ id: 'activity:recent', at: '2026-09-09T14:30:00Z', kind: 'activity', title: MODE.includes('memoryrace') ? 'A-only memory' : 'Recent activity' }], has_earlier: true, next_cursor: 'older' }
+          : { rows: [{ id: 'activity:recent', at: '2026-09-09T14:30:00Z', kind: 'activity', title: scenarios.has('memoryrace') ? 'A-only memory' : 'Recent activity' }], has_earlier: true, next_cursor: 'older' }
         : sid === 'sess-codex-3'
           ? { rows: [{ id: 'activity:b', at: '2026-09-09T15:30:00Z', kind: 'activity', title: 'B-only memory' }], has_earlier: false }
           : { rows: [], has_earlier: false };
@@ -1372,7 +910,7 @@
     if (tlMatch) {
       const sid = decodeURIComponent(tlMatch[1]);
       const sess = (data['/sessions'] || []).find(s => s.id === sid);
-      const body = sess ? (MODE.includes('tracereactivation') ? [...(sess._timeline || [])] : (sess._timeline || [])) : null;
+      const body = sess ? (scenarios.has('tracereactivation') ? [...(sess._timeline || [])] : (sess._timeline || [])) : null;
       return {
         ok: body !== null, status: body !== null ? 200 : 404,
         json: async () => body,
@@ -1386,13 +924,13 @@
       return { ok: true, status: 200, json: async () => { throw new SyntaxError('not JSON'); }, text: async () => md };
     }
     // removecadence: the gap between starting a removal and the next
-    if (MODE.includes('incidentremediation') && p === '/incidents' && new URLSearchParams(String(path).split('?')[1] || '').get('id')) {
+    if (scenarios.has('incidentremediation') && p === '/incidents' && new URLSearchParams(String(path).split('?')[1] || '').get('id')) {
       const incident = data['/incidents'][0];
       return {ok:true,status:200,json:async()=>({incident,workflow:incident.workflow || {status:'open'}})};
     }
     // removecadence: the gap between starting a removal and the next
     // /worktrees read lands on <pre id="remove-cadence">.
-    if (MODE.includes('removecadence') && p === '/worktrees' && window.__removePostedAt && !window.__removeGap) {
+    if (scenarios.has('removecadence') && p === '/worktrees' && window.__removePostedAt && !window.__removeGap) {
       window.__removeGap = Date.now() - window.__removePostedAt;
       stamp('remove-cadence', String(window.__removeGap));
     }
@@ -1407,13 +945,13 @@
       // spendcachedemo: the first two rounds (tile + card each) answer from
       // the usage cache — a 3 h old report being recomputed — then the fresh
       // one, $1 more.
-      if (MODE.includes('spendcachedemo') && body) {
+      if (scenarios.has('spendcachedemo') && body) {
         body = costLog.length <= 4
           ? { ...body, refreshing: true, generated_at: iso(3 * 3600000) }
           : { ...body, generated_at: iso(0), total: { ...body.total, cost_usd: body.total.cost_usd + 1 } };
       }
       // A cold report resolves after the first-render probe, within the 5s request deadline.
-      if (MODE.includes('spendslowdemo')) await new Promise(r => setTimeout(r, 3000));
+      if (scenarios.has('spendslowdemo')) await new Promise(r => setTimeout(r, 3000));
     }
     return {
       ok: body !== undefined,
@@ -1451,8 +989,8 @@
     close() { clearInterval(this._timer); this.readyState = 2; stamp('sse-state', 'closed'); }
   };
 
-  if (MODE.includes('filteredscope')) {
-    const flags = MODE.includes('historyflags');
+  if (scenarios.has('filteredscope')) {
+    const flags = scenarios.has('historyflags');
     const select = () => document.getElementById(flags ? 'flags-window' : 'event-window');
     setTimeout(() => {
       openTab(flags ? 'findings' : 'events');
@@ -1460,13 +998,13 @@
       select().dispatchEvent(new Event('change', { bubbles: true }));
     }, 1000);
     setTimeout(() => document.getElementById('btn-refresh').click(), 3000);
-    if (MODE.includes('changed')) {
+    if (scenarios.has('changed')) {
       setTimeout(() => {
         select().value = '7d';
         select().dispatchEvent(new Event('change', { bubbles: true }));
       }, 6000);
     }
-    if (MODE.includes('recover')) {
+    if (scenarios.has('recover')) {
       setTimeout(() => {
         stamp('history-before-recovery', document.getElementById(flags ? 'flags-list' : 'events-container').textContent + ' ' +
           Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
@@ -1476,9 +1014,9 @@
     }
   }
 
-  if (MODE.includes('malformeddemo')) {
+  if (scenarios.has('malformeddemo')) {
     setTimeout(() => document.getElementById('btn-refresh').click(), 3000);
-    if (MODE.includes('recover')) {
+    if (scenarios.has('recover')) {
       setTimeout(() => {
         stamp('malformed-before-recovery', document.getElementById('count-agents').textContent + ' ' +
           Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
@@ -1488,9 +1026,9 @@
     }
   }
 
-  if (MODE.includes('healthdemo')) {
+  if (scenarios.has('healthdemo')) {
     setTimeout(() => document.getElementById('btn-refresh').click(), 3000);
-    if (MODE.includes('recover')) {
+    if (scenarios.has('recover')) {
       setTimeout(() => {
         stamp('health-before-recovery', Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
         healthRecovered = true;
@@ -1500,9 +1038,9 @@
     setTimeout(() => openTab('resources'), 7000);
   }
 
-  if (MODE.includes('slowshape')) {
+  if (scenarios.has('slowshape')) {
     setTimeout(() => document.getElementById('btn-refresh').click(), 3000);
-    if (MODE.includes('recover')) {
+    if (scenarios.has('recover')) {
       setTimeout(() => {
         stamp('slow-shape-before-recovery', Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
         slowShapeRecovered = true;
@@ -1512,7 +1050,7 @@
     setTimeout(() => openTab('resources'), 7000);
   }
 
-  if (MODE.includes('refreshrace')) {
+  if (scenarios.has('refreshrace')) {
     setTimeout(() => document.getElementById('btn-refresh').click(), 1000);
   }
 
@@ -1530,13 +1068,13 @@
     return r;
   };
 
-  if (MODE.includes('authrecover')) {
+  if (scenarios.has('authrecover')) {
     let body, focused, top, selected;
     const receipt = {};
     setTimeout(async () => {
       openTab('sessions');
       await window.selectSession('sess-claude-1');
-      if (MODE.includes('authtrace')) await window.setSessionView('trace');
+      if (scenarios.has('authtrace')) await window.setSessionView('trace');
       body = document.querySelector('#session-detail .session-detail-body');
       body.scrollTop = 220;
       focused = document.querySelector('#session-detail details.session-metadata summary');
@@ -1569,7 +1107,7 @@
         && document.getElementById('session-ended').hidden && window.__sse.readyState === 1;
       receipt.contextSelection = selected === window.SA.selectedSessionId;
       receipt.contextTab = window.SA.activeTab === 'sessions';
-      receipt.contextView = window.SA.sessionView === (MODE.includes('authtrace') ? 'trace' : 'memory');
+      receipt.contextView = window.SA.sessionView === (scenarios.has('authtrace') ? 'trace' : 'memory');
       receipt.contextFocus = document.activeElement === document.querySelector('#session-detail details.session-metadata summary');
       receipt.metadataReplaced = !focused.isConnected;
       receipt.contextScroll = Math.abs(top - body.scrollTop) < 2;
@@ -1580,10 +1118,10 @@
     }, 7000);
   }
 
-  if (MODE.includes('notokenrecover')) {
+  if (scenarios.has('notokenrecover')) {
     setTimeout(() => { location.hash = 'ct=test-token&tab=sessions'; }, 2000);
   }
-  if (MODE.includes('investigationdemo')) {
+  if (scenarios.has('investigationdemo')) {
     setTimeout(async () => {
       const receipt = {};
       const tick = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -1637,7 +1175,7 @@
       document.body.dataset.investigationProbe = JSON.stringify(receipt);
     }, 2500);
   }
-  if (MODE.includes('permissionsdemo')) {
+  if (scenarios.has('permissionsdemo')) {
     setTimeout(async () => {
       const receipt = {};
       const tick = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -1690,9 +1228,9 @@
     }, 2500);
   }
 
-  if (MODE.includes('contexthandoff')) {
+  if (scenarios.has('contexthandoff')) {
     const receipt = {};
-    if (!MODE.includes('cold')) setTimeout(() => {
+    if (!scenarios.has('cold')) setTimeout(() => {
       location.hash = 'ct=test-token&tab=sessions&session=sess-claude-1&flag=flag-2';
     }, 1500);
     setTimeout(() => {
@@ -1727,7 +1265,7 @@
     }, 8500);
   }
 
-  if (MODE.includes('networkrecover')) {
+  if (scenarios.has('networkrecover')) {
     setTimeout(() => { networkRecoveryUnreachable = true; document.getElementById('btn-refresh').click(); }, 2000);
     setTimeout(() => {
       stamp('network-retained', String(document.getElementById('count-agents').textContent === '3'
@@ -1738,7 +1276,7 @@
     setTimeout(() => stamp('network-recovered', String(document.getElementById('offline-banner').hidden
       && document.getElementById('session-ended').hidden)), 5000);
   }
-  if (MODE.includes('permissiondeny')) {
+  if (scenarios.has('permissiondeny')) {
     setTimeout(() => window.reviewAct('fixture-review', 1, 'dismiss'), 2000);
     setTimeout(() => stamp('permission-retained', String(document.getElementById('session-ended').hidden
       && window.__sse.readyState === 1 && !!sessionStorage.getItem('sa.console-token'))), 4000);
@@ -1777,7 +1315,7 @@
   // History rows are closed until opened. Unless a mode asks for closed rows
   // (logsclosed, or burstdemo which counts renders), press every row head once
   // as it renders, so the bodies behind the rows are in the DOM the checks read.
-  if (!MODE.includes('logsclosed') && !MODE.includes('burstdemo')) {
+  if (!scenarios.has('logsclosed') && !scenarios.has('burstdemo')) {
     const pressed = new Set();
     new MutationObserver(() => {
       document.querySelectorAll('.log-head[aria-expanded="false"]').forEach(b => {
@@ -1792,16 +1330,16 @@
   // Auto-action: exercise the session drill-down like a user click would.
   // sessionlinkdemo: flag-1 belongs to the durable session sess-claude-1;
   // open Findings, then click its "View session in timeline".
-  if (location.search.includes('sessionlinkdemo')) {
+  if (scenarios.has('sessionlinkdemo')) {
     data['/flags'].find(f => f.id === 'flag-1').session_id = 'sess-claude-1';
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('[data-action="filter-session"][data-session="sess-claude-1"]')?.click(), 5000);
     setTimeout(() => document.querySelector('[data-action="session-view"][data-view="trace"]')?.click(), 6000);
   }
-  if (location.search.includes('sessiondemo')) {
+  if (scenarios.has('sessiondemo')) {
     setTimeout(() => window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77'), 4000);
   }
-  if (MODE.includes('sessionworkbench')) {
+  if (scenarios.has('sessionworkbench')) {
     for (let i = 0; i < 80; i++) data['/sessions'].push({ id: 'wb-session-' + i, harness: 'codex', repo: 'workbench-' + i,
       workspace: '/Users/dev/workbench-' + i, branch: 'main', status: 'idle', started_at: iso(3600000), last_seen_at: iso(120000 + i * 1000) });
     setTimeout(() => openTab('sessions'), 1500);
@@ -1888,7 +1426,7 @@
   // Auto-action: select a session in the session-first rail so the trace
   // waterfall renders. The Sessions tab is not the default, and the rail
   // only renders on screen, so open it before selecting.
-  if (MODE.includes('resultsdemo')) {
+  if (scenarios.has('resultsdemo')) {
     setTimeout(async () => {
       openTab('sessions');
       await window.selectSession('sess-claude-1');
@@ -1902,11 +1440,11 @@
         document.body.dataset.resultsFocus = String(!!current && current.parentElement.open && document.activeElement === current && current.textContent.includes('Resource samples observed'));
         const detail = document.querySelector('#session-detail');
         document.body.dataset.resultsFits = String(detail.scrollWidth <= detail.clientWidth && document.documentElement.scrollWidth <= innerWidth);
-        if (MODE.includes('resultsstale')) { window.__resultsFail = true; window.SA.refreshSessionOverview(true); }
+        if (scenarios.has('resultsstale')) { window.__resultsFail = true; window.SA.refreshSessionOverview(true); }
       }, 500);
     }, 2000);
   }
-  if (MODE.includes('overviewdemo')) {
+  if (scenarios.has('overviewdemo')) {
     setTimeout(() => document.querySelector('#session-daily [data-session="sess-claude-1"]')?.click(), 3500);
     setTimeout(() => {
       const body = document.querySelector('#session-detail .session-detail-body');
@@ -1915,9 +1453,9 @@
       const title = head?.getBoundingClientRect();
       document.body.dataset.overviewVisible = String(!!bounds && !!title && body.scrollTop < 2 && title.top >= bounds.top && title.bottom <= bounds.bottom);
     }, 9000);
-    if (MODE.includes('overviewrace')) setTimeout(() => window.selectSession('sess-codex-3'), 3600);
-    if (MODE.includes('overviewstale')) setTimeout(() => { window.__overviewFailed = true; window.SA.refreshSessionOverview(true); }, 5500);
-    if (MODE.includes('overviewfocus')) {
+    if (scenarios.has('overviewrace')) setTimeout(() => window.selectSession('sess-codex-3'), 3600);
+    if (scenarios.has('overviewstale')) setTimeout(() => { window.__overviewFailed = true; window.SA.refreshSessionOverview(true); }, 5500);
+    if (scenarios.has('overviewfocus')) {
       let button;
       setTimeout(() => {
         button = document.querySelector('#session-detail [data-action="guard-resolve"][data-verdict="deny"]');
@@ -1927,11 +1465,11 @@
       }, 5500);
       setTimeout(() => { document.body.dataset.overviewFocus = String(!!button && button.isConnected && document.activeElement === button && document.querySelector('#session-detail')?.textContent.includes('New observation')); }, 9000);
     }
-    if (MODE.includes('overviewdecision')) {
+    if (scenarios.has('overviewdecision')) {
       setTimeout(() => document.querySelector('#session-detail [data-action="guard-resolve"][data-verdict="deny"]')?.click(), 6000);
       setTimeout(() => { document.body.dataset.overviewResolved = String(window.SA.sessionOverview?.requests.length === 0); }, 9000);
     }
-    if (MODE.includes('overviewreturn')) {
+    if (scenarios.has('overviewreturn')) {
       setTimeout(() => document.querySelector('#session-detail [data-action="session-findings"]')?.click(), 5500);
       setTimeout(() => {
         document.body.dataset.overviewScoped = String(window.SA.activeTab === 'home' && window.SA.timelineSession === 'sess-claude-1');
@@ -1940,22 +1478,22 @@
       setTimeout(() => { document.body.dataset.overviewReturned = String(window.SA.activeTab === 'sessions' && window.SA.selectedSessionId === 'sess-claude-1'); }, 9000);
     }
   }
-  if (location.search.includes('raildemo')) {
+  if (scenarios.has('raildemo')) {
     setTimeout(() => openTab('sessions'), 1500);
     setTimeout(() => window.selectSession('sess-claude-1'), 4000);
-    if (MODE.includes('memorydemo')) {
+    if (scenarios.has('memorydemo')) {
       setTimeout(() => document.querySelector('[data-action="memory-earlier"]')?.click(), 6000);
     } else {
-      setTimeout(() => document.querySelector('[data-action="session-view"][data-view="trace"]')?.click(), MODE.includes('cspdemo') ? 4500 : 5500);
+      setTimeout(() => document.querySelector('[data-action="session-view"][data-view="trace"]')?.click(), scenarios.has('cspdemo') ? 4500 : 5500);
     }
   }
-  if (MODE.includes('memoryrace')) {
+  if (scenarios.has('memoryrace')) {
     setTimeout(() => openTab('sessions'), 1500);
     setTimeout(() => window.selectSession('sess-claude-1'), 4000);
     setTimeout(() => window.selectSession('sess-codex-3'), 4100);
     setTimeout(() => { document.body.dataset.memoryRace = document.querySelector('#session-detail')?.textContent.includes('B-only memory') ? 'B' : 'wrong'; }, 7000);
   }
-  if (MODE.includes('tracereactivation')) {
+  if (scenarios.has('tracereactivation')) {
     setTimeout(() => openTab('sessions'), 1500);
     setTimeout(() => window.selectSession('sess-claude-1'), 4000);
     setTimeout(() => window.setSessionView('trace'), 5000);
@@ -1976,7 +1514,7 @@
   // Auto-action: Export the selected session's report into a stubbed
   // clipboard; the copied text lands on body[data-clipboard]. Fires late so
   // the toast is still on screen when the DOM is dumped.
-  if (location.search.includes('exportdemo')) {
+  if (scenarios.has('exportdemo')) {
     const record = (t) => { document.body.dataset.clipboard = t; };
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -1990,7 +1528,7 @@
   // Auto-action: resolve the guard request once; the unified queue must
   // refresh and remove that blocked tool call. The styled confirm dialog
   // opens first — accept it.
-  if (location.search.includes('guarddemo')) {
+  if (scenarios.has('guarddemo')) {
     const clickResolve = () => {
       const btn = document.querySelector('[data-action="guard-resolve"][data-scope="once"]');
       if (btn) btn.click();
@@ -2016,7 +1554,7 @@
   // prompt; POST /incidents/status stamps <pre id="resolve-probe"> with the
   // attention counts and whether the queue still lists the incident — the
   // optimistic render, before any reconciliation.
-  if (MODE.includes('resolvedemo')) {
+  if (scenarios.has('resolvedemo')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       document.querySelector('#incidents-container [data-action="incident-status"][data-status="resolved"]').click();
@@ -2034,7 +1572,7 @@
   }
   // stickydemo: Attention tab, scroll 5000 px; <pre id="sticky-probe"> gets
   // the tablist's top, whether the posture pill shows, and its text.
-  if (MODE.includes('stickydemo')) {
+  if (scenarios.has('stickydemo')) {
     setTimeout(() => openTab('findings'), 4000);
     // Virtual time runs no frames, so the browser never dispatches the scroll
     // event a real scroll fires; dispatch it after scrolling.
@@ -2050,7 +1588,7 @@
   // drawerbackdemo: Uninspected drawer → first Evidence → Back; <pre
   // id="drawer-back-probe"> gets the back button after the chained open and
   // the drawer after the click.
-  if (MODE.includes('drawerbackdemo')) {
+  if (scenarios.has('drawerbackdemo')) {
     setTimeout(() => window.openUninspected(), 4000);
     setTimeout(() => document.querySelector('#drawer-body [data-action="endpoint-detail"]').click(), 4500);
     setTimeout(() => {
@@ -2067,7 +1605,7 @@
   // scopedemo: Attention → first "View session in timeline" (Sessions tab),
   // then Events, then Clear on the scope bar; <pre id="scope-probe"> gets the
   // bar on Sessions, the scoped Events rows, and the bar and rows after Clear.
-  if (MODE.includes('scopedemo')) {
+  if (scenarios.has('scopedemo')) {
     const bar = () => document.getElementById('scope-bar');
     const barState = () => `${bar().hidden ? 'hidden' : 'visible'}:${bar().textContent.trim()}`;
     const rows = () => document.querySelectorAll('#events-container .timeline-item').length;
@@ -2085,12 +1623,12 @@
     }, 5500);
   }
   // Auto-action: open the uninspected-egress drill-down modal.
-  if (location.search.includes('uninspecteddemo')) {
+  if (scenarios.has('uninspecteddemo')) {
     setTimeout(() => window.openUninspected(), 4000);
   }
   // Auto-action: open the drill-down, open a vendor disclosure, then Allow an
   // unknown row. The refill that follows must keep the disclosure open.
-  if (location.search.includes('keepopendemo')) {
+  if (scenarios.has('keepopendemo')) {
     setTimeout(() => window.openUninspected(), 4000);
     setTimeout(() => {
       const d = document.querySelector('#drawer-body details[data-key^="vendor:"]');
@@ -2106,7 +1644,7 @@
   // Auto-action: open the endpoint Evidence detail for the unattributed IPv6.
   // Auto-action: open an incident report, then click its accessed file — the
   // file drawer opens with a way back to the report.
-  if (location.search.includes('filedemo')) {
+  if (scenarios.has('filedemo')) {
     setTimeout(() => window.openIncidentReport('inc-file-1'), 3000);
     setTimeout(() => {
       const link = document.querySelector('#drawer [data-action="open-file"]');
@@ -2114,28 +1652,28 @@
       if (link) link.click();
     }, 5000);
   }
-  if (location.search.includes('endpointdemo')) {
+  if (scenarios.has('endpointdemo')) {
     setTimeout(() => window.openEndpointDetail('2600:1901:0:9e23::', 'claude'), 4000);
   }
   // Auto-action: open the egress modal, then fire a toast from inside it —
   // proves the toast renders above the open modal (native <dialog> is in the
   // browser top layer, which no root-level z-index can paint over). Fires
   // late so the toast is still on screen when the DOM is dumped.
-  if (location.search.includes('toastdemo')) {
+  if (scenarios.has('toastdemo')) {
     setTimeout(() => {
       window.openUninspected();
       document.getElementById('btn-refresh').click();
     }, 9000);
   }
   // Auto-action: open the notification preferences popover.
-  if (location.search.includes('notifydemo')) {
+  if (scenarios.has('notifydemo')) {
     setTimeout(() => document.getElementById('btn-notify').click(), 4000);
   }
   // notifyfocusdemo: typing a workspace path in the add-scope form must
   // survive a telemetry reconcile that actually changes notifyCfg — the add
   // form is static DOM outside the patched list, and 'notify' now holds
   // focus (PANEL_EL) the same as any other panel.
-  if (location.search.includes('notifyfocusdemo')) {
+  if (scenarios.has('notifyfocusdemo')) {
     setTimeout(() => {
       openTab('policy');
       const input = document.getElementById('notify-scope-path');
@@ -2155,18 +1693,18 @@
     }, 1500);
   }
   // Auto-action: allow the suggested host — the suggestion must disappear.
-  if (location.search.includes('allowdemo')) {
+  if (scenarios.has('allowdemo')) {
     setTimeout(() => document.querySelector('.fw-suggestion [data-action="allow-host"]').click(), 4000);
   }
   // Auto-action: dismiss the keychain flag — the card must leave the list.
-  if (location.search.includes('dismissdemo')) {
+  if (scenarios.has('dismissdemo')) {
     // Findings is opened first, as a user must: hidden panels do not render.
     setTimeout(() => openTab('findings'), 1500);
     setTimeout(() => document.querySelector('[data-action="dismiss-flag"][data-id="flag-3"]').click(), 4000);
   }
   // Auto-action: re-run the advisor on the first flag — the pending state
   // must show, then the fresh verdict must land and replace the chip.
-  if (location.search.includes('retriagedemo')) {
+  if (scenarios.has('retriagedemo')) {
     data['/flags'].find(x => x.id === 'flag-1').advisor = { assessment: 'benign', confidence: 0.9, rationale: 're-triage complete: routine vendor traffic', suggested_action: 'none', created_at: iso(120000) };
     // Findings is opened first, as a user must: hidden panels do not render.
     setTimeout(() => {
@@ -2183,12 +1721,12 @@
   }
   // Advisor-down variant: the circuit breaker is open — retriage must render
   // as an honest "Advisor offline" state, not a clickable dead button.
-  if (location.search.includes('advisordown')) {
+  if (scenarios.has('advisordown')) {
     data['/status'].advisor_health = { enabled: true, circuit_open: true, last_error: 'context deadline exceeded', queue_depth: 0, model: 'qwen3:8b' };
   }
   // No-fleet variant: no collector webhooks configured — the fleet panel must
   // hide entirely instead of carrying a permanently-empty placeholder.
-  if (location.search.includes('nofleetdemo')) {
+  if (scenarios.has('nofleetdemo')) {
     data['/fleet'] = { ...data['/fleet'], fleet_configured: false };
     // The fleet panel lives on Sessions/Processes, not the default Home tab.
     setTimeout(() => openTab('sessions/processes'), 1500);
@@ -2196,7 +1734,7 @@
   // spenddemo: switch the Spend card to by provider, then a full refresh
   // re-renders every panel; the probe records the select and the saved view
   // after that re-render on <pre id="spend-probe">.
-  if (MODE.includes('spenddemo')) {
+  if (scenarios.has('spenddemo')) {
     setTimeout(() => {
       const sel = document.getElementById('spend-by');
       sel.value = 'provider';
@@ -2213,7 +1751,7 @@
   // card's nodes. Mark the first day column and scroll the narrowed day bars,
   // refresh; then switch to by repo, mark the first list row, refresh again.
   // The results land on <pre id="spend-keep-probe">.
-  if (MODE.includes('spendkeepdemo')) {
+  if (scenarios.has('spendkeepdemo')) {
     const q = sel => document.querySelector('#spend-card ' + sel);
     const costFetches = () => ((document.getElementById('mock-costs') || {}).textContent || '').split('\n').length;
     const out = [];
@@ -2248,19 +1786,19 @@
   // record the card's notice and the tile's line on <pre id="spend-cache-probe">.
   // spendslowdemo: at 3 s (the /costs answers are still out) record the
   // agents KPI and the Spend card's text on <pre id="spend-slow-probe">.
-  if (MODE.includes('spendcachedemo')) {
+  if (scenarios.has('spendcachedemo')) {
     setTimeout(() => {
       const n = document.getElementById('spend-cache');
       stamp('spend-cache-probe', `notice=${n.hidden ? '' : n.textContent} hint=${document.getElementById('hint-spend').textContent}`);
     }, 1000);
   }
-  if (MODE.includes('spendshape')) {
+  if (scenarios.has('spendshape')) {
     setTimeout(() => document.querySelector('#spend-card').closest('details').open = true, 1000);
     setTimeout(() => {
       spendShapeBad = true;
       document.getElementById('btn-refresh').click();
     }, 3000);
-    if (MODE.includes('recover')) {
+    if (scenarios.has('recover')) {
       setTimeout(() => {
         stamp('spend-shape-before-recovery', document.getElementById('spend-cache').textContent);
         spendShapeBad = false;
@@ -2268,7 +1806,7 @@
       }, 6000);
     }
   }
-  if (MODE.includes('spendslowdemo')) {
+  if (scenarios.has('spendslowdemo')) {
     setTimeout(() => {
       stamp('spend-slow-probe', `agents=${document.getElementById('count-agents').textContent} `
         + `spend=${document.getElementById('spend-card').textContent.trim()}`);
@@ -2276,13 +1814,13 @@
   }
   // No-spend variant: an empty /costs report — the tile reads an em dash and
   // the card shows its empty state.
-  if (location.search.includes('nocostsdemo')) {
+  if (scenarios.has('nocostsdemo')) {
     data['/costs'] = { ...data['/costs'], total: { key: '', calls: 0, sessions: 0, tokens_in: 0, tokens_out: 0, cost_usd: 0, unpriced_calls: 0 }, rows: [] };
   }
   // plansdemo: /costs/plans reports a Codex Pro weekly window and the 24h
   // total counts plan calls — the Spend card heads its rows with the plan
   // line and bar; the stat strip says how many calls ran on plans.
-  if (location.search.includes('plansdemo')) {
+  if (scenarios.has('plansdemo')) {
     data['/costs/plans'] = { plans: [{ harness: 'codex', home: 'codex', plan_type: 'pro', limit_id: 'codex',
       windows: [{ window_minutes: 10080, used_percent: 52, resets_at: iso(-3 * 24 * 3600000) }], unlimited: false, seen_at: iso(0) }] };
     data['/costs'] = { ...data['/costs'], total: { ...data['/costs'].total, plan_calls: 12 } };
@@ -2290,7 +1828,7 @@
   // memfamilydemo: three claude sessions share root 5821 — Memory by family
   // shows one bar for that family with its session count, and the badge
   // counts agent families (5821, 4412, 6033), not sessions or infra (7001).
-  if (MODE.includes('memfamilydemo')) {
+  if (scenarios.has('memfamilydemo')) {
     // Memory by family is a Trends chart, under the Home:Trends group.
     setTimeout(() => openTab('overview'), 1500);
     for (const n of [5, 6]) {
@@ -2304,12 +1842,12 @@
   }
   // Post-mortem variant: every live session has exited, but persisted pressure
   // episodes must remain visible.
-  if (location.search.includes('noresourcesdemo')) {
+  if (scenarios.has('noresourcesdemo')) {
     data['/resources'] = { ...data['/resources'], rss_bytes: 0, cpu_percent: 0, process_count: 0, session_count: 0, sessions: [] };
     // The resource board and its flight recorder live on Sessions/Resources.
     setTimeout(() => openTab('sessions/resources'), 1500);
   }
-  if (MODE.includes('headroomhint') && !MODE.includes('phoneframe') && !MODE.includes('phonedemo')) {
+  if (scenarios.has('headroomhint') && !scenarios.has('phoneframe') && !scenarios.has('phonedemo')) {
     setTimeout(() => openTab('resources'), 5000);
     setTimeout(() => {
       const hint = document.querySelector('.headroom-hint');
@@ -2329,7 +1867,7 @@
   // orchestrated by an OpenClaw session) and three infra, joined to /sessions
   // by root pid. The data-pipeline codex family carries twenty processes (the
   // drawer's capped table), one leftover, events and a finding.
-  if (MODE.includes('familiesdemo')) {
+  if (scenarios.has('familiesdemo')) {
     const GB = 1024 ** 3, MB = 1024 ** 2;
     const fam = (pid, name, workspace, rss, cpu, extra) => ({
       key: `${pid}:1789470000000000000`, name, root_pid: pid, root_started_at: '2026-09-09T13:00:00Z',
@@ -2382,7 +1920,7 @@
         const rows = document.querySelectorAll('#drawer-body .family-proc-row').length;
         const more = document.querySelector('#drawer-body [data-action="show-more"]');
         stamp('family-probe', `rows=${rows} more=${more ? more.textContent.trim() : 'none'}`);
-        if (MODE.includes('familyevents')) document.querySelector('#drawer-body [data-action="family-events"]')?.click();
+        if (scenarios.has('familyevents')) document.querySelector('#drawer-body [data-action="family-events"]')?.click();
         else if (more) more.click();
       }, 800);
     }, 4000);
@@ -2390,7 +1928,7 @@
   // Phone-frame stress: the widest Resources text the board must hold at
   // 375px — a 60-character unbroken folder label, a 5-digit process count,
   // 128.0 GB of memory and 100.0% CPU on the machine strip.
-  if (MODE.includes('phoneframe')) {
+  if (scenarios.has('phoneframe')) {
     const GB = 1024 ** 3;
     const r = data['/resources'];
     r.host = { ...r.host, total_memory_bytes: 128 * GB, system_cpu_percent: 100, agent_cpu_percent: 100, non_agent_cpu_percent: 100,
@@ -2405,28 +1943,28 @@
     }];
   }
   // manyevents: 120 loaded events — the Events tab shows the newest 50.
-  if (MODE.includes('manyevents')) {
+  if (scenarios.has('manyevents')) {
     for (let i = 0; i < 114; i++) {
       data['/events'].push({ kind: 0, ts: iso(40000 + i * 1000), pid: 5821, path: `/Users/dev/workspace/api-service/src/m${i}.ts` });
     }
   }
   // traceevents: a model_call and a tool_call as the trace collectors write
   // them — pid 0, a session id, no path or detail.
-  if (MODE.includes('traceevents')) {
+  if (scenarios.has('traceevents')) {
     data['/events'].push(
       { kind: 14, ts: iso(90000), pid: 0, session_id: 'sess-claude-1', model: 'claude-sonnet-4-5', tokens_in: 12000, tokens_out: 340, cost_usd: 0.0412, price_class: 'priced' },
       { kind: 12, ts: iso(91000), pid: 0, session_id: 'sess-claude-1', tool: 'Bash', tool_status: 'ok', duration_ms: 2500, call_id: 'c-1' });
   }
   // duptrace: two tool_call rows at the identical ts with different call
   // ids — eventKey must key on call_id, not collapse them into one row.
-  if (MODE.includes('duptrace')) {
+  if (scenarios.has('duptrace')) {
     data['/events'].push(
       { kind: 12, ts: iso(92000), pid: 0, session_id: 'sess-claude-1', tool: 'Read', tool_status: 'ok', duration_ms: 10, call_id: 'dup-1' },
       { kind: 12, ts: iso(92000), pid: 0, session_id: 'sess-claude-1', tool: 'Write', tool_status: 'ok', duration_ms: 20, call_id: 'dup-2' });
   }
   // eventsorderdemo: events arrive out of ts order, one stamped ~4 months
   // old — the render must sort them newest first and date the old row.
-  if (MODE.includes('eventsorderdemo')) {
+  if (scenarios.has('eventsorderdemo')) {
     data['/events'] = [
       { kind: 0, ts: iso(1000), pid: 5821, path: '/Users/dev/workspace/api-service/src/new.ts' },
       { kind: 0, ts: iso(4 * 30 * 86400000), pid: 5821, path: '/Users/dev/workspace/api-service/src/old.ts' },
@@ -2516,13 +2054,13 @@
   };
   // clutteradvise: Ask advisor on the machine group; the plan must appear
   // under it once the re-read sees it.
-  if (MODE.includes('clutteradvise')) {
+  if (scenarios.has('clutteradvise')) {
     const iv = setInterval(() => {
       const btn = document.querySelector('#clutter-container [data-action="clutter-advise"][data-project="machine"]');
       if (btn) { clearInterval(iv); btn.click(); }
     }, 200);
   }
-  if (MODE.includes('clutterdemo')) {
+  if (scenarios.has('clutterdemo')) {
     setTimeout(() => {
       const btn = document.querySelector('#clutter-container [data-action="clutter-trash"]');
       if (btn) btn.click();
@@ -2540,7 +2078,7 @@
   }
   // batchdemo: three removable worktrees in one repository; Remove all
   // removes them after one dialog.
-  if (MODE.includes('batchdemo')) {
+  if (scenarios.has('batchdemo')) {
     const repo = data['/worktrees'].repos[0];
     const done = repo.worktrees.find(w => w.state === 'remove');
     repo.worktrees.push({ ...done, path: WT_REPO + '/.worktrees/old-a', branch: 'feat/old-a' }, { ...done, path: WT_REPO + '/.worktrees/old-b', branch: 'feat/old-b' });
@@ -2561,13 +2099,13 @@
   }
   // orphandemo: a repository that moved away leaves a folder pointing at it;
   // orphantrash moves the folder to the Trash from its row.
-  if (MODE.includes('orphandemo')) {
+  if (scenarios.has('orphandemo')) {
     const rep = data['/worktrees'];
     rep.repos.push({ path: '/Users/dev/gone-app', error: 'repository not found (moved or deleted)', size_bytes: 0, worktrees: [
       { path: '/Users/dev/.cursor/worktrees/gone-app/ctnj', state: 'review', orphan: true, reasons: ['directory is not registered with git; its files are the only copy'] },
     ] });
     rep.errors = ['/Users/dev/gone-app: repository not found (moved or deleted); 1 folder still points to it (listed first below)'];
-    if (MODE.includes('orphantrash')) {
+    if (scenarios.has('orphantrash')) {
       setTimeout(() => {
         const btn = document.querySelector('#worktrees-container [data-action="worktree-trash-orphan"]');
         if (btn) btn.click();
@@ -2586,7 +2124,7 @@
   }
   // refreshdemo: the first /worktrees and /cleanup answer from an old cached
   // scan while the daemon rescans; the tab must re-read until it lands.
-  if (MODE.includes('refreshdemo')) {
+  if (scenarios.has('refreshdemo')) {
     const freshW = data['/worktrees'];
     const oldW = JSON.parse(JSON.stringify(freshW));
     Object.assign(oldW, { cached: true, refreshing: true, generated_at: iso(3 * 3600000) });
@@ -2600,7 +2138,7 @@
   }
   // sizingdemo: the first /worktrees answers still sizing with no sizes;
   // the tab must re-read until the sizes land.
-  if (MODE.includes('sizingdemo')) {
+  if (scenarios.has('sizingdemo')) {
     const sized = data['/worktrees'];
     const pending = JSON.parse(JSON.stringify(sized));
     pending.sizing = true;
@@ -2613,11 +2151,11 @@
   // reviewdemo: Remove on the review row opens the Trash confirmation (no
   // drawer); reviewtrash accepts it and the row must leave the tab without
   // a rescan.
-  if (MODE.includes('reviewdemo')) {
+  if (scenarios.has('reviewdemo')) {
     setTimeout(() => {
       const btn = document.querySelector('#worktrees-container [data-action="worktree-review-trash"]');
       if (btn) btn.click();
-      if (MODE.includes('reviewtrash')) {
+      if (scenarios.has('reviewtrash')) {
         const iv = setInterval(() => {
           const ok = document.getElementById('confirm-ok');
           if (ok && !ok.closest('#confirm-layer').hidden) {
@@ -2632,13 +2170,13 @@
   // discussdemo: Discuss on the review row sends POST /agent/worktree and
   // opens the Agent tab; discussoff has the daemon answer 409 (agent off),
   // clicked late enough that the 4-second toast is still up at the dump.
-  if (MODE.includes('discussdemo')) {
+  if (scenarios.has('discussdemo')) {
     setTimeout(() => {
       const btn = document.querySelector('#worktrees-container .wt-row.wt-review [data-action="worktree-discuss"]');
       if (btn) btn.click();
-    }, MODE.includes('discussoff') ? 9000 : 3000);
+    }, scenarios.has('discussoff') ? 9000 : 3000);
   }
-  if (MODE.includes('worktreedemo')) {
+  if (scenarios.has('worktreedemo')) {
     setTimeout(() => {
       const btn = document.querySelector('#worktrees-container [data-action="worktree-remove"]');
       if (btn) btn.click();
@@ -2670,7 +2208,7 @@
   };
   // removeremovabledemo: three removable rows in one repository and one in
   // another; the Removable now tile's Remove all removes all four.
-  if (MODE.includes('removeremovabledemo')) {
+  if (scenarios.has('removeremovabledemo')) {
     const repo = data['/worktrees'].repos[0];
     const done = repo.worktrees.find(w => w.state === 'remove');
     repo.worktrees.push({ ...done, path: WT_REPO + '/.worktrees/old-a', branch: 'feat/old-a' }, { ...done, path: WT_REPO + '/.worktrees/old-b', branch: 'feat/old-b' });
@@ -2687,7 +2225,7 @@
   // historydemo: History opens the cleanup history in the drawer; then the
   // Removed chip filters it. reclaimdaydemo: a chart column opens it at
   // that day.
-  if (MODE.includes('historydemo')) {
+  if (scenarios.has('historydemo')) {
     setTimeout(() => document.querySelector('[data-action="worktrees-history"]').click(), 3000);
     setTimeout(() => {
       stamp('history-all', (document.getElementById('drawer-body') || {}).innerHTML || '');
@@ -2695,7 +2233,7 @@
       if (chip) chip.click();
     }, 4500);
   }
-  if (MODE.includes('reclaimdaydemo')) {
+  if (scenarios.has('reclaimdaydemo')) {
     setTimeout(() => {
       const col = document.querySelector('#worktrees-reclaim [data-action="reclaim-day"]');
       if (col) {
@@ -2708,7 +2246,7 @@
   }
   // wtsearchdemo: the search box keeps the rows whose branch, folder or
   // repository matches.
-  if (MODE.includes('wtsearchdemo')) {
+  if (scenarios.has('wtsearchdemo')) {
     setTimeout(() => {
       const input = document.getElementById('worktree-search');
       input.value = 'EVIDENCE';
@@ -2718,7 +2256,7 @@
   // groupdemo: the header Search… box narrows the System tab's worktrees and
   // clutter (any case), clearing it restores them; then Ask advisor about
   // all and Discuss all on the repository group post {"repo"}.
-  if (MODE.includes('groupdemo')) {
+  if (scenarios.has('groupdemo')) {
     const typeSearch = value => {
       const input = document.getElementById('global-search');
       input.value = value;
@@ -2751,7 +2289,7 @@
   // removecadence: sizes never land, so a 5 s re-read is always pending;
   // Remove is clicked right after one. The removal's first re-read must
   // come on its own 1.5 s cadence, not the pending 5 s one.
-  if (MODE.includes('removecadence')) {
+  if (scenarios.has('removecadence')) {
     const rep = data['/worktrees'];
     rep.sizing = true;
     let clicked = false;
@@ -2772,26 +2310,26 @@
   }
   // adoptdemo: a removal started elsewhere is running when the tab opens;
   // the progress toast follows it without a click.
-  if (MODE.includes('adoptdemo')) {
+  if (scenarios.has('adoptdemo')) {
     const p = WT_REPO + '/.worktrees/done';
     data['/worktrees'].removals = { [p]: { path: p, state: 'running', phase: 'checking', step: 'checking it is still safe to remove', started_at: iso(5000), step_at: iso(1000) } };
   }
 
   // Auto-action: demote a blocking rule — it must flip back to Promote.
-  if (location.search.includes('demotedemo')) {
+  if (scenarios.has('demotedemo')) {
     // The firewall rule list lives on the Egress tab, not the default Home tab.
     setTimeout(() => openTab('egress'), 1500);
     setTimeout(() => document.querySelector('[data-action="demote"][data-rule="aws-key"]').click(), 4000);
   }
   // Auto-action: remove an allowlist entry — the row must leave the list.
-  if (location.search.includes('allowlistdemo')) {
+  if (scenarios.has('allowlistdemo')) {
     setTimeout(() => document.querySelector('[data-action="allowlist-remove"]').click(), 4000);
   }
 
   // Quiet machine: no sessions and no agents — the rail's empty state. The
   // Sessions tab is not active by default, and the rail only renders once
   // it is on screen (renderAll no longer paints hidden panels), so open it.
-  if (location.search.includes('quietdemo')) {
+  if (scenarios.has('quietdemo')) {
     data['/sessions'] = [];
     data['/status'] = { ...data['/status'], agents: [], trees: [] };
     setTimeout(() => openTab('sessions'), 1500);
@@ -2799,7 +2337,7 @@
   // Auto-action: type a filter that matches nothing — the rail must say so
   // and offer to clear it. Sessions is not the default tab, so open it
   // before typing: the rail only renders on screen.
-  if (location.search.includes('nomatchdemo')) {
+  if (scenarios.has('nomatchdemo')) {
     setTimeout(() => openTab('sessions'), 1500);
     setTimeout(() => {
       const q = document.getElementById('session-cwd-filter');
@@ -2812,7 +2350,7 @@
   // live on the Sessions tab (board and processes sub-views), not the
   // default Home tab, so open both before the toggle click, and re-show the
   // board (where the pill itself lives) afterward so its state renders too.
-  if (location.search.includes('pilldemo')) {
+  if (scenarios.has('pilldemo')) {
     setTimeout(() => { openTab('sessions/processes'); openTab('sessions/board'); }, 1500);
     setTimeout(() => document.querySelector('#session-harness-pills [data-action="toggle-harness"][data-harness="claude"]').click(), 4000);
     setTimeout(() => openTab('sessions/processes'), 4300);
@@ -2823,7 +2361,7 @@
   // the tab panel, or the page as a whole (posture banner included), reaches
   // past the viewport, and posts it back; the result lands on
   // <body data-hscroll="sessions:N,agents:N,resources:N"> (N in px, 0 = fits).
-  if (MODE.includes('phoneframe')) {
+  if (scenarios.has('phoneframe')) {
     // Content inside a horizontal scroller (the Sessions sub-view control) or
     // an ellipsised log title is clipped by it, so the clipping box is what
     // must fit.
@@ -2845,7 +2383,7 @@
         const agents = measure('agents');
         setTimeout(() => {
           const resources = measure('resources');
-          if (MODE.includes('headroomhint')) {
+          if (scenarios.has('headroomhint')) {
             const hint = document.querySelector('.headroom-hint');
             hint.open = true;
             setTimeout(() => {
@@ -2856,13 +2394,13 @@
           }
           // patterndemo: the Attention/Flags tab holding the pattern card.
           const done = findings => parent.postMessage({ hscroll: `${sessions},${agents},${resources}${findings}` }, '*');
-          if (MODE.includes('patterndemo')) setTimeout(() => done(',' + measure('findings')), 300);
-          else if (MODE.includes('spenddaydemo')) setTimeout(() => done(',' + measure('overview')), 300);
+          if (scenarios.has('patterndemo')) setTimeout(() => done(',' + measure('findings')), 300);
+          else if (scenarios.has('spenddaydemo')) setTimeout(() => done(',' + measure('overview')), 300);
           else done('');
         }, 300);
       }, 300);
     }, 4000);
-  } else if (MODE.includes('phonedemo')) {
+  } else if (scenarios.has('phonedemo')) {
     addEventListener('message', (e) => {
       if (e.data && e.data.hscroll) document.body.dataset.hscroll = e.data.hscroll;
       if (e.data && e.data.headroom) document.body.dataset.headroom = e.data.headroom;
@@ -2871,10 +2409,10 @@
       const frame = document.createElement('iframe');
       frame.width = '375';
       frame.height = '812';
-      frame.src = 'harness.html?phoneframe&raildemo' + (MODE.includes('patterndemo') ? '&patterndemo' : '')
-        + (MODE.includes('memorydemo') ? '&memorydemo' : '')
-        + (MODE.includes('spenddaydemo') ? '&spenddaydemo' : '')
-        + (MODE.includes('headroomhint') ? '&headroomhint' : '');
+      frame.src = 'harness.html?phoneframe&raildemo' + (scenarios.has('patterndemo') ? '&patterndemo' : '')
+        + (scenarios.has('memorydemo') ? '&memorydemo' : '')
+        + (scenarios.has('spenddaydemo') ? '&spenddaydemo' : '')
+        + (scenarios.has('headroomhint') ? '&headroomhint' : '');
       document.body.prepend(frame);
     });
   }
@@ -2884,7 +2422,7 @@
   // rendered width as a percent of its track on <body data-csp-widths=
   // "wf-bar:N,hbar-fill:N,resource-host-segment:N"> — the first tool bar,
   // the smallest ranked bar, the agent memory segment.
-  if (MODE.includes('cspdemo')) {
+  if (scenarios.has('cspdemo')) {
     const probes = [
       ['wf-bar', 'sessions', '.wf-bar'],
       ['hbar-fill', 'overview', '#chart-memory .hbar-row:last-child .hbar-fill'],
@@ -2906,7 +2444,7 @@
   }
   // Posture banner off Home: 3 items and "and N more"; the link lands on Home,
   // where the banner lists nothing.
-  if (location.search.includes('posturemoredemo')) {
+  if (scenarios.has('posturemoredemo')) {
     const banner = () => {
       const ul = document.getElementById('posture-items');
       const more = ul.querySelector('.posture-more a');
@@ -2921,7 +2459,7 @@
   }
   // Egress fold: 2 rules with hits stay listed, 20 quiet rules fold into one
   // row; the open fold survives an SSE-driven refetch that changes its count.
-  if (location.search.includes('folddemo')) {
+  if (scenarios.has('folddemo')) {
     const fs = {
       'hit-a': { type: 'vendor-key', mode: 'monitor', would_block: 3, blocked: 0, legit: 1 },
       'hit-b': { type: 'cloud-key', mode: 'monitor', would_block: 0, blocked: 0, legit: 2 },
@@ -2958,7 +2496,7 @@
     }, 7000);
   }
   // Processes fills the width: panel width vs sub-view width at 1440 px.
-  if (location.search.includes('procwidthdemo')) {
+  if (scenarios.has('procwidthdemo')) {
     setTimeout(() => openTab('sessions/processes'), 1500);
     setTimeout(() => {
       const sub = document.getElementById('sub-processes');
@@ -2967,7 +2505,7 @@
     }, 4000);
   }
   // Auto-action: switch to the Egress tab — panels must hide/show correctly.
-  if (location.search.includes('tabdemo')) {
+  if (scenarios.has('tabdemo')) {
     setTimeout(() => openTab('egress'), 4000);
   }
   // Auto-action: switch to a named tab once telemetry has landed, then hold
@@ -2989,7 +2527,7 @@
   }
   // Auto-action: save a view, type a search, then apply the view — exercises
   // the saved-view + search paths through the real UI.
-  if (new URLSearchParams(location.search).has('viewdemo')) {
+  if (scenarios.has('viewdemo')) {
     setTimeout(() => {
       document.getElementById('btn-views').click();
       document.getElementById('view-name').value = 'Prod leaks';
@@ -3005,7 +2543,7 @@
   }
   // Auto-action: select a session, open the resource policy editor, and add
   // its workspace as an override through the real delegated click path.
-  if (location.search.includes('policydemo')) {
+  if (scenarios.has('policydemo')) {
     // The resource board (and its family drawer) lives on Sessions/Resources.
     setTimeout(() => openTab('sessions/resources'), 1500);
     setTimeout(() => {
@@ -3039,7 +2577,7 @@
   const renderCounts = () => (window.SA && window.SA.renderCounts) ? { ...window.SA.renderCounts } : null;
   // burstdemo: Findings open, burst; <pre id="render-counts"> gets the
   // per-panel render-count delta over the burst (or "missing").
-  if (MODE.includes('burstdemo')) {
+  if (scenarios.has('burstdemo')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const before = renderCounts();
@@ -3056,7 +2594,7 @@
   // memprobe: Overview open, every Memory by family row probed, then the same
   // session re-emitted three times. <pre id="mem-probe"> gets the chart-memory
   // renders in between and how many probed rows are still connected.
-  if (MODE.includes('memprobe')) {
+  if (scenarios.has('memprobe')) {
     setTimeout(() => openTab('overview'), 3500);
     setTimeout(() => {
       const rows = Array.from(document.querySelectorAll('#chart-memory .hbar-row'));
@@ -3078,7 +2616,7 @@
   // member selected, then session frames patch the rail; <pre id="dup-probe">
   // reports the row's patchList key, whether it stayed open and the selected
   // cards. With tab=resources the families fold the same way.
-  if (MODE.includes('dupdemo')) {
+  if (scenarios.has('dupdemo')) {
     const MB = 1024 ** 2;
     for (let i = 1; i <= 5; i++) {
       data['/sessions'].push({ id: `sess-dup-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-demo-app',
@@ -3096,7 +2634,7 @@
         rss_bytes: 100 * i * MB, cpu_percent: i, process_count: i, orphan_count: 0,
         processes: [{ pid, ppid: 1, name: 'codex', rss_bytes: 100 * i * MB, cpu_percent: i }], samples: [], diagnoses: [] });
     }
-    if (!MODE.includes('tab=resources') && !MODE.includes('foldpatch')) {
+    if (!scenarios.has('tab=resources') && !scenarios.has('foldpatch')) {
       const quill = 'group:codex|demo-app@main · quill';
       setTimeout(() => openTab('sessions'), 4000);
       setTimeout(() => {
@@ -3124,7 +2662,7 @@
   // ends another codex session; the probe waits out the render engine's
   // 3 s focus hold. <pre id="fold-probe">: focus kept, the group the same
   // open node, each fold's aria-expanded, the head counts around it.
-  if (MODE.includes('dupdemo') && MODE.includes('foldpatch')) {
+  if (scenarios.has('dupdemo') && scenarios.has('foldpatch')) {
     for (let i = 6; i <= 7; i++) {
       data['/sessions'].push({ id: `sess-dup-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-demo-app',
         repo: 'demo-app', branch: 'main', origin: 'quill (openclaw)',
@@ -3161,7 +2699,7 @@
   // View family button inside it focused, then a fourth codex family's
   // memory and CPU change. <pre id="family-probe">: focus kept, the group the
   // same open node, the fold still expanded, the head counts.
-  if (MODE.includes('dupdemo') && MODE.includes('familypatch')) {
+  if (scenarios.has('dupdemo') && scenarios.has('familypatch')) {
     data['/resources'].sessions.push({ key: '8400:1789470000000000000', name: 'codex', root_pid: 8400,
       root_started_at: '2026-09-09T13:00:00Z', workspace: '/Users/dev/workspace/etl-sidecar', last_seen_at: iso(30000),
       rss_bytes: 50 * 1024 ** 2, cpu_percent: 2, process_count: 1, orphan_count: 0,
@@ -3192,7 +2730,7 @@
   }
   // railburst: Sessions open, the infra group opened and probed, then a burst
   // with session frames that change the claude group.
-  if (MODE.includes('railburst')) {
+  if (scenarios.has('railburst')) {
     setTimeout(() => openTab('sessions'), 4000);
     setTimeout(() => {
       const d = document.querySelector('#session-rail details[data-harness="infra"]');
@@ -3206,7 +2744,7 @@
   }
   // focusburst: Findings open, flag-2's row head probed and focused, then a
   // burst; <pre id="focus-probe"> says whether that node kept focus.
-  if (MODE.includes('focusburst')) {
+  if (scenarios.has('focusburst')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const btn = document.querySelector('#flags-list .log-row[data-row-key="flag:flag-2"] .log-head');
@@ -3217,7 +2755,7 @@
   }
   // clickburst: press flag-3's Dismiss, burst, release and click the same
   // node 400ms later — a real click spans renders.
-  if (MODE.includes('clickburst')) {
+  if (scenarios.has('clickburst')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const btn = document.querySelector('#flags-list [data-action="dismiss-flag"][data-id="flag-3"]');
@@ -3233,7 +2771,7 @@
   // "Dismiss this flag class". The POST lands in the /mute fixture,
   // so the re-render adds a codex-scoped row beside the focused one.
   // <pre id="mute-focus-probe"> says whether focus stayed.
-  if (MODE.includes('rawmute')) {
+  if (scenarios.has('rawmute')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const un = document.querySelector('#flags-list [data-action="unmute"][data-host="blog.example.com"]');
@@ -3247,14 +2785,14 @@
   }
   // actdemo: Egress open, allow the suggested host late enough that the
   // inline note and the toast are still up at dump time (4s each).
-  if (MODE.includes('actdemo')) {
+  if (scenarios.has('actdemo')) {
     setTimeout(() => openTab('egress'), 4000);
     setTimeout(() => document.querySelector('.fw-suggestion [data-action="allow-host"]').click(), 9000);
   }
   // detailsprobe (with explaindemo): flag-2 raised seconds ago; Findings
   // open, its row's Evidence opened and probed, then a burst. <pre
   // id="details-probe"> says whether that node stayed connected and open.
-  if (MODE.includes('detailsprobe')) {
+  if (scenarios.has('detailsprobe')) {
     data['/flags'].find(f => f.id === 'flag-2').ts = new Date(Date.now() - 5000).toISOString();
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
@@ -3266,7 +2804,7 @@
   }
   // patternact (with patterndemo): Findings open, press the pattern row's
   // dismiss-all.
-  if (MODE.includes('patternact')) {
+  if (scenarios.has('patternact')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('#flags-list .row-body[data-pattern-key] [data-action-id="dismiss-all"]')?.click(), 9000);
   }
@@ -3274,7 +2812,7 @@
   // flag on the stream that the daemon folds into the codex pattern.
   // <pre id="pattern-stream-probe"> reads the Flags list 300 ms after the
   // frame (mid) and after the debounced reconcile (end).
-  if (MODE.includes('patternstream')) {
+  if (scenarios.has('patternstream')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const f = {
@@ -3304,7 +2842,7 @@
   // frame with a new api-service RSS, read after the 3 s focus hold lets the
   // panel render. <pre id="attn-probe"> says whether both survived, the
   // api-service need's memory text, and that the pattern stays out of the queue.
-  if (MODE.includes('attnkeep')) {
+  if (scenarios.has('attnkeep')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const card = document.querySelector('#flags-list .row-body[data-pattern-key]');
@@ -3324,7 +2862,7 @@
   // trendsprobe: Home open, Trends closed; a burst of flags and a session
   // update lands. <pre id="trends-probe"> gets the Trends panels' render
   // delta while closed, then after the group is opened.
-  if (MODE.includes('trendsprobe')) {
+  if (scenarios.has('trendsprobe')) {
     const trendDelta = (a, b) => ['activity', 'chart-flags', 'chart-memory']
       .map(k => `${k}=${(b[k] || 0) - (a[k] || 0)}`).join(',');
     setTimeout(() => {
@@ -3344,7 +2882,7 @@
   // throughout. <pre id="hidden-render-probe"> reports each panel's
   // absolute render count after boot, after Refresh, after a search, and
   // again once each panel is actually shown.
-  if (MODE.includes('hiddenrenderprobe')) {
+  if (scenarios.has('hiddenrenderprobe')) {
     const hidden = ['activity', 'chart-flags', 'chart-memory', 'resources'];
     const snap = () => hidden.map(k => `${k}=${(renderCounts() || {})[k] || 0}`).join(',');
     setTimeout(() => {
@@ -3373,7 +2911,7 @@
     }, 1000);
   }
   // policylists: the Policy tab, opened once telemetry has landed.
-  if (MODE.includes('scopedpermission')) {
+  if (scenarios.has('scopedpermission')) {
     data['/reviews']={reviews:[{id:'review-scope',revision:3,review_state:'unreviewed',count:1,evidence_available:true,evidence_flag_available:false,
       context:{rule:'sensitive-read-then-connect',session_id:'sess-claude-1',workspace:'/Users/dev/workspace/api-service',resources:['/work/.env'],destinations:['api.example.com:443']},
       available_scopes:[{kind:'once'},{kind:'session'},{kind:'exact',expiry:'24h'},{kind:'exact',expiry:'7d'}],source_ids:['flag-1'],incident_ids:[],assessment:{risk:'high',control:'observed',reason:'Recorded read and connection'}}],degraded:false};
@@ -3381,26 +2919,26 @@
     setTimeout(()=>document.querySelector('#flags-list [data-decision="expect"][data-scope="exact"][data-expiry="24h"]')?.click(),7000);
     setTimeout(()=>document.getElementById('confirm-ok')?.click(),7500);
     setTimeout(()=>openTab('policy'),8500);
-    if (MODE.includes('revokescope')) setTimeout(()=>document.querySelector('#policy-scopes [data-action="revoke-scope"]')?.click(),10000);
+    if (scenarios.has('revokescope')) setTimeout(()=>document.querySelector('#policy-scopes [data-action="revoke-scope"]')?.click(),10000);
   }
-  if (MODE.includes('policylists')) {
+  if (scenarios.has('policylists')) {
     setTimeout(() => openTab('policy'), 4000);
   }
   // forgetexpected (with policylists): press Forget on the expected row.
-  if (MODE.includes('forgetexpected')) {
+  if (scenarios.has('forgetexpected')) {
     setTimeout(() => document.querySelector('#policy-expected [data-action="forget-expected"]')?.click(), 7000);
   }
   // explainact: Findings open, press flag-2's first served action (the
   // recommended allow) late enough that the inline note and the toast are
   // still up at dump time.
-  if (MODE.includes('explainact')) {
+  if (scenarios.has('explainact')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('#flags-list .row-body[data-flag-id="flag-2"] .body-actions button')?.click(), 9000);
   }
   // routinedemo: gh read hosts.yml under three agents — one routine decision
   // ahead of the agent groups; Treat as routine is confirmed and sends the
   // served flag ids; the card leaves before the daemon answers.
-  if (MODE.includes('routinedemo')) {
+  if (scenarios.has('routinedemo')) {
     const key = 'routine|gh|/Users/dev/.config';
     setTimeout(() => openTab('findings'), 1500);
     data['/routine'] = [{
@@ -3425,7 +2963,7 @@
   }
   // orgallowdemo: flag-1 reached three Google addresses; Findings open, press
   // its one "Allow Google" choice from the More menu.
-  if (MODE.includes('orgallowdemo')) {
+  if (scenarios.has('orgallowdemo')) {
     const f1 = data['/flags'].find(f => f.id === 'flag-1');
     const hosts = ['142.250.1.1', '2607:f8b0:4002:c08::54', 'uf-in-f84.1e100.net'];
     f1.explain = {
@@ -3449,12 +2987,12 @@
   // allowpathact (with explaindemo): Findings open, press flag-2's allow-path
   // action specifically (not the first/recommended button) — proves the
   // request served for that action, not just whichever renders first.
-  if (MODE.includes('allowpathact')) {
+  if (scenarios.has('allowpathact')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('#flags-list .row-body[data-flag-id="flag-2"] [data-action-id="allow-path"]')?.click(), 9000);
   }
   // Exercise the actual workspace controls without sending chat or commands.
-  if (MODE.includes('agentworkspace')) {
+  if (scenarios.has('agentworkspace')) {
     data['/agent/recommendations'] = [
       { id: 901, ts: iso(60000), role: 'assistant', origin: 'analysis', review_state: 'pending', content: 'Review **SSH** configuration.', local_command: { command: 'ssh-add -l', workdir: '/Users/dev', mode: 'headless' } },
       { id: 902, ts: iso(60000), role: 'assistant', origin: 'analysis', review_state: 'saved', plan_id: 2, content: 'Already saved.' }
@@ -3490,6 +3028,13 @@
         checks.noOverflow = document.documentElement.scrollWidth <= innerWidth + 1;
         checks.composerVisible = document.getElementById('agent-send').getBoundingClientRect().bottom <= innerHeight + 1;
         checks.composerFootVisible = document.querySelector('.agent-chat-foot').getBoundingClientRect().bottom <= innerHeight + 1;
+        const foot = document.querySelector('.agent-chat-foot');
+        checks.composerFootContained = foot.getBoundingClientRect().bottom <= chat.getBoundingClientRect().bottom + 1;
+        foot.scrollTop = foot.scrollHeight;
+        const newChat = foot.querySelector('[data-action="agent-clear"]').getBoundingClientRect();
+        const footBounds = foot.getBoundingClientRect();
+        checks.composerFootReachable = newChat.top >= footBounds.top && newChat.bottom <= footBounds.bottom;
+        foot.scrollTop = 0;
         checks.advisorVisible = document.getElementById('advisor-state').getBoundingClientRect().height > 0;
         checks.homeHidden = getComputedStyle(document.getElementById('tab-home')).display === 'none';
         document.querySelector('[data-action="goto-tab"][data-tab="home"].agent-posture-link').click();
