@@ -1657,7 +1657,6 @@
   // Auto-action: re-run the advisor on the first flag — the pending state
   // must show, then the fresh verdict must land and replace the chip.
   if (scenarios.has('retriagedemo')) {
-    data['/flags'].find(x => x.id === 'flag-1').advisor = { assessment: 'benign', confidence: 0.9, rationale: 're-triage complete: routine vendor traffic', suggested_action: 'none', created_at: iso(120000) };
     // Findings is opened first, as a user must: hidden panels do not render.
     setTimeout(() => {
       openTab('findings');
@@ -1671,15 +1670,9 @@
       document.body.appendChild(receipt);
     }, 9000);
   }
-  // Advisor-down variant: the circuit breaker is open — retriage must render
-  // as an honest "Advisor offline" state, not a clickable dead button.
-  if (scenarios.has('advisordown')) {
-    data['/status'].advisor_health = { enabled: true, circuit_open: true, last_error: 'context deadline exceeded', queue_depth: 0, model: 'qwen3:8b' };
-  }
   // No-fleet variant: no collector webhooks configured — the fleet panel must
   // hide entirely instead of carrying a permanently-empty placeholder.
   if (scenarios.has('nofleetdemo')) {
-    data['/fleet'] = { ...data['/fleet'], fleet_configured: false };
     // The fleet panel lives on Sessions/Processes, not the default Home tab.
     setTimeout(() => openTab('sessions/processes'), 1500);
   }
@@ -2741,10 +2734,6 @@
   }
   // Exercise the actual workspace controls without sending chat or commands.
   if (scenarios.has('agentworkspace')) {
-    data['/agent/recommendations'] = [
-      { id: 901, ts: iso(60000), role: 'assistant', origin: 'analysis', review_state: 'pending', content: 'Review **SSH** configuration.', local_command: { command: 'ssh-add -l', workdir: '/Users/dev', mode: 'headless' } },
-      { id: 902, ts: iso(60000), role: 'assistant', origin: 'analysis', review_state: 'saved', plan_id: 2, content: 'Already saved.' }
-    ];
     setTimeout(() => {
       openTab('agent');
       setTimeout(() => {
