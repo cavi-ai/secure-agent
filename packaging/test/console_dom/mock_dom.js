@@ -1626,19 +1626,10 @@
   if (scenarios.has('memfamilydemo')) {
     // Memory by family is a Trends chart, under the Home:Trends group.
     setTimeout(() => openTab('overview'), 1500);
-    for (const n of [5, 6]) {
-      data['/sessions'].push({
-        id: `sess-claude-${n}`, harness: 'claude', workspace: '/Users/dev/workspace/api-service',
-        repo: 'api-service', branch: 'main', root_pid: 5821,
-        started_at: '2026-09-09T14:10:00Z', last_seen_at: iso(45000),
-        status: 'active', confidence: 'hook'
-      });
-    }
   }
   // Post-mortem variant: every live session has exited, but persisted pressure
   // episodes must remain visible.
   if (scenarios.has('noresourcesdemo')) {
-    data['/resources'] = { ...data['/resources'], rss_bytes: 0, cpu_percent: 0, process_count: 0, session_count: 0, sessions: [] };
     // The resource board and its flight recorder live on Sessions/Resources.
     setTimeout(() => openTab('sessions/resources'), 1500);
   }
@@ -1663,50 +1654,7 @@
   // by root pid. The data-pipeline codex family carries twenty processes (the
   // drawer's capped table), one leftover, events and a finding.
   if (scenarios.has('familiesdemo')) {
-    const GB = 1024 ** 3, MB = 1024 ** 2;
-    const fam = (pid, name, workspace, rss, cpu, extra) => ({
-      key: `${pid}:1789470000000000000`, name, root_pid: pid, root_started_at: '2026-09-09T13:00:00Z',
-      workspace, last_seen_at: iso(30000), rss_bytes: rss, cpu_percent: cpu, process_count: 1, orphan_count: 0,
-      processes: [{ pid, ppid: 1, name, rss_bytes: rss, cpu_percent: cpu, started_at: '2026-09-09T13:00:00Z' }],
-      samples: [{ at: iso(1800000), rss_bytes: Math.round(rss * 0.8), cpu_percent: cpu }, { at: iso(0), rss_bytes: rss, cpu_percent: cpu }],
-      diagnoses: [], ...(extra || {})
-    });
-    const procs = [{ pid: 4412, ppid: 1, name: 'codex', rss_bytes: 400 * MB, cpu_percent: 6, started_at: '2026-09-09T13:00:00Z' }];
-    for (let i = 1; i < 20; i++) {
-      procs.push({ pid: 4412 + i, ppid: i === 19 ? 777 : 4412, name: i % 2 ? 'node' : 'rg', rss_bytes: (40 + i) * MB,
-        cpu_percent: i / 2, started_at: '2026-09-09T13:05:00Z', ...(i === 19 ? { is_orphan: true } : {}) });
-    }
-    const pipeline = fam(4412, 'codex', '/Users/dev/workspace/data-pipeline', procs.reduce((n, p) => n + p.rss_bytes, 0), 15.5,
-      { processes: procs, process_count: 20, orphan_count: 1 });
-    const r = data['/resources'];
-    r.sessions = [
-      ...r.sessions,
-      pipeline,
-      fam(8100, 'openclaw', '/Users/dev/.openclaw', 300 * MB, 2),
-      fam(8201, 'codex', '/Users/dev/.openclaw/workspace-demo-app', 700 * MB, 12),
-      fam(8202, 'codex', '/Users/dev/.openclaw/workspace-bot', 250 * MB, 4),
-      fam(5950, 'claude', '/Users/dev/dev', 180 * MB, 1),
-      fam(4500, 'codex', '/Users/dev/scratch', 120 * MB, 0.5),
-      fam(9100, 'opencode', '/Users/dev/workspace/web-console', 90 * MB, 0.2),
-      fam(7001, 'ollama', '/', 10 * GB, 3, { kind: 'infra' }),
-      fam(7100, 'lm-studio', '/Applications/LM Studio.app', 3 * GB, 1, { kind: 'infra' }),
-      fam(7200, 'cursor-ide', '/Applications/Cursor.app', 2 * GB, 4, { kind: 'infra' })
-    ];
-    r.session_count = 9;
-    r.infra_count = 3;
-    data['/sessions'].push(
-      { id: 'sess-openclaw-1', harness: 'openclaw', workspace: '/Users/dev/.openclaw', root_pid: 8100,
-        started_at: '2026-09-09T12:00:00Z', last_seen_at: iso(15000), status: 'active', confidence: 'process-tree' },
-      { id: 'sess-oc-career', harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-demo-app', repo: 'demo-app', branch: 'main',
-        root_pid: 8201, parent_id: 'sess-openclaw-1', started_at: '2026-09-09T12:10:00Z', last_seen_at: iso(16000), status: 'active', confidence: 'transcript' },
-      { id: 'sess-oc-bot', harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-bot',
-        root_pid: 8202, parent_id: 'sess-openclaw-1', started_at: '2026-09-09T12:20:00Z', last_seen_at: iso(17000), status: 'active', confidence: 'transcript' }
-    );
-    data['/events'].splice(3, 0,
-      { kind: 8, ts: iso(8000), pid: 4413, detail: 'Bash → pytest -q' },
-      { kind: 5, ts: iso(9000), pid: 4412, remote_host: 'api.openai.com', remote_port: 443 });
-    data['/flags'].push({ id: 'flag-5', rule: 'keychain-access', agent: 'codex', pid: 4415, severity: 2, ts: iso(60000),
-      evidence: [{ kind: 'keychain', label: '/Users/dev/Library/Keychains/login.keychain-db', sub: 'keychain access' }] });
+    const pipeline = data['/resources'].sessions.find(family => family.root_pid === 4412);
     // View family on the data-pipeline row; stamp the drawer's table before
     // expanding it (or, with familyevents, follow Open in Events).
     setTimeout(() => {
