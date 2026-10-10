@@ -1761,34 +1761,29 @@ func scanIncidentsResult(rows *sql.Rows) ([]model.IncidentReport, error) {
 // advisor verdict yet — the backfill set for when the advisor is enabled
 // after flags already fired. Bounded by limit.
 func (s *Store) CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.Flag {
+	flags, _ := s.CriticalFlagsMissingAdvisorResult(since, limit)
+	return flags
+}
+
+// CriticalFlagsMissingAdvisorResult rejects failed reads without returning a
+// partial backfill. Nullable legacy metadata is decoded like other flag reads.
+func (s *Store) CriticalFlagsMissingAdvisorResult(since time.Time, limit int) (flags []model.Flag, readErr error) {
+	defer func() { s.noteRead("advisor backfill", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Invalid dates must reach the decoder rather than disappear from the
+	// time filter or fall beyond the limit behind valid rows.
 	rows, err := s.db.Query(
-		`SELECT f.id, f.rule, f.severity, f.ts, f.pid, f.agent, f.session_id, f.evidence
-		 FROM flags f
-		 LEFT JOIN advisor_verdicts v ON v.subject_id = f.id AND v.kind = 'flag'
-		 WHERE f.severity >= 3 AND v.subject_id IS NULL AND datetime(f.ts) >= datetime(?)
-		 ORDER BY datetime(f.ts) DESC, f.ts DESC LIMIT ?`,
+		flagSelect+` WHERE severity >= 3
+		 AND NOT EXISTS (SELECT 1 FROM advisor_verdicts v WHERE v.subject_id = flags.id AND v.kind = 'flag')
+		 AND (datetime(ts) IS NULL OR datetime(ts) >= datetime(?))
+		 ORDER BY datetime(ts) IS NULL DESC, datetime(ts) DESC, ts DESC LIMIT ?`,
 		since.UTC().Format(time.RFC3339Nano), normalizeLimit(limit),
 	)
 	if err != nil {
-		log.Printf("store: backfill query error: %v", err)
-		return nil
+		return nil, err
 	}
-	defer rows.Close()
-	flags := []model.Flag{}
-	for rows.Next() {
-		var fl model.Flag
-		var tsStr, evStr string
-		var sessionID sql.NullString
-		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &evStr); err == nil {
-			fl.SessionID = sessionID.String
-			fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
-			_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
-			flags = append(flags, fl)
-		}
-	}
-	return flags
+	return scanFlagsResult(rows)
 }
 
 // LastEventTimes returns the most recent event timestamp (RFC3339Nano, UTC)

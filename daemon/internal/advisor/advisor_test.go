@@ -55,14 +55,18 @@ func (s *chatStub) handler(t *testing.T) http.HandlerFunc {
 }
 
 type memSink struct {
-	writeErr   error
-	mu         sync.Mutex
-	rows       map[string]model.AdvisorVerdict
-	trend      model.TrendContext
-	backfill   []model.Flag
-	plans      map[string]model.AdvisorPlan
-	labels     []model.OperatorLabel
-	labelQuery string
+	writeErr      error
+	mu            sync.Mutex
+	rows          map[string]model.AdvisorVerdict
+	trend         model.TrendContext
+	backfill      []model.Flag
+	backfillErr   error
+	backfillCalls int
+	written       chan string
+	onWrite       func(string)
+	plans         map[string]model.AdvisorPlan
+	labels        []model.OperatorLabel
+	labelQuery    string
 }
 
 func (m *memSink) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict) error {
@@ -72,13 +76,22 @@ func (m *memSink) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdi
 		return m.writeErr
 	}
 	m.rows[subjectID] = v
+	if m.onWrite != nil {
+		m.onWrite(subjectID)
+	}
+	if m.written != nil {
+		m.written <- subjectID
+	}
 	return nil
 }
 
 func (m *memSink) TrendFor(rule, host string) model.TrendContext { return m.trend }
 
-func (m *memSink) CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.Flag {
-	return m.backfill
+func (m *memSink) CriticalFlagsMissingAdvisorResult(since time.Time, limit int) ([]model.Flag, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.backfillCalls++
+	return m.backfill, m.backfillErr
 }
 
 func newStubServer(t *testing.T, stub *chatStub) *httptest.Server {
@@ -378,6 +391,58 @@ func TestBackfillEnqueuesPreExistingFlags(t *testing.T) {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 	t.Fatalf("backfill flags never triaged: %v", sink.rows)
+}
+
+func TestBackfillFailureKeepsLiveTriageRunning(t *testing.T) {
+	stub := &chatStub{content: `{"assessment":"benign","confidence":0.9,"rationale":"routine"}`}
+	srv := newStubServer(t, stub)
+	sink := &memSink{
+		rows:        map[string]model.AdvisorVerdict{},
+		backfill:    []model.Flag{{ID: "partial", Rule: "keychain-access", Severity: 3}},
+		backfillErr: errors.New("backfill unavailable"),
+		written:     make(chan string, 2),
+	}
+	sub := New(Config{Enabled: true, Endpoint: srv.URL, Model: "m", Timeout: 2 * time.Second}, sink)
+	sub.EnqueueFlag(model.Flag{ID: "live", Rule: "keychain-access", Severity: 3})
+	sink.onWrite = func(id string) {
+		if queued := len(sub.queue); queued != 0 {
+			t.Errorf("failed backfill queued %d partial flags while processing %s", queued, id)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sub.Run(ctx) }()
+	select {
+	case id := <-sink.written:
+		if id != "live" {
+			t.Errorf("unexpected triage: %s", id)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("live flag was not triaged after backfill failure")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("advisor did not stop")
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.rows) != 1 || sink.rows["live"].Assessment != "benign" || len(sub.queue) != 0 {
+		t.Errorf("failed backfill admitted partial data: rows=%v queued=%d", sink.rows, len(sub.queue))
+	}
+	if sink.backfillCalls != 1 {
+		t.Errorf("backfill reads=%d; want one", sink.backfillCalls)
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if stub.requests != 1 {
+		t.Errorf("provider requests=%d; want one live request", stub.requests)
+	}
 }
 
 func TestHostAssessmentStored(t *testing.T) {
