@@ -3,8 +3,10 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
-	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"fmt"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
 type reviewSource struct {
@@ -28,7 +30,10 @@ func reviewSourcesTx(tx *sql.Tx, id string) ([]reviewSource, error) {
 		if err = rows.Scan(&f.ID, &f.Rule, &f.Severity, &ts, &f.PID, &f.Agent, &f.SessionID, &f.Workspace, &raw, &v.key); err != nil {
 			return nil, err
 		}
-		f.TS, _ = time.Parse(time.RFC3339Nano, ts)
+		f.TS, err = time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			return nil, fmt.Errorf("invalid flag timestamp: %w", err)
+		}
 		if err = json.Unmarshal([]byte(raw), &f.Evidence); err != nil {
 			return nil, err
 		}
