@@ -122,6 +122,10 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 	if reviewErr != nil || reviewLinkErr != nil {
 		reviews.Degraded = true
 	}
+	suggestions, hostReadErr := a.suggestionListResult()
+	if hostReadErr != nil {
+		failedReads = append(failedReads, "host advisor verdicts")
+	}
 	return Snapshot{
 		Status:      a.currentStatus(),
 		Flags:       flags,
@@ -131,7 +135,7 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 		Incidents:   out,
 		Events:      priceClassed(events),
 		Posture:     a.postureWithReadHealth(patterns, routine, failedReads),
-		Suggestions: a.suggestionList(),
+		Suggestions: suggestions,
 		Mutes:       a.mutePairs(),
 		Sessions:    sessions,
 	}, nil
@@ -160,9 +164,14 @@ func (a *API) mutePairs() []MutePair {
 }
 
 func (a *API) suggestionList() []Suggestion {
+	out, _ := a.suggestionListResult()
+	return out
+}
+
+func (a *API) suggestionListResult() ([]Suggestion, error) {
 	out := []Suggestion{}
 	if a.correlator == nil {
-		return out
+		return out, nil
 	}
 	for _, e := range a.correlator.UninspectedEgressSummary() {
 		if e.Count < minSuggestionCount || e.Infra != "" || e.Identity.Class == "vendor" || e.AgentKind == config.AgentKindInfra {
@@ -172,13 +181,19 @@ func (a *API) suggestionList() []Suggestion {
 			// suggestions — suggestions exist for judgment calls.
 			continue
 		}
-		sg := Suggestion{Agent: e.Agent, Host: e.Host, Count: e.Count, Identity: e.Identity}
-		if v, ok := a.store.AdvisorVerdictFor("host:"+e.Agent+"|"+e.Host, "host"); ok {
-			sg.Assessment = v.Assessment
-			sg.Rationale = v.Rationale
-			sg.Confidence = v.Confidence
-		}
-		out = append(out, sg)
+		out = append(out, Suggestion{Agent: e.Agent, Host: e.Host, Count: e.Count, Identity: e.Identity})
 	}
-	return out
+	ids := make([]string, len(out))
+	for i, sg := range out {
+		ids[i] = "host:" + sg.Agent + "|" + sg.Host
+	}
+	verdicts, readErr := a.store.AdvisorVerdictsFor(ids, "host")
+	for i, id := range ids {
+		if v, ok := verdicts[id]; ok {
+			out[i].Assessment = v.Assessment
+			out[i].Rationale = v.Rationale
+			out[i].Confidence = v.Confidence
+		}
+	}
+	return out, readErr
 }
