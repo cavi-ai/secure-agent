@@ -2129,13 +2129,6 @@
       return orig && orig.get ? orig.get() : rep;
     } });
   }
-  // adoptdemo: a removal started elsewhere is running when the tab opens;
-  // the progress toast follows it without a click.
-  if (scenarios.has('adoptdemo')) {
-    const p = WT_REPO + '/.worktrees/done';
-    data['/worktrees'].removals = { [p]: { path: p, state: 'running', phase: 'checking', step: 'checking it is still safe to remove', started_at: iso(5000), step_at: iso(1000) } };
-  }
-
   // Auto-action: demote a blocking rule — it must flip back to Promote.
   if (scenarios.has('demotedemo')) {
     // The firewall rule list lives on the Egress tab, not the default Home tab.
@@ -2151,8 +2144,6 @@
   // Sessions tab is not active by default, and the rail only renders once
   // it is on screen (renderAll no longer paints hidden panels), so open it.
   if (scenarios.has('quietdemo')) {
-    data['/sessions'] = [];
-    data['/status'] = { ...data['/status'], agents: [], trees: [] };
     setTimeout(() => openTab('sessions'), 1500);
   }
   // Auto-action: type a filter that matches nothing — the rail must say so
@@ -2281,12 +2272,6 @@
   // Egress fold: 2 rules with hits stay listed, 20 quiet rules fold into one
   // row; the open fold survives an SSE-driven refetch that changes its count.
   if (scenarios.has('folddemo')) {
-    const fs = {
-      'hit-a': { type: 'vendor-key', mode: 'monitor', would_block: 3, blocked: 0, legit: 1 },
-      'hit-b': { type: 'cloud-key', mode: 'monitor', would_block: 0, blocked: 0, legit: 2 },
-    };
-    for (let i = 0; i < 20; i++) fs['quiet-' + String(i).padStart(2, '0')] = { type: 'env-value', mode: 'monitor', would_block: 0, blocked: 0, legit: 0 };
-    data['/status'].firewall_stats = fs;
     const fold = () => document.querySelector('#firewall-container > details.fw-fold');
     const probe = () => {
       const c = document.getElementById('firewall-container');

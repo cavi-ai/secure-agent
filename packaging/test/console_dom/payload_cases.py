@@ -23,6 +23,40 @@ def disabled_agent(now_ms=None):
     return {"now": now, "patches": [{"route": "/agent/status", "path": ["enabled"], "value": False}]}
 
 
+def quiet_sessions(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": [
+        {"route": "/sessions", "path": [], "value": []},
+        *_fields("/status", [], {"agents": [], "trees": []}),
+    ]}
+
+
+def firewall_fold(now_ms=None):
+    now, _ = _clock(now_ms)
+    stats = {
+        "hit-a": {"type": "vendor-key", "mode": "monitor", "would_block": 3, "blocked": 0, "legit": 1},
+        "hit-b": {"type": "cloud-key", "mode": "monitor", "would_block": 0, "blocked": 0, "legit": 2},
+    }
+    for i in range(20):
+        stats[f"quiet-{i:02d}"] = {"type": "env-value", "mode": "monitor", "would_block": 0, "blocked": 0, "legit": 0}
+    return {"now": now, "patches": [
+        {"route": "/status", "path": ["firewall_stats"], "value": stats},
+    ]}
+
+
+def running_worktree_removal(now_ms=None):
+    """A removal started elsewhere is running when the System tab opens."""
+    now, iso = _clock(now_ms)
+    path = "/Users/dev/workspace/api-service/.worktrees/done"
+    return {"now": now, "patches": [
+        {"route": "/worktrees", "path": ["removals"], "value": {path: {
+            "path": path, "state": "running", "phase": "checking",
+            "step": "checking it is still safe to remove",
+            "started_at": iso(5000), "step_at": iso(1000),
+        }}},
+    ]}
+
+
 def empty_spend(now_ms=None):
     now, _ = _clock(now_ms)
     return {"now": now, "patches": [
