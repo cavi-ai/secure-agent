@@ -103,6 +103,7 @@ document.addEventListener('DOMContentLoaded', () => {
     drawerFoot.hidden = !foot;
     drawer.className = 'drawer' + (variant ? ' ' + variant : '');
     drawer.hidden = false;
+    if (back?.sessionReturn) btnDrawerClose?.focus({ preventScroll: true });
     // Reserve room so the panel docks beside the content instead of covering
     // it — this is an inspector, not a modal.
     const app = document.querySelector('.app');
@@ -387,6 +388,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionOverviewRefreshAgain = false;
     sessionOutcomesState = { loading: false, error: 'unavailable' };
     window.SA.invalidateSessionPermissions?.();
+    window.SA.clearSessionInvestigation?.();
     if (liveUpdates) liveUpdates.stop();
     showSessionEnded();
   }
@@ -606,15 +608,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const bar = document.getElementById('scope-bar');
     if (!bar) return;
     const t = telemetryData;
-    const html = sessionScopeOn() ? scopeBarHTML({
+    const html = sessionScopeOn() || window.SA.sessionInvestigationReturn ? scopeBarHTML({
       session: timelineSession, pids: timelinePids, pidLabel: timelinePidLabel,
       events: scopedBySession(t.eventsView || [], timelineSession, timelinePids).length,
       flags: scopedBySession(t.flagsView || [], timelineSession, timelinePids).length,
+      returnToSession: window.SA.sessionInvestigationReturn,
     }) : '';
     bar.hidden = !html;
     if (bar._saHTML !== html) {
+      const focusedAction = bar.contains(document.activeElement) ? document.activeElement?.dataset.action : '';
       bar.innerHTML = html;
       bar._saHTML = html;
+      if (focusedAction) Array.from(bar.querySelectorAll('[data-action]')).find(el => el.dataset.action === focusedAction)?.focus({ preventScroll: true });
     }
   }
 
@@ -2963,6 +2968,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const id = initialSessionId(visible, selectedSessionId);
       if (id !== selectedSessionId) {
         window.SA.closeSessionPermissions?.();
+        window.SA.clearSessionInvestigation?.();
         selectedSessionId = id;
         resetSessionMemory();
         sessionTimeline = [];
@@ -3088,6 +3094,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!id) return;
     const changed = selectedSessionId !== id;
     if (changed) window.SA.closeSessionPermissions?.();
+    if (changed) window.SA.clearSessionInvestigation?.();
     selectedSessionId = id;
     sessionSelectionInitialized = true;
     sessionReveal = true;
@@ -3569,35 +3576,134 @@ document.addEventListener('DOMContentLoaded', () => {
     fillFamilyDrawer();
   };
 
+  // Session investigation return context. Navigation restores reading state;
+  // it never replays a decision or process-control action.
+  let sessionInvestigation = null;
+  let sessionReturnSequence = 0;
+  const validSessionReturn = st => !!st && !sessionEnded && st.auth === handoffGeneration && st.session === selectedSessionId;
+  function captureSessionReturn(el) {
+    if (sessionEnded || activeTab !== 'sessions' || activeSub !== 'board' || !selectedSessionId || !el?.closest('#session-detail')) return null;
+    return { id: ++sessionReturnSequence, session: selectedSessionId, view: sessionView, auth: handoffGeneration,
+      detailTop: document.querySelector('#session-detail .session-detail-body')?.scrollTop || 0,
+      railTop: document.querySelector('#session-rail')?.scrollTop || 0, pageY: window.scrollY || 0,
+      opener: el, target: { ...el.dataset },
+      scope: { session: timelineSession, pids: timelinePids && [...timelinePids], label: timelinePidLabel } };
+  }
+  function restoreSessionReturn(st) {
+    if (!validSessionReturn(st)) return;
+    closeDrawer();
+    if (sessionInvestigation?.id === st.id) sessionInvestigation.active = false;
+    sessionView = st.view;
+    timelineSession = st.scope.session; timelinePids = st.scope.pids; timelinePidLabel = st.scope.label;
+    suppressFreshOnce = true;
+    renderEvents(); renderFlags(); renderIncidents(); paintScopeBar();
+    switchTab('sessions', { skipHash: true });
+    renderNow(['sessions']);
+    const body = document.querySelector('#session-detail .session-detail-body');
+    const rail = document.querySelector('#session-rail');
+    if (body) body.scrollTop = st.detailTop;
+    if (rail) rail.scrollTop = st.railTop;
+    window.scrollTo(0, st.pageY);
+    const target = st.opener.isConnected ? st.opener : Array.from(document.querySelectorAll('#session-detail [data-action]'))
+      .find(el => Object.entries(st.target).every(([key, value]) => el.dataset[key] === value));
+    target?.focus({ preventScroll: true });
+  }
+  function sessionDrawerBack(el) {
+    const st = captureSessionReturn(el);
+    return st ? { label: 'session', sessionReturn: st, reopen: () => restoreSessionReturn(st) } : null;
+  }
+  function showSessionInvestigation(st) {
+    if (!validSessionReturn(st)) return;
+    st.active = true;
+    timelineSession = st.destination.session;
+    timelinePids = st.destination.pids; timelinePidLabel = st.destination.label;
+    suppressFreshOnce = true;
+    renderEvents(); renderFlags(); renderIncidents(); paintScopeBar();
+    switchTab(st.destination.route, { group: st.destination.group, skipHash: true });
+    document.querySelector('#scope-bar [data-action="session-investigation-return"]')?.focus({ preventScroll: true });
+    fetchTelemetry();
+  }
+  function beginSessionInvestigation(st, destination) {
+    if (!validSessionReturn(st)) return false;
+    sessionInvestigation = Object.assign(st, { destination });
+    const mark = part => ({ ...history.state, saSessionInvestigation: { id: st.id, part } });
+    history.replaceState(mark('session'), '', location.pathname + location.search + consoleContextHash({ route: 'sessions', session: st.session }));
+    history.pushState(mark('evidence'), '', location.pathname + location.search + consoleRouteHash(resolveConsoleRoute(destination.route)));
+    showSessionInvestigation(st);
+    return true;
+  }
+  Object.defineProperty(window.SA, 'sessionInvestigationReturn', { get: () => !!sessionInvestigation?.active && validSessionReturn(sessionInvestigation) });
+  window.SA.clearSessionInvestigation = () => {
+    sessionInvestigation = null;
+    if (drawerBack?.sessionReturn) closeDrawer();
+  };
+  window.openSessionFindings = function(id, el) {
+    const st = id === selectedSessionId ? captureSessionReturn(el) : null;
+    if (beginSessionInvestigation(st, { route: 'home', group: 'findings', session: id, pids: null, label: '' })) return;
+    timelineSession = id; timelinePids = null; timelinePidLabel = ''; suppressFreshOnce = true;
+    paintScopeBar(); switchTab('home', { group: 'findings' }); fetchTelemetry();
+  };
+  window.openSessionFamilyEvents = (st, pids, label) => beginSessionInvestigation(st,
+    { route: 'events', session: null, pids: [...new Set(pids)], label });
+  window.returnToSessionInvestigation = function() {
+    const st = sessionInvestigation;
+    if (!validSessionReturn(st) || !st.active) return;
+    const marker = history.state?.saSessionInvestigation;
+    if (marker?.id === st.id && marker.part === 'evidence') history.back();
+    else {
+      restoreSessionReturn(st);
+      history.replaceState(null, '', location.pathname + location.search + consoleContextHash({ route: 'sessions', session: st.session }));
+    }
+  };
+  window.addEventListener('popstate', e => {
+    const st = sessionInvestigation;
+    const marker = e.state?.saSessionInvestigation;
+    if (!validSessionReturn(st) || marker?.id !== st.id) {
+      window.SA.clearSessionInvestigation(); paintScopeBar();
+      if (!sessionEnded) {
+        const context = consoleContextFromHash(location.hash);
+        if (context.route || context.session) openConsoleContext(context, handoffGeneration);
+      }
+      return;
+    }
+    if (marker.part === 'session') restoreSessionReturn(st);
+    else if (marker.part === 'evidence') showSessionInvestigation(st);
+  });
+
   // The open drawer as a way back to it. reopen re-runs its opener (with the
   // back it had), so the previous drawer renders from live data, never from
   // stale HTML. The policy editor has none: reopening would drop its draft.
   function currentDrawerBack() {
     if (!drawer || drawer.hidden) return null;
     const back = drawerBack || undefined;
+    const wrap = target => ({ ...target, sessionReturn: back?.sessionReturn });
     switch (drawerMode) {
       case 'uninspected':
-        return { label: 'Uninspected egress', reopen: () => window.openUninspected({ back }) };
+        return wrap({ label: 'Uninspected egress', reopen: () => window.openUninspected({ back }) });
       case 'endpoint': {
         const { host, agent } = drawerEndpoint;
-        return { label: 'Endpoint detail', reopen: () => window.openEndpointDetail(host, agent, { back }) };
+        return wrap({ label: 'Endpoint detail', reopen: () => window.openEndpointDetail(host, agent, { back }) });
       }
       case 'incident': {
         const id = drawerIncident;
-        return { label: 'Incident report', reopen: () => window.openIncidentReport(id, { back }) };
+        return wrap({ label: 'Incident report', reopen: () => window.openIncidentReport(id, { back }) });
       }
       case 'file': {
         const p = drawerFile;
-        return { label: 'File', reopen: () => window.openFileDetail(p, { back }) };
+        return wrap({ label: 'File', reopen: () => window.openFileDetail(p, { back }) });
       }
       case 'plan': {
         const s = drawerPlan;
-        return { label: 'What to do', reopen: () => window.openPlanDrawer(s, { back }) };
+        return wrap({ label: 'What to do', reopen: () => window.openPlanDrawer(s, { back }) });
+      }
+      case 'flag': {
+        const id = drawerFlag;
+        return wrap({ label: 'Security flag', reopen: () => window.openFlagDetail(id, { back }) });
       }
       case 'family': {
         const key = familyDrawerKey;
         const fam = familyByKey(key);
-        return { label: fam ? familyLabel(fam, telemetryData.sessions) : 'Process family', reopen: () => window.openFamilyDrawer(key, { back }) };
+        return wrap({ label: fam ? familyLabel(fam, telemetryData.sessions) : 'Process family', reopen: () => window.openFamilyDrawer(key, { back }) });
       }
     }
     return null;
@@ -4534,7 +4640,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!el) return;
     const d = el.dataset;
     // A drawer opened from inside the open drawer can go back to it.
-    const back = () => (el.closest('#drawer') ? currentDrawerBack() : null);
+    const back = () => (el.closest('#drawer') ? currentDrawerBack() : sessionDrawerBack(el));
     switch (d.action) {
       case 'toggle-row': {
         e.preventDefault();
@@ -4765,8 +4871,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!fam) break;
         const pids = [Number(fam.root_pid), ...(fam.processes || []).map(p => Number(p.pid))];
         const label = familyLabel(fam, telemetryData.sessions);
+        const origin = drawerBack?.sessionReturn;
         closeDrawer();
-        window.filterTimelineToPids([...new Set(pids)], label);
+        if (!window.openSessionFamilyEvents(origin, pids, label)) window.filterTimelineToPids([...new Set(pids)], label);
         break;
       }
       case 'kill-family-orphans':
@@ -4868,13 +4975,10 @@ document.addEventListener('DOMContentLoaded', () => {
         window.revokeSessionPermission(d.id);
         break;
       case 'session-findings':
-        timelineSession = d.id;
-        timelinePids = null;
-        timelinePidLabel = '';
-        suppressFreshOnce = true;
-        paintScopeBar();
-        switchTab('home', { group: 'findings' });
-        fetchTelemetry();
+        window.openSessionFindings(d.id, el);
+        break;
+      case 'session-investigation-return':
+        window.returnToSessionInvestigation();
         break;
       case 'toggle-ended-sessions':
         endedSessionsOpen[d.harness] = !endedSessionsOpen[d.harness];
