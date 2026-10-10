@@ -190,6 +190,7 @@ def main():
     ap.add_argument('--context-handoff-only', action='store_true', help='run native record handoff probes only')
     ap.add_argument('--session-permissions-only', action='store_true', help='run bounded decision permission drawer probes only')
     ap.add_argument('--session-investigation-only', action='store_true', help='run bounded session investigation return probes only')
+    ap.add_argument('--session-activity-only', action='store_true', help='run retained session activity probes only')
     args = ap.parse_args()
     chrome = find_chrome()
     if not chrome:
@@ -201,6 +202,18 @@ def main():
     try:
         build_harness(tmp)
         srv, origin = serve_with_csp(tmp)
+        if args.session_activity_only or not any((args.session_investigation_only, args.session_permissions_only, args.context_handoff_only, args.session_results_only, args.spend_only, args.auth_recovery_only, args.session_workbench_only)):
+            for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+                dom = dump_dom(chrome, tmp, '?activitydemo', origin, window_size=size)
+                receipt = re.search(r'data-activity-probe="([^"]+)"', dom)
+                state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+                for name in ('endedEntry', 'outsideSnapshot', 'scopedRead', 'recordedRows', 'limitVisible', 'kindFilter', 'staleRetained', 'returnContext', 'returnFilters', 'forwardFilters', 'fits'):
+                    check(f'session activity ({label}): {name}', state.get(name) is True, str(state))
+            if args.session_activity_only:
+                print(f'\n{len(passed)} passed, {len(failed)} failed')
+                if failed:
+                    raise SystemExit(1)
+                return
         if args.session_investigation_only or not (args.session_permissions_only or args.context_handoff_only or args.session_results_only or args.spend_only or args.auth_recovery_only or args.session_workbench_only):
             for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
                 dom = dump_dom(chrome, tmp, '?investigationdemo', origin, window_size=size)

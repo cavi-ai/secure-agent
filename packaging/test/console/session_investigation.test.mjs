@@ -17,6 +17,7 @@ function controller() {
   const c = { console, URLSearchParams, selectedSessionId: 'a', sessionView: 'trace', activeTab: 'sessions', activeSub: 'board',
     handoffGeneration: 2, sessionEnded: false, timelineSession: 'prior', timelinePids: null, timelinePidLabel: '',
     drawerBack: null,
+    filters: { events: { kind: 'all', since: 'all' } }, syncHistoryViews() {},
     suppressFreshOnce: false, location: { pathname: '/dashboard/', search: '', hash: '#sessions' }, calls: [],
     window: { SA: {}, scrollY: 27, scrollTo: (_x, y) => { c.pageY = y; }, addEventListener: (name, fn) => { listeners[name] = fn; } },
     document: { querySelector: s => s === '#session-detail .session-detail-body' ? body : s === '#session-rail' ? rail : null,
@@ -79,6 +80,23 @@ test('resource Events carries the originating session through the process-family
   c.history.back();
   assert.equal(c.activeSub, 'board');
   assert.equal(c.timelineSession, 'prior');
+});
+
+test('recorded Events needs no live process family and returns to the original view and event filters', () => {
+  const { c, opener } = controller();
+  c.sessionView = 'results';
+  c.filters.events = { kind: '5', since: '24h' };
+  c.window.openSessionEvents('a', opener);
+  assert.equal(c.activeSub, 'events');
+  assert.equal(c.timelineSession, 'a');
+  assert.equal(c.timelinePids, null);
+  c.filters.events.kind = '0'; c.filters.events.since = 'all';
+  c.history.back();
+  assert.equal(c.sessionView, 'results');
+  assert.deepEqual(c.filters.events, { kind: '5', since: '24h' });
+  assert.equal(c.focused, 'opener');
+  c.history.forward();
+  assert.deepEqual(c.filters.events, { kind: '0', since: 'all' });
 });
 
 test('changed authentication or selection invalidates an old return target and late browser navigation', () => {

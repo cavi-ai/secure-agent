@@ -379,6 +379,7 @@ function sessionDetailHTML(sess, events, trees) {
       </div>
       <button type="button" class="btn btn-sm btn-ghost sd-latest" data-action="session-latest" hidden>Jump to latest</button>
       <button type="button" class="btn btn-sm btn-ghost" data-action="session-status">Current status</button>
+      <button type="button" class="btn btn-sm btn-ghost" data-action="session-events" data-id="${escapeHTML(sess.id)}" title="Inspect retained file, connection, and tool events attributed to this session">View session events</button>
       <details class="session-metadata" data-session-details>
         <summary>Details</summary>
         <div class="sd-metadata-body">

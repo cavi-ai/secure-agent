@@ -668,13 +668,16 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   function isEventsFiltered() {
     const f = filters.events;
-    return f.kind !== 'all' || f.since !== 'all';
+    return !!timelineSession || f.kind !== 'all' || f.since !== 'all';
+  }
+  function eventsHistoryScope() {
+    return JSON.stringify({ ...filters.events, session: timelineSession || '' });
   }
   function syncHistoryViews() {
     const changed = [];
     for (const [name, filtered] of [['flags', isFlagsFiltered()], ['events', isEventsFiltered()]]) {
       const requested = filtered || (name === 'flags' && homeGroupOpen('findings'));
-      const scope = requested ? JSON.stringify(filters[name]) : null;
+      const scope = requested ? (name === 'events' ? eventsHistoryScope() : JSON.stringify(filters[name])) : null;
       const view = name + 'View';
       if (scope !== historyScopes[name]) {
         historyScopes[name] = scope;
@@ -702,6 +705,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   function eventsQuery() {
     const f = filters.events, p = new URLSearchParams();
+    if (timelineSession) p.set('session_id', timelineSession);
     if (f.kind !== 'all') p.set('kind', f.kind);
     const since = sinceParam(f.since);
     if (since) p.set('since', since);
@@ -1842,7 +1846,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (v) telemetryData.flagsView = v || [];
     }
     if (isEventsFiltered()) {
-      const v = await grab('events', eventsQuery());
+      const scope = eventsHistoryScope();
+      const v = await grab('events', eventsQuery(), () => current() && scope === eventsHistoryScope());
       if (obsolete()) return;
       if (v) telemetryData.eventsView = v || [];
     }
@@ -3581,20 +3586,32 @@ document.addEventListener('DOMContentLoaded', () => {
   let sessionInvestigation = null;
   let sessionReturnSequence = 0;
   const validSessionReturn = st => !!st && !sessionEnded && st.auth === handoffGeneration && st.session === selectedSessionId;
+  function applySessionEventFilters(saved) {
+    if (!saved) return;
+    Object.assign(filters.events, saved);
+    for (const [id, key] of [['event-filter', 'kind'], ['event-window', 'since']]) {
+      const control = document.querySelector('#' + id);
+      if (control) control.value = filters.events[key];
+    }
+  }
   function captureSessionReturn(el) {
     if (sessionEnded || activeTab !== 'sessions' || activeSub !== 'board' || !selectedSessionId || !el?.closest('#session-detail')) return null;
     return { id: ++sessionReturnSequence, session: selectedSessionId, view: sessionView, auth: handoffGeneration,
       detailTop: document.querySelector('#session-detail .session-detail-body')?.scrollTop || 0,
       railTop: document.querySelector('#session-rail')?.scrollTop || 0, pageY: window.scrollY || 0,
       opener: el, target: { ...el.dataset },
-      scope: { session: timelineSession, pids: timelinePids && [...timelinePids], label: timelinePidLabel } };
+      scope: { session: timelineSession, pids: timelinePids && [...timelinePids], label: timelinePidLabel,
+        events: { ...filters.events } } };
   }
   function restoreSessionReturn(st) {
     if (!validSessionReturn(st)) return;
+    if (sessionInvestigation?.id === st.id && st.active) st.destination.events = { ...filters.events };
     closeDrawer();
     if (sessionInvestigation?.id === st.id) sessionInvestigation.active = false;
     sessionView = st.view;
     timelineSession = st.scope.session; timelinePids = st.scope.pids; timelinePidLabel = st.scope.label;
+    applySessionEventFilters(st.scope.events);
+    syncHistoryViews();
     suppressFreshOnce = true;
     renderEvents(); renderFlags(); renderIncidents(); paintScopeBar();
     switchTab('sessions', { skipHash: true });
@@ -3607,6 +3624,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const target = st.opener.isConnected ? st.opener : Array.from(document.querySelectorAll('#session-detail [data-action]'))
       .find(el => Object.entries(st.target).every(([key, value]) => el.dataset[key] === value));
     target?.focus({ preventScroll: true });
+    fetchTelemetry({ slow: false });
   }
   function sessionDrawerBack(el) {
     const st = captureSessionReturn(el);
@@ -3617,6 +3635,8 @@ document.addEventListener('DOMContentLoaded', () => {
     st.active = true;
     timelineSession = st.destination.session;
     timelinePids = st.destination.pids; timelinePidLabel = st.destination.label;
+    applySessionEventFilters(st.destination.events);
+    syncHistoryViews();
     suppressFreshOnce = true;
     renderEvents(); renderFlags(); renderIncidents(); paintScopeBar();
     switchTab(st.destination.route, { group: st.destination.group, skipHash: true });
@@ -3625,7 +3645,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   function beginSessionInvestigation(st, destination) {
     if (!validSessionReturn(st)) return false;
-    sessionInvestigation = Object.assign(st, { destination });
+    sessionInvestigation = Object.assign(st, { destination: { ...destination, events: { ...filters.events } } });
     const mark = part => ({ ...history.state, saSessionInvestigation: { id: st.id, part } });
     history.replaceState(mark('session'), '', location.pathname + location.search + consoleContextHash({ route: 'sessions', session: st.session }));
     history.pushState(mark('evidence'), '', location.pathname + location.search + consoleRouteHash(resolveConsoleRoute(destination.route)));
@@ -3641,7 +3661,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const st = id === selectedSessionId ? captureSessionReturn(el) : null;
     if (beginSessionInvestigation(st, { route: 'home', group: 'findings', session: id, pids: null, label: '' })) return;
     timelineSession = id; timelinePids = null; timelinePidLabel = ''; suppressFreshOnce = true;
+    syncHistoryViews();
     paintScopeBar(); switchTab('home', { group: 'findings' }); fetchTelemetry();
+  };
+  window.openSessionEvents = function(id, el) {
+    const st = id === selectedSessionId ? captureSessionReturn(el) : null;
+    if (beginSessionInvestigation(st, { route: 'events', session: id, pids: null, label: '' })) return;
+    timelineSession = id; timelinePids = null; timelinePidLabel = ''; suppressFreshOnce = true;
+    syncHistoryViews();
+    paintScopeBar(); switchTab('events'); fetchTelemetry({ slow: false });
   };
   window.openSessionFamilyEvents = (st, pids, label) => beginSessionInvestigation(st,
     { route: 'events', session: null, pids: [...new Set(pids)], label });
@@ -4576,11 +4604,13 @@ document.addEventListener('DOMContentLoaded', () => {
     timelinePids = null;
     timelinePidLabel = '';
     suppressFreshOnce = true;
+    syncHistoryViews();
     renderEvents();
     renderFlags();
     renderIncidents();
     paintScopeBar();
     switchTab('sessions');
+    fetchTelemetry({ slow: false });
     await window.selectSession(sid);
     if (selectedSessionId !== sid) return;
     renderNow(['sessions']);
@@ -4595,11 +4625,13 @@ document.addEventListener('DOMContentLoaded', () => {
     timelinePids = (pids || []).map(Number).filter(n => n > 0);
     timelinePidLabel = label || '';
     suppressFreshOnce = true;
+    syncHistoryViews();
     renderEvents();
     renderFlags();
     renderIncidents();
     paintScopeBar();
     switchTab('events');
+    fetchTelemetry({ slow: false });
     const el = document.getElementById('events-container');
     if (el && el.scrollIntoView) {
       el.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'nearest' });
@@ -4611,10 +4643,12 @@ document.addEventListener('DOMContentLoaded', () => {
     timelinePids = null;
     timelinePidLabel = '';
     suppressFreshOnce = true;
+    syncHistoryViews();
     renderEvents();
     renderFlags();
     renderIncidents();
     paintScopeBar();
+    fetchTelemetry({ slow: false });
   };
 
   const btnSessionClear = document.getElementById('session-clear');
@@ -4976,6 +5010,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'session-findings':
         window.openSessionFindings(d.id, el);
+        break;
+      case 'session-events':
+        window.openSessionEvents(d.id, el);
         break;
       case 'session-investigation-return':
         window.returnToSessionInvestigation();

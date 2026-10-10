@@ -519,6 +519,18 @@
         : [{ ...data['/events'][0], kind: 8, detail: 'Filtered-history match' }];
       return { ok: true, status: 200, json: async () => rows };
     }
+    if (scenarios.has('activitydemo') && p === '/events') {
+      const q = new URLSearchParams(String(path).split('?')[1] || '');
+      window.__activityQueries = [...(window.__activityQueries || []), String(path)];
+      if (window.__activityFail) return { ok: false, status: 503 };
+      const retained = q.get('session_id') === 'sess-cursor-2' ? [
+        { kind: 0, ts: iso(7200000), session_id: 'sess-cursor-2', path: '/synthetic/retained-file.go' },
+        { kind: 5, ts: iso(7100000), session_id: 'sess-cursor-2', remote_host: 'recorded.example.invalid', remote_port: 443 },
+      ] : q.has('session_id') ? [] : data['/events'];
+      const rows = retained.filter(row => (!q.has('kind') || String(row.kind) === q.get('kind'))
+        && (!q.has('since') || new Date(row.ts) >= new Date(q.get('since'))));
+      return { ok: true, status: 200, json: async () => rows };
+    }
     if (scenarios.has('malformeddemo') && !malformedRecovered && p === '/guard/pending') {
       return { ok: true, status: 200, json: async () => ({ error: 'not a list' }) };
     }
@@ -928,6 +940,50 @@
 
   if (scenarios.has('notokenrecover')) {
     setTimeout(() => { location.hash = 'ct=test-token&tab=sessions'; }, 2000);
+  }
+  if (scenarios.has('activitydemo')) {
+    setTimeout(async () => {
+      const receipt = {};
+      const tick = () => new Promise(resolve => setTimeout(resolve, 50));
+      const painted = async predicate => {
+        for (let i = 0; i < 20; i++) { if (predicate()) return; await tick(); }
+        throw new Error('Activity view did not paint the expected read result');
+      };
+      const pop = async action => {
+        const event = new Promise(resolve => window.addEventListener('popstate', () => setTimeout(resolve, 0), { once: true }));
+        action(); await event;
+      };
+      const events = () => document.getElementById('events-container').textContent;
+      try {
+        await window.filterTimelineToSession('sess-cursor-2');
+        await window.setSessionView('results');
+        const detail = document.getElementById('session-detail');
+        const opener = detail.querySelector('[data-action="session-events"]');
+        receipt.endedEntry = !!opener && !detail.querySelector('[data-action="view-family"]');
+        receipt.outsideSnapshot = !window.SA.t.events.some(row => row.path === '/synthetic/retained-file.go');
+        opener.click(); await painted(() => events().includes('/synthetic/retained-file.go'));
+        receipt.scopedRead = window.__activityQueries.some(path => new URLSearchParams(path.split('?')[1]).get('session_id') === 'sess-cursor-2');
+        receipt.recordedRows = events().includes('/synthetic/retained-file.go') && events().includes('recorded.example.invalid') && !events().includes('logs.example.com');
+        if (!receipt.recordedRows) receipt.eventsText = events();
+        receipt.limitVisible = !document.getElementById('events-scope-note').hidden && document.getElementById('events-scope-note').textContent.includes('Up to 200');
+        const filter = document.getElementById('event-filter'); filter.value = '0'; filter.dispatchEvent(new Event('change', { bubbles: true }));
+        await painted(() => events().includes('/synthetic/retained-file.go') && !events().includes('recorded.example.invalid'));
+        receipt.kindFilter = events().includes('/synthetic/retained-file.go') && !events().includes('recorded.example.invalid');
+        window.__activityFail = true; document.getElementById('btn-refresh').click();
+        await painted(() => Array.from(document.querySelectorAll('.report-health:not([hidden])')).some(el => el.textContent.includes('Stale — showing data last refreshed')));
+        receipt.staleRetained = events().includes('/synthetic/retained-file.go') && Array.from(document.querySelectorAll('.report-health:not([hidden])')).some(el => el.textContent.includes('Stale — showing data last refreshed'));
+        if (!receipt.kindFilter || !receipt.staleRetained) receipt.filterState = { events: events(), reports: Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent) };
+        window.__activityFail = false;
+        await pop(() => document.querySelector('#scope-bar [data-action="session-investigation-return"]').click());
+        receipt.returnContext = window.SA.sessionView === 'results' && window.SA.selectedSessionId === 'sess-cursor-2' && document.activeElement?.dataset.action === 'session-events';
+        receipt.returnFilters = filter.value === 'all';
+        await pop(() => history.forward());
+        receipt.forwardFilters = filter.value === '0' && window.SA.timelineSession === 'sess-cursor-2';
+        await pop(() => history.back());
+        receipt.fits = document.documentElement.scrollWidth <= innerWidth;
+      } catch (err) { receipt.error = String(err); }
+      document.body.dataset.activityProbe = JSON.stringify(receipt);
+    }, 2500);
   }
   if (scenarios.has('investigationdemo')) {
     setTimeout(async () => {

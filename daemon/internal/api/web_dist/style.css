@@ -277,6 +277,7 @@ body {
   overflow-wrap: anywhere;
 }
 .panel-body > .report-health { padding: 8px 0; }
+.events-scope-note { margin: 0; padding: 0 16px; color: var(--tx-2); font-size: 0.8rem; line-height: 1.5; }
 .panel-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
 .timeline { max-height: 460px; overflow-y: auto; gap: 2px; }
 

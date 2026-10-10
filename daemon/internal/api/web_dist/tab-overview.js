@@ -1068,6 +1068,11 @@ function renderEvents() {
 
   const container = document.getElementById('events-container');
   const allEvents = SA.t.eventsView || [];
+  const note = document.getElementById('events-scope-note');
+  if (note) {
+    note.hidden = !SA.timelineSession;
+    note.textContent = SA.timelineSession ? 'Up to 200 matching retained events for this session. Activity outside recorded coverage is unknown.' : '';
+  }
   let events = allEvents;
   if (SA.timelineSession) events = filterEventsBySession(allEvents, SA.timelineSession);
   else if (SA.timelinePids && SA.timelinePids.length) events = filterEventsByPids(allEvents, SA.timelinePids);
@@ -1080,9 +1085,9 @@ function renderEvents() {
 
   if (events.length === 0) {
     const msg = SA.isEventsFiltered() && SA.t.eventsView === null
-      ? 'Filtered events have not loaded yet.'
+      ? SA.timelineSession ? 'Session events have not loaded yet.' : 'Filtered events have not loaded yet.'
       : SA.timelineSession
-      ? `No events for session ${sessionShort(SA.timelineSession)} in the loaded window`
+      ? 'No retained events match this session and the selected filters.'
       : (SA.timelinePids && SA.timelinePids.length)
         ? `No events for ${SA.timelinePidLabel || 'this session'} in the loaded window`
       : SA.isEventsFiltered() ? 'No events match the current filter' : 'No system events logged';
