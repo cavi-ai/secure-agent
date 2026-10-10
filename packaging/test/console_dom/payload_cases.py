@@ -320,6 +320,38 @@ def organization_allow(now_ms=None):
     return {"now": now, "patches": [{"route": "/flags", "path": [{"id": "flag-1"}, "explain"], "value": explain}]}
 
 
+def retriaged_finding(now_ms=None):
+    now, iso = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/flags", "path": [{"id": "flag-1"}, "advisor"], "value": {
+        "assessment": "benign", "confidence": 0.9, "rationale": "re-triage complete: routine vendor traffic",
+        "suggested_action": "none", "created_at": iso(120000),
+    }}]}
+
+
+def offline_advisor(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/status", "path": ["advisor_health"], "value": {
+        "enabled": True, "circuit_open": True, "last_error": "context deadline exceeded",
+        "queue_depth": 0, "model": "qwen3:8b",
+    }}]}
+
+
+def unconfigured_fleet(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/fleet", "path": ["fleet_configured"], "value": False}]}
+
+
+def agent_queue(now_ms=None):
+    now, iso = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/agent/recommendations", "path": [], "value": [
+        {"id": 901, "ts": iso(60000), "role": "assistant", "origin": "analysis", "review_state": "pending",
+         "content": "Review **SSH** configuration.",
+         "local_command": {"command": "ssh-add -l", "workdir": "/Users/dev", "mode": "headless"}},
+        {"id": 902, "ts": iso(60000), "role": "assistant", "origin": "analysis", "review_state": "saved",
+         "plan_id": 2, "content": "Already saved."},
+    ]}]}
+
+
 def payload_outcomes(now_ms=None):
     now, iso = _clock(now_ms)
     payloads = {}
