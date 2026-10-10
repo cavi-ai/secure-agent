@@ -25,6 +25,7 @@ function fixture(fetch) {
     window: { SA: {} },
     sessionEnded: false, SS_TOKEN_KEY: 'fixture', consoleToken: 'fixture', lastSnapshotAt: 0, cancelDialog: null,
     telemetryFetchGen: 0, telemetrySlowGen: 0,
+    pendingConsoleContext: null, handoffGeneration: 0, openConsoleContext: async () => {},
     sessionMemoryGeneration: 0, sessionTimelineRequest: 0, sessionOverviewGeneration: 0, sessionOutcomesGeneration: 0,
     sessionMemoryState: {}, sessionOverviewState: {}, sessionOverviewRefreshAgain: false, sessionOutcomesState: {},
     historyScopes: { flags: null, events: null },
@@ -64,6 +65,39 @@ function fixture(fetch) {
   return { ctx, requests, renders, connections, failures, retries, stops: () => stops, ended: () => ended };
 }
 const snapshot = () => response({ status: { uptime: 'new' }, flags: [], events: [] });
+
+test('record handoff waits for valid telemetry and opens once', async () => {
+  let available = false;
+  const f = fixture(async path => path === '/snapshot' ? (available ? snapshot() : response({}, 503)) : response([]));
+  const target = { route: 'sessions', session: 'durable', flag: 'specific' };
+  f.ctx.pendingConsoleContext = target;
+  const opened = [];
+  f.ctx.openConsoleContext = async (context, generation) => opened.push([context, generation]);
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(opened.length, 0);
+  assert.equal(f.ctx.pendingConsoleContext, target);
+  available = true;
+  f.ctx.handoffGeneration = 2;
+  await f.ctx.fetchTelemetry({ slow: false });
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.deepEqual(opened, [[target, 2]]);
+  assert.equal(f.ctx.pendingConsoleContext, null);
+});
+
+test('superseded telemetry cannot consume a newer record handoff', async () => {
+  const old = deferred();
+  let first = true;
+  const f = fixture(async path => path === '/snapshot' ? (first ? (first = false, old.promise) : snapshot()) : response([]));
+  f.ctx.pendingConsoleContext = { session: 'old' };
+  const opened = [];
+  f.ctx.openConsoleContext = async context => opened.push(context.session);
+  const pending = f.ctx.fetchTelemetry({ slow: false });
+  f.ctx.pendingConsoleContext = { session: 'new' };
+  await f.ctx.fetchTelemetry({ slow: false });
+  old.resolve(snapshot());
+  await pending;
+  assert.deepEqual(opened, ['new']);
+});
 
 test('paginated reviews refresh without replacing the resource response', async () => {
   const resources = {host:{total_memory_bytes:123},sessions:[]};

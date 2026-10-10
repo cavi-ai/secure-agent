@@ -19,6 +19,29 @@ const { agentStateText, agentOffHTML, agentMessageHTML, agentThreadItems, agentP
 
 const XSS = '<img src=x onerror=alert(1)>';
 
+test('retriage tracks a fresh identical verdict and waits while its actual task is active', () => {
+  const prior = {assessment:'benign',rationale:'routine',created_at:'2026-10-09T20:00:00Z'};
+  assert.notEqual(ctx.advisorVerdictSignature(prior), ctx.advisorVerdictSignature({...prior,created_at:'2026-10-09T20:02:00Z'}));
+  const active = {enabled:true,state:'inspecting',active_kind:'flag',active_subject:'fixture',elapsed_ms:100000,timeout_ms:120000};
+  assert.equal(ctx.advisorRetriageIsActive(active, 'fixture'), true);
+  assert.equal(ctx.advisorRetriageIsActive(active, 'other'), false);
+  assert.equal(ctx.advisorRetriageIsActive({...active,state:'idle'}, 'fixture'), false);
+  assert.equal(ctx.advisorRetriageIsActive({...active,circuit_open:true}, 'fixture'), false);
+  assert.match(ctx.advisorStateText({...active,active_tool:'classify_current_evidence'}), /local classification.*100s.*120s/);
+  assert.match(ctx.advisorStateText({enabled:true,state:'preparing',elapsed_ms:2000,timeout_ms:120000}), /preparing.*2s.*120s/);
+});
+
+test('system agent progress shows only known read-tool activity and numeric timing', () => {
+  const html = agentThreadItems({messages:[],chatting:true,work:{state:'inspecting',active_tool:'inspect_session_activity',elapsed_ms:2300,tool_calls:1}}, status())[0].html;
+  assert.match(html, /Inspecting related session activity/);
+  assert.match(html, /2s · 1 read calls/);
+  const unknown = agentThreadItems({messages:[],chatting:true,work:{state:'inspecting',active_tool:XSS}}, status())[0].html;
+  assert.ok(!unknown.includes(XSS));
+  assert.match(unknown, /recorded evidence/);
+  assert.match(agentMessageHTML({role:'assistant',content:'Answer',usage:{read_tool_calls:2,tool_calls:2}},status()), /2 read tool calls/);
+  assert.match(agentMessageHTML({role:'assistant',content:'Old answer',usage:{tool_calls:2}},status()), /2 tool requests \(not executed\)/);
+});
+
 test('advisor progress distinguishes waiting, inspection, paused retry and idle without exposing raw errors', () => {
   assert.match(ctx.advisorStateText({enabled:true,state:'answering',active_kind:'flag',elapsed_ms:12000,queue_depth:2}), /flag.*12s.*2 queued/);
   assert.match(ctx.advisorStateText({enabled:true,state:'inspecting',active_tool:'inspect_session_activity'}), /session activity/);

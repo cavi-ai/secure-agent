@@ -280,6 +280,7 @@ The system agent behind the console's Agent tab: a chat with a model on your loc
 ```yaml
 system_agent:
   enabled: false
+  debug: false                        # metadata-only request and read-tool logs
   endpoint: "http://127.0.0.1:11434"   # Ollama base URL (no /v1); must be loopback when enabled
   model: ""                            # chat model; "" = the first model Ollama lists
   harness_model: ""                    # model dispatched harnesses run; "" = model
@@ -296,6 +297,13 @@ A “new” finding is a newly stored finding, not every observed event. Repeate
 Ollama receives a bounded, masked evidence summary and returns a recommendation linked to the findings. This toggle does not execute commands, dismiss findings or change protection. Local commands and harness dispatches require separate user confirmation. Published samples and placeholder credentials are evidence for review, not an automatic dismissal rule.
 
 An enabled agent with a non-loopback endpoint is a validation error. Changes take effect live within one poll cycle.
+
+`debug` is also available in **Settings → Secure Agent → Chat → Tools and diagnostics**.
+**Open daemon log** opens `~/Library/Logs/secure-agent/daemon-err.log`. Logging includes
+request sizes, round numbers, read-tool names/counts and elapsed time; it excludes
+prompts, tool arguments, evidence and model replies. Read tools are scoped to the
+current reply, with fixed context, response and cache budgets described in
+[SYSTEM_AGENT.md](SYSTEM_AGENT.md#read-tools-and-fresh-chat).
 
 ### Proxy authentication
 

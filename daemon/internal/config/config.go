@@ -272,6 +272,8 @@ type AdvisorConfig struct {
 // unless enabled; the endpoint must be loopback, like the advisor's.
 type SystemAgentConfig struct {
 	Enabled bool `yaml:"enabled"`
+	// Debug logs bounded request/tool metadata, never evidence or reply text.
+	Debug bool `yaml:"debug"`
 	// Endpoint is the Ollama base URL (no /v1).
 	Endpoint string `yaml:"endpoint"`
 	// Model is the chat model; "" = the first model the server lists.

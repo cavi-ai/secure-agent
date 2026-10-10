@@ -65,7 +65,9 @@ final class ESCardStateTests: XCTestCase {
             XCTAssertFalse(stage.detail.contains(SetupManager.esCollectorLabel), "\(stage) detail")
         }
         XCTAssertFalse(ESStage.grantInstruction.contains(SetupManager.esCollectorLabel))
-        XCTAssertTrue(ESStage.grantInstruction.contains("turn on Secure Agent"))
+        XCTAssertEqual(ESStage.grantInstruction, FileTelemetryPermissionGuidance.instruction)
+        XCTAssertTrue(ESStage.grantInstruction.contains("Secure Agent"))
+        XCTAssertTrue(ESStage.grantInstruction.contains("Full Disk Access"))
     }
 
     func testOnlySettingsStepsPoll() {

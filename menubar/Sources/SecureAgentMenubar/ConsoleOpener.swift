@@ -1,5 +1,30 @@
 import AppKit
 
+/// Record identity comes from the daemon. A missing durable session ID stays
+/// a list handoff; a PID cannot identify the same session across reuse.
+enum ConsoleDestination: Equatable {
+    case session(String)
+    case flag(id: String, sessionID: String?)
+    case incident(id: String, sessionID: String?)
+
+    static func session(for agent: AgentSummaryModel) -> ConsoleDestination? {
+        guard let id = agent.sessionID, !id.isEmpty else { return nil }
+        return .session(id)
+    }
+
+    var parameters: [(String, String)] {
+        switch self {
+        case .session(let id): return [("session", id)]
+        case .flag(let id, let session):
+            return [("flag", id)] + (session.flatMap { $0.isEmpty ? nil : [("session", $0)] } ?? [])
+        case .incident(let id, let session):
+            return [("incident", id)] + (session.flatMap { $0.isEmpty ? nil : [("session", $0)] } ?? [])
+        }
+    }
+
+    var tab: String { parameters.contains { $0.0 == "session" } ? "sessions" : "findings" }
+}
+
 /// Focus-or-open for the web console: when the default browser already has a
 /// console tab, activate THAT tab instead of spawning a duplicate. "Open
 /// console" used to open a fresh tab every click — duplicates that dead-end
@@ -8,6 +33,19 @@ import AppKit
 /// Automation consent denied, browser not running) falls back to a plain
 /// open, because a duplicate tab is bad but no tab is worse.
 enum ConsoleOpener {
+
+    /// Credentials and context remain in the fragment, never a request query.
+    /// Records cannot choose an origin, port, return URL or credential.
+    static func dashboardURL(port: Int, token: String, tab: String? = nil, file: String? = nil,
+                             destination: ConsoleDestination? = nil) -> URL? {
+        guard (1...65535).contains(port), !token.isEmpty else { return nil }
+        var parameters = [("ct", token)]
+        if let tab = destination?.tab ?? tab { parameters.append(("tab", tab)) }
+        if let file { parameters.append(("file", file)) }
+        parameters += destination?.parameters ?? []
+        let fragment = parameters.map { "\($0.0)=\(DaemonClient.urlQueryEscape($0.1))" }.joined(separator: "&")
+        return URL(string: "http://127.0.0.1:\(port)/dashboard/#\(fragment)")
+    }
 
     /// The browser can request a fresh handoff, never supply a credential,
     /// target port or return URL. Those come only from the local daemon.

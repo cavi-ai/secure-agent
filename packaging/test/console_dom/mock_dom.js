@@ -247,6 +247,12 @@
   if (scenarios.has('tokenseed') || !scenarios.has('notoken')) {
     try { sessionStorage.setItem('sa.console-token', 'test-token'); } catch { /* ignored */ }
   }
+  if (scenarios.has('contexthandoff')) {
+    data['/flags'].find(f => f.id === 'flag-2').session_id = 'sess-claude-1';
+    sessionStorage.setItem('sa.selected-session', 'sess-codex-3');
+    sessionStorage.setItem('sa.harness-filter', JSON.stringify({ harnesses: {claude:false,codex:false}, text:'unrelated', liveOnly:true }));
+    if (scenarios.has('cold')) location.hash = 'ct=test-token&tab=sessions&session=sess-claude-1&flag=flag-2';
+  }
   // Policy lists (GET /guard/rules, /guard/path-allow; /mute is above).
   data['/guard/rules'] = [
     { id: 1, agent: 'claude', rule_id: 'env-file', decision: 'allow', source: 'prompt', created_at: '2026-09-20T10:00:00Z' },
@@ -587,7 +593,7 @@
       setTimeout(() => {
         const f = data['/flags'].find(x => x.id === body.flag_id);
         if (f) {
-          f.advisor = { assessment: 'benign', confidence: 0.9, rationale: 're-triage complete: routine vendor traffic', suggested_action: 'none' };
+          f.advisor = { assessment: 'benign', confidence: 0.9, rationale: 're-triage complete: routine vendor traffic', suggested_action: 'none', created_at: iso(0) };
           // The daemon publishes the updated flag on the stream.
           if (window.__sse) window.__sse.emit('flag', f);
         }
@@ -649,6 +655,35 @@
       return new Response(JSON.stringify(data[String(path)] ?? data[p]), {status: 200, headers: {'Content-Type': 'application/json'}});
     }
     if (scenarios.has('authrecover') && opts?.method === 'POST') authRecoveryMutations++;
+    if (scenarios.has('permissionsdemo') && p === '/decision-scopes') {
+      if (opts?.method === 'DELETE') {
+        const id = new URLSearchParams(String(path).split('?')[1]).get('id');
+        window.__permissionDeletes = (window.__permissionDeletes || 0) + 1;
+        if (id !== 'synthetic-scope') throw new Error('Wrong permission target');
+        window.__permissionRevoked = iso(0);
+        return { ok: true, json: async () => ({ revoked: true, id }) };
+      }
+      if (window.__permissionsFail) return { ok: false, status: 503 };
+      if (window.__permissionDelayedRead) await new Promise(resolve => setTimeout(resolve, 50));
+      const scope = id => ({ id, kind: 'exact', agent: 'claude', session_id: 'sess-claude-1',
+        workspace: '/synthetic/workspace', reader_exe: '/synthetic/tool', resource_path: '/synthetic/workspace/credentials',
+        operation: 'read-connect', destination: 'example.test:443', rule_id: 'sensitive-read-then-connect',
+        created_at: iso(60000), expires_at: new Date(now + 86400000).toISOString(),
+        revoked_at: id === 'synthetic-scope' ? window.__permissionRevoked : undefined });
+      return { ok: true, json: async () => [scope('synthetic-scope'), scope('unrelated-permission')] };
+    }
+    if (scenarios.has('contexthandoff') && p.startsWith('/flags/') && p.endsWith('/explain')) {
+      const id = decodeURIComponent(p.split('/')[2]);
+      const flag = data['/flags'].find(f => f.id === id);
+      return {ok:!!flag,status:flag?200:404,json:async()=>flag,text:async()=>flag?JSON.stringify(flag):'flag unavailable'};
+    }
+    if (scenarios.has('contexthandoff') && p === '/incidents' && !String(path).includes('format=markdown')) {
+      const id = new URLSearchParams(String(path).split('?')[1] || '').get('id');
+      if (id) {
+        const incident = data['/incidents'].find(i => i.id === id);
+        return {ok:!!incident,status:incident?200:404,json:async()=>({incident,workflow:incident?.workflow})};
+      }
+    }
     // Failure modes apply to API paths only (assets are served statically).
     if (scenarios.has('netfail') || networkRecoveryUnreachable) {
       throw new TypeError('Failed to fetch');
@@ -818,7 +853,7 @@
       const own = sid === 'sess-claude-1';
       const body = { session_id: sid, observed_at: iso(0), history: {
         evidence: Object.fromEntries(['reviews', 'incidents', 'interventions'].map(k => [k, { available: true, at_limit: false, limit: 100 }])),
-        reviews: own ? [{ id: 'synthetic-review', revision: 2, context: { rule: 'sensitive-read-then-connect' }, decision: { action: 'acknowledge', revision: 1, at: iso(90000) }, assessment: { residual_risk: 'possible-exposure' }, evidence_available: false }] : [],
+        reviews: own ? [{ id: 'synthetic-review', revision: 2, context: { rule: 'sensitive-read-then-connect' }, decision: { action: scenarios.has('permissionsdemo') ? 'expect' : 'acknowledge', revision: 1, at: iso(90000), ...(scenarios.has('permissionsdemo') ? { scope_ids: ['synthetic-scope', 'expired-record'] } : {}) }, assessment: { residual_risk: 'possible-exposure' }, evidence_available: false }] : [],
         interventions: own ? [{ id: 'synthetic-control', kind: 'pause', status: 'applied', verification: window.__resultsUpdate ? 'observed' : 'pending', requested_at: iso(60000), limits: ['Synthetic receipt; captured targets only.'] }] : [],
         incidents: own ? [{ id: 'synthetic-incident', remediation: { steps: [{ id: 'synthetic-step', item: { name: 'Synthetic key', action: 'Revoke key' }, status: 'reported', verification: 'unverified', reported_at: iso(30000), newer_evidence: true }] } }] : [],
       } };
@@ -1085,6 +1120,95 @@
 
   if (scenarios.has('notokenrecover')) {
     setTimeout(() => { location.hash = 'ct=test-token&tab=sessions'; }, 2000);
+  }
+  if (scenarios.has('permissionsdemo')) {
+    setTimeout(async () => {
+      const receipt = {};
+      const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+      await window.filterTimelineToSession('sess-claude-1');
+      await window.setSessionView('results');
+      const opener = document.querySelector('[data-action="session-permissions"]');
+      opener.focus(); opener.click(); await tick();
+      const body = document.getElementById('drawer-body');
+      receipt.scoped = body.textContent.includes('example.test:443') && body.textContent.includes('Current status unknown')
+        && !body.textContent.includes('unrelated-permission');
+      receipt.entryFocus = document.activeElement === document.getElementById('btn-drawer-close');
+      const details = body.querySelector('details'); details.open = true;
+      const summary = details.querySelector('summary'); summary.focus();
+      body.scrollTop = 120; const top = body.scrollTop;
+      window.__permissionDelayedRead = true;
+      await window.refreshSessionPermissions();
+      window.__permissionDelayedRead = false;
+      receipt.refreshFocus = document.activeElement === body.querySelector('details summary') && body.querySelector('details').open;
+      receipt.refreshScroll = Math.abs(top - body.scrollTop) < 2;
+      if (!receipt.refreshScroll) receipt.scrollMismatch = { before: top, after: body.scrollTop, width: innerWidth, height: innerHeight };
+      const savedStyle = body.style.cssText;
+      body.style.boxSizing = 'border-box'; body.style.flex = 'none';
+      body.style.height = (body.scrollHeight - 5) + 'px';
+      body.scrollTop = 120; const compactTop = body.scrollTop;
+      window.__permissionDelayedRead = true;
+      await window.refreshSessionPermissions();
+      window.__permissionDelayedRead = false;
+      receipt.compactScroll = compactTop > 0 && Math.abs(compactTop - body.scrollTop) < 2;
+      if (!receipt.compactScroll) receipt.scrollMismatch = { before: compactTop, after: body.scrollTop, width: innerWidth, height: innerHeight };
+      body.style.cssText = savedStyle;
+      window.__permissionsFail = true;
+      await window.refreshSessionPermissions();
+      receipt.stale = body.textContent.includes('Last known permission records') && body.textContent.includes('example.test:443')
+        && !body.querySelector('[data-action="session-permission-revoke"]');
+      window.__permissionsFail = false; await window.refreshSessionPermissions();
+      const revoke = body.querySelector('[data-action="session-permission-revoke"]');
+      revoke.focus(); revoke.click(); await tick();
+      document.getElementById('confirm-cancel').click(); await tick();
+      receipt.cancel = !window.__permissionDeletes && document.activeElement === revoke;
+      revoke.click(); await tick(); document.getElementById('confirm-ok').click(); await tick(); await tick();
+      receipt.revoked = window.__permissionDeletes === 1 && body.textContent.includes('Revocation saved')
+        && !body.querySelector('[data-action="session-permission-revoke"]');
+      receipt.fits = document.documentElement.scrollWidth <= innerWidth;
+      document.getElementById('btn-drawer-back').click();
+      receipt.back = document.getElementById('drawer').hidden && window.SA.selectedSessionId === 'sess-claude-1'
+        && window.SA.sessionView === 'results' && document.activeElement === opener;
+      opener.click(); await tick(); await window.selectSession('sess-codex-3');
+      receipt.selectionCloses = document.getElementById('drawer').hidden;
+      document.body.dataset.permissionsProbe = JSON.stringify(receipt);
+    }, 2500);
+  }
+
+  if (scenarios.has('contexthandoff')) {
+    const receipt = {};
+    if (!scenarios.has('cold')) setTimeout(() => {
+      location.hash = 'ct=test-token&tab=sessions&session=sess-claude-1&flag=flag-2';
+    }, 1500);
+    setTimeout(() => {
+      receipt.session = window.SA.selectedSessionId === 'sess-claude-1' && window.SA.activeTab === 'sessions';
+      receipt.flag = document.getElementById('drawer-body').textContent.includes('flag-2');
+      receipt.stripped = !location.hash.includes('ct=') && location.hash.includes('flag=flag-2');
+      receipt.filter = !window.SA.harnessFilter.harnesses.claude && window.SA.harnessFilter.text === ''
+        && window.SA.harnessFilter.harnesses.codex === false;
+      document.getElementById('btn-drawer-back')?.click();
+    }, 3000);
+    setTimeout(async () => {
+      receipt.back = document.getElementById('drawer').hidden && window.SA.selectedSessionId === 'sess-claude-1'
+        && location.hash.includes('session=sess-claude-1') && !location.hash.includes('flag=');
+      await window.selectSession('sess-claude-sub');
+      receipt.selectionRoute = location.hash.includes('session=sess-claude-sub');
+      location.hash = 'ct=test-token&tab=sessions&session=sess-cursor-2&incident=inc-20260907-6033-a1b2';
+    }, 4000);
+    setTimeout(() => {
+      receipt.incident = window.SA.selectedSessionId === 'sess-cursor-2'
+        && document.getElementById('drawer-title-text').textContent.includes('inc-20260907-6033-a1b2')
+        && document.getElementById('drawer-body').textContent.includes('Blast Radius Activity');
+      receipt.ended = document.getElementById('session-detail').textContent.includes('web-app')
+        && window.SA.harnessFilter.liveOnly === false;
+      location.hash = 'ct=test-token&tab=sessions&session=expired-session&flag=expired-flag';
+    }, 6000);
+    setTimeout(() => {
+      receipt.missing = window.SA.selectedSessionId === 'expired-session'
+        && document.getElementById('session-detail').textContent.includes('Session unavailable')
+        && document.getElementById('drawer-body').textContent.includes('flag unavailable');
+      receipt.noPidFallback = !document.getElementById('session-detail').textContent.includes('api-service');
+      document.body.dataset.contextHandoff = JSON.stringify(receipt);
+    }, 8500);
   }
 
   if (scenarios.has('networkrecover')) {
@@ -1527,11 +1651,19 @@
   // Auto-action: re-run the advisor on the first flag — the pending state
   // must show, then the fresh verdict must land and replace the chip.
   if (scenarios.has('retriagedemo')) {
+    data['/flags'].find(x => x.id === 'flag-1').advisor = { assessment: 'benign', confidence: 0.9, rationale: 're-triage complete: routine vendor traffic', suggested_action: 'none', created_at: iso(120000) };
     // Findings is opened first, as a user must: hidden panels do not render.
     setTimeout(() => {
       openTab('findings');
       document.querySelector('[data-action="retriage"][data-id="flag-1"]').click();
     }, 4000);
+    setTimeout(() => {
+      const receipt = document.createElement('pre');
+      receipt.id = 'retriage-complete';
+      receipt.hidden = true;
+      receipt.textContent = String(!!window.SA && !window.SA.pendingRetriage.has('flag-1'));
+      document.body.appendChild(receipt);
+    }, 9000);
   }
   // Advisor-down variant: the circuit breaker is open — retriage must render
   // as an honest "Advisor offline" state, not a clickable dead button.

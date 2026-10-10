@@ -613,6 +613,16 @@ public struct AdvisorHealthModel: Codable, Sendable {
     public let lastError: String?
     public let queueDepth: Int?
     public let model: String?
+    public let state: String?
+    public let activeKind: String?
+    public let activeSubject: String?
+    public let elapsedMS: Int64?
+    public let timeoutMS: Int64?
+
+    public func isReviewing(flagID: String) -> Bool {
+        enabled && circuitOpen != true && activeKind == "flag" && activeSubject == flagID
+            && ["preparing", "answering", "inspecting"].contains(state ?? "")
+    }
 
     enum CodingKeys: String, CodingKey {
         case enabled
@@ -620,6 +630,9 @@ public struct AdvisorHealthModel: Codable, Sendable {
         case lastError = "last_error"
         case queueDepth = "queue_depth"
         case model
+        case state
+        case activeKind = "active_kind", activeSubject = "active_subject"
+        case elapsedMS = "elapsed_ms", timeoutMS = "timeout_ms"
     }
 }
 
@@ -754,10 +767,20 @@ public struct AdvisorVerdictModel: Codable, Sendable, Equatable {
     public let confidence: Double?
     public let rationale: String
     public let suggestedAction: String?
+    public let createdAt: String?
+
+    public init(assessment: String?, confidence: Double?, rationale: String, suggestedAction: String?, createdAt: String? = nil) {
+        self.assessment = assessment
+        self.confidence = confidence
+        self.rationale = rationale
+        self.suggestedAction = suggestedAction
+        self.createdAt = createdAt
+    }
 
     enum CodingKeys: String, CodingKey {
         case assessment, confidence, rationale
         case suggestedAction = "suggested_action"
+        case createdAt = "created_at"
     }
 }
 

@@ -139,14 +139,17 @@ make dmg
 ```
 
 Open `dist/SecureAgent-<version>.dmg`, drag **Secure Agent.app** to **Applications**, and launch it.
-The first-run setup wizard walks you through:
+First-use setup follows one selected agent path:
 
-1. **Background monitor** — the `secure-agentd` daemon runs automatically as a child process of the app. It starts when you launch Secure Agent and stops when you quit it; there is no LaunchAgent and nothing runs in the background afterwards.
-2. **Full Disk Access** — deep-links to System Settings → Privacy & Security → Full Disk Access.
-3. **Harness hooks** — copies `secret_guard.py`, `injection_scan.py`, `activity_log.py` into `~/.claude/hooks`, `~/.cursor/hooks`, and `~/.config/opencode/hooks`.
-4. **Extras** — Open at Login (`SMAppService`) and the `secure-agent` CLI symlink in `~/.local/bin`.
+1. **Choose** — select a harness and see guarding, recorded activity, and payload inspection as separate capabilities. The bundled daemon starts and stops with the app.
+2. **Enable** — explicitly install hooks for Claude Code or Cursor alone, preserving existing user hooks. Other harnesses can continue with their observation path.
+3. **Result** — run an inert installed-hook check or view the result without a check. The check verifies the hook's daemon round trip; it does not establish that a running agent invokes the hook or that its traffic is inspected. Configuration changes and unavailable status require another check or refresh.
 
-Everything is also manageable later from the menu bar icon (**Setup & Permissions…**, **Settings…**, **Uninstall…**, **Open console**, **Ask Agent**). Secure Agent also appears in the Dock and opens Settings at launch, so it remains visible and accessible when macOS hides the menu bar item. Click the Dock icon to reopen Settings after closing its window; quit the app to stop its child daemon.
+File telemetry, additional hook scripts, traffic routing, secret registration, guard rules, the local advisor, Open at Login, and CLI installation remain under **Optional capabilities** after the result and in Settings. New first-use setup leaves file-telemetry registration and permission panes deferred until you explicitly enable that capability.
+
+Everything is also manageable later from the menu bar icon (**Setup & Permissions…**, **Settings…**, **Uninstall…**, **Open console**, **Ask Agent**). Secure Agent appears in the Dock, opens the setup flow on first use, and opens Settings on subsequent launches. Click the Dock icon to reopen Settings after closing its window; quit the app to stop its child daemon.
+
+Session cards in the menu bar open that same session in the console. Finding and remediation links open the selected evidence or incident, with a return to its session when the daemon knows that identity. Missing records stay unavailable; links never substitute a new process with the same PID. The console retains record identifiers when removing the handoff credential from the address bar.
 
 The UI has a separate menu bar identity in this update. Saved Secure Agent preferences and monitoring data remain in their existing locations. Allow **Secure Agent** in System Settings → Menu Bar; another application's menu bar setting should not be required. Review any macOS notification, Login Items or Full Disk Access prompt through the native Setup flow.
 
@@ -197,7 +200,7 @@ make install    # build "Secure Agent.app", install it to /Applications and laun
 
 Endpoint Security telemetry via `eslogger` runs in a collector daemon that ships inside the app bundle and is registered with `SMAppService` — no admin password.
 
-- **Automatic:** at launch the app registers the collector (once per launch), opens System Settings at each switch still off (once per build), and posts a notification naming the switch.
+- **Enable:** new first-use setup waits for **Enable file telemetry** in Optional capabilities or Settings → Telemetry. After that choice, the app retains its automatic registration and repair path: registration once per launch and permission guidance once per build. Existing installations retain their telemetry choices.
 - **Your two switches:** **Secure Agent** in **System Settings → General → Login Items & Extensions**, then **Secure Agent** in **Privacy & Security → Full Disk Access**; the File Telemetry card in **Settings → Telemetry** turns green on its own.
 - **Doctor:** **Run Doctor…** in the menu bar menu, or **Run Doctor** on the card, checks signing, the service in the bundle, registration, Login Items, the launchd job, Full Disk Access, spool health, an old helper under `/Library`, and the daemon's `/doctor`.
 - **Fixes:** each failing check has a Fix button; **Fix all** runs them in check order and waits up to 5 minutes on each System Settings switch.
@@ -239,6 +242,8 @@ Inspects what your agents send to their APIs and catches secrets leaving where t
 **Export recorded session history.** Session reports include the latest saved review decisions, the evidence revisions they apply to, residual risk, and intervention/remediation results. Missing source history and export limits are explicit. Copying a partial report shows a warning; an export does not establish task completion or current permission.
 
 **See decisions and results in the session.** The Results view keeps saved reviews, process-control receipts, and reported incident actions together. Applied controls, later observations, and unverified external actions remain distinct. Source failures retain the last known receipts with a retry message; bounded and expired history stay visible as limits.
+
+**Inspect the permissions from a decision.** View permissions in Results opens only the scope IDs saved with that decision, with their exact resources, recipients, expiry, and revocation records. Missing records have unknown status; failed refreshes retain labeled last-known data and disable revocation. Revocation requires confirmation and a matching saved response. It does not undo past access or remaining exposure, and other permissions or legacy policies may still allow access. Back returns to the same session result.
 
 **Monitor by default; earn enforcement.** Every rule runs in `monitor` mode: leaks are reported, nothing is blocked. Promote a rule to blocking once you trust it, in `~/.config/secure-agent/config.yaml`:
 

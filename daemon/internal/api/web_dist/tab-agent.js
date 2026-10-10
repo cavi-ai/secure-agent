@@ -40,6 +40,15 @@ function agentStateText(status) {
 }
 
 // Show the advisor's current work separately from interactive chat.
+function advisorVerdictSignature(v) {
+  return v ? JSON.stringify([v.created_at || '', v.assessment || '', v.suggested_action || '', v.rationale || '']) : '';
+}
+
+function advisorRetriageIsActive(health, id) {
+  return !!(health && health.enabled && !health.circuit_open && health.active_kind === 'flag' && health.active_subject === id
+    && ['preparing', 'answering', 'inspecting'].includes(health.state));
+}
+
 function advisorStateText(health, now = Date.now()) {
   if (!health || !health.enabled) return 'Advisor off';
   const queue = `${Math.max(0, Number(health.queue_depth) || 0)} queued`;
@@ -47,11 +56,15 @@ function advisorStateText(health, now = Date.now()) {
     const retry = Date.parse(health.retry_at);
     return 'Advisor paused after failed requests' + (Number.isFinite(retry) ? ` · retry in ${Math.max(0, Math.ceil((retry - now) / 1000))}s` : '') + ` · ${queue}`;
   }
+  const elapsed = Math.max(0, Math.floor((Number(health.elapsed_ms) || 0) / 1000));
+  const timeout = Number(health.timeout_ms);
+  const timing = `${elapsed}s` + (Number.isFinite(timeout) && timeout > 0 ? ` of ${Math.ceil(timeout / 1000)}s limit` : '');
   const tools = { inspect_current_evidence: 'finding evidence', inspect_session_activity: 'session activity', inspect_operator_history: 'operator history', classify_current_evidence: 'local classification' };
-  if (health.state === 'inspecting') return `Advisor inspecting ${tools[health.active_tool] || 'recorded evidence'} · ${queue}`;
+  if (health.state === 'preparing') return `Advisor preparing evidence · ${timing} · ${queue}`;
+  if (health.state === 'inspecting') return `Advisor inspecting ${tools[health.active_tool] || 'recorded evidence'} · ${timing} · ${queue}`;
   if (health.state === 'answering') {
     const kinds = { flag: 'flag', incident: 'incident', plan: 'plan', host: 'destination', guard: 'blocked access', worktree: 'worktree', project: 'cleanup', egress: 'egress' };
-    return `Advisor reviewing ${kinds[health.active_kind] || 'evidence'} · waiting for local model · ${Math.max(0, Math.floor((Number(health.elapsed_ms) || 0) / 1000))}s · ${queue}`;
+    return `Advisor reviewing ${kinds[health.active_kind] || 'evidence'} · waiting for local model · ${timing} · ${queue}`;
   }
   return `Advisor idle · ${queue}` + (health.last_duration_ms ? ` · last review ${Math.round(health.last_duration_ms / 1000)}s` : '');
 }
@@ -198,7 +211,8 @@ function agentMessageHTML(m, status, runs, activity) {
     u.prompt_tokens_per_second ? `${Number(u.prompt_tokens_per_second).toFixed(1)} input tokens/s` : '',
     u.output_tokens_per_second ? `${Number(u.output_tokens_per_second).toFixed(1)} output tokens/s` : '',
     u.elapsed_ms ? `${(Number(u.elapsed_ms) / 1000).toFixed(1)}s reply` : '',
-    u.tool_calls ? `${Number(u.tool_calls)} tool requests (not executed)` : 'no model tool calls',
+    u.read_tool_calls ? `${Number(u.read_tool_calls)} read tool calls`
+      : u.tool_calls ? `${Number(u.tool_calls)} tool requests (not executed)` : 'no model tool calls',
   ].filter(Boolean).join(' · ') : '';
   return `<div class="agent-msg assistant">${agentTextHTML(m.content, true)}${stats ? `<div class="agent-msg-meta">${stats}</div>` : ''}${skills}${agentLocalCommandHTML(m, (runs || []).find(r => r.id === m.local_run_id), activity)}${agentProposalHTML(m, status)}</div>`;
 }
@@ -209,8 +223,13 @@ function agentThreadItems(chat, status, runs, activity = {}) {
   const items = ((chat && chat.messages) || []).filter(m => m.origin !== 'analysis')
     .map(m => ({ key: 'm' + m.id, html: agentMessageHTML(m, status, runs, activity) }));
   if (activity.sending || (chat && chat.chatting)) {
-    const label = activity.sending ? 'Sending your message…' : 'Waiting for local Ollama…';
-    items.push({ key: 'pending', html: `<div class="agent-msg agent-pending" role="status" aria-live="polite">${agentSpinnerHTML()}<span>${label}</span></div>` });
+    const work = chat && chat.work;
+    const tools = { inspect_snapshot: 'findings snapshot', inspect_skill: 'built-in procedure', inspect_finding: 'finding evidence', inspect_session_activity: 'related session activity' };
+    const progress = work && work.state === 'inspecting' ? `Inspecting ${tools[work.active_tool] || 'recorded evidence'}…`
+      : work && work.state === 'preparing' ? 'Preparing skills and snapshot…' : 'Waiting for local Ollama…';
+    const label = activity.sending ? 'Sending your message…' : progress;
+    const timing = work && Number(work.elapsed_ms) > 0 ? ` · ${Math.floor(Number(work.elapsed_ms) / 1000)}s · ${Number(work.tool_calls) || 0} read calls` : '';
+    items.push({ key: 'pending', html: `<div class="agent-msg agent-pending" role="status" aria-live="polite">${agentSpinnerHTML()}<span>${label}${timing}</span></div>` });
   }
   return items;
 }

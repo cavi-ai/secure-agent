@@ -1462,21 +1462,20 @@ func (s *Store) PutIncident(inc model.IncidentReport) (writeErr error) {
 	defer s.mu.Unlock()
 
 	inc.Remediation = nil
+	if inc.AggregateCount == 0 {
+		inc.AggregateCount = 1
+	}
 	data, err := json.Marshal(inc)
 	if err != nil {
 		return fmt.Errorf("marshal incident: %w", err)
 	}
 
 	tsStr := inc.Timestamp.UTC().Format(time.RFC3339Nano)
-	count := inc.AggregateCount
-	if count == 0 {
-		count = 1
-	}
 	flagIDs, _ := json.Marshal([]string{inc.FlagID})
 	result, err := s.db.Exec(
 		`INSERT OR REPLACE INTO incidents (id, flag_id, pid, risk, report_json, created_at, rule, session_id, subject, aggregate_count, last_flag_at, flag_ids, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
 		inc.ID, inc.FlagID, inc.PID, string(inc.Risk), string(data), tsStr,
-		inc.Rule, inc.SessionID, inc.Subject, count, tsStr, string(flagIDs),
+		inc.Rule, inc.SessionID, inc.Subject, inc.AggregateCount, tsStr, string(flagIDs),
 	)
 	if err != nil {
 		return fmt.Errorf("insert incident: %w", err)
@@ -1509,7 +1508,14 @@ func (s *Store) GetIncident(id string) (report *model.IncidentReport, readErr er
 	defer s.mu.Unlock()
 
 	var storedID, reportJSON string
-	err := s.db.QueryRow(`SELECT id, report_json FROM incidents WHERE id = ? OR flag_id = ?`, id, id).Scan(&storedID, &reportJSON)
+	err := s.db.QueryRow(`SELECT id, report_json FROM incidents WHERE id = ?`, id).Scan(&storedID, &reportJSON)
+	if err == sql.ErrNoRows {
+		// Flag aliases include evidence aggregated after the initial report.
+		// Resolve the report identity first so an alias cannot shadow it.
+		err = s.db.QueryRow(`SELECT id, report_json FROM incidents
+			WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
+			ORDER BY `+timestampOrderExpr("created_at")+` DESC, id DESC LIMIT 1`, id, id).Scan(&storedID, &reportJSON)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1550,7 +1556,7 @@ func (s *Store) IncidentIDForFlag(flagID string) (string, bool) {
 	err := s.db.QueryRow(
 		`SELECT id FROM incidents
 		 WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
-		 ORDER BY datetime(created_at) DESC LIMIT 1`,
+		 ORDER BY `+timestampOrderExpr("created_at")+` DESC, id DESC LIMIT 1`,
 		flagID, flagID,
 	).Scan(&id)
 	if err != nil {
@@ -1563,14 +1569,27 @@ func (s *Store) IncidentIDForFlag(flagID string) (string, bool) {
 // aggregation key — one incident per rule+session+subject; repeat flags
 // become its evidence instead of minting duplicate reports.
 func (s *Store) FindOpenIncident(rule, sessionID, subject string) (string, bool) {
+	id, found, _ := s.FindOpenIncidentResult(rule, sessionID, subject)
+	return id, found
+}
+
+// FindOpenIncidentResult distinguishes a missing aggregation target from an
+// unavailable or invalid stored identity. Callers creating reports must use it.
+func (s *Store) FindOpenIncidentResult(rule, sessionID, subject string) (id string, found bool, readErr error) {
+	defer func() { s.noteRead("incident lookup", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var id string
 	err := s.db.QueryRow(findOpenIncidentSQL, rule, sessionID, subject).Scan(&id)
-	if err != nil {
-		return "", false
+	if err == sql.ErrNoRows {
+		return "", false, nil
 	}
-	return id, true
+	if err != nil {
+		return "", false, err
+	}
+	if id == "" {
+		return "", false, fmt.Errorf("invalid open incident identity")
+	}
+	return id, true, nil
 }
 
 // AggregateIntoIncident folds another flag into an existing incident: bumps

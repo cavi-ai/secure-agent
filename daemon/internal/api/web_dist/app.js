@@ -13,15 +13,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // rather than being retained across browser sessions.
   const SS_TOKEN_KEY = 'sa.console-token';
   const hashParams = new URLSearchParams(location.hash.slice(1));
+  const initialContext = consoleContextFromHash(location.hash);
+  let pendingConsoleContext = Object.values(initialContext).some(Boolean) ? initialContext : null;
   let consoleToken = hashParams.get('ct') || '';
   if (consoleToken) {
     try { sessionStorage.setItem(SS_TOKEN_KEY, consoleToken); } catch { /* private mode: memory only */ }
     if (window.history.replaceState) {
-      // Strip the token from the address bar but PRESERVE a tab deep-link
-      // (#ct=…&tab=egress → #egress) — the hero's "open the drill-down"
-      // depends on it surviving the handoff.
-      const tab = hashParams.get('tab');
-      history.replaceState(null, '', location.pathname + location.search + (tab ? '#' + tab : ''));
+      // Retain only the route and record identifiers. The credential never
+      // survives in a reload link, address-bar history or drawer context.
+      history.replaceState(null, '', location.pathname + location.search + (pendingConsoleContext ? consoleContextHash(initialContext) : ''));
     }
   } else {
     try { consoleToken = sessionStorage.getItem(SS_TOKEN_KEY) || ''; } catch { consoleToken = ''; }
@@ -386,6 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionOverviewState = { loading: false, error: 'unavailable' };
     sessionOverviewRefreshAgain = false;
     sessionOutcomesState = { loading: false, error: 'unavailable' };
+    window.SA.invalidateSessionPermissions?.();
     if (liveUpdates) liveUpdates.stop();
     showSessionEnded();
   }
@@ -404,8 +405,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // route; an explicit drill-down from the menu bar takes its requested tab.
     let route = activeTab === 'sessions' ? 'sessions/' + activeSub : activeTab;
     try { route = sessionStorage.getItem('sa.console-tab') || route; } catch { /* memory only */ }
-    route = handoff.get('tab') || route || 'home';
-    history.replaceState(null, '', location.pathname + location.search + '#' + route);
+    const context = consoleContextFromHash(location.hash);
+    route = context.route || route || 'home';
+    if (context.route || context.session || context.flag || context.incident || context.file) {
+      pendingConsoleContext = { ...context, route };
+    }
+    history.replaceState(null, '', location.pathname + location.search + consoleContextHash(pendingConsoleContext || { route }));
     const reason = document.getElementById('console-access-reason');
     reason.textContent = 'Checking the connection. Your view is preserved; actions remain paused.';
     try {
@@ -432,9 +437,7 @@ document.addEventListener('DOMContentLoaded', () => {
     startLiveUpdates();
     clearInterval(sparkTimer);
     sparkTimer = setInterval(() => { sparkAdvance(); drawSpark(); }, 1000);
-    if (selectedSessionId) loadSelectedSession(selectedSessionId);
-    const file = handoff.get('file');
-    if (file) window.openFileDetail(file);
+    if (selectedSessionId && !pendingConsoleContext?.session) loadSelectedSession(selectedSessionId);
   });
 
   function setConnState(next) {
@@ -1840,9 +1843,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     renderReportHealth(); // Filter changes can hide a failed filtered report.
+    telemetryData.connected = !!(snap && snap.status);
     reconcileRetriage();
 
-    telemetryData.connected = !!(snap && snap.status);
     const invalidSnapshot = reportHealth.failures(['snapshot']).some(report => report.error === 'Invalid response');
     setConnState(telemetryData.connected ? 'ok' : invalidSnapshot ? 'invalid-response' : 'unreachable');
 
@@ -1853,6 +1856,13 @@ document.addEventListener('DOMContentLoaded', () => {
     else markDirty(...PANELS.map(p => p[0]).filter(n => (slow || !SLOW_ONLY.has(n)) && n !== 'notify'));
     if (resources) fillFamilyDrawer();
     if (window.SA && window.SA.refreshSessionOverview) window.SA.refreshSessionOverview(!!(opts && opts.full));
+    // Apply once, only after authenticated telemetry succeeds. A newer
+    // credential handoff invalidates an opener awaiting session data.
+    if (snap && pendingConsoleContext && current()) {
+      const context = pendingConsoleContext;
+      pendingConsoleContext = null;
+      await openConsoleContext(context, handoffGeneration);
+    }
   }
 
   // Every panel is a candidate: initial load, Refresh, and actions that
@@ -2653,11 +2663,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // the menubar's flow.
   const pendingRetriage = new Map();
   const RETRIAGE_TIMEOUT_MS = 90000;
-  const advisorSig = (v) => v ? `${v.assessment || ''}|${v.suggested_action || ''}|${v.rationale || ''}` : '';
+  const advisorSig = advisorVerdictSignature;
 
   function reconcileRetriage() {
     if (!pendingRetriage.size) return;
-    const health = telemetryData.status && telemetryData.status.advisor_health;
+    const health = telemetryData.connected && telemetryData.status && telemetryData.status.advisor_health;
     for (const [id, p] of pendingRetriage) {
       const f = (telemetryData.flags || []).find(x => x.id === id);
       if (f && advisorSig(f.advisor) !== p.baseline) {
@@ -2666,11 +2676,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (drawerMode === 'flag' && drawerFlag === id && drawer && !drawer.hidden) {
           window.openFlagDetail(id, { back: drawerBack });
         }
-      } else if (Date.now() - p.at > RETRIAGE_TIMEOUT_MS) {
+      } else if (Date.now() - p.at > RETRIAGE_TIMEOUT_MS && !advisorRetriageIsActive(health, id)) {
         pendingRetriage.delete(id);
         showToast(health && health.circuit_open
           ? 'Advisor is offline (verdicts paused) — check the local model server'
-          : "Advisor didn't answer within 90s — the model server may be busy or down", 'danger');
+          : "Advisor hasn't returned a new verdict — check its current status", health && health.circuit_open ? 'danger' : 'info');
       }
     }
   }
@@ -2952,6 +2962,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (visible.length || transition) sessionSelectionInitialized = true;
       const id = initialSessionId(visible, selectedSessionId);
       if (id !== selectedSessionId) {
+        window.SA.closeSessionPermissions?.();
         selectedSessionId = id;
         resetSessionMemory();
         sessionTimeline = [];
@@ -3076,11 +3087,15 @@ document.addEventListener('DOMContentLoaded', () => {
   window.selectSession = async function(id) {
     if (!id) return;
     const changed = selectedSessionId !== id;
+    if (changed) window.SA.closeSessionPermissions?.();
     selectedSessionId = id;
     sessionSelectionInitialized = true;
     sessionReveal = true;
     sessionPane = 'detail';
     try { sessionStorage.setItem(SESSION_SELECTION_KEY, id); } catch { /* memory only */ }
+    if (activeTab === 'sessions' && activeSub === 'board') {
+      history.replaceState(null, '', location.pathname + location.search + consoleContextHash({ route: 'sessions', session: id }));
+    }
     if (changed) { resetSessionMemory(); sessionTimeline = []; }
     renderNow(['sessions']);
     if (window.matchMedia('(max-width: 900px)').matches) {
@@ -3371,9 +3386,145 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  // Deep link from the menubar: #ct=…&file=<path> opens that file's drawer.
-  const deepFile = hashParams.get('file');
-  if (deepFile) window.openFileDetail(deepFile);
+  async function openConsoleContext(context, generation) {
+    const current = () => !sessionEnded && generation === handoffGeneration;
+    if (!current()) return;
+    if (context.session) {
+      // A saved filter must not hide the record explicitly requested by the
+      // operator. Reset only when it would exclude this session.
+      const session = (telemetryData.sessions || []).find(s => s.id === context.session);
+      const groups = groupSessionsByHarness(telemetryData.sessions || [], [], telemetryData.agents || []);
+      if (session && !visibleSessionMembers(applySessionFilters(groups, harnessFilter)).some(s => s.id === session.id)) {
+        const group = groups.find(g => visibleSessionMembers([g]).some(s => s.id === session.id));
+        if (!sessionMatchesText(session, harnessFilter.text)) harnessFilter.text = '';
+        if (group) delete harnessFilter.harnesses[group.key];
+        if (session.status === 'ended') harnessFilter.liveOnly = false;
+        harnessFilterChanged();
+      }
+      switchTab('sessions');
+      await window.selectSession(context.session);
+    } else if (context.route) switchTab(context.route, { skipHash: true });
+    if (!current()) return;
+    if (context.session && (selectedSessionId !== context.session || activeTab !== 'sessions' || activeSub !== 'board')) return;
+    const hash = consoleContextHash(context);
+    const returnToSession = () => {
+      closeDrawer();
+      window.filterTimelineToSession(context.session);
+      history.replaceState(null, '', location.pathname + location.search + consoleContextHash({ route: 'sessions', session: context.session }));
+    };
+    const back = context.session ? { label: 'session', reopen: returnToSession } : undefined;
+    if (context.flag) window.openFlagDetail(context.flag, { back });
+    else if (context.incident) window.openIncidentReport(context.incident, { back });
+    else if (context.file) window.openFileDetail(context.file);
+    if (context.flag || context.incident || context.file) {
+      const onClose = drawerOnClose;
+      drawerOnClose = () => {
+        if (onClose) onClose();
+        if (location.hash === hash) history.replaceState(null, '', location.pathname + location.search
+          + consoleContextHash({ route: context.route, session: context.session }));
+      };
+    }
+    history.replaceState(null, '', location.pathname + location.search + hash);
+  }
+
+  // Permissions from one saved decision stay in its session. Reads and
+  // confirmations are scoped to this drawer and authentication generation.
+  let sessionPermissions = null;
+  function currentSessionPermissions(st) {
+    return !!st && st === sessionPermissions && !sessionEnded && !drawer.hidden &&
+      drawerMode === 'permissions' && st.seq === drawerSeq && st.auth === handoffGeneration &&
+      st.receipt.sessionID === selectedSessionId;
+  }
+  function renderSessionPermissions(st) {
+    const top = drawerBody.scrollTop;
+    const focused = drawerBody.contains(document.activeElement) ? document.activeElement : null;
+    const partKey = focused?.closest('[data-session-part]')?.dataset.sessionPart;
+    const disclosures = new Map(Array.from(drawerBody.querySelectorAll('[data-session-part]'), part =>
+      [part.dataset.sessionPart, Array.from(part.querySelectorAll('details'), d => d.open)]));
+    patchSessionDetail(drawerBody, 'permissions:' + st.receipt.reviewID, sessionPermissionsHTML(st.receipt, st));
+    for (const part of drawerBody.querySelectorAll('[data-session-part]')) {
+      const saved = disclosures.get(part.dataset.sessionPart);
+      if (saved) Array.from(part.querySelectorAll('details')).forEach((d, i) => { d.open = !!saved[i]; });
+      if (partKey === part.dataset.sessionPart && focused && !focused.isConnected) {
+        const target = Array.from(part.querySelectorAll('button, summary')).find(el =>
+          focused.tagName === 'SUMMARY' ? el.tagName === 'SUMMARY' : el.dataset.action === focused.dataset.action);
+        (target || btnDrawerClose)?.focus({ preventScroll: true });
+      }
+    }
+    drawerBody.scrollTop = top;
+  }
+  window.SA.closeSessionPermissions = () => {
+    if (drawerMode === 'permissions') closeDrawer();
+  };
+  window.SA.invalidateSessionPermissions = () => {
+    if (drawerMode !== 'permissions' || !sessionPermissions) return;
+    Object.assign(sessionPermissions, { loading: false, busy: '', error: 'unavailable' });
+    renderSessionPermissions(sessionPermissions);
+  };
+  window.openSessionPermissions = async function(reviewID, sessionID) {
+    const receipt = sessionPermissionReceipt(sessionOutcomes, reviewID, sessionID);
+    if (!drawer || !receipt || sessionID !== selectedSessionId || sessionEnded) return;
+    drawerMode = 'permissions';
+    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
+    openDrawer({ title: 'Decision permissions', icon: 'doc',
+      back: { label: 'session result', reopen: closeDrawer },
+      onClose: () => { if (drawerMode === 'permissions') drawerMode = null; sessionPermissions = null; } });
+    sessionPermissions = { receipt, seq: drawerSeq, auth: handoffGeneration, rows: null,
+      loading: false, error: '', busy: '', mutationError: false, revoked: new Set() };
+    btnDrawerClose?.focus({ preventScroll: true });
+    await window.refreshSessionPermissions();
+  };
+  window.refreshSessionPermissions = async function() {
+    const st = sessionPermissions;
+    if (!currentSessionPermissions(st) || st.loading || st.busy) return;
+    st.loading = true;
+    renderSessionPermissions(st);
+    try {
+      const response = await apiFetch('/decision-scopes');
+      if (!response.ok) throw new Error('Permissions unavailable');
+      const rows = await response.json();
+      if (!validPermissionRecords(rows)) throw new Error('Invalid permission records');
+      if (!currentSessionPermissions(st)) return;
+      Object.assign(st, { rows: rows.filter(r => st.receipt.ids.includes(r.id)), error: '',
+        mutationError: false, readAt: new Date().toISOString() });
+    } catch {
+      if (!currentSessionPermissions(st)) return;
+      st.error = 'unavailable';
+    }
+    if (!currentSessionPermissions(st)) return;
+    st.loading = false;
+    renderSessionPermissions(st);
+    window.saAnnounce(st.error ? 'Permission status unavailable. Last known records retained.' : 'Permission records loaded.');
+  };
+  window.revokeSessionPermission = async function(id) {
+    const st = sessionPermissions;
+    if (!currentSessionPermissions(st) || st.loading || st.busy || st.error || st.mutationError || st.revoked.has(id)) return;
+    const record = st.rows?.find(r => r.id === id);
+    if (!st.receipt.ids.includes(id) || !record || !permissionRecordState(record).revoke) return;
+    st.busy = id;
+    const consequence = record.operation === 'read-connect' ? 'Future matching activity is evaluated under remaining expectations and policies.' : 'Future guard requests are evaluated under remaining permissions and policies.';
+    const confirmed = await window.saConfirm(`Revoke this saved scope for ${record.resource_path}${record.destination ? ' → ' + record.destination : ''}? ${consequence} This does not undo previous access or remediate past exposure.`, { title: 'Revoke permission', okLabel: 'Revoke permission' });
+    if (!currentSessionPermissions(st)) return;
+    if (!confirmed) { st.busy = ''; renderSessionPermissions(st); return; }
+    renderSessionPermissions(st);
+    btnDrawerClose?.focus({ preventScroll: true });
+    try {
+      const response = await apiFetch('/decision-scopes?id=' + encodeURIComponent(id), { method: 'DELETE' });
+      if (!response.ok) throw new Error('Revocation unavailable');
+      const result = await response.json();
+      if (result?.revoked !== true || result.id !== id) throw new Error('Revocation confirmation unavailable');
+      if (!currentSessionPermissions(st)) return;
+      st.revoked.add(id);
+      st.busy = '';
+      window.saAnnounce('Permission revocation saved. The original decision and remaining risk are retained.');
+      await window.refreshSessionPermissions();
+    } catch {
+      if (!currentSessionPermissions(st)) return;
+      Object.assign(st, { busy: '', mutationError: true });
+      renderSessionPermissions(st);
+      window.saAnnounce('Revocation confirmation unavailable. Refresh permissions before retrying.');
+    }
+  };
 
   // Uninspected-egress drill-down: the count in the firewall panel becomes a
   // list the operator can act on (allow the endpoint, read the advisor's
@@ -4706,6 +4857,15 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'session-outcomes-retry':
         if (selectedSessionId) loadSessionOutcomes(selectedSessionId);
+        break;
+      case 'session-permissions':
+        window.openSessionPermissions(d.review, d.session);
+        break;
+      case 'session-permissions-refresh':
+        window.refreshSessionPermissions();
+        break;
+      case 'session-permission-revoke':
+        window.revokeSessionPermission(d.id);
         break;
       case 'session-findings':
         timelineSession = d.id;

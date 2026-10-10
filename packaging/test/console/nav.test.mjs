@@ -9,11 +9,33 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../daemon/internal/api/web_dist');
-const ctx = { window: {} };
+const ctx = { window: {}, URLSearchParams };
 vm.createContext(ctx);
 vm.runInContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), ctx, { filename: 'lib.js' });
 const { resolveConsoleRoute, routeKey, consoleRouteHash, isConsoleRoute, consoleBootState, policyListHTML } = ctx;
 const key = id => routeKey(resolveConsoleRoute(id));
+
+test('record handoffs strip the credential and round-trip exact context on reload', () => {
+  const id = 'session +&?#/π';
+  const raw = new URLSearchParams({ ct: 'fixture-token', tab: 'sessions', session: id, flag: 'flag&other=1', return: 'https://outside.invalid' });
+  const context = ctx.consoleContextFromHash('#' + raw);
+  assert.deepEqual({ ...context }, { route: 'sessions', session: id, flag: 'flag&other=1', incident: '', file: '' });
+  const hash = ctx.consoleContextHash(context);
+  assert.ok(!hash.includes('ct=') && !hash.includes('fixture-token') && !hash.includes('return'));
+  assert.deepEqual({ ...ctx.consoleContextFromHash(hash) }, { ...context });
+  assert.equal(key(hash), 'sessions/board');
+  assert.equal(isConsoleRoute(hash), true);
+});
+
+test('legacy tab and file handoffs remain scoped to the console', () => {
+  for (const route of ['egress', 'findings', 'sessions/events']) {
+    assert.equal(ctx.consoleContextFromHash('#ct=fixture&tab=' + encodeURIComponent(route)).route, route);
+  }
+  const context = ctx.consoleContextFromHash('#ct=fixture&file=%2Fworkspace%2Fa%2Bb.env');
+  assert.equal(context.file, '/workspace/a+b.env');
+  assert.equal(ctx.consoleContextFromHash('#ct=fixture&tab=https%3A%2F%2Foutside.invalid').route, '');
+  assert.equal(ctx.consoleContextFromHash('#ct=fixture&flag=f&incident=i').incident, '', 'one detail target per handoff');
+});
 
 test('every old tab id resolves to its new tab[/sub]', () => {
   const want = {

@@ -133,6 +133,8 @@ type Subscriber struct {
 	activeKind     string
 	activeSubject  string
 	activeTool     string
+	activeState    string
+	timeoutMS      int64
 	startedAt      time.Time
 	lastDurationMS int64
 	inputBytes     int
@@ -170,6 +172,7 @@ type HealthSnapshot struct {
 	ActiveSubject  string    `json:"active_subject,omitempty"`
 	ActiveTool     string    `json:"active_tool,omitempty"`
 	ElapsedMS      int64     `json:"elapsed_ms,omitempty"`
+	TimeoutMS      int64     `json:"timeout_ms,omitempty"`
 	LastDurationMS int64     `json:"last_duration_ms,omitempty"`
 	InputBytes     int       `json:"input_bytes,omitempty"`
 	ToolCalls      int       `json:"tool_calls,omitempty"`
@@ -197,7 +200,8 @@ func (s *Subscriber) Health() HealthSnapshot {
 		h.State = "paused"
 		h.RetryAt = s.circuitOpen.Add(breakerCooldown)
 	} else if !s.startedAt.IsZero() {
-		h.State = "answering"
+		h.State = s.activeState
+		h.TimeoutMS = s.timeoutMS
 		h.ElapsedMS = time.Since(s.startedAt).Milliseconds()
 		if s.activeTool != "" {
 			h.State = "inspecting"
@@ -412,8 +416,19 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 	if s.circuitIsOpen() {
 		return
 	}
+	timeout := s.client.Timeout
+	switch t.kind {
+	case "plan", "worktree", "project", "egress":
+		timeout = s.onRequest.Timeout
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout {
+		timeout = max(0, time.Until(deadline))
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	s.mu.Lock()
 	s.activeKind, s.activeSubject, s.startedAt = t.kind, t.subjectID, time.Now()
+	s.activeState, s.timeoutMS = "preparing", timeout.Milliseconds()
 	s.activeTool, s.inputBytes, s.toolCalls = "", 0, 0
 	s.mu.Unlock()
 	s.debugf("task start kind=%s queued=%d", t.kind, len(s.queue))
@@ -422,6 +437,7 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 		s.mu.Lock()
 		s.lastDurationMS = time.Since(s.startedAt).Milliseconds()
 		s.activeKind, s.activeSubject, s.activeTool = "", "", ""
+		s.activeState, s.timeoutMS = "", 0
 		s.startedAt = time.Time{}
 		duration, bytes, calls := s.lastDurationMS, s.inputBytes, s.toolCalls
 		s.mu.Unlock()

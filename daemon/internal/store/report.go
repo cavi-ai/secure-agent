@@ -141,14 +141,17 @@ func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr
 				tools[name] = t
 			}
 			t.Count++
-			t.DurationMs += e.DurationMs
+			if !addReportInt64(&t.DurationMs, e.DurationMs) {
+				return SessionReport{}, false, errors.New("session report tool duration overflow")
+			}
 			if e.ToolStatus == "error" {
 				t.Errors++
 			}
 		case event.KindModelCall:
 			rep.ModelCalls++
-			rep.TokensIn += e.TokensIn
-			rep.TokensOut += e.TokensOut
+			if !addReportInt64(&rep.TokensIn, e.TokensIn) || !addReportInt64(&rep.TokensOut, e.TokensOut) {
+				return SessionReport{}, false, errors.New("session report token total overflow")
+			}
 			rep.CostUSD += e.CostUSD
 			if math.IsInf(rep.CostUSD, 0) || math.IsNaN(rep.CostUSD) {
 				return SessionReport{}, false, errors.New("nonfinite session report cost")
@@ -160,8 +163,9 @@ func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr
 				models[name] = m
 			}
 			m.Calls++
-			m.TokensIn += e.TokensIn
-			m.TokensOut += e.TokensOut
+			if !addReportInt64(&m.TokensIn, e.TokensIn) || !addReportInt64(&m.TokensOut, e.TokensOut) {
+				return SessionReport{}, false, errors.New("session report model token overflow")
+			}
 			m.CostUSD += e.CostUSD
 			if math.IsInf(m.CostUSD, 0) || math.IsNaN(m.CostUSD) {
 				return SessionReport{}, false, errors.New("nonfinite session model cost")
@@ -231,6 +235,15 @@ func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr
 		rep.Interventions = []model.InterventionReceipt{}
 	}
 	return rep, true, nil
+}
+
+// addReportInt64 leaves the sum unchanged if the addition would overflow.
+func addReportInt64(sum *int64, value int64) bool {
+	if (value > 0 && *sum > math.MaxInt64-value) || (value < 0 && *sum < math.MinInt64-value) {
+		return false
+	}
+	*sum += value
+	return true
 }
 
 // sessionEventsOldestFirst reads up to reportEventCap of one session's events

@@ -660,6 +660,17 @@ struct SettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
             Button("Open Secure Agent chat") { state.openDashboard(tab: "agent") }
                 .disabled(state.dashboardUnavailableReason != nil)
+            DisclosureGroup("Tools and diagnostics") {
+                Text("The agent can read built-in procedures and a bounded snapshot of recorded findings and related session activity. It cannot read arbitrary files or execute a tool command.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("System agent debug logging", isOn: Binding(
+                    get: { setup.systemAgentDebug },
+                    set: { setup.setSystemAgentDebug($0) }
+                ))
+                Text("Logs include tool names, sizes and timings. Prompts, evidence, arguments and replies are excluded.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Open daemon log") { setup.openSystemAgentLog() }
+            }
         }
     }
 
@@ -1402,7 +1413,7 @@ enum ESStage: CaseIterable {
     case wrongLocation, legacyInstalled, notRegistered, requiresApproval, needsGrant, needsRegrant, notFound, active
 
     /// The Full Disk Access step, shown under C and D.
-    static let grantInstruction = "In the pane that just opened: turn on Secure Agent. This card turns green automatically — nothing else to do."
+    static let grantInstruction = FileTelemetryPermissionGuidance.instruction
 
     /// States that wait on a switch in System Settings.
     var awaitsUser: Bool {
