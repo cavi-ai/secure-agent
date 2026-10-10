@@ -262,6 +262,64 @@ def grouped_sessions(now_ms=None, *, ended=False, sidecar=False):
     ]}
 
 
+def scoped_review(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "payloads": {"/reviews": {"reviews": [{
+        "id": "review-scope", "revision": 3, "review_state": "unreviewed", "count": 1,
+        "evidence_available": True, "evidence_flag_available": False,
+        "context": {"rule": "sensitive-read-then-connect", "session_id": "sess-claude-1",
+                    "workspace": "/Users/dev/workspace/api-service", "resources": ["/work/.env"],
+                    "destinations": ["api.example.com:443"]},
+        "available_scopes": [{"kind": "once"}, {"kind": "session"},
+                             {"kind": "exact", "expiry": "24h"}, {"kind": "exact", "expiry": "7d"}],
+        "source_ids": ["flag-1"], "incident_ids": [],
+        "assessment": {"risk": "high", "control": "observed", "reason": "Recorded read and connection"},
+    }], "degraded": False}}}
+
+
+def routine_review(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "payloads": {"/routine": [{
+        "key": "routine|gh|/Users/dev/.config", "reader": "gh", "area": "~/.config/gh/hosts.yml",
+        "files": 1, "count": 145, "agents": ["claude", "codex", "openclaw"],
+        "destinations": [{"org": "GitHub", "host": "140.82.114.6", "count": 140}],
+        "destination_count": 3, "expectable": 143,
+        "disposition": {"state": "warning", "text": "Needs a look", "why": "w"},
+        "summary": "gh read ~/.config/gh/hosts.yml, then connected to GitHub and 2 more — 145 times across 3 agents.",
+        "actions": [
+            {"id": "expect-all", "label": "Treat as routine",
+             "consequence": "Each exact reader, file and destination these 143 flags cite is marked expected.",
+             "method": "POST", "path": "/expected", "body": {"flag_ids": ["r1", "r2"]}},
+            {"id": "dismiss-all", "label": "Dismiss all 145", "consequence": "c",
+             "method": "POST", "path": "/flags/acknowledge", "body": {"flag_ids": ["r1", "r2", "r3"]}},
+        ],
+        "flag_ids": ["r1", "r2", "r3"],
+    }]}}
+
+
+def organization_allow(now_ms=None):
+    now, _ = _clock(now_ms)
+    hosts = ["142.250.1.1", "2607:f8b0:4002:c08::54", "uf-in-f84.1e100.net"]
+    explain = {
+        "what": "Cursor read a sensitive file in your home directory, then reached Google 2 s later.",
+        "subject": {"path": "/Users/dev/.docker/config.json", "display": "~/.docker/config.json",
+                    "basename": "config.json", "category": "other_sensitive",
+                    "category_label": "sensitive file", "owner_label": "home directory"},
+        "egress": [{"host": host, "port": 443, "org": "Google", "kind": "ip", "allowlisted": False,
+                    "gap_seconds": 2} for host in hosts],
+        "context": {"harness": "cursor"},
+        "disposition": {"state": "warning", "text": "Needs a look",
+                        "why": "A connection was observed to Google near the read."},
+        "actions": [
+            *[{"id": "allow-host", "label": f"Allow {host} for cursor", "consequence": "c",
+               "method": "POST", "path": "/allowlist", "body": {"agent": "cursor", "host": host}} for host in hosts],
+            {"id": "dismiss", "label": "Dismiss this flag", "consequence": "c",
+             "method": "POST", "path": "/flags/acknowledge", "body": {"flag_id": "flag-1"}},
+        ],
+    }
+    return {"now": now, "patches": [{"route": "/flags", "path": [{"id": "flag-1"}, "explain"], "value": explain}]}
+
+
 def payload_outcomes(now_ms=None):
     now, iso = _clock(now_ms)
     payloads = {}

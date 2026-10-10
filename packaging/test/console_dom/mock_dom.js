@@ -2666,9 +2666,6 @@
   }
   // policylists: the Policy tab, opened once telemetry has landed.
   if (scenarios.has('scopedpermission')) {
-    data['/reviews']={reviews:[{id:'review-scope',revision:3,review_state:'unreviewed',count:1,evidence_available:true,evidence_flag_available:false,
-      context:{rule:'sensitive-read-then-connect',session_id:'sess-claude-1',workspace:'/Users/dev/workspace/api-service',resources:['/work/.env'],destinations:['api.example.com:443']},
-      available_scopes:[{kind:'once'},{kind:'session'},{kind:'exact',expiry:'24h'},{kind:'exact',expiry:'7d'}],source_ids:['flag-1'],incident_ids:[],assessment:{risk:'high',control:'observed',reason:'Recorded read and connection'}}],degraded:false};
     setTimeout(()=>openTab('findings'),4000);
     setTimeout(()=>document.querySelector('#flags-list [data-decision="expect"][data-scope="exact"][data-expiry="24h"]')?.click(),7000);
     setTimeout(()=>document.getElementById('confirm-ok')?.click(),7500);
@@ -2693,19 +2690,8 @@
   // ahead of the agent groups; Treat as routine is confirmed and sends the
   // served flag ids; the card leaves before the daemon answers.
   if (scenarios.has('routinedemo')) {
-    const key = 'routine|gh|/Users/dev/.config';
+    const key = data['/routine'][0].key;
     setTimeout(() => openTab('findings'), 1500);
-    data['/routine'] = [{
-      key, reader: 'gh', area: '~/.config/gh/hosts.yml', files: 1, count: 145, agents: ['claude', 'codex', 'openclaw'],
-      destinations: [{ org: 'GitHub', host: '140.82.114.6', count: 140 }], destination_count: 3, expectable: 143,
-      disposition: { state: 'warning', text: 'Needs a look', why: 'w' },
-      summary: 'gh read ~/.config/gh/hosts.yml, then connected to GitHub and 2 more — 145 times across 3 agents.',
-      actions: [
-        { id: 'expect-all', label: 'Treat as routine', consequence: 'Each exact reader, file and destination these 143 flags cite is marked expected.', method: 'POST', path: '/expected', body: { flag_ids: ['r1', 'r2'] } },
-        { id: 'dismiss-all', label: 'Dismiss all 145', consequence: 'c', method: 'POST', path: '/flags/acknowledge', body: { flag_ids: ['r1', 'r2', 'r3'] } },
-      ],
-      flag_ids: ['r1', 'r2', 'r3'],
-    }];
     setTimeout(() => {
       const card = document.querySelector(`#flags-list [data-routine-key="${CSS.escape(key)}"]`);
       const queued = !!document.querySelector(`#attention-list [data-routine-key="${CSS.escape(key)}"]`);
@@ -2718,19 +2704,6 @@
   // orgallowdemo: flag-1 reached three Google addresses; Findings open, press
   // its one "Allow Google" choice from the More menu.
   if (scenarios.has('orgallowdemo')) {
-    const f1 = data['/flags'].find(f => f.id === 'flag-1');
-    const hosts = ['142.250.1.1', '2607:f8b0:4002:c08::54', 'uf-in-f84.1e100.net'];
-    f1.explain = {
-      what: 'Cursor read a sensitive file in your home directory, then reached Google 2 s later.',
-      subject: { path: '/Users/dev/.docker/config.json', display: '~/.docker/config.json', basename: 'config.json', category: 'other_sensitive', category_label: 'sensitive file', owner_label: 'home directory' },
-      egress: hosts.map(host => ({ host, port: 443, org: 'Google', kind: 'ip', allowlisted: false, gap_seconds: 2 })),
-      context: { harness: 'cursor' },
-      disposition: { state: 'warning', text: 'Needs a look', why: 'A connection was observed to Google near the read.' },
-      actions: [
-        ...hosts.map(host => ({ id: 'allow-host', label: `Allow ${host} for cursor`, consequence: 'c', method: 'POST', path: '/allowlist', body: { agent: 'cursor', host } })),
-        { id: 'dismiss', label: 'Dismiss this flag', consequence: 'c', method: 'POST', path: '/flags/acknowledge', body: { flag_id: 'flag-1' } },
-      ],
-    };
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const card = document.querySelector('#flags-list .row-body[data-flag-id="flag-1"]');
