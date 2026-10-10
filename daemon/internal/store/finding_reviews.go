@@ -361,6 +361,17 @@ func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
 	if err != nil {
 		return err
 	}
+	sourceFlags := make([]model.Flag, 0, len(r.SourceIDs))
+	for _, id := range r.SourceIDs {
+		f, found, err := s.getFlagResultLocked(id)
+		if err != nil {
+			return err
+		}
+		if !found || !reviewContextMatchesFlag(*r, f) {
+			return ErrReviewConflict
+		}
+		sourceFlags = append(sourceFlags, f)
+	}
 	r.EvidenceAvailable = len(r.SourceIDs) > 0
 	var available int
 	if err = s.db.QueryRow(`SELECT COUNT(*) FROM flags WHERE id=?`, r.EvidenceFlagID).Scan(&available); err != nil {
@@ -371,13 +382,9 @@ func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
 	if r.EvidenceAvailable && r.ReviewState != "closed_reported" && (r.Decision == nil || r.Decision.Action != "expect" || r.Decision.Revision != r.Revision) {
 		r.AvailableScopes = []model.ScopeChoice{{Kind: "once"}}
 		complete := true
-		for _, id := range r.SourceIDs {
-			f, ok, readErr := s.getFlagResultLocked(id)
-			if readErr != nil {
-				return readErr
-			}
+		for _, f := range sourceFlags {
 			coordinates, e := model.ReadConnectScopes(f)
-			if !ok || e != nil {
+			if e != nil {
 				complete = false
 				break
 			}
@@ -541,7 +548,31 @@ func (s *Store) findingReviewIDLocked(flagID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if !reviewContextMatchesFlag(r, f) {
+		return "", ErrReviewConflict
+	}
 	return r.ID, nil
+}
+
+// A membership row cannot transfer evidence between review contexts. Promotion
+// collisions keep stable review IDs while isolating their earlier decisions.
+func reviewContextMatchesFlag(r model.ReviewRecord, f model.Flag) bool {
+	c := r.Context
+	switch c.Attribution {
+	case "source-only":
+		return c.Key() == model.ContextForReview(f, false).Key()
+	case "stored-session":
+		return c.Key() == model.ContextForReview(f, true).Key()
+	case "promoted-source":
+		want := model.ContextForReview(f, true)
+		if want.Attribution != "stored-session" || c.SourceID != r.ID {
+			return false
+		}
+		c.Attribution, c.SourceID = want.Attribution, want.SourceID
+		return c.Key() == want.Key()
+	default:
+		return false
+	}
 }
 
 func (s *Store) DecideFindingReview(req model.ReviewDecisionRequest) (receipt model.ReviewDecisionReceipt, err error) {
@@ -576,7 +607,7 @@ func (s *Store) DecideFindingReview(req model.ReviewDecisionRequest) (receipt mo
 		return receipt, e
 	}
 	for _, v := range sources {
-		if model.ReviewEvidenceKey(v.flag, model.AssessFinding(v.flag)) != v.key {
+		if !reviewContextMatchesFlag(r, v.flag) || model.ReviewEvidenceKey(v.flag, model.AssessFinding(v.flag)) != v.key {
 			return receipt, ErrReviewConflict
 		}
 	}
