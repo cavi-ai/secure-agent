@@ -406,7 +406,7 @@ def main():
         dom_memory_race = dump_dom(chrome, tmp, "?memoryrace")
         dom_trace_reactivation = dump_dom(chrome, tmp, "?tracereactivation")
         dom_pill = dump_dom(chrome, tmp, "?pilldemo")
-        dom_quiet = dump_dom(chrome, tmp, "?quietdemo")
+        dom_quiet = dump_dom(chrome, tmp, "?quietdemo", fixture=payload_cases.quiet_sessions())
         dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
         dom_coverage = dump_dom(chrome, tmp, "?coveragedemo", fixture={'patches': [{'route': '/posture', 'path': ['state'], 'value': 'attention'}, {'route': '/posture', 'path': ['needs_you'], 'value': 0}, {'route': '/posture', 'path': ['items'], 'value': []}, {'route': '/posture', 'path': ['groups'], 'value': []}, {'route': '/posture', 'path': ['summary'], 'value': 'No decisions pending. Monitoring coverage needs attention.'}]})
         dom_session_coverage = dump_dom(chrome, tmp, "?sessionvisibility", fixture=payload_cases.session_coverage())
@@ -473,7 +473,7 @@ def main():
         dom_wtday = dump_dom(chrome, tmp, "?tab=worktrees&reclaimdaydemo")
         dom_wtday_midnight = dump_dom(chrome, tmp, "?tab=worktrees&reclaimdaydemo&cleanupmidnight")
         dom_wtsearch = dump_dom(chrome, tmp, "?tab=worktrees&wtsearchdemo")
-        dom_wtadopt = dump_dom(chrome, tmp, "?tab=worktrees&adoptdemo")
+        dom_wtadopt = dump_dom(chrome, tmp, "?tab=worktrees", fixture=payload_cases.running_worktree_removal())
         dom_wtcadence = dump_dom(chrome, tmp, "?tab=worktrees&removecadence")
         dom_clutteradvise = dump_dom(chrome, tmp, "?tab=worktrees&clutteradvise")
         dom_wtgroup = dump_dom(chrome, tmp, "?tab=worktrees&groupdemo")
@@ -503,7 +503,7 @@ def main():
         dom_bulk = dump_dom(chrome, tmp, "?bulkdemo&logsclosed")
         dom_empty = dump_dom(chrome, tmp, "?emptyposture", fixture={'patches': [{'route': '/posture', 'path': ['state'], 'value': 'all-clear'}, {'route': '/posture', 'path': ['needs_you'], 'value': 0}, {'route': '/posture', 'path': ['coverage_count'], 'value': 0}, {'route': '/posture', 'path': ['coverage_items'], 'value': []}, {'route': '/posture', 'path': ['items'], 'value': []}, {'route': '/posture', 'path': ['groups'], 'value': []}, {'route': '/posture', 'path': ['summary'], 'value': 'Agents monitored, no action needed'}]})
         dom_posturemore = dump_dom(chrome, tmp, "?posturemoredemo")
-        dom_fold = dump_dom(chrome, tmp, "?folddemo")
+        dom_fold = dump_dom(chrome, tmp, "?folddemo", fixture=payload_cases.firewall_fold())
         dom_procwidth = dump_dom(chrome, tmp, "?procwidthdemo", window_size=(1440, 900))
 
         # --- session-first tab (P3) ---
