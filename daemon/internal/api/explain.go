@@ -61,9 +61,10 @@ var guardRuleForCategory = map[string]string{
 // per request so a list costs one status probe and one session read per
 // session, not one per flag.
 type explainEnv struct {
-	home     string
-	live     map[int32]AgentSummary
-	sessions map[string]*model.Session
+	home        string
+	live        map[int32]AgentSummary
+	sessions    map[string]*model.Session
+	incidentIDs map[string]string
 }
 
 func (a *API) newExplainEnv() *explainEnv {
@@ -143,17 +144,18 @@ func (a *API) handleFlagExplain(w http.ResponseWriter, r *http.Request) {
 // stampExplains sets Explain on the first explainListCap flags, including
 // reviewed history, without network lookups.
 func (a *API) stampExplains(flags []model.Flag) {
-	var env *explainEnv
-	n := 0
-	for i := range flags {
-		if n >= explainListCap {
-			continue
-		}
-		if env == nil {
-			env = a.newExplainEnv()
-		}
+	n := min(len(flags), explainListCap)
+	if n == 0 {
+		return
+	}
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = flags[i].ID
+	}
+	env := a.newExplainEnv()
+	env.incidentIDs, _ = a.store.IncidentIDsForFlags(ids)
+	for i := 0; i < n; i++ {
 		flags[i].Explain = a.explainFlagIn(flags[i], false, env)
-		n++
 	}
 }
 
@@ -165,6 +167,13 @@ func (a *API) explainFlag(f model.Flag, full bool) *model.FlagExplain {
 }
 
 func (a *API) explainFlagIn(f model.Flag, full bool, env *explainEnv) *model.FlagExplain {
+	if env.incidentIDs == nil {
+		env.incidentIDs = map[string]string{}
+	}
+	if _, seen := env.incidentIDs[f.ID]; !seen {
+		links, _ := a.store.IncidentIDsForFlags([]string{f.ID})
+		env.incidentIDs[f.ID] = links[f.ID]
+	}
 	assessment := assessmentForFlag(f)
 	ex := &model.FlagExplain{Disposition: dispositionFor(f), Assessment: &assessment}
 	sess := a.session(env, f.SessionID)
@@ -685,7 +694,7 @@ func (a *API) explainActions(f model.Flag, ex *model.FlagExplain, env *explainEn
 			acts = append(acts, act)
 		}
 	}
-	if id, ok := a.store.IncidentIDForFlag(f.ID); ok {
+	if id := env.incidentIDs[f.ID]; id != "" {
 		acts = append(acts, model.ExplainAction{
 			ID: "open-incident", Label: "Open incident report",
 			Consequence: "Shows the incident's remediation checklist with rotation advice; changes nothing.",
