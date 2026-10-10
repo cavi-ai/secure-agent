@@ -191,10 +191,22 @@ func TestIncidentAggregationAcceptsLegacyMissingFlagIDs(t *testing.T) {
 	if _, err := s.db.Exec(`UPDATE incidents SET flag_ids=NULL WHERE id='incident'`); err != nil {
 		t.Fatal(err)
 	}
-	if report, ok := s.AggregateIntoIncident("incident", "second", now); !ok || report.ID != "incident" || report.AggregateCount != 2 {
+	if report, ok := s.AggregateIntoIncident("incident", "first", now.Add(time.Hour)); !ok || report.AggregateCount != 1 || report.LastFlagAt != nil {
+		t.Fatalf("legacy replay changed original evidence: %+v, %v", report, ok)
+	}
+	if report, err := s.GetIncident("incident"); err != nil || report.AggregateCount != 1 || report.LastFlagAt != nil {
+		t.Fatalf("legacy replay changed saved report: %+v, %v", report, err)
+	}
+	latest := now.Add(time.Minute)
+	if report, ok := s.AggregateIntoIncident("incident", "second", latest); !ok || report.ID != "incident" || report.AggregateCount != 2 || report.LastFlagAt == nil || !report.LastFlagAt.Equal(latest) {
 		t.Fatalf("legacy evidence failed to aggregate: %+v, %v", report, ok)
 	}
 	if id, ok := s.IncidentIDForFlag("second"); !ok || id != "incident" {
 		t.Fatal("legacy aggregation did not save the new evidence link")
+	}
+	for _, flagID := range []string{"first", "second"} {
+		if report, ok := s.AggregateIntoIncident("incident", flagID, now.Add(time.Hour)); !ok || report.AggregateCount != 2 || report.LastFlagAt == nil || !report.LastFlagAt.Equal(latest) {
+			t.Fatalf("legacy replay %s changed aggregated evidence: %+v, %v", flagID, report, ok)
+		}
 	}
 }
