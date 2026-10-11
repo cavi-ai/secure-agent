@@ -9,12 +9,13 @@ import (
 
 // PostureItem is one thing the operator may need to act on.
 type PostureItem struct {
-	Kind      string `json:"kind"` // flag | incident | guard_pending | resource_pressure | coverage kinds
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Severity  int    `json:"severity"` // 3 critical, 2 high, 1 medium, 0 info
-	Detail    string `json:"detail,omitempty"`
-	Timestamp string `json:"ts,omitempty"`
+	Kind       string                   `json:"kind"` // flag | incident | guard_pending | resource_pressure | coverage kinds
+	ID         string                   `json:"id"`
+	Title      string                   `json:"title"`
+	Severity   int                      `json:"severity"` // 3 critical, 2 high, 1 medium, 0 info
+	Detail     string                   `json:"detail,omitempty"`
+	Timestamp  string                   `json:"ts,omitempty"`
+	Assessment *model.FindingAssessment `json:"assessment,omitempty"`
 }
 
 // Posture is the single headline answer: "do I need to look at this machine,

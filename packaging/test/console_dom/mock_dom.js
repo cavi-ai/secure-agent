@@ -903,6 +903,7 @@
     if (scenarios.has('recover')) {
       setTimeout(() => {
         stamp('malformed-before-recovery', document.getElementById('count-agents').textContent + ' ' +
+          document.getElementById('posture-health').textContent + ' ' +
           Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
         malformedRecovered = true;
         document.getElementById('posture-retry').click();

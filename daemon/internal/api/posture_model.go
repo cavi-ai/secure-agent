@@ -132,7 +132,13 @@ func firstEvidence(ev []model.EvidenceItem) string {
 func criticalSummary(items []PostureItem) string {
 	for _, it := range items {
 		if it.Severity >= 3 {
-			return it.Title + " — act now."
+			if it.Assessment != nil && it.Assessment.Reason != "" {
+				return it.Assessment.Reason
+			}
+			if it.Kind == "incident" {
+				return it.Title + " — review the incident report."
+			}
+			return it.Title + " — review the recorded evidence."
 		}
 	}
 	return attentionSummary(items)

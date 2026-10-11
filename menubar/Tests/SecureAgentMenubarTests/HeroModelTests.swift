@@ -40,6 +40,25 @@ final class HeroModelTests: XCTestCase {
         PostureModel(state: state, needsYou: state == "all-clear" ? 0 : 1, summary: summary, connected: true)
     }
 
+    func testPostureAssessmentIsVisibleWithoutASeparateFlagRead() throws {
+        let raw = #"{"state":"critical","needs_you":1,"summary":"Exposure and control outcome are unknown.","connected":true,"items":[{"kind":"review","id":"review","title":"Recorded finding","severity":3,"assessment":{"evidence_basis":[],"risk":"unknown","control":"unknown","residual_risk":"unknown","review_state":"unreviewed","reason":"Exposure and control outcome are unknown.","limits":["Delivery is not established."]}}]}"#
+        let s = state(flags: [])
+        s.seedPostureForTesting(try JSONDecoder().decode(PostureModel.self, from: Data(raw.utf8)))
+        let hero = ConsoleView(state: s, scrollable: false).heroModel
+        XCTAssertEqual(hero.title, "Urgent review")
+        XCTAssertTrue(hero.flagLines.contains { $0.contains("Risk unknown") })
+        XCTAssertTrue(hero.flagLines.contains { $0.contains("Control outcome unknown") })
+        XCTAssertTrue(hero.flagLines.contains("Delivery is not established."))
+        XCTAssertEqual(hero.buttonLabel, "Open in console")
+    }
+
+    func testHeroUsesTheHeadlineFindingInsteadOfAnotherNewerFlag() throws {
+        let s = state(flags: [served("newer", disposition: "critical", text: "Act now"), served("headline", disposition: "critical", text: "Act now")])
+        let raw = #"{"state":"critical","needs_you":2,"summary":"Headline finding","connected":true,"items":[{"kind":"flag","id":"headline","title":"Headline finding","severity":3}]}"#
+        s.seedPostureForTesting(try JSONDecoder().decode(PostureModel.self, from: Data(raw.utf8)))
+        XCTAssertEqual(ConsoleView(state: s, scrollable: false).heroModel.flag?.id, "headline")
+    }
+
     func testAssessmentOverridesLegacyBenignAndReviewDoesNotEraseRisk() throws {
         let data = Data(#"{"id":"assessed","rule":"sensitive-read-then-connect","severity":3,"ts":"","pid":901,"agent":"cursor","evidence":[],"acknowledged":true,"explain":{"what":"Sensitive tool read.","disposition":{"state":"benign-likely","text":"Likely benign","why":""},"actions":[{"id":"allow-host","label":"Allow","consequence":"","method":"POST","path":"/allowlist","recommended":true}],"assessment":{"evidence_basis":["model-visible-read"],"risk":"critical","control":"unknown","residual_risk":"model-exposure","review_state":"reviewed","reason":"Model-visible sensitive read.","limits":["Transmission not established."],"advice":{"assessment":"benign","confidence":0.99,"rationale":"Routine traffic."}}}}"#.utf8)
         let flag = try JSONDecoder().decode(FlagModel.self, from: data)
@@ -70,7 +89,7 @@ final class HeroModelTests: XCTestCase {
         let s = state(flags: [try assessed("b1", risk: "high", disposition: "benign-likely")])
         s.seedPostureForTesting(posture("attention", "No decisions pending. Monitoring coverage needs attention."))
         let hero = ConsoleView(state: s, scrollable: false).heroModel
-        XCTAssertNotEqual(hero.title, "Action needed")
+        XCTAssertNotEqual(hero.title, "Urgent review")
         XCTAssertEqual(hero.title, "Needs a look")
         XCTAssertEqual(hero.color, .warn)
         XCTAssertNil(hero.flag)
@@ -98,7 +117,7 @@ final class HeroModelTests: XCTestCase {
         let s = state(flags: [served("c1", disposition: "critical", text: "Act now")])
         s.seedPostureForTesting(posture("critical", "Agent read a secret, then connected out — act now."))
         let hero = ConsoleView(state: s, scrollable: false).heroModel
-        XCTAssertEqual(hero.title, "Action needed")
+        XCTAssertEqual(hero.title, "Urgent review")
         XCTAssertEqual(hero.color, .bad)
         XCTAssertEqual(hero.icon, "exclamationmark.shield.fill")
         XCTAssertEqual(hero.subtitle, "Agent read a secret, then connected out — act now.")
@@ -190,7 +209,7 @@ final class HeroModelTests: XCTestCase {
     func testCriticalUnactedWithoutPostureStillEscalates() {
         let s = state(flags: [flag(id: "f1", sev: 3, acked: false)])
         let hero = ConsoleView(state: s, scrollable: false).heroModel
-        XCTAssertEqual(hero.title, "Action needed")
+        XCTAssertEqual(hero.title, "Urgent review")
         XCTAssertEqual(hero.buttonLabel, "Open in console")
     }
 

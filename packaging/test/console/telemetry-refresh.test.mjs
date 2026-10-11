@@ -41,7 +41,7 @@ function fixture(fetch) {
     telemetryData: { status: { uptime: 'prior' }, flags: [], events: [], guardPending: [{ id: 'prior' }], costs: { refreshing: true } },
     failedEndpoints: new Set(), noteEndpointFailure: key => failures.push(key),
     prevUptimeSec: 0, parseUptimeSec: () => 1, showToast() {},
-    renderReportHealth() {}, loadSpend() {}, sparkIngestEvents() {}, reconcileRetriage() {},
+    renderReportHealth() {}, renderSnapshotHealth() {}, loadSpend() {}, sparkIngestEvents() {}, reconcileRetriage() {},
     isFlagsFiltered: () => false, isEventsFiltered: () => false, homeGroupOpen: () => false,
     flagsQuery: () => '/flags?fixture', eventsQuery: () => '/events?fixture',
     setConnState: state => connections.push(state),

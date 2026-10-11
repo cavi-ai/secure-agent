@@ -597,13 +597,33 @@ public struct PostureModel: Codable, Sendable, Equatable {
     public let needsYou: Int
     public let summary: String
     public let connected: Bool
+    public let items: [PostureItemModel]?
+
+    public init(state: String, needsYou: Int, summary: String, connected: Bool, items: [PostureItemModel]? = nil) {
+        self.state = state
+        self.needsYou = needsYou
+        self.summary = summary
+        self.connected = connected
+        self.items = items
+    }
+
+    public var criticalItem: PostureItemModel? { items?.first { $0.severity >= 3 } }
 
     enum CodingKeys: String, CodingKey {
         case state
         case needsYou = "needs_you"
         case summary
         case connected
+        case items
     }
+}
+
+public struct PostureItemModel: Codable, Sendable, Equatable {
+    public let kind: String
+    public let id: String
+    public let title: String
+    public let severity: Int
+    public let assessment: FindingAssessmentModel?
 }
 
 /// The daemon's advisor health snapshot (`advisor_health` in /status).

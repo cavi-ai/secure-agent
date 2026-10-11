@@ -251,6 +251,10 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 	}
 	items := []PostureItem{}
 	add := func(g *AttentionGroup, headline PostureItem, item AttentionItem) {
+		headline.Assessment = item.Assessment
+		if item.Assessment != nil && item.Assessment.Risk == "unknown" {
+			headline.Title = "Finding needs evidence review"
+		}
 		items = append(items, headline)
 		g.Items = append(g.Items, item)
 	}

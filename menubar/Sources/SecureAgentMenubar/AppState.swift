@@ -1294,9 +1294,13 @@ public final class AppState: ObservableObject {
         return .openConsole(tab: "findings")
     }
 
-    /// The flag the hero names: the newest unacted critical one (/flags is
-    /// newest first).
-    public var heroFlag: FlagModel? { unactedFlags.first }
+    /// Match the daemon's headline before falling back for older daemons.
+    public var heroFlag: FlagModel? {
+        if let item = posture?.criticalItem {
+            return item.kind == "flag" ? unactedFlags.first { $0.id == item.id } : nil
+        }
+        return unactedFlags.first
+    }
 
     /// The in-place action the hero ran last and how it went.
     public struct InPlaceAction: Equatable {

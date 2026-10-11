@@ -1065,7 +1065,8 @@ function renderSessionBoard() {
 function postureItemHTML(it) {
   const sev = it.severity >= 3 ? 's3' : it.severity === 2 ? 's2' : 's1';
   let link = '';
-  if (it.kind === 'flag') link = `<a href="#" data-action="goto-tab" data-tab="home" data-group="findings">view evidence</a>`;
+  if (it.kind === 'flag') link = `<a href="#" data-action="open-flag" data-id="${escapeHTML(it.id)}">view evidence</a>`;
+  if (['review', 'pattern', 'routine'].includes(it.kind)) link = `<a href="#" data-action="goto-tab" data-tab="home">review decision</a>`;
   if (it.kind === 'incident') link = `<a href="#" data-action="open-incident" data-id="${escapeHTML(it.id)}">view report</a>`;
   if (it.kind === 'guard_pending') link = `<span>resolve it in the menu bar app</span>`;
   if (it.kind === 'collector_down') link = `<span>— ${escapeHTML(it.detail || 'collector stopped')} <a href="#" data-action="open-fda">open Full Disk Access settings</a></span>`;
@@ -1112,7 +1113,7 @@ function renderPosture() {
   const prevState = banner.dataset.announcedState || '';
   const nextState = view.state;
   if (nextState !== prevState && (nextState === 'critical' || nextState === 'attention')) {
-    (window.saAnnounce || function(){})((nextState === 'critical' ? 'Critical: ' : 'Attention: ') + view.summary);
+    (window.saAnnounce || function(){})((nextState === 'critical' ? 'Urgent review: ' : 'Attention: ') + view.summary);
   }
   banner.dataset.announcedState = nextState;
   stateEl.textContent = view.title;
