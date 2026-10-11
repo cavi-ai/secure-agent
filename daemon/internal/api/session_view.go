@@ -2,10 +2,23 @@ package api
 
 import (
 	"slices"
+	"strconv"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
+
+const sessionTimelineDefaultLimit = 500
+
+// sessionTimelineLimit is the trace page size. A missing or non-positive
+// limit keeps the default so the route does not own ordering policy.
+func sessionTimelineLimit(raw string) int {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return sessionTimelineDefaultLimit
+	}
+	return n
+}
 
 type sessionTimelineStore interface {
 	QueryEventsResult(store.EventFilter) ([]event.Event, error)

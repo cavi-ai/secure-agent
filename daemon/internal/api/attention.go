@@ -285,7 +285,7 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 			continue
 		}
 		coveredReviews[r.ID] = true
-		severity := assessmentSeverity(r.Assessment, r.Severity)
+		severity := model.GroupFindingSeverity(r.Assessment, r.Severity)
 		if severity < 3 {
 			continue
 		}
@@ -310,7 +310,7 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 				d := rg.Disposition
 				severity := f.Severity
 				if rg.Assessment != nil {
-					severity = assessmentSeverity(*rg.Assessment, 0)
+					severity = model.GroupFindingSeverity(*rg.Assessment, 0)
 				}
 				if severity < 3 {
 					continue
@@ -342,7 +342,7 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 				d := p.Disposition
 				severity := f.Severity
 				if p.Assessment != nil {
-					severity = assessmentSeverity(*p.Assessment, 0)
+					severity = model.GroupFindingSeverity(*p.Assessment, 0)
 				}
 				if severity < 3 {
 					continue
@@ -367,7 +367,7 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 		}
 		d := dispositionFor(f)
 		assessment := model.AssessFinding(f)
-		severity := assessmentSeverity(assessment, f.Severity)
+		severity := model.GroupFindingSeverity(assessment, f.Severity)
 		if severity < 3 {
 			continue
 		}
