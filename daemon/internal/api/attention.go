@@ -366,7 +366,7 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 			continue
 		}
 		d := dispositionFor(f)
-		assessment := assessmentForFlag(f)
+		assessment := model.AssessFinding(f)
 		severity := assessmentSeverity(assessment, f.Severity)
 		if severity < 3 {
 			continue

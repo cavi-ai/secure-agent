@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// assessmentForFlag reads producer-owned fields only. Neither legacy display
+// AssessFinding reads producer-owned fields only. Neither legacy display
 // text nor an advisor verdict establishes payload contents or control results.
 func AssessFinding(f Flag) FindingAssessment {
 	a := FindingAssessment{
@@ -117,4 +117,76 @@ func appendBasis(basis []string, value string) []string {
 		return append(basis, value)
 	}
 	return basis
+}
+
+// StrongestFindingAssessment uses the same evidence order as stored reviews.
+// Review state belongs to the whole group; it never weakens observed risk.
+func StrongestFindingAssessment(flags []Flag) *FindingAssessment {
+	var strongest *FindingAssessment
+	open := false
+	for _, f := range flags {
+		a := AssessFinding(f)
+		open = open || !f.Acknowledged
+		if strongest == nil || findingAssessmentOutranks(*strongest, a) {
+			strongest = &a
+		}
+	}
+	if strongest != nil {
+		if open {
+			strongest.ReviewState = "unreviewed"
+		} else {
+			strongest.ReviewState = "reviewed"
+		}
+		strongest.Limits = append(strongest.Limits, "This assessment describes the strongest member; grouped activity does not establish shared intent.")
+	}
+	return strongest
+}
+
+// FindingAssessmentMerge couples the chosen facts to their evidence source.
+// Changed excludes advice and workflow so neither creates an evidence revision.
+type FindingAssessmentMerge struct {
+	Assessment   FindingAssessment
+	Changed      bool
+	NextEvidence bool
+}
+
+// MergeFindingAssessment retains the strongest observed facts, including late
+// arrivals. Advice, timestamps, count and workflow are not semantic evidence.
+func MergeFindingAssessment(old, next FindingAssessment) FindingAssessmentMerge {
+	basis := append(slices.Clone(old.EvidenceBasis), next.EvidenceBasis...)
+	slices.Sort(basis)
+	basis = slices.Compact(basis)
+	chosen := old
+	nextEvidence := findingAssessmentOutranks(old, next)
+	if nextEvidence {
+		chosen = next
+	}
+	if next.Control != "unknown" && next.Control != "" {
+		chosen.Control = next.Control
+	}
+	changed := !slices.Equal(basis, old.EvidenceBasis) || chosen.Risk != old.Risk || chosen.ResidualRisk != old.ResidualRisk || chosen.Control != old.Control || next.DetectorSeverity > old.DetectorSeverity
+	chosen.EvidenceBasis = basis
+	chosen.Advice = nil
+	chosen.DetectorSeverity = max(old.DetectorSeverity, next.DetectorSeverity)
+	return FindingAssessmentMerge{Assessment: chosen, Changed: changed, NextEvidence: nextEvidence}
+}
+
+func findingAssessmentRank(a FindingAssessment) int {
+	switch a.Risk {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "review":
+		return 2
+	case "informational":
+		return 1
+	default:
+		return a.DetectorSeverity
+	}
+}
+
+func findingAssessmentOutranks(stored, next FindingAssessment) bool {
+	nextRank, storedRank := findingAssessmentRank(next), findingAssessmentRank(stored)
+	return nextRank > storedRank || (nextRank == storedRank && stored.Risk == "unknown" && next.Risk != "unknown")
 }
