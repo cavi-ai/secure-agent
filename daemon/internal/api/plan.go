@@ -16,6 +16,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/playbook"
+	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 )
 
 // PlanFuncs connect /advisor/plan to the current advisor. A nil PlanFuncs
@@ -39,9 +40,10 @@ type PlanResponse struct {
 	Flag *model.Flag `json:"flag,omitempty"`
 	// Labels: the operator's earlier judgments on cases like this one and
 	// the suggestion they earn.
-	Labels       *model.LabelContext `json:"labels,omitempty"`
-	AdvisorReady bool                `json:"advisor_ready"`
-	Reason       string              `json:"reason,omitempty"`
+	Labels       *model.LabelContext          `json:"labels,omitempty"`
+	AdvisorReady bool                         `json:"advisor_ready"`
+	Reason       string                       `json:"reason,omitempty"`
+	Instruction  *sysagent.InstructionPreview `json:"instruction,omitempty"`
 }
 
 // Plan context bounds.
@@ -247,6 +249,7 @@ func (a *API) planSubject(w http.ResponseWriter, subject string) (planTarget, Pl
 		return planTarget{}, PlanResponse{}, false
 	}
 	resp.Labels = labels
+	resp.Instruction = a.planInstruction(t)
 	return t, resp, true
 }
 

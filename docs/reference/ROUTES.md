@@ -99,6 +99,7 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 | `/agent/recommendations` | GET, HEAD, POST | POST | no agents | — |
 | `/agent/worktree` | GET, HEAD, POST | POST | no agents | — |
 | `/agent/actions` | GET, HEAD, POST | POST | no agents | — |
+| `/agent/instructions` | GET, HEAD, POST | POST | no agents | `sysagent.InstructionPreview` |
 | `/agent/plans` | DELETE, GET, HEAD, POST | POST | no agents | — |
 | `/agent/dispatch` | GET, HEAD, POST | POST | no agents | — |
 | `/agent/runs` | GET, HEAD | — | no agents | — |

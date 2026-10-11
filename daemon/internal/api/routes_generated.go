@@ -6,6 +6,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
+	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 	"net/http"
 )
 
@@ -96,6 +97,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/agent/recommendations":        a.handleAgentRecommendations,
 		"/agent/worktree":               a.handleAgentWorktree,
 		"/agent/actions":                a.handleAgentActions,
+		"/agent/instructions":           a.handleAgentInstructions,
 		"/agent/plans":                  a.handleAgentPlans,
 		"/agent/dispatch":               a.handleAgentDispatch,
 		"/agent/runs":                   a.handleAgentRuns,
@@ -142,5 +144,6 @@ func RouteWireTypes() []any {
 		new(FleetNodeStatus),
 		new(model.FileDetail),
 		new(PlanResponse),
+		new(sysagent.InstructionPreview),
 	}
 }

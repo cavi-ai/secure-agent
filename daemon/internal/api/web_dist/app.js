@@ -3299,13 +3299,48 @@ document.addEventListener('DOMContentLoaded', () => {
   // Flags that come with a plan are kept so its action buttons work even when
   // the flag is outside the loaded list.
   const planFlagCache = new Map();
+  const planResponseCache = new Map();
+  const instructionRequests = new Map();
   const planPolls = new Map();
   const planSlots = subject => Array.from(document.querySelectorAll('.plan-slot'))
     .filter(el => el.dataset.planSubject === subject);
   function paintPlanSlots(subject, resp) {
     if (resp && resp.flag) planFlagCache.set(resp.flag.id, resp.flag);
-    planSlots(subject).forEach(el => { el.innerHTML = planHTML(resp); });
+    planResponseCache.set(subject, resp);
+    planSlots(subject).forEach(el => { el.innerHTML = planHTML(resp, undefined, instructionRequests.get(subject)); });
   }
+  window.applyAgentInstruction = async function(subject, revision) {
+    const resp = planResponseCache.get(subject);
+    const preview = resp?.instruction;
+    if (!preview?.ready || preview.applied || preview.revision !== revision || instructionRequests.get(subject)?.busy) return;
+    const state = { busy: true, error: '' };
+    instructionRequests.set(subject, state);
+    paintPlanSlots(subject, resp);
+    try {
+      const res = await apiFetch('/agent/instructions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject, revision })
+      });
+      if (!res.ok) throw new Error((await res.text()).trim() || 'Instruction update failed');
+      const result = await res.json();
+      if (!result?.applied || result.path !== preview.path || result.instruction !== preview.instruction) throw new Error('The update could not be confirmed; inspect the instruction file before retrying.');
+      const current = planResponseCache.get(subject);
+      if (current?.instruction?.path === preview.path && current.instruction.instruction === preview.instruction) {
+        current.instruction = { ...result, ready: true };
+      }
+      showToast('Safety rule applied to ' + result.path, 'success');
+    } catch (err) {
+      state.error = 'Could not confirm the update: ' + (err.message || err);
+      const current = planResponseCache.get(subject);
+      if (current?.instruction) current.instruction = { ...current.instruction, ready: false, reason: state.error };
+      // Refresh the file revision without automatically repeating a write.
+      await loadPlanSlot(subject);
+    } finally {
+      state.busy = false;
+      const current = planResponseCache.get(subject);
+      if (current) paintPlanSlots(subject, current);
+    }
+  };
   async function fetchPlan(subject) {
     const res = await apiFetch(`/advisor/plan?subject=${encodeURIComponent(subject)}`);
     if (!res.ok) throw new Error((await res.text()).trim() || 'no playbook');
@@ -4982,6 +5017,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'ask-plan':
         e.preventDefault();
         window.askAdvisorPlan(d.subject);
+        break;
+      case 'apply-agent-instruction':
+        e.preventDefault();
+        window.applyAgentInstruction(d.subject, d.revision);
         break;
       case 'mark-label':
         e.preventDefault();

@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Findings: apply built-in prevention instructions to the recorded project's AGENTS.md or CLAUDE.md in one click, with a file and text preview.
 - Documentation delivery: downloadable CI previews and immutable docs assets for published stable product releases, with a manual preview workflow.
 - Settings: add, edit, and remove File Guard paths and Egress Firewall patterns, with validation and persistent saves.
 - API: `{"repo"}` on `POST /worktrees/advise` and `POST /agent/worktree` covers a whole repository.
