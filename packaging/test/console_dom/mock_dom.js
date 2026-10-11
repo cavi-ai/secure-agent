@@ -1365,12 +1365,12 @@
         metadata.open = true;
         metadata.querySelector('summary').focus({ preventScroll: true });
         const top = body().scrollTop;
-        renderSessionBoard();
+        window.SA.renderSessionBoard();
         receipt.history = Math.abs(body().scrollTop - top) < 2;
         receipt.details = detail().querySelector('details.session-metadata').open;
         receipt.focus = document.activeElement === detail().querySelector('details.session-metadata summary');
         window.SA.sessionMemoryPage.rows.push({ id: 'new-activity', at: new Date(now).toISOString(), kind: 'activity', title: 'New activity' });
-        renderSessionBoard();
+        window.SA.renderSessionBoard();
         receipt.updateHistory = Math.abs(body().scrollTop - top) < 2 && !detail().querySelector('[data-action="session-latest"]').hidden;
         detail().querySelector('[data-action="session-latest"]').click();
         receipt.latest = near();
@@ -1384,13 +1384,13 @@
         receipt.earlier = detail().querySelectorAll('.sm-row').length === 121 && Math.abs(replacement.getBoundingClientRect().top - body().getBoundingClientRect().top - offset) < 2;
         const group = rail().querySelector('[data-harness="codex"]');
         group.open = false;
-        renderSessionBoard();
+        window.SA.renderSessionBoard();
         receipt.collapse = !rail().querySelector('[data-harness="codex"]').open;
         await window.selectSession(first);
         receipt.reveal = rail().querySelector('[data-harness="codex"]').open;
         const order = Array.from(rail().querySelectorAll('[data-action="select-session"]'), row => row.dataset.id).join(',');
         window.SA.t.sessions = window.SA.t.sessions.map(session => session.id === 'wb-session-79' ? { ...session, last_seen_at: new Date(now + 60000).toISOString() } : session);
-        renderSessionBoard();
+        window.SA.renderSessionBoard();
         receipt.order = Array.from(rail().querySelectorAll('[data-action="select-session"]'), row => row.dataset.id).join(',') === order;
         data['/sessions'].find(session => session.id === first)._timeline = Array.from({ length: 500 }, (_, i) => ({
           kind: 12, session_id: first, ts: iso(600000 - i * 1000), tool: 'RetainedTrace' + i, tool_status: 'ok', duration_ms: 100,
@@ -1407,7 +1407,7 @@
         const readingTop = body().scrollTop;
         window.showSessionList();
         const listTop = rail().scrollTop;
-        renderSessionBoard();
+        window.SA.renderSessionBoard();
         receipt.back = panel().dataset.pane === 'list' && rail().scrollTop === listTop && document.activeElement?.dataset.id === first;
         await window.selectSession(first);
         receipt.backReading = Math.abs(body().scrollTop - readingTop) < 2;
@@ -1422,7 +1422,7 @@
         await wait();
         const selected = window.SA.selectedSessionId;
         window.SA.t.sessions = window.SA.t.sessions.filter(session => session.id !== selected);
-        renderSessionBoard();
+        window.SA.renderSessionBoard();
         receipt.unavailable = window.SA.selectedSessionId === selected && detail().textContent.includes('Session unavailable');
         await window.selectSession('sess-claude-1');
         receipt.narrowFocus = !window.matchMedia('(max-width: 900px)').matches || document.activeElement === detail().querySelector('h3');

@@ -15,7 +15,7 @@ const scope = (id = 'scope-a', extra = {}) => ({ id, kind: 'exact', agent: 'clau
 function context() {
   const c = { Date, URLSearchParams, window: { SA: {} } };
   vm.createContext(c);
-  for (const file of ['lib.js', 'tab-overview.js', 'tab-sessions.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), c);
+  for (const file of ['lib.js', 'tab-overview.js', 'session-workbench.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), c);
   return c;
 }
 function controller() {
@@ -35,6 +35,7 @@ function controller() {
   const start = app.indexOf('  // Permissions from one saved decision');
   const end = app.indexOf('  // Uninspected-egress drill-down:', start);
   assert.ok(start >= 0 && end > start, 'permission controller exists');
+  c.sessionWorkbench = { get selectedSessionId() { return c.selectedSessionId; }, get sessionOutcomes() { return c.sessionOutcomes; } };
   vm.runInContext(app.slice(start, end), c);
   return { c, body, requests, announcements,
     answer(i, payload, status = 200) { requests[i].resolve({ ok: status === 200, status, json: async () => payload }); } };

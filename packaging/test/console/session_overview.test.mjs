@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../daemon/internal/api/web_dist');
 const ctx = { Date, window: { SA: {} } };
 vm.createContext(ctx);
-for (const file of ['lib.js', 'tab-findings.js', 'tab-sessions.js']) vm.runInContext(readFileSync(path.join(web, file), 'utf8'), ctx, { filename: file });
+for (const file of ['lib.js', 'tab-findings.js', 'session-workbench.js']) vm.runInContext(readFileSync(path.join(web, file), 'utf8'), ctx, { filename: file });
 
 test('session overview keeps review, risk and coverage limits visible', () => {
   const html = ctx.sessionOverviewHTML({ session_id: 'own', requests: [], findings: [{ id: 'f', title: 'Observed read', assessment: { risk: 'high', review_state: 'reviewed', residual_risk: 'model-exposure', reason: 'Review does not reverse exposure', limits: ['No captured payload'] } }], coverage: { guard: { state: 'observed', detail: 'Only reported outcomes' }, trace: { state: 'not-observed', detail: 'Quiet can be legitimate' }, payload: { state: 'unattributed', detail: 'Other traffic may be uninspected' } }, findings_truncated: true }, {});
