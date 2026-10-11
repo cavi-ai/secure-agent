@@ -402,7 +402,7 @@ function sessionPermissionsHTML(receipt, state) {
   }).join('');
 }
 
-function sessionDetailHTML(sess, events, trees) {
+function sessionDetailHTML(sess, events, trees, state = window.SA) {
   if (!sess) {
     return `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>Select a session to see its memory</span></div>`;
   }
@@ -422,9 +422,9 @@ function sessionDetailHTML(sess, events, trees) {
     </div>
     <div class="sd-detail-controls">
       <div class="sd-view-switch" role="group" aria-label="Session detail view">
-        <button type="button" class="sd-view${window.SA.sessionView === 'memory' ? ' active' : ''}" data-action="session-view" data-view="memory" aria-pressed="${window.SA.sessionView === 'memory'}">Memory</button>
-        <button type="button" class="sd-view${window.SA.sessionView === 'results' ? ' active' : ''}" data-action="session-view" data-view="results" aria-pressed="${window.SA.sessionView === 'results'}">Results</button>
-        <button type="button" class="sd-view${window.SA.sessionView === 'trace' ? ' active' : ''}" data-action="session-view" data-view="trace" aria-pressed="${window.SA.sessionView === 'trace'}">Trace</button>
+        <button type="button" class="sd-view${state.sessionView === 'memory' ? ' active' : ''}" data-action="session-view" data-view="memory" aria-pressed="${state.sessionView === 'memory'}">Memory</button>
+        <button type="button" class="sd-view${state.sessionView === 'results' ? ' active' : ''}" data-action="session-view" data-view="results" aria-pressed="${state.sessionView === 'results'}">Results</button>
+        <button type="button" class="sd-view${state.sessionView === 'trace' ? ' active' : ''}" data-action="session-view" data-view="trace" aria-pressed="${state.sessionView === 'trace'}">Trace</button>
       </div>
       <button type="button" class="btn btn-sm btn-ghost sd-latest" data-action="session-latest" hidden>Jump to latest</button>
       <button type="button" class="btn btn-sm btn-ghost" data-action="session-status">Current status</button>
@@ -440,5 +440,546 @@ function sessionDetailHTML(sess, events, trees) {
       </details>
     </div>
     </div>
-    <div class="session-detail-body">${window.SA.sessionView === 'results' ? sessionOutcomesHTML(window.SA.sessionOutcomes, window.SA.sessionOutcomesState) : sessionOverviewHTML(window.SA.sessionOverview, window.SA.sessionOverviewState) + (window.SA.sessionView === 'trace' ? sessionTraceHTML(events, window.SA.sessionTimelineState) : sessionMemoryHTML(window.SA.sessionMemoryPage, window.SA.sessionMemoryState))}</div>`;
+    <div class="session-detail-body">${state.sessionView === 'results' ? sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
+}
+
+// One workbench owns selection, retained reads, rendering and reading position.
+function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
+  // The generation invalidates late responses when selection changes; it
+  // also protects an earlier-page request from writing into another session.
+  const SESSION_SELECTION_KEY = 'sa.selected-session';
+  let selectedSessionId = '';
+  try { selectedSessionId = sessionStorage.getItem(SESSION_SELECTION_KEY) || ''; } catch { /* memory only */ }
+  let sessionSelectionInitialized = false;
+  let sessionFilterTransition = false;
+  let sessionReveal = false;
+  let sessionPane = 'detail';
+  let sessionView = 'memory';
+  let sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
+  let sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
+  let sessionMemoryGeneration = 0;
+  let sessionMemoryAt = 0;
+  let sessionMemoryHistoryLoaded = false;
+  let sessionTimeline = [];
+  let sessionTimelineState = { loading: false, loaded: false, error: '' };
+  let sessionTimelineAt = 0;
+  let sessionTimelineRequest = 0;
+  let sessionOverview = null;
+  let sessionOverviewState = { loading: false, error: '' };
+  let sessionOverviewGeneration = 0;
+  let sessionOverviewAt = 0;
+  let sessionOverviewRefreshAgain = false;
+  let sessionOutcomes = null;
+  let sessionOutcomesState = { loading: false, error: '' };
+  let sessionOutcomesGeneration = 0;
+  let sessionOutcomesAt = 0;
+  function refreshCurrent(force) {
+    if (selectedSessionId) {
+      loadSessionOverview(selectedSessionId, force);
+      if (sessionView === 'results') loadSessionOutcomes(selectedSessionId, force);
+    }
+  }
+  async function loadSessionOutcomes(id, force = true) {
+    if (!id || id !== selectedSessionId || sessionOutcomesState.loading) return;
+    if (!force && Date.now() - sessionOutcomesAt < 5000) return;
+    sessionOutcomesAt = Date.now();
+    const generation = sessionOutcomesGeneration;
+    sessionOutcomesState = { loading: true, error: sessionOutcomesState.error };
+    renderNow(['sessions']);
+    try {
+      const response = await apiFetch('/sessions/' + encodeURIComponent(id) + '/outcomes');
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const data = await response.json();
+      if (generation !== sessionOutcomesGeneration || id !== selectedSessionId) return;
+      if (!validSessionOutcomes(data, id)) throw new Error('Invalid response');
+      if (sessionOutcomes) for (const key of ['reviews', 'incidents', 'interventions']) {
+        if (!data.history.evidence[key].available) data.history[key] = sessionOutcomes.history[key];
+      }
+      sessionOutcomes = data;
+      sessionOutcomesState = { loading: false, error: '' };
+    } catch {
+      if (generation !== sessionOutcomesGeneration || id !== selectedSessionId) return;
+      sessionOutcomesState = { loading: false, error: 'unavailable' };
+    }
+    renderNow(['sessions']);
+  }
+  async function loadSessionOverview(id, force = true) {
+    if (!id || id !== selectedSessionId) return;
+    if (sessionOverviewState.loading) { if (force) sessionOverviewRefreshAgain = true; return; }
+    if (!force && Date.now() - sessionOverviewAt < 5000) return;
+    sessionOverviewAt = Date.now();
+    const generation = sessionOverviewGeneration;
+    sessionOverviewState = { loading: true, error: sessionOverviewState.error };
+    renderNow(['sessions']);
+    try {
+      const response = await apiFetch('/sessions/' + encodeURIComponent(id) + '/overview');
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const overview = await response.json();
+      if (generation !== sessionOverviewGeneration || id !== selectedSessionId) return;
+      if (!validSessionOverview(overview, id)) throw new Error('Invalid response');
+      sessionOverview = overview;
+      sessionOverviewState = { loading: false, error: '' };
+    } catch {
+      if (generation !== sessionOverviewGeneration || id !== selectedSessionId) return;
+      sessionOverviewState = { loading: false, error: 'unavailable' };
+    }
+    renderNow(['sessions']);
+    if (sessionOverviewRefreshAgain) { sessionOverviewRefreshAgain = false; loadSessionOverview(id); }
+  }
+  function resetSessionMemory() {
+    sessionMemoryGeneration++;
+    sessionMemoryHistoryLoaded = false;
+    sessionMemoryAt = 0;
+    sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
+    sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
+    sessionTimelineAt = 0;
+    sessionTimelineState = { loading: false, loaded: false, error: '' };
+    sessionOverviewGeneration++;
+    sessionOverview = null;
+    sessionOverviewState = { loading: false, error: '' };
+    sessionOverviewAt = 0;
+    sessionOverviewRefreshAgain = false;
+    sessionOutcomesGeneration++;
+    sessionOutcomes = null;
+    sessionOutcomesState = { loading: false, error: '' };
+    sessionOutcomesAt = 0;
+  }
+  function takeSessionReveal() {
+    const reveal = sessionReveal;
+    sessionReveal = false;
+    return reveal;
+  }
+  function reconcileSessionSelection(groups) {
+    const visible = visibleSessionMembers(groups);
+    const transition = sessionFilterTransition;
+    sessionFilterTransition = false;
+    if (!sessionSelectionInitialized || transition) {
+      if (visible.length || transition) sessionSelectionInitialized = true;
+      const id = initialSessionId(visible, selectedSessionId);
+      if (id !== selectedSessionId) {
+        window.SA.closeSessionPermissions?.();
+        window.SA.clearSessionInvestigation?.();
+        selectedSessionId = id;
+        resetSessionMemory();
+        sessionTimeline = [];
+        try { id ? sessionStorage.setItem(SESSION_SELECTION_KEY, id) : sessionStorage.removeItem(SESSION_SELECTION_KEY); } catch { /* memory only */ }
+        if (id) queueMicrotask(() => loadSelectedSession(id));
+      } else if (id && !sessionMemoryState.loading && !sessionMemoryPage.rows.length && !sessionTimeline.length) {
+        queueMicrotask(() => loadSelectedSession(id));
+      }
+      sessionReveal = !!id;
+    }
+    const panel = document.getElementById('session-board-panel');
+    if (panel) panel.dataset.pane = sessionPane;
+  }
+  async function loadSelectedSession(id) {
+    const history = sessionView === 'trace'
+      ? loadSessionTimeline(id, true).catch(() => {}) : sessionView === 'results' ? loadSessionOutcomes(id) : loadSessionMemory(id);
+    await Promise.all([history, loadSessionOverview(id)]);
+    renderNow(['sessions']);
+  }
+  let sessionHeightFrame = 0;
+  function scheduleSessionWorkbenchHeight() {
+    if (sessionHeightFrame) return;
+    sessionHeightFrame = requestAnimationFrame(() => {
+      sessionHeightFrame = 0;
+      const panel = document.getElementById('session-board-panel');
+      if (!panel || !panel.classList.contains('session-workbench') || !panel.getClientRects().length) return;
+      const body = panel.querySelector('.session-detail-body');
+      const followLatest = body && body.scrollHeight - body.clientHeight - body.scrollTop < 64;
+      const bottom = parseFloat(getComputedStyle(document.querySelector('.app') || document.body).paddingBottom) || 16;
+      const height = Math.floor((window.visualViewport?.height || window.innerHeight) - panel.getBoundingClientRect().top - bottom);
+      // Very short windows use document scrolling so controls remain reachable.
+      panel.classList.toggle('session-workbench-short', height < 320);
+      const value = Math.max(320, height) + 'px';
+      if (panel.style.getPropertyValue('--session-workbench-height') !== value) panel.style.setProperty('--session-workbench-height', value);
+      // Sizing changes the scroll range after the initial detail render.
+      if (followLatest) body.scrollTop = body.scrollHeight;
+      const latest = panel.querySelector('[data-action="session-latest"]');
+      if (latest && body) latest.hidden = body.scrollHeight - body.clientHeight - body.scrollTop < 64;
+    });
+  }
+  window.addEventListener('resize', scheduleSessionWorkbenchHeight);
+  window.visualViewport?.addEventListener('resize', scheduleSessionWorkbenchHeight);
+  if (typeof ResizeObserver !== 'undefined') {
+    const observer = new ResizeObserver(scheduleSessionWorkbenchHeight);
+    for (const el of document.querySelectorAll('.masthead, .tab-nav, .subtabs, #session-board-panel .session-toolbar')) observer.observe(el);
+  }
+  async function loadSessionMemory(sessionID, before) {
+    if (!sessionID || sessionID !== selectedSessionId) return;
+    if (sessionMemoryState.loadingEarlier || (!before && sessionMemoryState.loading)) return;
+    const generation = ++sessionMemoryGeneration;
+    sessionMemoryAt = Date.now();
+    sessionMemoryState = { ...sessionMemoryState, loading: !before, loadingEarlier: !!before, error: '' };
+    renderNow(['sessions']);
+    try {
+      const query = before ? '?before=' + encodeURIComponent(before) : '';
+      const response = await apiFetch('/sessions/' + encodeURIComponent(sessionID) + '/memory' + query);
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const page = await response.json();
+      if (generation !== sessionMemoryGeneration || sessionID !== selectedSessionId) return;
+      const incoming = Array.isArray(page.rows) ? page.rows : [];
+      if (before) {
+        sessionMemoryHistoryLoaded = true;
+        const seen = new Set((sessionMemoryPage.rows || []).map(row => row.id));
+        const older = incoming.filter(row => {
+          if (seen.has(row.id)) return false;
+          seen.add(row.id);
+          return true;
+        });
+        sessionMemoryPage = { rows: [...older, ...sessionMemoryPage.rows], has_earlier: !!page.has_earlier, next_cursor: page.next_cursor || '' };
+      } else if (sessionMemoryHistoryLoaded || sessionReadingHistory(sessionID, 'memory')) {
+        const merged = new Map(sessionMemoryPage.rows.map(row => [row.id, row]));
+        for (const row of incoming) merged.set(row.id, row);
+        sessionMemoryPage = { ...sessionMemoryPage, rows: [...merged.values()].sort((a, b) => String(a.at).localeCompare(String(b.at)) || String(a.id).localeCompare(String(b.id))) };
+      } else {
+        sessionMemoryPage = { rows: incoming, has_earlier: !!page.has_earlier, next_cursor: page.next_cursor || '' };
+      }
+      sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
+    } catch {
+      if (generation !== sessionMemoryGeneration || sessionID !== selectedSessionId) return;
+      sessionMemoryState = { loading: false, loadingEarlier: false, error: before ? 'earlier' : 'latest' };
+    }
+    renderNow(['sessions']);
+  }
+  async function loadSessionTimeline(id, force) {
+    if (!id || id !== selectedSessionId) return;
+    const generation = sessionMemoryGeneration;
+    // Throttle refetches: deltas for the selected session arrive per event.
+    if (!force && Date.now() - sessionTimelineAt < 2000) return;
+    sessionTimelineAt = Date.now();
+    const request = ++sessionTimelineRequest;
+    const current = () => id === selectedSessionId && generation === sessionMemoryGeneration
+      && request === sessionTimelineRequest && sessionView === 'trace';
+    sessionTimelineState = { ...sessionTimelineState, loading: true };
+    renderNow(['sessions']);
+    try {
+      const r = await apiFetch('/sessions/' + encodeURIComponent(id) + '/timeline?limit=500');
+      if (!r.ok) throw new Error('Trace unavailable');
+      const rows = await r.json();
+      if (!validSessionTrace(rows, id)) throw new Error('Invalid session trace');
+      if (!current()) return;
+      sessionTimeline = rows;
+      sessionTimelineState = { loading: false, loaded: true, error: '' };
+    } catch {
+      if (!current()) return;
+      sessionTimelineState = { ...sessionTimelineState, loading: false, error: 'unavailable' };
+    }
+    if (current()) renderNow(['sessions']);
+  }
+  function retrySessionTrace() {
+    if (selectedSessionId && sessionView === 'trace' && !sessionTimelineState.loading) {
+      return loadSessionTimeline(selectedSessionId, true);
+    }
+  }
+  async function selectSession(id) {
+    if (!id) return;
+    const changed = selectedSessionId !== id;
+    if (changed) window.SA.closeSessionPermissions?.();
+    if (changed) window.SA.clearSessionInvestigation?.();
+    selectedSessionId = id;
+    sessionSelectionInitialized = true;
+    sessionReveal = true;
+    sessionPane = 'detail';
+    try { sessionStorage.setItem(SESSION_SELECTION_KEY, id); } catch { /* memory only */ }
+    onSelect(id);
+    if (changed) { resetSessionMemory(); sessionTimeline = []; }
+    renderNow(['sessions']);
+    if (window.matchMedia('(max-width: 900px)').matches) {
+      document.querySelector('#session-detail h3')?.focus({ preventScroll: true });
+    }
+    if (changed || (!sessionMemoryPage.rows.length && !sessionTimeline.length)) await loadSelectedSession(id);
+  }
+  function showSessionList() {
+    // Capture the current reading position before narrow CSS hides detail.
+    renderNow(['sessions']);
+    sessionPane = 'list';
+    const panel = document.getElementById('session-board-panel');
+    if (panel) panel.dataset.pane = sessionPane;
+    const detail = document.getElementById('session-detail');
+    if (detail) detail._sessionReadingVisible = false;
+    const rail = document.getElementById('session-rail');
+    const scroll = rail?.scrollTop || 0;
+    const selected = Array.from(rail?.querySelectorAll('[data-action="select-session"]') || []).find(el => el.dataset.id === selectedSessionId);
+    const target = selected?.getClientRects().length ? selected : rail;
+    target?.focus({ preventScroll: true });
+    if (rail) rail.scrollTop = scroll;
+  }
+  function jumpToLatestSession() {
+    const body = document.querySelector('#session-detail .session-detail-body');
+    if (body) body.scrollTop = body.scrollHeight;
+    const latest = document.querySelector('#session-detail [data-action="session-latest"]');
+    if (latest) latest.hidden = true;
+  }
+  function showCurrentSessionStatus() {
+    if (sessionView === 'results') { setSessionView('memory').then(showCurrentSessionStatus); return; }
+    const body = document.querySelector('#session-detail .session-detail-body');
+    if (body) body.scrollTop = 0;
+    document.querySelector('#session-detail .sd-current-head h4')?.focus({ preventScroll: true });
+  }
+  async function setSessionView(view) {
+    if (!['memory', 'trace', 'results'].includes(view)) return;
+    sessionView = view;
+    renderNow(['sessions']);
+    if (view === 'results' && selectedSessionId) {
+      await loadSessionOutcomes(selectedSessionId);
+    } else if (view === 'trace' && selectedSessionId) {
+      try { await loadSessionTimeline(selectedSessionId, true); } catch { /* trace retries on next activation */ }
+      renderNow(['sessions']);
+    } else if (view === 'memory' && selectedSessionId && !sessionMemoryPage.rows.length) {
+      await loadSessionMemory(selectedSessionId);
+    }
+  }
+  function loadEarlierSessionMemory() {
+    if (selectedSessionId && sessionMemoryPage.has_earlier && sessionMemoryPage.next_cursor) {
+      return loadSessionMemory(selectedSessionId, sessionMemoryPage.next_cursor);
+    }
+  }
+
+  // Reading state belongs to a session and a mode, not to a telemetry render.
+  const sessionReadingState = new Map();
+  function sessionReadingHistory(sessionId, mode) {
+    const key = sessionId + '|' + mode;
+    const detail = document.getElementById('session-detail');
+    const body = detail?._sessionReadingKey === key ? detail.querySelector('.session-detail-body') : null;
+    if (body?.getClientRects().length) return body.scrollHeight - body.clientHeight - body.scrollTop >= 64;
+    // Back hides the pane; zero geometry must not replace its saved reading state.
+    return sessionReadingState.get(key)?.nearLatest === false;
+  }
+
+  function renderSessionDetail(detail, selected, trees, emptyHTML) {
+    const key = selectedSessionId + '|' + sessionView;
+    const oldBody = detail.querySelector('.session-detail-body');
+    const oldKey = detail._sessionReadingKey;
+    const oldSession = detail._sessionSelectedId;
+    const focused = detail.contains(document.activeElement) ? document.activeElement : null;
+    const focusedRow = focused?.closest('[data-row-id]');
+    const focusWithinRow = focusedRow ? '[data-row-id="' + CSS.escape(focusedRow.dataset.rowId) + '"] ' : '';
+    const focusTarget = focused && (focused.tagName === 'SUMMARY' ? 'summary'
+      : focused.dataset.action ? '[data-action="' + focused.dataset.action + '"]' + (focused.dataset.view ? '[data-view="' + focused.dataset.view + '"]' : '') : focused.tagName === 'H3' ? 'h3' : null);
+    const focusKey = focusTarget && focusWithinRow + focusTarget;
+    if (oldBody && oldKey && oldBody.getClientRects().length && detail._sessionReadingVisible !== false) {
+      const bounds = oldBody.getBoundingClientRect();
+      const anchor = Array.from(oldBody.querySelectorAll('[data-row-id]')).find(row => row.getBoundingClientRect().bottom > bounds.top && row.getBoundingClientRect().top < bounds.bottom);
+      const prev = sessionReadingState.get(oldKey) || {};
+      sessionReadingState.set(oldKey, { ...prev, top: oldBody.scrollTop,
+        nearLatest: oldBody.scrollHeight - oldBody.clientHeight - oldBody.scrollTop < 64,
+        anchor: anchor?.dataset.rowId, offset: anchor ? anchor.getBoundingClientRect().top - bounds.top : 0,
+        first: oldBody.querySelector('[data-row-id]')?.dataset.rowId,
+        detailsOpen: !!detail.querySelector('details.session-metadata')?.open });
+    }
+    const html = selected ? sessionDetailHTML(selected, sessionTimeline, trees, snapshot()) : emptyHTML;
+    if (detail._sessionMarkup !== html) {
+      const disclosures = new Map(Array.from(detail.querySelectorAll('[data-row-id]')).map(row =>
+        [row.dataset.rowId, Array.from(row.querySelectorAll('details'), d => d.open)]));
+      if (selected) patchSessionDetail(detail, selected.id, html);
+      else detail.innerHTML = html;
+      if (oldSession === selectedSessionId) for (const row of detail.querySelectorAll('[data-row-id]')) {
+        const saved = disclosures.get(row.dataset.rowId);
+        if (saved) Array.from(row.querySelectorAll('details')).forEach((d, i) => { d.open = !!saved[i]; });
+      }
+      detail._sessionMarkup = html;
+      applyInlineMetrics(detail);
+    }
+    detail._sessionReadingKey = key;
+    detail._sessionSelectedId = selectedSessionId;
+    const body = detail.querySelector('.session-detail-body');
+    detail._sessionReadingVisible = !!body?.getClientRects().length;
+    if (!body) return;
+    const state = sessionReadingState.get(key) || {};
+    const metadata = detail.querySelector('details.session-metadata');
+    if (metadata) metadata.open = !!state.detailsOpen;
+    const rows = Array.from(body.querySelectorAll('[data-row-id]'));
+    const loaded = sessionView === 'trace' ? !!sessionTimeline?.length : sessionView === 'results' ? !!sessionOutcomes : !!sessionMemoryPage?.rows.length;
+    const prepended = state.first && rows.length && rows[0].dataset.rowId !== state.first && rows.some(row => row.dataset.rowId === state.first);
+    if (!detail._sessionReadingVisible) return;
+    if ((!state.loaded && loaded) || (state.nearLatest && !prepended)) body.scrollTop = body.scrollHeight;
+    else {
+      body.scrollTop = state.top || 0;
+      const anchor = state.anchor && rows.find(row => row.dataset.rowId === state.anchor);
+      if (anchor) body.scrollTop += anchor.getBoundingClientRect().top - body.getBoundingClientRect().top - state.offset;
+    }
+    sessionReadingState.set(key, { ...state, loaded: state.loaded || loaded });
+    const updateLatest = () => {
+      const latest = detail.querySelector('[data-action="session-latest"]');
+      if (latest) latest.hidden = body.scrollHeight - body.clientHeight - body.scrollTop < 64;
+    };
+    if (!body._sessionScrollBound) { body.addEventListener('scroll', updateLatest, { passive: true }); body._sessionScrollBound = true; }
+    updateLatest();
+    if (focusKey && oldSession === selectedSessionId && !focused.isConnected) detail.querySelector(focusKey)?.focus({ preventScroll: true });
+  }
+
+  function renderSessionBoard() {
+    const SA = window.SA;
+
+    const rail = document.getElementById('session-rail');
+    const detail = document.getElementById('session-detail');
+    const legacy = document.getElementById('session-board');
+    const badge = document.getElementById('badge-session-count');
+    const pills = document.getElementById('session-harness-pills');
+    const strip = document.getElementById('session-count-strip');
+    if (!rail) return;
+    const agents = (SA.t.status && SA.t.status.agents) ? SA.t.status.agents : [];
+    const trees = SA.t.status && SA.t.status.trees;
+    const filter = SA.harnessFilter;
+    const q = filter.text || '';
+    const filtered = !!String(q).trim() || Object.values(filter.harnesses).some(v => v === false);
+    const noMatch = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No sessions match — <button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button></span></div>`;
+    const quiet = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>All quiet. Nothing is running.</span></div>`;
+    // The durable session spine (/sessions) is the source of truth when the
+    // daemon provides it; process-tree grouping is the fallback for older
+    // daemons.
+    const durable = SA.t.sessions;
+    const useDurable = Array.isArray(durable);
+    const panel = document.getElementById('session-board-panel');
+    if (panel) panel.classList.toggle('session-workbench', useDurable);
+    if (useDurable) scheduleSessionWorkbenchHeight();
+
+    if (useDurable) {
+      if (legacy) legacy.hidden = true;
+      rail.hidden = false;
+      if (detail) detail.hidden = false;
+      // Rail: one group per harness, live work first; ended runs collapse
+      // into a per-harness tail and infra sits in the last group.
+      const groups = groupSessionsByHarness(durable, trees, agents);
+      const liveCount = groups.reduce((n, g) => n + (g.infra ? 0 : familySize(g.live)), 0);
+      if (badge) badge.textContent = liveCount;
+      SA.setTabBadge('sessions', liveCount);
+      if (strip) strip.textContent = sessionCountStrip(groups, SA.t.status && SA.t.status.coverage);
+      if (pills) {
+        const present = applySessionFilters(groups, { liveOnly: filter.liveOnly }).filter(g => !g.infra).map(g => g.key);
+        pills.innerHTML = harnessPillsHTML(present, filter.harnesses);
+        applyInlineMetrics(pills);
+      }
+      const shown = applySessionFilters(groups, filter);
+      reconcileSessionSelection(shown);
+      const reveal = takeSessionReveal();
+      const sessionGroups = stableSessionOrder(shown.filter(g => !g.infra), rail._sessionGroupOrder, g => g.key);
+      rail._sessionGroupOrder = sessionGroups.map(g => g.key);
+      const infra = shown.find(g => g.infra);
+      // A group's open state is DOM state: patchList keeps an unchanged group's
+      // node and carries open across a rebuilt one.
+      // Rows patch inside each group's shell, keyed by session id or folded
+      // title, so a selected or expanded row survives a reconcile. The shell
+      // hashes by key and whether it has an ended tail: its counts change in
+      // place (syncSessionGroupShell), never by rebuilding the group.
+      const parts = sessionGroups.length
+        ? sessionGroups.map(g => ({ key: 'group:' + g.key, group: g, shell: `group:${g.key}|${g.ended.length ? 'ended' : ''}`, html: sessionGroupHTML(g, visibleSessionMembers([g]).some(s => s.id === selectedSessionId), !!SA.endedSessionsOpen[g.key]) }))
+        : [{ key: filtered ? 'empty:nomatch' : 'empty:quiet', html: filtered ? noMatch : quiet }];
+      if (infra) parts.push({ key: 'infra', html: sessionInfraGroupHTML(infra, false) });
+      const railTop = rail.scrollTop;
+      const railFocus = rail.contains(document.activeElement) ? document.activeElement : null;
+      const railFocusId = railFocus?.dataset.id;
+      patchList(rail, parts, { key: p => p.key, html: p => p.html, hash: p => p.shell || p.html });
+      const rowOpts = { key: r => r.key, html: r => r.html };
+      const rowOrders = rail._sessionRowOrders || (rail._sessionRowOrders = new Map());
+      const childOrders = rail._sessionChildOrders || (rail._sessionChildOrders = new Map());
+      for (const p of parts) {
+        if (!p.group) continue;
+        const node = Array.from(rail.children).find(n => n._saKey === p.key);
+        if (!node) continue;
+        if (reveal && visibleSessionMembers([p.group]).some(s => s.id === selectedSessionId)) {
+          node.open = true;
+          if (visibleSessionMembers([{ ...p.group, live: [] }]).some(s => s.id === selectedSessionId)) SA.endedSessionsOpen[p.group.key] = true;
+          for (const bucket of ['live', 'ended']) {
+            const titleOf = s => { const t = liveTreeFor(s, trees); return sessionTitle(s, t && t.root.cwd); };
+            for (const row of collapseSessionFamilies(p.group[bucket], p.group.key, titleOf)) {
+              if (row.dup && row.sessions.some(s => s.id === selectedSessionId)) SA.sessionDupOpen[bucket + '|' + row.key] = true;
+            }
+          }
+        }
+        syncSessionGroupShell(node, p.group, !!SA.endedSessionsOpen[p.group.key]);
+        const rows = (fams, bucket) => {
+          for (const family of fams) {
+            const familyKey = p.group.key + '|' + bucket + '|' + family.session.id;
+            family.children = stableSessionOrder(family.children, childOrders.get(familyKey), child => child.id);
+            childOrders.set(familyKey, family.children.map(child => child.id));
+          }
+          const list = sessionRailRows(fams, p.group.key, trees, selectedSessionId, SA.sessionDupOpen, bucket);
+          const orderKey = p.group.key + '|' + bucket;
+          const ordered = stableSessionOrder(list, rowOrders.get(orderKey), row => row.key);
+          rowOrders.set(orderKey, ordered.map(row => row.key));
+          return ordered;
+        };
+        patchList(node.querySelector('.session-rows'), rows(p.group.live, 'live'), rowOpts);
+        patchList(node.querySelector('.session-ended-body'), rows(p.group.ended, 'ended'), rowOpts);
+      }
+      rail.scrollTop = railTop;
+      if (railFocusId && !railFocus.isConnected) Array.from(rail.querySelectorAll('[data-action="select-session"]')).find(el => el.dataset.id === railFocusId)?.focus({ preventScroll: true });
+      const selected = durable.find(s => s.id === selectedSessionId);
+      const emptyDetail = selectedSessionId
+        ? `<div class="empty"><span>Session unavailable. It is no longer listed. <button type="button" class="link-btn" data-action="session-list">Back to sessions</button></span></div>`
+        : filtered ? noMatch : `<div class="empty"><span>No sessions available. Start an agent session, then refresh.</span></div>`;
+      if (detail) renderSessionDetail(detail, selected, trees, emptyDetail);
+      return;
+    }
+
+    // Legacy fallback: process-tree board, no rail, no harness grouping.
+    const rows = filterSessionRows(sessionRows(agents, trees), q);
+    if (badge) badge.textContent = rows.length;
+    SA.setTabBadge('sessions', rows.length);
+    if (pills) pills.innerHTML = '';
+    if (strip) strip.textContent = '';
+    rail.hidden = true;
+    if (detail) detail.hidden = true;
+    if (legacy) legacy.hidden = false;
+    if (rows.length === 0) {
+      legacy.innerHTML = String(q).trim() ? noMatch : quiet;
+      return;
+    }
+    const now = Date.now();
+    legacy.innerHTML = sessionBoardHTML(rows, now, SA.sessionHelpOpen);
+    legacy.querySelectorAll('details.session-helpers').forEach(el => {
+      el.addEventListener('toggle', () => {
+        SA.sessionHelpOpen[el.dataset.pid] = el.open;
+      });
+    });
+  }
+
+  function invalidate() {
+    sessionMemoryGeneration++;
+    sessionTimelineRequest++;
+    sessionOverviewGeneration++;
+    sessionOutcomesGeneration++;
+    sessionMemoryState = { ...sessionMemoryState, loading: false, loadingEarlier: false };
+    sessionTimelineState = { ...sessionTimelineState, loading: false, error: 'unavailable' };
+    sessionOverviewState = { loading: false, error: 'unavailable' };
+    sessionOverviewRefreshAgain = false;
+    sessionOutcomesState = { loading: false, error: 'unavailable' };
+  }
+  function refresh(kind, { id = selectedSessionId, before, force = true } = {}) {
+    if (kind === 'memory') return loadSessionMemory(id, before);
+    if (kind === 'trace') return loadSessionTimeline(id, force);
+    if (kind === 'results') return loadSessionOutcomes(id, force);
+    if (kind === 'overview') return loadSessionOverview(id, force);
+    return loadSelectedSession(id);
+  }
+  function activity(event) {
+    if (!selectedSessionId || event.session_id !== selectedSessionId) return;
+    if (sessionView === 'trace') return loadSessionTimeline(selectedSessionId);
+    if (sessionView === 'memory' && Date.now() - sessionMemoryAt >= 2000) return loadSessionMemory(selectedSessionId);
+  }
+  function restoreView(view) {
+    if (['memory', 'trace', 'results'].includes(view)) sessionView = view;
+  }
+  function snapshot() { return { selectedSessionId, sessionTimeline, sessionTimelineState, sessionView, sessionMemoryPage, sessionMemoryState, sessionOverview, sessionOverviewState, sessionOutcomes, sessionOutcomesState }; }
+  return {
+    selectSession, setView: setSessionView, render: renderSessionBoard,
+    refresh, refreshCurrent, activity, invalidate, restoreView,
+    showList: showSessionList, jumpToLatest: jumpToLatestSession, showCurrentStatus: showCurrentSessionStatus,
+    loadEarlier: loadEarlierSessionMemory, retryTrace: retrySessionTrace,
+    reconcileSelection: reconcileSessionSelection, takeReveal: takeSessionReveal,
+    filterChanged() { sessionFilterTransition = true; },
+    readingHistory: sessionReadingHistory,
+    get selectedSessionId() { return selectedSessionId; },
+    get sessionTimeline() { return sessionTimeline; },
+    get sessionTimelineState() { return sessionTimelineState; },
+    get sessionView() { return sessionView; },
+    get sessionMemoryPage() { return sessionMemoryPage; },
+    get sessionMemoryState() { return sessionMemoryState; },
+    get sessionOverview() { return sessionOverview; },
+    get sessionOverviewState() { return sessionOverviewState; },
+    get sessionOutcomes() { return sessionOutcomes; },
+    get sessionOutcomesState() { return sessionOutcomesState; },
+  };
 }

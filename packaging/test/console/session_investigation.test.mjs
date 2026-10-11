@@ -38,6 +38,8 @@ function controller() {
   vm.runInContext(readFileSync(new URL('event-history.js', web), 'utf8'), c);
   c.eventHistoryPage = c.createEventHistoryPage();
   vm.runInContext(readFileSync(new URL('lib.js', web), 'utf8'), c);
+  c.sessionWorkbench = { get selectedSessionId() { return c.selectedSessionId; }, get sessionView() { return c.sessionView; } };
+  c.sessionWorkbench.restoreView = view => { c.sessionView = view; };
   vm.runInContext(app.slice(start, end), c);
   return { c, opener, body, rail, entries, listeners };
 }

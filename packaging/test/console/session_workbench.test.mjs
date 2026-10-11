@@ -6,7 +6,6 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../daemon/internal/api/web_dist');
-const app = readFileSync(path.join(web, 'app.js'), 'utf8');
 const session = (id, status = 'active', last_seen_at = '2026-10-09T10:00:00Z') => ({ id, status, last_seen_at });
 const groups = (...sessions) => [{ key: 'codex', live: sessions.map(s => ({ session: s, children: [] })), ended: [] }];
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
@@ -23,7 +22,7 @@ function controller(persisted = '', manualOverview = false) {
     window: { SA: {}, addEventListener() {}, matchMedia: () => ({ matches: false }) },
     document: { getElementById: id => id === 'session-board-panel' ? panel : null, querySelectorAll: () => [], querySelector: () => null },
     queueMicrotask: cb => tasks.push(cb), requestAnimationFrame: () => 1,
-    renderNow() {}, showToast() {}, sessionReadingHistory: () => false,
+    renderNow() {},
     apiFetch: url => {
       if (url.endsWith('/overview') && !manualOverview) return Promise.resolve({ ok: true, json: async () => ({ session_id: decodeURIComponent(url.split('/')[2]), requests: [], findings: [] }) });
       const d = deferred(); requests.push({ url, ...d }); return d.promise;
@@ -31,22 +30,29 @@ function controller(persisted = '', manualOverview = false) {
   };
   vm.createContext(context);
   vm.runInContext(readFileSync(path.join(web, 'lib.js'), 'utf8'), context);
-  vm.runInContext(readFileSync(path.join(web, 'tab-sessions.js'), 'utf8'), context);
-  const logic = app.slice(app.indexOf("  const SESSION_SELECTION_KEY"), app.indexOf('  // Export: copy the session'));
-  const actions = app.slice(app.indexOf('  window.selectSession ='), app.indexOf('  // The drawer is shared by two views:'));
-  vm.runInContext(logic + actions + `\nwindow.testState = {
-    get selected() { return selectedSessionId; }, get mode() { return sessionView; },
-    get memory() { return sessionMemoryPage; }, get memoryState() { return sessionMemoryState; }, get trace() { return sessionTimeline; },
-    get traceState() { return typeof sessionTimelineState === 'undefined' ? undefined : sessionTimelineState; },
-    get results() { return sessionOutcomes; }, get resultState() { return sessionOutcomesState; },
-    get overview() { return sessionOverview; }, get overviewState() { return sessionOverviewState; },
-    reconcile: reconcileSessionSelection, reveal: takeSessionReveal,
-    filter() { sessionFilterTransition = true; },
-    refresh: loadSessionMemory, traceRefresh: loadSessionTimeline,
-    resultRefresh: loadSessionOutcomes,
-    overviewRefresh: loadSessionOverview,
-  };`, context);
-  return { context, panel, state: context.window.testState, actions: context.window, requests,
+  vm.runInContext(readFileSync(path.join(web, 'session-workbench.js'), 'utf8'), context);
+  const workbench = context.createSessionWorkbench({
+    apiFetch: context.apiFetch, renderNow: context.renderNow,
+    onSelect: id => context.history.replaceState(null, '', '#sessions?session=' + id),
+  });
+  const state = {
+    get selected() { return workbench.selectedSessionId; }, get mode() { return workbench.sessionView; },
+    get memory() { return workbench.sessionMemoryPage; }, get memoryState() { return workbench.sessionMemoryState; },
+    get trace() { return workbench.sessionTimeline; }, get traceState() { return workbench.sessionTimelineState; },
+    get results() { return workbench.sessionOutcomes; }, get resultState() { return workbench.sessionOutcomesState; },
+    get overview() { return workbench.sessionOverview; }, get overviewState() { return workbench.sessionOverviewState; },
+    reconcile: workbench.reconcileSelection, reveal: workbench.takeReveal,
+    filter: workbench.filterChanged,
+    refresh: (id, before) => workbench.refresh('memory', { id, before }),
+    traceRefresh: (id, force) => workbench.refresh('trace', { id, force }),
+    resultRefresh: id => workbench.refresh('results', { id }),
+    overviewRefresh: id => workbench.refresh('overview', { id }),
+  };
+  Object.assign(context.window, {
+    selectSession: workbench.selectSession, setSessionView: workbench.setView,
+    loadEarlierSessionMemory: workbench.loadEarlier, retrySessionTrace: workbench.retryTrace, showSessionList: workbench.showList,
+  });
+  return { context, panel, state, workbench, actions: context.window, requests,
     flush: () => { for (const task of tasks.splice(0)) task(); },
     answer: (i, payload) => requests[i].resolve({ ok: true, json: async () => payload }),
   };
@@ -343,31 +349,66 @@ test('shifted newest page preserves initial displayed history and cursor only wh
   const row = id => ({ id, at: '2026-10-09T' + ({ anchor: '10', recent: '11', latest: '12', newest: '13' }[id]) + ':00:00Z' });
   const select = c.actions.selectSession('a');
   c.answer(0, { rows: [row('anchor'), row('recent')], has_earlier: true, next_cursor: 'before-anchor' }); await select;
-  c.context.sessionReadingHistory = () => true;
+  const body = { scrollHeight: 1000, clientHeight: 300, scrollTop: 200, getClientRects: () => [1] };
+  const detail = { _sessionReadingKey: 'a|memory', querySelector: () => body };
+  const getElement = c.context.document.getElementById;
+  c.context.document.getElementById = id => id === 'session-detail' ? detail : getElement(id);
   const readingRefresh = c.state.refresh('a');
   c.answer(1, { rows: [row('recent'), row('latest')], has_earlier: true, next_cursor: 'before-recent' }); await readingRefresh;
   assert.deepEqual(Array.from(c.state.memory.rows, row => row.id), ['anchor', 'recent', 'latest']);
   assert.equal(c.state.memory.next_cursor, 'before-anchor');
-  c.context.sessionReadingHistory = () => false;
+  body.scrollTop = 700;
   const followingRefresh = c.state.refresh('a');
   c.answer(2, { rows: [row('latest'), row('newest')], has_earlier: true, next_cursor: 'before-latest' }); await followingRefresh;
   assert.deepEqual(Array.from(c.state.memory.rows, row => row.id), ['latest', 'newest'], 'following latest returns to bounded newest page');
   assert.equal(c.state.memory.next_cursor, 'before-latest');
 });
 
-test('history detection uses current visible scroll position and saved history while Back hides detail', () => {
-  const context = { window: {}, document: { getElementById: () => detail } };
+test('reading history uses the visible scroll position of the selected session and view', () => {
+  const c = controller();
   const body = { scrollHeight: 1000, clientHeight: 300, scrollTop: 200, getClientRects: () => [1] };
   const detail = { _sessionReadingKey: 'a|memory', querySelector: () => body };
-  vm.createContext(context);
-  vm.runInContext(readFileSync(path.join(web, 'tab-overview.js'), 'utf8'), context);
-  assert.equal(context.sessionReadingHistory('a', 'memory'), true);
+  c.context.document.getElementById = () => detail;
+  assert.equal(c.workbench.readingHistory('a', 'memory'), true);
   body.scrollTop = 700;
-  assert.equal(context.sessionReadingHistory('a', 'memory'), false);
-  body.getClientRects = () => [];
-  vm.runInContext("sessionReadingState.set('a|memory', { nearLatest: false });", context);
-  assert.equal(context.sessionReadingHistory('a', 'memory'), true);
-  vm.runInContext("sessionReadingState.set('a|memory', { nearLatest: true });", context);
-  assert.equal(context.sessionReadingHistory('a', 'memory'), false);
-  assert.equal(context.sessionReadingHistory('b', 'memory'), false);
+  assert.equal(c.workbench.readingHistory('a', 'memory'), false);
+  assert.equal(c.workbench.readingHistory('b', 'memory'), false);
+});
+
+test('credential loss invalidates every pending read without erasing retained facts', async () => {
+  const c = controller('', true);
+  const first = c.actions.selectSession('a');
+  c.answer(0, { rows: [{ id: 'saved' }] });
+  c.answer(1, { session_id: 'a', requests: [], findings: [] });
+  await first;
+  const memory = c.state.refresh('a');
+  const overview = c.state.overviewRefresh('a');
+  const results = c.actions.setSessionView('results');
+  const trace = c.actions.setSessionView('trace');
+  c.workbench.invalidate();
+  c.answer(2, { rows: [{ id: 'late' }] });
+  c.answer(3, { session_id: 'a', requests: [{ kind: 'guard', id: 'late' }], findings: [] });
+  c.answer(4, outcomes('a'));
+  c.answer(5, [traceEvent('a', 'late')]);
+  await Promise.all([memory, overview, results, trace]);
+  assert.equal(c.state.memory.rows[0].id, 'saved');
+  assert.equal(c.state.overview.requests.length, 0);
+  assert.equal(c.state.results, null);
+  assert.equal(c.state.overviewState.error, 'unavailable');
+  assert.equal(c.state.resultState.error, 'unavailable');
+  assert.equal(c.state.memoryState.loading, false);
+  assert.equal(c.state.trace.length, 0);
+  assert.equal(c.state.traceState.error, 'unavailable');
+  assert.equal(c.state.traceState.loading, false);
+});
+
+test('workbench instances do not share selection, view or retained reads', async () => {
+  const a = controller(), b = controller();
+  const first = a.actions.selectSession('a'); a.answer(0, { rows: [{ id: 'a-row' }] }); await first;
+  const second = b.actions.selectSession('b'); b.answer(0, { rows: [{ id: 'b-row' }] }); await second;
+  const trace = a.actions.setSessionView('trace'); a.answer(1, [traceEvent('a')]); await trace;
+  assert.equal(b.state.selected, 'b');
+  assert.equal(b.state.mode, 'memory');
+  assert.equal(b.state.memory.rows[0].id, 'b-row');
+  assert.equal(b.state.trace.length, 0);
 });

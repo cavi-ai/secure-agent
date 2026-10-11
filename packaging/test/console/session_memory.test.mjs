@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../daemon/internal/api/web_dist');
 const context = { Date };
 vm.createContext(context);
-for (const file of ['lib.js', 'tab-sessions.js']) {
+for (const file of ['lib.js', 'session-workbench.js']) {
   vm.runInContext(readFileSync(path.join(web, file), 'utf8'), context, { filename: file });
 }
 

@@ -6,7 +6,7 @@ import vm from 'node:vm';
 const web = new URL('../../../daemon/internal/api/web_dist/', import.meta.url);
 const ctx = { Date, window: { SA: {} } };
 vm.createContext(ctx);
-for (const file of ['lib.js', 'tab-overview.js', 'tab-sessions.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), ctx);
+for (const file of ['lib.js', 'tab-overview.js', 'session-workbench.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), ctx);
 const at = '2026-10-09T12:00:00Z';
 const evidence = Object.fromEntries(['reviews', 'interventions', 'incidents'].map(k => [k, { available: true, at_limit: false, limit: 100 }]));
 

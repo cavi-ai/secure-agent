@@ -27,9 +27,7 @@ function fixture(fetch) {
     telemetryFetchGen: 0, telemetrySlowGen: 0, expectedEgressReadGen: 0,
     protectionContext: null, protectionContextGeneration: 0,
     pendingConsoleContext: null, handoffGeneration: 0, openConsoleContext: async () => {},
-    sessionMemoryGeneration: 0, sessionTimelineRequest: 0, sessionOverviewGeneration: 0, sessionOutcomesGeneration: 0,
-    sessionMemoryState: {}, sessionOverviewState: {}, sessionOverviewRefreshAgain: false, sessionOutcomesState: {},
-    sessionTimelineState: {},
+    sessionWorkbench: { invalidate() { ctx.workbenchInvalidated = true; } },
     historyScopes: { flags: null, events: null }, timelineSession: null,
     reviewCursor: '', sinceParam: () => '',
     filters: { flags: { agent: 'all', rule: 'all', minsev: 'all', since: 'all' }, events: { kind: 'all', since: 'all' } },
@@ -244,6 +242,7 @@ test('a guard endpoint 403 ends the session even when the snapshot succeeds', as
   assert.equal(f.ctx.sessionEnded, true);
   assert.equal(f.stops(), 1);
   assert.equal(f.ended(), 1);
+  assert.equal(f.ctx.workbenchInvalidated, true);
   assert.equal(f.ctx.telemetryData.status, prior);
   assert.equal(f.renders.length, 0);
 });
