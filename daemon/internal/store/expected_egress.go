@@ -115,7 +115,22 @@ func scanExpectedRule(scanner interface{ Scan(...any) error }) (ExpectedEgressRu
 	return r, nil
 }
 
-func (s *Store) CreateExpectedEgressRule(rule ExpectedEgressRule) (out ExpectedEgressRule, writeErr error) {
+type expectedEgressRuleDB interface {
+	QueryRow(string, ...any) *sql.Row
+	Exec(string, ...any) (sql.Result, error)
+}
+
+func (s *Store) CreateExpectedEgressRule(rule ExpectedEgressRule) (ExpectedEgressRule, error) {
+	return s.createExpectedEgressRule(rule, false)
+}
+
+// CreateExpectedEgressRuleWithAudit commits an operator approval and its audit
+// together. An active rule is returned unchanged, with an audit of the request.
+func (s *Store) CreateExpectedEgressRuleWithAudit(rule ExpectedEgressRule) (ExpectedEgressRule, error) {
+	return s.createExpectedEgressRule(rule, true)
+}
+
+func (s *Store) createExpectedEgressRule(rule ExpectedEgressRule, audited bool) (out ExpectedEgressRule, writeErr error) {
 	var err error
 	rule, err = canonicalExpectedRule(rule)
 	if err != nil {
@@ -124,22 +139,49 @@ func (s *Store) CreateExpectedEgressRule(rule ExpectedEgressRule) (out ExpectedE
 	defer func() { s.noteWrite("expected egress create", writeErr) }()
 	s.egressMu.Lock()
 	defer s.egressMu.Unlock()
+	var db expectedEgressRuleDB = s.db
+	var tx *sql.Tx
+	if audited {
+		tx, err = s.db.Begin()
+		if err != nil {
+			return ExpectedEgressRule{}, err
+		}
+		defer tx.Rollback()
+		db = tx
+	}
 	var existing ExpectedEgressRule
-	existing, err = scanExpectedRule(s.db.QueryRow(`SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at FROM expected_egress_rules WHERE id=?`, rule.ID))
+	existing, err = scanExpectedRule(db.QueryRow(`SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at FROM expected_egress_rules WHERE id=?`, rule.ID))
 	if err == nil && existing.RevokedAt == nil {
-		return existing, nil
-	}
-	if err != nil && err != sql.ErrNoRows {
+		rule = existing
+	} else if err != nil && err != sql.ErrNoRows {
 		return rule, err
-	}
-	rule.CreatedAt = time.Now().UTC()
-	_, err = s.db.Exec(`INSERT INTO expected_egress_rules(id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at)
+	} else {
+		rule.CreatedAt = time.Now().UTC()
+		_, err = db.Exec(`INSERT INTO expected_egress_rules(id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at)
 	 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL) ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at, revoked_at=NULL`,
-		rule.ID, rule.Agent, rule.Kind, rule.Host, rule.Protocol, rule.Port, rule.ExePath, rule.Harness, rule.Workspace, rule.Rationale, rule.CreatedBy, rule.CreatedAt.Format(time.RFC3339Nano))
-	return rule, err
+			rule.ID, rule.Agent, rule.Kind, rule.Host, rule.Protocol, rule.Port, rule.ExePath, rule.Harness, rule.Workspace, rule.Rationale, rule.CreatedBy, rule.CreatedAt.Format(time.RFC3339Nano))
+		if err != nil {
+			return rule, err
+		}
+	}
+	if audited {
+		if err := s.commitExpectedEgressAudit(tx, AuditEntry{Action: "expected-egress-create", Rule: rule.ID, ToMode: rule.Kind, Detail: "operator decision from observed episode"}); err != nil {
+			return ExpectedEgressRule{}, err
+		}
+	}
+	return rule, nil
 }
 
-func (s *Store) RevokeExpectedEgressRule(id string) (writeErr error) {
+func (s *Store) RevokeExpectedEgressRule(id string) error {
+	return s.revokeExpectedEgressRule(id, false)
+}
+
+// RevokeExpectedEgressRuleWithAudit commits a revocation and its audit together.
+func (s *Store) RevokeExpectedEgressRuleWithAudit(id string) error {
+	return s.revokeExpectedEgressRule(id, true)
+}
+
+func (s *Store) revokeExpectedEgressRule(id string, audited bool) (writeErr error) {
 	if id == "" {
 		return errors.New("missing rule id")
 	}
@@ -150,7 +192,18 @@ func (s *Store) RevokeExpectedEgressRule(id string) (writeErr error) {
 	}()
 	s.egressMu.Lock()
 	defer s.egressMu.Unlock()
-	result, err := s.db.Exec(`UPDATE expected_egress_rules SET revoked_at=? WHERE id=? AND revoked_at IS NULL`, time.Now().UTC().Format(time.RFC3339Nano), id)
+	var db expectedEgressRuleDB = s.db
+	var tx *sql.Tx
+	if audited {
+		var err error
+		tx, err = s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		db = tx
+	}
+	result, err := db.Exec(`UPDATE expected_egress_rules SET revoked_at=? WHERE id=? AND revoked_at IS NULL`, time.Now().UTC().Format(time.RFC3339Nano), id)
 	if err != nil {
 		return err
 	}
@@ -161,7 +214,25 @@ func (s *Store) RevokeExpectedEgressRule(id string) (writeErr error) {
 	if n == 0 {
 		return sql.ErrNoRows
 	}
+	if audited {
+		return s.commitExpectedEgressAudit(tx, AuditEntry{Action: "expected-egress-revoke", Rule: id, ToMode: "revoked", Detail: "operator decision"})
+	}
 	return nil
+}
+
+// The transaction owns its connection: never call PutAudit here, which writes
+// through the pool and could block waiting for the same in-memory connection.
+func (s *Store) commitExpectedEgressAudit(tx *sql.Tx, a AuditEntry) (writeErr error) {
+	defer func() { s.noteWrite("operator audit", writeErr) }()
+	_, err := tx.Exec(`INSERT INTO audit (ts, action, rule, from_mode, to_mode, detail) VALUES (?, ?, ?, ?, ?, ?)`,
+		time.Now().UTC().Format(time.RFC3339Nano), a.Action, a.Rule, a.FromMode, a.ToMode, a.Detail)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM audit WHERE id NOT IN (SELECT id FROM audit ORDER BY id DESC LIMIT ?)`, maxAudit); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ListExpectedEgressRules() []ExpectedEgressRule {
