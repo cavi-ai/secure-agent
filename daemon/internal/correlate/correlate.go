@@ -352,14 +352,6 @@ func (c *Correlator) shouldFlag(flagID, rule string, pid int32, subject string, 
 		}
 	})
 	c.lastFire[key] = ts
-	// Bound the map: prune entries past 4x the largest window.
-	if len(c.lastFire) > 1024 {
-		for k, t := range c.lastFire {
-			if ts.Sub(t) > 4*time.Hour {
-				delete(c.lastFire, k)
-			}
-		}
-	}
 	return true
 }
 
@@ -911,6 +903,13 @@ func (c *Correlator) evictStaleLocked(now time.Time) {
 	}
 	c.lastEviction = now
 	c.evictOwnedLocked(now)
+	// Repeat suppression outlives every rule window, but expired subjects
+	// should not wait for another flag or trigger a full scan per insertion.
+	for key, at := range c.lastFire {
+		if now.Sub(at) > 4*time.Hour {
+			delete(c.lastFire, key)
+		}
+	}
 	for pid, list := range c.marks {
 		valid := list[:0]
 		for _, m := range list {
