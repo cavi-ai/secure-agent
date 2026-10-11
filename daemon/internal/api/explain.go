@@ -174,7 +174,7 @@ func (a *API) explainFlagIn(f model.Flag, full bool, env *explainEnv) *model.Fla
 		links, _ := a.store.IncidentIDsForFlags([]string{f.ID})
 		env.incidentIDs[f.ID] = links[f.ID]
 	}
-	assessment := assessmentForFlag(f)
+	assessment := model.AssessFinding(f)
 	ex := &model.FlagExplain{Disposition: dispositionFor(f), Assessment: &assessment}
 	sess := a.session(env, f.SessionID)
 	workspace := f.Workspace

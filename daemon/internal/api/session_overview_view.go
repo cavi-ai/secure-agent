@@ -42,7 +42,7 @@ func readSessionOverviewEvidence(st sessionOverviewStore, id string) (sessionOve
 	}
 	out := sessionOverviewEvidence{Session: sess, Findings: []SessionFinding{}, Truncated: len(flags) > findingCap}
 	for _, f := range flags[:min(len(flags), findingCap)] {
-		out.Findings = append(out.Findings, SessionFinding{ID: f.ID, Title: memoryRuleTitle(f.Rule), At: f.TS, Assessment: assessmentForFlag(f)})
+		out.Findings = append(out.Findings, SessionFinding{ID: f.ID, Title: memoryRuleTitle(f.Rule), At: f.TS, Assessment: model.AssessFinding(f)})
 	}
 	return out, nil
 }

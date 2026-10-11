@@ -145,13 +145,26 @@ func TestGroupedAssessmentPreservesStrongestReviewedEvidence(t *testing.T) {
 	direct := assessmentReadConnect()
 	direct.Evidence[0].Sub = "agent tool read"
 	direct.Acknowledged = true
-	a := assessmentForFlags([]model.Flag{legacy, direct})
+	a := model.StrongestFindingAssessment([]model.Flag{legacy, direct})
 	if a.Risk != "critical" || a.ResidualRisk != "model-exposure" || a.ReviewState != "unreviewed" {
 		t.Fatalf("group hid stronger reviewed evidence: %+v", a)
 	}
 	legacy.Acknowledged = true
-	a = assessmentForFlags([]model.Flag{legacy, direct})
+	a = model.StrongestFindingAssessment([]model.Flag{legacy, direct})
 	if a.Risk != "critical" || a.ResidualRisk != "model-exposure" || a.ReviewState != "reviewed" {
 		t.Fatalf("group review erased risk: %+v", a)
+	}
+}
+
+func TestGroupedAssessmentPrefersHighOverReviewInEitherOrder(t *testing.T) {
+	review := assessmentReadConnect()
+	high := assessmentReadConnect()
+	high.Evidence[1].PID = high.Evidence[0].PID
+	high.Acknowledged = true
+	for _, flags := range [][]model.Flag{{review, high}, {high, review}} {
+		a := model.StrongestFindingAssessment(flags)
+		if a.Risk != "high" || !slices.Contains(a.EvidenceBasis, "same-tree-connect") || a.ReviewState != "unreviewed" {
+			t.Fatalf("group chose weaker evidence: %+v", a)
+		}
 	}
 }
