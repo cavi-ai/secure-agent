@@ -136,7 +136,7 @@
     try { sessionStorage.setItem('sa.spend-view', JSON.stringify({ by: 'repo', since: '24h' })); } catch { /* ignored */ }
   }
   // spenddaydemo: a tab whose saved Spend view is by day over 7d (a reload).
-  if (scenarios.has('spenddaydemo')) {
+  if (scenarios.has('spenddaydemo') || scenarios.has('usagefocus')) {
     try { sessionStorage.setItem('sa.spend-view', JSON.stringify({ by: 'day', since: '7d' })); } catch { /* ignored */ }
   }
 
@@ -819,11 +819,16 @@
       const params = new URLSearchParams(String(path).split('?')[1] || '');
       const by = params.get('by');
       if (by && data['/costs?by=' + by]) body = data['/costs?by=' + by];
-      if (scenarios.has('remodelusage') && body) {
+      if ((scenarios.has('remodelusage') || scenarios.has('usagefocus')) && body) {
         const tz = Number(params.get('tz') || 0);
         if (by === 'day') {
-          const last = Date.parse(body.until) + tz * 60000;
-          body = {...body, rows:body.rows.map((row,i) => ({...row,key:new Date(last - (body.rows.length - 1 - i) * 86400000).toISOString().slice(0,10)}))};
+          if (scenarios.has('usagefocus')) {
+            body = {...body, since:'2026-10-08T00:00:00Z', until:'2026-10-11T00:00:00Z',
+              total:{calls:33,cost_usd:33}, rows:[{key:'2026-10-09',calls:11,cost_usd:11},{key:'2026-10-10',calls:22,cost_usd:22}]};
+          } else {
+            const last = Date.parse(body.until) + tz * 60000;
+            body = {...body, rows:body.rows.map((row,i) => ({...row,key:new Date(last - (body.rows.length - 1 - i) * 86400000).toISOString().slice(0,10)}))};
+          }
           data['/costs?by=day'] = body;
         } else if (params.get('until') && params.get('since')) {
           const day = new Date(Date.parse(params.get('since')) + tz * 60000).toISOString().slice(0,10);
@@ -831,6 +836,10 @@
           const total = row ? {...row,key:''} : {key:'',calls:0,cost_usd:0};
           body = {...body,by:'repo',since:params.get('since'),until:params.get('until'),total,
             rows:row ? [{...row,key:'fixture-repo'}] : []};
+          if (scenarios.has('usagefocus') && row) {
+            body.rows = Array.from({length:11}, (_,i) => ({key:`usage-repo-${String(i+1).padStart(2,'0')}`,
+              calls:row.calls/11,cost_usd:row.cost_usd*(11-i)/66}));
+          }
         }
       }
       costLog.push(String(path).split('?')[1] || '');

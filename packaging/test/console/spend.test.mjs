@@ -247,3 +247,109 @@ test('spendListItems: a row whose calls are all on plans reads "plan", not $0.00
   assert.match(html, /openai<\/span>[\s\S]*?<span class="spend-cost">\$0\.00<\/span>/);
   assert.equal((html.match(/spend-cost">plan</g) || []).length, 1);
 });
+
+
+function inspectorFixture() {
+  const document = {activeElement:null};
+  const focusCalls = [];
+  const node = (dataset) => ({dataset, closest() { return this; }, focus(options) {
+    document.activeElement = this; focusCalls.push({node:this,options});
+  }});
+  const reset = node({action:"reset-spend-day"});
+  const bar = node({action:"select-spend-day",day:"2026-10-10"});
+  const inspector = {
+    nodes:[], replacement:[],
+    contains(item) { return this.nodes.includes(item); },
+    querySelectorAll(selector) { return this.nodes.filter(item => selector === "[data-spend-repo]" ? item.dataset.spendRepo !== undefined : !!item.dataset.action); },
+    querySelector(selector) { return selector.includes("reset-spend-day") ? this.nodes.find(item => item.dataset.action === "reset-spend-day") : null; },
+    set innerHTML(value) { this.nodes = this.replacement; }
+  };
+  document.querySelector = () => bar;
+  return {document,node,inspector,reset,bar,focusCalls};
+}
+
+test("selected-day repository rows have escaped stable identities and named usage without Tab stops", () => {
+  const rows = [{key:"repo\"<x>",calls:3,cost_usd:2,plan_calls:1,unpriced_calls:1,local_calls:1}];
+  const html = joined(spendListItems(rows,8,{by:"repo",dayDetail:true}));
+  assert.match(html,/data-spend-repo="repo&quot;&lt;x&gt;"/);
+  assert.match(html,/tabindex="-1" role="group" aria-label="repo&quot;&lt;x&gt; · \$2\.00 · 3 calls · 1 on plans · 1 unpriced · 1 local"/);
+  assert.doesNotMatch(joined(spendListItems(rows,8,{by:"repo"})),/data-spend-repo|tabindex|role="group"/);
+  const card={since:'2026-10-09T00:00:00Z',until:'2026-10-11T00:00:00Z'};
+  const day={key:'2026-10-10',calls:3,cost_usd:2};
+  const report={...spendDayWindow(day.key,card,0),by:'repo',total:day,rows};
+  assert.match(spendDayDetailHTML(day,card,0,report),/data-spend-repo="repo&quot;&lt;x&gt;" tabindex="-1"/);
+});
+
+test("breakdown refresh preserves focused repository identity across replacement and reordering", () => {
+  const f = inspectorFixture(); ctx.document=f.document;
+  const old=f.node({spendRepo:"repo-9"});
+  const replacement=f.node({spendRepo:"repo-9"});
+  f.inspector.nodes=[f.reset,old]; f.inspector.replacement=[f.node({spendRepo:"repo-2"}),replacement,f.reset];
+  f.document.activeElement=old;
+  ctx.patchSpendDayInspector(f.inspector,"updated");
+  assert.equal(f.document.activeElement,replacement);
+  assert.equal(f.focusCalls.length,1);
+  assert.equal(f.focusCalls[0].options.preventScroll,true);
+  ctx.patchSpendDayInspector(f.inspector,"updated");
+  assert.equal(f.focusCalls.length,1,"unchanged markup does not refocus");
+});
+
+test("disappeared focused repository falls back to Clear selection; outside focus remains untouched", () => {
+  const f = inspectorFixture(); ctx.document=f.document;
+  const old=f.node({spendRepo:"removed"});
+  f.inspector.nodes=[f.reset,old]; f.inspector.replacement=[f.reset]; f.document.activeElement=old;
+  ctx.patchSpendDayInspector(f.inspector,"removed");
+  assert.equal(f.document.activeElement,f.reset);
+  const outside=f.node({action:"refresh"}); f.document.activeElement=outside;
+  ctx.patchSpendDayInspector(f.inspector,"background");
+  assert.equal(f.document.activeElement,outside);
+  assert.equal(f.focusCalls.length,1);
+  f.document.activeElement=f.reset; f.inspector.replacement=[];
+  ctx.patchSpendDayInspector(f.inspector,"");
+  assert.equal(f.document.activeElement,f.bar);
+});
+
+test("focused expansion captures first newly revealed repository before rerender reorders rows", () => {
+  const f=inspectorFixture();
+  const rows=Array.from({length:11},(_,i)=>({key:`repo-${i+1}`,calls:1,cost_usd:11-i}));
+  f.inspector.nodes=[...rows.slice(0,8).map(row=>f.node({spendRepo:row.key})),f.reset];
+  const control=f.node({action:"show-more",key:"spend"});
+  control.closest=selector=>selector === ".spend-day-inspector" ? f.inspector : null;
+  const expandedLists=new Set(); let rendered=0;
+  const c={document:f.document,telemetryData:{spendDayReport:{rows}},expandedLists,topCostRows:ctx.topCostRows,
+    renderNow(keys) { assert.equal(Array.from(keys).join(),"spend"); rendered++;
+      f.inspector.nodes=[...rows.slice().reverse().map(row=>f.node({spendRepo:row.key})),f.reset];
+    }};
+  vm.createContext(c);
+  const source=readFileSync(path.join(webDist,"app.js"),"utf8");
+  vm.runInContext(source.slice(source.indexOf("  function expandSpendDayRepositories("),source.indexOf("  // Spend card controls:")),c);
+  assert.equal(c.expandSpendDayRepositories(control),true);
+  assert.equal(f.document.activeElement.dataset.spendRepo,"repo-9");
+  assert.equal(expandedLists.has("spend"),true);
+  assert.equal(rendered,1);
+  assert.equal(f.focusCalls.length,1);
+  assert.equal(f.focusCalls[0].options,undefined,"explicit activation permits native focused-row visibility");
+  control.closest=()=>null;
+  assert.equal(c.expandSpendDayRepositories(control),false);
+  assert.equal(rendered,1,"shared Show more consumers use their existing path");
+  assert.match(source,/if \(d\.key === .spend. && expandSpendDayRepositories\(el\)\) break;/);
+});
+
+test('Clear selection restores its selected chart bar without changing the chart report or expansion', () => {
+  const f=inspectorFixture();
+  const chart={by:'day',since:'2026-10-09T00:00:00Z',until:'2026-10-11T00:00:00Z'};
+  const telemetryData={spendDay:'2026-10-10',spendDayReport:{rows:[]},spendDayRefresh:{loading:true},costsCard:chart};
+  const expandedLists=new Set(['spend']);
+  const c={telemetryData,expandedLists,spendDayGen:1,document:{querySelectorAll:()=>[f.bar]},renderNow:()=>{}};
+  vm.createContext(c);
+  const source=readFileSync(path.join(webDist,'app.js'),'utf8');
+  vm.runInContext(source.slice(source.indexOf('  function resetSpendDay('),source.indexOf('  async function loadSpendDay(')),c);
+  c.resetSpendDay(true);
+  assert.equal(telemetryData.spendDay,'');
+  assert.equal(telemetryData.spendDayReport,null);
+  assert.equal(c.spendDayGen,2);
+  assert.equal(f.document.activeElement,f.bar);
+  assert.equal(f.focusCalls[0].options.preventScroll,true);
+  assert.equal(telemetryData.costsCard,chart);
+  assert.equal(expandedLists.has('spend'),true);
+});

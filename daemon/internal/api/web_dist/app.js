@@ -2192,6 +2192,21 @@ document.addEventListener('DOMContentLoaded', () => {
     loadSpendDay();
   }
 
+  function expandSpendDayRepositories(control) {
+    const inspector = control.closest('.spend-day-inspector');
+    if (!inspector) return false;
+    const shown = new Set(Array.from(inspector.querySelectorAll('[data-spend-repo]'), node => node.dataset.spendRepo));
+    const rows = telemetryData.spendDayReport?.rows || [];
+    const next = topCostRows({ rows }, rows.length).find(row => !shown.has(String(row.key)));
+    expandedLists.add('spend');
+    renderNow(['spend']);
+    const target = next && Array.from(inspector.querySelectorAll('[data-spend-repo]')).find(node => node.dataset.spendRepo === String(next.key));
+    // Explicit expansion moves to the first newly revealed repository. Native
+    // focus supplies ordinary visibility; background rendering never scrolls.
+    (target || inspector.querySelector('[data-action="reset-spend-day"]'))?.focus();
+    return true;
+  }
+
   // Spend card controls: a change saves the view, clears the card and loads
   // the new report.
   const spendBySel = document.getElementById('spend-by');
@@ -5303,6 +5318,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'show-more':
         e.preventDefault();
+        if (d.key === 'spend' && expandSpendDayRepositories(el)) break;
         expandedLists.add(d.key || '');
         if (d.key === 'events') renderNow(['events']);
         else if (String(d.key).startsWith('agents:')) renderNow(['agents']);

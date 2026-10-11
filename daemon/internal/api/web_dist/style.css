@@ -1962,6 +1962,7 @@ button.spend-day:focus-visible { outline: 2px solid var(--brand); outline-offset
 .spend-day-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .spend-day-detail h3 { font-size: .875rem; font-weight: 650; }
 .spend-day-detail p { margin: 0; overflow-wrap: anywhere; }
+.spend-day-inspector [data-spend-repo]:focus { outline: 2px solid var(--brand); outline-offset: 2px; }
 .spend-day-range, .spend-day-status { color: var(--tx-2); font-size: .75rem; line-height: 1.5; }
 .spend-day-summary { color: var(--tx-1); font-size: .8125rem; line-height: 1.5; }
 .spend-day-track { display: flex; align-items: flex-end; width: 100%; max-width: 28px; height: 96px; border-radius: 4px; background: var(--bg-2); overflow: hidden; }

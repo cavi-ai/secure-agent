@@ -633,13 +633,27 @@ function renderSpend() {
     const inspector = wrap.nextElementSibling;
     const selected = rows.find(row => row.key === SA.t.spendDay);
     const html = selected ? spendDayDetailHTML(selected, card, SA.t.costsCardTZ, SA.t.spendDayReport, SA.t.spendDayRefresh, SA.expanded) : '';
-    if (inspector._saMarkup !== html) {
-      const resetFocused = inspector.contains(document.activeElement) && document.activeElement.dataset.action === 'reset-spend-day';
-      inspector.innerHTML = html;
-      inspector._saMarkup = html;
-      if (resetFocused) inspector.querySelector('[data-action="reset-spend-day"]')?.focus({ preventScroll: true });
-    }
+    patchSpendDayInspector(inspector, html);
   }
+}
+
+// A refreshed breakdown may replace or reorder its rows. Restore only focus
+// already owned by this inspector, using repository identity rather than position.
+function patchSpendDayInspector(inspector, html) {
+  if (inspector._saMarkup === html) return;
+  const active = document.activeElement;
+  const owned = inspector.contains(active);
+  const repo = owned ? active.closest('[data-spend-repo]')?.dataset.spendRepo : undefined;
+  const action = owned ? active.dataset.action : undefined;
+  inspector.innerHTML = html;
+  inspector._saMarkup = html;
+  if (!owned) return;
+  const rows = Array.from(inspector.querySelectorAll('[data-spend-repo]'));
+  const target = repo !== undefined ? rows.find(node => node.dataset.spendRepo === repo)
+    : Array.from(inspector.querySelectorAll('[data-action]')).find(node => node.dataset.action === action);
+  (target || inspector.querySelector('[data-action="reset-spend-day"]')
+    || document.querySelector('[data-action="select-spend-day"][aria-pressed="true"]')
+    || document.querySelector('[data-action="select-spend-day"]'))?.focus({ preventScroll: true });
 }
 
 // Match the server's fixed-offset day buckets, including truncated boundary
@@ -689,7 +703,7 @@ function spendDayDetailHTML(row, card, tz, report, state, expanded) {
     : state.loading || (matching && report.refreshing) ? (available ? spendCacheText([report]) || 'Refreshing day breakdown…' : 'Loading day breakdown…')
     : !available ? 'Day breakdown unavailable.' : '';
   const rows = available && Array.isArray(report.rows) ? report.rows : [];
-  const breakdown = available ? `<h4>By repository</h4><div class="spend-list">${spendListItems(rows, 8, { by: 'repo', expanded }).map(item => item.html).join('') || '<p>No model calls recorded for this day.</p>'}</div>` : '';
+  const breakdown = available ? `<h4>By repository</h4><div class="spend-list">${spendListItems(rows, 8, { by: 'repo', expanded, dayDetail: true }).map(item => item.html).join('') || '<p>No model calls recorded for this day.</p>'}</div>` : '';
   return `<section class="spend-day-detail" aria-label="Selected day usage">
     <div class="spend-day-detail-head"><h3>${escapeHTML(row.key)}</h3><button type="button" class="btn btn-ghost btn-sm" data-action="reset-spend-day">Clear selection</button></div>
     <p class="spend-day-range">${escapeHTML(spendDayRangeText(row.key, range))}</p>
@@ -786,7 +800,9 @@ function spendListItems(rows, n, opts) {
   const row = r => {
     const calls = Number(r.calls) || 0;
     const unknown = opts.by === 'provider' && r.key === '(unknown)';
-    return `<div class="spend-row">
+    const label = [r.key, spendRowCost(r), spendHintText(r), Number(r.local_calls) ? `${Number(r.local_calls)} local` : ''].filter(Boolean).join(' · ');
+    const focus = opts.dayDetail ? ` data-spend-repo="${escapeHTML(r.key)}" tabindex="-1" role="group" aria-label="${escapeHTML(label)}"` : '';
+    return `<div class="spend-row"${focus}>
       <span class="spend-key" title="${escapeHTML(r.key)}">${escapeHTML(r.key)}</span>
       ${unknown ? '<span class="spend-hint">provider not recorded</span>' : ''}
       ${r.harness ? harnessChipHTML(r.harness) : ''}
