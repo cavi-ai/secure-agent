@@ -144,7 +144,7 @@ function egressIntervalText(intervals) {
   return low === high ? `about every ${low} min` : `about every ${low}–${high} min`;
 }
 
-function egressEpisodeHTML(row) {
+function egressEpisodeHTML(row, selected = false) {
   const o = row.observed || {};
   const s = o.scope || {};
   const id = escapeHTML(row.id || o.id || '');
@@ -156,6 +156,8 @@ function egressEpisodeHTML(row) {
   const times = [o.first_seen ? `First ${escapeHTML(o.first_seen)}` : '', o.last_seen ? `Last ${escapeHTML(o.last_seen)}` : ''].filter(Boolean).join(' · ');
   const revoke = row.expected && row.expected_rule_id
     ? `<button type="button" class="btn btn-ghost btn-sm" data-action="revoke-expected-egress" data-id="${escapeHTML(row.expected_rule_id)}">Revoke expectation</button>` : '';
+  const inspect = row.expected && row.expected_rule_id
+    ? `<button type="button" class="btn btn-ghost btn-sm" data-action="view-egress-expectation" data-id="${escapeHTML(row.expected_rule_id)}" data-episode-id="${id}">View expectation</button>` : '';
   const inference = row.advisor_inference;
   const why = inference && inference.possible_purpose
     ? `<div class="egress-inference"><span>Advisor inference${inference.confidence ? ' · ' + escapeHTML(String(inference.confidence)) : ''}</span><p>${escapeHTML(inference.possible_purpose)}</p></div>`
@@ -165,11 +167,11 @@ function egressEpisodeHTML(row) {
       <button type="button" class="btn btn-ghost btn-sm" data-action="expect-egress" data-episode-id="${id}" data-kind="destination">Expect this destination</button>
       ${o.scope_complete ? `<span>All destinations for ${scope}</span><button type="button" class="btn btn-ghost btn-sm" data-action="expect-egress" data-episode-id="${id}" data-kind="scope">Expect all destinations for this activity scope</button>` : '<span>All-destinations choice unavailable: activity scope is incomplete.</span>'}
     </div>` : '';
-  return `<article class="egress-episode">
+  return `<article class="egress-episode${selected ? ' is-context-target' : ''}" data-egress-episode-id="${id}" tabindex="-1">
     <div class="egress-episode-head"><strong>${destination}</strong><span class="badge${row.expected ? ' badge-ok' : ''}">${row.expected ? 'expected' : row.candidate ? 'review' : 'observed'}</span></div>
     <div class="egress-observed"><span>Observed</span><p>${Number(o.count) || 0} calls · ${escapeHTML(egressIntervalText(o.intervals))} · ${scope || 'activity scope unavailable'}</p>${times ? `<p>${times}</p>` : ''}</div>
     ${why}
-    <div class="egress-episode-actions">${links}${revoke}${!inference ? `<button type="button" class="btn btn-ghost btn-sm" data-action="assess-egress-episode" data-id="${id}">Ask advisor why</button>` : ''}</div>
+    <div class="egress-episode-actions">${links}${inspect}${revoke}${!inference ? `<button type="button" class="btn btn-ghost btn-sm" data-action="assess-egress-episode" data-id="${id}">Ask advisor why</button>` : ''}</div>
     ${choices}
     <p class="egress-security-note">Expectations quiet informational repeats. Security checks and the connection record continue.</p>
   </article>`;
@@ -199,45 +201,87 @@ function egressAfterExpect(t, episodeId, kind) {
   };
 }
 
+// Context is an exact server ID, never a host- or scope-derived association.
+function protectionContextHTML(context, rules, episodes) {
+  if (!context) return '';
+  const rule = (rules || []).find(rule => rule.id === context.ruleId);
+  const origin = (episodes || []).find(row => row.id === context.episodeId && row.observed?.recurring);
+  let message, unavailable = false;
+  if (context.phase === 'traffic') {
+    unavailable = !origin;
+    message = origin ? 'Returned to the original activity.' : 'The original activity is no longer available. Recurring connections remain below.';
+  } else if (rule && !rule.revoked_at) {
+    message = 'Saved expectation for this activity. Its scope and rationale are shown below.';
+  } else if (context.status === 'loading') {
+    message = 'Loading the saved expectation…';
+  } else {
+    unavailable = true;
+    message = context.status === 'error' ? 'The saved expectation could not be loaded. Return to traffic to continue.'
+      : rule?.revoked_at ? 'This expectation was revoked.' : 'This expectation is no longer available.';
+  }
+  return `<div class="protection-context${unavailable ? ' protection-context-unavailable' : ''}" tabindex="-1" role="status"><p>${escapeHTML(message)}</p>${context.phase === 'rules' ? '<button type="button" class="btn btn-ghost btn-sm" data-action="back-egress-context">Back to traffic</button>' : ''}</div>`;
+}
+
 function renderEgressEpisodes() {
+  const SA = window.SA;
   const container = document.getElementById('recurring-egress-container');
   const badge = document.getElementById('badge-recurring-egress');
   if (!container) return;
-  const rows = (window.SA.t.egressEpisodes || []).filter(row => row.observed && row.observed.recurring);
-  const candidates = rows.filter(row => row.candidate).length;
-  if (badge) badge.textContent = candidates;
-  if (!rows.length) {
-    container.innerHTML = '<div class="empty"><span>No recurring connection pattern observed yet</span></div>';
-    return;
+  const rows = (SA.t.egressEpisodes || []).filter(row => row.observed && row.observed.recurring);
+  if (badge) badge.textContent = rows.filter(row => row.candidate).length;
+  const context = SA.protectionContext?.phase === 'traffic' ? SA.protectionContext : null;
+  const focused = container.contains(document.activeElement) ? document.activeElement : null;
+  const focusedEpisode = focused?.closest('[data-egress-episode-id]')?.dataset.egressEpisodeId;
+  const focusedAction = focused?.dataset.action;
+  const parts = rows.map(row => ({key:'episode:' + row.id, html:egressEpisodeHTML(row, context?.episodeId === row.id)}));
+  if (context) parts.unshift({key:'context', html:protectionContextHTML(context, SA.t.expectedEgress, rows)});
+  patchList(container, parts, {key:p => p.key, html:p => p.html,
+    empty:'<div class="empty"><span>No recurring connection pattern observed yet</span></div>'});
+  if (focused && !focused.isConnected) {
+    const target = [...container.querySelectorAll('[data-egress-episode-id]')].find(node => node.dataset.egressEpisodeId === focusedEpisode);
+    const action = target && [...target.querySelectorAll('[data-action]')].find(node => node.dataset.action === focusedAction && node.dataset.session === focused.dataset.session);
+    (action || target || container.querySelector('.protection-context'))?.focus({preventScroll:true});
   }
-  patchList(container, rows, { key: row => row.id, html: egressEpisodeHTML });
 }
 
 function renderExpectedEgressRules() {
+  const SA = window.SA;
   const container = document.getElementById('expected-egress-container');
   const badge = document.getElementById('badge-expected-egress');
   if (!container) return;
-  const rules = (window.SA.t.expectedEgress || []).filter(rule => !rule.revoked_at);
+  const rules = (SA.t.expectedEgress || []).filter(rule => !rule.revoked_at);
   if (badge) badge.textContent = rules.length;
-  if (!rules.length) {
-    container.innerHTML = '<div class="empty"><span>No expected connections saved</span></div>';
-    return;
-  }
+  const context = SA.protectionContext?.phase === 'rules' ? SA.protectionContext : null;
+  const focused = container.contains(document.activeElement) ? document.activeElement : null;
+  const focusedRule = focused?.closest('[data-expected-egress-rule]')?.dataset.expectedEgressRule;
+  const focusedAction = focused?.dataset.action;
   const groups = new Map();
   for (const rule of rules) {
     const harness = rule.harness || rule.agent || 'all';
     if (!groups.has(harness)) groups.set(harness, []);
     groups.get(harness).push(rule);
   }
-  container.innerHTML = `<div class="policy-list">${[...groups.entries()].sort(([a], [b]) => a.localeCompare(b))
-    .map(([harness, entries]) => `<section class="policy-harness-group"><div class="policy-harness-title">${harness === 'all' ? 'All harnesses' : harnessChipHTML(harness, { label: true })}</div>${entries.map(expectedEgressRuleHTML).join('')}</section>`).join('')}</div>`;
+  const parts = [...groups.keys()].sort((a,b) => a.localeCompare(b)).map(harness => ({key:'harness:' + harness,
+    html:`<section class="policy-harness-group"><div class="policy-harness-title">${harness === 'all' ? 'All harnesses' : harnessChipHTML(harness, {label:true})}</div><div class="policy-list" data-expected-harness="${escapeHTML(harness)}"></div></section>`}));
+  if (!rules.length) parts.push({key:'empty',html:'<div class="empty"><span>No expected connections saved</span></div>'});
+  if (context) parts.unshift({key:'context',html:protectionContextHTML(context, SA.t.expectedEgress, SA.t.egressEpisodes)});
+  patchList(container, parts, {key:p => p.key,html:p => p.html});
+  for (const list of container.querySelectorAll('[data-expected-harness]')) {
+    patchList(list, groups.get(list.dataset.expectedHarness) || [], {key:rule => rule.id,
+      html:rule => expectedEgressRuleHTML(rule, context?.ruleId === rule.id)});
+  }
+  if (focused && !focused.isConnected) {
+    const target = focusedRule ? [...container.querySelectorAll('[data-expected-egress-rule]')].find(node => node.dataset.expectedEgressRule === focusedRule) : null;
+    const action = target && [...target.querySelectorAll('[data-action]')].find(node => node.dataset.action === focusedAction);
+    (action || target || container.querySelector('.protection-context'))?.focus({preventScroll:true});
+  }
 }
 
-function expectedEgressRuleHTML(rule) {
+function expectedEgressRuleHTML(rule, selected = false) {
   const scope = rule.kind === 'scope'
     ? `All destinations · ${rule.agent} · ${rule.exe_path} · ${rule.harness} · ${rule.workspace}`
     : `${rule.host}:${rule.port} · ${rule.protocol} · ${rule.agent}`;
-  return `<div class="expected-egress-row"><span><strong>${escapeHTML(scope)}</strong><span>${escapeHTML(rule.rationale || 'Marked expected by the operator')}</span></span>
+  return `<div class="expected-egress-row${selected ? ' is-context-target' : ''}" data-expected-egress-rule="${escapeHTML(rule.id)}" tabindex="-1" role="group" aria-label="Saved expectation"${selected ? ' aria-current="true"' : ''}><span><strong>${escapeHTML(scope)}</strong><span>${escapeHTML(rule.rationale || 'Marked expected by the operator')}</span></span>
     <button type="button" class="btn btn-ghost btn-sm" data-action="revoke-expected-egress" data-id="${escapeHTML(rule.id)}">Revoke</button></div>`;
 }
 

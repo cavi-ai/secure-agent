@@ -148,7 +148,7 @@ test('Protection subviews retain selected ARIA and visibility without receiving 
     getElementById(id) { return id === nav.id ? nav : null; },
   };
   const runtime = {document, window:{history:{}}, sessionStorage:{setItem(){}},
-    activeTab:'home', activeSub:'board', activeProtection:'traffic', attentionSelection:null,
+    activeTab:'home', activeSub:'board', activeProtection:'traffic', attentionSelection:null, protectionContext:null, clearProtectionContext(){},
     PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){}};
   vm.createContext(runtime);
   vm.runInContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), runtime);

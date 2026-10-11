@@ -24,7 +24,8 @@ function fixture(fetch) {
   const ctx = {
     window: { SA: {} }, URLSearchParams,
     sessionEnded: false, SS_TOKEN_KEY: 'fixture', consoleToken: 'fixture', lastSnapshotAt: 0, cancelDialog: null,
-    telemetryFetchGen: 0, telemetrySlowGen: 0,
+    telemetryFetchGen: 0, telemetrySlowGen: 0, expectedEgressReadGen: 0,
+    protectionContext: null, protectionContextGeneration: 0,
     pendingConsoleContext: null, handoffGeneration: 0, openConsoleContext: async () => {},
     sessionMemoryGeneration: 0, sessionTimelineRequest: 0, sessionOverviewGeneration: 0, sessionOutcomesGeneration: 0,
     sessionMemoryState: {}, sessionOverviewState: {}, sessionOverviewRefreshAgain: false, sessionOutcomesState: {},
@@ -61,7 +62,8 @@ function fixture(fetch) {
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/report-health.js', import.meta.url), 'utf8'), ctx);
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/telemetry-validation.js', import.meta.url), 'utf8'), ctx);
   ctx.reportHealth = ctx.createConsoleReportHealth();
-  vm.runInContext(source('  function endSession()', '  let handoffGeneration') +
+  vm.runInContext(source('  function clearProtectionContext()', '  async function saveExpectedEgress(') +
+    source('  function endSession()', '  let handoffGeneration') +
     source('  function reportSucceeded(', '  // parseUptimeSec reads') +
     source('  function eventsHistoryScope()', '  function flagsQuery()') +
     source('  async function fetchTelemetry(', '  // Every panel is a candidate:'), ctx);
@@ -835,4 +837,59 @@ test('a different-range report cannot claim to be the selected day and refresh r
   await f.ctx.loadSpendDay();
   assert.equal(f.ctx.telemetryData.spendDay, '2026-10-08');
   assert.equal(f.ctx.telemetryData.spendDayReport.total.cost_usd, 8);
+});
+
+
+function inspectionUI(f) {
+  const ctx=f.ctx;
+  ctx.telemetryData.expectedEgress=[];
+  const targets=new Map();
+  const target=id=>{
+    if(!targets.has(id))targets.set(id,{dataset:{expectedEgressRule:id},focus(){ctx.document.activeElement=this;},scrollIntoView(){}});
+    return targets.get(id);
+  };
+  const fallback={focus(){ctx.document.activeElement=this;},scrollIntoView(){}};
+  const container={querySelectorAll:()=>ctx.telemetryData.expectedEgress.filter(rule=>!rule.revoked_at).map(rule=>target(rule.id)),querySelector:()=>fallback};
+  ctx.document={activeElement:null,getElementById:()=>container};
+  ctx.switchTab=()=>{};
+}
+
+test('a full refresh started before bounded expectation inspection cannot overwrite its newer exact rule', async()=>{
+  const old=deferred(),started=deferred();let reads=0;
+  const f=fixture(path=>{
+    if(path==='/snapshot')return Promise.resolve(snapshot());
+    if(path==='/expected-egress'){
+      if(++reads===1){started.resolve();return old.promise;}
+      return Promise.resolve(response({rules:[{id:'exact',rationale:'new direct read'}]}));
+    }
+    return Promise.resolve(response([]));
+  });
+  inspectionUI(f);
+  const full=f.ctx.fetchTelemetry();await started.promise;
+  await f.ctx.viewEgressExpectation('exact','origin');
+  old.resolve(response({rules:[{id:'old'}]}));await full;
+  assert.equal(reads,2,'one full-refresh read and one bounded missing-rule read');
+  assert.equal(f.ctx.telemetryData.expectedEgress[0].id,'exact');
+  assert.equal(f.ctx.telemetryData.expectedEgress[0].rationale,'new direct read');
+  assert.equal(f.ctx.document.activeElement.dataset.expectedEgressRule,'exact');
+});
+
+test('a newer full refresh owns expectation data when an older bounded inspection read finishes last', async()=>{
+  const old=deferred(),started=deferred();let reads=0;
+  const f=fixture(path=>{
+    if(path==='/snapshot')return Promise.resolve(snapshot());
+    if(path==='/expected-egress'){
+      if(++reads===1){started.resolve();return old.promise;}
+      return Promise.resolve(response({rules:[{id:'exact',rationale:'fresh full refresh'}]}));
+    }
+    return Promise.resolve(response([]));
+  });
+  inspectionUI(f);
+  const direct=f.ctx.viewEgressExpectation('exact','origin');await started.promise;
+  await f.ctx.fetchTelemetry();
+  old.resolve(response({rules:[{id:'obsolete'}]}));await direct;
+  assert.equal(reads,2);
+  assert.equal(f.ctx.telemetryData.expectedEgress[0].id,'exact');
+  assert.equal(f.ctx.telemetryData.expectedEgress[0].rationale,'fresh full refresh');
+  assert.equal(f.ctx.document.activeElement.dataset.expectedEgressRule,'exact');
 });

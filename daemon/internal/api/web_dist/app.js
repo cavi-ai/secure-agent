@@ -435,6 +435,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Fast refreshes supersede fast state without starving slower reports.
   let telemetryFetchGen = 0;
   let telemetrySlowGen = 0;
+  let expectedEgressReadGen = 0;
   let prevUptimeSec = 0;
   // Deduplicate report failure toasts until the next successful read. Snapshot
   // failures have a persistent headline instead of a second transient alert.
@@ -514,6 +515,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try { sessionStorage.removeItem(SS_TOKEN_KEY); } catch { /* private mode */ }
     if (sessionEnded) return;
     sessionEnded = true;
+    clearProtectionContext();
     if (cancelDialog) cancelDialog();
     clearInterval(sparkTimer);
     clearTimeout(spendPollTimer);
@@ -540,7 +542,10 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('hashchange', async () => {
     const handoff = new URLSearchParams(location.hash.slice(1));
     const fresh = handoff.get('ct');
-    if (!fresh) return;
+    if (!fresh) {
+      if (!sessionEnded && isConsoleRoute(location.hash)) switchTab(location.hash, {skipHash:true});
+      return;
+    }
     const generation = ++handoffGeneration;
     endSession();
     consoleToken = fresh;
@@ -1151,6 +1156,8 @@ document.addEventListener('DOMContentLoaded', () => {
     paintScopeBar();
   }
 
+  let protectionContext = null;
+  let protectionContextGeneration = 0;
   let activeProtection = 'traffic';
   let activeTab = 'home';
   let activeSub = 'board';
@@ -1817,6 +1824,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // (menu bar deep link, saved view, stored tab, in-page link) through the
   // alias table. opts.group expands that Home group.
   function switchTab(id, opts = {}) {
+    if (protectionContext && !opts.keepProtectionContext) clearProtectionContext();
     const r = resolveConsoleRoute(id);
     const from = activeTab;
     activeTab = r.tab;
@@ -1908,6 +1916,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const slow = !opts || opts.slow !== false;
     const gen = ++telemetryFetchGen;
     const slowGen = slow ? ++telemetrySlowGen : 0;
+    const expectedReadGen = slow ? ++expectedEgressReadGen : 0;
     syncHistoryViews();
     const current = () => !sessionEnded && gen === telemetryFetchGen;
     const currentSlow = () => !sessionEnded && slow && slowGen === telemetrySlowGen;
@@ -2004,7 +2013,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (uninspected) telemetryData.uninspected = uninspected || [];
         if (episodes) telemetryData.episodes = episodes || [];
         if (egressEpisodes) telemetryData.egressEpisodes = egressEpisodes.episodes || [];
-        if (expectedEgress) telemetryData.expectedEgress = expectedEgress.rules || [];
+        if (expectedEgress && expectedReadGen === expectedEgressReadGen) telemetryData.expectedEgress = expectedEgress.rules || [];
         if (notifyCfg) {
           // A reconcile while the operator is typing a workspace path must not
           // dirty (and re-render) the notify panel unless the served config
@@ -3049,6 +3058,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // the DOMContentLoaded closure. Lets that are reassigned use accessors.
   window.SA = {
     t: telemetryData,
+    get protectionContext() { return protectionContext; },
     sessionHelpOpen,
     endedSessionsOpen,
     sessionDupOpen,
@@ -4323,6 +4333,70 @@ document.addEventListener('DOMContentLoaded', () => {
     refillUninspected();
   };
 
+  function clearProtectionContext() {
+    if (!protectionContext) return;
+    protectionContext = null;
+    protectionContextGeneration++;
+    markDirty('expected-egress', 'recurring-egress');
+  }
+
+  function focusProtectionContext(context) {
+    const rules = context.phase === 'rules';
+    const container = document.getElementById(rules ? 'expected-egress-container' : 'recurring-egress-container');
+    const attr = rules ? 'expectedEgressRule' : 'egressEpisodeId';
+    const id = rules ? context.ruleId : context.episodeId;
+    const target = [...(container?.querySelectorAll(rules ? '[data-expected-egress-rule]' : '[data-egress-episode-id]') || [])].find(node => node.dataset[attr] === id);
+    const node = target || container?.querySelector('.protection-context');
+    if (node) {
+      node.focus({preventScroll:true});
+      node.scrollIntoView({behavior:'auto',block:'center'});
+    }
+    return node;
+  }
+
+  async function viewEgressExpectation(ruleId, episodeId) {
+    if (sessionEnded || typeof ruleId !== 'string' || !ruleId || typeof episodeId !== 'string' || !episodeId) return;
+    const generation = ++protectionContextGeneration;
+    const context = {ruleId,episodeId,phase:'rules',status:'loading',generation};
+    protectionContext = context;
+    const auth = handoffGeneration;
+    const ownsContext = () => !sessionEnded && protectionContext === context && generation === protectionContextGeneration && auth === handoffGeneration;
+    const found = (telemetryData.expectedEgress || []).some(rule => rule.id === ruleId && !rule.revoked_at);
+    if (found) context.status = 'ready';
+    switchTab('protection/rules', {keepProtectionContext:true});
+    renderNow(['expected-egress']);
+    const initialFocus = focusProtectionContext(context);
+    if (found) return;
+    const readGen = ++expectedEgressReadGen;
+    try {
+      const res = await apiFetch('/expected-egress');
+      if (!ownsContext()) return;
+      if (!res.ok) throw new Error('Expectation read failed');
+      const report = await res.json();
+      if (!ownsContext()) return;
+      if (!isConsoleReport('expected egress', report)) throw new Error('Invalid expectation response');
+      if (readGen === expectedEgressReadGen) telemetryData.expectedEgress = report.rules || [];
+      context.status = 'ready';
+    } catch {
+      if (!ownsContext()) return;
+      context.status = readGen === expectedEgressReadGen ? 'error' : 'ready';
+    }
+    if (!ownsContext()) return;
+    const retainFocus = document.activeElement === initialFocus;
+    renderNow(['expected-egress']);
+    if (retainFocus) focusProtectionContext(context);
+  }
+
+  function backToEgressContext() {
+    if (!protectionContext || sessionEnded) return;
+    protectionContext.phase = 'traffic';
+    protectionContext.status = 'ready';
+    protectionContext.generation = ++protectionContextGeneration;
+    switchTab('protection/traffic', {keepProtectionContext:true});
+    renderNow(['recurring-egress']);
+    focusProtectionContext(protectionContext);
+  }
+
   async function saveExpectedEgress(episodeId, kind) {
     if (!['destination', 'scope'].includes(kind)) return;
     let row = (telemetryData.egressEpisodes || []).find(e => e.id === episodeId);
@@ -5009,6 +5083,14 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'expect-egress':
         e.preventDefault();
         saveExpectedEgress(d.episodeId, d.kind);
+        break;
+      case 'view-egress-expectation':
+        e.preventDefault();
+        viewEgressExpectation(d.id, d.episodeId);
+        break;
+      case 'back-egress-context':
+        e.preventDefault();
+        backToEgressContext();
         break;
       case 'revoke-expected-egress':
         e.preventDefault();
