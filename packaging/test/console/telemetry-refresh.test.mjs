@@ -600,6 +600,9 @@ test('a failed new spend view is unavailable instead of claiming old-view data i
   f.ctx.telemetryData.costsCard = { total: { cost_usd: 100 } };
   Object.assign(f.ctx, { spendBySel: { value: 'provider' }, spendSinceSel: { value: '7d' },
     SPEND_BY: ['repo', 'provider'], SPEND_SINCE: ['24h', '7d'] });
+  f.ctx.document = { getElementById: id => id === 'spend-by' ? f.ctx.spendBySel : null };
+  const overview = readFileSync(new URL('../../../daemon/internal/api/web_dist/tab-overview.js', import.meta.url), 'utf8');
+  vm.runInContext(overview.slice(overview.indexOf('function syncSpendDayGuidance()'), overview.indexOf('function renderSpend()')), f.ctx);
   vm.runInContext(source('  const onSpendView = () => {', '  spendBySel?.addEventListener') + '\nonSpendView();', f.ctx);
   enableSpend(f);
   await f.ctx.loadSpend(false);

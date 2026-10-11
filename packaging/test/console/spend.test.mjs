@@ -432,3 +432,91 @@ test('empty and single-day charts are safe and never leave their bounds', () => 
   assert.equal(f.key(only,'Home').prevented,0);
   assert.equal(f.focusCalls.length,0);
 });
+
+function guidanceFixture() {
+  const guidance={hidden:true,textContent:'Select a day to see usage by repository. Use ←/→ or Home/End to move between dates.'}, grouping={value:'day'};
+  const inspector={contains:()=>false,set innerHTML(value){this.markup=value;}};
+  const body={firstElementChild:null,childElementCount:0,markup:'',set innerHTML(value){
+    this.markup=value;
+    const opening=value.match(/^<div class="(spend-bars|spend-list)"([^>]*)>/);
+    if (!opening) { this.firstElementChild=null; this.childElementCount=1; return; }
+    const attributes=new Map(Array.from(opening[2].matchAll(/([\w-]+)="([^"]*)"/g),match=>[match[1],match[2]]));
+    this.firstElementChild={className:opening[1],scrollLeft:0,children:[],nextElementSibling:inspector,
+      contains:()=>false,setAttribute:(name,value)=>attributes.set(name,value),removeAttribute:name=>attributes.delete(name),attributes};
+    this.childElementCount=opening[1] === 'spend-bars' ? 2 : 1;
+  }};
+  const plans={className:'spend-plans',nextElementSibling:body};
+  const cardElement={firstElementChild:plans,childElementCount:2};
+  const card={by:'day',since:'2026-10-09T00:00:00Z',until:'2026-10-11T00:00:00Z',total:{calls:2,cost_usd:2},rows:[{key:'2026-10-10',calls:2,cost_usd:2}]};
+  const SA={t:{costsCard:card,costsCardTZ:0},expanded:new Set()};
+  const context={window:{SA},document:{activeElement:null,getElementById:id=>({
+    'spend-card':cardElement,'spend-by':grouping,'spend-day-guidance':guidance
+  }[id])}};
+  vm.createContext(context);
+  for (const file of ['lib.js','tab-overview.js']) vm.runInContext(readFileSync(path.join(webDist,file),'utf8'),context);
+  context.patchList=()=>{};
+  return {context,SA,guidance,grouping,body,card,render:()=>context.renderSpend()};
+}
+
+test('day guidance stays visible across initial loading, empty, selected loading, selection, clear and refresh', () => {
+  const f=guidanceFixture();
+  f.SA.t.costsCard=null; f.render(); assert.equal(f.guidance.hidden,false);
+  f.SA.t.costsCard={...f.card,rows:[]}; f.render(); assert.equal(f.guidance.hidden,false);
+  f.SA.t.costsCard=f.card; f.render();
+  const chart=f.body.firstElementChild; chart.scrollLeft=37;
+  assert.equal(chart.attributes.get('role'),'group');
+  assert.equal(chart.attributes.get('aria-label'),'Daily usage dates');
+  assert.equal(chart.attributes.get('aria-describedby'),'spend-day-guidance');
+  f.SA.t.spendDay='2026-10-10'; f.SA.t.spendDayRefresh={loading:true}; f.render();
+  assert.equal(f.guidance.hidden,false);
+  f.SA.t.spendDayReport={...spendDayWindow('2026-10-10',f.card,0),by:'repo',total:f.card.total,rows:[]};
+  f.SA.t.spendDayRefresh={}; f.render(); assert.equal(f.guidance.hidden,false);
+  f.SA.t.spendDay=''; f.render(); assert.equal(f.guidance.hidden,false);
+  f.SA.t.costsCard={...f.card,refreshing:true,generated_at:f.card.since}; f.render();
+  assert.equal(f.guidance.hidden,false);
+  assert.equal(f.body.firstElementChild,chart,'caption changes do not replace the chart');
+  assert.equal(chart.scrollLeft,37);
+  assert.equal(f.guidance.textContent,'Select a day to see usage by repository. Use ←/→ or Home/End to move between dates.');
+});
+
+test('guidance visibility follows the current grouping control, including stale report grouping', () => {
+  const f=guidanceFixture();
+  for (const by of ['repo','provider','model']) {
+    f.SA.t.costsCard=f.card; f.render(); const chart=f.body.firstElementChild;
+    f.grouping.value=by; f.render();
+    assert.equal(f.guidance.hidden,true);
+    assert.equal(chart.attributes.has('aria-describedby'),false,'hidden guidance cannot describe a stale day chart');
+    assert.equal(f.body.firstElementChild,chart);
+    f.SA.t.costsCard=null; f.render(); assert.equal(f.guidance.hidden,true);
+    f.SA.t.costsCard=f.card;
+  }
+  f.grouping.value='day'; f.SA.t.costsCard={...f.card,by:'repo'}; f.render();
+  assert.equal(f.guidance.hidden,false,'stale non-day report does not hide current day instructions');
+  assert.equal(f.body.firstElementChild.attributes.has('aria-describedby'),false);
+});
+
+test('guidance is one static muted caption outside the replaced spend-card markup', () => {
+  const html=readFileSync(path.join(webDist,'index.html'),'utf8');
+  assert.equal((html.match(/id="spend-day-guidance"/g)||[]).length,1);
+  assert.match(html,/<p id="spend-day-guidance" class="spend-day-guidance" hidden>Select a day to see usage by repository\. Use ←\/→ or Home\/End to move between dates\.<\/p>\s*<div id="spend-card"/);
+  const caption=html.match(/<p id="spend-day-guidance"[^>]*>/)[0];
+  assert.doesNotMatch(caption,/tabindex|role=|aria-live|data-action/);
+});
+
+test('saved grouping initializes guidance before boot and grouping changes update it without a render', () => {
+  const source=readFileSync(path.join(webDist,'app.js'),'utf8');
+  for (const by of ['day','repo']) {
+    const f=guidanceFixture(), since={value:''};
+    f.guidance.hidden=by !== 'repo'; // Start with the opposite visibility.
+    Object.assign(f.context,{spendView:{by,since:'7d'},SPEND_BY:['day','repo','provider','model'],SPEND_SINCE:['24h','7d','30d'],
+      SPEND_VIEW_KEY:'sa.spend-view',sessionStorage:{setItem(){}},telemetryData:f.SA.t,spendPolls:0,
+      resetSpendDay(){},reportHealth:{reset(){}},renderReportHealth(){},renderNow(){},loadSpend(){}});
+    f.context.document.getElementById=id=>({'spend-by':f.grouping,'spend-since':since,'spend-day-guidance':f.guidance}[id]);
+    vm.runInContext(source.slice(source.indexOf('  const spendBySel ='),source.indexOf('  spendBySel?.addEventListener')),f.context);
+    assert.equal(f.grouping.value,by);
+    assert.equal(f.guidance.hidden,by !== 'day','guidance is initialized while rendering is unavailable before boot');
+    f.grouping.value=by === 'day' ? 'repo' : 'day';
+    vm.runInContext('onSpendView()',f.context);
+    assert.equal(f.guidance.hidden,f.grouping.value !== 'day','preboot grouping change updates the same caption');
+  }
+});

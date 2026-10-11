@@ -573,8 +573,16 @@ function renderChartMemory() {
 // unpriced calls are counted, never priced. While the daemon recomputes an
 // old report it answered from its usage cache (spendUpdating), the card head
 // says so and the tile's line ends "updating".
+function syncSpendDayGuidance() {
+  const guidance = document.getElementById('spend-day-guidance');
+  const showDayGuidance = document.getElementById('spend-by')?.value === 'day';
+  if (guidance) guidance.hidden = !showDayGuidance;
+  return showDayGuidance;
+}
+
 function renderSpend() {
   const SA = window.SA;
+  const showDayGuidance = syncSpendDayGuidance();
   const report = SA.t.costs;
   const total = (report && report.total) || {};
   const num = document.getElementById('count-spend');
@@ -620,8 +628,12 @@ function renderSpend() {
   const cls = day ? 'spend-bars' : 'spend-list';
   let wrap = body.firstElementChild;
   if (!wrap || body.childElementCount !== (day ? 2 : 1) || wrap.className !== cls) {
-    body.innerHTML = `<div class="${cls}"></div>${day ? '<div class="spend-day-inspector"></div>' : ''}`;
+    body.innerHTML = `<div class="${cls}"${day ? ' role="group" aria-label="Daily usage dates" aria-describedby="spend-day-guidance"' : ''}></div>${day ? '<div class="spend-day-inspector"></div>' : ''}`;
     wrap = body.firstElementChild;
+  }
+  if (day) {
+    if (showDayGuidance) wrap.setAttribute('aria-describedby', 'spend-day-guidance');
+    else wrap.removeAttribute('aria-describedby');
   }
   const left = wrap.scrollLeft;
   const focusedDay = wrap.contains(document.activeElement) ? document.activeElement.dataset.day : null;

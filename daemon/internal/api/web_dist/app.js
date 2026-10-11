@@ -2220,10 +2220,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const spendSinceSel = document.getElementById('spend-since');
   if (spendBySel) spendBySel.value = spendView.by;
   if (spendSinceSel) spendSinceSel.value = spendView.since;
+  syncSpendDayGuidance();
   const onSpendView = () => {
     const by = spendBySel && spendBySel.value, since = spendSinceSel && spendSinceSel.value;
     spendView = { by: SPEND_BY.includes(by) ? by : 'repo', since: SPEND_SINCE.includes(since) ? since : '24h' };
     try { sessionStorage.setItem(SPEND_VIEW_KEY, JSON.stringify(spendView)); } catch { /* private mode */ }
+    syncSpendDayGuidance();
     resetSpendDay();
     telemetryData.costsCard = null;
     reportHealth.reset('spend card'); // The new query has no retained card yet.
