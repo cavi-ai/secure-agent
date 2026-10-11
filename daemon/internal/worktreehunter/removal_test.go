@@ -25,28 +25,24 @@ func removalFixture(t *testing.T) (*Hunter, fixture) {
 	return h, f
 }
 
-// Deleting a large tree takes longer than a read-only git call may: the
-// removal runs under its own deadline, so git is not killed mid-delete.
+// Removal uses its own deadline. Expire the read deadline only after the
+// safety checks, so this regression does not depend on disk speed.
 func TestRemovalOutlastsTheReadTimeout(t *testing.T) {
 	h, f := removalFixture(t)
-	big := f.worktree(t, "big")
-	for i := 0; i < 200; i++ {
-		dir := filepath.Join(big, "node_modules", fmt.Sprintf("p%d", i))
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		for j := 0; j < 150; j++ {
-			if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%d.js", j)), []byte("x"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
+	wt := f.worktree(t, "done")
+	write(t, filepath.Join(wt, "node_modules", "ignored.js"), "x")
 	old := gitTimeout
-	gitTimeout = 400 * time.Millisecond
 	t.Cleanup(func() { gitTimeout = old })
-
-	if _, err := h.Remove(context.Background(), big); err != nil || exists(big) {
-		t.Fatalf("Remove(30,000 files) = %v, still on disk %v", err, exists(big))
+	rec := &phaseRecorder{onPhase: func(phase string) {
+		if phase == PhaseDeleting {
+			gitTimeout = time.Nanosecond
+		}
+	}}
+	if _, err := h.remove(context.Background(), wt, rec); err != nil || exists(wt) {
+		t.Fatalf("remove with expired read deadline = %v, still on disk %v", err, exists(wt))
+	}
+	if gitTimeout != time.Nanosecond {
+		t.Fatal("removal never reached the deleting phase")
 	}
 }
 
@@ -258,12 +254,16 @@ func TestNoBackgroundRescanWhileAnActionWaits(t *testing.T) {
 }
 
 type phaseRecorder struct {
-	seen  []string
-	bytes int64
-	files int
+	seen    []string
+	bytes   int64
+	files   int
+	onPhase func(string)
 }
 
 func (r *phaseRecorder) phase(p string) {
+	if r.onPhase != nil {
+		r.onPhase(p)
+	}
 	if p == PhaseDeleting && r.files > 0 {
 		p += "(measured)"
 	}
