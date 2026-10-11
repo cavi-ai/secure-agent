@@ -271,22 +271,22 @@ def main():
                     sys.exit(1)
                 return
         if args.spend_only:
-            cached = dump_dom(chrome, tmp, '?spendcachedemo', origin)
+            cached = dump_dom(chrome, tmp, '?savedspendrepo&spendcachedemo', origin)
             check('spend: saved rows remain visible during a quiet cache refresh',
                   'notice=Refreshing usage… · saved 3h ago' in html.unescape(pre(cached, 'spend-cache-probe')))
             check('spend: fresh data replaces cached data and clears the indicator',
                   'id="count-spend">$37.67<' in cached
                   and dom_query(cached).has(None, {'id': 'spend-cache', 'class': 'spend-cache', 'role': 'status', 'hidden': ''}))
-            delayed = dump_dom(chrome, tmp, '?spendshape', origin, fixture=payload_cases.delayed_spend())
+            delayed = dump_dom(chrome, tmp, '?savedspendrepo&spendshape', origin, fixture=payload_cases.delayed_spend())
             check('spend: delayed refresh retains totals and rows without warning banners',
                   'Refresh delayed · showing saved usage' in delayed
                   and 'id="count-spend">$36.67<' in delayed and 'api-service' in delayed
                   and 'Spend detail: Stale' not in delayed and 'Spend plans: Stale' not in delayed)
-            first = dump_dom(chrome, tmp, '?spendshape&firstload', origin, fixture=payload_cases.delayed_spend())
+            first = dump_dom(chrome, tmp, '?savedspendrepo&spendshape&firstload', origin, fixture=payload_cases.delayed_spend())
             check('spend: unavailable first response retries without claiming empty computed usage',
                   'Usage is taking longer to load · retrying…' in first
-                  and 'Refreshing usage…' in first and 'No priced model calls' not in first)
-            recovered = dump_dom(chrome, tmp, '?spendshape&recover', origin, fixture=payload_cases.delayed_spend())
+                  and 'Refreshing usage…' in first and 'No model calls' not in first)
+            recovered = dump_dom(chrome, tmp, '?savedspendrepo&spendshape&recover', origin, fixture=payload_cases.delayed_spend())
             check('spend: valid recovery clears the delayed state',
                   'Refresh delayed' in pre(recovered, 'spend-shape-before-recovery')
                   and dom_query(recovered).has(None, {'id': 'spend-cache', 'class': 'spend-cache', 'role': 'status', 'hidden': ''})
@@ -412,18 +412,21 @@ def main():
         dom_session_coverage = dump_dom(chrome, tmp, "?sessionvisibility", fixture=payload_cases.session_coverage())
         dom_phone = dump_dom(chrome, tmp, "?phonedemo")
         dom_memory_phone = dump_dom(chrome, tmp, "?phonedemo&memorydemo")
-        dom_nocosts = dump_dom(chrome, tmp, fixture=payload_cases.empty_spend())
+        dom_nocosts = dump_dom(chrome, tmp, "?savedspendrepo", fixture=payload_cases.empty_spend())
         dom_memfam = dump_dom(chrome, tmp, "?memfamilydemo", fixture=payload_cases.shared_root_sessions())
         dom_memprobe = dump_dom(chrome, tmp, "?memprobe")
-        dom_spend = dump_dom(chrome, tmp, "?spenddemo")
-        dom_plans = dump_dom(chrome, tmp, fixture=payload_cases.spend_plans())
+        dom_spend = dump_dom(chrome, tmp, "?savedspendrepo&spenddemo")
+        dom_spendrepo = dump_dom(chrome, tmp, "?savedspendrepo")
+        dom_attentionremodel = dump_dom(chrome, tmp, "?attentionremodel", origin)
+        dom_remodelusage = dump_dom(chrome, tmp, "?remodelusage", origin)
+        dom_plans = dump_dom(chrome, tmp, "?savedspendrepo", fixture=payload_cases.spend_plans())
         dom_spendday = dump_dom(chrome, tmp, "?spenddaydemo")
         dom_spendphone = dump_dom(chrome, tmp, "?phonedemo&spenddaydemo")
         dom_spendkeep = dump_dom(chrome, tmp, "?tab=overview&spenddaydemo&spendkeepdemo")
-        dom_spendcache = dump_dom(chrome, tmp, "?spendcachedemo")
-        dom_spendshape = dump_dom(chrome, tmp, "?spendshape", fixture=payload_cases.delayed_spend())
-        dom_spendshapefirst = dump_dom(chrome, tmp, "?spendshape&firstload", fixture=payload_cases.delayed_spend())
-        dom_spendshaperecover = dump_dom(chrome, tmp, "?spendshape&recover", fixture=payload_cases.delayed_spend())
+        dom_spendcache = dump_dom(chrome, tmp, "?savedspendrepo&spendcachedemo")
+        dom_spendshape = dump_dom(chrome, tmp, "?savedspendrepo&spendshape", fixture=payload_cases.delayed_spend())
+        dom_spendshapefirst = dump_dom(chrome, tmp, "?savedspendrepo&spendshape&firstload", fixture=payload_cases.delayed_spend())
+        dom_spendshaperecover = dump_dom(chrome, tmp, "?savedspendrepo&spendshape&recover", fixture=payload_cases.delayed_spend())
         dom_spendslow = dump_dom(chrome, tmp, "?spendslowdemo")
         dom_events = dump_dom(chrome, tmp, "?tab=events")
         dom_burst = dump_dom(chrome, tmp, "?burstdemo")
@@ -558,6 +561,14 @@ def main():
         check("the page, posture banner included, fits a 375px phone on Sessions, Agents and Resources",
               dom_query(dom_phone).has(None, {'data-hscroll': 'sessions:0,agents:0,resources:0'}),
               (re.search(r'data-hscroll="[^"]*"', dom_phone) or [None])[0])
+        guard_node = dom_query(dom_phone).find(None, {'data-overflow-guard': None})
+        try:
+            overflow_guard = json.loads(guard_node.attrs['data-overflow-guard']) if guard_node else {}
+        except (ValueError, TypeError):
+            overflow_guard = {}
+        for mode in ('auto', 'scroll', 'hidden', 'clip', 'unclipped', 'container', 'document'):
+            check(f"phone overflow probe: {mode} clipping or overflow control",
+                  overflow_guard.get(mode) is True, str(overflow_guard))
         check("Memory detail fits a 375px phone without horizontal page overflow",
               dom_query(dom_memory_phone).has(None, {'data-hscroll': 'sessions:0,agents:0,resources:0'}),
               (re.search(r'data-hscroll="[^"]*"', dom_memory_phone) or [None])[0])
@@ -644,23 +655,42 @@ def main():
         check("spend tile sub-line counts calls and unpriced calls",
               'id="hint-spend">40 calls · 2 unpriced<' in dom)
         def spend_card_of(d):
-            return d.split('id="spend-card"', 1)[1].split('</section>', 1)[0]
+            card = dom_query(d).find(None, {'id': 'spend-card'})
+            return card.inner_html if card else ''
         spend_key_re = r'<span class="spend-key" title="[^"]*">([^<]+)</span>'
-        spend_card = spend_card_of(dom)
+        spend_card = spend_card_of(dom_spendrepo)
         spend_keys = re.findall(spend_key_re, spend_card)
-        check("spend card defaults to repos by cost over 24h",
+        check("spend card restores a saved repo view over 24h",
               spend_keys == ["api-service", "web-console", "infra-tools", "scratch", "(no repo)", "docs"]
               and '<span class="spend-cost">$24.50</span>' in spend_card
               and '#logo-claude' in spend_card, f"keys={spend_keys}")
         check("empty spend report: tile reads an em dash, card shows its empty state",
               'id="count-spend">—<' in dom_nocosts and 'id="hint-spend"><' in dom_nocosts
-              and "No priced model calls in this window." in spend_card_of(dom_nocosts))
+              and "No model calls in this window." in spend_card_of(dom_nocosts))
+        default_spend = dom_query(dom).find(None, {'id': 'spend-card'})
+        check("spend card defaults to selectable daily usage over 7d",
+              default_spend is not None and pre(dom, 'spend-default-view') == 'by=day since=7d'
+              and len(default_spend.find_all('button', {'data-action': 'select-spend-day'})) == 7
+              and any(q.startswith('since=7d&by=day&tz=') for q in html.unescape(pre(dom, 'mock-costs')).splitlines()))
+        for label, rendered, pid, fields in (
+            ('attention inspector', dom_attentionremodel, 'attention-remodel-probe', ['initial', 'evidenceOpen', 'named', 'modal', 'pendingRetained', 'final', 'focus']),
+            ('daily usage selection', dom_remodelusage, 'usage-remodel-probe', ['selected', 'matches', 'focus', 'detail', 'reset']),
+        ):
+            raw = html.unescape(pre(rendered, pid))
+            try:
+                receipt = json.loads(raw)
+            except (ValueError, TypeError):
+                receipt = {}
+            for field in fields:
+                check(f'{label}: {field}', receipt.get(field) is True, raw)
         plans_card = spend_card_of(dom_plans)
+        plan_node = dom_query(plans_card).find(None, {'class': 'spend-plans'})
+        plan_row = dom_query(plans_card).find(None, {'class': 'spend-key'})
         check("spend: a /costs/plans entry renders its plan line and a bar at used_percent above the rows; none when empty",
               re.search(r'<div class="spend-plans"><div class="spend-plan">\s*<span class="spend-plan-text">'
                         r'Codex Pro · codex · weekly 52% used · resets (Sun|Mon|Tue|Wed|Thu|Fri|Sat) \d{1,2}:\d{2} (AM|PM)</span>'
                         r'<span class="hbar-track" title="weekly"><span class="hbar-fill" data-w="52.0"', plans_card) is not None
-              and plans_card.index('class="spend-plans"') < plans_card.index('class="spend-key"')
+              and plan_node is not None and plan_row is not None and plan_node.start < plan_row.start
               and '<div class="spend-plans"></div>' in spend_card, plans_card[:600])
         check("spend: the stat strip counts calls on plans before unpriced",
               'id="hint-spend">40 calls · 12 on plans · 2 unpriced<' in dom_plans)
@@ -677,10 +707,11 @@ def main():
               and spend_q[-1].startswith("since=24h&by=provider&tz="),
               f"probe={pre(dom_spend, 'spend-probe')!r} last={spend_q[-1]!r}")
         day_card = spend_card_of(dom_spendday)
+        highest_day = dom_query(day_card).find('button', {'data-action': 'select-spend-day', 'data-day': '2026-09-22'})
         day_labels = re.findall(r'<span class="spend-day-label">([^<]+)</span>', day_card)
         check("spend: a saved by-day view renders one column per day, oldest first, the costliest at full height",
               day_labels == ["Thu 17", "Fri 18", "Sat 19", "Sun 20", "Mon 21", "Tue 22", "Wed 23"]
-              and 'data-h="100.0"' in day_card.split("Tue 22", 1)[0].rsplit('class="spend-day"', 1)[1]
+              and highest_day is not None and highest_day.has(None, {'data-h': '100.0'})
               and any(q.startswith("since=7d&by=day&tz=") for q in html.unescape(pre(dom_spendday, "mock-costs")).split("\n")),
               f"labels={day_labels}")
         keep = html.unescape(pre(dom_spendkeep, "spend-keep-probe")).split("\n")
@@ -863,7 +894,7 @@ def main():
         # --- screen hygiene: the banner summarises, the queue lists ---
         check("Home: the posture banner lists no items; the attention queue lists them",
               re.search(r'<ul class="posture-items" id="posture-items" hidden(="")?></ul>', dom) is not None
-              and not dom_query(dom).has(None, {'class': 'posture-item'}) and dom_query(dom).has(None, {'data-action': 'guard-resolve', 'data-id': 'guard-1'}))
+              and not dom_query(dom).has(None, {'class': 'posture-item'}) and dom_query(dom).has(None, {'data-action': 'select-attention', 'data-need-kind': 'guard', 'data-need-id': 'guard-1'}))
         posture_egress = (re.search(r'<pre id="posture-egress"[^>]*>([^<]*)<', dom_posturemore) or [None, ""])[1]
         check("Egress: the posture banner lists 3 content rows (2 items + the advisor line) and \"and 4 more\"",
               posture_egress == "items=2 more=and 4 more hidden=0", posture_egress)
@@ -968,7 +999,7 @@ def main():
         check("first-load malformed spend reports retry quietly without inventing empty results",
               not first_spend and "Usage is taking longer to load · retrying…" in dom_spendshapefirst
               and "Refreshing usage…" in spend_card_of(dom_spendshapefirst)
-              and "No priced model calls" not in spend_card_of(dom_spendshapefirst)
+              and "No model calls" not in spend_card_of(dom_spendshapefirst)
               and 'id="count-agents">3<' in dom_spendshapefirst)
         check("valid spend recovery clears the delayed refresh status",
               "Refresh delayed" in pre(dom_spendshaperecover, "spend-shape-before-recovery")
@@ -1118,9 +1149,9 @@ def main():
         # --- tabs (console IA) ---
         tab_ids = re.findall(r'class="tab-btn[^"]*" data-tab="(\w+)"', dom)
         tab_labels = re.findall(r'data-tab="\w+" role="tab"[^>]*>\s*<svg[^>]*>.*?</svg><span>([^<]+)</span>', dom, re.S)
-        check("tab bar renders exactly six tabs, Home first, System after Egress, Agent last",
-              len(dom_query(dom).find_all(None, {'class': 'tab-btn'})) == 6 and tab_ids == ["home", "sessions", "egress", "system", "policy", "agent"]
-              and tab_labels == ["Home", "Sessions", "Egress", "System", "Policy", "Agent"], f"ids={tab_ids} labels={tab_labels}")
+        check("tab bar renders five tabs with Protection grouping and Agent last",
+              len(dom_query(dom).find_all(None, {'class': 'tab-btn'})) == 5 and tab_ids == ["home", "sessions", "protection", "system", "agent"]
+              and tab_labels == ["Home", "Sessions", "Protection", "System", "Agent"], f"ids={tab_ids} labels={tab_labels}")
         check("Sessions has no Cleanup sub-view; its panels live in the System tab",
               not dom_query(dom).has(None, {'data-subtab': 'worktrees'}) and not dom_query(dom).has(None, {'id': 'sub-worktrees'})
               and dom.index('id="tab-system"') < dom.index('id="worktrees-container"') < dom.index('id="clutter-container"') < dom.index('id="tab-policy"')
@@ -1137,10 +1168,12 @@ def main():
               and 'id="tab-policy" role="tabpanel" hidden' in dom)
         check("home panel visible",
               dom_query(dom).has(None, {'id': 'tab-home', 'role': 'tabpanel'}))
-        check("home groups are closed by default",
-              dom_query(dom).has('details', {'class': 'home-group', 'id': 'home-spend', 'data-group': 'spend'})
+        check("Home opens Usage by default and keeps Findings and Trends closed",
+              dom_query(dom).has('details', {'class': 'home-group', 'id': 'home-spend', 'data-group': 'spend', 'open': ''})
               and dom_query(dom).has('details', {'class': 'home-group', 'id': 'home-findings', 'data-group': 'findings'})
-              and dom_query(dom).has('details', {'class': 'home-group', 'id': 'home-trends', 'data-group': 'trends'}))
+              and dom_query(dom).has('details', {'class': 'home-group', 'id': 'home-trends', 'data-group': 'trends'})
+              and not dom_query(dom).has('details', {'id': 'home-findings', 'open': ''})
+              and not dom_query(dom).has('details', {'id': 'home-trends', 'open': ''}))
         check("hash #agents opens Sessions on the Processes sub-view",
               dom_query(dom_hashagents).has(None, {'class': 'tab-btn active', 'data-tab': 'sessions'})
               and dom_query(dom_hashagents).has(None, {'class': 'subtab-btn active', 'data-subtab': 'processes'})
@@ -1200,7 +1233,9 @@ def main():
         def policy_rows(kind):
             return policy_counter.counts.get(kind, -1)
         check("Policy lists guard decisions, file exceptions and muted classes from their endpoints",
-              dom_query(dom_policylists).has(None, {'class': 'tab-btn active', 'data-tab': 'policy'})
+              dom_query(dom_policylists).has(None, {'class': 'tab-btn active', 'data-tab': 'protection'})
+              and dom_query(dom_policylists).has(None, {'data-protection-view': 'rules', 'aria-selected': 'true', 'class': 'active'})
+              and 'hidden' not in dom_query(dom_policylists).find(None, {'id': 'protection-rules'}).attrs
               and policy_rows("guard") == 2 and policy_rows("path") == 1 and policy_rows("mute") == 2
               and 'id="badge-guard-rules">2<' in dom_policylists and 'id="badge-path-allows">1<' in dom_policylists
               and '.env.example</code>' in dom_policylists and "keychain-security-cli" in dom_policylists.split('data-policy="mute"', 1)[-1],
@@ -1229,10 +1264,10 @@ def main():
               "DELETE /expected?key=claude%7Cgh%7C%2FUsers%2Fdev%2F.config%2Fgh%2Fhosts.yml%7CGitHub" in forget_reqs
               and 'id="badge-expected">0<' in dom_forget and "No expected secret reads." in dom_forget,
               f"requests={forget_reqs!r}")
-        check("notification rules live in the Policy tab; the bell links there",
-              dom.index('id="tab-policy"') < dom.index('id="notify-rules-list"')
-              and dom_query(dom).has(None, {'id': 'btn-notify', 'data-action': 'goto-tab', 'data-tab': 'policy'})
-              and dom.index('id="tab-policy"') < dom.index('id="audit-panel"'))
+        check("Protection groups notification rules and audit in their own views; the bell opens Rules",
+              dom_query(dom).find(None, {'id': 'protection-rules'}).has(None, {'id': 'notify-rules-list'})
+              and dom_query(dom).has(None, {'id': 'btn-notify', 'data-action': 'goto-protection', 'data-protection-view': 'rules'})
+              and dom_query(dom).find(None, {'id': 'protection-audit'}).has(None, {'id': 'audit-panel'}))
         check("resource mission control is present", dom_query(dom).has(None, {'id': 'resource-mission-control'}))
         # The live Resources tab ends where the History tab begins: the flight
         # recorder moved out, so it must NOT be inside the resource view.
@@ -1466,8 +1501,10 @@ def main():
               and 'id="tabs-posture-text">Monitoring gap<' in dom_coverage
               and 'id="coverage-center" hidden' not in dom_coverage
               and 'id="badge-coverage-count">2<' in dom_coverage)
+        resource_attention = html.unescape(pre(dom, 'attention-resource-content'))
+        guard_attention = html.unescape(pre(dom, 'attention-guard-content'))
         check("attention resource actions target the full session",
-              dom_query(attention).has(None, {'data-action': 'resource-control', 'data-id': 'resource-1', 'data-decision': 'apply'}))
+              dom_query(resource_attention).has(None, {'data-action': 'resource-control', 'data-id': 'resource-1', 'data-decision': 'apply'}))
         check("session coverage remains available without a global monitoring gap",
               'Per-session coverage · 2' in dom_session_coverage
               and re.search(r'id="coverage-center"[^>]*\bhidden', dom_session_coverage) is None)
@@ -1482,11 +1519,11 @@ def main():
               and 'claude · changed' in dom_session_coverage
               and 'Configuration changed. Run the check again.' in dom_session_coverage)
         check("attention guard actions expose bounded choices",
-              dom_query(attention).has(None, {'data-action': 'guard-resolve', 'data-id': 'guard-1', 'data-verdict': 'allow', 'data-scope': 'once'})
-              and dom_query(attention).has(None, {'data-action': 'guard-resolve', 'data-id': 'guard-1', 'data-verdict': 'deny', 'data-scope': 'once'})
-              and dom_query(attention).has(None, {'data-scope': 'exact', 'data-expiry': '24h'})
-              and not dom_query(attention).has(None, {'data-scope': 'always'}))
-        check("attention keeps scope disclosure compact", "Future access requires a chosen limit" in attention)
+              dom_query(guard_attention).has(None, {'data-action': 'guard-resolve', 'data-id': 'guard-1', 'data-verdict': 'allow', 'data-scope': 'once'})
+              and dom_query(guard_attention).has(None, {'data-action': 'guard-resolve', 'data-id': 'guard-1', 'data-verdict': 'deny', 'data-scope': 'once'})
+              and dom_query(guard_attention).has(None, {'data-scope': 'exact', 'data-expiry': '24h'})
+              and not dom_query(guard_attention).has(None, {'data-scope': 'always'}))
+        check("attention keeps scope disclosure compact", "Future access requires a chosen limit" in guard_attention)
         check("coverage egress opens endpoint evidence", dom_query(coverage).has(None, {'data-action': 'open-uninspected'}))
         check("resolved guard request leaves the attention queue",
               f'id="tab-badge-home">{needs_you - 1}<' in dom_guard
@@ -1503,7 +1540,9 @@ def main():
         check("posture flag item opens Home with Findings history",
               dom_query(dom_tab).has(None, {'data-action': 'goto-tab', 'data-tab': 'home', 'data-group': 'findings'}))
         check("tab switch reveals the target panel",
-              dom_query(dom_tab).has(None, {'id': 'tab-egress', 'role': 'tabpanel'})
+              dom_query(dom_tab).has(None, {'class': 'tab-btn active', 'data-tab': 'protection'})
+              and dom_query(dom_tab).has(None, {'data-protection-view': 'traffic', 'aria-selected': 'true', 'class': 'active'})
+              and 'hidden' not in dom_query(dom_tab).find(None, {'id': 'protection-traffic'}).attrs
               and 'id="tab-home" role="tabpanel" hidden' in dom_tab)
         recurring = dom_tab.split('id="recurring-egress-container"', 1)[-1].split('id="endpoints-panel"', 1)[0]
         check("Egress explains scheduled calls as observed facts and labeled advisor inference",
@@ -1879,7 +1918,7 @@ def main():
         wt_prune = len(dom_query(wt).find_all(None, {'data-action': 'worktree-prune'}))
         check("worktrees: the System tab opens and renders a row per non-main worktree with its state",
               dom_query(dom_wt).has(None, {'class': 'tab-btn active', 'data-tab': 'system'}) and not dom_query(dom_wt).has(None, {'data-subtab': 'worktrees'})
-              and dom_wt.index('data-tab="egress" role="tab"') < dom_wt.index('data-tab="system" role="tab"') < dom_wt.index('data-tab="policy" role="tab"')
+              and [b.attrs.get('data-tab') for b in dom_query(dom_wt).find_all(None, {'class': 'tab-btn'})] == ['home', 'sessions', 'protection', 'system', 'agent']
               and wt_rows == 4
               and all(f'class="wt-row wt-{s}"' in wt for s in ("remove", "review", "keep", "prune"))
               and "main worktree of the repository" not in wt,

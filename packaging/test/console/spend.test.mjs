@@ -14,7 +14,8 @@ vm.createContext(ctx);
 for (const f of ['lib.js', 'tab-overview.js']) {
   vm.runInContext(readFileSync(path.join(webDist, f), 'utf8'), ctx, { filename: f });
 }
-const { spendListItems, spendDayItems, spendHintText, spendCacheText, spendUpdating, planWindowLabel, planLineText, spendPlanItems } = ctx;
+const { spendListItems, spendDayItems, spendHintText, spendCacheText, spendUpdating, planWindowLabel, planLineText, spendPlanItems,
+  spendDayWindow, spendDayDetailHTML, spendDayRangeText, spendRowCost } = ctx;
 const joined = items => items.map(i => i.html).join('');
 
 const keysOf = html => [...html.matchAll(/<span class="spend-key" title="[^"]*">([^<]+)<\/span>/g)].map(m => m[1]);
@@ -63,6 +64,106 @@ test('spendDayItems: one column per row in ascending key order keyed day:<key>, 
   assert.match(html, /title="2026-09-22 · \$676\.54 · 20 calls"/);
   assert.deepEqual([...html.matchAll(/<span class="spend-day-cost">([^<]+)</g)].map(m => m[1]), ['$336', '$677', '$0']);
   assert.doesNotMatch(html, /<canvas/);
+});
+
+test('day selection uses native keyboard buttons, persistent aria state, and escaped labels', () => {
+  const rows = [{key:'2026-09-21',calls:2,cost_usd:4}, {key:'2026-09-22',calls:1,cost_usd:0,unpriced_calls:1}];
+  const html = joined(spendDayItems(rows,'2026-09-22'));
+  assert.match(html, /<button type="button" class="spend-day" data-action="select-spend-day" data-day="2026-09-21" aria-pressed="false"/);
+  assert.match(html, /data-day="2026-09-22" aria-pressed="true"/);
+  assert.match(html, /aria-label="2026-09-22 · unpriced · 1 call · 1 unpriced"/);
+  assert.equal((html.match(/<\/button>/g) || []).length, 2);
+  assert.match(joined(spendDayItems([{key:'"><script>',calls:1,cost_usd:1}])), /data-day="&quot;&gt;&lt;script&gt;"/);
+  assert.doesNotMatch(joined(spendDayItems([{key:'"><script>',calls:1,cost_usd:1}])), /<script>/);
+});
+
+test('day interval clamps partial first/last buckets to the displayed report window', () => {
+  const report = {since:'2026-09-21T12:15:00Z',until:'2026-09-23T18:30:00Z'};
+  assert.deepEqual(JSON.parse(JSON.stringify(spendDayWindow('2026-09-21',report,-240))),
+    {since:'2026-09-21T12:15:00.000Z',until:'2026-09-22T04:00:00.000Z',tz:-240,partial:true});
+  assert.deepEqual(JSON.parse(JSON.stringify(spendDayWindow('2026-09-22',report,-240))),
+    {since:'2026-09-22T04:00:00.000Z',until:'2026-09-23T04:00:00.000Z',tz:-240,partial:false});
+  assert.deepEqual(JSON.parse(JSON.stringify(spendDayWindow('2026-09-23',report,-240))),
+    {since:'2026-09-23T04:00:00.000Z',until:'2026-09-23T18:30:00.000Z',tz:-240,partial:true});
+  assert.equal(spendDayWindow('2026-09-24',report,-240),null);
+});
+
+test('day buckets keep the captured fixed UTC offset across both DST transitions', () => {
+  const broad = {since:'2026-01-01T00:00:00Z',until:'2027-01-01T00:00:00Z'};
+  for (const day of ['2026-03-08','2026-11-01']) {
+    for (const tz of [-300,-240,330,840]) {
+      const range = spendDayWindow(day,broad,tz);
+      const start = Date.parse(range.since), end = Date.parse(range.until);
+      assert.equal(end-start,86400000);
+      // This is also the server's datetime(ts, '+N minutes') day key.
+      assert.equal(new Date(start+tz*60000).toISOString().slice(0,10),day);
+      assert.equal(new Date(end-1000+tz*60000).toISOString().slice(0,10),day);
+      assert.notEqual(new Date(end+tz*60000).toISOString().slice(0,10),day);
+    }
+  }
+});
+
+test('invalid day, timezone, and report windows cannot make a breakdown request', () => {
+  const report = {since:'2026-01-01T00:00:00Z',until:'2027-01-01T00:00:00Z'};
+  for (const day of ['bad','2026-02-30','2026-13-01','2026-00-01']) assert.equal(spendDayWindow(day,report,0),null);
+  for (const tz of [undefined,null,841,-841,NaN,1.5]) assert.equal(spendDayWindow('2026-09-22',report,tz),null);
+  assert.equal(spendDayWindow('2026-09-22',{...report,since:'bad'},0),null);
+  assert.equal(spendDayWindow('2026-09-22',{since:report.until,until:report.since},0),null);
+});
+
+test('day range copy shows readable chart-offset hours and exclusive midnight as 24:00', () => {
+  const card = {since:'2026-09-21T12:15:00Z',until:'2026-09-23T18:30:00Z'};
+  assert.equal(spendDayRangeText('2026-09-21',spendDayWindow('2026-09-21',card,-240)),
+    'Partial day · 08:15–24:00 · UTC−04:00');
+  assert.equal(spendDayRangeText('2026-09-22',spendDayWindow('2026-09-22',card,-240)),
+    'Day grouped at UTC−04:00');
+  assert.equal(spendDayRangeText('2026-09-23',spendDayWindow('2026-09-23',card,-240)),
+    'Partial day · 00:00–14:30 · UTC−04:00');
+  assert.equal(spendDayRangeText('2026-09-23',spendDayWindow('2026-09-23',{...card,until:'2026-09-23T13:00:15Z'},330)),
+    'Partial day · 00:00–18:30:15 · UTC+05:30');
+});
+
+test('selected detail distinguishes unavailable, loading, delayed, saved and zero usage', () => {
+  const row = {key:'2026-09-22',calls:0,cost_usd:0};
+  const card = {since:'2026-09-22T12:00:00Z',until:'2026-09-23T04:00:00Z'};
+  const range = spendDayWindow(row.key,card,-240);
+  const report = {...range,by:'repo',total:row,rows:[],refreshing:false};
+  const render = (rep,state={}) => spendDayDetailHTML(row,card,-240,rep,state);
+  const html = render(report);
+  assert.match(html, /Partial day · 08:00–24:00 · UTC−04:00/);
+  assert.doesNotMatch(html, /2026-09-22T|fixed offset/);
+  assert.match(html, /data-action="reset-spend-day">Clear selection/);
+  assert.match(html, /\$0\.00<\/strong> · 0 calls/);
+  assert.match(html, /No model calls recorded for this day/);
+  assert.doesNotMatch(html, /unavailable/);
+  assert.match(render(null,{loading:true}), /Loading day breakdown/);
+  assert.match(render(null), /Day breakdown unavailable/);
+  assert.match(render(null,{delayed:true}), /unavailable · refresh delayed/);
+  assert.match(render(report,{delayed:true}), /showing saved breakdown/);
+  assert.match(render({...report,refreshing:true}), /Loading day breakdown/);
+  assert.match(render({...report,refreshing:true,generated_at:card.since}), /Refreshing usage/);
+  assert.match(render(null,{error:'<img src=x onerror=alert(1)>'}), /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(render(null,{error:'<img src=x onerror=alert(1)>'}), /<img/);
+});
+
+test('selected detail drops a breakdown from another window and escapes repository evidence', () => {
+  const row = {key:'2026-09-22',calls:2,cost_usd:5};
+  const card = {since:'2026-09-21T04:00:00Z',until:'2026-09-24T04:00:00Z'};
+  const report = {...spendDayWindow(row.key,card,-240),by:'repo',total:row,
+    rows:[{key:'<script>repo</script>',calls:2,cost_usd:5}]};
+  assert.match(spendDayDetailHTML(row,card,-240,report), /&lt;script&gt;repo&lt;\/script&gt;/);
+  assert.doesNotMatch(spendDayDetailHTML(row,card,-240,{...report,until:card.until}), /repo&lt;/);
+  assert.match(spendDayDetailHTML(row,card,-240,{...report,until:card.until}), /Day breakdown unavailable/);
+});
+
+test('plan, unpriced and local usage never masquerade as a fully priced zero', () => {
+  assert.equal(spendRowCost({calls:2,plan_calls:2,cost_usd:0}),'plan');
+  assert.equal(spendRowCost({calls:2,unpriced_calls:2,cost_usd:0}),'unpriced');
+  assert.equal(spendRowCost({calls:2,local_calls:2,cost_usd:0}),'local');
+  const mixed = joined(spendDayItems([{key:'2026-09-22',calls:5,plan_calls:2,unpriced_calls:1,local_calls:1,cost_usd:1.2}]));
+  assert.match(mixed, /5 calls · 2 on plans · 1 unpriced · 1 local/);
+  assert.match(mixed, /spend-day-cost">\$1\.20/);
+  assert.match(joined(spendListItems([{key:'repo',calls:3,unpriced_calls:1,cost_usd:5}],8,{by:'repo'})), /1 unpriced/);
 });
 
 test('planWindowLabel: 10080 min is weekly, 300 is 5-hour, else hours', () => {

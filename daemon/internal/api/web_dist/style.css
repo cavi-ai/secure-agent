@@ -113,11 +113,12 @@ body {
 
 .app {
   max-width: 2200px;
+  min-width: 0;
   margin: 0 auto;
   padding: 28px clamp(16px, 2.4vw, 48px) 56px;
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 18px;
 }
 
 /* ---------- masthead ---------- */
@@ -144,7 +145,7 @@ body {
 }
 .brand-tag { font-size: 0.82rem; color: var(--tx-2); margin-top: 2px; }
 
-.masthead-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.masthead-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 
 .status-chip {
   display: flex; align-items: center; gap: 8px;
@@ -194,6 +195,7 @@ body {
 .btn-danger-solid:hover:not(:disabled) { background: var(--bad); border-color: var(--bad); opacity: 0.88; }
 .btn-warn-outline { background: transparent; border-color: var(--warn); color: var(--warn); }
 .btn-warn-outline:hover:not(:disabled) { background: var(--warn-bg); border-color: var(--warn); }
+.btn:focus-visible, .tab-btn:focus-visible, .subtab-btn:focus-visible, .home-group > summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .btn:disabled, .btn[disabled] { opacity: 0.45; cursor: not-allowed; }
 .btn:disabled:active, .btn[disabled]:active { transform: none; }
 
@@ -221,8 +223,8 @@ body {
 .kpi-label { font-size: 0.82rem; font-weight: 600; color: var(--tx-1); }
 
 /* ---------- grid + panels ---------- */
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
-.col { display: flex; flex-direction: column; gap: 18px; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .grid.grid-stack { grid-template-columns: minmax(0, 1fr); }
 .panel {
   background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-md);
@@ -872,17 +874,13 @@ body {
 .source-remove .icon { font-size: 0.9rem; }
 .source-remove:hover { background: var(--bad-bg); color: var(--bad); }
 
-/* ---------- docked inspector (replaces native <dialog> modals) ----------
-   NOT a modal. No scrim, no backdrop blur, no focus trap: the page behind the
-   panel stays fully visible and interactive, so this never "changes the
-   foreground/background" the way a native <dialog>'s system-scheme ::backdrop
-   did. The panel is anchored to the right edge and simply coexists with the
-   content (which the layout reserves room for via .app.drawer-open). */
+/* ---------- inspector: docked on desktop, modal when space is constrained ---------- */
 .drawer {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 200;
   display: flex; justify-content: flex-end; pointer-events: none;
 }
 .drawer[hidden] { display: none; }
+.drawer[data-modal="true"] { left: 0; background: hsl(223 30% 6% / 0.45); pointer-events: auto; }
 .drawer-panel {
   position: relative; height: 100%; width: min(560px, 92vw); max-width: 100%;
   display: flex; flex-direction: column;
@@ -906,7 +904,7 @@ body {
 /* This pane restores its own reading position across loading/status changes. */
 .drawer-body:has([data-session-part="permissions-head"]) { overflow-anchor: none; }
 .drawer-foot {
-  display: flex; justify-content: flex-end; gap: 8px;
+  display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px;
   padding: 14px 20px; border-top: 1px solid var(--line);
   background: var(--bg-1); flex: none;
 }
@@ -985,12 +983,12 @@ body {
 }
 .plan-suggestion p { margin: 0 0 6px; }
 .finding-labels { margin: 2px 0 0; font-size: 0.76rem; color: var(--tx-3); }
-/* While the inspector is open, reserve its width so it never sits ON TOP of
-   the content — the page shifts rather than being covered. */
-@media (min-width: 1100px) {
-  .app.drawer-open { padding-right: min(560px, 92vw); }
-  .app.drawer-open.drawer-wide { padding-right: min(720px, 94vw); }
-  .app.drawer-open { transition: padding-right .22s var(--ease); }
+/* Dock only when at least 580px of working content and gutters remain. */
+@media (min-width: 1180px) {
+  .app.drawer-open:not(.drawer-wide) { padding-right: calc(560px + clamp(16px, 2.4vw, 48px)); }
+}
+@media (min-width: 1340px) {
+  .app.drawer-open.drawer-wide { padding-right: calc(720px + clamp(16px, 2.4vw, 48px)); }
 }
 
 /* ---------- confirm layer ----------
@@ -1031,6 +1029,15 @@ body {
   width: auto; height: auto;
   max-height: min(60vh, 420px);
   pointer-events: none;
+}
+/* An open inspector keeps its action footer unobstructed by feedback. */
+.drawer:not([hidden]) ~ .toasts {
+  inset: 80px 22px auto auto;
+  max-height: min(40vh, 300px);
+}
+.drawer:not([hidden]) ~ .toasts .toast {
+  min-width: 0;
+  max-width: min(360px, calc(100vw - 44px));
 }
 /* Only hide-when-closed on browsers that support the Popover API; elsewhere
    the container is a normal always-present fixed div. */
@@ -1149,7 +1156,7 @@ body {
 .subview { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .subview[hidden] { display: none; }
 
-/* Home groups: closed <details>; their panels render when opened. */
+/* Home groups preserve user-controlled disclosure; usage starts expanded. */
 .home-group { min-width: 0; }
 .home-group > :not(summary) { margin-top: 18px; }
 .home-group > summary {
@@ -1205,7 +1212,17 @@ body.is-ended .masthead-right { display: none !important; }
   container-type: inline-size;
   --log-cols: 64px 132px minmax(0, 1fr) 52px 64px 112px 16px;
 }
-#tab-home > * { max-width: 1320px; width: 100%; }
+main { min-width: 0; }
+#tab-home > * { width: 100%; min-width: 0; }
+.home-support { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
+@container (min-width: 1000px) {
+  .home-support { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+.protection-nav { margin-bottom: 18px; }
+.protection-nav[hidden], .protection-view[hidden] { display: none; }
+.protection-view { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.protection-view .panel-head p { max-width: 72ch; margin-top: 4px; font-size: .78rem; color: var(--tx-2); }
+.protection-view .notify-pop-sub, .drawer-body > p { max-width: 72ch; }
 .needs { display: grid; gap: 8px; }
 .needs[hidden] { display: none; }
 .needs-title { display: flex; align-items: baseline; gap: 8px; margin: 0; font: 650 0.8125rem/1.2 var(--font); color: var(--tx-1); }
@@ -1215,6 +1232,7 @@ body.is-ended .masthead-right { display: none !important; }
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; min-height: 56px;
   padding: 10px 14px 10px 11px; border-left: 3px solid var(--warn); border-top: 1px solid var(--line);
 }
+.need.is-selected, .need-row.is-selected { background: var(--brand-bg); box-shadow: inset 3px 0 0 var(--brand); }
 .need:first-child { border-top: 0; border-top-left-radius: var(--r-md); }
 .need:last-child { border-bottom-left-radius: var(--r-md); }
 .need.sev-bad { border-left-color: var(--bad); }
@@ -1466,7 +1484,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 /* ---------- posture headline ---------- */
 .posture {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 18px;
-  border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin-bottom: 18px;
+  border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin-bottom: 0;
   background: linear-gradient(180deg, rgba(52, 211, 153, 0.05), transparent);
 }
 .posture[data-state="attention"] { background: linear-gradient(180deg, rgba(245, 158, 11, 0.08), transparent); border-color: rgba(245, 158, 11, 0.35); }
@@ -1870,7 +1888,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 /* ---------- at-a-glance stat strip (replaces the 4-tile KPI block) ---------- */
 .statstrip {
   display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 22px;
-  padding: 10px 4px 14px; margin-bottom: 4px;
+  padding: 8px 4px 12px; margin-bottom: 0;
   border-bottom: 1px solid var(--line);
 }
 .ss-item { display: flex; align-items: baseline; gap: 6px; }
@@ -1914,8 +1932,20 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .spend-plan-text { font-size: 0.75rem; color: var(--tx-2); overflow-wrap: anywhere; }
 .spend-controls { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; min-width: 0; }
 .spend-cache { font-size: 0.68rem; color: var(--tx-3); white-space: normal; }
-.spend-bars { display: flex; align-items: flex-end; gap: 4px; overflow-x: auto; padding-bottom: 2px; }
-.spend-day { flex: 1 0 34px; min-width: 34px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.spend-bars { display: flex; align-items: flex-end; gap: 4px; overflow-x: auto; padding: 4px 3px 6px; }
+.spend-day { flex: 1 0 44px; min-width: 44px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+button.spend-day { appearance: none; padding: 8px 4px; border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; color: inherit; font: inherit; cursor: pointer; }
+button.spend-day:hover { background: var(--bg-2); }
+button.spend-day[aria-pressed="true"] { background: var(--brand-bg); border-color: var(--brand); }
+button.spend-day:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.spend-day[aria-pressed="true"] .spend-day-bar { opacity: 1; }
+.spend-day[aria-pressed="true"] .spend-day-label { color: var(--tx-1); font-weight: 650; }
+.spend-day-detail { margin-top: 14px; padding: 14px; display: grid; gap: 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); }
+.spend-day-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.spend-day-detail h3 { font-size: .875rem; font-weight: 650; }
+.spend-day-detail p { margin: 0; overflow-wrap: anywhere; }
+.spend-day-range, .spend-day-status { color: var(--tx-2); font-size: .75rem; line-height: 1.5; }
+.spend-day-summary { color: var(--tx-1); font-size: .8125rem; line-height: 1.5; }
 .spend-day-track { display: flex; align-items: flex-end; width: 100%; max-width: 28px; height: 96px; border-radius: 4px; background: var(--bg-2); overflow: hidden; }
 .spend-day-bar { display: block; width: 100%; min-height: 2px; border-radius: 4px 4px 0 0; background: var(--brand); opacity: 0.8; }
 .spend-day-cost { font: 600 0.66rem/1 var(--mono); color: var(--tx-1); font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -2318,3 +2348,74 @@ button.rc-col:hover .rc-seg-freed { background: var(--brand-2); }
 .assessment-limits summary { cursor: pointer; }
 .assessment-limits ul { margin: 6px 0; padding-left: 18px; }
 .assessment-advice { color: var(--tx-2); margin: 6px 0 0; }
+
+/* Phone working mode: compact chrome, reachable controls, full-screen evidence. */
+@media (max-width: 719px) {
+  .app { padding: 12px 12px 32px; gap: 14px; }
+  .masthead { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; align-items: center; }
+  .brand { grid-column: 1 / 5; grid-row: 1; gap: 8px; min-width: 0; }
+  .brand-mark { width: 32px; height: 32px; font-size: 20px; flex: none; }
+  .brand-name { font-size: .95rem; gap: 5px; flex-wrap: wrap; }
+  .brand-ver { font-size: .6rem; padding: 2px 4px; }
+  .brand-tag, .masthead .spark { display: none; }
+  .masthead-right { display: contents; }
+  .masthead .status-chip { grid-column: 5 / 8; grid-row: 1; justify-self: end; padding: 7px 9px; font-size: .72rem; }
+  .search-wrap { grid-column: 1 / 5; grid-row: 2; }
+  .search-wrap .input-sm { width: 100%; min-height: 44px; }
+  .masthead [data-action="open-config"] { grid-column: 5 / 7; grid-row: 2; justify-content: center; }
+  #btn-refresh { grid-column: 7; grid-row: 2; justify-content: center; justify-self: end; }
+  .views-wrap { grid-column: 1; grid-row: 3; }
+  .notify-wrap { grid-column: 2; grid-row: 3; }
+  .theme-toggle { grid-column: 5 / 8; grid-row: 3; justify-self: end; padding: 0; }
+  .theme-toggle button { min-height: 44px; min-width: 44px; }
+  .masthead .btn { min-height: 44px; min-width: 44px; }
+  .views-wrap > .btn, .notify-wrap > .btn { width: 100%; justify-content: center; }
+  .views-pop { position: fixed; top: 150px; left: 12px; right: 12px; width: auto; max-height: calc(100dvh - 170px); overflow-y: auto; }
+  .posture { padding: 10px 12px; gap: 6px; flex-direction: column; }
+  .posture-main { min-width: 0; gap: 8px; }
+  .posture-state { font-size: .85rem; }
+  .posture-summary { font-size: .72rem; }
+  .posture-items { gap: 2px; }
+  .posture-items li { font-size: .7rem; overflow-wrap: anywhere; }
+  .statstrip { gap: 6px 14px; padding: 0 2px 10px; }
+  .ss-item { gap: 4px; }
+  .ss-num { font-size: 1.05rem; }
+  .ss-label { font-size: .68rem; }
+  .ss-hint { font-size: .65rem; }
+  .ss-meta { gap: 8px; font-size: .68rem; flex-wrap: wrap; }
+  .tabs { gap: 1px; padding: 3px; }
+  .tab-btn { justify-content: center; flex: 1 0 auto; gap: 3px; min-height: 44px; padding: 10px 5px; font-size: .73rem; }
+  .tab-btn > .icon { display: none; }
+  .tab-badge { min-width: 14px; padding: 2px 3px; font-size: .6rem; }
+  .tabs-posture { display: none; }
+  .subtab-btn { min-height: 44px; padding: 10px; }
+  .needs-title { font-size: .875rem; }
+  .need-head { min-height: 44px; }
+  .need-what { font-size: .85rem; }
+  .panel-head { flex-wrap: wrap; padding: 12px; gap: 8px; }
+  .panel-head .btn, .panel-head .select { min-height: 44px; }
+  .home-support { gap: 14px; }
+  .home-group > summary { min-height: 44px; }
+  .home-group > :not(summary) { margin-top: 10px; }
+  .spend-controls { flex: 1 1 auto; }
+  .spend-controls .select { flex: 1; min-width: 0; }
+  .spend-day-detail { padding: 12px; }
+  .spend-day-detail .btn { min-height: 44px; }
+  .drawer, .drawer.resource-policy { left: 0; }
+  .drawer .drawer-panel, .drawer.resource-policy .drawer-panel { width: 100%; border-left: 0; }
+  .drawer-head { flex-wrap: wrap; padding: 10px 12px; }
+  .drawer-head .btn, .drawer-foot .btn { min-height: 44px; }
+  .drawer-body { padding: 14px 12px; }
+  .drawer-foot { padding: 10px 12px; }
+}
+@media (max-width: 359px) {
+  .brand-name { font-size: .85rem; }
+  .brand-ver { display: none; }
+  .masthead { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .brand { grid-column: 1 / 4; }
+  .masthead .status-chip { grid-column: 4 / 7; }
+  .search-wrap { grid-column: 1 / 4; }
+  .masthead [data-action="open-config"] { grid-column: 4 / 6; }
+  #btn-refresh { grid-column: 6; }
+  .theme-toggle { grid-column: 4 / 7; }
+}
