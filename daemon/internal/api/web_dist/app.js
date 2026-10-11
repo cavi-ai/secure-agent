@@ -2235,6 +2235,25 @@ document.addEventListener('DOMContentLoaded', () => {
   spendBySel?.addEventListener('change', onSpendView);
   spendSinceSel?.addEventListener('change', onSpendView);
 
+  function handleSpendDayKeydown(event) {
+    if (sessionEnded || event.defaultPrevented || event.isComposing
+      || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const current = event.target?.closest?.('button[data-action="select-spend-day"]');
+    const bars = current?.closest('.spend-bars');
+    if (!bars) return;
+    const buttons = Array.from(bars.querySelectorAll('button[data-action="select-spend-day"]'))
+      .filter(button => !button.disabled && !button.matches(':disabled') && button.closest('.spend-bars') === bars);
+    const index = buttons.indexOf(current);
+    if (index < 0) return;
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+      : Math.max(0, Math.min(buttons.length - 1, index + (event.key === 'ArrowLeft' ? -1 : 1)));
+    event.preventDefault();
+    // Move focus within the current chart; activation keeps its native meaning.
+    if (buttons[next] !== current) buttons[next].focus();
+  }
+  document.getElementById('spend-card')?.addEventListener('keydown', handleSpendDayKeydown);
+
   function renderStatus() {
     const chip = document.getElementById('system-status');
     if (!telemetryData.connected) {

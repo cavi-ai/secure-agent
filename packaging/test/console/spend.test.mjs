@@ -353,3 +353,82 @@ test('Clear selection restores its selected chart bar without changing the chart
   assert.equal(telemetryData.costsCard,chart);
   assert.equal(expandedLists.has('spend'),true);
 });
+
+function dayKeyboardFixture(count = 4) {
+  const source = readFileSync(path.join(webDist,'app.js'),'utf8');
+  const focusCalls = [];
+  const bars = {buttons:[],querySelectorAll:()=>bars.buttons};
+  const button = (day, options = {}) => ({dataset:{action:'select-spend-day',day},disabled:false,
+    matches() { return this.fieldsetDisabled || this.disabled; },
+    closest(selector) { return selector === '.spend-bars' ? bars : this; },
+    focus(...args) { focusCalls.push({button:this,args}); }, ...options});
+  bars.buttons = Array.from({length:count}, (_,i)=>button(`day-${i}`));
+  let listener;
+  const forbidden = () => assert.fail('day-key focus must not activate, load, render, or schedule work');
+  const c = {sessionEnded:false,document:{getElementById:id=>{
+    assert.equal(id,'spend-card'); return {addEventListener:(type,handler)=>{assert.equal(type,'keydown');listener=handler;}};
+  }},selectSpendDay:forbidden,loadSpendDay:forbidden,apiFetch:forbidden,renderNow:forbidden,setTimeout:forbidden};
+  vm.createContext(c);
+  vm.runInContext(source.slice(source.indexOf('  function handleSpendDayKeydown('),source.indexOf('  function renderStatus(')),c);
+  const key = (current, value, options = {}) => {
+    const event = {target:current,key:value,prevented:0,preventDefault(){this.prevented++;},...options};
+    listener(event); return event;
+  };
+  return {c,bars,button,focusCalls,key};
+}
+
+test('daily chart arrows move to adjacent enabled DOM buttons, Home/End reach bounds, without activation', () => {
+  const f=dayKeyboardFixture(), [first,second,third,last]=f.bars.buttons;
+  for (const [from,key,to] of [[first,'ArrowRight',second],[third,'ArrowLeft',second],[third,'Home',first],[second,'End',last]]) {
+    assert.equal(f.key(from,key).prevented,1);
+    assert.equal(f.focusCalls.at(-1).button,to);
+    assert.equal(f.focusCalls.at(-1).args.length,0,'native focus may reveal the destination in the scrollable chart');
+  }
+  const count=f.focusCalls.length;
+  assert.equal(f.key(first,'ArrowLeft').prevented,1);
+  assert.equal(f.key(last,'ArrowRight').prevented,1);
+  assert.equal(f.focusCalls.length,count,'bounds clamp without redundant focus');
+  assert.equal(first.dataset.day,'day-0');
+});
+
+test('day-key navigation resolves live enabled buttons in its originating chart', () => {
+  const f=dayKeyboardFixture(), [first,second,third,last]=f.bars.buttons;
+  second.disabled=true; third.fieldsetDisabled=true;
+  assert.equal(f.key(first,'ArrowRight').prevented,1);
+  assert.equal(f.focusCalls.at(-1).button,last);
+  f.bars.buttons=[last,first];
+  assert.equal(f.key(last,'ArrowRight').prevented,1);
+  assert.equal(f.focusCalls.at(-1).button,first,'refresh DOM order is used immediately');
+  const foreign=f.button('other'); foreign.closest=selector=>selector === '.spend-bars' ? {} : foreign;
+  // Nested or other chart buttons never become neighbors of this chart.
+  f.bars.buttons=[first,foreign,last];
+  assert.equal(f.key(first,'ArrowRight').prevented,1);
+  assert.equal(f.focusCalls.at(-1).button,last);
+  const count=f.focusCalls.length;
+  assert.equal(f.key(second,'ArrowRight').prevented,0);
+  assert.equal(f.focusCalls.length,count,'removed/disabled source is ignored');
+});
+
+test('day-key navigation leaves activation, Tab, modified/composing/prevented events and unrelated controls untouched', () => {
+  const f=dayKeyboardFixture(), first=f.bars.buttons[0];
+  for (const key of ['Enter',' ','Tab','Escape','ArrowUp','ArrowDown']) assert.equal(f.key(first,key).prevented,0);
+  for (const field of ['altKey','ctrlKey','metaKey','shiftKey','isComposing','defaultPrevented'])
+    assert.equal(f.key(first,'ArrowRight',{[field]:true}).prevented,0);
+  assert.equal(f.key({closest:()=>null},'Home').prevented,0);
+  assert.equal(f.key({},'End').prevented,0);
+  assert.equal(f.key(null,'Home').prevented,0);
+  first.disabled=true;
+  assert.equal(f.key(first,'ArrowRight').prevented,0);
+  first.disabled=false; f.c.sessionEnded=true;
+  assert.equal(f.key(first,'ArrowRight').prevented,0);
+  assert.equal(f.focusCalls.length,0);
+});
+
+test('empty and single-day charts are safe and never leave their bounds', () => {
+  const f=dayKeyboardFixture(1), only=f.bars.buttons[0];
+  for (const key of ['ArrowLeft','ArrowRight','Home','End']) assert.equal(f.key(only,key).prevented,1);
+  assert.equal(f.focusCalls.length,0);
+  f.bars.buttons=[];
+  assert.equal(f.key(only,'Home').prevented,0);
+  assert.equal(f.focusCalls.length,0);
+});
