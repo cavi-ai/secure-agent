@@ -148,14 +148,29 @@ document.addEventListener('DOMContentLoaded', () => {
     attentionSelection.signature = signature;
     const view = needView(item, homeContext(window.SA));
     const focused = drawer.contains(document.activeElement) ? document.activeElement : null;
-    const action = focused?.dataset.action, id = focused?.dataset.id;
+    // Every served data field contributes to the choice: verdict, scope,
+    // expiry, intervention and evidence revision must survive unchanged.
+    const identity = control => control?.dataset.action
+      ? JSON.stringify(Object.entries(control.dataset).sort(([a], [b]) => a.localeCompare(b))) : null;
+    const choice = identity(focused);
     drawerTitle.textContent = item.title || view.word;
     drawerBody.innerHTML = `<div class="panel-body attention-inspector"><p class="finding-why">${escapeHTML(view.agent)}</p><h3>${escapeHTML(view.what)}</h3><p>${escapeHTML(view.why)}</p>${view.body ? view.body() : `<p>${escapeHTML(item.detail || '')}</p>`}</div>`;
     drawerBody.querySelectorAll('details.body-evidence').forEach(part => { part.open = true; });
     drawerFoot.innerHTML = actionBarHTML(view.items);
     drawerFoot.hidden = !view.items.length;
     if (focused && !focused.isConnected) {
-      const replacement = Array.from(drawer.querySelectorAll('[data-action]')).find(b => b.dataset.action === action && b.dataset.id === id);
+      const replacement = choice && Array.from(drawer.querySelectorAll('[data-action]')).find(control => {
+        if (identity(control) !== choice || control.disabled || control.matches(':disabled')
+          || control.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+        for (let part = control; part && part !== drawer; part = part.parentElement) {
+          const style = getComputedStyle(part);
+          if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+        }
+        // Replaced More disclosures start closed. Reveal the same choice
+        // before restoring focus, without invoking or changing the action.
+        for (let part = control.closest('details'); part; part = part.parentElement?.closest('details')) part.open = true;
+        return control.getClientRects().length > 0;
+      });
       (replacement || btnDrawerClose)?.focus({ preventScroll: true });
     }
   }
