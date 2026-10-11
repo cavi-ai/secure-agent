@@ -401,17 +401,19 @@ func initializeSchema(db *sql.DB) error {
 			return fmt.Errorf("failed to index incidents: %w", err)
 		}
 	}
-	// The retention-order indexes evaluate datetime(), which returns NULL
+	// The flag retention index evaluates datetime(), which returns NULL
 	// for a malformed stamp but fails on a stored 'now' (any case). Such a
-	// row cannot come from PutFlag or PutIncident; if one exists, the index
+	// row cannot come from PutFlag; if one exists, the index
 	// is skipped and those statements scan instead of the store failing.
 	for _, q := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_flags_time ON flags(datetime(ts), ts);`,
-		`CREATE INDEX IF NOT EXISTS idx_incidents_time ON incidents(datetime(created_at), created_at);`,
 	} {
 		if _, err := tx.Exec(q); err != nil {
 			log.Printf("store: %s skipped, retention and lists scan instead: %v", q, err)
 		}
+	}
+	if _, err := tx.Exec(incidentRetentionIndexSQL); err != nil {
+		log.Printf("store: incident time index skipped, retention and lists scan instead: %v", err)
 	}
 
 	if err := createMemoryIndexes(tx); err != nil {
