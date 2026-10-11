@@ -1,6 +1,10 @@
 package store
 
-import "github.com/cavi-ai/secure-agent/daemon/internal/model"
+import (
+	"slices"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+)
 
 // SessionOutcomeHistory is retained history, never current action authority.
 // Each source is read independently so an unavailable section does not erase
@@ -18,22 +22,34 @@ type SessionOutcomeEvidence struct {
 	Interventions ReportSourceEvidence `json:"interventions"`
 }
 
+type sessionOutcomeReader interface {
+	ListSessionFindingReviews(string) (ReviewPage, error)
+	RecentInterventions(string, int) ([]model.InterventionReceipt, error)
+	SessionIncidents(string) ([]model.IncidentReport, error)
+}
+
 func (s *Store) SessionOutcomes(id string) SessionOutcomeHistory {
+	return readSessionOutcomeHistory(s, id)
+}
+
+// readSessionOutcomeHistory retains readable receipt sources independently.
+// The returned review rows do not carry authority to create a new scope.
+func readSessionOutcomeHistory(reader sessionOutcomeReader, id string) SessionOutcomeHistory {
 	out := SessionOutcomeHistory{Reviews: []model.ReviewRecord{}, Incidents: []model.IncidentReport{}, Interventions: []model.InterventionReceipt{}}
-	page, reviewErr := s.ListSessionFindingReviews(id)
+	page, reviewErr := reader.ListSessionFindingReviews(id)
 	if reviewErr == nil && !page.Degraded {
-		out.Reviews = page.Reviews
+		out.Reviews = slices.Clone(page.Reviews)
 		for i := range out.Reviews {
 			out.Reviews[i].AvailableScopes = nil
 		}
 	}
 	out.Evidence.Reviews = ReportSourceEvidence{Available: reviewErr == nil && !page.Degraded, AtLimit: len(out.Reviews) >= 100, Limit: 100}
-	interventions, interventionErr := s.RecentInterventions(id, 200)
+	interventions, interventionErr := reader.RecentInterventions(id, 200)
 	if interventionErr == nil {
 		out.Interventions = interventions
 	}
 	out.Evidence.Interventions = ReportSourceEvidence{Available: interventionErr == nil, AtLimit: len(out.Interventions) >= 200, Limit: 200}
-	incidents, incidentErr := s.SessionIncidents(id)
+	incidents, incidentErr := reader.SessionIncidents(id)
 	if incidentErr == nil {
 		out.Incidents = incidents
 	}
