@@ -11,9 +11,8 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
-// A store whose stamps include 'now' (which datetime() refuses inside an
-// index) or malformed text still opens and accepts writes/retention; only the
-// retention-order indexes are skipped. Flag reads reject malformed timestamps.
+// Malformed legacy stamps do not prevent opening or retaining evidence.
+// Flag reads still reject malformed timestamps.
 func TestOpenSurvivesStampsTheTimeIndexesRefuse(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "e.db")
 	raw, err := sql.Open("sqlite", path)
@@ -72,13 +71,13 @@ func TestFlagHotPathsUseIndexes(t *testing.T) {
 	if plan := queryPlan(t, s, reattributeFlagsSQL, "claude", 7, "2026-10-07T00:00:00Z"); !strings.Contains(plan, "idx_flags_pid") {
 		t.Errorf("reattribute plan = %q, want idx_flags_pid", plan)
 	}
-	if plan := queryPlan(t, s, trimFlagsSQL, maxFlags); !strings.Contains(plan, "idx_flags_time") || strings.Contains(plan, "TEMP B-TREE") {
-		t.Errorf("trim plan = %q, want idx_flags_time without a sort", plan)
+	if plan := queryPlan(t, s, trimFlagsSQL, maxFlags); !strings.Contains(plan, "idx_flags_instant_time") || strings.Contains(plan, "TEMP B-TREE") {
+		t.Errorf("trim plan = %q, want idx_flags_instant_time without a sort", plan)
 	}
 	for _, f := range []FlagFilter{{}, {Unacted: true}, {MinSeverity: 3}} {
 		q, args := flagQuery(f)
-		if plan := queryPlan(t, s, q, args...); !strings.Contains(plan, "idx_flags_time") || strings.Contains(plan, "TEMP B-TREE") {
-			t.Errorf("QueryFlags(%+v) plan = %q, want idx_flags_time without a sort", f, plan)
+		if plan := queryPlan(t, s, q, args...); !strings.Contains(plan, "idx_flags_instant_time") || strings.Contains(plan, "TEMP B-TREE") {
+			t.Errorf("QueryFlags(%+v) plan = %q, want idx_flags_instant_time without a sort", f, plan)
 		}
 	}
 	if plan := queryPlan(t, s, ruleCountsSQL, "a", "b", "r", "claude"); !strings.Contains(plan, "idx_flags_rule_agent") {
@@ -94,17 +93,17 @@ func TestFlagHotPathsUseIndexes(t *testing.T) {
 	if plan := queryPlan(t, s, findOpenIncidentSQL, "r", "s1", "subj"); !strings.Contains(plan, "idx_incidents_open_key") {
 		t.Errorf("open-incident plan = %q, want idx_incidents_open_key", plan)
 	}
-	if plan := queryPlan(t, s, trimIncidentsSQL, maxIncidents); !strings.Contains(plan, "idx_incidents_time") || strings.Contains(plan, "TEMP B-TREE") {
-		t.Errorf("incident trim plan = %q, want idx_incidents_time without a sort", plan)
+	if plan := queryPlan(t, s, trimIncidentsSQL, maxIncidents); !strings.Contains(plan, "idx_incidents_instant_time") || strings.Contains(plan, "TEMP B-TREE") {
+		t.Errorf("incident trim plan = %q, want idx_incidents_instant_time without a sort", plan)
 	}
 	if plan := queryPlan(t, s, `SELECT report_json FROM incidents WHERE id = ? OR flag_id = ?`, "i", "f"); strings.Contains(plan, "SCAN incidents") {
 		t.Errorf("incident by id-or-flag plan = %q, want index lookups", plan)
 	}
 }
 
-// Both trims keep the same rows the previous whole-table statements kept,
+// Flag trimming keeps the same rows the previous whole-table statement kept,
 // including NULL, empty, unparseable, offset, sub-second and tied stamps.
-func TestTrimsKeepWhatThePreviousStatementsKept(t *testing.T) {
+func TestFlagTrimKeepsWhatThePreviousStatementKept(t *testing.T) {
 	stamps := []any{nil, "", "garbage",
 		"2026-10-07T12:00:00Z", "2026-10-07T13:30:00+02:00", "2026-10-07T07:15:00-05:00",
 		"2026-10-07T12:00:00.5Z", "2026-10-07T12:05:00Z", "2026-10-07T12:05:00Z",
@@ -116,9 +115,6 @@ func TestTrimsKeepWhatThePreviousStatementsKept(t *testing.T) {
 		{"flags", `INSERT INTO flags (id, rule, ts) VALUES (?, 'r', ?)`,
 			`DELETE FROM flags WHERE rowid NOT IN (SELECT rowid FROM flags ORDER BY datetime(ts) DESC, ts DESC LIMIT ?)`,
 			trimFlagsSQL, "ts", 5},
-		{"incidents", `INSERT INTO incidents (id, created_at) VALUES (?, ?)`,
-			`DELETE FROM incidents WHERE id NOT IN (SELECT id FROM incidents ORDER BY datetime(created_at) DESC, created_at DESC LIMIT ?)`,
-			trimIncidentsSQL, "created_at", 5},
 	} {
 		kept := func(trim string) []string {
 			s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")

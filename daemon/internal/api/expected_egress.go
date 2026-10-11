@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,7 +25,12 @@ func (a *API) handleExpectedEgress(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, map[string]any{"rules": a.store.ListExpectedEgressRules()})
+		rules, err := a.store.ListExpectedEgressRulesResult()
+		if err != nil {
+			http.Error(w, "expected egress rules unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, map[string]any{"rules": rules})
 	case http.MethodPost:
 		r.Body = http.MaxBytesReader(w, r.Body, 4096)
 		var req expectedEgressRequest
@@ -43,7 +49,11 @@ func (a *API) handleExpectedEgress(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid rule kind", http.StatusBadRequest)
 			return
 		}
-		episode, ok := a.store.GetEgressEpisode(req.EpisodeID)
+		episode, ok, err := a.store.GetEgressEpisodeResult(req.EpisodeID)
+		if err != nil {
+			http.Error(w, "egress episode unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		if !ok {
 			http.Error(w, "episode not found", http.StatusNotFound)
 			return
@@ -62,12 +72,15 @@ func (a *API) handleExpectedEgress(w http.ResponseWriter, r *http.Request) {
 		} else {
 			rule.Host, rule.Protocol, rule.Port = episode.Host, episode.Protocol, episode.Port
 		}
-		saved, err := a.store.CreateExpectedEgressRule(rule)
+		saved, err := a.store.CreateExpectedEgressRuleWithAudit(rule)
 		if err != nil {
-			http.Error(w, "invalid observed destination or scope", http.StatusBadRequest)
+			if errors.Is(err, store.ErrInvalidExpectedEgressRule) {
+				http.Error(w, "invalid observed destination or scope", http.StatusBadRequest)
+			} else {
+				http.Error(w, "expected egress rule unavailable", http.StatusServiceUnavailable)
+			}
 			return
 		}
-		a.store.PutAudit(store.AuditEntry{Action: "expected-egress-create", Rule: saved.ID, ToMode: saved.Kind, Detail: "operator decision from observed episode"})
 		writeJSON(w, saved)
 	case http.MethodDelete:
 		id := r.URL.Query().Get("id")
@@ -75,11 +88,14 @@ func (a *API) handleExpectedEgress(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid rule id", http.StatusBadRequest)
 			return
 		}
-		if err := a.store.RevokeExpectedEgressRule(id); err != nil {
-			http.Error(w, "rule not found", http.StatusNotFound)
+		if err := a.store.RevokeExpectedEgressRuleWithAudit(id); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, "rule not found", http.StatusNotFound)
+			} else {
+				http.Error(w, "expected egress rule unavailable", http.StatusServiceUnavailable)
+			}
 			return
 		}
-		a.store.PutAudit(store.AuditEntry{Action: "expected-egress-revoke", Rule: id, ToMode: "revoked", Detail: "operator decision"})
 		writeJSON(w, map[string]string{"status": "revoked", "id": id})
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

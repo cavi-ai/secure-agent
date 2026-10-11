@@ -4,7 +4,17 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
+
+// decisionScopeView is the GET body. Applicability is computed for the
+// response and is not a stored column.
+type decisionScopeView struct {
+	model.DecisionScope
+	Applicability model.ScopeApplicability `json:"applicability"`
+}
 
 func (a *API) handleDecisionScopes(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -14,7 +24,12 @@ func (a *API) handleDecisionScopes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Permissions unavailable", 503)
 			return
 		}
-		writeJSON(w, scopes)
+		now := time.Now()
+		views := make([]decisionScopeView, len(scopes))
+		for i, scope := range scopes {
+			views[i] = decisionScopeView{DecisionScope: scope, Applicability: scope.Applicability(now)}
+		}
+		writeJSON(w, views)
 	case http.MethodDelete:
 		id := r.URL.Query().Get("id")
 		if !guardTokenRE.MatchString(id) {

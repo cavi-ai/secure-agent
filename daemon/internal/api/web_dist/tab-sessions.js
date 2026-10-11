@@ -161,6 +161,26 @@ function sessionMemoryHTML(page, state) {
 // identity confidence, workspace path (click copies), Export (copies the
 // markdown report from GET /sessions/{id}/report), then Memory by default.
 // Trace keeps the existing waterfall and timeline endpoint.
+function validSessionTrace(rows, id) {
+  return Array.isArray(rows) && rows.length <= 500 && rows.every(row => row && typeof row === 'object'
+    && !Array.isArray(row) && row.session_id === id && Number.isInteger(row.kind) && row.kind >= 0
+    && typeof row.ts === 'string' && Number.isFinite(Date.parse(row.ts))
+    && ['duration_ms', 'tokens_in', 'tokens_out', 'cost_usd'].every(key => row[key] === undefined
+      || (typeof row[key] === 'number' && Number.isFinite(row[key]))));
+}
+
+function sessionTraceHTML(events, state) {
+  const loaded = state?.loaded || events.length > 0;
+  const retry = `<button type="button" class="link-btn" data-action="trace-retry"${state?.loading ? ' disabled' : ''}>Retry trace</button>`;
+  const message = state?.error ? `Trace unavailable.${loaded ? ' Showing the last successfully loaded history; it may be out of date.' : ''} ${retry}`
+    : state?.loading && !loaded ? 'Loading trace…' : '';
+  const text = message || (!loaded ? 'Loading trace…' : '');
+  const notice = `<div class="sm-state" data-session-part="trace-health" role="status"${text ? '' : ' hidden'}>${text}</div>`;
+  if (!loaded) return notice;
+  const limit = events.length === 500 ? '<p class="sm-state" data-session-part="trace-limit">This view contains the latest 500 retained event records; earlier history may be omitted. Use View session events to browse retained records.</p>' : '';
+  return notice + limit + sessionWaterfallHTML(events);
+}
+
 // Durable IDs are the entry point; live process counts and setup checks do
 // not substitute for a session's own record.
 function sessionDailyHTML(sessions, coverage) {
@@ -186,11 +206,42 @@ function renderSessionDaily() {
   if (el._saHTML !== html) { el.innerHTML = html; el._saHTML = html; }
 }
 
+// Validate the fields consumed by the current-status view before replacing
+// its last successful response. Unknown assessment values remain unknown.
+function validSessionOverview(data, id) {
+  const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const text = (v, names) => names.every(k => v[k] === undefined || typeof v[k] === 'string');
+  const number = (v, names) => names.every(k => v[k] === undefined || (typeof v[k] === 'number' && Number.isFinite(v[k]) && v[k] >= 0));
+  const rows = (v, test) => v == null || (Array.isArray(v) && v.every(test));
+  const strings = v => rows(v, s => typeof s === 'string');
+  const time = v => v === undefined || (typeof v === 'string' && Number.isFinite(Date.parse(v)));
+  const assessment = a => record(a) && text(a, ['risk', 'review_state', 'control', 'residual_risk', 'reason'])
+    && strings(a.evidence_basis) && strings(a.limits)
+    && (a.advice == null || (record(a.advice) && text(a.advice, ['assessment', 'rationale']) && number(a.advice, ['confidence'])));
+  if (!record(data) || data.session_id !== id || !time(data.observed_at)
+    || !Array.isArray(data.requests) || !Array.isArray(data.findings) || data.findings.length > 20
+    || (data.findings_truncated !== undefined && typeof data.findings_truncated !== 'boolean')) return false;
+  if (!data.requests.every(r => record(r) && r.kind === 'guard' && typeof r.id === 'string' && r.id.length > 0
+    && text(r, ['title', 'detail', 'path', 'rule', 'scopeText', 'reader_exe'])
+    && rows(r.available_scopes, c => record(c) && typeof c.kind === 'string' && text(c, ['expiry'])))) return false;
+  if (!data.findings.every(f => record(f) && typeof f.id === 'string' && f.id.length > 0
+    && text(f, ['title']) && time(f.at) && assessment(f.assessment))) return false;
+  if (data.coverage != null && (!record(data.coverage) || data.coverage.session_id !== id
+    || !['guard', 'trace', 'payload'].every(k => record(data.coverage[k]) && typeof data.coverage[k].state === 'string'
+      && typeof data.coverage[k].detail === 'string' && text(data.coverage[k], ['last_seen'])
+      && (data.coverage[k].supported === undefined || typeof data.coverage[k].supported === 'boolean')))) return false;
+  const r = data.resources;
+  return r == null || (record(r) && typeof r.key === 'string' && r.key.length > 0 && time(r.observed_at)
+    && number(r, ['rss_bytes', 'cpu_percent', 'process_count'])
+    && rows(r.diagnoses, d => record(d) && text(d, ['summary']))
+    && (r.control == null || (record(r.control) && text(r.control, ['state', 'last_error']))));
+}
+
 function sessionOverviewHTML(data, state) {
   state = state || {};
-  const retry = '<button type="button" class="link-btn" data-action="session-overview-retry">Retry current status</button>';
-  const status = state.error ? `Last known session status. Refresh failed; requests and measurements may have changed. ${retry}`
-    : !data ? state.loading ? 'Loading current session status…' : `Current session status unavailable. ${retry}` : '';
+  const retry = `<button type="button" class="link-btn" data-action="session-overview-retry"${state.loading ? ' disabled' : ''}>${state.loading ? 'Retrying current status…' : 'Retry current status'}</button>`;
+  const status = !data ? state.loading && !state.error ? 'Loading current session status…' : `Current session status unavailable. ${retry}`
+    : state.error ? `Last known session status. Refresh failed; requests and measurements may have changed. ${retry}` : '';
   const head = `<div class="sd-current-head" data-session-part="current-head"><h4 tabindex="-1">Current session status</h4>${status ? `<p class="sd-current-status" role="status">${status}</p>` : ''}</div>`;
   if (!data) return head;
   const disabled = state.error ? ' disabled' : '';
@@ -308,20 +359,12 @@ function validPermissionRecords(rows) {
     new Set(rows.map(r => r.id)).size === rows.length;
 }
 
-function permissionRecordState(scope, now = Date.now()) {
-  if (scope.revoked_at) return { label: Number.isFinite(Date.parse(scope.revoked_at)) && Date.parse(scope.revoked_at) <= now
-    ? 'Revoked' : 'Revocation time unavailable or in the future; applicability unknown', revoke: false };
-  const created = Date.parse(scope.created_at);
-  if (!Number.isFinite(created) || created > now) return { label: 'Creation time unavailable or in the future; applicability unknown', revoke: false };
-  if (scope.operation !== 'read-connect' && !scope.operation?.startsWith('guard:')) return { label: 'Operation unavailable; applicability unknown', revoke: false };
-  if (scope.kind === 'exact') {
-    const expires = Date.parse(scope.expires_at);
-    if (!Number.isFinite(expires) || expires <= created) return { label: 'Expiry unavailable; applicability unknown', revoke: false };
-    if (expires <= now) return { label: 'Expired', revoke: false };
-    return { label: 'Timed permission', revoke: true };
+function permissionApplicability(record) {
+  const applicability = record && record.applicability;
+  if (!applicability || typeof applicability.label !== 'string' || !applicability.label || typeof applicability.revoke !== 'boolean') {
+    return { label: 'Applicability unknown', revoke: false };
   }
-  return scope.kind === 'session' ? { label: 'Session permission', revoke: true }
-    : { label: 'Permission kind unavailable; applicability unknown', revoke: false };
+  return { label: applicability.label, revoke: applicability.revoke };
 }
 
 function sessionPermissionsHTML(receipt, state) {
@@ -341,7 +384,7 @@ function sessionPermissionsHTML(receipt, state) {
     const record = st.rows?.find(r => r.id === id);
     const saved = st.revoked?.has(id) ? '<p role="status">Revocation saved. Other permissions or expectations may still apply; past exposure and the saved decision remain.</p>' : '';
     if (!record) return `<section class="policy-row" data-session-part="permission:${escapeHTML(id)}"><div class="policy-row-main"><b>Current status unknown</b><p>Permission ${escapeHTML(id)}</p><p>The record is unavailable. This does not establish revocation or expiry.</p>${saved}</div></section>`;
-    const status = permissionRecordState(record);
+    const status = permissionApplicability(record);
     // Keep the action's height while a read/save is pending, so short drawers
     // do not clamp their reading position to zero. The action stays disabled.
     const revoke = status.revoke && !st.error && !st.mutationError && !st.revoked?.has(id);
@@ -397,5 +440,5 @@ function sessionDetailHTML(sess, events, trees) {
       </details>
     </div>
     </div>
-    <div class="session-detail-body">${window.SA.sessionView === 'results' ? sessionOutcomesHTML(window.SA.sessionOutcomes, window.SA.sessionOutcomesState) : sessionOverviewHTML(window.SA.sessionOverview, window.SA.sessionOverviewState) + (window.SA.sessionView === 'trace' ? sessionWaterfallHTML(events) : sessionMemoryHTML(window.SA.sessionMemoryPage, window.SA.sessionMemoryState))}</div>`;
+    <div class="session-detail-body">${window.SA.sessionView === 'results' ? sessionOutcomesHTML(window.SA.sessionOutcomes, window.SA.sessionOutcomesState) : sessionOverviewHTML(window.SA.sessionOverview, window.SA.sessionOverviewState) + (window.SA.sessionView === 'trace' ? sessionTraceHTML(events, window.SA.sessionTimelineState) : sessionMemoryHTML(window.SA.sessionMemoryPage, window.SA.sessionMemoryState))}</div>`;
 }

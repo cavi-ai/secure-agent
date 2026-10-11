@@ -107,6 +107,56 @@ func (s DecisionScope) Matches(q DecisionScope, now time.Time) bool {
 	return (s.Kind != "session" || s.SessionID == q.SessionID) && s.Agent == q.Agent && s.Workspace == q.Workspace && s.ReaderExe == q.ReaderExe && s.RuleID == q.RuleID && s.ResourcePath == q.ResourcePath && s.Operation == q.Operation && s.Destination == q.Destination
 }
 
+// ScopeApplicability is the label and revoke offer for a saved permission.
+// It is computed when the record is read and is not stored on DecisionScope.
+type ScopeApplicability struct {
+	Label  string `json:"label"`
+	Revoke bool   `json:"revoke"`
+}
+
+// Applicability is the display and revoke-offer rule. Timestamps are compared
+// the way the console parsed them: a revocation time that has not arrived is
+// not Revoked. Matches remains the live-request check.
+func (s DecisionScope) Applicability(now time.Time) ScopeApplicability {
+	nowMS := now.UnixMilli()
+	if !s.RevokedAt.IsZero() {
+		revokedMS, ok := scopeMillis(s.RevokedAt)
+		if ok && revokedMS <= nowMS {
+			return ScopeApplicability{Label: "Revoked"}
+		}
+		return ScopeApplicability{Label: "Revocation time unavailable or in the future; applicability unknown"}
+	}
+	createdMS, createdOK := scopeMillis(s.CreatedAt)
+	if !createdOK || createdMS > nowMS {
+		return ScopeApplicability{Label: "Creation time unavailable or in the future; applicability unknown"}
+	}
+	if s.Operation != "read-connect" && !strings.HasPrefix(s.Operation, "guard:") {
+		return ScopeApplicability{Label: "Operation unavailable; applicability unknown"}
+	}
+	if s.Kind == "exact" {
+		expiresMS, expiresOK := scopeMillis(s.ExpiresAt)
+		if s.ExpiresAt.IsZero() || !expiresOK || expiresMS <= createdMS {
+			return ScopeApplicability{Label: "Expiry unavailable; applicability unknown"}
+		}
+		if expiresMS <= nowMS {
+			return ScopeApplicability{Label: "Expired"}
+		}
+		return ScopeApplicability{Label: "Timed permission", Revoke: true}
+	}
+	if s.Kind == "session" {
+		return ScopeApplicability{Label: "Session permission", Revoke: true}
+	}
+	return ScopeApplicability{Label: "Permission kind unavailable; applicability unknown"}
+}
+
+func scopeMillis(t time.Time) (int64, bool) {
+	parsed, err := time.Parse(time.RFC3339Nano, t.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, false
+	}
+	return parsed.UnixMilli(), true
+}
+
 // MismatchReason explains a previous permission without implying executable
 // authenticity or weakening the coordinates checked by Matches.
 func (s DecisionScope) MismatchReason(q DecisionScope, now time.Time) string {

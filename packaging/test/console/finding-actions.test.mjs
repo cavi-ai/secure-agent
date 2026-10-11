@@ -93,7 +93,7 @@ for (const [id, route, body] of [
     const flag = { id: 'flag-1', agent: 'codex', explain: { actions: [{ id, method: 'POST', path: route, body }] } };
     const ctx = {
       window: {}, telemetryData: { flags: [], flagsView: [] }, planFlagCache: new Map([[flag.id, flag]]),
-      drawerMode: 'flag', drawerFlag: flag.id,
+      drawerMode: 'flag', drawerFlag: flag.id, attentionSelection: null,
       stageDropFlag: () => { dropped++; return () => { dropped--; }; },
       stageAllow: () => () => {},
       apiFetch: async (url, options) => {

@@ -2032,9 +2032,12 @@ function mapPostureAttention(p, fn) {
 // Six tabs; Sessions holds four sub-views. Old tab ids (menu bar deep
 // links, saved views, the stored tab, in-page links) resolve through one
 // alias table.
-const CONSOLE_TABS = ['home', 'sessions', 'egress', 'system', 'policy', 'agent'];
+const CONSOLE_TABS = ['home', 'sessions', 'protection', 'system', 'agent'];
+const PROTECTION_SUBS = ['traffic', 'rules', 'sources', 'audit'];
 const SESSIONS_SUBS = ['board', 'processes', 'resources', 'events'];
 const TAB_ALIASES = {
+  egress: { tab: 'protection', sub: 'traffic' },
+  policy: { tab: 'protection', sub: 'rules' },
   overview: { tab: 'home' },
   findings: { tab: 'home', focus: 'attention' },
   agents: { tab: 'sessions', sub: 'processes' },
@@ -2062,24 +2065,26 @@ function resolveConsoleRoute(id) {
   const [head, rest] = String(id || '').replace(/^#/, '').split('?')[0].split('/');
   if (Object.prototype.hasOwnProperty.call(TAB_ALIASES, head)) {
     const a = TAB_ALIASES[head];
-    return { tab: a.tab, sub: a.tab === 'sessions' ? a.sub : '', focus: a.focus || '' };
+    return { tab: a.tab, sub: ['sessions', 'protection'].includes(a.tab) ? a.sub : '', focus: a.focus || '' };
   }
   if (!CONSOLE_TABS.includes(head)) return { tab: 'home', sub: '', focus: '' };
   if (head === 'sessions' && Object.prototype.hasOwnProperty.call(SESSIONS_SUB_ALIASES, rest)) {
     return { tab: SESSIONS_SUB_ALIASES[rest], sub: '', focus: '' };
   }
+  if (head === 'protection') return { tab: 'protection', sub: PROTECTION_SUBS.includes(rest) ? rest : 'traffic', focus: '' };
   if (head === 'sessions') return { tab: 'sessions', sub: SESSIONS_SUBS.includes(rest) ? rest : 'board', focus: '' };
   return { tab: head, sub: '', focus: '' };
 }
 
 // routeKey: "tab" or "sessions/<sub>" — what the stored tab and saved views keep.
 function routeKey(r) {
-  return r.tab === 'sessions' ? 'sessions/' + (r.sub || 'board') : r.tab;
+  return r.tab === 'protection' ? 'protection/' + (r.sub || 'traffic') : r.tab === 'sessions' ? 'sessions/' + (r.sub || 'board') : r.tab;
 }
 
 // consoleRouteHash: the address-bar form, "#sessions/<sub>" for a sub-view
 // and "#sessions" for the board.
 function consoleRouteHash(r) {
+  if (r.tab === 'protection') return '#' + routeKey(r);
   return '#' + (r.tab === 'sessions' && r.sub && r.sub !== 'board' ? 'sessions/' + r.sub : r.tab);
 }
 
@@ -2191,6 +2196,7 @@ function reviewHTML(r, draft, actions = true) {
     <div class="decision-head"><strong>${escapeHTML((c.resources || []).join(', ') || c.rule)}</strong><span class="disp-badge">${escapeHTML(state.replaceAll('_', ' '))}</span></div>
     <p class="finding-why">${escapeHTML(r.agent || 'Unknown agent')} · ${Number(r.count)} occurrences · evidence revision ${Number(r.revision)}${r.reviewed_revision ? ` · reviewed revision ${Number(r.reviewed_revision)}` : ''}</p>
     <p class="finding-why">${escapeHTML((c.destinations || []).join(', ') || 'Destination unknown')} · ${escapeHTML(c.session_id || 'Session unknown; this source only')}${c.workspace ? ` · ${escapeHTML(c.workspace)}` : ''}</p>
+    <p>${escapeHTML(a.reason || '')}</p>
     ${assessmentHTML(a)}
     <p>Expected once records this review only. Future permissions count matching observed activity as expected; they do not bypass firewall or payload checks. They use the recorded executable path, workspace, file and exact endpoint. Executable signatures are not verified. Revoke in Policies.</p>
     ${(r.available_scopes || []).some(s => s.kind !== 'once') ? '' : '<p>Future permission is unavailable because session, workspace, executable or recipient identity is incomplete or the session has ended.</p>'}
@@ -2200,4 +2206,12 @@ function reviewHTML(r, draft, actions = true) {
     ${actions ? `<div class="attention-actions">${reviewPermissionItems(r).map(item => `<button class="btn btn-ghost btn-sm" ${item.attrs}>${item.label}</button>`).join('')}</div>` : ''}
     <details><summary>Evidence and review history</summary><p>${r.decision ? `${escapeHTML(r.decision.action.replaceAll('_', ' '))} · revision ${Number(r.decision.revision)} · ${escapeHTML(r.decision.at)}` : 'No decision receipt recorded.'}</p>${links}${incidents}</details>
   </article>`;
+}
+
+// Advance through the displayed queue, retaining selection if it still exists.
+function nextAttentionKey(selected, previous, current) {
+  const keys = current.map(it => `${it.kind}:${it.id}`);
+  if (keys.includes(selected)) return selected;
+  const at = previous.indexOf(selected);
+  return previous.slice(at + 1).find(key => keys.includes(key)) || keys[0] || '';
 }

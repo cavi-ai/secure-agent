@@ -201,3 +201,96 @@ func TestDrainLoopIncidentLookupFailureDoesNotCreateDuplicate(t *testing.T) {
 		now = now.Add(time.Hour)
 	}
 }
+
+func TestDrainLoopIncidentAbsorbFailureRetainsOriginal(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "events.db")
+	st, err := store.Open(dbPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cfg, _ := config.Load("/nonexistent")
+	tagger := agents.New(cfg, fakeProcSource{})
+	tagger.Refresh()
+	now := time.Now()
+	var incidentID string
+	for _, phase := range []string{"initial", "failed", "repaired"} {
+		if phase == "failed" {
+			if _, err := db.Exec(`CREATE TRIGGER fail_absorb BEFORE UPDATE ON incidents BEGIN SELECT RAISE(ABORT, 'injected aggregation failure'); END`); err != nil {
+				t.Fatal(err)
+			}
+		} else if phase == "repaired" {
+			if _, err := db.Exec(`DROP TRIGGER fail_absorb`); err != nil {
+				t.Fatal(err)
+			}
+		}
+		hub := api.NewDeltaHub()
+		deltas := hub.Subscribe()
+		b := bus.New(64)
+		var postureCalls atomic.Int32
+		done := runEventIngest(b.Subscribe(), ingestDeps{
+			Store: st, Correlator: correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{}),
+			Resolver: session.NewResolver(st, tagger), Tagger: tagger, Deltas: hub,
+			PostureChanged: func() { postureCalls.Add(1) },
+		}).Done()
+		b.Publish(event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"})
+		b.Publish(event.Event{Kind: event.KindConnOpen, TS: now.Add(time.Millisecond), PID: 500, RemoteHost: "evil.example.com", RemotePort: 443})
+		b.Close()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("drain loop did not finish")
+		}
+		hub.Close()
+		var reports []model.IncidentReport
+		flags := 0
+		for delta := range deltas {
+			if delta.Type == "incident" {
+				reports = append(reports, delta.Data.(model.IncidentReport))
+			} else if delta.Type == "flag" {
+				flags++
+			}
+		}
+		if flags != 1 || postureCalls.Load() == 0 {
+			t.Fatalf("%s: flag/posture publication stopped", phase)
+		}
+		var count, aggregate int
+		if err := db.QueryRow(`SELECT COUNT(*), MAX(aggregate_count) FROM incidents`).Scan(&count, &aggregate); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("%s: duplicate report created: %d", phase, count)
+		}
+		if phase == "failed" {
+			if len(reports) != 0 || aggregate != 1 {
+				t.Fatalf("failed absorb published or changed evidence: %+v count=%d", reports, aggregate)
+			}
+			if h := st.WriteHealth(); h.Failures != 1 || len(h.Active) != 1 || h.Active[0] != "incident aggregation" {
+				t.Fatalf("aggregation failure hidden: %+v", h)
+			}
+		} else {
+			if len(reports) != 1 {
+				t.Fatalf("%s: expected one incident delta: %+v", phase, reports)
+			}
+			if phase == "initial" {
+				incidentID = reports[0].ID
+			} else if reports[0].ID != incidentID || reports[0].AggregateCount != 2 || aggregate != 2 {
+				t.Fatalf("repair did not aggregate into original: %+v", reports)
+			}
+			if saved, err := st.GetIncident(incidentID); err != nil || saved.AggregateCount != reports[0].AggregateCount {
+				t.Fatalf("published delta differs from storage: %+v %v", saved, err)
+			}
+			if phase == "repaired" {
+				if h := st.WriteHealth(); h.Failures != 1 || len(h.Active) != 0 {
+					t.Fatalf("aggregation health did not recover: %+v", h)
+				}
+			}
+		}
+		now = now.Add(time.Hour)
+	}
+}

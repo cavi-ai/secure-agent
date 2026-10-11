@@ -126,6 +126,37 @@ func TestGuardScopeSaveFailureDoesNotAnswerAllow(t *testing.T) {
 	<-done
 }
 
+func TestDecisionScopeListServesApplicability(t *testing.T) {
+	a, _ := scopedGuardAPI(t)
+	p, done := enqueueScopeGuard(t, a, "")
+	if w := resolveScopeGuard(a, p, "session"); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	<-done
+	rec := httptest.NewRecorder()
+	a.handleDecisionScopes(rec, httptest.NewRequest("GET", "/decision-scopes", nil))
+	if rec.Code != 200 {
+		t.Fatal(rec.Code, rec.Body.String())
+	}
+	var body []struct {
+		Applicability model.ScopeApplicability `json:"applicability"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != 1 || body[0].Applicability.Label != "Session permission" || !body[0].Applicability.Revoke {
+		t.Fatalf("applicability: %s", rec.Body.String())
+	}
+	stored, err := a.store.ListDecisionScopes()
+	if err != nil || len(stored) != 1 {
+		t.Fatal(stored, err)
+	}
+	raw, err := json.Marshal(stored[0])
+	if err != nil || strings.Contains(string(raw), "applicability") {
+		t.Fatalf("stored scope includes applicability: %s %v", raw, err)
+	}
+}
+
 func TestLegacyApprovalUnchanged(t *testing.T) {
 	a, _ := scopedGuardAPI(t)
 	p, done := enqueueScopeGuard(t, a, "session")

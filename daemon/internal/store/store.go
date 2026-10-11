@@ -10,7 +10,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -43,11 +42,6 @@ const (
 
 // Flag statements on hot paths, each served by an index (see Open).
 const (
-	// trimFlagsSQL deletes only the oldest flags past the cap, walking
-	// idx_flags_time from the oldest end; no sort of the whole table.
-	trimFlagsSQL = `DELETE FROM flags WHERE rowid IN (
-		SELECT rowid FROM flags ORDER BY datetime(ts), ts
-		LIMIT max(0, (SELECT COUNT(*) FROM flags) - ?))`
 	// ruleCountsSQL counts a rule's flags for one agent in two windows; it
 	// seeks idx_flags_rule_agent.
 	ruleCountsSQL = `SELECT
@@ -56,22 +50,35 @@ const (
 		FROM flags WHERE rule = ? AND agent = ?`
 	// reattributeFlagsSQL seeks idx_flags_pid.
 	reattributeFlagsSQL = `UPDATE flags SET agent = ? WHERE pid = ? AND agent LIKE 'untagged:%' AND datetime(ts) >= datetime(?)`
-	// trimIncidentsSQL deletes only the oldest incidents past the cap through
-	// idx_incidents_time.
-	trimIncidentsSQL = `DELETE FROM incidents WHERE rowid IN (
-		SELECT rowid FROM incidents ORDER BY datetime(created_at), created_at
-		LIMIT max(0, (SELECT COUNT(*) FROM incidents) - ?))`
-	// findOpenIncidentSQL seeks idx_incidents_open_key; it runs for every
-	// new flag.
-	findOpenIncidentSQL = `SELECT id FROM incidents
-		 WHERE COALESCE(rule,'') = ? AND COALESCE(session_id,'') = ? AND COALESCE(subject,'') = ?
-		   AND COALESCE(status,'open') != 'resolved'
-		 ORDER BY datetime(created_at) DESC LIMIT 1`
 	// hostFirstSeenSQL seeks idx_events_host; the advisor runs it for each
 	// flag, host and egress episode it triages. The partial index is usable
 	// only when the statement repeats the index's empty-host exclusion.
 	hostFirstSeenSQL = `SELECT MIN(ts) FROM events WHERE remote_host = ? AND remote_host != ''`
 )
+
+// Flag retention and lists share full timestamp precision and identity ties.
+var trimFlagsSQL = `DELETE FROM flags WHERE rowid IN (
+	SELECT rowid FROM flags ORDER BY ` + timestampOrderExpr("ts") + `, id
+	LIMIT max(0, (SELECT COUNT(*) FROM flags) - ?))`
+
+var flagTimeIndexSQL = `CREATE INDEX IF NOT EXISTS idx_flags_instant_time ON flags(` + timestampOrderExpr("ts") + `, id);
+	DROP INDEX IF EXISTS idx_flags_time;`
+
+// Incident retention and active lists use the same instant and identity order.
+// The index keeps pruning bounded to an index walk rather than a table sort.
+var trimIncidentsSQL = `DELETE FROM incidents WHERE rowid IN (
+	SELECT rowid FROM incidents ORDER BY ` + timestampOrderExpr("created_at") + `, id
+	LIMIT max(0, (SELECT COUNT(*) FROM incidents) - ?))`
+
+var incidentRetentionIndexSQL = `CREATE INDEX IF NOT EXISTS idx_incidents_instant_time ON incidents(` + timestampOrderExpr("created_at") + `, id);
+	DROP INDEX IF EXISTS idx_incidents_time;`
+
+// findOpenIncidentSQL seeks idx_incidents_open_key; it runs for every new flag.
+// Preserve nanoseconds and normalize offsets before choosing the newest target.
+var findOpenIncidentSQL = `SELECT id FROM incidents
+	 WHERE COALESCE(rule,'') = ? AND COALESCE(session_id,'') = ? AND COALESCE(subject,'') = ?
+	   AND COALESCE(status,'open') != 'resolved'
+	 ORDER BY ` + timestampOrderExpr("created_at") + ` DESC, id DESC LIMIT 1`
 
 // Harness activity (hook and trace events) behind every /status, /snapshot
 // and /posture: idx_events_trace_activity covers only those kinds, and the
@@ -969,7 +976,7 @@ func (s *Store) GetFlagWithAdvisor(id string) (model.Flag, bool) {
 	return flags[0], true
 }
 
-// flagQuery builds QueryFlags' statement. Its ORDER BY matches idx_flags_time,
+// flagQuery builds QueryFlags' statement. Its ORDER BY matches idx_flags_instant_time,
 // so a LIMIT walks the index instead of sorting every row.
 func flagQuery(f FlagFilter) (string, []any) {
 	q := flagSelect + " WHERE 1=1"
@@ -1000,7 +1007,7 @@ func flagQuery(f FlagFilter) (string, []any) {
 	// Order by the normalized instant, not the raw RFC3339 text: local-offset
 	// stamps sort wrong lexicographically across a DST change, which with LIMIT
 	// can drop the truly-newest rows.
-	q += " ORDER BY datetime(ts) DESC, ts DESC LIMIT ?"
+	q += " ORDER BY " + timestampOrderExpr("ts") + " DESC, id DESC LIMIT ?"
 	args = append(args, flagLimit(f.Limit))
 	return q, args
 }
@@ -1471,317 +1478,6 @@ func nullFloat(f float64) any {
 		return nil
 	}
 	return f
-}
-
-// PutIncident creates a report and rejects existing identities without changing
-// their evidence or operator bookkeeping. Retention pruning remains best-effort
-// and does not invalidate a successful insertion.
-func (s *Store) PutIncident(inc model.IncidentReport) (writeErr error) {
-	defer func() {
-		s.noteWrite("incidents", writeErr)
-		if writeErr != nil {
-			log.Printf("store: failed to persist incident %s: %v", inc.ID, writeErr)
-		}
-	}()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	inc.Remediation = nil
-	if inc.AggregateCount == 0 {
-		inc.AggregateCount = 1
-	}
-	data, err := json.Marshal(inc)
-	if err != nil {
-		return fmt.Errorf("marshal incident: %w", err)
-	}
-
-	tsStr := inc.Timestamp.UTC().Format(time.RFC3339Nano)
-	flagIDs, _ := json.Marshal([]string{inc.FlagID})
-	result, err := s.db.Exec(
-		`INSERT INTO incidents (id, flag_id, pid, risk, report_json, created_at, rule, session_id, subject, aggregate_count, last_flag_at, flag_ids, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
-		inc.ID, inc.FlagID, inc.PID, string(inc.Risk), string(data), tsStr,
-		inc.Rule, inc.SessionID, inc.Subject, inc.AggregateCount, tsStr, string(flagIDs),
-	)
-	if err != nil {
-		return fmt.Errorf("insert incident: %w", err)
-	}
-	inserted, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("incident rows affected: %w", err)
-	}
-	if inserted != 1 {
-		return fmt.Errorf("incident insert affected %d rows", inserted)
-	}
-
-	// Retention: a flag storm inserts a full report_json per incident; cap the
-	// table so the always-on daemon's DB stays bounded (events are already capped).
-	// Order by the normalized instant, not raw text: local-offset stamps sort
-	// wrong lexicographically across a DST change.
-	_, _ = s.db.Exec(trimIncidentsSQL, maxIncidents)
-	return nil
-}
-
-func (s *Store) GetIncident(id string) (report *model.IncidentReport, readErr error) {
-	defer func() {
-		if readErr == sql.ErrNoRows {
-			s.noteRead("incidents", nil)
-		} else {
-			s.noteRead("incidents", readErr)
-		}
-	}()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var storedID, reportJSON string
-	err := s.db.QueryRow(`SELECT id, report_json FROM incidents WHERE id = ?`, id).Scan(&storedID, &reportJSON)
-	if err == sql.ErrNoRows {
-		// Flag aliases include evidence aggregated after the initial report.
-		// Resolve the report identity first so an alias cannot shadow it.
-		err = s.db.QueryRow(`SELECT id, report_json FROM incidents
-			WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
-			ORDER BY `+timestampOrderExpr("created_at")+` DESC, id DESC LIMIT 1`, id, id).Scan(&storedID, &reportJSON)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	inc, err := decodeIncidentReport(storedID, reportJSON)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.attachIncidentRemediationLocked(inc); err != nil {
-		return nil, err
-	}
-	if v, ok := s.advisorVerdictLocked(inc.ID, "incident"); ok {
-		inc.AdvisorNarrative = v.Rationale
-	}
-	return inc, nil
-}
-
-func decodeIncidentReport(id, reportJSON string) (*model.IncidentReport, error) {
-	var inc *model.IncidentReport
-	if err := json.Unmarshal([]byte(reportJSON), &inc); err != nil {
-		return nil, err
-	}
-	if inc == nil || inc.ID == "" || inc.ID != id {
-		return nil, fmt.Errorf("invalid incident report identity")
-	}
-	return inc, nil
-}
-
-// IncidentIDForFlag returns the incident a flag opened or was aggregated
-// into (newest first).
-func (s *Store) IncidentIDForFlag(flagID string) (string, bool) {
-	id, found, _ := s.IncidentIDForFlagResult(flagID)
-	return id, found
-}
-
-// FindOpenIncident returns the open (unresolved) incident matching the
-// aggregation key — one incident per rule+session+subject; repeat flags
-// become its evidence instead of minting duplicate reports.
-func (s *Store) FindOpenIncident(rule, sessionID, subject string) (string, bool) {
-	id, found, _ := s.FindOpenIncidentResult(rule, sessionID, subject)
-	return id, found
-}
-
-// FindOpenIncidentResult distinguishes a missing aggregation target from an
-// unavailable or invalid stored identity. Callers creating reports must use it.
-func (s *Store) FindOpenIncidentResult(rule, sessionID, subject string) (id string, found bool, readErr error) {
-	defer func() { s.noteRead("incident lookup", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	err := s.db.QueryRow(findOpenIncidentSQL, rule, sessionID, subject).Scan(&id)
-	if err == sql.ErrNoRows {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, err
-	}
-	if id == "" {
-		return "", false, fmt.Errorf("invalid open incident identity")
-	}
-	return id, true, nil
-}
-
-// AggregateIntoIncident folds another flag into an existing incident: bumps
-// the count, records the flag id as evidence, refreshes last_flag_at, and
-// patches the served report_json so the UI reads current numbers. Returns
-// the persisted report (for the incident delta) — false when the row is gone,
-// its evidence cannot be decoded, or the update does not persist.
-func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.IncidentReport, bool) {
-	if id == "" || flagID == "" {
-		return model.IncidentReport{}, false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var reportJSON, flagIDsRaw string
-	var count int
-	err := s.db.QueryRow(`SELECT report_json, COALESCE(flag_ids,'[]'), COALESCE(aggregate_count,1) FROM incidents WHERE id = ?`, id).
-		Scan(&reportJSON, &flagIDsRaw, &count)
-	if err != nil {
-		if err != sql.ErrNoRows {
-			s.noteWrite("incident aggregation", err)
-		}
-		return model.IncidentReport{}, false
-	}
-	var storedFlagIDs []*string
-	if err := json.Unmarshal([]byte(flagIDsRaw), &storedFlagIDs); err != nil {
-		s.noteWrite("incident aggregation", err)
-		return model.IncidentReport{}, false
-	}
-	if storedFlagIDs == nil {
-		s.noteWrite("incident aggregation", fmt.Errorf("null incident flag evidence"))
-		return model.IncidentReport{}, false
-	}
-	flagIDs := make([]string, len(storedFlagIDs))
-	for i, storedID := range storedFlagIDs {
-		if storedID == nil {
-			s.noteWrite("incident aggregation", fmt.Errorf("null incident flag identity"))
-			return model.IncidentReport{}, false
-		}
-		flagIDs[i] = *storedID
-	}
-	inc, err := decodeIncidentReport(id, reportJSON)
-	if err != nil {
-		s.noteWrite("incident aggregation", err)
-		return model.IncidentReport{}, false
-	}
-	if inc.FlagID != "" && !slices.Contains(flagIDs, inc.FlagID) {
-		flagIDs = append(flagIDs, inc.FlagID)
-	}
-	for _, existing := range flagIDs {
-		if existing == flagID {
-			if err := s.attachIncidentRemediationLocked(inc); err != nil {
-				s.noteRead("incidents", err)
-				return model.IncidentReport{}, false
-			}
-			s.noteRead("incidents", nil)
-			return *inc, true
-		}
-	}
-	if inc.Rule == "proxy-secret-leak" {
-		if inc.PayloadOutcomes == nil {
-			// Historic reports do not establish any of their control outcomes.
-			inc.PayloadOutcomes = &model.PayloadOutcomeSummary{Unknown: count}
-		}
-		var source model.Flag
-		var evidence string
-		err := s.db.QueryRow(`SELECT rule, evidence FROM flags WHERE id = ?`, flagID).Scan(&source.Rule, &evidence)
-		if err != nil && err != sql.ErrNoRows {
-			s.noteWrite("incident aggregation", err)
-			return model.IncidentReport{}, false
-		}
-		if err == nil {
-			if err := json.Unmarshal([]byte(evidence), &source.Evidence); err != nil {
-				s.noteWrite("incident aggregation", err)
-				return model.IncidentReport{}, false
-			}
-		}
-		outcome := model.PayloadOutcomeForFinding(source)
-		if outcome == nil {
-			outcome = &model.PayloadOutcomeSummary{Unknown: 1}
-		}
-		inc.PayloadOutcomes.Blocked += outcome.Blocked
-		inc.PayloadOutcomes.ObservedOnly += outcome.ObservedOnly
-		inc.PayloadOutcomes.Unknown += outcome.Unknown
-	}
-	flagIDs = append(flagIDs, flagID)
-	count++
-	inc.AggregateCount = count
-	t := ts.UTC()
-	if inc.Timestamp.After(t) {
-		t = inc.Timestamp.UTC()
-	}
-	if inc.LastFlagAt != nil && inc.LastFlagAt.After(t) {
-		t = inc.LastFlagAt.UTC()
-	}
-	inc.LastFlagAt = &t
-	tsStr := t.Format(time.RFC3339Nano)
-	data, err := json.Marshal(inc)
-	if err != nil {
-		s.noteWrite("incident aggregation", err)
-		return model.IncidentReport{}, false
-	}
-	reportJSON = string(data)
-	idsJSON, _ := json.Marshal(flagIDs)
-	result, err := s.db.Exec(`UPDATE incidents SET aggregate_count = ?, last_flag_at = ?, flag_ids = ?, report_json = ? WHERE id = ?`,
-		count, tsStr, string(idsJSON), reportJSON, id)
-	if err != nil {
-		s.noteWrite("incident aggregation", err)
-		return model.IncidentReport{}, false
-	}
-	updated, err := result.RowsAffected()
-	if err != nil {
-		s.noteWrite("incident aggregation", err)
-		return model.IncidentReport{}, false
-	}
-	if updated != 1 {
-		return model.IncidentReport{}, false
-	}
-	s.noteWrite("incident aggregation", nil)
-	if err := s.attachIncidentRemediationLocked(inc); err != nil {
-		s.noteRead("incidents", err)
-		return model.IncidentReport{}, false
-	}
-	s.noteRead("incidents", nil)
-	return *inc, true
-}
-
-func (s *Store) RecentIncidents(limit int) []model.IncidentReport {
-	incidents, _ := s.RecentIncidentsResult(limit)
-	return incidents
-}
-
-// RecentIncidentsResult returns no partial history after query, scan, report
-// decode or cursor failure. Resolved reports remain outside the active set.
-func (s *Store) RecentIncidentsResult(limit int) (out []model.IncidentReport, readErr error) {
-	defer func() { s.noteRead("incidents", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Resolved incidents stay in the audit trail but leave the active set:
-	// the operator dismissed them, so they must not keep rendering as
-	// critical rows in the popover.
-	rows, err := s.db.Query(recentIncidentsQuery, normalizeLimit(limit))
-	if err != nil {
-		return nil, err
-	}
-	list, err := scanIncidentsResult(rows)
-	if err != nil {
-		return nil, err
-	}
-	for i := range list {
-		if err := s.attachIncidentRemediationLocked(&list[i]); err != nil {
-			return nil, err
-		}
-	}
-	s.attachNarrativesLocked(list)
-	return list, nil
-}
-
-// Include NULL status so an unreadable workflow cannot silently hide a report.
-const recentIncidentsQuery = `SELECT id, report_json FROM incidents WHERE (status IS NULL OR status != 'resolved') ORDER BY datetime(created_at) DESC, created_at DESC LIMIT ?`
-
-func scanIncidentsResult(rows *sql.Rows) ([]model.IncidentReport, error) {
-	defer rows.Close()
-
-	list := []model.IncidentReport{}
-	for rows.Next() {
-		var id, reportJSON string
-		if err := rows.Scan(&id, &reportJSON); err != nil {
-			return nil, err
-		}
-		inc, err := decodeIncidentReport(id, reportJSON)
-		if err != nil {
-			return nil, err
-		}
-		list = append(list, *inc)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return list, nil
 }
 
 // CriticalFlagsMissingAdvisor returns recent severity-3 flags that have no
@@ -2562,120 +2258,6 @@ func (s *Store) DeleteGuardRule(agent, ruleID string) bool {
 	}
 	n, _ := res.RowsAffected()
 	return n > 0
-}
-
-// IncidentWorkflow is the mutable state layered on top of a stored report.
-// The report itself is immutable evidence; ack/resolve is operator bookkeeping.
-type IncidentWorkflow struct {
-	Status         string `json:"status"` // open | acknowledged | resolved
-	AcknowledgedAt string `json:"acknowledged_at,omitempty"`
-	ResolvedAt     string `json:"resolved_at,omitempty"`
-	ResolutionNote string `json:"resolution_note,omitempty"`
-}
-
-// SetIncidentStatus transitions an incident's workflow state. Transitions are
-// forward-only: open → acknowledged → resolved. Re-resolving is allowed (note
-// is replaced); acknowledged_at is stamped only the first time.
-func (s *Store) SetIncidentStatus(id, status, note string) (bool, error) {
-	_, updated, err := s.SetIncidentStatusResult(id, status, note)
-	return updated, err
-}
-
-// ErrInvalidIncidentStatus distinguishes invalid input from storage failure.
-var ErrInvalidIncidentStatus = errors.New("invalid incident status")
-
-// SetIncidentStatusResult returns the workflow read in the same transaction as
-// the update. An unreadable result or failed commit leaves no successful update.
-func (s *Store) SetIncidentStatusResult(id, status, note string) (workflow IncidentWorkflow, updated bool, writeErr error) {
-	var query string
-	var args []any
-	switch status {
-	case "acknowledged":
-		query = `UPDATE incidents SET status='acknowledged',
-			acknowledged_at=COALESCE(acknowledged_at, ?)
-			WHERE id = ? OR flag_id = ?`
-		args = []any{time.Now().UTC().Format(time.RFC3339Nano), id, id}
-	case "resolved":
-		query = `UPDATE incidents SET status='resolved', resolved_at=?, resolution_note=?
-			WHERE id = ? OR flag_id = ?`
-		args = []any{time.Now().UTC().Format(time.RFC3339Nano), note, id, id}
-	case "open":
-		query = `UPDATE incidents SET status='open', acknowledged_at=NULL, resolved_at=NULL, resolution_note=NULL
-			WHERE id = ? OR flag_id = ?`
-		args = []any{id, id}
-	default:
-		return IncidentWorkflow{}, false, fmt.Errorf("%w %q (open|acknowledged|resolved)", ErrInvalidIncidentStatus, status)
-	}
-	defer func() { s.noteWrite("incident workflows", writeErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	tx, err := s.db.Begin()
-	if err != nil {
-		return IncidentWorkflow{}, false, err
-	}
-	defer tx.Rollback()
-	res, err := tx.Exec(query, args...)
-	if err != nil {
-		return IncidentWorkflow{}, false, err
-	}
-	changed, err := res.RowsAffected()
-	if err != nil {
-		return IncidentWorkflow{}, false, err
-	}
-	if changed == 0 {
-		return IncidentWorkflow{}, false, nil
-	}
-	wf, err := scanIncidentWorkflow(tx.QueryRow(
-		`SELECT status, acknowledged_at, resolved_at, resolution_note FROM incidents WHERE id = ? OR flag_id = ?`, id, id))
-	s.noteRead("incident workflows", err)
-	if err != nil {
-		return IncidentWorkflow{}, false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return IncidentWorkflow{}, false, err
-	}
-	return wf, true, nil
-}
-
-// IncidentStatus returns the workflow state for one incident.
-func (s *Store) IncidentStatus(id string) (IncidentWorkflow, bool) {
-	wf, found, _ := s.IncidentStatusResult(id)
-	return wf, found
-}
-
-// IncidentStatusResult distinguishes a missing row from an unavailable or
-// malformed workflow. Missing rows are healthy reads, not storage failures.
-func (s *Store) IncidentStatusResult(id string) (workflow IncidentWorkflow, found bool, readErr error) {
-	defer func() { s.noteRead("incident workflows", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	wf, err := scanIncidentWorkflow(s.db.QueryRow(
-		`SELECT status, acknowledged_at, resolved_at, resolution_note FROM incidents WHERE id = ? OR flag_id = ?`, id, id))
-	if err == sql.ErrNoRows {
-		return IncidentWorkflow{Status: "unknown"}, false, nil
-	}
-	if err != nil {
-		return IncidentWorkflow{Status: "unknown"}, false, err
-	}
-	return wf, true, nil
-}
-
-func scanIncidentWorkflow(row *sql.Row) (IncidentWorkflow, error) {
-	var wf IncidentWorkflow
-	var ack, res, note sql.NullString
-	if err := row.Scan(&wf.Status, &ack, &res, &note); err != nil {
-		return IncidentWorkflow{}, err
-	}
-	switch wf.Status {
-	case "open", "acknowledged", "resolved":
-	default:
-		return IncidentWorkflow{}, fmt.Errorf("invalid incident workflow status")
-	}
-	wf.AcknowledgedAt = ack.String
-	wf.ResolvedAt = res.String
-	wf.ResolutionNote = note.String
-	return wf, nil
 }
 
 // ReclassifyReadConnectSeverity changes only unresolved weak correlations.

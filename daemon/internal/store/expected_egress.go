@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -35,6 +36,9 @@ type ExpectedEgressRule struct {
 	CreatedAt time.Time  `json:"created_at"`
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 }
+
+// ErrInvalidExpectedEgressRule identifies rejected rule input.
+var ErrInvalidExpectedEgressRule = errors.New("invalid expected egress rule")
 
 func canonicalExpectedRule(rule ExpectedEgressRule) (ExpectedEgressRule, error) {
 	rule.Agent = strings.TrimSpace(rule.Agent)
@@ -75,6 +79,17 @@ func canonicalExpectedRule(rule ExpectedEgressRule) (ExpectedEgressRule, error) 
 	return rule, nil
 }
 
+// validateExpectedRuleIdentity checks the key fields written by the rule creator.
+func validateExpectedRuleIdentity(rule ExpectedEgressRule) error {
+	canonical, err := canonicalExpectedRule(rule)
+	if err != nil || canonical.ID != rule.ID || canonical.Agent != rule.Agent ||
+		canonical.Host != rule.Host || canonical.Protocol != rule.Protocol || canonical.Port != rule.Port ||
+		canonical.ExePath != rule.ExePath || canonical.Harness != rule.Harness || canonical.Workspace != rule.Workspace {
+		return errors.New("invalid stored expected egress rule identity")
+	}
+	return nil
+}
+
 func scanExpectedRule(scanner interface{ Scan(...any) error }) (ExpectedEgressRule, error) {
 	var r ExpectedEgressRule
 	var created string
@@ -82,6 +97,9 @@ func scanExpectedRule(scanner interface{ Scan(...any) error }) (ExpectedEgressRu
 	err := scanner.Scan(&r.ID, &r.Agent, &r.Kind, &r.Host, &r.Protocol, &r.Port, &r.ExePath, &r.Harness, &r.Workspace, &r.Rationale, &r.CreatedBy, &created, &revoked)
 	if err != nil {
 		return r, err
+	}
+	if err := validateExpectedRuleIdentity(r); err != nil {
+		return ExpectedEgressRule{}, err
 	}
 	r.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
 	if err != nil {
@@ -97,36 +115,95 @@ func scanExpectedRule(scanner interface{ Scan(...any) error }) (ExpectedEgressRu
 	return r, nil
 }
 
+type expectedEgressRuleDB interface {
+	QueryRow(string, ...any) *sql.Row
+	Exec(string, ...any) (sql.Result, error)
+}
+
 func (s *Store) CreateExpectedEgressRule(rule ExpectedEgressRule) (ExpectedEgressRule, error) {
+	return s.createExpectedEgressRule(rule, false)
+}
+
+// CreateExpectedEgressRuleWithAudit commits an operator approval and its audit
+// together. An active rule is returned unchanged, with an audit of the request.
+func (s *Store) CreateExpectedEgressRuleWithAudit(rule ExpectedEgressRule) (ExpectedEgressRule, error) {
+	return s.createExpectedEgressRule(rule, true)
+}
+
+func (s *Store) createExpectedEgressRule(rule ExpectedEgressRule, audited bool) (out ExpectedEgressRule, writeErr error) {
 	var err error
 	rule, err = canonicalExpectedRule(rule)
 	if err != nil {
-		return rule, err
+		return rule, fmt.Errorf("%w: %v", ErrInvalidExpectedEgressRule, err)
 	}
+	defer func() { s.noteWrite("expected egress create", writeErr) }()
 	s.egressMu.Lock()
 	defer s.egressMu.Unlock()
+	var db expectedEgressRuleDB = s.db
+	var tx *sql.Tx
+	if audited {
+		tx, err = s.db.Begin()
+		if err != nil {
+			return ExpectedEgressRule{}, err
+		}
+		defer tx.Rollback()
+		db = tx
+	}
 	var existing ExpectedEgressRule
-	existing, err = scanExpectedRule(s.db.QueryRow(`SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at FROM expected_egress_rules WHERE id=?`, rule.ID))
+	existing, err = scanExpectedRule(db.QueryRow(`SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at FROM expected_egress_rules WHERE id=?`, rule.ID))
 	if err == nil && existing.RevokedAt == nil {
-		return existing, nil
-	}
-	if err != nil && err != sql.ErrNoRows {
+		rule = existing
+	} else if err != nil && err != sql.ErrNoRows {
 		return rule, err
-	}
-	rule.CreatedAt = time.Now().UTC()
-	_, err = s.db.Exec(`INSERT INTO expected_egress_rules(id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at)
+	} else {
+		rule.CreatedAt = time.Now().UTC()
+		_, err = db.Exec(`INSERT INTO expected_egress_rules(id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at)
 	 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL) ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at, revoked_at=NULL`,
-		rule.ID, rule.Agent, rule.Kind, rule.Host, rule.Protocol, rule.Port, rule.ExePath, rule.Harness, rule.Workspace, rule.Rationale, rule.CreatedBy, rule.CreatedAt.Format(time.RFC3339Nano))
-	return rule, err
+			rule.ID, rule.Agent, rule.Kind, rule.Host, rule.Protocol, rule.Port, rule.ExePath, rule.Harness, rule.Workspace, rule.Rationale, rule.CreatedBy, rule.CreatedAt.Format(time.RFC3339Nano))
+		if err != nil {
+			return rule, err
+		}
+	}
+	if audited {
+		if err := s.commitExpectedEgressAudit(tx, AuditEntry{Action: "expected-egress-create", Rule: rule.ID, ToMode: rule.Kind, Detail: "operator decision from observed episode"}); err != nil {
+			return ExpectedEgressRule{}, err
+		}
+	}
+	return rule, nil
 }
 
 func (s *Store) RevokeExpectedEgressRule(id string) error {
+	return s.revokeExpectedEgressRule(id, false)
+}
+
+// RevokeExpectedEgressRuleWithAudit commits a revocation and its audit together.
+func (s *Store) RevokeExpectedEgressRuleWithAudit(id string) error {
+	return s.revokeExpectedEgressRule(id, true)
+}
+
+func (s *Store) revokeExpectedEgressRule(id string, audited bool) (writeErr error) {
 	if id == "" {
 		return errors.New("missing rule id")
 	}
+	defer func() {
+		if !errors.Is(writeErr, sql.ErrNoRows) {
+			s.noteWrite("expected egress revoke", writeErr)
+		}
+	}()
 	s.egressMu.Lock()
 	defer s.egressMu.Unlock()
-	result, err := s.db.Exec(`UPDATE expected_egress_rules SET revoked_at=? WHERE id=? AND revoked_at IS NULL`, time.Now().UTC().Format(time.RFC3339Nano), id)
+	var db expectedEgressRuleDB = s.db
+	var tx *sql.Tx
+	if audited {
+		var err error
+		tx, err = s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		db = tx
+	}
+	result, err := db.Exec(`UPDATE expected_egress_rules SET revoked_at=? WHERE id=? AND revoked_at IS NULL`, time.Now().UTC().Format(time.RFC3339Nano), id)
 	if err != nil {
 		return err
 	}
@@ -137,34 +214,59 @@ func (s *Store) RevokeExpectedEgressRule(id string) error {
 	if n == 0 {
 		return sql.ErrNoRows
 	}
+	if audited {
+		return s.commitExpectedEgressAudit(tx, AuditEntry{Action: "expected-egress-revoke", Rule: id, ToMode: "revoked", Detail: "operator decision"})
+	}
 	return nil
 }
 
+// The transaction owns its connection: never call PutAudit here, which writes
+// through the pool and could block waiting for the same in-memory connection.
+func (s *Store) commitExpectedEgressAudit(tx *sql.Tx, a AuditEntry) (writeErr error) {
+	defer func() { s.noteWrite("operator audit", writeErr) }()
+	_, err := tx.Exec(`INSERT INTO audit (ts, action, rule, from_mode, to_mode, detail) VALUES (?, ?, ?, ?, ?, ?)`,
+		time.Now().UTC().Format(time.RFC3339Nano), a.Action, a.Rule, a.FromMode, a.ToMode, a.Detail)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM audit WHERE id NOT IN (SELECT id FROM audit ORDER BY id DESC LIMIT ?)`, maxAudit); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) ListExpectedEgressRules() []ExpectedEgressRule {
-	out := make([]ExpectedEgressRule, 0)
-	read := func(query string) bool {
+	rules, _ := s.ListExpectedEgressRulesResult()
+	return rules
+}
+
+// ListExpectedEgressRulesResult rejects incomplete rule lists.
+func (s *Store) ListExpectedEgressRulesResult() (out []ExpectedEgressRule, readErr error) {
+	defer func() { s.noteRead("expected egress rules", readErr) }()
+	out = make([]ExpectedEgressRule, 0)
+	read := func(query string) error {
 		rows, err := s.db.Query(query)
 		if err != nil {
-			return false
+			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			r, err := scanExpectedRule(rows)
 			if err != nil {
-				return false
+				return err
 			}
 			out = append(out, r)
 		}
-		return rows.Err() == nil
+		return rows.Err()
 	}
 	columns := `SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at FROM expected_egress_rules`
-	if !read(columns + ` WHERE revoked_at IS NULL ORDER BY created_at DESC,id DESC`) {
-		return nil
+	if err := read(columns + ` WHERE revoked_at IS NULL ORDER BY created_at DESC,id DESC`); err != nil {
+		return nil, err
 	}
-	if !read(columns + ` WHERE revoked_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 500`) {
-		return nil
+	if err := read(columns + ` WHERE revoked_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 500`); err != nil {
+		return nil, err
 	}
-	return out
+	return out, nil
 }
 
 // ExpectedEgressMatch only classifies informational candidates. It is never
@@ -189,22 +291,35 @@ func (s *Store) ExpectedEgressMatchingRuleID(o EgressObservation) string {
 // ExpectedEgressMatchingRuleID for any number of stored episodes, whose
 // scope, host and protocol were normalized when they were recorded.
 func (s *Store) ExpectedEgressMatcher() func(EgressEpisode) string {
+	match, err := s.ExpectedEgressMatcherResult()
+	if err != nil {
+		return func(EgressEpisode) string { return "" }
+	}
+	return match
+}
+
+// ExpectedEgressMatcherResult rejects failed reads before classifying episodes.
+func (s *Store) ExpectedEgressMatcherResult() (match func(EgressEpisode) string, readErr error) {
+	defer func() { s.noteRead("expected egress matcher", readErr) }()
 	var rules []ExpectedEgressRule
 	rows, err := s.db.Query(`SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace FROM expected_egress_rules
 	 WHERE revoked_at IS NULL ORDER BY CASE WHEN kind='destination' THEN 0 ELSE 1 END, created_at DESC, id DESC`)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var r ExpectedEgressRule
-			if rows.Scan(&r.ID, &r.Agent, &r.Kind, &r.Host, &r.Protocol, &r.Port, &r.ExePath, &r.Harness, &r.Workspace) != nil {
-				rules = nil
-				break
-			}
-			rules = append(rules, r)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r ExpectedEgressRule
+		if err := rows.Scan(&r.ID, &r.Agent, &r.Kind, &r.Host, &r.Protocol, &r.Port, &r.ExePath, &r.Harness, &r.Workspace); err != nil {
+			return nil, err
 		}
-		if rows.Err() != nil {
-			rules = nil
+		if err := validateExpectedRuleIdentity(r); err != nil {
+			return nil, err
 		}
+		rules = append(rules, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return func(e EgressEpisode) string {
 		if e.Scope.Agent == "" {
@@ -226,5 +341,5 @@ func (s *Store) ExpectedEgressMatcher() func(EgressEpisode) string {
 			}
 		}
 		return ""
-	}
+	}, nil
 }

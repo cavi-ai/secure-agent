@@ -9,6 +9,15 @@
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
   let bookCleanup = () => {};
+  let contextRuleReads = 0;
+  const contextRules = data['/expected-egress'].rules;
+  if (scenarios.has('attentionremodel')) {
+    const ids = scenarios.has('attentionfinal') ? ['flag-1'] : ['flag-1', 'flag-2'];
+    const items = ids.map(id => ({kind:'flag', id, priority:2, title:'Fixture attention ' + id, detail:'Recorded fixture evidence'}));
+    data['/posture'] = {...data['/posture'], needs_you:items.length, items,
+      groups:[{key:'fixture-attention',agent:'codex',items}]};
+  }
+
 
   // ---------- failure-mode simulation ----------
   // These modes reproduce the exact "trouble connecting" regressions:
@@ -118,10 +127,13 @@
     try { sessionStorage.setItem('sa.console-token', 'test-token'); } catch { /* ignored */ }
   }
   if (scenarios.has('contexthandoff')) {
-    data['/flags'].find(f => f.id === 'flag-2').session_id = 'sess-claude-1';
     sessionStorage.setItem('sa.selected-session', 'sess-codex-3');
     sessionStorage.setItem('sa.harness-filter', JSON.stringify({ harnesses: {claude:false,codex:false}, text:'unrelated', liveOnly:true }));
     if (scenarios.has('cold')) location.hash = 'ct=test-token&tab=sessions&session=sess-claude-1&flag=flag-2';
+  }
+  // Saved views are explicit fixtures; an unseeded tab exercises the product default.
+  if (scenarios.has('savedspendrepo')) {
+    try { sessionStorage.setItem('sa.spend-view', JSON.stringify({ by: 'repo', since: '24h' })); } catch { /* ignored */ }
   }
   // spenddaydemo: a tab whose saved Spend view is by day over 7d (a reload).
   if (scenarios.has('spenddaydemo')) {
@@ -337,6 +349,12 @@
     if (p === '/flags/acknowledge') {
       const ids = new Set(body.flag_ids || [body.flag_id]);
       data['/flags'] = data['/flags'].filter(f => !ids.has(f.id));
+      if (scenarios.has('attentionremodel')) {
+        const post = data['/posture'];
+        post.groups = post.groups.map(g => ({...g,items:g.items.filter(it => it.kind !== 'flag' || !ids.has(it.id))})).filter(g => g.items.length);
+        post.items = post.items.filter(it => it.kind !== 'flag' || !ids.has(it.id));
+        post.needs_you = post.items.length;
+      }
       // A pattern whose open flags were all acknowledged is served at 0
       // open without its dismiss-all, and leaves the attention queue.
       for (const pat of data['/patterns'] || []) {
@@ -473,11 +491,15 @@
       }
       if (window.__permissionsFail) return { ok: false, status: 503 };
       if (window.__permissionDelayedRead) await new Promise(resolve => setTimeout(resolve, 50));
-      const scope = id => ({ id, kind: 'exact', agent: 'claude', session_id: 'sess-claude-1',
+      const scope = id => {
+        const revoked = id === 'synthetic-scope' ? window.__permissionRevoked : undefined;
+        return { id, kind: 'exact', agent: 'claude', session_id: 'sess-claude-1',
         workspace: '/synthetic/workspace', reader_exe: '/synthetic/tool', resource_path: '/synthetic/workspace/credentials',
         operation: 'read-connect', destination: 'example.test:443', rule_id: 'sensitive-read-then-connect',
         created_at: iso(60000), expires_at: new Date(now + 86400000).toISOString(),
-        revoked_at: id === 'synthetic-scope' ? window.__permissionRevoked : undefined });
+        revoked_at: revoked,
+        applicability: revoked ? { label: 'Revoked', revoke: false } : { label: 'Timed permission', revoke: true } };
+      };
       return { ok: true, json: async () => [scope('synthetic-scope'), scope('unrelated-permission')] };
     }
     if ((scenarios.has('contexthandoff') || scenarios.has('investigationdemo')) && p.startsWith('/flags/') && p.endsWith('/explain')) {
@@ -625,6 +647,10 @@
       if (p === '/agent/chat' && scenarios.has('agentlatency')) {
         await new Promise(resolve => setTimeout(resolve, 30000));
       }
+      if (scenarios.has('attentionremodel') && p === '/flags/acknowledge') {
+        await new Promise(resolve => setTimeout(resolve, 600));
+        if (scenarios.has('attentionfail')) return {ok:false,status:503,text:async()=> 'Fixture write failed'};
+      }
       const out = handlePost(p, opts, String(path));
       return {
         ok: true, status: 200,
@@ -691,6 +717,8 @@
     const overviewMatch = p.match(/^\/sessions\/([^/]+)\/overview$/);
     if (overviewMatch) {
       const sid = decodeURIComponent(overviewMatch[1]);
+      if (window.__overviewHold) await new Promise(resolve => { window.__releaseOverview = resolve; });
+      if (window.__overviewFail) return { ok: false, status: 503, json: async () => ({}) };
       if (scenarios.has('overviewrace') && sid === 'sess-claude-1') await new Promise(resolve => setTimeout(resolve, 1800));
       if (scenarios.has('overviewstale') && window.__overviewFailed) return { ok: false, status: 503, json: async () => ({}) };
       const own = sid === 'sess-claude-1';
@@ -699,6 +727,7 @@
         findings: own ? [{ id: scenarios.has('investigationdemo') ? 'flag-2' : 'f1', title: 'Own session finding', assessment: { risk: 'high', review_state: 'reviewed', residual_risk: 'model-exposure', control: 'observed-only', reason: 'A tool-visible read remains observed after review.', limits: ['No captured payload proves forwarding.'] } }, ...(window.__overviewExtra ? [{ id: 'new-finding', title: 'New observation', assessment: { risk: 'review', review_state: 'unreviewed', residual_risk: 'unknown' } }] : [])] : [], findings_truncated: false,
         coverage: { session_id: sid, guard: { state: own ? 'observed' : 'not-observed', detail: 'Only this session reports count; not every call is proven guarded.' }, trace: { state: 'observed', detail: 'Attributed tool activity.' }, payload: { state: 'unattributed', detail: 'Other traffic may be uninspected.' } },
         resources: own ? { key: data['/resources'].sessions.find(f => f.root_pid === 5821)?.key, rss_bytes: 536870912, cpu_percent: 25, process_count: 2, diagnoses: [], control: { state: 'observing' } } : null };
+      if (window.__overviewMalformed) body.requests = [null];
       return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
     }
     // Session memory: newest page first; the earlier cursor prepends one row.
@@ -746,6 +775,7 @@
     // Session timeline: /sessions/<id>/timeline
     const tlMatch = p.match(/^\/sessions\/([^/]+)\/timeline/);
     if (tlMatch) {
+      if (window.__traceFail) return { ok: false, status: 503 };
       const sid = decodeURIComponent(tlMatch[1]);
       const sess = (data['/sessions'] || []).find(s => s.id === sid);
       const body = sess ? (scenarios.has('tracereactivation') ? [...(sess._timeline || [])] : (sess._timeline || [])) : null;
@@ -775,12 +805,34 @@
       window.__removeGap = Date.now() - window.__removePostedAt;
       stamp('remove-cadence', String(window.__removeGap));
     }
+    if (p === '/expected-egress' && !opts.method && (scenarios.has('contextread') || scenarios.has('contextmissing') || scenarios.has('contextfail'))) {
+      contextRuleReads++;
+      stamp('protection-context-reads', String(contextRuleReads));
+      if (scenarios.has('contextfail') && contextRuleReads > 1) return {ok:false,status:503};
+      const rules = scenarios.has('contextread') && contextRuleReads > 1 ? contextRules : [];
+      return {ok:true,status:200,json:async()=>({rules})};
+    }
     let body = data[p];
     // /costs answers by its `by` query; every /costs query lands, in order,
     // on <pre id="mock-costs">.
     if (p === '/costs') {
-      const by = new URLSearchParams(String(path).split('?')[1] || '').get('by');
+      const params = new URLSearchParams(String(path).split('?')[1] || '');
+      const by = params.get('by');
       if (by && data['/costs?by=' + by]) body = data['/costs?by=' + by];
+      if (scenarios.has('remodelusage') && body) {
+        const tz = Number(params.get('tz') || 0);
+        if (by === 'day') {
+          const last = Date.parse(body.until) + tz * 60000;
+          body = {...body, rows:body.rows.map((row,i) => ({...row,key:new Date(last - (body.rows.length - 1 - i) * 86400000).toISOString().slice(0,10)}))};
+          data['/costs?by=day'] = body;
+        } else if (params.get('until') && params.get('since')) {
+          const day = new Date(Date.parse(params.get('since')) + tz * 60000).toISOString().slice(0,10);
+          const row = data['/costs?by=day'].rows.find(r => r.key === day);
+          const total = row ? {...row,key:''} : {key:'',calls:0,cost_usd:0};
+          body = {...body,by:'repo',since:params.get('since'),until:params.get('until'),total,
+            rows:row ? [{...row,key:'fixture-repo'}] : []};
+        }
+      }
       costLog.push(String(path).split('?')[1] || '');
       stamp('mock-costs', costLog.join('\n'));
       // spendcachedemo: the first two rounds (tile + card each) answer from
@@ -860,11 +912,16 @@
     if (scenarios.has('recover')) {
       setTimeout(() => {
         stamp('malformed-before-recovery', document.getElementById('count-agents').textContent + ' ' +
+          document.getElementById('posture-health').textContent + ' ' +
           Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
         malformedRecovered = true;
-        document.getElementById('btn-refresh').click();
+        document.getElementById('posture-retry').click();
       }, 6000);
     }
+    setTimeout(() => {
+      const visible = id => document.getElementById(id).getClientRects().length > 0;
+      stamp('posture-visibility', `health=${visible('posture-health')} retry=${visible('posture-retry')}`);
+    }, 11000);
   }
 
   if (scenarios.has('healthdemo')) {
@@ -903,7 +960,9 @@
   const openTab = (id) => {
     const r = resolveConsoleRoute(id);
     document.querySelector(`.tab-btn[data-tab="${r.tab}"]`).click();
-    if (r.sub) document.querySelector(`.subtab-btn[data-subtab="${r.sub}"]`).click();
+    if (r.sub) document.querySelector(r.tab === 'protection'
+      ? `[data-action="goto-protection"][data-protection-view="${r.sub}"]`
+      : `.subtab-btn[data-subtab="${r.sub}"]`).click();
     const group = document.getElementById({ findings: 'home-findings', overview: 'home-trends' }[id] || '');
     if (group && !group.open) group.open = true;
     return r;
@@ -1220,10 +1279,16 @@
   // each panel's dirty bit is cleared by an on-screen render before the
   // dump. A panel's rendered DOM persists after switching away (only the
   // `hidden` attribute toggles), so the tour then lands back on Home with
-  // both groups closed — the boot-default checks (active tab, closed
-  // groups, hidden tabpanels) read the same dump and must still see it.
+  // Findings and Trends closed, Usage open — the boot-default checks
+  // read the same dump and must still see those defaults.
   if (location.search === '' && location.hash === '') {
     setTimeout(() => {
+      stamp('spend-default-view', `by=${document.getElementById('spend-by').value} since=${document.getElementById('spend-since').value}`);
+      for (const kind of ['guard', 'resource']) {
+        document.querySelector(`#attention-list [data-action="select-attention"][data-need-kind="${kind}"]`)?.click();
+        stamp(`attention-${kind}-content`, document.getElementById('drawer-body').innerHTML + document.getElementById('drawer-foot').innerHTML);
+        document.getElementById('btn-drawer-close').click();
+      }
       openTab('findings');
       openTab('overview');
       openTab('system');
@@ -1233,6 +1298,8 @@
       openTab('sessions/board');
       openTab('egress');
       openTab('policy');
+      openTab('protection/sources');
+      openTab('protection/audit');
       openTab('home');
       const findings = document.getElementById('home-findings');
       const trends = document.getElementById('home-trends');
@@ -1259,7 +1326,6 @@
   // sessionlinkdemo: flag-1 belongs to the durable session sess-claude-1;
   // open Findings, then click its "View session in timeline".
   if (scenarios.has('sessionlinkdemo')) {
-    data['/flags'].find(f => f.id === 'flag-1').session_id = 'sess-claude-1';
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('[data-action="filter-session"][data-session="sess-claude-1"]')?.click(), 5000);
     setTimeout(() => document.querySelector('[data-action="session-view"][data-view="trace"]')?.click(), 6000);
@@ -1271,8 +1337,6 @@
     }, 4000);
   }
   if (scenarios.has('sessionworkbench')) {
-    for (let i = 0; i < 80; i++) data['/sessions'].push({ id: 'wb-session-' + i, harness: 'codex', repo: 'workbench-' + i,
-      workspace: '/Users/dev/workbench-' + i, branch: 'main', status: 'idle', started_at: iso(3600000), last_seen_at: iso(120000 + i * 1000) });
     setTimeout(() => openTab('sessions'), 1500);
     setTimeout(async () => {
       const receipt = {};
@@ -1319,10 +1383,14 @@
         window.SA.t.sessions = window.SA.t.sessions.map(session => session.id === 'wb-session-79' ? { ...session, last_seen_at: new Date(now + 60000).toISOString() } : session);
         renderSessionBoard();
         receipt.order = Array.from(rail().querySelectorAll('[data-action="select-session"]'), row => row.dataset.id).join(',') === order;
+        data['/sessions'].find(session => session.id === first)._timeline = Array.from({ length: 500 }, (_, i) => ({
+          kind: 12, session_id: first, ts: iso(600000 - i * 1000), tool: 'RetainedTrace' + i, tool_status: 'ok', duration_ms: 100,
+        }));
         detail().querySelector('[data-view="trace"]').focus({ preventScroll: true });
         await window.setSessionView('trace');
         receipt.modeFocus = document.activeElement === detail().querySelector('[data-view="trace"]');
         receipt.trace = window.SA.sessionView === 'trace' && detail().querySelector('[data-view="trace"]').getAttribute('aria-pressed') === 'true';
+        receipt.traceLimit = detail().querySelectorAll('.wf-row').length === 500 && detail().textContent.includes('earlier history may be omitted');
         await window.setSessionView('memory');
         receipt.memory = detail().querySelectorAll('.sm-row').length === 121;
         rail().scrollTop = 300;
@@ -1350,6 +1418,45 @@
         await window.selectSession('sess-claude-1');
         receipt.narrowFocus = !window.matchMedia('(max-width: 900px)').matches || document.activeElement === detail().querySelector('h3');
         receipt.height = parseFloat(panel().style.getPropertyValue('--session-workbench-height')) > 0;
+        window.__traceFail = true;
+        await window.setSessionView('trace');
+        receipt.traceUnavailable = detail().textContent.includes('Trace unavailable') && !detail().textContent.includes('No trace events') && !detail().querySelector('.wf');
+        window.__traceFail = false;
+        const retry = detail().querySelector('[data-action="trace-retry"]');
+        retry.focus({ preventScroll: true });
+        receipt.traceRetryFocus = document.activeElement === retry && !retry.disabled;
+        retry.click(); await wait();
+        receipt.traceRecovered = window.SA.sessionTimelineState.loaded && !window.SA.sessionTimelineState.error && !!detail().querySelector('.wf') && !detail().querySelector('[data-action="trace-retry"]');
+        const saved = detail().querySelector('.wf').textContent;
+        window.__traceFail = true;
+        await window.setSessionView('trace');
+        receipt.traceStale = detail().textContent.includes('last successfully loaded') && detail().querySelector('.wf').textContent === saved;
+        window.__traceFail = false;
+        detail().querySelector('[data-action="trace-retry"]').click(); await wait();
+        receipt.traceRetryRecovered = !window.SA.sessionTimelineState.error && detail().querySelector('.wf').textContent === saved;
+        window.__overviewFail = true;
+        await window.selectSession('wb-session-0');
+        const status = () => detail().querySelector('.sd-current-head');
+        receipt.statusUnavailable = status().textContent.includes('Current session status unavailable') && !status().textContent.includes('Last known');
+        const statusRetry = status().querySelector('[data-action="session-overview-retry"]');
+        statusRetry.focus({ preventScroll: true });
+        receipt.statusRetryFocus = document.activeElement === statusRetry && !statusRetry.disabled;
+        window.__overviewFail = false;
+        statusRetry.click(); await wait();
+        receipt.statusRecovered = !window.SA.sessionOverviewState.error && !status().querySelector('[data-action="session-overview-retry"]');
+        await window.selectSession('sess-claude-1');
+        const savedFinding = detail().querySelector('.sd-finding').textContent;
+        window.__overviewMalformed = true;
+        window.SA.refreshSessionOverview(true); await wait();
+        receipt.statusMalformed = status().textContent.includes('Last known session status') && detail().querySelector('.sd-finding').textContent === savedFinding
+          && detail().querySelector('.sd-request').disabled;
+        window.__overviewMalformed = false;
+        window.__overviewHold = true;
+        status().querySelector('[data-action="session-overview-retry"]').click(); await wait();
+        receipt.statusRetryPending = status().querySelector('[data-action="session-overview-retry"]').disabled && detail().querySelector('.sd-request').disabled;
+        window.__overviewHold = false; window.__releaseOverview(); await wait();
+        receipt.statusRetryRecovered = !window.SA.sessionOverviewState.error && !status().querySelector('[data-action="session-overview-retry"]')
+          && !detail().querySelector('.sd-request').disabled && detail().querySelector('.sd-finding').textContent === savedFinding;
       } catch (error) { receipt.error = String(error.stack || error); }
       document.body.dataset.sessionWorkbench = JSON.stringify(receipt);
     }, 4000);
@@ -1461,6 +1568,7 @@
   // opens first — accept it.
   if (scenarios.has('guarddemo')) {
     const clickResolve = () => {
+      document.querySelector('#attention-list [data-action="select-attention"][data-need-kind="guard"]')?.click();
       const btn = document.querySelector('[data-action="guard-resolve"][data-scope="once"]');
       if (btn) btn.click();
     };
@@ -1605,9 +1713,17 @@
   // form is static DOM outside the patched list, and 'notify' now holds
   // focus (PANEL_EL) the same as any other panel.
   if (scenarios.has('notifyfocusdemo')) {
-    setTimeout(() => {
+    setTimeout(async () => {
       openTab('policy');
-      const input = document.getElementById('notify-scope-path');
+      let input = document.getElementById('notify-scope-path');
+      for (let attempt = 0; !input && attempt < 50; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        input = document.getElementById('notify-scope-path');
+      }
+      if (!input) {
+        stamp('notify-focus-probe', 'input-unavailable');
+        return;
+      }
       input.focus();
       input.value = 'in-progress-edit';
       input.dataset.probe = '1';
@@ -1636,7 +1752,6 @@
   // Auto-action: re-run the advisor on the first flag — the pending state
   // must show, then the fresh verdict must land and replace the chip.
   if (scenarios.has('retriagedemo')) {
-    data['/flags'].find(x => x.id === 'flag-1').advisor = { assessment: 'benign', confidence: 0.9, rationale: 're-triage complete: routine vendor traffic', suggested_action: 'none', created_at: iso(120000) };
     // Findings is opened first, as a user must: hidden panels do not render.
     setTimeout(() => {
       openTab('findings');
@@ -1650,15 +1765,9 @@
       document.body.appendChild(receipt);
     }, 9000);
   }
-  // Advisor-down variant: the circuit breaker is open — retriage must render
-  // as an honest "Advisor offline" state, not a clickable dead button.
-  if (scenarios.has('advisordown')) {
-    data['/status'].advisor_health = { enabled: true, circuit_open: true, last_error: 'context deadline exceeded', queue_depth: 0, model: 'qwen3:8b' };
-  }
   // No-fleet variant: no collector webhooks configured — the fleet panel must
   // hide entirely instead of carrying a permanently-empty placeholder.
   if (scenarios.has('nofleetdemo')) {
-    data['/fleet'] = { ...data['/fleet'], fleet_configured: false };
     // The fleet panel lives on Sessions/Processes, not the default Home tab.
     setTimeout(() => openTab('sessions/processes'), 1500);
   }
@@ -2089,21 +2198,15 @@
       return orig && orig.get ? orig.get() : rep;
     } });
   }
-  // adoptdemo: a removal started elsewhere is running when the tab opens;
-  // the progress toast follows it without a click.
-  if (scenarios.has('adoptdemo')) {
-    const p = WT_REPO + '/.worktrees/done';
-    data['/worktrees'].removals = { [p]: { path: p, state: 'running', phase: 'checking', step: 'checking it is still safe to remove', started_at: iso(5000), step_at: iso(1000) } };
-  }
-
   // Auto-action: demote a blocking rule — it must flip back to Promote.
   if (scenarios.has('demotedemo')) {
-    // The firewall rule list lives on the Egress tab, not the default Home tab.
-    setTimeout(() => openTab('egress'), 1500);
+    // The firewall rule list lives in Protection / Rules.
+    setTimeout(() => openTab('protection/rules'), 1500);
     setTimeout(() => document.querySelector('[data-action="demote"][data-rule="aws-key"]').click(), 4000);
   }
   // Auto-action: remove an allowlist entry — the row must leave the list.
   if (scenarios.has('allowlistdemo')) {
+    setTimeout(() => openTab('protection/rules'), 1500);
     setTimeout(() => document.querySelector('[data-action="allowlist-remove"]').click(), 4000);
   }
 
@@ -2111,8 +2214,6 @@
   // Sessions tab is not active by default, and the rail only renders once
   // it is on screen (renderAll no longer paints hidden panels), so open it.
   if (scenarios.has('quietdemo')) {
-    data['/sessions'] = [];
-    data['/status'] = { ...data['/status'], agents: [], trees: [] };
     setTimeout(() => openTab('sessions'), 1500);
   }
   // Auto-action: type a filter that matches nothing — the rail must say so
@@ -2143,22 +2244,69 @@
   // past the viewport, and posts it back; the result lands on
   // <body data-hscroll="sessions:N,agents:N,resources:N"> (N in px, 0 = fits).
   if (scenarios.has('phoneframe')) {
-    // Content inside a horizontal scroller (the Sessions sub-view control) or
-    // an ellipsised log title is clipped by it, so the clipping box is what
-    // must fit.
-    const measure = (tab) => {
-      const panel = document.getElementById('tab-' + openTab(tab).tab);
-      const width = document.documentElement.clientWidth;
-      let past = 0;
-      for (const el of [panel, ...panel.querySelectorAll('*')]) {
-        if (el.parentElement && el.parentElement.closest('.subtabs, .c-title')) continue;
+    // Measure each box's visible extent after all ancestor clips. The clipping
+    // containers still get measured themselves, and page overflow is independent.
+    const horizontalOverflow = (root, doc = document) => {
+      const width = doc.documentElement.clientWidth;
+      let past = Math.max(0, doc.documentElement.scrollWidth - width);
+      for (const el of [root, ...root.querySelectorAll('*')]) {
         const box = el.getBoundingClientRect();
-        if (box.width) past = Math.max(past, box.right - width);
+        if (!box.width || !box.height) continue;
+        let left = box.left, right = box.right;
+        for (let ancestor = el.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          const overflow = doc.defaultView.getComputedStyle(ancestor).overflowX;
+          if (!['auto', 'scroll', 'hidden', 'clip'].includes(overflow)) continue;
+          const bounds = ancestor.getBoundingClientRect();
+          const clipLeft = bounds.left + ancestor.clientLeft;
+          left = Math.max(left, clipLeft);
+          right = Math.min(right, clipLeft + ancestor.clientWidth);
+        }
+        if (right > left) past = Math.max(past, right - width);
       }
-      past = Math.max(past, document.documentElement.scrollWidth - width);
-      return `${tab}:${Math.round(past)}`;
+      return Math.round(past);
+    };
+    const measure = (tab) => `${tab}:${horizontalOverflow(document.getElementById('tab-' + openTab(tab).tab))}`;
+    const overflowGuard = () => {
+      // An isolated real document keeps these negative controls independent of
+      // console layout and removes every injected box before the console probe.
+      const frame = document.createElement('iframe');
+      Object.assign(frame.style, {position:'fixed',left:'0',top:'0',width:document.documentElement.clientWidth + 'px',height:'20px',border:'0',visibility:'hidden'});
+      document.body.append(frame);
+      const doc = frame.contentDocument;
+      if (!doc || !doc.body) { frame.remove(); return {unavailable:true}; }
+      doc.body.style.margin = '0';
+      const width = doc.documentElement.clientWidth;
+      const container = doc.createElement('div');
+      Object.assign(container.style, {position:'absolute',left:'0',top:'0',width:'100px',height:'10px'});
+      const child = doc.createElement('div');
+      Object.assign(child.style, {width:width + 60 + 'px',height:'5px'});
+      container.append(child);
+      doc.body.append(container);
+      const checks = {};
+      for (const mode of ['auto','scroll','hidden','clip']) {
+        container.style.overflowX = mode;
+        checks[mode] = horizontalOverflow(container, doc) === 0;
+      }
+      container.style.overflowX = 'visible';
+      container.style.overflowY = 'visible';
+      checks.unclipped = horizontalOverflow(container, doc) >= 60;
+      container.style.overflowX = 'hidden';
+      container.style.width = width + 24 + 'px';
+      checks.container = horizontalOverflow(container, doc) >= 24;
+      container.remove();
+      const wide = doc.createElement('div');
+      Object.assign(wide.style, {width:width + 24 + 'px',height:'5px'});
+      const small = doc.createElement('div');
+      Object.assign(small.style, {width:'20px',height:'5px'});
+      doc.body.append(wide, small);
+      checks.document = doc.documentElement.scrollWidth > width && horizontalOverflow(small, doc) >= 24;
+      frame.remove();
+      return checks;
     };
     setTimeout(() => {
+      const guards = overflowGuard();
+      document.body.dataset.overflowGuard = JSON.stringify(guards);
+      parent.postMessage({overflowGuard:guards}, '*');
       const sessions = measure('sessions');
       setTimeout(() => {
         const agents = measure('agents');
@@ -2174,7 +2322,11 @@
             }, 200);
           }
           // patterndemo: the Attention/Flags tab holding the pattern card.
-          const done = findings => parent.postMessage({ hscroll: `${sessions},${agents},${resources}${findings}` }, '*');
+          const done = findings => {
+            const hscroll = `${sessions},${agents},${resources}${findings}`;
+            document.body.dataset.hscroll = hscroll;
+            parent.postMessage({hscroll}, '*');
+          };
           if (scenarios.has('patterndemo')) setTimeout(() => done(',' + measure('findings')), 300);
           else if (scenarios.has('spenddaydemo')) setTimeout(() => done(',' + measure('overview')), 300);
           else done('');
@@ -2185,6 +2337,7 @@
     addEventListener('message', (e) => {
       if (e.data && e.data.hscroll) document.body.dataset.hscroll = e.data.hscroll;
       if (e.data && e.data.headroom) document.body.dataset.headroom = e.data.headroom;
+      if (e.data && e.data.overflowGuard) document.body.dataset.overflowGuard = JSON.stringify(e.data.overflowGuard);
     });
     document.addEventListener('DOMContentLoaded', () => {
       const frame = document.createElement('iframe');
@@ -2241,12 +2394,7 @@
   // Egress fold: 2 rules with hits stay listed, 20 quiet rules fold into one
   // row; the open fold survives an SSE-driven refetch that changes its count.
   if (scenarios.has('folddemo')) {
-    const fs = {
-      'hit-a': { type: 'vendor-key', mode: 'monitor', would_block: 3, blocked: 0, legit: 1 },
-      'hit-b': { type: 'cloud-key', mode: 'monitor', would_block: 0, blocked: 0, legit: 2 },
-    };
-    for (let i = 0; i < 20; i++) fs['quiet-' + String(i).padStart(2, '0')] = { type: 'env-value', mode: 'monitor', would_block: 0, blocked: 0, legit: 0 };
-    data['/status'].firewall_stats = fs;
+    setTimeout(() => openTab('egress'), 1200);
     const fold = () => document.querySelector('#firewall-container > details.fw-fold');
     const probe = () => {
       const c = document.getElementById('firewall-container');
@@ -2256,7 +2404,7 @@
         + `open=${d && d.open ? 1 : 0} rebuilt=${d && d.dataset.before ? 0 : 1}`;
     };
     let focusedPromote = null;
-    setTimeout(() => openTab('egress'), 1500);
+    setTimeout(() => openTab('protection/rules'), 1500);
     setTimeout(() => {
       stamp('fold-before', probe());
       const d = fold();
@@ -2537,10 +2685,10 @@
         `${un && un.isConnected && document.activeElement === un ? 'kept' : 'lost'} rows=${document.querySelectorAll('#flags-list .mute-row').length}`), 2600);
     }, 4300);
   }
-  // actdemo: Egress open, allow the suggested host late enough that the
+  // actdemo: Protection / Rules open, allow the suggested host late enough that the
   // inline note and the toast are still up at dump time (4s each).
   if (scenarios.has('actdemo')) {
-    setTimeout(() => openTab('egress'), 4000);
+    setTimeout(() => openTab('protection/rules'), 4000);
     setTimeout(() => document.querySelector('.fw-suggestion [data-action="allow-host"]').click(), 9000);
   }
   // detailsprobe (with explaindemo): flag-2 raised seconds ago; Findings
@@ -2666,9 +2814,6 @@
   }
   // policylists: the Policy tab, opened once telemetry has landed.
   if (scenarios.has('scopedpermission')) {
-    data['/reviews']={reviews:[{id:'review-scope',revision:3,review_state:'unreviewed',count:1,evidence_available:true,evidence_flag_available:false,
-      context:{rule:'sensitive-read-then-connect',session_id:'sess-claude-1',workspace:'/Users/dev/workspace/api-service',resources:['/work/.env'],destinations:['api.example.com:443']},
-      available_scopes:[{kind:'once'},{kind:'session'},{kind:'exact',expiry:'24h'},{kind:'exact',expiry:'7d'}],source_ids:['flag-1'],incident_ids:[],assessment:{risk:'high',control:'observed',reason:'Recorded read and connection'}}],degraded:false};
     setTimeout(()=>openTab('findings'),4000);
     setTimeout(()=>document.querySelector('#flags-list [data-decision="expect"][data-scope="exact"][data-expiry="24h"]')?.click(),7000);
     setTimeout(()=>document.getElementById('confirm-ok')?.click(),7500);
@@ -2693,19 +2838,8 @@
   // ahead of the agent groups; Treat as routine is confirmed and sends the
   // served flag ids; the card leaves before the daemon answers.
   if (scenarios.has('routinedemo')) {
-    const key = 'routine|gh|/Users/dev/.config';
+    const key = data['/routine'][0].key;
     setTimeout(() => openTab('findings'), 1500);
-    data['/routine'] = [{
-      key, reader: 'gh', area: '~/.config/gh/hosts.yml', files: 1, count: 145, agents: ['claude', 'codex', 'openclaw'],
-      destinations: [{ org: 'GitHub', host: '140.82.114.6', count: 140 }], destination_count: 3, expectable: 143,
-      disposition: { state: 'warning', text: 'Needs a look', why: 'w' },
-      summary: 'gh read ~/.config/gh/hosts.yml, then connected to GitHub and 2 more — 145 times across 3 agents.',
-      actions: [
-        { id: 'expect-all', label: 'Treat as routine', consequence: 'Each exact reader, file and destination these 143 flags cite is marked expected.', method: 'POST', path: '/expected', body: { flag_ids: ['r1', 'r2'] } },
-        { id: 'dismiss-all', label: 'Dismiss all 145', consequence: 'c', method: 'POST', path: '/flags/acknowledge', body: { flag_ids: ['r1', 'r2', 'r3'] } },
-      ],
-      flag_ids: ['r1', 'r2', 'r3'],
-    }];
     setTimeout(() => {
       const card = document.querySelector(`#flags-list [data-routine-key="${CSS.escape(key)}"]`);
       const queued = !!document.querySelector(`#attention-list [data-routine-key="${CSS.escape(key)}"]`);
@@ -2718,19 +2852,6 @@
   // orgallowdemo: flag-1 reached three Google addresses; Findings open, press
   // its one "Allow Google" choice from the More menu.
   if (scenarios.has('orgallowdemo')) {
-    const f1 = data['/flags'].find(f => f.id === 'flag-1');
-    const hosts = ['142.250.1.1', '2607:f8b0:4002:c08::54', 'uf-in-f84.1e100.net'];
-    f1.explain = {
-      what: 'Cursor read a sensitive file in your home directory, then reached Google 2 s later.',
-      subject: { path: '/Users/dev/.docker/config.json', display: '~/.docker/config.json', basename: 'config.json', category: 'other_sensitive', category_label: 'sensitive file', owner_label: 'home directory' },
-      egress: hosts.map(host => ({ host, port: 443, org: 'Google', kind: 'ip', allowlisted: false, gap_seconds: 2 })),
-      context: { harness: 'cursor' },
-      disposition: { state: 'warning', text: 'Needs a look', why: 'A connection was observed to Google near the read.' },
-      actions: [
-        ...hosts.map(host => ({ id: 'allow-host', label: `Allow ${host} for cursor`, consequence: 'c', method: 'POST', path: '/allowlist', body: { agent: 'cursor', host } })),
-        { id: 'dismiss', label: 'Dismiss this flag', consequence: 'c', method: 'POST', path: '/flags/acknowledge', body: { flag_id: 'flag-1' } },
-      ],
-    };
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const card = document.querySelector('#flags-list .row-body[data-flag-id="flag-1"]');
@@ -2747,10 +2868,6 @@
   }
   // Exercise the actual workspace controls without sending chat or commands.
   if (scenarios.has('agentworkspace')) {
-    data['/agent/recommendations'] = [
-      { id: 901, ts: iso(60000), role: 'assistant', origin: 'analysis', review_state: 'pending', content: 'Review **SSH** configuration.', local_command: { command: 'ssh-add -l', workdir: '/Users/dev', mode: 'headless' } },
-      { id: 902, ts: iso(60000), role: 'assistant', origin: 'analysis', review_state: 'saved', plan_id: 2, content: 'Already saved.' }
-    ];
     setTimeout(() => {
       openTab('agent');
       setTimeout(() => {
@@ -2798,4 +2915,99 @@
       }, 500);
     }, 4000);
   }
+
+  // One inspection round trip through real controls; no security writes.
+  if (scenarios.has('protectioncontext') || scenarios.has('protectioncontextprobe')) {
+    setTimeout(() => openTab('protection/traffic'), 1500);
+  }
+  if (scenarios.has('protectioncontextprobe')) setTimeout(() => {
+    const checks = {};
+    const writes = () => reqLog.filter(line => /^(POST|DELETE|PUT|PATCH) /.test(line)).length;
+    const beforeWrites = writes();
+    document.querySelector('[data-action="view-egress-expectation"][data-episode-id="episode-expected"]')?.click();
+    setTimeout(() => {
+      const selected = document.querySelector('[data-expected-egress-rule="expected-older"].is-context-target');
+      checks.rules = location.hash === '#protection/rules';
+      checks.selected = !!selected;
+      checks.nonDestructiveFocus = document.activeElement === selected;
+      checks.rationale = selected?.textContent.includes('Routine update') === true;
+      const beforeScroll = scrollY;
+      // Flush the same authoritative cached report through the real keyed renderer.
+      window.SA.flushRender();
+      renderExpectedEgressRules();
+      checks.refreshNode = selected === document.querySelector('[data-expected-egress-rule="expected-older"].is-context-target');
+      checks.refreshFocus = document.activeElement === selected && scrollY === beforeScroll;
+      document.querySelector('[data-action="back-egress-context"]')?.click();
+      const origin = document.querySelector('[data-egress-episode-id="episode-expected"].is-context-target');
+      checks.returned = location.hash === '#protection/traffic' && !!origin && document.activeElement === origin;
+      document.querySelector('[data-protection-view="audit"]')?.click();
+      checks.manualCleared = window.SA.protectionContext === null;
+      checks.noWrites = writes() === beforeWrites;
+      stamp('protection-context-probe', JSON.stringify(checks));
+    }, 500);
+  }, 2000);
+
+  // These probes exercise the real console DOM; timers are bounded once per fixture.
+  if (scenarios.has('attentionremodel')) setTimeout(() => {
+    const checks = {};
+    document.querySelector('#attention-list [data-action="select-attention"][data-need-id="flag-1"]')?.click();
+    checks.initial = window.SA.attentionKey === 'flag:flag-1';
+    checks.evidenceOpen = !!document.querySelector('#drawer-body details.body-evidence[open]');
+    const dialog = document.getElementById('drawer');
+    const label = document.getElementById(dialog.getAttribute('aria-labelledby'));
+    checks.named = !!label && dialog.contains(label) && !!label.textContent.trim();
+    checks.modal = matchMedia('(min-width: 1180px)').matches || (document.getElementById('drawer').getAttribute('aria-modal') === 'true' && document.querySelector('.app > main')?.inert);
+    if (scenarios.has('layoutwide')) window.openResourcePolicyEditor();
+    const layoutProbe = () => {
+      const root = document.getElementById('drawer');
+      const panel = root.querySelector('.drawer-panel');
+      const main = document.querySelector('.app > main');
+      if (root.hidden || !main || !panel) return;
+      const rect = node => {
+        const b = node.getBoundingClientRect();
+        return {left:b.left,top:b.top,right:b.right,bottom:b.bottom,width:b.width,height:b.height};
+      };
+      const panelRect = rect(panel), mainRect = rect(main);
+      const modal = root.getAttribute('aria-modal') === 'true';
+      const title = document.getElementById(root.getAttribute('aria-labelledby'));
+      stamp('remodel-layout-probe', JSON.stringify({width:document.documentElement.clientWidth,innerWidth,media1180:matchMedia('(min-width: 1180px)').matches,media1340:matchMedia('(min-width: 1340px)').matches,wide:root.classList.contains('resource-policy'),
+        modal,inert:main.inert,drawer:panelRect,main:mainRect,overflow:document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+        named:!!title && root.contains(title) && !!title.textContent.trim(),
+        contentFit:modal ? !!main.inert : mainRect.right <= panelRect.left + 1}));
+    };
+    const recordLayout = () => requestAnimationFrame(layoutProbe);
+    window.addEventListener('resize', recordLayout);
+    matchMedia('(min-width: 1180px)').addEventListener('change', recordLayout);
+    matchMedia('(min-width: 1340px)').addEventListener('change', recordLayout);
+    layoutProbe();
+    if (!scenarios.has('layoutwide')) document.querySelector('#drawer-foot [data-action="dismiss-flag"]')?.click();
+    setTimeout(() => {
+      checks.pendingRetained = scenarios.has('layoutwide') || window.SA.attentionKey === 'flag:flag-1';
+      if (scenarios.has('attentionrace')) document.querySelector('#attention-list [data-action="select-attention"][data-need-id="flag-2"]')?.click();
+    }, 100);
+    setTimeout(() => {
+      checks.final = scenarios.has('layoutwide') ? document.getElementById('drawer').classList.contains('resource-policy') : scenarios.has('attentionfail') ? window.SA.attentionKey === 'flag:flag-1'
+        : scenarios.has('attentionfinal') ? !window.SA.attentionKey && !document.querySelector('#drawer-foot [data-action]') && document.getElementById('drawer-body').textContent.includes('No items need your attention')
+        : window.SA.attentionKey === 'flag:flag-2';
+      checks.focus = document.activeElement.id === 'btn-drawer-close' || scenarios.has('attentionfail') || scenarios.has('attentionrace');
+      stamp('attention-remodel-probe', JSON.stringify(checks));
+      layoutProbe();
+    }, 1300);
+  }, 1200);
+  if (scenarios.has('remodelusage')) setTimeout(() => {
+    const checks = {};
+    const day = document.querySelector('[data-action="select-spend-day"]');
+    day?.focus(); day?.click();
+    setTimeout(() => {
+      const report = window.SA.t.spendDayReport;
+      const chartRow = window.SA.t.costsCard?.rows.find(r => r.key === window.SA.t.spendDay);
+      checks.selected = !!day && window.SA.t.spendDay === day.dataset.day;
+      checks.matches = !!report && !!chartRow && report.total.cost_usd === chartRow.cost_usd && report.total.calls === chartRow.calls;
+      checks.focus = document.activeElement.dataset.day === day?.dataset.day;
+      checks.detail = !!document.querySelector('.spend-day-inspector [data-action="reset-spend-day"]');
+      document.querySelector('[data-action="reset-spend-day"]')?.click();
+      checks.reset = !window.SA.t.spendDay && !document.querySelector('[data-action="select-spend-day"][aria-pressed="true"]');
+      stamp('usage-remodel-probe', JSON.stringify(checks));
+    }, 500);
+  }, 1500);
 })();

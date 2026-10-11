@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -10,12 +9,13 @@ import (
 
 // PostureItem is one thing the operator may need to act on.
 type PostureItem struct {
-	Kind      string `json:"kind"` // flag | incident | guard_pending | resource_pressure | coverage kinds
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Severity  int    `json:"severity"` // 3 critical, 2 high, 1 medium, 0 info
-	Detail    string `json:"detail,omitempty"`
-	Timestamp string `json:"ts,omitempty"`
+	Kind       string                   `json:"kind"` // flag | incident | guard_pending | resource_pressure | coverage kinds
+	ID         string                   `json:"id"`
+	Title      string                   `json:"title"`
+	Severity   int                      `json:"severity"` // 3 critical, 2 high, 1 medium, 0 info
+	Detail     string                   `json:"detail,omitempty"`
+	Timestamp  string                   `json:"ts,omitempty"`
+	Assessment *model.FindingAssessment `json:"assessment,omitempty"`
 }
 
 // Posture is the single headline answer: "do I need to look at this machine,
@@ -116,11 +116,7 @@ func (a *API) advisorReadFailures(kind string) []string {
 	if a.store == nil {
 		return nil
 	}
-	label := kind + " advisor verdicts"
-	if slices.Contains(a.store.WriteHealth().ReadActive, label) {
-		return []string{label}
-	}
-	return nil
+	return advisorReadFailuresFrom(a.store, kind)
 }
 
 // postureWith is computePosture over the 24 h patterns and routine groups

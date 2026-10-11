@@ -28,8 +28,14 @@ func (a *API) handleCleanup(w http.ResponseWriter, r *http.Request) {
 	if a.store != nil {
 		t := a.store.CleanupTotals(time.Now())
 		rep.Reclaimed = &t
-		for _, p := range rep.Projects {
-			if v, ok := a.store.AdvisorVerdictFor(advisor.ProjectSubjectID(p.Project), "project"); ok {
+		subjectIDs := make([]string, len(rep.Projects))
+		for i, p := range rep.Projects {
+			subjectIDs[i] = advisor.ProjectSubjectID(p.Project)
+		}
+		// Optional plans may be partial; retain read health for the whole batch.
+		verdicts, _ := a.store.AdvisorVerdictsFor(subjectIDs, "project")
+		for i, p := range rep.Projects {
+			if v, ok := verdicts[subjectIDs[i]]; ok {
 				if rep.Advice == nil {
 					rep.Advice = map[string]model.AdvisorVerdict{}
 				}

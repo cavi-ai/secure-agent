@@ -1294,9 +1294,13 @@ public final class AppState: ObservableObject {
         return .openConsole(tab: "findings")
     }
 
-    /// The flag the hero names: the newest unacted critical one (/flags is
-    /// newest first).
-    public var heroFlag: FlagModel? { unactedFlags.first }
+    /// Match the daemon's headline before falling back for older daemons.
+    public var heroFlag: FlagModel? {
+        if let item = posture?.criticalItem {
+            return item.kind == "flag" ? unactedFlags.first { $0.id == item.id } : nil
+        }
+        return unactedFlags.first
+    }
 
     /// The in-place action the hero ran last and how it went.
     public struct InPlaceAction: Equatable {
@@ -1320,10 +1324,20 @@ public final class AppState: ObservableObject {
             }
         }
         public let flagID: String
+        public let sessionID: String?
+        public let findingTitle: String
+        public let assessment: FindingAssessmentModel?
         public let action: FlagExplainAction
         public var phase: Phase
     }
     @Published public private(set) var inPlaceAction: InPlaceAction?
+    @Published public private(set) var inPlaceResultHidden = false
+
+    /// Hide feedback without releasing the successful mutation's retry guard.
+    public func dismissInPlaceResult() {
+        guard let run = inPlaceAction, run.phase != .running else { return }
+        inPlaceResultHidden = true
+    }
 
     /// allow-host and allow-path only mutate policy on the daemon — unlike
     /// the web console (web_dist/app.js explainAct), they don't acknowledge
@@ -1340,7 +1354,12 @@ public final class AppState: ObservableObject {
     /// the result line names the partial failure.
     public func performInPlace(_ action: FlagExplainAction, on flag: FlagModel) async {
         if inPlaceAction?.phase == .running { return }
-        inPlaceAction = InPlaceAction(flagID: flag.id, action: action, phase: .running)
+        if let run = inPlaceAction, run.flagID == flag.id, run.phase.keepsButtonDisabled { return }
+        let assessment = flag.explain?.assessment ?? posture?.items?.first { $0.kind == "flag" && $0.id == flag.id }?.assessment
+        inPlaceResultHidden = false
+        inPlaceAction = InPlaceAction(flagID: flag.id, sessionID: flag.sessionId,
+            findingTitle: flag.title?.isEmpty == false ? flag.title! : flag.rule,
+            assessment: assessment, action: action, phase: .running)
         do {
             try await client.perform(action)
             if Self.actionsRequiringAcknowledge.contains(action.id) {

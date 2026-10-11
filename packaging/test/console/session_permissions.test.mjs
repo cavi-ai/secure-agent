@@ -10,7 +10,8 @@ const receipt = { sessionID: 'session-a', reviewID: 'review-a', revision: 1, at,
 const scope = (id = 'scope-a', extra = {}) => ({ id, kind: 'exact', agent: 'claude', session_id: 'session-a',
   workspace: '/work/a', reader_exe: '/usr/bin/tool', rule_id: 'sensitive-read-then-connect',
   resource_path: '/work/a/.env', operation: 'read-connect', destination: 'example.test:443',
-  created_at: at, expires_at: '2099-10-09T12:00:00Z', identity_basis: 'observed-session', ...extra });
+  created_at: at, expires_at: '2099-10-09T12:00:00Z', identity_basis: 'observed-session',
+  applicability: { label: 'Timed permission', revoke: true }, ...extra });
 function context() {
   const c = { Date, URLSearchParams, window: { SA: {} } };
   vm.createContext(c);
@@ -71,17 +72,32 @@ test('scope details show only receipt IDs, unknown missing status, exact coordin
   assert.match(html, /data-action="session-permission-revoke" data-id="scope-a"/);
 });
 
-test('failed refresh retains labeled last-known scopes and disables revocation; terminal scopes have no revoke action', () => {
+test('failed refresh retains labeled last-known scopes and disables revocation', () => {
   const c = context();
   const stale = c.sessionPermissionsHTML(receipt, { rows: [scope()], readAt: at, error: 'unavailable' });
   assert.match(stale, /Last known permission records/);
+  assert.match(stale, /Timed permission/);
   assert.ok(!stale.includes('data-action="session-permission-revoke"'));
-  for (const extra of [{ revoked_at: at }, { revoked_at: 'invalid' }, { operation: 'unknown' }, { expires_at: '2020-01-01T00:00:00Z' }, { expires_at: 'invalid' }, { created_at: '2099-01-01T00:00:00Z' }]) {
-    const html = c.sessionPermissionsHTML(receipt, { rows: [scope('scope-a', extra)] });
-    assert.ok(!html.includes('data-action="session-permission-revoke"'));
-  }
   const hostile = c.sessionPermissionsHTML({ ...receipt, sessionID: '<img>' }, { rows: [scope('scope-a', { workspace: '<img>' })] });
   assert.ok(!hostile.includes('<img>'));
+});
+
+test('session permissions render server applicability and hide revoke when it is false or absent', () => {
+  const c = context();
+  const offered = c.sessionPermissionsHTML(receipt, { rows: [scope('scope-a', { revoked_at: at, applicability: { label: 'Timed permission', revoke: true } })] });
+  assert.match(offered, />Timed permission</);
+  assert.match(offered, /Expected read\/connect activity/);
+  assert.match(offered, /does not grant network access/);
+  assert.match(offered, /data-action="session-permission-revoke" data-id="scope-a"/);
+  const withheld = c.sessionPermissionsHTML(receipt, { rows: [scope('scope-a', { applicability: { label: 'Expired', revoke: false } })] });
+  assert.match(withheld, />Expired</);
+  assert.match(withheld, /Expected read\/connect activity/);
+  assert.match(withheld, /does not grant network access/);
+  assert.ok(!withheld.includes('data-action="session-permission-revoke"'));
+  const absent = c.sessionPermissionsHTML(receipt, { rows: [scope('scope-a', { applicability: undefined })] });
+  assert.match(absent, /Applicability unknown/);
+  assert.match(absent, /Expected read\/connect activity/);
+  assert.ok(!absent.includes('data-action="session-permission-revoke"'));
 });
 
 test('receipt lookup is bound to its durable session and rejects malformed or oversized ID sets', () => {

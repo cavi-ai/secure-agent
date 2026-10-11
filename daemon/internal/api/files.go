@@ -47,18 +47,42 @@ func evidencePath(p string) (string, bool) {
 	return p, true
 }
 
+// fileEvidenceGate is what stored findings and session accesses say about
+// one path. A read error is unavailable. Both empty is missing. Any row is
+// known.
+type fileEvidenceGate int
+
+const (
+	fileEvidenceKnown fileEvidenceGate = iota
+	fileEvidenceMissing
+	fileEvidenceUnavailable
+)
+
+// fileEvidence reads at most limit findings and limit session accesses that
+// name path.
+func (a *API) fileEvidence(path string, limit int) ([]model.FileFinding, []model.FileAccess, fileEvidenceGate, error) {
+	findings, err := a.store.PathFindingsResult(path, limit)
+	if err != nil {
+		return nil, nil, fileEvidenceUnavailable, err
+	}
+	accesses, err := a.store.PathAccessesResult(path, limit)
+	if err != nil {
+		return nil, nil, fileEvidenceUnavailable, err
+	}
+	if len(findings) == 0 && len(accesses) == 0 {
+		return findings, accesses, fileEvidenceMissing, nil
+	}
+	return findings, accesses, fileEvidenceKnown, nil
+}
+
 // isEvidencePath reports whether a stored flag, incident or agent-session
-// file event names p.
+// file event names p. A read error means the answer is unavailable.
 func (a *API) isEvidencePath(p string) (bool, error) {
-	findings, err := a.store.PathFindingsResult(p, 1)
+	_, _, gate, err := a.fileEvidence(p, 1)
 	if err != nil {
 		return false, err
 	}
-	if len(findings) > 0 {
-		return true, nil
-	}
-	accesses, err := a.store.PathAccessesResult(p, 1)
-	return len(accesses) > 0, err
+	return gate == fileEvidenceKnown, nil
 }
 
 // handleFileDetail serves GET /files/detail?path=: what the daemon knows
@@ -73,17 +97,12 @@ func (a *API) handleFileDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path must be absolute and clean", http.StatusBadRequest)
 		return
 	}
-	findings, err := a.store.PathFindingsResult(p, fileListLimit)
-	if err != nil {
+	findings, accesses, gate, err := a.fileEvidence(p, fileListLimit)
+	if err != nil || gate == fileEvidenceUnavailable {
 		http.Error(w, "File evidence unavailable; retry", http.StatusServiceUnavailable)
 		return
 	}
-	accesses, err := a.store.PathAccessesResult(p, fileListLimit)
-	if err != nil {
-		http.Error(w, "File evidence unavailable; retry", http.StatusServiceUnavailable)
-		return
-	}
-	if len(findings) == 0 && len(accesses) == 0 {
+	if gate == fileEvidenceMissing {
 		http.Error(w, "no stored evidence names this path", http.StatusNotFound)
 		return
 	}
@@ -360,12 +379,12 @@ func (a *API) fileAction(w http.ResponseWriter, r *http.Request, action, flag st
 		http.Error(w, "path must be absolute and clean", http.StatusBadRequest)
 		return
 	}
-	known, err := a.isEvidencePath(p)
-	if err != nil {
+	_, _, gate, err := a.fileEvidence(p, 1)
+	if err != nil || gate == fileEvidenceUnavailable {
 		http.Error(w, "File evidence unavailable; retry", http.StatusServiceUnavailable)
 		return
 	}
-	if !known {
+	if gate != fileEvidenceKnown {
 		http.Error(w, "no stored evidence names this path", http.StatusNotFound)
 		return
 	}

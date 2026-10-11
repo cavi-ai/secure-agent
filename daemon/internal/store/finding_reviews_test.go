@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -79,6 +80,19 @@ func reviewFlag(id string) model.Flag {
 	at := time.Date(2026, 10, 8, 21, 0, 0, 0, time.UTC)
 	return model.Flag{ID: id, Rule: "sensitive-read-then-connect", Agent: "codex", PID: 42, SessionID: "session", Workspace: "/work", Severity: 3, TS: at,
 		Evidence: []model.EvidenceItem{{Kind: "read", Label: "/work/credentials", Sub: "sensitive read", PID: 42, Exe: "agent", TS: at.Format(time.RFC3339Nano)}, {Kind: "connect", Label: "203.0.113.5:443", Sub: "egress", PID: 42, TS: at.Add(time.Second).Format(time.RFC3339Nano)}}}
+}
+
+func insertReviewFlag(t *testing.T, s *Store, f model.Flag) {
+	t.Helper()
+	ev, err := json.Marshal(f.Evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.db.Exec(`INSERT INTO flags (id,rule,severity,ts,pid,agent,session_id,workspace,evidence) VALUES (?,?,?,?,?,?,?,?,?)`,
+		f.ID, f.Rule, f.Severity, f.TS.UTC().Format(time.RFC3339Nano), f.PID, f.Agent, f.SessionID, f.Workspace, string(ev))
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestReviewReadHealthFailureMissingAndRecovery(t *testing.T) {
@@ -205,6 +219,49 @@ func TestReviewStrongerLateEvidenceReopensAndRejectsStaleDecision(t *testing.T) 
 	r = onlyReview(t, s)
 	if r.Revision != 2 || r.Assessment.Risk != "critical" || r.EvidenceFlagID != "stronger" {
 		t.Fatalf("late weaker evidence downgraded review: %+v", r)
+	}
+}
+
+func TestReviewEqualRankKnownRiskReplacesUnknownEvidenceFlag(t *testing.T) {
+	s := reviewStore(t)
+	stored := reviewFlag("stored-unknown")
+	insertReviewFlag(t, s, stored)
+	unknown := model.FindingAssessment{DetectorSeverity: stored.Severity, Risk: "unknown", Control: "unknown", ResidualRisk: "unknown"}
+	if _, err := s.ObserveFindingReview(stored, unknown); err != nil {
+		t.Fatal(err)
+	}
+	r := onlyReview(t, s)
+	if r.Assessment.Risk != "unknown" || r.EvidenceFlagID != stored.ID {
+		t.Fatalf("unknown evidence: %+v", r)
+	}
+	known := reviewFlag("known-risk")
+	known.TS = known.TS.Add(time.Minute)
+	if _, err := s.PutFlag(known); err != nil {
+		t.Fatal(err)
+	}
+	r = onlyReview(t, s)
+	if r.Assessment.Risk != "high" || r.EvidenceFlagID != known.ID {
+		t.Fatalf("equal-rank known risk kept unknown evidence: %+v", r)
+	}
+}
+
+func TestReviewControlOnlyChangeKeepsEvidenceFlag(t *testing.T) {
+	s := reviewStore(t)
+	stored := reviewFlag("stored-evidence")
+	if _, err := s.PutFlag(stored); err != nil {
+		t.Fatal(err)
+	}
+	later := reviewFlag("control-only")
+	later.TS = later.TS.Add(time.Minute)
+	insertReviewFlag(t, s, later)
+	a := model.AssessFinding(later)
+	a.Control = "blocked"
+	if _, err := s.ObserveFindingReview(later, a); err != nil {
+		t.Fatal(err)
+	}
+	r := onlyReview(t, s)
+	if r.Assessment.Risk != "high" || r.Assessment.Control != "blocked" || r.EvidenceFlagID != stored.ID || r.LatestFlagID != later.ID {
+		t.Fatalf("control change replaced evidence: %+v", r)
 	}
 }
 

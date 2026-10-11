@@ -1,9 +1,12 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +14,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 func overviewJSON(t *testing.T, a *API, id string) map[string]any {
@@ -105,5 +109,39 @@ func TestSessionOverviewBoundedFindingsAndReadFailure(t *testing.T) {
 	a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/sessions/s/overview", nil))
 	if w.Code != 503 {
 		t.Fatalf("failed read presented as absence: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSessionOverviewFindingsFailureAndRecovery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "overview.db")
+	st, err := store.Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now()
+	st.UpsertSession(model.Session{ID: "session", StartedAt: now, Status: model.SessionEnded})
+	if _, err := st.PutFlag(model.Flag{ID: "flag", SessionID: "session", PID: 1, Rule: readConnectRule, Severity: 3, TS: now}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("UPDATE flags SET pid='invalid' WHERE id='flag'"); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	w := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/sessions/session/overview", nil))
+	if w.Code != 503 || strings.TrimSpace(w.Body.String()) != "session findings unavailable" {
+		t.Fatalf("findings failure misclassified or leaked storage details: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := db.Exec("UPDATE flags SET pid=1 WHERE id='flag'"); err != nil {
+		t.Fatal(err)
+	}
+	if findings := overviewJSON(t, a, "session")["findings"].([]any); len(findings) != 1 || findings[0].(map[string]any)["id"] != "flag" {
+		t.Fatalf("recovered findings missing: %+v", findings)
 	}
 }

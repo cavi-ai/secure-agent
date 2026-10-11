@@ -196,13 +196,13 @@ func (i *eventIngest) Feed(e event.Event) bool {
 		// become its evidence. The 323-identical-flags storm becomes
 		// one incident with a count, not 323 reports.
 		subject := intel.SubjectForFlag(fl)
-		openID, found, lookupErr := st.FindOpenIncidentResult(fl.Rule, fl.SessionID, subject)
-		if lookupErr != nil {
-			log.Printf("store: open incident lookup failed: %v", lookupErr)
+		updated, persisted, absorbErr := st.AbsorbOpenIncident(fl.Rule, fl.SessionID, subject, fl.ID, fl.TS)
+		if absorbErr != nil {
+			log.Printf("store: incident absorb failed: %v", absorbErr)
 			continue
 		}
-		if found {
-			if updated, ok := st.AggregateIntoIncident(openID, fl.ID, fl.TS); ok && deltas != nil {
+		if persisted {
+			if deltas != nil {
 				deltas.Publish(api.Delta{Type: "incident", Data: updated})
 			}
 			if postureChanged != nil {

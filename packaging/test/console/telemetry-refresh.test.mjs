@@ -22,12 +22,14 @@ function fixture(fetch) {
   const requests = [], renders = [], connections = [], failures = [], retries = [];
   let stops = 0, ended = 0;
   const ctx = {
-    window: { SA: {} },
+    window: { SA: {} }, URLSearchParams,
     sessionEnded: false, SS_TOKEN_KEY: 'fixture', consoleToken: 'fixture', lastSnapshotAt: 0, cancelDialog: null,
-    telemetryFetchGen: 0, telemetrySlowGen: 0,
+    telemetryFetchGen: 0, telemetrySlowGen: 0, expectedEgressReadGen: 0,
+    protectionContext: null, protectionContextGeneration: 0,
     pendingConsoleContext: null, handoffGeneration: 0, openConsoleContext: async () => {},
     sessionMemoryGeneration: 0, sessionTimelineRequest: 0, sessionOverviewGeneration: 0, sessionOutcomesGeneration: 0,
     sessionMemoryState: {}, sessionOverviewState: {}, sessionOverviewRefreshAgain: false, sessionOutcomesState: {},
+    sessionTimelineState: {},
     historyScopes: { flags: null, events: null }, timelineSession: null,
     reviewCursor: '', sinceParam: () => '',
     filters: { flags: { agent: 'all', rule: 'all', minsev: 'all', since: 'all' }, events: { kind: 'all', since: 'all' } },
@@ -40,14 +42,14 @@ function fixture(fetch) {
     telemetryData: { status: { uptime: 'prior' }, flags: [], events: [], guardPending: [{ id: 'prior' }], costs: { refreshing: true } },
     failedEndpoints: new Set(), noteEndpointFailure: key => failures.push(key),
     prevUptimeSec: 0, parseUptimeSec: () => 1, showToast() {},
-    renderReportHealth() {}, loadSpend() {}, sparkIngestEvents() {}, reconcileRetriage() {},
+    renderReportHealth() {}, renderSnapshotHealth() {}, loadSpend() {}, sparkIngestEvents() {}, reconcileRetriage() {},
     isFlagsFiltered: () => false, isEventsFiltered: () => false, homeGroupOpen: () => false,
     flagsQuery: () => '/flags?fixture', eventsQuery: () => '/events?fixture',
     setConnState: state => connections.push(state),
     booted: true, PANELS: [['flags'], ['notify'], ['resources'], ['audit']], SLOW_ONLY: new Set(['resources', 'audit']), notifyCfgHash: '',
     markDirty: (...panels) => renders.push(panels), renderAll: () => renders.push('all'),
     fillFamilyDrawer() {}, renderNow: panels => renders.push(panels),
-    spendGen: 0, spendPollTimer: 2, spendPolls: 0, SPEND_POLLS: 30, SPEND_POLL_MS: 2000,
+    spendDayGen: 0, resetSpendDay() {}, spendGen: 0, spendPollTimer: 2, spendPolls: 0, SPEND_POLLS: 30, SPEND_POLL_MS: 2000,
     spendCardPath: () => '/costs?card'
   };
   vm.createContext(ctx);
@@ -60,13 +62,32 @@ function fixture(fetch) {
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/report-health.js', import.meta.url), 'utf8'), ctx);
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/telemetry-validation.js', import.meta.url), 'utf8'), ctx);
   ctx.reportHealth = ctx.createConsoleReportHealth();
-  vm.runInContext(source('  function endSession()', '  let handoffGeneration') +
+  vm.runInContext(source('  function clearProtectionContext()', '  async function saveExpectedEgress(') +
+    source('  function endSession()', '  let handoffGeneration') +
     source('  function reportSucceeded(', '  // parseUptimeSec reads') +
     source('  function eventsHistoryScope()', '  function flagsQuery()') +
     source('  async function fetchTelemetry(', '  // Every panel is a candidate:'), ctx);
   return { ctx, requests, renders, connections, failures, retries, stops: () => stops, ended: () => ended };
 }
 const snapshot = () => response({ status: { uptime: 'new' }, flags: [], events: [] });
+
+test('snapshot recovery clears its failure only after the replacement data is published', async () => {
+  const guard = deferred();
+  const f = fixture(path => path === '/snapshot' ? Promise.resolve(snapshot()) : guard.promise);
+  f.ctx.reportHealth.success('snapshot');
+  f.ctx.reportHealth.failure('snapshot', 'HTTP 503');
+  const prior = f.ctx.telemetryData.status;
+  const read = f.ctx.fetchTelemetry({ slow: false });
+  await new Promise(setImmediate);
+  assert.equal(f.ctx.telemetryData.status, prior);
+  assert.equal(f.ctx.lastSnapshotAt, 0);
+  assert.equal(f.ctx.reportHealth.failures(['snapshot'])[0].error, 'HTTP 503');
+  guard.resolve(response([]));
+  await read;
+  assert.equal(f.ctx.telemetryData.status.uptime, 'new');
+  assert.ok(f.ctx.lastSnapshotAt > 0);
+  assert.equal(f.ctx.reportHealth.failures(['snapshot']).length, 0);
+});
 
 test('failed or foreign page navigation retains rows and only a successful page advances the cursor', async () => {
   let mode = 'first';
@@ -766,4 +787,109 @@ test('changing a filter after applying a saved view updates the active query', (
   change();
   assert.match(queries.at(-1), /agent=codex/);
   assert.equal(f.ctx.filters.flags.agent, 'codex');
+});
+
+function enableDaySelection(f) {
+  vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/lib.js', import.meta.url), 'utf8'), f.ctx);
+  vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/tab-overview.js', import.meta.url), 'utf8'), f.ctx);
+  vm.runInContext(source('  function resetSpendDay(', '  // Spend card controls:'), f.ctx);
+  f.ctx.telemetryData.costsCard = { by: 'day', since: '2026-10-07T04:00:00.000Z', until: '2026-10-10T12:00:00.000Z', rows: [
+    { key: '2026-10-08', calls: 2, cost_usd: 8 }, { key: '2026-10-09', calls: 3, cost_usd: 9 }] };
+  f.ctx.telemetryData.costsCardTZ = -240;
+}
+function dayResponse(path, cost) {
+  const q = new URLSearchParams(path.split('?')[1]);
+  return response({ by: 'repo', since: q.get('since'), until: q.get('until'), total: { calls: 2, cost_usd: cost }, rows: [{ key: 'fixture-repo', calls: 2, cost_usd: cost }] });
+}
+for (const race of ['new selection', 'clear', 'auth replacement']) {
+  test('delayed day response cannot publish after ' + race, async () => {
+    const old = deferred();
+    let oldPath;
+    const f = fixture(path => { if (!oldPath) { oldPath = path; return old.promise; } return Promise.resolve(dayResponse(path, 9)); });
+    enableDaySelection(f);
+    f.ctx.selectSpendDay('2026-10-08');
+    await new Promise(resolve => setImmediate(resolve));
+    if (race === 'new selection') f.ctx.selectSpendDay('2026-10-09');
+    else if (race === 'clear') f.ctx.resetSpendDay();
+    else f.ctx.handoffGeneration++;
+    old.resolve(dayResponse(oldPath, 8));
+    await new Promise(resolve => setImmediate(resolve));
+    if (race === 'new selection') {
+      assert.equal(f.ctx.telemetryData.spendDay, '2026-10-09');
+      assert.equal(f.ctx.telemetryData.spendDayReport.total.cost_usd, 9);
+    } else assert.equal(f.ctx.telemetryData.spendDayReport, null);
+    const q = new URLSearchParams(oldPath.split('?')[1]);
+    assert.equal(q.get('since'), '2026-10-08T04:00:00.000Z');
+    assert.equal(q.get('until'), '2026-10-09T04:00:00.000Z');
+    assert.equal(q.get('tz'), '-240');
+  });
+}
+
+test('a different-range report cannot claim to be the selected day and refresh retains selection', async () => {
+  let wrong = true;
+  const f = fixture(path => Promise.resolve(wrong ? response({by:'repo',since:'2026-10-07T04:00:00Z',until:'2026-10-10T12:00:00Z',total:{calls:8,cost_usd:50},rows:[]}) : dayResponse(path,8)));
+  enableDaySelection(f);
+  f.ctx.selectSpendDay('2026-10-08');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.ctx.telemetryData.spendDayReport, null);
+  assert.match(f.ctx.telemetryData.spendDayRefresh.error, /does not match/);
+  wrong = false;
+  await f.ctx.loadSpendDay();
+  assert.equal(f.ctx.telemetryData.spendDay, '2026-10-08');
+  assert.equal(f.ctx.telemetryData.spendDayReport.total.cost_usd, 8);
+});
+
+
+function inspectionUI(f) {
+  const ctx=f.ctx;
+  ctx.telemetryData.expectedEgress=[];
+  const targets=new Map();
+  const target=id=>{
+    if(!targets.has(id))targets.set(id,{dataset:{expectedEgressRule:id},focus(){ctx.document.activeElement=this;},scrollIntoView(){}});
+    return targets.get(id);
+  };
+  const fallback={focus(){ctx.document.activeElement=this;},scrollIntoView(){}};
+  const container={querySelectorAll:()=>ctx.telemetryData.expectedEgress.filter(rule=>!rule.revoked_at).map(rule=>target(rule.id)),querySelector:()=>fallback};
+  ctx.document={activeElement:null,getElementById:()=>container};
+  ctx.switchTab=()=>{};
+}
+
+test('a full refresh started before bounded expectation inspection cannot overwrite its newer exact rule', async()=>{
+  const old=deferred(),started=deferred();let reads=0;
+  const f=fixture(path=>{
+    if(path==='/snapshot')return Promise.resolve(snapshot());
+    if(path==='/expected-egress'){
+      if(++reads===1){started.resolve();return old.promise;}
+      return Promise.resolve(response({rules:[{id:'exact',rationale:'new direct read'}]}));
+    }
+    return Promise.resolve(response([]));
+  });
+  inspectionUI(f);
+  const full=f.ctx.fetchTelemetry();await started.promise;
+  await f.ctx.viewEgressExpectation('exact','origin');
+  old.resolve(response({rules:[{id:'old'}]}));await full;
+  assert.equal(reads,2,'one full-refresh read and one bounded missing-rule read');
+  assert.equal(f.ctx.telemetryData.expectedEgress[0].id,'exact');
+  assert.equal(f.ctx.telemetryData.expectedEgress[0].rationale,'new direct read');
+  assert.equal(f.ctx.document.activeElement.dataset.expectedEgressRule,'exact');
+});
+
+test('a newer full refresh owns expectation data when an older bounded inspection read finishes last', async()=>{
+  const old=deferred(),started=deferred();let reads=0;
+  const f=fixture(path=>{
+    if(path==='/snapshot')return Promise.resolve(snapshot());
+    if(path==='/expected-egress'){
+      if(++reads===1){started.resolve();return old.promise;}
+      return Promise.resolve(response({rules:[{id:'exact',rationale:'fresh full refresh'}]}));
+    }
+    return Promise.resolve(response([]));
+  });
+  inspectionUI(f);
+  const direct=f.ctx.viewEgressExpectation('exact','origin');await started.promise;
+  await f.ctx.fetchTelemetry();
+  old.resolve(response({rules:[{id:'obsolete'}]}));await direct;
+  assert.equal(reads,2);
+  assert.equal(f.ctx.telemetryData.expectedEgress[0].id,'exact');
+  assert.equal(f.ctx.telemetryData.expectedEgress[0].rationale,'fresh full refresh');
+  assert.equal(f.ctx.document.activeElement.dataset.expectedEgressRule,'exact');
 });

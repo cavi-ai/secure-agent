@@ -1,12 +1,12 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
-	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 // SessionOverview keeps current controls separate from retained evidence.
@@ -40,25 +40,20 @@ type SessionResources struct {
 }
 
 func (a *API) serveSessionOverview(w http.ResponseWriter, r *http.Request, id string) {
-	sess, found, err := a.store.GetSessionResult(id)
+	evidence, err := readSessionOverviewEvidence(a.store, id)
 	if err != nil {
-		http.Error(w, "session status unavailable", http.StatusServiceUnavailable)
+		switch {
+		case errors.Is(err, errSessionOverviewMissing):
+			http.Error(w, "session not found", http.StatusNotFound)
+		case errors.Is(err, errSessionOverviewStatus):
+			http.Error(w, "session status unavailable", http.StatusServiceUnavailable)
+		default:
+			http.Error(w, "session findings unavailable", http.StatusServiceUnavailable)
+		}
 		return
 	}
-	if !found {
-		http.Error(w, "session not found", http.StatusNotFound)
-		return
-	}
-	const findingCap = 20
-	flags, err := a.store.QueryFlagsResult(store.FlagFilter{SessionID: id, Limit: findingCap + 1})
-	if err != nil {
-		http.Error(w, "session findings unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	out := SessionOverview{SessionID: id, ObservedAt: time.Now().UTC(), Requests: []AttentionItem{}, Findings: []SessionFinding{}, FindingsTruncated: len(flags) > findingCap}
-	for _, f := range flags[:min(len(flags), findingCap)] {
-		out.Findings = append(out.Findings, SessionFinding{ID: f.ID, Title: memoryRuleTitle(f.Rule), At: f.TS, Assessment: assessmentForFlag(f)})
-	}
+	sess := evidence.Session
+	out := SessionOverview{SessionID: id, ObservedAt: time.Now().UTC(), Requests: []AttentionItem{}, Findings: evidence.Findings, FindingsTruncated: evidence.Truncated}
 	if a.guardBroker != nil {
 		for _, p := range a.guardBroker.Pending() {
 			if p.SessionID == id {

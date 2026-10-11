@@ -16,6 +16,7 @@ type ReportEvidence struct {
 	Interventions ReportSourceEvidence `json:"interventions"`
 }
 
+// Partial is the export signal: any source is unavailable or at its limit.
 func (e ReportEvidence) Partial() bool {
 	for _, source := range []ReportSourceEvidence{e.Events, e.Flags, e.Reviews, e.Incidents, e.Interventions} {
 		if !source.Available || source.AtLimit {
@@ -23,4 +24,14 @@ func (e ReportEvidence) Partial() bool {
 		}
 	}
 	return false
+}
+
+// PlanCoreUnavailable is the plan rule. It is true when events or flags
+// are unavailable. AtLimit and reviews, incidents, and interventions do
+// not trip it. A nil ReportEvidence does not.
+func (e *ReportEvidence) PlanCoreUnavailable() bool {
+	if e == nil {
+		return false
+	}
+	return !e.Events.Available || !e.Flags.Available
 }

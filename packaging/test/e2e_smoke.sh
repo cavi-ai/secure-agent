@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 python3 "$SCRIPT_DIR/packaging/test/test_e2e_sse.py"
+python3 "$SCRIPT_DIR/packaging/test/test_e2e_fixture.py"
 tmp="$(mktemp -d)"
 COLLECTOR_PID=""
 ADVISOR_STUB_PID=""
@@ -270,6 +271,21 @@ go build -o "$tmp/fake-cursor" "$tmp/fake_cursor_main.go"
 AGENT_PID=$!
 FIXTURE_AGENT_PID=$AGENT_PID
 
+# Fail at the fixture's error instead of waiting through unrelated gates.
+check_fixture_alive() {
+  if kill -0 "$AGENT_PID" 2>/dev/null; then
+    return 0
+  fi
+  local fixture_status=0
+  wait "$AGENT_PID" || fixture_status=$?
+  echo "E2E fixture exited before correlation (exit $fixture_status)." >&2
+  cat "$tmp/fake-agent.log" >&2
+  if [ "$(uname -s)" = Darwin ]; then
+    echo "If the non-loopback TCP probe failed, run this test from Terminal or grant the launching app Local Network access in System Settings > Privacy & Security." >&2
+  fi
+  return 1
+}
+
 echo "Waiting for flag & incident report via API..."
 PASSED=false
 INCIDENT_PASSED=false
@@ -278,6 +294,7 @@ FLAGS_RESP=""
 CORRELATION_FLAGS_RESP=""
 
 for _ in $(seq 1 30); do
+  check_fixture_alive
   FLAGS_RESP=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/flags 2>/dev/null || true)
   INCIDENT_RESP=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/incidents 2>/dev/null || true)
 

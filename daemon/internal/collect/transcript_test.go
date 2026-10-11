@@ -198,15 +198,35 @@ func TestNewSessionFileReadFromStart(t *testing.T) {
 	}
 
 	b := bus.New(16)
+	defer b.Close()
 	sub := b.Subscribe()
 	ts := NewTranscriptScanner(b, []string{projectsDir})
 	ts.tailEvery = 20 * time.Millisecond
 	ts.resolveEvery = 50 * time.Millisecond
-	ts.activeWindowD = 100 * time.Millisecond
+	ts.activeWindowD = time.Minute
+	// The second resolve begins only after startup has seeded existing files.
+	// A fixed sleep can create this transcript before that first pass finishes.
+	ready := make(chan struct{})
+	passes := 0
+	ts.ExtraTargets = func() []string {
+		passes++
+		if passes == 2 {
+			close(ready)
+		}
+		return nil
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go ts.Run(ctx)
-	time.Sleep(200 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = ts.Run(ctx)
+	}()
+	defer func() { cancel(); <-done }()
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("scanner did not finish startup")
+	}
 
 	logPath := filepath.Join(projectsDir, "brand-new.jsonl")
 	line := `{"sessionId":"new-s","type":"user","timestamp":"2026-09-20T17:46:53.118Z","message":{"content":"first prompt"}}` + "\n"

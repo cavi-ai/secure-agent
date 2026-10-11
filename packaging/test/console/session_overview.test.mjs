@@ -25,6 +25,19 @@ test('failed current-status read keeps evidence and disables live actions', () =
   assert.match(html, /data-action="session-overview-retry"/);
 });
 
+test('first current-status failure does not imply any prior status and retry stays disabled while pending', () => {
+  const first = ctx.sessionOverviewHTML(null, { error: 'unavailable' });
+  assert.match(first, /Current session status unavailable/);
+  assert.ok(!first.includes('Last known'));
+  assert.ok(!first.includes('No retained findings'));
+  const pending = ctx.sessionOverviewHTML(null, { error: 'unavailable', loading: true });
+  assert.match(pending, /data-action="session-overview-retry" disabled/);
+  const stale = ctx.sessionOverviewHTML({ session_id: 'own', requests: [{ id: 'g', detail: 'Read request' }], findings: [] }, { error: 'unavailable', loading: true });
+  assert.match(stale, /Last known session status/);
+  assert.match(stale, /<fieldset[^>]*disabled/);
+  assert.match(stale, /data-action="session-overview-retry" disabled/);
+});
+
 test('overview escapes identifiers and labels at the DOM boundary', () => {
   const hostile = '<img src=x onerror=alert(1)>';
   const html = ctx.sessionOverviewHTML({ session_id: hostile, requests: [{ id: hostile, detail: hostile, path: hostile }], findings: [{ id: hostile, title: hostile, assessment: { residual_risk: hostile } }] }, {});

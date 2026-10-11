@@ -226,3 +226,70 @@ test('an expectation clears the episodes it covers before the daemon answers', (
   const gone = ctx.egressAfterExpect(t, 'missing', 'destination');
   assert.equal(gone.egressEpisodes, t.egressEpisodes);
 });
+
+
+test('View expectation uses only the served rule ID and exact episode, escaping both', () => {
+  const observed = {host:'same.example.com',recurring:true};
+  const served = ctx.egressEpisodeHTML({id:'episode"<&',expected:true,expected_rule_id:'rule"<&',observed});
+  assert.match(served, /data-action="view-egress-expectation" data-id="rule&quot;&lt;&amp;" data-episode-id="episode&quot;&lt;&amp;"/);
+  assert.match(served, /data-egress-episode-id="episode&quot;&lt;&amp;" tabindex="-1"/);
+  for (const row of [{id:'pending',expected:true,observed}, {id:'candidate',expected:false,expected_rule_id:'r',observed}]) {
+    assert.doesNotMatch(ctx.egressEpisodeHTML(row), /view-egress-expectation/);
+  }
+});
+
+test('selected expectation is a named exact target while retaining scope, rationale and revoke semantics', () => {
+  const html = ctx.expectedEgressRuleHTML({id:'r',kind:'scope',agent:'claude',exe_path:'/bin/cli',harness:'claude',workspace:'/work',rationale:'Weekly task'}, true);
+  assert.match(html, /class="expected-egress-row is-context-target" data-expected-egress-rule="r" tabindex="-1" role="group" aria-label="Saved expectation" aria-current="true"/);
+  assert.match(html, /All destinations · claude · \/bin\/cli · claude · \/work/);
+  assert.match(html, /Weekly task/);
+  assert.match(html, /data-action="revoke-expected-egress" data-id="r"/);
+});
+
+test('context feedback distinguishes exact availability, revoked rules, loading, failed reads and missing origins', () => {
+  const context = {ruleId:'exact',episodeId:'origin',phase:'rules',status:'ready'};
+  assert.match(ctx.protectionContextHTML(context, [{id:'other',host:'same'}], []), /no longer available/);
+  assert.match(ctx.protectionContextHTML(context, [{id:'exact',revoked_at:'now'}], []), /was revoked/);
+  assert.match(ctx.protectionContextHTML({...context,status:'loading'}, [], []), /Loading the saved expectation/);
+  assert.match(ctx.protectionContextHTML({...context,status:'error'}, [], []), /could not be loaded/);
+  assert.match(ctx.protectionContextHTML(context, [{id:'exact'}], []), /scope and rationale/);
+  assert.match(ctx.protectionContextHTML({...context,phase:'traffic'}, [], []), /original activity is no longer available/);
+  assert.match(ctx.protectionContextHTML({...context,phase:'traffic'}, [], [{id:'origin',observed:{recurring:true}}]), /Returned to the original activity/);
+});
+
+
+test('expectation renderer reconciles stable harness and exact-rule keys without replacing its container', () => {
+  const focused = {isConnected:true,dataset:{}};
+  const container = {contains:()=>true,querySelectorAll:()=>[list],set innerHTML(_value){throw new Error('Container rebuilt');}};
+  const list = {dataset:{expectedHarness:'claude'}};
+  const rules = [{id:'one',harness:'claude',kind:'destination',host:'api.example.com',port:443,agent:'claude',rationale:'Work'}];
+  const calls=[];
+  ctx.document = {activeElement:focused,getElementById:id=>id==='expected-egress-container'?container:{}};
+  focused.closest=()=>null;
+  ctx.window={SA:{t:{expectedEgress:rules,egressEpisodes:[]},protectionContext:{ruleId:'one',episodeId:'origin',phase:'rules',status:'ready'}}};
+  ctx.patchList=(target,items,opts)=>calls.push({target,parts:items.map(item=>({key:opts.key(item),html:opts.html(item)}))});
+  ctx.renderExpectedEgressRules();
+  ctx.window.SA.t.expectedEgress=rules.map(rule=>({...rule}));
+  ctx.renderExpectedEgressRules();
+  assert.deepEqual(calls[0].parts,calls[2].parts,'refresh retains keyed harness shells');
+  assert.deepEqual(calls[1].parts,calls[3].parts,'unchanged exact rules retain the same keyed markup');
+  assert.equal(calls[1].parts[0].key,'one');
+  assert.equal(ctx.document.activeElement,focused);
+});
+
+test('updated selected rule restores existing non-destructive focus without scrolling', () => {
+  const focusCalls=[];
+  const previous = {isConnected:true,dataset:{},closest:()=>({dataset:{expectedEgressRule:'one'}})};
+  const replacement = {dataset:{expectedEgressRule:'one'},querySelectorAll:()=>[],focus:options=>focusCalls.push(options)};
+  const list = {dataset:{expectedHarness:'claude'}};
+  const container = {contains:()=>true,querySelectorAll:selector=>selector==='[data-expected-harness]'?[list]:[replacement],querySelector:()=>null};
+  ctx.document={activeElement:previous,getElementById:id=>id==='expected-egress-container'?container:{}};
+  ctx.window={SA:{t:{expectedEgress:[{id:'one',harness:'claude'}]},protectionContext:{ruleId:'one',phase:'rules'}}};
+  ctx.patchList=target=>{if(target===list)previous.isConnected=false;};
+  ctx.renderExpectedEgressRules();
+  assert.equal(focusCalls.length,1);
+  assert.equal(focusCalls[0].preventScroll,true);
+  previous.isConnected=true;container.contains=()=>false;
+  ctx.renderExpectedEgressRules();
+  assert.equal(focusCalls.length,1,'refresh must not steal outside focus');
+});

@@ -323,7 +323,8 @@ function needsItems(posture) {
 function needView(item, ctx) {
   const g = item.group || {};
   const id = escapeHTML(item.id);
-  const v = { key: `${item.kind}:${item.id}`, kind: item.kind, agent: g.agent || '', sev: 'sev-bad', word: 'critical',
+  const a = item.assessment || (item.review || {}).assessment;
+  const v = { key: `${item.kind}:${item.id}`, kind: item.kind, agent: g.agent || '', sev: 'sev-bad', word: a ? assessmentDisplay(a).text : 'critical', assessment: a,
     what: item.detail || item.title || '', why: '', at: '', items: [], body: null };
   switch (item.kind) {
     case 'review': {
@@ -334,7 +335,7 @@ function needView(item, ctx) {
       return { ...v, agent: r.agent || v.agent, what: (c.resources || []).join(', ') || item.title,
         why: (r.assessment || {}).reason || '', at: r.last_seen,
         items: r.evidence_available ? [
-          { label: 'Mark reviewed', attrs: attrs('acknowledge'), bar: true },
+          { label: 'Mark reviewed', title: 'Records this evidence revision as reviewed; risk and control outcomes stay unchanged.', attrs: attrs('acknowledge'), bar: true },
           { label: 'Report closure', attrs: attrs('close_reported') },
           ...reviewPermissionItems(r),
         ] : [], body: () => reviewHTML(r, ctx.SA.reviewDrafts && ctx.SA.reviewDrafts.get(r.id), false) };
@@ -367,10 +368,12 @@ function needView(item, ctx) {
     }
     case 'flag': {
       const f = ctx.flags.get(item.id);
-      if (!f) return { ...v, items: [{ label: 'Dismiss', attrs: `data-action="dismiss-flag" data-id="${id}"`, bar: true }] };
+      if (!f) return { ...v, items: [{ label: 'View evidence', attrs: `data-action="open-flag" data-id="${id}"`, bar: true }] };
       const l = explainLines(f, ctx.now);
       const plan = { label: 'What to do', attrs: `data-action="open-plan" data-subject="flag:${id}"` };
-      return { ...v, what: (l && l.what) || v.what, why: (l && (l.why || l.state)) || '', at: f.ts,
+      const assessment = (f.explain || {}).assessment || a;
+      return { ...v, assessment, word: assessment ? assessmentDisplay(assessment).text : v.word,
+        what: (l && l.what) || v.what, why: assessment ? '' : (l && (l.why || l.state)) || '', at: f.ts,
         items: f.explain ? leadOnly(explainActionItems(f, [retriageItem(ctx, f.id)].filter(Boolean)), plan) : flagActionItems(f, ctx),
         body: () => flagBodyHTML(f, ctx, false) };
     }
@@ -400,13 +403,14 @@ function needRowHTML(v, open, nowMs) {
     + `${v.body ? '<svg class="icon need-chev" aria-hidden="true"><use href="#i-arrow"/></svg>' : ''}</span>`;
   const inner = `${harnessChipHTML(v.agent)}<span class="need-what" title="${escapeHTML(v.what)}">${escapeHTML(v.what)}</span>`
     + `<span class="need-why">${escapeHTML(v.why)}</span>${meta}`;
-  const head = v.body
-    ? `<button type="button" class="need-head" data-action="toggle-row" data-key="need:${escapeHTML(v.key)}" aria-expanded="${open}" aria-controls="${dom}">${inner}</button>`
-    : `<div class="need-head">${inner}</div>`;
-  return `<li class="need ${v.sev}${open ? ' open' : ''}" data-kind="${escapeHTML(v.kind)}">${head}`
-    + `<div class="need-actions">${actionBarHTML(v.items)}</div>`
-    + (v.body ? `<div class="need-detail" id="${dom}"${open ? '' : ' hidden'}>${open ? v.body() : ''}</div>` : '')
-    + '</li>';
+  const [kind, ...id] = v.key.split(':');
+  const selected = !!v.selected;
+  const head = `<button type="button" class="need-head" data-action="select-attention" data-need-kind="${escapeHTML(kind)}" data-need-id="${escapeHTML(id.join(':'))}" aria-pressed="${selected}">${inner}</button>`;
+  const lead = (v.items || []).find(i => i.bar);
+  return `<li class="need need-row ${v.sev}${v.assessment ? ' need-assessed' : ''}${selected ? ' is-selected' : ''}" data-kind="${escapeHTML(v.kind)}" data-need-key="${escapeHTML(v.key)}">${head}`
+    + (v.assessment ? `<div class="need-assessment">${assessmentHTML(v.assessment)}</div>` : '')
+    + (lead && lead.title ? `<p class="need-consequence">${escapeHTML(lead.title)}</p>` : '')
+    + `<div class="need-actions">${actionBarHTML(v.items)}</div></li>`;
 }
 
 function renderAttention() {
@@ -415,6 +419,7 @@ function renderAttention() {
   const list = document.getElementById('attention-list');
   const badge = document.getElementById('badge-attention-count');
   if (!list) return;
+  SA.reconcileAttention?.();
   renderCoverage();
   // The daemon serves the queue on /posture; needs_you counts its items, the
   // same set the menubar shows.
@@ -423,7 +428,7 @@ function renderAttention() {
   SA.setTabBadge('home', count);
   if (panel) panel.hidden = count === 0;
   const ctx = homeContext(SA);
-  const views = needsItems(SA.t.posture).map(it => needView(it, ctx));
+  const views = needsItems(SA.t.posture).map(it => ({ ...needView(it, ctx), selected: SA.attentionKey === `${it.kind}:${it.id}` }));
   patchList(list, views, { key: v => v.key, html: v => needRowHTML(v, SA.expanded.has('need:' + v.key), ctx.now) });
 }
 

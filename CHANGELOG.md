@@ -11,14 +11,15 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Chat: read tools for built-in skills, findings and session activity, with tool progress; **New chat** resets the context.
 - CLI: `secure-agent telemetry repair`.
 - Console: a System tab for worktrees and clutter, filtered by the header search, replaces Sessions → Cleanup.
-- Console: a notice on any report that failed to refresh.
+- Console: a notice on any report that failed to refresh, and a banner that claims all-clear only after telemetry loads, with **Retry**.
 - Console: the same reads across agents are one decision with **Treat as routine** and **Dismiss all** (`flag_ids` on `POST /expected`).
 - Cursor: Secure Agent's tool hooks run beside the user's hooks.
+- Documentation: guides for setup, first session, coverage and troubleshooting, generated CLI, configuration and API references, and a docs archive on each stable release.
 - Findings: evidence, control, residual risk and review state shown apart; reviews are saved per evidence revision, reopen on stronger evidence and keep the risk (`/reviews`).
 - Findings: send selected findings to the local agent's review queue.
 - Findings: agent-scoped `.env` exceptions for test and non-secret files.
 - Findings: `test-value` evidence for secrets that look like test values.
-- Guard and findings: **Allow once** by default; session, 24-hour and 7-day permissions cover one file, workspace or endpoint and are revoked under Policy (`/decision-scopes`).
+- Guard and findings: **Allow once** by default; session, 24-hour and 7-day permissions cover one file, workspace or endpoint and are revoked under Protection → Rules & permissions (`/decision-scopes`).
 - Incidents: **Dismiss** in Needs you; **Mark as routine** and the advisor above the report's evidence.
 - Incidents: reported remediation in the console, menu bar and exports, flagged when newer evidence arrives.
 - Pricing: Claude Sonnet 5.5.
@@ -50,11 +51,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: findings show their file and destinations as chips.
 - Console: the page fills wide windows, with decision groups two-up.
 - Console: disabled buttons are dimmed.
+- Console: a Protection tab with Traffic, Rules & permissions, Secret sources and Audit replaces Egress and Policy; recurring activity opens its saved expectation.
 - Console: the session view, filters, scroll and focus survive Back and Forward, drawers and expired credentials, which pause controls until the console reconnects.
-- Console and menu bar: Home and the hero list only decisions that need you; warnings and recurring connections stay in the findings history, now a compact log.
+- Console and menu bar: Home and the hero list only decisions that need you, each with its evidence, uncertainty, control outcome and action consequences; warnings and recurring connections stay in the findings history, now a compact log.
 - Dependencies: `modernc.org/sqlite` 1.60.1.
 - Egress: infra apps' endpoints count as `uninspected_infra`.
-- Egress: the warning badge counts pending decisions.
 - Findings: critical findings sort first.
 - Findings: temporal and parent-process correlations labeled apart from direct activity.
 - Findings: weak historical findings stay at review severity.
@@ -67,6 +68,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: sessions, findings and incidents open in the console at that record.
 - Performance: snapshots, posture and store lookups do about half the work.
 - Posture: uninspected egress alone is all-clear.
+- Protection → Traffic: the Recurring activity badge counts pending decisions.
 - Sessions: a compact navigator and activity ledger; narrow windows switch between list and detail.
 - Sessions: a tool call with no result is marked `incomplete` after 24 hours.
 - Settings: a sidebar of pages under Protection, Alerts, Monitoring, Secure Agent and General.
@@ -74,7 +76,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Settings → Exceptions: muted flags grouped by rule, beside allowed files.
 - Settings → File Guard and Notifications: mode menus replace segmented controls.
 - Settings → Providers: every daemon harness by name with its mark, Codex, Cursor, OpenClaw and Hermes first, toggles applied without a restart.
-- Spend: saved spend shows at once while it refreshes; one quota per shared Codex account.
+- Spend: saved spend shows at once while it refreshes; one quota per shared Codex account; a daily usage bar opens that day's breakdown.
 - Worktrees: the live-session button reads **Ask <harness>**.
 - Worktrees: the advisor sees the merge verdict and the default branch's side.
 
@@ -110,14 +112,17 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Fleet: `/status` and `/fleet` share one live `fleet_configured`.
 - Fleet: security alerts keep delivery capacity when traces fill the queue.
 - Forensic archive: kept when rotation fails.
-- Incidents: a report opens from any aggregated flag and keeps its newest evidence time, original flag and saved remediation; a duplicate never replaces it.
+- Findings and incidents: lists and retention keep the newest by exact timestamp.
+- Incidents: a report opens from any aggregated flag, workflow actions change only that report, and it keeps its newest evidence time, original flag and saved remediation; a duplicate never replaces it.
 - Menu bar: a hidden status item is recreated once per loss.
+- Menu bar: an action's result stays visible after its finding leaves the queue.
 - OpenCode: history read in bounded pages.
 - Policy files: an edit fails and leaves the file intact while a notification, mute, allowlist, expected-pattern, firewall or resource policy file is unreadable.
 - Pricing: stored calls priced when a price is added.
 - Resource episodes: include the session's tool calls, model calls and late file events.
 - Routing: the proxy URL carries the token.
 - Sessions: activity timestamps only move forward.
+- Sessions: failed Trace and status reads keep the last loaded data with a stale warning and **Retry**.
 - Sessions: rekeying is atomic.
 - Sessions: a silent session rooted in another family's infra ends after an hour.
 - Sessions: Antigravity sessions are recorded as `antigravity`.

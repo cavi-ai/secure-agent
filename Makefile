@@ -1,4 +1,19 @@
-.PHONY: all build test install uninstall clean daemon menubar cli collector smoke app dmg icon lint
+.PHONY: all build test install uninstall clean daemon menubar cli collector smoke app dmg icon lint docs docs-reference docs-check docs-test docs-archive
+
+docs-reference:
+	python3 packaging/docs/build.py reference
+
+docs-check:
+	python3 packaging/docs/build.py check
+
+docs-test:
+	python3 -m unittest discover -s packaging/docs -p 'test_*.py'
+
+docs:
+	python3 packaging/docs/build.py build
+
+docs-archive:
+	python3 packaging/docs/build.py archive
 
 app:
 	./packaging/make_app.sh

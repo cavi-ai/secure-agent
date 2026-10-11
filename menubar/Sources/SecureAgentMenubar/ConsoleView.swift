@@ -48,6 +48,7 @@ struct ConsoleView: View {
             }
             if showsHero { hero }
             if let pending = state.pendingGuard, state.connected { guardDecisionCard(pending) }
+            if let result = actionResultModel { actionResultCard(result) }
             if !state.agentRoots.isEmpty { sessionCards }
             if let incident = state.incidents.first(where: { $0.remediation?.steps.contains { $0.status == "reported" } == true }), let remediation = incident.remediation {
                 VStack(alignment: .leading, spacing: 4) {
@@ -166,9 +167,13 @@ struct ConsoleView: View {
         let subtitle: String
         let flag: FlagModel?
         let action: AppState.HeroAction?
+        var item: PostureItemModel? = nil
 
         /// Served title, then `explain.what`, then the disposition text.
         var flagLines: [String] {
+            if let item, let assessment = item.assessment {
+                return ([item.title] + assessment.summaryLines).filter { $0 != subtitle }
+            }
             guard let flag else { return [] }
             let title = (flag.title?.isEmpty == false) ? flag.title! : flag.rule
             let assessment = flag.explain?.assessment
@@ -205,6 +210,19 @@ struct ConsoleView: View {
             }
             if let flag = m.flag {
                 heroFlagBlock(flag, lines: m.flagLines, action: m.action, label: m.buttonLabel)
+            } else if let item = m.item {
+                ForEach(Array(m.flagLines.enumerated()), id: \.offset) { _, line in
+                    Text(line).font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Button("Open in console") {
+                    switch item.kind {
+                    case "flag": state.openDashboard(destination: .flag(id: item.id, sessionID: nil))
+                    case "incident": state.openDashboard(destination: .incident(id: item.id, sessionID: nil))
+                    default: state.openDashboard(tab: "home")
+                    }
+                }
+                .buttonStyle(.borderedProminent).tint(Color.brand).controlSize(.small)
             }
         }
         .padding(12)
@@ -216,8 +234,6 @@ struct ConsoleView: View {
 
     private func heroFlagBlock(_ flag: FlagModel, lines: [String], action: AppState.HeroAction?, label: String?) -> some View {
         let run = state.inPlaceAction?.flagID == flag.id ? state.inPlaceAction : nil
-        let running = run?.phase == .running
-        let done = run?.phase.keepsButtonDisabled ?? false
         return VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
                 Text(line)
@@ -226,6 +242,9 @@ struct ConsoleView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let action, let label, state.connected {
+                Text(Self.actionHelp(action))
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Button {
                     switch action {
                     case .perform(let a):
@@ -239,7 +258,7 @@ struct ConsoleView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .buttonStyle(.borderedProminent).tint(Color.brand).controlSize(.small)
-                .disabled(running || done)
+                .disabled(Self.actionIsDisabled(action, phase: run?.phase))
                 .help(Self.actionHelp(action))
             }
             if case .perform = action {
@@ -248,23 +267,91 @@ struct ConsoleView: View {
                 }
                 .buttonStyle(.plain)
             }
-            if let run {
-                Group {
-                    switch run.phase {
-                    case .running:
-                        Text("Working…").foregroundStyle(.secondary)
-                    case .done:
-                        Text("Recorded: \(run.action.label)").foregroundStyle(Color.ok)
-                    case .doneWithWarning(let message):
-                        Text(message).foregroundStyle(Color.warn)
-                    case .failed(let message):
-                        Text(message).foregroundStyle(Color.bad)
+        }
+    }
+
+    struct ActionResultModel {
+        let flagID: String
+        let sessionID: String?
+        let findingTitle: String
+        let actionLabel: String
+        let heading: String
+        let detail: String
+        let color: Color
+        let evidenceLines: [String]
+        let canDismiss: Bool
+    }
+
+    static func actionIsDisabled(_ action: AppState.HeroAction, phase: AppState.InPlaceAction.Phase?) -> Bool {
+        if case .perform = action { return phase?.keepsButtonDisabled ?? false }
+        return false
+    }
+
+    /// Feedback belongs to the acted-on finding, even when the hero advances.
+    var actionResultModel: ActionResultModel? {
+        guard let run = state.inPlaceAction, !state.inPlaceResultHidden else { return nil }
+        let heading: String
+        let detail: String
+        let color: Color
+        switch run.phase {
+        case .running:
+            heading = "Applying action"
+            detail = run.action.label
+            color = .brand
+        case .done:
+            heading = "Action applied"
+            detail = run.action.label
+            color = .ok
+        case .doneWithWarning(let message):
+            heading = "Action applied; review unconfirmed"
+            detail = message
+            color = .warn
+        case .failed(let message):
+            heading = "Action not confirmed"
+            detail = message
+            color = .bad
+        }
+        let current = heroModel
+        let evidenceIsShown = current.flag?.id == run.flagID && (current.item?.assessment ?? current.flag?.explain?.assessment) == run.assessment
+        return ActionResultModel(flagID: run.flagID, sessionID: run.sessionID, findingTitle: run.findingTitle, actionLabel: run.action.label,
+            heading: heading, detail: detail, color: color, evidenceLines: evidenceIsShown ? [] : run.assessment?.summaryLines ?? [],
+            canDismiss: run.phase != .running)
+    }
+
+    private func actionResultCard(_ result: ActionResultModel) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                Text(result.heading).font(.system(size: 11, weight: .semibold)).foregroundStyle(result.color)
+                Spacer(minLength: 0)
+                if result.canDismiss {
+                    Button { state.dismissInPlaceResult() } label: {
+                        Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                     }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .accessibilityLabel("Close action result")
                 }
-                .font(.system(size: 10))
-                .fixedSize(horizontal: false, vertical: true)
+            }
+            Text(result.findingTitle).font(.system(size: 11, weight: .semibold))
+            Text(result.actionLabel).font(.system(size: 11))
+            if result.detail != result.actionLabel { Text(result.detail).font(.system(size: 11)) }
+            if !result.evidenceLines.isEmpty {
+                Text("Evidence before this action").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                ForEach(Array(result.evidenceLines.enumerated()), id: \.offset) { _, line in
+                    Text(line).font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            }
+            if state.connected {
+                Button("View finding") {
+                    state.openDashboard(destination: .flag(id: result.flagID, sessionID: result.sessionID))
+                }
+                .buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(Color.brand)
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(result.color.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     static func actionHelp(_ action: AppState.HeroAction) -> String {
@@ -287,7 +374,8 @@ struct ConsoleView: View {
                              flag: nil, action: nil)
         }
         let top = state.heroFlag
-        let action = top.map(AppState.heroAction(for:))
+        let item = state.posture?.criticalItem
+        let action = top.map(AppState.heroAction(for:)) ?? (item == nil ? nil : .openConsole(tab: "home"))
 		if let warning = state.staleDataWarning, state.posture?.state != "critical" {
 			return HeroModel(icon: "exclamationmark.triangle.fill", color: .warn, title: "Monitoring data is stale",
 						 subtitle: warning, flag: top, action: action)
@@ -296,8 +384,8 @@ struct ConsoleView: View {
         let subtitle = summary.isEmpty ? monitoredLine : summary
         switch state.posture?.state ?? fallbackPostureState {
         case "critical":
-            return HeroModel(icon: "exclamationmark.shield.fill", color: .bad, title: "Action needed",
-                             subtitle: subtitle, flag: top, action: action)
+            return HeroModel(icon: "exclamationmark.shield.fill", color: .bad, title: "Urgent review",
+                             subtitle: subtitle, flag: top, action: action, item: item)
         case "attention":
             return HeroModel(icon: "exclamationmark.triangle.fill", color: .warn, title: "Needs a look",
                              subtitle: subtitle, flag: top, action: action)

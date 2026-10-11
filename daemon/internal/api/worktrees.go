@@ -175,15 +175,22 @@ func (a *API) worktreeNotes(rep worktreehunter.ScanReport) map[string]model.Advi
 	if a.store == nil {
 		return nil
 	}
-	notes := map[string]model.AdvisorVerdict{}
+	var paths, subjectIDs []string
 	for _, repo := range rep.Repos {
 		for _, wt := range repo.Worktrees {
 			if wt.Head == "" || wt.State == worktreehunter.StateMain {
 				continue
 			}
-			if v, ok := a.store.AdvisorVerdictFor(advisor.WorktreeSubjectID(wt.Path, wt.Head), "worktree"); ok {
-				notes[wt.Path] = v
-			}
+			paths = append(paths, wt.Path)
+			subjectIDs = append(subjectIDs, advisor.WorktreeSubjectID(wt.Path, wt.Head))
+		}
+	}
+	// Optional notes may be partial; retain read health for the whole batch.
+	verdicts, _ := a.store.AdvisorVerdictsFor(subjectIDs, "worktree")
+	notes := make(map[string]model.AdvisorVerdict, len(verdicts))
+	for i, subject := range subjectIDs {
+		if v, ok := verdicts[subject]; ok {
+			notes[paths[i]] = v
 		}
 	}
 	if len(notes) == 0 {

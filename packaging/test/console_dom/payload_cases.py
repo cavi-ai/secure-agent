@@ -23,6 +23,65 @@ def disabled_agent(now_ms=None):
     return {"now": now, "patches": [{"route": "/agent/status", "path": ["enabled"], "value": False}]}
 
 
+def context_handoff(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": [
+        {"route": "/flags", "path": [{"id": "flag-2"}, "session_id"], "value": "sess-claude-1"},
+    ]}
+
+
+def session_link(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": [
+        {"route": "/flags", "path": [{"id": "flag-1"}, "session_id"], "value": "sess-claude-1"},
+    ]}
+
+
+def session_workbench(now_ms=None):
+    now, iso = _clock(now_ms)
+    return {"now": now, "patches": [
+        {"route": "/sessions", "path": [], "append": [{
+            "id": f"wb-session-{i}", "harness": "codex", "repo": f"workbench-{i}",
+            "workspace": f"/Users/dev/workbench-{i}", "branch": "main", "status": "idle",
+            "started_at": iso(3600000), "last_seen_at": iso(120000 + i * 1000),
+        } for i in range(80)]},
+    ]}
+
+
+def quiet_sessions(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": [
+        {"route": "/sessions", "path": [], "value": []},
+        *_fields("/status", [], {"agents": [], "trees": []}),
+    ]}
+
+
+def firewall_fold(now_ms=None):
+    now, _ = _clock(now_ms)
+    stats = {
+        "hit-a": {"type": "vendor-key", "mode": "monitor", "would_block": 3, "blocked": 0, "legit": 1},
+        "hit-b": {"type": "cloud-key", "mode": "monitor", "would_block": 0, "blocked": 0, "legit": 2},
+    }
+    for i in range(20):
+        stats[f"quiet-{i:02d}"] = {"type": "env-value", "mode": "monitor", "would_block": 0, "blocked": 0, "legit": 0}
+    return {"now": now, "patches": [
+        {"route": "/status", "path": ["firewall_stats"], "value": stats},
+    ]}
+
+
+def running_worktree_removal(now_ms=None):
+    """A removal started elsewhere is running when the System tab opens."""
+    now, iso = _clock(now_ms)
+    path = "/Users/dev/workspace/api-service/.worktrees/done"
+    return {"now": now, "patches": [
+        {"route": "/worktrees", "path": ["removals"], "value": {path: {
+            "path": path, "state": "running", "phase": "checking",
+            "step": "checking it is still safe to remove",
+            "started_at": iso(5000), "step_at": iso(1000),
+        }}},
+    ]}
+
+
 def empty_spend(now_ms=None):
     now, _ = _clock(now_ms)
     return {"now": now, "patches": [
@@ -260,6 +319,96 @@ def grouped_sessions(now_ms=None, *, ended=False, sidecar=False):
         {"route": "/sessions", "path": [], "append": sessions},
         {"route": "/resources", "path": ["sessions"], "append": families},
     ]}
+
+
+def scoped_review(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "payloads": {"/reviews": {"reviews": [{
+        "id": "review-scope", "revision": 3, "review_state": "unreviewed", "count": 1,
+        "evidence_available": True, "evidence_flag_available": False,
+        "context": {"rule": "sensitive-read-then-connect", "session_id": "sess-claude-1",
+                    "workspace": "/Users/dev/workspace/api-service", "resources": ["/work/.env"],
+                    "destinations": ["api.example.com:443"]},
+        "available_scopes": [{"kind": "once"}, {"kind": "session"},
+                             {"kind": "exact", "expiry": "24h"}, {"kind": "exact", "expiry": "7d"}],
+        "source_ids": ["flag-1"], "incident_ids": [],
+        "assessment": {"risk": "high", "control": "observed", "reason": "Recorded read and connection"},
+    }], "degraded": False}}}
+
+
+def routine_review(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "payloads": {"/routine": [{
+        "key": "routine|gh|/Users/dev/.config", "reader": "gh", "area": "~/.config/gh/hosts.yml",
+        "files": 1, "count": 145, "agents": ["claude", "codex", "openclaw"],
+        "destinations": [{"org": "GitHub", "host": "140.82.114.6", "count": 140}],
+        "destination_count": 3, "expectable": 143,
+        "disposition": {"state": "warning", "text": "Needs a look", "why": "w"},
+        "summary": "gh read ~/.config/gh/hosts.yml, then connected to GitHub and 2 more — 145 times across 3 agents.",
+        "actions": [
+            {"id": "expect-all", "label": "Treat as routine",
+             "consequence": "Each exact reader, file and destination these 143 flags cite is marked expected.",
+             "method": "POST", "path": "/expected", "body": {"flag_ids": ["r1", "r2"]}},
+            {"id": "dismiss-all", "label": "Dismiss all 145", "consequence": "c",
+             "method": "POST", "path": "/flags/acknowledge", "body": {"flag_ids": ["r1", "r2", "r3"]}},
+        ],
+        "flag_ids": ["r1", "r2", "r3"],
+    }]}}
+
+
+def organization_allow(now_ms=None):
+    now, _ = _clock(now_ms)
+    hosts = ["142.250.1.1", "2607:f8b0:4002:c08::54", "uf-in-f84.1e100.net"]
+    explain = {
+        "what": "Cursor read a sensitive file in your home directory, then reached Google 2 s later.",
+        "subject": {"path": "/Users/dev/.docker/config.json", "display": "~/.docker/config.json",
+                    "basename": "config.json", "category": "other_sensitive",
+                    "category_label": "sensitive file", "owner_label": "home directory"},
+        "egress": [{"host": host, "port": 443, "org": "Google", "kind": "ip", "allowlisted": False,
+                    "gap_seconds": 2} for host in hosts],
+        "context": {"harness": "cursor"},
+        "disposition": {"state": "warning", "text": "Needs a look",
+                        "why": "A connection was observed to Google near the read."},
+        "actions": [
+            *[{"id": "allow-host", "label": f"Allow {host} for cursor", "consequence": "c",
+               "method": "POST", "path": "/allowlist", "body": {"agent": "cursor", "host": host}} for host in hosts],
+            {"id": "dismiss", "label": "Dismiss this flag", "consequence": "c",
+             "method": "POST", "path": "/flags/acknowledge", "body": {"flag_id": "flag-1"}},
+        ],
+    }
+    return {"now": now, "patches": [{"route": "/flags", "path": [{"id": "flag-1"}, "explain"], "value": explain}]}
+
+
+def retriaged_finding(now_ms=None):
+    now, iso = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/flags", "path": [{"id": "flag-1"}, "advisor"], "value": {
+        "assessment": "benign", "confidence": 0.9, "rationale": "re-triage complete: routine vendor traffic",
+        "suggested_action": "none", "created_at": iso(120000),
+    }}]}
+
+
+def offline_advisor(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/status", "path": ["advisor_health"], "value": {
+        "enabled": True, "circuit_open": True, "last_error": "context deadline exceeded",
+        "queue_depth": 0, "model": "qwen3:8b",
+    }}]}
+
+
+def unconfigured_fleet(now_ms=None):
+    now, _ = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/fleet", "path": ["fleet_configured"], "value": False}]}
+
+
+def agent_queue(now_ms=None):
+    now, iso = _clock(now_ms)
+    return {"now": now, "patches": [{"route": "/agent/recommendations", "path": [], "value": [
+        {"id": 901, "ts": iso(60000), "role": "assistant", "origin": "analysis", "review_state": "pending",
+         "content": "Review **SSH** configuration.",
+         "local_command": {"command": "ssh-add -l", "workdir": "/Users/dev", "mode": "headless"}},
+        {"id": 902, "ts": iso(60000), "role": "assistant", "origin": "analysis", "review_state": "saved",
+         "plan_id": 2, "content": "Already saved."},
+    ]}]}
 
 
 def payload_outcomes(now_ms=None):
