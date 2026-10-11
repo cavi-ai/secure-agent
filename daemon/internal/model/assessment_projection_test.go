@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestGroupFindingSeverityFoldsReviewBesideMergeRank(t *testing.T) {
+	high := FindingAssessment{Risk: "high", DetectorSeverity: 1}
+	review := FindingAssessment{Risk: "review", DetectorSeverity: 1}
+	if GroupFindingSeverity(high, 0) != GroupFindingSeverity(review, 0) {
+		t.Fatal("grouped cards split high and review")
+	}
+	if !findingAssessmentOutranks(review, high) || findingAssessmentOutranks(high, review) {
+		t.Fatal("review merge no longer lets high outrank review")
+	}
+	if GroupFindingSeverity(FindingAssessment{Risk: "unknown", DetectorSeverity: 4}, 9) != 9 {
+		t.Fatal("unknown group rank lowered the detector")
+	}
+}
+
 func TestMergeFindingAssessmentKeepsFactsAndEvidenceTogether(t *testing.T) {
 	old := FindingAssessment{Risk: "high", Control: "unknown", ResidualRisk: "possible-exposure", DetectorSeverity: 3,
 		EvidenceBasis: []string{"os-read", "same-tree-connect"}, Reason: "same reader", ReviewState: "reviewed"}

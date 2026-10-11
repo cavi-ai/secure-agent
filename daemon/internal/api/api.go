@@ -873,11 +873,7 @@ func (a *API) handleSessionSubpath(w http.ResponseWriter, r *http.Request) {
 // timeline the console renders for a selected session. Path shape:
 // /sessions/{id}/timeline[?limit=N].
 func (a *API) serveSessionTimeline(w http.ResponseWriter, r *http.Request, id string) {
-	f := store.EventFilter{SessionID: id, Limit: 500}
-	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
-		f.Limit = n
-	}
-	events, err := sessionTimeline(a.store, id, f.Limit)
+	events, err := sessionTimeline(a.store, id, sessionTimelineLimit(r.URL.Query().Get("limit")))
 	if err != nil {
 		http.Error(w, "event data unavailable", http.StatusServiceUnavailable)
 		return

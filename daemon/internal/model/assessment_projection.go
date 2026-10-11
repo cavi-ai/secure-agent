@@ -171,6 +171,22 @@ func MergeFindingAssessment(old, next FindingAssessment) FindingAssessmentMerge 
 	return FindingAssessmentMerge{Assessment: chosen, Changed: changed, NextEvidence: nextEvidence}
 }
 
+// GroupFindingSeverity ranks a finding for a grouped card. High and review
+// share a rank. Review merge uses findingAssessmentRank, where high outranks
+// review. An unknown assessment must not silently lower a detector's priority.
+func GroupFindingSeverity(a FindingAssessment, detectorSeverity int) int {
+	switch a.Risk {
+	case "critical":
+		return 3
+	case "high", "review":
+		return 2
+	case "informational":
+		return 1
+	default:
+		return max(a.DetectorSeverity, detectorSeverity)
+	}
+}
+
 func findingAssessmentRank(a FindingAssessment) int {
 	switch a.Risk {
 	case "critical":
