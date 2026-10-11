@@ -1212,7 +1212,8 @@ headline — collectors render the same answer the local UIs show instead of
 re-deriving it from raw flags.
 
 - Signature: `X-SecureAgent-Signature: sha256=<hex hmac-sha256(secret, body)>` — verify before trusting `payload`.
-- Retries: 3 attempts (500ms/2s/5s backoff) on network errors, 5xx, and 429 only. Non-retryable failures land in `~/.local/state/secure-agent/webhook-deliveries.jsonl` (0600).
+- Retries: one initial attempt and up to three retries (500ms/2s/5s backoff) on network errors, 5xx, and 429 only. Delivery outcomes are logged best-effort in `~/.local/state/secure-agent/webhook-deliveries.jsonl` (0600).
+- Log retention: the active file and one `.1` backup each hold at most 5 MiB. Oversized legacy logs and individual records are discarded; log-write failures do not prevent webhook delivery.
 - Delivery is best-effort and asynchronous; a dead collector never slows the daemon.
 
 ### 2. Pull API
