@@ -665,8 +665,8 @@ func kindBudget(kind int) int {
 
 // FlagFilter narrows a flag history query. A zero value returns the most recent
 // flags — RecentFlags is exactly that. Since is any RFC3339 timestamp (any
-// offset); it is compared with SQLite's datetime() so stored local-offset
-// stamps and a UTC bound normalize to the same instant.
+// offset); stored timestamps and the bound are normalized to UTC with full
+// nanosecond precision before comparison.
 type FlagFilter struct {
 	Agent       string // exact match; empty = any
 	Rule        string // exact match; empty = any
@@ -998,8 +998,8 @@ func flagQuery(f FlagFilter) (string, []any) {
 		args = append(args, f.MinSeverity)
 	}
 	if f.Since != "" {
-		q += " AND datetime(ts) >= datetime(?)"
-		args = append(args, f.Since)
+		q += " AND " + timestampOrderExpr("ts") + " >= " + timestampOrderExpr(":flag_since")
+		args = append(args, sql.Named("flag_since", f.Since))
 	}
 	if f.Unacted {
 		q += " AND (acknowledged IS NULL OR acknowledged = '')"
