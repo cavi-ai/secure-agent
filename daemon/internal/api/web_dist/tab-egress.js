@@ -1,5 +1,6 @@
-// Egress tab: where traffic went (uninspected endpoints), firewall rules,
-// watched sources, and the uninspected drill-down drawer.
+// Protection → Traffic and Secret sources: where traffic went (uninspected
+// endpoints), firewall rules, watched sources, and the uninspected drill-down
+// drawer.
 
 function renderFirewall() {
   const SA = window.SA;
@@ -110,8 +111,8 @@ function fwRuleHTML(r, st, flash) {
       </div>`;
 }
 
-// Where traffic went: the uninspected endpoints, inline as the Egress tab's
-// first panel. Same rows, rollups and actions as the drill-down drawer; one
+// Where traffic went: the uninspected endpoints, inline as Protection →
+// Traffic's first panel. Same rows, rollups and actions as the drill-down drawer; one
 // node per endpoint, so an Allow drops only its row and an open disclosure
 // or a focused button survives a refresh.
 function renderEndpoints() {

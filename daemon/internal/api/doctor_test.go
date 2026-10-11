@@ -227,7 +227,7 @@ func TestDoctorEgressAndBusFail(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
 	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s", ProxyEnabled: true, UninspectedEgress: 5, BusDrops: 7, BusDropping: true})
-	if c := doctorCheckByID(t, rep, "egress-routing"); c.State != doctorFail || !strings.Contains(c.Detail, "5") || !strings.Contains(c.Fix, "agent-env.sh") {
+	if c := doctorCheckByID(t, rep, "egress-routing"); c.State != doctorFail || !strings.Contains(c.Detail, "5") || !strings.Contains(c.Fix, "agent-env.sh") || !strings.Contains(c.Fix, "Protection → Traffic") {
 		t.Fatalf("egress-routing = %+v, want fail with the count and the routing fix", c)
 	}
 	if c := doctorCheckByID(t, rep, "bus"); c.State != doctorFail || !strings.Contains(c.Detail, "7") || !strings.Contains(c.Fix, "cannot recover") {

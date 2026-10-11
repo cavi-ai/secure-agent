@@ -18,6 +18,9 @@ test('review card preserves risk, context, receipts and explicit revision',()=>{
  assert.match(html,/data-revision="2"/);assert.match(html,/Evidence changed/);assert.match(html,/reviewed revision 1/i);
  assert.match(html,/data-id="stronger">View supporting evidence/);
  assert.match(html,/data-action="open-flag" data-id="stronger"/);
+ assert.match(html,/Revoke under Protection → Rules &amp; permissions\./);
+ assert.equal((app.match(/Revoke under Protection → Rules & permissions\./g)||[]).length,2);
+ assert.doesNotMatch(app+lib,/Revoke in Policies/);
  const expired=vm.runInContext('reviewHTML({...record,evidence_available:false})',ctx);
  assert.match(expired,/Source evidence has expired/);assert.doesNotMatch(expired,/data-action="review-decision"/);
 });
