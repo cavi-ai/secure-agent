@@ -1227,6 +1227,12 @@ main { min-width: 0; }
 .protection-view .notify-pop-sub, .drawer-body > p { max-width: 72ch; }
 .needs { display: grid; gap: 8px; }
 .needs[hidden] { display: none; }
+.review-result[hidden] { display: none; }
+.review-result .panel-head { flex-wrap: wrap; }
+.review-result .panel-body { display: grid; gap: 8px; }
+.review-result .panel-body p { margin: 0; overflow-wrap: anywhere; }
+.review-result .panel-body button { justify-self: start; }
+.review-result-target { font-weight: 600; }
 .needs-title { display: flex; align-items: baseline; gap: 8px; margin: 0; font: 650 0.8125rem/1.2 var(--font); color: var(--tx-1); }
 .needs-count { font: 600 0.75rem/1 var(--mono); color: var(--tx-3); }
 .needs-list { list-style: none; margin: 0; padding: 0; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--sh-1); }

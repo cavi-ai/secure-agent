@@ -397,9 +397,15 @@
       return {status:'ok',resolved:true};
     }
     if (p === '/reviews/decision') {
-      const receipt={id:body.id,revision:body.revision,action:body.action,at:iso(0),scope_ids:['scope-browser']};
-      const review=data['/reviews'].reviews[0];review.review_state='reviewed';review.decision=receipt;
-      data['/decision-scopes']=[{id:'scope-browser',kind:body.scope.kind,agent:'claude',session_id:'sess-claude-1',workspace:'/Users/dev/workspace/api-service',reader_exe:'/usr/bin/cat',rule_id:'sensitive-read-then-connect',resource_path:'/work/.env',operation:'read-connect',destination:'api.example.com:443',created_at:iso(0),expires_at:new Date(now+86400000).toISOString(),identity_basis:'observed-session'}];
+      const future = body.action === 'expect' && body.scope?.kind !== 'once';
+      const receipt={id:body.id,revision:body.revision,action:body.action,at:iso(0),...(future ? {scope_ids:['scope-browser']} : {})};
+      const review=data['/reviews'].reviews.find(r=>r.id===body.id);
+      review.review_state=body.action==='close_reported'?'closed_reported':'reviewed';review.decision=receipt;
+      if (future) data['/decision-scopes']=[{id:'scope-browser',kind:body.scope.kind,agent:'claude',session_id:'sess-claude-1',workspace:'/Users/dev/workspace/api-service',reader_exe:'/usr/bin/cat',rule_id:'sensitive-read-then-connect',resource_path:'/work/.env',operation:'read-connect',destination:'api.example.com:443',created_at:iso(0),expires_at:new Date(now+86400000).toISOString(),identity_basis:'observed-session'}];
+      for (const group of data['/posture'].groups || []) group.items=group.items.filter(item=>item.kind!=='review'||item.id!==body.id);
+      data['/posture'].groups=data['/posture'].groups.filter(group=>group.items.length);
+      data['/posture'].items=data['/posture'].items.filter(item=>item.kind!=='review'||item.id!==body.id);
+      data['/posture'].needs_you=data['/posture'].groups.reduce((n,g)=>n+g.items.length,0);
       return receipt;
     }
     if (p === '/advisor/assess-host') {
@@ -473,6 +479,12 @@
   let slowShapeRecovered = false;
   let spendShapeBad = scenarios.has('firstload');
   window.ConsoleFixtures.apply(fixture);
+  if (scenarios.has('reviewresult')) {
+    const review = data['/reviews'].reviews[0];
+    const item = {kind:'review',id:review.id,priority:2,title:'Recorded read and connection',review};
+    data['/posture'] = {...data['/posture'],needs_you:1,items:[item],
+      groups:[{key:'review-result',agent:'claude',items:[item]}]};
+  }
   stamp('fixture-posture', JSON.stringify(data['/posture']));
   const fixtureReads = {};
   stamp('fetch-count', '0');
@@ -514,7 +526,7 @@
       };
       return { ok: true, json: async () => [scope('synthetic-scope'), scope('unrelated-permission')] };
     }
-    if ((scenarios.has('contexthandoff') || scenarios.has('investigationdemo')) && p.startsWith('/flags/') && p.endsWith('/explain')) {
+    if ((scenarios.has('contexthandoff') || scenarios.has('investigationdemo') || scenarios.has('reviewresult')) && p.startsWith('/flags/') && p.endsWith('/explain')) {
       const id = decodeURIComponent(p.split('/')[2]);
       const flag = data['/flags'].find(f => f.id === id);
       return {ok:!!flag,status:flag?200:404,json:async()=>flag,text:async()=>flag?JSON.stringify(flag):'flag unavailable'};
@@ -2846,6 +2858,41 @@
     }, 1000);
   }
   // policylists: the Policy tab, opened once telemetry has landed.
+  if (scenarios.has('reviewresult')) {
+    const action = scenarios.has('reviewresult=expect') ? 'expect' : scenarios.has('reviewresult=close_reported') ? 'close_reported' : 'acknowledge';
+    setTimeout(() => {
+      document.querySelector('#attention-list [data-action="select-attention"]')?.click();
+      const selector = `[data-decision="${action}"]${action === 'expect' ? '[data-scope="exact"][data-expiry="24h"]' : ''}`;
+      document.querySelector('#drawer ' + selector)?.click();
+      if (action === 'expect') setTimeout(() => document.getElementById('confirm-ok')?.click(), 100);
+    }, 1500);
+    setTimeout(async () => {
+      const result=document.getElementById('review-result');
+      const text=result.textContent;
+      const probe={queueCleared:document.getElementById('attention-center').hidden,
+        retained:!result.hidden && text.includes('/work/.env') && text.includes('revision 3'),
+        label:text.includes({acknowledge:'Review recorded',close_reported:'Closure reported',expect:'Scoped permission recorded'}[action]),
+        fits:result.getBoundingClientRect().right<=innerWidth && document.documentElement.scrollWidth<=innerWidth};
+      result.querySelector('[data-action="open-review-result"]')?.click();
+      const body=document.getElementById('drawer-body');
+      probe.evidence=body.textContent.includes('Evidence before this decision') && body.textContent.includes('api.example.com:443') && body.textContent.includes('Recorded risk: high');
+      probe.readOnly=!document.querySelector('#drawer [data-action="review-decision"]');
+      const before=body.textContent;
+      body.querySelector('[data-action="open-flag"]')?.click();
+      await new Promise(resolve=>setTimeout(resolve,100));
+      const back=document.getElementById('btn-drawer-back');
+      probe.evidenceEntry=!back?.hidden && back?.textContent.includes('Review result') && body.textContent.includes('Recorded evidence');
+      back?.click();
+      probe.evidenceReturn=body.textContent===before && !document.querySelector('#drawer [data-action="review-decision"]');
+      if (scenarios.has('resultcard') || scenarios.has('dismissresult')) document.getElementById('btn-drawer-close')?.click();
+      if (scenarios.has('dismissresult')) {
+        result.querySelector('[data-action="dismiss-review-result"]')?.click();
+        window.SA.flushRender();
+        probe.dismissed=result.hidden && document.activeElement?.dataset.tab==='home';
+      }
+      document.body.dataset.reviewResultProbe=JSON.stringify(probe);
+    }, 3500);
+  }
   if (scenarios.has('scopedpermission')) {
     setTimeout(()=>openTab('findings'),4000);
     setTimeout(()=>document.querySelector('#flags-list [data-decision="expect"][data-scope="exact"][data-expiry="24h"]')?.click(),7000);

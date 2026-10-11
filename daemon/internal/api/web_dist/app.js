@@ -531,6 +531,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sessionEnded) return;
     sessionEnded = true;
     clearProtectionContext();
+    reviewResult = null;
+    reviewResultSeq++;
+    if (drawerMode === 'review-result') closeDrawer();
+    drawerReviewResult = null;
     if (cancelDialog) cancelDialog();
     clearInterval(sparkTimer);
     clearTimeout(spendPollTimer);
@@ -616,26 +620,64 @@ document.addEventListener('DOMContentLoaded', () => {
   const reviewDrafts = new Map();
   let reviewCursor = '';
   let reviewPageSeq = 0;
+  let reviewResult = null;
+  let reviewResultSeq = 0;
+  let drawerReviewResult = null;
   window.reviewAct = async function(id, revision, action, scope) {
+    const auth = handoffGeneration;
     if (scope && scope.kind !== 'once' && !await window.saConfirm('Count future activity as expected only for the recorded executable path, workspace, file and exact endpoint? ' + (scope.kind === 'session' ? 'This ends with the current session.' : `Expires after ${scope.expiry === '7d' ? '7 days' : '24 hours'}.`) + ' Firewall and payload checks remain active. Revoke under Protection → Rules & permissions.', {title:'Expected activity',okLabel:'Save permission'})) return;
+    if (sessionEnded || auth !== handoffGeneration) return;
+    const seq = ++reviewResultSeq;
+    const current = attentionItems().find(item => item.kind === 'review' && item.id === id)?.review
+      || telemetryData.reviews?.reviews?.find(review => review.id === id);
+    const review = current?.revision === revision ? JSON.parse(JSON.stringify(current)) : null;
     const finishAttention = beginAttentionWrite();
     reviewDrafts.set(id, { action, scope, conflict: false });
     try {
       const res = await apiFetch('/reviews/decision', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({id,revision,action,...(scope ? {scope} : {})}) });
+      if (sessionEnded || auth !== handoffGeneration) { finishAttention(false); return; }
       if (res.status === 409) {
         reviewDrafts.set(id, { action, scope, conflict: true });
         finishAttention(false);
         await fetchTelemetry();
+        if (sessionEnded || auth !== handoffGeneration) return;
         markDirty('flags', 'attention');
         showToast('Evidence changed. Review the new facts and choose again.', 'info');
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const receipt = await res.json();
+      if (sessionEnded || auth !== handoffGeneration) { finishAttention(false); return; }
+      if (!validReviewReceipt(receipt, id, revision, action)) throw new Error('Invalid decision receipt');
+      if (seq === reviewResultSeq) {
+        reviewResult = { receipt, review };
+        markDirty('attention');
+        window.saAnnounce(reviewResultLabel(receipt));
+      }
       reviewDrafts.delete(id);
+    } catch {
+      finishAttention(false);
+      if (sessionEnded || auth !== handoffGeneration) return;
+      showToast('Review not confirmed. Check history before deciding again.', 'danger');
       await fetchTelemetry();
-      finishAttention(true);
-      markDirty('flags', 'attention');
-    } catch (err) { finishAttention(false); showToast(`Could not save review: ${err}`, 'danger'); }
+      return;
+    }
+    await fetchTelemetry();
+    finishAttention(true);
+    if (!sessionEnded && auth === handoffGeneration) markDirty('flags', 'attention');
+  };
+  window.dismissReviewResult = function() {
+    reviewResult = null;
+    markDirty('attention');
+  };
+  window.openReviewResult = function(result = reviewResult) {
+    if (!result || sessionEnded) return;
+    drawerMode = 'review-result';
+    drawerReviewResult = result;
+    openDrawer({ title: reviewResultLabel(result.receipt), icon: 'shield',
+      body: reviewResultHTML(result, true), foot: '', onClose: () => {
+        if (drawerMode === 'review-result') { drawerMode = null; drawerReviewResult = null; }
+      } });
   };
   // Review pagination is explicit; each response is bounded to 100 records.
   window.loadReviewPage = async function(after) {
@@ -3133,6 +3175,7 @@ document.addEventListener('DOMContentLoaded', () => {
     agentTreeOpen,
     expanded: expandedLists,
     reviewDrafts,
+    get reviewResult() { return reviewResult; },
     get reviewCursor() { return reviewCursor; },
     historySelected,
     historyRows: new Map(),
@@ -3814,14 +3857,21 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (marker.part === 'evidence') showSessionInvestigation(st);
   });
 
-  // The open drawer as a way back to it. reopen re-runs its opener (with the
-  // back it had), so the previous drawer renders from live data, never from
-  // stale HTML. The policy editor has none: reopening would drop its draft.
+  // The open drawer as a way back to it. Reopening refreshes live evidence
+  // readers; saved results retain the evidence belonging to their decision.
+  // The policy editor has no back target because reopening would drop its draft.
   function currentDrawerBack() {
     if (!drawer || drawer.hidden) return null;
     const back = drawerBack || undefined;
     const wrap = target => ({ ...target, sessionReturn: back?.sessionReturn, attentionOrigin: attentionSelection || back?.attentionOrigin });
     switch (drawerMode) {
+      case 'review-result': {
+        const result = drawerReviewResult;
+        const auth = handoffGeneration;
+        return result ? wrap({ label: 'Review result', reopen: () => {
+          if (auth === handoffGeneration) window.openReviewResult(result);
+        } }) : null;
+      }
       case 'attention': {
         const key = attentionSelection?.key;
         return wrap({ label: 'Needs you', reopen: () => selectAttention(key) });
@@ -5282,6 +5332,15 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'review-decision':
         window.reviewAct(d.id, Number(d.revision), d.decision, d.scope ? {kind:d.scope,...(d.expiry ? {expiry:d.expiry} : {})} : undefined);
+        break;
+      case 'open-review-result':
+        e.preventDefault();
+        window.openReviewResult();
+        break;
+      case 'dismiss-review-result':
+        e.preventDefault();
+        window.dismissReviewResult();
+        document.querySelector('.tab-btn[data-tab="home"]')?.focus({ preventScroll: true });
         break;
       case 'revoke-scope':
         window.revokeScope(d.id);

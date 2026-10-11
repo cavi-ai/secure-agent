@@ -164,8 +164,8 @@ SHOTS = (
 )
 
 
-def screenshot(chrome, origin, query, path, tmp):
-    write_fixture(tmp, query)
+def screenshot(chrome, origin, query, path, tmp, fixture=None):
+    write_fixture(tmp, query, fixture)
     with tempfile.TemporaryDirectory(prefix="chrome-profile-", dir=tmp) as profile:
         out = subprocess.run(
             [chrome, f"--user-data-dir={profile}", "--no-first-run", "--disable-background-networking", "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
@@ -191,6 +191,7 @@ def main():
     ap.add_argument('--session-permissions-only', action='store_true', help='run bounded decision permission drawer probes only')
     ap.add_argument('--session-investigation-only', action='store_true', help='run bounded session investigation return probes only')
     ap.add_argument('--session-activity-only', action='store_true', help='run retained session activity probes only')
+    ap.add_argument('--review-results-only', action='store_true', help='run bounded review result interaction probes only')
     args = ap.parse_args()
     chrome = find_chrome()
     if not chrome:
@@ -202,6 +203,25 @@ def main():
     try:
         build_harness(tmp)
         srv, origin = serve_with_csp(tmp)
+        if args.review_results_only or not any(value for key, value in vars(args).items() if key.endswith('_only')):
+            for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+                for action in ('acknowledge', 'close_reported', 'expect'):
+                    query = '?reviewresult=' + action + ('&dismissresult' if action == 'acknowledge' else '')
+                    dom = dump_dom(chrome, tmp, query, origin, window_size=size, fixture=payload_cases.scoped_review())
+                    receipt = re.search(r'data-review-result-probe="([^"]+)"', dom)
+                    state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+                    for name in ('queueCleared', 'retained', 'label', 'fits', 'evidence', 'readOnly', 'evidenceEntry', 'evidenceReturn', *(['dismissed'] if action == 'acknowledge' else [])):
+                        check(f'review result ({label}, {action}): {name}', state.get(name) is True, str(state))
+        if args.review_results_only:
+            if args.screenshot:
+                shot_dir = os.path.abspath(args.screenshot)
+                os.makedirs(shot_dir, exist_ok=True)
+                screenshot(chrome, origin, '?reviewresult&resultcard', os.path.join(shot_dir, 'review-result-card.png'), tmp, payload_cases.scoped_review())
+                screenshot(chrome, origin, '?reviewresult', os.path.join(shot_dir, 'review-result-detail.png'), tmp, payload_cases.scoped_review())
+            print(f'\n{len(passed)} passed, {len(failed)} failed')
+            if failed:
+                raise SystemExit(1)
+            return
         if args.session_activity_only or not any((args.session_investigation_only, args.session_permissions_only, args.context_handoff_only, args.session_results_only, args.spend_only, args.auth_recovery_only, args.session_workbench_only)):
             for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
                 dom = dump_dom(chrome, tmp, '?activitydemo', origin, window_size=size)

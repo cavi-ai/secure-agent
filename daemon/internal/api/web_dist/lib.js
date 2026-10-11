@@ -2207,6 +2207,36 @@ function reviewPermissionItems(r) {
   return (r.available_scopes || [{kind:'once'}]).map(choice => ({label:permissionChoiceLabel(choice),
     attrs:`data-action="review-decision" data-id="${escapeHTML(r.id)}" data-revision="${Number(r.revision)}" data-decision="expect" data-scope="${escapeHTML(choice.kind)}"${choice.expiry ? ` data-expiry="${escapeHTML(choice.expiry)}"` : ''}`}));
 }
+function validReviewReceipt(receipt, id, revision, action) {
+  return !!receipt && receipt.id === id && Number.isSafeInteger(receipt.revision) && receipt.revision > 0 && receipt.revision === revision &&
+    ['acknowledge', 'close_reported', 'expect'].includes(receipt.action) && receipt.action === action &&
+    typeof receipt.at === 'string' && Number.isFinite(Date.parse(receipt.at)) &&
+    (receipt.scope_ids == null || (Array.isArray(receipt.scope_ids) && receipt.scope_ids.length <= 128 &&
+      receipt.scope_ids.every(id => typeof id === 'string' && id)));
+}
+function reviewResultLabel(receipt) {
+  return { acknowledge: 'Review recorded', close_reported: 'Closure reported',
+    expect: receipt.scope_ids?.length ? 'Scoped permission recorded' : 'Expected once' }[receipt.action];
+}
+function reviewResultHTML(result, details = false) {
+  const d = result.receipt, r = result.review, c = r?.context || {};
+  const scopes = d.scope_ids || [];
+  const meaning = d.action === 'close_reported' ? 'Closure was reported; remediation has not been verified.'
+    : d.action === 'expect' ? scopes.length
+      ? `${scopes.length} permission scope${scopes.length === 1 ? '' : 's'} recorded. Matching activity remains subject to firewall and payload checks. Inspect current permissions in Protection → Rules & permissions.`
+      : 'This decision records expected activity once. No future permission was created.'
+    : 'This records your review of the evidence; it does not establish remediation.';
+  const target = (c.resources || []).join(', ') || c.rule || d.id;
+  const receipt = `<p>Decision for evidence revision ${d.revision} · <time datetime="${escapeHTML(d.at)}">${escapeHTML(new Date(d.at).toLocaleString())}</time></p>`;
+  if (!details) return `<div class="panel-head"><h2 id="review-result-title">${escapeHTML(reviewResultLabel(d))}</h2><button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-review-result">Dismiss</button></div>
+    <div class="panel-body"><p class="review-result-target">${escapeHTML(target)}</p>${receipt}<p>${escapeHTML(meaning)}</p><button type="button" class="btn btn-ghost btn-sm" data-action="open-review-result">View result</button></div>`;
+  const links = (r?.source_ids || []).map((id, index) => `<button type="button" class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${escapeHTML(id)}">Recorded evidence ${index + 1}</button>`).join('');
+  return `<div class="panel-body"><h3>${escapeHTML(reviewResultLabel(d))}</h3><p>${escapeHTML(target)}</p>${receipt}<p>${escapeHTML(meaning)}</p>
+    ${scopes.length ? `<p>Recorded permission IDs: ${scopes.map(escapeHTML).join(', ')}</p>` : ''}
+    ${r ? `<h4>Evidence before this decision</h4><p>${escapeHTML(r.agent || 'Unknown agent')} · ${escapeHTML(c.session_id || 'Session unknown')}${c.workspace ? ` · ${escapeHTML(c.workspace)}` : ''}</p>
+      <p>${escapeHTML((c.destinations || []).join(', ') || 'Destination unknown')}</p><p>Recorded risk: ${escapeHTML(r.assessment?.risk || 'unknown')}</p><p>${escapeHTML(r.assessment?.reason || '')}</p>${assessmentHTML(r.assessment || {})}${links}`
+      : '<p>The evidence shown before this decision is unavailable. The server receipt remains.</p>'}</div>`;
+}
 function reviewHTML(r, draft, actions = true) {
   const c = r.context || {}, a = r.assessment || {};
   const state = r.review_state || 'unreviewed';

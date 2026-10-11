@@ -28,6 +28,7 @@ function fixture(fetch) {
     protectionContext: null, protectionContextGeneration: 0,
     pendingConsoleContext: null, handoffGeneration: 0, openConsoleContext: async () => {},
     sessionWorkbench: { invalidate() { ctx.workbenchInvalidated = true; } },
+    reviewResult: null, reviewResultSeq: 0, drawerReviewResult: null, drawerMode: null, closeDrawer() {},
     historyScopes: { flags: null, events: null }, timelineSession: null,
     reviewCursor: '', sinceParam: () => '',
     filters: { flags: { agent: 'all', rule: 'all', minsev: 'all', since: 'all' }, events: { kind: 'all', since: 'all' } },
@@ -68,6 +69,21 @@ function fixture(fetch) {
   return { ctx, requests, renders, connections, failures, retries, stops: () => stops, ended: () => ended };
 }
 const snapshot = () => response({ status: { uptime: 'new' }, flags: [], events: [] });
+
+test('session expiry clears review feedback and closes its evidence drawer', () => {
+  const f = fixture(async () => snapshot());
+  f.ctx.reviewResult = { receipt: { id: 'prior-session' } };
+  f.ctx.drawerReviewResult = f.ctx.reviewResult;
+  f.ctx.drawerMode = 'review-result';
+  let closed = 0;
+  f.ctx.closeDrawer = () => closed++;
+  f.ctx.endSession();
+  assert.equal(f.ctx.reviewResult, null);
+  assert.equal(f.ctx.drawerReviewResult, null);
+  assert.equal(f.ctx.reviewResultSeq, 1);
+  assert.equal(closed, 1);
+  assert.equal(f.ctx.sessionEnded, true);
+});
 
 test('snapshot recovery clears its failure only after the replacement data is published', async () => {
   const guard = deferred();
