@@ -502,14 +502,13 @@ func (s *Store) RuleAggregates() FleetRules {
 // the old rollup — it is the difference between "flags happened" and
 // "criticals are firing").
 func flagSeverity(payload json.RawMessage) int {
-	var m map[string]any
-	if json.Unmarshal(payload, &m) != nil {
+	var flag struct {
+		Severity int `json:"severity"`
+	}
+	if json.Unmarshal(payload, &flag) != nil {
 		return 0
 	}
-	if v, ok := m["severity"].(float64); ok {
-		return int(v)
-	}
-	return 0
+	return flag.Severity
 }
 
 // incidentSeverity maps an incident's risk string onto the flag severity

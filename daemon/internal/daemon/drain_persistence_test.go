@@ -175,22 +175,42 @@ func TestDrainFlagRecoveryUsesSameCorrelator(t *testing.T) {
 	health := make(chan store.WriteHealth, 4)
 	var offered []model.Flag
 	done := runEventIngest(input, ingestDeps{Store: f.store, Correlator: cr, Resolver: session.NewResolver(f.store, f.tagger), Tagger: f.tagger, PostureChanged: func() { health <- f.store.WriteHealth() }, NewFlag: func(flag model.Flag) { offered = append(offered, flag) }}).Done()
+	closeInput := sync.OnceFunc(func() { close(input) })
+	t.Cleanup(func() {
+		closeInput()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("drain cleanup did not finish")
+		}
+	})
 	now := time.Now().UTC()
 	input <- event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"}
 	conn := event.Event{Kind: event.KindConnOpen, TS: now.Add(time.Second), PID: 500, RemoteHost: "evil.example.com", RemotePort: 443}
 	input <- conn
-	select {
-	case h := <-health:
-		if h.Failures != 1 || len(h.Active) != 1 || h.Active[0] != "flags" {
-			t.Errorf("initial failure was hidden: %+v", h)
+	// Projection health can notify before the flag write finishes. Only
+	// repair the trigger once the injected flag failure has been observed.
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+waitForFailure:
+	for {
+		select {
+		case h := <-health:
+			if h.Failures == 0 {
+				continue
+			}
+			if h.Failures != 1 || len(h.Active) != 1 || h.Active[0] != "flags" {
+				t.Fatalf("initial failure was hidden: %+v", h)
+			}
+			break waitForFailure
+		case <-deadline.C:
+			t.Fatal("failed flag did not refresh health")
 		}
-	case <-time.After(3 * time.Second):
-		t.Error("failed flag did not refresh health")
 	}
 	f.exec(t, "DROP TRIGGER reject_flag")
 	conn.TS = conn.TS.Add(time.Second)
 	input <- conn
-	close(input)
+	closeInput()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
