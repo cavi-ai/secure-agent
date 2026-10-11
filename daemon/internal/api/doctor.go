@@ -107,7 +107,7 @@ var doctorProbes = []doctorProbe{
 	{"tool-pairing", "Tool-call pairing", "Update Secure Agent so every harness adapter sends a call id; rows already stored stay unpaired", checkToolPairing},
 	{"pricing", "Model-call pricing", "Update Secure Agent so its price table covers the Claude models in use", checkPricing},
 	{"retention", "Event retention", "Find the process flooding these kinds in the Events tab; their rows are evicted inside a day", checkRetention},
-	{"egress-routing", "Egress routing", "turn on Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent, source agent-env.sh where other agents launch, or Allow the endpoints in the Egress tab", checkEgressRouting},
+	{"egress-routing", "Egress routing", "turn on Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent, source agent-env.sh where other agents launch, or Allow the endpoints in Protection → Traffic", checkEgressRouting},
 	{"bus", "Event bus", "Monitoring history for this run is incomplete. If the count keeps increasing, update Secure Agent and check for a collector flooding Events. Restarting cannot recover lost deliveries.", checkBus},
 	{"storage", "Evidence storage", "Check free disk space and state-directory permissions; earlier failed writes cannot be recovered by restarting", checkStorage},
 }

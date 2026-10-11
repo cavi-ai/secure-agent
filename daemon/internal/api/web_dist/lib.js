@@ -2198,7 +2198,7 @@ function reviewHTML(r, draft, actions = true) {
     <p class="finding-why">${escapeHTML((c.destinations || []).join(', ') || 'Destination unknown')} · ${escapeHTML(c.session_id || 'Session unknown; this source only')}${c.workspace ? ` · ${escapeHTML(c.workspace)}` : ''}</p>
     <p>${escapeHTML(a.reason || '')}</p>
     ${assessmentHTML(a)}
-    <p>Expected once records this review only. Future permissions count matching observed activity as expected; they do not bypass firewall or payload checks. They use the recorded executable path, workspace, file and exact endpoint. Executable signatures are not verified. Revoke in Policies.</p>
+    <p>Expected once records this review only. Future permissions count matching observed activity as expected; they do not bypass firewall or payload checks. They use the recorded executable path, workspace, file and exact endpoint. Executable signatures are not verified. Revoke under Protection → Rules &amp; permissions.</p>
     ${(r.available_scopes || []).some(s => s.kind !== 'once') ? '' : '<p>Future permission is unavailable because session, workspace, executable or recipient identity is incomplete or the session has ended.</p>'}
     ${r.evidence_flag_available ? `<button class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${escapeHTML(r.evidence_flag_id)}">View supporting evidence</button>` : '<p>The source supporting this assessment has expired. The recorded risk remains in history.</p>'}
     ${draft && draft.conflict ? `<p role="alert">Evidence changed. Your ${escapeHTML(draft.action.replaceAll('_', ' '))} choice is retained. Review the new facts and choose again.</p>` : ''}

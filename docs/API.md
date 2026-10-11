@@ -1346,7 +1346,7 @@ Each agent's outbound connections grouped by activity scope and destination (`ho
 ```
 
 - `recurring` — at least 5 connections, and the last 4 gaps are each 1 minute or more and within 2× of each other.
-- `candidate` — recurring, attributed to a known agent, and not covered by an expected-egress rule; candidates come first and are listed on the Egress tab, not in the Home queue.
+- `candidate` — recurring, attributed to a known agent, and not covered by an expected-egress rule; candidates come first and are listed in Protection → Traffic, not in the Home queue.
 - `expected_rule_id` — present when a saved active rule explains the episode. An exact-destination rule takes precedence over an activity-scope rule.
 - At most 100 non-candidate episodes are listed; episodes idle for 7 days are dropped.
 - `advisor_inference` is present only when the advisor assessed the episode's current evidence; the console labels it as an inference.
@@ -1377,7 +1377,7 @@ POST accepts exactly one JSON object containing only `episode_id` and `kind`, wi
 
 DELETE IDs must be 32 lowercase hexadecimal characters. Rejected or failed mutations do not emit success audits. An unavailable rule list is an error, not an empty set of expectations.
 
-Creates and revokes are audited (`expected-egress-create`, `expected-egress-revoke`). A rule only clears the episode's candidate flag on the Egress tab: the proxy, guard, correlator, incidents and flags never consult it. NoAgent; POST and DELETE are mutations (pinned UI or owner).
+Creates and revokes are audited (`expected-egress-create`, `expected-egress-revoke`). A rule only clears the episode's candidate flag in Protection → Traffic: the proxy, guard, correlator, incidents and flags never consult it. NoAgent; POST and DELETE are mutations (pinned UI or owner).
 
 ### `GET|POST /notify/rules`
 

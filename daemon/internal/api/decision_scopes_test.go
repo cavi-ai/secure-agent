@@ -62,6 +62,9 @@ func TestGuardScopedResolveAndRevocation(t *testing.T) {
 	if p.SessionID != "session" || len(p.AvailableScopes) != 4 {
 		t.Fatalf("attested choices: %+v", p)
 	}
+	if !strings.HasSuffix(p.ScopeText, "Revoke under Protection → Rules & permissions.") {
+		t.Fatalf("scope text names a missing view: %q", p.ScopeText)
+	}
 	w := resolveScopeGuard(a, p, "session")
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())

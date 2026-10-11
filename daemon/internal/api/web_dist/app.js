@@ -610,7 +610,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let reviewCursor = '';
   let reviewPageSeq = 0;
   window.reviewAct = async function(id, revision, action, scope) {
-    if (scope && scope.kind !== 'once' && !await window.saConfirm('Count future activity as expected only for the recorded executable path, workspace, file and exact endpoint? ' + (scope.kind === 'session' ? 'This ends with the current session.' : `Expires after ${scope.expiry === '7d' ? '7 days' : '24 hours'}.`) + ' Firewall and payload checks remain active. Revoke in Policies.', {title:'Expected activity',okLabel:'Save permission'})) return;
+    if (scope && scope.kind !== 'once' && !await window.saConfirm('Count future activity as expected only for the recorded executable path, workspace, file and exact endpoint? ' + (scope.kind === 'session' ? 'This ends with the current session.' : `Expires after ${scope.expiry === '7d' ? '7 days' : '24 hours'}.`) + ' Firewall and payload checks remain active. Revoke under Protection → Rules & permissions.', {title:'Expected activity',okLabel:'Save permission'})) return;
     const finishAttention = beginAttentionWrite();
     reviewDrafts.set(id, { action, scope, conflict: false });
     try {
@@ -1382,8 +1382,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Policy lists are not telemetry either: they load when the Policy tab
-  // opens and on its Refresh, never on the refresh cycle.
+  // Policy lists are not telemetry either: they load when Protection → Rules &
+  // permissions opens and on its Refresh, never on the refresh cycle.
   const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null, loading: false, error: '' };
   async function loadPolicy() {
     if (policyState.loading) return;
@@ -4112,7 +4112,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const action = verdict === 'allow'
       ? (scope === 'always' ? 'allow every future path matched by this rule' : scope === 'session' ? 'allow this file and tool in this session until it ends' : scope === 'exact' ? `allow this file and tool in this workspace for ${expiry === '7d' ? '7 days' : '24 hours'}` : 'allow this request once')
       : (scope === 'always' ? 'deny every future path matched by this rule' : 'deny this request once');
-    if (scope !== 'once' && !await saConfirm(`Apply guard decision: ${action}? Executable identity uses its observed path. File approvals do not authorize network access. Revoke in Policies.`, { title: 'Guard decision', okLabel: 'Apply' })) return;
+    if (scope !== 'once' && !await saConfirm(`Apply guard decision: ${action}? Executable identity uses its observed path. File approvals do not authorize network access. Revoke under Protection → Rules & permissions.`, { title: 'Guard decision', okLabel: 'Apply' })) return;
     const revert = stage(['guardPending', 'posture'], ['attention', 'posture', 'tab-badges'], () => {
       telemetryData.guardPending = (telemetryData.guardPending || []).filter(x => x.id !== id);
       mapAttentionItems(it => (it.kind === 'guard' && it.id === id ? null : it));
@@ -5782,8 +5782,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Notification rules live in the Policy tab (the header bell is a link to
-  // it); the panel keeps the popover's element ids.
+  // Notification rules live in Protection → Rules & permissions (the header
+  // bell is a link to it); the panel keeps the popover's element ids.
   const notifyPop = document.getElementById('notify-pop');
   if (notifyPop) {
     notifyPop.addEventListener('change', async (e) => {
