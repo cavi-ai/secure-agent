@@ -3561,9 +3561,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await apiFetch('/decision-scopes');
       if (!response.ok) throw new Error('Permissions unavailable');
       const rows = await response.json();
-      if (!validPermissionRecords(rows)) throw new Error('Invalid permission records');
+      const viewRows = decisionPermissionRows(st.receipt, rows);
       if (!currentSessionPermissions(st)) return;
-      Object.assign(st, { rows: rows.filter(r => st.receipt.ids.includes(r.id)), error: '',
+      Object.assign(st, { rows: viewRows, error: '',
         mutationError: false, readAt: new Date().toISOString() });
     } catch {
       if (!currentSessionPermissions(st)) return;
@@ -3577,10 +3577,11 @@ document.addEventListener('DOMContentLoaded', () => {
   window.revokeSessionPermission = async function(id) {
     const st = sessionPermissions;
     if (!currentSessionPermissions(st) || st.loading || st.busy || st.error || st.mutationError || st.revoked.has(id)) return;
-    const record = st.rows?.find(r => r.id === id);
-    if (!st.receipt.ids.includes(id) || !record || !permissionApplicability(record).revoke) return;
+    const row = st.rows?.find(r => r.id === id);
+    if (!row?.revoke || !row.record) return;
+    const record = row.record;
     st.busy = id;
-    const consequence = record.operation === 'read-connect' ? 'Future matching activity is evaluated under remaining expectations and policies.' : 'Future guard requests are evaluated under remaining permissions and policies.';
+    const consequence = row.consequence;
     const confirmed = await window.saConfirm(`Revoke this saved scope for ${record.resource_path}${record.destination ? ' → ' + record.destination : ''}? ${consequence} This does not undo previous access or remediate past exposure.`, { title: 'Revoke permission', okLabel: 'Revoke permission' });
     if (!currentSessionPermissions(st)) return;
     if (!confirmed) { st.busy = ''; renderSessionPermissions(st); return; }

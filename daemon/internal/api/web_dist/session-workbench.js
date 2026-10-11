@@ -343,65 +343,6 @@ function sessionOutcomesHTML(data, state) {
   return head + `<div data-session-part="outcomes-limits">${limits}${Object.values(h.evidence).some(source => !source.available) ? retry : ''}${!rows.length && !limits ? '<p>No saved decisions or results in the retained history. This is not a safety verdict.</p>' : ''}</div>` + history;
 }
 
-function sessionPermissionReceipt(data, reviewID, sessionID) {
-  if (!sessionID || data?.session_id !== sessionID) return null;
-  const decision = data.history?.reviews?.find(r => r.id === reviewID)?.decision;
-  const ids = decision?.scope_ids;
-  if (!Number.isInteger(decision?.revision) || decision.revision < 1 || !Array.isArray(ids) ||
-      !ids.length || ids.length > 128 || ids.some(id => typeof id !== 'string' || !id)) return null;
-  return { sessionID, reviewID, revision: decision.revision, at: decision.at, ids: [...new Set(ids)] };
-}
-
-function validPermissionRecords(rows) {
-  return Array.isArray(rows) && rows.length <= 10000 &&
-    rows.every(r => r && ['id', 'kind', 'agent', 'rule_id', 'operation', 'resource_path', 'created_at'].every(key => typeof r[key] === 'string' && r[key]) &&
-      ['session_id', 'workspace', 'reader_exe', 'destination', 'expires_at', 'revoked_at'].every(key => r[key] == null || typeof r[key] === 'string')) &&
-    new Set(rows.map(r => r.id)).size === rows.length;
-}
-
-function permissionApplicability(record) {
-  const applicability = record && record.applicability;
-  if (!applicability || typeof applicability.label !== 'string' || !applicability.label || typeof applicability.revoke !== 'boolean') {
-    return { label: 'Applicability unknown', revoke: false };
-  }
-  return { label: applicability.label, revoke: applicability.revoke };
-}
-
-function sessionPermissionsHTML(receipt, state) {
-  const st = state || {};
-  const refresh = `<button type="button" class="link-btn" data-action="session-permissions-refresh"${st.loading || st.busy ? ' disabled' : ''}>Refresh permissions</button>`;
-  const notice = st.error ? (st.rows ? 'Last known permission records. Current status unavailable.' : 'Permission records unavailable.')
-    : st.loading ? 'Loading permission records…' : '';
-  const head = `<header class="policy-row-main" data-session-part="permissions-head">
-    <h4>Permissions from this decision</h4>
-    <p>Session ${escapeHTML(receipt.sessionID)} · decision for revision ${receipt.revision}<br>Saved ${escapeHTML(receipt.at || 'time unavailable')}</p>
-    <p>The daemon rechecks live session and identity before applying a saved scope. These records do not establish that a request is currently allowed.</p>
-    <p>Other permissions and legacy policies may still allow matching access. Revocation does not undo past access.</p>
-    ${st.readAt ? `<p>Read at ${escapeHTML(st.readAt)}</p>` : ''}
-    <p role="status">${notice}${st.mutationError ? ' Revocation confirmation unavailable. Refresh before retrying.' : ''}${st.busy ? ' Revocation awaiting confirmation or save.' : ''}</p>${refresh}
-  </header>`;
-  return head + receipt.ids.map(id => {
-    const record = st.rows?.find(r => r.id === id);
-    const saved = st.revoked?.has(id) ? '<p role="status">Revocation saved. Other permissions or expectations may still apply; past exposure and the saved decision remain.</p>' : '';
-    if (!record) return `<section class="policy-row" data-session-part="permission:${escapeHTML(id)}"><div class="policy-row-main"><b>Current status unknown</b><p>Permission ${escapeHTML(id)}</p><p>The record is unavailable. This does not establish revocation or expiry.</p>${saved}</div></section>`;
-    const status = permissionApplicability(record);
-    // Keep the action's height while a read/save is pending, so short drawers
-    // do not clamp their reading position to zero. The action stays disabled.
-    const revoke = status.revoke && !st.error && !st.mutationError && !st.revoked?.has(id);
-    const operation = record.operation === 'read-connect' ? 'Expected read/connect activity' : record.operation?.startsWith('guard:') ? 'Guarded ' + record.operation.slice(6) + ' access' : 'Operation unavailable';
-    const effect = record.operation === 'read-connect' ? 'Marks this matching read/connect pattern expected. It does not grant network access.' : record.operation?.startsWith('guard:') ? 'Allows matching guarded tool access when the daemon validates the recorded identity and scope.' : 'Permission effect unknown.';
-    return `<section class="policy-row" data-session-part="permission:${escapeHTML(id)}"><div class="policy-row-main">
-      <h5>${escapeHTML(status.label)}</h5><p>${escapeHTML(record.agent || 'Agent unavailable')} · ${escapeHTML(operation || 'Operation unavailable')}</p>
-      <p>${effect}</p>
-      <p>Resource <code>${escapeHTML(record.resource_path || 'unavailable')}</code>${record.destination ? ` → ${escapeHTML(record.destination)}` : ''}</p>
-      <p>Workspace ${escapeHTML(record.workspace || 'unavailable')}<br>Executable path ${escapeHTML(record.reader_exe || 'unavailable')} (observed, not signature verified)</p>
-      <p>Created ${escapeHTML(record.created_at || 'unavailable')}${record.expires_at ? `<br>Expires ${escapeHTML(record.expires_at)}` : ''}${record.revoked_at ? `<br>Revoked ${escapeHTML(record.revoked_at)}` : ''}</p>${saved}
-      <details data-session-details><summary>Permission identifiers</summary><p>${escapeHTML(id)}<br>Rule ${escapeHTML(record.rule_id || 'unavailable')}<br>Originating session ${escapeHTML(record.session_id || 'unavailable')}</p></details>
-      ${revoke ? `<button type="button" class="btn btn-ghost btn-sm" data-action="session-permission-revoke" data-id="${escapeHTML(id)}"${st.loading || st.busy ? ' disabled' : ''}>Revoke this permission</button>` : ''}
-    </div></section>`;
-  }).join('');
-}
-
 function sessionDetailHTML(sess, events, trees, state = window.SA) {
   if (!sess) {
     return `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>Select a session to see its memory</span></div>`;
