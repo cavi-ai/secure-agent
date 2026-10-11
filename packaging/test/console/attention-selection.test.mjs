@@ -183,3 +183,87 @@ test('drawer mode follows CSS media changes even when innerWidth remains stale',
   assert.equal(main.inert, false);
   assert.equal(ctx.window.innerWidth, 1900);
 });
+
+function inspectorHarness() {
+  const controls = [], focusCalls = [];
+  const document = { activeElement: null };
+  const drawer = { contains: node => controls.includes(node) || node === close,
+    querySelectorAll: () => controls };
+  const close = {isConnected:true,focus(options) { document.activeElement=this; focusCalls.push({node:this,options}); }};
+  const make = (dataset, options = {}) => {
+    const button = {dataset, isConnected:true, disabled:false, parentElement:drawer,
+      matches() { return this.disabled; },
+      closest(selector) {
+        if (selector === 'details') return this.disclosure || null;
+        return this.hidden || this.inert || this.ariaHidden ? this : null;
+      },
+      getClientRects() { return this.disclosure && !this.disclosure.open ? [] : [{}]; },
+      focus(opts) { document.activeElement=this; focusCalls.push({node:this,options:opts}); }, ...options
+    };
+    return button;
+  };
+  const ctx = {document,drawer,btnDrawerClose:close,drawerMode:'attention',attentionSelection:{signature:'old'},
+    attentionSignature:()=>ctx.signature,signature:'new',homeContext:()=>({}),
+    needView:()=>({word:'Request',agent:'codex',what:'Recorded request',why:'Recorded evidence',items:[{}]}),
+    window:{SA:{}},escapeHTML:s=>s,actionBarHTML:()=>'',drawerTitle:{},
+    drawerBody:{querySelectorAll:()=>[]},drawerFoot:{next:[],set innerHTML(value) {
+      controls.forEach(node=>{node.isConnected=false;}); controls.splice(0,controls.length,...this.next);
+    }},getComputedStyle:node=>({display:node.display||'block',visibility:node.visibility||'visible'})};
+  vm.createContext(ctx);
+  vm.runInContext(fn('refreshAttentionInspector','  function reconcileAttention'),ctx);
+  return {ctx,make,controls,focusCalls,close,refresh:()=>ctx.refreshAttentionInspector({id:'request'})};
+}
+
+test('attention refresh retains Deny rather than the first Allow choice sharing its action and ID', () => {
+  const f=inspectorHarness();
+  const old=f.make({action:'guard-resolve',id:'guard-1',verdict:'deny',scope:'once'});
+  const allow=f.make({action:'guard-resolve',id:'guard-1',verdict:'allow',scope:'once'});
+  const deny=f.make({...old.dataset});
+  f.controls.push(old); f.ctx.document.activeElement=old; f.ctx.drawerFoot.next=[allow,deny];
+  f.refresh();
+  assert.equal(f.ctx.document.activeElement,deny);
+  assert.equal(f.focusCalls.length,1);
+  assert.equal(f.focusCalls[0].options.preventScroll,true);
+});
+
+for (const [name, choice, other] of [
+  ['guard scope and expiry',{action:'guard-resolve',id:'g',verdict:'allow',scope:'exact',expiry:'24h'},{expiry:'7d'}],
+  ['review decision and revision',{action:'review-decision',id:'r',decision:'close_reported',revision:'4'},{decision:'acknowledge'}],
+  ['resource intervention',{action:'resource-control',id:'p',decision:'apply',intervention:'pause',session:'s'},{intervention:'terminate'}],
+  ['served action ID',{action:'explain-act',flagId:'f',actionId:'deny',patternKey:'pattern'},{actionId:'allow-host'}],
+  ['remediation evidence',{action:'incident-remediation',id:'i',stepId:'step',revision:'3',evidence:'e1'},{evidence:'e2'}],
+]) test('attention refresh matches the complete ' + name, () => {
+  const f=inspectorHarness(); const old=f.make(choice), opposite=f.make({...choice,...other});
+  // Attribute insertion order does not change the served choice identity.
+  const exact=f.make(Object.fromEntries(Object.entries(choice).reverse()));
+  f.controls.push(old); f.ctx.document.activeElement=old; f.ctx.drawerFoot.next=[opposite,exact];
+  f.refresh(); assert.equal(f.ctx.document.activeElement,exact);
+});
+
+test('exact choice inside replaced More disclosure is revealed before focus', () => {
+  const f=inspectorHarness(); const data={action:'guard-resolve',id:'g',verdict:'allow',scope:'exact',expiry:'24h'};
+  const old=f.make(data), disclosure={open:false,parentElement:{closest:()=>null}};
+  const exact=f.make({...data},{disclosure});
+  f.controls.push(old); f.ctx.document.activeElement=old; f.ctx.drawerFoot.next=[exact];
+  f.refresh(); assert.equal(disclosure.open,true); assert.equal(f.ctx.document.activeElement,exact);
+});
+
+for (const [name, change] of [
+  ['removed',null],['new revision',{dataset:{action:'review-decision',id:'r',decision:'acknowledge',revision:'5'}}],
+  ['disabled',{disabled:true}],['hidden',{hidden:true}],['inert',{inert:true}],['aria hidden',{ariaHidden:true}],
+  ['CSS hidden',{display:'none'}],['invisible',{visibility:'hidden'}],['unrendered',{getClientRects:()=>[]}],
+]) test('attention refresh uses neutral Close when the exact choice is ' + name, () => {
+  const f=inspectorHarness(); const data={action:'review-decision',id:'r',decision:'acknowledge',revision:'4'};
+  const old=f.make(data); f.controls.push(old); f.ctx.document.activeElement=old;
+  f.ctx.drawerFoot.next=change ? [f.make({...data},change)] : [];
+  f.refresh(); assert.equal(f.ctx.document.activeElement,f.close); assert.equal(f.focusCalls.length,1);
+});
+
+test('unchanged inspector and focus outside its drawer receive no extra focus', () => {
+  const f=inspectorHarness(), old=f.make({action:'guard-resolve',id:'g',verdict:'deny',scope:'once'});
+  f.controls.push(old); f.ctx.document.activeElement=old; f.ctx.signature='old';
+  f.refresh(); assert.equal(f.ctx.document.activeElement,old); assert.equal(old.isConnected,true);
+  const outside=f.make({action:'refresh'}); f.ctx.document.activeElement=outside; f.ctx.signature='new';
+  f.ctx.drawerFoot.next=[f.make({...old.dataset})]; f.refresh();
+  assert.equal(f.ctx.document.activeElement,outside); assert.equal(f.focusCalls.length,0);
+});

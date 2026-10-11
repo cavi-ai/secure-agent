@@ -11,6 +11,18 @@
   let bookCleanup = () => {};
   let contextRuleReads = 0;
   const contextRules = data['/expected-egress'].rules;
+  if (scenarios.has('attentionactionfocus') || scenarios.has('attentionactionmanual')) {
+    const group = data['/posture'].groups.find(group => group.items.some(item => item.kind === 'guard'));
+    const guard = {...group.items.find(item => item.kind === 'guard')};
+    data['/posture'] = {...data['/posture'],needs_you:1,items:[guard],groups:[{...group,items:[guard]}]};
+    let facts = 0;
+    window.__attentionActionFocusRefresh = (mode = 'facts') => {
+      guard.detail = `Recorded guard facts ${++facts}`;
+      if (mode === 'remove') guard.available_scopes = guard.available_scopes.filter(scope => scope.expiry !== '24h');
+      window.SA.t.posture = data['/posture'];
+      window.SA.reconcileAttention();
+    };
+  }
   if (scenarios.has('attentionremodel')) {
     const ids = scenarios.has('attentionfinal') ? ['flag-1'] : ['flag-1', 'flag-2'];
     const items = ids.map(id => ({kind:'flag', id, priority:2, title:'Fixture attention ' + id, detail:'Recorded fixture evidence'}));
@@ -2924,6 +2936,31 @@
       }, 500);
     }, 4000);
   }
+
+  // Focus continuity uses native served buttons without activating a decision.
+  if (scenarios.has('attentionactionfocus')) setTimeout(() => {
+    const checks = {};
+    const writes = () => reqLog.filter(line => /^(POST|DELETE|PUT|PATCH) /.test(line)).length;
+    const before = writes();
+    document.querySelector('#attention-list [data-action="select-attention"][data-need-kind="guard"]')?.click();
+    const deny = document.querySelector('#drawer-foot [data-action="guard-resolve"][data-verdict="deny"]');
+    checks.opened = !!deny;
+    deny?.focus({preventScroll:true});
+    window.__attentionActionFocusRefresh();
+    checks.deny = document.activeElement.dataset.verdict === 'deny';
+    const more = document.querySelector('#drawer-foot details.act-more');
+    if (more) more.open = true;
+    const choice = document.querySelector('#drawer-foot [data-scope="exact"][data-expiry="24h"]');
+    choice?.focus({preventScroll:true});
+    window.__attentionActionFocusRefresh();
+    checks.more = document.activeElement.dataset.scope === 'exact' && document.activeElement.dataset.expiry === '24h'
+      && document.activeElement.closest('details')?.open && document.activeElement.getClientRects().length > 0;
+    window.__attentionActionFocusRefresh('remove');
+    checks.removed = document.activeElement.id === 'btn-drawer-close';
+    checks.noWrites = writes() === before;
+    stamp('attention-action-focus-probe',JSON.stringify(checks));
+    document.body.dataset.attentionActionFocus = JSON.stringify(checks);
+  }, 1500);
 
   // One inspection round trip through real controls; no security writes.
   if (scenarios.has('protectioncontext') || scenarios.has('protectioncontextprobe')) {
