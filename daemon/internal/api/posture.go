@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -116,11 +115,7 @@ func (a *API) advisorReadFailures(kind string) []string {
 	if a.store == nil {
 		return nil
 	}
-	label := kind + " advisor verdicts"
-	if slices.Contains(a.store.WriteHealth().ReadActive, label) {
-		return []string{label}
-	}
-	return nil
+	return advisorReadFailuresFrom(a.store, kind)
 }
 
 // postureWith is computePosture over the 24 h patterns and routine groups
