@@ -5,6 +5,7 @@
 [Getting started](GETTING_STARTED.md) installs the app and the selected hooks. Enable each protection deliberately: hook registration, named guard modes, secret fingerprints and proxy routing are separate controls.
 
 - [Egress firewall and routing](#egress-secret-leak-firewall)
+- [Review recurring connections](#review-recurring-connections)
 - [Directory Guard and approvals](#directory-guard)
 - [Configuration reference](CONFIGURATION.md)
 - [Firewall limits](FIREWALL_THREAT_MODEL.md) · [Guard limits](GUARD_THREAT_MODEL.md)
@@ -51,6 +52,24 @@ The snippet carries a per-install proxy token. Proxy requests require that crede
 Traffic that bypasses the proxy (pinned or unrouted) is counted as `uninspected_egress` in the status — a **rolling 24h** distinct-endpoint count, so the number reflects the current blind spot instead of growing forever. Clicking the warning (console or posture banner) opens the drill-down: every endpoint with per-agent counts, last-seen, the advisor's verdict, and a one-click **Allow** that records an expected endpoint; it does not decrypt or inspect that traffic (`GET /egress/uninspected` for the raw list).
 
 See [FIREWALL_THREAT_MODEL.md](FIREWALL_THREAT_MODEL.md) for exactly what the firewall defends against, what it does not, and how it handles secret material.
+
+## Review recurring connections
+
+The console's **Egress** tab groups observed outbound connections by agent activity and destination. A recurring connection from a known agent appears for review when no saved expectation covers it. These observations contain connection metadata; they do not establish what a request contained or whether a destination is safe. Any advisor explanation is labeled as an inference.
+
+Choose an expectation from the observed episode:
+
+| Choice | Scope |
+|---|---|
+| **Expect this destination** | That agent's exact host, protocol and port. Loopback destinations cannot be saved. |
+| **Expect all destinations for this activity scope** | Every destination for the same agent, executable, harness and workspace. Available only when the observed activity scope is complete. |
+| **Revoke expectation** | Remove the saved expectation. A recurring episode can return for review on refresh if no other rule covers it. |
+
+Prefer the exact destination when that is the decision you intend. The activity-scope choice also covers future destinations for that scope. Matching exact-destination rules take precedence over broader activity-scope rules.
+
+An expectation changes the episode's review classification. File guards, payload inspection, findings and incident detection continue to apply independently. The **Allow** action in the uninspected-endpoint drill-down uses a separate host allowlist; neither action routes traffic through the proxy or decrypts it.
+
+If an expectation cannot be saved, check the episode's observed agent, destination and scope. An invalid observation is rejected; an unavailable store or inconsistent saved rule produces an error rather than a successful approval. Retry a failed read before relying on the displayed classification. See [Troubleshooting](TROUBLESHOOTING.md#expected-connections-are-unavailable) and the [expected-egress API](API.md#expected-egress-expected-egress).
 
 ## Directory Guard
 
