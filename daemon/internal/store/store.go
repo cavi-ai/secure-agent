@@ -42,11 +42,6 @@ const (
 
 // Flag statements on hot paths, each served by an index (see Open).
 const (
-	// trimFlagsSQL deletes only the oldest flags past the cap, walking
-	// idx_flags_time from the oldest end; no sort of the whole table.
-	trimFlagsSQL = `DELETE FROM flags WHERE rowid IN (
-		SELECT rowid FROM flags ORDER BY datetime(ts), ts
-		LIMIT max(0, (SELECT COUNT(*) FROM flags) - ?))`
 	// ruleCountsSQL counts a rule's flags for one agent in two windows; it
 	// seeks idx_flags_rule_agent.
 	ruleCountsSQL = `SELECT
@@ -60,6 +55,14 @@ const (
 	// only when the statement repeats the index's empty-host exclusion.
 	hostFirstSeenSQL = `SELECT MIN(ts) FROM events WHERE remote_host = ? AND remote_host != ''`
 )
+
+// Flag retention and lists share full timestamp precision and identity ties.
+var trimFlagsSQL = `DELETE FROM flags WHERE rowid IN (
+	SELECT rowid FROM flags ORDER BY ` + timestampOrderExpr("ts") + `, id
+	LIMIT max(0, (SELECT COUNT(*) FROM flags) - ?))`
+
+var flagTimeIndexSQL = `CREATE INDEX IF NOT EXISTS idx_flags_instant_time ON flags(` + timestampOrderExpr("ts") + `, id);
+	DROP INDEX IF EXISTS idx_flags_time;`
 
 // Incident retention and active lists use the same instant and identity order.
 // The index keeps pruning bounded to an index walk rather than a table sort.
@@ -973,7 +976,7 @@ func (s *Store) GetFlagWithAdvisor(id string) (model.Flag, bool) {
 	return flags[0], true
 }
 
-// flagQuery builds QueryFlags' statement. Its ORDER BY matches idx_flags_time,
+// flagQuery builds QueryFlags' statement. Its ORDER BY matches idx_flags_instant_time,
 // so a LIMIT walks the index instead of sorting every row.
 func flagQuery(f FlagFilter) (string, []any) {
 	q := flagSelect + " WHERE 1=1"
@@ -1004,7 +1007,7 @@ func flagQuery(f FlagFilter) (string, []any) {
 	// Order by the normalized instant, not the raw RFC3339 text: local-offset
 	// stamps sort wrong lexicographically across a DST change, which with LIMIT
 	// can drop the truly-newest rows.
-	q += " ORDER BY datetime(ts) DESC, ts DESC LIMIT ?"
+	q += " ORDER BY " + timestampOrderExpr("ts") + " DESC, id DESC LIMIT ?"
 	args = append(args, flagLimit(f.Limit))
 	return q, args
 }
