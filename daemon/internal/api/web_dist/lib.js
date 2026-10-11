@@ -426,15 +426,34 @@ function labelsHTML(resp, nowMs) {
 // one (why, prevention, behavior, remediation, recommended actions as
 // buttons), the rule's playbook, and the ask button. Pure; everything is
 // escaped.
-function planHTML(resp, nowMs) {
+function agentInstructionHTML(subject, action, state = {}) {
+  if (!action) return '';
+  if (!action.ready) return `<p class="plan-status">${escapeHTML(action.reason || 'Instruction update unavailable.')}</p>`;
+  const file = String(action.path || '').split('/').pop();
+  if (!['AGENTS.md', 'CLAUDE.md'].includes(file) || !action.instruction || !/^[a-f0-9]{64}$/.test(action.revision || '')) return '';
+  const button = action.applied ? '<p role="status">Already applied</p>'
+    : `<button type="button" class="btn btn-primary btn-sm" data-action="apply-agent-instruction" data-subject="${escapeHTML(subject)}" data-revision="${escapeHTML(action.revision)}"${state.busy ? ' disabled' : ''}>${state.busy ? 'Applying…' : 'Apply to ' + file}</button>`;
+  return `<div class="plan-instruction" aria-busy="${!!state.busy}"><p>Append this safety rule to <code>${escapeHTML(action.path)}</code>:</p>`
+    + `<blockquote>${escapeHTML(action.instruction)}</blockquote><div class="endpoint-actions">${button}</div>`
+    + (state.error ? `<p class="plan-status" role="alert">${escapeHTML(state.error)}</p>` : '') + '</div>';
+}
+
+function planHTML(resp, nowMs, instructionState) {
   if (!resp || !resp.playbook) return '';
   const pb = resp.playbook;
   const p = resp.plan;
   const flag = resp.flag;
   const list = (items, tag) => (items && items.length)
     ? `<${tag || 'ul'} class="plan-list">${items.map(x => `<li>${escapeHTML(x)}</li>`).join('')}</${tag || 'ul'}>` : '';
-  const steps = items => (items && items.length) ? `<ul class="plan-list">${items.map(s =>
-    `<li><span class="plan-kind">${escapeHTML(PLAN_STEP_KINDS[s.kind] || s.kind)}</span> <strong>${escapeHTML(s.step)}</strong>. ${escapeHTML(s.detail)}</li>`).join('')}</ul>` : '';
+  let instructionShown = false;
+  const steps = items => (items && items.length) ? `<ul class="plan-list">${items.map(s => {
+    let action = '';
+    if (s.kind === 'agent-instruction' && !instructionShown) {
+      action = agentInstructionHTML(resp.subject, resp.instruction, instructionState);
+      instructionShown = !!action;
+    }
+    return `<li><span class="plan-kind">${escapeHTML(PLAN_STEP_KINDS[s.kind] || s.kind)}</span> <strong>${escapeHTML(s.step)}</strong>. ${escapeHTML(s.detail)}${action}</li>`;
+  }).join('')}</ul>` : '';
 
   const status = {
     pending: 'The advisor is writing a plan from this finding\'s local context…',

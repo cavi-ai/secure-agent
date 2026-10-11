@@ -12,6 +12,23 @@ const ctx = {};
 vm.runInNewContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), ctx, { filename: 'lib.js' });
 const { planHTML, planSlotHTML } = ctx;
 
+test('instruction action previews the exact file and rule before a single apply button', () => {
+  const instruction = { path: '/work/project/AGENTS.md', instruction: 'Never print <secret> values.', revision: 'a'.repeat(64), applied: false, ready: true };
+  const html = planHTML({ subject: 'flag:f1', status: 'ready', playbook, plan, flag, instruction }, now);
+  assert.match(html, /Apply to AGENTS.md/);
+  assert.match(html, /data-action="apply-agent-instruction"/);
+  assert.match(html, /data-revision="a{64}"/);
+  assert.match(html, /\/work\/project\/AGENTS.md/);
+  assert.match(html, /Never print &lt;secret&gt; values\./);
+  assert.equal((html.match(/data-action="apply-agent-instruction"/g) || []).length, 1);
+  const applied = planHTML({ subject: 'flag:f1', playbook, plan, instruction: { ...instruction, applied: true } }, now);
+  assert.match(applied, /Already applied/);
+  assert.ok(!applied.includes('data-action="apply-agent-instruction"'));
+  const unavailable = planHTML({ subject: 'flag:f1', playbook, plan, instruction: { ready: false, reason: 'Project folder unavailable' } }, now);
+  assert.match(unavailable, /Project folder unavailable/);
+  assert.ok(!unavailable.includes('data-action="apply-agent-instruction"'));
+});
+
 test('incident report places decisions and advisor between the summary and evidence', () => {
   const markdown = '# Report\n\n- **Summary**: Test fixture\n\n## Rotation checklist\n\nEvidence';
   const html = ctx.incidentReportHTML('a"b', {status: 'open'}, markdown);

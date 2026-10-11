@@ -1041,6 +1041,15 @@ export interface LabelContext {
   suggestion?: LabelSuggestion;
 }
 
+export interface InstructionPreview {
+  path: string;
+  instruction: string;
+  revision: string;
+  applied: boolean;
+  ready: boolean;
+  reason?: string;
+}
+
 export interface PlanResponse {
   subject: string;
   status: string;
@@ -1050,6 +1059,7 @@ export interface PlanResponse {
   labels?: LabelContext;
   advisor_ready: boolean;
   reason?: string;
+  instruction?: InstructionPreview;
 }
 
 export interface ReviewDecisionRequest {
