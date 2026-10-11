@@ -15,7 +15,7 @@ const scope = (id = 'scope-a', extra = {}) => ({ id, kind: 'exact', agent: 'clau
 function context() {
   const c = { Date, URLSearchParams, window: { SA: {} } };
   vm.createContext(c);
-  for (const file of ['lib.js', 'tab-overview.js', 'session-workbench.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), c);
+  for (const file of ['lib.js', 'tab-overview.js', 'session-workbench.js', 'decision-permissions.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), c);
   return c;
 }
 function controller() {
@@ -42,6 +42,24 @@ function controller() {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+test('one decision view owns ordered rows, missing records, and revoke offers', () => {
+  const c = context();
+  const rows = c.decisionPermissionRows(receipt, [scope('unrelated'), scope()]);
+  assert.deepEqual(Array.from(rows, row => row.id), receipt.ids);
+  assert.equal(rows[0].label, 'Timed permission');
+  assert.equal(rows[0].revoke, true);
+  assert.match(rows[0].effect, /does not grant network access/);
+  assert.equal(rows[1].record, null);
+  assert.equal(rows[1].label, 'Current status unknown');
+  assert.equal(rows[1].revoke, false);
+  assert.throws(() => c.decisionPermissionRows(receipt, [scope(), scope()]));
+  assert.throws(() => c.decisionPermissionRows(receipt, null));
+  const unknown = c.decisionPermissionRows(receipt, [scope('scope-a', { applicability: { label: 'Allowed', revoke: 'yes' } })]);
+  assert.equal(unknown[0].revoke, false);
+  assert.equal(unknown[0].label, 'Applicability unknown');
+  assert.equal(receipt.ids.length, 2, 'the saved receipt is unchanged');
+});
+
 test('pending refresh retains a disabled action without permitting a revocation request', async () => {
   const t = controller();
   const open = t.c.window.openSessionPermissions('review-a', 'session-a');
@@ -65,7 +83,7 @@ test('Results links the exact saved decision and session instead of the global p
 
 test('scope details show only receipt IDs, unknown missing status, exact coordinates, and historic revision', () => {
   const c = context();
-  const html = c.sessionPermissionsHTML(receipt, { rows: [scope(), scope('unrelated')], readAt: at });
+  const html = c.sessionPermissionsHTML(receipt, { rows: c.decisionPermissionRows(receipt, [scope(), scope('unrelated')]), readAt: at });
   for (const text of ['revision 1', 'session-a', '/usr/bin/tool', '/work/a/.env', 'example.test:443', 'scope-missing',
     'Current status unknown', 'not signature verified', 'rechecks live session', 'does not grant network access']) assert.ok(html.includes(text), text);
   assert.ok(!html.includes('unrelated'));
@@ -75,27 +93,27 @@ test('scope details show only receipt IDs, unknown missing status, exact coordin
 
 test('failed refresh retains labeled last-known scopes and disables revocation', () => {
   const c = context();
-  const stale = c.sessionPermissionsHTML(receipt, { rows: [scope()], readAt: at, error: 'unavailable' });
+  const stale = c.sessionPermissionsHTML(receipt, { rows: c.decisionPermissionRows(receipt, [scope()]), readAt: at, error: 'unavailable' });
   assert.match(stale, /Last known permission records/);
   assert.match(stale, /Timed permission/);
   assert.ok(!stale.includes('data-action="session-permission-revoke"'));
-  const hostile = c.sessionPermissionsHTML({ ...receipt, sessionID: '<img>' }, { rows: [scope('scope-a', { workspace: '<img>' })] });
+  const hostile = c.sessionPermissionsHTML({ ...receipt, sessionID: '<img>' }, { rows: c.decisionPermissionRows(receipt, [scope('scope-a', { workspace: '<img>' })]) });
   assert.ok(!hostile.includes('<img>'));
 });
 
 test('session permissions render server applicability and hide revoke when it is false or absent', () => {
   const c = context();
-  const offered = c.sessionPermissionsHTML(receipt, { rows: [scope('scope-a', { revoked_at: at, applicability: { label: 'Timed permission', revoke: true } })] });
+  const offered = c.sessionPermissionsHTML(receipt, { rows: c.decisionPermissionRows(receipt, [scope('scope-a', { revoked_at: at, applicability: { label: 'Timed permission', revoke: true } })]) });
   assert.match(offered, />Timed permission</);
   assert.match(offered, /Expected read\/connect activity/);
   assert.match(offered, /does not grant network access/);
   assert.match(offered, /data-action="session-permission-revoke" data-id="scope-a"/);
-  const withheld = c.sessionPermissionsHTML(receipt, { rows: [scope('scope-a', { applicability: { label: 'Expired', revoke: false } })] });
+  const withheld = c.sessionPermissionsHTML(receipt, { rows: c.decisionPermissionRows(receipt, [scope('scope-a', { applicability: { label: 'Expired', revoke: false } })]) });
   assert.match(withheld, />Expired</);
   assert.match(withheld, /Expected read\/connect activity/);
   assert.match(withheld, /does not grant network access/);
   assert.ok(!withheld.includes('data-action="session-permission-revoke"'));
-  const absent = c.sessionPermissionsHTML(receipt, { rows: [scope('scope-a', { applicability: undefined })] });
+  const absent = c.sessionPermissionsHTML(receipt, { rows: c.decisionPermissionRows(receipt, [scope('scope-a', { applicability: undefined })]) });
   assert.match(absent, /Applicability unknown/);
   assert.match(absent, /Expected read\/connect activity/);
   assert.ok(!absent.includes('data-action="session-permission-revoke"'));
