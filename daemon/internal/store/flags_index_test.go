@@ -11,9 +11,8 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
-// A store whose stamps include 'now' (which datetime() refuses inside an
-// index) or malformed text still opens and accepts writes/retention; only the
-// flag retention index is skipped. Flag reads reject malformed timestamps.
+// Malformed legacy stamps do not prevent opening or retaining evidence.
+// Flag reads still reject malformed timestamps.
 func TestOpenSurvivesStampsTheTimeIndexesRefuse(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "e.db")
 	raw, err := sql.Open("sqlite", path)
@@ -72,13 +71,13 @@ func TestFlagHotPathsUseIndexes(t *testing.T) {
 	if plan := queryPlan(t, s, reattributeFlagsSQL, "claude", 7, "2026-10-07T00:00:00Z"); !strings.Contains(plan, "idx_flags_pid") {
 		t.Errorf("reattribute plan = %q, want idx_flags_pid", plan)
 	}
-	if plan := queryPlan(t, s, trimFlagsSQL, maxFlags); !strings.Contains(plan, "idx_flags_time") || strings.Contains(plan, "TEMP B-TREE") {
-		t.Errorf("trim plan = %q, want idx_flags_time without a sort", plan)
+	if plan := queryPlan(t, s, trimFlagsSQL, maxFlags); !strings.Contains(plan, "idx_flags_instant_time") || strings.Contains(plan, "TEMP B-TREE") {
+		t.Errorf("trim plan = %q, want idx_flags_instant_time without a sort", plan)
 	}
 	for _, f := range []FlagFilter{{}, {Unacted: true}, {MinSeverity: 3}} {
 		q, args := flagQuery(f)
-		if plan := queryPlan(t, s, q, args...); !strings.Contains(plan, "idx_flags_time") || strings.Contains(plan, "TEMP B-TREE") {
-			t.Errorf("QueryFlags(%+v) plan = %q, want idx_flags_time without a sort", f, plan)
+		if plan := queryPlan(t, s, q, args...); !strings.Contains(plan, "idx_flags_instant_time") || strings.Contains(plan, "TEMP B-TREE") {
+			t.Errorf("QueryFlags(%+v) plan = %q, want idx_flags_instant_time without a sort", f, plan)
 		}
 	}
 	if plan := queryPlan(t, s, ruleCountsSQL, "a", "b", "r", "claude"); !strings.Contains(plan, "idx_flags_rule_agent") {
