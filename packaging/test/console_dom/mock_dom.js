@@ -9,6 +9,8 @@
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
   let bookCleanup = () => {};
+  let contextRuleReads = 0;
+  const contextRules = data['/expected-egress'].rules;
   if (scenarios.has('attentionremodel')) {
     const ids = scenarios.has('attentionfinal') ? ['flag-1'] : ['flag-1', 'flag-2'];
     const items = ids.map(id => ({kind:'flag', id, priority:2, title:'Fixture attention ' + id, detail:'Recorded fixture evidence'}));
@@ -802,6 +804,13 @@
     if (scenarios.has('removecadence') && p === '/worktrees' && window.__removePostedAt && !window.__removeGap) {
       window.__removeGap = Date.now() - window.__removePostedAt;
       stamp('remove-cadence', String(window.__removeGap));
+    }
+    if (p === '/expected-egress' && !opts.method && (scenarios.has('contextread') || scenarios.has('contextmissing') || scenarios.has('contextfail'))) {
+      contextRuleReads++;
+      stamp('protection-context-reads', String(contextRuleReads));
+      if (scenarios.has('contextfail') && contextRuleReads > 1) return {ok:false,status:503};
+      const rules = scenarios.has('contextread') && contextRuleReads > 1 ? contextRules : [];
+      return {ok:true,status:200,json:async()=>({rules})};
     }
     let body = data[p];
     // /costs answers by its `by` query; every /costs query lands, in order,
@@ -2906,6 +2915,37 @@
       }, 500);
     }, 4000);
   }
+
+  // One inspection round trip through real controls; no security writes.
+  if (scenarios.has('protectioncontext') || scenarios.has('protectioncontextprobe')) {
+    setTimeout(() => openTab('protection/traffic'), 1500);
+  }
+  if (scenarios.has('protectioncontextprobe')) setTimeout(() => {
+    const checks = {};
+    const writes = () => reqLog.filter(line => /^(POST|DELETE|PUT|PATCH) /.test(line)).length;
+    const beforeWrites = writes();
+    document.querySelector('[data-action="view-egress-expectation"][data-episode-id="episode-expected"]')?.click();
+    setTimeout(() => {
+      const selected = document.querySelector('[data-expected-egress-rule="expected-older"].is-context-target');
+      checks.rules = location.hash === '#protection/rules';
+      checks.selected = !!selected;
+      checks.nonDestructiveFocus = document.activeElement === selected;
+      checks.rationale = selected?.textContent.includes('Routine update') === true;
+      const beforeScroll = scrollY;
+      // Flush the same authoritative cached report through the real keyed renderer.
+      window.SA.flushRender();
+      renderExpectedEgressRules();
+      checks.refreshNode = selected === document.querySelector('[data-expected-egress-rule="expected-older"].is-context-target');
+      checks.refreshFocus = document.activeElement === selected && scrollY === beforeScroll;
+      document.querySelector('[data-action="back-egress-context"]')?.click();
+      const origin = document.querySelector('[data-egress-episode-id="episode-expected"].is-context-target');
+      checks.returned = location.hash === '#protection/traffic' && !!origin && document.activeElement === origin;
+      document.querySelector('[data-protection-view="audit"]')?.click();
+      checks.manualCleared = window.SA.protectionContext === null;
+      checks.noWrites = writes() === beforeWrites;
+      stamp('protection-context-probe', JSON.stringify(checks));
+    }, 500);
+  }, 2000);
 
   // These probes exercise the real console DOM; timers are bounded once per fixture.
   if (scenarios.has('attentionremodel')) setTimeout(() => {
