@@ -183,6 +183,88 @@ final class PopoverGlanceTests: XCTestCase {
         XCTAssertTrue(stub.performed.isEmpty)
     }
 
+    func testActionResultSurvivesQueueAdvanceWithOriginalEvidence() async throws {
+        let stub = StubDaemonClient()
+        let assessment = FindingAssessmentModel(evidenceBasis: ["fingerprint-payload"], risk: "critical",
+            control: "blocked", residualRisk: "transmission-attempt", reviewState: "unreviewed",
+            recommendationID: nil, reason: "The proxy rejected this request before forwarding.",
+            limits: ["Earlier exposure is not verified."], advice: nil)
+        let acted = FlagModel(id: "acted", rule: "proxy-secret-leak", severity: 3, ts: "", pid: 1,
+            agent: "cursor", evidence: [], sessionId: "original-session", title: "Recorded payload finding",
+            explain: FlagExplain(what: "Recorded attempt", disposition: FlagDisposition(state: "critical", text: "Urgent", why: ""),
+                actions: [allowHost], assessment: assessment))
+        let next = FlagModel(id: "next", rule: "keychain-access", severity: 3, ts: "", pid: 2, agent: "codex", evidence: [])
+        stub.flags = [acted, next]
+        let state = connectedState(stub)
+        state.seedFlagsForTesting(stub.flags)
+        await state.performInPlace(allowHost, on: acted)
+
+        let view = ConsoleView(state: state, scrollable: false)
+        XCTAssertEqual(state.heroFlag?.id, "next")
+        let result = try XCTUnwrap(view.actionResultModel)
+        XCTAssertEqual(result.heading, "Action applied")
+        XCTAssertEqual(result.flagID, "acted")
+        XCTAssertEqual(result.sessionID, "original-session")
+        XCTAssertEqual(result.findingTitle, "Recorded payload finding")
+        XCTAssertEqual(result.actionLabel, "Allow api.example.com for cursor")
+        XCTAssertTrue(result.evidenceLines.contains { $0.contains("Transmission attempt") && $0.contains("Blocked before forwarding") })
+        XCTAssertTrue(result.evidenceLines.contains("Earlier exposure is not verified."))
+        XCTAssertEqual(state.inPlaceAction?.assessment, assessment, "refresh must not replace the evidence captured for the action")
+
+        state.seedFlagsForTesting([])
+        XCTAssertNil(view.heroModel.flag)
+        XCTAssertEqual(view.actionResultModel?.flagID, "acted", "an empty queue must not erase the result")
+        state.seedFlagsForTesting([acted])
+        XCTAssertTrue(view.actionResultModel?.evidenceLines.isEmpty ?? false, "identical evidence already visible in the hero should not be repeated")
+        state.seedFlagsForTesting([FlagModel(id: "acted", rule: "proxy-secret-leak", severity: 3, ts: "", pid: 1, agent: "cursor", evidence: [])])
+        XCTAssertFalse(view.actionResultModel?.evidenceLines.isEmpty ?? true, "missing current evidence must not erase the captured assessment")
+    }
+
+    func testClosingPartialResultPreservesMutationGuard() async {
+        let stub = StubDaemonClient()
+        stub.acknowledgeError = DaemonClientError.transport("daemon restarting")
+        let state = connectedState(stub)
+        let flag = FlagModel(id: "pending", rule: "sensitive-read-then-connect", severity: 3, ts: "", pid: 1, agent: "cursor", evidence: [])
+        await state.performInPlace(allowHost, on: flag)
+        XCTAssertEqual(ConsoleView(state: state).actionResultModel?.heading, "Action applied; review unconfirmed")
+        state.dismissInPlaceResult()
+        XCTAssertNil(ConsoleView(state: state).actionResultModel)
+        XCTAssertTrue(state.inPlaceAction?.phase.keepsButtonDisabled ?? false)
+        XCTAssertTrue(ConsoleView.actionIsDisabled(.perform(allowHost), phase: state.inPlaceAction?.phase))
+        XCTAssertFalse(ConsoleView.actionIsDisabled(.openConsole(tab: "findings"), phase: state.inPlaceAction?.phase), "a mutation retry guard must not block evidence inspection")
+        await state.performInPlace(allowHost, on: flag)
+        XCTAssertEqual(stub.performed, [allowHost], "closing feedback must not make a successful mutation replayable")
+    }
+
+    func testFailedResultDoesNotClaimApplicationAndRetryReplacesIt() async {
+        let stub = StubDaemonClient()
+        stub.performError = DaemonClientError.http(500)
+        let state = connectedState(stub)
+        let flag = FlagModel(id: "failed", rule: "keychain-access", severity: 3, ts: "", pid: 1, agent: "cursor", evidence: [])
+        await state.performInPlace(allowHost, on: flag)
+        XCTAssertEqual(ConsoleView(state: state).actionResultModel?.heading, "Action not confirmed")
+        XCTAssertEqual(ConsoleView(state: state).actionResultModel?.actionLabel, "Allow api.example.com for cursor")
+        state.dismissInPlaceResult()
+        stub.performError = nil
+        await state.performInPlace(allowHost, on: flag)
+        XCTAssertEqual(ConsoleView(state: state).actionResultModel?.heading, "Action applied")
+        XCTAssertEqual(stub.performed, [allowHost])
+    }
+
+    func testActionResultUsesOnlyMatchingPostureEvidence() async throws {
+        let stub = StubDaemonClient()
+        let state = connectedState(stub)
+        let flag = FlagModel(id: "acted", rule: "proxy-secret-leak", severity: 3, ts: "", pid: 1, agent: "cursor", evidence: [])
+        let raw = #"{"state":"critical","needs_you":1,"summary":"Unknown","connected":true,"items":[{"kind":"flag","id":"acted","title":"Recorded finding","severity":3,"assessment":{"evidence_basis":[],"risk":"unknown","control":"unknown","residual_risk":"unknown","review_state":"unreviewed","reason":"Exposure and control outcome are unknown.","limits":[]}}]}"#
+        state.seedPostureForTesting(try JSONDecoder().decode(PostureModel.self, from: Data(raw.utf8)))
+        await state.performInPlace(allowHost, on: flag)
+        XCTAssertEqual(state.inPlaceAction?.assessment?.risk, "unknown")
+        XCTAssertTrue(ConsoleView(state: state).actionResultModel?.evidenceLines.contains { $0.contains("Control outcome unknown") } ?? false)
+        let other = FlagModel(id: "other", rule: "keychain-access", severity: 3, ts: "", pid: 1, agent: "cursor", evidence: [])
+        await state.performInPlace(allowHost, on: other)
+        XCTAssertNil(state.inPlaceAction?.assessment, "another finding's assessment must not be attributed to this action")
+    }
+
     /// Table-driven: perform() only trusts an id's exact served method, path
     /// and required body keys — never whatever a malformed or tampered
     /// action happens to carry for that id.
