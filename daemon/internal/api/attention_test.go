@@ -17,11 +17,14 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
 
-func attentionAPI(t *testing.T, sessions []resource.Session) *API {
+func attentionDeps(t *testing.T, sessions []resource.Session) Deps {
 	t.Helper()
-	a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.resources = func() resource.Snapshot { return resource.Snapshot{Sessions: sessions} }
-	return a
+
+	return Deps{Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Resources: func() resource.Snapshot { return resource.Snapshot{Sessions: sessions} }}
+}
+
+func attentionAPI(t *testing.T, sessions []resource.Session) *API {
+	return newTestAPI(attentionDeps(t, sessions))
 }
 
 // attentionGroups is the queue posture builds: over the store's 24 h
@@ -65,8 +68,9 @@ func TestAttentionGroupsEmptyWhenNothingPending(t *testing.T) {
 }
 
 func TestAttentionGroupsGuardPendingJoinsLiveSession(t *testing.T) {
-	a := attentionAPI(t, []resource.Session{mkResourceSession(42, "codex", "/work/repo")})
-	a.guardBroker = guard.NewBroker(time.Minute)
+	deps := attentionDeps(t, []resource.Session{mkResourceSession(42, "codex", "/work/repo")})
+	deps.Guard = guard.NewBroker(time.Minute)
+	a := newTestAPI(deps)
 	// Request blocks until a decision lands; run it in the background and let
 	// it time out after the test — the prompt stays pending meanwhile.
 	go a.guardBroker.Request(context.Background(), guard.Pending{
@@ -87,8 +91,9 @@ func TestAttentionGroupsGuardPendingJoinsLiveSession(t *testing.T) {
 }
 
 func TestAttentionGroupLabelKeepsAgentIDCaseAtRootWorkspace(t *testing.T) {
-	a := attentionAPI(t, []resource.Session{mkResourceSession(43, "cursor-ide", "/")})
-	a.guardBroker = guard.NewBroker(time.Minute)
+	deps := attentionDeps(t, []resource.Session{mkResourceSession(43, "cursor-ide", "/")})
+	deps.Guard = guard.NewBroker(time.Minute)
+	a := newTestAPI(deps)
 	go a.guardBroker.Request(context.Background(), guard.Pending{ID: "g3", Agent: "cursor-ide", Tool: "Read", Path: "/Users/x/.aws/credentials"})
 	waitFor(t, func() bool { return len(a.guardBroker.Pending()) == 1 })
 	groups := attentionGroups(a)
@@ -98,8 +103,9 @@ func TestAttentionGroupLabelKeepsAgentIDCaseAtRootWorkspace(t *testing.T) {
 }
 
 func TestAttentionGroupsUnmatchedGuardGetsAgentBucket(t *testing.T) {
-	a := attentionAPI(t, nil)
-	a.guardBroker = guard.NewBroker(time.Minute)
+	deps := attentionDeps(t, nil)
+	deps.Guard = guard.NewBroker(time.Minute)
+	a := newTestAPI(deps)
 	go a.guardBroker.Request(context.Background(), guard.Pending{ID: "g2", Agent: "codex", Tool: "Write", Path: "/tmp/x"})
 	waitFor(t, func() bool { return len(a.guardBroker.Pending()) == 1 })
 	groups := attentionGroups(a)
@@ -241,8 +247,8 @@ func TestAttentionGroupsCoverEveryPostureItem(t *testing.T) {
 		Agents:     []AgentSummary{{PID: 42, Name: "cursor"}, {PID: 43, Name: "cursor"}},
 		Collectors: []supervise.Health{{Name: "transcript", Running: true}},
 	}
-	a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status { return status })
-	a.correlator = cr
+
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return status }, Correlator: cr})
 	a.store.PutFlag(model.Flag{ID: "crit", Rule: "tcc-tamper", Severity: 3, TS: now, PID: 42, Agent: "cursor"})
 	a.store.PutFlag(model.Flag{ID: "high", Rule: "keychain-access", Severity: 2, TS: now, PID: 42, Agent: "cursor"})
 
@@ -308,10 +314,10 @@ func TestAttentionEgressCoverageSkipsCarriers(t *testing.T) {
 		for _, h := range hosts {
 			cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: now.Add(-time.Hour), RemoteHost: h, RemotePort: 443})
 		}
-		a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status {
+
+		a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status {
 			return Status{Running: true, UninspectedEgress: cr.UninspectedEgressCountWindow(24 * time.Hour)}
-		})
-		a.correlator = cr
+		}, Correlator: cr})
 		return a, cr
 	}
 	const carrier, unknown = "104.16.0.1", "unknown.example.com"
@@ -379,7 +385,7 @@ func TestAttentionIncidentSeverityPreservesRisk(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+			a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 			a.store.PutIncident(model.IncidentReport{ID: "inc-1", Rule: "sensitive-read-then-connect", Risk: tc.risk,
 				Timestamp: tc.ts, Agent: "claude", PID: 7, Summary: "s"})
 			p := a.computePosture()

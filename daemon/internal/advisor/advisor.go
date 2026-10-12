@@ -59,7 +59,7 @@ type Sink interface {
 	PutAdvisorPlan(subject string, p model.AdvisorPlan) error
 	// SimilarLabels returns the operator's judgments on cases like this
 	// one (rule, agent, and the file path or host involved).
-	SimilarLabels(rule, agent, pattern string, limit int) []model.OperatorLabel
+	SimilarLabelsResult(rule, agent, pattern string, limit int) ([]model.OperatorLabel, error)
 }
 
 // IsLoopbackEndpoint reports whether the endpoint URL targets this machine.
@@ -699,7 +699,10 @@ func (s *Subscriber) operatorHistory(fl model.Flag) string {
 	if pattern == "" {
 		pattern = evidenceHost(fl)
 	}
-	labels := s.sink.SimilarLabels(fl.Rule, fl.Agent, pattern, operatorHistoryLimit)
+	labels, err := s.sink.SimilarLabelsResult(fl.Rule, fl.Agent, pattern, operatorHistoryLimit)
+	if err != nil {
+		return "\noperator history unavailable"
+	}
 	if len(labels) == 0 {
 		return ""
 	}

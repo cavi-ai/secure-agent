@@ -902,7 +902,11 @@ func reattributeUntaggedFlags(st *store.Store, deltas *api.DeltaHub, now func() 
 			return
 		}
 		filter := store.FlagFilter{Agent: info.Name, Since: since.UTC().Format(time.RFC3339Nano), Limit: model.PatternFlagIDCap}
-		for _, fl := range st.QueryFlags(filter) {
+		flags, err := st.QueryFlagsResult(filter)
+		if err != nil {
+			return
+		}
+		for _, fl := range flags {
 			if fl.PID == pid {
 				deltas.Publish(api.Delta{Type: "flag", Data: fl})
 			}

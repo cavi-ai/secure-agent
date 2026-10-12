@@ -42,7 +42,7 @@ func TestSessionReportEndpoint(t *testing.T) {
 	}
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(-9 * time.Minute), SessionID: "s1", ToolName: "Bash", ToolStatus: "ok", DurationMs: 1500, CallID: "c1"})
 	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-8 * time.Minute), SessionID: "s1", Model: "m1", TokensIn: 100, TokensOut: 10, CostUSD: 0.25})
-	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	mux := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }}).buildMux()
 	get := func(path string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))

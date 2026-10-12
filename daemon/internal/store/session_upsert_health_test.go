@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"testing"
 	"time"
 
@@ -47,7 +48,7 @@ func TestSessionUpsertFailureAndRecovery(t *testing.T) {
 			if _, err := s.db.Exec(recover); err != nil {
 				t.Fatal(err)
 			}
-			if saved, ok := s.GetSession(sess.ID); failure == "ignored update" {
+			if saved, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult(sess.ID)); failure == "ignored update" {
 				if !ok || !saved.LastSeenAt.Equal(now) {
 					t.Fatalf("ignored update changed saved state: %+v", saved)
 				}
@@ -57,7 +58,7 @@ func TestSessionUpsertFailureAndRecovery(t *testing.T) {
 			if err := s.UpsertSession(sess); err != nil {
 				t.Fatal(err)
 			}
-			if saved, ok := s.GetSession(sess.ID); !ok || !saved.LastSeenAt.Equal(sess.LastSeenAt) {
+			if saved, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult(sess.ID)); !ok || !saved.LastSeenAt.Equal(sess.LastSeenAt) {
 				t.Fatalf("retry did not save session: %+v", saved)
 			}
 			if h := s.WriteHealth(); h.Failures != 1 || len(h.Active) != 0 {

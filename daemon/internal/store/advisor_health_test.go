@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -38,7 +39,7 @@ func TestAdvisorVerdictWriteFailureRecoversIndependently(t *testing.T) {
 			if err := s.PutAdvisorVerdict("subject", "flag", verdict); err == nil {
 				t.Fatal("failed write reported verdict persistence success")
 			}
-			if got, ok := s.AdvisorVerdictFor("subject", "flag"); !ok || got.Rationale != "saved" {
+			if got, ok := testutil.Lookup[model.AdvisorVerdict](t)(s.AdvisorVerdictResultFor("subject", "flag")); !ok || got.Rationale != "saved" {
 				t.Fatalf("failed write changed saved verdict: %+v, %v", got, ok)
 			}
 			h := s.WriteHealth()
@@ -56,7 +57,7 @@ func TestAdvisorVerdictWriteFailureRecoversIndependently(t *testing.T) {
 			if err := s.PutAdvisorVerdict("subject", "flag", verdict); err != nil {
 				t.Fatal(err)
 			}
-			if got, ok := s.AdvisorVerdictFor("subject", "flag"); !ok || got.Rationale != "new" {
+			if got, ok := testutil.Lookup[model.AdvisorVerdict](t)(s.AdvisorVerdictResultFor("subject", "flag")); !ok || got.Rationale != "new" {
 				t.Fatalf("recovered verdict was not saved: %+v, %v", got, ok)
 			}
 			h = s.WriteHealth()

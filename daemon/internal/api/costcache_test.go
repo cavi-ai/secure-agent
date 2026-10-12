@@ -132,7 +132,7 @@ func TestCostKeyIsTheRequestAsAsked(t *testing.T) {
 // newCostsTestAPI builds the API on st; the test waits for the report
 // cache's background work before st closes.
 func newCostsTestAPI(t *testing.T, st *store.Store) *API {
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	t.Cleanup(a.costs.bg.Wait)
 	return a
 }

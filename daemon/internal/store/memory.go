@@ -114,7 +114,11 @@ func (s *Store) QuerySessionMemory(sessionID string, before *MemoryCursor, limit
 	// Resolve old resource family identity before the read transaction. New
 	// source rows always use their persisted session_id.
 	legacyKey := "\x00"
-	if sess, ok := s.GetSession(sessionID); ok && sess.RootPID > 0 && sess.RootStartedAt != "" {
+	sess, found, err := s.GetSessionResult(sessionID)
+	if err != nil {
+		return nil, false, err
+	}
+	if found && sess.RootPID > 0 && sess.RootStartedAt != "" {
 		if started, err := time.Parse(time.RFC3339Nano, sess.RootStartedAt); err == nil {
 			key := fmt.Sprintf("%d:%d", sess.RootPID, started.UnixNano())
 			if s.SessionIDForFamilyKey(key) == sessionID {

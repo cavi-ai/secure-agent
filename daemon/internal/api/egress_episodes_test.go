@@ -28,9 +28,10 @@ func TestEgressEpisodesCandidateAndAssessment(t *testing.T) {
 			}
 		}
 	}
-	api := newTestAPI("", st, nil, nil)
+
 	queued := 0
-	api.egressAdvisor = func(store.EgressEpisode) bool { queued++; return true }
+
+	api := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, EgressAdvisor: func(store.EgressEpisode) bool { queued++; return true }})
 	mux := api.buildMux()
 	read := func() []egressEpisodeView {
 		w := httptest.NewRecorder()
@@ -127,7 +128,7 @@ func TestEgressEpisodesPrioritizesOlderCandidate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	views, err := newTestAPI("", st, nil, nil).egressEpisodeViews()
+	views, err := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil}).egressEpisodeViews()
 	if err != nil {
 		t.Fatal(err)
 	}

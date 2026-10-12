@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"net"
 	"net/http"
 	"os"
@@ -101,7 +103,7 @@ func TestCoverageProbeInstalledHookLive(t *testing.T) {
 	if receipt.State != "passed" {
 		t.Fatalf("round trip: %s", receipt.State)
 	}
-	if rows := a.store.QueryEvents(store.EventFilter{Limit: 20}); len(rows) != 0 {
+	if rows := testutil.Read[[]event.Event](t)(a.store.QueryEventsResult(store.EventFilter{Limit: 20})); len(rows) != 0 {
 		t.Fatal("synthetic probe manufactured session evidence")
 	}
 	if rows := a.store.ListGuardDecisions("", 20); len(rows) != 0 {

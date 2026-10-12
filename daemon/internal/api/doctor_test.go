@@ -22,7 +22,7 @@ import (
 func getDoctor(t *testing.T, st *store.Store, status Status) (DoctorReport, string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	a := newTestAPI("", st, nil, func() Status { return status })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return status }})
 	rec := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/doctor", nil))
 	if rec.Code != http.StatusOK {
@@ -100,7 +100,7 @@ func TestDoctorEmptyStore(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	newTestAPI("", st, nil, func() Status { return Status{} }).buildMux().
+	newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{} }}).buildMux().
 		ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/doctor", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST /doctor: status %d, want 405", rec.Code)

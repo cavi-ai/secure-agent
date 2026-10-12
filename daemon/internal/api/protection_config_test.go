@@ -12,8 +12,9 @@ import (
 )
 
 func TestFirewallPatternCRUDPersistsAndApplies(t *testing.T) {
-	a := explainTestAPI(t)
-	a.configPath = filepath.Join(t.TempDir(), "config.yaml")
+	deps := explainTestDeps(t)
+	deps.ConfigPath = filepath.Join(t.TempDir(), "config.yaml")
+	a := newTestAPI(deps)
 	if err := os.WriteFile(a.configPath, []byte("# keep me\nproxy_enabled: false\nfirewall:\n  mode: block\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -76,8 +77,9 @@ func TestFirewallPatternCRUDPersistsAndApplies(t *testing.T) {
 func TestFirewallPatternFailedSaveKeepsProtection(t *testing.T) {
 	for _, bad := range []string{"broken: [", "null", "firewall: null\n", "firewall: &fw {mode: block}\nother: *fw\n"} {
 		t.Run(bad, func(t *testing.T) {
-			a := explainTestAPI(t)
-			a.configPath = filepath.Join(t.TempDir(), "config.yaml")
+			deps := explainTestDeps(t)
+			deps.ConfigPath = filepath.Join(t.TempDir(), "config.yaml")
+			a := newTestAPI(deps)
 			os.WriteFile(a.configPath, []byte(bad), 0600)
 			var err error
 			a.fwEngine, err = firewall.NewEngine(config.FirewallConfig{Mode: "block", Patterns: []config.PatternConfig{{ID: "fixture", Re: "fixture_[A-Z]{8}", Mode: "block"}}}, nil)
@@ -100,9 +102,10 @@ func TestFirewallPatternFailedSaveKeepsProtection(t *testing.T) {
 }
 
 func TestProtectionConfigRejectsInvalidEdits(t *testing.T) {
-	a := explainTestAPI(t)
-	a.configPath = filepath.Join(t.TempDir(), "config.yaml")
-	a.socketPath = filepath.Join(t.TempDir(), "daemon.sock")
+	deps := explainTestDeps(t)
+	deps.ConfigPath = filepath.Join(t.TempDir(), "config.yaml")
+	deps.SocketPath = filepath.Join(t.TempDir(), "daemon.sock")
+	a := newTestAPI(deps)
 	cfg, _ := config.Load("")
 	a.fwEngine, _ = firewall.NewEngine(cfg.Firewall, nil)
 	for _, body := range []string{`{"op":"add","pattern":{"id":"bad","re":"[","mode":"monitor"}}`, `{"op":"add","pattern":{"id":"entropy","re":"x","mode":"monitor"}}`, `{"op":"remove","id":"absent"}`, `{"op":"add","pattern":{"id":"aws-key","re":"x","mode":"monitor"}}`} {
@@ -154,8 +157,9 @@ func TestProtectionConfigRejectsInvalidEdits(t *testing.T) {
 func TestGuardConfigCorruptionCannotBeOverwritten(t *testing.T) {
 	for _, bad := range []string{`null`, `{broken`, `{"rules":null,"dir_scan":[]}`} {
 		t.Run(bad, func(t *testing.T) {
-			a := explainTestAPI(t)
-			a.socketPath = filepath.Join(t.TempDir(), "daemon.sock")
+			deps := explainTestDeps(t)
+			deps.SocketPath = filepath.Join(t.TempDir(), "daemon.sock")
+			a := newTestAPI(deps)
 			path := filepath.Join(filepath.Dir(a.socketPath), "guard-rules.json")
 			if err := os.WriteFile(path, []byte(bad), 0600); err != nil {
 				t.Fatal(err)

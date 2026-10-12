@@ -24,7 +24,7 @@ func TestSessionEventsAreFilteredBeforeTheHistoryLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	for _, tc := range []struct {
 		query string
 		path  string
@@ -62,7 +62,7 @@ func TestSessionEventPagesRetainScopeAcrossNewWrites(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	query := "/events?page=1&session_id=ended&kind=0&limit=3"
 	read := func(path string) map[string]any {
 		t.Helper()
@@ -128,7 +128,7 @@ func TestSessionEventPagesRetainScopeAcrossNewWrites(t *testing.T) {
 }
 
 func TestSessionEventPageRejectsInvalidRequests(t *testing.T) {
-	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }})
 	for _, query := range []string{"page=1", "page=bad&session_id=s", "page=1&session_id=s&before=bad", "page=1&session_id=s&limit=0", "page=1&session_id=s&kind=bad", "page=1&session_id=s&since=bad"} {
 		w := httptest.NewRecorder()
 		a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/events?"+query, nil))

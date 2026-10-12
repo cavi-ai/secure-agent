@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-const app = readFileSync(new URL('../../../daemon/internal/api/web_dist/app.js', import.meta.url), 'utf8');
-function source(begin, end) {
-  const start = app.indexOf(begin), finish = app.indexOf(end, start);
-  assert.ok(start >= 0 && finish > start);
-  return app.slice(start, finish);
+function install(ctx, file, factory, methods) {
+  const moduleContext = vm.createContext({ URLSearchParams });
+  vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/' + file, import.meta.url), 'utf8'), moduleContext);
+  const module = moduleContext[factory]({ state: ctx, actions: ctx });
+  for (const method of methods) ctx[method] = module[method];
+  return module;
 }
 function response(body, status = 200) {
   return { status, ok: status === 200, json: async () => body,
@@ -62,11 +63,10 @@ function fixture(fetch) {
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/report-health.js', import.meta.url), 'utf8'), ctx);
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/telemetry-validation.js', import.meta.url), 'utf8'), ctx);
   ctx.reportHealth = ctx.createConsoleReportHealth();
-  vm.runInContext(source('  function clearProtectionContext()', '  async function saveExpectedEgress(') +
-    source('  function endSession()', '  let handoffGeneration') +
-    source('  function reportSucceeded(', '  // parseUptimeSec reads') +
-    source('  function eventsHistoryScope()', '  function flagsQuery()') +
-    source('  async function fetchTelemetry(', '  // Every panel is a candidate:'), ctx);
+  const lifecycle = install(ctx, 'console-lifecycle.js', 'createConsoleLifecycle', ['endSession', 'clearProtectionContext', 'reportSucceeded', 'reportFailed']);
+  ctx.window.viewEgressExpectation = ctx.viewEgressExpectation = lifecycle.viewEgressExpectation;
+  install(ctx, 'history-controller.js', 'createHistoryController', ['eventsHistoryScope', 'syncHistoryViews']);
+  install(ctx, 'telemetry-refresh.js', 'createTelemetryRefresh', ['fetchTelemetry']);
   return { ctx, requests, renders, connections, failures, retries, stops: () => stops, ended: () => ended };
 }
 const snapshot = () => response({ status: { uptime: 'new' }, flags: [], events: [] });
@@ -324,7 +324,7 @@ test('filtered history authentication failure prevents the next history request'
 });
 
 function enableSpend(f) {
-  vm.runInContext(source('  async function loadSpend(', '  // Spend card controls:'), f.ctx);
+  install(f.ctx, 'spend-controller.js', 'createSpendController', ['loadSpend', 'resetSpendDay', 'loadSpendDay', 'selectSpendDay']);
 }
 
 const spendReports = [
@@ -622,8 +622,8 @@ test('a failed new spend view is unavailable instead of claiming old-view data i
     SPEND_BY: ['repo', 'provider'], SPEND_SINCE: ['24h', '7d'] });
   f.ctx.document = { getElementById: id => id === 'spend-by' ? f.ctx.spendBySel : null };
   const overview = readFileSync(new URL('../../../daemon/internal/api/web_dist/tab-overview.js', import.meta.url), 'utf8');
-  vm.runInContext(overview.slice(overview.indexOf('function syncSpendDayGuidance()'), overview.indexOf('function renderSpend()')), f.ctx);
-  vm.runInContext(source('  const onSpendView = () => {', '  spendBySel?.addEventListener') + '\nonSpendView();', f.ctx);
+  vm.runInContext(overview, f.ctx);
+  install(f.ctx, 'spend-controller.js', 'createSpendController', ['onSpendView']).onSpendView();
   enableSpend(f);
   await f.ctx.loadSpend(false);
   assert.equal(f.ctx.telemetryData.costsCard, null);
@@ -802,8 +802,9 @@ test('changing a filter after applying a saved view updates the active query', (
     loadViews: () => [{ name: 'saved', flags: { agent: 'claude' } }],
     syncFilterControls() { select.value = f.ctx.filters.flags.agent; },
     fetchTelemetry: () => queries.push(f.ctx.flagsQuery()) });
-  vm.runInContext(source('  function flagsQuery()', '  // ---------- saved views ----------') +
-    source('  window.applyView = function(name)', '  window.removeView'), f.ctx);
+  const history = install(f.ctx, 'history-controller.js', 'createHistoryController', ['flagsQuery', 'eventsQuery']);
+  f.ctx.window.applyView = history.applyView;
+  history.bindFilters();
   f.ctx.window.applyView('saved');
   select.value = 'codex';
   change();
@@ -814,7 +815,7 @@ test('changing a filter after applying a saved view updates the active query', (
 function enableDaySelection(f) {
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/lib.js', import.meta.url), 'utf8'), f.ctx);
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/tab-overview.js', import.meta.url), 'utf8'), f.ctx);
-  vm.runInContext(source('  function resetSpendDay(', '  // Spend card controls:'), f.ctx);
+  install(f.ctx, 'spend-controller.js', 'createSpendController', ['resetSpendDay', 'loadSpendDay', 'selectSpendDay']);
   f.ctx.telemetryData.costsCard = { by: 'day', since: '2026-10-07T04:00:00.000Z', until: '2026-10-10T12:00:00.000Z', rows: [
     { key: '2026-10-08', calls: 2, cost_usd: 8 }, { key: '2026-10-09', calls: 3, cost_usd: 9 }] };
   f.ctx.telemetryData.costsCardTZ = -240;

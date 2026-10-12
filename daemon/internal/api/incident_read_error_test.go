@@ -21,7 +21,7 @@ func TestIncidentReadResolvesAggregatedFlags(t *testing.T) {
 	if _, ok := st.AggregateIntoIncident("incident", "second", now); !ok {
 		t.Fatal("could not aggregate second flag")
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	for _, id := range []string{"incident", "first", "second"} {
 		w := httptest.NewRecorder()
 		a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/incidents?id="+id, nil))
@@ -83,7 +83,7 @@ func TestIncidentReadFailuresRejectPartialResponsesAndRecover(t *testing.T) {
 			if _, err := db.Exec("UPDATE incidents SET report_json=? WHERE id='bad'", payload); err != nil {
 				t.Fatal(err)
 			}
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 			for _, url := range []string{"/incidents", "/incidents?id=bad", "/incidents?id=flag-bad&format=md", "/snapshot"} {
 				w := httptest.NewRecorder()
 				a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", url, nil))
@@ -107,7 +107,7 @@ func TestIncidentReadFailuresRejectPartialResponsesAndRecover(t *testing.T) {
 
 func TestIncidentReadDistinguishesMissingFromUnavailable(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	w := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/incidents?id=missing", nil))
 	if w.Code != 404 {
@@ -143,7 +143,7 @@ func TestIncidentReadRejectsUnavailableWorkflow(t *testing.T) {
 			if _, err := db.Exec("UPDATE incidents SET status=? WHERE id='bad'", status); err != nil {
 				t.Fatal(err)
 			}
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 			for _, url := range []string{"/incidents", "/incidents?id=bad", "/snapshot"} {
 				w := httptest.NewRecorder()
 				a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", url, nil))

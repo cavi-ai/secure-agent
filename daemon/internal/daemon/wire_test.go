@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -421,18 +422,18 @@ func TestStartDrainLoopPersistsAndCloses(t *testing.T) {
 		t.Fatal("drain loop did not finish after bus close")
 	}
 
-	flags := st.RecentFlags(10)
+	flags := testutil.Read[[]model.Flag](t)(st.QueryFlagsResult(store.FlagFilter{Limit: 10}))
 	if len(flags) != 1 || flags[0].Rule != "sensitive-read-then-connect" {
 		t.Fatalf("expected the correlated flag persisted, got %v", flags)
 	}
 	if len(offered) != 1 || offered[0].ID != flags[0].ID {
 		t.Fatalf("new-flag hook got %v, want the stored flag", offered)
 	}
-	incidents := st.RecentIncidents(10)
+	incidents := testutil.Read[[]model.IncidentReport](t)(st.RecentIncidentsResult(10))
 	if len(incidents) == 0 {
 		t.Fatal("drain loop must turn the flag into an incident report")
 	}
-	episodes := st.ListEgressEpisodes(10)
+	episodes := testutil.Read[[]store.EgressEpisode](t)(st.ListEgressEpisodes(10))
 	if len(episodes) != 1 || episodes[0].Host != "evil.example.com" || episodes[0].Count != 1 {
 		t.Fatalf("connection episode projection = %+v", episodes)
 	}
@@ -477,7 +478,7 @@ func TestDrainLoopMarksRecordRows(t *testing.T) {
 	}
 
 	rules := map[string]int{}
-	for _, f := range st.RecentFlags(10) {
+	for _, f := range testutil.Read[[]model.Flag](t)(st.QueryFlagsResult(store.FlagFilter{Limit: 10})) {
 		rules[f.Rule]++
 	}
 	if rules["sensitive-read-then-connect"] != 1 || rules["keychain-access"] != 1 || len(rules) != 2 {
@@ -531,7 +532,7 @@ func TestDrainLoopDropsUnattributedFileEvents(t *testing.T) {
 	}
 
 	got := map[string]bool{}
-	for _, e := range st.RecentEvents(100) {
+	for _, e := range testutil.Read[[]event.Event](t)(st.QueryEventsResult(store.EventFilter{Limit: 100})) {
 		got[fmt.Sprintf("%d/%s/%v", e.PID, e.Kind, e.SessionID != "")] = true
 	}
 	want := map[string]bool{
@@ -547,7 +548,7 @@ func TestDrainLoopDropsUnattributedFileEvents(t *testing.T) {
 			t.Fatalf("stored events = %v, missing %s", got, k)
 		}
 	}
-	flags := st.RecentFlags(10)
+	flags := testutil.Read[[]model.Flag](t)(st.QueryFlagsResult(store.FlagFilter{Limit: 10}))
 	if len(flags) != 1 || flags[0].Rule != "keychain-access" {
 		t.Fatalf("flags = %+v, want the one keychain-access flag", flags)
 	}

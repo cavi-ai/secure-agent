@@ -5,7 +5,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -23,20 +22,15 @@ type Snapshot struct {
 	Patterns []model.Pattern `json:"patterns"`
 	// Routine are the same reads across agents (at least 3 flags spanning
 	// agents or files); the console renders one decision for each.
-	Routine     []model.RoutineGroup `json:"routine"`
-	Incidents   []snapshotIncident   `json:"incidents"`
-	Events      []event.Event        `json:"events"`
-	Posture     Posture              `json:"posture"`
-	Suggestions []Suggestion         `json:"suggestions"`
-	Mutes       []MutePair           `json:"mutes"`
+	Routine     []model.RoutineGroup   `json:"routine"`
+	Incidents   []store.IncidentDetail `json:"incidents"`
+	Events      []event.Event          `json:"events"`
+	Posture     Posture                `json:"posture"`
+	Suggestions []Suggestion           `json:"suggestions"`
+	Mutes       []MutePair             `json:"mutes"`
 	// Sessions is the durable session spine (live and recently ended) — the
 	// Sessions tab renders from this, not from process-tree guesswork.
 	Sessions []model.Session `json:"sessions"`
-}
-
-type snapshotIncident struct {
-	model.IncidentReport
-	Workflow store.IncidentWorkflow `json:"workflow"`
 }
 
 func (a *API) handleSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +58,7 @@ func (a *API) currentSnapshot() (Snapshot, error) {
 	return a.snapshotWithSessions(sessions, events)
 }
 
-func (a *API) incidentListResult(limit int) ([]snapshotIncident, error) {
+func (a *API) incidentListResult(limit int) ([]store.IncidentDetail, error) {
 	return readIncidentList(a.store, limit)
 }
 
@@ -153,31 +147,8 @@ func (a *API) suggestionList() []Suggestion {
 }
 
 func (a *API) suggestionListResult() ([]Suggestion, error) {
-	out := []Suggestion{}
 	if a.correlator == nil {
-		return out, nil
+		return []Suggestion{}, nil
 	}
-	for _, e := range a.correlator.UninspectedEgressSummary() {
-		if e.Count < minSuggestionCount || e.Infra != "" || e.Identity.Class == "vendor" || e.AgentKind == config.AgentKindInfra {
-			// Rare pairs, known CDN/cloud carriers, the agents' own vendors
-			// (rolled up in the drill-down with their own bulk action) and
-			// infra families (not agents) are never "approve this endpoint"
-			// suggestions — suggestions exist for judgment calls.
-			continue
-		}
-		out = append(out, Suggestion{Agent: e.Agent, Host: e.Host, Count: e.Count, Identity: e.Identity})
-	}
-	ids := make([]string, len(out))
-	for i, sg := range out {
-		ids[i] = "host:" + sg.Agent + "|" + sg.Host
-	}
-	verdicts, readErr := a.store.AdvisorVerdictsFor(ids, "host")
-	for i, id := range ids {
-		if v, ok := verdicts[id]; ok {
-			out[i].Assessment = v.Assessment
-			out[i].Rationale = v.Rationale
-			out[i].Confidence = v.Confidence
-		}
-	}
-	return out, readErr
+	return readEgressSuggestions(a.store, a.correlator.UninspectedEgressSummary())
 }

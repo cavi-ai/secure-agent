@@ -30,8 +30,7 @@ func TestUninspectedEgressRows(t *testing.T) {
 	cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: first, RemoteHost: "160.79.104.10", RemotePort: 443, SessionID: "sess-a"})
 	cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: time.Now(), RemoteHost: "160.79.104.10", RemotePort: 443, SessionID: "sess-b"})
 
-	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
-	a.correlator = cr
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Correlator: cr})
 	rec := httptest.NewRecorder()
 	a.handleUninspectedEgress(rec, httptest.NewRequest(http.MethodGet, "/egress/uninspected", nil))
 	if rec.Code != http.StatusOK {
@@ -72,7 +71,7 @@ func TestEndpointDetailFindsSessionBeyondListLimit(t *testing.T) {
 	host := "203.0.113.7"
 	st.PutEvent(event.Event{Kind: event.KindConnOpen, TS: time.Now(), SessionID: "proc-0", RemoteHost: host, RemotePort: 443})
 
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	rec := httptest.NewRecorder()
 	a.handleEndpointDetail(rec, httptest.NewRequest(http.MethodGet, "/egress/endpoint?host="+host, nil))
 	var d EndpointDetail
@@ -99,8 +98,8 @@ func TestSuggestionListSkipsVendor(t *testing.T) {
 			cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: time.Now(), RemoteHost: h, RemotePort: 443})
 		}
 	}
-	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
-	a.correlator = cr
+
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Correlator: cr})
 	got := a.suggestionList()
 	if len(got) != 1 || got[0].Host != "34.120.1.1" || got[0].Identity.Org != "Google Cloud" || got[0].Identity.Class != "cloud" {
 		t.Fatalf("suggestions = %+v, want only the Google Cloud host", got)
@@ -141,8 +140,8 @@ func TestInfraAppRowsCarryKindAndAreNotSuggested(t *testing.T) {
 			cr.Observe(event.Event{Kind: event.KindConnOpen, PID: pid, TS: time.Now(), RemoteHost: "34.120.1.1", RemotePort: 443})
 		}
 	}
-	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
-	a.correlator = cr
+
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Correlator: cr})
 
 	rec := httptest.NewRecorder()
 	a.handleUninspectedEgress(rec, httptest.NewRequest(http.MethodGet, "/egress/uninspected", nil))

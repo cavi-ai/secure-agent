@@ -25,9 +25,10 @@ func TestPlanHistoryReadFailureRejectsGenerationAndRecovers(t *testing.T) {
 	if _, err := st.PutFlag(model.Flag{ID: "f1", Rule: "rule", Agent: "codex", TS: time.Now(), Severity: 3}); err != nil {
 		t.Fatal(err)
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+
 	rec := &planRecorder{ready: true, pending: map[string]bool{}}
-	a.plan = rec.funcs()
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Plan: rec.funcs()})
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)

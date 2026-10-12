@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -46,7 +47,7 @@ func TestRekeyMergesCallsAndAllReferences(t *testing.T) {
 	if err := s.RekeySession("old", "new"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s.GetSession("old"); ok {
+	if _, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("old")); ok {
 		t.Fatal("old session retained")
 	}
 	var old, count, in, out, dur int
@@ -87,7 +88,7 @@ func TestRekeyFailureRollsBackAndRecoversHealth(t *testing.T) {
 	if err := s.RekeySession("old", "new"); err == nil {
 		t.Fatal("failed rekey returned success")
 	}
-	if _, ok := s.GetSession("old"); !ok {
+	if _, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("old")); !ok {
 		t.Fatal("failed rekey deleted old session")
 	}
 	h := s.WriteHealth()
@@ -107,7 +108,7 @@ func TestRekeyFailureRollsBackAndRecoversHealth(t *testing.T) {
 	if err := s.RekeySession("old", "new"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s.GetSession("old"); ok {
+	if _, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("old")); ok {
 		t.Fatal("retry retained old session")
 	}
 	h = s.WriteHealth()

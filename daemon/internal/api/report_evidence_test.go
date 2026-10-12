@@ -15,7 +15,7 @@ import (
 
 func TestSessionReportUnavailableIdentityIsNotNotFound(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	st.Close()
 	w := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/sessions/session/report?format=md", nil))
@@ -42,7 +42,7 @@ func TestSessionReportPartialExportNamesMissingEvidence(t *testing.T) {
 	if _, err := db.Exec(`ALTER TABLE events RENAME TO unavailable_events`); err != nil {
 		t.Fatal(err)
 	}
-	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	mux := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }}).buildMux()
 	for _, format := range []string{"json", "md"} {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, httptest.NewRequest("GET", "/sessions/session/report?format="+format, nil))

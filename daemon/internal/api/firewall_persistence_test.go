@@ -11,9 +11,8 @@ import (
 )
 
 func TestFirewallModePersistenceFailureKeepsEnforcement(t *testing.T) {
-	a := explainTestAPI(t)
-	var err error
-	a.fwEngine, err = firewall.NewEngine(config.FirewallConfig{Mode: "block"}, []byte("test-salt"))
+	deps := explainTestDeps(t)
+	engine, err := firewall.NewEngine(config.FirewallConfig{Mode: "block"}, []byte("test-salt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +21,8 @@ func TestFirewallModePersistenceFailureKeepsEnforcement(t *testing.T) {
 	if err := os.WriteFile(path, []byte(corrupt), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a.fwModes = firewall.NewModeStore(path)
+	deps.Firewall = FirewallControl{Engine: engine, Modes: firewall.NewModeStore(path)}
+	a := newTestAPI(deps)
 	before := a.fwEngine.RuleMode("aws-key")
 	w := call(t, a, "POST", "/firewall/mode", `{"rule":"aws-key","mode":"monitor"}`)
 	if w.Code != 500 {
@@ -43,7 +43,7 @@ func TestFirewallSourceLoadFailureHasNoSideEffects(t *testing.T) {
 	for _, data := range []string{`{broken`, `null`} {
 		for _, op := range []string{"add", "remove"} {
 			t.Run(data+"/"+op, func(t *testing.T) {
-				a := explainTestAPI(t)
+				deps := explainTestDeps(t)
 				dir := t.TempDir()
 				path, source := filepath.Join(dir, "sources.json"), filepath.Join(dir, "app.env")
 				if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
@@ -52,9 +52,10 @@ func TestFirewallSourceLoadFailureHasNoSideEffects(t *testing.T) {
 				if err := os.WriteFile(source, []byte("# empty fixture\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				a.fwSources = firewall.NewSourceStore(path)
+				deps.Firewall.Sources = firewall.NewSourceStore(path)
 				ingestCalls := 0
-				a.fwIngest = func() ([]string, error) { ingestCalls++; return nil, nil }
+				deps.Firewall.Ingest = func() ([]string, error) { ingestCalls++; return nil, nil }
+				a := newTestAPI(deps)
 				body, err := json.Marshal(sourceRequest{Source: source, Op: op})
 				if err != nil {
 					t.Fatal(err)

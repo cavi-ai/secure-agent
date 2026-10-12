@@ -34,7 +34,7 @@ func TestServePreservesNonSocketPaths(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel() // a wrongly successful bind must not hang this regression
-			a := newTestAPI(path, testStore(t), &fakeKiller{}, func() Status { return Status{} })
+			a := newTestAPI(Deps{SocketPath: path, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{} }})
 			if err := a.Serve(ctx); err == nil {
 				t.Error("non-socket path must refuse startup")
 			}
@@ -65,8 +65,8 @@ func TestServeListenerFailureClosesAcceptedStream(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	a := newTestAPI(path, testStore(t), &fakeKiller{}, func() Status { return Status{} })
-	a.deltaHub = NewDeltaHub()
+
+	a := newTestAPI(Deps{SocketPath: path, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{} }, DeltaHub: NewDeltaHub()})
 	defer a.deltaHub.Close()
 	done := make(chan error, 1)
 	go func() { done <- a.ServeListener(ctx, listener) }()

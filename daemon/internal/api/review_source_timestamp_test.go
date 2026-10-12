@@ -42,7 +42,7 @@ func TestReviewSourceTimestampRejectsHTTPDecisionAndRecovers(t *testing.T) {
 	if _, err := db.Exec(`UPDATE flags SET ts=NULL WHERE id=?`, f.ID); err != nil {
 		t.Fatal(err)
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	request := func(want int) {
 		t.Helper()
 		w := httptest.NewRecorder()

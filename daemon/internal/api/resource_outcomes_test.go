@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,9 +25,8 @@ func TestResourceReceiptReachesAPIAndSessionExport(t *testing.T) {
 	}
 	c.Observe(resource.Snapshot{ObservedAt: now, Sessions: []resource.Session{{Key: "family", RootPID: 10, RootStartedAt: started, RSSBytes: 200, Processes: []resource.Process{{PID: 10, StartedAt: started}}}}}, now)
 	id := c.Snapshot().Control.Pending[0].ID
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
-	a.resources = c.Snapshot
-	a.resourceControl = c
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Resources: c.Snapshot, ResourceControl: c})
 	w := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/resources/control", strings.NewReader(`{"id":"`+id+`","decision":"apply"}`)))
 	if w.Code != http.StatusOK {
@@ -40,7 +41,7 @@ func TestResourceReceiptReachesAPIAndSessionExport(t *testing.T) {
 	if len(result.Interventions) != 1 || result.Interventions[0].Status != "applied" || result.Interventions[0].Verification != "pending" {
 		t.Fatalf("lost bounded result: %+v", result.Interventions)
 	}
-	report, ok := st.SessionReport("owned")
+	report, ok := testutil.Lookup[store.SessionReport](t)(st.SessionReportResult("owned"))
 	if !ok || len(report.Interventions) != 1 || report.Interventions[0].SessionID != "owned" {
 		t.Fatalf("lost session linkage: %+v", report.Interventions)
 	}

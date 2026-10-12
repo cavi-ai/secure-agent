@@ -78,7 +78,7 @@ func TestPostureRetainsReviewReadFailureAfterHealthyLookup(t *testing.T) {
 			if _, err := db.Exec("UPDATE finding_reviews SET state=?,record_json='invalid' WHERE id=?", state, badID); err != nil {
 				t.Fatal(err)
 			}
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 			read := func() Posture {
 				t.Helper()
 				w := httptest.NewRecorder()

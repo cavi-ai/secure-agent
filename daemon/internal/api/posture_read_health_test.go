@@ -56,8 +56,8 @@ func TestPostureReadFailureVisibleOnFirstPassAndRecovery(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
-				a.deltaHub = NewDeltaHub()
+
+				a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, DeltaHub: NewDeltaHub()})
 				defer a.deltaHub.Close()
 				ch := a.deltaHub.Subscribe()
 				read := func() Posture {
@@ -142,7 +142,7 @@ func TestPostureReadFailureRetainsKnownDecisions(t *testing.T) {
 	if _, err := db.Exec("UPDATE incidents SET report_json='invalid'"); err != nil {
 		t.Fatal(err)
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	p := a.CurrentPosture()
 	if p.State != "critical" || p.NeedsYou != 1 || p.CoverageCount != 1 || len(p.Items) != 1 || p.Items[0].ID != "critical" {
 		t.Fatalf("unavailable history hid a known critical decision: %+v", p)
@@ -174,7 +174,7 @@ func TestSnapshotPostureReportsFailureInWiderAttentionRead(t *testing.T) {
 	if _, err := db.Exec("UPDATE flags SET pid='invalid'"); err != nil {
 		t.Fatal(err)
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	w := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/snapshot", nil))
 	if w.Code != 200 {

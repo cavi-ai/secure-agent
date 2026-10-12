@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -112,10 +113,10 @@ func TestIncidentCreationRejectsExistingIdentity(t *testing.T) {
 		if report, err := s.GetIncident(inc.ID); err != nil || !reflect.DeepEqual(report, saved) {
 			t.Errorf("duplicate creation changed evidence or remediation: %+v %v", report, err)
 		}
-		if got, ok := s.IncidentStatus(inc.ID); !ok || got != wf {
+		if got, ok := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult(inc.ID)); !ok || got != wf {
 			t.Errorf("duplicate creation changed workflow: %+v %v", got, ok)
 		}
-		if id, ok := s.IncidentIDForFlag("second"); !ok || id != inc.ID {
+		if id, ok := testutil.Lookup[string](t)(s.IncidentIDForFlagResult("second")); !ok || id != inc.ID {
 			t.Error("duplicate creation removed aggregated evidence link")
 		}
 	}
