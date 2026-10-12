@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import payload_cases
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -105,6 +106,15 @@ def serve_with_csp(tmp):
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *a, **kw):
             super().__init__(*a, directory=tmp, **kw)
+
+        def do_GET(self):
+            if self.path == '/__console_frame_checkpoint':
+                time.sleep(0.05)
+                self.send_response(204)
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                return
+            super().do_GET()
 
         def end_headers(self):
             self.send_header("Content-Security-Policy", policy)
@@ -350,6 +360,13 @@ def main():
             check(f'sessions workbench ({label}): interaction receipt produced', bool(state), str(state))
             for name, result in state.items():
                 check(f'sessions workbench ({label}): {name}', result is True, str(result))
+        for label, size, query in [('long phone', (320, 800), '?readingdemo&readinglong'), ('short phone', (390, 800), '?readingdemo'), ('short viewport', (375, 480), '?readingdemo&readinglong')]:
+            reading_dom = dump_dom(chrome, tmp, query, origin, window_size=size, fixture=payload_cases.session_workbench())
+            receipt = re.search(r'data-session-reading="([^"]+)"', reading_dom)
+            state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+            check(f'session reading ({label}): receipt produced', bool(state), str(state))
+            for name in ('memoryBudget', 'contextInBody', 'latest', 'currentContext', 'detailsBudget', 'detailsDoNotGrowChrome', 'fullTitleRow', 'toolbar', 'actions', 'resultsBudget', 'traceBudget', 'fits'):
+                check(f'session reading ({label}): {name}', state.get(name) is True, str(state))
         if args.session_workbench_only:
             print(f"\n{len(passed)} passed, {len(failed)} failed")
             if failed:
@@ -599,13 +616,15 @@ def main():
               and '<span class="sd-harness">Claude Code</span>' in detail_head
               and '>hook</span>' in detail_head
               and dom_query(detail_head).has(None, {'data-action': 'copy-path', 'data-path': '/Users/dev/workspace/api-service'}))
-        detail_chrome = dom_rail.split('class="session-detail-chrome"', 1)[1].split('class="session-detail-body"', 1)[0]
-        metadata = detail_chrome.split('class="session-metadata"', 1)[1].split('</details>', 1)[0]
-        check("detail chrome keeps Copy report reachable and the copyable path in expandable Details",
-              'data-action="copy-report" data-id="sess-claude-1"' in detail_chrome.split('class="sd-detail-controls"', 1)[0]
-              and '>Copy report</button>' in detail_chrome
-              and '<summary>Details</summary>' in metadata
-              and dom_query(metadata).has(None, {'data-action': 'copy-path', 'data-path': '/Users/dev/workspace/api-service'}))
+        detail_node = dom_query(dom_rail).find(None, {'id': 'session-detail'})
+        detail_chrome = detail_node.find(None, {'class': 'session-detail-chrome'})
+        detail_body = detail_node.find(None, {'class': 'session-detail-body'})
+        metadata = detail_body.find('details', {'class': 'session-metadata'})
+        check("detail chrome keeps Copy report reachable; scrolling context retains expandable Details and copyable path",
+              detail_chrome.has(None, {'data-action': 'copy-report', 'data-id': 'sess-claude-1'})
+              and 'Copy report' in detail_chrome.text and not detail_chrome.has(None, {'class': 'session-metadata'})
+              and metadata is not None and metadata.has('summary')
+              and metadata.has(None, {'data-action': 'copy-path', 'data-path': '/Users/dev/workspace/api-service'}))
         clip = (re.search(r'data-clipboard="([^"]*)"', dom_export) or [None, ""])[1]
         check("Export copies the markdown session report and toasts",
               clip.startswith("# claude · api-service@main") and "## Summary" in clip

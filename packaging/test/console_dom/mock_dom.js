@@ -8,6 +8,7 @@
 (() => {
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
+  const readingFetch = scenarios.has('readingdemo') ? window.fetch.bind(window) : null;
   let bookCleanup = () => {};
   let contextRuleReads = 0;
   const contextRules = data['/expected-egress'].rules;
@@ -30,6 +31,13 @@
       groups:[{key:'fixture-attention',agent:'codex',items}]};
   }
 
+
+  if (scenarios.has('readinglong')) {
+    const session = data['/sessions'].find(session => session.id === 'sess-codex-3');
+    session.repo = 'session-workbench-complete-reading-identity-navigation';
+    session.branch = 'feat/long-session-reading-context';
+    session.workspace = '/workspace/session-workbench-complete-reading-identity-navigation';
+  }
 
   // ---------- failure-mode simulation ----------
   // These modes reproduce the exact "trouble connecting" regressions:
@@ -716,7 +724,7 @@
       };
     }
     // Dense workbench pages exercise real scroll anchoring and focus continuity.
-    if ((scenarios.has('sessionworkbench') || scenarios.has('authhistory')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
+    if ((scenarios.has('sessionworkbench') || scenarios.has('readingdemo') || scenarios.has('authhistory')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
       const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
       const start = before ? -30 : 0;
       const rows = Array.from({ length: before ? 30 : 90 }, (_, i) => ({ id: 'wb-row-' + (start + i),
@@ -1371,6 +1379,76 @@
       openTab('events');
     }, 4000);
   }
+  if (scenarios.has('readingdemo')) {
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(async () => {
+      const receipt = {};
+      const settle = async () => {
+        let previous = '', dimensions;
+        for (let attempt = 0; attempt < 6; attempt++) {
+          const panel = document.getElementById('session-board-panel');
+          const body = document.querySelector('#session-detail .session-detail-body');
+          const paragraph = body?.querySelector('.sm-content p, .sd-outcome p, .sm-state');
+          const line = paragraph ? parseFloat(getComputedStyle(paragraph).lineHeight) || 18 : 18;
+          const style = body && getComputedStyle(body);
+          const budget = Math.ceil(8 * line + 44 + (parseFloat(style?.paddingTop) || 0) + (parseFloat(style?.paddingBottom) || 0));
+          const rect = body?.getBoundingClientRect(), bounds = panel.getBoundingClientRect();
+          dimensions = { mode: window.SA.sessionView, budget, clientHeight: body?.clientHeight,
+            bodyTop: rect?.top, bodyBottom: rect?.bottom, panelTop: bounds.top, panelBottom: bounds.bottom,
+            chromeHeight: panel.querySelector('.session-detail-chrome')?.getBoundingClientRect().height };
+          const valid = body && body.clientHeight >= budget - 2 && rect.top >= bounds.top && rect.bottom <= bounds.bottom + 1;
+          const current = JSON.stringify(dimensions);
+          if (valid && current === previous) {
+            (receipt.dimensions ||= {})[window.SA.sessionView] = dimensions;
+            return;
+          }
+          previous = valid ? current : '';
+          // Virtual-time timers can outrun compositor frames. A pending HTTP
+          // checkpoint yields to native animation frames and ResizeObserver.
+          if (attempt < 5) {
+            const response = await readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+            if (!response.ok) throw new Error('Session reading frame checkpoint failed: ' + response.status);
+          }
+        }
+        throw new Error('Session reading layout did not settle: ' + JSON.stringify(dimensions));
+      };
+      try {
+        await window.selectSession('sess-codex-3'); await settle();
+        const panel = document.getElementById('session-board-panel');
+        const measure = () => {
+          const body = document.querySelector('#session-detail .session-detail-body');
+          const text = body.querySelector('.sm-content p, .sd-outcome p, .sm-state');
+          const line = text ? parseFloat(getComputedStyle(text).lineHeight) || 18 : 18;
+          const style = getComputedStyle(body);
+          const budget = Math.ceil(8 * line + 44 + (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0));
+          const rect = body.getBoundingClientRect(), bounds = panel.getBoundingClientRect();
+          return body.clientHeight >= budget - 2 && rect.top >= bounds.top && rect.bottom <= bounds.bottom + 1;
+        };
+        receipt.memoryBudget = measure();
+        const body = document.querySelector('#session-detail .session-detail-body');
+        receipt.contextInBody = !!body.querySelector('[data-session-part="session-context"] details.session-metadata')
+          && !document.querySelector('.session-detail-chrome .session-metadata');
+        receipt.latest = body.scrollHeight - body.clientHeight - body.scrollTop < 64;
+        document.querySelector('[data-action="session-status"]').click();
+        await settle();
+        receipt.currentContext = body.scrollTop === 0 && body.querySelector('.session-context').getBoundingClientRect().top < body.getBoundingClientRect().bottom;
+        const chrome = document.querySelector('.session-detail-chrome');
+        const before = chrome.getBoundingClientRect().height;
+        body.querySelector('details.session-metadata').open = true; await settle();
+        receipt.detailsBudget = measure();
+        receipt.detailsDoNotGrowChrome = Math.abs(chrome.getBoundingClientRect().height - before) < 1;
+        receipt.fullTitleRow = !document.querySelector('.session-detail-head [data-action="copy-report"]');
+        const narrow = matchMedia('(max-width:900px)').matches;
+        receipt.toolbar = (getComputedStyle(panel.querySelector('.session-toolbar')).display === 'none') === narrow;
+        receipt.actions = !narrow || Array.from(chrome.querySelectorAll('.sd-back, .sd-export, .sd-view, [data-action="session-status"]')).every(button => button.getBoundingClientRect().height >= 44);
+        for (const mode of ['results','trace']) {
+          await window.setSessionView(mode); await settle(); receipt[mode + 'Budget'] = measure();
+        }
+        receipt.fits = document.documentElement.scrollWidth <= document.documentElement.clientWidth;
+      } catch (error) { receipt.error = error.message; }
+      document.body.dataset.sessionReading = JSON.stringify(receipt);
+    }, 2500);
+  }
   if (scenarios.has('sessionworkbench')) {
     setTimeout(() => openTab('sessions'), 1500);
     setTimeout(async () => {
@@ -1596,7 +1674,7 @@
         write: async (items) => record(await (await items[0].getType('text/plain')).text())
       }
     });
-    setTimeout(() => document.querySelector('.session-detail-head [data-action="copy-report"]').click(), 9000);
+    setTimeout(() => document.querySelector('.session-detail-chrome [data-action="copy-report"]').click(), 9000);
   }
   // Auto-action: resolve the guard request once; the unified queue must
   // refresh and remove that blocked tool call. The styled confirm dialog
