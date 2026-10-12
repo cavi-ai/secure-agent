@@ -8,7 +8,7 @@
 (() => {
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
-  const readingFetch = scenarios.has('readingdemo') || scenarios.has('worktreehierarchy') || scenarios.has('sessiondiscovery') || scenarios.has('sessionemptynav') || scenarios.has('sessionlatestfocus') ? window.fetch.bind(window) : null;
+  const readingFetch = scenarios.has('readingdemo') || scenarios.has('worktreehierarchy') || scenarios.has('sessiondiscovery') || scenarios.has('sessionemptynav') || scenarios.has('sessionlatestfocus') || scenarios.has('sessionstatusfocus') ? window.fetch.bind(window) : null;
   if (scenarios.has('expectedremove')) data['/expected'] = [
     { key: 'claude|gh|/synthetic/credentials|example.test', agent: 'claude', reader: 'gh', path: '/synthetic/credentials', dest: 'example.test', created_at: iso(60000), hits: 2 },
     { key: 'claude|*|/synthetic/.env.test|*', scope: 'file', agent: 'claude', reader: '*', path: '/synthetic/.env.test', dest: '*', created_at: iso(60000), hits: 0 },
@@ -775,7 +775,7 @@
       };
     }
     // Dense workbench pages exercise real scroll anchoring and focus continuity.
-    if ((scenarios.has('sessionworkbench') || scenarios.has('readingdemo') || scenarios.has('authhistory') || scenarios.has('sessionlatestfocus')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
+    if ((scenarios.has('sessionworkbench') || scenarios.has('readingdemo') || scenarios.has('authhistory') || scenarios.has('sessionlatestfocus') || scenarios.has('sessionstatusfocus')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
       const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
       const start = before ? -30 : 0;
       const rows = Array.from({ length: before ? 30 : 90 }, (_, i) => ({ id: 'wb-row-' + (start + i),
@@ -1602,6 +1602,53 @@
         receipt.fits = document.documentElement.scrollWidth <= document.documentElement.clientWidth;
       } catch (error) { receipt.error = error.message; }
       document.body.dataset.sessionReading = JSON.stringify(receipt);
+    }, 2500);
+  }
+  if (scenarios.has('sessionstatusfocus')) {
+    data['/sessions'].find(session => session.id === 'sess-claude-1')._timeline = Array.from({length: 90}, (_, i) => ({
+      id: 'status-trace-' + i, session_id: 'sess-claude-1', kind: 12, ts: iso((90 - i) * 60000), tool: 'Retained trace ' + i, tool_status: 'ok', duration_ms: 10,
+    }));
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(async () => {
+      const receipt = {};
+      const checkpoint = () => readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+      const detail = () => document.getElementById('session-detail');
+      const heading = () => detail().querySelector('.sd-current-head h4');
+      const refresh = async () => { await window.SA.refreshSessionOverview(true); await checkpoint(); };
+      try {
+        await window.selectSession('sess-claude-1');
+        for (const mode of ['memory', 'trace']) {
+          await window.setSessionView(mode); await checkpoint();
+          detail().querySelector('[data-action="session-status"]').click(); await checkpoint();
+          const body = detail().querySelector('.session-detail-body');
+          const first = heading(), top = body.scrollTop, x = scrollX, y = scrollY;
+          receipt[mode + 'Ready'] = document.activeElement === first && !!first.getClientRects().length && top === 0;
+          await refresh();
+          receipt[mode + 'Unchanged'] = heading() === first && document.activeElement === first;
+          window.__overviewFail = true; await refresh();
+          receipt[mode + 'Failure'] = heading() !== first && document.activeElement === heading() && heading().isConnected
+            && !!heading().getClientRects().length && detail().textContent.includes('Last known session status');
+          receipt[mode + 'Reading'] = detail().querySelector('.session-detail-body') === body && body.scrollTop === top && scrollX === x && scrollY === y;
+          const stale = heading();
+          window.__overviewFail = false; await refresh();
+          receipt[mode + 'Recovery'] = heading() !== stale && document.activeElement === heading() && heading().isConnected
+            && !window.SA.sessionOverviewState.error && body.scrollTop === top && scrollX === x && scrollY === y;
+          const outside = document.querySelector('.tab-btn[data-tab="sessions"]');
+          outside.focus({preventScroll: true}); window.__overviewFail = true; await refresh();
+          receipt[mode + 'Outside'] = document.activeElement === outside;
+          window.__overviewFail = false; await refresh();
+          receipt[mode + 'OutsideRecovery'] = document.activeElement === outside;
+        }
+        heading().focus({preventScroll: true});
+        await window.setSessionView('results'); await checkpoint();
+        receipt.viewSwitch = !detail().querySelector('.sd-current-head h4') && document.activeElement !== heading();
+        await window.setSessionView('memory'); await checkpoint();
+        heading().focus({preventScroll: true});
+        await window.selectSession('sess-codex-3'); await checkpoint();
+        receipt.sessionSwitch = document.activeElement !== heading();
+      } catch (error) { receipt.error = error.message; }
+      window.__overviewFail = false;
+      document.body.dataset.sessionStatusFocus = JSON.stringify(receipt);
     }, 2500);
   }
   if (scenarios.has('sessionlatestfocus')) {
