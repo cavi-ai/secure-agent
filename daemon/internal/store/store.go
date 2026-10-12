@@ -218,8 +218,8 @@ func (s *Store) SetEventRetention(conn, other time.Duration) {
 }
 
 // AuditEntry is one durable record of a policy/control change (a rule promoted
-// or demoted, fingerprints ingested or reloaded). Unlike events, audit rows are
-// low-volume and never pruned. No field ever carries a secret value.
+// or demoted, fingerprints ingested or reloaded). The newest maxAudit rows
+// are retained. No field ever carries a secret value.
 type AuditEntry struct {
 	ID       int64  `json:"id"`
 	TS       string `json:"ts"`
