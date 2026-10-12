@@ -472,7 +472,18 @@ def run_session_status_focus(page):
             page.check(f'session status focus ({width}): {name}', state.get(name) is True, str(state))
 
 
+def run_session_search_recovery(page):
+    for width in (375, 1280):
+        dom = page.dom('?sessionsearchrecovery', window_size=(width, 800), served=True)
+        receipt = re.search(r'data-session-search-recovery="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        page.check(f'session search recovery ({width}): receipt produced', bool(state), str(state))
+        for name in ('origin', 'recovery', 'reset', 'results', 'retry', 'empty', 'agents', 'agentResults', 'bounds'):
+            page.check(f'session search recovery ({width}): {name}', state.get(name) is True, str(state))
+
+
 CASES = (
+    Case('session_search_recovery', run_session_search_recovery),
     Case('session_status_focus', run_session_status_focus),
     Case('session_latest_focus', run_session_latest_focus),
     Case('session_empty_navigation', run_session_empty_navigation),
