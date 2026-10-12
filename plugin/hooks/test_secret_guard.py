@@ -26,6 +26,15 @@ HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secret_guard.py
 # build all home-relative paths from this constant.
 HOME = tempfile.mkdtemp(prefix="secret-guard-test-home-")
 
+# The module reads HOME and the activity log path at import, so the in-process
+# layer imports it only after both point into the temp HOME.
+os.environ["HOME"] = HOME
+os.environ["SECURE_AGENT_ACTIVITY_LOG"] = os.path.join(HOME, "activity.jsonl")
+sys.path.insert(0, os.path.dirname(HOOK))
+import secret_guard  # noqa: E402
+
+AUDIT_LOG = os.path.join(HOME, ".agents", "logs", "secret-guard.jsonl")
+
 
 def run(payload: dict, env: dict | None = None) -> dict:
     base = dict(os.environ)
@@ -48,6 +57,11 @@ def run(payload: dict, env: dict | None = None) -> dict:
         return json.loads(p.stdout or "{}")
     except json.JSONDecodeError:
         raise AssertionError(f"non-JSON stdout: {p.stdout[:400]}")
+
+
+def last_audit_rule() -> str:
+    with open(AUDIT_LOG, encoding="utf-8") as fh:
+        return json.loads(fh.read().strip().split("\n")[-1])["rule"]
 
 
 def bash(cmd: str) -> dict:
@@ -172,7 +186,7 @@ DENY = [
     # interpreter bypass
     (f"python3 -c \"open('{HOME}/.zshrc','a').write('x')\"", "interpreter-write-bypass"),
     ("node -e \"require('fs').appendFileSync(process.env.HOME+'/.zshenv','x')\"", "interpreter-write-bypass"),
-    (f"perl -e 'open(F,\">>\",\"{HOME}/.zprofile\"); print F \"x\"'", "interpreter-write-bypass"),
+    (f"perl -e 'open(F,\">>\",\"{HOME}/.zprofile\"); print F \"x\"'", "shell-rc-redirect"),
     ("osascript -e 'do shell script \"chflags nouchg ~/.zshrc\"'", "interpreter-write-bypass"),
     # real-world casing: KEYCHAIN_MARKERS are lowercase, the path is not
     (f"python3 -c \"open('{HOME}/Library/Keychains/login.keychain-db','w')\"", "interpreter-write-bypass"),
@@ -680,11 +694,15 @@ def main() -> int:
                 failures.append(f"[{label}] should DENY ({rule}) but allowed: {cmd}")
             elif hso.get("permissionDecision") != "deny" or not hso.get("permissionDecisionReason"):
                 failures.append(f"[{label}] deny is missing current Claude Code keys: {cmd}")
+            elif last_audit_rule() != rule:
+                failures.append(f"[{label}] audited rule {last_audit_rule()!r}, expected {rule}: {cmd}")
 
     for path, rule in WRITE_DENY:
         out = run(write(path))
         if out.get("permission") != "deny":
             failures.append(f"[write] should DENY ({rule}) but allowed: {path}")
+        elif last_audit_rule() != rule:
+            failures.append(f"[write] audited rule {last_audit_rule()!r}, expected {rule}: {path}")
 
     for fn in EXTRA_TESTS:
         try:
@@ -855,6 +873,134 @@ def _test_editable_guard_policy_applies_and_fails_closed():
 
 
 EXTRA_TESTS.append(_test_editable_guard_policy_applies_and_fails_closed)
+
+
+# --- verdict layer: every rule is decided in-process --------------------------
+
+@contextlib.contextmanager
+def in_process(**env):
+    """Hermetic environment for calling the evaluators directly."""
+    saved = dict(os.environ)
+    for key in ("SECURE_AGENT_GUARD_MODES", "SECURE_AGENT_GUARD_RULES",
+                "SECURE_AGENT_GUARD_CWD_OVERRIDES", "SECURE_AGENT_CWD", "SECURE_AGENT_SOCK"):
+        os.environ.pop(key, None)
+    os.environ.update(env)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
+def _assert_denied(verdict, rule):
+    assert verdict.kind == "deny", verdict
+    assert verdict.rule == rule, verdict
+    assert verdict.user_msg.startswith("Blocked:"), verdict
+    assert verdict.agent_msg.startswith("DENIED"), verdict
+    assert not verdict.broker and not verdict.touched, verdict
+
+
+def _test_verdicts_match_allow_and_deny_tables():
+    with in_process():
+        for cmd in ALLOW:
+            assert secret_guard.evaluate_command(cmd).kind == "allow", cmd
+        for cmd, rule in DENY:
+            _assert_denied(secret_guard.evaluate_command(cmd), rule)
+
+
+def _test_deny_reply_carries_the_verdict_texts():
+    for cmd, _ in DENY[::7]:
+        with in_process():
+            verdict = secret_guard.evaluate_command(cmd)
+        out = run(bash(cmd))
+        assert out.get("user_message") == verdict.user_msg, cmd
+        assert out.get("agent_message") == verdict.agent_msg, cmd
+        assert out.get("hookSpecificOutput", {}).get("permissionDecisionReason") == verdict.agent_msg, cmd
+
+
+def _test_group_1_security_cli_and_control_plane_executors():
+    with in_process():
+        _assert_denied(secret_guard.evaluate_command("security dump-keychain"), "keychain-security-cli")
+        _assert_denied(secret_guard.evaluate_command(
+            "curl --unix-socket ~/.config/secure-agent/daemon.sock http://unix/guard/resolve -d '{}'"),
+            "guard-control-network")
+        _assert_denied(secret_guard.evaluate_command("echo ~/.zshrc | xargs rm"), "executor-bypass")
+        _assert_denied(secret_guard.evaluate_command("tar cf - ~/.ssh"), "secret-archive")
+
+
+def _test_group_2_keychain_files():
+    with in_process():
+        _assert_denied(secret_guard.evaluate_command("cat ~/Library/Keychains/login.keychain-db"),
+                       "keychain-file-op")
+
+
+def _test_group_3_shell_rc_mutation_and_chflags():
+    with in_process():
+        _assert_denied(secret_guard.evaluate_command("cp /tmp/new ~/.zshrc"), "shell-rc-mutation")
+        _assert_denied(secret_guard.evaluate_command("chflags nouchg ~/.zshrc"), "shell-rc-unlock")
+        locked = secret_guard.evaluate_command("chflags uchg ~/.zshrc")
+        assert locked.kind == "allow" and locked.touched == ("shell-rc-lock",), locked
+
+
+def _test_group_4_redirects():
+    with in_process():
+        _assert_denied(secret_guard.evaluate_command("echo x > ~/.zshrc"), "shell-rc-redirect")
+        _assert_denied(secret_guard.evaluate_command("echo x > ~/Library/Keychains/login.keychain-db"),
+                       "keychain-redirect")
+
+
+def _test_group_5_inline_interpreter_writes():
+    with in_process():
+        _assert_denied(secret_guard.evaluate_command(
+            f"python3 -c \"open('{HOME}/.zshrc','a').write('x')\""), "interpreter-write-bypass")
+        _assert_denied(secret_guard.evaluate_command(
+            "python3 -c \"import base64;open(base64.b64decode('L3RtcC94'),'w').write('y')\""),
+            "interpreter-obfuscated-write")
+
+
+def _test_group_6_printing_credential_files():
+    with in_process():
+        _assert_denied(secret_guard.evaluate_command("cat ~/.aws/credentials"), "secret-file-read")
+
+
+def _test_group_6a_directory_guard_modes_on_bash():
+    command = "cat /tmp/x/.env"
+    with in_process():
+        assert secret_guard.evaluate_command(command).kind == "allow"
+    for mode in ("deny", "prompt"):
+        with in_process(**with_modes(**{"env-files": mode})):
+            _assert_denied(secret_guard.evaluate_command(command), "guard-deny:env-files")
+    with in_process(**with_modes(**{"ssh-keys": "deny"})):
+        _assert_denied(secret_guard.evaluate_command("cp -r ~/.ssh /tmp/sshbackup"), "guard-deny:ssh-keys")
+
+
+def _test_group_7_allowed_traffic_reports_touched_surfaces():
+    with in_process():
+        verdict = secret_guard.evaluate_command("cat ~/.zshrc; ls ~/Library/Keychains/")
+    assert verdict.kind == "allow", verdict
+    assert verdict.touched == ("keychain-read", "shell-rc-read"), verdict
+
+
+def _test_evaluate_file_write_decides_per_path():
+    with in_process():
+        for path, rule in WRITE_DENY:
+            _assert_denied(secret_guard.evaluate_file_write(path), rule)
+        assert secret_guard.evaluate_file_write("/tmp/project/main.go").kind == "allow"
+
+
+EXTRA_TESTS += [
+    _test_verdicts_match_allow_and_deny_tables,
+    _test_deny_reply_carries_the_verdict_texts,
+    _test_group_1_security_cli_and_control_plane_executors,
+    _test_group_2_keychain_files,
+    _test_group_3_shell_rc_mutation_and_chflags,
+    _test_group_4_redirects,
+    _test_group_5_inline_interpreter_writes,
+    _test_group_6_printing_credential_files,
+    _test_group_6a_directory_guard_modes_on_bash,
+    _test_group_7_allowed_traffic_reports_touched_surfaces,
+    _test_evaluate_file_write_decides_per_path,
+]
 
 
 if __name__ == "__main__":
