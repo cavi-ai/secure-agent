@@ -782,9 +782,18 @@ function planLineText(p) {
     parts.push(`${planWindowLabel(w.window_minutes)} ${Math.round(Number(w.used_percent) || 0)}% used`
       + (isNaN(reset) ? '' : ` · resets ${fmtDayClock(new Date(reset))}`));
   }
-  const seen = Date.parse(p.seen_at);
-  if (Number.isFinite(seen)) parts.push(`observed ${new Date(seen).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`);
   return parts.filter(Boolean).join(' · ');
+}
+
+function planObservationHTML(value) {
+  const unavailable = 'Observation time unavailable';
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)
+    || Number(value.slice(0, 4)) <= 1) return unavailable;
+  const date = new Date(value);
+  const calendar = new Date(value.slice(0, 19).toUpperCase() + 'Z');
+  if (!isFinite(date.getTime()) || !isFinite(calendar.getTime()) || calendar.toISOString().slice(0, 19) !== value.slice(0, 19).toUpperCase()) return unavailable;
+  const text = `${EVENT_MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()} ${fmtDayClock(date).slice(4)}`;
+  return `Observed <time datetime="${date.toISOString()}">${escapeHTML(text)}</time>`;
 }
 
 // spendPlanItems: the Spend card's plan-headroom lines as patchList items
@@ -799,7 +808,7 @@ function spendPlanItems(plans) {
       return `<span class="hbar-track" title="${escapeHTML(planWindowLabel(w.window_minutes))}"><span class="hbar-fill${cls}" data-w="${pct.toFixed(1)}"></span></span>`;
     }).join('');
     const html = `<div class="spend-plan${unverified(p) ? ' spend-plan-unverified' : ''}">
-      <span class="spend-plan-text">${escapeHTML(planLineText(p))}</span>${bars}
+      <span class="spend-plan-text">${escapeHTML(planLineText(p))} · ${planObservationHTML(p.seen_at)}</span>${bars}
     </div>`;
     return { key: `plan:${p.account_key ? p.account_key + ':' + (p.limit_id || '') : p.home_path || p.home}`,
       html: unverified(p) ? `<details class="spend-plan-history"><summary>Unverified quota observation · ${escapeHTML(p.home || p.harness)}</summary>${html}</details>` : html };
