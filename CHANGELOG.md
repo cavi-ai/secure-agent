@@ -4,7 +4,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [1.3.0] - Unreleased
+## [1.3.0] - 2026-10-12
 
 ### Added
 - Advisor: read-only evidence tools and optional local classification for context routing.
