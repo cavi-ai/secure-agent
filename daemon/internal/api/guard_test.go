@@ -22,14 +22,21 @@ import (
 func TestGuardPendingAttachesAdvisorAdvice(t *testing.T) {
 	st := testStore(t)
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: newTestBroker(), GuardAdvisor: func(req model.GuardAssessmentRequest) {
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(5 * time.Second), GuardAdvisor: func(req model.GuardAssessmentRequest) {
 		st.PutAdvisorVerdict(advisor.GuardSubjectID(req.Agent, req.RuleID, req.Path, req.Tool), "guard",
 			model.AdvisorVerdict{Assessment: "malicious", Confidence: 0.9, Rationale: "exfiltration shape"})
 	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 	// A blocked decision creates the pending prompt (and blocks; run async).
 	go func() {
+		defer close(done)
 		req := httptest.NewRequest(http.MethodPost, "/guard/decision",
-			strings.NewReader(`{"agent":"claude","tool":"Read","path":"/x/.env","rule_id":"env-files"}`))
+			strings.NewReader(`{"agent":"claude","tool":"Read","path":"/x/.env","rule_id":"env-files"}`)).WithContext(ctx)
 		a.handleGuardDecision(httptest.NewRecorder(), req)
 	}()
 	// Wait for the prompt to register, then read /guard/pending.
@@ -54,6 +61,7 @@ func TestGuardPendingAttachesAdvisorAdvice(t *testing.T) {
 	}
 	// The prompt is still pending — advice never resolves it.
 	a.guardBroker.Resolve(pending[0].ID, guard.Decision{Verdict: "deny", Scope: "once"})
+	<-done
 }
 
 func TestGuardOutcomePersistence(t *testing.T) {
