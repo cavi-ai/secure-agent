@@ -27,6 +27,7 @@ function fixture(fetch) {
     sessionEnded: false, SS_TOKEN_KEY: 'fixture', consoleToken: 'fixture', lastSnapshotAt: 0, cancelDialog: null,
     telemetryFetchGen: 0, telemetrySlowGen: 0, expectedEgressReadGen: 0,
     protectionContext: null, protectionContextGeneration: 0,
+    resetPolicyState() { ctx.policyReset = true; },
     pendingConsoleContext: null, handoffGeneration: 0, openConsoleContext: async () => {},
     sessionWorkbench: { invalidate() { ctx.workbenchInvalidated = true; } },
     reviewResult: null, reviewResultSeq: 0, drawerReviewResult: null, drawerMode: null, closeDrawer() {},

@@ -2151,7 +2151,8 @@ function policyListHTML(kind, rows, st) {
   const s = st || {};
   const removal = kind === 'expected' && s.expectedRemoval;
   const saved = removal ? `<p role="status">Exception removal saved for <code>${escapeHTML(removal.path)}</code> (${escapeHTML(removal.agent)}). Remaining exceptions and policies still apply; past activity is unchanged.</p>` : '';
-  const notice = saved + (kind === 'expected' && s.error ? '<p role="status">Current exceptions unavailable. Refresh before removing an exception.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh exceptions</button>' : '');
+  const notice = saved + (kind === 'expected' && s.error ? '<p role="status">Current exceptions unavailable. Refresh before removing an exception.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh exceptions</button>' : '')
+    + (kind === 'scope' && s.error ? '<p role="status">Last known permission records. Current status unavailable. Refresh before revoking.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh permissions</button>' : '');
   if (!rows) {
     if (s.error) return `${notice}<div class="empty"><span>${escapeHTML(s.error)}</span></div>`;
     return `<div class="loading">Loading…</div>`;
@@ -2163,18 +2164,25 @@ function policyListHTML(kind, rows, st) {
     expected: 'No expected secret reads. Expected, on a read-then-connect finding, adds one here.',
     scope: 'No scoped permissions. Choose a session or timed permission on a recorded finding or guard prompt.',
   };
-  if (!rows.length) return `${notice}${kind === 'expected' && s.error ? '' : `<div class="empty"><span>${EMPTY[kind]}</span></div>`}`;
+  if (!rows.length) return kind === 'scope' && notice ? notice
+    : `${notice}${kind === 'expected' && s.error ? '' : `<div class="empty"><span>${EMPTY[kind]}</span></div>`}`;
   const row = (main, sub, meta) => `<div class="policy-row"><div class="policy-row-main">${main}</div>`
     + `<div class="policy-row-sub">${sub}</div>${meta ? `<span class="policy-row-meta">${meta}</span>` : ''}</div>`;
   const when = r => r.created_at ? escapeHTML(String(r.created_at).slice(0, 10)) : '';
   const items = rows.map(r => {
     if (kind === 'scope') {
-      const revoked = !!r.revoked_at, expired = r.expires_at && Date.parse(r.expires_at) <= Date.now();
-      const lifetime = revoked ? 'Revoked' : expired ? 'Expired' : r.kind === 'session' ? `Until session ${r.session_id} ends` : `Expires ${r.expires_at}`;
+      const applicability = decisionScopeApplicability(r), mutation = s.scopeMutations?.get(r.id);
+      const saved = mutation?.status === 'saved', unconfirmed = mutation?.status === 'unconfirmed';
+      const pending = mutation?.status === 'confirming' || mutation?.status === 'saving';
+      const lifetime = saved ? 'Revoked' : applicability.label;
+      const duration = r.expires_at ? ` · Expires ${r.expires_at}` : r.kind === 'session' && r.session_id ? ` · Session ${r.session_id}` : '';
+      const feedback = saved ? '<p role="status">Revocation saved. Other permissions may still apply; past access is unchanged.</p>'
+        : unconfirmed ? '<p role="status">Revocation not confirmed. Refresh permissions before trying again.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh permissions</button>'
+        : mutation?.status === 'saving' ? '<p role="status">Saving revocation…</p>' : '';
       const recipient = r.destination ? ` → ${r.destination}` : '';
       return row(`<b>${escapeHTML(r.agent)}</b> · ${escapeHTML(r.operation)} <code>${escapeHTML(r.resource_path)}</code>${escapeHTML(recipient)}`,
-        `${escapeHTML(r.workspace)} · executable path ${escapeHTML(r.reader_exe)} (observed, not signature verified) · ${escapeHTML(lifetime)}`,
-        revoked || expired ? '' : `<button class="btn btn-ghost btn-sm" data-action="revoke-scope" data-id="${escapeHTML(r.id)}">Revoke</button>`);
+        `${escapeHTML(r.workspace)} · executable path ${escapeHTML(r.reader_exe)} (observed, not signature verified) · ${escapeHTML(lifetime + duration)}${feedback}`,
+        !applicability.revoke || saved || unconfirmed || s.error ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-action="revoke-scope" data-id="${escapeHTML(r.id)}"${s.loading || pending ? ' disabled' : ''}>Revoke</button>`);
     }
     if (kind === 'guard') {
       return row(`<span class="policy-decision ${r.decision === 'deny' ? 'deny' : 'allow'}">${escapeHTML(r.decision || '')}</span> `

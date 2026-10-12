@@ -384,7 +384,7 @@
       const receipt={id:body.id,revision:body.revision,action:body.action,at:iso(0),...(future ? {scope_ids:['scope-browser']} : {})};
       const review=data['/reviews'].reviews.find(r=>r.id===body.id);
       review.review_state=body.action==='close_reported'?'closed_reported':'reviewed';review.decision=receipt;
-      if (future) data['/decision-scopes']=[{id:'scope-browser',kind:body.scope.kind,agent:'claude',session_id:'sess-claude-1',workspace:'/Users/dev/workspace/api-service',reader_exe:'/usr/bin/cat',rule_id:'sensitive-read-then-connect',resource_path:'/work/.env',operation:'read-connect',destination:'api.example.com:443',created_at:iso(0),expires_at:new Date(now+86400000).toISOString(),identity_basis:'observed-session'}];
+      if (future) data['/decision-scopes']=[{id:'scope-browser',kind:body.scope.kind,agent:'claude',session_id:'sess-claude-1',workspace:'/Users/dev/workspace/api-service',reader_exe:'/usr/bin/cat',rule_id:'sensitive-read-then-connect',resource_path:'/work/.env',operation:'read-connect',destination:'api.example.com:443',created_at:iso(0),expires_at:new Date(now+86400000).toISOString(),identity_basis:'observed-session',applicability:{label:'Timed permission',revoke:true}}];
       for (const group of data['/posture'].groups || []) group.items=group.items.filter(item=>item.kind!=='review'||item.id!==body.id);
       data['/posture'].groups=data['/posture'].groups.filter(group=>group.items.length);
       data['/posture'].items=data['/posture'].items.filter(item=>item.kind!=='review'||item.id!==body.id);
@@ -462,6 +462,11 @@
   let slowShapeRecovered = false;
   let spendShapeBad = scenarios.has('firstload');
   window.ConsoleFixtures.apply(fixture);
+  if (scenarios.has('scoperevoke')) data['/decision-scopes'] = [{ id: 'scope-global', kind: 'exact', agent: 'claude',
+    session_id: 'sess-claude-1', workspace: '/synthetic/workspace', reader_exe: '/synthetic/tool',
+    rule_id: 'sensitive-read-then-connect', resource_path: '/synthetic/credentials', operation: 'read-connect',
+    destination: 'example.test:443', created_at: iso(60000), expires_at: new Date(now+86400000).toISOString(),
+    ...(scenarios.has('unknownscope') ? {} : { applicability: { label: 'Timed permission', revoke: true } }) }];
   if (scenarios.has('attentionactionfocus') || scenarios.has('attentionactionmanual')) {
     let facts = 0;
     window.__attentionActionFocusRefresh = (mode = 'facts') => {
@@ -523,6 +528,17 @@
         ...rows.map(row => ({ ...row, applicability: row.applicability || { label: 'Timed permission', revoke: true } })),
         { ...rows[0], id: 'unrelated-permission', resource_path: '/unrelated/resource' },
       ] : [] };
+    }
+    if (scenarios.has('scoperevoke') && p === '/decision-scopes') {
+      if (opts?.method === 'DELETE') {
+        const id = new URLSearchParams(String(path).split('?')[1]).get('id');
+        if (id !== 'scope-global') throw new Error('Wrong permission target');
+        window.__globalScopeDeletes = (window.__globalScopeDeletes || 0) + 1;
+        Object.assign(data[p][0], { revoked_at: iso(0), applicability: { label: 'Revoked', revoke: false } });
+        return { ok: true, json: async () => ({ revoked: true, id: scenarios.has('ambiguousrevoke') ? 'wrong-id' : id }) };
+      }
+      if (scenarios.has('scopereadfail') && window.__globalScopeDeletes) return { ok: false, status: 503, text: async () => 'Unavailable' };
+      return { ok: true, json: async () => structuredClone(data[p]) };
     }
     if (scenarios.has('permissionsdemo') && p === '/decision-scopes') {
       if (opts?.method === 'DELETE') {
@@ -648,7 +664,10 @@
       if (p === '/decision-scopes' && opts.method === 'DELETE') {
         line=`DELETE ${String(path)}`;
         const id=new URLSearchParams(String(path).split('?')[1]||'').get('id');
-        const scope=data['/decision-scopes'].find(s=>s.id===id);if(scope)scope.revoked_at=iso(0);
+        const scope=data['/decision-scopes'].find(s=>s.id===id);
+        if(scope)Object.assign(scope,{revoked_at:iso(0),applicability:{label:'Revoked',revoke:false}});
+        reqLog.push(line);stamp('mock-requests',reqLog.join('\n'));
+        return {ok:!!scope,status:scope?200:404,json:async()=>({revoked:true,id})};
       }
       reqLog.push(line);
       stamp('mock-requests', reqLog.join('\n'));
@@ -3049,7 +3068,49 @@
     setTimeout(()=>document.querySelector('#flags-list [data-decision="expect"][data-scope="exact"][data-expiry="24h"]')?.click(),7000);
     setTimeout(()=>document.getElementById('confirm-ok')?.click(),7500);
     setTimeout(()=>openTab('policy'),8500);
-    if (scenarios.has('revokescope')) setTimeout(()=>document.querySelector('#policy-scopes [data-action="revoke-scope"]')?.click(),10000);
+    if (scenarios.has('revokescope')) setTimeout(()=>{
+      document.querySelector('#policy-scopes [data-action="revoke-scope"]')?.click();
+      setTimeout(()=>document.getElementById('confirm-ok')?.click(),100);
+    },10000);
+  }
+  if (scenarios.has('scoperevoke')) {
+    setTimeout(()=>openTab('policy'),1500);
+    setTimeout(async()=>{
+      const list=document.getElementById('policy-scopes');
+      const probe={loaded:list.textContent.includes('/synthetic/credentials'),fits:document.documentElement.scrollWidth<=innerWidth};
+      const button=list.querySelector('[data-action="revoke-scope"]');
+      if (scenarios.has('unknownscope')) {
+        probe.unknown=list.textContent.includes('Applicability unknown') && !button && !window.__globalScopeDeletes;
+      } else {
+        button?.focus();button?.click();button?.click();
+        await new Promise(resolve=>setTimeout(resolve,100));
+        probe.confirmation=document.getElementById('confirm-message').textContent.includes('/synthetic/credentials')
+          && document.getElementById('confirm-message').textContent.includes('example.test:443') && !window.__globalScopeDeletes;
+        if (scenarios.has('confirmonly')) return;
+        document.getElementById('confirm-cancel')?.click();
+        await new Promise(resolve=>setTimeout(resolve,100));
+        probe.cancelled=!window.__globalScopeDeletes && !!list.querySelector('[data-action="revoke-scope"]');
+        probe.cancelFocus=document.activeElement?.dataset.action==='revoke-scope' && document.activeElement?.dataset.id==='scope-global';
+        list.querySelector('[data-action="revoke-scope"]')?.click();document.getElementById('confirm-ok')?.click();
+        await new Promise(resolve=>setTimeout(resolve,200));
+        probe.once=window.__globalScopeDeletes===1;
+        probe.noReplay=!list.querySelector('[data-action="revoke-scope"]');
+        if (scenarios.has('ambiguousrevoke')) {
+          probe.unconfirmed=list.textContent.includes('Revocation not confirmed') && !list.textContent.includes('Revocation saved');
+          list.querySelector('[data-action="policy-refresh"]')?.click();
+          for (let attempt=0;attempt<20 && (list.textContent.includes('Revocation not confirmed') || !list.textContent.includes('Revoked'));attempt++) {
+            await new Promise(resolve=>setTimeout(resolve,50));
+          }
+          probe.refreshed=list.textContent.includes('Revoked') && !list.textContent.includes('Revocation not confirmed')
+            && !list.textContent.includes('Revocation saved') && window.__globalScopeDeletes===1;
+          if (!probe.refreshed) probe.refreshText=list.textContent;
+        } else {
+          probe.saved=list.textContent.includes('Revocation saved') && list.textContent.includes('/synthetic/credentials');
+          if (scenarios.has('scopereadfail')) probe.retained=list.textContent.includes('Last known permission records');
+        }
+      }
+      document.body.dataset.globalPermissionsProbe=JSON.stringify(probe);
+    },3500);
   }
   if (scenarios.has('policylists')) {
     setTimeout(() => openTab('policy'), 4000);
