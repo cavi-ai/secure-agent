@@ -152,13 +152,12 @@ func TestOwnerConnectionIsNotCited(t *testing.T) {
 // One pattern (agent, reader, secret, destination org) is one flag per
 // hour; repeats fold into it. A new destination or a new window flags again.
 func TestReadThenConnectRepeatsFold(t *testing.T) {
-	c := newFamilyCorrelator(t)
 	type rep struct {
 		id string
 		at time.Time
 	}
 	var reps []rep
-	c.SetOnRepeat(func(id string, at time.Time) { reps = append(reps, rep{id, at}) })
+	c := newFamilyCorrelatorWith(t, Hooks{OnRepeat: func(id string, at time.Time) { reps = append(reps, rep{id, at}) }})
 	base := time.Unix(1_700_000_000, 0)
 	aws := homePath(t, ".aws/credentials")
 	var raised []model.Flag
@@ -245,11 +244,10 @@ func TestNotSecretPathUnderSensitiveDir(t *testing.T) {
 }
 
 func TestReadConnectOpenFindingDoesNotRealertHourly(t *testing.T) {
-	c := newFamilyCorrelator(t)
 	base := time.Unix(1700000000, 0)
 	var first string
 	open := true
-	c.SetOpenFlagChecker(func(id string) bool { return id == first && open })
+	c := newFamilyCorrelatorWith(t, Hooks{OpenFlag: func(id string) bool { return id == first && open }})
 	for _, minutes := range []int{0, 61, 125} {
 		at := base.Add(time.Duration(minutes) * time.Minute)
 		ghReads(c, t, event.KindFileOpen, at)
@@ -286,11 +284,12 @@ func TestReadConnectRepeatEscalatesStrongerEvidence(t *testing.T) {
 }
 
 func TestOpenReadFindingFoldingSurvivesRestart(t *testing.T) {
-	c := newFamilyCorrelator(t)
 	at := time.Unix(1700000000, 0)
 	path := homePath(t, ".config/gh/hosts.yml")
-	c.RestoreOpenReadFlags([]model.Flag{{ID: "retained", Rule: readConnectRule, Severity: 3, TS: at, Agent: "cursor", Evidence: []model.EvidenceItem{{Kind: "read", Label: path, Exe: ghExe}, {Kind: "connect", Label: "evil.example.com:443"}}}})
-	c.SetOpenFlagChecker(func(id string) bool { return id == "retained" })
+	c := newFamilyCorrelatorWith(t, Hooks{
+		OpenFlag:      func(id string) bool { return id == "retained" },
+		OpenReadFlags: []model.Flag{{ID: "retained", Rule: readConnectRule, Severity: 3, TS: at, Agent: "cursor", Evidence: []model.EvidenceItem{{Kind: "read", Label: path, Exe: ghExe}, {Kind: "connect", Label: "evil.example.com:443"}}}},
+	})
 	ghReads(c, t, event.KindFileOpen, at.Add(2*time.Hour))
 	if f := connectTo(c, 201, "evil.example.com", at.Add(2*time.Hour+time.Second)); len(f) != 0 {
 		t.Fatal("restart duplicated unresolved finding", f)
