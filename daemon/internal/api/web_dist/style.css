@@ -2132,6 +2132,28 @@ button.spend-day:focus-visible { outline: 2px solid var(--brand); outline-offset
 
 /* ---------- Agent tab: system agent chat, plans, runs ---------- */
 .agent-posture-link { display: none; }
+/* Agent dock: the conversation beside the page; the page narrows to it. */
+.agent-dock {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 150;
+  width: min(440px, 100vw); display: flex; flex-direction: column;
+  background: var(--bg-1); color: var(--tx-1);
+  border-left: 1px solid var(--line-2); box-shadow: var(--sh-2);
+}
+.agent-dock[hidden] { display: none; }
+.agent-dock-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex: none; }
+.agent-dock-head h3 { flex: none; display: flex; align-items: center; gap: 8px; font-size: 0.9rem; font-weight: 650; }
+.agent-dock-state { flex: 1 1 auto; min-width: 0; font-size: 0.74rem; color: var(--tx-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-dock-actions { display: flex; gap: 6px; }
+.agent-dock-body { flex: 1 1 auto; min-height: 0; display: flex; }
+.agent-dock .agent-chat { flex: 1 1 auto; }
+.agent-dock .agent-thread { padding: 12px 14px; }
+.agent-dock .agent-chat-foot { max-width: none; padding: 10px 12px 14px; }
+body.agent-docked { padding-right: min(440px, 100vw); }
+body.agent-docked .toasts { inset: 80px calc(min(440px, 100vw) + 22px) auto auto; max-height: min(40vh, 300px); }
+@media (max-width: 900px) {
+  body.agent-docked { padding-right: 0; }
+  body.agent-docked .toasts { inset: 64px 12px auto 12px; }
+}
 .agent-page .app { height: 100dvh; min-height: 640px; padding-bottom: 18px; gap: 18px; }
 .agent-page .app > :not(main) { flex-shrink: 0; }
 .agent-page .app > main { flex: 1; min-height: 0; }
