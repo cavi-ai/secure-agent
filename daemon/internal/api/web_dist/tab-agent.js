@@ -229,9 +229,19 @@ function agentThreadItems(chat, status, runs, activity = {}) {
       : work && work.state === 'preparing' ? 'Preparing skills and snapshot…' : 'Waiting for local Ollama…';
     const label = activity.sending ? 'Sending your message…' : progress;
     const timing = work && Number(work.elapsed_ms) > 0 ? ` · ${Math.floor(Number(work.elapsed_ms) / 1000)}s · ${Number(work.tool_calls) || 0} read calls` : '';
-    items.push({ key: 'pending', html: `<div class="agent-msg agent-pending" role="status" aria-live="polite">${agentSpinnerHTML()}<span>${label}${timing}</span></div>` });
+    // Keep the animated shell stable while renderAgent updates its text.
+    items.push({ key: 'pending', label: label + timing, html: `<div class="agent-msg agent-pending" role="status" aria-live="polite">${agentSpinnerHTML()}<span class="agent-pending-label"></span><span class="agent-working-dots" aria-hidden="true"><span class="agent-activity-dot"></span><span class="agent-activity-dot"></span><span class="agent-activity-dot"></span></span></div>` });
   }
   return items;
+}
+
+// History establishes a baseline. Later renders identify only newly accepted
+// message IDs, even when old content changes or previously seen history returns.
+function agentMessageArrivals(chat, seen) {
+  if (!chat || !Array.isArray(chat.messages)) return { seen, arrived: new Set() };
+  const keys = chat.messages.filter(m => m.origin !== 'analysis').map(m => 'm' + m.id);
+  const arrived = new Set(seen ? keys.filter(key => !seen.has(key)) : []);
+  return { seen: new Set([...(seen || []), ...keys]), arrived };
 }
 
 // agentEmptyThreadHTML: an enabled agent before the first message.

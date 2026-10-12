@@ -2201,6 +2201,7 @@ body.agent-docked .toasts { inset: 80px calc(min(440px, 100vw) + 22px) auto auto
 .agent-workspace.has-inspector .agent-layout { grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); }
 .agent-chat { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .agent-thread {
+  --agent-message-enter: 160ms;
   flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 26px;
   width: 100%; max-width: 860px; align-self: center; padding: 32px clamp(20px, 4vw, 56px); overflow-y: auto; overscroll-behavior: contain;
 }
@@ -2213,10 +2214,18 @@ body.agent-docked .toasts { inset: 80px calc(min(440px, 100vw) + 22px) auto auto
 .agent-spinner { width: 16px; height: 16px; flex: none; color: var(--brand-2); animation: spin 1s linear infinite; }
 .btn-primary .agent-spinner { color: currentColor; }
 .agent-spinner circle { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-dasharray: 30 14; }
+.agent-working-dots {
+  --agent-work-cycle: 1.2s;
+  display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--brand-2);
+}
+.agent-activity-dot { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: agent-work-pulse var(--agent-work-cycle) var(--ease) infinite; }
+.agent-activity-dot:nth-child(2) { animation-delay: 150ms; }
+.agent-activity-dot:nth-child(3) { animation-delay: 300ms; }
+@keyframes agent-work-pulse { 0%, 70%, 100% { opacity: 0.35; } 35% { opacity: 1; } }
 .agent-proposal-head .badge { display: inline-flex; align-items: center; gap: 6px; }
 .agent-approval-note { font-size: 0.72rem; color: var(--tx-3); }
 .agent-feedback { margin-top: 8px; font-size: 0.78rem; line-height: 1.5; color: var(--bad); overflow-wrap: anywhere; }
-@media (prefers-reduced-motion: reduce) { .agent-spinner { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .agent-spinner, .agent-activity-dot { animation: none; } }
 .agent-bubble {
   padding: 0; border: 0; background: transparent; color: var(--tx-1); font-size: 0.92rem; line-height: 1.65;
   white-space: pre-wrap; overflow-wrap: anywhere;

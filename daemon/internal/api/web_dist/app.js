@@ -1350,10 +1350,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const AGENT_POLL_MS = 1500;
   const AGENT_POLL_LIMIT = 1200;
   const AGENT_TIMEOUT_MS = 15000;
-  const agentState = { status: null, chat: null, plans: null, runs: null, recommendations: null, skills: null, error: '', sendError: '', sending: false, actionRequests: new Set(), readVersion: {}, polls: 0, lastCount: 0 };
+  const agentState = { status: null, chat: null, plans: null, runs: null, recommendations: null, skills: null, error: '', sendError: '', sending: false, actionRequests: new Set(), readVersion: {}, polls: 0, lastCount: 0, seenMessageKeys: null };
   // Literal paths: the proxy's console allow-list test reads them from here.
   const AGENT_PATHS = { status: '/agent/status', chat: '/agent/chat', plans: '/agent/plans', runs: '/agent/runs', recommendations: '/agent/recommendations' };
   let agentPollTimer = null;
+  const agentReducedMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  agentReducedMotion?.addEventListener('change', event => {
+    if (!event.matches) return;
+    const thread = document.getElementById('agent-thread');
+    thread?.getAnimations?.({ subtree: true }).forEach(animation => {
+      if (animation.id === 'agent-message-arrival') animation.cancel();
+    });
+  });
   // Agent dock: the Agent tab's conversation (#agent-chat) moved beside the
   // current page, so asking about a worktree does not navigate away. It and
   // the inspector drawer share the right edge: one is open at a time.
@@ -1541,6 +1549,23 @@ document.addEventListener('DOMContentLoaded', () => {
       const beforeHeight = thread.scrollHeight;
       const follow = agentState.lastCount === 0 || beforeHeight - thread.scrollTop - thread.clientHeight < 80;
       patchList(thread, items, { key: i => i.key, html: i => i.html, empty: agentEmptyThreadHTML(st) });
+      const pending = items.find(item => item.key === 'pending');
+      const pendingLabel = thread.querySelector('.agent-pending-label');
+      if (pendingLabel && pendingLabel.textContent !== pending.label) pendingLabel.textContent = pending.label;
+      const arrivals = agentMessageArrivals(agentState.chat, agentState.seenMessageKeys);
+      agentState.seenMessageKeys = arrivals.seen;
+      if (arrivals.arrived.size && !(agentReducedMotion && agentReducedMotion.matches)) {
+        const motion = getComputedStyle(thread);
+        const duration = parseFloat(motion.getPropertyValue('--agent-message-enter')) || 160;
+        const easing = motion.getPropertyValue('--ease').trim() || 'ease-out';
+        items.forEach((item, index) => {
+          const node = thread.children[index];
+          if (arrivals.arrived.has(item.key) && node && node.animate) {
+            node.animate([{ opacity: 0.35, transform: 'translateY(4px)' }, { opacity: 1, transform: 'translateY(0)' }],
+              { id: 'agent-message-arrival', duration, easing });
+          }
+        });
+      }
       if (follow && (items.length !== agentState.lastCount || thread.scrollHeight !== beforeHeight)) thread.scrollTop = thread.scrollHeight;
       agentState.lastCount = items.length;
     }

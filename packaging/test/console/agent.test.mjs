@@ -32,10 +32,10 @@ test('retriage tracks a fresh identical verdict and waits while its actual task 
 });
 
 test('system agent progress shows only known read-tool activity and numeric timing', () => {
-  const html = agentThreadItems({messages:[],chatting:true,work:{state:'inspecting',active_tool:'inspect_session_activity',elapsed_ms:2300,tool_calls:1}}, status())[0].html;
-  assert.match(html, /Inspecting related session activity/);
-  assert.match(html, /2s · 1 read calls/);
-  const unknown = agentThreadItems({messages:[],chatting:true,work:{state:'inspecting',active_tool:XSS}}, status())[0].html;
+  const label = agentThreadItems({messages:[],chatting:true,work:{state:'inspecting',active_tool:'inspect_session_activity',elapsed_ms:2300,tool_calls:1}}, status())[0].label;
+  assert.match(label, /Inspecting related session activity/);
+  assert.match(label, /2s · 1 read calls/);
+  const unknown = agentThreadItems({messages:[],chatting:true,work:{state:'inspecting',active_tool:XSS}}, status())[0].label;
   assert.ok(!unknown.includes(XSS));
   assert.match(unknown, /recorded evidence/);
   assert.match(agentMessageHTML({role:'assistant',content:'Answer',usage:{read_tool_calls:2,tool_calls:2}},status()), /2 read tool calls/);
