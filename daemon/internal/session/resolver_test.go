@@ -6,11 +6,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
+	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -813,6 +815,134 @@ func TestEndTranscriptSession(t *testing.T) {
 	r.EndTranscriptSession("conv-1", time.Now())
 	if s, _ := testutil.Lookup[model.Session](t)(st.GetSession("conv-1")); s.Status != model.SessionEnded {
 		t.Fatalf("status = %q, want ended", s.Status)
+	}
+}
+
+// A conversation that continues after it ended reopens on the harness's own
+// record of work dated after the end while its root lives. Late records,
+// records with no time of their own, transcript hits, wall-clock sightings, an
+// open rollout and a dead root leave it ended.
+func TestWorkAfterTheEndResumesSession(t *testing.T) {
+	started := time.Now().Add(-48 * time.Hour)
+	r, st := testResolver(t, fakeProcs{
+		200: {PID: 200, PPID: 1, Exe: "/usr/local/bin/codex", CWD: "/repo", StartTime: started},
+	})
+	end := time.Now().Add(-time.Hour)
+	for id, root := range map[string]int32{"live-root": 200, "dead-root": 300, "no-root": 0} {
+		st.UpsertSession(model.Session{ID: id, Harness: "codex", RootPID: root, StartedAt: started, LastSeenAt: end.Add(-time.Minute), Status: model.SessionActive, Confidence: model.ConfTranscript})
+		r.EndTranscriptSession(id, end)
+	}
+	status := func(id string) string {
+		s, _ := testutil.Lookup[model.Session](t)(st.GetSession(id))
+		return s.Status
+	}
+	for _, e := range []event.Event{
+		{Kind: event.KindToolCall, SessionID: "live-root", TS: end.Add(-time.Second)},
+		{Kind: event.KindToolCall, SessionID: "live-root"},
+		{Kind: event.KindTranscriptHit, SessionID: "live-root", TS: end.Add(time.Minute)},
+		{Kind: event.KindModelCall, SessionID: "dead-root", TS: end.Add(time.Minute)},
+	} {
+		r.Resolve(&e)
+	}
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "live-root", Harness: "codex", TS: time.Now()})
+	r.JoinTranscriptPID("live-root", 200)
+	for _, id := range []string{"live-root", "dead-root", "no-root"} {
+		if got := status(id); got != model.SessionEnded {
+			t.Fatalf("%s: status %q before new work, want ended", id, got)
+		}
+	}
+	for _, e := range []event.Event{
+		{Kind: event.KindModelCall, SessionID: "live-root", TS: end.Add(time.Minute)},
+		{Kind: event.KindPluginAction, SessionID: "no-root", TS: end.Add(time.Minute)},
+	} {
+		var emitted string
+		r.OnSessionChange = func(s model.Session) {
+			if s.ID == e.SessionID {
+				emitted = s.Status
+			}
+		}
+		r.Resolve(&e)
+		if got, _ := testutil.Lookup[model.Session](t)(st.GetSession(e.SessionID)); got.Status != model.SessionActive || got.EndedAt != nil || emitted != model.SessionActive {
+			t.Fatalf("%s: status %q, ended_at %v, emitted %q after new work; want active, nil, active", e.SessionID, got.Status, got.EndedAt, emitted)
+		}
+	}
+}
+
+// A Cursor transcript line carries no time; re-read after its conversation
+// ended, it is stamped with the read time and must not reopen the session.
+func TestReplayedCursorLineKeepsSessionEnded(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{})
+	id := "0b8f6a2e-1111-2222-3333-444455556666"
+	week := time.Now().Add(-7 * 24 * time.Hour)
+	st.UpsertSession(model.Session{ID: id, Harness: "cursor", StartedAt: week, LastSeenAt: week, Status: model.SessionActive, Confidence: model.ConfTranscript})
+	r.EndTranscriptSession(id, week.Add(25*time.Hour))
+	tr := collect.NewCursorTracer(filepath.Join(t.TempDir(), ".cursor", "projects", "Users-x-repo", "agent-transcripts", id, id+".jsonl"))
+	evs, ok := tr.ParseLine(`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}`)
+	if !ok || len(evs) == 0 {
+		t.Fatalf("ParseLine = %v, %v; want events", evs, ok)
+	}
+	for i := range evs {
+		r.Resolve(&evs[i])
+	}
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession(id)); got.Status != model.SessionEnded {
+		t.Fatalf("status %q after a re-read line, want ended", got.Status)
+	}
+}
+
+// A resumed session takes its root back, free or held by a process-tree
+// session minted on it while the session was ended (that one merges in):
+// later tree events resolve to it, and Sweep ends it again when the root
+// exits.
+func TestResumedSessionHoldsItsRootAgain(t *testing.T) {
+	for _, minted := range []bool{false, true} {
+		started := time.Now().Add(-48 * time.Hour)
+		procs := fakeProcs{200: {PID: 200, PPID: 1, Exe: "/usr/local/bin/codex", CWD: "/repo", StartTime: started}}
+		r, st := testResolver(t, procs)
+		end := time.Now().Add(-time.Hour)
+		st.UpsertSession(model.Session{ID: "c", Harness: "codex", Workspace: "/repo", RootPID: 200, RootStartedAt: started.UTC().Format(time.RFC3339Nano), StartedAt: started, LastSeenAt: end.Add(-time.Minute), Status: model.SessionActive, Confidence: model.ConfTranscript})
+		r.EndTranscriptSession("c", end)
+		if minted {
+			if got := r.Resolve(&event.Event{Kind: event.KindFileOpen, PID: 200, TS: end.Add(time.Minute)}); got == "c" || got == "" {
+				t.Fatalf("tree event while ended resolved to %q, want a process-tree session", got)
+			}
+		}
+
+		r.Resolve(&event.Event{Kind: event.KindModelCall, SessionID: "c", TS: end.Add(2 * time.Minute)})
+		if got := r.Resolve(&event.Event{Kind: event.KindFileOpen, PID: 200, TS: end.Add(3 * time.Minute)}); got != "c" {
+			t.Fatalf("minted=%v: tree event after the resume resolved to %q, want c", minted, got)
+		}
+		var live []string
+		for _, s := range testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{})) {
+			if s.Status != model.SessionEnded {
+				live = append(live, s.ID)
+			}
+		}
+		if !slices.Equal(live, []string{"c"}) {
+			t.Fatalf("minted=%v: live sessions %v, want [c]", minted, live)
+		}
+
+		delete(procs, 200)
+		r.tagger.Refresh()
+		r.Sweep()
+		if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("c")); got.Status != model.SessionEnded {
+			t.Fatalf("minted=%v: status %q after the root exited, want ended", minted, got.Status)
+		}
+	}
+}
+
+// A root pid now held by another process (a different start time) does not
+// reopen the conversation it once ran.
+func TestResumeNeedsTheRecordedRootProcess(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{
+		200: {PID: 200, PPID: 1, Exe: "/usr/local/bin/codex", CWD: "/repo", StartTime: time.Now().Add(-time.Minute)},
+	})
+	started := time.Now().Add(-48 * time.Hour)
+	end := time.Now().Add(-time.Hour)
+	st.UpsertSession(model.Session{ID: "c", Harness: "codex", RootPID: 200, RootStartedAt: started.UTC().Format(time.RFC3339Nano), StartedAt: started, LastSeenAt: end.Add(-time.Minute), Status: model.SessionActive, Confidence: model.ConfTranscript})
+	r.EndTranscriptSession("c", end)
+	r.Resolve(&event.Event{Kind: event.KindModelCall, SessionID: "c", TS: end.Add(time.Minute)})
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("c")); got.Status != model.SessionEnded {
+		t.Fatalf("status %q with the root pid reused, want ended", got.Status)
 	}
 }
 

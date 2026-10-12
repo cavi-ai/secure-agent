@@ -189,11 +189,14 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 	if err := json.Unmarshal([]byte(trimmed), &rec); err != nil {
 		return nil, false
 	}
-	ts := time.Now()
+	ts, observed := time.Now(), true
 	if rec.Timestamp != "" {
 		if parsed, err := time.Parse(time.RFC3339Nano, rec.Timestamp); err == nil {
-			ts = parsed
+			ts, observed = parsed, false
 		}
+	}
+	if observed {
+		defer func() { markObserved(events) }()
 	}
 
 	retired := t.pending.expire(ts)
