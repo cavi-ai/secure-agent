@@ -412,6 +412,19 @@ function worktreeAgentChipHTML(w) {
   return `<span class="wt-agent-live" title="${escapeHTML(`${who} is working in this folder; removing it breaks that session`)}">${escapeHTML(who)} working here</span>`;
 }
 
+const WORKTREE_REASON_KINDS = new Set(['keep', 'agent', 'review', 'safe', 'info']);
+
+// worktreeReasonsHTML: the row's reasons as tags toned by the daemon's
+// reason_kinds; the agent chip in the header stands for the agent reason.
+function worktreeReasonsHTML(w) {
+  const kinds = w.reason_kinds || [];
+  const items = (w.reasons || []).map((text, i) => ({ text, kind: WORKTREE_REASON_KINDS.has(kinds[i]) ? kinds[i] : '' }))
+    .filter(it => !(it.kind === 'agent' && w.in_use));
+  if (!items.length) return '';
+  return `<ul class="wt-reasons wt-reason-tags" role="list">${items.map(it =>
+    `<li class="wt-reason${it.kind ? ' wt-reason-' + it.kind : ''}">${escapeHTML(it.text)}</li>`).join('')}</ul>`;
+}
+
 // worktreeTrashBlock: why a keep or review row cannot be moved to the Trash
 // from the console, or ''. The daemon refuses the same rows again.
 function worktreeTrashBlock(w) {
@@ -482,7 +495,6 @@ function worktreeRemovalHTML(rm) {
 // removal disables Remove and shows its step.
 function worktreeRowHTML(w, repo, note, ask, removal, askable) {
   const branch = w.branch || (w.detached ? '(detached)' : '');
-  const reasons = (w.reasons || []).map(r => `<li>${escapeHTML(r)}</li>`).join('');
   let action = '';
   if (w.orphan) {
     // Git no longer records this folder: open it, link it to the repository
@@ -516,18 +528,18 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable) {
     : `<button type="button" class="btn btn-ghost btn-sm wt-open" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}" title="Show in Finder" aria-label="Show ${escapeHTML(branch || w.path)} in Finder"><svg class="icon"><use href="#i-folder"/></svg></button>`;
   return `<div class="wt-row wt-${escapeHTML(w.state)}" data-path="${escapeHTML(w.path)}">
     <div class="wt-main">
+      <span class="wt-state">${escapeHTML(w.state)}</span>
       <div class="wt-identity">
-        <span class="wt-branch">${escapeHTML(branch)}</span>
+        <div class="wt-title"><span class="wt-branch">${escapeHTML(branch)}</span>${worktreeAgentChipHTML(w)}${w.stale ? '<span class="wt-stale">stale</span>' : ''}</div>
         <button type="button" class="wt-path" data-action="copy-path" data-path="${escapeHTML(w.path)}" title="${escapeHTML(w.path)} — click to copy">${escapeHTML(worktreePathLabel(w.path, repo.path))}</button>
       </div>
       <div class="wt-facts">
-        <span class="wt-state">${escapeHTML(w.state)}</span>${w.stale ? '<span class="wt-stale">stale</span>' : ''}${worktreeAgentChipHTML(w)}
         <span class="wt-size">${escapeHTML(worktreeSizeLabel(w))}</span>
         <span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>
       </div>
       <div class="wt-actions">${open}${action}${discuss}</div>
     </div>
-    ${reasons ? `<ul class="wt-reasons">${reasons}</ul>` : ''}
+    ${worktreeReasonsHTML(w)}
     ${worktreeNoteHTML(note, discuss ? w.path : '')}
     ${worktreeAskHTML(ask)}
     ${worktreeRemovalHTML(removal)}

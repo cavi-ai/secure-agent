@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -511,6 +512,38 @@ func TestClassifyActiveGrace(t *testing.T) {
 		}
 		if c.state == StateKeep && !strings.Contains(strings.Join(w.Reasons, " "), "active in the last 24 hours") {
 			t.Errorf("grace reason missing: %q", w.Reasons)
+		}
+	}
+}
+
+// Every reason carries its kind, in order: what keeps the folder, an agent
+// working in it, what only lives here, what is kept elsewhere, and context.
+func TestReasonKindsFollowReasons(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	idle := facts{DefaultBranch: "origin/main", IndexTime: now.Add(-30 * 24 * time.Hour)}
+	recent := facts{DefaultBranch: "origin/main", IndexTime: now.Add(-time.Hour)}
+	for _, c := range []struct {
+		name  string
+		w     Worktree
+		f     facts
+		kinds []string
+	}{
+		{"main", Worktree{}, facts{Main: true}, []string{ReasonInfo}},
+		{"locked and gone", Worktree{Locked: true}, facts{Missing: true}, []string{ReasonKeep, ReasonInfo}},
+		{"gone", Worktree{}, facts{Missing: true}, []string{ReasonInfo}},
+		{"keep", Worktree{Changed: 2, Untracked: 1, InUse: true, ActiveAgent: "codex", Stashes: 1, Merged: mergedAncestor,
+			SubmoduleLocal: []string{"submodule vendor/x has 3 commits on no remote (removal loses them)"}}, idle,
+			[]string{ReasonKeep, ReasonKeep, ReasonAgent, ReasonKeep, ReasonReview, ReasonSafe}},
+		{"review", Worktree{PreciousIgnored: []string{".tmp/ (1 file)"}, Unique: 2, Merged: "no"}, idle, []string{ReasonReview, ReasonReview}},
+		{"merged and idle", Worktree{Merged: mergedAncestor, Submodules: 1}, idle, []string{ReasonSafe, ReasonSafe}},
+		{"pushed and idle", Worktree{Merged: "no"}, idle, []string{ReasonSafe}},
+		{"merged and recent", Worktree{Merged: mergedAncestor}, recent, []string{ReasonInfo}},
+		{"not merged and recent", Worktree{Merged: "no"}, recent, []string{ReasonInfo}},
+	} {
+		w := c.w
+		classify(&w, c.f, now, 14*24*time.Hour)
+		if !slices.Equal(w.ReasonKinds, c.kinds) || len(w.Reasons) != len(w.ReasonKinds) {
+			t.Errorf("%s: kinds %q for reasons %q, want %q", c.name, w.ReasonKinds, w.Reasons, c.kinds)
 		}
 	}
 }

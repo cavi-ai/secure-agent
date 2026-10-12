@@ -1375,6 +1375,7 @@ export interface Worktree {
   reconnect?: string;
   state: string;
   reasons: string[] | null;
+  reason_kinds: string[] | null;
   stale?: boolean;
   last_activity?: string;
   idle_days: number;

@@ -1001,6 +1001,8 @@ The scan runs `git` read-only: `GIT_OPTIONAL_LOCKS=0` (no index refresh), `core.
 | `review` | nothing git-tracked is lost, but something only lives here: precious ignored files (`.env*`, `*.pem`, `*.key`, `.tmp/`, `.claude/`, `.remember/`, with file count and size), commits on no remote and not in the default branch, stashes on the branch, an orphan directory, or an inspection error |
 | `remove` | none of the above, no activity in the last 24 hours, and contained in the default branch (ancestor, squash, or no net change) or every commit on a remote and idle past `stale_days` |
 
+`reason_kinds` gives each entry of `reasons`, in order, one kind: `keep` (removal would lose work or cut into a git operation), `agent` (an agent is working there), `review` (something only lives there), `safe` (the work is kept elsewhere) or `info`.
+
 Merge detection is local. The default branch is `origin/HEAD`'s target, else the first of `origin/main`, `origin/master`, `main`, `master`. `merged` is `ancestor` (HEAD reachable from it), `squash` (the branch's zero-context diff from the merge-base has the patch id of one of the newest 1,000 non-merge commits on it), `empty` (no net change), `content` (compared with the same file on the default branch, or the one with the same name and the longest common trailing path including a directory: every line the branch adds is there at least as many times as it adds it, every line it removes is there no more often than at the branch tip, every added binary is a blob it has, every deleted file is gone and every changed file mode matches; the branch's merge-base, or the commit its reflog says it was created at when the histories share none, is the base; an added line of three or more words also counts when the file has a longer line, one the base did not have, holding all of its words, for up to 3 lines or a tenth of the lines, whichever is more), `no`, or `unknown` (no merge-base and no creation entry, a diff over 1,000 files, 100,000 added lines or 8 MiB, over 32 MiB of default-branch content to read, a type change or submodule pointer, or a git error; with a merge-base whose squash check said no, the answer stays `no`). `content_lines` counts the non-blank lines the branch adds, `content_missing` those the default branch lacks, `content_extended` those it has only in a longer form and `content_other` the removed lines or files, binaries and file modes that still differ, set when the content check ran to the end. `unrelated_history` is `true` when HEAD shares no commit with the default branch; its review reason then measures the lines added since the branch was created instead of counting the old history's commits. A merged row that is `keep` or `review` for another reason lists the merge as its last reason. `stale` is `true` when idle past `stale_days`, or merged or its upstream branch gone with no activity in the last 24 hours. Last activity is the newest of HEAD's commit time, the worktree index's mtime and the newest session seen under the path.
 
 ```json
@@ -1012,9 +1014,10 @@ Merge detection is local. The default branch is `origin/HEAD`'s target, else the
   "summary": {"repos": 31, "worktrees": 131, "remove": 42, "review": 64, "keep": 21, "prune": 4, "stale": 114},
   "repos": [
     {"path": "/Users/me/code/app", "source": "session", "default_branch": "origin/main", "worktrees": [
-      {"path": "/Users/me/code/app", "branch": "main", "state": "main", "reasons": ["main worktree of the repository"], "idle_days": 0},
+      {"path": "/Users/me/code/app", "branch": "main", "state": "main", "reasons": ["main worktree of the repository"], "reason_kinds": ["info"], "idle_days": 0},
       {"path": "/Users/me/code/app/.worktrees/ui", "branch": "feat/ui", "head": "518e4bb2c1d0",
-       "state": "review", "reasons": ["ignored files that only live here: .tmp/ (660 files, 207.3 MB)"],
+       "state": "review", "reasons": ["ignored files that only live here: .tmp/ (660 files, 207.3 MB)", "merged into origin/main (squash)"],
+       "reason_kinds": ["review", "safe"],
        "stale": true, "last_activity": "2026-09-23T06:30:41Z", "idle_days": 0,
        "upstream": "origin/feat/ui", "merged": "squash", "other_ignored": 3,
        "precious_ignored": [".tmp/ (660 files, 207.3 MB)"]}

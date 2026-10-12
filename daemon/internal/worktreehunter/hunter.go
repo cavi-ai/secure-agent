@@ -372,6 +372,19 @@ type savedReport struct {
 	Report  ScanReport `json:"report"`
 }
 
+// kindsAligned reports whether every row carries one kind per reason; a
+// report saved without reason kinds is rescanned rather than served.
+func kindsAligned(rep ScanReport) bool {
+	for _, r := range rep.Repos {
+		for _, w := range r.Worktrees {
+			if len(w.ReasonKinds) != len(w.Reasons) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // savedSize is one stored measurement.
 type savedSize struct {
 	Bytes   int64     `json:"bytes"`
@@ -392,7 +405,7 @@ func (h *Hunter) load() {
 	h.mu.Unlock()
 	if body, at, ok := h.st.ScanCache(cacheReportKey); ok {
 		var saved savedReport
-		if json.Unmarshal(body, &saved) == nil && reflect.DeepEqual(normalize(saved.Options), opts) {
+		if json.Unmarshal(body, &saved) == nil && reflect.DeepEqual(normalize(saved.Options), opts) && kindsAligned(saved.Report) {
 			h.mu.Lock()
 			if h.cached == nil {
 				h.cached, h.cachedAt = &saved.Report, at
@@ -744,7 +757,7 @@ func attachOrphans(repos []RepoReport, orphans []orphanDir, activity []model.Wor
 		}
 		if c := reconnectCandidate(repos, o); c != "" {
 			w.Reconnect = c
-			w.Reasons = append(w.Reasons, c+" still records this worktree: Reconnect links it again")
+			w.reason(ReasonInfo, c+" still records this worktree: Reconnect links it again")
 		}
 		if i < 0 {
 			name := o.Main
