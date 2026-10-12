@@ -503,12 +503,16 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable) {
     : `<button type="button" class="btn btn-ghost btn-sm wt-open" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}" title="Show in Finder" aria-label="Show ${escapeHTML(branch || w.path)} in Finder"><svg class="icon"><use href="#i-folder"/></svg></button>`;
   return `<div class="wt-row wt-${escapeHTML(w.state)}" data-path="${escapeHTML(w.path)}">
     <div class="wt-main">
-      <span class="wt-state">${escapeHTML(w.state)}</span>${w.stale ? '<span class="wt-stale">stale</span>' : ''}
-      <span class="wt-branch">${escapeHTML(branch)}</span>
-      <button type="button" class="wt-path" data-action="copy-path" data-path="${escapeHTML(w.path)}" title="${escapeHTML(w.path)} — click to copy">${escapeHTML(worktreePathLabel(w.path, repo.path))}</button>
-      <span class="wt-size">${escapeHTML(worktreeSizeLabel(w))}</span>
-      <span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>
-      ${open}${action}${discuss}
+      <div class="wt-identity">
+        <span class="wt-branch">${escapeHTML(branch)}</span>
+        <button type="button" class="wt-path" data-action="copy-path" data-path="${escapeHTML(w.path)}" title="${escapeHTML(w.path)} — click to copy">${escapeHTML(worktreePathLabel(w.path, repo.path))}</button>
+      </div>
+      <div class="wt-facts">
+        <span class="wt-state">${escapeHTML(w.state)}</span>${w.stale ? '<span class="wt-stale">stale</span>' : ''}
+        <span class="wt-size">${escapeHTML(worktreeSizeLabel(w))}</span>
+        <span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>
+      </div>
+      <div class="wt-actions">${open}${action}${discuss}</div>
     </div>
     ${reasons ? `<ul class="wt-reasons">${reasons}</ul>` : ''}
     ${worktreeNoteHTML(note, discuss ? w.path : '')}
@@ -561,15 +565,21 @@ function worktreeGroupAskText(res) {
 // latest ask and latest removal.
 function worktreeGroupHTML(g, advice, asks, removals, askable) {
   const meta = [g.repo.default_branch, g.repo.source].filter(Boolean).join(' · ');
+  const name = String(g.repo.path || '').replace(/\/$/, '').split('/').pop() || g.repo.path;
   return `<section class="wt-repo">
     <div class="wt-repo-head">
-      <span class="wt-repo-path" title="${escapeHTML(g.repo.path)}">${escapeHTML(g.repo.path)}</span>
-      ${meta ? `<span class="wt-repo-meta">${escapeHTML(meta)}</span>` : ''}
-      ${g.repo.size_bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.repo.size_bytes))}</span>` : ''}
-      ${g.repo.error
+      <div class="wt-repo-identity">
+        <h3 class="wt-repo-name">${escapeHTML(name)}</h3>
+        <span class="wt-repo-path" title="${escapeHTML(g.repo.path)}">${escapeHTML(g.repo.path)}</span>
+      </div>
+      <div class="wt-repo-facts">
+        ${meta ? `<span class="wt-repo-meta">${escapeHTML(meta)}</span>` : ''}
+        ${g.repo.size_bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.repo.size_bytes))}</span>` : ''}
+      </div>
+      <div class="wt-repo-actions">${g.repo.error
         ? `<span class="wt-repo-error">${escapeHTML(g.repo.error)} — the folders below still point to it</span>`
         : worktreeRemoveAllHTML(g.repo, removals) + worktreeGroupAsksHTML(g)
-          + `<button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>`}
+          + `<button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>`}</div>
     </div>
     ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path], (removals || {})[w.path], (askable || {})[w.path])).join('')}
   </section>`;

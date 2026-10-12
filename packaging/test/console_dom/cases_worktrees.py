@@ -549,7 +549,18 @@ def run_worktrees_2(page):
         ta[:300],
     )
 
+def run_worktree_hierarchy(page):
+    for width in (320, 390, 428, 768, 1280):
+        dom = page.dom('?worktreehierarchy', served=True, window_size=(width, 800), fixture=payload_cases.worktree_reading_hierarchy())
+        receipt = re.search(r'data-worktree-hierarchy="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        page.check(f'worktree hierarchy ({width}): receipt produced', bool(state), str(state))
+        for name in ('completeIdentities', 'duplicateNames', 'bounds', 'actions', 'failure', 'touch', 'search'):
+            page.check(f'worktree hierarchy ({width}): {name}', state.get(name) is True, str(state))
+
+
 CASES = (
+    Case('worktree_hierarchy', run_worktree_hierarchy),
     Case('worktrees', run_worktrees, ('dom_memfam', 'dom_wt', 'dom_wtdiscuss', 'dom_wtdiscussoff', 'dom_wtrefresh', 'dom_wtreview', 'dom_wtreviewtrash', 'dom_wtsizing')),
     Case('clutter', run_clutter, ('dom_clutter', 'dom_clutteradvise', 'dom_clutter_view')),
     Case('worktrees_2', run_worktrees_2, ('dom_wtadopt', 'dom_wtbatch', 'dom_wtcadence', 'dom_wtday', 'dom_wtday_midnight', 'dom_wtgroup', 'dom_wthistory', 'dom_wtorphan', 'dom_wtorphantrash', 'dom_wtremovable', 'dom_wtremove', 'dom_wtremovefail', 'dom_wtremoving', 'dom_wtsearch')),
