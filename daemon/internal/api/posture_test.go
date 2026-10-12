@@ -22,8 +22,8 @@ func TestDismissPushesAllClearPosture(t *testing.T) {
 		t.Run(body, func(t *testing.T) {
 			st := testStore(t)
 			st.PutFlag(model.Flag{ID: "last", Rule: "transcript-secret-leak", Severity: 2, TS: time.Now()})
-			a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
-			a.deltaHub = NewDeltaHub()
+
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, DeltaHub: NewDeltaHub()})
 			ch := a.deltaHub.Subscribe()
 			defer a.deltaHub.Unsubscribe(ch)
 			a.PublishPostureIfChanged()
@@ -49,8 +49,8 @@ func TestDismissPushesAllClearPosture(t *testing.T) {
 func TestIncidentDismissalPushesPostureAndRetainsReport(t *testing.T) {
 	st := testStore(t)
 	st.PutIncident(model.IncidentReport{ID: "test-incident", Rule: "secret-in-transcript", Agent: "codex", Risk: model.RiskCritical, Timestamp: time.Now(), Summary: "Test fixture"})
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
-	a.deltaHub = NewDeltaHub()
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, DeltaHub: NewDeltaHub()})
 	ch := a.deltaHub.Subscribe()
 	defer a.deltaHub.Unsubscribe(ch)
 	a.PublishPostureIfChanged()
@@ -70,7 +70,7 @@ func TestIncidentDismissalPushesPostureAndRetainsReport(t *testing.T) {
 	default:
 		t.Fatal("incident dismissal did not push posture")
 	}
-	fresh := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	fresh := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	if p := fresh.computePosture(); p.NeedsYou != 0 {
 		t.Fatalf("fresh API restored dismissed incident: %+v", p)
 	}
@@ -86,8 +86,8 @@ func TestIncidentDismissalPushesPostureAndRetainsReport(t *testing.T) {
 func TestDecisionPushesPostureAtUnchangedCount(t *testing.T) {
 	st := testStore(t)
 	st.PutFlag(model.Flag{ID: "a", Rule: "transcript-secret-leak", Severity: 3, TS: time.Now()})
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.deltaHub = NewDeltaHub()
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, DeltaHub: NewDeltaHub()})
 	ch := a.deltaHub.Subscribe()
 	defer a.deltaHub.Unsubscribe(ch)
 	a.PublishPostureIfChanged()
@@ -112,8 +112,8 @@ func TestDecisionPushesPostureAtUnchangedCount(t *testing.T) {
 }
 
 func TestOlderPostureNeverFollowsNewer(t *testing.T) {
-	a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.deltaHub = NewDeltaHub()
+
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, DeltaHub: NewDeltaHub()})
 	ch := a.deltaHub.Subscribe()
 	defer a.deltaHub.Unsubscribe(ch)
 	a.publishPosture(2, Posture{State: "attention", NeedsYou: 1}, true)
@@ -131,7 +131,7 @@ func TestOlderPostureNeverFollowsNewer(t *testing.T) {
 func TestPostureAllClearWhenNothingPending(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -161,7 +161,7 @@ func TestPostureExcludesAcknowledgedFlags(t *testing.T) {
 	st.PutFlag(model.Flag{ID: "open-1", Rule: "sensitive-read-then-connect", Severity: 3, TS: time.Now(), Evidence: model.EvidenceFromStrings("read .env then connected")})
 	st.PutFlag(model.Flag{ID: "done-1", Rule: "proxy-secret-leak", Severity: 3, TS: time.Now(), Evidence: model.EvidenceFromStrings("key in body")})
 	st.AcknowledgeFlag("done-1")
-	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -189,7 +189,7 @@ func TestPostureCriticalFlagDrivesState(t *testing.T) {
 	defer os.Remove(sock)
 	st := testStore(t)
 	st.PutFlag(model.Flag{ID: "f1", Rule: "sensitive-read-then-connect", Severity: 3, TS: time.Now(), Evidence: model.EvidenceFromStrings("read .env then connected")})
-	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -216,9 +216,9 @@ func TestPostureCriticalFlagDrivesState(t *testing.T) {
 // Uninspected egress alone is a coverage note: posture stays all-clear (the
 // menu bar purple, no hero) and the note stays listed for the console.
 func TestPostureEgressNoteAloneIsAllClear(t *testing.T) {
-	a := newTestAPI("", testStore(t), nil, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status {
 		return Status{Running: true, UninspectedEgress: 9}
-	})
+	}})
 	p := a.computePosture()
 	if p.State != "all-clear" || p.NeedsYou != 0 || p.CoverageCount != 1 || p.CoverageItems[0].Kind != "uninspected_egress" {
 		t.Fatalf("posture = %+v, want all-clear with the egress note listed", p)
@@ -231,13 +231,13 @@ func TestPostureEgressNoteAloneIsAllClear(t *testing.T) {
 func TestPostureSeparatesUninspectedEgressAndDeadCollectorsFromDecisions(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture3_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status {
+	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status {
 		return Status{
 			Running:           true,
 			UninspectedEgress: 3,
 			Collectors:        []supervise.Health{{Name: "eslogger", Running: false, LastError: "exit 1"}},
 		}
-	})
+	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -295,7 +295,7 @@ func TestPostureSeparatesUninspectedEgressAndDeadCollectorsFromDecisions(t *test
 func TestPostureFlagsSilentCollectorsAndUncoveredHarnesses(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture5_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status {
+	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status {
 		return Status{
 			Running: true, Uptime: "1h0m0s", ActiveAgents: 2,
 			Agents: []AgentSummary{{PID: 42, Name: "cursor"}},
@@ -304,7 +304,7 @@ func TestPostureFlagsSilentCollectorsAndUncoveredHarnesses(t *testing.T) {
 				{Name: "netsampler", Running: true}, // not watched (idle agents open no sockets)
 			},
 		}
-	})
+	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -348,13 +348,13 @@ func TestPostureFlagsCrashLoopingRootService(t *testing.T) {
 		return collect.ESServiceSnapshot{State: "spawn scheduled (last exit 1)", SpoolMtime: time.Now().Add(-8 * 24 * time.Hour)}, nil
 	}
 	defer func() { collect.ESServiceProbe = prev }()
-	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status {
+	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status {
 		return Status{
 			Running: true, Uptime: "1h0m0s", ActiveAgents: 2,
 			Collectors: []supervise.Health{{Name: "eslogger", Running: true, LastProduced: time.Now().UTC().Format(time.RFC3339)}},
 			ESService:  &collect.ESServiceSnapshot{State: "spawn scheduled (last exit 1)", SpoolMtime: time.Now().Add(-8 * 24 * time.Hour)},
 		}
-	})
+	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -547,12 +547,12 @@ func TestESServiceItemsStaleFloodYieldsToServiceState(t *testing.T) {
 func TestPostureNoSilenceFlagsWhenIdle(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture6_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status {
+	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status {
 		return Status{
 			Running: true, Uptime: "2h0m0s", ActiveAgents: 0,
 			Collectors: []supervise.Health{{Name: "eslogger", Running: true}},
 		}
-	})
+	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -575,7 +575,7 @@ func TestPostureOldFlagsDoNotCount(t *testing.T) {
 	defer os.Remove(sock)
 	st := testStore(t)
 	st.PutFlag(model.Flag{ID: "old", Rule: "keychain-access", Severity: 3, TS: time.Now().Add(-48 * time.Hour)})
-	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -681,7 +681,7 @@ func TestPostureAdviceCannotDowngradeExposure(t *testing.T) {
 		if withAdvisor {
 			st.PutAdvisorVerdict("fp", "flag", model.AdvisorVerdict{Assessment: "benign", Confidence: 0.93, Rationale: "Own skill config.", SuggestedAction: "allow-host", CreatedAt: time.Now()})
 		}
-		return newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} }).computePosture()
+		return newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }}).computePosture()
 	}
 	p := put(true)
 	if p.State != "critical" || len(p.Items) != 1 || p.Items[0].Severity != 3 {

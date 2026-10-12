@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -319,7 +320,7 @@ func TestReviewWriteFailureRetainsSourceAndDecisionIsAtomic(t *testing.T) {
 	if err == nil {
 		t.Fatal("receipt failure accepted")
 	}
-	f, ok := s.GetFlag("source")
+	f, ok := testutil.Lookup[model.Flag](t)(s.GetFlagResult("source"))
 	if !ok || f.Acknowledged {
 		t.Fatalf("partial acknowledgment: %+v", f)
 	}
@@ -332,7 +333,7 @@ func TestReviewWriteFailureRetainsSourceAndDecisionIsAtomic(t *testing.T) {
 	if err != nil || !result.Changed {
 		t.Fatalf("projection lost detection: %+v %v", result, err)
 	}
-	if _, ok = s.GetFlag("second"); !ok {
+	if _, ok = testutil.Lookup[model.Flag](t)(s.GetFlagResult("second")); !ok {
 		t.Fatal("source lost")
 	}
 	p, err := s.ListFindingReviews("", 100)

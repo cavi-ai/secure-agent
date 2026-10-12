@@ -46,19 +46,6 @@ func (s *Store) PutOperatorLabelResult(l model.OperatorLabel) (err error) {
 	return nil
 }
 
-// SimilarLabels returns up to limit labels sharing the rule or the pattern,
-// ranked: the exact case, the same agent and pattern, the same rule and
-// agent, the same pattern, the same rule; newest first within a rank. Empty
-// keys match nothing. Never nil.
-func (s *Store) SimilarLabels(rule, agent, pattern string, limit int) []model.OperatorLabel {
-	out, err := s.SimilarLabelsResult(rule, agent, pattern, limit)
-	if err != nil {
-		log.Printf("store: similar labels: %v", err)
-		return []model.OperatorLabel{}
-	}
-	return out
-}
-
 // SimilarLabelsResult rejects incomplete history rather than returning the
 // rows preceding a query, scan, cursor or timestamp failure.
 func (s *Store) SimilarLabelsResult(rule, agent, pattern string, limit int) (out []model.OperatorLabel, err error) {
@@ -101,16 +88,6 @@ func (s *Store) SimilarLabelsResult(rule, agent, pattern string, limit int) (out
 		return nil, fmt.Errorf("iterate operator labels: %w", err)
 	}
 	return out, nil
-}
-
-// LabelSummary counts ok and not_ok labels on the same case: the same agent
-// and pattern, or the same rule and agent when there is no pattern.
-func (s *Store) LabelSummary(agent, pattern, rule string) model.LabelSummary {
-	sum, err := s.LabelSummaryResult(agent, pattern, rule)
-	if err != nil {
-		log.Printf("store: label summary: %v", err)
-	}
-	return sum
 }
 
 // LabelSummaryResult distinguishes an empty history from an unavailable read.

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"slices"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func TestIncidentLinkRejectsInvalidTargetsAndRecovers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if id, found := s.IncidentIDForFlag("source"); found || id != "" {
+			if id, found, err := s.IncidentIDForFlagResult("source"); err == nil || found || id != "" {
 				t.Errorf("unusable incident link accepted: %q %v", id, found)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != 1 || !slices.Contains(h.ReadActive, "incident links") {
@@ -49,7 +50,7 @@ func TestIncidentLinkRejectsInvalidTargetsAndRecovers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if id, found := s.IncidentIDForFlag("source"); !found || id != "incident" {
+			if id, found := testutil.Lookup[string](t)(s.IncidentIDForFlagResult("source")); !found || id != "incident" {
 				t.Errorf("repaired target unavailable: %q %v", id, found)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 0 {

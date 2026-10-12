@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -27,14 +28,14 @@ func TestEventWriteResultRejectsIgnoredNewRows(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, err := s.PutEvent(e)
-			if err == nil || result.Changed || !result.HealthChanged || len(s.RecentEvents(10)) != 0 {
+			if err == nil || result.Changed || !result.HealthChanged || len(testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 10}))) != 0 {
 				t.Fatalf("ignored insert reported success: %+v, %v", result, err)
 			}
 			if _, err := s.db.Exec("DROP TRIGGER ignore_event"); err != nil {
 				t.Fatal(err)
 			}
 			result, err = s.PutEvent(e)
-			if err != nil || !result.Changed || !result.HealthChanged || len(s.RecentEvents(10)) != 1 {
+			if err != nil || !result.Changed || !result.HealthChanged || len(testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 10}))) != 1 {
 				t.Fatalf("insert did not recover: %+v, %v", result, err)
 			}
 			if h := s.WriteHealth(); h.Failures != 1 || len(h.Active) != 0 {
@@ -93,7 +94,7 @@ func TestModelWriteResultRejectsIgnoredUsageIncrease(t *testing.T) {
 	if result, err := s.PutEvent(e); err == nil || result.Changed || !result.HealthChanged {
 		t.Fatalf("ignored usage increase was mistaken for a duplicate: %+v, %v", result, err)
 	}
-	if got := s.RecentEvents(10); len(got) != 1 || got[0].TokensIn != 100 {
+	if got := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 10})); len(got) != 1 || got[0].TokensIn != 100 {
 		t.Fatalf("rejected usage changed saved row: %+v", got)
 	}
 	if _, err := s.db.Exec("DROP TRIGGER ignore_usage"); err != nil {
@@ -130,7 +131,7 @@ func TestFlagWriteResultKeepsMirrorConsistentWithSQLite(t *testing.T) {
 	if err != nil || !result.Changed || !result.HealthChanged {
 		t.Fatalf("mirror failure invalidated saved flag: %+v, %v", result, err)
 	}
-	if _, ok := s.GetFlag(flag.ID); !ok {
+	if _, ok := testutil.Lookup[model.Flag](t)(s.GetFlagResult(flag.ID)); !ok {
 		t.Fatal("mirror failure lost saved flag")
 	}
 	if h := s.WriteHealth(); h.Failures != 2 || len(h.Active) != 1 || h.Active[0] != "flag mirror" {

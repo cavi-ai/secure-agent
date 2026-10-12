@@ -1,3 +1,4 @@
+import { controller } from './controllers.mjs';
 // Console Spend card tests — zero dependencies. Evaluates lib.js and
 // tab-overview.js in one fresh VM context, as the browser loads them.
 
@@ -322,7 +323,7 @@ test("focused expansion captures first newly revealed repository before rerender
     }};
   vm.createContext(c);
   const source=readFileSync(path.join(webDist,"app.js"),"utf8");
-  vm.runInContext(source.slice(source.indexOf("  function expandSpendDayRepositories("),source.indexOf("  // Spend card controls:")),c);
+  Object.assign(c, controller('spend-controller.js', 'createSpendController', c));
   assert.equal(c.expandSpendDayRepositories(control),true);
   assert.equal(f.document.activeElement.dataset.spendRepo,"repo-9");
   assert.equal(expandedLists.has("spend"),true);
@@ -343,7 +344,7 @@ test('Clear selection restores its selected chart bar without changing the chart
   const c={telemetryData,expandedLists,spendDayGen:1,document:{querySelectorAll:()=>[f.bar]},renderNow:()=>{}};
   vm.createContext(c);
   const source=readFileSync(path.join(webDist,'app.js'),'utf8');
-  vm.runInContext(source.slice(source.indexOf('  function resetSpendDay('),source.indexOf('  async function loadSpendDay(')),c);
+  Object.assign(c, controller('spend-controller.js', 'createSpendController', c));
   c.resetSpendDay(true);
   assert.equal(telemetryData.spendDay,'');
   assert.equal(telemetryData.spendDayReport,null);
@@ -516,7 +517,8 @@ test('saved grouping initializes guidance before boot and grouping changes updat
     assert.equal(f.grouping.value,by);
     assert.equal(f.guidance.hidden,by !== 'day','guidance is initialized while rendering is unavailable before boot');
     f.grouping.value=by === 'day' ? 'repo' : 'day';
-    vm.runInContext('onSpendView()',f.context);
+    f.context.spendBySel=f.grouping; f.context.spendSinceSel=since;
+    controller('spend-controller.js', 'createSpendController', f.context).onSpendView();
     assert.equal(f.guidance.hidden,f.grouping.value !== 'day','preboot grouping change updates the same caption');
   }
 });

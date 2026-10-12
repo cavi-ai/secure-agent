@@ -26,7 +26,7 @@ func TestFlagsEndpointHonorsNanosecondSince(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	w := httptest.NewRecorder()
 	a.handleFlags(w, httptest.NewRequest(http.MethodGet, "/flags?since="+url.QueryEscape(cutoff), nil))
 	var flags []model.Flag

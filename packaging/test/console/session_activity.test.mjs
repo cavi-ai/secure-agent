@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-const app = readFileSync(new URL('../../../daemon/internal/api/web_dist/app.js', import.meta.url), 'utf8');
+import { controller } from './controllers.mjs';
 function history() {
   const c = { URLSearchParams, Date, window: {}, timelineSession: null,
     filters: { events: { kind: 'all', since: 'all' }, flags: { agent: 'all', rule: 'all', minsev: 'all', since: 'all' } },
@@ -14,7 +14,8 @@ function history() {
   };
   vm.createContext(c);
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/event-history.js', import.meta.url), 'utf8'), c);
-  vm.runInContext(app.slice(app.indexOf('  function sinceParam('), app.indexOf('  function wireFilter(')), c);
+  Object.assign(c, controller('history-controller.js', 'createHistoryController', c));
+  c.eventHistoryPage = c.createEventHistoryPage();
   return c;
 }
 

@@ -23,9 +23,10 @@ func TestStoredPlanReadFailureAndRecovery(t *testing.T) {
 			if _, err := st.PutFlag(model.Flag{ID: "plan-source", Rule: "keychain-access", PID: 42, Severity: 3, TS: time.Now()}); err != nil {
 				t.Fatal(err)
 			}
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+
 			rec := &planRecorder{ready: true, pending: map[string]bool{}}
-			a.plan = rec.funcs()
+
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Plan: rec.funcs()})
 			const subject = "flag:plan-source"
 			if code, response := planCall(t, a, http.MethodGet, subject); code != http.StatusOK || response.Status != "none" || response.Plan != nil {
 				t.Fatalf("healthy missing plan: %d %+v", code, response)

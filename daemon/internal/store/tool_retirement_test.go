@@ -2,6 +2,7 @@ package store
 
 import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"testing"
 	"time"
 )
@@ -17,7 +18,7 @@ func TestToolRetirementDoesNotOverwriteCompletion(t *testing.T) {
 	e.ToolStatus = "incomplete"
 	e.DurationMs = 0
 	s.PutEvent(e)
-	rows := s.QueryEvents(EventFilter{Limit: 10})
+	rows := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 10}))
 	if len(rows) != 1 || rows[0].ToolStatus != "ok" || rows[0].DurationMs != 42 {
 		t.Fatal("retirement overwrote completed tool")
 	}

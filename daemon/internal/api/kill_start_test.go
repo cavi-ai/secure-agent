@@ -9,11 +9,11 @@ import (
 
 func TestKillEndpointRejectsStartMismatch(t *testing.T) {
 	fk := &fakeKiller{}
-	a := newTestAPI("", testStore(t), fk, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: fk, Status: func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
 			{PID: 7, Name: "claude", StartedAt: "2026-09-09T16:00:00Z"},
 		}}
-	})
+	}})
 	req := httptest.NewRequest(http.MethodPost, "/kill", strings.NewReader(`{"pid":7,"started_at":"2026-01-01T00:00:00Z"}`))
 	rec := httptest.NewRecorder()
 	a.handleKill(rec, req)
@@ -27,11 +27,11 @@ func TestKillEndpointRejectsStartMismatch(t *testing.T) {
 
 func TestKillEndpointAllowsMatchingStart(t *testing.T) {
 	fk := &fakeKiller{}
-	a := newTestAPI("", testStore(t), fk, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: fk, Status: func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
 			{PID: 7, Name: "claude", StartedAt: "2026-09-09T16:00:00Z"},
 		}}
-	})
+	}})
 	req := httptest.NewRequest(http.MethodPost, "/kill", strings.NewReader(`{"pid":7,"started_at":"2026-09-09T16:00:00Z"}`))
 	rec := httptest.NewRecorder()
 	a.handleKill(rec, req)

@@ -41,13 +41,14 @@ func TestSessionOverviewKeepsEvidenceAndLiveIdentitySeparate(t *testing.T) {
 	}
 	st.PutFlag(model.Flag{ID: "unknown", Agent: "claude", TS: now, Rule: "sensitive-read-then-connect", Severity: 3})
 	st.PutEvent(event.Event{Kind: event.KindToolCall, SessionID: "own", TS: now, ToolName: "Read"})
-	a := newTestAPI("", st, nil, func() Status {
-		return Status{Running: true, Agents: []AgentSummary{{PID: 40, RootPID: 40, Name: "claude", StartedAt: start.Format(time.RFC3339Nano)}}}
-	})
+
 	rootStart := start
-	a.resources = func() resource.Snapshot {
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status {
+		return Status{Running: true, Agents: []AgentSummary{{PID: 40, RootPID: 40, Name: "claude", StartedAt: start.Format(time.RFC3339Nano)}}}
+	}, Resources: func() resource.Snapshot {
 		return resource.Snapshot{Sessions: []resource.Session{{Key: "root", RootPID: 40, RootStartedAt: rootStart, Name: "claude", RSSBytes: 1024, ProcessCount: 2}}}
-	}
+	}})
 	out := overviewJSON(t, a, "own")
 	findings := out["findings"].([]any)
 	if len(findings) != 1 || findings[0].(map[string]any)["id"] != "own" {
@@ -94,7 +95,7 @@ func TestSessionOverviewBoundedFindingsAndReadFailure(t *testing.T) {
 	for i := 0; i < 24; i++ {
 		st.PutFlag(model.Flag{ID: fmt.Sprint(i), SessionID: "s", Rule: "sensitive-read-then-connect", TS: now, Severity: 3})
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	out := overviewJSON(t, a, "s")
 	if len(out["findings"].([]any)) != 20 || out["findings_truncated"] != true {
 		t.Fatalf("unbounded or hidden limit: %+v", out)
@@ -132,7 +133,7 @@ func TestSessionOverviewFindingsFailureAndRecovery(t *testing.T) {
 	if _, err := db.Exec("UPDATE flags SET pid='invalid' WHERE id='flag'"); err != nil {
 		t.Fatal(err)
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	w := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/sessions/session/overview", nil))
 	if w.Code != 503 || strings.TrimSpace(w.Body.String()) != "session findings unavailable" {

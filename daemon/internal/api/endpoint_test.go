@@ -16,7 +16,7 @@ import (
 // agents/sessions behind it. Missing ?host= is a 400, not a panic.
 func TestEndpointDetail(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 
 	// Zero times must serialize as omitted, never as year 0001.
 	rec := httptest.NewRecorder()
@@ -61,8 +61,8 @@ func TestEndpointDetail(t *testing.T) {
 // An approved parent domain counts as an allowance for its subdomains, the
 // same rule the correlator applies; a look-alike suffix does not.
 func TestEndpointDetailAllowedCoversSubdomain(t *testing.T) {
-	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
-	a.allowlist = correlate.NewAllowlistStore(filepath.Join(t.TempDir(), "allowlist.json"))
+
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Allowlist: correlate.NewAllowlistStore(filepath.Join(t.TempDir(), "allowlist.json"))})
 	if err := a.allowlist.Add("claude", "anthropic.com"); err != nil {
 		t.Fatal(err)
 	}

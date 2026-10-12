@@ -119,7 +119,7 @@ func TestSessionMemoryRedaction(t *testing.T) {
 	st.PutGuardDecisionForTest(store.GuardDecision{ID: "g2", SessionID: "s1", RuleID: "cloud-creds", Verdict: "allow", Scope: "always", At: now.Add(4 * time.Nanosecond).Format(time.RFC3339Nano)})
 	st.PutResourceEpisode(resource.Episode{CapturedAt: now, Severity: "warning", DiagnosisCodes: []string{identifierSecret}, Session: resource.Session{Key: "100:" + strconv.FormatInt(started.UnixNano(), 10), RootPID: 100, RootStartedAt: started, Workspace: hostile, Kind: "agent"}})
 	st.PutResourceEpisode(resource.Episode{CapturedAt: now.Add(time.Nanosecond), Severity: "warning", DiagnosisCodes: []string{"heavy-memory"}, Session: resource.Session{Key: "100:" + strconv.FormatInt(started.UnixNano(), 10), RootPID: 100, RootStartedAt: started, RSSBytes: 4 << 30, Kind: "agent"}})
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	w := httptest.NewRecorder()
 	a.handleSessionSubpath(w, httptest.NewRequest(http.MethodGet, "/sessions/s1/memory", nil))
 	if w.Code != 200 {
@@ -164,7 +164,7 @@ func TestSessionMemoryErrors(t *testing.T) {
 	st := testStore(t)
 	now := time.Now()
 	st.UpsertSession(model.Session{ID: "s1", StartedAt: now, LastSeenAt: now})
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	for _, tc := range []struct {
 		path string
 		want int
@@ -184,7 +184,7 @@ func TestSessionMemoryPagination(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		st.PutEvent(event.Event{Kind: event.KindPluginAction, TS: now.Add(time.Duration(i) * time.Nanosecond), SessionID: "s1"})
 	}
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	first := httptest.NewRecorder()
 	a.handleSessionSubpath(first, httptest.NewRequest(http.MethodGet, "/sessions/s1/memory?limit=2", nil))
 	if first.Code != 200 {

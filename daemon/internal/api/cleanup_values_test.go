@@ -34,7 +34,7 @@ func TestCleanupLedgerValuesAreHistoryNotCurrentTrash(t *testing.T) {
 		row.Path = "/fixture/source"
 		st.PutCleanup(row)
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{Store: st, Status: func() Status { return Status{Running: true} }})
 	read := func(limit string) (model.CleanupTotals, []model.CleanupDay) {
 		t.Helper()
 		w := httptest.NewRecorder()

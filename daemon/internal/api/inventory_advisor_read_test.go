@@ -44,7 +44,8 @@ func TestInventoryAdvisorReadBatchFailureAndRecovery(t *testing.T) {
 				at := time.Now().UTC()
 				keys := []string{filepath.Join(root, "first"), filepath.Join(root, "second"), filepath.Join(root, "third")}
 				subjectIDs := make([]string, len(keys))
-				a := newTestAPI("", st, nil, nil)
+				deps := Deps{Store: st}
+				a := newTestAPI(deps)
 				var read func() map[string]model.AdvisorVerdict
 				if kind == "worktree" {
 					rep := worktreehunter.ScanReport{Repos: []worktreehunter.RepoReport{{Path: root}}}
@@ -78,7 +79,8 @@ func TestInventoryAdvisorReadBatchFailureAndRecovery(t *testing.T) {
 						places[i] = clutter.Place{Path: key, Project: key}
 						subjectIDs[i] = advisor.ProjectSubjectID(key)
 					}
-					a.clutter = clutter.New(st, filepath.Join(root, "home"), func(context.Context) []clutter.Place { return places })
+					deps.Clutter = clutter.New(st, filepath.Join(root, "home"), func(context.Context) []clutter.Place { return places })
+					a = newTestAPI(deps)
 					mux := a.buildMux()
 					type coreItem struct{ Project, Kind, Action string }
 					var baseline map[string]coreItem

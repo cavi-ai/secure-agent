@@ -13,7 +13,7 @@ import (
 // Discovery carries this machine's profile and the ranked recommendations
 // next to the servers and the managed catalog ids.
 func TestAdvisorDiscoverRecommends(t *testing.T) {
-	a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	w := httptest.NewRecorder()
 	a.handleAdvisorDiscover(w, httptest.NewRequest(http.MethodGet, "/advisor/discover", nil))
 	if w.Code != http.StatusOK {

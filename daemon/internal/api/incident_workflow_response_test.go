@@ -40,7 +40,7 @@ func TestIncidentStatusFailureRollsBackAndRecovers(t *testing.T) {
 			if _, err := db.Exec(trigger); err != nil {
 				t.Fatal(err)
 			}
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 			post := func(payload string) *httptest.ResponseRecorder {
 				t.Helper()
 				w := httptest.NewRecorder()

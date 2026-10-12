@@ -75,7 +75,7 @@ func waitForSocket(t *testing.T, socketPath string) {
 func TestKillEndpointInvokesKiller(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "d.sock")
 	fk := &fakeKiller{}
-	a := newTestAPI(sock, testStore(t), fk, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: fk, Status: func() Status { return Status{Running: true} }})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -110,8 +110,9 @@ func TestFirewallModeEndpointPromotesAndPersists(t *testing.T) {
 	}
 	modes := firewall.NewModeStore(filepath.Join(dir, "firewall-modes.json"))
 
-	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.setFirewallForTest(FirewallControl{Engine: eng, Modes: modes})
+	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }}
+	deps.Firewall = FirewallControl{Engine: eng, Modes: modes}
+	a := newTestAPI(deps)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -151,8 +152,9 @@ func TestFirewallModePromotesAllOfTypeLeavesOthers(t *testing.T) {
 	}
 	modes := firewall.NewModeStore(filepath.Join(dir, "firewall-modes.json"))
 
-	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.setFirewallForTest(FirewallControl{Engine: eng, Modes: modes})
+	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }}
+	deps.Firewall = FirewallControl{Engine: eng, Modes: modes}
+	a := newTestAPI(deps)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -195,7 +197,7 @@ func TestFlagsAndEventsEndpointsApplyFilters(t *testing.T) {
 
 	sock := fmt.Sprintf("/tmp/sa_test_filt_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -243,8 +245,9 @@ func TestFirewallModePromotionIsAudited(t *testing.T) {
 	}
 	modes := firewall.NewModeStore(filepath.Join(dir, "firewall-modes.json"))
 
-	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.setFirewallForTest(FirewallControl{Engine: eng, Modes: modes})
+	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }}
+	deps.Firewall = FirewallControl{Engine: eng, Modes: modes}
+	a := newTestAPI(deps)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -276,13 +279,14 @@ func TestFingerprintIngestEndpointReturnsLabels(t *testing.T) {
 	defer os.Remove(sock)
 
 	called := false
-	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.setFirewallForTest(FirewallControl{
+	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }}
+	deps.Firewall = FirewallControl{
 		Ingest: func() ([]string, error) {
 			called = true
 			return []string{"STRIPE (~/.env)"}, nil
 		},
-	})
+	}
+	a := newTestAPI(deps)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -313,15 +317,16 @@ func TestFirewallSourcesAddRemoveAndAudit(t *testing.T) {
 	srcStore := firewall.NewSourceStore(filepath.Join(dir, "firewall-sources.json"))
 	ingestCalls := 0
 
-	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.setFirewallForTest(FirewallControl{
+	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }}
+	deps.Firewall = FirewallControl{
 		Sources:     srcStore,
 		BaseSources: []string{"/etc/agent/defaults.env"},
 		Ingest: func() ([]string, error) {
 			ingestCalls++
 			return []string{"KEY (src)"}, nil
 		},
-	})
+	}
+	a := newTestAPI(deps)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -406,9 +411,10 @@ func TestFirewallSourcesAddRemoveAndAudit(t *testing.T) {
 
 func TestGuardPendingSortedByTSAscending(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+
 	broker := guard.NewBroker(2 * time.Second)
-	a.guardBroker = broker
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: broker})
 
 	// Enqueue with explicit, out-of-order timestamps. The broker keys its
 	// waiters by a map, which has no inherent order, so the handler must
@@ -453,8 +459,7 @@ func TestGuardDecisionCachedRule(t *testing.T) {
 	st := testStore(t)
 	st.PutGuardRule(store.GuardRule{Agent: "claude", RuleID: "cloud-creds", Decision: "allow", Source: "onboarding"})
 
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.guardBroker = guard.NewBroker(time.Second)
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(time.Second)})
 
 	body := `{"agent":"claude","tool":"Read","path":"/Users/x/.aws/credentials","rule_id":"cloud-creds"}`
 	rr := httptest.NewRecorder()
@@ -471,8 +476,8 @@ func TestGuardDecisionCachedRule(t *testing.T) {
 
 func TestGuardDecisionRejectsInvalidAgent(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.guardBroker = guard.NewBroker(time.Second)
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(time.Second)})
 
 	// A shell metacharacter in "agent" is exactly what a forged control-plane
 	// call (see the hook's guard-control-network denial) would try to smuggle
@@ -487,7 +492,7 @@ func TestGuardDecisionRejectsInvalidAgent(t *testing.T) {
 
 func TestGuardRulesDeleteRejectsInvalidRuleID(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest("DELETE", "/guard/rules?agent=claude&rule_id=../../etc/passwd", nil)
@@ -503,10 +508,10 @@ func TestSnapshotBundlesHotTelemetry(t *testing.T) {
 	st.PutFlag(model.Flag{ID: "flag-a", Rule: "proxy-secret-leak", Severity: 3, Agent: "claude", PID: 1, TS: now})
 	st.PutEvent(event.Event{Kind: event.KindProxyHit, PID: 1, TS: now, Detail: "proxy-scan"})
 
-	a := newTestAPI("", st, &fakeKiller{}, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status {
 		return Status{Running: true, Version: "test", ActiveAgents: 1,
 			Agents: []AgentSummary{{PID: 1, Name: "claude"}}}
-	})
+	}})
 
 	rr := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(rr, httptest.NewRequest("GET", "/snapshot", nil))
@@ -560,8 +565,7 @@ func TestStatusCountsUnacted24hAndBusDrops(t *testing.T) {
 	st.AcknowledgeFlag("ack")
 	st.PutFlag(model.Flag{ID: "info", Rule: "keychain-access", Severity: 1, Agent: "claude", PID: 1, TS: now})
 
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.busDrops = func() uint64 { return 7 }
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, BusDrops: func() uint64 { return 7 }})
 
 	rr := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(rr, httptest.NewRequest("GET", "/status", nil))
@@ -611,12 +615,12 @@ func TestStatusJSONIncludesTrees(t *testing.T) {
 	now := time.Now()
 	db.UpsertSession(model.Session{ID: "s-origin", Harness: "claude", RootPID: 10, Repo: "demo-app", Branch: "main",
 		Origin: "quill (openclaw)", StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfProcessTree})
-	a := newTestAPI("", db, &fakeKiller{}, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: db, Killer: &fakeKiller{}, Status: func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
 			{PID: 10, Name: "claude", RootPID: 10, CPUPercent: 60},
 			{PID: 11, Name: "claude", RootPID: 10, CPUPercent: 15},
 		}}
-	})
+	}})
 	rr := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(rr, httptest.NewRequest("GET", "/status", nil))
 	if rr.Code != 200 {
@@ -643,14 +647,14 @@ func TestStatusJSONIncludesTrees(t *testing.T) {
 
 func TestKillEndpointKillsTaggedTreeSharingRootPID(t *testing.T) {
 	fk := &fakeKiller{}
-	a := newTestAPI("", testStore(t), fk, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: fk, Status: func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
 			{PID: 10, Name: "claude", RootPID: 10},
 			{PID: 11, Name: "claude", RootPID: 10},
 			{PID: 12, Name: "claude", RootPID: 10},
 			{PID: 20, Name: "cursor", RootPID: 20},
 		}}
-	})
+	}})
 	req := httptest.NewRequest(http.MethodPost, "/kill", strings.NewReader(`{"pid":10}`))
 	rec := httptest.NewRecorder()
 	a.handleKill(rec, req)
@@ -676,13 +680,13 @@ func TestKillEndpointKillsTaggedTreeSharingRootPID(t *testing.T) {
 
 func TestKillEndpointHelperPIDKillsWholeTree(t *testing.T) {
 	fk := &fakeKiller{}
-	a := newTestAPI("", testStore(t), fk, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: fk, Status: func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
 			{PID: 10, Name: "claude", RootPID: 10},
 			{PID: 11, Name: "claude", RootPID: 10},
 			{PID: 12, Name: "claude", RootPID: 10},
 		}}
-	})
+	}})
 	req := httptest.NewRequest(http.MethodPost, "/kill", strings.NewReader(`{"pid":11}`))
 	rec := httptest.NewRecorder()
 	a.handleKill(rec, req)
@@ -703,13 +707,13 @@ func TestKillEndpointHelperPIDKillsWholeTree(t *testing.T) {
 func TestTerminateAgentTreeUsesLiveHelperWhenRootExited(t *testing.T) {
 	fk := &fakeKiller{}
 	started := "2026-09-09T16:00:00.123456789Z"
-	a := newTestAPI("", testStore(t), fk, func() Status {
+
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: fk, Status: func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
 			{PID: 11, Name: "claude", RootPID: 10, StartedAt: started, IsOrphan: true},
 			{PID: 12, Name: "claude", RootPID: 10, IsOrphan: true},
 		}}
-	})
-	a.agentPIDs = func() map[int32]struct{} { return map[int32]struct{}{11: {}, 12: {}} }
+	}, AgentPIDs: func() map[int32]struct{} { return map[int32]struct{}{11: {}, 12: {}} }})
 	if a.peerRole != nil {
 		a.peerRole.AgentPIDs = func() map[int32]struct{} { return map[int32]struct{}{11: {}, 12: {}} }
 	}
@@ -726,13 +730,13 @@ func TestTerminateAgentTreeVerifiedRejectsReusedChildPID(t *testing.T) {
 	fk := &fakeKiller{}
 	rootStarted := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
 	childStarted := rootStarted.Add(time.Second)
-	a := newTestAPI("", testStore(t), fk, func() Status {
+
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: fk, Status: func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
 			{PID: 10, Name: "claude", RootPID: 10, StartedAt: rootStarted.Format(time.RFC3339Nano)},
 			{PID: 11, Name: "claude", RootPID: 10, StartedAt: childStarted.Add(time.Second).Format(time.RFC3339Nano)},
 		}}
-	})
-	a.agentPIDs = func() map[int32]struct{} { return map[int32]struct{}{10: {}, 11: {}} }
+	}, AgentPIDs: func() map[int32]struct{} { return map[int32]struct{}{10: {}, 11: {}} }})
 	if a.peerRole != nil {
 		a.peerRole.AgentPIDs = func() map[int32]struct{} { return map[int32]struct{}{10: {}, 11: {}} }
 	}
@@ -760,7 +764,7 @@ func TestSessionsEndpoint(t *testing.T) {
 		Status: model.SessionActive, Confidence: model.ConfProcessTree})
 	st.EndSession("s2", now.Add(-30*time.Minute))
 
-	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -808,7 +812,7 @@ func TestSessionTimelineEndpoint(t *testing.T) {
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(time.Second), SessionID: "s1", ToolName: "Bash", ToolStatus: "ok", DurationMs: 900})
 	st.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now.Add(2 * time.Second), SessionID: "other", Path: "/x"})
 
-	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -853,7 +857,7 @@ func TestSessionOriginServed(t *testing.T) {
 		StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfTranscript})
 	st.UpsertSession(model.Session{ID: "own", Harness: "codex",
 		StartedAt: now.Add(-time.Minute), LastSeenAt: now.Add(-time.Minute), Status: model.SessionActive, Confidence: model.ConfTranscript})
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	get := func(path string, into any) string {
 		t.Helper()
 		rr := httptest.NewRecorder()

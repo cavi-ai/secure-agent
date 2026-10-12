@@ -457,48 +457,89 @@ document.addEventListener('DOMContentLoaded', () => {
   const failedEndpoints = new Set();
   const reportHealth = createConsoleReportHealth();
 
-  function noteEndpointFailure(key) {
-    if (failedEndpoints.has(key)) return;
-    failedEndpoints.add(key);
-    if (key === 'snapshot' && hasSnapshotHeadline()) return;
-    showToast(`Couldn't load ${key} — will keep retrying`, 'danger');
-  }
-
-  function hasSnapshotHeadline() {
-    const banner = document.getElementById('posture-banner');
-    return !!(banner && !banner.hidden && document.getElementById('posture-health'));
-  }
-  function renderSnapshotHealth() {
-    if (sessionEnded || !window.SA || !hasSnapshotHeadline()) return;
-    renderPosture();
-    paintTabsPosture();
-  }
-  function renderReportHealth() {
-    if (sessionEnded) return;
-    const snapshotInHeadline = hasSnapshotHeadline() && !document.getElementById('posture-health').hidden;
-    document.querySelectorAll('[data-reports]').forEach(el => {
-      const keys = el.dataset.reports.split('|').filter(key =>
-        !['spend', 'spend card', 'spend plans'].includes(key)
-        && (key !== 'snapshot' || !snapshotInHeadline)
-        && (key !== 'flags' || isFlagsFiltered() || homeGroupOpen('findings')) && (key !== 'events' || isEventsFiltered()));
-      const failures = reportHealth.failures(keys);
-      const text = consoleReportHealthText(failures);
-      if (el.textContent !== text) el.textContent = text;
-      el.hidden = failures.length === 0;
+  let consoleLifecycleController;
+  function consoleLifecycleControllerModule() {
+    return consoleLifecycleController ||= createConsoleLifecycle({
+      state: {
+        get SS_TOKEN_KEY() { return SS_TOKEN_KEY; },
+        get cancelDialog() { return cancelDialog; },
+        set cancelDialog(value) { cancelDialog = value; },
+        get consoleAuth() { return consoleAuth; },
+        get consoleToken() { return consoleToken; },
+        set consoleToken(value) { consoleToken = value; },
+        get eventHistoryPage() { return eventHistoryPage; },
+        set eventHistoryPage(value) { eventHistoryPage = value; },
+        get expectedEgressReadGen() { return expectedEgressReadGen; },
+        set expectedEgressReadGen(value) { expectedEgressReadGen = value; },
+        get failedEndpoints() { return failedEndpoints; },
+        get handoffGeneration() { return handoffGeneration; },
+        set handoffGeneration(value) { handoffGeneration = value; },
+        get liveUpdates() { return liveUpdates; },
+        set liveUpdates(value) { liveUpdates = value; },
+        get protectionContext() { return protectionContext; },
+        set protectionContext(value) { protectionContext = value; },
+        get protectionContextGeneration() { return protectionContextGeneration; },
+        set protectionContextGeneration(value) { protectionContextGeneration = value; },
+        get reviewResult() { return reviewResult; },
+        set reviewResult(value) { reviewResult = value; },
+        get reviewResultSeq() { return reviewResultSeq; },
+        set reviewResultSeq(value) { reviewResultSeq = value; },
+        get drawerReviewResult() { return drawerReviewResult; },
+        set drawerReviewResult(value) { drawerReviewResult = value; },
+        get drawerMode() { return drawerMode; },
+        get reportHealth() { return reportHealth; },
+        get sessionEnded() { return sessionEnded; },
+        set sessionEnded(value) { sessionEnded = value; },
+        get sessionWorkbench() { return sessionWorkbench; },
+        get sparkTimer() { return sparkTimer; },
+        set sparkTimer(value) { sparkTimer = value; },
+        get spendDayGen() { return spendDayGen; },
+        set spendDayGen(value) { spendDayGen = value; },
+        get spendGen() { return spendGen; },
+        set spendGen(value) { spendGen = value; },
+        get spendPollTimer() { return spendPollTimer; },
+        set spendPollTimer(value) { spendPollTimer = value; },
+        get telemetryData() { return telemetryData; },
+        set telemetryData(value) { telemetryData = value; }
+      },
+      actions: {
+        get closeDrawer() { return closeDrawer; },
+        get apiFetch() { return apiFetch; },
+        clearInterval: (...args) => window.clearInterval(...args),
+        clearTimeout: (...args) => window.clearTimeout(...args),
+        get consolePosturePresentation() { return consolePosturePresentation; },
+        get consoleReportHealthText() { return consoleReportHealthText; },
+        get createEventHistoryPage() { return createEventHistoryPage; },
+        get document() { return document; },
+        get homeGroupOpen() { return homeGroupOpen; },
+        get isConsoleReport() { return isConsoleReport; },
+        get isEventsFiltered() { return isEventsFiltered; },
+        get isFlagsFiltered() { return isFlagsFiltered; },
+        get markDirty() { return markDirty; },
+        get renderNow() { return renderNow; },
+        get renderPosture() { return renderPosture; },
+        get renderReportHealth() { return renderReportHealth; },
+        get renderSnapshotHealth() { return renderSnapshotHealth; },
+        get sessionStorage() { return sessionStorage; },
+        get showSessionEnded() { return showSessionEnded; },
+        get showToast() { return showToast; },
+        get switchTab() { return switchTab; },
+        get window() { return window; }
+      }
     });
   }
-  function reportSucceeded(key) {
-    reportHealth.success(key);
-    failedEndpoints.delete(key);
-    if (key === 'snapshot') renderSnapshotHealth();
-    renderReportHealth();
-  }
-  function reportFailed(key, reason) {
-    reportHealth.failure(key, reason);
-    if (key === 'snapshot') renderSnapshotHealth();
-    renderReportHealth();
-  }
-
+  function noteEndpointFailure(...args) { return consoleLifecycleControllerModule().noteEndpointFailure(...args); }
+  function hasSnapshotHeadline(...args) { return consoleLifecycleControllerModule().hasSnapshotHeadline(...args); }
+  function renderSnapshotHealth(...args) { return consoleLifecycleControllerModule().renderSnapshotHealth(...args); }
+  function renderReportHealth(...args) { return consoleLifecycleControllerModule().renderReportHealth(...args); }
+  function reportSucceeded(...args) { return consoleLifecycleControllerModule().reportSucceeded(...args); }
+  function reportFailed(...args) { return consoleLifecycleControllerModule().reportFailed(...args); }
+  function endSession(...args) { return consoleLifecycleControllerModule().endSession(...args); }
+  function clearProtectionContext(...args) { return consoleLifecycleControllerModule().clearProtectionContext(...args); }
+  function focusProtectionContext(...args) { return consoleLifecycleControllerModule().focusProtectionContext(...args); }
+  function viewEgressExpectation(...args) { return consoleLifecycleControllerModule().viewEgressExpectation(...args); }
+  function backToEgressContext(...args) { return consoleLifecycleControllerModule().backToEgressContext(...args); }
+  function paintTabsPosture(...args) { return consoleLifecycleControllerModule().paintTabsPosture(...args); }
   // parseUptimeSec reads Go duration strings ("20h3m44s", "2s", "1m5s").
   function parseUptimeSec(s) {
     if (!s) return 0;
@@ -524,31 +565,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Credential rejection stops delivery. No mutation is queued or replayed.
-  function endSession() {
-    consoleToken = '';
-    consoleAuth.replaceToken('');
-    try { sessionStorage.removeItem(SS_TOKEN_KEY); } catch { /* private mode */ }
-    if (sessionEnded) return;
-    sessionEnded = true;
-    clearProtectionContext();
-    reviewResult = null;
-    reviewResultSeq++;
-    if (drawerMode === 'review-result' || drawerMode === 'permissions') closeDrawer();
-    drawerReviewResult = null;
-    if (cancelDialog) cancelDialog();
-    clearInterval(sparkTimer);
-    clearTimeout(spendPollTimer);
-    spendPollTimer = null;
-    spendDayGen++;
-    spendGen++; // invalidate spend responses already in flight
-    sessionWorkbench.invalidate();
-    eventHistoryPage = createEventHistoryPage();
-    window.SA.invalidateSessionPermissions?.();
-    window.SA.clearSessionInvestigation?.();
-    if (liveUpdates) liveUpdates.stop();
-    showSessionEnded();
-  }
-
   let handoffGeneration = 0;
   window.addEventListener('hashchange', async () => {
     const handoff = new URLSearchParams(location.hash.slice(1));
@@ -826,14 +842,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Posture pill on the stuck tab bar: the hero's count; a click goes back
   // to the top.
-  function paintTabsPosture() {
-    const pill = document.getElementById('tabs-posture');
-    const text = document.getElementById('tabs-posture-text');
-    if (!pill || !text) return;
-    const view = consolePosturePresentation(telemetryData.posture, window.SA?.postureHealth);
-    pill.dataset.state = view.state;
-    text.textContent = view.pill;
-  }
   const tabsBar = document.getElementById('tabs-bar');
   function syncTabsStuck() {
     if (!tabsBar) return;
@@ -858,91 +866,58 @@ document.addEventListener('DOMContentLoaded', () => {
     panel.classList.add('intercepted');
   }
 
-  function sinceParam(v) {
-    const ms = { '1h': 3600e3, '24h': 86400e3, '7d': 604800e3 }[v];
-    return ms ? new Date(Date.now() - ms).toISOString() : '';
+  let historyControllerController;
+  function historyControllerControllerModule() {
+    return historyControllerController ||= createHistoryController({
+      state: {
+        get eventHistoryPage() { return eventHistoryPage; },
+        set eventHistoryPage(value) { eventHistoryPage = value; },
+        get failedEndpoints() { return failedEndpoints; },
+        get filters() { return filters; },
+        get historyScopes() { return historyScopes; },
+        get reportHealth() { return reportHealth; },
+        get sessionEnded() { return sessionEnded; },
+        set sessionEnded(value) { sessionEnded = value; },
+        get suppressFreshOnce() { return suppressFreshOnce; },
+        set suppressFreshOnce(value) { suppressFreshOnce = value; },
+        get telemetryData() { return telemetryData; },
+        set telemetryData(value) { telemetryData = value; },
+        get timelineSession() { return timelineSession; },
+        set timelineSession(value) { timelineSession = value; }
+      },
+      actions: {
+        get createEventHistoryPage() { return createEventHistoryPage; },
+        get document() { return document; },
+        get fetchTelemetry() { return fetchTelemetry; },
+        get homeGroupOpen() { return homeGroupOpen; },
+        get isConsoleRoute() { return isConsoleRoute; },
+        get isEventsFiltered() { return isEventsFiltered; },
+        get isFlagsFiltered() { return isFlagsFiltered; },
+        get loadViews() { return loadViews; },
+        get markDirty() { return markDirty; },
+        get renderEvents() { return renderEvents; },
+        get renderNow() { return renderNow; },
+        get renderReportHealth() { return renderReportHealth; },
+        get requestEventHistoryPage() { return requestEventHistoryPage; },
+        get showToast() { return showToast; },
+        get switchTab() { return switchTab; },
+        get syncFilterControls() { return syncFilterControls; }
+      }
+    });
   }
-  function isFlagsFiltered() {
-    const f = filters.flags;
-    return f.agent !== 'all' || f.rule !== 'all' || f.minsev !== 'all' || f.since !== 'all';
-  }
-  function isEventsFiltered() {
-    const f = filters.events;
-    return !!timelineSession || f.kind !== 'all' || f.since !== 'all';
-  }
+  function sinceParam(...args) { return historyControllerControllerModule().sinceParam(...args); }
+  function isFlagsFiltered(...args) { return historyControllerControllerModule().isFlagsFiltered(...args); }
+  function isEventsFiltered(...args) { return historyControllerControllerModule().isEventsFiltered(...args); }
+  function eventsHistoryScope(...args) { return historyControllerControllerModule().eventsHistoryScope(...args); }
+  function syncHistoryViews(...args) { return historyControllerControllerModule().syncHistoryViews(...args); }
+  function flagsQuery(...args) { return historyControllerControllerModule().flagsQuery(...args); }
+  function eventsQuery(...args) { return historyControllerControllerModule().eventsQuery(...args); }
+  window.pageSessionEvents = (...args) => historyControllerControllerModule().pageSessionEvents(...args);
+  function wireFilter(...args) { return historyControllerControllerModule().wireFilter(...args); }
+  window.applyView = (...args) => historyControllerControllerModule().applyView(...args);
+  function bindFilters(...args) { return historyControllerControllerModule().bindFilters(...args); }
+  historyControllerControllerModule().bindFilters();
   let eventHistoryPage = createEventHistoryPage();
-  function eventsHistoryScope() {
-    return JSON.stringify({ ...filters.events, session: timelineSession || '' });
-  }
-  function syncHistoryViews() {
-    const changed = [];
-    for (const [name, filtered] of [['flags', isFlagsFiltered()], ['events', isEventsFiltered()]]) {
-      const requested = filtered || (name === 'flags' && homeGroupOpen('findings'));
-      const scope = requested ? (name === 'events' ? eventsHistoryScope() : JSON.stringify(filters[name])) : null;
-      const view = name + 'View';
-      if (scope !== historyScopes[name]) {
-        historyScopes[name] = scope;
-        if (name === 'events') eventHistoryPage = createEventHistoryPage(sinceParam(filters.events.since));
-        telemetryData[view] = requested ? null : telemetryData[name];
-        reportHealth.reset(name);
-        failedEndpoints.delete(name);
-        changed.push(name);
-      } else if (!requested) telemetryData[view] = telemetryData[name];
-    }
-    if (changed.length) {
-      renderReportHealth();
-      markDirty(...changed, 'tab-badges');
-    }
-  }
-
-  function flagsQuery() {
-    const f = filters.flags, p = new URLSearchParams();
-    if (f.agent !== 'all') p.set('agent', f.agent);
-    if (f.rule !== 'all') p.set('rule', f.rule);
-    if (f.minsev !== 'all') p.set('min_severity', f.minsev);
-    const since = sinceParam(f.since);
-    if (since) p.set('since', since);
-    p.set('limit', '200');
-    return '/flags?' + p.toString();
-  }
-  function eventsQuery() {
-    const f = filters.events, p = new URLSearchParams();
-    if (timelineSession) p.set('session_id', timelineSession);
-    if (f.kind !== 'all') p.set('kind', f.kind);
-    const since = timelineSession ? eventHistoryPage.since || sinceParam(f.since) : sinceParam(f.since);
-    if (since) p.set('since', since);
-    p.set('limit', '200');
-    if (timelineSession) {
-      p.set('page', '1');
-      const cursor = eventHistoryPage.pending?.cursor ?? eventHistoryPage.cursor;
-      if (cursor) p.set('before', cursor);
-    }
-    return '/events?' + p.toString();
-  }
-
-  window.pageSessionEvents = async function(direction) {
-    const page = eventHistoryPage;
-    if (sessionEnded || !timelineSession || !requestEventHistoryPage(eventHistoryPage, direction)) return;
-    suppressFreshOnce = true;
-    renderEvents();
-    await fetchTelemetry({ slow: false });
-    if (!sessionEnded && page === eventHistoryPage) {
-      suppressFreshOnce = true;
-      renderNow(['events']);
-    }
-  };
-
-  function wireFilter(id, obj, key) {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('change', () => { obj[key] = el.value; suppressFreshOnce = true; fetchTelemetry(); });
-  }
-  wireFilter('event-filter', filters.events, 'kind');
-  wireFilter('event-window', filters.events, 'since');
-  wireFilter('flags-agent', filters.flags, 'agent');
-  wireFilter('flags-rule', filters.flags, 'rule');
-  wireFilter('flags-severity', filters.flags, 'minsev');
-  wireFilter('flags-window', filters.flags, 'since');
-
   // ---------- saved views ----------
   // A view is a named snapshot of what the operator is looking at: the tab,
   // the flag/event filters, and the free-text search. Persisted in
@@ -974,21 +949,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (nameEl) nameEl.value = '';
     renderViews();
     showToast(`View saved: ${name}`, 'success');
-  };
-  window.applyView = function(name) {
-    const view = loadViews().find(v => v.name === name);
-    if (!view) return;
-    Object.assign(filters.flags, view.flags || {});
-    Object.assign(filters.events, view.events || {});
-    const search = document.getElementById('global-search');
-    if (search) search.value = view.search || '';
-    syncFilterControls();
-    const pop = document.getElementById('views-pop');
-    if (pop) pop.hidden = true;
-    if (view.tab && isConsoleRoute(view.tab)) switchTab(view.tab);
-    suppressFreshOnce = true;
-    fetchTelemetry();
-    showToast(`View applied: ${name}`, 'info');
   };
   window.removeView = function(name) {
     persistViews(loadViews().filter(v => v.name !== name));
@@ -1542,24 +1502,31 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!r.ok) throw new Error(text.trim() || String(r.status));
     try { return JSON.parse(text); } catch { return null; }
   }
-  function agentBusy() {
-    return !!(agentState.sending || agentState.actionRequests.size || (agentState.chat && agentState.chat.chatting) || (agentState.runs || []).some(r => r.status === 'running'));
+  let agentControllerController;
+  function agentControllerControllerModule() {
+    return agentControllerController ||= createAgentController({
+      state: {
+        get AGENT_PATHS() { return AGENT_PATHS; },
+        get agentInput() { return agentInput; },
+        get agentState() { return agentState; },
+        get agentWorkdirInput() { return agentWorkdirInput; }
+      },
+      actions: {
+        get agentFetch() { return agentFetch; },
+        get fillAgentHarnesses() { return fillAgentHarnesses; },
+        get followAgent() { return followAgent; },
+        get loadAgent() { return loadAgent; },
+        get markDirty() { return markDirty; },
+        get renderNow() { return renderNow; },
+        get showToast() { return showToast; },
+        get window() { return window; }
+      }
+    });
   }
-  async function loadAgent(parts) {
-    const want = parts || ['status', 'chat', 'plans', 'runs', 'recommendations'];
-    const wasBusy = agentBusy();
-    const versions = want.map(p => agentState.readVersion[p] = (agentState.readVersion[p] || 0) + 1);
-    try {
-      const got = await Promise.all(want.map(p => agentFetch(AGENT_PATHS[p])));
-      want.forEach((p, i) => { if (agentState.readVersion[p] === versions[i]) agentState[p] = got[i]; });
-      agentState.error = '';
-      if (want.includes('status')) fillAgentHarnesses();
-    } catch (err) {
-      agentState.error = "Couldn't load the system agent: " + (err.message || err);
-    }
-    markDirty('agent');
-    followAgent(wasBusy);
-  }
+  function agentBusy(...args) { return agentControllerControllerModule().agentBusy(...args); }
+  function loadAgent(...args) { return agentControllerControllerModule().loadAgent(...args); }
+  window.sendAgentMessage = (...args) => agentControllerControllerModule().sendAgentMessage(...args);
+  window.runLocalAgentAction = (...args) => agentControllerControllerModule().runLocalAgentAction(...args);
   function followAgent(wasBusy) {
     if (!agentBusy()) {
       agentState.polls = 0;
@@ -1643,41 +1610,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const sEl = document.getElementById('agent-skills');
     if (sEl) sEl.innerHTML = agentSkillsHTML(st);
   }
-  window.sendAgentMessage = async function() {
-    if (agentBusy()) return;
-    if (!agentState.status?.enabled || agentState.status.reason) {
-      agentState.sendError = agentState.status?.reason || (agentState.status
-        ? 'Enable chat in Settings → Secure Agent before sending.' : 'Still connecting to Secure Agent. Please wait.');
-      renderNow(['agent']);
-      return;
-    }
-    const draft = agentInput ? agentInput.value : '';
-    const text = draft.trim();
-    if (!text) return;
-    // Paint before the network request. The server alone masks and accepts
-    // message text; never create an optimistic copy of an unmasked draft.
-    agentState.sending = true;
-    agentState.sendError = '';
-    renderNow(['agent']);
-    try {
-      const res = await agentFetch('/agent/chat', { method: 'POST',
-        body: { message: text, workdir: agentWorkdirInput.value.trim() } });
-      if (!res?.message?.id) throw new Error('The daemon did not acknowledge the message');
-      if (agentInput.value === draft) agentInput.value = '';
-      const chat = agentState.chat || (agentState.chat = { messages: [] });
-      // An older GET cannot erase a message accepted after that GET started.
-      agentState.readVersion.chat = (agentState.readVersion.chat || 0) + 1;
-      if (!(chat.messages || []).some(m => m.id === res.message.id)) chat.messages = [...(chat.messages || []), res.message];
-      chat.chatting = true;
-    } catch (err) {
-      agentState.sendError = 'Delivery could not be confirmed: ' + (err.message || err) + '. Your draft is kept; check the conversation before retrying.';
-      await loadAgent(['chat']);
-    } finally {
-      agentState.sending = false;
-      renderNow(['agent']);
-      followAgent(false);
-    }
-  };
   window.saveAgentRequest = async function() {
     const text = agentHandoffInput ? agentHandoffInput.value.trim() : '';
     if (!text) { showToast("Write the request first — it becomes the plan's task", 'info'); return; }
@@ -1692,33 +1624,6 @@ document.addEventListener('DOMContentLoaded', () => {
       loadAgent(['plans']);
     } catch (err) {
       showToast('Not saved: ' + (err.message || err), 'danger');
-    }
-  };
-  window.runLocalAgentAction = async function(messageId) {
-    const m = [...((agentState.chat && agentState.chat.messages) || []), ...(agentState.recommendations || [])].find(x => x.id === messageId);
-    if (!m || !m.local_command || m.local_run_id || agentState.actionRequests.has(messageId)) return;
-    const action = m.local_command;
-    const mode = action.mode === 'terminal' ? 'in Terminal' : 'headless';
-    agentState.actionRequests.add(messageId);
-    renderNow(['agent']);
-    try {
-      const ok = await window.saConfirm(`Run this exact local command ${mode} in ${action.workdir}?\n\n${action.command}\n\nIt runs with your account's file and network access. No harness receives this chat or command.`,
-        { title: 'Confirm local command', okLabel: 'Run command', danger: true });
-      if (!ok) return;
-      const res = await agentFetch('/agent/actions', { method: 'POST', body: { message_id: messageId } });
-      m.local_run_id = res.run.id;
-      agentState.readVersion.chat = (agentState.readVersion.chat || 0) + 1;
-      agentState.readVersion.runs = (agentState.readVersion.runs || 0) + 1;
-      agentState.runs = [res.run, ...(agentState.runs || []).filter(r => r.id !== res.run.id)];
-      // Keep the conversation and focus in place; execution is visible on
-      // the command proposal as well as in History.
-      loadAgent(['chat', 'runs', 'recommendations']);
-    } catch (err) {
-      showToast('Local command not run: ' + (err.message || err), 'danger');
-    } finally {
-      agentState.actionRequests.delete(messageId);
-      renderNow(['agent']);
-      followAgent(false);
     }
   };
   window.analyzeAgentActivity = async function(flagIds) {
@@ -1980,175 +1885,78 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   switchTab(initialTab, { skipHash: true });
 
-  async function fetchTelemetry(opts) {
-    // The shared request gate handles credential rejection. Other failures mark that report stale
-    // or unavailable; snapshot failure also changes the connection status.
-    // A failed endpoint NEVER overwrites the panel's last good data.
-    if (sessionEnded) return;
-    const slow = !opts || opts.slow !== false;
-    const gen = ++telemetryFetchGen;
-    const slowGen = slow ? ++telemetrySlowGen : 0;
-    const expectedReadGen = slow ? ++expectedEgressReadGen : 0;
-    syncHistoryViews();
-    const current = () => !sessionEnded && gen === telemetryFetchGen;
-    const currentSlow = () => !sessionEnded && slow && slowGen === telemetrySlowGen;
-    let changedSlow = false;
-    let changedResources = false;
-    const obsolete = () => {
-      if (current()) return false;
-      if (!sessionEnded && changedSlow) {
-        markDirty(...PANELS.map(p => p[0]).filter(n => SLOW_ONLY.has(n)));
-        if (changedResources) fillFamilyDrawer();
+  let telemetryRefreshController;
+  function telemetryRefreshControllerModule() {
+    return telemetryRefreshController ||= createTelemetryRefresh({
+      state: {
+        get PANELS() { return PANELS; },
+        get SLOW_ONLY() { return SLOW_ONLY; },
+        get booted() { return booted; },
+        set booted(value) { booted = value; },
+        get eventHistoryPage() { return eventHistoryPage; },
+        set eventHistoryPage(value) { eventHistoryPage = value; },
+        get expectedEgressReadGen() { return expectedEgressReadGen; },
+        set expectedEgressReadGen(value) { expectedEgressReadGen = value; },
+        get firstEventRender() { return firstEventRender; },
+        set firstEventRender(value) { firstEventRender = value; },
+        get handoffGeneration() { return handoffGeneration; },
+        set handoffGeneration(value) { handoffGeneration = value; },
+        get lastSnapshotAt() { return lastSnapshotAt; },
+        set lastSnapshotAt(value) { lastSnapshotAt = value; },
+        get notifyCfgHash() { return notifyCfgHash; },
+        set notifyCfgHash(value) { notifyCfgHash = value; },
+        get pendingConsoleContext() { return pendingConsoleContext; },
+        set pendingConsoleContext(value) { pendingConsoleContext = value; },
+        get prevEventKeys() { return prevEventKeys; },
+        set prevEventKeys(value) { prevEventKeys = value; },
+        get prevUptimeSec() { return prevUptimeSec; },
+        set prevUptimeSec(value) { prevUptimeSec = value; },
+        get reportHealth() { return reportHealth; },
+        get reviewCursor() { return reviewCursor; },
+        set reviewCursor(value) { reviewCursor = value; },
+        get sessionEnded() { return sessionEnded; },
+        set sessionEnded(value) { sessionEnded = value; },
+        get telemetryData() { return telemetryData; },
+        set telemetryData(value) { telemetryData = value; },
+        get telemetryFetchGen() { return telemetryFetchGen; },
+        set telemetryFetchGen(value) { telemetryFetchGen = value; },
+        get telemetrySlowGen() { return telemetrySlowGen; },
+        set telemetrySlowGen(value) { telemetrySlowGen = value; },
+        get timelineSession() { return timelineSession; },
+        set timelineSession(value) { timelineSession = value; }
+      },
+      actions: {
+        get acceptEventHistoryPage() { return acceptEventHistoryPage; },
+        get apiFetch() { return apiFetch; },
+        get eventsHistoryScope() { return eventsHistoryScope; },
+        get eventsQuery() { return eventsQuery; },
+        get failEventHistoryPage() { return failEventHistoryPage; },
+        get fillFamilyDrawer() { return fillFamilyDrawer; },
+        get flagsQuery() { return flagsQuery; },
+        get homeGroupOpen() { return homeGroupOpen; },
+        get isConsoleReport() { return isConsoleReport; },
+        get isEventsFiltered() { return isEventsFiltered; },
+        get isFlagsFiltered() { return isFlagsFiltered; },
+        get loadSpend() { return loadSpend; },
+        get markDirty() { return markDirty; },
+        get noteEndpointFailure() { return noteEndpointFailure; },
+        get openConsoleContext() { return openConsoleContext; },
+        get parseUptimeSec() { return parseUptimeSec; },
+        get reconcileRetriage() { return reconcileRetriage; },
+        get renderAll() { return renderAll; },
+        get renderReportHealth() { return renderReportHealth; },
+        get reportFailed() { return reportFailed; },
+        get reportSucceeded() { return reportSucceeded; },
+        get setConnState() { return setConnState; },
+        get showToast() { return showToast; },
+        get sparkIngestEvents() { return sparkIngestEvents; },
+        get syncHistoryViews() { return syncHistoryViews; },
+        get validEventHistoryPage() { return validEventHistoryPage; },
+        get window() { return window; }
       }
-      return true;
-    };
-    const grab = async (key, path, ownsResult = current) => {
-      if (sessionEnded) return null;
-      try {
-        const r = await apiFetch(path);
-        if (sessionEnded) return null;
-        if (!ownsResult()) return null;
-        if (!r.ok) { noteEndpointFailure(key); reportFailed(key, `HTTP ${r.status}`); return null; }
-        const value = await r.json();
-        if (!ownsResult()) return null;
-        if (!isConsoleReport(key, value)) { reportFailed(key, 'Invalid response'); return null; }
-        if (key !== 'snapshot') reportSucceeded(key);
-        return value;
-      } catch {
-        if (ownsResult()) reportFailed(key, 'Request failed or response unreadable');
-        return null;
-      }
-    };
-
-    if (slow) loadSpend(); // beside this cycle: its reports never hold the first render
-    const requests = [grab('snapshot', '/snapshot'), grab('guard decisions', '/guard/pending')];
-    if (slow) requests.push(grab('resources', '/resources', currentSlow));
-    const reviewQueryCursor = reviewCursor;
-    if (reviewQueryCursor) requests.push(grab('reviews', '/reviews?limit=100&after=' + encodeURIComponent(reviewQueryCursor), () => current() && reviewCursor === reviewQueryCursor).then(page => { if (page) telemetryData.reviews = page; }));
-    const [snap, guardPending, resources] = await Promise.all(requests);
-    if (sessionEnded) return;
-    if (resources && currentSlow()) {
-      telemetryData.resources = resources;
-      changedResources = changedSlow = true;
-    }
-    if (current()) {
-      if (guardPending) telemetryData.guardPending = guardPending || [];
-      if (snap) {
-        lastSnapshotAt = Date.now();
-        const status = snap.status;
-        if (status) {
-          const up = parseUptimeSec(status.uptime);
-          if (prevUptimeSec > 0 && up < prevUptimeSec - 5) {
-            showToast('Daemon restarted — reconnected to the new instance', 'info');
-            prevEventKeys = new Set();
-            firstEventRender = true;
-          }
-          prevUptimeSec = up;
-          telemetryData.status = status;
-        }
-        if (snap.flags) telemetryData.flags = (snap.flags || []).filter(f => !f.acknowledged);
-        if (snap.reviews && !reviewCursor) telemetryData.reviews = snap.reviews;
-        if (snap.patterns) telemetryData.patterns = snap.patterns || [];
-        if (snap.routine) telemetryData.routine = snap.routine || [];
-        if (snap.incidents) telemetryData.incidents = snap.incidents || [];
-        if (snap.events) telemetryData.events = snap.events || [];
-        if (snap.posture) telemetryData.posture = snap.posture;
-        if (snap.suggestions) telemetryData.suggestions = snap.suggestions || [];
-        if (snap.mutes) telemetryData.mutes = snap.mutes || [];
-        if (snap.sessions) telemetryData.sessions = snap.sessions || [];
-        // Clear the snapshot failure only after its data has been published.
-        reportSucceeded('snapshot');
-      }
-    }
-
-    if (currentSlow()) {
-      const grabSlow = (key, path) => grab(key, path, currentSlow);
-      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes, egressEpisodes, expectedEgress] = await Promise.all([
-        grabSlow('fleet', '/fleet'),
-        grabSlow('audit', '/audit?limit=50'),
-        grabSlow('firewall sources', '/firewall/sources'),
-        grabSlow('activity rollup', '/stats/rollup?hours=168'),
-        grabSlow('uninspected egress', '/egress/uninspected?hours=24&limit=200'),
-        grabSlow('notification rules', '/notify/rules'),
-        grabSlow('allowlist', '/allowlist'),
-        grabSlow('resource episodes', '/resources/episodes'),
-        grabSlow('recurring egress', '/egress/episodes'),
-        grabSlow('expected egress', '/expected-egress')
-      ]);
-      if (sessionEnded) return;
-      if (currentSlow()) {
-        changedSlow = true;
-        if (fleet) telemetryData.fleet = fleet || [];
-        if (audit) telemetryData.audit = audit || [];
-        if (sources) telemetryData.sources = sources || [];
-        if (rollup) telemetryData.rollup = rollup || [];
-        if (uninspected) telemetryData.uninspected = uninspected || [];
-        if (episodes) telemetryData.episodes = episodes || [];
-        if (egressEpisodes) telemetryData.egressEpisodes = egressEpisodes.episodes || [];
-        if (expectedEgress && expectedReadGen === expectedEgressReadGen) telemetryData.expectedEgress = expectedEgress.rules || [];
-        if (notifyCfg) {
-          // A reconcile while the operator is typing a workspace path must not
-          // dirty (and re-render) the notify panel unless the served config
-          // actually changed — a stable hash, not the poll cadence, decides.
-          const h = JSON.stringify(notifyCfg);
-          if (h !== notifyCfgHash) { notifyCfgHash = h; telemetryData.notifyCfg = notifyCfg; markDirty('notify'); }
-        }
-        if (allowlist) telemetryData.allowlist = allowlist || [];
-      }
-    }
-
-    if (obsolete()) return;
-    syncHistoryViews();
-    sparkIngestEvents(telemetryData.events);
-    if (isFlagsFiltered() || homeGroupOpen('findings')) {
-      const v = await grab('flags', flagsQuery());
-      if (obsolete()) return;
-      if (v) telemetryData.flagsView = v || [];
-    }
-    if (isEventsFiltered()) {
-      const scope = eventsHistoryScope();
-      const page = eventHistoryPage;
-      const cursor = page.pending?.cursor ?? page.cursor;
-      const session = timelineSession;
-      page.loading = true;
-      const ownsPage = () => current() && scope === eventsHistoryScope() && page === eventHistoryPage
-        && cursor === (page.pending?.cursor ?? page.cursor);
-      const v = await grab('events', eventsQuery(), ownsPage);
-      if (obsolete()) return;
-      if (ownsPage()) {
-        if (v && (Array.isArray(v) || validEventHistoryPage(v, session))) {
-          telemetryData.eventsView = session ? acceptEventHistoryPage(page, v) : v;
-          page.loading = false;
-        } else {
-          if (v) reportFailed('events', 'Event page does not match this session');
-          failEventHistoryPage(page);
-        }
-      }
-    }
-
-    renderReportHealth(); // Filter changes can hide a failed filtered report.
-    telemetryData.connected = !!(snap && snap.status);
-    reconcileRetriage();
-
-    const invalidSnapshot = reportHealth.failures(['snapshot']).some(report => report.error === 'Invalid response');
-    setConnState(telemetryData.connected ? 'ok' : invalidSnapshot ? 'invalid-response' : 'unreachable');
-
-    if (!booted || (opts && opts.full)) renderAll();
-    // 'notify' is excluded here: it dirties itself above, only when its
-    // fetched config actually changed, so an unrelated poll tick never
-    // erases an in-progress workspace-scope edit.
-    else markDirty(...PANELS.map(p => p[0]).filter(n => (slow || !SLOW_ONLY.has(n)) && n !== 'notify'));
-    if (resources) fillFamilyDrawer();
-    if (window.SA && window.SA.refreshSessionOverview) window.SA.refreshSessionOverview(!!(opts && opts.full));
-    // Apply once, only after authenticated telemetry succeeds. A newer
-    // credential handoff invalidates an opener awaiting session data.
-    if (snap && pendingConsoleContext && current()) {
-      const context = pendingConsoleContext;
-      pendingConsoleContext = null;
-      await openConsoleContext(context, handoffGeneration);
-    }
+    });
   }
-
+  function fetchTelemetry(...args) { return telemetryRefreshControllerModule().fetchTelemetry(...args); }
   // Every panel is a candidate: initial load, Refresh, and actions that
   // reshape every list (search, session select). "Candidate" does not mean
   // "rendered" — renderDirty() still runs each through panelOnScreen, so a
@@ -2172,113 +1980,63 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // loadSpend reads the three spend reports from the usage cache; now renders
   // at once (a view the user just chose), else when the panel may.
-  async function loadSpend(now) {
-    if (sessionEnded) return;
-    const gen = ++spendGen;
-    clearTimeout(spendPollTimer);
-    spendPollTimer = null;
-    const cardPath = spendCardPath();
-    const cardTZ = Number(new URLSearchParams(cardPath.split('?')[1]).get('tz'));
-    telemetryData.spendRefresh = { loading: true, delayed: false };
-    if (now) renderNow(['spend']); else markDirty('spend');
-    const ownsResult = key => !sessionEnded && gen === spendGen && (key !== 'spend card' || cardPath === spendCardPath());
-    const grab = async (key, path) => {
-      if (sessionEnded) return null;
-      try {
-        const r = await apiFetch(path);
-        if (sessionEnded) return null;
-        if (!ownsResult(key)) return null;
-        if (!r.ok) { reportFailed(key, `HTTP ${r.status}`); return null; }
-        const value = await r.json();
-        if (!ownsResult(key)) return null;
-        if (!isConsoleReport(key, value)) { reportFailed(key, 'Invalid response'); return null; }
-        reportSucceeded(key);
-        return value;
-      } catch {
-        if (ownsResult(key)) reportFailed(key, 'Request failed or response unreadable');
-        return null;
+  let spendControllerController;
+  function spendControllerControllerModule() {
+    return spendControllerController ||= createSpendController({
+      state: {
+        get SPEND_BY() { return SPEND_BY; },
+        get SPEND_POLLS() { return SPEND_POLLS; },
+        get SPEND_POLL_MS() { return SPEND_POLL_MS; },
+        get SPEND_SINCE() { return SPEND_SINCE; },
+        get SPEND_VIEW_KEY() { return SPEND_VIEW_KEY; },
+        get expandedLists() { return expandedLists; },
+        get handoffGeneration() { return handoffGeneration; },
+        set handoffGeneration(value) { handoffGeneration = value; },
+        get reportHealth() { return reportHealth; },
+        get sessionEnded() { return sessionEnded; },
+        set sessionEnded(value) { sessionEnded = value; },
+        get spendBySel() { return spendBySel; },
+        get spendDayGen() { return spendDayGen; },
+        set spendDayGen(value) { spendDayGen = value; },
+        get spendGen() { return spendGen; },
+        set spendGen(value) { spendGen = value; },
+        get spendPollTimer() { return spendPollTimer; },
+        set spendPollTimer(value) { spendPollTimer = value; },
+        get spendPolls() { return spendPolls; },
+        set spendPolls(value) { spendPolls = value; },
+        get spendSinceSel() { return spendSinceSel; },
+        get spendView() { return spendView; },
+        set spendView(value) { spendView = value; },
+        get telemetryData() { return telemetryData; },
+        set telemetryData(value) { telemetryData = value; }
+      },
+      actions: {
+        get apiFetch() { return apiFetch; },
+        clearTimeout: (...args) => window.clearTimeout(...args),
+        get document() { return document; },
+        get isConsoleReport() { return isConsoleReport; },
+        get loadSpend() { return loadSpend; },
+        get markDirty() { return markDirty; },
+        get renderNow() { return renderNow; },
+        get renderReportHealth() { return renderReportHealth; },
+        get reportFailed() { return reportFailed; },
+        get reportSucceeded() { return reportSucceeded; },
+        get resetSpendDay() { return resetSpendDay; },
+        get sessionStorage() { return sessionStorage; },
+        setTimeout: (...args) => window.setTimeout(...args),
+        get spendCardPath() { return spendCardPath; },
+        get spendDayWindow() { return spendDayWindow; },
+        get syncSpendDayGuidance() { return syncSpendDayGuidance; },
+        get topCostRows() { return topCostRows; }
       }
-    };
-    const [costs, costsCard, costPlans] = await Promise.all([
-      grab('spend', '/costs?since=24h&by=repo&cached=1'),
-      grab('spend card', cardPath),
-      grab('spend plans', '/costs/plans')
-    ]);
-    if (sessionEnded || gen !== spendGen) return;
-    if (costs) telemetryData.costs = costs;
-    if (costPlans) telemetryData.costPlans = costPlans;
-    if (costsCard && cardPath === spendCardPath()) {
-      telemetryData.costsCard = costsCard;
-      telemetryData.costsCardTZ = cardTZ;
-      if (telemetryData.spendDay) {
-        if (!spendDayWindow(telemetryData.spendDay, costsCard, cardTZ)) resetSpendDay();
-        else loadSpendDay();
-      }
-    }
-    telemetryData.spendRefresh = { loading: false,
-      delayed: reportHealth.failures(['spend', 'spend card', 'spend plans']).length > 0 };
-    if (now) renderNow(['spend']); else markDirty('spend');
-    if (!telemetryData.spendRefresh.delayed && ![telemetryData.costs, telemetryData.costsCard].some(r => r && r.refreshing)) { spendPolls = 0; return; }
-    if (spendPolls >= SPEND_POLLS) return; // the slow cycle keeps asking
-    spendPolls++;
-    spendPollTimer = setTimeout(() => loadSpend(false), SPEND_POLL_MS);
+    });
   }
-
-  function resetSpendDay(focus = false) {
-    const day = telemetryData.spendDay;
-    spendDayGen++;
-    telemetryData.spendDay = '';
-    telemetryData.spendDayReport = null;
-    telemetryData.spendDayRefresh = {};
-    renderNow(['spend']);
-    if (focus) Array.from(document.querySelectorAll('[data-action="select-spend-day"]')).find(button => button.dataset.day === day)?.focus({ preventScroll: true });
-  }
-  async function loadSpendDay() {
-    const day = telemetryData.spendDay;
-    const range = spendDayWindow(day, telemetryData.costsCard, telemetryData.costsCardTZ);
-    if (!range || sessionEnded) return;
-    const gen = ++spendDayGen, auth = handoffGeneration;
-    const owns = () => !sessionEnded && auth === handoffGeneration && gen === spendDayGen && day === telemetryData.spendDay;
-    const params = new URLSearchParams({ since: range.since, until: range.until, by: 'repo', tz: String(range.tz), cached: '1' });
-    telemetryData.spendDayRefresh = { loading: true };
-    renderNow(['spend']);
-    try {
-      const res = await apiFetch('/costs?' + params);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const report = await res.json();
-      if (!owns()) return;
-      if (!isConsoleReport('spend card', report)) throw new Error('Invalid usage response');
-      if (report.by !== 'repo' || Date.parse(report.since) !== Date.parse(range.since) || Date.parse(report.until) !== Date.parse(range.until)) throw new Error('Usage response does not match the selected day');
-      telemetryData.spendDayReport = report;
-      telemetryData.spendDayRefresh = { loading: false, delayed: !!report.refreshing };
-    } catch (err) {
-      if (!owns()) return;
-      telemetryData.spendDayRefresh = { loading: false, delayed: true, error: 'Could not load this day: ' + (err.message || err) };
-    }
-    if (owns()) renderNow(['spend']);
-  }
-  function selectSpendDay(day) {
-    if (!spendDayWindow(day, telemetryData.costsCard, telemetryData.costsCardTZ)) return;
-    telemetryData.spendDay = day;
-    telemetryData.spendDayReport = null;
-    loadSpendDay();
-  }
-
-  function expandSpendDayRepositories(control) {
-    const inspector = control.closest('.spend-day-inspector');
-    if (!inspector) return false;
-    const shown = new Set(Array.from(inspector.querySelectorAll('[data-spend-repo]'), node => node.dataset.spendRepo));
-    const rows = telemetryData.spendDayReport?.rows || [];
-    const next = topCostRows({ rows }, rows.length).find(row => !shown.has(String(row.key)));
-    expandedLists.add('spend');
-    renderNow(['spend']);
-    const target = next && Array.from(inspector.querySelectorAll('[data-spend-repo]')).find(node => node.dataset.spendRepo === String(next.key));
-    // Explicit expansion moves to the first newly revealed repository. Native
-    // focus supplies ordinary visibility; background rendering never scrolls.
-    (target || inspector.querySelector('[data-action="reset-spend-day"]'))?.focus();
-    return true;
-  }
-
+  function loadSpend(...args) { return spendControllerControllerModule().loadSpend(...args); }
+  function resetSpendDay(...args) { return spendControllerControllerModule().resetSpendDay(...args); }
+  function loadSpendDay(...args) { return spendControllerControllerModule().loadSpendDay(...args); }
+  function selectSpendDay(...args) { return spendControllerControllerModule().selectSpendDay(...args); }
+  function expandSpendDayRepositories(...args) { return spendControllerControllerModule().expandSpendDayRepositories(...args); }
+  const onSpendView = (...args) => spendControllerControllerModule().onSpendView(...args);
   // Spend card controls: a change saves the view, clears the card and loads
   // the new report.
   const spendBySel = document.getElementById('spend-by');
@@ -2286,19 +2044,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (spendBySel) spendBySel.value = spendView.by;
   if (spendSinceSel) spendSinceSel.value = spendView.since;
   syncSpendDayGuidance();
-  const onSpendView = () => {
-    const by = spendBySel && spendBySel.value, since = spendSinceSel && spendSinceSel.value;
-    spendView = { by: SPEND_BY.includes(by) ? by : 'repo', since: SPEND_SINCE.includes(since) ? since : '24h' };
-    try { sessionStorage.setItem(SPEND_VIEW_KEY, JSON.stringify(spendView)); } catch { /* private mode */ }
-    syncSpendDayGuidance();
-    resetSpendDay();
-    telemetryData.costsCard = null;
-    reportHealth.reset('spend card'); // The new query has no retained card yet.
-    renderReportHealth();
-    spendPolls = 0;
-    renderNow(['spend']);
-    loadSpend(true);
-  };
   spendBySel?.addEventListener('change', onSpendView);
   spendSinceSel?.addEventListener('change', onSpendView);
 
@@ -4214,70 +3959,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (ok) list.forEach(host => cardNote(allowRowSel(agent, host), '.mute-row', 'firewall-container', 'allowlisted'));
     refillUninspected();
   };
-
-  function clearProtectionContext() {
-    if (!protectionContext) return;
-    protectionContext = null;
-    protectionContextGeneration++;
-    markDirty('expected-egress', 'recurring-egress');
-  }
-
-  function focusProtectionContext(context) {
-    const rules = context.phase === 'rules';
-    const container = document.getElementById(rules ? 'expected-egress-container' : 'recurring-egress-container');
-    const attr = rules ? 'expectedEgressRule' : 'egressEpisodeId';
-    const id = rules ? context.ruleId : context.episodeId;
-    const target = [...(container?.querySelectorAll(rules ? '[data-expected-egress-rule]' : '[data-egress-episode-id]') || [])].find(node => node.dataset[attr] === id);
-    const node = target || container?.querySelector('.protection-context');
-    if (node) {
-      node.focus({preventScroll:true});
-      node.scrollIntoView({behavior:'auto',block:'center'});
-    }
-    return node;
-  }
-
-  async function viewEgressExpectation(ruleId, episodeId) {
-    if (sessionEnded || typeof ruleId !== 'string' || !ruleId || typeof episodeId !== 'string' || !episodeId) return;
-    const generation = ++protectionContextGeneration;
-    const context = {ruleId,episodeId,phase:'rules',status:'loading',generation};
-    protectionContext = context;
-    const auth = handoffGeneration;
-    const ownsContext = () => !sessionEnded && protectionContext === context && generation === protectionContextGeneration && auth === handoffGeneration;
-    const found = (telemetryData.expectedEgress || []).some(rule => rule.id === ruleId && !rule.revoked_at);
-    if (found) context.status = 'ready';
-    switchTab('protection/rules', {keepProtectionContext:true});
-    renderNow(['expected-egress']);
-    const initialFocus = focusProtectionContext(context);
-    if (found) return;
-    const readGen = ++expectedEgressReadGen;
-    try {
-      const res = await apiFetch('/expected-egress');
-      if (!ownsContext()) return;
-      if (!res.ok) throw new Error('Expectation read failed');
-      const report = await res.json();
-      if (!ownsContext()) return;
-      if (!isConsoleReport('expected egress', report)) throw new Error('Invalid expectation response');
-      if (readGen === expectedEgressReadGen) telemetryData.expectedEgress = report.rules || [];
-      context.status = 'ready';
-    } catch {
-      if (!ownsContext()) return;
-      context.status = readGen === expectedEgressReadGen ? 'error' : 'ready';
-    }
-    if (!ownsContext()) return;
-    const retainFocus = document.activeElement === initialFocus;
-    renderNow(['expected-egress']);
-    if (retainFocus) focusProtectionContext(context);
-  }
-
-  function backToEgressContext() {
-    if (!protectionContext || sessionEnded) return;
-    protectionContext.phase = 'traffic';
-    protectionContext.status = 'ready';
-    protectionContext.generation = ++protectionContextGeneration;
-    switchTab('protection/traffic', {keepProtectionContext:true});
-    renderNow(['recurring-egress']);
-    focusProtectionContext(protectionContext);
-  }
 
   async function saveExpectedEgress(episodeId, kind) {
     if (!['destination', 'scope'].includes(kind)) return;

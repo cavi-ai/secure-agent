@@ -43,7 +43,7 @@ func TestExpectedEgressIdentityFailureAndRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			mux := newTestAPI("", st, nil, nil).buildMux()
+			mux := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil}).buildMux()
 			request := func(method, path, body string) *httptest.ResponseRecorder {
 				w := httptest.NewRecorder()
 				mux.ServeHTTP(w, httptest.NewRequest(method, path, strings.NewReader(body)))

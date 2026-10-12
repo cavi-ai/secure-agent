@@ -22,7 +22,7 @@ func payloadFlag(t *testing.T, layer, findingAction, requestAction string) model
 }
 
 func TestPayloadAssessmentUsesRequestGateNotRuleMode(t *testing.T) {
-	a := newTestAPI("", testStore(t), nil, nil)
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: nil})
 	for _, tc := range []struct{ layer, finding, request, control string }{
 		{"fingerprint", "block", "block", "blocked"},
 		{"pattern", "would-block", "would-block", "observed-only"},
@@ -49,7 +49,7 @@ func TestPayloadAssessmentUsesRequestGateNotRuleMode(t *testing.T) {
 }
 
 func TestPayloadAssessmentRejectsUnsupportedProof(t *testing.T) {
-	a := newTestAPI("", testStore(t), nil, nil)
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: nil})
 	for _, tc := range []struct{ layer, finding, request string }{
 		{"entropy", "block", "block"},
 		{"pattern", "block", "would-block"},

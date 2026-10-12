@@ -901,7 +901,7 @@ export interface IncidentWorkflow {
   resolution_note?: string;
 }
 
-export interface snapshotIncident {
+export interface IncidentDetail {
   id: string;
   flag_id: string;
   pid: number;
@@ -990,7 +990,7 @@ export interface ApiSnapshot {
   reviews: ReviewPage;
   patterns: Pattern[] | null;
   routine: RoutineGroup[] | null;
-  incidents: snapshotIncident[] | null;
+  incidents: IncidentDetail[] | null;
   events: Event[] | null;
   posture: Posture;
   suggestions: Suggestion[] | null;

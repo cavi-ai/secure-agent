@@ -25,7 +25,7 @@ func TestPriceClassOnServedEventSurfaces(t *testing.T) {
 	mc := event.Event{Kind: event.KindModelCall, TS: now, SessionID: "s-1", Model: "claude-sonnet-4-5", TokensIn: 100, TokensOut: 10}
 	st.PutEvent(mc)
 
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 
 	// GET /events
 	rr := httptest.NewRecorder()
@@ -61,9 +61,10 @@ func TestPriceClassOnServedEventSurfaces(t *testing.T) {
 	// (daemon/internal/daemon/wire.go's startDrainLoop) before publishing.
 	sock := fmt.Sprintf("/tmp/sa_test_priceclass_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a2 := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+
 	hub := NewDeltaHub()
-	a2.deltaHub = hub
+
+	a2 := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, DeltaHub: hub})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a2.Serve(ctx)

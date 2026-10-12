@@ -28,7 +28,7 @@ func TestEventsEndpointHonorsNanosecondSince(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	query := url.Values{"since": {cutoff}, "session_id": {"owned"}}
 	get := func(target any) {
 		t.Helper()

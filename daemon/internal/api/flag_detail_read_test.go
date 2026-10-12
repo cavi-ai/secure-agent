@@ -27,8 +27,8 @@ func TestUnavailableFlagDetailDoesNotApplyExceptions(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
-			a.expected = correlate.NewExpectStore(filepath.Join(dir, "expected.json"))
+
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Expected: correlate.NewExpectStore(filepath.Join(dir, "expected.json"))})
 			bad := ghFlag("bad-detail", time.Now(), ghRead("sensitive read", 900, "GitHub"), "evil.example.com")
 			good := ghFlag("good-detail", time.Now(), ghRead("sensitive read", 901, "GitHub"), "good.example.com")
 			if _, err := st.PutFlag(bad); err != nil {

@@ -11,7 +11,8 @@ import (
 func TestRoutingClaude(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	a := newTestAPI("", st, nil, nil)
+	deps := Deps{Store: st}
+	a := newTestAPI(deps)
 	get := func(method string) (*httptest.ResponseRecorder, RoutingInfo) {
 		rec := httptest.NewRecorder()
 		a.buildMux().ServeHTTP(rec, httptest.NewRequest(method, "/routing/claude", nil))
@@ -23,7 +24,8 @@ func TestRoutingClaude(t *testing.T) {
 		t.Fatalf("unwired: %d %+v, want 200, not ready, with a reason", rec.Code, info)
 	}
 	want := RoutingInfo{Ready: true, Env: map[string]string{"HTTPS_PROXY": "http://inspect:t@127.0.0.1:8443"}, BashEnvPath: "/c/agent-env.sh"}
-	a.routing = func() RoutingInfo { return want }
+	deps.Routing = func() RoutingInfo { return want }
+	a = newTestAPI(deps)
 	if rec, info := get(http.MethodGet); rec.Code != http.StatusOK || !reflect.DeepEqual(info, want) {
 		t.Fatalf("wired: %d %+v, want %+v", rec.Code, info, want)
 	}

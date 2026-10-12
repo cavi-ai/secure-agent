@@ -61,7 +61,7 @@ func (w *stalledGreeting) Flush() {
 func TestEventStreamEndsAfterOverflow(t *testing.T) {
 	h := NewDeltaHub()
 	h.buf = 1
-	a := &API{deltaHub: h}
+	a := New(Deps{DeltaHub: h})
 	w := &stalledGreeting{ResponseRecorder: httptest.NewRecorder(), entered: make(chan struct{}), release: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -84,8 +84,8 @@ func TestEventStreamEndsAfterOverflow(t *testing.T) {
 func TestDeltaLossIsSeparateFromEvidenceLoss(t *testing.T) {
 	st := testStore(t)
 	defer st.Close()
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
-	a.deltaHub = NewDeltaHub()
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, DeltaHub: NewDeltaHub()})
 	a.deltaHub.buf = 1
 	a.deltaHub.Subscribe()
 	a.deltaHub.Publish(Delta{Type: "first"})
