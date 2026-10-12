@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,16 +67,21 @@ func TestStatusEvidenceStampsBeforeGroupingAndKeepsLiveFacts(t *testing.T) {
 		t.Fatalf("roots without a stamped root pid not joined by pid: %+v", got.Trees)
 	}
 	want := store.FlagFilter{Unacted: true, MinSeverity: 2, Since: "2026-10-11T12:00:00Z", Limit: 500}
-	if got.UnactedFlags24h != 3 || st.filter != want {
-		t.Fatalf("unacted count %d from %+v, want 3 from %+v", got.UnactedFlags24h, st.filter, want)
+	if got.UnactedFlags24h == nil || *got.UnactedFlags24h != 3 || st.filter != want {
+		t.Fatalf("unacted count %v from %+v, want 3 from %+v", got.UnactedFlags24h, st.filter, want)
 	}
 }
 
-func TestStatusEvidenceFailedFlagReadKeepsLiveCount(t *testing.T) {
+func TestStatusEvidenceFailedFlagReadLeavesCountUnknown(t *testing.T) {
 	st := &memoryStatusEvidence{flags: make([]model.Flag, 9), flagErr: errors.New("flags unavailable")}
-	got := joinStatusEvidence(st, Status{UnactedFlags24h: 4}, time.Now())
-	if got.UnactedFlags24h != 4 || st.flagRead != 1 {
-		t.Fatalf("failed flag read changed the count: %d after %d reads", got.UnactedFlags24h, st.flagRead)
+	stale := 4
+	got := joinStatusEvidence(st, Status{UnactedFlags24h: &stale}, time.Now())
+	if got.UnactedFlags24h != nil || st.flagRead != 1 {
+		t.Fatalf("failed flag read reported a count: %v after %d reads", got.UnactedFlags24h, st.flagRead)
+	}
+	body, err := json.Marshal(got)
+	if err != nil || !strings.Contains(string(body), `"unacted_flags_24h":null`) {
+		t.Fatalf("unknown count must encode as null: %s, %v", body, err)
 	}
 	if st.asked != nil || got.Trees == nil || len(got.Trees) != 0 {
 		t.Fatalf("no agents: asked %v, trees %+v", st.asked, got.Trees)

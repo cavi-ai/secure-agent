@@ -16,7 +16,8 @@ type statusEvidenceStore interface {
 
 // joinStatusEvidence stamps each agent's last event, groups agents into trees
 // labelled from their root's durable session, and counts the last day's
-// unacted findings. Live process facts are never overwritten.
+// unacted findings, null when they cannot be read. Live process facts are
+// never overwritten.
 func joinStatusEvidence(st statusEvidenceStore, s Status, now time.Time) Status {
 	if len(s.Agents) > 0 {
 		pids := make([]int32, len(s.Agents))
@@ -66,8 +67,10 @@ func joinStatusEvidence(st statusEvidenceStore, s Status, now time.Time) Status 
 		Since:       now.Add(-24 * time.Hour).UTC().Format(time.RFC3339),
 		Limit:       500,
 	})
+	s.UnactedFlags24h = nil
 	if err == nil {
-		s.UnactedFlags24h = len(flags)
+		n := len(flags)
+		s.UnactedFlags24h = &n
 	}
 	return s
 }

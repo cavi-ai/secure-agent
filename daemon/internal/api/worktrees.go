@@ -94,7 +94,12 @@ func (a *API) handleWorktreeAsks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "store not wired", http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, a.store.AgentAsks(queryInt(r.URL.Query().Get("limit"), 50)))
+	asks, err := a.store.AgentAsks(queryInt(r.URL.Query().Get("limit"), 50))
+	if err != nil {
+		http.Error(w, "agent asks unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, asks)
 }
 
 // handleCleanupLedger serves the cleanup ledger: what was removed and the
@@ -110,7 +115,12 @@ func (a *API) handleCleanupLedger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	writeJSON(w, readCleanupLedger(a.store, time.Now(), queryInt(q.Get("limit"), 100), queryInt(q.Get("days"), 0)))
+	ledger, err := readCleanupLedger(a.store, time.Now(), queryInt(q.Get("limit"), 100), queryInt(q.Get("days"), 0))
+	if err != nil {
+		http.Error(w, "cleanup history unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, ledger)
 }
 
 // groupAdviseMaxRows bounds one group ask; the rest are skipped.

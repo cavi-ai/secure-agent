@@ -112,12 +112,12 @@ func TestCleanupLedger(t *testing.T) {
 	s.PutCleanup(model.CleanupEntry{TS: now, Action: "trash:tmp", Path: "/r/.tmp", Repo: "/r", Bytes: 4096})
 	s.PutCleanup(model.CleanupEntry{TS: now, Action: "ask:none", Path: "/r/.worktrees/new", Repo: "/r", Detail: "claude answered: none"})
 
-	log := s.CleanupLog(10)
-	if len(log) != 5 || log[0].Action != "ask:none" || log[1].Action != "trash:tmp" || log[2].Action != "worktree-prune" || log[3].Bytes != 250 || log[3].Detail != "branch feat/new kept" || !log[4].TS.Equal(now.Add(-40*24*time.Hour)) {
+	log, err := s.CleanupLog(10)
+	if err != nil || len(log) != 5 || log[0].Action != "ask:none" || log[1].Action != "trash:tmp" || log[2].Action != "worktree-prune" || log[3].Bytes != 250 || log[3].Detail != "branch feat/new kept" || !log[4].TS.Equal(now.Add(-40*24*time.Hour)) {
 		t.Fatalf("log = %+v", log)
 	}
-	tot := s.CleanupTotals(now)
-	if tot.Bytes != 1250 || tot.Count != 3 || tot.Bytes30d != 250 || tot.Count30d != 2 || tot.TrashedBytes != 4096 || tot.TrashedCount != 1 {
+	tot, err := s.CleanupTotals(now)
+	if err != nil || tot.Bytes != 1250 || tot.Count != 3 || tot.Bytes30d != 250 || tot.Count30d != 2 || tot.TrashedBytes != 4096 || tot.TrashedCount != 1 {
 		t.Fatalf("totals = %+v (an agent's answer is not a cleanup)", tot)
 	}
 }
@@ -145,7 +145,10 @@ func TestCleanupDaily(t *testing.T) {
 	put(time.Date(2026, 9, 23, 0, 0, 0, 500000000, loc), "worktree-remove", 3)
 	put(time.Date(2026, 9, 22, 23, 59, 59, 0, loc), "worktree-remove", 1000)
 
-	days := s.CleanupDaily(now, 3)
+	days, err := s.CleanupDaily(now, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []model.CleanupDay{
 		{Day: "2026-09-23", Bytes: 3, Count: 1},
 		{Day: "2026-09-24", Bytes: 7, Count: 1},
@@ -159,11 +162,11 @@ func TestCleanupDaily(t *testing.T) {
 			t.Fatalf("day %d = %+v, want %+v (all: %+v)", i, days[i], want[i], days)
 		}
 	}
-	if got := s.CleanupDaily(now, 0); got != nil {
-		t.Fatalf("0 days = %+v", got)
+	if got, err := s.CleanupDaily(now, 0); got != nil || err != nil {
+		t.Fatalf("0 days = %+v, %v", got, err)
 	}
-	if got := s.CleanupDaily(now, 10000); len(got) != maxCleanupDays || got[len(got)-1].Day != "2026-09-25" {
-		t.Fatalf("capped series: %d days ending %+v", len(got), got[len(got)-1])
+	if got, err := s.CleanupDaily(now, 10000); err != nil || len(got) != maxCleanupDays || got[len(got)-1].Day != "2026-09-25" {
+		t.Fatalf("capped series: %d days ending %+v, %v", len(got), got[len(got)-1], err)
 	}
 }
 
@@ -194,8 +197,8 @@ func TestAgentAsksAndSessionsInWorkspace(t *testing.T) {
 	id := s.PutAgentAsk(model.AgentAsk{TS: t0, Path: "/r/.worktrees/a", Repo: "/r", Harness: "claude", SessionID: "claude-old", Status: "running"})
 	fin := t0.Add(time.Minute)
 	s.FinishAgentAsk(model.AgentAsk{ID: id, Status: "answered", Verdict: "pr", Detail: "https://example.test/pr/1", CostUSD: 0.12, Output: "done", FinishedAt: &fin})
-	asks := s.AgentAsks(5)
-	if len(asks) != 1 || asks[0].Verdict != "pr" || asks[0].CostUSD != 0.12 || asks[0].FinishedAt == nil || !asks[0].FinishedAt.Equal(fin) || asks[0].SessionID != "claude-old" {
+	asks, err := s.AgentAsks(5)
+	if err != nil || len(asks) != 1 || asks[0].Verdict != "pr" || asks[0].CostUSD != 0.12 || asks[0].FinishedAt == nil || !asks[0].FinishedAt.Equal(fin) || asks[0].SessionID != "claude-old" {
 		t.Fatalf("asks = %+v", asks)
 	}
 }
