@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Exercise fixture failure reporting without starting the daemon."""
 import pathlib
+import contextlib
+import io
 import json
+import runpy
 import select
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import urllib.request
 
 
@@ -44,6 +48,13 @@ class FixtureLivenessTests(unittest.TestCase):
 
 
 class AdvisorFixtureTests(unittest.TestCase):
+    def test_startup_does_not_require_hostname_resolution(self):
+        with mock.patch("socket.getfqdn", side_effect=AssertionError("DNS unavailable")), \
+                mock.patch("http.server.HTTPServer.serve_forever"), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            runpy.run_path(str(pathlib.Path(__file__).with_name("advisor_stub.py")), run_name="__main__")
+        self.assertTrue(output.getvalue().strip().startswith("http://127.0.0.1:"))
+
     def start_from_smoke(self, script_dir):
         source = pathlib.Path(__file__).with_name("e2e_smoke.sh").read_text()
         startup = 'mkfifo "$tmp/advisor-ready"' + source.split(

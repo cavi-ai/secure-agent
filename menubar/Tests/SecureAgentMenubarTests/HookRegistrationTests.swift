@@ -27,8 +27,8 @@ final class HookRegistrationTests: XCTestCase {
     }
 
     func testRegisterCreatesSettingsFromScratch() throws {
-        try SetupManager.registerClaudeHooks(at: settingsPath, command: command)
-        XCTAssertTrue(SetupManager.claudeHooksRegistered(at: settingsPath))
+        try HookRegistry.Claude.register(at: settingsPath, command: command)
+        XCTAssertTrue(HookRegistry.Claude.registered(at: settingsPath))
         let root = try readSettings()
         let hooks = root["hooks"] as? [String: Any]
         XCTAssertNotNil(hooks?["PreToolUse"])
@@ -48,7 +48,7 @@ final class HookRegistrationTests: XCTestCase {
         """
         try existing.write(toFile: settingsPath, atomically: true, encoding: .utf8)
 
-        try SetupManager.registerClaudeHooks(at: settingsPath, command: command)
+        try HookRegistry.Claude.register(at: settingsPath, command: command)
 
         let root = try readSettings()
         XCTAssertEqual(root["model"] as? String, "opus", "unrelated settings must survive")
@@ -59,8 +59,8 @@ final class HookRegistrationTests: XCTestCase {
     }
 
     func testRegisterIsIdempotent() throws {
-        try SetupManager.registerClaudeHooks(at: settingsPath, command: command)
-        try SetupManager.registerClaudeHooks(at: settingsPath, command: command)
+        try HookRegistry.Claude.register(at: settingsPath, command: command)
+        try HookRegistry.Claude.register(at: settingsPath, command: command)
         let root = try readSettings()
         let pre = (root["hooks"] as! [String: Any])["PreToolUse"] as! [[String: Any]]
         XCTAssertEqual(pre.count, 1, "re-registering must not duplicate the entry")
@@ -68,18 +68,18 @@ final class HookRegistrationTests: XCTestCase {
 
     func testRegisterRefusesCorruptSettings() throws {
         try "not json {".write(toFile: settingsPath, atomically: true, encoding: .utf8)
-        XCTAssertThrowsError(try SetupManager.registerClaudeHooks(at: settingsPath, command: command))
+        XCTAssertThrowsError(try HookRegistry.Claude.register(at: settingsPath, command: command))
         // The corrupt file is untouched — never clobbered.
         let contents = try String(contentsOfFile: settingsPath, encoding: .utf8)
         XCTAssertEqual(contents, "not json {")
     }
 
     func testUnregisterRemovesOnlyOurs() throws {
-        try SetupManager.registerClaudeHooks(at: settingsPath, command: command)
-        XCTAssertTrue(SetupManager.claudeHooksRegistered(at: settingsPath))
+        try HookRegistry.Claude.register(at: settingsPath, command: command)
+        XCTAssertTrue(HookRegistry.Claude.registered(at: settingsPath))
 
-        SetupManager.unregisterClaudeHooks(at: settingsPath)
-        XCTAssertFalse(SetupManager.claudeHooksRegistered(at: settingsPath))
+        HookRegistry.Claude.unregister(at: settingsPath)
+        XCTAssertFalse(HookRegistry.Claude.registered(at: settingsPath))
 
         let root = try readSettings()
         let pre = (root["hooks"] as! [String: Any])["PreToolUse"] as! [[String: Any]]
@@ -127,7 +127,7 @@ final class HookRefreshTests: XCTestCase {
         let past = Date(timeIntervalSince1970: 1_000_000)
         try fm.setAttributes([.modificationDate: past], ofItemAtPath: installed + "/same.py")
 
-        let refreshed = try SetupManager.refreshInstalledHooks(bundledDir: bundled, installedDir: installed)
+        let refreshed = try HookRegistry.refreshInstalledHooks(bundledDir: bundled, installedDir: installed)
 
         XCTAssertEqual(refreshed, ["added.py", "secret_guard.py"])
         XCTAssertEqual(read(installed + "/secret_guard.py"), "new guard")
@@ -141,7 +141,7 @@ final class HookRefreshTests: XCTestCase {
     func testRefreshNeverTouchesSettings() throws {
         write(bundled + "/secret_guard.py", "new guard")
         write(installed + "/settings.json", "{}")
-        try SetupManager.refreshInstalledHooks(bundledDir: bundled, installedDir: installed)
+        try HookRegistry.refreshInstalledHooks(bundledDir: bundled, installedDir: installed)
         XCTAssertEqual(read(installed + "/settings.json"), "{}")
     }
 
@@ -151,7 +151,7 @@ final class HookRefreshTests: XCTestCase {
         write(bundled + "/secret_guard.py", "guard")
         write(bundled + "/guard-rules.json", #"{"rules":[]}"#)
         write(bundled + "/hooks.json", "{}")
-        let refreshed = try SetupManager.refreshInstalledHooks(bundledDir: bundled, installedDir: installed)
+        let refreshed = try HookRegistry.refreshInstalledHooks(bundledDir: bundled, installedDir: installed)
         XCTAssertEqual(refreshed, ["guard-rules.json", "secret_guard.py"])
         XCTAssertFalse(fm.fileExists(atPath: installed + "/hooks.json"))
     }
@@ -162,10 +162,10 @@ final class HookRefreshTests: XCTestCase {
         let repoHooks = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("plugin/hooks").path
-        try SetupManager.refreshInstalledHooks(bundledDir: repoHooks, installedDir: installed)
+        try HookRegistry.refreshInstalledHooks(bundledDir: repoHooks, installedDir: installed)
         var env = ProcessInfo.processInfo.environment
         env["SECURE_AGENT_ACTIVITY_LOG"] = root + "/activity.jsonl"
-        let failure = await SetupManager.selfTestHook(at: installed + "/secret_guard.py", environment: env)
+        let failure = await HookRegistry.selfTestHook(at: installed + "/secret_guard.py", environment: env)
         XCTAssertNil(failure)
     }
 
@@ -174,13 +174,13 @@ final class HookRefreshTests: XCTestCase {
         var env = ProcessInfo.processInfo.environment
         env["SECURE_AGENT_PROBE_ID"] = String(repeating: "a", count: 64)
         env["SECURE_AGENT_HARNESS"] = "claude"
-        let failure = await SetupManager.selfTestHook(at: installed + "/secret_guard.py", environment: env)
+        let failure = await HookRegistry.selfTestHook(at: installed + "/secret_guard.py", environment: env)
         XCTAssertNotNil(failure, "an allow response cannot prove the inert deny round trip")
     }
 
     func testCrashingHookCannotPassByPrintingJSON() async {
         write(installed + "/secret_guard.py", "import sys\nprint('{\"permission\":\"allow\"}')\nsys.exit(1)")
-        let failure = await SetupManager.selfTestHook(at: installed + "/secret_guard.py")
+        let failure = await HookRegistry.selfTestHook(at: installed + "/secret_guard.py")
         XCTAssertNotNil(failure, "nonzero hook exit cannot be accepted as a pass")
     }
 }
@@ -207,19 +207,19 @@ final class CursorHookRegistrationTests: XCTestCase {
         let original = Data(#"{"version":1,"extra":"keep","hooks":{"preToolUse":[{"command":"user-hook","matcher":"Shell"}],"sessionStart":[{"command":"user-start"}]}}"#.utf8)
         try original.write(to: URL(fileURLWithPath: path))
         let command = "python3 '/tmp/home with spaces/.cursor/hooks/secret_guard.py'"
-        try SetupManager.registerCursorHooks(at: path, command: command)
+        try HookRegistry.Cursor.register(at: path, command: command)
         let first = try Data(contentsOf: URL(fileURLWithPath: path))
-        try SetupManager.registerCursorHooks(at: path, command: command)
+        try HookRegistry.Cursor.register(at: path, command: command)
         XCTAssertEqual(first, try Data(contentsOf: URL(fileURLWithPath: path)))
         XCTAssertEqual(original, try Data(contentsOf: URL(fileURLWithPath: path + ".bak-secure-agent")))
-        XCTAssertTrue(SetupManager.cursorHooksRegistered(at: path, command: command))
+        XCTAssertTrue(HookRegistry.Cursor.registered(at: path, command: command))
         let root = try JSONSerialization.jsonObject(with: first) as! [String: Any]
         XCTAssertEqual(root["extra"] as? String, "keep")
         let hooks = root["hooks"] as! [String: Any]
         XCTAssertEqual((hooks["preToolUse"] as! [[String: Any]]).count, 2)
         XCTAssertEqual((hooks["sessionStart"] as! [[String: Any]]).first?["command"] as? String, "user-start")
-        try SetupManager.unregisterCursorHooks(at: path, command: command)
-        XCTAssertFalse(SetupManager.cursorHooksRegistered(at: path, command: command))
+        try HookRegistry.Cursor.unregister(at: path, command: command)
+        XCTAssertFalse(HookRegistry.Cursor.registered(at: path, command: command))
         let after = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as! [String: Any]
         XCTAssertEqual(((after["hooks"] as! [String: Any])["preToolUse"] as! [[String: Any]]).count, 1)
     }
@@ -232,8 +232,28 @@ final class CursorHookRegistrationTests: XCTestCase {
         for text in ["bad json", #"{"version":true,"hooks":{}}"#, #"{"version":2,"hooks":{}}"#, #"{"version":1,"hooks":[]}"#, #"{"version":1,"hooks":{"preToolUse":{}}}"#] {
             let data = Data(text.utf8)
             try data.write(to: URL(fileURLWithPath: path))
-            XCTAssertThrowsError(try SetupManager.registerCursorHooks(at: path, command: "guard"))
+            XCTAssertThrowsError(try HookRegistry.Cursor.register(at: path, command: "guard"))
             XCTAssertEqual(data, try Data(contentsOf: URL(fileURLWithPath: path)))
         }
+    }
+
+    func testEachHarnessRegistersAndUnregistersOnATempFile() throws {
+        let dir = NSTemporaryDirectory() + "/hook-registry-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let claude = dir + "/settings.json"
+        let claudeCommand = "python3 /tmp/x/.claude/hooks/secret_guard.py"
+        try HookRegistry.Claude.register(at: claude, command: claudeCommand)
+        XCTAssertTrue(HookRegistry.Claude.registered(at: claude))
+        HookRegistry.Claude.unregister(at: claude)
+        XCTAssertFalse(HookRegistry.Claude.registered(at: claude))
+
+        let cursor = dir + "/hooks.json"
+        let cursorCommand = "python3 '/tmp/x/.cursor/hooks/secret_guard.py'"
+        try HookRegistry.Cursor.register(at: cursor, command: cursorCommand)
+        XCTAssertTrue(HookRegistry.Cursor.registered(at: cursor, command: cursorCommand))
+        try HookRegistry.Cursor.unregister(at: cursor, command: cursorCommand)
+        XCTAssertFalse(HookRegistry.Cursor.registered(at: cursor, command: cursorCommand))
     }
 }

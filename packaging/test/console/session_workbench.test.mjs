@@ -266,6 +266,61 @@ test('Show ended sessions preserves filters, persists Live only, and restores vi
   }
 });
 
+test('Clear filter preserves Live only and resets shared controls before returning focus to the originating search', () => {
+  const app = readFileSync(path.join(web, 'app.js'), 'utf8');
+  const start = app.indexOf("  const HARNESS_FILTER_KEY = 'sa.harness-filter';");
+  const end = app.indexOf('\n  syncHarnessFilterControls();', start);
+  for (const liveOnly of [true, false]) for (const originKind of ['detail', 'rail', 'legacy', 'agents', 'unrelated']) {
+    const saved = {harnesses: {claude: false}, text: 'missing-project', liveOnly};
+    const storage = new Map([['sa.harness-filter', JSON.stringify(saved)]]), calls = [];
+    const panel = {dataset: {pane: originKind === 'rail' ? 'list' : 'detail'}};
+    const input = id => ({value: saved.text, isConnected: true, getClientRects: () => [{}],
+      focus(options) {assert.equal(options.preventScroll, true); calls.push(id);}});
+    const sessionSearch = input('sessions'), agentSearch = input('agents'), checkbox = {checked: liveOnly};
+    const context = {sessionStorage: {getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value)},
+      document: {getElementById: id => ({'session-cwd-filter': sessionSearch, 'agent-filter-text': agentSearch,
+        'session-live-only': checkbox, 'session-board-panel': panel})[id]},
+      sessionWorkbench: {filterChanged: () => calls.push('reconcile'), render: () => calls.push('sessions-render'),
+        showList: () => {calls.push('list'); panel.dataset.pane = 'list';}}, renderAgents: () => calls.push('agents-render')};
+    vm.createContext(context); vm.runInContext(app.slice(start, end), context);
+    const fromSessions = ['detail', 'rail', 'legacy'].includes(originKind);
+    let rendered = false;
+    context.sessionWorkbench.render = () => {calls.push('sessions-render'); rendered = true;};
+    context.clearHarnessFilter({closest(selector) {
+      assert.equal(rendered, false, 'origin is captured before its control can be replaced');
+      return selector === '#session-board-panel' && fromSessions ? panel
+        : selector === '#agents-container' && originKind === 'agents' ? {} : null;
+    }});
+    assert.deepEqual(JSON.parse(storage.get('sa.harness-filter')), {harnesses: {}, text: '', liveOnly});
+    assert.equal(sessionSearch.value, ''); assert.equal(agentSearch.value, ''); assert.equal(checkbox.checked, liveOnly);
+    assert.deepEqual(calls.slice(0, 3), ['reconcile', 'sessions-render', 'agents-render']);
+    assert.equal(calls.includes('list'), fromSessions && originKind !== 'rail');
+    assert.equal(calls.at(-1), fromSessions ? 'sessions' : originKind === 'agents' ? 'agents' : 'agents-render');
+    if (!fromSessions) assert.equal(panel.dataset.pane, 'detail', 'Agents and unrelated origins never change the Sessions pane');
+  }
+  const actionStart = app.indexOf("      case 'clear-harness-filter':");
+  const action = app.slice(actionStart, app.indexOf("      case 'copy-report':", actionStart));
+  const origin = {}, invocations = [];
+  vm.runInNewContext('switch ("clear-harness-filter") {' + action + '}', {el: origin, clearHarnessFilter: el => invocations.push(el)});
+  assert.deepEqual(invocations, [origin], 'the delegated action passes its actual origin to the recovery helper');
+});
+
+test('Clear filter resolves search after rendering and safely skips absent, hidden and disconnected targets', () => {
+  const app = readFileSync(path.join(web, 'app.js'), 'utf8');
+  const start = app.indexOf('  function clearHarnessFilter('), end = app.indexOf('\n  syncHarnessFilterControls();', start);
+  for (const kind of ['replaced', 'missing', 'hidden', 'disconnected']) {
+    let target = {focus() {assert.fail('the replaced search must not receive focus');}}, focusCalls = 0;
+    const replacement = kind === 'missing' ? null : {isConnected: kind !== 'disconnected', getClientRects: () => kind === 'hidden' ? [] : [{}],
+      focus(options) {assert.equal(options.preventScroll, true); focusCalls++;}};
+    const context = {harnessFilter: {harnesses: {codex: false}, text: 'query', liveOnly: true},
+      harnessFilterChanged: () => {target = replacement;},
+      document: {getElementById: () => target}, sessionWorkbench: {showList() {assert.fail('Agents must not open the Sessions list');}}};
+    vm.createContext(context); vm.runInContext(app.slice(start, end), context);
+    context.clearHarnessFilter({closest: selector => selector === '#agents-container' ? {} : null});
+    assert.equal(focusCalls, kind === 'replaced' ? 1 : 0);
+  }
+});
+
 test('malformed current status retains prior facts and keeps access decisions unavailable until recovery', async () => {
   const c = controller('', true);
   const selected = c.actions.selectSession('a');
