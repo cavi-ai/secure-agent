@@ -14,6 +14,23 @@ vm.createContext(ctx);
 vm.runInContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), ctx, { filename: 'lib.js' });
 const { resolveConsoleRoute, routeKey, consoleRouteHash, isConsoleRoute, consoleBootState, policyListHTML } = ctx;
 const key = id => routeKey(resolveConsoleRoute(id));
+// The real worktree controller inside a switchTab runtime: request answers
+// each report read, visible follows the runtime's active System view.
+const reportRead = url => (url === '/worktrees' ? 'worktrees' : url === '/cleanup' ? 'clutter' : 'ledger');
+function attachWorktreeController(runtime, request) {
+  for (const file of ['tab-worktrees.js', 'worktree-controller.js']) {
+    vm.runInContext(readFileSync(path.join(webDist, file), 'utf8'), runtime, { filename: file });
+  }
+  runtime.worktreeController = runtime.createWorktreeController({
+    request,
+    toast() {}, confirm: async () => false, render() {}, markDirty() {}, discuss() {},
+    history: { open: () => false, paint() {} },
+    visible: view => runtime.activeTab === 'system' && runtime.activeSystemSub === view,
+    now: Date.now,
+    toastHost: { show() {}, hideWhenEmpty() {} }
+  });
+  return runtime.worktreeController;
+}
 
 test('record handoffs strip the credential and round-trip exact context on reload', () => {
   const id = 'session +&?#/π';
@@ -176,12 +193,10 @@ test('Protection subviews retain selected ARIA and visibility without receiving 
   const runtime = {document, window:{history}, history, location:{pathname:'/console',search:''},
     sessionStorage:{setItem(key, value){saved.set(key,value);}},
     activeTab:'home', activeSub:'board', activeProtection:'traffic', activeSystemSub:'worktrees', attentionSelection:null, protectionContext:null, clearProtectionContext(){},
-    PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){},
-    WORKTREE_STALE_MS:60000, worktreesState:{report:null, ledger:null}, clutterState:{report:null},
-    loadWorktrees(){loads.push('worktrees');}, loadLedger(){loads.push('ledger');}, loadClutter(){loads.push('clutter');},
-    followWorktreeSizing(){}, followClutterSizing(){}};
+    PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){}};
   vm.createContext(runtime);
   vm.runInContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), runtime);
+  attachWorktreeController(runtime, url => { loads.push(reportRead(url)); return new Promise(() => {}); });
   vm.runInContext(source.slice(start, end), runtime);
   assert.equal(sessions.every(button => button.listeners.length === 1), true);
   assert.equal(system.every(button => button.listeners.length === 1), true);
@@ -277,39 +292,39 @@ test('saved views capture the independent System sub-view and retain filters', (
 });
 
 
-test('returning to a pending System report resumes bounded followup after its hidden-view timer expires', () => {
+test('returning to a pending System report resumes bounded followup after its hidden-view timer expires', async () => {
   const source = readFileSync(path.join(webDist, 'app.js'), 'utf8');
   const timers = new Map();
   let timerID = 0;
   const reads = [];
+  const served = { '/worktrees': {}, '/cleanup': {} };
   const runtime = {
     document:{body:{classList:{toggle(){}}}, querySelectorAll:() => [], getElementById:() => null},
     window:{history:{}}, sessionStorage:{setItem(){}},
     activeTab:'home', activeSub:'board', activeProtection:'traffic', activeSystemSub:'worktrees',
     attentionSelection:null, protectionContext:null,
     PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){},
-    WORKTREE_STALE_MS:60000, WORKTREE_SIZING_POLL_MS:5000, WORKTREE_SIZING_POLLS:60, WORKTREE_REMOVAL_POLL_MS:1500,
-    worktreesState:{report:{},loadedAt:Date.now(),ledger:{},ledgerAt:Date.now()},
-    clutterState:{report:{},loadedAt:Date.now()},
-    worktreeSizingTimer:null, worktreeSizingFast:false, worktreeSizingPolls:0, clutterSizingTimer:null, clutterSizingPolls:0,
     setTimeout(fn,delay){const id=++timerID; timers.set(id,{fn,delay}); return id;}, clearTimeout(id){timers.delete(id);},
-    loadWorktrees(){reads.push('worktrees');}, loadClutter(){reads.push('clutter');}, loadLedger(){reads.push('ledger');},
   };
   vm.createContext(runtime);
   vm.runInContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), runtime);
-  const workStart = source.indexOf('  const removalRunning =');
-  vm.runInContext(source.slice(workStart, source.indexOf('  // Removal progress:', workStart)), runtime);
-  const clutterStart = source.indexOf('  function followClutterSizing(');
-  vm.runInContext(source.slice(clutterStart, source.indexOf('  async function loadClutter(', clutterStart)), runtime);
+  const controller = attachWorktreeController(runtime, async url => {
+    reads.push(reportRead(url));
+    return { ok: true, json: async () => served[url] || {} };
+  });
   const switchStart = source.indexOf('  function switchTab(');
   vm.runInContext(source.slice(switchStart, source.indexOf('  // Tab badges:', switchStart)), runtime);
+  const settle = () => new Promise(res => setImmediate(res));
   const fire = () => {
     assert.equal(timers.size, 1);
     const [id,{fn,delay}] = [...timers][0]; timers.delete(id); fn(); return delay;
   };
+  const fresh = (worktrees, clutter) => {
+    Object.assign(controller.worktreesState, { report: worktrees, loadedAt: Date.now(), ledger: {}, ledgerAt: Date.now() });
+    Object.assign(controller.clutterState, { report: clutter, loadedAt: Date.now() });
+  };
   for (const [view,pending] of [['worktrees',{sizing:true}],['worktrees',{refreshing:true}],['worktrees',{asks:{task:{status:'running'}}}],['clutter',{sizing:true}],['clutter',{refreshing:true}]]) {
-    runtime.worktreesState.report = view === 'worktrees' ? pending : {};
-    runtime.clutterState.report = view === 'clutter' ? pending : {};
+    fresh(view === 'worktrees' ? pending : {}, view === 'clutter' ? pending : {});
     reads.length = 0;
     runtime.switchTab('system/' + view);
     assert.deepEqual(reads, [], 'a fresh pending report resumes its timer without an immediate scan');
@@ -319,12 +334,27 @@ test('returning to a pending System report resumes bounded followup after its hi
     runtime.switchTab('system/' + view);
     assert.equal(fire(), 5000);
     assert.deepEqual(reads, [view], 'reopening within 60 seconds resumes the pending report');
+    await settle();
   }
-  runtime.worktreeSizingPolls = 60; runtime.clutterSizingPolls = 60;
-  runtime.worktreesState.report = {sizing:true}; runtime.clutterState.report = {refreshing:true};
-  runtime.switchTab('system/worktrees'); runtime.switchTab('system/clutter');
-  assert.equal(timers.size, 0, 'navigation does not reset the existing sizing cap');
-  runtime.worktreesState.report = {removals:{path:{state:'running'}}};
+  assert.equal(timers.size, 0);
+  for (const [view, url] of [['worktrees', '/worktrees'], ['clutter', '/cleanup']]) {
+    served[url] = { sizing: true };
+    fresh(view === 'worktrees' ? { sizing: true } : {}, view === 'clutter' ? { sizing: true } : {});
+    runtime.switchTab('system/' + view);
+    let fires = 0;
+    while (timers.size) {
+      assert.equal(fire(), 5000);
+      fires++;
+      await settle();
+      assert.ok(fires <= 60, 'followup is bounded');
+    }
+    assert.equal(fires, 60, view + ' followup stops at the sizing cap');
+    runtime.switchTab('system/resources');
+    runtime.switchTab('system/' + view);
+    assert.equal(timers.size, 0, 'navigation does not reset the existing sizing cap');
+    served[url] = {};
+  }
+  controller.worktreesState.report = {removals:{path:{state:'running'}}};
   runtime.switchTab('system/worktrees'); runtime.switchTab('system/resources');
   assert.equal(fire(), 1500);
   assert.equal(reads.at(-1), 'worktrees', 'running removals retain their cross-view followup');

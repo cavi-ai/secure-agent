@@ -11,7 +11,7 @@ const app = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url
 for (const success of [true, false]) {
  test(`incident dismissal ${success ? 'clears the queue and keeps history' : 'restores the queue on a failed write'}`, async () => {
   const begin = app.indexOf('  window.setIncidentStatus = async function(');
-  const finish = app.indexOf('  // Worktree actions.', begin);
+  const finish = app.indexOf('  // Discuss:', begin);
   const original = {incidents:[{id:'inc'}], posture:{items:[{kind:'incident',id:'inc'}]}};
   const ctx = {window:{}, telemetryData:structuredClone(original), drawerMode:null,
    mapAttentionItems:fn=>{ctx.telemetryData.posture.items=ctx.telemetryData.posture.items.map(fn).filter(Boolean);},
