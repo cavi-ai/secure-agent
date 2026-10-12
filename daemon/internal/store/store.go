@@ -1188,9 +1188,11 @@ func (s *Store) trendCounts(rule, host string) (model.TrendContext, func() map[s
 	if host != "" {
 		var first sql.NullString
 		err := s.db.QueryRow(hostFirstSeenSQL, host).Scan(&first)
-		if err == nil && first.Valid && first.String != "" {
-			tc.HostKnown = true
-			tc.HostFirstSeen = first.String
+		if err == nil && first.Valid {
+			if at, parseErr := time.Parse(time.RFC3339Nano, first.String); parseErr == nil {
+				tc.HostKnown = true
+				tc.HostFirstSeen = at.UTC().Format(time.RFC3339Nano)
+			}
 		}
 	}
 	return tc, s.allowlist
