@@ -108,10 +108,10 @@ func (s *ExpectStore) loadLocked() error {
 	return nil
 }
 
-// Failed loads stay cached on the event path. An edit retries the load so
-// operators can repair the file without restarting, and never overwrites a
-// policy that could not be read or decoded.
-func (s *ExpectStore) loadForEditLocked() error {
+// Failed loads stay cached on the event path. An operator read or edit retries
+// the load so operators can repair the file without restarting. Edits never
+// overwrite a policy that could not be read or decoded.
+func (s *ExpectStore) loadForOperatorLocked() error {
 	if s.loadErr != nil {
 		s.loaded = false
 	}
@@ -140,7 +140,8 @@ func (s *ExpectStore) sortedLocked() []ExpectedPattern {
 	return out
 }
 
-// List returns the expected patterns, oldest first.
+// List returns cached expected patterns, oldest first, treating a failed load
+// as no exceptions. Operator-facing reads should use ListResult.
 func (s *ExpectStore) List() []ExpectedPattern {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -148,12 +149,23 @@ func (s *ExpectStore) List() []ExpectedPattern {
 	return s.sortedLocked()
 }
 
+// ListResult returns active expected patterns or an error without partial
+// entries. Only failed loads are retried, preserving in-memory hit counts.
+func (s *ExpectStore) ListResult() ([]ExpectedPattern, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.loadForOperatorLocked(); err != nil {
+		return nil, err
+	}
+	return s.sortedLocked(), nil
+}
+
 // Add records p (its Key is derived) and returns the stored entry. Adding a
 // pattern already present returns it unchanged.
 func (s *ExpectStore) Add(p ExpectedPattern) (ExpectedPattern, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.loadForEditLocked(); err != nil {
+	if err := s.loadForOperatorLocked(); err != nil {
 		return ExpectedPattern{}, err
 	}
 	if e, ok := s.entries[ReadConnectKey(p.Agent, p.Reader, p.Path, p.Dest)]; ok {
@@ -171,7 +183,7 @@ func (s *ExpectStore) Add(p ExpectedPattern) (ExpectedPattern, error) {
 func (s *ExpectStore) AddAll(ps []ExpectedPattern) ([]ExpectedPattern, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.loadForEditLocked(); err != nil {
+	if err := s.loadForOperatorLocked(); err != nil {
 		return nil, err
 	}
 	return s.addLocked(ps)
@@ -204,7 +216,7 @@ func (s *ExpectStore) addLocked(ps []ExpectedPattern) ([]ExpectedPattern, error)
 func (s *ExpectStore) Remove(key string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.loadForEditLocked(); err != nil {
+	if err := s.loadForOperatorLocked(); err != nil {
 		return false, err
 	}
 	e, ok := s.entries[key]

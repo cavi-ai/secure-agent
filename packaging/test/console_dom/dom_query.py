@@ -27,9 +27,12 @@ class Node:
 
     @property
     def text(self):
-        if self.tag in ("script", "style"):
+        return self.text_without()
+
+    def text_without(self, *tags):
+        if self.tag in ("script", "style", *tags):
             return ""
-        return "".join(part.text if isinstance(part, Node) else part for part in self.parts)
+        return "".join(part.text_without(*tags) if isinstance(part, Node) else part for part in self.parts)
 
     def find_all(self, tag=None, attrs=None):
         result = []
