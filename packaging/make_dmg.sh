@@ -4,6 +4,11 @@
 #
 # Signing/notarization environment:
 #   CODESIGN_IDENTITY  Signing identity for make_app.sh (default "-" = ad-hoc).
+#   DEVELOPER_TEAM     Team ID: re-sign the app with the team's Developer ID
+#                      through an Xcode export and notarize it with the signed-in
+#                      Xcode account (devid_export.sh). The DMG is then signed
+#                      and notarized only with CODESIGN_IDENTITY and
+#                      NOTARY_PROFILE.
 #   NOTARY_PROFILE     Keychain profile name for `xcrun notarytool` (created via
 #                      `xcrun notarytool store-credentials`). If unset, notarization
 #                      is skipped and the DMG will only run after right-click > Open
@@ -31,7 +36,10 @@ trap 'rm -rf "${BUILD_DIR}"' EXIT
 STAGING="${BUILD_DIR}/staging"
 CANDIDATE_DMG="${BUILD_DIR}/$(basename "${DMG_PATH}")"
 
-if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+if [[ -n "${DEVELOPER_TEAM:-}" ]]; then
+  "${REPO_ROOT}/packaging/devid_export.sh" "${APP_DIR}" "${DEVELOPER_TEAM}" "${BUILD_DIR}/devid"
+  APP_DIR="${BUILD_DIR}/devid/notarized/${APP_NAME}.app"
+elif [[ -n "${NOTARY_PROFILE:-}" ]]; then
   echo "==> Notarizing app..."
   ZIP_PATH="${REPO_ROOT}/dist/SecureAgent-notarize.zip"
   ditto -c -k --keepParent "${APP_DIR}" "${ZIP_PATH}"
@@ -67,11 +75,13 @@ fi
 
 if [[ "${RELEASE_BUILD:-0}" == 1 ]]; then
   codesign --verify --deep --strict "${APP_DIR}"
-  codesign --verify --strict "${CANDIDATE_DMG}"
   xcrun stapler validate "${APP_DIR}"
-  xcrun stapler validate "${CANDIDATE_DMG}"
   spctl --assess --type execute "${APP_DIR}"
-  spctl --assess --type open --context context:primary-signature "${CANDIDATE_DMG}"
+  if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+    codesign --verify --strict "${CANDIDATE_DMG}"
+    xcrun stapler validate "${CANDIDATE_DMG}"
+    spctl --assess --type open --context context:primary-signature "${CANDIDATE_DMG}"
+  fi
 fi
 
 rm -rf "${STAGING}"
