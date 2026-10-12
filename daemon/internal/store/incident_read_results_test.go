@@ -118,7 +118,7 @@ func TestIncidentWorkflowReadRecoveryAndNullableFields(t *testing.T) {
 	if h := s.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 0 {
 		t.Fatalf("workflow recovery health: %+v", h)
 	}
-	if _, err := s.SetIncidentStatus("incident", "resolved", ""); err != nil {
+	if _, _, err := s.SetIncidentStatusResult("incident", "resolved", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.RecentIncidentsResult(10); err != nil || got == nil || len(got) != 0 {

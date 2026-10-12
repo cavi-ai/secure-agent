@@ -29,10 +29,10 @@ func TestSessionIdleAndActivityFaultsRecoverIndependently(t *testing.T) {
 	if err := s.TouchSession("idle", now.Add(time.Minute)); err == nil {
 		t.Fatal("failed activity write reported success")
 	}
-	if saved, _ := testutil.Lookup[model.Session](t)(s.GetSessionResult("active")); saved.Status != model.SessionActive {
+	if saved, _ := testutil.Lookup[model.Session](t)(s.GetSession("active")); saved.Status != model.SessionActive {
 		t.Fatalf("failed idle write changed saved state: %+v", saved)
 	}
-	if saved, _ := testutil.Lookup[model.Session](t)(s.GetSessionResult("idle")); saved.Status != model.SessionIdle || !saved.LastSeenAt.Equal(now) {
+	if saved, _ := testutil.Lookup[model.Session](t)(s.GetSession("idle")); saved.Status != model.SessionIdle || !saved.LastSeenAt.Equal(now) {
 		t.Fatalf("failed activity write changed saved state: %+v", saved)
 	}
 	h := s.WriteHealth()
@@ -72,7 +72,7 @@ func TestSessionIdleAndActivityFaultsRecoverIndependently(t *testing.T) {
 		t.Fatalf("recovered idle transitions = %v", ids)
 	}
 	for _, id := range ids {
-		if saved, _ := testutil.Lookup[model.Session](t)(s.GetSessionResult(id)); saved.Status != model.SessionIdle {
+		if saved, _ := testutil.Lookup[model.Session](t)(s.GetSession(id)); saved.Status != model.SessionIdle {
 			t.Fatalf("returned idle transition was not saved: %+v", saved)
 		}
 	}
@@ -99,7 +99,7 @@ func TestSessionIdlingRejectsPartialUpdate(t *testing.T) {
 		t.Fatalf("partial idle update returned committed IDs or no error: %v, %v", ids, err)
 	}
 	for _, id := range []string{"first", "second"} {
-		if saved, _ := testutil.Lookup[model.Session](t)(s.GetSessionResult(id)); saved.Status != model.SessionActive {
+		if saved, _ := testutil.Lookup[model.Session](t)(s.GetSession(id)); saved.Status != model.SessionActive {
 			t.Fatalf("partial idle update was not rolled back: %+v", saved)
 		}
 	}

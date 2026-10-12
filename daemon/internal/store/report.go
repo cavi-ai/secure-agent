@@ -82,7 +82,7 @@ const (
 const ReportTopN = 50
 
 type sessionReportReader interface {
-	GetSessionResult(string) (model.Session, bool, error)
+	GetSessionBounded(string) (model.Session, bool, error)
 	sessionEventsOldestFirst(string) ([]event.Event, error)
 	QueryFlagsResult(FlagFilter) ([]model.Flag, error)
 	SessionOutcomes(string) SessionOutcomeHistory
@@ -98,7 +98,7 @@ func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr
 // readSessionReport aggregates retained evidence independently of storage.
 // Identity must be readable before any evidence sources are queried.
 func readSessionReport(reader sessionReportReader, id string) (SessionReport, bool, error) {
-	sess, ok, err := reader.GetSessionResult(id)
+	sess, ok, err := reader.GetSessionBounded(id)
 	if err != nil {
 		return SessionReport{}, false, err
 	}

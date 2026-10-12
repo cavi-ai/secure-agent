@@ -1500,7 +1500,7 @@ func (a *API) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		seen[e.SessionID] = true
-		s, ok, err := a.store.GetSessionResult(e.SessionID)
+		s, ok, err := a.store.GetSessionBounded(e.SessionID)
 		if err != nil {
 			http.Error(w, "endpoint sessions unavailable", http.StatusServiceUnavailable)
 			return

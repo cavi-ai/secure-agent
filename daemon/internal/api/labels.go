@@ -51,7 +51,7 @@ func (a *API) recordLabel(l model.OperatorLabel) {
 		return
 	}
 	l.CreatedAt = time.Now()
-	a.store.PutOperatorLabel(l)
+	_ = a.store.PutOperatorLabelResult(l)
 }
 
 // handleLabels serves POST /labels {subject, label, reason, source}: an

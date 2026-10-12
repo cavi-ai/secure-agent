@@ -102,7 +102,7 @@ func TestCheckedSessionReadsRejectInvalidTimestamps(t *testing.T) {
 			if _, err := s.db.Exec("UPDATE sessions SET " + column + "='invalid' WHERE id='s1'"); err != nil {
 				t.Fatal(err)
 			}
-			if sess, found, err := s.GetSessionResult("s1"); err == nil || found || sess.ID != "" {
+			if sess, found, err := s.GetSession("s1"); err == nil || found || sess.ID != "" {
 				t.Fatalf("invalid session identity: %+v, %v, %v", sess, found, err)
 			}
 			if sessions, err := s.ListSessionsResult(SessionFilter{Limit: 100}); err == nil || sessions != nil {
