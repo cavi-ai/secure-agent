@@ -7,15 +7,15 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
-// traceSession normalizes the harness-specific identity and sighting rules.
-type traceSession struct {
+// TraceSession normalizes the harness-specific identity and sighting rules.
+type TraceSession struct {
 	ID, Harness, Workspace, Origin string
 	At                             time.Time
 }
 
 type traceLineResult struct {
 	Events  []event.Event
-	Session traceSession
+	Session TraceSession
 	Parsed  bool
 }
 
@@ -39,7 +39,7 @@ var jsonlAdapters = []jsonlAdapter{
 			evs, cwd, ok := t.ParseLine(line)
 			r := traceLineResult{Events: evs, Parsed: ok}
 			if ok && len(evs) > 0 {
-				r.Session = traceSession{ID: evs[0].SessionID, Harness: "claude", Workspace: cwd, At: evs[0].TS}
+				r.Session = TraceSession{ID: evs[0].SessionID, Harness: "claude", Workspace: cwd, At: evs[0].TS}
 			}
 			return r
 		}}
@@ -54,7 +54,7 @@ var jsonlAdapters = []jsonlAdapter{
 			r := traceLineResult{Events: evs, Parsed: ok || len(evs) > 0}
 			if r.Parsed {
 				id, cwd := t.Session()
-				r.Session = traceSession{ID: id, Harness: "codex", Workspace: cwd, Origin: CodexOrigin(path), At: time.Now()}
+				r.Session = TraceSession{ID: id, Harness: "codex", Workspace: cwd, Origin: CodexOrigin(path), At: time.Now()}
 			}
 			return r
 		}}
@@ -66,7 +66,7 @@ var jsonlAdapters = []jsonlAdapter{
 			r := traceLineResult{Events: evs, Parsed: ok}
 			if ok && len(evs) > 0 {
 				id, cwd := t.Session()
-				r.Session = traceSession{ID: id, Harness: "cursor", Workspace: cwd, At: evs[0].TS}
+				r.Session = TraceSession{ID: id, Harness: "cursor", Workspace: cwd, At: evs[0].TS}
 			}
 			return r
 		}}
@@ -78,7 +78,7 @@ var jsonlAdapters = []jsonlAdapter{
 			r := traceLineResult{Events: evs, Parsed: ok}
 			if ok && len(evs) > 0 {
 				id, cwd := t.Session()
-				r.Session = traceSession{ID: id, Harness: "antigravity", Workspace: cwd, At: evs[0].TS}
+				r.Session = TraceSession{ID: id, Harness: "antigravity", Workspace: cwd, At: evs[0].TS}
 			}
 			return r
 		}}

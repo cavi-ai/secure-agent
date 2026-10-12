@@ -80,7 +80,7 @@ func TestTranscriptRetiresDeletedParserState(t *testing.T) {
 			ts.tailFile(source.path, offsets, nil)
 		}
 	}
-	if len(ts.trace.files) != 4*count || len(ts.rolloutIDs) != count {
+	if len(ts.trace.files) != 4*count || len(ts.sessionIDs) != 4*count {
 		t.Fatal("fixtures did not create each harness's parser and identity state")
 	}
 	if err := ts.saveOffsets(offsets); err != nil {
@@ -96,8 +96,8 @@ func TestTranscriptRetiresDeletedParserState(t *testing.T) {
 		return nil
 	}
 	resolveTranscriptState(t, ts)
-	if len(ts.trace.files)+len(ts.rolloutIDs) != 0 {
-		t.Fatalf("deleted sources retained state: parsers=%d identities=%d", len(ts.trace.files), len(ts.rolloutIDs))
+	if len(ts.trace.files)+len(ts.sessionIDs) != 0 {
+		t.Fatalf("deleted sources retained state: parsers=%d identities=%d", len(ts.trace.files), len(ts.sessionIDs))
 	}
 	if remaining := ts.loadOffsets(); len(remaining) != 0 {
 		t.Fatalf("deleted checkpoints retained: %v", remaining)
@@ -120,7 +120,7 @@ func TestTranscriptRetainsInactiveParserAndCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolveTranscriptState(t, ts)
-	if ts.trace.files[path] != tracer || ts.loadOffsets()[path] != checkpoint || ts.RolloutSession(path) != "019f58e8-6230" {
+	if ts.trace.files[path] != tracer || ts.loadOffsets()[path] != checkpoint || ts.SessionForPath(path) != "019f58e8-6230" {
 		t.Fatal("inactive but present source lost parser, checkpoint or identity")
 	}
 	events := appendTranscriptEvents(t, ts, sub, offsets, path, codexTokenLine)

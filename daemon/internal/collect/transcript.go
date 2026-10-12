@@ -91,15 +91,10 @@ type TranscriptScanner struct {
 	// can register the authoritative session record.
 	OnHandshake func(Handshake)
 
-	// OnSessionSeen, when set, reports a session id sighted in a harness
-	// transcript, with the harness name and workspace — transcript-tier
-	// resolution and the join key to the process-tree session for the same
-	// harness+workspace.
-	OnSessionSeen func(sessionID, harness, workspace string, at time.Time)
-
-	// OnCodexSessionSeen, when set, reports a Codex rollout's session with
-	// its workspace and CodexOrigin (who spawned it; "" for the user's own).
-	OnCodexSessionSeen func(sessionID, workspace, origin string, at time.Time)
+	// OnSessionSeen, when set, is fired once per parsed line that names a
+	// session, for every JSONL harness, with the harness name and (when the
+	// harness records it) the origin.
+	OnSessionSeen func(TraceSession)
 
 	// TextScanner, when set, scans every tailed line for known and typed
 	// secrets. Nil falls back to the redact package's patterns.
@@ -111,33 +106,33 @@ type TranscriptScanner struct {
 
 	trace jsonlTracers
 
-	// rolloutIDs maps a codex rollout path to the session id its session_meta
-	// names, for the open-rollout joiner, which runs on its own goroutine.
-	rolloutMu  sync.Mutex
-	rolloutIDs map[string]string
+	// sessionIDs maps a transcript path to the session id last sighted in it,
+	// for the open-rollout joiner, which runs on its own goroutine.
+	sessionMu  sync.Mutex
+	sessionIDs map[string]string
 }
 
-// RolloutSession names the session a codex rollout belongs to: the id its
-// session_meta line carries once the tracer has read it, else the id in the
-// file name. Safe for concurrent use.
-func (ts *TranscriptScanner) RolloutSession(path string) string {
-	ts.rolloutMu.Lock()
-	id := ts.rolloutIDs[path]
-	ts.rolloutMu.Unlock()
+// SessionForPath returns the session id last sighted in the transcript at
+// path (the codex rollout joiner reads it for rollouts held open by codex
+// processes), else the id in the file name. Safe for concurrent use.
+func (ts *TranscriptScanner) SessionForPath(path string) string {
+	ts.sessionMu.Lock()
+	id := ts.sessionIDs[path]
+	ts.sessionMu.Unlock()
 	if id != "" {
 		return id
 	}
 	return RolloutSessionID(path)
 }
 
-// noteRolloutSession records the session id a rollout's session_meta names.
-func (ts *TranscriptScanner) noteRolloutSession(path, id string) {
-	ts.rolloutMu.Lock()
-	defer ts.rolloutMu.Unlock()
-	if ts.rolloutIDs == nil {
-		ts.rolloutIDs = map[string]string{}
+// noteSession records the session id sighted in the transcript at path.
+func (ts *TranscriptScanner) noteSession(path, id string) {
+	ts.sessionMu.Lock()
+	defer ts.sessionMu.Unlock()
+	if ts.sessionIDs == nil {
+		ts.sessionIDs = map[string]string{}
 	}
-	ts.rolloutIDs[path] = id
+	ts.sessionIDs[path] = id
 }
 
 // Handshake is the hook's session announcement line
@@ -621,9 +616,9 @@ func (ts *TranscriptScanner) noteSource(p string, stamp transcriptSource) {
 
 func (ts *TranscriptScanner) resetSource(p string) {
 	ts.trace.Reset(p)
-	ts.rolloutMu.Lock()
-	delete(ts.rolloutIDs, p)
-	ts.rolloutMu.Unlock()
+	ts.sessionMu.Lock()
+	delete(ts.sessionIDs, p)
+	ts.sessionMu.Unlock()
 }
 
 type pendingTranscriptLine struct {
@@ -780,15 +775,11 @@ func (ts *TranscriptScanner) eventsForLine(p, line string, lineStart, offset int
 	r := ts.trace.Parse(p, line, offset, source)
 	if r.Parsed {
 		s := r.Session
-		if s.Harness == "codex" {
-			if s.ID != "" {
-				ts.noteRolloutSession(p, s.ID)
-				if ts.OnCodexSessionSeen != nil {
-					ts.OnCodexSessionSeen(s.ID, s.Workspace, s.Origin, s.At)
-				}
+		if s.ID != "" {
+			ts.noteSession(p, s.ID)
+			if ts.OnSessionSeen != nil {
+				ts.OnSessionSeen(s)
 			}
-		} else if s.ID != "" && ts.OnSessionSeen != nil {
-			ts.OnSessionSeen(s.ID, s.Harness, s.Workspace, s.At)
 		}
 		return append(r.Events, ts.transcriptHits(line, p, harnessForPath(p), ts.trace.Session(p), lineStart)...)
 	}

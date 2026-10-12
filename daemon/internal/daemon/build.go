@@ -948,18 +948,13 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 				Repo: h.Repo, Branch: h.Branch, PID: h.PID, TS: hts,
 			})
 		}
-		ts.OnSessionSeen = resolver.NoteTranscriptSession
-		ts.OnCodexSessionSeen = func(id, workspace, origin string, at time.Time) {
-			resolver.NoteTranscriptSighting(session.TranscriptSighting{
-				ID: id, Harness: "codex", Workspace: workspace, Origin: origin, TS: at,
-			})
-		}
+		ts.OnSessionSeen = transcriptSighting(resolver)
 		// A codex process holds its rollout open: the open-file probe joins
 		// the rollout's session to that process's tree.
 		joiner := &collect.RolloutJoiner{
 			PIDs:       func() []int32 { return codexPIDs(tagger) },
 			Probe:      collect.OpenRolloutFiles,
-			SessionFor: ts.RolloutSession,
+			SessionFor: ts.SessionForPath,
 			Join:       resolver.JoinTranscriptPID,
 		}
 		go func() { _ = joiner.Run(c) }()
@@ -1028,6 +1023,16 @@ func newHermesCollector(cfg config.Config, b *bus.Bus, supReg *supervise.Registr
 	}
 	h.OnSessionEnded = resolver.EndTranscriptSession
 	return h
+}
+
+// transcriptSighting hands each transcript sighting, with its harness and
+// origin, to the session resolver.
+func transcriptSighting(resolver *session.Resolver) func(collect.TraceSession) {
+	return func(s collect.TraceSession) {
+		resolver.NoteTranscriptSighting(session.TranscriptSighting{
+			ID: s.ID, Harness: s.Harness, Workspace: s.Workspace, Origin: s.Origin, TS: s.At,
+		})
+	}
 }
 
 // codexPIDs lists the live pids the tagger names codex.
