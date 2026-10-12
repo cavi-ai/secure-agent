@@ -886,7 +886,9 @@
       contextRuleReads++;
       stamp('protection-context-reads', String(contextRuleReads));
       if (scenarios.has('contextfail') && contextRuleReads > 1) return {ok:false,status:503};
-      const rules = scenarios.has('contextread') && contextRuleReads > 1 ? contextRules : [];
+      // A missing or unreadable exact rule leaves only a same-host rule saved.
+      const sameHost = contextRules.map(rule => ({...rule, id: rule.id + '-same-host'}));
+      const rules = !scenarios.has('contextread') ? sameHost : contextRuleReads > 1 ? contextRules : [];
       return {ok:true,status:200,json:async()=>({rules})};
     }
     let body = data[p];
@@ -3255,7 +3257,6 @@
         await new Promise(resolve=>setTimeout(resolve,100));
         probe.confirmation=document.getElementById('confirm-message').textContent.includes('/synthetic/credentials')
           && document.getElementById('confirm-message').textContent.includes('example.test:443') && !window.__globalScopeDeletes;
-        if (scenarios.has('confirmonly')) return;
         document.getElementById('confirm-cancel')?.click();
         await new Promise(resolve=>setTimeout(resolve,100));
         probe.cancelled=!window.__globalScopeDeletes && !!list.querySelector('[data-action="revoke-scope"]');
@@ -3316,7 +3317,6 @@
           probe.noWrite = !window.__policyWrites;
           const retry = scopes.querySelector('[data-action="policy-refresh-report"]');
           probe.retryLabel = retry.textContent === 'Refresh scoped permissions' && retry.getBoundingClientRect().height >= 44;
-          if (scenarios.has('policyhealthshot')) return;
           const before = { ...window.__policyReads };
           healthy.focus(); window.__policyRecovered = true; retry.click();
           probe.recovered = await wait(() => scopes.textContent.includes('No scoped permissions') && !scopes.querySelector('[data-action="policy-refresh-report"]'));
@@ -3454,7 +3454,7 @@
   }, 1500);
 
   // One inspection round trip through real controls; no security writes.
-  if (scenarios.has('protectioncontext') || scenarios.has('protectioncontextprobe')) {
+  if (scenarios.has('protectioncontextprobe')) {
     setTimeout(() => openTab('protection/traffic'), 1500);
   }
   if (scenarios.has('protectioncontextprobe')) setTimeout(() => {
@@ -3466,6 +3466,7 @@
       const selected = document.querySelector('[data-expected-egress-rule="expected-older"].is-context-target');
       checks.rules = location.hash === '#protection/rules';
       checks.selected = !!selected;
+      checks.anyTarget = !!document.querySelector('[data-expected-egress-rule].is-context-target');
       checks.nonDestructiveFocus = document.activeElement === selected;
       checks.rationale = selected?.textContent.includes('Routine update') === true;
       const beforeScroll = scrollY;
