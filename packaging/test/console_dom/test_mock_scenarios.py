@@ -9,7 +9,8 @@ SCENARIO_BRANCHES = 289
 
 class MockScenarioBranchTests(unittest.TestCase):
     def test_mock_scenario_branches_only_decrease(self):
-        count = open(MOCK).read().count("scenarios.has(")
+        with open(MOCK) as stream:
+            count = stream.read().count("scenarios.has(")
         self.assertLessEqual(count, SCENARIO_BRANCHES,
                              "put the case's data, routes and steps in its cases_<family>.js, not mock_dom.js")
         self.assertEqual(count, SCENARIO_BRANCHES,
