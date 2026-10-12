@@ -320,6 +320,18 @@ func (t *Tagger) Alive(pid int32) bool {
 	return ok
 }
 
+// Started reports when the process now holding pid started, read as Alive
+// reads liveness; ok is false when pid is gone.
+func (t *Tagger) Started(pid int32) (time.Time, bool) {
+	t.mu.RLock()
+	p, ok := t.table[pid]
+	t.mu.RUnlock()
+	if !ok {
+		p, ok = t.ps.Info(pid)
+	}
+	return p.StartTime, ok
+}
+
 func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 	if info, ok := t.cache[pid]; ok {
 		return info, t.tagged[pid]

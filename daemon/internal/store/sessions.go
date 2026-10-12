@@ -359,22 +359,23 @@ func (s *Store) MarkSessionsIdle(cutoff time.Time) (_ []string, writeErr error) 
 	return ids, nil
 }
 
-// SessionRoots returns root pids of non-ended sessions so the resolver can
-// end sessions whose process tree is gone.
-func (s *Store) SessionRoots() map[int32]string {
+// SessionRoots returns the non-ended sessions on each root pid (an app can
+// host several conversations on one root), with ID, RootPID and
+// RootStartedAt set, so the resolver can end every session whose root
+// process is gone or reused.
+func (s *Store) SessionRoots() map[int32][]model.Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT root_pid, id FROM sessions WHERE status != ? AND root_pid != 0`, model.SessionEnded)
+	rows, err := s.db.Query(`SELECT root_pid, id, COALESCE(root_started_at, '') FROM sessions WHERE status != ? AND root_pid != 0`, model.SessionEnded)
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
-	out := map[int32]string{}
+	out := map[int32][]model.Session{}
 	for rows.Next() {
-		var pid int32
-		var id string
-		if rows.Scan(&pid, &id) == nil {
-			out[pid] = id
+		var sess model.Session
+		if rows.Scan(&sess.RootPID, &sess.ID, &sess.RootStartedAt) == nil {
+			out[sess.RootPID] = append(out[sess.RootPID], sess)
 		}
 	}
 	return out
