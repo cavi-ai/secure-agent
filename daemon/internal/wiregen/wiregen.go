@@ -159,8 +159,8 @@ func TypeScript(types ...any) string {
 		fmt.Fprintf(&out, "export interface %s {\n", names[t])
 		for _, f := range fields[t] {
 			tsType := tsTypeOf(f.typ, names)
-			if f.nullable {
-				tsType += " | null"
+			if f.omitEmpty {
+				tsType = nonNullTSTypeOf(f.typ, names)
 			}
 			opt := ""
 			if f.optional {
@@ -209,12 +209,12 @@ func typeNames(fields map[reflect.Type][]wireField) map[reflect.Type]string {
 }
 
 type wireField struct {
-	name     string
-	typ      reflect.Type
-	optional bool
-	nullable bool
-	tagged   bool
-	index    []int
+	name      string
+	typ       reflect.Type
+	optional  bool
+	omitEmpty bool
+	tagged    bool
+	index     []int
 }
 
 // Follow encoding/json's promotion rules: the shallowest field wins, a
@@ -252,7 +252,11 @@ func jsonFields(t reflect.Type) []wireField {
 			if name == "" {
 				name = f.Name
 			}
-			candidates = append(candidates, wireField{name: name, typ: f.Type, optional: optional || hasJSONOption(opts, "omitempty"), nullable: f.Type.Kind() == reflect.Pointer && !hasJSONOption(opts, "omitempty"), tagged: tagged, index: fieldIndex})
+			omitEmpty := hasJSONOption(opts, "omitempty")
+			candidates = append(candidates, wireField{
+				name: name, typ: f.Type, optional: optional || omitEmpty,
+				omitEmpty: omitEmpty, tagged: tagged, index: fieldIndex,
+			})
 		}
 	}
 	walk(t, nil, false)
@@ -299,11 +303,24 @@ func hasJSONOption(options, option string) bool {
 	return false
 }
 
+// Nil pointers, slices and maps encode as JSON null. omitempty removes only
+// the outer nil value; collection elements and pointer targets keep their own
+// nullability (a non-nil pointer to a nil slice still encodes as null).
 func tsTypeOf(t reflect.Type, names map[reflect.Type]string) string {
-	for t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
+	typ := nonNullTSTypeOf(t, names)
 	switch t.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Map:
+		if typ != "unknown" && !strings.HasSuffix(typ, " | null") {
+			typ += " | null"
+		}
+	}
+	return typ
+}
+
+func nonNullTSTypeOf(t reflect.Type, names map[reflect.Type]string) string {
+	switch t.Kind() {
+	case reflect.Pointer:
+		return tsTypeOf(t.Elem(), names)
 	case reflect.String:
 		return "string"
 	case reflect.Bool:
@@ -311,7 +328,11 @@ func tsTypeOf(t reflect.Type, names map[reflect.Type]string) string {
 	case reflect.Int, reflect.Int32, reflect.Int64, reflect.Float64, reflect.Uint64, reflect.Int16, reflect.Uint32:
 		return "number"
 	case reflect.Slice, reflect.Array:
-		return tsTypeOf(t.Elem(), names) + "[]"
+		elem := tsTypeOf(t.Elem(), names)
+		if strings.Contains(elem, " | ") {
+			elem = "(" + elem + ")"
+		}
+		return elem + "[]"
 	case reflect.Map:
 		return "Record<string, " + tsTypeOf(t.Elem(), names) + ">"
 	case reflect.Struct:
