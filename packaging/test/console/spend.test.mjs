@@ -213,6 +213,47 @@ const friday = new Date(2026, 8, 25, 15, 10).toISOString();
 const proPlan = { harness: 'codex', home: 'codex', plan_type: 'pro', limit_id: 'codex',
   windows: [{ window_minutes: 10080, used_percent: 52, resets_at: friday }], unlimited: false, seen_at: friday };
 
+test('quota observation uses its actual local calendar date, year and clock with canonical datetime', () => {
+  const html = spendPlanItems([proPlan])[0].html;
+  assert.ok(html.includes(`Observed <time datetime="${friday}">Sep 25, 2026 3:10 PM</time>`));
+  assert.equal((html.match(/<time /g) || []).length, 1, 'one observation per quota row');
+  const offset = '2026-12-31T23:40:15.123456+05:30';
+  const instant = new Date(offset);
+  const updated = spendPlanItems([{...proPlan, seen_at: offset}])[0];
+  assert.ok(updated.html.includes(`datetime="${instant.toISOString()}"`));
+  const timeText = updated.html.match(/<time [^>]+>([^<]+)<\/time>/)[1];
+  assert.equal(timeText, new Intl.DateTimeFormat('en-US', {month: 'short', day: 'numeric', year: 'numeric'}).format(instant) + ' ' + ctx.fmtDayClock(instant).slice(4));
+  assert.notEqual(updated.html, html);
+  assert.equal(updated.key, spendPlanItems([proPlan])[0].key);
+});
+
+test('quota observation does not manufacture a time for missing, malformed or sentinel timestamps', () => {
+  for (const seen_at of [undefined, null, '', ' ', 0, 1790000000000, {}, [], '2026-09-25', 'invalid',
+    '2026-02-30T15:10:00Z', '2026-13-01T00:00:00Z', '2026-09-25T24:00:00Z', '2026-09-25T15:10:00+25:00',
+    '0001-01-01T00:00:00Z', '0001-01-01T00:00:00.000000000+00:00']) {
+    const html = spendPlanItems([{...proPlan, seen_at, generated_at: friday}])[0].html;
+    assert.match(html, /Observation time unavailable/, String(seen_at));
+    assert.doesNotMatch(html, /<time\b/, String(seen_at));
+    assert.match(html, /resets Fri 3:10 PM/, 'reset time remains separate');
+  }
+});
+
+test('observation changes retain quota identity, home labels, windows and usage bar severity', () => {
+  const plan = {...proPlan, account_key: 'account', homes: ['codex', 'agent'],
+    windows: [{...proPlan.windows[0], used_percent: 76}, {window_minutes: 300, used_percent: 95, resets_at: friday}]};
+  const first = spendPlanItems([plan])[0];
+  const second = spendPlanItems([{...plan, seen_at: new Date(2027, 0, 2, 9, 5).toISOString()}])[0];
+  assert.equal(first.key, 'plan:account:codex'); assert.equal(second.key, first.key);
+  for (const html of [first.html, second.html]) {
+    assert.match(html, /Codex Pro · shared by 2 homes · weekly 76% used · resets Fri 3:10 PM · 5-hour 95% used/);
+    assert.match(html, /class="hbar-fill warn" data-w="76\.0"/);
+    assert.match(html, /class="hbar-fill crit" data-w="95\.0"/);
+    assert.equal((html.match(/hbar-track/g) || []).length, 2);
+  }
+  assert.notEqual(first.html, second.html);
+  assert.match(second.html, /Jan 2, 2027 9:05 AM/);
+});
+
 test('planLineText: plan, home, window, percent and the local reset time', () => {
   assert.equal(planLineText(proPlan), 'Codex Pro · codex · weekly 52% used · resets Fri 3:10 PM');
   const two = { ...proPlan, home: 'birch (openclaw)', windows: [proPlan.windows[0], { window_minutes: 300, used_percent: 7.5, resets_at: 'bad' }] };
@@ -222,7 +263,7 @@ test('planLineText: plan, home, window, percent and the local reset time', () =>
 test('spendPlanItems: one item per plan keyed plan:<home>, a bar per window at used_percent; none for an empty list', () => {
   const items = spendPlanItems([proPlan, { ...proPlan, home: 'birch (openclaw)', windows: [{ window_minutes: 300, used_percent: 95, resets_at: friday }] }]);
   assert.deepEqual(Array.from(items, i => i.key), ['plan:codex', 'plan:birch (openclaw)']);
-  assert.match(items[0].html, /<span class="spend-plan-text">Codex Pro · codex · weekly 52% used · resets Fri 3:10 PM<\/span>/);
+  assert.match(items[0].html, /<span class="spend-plan-text">Codex Pro · codex · weekly 52% used · resets Fri 3:10 PM · Observed <time datetime="[^"]+">Sep 25, 2026 3:10 PM<\/time><\/span>/);
   assert.match(items[0].html, /class="hbar-fill" data-w="52\.0"/);
   assert.match(items[1].html, /class="hbar-fill crit" data-w="95\.0"/);
   assert.equal(spendPlanItems([]).length, 0);
