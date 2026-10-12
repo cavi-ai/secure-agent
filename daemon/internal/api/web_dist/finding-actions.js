@@ -1,31 +1,8 @@
 // Write actions for findings, guard rules and egress: each applies its
 // expected result to the telemetry first, sends the request, then keeps the
 // result or puts it back.
-function createFindingActions({ request, toast, refetch, stage, telemetry, cardNote, cssq, drawer, flags, loadPolicy }) {
-  const send = async (method, path, payload) => {
-    const res = await request(path, {
-      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-    });
-    if (!res.ok) throw new Error(await res.text());
-  };
-
-  // Runs a staged write. A rejected or failed request reverts the staged
-  // result and reports through failed/error; ok runs on success.
-  async function write(revert, run, { ok, failed, error }) {
-    try {
-      const res = await run();
-      if (res.ok) {
-        await ok(res);
-        return true;
-      }
-      revert();
-      await failed(res);
-    } catch (err) {
-      revert();
-      error(err);
-    }
-    return false;
-  }
+function createFindingActions({ request, toast, refetch, writes, telemetry, cardNote, cssq, drawer, flags, loadPolicy }) {
+  const { stage, write, send } = writes;
 
   const allowRowSel = (agent, host) => `#firewall-container [data-action="allowlist-remove"][data-agent="${cssq(agent)}"][data-host="${cssq(host)}"]`;
   function stageAllow(agent, hosts) {

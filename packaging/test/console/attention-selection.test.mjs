@@ -27,7 +27,11 @@ function load(keys = ['flag:a', 'guard:b', 'incident:c']) {
   vm.runInContext(readFileSync(new URL('lib.js', assets), 'utf8'), ctx);
   vm.runInContext(fn('reconcileAttention', '  function beginAttentionWrite'), ctx);
   vm.runInContext(fn('beginAttentionWrite', '  function openDrawer'), ctx);
-  vm.runInContext(fn('stage', '  // posture.groups'), ctx);
+  vm.runInContext(readFileSync(new URL('staged-write.js', assets), 'utf8'), ctx);
+  ctx.stage = ctx.createStagedWrite({
+    telemetry: () => ctx.telemetryData, render: names => ctx.renderNow(names),
+    beginAttentionWrite: () => ctx.beginAttentionWrite(), request: () => { throw new Error('no requests in this test'); }
+  }).stage;
   return { ctx, buttons };
 }
 function remove(ctx, id) {

@@ -2137,26 +2137,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
   // ---------- act in place ----------
-  // A mutating action applies its expected result to telemetryData and
-  // renders the affected panels BEFORE the request; the card changes under
-  // the click. stage() snapshots the top-level keys the mutation replaces
-  // (mutations assign new values, never edit in place) and returns revert(),
-  // which restores a key only if nothing (SSE, reconcile) replaced it since.
-  function stage(keys, panels, mutate) {
-    const finishAttention = keys.includes('posture') ? beginAttentionWrite() : null;
-    const before = keys.map(k => telemetryData[k]);
-    mutate();
-    const after = keys.map(k => telemetryData[k]);
-    renderNow(panels);
-    const revert = () => {
-      keys.forEach((k, i) => { if (telemetryData[k] === after[i]) telemetryData[k] = before[i]; });
-      finishAttention?.(false);
-      renderNow(panels);
-    };
-    revert.commit = () => finishAttention?.(true);
-    revert.isCurrent = () => !finishAttention || finishAttention.isCurrent();
-    return revert;
-  }
+  const stagedWrite = createStagedWrite({
+    telemetry: () => telemetryData,
+    render: renderNow,
+    beginAttentionWrite,
+    request: apiFetch
+  });
   // posture.groups is the attention queue: map its items, drop empty groups;
   // a dropped item leaves posture.items and needs_you with it.
   function mapAttentionItems(fn) {
@@ -2203,30 +2189,25 @@ document.addEventListener('DOMContentLoaded', () => {
       if (note === null) return; // cancelled
       body.note = note;
     }
-    const revert = stage(['incidents', 'posture'], ['incidents', 'attention', 'posture', 'status'], () => {
+    const revert = stagedWrite.stage(['incidents', 'posture'], ['incidents', 'attention', 'posture', 'status'], () => {
       telemetryData.incidents = (telemetryData.incidents || []).map(inc => inc.id !== id ? inc
         : { ...inc, workflow: { ...(inc.workflow || {}), status, ...(body.note ? { resolution_note: body.note } : {}) } });
       mapAttentionItems(it => (it.kind !== 'incident' || it.id !== id ? it : status === 'open' ? { ...it, status } : null));
     });
-    try {
-      const r = await apiFetch('/incidents/status', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      if (!r.ok) throw new Error(await r.text());
-      const result = await r.json();
-      revert.commit?.();
-      if (revert.isCurrent?.() !== false && drawerMode === 'incident' && drawerIncident === id) {
-        const actions = drawerBody.querySelector('.incident-workflow-actions');
-        if (actions) actions.innerHTML = incidentWorkflowHTML(id, result.workflow);
-      }
-      showToast(status === 'resolved' ? 'Incident closure recorded as reported' : 'Incident dismissed from Needs you', 'success');
-      cardNote(`#incidents-container [data-action="open-incident"][data-id="${cssq(id)}"]`, '.log-row', 'incidents-container', status);
-      fetchTelemetry();
-    } catch (err) {
-      revert();
-      showToast('Failed to update incident: ' + err.message, 'danger');
-    }
+    await stagedWrite.write(revert, () => stagedWrite.send('POST', '/incidents/status', body), {
+      ok: async r => {
+        const result = await r.json();
+        revert.commit?.();
+        if (revert.isCurrent?.() !== false && drawerMode === 'incident' && drawerIncident === id) {
+          const actions = drawerBody.querySelector('.incident-workflow-actions');
+          if (actions) actions.innerHTML = incidentWorkflowHTML(id, result.workflow);
+        }
+        showToast(status === 'resolved' ? 'Incident closure recorded as reported' : 'Incident dismissed from Needs you', 'success');
+        cardNote(`#incidents-container [data-action="open-incident"][data-id="${cssq(id)}"]`, '.log-row', 'incidents-container', status);
+        fetchTelemetry();
+      },
+      error: err => showToast('Failed to update incident: ' + err.message, 'danger')
+    });
   };
 
   const incidentRemediationInFlight = new Set();
@@ -2236,11 +2217,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const buttons = Array.from(document.querySelectorAll('[data-action="incident-remediation"]')).filter(button => button.dataset.id === id);
     buttons.forEach(button => { button.disabled = true; });
     try {
-      const r = await apiFetch('/incidents/remediation', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, step_id: stepId, expected_revision: revision, expected_evidence: evidence, status })
-      });
-      if (!r.ok) throw new Error(await r.text());
+      const r = await stagedWrite.send('POST', '/incidents/remediation',
+        { id, step_id: stepId, expected_revision: revision, expected_evidence: evidence, status });
       const result = await r.json();
       if (!result.incident || !result.incident.remediation) throw new Error('Saved remediation result unavailable');
       if (drawerMode === 'incident' && drawerIncident === id) {
@@ -2329,43 +2307,41 @@ document.addEventListener('DOMContentLoaded', () => {
     const input = document.getElementById('source-input');
     const value = (input.value || '').trim();
     if (!value) return;
-    const revert = stage(['sources'], ['sources'], () => {
+    const revert = stagedWrite.stage(['sources'], ['sources'], () => {
       telemetryData.sources = [...(telemetryData.sources || []), { source: value, origin: 'user' }];
     });
-    try {
-      const res = await apiFetch('/firewall/sources', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: value, op: 'add' })
-      });
-      if (!res.ok) { revert(); showToast('Failed to add source: ' + (await res.text()), 'danger'); return; }
-      const data = await res.json();
-      input.value = '';
-      showToast(`Watching ${value} — ${data.registered} secret(s) registered`, 'success');
-      cardNote(`#sources-list [data-action="remove-source"][data-source="${cssq(value)}"]`, '.source-item', 'sources-list', 'watching');
-      fetchTelemetry();
-    } catch (err) {
-      revert();
-      showToast('Failed to add source: ' + err, 'danger');
-    }
+    await stagedWrite.write(revert, () => apiFetch('/firewall/sources', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: value, op: 'add' })
+    }), {
+      ok: async res => {
+        const data = await res.json();
+        input.value = '';
+        showToast(`Watching ${value} — ${data.registered} secret(s) registered`, 'success');
+        cardNote(`#sources-list [data-action="remove-source"][data-source="${cssq(value)}"]`, '.source-item', 'sources-list', 'watching');
+        fetchTelemetry();
+      },
+      failed: async res => showToast('Failed to add source: ' + (await res.text()), 'danger'),
+      error: err => showToast('Failed to add source: ' + err, 'danger')
+    });
   };
 
   window.removeSource = async function(source) {
-    const revert = stage(['sources'], ['sources'], () => {
+    const revert = stagedWrite.stage(['sources'], ['sources'], () => {
       telemetryData.sources = (telemetryData.sources || []).filter(x => x.source !== source);
     });
-    try {
-      const res = await apiFetch('/firewall/sources', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source, op: 'remove' })
-      });
-      if (!res.ok) { revert(); showToast('Failed to remove source: ' + (await res.text()), 'danger'); return; }
-      showToast(`Stopped watching ${source}`, 'info');
-      cardNote('', '', 'sources-list', 'stopped watching');
-      fetchTelemetry();
-    } catch (err) {
-      revert();
-      showToast('Failed to remove source: ' + err, 'danger');
-    }
+    await stagedWrite.write(revert, () => apiFetch('/firewall/sources', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, op: 'remove' })
+    }), {
+      ok: () => {
+        showToast(`Stopped watching ${source}`, 'info');
+        cardNote('', '', 'sources-list', 'stopped watching');
+        fetchTelemetry();
+      },
+      failed: async res => showToast('Failed to remove source: ' + (await res.text()), 'danger'),
+      error: err => showToast('Failed to remove source: ' + err, 'danger')
+    });
   };
 
   function syncSelect(id, values) {
@@ -2430,7 +2406,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Acknowledge one finding: remove its pending decision while retaining its
   // reviewed facts in history. The rule keeps watching; revert restores both.
   function stageDropFlag(id) {
-    return stage(['flags', 'flagsView', 'posture'], ['flags', 'attention', 'posture', 'chart-flags', 'status', 'tab-badges'], () => {
+    return stagedWrite.stage(['flags', 'flagsView', 'posture'], ['flags', 'attention', 'posture', 'chart-flags', 'status', 'tab-badges'], () => {
       telemetryData.flags = (telemetryData.flags || []).filter(x => x.id !== id);
       if (telemetryData.flagsView !== null) telemetryData.flagsView = (telemetryData.flagsView || []).map(x => x.id === id ? reviewedFlag(x) : x);
       mapAttentionItems(it => (it.kind === 'flag' && it.id === id ? null : it));
@@ -2438,21 +2414,16 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   window.dismissFlag = async function(id) {
     const revert = stageDropFlag(id);
-    try {
-      const res = await apiFetch('/flags/acknowledge', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ flag_id: id })
-      });
-      if (!res.ok) throw new Error(await res.text());
-      revert.commit?.();
-      showToast('Flag dismissed — the rule keeps watching', 'info');
-      if (revert.isCurrent?.() !== false && !attentionSelection && drawerMode === 'flag' && drawerFlag === id) closeDrawer();
-      cardNote('', '', 'flags-list', 'dismissed');
-      fetchTelemetry();
-    } catch (err) {
-      revert();
-      showToast(`Failed to dismiss flag: ${err.message || err}`, 'danger');
-    }
+    await stagedWrite.write(revert, () => stagedWrite.send('POST', '/flags/acknowledge', { flag_id: id }), {
+      ok: () => {
+        revert.commit?.();
+        showToast('Flag dismissed — the rule keeps watching', 'info');
+        if (revert.isCurrent?.() !== false && !attentionSelection && drawerMode === 'flag' && drawerFlag === id) closeDrawer();
+        cardNote('', '', 'flags-list', 'dismissed');
+        fetchTelemetry();
+      },
+      error: err => showToast(`Failed to dismiss flag: ${err.message || err}`, 'danger')
+    });
   };
 
   // Revision-bound records use their captured revisions; source-only rows
@@ -2466,10 +2437,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const n = rows.length;
     if (!await window.saConfirm(`Mark ${n} finding${n === 1 ? '' : 's'} reviewed? They stay in history; rules keep watching.`,
       { title: 'Mark reviewed', okLabel: 'Mark reviewed', danger: false })) return;
-    const revert = stage(['routine', 'patterns', 'flags', 'flagsView', 'posture'], ['flags', 'attention', 'posture', 'chart-flags', 'status', 'tab-badges'], () => {
+    const revert = stagedWrite.stage(['routine', 'patterns', 'flags', 'flagsView', 'posture'], ['flags', 'attention', 'posture', 'chart-flags', 'status', 'tab-badges'], () => {
       Object.assign(telemetryData, reviewedAfterOptimistic(telemetryData, ids));
     });
-    try {
+    const saved = await stagedWrite.write(revert, async () => {
       for (const review of reviews) {
         const res = await apiFetch('/reviews/decision', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2481,24 +2452,22 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (!res.ok) throw new Error(await res.text());
       }
-      for (let i = 0; i < ids.length; i += 500) {
-        const res = await apiFetch('/flags/acknowledge', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ flag_ids: ids.slice(i, i + 500) })
-        });
-        if (!res.ok) throw new Error(await res.text());
-      }
-    } catch (err) {
-      revert();
-      showToast(`Mark reviewed failed: ${err.message || err}`, 'danger');
+      for (let i = 0; i < ids.length; i += 500) await stagedWrite.send('POST', '/flags/acknowledge', { flag_ids: ids.slice(i, i + 500) });
+      return { ok: true };
+    }, {
+      ok: () => {
+        revert.commit?.();
+        historySelected.clear();
+        syncHistoryChecks();
+        showToast(`Marked ${n} reviewed — the rules keep watching`, 'success');
+      },
+      error: err => showToast(`Mark reviewed failed: ${err.message || err}`, 'danger')
+    });
+    if (!saved) {
       await fetchTelemetry();
       markDirty(['flags', 'attention']);
       return;
     }
-    revert.commit?.();
-    historySelected.clear();
-    syncHistoryChecks();
-    showToast(`Marked ${n} reviewed — the rules keep watching`, 'success');
     fetchTelemetry();
   };
 
@@ -3315,7 +3284,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.resolveResourceControl = async function(id, decision, sessionKey, actionName) {
     const verb = decision === 'dismiss' ? 'keep this session running' : decision === 'resume' ? 'resume this entire session' : `apply ${String(actionName || 'this intervention').replaceAll('_', ' ')}`;
     if (!await saConfirm(`Save this resource policy change: ${verb}?`, { title: 'Resource policy', okLabel: 'Save' })) return;
-    const revert = stage(['posture', 'resources'], ['attention', 'posture', 'resources', 'tab-badges'], () => {
+    const revert = stagedWrite.stage(['posture', 'resources'], ['attention', 'posture', 'resources', 'tab-badges'], () => {
       if (!id) return;
       mapAttentionItems(it => (it.kind === 'resource' && it.id === id ? null : it));
       const r = telemetryData.resources;
@@ -3323,21 +3292,18 @@ document.addEventListener('DOMContentLoaded', () => {
         telemetryData.resources = { ...r, control: { ...r.control, pending: r.control.pending.filter(x => x.id !== id) } };
       }
     });
-    try {
-      const res = await apiFetch('/resources/control', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ id, decision, session_key: sessionKey || '' })
-      });
-      if (!res.ok) throw new Error(await res.text());
-      revert.commit?.();
-      showToast(decision === 'dismiss' ? 'Session kept running for the cooldown window.' : decision === 'resume' ? 'Session resumed.' : 'Intervention applied.', 'success');
-      cardNote('', '', activeTab === 'system' && activeSystemSub === 'resources' ? 'resource-board' : 'attention-list', decision === 'dismiss' ? 'kept running' : decision === 'resume' ? 'resumed' : 'applied');
-      fetchTelemetry({ slow: true });
-    } catch (err) {
-      revert();
-      showToast(`Resource decision failed: ${err}`, 'danger');
-      fetchTelemetry({ slow: true });
-    }
+    await stagedWrite.write(revert, () => stagedWrite.send('POST', '/resources/control', { id, decision, session_key: sessionKey || '' }), {
+      ok: () => {
+        revert.commit?.();
+        showToast(decision === 'dismiss' ? 'Session kept running for the cooldown window.' : decision === 'resume' ? 'Session resumed.' : 'Intervention applied.', 'success');
+        cardNote('', '', activeTab === 'system' && activeSystemSub === 'resources' ? 'resource-board' : 'attention-list', decision === 'dismiss' ? 'kept running' : decision === 'resume' ? 'resumed' : 'applied');
+        fetchTelemetry({ slow: true });
+      },
+      error: err => {
+        showToast(`Resource decision failed: ${err}`, 'danger');
+        fetchTelemetry({ slow: true });
+      }
+    });
   };
 
   window.resolveGuardPrompt = async function(id, verdict, scope, expiry) {
@@ -3345,27 +3311,22 @@ document.addEventListener('DOMContentLoaded', () => {
       ? (scope === 'always' ? 'allow every future path matched by this rule' : scope === 'session' ? 'allow this file and tool in this session until it ends' : scope === 'exact' ? `allow this file and tool in this workspace for ${expiry === '7d' ? '7 days' : '24 hours'}` : 'allow this request once')
       : (scope === 'always' ? 'deny every future path matched by this rule' : 'deny this request once');
     if (scope !== 'once' && !await saConfirm(`Apply guard decision: ${action}? Executable identity uses its observed path. File approvals do not authorize network access. Revoke under Protection → Rules & permissions.`, { title: 'Guard decision', okLabel: 'Apply' })) return;
-    const revert = stage(['guardPending', 'posture'], ['attention', 'posture', 'tab-badges'], () => {
+    const revert = stagedWrite.stage(['guardPending', 'posture'], ['attention', 'posture', 'tab-badges'], () => {
       telemetryData.guardPending = (telemetryData.guardPending || []).filter(x => x.id !== id);
       mapAttentionItems(it => (it.kind === 'guard' && it.id === id ? null : it));
     });
-    try {
-      const res = await apiFetch('/guard/resolve', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, verdict, scope, ...(expiry ? {expiry} : {}) })
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const receipt = await res.json();
-      if (!receipt.resolved) throw new Error('This request is unavailable for that decision. Refresh requests and permissions.');
-      revert.commit?.();
-      showToast(`Guard decision saved: ${action}.`, 'success');
-      cardNote('', '', 'attention-list', verdict === 'allow' ? 'allowed' : 'denied');
-      if (sessionWorkbench.selectedSessionId) sessionWorkbench.refresh('overview');
-      fetchTelemetry({ slow: false });
-    } catch (err) {
-      revert();
-      showToast(`Guard decision failed: ${err}`, 'danger');
-    }
+    await stagedWrite.write(revert, () => stagedWrite.send('POST', '/guard/resolve', { id, verdict, scope, ...(expiry ? {expiry} : {}) }), {
+      ok: async res => {
+        const receipt = await res.json();
+        if (!receipt.resolved) throw new Error('This request is unavailable for that decision. Refresh requests and permissions.');
+        revert.commit?.();
+        showToast(`Guard decision saved: ${action}.`, 'success');
+        cardNote('', '', 'attention-list', verdict === 'allow' ? 'allowed' : 'denied');
+        if (sessionWorkbench.selectedSessionId) sessionWorkbench.refresh('overview');
+        fetchTelemetry({ slow: false });
+      },
+      error: err => showToast(`Guard decision failed: ${err}`, 'danger')
+    });
   };
 
   let resourcePolicyDraft = null;
@@ -3561,23 +3522,21 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!await window.saConfirm(`${description} Security flags, guard decisions, and proxy inspection continue.`, {
       title: kind === 'scope' ? 'Expect this activity scope' : 'Expect this destination', okLabel: 'Save expectation', danger: false
     })) return;
-    const revert = stage(['egressEpisodes', 'posture'], ['recurring-egress', 'attention', 'posture', 'status', 'tab-badges'], () => {
+    const revert = stagedWrite.stage(['egressEpisodes', 'posture'], ['recurring-egress', 'attention', 'posture', 'status', 'tab-badges'], () => {
       Object.assign(telemetryData, egressAfterExpect(telemetryData, episodeId, kind));
     });
-    try {
-      const res = await apiFetch('/expected-egress', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ episode_id: episodeId, kind })
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    } catch (err) {
-      revert();
-      showToast(`Could not save expectation: ${err}`, 'danger');
-      return;
-    }
-    revert.commit?.();
-    showToast('Expected connection saved. Security detection remains active.', 'success');
-    await fetchTelemetry({ slow: true });
+    const saved = await stagedWrite.write(revert, () => apiFetch('/expected-egress', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episode_id: episodeId, kind })
+    }), {
+      ok: () => {
+        revert.commit?.();
+        showToast('Expected connection saved. Security detection remains active.', 'success');
+      },
+      failed: res => showToast(`Could not save expectation: Error: HTTP ${res.status}`, 'danger'),
+      error: err => showToast(`Could not save expectation: ${err}`, 'danger')
+    });
+    if (saved) await fetchTelemetry({ slow: true });
   }
 
   async function revokeExpectedEgress(id) {
@@ -3605,7 +3564,7 @@ document.addEventListener('DOMContentLoaded', () => {
     request: apiFetch,
     toast: showToast,
     refetch: fetchTelemetry,
-    stage,
+    writes: stagedWrite,
     telemetry: () => telemetryData,
     cardNote,
     cssq,
