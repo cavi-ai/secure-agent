@@ -16,7 +16,7 @@ func ProjectSubjectID(project string) string { return "project:" + project }
 // worktree note it drops (reports false) on a full queue and is display
 // only: no verdict, removal or clearing ever reads it.
 func (s *Subscriber) EnqueueProject(req model.ProjectCleanupRequest) bool {
-	t := task{kind: "project", subjectID: ProjectSubjectID(req.Project), project: req}
+	t := task{kind: projectKind, subjectID: ProjectSubjectID(req.Project), project: req}
 	select {
 	case s.queue <- t:
 		return true

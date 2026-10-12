@@ -158,7 +158,7 @@ func (s *Subscriber) EnqueuePlan(req PlanRequest) bool {
 	s.planInflight[req.SubjectID] = time.Now()
 	s.mu.Unlock()
 	select {
-	case s.queue <- task{kind: "plan", subjectID: req.SubjectID, plan: req}:
+	case s.queue <- task{kind: planKind, subjectID: req.SubjectID, plan: req}:
 		return true
 	default:
 		s.clearPlan(req.SubjectID)

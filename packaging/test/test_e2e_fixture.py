@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Exercise fixture failure reporting without starting the daemon."""
 import pathlib
+import json
+import select
 import subprocess
+import sys
 import tempfile
 import unittest
+import urllib.request
 
 
 class FixtureLivenessTests(unittest.TestCase):
@@ -37,6 +41,68 @@ class FixtureLivenessTests(unittest.TestCase):
         result = self.check_fixture("true")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("exit 0", result.stderr)
+
+
+class AdvisorFixtureTests(unittest.TestCase):
+    def start_from_smoke(self, script_dir):
+        source = pathlib.Path(__file__).with_name("e2e_smoke.sh").read_text()
+        startup = 'mkfifo "$tmp/advisor-ready"' + source.split(
+            'mkfifo "$tmp/advisor-ready"', 1
+        )[1].split('\n# Create a test overlay', 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            return subprocess.run(
+                ["bash", "-c", 'set -euo pipefail\ntmp=$1\nSCRIPT_DIR=$2\n'
+                 + 'ADVISOR_STUB_PID=""\ntrap \'kill "$ADVISOR_STUB_PID" 2>/dev/null || true\' EXIT\n'
+                 + startup + '\nprintf "%s\\n" "$ADVISOR_ENDPOINT"\n',
+                 "advisor-test", directory, str(script_dir)],
+                capture_output=True, text=True, timeout=15,
+            )
+
+    def test_smoke_waits_for_bound_listener(self):
+        result = self.start_from_smoke(pathlib.Path(__file__).resolve().parents[2])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.strip().startswith("http://127.0.0.1:"))
+
+    def test_smoke_reports_startup_failure(self):
+        with tempfile.TemporaryDirectory() as missing:
+            result = self.start_from_smoke(missing)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Advisor stub failed to start", result.stderr)
+        self.assertIn("advisor_stub.py", result.stderr)
+
+    def test_ready_stubs_use_distinct_ports_and_return_verdicts(self):
+        processes = []
+        self.addCleanup(lambda: self.stop(processes))
+        endpoints = []
+        for _ in range(2):
+            process = subprocess.Popen(
+                [sys.executable, str(pathlib.Path(__file__).with_name("advisor_stub.py"))],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            processes.append(process)
+            readable, _, _ = select.select([process.stdout], [], [], 5)
+            self.assertTrue(readable, "advisor fixture did not signal readiness")
+            endpoint = process.stdout.readline().strip()
+            self.assertTrue(endpoint.startswith("http://127.0.0.1:"), endpoint)
+            endpoints.append(endpoint)
+            request = urllib.request.Request(
+                endpoint + "/v1/chat/completions",
+                data=json.dumps({"model": "e2e-stub-4b", "messages": []}).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                choices = json.load(response)["choices"]
+            self.assertEqual(len(choices), 1)
+            verdict = json.loads(choices[0]["message"]["content"])
+            self.assertEqual(verdict["assessment"], "benign")
+            self.assertEqual(verdict["rationale"], "routine workflow")
+        self.assertNotEqual(*endpoints)
+
+    @staticmethod
+    def stop(processes):
+        for process in processes:
+            process.terminate()
+            process.communicate(timeout=5)
 
 
 if __name__ == "__main__":

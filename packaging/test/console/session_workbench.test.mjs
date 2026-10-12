@@ -59,6 +59,80 @@ function controller(persisted = '', manualOverview = false) {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+function statusFocusRender(options = {}) {
+  const source = readFileSync(path.join(web, 'session-workbench.js'), 'utf8');
+  const calls = [];
+  const heading = () => ({tagName: 'H4', dataset: {}, isConnected: true, closest: () => null,
+    getClientRects: () => options.hiddenHeading ? [] : [{}],
+    focus(focusOptions) { calls.push(focusOptions); context.document.activeElement = this; }});
+  let current = heading();
+  const original = current;
+  const outside = {tagName: 'BUTTON', dataset: {}, isConnected: true};
+  const unrelated = {...heading(), tagName: options.focusTag || 'H4', dataset: options.focusDataset || {}};
+  const focused = options.outside ? outside : options.unrelated ? unrelated : original;
+  const body = {scrollTop: 0, scrollHeight: 1000, clientHeight: 200,
+    getClientRects: () => options.hiddenBody ? [] : [{}], getBoundingClientRect: () => ({top: 0, bottom: 200}),
+    querySelectorAll: () => [], querySelector: () => null, addEventListener() {}};
+  let markup = 'initial';
+  const detail = {_sessionReadingKey: options.oldKey || 'a|memory', _sessionSelectedId: options.oldSession || 'a', _sessionMarkup: markup,
+    contains: node => node !== outside,
+    querySelectorAll: () => [],
+    querySelector: selector => selector === '.session-detail-body' ? body
+      : selector === '.sd-current-head h4' ? current
+      : selector === 'h3' || selector === 'summary' || selector.startsWith('[data-action="session-view"]') ? current : null};
+  const context = {selectedSessionId: 'a', sessionView: options.view || 'memory', sessionReadingState: new Map([['a|memory', {loaded: true}]]),
+    sessionTimeline: [], sessionOutcomes: null, sessionMemoryPage: {rows: []}, CSS: {escape: value => value},
+    document: {activeElement: focused}, snapshot: () => ({}), sessionDetailHTML: () => markup,
+    applyInlineMetrics() {}, patchSessionDetail() {
+      if (!options.connected && !options.outside) { context.document.activeElement.isConnected = false; context.document.activeElement = null; }
+      current = options.missingHeading ? null : options.connected ? current : heading();
+    }};
+  vm.createContext(context);
+  const start = source.indexOf('  function renderSessionDetail(');
+  vm.runInContext(source.slice(start, source.indexOf('  function renderSessionBoard(', start)), context);
+  return {context, calls, body, original, outside, get current() { return current; },
+    render(nextMarkup) { markup = nextMarkup; context.renderSessionDetail(detail, {id: 'a'}, [], ''); }};
+}
+
+test('Current status focus follows replacement on refresh failure and recovery within the same session and view', () => {
+  for (const view of ['memory', 'trace']) {
+    const c = statusFocusRender({view, oldKey: 'a|' + view});
+    for (const state of ['refreshed', 'unavailable', 'recovered']) {
+      c.render(state);
+      assert.equal(c.context.document.activeElement, c.current);
+      assert.equal(c.current.isConnected, true);
+      assert.equal(c.calls.at(-1).preventScroll, true);
+      assert.equal(c.body.scrollTop, 0, 'Current status reading position remains unchanged');
+    }
+    assert.equal(c.calls.length, 3);
+  }
+});
+
+test('Current status restoration leaves connected, outside, unrelated and different reading contexts alone', () => {
+  for (const options of [{connected: true}, {outside: true}, {unrelated: true}, {oldKey: 'a|trace'},
+    {oldSession: 'b', oldKey: 'b|memory'}, {missingHeading: true}, {hiddenHeading: true}, {hiddenBody: true}]) {
+    const c = statusFocusRender(options);
+    const before = c.context.document.activeElement;
+    c.render('unavailable');
+    assert.equal(c.calls.length, 0, JSON.stringify(options));
+    if (options.connected || options.outside) assert.equal(c.context.document.activeElement, before);
+  }
+  const unchanged = statusFocusRender();
+  unchanged.render('initial');
+  assert.equal(unchanged.context.document.activeElement, unchanged.original);
+  assert.equal(unchanged.calls.length, 0);
+});
+
+test('existing title, disclosure and action focus restoration remains available', () => {
+  for (const options of [{focusTag: 'H3'}, {focusTag: 'SUMMARY'}, {focusTag: 'BUTTON', focusDataset: {action: 'session-view', view: 'trace'}}]) {
+    const c = statusFocusRender({...options, unrelated: true});
+    c.render('refreshed');
+    assert.equal(c.context.document.activeElement, c.current);
+    assert.equal(c.calls.length, 1);
+    assert.equal(c.calls[0].preventScroll, true);
+  }
+});
+
 test('Jump to latest captures owned focus before scroll hides the control and announces the visible reading body once', () => {
   const c = controller();
   const calls = [], announcements = [];

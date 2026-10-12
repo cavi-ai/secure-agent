@@ -310,7 +310,7 @@ func TestCodexHomeLabel(t *testing.T) {
 // (a backfilled rollout) never replaces a newer one. Two homes sharing a
 // label (e.g. two ".codex" dirs) are both served, keyed apart by home_path.
 func TestRecordPlanKeepsNewestPerHome(t *testing.T) {
-	home := "/tmp/registry-test-home"
+	home := filepath.Join(t.TempDir(), "registry-test-home")
 	home2 := home + "-2"
 	t0 := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 	snap := func(pct float64, at time.Time) PlanSnapshot {

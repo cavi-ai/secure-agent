@@ -4,7 +4,7 @@ import XCTest
 final class AdvisorPreferencesTests: XCTestCase {
     func testModelChangePreservesRuntimeAndUnknownSettings() throws {
         let yaml = "advisor:\n  enabled: true\n  model: old\n  endpoint: http://127.0.0.1:8080\n  timeout_ms: 120000\n  classifier_endpoint: http://127.0.0.1:8009\n  classifier_model: kev-latest\n  debug: true\n  future_setting: keep\nfirewall:\n  mode: monitor\n"
-        let changed = try SetupManager.advisorConfigSetting(yaml, mode: .managed, endpoint: nil, model: "local-model")
+        let changed = try AdvisorPreferences.settingModel(yaml, managed: true, endpoint: nil, model: "local-model")
         XCTAssertTrue(changed.contains("  timeout_ms: 120000\n"))
         XCTAssertTrue(changed.contains("  classifier_endpoint: http://127.0.0.1:8009\n"))
         XCTAssertTrue(changed.contains("  debug: true\n"))

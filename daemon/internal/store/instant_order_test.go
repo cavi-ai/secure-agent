@@ -219,7 +219,7 @@ func TestCleanupTotalsHonorFractionWidths(t *testing.T) {
 	s := activityStore(t)
 	now := subsecond.Truncate(time.Second).Add(30 * 24 * time.Hour)
 	s.PutCleanup(model.CleanupEntry{TS: now.Add(-30*24*time.Hour + 500*time.Millisecond), Action: "worktree-remove", Path: "/w/x", Bytes: 7})
-	if got := s.CleanupTotals(now); got.Count30d != 1 || got.Bytes30d != 7 {
+	if got, err := s.CleanupTotals(now); err != nil || got.Count30d != 1 || got.Bytes30d != 7 {
 		t.Fatalf("CleanupTotals 30d = %d rows %d bytes, want 1 row 7 bytes", got.Count30d, got.Bytes30d)
 	}
 }

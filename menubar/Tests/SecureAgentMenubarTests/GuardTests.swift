@@ -36,31 +36,31 @@ final class GuardTests: XCTestCase {
     // MARK: - advisor config YAML helpers
 
     func testAdvisorConfigEnableAppendsBlockWhenAbsent() throws {
-        let out = try SetupManager.advisorConfigUpdating("proxy_enabled: true\n", enabled: true)
-        XCTAssertTrue(SetupManager.advisorConfigIsEnabled(out))
+        let out = try AdvisorPreferences.settingEnabled("proxy_enabled: true\n", enabled: true)
+        XCTAssertTrue(ConfigDocument(out).flag("enabled", in: "advisor"))
         XCTAssertTrue(out.contains("proxy_enabled: true")) // untouched
         XCTAssertTrue(out.contains("endpoint: \"http://127.0.0.1:8080\""))
     }
 
     func testAdvisorConfigFlipsEnabledLineOnly() throws {
         let yaml = "proxy_enabled: true\nadvisor:\n  enabled: false\n  endpoint: \"http://127.0.0.1:8080\"\n  model: \"qwen\"\n"
-        let out = try SetupManager.advisorConfigUpdating(yaml, enabled: true)
-        XCTAssertTrue(SetupManager.advisorConfigIsEnabled(out))
+        let out = try AdvisorPreferences.settingEnabled(yaml, enabled: true)
+        XCTAssertTrue(ConfigDocument(out).flag("enabled", in: "advisor"))
         XCTAssertTrue(out.contains("model: \"qwen\"")) // other keys preserved
         // and flipping back works
-        let off = try SetupManager.advisorConfigUpdating(out, enabled: false)
-        XCTAssertFalse(SetupManager.advisorConfigIsEnabled(off))
+        let off = try AdvisorPreferences.settingEnabled(out, enabled: false)
+        XCTAssertFalse(ConfigDocument(off).flag("enabled", in: "advisor"))
     }
 
     func testAdvisorConfigMissingFileIsDisabled() {
-        XCTAssertFalse(SetupManager.advisorConfigIsEnabled(""))
-        XCTAssertFalse(SetupManager.advisorConfigIsEnabled("proxy_enabled: true\n"))
+        XCTAssertFalse(ConfigDocument("").flag("enabled", in: "advisor"))
+        XCTAssertFalse(ConfigDocument("proxy_enabled: true\n").flag("enabled", in: "advisor"))
     }
 
     func testAdvisorConfigIgnoresKeysOutsideBlock() {
         // An `enabled:` line in another section must not count.
         let yaml = "firewall:\n  enabled: true\nadvisor:\n  enabled: false\n"
-        XCTAssertFalse(SetupManager.advisorConfigIsEnabled(yaml))
+        XCTAssertFalse(ConfigDocument(yaml).flag("enabled", in: "advisor"))
     }
 
     // MARK: - advisor full-block writer (Settings advisor pane)
@@ -80,19 +80,19 @@ final class GuardTests: XCTestCase {
     }
 
     func testAdvisorConfigSettingManagedWritesManagedBlock() throws {
-        let out = try SetupManager.advisorConfigSetting("proxy_enabled: true\n", mode: .managed, endpoint: nil,
-                                                    model: "mlx-community/Qwen3-4B-4bit")
+        let out = try AdvisorPreferences.settingModel("proxy_enabled: true\n", managed: true, endpoint: nil,
+                                                      model: "mlx-community/Qwen3-4B-4bit")
         XCTAssertTrue(out.contains("managed: true"))
         XCTAssertTrue(out.contains("managed_model: \"mlx-community/Qwen3-4B-4bit\""))
         XCTAssertFalse(out.contains("endpoint:")) // managed derives it
-        XCTAssertTrue(SetupManager.advisorConfigIsEnabled(out))
+        XCTAssertTrue(ConfigDocument(out).flag("enabled", in: "advisor"))
         XCTAssertTrue(out.contains("proxy_enabled: true"))
     }
 
     func testAdvisorConfigSettingExistingReplacesOldBlock() throws {
         let old = "advisor:\n  enabled: true\n  endpoint: \"http://127.0.0.1:8080\"\n  model: \"old\"\nfirewall:\n  mode: monitor\n"
-        let out = try SetupManager.advisorConfigSetting(old, mode: .existing,
-                                                    endpoint: "http://127.0.0.1:11434", model: "qwen3:4b")
+        let out = try AdvisorPreferences.settingModel(old, managed: false,
+                                                      endpoint: "http://127.0.0.1:11434", model: "qwen3:4b")
         XCTAssertTrue(out.contains("endpoint: \"http://127.0.0.1:11434\""))
         XCTAssertTrue(out.contains("model: \"qwen3:4b\""))
         XCTAssertFalse(out.contains("model: \"old\""))

@@ -10,7 +10,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Advisor: read-only evidence tools and optional local classification for context routing.
 - Chat: read tools for built-in skills, findings and session activity, with tool progress; **New chat** resets the context.
 - CLI: `secure-agent telemetry repair`.
-- Console: a System tab for worktrees and clutter, filtered by the header search, replaces Sessions → Cleanup.
+- Console: a System tab for CPU, memory, pressure history, worktrees and clutter, filtered by the header search, replaces Sessions → Cleanup; unreadable cleanup history, reclaimed space and agent asks show as unavailable.
 - Console: a notice on any report that failed to refresh, and a banner that claims all-clear only after telemetry loads, with **Retry**.
 - Console: the same reads across agents are one decision with **Treat as routine** and **Dismiss all** (`flag_ids` on `POST /expected`).
 - Cursor: Secure Agent's tool hooks run beside the user's hooks.
@@ -52,6 +52,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: findings show their file and destinations as chips.
 - Console: the page fills wide windows, with decision groups two-up.
 - Console: disabled buttons are dimmed.
+- Console: revoking a permission or removing an expected read or file exception asks for confirmation.
 - Console: a Protection tab with Traffic, Rules & permissions, Secret sources and Audit replaces Egress and Policy; recurring activity opens its saved expectation.
 - Console: the session view, filters, scroll and focus survive Back and Forward, drawers and expired credentials, which pause controls until the console reconnects.
 - Console and menu bar: Home and the hero list only decisions that need you, each with its evidence, uncertainty, control outcome and action consequences; warnings and recurring connections stay in the findings history, now a compact log.
@@ -77,7 +78,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Settings → Exceptions: muted flags grouped by rule, beside allowed files.
 - Settings → File Guard and Notifications: mode menus replace segmented controls.
 - Settings → Providers: every daemon harness by name with its mark, Codex, Cursor, OpenClaw and Hermes first, toggles applied without a restart.
-- Spend: saved spend shows at once while it refreshes; one quota per shared Codex account; a daily usage bar opens that day's breakdown.
+- Spend: saved spend shows at once while it refreshes; one quota per shared Codex account; a daily usage bar, chosen by click or arrow keys, opens that day's breakdown.
 - Worktrees: the live-session button reads **Ask <harness>**.
 - Worktrees: the advisor sees the merge verdict and the default branch's side.
 
@@ -112,8 +113,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Firewall: fingerprint reloads and ingestion leave the registry unchanged when a source, the salt or the engine fails.
 - Fleet: `/status` and `/fleet` share one live `fleet_configured`.
 - Fleet: security alerts keep delivery capacity when traces fill the queue.
+- Fleet: delivery logs are capped at 5 MiB with one backup, and the collector keeps critical counts through replay.
 - Forensic archive: kept when rotation fails.
-- Findings and incidents: lists and retention keep the newest by exact timestamp.
 - Incidents: a report opens from any aggregated flag, workflow actions change only that report, and it keeps its newest evidence time, original flag and saved remediation; a duplicate never replaces it.
 - Menu bar: a hidden status item is recreated once per loss.
 - Menu bar: an action's result stays visible after its finding leaves the queue.
@@ -128,6 +129,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Sessions: a silent session rooted in another family's infra ends after an hour.
 - Sessions: Antigravity sessions are recorded as `antigravity`.
 - Sessions: ended sessions release their write throttle once stored.
+- Store: lists, retention, `since` and `until` filters and first-seen times order by exact instant across time zones.
 - Store: records are published only after they are stored.
 - Store: failed session writes are retried.
 - Store: schema upgrades run in one transaction.

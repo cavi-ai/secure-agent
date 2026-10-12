@@ -58,26 +58,14 @@ COLLECTOR_PID=$!
 # Local-advisor stub: an OpenAI-compatible chat endpoint on loopback that
 # always returns a benign triage verdict. The daemon's advisor must call it
 # for the flag below and attach the verdict to /flags.
-ADVISOR_PORT=$((21000 + RANDOM % 2000))
-cat > "$tmp/advisor_stub.py" <<PYEOF
-import http.server, json
-class H(http.server.BaseHTTPRequestHandler):
-    def do_POST(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        self.rfile.read(n)
-        body = json.dumps({"choices": [{"message": {"role": "assistant",
-            "content": '{"assessment":"benign","confidence":0.9,"rationale":"routine workflow","suggested_action":"none"}'}}]}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-    def log_message(self, *a):
-        pass
-http.server.HTTPServer(("127.0.0.1", $ADVISOR_PORT), H).serve_forever()
-PYEOF
-python3 "$tmp/advisor_stub.py" > "$tmp/advisor_stub.log" 2>&1 &
+mkfifo "$tmp/advisor-ready"
+python3 "$SCRIPT_DIR/packaging/test/advisor_stub.py" > "$tmp/advisor-ready" 2> "$tmp/advisor_stub.log" &
 ADVISOR_STUB_PID=$!
+if ! read -r -t 10 ADVISOR_ENDPOINT < "$tmp/advisor-ready"; then
+  echo "Advisor stub failed to start." >&2
+  cat "$tmp/advisor_stub.log" >&2
+  exit 1
+fi
 
 # Create a test overlay config with fast sampling interval for smoke test
 cat > "$tmp/test_config.yaml" <<EOF
@@ -107,7 +95,7 @@ firewall:
     salt_ref: "$tmp/fw-salt"
 advisor:
   enabled: true
-  endpoint: "http://127.0.0.1:$ADVISOR_PORT"
+  endpoint: "$ADVISOR_ENDPOINT"
   model: "e2e-stub-4b"
   timeout_ms: 4000
 fleet:
@@ -441,6 +429,8 @@ else
   echo "Advisor: MISSING verdict on /flags."
   curl -s --unix-socket "$SOCKET_PATH" http://unix/status | python3 -c 'import json, sys; status = json.load(sys.stdin); print("Advisor health:", json.dumps({key: status.get(key) for key in ("advisor_enabled", "advisor_health")}))' || true
   echo "Advisor stub log: $(cat "$tmp/advisor_stub.log" 2>/dev/null || true)"
+  echo "Advisor daemon diagnostics:"
+  grep 'advisor:' "$tmp/daemon.log" || true
 fi
 
 # ---------------------------------------------------------------------------
