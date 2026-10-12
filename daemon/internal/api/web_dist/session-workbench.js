@@ -741,10 +741,11 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     const oldKey = detail._sessionReadingKey;
     const oldSession = detail._sessionSelectedId;
     const focused = detail.contains(document.activeElement) ? document.activeElement : null;
+    const currentStatusFocus = !!focused && oldKey === key && focused === detail.querySelector('.sd-current-head h4');
     const focusedRow = focused?.closest('[data-row-id]');
     const focusWithinRow = focusedRow ? '[data-row-id="' + CSS.escape(focusedRow.dataset.rowId) + '"] ' : '';
     const focusTarget = focused && (focused.tagName === 'SUMMARY' ? 'summary'
-      : focused.dataset.action ? '[data-action="' + focused.dataset.action + '"]' + (focused.dataset.view ? '[data-view="' + focused.dataset.view + '"]' : '') : focused.tagName === 'H3' ? 'h3' : null);
+      : focused.dataset.action ? '[data-action="' + focused.dataset.action + '"]' + (focused.dataset.view ? '[data-view="' + focused.dataset.view + '"]' : '') : focused.tagName === 'H3' ? 'h3' : currentStatusFocus ? '.sd-current-head h4' : null);
     const focusKey = focusTarget && focusWithinRow + focusTarget;
     if (oldBody && oldKey && oldBody.getClientRects().length && detail._sessionReadingVisible !== false) {
       const bounds = oldBody.getBoundingClientRect();
@@ -794,7 +795,10 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     };
     if (!body._sessionScrollBound) { body.addEventListener('scroll', updateLatest, { passive: true }); body._sessionScrollBound = true; }
     updateLatest();
-    if (focusKey && oldSession === selectedSessionId && !focused.isConnected) detail.querySelector(focusKey)?.focus({ preventScroll: true });
+    if (focusKey && oldSession === selectedSessionId && !focused.isConnected) {
+      const target = detail.querySelector(focusKey);
+      if (target && (!currentStatusFocus || target.getClientRects().length)) target.focus({ preventScroll: true });
+    }
   }
 
   function renderSessionBoard() {

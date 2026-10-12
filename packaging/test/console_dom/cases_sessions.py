@@ -459,7 +459,22 @@ def run_session_latest_focus(page):
                 page.check(f'session latest focus ({width}): {name}', state.get(name) is True, str(state))
 
 
+def run_session_status_focus(page):
+    for width in (375, 1280):
+        dom = page.dom('?sessionstatusfocus', window_size=(width, 800), fixture=payload_cases.session_workbench(), served=True)
+        receipt = re.search(r'data-session-status-focus="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        page.check(f'session status focus ({width}): receipt produced', bool(state), str(state))
+        for mode in ('memory', 'trace'):
+            for assertion in ('Ready', 'Unchanged', 'Failure', 'Reading', 'Recovery', 'Outside', 'OutsideRecovery'):
+                name = mode + assertion
+                page.check(f'session status focus ({width}): {name}', state.get(name) is True, str(state))
+        for name in ('viewSwitch', 'sessionSwitch'):
+            page.check(f'session status focus ({width}): {name}', state.get(name) is True, str(state))
+
+
 CASES = (
+    Case('session_status_focus', run_session_status_focus),
     Case('session_latest_focus', run_session_latest_focus),
     Case('session_empty_navigation', run_session_empty_navigation),
     Case('session_discovery', run_session_discovery),
