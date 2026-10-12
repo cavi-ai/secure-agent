@@ -1664,7 +1664,11 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .session-card:hover { background: var(--bg-2); }
 .session-card.selected { background: var(--brand-bg); box-shadow: inset 2px 0 var(--brand); }
 .session-card.ended { color: var(--tx-2); }
-.session-card .sc-label { font-weight: 600; font-size: 12px; line-height: 16px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-card .sc-label, .session-dup-toggle .sc-label {
+  display: block; min-width: 0; font: 650 14px/1.4 var(--font); color: var(--tx-1);
+  padding: 5px 8px; border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  white-space: normal; overflow-wrap: anywhere;
+}
 .session-rows, .session-family, .session-dup-body { display: flex; flex-direction: column; }
 .session-dup { display: flex; flex-direction: column; border-bottom: 1px solid var(--line); background: transparent; }
 .session-dup.ended { color: var(--tx-2); }
@@ -1675,8 +1679,8 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .session-dup-toggle:hover { background: var(--bg-2); }
 .session-dup-toggle:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .session-dup-toggle .sc-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.session-dup-toggle .sc-label { min-width: 0; font-weight: 600; font-size: 12px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-dup-toggle .sc-meta { display: flex; gap: 8px; margin-top: 2px; font-size: 11px; color: var(--tx-2); }
+.session-dup-body .session-card .sc-label { font: 600 12px/16px var(--font); color: var(--tx-2); padding: 0; border: 0; border-radius: 0; }
 .session-dup-count, .family-dup-count { flex: none; font: 600 0.72rem/1 var(--mono); color: var(--tx-3); }
 .session-dup-toggle .icon, .family-dup-toggle .icon { flex: none; width: 11px; height: 11px; color: var(--tx-3); }
 .session-dup.open .session-dup-toggle .icon, .family-dup.open .family-dup-toggle .icon { transform: rotate(90deg); }
@@ -1723,7 +1727,8 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
   background: hsl(0 0% 50% / 0.14); /* fallback where color-mix is unavailable */
   background: color-mix(in srgb, var(--harness-color, var(--tx-2)) 16%, transparent);
 }
-.session-card .sc-meta { display: flex; gap: 8px; align-items: center; margin-top: 2px; font-size: 11px; line-height: 13px; color: var(--tx-2); }
+.session-card .sc-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 2px; font-size: 11px; line-height: 13px; color: var(--tx-2); }
+.session-card .sc-meta > span, .session-dup-toggle .sc-meta > span { flex: none; }
 .session-card .sc-state { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 999px; }
 .sc-state.active { color: var(--ok); background: var(--ok-bg); }
 .sc-state.idle { color: var(--warn); background: var(--warn-bg); }
@@ -1738,7 +1743,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .session-detail > .empty { flex: 1; padding: 24px; }
 .session-detail-chrome { flex: none; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--bg-1); }
 .session-detail-head { display: flex; align-items: center; gap: 6px 8px; min-width: 0; }
-.session-detail-head h3 { flex: 1; margin: 0; font-size: 16px; line-height: 1.35; min-width: 0; overflow-wrap: anywhere; }
+.session-detail-head h3 { flex: 1; margin: 0; font: 650 16px/1.35 var(--font); color: var(--tx-1); min-width: 0; overflow-wrap: anywhere; padding: 5px 8px; border: 1px solid var(--line-2); border-radius: var(--r-sm); }
 .session-detail-head h3:focus { outline: 2px solid var(--brand); outline-offset: 3px; }
 .session-detail-head .harness-tile { --harness-tile: var(--harness-tile-lg); }
 .sd-back { display: none; }
