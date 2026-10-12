@@ -120,8 +120,13 @@ def spend_plans(now_ms=None):
     return {"now": now, "patches": [
         {"route": "/costs/plans", "path": ["plans"], "value": [{
             "harness": "codex", "home": "codex", "plan_type": "pro", "limit_id": "codex",
+            "account_key": "fixture-account",
             "windows": [{"window_minutes": 10080, "used_percent": 52, "resets_at": iso(-3 * 24 * 3600000)}],
             "unlimited": False, "seen_at": iso(0),
+        }, {
+            "harness": "codex", "home": "old-home", "plan_type": "pro", "limit_id": "codex",
+            "windows": [{"window_minutes": 10080, "used_percent": 71, "resets_at": iso(-3 * 24 * 3600000)}],
+            "unlimited": False, "seen_at": iso(2 * 24 * 3600000),
         }]},
         {"route": "/costs", "path": ["total", "plan_calls"], "value": 12},
     ]}
