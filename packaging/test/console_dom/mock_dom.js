@@ -12,7 +12,11 @@
   const { now, iso, data, scenarios } = fixture;
   const routes = new Map();
   const realFetch = window.fetch.bind(window);
-  const readingFetch = scenarios.has('readingdemo') || scenarios.has('worktreehierarchy') || scenarios.has('sessiondiscovery') ? window.fetch.bind(window) : null;
+  const readingFetch = scenarios.has('readingdemo') || scenarios.has('worktreehierarchy') || scenarios.has('sessiondiscovery') || scenarios.has('sessionemptynav') || scenarios.has('sessionlatestfocus') ? window.fetch.bind(window) : null;
+  if (scenarios.has('expectedremove')) data['/expected'] = [
+    { key: 'claude|gh|/synthetic/credentials|example.test', agent: 'claude', reader: 'gh', path: '/synthetic/credentials', dest: 'example.test', created_at: iso(60000), hits: 2 },
+    { key: 'claude|*|/synthetic/.env.test|*', scope: 'file', agent: 'claude', reader: '*', path: '/synthetic/.env.test', dest: '*', created_at: iso(60000), hits: 0 },
+  ];
   if (scenarios.has('policyhealth')) data['/decision-scopes'] = [{
     id: 'policy-health-scope', kind: 'exact', agent: 'claude', rule_id: 'sensitive-read-then-connect',
     operation: 'read-connect', resource_path: '/synthetic/credentials', destination: 'example.test:443',
@@ -768,7 +772,7 @@
       };
     }
     // Dense workbench pages exercise real scroll anchoring and focus continuity.
-    if ((scenarios.has('sessionworkbench') || scenarios.has('readingdemo') || scenarios.has('authhistory')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
+    if ((scenarios.has('sessionworkbench') || scenarios.has('readingdemo') || scenarios.has('authhistory') || scenarios.has('sessionlatestfocus')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
       const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
       const start = before ? -30 : 0;
       const rows = Array.from({ length: before ? 30 : 90 }, (_, i) => ({ id: 'wb-row-' + (start + i),
@@ -788,6 +792,7 @@
         interventions: own ? [{ id: 'synthetic-control', kind: 'pause', status: 'applied', verification: window.__resultsUpdate ? 'observed' : 'pending', requested_at: iso(60000), limits: ['Synthetic receipt; captured targets only.'] }] : [],
         incidents: own ? [{ id: 'synthetic-incident', remediation: { steps: [{ id: 'synthetic-step', item: { name: 'Synthetic key', action: 'Revoke key' }, status: 'reported', verification: 'unverified', reported_at: iso(30000), newer_evidence: true }] } }] : [],
       } };
+      if (scenarios.has('sessionlatestfocus')) body.history.reviews = Array.from({length: 60}, (_, i) => ({...body.history.reviews[0], id: 'latest-review-' + i}));
       return { ok: true, status: 200, json: async () => body };
     }
     const overviewMatch = p.match(/^\/sessions\/([^/]+)\/overview$/);
@@ -1075,7 +1080,7 @@
       window.saConfirm('Fixture action awaiting confirmation').then(value => { receipt.dialogCancelled = value === false; });
       authRecoveryExpired = true;
       // An action is rejected; recovery must never replay it.
-      await window.reviewAct('fixture-review', 1, 'dismiss');
+      await window.reviewAct('fixture-review', 1, 'acknowledge');
       receipt.paused = document.body.classList.contains('is-paused') && document.querySelector('main').inert
         && !document.querySelector('main').hidden && window.__sse.readyState === 2;
       receipt.retained = body === document.querySelector('#session-detail .session-detail-body')
@@ -1355,7 +1360,7 @@
       && document.getElementById('session-ended').hidden)), 5000);
   }
   if (scenarios.has('permissiondeny')) {
-    setTimeout(() => window.reviewAct('fixture-review', 1, 'dismiss'), 2000);
+    setTimeout(() => window.reviewAct('fixture-review', 1, 'acknowledge'), 2000);
     setTimeout(() => stamp('permission-retained', String(document.getElementById('session-ended').hidden
       && window.__sse.readyState === 1 && !!sessionStorage.getItem('sa.console-token'))), 4000);
   }
@@ -1557,6 +1562,47 @@
         receipt.fits = document.documentElement.scrollWidth <= document.documentElement.clientWidth;
       } catch (error) { receipt.error = error.message; }
       document.body.dataset.sessionReading = JSON.stringify(receipt);
+    }, 2500);
+  }
+  if (scenarios.has('sessionlatestfocus')) {
+    data['/sessions'].find(session => session.id === 'sess-claude-1')._timeline = Array.from({length: 90}, (_, i) => ({
+      id: 'latest-trace-' + i, session_id: 'sess-claude-1', kind: 12, ts: iso((90 - i) * 60000), tool: 'Retained trace ' + i, tool_status: 'ok', duration_ms: 10,
+    }));
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(async () => {
+      const receipt = {};
+      const checkpoint = () => readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+      const announcements = [];
+      const announce = window.saAnnounce;
+      window.saAnnounce = text => { announcements.push(text); announce(text); };
+      try {
+        await window.selectSession('sess-claude-1');
+        for (const mode of ['memory', 'trace', 'results']) {
+          await window.setSessionView(mode); await checkpoint();
+          const body = document.querySelector('#session-detail .session-detail-body');
+          const latest = document.querySelector('#session-detail [data-action="session-latest"]');
+          body.scrollTop = 0; body.dispatchEvent(new Event('scroll')); await checkpoint();
+          receipt[mode + 'Ready'] = body.scrollHeight > body.clientHeight + 64 && !latest.hidden;
+          latest.focus({preventScroll: true});
+          const x = scrollX, y = scrollY, before = announcements.length;
+          latest.click(); await checkpoint();
+          // The existing announcer publishes repeated text after its 30ms tick.
+          await new Promise(resolve => setTimeout(resolve, 40));
+          receipt[mode + 'Focus'] = document.activeElement === body && body.isConnected && !!body.getClientRects().length && body.getAttribute('tabindex') === '-1';
+          receipt[mode + 'Latest'] = latest.hidden && body.scrollHeight - body.clientHeight - body.scrollTop < 2;
+          receipt[mode + 'Page'] = scrollX === x && scrollY === y;
+          receipt[mode + 'Announcement'] = announcements.length === before + 1 && announcements.at(-1) === 'Moved to latest session content.'
+            && document.getElementById('a11y-live').textContent === 'Moved to latest session content.';
+          body.scrollTop = 0; body.dispatchEvent(new Event('scroll')); await checkpoint();
+          const outside = document.querySelector('.tab-btn[data-tab="sessions"]');
+          outside.focus({preventScroll: true});
+          const silent = announcements.length;
+          latest.click(); await checkpoint();
+          receipt[mode + 'Outside'] = document.activeElement === outside && announcements.length === silent && body.scrollHeight - body.clientHeight - body.scrollTop < 2;
+        }
+      } catch (error) { receipt.error = error.message; }
+      window.saAnnounce = announce;
+      document.body.dataset.sessionLatestFocus = JSON.stringify(receipt);
     }, 2500);
   }
   if (scenarios.has('sessionworkbench')) {
@@ -2294,6 +2340,42 @@
       const btn = document.querySelector('#worktrees-container .wt-row.wt-review [data-action="worktree-discuss"]');
       if (btn) btn.click();
     }, scenarios.has('discussoff') ? 9000 : 3000);
+  }
+  // dockcycle: Discuss opens the dock; the inspector drawer replaces it and
+  // Discuss again replaces the drawer; Escape while typing keeps it; Close
+  // returns the conversation to the Agent tab and focus to Discuss. Each
+  // step's state is stamped as JSON on #dock-cycle.
+  if (scenarios.has('dockcycle')) {
+    const state = () => {
+      const chat = document.getElementById('agent-chat');
+      const thread = document.getElementById('agent-thread');
+      return {
+        dock: !document.getElementById('agent-dock').hidden,
+        drawer: !document.getElementById('drawer').hidden,
+        chat: chat.parentElement.id || chat.parentElement.className,
+        tab: (document.querySelector('.tab-btn.active') || {}).dataset?.tab,
+        focus: document.activeElement.id || (document.activeElement.dataset || {}).action || document.activeElement.tagName,
+        end: thread.scrollHeight - thread.scrollTop - thread.clientHeight < 4,
+      };
+    };
+    const steps = {};
+    const discuss = () => document.querySelector('#worktrees-container .wt-row.wt-review [data-action="worktree-discuss"]');
+    setTimeout(() => { discuss().focus(); discuss().click(); }, 3000);
+    setTimeout(() => { steps.open = state(); document.querySelector('[data-action="worktrees-history"]').click(); }, 4500);
+    setTimeout(() => { steps.drawer = state(); discuss().focus(); discuss().click(); }, 5500);
+    setTimeout(() => {
+      steps.reopen = state();
+      const input = document.getElementById('agent-input');
+      input.value = 'half typed';
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    }, 7000);
+    setTimeout(() => {
+      steps.typing = state();
+      document.getElementById('agent-input').value = '';
+      document.querySelector('[data-action="agent-dock-close"]').click();
+    }, 7500);
+    setTimeout(() => { steps.closed = state(); stamp('dock-cycle', JSON.stringify(steps)); }, 8000);
   }
   if (scenarios.has('worktreedemo')) {
     setTimeout(() => {

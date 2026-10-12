@@ -69,11 +69,33 @@ func TestWorkspaceActivity(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("workspaces = %+v, want only the two absolute ones", got)
 	}
-	if one := got["/w/one"]; one.Live || !one.LastSeen.Equal(t0.Add(time.Hour)) {
-		t.Fatalf("/w/one = %+v, want ended with newest last_seen", one)
+	if one := got["/w/one"]; one.Live || !one.LastSeen.Equal(t0.Add(time.Hour)) || one.Harness != "codex" {
+		t.Fatalf("/w/one = %+v, want ended with the newest session's last_seen and harness (codex)", one)
 	}
-	if two := got["/w/two"]; !two.Live {
-		t.Fatalf("/w/two = %+v, want live (idle)", two)
+	if two := got["/w/two"]; !two.Live || two.Harness != "claude" {
+		t.Fatalf("/w/two = %+v, want live (idle) claude", two)
+	}
+
+	// The newest session names the folder, not the alphabetically last.
+	s.UpsertSession(model.Session{ID: "s5", Harness: "codex", Workspace: "/w/three", StartedAt: t0, LastSeenAt: t0, Status: model.SessionActive})
+	s.EndSession("s5", t0)
+	s.UpsertSession(model.Session{ID: "s6", Harness: "claude", Workspace: "/w/three", StartedAt: t0, LastSeenAt: t0.Add(time.Hour), Status: model.SessionActive})
+	s.EndSession("s6", t0.Add(time.Hour))
+	// A live session names the folder before a newer ended one, and a named
+	// session before an unnamed one.
+	s.UpsertSession(model.Session{ID: "s7", Harness: "claude", Workspace: "/w/four", StartedAt: t0, LastSeenAt: t0, Status: model.SessionIdle})
+	s.UpsertSession(model.Session{ID: "s8", Harness: "codex", Workspace: "/w/four", StartedAt: t0, LastSeenAt: t0.Add(time.Hour), Status: model.SessionActive})
+	s.EndSession("s8", t0.Add(time.Hour))
+	s.UpsertSession(model.Session{ID: "s9", Harness: "cursor", Workspace: "/w/five", StartedAt: t0, LastSeenAt: t0, Status: model.SessionActive})
+	s.UpsertSession(model.Session{ID: "s10", Workspace: "/w/five", StartedAt: t0, LastSeenAt: t0.Add(time.Hour), Status: model.SessionActive})
+	got = map[string]model.WorkspaceActivity{}
+	for _, a := range s.WorkspaceActivity() {
+		got[a.Workspace] = a
+	}
+	for ws, want := range map[string]string{"/w/three": "claude", "/w/four": "claude", "/w/five": "cursor"} {
+		if got[ws].Harness != want {
+			t.Errorf("%s harness = %q, want %q (%+v)", ws, got[ws].Harness, want, got[ws])
+		}
 	}
 }
 
