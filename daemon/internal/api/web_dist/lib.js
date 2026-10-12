@@ -2223,7 +2223,7 @@ function reviewResultHTML(result, details = false) {
   const scopes = d.scope_ids || [];
   const meaning = d.action === 'close_reported' ? 'Closure was reported; remediation has not been verified.'
     : d.action === 'expect' ? scopes.length
-      ? `${scopes.length} permission scope${scopes.length === 1 ? '' : 's'} recorded. Matching activity remains subject to firewall and payload checks. Inspect current permissions in Protection → Rules & permissions.`
+      ? `${scopes.length} permission scope${scopes.length === 1 ? '' : 's'} recorded. Matching activity remains subject to firewall and payload checks.`
       : 'This decision records expected activity once. No future permission was created.'
     : 'This records your review of the evidence; it does not establish remediation.';
   const target = (c.resources || []).join(', ') || c.rule || d.id;
@@ -2233,6 +2233,7 @@ function reviewResultHTML(result, details = false) {
   const links = (r?.source_ids || []).map((id, index) => `<button type="button" class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${escapeHTML(id)}">Recorded evidence ${index + 1}</button>`).join('');
   return `<div class="panel-body"><h3>${escapeHTML(reviewResultLabel(d))}</h3><p>${escapeHTML(target)}</p>${receipt}<p>${escapeHTML(meaning)}</p>
     ${scopes.length ? `<p>Recorded permission IDs: ${scopes.map(escapeHTML).join(', ')}</p>` : ''}
+    ${d.action === 'expect' && scopes.length ? '<button type="button" class="btn btn-ghost btn-sm" data-action="open-review-result-permissions">View permissions</button>' : ''}
     ${r ? `<h4>Evidence before this decision</h4><p>${escapeHTML(r.agent || 'Unknown agent')} · ${escapeHTML(c.session_id || 'Session unknown')}${c.workspace ? ` · ${escapeHTML(c.workspace)}` : ''}</p>
       <p>${escapeHTML((c.destinations || []).join(', ') || 'Destination unknown')}</p><p>Recorded risk: ${escapeHTML(r.assessment?.risk || 'unknown')}</p><p>${escapeHTML(r.assessment?.reason || '')}</p>${assessmentHTML(r.assessment || {})}${links}`
       : '<p>The evidence shown before this decision is unavailable. The server receipt remains.</p>'}</div>`;

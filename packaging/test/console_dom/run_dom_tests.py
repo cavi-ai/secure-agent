@@ -206,11 +206,13 @@ def main():
         if args.review_results_only or not any(value for key, value in vars(args).items() if key.endswith('_only')):
             for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
                 for action in ('acknowledge', 'close_reported', 'expect'):
-                    query = '?reviewresult=' + action + ('&dismissresult' if action == 'acknowledge' else '')
+                    query = '?reviewresult=' + action + ('&dismissresult' if action == 'acknowledge' else '&resultrevoke' if action == 'expect' else '')
                     dom = dump_dom(chrome, tmp, query, origin, window_size=size, fixture=payload_cases.scoped_review())
                     receipt = re.search(r'data-review-result-probe="([^"]+)"', dom)
                     state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
-                    for name in ('queueCleared', 'retained', 'label', 'fits', 'evidence', 'readOnly', 'evidenceEntry', 'evidenceReturn', *(['dismissed'] if action == 'acknowledge' else [])):
+                    for name in ('queueCleared', 'retained', 'label', 'fits', 'evidence', 'readOnly', 'evidenceEntry', 'evidenceReturn', 'permissionEntry',
+                                 *(['dismissed'] if action == 'acknowledge' else []),
+                                 *(['permissionDetail', 'permissionScope', 'permissionFits', 'permissionCancelled', 'permissionRevoked', 'permissionReturn'] if action == 'expect' else [])):
                         check(f'review result ({label}, {action}): {name}', state.get(name) is True, str(state))
         if args.review_results_only:
             if args.screenshot:
@@ -218,6 +220,7 @@ def main():
                 os.makedirs(shot_dir, exist_ok=True)
                 screenshot(chrome, origin, '?reviewresult&resultcard', os.path.join(shot_dir, 'review-result-card.png'), tmp, payload_cases.scoped_review())
                 screenshot(chrome, origin, '?reviewresult', os.path.join(shot_dir, 'review-result-detail.png'), tmp, payload_cases.scoped_review())
+                screenshot(chrome, origin, '?reviewresult=expect&resultpermissions', os.path.join(shot_dir, 'review-result-permissions.png'), tmp, payload_cases.scoped_review())
             print(f'\n{len(passed)} passed, {len(failed)} failed')
             if failed:
                 raise SystemExit(1)
