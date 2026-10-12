@@ -1077,7 +1077,7 @@
       window.saConfirm('Fixture action awaiting confirmation').then(value => { receipt.dialogCancelled = value === false; });
       authRecoveryExpired = true;
       // An action is rejected; recovery must never replay it.
-      await window.reviewAct('fixture-review', 1, 'dismiss');
+      await window.reviewAct('fixture-review', 1, 'acknowledge');
       receipt.paused = document.body.classList.contains('is-paused') && document.querySelector('main').inert
         && !document.querySelector('main').hidden && window.__sse.readyState === 2;
       receipt.retained = body === document.querySelector('#session-detail .session-detail-body')
@@ -1357,7 +1357,7 @@
       && document.getElementById('session-ended').hidden)), 5000);
   }
   if (scenarios.has('permissiondeny')) {
-    setTimeout(() => window.reviewAct('fixture-review', 1, 'dismiss'), 2000);
+    setTimeout(() => window.reviewAct('fixture-review', 1, 'acknowledge'), 2000);
     setTimeout(() => stamp('permission-retained', String(document.getElementById('session-ended').hidden
       && window.__sse.readyState === 1 && !!sessionStorage.getItem('sa.console-token'))), 4000);
   }
