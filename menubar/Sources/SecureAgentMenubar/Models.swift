@@ -586,9 +586,19 @@ public struct DaemonDoctorCheckModel: Codable, Sendable, Equatable {
     }
 }
 
-/// `/doctor`: the daemon's health checks in fixed order.
+/// `/doctor`: the daemon's health checks in fixed order. A null or absent
+/// list decodes as no checks.
 public struct DaemonDoctorReportModel: Codable, Sendable {
     public let checks: [DaemonDoctorCheckModel]
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        checks = try c.decodeIfPresent([DaemonDoctorCheckModel].self, forKey: .checks) ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case checks
+    }
 }
 
 /// /posture headline; attention state is derived daemon-side only.
