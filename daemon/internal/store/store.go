@@ -48,13 +48,15 @@ const (
 		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0)
 		FROM flags WHERE rule = ? AND agent = ?`
-	// reattributeFlagsSQL seeks idx_flags_pid.
-	reattributeFlagsSQL = `UPDATE flags SET agent = ? WHERE pid = ? AND agent LIKE 'untagged:%' AND datetime(ts) >= datetime(?)`
 	// hostFirstSeenSQL seeks idx_events_host; the advisor runs it for each
 	// flag, host and egress episode it triages. The partial index is usable
 	// only when the statement repeats the index's empty-host exclusion.
 	hostFirstSeenSQL = `SELECT MIN(ts) FROM events WHERE remote_host = ? AND remote_host != ''`
 )
+
+// reattributeFlagsSQL seeks idx_flags_pid. Numbered parameters reuse the cutoff
+// throughout its timestamp normalization without duplicating bound values.
+var reattributeFlagsSQL = `UPDATE flags SET agent = ?1 WHERE pid = ?2 AND agent LIKE 'untagged:%' AND ` + timestampOrderExpr("ts") + ` >= ` + timestampOrderExpr("?3")
 
 // Flag retention and lists share full timestamp precision and identity ties.
 var trimFlagsSQL = `DELETE FROM flags WHERE rowid IN (

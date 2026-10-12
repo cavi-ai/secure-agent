@@ -65,3 +65,47 @@ func TestTaggerCatchUpReattributesUntaggedFlags(t *testing.T) {
 		t.Fatal("no flag delta after reattribution")
 	}
 }
+
+func TestReattributionCutoffMatchesPublishedDeltas(t *testing.T) {
+	st, err := store.Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	at := time.Date(2026, 10, 11, 12, 0, 0, 123456789, time.UTC)
+	for _, row := range []struct {
+		id string
+		ts time.Time
+	}{
+		{"before", at.Add(-time.Nanosecond)}, {"at", at}, {"after", at.Add(time.Nanosecond)},
+	} {
+		if _, err := st.PutFlag(model.Flag{ID: row.id, Rule: "keychain-access", Severity: 3, TS: row.ts, PID: 200, Agent: "untagged:node"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hub := api.NewDeltaHub()
+	sub := hub.Subscribe()
+	defer hub.Unsubscribe(sub)
+	reattributeUntaggedFlags(st, hub, func() time.Time { return at.Add(time.Hour) })(200, agents.AgentInfo{Name: "claude"})
+	if f, found, err := st.GetFlagResult("before"); err != nil || !found || f.Agent != "untagged:node" {
+		t.Fatalf("pre-cutoff flag=%+v found=%v err=%v", f, found, err)
+	}
+	seen := make(map[string]bool)
+	for i := 0; i < 2; i++ {
+		select {
+		case d := <-sub:
+			f, ok := d.Data.(model.Flag)
+			if d.Type != "flag" || !ok || f.Agent != "claude" || (f.ID != "at" && f.ID != "after") || seen[f.ID] {
+				t.Fatalf("unexpected delta=%+v", d)
+			}
+			seen[f.ID] = true
+		case <-time.After(time.Second):
+			t.Fatal("missing reattribution delta")
+		}
+	}
+	select {
+	case d := <-sub:
+		t.Fatalf("extra reattribution delta=%+v", d)
+	default:
+	}
+}
