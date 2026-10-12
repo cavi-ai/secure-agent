@@ -29,6 +29,17 @@ final class UpdateManagerTests: XCTestCase {
         XCTAssertNil(UpdateManager.expectedSHA256("", filename: "x.dmg"))
     }
 
+    func testConflictingChecksumsAreRejected() {
+        let first = String(repeating: "a", count: 64)
+        let second = String(repeating: "b", count: 64)
+        XCTAssertNil(UpdateManager.expectedSHA256(
+            "\(first)  dist/update.dmg\n\(second)  update.dmg\n", filename: "update.dmg"))
+        XCTAssertEqual(UpdateManager.expectedSHA256(
+            "\(first)  dist/update.dmg\n\(first)  update.dmg\n", filename: "update.dmg"), first)
+        XCTAssertNil(UpdateManager.expectedSHA256(
+            "\(String(repeating: "z", count: 64))  update.dmg\n", filename: "update.dmg"))
+    }
+
     func testDiscoverRepoFindsThisCheckout() {
         // Start from this test file's own path — walking up must reach the repo.
         let here = URL(fileURLWithPath: #filePath)

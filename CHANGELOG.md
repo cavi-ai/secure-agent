@@ -23,13 +23,15 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: disabled buttons are dimmed.
 
 ### Fixed
+- Updates: verify a staged app before atomic replacement, restore the previous app if relaunch preparation fails, and relaunch after the old process exits.
+- Packaging: replace rebuilt DMG checksum entries and require a vulnerability scan, distribution signing, notarization, and Gatekeeper checks for release builds.
 - Credential reads by the owning program, directory opens, and files an agent wrote itself no longer raise sensitive-read findings.
 - Console: the header search filters the System tab's worktrees and clutter.
 - Worktrees: a folder whose agent was seen in the last 15 minutes cannot be removed, and its row names the agent.
 - Worktrees: cleanup history, reclaimed space and agent asks read unavailable when they cannot be read, instead of empty or zero.
 - Sessions: an ended conversation that records new work while its process lives returns to active.
 
-## [1.3.0] - 2026-10-08
+## [1.3.0] - Unreleased
 
 ### Added
 - API: `GET /routing/claude`, `POST /agent/worktree`, and `flag_ids` on `POST /expected`.
