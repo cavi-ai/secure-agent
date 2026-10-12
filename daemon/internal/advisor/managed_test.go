@@ -3,8 +3,8 @@ package advisor
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -61,64 +61,69 @@ func TestDiscoverServersIgnoresNonModelServers(t *testing.T) {
 	}
 }
 
-// fakeModelServer launches the test binary as a model server, keeping the
-// process-launch test independent of an installed Python interpreter.
+// fakeModelServer re-executes this test binary as a model server, so the
+// subprocess test does not depend on an installed Python interpreter.
 func fakeModelServer(t *testing.T) string {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script")
 	}
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "mlx_lm.server")
-	testBinary, err := os.Executable()
+	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	quotedBinary := "'" + strings.ReplaceAll(testBinary, "'", "'\"'\"'") + "'"
-	script := "#!/bin/sh\nexport SA_ADVISOR_TEST_SERVER=1\nexec " + quotedBinary + " -test.run='^TestManagedModelServerProcess$' -- \"$@\"\n"
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "mlx_lm.server")
+	script := "#!/bin/sh\nexport SECURE_AGENT_TEST_MODEL_SERVER=1\nexec '" +
+		strings.ReplaceAll(executable, "'", "'\"'\"'") +
+		"' -test.run='^TestManagedModelServerHelper$' -- \"$@\"\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return bin
 }
 
-func TestManagedModelServerProcess(t *testing.T) {
-	if os.Getenv("SA_ADVISOR_TEST_SERVER") != "1" {
+func TestManagedModelServerHelper(t *testing.T) {
+	if os.Getenv("SECURE_AGENT_TEST_MODEL_SERVER") != "1" {
 		return
 	}
-	var port string
-	for i, arg := range os.Args {
-		if arg == "--port" && i+1 < len(os.Args) {
-			port = os.Args[i+1]
-			break
-		}
+	if len(os.Args) < 4 || os.Args[2] != "--" {
+		t.Fatal("missing managed server arguments")
 	}
-	if port == "" {
-		t.Fatal("model server helper requires --port")
-	}
-	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
-	if err != nil {
+	args := flag.NewFlagSet("model-server", flag.ContinueOnError)
+	model := args.String("model", "", "model ID")
+	host := args.String("host", "", "listen address")
+	port := args.Int("port", 0, "listen port")
+	if err := args.Parse(os.Args[3:]); err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
-	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	if *model != "fake-4b" || *host != "127.0.0.1" || *port < 1 || *port > 65535 || args.NArg() != 0 {
+		t.Fatalf("invalid managed server arguments: %v", os.Args[3:])
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "fake-4b"}}})
-	})}
-	if err := server.Serve(listener); err != nil {
+		json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"id": *model}},
+		})
+	})
+	if err := http.ListenAndServe(fmt.Sprintf("%s:%d", *host, *port), mux); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestLaunchManagedSpawnsAndServes(t *testing.T) {
 	bin := fakeModelServer(t)
+	// Launch the helper even when no external runtime is available on PATH.
+	t.Setenv("PATH", "")
 	cmd, endpoint, err := LaunchManaged(ManagedSpec{Model: "fake-4b", Bin: bin})
 	if err != nil {
 		t.Fatalf("LaunchManaged: %v", err)
 	}
-	t.Cleanup(func() {
+	defer func() {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-	})
+	}()
 
 	if !strings.HasPrefix(endpoint, "http://127.0.0.1:") {
 		t.Fatalf("endpoint must be loopback, got %q", endpoint)
