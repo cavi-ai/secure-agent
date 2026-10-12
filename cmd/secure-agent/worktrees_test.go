@@ -264,7 +264,7 @@ func TestFormatCleanup(t *testing.T) {
 func TestAskLineAndRunWorktreeAsk(t *testing.T) {
 	for a, want := range map[wtAsk]string{
 		{Harness: "claude", Status: "running"}: "asked claude: waiting for its answer",
-		{Harness: "claude", Status: "answered", Verdict: "pr", Detail: "https://x/pull/9", CostUSD: 0.21}: "asked claude: pr — https://x/pull/9 ($0.21)",
+		{Harness: "claude", Status: "answered", Verdict: "pr", Detail: "https://x/pull/9", CostUSD: 0.21}: "asked claude: pr — https://x/pull/9 (session $0.21)",
 		{Harness: "codex", Status: "answered", Verdict: "removable", Detail: "merged"}:                    "asked codex: removable — merged",
 		{Harness: "codex", Status: "timeout", Verdict: "none", Detail: "no answer within 15m0s"}:          "asked codex: timeout — no answer within 15m0s",
 	} {

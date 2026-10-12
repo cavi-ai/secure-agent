@@ -520,7 +520,7 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
   // its answer arrives in the report's asks (the tab re-reads meanwhile).
   async function askWorktreeAgent(path) {
     const ok = await confirm(
-      `Resume the agent that worked in ${path}? It gets a fixed request: open a pull request for work worth keeping, or say the worktree can go. It runs with your agent settings (it may commit and push), capped at $1.00 for Claude Code and 15 minutes.`,
+      `Resume the agent that worked in ${path}? It gets a fixed request: open a pull request for work worth keeping, or say the worktree can go. It runs with your agent settings (it may commit and push) for up to 15 minutes.`,
       { title: 'Ask the agent', okLabel: 'Ask', danger: false });
     if (!ok) return;
     try {
@@ -591,7 +591,7 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
     activate,
     closeRemovalToast,
     addRepo,
-    setWorktreeFilter(state) { worktreesState.filter.state = state || ''; },
+    setWorktreeFilter(state) { worktreesState.filter = nextWorktreeFilter(worktreesState.filter, state || ''); },
     toggleStaleFilter() { worktreesState.filter.stale = !worktreesState.filter.stale; },
     setWorktreeSearch(q) { worktreesState.filter.q = q; },
     setClutterKind(kind) { clutterState.filter.kind = kind || ''; },

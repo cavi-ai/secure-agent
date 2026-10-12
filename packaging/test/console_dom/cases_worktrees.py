@@ -95,7 +95,7 @@ def run_worktrees(page):
             and '>Ask codex</button>' in wt
             and 'Ask the agent' not in wt
             and not dom_query(wt).has(None, {'data-action': 'worktree-review'})
-            and '<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://github.com/o/r/pull/9 ($0.21)</p>' in wt
+            and '<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://github.com/o/r/pull/9 (session $0.21)</p>' in wt
         ),
     )
     check(
@@ -587,7 +587,15 @@ def run_worktree_hierarchy(page):
             page.check(f'worktree hierarchy ({width}): {name}', state.get(name) is True, str(state))
 
 
+def run_filter_regressions(page):
+    dom = page.dom('?raildemo', served=True, fixture={'script': 'cases_filter_regressions.js'})
+    state = json.loads(html.unescape(pre(dom, 'filter-regression-probe')) or '{}')
+    for key in ('state', 'focus', 'deselect', 'stale', 'intersection', 'all', 'searchEmpty', 'harnessVisible', 'harnessOff', 'harnessFocus', 'harnessOn', 'harnessAll', 'shared'):
+        page.check(f'filter regressions: {key}', state.get(key) is True, str(state))
+
+
 CASES = (
+    Case('filter_regressions', run_filter_regressions),
     Case('worktree_hierarchy', run_worktree_hierarchy),
     Case('worktrees', run_worktrees, ('dom_memfam', 'dom_wt', 'dom_wtdiscuss', 'dom_wtdiscussoff', 'dom_wtdockcycle', 'dom_wtrefresh', 'dom_wtreview', 'dom_wtreviewtrash', 'dom_wtsizing')),
     Case('clutter', run_clutter, ('dom_clutter', 'dom_clutteradvise', 'dom_clutter_view')),
