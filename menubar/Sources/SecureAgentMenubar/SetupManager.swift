@@ -88,10 +88,10 @@ public final class SetupManager: ObservableObject {
             var off = disabledAgents
             if disabled { if !off.contains(name) { off.append(name) } }
             else { off.removeAll { $0 == name } }
-            let updated = Self.setDisabledAgents(configYAML(), disabled: off)
-            let dir = (configPath as NSString).deletingLastPathComponent
-            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            try configStore.update { text in
+                let document = ConfigDocument(text)
+                return try (off.isEmpty ? document.removing("disabled_agents") : document.settingList("disabled_agents", to: off)).text
+            }
             disabledAgents = off
         } catch {
             report(error)
@@ -230,23 +230,24 @@ public final class SetupManager: ObservableObject {
             fm.fileExists(atPath: "\(target)/secret_guard.py")
         } && claudeHooksRegistered()
           && Self.cursorHooksRegistered(at: Self.cursorHooksPath, command: Self.cursorHookCommand)
-        advisorEnabled = Self.advisorConfigIsEnabled(configYAML())
-        systemAgentEnabled = Self.systemAgentConfigIsEnabled(configYAML())
-        systemAgentAutoReview = Self.systemAgentConfigIsEnabled(configYAML(), key: "auto_review")
-        systemAgentDebug = Self.systemAgentConfigIsEnabled(configYAML(), key: "debug")
+        let config = configDocument
+        advisorEnabled = config.flag("enabled", in: "advisor")
+        systemAgentEnabled = config.flag("enabled", in: "system_agent")
+        systemAgentAutoReview = config.flag("auto_review", in: "system_agent")
+        systemAgentDebug = config.flag("debug", in: "system_agent")
         do {
-            autoReviewPolicy = try AutoReviewPolicy.read(configYAML())
+            autoReviewPolicy = try AutoReviewPolicy.read(config.text)
             autoReviewPolicyAvailable = true
         } catch {
             autoReviewPolicyAvailable = false
             report(error)
         }
-        advisorPersisted = Self.advisorConfig(configYAML())
+        advisorPersisted = AdvisorPreferences.persistedChoice(config.text)
         do {
-            advisorPreferences = try AdvisorPreferences.read(configYAML())
+            advisorPreferences = try AdvisorPreferences.read(config.text)
             advisorPreferencesError = nil
         } catch { advisorPreferencesError = error.localizedDescription }
-        disabledAgents = Self.disabledAgents(configYAML())
+        disabledAgents = (try? config.list("disabled_agents")) ?? []
         advisorDiscovery = (try? await DaemonClient().fetchAdvisorDiscover())
             ?? AdvisorDiscovery(servers: [], managedModels: [])
     }
@@ -263,20 +264,18 @@ public final class SetupManager: ObservableObject {
 
     // MARK: - Local advisor
 
-    private var configPath: String { "\(home)/.config/secure-agent/config.yaml" }
+    private lazy var configStore = ConfigStore(home: home)
 
-    private func configYAML() -> String {
-        (try? String(contentsOfFile: configPath, encoding: .utf8)) ?? ""
+    /// The current file; empty when it is missing or unreadable.
+    private var configDocument: ConfigDocument {
+        (try? configStore.document()) ?? ConfigDocument("")
     }
 
     /// The chat agent is opt-in. Keep its existing endpoint and model choices
     /// intact when toggling it from Settings; the daemon reloads this live.
     public func setSystemAgentEnabled(_ enabled: Bool) {
         do {
-            let updated = Self.systemAgentConfigUpdating(configYAML(), enabled: enabled)
-            let dir = (configPath as NSString).deletingLastPathComponent
-            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            try configStore.update { try ConfigDocument($0).setting("enabled", to: enabled, in: "system_agent").text }
             systemAgentEnabled = enabled
         } catch {
             report(error)
@@ -286,10 +285,7 @@ public final class SetupManager: ObservableObject {
     /// Automatic review of new findings by the chat agent; applied live.
     public func setSystemAgentAutoReview(_ on: Bool) {
         do {
-            let updated = Self.systemAgentConfigUpdating(configYAML(), key: "auto_review", enabled: on)
-            let dir = (configPath as NSString).deletingLastPathComponent
-            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            try configStore.update { try ConfigDocument($0).setting("auto_review", to: on, in: "system_agent").text }
             systemAgentAutoReview = on
         } catch {
             report(error)
@@ -299,40 +295,9 @@ public final class SetupManager: ObservableObject {
     /// Update metadata-only diagnostics without changing other agent settings.
     public func setSystemAgentDebug(_ on: Bool) {
         do {
-            let updated = try Self.systemAgentDebugUpdating(configYAML(), enabled: on)
-            try fm.createDirectory(atPath: (configPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            try configStore.update { try ConfigDocument($0).setting("debug", to: on, in: "system_agent").text }
             systemAgentDebug = on
         } catch { report(error) }
-    }
-
-    /// Refuse ambiguous structures instead of rewriting unrelated configuration.
-    public nonisolated static func systemAgentDebugUpdating(_ yaml: String, enabled: Bool) throws -> String {
-        let lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        let headers = lines.indices.filter { lines[$0].hasPrefix("system_agent:") }
-        let candidates = lines.indices.filter { lines[$0].range(of: #"^["']?system_agent["']?\s*:"#, options: .regularExpression) != nil }
-        guard headers.count <= 1, candidates == headers, !lines.contains(where: { ["---", "..."].contains($0.trimmingCharacters(in: .whitespaces)) }) else {
-            throw NSError(domain: "SystemAgentSettings", code: 1, userInfo: [NSLocalizedDescriptionKey: "The system_agent configuration is ambiguous; edit it in Config."])
-        }
-        if let start = headers.first {
-            let header = lines[start].split(separator: "#", maxSplits: 1).first.map(String.init) ?? ""
-            guard header.trimmingCharacters(in: .whitespaces) == "system_agent:" else {
-                throw NSError(domain: "SystemAgentSettings", code: 1, userInfo: [NSLocalizedDescriptionKey: "Expand the system_agent mapping in Config before changing debug logging."])
-            }
-            var seen = false
-            for line in lines.dropFirst(start + 1) {
-                if !line.isEmpty && !line.hasPrefix(" ") && !line.hasPrefix("#") { break }
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if trimmed.hasPrefix("debug:") {
-                    let value = trimmed.dropFirst(6).split(separator: "#", maxSplits: 1).first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
-                    guard !seen, line.hasPrefix("  debug:"), ["true", "false"].contains(value) else {
-                        throw NSError(domain: "SystemAgentSettings", code: 1, userInfo: [NSLocalizedDescriptionKey: "The debug value is ambiguous; edit it in Config."])
-                    }
-                    seen = true
-                }
-            }
-        }
-        return systemAgentConfigUpdating(yaml, key: "debug", enabled: enabled)
     }
 
     /// Re-read the current file so other settings and unknown rule IDs survive.
@@ -349,55 +314,17 @@ public final class SetupManager: ObservableObject {
 
     private func updateAutoReviewPolicy(_ change: (inout AutoReviewPolicy) -> Void) {
         do {
-            let yaml = fm.fileExists(atPath: configPath)
-                ? try String(contentsOfFile: configPath, encoding: .utf8) : ""
-            var policy = try AutoReviewPolicy.read(yaml)
-            change(&policy)
-            let updated = try policy.updating(yaml)
-            let dir = (configPath as NSString).deletingLastPathComponent
-            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            var policy = AutoReviewPolicy()
+            try configStore.update { yaml in
+                policy = try AutoReviewPolicy.read(yaml)
+                change(&policy)
+                return try policy.updating(yaml)
+            }
             autoReviewPolicy = policy
             autoReviewPolicyAvailable = true
         } catch {
             report(error)
         }
-    }
-
-    public nonisolated static func systemAgentConfigIsEnabled(_ yaml: String, key: String = "enabled") -> Bool {
-        var inBlock = false
-        for line in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
-            let s = String(line)
-            if s.hasPrefix("system_agent:") { inBlock = true; continue }
-            if inBlock && !s.hasPrefix(" ") && !s.hasPrefix("#") && !s.isEmpty { inBlock = false }
-            if inBlock && s.trimmingCharacters(in: .whitespaces).hasPrefix("\(key):") {
-                let value = s.trimmingCharacters(in: .whitespaces).dropFirst(key.count + 1)
-                    .split(separator: "#", maxSplits: 1).first.map(String.init) ?? ""
-                return value.trimmingCharacters(in: .whitespaces) == "true"
-            }
-        }
-        return false
-    }
-
-    public nonisolated static func systemAgentConfigUpdating(_ yaml: String, key: String = "enabled", enabled: Bool) -> String {
-        let value = enabled ? "true" : "false"
-        var lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard let start = lines.firstIndex(where: { $0.hasPrefix("system_agent:") }) else {
-            var base = yaml
-            if !base.isEmpty && !base.hasSuffix("\n") { base += "\n" }
-            return base + "system_agent:\n  \(key): \(value)\n"
-        }
-        let end = (start + 1..<lines.count).first {
-            let line = lines[$0]
-            return !line.isEmpty && !line.hasPrefix(" ") && !line.hasPrefix("#")
-        } ?? lines.count
-        for i in start + 1..<end where lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("\(key):") {
-            let indent = String(lines[i].prefix(while: { $0 == " " }))
-            lines[i] = "\(indent)\(key): \(value)"
-            return lines.joined(separator: "\n")
-        }
-        lines.insert("  \(key): \(value)", at: start + 1)
-        return lines.joined(separator: "\n")
     }
 
     /// Flip advisor.enabled in config.yaml. Line-based and deliberately
@@ -406,10 +333,7 @@ public final class SetupManager: ObservableObject {
     /// Writes are atomic — a torn config would be a loud daemon error.
     public func setAdvisorEnabled(_ enabled: Bool) {
         do {
-            let updated = try Self.advisorConfigUpdating(configYAML(), enabled: enabled)
-            let dir = (configPath as NSString).deletingLastPathComponent
-            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            try configStore.update { try AdvisorPreferences.settingEnabled($0, enabled: enabled) }
             advisorEnabled = enabled
             advisorNote = "Automatic analysis " + (enabled ? "enabled" : "disabled") + " — applied live (daemon hot-reloads config)."
         } catch {
@@ -423,42 +347,17 @@ public final class SetupManager: ObservableObject {
 
     // MARK: - Inspection proxy (web console)
 
-    /// Flip proxy_enabled in config.yaml. Line-based and deliberately narrow,
-    /// same contract as the advisor helpers: rewrite the TOP-LEVEL key when
-    /// present (never an indented or commented lookalike), append it
-    /// otherwise, preserve every other byte of the user's file.
-    public nonisolated static func proxyEnabledUpdating(_ yaml: String, enabled: Bool) -> String {
-        let value = enabled ? "true" : "false"
-        let lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var out = lines
-        var replaced = false
-        for i in lines.indices {
-            let line = lines[i]
-            guard !line.hasPrefix(" "), !line.hasPrefix("\t"), !line.hasPrefix("#") else { continue }
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("proxy_enabled:") {
-                out[i] = "proxy_enabled: \(value)"
-                replaced = true
-            }
-        }
-        if replaced { return out.joined(separator: "\n") }
-        var base = yaml
-        if !base.isEmpty && !base.hasSuffix("\n") { base += "\n" }
-        return base + """
-        # Loopback inspection proxy (127.0.0.1): serves the web console and
-        # inspects agent egress for secret leaks / prompt injection.
-        proxy_enabled: \(value)
-
-        """
-    }
-
-    /// Write proxy_enabled; the daemon starts the proxy at boot only, so the
-    /// caller is responsible for bouncing the daemon afterwards.
+    /// Write proxy_enabled: the TOP-LEVEL key is rewritten when present (never
+    /// an indented or commented lookalike) and appended otherwise. The daemon
+    /// starts the proxy at boot only, so the caller is responsible for bouncing
+    /// the daemon afterwards.
     public func setProxyEnabled(_ enabled: Bool) {
         do {
-            let updated = Self.proxyEnabledUpdating(configYAML(), enabled: enabled)
-            let dir = (configPath as NSString).deletingLastPathComponent
-            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            try configStore.update {
+                try ConfigDocument($0).setting("proxy_enabled", to: enabled, introducedBy:
+                    "# Loopback inspection proxy (127.0.0.1): serves the web console and\n"
+                    + "# inspects agent egress for secret leaks / prompt injection.").text
+            }
         } catch {
             report(error)
         }
@@ -470,10 +369,9 @@ public final class SetupManager: ObservableObject {
     /// Atomic write; the daemon applies changes live.
     public func setAdvisorConfig(mode: AdvisorMode, endpoint: String?, model: String) {
         do {
-            let updated = try Self.advisorConfigSetting(configYAML(), mode: mode, endpoint: endpoint, model: model)
-            let dir = (configPath as NSString).deletingLastPathComponent
-            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            try configStore.update {
+                try AdvisorPreferences.settingModel($0, managed: mode == .managed, endpoint: endpoint, model: model)
+            }
             advisorEnabled = true
             advisorNote = "Analysis model configured (\(mode.rawValue)) — applied live (daemon hot-reloads config)."
         } catch {
@@ -496,15 +394,8 @@ public final class SetupManager: ObservableObject {
         setAdvisorConfig(mode: c.mode, endpoint: c.endpoint, model: c.model)
     }
 
-    /// Update model fields without discarding timeout, classifier, debug or future fields.
-    public nonisolated static func advisorConfigSetting(_ yaml: String, mode: AdvisorMode, endpoint: String?, model: String) throws -> String {
-        try AdvisorPreferences.settingModel(yaml, managed: mode == .managed, endpoint: endpoint, model: model)
-    }
-
     func saveAdvisorPreferences(_ preferences: AdvisorPreferences) throws {
-        let updated = try preferences.updating(configYAML())
-        try fm.createDirectory(atPath: (configPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-        try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+        try configStore.update { try preferences.updating($0) }
         advisorPreferences = preferences
         advisorPreferencesError = nil
         advisorNote = "Advisor settings saved — applied live."
@@ -527,128 +418,6 @@ public final class SetupManager: ObservableObject {
             return "The log could not be opened. It is at ~/Library/Logs/secure-agent/daemon-err.log."
         }
         return nil
-    }
-
-    /// True when the YAML has an advisor block with `enabled: true`.
-    /// Line-based: a real YAML parser would be overkill for one boolean.
-    /// Read the disabled_agents list (top-level key, "- name" lines).
-    public nonisolated static func disabledAgents(_ yaml: String) -> [String] {
-        var inList = false
-        var out: [String] = []
-        for line in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
-            let s = String(line)
-            if s.hasPrefix("disabled_agents:") { inList = true; continue }
-            if inList {
-                let t = s.trimmingCharacters(in: .whitespaces)
-                if t.hasPrefix("-") {
-                    out.append(t.dropFirst().trimmingCharacters(in: .whitespaces)
-                        .replacingOccurrences(of: "\"", with: ""))
-                    continue
-                }
-                break // first non-dash line ends the list
-            }
-        }
-        return out
-    }
-
-    /// Write the disabled_agents list (replace or append; preserves the rest
-    /// of the file byte-for-byte).
-    public nonisolated static func setDisabledAgents(_ yaml: String, disabled: [String]) -> String {
-        var lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        // Strip existing block.
-        var kept: [String] = []
-        var skipping = false
-        for line in lines {
-            if line.hasPrefix("disabled_agents:") { skipping = true; continue }
-            if skipping {
-                if line.hasPrefix("  -") || line.hasPrefix(" -") { continue }
-                skipping = false
-            }
-            kept.append(line)
-        }
-        lines = kept
-        if disabled.isEmpty { return lines.joined(separator: "\n") }
-        var block = ["disabled_agents:"]
-        block += disabled.map { "  - \($0)" }
-        // Insert at the top (after any leading comments) — top-level keys
-        // read fine anywhere, but top keeps it discoverable.
-        var idx = 0
-        while idx < lines.count && (lines[idx].hasPrefix("#") || lines[idx].trimmingCharacters(in: .whitespaces).isEmpty) {
-            idx += 1
-        }
-        lines.insert(contentsOf: block, at: idx)
-        return lines.joined(separator: "\n")
-    }
-
-    /// The persisted advisor config (mode, endpoint, model) — what the
-    /// Settings tab restores on open so the advisor "sticks" instead of
-    /// defaulting to managed-every-launch.
-    public nonisolated static func advisorConfig(_ yaml: String) -> (mode: String?, endpoint: String?, model: String?) {
-        var inAdvisor = false
-        var endpoint: String?
-        var model: String?
-        var managed: Bool?
-        var hasExistingConfig = false
-        for line in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
-            let s = String(line)
-            if s.hasPrefix("advisor:") { inAdvisor = true; continue }
-            if inAdvisor && !s.hasPrefix(" ") && !s.hasPrefix("#") && !s.trimmingCharacters(in: .whitespaces).isEmpty {
-                inAdvisor = false
-            }
-            guard inAdvisor else { continue }
-            let t = s.trimmingCharacters(in: .whitespaces)
-            if t.hasPrefix("managed:") {
-                managed = t.replacingOccurrences(of: "managed:", with: "")
-                    .trimmingCharacters(in: .whitespaces)
-                    .split(separator: "#").first.map { $0.trimmingCharacters(in: .whitespaces) == "true" }
-            } else if t.hasPrefix("managed_model:") {
-                model = t.replacingOccurrences(of: "managed_model:", with: "")
-                    .trimmingCharacters(in: .whitespaces)
-                    .replacingOccurrences(of: "\"", with: "")
-            } else if t.hasPrefix("endpoint:") {
-                endpoint = t.replacingOccurrences(of: "endpoint:", with: "")
-                    .trimmingCharacters(in: .whitespaces)
-                    .replacingOccurrences(of: "\"", with: "")
-                hasExistingConfig = hasExistingConfig || endpoint?.isEmpty == false
-            } else if t.hasPrefix("model:") {
-                model = t.replacingOccurrences(of: "model:", with: "")
-                    .trimmingCharacters(in: .whitespaces)
-                    .replacingOccurrences(of: "\"", with: "")
-                hasExistingConfig = hasExistingConfig || model?.isEmpty == false
-            }
-        }
-        // The canonical existing-server writer omits managed; the daemon
-        // treats that absence as unmanaged rather than unconfigured.
-        let m = managed.map { $0 ? "managed" : "existing" }
-            ?? (hasExistingConfig ? "existing" : nil)
-        return (m, endpoint, model)
-    }
-
-    public nonisolated static func advisorConfigIsEnabled(_ yaml: String) -> Bool {
-        var inAdvisor = false
-        for line in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
-            let s = String(line)
-            if s.hasPrefix("advisor:") { inAdvisor = true; continue }
-            // Any non-indented, non-comment line ends the advisor block.
-            if inAdvisor && !s.hasPrefix(" ") && !s.hasPrefix("#") && !s.trimmingCharacters(in: .whitespaces).isEmpty {
-                inAdvisor = false
-            }
-            if inAdvisor {
-                let t = s.trimmingCharacters(in: .whitespaces)
-                if t.hasPrefix("enabled:") {
-                    return t.replacingOccurrences(of: "enabled:", with: "")
-                        .trimmingCharacters(in: .whitespaces)
-                        .split(separator: "#").first.map { $0.trimmingCharacters(in: .whitespaces) == "true" } ?? false
-                }
-            }
-        }
-        return false
-    }
-
-    /// Return the YAML with advisor.enabled set. Appends the full block when
-    /// the advisor key is absent; preserves all other content byte-for-byte.
-    public nonisolated static func advisorConfigUpdating(_ yaml: String, enabled: Bool) throws -> String {
-        try AdvisorPreferences.settingEnabled(yaml, enabled: enabled)
     }
 
     // MARK: - Legacy LaunchAgent migration
