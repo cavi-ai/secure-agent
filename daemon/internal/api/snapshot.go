@@ -5,7 +5,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -153,31 +152,8 @@ func (a *API) suggestionList() []Suggestion {
 }
 
 func (a *API) suggestionListResult() ([]Suggestion, error) {
-	out := []Suggestion{}
 	if a.correlator == nil {
-		return out, nil
+		return []Suggestion{}, nil
 	}
-	for _, e := range a.correlator.UninspectedEgressSummary() {
-		if e.Count < minSuggestionCount || e.Infra != "" || e.Identity.Class == "vendor" || e.AgentKind == config.AgentKindInfra {
-			// Rare pairs, known CDN/cloud carriers, the agents' own vendors
-			// (rolled up in the drill-down with their own bulk action) and
-			// infra families (not agents) are never "approve this endpoint"
-			// suggestions — suggestions exist for judgment calls.
-			continue
-		}
-		out = append(out, Suggestion{Agent: e.Agent, Host: e.Host, Count: e.Count, Identity: e.Identity})
-	}
-	ids := make([]string, len(out))
-	for i, sg := range out {
-		ids[i] = "host:" + sg.Agent + "|" + sg.Host
-	}
-	verdicts, readErr := a.store.AdvisorVerdictsFor(ids, "host")
-	for i, id := range ids {
-		if v, ok := verdicts[id]; ok {
-			out[i].Assessment = v.Assessment
-			out[i].Rationale = v.Rationale
-			out[i].Confidence = v.Confidence
-		}
-	}
-	return out, readErr
+	return readEgressSuggestions(a.store, a.correlator.UninspectedEgressSummary())
 }
