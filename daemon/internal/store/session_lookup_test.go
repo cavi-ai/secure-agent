@@ -29,11 +29,11 @@ func TestGetSessionBeyondListLimit(t *testing.T) {
 	}
 	defer s.Close()
 	seedSessions(t, s, 1200)
-	got, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("sess-0"))
+	got, ok := testutil.Lookup[model.Session](t)(s.GetSession("sess-0"))
 	if !ok || got.ID != "sess-0" || got.Harness != "claude" {
 		t.Fatalf("GetSession(oldest of 1200) = %+v, %v", got, ok)
 	}
-	if _, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("sess-missing")); ok {
+	if _, ok := testutil.Lookup[model.Session](t)(s.GetSession("sess-missing")); ok {
 		t.Fatal("unknown id must not be found")
 	}
 }

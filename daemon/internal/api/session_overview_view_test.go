@@ -25,7 +25,7 @@ type memoryOverviewStore struct {
 	findingReads int
 }
 
-func (s *memoryOverviewStore) GetSessionResult(id string) (model.Session, bool, error) {
+func (s *memoryOverviewStore) GetSessionBounded(id string) (model.Session, bool, error) {
 	s.sessionID = id
 	return s.session, s.found, s.sessionErr
 }

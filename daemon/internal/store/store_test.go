@@ -313,7 +313,7 @@ func TestIncidentStatusWorkflowForwardOnly(t *testing.T) {
 		t.Fatalf("initial status = %+v ok=%v, want open", wf, ok)
 	}
 
-	if ok, err := s.SetIncidentStatus(id, "acknowledged", ""); err != nil || !ok {
+	if _, ok, err := s.SetIncidentStatusResult(id, "acknowledged", ""); err != nil || !ok {
 		t.Fatalf("ack: ok=%v err=%v", ok, err)
 	}
 	wf, _ := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult(id))
@@ -324,13 +324,13 @@ func TestIncidentStatusWorkflowForwardOnly(t *testing.T) {
 
 	// Re-ack keeps the first stamp.
 	time.Sleep(10 * time.Millisecond)
-	_, _ = s.SetIncidentStatus(id, "acknowledged", "")
+	_, _, _ = s.SetIncidentStatusResult(id, "acknowledged", "")
 	wf, _ = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult(id))
 	if wf.AcknowledgedAt != firstAck {
 		t.Fatal("acknowledged_at must be stamped only once")
 	}
 
-	if ok, err := s.SetIncidentStatus(id, "resolved", "rotated keys"); err != nil || !ok {
+	if _, ok, err := s.SetIncidentStatusResult(id, "resolved", "rotated keys"); err != nil || !ok {
 		t.Fatalf("resolve: ok=%v err=%v", ok, err)
 	}
 	wf, _ = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult(id))
@@ -339,7 +339,7 @@ func TestIncidentStatusWorkflowForwardOnly(t *testing.T) {
 	}
 
 	// Unknown id must not be a silent success.
-	if ok, _ := s.SetIncidentStatus("nope", "resolved", ""); ok {
+	if _, ok, _ := s.SetIncidentStatusResult("nope", "resolved", ""); ok {
 		t.Fatal("unknown incident reported resolved")
 	}
 	if _, ok := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult("nope")); ok {
@@ -582,7 +582,7 @@ func TestIncidentStatusWorkflow(t *testing.T) {
 	s.PutIncident(report)
 
 	// Acknowledge.
-	ok, err := s.SetIncidentStatus("inc-1", "acknowledged", "")
+	_, ok, err := s.SetIncidentStatusResult("inc-1", "acknowledged", "")
 	if err != nil || !ok {
 		t.Fatalf("acknowledge failed: %v ok=%v", err, ok)
 	}
@@ -592,7 +592,7 @@ func TestIncidentStatusWorkflow(t *testing.T) {
 	}
 
 	// Resolve with note.
-	ok, err = s.SetIncidentStatus("inc-1", "resolved", "verified benign")
+	_, ok, err = s.SetIncidentStatusResult("inc-1", "resolved", "verified benign")
 	if err != nil || !ok {
 		t.Fatalf("resolve failed: %v ok=%v", err, ok)
 	}
