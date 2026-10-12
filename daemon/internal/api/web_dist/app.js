@@ -3837,7 +3837,6 @@ document.addEventListener('DOMContentLoaded', () => {
         window.askWorktreeAgent(d.path);
         break;
       case 'worktree-filter':
-        worktreesState.filter = nextWorktreeFilter(worktreesState.filter, d.state || '');
         worktreeController.setWorktreeFilter(d.state);
         renderNow(['worktrees']);
         break;
