@@ -30,7 +30,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: the header search filters the System tab's worktrees and clutter.
 - Worktrees: a folder whose agent was seen in the last 15 minutes cannot be removed, and its row names the agent.
 - Worktrees: cleanup history, reclaimed space and agent asks read unavailable when they cannot be read, instead of empty or zero.
-- Sessions: an ended conversation that records new work while its process lives returns to active.
+- Sessions: an ended conversation that records new work while its process lives returns to active, and every conversation on an exited process ends in the same sweep.
 
 ## [1.3.0] - Unreleased
 

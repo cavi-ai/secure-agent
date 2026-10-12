@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -165,10 +166,16 @@ func TestSessionRootsExcludesEnded(t *testing.T) {
 	now := time.Now()
 	s.UpsertSession(model.Session{ID: "live", RootPID: 1, StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfHook})
 	s.UpsertSession(model.Session{ID: "dead", RootPID: 2, StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfHook})
+	s.UpsertSession(model.Session{ID: "sibling", RootPID: 1, RootStartedAt: "2026-10-11T18:31:54.28205Z", StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfHook})
 	s.EndSession("dead", now)
 	roots := s.SessionRoots()
-	if _, ok := roots[1]; !ok {
-		t.Fatal("live root missing")
+	var got []string
+	for _, sess := range roots[1] {
+		got = append(got, sess.ID+"@"+sess.RootStartedAt)
+	}
+	slices.Sort(got)
+	if want := []string{"live@", "sibling@2026-10-11T18:31:54.28205Z"}; !slices.Equal(got, want) {
+		t.Fatalf("root 1 sessions = %q, want %q", got, want)
 	}
 	if _, ok := roots[2]; ok {
 		t.Fatal("ended session's root must not be reported live")
