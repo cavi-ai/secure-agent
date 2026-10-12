@@ -52,6 +52,15 @@ notarizes the app and DMG, validates both stapled tickets, and checks Gatekeeper
 acceptance before writing checksums. `make dmg` remains available for local
 development builds with optional notarization.
 
+With a Developer ID certificate managed by Xcode (no local identity or notary
+profile), pass the team ID instead. The app is re-signed through an Xcode
+export and notarized with the signed-in Xcode account; its stapled ticket and
+Gatekeeper acceptance are checked before packaging it in an unsigned DMG:
+
+```bash
+make release VERSION=v1.2.3 DEVELOPER_TEAM=TEAMID
+```
+
 Release builds also require `govulncheck` on `PATH` and a successful scan with
 the selected Go compiler. A newer compiler can contain vulnerabilities absent
 from the version declared in `go.mod`; update or select a patched compiler when
@@ -116,6 +125,7 @@ secure-agent/
 ├── packaging/
 │   ├── make_app.sh      # Universal app build and signing
 │   ├── make_dmg.sh      # DMG packaging and optional notarization
+│   ├── devid_export.sh  # Developer ID signing and notarization through Xcode
 │   ├── make_icon.sh     # AppIcon.icns generation
 │   ├── install.sh       # Build, install to /Applications, launch
 │   ├── uninstall.sh     # Legacy installation cleanup

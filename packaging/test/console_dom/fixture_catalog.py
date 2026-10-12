@@ -452,9 +452,33 @@ FIXTURES = {
         payload=payload_cases.grouped_attention,
         served=True,
     ),
+    'dom_attentionfail': Fixture(
+        query='?attentionremodel&attentionfail',
+        scenarios=('attentionremodel', 'attentionfail'),
+        payload=payload_cases.grouped_attention,
+        served=True,
+    ),
+    'dom_attentionrace': Fixture(
+        query='?attentionremodel&attentionrace',
+        scenarios=('attentionremodel', 'attentionrace'),
+        payload=payload_cases.grouped_attention,
+        served=True,
+    ),
+    'dom_attentionwide': Fixture(
+        query='?attentionremodel&layoutwide',
+        scenarios=('attentionremodel', 'layoutwide'),
+        payload=payload_cases.grouped_attention,
+        served=True,
+        window_size=(1440, 900),
+    ),
     'dom_remodelusage': Fixture(
         query='?remodelusage',
         scenarios=('remodelusage',),
+        served=True,
+    ),
+    'dom_usagefocus': Fixture(
+        query='?remodelusage&usagefocus',
+        scenarios=('remodelusage', 'usagefocus'),
         served=True,
     ),
     'dom_plans': Fixture(

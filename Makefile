@@ -24,10 +24,12 @@ dmg:
 # Signed release build: Developer ID Application cert + notarization.
 # Usage: make release [VERSION=x.y.z]
 # Env: explicit CODESIGN_IDENTITY (Developer ID Application) and
-#      NOTARY_PROFILE (keychain profile for notarytool).
+#      NOTARY_PROFILE (keychain profile for notarytool), or DEVELOPER_TEAM
+#      (team ID: Developer ID signing through an Xcode export, notarized with
+#      the signed-in Xcode account).
 release: VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 release:
-	RELEASE_BUILD=1 VERSION="$(VERSION)" CODESIGN_IDENTITY="$(CODESIGN_IDENTITY)" NOTARY_PROFILE="$(NOTARY_PROFILE)" ./packaging/make_dmg.sh
+	RELEASE_BUILD=1 VERSION="$(VERSION)" CODESIGN_IDENTITY="$(CODESIGN_IDENTITY)" NOTARY_PROFILE="$(NOTARY_PROFILE)" DEVELOPER_TEAM="$(DEVELOPER_TEAM)" ./packaging/make_dmg.sh
 
 icon:
 	./packaging/make_icon.sh
@@ -89,6 +91,7 @@ test:
 	./packaging/test/check_console_css.sh
 	@echo "==> Checking app bundle layout..."
 	./packaging/test/check_bundle_layout.sh
+	bash packaging/test/test_devid_export.sh
 	@echo "==> Running console JS unit tests..."
 	node --test 'packaging/test/console/*.test.mjs'
 	@echo "==> Running console DOM tests..."
