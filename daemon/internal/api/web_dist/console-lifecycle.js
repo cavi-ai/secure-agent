@@ -52,7 +52,7 @@ function createConsoleLifecycle({ state, actions }) {
     clearProtectionContext();
     state.reviewResult = null;
     state.reviewResultSeq++;
-    if (state.drawerMode === 'review-result') actions.closeDrawer();
+    if (state.drawerMode === 'review-result' || state.drawerMode === 'permissions') actions.closeDrawer();
     state.drawerReviewResult = null;
     if (state.cancelDialog) state.cancelDialog();
     actions.clearInterval(state.sparkTimer);

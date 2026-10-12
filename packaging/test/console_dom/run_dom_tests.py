@@ -251,6 +251,7 @@ def main():
             if args.review_results_only:
                 screenshot(chrome, origin, '?reviewresult&resultcard', os.path.join(shot_dir, 'review-result-card.png'), tmp, payload_cases.scoped_review())
                 screenshot(chrome, origin, '?reviewresult', os.path.join(shot_dir, 'review-result-detail.png'), tmp, payload_cases.scoped_review())
+                screenshot(chrome, origin, '?reviewresult=expect&resultpermissions', os.path.join(shot_dir, 'review-result-permissions.png'), tmp, payload_cases.scoped_review())
             for name, query, themes in (() if args.review_results_only else SHOTS):
                 for theme in themes:
                     path = os.path.join(shot_dir, f"{name}-{theme}.png")

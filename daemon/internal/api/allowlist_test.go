@@ -86,9 +86,8 @@ func TestAllowlistSuggestApproveRoundTrip(t *testing.T) {
 	}
 	tg := agents.New(cfg, allowlistProcSource{})
 	tg.Refresh()
-	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 	al := correlate.NewAllowlistStore(filepath.Join(dir, "allowlist-overrides.json"))
-	cr.SetAllowlistOverrides(func(agent string) []string { return al.Load()[agent] })
+	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{AllowlistOverrides: func(agent string) []string { return al.Load()[agent] }})
 
 	// Recurring uninspected egress: below threshold = no suggestion.
 	now := time.Now()
@@ -186,9 +185,8 @@ func TestMuteEndpointRoundTrip(t *testing.T) {
 	}
 	tg := agents.New(cfg, allowlistProcSource{})
 	tg.Refresh()
-	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 	ms := correlate.NewMuteStore(filepath.Join(dir, "muted.json"))
-	cr.SetMuteChecker(ms.Muted)
+	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{Muted: ms.Muted})
 
 	st := testStore(t)
 

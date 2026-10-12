@@ -167,11 +167,10 @@ func TestDrainDuplicateModelObservationDoesNotPublishNewRow(t *testing.T) {
 func TestDrainFlagRecoveryUsesSameCorrelator(t *testing.T) {
 	f := newPersistenceFixture(t)
 	f.exec(t, `CREATE TRIGGER reject_flag BEFORE INSERT ON flags BEGIN SELECT RAISE(ABORT, 'injected failure'); END`)
-	cr := correlate.New(f.tagger, sensitive.New(f.cfg), f.cfg, correlate.Hooks{})
-	cr.SetOpenFlagChecker(func(id string) bool {
+	cr := correlate.New(f.tagger, sensitive.New(f.cfg), f.cfg, correlate.Hooks{OpenFlag: func(id string) bool {
 		flag, ok := testutil.Lookup[model.Flag](t)(f.store.GetFlagResult(id))
 		return ok && !flag.Acknowledged
-	})
+	}})
 	input := make(chan event.Event, 4)
 	health := make(chan store.WriteHealth, 4)
 	var offered []model.Flag

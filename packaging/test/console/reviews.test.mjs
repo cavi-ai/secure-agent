@@ -103,8 +103,11 @@ test('receipt labels preserve closure uncertainty and actual permission scope ID
  assert.match(closure,/Closure reported/);assert.match(closure,/not been verified/);
  const scoped=ctx.reviewResultHTML({receipt:{...receipt,action:'expect',scope_ids:['scope-one']},review:record},true);
  assert.match(scoped,/Scoped permission recorded/);assert.match(scoped,/scope-one/);assert.match(scoped,/firewall and payload checks/i);
+ assert.match(scoped,/data-action="open-review-result-permissions"/);
+ assert.doesNotMatch(ctx.reviewResultHTML({receipt:{...receipt,action:'expect',scope_ids:['scope-one']},review:record}),/data-action="open-review-result-permissions"/);
  const once=ctx.reviewResultHTML({receipt:{...receipt,action:'expect'},review:record},true);
  assert.match(once,/Expected once/);assert.match(once,/No future permission/);
+ assert.doesNotMatch(once+closure,/data-action="open-review-result-permissions"/);
  assert.doesNotMatch(scoped,/data-action="review-decision"/);
 });
 

@@ -16,6 +16,9 @@ for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
         if action == 'acknowledge':
             scenarios += ('dismissresult',)
             query += '&dismissresult'
+        elif action == 'expect':
+            scenarios += ('resultrevoke',)
+            query += '&resultrevoke'
         FIXTURES[name] = Fixture(query=query, scenarios=scenarios,
                                  window_size=size, served=True,
                                  payload=payload_cases.scoped_review)
@@ -28,9 +31,12 @@ def run_review_results(page):
         receipt = re.search(r'data-review-result-probe="([^"]+)"', dom)
         state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
         names = ('queueCleared', 'retained', 'label', 'fits', 'evidence', 'readOnly',
-                 'evidenceEntry', 'evidenceReturn')
+                 'evidenceEntry', 'evidenceReturn', 'permissionEntry')
         if action == 'acknowledge':
             names += ('dismissed',)
+        elif action == 'expect':
+            names += ('permissionDetail', 'permissionScope', 'permissionFits',
+                      'permissionCancelled', 'permissionRevoked', 'permissionReturn')
         for name in names:
             page.check(f'review result ({label}, {action}): {name}',
                        state.get(name) is True, str(state))

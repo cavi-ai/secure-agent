@@ -3337,13 +3337,13 @@ document.addEventListener('DOMContentLoaded', () => {
     history.replaceState(null, '', location.pathname + location.search + hash);
   }
 
-  // Permissions from one saved decision stay in its session. Reads and
+  // Permissions from one saved decision stay with their result. Reads and
   // confirmations are scoped to this drawer and authentication generation.
   let sessionPermissions = null;
-  function currentSessionPermissions(st) {
+  function currentDecisionPermissions(st) {
     return !!st && st === sessionPermissions && !sessionEnded && !drawer.hidden &&
       drawerMode === 'permissions' && st.seq === drawerSeq && st.auth === handoffGeneration &&
-      st.receipt.sessionID === sessionWorkbench.selectedSessionId;
+      (st.origin !== 'session' || st.receipt.sessionID === sessionWorkbench.selectedSessionId);
   }
   function renderSessionPermissions(st) {
     const top = drawerBody.scrollTop;
@@ -3364,29 +3364,37 @@ document.addEventListener('DOMContentLoaded', () => {
     drawerBody.scrollTop = top;
   }
   window.SA.closeSessionPermissions = () => {
-    if (drawerMode === 'permissions') closeDrawer();
+    if (drawerMode === 'permissions' && sessionPermissions?.origin === 'session') closeDrawer();
   };
   window.SA.invalidateSessionPermissions = () => {
-    if (drawerMode !== 'permissions' || !sessionPermissions) return;
+    if (drawerMode !== 'permissions' || sessionPermissions?.origin !== 'session') return;
     Object.assign(sessionPermissions, { loading: false, busy: '', error: 'unavailable' });
     renderSessionPermissions(sessionPermissions);
   };
   window.openSessionPermissions = async function(reviewID, sessionID) {
     const receipt = sessionPermissionReceipt(sessionWorkbench.sessionOutcomes, reviewID, sessionID);
-    if (!drawer || !receipt || sessionID !== sessionWorkbench.selectedSessionId || sessionEnded) return;
+    if (sessionID !== sessionWorkbench.selectedSessionId) return;
+    await openDecisionPermissions(receipt, 'session', { label: 'session result', reopen: closeDrawer });
+  };
+  window.openReviewResultPermissions = async function() {
+    if (!drawer || drawer.hidden || drawerMode !== 'review-result') return;
+    await openDecisionPermissions(reviewResultPermissionReceipt(drawerReviewResult), 'review-result', currentDrawerBack());
+  };
+  async function openDecisionPermissions(receipt, origin, back) {
+    if (!drawer || !receipt || sessionEnded) return;
     drawerMode = 'permissions';
     if (btnDrawerCopy) btnDrawerCopy.hidden = true;
     openDrawer({ title: 'Decision permissions', icon: 'doc',
-      back: { label: 'session result', reopen: closeDrawer },
+      back,
       onClose: () => { if (drawerMode === 'permissions') drawerMode = null; sessionPermissions = null; } });
-    sessionPermissions = { receipt, seq: drawerSeq, auth: handoffGeneration, rows: null,
+    sessionPermissions = { receipt, origin, seq: drawerSeq, auth: handoffGeneration, rows: null,
       loading: false, error: '', busy: '', mutationError: false, revoked: new Set() };
     btnDrawerClose?.focus({ preventScroll: true });
     await window.refreshSessionPermissions();
-  };
+  }
   window.refreshSessionPermissions = async function() {
     const st = sessionPermissions;
-    if (!currentSessionPermissions(st) || st.loading || st.busy) return;
+    if (!currentDecisionPermissions(st) || st.loading || st.busy) return;
     st.loading = true;
     renderSessionPermissions(st);
     try {
@@ -3394,28 +3402,28 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!response.ok) throw new Error('Permissions unavailable');
       const rows = await response.json();
       const viewRows = decisionPermissionRows(st.receipt, rows);
-      if (!currentSessionPermissions(st)) return;
+      if (!currentDecisionPermissions(st)) return;
       Object.assign(st, { rows: viewRows, error: '',
         mutationError: false, readAt: new Date().toISOString() });
     } catch {
-      if (!currentSessionPermissions(st)) return;
+      if (!currentDecisionPermissions(st)) return;
       st.error = 'unavailable';
     }
-    if (!currentSessionPermissions(st)) return;
+    if (!currentDecisionPermissions(st)) return;
     st.loading = false;
     renderSessionPermissions(st);
     window.saAnnounce(st.error ? 'Permission status unavailable. Last known records retained.' : 'Permission records loaded.');
   };
   window.revokeSessionPermission = async function(id) {
     const st = sessionPermissions;
-    if (!currentSessionPermissions(st) || st.loading || st.busy || st.error || st.mutationError || st.revoked.has(id)) return;
+    if (!currentDecisionPermissions(st) || st.loading || st.busy || st.error || st.mutationError || st.revoked.has(id)) return;
     const row = st.rows?.find(r => r.id === id);
     if (!row?.revoke || !row.record) return;
     const record = row.record;
     st.busy = id;
     const consequence = row.consequence;
     const confirmed = await window.saConfirm(`Revoke this saved scope for ${record.resource_path}${record.destination ? ' → ' + record.destination : ''}? ${consequence} This does not undo previous access or remediate past exposure.`, { title: 'Revoke permission', okLabel: 'Revoke permission' });
-    if (!currentSessionPermissions(st)) return;
+    if (!currentDecisionPermissions(st)) return;
     if (!confirmed) { st.busy = ''; renderSessionPermissions(st); return; }
     renderSessionPermissions(st);
     btnDrawerClose?.focus({ preventScroll: true });
@@ -3424,13 +3432,13 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!response.ok) throw new Error('Revocation unavailable');
       const result = await response.json();
       if (result?.revoked !== true || result.id !== id) throw new Error('Revocation confirmation unavailable');
-      if (!currentSessionPermissions(st)) return;
+      if (!currentDecisionPermissions(st)) return;
       st.revoked.add(id);
       st.busy = '';
       window.saAnnounce('Permission revocation saved. The original decision and remaining risk are retained.');
       await window.refreshSessionPermissions();
     } catch {
-      if (!currentSessionPermissions(st)) return;
+      if (!currentDecisionPermissions(st)) return;
       Object.assign(st, { busy: '', mutationError: true });
       renderSessionPermissions(st);
       window.saAnnounce('Revocation confirmation unavailable. Refresh permissions before retrying.');
@@ -5017,6 +5025,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'open-review-result':
         e.preventDefault();
         window.openReviewResult();
+        break;
+      case 'open-review-result-permissions':
+        e.preventDefault();
+        window.openReviewResultPermissions();
         break;
       case 'dismiss-review-result':
         e.preventDefault();

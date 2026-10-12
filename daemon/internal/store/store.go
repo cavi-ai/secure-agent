@@ -904,9 +904,9 @@ func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
 	defer s.mu.Unlock()
 	res, err := s.db.Exec(
 		`UPDATE flags SET repeats = COALESCE(repeats, 0) + 1,
-		 last_seen = CASE WHEN last_seen IS NULL OR datetime(last_seen) < datetime(?) THEN ? ELSE last_seen END
-		 WHERE id = ?`,
-		at.UTC().Format(time.RFC3339Nano), at.UTC().Format(time.RFC3339Nano), id)
+		 last_seen = CASE WHEN last_seen IS NULL OR `+timestampOrderExpr("last_seen")+` < `+timestampOrderExpr(":repeat_at")+` THEN :repeat_at ELSE last_seen END
+		 WHERE id = :flag_id`,
+		sql.Named("repeat_at", at.UTC().Format(time.RFC3339Nano)), sql.Named("flag_id", id))
 	if err != nil {
 		log.Printf("store: flag repeat %s: %v", id, err)
 		return false

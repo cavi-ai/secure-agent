@@ -8,10 +8,9 @@ import (
 )
 
 func TestScopedExpectedUsesFullReaderEndpointAndSession(t *testing.T) {
-	c := newFamilyCorrelator(t)
 	now := time.Now().UTC()
 	g := model.DecisionScope{Kind: "session", Agent: "cursor", SessionID: "session", Workspace: "/work", ReaderExe: "/usr/bin/cat", ResourcePath: "/work/.env", RuleID: readConnectRule, Operation: "read-connect", Destination: "evil.example:443", IdentityBasis: "observed-session", CreatedAt: now.Add(-time.Second)}
-	c.SetScopedExpected(func(q []model.DecisionScope, pid int32) bool {
+	c := newFamilyCorrelatorWith(t, Hooks{ScopedExpected: func(q []model.DecisionScope, pid int32) bool {
 		if pid != 42 {
 			return false
 		}
@@ -22,7 +21,7 @@ func TestScopedExpectedUsesFullReaderEndpointAndSession(t *testing.T) {
 			}
 		}
 		return len(q) > 0
-	})
+	}})
 	r := readMark{sessionID: "session", path: g.ResourcePath, exe: g.ReaderExe, pid: 42, kind: event.KindFileOpen, at: now}
 	cm := connMark{sessionID: "session", host: "evil.example", port: 443, pid: 42, at: now}
 	if !c.expectedLocked("cursor", []readMark{r}, cm, now) {

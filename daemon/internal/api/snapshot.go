@@ -60,7 +60,7 @@ func (a *API) currentSnapshot() (Snapshot, error) {
 }
 
 func (a *API) incidentListResult(limit int) ([]store.IncidentDetail, error) {
-	return a.store.RecentIncidentDetails(limit)
+	return readIncidentList(a.store, limit)
 }
 
 func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Event) (Snapshot, error) {
