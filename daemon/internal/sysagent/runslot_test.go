@@ -14,16 +14,21 @@ import (
 
 func TestRunSlotClaimsOneRunAtATime(t *testing.T) {
 	a, _ := testAgent(t, "http://127.0.0.1:1", nil)
-	if err := a.claimRun(7); err != nil || a.runningID() != 7 {
-		t.Fatalf("first claim: id=%d err=%v", a.runningID(), err)
+	if err := a.runBusy(); err != nil {
+		t.Fatalf("free slot: %v", err)
 	}
-	err := a.claimRun(8)
+	a.claimRun(7)
+	err := a.runBusy()
 	if !errors.Is(err, ErrBusy) || !strings.Contains(err.Error(), "run 7 is still running") || a.runningID() != 7 {
-		t.Fatalf("second claim: id=%d err=%v", a.runningID(), err)
+		t.Fatalf("taken slot: id=%d err=%v", a.runningID(), err)
 	}
 	a.releaseRun()
-	if err := a.claimRun(8); err != nil || a.runningID() != 8 {
-		t.Fatalf("claim after release: id=%d err=%v", a.runningID(), err)
+	if err := a.runBusy(); err != nil {
+		t.Fatalf("released slot: %v", err)
+	}
+	a.claimRun(8)
+	if a.runningID() != 8 {
+		t.Fatalf("claim after release: id=%d", a.runningID())
 	}
 }
 
@@ -50,9 +55,7 @@ func TestEntryPointsRefuseWhileRunSlotIsTaken(t *testing.T) {
 	}
 
 	a.mu.Lock()
-	if err := a.claimRun(99); err != nil {
-		t.Fatal(err)
-	}
+	a.claimRun(99)
 	a.mu.Unlock()
 	refusals := map[string]error{}
 	_, refusals["Dispatch"] = a.Dispatch(context.Background(), DispatchInput{PlanID: p.ID})

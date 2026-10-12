@@ -17,14 +17,8 @@ func (a *Agent) runBusy() error {
 	return nil
 }
 
-// claimRun records id as the run in flight, or refuses when one already is.
-func (a *Agent) claimRun(id int64) error {
-	if err := a.runBusy(); err != nil {
-		return err
-	}
-	a.running = id
-	return nil
-}
+// claimRun records id as the run in flight; the caller checked runBusy under the same hold of a.mu.
+func (a *Agent) claimRun(id int64) { a.running = id }
 
 func (a *Agent) releaseRun() { a.running = 0 }
 

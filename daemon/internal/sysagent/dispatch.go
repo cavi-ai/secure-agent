@@ -123,7 +123,7 @@ func (a *Agent) Dispatch(ctx context.Context, in DispatchInput) (model.SysAgentR
 		a.mu.Unlock()
 		return model.SysAgentRun{}, fmt.Errorf("%w: the plan could not be updated", ErrUnavailable)
 	}
-	_ = a.claimRun(run.ID) // free: mu has been held since the runBusy check
+	a.claimRun(run.ID)
 	a.wg.Add(1)
 	a.mu.Unlock()
 	a.audit(run)

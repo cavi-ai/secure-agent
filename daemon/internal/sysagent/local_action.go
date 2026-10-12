@@ -98,7 +98,7 @@ func (a *Agent) RunLocal(messageID int64) (model.SysAgentRun, error) {
 		a.st.PutSysAgentRun(run)
 	}
 	if action.Mode == ModeHeadless {
-		_ = a.claimRun(run.ID) // free: mu has been held since the runBusy check
+		a.claimRun(run.ID)
 		a.wg.Add(1)
 		go a.runHeadless(0, run, "/bin/sh", launch{
 			TaskDir: taskDir,
