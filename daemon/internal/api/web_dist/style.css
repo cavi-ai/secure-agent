@@ -1617,6 +1617,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .session-toolbar .harness-filter-text { max-width: 300px; min-width: 160px; margin-left: auto; }
 .session-toolbar .badge { flex: none; }
 .session-toolbar .switch { min-height: 32px; white-space: nowrap; }
+.session-empty [data-action="show-ended-sessions"] { min-height: 44px; }
 .session-count-strip { font: 500 0.7rem/1.4 var(--mono); color: var(--tx-3); }
 .session-count-strip:empty { display: none; }
 .session-toolbar .harness-pills { gap: 4px; }

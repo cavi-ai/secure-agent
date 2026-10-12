@@ -118,10 +118,10 @@ def run_empty_rail_says_all_quiet(page):
     check = page.check
     dom_quiet = page.fixture('dom_quiet')
     check(
-        'empty rail says all quiet',
+        'empty durable rail says no live sessions without offering ended recovery',
         (
-            'All quiet. Nothing is running.' in dom_query(dom_quiet).text
-            or dom_query(dom_quiet).has(None, {'title': lambda value: 'All quiet. Nothing is running.' in (value or '')})
+            'No live sessions.' in dom_query(dom_quiet).text
+            and not dom_query(dom_quiet).has(None, {'data-action': 'show-ended-sessions'})
         ),
     )
 
@@ -132,10 +132,10 @@ def run_filter_that_hides_everything_offers_to_clear_it(page):
         'filter that hides everything offers to clear it',
         (
             (
-                'No sessions match' in dom_query(dom_nomatch).text
-                or dom_query(dom_nomatch).has(None, {'title': lambda value: 'No sessions match' in (value or '')})
+                'No live sessions match these filters.' in dom_query(dom_nomatch).text
             )
             and dom_query(dom_nomatch).has(None, {'data-action': 'clear-harness-filter'})
+            and not dom_query(dom_nomatch).has(None, {'data-action': 'show-ended-sessions'})
         ),
     )
 

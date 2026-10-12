@@ -2250,6 +2250,16 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionWorkbench.render();
     renderAgents();
   }
+  function showEndedSessions(origin) {
+    const fromDetail = !!origin?.closest('#session-detail');
+    harnessFilter.liveOnly = false;
+    harnessFilterChanged();
+    if (fromDetail) sessionWorkbench.showList();
+    const selected = Array.from(document.querySelectorAll('#session-rail [data-action="select-session"]'))
+      .find(el => el.dataset.id === sessionWorkbench.selectedSessionId && el.getClientRects().length);
+    const target = selected || (liveOnlySwitch?.getClientRects().length ? liveOnlySwitch : null);
+    target?.focus({preventScroll: true});
+  }
   syncHarnessFilterControls();
   for (const el of harnessTextInputs) {
     el.addEventListener('input', () => { harnessFilter.text = el.value; harnessFilterChanged(); });
@@ -5004,6 +5014,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'session-list':
         window.showSessionList();
+        break;
+      case 'show-ended-sessions':
+        showEndedSessions(el);
         break;
       case 'session-latest':
         window.jumpToLatestSession();
