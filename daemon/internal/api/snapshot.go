@@ -25,7 +25,7 @@ type Snapshot struct {
 	// Routine are the same reads across agents (at least 3 flags spanning
 	// agents or files); the console renders one decision for each.
 	Routine     []model.RoutineGroup `json:"routine"`
-	Incidents   any                  `json:"incidents"`
+	Incidents   []snapshotIncident   `json:"incidents"`
 	Events      []event.Event        `json:"events"`
 	Posture     Posture              `json:"posture"`
 	Suggestions []Suggestion         `json:"suggestions"`
