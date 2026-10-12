@@ -41,14 +41,30 @@ Override the identity explicitly, e.g. for proper Gatekeeper distribution:
 export CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
 xcrun notarytool store-credentials secure-agent-notary --apple-id you@example.com --team-id TEAMID
 export NOTARY_PROFILE=secure-agent-notary
-make dmg   # signs, notarizes, and staples both the app and the DMG
+go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+export PATH="$(go env GOPATH)/bin:$PATH"
+make release VERSION=v1.3.0
 ```
 
-With a Developer ID certificate managed by Xcode (no local identity or notary profile), pass the team ID instead. The app is re-signed through an Xcode export, notarized with the signed-in Xcode account, and its stapled ticket is validated before packaging:
+`make release` requires a clean committed tree, a stable version, an explicit
+Developer ID Application identity, and a notarization profile. It signs and
+notarizes the app and DMG, validates both stapled tickets, and checks Gatekeeper
+acceptance before writing checksums. `make dmg` remains available for local
+development builds with optional notarization.
+
+With a Developer ID certificate managed by Xcode (no local identity or notary
+profile), pass the team ID instead. The app is re-signed through an Xcode
+export and notarized with the signed-in Xcode account; its stapled ticket and
+Gatekeeper acceptance are checked before packaging it in an unsigned DMG:
 
 ```bash
 make release VERSION=v1.2.3 DEVELOPER_TEAM=TEAMID
 ```
+
+Release builds also require `govulncheck` on `PATH` and a successful scan with
+the selected Go compiler. A newer compiler can contain vulnerabilities absent
+from the version declared in `go.mod`; update or select a patched compiler when
+the scan reports standard-library issues.
 
 ## Run validation
 

@@ -414,6 +414,42 @@ func TestEndSessionClosesRunningToolCalls(t *testing.T) {
 	}
 }
 
+// An ended session reopens only on activity after its end; activity at or
+// before the end is a late record. Resuming keeps a newer last_seen_at.
+func TestResumeSessionOnlyAfterTheEnd(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	start := time.Date(2026, 10, 11, 18, 0, 0, 0, time.UTC)
+	end := start.Add(30 * time.Minute)
+	s.UpsertSession(model.Session{ID: "c", RootPID: 7, StartedAt: start, LastSeenAt: start, Status: model.SessionActive})
+	if err := s.EndSession("c", end); err != nil {
+		t.Fatal(err)
+	}
+	for _, ts := range []time.Time{end.Add(-time.Second), end} {
+		if resumed, err := s.ResumeSession("c", ts); err != nil || resumed {
+			t.Fatalf("ResumeSession at %s = %v, %v; want false, nil", ts, resumed, err)
+		}
+	}
+	if got, _ := testutil.Lookup[model.Session](t)(s.GetSession("c")); got.Status != model.SessionEnded || got.EndedAt == nil {
+		t.Fatalf("after late records: status %q, ended_at %v; want ended", got.Status, got.EndedAt)
+	}
+	seen := end.Add(5 * time.Minute)
+	s.UpsertSession(model.Session{ID: "c", StartedAt: start, LastSeenAt: seen, Status: model.SessionActive})
+	if resumed, err := s.ResumeSession("c", end.Add(2*time.Minute)); err != nil || !resumed {
+		t.Fatalf("ResumeSession after the end = %v, %v; want true, nil", resumed, err)
+	}
+	got, _ := testutil.Lookup[model.Session](t)(s.GetSession("c"))
+	if got.Status != model.SessionActive || got.EndedAt != nil || !got.LastSeenAt.Equal(seen) {
+		t.Fatalf("resumed: status %q, ended_at %v, last_seen %s; want active, nil, %s", got.Status, got.EndedAt, got.LastSeenAt, seen)
+	}
+	if resumed, err := s.ResumeSession("c", seen.Add(time.Minute)); err != nil || resumed {
+		t.Fatalf("ResumeSession on a live session = %v, %v; want false, nil", resumed, err)
+	}
+}
+
 // Rows stuck at "running" past the cutoff (completion line lost, or written
 // before EndSession swept them) close as error; recent in-flight calls and
 // completed calls are untouched.

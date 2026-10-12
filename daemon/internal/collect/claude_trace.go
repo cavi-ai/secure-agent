@@ -145,11 +145,14 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 		t.msgNext = 0
 	}
 	t.sessionID = rec.SessionID
-	ts := time.Now()
+	ts, observed := time.Now(), true
 	if rec.Timestamp != "" {
 		if parsed, err := time.Parse(time.RFC3339Nano, rec.Timestamp); err == nil {
-			ts = parsed
+			ts, observed = parsed, false
 		}
+	}
+	if observed {
+		defer func() { markObserved(events) }()
 	}
 
 	contents := claudeContents(rec.Message.Content)

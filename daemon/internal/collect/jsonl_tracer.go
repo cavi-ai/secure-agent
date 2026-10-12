@@ -7,6 +7,14 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
+// markObserved flags events stamped with the collector's clock
+// (event.Event.ObservedTS).
+func markObserved(events []event.Event) {
+	for i := range events {
+		events[i].ObservedTS = true
+	}
+}
+
 // TraceSession normalizes the harness-specific identity and sighting rules.
 type TraceSession struct {
 	ID, Harness, Workspace, Origin string
