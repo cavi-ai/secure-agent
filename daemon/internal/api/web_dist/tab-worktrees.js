@@ -6,18 +6,26 @@
 
 const WORKTREE_STATES = ['remove', 'review', 'keep', 'prune'];
 
-// worktreeStateCounts: rows per state (main rows excluded) plus stale.
-function worktreeStateCounts(rep) {
+// State counts preserve the searches and stale filter; the stale count
+// preserves the selected state. All counts both filters cleared.
+function worktreeStateCounts(rep, filter, term) {
+  const f = filter || {};
   const out = { all: 0, remove: 0, review: 0, keep: 0, prune: 0, stale: 0 };
   for (const repo of (rep && rep.repos) || []) {
     for (const w of repo.worktrees || []) {
-      if (w.state === 'main') continue;
+      if (w.state === 'main' || !worktreeMatches(w, repo, f.q)
+        || !matchesSearch(term, w.branch, w.path, repo.path, w.state, w.reasons)) continue;
       out.all++;
-      if (out[w.state] !== undefined) out[w.state]++;
-      if (w.stale) out.stale++;
+      if ((!f.stale || w.stale) && WORKTREE_STATES.includes(w.state)) out[w.state]++;
+      if (w.stale && (!f.state || w.state === f.state)) out.stale++;
     }
   }
   return out;
+}
+
+function nextWorktreeFilter(filter, state) {
+  return { ...filter, state: filter.state === state ? '' : state,
+    stale: state ? !!filter.stale : false };
 }
 
 // worktreeMatches: the search box keeps rows whose branch, path or
@@ -412,6 +420,19 @@ function worktreeAgentChipHTML(w) {
   return `<span class="wt-agent-live" title="${escapeHTML(`${who} is working in this folder; removing it breaks that session`)}">${escapeHTML(who)} working here</span>`;
 }
 
+const WORKTREE_REASON_KINDS = new Set(['keep', 'agent', 'review', 'safe', 'info']);
+
+// worktreeReasonsHTML: the row's reasons as tags toned by the daemon's
+// reason_kinds; the agent chip in the header stands for the agent reason.
+function worktreeReasonsHTML(w) {
+  const kinds = w.reason_kinds || [];
+  const items = (w.reasons || []).map((text, i) => ({ text, kind: WORKTREE_REASON_KINDS.has(kinds[i]) ? kinds[i] : '' }))
+    .filter(it => !(it.kind === 'agent' && w.in_use));
+  if (!items.length) return '';
+  return `<ul class="wt-reasons wt-reason-tags" role="list">${items.map(it =>
+    `<li class="wt-reason${it.kind ? ' wt-reason-' + it.kind : ''}">${escapeHTML(it.text)}</li>`).join('')}</ul>`;
+}
+
 // worktreeTrashBlock: why a keep or review row cannot be moved to the Trash
 // from the console, or ''. The daemon refuses the same rows again.
 function worktreeTrashBlock(w) {
@@ -449,7 +470,7 @@ function worktreeAskHTML(ask) {
   let text;
   if (ask.status === 'running') text = `waiting for ${ask.harness}'s answer…`;
   else if (ask.status === 'answered' && ask.verdict !== 'none') {
-    text = `${ask.verdict}${ask.detail ? ' — ' + ask.detail : ''}${ask.cost_usd ? ` ($${Number(ask.cost_usd).toFixed(2)})` : ''}`;
+    text = `${ask.verdict}${ask.detail ? ' — ' + ask.detail : ''}${ask.cost_usd ? ` (session $${Number(ask.cost_usd).toFixed(2)})` : ''}`;
   } else text = `${ask.status}${ask.detail ? ' — ' + ask.detail : ''}`;
   return `<p class="wt-ask wt-ask-${escapeHTML(ask.status)}"><b>Asked ${escapeHTML(ask.harness)}:</b> ${escapeHTML(text)}</p>`;
 }
@@ -482,7 +503,6 @@ function worktreeRemovalHTML(rm) {
 // removal disables Remove and shows its step.
 function worktreeRowHTML(w, repo, note, ask, removal, askable) {
   const branch = w.branch || (w.detached ? '(detached)' : '');
-  const reasons = (w.reasons || []).map(r => `<li>${escapeHTML(r)}</li>`).join('');
   let action = '';
   if (w.orphan) {
     // Git no longer records this folder: open it, link it to the repository
@@ -516,18 +536,18 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable) {
     : `<button type="button" class="btn btn-ghost btn-sm wt-open" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}" title="Show in Finder" aria-label="Show ${escapeHTML(branch || w.path)} in Finder"><svg class="icon"><use href="#i-folder"/></svg></button>`;
   return `<div class="wt-row wt-${escapeHTML(w.state)}" data-path="${escapeHTML(w.path)}">
     <div class="wt-main">
+      <span class="wt-state">${escapeHTML(w.state)}</span>
       <div class="wt-identity">
-        <span class="wt-branch">${escapeHTML(branch)}</span>
+        <div class="wt-title"><span class="wt-branch">${escapeHTML(branch)}</span>${worktreeAgentChipHTML(w)}${w.stale ? '<span class="wt-stale">stale</span>' : ''}</div>
         <button type="button" class="wt-path" data-action="copy-path" data-path="${escapeHTML(w.path)}" title="${escapeHTML(w.path)} — click to copy">${escapeHTML(worktreePathLabel(w.path, repo.path))}</button>
       </div>
       <div class="wt-facts">
-        <span class="wt-state">${escapeHTML(w.state)}</span>${w.stale ? '<span class="wt-stale">stale</span>' : ''}${worktreeAgentChipHTML(w)}
         <span class="wt-size">${escapeHTML(worktreeSizeLabel(w))}</span>
         <span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>
       </div>
       <div class="wt-actions">${open}${action}${discuss}</div>
     </div>
-    ${reasons ? `<ul class="wt-reasons">${reasons}</ul>` : ''}
+    ${worktreeReasonsHTML(w)}
     ${worktreeNoteHTML(note, discuss ? w.path : '')}
     ${worktreeAskHTML(ask)}
     ${worktreeRemovalHTML(removal)}
@@ -608,7 +628,10 @@ function worktreeRemoveAllHTML(repo, removals) {
 // worktreeFilterHTML: one pill per state with its count, then stale.
 function worktreeFilterHTML(counts, filter) {
   const f = filter || {};
-  const pill = (state, label, n) => `<button type="button" class="wt-pill${(f.state || '') === state ? ' on' : ''}" data-action="worktree-filter" data-state="${state}" aria-pressed="${(f.state || '') === state}">${label} <b>${n}</b></button>`;
+  const pill = (state, label, n) => {
+    const on = (f.state || '') === state && (!!state || !f.stale);
+    return `<button type="button" class="wt-pill${on ? ' on' : ''}" data-action="worktree-filter" data-state="${state}" aria-pressed="${!!on}">${label} <b>${n}</b></button>`;
+  };
   return pill('', 'All', counts.all)
     + WORKTREE_STATES.map(s => pill(s, s[0].toUpperCase() + s.slice(1), counts[s])).join('')
     + `<button type="button" class="wt-pill${f.stale ? ' on' : ''}" data-action="worktree-stale" aria-pressed="${!!f.stale}">Stale <b>${counts.stale}</b></button>`;
@@ -657,21 +680,22 @@ function renderWorktrees() {
     container.innerHTML = state.loading
       ? '<div class="loading">Scanning worktrees… the first scan reads every repository and can take a minute.</div>'
       : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${escapeHTML(state.error || 'No scan yet.')}</span></div>`;
-    if (pills) pills.innerHTML = '';
+    if (pills) renderFilterPills(pills, '');
     if (summary) summary.textContent = '';
     if (legend) legend.hidden = true;
     if (disk) disk.innerHTML = '';
     if (errors) errors.hidden = true;
     return;
   }
-  const counts = worktreeStateCounts(rep);
-  const groups = worktreeGroups(rep, state.filter, SA.globalSearchTerm ? SA.globalSearchTerm() : '');
+  const term = SA.globalSearchTerm ? SA.globalSearchTerm() : '';
+  const counts = worktreeStateCounts(rep, state.filter, term);
+  const groups = worktreeGroups(rep, state.filter, term);
   const shown = groups.reduce((n, g) => n + g.rows.length, 0);
-  if (pills) pills.innerHTML = worktreeFilterHTML(counts, state.filter);
+  if (pills) renderFilterPills(pills, worktreeFilterHTML(counts, state.filter));
   if (summary) summary.textContent = worktreesSummaryText(rep, undefined, shown) + (state.loading ? ' · rescanning…' : '');
   if (legend) {
     legend.textContent = WORKTREE_LEGEND;
-    legend.hidden = counts.all === 0;
+    legend.hidden = worktreeStateCounts(rep).all === 0;
   }
   if (disk) {
     disk.innerHTML = worktreeDiskHTML(rep);
@@ -684,7 +708,7 @@ function renderWorktrees() {
   }
   container.innerHTML = groups.length
     ? groups.map(g => worktreeGroupHTML(g, rep.advice, rep.asks, rep.removals, rep.askable)).join('')
-    : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${counts.all ? 'No worktree matches this filter.' : 'No linked worktrees found. Add a repository above if one is missing.'}</span></div>`;
+    : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${worktreeStateCounts(rep).all ? 'No worktree matches this filter.' : 'No linked worktrees found. Add a repository above if one is missing.'}</span></div>`;
 }
 
 // ---------- clutter ----------

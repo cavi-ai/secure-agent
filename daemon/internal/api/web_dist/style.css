@@ -255,8 +255,8 @@ body {
 .harness-pill:hover { border-color: var(--brand); }
 .harness-pill:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 .harness-pill .harness-chip { gap: 6px; }
-.harness-pill.off { opacity: 0.5; background: transparent; }
-.harness-pill.off .harness-label { text-decoration: line-through; }
+.harness-pill[aria-pressed="true"] { background: var(--brand-bg); border-color: var(--brand); color: var(--brand-2); }
+.harness-pill.off { background: transparent; color: var(--tx-2); }
 .harness-filter-text { flex: 1 1 160px; max-width: 280px; margin-left: auto; padding: 6px 10px; font-size: 0.78rem; }
 .switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx-2); cursor: pointer; -webkit-user-select: none; user-select: none; }
 .switch input {
@@ -1985,6 +1985,10 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .spend-plans:not(:empty) { margin-bottom: 12px; }
 .spend-plan { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .spend-plan-text { font-size: 0.75rem; color: var(--tx-2); overflow-wrap: anywhere; }
+.spend-plan-unverified { border-left: 2px solid var(--line-2); padding-left: 8px; }
+.spend-plan-unverified .hbar-fill { background: var(--tx-3); }
+.spend-plan-history summary { font-size: 0.75rem; color: var(--tx-2); cursor: pointer; }
+.spend-plan-history[open] .spend-plan { margin-top: 6px; }
 .spend-controls { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; min-width: 0; }
 .spend-cache { font-size: 0.68rem; color: var(--tx-3); white-space: normal; }
 .spend-day-guidance { margin: 0 0 8px; font-size: .75rem; color: var(--tx-2); line-height: 1.5; }
@@ -2050,17 +2054,36 @@ button.spend-day:focus-visible { outline: 2px solid var(--brand); outline-offset
 #system-worktrees .wt-repo-actions { flex: 0 1 auto; }
 #system-worktrees .wt-repo-actions > * { margin-left: 0; white-space: normal; overflow-wrap: anywhere; }
 #system-worktrees .wt-repo-error { color: var(--warn); }
-#system-worktrees .wt-identity { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex: 1 1 220px; min-width: 0; padding: 6px 8px; border: 1px solid var(--line-2); border-radius: var(--r-sm); }
+#system-worktrees .wt-row { padding: 12px 14px; }
+#system-worktrees .wt-identity { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; flex: 1 1 220px; min-width: 0; }
+#system-worktrees .wt-title { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; max-width: 100%; }
 #system-worktrees .wt-branch { flex: initial; max-width: 100%; font: 650 14px/1.4 var(--font); color: var(--tx-1); white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 #system-worktrees .wt-path { flex: initial; order: initial; max-width: 100%; font: 12px/1.5 var(--mono); white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 #system-worktrees .wt-size { min-width: 0; text-align: left; }
 #system-worktrees .wt-idle, #system-worktrees .wt-stale { color: var(--tx-2); }
-#system-worktrees .wt-reasons, #system-worktrees .wt-advice, #system-worktrees .wt-ask, #system-worktrees .wt-removal { margin-left: 0; }
+/* Reasons, advice, asks and removals sit under the name, past the state chip. */
+#system-worktrees .wt-reasons, #system-worktrees .wt-advice, #system-worktrees .wt-ask, #system-worktrees .wt-removal { margin-left: 70px; }
+#system-worktrees .wt-reason-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding: 0; list-style: none; }
+/* A reason's tone and mark say what it means for removal, matching the state
+   chips: a violet dot for work that would be lost (keep), an amber ring for
+   something to look at (review), a green check for work kept elsewhere, a
+   dashed outline for context. */
+.wt-reason { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; margin: 0; padding: 3px 8px; border: 1px solid var(--line-2); border-radius: var(--r-sm); font-size: 0.74rem; line-height: 1.35; color: var(--tx-2); overflow-wrap: anywhere; }
+.wt-reasons .wt-reason { margin: 0; }
+.wt-reason::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--tx-3); }
+.wt-reason-keep { border-color: transparent; background: var(--brand-bg); color: var(--tx-1); }
+.wt-reason-keep::before { background: var(--brand); }
+.wt-reason-review { color: var(--tx-1); }
+.wt-reason-review::before { background: none; box-shadow: inset 0 0 0 1.5px var(--warn); }
+.wt-reason-safe { border-color: transparent; background: var(--ok-bg); color: var(--tx-1); }
+.wt-reason-safe::before { content: '✓'; width: auto; height: auto; border-radius: 0; background: none; color: var(--ok); font-weight: 700; line-height: 1; }
+.wt-reason-info { border-style: dashed; color: var(--tx-2); }
 #system-worktrees .wt-filters { gap: 10px; }
 #system-worktrees .wt-search { min-width: 0; }
 #system-worktrees .wt-add { min-width: 0; margin-left: 0; padding: 6px; border: 1px solid var(--line-2); border-radius: var(--r-sm); }
 @media (max-width: 720px) {
   #system-worktrees .wt-repo-identity, #system-worktrees .wt-identity { flex-basis: 100%; }
+  #system-worktrees .wt-reasons, #system-worktrees .wt-advice, #system-worktrees .wt-ask, #system-worktrees .wt-removal { margin-left: 0; }
   #system-worktrees .wt-repo-facts, #system-worktrees .wt-facts, #system-worktrees .wt-repo-actions, #system-worktrees .wt-actions { width: 100%; }
   #system-worktrees .wt-search { flex: 1 1 100%; width: 100%; max-width: none; margin-left: 0; }
   #system-worktrees .wt-add { flex: 1 1 100%; width: 100%; max-width: none; }
@@ -2178,6 +2201,7 @@ body.agent-docked .toasts { inset: 80px calc(min(440px, 100vw) + 22px) auto auto
 .agent-workspace.has-inspector .agent-layout { grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); }
 .agent-chat { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .agent-thread {
+  --agent-message-enter: 160ms;
   flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 26px;
   width: 100%; max-width: 860px; align-self: center; padding: 32px clamp(20px, 4vw, 56px); overflow-y: auto; overscroll-behavior: contain;
 }
@@ -2190,10 +2214,18 @@ body.agent-docked .toasts { inset: 80px calc(min(440px, 100vw) + 22px) auto auto
 .agent-spinner { width: 16px; height: 16px; flex: none; color: var(--brand-2); animation: spin 1s linear infinite; }
 .btn-primary .agent-spinner { color: currentColor; }
 .agent-spinner circle { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-dasharray: 30 14; }
+.agent-working-dots {
+  --agent-work-cycle: 1.2s;
+  display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--brand-2);
+}
+.agent-activity-dot { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: agent-work-pulse var(--agent-work-cycle) var(--ease) infinite; }
+.agent-activity-dot:nth-child(2) { animation-delay: 150ms; }
+.agent-activity-dot:nth-child(3) { animation-delay: 300ms; }
+@keyframes agent-work-pulse { 0%, 70%, 100% { opacity: 0.35; } 35% { opacity: 1; } }
 .agent-proposal-head .badge { display: inline-flex; align-items: center; gap: 6px; }
 .agent-approval-note { font-size: 0.72rem; color: var(--tx-3); }
 .agent-feedback { margin-top: 8px; font-size: 0.78rem; line-height: 1.5; color: var(--bad); overflow-wrap: anywhere; }
-@media (prefers-reduced-motion: reduce) { .agent-spinner { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .agent-spinner, .agent-activity-dot { animation: none; } }
 .agent-bubble {
   padding: 0; border: 0; background: transparent; color: var(--tx-1); font-size: 0.92rem; line-height: 1.65;
   white-space: pre-wrap; overflow-wrap: anywhere;

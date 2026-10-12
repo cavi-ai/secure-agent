@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"log"
 	"sync"
 
@@ -100,7 +101,7 @@ func (i *eventIngest) Feed(e event.Event) bool {
 	st, cr, res, tagger := d.Store, d.Correlator, d.Resolver, d.Tagger
 	pub, deltas, otlpExp := d.Fleet, d.Deltas, d.OTLP
 	postureChanged, advGet, newFlag := d.PostureChanged, d.Advisor, d.NewFlag
-	analyzer, projection := i.analyzer, i.projection
+	projection := i.projection
 	// Attribute before anything else: the stored event, the flags it
 	// triggers, and the incident all carry the session id.
 	res.Resolve(&e)
@@ -192,38 +193,22 @@ func (i *eventIngest) Feed(e event.Event) bool {
 			newFlag(fl)
 		}
 
-		// Incidents aggregate: one per rule+session+subject, flags
-		// become its evidence. The 323-identical-flags storm becomes
-		// one incident with a count, not 323 reports.
-		subject := intel.SubjectForFlag(fl)
-		updated, persisted, absorbErr := st.AbsorbOpenIncident(fl.Rule, fl.SessionID, subject, fl.ID, fl.TS)
-		if absorbErr != nil {
-			log.Printf("store: incident absorb failed: %v", absorbErr)
-			continue
-		}
-		if persisted {
-			if deltas != nil {
-				deltas.Publish(api.Delta{Type: "incident", Data: updated})
-			}
-			if postureChanged != nil {
-				postureChanged()
-			}
-			continue
-		}
-
-		recentEvs, err := st.QueryEvents(store.EventFilter{Limit: 100})
+		report, created, err := i.incidentFor(fl)
 		if err != nil {
-			continue
-		}
-		report := analyzer.Analyze(fl, recentEvs)
-		report.SessionID = fl.SessionID
-		report.Subject = subject
-		report.AggregateCount = 1
-		if err := st.PutIncident(report); err != nil {
+			var absorbErr absorbError
+			if errors.As(err, &absorbErr) {
+				log.Printf("store: incident absorb failed: %v", absorbErr)
+			}
 			continue
 		}
 		if deltas != nil {
 			deltas.Publish(api.Delta{Type: "incident", Data: report})
+		}
+		if !created {
+			if postureChanged != nil {
+				postureChanged()
+			}
+			continue
 		}
 		log.Printf("INCIDENT CREATED [%s]: %s (Risk: %s, %d rotate items)", report.ID, report.Summary, report.Risk, len(report.RotateList))
 		if pub != nil {

@@ -7,8 +7,8 @@
 // Invariants:
 //   - The request is fixed text built from the checker's facts; nothing the
 //     repository contains is sent as instructions.
-//   - One ask runs at a time, bounded by a timeout and (Claude Code) a
-//     dollar cap; the agent runs with the user's own settings and hooks.
+//   - One ask runs at a time, bounded by a timeout; the agent runs with the
+//     user's own settings and hooks.
 //   - The answer is recorded, never acted on: the worktree's verdict and
 //     what removal accepts are computed without it.
 package agentask
@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,9 +31,8 @@ import (
 )
 
 const (
-	// BudgetUSD caps one Claude Code ask (--max-budget-usd).
-	BudgetUSD = 1.00
-	// Timeout bounds one ask.
+	// Timeout bounds one ask. Claude Code takes no budget flag: it counts the
+	// resumed session's past spend against one.
 	Timeout = 15 * time.Minute
 	// maxOutput bounds the reply kept in memory.
 	maxOutput = 1 << 20
@@ -149,8 +147,7 @@ func (a *Asker) run(ask model.AgentAsk, bin string, req Request) {
 	var lastFile string
 	switch ask.Harness {
 	case "claude":
-		args = []string{"--resume", ask.SessionID, "--fork-session", "-p", prompt,
-			"--output-format", "json", "--max-budget-usd", strconv.FormatFloat(BudgetUSD, 'f', 2, 64)}
+		args = []string{"--resume", ask.SessionID, "--fork-session", "-p", prompt, "--output-format", "json"}
 	case "codex":
 		f, err := os.CreateTemp("", "secure-agent-ask-*.txt")
 		if err == nil {
@@ -173,6 +170,10 @@ func (a *Asker) run(ask model.AgentAsk, bin string, req Request) {
 
 	text, cost := reply(ask.Harness, out.String(), lastFile)
 	verdict, detail := ParseVerdict(text)
+	agentErr := ""
+	if ask.Harness == "claude" {
+		agentErr = claudeError(out.String())
+	}
 	fin := a.now()
 	ask.FinishedAt, ask.CostUSD, ask.Output = &fin, cost, tail(text, 12)
 	switch {
@@ -180,8 +181,15 @@ func (a *Asker) run(ask model.AgentAsk, bin string, req Request) {
 		ask.Status, ask.Verdict, ask.Detail = "timeout", "none", fmt.Sprintf("no answer within %v", a.timeout)
 	case verdict != "":
 		ask.Status, ask.Verdict, ask.Detail = "answered", verdict, detail
-	case runErr != nil:
-		ask.Status, ask.Verdict, ask.Detail = "failed", "none", strings.TrimSpace(runErr.Error()+": "+tail(errOut.String(), 3))
+	case runErr != nil || agentErr != "":
+		why := agentErr
+		if why == "" {
+			why = strings.TrimSpace(tail(errOut.String(), 3))
+		}
+		if runErr != nil {
+			why = strings.TrimSuffix(runErr.Error()+": "+why, ": ")
+		}
+		ask.Status, ask.Verdict, ask.Detail = "failed", "none", why
 	default:
 		ask.Status, ask.Verdict, ask.Detail = "answered", "none", "the reply had no WORKTREE-VERDICT line"
 	}
@@ -243,6 +251,43 @@ func reply(harness, stdout, lastFile string) (string, float64) {
 		}
 	}
 	return stdout, 0
+}
+
+// claudeError is the error Claude Code's JSON result reports: its text errors,
+// else its result text, else its subtype. "" only when the result does not
+// report an error.
+func claudeError(stdout string) string {
+	var r struct {
+		IsError bool              `json:"is_error"`
+		Errors  []json.RawMessage `json:"errors"`
+		Result  json.RawMessage   `json:"result"`
+		Subtype json.RawMessage   `json:"subtype"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(stdout)), &r) != nil || !r.IsError {
+		return ""
+	}
+	text := func(raw json.RawMessage) string {
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			return ""
+		}
+		return strings.TrimSpace(s)
+	}
+	var errs []string
+	for _, e := range r.Errors {
+		if s := text(e); s != "" {
+			errs = append(errs, s)
+		}
+	}
+	switch {
+	case len(errs) > 0:
+		return strings.Join(errs, "; ")
+	case text(r.Result) != "":
+		return text(r.Result)
+	case text(r.Subtype) != "":
+		return text(r.Subtype)
+	}
+	return "claude reported an error"
 }
 
 func tail(s string, n int) string {

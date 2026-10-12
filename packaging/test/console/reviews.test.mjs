@@ -248,10 +248,12 @@ test('bulk review uses the selected evidence revision and retains a stale choice
  assert.ok(start>=0&&end>start);
  const calls=[],drafts=new Map(),selected=new Set(['review:context']);let refreshed=0;
  const ctx={window:{SA:{historyRows:new Map([['review:context',{review:{id:'context',revision:1},flagIds:[]}]])},saConfirm:async()=>true},
-  historySelected:selected,reviewDrafts:drafts,telemetryData:{},stage:()=>()=>{},syncHistoryChecks:()=>{},markDirty:()=>{},
+  historySelected:selected,reviewDrafts:drafts,telemetryData:{},reviewedAfterOptimistic:()=>({}),syncHistoryChecks:()=>{},markDirty:()=>{},
   showToast:()=>{},fetchTelemetry:async()=>{refreshed++},
   apiFetch:async(url,opts)=>{calls.push([url,JSON.parse(opts.body)]);return{ok:false,status:409,text:async()=> 'stale'}}};
- vm.runInNewContext(app.slice(start,end),ctx);await ctx.window.historyBulkReview();
+ vm.createContext(ctx);vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/staged-write.js',import.meta.url),'utf8'),ctx);
+ ctx.stagedWrite=ctx.createStagedWrite({telemetry:()=>ctx.telemetryData,render:()=>{},beginAttentionWrite:()=>null,request:ctx.apiFetch});
+ vm.runInContext(app.slice(start,end),ctx);await ctx.window.historyBulkReview();
  assert.deepEqual(calls,[['/reviews/decision',{id:'context',revision:1,action:'acknowledge'}]]);
  assert.equal(refreshed,1);assert.equal(drafts.get('context').conflict,true);assert.equal(selected.size,1);
 });

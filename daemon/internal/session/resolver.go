@@ -188,7 +188,7 @@ type resolverStore interface {
 	RekeySession(string, string) error
 	TouchSession(string, time.Time) error
 	MarkSessionsIdle(time.Time) ([]string, error)
-	SessionRoots() map[int32]string
+	SessionRoots() map[int32][]model.Session
 	EndSession(string, time.Time) error
 	ResumeSession(string, time.Time) (bool, error)
 }
@@ -716,14 +716,18 @@ func (r *Resolver) resumeLocked(e *event.Event) {
 // recorded (the same start time, when recorded). A session without a root
 // counts as live.
 func (r *Resolver) rootLive(sess model.Session) bool {
-	if sess.RootPID == 0 {
+	return sess.RootPID == 0 || !r.rootGone(sess.RootPID, rootStarted(sess))
+}
+
+// rootGone reports whether root no longer runs the process a session
+// recorded: the pid is gone, or a process started at another time holds it.
+// A zero recorded start checks the pid alone.
+func (r *Resolver) rootGone(root int32, recorded time.Time) bool {
+	started, ok := r.tagger.Started(root)
+	if !ok {
 		return true
 	}
-	if start := rootStarted(sess); !start.IsZero() {
-		info, ok := r.tagger.Tag(sess.RootPID)
-		return ok && info.StartedAt.Equal(start)
-	}
-	return r.tagger.Alive(sess.RootPID)
+	return !recorded.IsZero() && !started.IsZero() && !started.Equal(recorded)
 }
 
 // holdRootLocked gives a resumed session back the root endLocked released: a
@@ -1029,26 +1033,32 @@ func (r *Resolver) Sweep() {
 		log.Printf("session: persist idle transitions: %v", err)
 	}
 
-	live := map[int32]bool{}
-	for pid := range r.tagger.TaggedPIDs() {
-		live[pid] = true
-	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for root, id := range r.byRoot {
 		// A root missing from one process-table sample is ended only when the
-		// process source confirms it is gone.
-		if !live[root] && !r.tagger.Alive(root) {
+		// process source confirms it is gone or reused.
+		sess, ok, err := r.lookupLocked(id)
+		if err != nil {
+			continue
+		}
+		var recorded time.Time
+		if ok && sess.RootPID == root {
+			recorded = rootStarted(sess)
+		}
+		if r.rootGone(root, recorded) {
 			r.endLocked(id, now)
 		}
 	}
 	// Sessions known to the store but not to the in-memory maps (daemon
-	// restarted mid-session): end those whose root pid is not live, and end
-	// pid-less hook sessions after a day of silence.
-	for root, id := range r.st.SessionRoots() {
-		if _, tracked := r.byRoot[root]; !tracked && !live[root] && !r.tagger.Alive(root) {
-			r.endLocked(id, now)
+	// restarted mid-session, or other conversations on a tracked root): end
+	// those whose root is gone or reused, and end pid-less hook sessions
+	// after a day of silence.
+	for root, sessions := range r.st.SessionRoots() {
+		for _, sess := range sessions {
+			if r.byRoot[root] != sess.ID && r.rootGone(root, rootStarted(sess)) {
+				r.endLocked(sess.ID, now)
+			}
 		}
 	}
 	sessions, err := r.st.ListSessions(store.SessionFilter{Status: model.SessionIdle, Limit: 500})

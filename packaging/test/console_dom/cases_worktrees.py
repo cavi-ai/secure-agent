@@ -52,6 +52,17 @@ def run_worktrees(page):
         ),
     )
     check(
+        'worktrees: reasons are tags toned by kind, and the agent chip replaces the agent reason',
+        (
+            '<li class="wt-reason wt-reason-keep">2 uncommitted changes</li>' in wt
+            and '<li class="wt-reason wt-reason-review">ignored files that only live here: .tmp/ (3 files, 1.2 MB)</li>' in wt
+            and '<li class="wt-reason wt-reason-safe">merged into origin/main (squash)</li>' in wt
+            and '<li class="wt-reason wt-reason-info">directory is gone; git still lists it</li>' in wt
+            and 'an agent session is live here</li>' not in wt
+            and '<div class="wt-title"><span class="wt-branch">(detached)</span><span class="wt-agent-live"' in wt
+        ),
+    )
+    check(
         'worktrees: state pills carry counts and the summary line reads the scan',
         (
             'data-state="" aria-pressed="true">All <b>4</b></button>' in dom_wt
@@ -84,7 +95,7 @@ def run_worktrees(page):
             and '>Ask codex</button>' in wt
             and 'Ask the agent' not in wt
             and not dom_query(wt).has(None, {'data-action': 'worktree-review'})
-            and '<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://github.com/o/r/pull/9 ($0.21)</p>' in wt
+            and '<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://github.com/o/r/pull/9 (session $0.21)</p>' in wt
         ),
     )
     check(
@@ -576,7 +587,15 @@ def run_worktree_hierarchy(page):
             page.check(f'worktree hierarchy ({width}): {name}', state.get(name) is True, str(state))
 
 
+def run_filter_regressions(page):
+    dom = page.dom('?raildemo', served=True, fixture={'script': 'cases_filter_regressions.js'})
+    state = json.loads(html.unescape(pre(dom, 'filter-regression-probe')) or '{}')
+    for key in ('state', 'focus', 'deselect', 'stale', 'intersection', 'all', 'searchEmpty', 'harnessVisible', 'harnessOff', 'harnessFocus', 'harnessOn', 'harnessAll', 'shared'):
+        page.check(f'filter regressions: {key}', state.get(key) is True, str(state))
+
+
 CASES = (
+    Case('filter_regressions', run_filter_regressions),
     Case('worktree_hierarchy', run_worktree_hierarchy),
     Case('worktrees', run_worktrees, ('dom_memfam', 'dom_wt', 'dom_wtdiscuss', 'dom_wtdiscussoff', 'dom_wtdockcycle', 'dom_wtrefresh', 'dom_wtreview', 'dom_wtreviewtrash', 'dom_wtsizing')),
     Case('clutter', run_clutter, ('dom_clutter', 'dom_clutteradvise', 'dom_clutter_view')),

@@ -776,6 +776,7 @@ function planLineText(p) {
   const cap = s => { s = String(s || ''); return s ? s[0].toUpperCase() + s.slice(1) : ''; };
   const sharing = Array.isArray(p.homes) && p.homes.length > 1 ? `shared by ${p.homes.length} homes` : String(p.home || '');
   const parts = [[cap(p.harness), cap(p.plan_type)].filter(Boolean).join(' '), sharing];
+  if (p.harness === 'codex' && !p.account_key) parts.push('Account unverified — may overlap a shared account');
   for (const w of Array.isArray(p.windows) ? p.windows : []) {
     const reset = Date.parse(w.resets_at);
     parts.push(`${planWindowLabel(w.window_minutes)} ${Math.round(Number(w.used_percent) || 0)}% used`
@@ -784,19 +785,33 @@ function planLineText(p) {
   return parts.filter(Boolean).join(' · ');
 }
 
+function planObservationHTML(value) {
+  const unavailable = 'Observation time unavailable';
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)
+    || Number(value.slice(0, 4)) <= 1) return unavailable;
+  const date = new Date(value);
+  const calendar = new Date(value.slice(0, 19).toUpperCase() + 'Z');
+  if (!isFinite(date.getTime()) || !isFinite(calendar.getTime()) || calendar.toISOString().slice(0, 19) !== value.slice(0, 19).toUpperCase()) return unavailable;
+  const text = `${EVENT_MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()} ${fmtDayClock(date).slice(4)}`;
+  return `Observed <time datetime="${date.toISOString()}">${escapeHTML(text)}</time>`;
+}
+
 // spendPlanItems: the Spend card's plan-headroom lines as patchList items
 // { key: "plan:<home>", html } — the line, then one bar per window filled to
 // used_percent. No items for an empty list.
 function spendPlanItems(plans) {
-  return (plans || []).map(p => {
+  const unverified = p => p.harness === 'codex' && !p.account_key;
+  return [...(plans || [])].sort((a, b) => Number(unverified(a)) - Number(unverified(b))).map(p => {
     const bars = (Array.isArray(p.windows) ? p.windows : []).map(w => {
       const pct = Math.min(100, Math.max(0, Number(w.used_percent) || 0));
       const cls = pct >= 90 ? ' crit' : pct >= 75 ? ' warn' : '';
       return `<span class="hbar-track" title="${escapeHTML(planWindowLabel(w.window_minutes))}"><span class="hbar-fill${cls}" data-w="${pct.toFixed(1)}"></span></span>`;
     }).join('');
-    return { key: `plan:${p.account_key ? p.account_key + ':' + (p.limit_id || '') : p.home_path || p.home}`, html: `<div class="spend-plan">
-      <span class="spend-plan-text">${escapeHTML(planLineText(p))}</span>${bars}
-    </div>` };
+    const html = `<div class="spend-plan${unverified(p) ? ' spend-plan-unverified' : ''}">
+      <span class="spend-plan-text">${escapeHTML(planLineText(p))} · ${planObservationHTML(p.seen_at)}</span>${bars}
+    </div>`;
+    return { key: `plan:${p.account_key ? p.account_key + ':' + (p.limit_id || '') : p.home_path || p.home}`,
+      html: unverified(p) ? `<details class="spend-plan-history"><summary>Unverified quota observation · ${escapeHTML(p.home || p.harness)}</summary>${html}</details>` : html };
   });
 }
 

@@ -425,20 +425,35 @@ def run_empty_spend_report(page):
         ),
     )
 
+ATTENTION_FIELDS = ['initial', 'evidenceOpen', 'named', 'modal', 'pendingRetained', 'final', 'focus']
+# The probe reports focus as held for a failed or interrupted write.
+INTERRUPTED_ATTENTION_FIELDS = ['initial', 'evidenceOpen', 'named', 'modal', 'pendingRetained', 'final']
+USAGE_FIELDS = ['selected', 'matches', 'focus', 'detail', 'reset']
+# The wide variant opens the resource policy editor instead of writing.
+WIDE_ATTENTION_FIELDS = ['initial', 'evidenceOpen', 'named', 'final']
+WIDE_LAYOUT = {'wide': True, 'modal': False, 'inert': False, 'overflow': False, 'contentFit': True, 'named': True}
+
+
 def run_console(page):
     check = page.check
-    dom_attentionremodel = page.fixture('dom_attentionremodel')
-    dom_remodelusage = page.fixture('dom_remodelusage')
-    for label, rendered, pid, fields in (('attention inspector', dom_attentionremodel, 'attention-remodel-probe', ['initial', 'evidenceOpen', 'named', 'modal', 'pendingRetained', 'final', 'focus']), ('daily usage selection', dom_remodelusage, 'usage-remodel-probe', ['selected', 'matches', 'focus', 'detail', 'reset'])):
-        raw = html.unescape(pre(rendered, pid))
+    for label, fixture, pid, expected in (
+        ('attention inspector', 'dom_attentionremodel', 'attention-remodel-probe', dict.fromkeys(ATTENTION_FIELDS, True)),
+        ('attention inspector (failed write)', 'dom_attentionfail', 'attention-remodel-probe', dict.fromkeys(INTERRUPTED_ATTENTION_FIELDS, True)),
+        ('attention inspector (selection during write)', 'dom_attentionrace', 'attention-remodel-probe', dict.fromkeys(INTERRUPTED_ATTENTION_FIELDS, True)),
+        ('attention inspector (1440px)', 'dom_attentionwide', 'attention-remodel-probe', dict.fromkeys(WIDE_ATTENTION_FIELDS, True)),
+        ('attention inspector layout (1440px)', 'dom_attentionwide', 'remodel-layout-probe', WIDE_LAYOUT),
+        ('daily usage selection', 'dom_remodelusage', 'usage-remodel-probe', dict.fromkeys(USAGE_FIELDS, True)),
+        ('daily usage selection (many repositories)', 'dom_usagefocus', 'usage-remodel-probe', dict.fromkeys(USAGE_FIELDS, True)),
+    ):
+        raw = html.unescape(pre(page.fixture(fixture), pid))
         try:
             receipt = json.loads(raw)
         except (ValueError, TypeError):
             receipt = {}
-        for field in fields:
+        for field, value in expected.items():
             check(
                 f'{label}: {field}',
-                receipt.get(field) is True,
+                receipt.get(field) is value,
                 raw,
             )
 
@@ -3995,7 +4010,8 @@ CASES = (
     Case('kpi_flags_are_unacted_last_24h', run_kpi_flags_are_unacted_last_24h, ('dom',)),
     Case('kpi_incidents_count', run_kpi_incidents_count, ('dom',)),
     Case('empty_spend_report', run_empty_spend_report, ('dom_nocosts',)),
-    Case('console', run_console, ('dom_attentionremodel', 'dom_remodelusage')),
+    Case('console', run_console, ('dom_attentionremodel', 'dom_attentionfail', 'dom_attentionrace', 'dom_attentionwide',
+                                  'dom_remodelusage', 'dom_usagefocus')),
     Case('a_switched_off_pill_hides_the_harness_in_agents_too', run_a_switched_off_pill_hides_the_harness_in_agents_too, ('dom_pill',)),
     Case('claude_instance_pid', run_claude_instance_pid, ('dom',)),
     Case('nested_helper_pid', run_nested_helper_pid, ('dom',)),

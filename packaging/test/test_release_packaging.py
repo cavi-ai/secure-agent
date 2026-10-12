@@ -34,18 +34,25 @@ printf '%s' "$DMG_CONTENT" > "${@: -1}"
 set -eu
 touch "${@: -1}"
 ''')
+        self.calls = self.root / "calls.log"
         for command in ("codesign", "xcrun", "spctl", "govulncheck"):
             self.write_script(self.bin / command, '''#!/bin/bash
 set -eu
+echo "$(basename "$0") $*" >> "$CALLS"
 if [[ "$(basename "$0")" == "${FAIL_COMMAND:-}" ]]; then exit 1; fi
+''')
+        self.write_script(packaging / "devid_export.sh", '''#!/bin/bash
+set -eu
+echo "devid_export $*" >> "$CALLS"
+mkdir -p "$3/notarized/Secure Agent.app"
 ''')
         self.write_script(self.bin / "git", '''#!/bin/bash
 set -eu
 if [[ "${DIRTY_TREE:-0}" == 1 ]]; then exit 1; fi
 ''')
         self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + os.defpath,
-                    "VERSION": "v1.3.0", "DMG_CONTENT": "first"}
-        for key in ("CODESIGN_IDENTITY", "NOTARY_PROFILE", "RELEASE_BUILD", "FAIL_COMMAND", "DIRTY_TREE"):
+                    "VERSION": "v1.3.0", "DMG_CONTENT": "first", "CALLS": str(self.calls)}
+        for key in ("CODESIGN_IDENTITY", "NOTARY_PROFILE", "DEVELOPER_TEAM", "RELEASE_BUILD", "FAIL_COMMAND", "DIRTY_TREE"):
             self.env.pop(key, None)
 
     def write_script(self, path, body):
@@ -67,6 +74,25 @@ if [[ "${DIRTY_TREE:-0}" == 1 ]]; then exit 1; fi
         self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
         self.assertEqual((dist / "checksums.txt").read_text(),
                          other + hashlib.sha256(b"second").hexdigest() + "  dist/SecureAgent-v1.3.0.dmg\n")
+
+    def test_developer_team_release_packages_the_notarized_app(self):
+        result = self.run_build(RELEASE_BUILD="1", DEVELOPER_TEAM="ABCDE12345")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "dist/SecureAgent-v1.3.0.dmg").read_bytes(), b"first")
+        calls = self.calls.read_text().splitlines()
+        export = [c for c in calls if c.startswith("devid_export ")]
+        self.assertEqual(len(export), 1)
+        self.assertIn("dist/Secure Agent.app ABCDE12345 ", export[0])
+        notarized = "devid/notarized/Secure Agent.app"
+        self.assertTrue(any(c.startswith("xcrun stapler validate ") and c.endswith(notarized) for c in calls), calls)
+        self.assertTrue(any(c.startswith("spctl --assess --type execute ") and c.endswith(notarized) for c in calls), calls)
+        self.assertFalse(any(c.startswith("codesign --force") or "--type open" in c for c in calls), calls)
+
+    def test_release_rejects_malformed_developer_team_before_build(self):
+        result = self.run_build(RELEASE_BUILD="1", DEVELOPER_TEAM="team")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("DEVELOPER_TEAM", result.stderr)
+        self.assertFalse((self.root / "dist/built").exists())
 
     def test_release_rejects_missing_notarization_before_build(self):
         result = self.run_build(RELEASE_BUILD="1", CODESIGN_IDENTITY="Developer ID Application: Fixture (FIXTURE)")

@@ -1738,3 +1738,11 @@ test('Processes identity stays escaped above factual metadata and preserves help
   assert.match(html, /data-action="kill" data-pid="4413" data-started="2026-10-10T09:02:00Z"/);
   assert.match(ctx.agentInstanceHTML({root:{pid:42,name:'codex'},children:[]}, Date.now(), {}, new Map()), /agent-row-title">Codex<\/span>/);
 });
+
+
+test('harness All resets exclusions and only represents the unfiltered harness set', () => {
+  const all = harnessPillsHTML(['claude', 'codex'], {});
+  assert.match(all, /data-action="all-harnesses" aria-pressed="true">All/);
+  const subset = harnessPillsHTML(['claude', 'codex'], {codex:false});
+  assert.match(subset, /data-action="all-harnesses" aria-pressed="false">All/);
+});

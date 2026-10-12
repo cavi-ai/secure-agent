@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 # Release builds must be distributable; local app/DMG builds remain separate.
+# DEVELOPER_TEAM replaces the identity and notary profile: the app is signed
+# and notarized through an Xcode export (devid_export.sh).
 require_release_settings() {
-  if [[ "${CODESIGN_IDENTITY:-}" != "Developer ID Application: "* ]]; then
-    echo "error: release builds require an explicit Developer ID Application signing identity" >&2
-    return 1
-  fi
-  if [[ -z "${NOTARY_PROFILE:-}" ]]; then
-    echo "error: release builds require NOTARY_PROFILE" >&2
-    return 1
+  if [[ -n "${DEVELOPER_TEAM:-}" ]]; then
+    if [[ ! "${DEVELOPER_TEAM}" =~ ^[A-Z0-9]{10}$ ]]; then
+      echo "error: DEVELOPER_TEAM must be a 10-character team ID" >&2
+      return 1
+    fi
+  else
+    if [[ "${CODESIGN_IDENTITY:-}" != "Developer ID Application: "* ]]; then
+      echo "error: release builds require an explicit Developer ID Application signing identity or DEVELOPER_TEAM" >&2
+      return 1
+    fi
+    if [[ -z "${NOTARY_PROFILE:-}" ]]; then
+      echo "error: release builds require NOTARY_PROFILE" >&2
+      return 1
+    fi
   fi
   if [[ ! "${VERSION:-}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "error: release builds require VERSION=x.y.z or vX.Y.Z" >&2

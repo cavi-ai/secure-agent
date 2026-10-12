@@ -95,16 +95,68 @@ echo 'a warning on stderr' >&2
 	b, _ := os.ReadFile(args)
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
 	joined := strings.Join(lines, "|")
-	for _, want := range []string{"--resume|sess-1234|--fork-session|-p|", "--output-format|json|--max-budget-usd|1.00", "|" + wt} {
+	for _, want := range []string{"--resume|sess-1234|--fork-session|-p|", "--output-format|json|" + wt} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("claude args/cwd %q lack %q", joined, want)
 		}
+	}
+	// Claude counts the resumed session's past spend against a budget flag.
+	if strings.Contains(joined, "--max-budget-usd") {
+		t.Fatalf("claude args %q carry a budget cap", joined)
 	}
 	if !strings.Contains(joined, "WORKTREE-VERDICT: removable <reason>") || !strings.Contains(joined, "- 2 uncommitted changes") {
 		t.Fatalf("prompt missing the request or the reasons: %q", joined)
 	}
 	if len(st.ledger) != 1 || st.ledger[0].Action != "ask:pr" || len(st.audit) != 1 || st.audit[0].Action != "worktree-ask" {
 		t.Fatalf("ledger %+v audit %+v", st.ledger, st.audit)
+	}
+}
+
+// A failed ask names the agent's own error: claude's JSON result when it
+// reports one, else the end of stderr, with no empty tail.
+func TestFailedAskNamesTheAgentsError(t *testing.T) {
+	budget := `{"type":"result","subtype":"error_max_budget_usd","is_error":true,"errors":["Reached maximum budget ($1)"],"total_cost_usd":6.48}`
+	for _, c := range []struct {
+		name, script, detail string
+	}{
+		{"claude error result", "printf '%s\\n' '" + budget + "'\nexit 1\n", "exit status 1: Reached maximum budget ($1)"},
+		{"claude error result, exit 0", "printf '%s\\n' '" + budget + "'\n", "Reached maximum budget ($1)"},
+		{"claude error with only a result", "printf '%s\\n' '{\"type\":\"result\",\"is_error\":true,\"result\":\"API Error: 529 overloaded\"}'\nexit 1\n", "exit status 1: API Error: 529 overloaded"},
+		{"claude error with only a subtype", "printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"error_max_turns\",\"is_error\":true}'\nexit 1\n", "exit status 1: error_max_turns"},
+		{"claude error with only a subtype, exit 0", "printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true}'\n", "error_during_execution"},
+		{"claude errors that are not text", "printf '%s\\n' '{\"type\":\"result\",\"is_error\":true,\"errors\":[{\"message\":\"x\"}]}'\nexit 1\n", "exit status 1: claude reported an error"},
+		{"stderr", "echo 'not json'\necho 'boom' >&2\nexit 3\n", "exit status 3: boom"},
+		{"nothing said", "exit 2\n", "exit status 2"},
+	} {
+		a, st, wt, bin := setup(t, "claude")
+		fakeCLI(t, bin, "claude", c.script)
+		ask, err := a.Ask(Request{Path: wt, State: "keep"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Wait()
+		if got := st.asks[ask.ID]; got.Status != "failed" || got.Verdict != "none" || got.Detail != c.detail {
+			t.Errorf("%s: ask = %q %q %q, want failed none %q", c.name, got.Status, got.Verdict, got.Detail, c.detail)
+		}
+	}
+	// A verdict is the agent's answer even when the run also reports an error;
+	// a reply that is not an error but names no verdict is answered.
+	for _, c := range []struct {
+		name, script, status, verdict, detail string
+	}{
+		{"verdict despite an error", `printf '%s\n' '{"type":"result","is_error":true,"result":"done\nWORKTREE-VERDICT: keep busy"}'` + "\nexit 1\n", "answered", "keep", "busy"},
+		{"no verdict", `printf '%s\n' '{"type":"result","is_error":false,"result":"I looked around."}'` + "\n", "answered", "none", "the reply had no WORKTREE-VERDICT line"},
+	} {
+		a, st, wt, bin := setup(t, "claude")
+		fakeCLI(t, bin, "claude", c.script)
+		ask, err := a.Ask(Request{Path: wt, State: "keep"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Wait()
+		if got := st.asks[ask.ID]; got.Status != c.status || got.Verdict != c.verdict || got.Detail != c.detail {
+			t.Errorf("%s: ask = %q %q %q, want %q %q %q", c.name, got.Status, got.Verdict, got.Detail, c.status, c.verdict, c.detail)
+		}
 	}
 }
 

@@ -13,27 +13,26 @@ const plain = x => JSON.parse(JSON.stringify(x));
 function build({ telemetry = {}, respond = () => ({ ok: true, json: async () => ({}) }), window: win = {}, flagList = [], dropFlag } = {}) {
   const ctx = { Date, setTimeout: fn => { fn(); }, window: { saConfirm: async () => true, ...win } };
   vm.createContext(ctx);
-  for (const file of ['lib.js', 'tab-findings.js', 'finding-actions.js']) {
+  for (const file of ['lib.js', 'tab-findings.js', 'staged-write.js', 'finding-actions.js']) {
     vm.runInContext(readFileSync(path.join(web, file), 'utf8'), ctx, { filename: file });
   }
   const log = { requests: [], toasts: [], notes: [], refetches: 0, refills: 0, closed: [], dropped: 0 };
   const state = { t: telemetry };
-  const stage = (keys, _panels, mutate) => {
-    const before = keys.map(k => state.t[k]);
-    mutate();
-    const after = keys.map(k => state.t[k]);
-    const revert = () => { keys.forEach((k, i) => { if (state.t[k] === after[i]) state.t[k] = before[i]; }); };
-    revert.commit = () => {};
-    return revert;
+  const request = async (url, req) => {
+    log.requests.push({ url, method: req.method, body: req.body ? JSON.parse(req.body) : undefined });
+    return respond(url, req);
   };
+  const writes = ctx.createStagedWrite({
+    telemetry: () => state.t,
+    render: () => {},
+    beginAttentionWrite: () => Object.assign(() => true, { isCurrent: () => true }),
+    request
+  });
   const actions = ctx.createFindingActions({
-    request: async (url, req) => {
-      log.requests.push({ url, method: req.method, body: req.body ? JSON.parse(req.body) : undefined });
-      return respond(url, req);
-    },
+    request,
     toast: (message, type) => log.toasts.push({ message, type }),
     refetch: () => { log.refetches++; },
-    stage,
+    writes,
     telemetry: () => state.t,
     cardNote: (...args) => log.notes.push(args),
     cssq: x => x,

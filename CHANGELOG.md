@@ -79,7 +79,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Settings → File Guard and Notifications: mode menus replace segmented controls.
 - Settings → Providers: every daemon harness by name with its mark, Codex, Cursor, OpenClaw and Hermes first, toggles applied without a restart.
 - Spend: saved spend shows at once while it refreshes; one quota per shared Codex account; a daily usage bar, chosen by click or arrow keys, opens that day's breakdown.
-- Worktrees: the live-session button reads **Ask <harness>**.
+- Worktrees: the live-session button reads **Ask <harness>**, runs Claude Code without a budget cap, and a failed ask shows the agent's own error.
+- Worktrees: rows lead with their state, and reasons are tags colored by what they mean for removal (`reason_kinds` on `GET /worktrees`).
 - Worktrees: the advisor sees the merge verdict and the default branch's side.
 
 ### Fixed
@@ -124,7 +125,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Resource episodes: include the session's tool calls, model calls and late file events.
 - Routing: the proxy URL carries the token.
 - Sessions: activity timestamps only move forward.
-- Sessions: an ended session that records new work while its process lives returns to active.
+- Sessions: an ended session that records new work while its process lives returns to active, and every session on an exited or reused root ends in the same sweep.
 - Sessions: failed Trace and status reads keep the last loaded data with a stale warning and **Retry**.
 - Sessions: rekeying is atomic.
 - Sessions: a silent session rooted in another family's infra ends after an hour.

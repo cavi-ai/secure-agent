@@ -2,6 +2,7 @@ package worktreehunter
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,6 +53,50 @@ func TestSavedScanAndSizesAnswerAfterRestart(t *testing.T) {
 	other.now = clock
 	if rep := other.Report(context.Background(), false); rep.Cached {
 		t.Fatal("a scan saved under other options answered")
+	}
+}
+
+// A saved scan whose rows lack a kind per reason is not served; the restarted
+// daemon scans again.
+func TestSavedScanWithoutReasonKindsIsRescanned(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	f.worktree(t, "done")
+	st := newMemStore()
+	st.activity = []model.WorkspaceActivity{{Workspace: f.main}}
+	first := New(st, home, Options{})
+	first.Report(context.Background(), true)
+	first.sizeWG.Wait()
+
+	body, at, ok := st.ScanCache(cacheReportKey)
+	if !ok {
+		t.Fatal("first scan saved nothing")
+	}
+	var saved savedReport
+	if err := json.Unmarshal(body, &saved); err != nil {
+		t.Fatal(err)
+	}
+	for i := range saved.Report.Repos {
+		for j := range saved.Report.Repos[i].Worktrees {
+			saved.Report.Repos[i].Worktrees[j].ReasonKinds = nil
+		}
+	}
+	old, err := json.Marshal(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.PutScanCache(cacheReportKey, old, at)
+
+	rep := New(st, home, Options{}).Report(context.Background(), false)
+	if rep.Cached {
+		t.Fatal("a saved scan without reason kinds answered")
+	}
+	for _, r := range rep.Repos {
+		for _, w := range r.Worktrees {
+			if len(w.ReasonKinds) != len(w.Reasons) {
+				t.Fatalf("%s: kinds %q for reasons %q", w.Path, w.ReasonKinds, w.Reasons)
+			}
+		}
 	}
 }
 

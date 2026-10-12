@@ -71,16 +71,33 @@ def run_spend(page):
     plans_card = spend_card_of(dom_plans)
     plan_node = dom_query(plans_card).find(None, {'class': 'spend-plans'})
     plan_row = dom_query(plans_card).find(None, {'class': 'spend-key'})
+    known_plan = dom_query(plans_card).find('div', {'class': 'spend-plan'})
+    history = dom_query(plans_card).find('details', {'class': 'spend-plan-history'})
     check(
-        'spend: a /costs/plans entry renders its plan line and a bar at used_percent above the rows; none when empty',
+        'spend: identified quota renders above rows with its observed time and used-percent bar; none when empty',
         (
-            re.search('<div class="spend-plans"><div class="spend-plan">\\s*<span class="spend-plan-text">Codex Pro · codex · weekly 52% used · resets (Sun|Mon|Tue|Wed|Thu|Fri|Sat) \\d{1,2}:\\d{2} (AM|PM)</span><span class="hbar-track" title="weekly"><span class="hbar-fill" data-w="52.0"', plans_card) is not None
+            known_plan is not None
+            and re.search(r'Codex Pro · codex · weekly 52% used · resets (Sun|Mon|Tue|Wed|Thu|Fri|Sat) \d{1,2}:\d{2} (AM|PM) · Observed ', known_plan.text) is not None
+            and known_plan.has('span', {'class': 'hbar-fill', 'data-w': '52.0'})
             and plan_node is not None
             and plan_row is not None
             and plan_node.start < plan_row.start
             and '<div class="spend-plans"></div>' in spend_card
         ),
         plans_card[:600],
+    )
+    check(
+        'spend: unidentified quota stays collapsed after identified quota and names the possible account overlap',
+        (
+            history is not None
+            and 'open' not in history.attrs
+            and known_plan is not None and known_plan.start < history.start
+            and 'Unverified quota observation · old-home' in history.text
+            and 'Account unverified — may overlap a shared account' in history.text
+            and 'weekly 71% used' in history.text and 'Observed ' in history.text
+            and history.has('div', {'class': 'spend-plan-unverified'})
+            and history.has('span', {'class': 'hbar-fill', 'data-w': '71.0'})
+        ),
     )
     check(
         'spend: the stat strip counts calls on plans before unpriced',
@@ -229,7 +246,26 @@ def run_spend_refresh(page):
         html.unescape(pre(cold, 'spend-slow-probe')) == 'agents=3 spend=Refreshing usage…',
     )
 
+def run_quota_observation_time(page):
+    fixture = payload_cases.spend_plans()
+    seen_at = fixture['patches'][0]['value'][0]['seen_at']
+    dom = page.dom('?plansdemo', served=True, fixture=fixture)
+    row = dom_query(dom).find(None, {'class': 'spend-plan'})
+    text = row.find(None, {'class': 'spend-plan-text'}) if row else None
+    times = text.find_all('time') if text else []
+    page.check('quota observation: one semantic time carries the actual seen_at',
+               len(times) == 1 and times[0].attrs.get('datetime') == seen_at, row.inner_html if row else 'missing row')
+    page.check('quota observation: absolute calendar date includes year and clock inside the existing label',
+               bool(text and re.search(r' · Observed <time datetime="[^"]+">[A-Z][a-z]{2} \d{1,2}, \d{4} \d{1,2}:\d{2} (AM|PM)</time>', text.inner_html)),
+               text.inner_html if text else 'missing label')
+    page.check('quota observation: quota label and weekly usage bar remain intact',
+               bool(text and text.inner_html.startswith('Codex Pro · codex · weekly 52% used · resets ')
+                    and len(row.find_all(None, {'class': 'hbar-track'})) == 1
+                    and row.find(None, {'class': 'hbar-fill', 'data-w': '52.0'})), row.inner_html if row else 'missing row')
+
+
 CASES = (
+    Case('quota_observation_time', run_quota_observation_time),
     Case('spend_tile_shows_the_24h_total', run_spend_tile_shows_the_24h_total, ('dom',)),
     Case('spend_tile_sub_line_counts_calls_and_unpriced_calls', run_spend_tile_sub_line_counts_calls_and_unpriced_calls, ('dom',)),
     Case('spend_card_restores_a_saved_repo_view_over_24h', run_spend_card_restores_a_saved_repo_view_over_24h, ('dom_spendrepo',)),

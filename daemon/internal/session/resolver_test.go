@@ -188,6 +188,43 @@ func TestSweepEndsSessionsWhoseRootExited(t *testing.T) {
 	}
 }
 
+// Conversations that share one root (an app hosting several threads) all end
+// in the sweep that finds the root gone.
+func TestSweepEndsEverySessionOnAGoneRoot(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{})
+	now := time.Now()
+	ids := []string{"thread-a", "thread-b", "thread-c", "thread-d"}
+	for _, id := range ids {
+		st.UpsertSession(model.Session{ID: id, Harness: "codex", RootPID: 300, StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfTranscript})
+	}
+	r.byRoot[300] = "thread-a"
+	r.Sweep()
+	for _, id := range ids {
+		if got, _ := testutil.Lookup[model.Session](t)(st.GetSession(id)); got.Status != model.SessionEnded {
+			t.Errorf("%s: status %q after one sweep, want ended", id, got.Status)
+		}
+	}
+}
+
+// A root pid now held by another process (a different start time) is gone for
+// the conversations recorded on it, tracked or not; one recorded on the
+// process that holds the pid now stays.
+func TestSweepEndsSessionsOnAReusedRoot(t *testing.T) {
+	now := time.Now()
+	r, st := testResolver(t, fakeProcs{300: {PID: 300, PPID: 1, Exe: "/bin/sleep", StartTime: now}})
+	old := now.Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	for id, start := range map[string]string{"tracked": old, "stored": old, "unrecorded-start": "", "current": now.UTC().Format(time.RFC3339Nano)} {
+		st.UpsertSession(model.Session{ID: id, Harness: "codex", RootPID: 300, RootStartedAt: start, StartedAt: now.Add(-2 * time.Hour), LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfTranscript})
+	}
+	r.byRoot[300] = "tracked"
+	r.Sweep()
+	for id, want := range map[string]string{"tracked": model.SessionEnded, "stored": model.SessionEnded, "unrecorded-start": model.SessionActive, "current": model.SessionActive} {
+		if got, _ := testutil.Lookup[model.Session](t)(st.GetSession(id)); got.Status != want {
+			t.Errorf("%s: status %q, want %q", id, got.Status, want)
+		}
+	}
+}
+
 // flakyProcs serves every pid through Info but leaves hidden pids out of
 // List: a process-table sample that missed a live process.
 type flakyProcs struct {
