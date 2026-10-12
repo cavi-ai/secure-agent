@@ -71,7 +71,8 @@ struct ConfigDocument: Equatable, Sendable {
         let entry = key + ": " + value
         if let field = place.field {
             guard field.count == 1 else { throw Error.unsupported(scope) }
-            lines[field.lowerBound] = Self.spaces(Self.indentation(lines[field.lowerBound])) + entry        } else if let body = place.body {
+            lines[field.lowerBound] = Self.spaces(Self.indentation(lines[field.lowerBound])) + entry
+        } else if let body = place.body {
             lines.insert(Self.spaces(place.indent) + entry, at: body.lowerBound)
         } else {
             if lines.last == "" { lines.removeLast() }
