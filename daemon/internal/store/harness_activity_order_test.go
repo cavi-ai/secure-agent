@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"testing"
 	"time"
 
@@ -19,11 +20,11 @@ func TestHarnessActivityOrdersFractionalSeconds(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.PutEvent(event.Event{Kind: event.KindToolCall, SessionID: "s", TS: base, CallID: "a"})
-	if got := s.HarnessActivitySince(base.Add(500 * time.Millisecond)); len(got) != 0 {
+	if got := testutil.Read[map[string]HarnessActivity](t)(s.HarnessActivitySinceResult(base.Add(500 * time.Millisecond))); len(got) != 0 {
 		t.Fatalf("older event admitted: %v", got)
 	}
 	s.PutEvent(event.Event{Kind: event.KindToolCall, SessionID: "s", TS: base.Add(900 * time.Millisecond), CallID: "b"})
-	if got := s.HarnessActivitySince(base.Add(-time.Second))["claude"].TraceLastSeen; got != "2026-10-08T12:00:00.9Z" {
+	if got := testutil.Read[map[string]HarnessActivity](t)(s.HarnessActivitySinceResult(base.Add(-time.Second)))["claude"].TraceLastSeen; got != "2026-10-08T12:00:00.9Z" {
 		t.Fatalf("latest = %q", got)
 	}
 }

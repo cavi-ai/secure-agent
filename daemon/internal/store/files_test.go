@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -36,7 +37,7 @@ func TestPathFindingsMatchExactly(t *testing.T) {
 	s.PutIncident(model.IncidentReport{ID: "inc-near", FlagID: "f-near", Rule: "secret-in-transcript", Risk: "high",
 		Timestamp: now, TouchedFiles: []string{near + ".bak"}, Connections: []string{}, RotateList: []model.RotateItem{}})
 
-	got := s.PathFindings(odd, 20)
+	got := testutil.Read[[]model.FileFinding](t)(s.PathFindingsResult(odd, 20))
 	if len(got) != 2 {
 		t.Fatalf("findings for %q = %+v, want the one flag and the one incident", odd, got)
 	}
@@ -52,7 +53,7 @@ func TestPathFindingsMatchExactly(t *testing.T) {
 			t.Fatalf("flag finding evidence = %+v, want transcript fp-1 at 10", f)
 		}
 	}
-	if got := s.PathFindings("/w/none.txt", 20); got == nil || len(got) != 0 {
+	if got := testutil.Read[[]model.FileFinding](t)(s.PathFindingsResult("/w/none.txt", 20)); got == nil || len(got) != 0 {
 		t.Fatalf("no evidence: got %#v, want empty non-nil", got)
 	}
 }
@@ -68,11 +69,11 @@ func TestPathAccessesAreSessionFileEvents(t *testing.T) {
 	s.PutEvent(event.Event{Kind: event.KindExec, TS: now, PID: 13, Path: p, SessionID: "s1"})           // not a file event
 	s.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now, PID: 14, Path: p + "x", SessionID: "s1"}) // other path
 
-	got := s.PathAccesses(p, 20)
+	got := testutil.Read[[]model.FileAccess](t)(s.PathAccessesResult(p, 20))
 	if len(got) != 2 || got[0].PID != 11 || got[0].Kind != "file-write" || got[1].PID != 10 || got[1].ExePath != "/bin/cat" {
 		t.Fatalf("accesses = %+v, want pid 11 write then pid 10 open", got)
 	}
-	if got := s.PathAccesses("/w/none", 20); got == nil || len(got) != 0 {
+	if got := testutil.Read[[]model.FileAccess](t)(s.PathAccessesResult("/w/none", 20)); got == nil || len(got) != 0 {
 		t.Fatalf("no accesses: got %#v, want empty non-nil", got)
 	}
 }

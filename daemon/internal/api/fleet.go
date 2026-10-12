@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 type FleetNodeStatus struct {
@@ -38,7 +40,11 @@ func (a *API) handleFleet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	st := a.statusFn()
-	flags := a.store.RecentFlags(100)
+	flags, err := a.store.QueryFlagsResult(store.FlagFilter{Limit: 100})
+	if err != nil {
+		http.Error(w, "fleet findings unavailable", http.StatusServiceUnavailable)
+		return
+	}
 
 	node := FleetNodeStatus{
 		Hostname:        hostname,

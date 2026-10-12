@@ -70,18 +70,19 @@ func TestUninspectedSummaryCounts(t *testing.T) {
 }
 
 func TestAllowlistOverrideMakesHostVendor(t *testing.T) {
-	c := newTestCorrelator(t)
+	var approved []string
+	c := newTestCorrelatorWith(t, Hooks{AllowlistOverrides: func(agent string) []string {
+		if agent == "cursor" {
+			return approved
+		}
+		return nil
+	}})
 	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: time.Now(), RemoteHost: "api.github.com", RemotePort: 443})
 	if n := c.UninspectedEgressCount(); n != 1 {
 		t.Fatalf("pre-approval: expected 1 uninspected, got %d", n)
 	}
 
-	c.SetAllowlistOverrides(func(agent string) []string {
-		if agent == "cursor" {
-			return []string{"api.github.com"}
-		}
-		return nil
-	})
+	approved = []string{"api.github.com"}
 	c.NoteAllowlistAdded("cursor", "api.github.com")
 
 	if n := c.UninspectedEgressCount(); n != 0 {

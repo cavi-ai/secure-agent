@@ -513,6 +513,22 @@
       return new Response(JSON.stringify(data[String(path)] ?? data[p]), {status: 200, headers: {'Content-Type': 'application/json'}});
     }
     if (scenarios.has('authrecover') && opts?.method === 'POST') authRecoveryMutations++;
+    if (scenarios.has('reviewresult') && p === '/decision-scopes') {
+      const rows = data['/decision-scopes'] || [];
+      if (opts?.method === 'DELETE') {
+        const id = new URLSearchParams(String(path).split('?')[1]).get('id');
+        if (id !== 'scope-browser') throw new Error('Wrong permission target');
+        window.__reviewPermissionDeletes = (window.__reviewPermissionDeletes || 0) + 1;
+        const record = rows.find(row => row.id === id);
+        record.revoked_at = iso(0);
+        record.applicability = { label: 'Revoked', revoke: false };
+        return { ok: true, json: async () => ({ revoked: true, id }) };
+      }
+      return { ok: true, json: async () => rows.length ? [
+        ...rows.map(row => ({ ...row, applicability: row.applicability || { label: 'Timed permission', revoke: true } })),
+        { ...rows[0], id: 'unrelated-permission', resource_path: '/unrelated/resource' },
+      ] : [] };
+    }
     if (scenarios.has('permissionsdemo') && p === '/decision-scopes') {
       if (opts?.method === 'DELETE') {
         const id = new URLSearchParams(String(path).split('?')[1]).get('id');
@@ -2962,6 +2978,32 @@
       probe.evidenceEntry=!back?.hidden && back?.textContent.includes('Review result') && body.textContent.includes('Recorded evidence');
       back?.click();
       probe.evidenceReturn=body.textContent===before && !document.querySelector('#drawer [data-action="review-decision"]');
+      const permissions = body.querySelector('[data-action="open-review-result-permissions"]');
+      probe.permissionEntry = action === 'expect' ? !!permissions : !permissions;
+      if (action === 'expect') {
+        permissions?.click();
+        await new Promise(resolve=>setTimeout(resolve,100));
+        probe.permissionDetail=body.textContent.includes('Timed permission') && body.textContent.includes('/work/.env')
+          && body.textContent.includes('api.example.com:443') && body.textContent.includes('decision for revision 3');
+        probe.permissionScope=!!body.querySelector('[data-action="session-permission-revoke"][data-id="scope-browser"]')
+          && !body.textContent.includes('unrelated-permission') && !body.textContent.includes('/unrelated/resource');
+        probe.permissionFits=document.documentElement.scrollWidth<=innerWidth;
+        if (scenarios.has('resultrevoke')) {
+          body.querySelector('[data-action="session-permission-revoke"]')?.click();
+          document.getElementById('confirm-cancel')?.click();
+          await new Promise(resolve=>setTimeout(resolve,100));
+          probe.permissionCancelled=!window.__reviewPermissionDeletes && !!body.querySelector('[data-action="session-permission-revoke"]');
+          body.querySelector('[data-action="session-permission-revoke"]')?.click();
+          document.getElementById('confirm-ok')?.click();
+          await new Promise(resolve=>setTimeout(resolve,100));
+          probe.permissionRevoked=window.__reviewPermissionDeletes===1 && body.textContent.includes('Revocation saved')
+            && !body.querySelector('[data-action="session-permission-revoke"]');
+        }
+        if (!scenarios.has('resultpermissions')) {
+          back?.click();
+          probe.permissionReturn=body.textContent===before;
+        }
+      }
       if (scenarios.has('resultcard') || scenarios.has('dismissresult')) document.getElementById('btn-drawer-close')?.click();
       if (scenarios.has('dismissresult')) {
         result.querySelector('[data-action="dismiss-review-result"]')?.click();

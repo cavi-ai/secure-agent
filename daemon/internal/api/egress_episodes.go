@@ -133,7 +133,12 @@ func (a *API) handleEgressEpisodeSubpath(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "not a recurring candidate", http.StatusConflict)
 		return
 	}
-	if v, ok := a.store.AdvisorVerdictFor(advisor.EgressSubjectID(e.ID), "egress"); ok && v.Assessment == advisor.EgressEvidenceKey(e) {
+	v, found, err := a.store.AdvisorVerdictResultFor(advisor.EgressSubjectID(e.ID), "egress")
+	if err != nil {
+		http.Error(w, "egress advice unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if found && v.Assessment == advisor.EgressEvidenceKey(e) {
 		writeJSON(w, map[string]any{"status": "cached"})
 		return
 	}

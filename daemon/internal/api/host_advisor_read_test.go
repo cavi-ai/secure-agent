@@ -58,8 +58,8 @@ func TestHostAdvisorReadBatchFailureAndRecovery(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
-				a.correlator = cr
+
+				a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Correlator: cr})
 				request := func(degraded bool) []Suggestion {
 					t.Helper()
 					w := httptest.NewRecorder()

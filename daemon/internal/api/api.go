@@ -311,6 +311,10 @@ type Deps struct {
 	Killer     Killer
 	Status     StatusFunc
 
+	// Local process and path operations use system implementations by default.
+	OpenPath     func(...string) error
+	TCPClientPID func(string) (int32, error)
+
 	// Resources / control (optional).
 	Resources             func() resource.Snapshot
 	ResourceControl       *resource.Controller
@@ -439,8 +443,14 @@ func New(d Deps) *API {
 		deltaHub:        d.DeltaHub,
 		isAgentPID:      d.IsAgentPID,
 		plan:            d.Plan,
-		tcpClientPID:    TCPClientPID,
-		openPath:        openWithSystem,
+		tcpClientPID:    d.TCPClientPID,
+		openPath:        d.OpenPath,
+	}
+	if a.tcpClientPID == nil {
+		a.tcpClientPID = TCPClientPID
+	}
+	if a.openPath == nil {
+		a.openPath = openWithSystem
 	}
 	a.peerChk = d.PeerChecker
 	if d.PeerChecker != nil {
@@ -925,12 +935,15 @@ func (a *API) currentStatus() Status {
 			}
 		}
 	}
-	st.UnactedFlags24h = len(a.store.QueryFlags(store.FlagFilter{
+	flags, err := a.store.QueryFlagsResult(store.FlagFilter{
 		Unacted:     true,
 		MinSeverity: 2,
 		Since:       time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
 		Limit:       500,
-	}))
+	})
+	if err == nil {
+		st.UnactedFlags24h = len(flags)
+	}
 	return a.evidenceStatus(st)
 }
 
@@ -1062,7 +1075,7 @@ func (a *API) handleIncidents(w http.ResponseWriter, r *http.Request) {
 
 	id := r.URL.Query().Get("id")
 	if id != "" {
-		inc, err := a.store.GetIncident(id)
+		inc, err := a.store.GetIncidentDetail(id)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(w, "Incident not found", http.StatusNotFound)
@@ -1075,16 +1088,11 @@ func (a *API) handleIncidents(w http.ResponseWriter, r *http.Request) {
 		if format == "markdown" || format == "md" {
 			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 			analyzer := intel.NewAnalyzer()
-			w.Write([]byte(analyzer.GenerateMarkdown(*inc)))
+			w.Write([]byte(analyzer.GenerateMarkdown(inc.IncidentReport)))
 			return
 		}
 		// The report plus its workflow state, so UIs can render one object.
-		wf, found, err := a.store.IncidentStatusResult(inc.ID)
-		if err != nil || !found {
-			http.Error(w, "incident data unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		writeJSON(w, map[string]any{"incident": inc, "workflow": wf})
+		writeJSON(w, map[string]any{"incident": inc.IncidentReport, "workflow": inc.Workflow})
 		return
 	}
 
@@ -1476,11 +1484,15 @@ func (a *API) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 
 	// Recent connection events to this host, and the durable sessions behind
 	// them (so "claude reached it" comes with the repo/branch it was working in).
-	evs := a.store.QueryEvents(store.EventFilter{
+	evs, err := a.store.QueryEventsResult(store.EventFilter{
 		RemoteHost: host,
 		Since:      time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339),
 		Limit:      50,
 	})
+	if err != nil {
+		http.Error(w, "endpoint events unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	detail.Events = evs
 	seen := map[string]bool{}
 	for _, e := range evs {
@@ -1488,7 +1500,12 @@ func (a *API) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		seen[e.SessionID] = true
-		if s, ok := a.store.GetSession(e.SessionID); ok {
+		s, ok, err := a.store.GetSessionResult(e.SessionID)
+		if err != nil {
+			http.Error(w, "endpoint sessions unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if ok {
 			detail.Sessions = append(detail.Sessions, s)
 		}
 	}

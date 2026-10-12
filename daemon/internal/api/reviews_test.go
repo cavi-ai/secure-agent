@@ -13,7 +13,7 @@ import (
 )
 
 func TestReviewRoutesAndRevisionConflict(t *testing.T) {
-	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }})
 	a.store.UpsertSession(model.Session{ID: "session", Confidence: model.ConfHook})
 	at := time.Now().UTC()
 	f := model.Flag{ID: "source", Rule: readConnectRule, SessionID: "session", Severity: 3, TS: at, PID: 42, Agent: "codex", Evidence: []model.EvidenceItem{{Kind: "read", Label: "/work/credentials", Sub: "sensitive read", PID: 42, TS: at.Format(time.RFC3339Nano)}, {Kind: "connect", Label: "203.0.113.5:443", Sub: "egress", PID: 42, TS: at.Add(time.Second).Format(time.RFC3339Nano)}}}

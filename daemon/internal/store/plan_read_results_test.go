@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"slices"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ func TestPlanReadRejectsCorruptionAndRecovers(t *testing.T) {
 			if _, err := s.db.Exec("UPDATE advisor_plans SET " + damage); err != nil {
 				t.Fatal(err)
 			}
-			if got, found := s.AdvisorPlanFor("subject"); found || got.Summary != "" || got.EvidenceKey != "" || !got.CreatedAt.IsZero() {
+			if got, found, err := s.AdvisorPlanResultFor("subject"); err == nil || found || got.Summary != "" || got.EvidenceKey != "" || !got.CreatedAt.IsZero() {
 				t.Errorf("corrupt plan accepted or partial payload returned: %+v %v", got, found)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != 1 || !slices.Equal(h.ReadActive, []string{"advisor plans"}) {
@@ -28,7 +29,7 @@ func TestPlanReadRejectsCorruptionAndRecovers(t *testing.T) {
 			if err := s.PutAdvisorPlan("subject", p); err != nil {
 				t.Fatal(err)
 			}
-			if got, found := s.AdvisorPlanFor("subject"); !found || got.Summary != p.Summary || !got.CreatedAt.Equal(p.CreatedAt) {
+			if got, found := testutil.Lookup[model.AdvisorPlan](t)(s.AdvisorPlanResultFor("subject")); !found || got.Summary != p.Summary || !got.CreatedAt.Equal(p.CreatedAt) {
 				t.Errorf("plan recovery: %+v %v", got, found)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 0 {

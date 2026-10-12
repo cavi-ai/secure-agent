@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"database/sql"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"math"
 	"path/filepath"
 	"testing"
@@ -34,7 +35,7 @@ func TestAdvisorPlanPersistenceRefreshesPosture(t *testing.T) {
 	if len(observed) != 1 || observed[0].Failures != 1 || len(observed[0].Active) != 1 || observed[0].Active[0] != "advisor plans" {
 		t.Fatalf("posture callback did not observe plan failure: %+v", observed)
 	}
-	if saved, ok := st.AdvisorPlanFor("subject"); !ok || saved.Summary != "saved" {
+	if saved, ok := testutil.Lookup[model.AdvisorPlan](t)(st.AdvisorPlanResultFor("subject")); !ok || saved.Summary != "saved" {
 		t.Fatalf("failed save changed the previous plan: %+v, %v", saved, ok)
 	}
 	p.Confidence = 0.8
@@ -44,7 +45,7 @@ func TestAdvisorPlanPersistenceRefreshesPosture(t *testing.T) {
 	if len(observed) != 2 || observed[1].Failures != 1 || len(observed[1].Active) != 0 {
 		t.Fatalf("posture callback did not observe recovery and retained history: %+v", observed)
 	}
-	if saved, ok := st.AdvisorPlanFor("subject"); !ok || saved.Summary != "new" {
+	if saved, ok := testutil.Lookup[model.AdvisorPlan](t)(st.AdvisorPlanResultFor("subject")); !ok || saved.Summary != "new" {
 		t.Fatalf("recovered plan was not saved: %+v, %v", saved, ok)
 	}
 	select {
@@ -87,7 +88,7 @@ func TestVerdictPublishingSinkFailureAndRecovery(t *testing.T) {
 				t.Fatalf("failed verdict published a delta: %+v", delta)
 			default:
 			}
-			if got, ok := st.AdvisorVerdictFor("subject", kind); !ok || got.Rationale != "saved" {
+			if got, ok := testutil.Lookup[model.AdvisorVerdict](t)(st.AdvisorVerdictResultFor("subject", kind)); !ok || got.Rationale != "saved" {
 				t.Fatalf("failed verdict overwrote saved data: %+v, %v", got, ok)
 			}
 			h := st.WriteHealth()
@@ -100,7 +101,7 @@ func TestVerdictPublishingSinkFailureAndRecovery(t *testing.T) {
 			if err := sink.PutAdvisorVerdict("subject", kind, verdict); err != nil {
 				t.Fatal(err)
 			}
-			if got, ok := st.AdvisorVerdictFor("subject", kind); !ok || got.Rationale != "new" {
+			if got, ok := testutil.Lookup[model.AdvisorVerdict](t)(st.AdvisorVerdictResultFor("subject", kind)); !ok || got.Rationale != "new" {
 				t.Fatalf("verdict did not recover: %+v, %v", got, ok)
 			}
 			h = st.WriteHealth()

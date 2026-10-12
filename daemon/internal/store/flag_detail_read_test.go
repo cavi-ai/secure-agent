@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"testing"
 	"time"
 
@@ -18,7 +19,7 @@ func TestFlagDetailRejectsMalformedReadsAndRecovers(t *testing.T) {
 			if _, err := s.db.Exec("UPDATE flags SET " + damage + " WHERE id='detail'"); err != nil {
 				t.Fatal(err)
 			}
-			if got, found := s.GetFlag(f.ID); found || got.ID != "" {
+			if got, found, err := s.GetFlagResult(f.ID); err == nil || found || got.ID != "" {
 				t.Errorf("malformed detail accepted: found=%v %+v", found, got)
 			}
 			h := s.WriteHealth()
@@ -28,7 +29,7 @@ func TestFlagDetailRejectsMalformedReadsAndRecovers(t *testing.T) {
 			if _, err := s.PutFlag(f); err != nil {
 				t.Fatal(err)
 			}
-			if got, found := s.GetFlag(f.ID); !found || got.ID != f.ID || !got.TS.Equal(f.TS) {
+			if got, found := testutil.Lookup[model.Flag](t)(s.GetFlagResult(f.ID)); !found || got.ID != f.ID || !got.TS.Equal(f.TS) {
 				t.Errorf("detail recovery: found=%v %+v", found, got)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 0 {
@@ -47,7 +48,7 @@ func TestFlagDetailPreservesNullableLegacyFields(t *testing.T) {
 	if _, err := s.db.Exec("UPDATE flags SET rule=NULL,agent=NULL,evidence=NULL,session_id=NULL,workspace=NULL,process=NULL,repeats=NULL,last_seen=NULL WHERE id=?", f.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got, found := s.GetFlag(f.ID); !found || got.ID != f.ID || got.Rule != "" || got.Agent != "" || got.Process != nil || got.Repeats != 0 || got.LastSeen != nil {
+	if got, found := testutil.Lookup[model.Flag](t)(s.GetFlagResult(f.ID)); !found || got.ID != f.ID || got.Rule != "" || got.Agent != "" || got.Process != nil || got.Repeats != 0 || got.LastSeen != nil {
 		t.Errorf("valid nullable legacy detail rejected: found=%v %+v", found, got)
 	}
 	if h := s.WriteHealth(); h.ReadFailures != 0 {

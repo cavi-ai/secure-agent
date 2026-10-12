@@ -100,21 +100,6 @@ func decodeIncidentReport(id, reportJSON string) (*model.IncidentReport, error) 
 	return inc, nil
 }
 
-// IncidentIDForFlag returns the incident a flag opened or was aggregated
-// into (newest first).
-func (s *Store) IncidentIDForFlag(flagID string) (string, bool) {
-	id, found, _ := s.IncidentIDForFlagResult(flagID)
-	return id, found
-}
-
-// FindOpenIncident returns the open (unresolved) incident matching the
-// aggregation key — one incident per rule+session+subject; repeat flags
-// become its evidence instead of minting duplicate reports.
-func (s *Store) FindOpenIncident(rule, sessionID, subject string) (string, bool) {
-	id, found, _ := s.FindOpenIncidentResult(rule, sessionID, subject)
-	return id, found
-}
-
 // FindOpenIncidentResult distinguishes a missing aggregation target from an
 // unavailable or invalid stored identity. Callers creating reports must use it.
 func (s *Store) FindOpenIncidentResult(rule, sessionID, subject string) (id string, found bool, readErr error) {
@@ -308,11 +293,6 @@ func (s *Store) aggregateIncidentLocked(tx *sql.Tx, id, flagID string, ts time.T
 		s.noteWrite("incident aggregation", nil)
 	}
 	return *inc, nil
-}
-
-func (s *Store) RecentIncidents(limit int) []model.IncidentReport {
-	incidents, _ := s.RecentIncidentsResult(limit)
-	return incidents
 }
 
 // RecentIncidentsResult returns no partial history after query, scan, report
@@ -532,12 +512,6 @@ func (s *Store) SetIncidentStatusResult(id, status, note string) (workflow Incid
 	return wf, true, nil
 }
 
-// IncidentStatus returns the workflow state for one incident.
-func (s *Store) IncidentStatus(id string) (IncidentWorkflow, bool) {
-	wf, found, _ := s.IncidentStatusResult(id)
-	return wf, found
-}
-
 // IncidentStatusResult distinguishes a missing row from an unavailable or
 // malformed workflow. Missing rows are healthy reads, not storage failures.
 func (s *Store) IncidentStatusResult(id string) (workflow IncidentWorkflow, found bool, readErr error) {
@@ -580,24 +554,13 @@ func scanIncidentWorkflow(row *sql.Row) (IncidentWorkflow, error) {
 // SessionIncidents rejects partial history when a report's session identity
 // disagrees with the storage scope used to select it.
 func (s *Store) SessionIncidents(sessionID string) (out []model.IncidentReport, readErr error) {
-	defer func() { s.noteRead("incident remediation", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT id,report_json FROM incidents WHERE session_id=? ORDER BY `+timestampOrderExpr("created_at")+` DESC,id DESC LIMIT 100`, sessionID)
+	details, err := s.SessionIncidentDetails(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	list, err := scanIncidentsResult(rows)
-	if err != nil {
-		return nil, err
+	out = make([]model.IncidentReport, len(details))
+	for i := range details {
+		out[i] = details[i].IncidentReport
 	}
-	for i := range list {
-		if list[i].SessionID != sessionID {
-			return nil, fmt.Errorf("incident session identity mismatch")
-		}
-		if err := s.attachIncidentRemediationLocked(&list[i]); err != nil {
-			return nil, err
-		}
-	}
-	return list, nil
+	return out, nil
 }

@@ -52,9 +52,8 @@ func TestAllowlistLoadFailurePreservesUninspectedEgress(t *testing.T) {
 				t.Fatal("fixture must contain one uninspected endpoint")
 			}
 			st := testStore(t)
-			a := newTestAPI("", st, nil, nil)
-			a.allowlist = correlate.NewAllowlistStore(path)
-			a.correlator = cr
+
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, Allowlist: correlate.NewAllowlistStore(path), Correlator: cr})
 			body := `{"agent":"cursor","host":"new.example.com"}`
 			r := httptest.NewRequest(method, "/allowlist", strings.NewReader(body))
 			w := httptest.NewRecorder()
@@ -87,9 +86,8 @@ func TestAllowlistSuggestApproveRoundTrip(t *testing.T) {
 	}
 	tg := agents.New(cfg, allowlistProcSource{})
 	tg.Refresh()
-	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 	al := correlate.NewAllowlistStore(filepath.Join(dir, "allowlist-overrides.json"))
-	cr.SetAllowlistOverrides(func(agent string) []string { return al.Load()[agent] })
+	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{AllowlistOverrides: func(agent string) []string { return al.Load()[agent] }})
 
 	// Recurring uninspected egress: below threshold = no suggestion.
 	now := time.Now()
@@ -100,9 +98,8 @@ func TestAllowlistSuggestApproveRoundTrip(t *testing.T) {
 	}
 
 	st := testStore(t)
-	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.correlator = cr
-	a.allowlist = al
+
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Correlator: cr, Allowlist: al})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -188,14 +185,12 @@ func TestMuteEndpointRoundTrip(t *testing.T) {
 	}
 	tg := agents.New(cfg, allowlistProcSource{})
 	tg.Refresh()
-	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 	ms := correlate.NewMuteStore(filepath.Join(dir, "muted.json"))
-	cr.SetMuteChecker(ms.Muted)
+	cr := correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{Muted: ms.Muted})
 
 	st := testStore(t)
-	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.correlator = cr
-	a.mutes = ms
+
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Correlator: cr, Mutes: ms})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -284,9 +279,8 @@ func TestAllowlistListAndRemove(t *testing.T) {
 
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.correlator = cr
-	a.allowlist = alStore
+
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Correlator: cr, Allowlist: alStore})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)

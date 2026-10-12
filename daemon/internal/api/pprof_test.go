@@ -15,15 +15,17 @@ import (
 func TestPprofOwnerOnly(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_pprof_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }}
 	var asAgent atomic.Bool
 	selfPID := int32(os.Getpid())
-	a.setPeersForTest(loopbackChecker{NewPeerChecker()}, func() map[int32]struct{} {
+	deps.PeerChecker = loopbackChecker{NewPeerChecker()}
+	deps.AgentPIDs = func() map[int32]struct{} {
 		if asAgent.Load() {
 			return map[int32]struct{}{selfPID: {}}
 		}
 		return nil
-	})
+	}
+	a := newTestAPI(deps)
 	ctx, cancel := contextWithCancel()
 	defer cancel()
 	go a.Serve(ctx)

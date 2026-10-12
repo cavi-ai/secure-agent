@@ -12,11 +12,11 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
-func (m *memSink) SimilarLabels(rule, agent, pattern string, limit int) []model.OperatorLabel {
+func (m *memSink) SimilarLabelsResult(rule, agent, pattern string, limit int) ([]model.OperatorLabel, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.labelQuery = rule + "|" + agent + "|" + pattern
-	return m.labels
+	return m.labels, nil
 }
 
 func (m *memSink) PutAdvisorPlan(subject string, p model.AdvisorPlan) error {

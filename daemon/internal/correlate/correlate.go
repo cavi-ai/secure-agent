@@ -92,15 +92,15 @@ type Correlator struct {
 	// They are discarded on persistence resolution or the next observation.
 	persistenceUndo map[string][]func()
 	// allowlistOverrides supplies user-approved hosts (console suggestions) on
-	// top of the config allowlist. Nil until wired.
+	// top of the config allowlist. Nil unless supplied in Hooks.
 	allowlistOverrides func(agent string) []string
 	// isMuted answers whether a (rule, host) pair has been dispositioned away
-	// by the operator for agent. Nil until wired.
+	// by the operator for agent. Nil unless supplied in Hooks.
 	isMuted    func(rule, host, agent string) bool
 	mutedCount int
 	// onUninspected fires once when an endpoint first crosses the suggestion
 	// threshold — the advisor's cue to pre-assess the host before the
-	// operator ever sees the suggestion. Nil until wired.
+	// operator ever sees the suggestion. Nil unless supplied in Hooks.
 	onUninspected func(agent, host string)
 	// folded[pattern] is the flag a read-then-connect pattern raised in the
 	// current window; repeats queue in repeats until Observe unlocks and
@@ -116,9 +116,9 @@ type Correlator struct {
 	lastEviction     time.Time
 }
 
-// Hooks are installed before the first Observe call. Callbacks keep their
-// existing concurrency contract: OnUninspected must only enqueue while the
-// correlator lock is held; OnRepeat runs after Observe releases that lock.
+// Hooks are fixed at New. OnUninspected runs with the correlator lock held
+// and must only enqueue; OnRepeat runs after Observe releases that lock.
+// Without OpenFlag, read-then-connect folding falls back to its in-memory window.
 type Hooks struct {
 	AllowlistOverrides func(string) []string
 	Muted              func(rule, host, agent string) bool
@@ -147,7 +147,7 @@ func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Conf
 		isScopedExpected:   hooks.ScopedExpected,
 		isOpenFlag:         hooks.OpenFlag,
 	}
-	c.RestoreOpenReadFlags(hooks.OpenReadFlags)
+	c.restoreOpenReadFlags(hooks.OpenReadFlags)
 	return c
 }
 
@@ -215,37 +215,12 @@ func (c *Correlator) pruneUninspectedLocked(now time.Time) {
 	}
 }
 
-// SetAllowlistOverrides wires the user-approved host list (persisted by the
-// AllowlistStore) into vendor-host recognition.
-func (c *Correlator) SetAllowlistOverrides(fn func(agent string) []string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.allowlistOverrides = fn
-}
-
 // NoteAllowlistAdded drops the agent|host pair from the blind-spot set once
 // the user approves it — the metric should reflect what is STILL unseen.
 func (c *Correlator) NoteAllowlistAdded(agent, host string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.uninspected, agent+"|"+strings.ToLower(host))
-}
-
-// SetMuteChecker wires operator dispositions: (rule, host) pairs muted for
-// the flag's agent are counted, not flagged.
-func (c *Correlator) SetMuteChecker(fn func(rule, host, agent string) bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.isMuted = fn
-}
-
-// SetOnUninspected wires the suggestion-threshold hook (advisor host
-// pre-assessment). Fires with the correlator lock HELD — the callback must
-// be non-blocking (enqueue, never call back into the correlator).
-func (c *Correlator) SetOnUninspected(fn func(agent, host string)) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.onUninspected = fn
 }
 
 // MutedCount reports how many flags were suppressed by dispositions — proof

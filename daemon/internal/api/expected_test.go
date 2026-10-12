@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -19,12 +20,13 @@ func TestExpectedLoadFailureHasNoMutationSideEffects(t *testing.T) {
 	for _, content := range []string{`[{"agent":"claude"},`, `null`} {
 		for _, operation := range []string{"add", "add-all", "remove"} {
 			t.Run(content+"/"+operation, func(t *testing.T) {
-				a := expectedTestAPI(t)
+				deps := expectedTestDeps(t)
 				path := filepath.Join(t.TempDir(), "expected.json")
 				if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				a.expected = correlate.NewExpectStore(path)
+				deps.Expected = correlate.NewExpectStore(path)
+				a := newTestAPI(deps)
 				f := ghFlag("fixture", time.Now(), ghRead("sensitive read", 900, "GitHub"), "evil.example.com")
 				a.store.PutFlag(f)
 				call(t, a, "GET", "/expected", "") // Exercise the cached load failure.
@@ -40,10 +42,10 @@ func TestExpectedLoadFailureHasNoMutationSideEffects(t *testing.T) {
 				if w.Code != 500 {
 					t.Fatalf("status = %d: %s", w.Code, w.Body)
 				}
-				if got, _ := a.store.GetFlag(f.ID); got.Acknowledged {
+				if got, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult(f.ID)); got.Acknowledged {
 					t.Fatal("failed edit acknowledged the flag")
 				}
-				if labels := a.store.SimilarLabels(readConnectRule, "claude", ghHosts, 5); len(labels) != 0 {
+				if labels := testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabelsResult(readConnectRule, "claude", ghHosts, 5)); len(labels) != 0 {
 					t.Fatalf("failed edit wrote labels: %+v", labels)
 				}
 				if audit := a.store.RecentAudit(10); len(audit) != 0 {
@@ -60,13 +62,15 @@ func TestExpectedLoadFailureHasNoMutationSideEffects(t *testing.T) {
 	}
 }
 
-func expectedTestAPI(t *testing.T) *API {
+func expectedTestDeps(t *testing.T) Deps {
 	t.Helper()
 	pinExplainHome(t, "/Users/dev")
-	a := explainTestAPI(t)
-	a.expected = correlate.NewExpectStore(filepath.Join(t.TempDir(), "expected.json"))
-	return a
+	deps := explainTestDeps(t)
+	deps.Expected = correlate.NewExpectStore(filepath.Join(t.TempDir(), "expected.json"))
+	return deps
 }
+
+func expectedTestAPI(t *testing.T) *API { return newTestAPI(expectedTestDeps(t)) }
 
 func call(t *testing.T, a *API, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -102,11 +106,11 @@ func TestExpectedFlow(t *testing.T) {
 		t.Fatalf("stored = %+v (%v)", p, err)
 	}
 	for id, acked := range map[string]bool{"same1": true, "same2": false, "other-dest": false} {
-		if f, _ := a.store.GetFlag(id); f.Acknowledged != acked {
+		if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult(id)); f.Acknowledged != acked {
 			t.Errorf("%s acknowledged = %v, want %v", id, f.Acknowledged, acked)
 		}
 	}
-	if labels := a.store.SimilarLabels(readConnectRule, "claude", ghHosts, 5); len(labels) != 1 || labels[0].Label != "ok" || labels[0].Source != "expect" {
+	if labels := testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabelsResult(readConnectRule, "claude", ghHosts, 5)); len(labels) != 1 || labels[0].Label != "ok" || labels[0].Source != "expect" {
 		t.Fatalf("labels = %+v, want one ok/expect", labels)
 	}
 	if audit := a.store.RecentAudit(10); len(audit) == 0 || audit[0].Action != "expect-add" {
@@ -180,7 +184,7 @@ func TestExpectedEndpointScopeAndMixedEvidence(t *testing.T) {
 		t.Fatalf("POST: %d %s", w.Code, w.Body)
 	}
 	for id, want := range map[string]bool{"selected": true, "other-address": false, "mixed": false} {
-		f, _ := a.store.GetFlag(id)
+		f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult(id))
 		if f.Acknowledged != want {
 			t.Errorf("%s acknowledged=%v want %v", id, f.Acknowledged, want)
 		}
@@ -211,7 +215,7 @@ func TestNonSecretFileExceptionIsExactAndReversible(t *testing.T) {
 	if a.expected.Match([]string{"claude|node|/project/test/.env.local|other.example.com"}, now) {
 		t.Fatal("exception escaped exact file")
 	}
-	if f, _ := a.store.GetFlag("mixed-file"); f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult("mixed-file")); f.Acknowledged {
 		t.Fatal("mixed sensitive file was hidden")
 	}
 	if w := call(t, a, "DELETE", "/expected?key="+entry.Key, ""); w.Code != 200 {
@@ -239,7 +243,7 @@ func TestMixedFindingOffersNextUncoveredPair(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body)
 	}
-	if f, _ := a.store.GetFlag(f.ID); !f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult(f.ID)); !f.Acknowledged {
 		t.Fatal("fully covered finding should be reviewed")
 	}
 	if w := call(t, a, "POST", "/expected", `{"flag_id":"mixed","path":"/arbitrary/.env","host":"two.example.com"}`); w.Code != 422 {

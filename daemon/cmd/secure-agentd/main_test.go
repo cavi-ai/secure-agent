@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"io"
 	"net"
 	"net/http"
@@ -105,7 +106,7 @@ func TestFullBusCorrelatorStorePipeline(t *testing.T) {
 	var flags []model.Flag
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		flags = st.RecentFlags(10)
+		flags = testutil.Read[[]model.Flag](t)(st.QueryFlagsResult(store.FlagFilter{Limit: 10}))
 		if len(flags) == 1 || time.Now().After(deadline) {
 			break
 		}
@@ -283,7 +284,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if len(readFlags()) == 0 {
-		events := st.RecentEvents(50)
+		events := testutil.Read[[]event.Event](t)(st.QueryEventsResult(store.EventFilter{Limit: 50}))
 		evData, _ := json.MarshalIndent(events, "", "  ")
 		t.Fatalf("correlator never wrote a flag; fixture sockets: %+v\nEVENTS:\n%s", fixture.SocketsFor(currPID), string(evData))
 	}

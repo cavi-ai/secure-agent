@@ -177,9 +177,8 @@ func TestExpectStoreAddAll(t *testing.T) {
 }
 
 func TestExpectedPatternIsCountedNotFlagged(t *testing.T) {
-	c := newFamilyCorrelator(t)
 	store := NewExpectStore(filepath.Join(t.TempDir(), "expected.json"))
-	c.SetExpected(store.Match)
+	c := newFamilyCorrelatorWith(t, Hooks{Expected: store.Match})
 	hosts := homePath(t, ".config/gh/hosts.yml")
 	if _, err := store.Add(ExpectedPattern{Agent: "cursor", Reader: "gh-reader", Path: hosts, Dest: "2606:4700::6812:105d"}); err != nil {
 		t.Fatal(err)

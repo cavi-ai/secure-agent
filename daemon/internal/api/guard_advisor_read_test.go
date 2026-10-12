@@ -18,7 +18,7 @@ import (
 )
 
 func TestGuardPendingWithoutAdvisorStore(t *testing.T) {
-	a := &API{guardBroker: guard.NewBroker(time.Minute)}
+	a := New(Deps{Guard: guard.NewBroker(time.Minute)})
 	w := httptest.NewRecorder()
 	a.handleGuardPending(w, httptest.NewRequest("GET", "/guard/pending", nil))
 	if w.Code != 200 || w.Body.String() != "[]\n" {
@@ -87,8 +87,8 @@ func TestGuardAdvisorReadBatchFailureAndRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			a := newTestAPI("", st, nil, nil)
-			a.guardBroker = broker
+
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, Guard: broker})
 			mux := a.buildMux()
 			request := func() []guard.Pending {
 				t.Helper()

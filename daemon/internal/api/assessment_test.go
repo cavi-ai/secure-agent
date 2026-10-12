@@ -40,7 +40,7 @@ func assessmentReadConnect() model.Flag {
 }
 
 func TestAssessmentEvidencePrecedence(t *testing.T) {
-	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }})
 	for _, tc := range []struct {
 		name, risk, residual, basis string
 		change                      func(*model.Flag)
@@ -75,7 +75,7 @@ func TestAssessmentEvidencePrecedence(t *testing.T) {
 }
 
 func TestAcknowledgmentDoesNotChangeRisk(t *testing.T) {
-	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }})
 	f := assessmentReadConnect()
 	f.Evidence[0].Sub = "agent tool read"
 	before := servedAssessment(t, a, f)
@@ -92,7 +92,7 @@ func TestAcknowledgmentDoesNotChangeRisk(t *testing.T) {
 }
 
 func TestAdvisorDoesNotOverrideDirectEvidence(t *testing.T) {
-	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }})
 	f := assessmentReadConnect()
 	f.Evidence[0].Sub = "agent tool read"
 	f.Advisor = &model.AdvisorVerdict{Assessment: "benign", Confidence: .99, Rationale: "Routine traffic.", SuggestedAction: "allow-host"}
@@ -115,7 +115,7 @@ func TestAdvisorDoesNotOverrideDirectEvidence(t *testing.T) {
 }
 
 func TestReviewedExposureRemainsAvailableInHistory(t *testing.T) {
-	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }})
 	f := assessmentReadConnect()
 	f.Evidence[0].Sub = "agent tool read"
 	a.store.PutFlag(f)

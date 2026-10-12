@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,11 +40,11 @@ func TestReclassifyReadFlagsAcknowledgesOnlyStaleOnes(t *testing.T) {
 	if n := reclassifyReadFlags(st, sensitive.New(cfg), cfg.CredentialOwners); n != 1 {
 		t.Fatalf("acknowledged = %d, want 1", n)
 	}
-	if f, _ := st.GetFlag("zshenv"); !f.Acknowledged || f.AckReason != correlate.ReclassifiedReadReason {
+	if f, _ := testutil.Lookup[model.Flag](t)(st.GetFlagResult("zshenv")); !f.Acknowledged || f.AckReason != correlate.ReclassifiedReadReason {
 		t.Fatalf("zshenv flag = ack %v reason %q", f.Acknowledged, f.AckReason)
 	}
 	for _, id := range []string{"aws", "other"} {
-		if f, _ := st.GetFlag(id); f.Acknowledged || f.AckReason != "" {
+		if f, _ := testutil.Lookup[model.Flag](t)(st.GetFlagResult(id)); f.Acknowledged || f.AckReason != "" {
 			t.Fatalf("%s must stay open, got ack %v reason %q", id, f.Acknowledged, f.AckReason)
 		}
 	}
@@ -78,7 +79,7 @@ func TestReclassifyCausalSeverityPreservesFindingsAndDirectEvidence(t *testing.T
 	}
 	reclassifyReadFlags(st, sensitive.New(cfg), cfg.CredentialOwners)
 	for id, want := range map[string]int{"ancestor": 2, "direct": 3, "tool": 3} {
-		f, _ := st.GetFlag(id)
+		f, _ := testutil.Lookup[model.Flag](t)(st.GetFlagResult(id))
 		if f.Severity != want || f.Acknowledged {
 			t.Errorf("%s severity=%d acknowledged=%v", id, f.Severity, f.Acknowledged)
 		}

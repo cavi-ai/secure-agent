@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"slices"
 	"strings"
 	"time"
@@ -23,18 +22,6 @@ func jsonLike(path string) string {
 	enc := strings.Trim(string(b), `"`)
 	enc = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(enc)
 	return "%" + enc + "%"
-}
-
-// PathFindings returns the flags whose evidence names path and the incidents
-// whose touched files include it, newest first, at most limit of each.
-// Never nil.
-func (s *Store) PathFindings(path string, limit int) []model.FileFinding {
-	out, err := s.PathFindingsResult(path, limit)
-	if err != nil {
-		log.Printf("store: path findings: %v", err)
-		return []model.FileFinding{}
-	}
-	return out
 }
 
 // PathFindingsResult returns no partial findings when a query or candidate
@@ -112,17 +99,6 @@ func (s *Store) PathFindingsResult(path string, limit int) (findings []model.Fil
 		return nil, err
 	}
 	return out, nil
-}
-
-// PathAccesses returns the newest file open/write/delete events on path made
-// inside an agent session, at most limit. Never nil.
-func (s *Store) PathAccesses(path string, limit int) []model.FileAccess {
-	out, err := s.PathAccessesResult(path, limit)
-	if err != nil {
-		log.Printf("store: path accesses: %v", err)
-		return []model.FileAccess{}
-	}
-	return out
 }
 
 // PathAccessesResult distinguishes unavailable access history from an empty

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -50,9 +51,10 @@ func TestAdvisorPlanRejectsUnavailableLabelHistoryAndRecovers(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+
 			rec := &planRecorder{ready: true, pending: map[string]bool{}}
-			a.plan = rec.funcs()
+
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Plan: rec.funcs()})
 			db, err := sql.Open("sqlite", path)
 			if err != nil {
 				t.Fatal(err)
@@ -108,7 +110,7 @@ func TestExplicitLabelsReportFailedWriteAndAllowRetry(t *testing.T) {
 			if err := st.PutIncident(model.IncidentReport{ID: "i1", Rule: "secret-in-transcript", Agent: "codex", Timestamp: time.Now()}); err != nil {
 				t.Fatal(err)
 			}
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 			db, err := sql.Open("sqlite", path)
 			if err != nil {
 				t.Fatal(err)
@@ -128,7 +130,7 @@ func TestExplicitLabelsReportFailedWriteAndAllowRetry(t *testing.T) {
 			if health := st.WriteHealth(); !slices.Contains(health.Active, "operator labels") {
 				t.Fatalf("failed label write hidden from health: %+v", health)
 			}
-			if got := st.LabelSummary("codex", "", "secret-in-transcript"); got.OK != 0 {
+			if got := testutil.Read[model.LabelSummary](t)(st.LabelSummaryResult("codex", "", "secret-in-transcript")); got.OK != 0 {
 				t.Fatalf("failed judgment persisted: %+v", got)
 			}
 			if _, err := db.Exec(`DROP TRIGGER reject_label_insert`); err != nil {
@@ -137,7 +139,7 @@ func TestExplicitLabelsReportFailedWriteAndAllowRetry(t *testing.T) {
 			if w := postJSON(a.handleLabels, "/labels", body); w.Code != http.StatusOK {
 				t.Fatalf("retry: %d %s", w.Code, w.Body.String())
 			}
-			if got := st.LabelSummary("codex", "", "secret-in-transcript"); got.OK != 1 {
+			if got := testutil.Read[model.LabelSummary](t)(st.LabelSummaryResult("codex", "", "secret-in-transcript")); got.OK != 1 {
 				t.Fatalf("retry judgment: %+v", got)
 			}
 			if health := st.WriteHealth(); slices.Contains(health.Active, "operator labels") {
@@ -155,7 +157,7 @@ func TestPostLabelMarksAFinding(t *testing.T) {
 	if w := postJSON(a.handleLabels, "/labels", map[string]string{"subject": "flag:f1", "label": "ok", "reason": "my own <test> key"}); w.Code != http.StatusOK {
 		t.Fatalf("mark: %d %s", w.Code, w.Body.String())
 	}
-	got := a.store.SimilarLabels("secret-in-transcript", "codex", p, 5)
+	got := testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabelsResult("secret-in-transcript", "codex", p, 5))
 	if len(got) != 1 || got[0].Label != "ok" || got[0].Source != "mark" || got[0].Pattern != p || got[0].Reason != "my own <test> key" {
 		t.Fatalf("stored = %+v", got)
 	}
@@ -178,14 +180,15 @@ func TestPostLabelMarksAFinding(t *testing.T) {
 
 // Allowlisting, muting, path allows and guard answers record labels.
 func TestDispositionsRecordLabels(t *testing.T) {
-	a, _ := planTestAPI(t)
+	deps, _ := planTestDeps(t)
 	cfg, err := config.Load("/nonexistent")
 	if err != nil {
 		t.Fatal(err)
 	}
 	tg := agents.New(cfg, allowlistProcSource{})
 	tg.Refresh()
-	a.correlator = correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
+	deps.Correlator = correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
+	a := newTestAPI(deps)
 	if w := postJSON(a.handleAllowlistAdd, "/allowlist", map[string]string{"agent": "codex", "host": "api.openai.com"}); w.Code != http.StatusOK {
 		t.Fatalf("allowlist: %d %s", w.Code, w.Body.String())
 	}
@@ -211,7 +214,7 @@ func TestDispositionsRecordLabels(t *testing.T) {
 
 	check := func(rule, agent, pattern, label, source string) {
 		t.Helper()
-		for _, l := range a.store.SimilarLabels(rule, agent, pattern, 20) {
+		for _, l := range testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabelsResult(rule, agent, pattern, 20)) {
 			if l.Rule == rule && l.Agent == agent && l.Pattern == pattern && l.Label == label && l.Source == source {
 				return
 			}
@@ -222,7 +225,7 @@ func TestDispositionsRecordLabels(t *testing.T) {
 	check("sensitive-read-then-connect", "", "api.example.com", "ok", "mute")
 	check("env-files", "codex", "/w/api/.env", "ok", "allow-path")
 	check("cloud-creds", "codex", "/w/api/secrets.json", "not_ok", "guard-deny")
-	if n := len(a.store.SimilarLabels("", "", "unknown", 5)); n != 0 {
+	if n := len(testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabelsResult("", "", "unknown", 5))); n != 0 {
 		t.Fatalf("unknown guard id wrote %d labels", n)
 	}
 }

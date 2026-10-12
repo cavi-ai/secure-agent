@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,7 @@ func TestIncidentRemediationReportsRemainUnverifiedAndRevisionBound(t *testing.T
 	if err := st.PutIncident(inc); err != nil {
 		t.Fatal(err)
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	get := func() map[string]any {
 		t.Helper()
 		w := httptest.NewRecorder()
@@ -74,7 +75,7 @@ func TestIncidentRemediationReportsRemainUnverifiedAndRevisionBound(t *testing.T
 	if first["status"] != "reported" || first["verification"] != "unverified" || first["reported_at"] == nil || second["status"] != "pending" {
 		t.Fatalf("untruthful or cross-item result: %+v", rem)
 	}
-	report, found := st.SessionReport("session")
+	report, found := testutil.Lookup[store.SessionReport](t)(st.SessionReportResult("session"))
 	if !found || !report.IncidentsAvailable || len(report.Incidents) != 1 {
 		t.Fatalf("missing session export: %+v", report)
 	}

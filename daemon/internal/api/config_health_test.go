@@ -30,7 +30,7 @@ func TestDoctorReportsConfigProblems(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true, Uptime: "1h0m0s"} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true, Uptime: "1h0m0s"} }})
 
 	if c := configCheck(t, a); c.State != doctorPass || c.Fix != "" {
 		t.Fatalf("no problem: %+v", c)
@@ -79,7 +79,7 @@ func TestDoctorReportsRestartNeeded(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true, Uptime: "1h0m0s"} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true, Uptime: "1h0m0s"} }})
 
 	a.SetConfigRestartNeeded([]string{"proxy_port", "firewall"})
 	if c := configCheck(t, a); c.State != doctorFail || c.Detail != "changed since start, applied after restart: proxy_port, firewall" {
@@ -101,7 +101,7 @@ func TestDoctorConfigCheckHidesOverlayValues(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true, Uptime: "1h0m0s"} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true, Uptime: "1h0m0s"} }})
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	overlay := "advisor:\n  enabled: true\n  managed: false\n  endpoint: \"https://user:hunter2hunter2@api.example.com/v1\"\n  model: \"m\"\n"

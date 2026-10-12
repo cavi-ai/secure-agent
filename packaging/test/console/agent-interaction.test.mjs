@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-const app = readFileSync(new URL('../../../daemon/internal/api/web_dist/app.js', import.meta.url), 'utf8');
-function source(begin, end) {
-  const start = app.indexOf(begin);
-  const finish = app.indexOf(end, start);
-  assert.ok(start >= 0 && finish > start);
-  return app.slice(start, finish);
+function install(ctx, file, factory, methods) {
+  const moduleContext = vm.createContext({ URLSearchParams });
+  vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/' + file, import.meta.url), 'utf8'), moduleContext);
+  const module = moduleContext[factory]({ state: ctx, actions: ctx });
+  for (const method of methods) ctx[method] = module[method];
+  return module;
 }
 function composer(fetch) {
   const paints = [];
@@ -18,8 +18,10 @@ function composer(fetch) {
     agentFetch: fetch, renderNow: () => paints.push(true), followAgent: () => {},
     showToast: () => {}, loadAgent: async () => {},
   };
-  vm.runInNewContext(source('  function agentBusy()', '  async function loadAgent(') +
-    source('  window.sendAgentMessage = async function()', '  window.saveAgentRequest = async function()'), ctx);
+  vm.createContext(ctx);
+  const agent = install(ctx, 'agent-controller.js', 'createAgentController', ['agentBusy']);
+  ctx.window.sendAgentMessage = agent.sendAgentMessage;
+  ctx.window.runLocalAgentAction = agent.runLocalAgentAction;
   return { ctx, paints };
 }
 function deferred() {
@@ -67,7 +69,7 @@ test('an older chat refresh cannot erase a newly accepted message', async () => 
     ? Promise.resolve({ message: { id: 7, role: 'user', content: 'Check Git signing' } }) : oldRead.promise);
   ctx.markDirty = () => {};
   ctx.fillAgentHarnesses = () => {};
-  vm.runInNewContext(source('  async function loadAgent(', '  function followAgent('), ctx);
+  install(ctx, 'agent-controller.js', 'createAgentController', ['loadAgent']);
   const refresh = ctx.loadAgent(['chat']);
   await ctx.window.sendAgentMessage();
   oldRead.resolve({ messages: [], chatting: false });
@@ -82,7 +84,6 @@ test('repeated command clicks open one confirmation and cancellation executes no
   let dialogs = 0;
   ctx.window.saConfirm = () => { dialogs++; return confirmation.promise; };
   ctx.agentState.chat.messages = [{ id: 3, local_command: { command: 'pwd', mode: 'headless', workdir: '/repo' } }];
-  vm.runInNewContext(source('  window.runLocalAgentAction = async function(', '  window.analyzeAgentActivity = async function('), ctx);
   const first = ctx.window.runLocalAgentAction(3);
   await ctx.window.runLocalAgentAction(3);
   assert.equal(dialogs, 1);
@@ -96,7 +97,6 @@ test('a confirmed command is linked immediately without moving the conversation 
   const { ctx } = composer(async () => ({ run: { id: 9, status: 'running' } }));
   ctx.window.saConfirm = async () => true;
   ctx.agentState.chat.messages = [{ id: 3, local_command: { command: 'pwd', mode: 'headless', workdir: '/repo' } }];
-  vm.runInNewContext(source('  window.runLocalAgentAction = async function(', '  window.analyzeAgentActivity = async function('), ctx);
   await ctx.window.runLocalAgentAction(3);
   assert.equal(ctx.agentState.chat.messages[0].local_run_id, 9);
   assert.equal(ctx.agentState.runs[0].status, 'running');

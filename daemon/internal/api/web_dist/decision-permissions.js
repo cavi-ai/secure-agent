@@ -1,10 +1,20 @@
-function sessionPermissionReceipt(data, reviewID, sessionID) {
-  if (!sessionID || data?.session_id !== sessionID) return null;
-  const decision = data.history?.reviews?.find(r => r.id === reviewID)?.decision;
+function decisionPermissionReceipt(decision, reviewID, sessionID) {
   const ids = decision?.scope_ids;
-  if (!Number.isInteger(decision?.revision) || decision.revision < 1 || !Array.isArray(ids) ||
+  if (typeof reviewID !== 'string' || !reviewID || !Number.isSafeInteger(decision?.revision) || decision.revision < 1 || !Array.isArray(ids) ||
       !ids.length || ids.length > 128 || ids.some(id => typeof id !== 'string' || !id)) return null;
   return { sessionID, reviewID, revision: decision.revision, at: decision.at, ids: [...new Set(ids)] };
+}
+
+function sessionPermissionReceipt(data, reviewID, sessionID) {
+  if (!sessionID || data?.session_id !== sessionID) return null;
+  return decisionPermissionReceipt(data.history?.reviews?.find(r => r.id === reviewID)?.decision, reviewID, sessionID);
+}
+
+function reviewResultPermissionReceipt(result) {
+  const decision = result?.receipt;
+  if (!validReviewReceipt(decision, decision?.id, decision?.revision, 'expect')) return null;
+  const session = result.review?.context?.session_id;
+  return decisionPermissionReceipt(decision, decision.id, typeof session === 'string' ? session : '');
 }
 
 // Projects one saved decision into display rows. Applicability comes from the
@@ -43,7 +53,7 @@ function sessionPermissionsHTML(receipt, state) {
     : st.loading ? 'Loading permission records…' : '';
   const head = `<header class="policy-row-main" data-session-part="permissions-head">
     <h4>Permissions from this decision</h4>
-    <p>Session ${escapeHTML(receipt.sessionID)} · decision for revision ${receipt.revision}<br>Saved ${escapeHTML(receipt.at || 'time unavailable')}</p>
+    <p>${receipt.sessionID ? `Session ${escapeHTML(receipt.sessionID)}` : 'Session unavailable'} · decision for revision ${receipt.revision}<br>Saved ${escapeHTML(receipt.at || 'time unavailable')}</p>
     <p>The daemon rechecks live session and identity before applying a saved scope. These records do not establish that a request is currently allowed.</p>
     <p>Other permissions and legacy policies may still allow matching access. Revocation does not undo past access.</p>
     ${st.readAt ? `<p>Read at ${escapeHTML(st.readAt)}</p>` : ''}

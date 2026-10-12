@@ -3,6 +3,7 @@ package daemon
 import (
 	"database/sql"
 	"encoding/json"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -107,12 +108,12 @@ func TestDrainRejectedEventKeepsGuardLiveAndReportsRecovery(t *testing.T) {
 	if len(deltas) != 1 || deltas[0].Type != "guard-prompt" {
 		t.Fatalf("failed writes published persisted data or hid live guard notification: %+v", deltas)
 	}
-	if len(f.store.RecentEvents(10)) != 0 || len(health) == 0 || health[len(health)-1].Failures != 2 {
+	if len(testutil.Read[[]event.Event](t)(f.store.QueryEventsResult(store.EventFilter{Limit: 10}))) != 0 || len(health) == 0 || health[len(health)-1].Failures != 2 {
 		t.Fatalf("event failure was not visible: health=%+v", health)
 	}
 	f.exec(t, "DROP TRIGGER reject_event")
 	deltas, _, health = f.drain(t, event.Event{Kind: event.KindToolCall, TS: now.Add(time.Second), PID: 500, ToolName: "Read", CallID: "saved"})
-	if len(deltas) != 1 || deltas[0].Type != "event" || len(f.store.RecentEvents(10)) != 1 {
+	if len(deltas) != 1 || deltas[0].Type != "event" || len(testutil.Read[[]event.Event](t)(f.store.QueryEventsResult(store.EventFilter{Limit: 10}))) != 1 {
 		t.Fatalf("recovered row did not match live feed: %+v", deltas)
 	}
 	if len(health) == 0 || health[len(health)-1].Failures != 2 || len(health[len(health)-1].Active) != 0 {
@@ -131,7 +132,7 @@ func TestDrainRejectedFlagDoesNotCreateDependents(t *testing.T) {
 				{Kind: event.KindConnOpen, TS: now.Add(time.Second), PID: 500, RemoteHost: "evil.example.com", RemotePort: 443},
 			}
 			deltas, offered, health := f.drain(t, observations...)
-			if len(offered) != 0 || len(f.store.RecentFlags(10)) != 0 || len(f.store.RecentIncidents(10)) != 0 {
+			if len(offered) != 0 || len(testutil.Read[[]model.Flag](t)(f.store.QueryFlagsResult(store.FlagFilter{Limit: 10}))) != 0 || len(testutil.Read[[]model.IncidentReport](t)(f.store.RecentIncidentsResult(10))) != 0 {
 				t.Fatalf("failed flag started dependent work: offered=%+v", offered)
 			}
 			for _, d := range deltas {
@@ -144,7 +145,7 @@ func TestDrainRejectedFlagDoesNotCreateDependents(t *testing.T) {
 			}
 			f.exec(t, "DROP TRIGGER reject_flag")
 			_, offered, health = f.drain(t, observations...)
-			if len(offered) != 1 || len(f.store.RecentFlags(10)) != 1 || len(f.store.RecentIncidents(10)) != 1 {
+			if len(offered) != 1 || len(testutil.Read[[]model.Flag](t)(f.store.QueryFlagsResult(store.FlagFilter{Limit: 10}))) != 1 || len(testutil.Read[[]model.IncidentReport](t)(f.store.RecentIncidentsResult(10))) != 1 {
 				t.Fatalf("recovery did not create saved flag and dependents: %+v", offered)
 			}
 			if len(health) == 0 || len(health[len(health)-1].Active) != 0 || health[len(health)-1].Failures != 1 {
@@ -158,7 +159,7 @@ func TestDrainDuplicateModelObservationDoesNotPublishNewRow(t *testing.T) {
 	f := newPersistenceFixture(t)
 	e := event.Event{Kind: event.KindModelCall, TS: time.Now().UTC(), PID: 500, CallID: "call", TokensIn: 100}
 	deltas, _, _ := f.drain(t, e, e)
-	if len(deltas) != 1 || len(f.store.RecentEvents(10)) != 1 {
+	if len(deltas) != 1 || len(testutil.Read[[]event.Event](t)(f.store.QueryEventsResult(store.EventFilter{Limit: 10}))) != 1 {
 		t.Fatalf("duplicate observation published a new row: deltas=%+v", deltas)
 	}
 }
@@ -166,11 +167,10 @@ func TestDrainDuplicateModelObservationDoesNotPublishNewRow(t *testing.T) {
 func TestDrainFlagRecoveryUsesSameCorrelator(t *testing.T) {
 	f := newPersistenceFixture(t)
 	f.exec(t, `CREATE TRIGGER reject_flag BEFORE INSERT ON flags BEGIN SELECT RAISE(ABORT, 'injected failure'); END`)
-	cr := correlate.New(f.tagger, sensitive.New(f.cfg), f.cfg, correlate.Hooks{})
-	cr.SetOpenFlagChecker(func(id string) bool {
-		flag, ok := f.store.GetFlag(id)
+	cr := correlate.New(f.tagger, sensitive.New(f.cfg), f.cfg, correlate.Hooks{OpenFlag: func(id string) bool {
+		flag, ok := testutil.Lookup[model.Flag](t)(f.store.GetFlagResult(id))
 		return ok && !flag.Acknowledged
-	})
+	}})
 	input := make(chan event.Event, 4)
 	health := make(chan store.WriteHealth, 4)
 	var offered []model.Flag
@@ -216,7 +216,7 @@ waitForFailure:
 	case <-time.After(3 * time.Second):
 		t.Fatal("drain did not finish")
 	}
-	if len(offered) != 1 || len(f.store.RecentFlags(10)) != 1 || len(f.store.RecentIncidents(10)) != 1 {
+	if len(offered) != 1 || len(testutil.Read[[]model.Flag](t)(f.store.QueryFlagsResult(store.FlagFilter{Limit: 10}))) != 1 || len(testutil.Read[[]model.IncidentReport](t)(f.store.RecentIncidentsResult(10))) != 1 {
 		t.Fatalf("correlator's failed-flag state prevented recovery: offered=%+v", offered)
 	}
 }

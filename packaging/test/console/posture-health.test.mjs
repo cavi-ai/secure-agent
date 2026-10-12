@@ -1,3 +1,4 @@
+import { controller } from './controllers.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -15,10 +16,7 @@ function fixture(posture, health = { lastSnapshotAt: 1234, error: '' }) {
   for (const name of ['lib.js', 'report-health.js', 'tab-overview.js']) {
     vm.runInContext(readFileSync(new URL(name, assets), 'utf8'), ctx);
   }
-  const start = app.indexOf('  function paintTabsPosture()');
-  const end = app.indexOf('\n  function ', start + 1);
-  assert.ok(start >= 0 && end > start);
-  vm.runInContext(app.slice(start, end), ctx);
+  Object.assign(ctx, controller('console-lifecycle.js', 'createConsoleLifecycle', ctx));
   return { ctx, nodes, paint() { ctx.renderPosture(); ctx.paintTabsPosture(); } };
 }
 

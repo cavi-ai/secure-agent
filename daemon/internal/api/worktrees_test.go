@@ -102,7 +102,7 @@ func TestWorktreesEndpoints(t *testing.T) {
 func TestWorktreesUnwired(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	mux := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }}).buildMux()
 	for _, req := range []*http.Request{
 		httptest.NewRequest(http.MethodGet, "/worktrees", nil),
 		httptest.NewRequest(http.MethodPost, "/worktrees/repos", strings.NewReader(`{"path":"/x"}`)),
@@ -527,9 +527,10 @@ func TestWorktreeOrphanEndpoints(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	st.UpsertSession(model.Session{ID: "s-lost", Harness: "claude", Workspace: orphan, Status: model.SessionEnded,
 		StartedAt: time.Now().Add(-72 * time.Hour), LastSeenAt: time.Now().Add(-72 * time.Hour)})
-	a := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})})
+	deps := Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}
 	var opened []string
-	a.openPath = func(args ...string) error { opened = append(opened, strings.Join(args, " ")); return nil }
+	deps.OpenPath = func(args ...string) error { opened = append(opened, strings.Join(args, " ")); return nil }
+	a := newTestAPI(deps)
 	mux := a.buildMux()
 	do := func(path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -767,7 +768,7 @@ func TestWorktreeAdviseWholeRepository(t *testing.T) {
 // One group ask runs at a time across repositories, so the advisor's shared
 // queue holds at most one of its notes.
 func TestGroupAdviseOneAtATime(t *testing.T) {
-	a := &API{}
+	a := New(Deps{})
 	if !a.startGroupAdvise("/a") || a.startGroupAdvise("/b") || a.startGroupAdvise("/a") {
 		t.Fatal("a second group ask started while one runs")
 	}
@@ -780,7 +781,7 @@ func TestGroupAdviseOneAtATime(t *testing.T) {
 // A group ask's background run ends with the daemon: it runs under the
 // serving context, not the request's.
 func TestGroupAdviseRunsUnderTheServingContext(t *testing.T) {
-	a := &API{}
+	a := New(Deps{})
 	if a.lifetime().Err() != nil {
 		t.Fatal("before serving, the lifetime is Background")
 	}

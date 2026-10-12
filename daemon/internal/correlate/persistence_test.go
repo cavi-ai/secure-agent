@@ -38,7 +38,8 @@ func TestRejectedPersistenceReleasesRuleSuppression(t *testing.T) {
 }
 
 func TestRejectedEscalationPreservesSavedReadFinding(t *testing.T) {
-	c := newFamilyCorrelator(t)
+	var repeatID string
+	c := newFamilyCorrelatorWith(t, Hooks{OnRepeat: func(id string, _ time.Time) { repeatID = id }})
 	at := time.Unix(1700000000, 0)
 	ghReads(c, t, event.KindFileOpen, at)
 	first := connectTo(c, 200, "evil.example.com", at.Add(time.Second))
@@ -52,8 +53,7 @@ func TestRejectedEscalationPreservesSavedReadFinding(t *testing.T) {
 		t.Fatal(stronger)
 	}
 	c.ResolvePersistence(stronger[0].ID, false)
-	var repeatID string
-	c.SetOnRepeat(func(id string, _ time.Time) { repeatID = id })
+	repeatID = ""
 	if flags := connectTo(c, 200, "evil.example.com", at.Add(2*time.Minute+2*time.Second)); len(flags) != 0 || repeatID != first[0].ID {
 		t.Fatalf("failed escalation displaced saved finding: flags=%+v repeat=%s", flags, repeatID)
 	}

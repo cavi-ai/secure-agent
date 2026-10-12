@@ -34,7 +34,7 @@ func TestEventReadFailureDoesNotReturnSuccessfulPartialData(t *testing.T) {
 			if _, err := db.Exec("UPDATE events SET " + damage + " WHERE session_id='bad'"); err != nil {
 				t.Fatal(err)
 			}
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 			for _, url := range []string{"/events", "/events?page=1&session_id=bad", "/sessions/bad/timeline", "/snapshot"} {
 				w := httptest.NewRecorder()
 				a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", url, nil))
@@ -69,7 +69,7 @@ func TestEventReadFailureDoesNotReturnSuccessfulPartialData(t *testing.T) {
 
 func TestEventEndpointsRejectClosedDatabase(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	st.Close()
 	for _, url := range []string{"/events", "/events?page=1&session_id=any", "/sessions/any/timeline"} {
 		w := httptest.NewRecorder()

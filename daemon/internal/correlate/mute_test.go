@@ -49,10 +49,9 @@ func TestMuteMutationsReportReadErrors(t *testing.T) {
 }
 
 func TestMuteSuppressesFlagAndCounts(t *testing.T) {
-	c := newTestCorrelator(t)
-	c.SetMuteChecker(func(rule, host, agent string) bool {
+	c := newTestCorrelatorWith(t, Hooks{Muted: func(rule, host, agent string) bool {
 		return rule == "sensitive-read-then-connect" && host == "evil.example.com"
-	})
+	}})
 
 	base := time.Unix(1_700_000_000, 0)
 	c.Observe(event.Event{Kind: event.KindFileOpen, PID: 200, TS: base, Path: "/Users/x/proj/.env"})
@@ -143,12 +142,11 @@ func TestMuteStoreAgentScope(t *testing.T) {
 // A keychain-class mute for one agent counts that agent's access and still
 // flags another agent's.
 func TestKeychainMuteForOneAgentStillFlagsAnother(t *testing.T) {
-	c := newTestCorrelator(t) // pid 200 = cursor
 	store := NewMuteStore(filepath.Join(t.TempDir(), "muted.json"))
 	if err := store.Add("keychain-access", "*", "cursor"); err != nil {
 		t.Fatal(err)
 	}
-	c.SetMuteChecker(store.Muted)
+	c := newTestCorrelatorWith(t, Hooks{Muted: store.Muted}) // pid 200 = cursor
 	base := time.Now()
 	const kc = "/Users/x/Library/Keychains/login.keychain-db"
 

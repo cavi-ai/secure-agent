@@ -2,6 +2,7 @@ package session
 
 import (
 	"database/sql"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -56,7 +57,7 @@ func TestResolverIdleAndActivityWriteRecovery(t *testing.T) {
 			if len(emitted) != 0 {
 				t.Fatalf("failed write emitted a session transition: %+v", emitted)
 			}
-			if saved, _ := st.GetSession("session"); saved.Status != status || !saved.LastSeenAt.Equal(lastSeen) {
+			if saved, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("session")); saved.Status != status || !saved.LastSeenAt.Equal(lastSeen) {
 				t.Fatalf("failed write changed saved state: %+v", saved)
 			}
 			if path == "activity" {
@@ -68,7 +69,7 @@ func TestResolverIdleAndActivityWriteRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			attempt(now.Add(time.Second))
-			saved, _ := st.GetSession("session")
+			saved, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("session"))
 			if path == "idle" {
 				if saved.Status != model.SessionIdle || len(emitted) != 1 || emitted[0].Status != model.SessionIdle {
 					t.Fatalf("idle recovery did not publish saved state: saved=%+v deltas=%+v", saved, emitted)
