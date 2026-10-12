@@ -103,13 +103,18 @@ func (familyProcSource) Info(pid int32) (agents.ProcInfo, bool) {
 
 func newFamilyCorrelator(t *testing.T) *Correlator {
 	t.Helper()
+	return newFamilyCorrelatorWith(t, Hooks{})
+}
+
+func newFamilyCorrelatorWith(t *testing.T, hooks Hooks) *Correlator {
+	t.Helper()
 	cfg, err := config.Load("/nonexistent")
 	if err != nil {
 		t.Fatal(err)
 	}
 	tg := agents.New(cfg, familyProcSource{})
 	tg.Refresh()
-	return New(tg, sensitive.New(cfg), cfg, Hooks{})
+	return New(tg, sensitive.New(cfg), cfg, hooks)
 }
 
 func TestReadConnectSeverityTracksCausalStrength(t *testing.T) {

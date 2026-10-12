@@ -43,9 +43,8 @@ func TestUninspectedSummaryIdentity(t *testing.T) {
 // The count-3 advisor pre-assessment skips only the agents' own vendors;
 // cloud hosts (which can front anyone) and unknowns are still assessed.
 func TestObserveSkipsAdvisorForKnownVendor(t *testing.T) {
-	c := newTestCorrelator(t)
 	var fired []string
-	c.SetOnUninspected(func(_, host string) { fired = append(fired, host) })
+	c := newTestCorrelatorWith(t, Hooks{OnUninspected: func(_, host string) { fired = append(fired, host) }})
 	now := time.Now()
 	for i := 0; i < 3; i++ {
 		for _, h := range []string{"160.79.104.10", "34.120.1.1", "203.0.113.7"} {
