@@ -80,6 +80,7 @@ test:
 	python3 plugin/hooks/test_secret_guard.py
 	python3 plugin/hooks/test_injection_scan.py
 	python3 plugin/hooks/test_activity_log.py
+	python3 plugin/hooks/test_cursor_hooks.py
 	@echo "==> Checking console assets..."
 	./packaging/test/check_console_css.sh
 	@echo "==> Checking app bundle layout..."
