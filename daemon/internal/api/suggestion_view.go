@@ -6,13 +6,14 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
-type suggestionVerdictReader interface {
+// advisorVerdictsReader batches optional advisor notes for one kind of subject.
+type advisorVerdictsReader interface {
 	AdvisorVerdictsFor([]string, string) (map[string]model.AdvisorVerdict, error)
 }
 
 // readEgressSuggestions selects recurring endpoints that need a decision.
 // Advisor failures retain observed endpoints and valid sibling verdicts.
-func readEgressSuggestions(reader suggestionVerdictReader, endpoints []correlate.UninspectedSummary) ([]Suggestion, error) {
+func readEgressSuggestions(reader advisorVerdictsReader, endpoints []correlate.UninspectedSummary) ([]Suggestion, error) {
 	out := []Suggestion{}
 	for _, e := range endpoints {
 		if e.Count < minSuggestionCount || e.Infra != "" || e.Identity.Class == "vendor" || e.AgentKind == config.AgentKindInfra {
