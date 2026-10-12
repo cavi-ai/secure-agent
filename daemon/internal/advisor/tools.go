@@ -64,10 +64,15 @@ func (s *Subscriber) scopedFlag(ctx context.Context) (model.Flag, bool) {
 	if !ok {
 		return model.Flag{}, false
 	}
-	if t.kind == "flag" {
-		return t.flag, true
+	if t.kind == nil || t.kind.scopedFlag == nil {
+		return model.Flag{}, false
 	}
-	if t.kind == "plan" && strings.HasPrefix(t.subjectID, "flag:") {
+	return t.kind.scopedFlag(s, t)
+}
+
+// planScopedFlag resolves the finding a plan for a "flag:" subject is about.
+func planScopedFlag(s *Subscriber, t task) (model.Flag, bool) {
+	if strings.HasPrefix(t.subjectID, "flag:") {
 		if reader, ok := s.sink.(evidenceReader); ok {
 			fl, found, err := reader.GetFlag(strings.TrimPrefix(t.subjectID, "flag:"))
 			return fl, found && err == nil
