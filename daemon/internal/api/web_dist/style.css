@@ -1188,6 +1188,8 @@ body {
 .policy-row-main { font-size: 0.8rem; color: var(--tx-1); overflow-wrap: anywhere; min-width: 0; }
 .policy-row-sub { grid-column: 1; font-size: 0.72rem; color: var(--tx-2); overflow-wrap: anywhere; }
 .policy-row-meta { grid-column: 2; grid-row: 1; font-size: 0.72rem; color: var(--tx-3); white-space: nowrap; }
+#policy-expected .policy-row-meta { grid-column: 1; grid-row: auto; white-space: normal; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#policy-expected [data-action="forget-expected"] { min-height: 44px; }
 .policy-decision { font-weight: 650; text-transform: uppercase; font-size: 0.68rem; }
 .policy-decision.allow { color: var(--ok); }
 .policy-decision.deny { color: var(--bad); }

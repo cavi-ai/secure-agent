@@ -50,6 +50,7 @@ function createConsoleLifecycle({ state, actions }) {
     if (state.sessionEnded) return;
     state.sessionEnded = true;
     clearProtectionContext();
+    actions.resetPolicyState();
     state.reviewResult = null;
     state.reviewResultSeq++;
     if (state.drawerMode === 'review-result' || state.drawerMode === 'permissions') actions.closeDrawer();

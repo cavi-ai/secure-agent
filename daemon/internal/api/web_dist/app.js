@@ -516,6 +516,7 @@ document.addEventListener('DOMContentLoaded', () => {
         get isEventsFiltered() { return isEventsFiltered; },
         get isFlagsFiltered() { return isFlagsFiltered; },
         get markDirty() { return markDirty; },
+        get resetPolicyState() { return resetPolicyState; },
         get renderNow() { return renderNow; },
         get renderPosture() { return renderPosture; },
         get renderReportHealth() { return renderReportHealth; },
@@ -1403,31 +1404,56 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Policy lists are not telemetry either: they load when Protection → Rules &
   // permissions opens and on its Refresh, never on the refresh cycle.
-  const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null, loading: false, error: '' };
+  const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null,
+    loading: false, error: '', readSeq: 0, expectedMutations: new Map(), expectedRemoval: null };
+  function resetPolicyState() {
+    Object.assign(policyState, { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null,
+      loading: false, error: '', expectedRemoval: null });
+    policyState.readSeq++;
+    policyState.expectedMutations.clear();
+    markDirty('policy');
+  }
   async function loadPolicy() {
-    if (policyState.loading) return;
+    if (sessionEnded || policyState.loading) return;
+    const auth = handoffGeneration, seq = ++policyState.readSeq;
+    const current = () => !sessionEnded && auth === handoffGeneration && seq === policyState.readSeq;
     policyState.loading = true;
     policyState.error = '';
     markDirty('policy');
     const get = async (path) => {
       const r = await apiFetch(path);
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
-      return (await r.json()) || [];
+      const payload = await r.json();
+      return path === '/expected' ? payload : payload || [];
     };
     try {
       const [rules, paths, mutes, expected, scopes] = await Promise.all([get('/guard/rules'), get('/guard/path-allow'), get('/mute'), get('/expected'), get('/decision-scopes')]);
+      if (!validExpectedPatterns(expected)) throw new Error('Invalid exception records');
+      if (!current()) return;
       Object.assign(policyState, { guardRules: rules, pathAllows: paths, mutes, expected, scopes });
+      for (const [key, mutation] of policyState.expectedMutations) {
+        if (mutation.status === 'unconfirmed') policyState.expectedMutations.delete(key);
+      }
     } catch (err) {
+      if (!current()) return;
       policyState.error = "Couldn't load the policy lists: " + (err.message || err);
     } finally {
-      policyState.loading = false;
-      markDirty('policy');
+      if (current()) { policyState.loading = false; markDirty('policy'); }
     }
   }
   function renderPolicyLists() {
     const put = (id, badge, rows, html) => {
       const el = document.getElementById(id);
-      if (el) el.innerHTML = html;
+      if (el && el.innerHTML !== html) {
+        const focused = id === 'policy-expected' && el.contains(document.activeElement) && document.activeElement.dataset.action === 'forget-expected'
+          ? document.activeElement.dataset.key : null;
+        el.innerHTML = html;
+        if (focused) {
+          const target = Array.from(el.querySelectorAll('[data-action="forget-expected"]')).find(button => button.dataset.key === focused && !button.disabled);
+          if (target) target.focus({ preventScroll: true });
+          else { el.tabIndex = -1; el.focus({ preventScroll: true }); }
+        }
+      }
       const b = document.getElementById(badge);
       if (b) b.textContent = rows ? rows.length : 0;
     };
@@ -1446,6 +1472,50 @@ document.addEventListener('DOMContentLoaded', () => {
       await loadPolicy();
       showToast('Permission revoked. The next matching request will be evaluated again.', 'success');
     } catch (err) { showToast(`Revocation could not be saved: ${err}`, 'danger'); }
+  };
+
+  window.forgetExpected = async function(key) {
+    const records = policyState.expected;
+    if (sessionEnded || policyState.loading || policyState.error || !validExpectedPatterns(records) || policyState.expectedMutations.has(key)) return;
+    const record = records.find(r => r.key === key);
+    if (!record) return;
+    const mutation = { auth: handoffGeneration, status: 'confirming' };
+    const current = () => !sessionEnded && mutation.auth === handoffGeneration && policyState.expectedMutations.get(key) === mutation;
+    policyState.expectedMutations.set(key, mutation);
+    const target = record.scope === 'file'
+      ? `Remove the non-secret file exception for ${record.agent}: ${record.path}? This exception covers all readers and destinations for this agent and file.`
+      : `Remove the expected read/connect exception for ${record.agent}: ${record.reader} reads ${record.path}, then reaches ${record.dest}?`;
+    const confirmed = await window.saConfirm(target + ' Future matching activity is evaluated under remaining exceptions and policies. Past activity and exposure are unchanged.',
+      { title: 'Remove exception', okLabel: 'Remove exception' });
+    if (!current()) return;
+    if (!confirmed) { policyState.expectedMutations.delete(key); return; }
+    const latest = policyState.expected?.find(r => r.key === key);
+    if (policyState.loading || policyState.error || !latest || ['agent', 'reader', 'path', 'dest', 'scope'].some(field => latest[field] !== record[field])) {
+      policyState.expectedMutations.delete(key); markDirty('policy'); return;
+    }
+    mutation.status = 'saving';
+    markDirty('policy');
+    try {
+      const response = await apiFetch('/expected?key=' + encodeURIComponent(key), { method: 'DELETE' });
+      if (!response.ok) throw new Error('Removal unavailable');
+      const receipt = await response.json();
+      if (receipt?.status !== 'ok' || receipt.key !== key) throw new Error('Removal not confirmed');
+      if (!current()) return;
+      // A read begun before this receipt cannot restore the removed row.
+      policyState.readSeq++;
+      policyState.loading = false;
+      policyState.expected = policyState.expected.filter(r => r.key !== key);
+      policyState.expectedRemoval = { ...record };
+      policyState.expectedMutations.delete(key);
+      markDirty('policy');
+      showToast('Exception removal saved. Remaining exceptions and policies still apply; past activity is unchanged.', 'success');
+      await loadPolicy();
+    } catch {
+      if (!current()) return;
+      mutation.status = 'unconfirmed';
+      markDirty('policy');
+      showToast('Removal not confirmed. Refresh exceptions before trying again.', 'danger');
+    }
   };
 
   // Agent tab: the system agent's status, chat, plans and runs load when
@@ -5111,16 +5181,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'forget-expected':
         e.preventDefault();
-        (async () => {
-          try {
-            const res = await apiFetch(`/expected?key=${encodeURIComponent(d.key || '')}`, { method: 'DELETE' });
-            if (!res.ok) throw new Error((await res.text()).trim() || String(res.status));
-            showToast('Forgot the expected pattern; it flags again', 'info');
-          } catch (err) {
-            showToast(`Failed to forget: ${err.message || err}`, 'danger');
-          }
-          loadPolicy();
-        })();
+        window.forgetExpected(d.key);
         break;
       case 'agent-refresh':
         e.preventDefault();
