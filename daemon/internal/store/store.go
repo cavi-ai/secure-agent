@@ -48,11 +48,12 @@ const (
 		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0)
 		FROM flags WHERE rule = ? AND agent = ?`
-	// hostFirstSeenSQL seeks idx_events_host; the advisor runs it for each
-	// flag, host and egress episode it triages. The partial index is usable
-	// only when the statement repeats the index's empty-host exclusion.
-	hostFirstSeenSQL = `SELECT MIN(ts) FROM events WHERE remote_host = ? AND remote_host != ''`
 )
+
+// hostFirstSeenSQL seeks idx_events_host; the advisor runs it for each
+// flag, host and egress episode it triages. Normalize before taking the
+// minimum so offsets and fractional widths cannot change chronology.
+var hostFirstSeenSQL = `SELECT MIN(` + timestampOrderExpr("ts") + `) FROM events WHERE remote_host = ? AND remote_host != ''`
 
 // reattributeFlagsSQL seeks idx_flags_pid. Numbered parameters reuse the cutoff
 // throughout its timestamp normalization without duplicating bound values.
@@ -1188,9 +1189,11 @@ func (s *Store) trendCounts(rule, host string) (model.TrendContext, func() map[s
 	if host != "" {
 		var first sql.NullString
 		err := s.db.QueryRow(hostFirstSeenSQL, host).Scan(&first)
-		if err == nil && first.Valid && first.String != "" {
-			tc.HostKnown = true
-			tc.HostFirstSeen = first.String
+		if err == nil && first.Valid {
+			if at, parseErr := time.Parse(time.RFC3339Nano, first.String); parseErr == nil {
+				tc.HostKnown = true
+				tc.HostFirstSeen = at.UTC().Format(time.RFC3339Nano)
+			}
 		}
 	}
 	return tc, s.allowlist
