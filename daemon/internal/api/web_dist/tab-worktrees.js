@@ -77,8 +77,8 @@ function worktreeDiskHTML(rep) {
 
 // ---------- reclaimed space: tiles, daily chart, history ----------
 // The ledger (GET /cleanup/ledger?days=30) books every cleanup with the
-// bytes it gave back; moves to the Trash count apart until the Trash is
-// emptied.
+// bytes it gave back; moves to the Trash are recorded separately. The
+// ledger does not measure current Trash contents or observe it being emptied.
 
 const RECLAIM_DAYS = 30;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -133,9 +133,9 @@ function removableEverywhere(rep) {
   return { rows, bytes: rows.reduce((n, r) => n + (Number(r.w.size_bytes) || 0), 0) };
 }
 
-// reclaimTilesHTML: what the charted days freed, what cleanups freed all
-// time, what Remove can free now (Remove all across repositories when two
-// or more rows are removable), and what waits in the Trash. Before the
+// reclaimTilesHTML: what the charted days freed, what recorded cleanups
+// freed, what Remove can free now (Remove all across repositories when two
+// or more rows are removable), and recorded moves to the Trash. Before the
 // ledger loads the report's totals stand in.
 function reclaimTilesHTML(rep, ledger) {
   const totals = (ledger && ledger.totals) || (rep && rep.reclaimed) || {};
@@ -153,9 +153,9 @@ function reclaimTilesHTML(rep, ledger) {
     ? `<button type="button" class="btn btn-danger btn-sm rc-remove-all" data-action="worktrees-remove-removable">Remove all ${rm.rows.length}</button>`
     : '';
   return tile('rc-freed', `Freed · last ${daily ? daily.length : RECLAIM_DAYS} days`, fmtDisk(freed), escapeHTML(plural(freedCount, 'cleanup', 'cleanups')))
-    + tile('rc-alltime', 'Freed · all time', fmtDisk(totals.bytes), escapeHTML(plural(Number(totals.count) || 0, 'cleanup', 'cleanups')))
+    + tile('rc-alltime', 'Freed · recorded', fmtDisk(totals.bytes), escapeHTML(plural(Number(totals.count) || 0, 'cleanup', 'cleanups')))
     + tile('rc-removable', 'Removable now', fmtDisk(rm.bytes), escapeHTML(plural(rm.rows.length, 'worktree', 'worktrees')) + (rep && rep.sizing ? ' · measuring…' : ''), removeAll)
-    + tile('rc-trash', 'In the Trash', fmtDisk(totals.trashed_bytes), 'frees when the Trash is emptied');
+    + tile('rc-trash', 'Moved to the Trash', fmtDisk(totals.trashed_bytes), escapeHTML(plural(Number(totals.trashed_count) || 0, 'recorded cleanup', 'recorded cleanups')) + ' · current Trash size is not measured');
 }
 
 // reclaimDayText: a day's numbers as the column label and tooltip read
@@ -769,7 +769,7 @@ function clutterSummaryText(rep) {
   if (rep.sizing) text += ' · measuring…';
   else if (rep.refreshing) text += ' · refreshing…';
   const r = rep.reclaimed;
-  if (r && r.trashed_count) text += ` · ${fmtDisk(r.trashed_bytes)} moved to the Trash by cleanups (frees when the Trash is emptied)`;
+  if (r && r.trashed_count) text += ` · ${fmtDisk(r.trashed_bytes)} moved to the Trash by recorded cleanups`;
   return text;
 }
 

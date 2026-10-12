@@ -50,6 +50,10 @@ function createConsoleLifecycle({ state, actions }) {
     if (state.sessionEnded) return;
     state.sessionEnded = true;
     clearProtectionContext();
+    state.reviewResult = null;
+    state.reviewResultSeq++;
+    if (state.drawerMode === 'review-result') actions.closeDrawer();
+    state.drawerReviewResult = null;
     if (state.cancelDialog) state.cancelDialog();
     actions.clearInterval(state.sparkTimer);
     actions.clearTimeout(state.spendPollTimer);

@@ -165,8 +165,8 @@ SHOTS = (
 )
 
 
-def screenshot(chrome, origin, query, path, tmp):
-    write_fixture(tmp, query)
+def screenshot(chrome, origin, query, path, tmp, fixture=None):
+    write_fixture(tmp, query, fixture)
     with tempfile.TemporaryDirectory(prefix="chrome-profile-", dir=tmp) as profile:
         out = subprocess.run(
             [chrome, f"--user-data-dir={profile}", "--no-first-run", "--disable-background-networking", "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
@@ -200,7 +200,7 @@ class CasePage:
 
 def select_cases(cases, args):
     names = list(args.only)
-    aliases = ("session_activity", "session_investigation", "session_permissions", "context_handoff", "session_results", "spend", "auth_recovery", "session_workbench")
+    aliases = ("review_results", "session_activity", "session_investigation", "session_permissions", "context_handoff", "session_results", "spend", "auth_recovery", "session_workbench")
     names.extend("spend_refresh" if name == "spend" else name for name in aliases if getattr(args, name + "_only", False))
     available = {case.name: case for case in cases}
     unknown = set(names) - available.keys()
@@ -221,6 +221,7 @@ def main():
     ap.add_argument('--session-permissions-only', action='store_true', help='run bounded decision permission drawer probes only')
     ap.add_argument('--session-investigation-only', action='store_true', help='run bounded session investigation return probes only')
     ap.add_argument('--session-activity-only', action='store_true', help='run retained session activity probes only')
+    ap.add_argument('--review-results-only', action='store_true', help='run bounded review result interaction probes only')
     ap.add_argument('--only', action='append', default=[], help='run a named case (repeatable)')
     ap.add_argument('--list', action='store_true', help='list case names without launching a browser')
     args = ap.parse_args()
@@ -247,7 +248,10 @@ def main():
         if args.screenshot:
             shot_dir = os.path.abspath(args.screenshot)
             os.makedirs(shot_dir, exist_ok=True)
-            for name, query, themes in SHOTS:
+            if args.review_results_only:
+                screenshot(chrome, origin, '?reviewresult&resultcard', os.path.join(shot_dir, 'review-result-card.png'), tmp, payload_cases.scoped_review())
+                screenshot(chrome, origin, '?reviewresult', os.path.join(shot_dir, 'review-result-detail.png'), tmp, payload_cases.scoped_review())
+            for name, query, themes in (() if args.review_results_only else SHOTS):
                 for theme in themes:
                     path = os.path.join(shot_dir, f"{name}-{theme}.png")
                     screenshot(chrome, origin, f"{query}&theme={theme}", path, tmp)

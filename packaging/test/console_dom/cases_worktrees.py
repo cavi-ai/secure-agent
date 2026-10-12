@@ -197,21 +197,7 @@ def run_worktrees(page):
     def tile(dom_text, cls):
         return rc_block(dom_text).split(f'class="rc-tile {cls}"', 1)[-1].split('</div>', 1)[0]
     rc = rc_block(dom_wt)
-    check(
-        'worktrees: tiles lead the tab: freed in 30 days, all time, removable now, in the Trash',
-        (
-            'Freed · last 30 days' in tile(dom_wt, 'rc-freed')
-            and '1.0 GB' in tile(dom_wt, 'rc-freed')
-            and '1 cleanup<' in tile(dom_wt, 'rc-freed')
-            and '3.0 GB' in tile(dom_wt, 'rc-alltime')
-            and '2 cleanups' in tile(dom_wt, 'rc-alltime')
-            and '1.5 GB' in tile(dom_wt, 'rc-removable')
-            and '1 worktree<' in tile(dom_wt, 'rc-removable')
-            and 'worktrees-remove-removable' not in rc
-            and '50 MB' in tile(dom_wt, 'rc-trash')
-        ),
-        rc[:600],
-    )
+    check('worktrees: tiles distinguish recorded cleanup history from current removable space', 'Freed · last 30 days' in tile(dom_wt, 'rc-freed') and '1.0 GB' in tile(dom_wt, 'rc-freed') and ('1 cleanup<' in tile(dom_wt, 'rc-freed')) and ('Freed · recorded' in tile(dom_wt, 'rc-alltime')) and ('3.0 GB' in tile(dom_wt, 'rc-alltime')) and ('2 cleanups' in tile(dom_wt, 'rc-alltime')) and ('1.5 GB' in tile(dom_wt, 'rc-removable')) and ('1 worktree<' in tile(dom_wt, 'rc-removable')) and ('worktrees-remove-removable' not in rc) and ('50 MB' in tile(dom_wt, 'rc-trash')) and ('Moved to the Trash' in tile(dom_wt, 'rc-trash')) and ('1 recorded cleanup' in tile(dom_wt, 'rc-trash')) and ('current Trash size is not measured' in tile(dom_wt, 'rc-trash')) and ('In the Trash' not in rc) and ('frees when the Trash is emptied' not in rc), rc[:600])
     check(
         'worktrees: the reclaimed chart has a column per day; only days with cleanups are buttons, labeled with their numbers',
         (
@@ -289,17 +275,7 @@ def run_clutter(page):
         ),
     )
     clr = cl_block(dom_clutter)
-    check(
-        'clutter: Move to Trash posts after the dialog, drops the row and counts it as in the Trash',
-        (
-            'POST /cleanup/trash' in pre(dom_clutter, 'mock-requests')
-            and '/api-service/.tmp' not in clr
-            and (
-                '1.0 MB moved to the Trash by cleanups' in dom_query(dom_clutter).text
-                or dom_query(dom_clutter).has(None, {'title': lambda value: '1.0 MB moved to the Trash by cleanups' in (value or '')})
-            )
-        ),
-    )
+    check('clutter: Move to Trash posts after the dialog, drops the row and records the moved bytes', 'POST /cleanup/trash' in pre(dom_clutter, 'mock-requests') and '/api-service/.tmp' not in clr and ('1.0 MB moved to the Trash by recorded cleanups' in dom_clutter))
 
 def run_worktrees_2(page):
     check = page.check
