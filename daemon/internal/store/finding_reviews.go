@@ -228,13 +228,15 @@ func observeReviewTx(tx *sql.Tx, f model.Flag, a model.FindingAssessment) (r mod
 		seen = *f.LastSeen
 	}
 	if fresh {
-		if _, err = tx.Exec(`DELETE FROM finding_review_actions WHERE review_id IN (SELECT id FROM finding_reviews WHERE state='closed_reported' AND closed_at<?)`, time.Now().Add(-30*24*time.Hour).UTC().Format(time.RFC3339Nano)); err != nil {
+		expired := `state='closed_reported' AND ` + timestampOrderExpr("closed_at") + `<?`
+		cutoff := instantArg(time.Now().Add(-30 * 24 * time.Hour))
+		if _, err = tx.Exec(`DELETE FROM finding_review_actions WHERE review_id IN (SELECT id FROM finding_reviews WHERE `+expired+`)`, cutoff); err != nil {
 			return
 		}
-		if _, err = tx.Exec(`DELETE FROM finding_review_members WHERE review_id IN (SELECT id FROM finding_reviews WHERE state='closed_reported' AND closed_at<?)`, time.Now().Add(-30*24*time.Hour).UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.Exec(`DELETE FROM finding_review_members WHERE review_id IN (SELECT id FROM finding_reviews WHERE `+expired+`)`, cutoff); err != nil {
 			return
 		}
-		if _, err = tx.Exec(`DELETE FROM finding_reviews WHERE state='closed_reported' AND closed_at<?`, time.Now().Add(-30*24*time.Hour).UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err = tx.Exec(`DELETE FROM finding_reviews WHERE `+expired, cutoff); err != nil {
 			return
 		}
 		var total int
@@ -275,7 +277,7 @@ func observeReviewTx(tx *sql.Tx, f model.Flag, a model.FindingAssessment) (r mod
 		}
 	}
 	if _, err = tx.Exec(`INSERT INTO finding_review_members(flag_id,review_id,count,last_seen,source_key) VALUES (?,?,?,?,?)
- ON CONFLICT(flag_id) DO UPDATE SET count=MAX(count,excluded.count),last_seen=CASE WHEN last_seen<excluded.last_seen THEN excluded.last_seen ELSE last_seen END,source_key=excluded.source_key`, f.ID, id, 1+max(0, f.Repeats), seen.UTC().Format(time.RFC3339Nano), model.ReviewEvidenceKey(f, a)); err != nil {
+ ON CONFLICT(flag_id) DO UPDATE SET count=MAX(count,excluded.count),last_seen=CASE WHEN `+timestampOrderExpr("last_seen")+`<`+timestampOrderExpr("excluded.last_seen")+` THEN excluded.last_seen ELSE last_seen END,source_key=excluded.source_key`, f.ID, id, 1+max(0, f.Repeats), seen.UTC().Format(time.RFC3339Nano), model.ReviewEvidenceKey(f, a)); err != nil {
 		return
 	}
 	r.Count += max(0, 1+max(0, f.Repeats)-priorCount)
@@ -308,7 +310,7 @@ func (s *Store) GetFindingReview(id string) (r model.ReviewRecord, ok bool, err 
 }
 
 func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
-	rows, err := s.db.Query(`SELECT m.flag_id FROM finding_review_members m JOIN flags f ON f.id=m.flag_id WHERE m.review_id=? ORDER BY m.last_seen DESC,m.flag_id LIMIT 100`, r.ID)
+	rows, err := s.db.Query(`SELECT m.flag_id FROM finding_review_members m JOIN flags f ON f.id=m.flag_id WHERE m.review_id=? ORDER BY `+timestampOrderExpr("m.last_seen")+` DESC,m.flag_id LIMIT 100`, r.ID)
 	if err != nil {
 		return err
 	}
@@ -423,7 +425,7 @@ func (s *Store) listFindingReviews(after string, limit int, state, sessionID str
 	query := `SELECT id,state,record_json FROM finding_reviews WHERE id>? AND (?='' OR state=?) ORDER BY id LIMIT ?`
 	args := []any{after, state, state, limit + 1}
 	if sessionID != "" {
-		query = `SELECT id,state,record_json FROM finding_reviews WHERE session_id=? ORDER BY last_seen DESC,id DESC LIMIT ?`
+		query = `SELECT id,state,record_json FROM finding_reviews WHERE session_id=? ORDER BY ` + timestampOrderExpr("last_seen") + ` DESC,id DESC LIMIT ?`
 		args = []any{sessionID, limit + 1}
 	}
 	rows, err := s.db.Query(query, args...)
@@ -736,7 +738,7 @@ func (s *Store) syncLegacyReviewsLocked(ids []string) {
 				break
 			}
 			var resolved sql.NullString
-			legacyErr := s.db.QueryRow(`SELECT resolved_at FROM incidents WHERE status='resolved' AND (flag_id=? OR (COALESCE(rule,'')=? AND COALESCE(session_id,'')=? AND EXISTS(SELECT 1 FROM json_each(flag_ids) WHERE value=?))) ORDER BY created_at DESC LIMIT 1`, v.id, r.Context.Rule, r.Context.SessionID, v.id).Scan(&resolved)
+			legacyErr := s.db.QueryRow(`SELECT resolved_at FROM incidents WHERE status='resolved' AND (flag_id=? OR (COALESCE(rule,'')=? AND COALESCE(session_id,'')=? AND EXISTS(SELECT 1 FROM json_each(flag_ids) WHERE value=?))) ORDER BY `+timestampOrderExpr("created_at")+` DESC LIMIT 1`, v.id, r.Context.Rule, r.Context.SessionID, v.id).Scan(&resolved)
 			if legacyErr == nil {
 				closed = true
 				resolvedAt, parseErr := time.Parse(time.RFC3339Nano, resolved.String)
