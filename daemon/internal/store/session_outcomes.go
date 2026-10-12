@@ -8,7 +8,9 @@ import (
 
 // SessionOutcomeHistory is retained history, never current action authority.
 // Each source is read independently so an unavailable section does not erase
-// the other receipts. Callers must establish that the session exists first.
+// the other receipts. SessionOutcomes does not check identity; report
+// aggregation calls it after its own identity read. Request handlers use
+// SessionOutcome.
 type SessionOutcomeHistory struct {
 	Reviews       []model.ReviewRecord        `json:"reviews"`
 	Incidents     []model.IncidentReport      `json:"incidents"`

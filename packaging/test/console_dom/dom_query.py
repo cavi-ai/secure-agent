@@ -27,9 +27,12 @@ class Node:
 
     @property
     def text(self):
-        if self.tag in ("script", "style"):
+        return self.text_without()
+
+    def text_without(self, *tags):
+        if self.tag in ("script", "style", *tags):
             return ""
-        return "".join(part.text if isinstance(part, Node) else part for part in self.parts)
+        return "".join(part.text_without(*tags) if isinstance(part, Node) else part for part in self.parts)
 
     def find_all(self, tag=None, attrs=None):
         result = []
@@ -47,8 +50,8 @@ class Node:
     def find(self, tag=None, attrs=None):
         return next(iter(self.find_all(tag, attrs)), None)
 
-    def has(self, tag=None, attrs=None):
-        return self.find(tag, attrs) is not None
+    def has(self, tag=None, attrs=None, *, text=None):
+        return any(text is None or node.text == text for node in self.find_all(tag, attrs))
 
 
 class _Parser(HTMLParser):

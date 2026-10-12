@@ -15,7 +15,7 @@ type SessionOutcomes struct {
 
 // serveSessionOutcomes reads receipts without scanning the session's activity.
 func (a *API) serveSessionOutcomes(w http.ResponseWriter, r *http.Request, id string) {
-	_, found, err := a.store.GetSessionResult(id)
+	history, found, err := a.store.SessionOutcome(id)
 	if err != nil {
 		http.Error(w, "session results unavailable", http.StatusServiceUnavailable)
 		return
@@ -24,5 +24,5 @@ func (a *API) serveSessionOutcomes(w http.ResponseWriter, r *http.Request, id st
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, SessionOutcomes{SessionID: id, ObservedAt: time.Now().UTC(), History: a.store.SessionOutcomes(id)})
+	writeJSON(w, SessionOutcomes{SessionID: id, ObservedAt: time.Now().UTC(), History: history})
 }

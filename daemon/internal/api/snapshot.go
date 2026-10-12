@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -47,11 +48,7 @@ func (a *API) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) currentSnapshot() (Snapshot, error) {
-	sessions, err := a.store.ListSessionsResult(store.SessionFilter{Limit: 100})
-	if err != nil {
-		return Snapshot{}, err
-	}
-	events, err := a.store.QueryEventsResult(store.EventFilter{Limit: 50})
+	sessions, events, err := readSnapshotRows(a.store)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -68,7 +65,7 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 		return Snapshot{}, err
 	}
 	failedReads := a.advisorReadFailures("incident")
-	flags, err := a.store.QueryFlagsResult(store.FlagFilter{
+	flags, err := a.store.QueryFlags(store.FlagFilter{
 		Unacted: true,
 		Since:   time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
 		Limit:   200,
@@ -120,11 +117,15 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 }
 
 func (a *API) mutePairs() []MutePair {
-	out := []MutePair{}
 	if a.mutes == nil {
-		return out
+		return []MutePair{}
 	}
-	for rule, mutes := range a.mutes.Load() {
+	return mutePairsFrom(a.mutes.Load())
+}
+
+func mutePairsFrom(policy map[string][]correlate.Mute) []MutePair {
+	out := []MutePair{}
+	for rule, mutes := range policy {
 		for _, m := range mutes {
 			out = append(out, MutePair{Rule: rule, Host: m.Host, Agent: m.Agent, Title: humanFlagTitle(rule)})
 		}

@@ -70,7 +70,7 @@ func TestPlanTargetReadFailuresRejectDecisionsAndRecover(t *testing.T) {
 			if len(rec.reqs) != 0 {
 				t.Errorf("enqueued %d plans from failed target", len(rec.reqs))
 			}
-			if labels := testutil.Read[[]model.OperatorLabel](t)(st.SimilarLabelsResult("secret-in-transcript", "codex", "", 5)); len(labels) != 0 {
+			if labels := testutil.Read[[]model.OperatorLabel](t)(st.SimilarLabels("secret-in-transcript", "codex", "", 5)); len(labels) != 0 {
 				t.Errorf("recorded judgments from failed target: %+v", labels)
 			}
 			if tc.repair != "" {

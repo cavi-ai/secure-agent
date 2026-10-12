@@ -82,15 +82,15 @@ const (
 const ReportTopN = 50
 
 type sessionReportReader interface {
-	GetSessionResult(string) (model.Session, bool, error)
+	GetSessionBounded(string) (model.Session, bool, error)
 	sessionEventsOldestFirst(string) ([]event.Event, error)
-	QueryFlagsResult(FlagFilter) ([]model.Flag, error)
+	QueryFlags(FlagFilter) ([]model.Flag, error)
 	SessionOutcomes(string) SessionOutcomeHistory
 }
 
-// SessionReportResult distinguishes unavailable identity from a missing session.
+// SessionReport distinguishes unavailable identity from a missing session.
 // Source failures retain independently readable sections with explicit limits.
-func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr error) {
+func (s *Store) SessionReport(id string) (_ SessionReport, _ bool, readErr error) {
 	defer func() { s.noteRead("session reports", readErr) }()
 	return readSessionReport(s, id)
 }
@@ -98,7 +98,7 @@ func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr
 // readSessionReport aggregates retained evidence independently of storage.
 // Identity must be readable before any evidence sources are queried.
 func readSessionReport(reader sessionReportReader, id string) (SessionReport, bool, error) {
-	sess, ok, err := reader.GetSessionResult(id)
+	sess, ok, err := reader.GetSessionBounded(id)
 	if err != nil {
 		return SessionReport{}, false, err
 	}
@@ -228,7 +228,7 @@ func readSessionReport(reader sessionReportReader, id string) (SessionReport, bo
 	rep.Files = topCounts(files, ReportTopN)
 	rep.Hosts = topCounts(hosts, ReportTopN)
 	var flagErr error
-	rep.Flags, flagErr = reader.QueryFlagsResult(FlagFilter{SessionID: id, Limit: reportFlagLimit})
+	rep.Flags, flagErr = reader.QueryFlags(FlagFilter{SessionID: id, Limit: reportFlagLimit})
 	if flagErr != nil {
 		rep.Flags = nil
 	}
@@ -265,7 +265,7 @@ func (s *Store) sessionEventsOldestFirst(id string) (out []event.Event, readErr 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	rows, err := s.db.QueryContext(ctx, `SELECT kind, ts, COALESCE(path,''), COALESCE(remote_host,''), COALESCE(detail,''), tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd
-		FROM events WHERE session_id = ? ORDER BY julianday(ts) ASC, id ASC LIMIT ?`, id, reportEventCap)
+		FROM events WHERE session_id = ? ORDER BY `+timestampOrderExpr("ts")+` ASC, id ASC LIMIT ?`, id, reportEventCap)
 	if err != nil {
 		return nil, err
 	}

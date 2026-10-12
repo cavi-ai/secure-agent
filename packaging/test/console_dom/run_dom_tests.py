@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import payload_cases
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -73,7 +74,7 @@ def build_harness(tmp):
     """Harness page = real index.html with mock_dom.js injected between lib.js
     and app.js. Real assets are symlinked so relative paths resolve."""
     for f in ("index.html", "style.css", "lib.js", "event-history.js", "live-updates.js", "console-auth.js", "report-health.js", "telemetry-validation.js", "app.js",
-              "telemetry-refresh.js", "spend-controller.js", "agent-controller.js", "history-controller.js", "console-lifecycle.js",
+              "telemetry-refresh.js", "spend-controller.js", "agent-controller.js", "history-controller.js", "console-lifecycle.js", "policy-controller.js", "finding-actions.js",
               "tab-overview.js", "session-workbench.js", "decision-permissions.js", "tab-agents.js", "tab-egress.js", "tab-findings.js",
               "tab-worktrees.js", "tab-agent.js", "theme-init.js", "icon.svg"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))
@@ -107,6 +108,15 @@ def serve_with_csp(tmp):
         def __init__(self, *a, **kw):
             super().__init__(*a, directory=tmp, **kw)
 
+        def do_GET(self):
+            if self.path == '/__console_frame_checkpoint':
+                time.sleep(0.05)
+                self.send_response(204)
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                return
+            super().do_GET()
+
         def end_headers(self):
             self.send_header("Content-Security-Policy", policy)
             super().end_headers()
@@ -128,6 +138,8 @@ def write_fixture(tmp, query_string, fixture=None):
         if value:
             scenarios.append(f"{key}={value}")
     spec = {"scenarios": scenarios, **(fixture or {})}
+    from fixture_catalog import scenario_payload
+    spec = {**scenario_payload(spec["scenarios"], spec.get("now")), **spec}
     with open(os.path.join(tmp, "fixture-config.js"), "w") as stream:
         stream.write("window.CONSOLE_TEST = " + json.dumps(spec) + ";\n"
                      "if (window.parent !== window) {\n"
@@ -200,7 +212,7 @@ class CasePage:
 
 def select_cases(cases, args):
     names = list(args.only)
-    aliases = ("review_results", "session_activity", "session_investigation", "session_permissions", "context_handoff", "session_results", "spend", "auth_recovery", "session_workbench")
+    aliases = ("review_results", "session_activity", "session_investigation", "session_permissions", "context_handoff", "session_results", "spend", "auth_recovery", "session_workbench", "policy_permissions")
     names.extend("spend_refresh" if name == "spend" else name for name in aliases if getattr(args, name + "_only", False))
     available = {case.name: case for case in cases}
     unknown = set(names) - available.keys()
@@ -222,6 +234,7 @@ def main():
     ap.add_argument('--session-investigation-only', action='store_true', help='run bounded session investigation return probes only')
     ap.add_argument('--session-activity-only', action='store_true', help='run retained session activity probes only')
     ap.add_argument('--review-results-only', action='store_true', help='run bounded review result interaction probes only')
+    ap.add_argument('--policy-permissions-only', action='store_true', help='run bounded global permission revocation probes only')
     ap.add_argument('--only', action='append', default=[], help='run a named case (repeatable)')
     ap.add_argument('--list', action='store_true', help='list case names without launching a browser')
     args = ap.parse_args()
@@ -249,9 +262,9 @@ def main():
             shot_dir = os.path.abspath(args.screenshot)
             os.makedirs(shot_dir, exist_ok=True)
             if args.review_results_only:
-                screenshot(chrome, origin, '?reviewresult&resultcard', os.path.join(shot_dir, 'review-result-card.png'), tmp, payload_cases.scoped_review())
-                screenshot(chrome, origin, '?reviewresult', os.path.join(shot_dir, 'review-result-detail.png'), tmp, payload_cases.scoped_review())
-                screenshot(chrome, origin, '?reviewresult=expect&resultpermissions', os.path.join(shot_dir, 'review-result-permissions.png'), tmp, payload_cases.scoped_review())
+                screenshot(chrome, origin, '?reviewresult&resultcard', os.path.join(shot_dir, 'review-result-card.png'), tmp, payload_cases.review_result())
+                screenshot(chrome, origin, '?reviewresult', os.path.join(shot_dir, 'review-result-detail.png'), tmp, payload_cases.review_result())
+                screenshot(chrome, origin, '?reviewresult=expect&resultpermissions', os.path.join(shot_dir, 'review-result-permissions.png'), tmp, payload_cases.review_result())
             for name, query, themes in (() if args.review_results_only else SHOTS):
                 for theme in themes:
                     path = os.path.join(shot_dir, f"{name}-{theme}.png")

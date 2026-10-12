@@ -103,7 +103,7 @@ See [resource policy configuration](CONFIGURATION.md#resource_control-map) for b
 
 `secure-agent worktrees` lists every Git worktree found through agent sessions, agent worktree directories and a saved repo list, each marked remove, review, keep or prune with the reasons. The console's System tab shows these worktrees and disk usage per project, including what cleanups have reclaimed (`secure-agent cleanup log`).
 
-“Ask <harness>” appears only for a live, resumable agent session; “Ask advisor” requests an advisory note; “Discuss” puts the question to the Agent tab. Removing a reviewed worktree moves its folder to Trash while keeping the Git branch, commits and stashes. It refuses an active session, a locked worktree, or a detached HEAD holding commits no branch keeps, as well as conflicts and partly staged files.
+“Ask <harness>” appears only for a live, resumable agent session; “Ask advisor” requests an advisory note; “Discuss” puts the question to the agent in a panel docked beside the page. Removing a reviewed worktree moves its folder to Trash while keeping the Git branch, commits and stashes. It refuses an active session, a locked worktree, or a detached HEAD holding commits no branch keeps, as well as conflicts and partly staged files.
 
 Start with the inventory before removing anything:
 

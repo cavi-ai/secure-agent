@@ -902,7 +902,7 @@ func reattributeUntaggedFlags(st *store.Store, deltas *api.DeltaHub, now func() 
 			return
 		}
 		filter := store.FlagFilter{Agent: info.Name, Since: since.UTC().Format(time.RFC3339Nano), Limit: model.PatternFlagIDCap}
-		flags, err := st.QueryFlagsResult(filter)
+		flags, err := st.QueryFlags(filter)
 		if err != nil {
 			return
 		}

@@ -54,7 +54,7 @@ func TestExpectedEgressAuditRollbackAndRecovery(t *testing.T) {
 					}
 				}
 				st.PutAudit(store.AuditEntry{Action: "fixture-existing", Detail: "existing audit"})
-				baselineRules := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRulesResult())
+				baselineRules := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRules())
 				baselineAudit := st.RecentAudit(10)
 				if len(baselineAudit) != 1 {
 					t.Fatal("missing audit fixture")
@@ -84,7 +84,7 @@ func TestExpectedEgressAuditRollbackAndRecovery(t *testing.T) {
 				if w.Code != http.StatusServiceUnavailable {
 					t.Errorf("audit failure returned success: %d %s", w.Code, w.Body.String())
 				}
-				if got := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRulesResult()); !reflect.DeepEqual(got, baselineRules) {
+				if got := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRules()); !reflect.DeepEqual(got, baselineRules) {
 					t.Errorf("audit failure changed rules: got %+v, want %+v", got, baselineRules)
 				}
 				var count int
@@ -126,7 +126,7 @@ func TestExpectedEgressAuditRollbackAndRecovery(t *testing.T) {
 				action, toMode := "expected-egress-create", "destination"
 				if decision == "revoke" {
 					action, toMode = "expected-egress-revoke", "revoked"
-					if got := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRulesResult()); len(got) != 1 || got[0].RevokedAt == nil {
+					if got := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRules()); len(got) != 1 || got[0].RevokedAt == nil {
 						t.Errorf("retry did not revoke: %+v", got)
 					}
 				} else {
@@ -146,14 +146,14 @@ func TestExpectedEgressAuditRollbackAndRecovery(t *testing.T) {
 				if got := st.WriteHealth(); got.Failures != h.Failures || len(got.Active) != 0 {
 					t.Errorf("recovery lost history or kept faults: %+v", got)
 				}
-				persisted := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRulesResult())
+				persisted := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRules())
 				st.Close()
 				reopened, err := store.Open(path, "")
 				if err != nil {
 					t.Fatal(err)
 				}
 				st = reopened
-				if !reflect.DeepEqual(testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRulesResult()), persisted) || !reflect.DeepEqual(st.RecentAudit(10), audits) {
+				if !reflect.DeepEqual(testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRules()), persisted) || !reflect.DeepEqual(st.RecentAudit(10), audits) {
 					t.Error("rule or audit lost on reopen")
 				}
 			})

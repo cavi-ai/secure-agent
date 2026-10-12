@@ -81,8 +81,8 @@ func interfaceBody(t *testing.T, ts, name string) string {
 func TestTypeScriptPreservesCollidingWireTypes(t *testing.T) {
 	ts := Generate()
 	for name, fields := range map[string][]string{
-		"ApiSnapshot":      {"incidents: IncidentDetail[];", "sessions: ModelSession[];"},
-		"ResourceSnapshot": {"sessions: ResourceSession[];"},
+		"ApiSnapshot":      {"incidents: IncidentDetail[] | null;", "sessions: ModelSession[] | null;"},
+		"ResourceSnapshot": {"sessions: ResourceSession[] | null;"},
 		"ModelSession":     {"id: string;"},
 		"ResourceSession":  {"key: string;"},
 	} {
@@ -153,7 +153,7 @@ func TestTypeScriptDiscoversCollectionStructs(t *testing.T) {
 		t.Fatal("collection element missing or duplicated")
 	}
 	body := interfaceBody(t, ts, "collections")
-	for _, field := range []string{"map: Record<string, element>;", "array: element[];"} {
+	for _, field := range []string{"map: Record<string, element> | null;", "array: element[];"} {
 		if !strings.Contains(body, field) {
 			t.Errorf("missing %s", field)
 		}

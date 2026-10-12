@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.classList.add(cached ? 'is-paused' : 'is-ended');
     const ended = document.getElementById('session-ended');
     recoveryFocus = document.activeElement;
-    document.querySelectorAll('.app > *, .masthead-right, #drawer, #confirm-layer').forEach(el => {
+    document.querySelectorAll('.app > *, .masthead-right, #drawer, #agent-dock, #confirm-layer').forEach(el => {
       if (el !== ended && !el.classList.contains('masthead')) {
         pausedElements.set(el, { inert: el.inert, hidden: el.hidden });
         el.inert = true;
@@ -79,6 +79,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // The drawer is a single reusable surface: title + body + optional footer
   // actions. Only one is open at a time; closing restores focus to the opener.
   let drawerOpener = null;
+  // Agent dock state (openAgentDock): the drawer closes it on open.
+  let agentDockOpen = false;
+  let agentDockOpener = null;
   let drawerOnClose = null;
   let drawerBack = null;
   // Bumped on every open: an async opener writes its body only while its
@@ -215,6 +218,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function openDrawer({ title, icon, body, foot, variant, onClose, back, attentionOrigin }) {
     if (!drawer) return false;
+    closeAgentDock();
     // A drawer opened from inside the open one keeps the original opener, so
     // closing still returns focus to the page.
     if (drawer.hidden) drawerOpener = document.activeElement;
@@ -516,6 +520,7 @@ document.addEventListener('DOMContentLoaded', () => {
         get isEventsFiltered() { return isEventsFiltered; },
         get isFlagsFiltered() { return isFlagsFiltered; },
         get markDirty() { return markDirty; },
+        get resetPolicyState() { return resetPolicyState; },
         get renderNow() { return renderNow; },
         get renderPosture() { return renderPosture; },
         get renderReportHealth() { return renderReportHealth; },
@@ -606,6 +611,7 @@ document.addEventListener('DOMContentLoaded', () => {
       el.hidden = previous.hidden;
     }
     pausedElements.clear();
+    if (activeTab === 'protection' && activeProtection === 'rules') loadPolicy();
     syncDrawerMode();
     if (handoff.has('tab')) switchTab(route, { skipHash: true });
     if (recoveryFocus?.isConnected) recoveryFocus.focus({ preventScroll: true });
@@ -640,6 +646,10 @@ document.addEventListener('DOMContentLoaded', () => {
   let reviewResultSeq = 0;
   let drawerReviewResult = null;
   window.reviewAct = async function(id, revision, action, scope) {
+    if (!validReviewDecision(revision, action, scope)) {
+      showToast('Review decision unavailable. Refresh the evidence before choosing again.', 'danger');
+      return;
+    }
     const auth = handoffGeneration;
     if (scope && scope.kind !== 'once' && !await window.saConfirm('Count future activity as expected only for the recorded executable path, workspace, file and exact endpoint? ' + (scope.kind === 'session' ? 'This ends with the current session.' : `Expires after ${scope.expiry === '7d' ? '7 days' : '24 hours'}.`) + ' Firewall and payload checks remain active. Revoke under Protection → Rules & permissions.', {title:'Expected activity',okLabel:'Save permission'})) return;
     if (sessionEnded || auth !== handoffGeneration) return;
@@ -1065,6 +1075,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function panelOnScreen(name) {
     const v = PANEL_VIEW[name];
     if (!v) return true;
+    // The docked conversation is on screen over any tab.
+    if (name === 'agent' && agentDockOpen) return true;
     const [route, group] = v.split(':');
     const [tab, sub] = route.split('/');
     if (tab !== activeTab || (sub && sub !== (tab === 'protection' ? activeProtection : tab === 'system' ? activeSystemSub : activeSub))) return false;
@@ -1403,49 +1415,119 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Policy lists are not telemetry either: they load when Protection → Rules &
   // permissions opens and on its Refresh, never on the refresh cycle.
-  const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null, loading: false, error: '' };
-  async function loadPolicy() {
-    if (policyState.loading) return;
-    policyState.loading = true;
-    policyState.error = '';
-    markDirty('policy');
-    const get = async (path) => {
-      const r = await apiFetch(path);
-      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
-      return (await r.json()) || [];
-    };
-    try {
-      const [rules, paths, mutes, expected, scopes] = await Promise.all([get('/guard/rules'), get('/guard/path-allow'), get('/mute'), get('/expected'), get('/decision-scopes')]);
-      Object.assign(policyState, { guardRules: rules, pathAllows: paths, mutes, expected, scopes });
-    } catch (err) {
-      policyState.error = "Couldn't load the policy lists: " + (err.message || err);
-    } finally {
-      policyState.loading = false;
-      markDirty('policy');
-    }
+  const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null,
+    loading: false, error: '', scopeMutations: new Map(), expectedMutations: new Map(), expectedRemoval: null };
+  const policyRendered = new Map();
+  let policyController;
+  function consolePolicyControllerModule() {
+    return policyController ||= createConsolePolicy({
+      state: { policyState, get sessionEnded() { return sessionEnded; }, get handoffGeneration() { return handoffGeneration; } },
+      actions: { apiFetch: (...args) => apiFetch(...args), markDirty, decisionPermissionRows, validExpectedPatterns }
+    });
   }
+  function loadPolicy(kind) { return consolePolicyControllerModule().load(kind); }
+  function resetPolicyState() { return consolePolicyControllerModule().reset(); }
+  function policyReady(kind) { return consolePolicyControllerModule().ready(kind); }
   function renderPolicyLists() {
     const put = (id, badge, rows, html) => {
       const el = document.getElementById(id);
-      if (el) el.innerHTML = html;
+      if (el && policyRendered.get(id) !== html) {
+        const active = document.activeElement;
+        const focused = el.contains(active) && active.dataset.action ? { ...active.dataset } : null;
+        el.innerHTML = html;
+        policyRendered.set(id, html);
+        if (focused) {
+          const target = Array.from(el.querySelectorAll('[data-action]')).find(button => !button.disabled &&
+            ['action', 'id', 'key', 'kind'].every(field => button.dataset[field] === focused[field]));
+          if (target) target.focus({ preventScroll: true });
+          else { el.tabIndex = -1; el.focus({ preventScroll: true }); }
+        }
+      }
       const b = document.getElementById(badge);
-      if (b) b.textContent = rows ? rows.length : 0;
+      if (b) b.textContent = rows ? rows.length : '—';
     };
     const st = policyState;
-    put('policy-guard-rules', 'badge-guard-rules', st.guardRules, policyListHTML('guard', st.guardRules, st));
-    put('policy-path-allows', 'badge-path-allows', st.pathAllows, policyListHTML('path', st.pathAllows, st));
-    put('policy-mutes', 'badge-mutes', st.mutes, policyListHTML('mute', st.mutes, st));
-    put('policy-expected', 'badge-expected', st.expected, policyListHTML('expected', st.expected, st));
-    put('policy-scopes', 'badge-scopes', st.scopes, policyListHTML('scope', st.scopes, st));
+    consolePolicyControllerModule();
+    const view = key => ({ ...st, ...st.reports[key] });
+    put('policy-guard-rules', 'badge-guard-rules', st.guardRules, policyListHTML('guard', st.guardRules, view('guardRules')));
+    put('policy-path-allows', 'badge-path-allows', st.pathAllows, policyListHTML('path', st.pathAllows, view('pathAllows')));
+    put('policy-mutes', 'badge-mutes', st.mutes, policyListHTML('mute', st.mutes, view('mutes')));
+    put('policy-expected', 'badge-expected', st.expected, policyListHTML('expected', st.expected, view('expected')));
+    put('policy-scopes', 'badge-scopes', st.scopes, policyListHTML('scope', st.scopes, view('scopes')));
   }
 
   window.revokeScope = async function(id) {
+    const record = policyState.scopes?.find(r => r.id === id);
+    if (!policyReady('scope') || policyState.scopeMutations.has(id) || !decisionScopeApplicability(record).revoke) return;
+    const mutation = { auth: handoffGeneration, status: 'confirming' };
+    const current = () => !sessionEnded && mutation.auth === handoffGeneration && policyState.scopeMutations.get(id) === mutation;
+    policyState.scopeMutations.set(id, mutation);
+    const confirmed = await window.saConfirm(`Revoke this saved permission for ${record.resource_path}${record.destination ? ' → ' + record.destination : ''}? Other permissions and policies may still allow matching activity. This does not undo past access or remediate past exposure.`, { title: 'Revoke permission', okLabel: 'Revoke permission' });
+    if (!current()) return;
+    if (!confirmed) { policyState.scopeMutations.delete(id); return; }
+    if (!policyReady('scope') || !decisionScopeApplicability(policyState.scopes?.find(r => r.id === id)).revoke) {
+      policyState.scopeMutations.delete(id); markDirty('policy'); return;
+    }
+    mutation.status = 'saving';
+    markDirty('policy');
     try {
       const res = await apiFetch('/decision-scopes?id=' + encodeURIComponent(id), {method:'DELETE'});
-      if (!res.ok) throw new Error(await res.text());
-      await loadPolicy();
-      showToast('Permission revoked. The next matching request will be evaluated again.', 'success');
-    } catch (err) { showToast(`Revocation could not be saved: ${err}`, 'danger'); }
+      if (!res.ok || !validScopeRevocation(await res.json(), id)) throw new Error('Revocation not confirmed');
+      if (!current()) return;
+      consolePolicyControllerModule().invalidate('scope');
+      mutation.status = 'saved';
+      markDirty('policy');
+      showToast('Permission revocation saved. Other permissions may still apply; past access is unchanged.', 'success');
+      await loadPolicy('scope');
+    } catch {
+      if (!current()) return;
+      mutation.status = 'unconfirmed';
+      markDirty('policy');
+      showToast('Revocation not confirmed. Refresh permissions before trying again.', 'danger');
+    }
+  };
+
+  window.forgetExpected = async function(key) {
+    const records = policyState.expected;
+    if (!policyReady('expected') || !validExpectedPatterns(records) || policyState.expectedMutations.has(key)) return;
+    const record = records.find(r => r.key === key);
+    if (!record) return;
+    const mutation = { auth: handoffGeneration, status: 'confirming' };
+    const current = () => !sessionEnded && mutation.auth === handoffGeneration && policyState.expectedMutations.get(key) === mutation;
+    policyState.expectedMutations.set(key, mutation);
+    const target = record.scope === 'file'
+      ? `Remove the non-secret file exception for ${record.agent}: ${record.path}? This exception covers all readers and destinations for this agent and file.`
+      : `Remove the expected read/connect exception for ${record.agent}: ${record.reader} reads ${record.path}, then reaches ${record.dest}?`;
+    const confirmed = await window.saConfirm(target + ' Future matching activity is evaluated under remaining exceptions and policies. Past activity and exposure are unchanged.',
+      { title: 'Remove exception', okLabel: 'Remove exception' });
+    if (!current()) return;
+    if (!confirmed) { policyState.expectedMutations.delete(key); return; }
+    const latest = policyState.expected?.find(r => r.key === key);
+    if (!policyReady('expected') || !latest || ['agent', 'reader', 'path', 'dest', 'scope'].some(field => latest[field] !== record[field])) {
+      policyState.expectedMutations.delete(key); markDirty('policy'); return;
+    }
+    mutation.status = 'saving';
+    markDirty('policy');
+    try {
+      const response = await apiFetch('/expected?key=' + encodeURIComponent(key), { method: 'DELETE' });
+      if (!response.ok) throw new Error('Removal unavailable');
+      const receipt = await response.json();
+      if (receipt?.status !== 'ok' || receipt.key !== key) throw new Error('Removal not confirmed');
+      if (!current()) return;
+      // A read begun before this receipt cannot restore the removed row.
+      consolePolicyControllerModule().invalidate('expected');
+      policyState.expected = policyState.expected.filter(r => r.key !== key);
+      policyState.expectedRemoval = { ...record };
+      policyState.expectedMutations.delete(key);
+      markDirty('policy');
+      showToast('Exception removal saved. Remaining exceptions and policies still apply; past activity is unchanged.', 'success');
+      await loadPolicy('expected');
+    } catch {
+      if (!current()) return;
+      mutation.status = 'unconfirmed';
+      markDirty('policy');
+      showToast('Removal not confirmed. Refresh exceptions before trying again.', 'danger');
+    }
   };
 
   // Agent tab: the system agent's status, chat, plans and runs load when
@@ -1459,6 +1541,68 @@ document.addEventListener('DOMContentLoaded', () => {
   // Literal paths: the proxy's console allow-list test reads them from here.
   const AGENT_PATHS = { status: '/agent/status', chat: '/agent/chat', plans: '/agent/plans', runs: '/agent/runs', recommendations: '/agent/recommendations' };
   let agentPollTimer = null;
+  // Agent dock: the Agent tab's conversation (#agent-chat) moved beside the
+  // current page, so asking about a worktree does not navigate away. It and
+  // the inspector drawer share the right edge: one is open at a time.
+  const agentDockNarrow = window.matchMedia ? window.matchMedia('(max-width: 900px)') : null;
+  // Below 900px the dock covers the page instead of narrowing it.
+  function syncAgentDockInert() {
+    const app = document.querySelector('.app');
+    if (app && !sessionEnded) app.inert = agentDockOpen && !!(agentDockNarrow && agentDockNarrow.matches);
+  }
+  agentDockNarrow?.addEventListener('change', syncAgentDockInert);
+  // Moving the conversation resets its scroll; it reopens at the newest message.
+  function agentThreadToEnd() {
+    const thread = document.getElementById('agent-thread');
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }
+  function openAgentDock() {
+    const dock = document.getElementById('agent-dock');
+    const chat = document.getElementById('agent-chat');
+    const body = document.getElementById('agent-dock-body');
+    if (activeTab === 'agent' || !dock || !chat || !body) {
+      switchTab('agent');
+      return;
+    }
+    closeDrawer();
+    if (!agentDockOpen) agentDockOpener = document.activeElement;
+    if (chat.parentElement !== body) body.appendChild(chat);
+    dock.hidden = false;
+    agentDockOpen = true;
+    document.body.classList.add('agent-docked');
+    syncAgentDockInert();
+    markDirty('agent');
+    agentThreadToEnd();
+    loadAgent();
+    const input = document.getElementById('agent-input');
+    if (input) input.focus({ preventScroll: true });
+  }
+  // restoreFocus returns focus to what opened the dock (Close, Escape); a
+  // move to the Agent tab focuses there instead.
+  function closeAgentDock(restoreFocus = false) {
+    if (!agentDockOpen) return;
+    const dock = document.getElementById('agent-dock');
+    const chat = document.getElementById('agent-chat');
+    const layout = document.querySelector('#tab-agent .agent-layout');
+    if (chat && layout) layout.insertBefore(chat, layout.firstChild);
+    if (dock) dock.hidden = true;
+    agentDockOpen = false;
+    document.body.classList.remove('agent-docked');
+    syncAgentDockInert();
+    agentThreadToEnd();
+    const opener = agentDockOpener;
+    agentDockOpener = null;
+    if (restoreFocus && opener && opener.isConnected) opener.focus({ preventScroll: true });
+  }
+  document.addEventListener('keydown', e => {
+    const dock = document.getElementById('agent-dock');
+    if (e.key !== 'Escape' || e.defaultPrevented || sessionEnded || !agentDockOpen || !dock || !dock.contains(document.activeElement)) return;
+    // Escape while writing a message keeps the panel.
+    const a = document.activeElement;
+    if (a.matches('textarea, input') && a.value) return;
+    e.preventDefault();
+    closeAgentDock(true);
+  });
   const agentComposer = document.getElementById('agent-composer');
   const agentInput = document.getElementById('agent-input');
   const agentHarnessSelect = document.getElementById('agent-harness');
@@ -1468,6 +1612,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let agentActivePane = '';
   function setAgentPanel(pane, toggle = false) {
     if (pane && !['queue', 'history', 'tools'].includes(pane)) return;
+    // The queue, history and tools live in the Agent tab: show it.
+    if (pane && agentDockOpen) switchTab('agent');
     if (toggle && pane === agentActivePane) pane = '';
     const previous = agentActivePane;
     agentActivePane = pane;
@@ -1533,7 +1679,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (wasBusy) loadAgent(['chat', 'plans', 'runs', 'recommendations']);
       return;
     }
-    if (agentPollTimer || activeTab !== 'agent' || agentState.polls >= AGENT_POLL_LIMIT) return;
+    if (agentPollTimer || (activeTab !== 'agent' && !agentDockOpen) || agentState.polls >= AGENT_POLL_LIMIT) return;
     agentState.polls++;
     agentPollTimer = setTimeout(() => {
       agentPollTimer = null;
@@ -1554,6 +1700,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const enabled = !!(st && st.enabled);
     const stateEl = document.getElementById('agent-state');
     if (stateEl) stateEl.textContent = agentState.error || agentStateText(st);
+    const dockStateEl = document.getElementById('agent-dock-state');
+    if (dockStateEl) dockStateEl.textContent = agentState.error || agentStateText(st);
     const advisorStateEl = document.getElementById('advisor-state');
     if (advisorStateEl) advisorStateEl.textContent = advisorStateText(telemetryData.status && telemetryData.status.advisor_health);
     const unavailable = !enabled || !!(st && st.reason) || agentBusy();
@@ -1790,6 +1938,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function switchTab(id, opts = {}) {
     if (protectionContext && !opts.keepProtectionContext) clearProtectionContext();
     const r = resolveConsoleRoute(id);
+    // The Agent tab shows the conversation itself: take it back from the dock.
+    if (r.tab === 'agent') closeAgentDock();
     const from = activeTab;
     activeTab = r.tab;
     document.body.classList.toggle('agent-page', activeTab === 'agent');
@@ -2180,6 +2330,16 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionWorkbench.render();
     renderAgents();
   }
+  function showEndedSessions(origin) {
+    const fromDetail = !!origin?.closest('#session-detail');
+    harnessFilter.liveOnly = false;
+    harnessFilterChanged();
+    if (fromDetail) sessionWorkbench.showList();
+    const selected = Array.from(document.querySelectorAll('#session-rail [data-action="select-session"]'))
+      .find(el => el.dataset.id === sessionWorkbench.selectedSessionId && el.getClientRects().length);
+    const target = selected || (liveOnlySwitch?.getClientRects().length ? liveOnlySwitch : null);
+    target?.focus({preventScroll: true});
+  }
   syncHarnessFilterControls();
   for (const el of harnessTextInputs) {
     el.addEventListener('input', () => { harnessFilter.text = el.value; harnessFilterChanged(); });
@@ -2215,13 +2375,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!p || !p.groups) return;
     telemetryData.posture = mapPostureAttention(p, fn);
   }
-  const withMode = (rules, mode) => {
-    const s = telemetryData.status;
-    if (!s || !s.firewall_stats) return;
-    const stats = { ...s.firewall_stats };
-    rules.forEach(r => { if (stats[r]) stats[r] = { ...stats[r], mode }; });
-    telemetryData.status = { ...s, firewall_stats: stats };
-  };
   const cssq = v => CSS.escape(String(v));
   // One-line confirmation on the card the action changed, for 4s. When the
   // action removed the card, the note sits on its panel's head.
@@ -2239,19 +2392,12 @@ document.addEventListener('DOMContentLoaded', () => {
     at.appendChild(note);
     setTimeout(() => note.remove(), 4000);
   }
-  const allowRowSel = (agent, host) => `#firewall-container [data-action="allowlist-remove"][data-agent="${cssq(agent)}"][data-host="${cssq(host)}"]`;
-  function stageAllow(agent, hosts) {
-    const hit = x => x.agent === agent && hosts.includes(x.host);
-    return stage(['allowlist', 'suggestions', 'uninspected'], ['firewall', 'endpoints'], () => {
-      const have = telemetryData.allowlist || [];
-      telemetryData.allowlist = have.concat(hosts.filter(h => !have.some(p => p.agent === agent && p.host === h)).map(host => ({ agent, host })));
-      telemetryData.suggestions = (telemetryData.suggestions || []).filter(x => !hit(x));
-      telemetryData.uninspected = (telemetryData.uninspected || []).filter(x => !hit(x));
-    });
+  function refillUninspectedDrawer() {
+    if (drawerMode === 'uninspected' && drawer && !drawer.hidden) fillUninspected(drawerBody);
   }
   function refillUninspected() {
     markDirty('endpoints');
-    if (drawerMode === 'uninspected' && drawer && !drawer.hidden) fillUninspected(drawerBody);
+    refillUninspectedDrawer();
   }
 
   // Posture headline: the one-glance answer, plus clickable jump-off points
@@ -2469,7 +2615,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Discuss: the daemon writes the question from the worktree's fresh facts
   // (a repository's, from its cached report) and the local model answers in
-  // the Agent tab's conversation. target is {path} or {repo}.
+  // the conversation, docked beside the page. target is {path} or {repo}.
   async function discussWorktreeTarget(target) {
     try {
       const res = await agentFetch('/agent/worktree', { method: 'POST', body: target });
@@ -2483,7 +2629,7 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast(err.message || String(err), 'danger');
       return;
     }
-    switchTab('agent');
+    openAgentDock();
   }
   window.discussWorktree = path => discussWorktreeTarget({ path });
   window.discussWorktreeGroup = repo => discussWorktreeTarget({ repo });
@@ -3431,7 +3577,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await apiFetch('/decision-scopes?id=' + encodeURIComponent(id), { method: 'DELETE' });
       if (!response.ok) throw new Error('Revocation unavailable');
       const result = await response.json();
-      if (result?.revoked !== true || result.id !== id) throw new Error('Revocation confirmation unavailable');
+      if (!validScopeRevocation(result, id)) throw new Error('Revocation confirmation unavailable');
       if (!currentDecisionPermissions(st)) return;
       st.revoked.add(id);
       st.busy = '';
@@ -3934,32 +4080,6 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchTelemetry();
   }
 
-  // Bulk allow: one click for a group the operator has already judged (all
-  // hosts under one suffix for one agent). Sequential and bounded — the
-  // allowlist is a user-owned file, not a bulk-import target.
-  window.bulkAllowHosts = async function(agent, hosts) {
-    const list = String(hosts || '').split(',').filter(Boolean);
-    const revert = stageAllow(agent, list);
-    refillUninspected();
-    let ok = 0;
-    for (const host of list) {
-      try {
-        const res = await apiFetch('/allowlist', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agent, host })
-        });
-        if (res.ok) ok++;
-      } catch { /* continue; the toast reports the tally */ }
-    }
-    // None landed: put everything back. A partial run keeps the optimistic
-    // rows until the reconcile below shows which ones the daemon took.
-    if (ok === 0 && list.length) { revert(); refillUninspected(); }
-    showToast(`Allowlisted ${ok} of ${list.length} hosts for ${agent}`, ok === list.length ? 'success' : ok ? 'warn' : 'danger');
-    await fetchTelemetry();
-    if (ok) list.forEach(host => cardNote(allowRowSel(agent, host), '.mute-row', 'firewall-container', 'allowlisted'));
-    refillUninspected();
-  };
-
   async function saveExpectedEgress(episodeId, kind) {
     if (!['destination', 'scope'].includes(kind)) return;
     let row = (telemetryData.egressEpisodes || []).find(e => e.id === episodeId);
@@ -4022,509 +4142,32 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) { showToast(`Could not assess activity: ${err}`, 'danger'); }
   }
 
-  // Ask the advisor what an endpoint is — the functionality that turns a raw
-  // IP into a decision. The daemon answers with a cached verdict immediately
-  // and queues a fresh assessment; the console polls a few times for the
-  // verdict to land, then re-renders the row.
-  window.assessHost = async function(agent, host) {
-    try {
-      const res = await apiFetch('/advisor/assess-host', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent, host })
-      });
-      if (res.status === 503) {
-        showToast('Advisor is off — enable it in Settings for endpoint guidance.', 'info');
-        return;
-      }
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json().catch(() => ({}));
-      showToast(data.verdict ? 'Advisor verdict loaded' : 'Asking the advisor…', 'info');
-      await pollHostVerdict(agent, host, !!data.verdict);
-    } catch (err) {
-      showToast(`Advisor assessment failed: ${err.message || err}`, 'danger');
+  const findingActions = createFindingActions({
+    request: apiFetch,
+    toast: showToast,
+    refetch: fetchTelemetry,
+    stage,
+    telemetry: () => telemetryData,
+    cardNote,
+    cssq,
+    loadPolicy,
+    flags: {
+      find: id => (telemetryData.flags || []).find(x => x.id === id)
+        || (telemetryData.flagsView || []).find(x => x.id === id)
+        || planFlagCache.get(id),
+      drop: stageDropFlag
+    },
+    drawer: {
+      back: currentDrawerBack,
+      refill: refillUninspected,
+      refillOpen: refillUninspectedDrawer,
+      closeFlag: id => { if (!attentionSelection && drawerMode === 'flag' && drawerFlag === id) closeDrawer(); }
     }
-  };
-
-  // Poll for a fresh host verdict (bounded): the model answers in seconds, and
-  // /egress/uninspected carries the stored verdict once it lands.
-  async function pollHostVerdict(agent, host, hadVerdict) {
-    const rounds = hadVerdict ? 1 : 8;
-    for (let i = 0; i < rounds; i++) {
-      await fetchTelemetry({ slow: true });
-      const row = (telemetryData.uninspected || []).find(e => e.agent === agent && e.host === host);
-      if (row && row.assessment) break;
-      await new Promise(r => setTimeout(r, 1500));
-    }
-    if (drawerMode === 'uninspected' && drawer && !drawer.hidden) {
-      fillUninspected(drawerBody);
-    }
+  });
+  for (const name of ['bulkAllowHosts', 'assessHost', 'allowHost', 'openFDASettings', 'muteFlag', 'explainAct', 'routineAct',
+    'explainAllowOrg', 'patternAct', 'unmuteFlag', 'promoteVendorKeys', 'promoteRule', 'demoteRule', 'removeAllowlistEntry']) {
+    window[name] = (...args) => findingActions[name](...args);
   }
-
-  window.allowHost = async function(agent, host) {
-    const revert = stageAllow(agent, [host]);
-    refillUninspected();
-    try {
-      const res = await apiFetch('/allowlist', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent, host })
-      });
-      if (res.ok) {
-        showToast(`Allowlisted ${host} for ${agent}`, 'success');
-        cardNote(allowRowSel(agent, host), '.mute-row', 'firewall-container', 'allowlisted');
-        await fetchTelemetry();
-        refillUninspected();
-      } else {
-        revert();
-        refillUninspected();
-        showToast(`Failed to allowlist ${host}.`, 'danger');
-      }
-    } catch (err) {
-      revert();
-      refillUninspected();
-      showToast(`Error allowlisting ${host}: ${err}`, 'danger');
-    }
-  };
-
-  window.openFDASettings = async function() {
-    try {
-      const res = await apiFetch('/ui/open-fda', { method: 'POST' });
-      if (res.ok) {
-        showToast('Opening System Settings → Full Disk Access', 'info');
-      } else {
-        showToast('Could not open settings — open Setup & Permissions from the menu bar instead.', 'danger');
-      }
-    } catch (err) {
-      showToast(`Could not open settings: ${err}`, 'danger');
-    }
-  };
-
-  window.muteFlag = async function(rule, host, agent) {
-    agent = agent || '';
-    const revert = stage(['mutes'], ['flags'], () => {
-      telemetryData.mutes = [...(telemetryData.mutes || []), agent ? { rule, host, agent } : { rule, host }];
-    });
-    try {
-      const res = await apiFetch('/mute', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(agent ? { rule, host, agent } : { rule, host })
-      });
-      if (res.ok) {
-        const who = agent ? ` from ${agent}` : '';
-        showToast(host === '*'
-          ? `Dismissed ${rule}${who} — future flags of this class are suppressed`
-          : `Muted ${rule} for ${host}${who} — future flags suppressed`, 'success');
-        cardNote(`#flags-list [data-action="unmute"][data-rule="${cssq(rule)}"][data-host="${cssq(host)}"][data-agent="${cssq(agent)}"]`, '.mute-row', 'flags-list', 'muted');
-        fetchTelemetry();
-        return true;
-      }
-      revert();
-      showToast(`Failed to mute: ${await res.text()}`, 'danger');
-    } catch (err) {
-      revert();
-      showToast(`Error muting: ${err}`, 'danger');
-    }
-    return false;
-  };
-
-  // A served explanation action (finding card, attention item). The request
-  // comes from flag.explain.actions, found by flag id + action id (+ host:
-  // allow-host appears once per destination); each id runs the console's
-  // existing optimistic path. allow-host, mute and dismiss resolve the flag,
-  // so its card leaves the list; POST /allowlist does not acknowledge the
-  // flag on the daemon, so the allow is followed by /flags/acknowledge.
-  window.explainAct = async function(flagId, actionId, host) {
-    const f = (telemetryData.flags || []).find(x => x.id === flagId)
-      || (telemetryData.flagsView || []).find(x => x.id === flagId)
-      || planFlagCache.get(flagId);
-    const a = f && f.explain && (f.explain.actions || []).find(x => x.id === actionId
-      && (!host || (x.body && x.body.host) === host));
-    if (!a) {
-      showToast('That action is no longer offered for this finding — the list is refreshing.', 'info');
-      fetchTelemetry();
-      return;
-    }
-    const body = a.body || {};
-    switch (a.id) {
-      case 'inspect-file':
-        return window.openFileDetail(body.path, { back: currentDrawerBack() });
-
-      case 'review-local':
-        return window.analyzeAgentActivity(body.flag_ids);
-      case 'expect':
-      case 'expect-file':
-        if (!await window.saConfirm(a.consequence, { title: 'Confirm security exception', okLabel: 'Save exception' })) return;
-        try {
-          const res = await apiFetch(a.path, {method: a.method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)});
-          if (!res.ok) throw new Error(await res.text());
-          showToast('Exception saved; unmatched evidence stays open. Revoke under Policy.', 'success');
-          fetchTelemetry(); loadPolicy();
-        } catch (err) {showToast('Exception not saved: ' + (err.message || err), 'danger');}
-        return;
-
-      case 'dismiss':
-        return window.dismissFlag(f.id);
-      case 'kill':
-        if (await window.killProcess(Number(body.pid), body.started_at, f.agent)) {
-          window.markLabel('flag:' + f.id, 'not_ok', 'kill', { quiet: true });
-        }
-        return;
-      case 'open-incident':
-        return window.openIncidentReport(new URLSearchParams(String(a.path).split('?')[1] || '').get('id') || '', { back: currentDrawerBack() });
-      case 'mute-rule-host':
-      case 'mute-class':
-        if (await window.muteFlag(body.rule, body.host, body.agent)) { const done = stageDropFlag(f.id); done.commit?.(); }
-        return;
-      case 'allow-host': {
-        const revertAllow = stageAllow(body.agent, [body.host]);
-        const revertDrop = stageDropFlag(f.id);
-        const send = async (method, path, payload) => {
-          const res = await apiFetch(path, {
-            method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-          });
-          if (!res.ok) throw new Error(await res.text());
-        };
-        try {
-          await send(a.method, a.path, body);
-        } catch (err) {
-          revertDrop();
-          revertAllow();
-          showToast(`Failed to allowlist ${body.host}: ${err.message || err}`, 'danger');
-          return;
-        }
-        try {
-          await send('POST', '/flags/acknowledge', { flag_id: f.id });
-        } catch (err) {
-          revertDrop();
-          showToast(`Allowlisted ${body.host}, but the flag was not marked reviewed: ${err.message || err}`, 'danger');
-          fetchTelemetry();
-          return;
-        }
-        revertDrop.commit?.();
-    if (revertDrop.isCurrent?.() !== false && !attentionSelection && drawerMode === 'flag' && drawerFlag === f.id) closeDrawer();
-        showToast(`Allowlisted ${body.host} for ${body.agent}`, 'success');
-        cardNote('', '', 'flags-list', 'allowlisted');
-        fetchTelemetry();
-        return;
-      }
-      case 'allow-path': {
-        const revertDrop = stageDropFlag(f.id);
-        try {
-          const res = await apiFetch(a.path, {
-            method: a.method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-          });
-          if (!res.ok) throw new Error(await res.text());
-        } catch (err) {
-          revertDrop();
-          showToast(`Failed to allow ${body.path}: ${err.message || err}`, 'danger');
-          return;
-        }
-        try {
-          const res = await apiFetch('/flags/acknowledge', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ flag_id: f.id })
-          });
-          if (!res.ok) throw new Error(await res.text());
-        } catch (err) {
-          revertDrop();
-          showToast(`Allowed ${body.path}, but the flag was not marked reviewed: ${err.message || err}`, 'danger');
-          fetchTelemetry();
-          return;
-        }
-        revertDrop.commit?.();
-    if (revertDrop.isCurrent?.() !== false && !attentionSelection && drawerMode === 'flag' && drawerFlag === f.id) closeDrawer();
-        showToast(`Allowed ${body.path} for ${body.agent}`, 'success');
-        fetchTelemetry();
-        return;
-      }
-    }
-  };
-
-  // One destination organization's allow-host choices at once: every served
-  // allow for its hosts, in order, then one acknowledgement — the requests
-  // the per-host buttons sent one at a time. Reverted when none lands.
-  // A routine group's served action: Treat as routine (confirmed; every
-  // exact pair its flags cite is expected) or Dismiss all. The group and its
-  // flags leave the page before the request; a failure puts them back.
-  window.routineAct = async function(key, actionId) {
-    const rg = (telemetryData.routine || []).find(r => r.key === key);
-    const a = rg && (rg.actions || []).find(x => x.id === actionId);
-    if (!a) {
-      showToast('That action is no longer offered — the list is refreshing.', 'info');
-      fetchTelemetry();
-      return;
-    }
-    if (a.id === 'expect-all' && !await window.saConfirm(a.consequence, { title: 'Treat as routine', okLabel: 'Treat as routine', danger: false })) return;
-    const ids = (a.body && a.body.flag_ids) || [];
-    const revert = stage(['routine', 'patterns', 'flags', 'flagsView', 'posture'], ['flags', 'attention', 'posture', 'chart-flags', 'status', 'tab-badges'], () => {
-      Object.assign(telemetryData, routineAfterOptimistic(telemetryData, key, ids));
-    });
-    let out = {};
-    try {
-      const res = await apiFetch(a.path, { method: a.method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(a.body || {}) });
-      if (!res.ok) throw new Error(await res.text());
-      out = await res.json().catch(() => ({}));
-    } catch (err) {
-      revert();
-      showToast(`${a.label} failed: ${err.message || err}`, 'danger');
-      return;
-    }
-    revert.commit?.();
-    showToast(a.id === 'expect-all'
-      ? `${Number(out.added) || 0} exact reads marked expected; ${Number(out.acknowledged) || 0} flags reviewed`
-      : `Dismissed ${ids.length} flags — the rules keep watching`, 'success');
-    fetchTelemetry();
-    if (a.id === 'expect-all') loadPolicy();
-  };
-
-  window.explainAllowOrg = async function(flagId, org) {
-    const f = (telemetryData.flags || []).find(x => x.id === flagId)
-      || (telemetryData.flagsView || []).find(x => x.id === flagId)
-      || planFlagCache.get(flagId);
-    const hosts = new Set((egressByOrg(f).get(org) || []).map(e => e.host));
-    const acts = ((f && f.explain && f.explain.actions) || []).filter(a => a.id === 'allow-host' && a.body && hosts.has(a.body.host));
-    if (!acts.length) {
-      showToast('That action is no longer offered for this finding — the list is refreshing.', 'info');
-      fetchTelemetry();
-      return;
-    }
-    const agent = acts[0].body.agent;
-    const revertAllow = stageAllow(agent, acts.map(a => a.body.host));
-    const revertDrop = stageDropFlag(f.id);
-    const send = async (method, path, payload) => {
-      const res = await apiFetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!res.ok) throw new Error(await res.text());
-    };
-    let ok = 0;
-    for (const a of acts) {
-      try { await send(a.method, a.path, a.body); ok++; } catch { /* the toast reports the tally */ }
-    }
-    if (!ok) {
-      revertDrop();
-      revertAllow();
-      showToast(`Failed to allowlist ${org} for ${agent}`, 'danger');
-      return;
-    }
-    try {
-      await send('POST', '/flags/acknowledge', { flag_id: f.id });
-    } catch (err) {
-      revertDrop();
-      showToast(`Allowlisted ${org}, but the flag was not marked reviewed: ${err.message || err}`, 'danger');
-      fetchTelemetry();
-      return;
-    }
-    revertDrop.commit?.();
-    if (revertDrop.isCurrent?.() !== false && !attentionSelection && drawerMode === 'flag' && drawerFlag === f.id) closeDrawer();
-    showToast(`Allowlisted ${ok} of ${acts.length} ${org} addresses for ${agent}`, ok === acts.length ? 'success' : 'warn');
-    cardNote('', '', 'flags-list', 'allowlisted');
-    fetchTelemetry();
-  };
-
-  // A pattern card's served action (Attention, Flags), found by pattern key +
-  // action id (+ host). Before the request (reverted if it fails) the card's
-  // open count drops by the submitted flag ids — all of them for a mute —
-  // and reads 0 open with its buttons disabled once none is left; those
-  // flags leave the lists; the next snapshot reconciles the pattern.
-  function stagePatternDone(key, submitted) {
-    return stage(['patterns', 'flags', 'flagsView', 'posture'], ['flags', 'attention', 'posture', 'chart-flags', 'status', 'tab-badges'], () => {
-      Object.assign(telemetryData, patternAfterOptimisticDismiss(telemetryData, key, submitted));
-    });
-  }
-  window.patternAct = async function(key, actionId, host) {
-    const p = (telemetryData.patterns || []).find(x => x.key === key);
-    const a = p && !p.dismissed && (p.actions || []).find(x => x.id === actionId
-      && (!host || (x.body && x.body.host) === host));
-    if (!a) {
-      showToast('That action is no longer offered for this pattern — the list is refreshing.', 'info');
-      fetchTelemetry();
-      return;
-    }
-    const body = a.body || {};
-    const send = async (method, path, payload) => {
-      const res = await apiFetch(path, {
-        method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-      });
-      if (!res.ok) throw new Error(await res.text());
-    };
-    const dismiss = (p.actions || []).find(x => x.id === 'dismiss-all');
-    const openIds = (dismiss && dismiss.body && dismiss.body.flag_ids) || [];
-    switch (a.id) {
-      case 'inspect-file':
-        return window.openFileDetail(body.path, { back: currentDrawerBack() });
-      case 'review-local':
-        return window.analyzeAgentActivity(body.flag_ids);
-      case 'expect':
-      case 'expect-file': {
-        if (!await window.saConfirm(a.consequence, { title: 'Confirm security exception', okLabel: 'Save exception' })) return;
-        try {
-          await send(a.method, a.path, body);
-          showToast('Exception saved; unmatched evidence stays open. Revoke under Policy.', 'success');
-          fetchTelemetry(); loadPolicy();
-        } catch (err) { showToast('Exception not saved: ' + (err.message || err), 'danger'); }
-        return;
-      }
-
-      case 'kill':
-        return window.killProcess(Number(body.pid), body.started_at, p.agent);
-      case 'mute-rule-host':
-      case 'mute-class':
-        if (await window.muteFlag(body.rule, body.host, body.agent)) { const done = stagePatternDone(key); done.commit?.(); }
-        return;
-      case 'dismiss-all': {
-        const revert = stagePatternDone(key, openIds);
-        try {
-          await send(a.method, a.path, body);
-        } catch (err) {
-          revert();
-          showToast(`Failed to dismiss the pattern: ${err.message || err}`, 'danger');
-          return;
-        }
-        revert.commit?.();
-        showToast(`Dismissed ${openIds.length} flag${openIds.length === 1 ? '' : 's'} — the rule keeps watching`, 'info');
-        cardNote(`[data-pattern-key="${cssq(key)}"] .pattern-open`, '.log-row', 'flags-list', 'dismissed');
-        fetchTelemetry();
-        return;
-      }
-      case 'allow-host': {
-        const revertAllow = stageAllow(body.agent, [body.host]);
-        const revert = stagePatternDone(key, openIds);
-        try {
-          await send(a.method, a.path, body);
-        } catch (err) {
-          revert();
-          revertAllow();
-          showToast(`Failed to allowlist ${body.host}: ${err.message || err}`, 'danger');
-          return;
-        }
-        if (openIds.length) {
-          try {
-            await send('POST', '/flags/acknowledge', { flag_ids: openIds });
-          } catch (err) {
-            revert();
-            showToast(`Allowlisted ${body.host}, but its flags were not marked reviewed: ${err.message || err}`, 'danger');
-            fetchTelemetry();
-            return;
-          }
-        }
-        revert.commit?.();
-        showToast(`Allowlisted ${body.host} for ${body.agent}`, 'success');
-        fetchTelemetry();
-        return;
-      }
-    }
-  };
-
-  window.unmuteFlag = async function(rule, host, agent) {
-    agent = agent || '';
-    const revert = stage(['mutes'], ['flags'], () => {
-      telemetryData.mutes = (telemetryData.mutes || []).filter(m => !(m.rule === rule && m.host === host && (m.agent || '') === agent));
-    });
-    try {
-      const q = `rule=${encodeURIComponent(rule)}&host=${encodeURIComponent(host)}` + (agent ? `&agent=${encodeURIComponent(agent)}` : '');
-      const res = await apiFetch(`/mute?${q}`, { method: 'DELETE' });
-      if (res.ok) {
-        showToast(`Unmuted ${rule} for ${host}${agent ? ` from ${agent}` : ''}`, 'info');
-        cardNote('', '', 'flags-list', 'unmuted');
-        fetchTelemetry();
-      } else {
-        revert();
-        showToast(`Failed to unmute.`, 'danger');
-      }
-    } catch (err) {
-      revert();
-      showToast(`Error unmuting: ${err}`, 'danger');
-    }
-  };
-
-  window.promoteVendorKeys = async function() {
-    const stats = (telemetryData.status && telemetryData.status.firewall_stats) || {};
-    const revert = stage(['status'], ['firewall'], () => withMode(monitorVendorKeyIDs(stats), 'block'));
-    try {
-      const res = await apiFetch('/firewall/mode', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'vendor-key', mode: 'block' })
-      });
-      if (res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const n = (body.promoted || []).length;
-        showToast(n ? `Promoted ${n} vendor-key rule${n === 1 ? '' : 's'} to block.` : 'Vendor-key rules already blocking.', 'success');
-        cardNote('', '', 'firewall-container', 'vendor keys blocking');
-        fetchTelemetry();
-      } else {
-        revert();
-        showToast('Failed to promote vendor-key rules.', 'danger');
-      }
-    } catch (err) {
-      revert();
-      showToast(`Error promoting vendor-key rules: ${err}`, 'danger');
-    }
-  };
-
-  window.promoteRule = async function(rule) {
-    const revert = stage(['status'], ['firewall'], () => withMode([rule], 'block'));
-    try {
-      const res = await apiFetch('/firewall/mode', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rule, mode: 'block' })
-      });
-      if (res.ok) {
-        showToast(`Rule “${rule}” promoted to block.`, 'success');
-        cardNote(`#firewall-container [data-rule="${cssq(rule)}"]`, '.fw-rule', 'firewall-container', 'blocking');
-        fetchTelemetry();
-      } else {
-        revert();
-        showToast(`Failed to promote “${rule}”.`, 'danger');
-      }
-    } catch (err) {
-      revert();
-      showToast(`Error promoting “${rule}”: ${err}`, 'danger');
-    }
-  };
-
-  // Blocking must be reversible — a rule you can only tighten is a ratchet.
-  window.demoteRule = async function(rule) {
-    const revert = stage(['status'], ['firewall'], () => withMode([rule], 'monitor'));
-    try {
-      const res = await apiFetch('/firewall/mode', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rule, mode: 'monitor' })
-      });
-      if (res.ok) {
-        showToast(`Rule “${rule}” back to monitor.`, 'success');
-        cardNote(`#firewall-container [data-rule="${cssq(rule)}"]`, '.fw-rule', 'firewall-container', 'monitoring');
-        fetchTelemetry();
-      } else {
-        revert();
-        showToast(`Failed to demote “${rule}”.`, 'danger');
-      }
-    } catch (err) {
-      revert();
-      showToast(`Error demoting “${rule}”: ${err}`, 'danger');
-    }
-  };
-
-  window.removeAllowlistEntry = async function(agent, host) {
-    const revert = stage(['allowlist'], ['firewall'], () => {
-      telemetryData.allowlist = (telemetryData.allowlist || []).filter(p => !(p.agent === agent && p.host === host));
-    });
-    try {
-      const res = await apiFetch('/allowlist', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent, host })
-      });
-      if (res.ok) {
-        showToast(`Removed ${host} for ${agent}.`, 'info');
-        cardNote('', '', 'firewall-container', 'removed');
-      } else {
-        revert();
-        showToast(`Failed to remove ${host}.`, 'danger');
-      }
-    } catch (err) {
-      revert();
-      showToast(`Error removing ${host}: ${err}`, 'danger');
-    }
-  };
 
   // Session drill-down: jump from a finding to its durable session.
   // "View session in timeline" (finding cards, Attention): open the session
@@ -4704,6 +4347,15 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'worktree-discuss':
         e.preventDefault();
         window.discussWorktree(d.path);
+        break;
+      case 'agent-dock-close':
+        e.preventDefault();
+        closeAgentDock(true);
+        break;
+      case 'agent-dock-expand':
+        e.preventDefault();
+        switchTab('agent');
+        document.getElementById('agent-input')?.focus({ preventScroll: true });
         break;
       case 'worktree-review-trash':
         e.preventDefault();
@@ -4935,6 +4587,9 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'session-list':
         window.showSessionList();
         break;
+      case 'show-ended-sessions':
+        showEndedSessions(el);
+        break;
       case 'session-latest':
         window.jumpToLatestSession();
         break;
@@ -5097,6 +4752,10 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         loadPolicy();
         break;
+      case 'policy-refresh-report':
+        e.preventDefault();
+        loadPolicy(d.kind);
+        break;
       case 'open-config':
         e.preventDefault();
         (async () => {
@@ -5111,16 +4770,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'forget-expected':
         e.preventDefault();
-        (async () => {
-          try {
-            const res = await apiFetch(`/expected?key=${encodeURIComponent(d.key || '')}`, { method: 'DELETE' });
-            if (!res.ok) throw new Error((await res.text()).trim() || String(res.status));
-            showToast('Forgot the expected pattern; it flags again', 'info');
-          } catch (err) {
-            showToast(`Failed to forget: ${err.message || err}`, 'danger');
-          }
-          loadPolicy();
-        })();
+        window.forgetExpected(d.key);
         break;
       case 'agent-refresh':
         e.preventDefault();

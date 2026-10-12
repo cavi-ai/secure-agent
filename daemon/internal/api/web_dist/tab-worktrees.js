@@ -401,13 +401,20 @@ function worktreeDiscussHTML(path) {
   return `<button type="button" class="link-btn" data-action="worktree-discuss" data-path="${escapeHTML(path)}">Discuss</button>`;
 }
 
+// worktreeAgentChipHTML: the warning on a row an agent is working in.
+function worktreeAgentChipHTML(w) {
+  if (!w.in_use) return '';
+  const who = w.active_agent || 'agent';
+  return `<span class="wt-agent-live" title="${escapeHTML(`${who} is working in this folder; removing it breaks that session`)}">${escapeHTML(who)} working here</span>`;
+}
+
 // worktreeTrashBlock: why a keep or review row cannot be moved to the Trash
 // from the console, or ''. The daemon refuses the same rows again.
 function worktreeTrashBlock(w) {
   if (w.error) return `could not inspect: ${w.error}`;
   if (w.git_operation) return `a git ${w.git_operation} is in progress; finish or abort it first`;
   if (w.submodules > 0) return 'it has populated submodules';
-  if (w.in_use) return 'an agent session is live here';
+  if (w.in_use) return w.active_agent ? `${w.active_agent} is working here` : 'an agent session is live here';
   if (w.locked) return 'it is locked; unlock it first';
   if (w.loose_commits > 0) return 'detached HEAD has commits on no branch; create a branch first';
   if (w.conflicts > 0) return 'a merge or rebase has unresolved conflicts; finish or abort it first';
@@ -478,7 +485,9 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable) {
     // that still records it (moved repo), or move it to the Trash.
     action = `<button type="button" class="btn btn-sm" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}">Open folder</button>`
       + (w.reconnect ? `<button type="button" class="btn btn-sm" data-action="worktree-reconnect" data-path="${escapeHTML(w.path)}" data-repo="${escapeHTML(w.reconnect)}">Reconnect</button>` : '')
-      + `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-trash-orphan" data-path="${escapeHTML(w.path)}">Move to Trash</button>`;
+      + (w.in_use
+        ? `<button type="button" class="btn btn-sm" disabled title="${escapeHTML('Cannot move to Trash: ' + worktreeTrashBlock({ in_use: true, active_agent: w.active_agent }))}">Move to Trash</button>`
+        : `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-trash-orphan" data-path="${escapeHTML(w.path)}">Move to Trash</button>`);
   } else if (w.state === 'remove') {
     const safe = 'Safe to remove' + ((w.reasons || [])[0] ? ': ' + w.reasons[0] : '');
     action = removal && removal.state === 'running'
@@ -503,12 +512,16 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable) {
     : `<button type="button" class="btn btn-ghost btn-sm wt-open" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}" title="Show in Finder" aria-label="Show ${escapeHTML(branch || w.path)} in Finder"><svg class="icon"><use href="#i-folder"/></svg></button>`;
   return `<div class="wt-row wt-${escapeHTML(w.state)}" data-path="${escapeHTML(w.path)}">
     <div class="wt-main">
-      <span class="wt-state">${escapeHTML(w.state)}</span>${w.stale ? '<span class="wt-stale">stale</span>' : ''}
-      <span class="wt-branch">${escapeHTML(branch)}</span>
-      <button type="button" class="wt-path" data-action="copy-path" data-path="${escapeHTML(w.path)}" title="${escapeHTML(w.path)} — click to copy">${escapeHTML(worktreePathLabel(w.path, repo.path))}</button>
-      <span class="wt-size">${escapeHTML(worktreeSizeLabel(w))}</span>
-      <span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>
-      ${open}${action}${discuss}
+      <div class="wt-identity">
+        <span class="wt-branch">${escapeHTML(branch)}</span>
+        <button type="button" class="wt-path" data-action="copy-path" data-path="${escapeHTML(w.path)}" title="${escapeHTML(w.path)} — click to copy">${escapeHTML(worktreePathLabel(w.path, repo.path))}</button>
+      </div>
+      <div class="wt-facts">
+        <span class="wt-state">${escapeHTML(w.state)}</span>${w.stale ? '<span class="wt-stale">stale</span>' : ''}${worktreeAgentChipHTML(w)}
+        <span class="wt-size">${escapeHTML(worktreeSizeLabel(w))}</span>
+        <span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>
+      </div>
+      <div class="wt-actions">${open}${action}${discuss}</div>
     </div>
     ${reasons ? `<ul class="wt-reasons">${reasons}</ul>` : ''}
     ${worktreeNoteHTML(note, discuss ? w.path : '')}
@@ -561,15 +574,21 @@ function worktreeGroupAskText(res) {
 // latest ask and latest removal.
 function worktreeGroupHTML(g, advice, asks, removals, askable) {
   const meta = [g.repo.default_branch, g.repo.source].filter(Boolean).join(' · ');
+  const name = String(g.repo.path || '').replace(/\/$/, '').split('/').pop() || g.repo.path;
   return `<section class="wt-repo">
     <div class="wt-repo-head">
-      <span class="wt-repo-path" title="${escapeHTML(g.repo.path)}">${escapeHTML(g.repo.path)}</span>
-      ${meta ? `<span class="wt-repo-meta">${escapeHTML(meta)}</span>` : ''}
-      ${g.repo.size_bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.repo.size_bytes))}</span>` : ''}
-      ${g.repo.error
+      <div class="wt-repo-identity">
+        <h3 class="wt-repo-name">${escapeHTML(name)}</h3>
+        <span class="wt-repo-path" title="${escapeHTML(g.repo.path)}">${escapeHTML(g.repo.path)}</span>
+      </div>
+      <div class="wt-repo-facts">
+        ${meta ? `<span class="wt-repo-meta">${escapeHTML(meta)}</span>` : ''}
+        ${g.repo.size_bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.repo.size_bytes))}</span>` : ''}
+      </div>
+      <div class="wt-repo-actions">${g.repo.error
         ? `<span class="wt-repo-error">${escapeHTML(g.repo.error)} — the folders below still point to it</span>`
         : worktreeRemoveAllHTML(g.repo, removals) + worktreeGroupAsksHTML(g)
-          + `<button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>`}
+          + `<button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>`}</div>
     </div>
     ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path], (removals || {})[w.path], (askable || {})[w.path])).join('')}
   </section>`;

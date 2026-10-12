@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -26,7 +25,7 @@ func TestAGYSessionsCarryTheAntigravityAgentName(t *testing.T) {
 	b.Subscribe()
 	ts := NewTranscriptScanner(b, nil)
 	var harnesses []string
-	ts.OnSessionSeen = func(_, harness, _ string, _ time.Time) { harnesses = append(harnesses, harness) }
+	ts.OnSessionSeen = func(s TraceSession) { harnesses = append(harnesses, s.Harness) }
 	ts.tailFile(path, map[string]int64{}, nil)
 	if strings.Join(harnesses, ",") != "antigravity" {
 		t.Fatalf("session harness = %v, want [antigravity]", harnesses)

@@ -8,28 +8,28 @@
 (() => {
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
+  const readingFetch = scenarios.has('readingdemo') || scenarios.has('worktreehierarchy') || scenarios.has('sessiondiscovery') || scenarios.has('sessionemptynav') || scenarios.has('sessionlatestfocus') ? window.fetch.bind(window) : null;
+  if (scenarios.has('expectedremove')) data['/expected'] = [
+    { key: 'claude|gh|/synthetic/credentials|example.test', agent: 'claude', reader: 'gh', path: '/synthetic/credentials', dest: 'example.test', created_at: iso(60000), hits: 2 },
+    { key: 'claude|*|/synthetic/.env.test|*', scope: 'file', agent: 'claude', reader: '*', path: '/synthetic/.env.test', dest: '*', created_at: iso(60000), hits: 0 },
+  ];
+  if (scenarios.has('policyhealth')) data['/decision-scopes'] = [{
+    id: 'policy-health-scope', kind: 'exact', agent: 'claude', rule_id: 'sensitive-read-then-connect',
+    operation: 'read-connect', resource_path: '/synthetic/credentials', destination: 'example.test:443',
+    workspace: '/synthetic/workspace', reader_exe: '/synthetic/tool', created_at: iso(60000),
+    expires_at: new Date(now + 86400000).toISOString(), applicability: { label: 'Timed permission', revoke: true },
+  }];
   let bookCleanup = () => {};
   let contextRuleReads = 0;
   const contextRules = data['/expected-egress'].rules;
-  if (scenarios.has('attentionactionfocus') || scenarios.has('attentionactionmanual')) {
-    const group = data['/posture'].groups.find(group => group.items.some(item => item.kind === 'guard'));
-    const guard = {...group.items.find(item => item.kind === 'guard')};
-    data['/posture'] = {...data['/posture'],needs_you:1,items:[guard],groups:[{...group,items:[guard]}]};
-    let facts = 0;
-    window.__attentionActionFocusRefresh = (mode = 'facts') => {
-      guard.detail = `Recorded guard facts ${++facts}`;
-      if (mode === 'remove') guard.available_scopes = guard.available_scopes.filter(scope => scope.expiry !== '24h');
-      window.SA.t.posture = data['/posture'];
-      window.SA.reconcileAttention();
-    };
-  }
-  if (scenarios.has('attentionremodel')) {
-    const ids = scenarios.has('attentionfinal') ? ['flag-1'] : ['flag-1', 'flag-2'];
-    const items = ids.map(id => ({kind:'flag', id, priority:2, title:'Fixture attention ' + id, detail:'Recorded fixture evidence'}));
-    data['/posture'] = {...data['/posture'], needs_you:items.length, items,
-      groups:[{key:'fixture-attention',agent:'codex',items}]};
-  }
 
+
+  if (scenarios.has('readinglong')) {
+    const session = data['/sessions'].find(session => session.id === 'sess-codex-3');
+    session.repo = 'session-workbench-complete-reading-identity-navigation';
+    session.branch = 'feat/long-session-reading-context';
+    session.workspace = '/workspace/session-workbench-complete-reading-identity-navigation';
+  }
 
   // ---------- failure-mode simulation ----------
   // These modes reproduce the exact "trouble connecting" regressions:
@@ -45,22 +45,11 @@
   //   tokenseed    — pre-seed sessionStorage (simulates a RELOADED tab: no
   //                  #ct fragment, token must come from storage).
   if (scenarios.has('incidentremediation')) {
-    const inc = data['/incidents'][0];
-    const item = {id:'key',name:'Fixture credential',category:'ENV_SECRETS',path:'/workspace/.env',risk:'HIGH',description:'Fixture only',action:'Revoke the affected credential in its provider console'};
-    inc.rotate_list = [item];
-    inc.remediation = {revision:1,evidence_revision:'fixture-evidence',steps:[
-      {id:'fixture-reported',item,status:'reported',verification:'unverified',reported_at:iso(10000),newer_evidence:true},
-      {id:'fixture-pending',item:{...item,name:'Second fixture credential',path:'/workspace/second/.env'},status:'pending',verification:'unverified',newer_evidence:false}
-    ]};
     setTimeout(async () => { await window.openIncidentReport('fixture-source-alias'); stamp('incident-remediation-probe', document.querySelector('.incident-remediation [data-action]')?.dataset.id || 'missing'); }, 500);
   }
   let authRecoveryExpired = false;
   let authRecoveryMutations = 0;
   let networkRecoveryUnreachable = false;
-  if (scenarios.has('filteredscope')) {
-    data['/flags'].push({ ...data['/flags'][0], id: 'history-broad-only', ts: iso(2 * 3600000) });
-    data['/events'].push({ ...data['/events'][0], ts: iso(2 * 3600000), detail: 'Broad-only history row' });
-  }
   const REQUIRE_TOKEN = scenarios.has('requiretoken');
   // expectdemo: Egress → Expect this destination retires the episode's
   // choices before POST /expected-egress answers; the posture queue is not
@@ -401,7 +390,7 @@
       const receipt={id:body.id,revision:body.revision,action:body.action,at:iso(0),...(future ? {scope_ids:['scope-browser']} : {})};
       const review=data['/reviews'].reviews.find(r=>r.id===body.id);
       review.review_state=body.action==='close_reported'?'closed_reported':'reviewed';review.decision=receipt;
-      if (future) data['/decision-scopes']=[{id:'scope-browser',kind:body.scope.kind,agent:'claude',session_id:'sess-claude-1',workspace:'/Users/dev/workspace/api-service',reader_exe:'/usr/bin/cat',rule_id:'sensitive-read-then-connect',resource_path:'/work/.env',operation:'read-connect',destination:'api.example.com:443',created_at:iso(0),expires_at:new Date(now+86400000).toISOString(),identity_basis:'observed-session'}];
+      if (future) data['/decision-scopes']=[{id:'scope-browser',kind:body.scope.kind,agent:'claude',session_id:'sess-claude-1',workspace:'/Users/dev/workspace/api-service',reader_exe:'/usr/bin/cat',rule_id:'sensitive-read-then-connect',resource_path:'/work/.env',operation:'read-connect',destination:'api.example.com:443',created_at:iso(0),expires_at:new Date(now+86400000).toISOString(),identity_basis:'observed-session',applicability:{label:'Timed permission',revoke:true}}];
       for (const group of data['/posture'].groups || []) group.items=group.items.filter(item=>item.kind!=='review'||item.id!==body.id);
       data['/posture'].groups=data['/posture'].groups.filter(group=>group.items.length);
       data['/posture'].items=data['/posture'].items.filter(item=>item.kind!=='review'||item.id!==body.id);
@@ -479,11 +468,25 @@
   let slowShapeRecovered = false;
   let spendShapeBad = scenarios.has('firstload');
   window.ConsoleFixtures.apply(fixture);
-  if (scenarios.has('reviewresult')) {
-    const review = data['/reviews'].reviews[0];
-    const item = {kind:'review',id:review.id,priority:2,title:'Recorded read and connection',review};
-    data['/posture'] = {...data['/posture'],needs_you:1,items:[item],
-      groups:[{key:'review-result',agent:'claude',items:[item]}]};
+  if (scenarios.has('scoperevoke')) data['/decision-scopes'] = [{ id: 'scope-global', kind: 'exact', agent: 'claude',
+    session_id: 'sess-claude-1', workspace: '/synthetic/workspace', reader_exe: '/synthetic/tool',
+    rule_id: 'sensitive-read-then-connect', resource_path: '/synthetic/credentials', operation: 'read-connect',
+    destination: 'example.test:443', created_at: iso(60000), expires_at: new Date(now+86400000).toISOString(),
+    ...(scenarios.has('unknownscope') ? {} : { applicability: { label: 'Timed permission', revoke: true } }) }];
+  if (scenarios.has('attentionactionfocus') || scenarios.has('attentionactionmanual')) {
+    let facts = 0;
+    window.__attentionActionFocusRefresh = (mode = 'facts') => {
+      const detail = `Recorded guard facts ${++facts}`;
+      const posture = data['/posture'];
+      const guards = new Set([...posture.items, ...posture.groups.flatMap(group => group.items)]
+        .filter(item => item.kind === 'guard'));
+      for (const guard of guards) {
+        guard.detail = detail;
+        if (mode === 'remove') guard.available_scopes = guard.available_scopes.filter(scope => scope.expiry !== '24h');
+      }
+      window.SA.t.posture = posture;
+      window.SA.reconcileAttention();
+    };
   }
   stamp('fixture-posture', JSON.stringify(data['/posture']));
   const fixtureReads = {};
@@ -505,6 +508,29 @@
       return new Response(JSON.stringify(data[String(path)] ?? data[p]), {status: 200, headers: {'Content-Type': 'application/json'}});
     }
     if (scenarios.has('authrecover') && opts?.method === 'POST') authRecoveryMutations++;
+    if (scenarios.has('expectedremove') && p === '/expected') {
+      if (opts?.method === 'DELETE') {
+        const key = new URLSearchParams(String(path).split('?')[1]).get('key');
+        if (!data[p].some(row => row.key === key)) throw new Error('Wrong exception target');
+        window.__expectedRemovalDeletes = (window.__expectedRemovalDeletes || 0) + 1;
+        data[p] = data[p].filter(row => row.key !== key);
+        return { ok: true, json: async () => ({ status: 'ok', key: scenarios.has('removaluncertain') ? 'wrong-key' : key }) };
+      }
+      if (scenarios.has('removalreadfail') && window.__expectedRemovalDeletes) return { ok: false, status: 503, text: async () => 'Unavailable' };
+      return { ok: true, json: async () => scenarios.has('removalinvalid') ? null : structuredClone(data[p]) };
+    }
+    if (scenarios.has('policyhealth') && ['/guard/rules', '/guard/path-allow', '/mute', '/expected', '/decision-scopes'].includes(p)) {
+      window.__policyReads ||= {};
+      if (opts?.method === 'DELETE') { window.__policyWrites = (window.__policyWrites || 0) + 1; throw new Error('Unexpected policy write'); }
+      window.__policyReads[p] = (window.__policyReads[p] || 0) + 1;
+      if (p === '/mute' && scenarios.has('policyhealth=slow') && !window.__policyRecovered) await new Promise(resolve => { window.__finishPolicyMute = resolve; });
+      if (p === '/decision-scopes') {
+        if ((scenarios.has('policyhealth=first') || scenarios.has('policyhealth=reconnect') || window.__policyFailure) && !window.__policyRecovered) return { ok: false, status: 503 };
+        if (scenarios.has('policyhealth=malformed') && !window.__policyRecovered) return { ok: true, json: async () => null };
+        if (window.__policyRecovered) return { ok: true, json: async () => [] };
+      }
+      return { ok: true, json: async () => structuredClone(data[p]) };
+    }
     if (scenarios.has('reviewresult') && p === '/decision-scopes') {
       const rows = data['/decision-scopes'] || [];
       if (opts?.method === 'DELETE') {
@@ -520,6 +546,17 @@
         ...rows.map(row => ({ ...row, applicability: row.applicability || { label: 'Timed permission', revoke: true } })),
         { ...rows[0], id: 'unrelated-permission', resource_path: '/unrelated/resource' },
       ] : [] };
+    }
+    if (scenarios.has('scoperevoke') && p === '/decision-scopes') {
+      if (opts?.method === 'DELETE') {
+        const id = new URLSearchParams(String(path).split('?')[1]).get('id');
+        if (id !== 'scope-global') throw new Error('Wrong permission target');
+        window.__globalScopeDeletes = (window.__globalScopeDeletes || 0) + 1;
+        Object.assign(data[p][0], { revoked_at: iso(0), applicability: { label: 'Revoked', revoke: false } });
+        return { ok: true, json: async () => ({ revoked: true, id: scenarios.has('ambiguousrevoke') ? 'wrong-id' : id }) };
+      }
+      if (scenarios.has('scopereadfail') && window.__globalScopeDeletes) return { ok: false, status: 503, text: async () => 'Unavailable' };
+      return { ok: true, json: async () => structuredClone(data[p]) };
     }
     if (scenarios.has('permissionsdemo') && p === '/decision-scopes') {
       if (opts?.method === 'DELETE') {
@@ -645,10 +682,16 @@
       if (p === '/decision-scopes' && opts.method === 'DELETE') {
         line=`DELETE ${String(path)}`;
         const id=new URLSearchParams(String(path).split('?')[1]||'').get('id');
-        const scope=data['/decision-scopes'].find(s=>s.id===id);if(scope)scope.revoked_at=iso(0);
+        const scope=data['/decision-scopes'].find(s=>s.id===id);
+        if(scope)Object.assign(scope,{revoked_at:iso(0),applicability:{label:'Revoked',revoke:false}});
+        reqLog.push(line);stamp('mock-requests',reqLog.join('\n'));
+        return {ok:!!scope,status:scope?200:404,json:async()=>({revoked:true,id})};
       }
       reqLog.push(line);
       stamp('mock-requests', reqLog.join('\n'));
+      if (p === '/expected' && opts.method === 'DELETE') {
+        return { ok: true, json: async () => ({ status: 'ok', key: new URLSearchParams(String(path).split('?')[1]).get('key') }) };
+      }
       if (scenarios.has('incidentremediation') && p === '/incidents/remediation') {
         const req = JSON.parse(opts.body);
         const inc = data['/incidents'][0];
@@ -732,7 +775,7 @@
       };
     }
     // Dense workbench pages exercise real scroll anchoring and focus continuity.
-    if ((scenarios.has('sessionworkbench') || scenarios.has('authhistory')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
+    if ((scenarios.has('sessionworkbench') || scenarios.has('readingdemo') || scenarios.has('authhistory') || scenarios.has('sessionlatestfocus')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
       const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
       const start = before ? -30 : 0;
       const rows = Array.from({ length: before ? 30 : 90 }, (_, i) => ({ id: 'wb-row-' + (start + i),
@@ -752,6 +795,7 @@
         interventions: own ? [{ id: 'synthetic-control', kind: 'pause', status: 'applied', verification: window.__resultsUpdate ? 'observed' : 'pending', requested_at: iso(60000), limits: ['Synthetic receipt; captured targets only.'] }] : [],
         incidents: own ? [{ id: 'synthetic-incident', remediation: { steps: [{ id: 'synthetic-step', item: { name: 'Synthetic key', action: 'Revoke key' }, status: 'reported', verification: 'unverified', reported_at: iso(30000), newer_evidence: true }] } }] : [],
       } };
+      if (scenarios.has('sessionlatestfocus')) body.history.reviews = Array.from({length: 60}, (_, i) => ({...body.history.reviews[0], id: 'latest-review-' + i}));
       return { ok: true, status: 200, json: async () => body };
     }
     const overviewMatch = p.match(/^\/sessions\/([^/]+)\/overview$/);
@@ -1034,7 +1078,7 @@
       window.saConfirm('Fixture action awaiting confirmation').then(value => { receipt.dialogCancelled = value === false; });
       authRecoveryExpired = true;
       // An action is rejected; recovery must never replay it.
-      await window.reviewAct('fixture-review', 1, 'dismiss');
+      await window.reviewAct('fixture-review', 1, 'acknowledge');
       receipt.paused = document.body.classList.contains('is-paused') && document.querySelector('main').inert
         && !document.querySelector('main').hidden && window.__sse.readyState === 2;
       receipt.retained = body === document.querySelector('#session-detail .session-detail-body')
@@ -1314,7 +1358,7 @@
       && document.getElementById('session-ended').hidden)), 5000);
   }
   if (scenarios.has('permissiondeny')) {
-    setTimeout(() => window.reviewAct('fixture-review', 1, 'dismiss'), 2000);
+    setTimeout(() => window.reviewAct('fixture-review', 1, 'acknowledge'), 2000);
     setTimeout(() => stamp('permission-retained', String(document.getElementById('session-ended').hidden
       && window.__sse.readyState === 1 && !!sessionStorage.getItem('sa.console-token'))), 4000);
   }
@@ -1386,6 +1430,220 @@
       await window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77');
       openTab('events');
     }, 4000);
+  }
+  if (scenarios.has('worktreehierarchy')) {
+    setTimeout(() => openTab('system/worktrees'), 1500);
+    setTimeout(async () => {
+      const receipt = {};
+      try {
+        const response = await readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+        if (!response.ok) throw new Error('Worktree layout checkpoint failed: ' + response.status);
+        const root = document.getElementById('system-worktrees');
+        const width = document.documentElement.clientWidth;
+        const identities = [...root.querySelectorAll('.wt-repo-name, .wt-repo-path, .wt-branch, .wt-path')];
+        const controls = [...root.querySelectorAll('button, input')].filter(node => node.getClientRects().length);
+        const full = node => getComputedStyle(node).whiteSpace === 'normal' && node.scrollWidth <= node.clientWidth + 1;
+        receipt.completeIdentities = identities.length >= 10 && identities.every(full);
+        const paths = [...root.querySelectorAll('.wt-repo-path')].map(node => node.textContent);
+        receipt.duplicateNames = [...root.querySelectorAll('.wt-repo-name')].every(node => node.textContent === 'service') && new Set(paths).size === 2;
+        receipt.bounds = [...identities, ...controls].every(node => {
+          const rect = node.getBoundingClientRect();
+          return rect.left >= -1 && rect.right <= width + 1;
+        }) && document.documentElement.scrollWidth <= width;
+        receipt.actions = root.querySelector('[data-action="worktree-ask"]').closest('.wt-actions').querySelectorAll('button').length === 5;
+        receipt.failure = root.querySelector('.wt-repo-error').textContent.includes('repository not found') && root.querySelectorAll('.wt-repo-actions')[0].querySelectorAll('button').length === 0;
+        receipt.touch = width > 720 || controls.every(node => node.getBoundingClientRect().height >= 44);
+        receipt.search = width > 720 || document.getElementById('worktree-search').getBoundingClientRect().width >= root.clientWidth - 40;
+        receipt.dimensions = {width, search: document.getElementById('worktree-search').getBoundingClientRect().width, branch: root.querySelector('.wt-branch').getBoundingClientRect().width};
+      } catch (error) { receipt.error = error.message; }
+      document.body.dataset.worktreeHierarchy = JSON.stringify(receipt);
+    }, 2500);
+  }
+  if (scenarios.has('sessiondiscovery')) {
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(() => {
+      window.SA.harnessFilter.harnesses = {claude: false};
+      const input = document.getElementById('session-cwd-filter');
+      input.value = 'web-app';
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+    }, 2500);
+    setTimeout(async () => {
+      const receipt = {};
+      try {
+        await readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+        const panel = document.getElementById('session-board-panel');
+        const detail = document.getElementById('session-detail');
+        const rail = document.getElementById('session-rail');
+        const origin = window.matchMedia('(max-width: 900px)').matches ? detail : rail;
+        const action = origin.querySelector('[data-action="show-ended-sessions"]');
+        receipt.copy = origin.textContent.includes('No live sessions match these filters.') && origin.textContent.includes('Matching ended sessions are available.');
+        receipt.reachable = !!action?.getClientRects().length && action.getBoundingClientRect().height >= 44;
+        action.focus(); action.click();
+        await readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+        const saved = JSON.parse(sessionStorage.getItem('sa.harness-filter'));
+        receipt.filters = saved.text === 'web-app' && saved.harnesses.claude === false && saved.liveOnly === false
+          && document.getElementById('session-cwd-filter').value === 'web-app' && !document.getElementById('session-live-only').checked;
+        receipt.list = !window.matchMedia('(max-width: 900px)').matches || panel.dataset.pane === 'list';
+        const focus = document.activeElement;
+        receipt.focus = focus?.dataset.id === 'sess-cursor-2' && focus.isConnected && !!focus.getClientRects().length && focus.getAttribute('aria-pressed') === 'true';
+        receipt.ended = !!rail.querySelector('[data-action="select-session"][data-id="sess-cursor-2"]')?.getClientRects().length;
+        receipt.bounds = document.documentElement.scrollWidth <= document.documentElement.clientWidth;
+      } catch (error) { receipt.error = error.message; }
+      document.body.dataset.sessionDiscovery = JSON.stringify(receipt);
+    }, 3500);
+  }
+  if (scenarios.has('sessionemptynav')) {
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(() => {
+      window.SA.harnessFilter.harnesses = {claude: false};
+      const input = document.getElementById('session-cwd-filter');
+      input.value = 'missing-project'; input.dispatchEvent(new Event('input', {bubbles: true}));
+    }, 2500);
+    setTimeout(async () => {
+      const receipt = {};
+      const checkpoint = () => readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+      const detail = document.getElementById('session-detail');
+      const panel = document.getElementById('session-board-panel');
+      const input = document.getElementById('session-cwd-filter');
+      const narrow = window.matchMedia('(max-width: 900px)').matches;
+      const backs = () => [...detail.querySelectorAll('[data-action="session-list"]')].filter(node => node.getClientRects().length);
+      try {
+        await checkpoint();
+        const before = sessionStorage.getItem('sa.harness-filter'), selection = window.SA.selectedSessionId, hash = location.hash;
+        receipt.missingBack = backs().length === (narrow ? 1 : 0) && (!narrow || backs()[0].getBoundingClientRect().height >= 44);
+        receipt.copy = detail.textContent.includes('No live sessions match these filters.') && !!detail.querySelector('[data-action="clear-harness-filter"]');
+        if (narrow) backs()[0].click(); else window.showSessionList();
+        receipt.searchFocus = document.activeElement === input && !!input.getClientRects().length && panel.dataset.pane === 'list';
+        receipt.preserved = input.value === 'missing-project' && window.SA.harnessFilter.harnesses.claude === false && window.SA.harnessFilter.liveOnly
+          && sessionStorage.getItem('sa.harness-filter') === before && window.SA.selectedSessionId === selection && location.hash === hash;
+        // A retained selection disappearing keeps the existing unavailable route.
+        input.value = ''; input.dispatchEvent(new Event('input', {bubbles: true}));
+        await window.selectSession('sess-codex-3');
+        window.SA.t.sessions = [];
+        window.SA.renderSessionBoard(); await checkpoint();
+        receipt.unavailable = detail.textContent.includes('Session unavailable.') && backs().length === 1 && (!narrow || backs()[0].getBoundingClientRect().height >= 44);
+        window.SA.harnessFilter.harnesses = {};
+        const live = document.getElementById('session-live-only');
+        live.checked = false; live.dispatchEvent(new Event('change', {bubbles: true}));
+        await checkpoint();
+        receipt.noData = detail.textContent.includes('No sessions available.') && backs().length === (narrow ? 1 : 0);
+        if (narrow) backs()[0].click(); else window.showSessionList();
+        receipt.noDataFocus = document.activeElement === input && panel.dataset.pane === 'list';
+        receipt.bounds = document.documentElement.scrollWidth <= document.documentElement.clientWidth;
+      } catch (error) { receipt.error = error.message; }
+      document.body.dataset.sessionEmptyNavigation = JSON.stringify(receipt);
+    }, 3500);
+  }
+  if (scenarios.has('readingdemo')) {
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(async () => {
+      const receipt = {};
+      const settle = async () => {
+        let previous = '', dimensions;
+        for (let attempt = 0; attempt < 6; attempt++) {
+          const panel = document.getElementById('session-board-panel');
+          const body = document.querySelector('#session-detail .session-detail-body');
+          const paragraph = body?.querySelector('.sm-content p, .sd-outcome p, .sm-state');
+          const line = paragraph ? parseFloat(getComputedStyle(paragraph).lineHeight) || 18 : 18;
+          const style = body && getComputedStyle(body);
+          const budget = Math.ceil(8 * line + 44 + (parseFloat(style?.paddingTop) || 0) + (parseFloat(style?.paddingBottom) || 0));
+          const rect = body?.getBoundingClientRect(), bounds = panel.getBoundingClientRect();
+          dimensions = { mode: window.SA.sessionView, budget, clientHeight: body?.clientHeight,
+            bodyTop: rect?.top, bodyBottom: rect?.bottom, panelTop: bounds.top, panelBottom: bounds.bottom,
+            chromeHeight: panel.querySelector('.session-detail-chrome')?.getBoundingClientRect().height };
+          const valid = body && body.clientHeight >= budget - 2 && rect.top >= bounds.top && rect.bottom <= bounds.bottom + 1;
+          const current = JSON.stringify(dimensions);
+          if (valid && current === previous) {
+            (receipt.dimensions ||= {})[window.SA.sessionView] = dimensions;
+            return;
+          }
+          previous = valid ? current : '';
+          // Virtual-time timers can outrun compositor frames. A pending HTTP
+          // checkpoint yields to native animation frames and ResizeObserver.
+          if (attempt < 5) {
+            const response = await readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+            if (!response.ok) throw new Error('Session reading frame checkpoint failed: ' + response.status);
+          }
+        }
+        throw new Error('Session reading layout did not settle: ' + JSON.stringify(dimensions));
+      };
+      try {
+        await window.selectSession('sess-codex-3'); await settle();
+        const panel = document.getElementById('session-board-panel');
+        const measure = () => {
+          const body = document.querySelector('#session-detail .session-detail-body');
+          const text = body.querySelector('.sm-content p, .sd-outcome p, .sm-state');
+          const line = text ? parseFloat(getComputedStyle(text).lineHeight) || 18 : 18;
+          const style = getComputedStyle(body);
+          const budget = Math.ceil(8 * line + 44 + (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0));
+          const rect = body.getBoundingClientRect(), bounds = panel.getBoundingClientRect();
+          return body.clientHeight >= budget - 2 && rect.top >= bounds.top && rect.bottom <= bounds.bottom + 1;
+        };
+        receipt.memoryBudget = measure();
+        const body = document.querySelector('#session-detail .session-detail-body');
+        receipt.contextInBody = !!body.querySelector('[data-session-part="session-context"] details.session-metadata')
+          && !document.querySelector('.session-detail-chrome .session-metadata');
+        receipt.latest = body.scrollHeight - body.clientHeight - body.scrollTop < 64;
+        document.querySelector('[data-action="session-status"]').click();
+        await settle();
+        receipt.currentContext = body.scrollTop === 0 && body.querySelector('.session-context').getBoundingClientRect().top < body.getBoundingClientRect().bottom;
+        const chrome = document.querySelector('.session-detail-chrome');
+        const before = chrome.getBoundingClientRect().height;
+        body.querySelector('details.session-metadata').open = true; await settle();
+        receipt.detailsBudget = measure();
+        receipt.detailsDoNotGrowChrome = Math.abs(chrome.getBoundingClientRect().height - before) < 1;
+        receipt.fullTitleRow = !document.querySelector('.session-detail-head [data-action="copy-report"]');
+        const narrow = matchMedia('(max-width:900px)').matches;
+        receipt.toolbar = (getComputedStyle(panel.querySelector('.session-toolbar')).display === 'none') === narrow;
+        receipt.actions = !narrow || Array.from(chrome.querySelectorAll('.sd-back, .sd-export, .sd-view, [data-action="session-status"]')).every(button => button.getBoundingClientRect().height >= 44);
+        for (const mode of ['results','trace']) {
+          await window.setSessionView(mode); await settle(); receipt[mode + 'Budget'] = measure();
+        }
+        receipt.fits = document.documentElement.scrollWidth <= document.documentElement.clientWidth;
+      } catch (error) { receipt.error = error.message; }
+      document.body.dataset.sessionReading = JSON.stringify(receipt);
+    }, 2500);
+  }
+  if (scenarios.has('sessionlatestfocus')) {
+    data['/sessions'].find(session => session.id === 'sess-claude-1')._timeline = Array.from({length: 90}, (_, i) => ({
+      id: 'latest-trace-' + i, session_id: 'sess-claude-1', kind: 12, ts: iso((90 - i) * 60000), tool: 'Retained trace ' + i, tool_status: 'ok', duration_ms: 10,
+    }));
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(async () => {
+      const receipt = {};
+      const checkpoint = () => readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+      const announcements = [];
+      const announce = window.saAnnounce;
+      window.saAnnounce = text => { announcements.push(text); announce(text); };
+      try {
+        await window.selectSession('sess-claude-1');
+        for (const mode of ['memory', 'trace', 'results']) {
+          await window.setSessionView(mode); await checkpoint();
+          const body = document.querySelector('#session-detail .session-detail-body');
+          const latest = document.querySelector('#session-detail [data-action="session-latest"]');
+          body.scrollTop = 0; body.dispatchEvent(new Event('scroll')); await checkpoint();
+          receipt[mode + 'Ready'] = body.scrollHeight > body.clientHeight + 64 && !latest.hidden;
+          latest.focus({preventScroll: true});
+          const x = scrollX, y = scrollY, before = announcements.length;
+          latest.click(); await checkpoint();
+          // The existing announcer publishes repeated text after its 30ms tick.
+          await new Promise(resolve => setTimeout(resolve, 40));
+          receipt[mode + 'Focus'] = document.activeElement === body && body.isConnected && !!body.getClientRects().length && body.getAttribute('tabindex') === '-1';
+          receipt[mode + 'Latest'] = latest.hidden && body.scrollHeight - body.clientHeight - body.scrollTop < 2;
+          receipt[mode + 'Page'] = scrollX === x && scrollY === y;
+          receipt[mode + 'Announcement'] = announcements.length === before + 1 && announcements.at(-1) === 'Moved to latest session content.'
+            && document.getElementById('a11y-live').textContent === 'Moved to latest session content.';
+          body.scrollTop = 0; body.dispatchEvent(new Event('scroll')); await checkpoint();
+          const outside = document.querySelector('.tab-btn[data-tab="sessions"]');
+          outside.focus({preventScroll: true});
+          const silent = announcements.length;
+          latest.click(); await checkpoint();
+          receipt[mode + 'Outside'] = document.activeElement === outside && announcements.length === silent && body.scrollHeight - body.clientHeight - body.scrollTop < 2;
+        }
+      } catch (error) { receipt.error = error.message; }
+      window.saAnnounce = announce;
+      document.body.dataset.sessionLatestFocus = JSON.stringify(receipt);
+    }, 2500);
   }
   if (scenarios.has('sessionworkbench')) {
     setTimeout(() => openTab('sessions'), 1500);
@@ -1459,7 +1717,7 @@
         receipt.filterReplacement = window.SA.selectedSessionId === 'wb-session-79';
         input.value = 'no-workbench-matches'; input.dispatchEvent(new Event('input', { bubbles: true }));
         await wait();
-        receipt.filterEmpty = window.SA.selectedSessionId === '' && detail().textContent.includes('No sessions match') && !!detail().querySelector('[data-action="clear-harness-filter"]');
+        receipt.filterEmpty = window.SA.selectedSessionId === '' && detail().textContent.includes('No live sessions match these filters.') && !!detail().querySelector('[data-action="clear-harness-filter"]');
         detail().querySelector('[data-action="clear-harness-filter"]').click();
         await wait();
         const selected = window.SA.selectedSessionId;
@@ -1612,7 +1870,7 @@
         write: async (items) => record(await (await items[0].getType('text/plain')).text())
       }
     });
-    setTimeout(() => document.querySelector('.session-detail-head [data-action="copy-report"]').click(), 9000);
+    setTimeout(() => document.querySelector('.session-detail-chrome [data-action="copy-report"]').click(), 9000);
   }
   // Auto-action: resolve the guard request once; the unified queue must
   // refresh and remove that blocked tool call. The styled confirm dialog
@@ -2122,6 +2380,42 @@
       const btn = document.querySelector('#worktrees-container .wt-row.wt-review [data-action="worktree-discuss"]');
       if (btn) btn.click();
     }, scenarios.has('discussoff') ? 9000 : 3000);
+  }
+  // dockcycle: Discuss opens the dock; the inspector drawer replaces it and
+  // Discuss again replaces the drawer; Escape while typing keeps it; Close
+  // returns the conversation to the Agent tab and focus to Discuss. Each
+  // step's state is stamped as JSON on #dock-cycle.
+  if (scenarios.has('dockcycle')) {
+    const state = () => {
+      const chat = document.getElementById('agent-chat');
+      const thread = document.getElementById('agent-thread');
+      return {
+        dock: !document.getElementById('agent-dock').hidden,
+        drawer: !document.getElementById('drawer').hidden,
+        chat: chat.parentElement.id || chat.parentElement.className,
+        tab: (document.querySelector('.tab-btn.active') || {}).dataset?.tab,
+        focus: document.activeElement.id || (document.activeElement.dataset || {}).action || document.activeElement.tagName,
+        end: thread.scrollHeight - thread.scrollTop - thread.clientHeight < 4,
+      };
+    };
+    const steps = {};
+    const discuss = () => document.querySelector('#worktrees-container .wt-row.wt-review [data-action="worktree-discuss"]');
+    setTimeout(() => { discuss().focus(); discuss().click(); }, 3000);
+    setTimeout(() => { steps.open = state(); document.querySelector('[data-action="worktrees-history"]').click(); }, 4500);
+    setTimeout(() => { steps.drawer = state(); discuss().focus(); discuss().click(); }, 5500);
+    setTimeout(() => {
+      steps.reopen = state();
+      const input = document.getElementById('agent-input');
+      input.value = 'half typed';
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    }, 7000);
+    setTimeout(() => {
+      steps.typing = state();
+      document.getElementById('agent-input').value = '';
+      document.querySelector('[data-action="agent-dock-close"]').click();
+    }, 7500);
+    setTimeout(() => { steps.closed = state(); stamp('dock-cycle', JSON.stringify(steps)); }, 8000);
   }
   if (scenarios.has('worktreedemo')) {
     setTimeout(() => {
@@ -2940,14 +3234,154 @@
     setTimeout(()=>document.querySelector('#flags-list [data-decision="expect"][data-scope="exact"][data-expiry="24h"]')?.click(),7000);
     setTimeout(()=>document.getElementById('confirm-ok')?.click(),7500);
     setTimeout(()=>openTab('policy'),8500);
-    if (scenarios.has('revokescope')) setTimeout(()=>document.querySelector('#policy-scopes [data-action="revoke-scope"]')?.click(),10000);
+    if (scenarios.has('revokescope')) setTimeout(()=>{
+      document.querySelector('#policy-scopes [data-action="revoke-scope"]')?.click();
+      setTimeout(()=>document.getElementById('confirm-ok')?.click(),100);
+    },10000);
+  }
+  if (scenarios.has('scoperevoke')) {
+    setTimeout(()=>openTab('policy'),1500);
+    setTimeout(async()=>{
+      const list=document.getElementById('policy-scopes');
+      const probe={loaded:list.textContent.includes('/synthetic/credentials'),fits:document.documentElement.scrollWidth<=innerWidth};
+      const button=list.querySelector('[data-action="revoke-scope"]');
+      if (scenarios.has('unknownscope')) {
+        probe.unknown=list.textContent.includes('Applicability unknown') && !button && !window.__globalScopeDeletes;
+      } else {
+        button?.focus();button?.click();button?.click();
+        await new Promise(resolve=>setTimeout(resolve,100));
+        probe.confirmation=document.getElementById('confirm-message').textContent.includes('/synthetic/credentials')
+          && document.getElementById('confirm-message').textContent.includes('example.test:443') && !window.__globalScopeDeletes;
+        if (scenarios.has('confirmonly')) return;
+        document.getElementById('confirm-cancel')?.click();
+        await new Promise(resolve=>setTimeout(resolve,100));
+        probe.cancelled=!window.__globalScopeDeletes && !!list.querySelector('[data-action="revoke-scope"]');
+        probe.cancelFocus=document.activeElement?.dataset.action==='revoke-scope' && document.activeElement?.dataset.id==='scope-global';
+        list.querySelector('[data-action="revoke-scope"]')?.click();document.getElementById('confirm-ok')?.click();
+        await new Promise(resolve=>setTimeout(resolve,200));
+        probe.once=window.__globalScopeDeletes===1;
+        probe.noReplay=!list.querySelector('[data-action="revoke-scope"]');
+        if (scenarios.has('ambiguousrevoke')) {
+          probe.unconfirmed=list.textContent.includes('Revocation not confirmed') && !list.textContent.includes('Revocation saved');
+          list.querySelector('[data-action="policy-refresh"]')?.click();
+          for (let attempt=0;attempt<20 && (list.textContent.includes('Revocation not confirmed') || !list.textContent.includes('Revoked'));attempt++) {
+            await new Promise(resolve=>setTimeout(resolve,50));
+          }
+          probe.refreshed=list.textContent.includes('Revoked') && !list.textContent.includes('Revocation not confirmed')
+            && !list.textContent.includes('Revocation saved') && window.__globalScopeDeletes===1;
+          if (!probe.refreshed) probe.refreshText=list.textContent;
+        } else {
+          probe.saved=list.textContent.includes('Revocation saved') && list.textContent.includes('/synthetic/credentials');
+          if (scenarios.has('scopereadfail')) probe.retained=list.textContent.includes('Showing last known records');
+        }
+      }
+      document.body.dataset.globalPermissionsProbe=JSON.stringify(probe);
+    },3500);
   }
   if (scenarios.has('policylists')) {
     setTimeout(() => openTab('policy'), 4000);
   }
+  if (scenarios.has('policyhealth')) {
+    setTimeout(async () => {
+      const probe = {};
+      const wait = async predicate => { for (let i = 0; i < 40; i++) { window.SA.flushRender(); if (predicate()) return true; await new Promise(resolve => setTimeout(resolve, 50)); } return false; };
+      try {
+        openTab('policy');
+        const scopes = document.getElementById('policy-scopes'), expected = document.getElementById('policy-expected');
+        await wait(() => expected.querySelector('[data-action="forget-expected"]'));
+        let healthy = expected.querySelector('[data-action="forget-expected"]');
+        probe.healthy = !!healthy && !healthy.disabled && document.getElementById('badge-guard-rules').textContent === '2';
+        if (scenarios.has('policyhealth=slow')) {
+          probe.pendingSibling = document.getElementById('badge-mutes').textContent === '—' && document.getElementById('policy-mutes').textContent.includes('Loading');
+          probe.usable = !!scopes.querySelector('[data-action="revoke-scope"]:not([disabled])');
+          healthy.focus(); window.__policyRecovered = true; window.__finishPolicyMute();
+          probe.settled = await wait(() => document.getElementById('badge-mutes').textContent === '2');
+          probe.focus = document.activeElement === healthy && healthy.isConnected;
+        } else {
+          if (scenarios.has('policyhealth=stale')) {
+            await wait(() => scopes.querySelector('[data-action="revoke-scope"]'));
+            window.__policyFailure = true;
+            document.querySelector('#policy-guard-panel [data-action="policy-refresh"]').click();
+          }
+          await wait(() => scopes.querySelector('[data-action="policy-refresh-report"]'));
+          healthy = expected.querySelector('[data-action="forget-expected"]:not([disabled])');
+          probe.qualified = scenarios.has('policyhealth=stale') ? scopes.textContent.includes('Showing last known records') && scopes.textContent.includes('Last successful refresh') && scopes.textContent.includes('/synthetic/credentials')
+            : scopes.textContent.includes('Unavailable. No successful read yet') && document.getElementById('badge-scopes').textContent === '—';
+          probe.noEmptyClaim = !scopes.textContent.includes('No scoped permissions');
+          probe.readOnly = !scopes.querySelector('[data-action="revoke-scope"]');
+          await window.revokeScope('policy-health-scope');
+          probe.noWrite = !window.__policyWrites;
+          const retry = scopes.querySelector('[data-action="policy-refresh-report"]');
+          probe.retryLabel = retry.textContent === 'Refresh scoped permissions' && retry.getBoundingClientRect().height >= 44;
+          if (scenarios.has('policyhealthshot')) return;
+          const before = { ...window.__policyReads };
+          healthy.focus(); window.__policyRecovered = true; retry.click();
+          probe.recovered = await wait(() => scopes.textContent.includes('No scoped permissions') && !scopes.querySelector('[data-action="policy-refresh-report"]'));
+          probe.bounded = window.__policyReads['/decision-scopes'] === before['/decision-scopes'] + 1 && Object.keys(before).filter(path => path !== '/decision-scopes').every(path => before[path] === window.__policyReads[path]);
+          probe.focus = document.activeElement === healthy && healthy.isConnected;
+          if (scenarios.has('policyhealth=reconnect')) {
+            const reads = window.__policyReads['/decision-scopes'];
+            location.hash = 'ct=fixture-restored';
+            probe.reconnected = await wait(() => !document.body.classList.contains('is-ended') && window.__policyReads['/decision-scopes'] > reads && scopes.textContent.includes('No scoped permissions'));
+            probe.reloaded = !!expected.querySelector('[data-action="forget-expected"]:not([disabled])');
+          }
+        }
+        probe.fits = document.documentElement.scrollWidth <= innerWidth;
+      } catch (error) { probe.error = String(error); }
+      document.body.dataset.policyHealthProbe = JSON.stringify(probe);
+    }, 4000);
+  }
   // forgetexpected (with policylists): press Forget on the expected row.
   if (scenarios.has('forgetexpected')) {
     setTimeout(() => document.querySelector('#policy-expected [data-action="forget-expected"]')?.click(), 7000);
+    setTimeout(() => document.getElementById('confirm-ok')?.click(), 7500);
+  }
+  if (scenarios.has('expectedremove')) {
+    setTimeout(async () => {
+      const probe = {};
+      const wait = async predicate => { for (let i = 0; i < 30; i++) { window.SA.flushRender(); if (predicate()) return true; await new Promise(resolve => setTimeout(resolve, 50)); } return false; };
+      try {
+        openTab('policy');
+        const list = document.getElementById('policy-expected');
+        await wait(() => list.textContent.includes('Remove exception') || list.textContent.includes('The daemon returned invalid records.'));
+        if (scenarios.has('removalinvalid')) {
+          probe.unavailable = list.textContent.includes('The daemon returned invalid records.') && !list.querySelector('[data-action="forget-expected"]');
+          probe.noWrite = !window.__expectedRemovalDeletes;
+        } else {
+          const file = scenarios.has('expectedremove=file');
+          const key = file ? 'claude|*|/synthetic/.env.test|*' : 'claude|gh|/synthetic/credentials|example.test';
+          const button = Array.from(list.querySelectorAll('[data-action="forget-expected"]')).find(el => el.dataset.key === key);
+          probe.label = button.textContent === 'Remove exception' && button.getAttribute('aria-label').includes(file ? '/synthetic/.env.test' : '/synthetic/credentials');
+          probe.target = button.getBoundingClientRect().height >= 44;
+          button.focus(); button.click();
+          const message = document.getElementById('confirm-message').textContent;
+          probe.scope = file ? message.includes('all readers and destinations for this agent and file') : message.includes('gh reads /synthetic/credentials, then reaches example.test');
+          probe.consequence = message.includes('remaining exceptions and policies') && message.includes('Past activity and exposure are unchanged');
+          if (scenarios.has('confirmonly')) return;
+          document.getElementById('confirm-cancel').click();
+          await new Promise(resolve => setTimeout(resolve, 50));
+          probe.cancelled = !window.__expectedRemovalDeletes && document.activeElement === button && button.isConnected;
+          button.click(); document.getElementById('confirm-ok').click();
+          await wait(() => list.textContent.includes('Exception removal saved') || list.textContent.includes('Removal not confirmed'));
+          probe.oneWrite = window.__expectedRemovalDeletes === 1;
+          if (scenarios.has('removaluncertain')) {
+            probe.uncertain = list.textContent.includes('Removal not confirmed') && !Array.from(list.querySelectorAll('[data-action="forget-expected"]')).some(el => el.dataset.key === key);
+            await window.forgetExpected(key);
+            probe.noReplay = window.__expectedRemovalDeletes === 1;
+            list.querySelector('[data-action="policy-refresh"]').click();
+            probe.refreshed = await wait(() => !list.textContent.includes('Removal not confirmed'));
+            probe.authoritative = !list.textContent.includes(file ? 'Non-secret file' : 'reads');
+          } else {
+            probe.saved = list.textContent.includes('Exception removal saved') && !Array.from(list.querySelectorAll('[data-action="forget-expected"]')).some(el => el.dataset.key === key);
+            probe.remaining = document.getElementById('badge-expected').textContent === '1';
+            probe.feedback = list.textContent.includes('Remaining exceptions and policies still apply; past activity is unchanged');
+            if (scenarios.has('removalreadfail')) probe.retained = list.textContent.includes('current status is unavailable') && !list.querySelector('[data-action="forget-expected"]');
+          }
+        }
+        probe.fits = document.documentElement.scrollWidth <= innerWidth;
+      } catch (error) { probe.error = String(error); }
+      document.body.dataset.expectedRemovalProbe = JSON.stringify(probe);
+    }, 4000);
   }
   // explainact: Findings open, press flag-2's first served action (the
   // recommended allow) late enough that the inline note and the toast are

@@ -41,17 +41,17 @@ const (
 )
 
 // Flag statements on hot paths, each served by an index (see Open).
-const (
+var (
 	// ruleCountsSQL counts a rule's flags for one agent in two windows; it
 	// seeks idx_flags_rule_agent.
 	ruleCountsSQL = `SELECT
-		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0)
+		COALESCE(SUM(CASE WHEN ` + timestampOrderExpr("ts") + ` >= ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN ` + timestampOrderExpr("ts") + ` >= ? THEN 1 ELSE 0 END), 0)
 		FROM flags WHERE rule = ? AND agent = ?`
 	// hostFirstSeenSQL seeks idx_events_host; the advisor runs it for each
 	// flag, host and egress episode it triages. The partial index is usable
 	// only when the statement repeats the index's empty-host exclusion.
-	hostFirstSeenSQL = `SELECT MIN(ts) FROM events WHERE remote_host = ? AND remote_host != ''`
+	hostFirstSeenSQL = `SELECT substr(MIN(` + timestampOrderExpr("ts") + ` || ts),31) FROM events WHERE remote_host = ? AND remote_host != ''`
 )
 
 // reattributeFlagsSQL seeks idx_flags_pid. Numbered parameters reuse the cutoff
@@ -218,8 +218,8 @@ func (s *Store) SetEventRetention(conn, other time.Duration) {
 }
 
 // AuditEntry is one durable record of a policy/control change (a rule promoted
-// or demoted, fingerprints ingested or reloaded). Unlike events, audit rows are
-// low-volume and never pruned. No field ever carries a secret value.
+// or demoted, fingerprints ingested or reloaded). The newest maxAudit rows
+// are retained. No field ever carries a secret value.
 type AuditEntry struct {
 	ID       int64  `json:"id"`
 	TS       string `json:"ts"`
@@ -499,9 +499,9 @@ func (s *Store) PruneEvents() {
 }
 
 func (s *Store) pruneEventsLocked() {
-	// Time-based per kind first (datetime() normalizes any legacy local-offset
-	// ts values), then per-kind row budgets as a pure backstop. Every kind
-	// present in the table is capped on its own budget (kindBudgets, else
+	// Time-based per kind first (instantBeforeSQL normalizes any legacy
+	// local-offset ts values), then per-kind row budgets as a pure backstop.
+	// Every kind present in the table is capped on its own budget (kindBudgets, else
 	// defaultKindBudget), so one kind's volume never evicts another kind's
 	// rows. Time retention still applies to every kind.
 	conn := s.connRetention
@@ -513,12 +513,11 @@ func (s *Store) pruneEventsLocked() {
 		other = DefaultEventRetention
 	}
 	now := time.Now().UTC()
-	connCutoff := now.Add(-conn).Format(time.RFC3339Nano)
-	otherCutoff := now.Add(-other).Format(time.RFC3339Nano)
-	_, _ = s.db.Exec(`DELETE FROM events WHERE kind IN (?, ?) AND datetime(ts) < datetime(?)`,
-		int(event.KindConnOpen), int(event.KindConnClose), connCutoff)
-	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND datetime(ts) < datetime(?)`,
-		int(event.KindConnOpen), int(event.KindConnClose), otherCutoff)
+	connKinds := []any{int(event.KindConnOpen), int(event.KindConnClose)}
+	_, _ = s.db.Exec(`DELETE FROM events WHERE kind IN (?, ?) AND `+instantBeforeSQL("ts"),
+		append(connKinds, instantBound(now.Add(-conn))...)...)
+	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND `+instantBeforeSQL("ts"),
+		append(connKinds, instantBound(now.Add(-other))...)...)
 	// Distinct kinds by index skip-scan: one MIN(kind) seek per kind.
 	rows, err := s.db.Query(`WITH RECURSIVE k(v) AS (
 			SELECT MIN(kind) FROM events
@@ -923,9 +922,9 @@ func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
 	return n == 1
 }
 
-// GetFlagResult distinguishes a missing row from an unavailable or malformed
+// GetFlag distinguishes a missing row from an unavailable or malformed
 // detail, using the same checked decoder as flag history.
-func (s *Store) GetFlagResult(id string) (model.Flag, bool, error) {
+func (s *Store) GetFlag(id string) (model.Flag, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.getFlagResultLocked(id)
@@ -958,7 +957,7 @@ func (s *Store) getFlagResultLocked(id string) (flag model.Flag, found bool, rea
 // a flag delta publishes (wire.go), so a verdict that lands after the flag
 // itself can be re-pushed with the same fields the popover already renders.
 func (s *Store) GetFlagWithAdvisor(id string) (model.Flag, bool) {
-	fl, ok, err := s.GetFlagResult(id)
+	fl, ok, err := s.GetFlag(id)
 	if err != nil {
 		return model.Flag{}, false
 	}
@@ -1009,9 +1008,9 @@ func flagQuery(f FlagFilter) (string, []any) {
 	return q, args
 }
 
-// QueryFlagsResult never returns partial flags after a query, decode or
+// QueryFlags never returns partial flags after a query, decode or
 // cursor error. Nullable optional fields in older schemas remain valid.
-func (s *Store) QueryFlagsResult(f FlagFilter) (out []model.Flag, readErr error) {
+func (s *Store) QueryFlags(f FlagFilter) (out []model.Flag, readErr error) {
 	defer func() { s.noteRead("flags", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1176,21 +1175,24 @@ func (s *Store) trendCounts(rule, host string) (model.TrendContext, func() map[s
 	defer s.mu.Unlock()
 	var tc model.TrendContext
 	now := time.Now().UTC()
-	wk := now.Add(-7 * 24 * time.Hour).Format(time.RFC3339Nano)
-	prior := now.Add(-14 * 24 * time.Hour).Format(time.RFC3339Nano)
+	wk := instantArg(now.Add(-7 * 24 * time.Hour))
+	prior := instantArg(now.Add(-14 * 24 * time.Hour))
+	at := timestampOrderExpr("ts")
 	_ = s.db.QueryRow(
 		`SELECT
-		   SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END),
-		   SUM(CASE WHEN datetime(ts) >= datetime(?) AND datetime(ts) < datetime(?) THEN 1 ELSE 0 END)
+		   SUM(CASE WHEN `+at+` >= ? THEN 1 ELSE 0 END),
+		   SUM(CASE WHEN `+at+` >= ? AND `+at+` < ? THEN 1 ELSE 0 END)
 		 FROM flags WHERE rule = ?`,
 		wk, prior, wk, rule,
 	).Scan(&tc.RuleLast7d, &tc.RulePrior7d)
 	if host != "" {
 		var first sql.NullString
 		err := s.db.QueryRow(hostFirstSeenSQL, host).Scan(&first)
-		if err == nil && first.Valid && first.String != "" {
-			tc.HostKnown = true
-			tc.HostFirstSeen = first.String
+		if err == nil && first.Valid {
+			if at, parseErr := time.Parse(time.RFC3339Nano, first.String); parseErr == nil {
+				tc.HostKnown = true
+				tc.HostFirstSeen = at.UTC().Format(time.RFC3339Nano)
+			}
 		}
 	}
 	return tc, s.allowlist
@@ -1341,9 +1343,9 @@ func eventRecordQuery(f EventFilter, withID bool, beforeID int64) (string, []any
 	return q, args
 }
 
-// QueryEventsResult distinguishes a successful empty history from failed or
+// QueryEvents distinguishes a successful empty history from failed or
 // incomplete reads. Decode and cursor errors never return partial evidence.
-func (s *Store) QueryEventsResult(f EventFilter) (out []event.Event, readErr error) {
+func (s *Store) QueryEvents(f EventFilter) (out []event.Event, readErr error) {
 	defer func() { s.noteRead("events", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1463,20 +1465,21 @@ func nullFloat(f float64) any {
 	return f
 }
 
-// CriticalFlagsMissingAdvisorResult rejects failed reads without returning a
+// CriticalFlagsMissingAdvisor rejects failed reads without returning a
 // partial backfill. Nullable legacy metadata is decoded like other flag reads.
-func (s *Store) CriticalFlagsMissingAdvisorResult(since time.Time, limit int) (flags []model.Flag, readErr error) {
+func (s *Store) CriticalFlagsMissingAdvisor(since time.Time, limit int) (flags []model.Flag, readErr error) {
 	defer func() { s.noteRead("advisor backfill", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Invalid dates must reach the decoder rather than disappear from the
 	// time filter or fall beyond the limit behind valid rows.
+	at := timestampOrderExpr("ts")
 	rows, err := s.db.Query(
 		flagSelect+` WHERE severity >= 3
 		 AND NOT EXISTS (SELECT 1 FROM advisor_verdicts v WHERE v.subject_id = flags.id AND v.kind = 'flag')
-		 AND (datetime(ts) IS NULL OR datetime(ts) >= datetime(?))
-		 ORDER BY datetime(ts) IS NULL DESC, datetime(ts) DESC, ts DESC LIMIT ?`,
-		since.UTC().Format(time.RFC3339Nano), normalizeLimit(limit),
+		 AND (`+at+` IS NULL OR `+at+` >= ?)
+		 ORDER BY `+at+` IS NULL DESC, `+at+` DESC, ts DESC LIMIT ?`,
+		instantArg(since), normalizeLimit(limit),
 	)
 	if err != nil {
 		return nil, err
@@ -1699,15 +1702,15 @@ func (s *Store) attachResourceEpisodeActivity(ctx context.Context, episode resou
 	// exited before capture is in the session but not in the family list.
 	if len(pids) > 0 {
 		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pids)), ",")
-		args := make([]any, 0, len(pids)+2)
+		args := make([]any, 0, len(pids)+6)
 		for _, pid := range pids {
 			args = append(args, pid)
 		}
-		args = append(args, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
+		args = append(append(args, instantBound(start)...), instantBound(end.Add(time.Nanosecond))...)
 		err := s.scanResourceActivity(ctx, `SELECT `+resourceActivityColumns+`
 			FROM events WHERE pid IN (`+placeholders+`)
-			AND datetime(ts) >= datetime(?) AND datetime(ts) <= datetime(?)
-			ORDER BY datetime(ts) DESC, id DESC`, args, func(e event.Event) {
+			AND `+instantSinceSQL("ts")+` AND `+instantBeforeSQL("ts")+`
+			ORDER BY `+timestampOrderExpr("ts")+` DESC, id DESC`, args, func(e event.Event) {
 			process := processes[e.PID]
 			if e.TS.Before(start) || e.TS.After(end) || (!process.StartedAt.IsZero() && e.TS.Before(process.StartedAt)) {
 				return
@@ -1721,7 +1724,7 @@ func (s *Store) attachResourceEpisodeActivity(ctx context.Context, episode resou
 	if episode.SessionID != "" {
 		at := memoryTimestampExpr("ts")
 		err := s.scanResourceActivity(ctx, `SELECT `+resourceActivityColumns+`
-			FROM events WHERE session_id = ? AND strftime('%s', ts) IS NOT NULL
+			FROM events WHERE session_id = ?
 			AND `+at+` >= ? AND `+at+` <= ?
 			ORDER BY `+at+` DESC, id DESC`,
 			[]any{episode.SessionID, start.UnixNano(), end.UnixNano()}, func(e event.Event) {
@@ -2124,43 +2127,55 @@ func (s *Store) GuardPathAllowed(agent, ruleID, path string) bool {
 	return s.guardPathAllowedLocked(agent, ruleID, filepath.Clean(path))
 }
 
-// ListGuardPathAllows returns recent per-path allows, newest first.
-func (s *Store) ListGuardPathAllows(limit int) []GuardPathAllow {
+// ListGuardPathAllows returns recent per-path allows, newest first, or an error
+// without partial records if the read fails.
+func (s *Store) ListGuardPathAllows(limit int) ([]GuardPathAllow, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
-		`SELECT agent, rule_id, path, created_at FROM guard_path_allows ORDER BY datetime(created_at) DESC LIMIT ?`,
+		`SELECT agent, rule_id, path, created_at FROM guard_path_allows ORDER BY `+timestampOrderExpr("created_at")+` DESC LIMIT ?`,
 		normalizeLimit(limit),
 	)
 	if err != nil {
-		log.Printf("store: list guard_path_allows error: %v", err)
-		return nil
+		return nil, fmt.Errorf("list guard path allows: %w", err)
 	}
 	defer rows.Close()
 	out := []GuardPathAllow{}
 	for rows.Next() {
 		var g GuardPathAllow
-		if err := rows.Scan(&g.Agent, &g.RuleID, &g.Path, &g.CreatedAt); err == nil {
-			out = append(out, g)
+		if err := rows.Scan(&g.Agent, &g.RuleID, &g.Path, &g.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan guard path allow: %w", err)
 		}
+		out = append(out, g)
 	}
-	return out
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read guard path allows: %w", err)
+	}
+	return out, nil
 }
 
 // DeleteGuardPathAllow revokes one exception; removing an absent one is a no-op.
-func (s *Store) DeleteGuardPathAllow(agent, ruleID, path string) bool {
+// Storage failures return an error rather than reporting an absent exception.
+func (s *Store) DeleteGuardPathAllow(agent, ruleID, path string) (removed bool, writeErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		if writeErr != nil || removed {
+			s.noteWrite("guard path revocations", writeErr)
+		}
+	}()
 	res, err := s.db.Exec(
 		`DELETE FROM guard_path_allows WHERE agent = ? AND rule_id = ? AND path = ?`,
 		agent, ruleID, path,
 	)
 	if err != nil {
-		log.Printf("store: delete guard_path_allows error: %v", err)
-		return false
+		return false, fmt.Errorf("delete guard path allow: %w", err)
 	}
-	n, _ := res.RowsAffected()
-	return n > 0
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("guard path allow deletion result: %w", err)
+	}
+	return n > 0, nil
 }
 
 func (s *Store) PutGuardRule(g GuardRule) {
@@ -2192,41 +2207,52 @@ func (s *Store) LookupGuardRule(agent, ruleID string) (GuardRule, bool) {
 	return g, true
 }
 
-func (s *Store) ListGuardRules(limit int) []GuardRule {
+// ListGuardRules returns recent decisions, newest first, or an error without
+// partial records if the read fails.
+func (s *Store) ListGuardRules(limit int) ([]GuardRule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
-		`SELECT agent, rule_id, decision, source, created_at FROM guard_rules ORDER BY datetime(created_at) DESC LIMIT ?`,
+		`SELECT agent, rule_id, decision, source, created_at FROM guard_rules ORDER BY `+timestampOrderExpr("created_at")+` DESC LIMIT ?`,
 		normalizeLimit(limit),
 	)
 	if err != nil {
-		log.Printf("store: query guard_rules error: %v", err)
-		return []GuardRule{}
+		return nil, fmt.Errorf("list guard rules: %w", err)
 	}
 	defer rows.Close()
 	out := []GuardRule{}
 	for rows.Next() {
 		var g GuardRule
-		if err := rows.Scan(&g.Agent, &g.RuleID, &g.Decision, &g.Source, &g.CreatedAt); err == nil {
-			out = append(out, g)
+		if err := rows.Scan(&g.Agent, &g.RuleID, &g.Decision, &g.Source, &g.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan guard rule: %w", err)
 		}
+		out = append(out, g)
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("store: guard_rules cursor error (result may be truncated): %v", err)
+		return nil, fmt.Errorf("read guard rules: %w", err)
 	}
-	return out
+	return out, nil
 }
 
-func (s *Store) DeleteGuardRule(agent, ruleID string) bool {
+// DeleteGuardRule revokes one decision; removing an absent one is a no-op.
+// Storage failures return an error rather than reporting an absent decision.
+func (s *Store) DeleteGuardRule(agent, ruleID string) (removed bool, writeErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		if writeErr != nil || removed {
+			s.noteWrite("guard rule revocations", writeErr)
+		}
+	}()
 	res, err := s.db.Exec(`DELETE FROM guard_rules WHERE agent = ? AND rule_id = ?`, agent, ruleID)
 	if err != nil {
-		log.Printf("store: delete guard rule error: %v", err)
-		return false
+		return false, fmt.Errorf("delete guard rule: %w", err)
 	}
-	n, _ := res.RowsAffected()
-	return n > 0
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("guard rule deletion result: %w", err)
+	}
+	return n > 0, nil
 }
 
 // ReclassifyReadConnectSeverity changes only unresolved weak correlations.

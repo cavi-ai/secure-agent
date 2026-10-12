@@ -62,7 +62,7 @@ func TestReviewSourceTimestampRejectsHTTPDecisionAndRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	request(200)
-	got, found, err := st.GetFlagResult(f.ID)
+	got, found, err := st.GetFlag(f.ID)
 	if err != nil || !found || !got.Acknowledged {
 		t.Fatalf("repaired decision: %+v found=%v err=%v", got, found, err)
 	}

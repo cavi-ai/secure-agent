@@ -28,10 +28,10 @@ func TestRuleCountsResultWindowsScopeAndEmpty(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if d7, d30, err := s.RuleCountsResult("rule", "codex", now); err != nil || d7 != 2 || d30 != 4 {
+	if d7, d30, err := s.RuleCounts("rule", "codex", now); err != nil || d7 != 2 || d30 != 4 {
 		t.Fatalf("window counts: %d, %d, %v", d7, d30, err)
 	}
-	if d7, d30, err := s.RuleCountsResult("missing", "codex", now); err != nil || d7 != 0 || d30 != 0 {
+	if d7, d30, err := s.RuleCounts("missing", "codex", now); err != nil || d7 != 0 || d30 != 0 {
 		t.Fatalf("healthy empty counts: %d, %d, %v", d7, d30, err)
 	}
 }
@@ -45,7 +45,7 @@ func TestRuleCountsResultFailureAndRecovery(t *testing.T) {
 	if _, err := s.db.Exec("ALTER TABLE flags RENAME TO unavailable_flags"); err != nil {
 		t.Fatal(err)
 	}
-	if d7, d30, err := s.RuleCountsResult("rule", "codex", time.Now()); err == nil || d7 != 0 || d30 != 0 {
+	if d7, d30, err := s.RuleCounts("rule", "codex", time.Now()); err == nil || d7 != 0 || d30 != 0 {
 		t.Fatalf("failed counts: %d, %d, %v", d7, d30, err)
 	}
 	if h := s.WriteHealth(); h.ReadFailures != 1 || !slices.Equal(h.ReadActive, []string{"rule history"}) || h.Failures != 0 {
@@ -54,14 +54,14 @@ func TestRuleCountsResultFailureAndRecovery(t *testing.T) {
 	if _, err := s.db.Exec("ALTER TABLE unavailable_flags RENAME TO flags"); err != nil {
 		t.Fatal(err)
 	}
-	if d7, d30, err := s.RuleCountsResult("rule", "codex", time.Now()); err != nil || d7 != 0 || d30 != 0 {
+	if d7, d30, err := s.RuleCounts("rule", "codex", time.Now()); err != nil || d7 != 0 || d30 != 0 {
 		t.Fatalf("recovered empty counts: %d, %d, %v", d7, d30, err)
 	}
 	if h := s.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 0 {
 		t.Fatalf("recovered health: %+v", h)
 	}
 	s.Close()
-	if d7, d30, err := s.RuleCountsResult("rule", "codex", time.Now()); err == nil || d7 != 0 || d30 != 0 {
+	if d7, d30, err := s.RuleCounts("rule", "codex", time.Now()); err == nil || d7 != 0 || d30 != 0 {
 		t.Fatalf("closed counts: %d, %d, %v", d7, d30, err)
 	}
 	if h := s.WriteHealth(); h.ReadFailures != 2 || !slices.Equal(h.ReadActive, []string{"rule history"}) {

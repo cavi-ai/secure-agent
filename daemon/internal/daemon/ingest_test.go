@@ -29,7 +29,7 @@ func TestIngestStopDrainsProjectionAndRejectsLaterFeed(t *testing.T) {
 	if i.Feed(e) {
 		t.Fatal("stopped ingest accepted a new event")
 	}
-	if len(testutil.Read[[]event.Event](t)(f.store.QueryEventsResult(store.EventFilter{Limit: 10}))) != 1 || len(testutil.Read[[]store.EgressEpisode](t)(f.store.ListEgressEpisodesForReviewResult())) != 1 {
+	if len(testutil.Read[[]event.Event](t)(f.store.QueryEvents(store.EventFilter{Limit: 10}))) != 1 || len(testutil.Read[[]store.EgressEpisode](t)(f.store.ListEgressEpisodesForReview())) != 1 {
 		t.Fatal("stop lost persisted activity or queued projection")
 	}
 }

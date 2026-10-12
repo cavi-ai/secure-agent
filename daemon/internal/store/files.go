@@ -24,9 +24,9 @@ func jsonLike(path string) string {
 	return "%" + enc + "%"
 }
 
-// PathFindingsResult returns no partial findings when a query or candidate
+// PathFindings returns no partial findings when a query or candidate
 // row cannot be read. A successful empty result is non-nil.
-func (s *Store) PathFindingsResult(path string, limit int) (findings []model.FileFinding, readErr error) {
+func (s *Store) PathFindings(path string, limit int) (findings []model.FileFinding, readErr error) {
 	defer func() { s.noteRead("path findings", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -34,7 +34,7 @@ func (s *Store) PathFindingsResult(path string, limit int) (findings []model.Fil
 	like := jsonLike(path)
 
 	rows, err := s.db.Query(`SELECT id, rule, severity, ts, agent, session_id, evidence, COALESCE(acknowledged, '')
-		FROM flags WHERE evidence LIKE ? ESCAPE '\' ORDER BY ts DESC LIMIT ?`, like, pathScanCap)
+		FROM flags WHERE evidence LIKE ? ESCAPE '\' ORDER BY `+timestampOrderExpr("ts")+` DESC LIMIT ?`, like, pathScanCap)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +71,7 @@ func (s *Store) PathFindingsResult(path string, limit int) (findings []model.Fil
 	rows.Close()
 
 	rows, err = s.db.Query(`SELECT report_json, COALESCE(status, 'open') FROM incidents
-		WHERE report_json LIKE ? ESCAPE '\' ORDER BY datetime(created_at) DESC LIMIT ?`, like, pathScanCap)
+		WHERE report_json LIKE ? ESCAPE '\' ORDER BY `+timestampOrderExpr("created_at")+` DESC LIMIT ?`, like, pathScanCap)
 	if err != nil {
 		return nil, err
 	}
@@ -101,9 +101,9 @@ func (s *Store) PathFindingsResult(path string, limit int) (findings []model.Fil
 	return out, nil
 }
 
-// PathAccessesResult distinguishes unavailable access history from an empty
+// PathAccesses distinguishes unavailable access history from an empty
 // history and discards partial results on failure.
-func (s *Store) PathAccessesResult(path string, limit int) (accesses []model.FileAccess, readErr error) {
+func (s *Store) PathAccesses(path string, limit int) (accesses []model.FileAccess, readErr error) {
 	defer func() { s.noteRead("path accesses", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()

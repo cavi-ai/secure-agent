@@ -85,14 +85,19 @@ func (s *Store) WorktreeRepos() []model.WorktreeRepo {
 }
 
 // WorkspaceActivity returns one row per absolute session workspace: the
-// newest last_seen across its sessions and whether any of them is still
-// active or idle (not ended).
+// newest last_seen across its sessions, the harness to name (a live
+// session's before an ended one's, a named one before an unnamed one, then
+// the newest), and whether any of them is still active or idle (not ended).
 func (s *Store) WorkspaceActivity() []model.WorkspaceActivity {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT workspace, MAX(last_seen_at), MAX(status IN (?, ?))
+	order := timestampOrderExpr("last_seen_at")
+	// Two flag characters ahead of the 30-character order key.
+	rows, err := s.db.Query(`SELECT workspace, substr(MAX(`+order+` || last_seen_at),31),
+		substr(MAX(CASE WHEN status IN (?, ?) THEN '1' ELSE '0' END || CASE WHEN COALESCE(harness, '') != '' THEN '1' ELSE '0' END || `+order+` || COALESCE(harness, '')),33),
+		MAX(status IN (?, ?))
 		FROM sessions WHERE workspace LIKE '/%' GROUP BY workspace`,
-		model.SessionActive, model.SessionIdle)
+		model.SessionActive, model.SessionIdle, model.SessionActive, model.SessionIdle)
 	if err != nil {
 		log.Printf("store: query workspace activity: %v", err)
 		return nil
@@ -101,10 +106,11 @@ func (s *Store) WorkspaceActivity() []model.WorkspaceActivity {
 	out := []model.WorkspaceActivity{}
 	for rows.Next() {
 		var a model.WorkspaceActivity
-		var last sql.NullString
-		if err := rows.Scan(&a.Workspace, &last, &a.Live); err != nil {
+		var last, harness sql.NullString
+		if err := rows.Scan(&a.Workspace, &last, &harness, &a.Live); err != nil {
 			continue
 		}
+		a.Harness = harness.String
 		a.LastSeen, _ = time.Parse(time.RFC3339Nano, last.String)
 		out = append(out, a)
 	}
@@ -176,12 +182,12 @@ func (s *Store) CleanupTotals(now time.Time) model.CleanupTotals {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var t model.CleanupTotals
-	cut := now.Add(-30 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	cut := instantArg(now.Add(-30 * 24 * time.Hour))
 	err := s.db.QueryRow(`SELECT
 		COALESCE(SUM(CASE WHEN trashed THEN 0 ELSE bytes END), 0), COALESCE(SUM(NOT trashed), 0),
-		COALESCE(SUM(CASE WHEN ts >= ? AND NOT trashed THEN bytes ELSE 0 END), 0), COALESCE(SUM(ts >= ? AND NOT trashed), 0),
+		COALESCE(SUM(CASE WHEN at >= ? AND NOT trashed THEN bytes ELSE 0 END), 0), COALESCE(SUM(at >= ? AND NOT trashed), 0),
 		COALESCE(SUM(CASE WHEN trashed THEN bytes ELSE 0 END), 0), COALESCE(SUM(trashed), 0)
-		FROM (SELECT ts, bytes, action LIKE 'trash:%' AS trashed FROM cleanup_log WHERE action NOT LIKE 'ask:%')`, cut, cut).
+		FROM (SELECT `+timestampOrderExpr("ts")+` AS at, bytes, action LIKE 'trash:%' AS trashed FROM cleanup_log WHERE action NOT LIKE 'ask:%')`, cut, cut).
 		Scan(&t.Bytes, &t.Count, &t.Bytes30d, &t.Count30d, &t.TrashedBytes, &t.TrashedCount)
 	if err != nil {
 		log.Printf("store: cleanup totals: %v", err)
@@ -211,14 +217,11 @@ func (s *Store) CleanupDaily(now time.Time, days int) []model.CleanupDay {
 		out[i].Day = time.Date(y, m, d-days+1+i, 0, 0, 0, 0, loc).Format(time.DateOnly)
 		index[out[i].Day] = i
 	}
-	// ts is text: fractional seconds make the string comparison fuzzy by
-	// under a second, so the query starts a second early and the day index
-	// decides.
-	first := time.Date(y, m, d-days+1, 0, 0, 0, 0, loc).Add(-time.Second)
+	first := time.Date(y, m, d-days+1, 0, 0, 0, 0, loc)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT ts, action, bytes FROM cleanup_log WHERE ts >= ? AND action NOT LIKE 'ask:%'`,
-		first.UTC().Format(time.RFC3339Nano))
+	rows, err := s.db.Query(`SELECT ts, action, bytes FROM cleanup_log WHERE `+timestampOrderExpr("ts")+` >= ? AND action NOT LIKE 'ask:%'`,
+		instantArg(first))
 	if err != nil {
 		log.Printf("store: cleanup daily: %v", err)
 		return out
@@ -340,7 +343,7 @@ func (s *Store) SessionsInWorkspace(dir string) []model.Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(sessionSelect+` WHERE (workspace = ? OR workspace LIKE ? ESCAPE '\') AND confidence IN (?, ?)
-		ORDER BY last_seen_at DESC LIMIT 20`,
+		ORDER BY `+timestampOrderExpr("last_seen_at")+` DESC LIMIT 20`,
 		dir, likePrefix(dir)+"/%", model.ConfHook, model.ConfTranscript)
 	if err != nil {
 		log.Printf("store: sessions in workspace: %v", err)

@@ -71,6 +71,47 @@ func TestHostLookupsUseTheHostIndex(t *testing.T) {
 	}
 }
 
+func TestHostFirstSeenUsesEarliestInstant(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stamps []string
+		want   string
+	}{
+		{"whole second", []string{"2026-10-11T12:00:00.1Z", "2026-10-11T12:00:00Z"}, "2026-10-11T12:00:00Z"},
+		{"fraction widths", []string{"2026-10-11T12:00:00.100000001Z", "2026-10-11T12:00:00.1Z"}, "2026-10-11T12:00:00.1Z"},
+		{"offsets", []string{"2026-10-11T08:00:00-04:00", "2026-10-11T13:00:00+02:00"}, "2026-10-11T11:00:00Z"},
+		{"equal instant", []string{"2026-10-11T08:00:00.123456789-04:00", "2026-10-11T12:00:00.123456789Z"}, "2026-10-11T12:00:00.123456789Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := labelStore(t)
+			for i, stamp := range tc.stamps {
+				at, err := time.Parse(time.RFC3339Nano, stamp)
+				if err != nil {
+					t.Fatal(err)
+				}
+				label := fmt.Sprintf("row-%d", i)
+				if _, err := s.PutEvent(event.Event{Kind: event.KindConnOpen, TS: at, RemoteHost: "api.example.com", Detail: label}); err != nil {
+					t.Fatal(err)
+				}
+				// Preserve historical representations instead of PutEvent's UTC format.
+				if _, err := s.db.Exec("UPDATE events SET ts=? WHERE detail=?", stamp, label); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := s.PutEvent(event.Event{Kind: event.KindConnOpen, TS: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), RemoteHost: "other.example.com"}); err != nil {
+				t.Fatal(err)
+			}
+			trend := s.TrendFor("", "api.example.com")
+			if !trend.HostKnown || trend.HostFirstSeen != tc.want {
+				t.Fatalf("host known=%v first_seen=%q, want %q", trend.HostKnown, trend.HostFirstSeen, tc.want)
+			}
+			if missing := s.TrendFor("", "missing.example.com"); missing.HostKnown || missing.HostFirstSeen != "" {
+				t.Fatalf("missing host=%+v", missing)
+			}
+		})
+	}
+}
+
 // The host filter returns the same rows, newest first, and the trend's first
 // sighting is the host's oldest event; events without a host never match.
 func TestHostLookupsReturnTheHostsEvents(t *testing.T) {
@@ -86,16 +127,16 @@ func TestHostLookupsReturnTheHostsEvents(t *testing.T) {
 	}
 
 	var pids []string
-	for _, e := range testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{RemoteHost: "a.example", Limit: 50})) {
+	for _, e := range testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{RemoteHost: "a.example", Limit: 50})) {
 		pids = append(pids, fmt.Sprint(e.PID))
 	}
 	if got := strings.Join(pids, ","); got != "6,4,1" {
 		t.Errorf("a.example events = %s, want 6,4,1", got)
 	}
-	if got := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{RemoteHost: "a.example", Since: base.Add(2 * time.Minute).Format(time.RFC3339), Limit: 50})); len(got) != 2 {
+	if got := testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{RemoteHost: "a.example", Since: base.Add(2 * time.Minute).Format(time.RFC3339), Limit: 50})); len(got) != 2 {
 		t.Errorf("a.example since +2m = %d events, want 2", len(got))
 	}
-	if got := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 50})); len(got) != len(hosts) {
+	if got := testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Limit: 50})); len(got) != len(hosts) {
 		t.Errorf("unfiltered = %d events, want %d", len(got), len(hosts))
 	}
 	if tc := s.TrendFor("", "b.example"); !tc.HostKnown || tc.HostFirstSeen != base.Add(2*time.Minute).Format(time.RFC3339Nano) {
@@ -153,7 +194,7 @@ func BenchmarkQueryEventsByHost(b *testing.B) {
 	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		testutil.Read[[]event.Event](b)(s.QueryEventsResult(EventFilter{RemoteHost: fmt.Sprintf("h%d.example", i%500), Since: since, Limit: 50}))
+		testutil.Read[[]event.Event](b)(s.QueryEvents(EventFilter{RemoteHost: fmt.Sprintf("h%d.example", i%500), Since: since, Limit: 50}))
 	}
 }
 
@@ -162,7 +203,7 @@ func BenchmarkQueryEventsBusiestHost(b *testing.B) {
 	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		testutil.Read[[]event.Event](b)(s.QueryEventsResult(EventFilter{RemoteHost: "hot.example", Since: since, Limit: 50}))
+		testutil.Read[[]event.Event](b)(s.QueryEvents(EventFilter{RemoteHost: "hot.example", Since: since, Limit: 50}))
 	}
 }
 

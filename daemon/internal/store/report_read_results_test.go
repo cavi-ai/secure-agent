@@ -22,7 +22,7 @@ func TestSessionReportResultMarksUnavailableSourcesAndRecovers(t *testing.T) {
 			if _, err := s.db.Exec(tc.damage); err != nil {
 				t.Fatal(err)
 			}
-			rep, found, err := s.SessionReportResult("s1")
+			rep, found, err := s.SessionReport("s1")
 			if tc.name == "cost overflow" {
 				if err == nil || found || !reflect.DeepEqual(rep, SessionReport{}) {
 					t.Fatalf("nonfinite aggregate escaped: %+v, %v, %v", rep, found, err)
@@ -51,7 +51,7 @@ func TestSessionReportResultMarksUnavailableSourcesAndRecovers(t *testing.T) {
 			} else if _, err := s.db.Exec("UPDATE events SET ts=? WHERE tool='Bash'", now.Format(time.RFC3339Nano)); err != nil {
 				t.Fatal(err)
 			}
-			if rep, found, err := s.SessionReportResult("s1"); err != nil || !found || rep.Events != 15 {
+			if rep, found, err := s.SessionReport("s1"); err != nil || !found || rep.Events != 15 {
 				t.Fatalf("recovered report: %+v, %v, %v", rep, found, err)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != failures || len(h.ReadActive) != 0 {
@@ -68,7 +68,7 @@ func TestSessionReportResultPreservesOptionalAvailability(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rep, found, err := s.SessionReportResult("s1")
+	rep, found, err := s.SessionReport("s1")
 	if err != nil || !found || rep.Events != 15 || rep.IncidentsAvailable || rep.InterventionsAvailable {
 		t.Fatalf("optional availability: %+v, %v, %v", rep, found, err)
 	}
@@ -76,17 +76,17 @@ func TestSessionReportResultPreservesOptionalAvailability(t *testing.T) {
 
 func TestSessionReportResultMissingClosedAndNullableEvents(t *testing.T) {
 	s := seedReportStore(t, time.Now())
-	if rep, found, err := s.SessionReportResult("missing"); err != nil || found || !reflect.DeepEqual(rep, SessionReport{}) {
+	if rep, found, err := s.SessionReport("missing"); err != nil || found || !reflect.DeepEqual(rep, SessionReport{}) {
 		t.Fatalf("healthy missing: %+v, %v, %v", rep, found, err)
 	}
 	if _, err := s.db.Exec(`UPDATE events SET path=NULL, remote_host=NULL, detail=NULL, tool=NULL, tool_status=NULL, model=NULL, duration_ms=NULL, tokens_in=NULL, tokens_out=NULL, cost_usd=NULL`); err != nil {
 		t.Fatal(err)
 	}
-	if rep, found, err := s.SessionReportResult("s1"); err != nil || !found || rep.Events != 15 {
+	if rep, found, err := s.SessionReport("s1"); err != nil || !found || rep.Events != 15 {
 		t.Fatalf("nullable event fields: %+v, %v, %v", rep, found, err)
 	}
 	s.Close()
-	if rep, found, err := s.SessionReportResult("missing"); err == nil || found || !reflect.DeepEqual(rep, SessionReport{}) {
+	if rep, found, err := s.SessionReport("missing"); err == nil || found || !reflect.DeepEqual(rep, SessionReport{}) {
 		t.Fatalf("unavailable report: %+v, %v, %v", rep, found, err)
 	}
 	if h := s.WriteHealth(); !slices.Contains(h.ReadActive, "session reports") {
@@ -102,22 +102,22 @@ func TestCheckedSessionReadsRejectInvalidTimestamps(t *testing.T) {
 			if _, err := s.db.Exec("UPDATE sessions SET " + column + "='invalid' WHERE id='s1'"); err != nil {
 				t.Fatal(err)
 			}
-			if sess, found, err := s.GetSessionResult("s1"); err == nil || found || sess.ID != "" {
+			if sess, found, err := s.GetSession("s1"); err == nil || found || sess.ID != "" {
 				t.Fatalf("invalid session identity: %+v, %v, %v", sess, found, err)
 			}
-			if sessions, err := s.ListSessionsResult(SessionFilter{Limit: 100}); err == nil || sessions != nil {
+			if sessions, err := s.ListSessions(SessionFilter{Limit: 100}); err == nil || sessions != nil {
 				t.Fatalf("partial session list: %+v, %v", sessions, err)
 			}
-			if _, found, err := s.SessionReportResult("s1"); err == nil || found {
+			if _, found, err := s.SessionReport("s1"); err == nil || found {
 				t.Fatalf("invalid report identity: found=%v err=%v", found, err)
 			}
 			if _, err := s.db.Exec("UPDATE sessions SET "+column+"=? WHERE id='s1'", now.Format(time.RFC3339Nano)); err != nil {
 				t.Fatal(err)
 			}
-			if _, found, err := s.SessionReportResult("s1"); err != nil || !found {
+			if _, found, err := s.SessionReport("s1"); err != nil || !found {
 				t.Fatalf("recovered identity: found=%v err=%v", found, err)
 			}
-			if _, err := s.ListSessionsResult(SessionFilter{Limit: 100}); err != nil {
+			if _, err := s.ListSessions(SessionFilter{Limit: 100}); err != nil {
 				t.Fatal(err)
 			}
 			if h := s.WriteHealth(); len(h.ReadActive) != 0 {

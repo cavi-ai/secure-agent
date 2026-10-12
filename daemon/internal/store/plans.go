@@ -34,7 +34,7 @@ func (s *Store) PutAdvisorPlan(subject string, p model.AdvisorPlan) (writeErr er
 		return fmt.Errorf("advisor plan insert affected %d rows", inserted)
 	}
 	_, _ = s.db.Exec(`DELETE FROM advisor_plans WHERE subject_id NOT IN
-		(SELECT subject_id FROM advisor_plans ORDER BY created_at DESC LIMIT ?)`, maxAdvisorPlans)
+		(SELECT subject_id FROM advisor_plans ORDER BY `+timestampOrderExpr("created_at")+` DESC LIMIT ?)`, maxAdvisorPlans)
 	return nil
 }
 

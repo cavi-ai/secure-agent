@@ -59,21 +59,19 @@ func (s *Store) doctorCountByKey(q string, args ...any) map[string]int {
 	return out
 }
 
-func sinceArg(since time.Time) string { return since.UTC().Format(time.RFC3339Nano) }
-
 // SessionIdentityStats returns the all-time session count and how many carry
 // a harness name, plus, among named sessions started at or after since, how
 // many carry a workspace and how many of those also carry a repo.
 func (s *Store) SessionIdentityStats(since time.Time) (total, named, withWorkspace, withRepo int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	arg := sinceArg(since)
+	arg, started := instantArg(since), timestampOrderExpr("started_at")
 	err := s.db.QueryRow(`SELECT COUNT(*),
 		COALESCE(SUM(CASE WHEN COALESCE(harness,'') != '' THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN COALESCE(harness,'') != '' AND COALESCE(workspace,'') != ''
-			AND datetime(started_at) >= datetime(?) THEN 1 ELSE 0 END),0),
+			AND `+started+` >= ? THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN COALESCE(harness,'') != '' AND COALESCE(workspace,'') != '' AND COALESCE(repo,'') != ''
-			AND datetime(started_at) >= datetime(?) THEN 1 ELSE 0 END),0)
+			AND `+started+` >= ? THEN 1 ELSE 0 END),0)
 		FROM sessions`, arg, arg).Scan(&total, &named, &withWorkspace, &withRepo)
 	if err != nil {
 		log.Printf("store: session identity stats error: %v", err)
@@ -86,9 +84,10 @@ func (s *Store) SessionIdentityStats(since time.Time) (total, named, withWorkspa
 func (s *Store) DoctorWorkspaceRepos(since time.Time) ([][2]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	started := timestampOrderExpr("started_at")
 	rows, err := s.db.Query(`SELECT workspace, COALESCE(repo,'') FROM sessions
 		WHERE COALESCE(harness,'') != '' AND COALESCE(workspace,'') != ''
-		AND datetime(started_at) >= datetime(?) ORDER BY datetime(started_at), id`, sinceArg(since))
+		AND `+started+` >= ? ORDER BY `+started+`, id`, instantArg(since))
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +105,7 @@ func (s *Store) DoctorWorkspaceRepos(since time.Time) ([][2]string, error) {
 
 // SessionsCreatedSince counts sessions started at or after since.
 func (s *Store) SessionsCreatedSince(since time.Time) int {
-	return s.doctorCount(`SELECT COUNT(*) FROM sessions WHERE datetime(started_at) >= datetime(?)`, sinceArg(since))
+	return s.doctorCount(`SELECT COUNT(*) FROM sessions WHERE `+timestampOrderExpr("started_at")+` >= ?`, instantArg(since))
 }
 
 // ToolCallStats returns the all-time number of (session_id, call_id) pairs
@@ -117,8 +116,8 @@ func (s *Store) ToolCallStats(since time.Time) (dupePairs, idlessSince int) {
 		WHERE call_id IS NOT NULL AND call_id != ''
 		GROUP BY session_id, call_id HAVING COUNT(*) > 1)`)
 	idlessSince = s.doctorCount(`SELECT COUNT(*) FROM events
-		WHERE kind = ? AND datetime(ts) >= datetime(?) AND (call_id IS NULL OR call_id = '')`,
-		int(event.KindToolCall), sinceArg(since))
+		WHERE kind = ? AND `+instantSinceSQL("ts")+` AND (call_id IS NULL OR call_id = '')`,
+		append([]any{int(event.KindToolCall)}, instantBound(since)...)...)
 	return dupePairs, idlessSince
 }
 
@@ -143,20 +142,20 @@ func (s *Store) PricingStats() (claudePriced, claudeUnpriced, allUnpriced, allCa
 // HookEventsSince counts harness hook events (plugin actions) at or after
 // since.
 func (s *Store) HookEventsSince(since time.Time) int {
-	return s.doctorCount(`SELECT COUNT(*) FROM events WHERE kind = ? AND datetime(ts) >= datetime(?)`,
-		int(event.KindPluginAction), sinceArg(since))
+	return s.doctorCount(`SELECT COUNT(*) FROM events WHERE kind = ? AND `+instantSinceSQL("ts"),
+		append([]any{int(event.KindPluginAction)}, instantBound(since)...)...)
 }
 
 // HarnessActivity contains timestamps only. Attribution uses the persisted
 // session ID, never a guessed join by PID, workspace, or time.
 type HarnessActivity struct{ HookLastSeen, TraceLastSeen string }
 
-func (s *Store) HarnessActivitySinceResult(since time.Time) (out map[string]HarnessActivity, readErr error) {
+func (s *Store) HarnessActivitySince(since time.Time) (out map[string]HarnessActivity, readErr error) {
 	defer func() { s.noteRead("harness activity", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out = map[string]HarnessActivity{}
-	rows, err := s.db.Query(harnessActivitySQL, since.UTC().Format(activityTimeLayout))
+	rows, err := s.db.Query(harnessActivitySQL, instantArg(since))
 	if err != nil {
 		return nil, err
 	}
@@ -194,8 +193,8 @@ func (s *Store) TraceRowsWrittenByHarness() map[string]int {
 // harness.
 func (s *Store) SessionsByHarness(since time.Time) map[string]int {
 	return s.doctorCountByKey(`SELECT harness, COUNT(*) FROM sessions
-		WHERE COALESCE(harness,'') != '' AND datetime(started_at) >= datetime(?)
-		GROUP BY harness`, sinceArg(since))
+		WHERE COALESCE(harness,'') != '' AND `+timestampOrderExpr("started_at")+` >= ?
+		GROUP BY harness`, instantArg(since))
 }
 
 // RetentionReport lists every event kind present with its row and record
@@ -227,10 +226,11 @@ func (s *Store) RetentionReport() []KindRetention {
 	rows.Close()
 	// The same seeks the prune runs: the budget-th newest row is the oldest
 	// one the cap keeps.
+	at := timestampOrderExpr("ts")
 	for i := range out {
 		r := &out[i]
-		r.HorizonTS = s.nthNewestTSLocked(`SELECT datetime(ts) FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?`, r.Kind, r.Budget-1)
-		r.RecordHorizonTS = s.nthNewestTSLocked(`SELECT datetime(ts) FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?`, r.Kind, r.RecordBudget-1)
+		r.HorizonTS = s.nthNewestTSLocked(`SELECT `+at+` FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?`, r.Kind, r.Budget-1)
+		r.RecordHorizonTS = s.nthNewestTSLocked(`SELECT `+at+` FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?`, r.Kind, r.RecordBudget-1)
 	}
 	return out
 }
@@ -242,7 +242,7 @@ func (s *Store) nthNewestTSLocked(q string, kind, offset int) string {
 	if err := s.db.QueryRow(q, kind, offset).Scan(&ts); err != nil {
 		return ""
 	}
-	t, err := time.Parse(time.DateTime, ts)
+	t, err := time.Parse(activityTimeLayout, ts)
 	if err != nil {
 		return ""
 	}

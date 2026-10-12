@@ -59,6 +59,139 @@ function controller(persisted = '', manualOverview = false) {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+test('Jump to latest captures owned focus before scroll hides the control and announces the visible reading body once', () => {
+  const c = controller();
+  const calls = [], announcements = [];
+  const latest = {};
+  let hidden = false;
+  Object.defineProperty(latest, 'hidden', {get: () => hidden, set(value) {hidden = value; calls.push('hide');}});
+  c.context.document.activeElement = latest;
+  const body = {isConnected: true, scrollHeight: 900, getClientRects: () => [{}], focus(options) {
+    assert.equal(options.preventScroll, true); calls.push('focus'); c.context.document.activeElement = body;
+  }};
+  Object.defineProperty(body, 'scrollTop', {set(value) {
+    assert.equal(value, 900); calls.push('scroll'); latest.hidden = true;
+    c.context.document.activeElement = null;
+  }});
+  c.context.document.querySelector = selector => selector.includes('session-latest') ? latest : body;
+  c.context.window.saAnnounce = text => announcements.push(text);
+  c.workbench.jumpToLatest();
+  assert.deepEqual(calls, ['scroll', 'hide', 'focus', 'hide']);
+  assert.equal(c.context.document.activeElement, body); assert.equal(latest.hidden, true);
+  assert.deepEqual(announcements, ['Moved to latest session content.']);
+});
+
+test('Jump to latest preserves outside focus and safely skips absent, hidden, or disconnected reading bodies', () => {
+  const c = controller();
+  let focusCalls = 0, announced = 0;
+  c.context.window.saAnnounce = () => {announced++;};
+  for (const kind of ['outside', 'missing', 'hidden', 'disconnected']) {
+    const latest = {}, outside = {};
+    const body = kind === 'missing' ? null : {isConnected: kind !== 'disconnected', scrollHeight: 900,
+      getClientRects: () => kind === 'hidden' ? [] : [{}], focus: () => {focusCalls++;}};
+    const initial = kind === 'outside' ? outside : latest;
+    c.context.document.activeElement = initial;
+    c.context.document.querySelector = selector => selector.includes('session-latest') ? latest : body;
+    c.workbench.jumpToLatest();
+    assert.equal(c.context.document.activeElement, initial, kind);
+    assert.equal(latest.hidden, true, kind);
+    if (body) assert.equal(body.scrollTop, 900, kind);
+  }
+  assert.equal(focusCalls, 0); assert.equal(announced, 0);
+});
+
+test('Memory, Trace, and Results reading bodies are programmatically focusable without a Tab stop', () => {
+  const c = controller();
+  for (const sessionView of ['memory', 'trace', 'results']) {
+    const html = c.context.sessionDetailHTML({...session('a'), harness: 'codex'}, [], [], {sessionView});
+    assert.match(html, /class="session-detail-body" tabindex="-1"/);
+  }
+});
+
+test('empty detail adds one narrow Back while preserving an existing unavailable Back', () => {
+  const c = controller();
+  for (const empty of [c.context.sessionEmptyHTML([], {text: 'missing-project', harnesses: {}, liveOnly: true}), '<div class="empty">No sessions available.</div>']) {
+    const html = c.context.sessionEmptyDetailHTML(empty);
+    assert.equal([...html.matchAll(/data-action="session-list"/g)].length, 1);
+    assert.ok(html.startsWith('<button type="button" class="btn btn-sm btn-ghost sd-back"'));
+    assert.ok(html.endsWith(empty));
+  }
+  const unavailable = '<div class="empty">Session unavailable. <button type="button" class="link-btn" data-action="session-list">Back to sessions</button></div>';
+  assert.equal(c.context.sessionEmptyDetailHTML(unavailable), unavailable);
+  const selected = c.context.sessionDetailHTML({...session('a'), harness: 'codex'}, [], [], {});
+  assert.equal([...selected.matchAll(/data-action="session-list"/g)].length, 1, 'selected detail keeps its existing Back');
+});
+
+test('Back focuses selected visible card, otherwise search, without changing filters or reading selection', () => {
+  const c = controller('a');
+  c.state.reconcile(groups(session('a')));
+  let focused = '', cardVisible = true, searchVisible = true;
+  const card = {dataset: {id: 'a'}, getClientRects: () => cardVisible ? [{}] : [], focus: options => {assert.equal(options.preventScroll, true); focused = 'card';}};
+  const rail = {scrollTop: 33, querySelectorAll: () => [card], focus: () => {focused = 'rail';}};
+  const search = {value: 'missing-project', getClientRects: () => searchVisible ? [{}] : [], focus: options => {assert.equal(options.preventScroll, true); focused = 'search';}};
+  const detail = {};
+  c.context.document.getElementById = id => ({'session-board-panel': c.panel, 'session-rail': rail, 'session-cwd-filter': search, 'session-detail': detail})[id];
+  const filter = {text: 'missing-project', harnesses: {claude: false}, liveOnly: true};
+  c.context.window.SA.harnessFilter = filter;
+  c.context.sessionStorage.setItem('sa.harness-filter', JSON.stringify(filter));
+  c.actions.showSessionList(); assert.equal(focused, 'card');
+  cardVisible = false; c.actions.showSessionList(); assert.equal(focused, 'search');
+  searchVisible = false; c.actions.showSessionList(); assert.equal(focused, 'rail');
+  assert.equal(c.panel.dataset.pane, 'list'); assert.equal(rail.scrollTop, 33);
+  assert.equal(c.state.selected, 'a'); assert.equal(search.value, 'missing-project');
+  assert.equal(c.context.sessionStorage.getItem('sa.harness-filter'), JSON.stringify(filter));
+  assert.deepEqual(filter, {text: 'missing-project', harnesses: {claude: false}, liveOnly: true});
+});
+
+test('empty Sessions recovery names only ended matches hidden by identical Live only filters', () => {
+  const c = controller();
+  const family = (id, status, repo) => ({session: {...session(id, status), repo}, children: []});
+  const ended = family('ended', 'ended', 'web-app');
+  const live = family('live', 'active', 'api');
+  const retained = [{key: 'cursor', live: [], ended: [ended]}];
+  const filter = {text: 'web-app', harnesses: {claude: false}, liveOnly: true};
+  const render = (data, options = filter) => c.context.sessionEmptyHTML(data, options);
+  assert.match(render(retained), /No live sessions match these filters\./);
+  assert.match(render(retained), /Matching ended sessions are available/);
+  assert.match(render(retained), /data-action="show-ended-sessions"/);
+  assert.doesNotMatch(render(retained, {...filter, harnesses: {cursor: false}}), /show-ended-sessions/);
+  assert.doesNotMatch(render(retained, {...filter, text: 'missing'}), /show-ended-sessions/);
+  assert.doesNotMatch(render([]), /show-ended-sessions/);
+  assert.match(render([], {...filter, text: '', harnesses: {}}), /No live sessions\./);
+  assert.doesNotMatch(render(retained, {...filter, liveOnly: false}), /show-ended-sessions|No live sessions/);
+  assert.match(render([], {text: '', harnesses: {}, liveOnly: false}), /All quiet\. Nothing is running\./);
+  const withTail = [{key: 'cursor', live: [live], ended: [ended]}];
+  assert.doesNotMatch(render(withTail, {...filter, text: ''}), /show-ended-sessions/, 'ended tails in live groups are already included');
+  assert.deepEqual(filter, {text: 'web-app', harnesses: {claude: false}, liveOnly: true});
+});
+
+test('Show ended sessions preserves filters, persists Live only, and restores visible list focus', () => {
+  const app = readFileSync(path.join(web, 'app.js'), 'utf8');
+  const start = app.indexOf("  const HARNESS_FILTER_KEY = 'sa.harness-filter';");
+  const end = app.indexOf('\n  syncHarnessFilterControls();', start);
+  assert.ok(start >= 0 && end > start);
+  for (const fromDetail of [false, true]) {
+    const saved = {harnesses: {claude: false}, text: 'web-app', liveOnly: true};
+    const storage = new Map([['sa.harness-filter', JSON.stringify(saved)]]);
+    let listCalls = 0, changes = 0, focused = '';
+    const checkbox = {checked: true, getClientRects: () => [{}], focus: () => {focused = 'checkbox';}};
+    const input = {value: 'web-app'};
+    const selected = {dataset: {id: 'ended'}, getClientRects: () => [{}], focus: () => {focused = 'ended';}};
+    const context = {sessionStorage: {getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value)},
+      document: {getElementById: id => id === 'session-live-only' ? checkbox : input, querySelectorAll: () => [selected]},
+      sessionWorkbench: {selectedSessionId: 'ended', filterChanged: () => {changes++;}, render() {}, showList: () => {listCalls++;}}, renderAgents() {}};
+    vm.createContext(context);
+    vm.runInContext(app.slice(start, end), context);
+    context.showEndedSessions({closest: () => fromDetail ? {} : null});
+    assert.deepEqual(JSON.parse(storage.get('sa.harness-filter')), {...saved, liveOnly: false});
+    assert.equal(checkbox.checked, false); assert.equal(input.value, 'web-app'); assert.equal(changes, 1);
+    assert.equal(listCalls, fromDetail ? 1 : 0); assert.equal(focused, 'ended');
+    selected.getClientRects = () => [];
+    context.showEndedSessions({closest: () => null});
+    assert.equal(focused, 'checkbox', 'hidden card never receives recovery focus');
+  }
+});
+
 test('malformed current status retains prior facts and keeps access decisions unavailable until recovery', async () => {
   const c = controller('', true);
   const selected = c.actions.selectSession('a');
@@ -411,4 +544,63 @@ test('workbench instances do not share selection, view or retained reads', async
   assert.equal(b.state.mode, 'memory');
   assert.equal(b.state.memory.rows[0].id, 'b-row');
   assert.equal(b.state.trace.length, 0);
+});
+
+test('detail context is keyed in the scrolling body while navigation and status remain in chrome', () => {
+  const c = controller();
+  const selected = {id:'a', harness:'codex', repo:'complete<identity', branch:'main', workspace:'/workspace/exact&path', confidence:'hook'};
+  for (const mode of ['memory','results','trace']) {
+    const html = c.context.sessionDetailHTML(selected, [], [], {sessionView:mode, sessionOverview:null, sessionMemoryPage:{rows:[]}});
+    const [chrome,body] = html.split('<div class="session-detail-body" tabindex="-1">');
+    assert.ok(chrome.includes('data-action="copy-report" data-id="a"'));
+    assert.ok(chrome.includes('data-action="session-list"'));
+    assert.ok(chrome.includes('data-action="session-status"'));
+    assert.ok(chrome.includes('<h3 tabindex="-1">complete&lt;identity@main</h3>'));
+    assert.ok(!chrome.includes('session-metadata') && !chrome.includes('data-action="session-events"'));
+    assert.ok(body.includes('data-session-part="session-context"'));
+    assert.ok(body.includes('data-action="session-events" data-id="a"'));
+    assert.ok(body.includes('data-action="copy-path" data-path="/workspace/exact&amp;path"'));
+    if (mode !== 'results') assert.ok(body.indexOf('data-session-part="current-head"') < body.indexOf('data-session-part="session-context"'));
+  }
+});
+
+test('workbench sizing reserves measured reading lines and rebinds chrome without observing height-driven panes', () => {
+  const source = readFileSync(path.join(web, 'session-workbench.js'), 'utf8');
+  const frames = [], observed = new Set(), removed = [], writes = [];
+  const rect = height => ({getClientRects:() => [1],getBoundingClientRect:() => ({height})});
+  const text = {style:{lineHeight:'24px'}};
+  const body = {...rect(240),style:{paddingTop:'0px',paddingBottom:'10px'},scrollHeight:1000,clientHeight:240,scrollTop:100,
+    querySelector:() => text};
+  let chrome = rect(220);
+  const toolbar = rect(0), latest = {};
+  const values = new Map();
+  const panel = {getClientRects:() => [1],getBoundingClientRect:() => ({top:400}),
+    classList:{contains:() => true,toggle(_name,on){panel.short=on;}},
+    style:{getPropertyValue:name => values.get(name),setProperty(name,value){writes.push([name,value]);values.set(name,value);}},
+    querySelector:selector => ({'.session-detail-body':body,'.session-detail-chrome':chrome,'.session-toolbar':toolbar,'[data-action="session-latest"]':latest})[selector]};
+  const upstream = {};
+  const context = {window:{innerHeight:700,addEventListener(){}},
+    document:{body:{},getElementById:() => panel,querySelector:() => upstream,querySelectorAll:() => [upstream]},
+    getComputedStyle:node => node === panel ? {borderTopWidth:'1px',borderBottomWidth:'1px'} : node === upstream ? {paddingBottom:'16px'} : node.style || {},
+    requestAnimationFrame:callback => {frames.push(callback);return frames.length;},
+    ResizeObserver:class {constructor(callback){this.callback=callback;} observe(node){observed.add(node);} unobserve(node){observed.delete(node);removed.push(node);}},
+  };
+  vm.createContext(context);
+  const start = source.indexOf('  let sessionHeightFrame =');
+  vm.runInContext(source.slice(start,source.indexOf('  async function loadSessionMemory(',start)),context);
+  context.scheduleSessionWorkbenchHeight();context.scheduleSessionWorkbenchHeight();
+  assert.equal(frames.length,1,'measurements coalesce');frames.shift()();
+  assert.equal(values.get('--session-split-height'),'466px'); // 220 chrome + 8×24 +44 action +10 padding
+  assert.equal(values.get('--session-workbench-height'),'468px');
+  assert.equal(panel.short,true);
+  assert.equal(body.scrollTop,100,'history position is preserved while sizing');
+  assert.ok(observed.has(chrome) && observed.has(upstream));
+  assert.ok(!observed.has(body) && !observed.has(panel));
+  const count = writes.length;
+  context.scheduleSessionWorkbenchHeight();frames.shift()();assert.equal(writes.length,count,'unchanged dimensions do not write styles');
+  const previous = chrome;chrome=rect(180);context.window.innerHeight=1000;
+  context.scheduleSessionWorkbenchHeight();frames.shift()();
+  assert.ok(removed.includes(previous) && observed.has(chrome));
+  assert.equal(panel.short,false);
+  assert.equal(values.get('--session-workbench-height'),'584px');
 });

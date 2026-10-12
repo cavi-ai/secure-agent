@@ -151,7 +151,7 @@ func (s *Store) TouchSession(id string, ts time.Time) (writeErr error) {
 		status = CASE WHEN status = ? THEN ? ELSE status END
 		WHERE id = ? AND status != ? AND (`+timestampOrderExpr("last_seen_at")+` IS NULL OR `+timestampOrderExpr("last_seen_at")+` < ?)`,
 		ts.UTC().Format(time.RFC3339Nano),
-		model.SessionIdle, model.SessionActive, id, model.SessionEnded, ts.UTC().Format(activityTimeLayout))
+		model.SessionIdle, model.SessionActive, id, model.SessionEnded, instantArg(ts))
 	if err != nil {
 		return fmt.Errorf("touch session: %w", err)
 	}
@@ -186,7 +186,7 @@ func (s *Store) EndSession(id string, ts time.Time) (writeErr error) {
 	defer tx.Rollback()
 	t := ts.UTC().Format(time.RFC3339Nano)
 	sessionResult, err := tx.Exec(`UPDATE sessions SET status = ?, ended_at = ?, last_seen_at = CASE WHEN `+timestampOrderExpr("last_seen_at")+` IS NULL OR `+timestampOrderExpr("last_seen_at")+` < ? THEN ? ELSE last_seen_at END WHERE id = ? AND status != ?`,
-		model.SessionEnded, t, ts.UTC().Format(activityTimeLayout), t, id, model.SessionEnded)
+		model.SessionEnded, t, instantArg(ts), t, id, model.SessionEnded)
 	if err != nil {
 		return fmt.Errorf("end session: %w", err)
 	}
@@ -220,8 +220,8 @@ func (s *Store) SweepStaleRunningCalls(cutoff time.Time) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	res, err := s.db.Exec(`UPDATE events SET tool_status = 'error'
-		WHERE kind = ? AND tool_status = 'running' AND ts < ?`,
-		int(event.KindToolCall), cutoff.UTC().Format(time.RFC3339Nano))
+		WHERE kind = ? AND tool_status = 'running' AND `+instantBeforeSQL("ts"),
+		append([]any{int(event.KindToolCall)}, instantBound(cutoff)...)...)
 	if err != nil {
 		return 0
 	}
@@ -287,7 +287,7 @@ func (s *Store) MarkSessionsIdle(cutoff time.Time) (_ []string, writeErr error) 
 	}
 	defer tx.Rollback()
 
-	c := cutoff.UTC().Format(activityTimeLayout)
+	c := instantArg(cutoff)
 	rows, err := tx.Query(`SELECT id FROM sessions WHERE status = ? AND `+timestampOrderExpr("last_seen_at")+` < ?`, model.SessionActive, c)
 	if err != nil {
 		return nil, fmt.Errorf("select idle sessions: %w", err)
@@ -403,7 +403,7 @@ func (f SessionFilter) where() (string, []any) {
 		}
 	}
 	if !f.Since.IsZero() {
-		since := f.Since.UTC().Format(activityTimeLayout)
+		since := instantArg(f.Since)
 		clause.WriteString(" AND (" + timestampOrderExpr("started_at") + " >= ? OR " + timestampOrderExpr("last_seen_at") + " >= ?)")
 		args = append(args, since, since)
 	}
@@ -460,9 +460,9 @@ func scanSessions(rows *sql.Rows) []model.Session {
 	return out
 }
 
-// ListSessionsResult distinguishes an empty population from an unavailable
+// ListSessions distinguishes an empty population from an unavailable
 // query. HTTP consumers must not replace last-known data on a read failure.
-func (s *Store) ListSessionsResult(f SessionFilter) (out []model.Session, readErr error) {
+func (s *Store) ListSessions(f SessionFilter) (out []model.Session, readErr error) {
 	defer func() { s.noteRead("sessions", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -507,19 +507,24 @@ func (s *Store) ListSessionsResult(f SessionFilter) (out []model.Session, readEr
 	}
 }
 
-// sessionByID reads one session row directly, whatever its status or age.
-func (s *Store) sessionByID(id string) (model.Session, bool) {
+// GetSession reads one session row consistent with every committed collector
+// write. Missing is false, nil; a failed read is an error and a read-health fault.
+func (s *Store) GetSession(id string) (_ model.Session, _ bool, readErr error) {
+	defer func() { s.noteRead("session lookup", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(sessionSelect+` WHERE id = ?`, id)
 	if err != nil {
-		return model.Session{}, false
+		return model.Session{}, false, err
 	}
-	got := scanSessions(rows)
-	if len(got) == 0 {
-		return model.Session{}, false
+	sessions, err := scanSessionsResult(rows)
+	if err != nil {
+		return model.Session{}, false, err
 	}
-	return got[0], true
+	if len(sessions) == 0 {
+		return model.Session{}, false, nil
+	}
+	return sessions[0], true, nil
 }
 
 func min(a, b int) int {
@@ -529,9 +534,9 @@ func min(a, b int) int {
 	return b
 }
 
-// GetSessionResult distinguishes missing identity from failed evidence reads.
-// The bounded reader does not wait on the collector's write mutex.
-func (s *Store) GetSessionResult(id string) (_ model.Session, _ bool, readErr error) {
+// GetSessionBounded is the request-handler session read: bounded by a 100 ms
+// deadline, it never waits on the collector mutex.
+func (s *Store) GetSessionBounded(id string) (_ model.Session, _ bool, readErr error) {
 	defer func() { s.noteRead("session lookup", readErr) }()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -552,6 +557,6 @@ func (s *Store) GetSessionResult(id string) (_ model.Session, _ bool, readErr er
 // pruneSessionsLocked bounds the ended-session tail: ended rows older than
 // the event retention window are pure noise.
 func (s *Store) pruneSessionsLocked() {
-	cutoff := time.Now().Add(-30 * 24 * time.Hour).UTC().Format(activityTimeLayout)
+	cutoff := instantArg(time.Now().Add(-30 * 24 * time.Hour))
 	_, _ = s.db.Exec(`DELETE FROM sessions WHERE status = ? AND `+timestampOrderExpr("ended_at")+` < ?`, model.SessionEnded, cutoff)
 }

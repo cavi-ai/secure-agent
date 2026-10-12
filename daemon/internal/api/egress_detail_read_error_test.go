@@ -87,10 +87,10 @@ func TestEgressDetailReadFailurePreventsActionsAndRecovers(t *testing.T) {
 			if w := approve(); w.Code != http.StatusServiceUnavailable {
 				t.Errorf("failed approval evidence treated as absent: %d %s", w.Code, w.Body.String())
 			}
-			if queued != 0 || len(testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRulesResult())) != 0 || len(st.RecentAudit(10)) != 0 {
+			if queued != 0 || len(testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRules())) != 0 || len(st.RecentAudit(10)) != 0 {
 				t.Error("failed evidence queued advice or wrote rules/audit")
 			}
-			if episode, found, err := st.GetEgressEpisodeResult(baseline.ID); err == nil || found || !reflect.DeepEqual(episode, store.EgressEpisode{}) {
+			if episode, found, err := st.GetEgressEpisode(baseline.ID); err == nil || found || !reflect.DeepEqual(episode, store.EgressEpisode{}) {
 				t.Errorf("failed detail read returned partial evidence: episode=%+v found=%v err=%v", episode, found, err)
 			}
 			h := st.WriteHealth()
@@ -113,7 +113,7 @@ func TestEgressDetailReadFailurePreventsActionsAndRecovers(t *testing.T) {
 			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &rule) != nil || rule.Kind != "scope" || rule.Agent != scope.Agent || rule.ExePath != scope.ExePath || rule.Workspace != scope.Workspace || rule.Harness != scope.Harness {
 				t.Fatalf("approval did not recover from observed scope: %d %s", w.Code, w.Body.String())
 			}
-			if rules, audit := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRulesResult()), st.RecentAudit(10); len(rules) != 1 || len(audit) != 1 || audit[0].Action != "expected-egress-create" || audit[0].Rule != rule.ID {
+			if rules, audit := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRules()), st.RecentAudit(10); len(rules) != 1 || len(audit) != 1 || audit[0].Action != "expected-egress-create" || audit[0].Rule != rule.ID {
 				t.Fatalf("recovered approval missing rule or audit: rules=%+v audit=%+v", rules, audit)
 			}
 			if got := st.WriteHealth(); got.ReadFailures != h.ReadFailures || len(got.ReadActive) != 0 {

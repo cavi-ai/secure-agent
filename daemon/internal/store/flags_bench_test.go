@@ -99,7 +99,7 @@ func BenchmarkFindOpenIncidentAtCap(b *testing.B) {
 	s, _ := seedIncidentsAtCap(b)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		testutil.Lookup[string](b)(s.FindOpenIncidentResult("r", fmt.Sprintf("s%d", i%200), "subj"))
+		testutil.Lookup[string](b)(s.FindOpenIncident("r", fmt.Sprintf("s%d", i%200), "subj"))
 	}
 }
 
@@ -107,6 +107,6 @@ func BenchmarkQueryFlagsAtCap(b *testing.B) {
 	s, _ := seedFlagsAtCap(b)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		testutil.Read[[]model.Flag](b)(s.QueryFlagsResult(FlagFilter{Limit: 100}))
+		testutil.Read[[]model.Flag](b)(s.QueryFlags(FlagFilter{Limit: 100}))
 	}
 }

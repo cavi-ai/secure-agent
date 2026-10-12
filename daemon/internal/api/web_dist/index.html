@@ -559,7 +559,7 @@
             <div class="rc-tip" id="reclaim-tip" role="tooltip" hidden></div>
           </div>
           <div class="wt-disk" id="worktrees-disk"></div>
-          <div class="harness-filter">
+          <div class="harness-filter wt-filters">
             <div class="harness-pills" id="worktree-pills"></div>
             <input type="search" id="worktree-search" class="input harness-filter-text wt-search" placeholder="Filter by branch, folder or repo…" aria-label="Filter worktrees by branch, folder or repository" autocomplete="off" spellcheck="false">
             <form class="wt-add" id="worktree-add-form">
@@ -775,6 +775,18 @@
       </div>
     </main>
   </div>
+  <!-- Agent dock: the Agent tab's conversation beside the current page. -->
+  <aside id="agent-dock" class="agent-dock" aria-labelledby="agent-dock-title" hidden>
+    <header class="agent-dock-head">
+      <h3 id="agent-dock-title"><svg class="icon"><use href="#i-chat"/></svg><span>Secure Agent</span></h3>
+      <span class="agent-dock-state" id="agent-dock-state"></span>
+      <div class="agent-dock-actions">
+        <button type="button" class="btn btn-ghost btn-sm" data-action="agent-dock-expand">Open Agent tab</button>
+        <button type="button" class="btn btn-icon" data-action="agent-dock-close" aria-label="Close the agent panel"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>
+    </header>
+    <div class="agent-dock-body" id="agent-dock-body"></div>
+  </aside>
   <!-- Inspector docks when space permits; smaller viewports use a modal detail pane. -->
   <div id="drawer" class="drawer" hidden>
     <aside class="drawer-panel" role="complementary" aria-labelledby="drawer-title">
@@ -835,6 +847,8 @@
   <script src="agent-controller.js"></script>
   <script src="history-controller.js"></script>
   <script src="console-lifecycle.js"></script>
+  <script src="policy-controller.js"></script>
+  <script src="finding-actions.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

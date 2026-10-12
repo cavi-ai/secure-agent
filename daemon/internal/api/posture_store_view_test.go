@@ -29,7 +29,7 @@ type memoryPostureStore struct {
 	incidentHealth []string
 }
 
-func (s *memoryPostureStore) QueryFlagsResult(filter store.FlagFilter) ([]model.Flag, error) {
+func (s *memoryPostureStore) QueryFlags(filter store.FlagFilter) ([]model.Flag, error) {
 	s.filter = filter
 	s.health.ReadActive = s.flagHealth
 	return s.flags, s.flagErr

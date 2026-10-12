@@ -3,11 +3,15 @@ package collect
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 )
 
 const rolloutA = "/Users/u/.codex/sessions/2026/09/23/rollout-2026-09-23T04-01-20-0199aabb-ccdd-7eef-8011-223344556677.jsonl"
@@ -121,11 +125,27 @@ func TestRolloutJoinerSkipsProbeWithoutPIDs(t *testing.T) {
 // read, the file name's id before that.
 func TestScannerRolloutSession(t *testing.T) {
 	ts := NewTranscriptScanner(nil, nil)
-	if got := ts.RolloutSession(rolloutA); got != "0199aabb-ccdd-7eef-8011-223344556677" {
+	if got := ts.SessionForPath(rolloutA); got != "0199aabb-ccdd-7eef-8011-223344556677" {
 		t.Fatalf("before session_meta = %q, want the file name id", got)
 	}
-	ts.noteRolloutSession(rolloutA, "meta-id")
-	if got := ts.RolloutSession(rolloutA); got != "meta-id" {
+	ts.noteSession(rolloutA, "meta-id")
+	if got := ts.SessionForPath(rolloutA); got != "meta-id" {
 		t.Fatalf("after session_meta = %q, want meta-id", got)
+	}
+}
+
+// A sighted claude transcript is recorded by path like a codex rollout.
+func TestScannerSessionForPathRecordsEveryHarness(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".claude", "projects", "repo", "c.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New(16)
+	defer b.Close()
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, nil)
+	appendAndTail(t, ts, sub, map[string]int64{}, path, claudeAssistantLine)
+	if got := ts.SessionForPath(path); got != "sess-1" {
+		t.Fatalf("SessionForPath after claude line = %q, want sess-1", got)
 	}
 }

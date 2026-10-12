@@ -22,7 +22,7 @@ type memoryReportReader struct {
 	filter                         FlagFilter
 }
 
-func (r *memoryReportReader) GetSessionResult(id string) (model.Session, bool, error) {
+func (r *memoryReportReader) GetSessionBounded(id string) (model.Session, bool, error) {
 	r.reads = append(r.reads, "session:"+id)
 	return r.session, r.found, r.identityErr
 }
@@ -32,7 +32,7 @@ func (r *memoryReportReader) sessionEventsOldestFirst(id string) ([]event.Event,
 	return r.events, r.eventErr
 }
 
-func (r *memoryReportReader) QueryFlagsResult(filter FlagFilter) ([]model.Flag, error) {
+func (r *memoryReportReader) QueryFlags(filter FlagFilter) ([]model.Flag, error) {
 	r.reads = append(r.reads, "flags:"+filter.SessionID)
 	r.filter = filter
 	return r.flags, r.flagErr

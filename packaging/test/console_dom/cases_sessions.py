@@ -416,7 +416,52 @@ def run_session_workbench(page):
                 str(result),
             )
 
+def run_session_reading(page):
+    check = page.check
+    for label, size, query in [('long phone', (320, 800), '?readingdemo&readinglong'), ('short phone', (390, 800), '?readingdemo'), ('short viewport', (375, 480), '?readingdemo&readinglong')]:
+        reading_dom = page.dom(query, window_size=size, fixture=payload_cases.session_workbench(), served=True)
+        receipt = re.search(r'data-session-reading="([^"]+)"', reading_dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        check(f'session reading ({label}): receipt produced', bool(state), str(state))
+        for name in ('memoryBudget', 'contextInBody', 'latest', 'currentContext', 'detailsBudget', 'detailsDoNotGrowChrome', 'fullTitleRow', 'toolbar', 'actions', 'resultsBudget', 'traceBudget', 'fits'):
+            check(f'session reading ({label}): {name}', state.get(name) is True, str(state))
+
+def run_session_discovery(page):
+    for label, size in [('desktop', (1280, 800)), ('phone', (375, 800))]:
+        dom = page.dom('?sessiondiscovery', served=True, window_size=size)
+        receipt = re.search(r'data-session-discovery="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        page.check(f'session discovery ({label}): receipt produced', bool(state), str(state))
+        for name in ('copy', 'reachable', 'filters', 'list', 'focus', 'ended', 'bounds'):
+            page.check(f'session discovery ({label}): {name}', state.get(name) is True, str(state))
+
+
+def run_session_empty_navigation(page):
+    for width in (375, 900, 1280):
+        dom = page.dom('?sessionemptynav', served=True, window_size=(width, 800))
+        receipt = re.search(r'data-session-empty-navigation="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        page.check(f'session empty navigation ({width}): receipt produced', bool(state), str(state))
+        for name in ('missingBack', 'copy', 'searchFocus', 'preserved', 'unavailable', 'noData', 'noDataFocus', 'bounds'):
+            page.check(f'session empty navigation ({width}): {name}', state.get(name) is True, str(state))
+
+
+def run_session_latest_focus(page):
+    for width in (375, 1280):
+        dom = page.dom('?sessionlatestfocus', window_size=(width, 800), fixture=payload_cases.session_workbench(), served=True)
+        receipt = re.search(r'data-session-latest-focus="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        page.check(f'session latest focus ({width}): receipt produced', bool(state), str(state))
+        for mode in ('memory', 'trace', 'results'):
+            for assertion in ('Ready', 'Focus', 'Latest', 'Page', 'Announcement', 'Outside'):
+                name = mode + assertion
+                page.check(f'session latest focus ({width}): {name}', state.get(name) is True, str(state))
+
+
 CASES = (
+    Case('session_latest_focus', run_session_latest_focus),
+    Case('session_empty_navigation', run_session_empty_navigation),
+    Case('session_discovery', run_session_discovery),
     Case('session_rail_renders_durable_sessions', run_session_rail_renders_durable_sessions, ('dom',)),
     Case('rail_titles_are_repo_branch_not_harness_repo', run_rail_titles_are_repo_branch_not_harness_repo, ('dom',)),
     Case('ended_session_marked', run_ended_session_marked, ('dom',)),
@@ -448,4 +493,5 @@ CASES = (
     Case('context_handoff', run_context_handoff, ()),
     Case('session_results', run_session_results, ()),
     Case('session_workbench', run_session_workbench, ()),
+    Case('session_reading', run_session_reading, ()),
 )

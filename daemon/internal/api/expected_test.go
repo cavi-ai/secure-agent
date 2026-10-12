@@ -42,10 +42,10 @@ func TestExpectedLoadFailureHasNoMutationSideEffects(t *testing.T) {
 				if w.Code != 500 {
 					t.Fatalf("status = %d: %s", w.Code, w.Body)
 				}
-				if got, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult(f.ID)); got.Acknowledged {
+				if got, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlag(f.ID)); got.Acknowledged {
 					t.Fatal("failed edit acknowledged the flag")
 				}
-				if labels := testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabelsResult(readConnectRule, "claude", ghHosts, 5)); len(labels) != 0 {
+				if labels := testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabels(readConnectRule, "claude", ghHosts, 5)); len(labels) != 0 {
 					t.Fatalf("failed edit wrote labels: %+v", labels)
 				}
 				if audit := a.store.RecentAudit(10); len(audit) != 0 {
@@ -106,11 +106,11 @@ func TestExpectedFlow(t *testing.T) {
 		t.Fatalf("stored = %+v (%v)", p, err)
 	}
 	for id, acked := range map[string]bool{"same1": true, "same2": false, "other-dest": false} {
-		if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult(id)); f.Acknowledged != acked {
+		if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlag(id)); f.Acknowledged != acked {
 			t.Errorf("%s acknowledged = %v, want %v", id, f.Acknowledged, acked)
 		}
 	}
-	if labels := testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabelsResult(readConnectRule, "claude", ghHosts, 5)); len(labels) != 1 || labels[0].Label != "ok" || labels[0].Source != "expect" {
+	if labels := testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabels(readConnectRule, "claude", ghHosts, 5)); len(labels) != 1 || labels[0].Label != "ok" || labels[0].Source != "expect" {
 		t.Fatalf("labels = %+v, want one ok/expect", labels)
 	}
 	if audit := a.store.RecentAudit(10); len(audit) == 0 || audit[0].Action != "expect-add" {
@@ -122,6 +122,11 @@ func TestExpectedFlow(t *testing.T) {
 	}
 	if w := call(t, a, "DELETE", "/expected?key="+p.Key, ""); w.Code != 200 {
 		t.Fatalf("DELETE status %d", w.Code)
+	} else {
+		var receipt map[string]string
+		if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil || receipt["status"] != "ok" || receipt["key"] != p.Key {
+			t.Fatalf("DELETE receipt = %+v (%v)", receipt, err)
+		}
 	}
 	if w := call(t, a, "DELETE", "/expected?key="+p.Key, ""); w.Code != 404 {
 		t.Fatalf("second DELETE status %d, want 404", w.Code)
@@ -184,7 +189,7 @@ func TestExpectedEndpointScopeAndMixedEvidence(t *testing.T) {
 		t.Fatalf("POST: %d %s", w.Code, w.Body)
 	}
 	for id, want := range map[string]bool{"selected": true, "other-address": false, "mixed": false} {
-		f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult(id))
+		f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlag(id))
 		if f.Acknowledged != want {
 			t.Errorf("%s acknowledged=%v want %v", id, f.Acknowledged, want)
 		}
@@ -215,7 +220,7 @@ func TestNonSecretFileExceptionIsExactAndReversible(t *testing.T) {
 	if a.expected.Match([]string{"claude|node|/project/test/.env.local|other.example.com"}, now) {
 		t.Fatal("exception escaped exact file")
 	}
-	if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult("mixed-file")); f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlag("mixed-file")); f.Acknowledged {
 		t.Fatal("mixed sensitive file was hidden")
 	}
 	if w := call(t, a, "DELETE", "/expected?key="+entry.Key, ""); w.Code != 200 {
@@ -243,7 +248,7 @@ func TestMixedFindingOffersNextUncoveredPair(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body)
 	}
-	if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult(f.ID)); !f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlag(f.ID)); !f.Acknowledged {
 		t.Fatal("fully covered finding should be reviewed")
 	}
 	if w := call(t, a, "POST", "/expected", `{"flag_id":"mixed","path":"/arbitrary/.env","host":"two.example.com"}`); w.Code != 422 {

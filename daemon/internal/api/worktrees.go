@@ -8,12 +8,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agentask"
-	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
@@ -31,60 +29,10 @@ func (a *API) handleWorktrees(w http.ResponseWriter, r *http.Request) {
 	}
 	refresh := r.URL.Query().Get("refresh") == "1"
 	rep := a.worktrees.Report(r.Context(), refresh)
-	rep.Advice = a.worktreeNotes(rep)
-	rep.Asks = a.latestAsks()
-	rep.Askable = a.askableWorktrees(rep)
 	if a.store != nil {
-		t := a.store.CleanupTotals(time.Now())
-		rep.Reclaimed = &t
+		rep = enrichWorktreeReport(a.store, rep, a.asker != nil, time.Now())
 	}
 	writeJSON(w, rep)
-}
-
-func (a *API) askableWorktrees(rep worktreehunter.ScanReport) map[string]string {
-	if a.store == nil || a.asker == nil {
-		return nil
-	}
-	sessions, err := a.store.ListSessionsResult(store.SessionFilter{Status: model.SessionActive, Limit: 10000})
-	if err != nil {
-		return nil
-	}
-	out := map[string]string{}
-	for _, repo := range rep.Repos {
-		for _, wt := range repo.Worktrees {
-			if !wt.InUse || (wt.State != worktreehunter.StateKeep && wt.State != worktreehunter.StateReview) || wt.Orphan {
-				continue
-			}
-			for _, sess := range sessions {
-				if !agentask.EligibleSession(sess) {
-					continue
-				}
-				rel, err := filepath.Rel(wt.Path, sess.Workspace)
-				if err == nil && rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-					out[wt.Path] = sess.Harness
-					break
-				}
-			}
-		}
-	}
-	return out
-}
-
-// latestAsks maps each worktree path to its newest agent ask.
-func (a *API) latestAsks() map[string]model.AgentAsk {
-	if a.store == nil {
-		return nil
-	}
-	out := map[string]model.AgentAsk{}
-	for _, ask := range a.store.AgentAsks(500) {
-		if _, seen := out[ask.Path]; !seen {
-			out[ask.Path] = ask
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // handleWorktreeAsk resumes the conversation of the agent that worked in a
@@ -161,45 +109,8 @@ func (a *API) handleCleanupLedger(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "store not wired", http.StatusServiceUnavailable)
 		return
 	}
-	now := time.Now()
-	out := map[string]any{
-		"totals":  a.store.CleanupTotals(now),
-		"entries": a.store.CleanupLog(queryInt(r.URL.Query().Get("limit"), 100)),
-	}
-	if days := queryInt(r.URL.Query().Get("days"), 0); days > 0 {
-		out["daily"] = a.store.CleanupDaily(now, days)
-	}
-	writeJSON(w, out)
-}
-
-// worktreeNotes looks up the stored advisor note for each row at its current
-// HEAD. rep is the handler's copy: the map is new, the cached scan untouched.
-func (a *API) worktreeNotes(rep worktreehunter.ScanReport) map[string]model.AdvisorVerdict {
-	if a.store == nil {
-		return nil
-	}
-	var paths, subjectIDs []string
-	for _, repo := range rep.Repos {
-		for _, wt := range repo.Worktrees {
-			if wt.Head == "" || wt.State == worktreehunter.StateMain {
-				continue
-			}
-			paths = append(paths, wt.Path)
-			subjectIDs = append(subjectIDs, advisor.WorktreeSubjectID(wt.Path, wt.Head))
-		}
-	}
-	// Optional notes may be partial; retain read health for the whole batch.
-	verdicts, _ := a.store.AdvisorVerdictsFor(subjectIDs, "worktree")
-	notes := make(map[string]model.AdvisorVerdict, len(verdicts))
-	for i, subject := range subjectIDs {
-		if v, ok := verdicts[subject]; ok {
-			notes[paths[i]] = v
-		}
-	}
-	if len(notes) == 0 {
-		return nil
-	}
-	return notes
+	q := r.URL.Query()
+	writeJSON(w, readCleanupLedger(a.store, time.Now(), queryInt(q.Get("limit"), 100), queryInt(q.Get("days"), 0)))
 }
 
 // groupAdviseMaxRows bounds one group ask; the rest are skipped.
@@ -648,9 +559,12 @@ func (a *API) handleWorktreeTrash(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := a.worktrees.TrashOrphan(r.Context(), p)
+	var busy *worktreehunter.NotReviewableError
 	switch {
 	case errors.Is(err, worktreehunter.ErrNotOrphan):
 		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.As(err, &busy):
+		http.Error(w, err.Error(), http.StatusConflict)
 	case err != nil:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	default:

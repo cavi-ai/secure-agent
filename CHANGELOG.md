@@ -39,8 +39,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Status: `proxy_tunneled`, `proxy_decrypted`, `es_service.newest_event_at` and `lag_seconds`.
 - Status, posture and Doctor: dropped telemetry, failed evidence reads and writes, lost OTLP spans, egress summary loss and incomplete proxy inspection; spool loss and bus drops fail only while they grow.
 - Telemetry Doctor: recovery steps and **Open hook setup**.
-- Worktrees: **Discuss** asks the Agent tab about a worktree; **Ask advisor about all** and **Discuss all** cover a repository (`POST /agent/worktree`, `repo` on `POST /worktrees/advise`).
-- Worktrees: **Remove** for confirmed rows and amber **Remove…** to the Trash for keep and review rows, greyed while work would be lost or a rebase, merge or cherry-pick is in progress, with a legend.
+- Worktrees: **Discuss** asks the agent about a worktree in a panel docked beside the page; **Ask advisor about all** and **Discuss all** cover a repository (`POST /agent/worktree`, `repo` on `POST /worktrees/advise`).
+- Worktrees: **Remove** for confirmed rows and amber **Remove…** to the Trash for keep and review rows, greyed while work would be lost, a rebase, merge or cherry-pick is in progress, or an agent was seen there in the last 15 minutes (named on the row), with a legend.
 - Worktrees: merges are detected by content, also after a history rewrite.
 
 ### Changed

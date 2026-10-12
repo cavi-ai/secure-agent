@@ -14,8 +14,12 @@ def pre(dom_text, pid):
     node = dom_query(dom_text).find('pre', {'id': pid})
     return node.inner_html if node else ''
 
+def log_row_nodes(dom):
+    root = dom_query(dom) if isinstance(dom, str) else dom
+    return {node.attrs['data-row-key']: node for node in root.find_all('li', {'class': 'log-row', 'data-row-key': None})}
+
 def log_rows(dom_text):
-    return {node.attrs['data-row-key']: node.html for node in dom_query(dom_text).find_all('li', {'class': 'log-row', 'data-row-key': None})}
+    return {key: node.html for key, node in log_row_nodes(dom_text).items()}
 
 class PolicyRowCounter(HTMLParser):
 

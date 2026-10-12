@@ -17,13 +17,13 @@ import (
 
 type unavailableEvidenceStore struct{ Store }
 
-func (unavailableEvidenceStore) QueryFlagsResult(store.FlagFilter) ([]model.Flag, error) {
+func (unavailableEvidenceStore) QueryFlags(store.FlagFilter) ([]model.Flag, error) {
 	return nil, fmt.Errorf("private store failure")
 }
-func (unavailableEvidenceStore) GetFlagResult(string) (model.Flag, bool, error) {
+func (unavailableEvidenceStore) GetFlag(string) (model.Flag, bool, error) {
 	return model.Flag{}, false, fmt.Errorf("private store failure")
 }
-func (unavailableEvidenceStore) SessionReportResult(string) (store.SessionReport, bool, error) {
+func (unavailableEvidenceStore) SessionReport(string) (store.SessionReport, bool, error) {
 	return store.SessionReport{}, false, fmt.Errorf("private store failure")
 }
 

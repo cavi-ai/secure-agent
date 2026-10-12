@@ -27,9 +27,11 @@ function fixture(fetch) {
     sessionEnded: false, SS_TOKEN_KEY: 'fixture', consoleToken: 'fixture', lastSnapshotAt: 0, cancelDialog: null,
     telemetryFetchGen: 0, telemetrySlowGen: 0, expectedEgressReadGen: 0,
     protectionContext: null, protectionContextGeneration: 0,
+    resetPolicyState() { ctx.policyReset = true; },
     pendingConsoleContext: null, handoffGeneration: 0, openConsoleContext: async () => {},
     sessionWorkbench: { invalidate() { ctx.workbenchInvalidated = true; } },
     reviewResult: null, reviewResultSeq: 0, drawerReviewResult: null, drawerMode: null, closeDrawer() {},
+    resetPolicyState() { ctx.policyReset = true; },
     historyScopes: { flags: null, events: null }, timelineSession: null,
     reviewCursor: '', sinceParam: () => '',
     filters: { flags: { agent: 'all', rule: 'all', minsev: 'all', since: 'all' }, events: { kind: 'all', since: 'all' } },
@@ -84,6 +86,7 @@ test('session expiry clears review feedback and closes its evidence or permissio
     assert.equal(f.ctx.reviewResultSeq, 1);
     assert.equal(closed, 1);
     assert.equal(f.ctx.sessionEnded, true);
+    assert.equal(f.ctx.policyReset, true);
   }
 });
 

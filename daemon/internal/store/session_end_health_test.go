@@ -27,10 +27,10 @@ func TestEndSessionFailureIsAtomicAndRecovers(t *testing.T) {
 	if err := s.EndSession("session", now.Add(time.Minute)); err == nil {
 		t.Fatal("failed session ending reported success")
 	}
-	if saved, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("session")); !ok || saved.Status != model.SessionActive || saved.EndedAt != nil || !saved.LastSeenAt.Equal(now) {
+	if saved, ok := testutil.Lookup[model.Session](t)(s.GetSession("session")); !ok || saved.Status != model.SessionActive || saved.EndedAt != nil || !saved.LastSeenAt.Equal(now) {
 		t.Fatalf("failed ending partially changed the session: %+v, %v", saved, ok)
 	}
-	if calls := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Kind: &kind})); len(calls) != 1 || calls[0].ToolStatus != "running" {
+	if calls := testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Kind: &kind})); len(calls) != 1 || calls[0].ToolStatus != "running" {
 		t.Fatalf("failed ending changed the running call: %+v", calls)
 	}
 	h := s.WriteHealth()
@@ -57,10 +57,10 @@ func TestEndSessionFailureIsAtomicAndRecovers(t *testing.T) {
 	if err := s.EndSession("session", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if saved, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("session")); !ok || saved.Status != model.SessionEnded || saved.EndedAt == nil || !saved.EndedAt.Equal(now.Add(time.Minute)) {
+	if saved, ok := testutil.Lookup[model.Session](t)(s.GetSession("session")); !ok || saved.Status != model.SessionEnded || saved.EndedAt == nil || !saved.EndedAt.Equal(now.Add(time.Minute)) {
 		t.Fatalf("ending did not recover: %+v, %v", saved, ok)
 	}
-	if calls := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Kind: &kind})); len(calls) != 1 || calls[0].ToolStatus != "error" {
+	if calls := testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Kind: &kind})); len(calls) != 1 || calls[0].ToolStatus != "error" {
 		t.Fatalf("recovered ending did not close the running call: %+v", calls)
 	}
 	h = s.WriteHealth()

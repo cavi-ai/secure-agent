@@ -2140,10 +2140,23 @@ function consoleBootState(hashToken, storedToken) {
 // policyListHTML: one read-only Policy list — guard decisions ('guard'),
 // file exceptions ('path'), muted flag classes ('mute'). st carries the
 // loading and error state; each empty list says what fills it.
+function validExpectedPatterns(records) {
+  return Array.isArray(records) && records.length <= 10000 && records.every(r => r &&
+    ['key', 'agent', 'reader', 'path', 'dest'].every(field => typeof r[field] === 'string' && r[field]) &&
+    (r.scope == null || r.scope === '' || r.scope === 'file')) &&
+    new Set(records.map(r => r.key)).size === records.length;
+}
+
 function policyListHTML(kind, rows, st) {
   const s = st || {};
+  const removal = kind === 'expected' && s.expectedRemoval;
+  const saved = removal ? `<p role="status">Exception removal saved for <code>${escapeHTML(removal.path)}</code> (${escapeHTML(removal.agent)}). Remaining exceptions and policies still apply; past activity is unchanged.</p>` : '';
+  const label = s.label || { guard: 'Guard decisions', path: 'File exceptions', mute: 'Muted flag classes', expected: 'Expected secret reads', scope: 'Scoped permissions' }[kind];
+  const refreshed = rows != null && Number.isFinite(s.lastSuccessAt) ? ' Last successful refresh: ' + new Date(s.lastSuccessAt).toLocaleString() + '.' : '';
+  const notice = saved + (s.error ? `<div class="policy-read-status" role="status"><p>${escapeHTML(label)}: ${rows != null ? 'Refresh failed. Showing last known records; current status is unavailable.' : 'Unavailable. No successful read yet.'}${escapeHTML(refreshed)} ${escapeHTML(s.error)}</p><button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh-report" data-kind="${escapeHTML(kind)}"${s.loading ? ' disabled' : ''}>${escapeHTML('Refresh ' + label.toLowerCase())}</button></div>`
+    : s.loading && rows != null ? `<p class="policy-read-status" role="status">${escapeHTML('Refreshing ' + label.toLowerCase() + '…')}</p>` : '');
   if (!rows) {
-    if (s.error) return `<div class="empty"><span>${escapeHTML(s.error)}</span></div>`;
+    if (s.error) return notice;
     return `<div class="loading">Loading…</div>`;
   }
   const EMPTY = {
@@ -2153,18 +2166,24 @@ function policyListHTML(kind, rows, st) {
     expected: 'No expected secret reads. Expected, on a read-then-connect finding, adds one here.',
     scope: 'No scoped permissions. Choose a session or timed permission on a recorded finding or guard prompt.',
   };
-  if (!rows.length) return `<div class="empty"><span>${EMPTY[kind]}</span></div>`;
+  if (!rows.length) return notice + (s.error ? '' : `<div class="empty"><span>${EMPTY[kind]}</span></div>`);
   const row = (main, sub, meta) => `<div class="policy-row"><div class="policy-row-main">${main}</div>`
     + `<div class="policy-row-sub">${sub}</div>${meta ? `<span class="policy-row-meta">${meta}</span>` : ''}</div>`;
   const when = r => r.created_at ? escapeHTML(String(r.created_at).slice(0, 10)) : '';
   const items = rows.map(r => {
     if (kind === 'scope') {
-      const revoked = !!r.revoked_at, expired = r.expires_at && Date.parse(r.expires_at) <= Date.now();
-      const lifetime = revoked ? 'Revoked' : expired ? 'Expired' : r.kind === 'session' ? `Until session ${r.session_id} ends` : `Expires ${r.expires_at}`;
+      const applicability = decisionScopeApplicability(r), mutation = s.scopeMutations?.get(r.id);
+      const saved = mutation?.status === 'saved', unconfirmed = mutation?.status === 'unconfirmed';
+      const pending = mutation?.status === 'confirming' || mutation?.status === 'saving';
+      const lifetime = saved ? 'Revoked' : applicability.label;
+      const duration = r.expires_at ? ` · Expires ${r.expires_at}` : r.kind === 'session' && r.session_id ? ` · Session ${r.session_id}` : '';
+      const feedback = saved ? '<p role="status">Revocation saved. Other permissions may still apply; past access is unchanged.</p>'
+        : unconfirmed ? '<p role="status">Revocation not confirmed. Refresh permissions before trying again.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh permissions</button>'
+        : mutation?.status === 'saving' ? '<p role="status">Saving revocation…</p>' : '';
       const recipient = r.destination ? ` → ${r.destination}` : '';
       return row(`<b>${escapeHTML(r.agent)}</b> · ${escapeHTML(r.operation)} <code>${escapeHTML(r.resource_path)}</code>${escapeHTML(recipient)}`,
-        `${escapeHTML(r.workspace)} · executable path ${escapeHTML(r.reader_exe)} (observed, not signature verified) · ${escapeHTML(lifetime)}`,
-        revoked || expired ? '' : `<button class="btn btn-ghost btn-sm" data-action="revoke-scope" data-id="${escapeHTML(r.id)}">Revoke</button>`);
+        `${escapeHTML(r.workspace)} · executable path ${escapeHTML(r.reader_exe)} (observed, not signature verified) · ${escapeHTML(lifetime + duration)}${feedback}`,
+        !applicability.revoke || saved || unconfirmed || s.error ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-action="revoke-scope" data-id="${escapeHTML(r.id)}"${s.loading || pending ? ' disabled' : ''}>Revoke</button>`);
     }
     if (kind === 'guard') {
       return row(`<span class="policy-decision ${r.decision === 'deny' ? 'deny' : 'allow'}">${escapeHTML(r.decision || '')}</span> `
@@ -2174,15 +2193,21 @@ function policyListHTML(kind, rows, st) {
       return row(`<code>${escapeHTML(r.path || '')}</code>`, `Legacy policy · includes descendants · no expiry · ${escapeHTML(r.rule_id || '')} for ${escapeHTML(r.agent || '')}`, when(r));
     }
     if (kind === 'expected') {
+      const mutation = s.expectedMutations?.get(r.key);
+      const unconfirmed = mutation?.status === 'unconfirmed';
+      const feedback = unconfirmed ? '<p role="status">Removal not confirmed. Refresh exceptions before trying again.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh exceptions</button>'
+        : mutation?.status === 'saving' ? '<p role="status">Saving exception removal…</p>' : '';
+      const remove = s.error || unconfirmed || !validExpectedPatterns([r]) ? ''
+        : `<button type="button" class="btn btn-ghost btn-sm" data-action="forget-expected" data-key="${escapeHTML(r.key)}" aria-label="${escapeHTML('Remove exception for ' + r.agent + ': ' + r.path)}"${s.loading || mutation ? ' disabled' : ''}>Remove exception</button>`;
       if (r.scope === 'file') return row(`<b>Non-secret file</b> <code>${escapeHTML(r.path || '')}</code>`,
-        `${escapeHTML(r.agent || '')} only · all readers and destinations · ${Number(r.hits) || 0} matches`,
-        `${when(r)} <button class="source-remove" title="Revoke this file exception" data-action="forget-expected" data-key="${escapeHTML(r.key || '')}"><svg class="icon"><use href="#i-close"/></svg></button>`);
+        `${escapeHTML(r.agent || '')} only · all readers and destinations · ${Number(r.hits) || 0} matches${feedback}`,
+        `${when(r)} ${remove}`);
       const legacy = r.dest && r.dest !== String(r.dest).toLowerCase();
       const reader = r.reader === 'tool'  ? 'an agent tool' : (r.reader || '');
       const hits = Number(r.hits) || 0;
       return row(`<b>${escapeHTML(reader)}</b> reads <code>${escapeHTML(r.path || '')}</code>, then reaches <b>${escapeHTML(r.dest || '')}</b>`,
-        `${escapeHTML(r.agent || '')} · legacy policy · no expiry · ${legacy ? 'Legacy provider exception is inactive; review an exact host' : hits + ' since the daemon started'}`,
-        `${when(r)} <button class="source-remove" title="Forget: flag this pattern again" data-action="forget-expected" data-key="${escapeHTML(r.key || '')}"><svg class="icon"><use href="#i-close"/></svg></button>`);
+        `${escapeHTML(r.agent || '')} · legacy policy · no expiry · ${legacy ? 'Legacy provider exception is inactive; review an exact host' : hits + ' since the daemon started'}${feedback}`,
+        `${when(r)} ${remove}`);
     }
     const scope = (r.host === '*' ? 'all hosts' : escapeHTML(r.host || '')) + ' · ' + (r.agent ? escapeHTML(r.agent) : 'all agents');
     return row(`<b>${escapeHTML(r.title || r.rule || '')}</b>`, scope, '');
@@ -2196,15 +2221,27 @@ function policyListHTML(kind, rows, st) {
   });
   const grouped = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([harness, entries]) =>
     `<section class="policy-harness-group"><div class="policy-harness-title">${harness === 'all' ? 'All harnesses' : harnessChipHTML(harness, { label: true })}</div>${entries.join('')}</section>`).join('');
-  return `<div class="policy-list" data-policy="${kind}">${grouped}</div>`;
+  return `${notice}<div class="policy-list" data-policy="${kind}">${grouped}</div>`;
 }
 // Durable review actions are revision-bound; none creates a permission.
 function permissionChoiceLabel(choice, prefix = 'Expected') {
   return `${prefix} ${choice.kind === 'once' ? 'once' : choice.kind === 'session' ? 'for this session' : choice.expiry === '7d' ? 'for 7 days' : 'for 24 hours'}`;
 }
+function validReviewRevision(revision) {
+  return Number.isSafeInteger(revision) && revision > 0;
+}
+function validReviewScope(scope) {
+  if (!scope) return false;
+  if (scope.kind === 'once' || scope.kind === 'session') return scope.expiry === undefined || scope.expiry === '';
+  return scope.kind === 'exact' && (scope.expiry === '24h' || scope.expiry === '7d');
+}
+function validReviewDecision(revision, action, scope) {
+  return validReviewRevision(revision) && (action === 'expect' ? validReviewScope(scope)
+    : (action === 'acknowledge' || action === 'close_reported') && scope == null);
+}
 function reviewPermissionItems(r) {
-  if (!r.evidence_available || r.review_state === 'closed_reported' || r.decision && r.decision.action === 'expect' && r.decision.revision === r.revision) return [];
-  return (r.available_scopes || [{kind:'once'}]).map(choice => ({label:permissionChoiceLabel(choice),
+  if (!validReviewRevision(r.revision) || !r.evidence_available || r.review_state === 'closed_reported' || r.decision && r.decision.action === 'expect' && r.decision.revision === r.revision) return [];
+  return (r.available_scopes || [{kind:'once'}]).filter(validReviewScope).map(choice => ({label:permissionChoiceLabel(choice),
     attrs:`data-action="review-decision" data-id="${escapeHTML(r.id)}" data-revision="${Number(r.revision)}" data-decision="expect" data-scope="${escapeHTML(choice.kind)}"${choice.expiry ? ` data-expiry="${escapeHTML(choice.expiry)}"` : ''}`}));
 }
 function validReviewReceipt(receipt, id, revision, action) {
@@ -2239,6 +2276,7 @@ function reviewResultHTML(result, details = false) {
       : '<p>The evidence shown before this decision is unavailable. The server receipt remains.</p>'}</div>`;
 }
 function reviewHTML(r, draft, actions = true) {
+  actions = actions && validReviewRevision(r.revision);
   const c = r.context || {}, a = r.assessment || {};
   const state = r.review_state || 'unreviewed';
   const action = decision => `data-action="review-decision" data-id="${escapeHTML(r.id)}" data-revision="${Number(r.revision)}" data-decision="${decision}"`;

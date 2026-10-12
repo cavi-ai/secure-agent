@@ -78,7 +78,7 @@ func createMemoryIndexes(db *sql.Tx) error {
 func memoryRows(tx *sql.Tx, table, atColumn, idColumn, extra, filter string, args []any, rank int, before *MemoryCursor, limit int) (*sql.Rows, error) {
 	atExpr := memoryTimestampExpr(atColumn)
 	idExpr := "CAST(" + idColumn + " AS TEXT)"
-	where := "(" + filter + ") AND strftime('%s'," + atColumn + ") IS NOT NULL"
+	where := "(" + filter + ") AND " + atExpr + " IS NOT NULL"
 	if before != nil {
 		boundary := before.At.UnixNano()
 		switch {
@@ -114,7 +114,7 @@ func (s *Store) QuerySessionMemory(sessionID string, before *MemoryCursor, limit
 	// Resolve old resource family identity before the read transaction. New
 	// source rows always use their persisted session_id.
 	legacyKey := "\x00"
-	sess, found, err := s.GetSessionResult(sessionID)
+	sess, found, err := s.GetSessionBounded(sessionID)
 	if err != nil {
 		return nil, false, err
 	}

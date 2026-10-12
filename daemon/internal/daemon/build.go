@@ -132,7 +132,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	advisorStk := &advisorStackHolder{}
 	c.advisor = advisorStk
 	allowlistStore, muteStore, expectStore := loadEgressOverrides(cfg)
-	openReadFlags, err := st.QueryFlagsResult(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: 1024})
+	openReadFlags, err := st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: 1024})
 	if err != nil {
 		log.Printf("daemon: retained read findings unavailable: %v", err)
 	}
@@ -142,7 +142,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		Expected:           expectStore.Match,
 		OnRepeat:           foldFlagRepeat(st, deltaHub),
 		OpenFlag: func(id string) bool {
-			f, ok, err := st.GetFlagResult(id)
+			f, ok, err := st.GetFlag(id)
 			return err == nil && ok && !f.Acknowledged
 		},
 		OpenReadFlags: openReadFlags,
@@ -671,7 +671,7 @@ func repairStoredRows(st *store.Store) {
 // classifier no longer counts as a secret read. Returns how many it
 // acknowledged.
 func reclassifyReadFlags(st *store.Store, cl sensitive.Classifier, owners []config.CredentialOwner) int {
-	open, err := st.QueryFlagsResult(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: math.MaxInt32})
+	open, err := st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: math.MaxInt32})
 	if err != nil {
 		return 0
 	}
@@ -753,7 +753,7 @@ func buildAdvisorHooks(st *store.Store, advisorStk *advisorStackHolder) (*api.Re
 	// Re-triage: look up the stored flag, enqueue through the CURRENT stack.
 	retriage := &api.RetriageFuncs{
 		LookupFlag: func(id string) (model.Flag, bool) {
-			f, ok, err := st.GetFlagResult(id)
+			f, ok, err := st.GetFlag(id)
 			return f, ok && err == nil
 		},
 		Enqueue: func(fl model.Flag) bool {
@@ -948,18 +948,13 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 				Repo: h.Repo, Branch: h.Branch, PID: h.PID, TS: hts,
 			})
 		}
-		ts.OnSessionSeen = resolver.NoteTranscriptSession
-		ts.OnCodexSessionSeen = func(id, workspace, origin string, at time.Time) {
-			resolver.NoteTranscriptSighting(session.TranscriptSighting{
-				ID: id, Harness: "codex", Workspace: workspace, Origin: origin, TS: at,
-			})
-		}
+		ts.OnSessionSeen = transcriptSighting(resolver)
 		// A codex process holds its rollout open: the open-file probe joins
 		// the rollout's session to that process's tree.
 		joiner := &collect.RolloutJoiner{
 			PIDs:       func() []int32 { return codexPIDs(tagger) },
 			Probe:      collect.OpenRolloutFiles,
-			SessionFor: ts.RolloutSession,
+			SessionFor: ts.SessionForPath,
 			Join:       resolver.JoinTranscriptPID,
 		}
 		go func() { _ = joiner.Run(c) }()
@@ -1028,6 +1023,16 @@ func newHermesCollector(cfg config.Config, b *bus.Bus, supReg *supervise.Registr
 	}
 	h.OnSessionEnded = resolver.EndTranscriptSession
 	return h
+}
+
+// transcriptSighting hands each transcript sighting, with its harness and
+// origin, to the session resolver.
+func transcriptSighting(resolver *session.Resolver) func(collect.TraceSession) {
+	return func(s collect.TraceSession) {
+		resolver.NoteTranscriptSighting(session.TranscriptSighting{
+			ID: s.ID, Harness: s.Harness, Workspace: s.Workspace, Origin: s.Origin, TS: s.At,
+		})
+	}
 }
 
 // codexPIDs lists the live pids the tagger names codex.

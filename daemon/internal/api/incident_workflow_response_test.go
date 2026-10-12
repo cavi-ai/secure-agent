@@ -82,7 +82,7 @@ func TestIncidentStatusFailureRollsBackAndRecovers(t *testing.T) {
 			if response.Status != "ok" || response.Workflow.Status != "resolved" || response.Workflow.ResolvedAt == "" || response.Workflow.ResolutionNote != "reviewed" {
 				t.Fatalf("recovery response: %+v", response)
 			}
-			persisted, found, err := st.IncidentStatusResult("incident")
+			persisted, found, err := st.IncidentStatus("incident")
 			if err != nil || !found || persisted != response.Workflow {
 				t.Errorf("response differs from committed workflow: %+v %v %v", persisted, found, err)
 			}

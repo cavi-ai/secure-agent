@@ -2,6 +2,30 @@
 import payload_cases
 from case_types import Fixture
 
+def scenario_payload(scenarios, now_ms=None):
+    """Named legacy probes use the same payload constructors as catalog cases."""
+    names = set(scenarios)
+    builders = []
+    if names & {"attentionactionfocus", "attentionactionmanual"}:
+        builders.append(payload_cases.attention_focus)
+    if "attentionremodel" in names:
+        builders.append(lambda now: payload_cases.grouped_attention(now, final="attentionfinal" in names))
+    if "incidentremediation" in names:
+        builders.append(payload_cases.incident_remediation)
+    if "filteredscope" in names:
+        builders.append(payload_cases.filtered_history)
+    if "reviewresult" in names:
+        builders.append(payload_cases.review_result)
+    if "worktreehierarchy" in names:
+        builders.append(payload_cases.worktree_reading_hierarchy)
+    spec = {}
+    for builder in builders:
+        part = builder(spec.get("now", now_ms))
+        spec["now"] = part["now"]
+        spec.setdefault("patches", []).extend(part.get("patches", []))
+        spec.setdefault("payloads", {}).update(part.get("payloads", {}))
+    return spec
+
 FIXTURES = {
     'dom_csp': Fixture(
         query='?cspdemo&raildemo',
@@ -170,26 +194,31 @@ FIXTURES = {
     'dom_historyflags': Fixture(
         query='?filteredscope&historyflags',
         scenarios=('filteredscope', 'historyflags'),
+        payload=payload_cases.filtered_history,
         served=False,
     ),
     'dom_historyevents': Fixture(
         query='?filteredscope&historyevents',
         scenarios=('filteredscope', 'historyevents'),
+        payload=payload_cases.filtered_history,
         served=False,
     ),
     'dom_historyflagschanged': Fixture(
         query='?filteredscope&historyflags&changed',
         scenarios=('filteredscope', 'historyflags', 'changed'),
+        payload=payload_cases.filtered_history,
         served=False,
     ),
     'dom_historyeventschanged': Fixture(
         query='?filteredscope&historyevents&changed',
         scenarios=('filteredscope', 'historyevents', 'changed'),
+        payload=payload_cases.filtered_history,
         served=False,
     ),
     'dom_historyrecover': Fixture(
         query='?filteredscope&historyflags&recover',
         scenarios=('filteredscope', 'historyflags', 'recover'),
+        payload=payload_cases.filtered_history,
         served=False,
     ),
     'dom_malformed': Fixture(
@@ -420,6 +449,7 @@ FIXTURES = {
     'dom_attentionremodel': Fixture(
         query='?attentionremodel',
         scenarios=('attentionremodel',),
+        payload=payload_cases.grouped_attention,
         served=True,
     ),
     'dom_remodelusage': Fixture(
@@ -657,6 +687,12 @@ FIXTURES = {
     'dom_wtdiscuss': Fixture(
         query='?tab=worktrees&discussdemo',
         scenarios=('tab', 'tab=worktrees', 'discussdemo'),
+        served=False,
+    ),
+    'dom_wtdockcycle': Fixture(
+        query='?tab=worktrees&dockcycle',
+        scenarios=('tab', 'tab=worktrees', 'dockcycle'),
+        window_size=(1280, 900),
         served=False,
     ),
     'dom_wtdiscussoff': Fixture(

@@ -1,4 +1,4 @@
-.PHONY: all build test install uninstall clean daemon menubar cli collector smoke app dmg icon lint docs docs-reference docs-check docs-test docs-archive
+.PHONY: all build test test-menubar-rendering install uninstall clean daemon menubar cli collector smoke app dmg icon lint docs docs-reference docs-check docs-test docs-archive
 
 docs-reference:
 	python3 packaging/docs/build.py reference
@@ -70,16 +70,23 @@ menubar:
 	@echo "==> Building secure-agent-menubar..."
 	bash packaging/swift_macos.sh build --package-path menubar -c release
 
+# Interactive macOS check; requires Screen Recording and Full Disk Access.
+test-menubar-rendering:
+	python3 packaging/check_menu_bar.py
+	bash packaging/test/test_status_item_rendering.sh
+
 test:
 	@echo "==> Running Go unit tests..."
 	go test ./... -count=1
 	@echo "==> Running Swift package tests..."
 	bash packaging/swift_macos.sh test --package-path menubar
 	bash packaging/test/test_status_item_lifecycle.sh
+	python3 packaging/test/test_menu_bar_tracking.py
 	@echo "==> Running Python hook tests..."
 	python3 plugin/hooks/test_secret_guard.py
 	python3 plugin/hooks/test_injection_scan.py
 	python3 plugin/hooks/test_activity_log.py
+	python3 plugin/hooks/test_cursor_hooks.py
 	@echo "==> Checking console assets..."
 	./packaging/test/check_console_css.sh
 	@echo "==> Checking app bundle layout..."

@@ -47,7 +47,7 @@ func TestIncidentAggregationPreservesLatestEvidenceTime(t *testing.T) {
 		if err != nil || !at.Equal(tc.want) {
 			t.Fatalf("%s: saved timestamp=%s err=%v", tc.flagID, rawTime, err)
 		}
-		if id, ok := testutil.Lookup[string](t)(s.IncidentIDForFlagResult(tc.flagID)); !ok || id != "incident" {
+		if id, ok := testutil.Lookup[string](t)(s.IncidentIDForFlag(tc.flagID)); !ok || id != "incident" {
 			t.Fatalf("%s: evidence link missing", tc.flagID)
 		}
 	}

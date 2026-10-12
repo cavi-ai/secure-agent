@@ -29,6 +29,23 @@ class DOMQueryTests(unittest.TestCase):
         self.assertEqual(node.inner_html, '<p>First</p>')
         self.assertNotIn("Second", node.text)
 
+    def test_text_excludes_evidence_subtrees_without_hiding_sibling_text(self):
+        dom = '<li><p>PID 42 outside</p><details><summary>Evidence</summary><div>PID 99<details>nested evidence</details></div></details><p>A &amp; B</p><!-- hidden --><script>fake text</script><style>fake style</style></li>'
+        row = query(dom).find('li')
+        self.assertEqual(row.text_without('details'), 'PID 42 outsideA & B')
+        self.assertEqual(row.text, 'PID 42 outsideEvidencePID 99nested evidenceA & B')
+
+    def test_text_and_attributes_must_match_the_same_element(self):
+        dom = '<!-- <span id="count">3</span> --><span id="other">3</span><span id="count">2</span>'
+        self.assertFalse(query(dom).has('span', {'id': 'count'}, text='3'))
+        self.assertTrue(query(dom).has('span', {'id': 'count'}, text='2'))
+        self.assertFalse(query(dom).has('span', {'id': 'missing'}, text=''))
+
+    def test_text_matches_decoded_content_despite_markup_and_attribute_order(self):
+        dom = '<span title="total" class="extra count" id="count">A &amp; <strong>B</strong></span><span id="empty"></span>'
+        self.assertTrue(query(dom).has('span', {'id': 'count', 'class': 'count'}, text='A & B'))
+        self.assertTrue(query(dom).has('span', {'id': 'empty'}, text=''))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -235,8 +235,8 @@ func (s *Store) commitExpectedEgressAudit(tx *sql.Tx, a AuditEntry) (writeErr er
 	return tx.Commit()
 }
 
-// ListExpectedEgressRulesResult rejects incomplete rule lists.
-func (s *Store) ListExpectedEgressRulesResult() (out []ExpectedEgressRule, readErr error) {
+// ListExpectedEgressRules rejects incomplete rule lists.
+func (s *Store) ListExpectedEgressRules() (out []ExpectedEgressRule, readErr error) {
 	defer func() { s.noteRead("expected egress rules", readErr) }()
 	out = make([]ExpectedEgressRule, 0)
 	read := func(query string) error {
@@ -255,10 +255,11 @@ func (s *Store) ListExpectedEgressRulesResult() (out []ExpectedEgressRule, readE
 		return rows.Err()
 	}
 	columns := `SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at FROM expected_egress_rules`
-	if err := read(columns + ` WHERE revoked_at IS NULL ORDER BY created_at DESC,id DESC`); err != nil {
+	newest := ` ORDER BY ` + timestampOrderExpr("created_at") + ` DESC,id DESC`
+	if err := read(columns + ` WHERE revoked_at IS NULL` + newest); err != nil {
 		return nil, err
 	}
-	if err := read(columns + ` WHERE revoked_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 500`); err != nil {
+	if err := read(columns + ` WHERE revoked_at IS NOT NULL` + newest + ` LIMIT 500`); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -279,19 +280,19 @@ func (s *Store) ExpectedEgressMatchingRuleID(o EgressObservation) string {
 		return ""
 	}
 	o.Protocol = strings.ToLower(strings.TrimSpace(o.Protocol))
-	match, err := s.ExpectedEgressMatcherResult()
+	match, err := s.ExpectedEgressMatcher()
 	if err != nil {
 		return ""
 	}
 	return match(EgressEpisode{Scope: normalizeEgressScope(o.Scope), Host: o.Host, Protocol: o.Protocol, Port: o.Port})
 }
 
-// ExpectedEgressMatcherResult rejects failed reads before classifying episodes.
-func (s *Store) ExpectedEgressMatcherResult() (match func(EgressEpisode) string, readErr error) {
+// ExpectedEgressMatcher rejects failed reads before classifying episodes.
+func (s *Store) ExpectedEgressMatcher() (match func(EgressEpisode) string, readErr error) {
 	defer func() { s.noteRead("expected egress matcher", readErr) }()
 	var rules []ExpectedEgressRule
 	rows, err := s.db.Query(`SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace FROM expected_egress_rules
-	 WHERE revoked_at IS NULL ORDER BY CASE WHEN kind='destination' THEN 0 ELSE 1 END, created_at DESC, id DESC`)
+	 WHERE revoked_at IS NULL ORDER BY CASE WHEN kind='destination' THEN 0 ELSE 1 END, ` + timestampOrderExpr("created_at") + ` DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}

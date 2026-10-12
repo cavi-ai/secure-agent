@@ -3,6 +3,24 @@
 // the right. renderSessionBoard (app.js's panel registry) delegates here when
 // durable sessions exist; the legacy process-tree board remains the fallback.
 
+// Empty recovery considers ended sessions hidden only by Live only.
+function sessionEmptyHTML(groups, filter) {
+  const filtered = !!String(filter.text || '').trim() || Object.values(filter.harnesses || {}).some(value => value === false);
+  const visible = new Set(visibleSessionMembers(applySessionFilters(groups, filter)).map(session => session.id));
+  const hiddenEnded = filter.liveOnly && visibleSessionMembers(applySessionFilters(groups, {...filter, liveOnly: false}))
+    .some(session => session.status === 'ended' && !visible.has(session.id));
+  const message = filter.liveOnly ? (filtered ? 'No live sessions match these filters.' : 'No live sessions.')
+    : filtered ? 'No sessions match these filters.' : 'All quiet. Nothing is running.';
+  return `<div class="empty session-empty"><svg class="icon"><use href="#i-agent"/></svg><div><span>${message}</span>
+    ${hiddenEnded ? '<p>Matching ended sessions are available.</p><button type="button" class="btn btn-sm" data-action="show-ended-sessions">Show ended sessions</button>' : ''}
+    ${filtered ? '<button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button>' : ''}</div></div>`;
+}
+
+function sessionEmptyDetailHTML(emptyHTML) {
+  return emptyHTML.includes('data-action="session-list"') ? emptyHTML
+    : '<button type="button" class="btn btn-sm btn-ghost sd-back" data-action="session-list">Back to sessions</button>' + emptyHTML;
+}
+
 // liveTreeFor: the live process tree rooted at a session's root pid, if up.
 function liveTreeFor(s, trees) {
   if (!s.root_pid) return null;
@@ -237,12 +255,12 @@ function validSessionOverview(data, id) {
     && (r.control == null || (record(r.control) && text(r.control, ['state', 'last_error']))));
 }
 
-function sessionOverviewHTML(data, state) {
+function sessionOverviewHTML(data, state, contextHTML = '') {
   state = state || {};
   const retry = `<button type="button" class="link-btn" data-action="session-overview-retry"${state.loading ? ' disabled' : ''}>${state.loading ? 'Retrying current status…' : 'Retry current status'}</button>`;
   const status = !data ? state.loading && !state.error ? 'Loading current session status…' : `Current session status unavailable. ${retry}`
     : state.error ? `Last known session status. Refresh failed; requests and measurements may have changed. ${retry}` : '';
-  const head = `<div class="sd-current-head" data-session-part="current-head"><h4 tabindex="-1">Current session status</h4>${status ? `<p class="sd-current-status" role="status">${status}</p>` : ''}</div>`;
+  const head = `<div class="sd-current-head" data-session-part="current-head"><h4 tabindex="-1">Current session status</h4>${status ? `<p class="sd-current-status" role="status">${status}</p>` : ''}</div>` + contextHTML;
   if (!data) return head;
   const disabled = state.error ? ' disabled' : '';
   const requests = (data.requests || []).map(r => {
@@ -354,21 +372,7 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
     sess.started_at ? 'started ' + fmtAge(sess.started_at, Date.now()) + ' ago' : '',
     sess.ended_at ? 'ended ' + fmtAge(sess.ended_at, Date.now()) + ' ago' : '',
   ].filter(Boolean).map(escapeHTML).join(' · ');
-  return `<div class="session-detail-chrome">
-    <div class="session-detail-head">
-      <button type="button" class="btn btn-sm btn-ghost sd-back" data-action="session-list">Back to sessions</button>
-      ${harnessChipHTML(sess.harness)}
-      <h3 tabindex="-1">${escapeHTML(title)}</h3>
-      <button type="button" class="btn btn-sm btn-ghost sd-export" data-action="copy-report" data-id="${escapeHTML(sess.id)}" title="Copy this session's report as markdown"><svg class="icon"><use href="#i-copy"/></svg>Copy report</button>
-    </div>
-    <div class="sd-detail-controls">
-      <div class="sd-view-switch" role="group" aria-label="Session detail view">
-        <button type="button" class="sd-view${state.sessionView === 'memory' ? ' active' : ''}" data-action="session-view" data-view="memory" aria-pressed="${state.sessionView === 'memory'}">Memory</button>
-        <button type="button" class="sd-view${state.sessionView === 'results' ? ' active' : ''}" data-action="session-view" data-view="results" aria-pressed="${state.sessionView === 'results'}">Results</button>
-        <button type="button" class="sd-view${state.sessionView === 'trace' ? ' active' : ''}" data-action="session-view" data-view="trace" aria-pressed="${state.sessionView === 'trace'}">Trace</button>
-      </div>
-      <button type="button" class="btn btn-sm btn-ghost sd-latest" data-action="session-latest" hidden>Jump to latest</button>
-      <button type="button" class="btn btn-sm btn-ghost" data-action="session-status">Current status</button>
+  const contextHTML = `<section class="session-context" data-session-part="session-context" aria-label="Session context">
       <button type="button" class="btn btn-sm btn-ghost" data-action="session-events" data-id="${escapeHTML(sess.id)}" title="Inspect retained file, connection, and tool events attributed to this session">View session events</button>
       <details class="session-metadata" data-session-details>
         <summary>Details</summary>
@@ -379,9 +383,27 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
           ${meta ? `<span class="sd-meta">${meta}</span>` : ''}
         </div>
       </details>
+    </section>`;
+  return `<div class="session-detail-chrome">
+    <div class="session-detail-actions">
+      <button type="button" class="btn btn-sm btn-ghost sd-back" data-action="session-list">Back to sessions</button>
+      <button type="button" class="btn btn-sm btn-ghost sd-export" data-action="copy-report" data-id="${escapeHTML(sess.id)}" title="Copy this session's report as markdown"><svg class="icon"><use href="#i-copy"/></svg>Copy report</button>
+    </div>
+    <div class="session-detail-head">
+      ${harnessChipHTML(sess.harness)}
+      <h3 tabindex="-1">${escapeHTML(title)}</h3>
+    </div>
+    <div class="sd-detail-controls">
+      <div class="sd-view-switch" role="group" aria-label="Session detail view">
+        <button type="button" class="sd-view${state.sessionView === 'memory' ? ' active' : ''}" data-action="session-view" data-view="memory" aria-pressed="${state.sessionView === 'memory'}">Memory</button>
+        <button type="button" class="sd-view${state.sessionView === 'results' ? ' active' : ''}" data-action="session-view" data-view="results" aria-pressed="${state.sessionView === 'results'}">Results</button>
+        <button type="button" class="sd-view${state.sessionView === 'trace' ? ' active' : ''}" data-action="session-view" data-view="trace" aria-pressed="${state.sessionView === 'trace'}">Trace</button>
+      </div>
+      <button type="button" class="btn btn-sm btn-ghost sd-latest" data-action="session-latest" hidden>Jump to latest</button>
+      <button type="button" class="btn btn-sm btn-ghost" data-action="session-status">Current status</button>
     </div>
     </div>
-    <div class="session-detail-body">${state.sessionView === 'results' ? sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
+    <div class="session-detail-body" tabindex="-1">${state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
 }
 
 // One workbench owns selection, retained reads, rendering and reading position.
@@ -520,6 +542,8 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     renderNow(['sessions']);
   }
   let sessionHeightFrame = 0;
+  let sessionHeightChrome = null;
+  const sessionHeightObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(scheduleSessionWorkbenchHeight) : null;
   function scheduleSessionWorkbenchHeight() {
     if (sessionHeightFrame) return;
     sessionHeightFrame = requestAnimationFrame(() => {
@@ -528,12 +552,30 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       if (!panel || !panel.classList.contains('session-workbench') || !panel.getClientRects().length) return;
       const body = panel.querySelector('.session-detail-body');
       const followLatest = body && body.scrollHeight - body.clientHeight - body.scrollTop < 64;
+      const chrome = panel.querySelector('.session-detail-chrome');
+      if (sessionHeightObserver && chrome !== sessionHeightChrome) {
+        if (sessionHeightChrome) sessionHeightObserver.unobserve(sessionHeightChrome);
+        if (chrome) sessionHeightObserver.observe(chrome);
+        sessionHeightChrome = chrome;
+      }
+      const style = getComputedStyle(panel);
+      const bodyStyle = body && getComputedStyle(body);
+      const paragraph = body?.querySelector('.sm-content p, .sd-outcome p, .sm-state');
+      const lineHeight = paragraph ? parseFloat(getComputedStyle(paragraph).lineHeight) || 18 : 18;
+      const readingReserve = Math.ceil(8 * lineHeight + 44
+        + (parseFloat(bodyStyle?.paddingTop) || 0) + (parseFloat(bodyStyle?.paddingBottom) || 0));
+      const visibleHeight = el => el?.getClientRects().length ? el.getBoundingClientRect().height : 0;
+      const detailVisible = !!body?.getClientRects().length;
+      const splitMinimum = (detailVisible ? visibleHeight(chrome) : 0) + readingReserve;
+      const minimum = visibleHeight(panel.querySelector('.session-toolbar')) + splitMinimum
+        + (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0);
       const bottom = parseFloat(getComputedStyle(document.querySelector('.app') || document.body).paddingBottom) || 16;
       const height = Math.floor((window.visualViewport?.height || window.innerHeight) - panel.getBoundingClientRect().top - bottom);
-      // Very short windows use document scrolling so controls remain reachable.
-      panel.classList.toggle('session-workbench-short', height < 320);
-      const value = Math.max(320, height) + 'px';
-      if (panel.style.getPropertyValue('--session-workbench-height') !== value) panel.style.setProperty('--session-workbench-height', value);
+      // When chrome and a useful reading area cannot fit, the document scrolls.
+      panel.classList.toggle('session-workbench-short', height < minimum);
+      for (const [name, value] of [['--session-workbench-height', Math.max(minimum, height) + 'px'], ['--session-split-height', splitMinimum + 'px']]) {
+        if (panel.style.getPropertyValue(name) !== value) panel.style.setProperty(name, value);
+      }
       // Sizing changes the scroll range after the initial detail render.
       if (followLatest) body.scrollTop = body.scrollHeight;
       const latest = panel.querySelector('[data-action="session-latest"]');
@@ -542,9 +584,8 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
   }
   window.addEventListener('resize', scheduleSessionWorkbenchHeight);
   window.visualViewport?.addEventListener('resize', scheduleSessionWorkbenchHeight);
-  if (typeof ResizeObserver !== 'undefined') {
-    const observer = new ResizeObserver(scheduleSessionWorkbenchHeight);
-    for (const el of document.querySelectorAll('.masthead, .tab-nav, .subtabs, #session-board-panel .session-toolbar')) observer.observe(el);
+  if (sessionHeightObserver) {
+    for (const el of document.querySelectorAll('.masthead, #tabs-bar, .subtabs, #session-board-panel .session-toolbar')) sessionHeightObserver.observe(el);
   }
   async function loadSessionMemory(sessionID, before) {
     if (!sessionID || sessionID !== selectedSessionId) return;
@@ -642,14 +683,20 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     const rail = document.getElementById('session-rail');
     const scroll = rail?.scrollTop || 0;
     const selected = Array.from(rail?.querySelectorAll('[data-action="select-session"]') || []).find(el => el.dataset.id === selectedSessionId);
-    const target = selected?.getClientRects().length ? selected : rail;
+    const search = document.getElementById('session-cwd-filter');
+    const target = selected?.getClientRects().length ? selected : search?.getClientRects().length ? search : rail;
     target?.focus({ preventScroll: true });
     if (rail) rail.scrollTop = scroll;
   }
   function jumpToLatestSession() {
+    const latest = document.querySelector('#session-detail [data-action="session-latest"]');
+    const ownsFocus = !!latest && document.activeElement === latest;
     const body = document.querySelector('#session-detail .session-detail-body');
     if (body) body.scrollTop = body.scrollHeight;
-    const latest = document.querySelector('#session-detail [data-action="session-latest"]');
+    if (ownsFocus && body?.isConnected && body.getClientRects().length) {
+      body.focus({ preventScroll: true });
+      if (document.activeElement === body && typeof window.saAnnounce === 'function') window.saAnnounce('Moved to latest session content.');
+    }
     if (latest) latest.hidden = true;
   }
   function showCurrentSessionStatus() {
@@ -709,7 +756,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
         first: oldBody.querySelector('[data-row-id]')?.dataset.rowId,
         detailsOpen: !!detail.querySelector('details.session-metadata')?.open });
     }
-    const html = selected ? sessionDetailHTML(selected, sessionTimeline, trees, snapshot()) : emptyHTML;
+    const html = selected ? sessionDetailHTML(selected, sessionTimeline, trees, snapshot()) : sessionEmptyDetailHTML(emptyHTML);
     if (detail._sessionMarkup !== html) {
       const disclosures = new Map(Array.from(detail.querySelectorAll('[data-row-id]')).map(row =>
         [row.dataset.rowId, Array.from(row.querySelectorAll('details'), d => d.open)]));
@@ -793,6 +840,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
         applyInlineMetrics(pills);
       }
       const shown = applySessionFilters(groups, filter);
+      const emptyHTML = sessionEmptyHTML(groups, filter);
       reconcileSessionSelection(shown);
       const reveal = takeSessionReveal();
       const sessionGroups = stableSessionOrder(shown.filter(g => !g.infra), rail._sessionGroupOrder, g => g.key);
@@ -806,7 +854,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       // place (syncSessionGroupShell), never by rebuilding the group.
       const parts = sessionGroups.length
         ? sessionGroups.map(g => ({ key: 'group:' + g.key, group: g, shell: `group:${g.key}|${g.ended.length ? 'ended' : ''}`, html: sessionGroupHTML(g, visibleSessionMembers([g]).some(s => s.id === selectedSessionId), !!SA.endedSessionsOpen[g.key]) }))
-        : [{ key: filtered ? 'empty:nomatch' : 'empty:quiet', html: filtered ? noMatch : quiet }];
+        : [{ key: filtered ? 'empty:nomatch' : 'empty:quiet', html: emptyHTML }];
       if (infra) parts.push({ key: 'infra', html: sessionInfraGroupHTML(infra, false) });
       const railTop = rail.scrollTop;
       const railFocus = rail.contains(document.activeElement) ? document.activeElement : null;
@@ -850,7 +898,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       const selected = durable.find(s => s.id === selectedSessionId);
       const emptyDetail = selectedSessionId
         ? `<div class="empty"><span>Session unavailable. It is no longer listed. <button type="button" class="link-btn" data-action="session-list">Back to sessions</button></span></div>`
-        : filtered ? noMatch : `<div class="empty"><span>No sessions available. Start an agent session, then refresh.</span></div>`;
+        : filter.liveOnly || filtered ? emptyHTML : `<div class="empty"><span>No sessions available. Start an agent session, then refresh.</span></div>`;
       if (detail) renderSessionDetail(detail, selected, trees, emptyDetail);
       return;
     }

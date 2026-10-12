@@ -40,11 +40,11 @@ func TestDeferredRekeyFailurePreservesEvidenceAndIndices(t *testing.T) {
 	if !r.touch["old"].Equal(now) {
 		t.Fatal("failed promotion dropped activity throttle")
 	}
-	events := testutil.Read[[]event.Event](t)(st.QueryEventsResult(store.EventFilter{Limit: 10}))
+	events := testutil.Read[[]event.Event](t)(st.QueryEvents(store.EventFilter{Limit: 10}))
 	if len(events) != 1 || events[0].SessionID != "old" {
 		t.Fatalf("failed promotion rekeyed evidence: %+v", events)
 	}
-	if _, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("new")); ok {
+	if _, ok := testutil.Lookup[model.Session](t)(st.GetSession("new")); ok {
 		t.Fatal("failed promotion created canonical session")
 	}
 	if _, err := db.Exec(`DROP TRIGGER fail_promotion`); err != nil {
@@ -60,7 +60,7 @@ func TestDeferredRekeyFailurePreservesEvidenceAndIndices(t *testing.T) {
 	if _, ok := r.touch["old"]; ok {
 		t.Fatal("promotion retained retired identity's activity throttle")
 	}
-	if events := testutil.Read[[]event.Event](t)(st.QueryEventsResult(store.EventFilter{Limit: 10})); len(events) != 1 || events[0].SessionID != "new" {
+	if events := testutil.Read[[]event.Event](t)(st.QueryEvents(store.EventFilter{Limit: 10})); len(events) != 1 || events[0].SessionID != "new" {
 		t.Fatalf("promotion retry evidence: %+v", events)
 	}
 }

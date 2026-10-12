@@ -28,7 +28,7 @@ func TestSessionLifecycle(t *testing.T) {
 	// Upsert with weaker confidence and empty metadata must not downgrade or
 	// erase the hook-provided fields.
 	s.UpsertSession(model.Session{ID: "s1", Harness: "claude", LastSeenAt: now, Confidence: model.ConfProcessTree})
-	got := testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{}))
+	got := testutil.Read[[]model.Session](t)(s.ListSessions(SessionFilter{}))
 	if len(got) != 1 {
 		t.Fatalf("sessions = %d, want 1", len(got))
 	}
@@ -38,25 +38,25 @@ func TestSessionLifecycle(t *testing.T) {
 
 	// Touch reactivates an idle session but never reopens an ended one.
 	s.MarkSessionsIdle(now.Add(-time.Hour)) // cutoff in past: no-op for fresh
-	if n := len(testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{Status: model.SessionIdle}))); n != 0 {
+	if n := len(testutil.Read[[]model.Session](t)(s.ListSessions(SessionFilter{Status: model.SessionIdle}))); n != 0 {
 		t.Fatal("fresh session must not be idle")
 	}
 	s.MarkSessionsIdle(now.Add(time.Hour)) // everything older than cutoff+1h
-	if n := len(testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{Status: model.SessionIdle}))); n != 1 {
+	if n := len(testutil.Read[[]model.Session](t)(s.ListSessions(SessionFilter{Status: model.SessionIdle}))); n != 1 {
 		t.Fatalf("idle sessions = %d, want 1", n)
 	}
 	s.TouchSession("s1", now.Add(2*time.Hour))
-	if n := len(testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{Status: model.SessionActive}))); n != 1 {
+	if n := len(testutil.Read[[]model.Session](t)(s.ListSessions(SessionFilter{Status: model.SessionActive}))); n != 1 {
 		t.Fatalf("active sessions = %d, want 1 after touch", n)
 	}
 
 	s.EndSession("s1", now.Add(3*time.Hour))
-	ended := testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{Status: model.SessionEnded}))
+	ended := testutil.Read[[]model.Session](t)(s.ListSessions(SessionFilter{Status: model.SessionEnded}))
 	if len(ended) != 1 || ended[0].EndedAt == nil {
 		t.Fatalf("ended = %+v, want 1 with ended_at", ended)
 	}
 	s.TouchSession("s1", now.Add(4*time.Hour))
-	if n := len(testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{Status: model.SessionEnded}))); n != 1 {
+	if n := len(testutil.Read[[]model.Session](t)(s.ListSessions(SessionFilter{Status: model.SessionEnded}))); n != 1 {
 		t.Fatal("touch must not reopen an ended session")
 	}
 }
@@ -119,16 +119,16 @@ func TestRekeySessionRepointsEventsAndFlags(t *testing.T) {
 
 	s.RekeySession("proc-100-1", "hook-abc")
 
-	if n := len(testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{}))); n != 2 {
+	if n := len(testutil.Read[[]model.Session](t)(s.ListSessions(SessionFilter{}))); n != 2 {
 		t.Fatalf("sessions = %d, want 2 after rekey", n)
 	}
-	if _, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("proc-100-1")); ok {
+	if _, ok := testutil.Lookup[model.Session](t)(s.GetSession("proc-100-1")); ok {
 		t.Fatal("old id still present after rekey")
 	}
-	if got, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("hook-abc")); !ok || got.ParentID != "proc-50-1" {
+	if got, ok := testutil.Lookup[model.Session](t)(s.GetSession("hook-abc")); !ok || got.ParentID != "proc-50-1" {
 		t.Fatalf("rekeyed session = %+v, %v; want parent proc-50-1", got, ok)
 	}
-	if child, _ := testutil.Lookup[model.Session](t)(s.GetSessionResult("proc-200-1")); child.ParentID != "hook-abc" {
+	if child, _ := testutil.Lookup[model.Session](t)(s.GetSession("proc-200-1")); child.ParentID != "hook-abc" {
 		t.Fatalf("child parent = %q, want hook-abc", child.ParentID)
 	}
 
@@ -138,18 +138,18 @@ func TestRekeySessionRepointsEventsAndFlags(t *testing.T) {
 	s.UpsertSession(model.Session{ID: "tx-300", Harness: "codex",
 		StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfTranscript})
 	s.RekeySession("proc-300-1", "tx-300")
-	if got, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("tx-300")); !ok || got.ParentID != "hook-abc" {
+	if got, ok := testutil.Lookup[model.Session](t)(s.GetSession("tx-300")); !ok || got.ParentID != "hook-abc" {
 		t.Fatalf("merged session = %+v, %v; want parent hook-abc", got, ok)
 	}
-	if _, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("proc-300-1")); ok {
+	if _, ok := testutil.Lookup[model.Session](t)(s.GetSession("proc-300-1")); ok {
 		t.Fatal("old id still present after merge")
 	}
-	for _, e := range testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 10})) {
+	for _, e := range testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Limit: 10})) {
 		if e.SessionID != "hook-abc" {
 			t.Fatalf("event session_id = %q, want hook-abc", e.SessionID)
 		}
 	}
-	for _, f := range testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Limit: 10})) {
+	for _, f := range testutil.Read[[]model.Flag](t)(s.QueryFlags(FlagFilter{Limit: 10})) {
 		if f.SessionID != "hook-abc" {
 			t.Fatalf("flag session_id = %q, want hook-abc", f.SessionID)
 		}
@@ -193,22 +193,22 @@ func TestIncidentAggregation(t *testing.T) {
 		Risk: model.RiskHigh, Summary: "first",
 	})
 
-	id, ok := testutil.Lookup[string](t)(s.FindOpenIncidentResult("keychain-access", "sess-1", "login.keychain-db"))
+	id, ok := testutil.Lookup[string](t)(s.FindOpenIncident("keychain-access", "sess-1", "login.keychain-db"))
 	if !ok || id != "inc-1" {
 		t.Fatalf("FindOpenIncident = %q, %v", id, ok)
 	}
 	// Different subject or session must NOT match.
-	if _, ok := testutil.Lookup[string](t)(s.FindOpenIncidentResult("keychain-access", "sess-1", "other.plist")); ok {
+	if _, ok := testutil.Lookup[string](t)(s.FindOpenIncident("keychain-access", "sess-1", "other.plist")); ok {
 		t.Fatal("wrong subject matched")
 	}
-	if _, ok := testutil.Lookup[string](t)(s.FindOpenIncidentResult("keychain-access", "sess-2", "login.keychain-db")); ok {
+	if _, ok := testutil.Lookup[string](t)(s.FindOpenIncident("keychain-access", "sess-2", "login.keychain-db")); ok {
 		t.Fatal("wrong session matched")
 	}
 
 	s.AggregateIntoIncident("inc-1", "f2", now.Add(time.Hour))
 	s.AggregateIntoIncident("inc-1", "f3", now.Add(2*time.Hour))
 
-	got := testutil.Read[[]model.IncidentReport](t)(s.RecentIncidentsResult(5))
+	got := testutil.Read[[]model.IncidentReport](t)(s.RecentIncidents(5))
 	if len(got) != 1 {
 		t.Fatalf("incidents = %d, want 1 aggregated", len(got))
 	}
@@ -221,7 +221,7 @@ func TestIncidentAggregation(t *testing.T) {
 
 	// Resolved: no longer an aggregation target.
 	s.db.Exec(`UPDATE incidents SET status = 'resolved' WHERE id = 'inc-1'`)
-	if _, ok := testutil.Lookup[string](t)(s.FindOpenIncidentResult("keychain-access", "sess-1", "login.keychain-db")); ok {
+	if _, ok := testutil.Lookup[string](t)(s.FindOpenIncident("keychain-access", "sess-1", "login.keychain-db")); ok {
 		t.Fatal("resolved incident must not aggregate")
 	}
 }
@@ -242,7 +242,7 @@ func TestToolCallUpsertsOneRow(t *testing.T) {
 	s.PutEvent(start)
 	// Re-read of the same start must not create a second row.
 	s.PutEvent(start)
-	if n := len(testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 10}))); n != 1 {
+	if n := len(testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Limit: 10}))); n != 1 {
 		t.Fatalf("start re-read produced %d rows, want 1", n)
 	}
 
@@ -250,7 +250,7 @@ func TestToolCallUpsertsOneRow(t *testing.T) {
 	done := event.Event{Kind: event.KindToolCall, TS: now.Add(3 * time.Second), SessionID: "s1",
 		CallID: "toolu_1", ToolName: "Bash", ToolStatus: "ok", DurationMs: 3000}
 	s.PutEvent(done)
-	got := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 10}))
+	got := testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Limit: 10}))
 	if len(got) != 1 {
 		t.Fatalf("after completion rows = %d, want 1", len(got))
 	}
@@ -261,14 +261,14 @@ func TestToolCallUpsertsOneRow(t *testing.T) {
 	// A different call id is its own row.
 	s.PutEvent(event.Event{Kind: event.KindToolCall, TS: now, SessionID: "s1",
 		CallID: "toolu_2", ToolName: "Read", ToolStatus: "running"})
-	if n := len(testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 10}))); n != 2 {
+	if n := len(testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Limit: 10}))); n != 2 {
 		t.Fatalf("distinct call rows = %d, want 2", n)
 	}
 
 	// Non-tool events (no call id) still append freely.
 	s.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now, SessionID: "s1", Path: "/x"})
 	s.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now, SessionID: "s1", Path: "/x"})
-	if n := len(testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 10}))); n != 4 {
+	if n := len(testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Limit: 10}))); n != 4 {
 		t.Fatalf("non-tool rows = %d, want 4 (append, not upsert)", n)
 	}
 }
@@ -288,7 +288,7 @@ func TestUpsertSessionPreservesHarness(t *testing.T) {
 	st.UpsertSession(model.Session{ID: "s1",
 		StartedAt: time.Now(), LastSeenAt: time.Now(), Status: model.SessionActive})
 
-	got, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("s1"))
+	got, ok := testutil.Lookup[model.Session](t)(st.GetSession("s1"))
 	if !ok {
 		t.Fatal("session disappeared")
 	}
@@ -330,10 +330,10 @@ func TestOpenMigratesOldEventsTableForCallIndex(t *testing.T) {
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: time.Now(), SessionID: "s", CallID: "c1", ToolStatus: "running"})
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: time.Now(), SessionID: "s", CallID: "c1", ToolStatus: "ok"})
 	kind := int(event.KindToolCall)
-	if n := len(testutil.Read[[]event.Event](t)(st.QueryEventsResult(EventFilter{Kind: &kind}))); n != 1 {
+	if n := len(testutil.Read[[]event.Event](t)(st.QueryEvents(EventFilter{Kind: &kind}))); n != 1 {
 		t.Fatalf("events=%d want 1 after upsert on migrated table", n)
 	}
-	rows, err := st.QueryEventsResult(EventFilter{})
+	rows, err := st.QueryEvents(EventFilter{})
 	if err != nil || len(rows) != 2 || rows[1].Path != "/Users/x/.ssh/id_rsa" {
 		t.Fatalf("legacy nullable event lost: %+v, %v", rows, err)
 	}
@@ -363,7 +363,7 @@ func TestDefaultSessionViewLiveFirst(t *testing.T) {
 		})
 	}
 
-	got := testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{Limit: 20}))
+	got := testutil.Read[[]model.Session](t)(s.ListSessions(SessionFilter{Limit: 20}))
 	live := 0
 	ended := 0
 	for _, sess := range got {
@@ -381,7 +381,7 @@ func TestDefaultSessionViewLiveFirst(t *testing.T) {
 		t.Fatalf("first row status = %s, want active", got[0].Status)
 	}
 	// Explicit ended filter still reaches the whole population.
-	if n := len(testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{Status: model.SessionEnded, Limit: 100}))); n != 40 {
+	if n := len(testutil.Read[[]model.Session](t)(s.ListSessions(SessionFilter{Status: model.SessionEnded, Limit: 100}))); n != 40 {
 		t.Fatalf("ended filter = %d, want 40", n)
 	}
 }
@@ -401,7 +401,7 @@ func TestEndSessionClosesRunningToolCalls(t *testing.T) {
 
 	s.EndSession("sx", now.Add(time.Minute))
 	kind := int(event.KindToolCall)
-	calls := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Kind: &kind}))
+	calls := testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Kind: &kind}))
 	byID := map[string]string{}
 	for _, e := range calls {
 		byID[e.CallID] = e.ToolStatus
@@ -434,7 +434,7 @@ func TestSweepStaleRunningCalls(t *testing.T) {
 	}
 	kind := int(event.KindToolCall)
 	byID := map[string]string{}
-	for _, e := range testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Kind: &kind})) {
+	for _, e := range testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Kind: &kind})) {
 		byID[e.CallID] = e.ToolStatus
 	}
 	if byID["stale"] != "error" || byID["live"] != "running" || byID["done"] != "ok" {
@@ -466,15 +466,15 @@ func TestRepairSessionGitIdentity(t *testing.T) {
 	if n := s.RepairSessionGitIdentity(resolve); n != 3 {
 		t.Fatalf("repaired %d, want 3 (a basename repo is heuristic output on any confidence)", n)
 	}
-	sess, _ := testutil.Lookup[model.Session](t)(s.GetSessionResult("old-proc"))
+	sess, _ := testutil.Lookup[model.Session](t)(s.GetSession("old-proc"))
 	if sess.Repo != "proj" || sess.Branch != "main" {
 		t.Fatalf("old-proc = %q/%q, want proj/main", sess.Repo, sess.Branch)
 	}
-	sess, _ = testutil.Lookup[model.Session](t)(s.GetSessionResult("old-nonrepo"))
+	sess, _ = testutil.Lookup[model.Session](t)(s.GetSession("old-nonrepo"))
 	if sess.Repo != "" || sess.Branch != "" {
 		t.Fatalf("old-nonrepo = %q/%q, want empty (no enclosing repo)", sess.Repo, sess.Branch)
 	}
-	sess, _ = testutil.Lookup[model.Session](t)(s.GetSessionResult("hook-row"))
+	sess, _ = testutil.Lookup[model.Session](t)(s.GetSession("hook-row"))
 	if sess.Repo != "proj" || sess.Branch != "main" {
 		t.Fatalf("hook row = %q/%q, want proj/main (its stored value was the heuristic's)", sess.Repo, sess.Branch)
 	}
@@ -484,7 +484,7 @@ func TestRepairSessionGitIdentity(t *testing.T) {
 	if n := s.RepairSessionGitIdentity(resolve); n != 0 {
 		t.Fatalf("repaired %d, want 0 (nothing heuristic left)", n)
 	}
-	sess, _ = testutil.Lookup[model.Session](t)(s.GetSessionResult("real"))
+	sess, _ = testutil.Lookup[model.Session](t)(s.GetSession("real"))
 	if sess.Repo != "proj" || sess.Branch != "kept" {
 		t.Fatalf("real row = %q/%q, must be untouched", sess.Repo, sess.Branch)
 	}
@@ -502,15 +502,15 @@ func TestUpsertSessionKeepsParent(t *testing.T) {
 	now := time.Now()
 	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", StartedAt: now, LastSeenAt: now})
 	st.UpsertSession(model.Session{ID: "s1", ParentID: "orch", StartedAt: now, LastSeenAt: now})
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("s1")); got.ParentID != "orch" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("s1")); got.ParentID != "orch" {
 		t.Fatalf("parent = %q, want orch", got.ParentID)
 	}
 	st.UpsertSession(model.Session{ID: "s1", ParentID: "orch-2", StartedAt: now, LastSeenAt: now})
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("s1")); got.ParentID != "orch-2" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("s1")); got.ParentID != "orch-2" {
 		t.Fatalf("parent = %q, want orch-2", got.ParentID)
 	}
 	st.UpsertSession(model.Session{ID: "s1", StartedAt: now, LastSeenAt: now})
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("s1")); got.ParentID != "orch-2" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("s1")); got.ParentID != "orch-2" {
 		t.Fatalf("parent = %q after an empty upsert, want orch-2 kept", got.ParentID)
 	}
 }
@@ -526,17 +526,17 @@ func TestUpsertSessionKeepsOrigin(t *testing.T) {
 	now := time.Now()
 	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", RootPID: 42, Origin: "quill (openclaw)", StartedAt: now, LastSeenAt: now})
 	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", StartedAt: now, LastSeenAt: now})
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("s1")); got.Origin != "quill (openclaw)" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("s1")); got.Origin != "quill (openclaw)" {
 		t.Fatalf("origin = %q after an empty upsert, want quill (openclaw) kept", got.Origin)
 	}
-	if l := testutil.Read[[]model.Session](t)(st.ListSessionsResult(SessionFilter{})); len(l) != 1 || l[0].Origin != "quill (openclaw)" {
+	if l := testutil.Read[[]model.Session](t)(st.ListSessions(SessionFilter{})); len(l) != 1 || l[0].Origin != "quill (openclaw)" {
 		t.Fatalf("ListSessions origin: %+v", l)
 	}
 	if m := st.SessionsByRootPID(); m[42].Origin != "quill (openclaw)" {
 		t.Fatalf("SessionsByRootPID origin: %+v", m[42])
 	}
 	st.UpsertSession(model.Session{ID: "s2", Harness: "codex", StartedAt: now, LastSeenAt: now})
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("s2")); got.Origin != "" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("s2")); got.Origin != "" {
 		t.Fatalf("origin = %q for a session never given one", got.Origin)
 	}
 }
@@ -553,7 +553,7 @@ func TestRekeySessionKeepsOrigin(t *testing.T) {
 	st.UpsertSession(model.Session{ID: "old", Harness: "codex", Origin: "fennel (openclaw)", StartedAt: now, LastSeenAt: now})
 	st.UpsertSession(model.Session{ID: "new", Harness: "codex", StartedAt: now, LastSeenAt: now})
 	st.RekeySession("old", "new")
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("new")); got.Origin != "fennel (openclaw)" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("new")); got.Origin != "fennel (openclaw)" {
 		t.Fatalf("merged origin = %q, want fennel (openclaw)", got.Origin)
 	}
 }
@@ -581,11 +581,11 @@ func TestOpenMigratesSessionsOrigin(t *testing.T) {
 		t.Fatalf("Open on a pre-origin DB failed: %v", err)
 	}
 	defer st.Close()
-	if got, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("pre")); !ok || got.Origin != "" {
+	if got, ok := testutil.Lookup[model.Session](t)(st.GetSession("pre")); !ok || got.Origin != "" {
 		t.Fatalf("pre-origin row: ok=%v origin=%q", ok, got.Origin)
 	}
 	st.UpsertSession(model.Session{ID: "pre", Origin: "x (openclaw)", StartedAt: time.Now(), LastSeenAt: time.Now()})
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("pre")); got.Origin != "x (openclaw)" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("pre")); got.Origin != "x (openclaw)" {
 		t.Fatalf("origin after migration = %q", got.Origin)
 	}
 }
