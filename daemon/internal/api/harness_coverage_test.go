@@ -15,7 +15,7 @@ import (
 // storeActivity reads st's harness activity on every call, uncached.
 func storeActivity(st *store.Store) func() map[string]store.HarnessActivity {
 	return func() map[string]store.HarnessActivity {
-		activity, err := st.HarnessActivitySinceResult(time.Now().Add(-hookActivityWindow))
+		activity, err := st.HarnessActivitySince(time.Now().Add(-hookActivityWindow))
 		if err != nil {
 			return nil
 		}

@@ -38,7 +38,7 @@ func TestSessionReportIntegerOverflowRejectsPartialTotals(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			rep, found, err := s.SessionReportResult("s1")
+			rep, found, err := s.SessionReport("s1")
 			if err == nil || found || !reflect.DeepEqual(rep, SessionReport{}) {
 				t.Errorf("overflow report: %+v, %v, %v", rep, found, err)
 			}
@@ -48,7 +48,7 @@ func TestSessionReportIntegerOverflowRejectsPartialTotals(t *testing.T) {
 			if _, err := s.db.Exec(`UPDATE events SET tokens_in=1, tokens_out=1, duration_ms=1`); err != nil {
 				t.Fatal(err)
 			}
-			if rep, found, err := s.SessionReportResult("s1"); err != nil || !found || rep.Events != len(tc.events) {
+			if rep, found, err := s.SessionReport("s1"); err != nil || !found || rep.Events != len(tc.events) {
 				t.Fatalf("recovered report: %+v, %v, %v", rep, found, err)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 0 {

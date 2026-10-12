@@ -31,17 +31,17 @@ func TestLegacyIncidentWorkflowDefault(t *testing.T) {
 		if err := s.db.QueryRow(`SELECT status, resolution_note FROM incidents WHERE id='resolved'`).Scan(&status, &note); err != nil || status != "resolved" || note != "preserved" {
 			t.Fatalf("operator decision changed: %q %q %v", status, note, err)
 		}
-		if _, _, err := s.IncidentStatusResult("ambiguous"); err == nil {
+		if _, _, err := s.IncidentStatus("ambiguous"); err == nil {
 			t.Fatal("ambiguous workflow became readable")
 		}
-		if _, _, err := s.IncidentStatusResult("invalid"); err == nil {
+		if _, _, err := s.IncidentStatus("invalid"); err == nil {
 			t.Fatal("invalid workflow became readable")
 		}
 		id := fmt.Sprintf("new-%d", pass)
 		if err := s.PutIncident(model.IncidentReport{ID: id, FlagID: "new-flag", Timestamp: time.Now()}); err != nil {
 			t.Fatal(err)
 		}
-		wf, found, err := s.IncidentStatusResult(id)
+		wf, found, err := s.IncidentStatus(id)
 		if err != nil || !found || wf.Status != "open" {
 			t.Fatalf("new legacy-schema incident: %+v %v %v", wf, found, err)
 		}
@@ -64,7 +64,7 @@ func TestDefaultSchemaNullIncidentRemainsUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, _, err := s.IncidentStatusResult("corrupt"); err == nil {
+	if _, _, err := s.IncidentStatus("corrupt"); err == nil {
 		t.Fatal("corrupt current-schema workflow became readable")
 	}
 }
@@ -226,7 +226,7 @@ func TestSchemaBridgePreservesVersionThreeMetadata(t *testing.T) {
 		if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 3 {
 			t.Fatalf("bridge lowered version: %d, %v", version, err)
 		}
-		f, ok := testutil.Lookup[model.Flag](t)(s.GetFlagResult("f"))
+		f, ok := testutil.Lookup[model.Flag](t)(s.GetFlag("f"))
 		if !ok || f.Severity != 3 || !f.Acknowledged || len(f.Evidence) != 1 || f.Evidence[0].String() != "preserved evidence" {
 			t.Fatalf("old read model lost canonical evidence: %+v", f)
 		}

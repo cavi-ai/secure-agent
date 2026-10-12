@@ -81,7 +81,7 @@ func TestIncidentAdvisorEnrichmentRetainsReportsAndReadFailure(t *testing.T) {
 	if _, err := s.db.Exec("UPDATE advisor_verdicts SET created_at='invalid' WHERE subject_id='bad-incident-advisor'"); err != nil {
 		t.Fatal(err)
 	}
-	list, err := s.RecentIncidentsResult(10)
+	list, err := s.RecentIncidents(10)
 	if err != nil || len(list) != 2 {
 		t.Fatalf("advice failure erased reports: %+v %v", list, err)
 	}
@@ -97,7 +97,7 @@ func TestIncidentAdvisorEnrichmentRetainsReportsAndReadFailure(t *testing.T) {
 	if err := s.PutAdvisorVerdict("bad-incident-advisor", "incident", model.AdvisorVerdict{Rationale: "repaired", CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RecentIncidentsResult(10); err != nil {
+	if _, err := s.RecentIncidents(10); err != nil {
 		t.Fatal(err)
 	}
 	if h := s.WriteHealth(); h.ReadFailures != 2 || len(h.ReadActive) != 0 {
@@ -119,7 +119,7 @@ func TestAdvisorEnrichmentRetainsCoreFindingsAndBatchFailure(t *testing.T) {
 	if _, err := s.db.Exec("UPDATE advisor_verdicts SET created_at='invalid' WHERE subject_id='bad-advisor'"); err != nil {
 		t.Fatal(err)
 	}
-	flags, err := s.QueryFlagsResult(FlagFilter{})
+	flags, err := s.QueryFlags(FlagFilter{})
 	if err != nil || len(flags) != 2 {
 		t.Fatalf("optional enrichment erased core findings: %+v %v", flags, err)
 	}
@@ -135,7 +135,7 @@ func TestAdvisorEnrichmentRetainsCoreFindingsAndBatchFailure(t *testing.T) {
 	if err := s.PutAdvisorVerdict("bad-advisor", "flag", model.AdvisorVerdict{Rationale: "repaired", CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if flags, err := s.QueryFlagsResult(FlagFilter{}); err != nil || len(flags) != 2 || flags[0].Advisor == nil {
+	if flags, err := s.QueryFlags(FlagFilter{}); err != nil || len(flags) != 2 || flags[0].Advisor == nil {
 		t.Errorf("batch recovery: %+v %v", flags, err)
 	}
 	if h := s.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 0 {

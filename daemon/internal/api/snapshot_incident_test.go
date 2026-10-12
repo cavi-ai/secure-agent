@@ -93,12 +93,12 @@ func TestSnapshotIncidentWireShape(t *testing.T) {
 	if err := st.PutIncident(report); err != nil {
 		t.Fatal(err)
 	}
-	wf, updated, err := st.SetIncidentStatusResult(report.ID, "acknowledged", "")
+	wf, updated, err := st.SetIncidentStatus(report.ID, "acknowledged", "")
 	if err != nil || !updated {
 		t.Fatalf("acknowledge: updated=%v err=%v", updated, err)
 	}
 	// Report fields stay flattened; workflow stays a separate nested object.
-	stored, err := st.RecentIncidentsResult(10)
+	stored, err := st.RecentIncidents(10)
 	if err != nil || len(stored) != 1 {
 		t.Fatalf("stored reports: %+v err=%v", stored, err)
 	}

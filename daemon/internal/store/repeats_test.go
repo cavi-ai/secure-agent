@@ -15,7 +15,7 @@ func TestBumpFlagRepeat(t *testing.T) {
 	if s.BumpFlagRepeat("missing", base) {
 		t.Fatal("bump of an unknown flag reported success")
 	}
-	if f, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("f1")); f.Repeats != 0 || f.LastSeen != nil {
+	if f, _ := testutil.Lookup[model.Flag](t)(s.GetFlag("f1")); f.Repeats != 0 || f.LastSeen != nil {
 		t.Fatalf("fresh flag repeats/last_seen = %d/%v, want 0/nil", f.Repeats, f.LastSeen)
 	}
 	later := base.Add(5 * time.Minute)
@@ -24,11 +24,11 @@ func TestBumpFlagRepeat(t *testing.T) {
 			t.Fatal("bump failed")
 		}
 	}
-	f, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("f1"))
+	f, _ := testutil.Lookup[model.Flag](t)(s.GetFlag("f1"))
 	if f.Repeats != 2 || f.LastSeen == nil || !f.LastSeen.Equal(later) {
 		t.Fatalf("repeats/last_seen = %d/%v, want 2/%v (an older repeat never moves it back)", f.Repeats, f.LastSeen, later)
 	}
-	q := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Rule: "sensitive-read-then-connect"}))
+	q := testutil.Read[[]model.Flag](t)(s.QueryFlags(FlagFilter{Rule: "sensitive-read-then-connect"}))
 	if len(q) != 1 || q[0].Repeats != 2 || q[0].LastSeen == nil {
 		t.Fatalf("QueryFlags = %+v, want the repeats carried", q)
 	}
@@ -68,12 +68,12 @@ func TestBumpFlagRepeatPreservesNewestNanosecond(t *testing.T) {
 				if !s.BumpFlagRepeat("f", at) {
 					t.Fatal("repeat failed")
 				}
-				f, found, err := s.GetFlagResult("f")
+				f, found, err := s.GetFlag("f")
 				if err != nil || !found || f.Repeats != i+2 || f.LastSeen == nil || !f.LastSeen.Equal(newer) {
 					t.Fatalf("repeat %d: flag=%+v found=%v err=%v, want repeats=%d last_seen=%s", i, f, found, err, i+2, newer)
 				}
 			}
-			flags, err := s.QueryFlagsResult(FlagFilter{Rule: "sensitive-read-then-connect"})
+			flags, err := s.QueryFlags(FlagFilter{Rule: "sensitive-read-then-connect"})
 			if err != nil || len(flags) != 1 || flags[0].Repeats != 4 || flags[0].LastSeen == nil || !flags[0].LastSeen.Equal(newer) {
 				t.Fatalf("history: flags=%+v err=%v", flags, err)
 			}

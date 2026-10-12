@@ -19,7 +19,7 @@ func TestIncidentDetailsOwnWorkflowAndAliasIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := s.SetIncidentStatusResult("canonical", "acknowledged", "reviewed"); err != nil {
+	if _, _, err := s.SetIncidentStatus("canonical", "acknowledged", "reviewed"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.GetIncidentDetail("alias")

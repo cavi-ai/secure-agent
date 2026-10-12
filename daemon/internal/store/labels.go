@@ -8,9 +8,9 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
-// PutOperatorLabelResult commits one judgment and trims history atomically,
+// PutOperatorLabel commits one judgment and trims history atomically,
 // keeping the newest maxOperatorLabels. An error leaves history unchanged.
-func (s *Store) PutOperatorLabelResult(l model.OperatorLabel) (err error) {
+func (s *Store) PutOperatorLabel(l model.OperatorLabel) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer func() { s.noteWrite("operator labels", err) }()
@@ -37,9 +37,9 @@ func (s *Store) PutOperatorLabelResult(l model.OperatorLabel) (err error) {
 	return nil
 }
 
-// SimilarLabelsResult rejects incomplete history rather than returning the
+// SimilarLabels rejects incomplete history rather than returning the
 // rows preceding a query, scan, cursor or timestamp failure.
-func (s *Store) SimilarLabelsResult(rule, agent, pattern string, limit int) (out []model.OperatorLabel, err error) {
+func (s *Store) SimilarLabels(rule, agent, pattern string, limit int) (out []model.OperatorLabel, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer func() { s.noteRead("similar operator labels", err) }()
@@ -81,8 +81,8 @@ func (s *Store) SimilarLabelsResult(rule, agent, pattern string, limit int) (out
 	return out, nil
 }
 
-// LabelSummaryResult distinguishes an empty history from an unavailable read.
-func (s *Store) LabelSummaryResult(agent, pattern, rule string) (sum model.LabelSummary, err error) {
+// LabelSummary distinguishes an empty history from an unavailable read.
+func (s *Store) LabelSummary(agent, pattern, rule string) (sum model.LabelSummary, err error) {
 	if pattern == "" && rule == "" {
 		return sum, nil
 	}

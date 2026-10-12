@@ -52,7 +52,7 @@ func (a *API) recordLabel(l model.OperatorLabel) {
 	}
 	l.CreatedAt = time.Now()
 	// Best effort beside the action that triggered it; a failed write stays in write health.
-	_ = a.store.PutOperatorLabelResult(l)
+	_ = a.store.PutOperatorLabel(l)
 }
 
 // handleLabels serves POST /labels {subject, label, reason, source}: an
@@ -91,7 +91,7 @@ func (a *API) handleLabels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rule, agent, pattern := labelKeys(t)
-	if err := a.store.PutOperatorLabelResult(model.OperatorLabel{Kind: t.kind, Rule: rule, Agent: agent, Pattern: pattern,
+	if err := a.store.PutOperatorLabel(model.OperatorLabel{Kind: t.kind, Rule: rule, Agent: agent, Pattern: pattern,
 		Label: req.Label, Reason: req.Reason, Source: req.Source}); err != nil {
 		http.Error(w, "Operator judgment could not be saved; retry", http.StatusServiceUnavailable)
 		return
@@ -104,11 +104,11 @@ func (a *API) handleLabels(w http.ResponseWriter, r *http.Request) {
 // ok → the offered kill, and the playbook's guard rule.
 func (a *API) labelContext(t planTarget, offered []string) (*model.LabelContext, error) {
 	rule, agent, pattern := labelKeys(t)
-	summary, err := a.store.LabelSummaryResult(agent, pattern, rule)
+	summary, err := a.store.LabelSummary(agent, pattern, rule)
 	if err != nil {
 		return nil, err
 	}
-	similar, err := a.store.SimilarLabelsResult(rule, agent, pattern, labelSimilarLimit)
+	similar, err := a.store.SimilarLabels(rule, agent, pattern, labelSimilarLimit)
 	if err != nil {
 		return nil, err
 	}

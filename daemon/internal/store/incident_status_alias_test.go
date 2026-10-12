@@ -34,26 +34,26 @@ func TestIncidentStatusFollowsFlagListAliasAndExactID(t *testing.T) {
 		t.Fatalf("listed flag is not only in flag_ids: flag_id=%q flag_ids=%s", flagID, flagIDs)
 	}
 
-	wf, updated, err := s.SetIncidentStatusResult("listed", "acknowledged", "")
+	wf, updated, err := s.SetIncidentStatus("listed", "acknowledged", "")
 	if err != nil || !updated || wf.Status != "acknowledged" || wf.AcknowledgedAt == "" {
 		t.Fatalf("ack by flag_ids alias: %+v updated=%v err=%v", wf, updated, err)
 	}
 	if got, err := s.GetIncident("listed"); err != nil || got.ID != "canonical" {
 		t.Fatalf("alias lookup: %+v %v", got, err)
 	}
-	if id, found, err := s.IncidentIDForFlagResult("listed"); err != nil || !found || id != "canonical" {
+	if id, found, err := s.IncidentIDForFlag("listed"); err != nil || !found || id != "canonical" {
 		t.Fatalf("alias link: %q found=%v err=%v", id, found, err)
 	}
-	stored, found := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult("canonical"))
+	stored, found := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatus("canonical"))
 	if !found || stored.Status != "acknowledged" {
 		t.Fatalf("canonical after ack: %+v found=%v", stored, found)
 	}
 
-	wf, updated, err = s.SetIncidentStatusResult("listed", "resolved", "rotated")
+	wf, updated, err = s.SetIncidentStatus("listed", "resolved", "rotated")
 	if err != nil || !updated || wf.Status != "resolved" || wf.ResolutionNote != "rotated" {
 		t.Fatalf("resolve by flag_ids alias: %+v updated=%v err=%v", wf, updated, err)
 	}
-	stored, found = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult("canonical"))
+	stored, found = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatus("canonical"))
 	if !found || stored.Status != "resolved" || stored.ResolutionNote != "rotated" {
 		t.Fatalf("canonical after resolve: %+v found=%v", stored, found)
 	}
@@ -66,26 +66,26 @@ func TestIncidentStatusFollowsFlagListAliasAndExactID(t *testing.T) {
 	if got, err := s.GetIncident("listed"); err != nil || got.ID != "listed" {
 		t.Fatalf("exact id shadowed by alias: %+v %v", got, err)
 	}
-	if id, found, err := s.IncidentIDForFlagResult("listed"); err != nil || !found || id != "listed" {
+	if id, found, err := s.IncidentIDForFlag("listed"); err != nil || !found || id != "listed" {
 		t.Fatalf("exact id link: %q found=%v err=%v", id, found, err)
 	}
-	wf, updated, err = s.SetIncidentStatusResult("listed", "acknowledged", "")
+	wf, updated, err = s.SetIncidentStatus("listed", "acknowledged", "")
 	if err != nil || !updated || wf.Status != "acknowledged" {
 		t.Fatalf("exact id status: %+v updated=%v err=%v", wf, updated, err)
 	}
-	stored, found = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult("canonical"))
+	stored, found = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatus("canonical"))
 	if !found || stored.Status != "resolved" || stored.ResolutionNote != "rotated" {
 		t.Fatalf("exact id status wrote the alias incident: %+v found=%v", stored, found)
 	}
-	exact, found := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult("listed"))
+	exact, found := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatus("listed"))
 	if !found || exact.Status != "acknowledged" {
 		t.Fatalf("exact row status: %+v found=%v", exact, found)
 	}
 
-	if _, updated, err := s.SetIncidentStatusResult("absent", "acknowledged", ""); err != nil || updated {
+	if _, updated, err := s.SetIncidentStatus("absent", "acknowledged", ""); err != nil || updated {
 		t.Fatalf("missing status: updated=%v err=%v", updated, err)
 	}
-	if _, _, err := s.SetIncidentStatusResult("listed", "nope", ""); !errors.Is(err, ErrInvalidIncidentStatus) {
+	if _, _, err := s.SetIncidentStatus("listed", "nope", ""); !errors.Is(err, ErrInvalidIncidentStatus) {
 		t.Fatalf("invalid status: %v", err)
 	}
 }

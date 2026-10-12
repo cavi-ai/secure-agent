@@ -61,7 +61,7 @@ func TestExpectedEgressMatchingAndPersistence(t *testing.T) {
 	if s.ExpectedEgressMatch(obs) {
 		t.Fatal("revoked broad rule matched after reopen")
 	}
-	if len(testutil.Read[[]ExpectedEgressRule](t)(s.ListExpectedEgressRulesResult())) != 2 {
+	if len(testutil.Read[[]ExpectedEgressRule](t)(s.ListExpectedEgressRules())) != 2 {
 		t.Fatal("rules not persisted")
 	}
 }
@@ -105,7 +105,7 @@ func TestExpectedEgressActiveRuleSurvivesRevokedHistoryLimit(t *testing.T) {
 		}
 	}
 	found := false
-	for _, rule := range testutil.Read[[]ExpectedEgressRule](t)(s.ListExpectedEgressRulesResult()) {
+	for _, rule := range testutil.Read[[]ExpectedEgressRule](t)(s.ListExpectedEgressRules()) {
 		if rule.ID == active.ID {
 			found = true
 			break
@@ -135,7 +135,7 @@ func TestExpectedEgressMatcherReadsRulesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := testutil.Read[func(EgressEpisode) string](t)(s.ExpectedEgressMatcherResult())
+	before := testutil.Read[func(EgressEpisode) string](t)(s.ExpectedEgressMatcher())
 	exact, err := s.CreateExpectedEgressRule(ExpectedEgressRule{Agent: "claude", Kind: "destination", Host: "api.example.com", Protocol: "tcp", Port: 443})
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestExpectedEgressMatcherReadsRulesOnce(t *testing.T) {
 	if got := before(ep); got != broad.ID {
 		t.Fatalf("matcher read before the destination rule = %q, want the scope rule %q", got, broad.ID)
 	}
-	match := testutil.Read[func(EgressEpisode) string](t)(s.ExpectedEgressMatcherResult())
+	match := testutil.Read[func(EgressEpisode) string](t)(s.ExpectedEgressMatcher())
 	if got := match(ep); got != exact.ID {
 		t.Fatalf("matcher = %q, want the destination rule %q over the scope rule", got, exact.ID)
 	}

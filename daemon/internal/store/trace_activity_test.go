@@ -56,7 +56,7 @@ func TestHarnessActivitySince(t *testing.T) {
 		e.PID = int32(100 + i)
 		s.PutEvent(e)
 	}
-	got := testutil.Read[map[string]HarnessActivity](t)(s.HarnessActivitySinceResult(base))
+	got := testutil.Read[map[string]HarnessActivity](t)(s.HarnessActivitySince(base))
 	want := map[string]HarnessActivity{
 		"claude": {HookLastSeen: base.Add(10 * time.Minute).Format(time.RFC3339Nano), TraceLastSeen: base.Add(30 * time.Minute).Format(time.RFC3339Nano)},
 		"codex":  {TraceLastSeen: base.Add(5 * time.Minute).Format(time.RFC3339Nano)},
@@ -131,7 +131,7 @@ func BenchmarkHarnessActivitySince(b *testing.B) {
 	since := start.Add(9 * 24 * time.Hour)
 	b.Run("read", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			testutil.Read[map[string]HarnessActivity](b)(s.HarnessActivitySinceResult(since))
+			testutil.Read[map[string]HarnessActivity](b)(s.HarnessActivitySince(since))
 		}
 	})
 	// Below the 1,000-insert prune trigger: the cost of one model call row.

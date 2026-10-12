@@ -211,7 +211,7 @@ func (i *eventIngest) Feed(e event.Event) bool {
 			continue
 		}
 
-		recentEvs, err := st.QueryEventsResult(store.EventFilter{Limit: 100})
+		recentEvs, err := st.QueryEvents(store.EventFilter{Limit: 100})
 		if err != nil {
 			continue
 		}

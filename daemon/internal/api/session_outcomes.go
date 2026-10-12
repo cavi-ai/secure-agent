@@ -15,7 +15,7 @@ type SessionOutcomes struct {
 
 // serveSessionOutcomes reads receipts without scanning the session's activity.
 func (a *API) serveSessionOutcomes(w http.ResponseWriter, r *http.Request, id string) {
-	history, found, err := a.store.SessionOutcomeResult(id)
+	history, found, err := a.store.SessionOutcome(id)
 	if err != nil {
 		http.Error(w, "session results unavailable", http.StatusServiceUnavailable)
 		return

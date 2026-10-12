@@ -87,7 +87,7 @@ func (m *memSink) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdi
 
 func (m *memSink) TrendFor(rule, host string) model.TrendContext { return m.trend }
 
-func (m *memSink) CriticalFlagsMissingAdvisorResult(since time.Time, limit int) ([]model.Flag, error) {
+func (m *memSink) CriticalFlagsMissingAdvisor(since time.Time, limit int) ([]model.Flag, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.backfillCalls++

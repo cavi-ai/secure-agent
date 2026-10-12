@@ -25,7 +25,7 @@ func (a *API) handleExpectedEgress(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		rules, err := a.store.ListExpectedEgressRulesResult()
+		rules, err := a.store.ListExpectedEgressRules()
 		if err != nil {
 			http.Error(w, "expected egress rules unavailable", http.StatusServiceUnavailable)
 			return
@@ -49,7 +49,7 @@ func (a *API) handleExpectedEgress(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid rule kind", http.StatusBadRequest)
 			return
 		}
-		episode, ok, err := a.store.GetEgressEpisodeResult(req.EpisodeID)
+		episode, ok, err := a.store.GetEgressEpisode(req.EpisodeID)
 		if err != nil {
 			http.Error(w, "egress episode unavailable", http.StatusServiceUnavailable)
 			return

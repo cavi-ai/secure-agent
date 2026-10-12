@@ -78,7 +78,7 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 	t := planTarget{subject: subject, kind: kind}
 	switch kind {
 	case "flag":
-		f, ok, err := a.store.GetFlagResult(id)
+		f, ok, err := a.store.GetFlag(id)
 		if err != nil {
 			return planTarget{}, false, err
 		}
@@ -100,7 +100,7 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 		}
 		t.incident = &inc.IncidentReport
 		if inc.FlagID != "" {
-			f, ok, err := a.store.GetFlagResult(inc.FlagID)
+			f, ok, err := a.store.GetFlag(inc.FlagID)
 			if err != nil {
 				return planTarget{}, false, err
 			}
@@ -140,7 +140,7 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 		t.findings, t.accesses = findings, accesses
 		for _, f := range t.findings {
 			if f.Kind == "flag" && t.flag == nil {
-				fl, ok, err := a.store.GetFlagResult(f.ID)
+				fl, ok, err := a.store.GetFlag(f.ID)
 				if err != nil {
 					return planTarget{}, false, err
 				}
@@ -348,7 +348,7 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.Ope
 	var d7, d30 int
 	if t.rule != "" {
 		var err error
-		d7, d30, err = a.store.RuleCountsResult(t.rule, t.agent, time.Now())
+		d7, d30, err = a.store.RuleCounts(t.rule, t.agent, time.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -443,7 +443,7 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.Ope
 // planSessionLines adds the session summary and the timeline leading up to
 // the finding.
 func (a *API) planSessionLines(t planTarget, add func(string, ...any)) error {
-	rep, ok, err := a.store.SessionReportResult(t.sessionID)
+	rep, ok, err := a.store.SessionReport(t.sessionID)
 	if err != nil {
 		return err
 	}

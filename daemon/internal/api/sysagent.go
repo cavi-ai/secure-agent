@@ -41,7 +41,7 @@ func (a *API) handleAgentAnalyze(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "select at most 30 flags", http.StatusBadRequest)
 		return
 	}
-	flags, err := a.store.QueryFlagsResult(store.FlagFilter{Limit: 30})
+	flags, err := a.store.QueryFlags(store.FlagFilter{Limit: 30})
 	if err != nil {
 		http.Error(w, "findings unavailable", http.StatusServiceUnavailable)
 		return
@@ -280,7 +280,7 @@ var worktreeMergeVerdicts = map[string]bool{
 // flags' structured evidence, recent behavior and operator actions. It
 // returns the prompt and the ids of the flags it carries.
 func (a *API) analysisPrompt(flags []model.Flag) (string, []string) {
-	events, eventErr := a.store.QueryEventsResult(store.EventFilter{Limit: 100})
+	events, eventErr := a.store.QueryEvents(store.EventFilter{Limit: 100})
 	audit := a.store.RecentAudit(20)
 	var b strings.Builder
 	if eventErr != nil {

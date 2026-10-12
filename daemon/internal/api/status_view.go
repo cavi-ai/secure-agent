@@ -11,7 +11,7 @@ import (
 type statusEvidenceStore interface {
 	LastEventTimes([]int32) map[int32]string
 	SessionsByRootPID() map[int32]model.Session
-	QueryFlagsResult(store.FlagFilter) ([]model.Flag, error)
+	QueryFlags(store.FlagFilter) ([]model.Flag, error)
 }
 
 // joinStatusEvidence stamps each agent's last event, groups agents into trees
@@ -60,7 +60,7 @@ func joinStatusEvidence(st statusEvidenceStore, s Status, now time.Time) Status 
 			}
 		}
 	}
-	flags, err := st.QueryFlagsResult(store.FlagFilter{
+	flags, err := st.QueryFlags(store.FlagFilter{
 		Unacted:     true,
 		MinSeverity: 2,
 		Since:       now.Add(-24 * time.Hour).UTC().Format(time.RFC3339),

@@ -922,9 +922,9 @@ func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
 	return n == 1
 }
 
-// GetFlagResult distinguishes a missing row from an unavailable or malformed
+// GetFlag distinguishes a missing row from an unavailable or malformed
 // detail, using the same checked decoder as flag history.
-func (s *Store) GetFlagResult(id string) (model.Flag, bool, error) {
+func (s *Store) GetFlag(id string) (model.Flag, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.getFlagResultLocked(id)
@@ -957,7 +957,7 @@ func (s *Store) getFlagResultLocked(id string) (flag model.Flag, found bool, rea
 // a flag delta publishes (wire.go), so a verdict that lands after the flag
 // itself can be re-pushed with the same fields the popover already renders.
 func (s *Store) GetFlagWithAdvisor(id string) (model.Flag, bool) {
-	fl, ok, err := s.GetFlagResult(id)
+	fl, ok, err := s.GetFlag(id)
 	if err != nil {
 		return model.Flag{}, false
 	}
@@ -1008,9 +1008,9 @@ func flagQuery(f FlagFilter) (string, []any) {
 	return q, args
 }
 
-// QueryFlagsResult never returns partial flags after a query, decode or
+// QueryFlags never returns partial flags after a query, decode or
 // cursor error. Nullable optional fields in older schemas remain valid.
-func (s *Store) QueryFlagsResult(f FlagFilter) (out []model.Flag, readErr error) {
+func (s *Store) QueryFlags(f FlagFilter) (out []model.Flag, readErr error) {
 	defer func() { s.noteRead("flags", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1343,9 +1343,9 @@ func eventRecordQuery(f EventFilter, withID bool, beforeID int64) (string, []any
 	return q, args
 }
 
-// QueryEventsResult distinguishes a successful empty history from failed or
+// QueryEvents distinguishes a successful empty history from failed or
 // incomplete reads. Decode and cursor errors never return partial evidence.
-func (s *Store) QueryEventsResult(f EventFilter) (out []event.Event, readErr error) {
+func (s *Store) QueryEvents(f EventFilter) (out []event.Event, readErr error) {
 	defer func() { s.noteRead("events", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1465,9 +1465,9 @@ func nullFloat(f float64) any {
 	return f
 }
 
-// CriticalFlagsMissingAdvisorResult rejects failed reads without returning a
+// CriticalFlagsMissingAdvisor rejects failed reads without returning a
 // partial backfill. Nullable legacy metadata is decoded like other flag reads.
-func (s *Store) CriticalFlagsMissingAdvisorResult(since time.Time, limit int) (flags []model.Flag, readErr error) {
+func (s *Store) CriticalFlagsMissingAdvisor(since time.Time, limit int) (flags []model.Flag, readErr error) {
 	defer func() { s.noteRead("advisor backfill", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2155,19 +2155,27 @@ func (s *Store) ListGuardPathAllows(limit int) ([]GuardPathAllow, error) {
 }
 
 // DeleteGuardPathAllow revokes one exception; removing an absent one is a no-op.
-func (s *Store) DeleteGuardPathAllow(agent, ruleID, path string) bool {
+// Storage failures return an error rather than reporting an absent exception.
+func (s *Store) DeleteGuardPathAllow(agent, ruleID, path string) (removed bool, writeErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		if writeErr != nil || removed {
+			s.noteWrite("guard path revocations", writeErr)
+		}
+	}()
 	res, err := s.db.Exec(
 		`DELETE FROM guard_path_allows WHERE agent = ? AND rule_id = ? AND path = ?`,
 		agent, ruleID, path,
 	)
 	if err != nil {
-		log.Printf("store: delete guard_path_allows error: %v", err)
-		return false
+		return false, fmt.Errorf("delete guard path allow: %w", err)
 	}
-	n, _ := res.RowsAffected()
-	return n > 0
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("guard path allow deletion result: %w", err)
+	}
+	return n > 0, nil
 }
 
 func (s *Store) PutGuardRule(g GuardRule) {
@@ -2226,16 +2234,25 @@ func (s *Store) ListGuardRules(limit int) ([]GuardRule, error) {
 	return out, nil
 }
 
-func (s *Store) DeleteGuardRule(agent, ruleID string) bool {
+// DeleteGuardRule revokes one decision; removing an absent one is a no-op.
+// Storage failures return an error rather than reporting an absent decision.
+func (s *Store) DeleteGuardRule(agent, ruleID string) (removed bool, writeErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		if writeErr != nil || removed {
+			s.noteWrite("guard rule revocations", writeErr)
+		}
+	}()
 	res, err := s.db.Exec(`DELETE FROM guard_rules WHERE agent = ? AND rule_id = ?`, agent, ruleID)
 	if err != nil {
-		log.Printf("store: delete guard rule error: %v", err)
-		return false
+		return false, fmt.Errorf("delete guard rule: %w", err)
 	}
-	n, _ := res.RowsAffected()
-	return n > 0
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("guard rule deletion result: %w", err)
+	}
+	return n > 0, nil
 }
 
 // ReclassifyReadConnectSeverity changes only unresolved weak correlations.

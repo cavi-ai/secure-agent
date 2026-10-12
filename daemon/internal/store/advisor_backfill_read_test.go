@@ -33,7 +33,7 @@ func TestAdvisorBackfillRejectsCorruptRowsAndRecovers(t *testing.T) {
 			if tc.name == "timestamp" {
 				limit = 1 // Invalid dates must not hide behind newer valid rows.
 			}
-			if rows, err := s.CriticalFlagsMissingAdvisorResult(at.Add(-time.Hour), limit); err == nil || rows != nil {
+			if rows, err := s.CriticalFlagsMissingAdvisor(at.Add(-time.Hour), limit); err == nil || rows != nil {
 				t.Errorf("corrupt or partial backfill returned: rows=%+v err=%v", rows, err)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != 1 || !slices.Equal(h.ReadActive, []string{"advisor backfill"}) || h.Failures != 0 {
@@ -46,7 +46,7 @@ func TestAdvisorBackfillRejectsCorruptRowsAndRecovers(t *testing.T) {
 			} else if _, err := s.db.Exec(`UPDATE flags SET ts=? WHERE id='bad'`, at.Format(time.RFC3339Nano)); err != nil {
 				t.Fatal(err)
 			}
-			if rows, err := s.CriticalFlagsMissingAdvisorResult(at.Add(-time.Hour), 25); err != nil || len(rows) != 2 || rows[0].ID != "good" || rows[1].ID != "bad" {
+			if rows, err := s.CriticalFlagsMissingAdvisor(at.Add(-time.Hour), 25); err != nil || len(rows) != 2 || rows[0].ID != "good" || rows[1].ID != "bad" {
 				t.Fatalf("backfill recovery: rows=%+v err=%v", rows, err)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 0 {
@@ -66,14 +66,14 @@ func TestAdvisorBackfillNullableMetadataAndHealthyAbsence(t *testing.T) {
 	 evidence=NULL, acknowledged=NULL, ack_reason=NULL, process=NULL, repeats=NULL, last_seen=NULL WHERE id='legacy'`); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := s.CriticalFlagsMissingAdvisorResult(at.Add(-time.Hour), 1)
+	rows, err := s.CriticalFlagsMissingAdvisor(at.Add(-time.Hour), 1)
 	if err != nil || len(rows) != 1 || rows[0].ID != "legacy" || !rows[0].TS.Equal(at) || rows[0].PID != 42 {
 		t.Fatalf("nullable legacy flag: rows=%+v err=%v", rows, err)
 	}
 	if err := s.PutAdvisorVerdict("legacy", "flag", model.AdvisorVerdict{Assessment: "benign", Rationale: "routine"}); err != nil {
 		t.Fatal(err)
 	}
-	rows, err = s.CriticalFlagsMissingAdvisorResult(at.Add(-time.Hour), 1)
+	rows, err = s.CriticalFlagsMissingAdvisor(at.Add(-time.Hour), 1)
 	if err != nil || rows == nil || len(rows) != 0 {
 		t.Fatalf("healthy absence: rows=%+v err=%v", rows, err)
 	}

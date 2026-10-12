@@ -106,7 +106,7 @@ func TestFullBusCorrelatorStorePipeline(t *testing.T) {
 	var flags []model.Flag
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		flags = testutil.Read[[]model.Flag](t)(st.QueryFlagsResult(store.FlagFilter{Limit: 10}))
+		flags = testutil.Read[[]model.Flag](t)(st.QueryFlags(store.FlagFilter{Limit: 10}))
 		if len(flags) == 1 || time.Now().After(deadline) {
 			break
 		}
@@ -268,7 +268,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	// assert the unix API serves the flag.
 	deadline := time.Now().Add(5 * time.Second)
 	readFlags := func() []model.Flag {
-		flags, err := st.QueryFlagsResult(store.FlagFilter{Limit: 10})
+		flags, err := st.QueryFlags(store.FlagFilter{Limit: 10})
 		if err != nil {
 			t.Fatalf("flag read failed: %v", err)
 		}
@@ -284,7 +284,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if len(readFlags()) == 0 {
-		events := testutil.Read[[]event.Event](t)(st.QueryEventsResult(store.EventFilter{Limit: 50}))
+		events := testutil.Read[[]event.Event](t)(st.QueryEvents(store.EventFilter{Limit: 50}))
 		evData, _ := json.MarshalIndent(events, "", "  ")
 		t.Fatalf("correlator never wrote a flag; fixture sockets: %+v\nEVENTS:\n%s", fixture.SocketsFor(currPID), string(evData))
 	}

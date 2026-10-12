@@ -330,8 +330,8 @@ func scanEgressEpisode(scanner interface{ Scan(...any) error }) (EgressEpisode, 
 	return e, nil
 }
 
-// GetEgressEpisodeResult distinguishes missing evidence from failed reads.
-func (s *Store) GetEgressEpisodeResult(id string) (episode EgressEpisode, found bool, readErr error) {
+// GetEgressEpisode distinguishes missing evidence from failed reads.
+func (s *Store) GetEgressEpisode(id string) (episode EgressEpisode, found bool, readErr error) {
 	defer func() { s.noteRead("egress episode detail", readErr) }()
 	row := s.db.QueryRow(`SELECT id,agent,exe_path,harness,workspace,host,protocol,port,count,first_seen_ns,last_seen_ns,intervals_json,session_ids_json FROM egress_episodes WHERE id=? AND last_seen_ns>=?`, id, time.Now().Add(-egressIdleExpiry).UnixNano())
 	e, err := scanEgressEpisode(row)
@@ -352,15 +352,15 @@ func (s *Store) ListEgressEpisodes(limit int) ([]EgressEpisode, error) {
 	if limit > maxEgressQuery {
 		limit = maxEgressQuery
 	}
-	return s.listEgressEpisodesResult(limit)
+	return s.listEgressEpisodes(limit)
 }
 
-// ListEgressEpisodesForReviewResult rejects incomplete core review evidence.
-func (s *Store) ListEgressEpisodesForReviewResult() ([]EgressEpisode, error) {
-	return s.listEgressEpisodesResult(maxEgressEpisodes)
+// ListEgressEpisodesForReview rejects incomplete core review evidence.
+func (s *Store) ListEgressEpisodesForReview() ([]EgressEpisode, error) {
+	return s.listEgressEpisodes(maxEgressEpisodes)
 }
 
-func (s *Store) listEgressEpisodesResult(limit int) (out []EgressEpisode, readErr error) {
+func (s *Store) listEgressEpisodes(limit int) (out []EgressEpisode, readErr error) {
 	defer func() { s.noteRead("egress episodes", readErr) }()
 	rows, err := s.db.Query(`SELECT id,agent,exe_path,harness,workspace,host,protocol,port,count,first_seen_ns,last_seen_ns,intervals_json,session_ids_json FROM egress_episodes WHERE last_seen_ns>=? ORDER BY last_seen_ns DESC, id DESC LIMIT ?`, time.Now().Add(-egressIdleExpiry).UnixNano(), limit)
 	if err != nil {

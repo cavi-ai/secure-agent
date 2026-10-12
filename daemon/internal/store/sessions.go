@@ -460,9 +460,9 @@ func scanSessions(rows *sql.Rows) []model.Session {
 	return out
 }
 
-// ListSessionsResult distinguishes an empty population from an unavailable
+// ListSessions distinguishes an empty population from an unavailable
 // query. HTTP consumers must not replace last-known data on a read failure.
-func (s *Store) ListSessionsResult(f SessionFilter) (out []model.Session, readErr error) {
+func (s *Store) ListSessions(f SessionFilter) (out []model.Session, readErr error) {
 	defer func() { s.noteRead("sessions", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -84,13 +84,13 @@ const ReportTopN = 50
 type sessionReportReader interface {
 	GetSessionBounded(string) (model.Session, bool, error)
 	sessionEventsOldestFirst(string) ([]event.Event, error)
-	QueryFlagsResult(FlagFilter) ([]model.Flag, error)
+	QueryFlags(FlagFilter) ([]model.Flag, error)
 	SessionOutcomes(string) SessionOutcomeHistory
 }
 
-// SessionReportResult distinguishes unavailable identity from a missing session.
+// SessionReport distinguishes unavailable identity from a missing session.
 // Source failures retain independently readable sections with explicit limits.
-func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr error) {
+func (s *Store) SessionReport(id string) (_ SessionReport, _ bool, readErr error) {
 	defer func() { s.noteRead("session reports", readErr) }()
 	return readSessionReport(s, id)
 }
@@ -228,7 +228,7 @@ func readSessionReport(reader sessionReportReader, id string) (SessionReport, bo
 	rep.Files = topCounts(files, ReportTopN)
 	rep.Hosts = topCounts(hosts, ReportTopN)
 	var flagErr error
-	rep.Flags, flagErr = reader.QueryFlagsResult(FlagFilter{SessionID: id, Limit: reportFlagLimit})
+	rep.Flags, flagErr = reader.QueryFlags(FlagFilter{SessionID: id, Limit: reportFlagLimit})
 	if flagErr != nil {
 		rep.Flags = nil
 	}

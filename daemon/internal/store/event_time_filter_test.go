@@ -51,7 +51,7 @@ func TestEventTimeFiltersPreserveNanosecondBounds(t *testing.T) {
 				{"both", EventFilter{Since: cutoff, Until: cutoff}, []string{"at"}},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					rows, err := s.QueryEventsResult(tc.filter)
+					rows, err := s.QueryEvents(tc.filter)
 					var labels []string
 					for _, row := range rows {
 						labels = append(labels, row.Detail)
@@ -87,7 +87,7 @@ func TestEventTimeFiltersPreserveNanosecondBounds(t *testing.T) {
 			}
 			kind := int(event.KindFileOpen)
 			filter := EventFilter{Kind: &kind, PID: 7, SessionID: "owned", RemoteHost: "api.example.com", Since: cutoff, Until: cutoff, Limit: 1}
-			rows, err := s.QueryEventsResult(filter)
+			rows, err := s.QueryEvents(filter)
 			if err != nil || len(rows) != 1 || rows[0].Detail != "at" {
 				t.Fatalf("combined filters: rows=%v err=%v", rows, err)
 			}

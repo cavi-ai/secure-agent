@@ -111,11 +111,11 @@ func TestExpectedEgressReadFailureAndRecovery(t *testing.T) {
 			if h.ReadFailures != wantFailures || !slices.Contains(h.ReadActive, "expected egress rules") || matcherFails && !slices.Contains(h.ReadActive, "expected egress matcher") {
 				t.Errorf("rule read faults hidden or erased by narrower matcher: %+v", h)
 			}
-			if rules, err := st.ListExpectedEgressRulesResult(); err == nil || rules != nil {
+			if rules, err := st.ListExpectedEgressRules(); err == nil || rules != nil {
 				t.Errorf("failed rule list returned partial evidence: rules=%+v err=%v", rules, err)
 			}
 			if matcherFails {
-				if match, err := st.ExpectedEgressMatcherResult(); err == nil || match != nil {
+				if match, err := st.ExpectedEgressMatcher(); err == nil || match != nil {
 					t.Error("failed matcher exposed partial classification")
 				}
 			}

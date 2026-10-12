@@ -85,7 +85,7 @@ func (a *API) handleExpected(w http.ResponseWriter, r *http.Request) {
 			a.expectFlags(w, req.FlagIDs)
 			return
 		}
-		f, ok, err := a.store.GetFlagResult(req.FlagID)
+		f, ok, err := a.store.GetFlag(req.FlagID)
 		if err != nil {
 			http.Error(w, "flag data unavailable", http.StatusServiceUnavailable)
 			return
@@ -169,7 +169,7 @@ func (a *API) expectFlags(w http.ResponseWriter, ids []string) {
 	now := time.Now().UTC()
 	var pairs []correlate.ExpectedPattern
 	for _, id := range ids {
-		f, found, err := a.store.GetFlagResult(id)
+		f, found, err := a.store.GetFlag(id)
 		if err != nil {
 			http.Error(w, "flag data unavailable", http.StatusServiceUnavailable)
 			return
@@ -203,7 +203,7 @@ func (a *API) expectFlags(w http.ResponseWriter, ids []string) {
 
 // acknowledgeExpected reviews only findings fully covered by current exceptions.
 func (a *API) acknowledgeExpected() int {
-	open, err := a.store.QueryFlagsResult(store.FlagFilter{Rule: readConnectRule, Unacted: true, Limit: math.MaxInt32})
+	open, err := a.store.QueryFlags(store.FlagFilter{Rule: readConnectRule, Unacted: true, Limit: math.MaxInt32})
 	if err != nil {
 		return 0
 	}

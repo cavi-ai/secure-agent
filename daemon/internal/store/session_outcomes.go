@@ -10,7 +10,7 @@ import (
 // Each source is read independently so an unavailable section does not erase
 // the other receipts. SessionOutcomes does not check identity; report
 // aggregation calls it after its own identity read. Request handlers use
-// SessionOutcomeResult.
+// SessionOutcome.
 type SessionOutcomeHistory struct {
 	Reviews       []model.ReviewRecord        `json:"reviews"`
 	Incidents     []model.IncidentReport      `json:"incidents"`

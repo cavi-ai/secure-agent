@@ -42,8 +42,8 @@ type functionTool struct {
 	} `json:"function"`
 }
 type evidenceReader interface {
-	GetFlagResult(string) (model.Flag, bool, error)
-	SessionReportResult(string) (store.SessionReport, bool, error)
+	GetFlag(string) (model.Flag, bool, error)
+	SessionReport(string) (store.SessionReport, bool, error)
 }
 
 func (s *Subscriber) mask(text string) (string, error) {
@@ -69,7 +69,7 @@ func (s *Subscriber) scopedFlag(ctx context.Context) (model.Flag, bool) {
 	}
 	if t.kind == "plan" && strings.HasPrefix(t.subjectID, "flag:") {
 		if reader, ok := s.sink.(evidenceReader); ok {
-			fl, found, err := reader.GetFlagResult(strings.TrimPrefix(t.subjectID, "flag:"))
+			fl, found, err := reader.GetFlag(strings.TrimPrefix(t.subjectID, "flag:"))
 			return fl, found && err == nil
 		}
 	}
@@ -131,7 +131,7 @@ func (s *Subscriber) runEvidenceTool(ctx context.Context, name, user string) (st
 		if !ok {
 			return "", fmt.Errorf("session reader unavailable")
 		}
-		rep, found, err := reader.SessionReportResult(fl.SessionID)
+		rep, found, err := reader.SessionReport(fl.SessionID)
 		if err != nil {
 			return "", fmt.Errorf("session evidence unavailable: %w", err)
 		}

@@ -55,7 +55,7 @@ func (a *API) computePatterns(since time.Time, min int) []model.Pattern {
 }
 
 func (a *API) computePatternsResult(since time.Time, min int) ([]model.Pattern, error) {
-	flags, err := a.store.QueryFlagsResult(store.FlagFilter{Since: since.UTC().Format(time.RFC3339), Limit: patternFlagLimit})
+	flags, err := a.store.QueryFlags(store.FlagFilter{Since: since.UTC().Format(time.RFC3339), Limit: patternFlagLimit})
 	if err != nil {
 		return nil, err
 	}

@@ -100,9 +100,9 @@ func decodeIncidentReport(id, reportJSON string) (*model.IncidentReport, error) 
 	return inc, nil
 }
 
-// FindOpenIncidentResult distinguishes a missing aggregation target from an
+// FindOpenIncident distinguishes a missing aggregation target from an
 // unavailable or invalid stored identity. Callers creating reports must use it.
-func (s *Store) FindOpenIncidentResult(rule, sessionID, subject string) (id string, found bool, readErr error) {
+func (s *Store) FindOpenIncident(rule, sessionID, subject string) (id string, found bool, readErr error) {
 	defer func() { s.noteRead("incident lookup", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -295,9 +295,9 @@ func (s *Store) aggregateIncidentLocked(tx *sql.Tx, id, flagID string, ts time.T
 	return *inc, nil
 }
 
-// RecentIncidentsResult returns no partial history after query, scan, report
+// RecentIncidents returns no partial history after query, scan, report
 // decode or cursor failure. Resolved reports remain outside the active set.
-func (s *Store) RecentIncidentsResult(limit int) (out []model.IncidentReport, readErr error) {
+func (s *Store) RecentIncidents(limit int) (out []model.IncidentReport, readErr error) {
 	defer func() { s.noteRead("incidents", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -346,9 +346,9 @@ func scanIncidentsResult(rows *sql.Rows) ([]model.IncidentReport, error) {
 	return list, nil
 }
 
-// IncidentIDForFlagResult distinguishes absent reports from unavailable or
+// IncidentIDForFlag distinguishes absent reports from unavailable or
 // invalid targets using the same identity decoder as incident detail.
-func (s *Store) IncidentIDForFlagResult(flagID string) (id string, found bool, readErr error) {
+func (s *Store) IncidentIDForFlag(flagID string) (id string, found bool, readErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer func() { s.noteRead("incident links", readErr) }()
@@ -441,13 +441,13 @@ type IncidentWorkflow struct {
 // ErrInvalidIncidentStatus distinguishes invalid input from storage failure.
 var ErrInvalidIncidentStatus = errors.New("invalid incident status")
 
-// SetIncidentStatusResult transitions an incident's workflow state.
+// SetIncidentStatus transitions an incident's workflow state.
 // Re-resolving replaces the note; acknowledged_at is stamped only the first
 // time. It resolves the same incident identity as lookup inside the update
 // transaction, then returns the workflow read in that transaction.
 // An unreadable result or failed commit leaves no successful update. Zero
 // matching rows are not an error.
-func (s *Store) SetIncidentStatusResult(id, status, note string) (workflow IncidentWorkflow, updated bool, writeErr error) {
+func (s *Store) SetIncidentStatus(id, status, note string) (workflow IncidentWorkflow, updated bool, writeErr error) {
 	var query string
 	var args []any
 	switch status {
@@ -506,9 +506,9 @@ func (s *Store) SetIncidentStatusResult(id, status, note string) (workflow Incid
 	return wf, true, nil
 }
 
-// IncidentStatusResult distinguishes a missing row from an unavailable or
+// IncidentStatus distinguishes a missing row from an unavailable or
 // malformed workflow. Missing rows are healthy reads, not storage failures.
-func (s *Store) IncidentStatusResult(id string) (workflow IncidentWorkflow, found bool, readErr error) {
+func (s *Store) IncidentStatus(id string) (workflow IncidentWorkflow, found bool, readErr error) {
 	defer func() { s.noteRead("incident workflows", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()

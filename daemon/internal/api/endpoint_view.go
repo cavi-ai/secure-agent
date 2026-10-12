@@ -16,7 +16,7 @@ var (
 
 // endpointEvidenceStore supplies recorded connections and their sessions.
 type endpointEvidenceStore interface {
-	QueryEventsResult(store.EventFilter) ([]event.Event, error)
+	QueryEvents(store.EventFilter) ([]event.Event, error)
 	GetSessionBounded(string) (model.Session, bool, error)
 }
 
@@ -24,7 +24,7 @@ type endpointEvidenceStore interface {
 // and each distinct durable session behind them, in first-seen order. Any
 // failed read rejects the whole answer; empty lists encode as [].
 func endpointConnections(st endpointEvidenceStore, host string, now time.Time) ([]event.Event, []model.Session, error) {
-	evs, err := st.QueryEventsResult(store.EventFilter{
+	evs, err := st.QueryEvents(store.EventFilter{
 		RemoteHost: host,
 		Since:      now.Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339),
 		Limit:      50,

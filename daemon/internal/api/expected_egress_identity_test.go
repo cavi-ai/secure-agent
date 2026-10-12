@@ -93,10 +93,10 @@ func TestExpectedEgressIdentityFailureAndRecovery(t *testing.T) {
 					t.Errorf("reapproval returned mismatched stored rule: %d %s", w.Code, w.Body.String())
 				}
 			}
-			if rows, err := st.ListExpectedEgressRulesResult(); err == nil || rows != nil {
+			if rows, err := st.ListExpectedEgressRules(); err == nil || rows != nil {
 				t.Errorf("invalid rules escaped checked list: %+v %v", rows, err)
 			}
-			if match, err := st.ExpectedEgressMatcherResult(); err == nil || match != nil {
+			if match, err := st.ExpectedEgressMatcher(); err == nil || match != nil {
 				t.Error("invalid rules escaped checked matcher")
 			}
 			if audit := st.RecentAudit(10); len(audit) != 0 {
@@ -107,7 +107,7 @@ func TestExpectedEgressIdentityFailureAndRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if rules, err := st.ListExpectedEgressRulesResult(); err != nil || !reflect.DeepEqual(rules, []store.ExpectedEgressRule{rule}) {
+			if rules, err := st.ListExpectedEgressRules(); err != nil || !reflect.DeepEqual(rules, []store.ExpectedEgressRule{rule}) {
 				t.Errorf("repair changed persisted fields: %+v %v", rules, err)
 			}
 			if got := getEpisodes(); !reflect.DeepEqual(got, baseline) {

@@ -85,7 +85,7 @@ func TestReviewScopeFailureRollsBackReceiptAndAcknowledgement(t *testing.T) {
 	if e != nil || len(g) != 0 {
 		t.Fatalf("failed receipt left grant: %v %v", g, e)
 	}
-	f, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("source"))
+	f, _ := testutil.Lookup[model.Flag](t)(s.GetFlag("source"))
 	if f.Acknowledged {
 		t.Fatal("failed transaction acknowledged source")
 	}
