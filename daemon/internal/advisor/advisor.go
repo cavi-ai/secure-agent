@@ -104,8 +104,109 @@ type chatResponse struct {
 	} `json:"choices"`
 }
 
+// taskKind defines one kind of queued advisor work. name is the persisted
+// verdict kind and the Health active_kind; run performs the model call and
+// persists its result, returning only the model error.
+type taskKind struct {
+	name string
+	// slow kinds are asked for by someone and run under the on-request timeout.
+	slow bool
+	// release frees the kind's in-flight reservation once the task ends.
+	release func(s *Subscriber, subjectID string)
+	run     func(ctx context.Context, s *Subscriber, t task) error
+	// scopedFlag resolves the finding a task's evidence tools may read.
+	scopedFlag func(s *Subscriber, t task) (model.Flag, bool)
+}
+
+// verdictRun builds the run of a kind that stores an AdvisorVerdict.
+func verdictRun(assess func(ctx context.Context, s *Subscriber, t task) (model.AdvisorVerdict, error)) func(ctx context.Context, s *Subscriber, t task) error {
+	return func(ctx context.Context, s *Subscriber, t task) error {
+		verdict, err := assess(ctx, s, t)
+		if err != nil {
+			return err
+		}
+		verdict.Model = s.cfg.Model
+		verdict.CreatedAt = time.Now().UTC()
+		if err := s.sink.PutAdvisorVerdict(t.subjectID, t.kind.name, verdict); err != nil {
+			// Storage health owns this fault; a successful model response must not
+			// trip the provider's circuit breaker because persistence failed.
+			log.Printf("advisor: persist verdict: %v", err)
+		}
+		return nil
+	}
+}
+
+var (
+	flagKind = &taskKind{
+		name: "flag",
+		run: verdictRun(func(ctx context.Context, s *Subscriber, t task) (model.AdvisorVerdict, error) {
+			return s.triageFlag(ctx, t.flag)
+		}),
+		scopedFlag: func(_ *Subscriber, t task) (model.Flag, bool) { return t.flag, true },
+	}
+	incidentKind = &taskKind{
+		name: "incident",
+		run: verdictRun(func(ctx context.Context, s *Subscriber, t task) (model.AdvisorVerdict, error) {
+			return s.narrateIncident(ctx, t.incident)
+		}),
+	}
+	hostKind = &taskKind{
+		name: "host",
+		run: verdictRun(func(ctx context.Context, s *Subscriber, t task) (model.AdvisorVerdict, error) {
+			return s.assessHost(ctx, t.agentName, t.host)
+		}),
+	}
+	guardKind = &taskKind{
+		name: "guard",
+		run: verdictRun(func(ctx context.Context, s *Subscriber, t task) (model.AdvisorVerdict, error) {
+			return s.assessGuard(ctx, t.guard)
+		}),
+	}
+	planKind = &taskKind{
+		name:    "plan",
+		slow:    true,
+		release: func(s *Subscriber, subjectID string) { s.clearPlan(subjectID) },
+		run: func(ctx context.Context, s *Subscriber, t task) error {
+			p, err := s.writePlan(ctx, t.plan)
+			if err != nil {
+				return err
+			}
+			p.Model = s.cfg.Model
+			p.CreatedAt = time.Now().UTC()
+			p.EvidenceKey = t.plan.EvidenceKey
+			if err := s.sink.PutAdvisorPlan(t.subjectID, p); err != nil {
+				log.Printf("advisor: persist plan: %v", err)
+			}
+			return nil
+		},
+		scopedFlag: planScopedFlag,
+	}
+	worktreeKind = &taskKind{
+		name: "worktree",
+		slow: true,
+		run: verdictRun(func(ctx context.Context, s *Subscriber, t task) (model.AdvisorVerdict, error) {
+			return s.assessWorktree(ctx, t.worktree)
+		}),
+	}
+	projectKind = &taskKind{
+		name: "project",
+		slow: true,
+		run: verdictRun(func(ctx context.Context, s *Subscriber, t task) (model.AdvisorVerdict, error) {
+			return s.assessProject(ctx, t.project)
+		}),
+	}
+	egressKind = &taskKind{
+		name:    "egress",
+		slow:    true,
+		release: func(s *Subscriber, subjectID string) { s.clearEgressInflight(subjectID) },
+		run: verdictRun(func(ctx context.Context, s *Subscriber, t task) (model.AdvisorVerdict, error) {
+			return s.assessEgress(ctx, t.egress)
+		}),
+	}
+)
+
 type task struct {
-	kind      string // "flag" | "incident" | "host" | "guard" | "plan" | "worktree" | "project"
+	kind      *taskKind
 	subjectID string
 	flag      model.Flag
 	incident  model.IncidentReport
@@ -254,7 +355,7 @@ func New(cfg Config, sink Sink) *Subscriber {
 // TriageForTest runs the flag triage synchronously and returns the verdict —
 // test-only: production paths go through the queue + process().
 func (s *Subscriber) TriageForTest(fl model.Flag) (model.AdvisorVerdict, error) {
-	return s.triageFlag(context.WithValue(context.Background(), reviewScopeKey{}, task{kind: "flag", subjectID: fl.ID, flag: fl}), fl)
+	return s.triageFlag(context.WithValue(context.Background(), reviewScopeKey{}, task{kind: flagKind, subjectID: fl.ID, flag: fl}), fl)
 }
 
 // RetriageCooldown: one re-triage per flag per window. Rapid clicking (or
@@ -301,7 +402,7 @@ func (s *Subscriber) RetriageFlag(fl model.Flag) bool {
 	}
 	s.mu.Unlock()
 
-	t := task{kind: "flag", subjectID: fl.ID, flag: fl}
+	t := task{kind: flagKind, subjectID: fl.ID, flag: fl}
 	select {
 	case s.queue <- t:
 		return true
@@ -321,7 +422,7 @@ func (s *Subscriber) RetriageFlag(fl model.Flag) bool {
 }
 
 func (s *Subscriber) EnqueueFlag(fl model.Flag) {
-	t := task{kind: "flag", subjectID: fl.ID, flag: fl}
+	t := task{kind: flagKind, subjectID: fl.ID, flag: fl}
 	select {
 	case s.queue <- t:
 	default:
@@ -338,7 +439,7 @@ func (s *Subscriber) EnqueueFlag(fl model.Flag) {
 
 // EnqueueIncident offers an incident for a narrative.
 func (s *Subscriber) EnqueueIncident(inc model.IncidentReport) {
-	t := task{kind: "incident", subjectID: inc.ID, incident: inc}
+	t := task{kind: incidentKind, subjectID: inc.ID, incident: inc}
 	select {
 	case s.queue <- t:
 	default:
@@ -351,7 +452,7 @@ func (s *Subscriber) EnqueueIncident(inc model.IncidentReport) {
 // (allowlist suggestions). Must be non-blocking: it is called from inside
 // the correlator's lock.
 func (s *Subscriber) EnqueueHost(agent, host string) {
-	t := task{kind: "host", subjectID: "host:" + agent + "|" + host, host: host, agentName: agent}
+	t := task{kind: hostKind, subjectID: "host:" + agent + "|" + host, host: host, agentName: agent}
 	select {
 	case s.queue <- t:
 	default:
@@ -370,7 +471,7 @@ func GuardSubjectID(agent, ruleID, path, tool string) string {
 // human's ability to decide. The advisor NEVER resolves the prompt itself.
 func (s *Subscriber) EnqueueGuard(req model.GuardAssessmentRequest) {
 	t := task{
-		kind:      "guard",
+		kind:      guardKind,
 		subjectID: GuardSubjectID(req.Agent, req.RuleID, req.Path, req.Tool),
 		guard:     req,
 	}
@@ -414,18 +515,14 @@ func (s *Subscriber) Run(ctx context.Context) error {
 }
 
 func (s *Subscriber) process(ctx context.Context, t task) {
-	if t.kind == "egress" {
-		defer s.clearEgressInflight(t.subjectID)
-	}
-	if t.kind == "plan" {
-		defer s.clearPlan(t.subjectID)
+	if t.kind.release != nil {
+		defer t.kind.release(s, t.subjectID)
 	}
 	if s.circuitIsOpen() {
 		return
 	}
 	timeout := s.client.Timeout
-	switch t.kind {
-	case "plan", "worktree", "project", "egress":
+	if t.kind.slow {
 		timeout = s.onRequest.Timeout
 	}
 	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout {
@@ -434,11 +531,11 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	s.mu.Lock()
-	s.activeKind, s.activeSubject, s.startedAt = t.kind, t.subjectID, time.Now()
+	s.activeKind, s.activeSubject, s.startedAt = t.kind.name, t.subjectID, time.Now()
 	s.activeState, s.timeoutMS = "preparing", timeout.Milliseconds()
 	s.activeTool, s.inputBytes, s.toolCalls = "", 0, 0
 	s.mu.Unlock()
-	s.debugf("task start kind=%s queued=%d", t.kind, len(s.queue))
+	s.debugf("task start kind=%s queued=%d", t.kind.name, len(s.queue))
 	completed := false
 	defer func() {
 		s.mu.Lock()
@@ -448,49 +545,10 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 		s.startedAt = time.Time{}
 		duration, bytes, calls := s.lastDurationMS, s.inputBytes, s.toolCalls
 		s.mu.Unlock()
-		s.debugf("task end kind=%s completed=%t duration_ms=%d input_bytes=%d tool_calls=%d", t.kind, completed, duration, bytes, calls)
+		s.debugf("task end kind=%s completed=%t duration_ms=%d input_bytes=%d tool_calls=%d", t.kind.name, completed, duration, bytes, calls)
 	}()
 	ctx = context.WithValue(ctx, reviewScopeKey{}, t)
-	if t.kind == "plan" {
-		p, err := s.writePlan(ctx, t.plan)
-		if err != nil {
-			s.recordFailure(err)
-			return
-		}
-		s.mu.Lock()
-		s.failures = 0
-		s.lastErr = ""
-		s.mu.Unlock()
-		p.Model = s.cfg.Model
-		completed = true
-		p.CreatedAt = time.Now().UTC()
-		p.EvidenceKey = t.plan.EvidenceKey
-		if err := s.sink.PutAdvisorPlan(t.subjectID, p); err != nil {
-			log.Printf("advisor: persist plan: %v", err)
-		}
-		return
-	}
-	var (
-		verdict model.AdvisorVerdict
-		err     error
-	)
-	switch t.kind {
-	case "flag":
-		verdict, err = s.triageFlag(ctx, t.flag)
-	case "incident":
-		verdict, err = s.narrateIncident(ctx, t.incident)
-	case "host":
-		verdict, err = s.assessHost(ctx, t.agentName, t.host)
-	case "guard":
-		verdict, err = s.assessGuard(ctx, t.guard)
-	case "worktree":
-		verdict, err = s.assessWorktree(ctx, t.worktree)
-	case "project":
-		verdict, err = s.assessProject(ctx, t.project)
-	case "egress":
-		verdict, err = s.assessEgress(ctx, t.egress)
-	}
-	if err != nil {
+	if err := t.kind.run(ctx, s, t); err != nil {
 		s.recordFailure(err)
 		return
 	}
@@ -498,14 +556,7 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 	s.failures = 0
 	s.lastErr = ""
 	s.mu.Unlock()
-	verdict.Model = s.cfg.Model
 	completed = true
-	verdict.CreatedAt = time.Now().UTC()
-	if err := s.sink.PutAdvisorVerdict(t.subjectID, t.kind, verdict); err != nil {
-		// Storage health owns this fault; a successful model response must not
-		// trip the provider's circuit breaker because persistence failed.
-		log.Printf("advisor: persist verdict: %v", err)
-	}
 }
 
 func (s *Subscriber) circuitIsOpen() bool {

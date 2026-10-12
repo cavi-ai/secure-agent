@@ -26,7 +26,7 @@ func TestHealthReportsActualRequestBudgetAndDeadline(t *testing.T) {
 	s := New(Config{Enabled: true, Endpoint: srv.URL, Timeout: 120 * time.Second}, &memSink{rows: map[string]model.AdvisorVerdict{}})
 	go func() {
 		defer close(done)
-		s.process(context.Background(), task{kind: "flag", subjectID: "fixture", flag: model.Flag{ID: "fixture"}})
+		s.process(context.Background(), task{kind: flagKind, subjectID: "fixture", flag: model.Flag{ID: "fixture"}})
 	}()
 	bytes := <-entered
 	h := s.Health()
@@ -66,7 +66,7 @@ func TestTaskDeadlineIncludesEvidencePreparation(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		s.process(context.Background(), task{kind: "flag", flag: model.Flag{ID: "fixture"}})
+		s.process(context.Background(), task{kind: flagKind, flag: model.Flag{ID: "fixture"}})
 	}()
 	<-sink.entered
 	h := s.Health()
