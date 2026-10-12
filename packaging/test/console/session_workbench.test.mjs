@@ -59,6 +59,41 @@ function controller(persisted = '', manualOverview = false) {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+test('empty detail adds one narrow Back while preserving an existing unavailable Back', () => {
+  const c = controller();
+  for (const empty of [c.context.sessionEmptyHTML([], {text: 'missing-project', harnesses: {}, liveOnly: true}), '<div class="empty">No sessions available.</div>']) {
+    const html = c.context.sessionEmptyDetailHTML(empty);
+    assert.equal([...html.matchAll(/data-action="session-list"/g)].length, 1);
+    assert.ok(html.startsWith('<button type="button" class="btn btn-sm btn-ghost sd-back"'));
+    assert.ok(html.endsWith(empty));
+  }
+  const unavailable = '<div class="empty">Session unavailable. <button type="button" class="link-btn" data-action="session-list">Back to sessions</button></div>';
+  assert.equal(c.context.sessionEmptyDetailHTML(unavailable), unavailable);
+  const selected = c.context.sessionDetailHTML({...session('a'), harness: 'codex'}, [], [], {});
+  assert.equal([...selected.matchAll(/data-action="session-list"/g)].length, 1, 'selected detail keeps its existing Back');
+});
+
+test('Back focuses selected visible card, otherwise search, without changing filters or reading selection', () => {
+  const c = controller('a');
+  c.state.reconcile(groups(session('a')));
+  let focused = '', cardVisible = true, searchVisible = true;
+  const card = {dataset: {id: 'a'}, getClientRects: () => cardVisible ? [{}] : [], focus: options => {assert.equal(options.preventScroll, true); focused = 'card';}};
+  const rail = {scrollTop: 33, querySelectorAll: () => [card], focus: () => {focused = 'rail';}};
+  const search = {value: 'missing-project', getClientRects: () => searchVisible ? [{}] : [], focus: options => {assert.equal(options.preventScroll, true); focused = 'search';}};
+  const detail = {};
+  c.context.document.getElementById = id => ({'session-board-panel': c.panel, 'session-rail': rail, 'session-cwd-filter': search, 'session-detail': detail})[id];
+  const filter = {text: 'missing-project', harnesses: {claude: false}, liveOnly: true};
+  c.context.window.SA.harnessFilter = filter;
+  c.context.sessionStorage.setItem('sa.harness-filter', JSON.stringify(filter));
+  c.actions.showSessionList(); assert.equal(focused, 'card');
+  cardVisible = false; c.actions.showSessionList(); assert.equal(focused, 'search');
+  searchVisible = false; c.actions.showSessionList(); assert.equal(focused, 'rail');
+  assert.equal(c.panel.dataset.pane, 'list'); assert.equal(rail.scrollTop, 33);
+  assert.equal(c.state.selected, 'a'); assert.equal(search.value, 'missing-project');
+  assert.equal(c.context.sessionStorage.getItem('sa.harness-filter'), JSON.stringify(filter));
+  assert.deepEqual(filter, {text: 'missing-project', harnesses: {claude: false}, liveOnly: true});
+});
+
 test('empty Sessions recovery names only ended matches hidden by identical Live only filters', () => {
   const c = controller();
   const family = (id, status, repo) => ({session: {...session(id, status), repo}, children: []});
