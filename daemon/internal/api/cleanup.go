@@ -29,20 +29,7 @@ func (a *API) handleCleanup(w http.ResponseWriter, r *http.Request) {
 		if t, err := a.store.CleanupTotals(time.Now()); err == nil {
 			rep.Reclaimed = &t
 		}
-		subjectIDs := make([]string, len(rep.Projects))
-		for i, p := range rep.Projects {
-			subjectIDs[i] = advisor.ProjectSubjectID(p.Project)
-		}
-		// Optional plans may be partial; retain read health for the whole batch.
-		verdicts, _ := a.store.AdvisorVerdictsFor(subjectIDs, "project")
-		for i, p := range rep.Projects {
-			if v, ok := verdicts[subjectIDs[i]]; ok {
-				if rep.Advice == nil {
-					rep.Advice = map[string]model.AdvisorVerdict{}
-				}
-				rep.Advice[p.Project] = v
-			}
-		}
+		rep.Advice = clutterAdvice(a.store, rep.Projects)
 	}
 	writeJSON(w, rep)
 }
