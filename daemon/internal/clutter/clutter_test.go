@@ -273,15 +273,54 @@ func TestCleanRunsTheToolsOwnCommand(t *testing.T) {
 	}
 }
 
+// A workspace-level .quarantine or .tmp is out of the Trash while an agent
+// works in the workspace outside any repository; an agent inside a
+// repository uses that repository's own folders.
+func TestWorkspaceLevelFoldersWaitForAgentsBelow(t *testing.T) {
+	m := newMachine(t)
+	t.Setenv("PATH", "/usr/bin:/bin")
+	find := func(items []ClutterItem, p string) ClutterItem {
+		t.Helper()
+		for _, it := range items {
+			if it.Path == p {
+				return it
+			}
+		}
+		t.Fatalf("no item at %s", p)
+		return ClutterItem{}
+	}
+	quarantine := filepath.Join(m.ws, ".quarantine")
+	idle := find(m.clutter(&memStore{}).collect(context.Background()), quarantine)
+	if idle.Action != ActionTrash {
+		t.Fatalf("no agent: %+v, want trash", idle)
+	}
+	inRepo := find(m.clutter(&memStore{activity: []model.WorkspaceActivity{{Workspace: filepath.Join(m.repo, "src"), Live: true}}}).collect(context.Background()), quarantine)
+	if inRepo.Action != ActionTrash {
+		t.Fatalf("agent inside a repository: %+v, want trash", inRepo)
+	}
+	for _, ws := range []string{m.ws, filepath.Join(m.ws, "scratch")} {
+		busy := find(m.clutter(&memStore{activity: []model.WorkspaceActivity{{Workspace: ws, Live: true}}}).collect(context.Background()), quarantine)
+		if busy.Action != ActionNone || busy.Note != "an agent session is live under this folder" {
+			t.Fatalf("agent in %s: %+v, want no action with the reason", ws, busy)
+		}
+	}
+}
+
 func TestLivePlacesPicksTheDeepestPlace(t *testing.T) {
 	places := []Place{{Path: "/r"}, {Path: "/r/.worktrees/a"}}
+	now := time.Date(2026, 10, 12, 19, 0, 0, 0, time.UTC)
 	live := livePlaces(places, []model.WorkspaceActivity{
 		{Workspace: "/r/.worktrees/a/pkg", Live: true},
-		{Workspace: "/r/docs", Live: false},
+		{Workspace: "/r/docs", Live: false, LastSeen: now.Add(-time.Hour)},
 		{Workspace: "/elsewhere", Live: true},
-	})
+	}, now)
 	if !live["/r/.worktrees/a"] || live["/r"] || len(live) != 1 {
 		t.Fatalf("live = %v", live)
+	}
+	// An ended session whose agent was seen minutes ago still holds its place.
+	live = livePlaces(places, []model.WorkspaceActivity{{Workspace: "/r/docs", LastSeen: now.Add(-2 * time.Minute)}}, now)
+	if !live["/r"] {
+		t.Fatalf("recently seen session: live = %v", live)
 	}
 }
 

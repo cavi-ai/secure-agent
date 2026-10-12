@@ -100,6 +100,13 @@ func TestTrashReviewedRefusesWhatTheFolderMoveCannotUndo(t *testing.T) {
 			st.activity = []model.WorkspaceActivity{{Workspace: wt, LastSeen: time.Now(), Live: true}}
 			return wt
 		}, "an agent session is live here"},
+		// An ended session whose agent was seen minutes ago is still working
+		// there (the refusal test runs its clock 48 hours ahead).
+		{"ended session seen minutes ago", func(t *testing.T, f fixture, st *memStore) string {
+			wt := f.worktree(t, "recent")
+			st.activity = []model.WorkspaceActivity{{Workspace: wt, Harness: "codex", LastSeen: time.Now().Add(48*time.Hour - 2*time.Minute)}}
+			return wt
+		}, "codex is working here"},
 		{"locked", func(t *testing.T, f fixture, st *memStore) string {
 			wt := f.worktree(t, "locked")
 			run(t, f.main, "worktree", "lock", "--reason", "agent busy", wt)

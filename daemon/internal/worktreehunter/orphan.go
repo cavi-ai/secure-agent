@@ -104,12 +104,16 @@ type TrashedOrphan struct {
 }
 
 // TrashOrphan moves the orphan folder at path to the Trash on its volume
-// and books its size as trashed.
+// and books its size as trashed. An agent working in it refuses the move.
 func (h *Hunter) TrashOrphan(ctx context.Context, path string) (TrashedOrphan, error) {
 	defer h.lockForAction(nil)()
 	o, ok := orphanAt(path)
 	if !ok {
 		return TrashedOrphan{}, ErrNotOrphan
+	}
+	if inUse, agent, _ := agentAt(o.Path, h.st.WorkspaceActivity(), h.now()); inUse {
+		row := Worktree{Path: o.Path, Orphan: true, State: StateKeep, InUse: true, ActiveAgent: agent}
+		return TrashedOrphan{}, &NotReviewableError{Row: row, Why: liveAgentReason(row)}
 	}
 	u := diskusage.Dir(context.WithoutCancel(ctx), o.Path, nil)
 	dest, err := trash.Mover{Home: h.home, GOOS: h.goos, Now: h.now}.Move(o.Path)
