@@ -13,6 +13,12 @@
     { key: 'claude|gh|/synthetic/credentials|example.test', agent: 'claude', reader: 'gh', path: '/synthetic/credentials', dest: 'example.test', created_at: iso(60000), hits: 2 },
     { key: 'claude|*|/synthetic/.env.test|*', scope: 'file', agent: 'claude', reader: '*', path: '/synthetic/.env.test', dest: '*', created_at: iso(60000), hits: 0 },
   ];
+  if (scenarios.has('policyhealth')) data['/decision-scopes'] = [{
+    id: 'policy-health-scope', kind: 'exact', agent: 'claude', rule_id: 'sensitive-read-then-connect',
+    operation: 'read-connect', resource_path: '/synthetic/credentials', destination: 'example.test:443',
+    workspace: '/synthetic/workspace', reader_exe: '/synthetic/tool', created_at: iso(60000),
+    expires_at: new Date(now + 86400000).toISOString(), applicability: { label: 'Timed permission', revoke: true },
+  }];
   let bookCleanup = () => {};
   let contextRuleReads = 0;
   const contextRules = data['/expected-egress'].rules;
@@ -512,6 +518,18 @@
       }
       if (scenarios.has('removalreadfail') && window.__expectedRemovalDeletes) return { ok: false, status: 503, text: async () => 'Unavailable' };
       return { ok: true, json: async () => scenarios.has('removalinvalid') ? null : structuredClone(data[p]) };
+    }
+    if (scenarios.has('policyhealth') && ['/guard/rules', '/guard/path-allow', '/mute', '/expected', '/decision-scopes'].includes(p)) {
+      window.__policyReads ||= {};
+      if (opts?.method === 'DELETE') { window.__policyWrites = (window.__policyWrites || 0) + 1; throw new Error('Unexpected policy write'); }
+      window.__policyReads[p] = (window.__policyReads[p] || 0) + 1;
+      if (p === '/mute' && scenarios.has('policyhealth=slow') && !window.__policyRecovered) await new Promise(resolve => { window.__finishPolicyMute = resolve; });
+      if (p === '/decision-scopes') {
+        if ((scenarios.has('policyhealth=first') || scenarios.has('policyhealth=reconnect') || window.__policyFailure) && !window.__policyRecovered) return { ok: false, status: 503 };
+        if (scenarios.has('policyhealth=malformed') && !window.__policyRecovered) return { ok: true, json: async () => null };
+        if (window.__policyRecovered) return { ok: true, json: async () => [] };
+      }
+      return { ok: true, json: async () => structuredClone(data[p]) };
     }
     if (scenarios.has('reviewresult') && p === '/decision-scopes') {
       const rows = data['/decision-scopes'] || [];
@@ -3134,7 +3152,7 @@
           if (!probe.refreshed) probe.refreshText=list.textContent;
         } else {
           probe.saved=list.textContent.includes('Revocation saved') && list.textContent.includes('/synthetic/credentials');
-          if (scenarios.has('scopereadfail')) probe.retained=list.textContent.includes('Last known permission records');
+          if (scenarios.has('scopereadfail')) probe.retained=list.textContent.includes('Showing last known records');
         }
       }
       document.body.dataset.globalPermissionsProbe=JSON.stringify(probe);
@@ -3142,6 +3160,56 @@
   }
   if (scenarios.has('policylists')) {
     setTimeout(() => openTab('policy'), 4000);
+  }
+  if (scenarios.has('policyhealth')) {
+    setTimeout(async () => {
+      const probe = {};
+      const wait = async predicate => { for (let i = 0; i < 40; i++) { window.SA.flushRender(); if (predicate()) return true; await new Promise(resolve => setTimeout(resolve, 50)); } return false; };
+      try {
+        openTab('policy');
+        const scopes = document.getElementById('policy-scopes'), expected = document.getElementById('policy-expected');
+        await wait(() => expected.querySelector('[data-action="forget-expected"]'));
+        let healthy = expected.querySelector('[data-action="forget-expected"]');
+        probe.healthy = !!healthy && !healthy.disabled && document.getElementById('badge-guard-rules').textContent === '2';
+        if (scenarios.has('policyhealth=slow')) {
+          probe.pendingSibling = document.getElementById('badge-mutes').textContent === '—' && document.getElementById('policy-mutes').textContent.includes('Loading');
+          probe.usable = !!scopes.querySelector('[data-action="revoke-scope"]:not([disabled])');
+          healthy.focus(); window.__policyRecovered = true; window.__finishPolicyMute();
+          probe.settled = await wait(() => document.getElementById('badge-mutes').textContent === '2');
+          probe.focus = document.activeElement === healthy && healthy.isConnected;
+        } else {
+          if (scenarios.has('policyhealth=stale')) {
+            await wait(() => scopes.querySelector('[data-action="revoke-scope"]'));
+            window.__policyFailure = true;
+            document.querySelector('#policy-guard-panel [data-action="policy-refresh"]').click();
+          }
+          await wait(() => scopes.querySelector('[data-action="policy-refresh-report"]'));
+          healthy = expected.querySelector('[data-action="forget-expected"]:not([disabled])');
+          probe.qualified = scenarios.has('policyhealth=stale') ? scopes.textContent.includes('Showing last known records') && scopes.textContent.includes('Last successful refresh') && scopes.textContent.includes('/synthetic/credentials')
+            : scopes.textContent.includes('Unavailable. No successful read yet') && document.getElementById('badge-scopes').textContent === '—';
+          probe.noEmptyClaim = !scopes.textContent.includes('No scoped permissions');
+          probe.readOnly = !scopes.querySelector('[data-action="revoke-scope"]');
+          await window.revokeScope('policy-health-scope');
+          probe.noWrite = !window.__policyWrites;
+          const retry = scopes.querySelector('[data-action="policy-refresh-report"]');
+          probe.retryLabel = retry.textContent === 'Refresh scoped permissions' && retry.getBoundingClientRect().height >= 44;
+          if (scenarios.has('policyhealthshot')) return;
+          const before = { ...window.__policyReads };
+          healthy.focus(); window.__policyRecovered = true; retry.click();
+          probe.recovered = await wait(() => scopes.textContent.includes('No scoped permissions') && !scopes.querySelector('[data-action="policy-refresh-report"]'));
+          probe.bounded = window.__policyReads['/decision-scopes'] === before['/decision-scopes'] + 1 && Object.keys(before).filter(path => path !== '/decision-scopes').every(path => before[path] === window.__policyReads[path]);
+          probe.focus = document.activeElement === healthy && healthy.isConnected;
+          if (scenarios.has('policyhealth=reconnect')) {
+            const reads = window.__policyReads['/decision-scopes'];
+            location.hash = 'ct=fixture-restored';
+            probe.reconnected = await wait(() => !document.body.classList.contains('is-ended') && window.__policyReads['/decision-scopes'] > reads && scopes.textContent.includes('No scoped permissions'));
+            probe.reloaded = !!expected.querySelector('[data-action="forget-expected"]:not([disabled])');
+          }
+        }
+        probe.fits = document.documentElement.scrollWidth <= innerWidth;
+      } catch (error) { probe.error = String(error); }
+      document.body.dataset.policyHealthProbe = JSON.stringify(probe);
+    }, 4000);
   }
   // forgetexpected (with policylists): press Forget on the expected row.
   if (scenarios.has('forgetexpected')) {
@@ -3155,9 +3223,9 @@
       try {
         openTab('policy');
         const list = document.getElementById('policy-expected');
-        await wait(() => list.textContent.includes('Remove exception') || list.textContent.includes('Invalid exception records'));
+        await wait(() => list.textContent.includes('Remove exception') || list.textContent.includes('The daemon returned invalid records.'));
         if (scenarios.has('removalinvalid')) {
-          probe.unavailable = list.textContent.includes('Invalid exception records') && !list.querySelector('[data-action="forget-expected"]');
+          probe.unavailable = list.textContent.includes('The daemon returned invalid records.') && !list.querySelector('[data-action="forget-expected"]');
           probe.noWrite = !window.__expectedRemovalDeletes;
         } else {
           const file = scenarios.has('expectedremove=file');
@@ -3187,7 +3255,7 @@
             probe.saved = list.textContent.includes('Exception removal saved') && !Array.from(list.querySelectorAll('[data-action="forget-expected"]')).some(el => el.dataset.key === key);
             probe.remaining = document.getElementById('badge-expected').textContent === '1';
             probe.feedback = list.textContent.includes('Remaining exceptions and policies still apply; past activity is unchanged');
-            if (scenarios.has('removalreadfail')) probe.retained = list.textContent.includes('Current exceptions unavailable') && !list.querySelector('[data-action="forget-expected"]');
+            if (scenarios.has('removalreadfail')) probe.retained = list.textContent.includes('current status is unavailable') && !list.querySelector('[data-action="forget-expected"]');
           }
         }
         probe.fits = document.documentElement.scrollWidth <= innerWidth;

@@ -1178,6 +1178,9 @@ body {
 
 /* Policy: read-only lists. */
 .policy-list { display: flex; flex-direction: column; }
+.policy-read-status { border-left: 3px solid var(--line); padding: 8px 12px; margin: 0 0 12px; font-size: .8rem; overflow-wrap: anywhere; }
+.policy-read-status p { margin: 0 0 8px; }
+.policy-read-status button { min-height: 44px; white-space: normal; }
 .policy-harness-group + .policy-harness-group { margin-top: 14px; }
 .policy-harness-title { margin: 0 0 4px; font-size: 0.75rem; font-weight: 650; color: var(--tx-2); }
 .policy-row {
