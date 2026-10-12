@@ -2118,6 +2118,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const target = selected || (liveOnlySwitch?.getClientRects().length ? liveOnlySwitch : null);
     target?.focus({preventScroll: true});
   }
+  function clearHarnessFilter(origin) {
+    const fromSessions = !!origin?.closest('#session-board-panel');
+    const searchId = fromSessions ? 'session-cwd-filter' : origin?.closest('#agents-container') ? 'agent-filter-text' : null;
+    harnessFilter.harnesses = {};
+    harnessFilter.text = '';
+    harnessFilterChanged();
+    const panel = fromSessions && document.getElementById('session-board-panel');
+    if (panel && panel.dataset.pane !== 'list') sessionWorkbench.showList();
+    const search = searchId && document.getElementById(searchId);
+    if (search?.isConnected && search.getClientRects().length) search.focus({preventScroll: true});
+  }
   syncHarnessFilterControls();
   for (const el of harnessTextInputs) {
     el.addEventListener('input', () => { harnessFilter.text = el.value; harnessFilterChanged(); });
@@ -4101,9 +4112,7 @@ document.addEventListener('DOMContentLoaded', () => {
         harnessFilterChanged();
         break;
       case 'clear-harness-filter':
-        harnessFilter.harnesses = {};
-        harnessFilter.text = '';
-        harnessFilterChanged();
+        clearHarnessFilter(el);
         break;
       case 'copy-report':
         window.copySessionReport(d.id);
