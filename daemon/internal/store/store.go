@@ -2127,8 +2127,9 @@ func (s *Store) GuardPathAllowed(agent, ruleID, path string) bool {
 	return s.guardPathAllowedLocked(agent, ruleID, filepath.Clean(path))
 }
 
-// ListGuardPathAllows returns recent per-path allows, newest first.
-func (s *Store) ListGuardPathAllows(limit int) []GuardPathAllow {
+// ListGuardPathAllows returns recent per-path allows, newest first, or an error
+// without partial records if the read fails.
+func (s *Store) ListGuardPathAllows(limit int) ([]GuardPathAllow, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
@@ -2136,18 +2137,21 @@ func (s *Store) ListGuardPathAllows(limit int) []GuardPathAllow {
 		normalizeLimit(limit),
 	)
 	if err != nil {
-		log.Printf("store: list guard_path_allows error: %v", err)
-		return nil
+		return nil, fmt.Errorf("list guard path allows: %w", err)
 	}
 	defer rows.Close()
 	out := []GuardPathAllow{}
 	for rows.Next() {
 		var g GuardPathAllow
-		if err := rows.Scan(&g.Agent, &g.RuleID, &g.Path, &g.CreatedAt); err == nil {
-			out = append(out, g)
+		if err := rows.Scan(&g.Agent, &g.RuleID, &g.Path, &g.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan guard path allow: %w", err)
 		}
+		out = append(out, g)
 	}
-	return out
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read guard path allows: %w", err)
+	}
+	return out, nil
 }
 
 // DeleteGuardPathAllow revokes one exception; removing an absent one is a no-op.
@@ -2195,7 +2199,9 @@ func (s *Store) LookupGuardRule(agent, ruleID string) (GuardRule, bool) {
 	return g, true
 }
 
-func (s *Store) ListGuardRules(limit int) []GuardRule {
+// ListGuardRules returns recent decisions, newest first, or an error without
+// partial records if the read fails.
+func (s *Store) ListGuardRules(limit int) ([]GuardRule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
@@ -2203,21 +2209,21 @@ func (s *Store) ListGuardRules(limit int) []GuardRule {
 		normalizeLimit(limit),
 	)
 	if err != nil {
-		log.Printf("store: query guard_rules error: %v", err)
-		return []GuardRule{}
+		return nil, fmt.Errorf("list guard rules: %w", err)
 	}
 	defer rows.Close()
 	out := []GuardRule{}
 	for rows.Next() {
 		var g GuardRule
-		if err := rows.Scan(&g.Agent, &g.RuleID, &g.Decision, &g.Source, &g.CreatedAt); err == nil {
-			out = append(out, g)
+		if err := rows.Scan(&g.Agent, &g.RuleID, &g.Decision, &g.Source, &g.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan guard rule: %w", err)
 		}
+		out = append(out, g)
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("store: guard_rules cursor error (result may be truncated): %v", err)
+		return nil, fmt.Errorf("read guard rules: %w", err)
 	}
-	return out
+	return out, nil
 }
 
 func (s *Store) DeleteGuardRule(agent, ruleID string) bool {

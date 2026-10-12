@@ -892,59 +892,7 @@ func (a *API) serveSessionTimeline(w http.ResponseWriter, r *http.Request, id st
 }
 
 func (a *API) currentStatus() Status {
-	st := a.statusFn()
-	if len(st.Agents) > 0 {
-		pids := make([]int32, len(st.Agents))
-		for i, ag := range st.Agents {
-			pids[i] = ag.PID
-		}
-		times := a.store.LastEventTimes(pids)
-		for i := range st.Agents {
-			if ts, ok := times[st.Agents[i].PID]; ok {
-				st.Agents[i].LastSeenAt = ts
-			}
-		}
-	}
-	st.Trees = GroupAgentTrees(st.Agents)
-	// Join each tree root to its durable session (by root pid) so the menubar
-	// and console can label a row with the harness + repo@branch the session
-	// knows — the process cwd alone reads as "/" for many agents.
-	if byRoot := a.store.SessionsByRootPID(); len(byRoot) > 0 {
-		for i := range st.Trees {
-			root := &st.Trees[i].Root
-			pid := root.RootPID
-			if pid == 0 {
-				pid = root.PID
-			}
-			if sess, ok := byRoot[pid]; ok {
-				if root.SessionID == "" {
-					root.SessionID = sess.ID
-				}
-				if root.Workspace == "" {
-					root.Workspace = sess.Workspace
-				}
-				if root.Repo == "" {
-					root.Repo = sess.Repo
-				}
-				if root.Branch == "" {
-					root.Branch = sess.Branch
-				}
-				if root.Origin == "" {
-					root.Origin = sess.Origin
-				}
-			}
-		}
-	}
-	flags, err := a.store.QueryFlags(store.FlagFilter{
-		Unacted:     true,
-		MinSeverity: 2,
-		Since:       time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
-		Limit:       500,
-	})
-	if err == nil {
-		st.UnactedFlags24h = len(flags)
-	}
-	return a.evidenceStatus(st)
+	return a.evidenceStatus(joinStatusEvidence(a.store, a.statusFn(), time.Now()))
 }
 
 // Shared monitoring facts for status, posture, and Doctor.
@@ -1228,7 +1176,12 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, a.mutePairs())
+		mutes, err := a.mutes.LoadResult()
+		if err != nil {
+			http.Error(w, "Muted hosts are unavailable. Refresh before changing policy.", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, mutePairsFrom(mutes))
 	case http.MethodPost:
 		limitBody(w, r)
 		var req MutePair
@@ -1380,17 +1333,7 @@ func (a *API) uninspectedRows(since time.Time, limit int) []UninspectedEndpoint 
 			break
 		}
 	}
-	ids := make([]string, len(out))
-	for i, ep := range out {
-		ids[i] = "host:" + ep.Agent + "|" + ep.Host
-	}
-	verdicts, _ := a.store.AdvisorVerdictsFor(ids, "host")
-	for i, id := range ids {
-		if v, ok := verdicts[id]; ok {
-			out[i].Assessment = v.Assessment
-			out[i].Rationale = v.Rationale
-		}
-	}
+	attachHostAdvice(a.store, out)
 	return out
 }
 
@@ -1453,9 +1396,7 @@ func (a *API) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 		Host:     host,
 		Identity: hostid.Identify(host),
 		Agents:   []string{},
-		Sessions: []model.Session{},
 		Allowed:  []EndpointAllowance{},
-		Events:   []event.Event{},
 	}
 	// Aggregate every agent+host summary matching this host (case-insensitive;
 	// the summaries key on the lowercased host).
@@ -1484,31 +1425,13 @@ func (a *API) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 
 	// Recent connection events to this host, and the durable sessions behind
 	// them (so "claude reached it" comes with the repo/branch it was working in).
-	evs, err := a.store.QueryEvents(store.EventFilter{
-		RemoteHost: host,
-		Since:      time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339),
-		Limit:      50,
-	})
+	evs, sessions, err := endpointConnections(a.store, host, time.Now())
 	if err != nil {
-		http.Error(w, "endpoint events unavailable", http.StatusServiceUnavailable)
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	detail.Events = evs
-	seen := map[string]bool{}
-	for _, e := range evs {
-		if e.SessionID == "" || seen[e.SessionID] {
-			continue
-		}
-		seen[e.SessionID] = true
-		s, ok, err := a.store.GetSessionBounded(e.SessionID)
-		if err != nil {
-			http.Error(w, "endpoint sessions unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		if ok {
-			detail.Sessions = append(detail.Sessions, s)
-		}
-	}
+	detail.Sessions = sessions
 
 	// Existing allowances for this host (any agent) — so the drawer can say
 	// "already trusted for X" instead of re-offering Allow.

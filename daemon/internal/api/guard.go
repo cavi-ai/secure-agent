@@ -242,7 +242,12 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleGuardPathAllow(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, a.store.ListGuardPathAllows(200))
+		allows, err := a.store.ListGuardPathAllows(200)
+		if err != nil {
+			http.Error(w, "File exceptions are unavailable. Refresh before changing policy.", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, allows)
 	case http.MethodPost:
 		if a.guardBroker == nil {
 			http.Error(w, "guard not enabled", http.StatusServiceUnavailable)
@@ -297,7 +302,12 @@ func (a *API) handleGuardPathAllow(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleGuardRules(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, a.store.ListGuardRules(200))
+		rules, err := a.store.ListGuardRules(200)
+		if err != nil {
+			http.Error(w, "Guard decisions are unavailable. Refresh before changing policy.", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, rules)
 	case http.MethodDelete:
 		agent := r.URL.Query().Get("agent")
 		ruleID := r.URL.Query().Get("rule_id")

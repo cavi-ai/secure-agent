@@ -16,6 +16,11 @@ function sessionEmptyHTML(groups, filter) {
     ${filtered ? '<button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button>' : ''}</div></div>`;
 }
 
+function sessionEmptyDetailHTML(emptyHTML) {
+  return emptyHTML.includes('data-action="session-list"') ? emptyHTML
+    : '<button type="button" class="btn btn-sm btn-ghost sd-back" data-action="session-list">Back to sessions</button>' + emptyHTML;
+}
+
 // liveTreeFor: the live process tree rooted at a session's root pid, if up.
 function liveTreeFor(s, trees) {
   if (!s.root_pid) return null;
@@ -678,7 +683,8 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     const rail = document.getElementById('session-rail');
     const scroll = rail?.scrollTop || 0;
     const selected = Array.from(rail?.querySelectorAll('[data-action="select-session"]') || []).find(el => el.dataset.id === selectedSessionId);
-    const target = selected?.getClientRects().length ? selected : rail;
+    const search = document.getElementById('session-cwd-filter');
+    const target = selected?.getClientRects().length ? selected : search?.getClientRects().length ? search : rail;
     target?.focus({ preventScroll: true });
     if (rail) rail.scrollTop = scroll;
   }
@@ -745,7 +751,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
         first: oldBody.querySelector('[data-row-id]')?.dataset.rowId,
         detailsOpen: !!detail.querySelector('details.session-metadata')?.open });
     }
-    const html = selected ? sessionDetailHTML(selected, sessionTimeline, trees, snapshot()) : emptyHTML;
+    const html = selected ? sessionDetailHTML(selected, sessionTimeline, trees, snapshot()) : sessionEmptyDetailHTML(emptyHTML);
     if (detail._sessionMarkup !== html) {
       const disclosures = new Map(Array.from(detail.querySelectorAll('[data-row-id]')).map(row =>
         [row.dataset.rowId, Array.from(row.querySelectorAll('details'), d => d.open)]));

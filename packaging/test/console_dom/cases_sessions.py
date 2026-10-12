@@ -436,7 +436,18 @@ def run_session_discovery(page):
             page.check(f'session discovery ({label}): {name}', state.get(name) is True, str(state))
 
 
+def run_session_empty_navigation(page):
+    for width in (375, 900, 1280):
+        dom = page.dom('?sessionemptynav', served=True, window_size=(width, 800))
+        receipt = re.search(r'data-session-empty-navigation="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        page.check(f'session empty navigation ({width}): receipt produced', bool(state), str(state))
+        for name in ('missingBack', 'copy', 'searchFocus', 'preserved', 'unavailable', 'noData', 'noDataFocus', 'bounds'):
+            page.check(f'session empty navigation ({width}): {name}', state.get(name) is True, str(state))
+
+
 CASES = (
+    Case('session_empty_navigation', run_session_empty_navigation),
     Case('session_discovery', run_session_discovery),
     Case('session_rail_renders_durable_sessions', run_session_rail_renders_durable_sessions, ('dom',)),
     Case('rail_titles_are_repo_branch_not_harness_repo', run_rail_titles_are_repo_branch_not_harness_repo, ('dom',)),
