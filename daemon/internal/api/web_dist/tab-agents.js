@@ -16,7 +16,7 @@ function renderAgents() {
   badge.textContent = agentGroups.length;
   SA.setTabBadge('processes', agentGroups.length); // informative count, neutral styling
   if (pills) {
-    pills.innerHTML = harnessPillsHTML(agentGroups.map(g => g.key), SA.harnessFilter.harnesses);
+    renderFilterPills(pills, harnessPillsHTML(agentGroups.map(g => g.key), SA.harnessFilter.harnesses));
     applyInlineMetrics(pills);
   }
 

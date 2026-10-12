@@ -214,15 +214,15 @@ const proPlan = { harness: 'codex', home: 'codex', plan_type: 'pro', limit_id: '
   windows: [{ window_minutes: 10080, used_percent: 52, resets_at: friday }], unlimited: false, seen_at: friday };
 
 test('planLineText: plan, home, window, percent and the local reset time', () => {
-  assert.equal(planLineText(proPlan), 'Codex Pro · codex · weekly 52% used · resets Fri 3:10 PM');
+  assert.equal(planLineText(proPlan), 'Codex Pro · codex · Account unverified — may overlap a shared account · weekly 52% used · resets Fri 3:10 PM · observed ' + new Date(friday).toLocaleString(undefined, {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}));
   const two = { ...proPlan, home: 'birch (openclaw)', windows: [proPlan.windows[0], { window_minutes: 300, used_percent: 7.5, resets_at: 'bad' }] };
-  assert.equal(planLineText(two), 'Codex Pro · birch (openclaw) · weekly 52% used · resets Fri 3:10 PM · 5-hour 8% used');
+  assert.equal(planLineText(two), 'Codex Pro · birch (openclaw) · Account unverified — may overlap a shared account · weekly 52% used · resets Fri 3:10 PM · 5-hour 8% used · observed ' + new Date(friday).toLocaleString(undefined, {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}));
 });
 
 test('spendPlanItems: one item per plan keyed plan:<home>, a bar per window at used_percent; none for an empty list', () => {
   const items = spendPlanItems([proPlan, { ...proPlan, home: 'birch (openclaw)', windows: [{ window_minutes: 300, used_percent: 95, resets_at: friday }] }]);
   assert.deepEqual(Array.from(items, i => i.key), ['plan:codex', 'plan:birch (openclaw)']);
-  assert.match(items[0].html, /<span class="spend-plan-text">Codex Pro · codex · weekly 52% used · resets Fri 3:10 PM<\/span>/);
+  assert.match(items[0].html, /<span class="spend-plan-text">Codex Pro · codex · Account unverified — may overlap a shared account · weekly 52% used · resets Fri 3:10 PM · observed [^<]+<\/span>/);
   assert.match(items[0].html, /class="hbar-fill" data-w="52\.0"/);
   assert.match(items[1].html, /class="hbar-fill crit" data-w="95\.0"/);
   assert.equal(spendPlanItems([]).length, 0);
@@ -521,4 +521,18 @@ test('saved grouping initializes guidance before boot and grouping changes updat
     controller('spend-controller.js', 'createSpendController', f.context).onSpendView();
     assert.equal(f.guidance.hidden,f.grouping.value !== 'day','preboot grouping change updates the same caption');
   }
+});
+
+
+test('unidentified historical Codex quota is explicitly unverified and observed', () => {
+  const unknown = {...proPlan, home:'deb (openclaw)'};
+  assert.match(planLineText(unknown), /Account unverified/);
+  assert.match(planLineText(unknown), /observed/);
+  assert.match(spendPlanItems([unknown])[0].html, /spend-plan-unverified/);
+  assert.match(spendPlanItems([unknown])[0].html, /<details class="spend-plan-history"><summary>Unverified quota observation/);
+  assert.doesNotMatch(spendPlanItems([unknown])[0].html, /<details[^>]* open/);
+  const known = {...proPlan, account_key:'account'};
+  assert.doesNotMatch(planLineText(known), /Account unverified/);
+  assert.match(planLineText(known), /observed/);
+  assert.equal(spendPlanItems([unknown,known])[0].key, 'plan:account:codex');
 });

@@ -263,14 +263,17 @@ test('activate loads only what is stale for the view it was given', async () => 
   assert.equal(log.ledger, 2);
 });
 
-test('filter mutators change only their own field', () => {
+test('worktree filters toggle state and All clears stale while preserving search', () => {
   const { controller } = build();
   controller.setWorktreeFilter('review');
   controller.toggleStaleFilter();
   controller.setWorktreeSearch('feat');
   assert.deepEqual(plain(controller.worktreesState.filter), { state: 'review', stale: true, q: 'feat' });
+  controller.setWorktreeFilter('review');
+  assert.deepEqual(plain(controller.worktreesState.filter), { state: '', stale: true, q: 'feat' });
+  controller.setWorktreeFilter('prune');
+  assert.deepEqual(plain(controller.worktreesState.filter), { state: 'prune', stale: true, q: 'feat' });
   controller.setWorktreeFilter(undefined);
-  controller.toggleStaleFilter();
   assert.deepEqual(plain(controller.worktreesState.filter), { state: '', stale: false, q: 'feat' });
   controller.setClutterKind('cache');
   controller.expandClutterProject('proj');

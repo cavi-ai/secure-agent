@@ -4111,6 +4111,10 @@ document.addEventListener('DOMContentLoaded', () => {
         else harnessFilter.harnesses[d.harness] = false;
         harnessFilterChanged();
         break;
+      case 'all-harnesses':
+        harnessFilter.harnesses = {};
+        harnessFilterChanged();
+        break;
       case 'clear-harness-filter':
         clearHarnessFilter(el);
         break;
