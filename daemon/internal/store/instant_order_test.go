@@ -294,11 +294,11 @@ func TestGuardListsNewestFirstWithinOneSecond(t *testing.T) {
 	}
 	restamp(t, s, `UPDATE guard_path_allows SET created_at=CASE path WHEN '/w/older' THEN ? ELSE ? END`, older, newer)
 	restamp(t, s, `UPDATE guard_rules SET created_at=CASE rule_id WHEN 'older' THEN ? ELSE ? END`, older, newer)
-	if got := s.ListGuardPathAllows(1); len(got) != 1 || got[0].Path != "/w/newer" {
-		t.Errorf("ListGuardPathAllows = %+v, want /w/newer first", got)
+	if got, err := s.ListGuardPathAllows(1); err != nil || len(got) != 1 || got[0].Path != "/w/newer" {
+		t.Errorf("ListGuardPathAllows = %+v, err=%v, want /w/newer first", got, err)
 	}
-	if got := s.ListGuardRules(1); len(got) != 1 || got[0].RuleID != "newer" {
-		t.Errorf("ListGuardRules = %+v, want newer first", got)
+	if got, err := s.ListGuardRules(1); err != nil || len(got) != 1 || got[0].RuleID != "newer" {
+		t.Errorf("ListGuardRules = %+v, err=%v, want newer first", got, err)
 	}
 }
 

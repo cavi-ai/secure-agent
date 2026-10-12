@@ -266,8 +266,9 @@ func TestGuardRuleRoundTrip(t *testing.T) {
 	if got.Decision != "deny" {
 		t.Fatalf("upsert failed, decision=%q", got.Decision)
 	}
-	if n := len(s.ListGuardRules(0)); n != 1 {
-		t.Fatalf("ListGuardRules = %d rows, want 1", n)
+	rules, err := s.ListGuardRules(0)
+	if err != nil || len(rules) != 1 {
+		t.Fatalf("ListGuardRules = %d rows, err=%v, want 1", len(rules), err)
 	}
 	if !s.DeleteGuardRule("claude", "cloud-creds") {
 		t.Fatal("delete returned false")
@@ -286,7 +287,10 @@ func TestListGuardRulesEmptyIsEmptyArrayNotNull(t *testing.T) {
 	}
 	defer s.Close()
 
-	rules := s.ListGuardRules(10)
+	rules, err := s.ListGuardRules(10)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if rules == nil {
 		t.Fatal("ListGuardRules returned nil, want a non-nil empty slice")
 	}
@@ -452,8 +456,8 @@ func TestGuardPathAllows(t *testing.T) {
 	}
 	// Idempotent upsert, list, revoke.
 	s.PutGuardPathAllow(GuardPathAllow{Agent: "claude", RuleID: "ssh-keys", Path: "/Users/x/.ssh/config"})
-	if got := s.ListGuardPathAllows(100); len(got) != 1 {
-		t.Fatalf("upsert must not duplicate, got %d rows", len(got))
+	if got, err := s.ListGuardPathAllows(100); err != nil || len(got) != 1 {
+		t.Fatalf("upsert must not duplicate, got %d rows, err=%v", len(got), err)
 	}
 	if !s.DeleteGuardPathAllow("claude", "ssh-keys", "/Users/x/.ssh/config") {
 		t.Fatal("delete of an existing allow must report removed")
