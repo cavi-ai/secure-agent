@@ -212,7 +212,7 @@ func (a *Agent) Status(ctx context.Context) AgentStatus {
 		st.Skills = append(st.Skills, SkillInfo{ID: s.ID, Title: s.Title, Summary: s.Summary})
 	}
 	a.mu.Lock()
-	st.Chatting, st.RunningRun = a.chatting, a.running
+	st.Chatting, st.RunningRun = a.chatting, a.runningID()
 	a.mu.Unlock()
 	var info ollamaInfo
 	if cfg.Enabled {
@@ -577,7 +577,7 @@ func knownHarness(id string) string {
 func (a *Agent) planRunning(p model.SysAgentPlan) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return p.Status == "running" && a.running != 0 && a.running == p.RunID
+	return p.Status == "running" && a.runningID() != 0 && a.runningID() == p.RunID
 }
 
 // Recover closes runs and plans a stopped daemon left "running": their

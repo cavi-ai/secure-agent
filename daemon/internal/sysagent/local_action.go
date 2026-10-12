@@ -35,18 +35,15 @@ func (a *Agent) RunLocal(messageID int64) (model.SysAgentRun, error) {
 	if m.Origin == "analysis" && m.ReviewState != "pending" {
 		return model.SysAgentRun{}, fmt.Errorf("%w: this recommendation is no longer pending", ErrInvalid)
 	}
-	if a.running != 0 {
-		return model.SysAgentRun{}, fmt.Errorf("%w: another local run is in progress", ErrBusy)
+	if err := a.runBusy(); err != nil {
+		return model.SysAgentRun{}, err
 	}
 	action := m.LocalCommand
 	if (action.Mode != ModeHeadless && action.Mode != ModeTerminal) || strings.TrimSpace(action.Command) == "" || len(action.Command) > 2048 {
 		return model.SysAgentRun{}, fmt.Errorf("%w: invalid stored local command", ErrInvalid)
 	}
-	if fi, err := os.Stat(action.Workdir); err != nil || !fi.IsDir() {
-		return model.SysAgentRun{}, fmt.Errorf("%w: the folder %s does not exist", ErrInvalid, action.Workdir)
-	}
-	if action.Mode == ModeHeadless && action.Workdir == string(filepath.Separator) {
-		return model.SysAgentRun{}, fmt.Errorf("%w: a headless command needs a folder narrower than /", ErrInvalid)
+	if err := launchFolder(action.Mode, action.Workdir); err != nil {
+		return model.SysAgentRun{}, err
 	}
 	run := model.SysAgentRun{TS: a.now(), Title: "Local command", Harness: "local", Mode: action.Mode,
 		Workdir: action.Workdir, Command: action.Command, Model: cfg.Model}
@@ -101,7 +98,7 @@ func (a *Agent) RunLocal(messageID int64) (model.SysAgentRun, error) {
 		a.st.PutSysAgentRun(run)
 	}
 	if action.Mode == ModeHeadless {
-		a.running = run.ID
+		a.claimRun(run.ID)
 		a.wg.Add(1)
 		go a.runHeadless(0, run, "/bin/sh", launch{
 			TaskDir: taskDir,

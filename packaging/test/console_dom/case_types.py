@@ -17,6 +17,7 @@ class Fixture:
     served: bool = False
     window_size: tuple[int, int] | None = None
     reduced_motion: bool = False
+    script: str = ""
 
     def load(self, page):
         payload = self.payload() if self.payload else {}
@@ -25,5 +26,5 @@ class Fixture:
             served=self.served,
             window_size=self.window_size,
             reduced_motion=self.reduced_motion,
-            fixture={"scenarios": list(self.scenarios), **payload},
+            fixture={"scenarios": list(self.scenarios), "script": self.script, **payload},
         )

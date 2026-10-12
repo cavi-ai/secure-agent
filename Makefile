@@ -1,4 +1,4 @@
-.PHONY: all build test test-menubar-rendering install uninstall clean daemon menubar cli collector smoke app dmg icon lint docs docs-reference docs-check docs-test docs-archive
+.PHONY: all build test test-menubar-rendering install uninstall clean daemon menubar cli collector smoke app dmg release icon lint docs docs-reference docs-check docs-test docs-archive
 
 docs-reference:
 	python3 packaging/docs/build.py reference
@@ -23,14 +23,11 @@ dmg:
 
 # Signed release build: Developer ID Application cert + notarization.
 # Usage: make release [VERSION=x.y.z]
-# Env: CODESIGN_IDENTITY (default: same resolution as `make install` —
-#      packaging/lib/sign_identity.sh — for stable TCC grants)
-#      NOTARY_PROFILE (keychain profile for notarytool — required for
-#      distribution beyond this machine)
+# Env: explicit CODESIGN_IDENTITY (Developer ID Application) and
+#      NOTARY_PROFILE (keychain profile for notarytool).
 release: VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-release: CODESIGN_IDENTITY ?= $(shell bash -c '. packaging/lib/sign_identity.sh && resolve_sign_identity' 2>/dev/null)
 release:
-	VERSION=$(VERSION) CODESIGN_IDENTITY="$(CODESIGN_IDENTITY)" NOTARY_PROFILE="$(NOTARY_PROFILE)" ./packaging/make_dmg.sh
+	RELEASE_BUILD=1 VERSION="$(VERSION)" CODESIGN_IDENTITY="$(CODESIGN_IDENTITY)" NOTARY_PROFILE="$(NOTARY_PROFILE)" ./packaging/make_dmg.sh
 
 icon:
 	./packaging/make_icon.sh
@@ -87,6 +84,7 @@ test:
 	python3 plugin/hooks/test_injection_scan.py
 	python3 plugin/hooks/test_activity_log.py
 	python3 plugin/hooks/test_cursor_hooks.py
+	python3 packaging/test/test_release_packaging.py
 	@echo "==> Checking console assets..."
 	./packaging/test/check_console_css.sh
 	@echo "==> Checking app bundle layout..."

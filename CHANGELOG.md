@@ -66,7 +66,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Findings: destination mutes match structured evidence.
 - Findings: `.env` evidence shows variable names only.
 - Findings and incidents: a payload finding shows whether its request was blocked, only observed, or unknown.
-- Install: one copy, `/Applications/Secure Agent.app`.
+- Install: one copy, `/Applications/Secure Agent.app`, signed with Developer ID and notarized.
 - Menu bar: sessions, findings and incidents open in the console at that record.
 - Performance: snapshots, posture and store lookups do about half the work.
 - Posture: uninspected egress alone is all-clear.
@@ -124,6 +124,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Resource episodes: include the session's tool calls, model calls and late file events.
 - Routing: the proxy URL carries the token.
 - Sessions: activity timestamps only move forward.
+- Sessions: an ended session that records new work while its process lives returns to active.
 - Sessions: failed Trace and status reads keep the last loaded data with a stale warning and **Retry**.
 - Sessions: rekeying is atomic.
 - Sessions: a silent session rooted in another family's infra ends after an hour.
@@ -138,6 +139,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Transcripts: events kept until delivered.
 - Transcripts: checkpoint failures retried and reported.
 - Transcripts: deleted transcripts are retired and unreadable ones keep their checkpoint.
+- Updates: the downloaded app is verified before it replaces the installed one, and the previous app is restored if relaunch preparation fails.
 - Worktrees: an action cancels the background rescan.
 - Worktrees: a merged branch keeps its merge reason beside keep and review reasons.
 - Worktrees: git reads never lazy-fetch objects in a partial clone.

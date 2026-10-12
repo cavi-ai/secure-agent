@@ -122,7 +122,7 @@ func TestHeadlessMasksBeforeSelectingOutputTail(t *testing.T) {
 			}
 			run := model.SysAgentRun{TS: time.Now(), Harness: "local", Workdir: dir, Status: "running"}
 			run.ID = st.PutSysAgentRun(run)
-			a.running = run.ID
+			a.claimRun(run.ID)
 			a.wg.Add(1)
 			a.runHeadless(0, run, "/bin/sh", launch{Args: []string{"-c", script}}, time.Second)
 			got := st.SysAgentRuns(1)[0]
@@ -142,7 +142,7 @@ func TestHeadlessWithholdsTruncatedOutput(t *testing.T) {
 	}
 	run := model.SysAgentRun{TS: time.Now(), Harness: "local", Workdir: dir, Status: "running"}
 	run.ID = st.PutSysAgentRun(run)
-	a.running = run.ID
+	a.claimRun(run.ID)
 	a.wg.Add(1)
 	a.runHeadless(0, run, "/bin/cat", launch{Args: []string{fixture}}, time.Second)
 	got := st.SysAgentRuns(1)[0]

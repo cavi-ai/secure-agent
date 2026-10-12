@@ -62,13 +62,8 @@ func (a *Agent) Dispatch(ctx context.Context, in DispatchInput) (model.SysAgentR
 	if err := a.normalizePlan(&p); err != nil {
 		return model.SysAgentRun{}, err
 	}
-	if fi, err := os.Stat(p.Workdir); err != nil || !fi.IsDir() {
-		return model.SysAgentRun{}, fmt.Errorf("%w: the folder %s does not exist", ErrInvalid, p.Workdir)
-	}
-	// A headless harness is sandboxed to its folder; / would scope it to
-	// the whole disk.
-	if p.Mode == ModeHeadless && p.Workdir == string(filepath.Separator) {
-		return model.SysAgentRun{}, fmt.Errorf("%w: a headless run needs a folder narrower than /; pick one, or open it in a terminal", ErrInvalid)
+	if err := launchFolder(p.Mode, p.Workdir); err != nil {
+		return model.SysAgentRun{}, err
 	}
 	h, _ := harnessByID(p.Harness)
 	info := probe(ctx, a.client, cfg.Endpoint)
@@ -106,10 +101,9 @@ func (a *Agent) Dispatch(ctx context.Context, in DispatchInput) (model.SysAgentR
 		return run, err
 	}
 	a.mu.Lock()
-	if a.running != 0 {
-		busy := a.running
+	if err := a.runBusy(); err != nil {
 		a.mu.Unlock()
-		return model.SysAgentRun{}, fmt.Errorf("%w: run %d is still running; one headless run at a time", ErrBusy, busy)
+		return model.SysAgentRun{}, err
 	}
 	if err := writeFiles(l.Files); err != nil {
 		a.mu.Unlock()
@@ -129,7 +123,7 @@ func (a *Agent) Dispatch(ctx context.Context, in DispatchInput) (model.SysAgentR
 		a.mu.Unlock()
 		return model.SysAgentRun{}, fmt.Errorf("%w: the plan could not be updated", ErrUnavailable)
 	}
-	a.running = run.ID
+	a.claimRun(run.ID)
 	a.wg.Add(1)
 	a.mu.Unlock()
 	a.audit(run)
@@ -204,7 +198,7 @@ func (a *Agent) audit(run model.SysAgentRun) {
 func (a *Agent) runHeadless(planID int64, run model.SysAgentRun, bin string, l launch, timeout time.Duration) {
 	defer func() {
 		a.mu.Lock()
-		a.running = 0
+		a.releaseRun()
 		a.mu.Unlock()
 		a.wg.Done()
 	}()

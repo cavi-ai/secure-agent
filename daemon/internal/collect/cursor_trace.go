@@ -146,6 +146,7 @@ func (t *CursorTracer) ParseLine(line string) (events []event.Event, ok bool) {
 		}
 	}
 	ts := time.Now() // Cursor transcripts carry no timestamps.
+	defer func() { markObserved(events) }()
 
 	switch rec.Role {
 	case "assistant":

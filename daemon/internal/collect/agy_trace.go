@@ -134,13 +134,16 @@ func (t *AGYTracer) ParseLine(line string) (events []event.Event, ok bool) {
 	if err := json.Unmarshal([]byte(trimmed), &rec); err != nil || t.sessionID == "" {
 		return nil, false
 	}
-	ts := time.Now()
+	ts, observed := time.Now(), true
 	if rec.CreatedAt != "" {
 		if parsed, err := time.Parse(time.RFC3339Nano, rec.CreatedAt); err == nil {
-			ts = parsed
+			ts, observed = parsed, false
 		} else if parsed, err := time.Parse(time.RFC3339, rec.CreatedAt); err == nil {
-			ts = parsed
+			ts, observed = parsed, false
 		}
+	}
+	if observed {
+		defer func() { markObserved(events) }()
 	}
 
 	// A user input is a turn boundary.

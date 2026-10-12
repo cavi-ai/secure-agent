@@ -77,15 +77,20 @@ public final class UpdateManager: ObservableObject {
     /// The expected SHA-256 for `filename` from a checksums.txt body
     /// ("<hash>  <path>" lines, path may carry a directory prefix).
     public nonisolated static func expectedSHA256(_ checksums: String, filename: String) -> String? {
+        var expected: String?
         for line in checksums.split(separator: "\n") {
             let cols = line.split(separator: " ", omittingEmptySubsequences: true)
-            guard cols.count >= 2, String(cols[0]).count == 64 else { continue }
+            guard cols.count == 2 else { continue }
             let path = String(cols.last!)
             if path == filename || path.hasSuffix("/" + filename) {
-                return String(cols[0])
+                let digest = String(cols[0]).lowercased()
+                guard digest.utf8.count == 64,
+                      digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+                      expected == nil || expected == digest else { return nil }
+                expected = digest
             }
         }
-        return nil
+        return expected
     }
 
     // MARK: - Check
@@ -152,6 +157,7 @@ public final class UpdateManager: ObservableObject {
     // MARK: - Apply
 
     public func applyUpdate(currentVersion: String) async {
+        guard state != .downloading, state != .installing, state != .nightlyRunning else { return }
         switch channel {
         case .stable:
             await applyStable()
@@ -165,7 +171,10 @@ public final class UpdateManager: ObservableObject {
         do {
             var req = URLRequest(url: Self.releasesURL)
             req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                throw UpdateError.shell("release download metadata could not be fetched")
+            }
             let rel = try JSONDecoder().decode(Release.self, from: data)
             guard let dmg = rel.assets.first(where: { $0.name.hasSuffix(".dmg") }) else {
                 state = .error("no DMG asset on the latest release")
@@ -175,7 +184,12 @@ public final class UpdateManager: ObservableObject {
                 state = .error("release has no checksums.txt — refusing to install unverified")
                 return
             }
-            let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(dmg.name)
+            let download = FileManager.default.temporaryDirectory
+                .appendingPathComponent("secure-agent-download-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: download, withIntermediateDirectories: false,
+                                                   attributes: [.posixPermissions: 0o700])
+            defer { try? FileManager.default.removeItem(at: download) }
+            let tmp = download.appendingPathComponent("update.dmg")
             // Stream to disk while hashing: a DMG is 100+ MB and must not be
             // held whole in RAM. Hash over the bytes AS WRITTEN, so a
             // truncated download fails the verify instead of installing a
@@ -239,11 +253,9 @@ public final class UpdateManager: ObservableObject {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Mount, replace the app bundle in place, detach, relaunch. The bundle is
-    /// replaced at its CURRENT location (dist/ for dev installs, /Applications
-    /// for real ones) — writing to /Applications may require admin rights,
-    /// which is surfaced as an honest error. All shell work is awaited
-    /// off-main so the UI stays responsive through the install.
+    /// Verify a staged bundle, exchange it with the installed copy, and launch
+    /// an independent helper before exiting. Installation errors retain the
+    /// running bundle; filesystem permissions are reported to the operator.
     private static func installDMG(at dmg: URL) async throws {
         let mount = await run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", dmg.path])
         guard mount.status == 0 else { throw UpdateError.shell("hdiutil attach: \(mount.stderr)") }
@@ -251,29 +263,30 @@ public final class UpdateManager: ObservableObject {
             .split(separator: "\t").last.map(String.init)?.trimmingCharacters(in: .whitespaces) else {
             throw UpdateError.shell("hdiutil attach: no mount point")
         }
-        // Detach the unmount: defer can't await, and the mount point must
-        // outlive the copy regardless of how installDMG exits.
-        defer { Task.detached { _ = await run("/usr/bin/hdiutil", ["detach", mountPoint]) } }
-        let src = "\(mountPoint)/Secure Agent.app"
-        let dst = Bundle.main.bundleURL.path
-        let copy = await run("/usr/bin/ditto", [src, dst])
-        guard copy.status == 0 else {
-            throw UpdateError.shell("install failed (permission?): \(copy.stderr). Install from the DMG manually.")
-        }
-        // Verify the copied bundle's signature BEFORE terminating the running
-        // instance: a truncated/corrupt copy must not brick the install by
-        // killing the only working app. The old instance stays alive on
-        // failure and the operator can retry.
-        let verify = await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", dst])
-        guard verify.status == 0 else {
+        let destination = Bundle.main.bundleURL
+        let pid = ProcessInfo.processInfo.processIdentifier
+        do {
+            try await BundleUpdateInstaller.install(
+                from: URL(fileURLWithPath: mountPoint).appendingPathComponent("Secure Agent.app"),
+                to: destination,
+                verify: { staged in
+                    let verify = await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", staged.path])
+                    guard verify.status == 0 else {
+                        throw UpdateError.shell("downloaded bundle failed signature verification: \(verify.stderr)")
+                    }
+                    // The staged copy no longer needs the mounted image. Finish
+                    // unmounting before starting any relaunch helper.
+                    let detach = await run("/usr/bin/hdiutil", ["detach", mountPoint])
+                    guard detach.status == 0 else {
+                        throw UpdateError.shell("disk image could not be detached: \(detach.stderr)")
+                    }
+                }, prepareRelaunch: {
+                    _ = try BundleUpdateInstaller.startAfterExit(of: pid,
+                        executable: URL(fileURLWithPath: "/usr/bin/open"), arguments: ["-n", destination.path])
+                })
+        } catch {
             _ = await run("/usr/bin/hdiutil", ["detach", mountPoint])
-            throw UpdateError.shell("copied bundle failed signature verification (\(verify.stderr)); keeping the current install")
-        }
-        // Relaunch AFTER this instance exits: the old app must take its daemon
-        // down first, or the new instance's daemon loses the socket-bind race
-        // against the still-running old one.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/open"), arguments: ["-n", dst])
+            throw error
         }
         NSApp.terminate(nil)
     }
@@ -321,7 +334,12 @@ public final class UpdateManager: ObservableObject {
 
     // MARK: - Process helper
 
-    enum UpdateError: Error { case shell(String) }
+    enum UpdateError: LocalizedError {
+        case shell(String)
+        var errorDescription: String? {
+            switch self { case .shell(let message): return message }
+        }
+    }
 
     /// Drain a pipe fully on a side thread. Reading AFTER waitUntilExit()
     /// deadlocks once a pipe's 64KB buffer fills, so both pipes must be
