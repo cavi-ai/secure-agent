@@ -426,7 +426,18 @@ def run_session_reading(page):
         for name in ('memoryBudget', 'contextInBody', 'latest', 'currentContext', 'detailsBudget', 'detailsDoNotGrowChrome', 'fullTitleRow', 'toolbar', 'actions', 'resultsBudget', 'traceBudget', 'fits'):
             check(f'session reading ({label}): {name}', state.get(name) is True, str(state))
 
+def run_session_discovery(page):
+    for label, size in [('desktop', (1280, 800)), ('phone', (375, 800))]:
+        dom = page.dom('?sessiondiscovery', served=True, window_size=size)
+        receipt = re.search(r'data-session-discovery="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        page.check(f'session discovery ({label}): receipt produced', bool(state), str(state))
+        for name in ('copy', 'reachable', 'filters', 'list', 'focus', 'ended', 'bounds'):
+            page.check(f'session discovery ({label}): {name}', state.get(name) is True, str(state))
+
+
 CASES = (
+    Case('session_discovery', run_session_discovery),
     Case('session_rail_renders_durable_sessions', run_session_rail_renders_durable_sessions, ('dom',)),
     Case('rail_titles_are_repo_branch_not_harness_repo', run_rail_titles_are_repo_branch_not_harness_repo, ('dom',)),
     Case('ended_session_marked', run_ended_session_marked, ('dom',)),

@@ -128,7 +128,7 @@ func (i *eventIngest) Feed(e event.Event) bool {
 			}
 		}
 		if e.SessionID != "" {
-			if sess, ok, err := st.GetSessionResult(e.SessionID); err == nil && ok {
+			if sess, ok, err := st.GetSession(e.SessionID); err == nil && ok {
 				observation.Scope.Harness = sess.Harness
 				observation.Scope.Workspace = sess.Workspace
 			}

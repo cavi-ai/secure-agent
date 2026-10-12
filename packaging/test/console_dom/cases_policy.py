@@ -227,7 +227,21 @@ def run_mutes_ledger(page):
         f"probe={pre(dom_rawmute, 'mute-focus-probe')!r}",
     )
 
+def run_policy_permissions(page):
+    check = page.check
+    for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+        for variant in ('confirmed', 'ambiguousrevoke', 'scopereadfail', 'unknownscope'):
+            dom = page.dom('?scoperevoke&' + variant, window_size=size, served=True)
+            receipt = re.search(r'data-global-permissions-probe="([^"]+)"', dom)
+            state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+            names = ['loaded', 'fits'] + (['unknown'] if variant == 'unknownscope' else
+                ['confirmation', 'cancelled', 'cancelFocus', 'once', 'noReplay'] +
+                (['unconfirmed', 'refreshed'] if variant == 'ambiguousrevoke' else ['saved', *(['retained'] if variant == 'scopereadfail' else [])]))
+            for name in names:
+                check(f'global permissions ({label}, {variant}): {name}', state.get(name) is True, str(state))
+
 CASES = (
+    Case('policy_permissions', run_policy_permissions, ()),
     Case('allowlist_entries_render_with_remove', run_allowlist_entries_render_with_remove, ('dom',)),
     Case('mute_action_on_advisor_benign_flag', run_mute_action_on_advisor_benign_flag, ('dom',)),
     Case('mutes_list_rendered_with_unmute', run_mutes_list_rendered_with_unmute, ('dom',)),

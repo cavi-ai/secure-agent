@@ -18,7 +18,7 @@ var (
 )
 
 type sessionOverviewStore interface {
-	GetSessionResult(string) (model.Session, bool, error)
+	GetSessionBounded(string) (model.Session, bool, error)
 	QueryFlagsResult(store.FlagFilter) ([]model.Flag, error)
 }
 
@@ -31,7 +31,7 @@ type sessionOverviewEvidence struct {
 // readSessionOverviewEvidence selects retained evidence by durable session ID.
 // Live coverage and controls are gathered separately by the HTTP boundary.
 func readSessionOverviewEvidence(st sessionOverviewStore, id string) (sessionOverviewEvidence, error) {
-	sess, found, err := st.GetSessionResult(id)
+	sess, found, err := st.GetSessionBounded(id)
 	if err != nil {
 		return sessionOverviewEvidence{}, fmt.Errorf("%w: %w", errSessionOverviewStatus, err)
 	}

@@ -274,3 +274,16 @@ func TestLabelsReachExplainPlanAndSuggestion(t *testing.T) {
 	}
 	_ = model.OperatorLabel{}
 }
+
+func TestRecordLabelKeepsActionWhenStoreUnavailable(t *testing.T) {
+	st, err := store.Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAPI(Deps{Store: st})
+	st.Close()
+	a.recordLabel(model.OperatorLabel{Kind: "host", Agent: "claude", Pattern: "api.example.com", Label: "ok", Source: "allow-host"})
+	if h := st.WriteHealth(); !slices.Contains(h.Active, "operator labels") {
+		t.Fatalf("failed label write hidden from write health: %+v", h)
+	}
+}

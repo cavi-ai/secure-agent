@@ -51,7 +51,8 @@ func (a *API) recordLabel(l model.OperatorLabel) {
 		return
 	}
 	l.CreatedAt = time.Now()
-	a.store.PutOperatorLabel(l)
+	// Best effort beside the action that triggered it; a failed write stays in write health.
+	_ = a.store.PutOperatorLabelResult(l)
 }
 
 // handleLabels serves POST /labels {subject, label, reason, source}: an

@@ -181,7 +181,7 @@ const maxSightings = 10000
 // resolverStore keeps identity reads and lifecycle writes explicit. A missing
 // session permits attribution; an unavailable read must not reassign ownership.
 type resolverStore interface {
-	GetSessionResult(string) (model.Session, bool, error)
+	GetSession(string) (model.Session, bool, error)
 	ListSessionsResult(store.SessionFilter) ([]model.Session, error)
 	UpsertSession(model.Session) error
 	PromoteSession(model.Session, string) error
@@ -381,7 +381,7 @@ func (r *Resolver) lookupLocked(id string) (model.Session, bool, error) {
 	if sess, ok := r.deferred[id]; ok {
 		return sess, true, nil
 	}
-	return r.st.GetSessionResult(id)
+	return r.st.GetSession(id)
 }
 
 // maxAncestry bounds the OS ancestry walk from a session root.
@@ -616,7 +616,7 @@ func (r *Resolver) findProvisionalLocked(id, harness, workspace string) (string,
 	if !ok || cand.Confidence != model.ConfProcessTree {
 		return "", false, nil
 	}
-	t, ok, err := r.st.GetSessionResult(id)
+	t, ok, err := r.st.GetSession(id)
 	if err != nil {
 		return "", false, err
 	}
@@ -758,7 +758,7 @@ func (r *Resolver) JoinTranscriptPID(id string, pid int32) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	sess, ok, err := r.st.GetSessionResult(id)
+	sess, ok, err := r.st.GetSession(id)
 	if err != nil || !ok {
 		return
 	}
@@ -772,7 +772,7 @@ func (r *Resolver) JoinTranscriptPID(id string, pid int32) {
 		if err != nil {
 			return
 		}
-		newer, ok, err := r.st.GetSessionResult(old)
+		newer, ok, err := r.st.GetSession(old)
 		if err != nil {
 			return
 		}
@@ -831,7 +831,7 @@ func (r *Resolver) SightedByHarness(since time.Time) map[string]int {
 	out := map[string]int{}
 	for id, harness := range ids {
 		if harness == "" {
-			if sess, ok, err := r.st.GetSessionResult(id); err == nil && ok {
+			if sess, ok, err := r.st.GetSession(id); err == nil && ok {
 				harness = sess.Harness
 			}
 		}
@@ -864,7 +864,7 @@ func (r *Resolver) upsertAndEmitLocked(sess model.Session) bool {
 		log.Printf("session: persist metadata: %v", err)
 		return false
 	}
-	if saved, ok, err := r.st.GetSessionResult(sess.ID); err == nil && ok {
+	if saved, ok, err := r.st.GetSession(sess.ID); err == nil && ok {
 		r.emitLocked(saved)
 	}
 	return true
@@ -898,7 +898,7 @@ func (r *Resolver) touchLocked(id string, ts time.Time) {
 		}
 		delete(r.deferred, id)
 		r.touch[id] = ts
-		if saved, ok, err := r.st.GetSessionResult(id); err == nil && ok {
+		if saved, ok, err := r.st.GetSession(id); err == nil && ok {
 			r.emitLocked(saved)
 		}
 		return
@@ -930,7 +930,7 @@ func (r *Resolver) WorkspaceFor(sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
-	if sess, ok, err := r.st.GetSessionResult(sessionID); err == nil && ok {
+	if sess, ok, err := r.st.GetSession(sessionID); err == nil && ok {
 		return sess.Workspace
 	}
 	return ""
@@ -949,7 +949,7 @@ func (r *Resolver) PermissionIdentity(pid int32, claimed string) (model.Decision
 	if id == "" || (claimed != "" && claimed != id) {
 		return model.DecisionScope{}, false
 	}
-	sess, ok, err := r.st.GetSessionResult(id)
+	sess, ok, err := r.st.GetSession(id)
 	if err != nil || !ok || (sess.Status != model.SessionActive && sess.Status != model.SessionIdle) || sess.RootPID != info.PID || !rootStarted(sess).Equal(info.StartedAt) || sess.Harness != info.Name || sess.Workspace != info.CWD {
 		return model.DecisionScope{}, false
 	}
@@ -1011,7 +1011,7 @@ func (r *Resolver) Sweep() {
 	// Idle transitions ride the delta stream too (the console's status chip
 	// must move without a poll).
 	for _, id := range idled {
-		if sess, ok, err := r.st.GetSessionResult(id); err == nil && ok {
+		if sess, ok, err := r.st.GetSession(id); err == nil && ok {
 			r.emitLocked(sess)
 		}
 	}
@@ -1024,7 +1024,7 @@ func (r *Resolver) endLocked(id string, now time.Time) {
 		log.Printf("session: end tracked session: %v", err)
 		return
 	}
-	if sess, ok, err := r.st.GetSessionResult(id); err == nil && ok {
+	if sess, ok, err := r.st.GetSession(id); err == nil && ok {
 		r.emitLocked(sess)
 	}
 	delete(r.deferred, id)

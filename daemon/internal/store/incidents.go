@@ -438,19 +438,13 @@ type IncidentWorkflow struct {
 	ResolutionNote string `json:"resolution_note,omitempty"`
 }
 
-// SetIncidentStatus transitions an incident's workflow state. Transitions are
-// forward-only: open → acknowledged → resolved. Re-resolving is allowed (note
-// is replaced); acknowledged_at is stamped only the first time.
-func (s *Store) SetIncidentStatus(id, status, note string) (bool, error) {
-	_, updated, err := s.SetIncidentStatusResult(id, status, note)
-	return updated, err
-}
-
 // ErrInvalidIncidentStatus distinguishes invalid input from storage failure.
 var ErrInvalidIncidentStatus = errors.New("invalid incident status")
 
-// SetIncidentStatusResult resolves the same incident identity as lookup inside
-// the update transaction, then returns the workflow read in that transaction.
+// SetIncidentStatusResult transitions an incident's workflow state.
+// Re-resolving replaces the note; acknowledged_at is stamped only the first
+// time. It resolves the same incident identity as lookup inside the update
+// transaction, then returns the workflow read in that transaction.
 // An unreadable result or failed commit leaves no successful update. Zero
 // matching rows are not an error.
 func (s *Store) SetIncidentStatusResult(id, status, note string) (workflow IncidentWorkflow, updated bool, writeErr error) {

@@ -3,19 +3,10 @@ package store
 import (
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
-
-// PutOperatorLabel records best-effort feedback from another control action.
-// Explicit operator judgments use PutOperatorLabelResult to observe failures.
-func (s *Store) PutOperatorLabel(l model.OperatorLabel) {
-	if err := s.PutOperatorLabelResult(l); err != nil {
-		log.Printf("store: operator label: %v", err)
-	}
-}
 
 // PutOperatorLabelResult commits one judgment and trims history atomically,
 // keeping the newest maxOperatorLabels. An error leaves history unchanged.

@@ -28,6 +28,7 @@ function fixture({ records = [record()], confirm = async () => true, remove, rea
     } };
   vm.createContext(ctx);
   vm.runInContext(readFileSync(new URL('lib.js', root), 'utf8'), ctx);
+  vm.runInContext(readFileSync(new URL('decision-permissions.js', root), 'utf8'), ctx);
   vm.runInContext(app.slice(start, end), ctx);
   const state = vm.runInContext('policyState', ctx);
   state.expected = records;

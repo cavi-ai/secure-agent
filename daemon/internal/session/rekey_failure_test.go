@@ -44,7 +44,7 @@ func TestDeferredRekeyFailurePreservesEvidenceAndIndices(t *testing.T) {
 	if len(events) != 1 || events[0].SessionID != "old" {
 		t.Fatalf("failed promotion rekeyed evidence: %+v", events)
 	}
-	if _, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("new")); ok {
+	if _, ok := testutil.Lookup[model.Session](t)(st.GetSession("new")); ok {
 		t.Fatal("failed promotion created canonical session")
 	}
 	if _, err := db.Exec(`DROP TRIGGER fail_promotion`); err != nil {

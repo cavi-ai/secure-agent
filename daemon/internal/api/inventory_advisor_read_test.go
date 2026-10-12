@@ -63,7 +63,7 @@ func TestInventoryAdvisorReadBatchFailureAndRecovery(t *testing.T) {
 					}
 					read = func() map[string]model.AdvisorVerdict {
 						t.Helper()
-						notes := a.worktreeNotes(rep)
+						notes := worktreeNotes(a.store, rep)
 						after, err := json.Marshal(rep)
 						if err != nil || !bytes.Equal(before, after) {
 							t.Fatal("advice mutated the source worktree report")

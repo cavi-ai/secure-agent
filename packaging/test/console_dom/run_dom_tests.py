@@ -212,7 +212,7 @@ class CasePage:
 
 def select_cases(cases, args):
     names = list(args.only)
-    aliases = ("review_results", "session_activity", "session_investigation", "session_permissions", "context_handoff", "session_results", "spend", "auth_recovery", "session_workbench")
+    aliases = ("review_results", "session_activity", "session_investigation", "session_permissions", "context_handoff", "session_results", "spend", "auth_recovery", "session_workbench", "policy_permissions")
     names.extend("spend_refresh" if name == "spend" else name for name in aliases if getattr(args, name + "_only", False))
     available = {case.name: case for case in cases}
     unknown = set(names) - available.keys()
@@ -234,6 +234,7 @@ def main():
     ap.add_argument('--session-investigation-only', action='store_true', help='run bounded session investigation return probes only')
     ap.add_argument('--session-activity-only', action='store_true', help='run retained session activity probes only')
     ap.add_argument('--review-results-only', action='store_true', help='run bounded review result interaction probes only')
+    ap.add_argument('--policy-permissions-only', action='store_true', help='run bounded global permission revocation probes only')
     ap.add_argument('--only', action='append', default=[], help='run a named case (repeatable)')
     ap.add_argument('--list', action='store_true', help='list case names without launching a browser')
     args = ap.parse_args()

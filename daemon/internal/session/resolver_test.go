@@ -218,7 +218,7 @@ func TestSweepEndsSessionOnlyWhenRootConfirmedGone(t *testing.T) {
 	restarted := NewResolver(st, r.tagger)
 
 	status := func() string {
-		got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult(id))
+		got, _ := testutil.Lookup[model.Session](t)(st.GetSession(id))
 		return got.Status
 	}
 
@@ -272,7 +272,7 @@ func TestSilentSessionOnAnInfraRootEnds(t *testing.T) {
 		"conv-old": model.SessionEnded, "conv-recent": model.SessionIdle,
 		"app": model.SessionIdle, "agent-root": model.SessionIdle,
 	} {
-		if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult(id)); got.Status != want {
+		if got, _ := testutil.Lookup[model.Session](t)(st.GetSession(id)); got.Status != want {
 			t.Errorf("%s: status %q, want %q", id, got.Status, want)
 		}
 	}
@@ -483,7 +483,7 @@ func TestOrchestratedRunNestsUnderOrchestrator(t *testing.T) {
 	r, st := testResolver(t, orchestratorTree())
 	parent := resolvePID(t, r, 100)
 	child := resolvePID(t, r, 102)
-	got, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(child))
+	got, ok := testutil.Lookup[model.Session](t)(st.GetSession(child))
 	if !ok || got.Harness != "codex" || got.ParentID != parent {
 		t.Fatalf("codex session = %+v, %v; want parent %q", got, ok, parent)
 	}
@@ -496,7 +496,7 @@ func TestOrchestratorParentIsFamilyRootSession(t *testing.T) {
 	parent := resolvePID(t, r, 100)
 	resolvePID(t, r, 101)
 	child := resolvePID(t, r, 102)
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult(child)); got.ParentID != parent {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession(child)); got.ParentID != parent {
 		t.Fatalf("codex parent = %q, want %q", got.ParentID, parent)
 	}
 }
@@ -505,7 +505,7 @@ func TestOrchestratorParentIsFamilyRootSession(t *testing.T) {
 func TestOrchestratorWithoutSessionLeavesParentEmpty(t *testing.T) {
 	r, st := testResolver(t, orchestratorTree())
 	child := resolvePID(t, r, 102)
-	if got, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(child)); !ok || got.ParentID != "" {
+	if got, ok := testutil.Lookup[model.Session](t)(st.GetSession(child)); !ok || got.ParentID != "" {
 		t.Fatalf("codex session = %+v, %v; want no parent", got, ok)
 	}
 }
@@ -519,7 +519,7 @@ func TestRootWithoutOtherHarnessHasNoParent(t *testing.T) {
 	})
 	for _, pid := range []int32{301, 302} {
 		id := resolvePID(t, r, pid)
-		if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult(id)); got.ParentID != "" {
+		if got, _ := testutil.Lookup[model.Session](t)(st.GetSession(id)); got.ParentID != "" {
 			t.Fatalf("pid %d parent = %q, want none", pid, got.ParentID)
 		}
 	}
@@ -536,7 +536,7 @@ func TestInfraAncestorIsNotOrchestrator(t *testing.T) {
 	})
 	resolvePID(t, r, 400)
 	child := resolvePID(t, r, 402)
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult(child)); got.ParentID != "" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession(child)); got.ParentID != "" {
 		t.Fatalf("claude parent = %q, want none", got.ParentID)
 	}
 }
@@ -663,7 +663,7 @@ func TestHookEventJoinsProcessTree(t *testing.T) {
 	})
 	e := event.Event{Kind: event.KindPluginAction, PID: 200, SessionID: "hook-x", TS: time.Now()}
 	r.Resolve(&e)
-	s, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("hook-x"))
+	s, ok := testutil.Lookup[model.Session](t)(st.GetSession("hook-x"))
 	if !ok || s.RootPID != 100 || s.Confidence != model.ConfHook || s.Harness != "codex" {
 		t.Fatalf("hook session = %+v (ok=%v), want root 100 codex hook", s, ok)
 	}
@@ -687,7 +687,7 @@ func TestHookEventRekeysProcessTreeSession(t *testing.T) {
 	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now(), Path: "/repo/a"}
 	procID := r.Resolve(&e)
 	st.PutEvent(e)
-	if s, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(procID)); !ok || s.Confidence != model.ConfProcessTree {
+	if s, ok := testutil.Lookup[model.Session](t)(st.GetSession(procID)); !ok || s.Confidence != model.ConfProcessTree {
 		t.Fatalf("process-tree session %q not persisted: %+v", procID, s)
 	}
 
@@ -746,10 +746,10 @@ func TestHookEventDoesNotMergeSiblingHookSession(t *testing.T) {
 	r.Resolve(&a)
 	b := event.Event{Kind: event.KindPluginAction, PID: 100, SessionID: "hook-b", TS: time.Now()}
 	r.Resolve(&b)
-	if _, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("hook-a")); !ok {
+	if _, ok := testutil.Lookup[model.Session](t)(st.GetSession("hook-a")); !ok {
 		t.Fatal("hook-a was merged into hook-b")
 	}
-	if s, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("hook-b")); !ok || s.RootPID != 100 {
+	if s, ok := testutil.Lookup[model.Session](t)(st.GetSession("hook-b")); !ok || s.RootPID != 100 {
 		t.Fatalf("hook-b = %+v, want rooted at 100", s)
 	}
 	if id := resolvePID(t, r, 100); id != "hook-b" {
@@ -763,7 +763,7 @@ func TestHookEventLateTagFillsRoot(t *testing.T) {
 	r, st := testResolver(t, fakeProcs{})
 	e := event.Event{Kind: event.KindPluginAction, PID: 100, SessionID: "hook-x", TS: time.Now()}
 	r.Resolve(&e)
-	if s, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("hook-x")); s.RootPID != 0 {
+	if s, _ := testutil.Lookup[model.Session](t)(st.GetSession("hook-x")); s.RootPID != 0 {
 		t.Fatalf("untagged pid set root %d", s.RootPID)
 	}
 	r.tagger = agents.New(mustConfig(t), fakeProcs{
@@ -772,7 +772,7 @@ func TestHookEventLateTagFillsRoot(t *testing.T) {
 	r.tagger.Refresh()
 	e2 := event.Event{Kind: event.KindPluginAction, PID: 100, SessionID: "hook-x", TS: time.Now()}
 	r.Resolve(&e2)
-	s, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("hook-x"))
+	s, _ := testutil.Lookup[model.Session](t)(st.GetSession("hook-x"))
 	if s.RootPID != 100 || s.Harness != "codex" {
 		t.Fatalf("session = %+v, want root 100 codex after the late tag", s)
 	}
@@ -783,7 +783,7 @@ func TestHookEventUntaggedPIDKeepsNoRoot(t *testing.T) {
 	r, st := testResolver(t, fakeProcs{})
 	e := event.Event{Kind: event.KindPluginAction, PID: 999, SessionID: "hook-x", TS: time.Now()}
 	r.Resolve(&e)
-	s, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("hook-x"))
+	s, ok := testutil.Lookup[model.Session](t)(st.GetSession("hook-x"))
 	if !ok || s.RootPID != 0 || s.Confidence != model.ConfHook {
 		t.Fatalf("session = %+v, want a rootless hook session", s)
 	}
@@ -795,13 +795,13 @@ func TestTraceEventCreatesTranscriptSession(t *testing.T) {
 	r, st := testResolver(t, fakeProcs{})
 	e := event.Event{Kind: event.KindToolCall, SessionID: "conv-1", CallID: "c1", ToolName: "exec", TS: time.Now()}
 	r.Resolve(&e)
-	if s, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("conv-1")); !ok || s.Confidence != model.ConfTranscript {
+	if s, ok := testutil.Lookup[model.Session](t)(st.GetSession("conv-1")); !ok || s.Confidence != model.ConfTranscript {
 		t.Fatalf("session = %+v, want confidence transcript", s)
 	}
 	r.NoteTranscriptSession("conv-2", "openclaw", "openclaw:ember", time.Now())
 	e2 := event.Event{Kind: event.KindTurn, SessionID: "conv-2", TS: time.Now()}
 	r.Resolve(&e2)
-	if s, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("conv-2")); s.Confidence != model.ConfTranscript || s.Harness != "openclaw" {
+	if s, _ := testutil.Lookup[model.Session](t)(st.GetSession("conv-2")); s.Confidence != model.ConfTranscript || s.Harness != "openclaw" {
 		t.Fatalf("session = %+v, want openclaw transcript kept", s)
 	}
 }
@@ -811,7 +811,7 @@ func TestEndTranscriptSession(t *testing.T) {
 	r, st := testResolver(t, fakeProcs{})
 	r.NoteTranscriptSession("conv-1", "openclaw", "openclaw:ember", time.Now().Add(-time.Minute))
 	r.EndTranscriptSession("conv-1", time.Now())
-	if s, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("conv-1")); s.Status != model.SessionEnded {
+	if s, _ := testutil.Lookup[model.Session](t)(st.GetSession("conv-1")); s.Status != model.SessionEnded {
 		t.Fatalf("status = %q, want ended", s.Status)
 	}
 }
@@ -837,7 +837,7 @@ func TestHookEventNestsUnderOrchestrator(t *testing.T) {
 	parent := resolvePID(t, r, 100)
 	h := event.Event{Kind: event.KindPluginAction, PID: 102, SessionID: "hook-x", TS: time.Now()}
 	r.Resolve(&h)
-	if got, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("hook-x")); !ok || got.ParentID != parent || got.RootPID == 0 {
+	if got, ok := testutil.Lookup[model.Session](t)(st.GetSession("hook-x")); !ok || got.ParentID != parent || got.RootPID == 0 {
 		t.Fatalf("hook session = %+v, %v; want parent %q and a root", got, ok, parent)
 	}
 }
@@ -850,7 +850,7 @@ func TestNoteTranscriptSightingCarriesRepoBranchParent(t *testing.T) {
 		ID: "h-child", Harness: "hermes", Workspace: "/nonexistent/proj/sub",
 		Repo: "proj", Branch: "feat/x", ParentID: "h-root", TS: time.Now(),
 	})
-	s, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("h-child"))
+	s, ok := testutil.Lookup[model.Session](t)(st.GetSession("h-child"))
 	if !ok || s.Harness != "hermes" || s.Repo != "proj" || s.Branch != "feat/x" || s.ParentID != "h-root" ||
 		s.Workspace != "/nonexistent/proj/sub" || s.Confidence != model.ConfTranscript {
 		t.Fatalf("session = %+v (ok=%v)", s, ok)
@@ -905,13 +905,13 @@ func TestJoinTranscriptPIDRepeatIsNoop(t *testing.T) {
 	r, st := testResolver(t, codexRolloutTree())
 	r.NoteTranscriptSession("rollout-a", "codex", "/teams/x", time.Now())
 	r.JoinTranscriptPID("rollout-a", 100)
-	before, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("rollout-a"))
+	before, _ := testutil.Lookup[model.Session](t)(st.GetSession("rollout-a"))
 	emitted := 0
 	r.OnSessionChange = func(model.Session) { emitted++ }
 
 	r.JoinTranscriptPID("rollout-a", 100)
 
-	after, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("rollout-a"))
+	after, _ := testutil.Lookup[model.Session](t)(st.GetSession("rollout-a"))
 	if emitted != 0 || after != before {
 		t.Fatalf("repeat join emitted %d, row %+v → %+v; want a no-op", emitted, before, after)
 	}
@@ -935,8 +935,8 @@ func TestJoinTranscriptPIDNewerRolloutTakesRoot(t *testing.T) {
 	r.JoinTranscriptPID("rollout-b", 100)
 	r.JoinTranscriptPID("rollout-a", 100)
 
-	a, okA := testutil.Lookup[model.Session](t)(st.GetSessionResult("rollout-a"))
-	b, okB := testutil.Lookup[model.Session](t)(st.GetSessionResult("rollout-b"))
+	a, okA := testutil.Lookup[model.Session](t)(st.GetSession("rollout-a"))
+	b, okB := testutil.Lookup[model.Session](t)(st.GetSession("rollout-b"))
 	if !okA || !okB || a.RootPID != 100 || b.RootPID != 100 {
 		t.Fatalf("a = %+v %v, b = %+v %v; want both rows rooted at 100", a, okA, b, okB)
 	}
@@ -965,7 +965,7 @@ func TestJoinTranscriptPIDIgnoresUntaggedPID(t *testing.T) {
 	r.NoteTranscriptSession("rollout-a", "codex", "/teams/x", time.Now())
 	r.JoinTranscriptPID("rollout-a", 300)
 	r.JoinTranscriptPID("rollout-a", 999)
-	if s, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("rollout-a")); s.RootPID != 0 {
+	if s, _ := testutil.Lookup[model.Session](t)(st.GetSession("rollout-a")); s.RootPID != 0 {
 		t.Fatalf("session = %+v, want no root", s)
 	}
 	if len(r.byRoot) != 0 || len(r.byPID) != 0 {
@@ -1001,7 +1001,7 @@ func sharedCwdTree() fakeProcs {
 
 func wantRoot(t *testing.T, st *store.Store, id string, root int32, parent string) {
 	t.Helper()
-	s, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(id))
+	s, ok := testutil.Lookup[model.Session](t)(st.GetSession(id))
 	if !ok || s.Harness != "codex" || s.RootPID != root || s.ParentID != parent {
 		t.Fatalf("session %q = %+v, %v; want codex rooted at %d under %q", id, s, ok, root, parent)
 	}
@@ -1071,8 +1071,8 @@ func TestDesktopConversationEndsWithItsOwnProcess(t *testing.T) {
 	} {
 		r.Resolve(&e)
 	}
-	a, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("conv-a"))
-	b, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("conv-b"))
+	a, _ := testutil.Lookup[model.Session](t)(st.GetSession("conv-a"))
+	b, _ := testutil.Lookup[model.Session](t)(st.GetSession("conv-b"))
 	if a.RootPID != 111 || b.RootPID != 121 || a.Harness != "claude" {
 		t.Fatalf("roots a=%d b=%d harness=%q; want each conversation's claude process", a.RootPID, b.RootPID, a.Harness)
 	}
@@ -1082,8 +1082,8 @@ func TestDesktopConversationEndsWithItsOwnProcess(t *testing.T) {
 	r.tagger = agents.New(mustConfig(t), procs)
 	r.tagger.Refresh()
 	r.Sweep()
-	a, _ = testutil.Lookup[model.Session](t)(st.GetSessionResult("conv-a"))
-	b, _ = testutil.Lookup[model.Session](t)(st.GetSessionResult("conv-b"))
+	a, _ = testutil.Lookup[model.Session](t)(st.GetSession("conv-a"))
+	b, _ = testutil.Lookup[model.Session](t)(st.GetSession("conv-b"))
 	if a.Status != model.SessionEnded || b.Status == model.SessionEnded {
 		t.Fatalf("after conversation a exits: a=%s b=%s; want only a ended", a.Status, b.Status)
 	}
@@ -1106,7 +1106,7 @@ func TestSameCwdSweepEndsEachOnItsOwnRoot(t *testing.T) {
 		r.Sweep()
 	}
 	status := func(id string) string {
-		s, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult(id))
+		s, _ := testutil.Lookup[model.Session](t)(st.GetSession(id))
 		return s.Status
 	}
 
@@ -1140,7 +1140,7 @@ func TestSameCwdTranscriptJoinsTheRootHoldingIt(t *testing.T) {
 
 	r.NoteTranscriptSession("rollout-a", "codex", home, time.Now())
 	for _, id := range []string{a, b} {
-		if _, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(id)); !ok {
+		if _, ok := testutil.Lookup[model.Session](t)(st.GetSession(id)); !ok {
 			t.Fatalf("process-tree row %q merged by scope alone", id)
 		}
 	}
@@ -1149,7 +1149,7 @@ func TestSameCwdTranscriptJoinsTheRootHoldingIt(t *testing.T) {
 	r.NoteTranscriptSession("rollout-a", "codex", home, time.Now())
 	wantRoot(t, st, "rollout-a", 300, orch)
 	wantRoot(t, st, b, 400, orch)
-	if _, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(a)); ok {
+	if _, ok := testutil.Lookup[model.Session](t)(st.GetSession(a)); ok {
 		t.Fatalf("row %q not merged into rollout-a", a)
 	}
 
@@ -1157,7 +1157,7 @@ func TestSameCwdTranscriptJoinsTheRootHoldingIt(t *testing.T) {
 	r.JoinTranscriptPID("rollout-b", 400)
 	wantRoot(t, st, "rollout-a", 300, orch)
 	wantRoot(t, st, "rollout-b", 400, orch)
-	if _, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(b)); ok {
+	if _, ok := testutil.Lookup[model.Session](t)(st.GetSession(b)); ok {
 		t.Fatalf("row %q not merged into rollout-b", b)
 	}
 
@@ -1187,7 +1187,7 @@ func TestNoteTranscriptSightingCarriesOrigin(t *testing.T) {
 	r, st := testResolver(t, fakeProcs{})
 	r.NoteTranscriptSighting(TranscriptSighting{ID: "c1", Harness: "codex", Workspace: "/nonexistent/w", Origin: "x (openclaw)", TS: time.Now()})
 	r.NoteTranscriptSession("c1", "codex", "/nonexistent/w", time.Now())
-	if s, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("c1")); !ok || s.Origin != "x (openclaw)" {
+	if s, ok := testutil.Lookup[model.Session](t)(st.GetSession("c1")); !ok || s.Origin != "x (openclaw)" {
 		t.Fatalf("session = %+v (ok=%v)", s, ok)
 	}
 }

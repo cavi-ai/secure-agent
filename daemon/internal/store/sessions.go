@@ -507,19 +507,24 @@ func (s *Store) ListSessionsResult(f SessionFilter) (out []model.Session, readEr
 	}
 }
 
-// sessionByID reads one session row directly, whatever its status or age.
-func (s *Store) sessionByID(id string) (model.Session, bool) {
+// GetSession reads one session row consistent with every committed collector
+// write. Missing is false, nil; a failed read is an error and a read-health fault.
+func (s *Store) GetSession(id string) (_ model.Session, _ bool, readErr error) {
+	defer func() { s.noteRead("session lookup", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(sessionSelect+` WHERE id = ?`, id)
 	if err != nil {
-		return model.Session{}, false
+		return model.Session{}, false, err
 	}
-	got := scanSessions(rows)
-	if len(got) == 0 {
-		return model.Session{}, false
+	sessions, err := scanSessionsResult(rows)
+	if err != nil {
+		return model.Session{}, false, err
 	}
-	return got[0], true
+	if len(sessions) == 0 {
+		return model.Session{}, false, nil
+	}
+	return sessions[0], true, nil
 }
 
 func min(a, b int) int {
@@ -529,9 +534,9 @@ func min(a, b int) int {
 	return b
 }
 
-// GetSessionResult distinguishes missing identity from failed evidence reads.
-// The bounded reader does not wait on the collector's write mutex.
-func (s *Store) GetSessionResult(id string) (_ model.Session, _ bool, readErr error) {
+// GetSessionBounded is the request-handler session read: bounded by a 100 ms
+// deadline, it never waits on the collector mutex.
+func (s *Store) GetSessionBounded(id string) (_ model.Session, _ bool, readErr error) {
 	defer func() { s.noteRead("session lookup", readErr) }()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()

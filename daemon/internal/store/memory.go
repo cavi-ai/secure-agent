@@ -114,7 +114,7 @@ func (s *Store) QuerySessionMemory(sessionID string, before *MemoryCursor, limit
 	// Resolve old resource family identity before the read transaction. New
 	// source rows always use their persisted session_id.
 	legacyKey := "\x00"
-	sess, found, err := s.GetSessionResult(sessionID)
+	sess, found, err := s.GetSessionBounded(sessionID)
 	if err != nil {
 		return nil, false, err
 	}

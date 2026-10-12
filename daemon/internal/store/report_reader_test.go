@@ -22,7 +22,7 @@ type memoryReportReader struct {
 	filter                         FlagFilter
 }
 
-func (r *memoryReportReader) GetSessionResult(id string) (model.Session, bool, error) {
+func (r *memoryReportReader) GetSessionBounded(id string) (model.Session, bool, error) {
 	r.reads = append(r.reads, "session:"+id)
 	return r.session, r.found, r.identityErr
 }

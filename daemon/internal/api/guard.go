@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -76,7 +75,7 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	// A supplied identity is only attributable if the durable session exists.
 	// Never guess from the agent, workspace, or request time.
 	if req.SessionID != "" {
-		_, ok, err := a.store.GetSessionResult(req.SessionID)
+		_, ok, err := a.store.GetSessionBounded(req.SessionID)
 		if err != nil {
 			http.Error(w, "session data unavailable", http.StatusServiceUnavailable)
 			return
@@ -94,24 +93,7 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	identity.RuleID = req.RuleID
 	identity.ResourcePath = req.Path
 	identity.Operation = "guard:" + req.Tool
-	if identity.IdentityBasis != "" && a.store.MatchDecisionScopes([]model.DecisionScope{identity}) {
-		d := guard.Decision{Verdict: "allow", Scope: "scoped", Reason: "saved-permission"}
-		record(d)
-		writeJSON(w, d)
-		return
-	}
-	// Per-path exceptions first: an operator-granted allow on THIS exact
-	// path (or an ancestor of it) answers without prompting. Cheapest and
-	// narrowest check first — one cached rule-wide allow must never widen
-	// what a per-path allow does not cover.
-	if a.store.GuardPathAllowed(req.Agent, req.RuleID, req.Path) {
-		d := guard.Decision{Verdict: "allow", Scope: "always", Reason: "path-allow"}
-		record(d)
-		writeJSON(w, d)
-		return
-	}
-	if g, ok := a.store.LookupGuardRule(req.Agent, req.RuleID); ok {
-		d := guard.Decision{Verdict: g.Decision, Scope: "always", Reason: "cached"}
+	if d, ok := standingGuardDecision(a.store, identity, req.Agent, req.RuleID, req.Path); ok {
 		record(d)
 		writeJSON(w, d)
 		return
@@ -175,18 +157,8 @@ func (a *API) handleGuardPending(w http.ResponseWriter, r *http.Request) {
 	}
 	pending := a.guardBroker.Pending()
 	if a.store != nil {
-		subjectIDs := make([]string, len(pending))
-		for i, p := range pending {
-			subjectIDs[i] = advisor.GuardSubjectID(p.Agent, p.RuleID, p.Path, p.Tool)
-		}
-		// Optional advice may be partial; retain read health for the whole batch.
-		verdicts, _ := a.store.AdvisorVerdictsFor(subjectIDs, "guard")
 		// Advisory only: the human still resolves the prompt.
-		for i := range pending {
-			if v, ok := verdicts[subjectIDs[i]]; ok {
-				pending[i].Advisor = &v
-			}
-		}
+		attachGuardAdvice(a.store, pending)
 	}
 	// Keep the API response oldest-first by timestamp.
 	sort.Slice(pending, func(i, j int) bool { return pending[i].TS < pending[j].TS })

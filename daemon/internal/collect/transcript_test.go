@@ -539,11 +539,14 @@ func TestCodexSessionSeenCarriesOrigin(t *testing.T) {
 	sub := b.Subscribe()
 	ts := NewTranscriptScanner(b, nil)
 	var origins []string
-	ts.OnCodexSessionSeen = func(id, _, origin string, _ time.Time) {
-		if id == "" {
+	ts.OnSessionSeen = func(s TraceSession) {
+		if s.ID == "" {
 			t.Errorf("empty session id")
 		}
-		origins = append(origins, origin)
+		if s.Harness != "codex" {
+			t.Errorf("harness = %q, want codex", s.Harness)
+		}
+		origins = append(origins, s.Origin)
 	}
 	offsets := map[string]int64{}
 
@@ -560,6 +563,36 @@ func TestCodexSessionSeenCarriesOrigin(t *testing.T) {
 		if o != "" {
 			t.Fatalf("own codex rollout origin = %q, want none", o)
 		}
+	}
+}
+
+// Every JSONL harness reports its sighting through the one callback, carrying
+// the harness name and, for Codex, the rollout's origin.
+func TestSessionSeenCarriesHarnessAndOrigin(t *testing.T) {
+	root := t.TempDir()
+	codexPath := filepath.Join(root, ".openclaw", "agents", "x", "agent", "codex-home", "sessions", "2026", "09", "22", "rollout-2026-09-22T10-00-00-a.jsonl")
+	claudePath := filepath.Join(root, ".claude", "projects", "repo", "c.jsonl")
+	for _, p := range []string{codexPath, claudePath} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := bus.New(64)
+	defer b.Close()
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, nil)
+	var seen []TraceSession
+	ts.OnSessionSeen = func(s TraceSession) { seen = append(seen, s) }
+	offsets := map[string]int64{}
+
+	appendAndTail(t, ts, sub, offsets, codexPath, codexMetaLine)
+	if len(seen) != 1 || seen[0].Harness != "codex" || seen[0].ID != "019f58e8-6230" || seen[0].Origin != CodexOrigin(codexPath) || seen[0].Origin == "" {
+		t.Fatalf("codex sightings = %+v, want one codex sighting with origin %q", seen, CodexOrigin(codexPath))
+	}
+	seen = nil
+	appendAndTail(t, ts, sub, offsets, claudePath, claudeAssistantLine)
+	if len(seen) != 1 || seen[0].Harness != "claude" || seen[0].ID != "sess-1" || seen[0].Origin != "" {
+		t.Fatalf("claude sightings = %+v, want one claude sighting without origin", seen)
 	}
 }
 
@@ -760,7 +793,7 @@ func TestTranscriptPartialDeliveryPreservesTracePairingAndSecretHit(t *testing.T
 	ts := NewTranscriptScanner(b, nil)
 	ts.TextScanner = stubTextScanner{secret: secret}
 	seen := 0
-	ts.OnSessionSeen = func(string, string, string, time.Time) { seen++ }
+	ts.OnSessionSeen = func(TraceSession) { seen++ }
 	offsets := map[string]int64{}
 	ts.tailFile(path, offsets, nil)
 	if offsets[path] != 0 || b.Dropped() != 0 {

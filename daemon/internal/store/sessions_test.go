@@ -122,13 +122,13 @@ func TestRekeySessionRepointsEventsAndFlags(t *testing.T) {
 	if n := len(testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{}))); n != 2 {
 		t.Fatalf("sessions = %d, want 2 after rekey", n)
 	}
-	if _, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("proc-100-1")); ok {
+	if _, ok := testutil.Lookup[model.Session](t)(s.GetSession("proc-100-1")); ok {
 		t.Fatal("old id still present after rekey")
 	}
-	if got, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("hook-abc")); !ok || got.ParentID != "proc-50-1" {
+	if got, ok := testutil.Lookup[model.Session](t)(s.GetSession("hook-abc")); !ok || got.ParentID != "proc-50-1" {
 		t.Fatalf("rekeyed session = %+v, %v; want parent proc-50-1", got, ok)
 	}
-	if child, _ := testutil.Lookup[model.Session](t)(s.GetSessionResult("proc-200-1")); child.ParentID != "hook-abc" {
+	if child, _ := testutil.Lookup[model.Session](t)(s.GetSession("proc-200-1")); child.ParentID != "hook-abc" {
 		t.Fatalf("child parent = %q, want hook-abc", child.ParentID)
 	}
 
@@ -138,10 +138,10 @@ func TestRekeySessionRepointsEventsAndFlags(t *testing.T) {
 	s.UpsertSession(model.Session{ID: "tx-300", Harness: "codex",
 		StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfTranscript})
 	s.RekeySession("proc-300-1", "tx-300")
-	if got, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("tx-300")); !ok || got.ParentID != "hook-abc" {
+	if got, ok := testutil.Lookup[model.Session](t)(s.GetSession("tx-300")); !ok || got.ParentID != "hook-abc" {
 		t.Fatalf("merged session = %+v, %v; want parent hook-abc", got, ok)
 	}
-	if _, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("proc-300-1")); ok {
+	if _, ok := testutil.Lookup[model.Session](t)(s.GetSession("proc-300-1")); ok {
 		t.Fatal("old id still present after merge")
 	}
 	for _, e := range testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 10})) {
@@ -288,7 +288,7 @@ func TestUpsertSessionPreservesHarness(t *testing.T) {
 	st.UpsertSession(model.Session{ID: "s1",
 		StartedAt: time.Now(), LastSeenAt: time.Now(), Status: model.SessionActive})
 
-	got, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("s1"))
+	got, ok := testutil.Lookup[model.Session](t)(st.GetSession("s1"))
 	if !ok {
 		t.Fatal("session disappeared")
 	}
@@ -466,15 +466,15 @@ func TestRepairSessionGitIdentity(t *testing.T) {
 	if n := s.RepairSessionGitIdentity(resolve); n != 3 {
 		t.Fatalf("repaired %d, want 3 (a basename repo is heuristic output on any confidence)", n)
 	}
-	sess, _ := testutil.Lookup[model.Session](t)(s.GetSessionResult("old-proc"))
+	sess, _ := testutil.Lookup[model.Session](t)(s.GetSession("old-proc"))
 	if sess.Repo != "proj" || sess.Branch != "main" {
 		t.Fatalf("old-proc = %q/%q, want proj/main", sess.Repo, sess.Branch)
 	}
-	sess, _ = testutil.Lookup[model.Session](t)(s.GetSessionResult("old-nonrepo"))
+	sess, _ = testutil.Lookup[model.Session](t)(s.GetSession("old-nonrepo"))
 	if sess.Repo != "" || sess.Branch != "" {
 		t.Fatalf("old-nonrepo = %q/%q, want empty (no enclosing repo)", sess.Repo, sess.Branch)
 	}
-	sess, _ = testutil.Lookup[model.Session](t)(s.GetSessionResult("hook-row"))
+	sess, _ = testutil.Lookup[model.Session](t)(s.GetSession("hook-row"))
 	if sess.Repo != "proj" || sess.Branch != "main" {
 		t.Fatalf("hook row = %q/%q, want proj/main (its stored value was the heuristic's)", sess.Repo, sess.Branch)
 	}
@@ -484,7 +484,7 @@ func TestRepairSessionGitIdentity(t *testing.T) {
 	if n := s.RepairSessionGitIdentity(resolve); n != 0 {
 		t.Fatalf("repaired %d, want 0 (nothing heuristic left)", n)
 	}
-	sess, _ = testutil.Lookup[model.Session](t)(s.GetSessionResult("real"))
+	sess, _ = testutil.Lookup[model.Session](t)(s.GetSession("real"))
 	if sess.Repo != "proj" || sess.Branch != "kept" {
 		t.Fatalf("real row = %q/%q, must be untouched", sess.Repo, sess.Branch)
 	}
@@ -502,15 +502,15 @@ func TestUpsertSessionKeepsParent(t *testing.T) {
 	now := time.Now()
 	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", StartedAt: now, LastSeenAt: now})
 	st.UpsertSession(model.Session{ID: "s1", ParentID: "orch", StartedAt: now, LastSeenAt: now})
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("s1")); got.ParentID != "orch" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("s1")); got.ParentID != "orch" {
 		t.Fatalf("parent = %q, want orch", got.ParentID)
 	}
 	st.UpsertSession(model.Session{ID: "s1", ParentID: "orch-2", StartedAt: now, LastSeenAt: now})
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("s1")); got.ParentID != "orch-2" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("s1")); got.ParentID != "orch-2" {
 		t.Fatalf("parent = %q, want orch-2", got.ParentID)
 	}
 	st.UpsertSession(model.Session{ID: "s1", StartedAt: now, LastSeenAt: now})
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("s1")); got.ParentID != "orch-2" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("s1")); got.ParentID != "orch-2" {
 		t.Fatalf("parent = %q after an empty upsert, want orch-2 kept", got.ParentID)
 	}
 }
@@ -526,7 +526,7 @@ func TestUpsertSessionKeepsOrigin(t *testing.T) {
 	now := time.Now()
 	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", RootPID: 42, Origin: "quill (openclaw)", StartedAt: now, LastSeenAt: now})
 	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", StartedAt: now, LastSeenAt: now})
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("s1")); got.Origin != "quill (openclaw)" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("s1")); got.Origin != "quill (openclaw)" {
 		t.Fatalf("origin = %q after an empty upsert, want quill (openclaw) kept", got.Origin)
 	}
 	if l := testutil.Read[[]model.Session](t)(st.ListSessionsResult(SessionFilter{})); len(l) != 1 || l[0].Origin != "quill (openclaw)" {
@@ -536,7 +536,7 @@ func TestUpsertSessionKeepsOrigin(t *testing.T) {
 		t.Fatalf("SessionsByRootPID origin: %+v", m[42])
 	}
 	st.UpsertSession(model.Session{ID: "s2", Harness: "codex", StartedAt: now, LastSeenAt: now})
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("s2")); got.Origin != "" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("s2")); got.Origin != "" {
 		t.Fatalf("origin = %q for a session never given one", got.Origin)
 	}
 }
@@ -553,7 +553,7 @@ func TestRekeySessionKeepsOrigin(t *testing.T) {
 	st.UpsertSession(model.Session{ID: "old", Harness: "codex", Origin: "fennel (openclaw)", StartedAt: now, LastSeenAt: now})
 	st.UpsertSession(model.Session{ID: "new", Harness: "codex", StartedAt: now, LastSeenAt: now})
 	st.RekeySession("old", "new")
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("new")); got.Origin != "fennel (openclaw)" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("new")); got.Origin != "fennel (openclaw)" {
 		t.Fatalf("merged origin = %q, want fennel (openclaw)", got.Origin)
 	}
 }
@@ -581,11 +581,11 @@ func TestOpenMigratesSessionsOrigin(t *testing.T) {
 		t.Fatalf("Open on a pre-origin DB failed: %v", err)
 	}
 	defer st.Close()
-	if got, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("pre")); !ok || got.Origin != "" {
+	if got, ok := testutil.Lookup[model.Session](t)(st.GetSession("pre")); !ok || got.Origin != "" {
 		t.Fatalf("pre-origin row: ok=%v origin=%q", ok, got.Origin)
 	}
 	st.UpsertSession(model.Session{ID: "pre", Origin: "x (openclaw)", StartedAt: time.Now(), LastSeenAt: time.Now()})
-	if got, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("pre")); got.Origin != "x (openclaw)" {
+	if got, _ := testutil.Lookup[model.Session](t)(st.GetSession("pre")); got.Origin != "x (openclaw)" {
 		t.Fatalf("origin after migration = %q", got.Origin)
 	}
 }

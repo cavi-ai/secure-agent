@@ -85,7 +85,7 @@ func (a *API) session(env *explainEnv, id string) *model.Session {
 		return s
 	}
 	var out *model.Session
-	if s, ok, err := a.store.GetSessionResult(id); err == nil && ok {
+	if s, ok, err := a.store.GetSessionBounded(id); err == nil && ok {
 		out = &s
 	}
 	env.sessions[id] = out

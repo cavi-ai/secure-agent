@@ -12,7 +12,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
-type memorySuggestionVerdictReader struct {
+type memoryAdvisorVerdicts struct {
 	verdicts map[string]model.AdvisorVerdict
 	err      error
 	ids      []string
@@ -20,7 +20,7 @@ type memorySuggestionVerdictReader struct {
 	reads    int
 }
 
-func (r *memorySuggestionVerdictReader) AdvisorVerdictsFor(ids []string, kind string) (map[string]model.AdvisorVerdict, error) {
+func (r *memoryAdvisorVerdicts) AdvisorVerdictsFor(ids []string, kind string) (map[string]model.AdvisorVerdict, error) {
 	r.ids, r.kind = slices.Clone(ids), kind
 	r.reads++
 	return r.verdicts, r.err
@@ -36,7 +36,7 @@ func TestSuggestionReaderFiltersAndBatchesCandidates(t *testing.T) {
 		{Agent: "agent-a", Host: "boundary.example", Count: minSuggestionCount},
 	}
 	before := slices.Clone(endpoints)
-	r := &memorySuggestionVerdictReader{verdicts: map[string]model.AdvisorVerdict{
+	r := &memoryAdvisorVerdicts{verdicts: map[string]model.AdvisorVerdict{
 		"host:agent-b|frequent.example": {Assessment: "expected", Rationale: "Known destination", Confidence: 0.8},
 		"host:agent|vendor.example":     {Assessment: "suspicious"},
 	}}
@@ -60,7 +60,7 @@ func TestSuggestionReaderRetainsHealthyAdviceAndRecovers(t *testing.T) {
 		{Agent: "agent", Host: "second.example", Count: 3},
 	}
 	for _, healthySibling := range []bool{false, true} {
-		r := &memorySuggestionVerdictReader{err: failed, verdicts: map[string]model.AdvisorVerdict{}}
+		r := &memoryAdvisorVerdicts{err: failed, verdicts: map[string]model.AdvisorVerdict{}}
 		if healthySibling {
 			r.verdicts["host:agent|second.example"] = model.AdvisorVerdict{Assessment: "expected", Rationale: "Known destination", Confidence: 0.9}
 		}
@@ -84,7 +84,7 @@ func TestSuggestionReaderRetainsHealthyAdviceAndRecovers(t *testing.T) {
 
 func TestSuggestionReaderEmptyAndExcludedEndpoints(t *testing.T) {
 	for _, endpoints := range [][]correlate.UninspectedSummary{nil, {{Agent: "agent", Host: "rare.example", Count: 2}}} {
-		r := &memorySuggestionVerdictReader{}
+		r := &memoryAdvisorVerdicts{}
 		rows, err := readEgressSuggestions(r, endpoints)
 		if err != nil || rows == nil || len(rows) != 0 || r.reads != 1 || len(r.ids) != 0 || r.kind != "host" {
 			t.Fatalf("empty candidate batch: %+v, %v, reader=%+v", rows, err, r)

@@ -1405,11 +1405,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // Policy lists are not telemetry either: they load when Protection → Rules &
   // permissions opens and on its Refresh, never on the refresh cycle.
   const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null,
-    loading: false, error: '', readSeq: 0, expectedMutations: new Map(), expectedRemoval: null };
+    loading: false, error: '', readSeq: 0, scopeMutations: new Map(), expectedMutations: new Map(), expectedRemoval: null };
   function resetPolicyState() {
     Object.assign(policyState, { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null,
       loading: false, error: '', expectedRemoval: null });
     policyState.readSeq++;
+    policyState.scopeMutations.clear();
     policyState.expectedMutations.clear();
     markDirty('policy');
   }
@@ -1424,13 +1425,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const r = await apiFetch(path);
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
       const payload = await r.json();
-      return path === '/expected' ? payload : payload || [];
+      return path === '/expected' || path === '/decision-scopes' ? payload : payload || [];
     };
     try {
       const [rules, paths, mutes, expected, scopes] = await Promise.all([get('/guard/rules'), get('/guard/path-allow'), get('/mute'), get('/expected'), get('/decision-scopes')]);
+      if (!validDecisionScopeRecords(scopes)) throw new Error('Invalid permission records');
       if (!validExpectedPatterns(expected)) throw new Error('Invalid exception records');
       if (!current()) return;
       Object.assign(policyState, { guardRules: rules, pathAllows: paths, mutes, expected, scopes });
+      for (const [id, mutation] of policyState.scopeMutations) {
+        if (mutation.status === 'unconfirmed') policyState.scopeMutations.delete(id);
+      }
       for (const [key, mutation] of policyState.expectedMutations) {
         if (mutation.status === 'unconfirmed') policyState.expectedMutations.delete(key);
       }
@@ -1445,11 +1450,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const put = (id, badge, rows, html) => {
       const el = document.getElementById(id);
       if (el && el.innerHTML !== html) {
-        const focused = id === 'policy-expected' && el.contains(document.activeElement) && document.activeElement.dataset.action === 'forget-expected'
-          ? document.activeElement.dataset.key : null;
+        const action = id === 'policy-scopes' ? 'revoke-scope' : id === 'policy-expected' ? 'forget-expected' : null;
+        const key = id === 'policy-scopes' ? 'id' : 'key';
+        const focused = action && el.contains(document.activeElement) && document.activeElement.dataset.action === action
+          ? document.activeElement.dataset[key] : null;
         el.innerHTML = html;
         if (focused) {
-          const target = Array.from(el.querySelectorAll('[data-action="forget-expected"]')).find(button => button.dataset.key === focused && !button.disabled);
+          const target = Array.from(el.querySelectorAll('[data-action="' + action + '"]')).find(button => button.dataset[key] === focused && !button.disabled);
           if (target) target.focus({ preventScroll: true });
           else { el.tabIndex = -1; el.focus({ preventScroll: true }); }
         }
@@ -1466,12 +1473,33 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   window.revokeScope = async function(id) {
+    const record = policyState.scopes?.find(r => r.id === id);
+    if (sessionEnded || policyState.loading || policyState.error || policyState.scopeMutations.has(id) || !decisionScopeApplicability(record).revoke) return;
+    const mutation = { auth: handoffGeneration, status: 'confirming' };
+    const current = () => !sessionEnded && mutation.auth === handoffGeneration && policyState.scopeMutations.get(id) === mutation;
+    policyState.scopeMutations.set(id, mutation);
+    const confirmed = await window.saConfirm(`Revoke this saved permission for ${record.resource_path}${record.destination ? ' → ' + record.destination : ''}? Other permissions and policies may still allow matching activity. This does not undo past access or remediate past exposure.`, { title: 'Revoke permission', okLabel: 'Revoke permission' });
+    if (!current()) return;
+    if (!confirmed) { policyState.scopeMutations.delete(id); return; }
+    if (policyState.loading || policyState.error || !decisionScopeApplicability(policyState.scopes?.find(r => r.id === id)).revoke) {
+      policyState.scopeMutations.delete(id); markDirty('policy'); return;
+    }
+    mutation.status = 'saving';
+    markDirty('policy');
     try {
       const res = await apiFetch('/decision-scopes?id=' + encodeURIComponent(id), {method:'DELETE'});
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok || !validScopeRevocation(await res.json(), id)) throw new Error('Revocation not confirmed');
+      if (!current()) return;
+      mutation.status = 'saved';
+      markDirty('policy');
+      showToast('Permission revocation saved. Other permissions may still apply; past access is unchanged.', 'success');
       await loadPolicy();
-      showToast('Permission revoked. The next matching request will be evaluated again.', 'success');
-    } catch (err) { showToast(`Revocation could not be saved: ${err}`, 'danger'); }
+    } catch {
+      if (!current()) return;
+      mutation.status = 'unconfirmed';
+      markDirty('policy');
+      showToast('Revocation not confirmed. Refresh permissions before trying again.', 'danger');
+    }
   };
 
   window.forgetExpected = async function(key) {
@@ -2249,6 +2277,16 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionWorkbench.filterChanged();
     sessionWorkbench.render();
     renderAgents();
+  }
+  function showEndedSessions(origin) {
+    const fromDetail = !!origin?.closest('#session-detail');
+    harnessFilter.liveOnly = false;
+    harnessFilterChanged();
+    if (fromDetail) sessionWorkbench.showList();
+    const selected = Array.from(document.querySelectorAll('#session-rail [data-action="select-session"]'))
+      .find(el => el.dataset.id === sessionWorkbench.selectedSessionId && el.getClientRects().length);
+    const target = selected || (liveOnlySwitch?.getClientRects().length ? liveOnlySwitch : null);
+    target?.focus({preventScroll: true});
   }
   syncHarnessFilterControls();
   for (const el of harnessTextInputs) {
@@ -3501,7 +3539,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await apiFetch('/decision-scopes?id=' + encodeURIComponent(id), { method: 'DELETE' });
       if (!response.ok) throw new Error('Revocation unavailable');
       const result = await response.json();
-      if (result?.revoked !== true || result.id !== id) throw new Error('Revocation confirmation unavailable');
+      if (!validScopeRevocation(result, id)) throw new Error('Revocation confirmation unavailable');
       if (!currentDecisionPermissions(st)) return;
       st.revoked.add(id);
       st.busy = '';
@@ -5004,6 +5042,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'session-list':
         window.showSessionList();
+        break;
+      case 'show-ended-sessions':
+        showEndedSessions(el);
         break;
       case 'session-latest':
         window.jumpToLatestSession();

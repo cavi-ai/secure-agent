@@ -69,7 +69,7 @@ func TestResolverEndingFailureRetainsTrackingAndAllowsRecovery(t *testing.T) {
 			if len(emitted) != 0 {
 				t.Fatalf("failed ending emitted a lifecycle transition: %+v", emitted)
 			}
-			if saved, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(sess.ID)); !ok || saved.Status != sess.Status || saved.EndedAt != nil {
+			if saved, ok := testutil.Lookup[model.Session](t)(st.GetSession(sess.ID)); !ok || saved.Status != sess.Status || saved.EndedAt != nil {
 				t.Fatalf("failed ending changed saved session: %+v, %v", saved, ok)
 			}
 			if path == "tracked root" && (r.byRoot[100] != sess.ID || r.byPID[101] != sess.ID || r.byScope["scope"] != sess.ID) {
@@ -85,7 +85,7 @@ func TestResolverEndingFailureRetainsTrackingAndAllowsRecovery(t *testing.T) {
 			if len(emitted) != 1 || emitted[0].Status != model.SessionEnded {
 				t.Fatalf("recovered ending did not emit persisted state: %+v", emitted)
 			}
-			if saved, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(sess.ID)); !ok || saved.Status != model.SessionEnded {
+			if saved, ok := testutil.Lookup[model.Session](t)(st.GetSession(sess.ID)); !ok || saved.Status != model.SessionEnded {
 				t.Fatalf("ending did not recover: %+v, %v", saved, ok)
 			}
 			if (path == "tracked root" && (len(r.byRoot) != 0 || len(r.byPID) != 0)) || len(r.byScope) != 0 {
