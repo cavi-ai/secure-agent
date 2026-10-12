@@ -559,7 +559,15 @@ def run_worktree_hierarchy(page):
             page.check(f'worktree hierarchy ({width}): {name}', state.get(name) is True, str(state))
 
 
+def run_filter_regressions(page):
+    dom = page.dom('?filterregression&raildemo', served=True)
+    state = json.loads(html.unescape(pre(dom, 'filter-regression-probe')) or '{}')
+    for key in ('state', 'focus', 'deselect', 'stale', 'intersection', 'all', 'searchEmpty', 'harnessOff', 'harnessFocus', 'harnessOn', 'harnessAll', 'shared'):
+        page.check(f'filter regressions: {key}', state.get(key) is True, str(state))
+
+
 CASES = (
+    Case('filter_regressions', run_filter_regressions),
     Case('worktree_hierarchy', run_worktree_hierarchy),
     Case('worktrees', run_worktrees, ('dom_memfam', 'dom_wt', 'dom_wtdiscuss', 'dom_wtdiscussoff', 'dom_wtrefresh', 'dom_wtreview', 'dom_wtreviewtrash', 'dom_wtsizing')),
     Case('clutter', run_clutter, ('dom_clutter', 'dom_clutteradvise', 'dom_clutter_view')),

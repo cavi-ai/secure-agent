@@ -831,7 +831,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       if (strip) strip.textContent = sessionCountStrip(groups, SA.t.status && SA.t.status.coverage);
       if (pills) {
         const present = applySessionFilters(groups, { liveOnly: filter.liveOnly }).filter(g => !g.infra).map(g => g.key);
-        pills.innerHTML = harnessPillsHTML(present, filter.harnesses);
+        renderFilterPills(pills, harnessPillsHTML(present, filter.harnesses));
         applyInlineMetrics(pills);
       }
       const shown = applySessionFilters(groups, filter);

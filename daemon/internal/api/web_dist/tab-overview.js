@@ -776,11 +776,14 @@ function planLineText(p) {
   const cap = s => { s = String(s || ''); return s ? s[0].toUpperCase() + s.slice(1) : ''; };
   const sharing = Array.isArray(p.homes) && p.homes.length > 1 ? `shared by ${p.homes.length} homes` : String(p.home || '');
   const parts = [[cap(p.harness), cap(p.plan_type)].filter(Boolean).join(' '), sharing];
+  if (p.harness === 'codex' && !p.account_key) parts.push('Account unverified — may overlap a shared account');
   for (const w of Array.isArray(p.windows) ? p.windows : []) {
     const reset = Date.parse(w.resets_at);
     parts.push(`${planWindowLabel(w.window_minutes)} ${Math.round(Number(w.used_percent) || 0)}% used`
       + (isNaN(reset) ? '' : ` · resets ${fmtDayClock(new Date(reset))}`));
   }
+  const seen = Date.parse(p.seen_at);
+  if (Number.isFinite(seen)) parts.push(`observed ${new Date(seen).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`);
   return parts.filter(Boolean).join(' · ');
 }
 
@@ -788,15 +791,18 @@ function planLineText(p) {
 // { key: "plan:<home>", html } — the line, then one bar per window filled to
 // used_percent. No items for an empty list.
 function spendPlanItems(plans) {
-  return (plans || []).map(p => {
+  const unverified = p => p.harness === 'codex' && !p.account_key;
+  return [...(plans || [])].sort((a, b) => Number(unverified(a)) - Number(unverified(b))).map(p => {
     const bars = (Array.isArray(p.windows) ? p.windows : []).map(w => {
       const pct = Math.min(100, Math.max(0, Number(w.used_percent) || 0));
       const cls = pct >= 90 ? ' crit' : pct >= 75 ? ' warn' : '';
       return `<span class="hbar-track" title="${escapeHTML(planWindowLabel(w.window_minutes))}"><span class="hbar-fill${cls}" data-w="${pct.toFixed(1)}"></span></span>`;
     }).join('');
-    return { key: `plan:${p.account_key ? p.account_key + ':' + (p.limit_id || '') : p.home_path || p.home}`, html: `<div class="spend-plan">
+    const html = `<div class="spend-plan${unverified(p) ? ' spend-plan-unverified' : ''}">
       <span class="spend-plan-text">${escapeHTML(planLineText(p))}</span>${bars}
-    </div>` };
+    </div>`;
+    return { key: `plan:${p.account_key ? p.account_key + ':' + (p.limit_id || '') : p.home_path || p.home}`,
+      html: unverified(p) ? `<details class="spend-plan-history"><summary>Unverified quota observation · ${escapeHTML(p.home || p.harness)}</summary>${html}</details>` : html };
   });
 }
 

@@ -4808,7 +4808,7 @@ document.addEventListener('DOMContentLoaded', () => {
         window.askWorktreeAgent(d.path);
         break;
       case 'worktree-filter':
-        worktreesState.filter.state = d.state || '';
+        worktreesState.filter = nextWorktreeFilter(worktreesState.filter, d.state || '');
         renderNow(['worktrees']);
         break;
       case 'worktree-stale':
@@ -5080,6 +5080,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'toggle-harness':
         if (harnessFilter.harnesses[d.harness] === false) delete harnessFilter.harnesses[d.harness];
         else harnessFilter.harnesses[d.harness] = false;
+        harnessFilterChanged();
+        break;
+      case 'all-harnesses':
+        harnessFilter.harnesses = {};
         harnessFilterChanged();
         break;
       case 'clear-harness-filter':

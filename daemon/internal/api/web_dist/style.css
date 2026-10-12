@@ -255,8 +255,8 @@ body {
 .harness-pill:hover { border-color: var(--brand); }
 .harness-pill:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 .harness-pill .harness-chip { gap: 6px; }
-.harness-pill.off { opacity: 0.5; background: transparent; }
-.harness-pill.off .harness-label { text-decoration: line-through; }
+.harness-pill[aria-pressed="true"] { background: var(--brand-bg); border-color: var(--brand); color: var(--brand-2); }
+.harness-pill.off { background: transparent; color: var(--tx-2); }
 .harness-filter-text { flex: 1 1 160px; max-width: 280px; margin-left: auto; padding: 6px 10px; font-size: 0.78rem; }
 .switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx-2); cursor: pointer; -webkit-user-select: none; user-select: none; }
 .switch input {
@@ -1985,6 +1985,10 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .spend-plans:not(:empty) { margin-bottom: 12px; }
 .spend-plan { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .spend-plan-text { font-size: 0.75rem; color: var(--tx-2); overflow-wrap: anywhere; }
+.spend-plan-unverified { border-left: 2px solid var(--line-2); padding-left: 8px; }
+.spend-plan-unverified .hbar-fill { background: var(--tx-3); }
+.spend-plan-history summary { font-size: 0.75rem; color: var(--tx-2); cursor: pointer; }
+.spend-plan-history[open] .spend-plan { margin-top: 6px; }
 .spend-controls { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; min-width: 0; }
 .spend-cache { font-size: 0.68rem; color: var(--tx-3); white-space: normal; }
 .spend-day-guidance { margin: 0 0 8px; font-size: .75rem; color: var(--tx-2); line-height: 1.5; }

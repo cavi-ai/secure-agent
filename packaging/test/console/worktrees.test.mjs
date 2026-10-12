@@ -724,3 +724,20 @@ test('progress toast: phases add up to one bar, running rows first with size and
   const many = removalToastModel(['/1', '/2', '/3', '/4', '/5', '/6'], {});
   assert.ok(removalToastHTML(many).includes('<li class="rt-more">and 2 more</li>'));
 });
+
+
+test('worktree state toggles off and All clears stale while preserving search', () => {
+  const f = {state: 'prune', stale: true, q: 'app'};
+  assert.deepEqual({...ctx.nextWorktreeFilter(f, 'prune')}, {state: '', stale: true, q: 'app'});
+  assert.deepEqual({...ctx.nextWorktreeFilter(f, '')}, {state: '', stale: false, q: 'app'});
+  assert.deepEqual({...ctx.nextWorktreeFilter(f, 'review')}, {state: 'review', stale: true, q: 'app'});
+  assert.equal(f.state, 'prune');
+  assert.doesNotMatch(worktreeFilterHTML(worktreeStateCounts(report()), {stale: true}), /wt-pill on[^>]*data-state=""/);
+});
+
+test('worktree counts predict each filter under stale and both searches', () => {
+  const counts = worktreeStateCounts(report(), {state:'prune', stale:true});
+  assert.deepEqual({...counts}, {all:4, remove:1, review:1, keep:0, prune:0, stale:0});
+  const searched = worktreeStateCounts(report(), {state:'review', q:'lib'}, 'ev');
+  assert.deepEqual({...searched}, {all:1, remove:0, review:1, keep:0, prune:0, stale:1});
+});

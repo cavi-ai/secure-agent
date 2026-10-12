@@ -851,10 +851,24 @@ function sessionCountStrip(groups, coverage) {
 // Agents filter rows. harnesses[key] === false renders the pill off.
 function harnessPillsHTML(keys, harnesses) {
   const off = harnesses || {};
-  return (keys || []).map(k => {
+  if (!keys || !keys.length) return '';
+  const all = !Object.values(off).some(value => value === false);
+  return `<button type="button" class="harness-pill${all ? '' : ' off'}" data-action="all-harnesses" aria-pressed="${all}">All</button>` + keys.map(k => {
     const on = off[k] !== false;
-    return `<button type="button" class="harness-pill${on ? '' : ' off'}" data-action="toggle-harness" data-harness="${escapeHTML(k)}" aria-pressed="${on}">${harnessChipHTML(k, { label: true })}</button>`;
+    return `<button type="button" class="harness-pill${on ? '' : ' off'}" data-action="toggle-harness" data-harness="${escapeHTML(k)}" aria-pressed="${on}" title="${on ? 'Hide' : 'Show'} ${escapeHTML(harnessMeta(k).label)}">${harnessChipHTML(k, { label: true })}</button>`;
   }).join('');
+}
+
+// Preserve keyboard focus when a filter row is refreshed, including on
+// telemetry updates. Dataset identity also distinguishes the All buttons.
+function renderFilterPills(container, html) {
+  const focused = container.contains(document.activeElement) ? document.activeElement : null;
+  const identity = focused && JSON.stringify(focused.dataset);
+  if (container._saFilterHTML === html) return;
+  container.innerHTML = html;
+  container._saFilterHTML = html;
+  if (identity) Array.from(container.querySelectorAll('button'))
+    .find(button => JSON.stringify(button.dataset) === identity)?.focus({ preventScroll: true });
 }
 
 // middleTruncate: keep both ends of a long path — the root says where, the
