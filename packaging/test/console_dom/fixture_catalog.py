@@ -689,6 +689,12 @@ FIXTURES = {
         scenarios=('tab', 'tab=worktrees', 'discussdemo'),
         served=False,
     ),
+    'dom_wtdockcycle': Fixture(
+        query='?tab=worktrees&dockcycle',
+        scenarios=('tab', 'tab=worktrees', 'dockcycle'),
+        window_size=(1280, 900),
+        served=False,
+    ),
     'dom_wtdiscussoff': Fixture(
         query='?tab=worktrees&discussdemo&discussoff',
         scenarios=('tab', 'tab=worktrees', 'discussdemo', 'discussoff'),

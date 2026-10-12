@@ -294,7 +294,8 @@ func (c *Clutter) collect(ctx context.Context) []ClutterItem {
 	for _, p := range places {
 		placeSet[p.Path] = true
 	}
-	live := livePlaces(places, c.st.WorkspaceActivity())
+	activity, now := c.st.WorkspaceActivity(), c.now()
+	live := livePlaces(places, activity, now)
 	seen := map[string]bool{}
 	var items []ClutterItem
 	add := func(it ClutterItem) {
@@ -334,11 +335,17 @@ func (c *Clutter) collect(ctx context.Context) []ClutterItem {
 			if dir == c.home || dir == filepath.Dir(dir) || strings.Count(dir, "/") < 3 {
 				break
 			}
+			busy := agentUnder(dir, places, activity, now)
 			for name, kind := range map[string]string{".tmp": KindTmp, ".quarantine": KindQuarantine} {
 				d := filepath.Join(dir, name)
-				if isDir(d) {
-					add(ClutterItem{Kind: kind, Name: name, Path: d, Action: ActionTrash, Note: "workspace-level, outside any repository"})
+				if !isDir(d) {
+					continue
 				}
+				it := ClutterItem{Kind: kind, Name: name, Path: d, Action: ActionTrash, Note: "workspace-level, outside any repository"}
+				if busy {
+					it.Action, it.Note = ActionNone, "an agent session is live under this folder"
+				}
+				add(it)
 			}
 		}
 	}
@@ -375,13 +382,33 @@ func (c *Clutter) collect(ctx context.Context) []ClutterItem {
 	return items
 }
 
-// livePlaces marks each place holding a live agent session: the session's
-// workspace is the place or under it, and not under a deeper place (a live
-// session in a linked worktree does not freeze the repository around it).
-func livePlaces(places []Place, activity []model.WorkspaceActivity) map[string]bool {
+// agentUnder reports whether an agent is working at now in dir, or under it
+// outside every place: an agent inside a repository uses that repository's
+// own folders, one outside any uses the workspace's.
+func agentUnder(dir string, places []Place, activity []model.WorkspaceActivity, now time.Time) bool {
+	for _, a := range activity {
+		if !a.ActiveAt(now) || (a.Workspace != dir && !strings.HasPrefix(a.Workspace, dir+"/")) {
+			continue
+		}
+		inside := false
+		for _, p := range places {
+			inside = inside || a.Workspace == p.Path || strings.HasPrefix(a.Workspace, p.Path+"/")
+		}
+		if !inside {
+			return true
+		}
+	}
+	return false
+}
+
+// livePlaces marks each place holding an agent at now (ActiveAt): the
+// session's workspace is the place or under it, and not under a deeper place
+// (a live session in a linked worktree does not freeze the repository
+// around it).
+func livePlaces(places []Place, activity []model.WorkspaceActivity, now time.Time) map[string]bool {
 	out := map[string]bool{}
 	for _, a := range activity {
-		if !a.Live {
+		if !a.ActiveAt(now) {
 			continue
 		}
 		best := ""

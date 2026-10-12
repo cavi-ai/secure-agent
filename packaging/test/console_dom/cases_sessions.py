@@ -446,7 +446,20 @@ def run_session_empty_navigation(page):
             page.check(f'session empty navigation ({width}): {name}', state.get(name) is True, str(state))
 
 
+def run_session_latest_focus(page):
+    for width in (375, 1280):
+        dom = page.dom('?sessionlatestfocus', window_size=(width, 800), fixture=payload_cases.session_workbench(), served=True)
+        receipt = re.search(r'data-session-latest-focus="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        page.check(f'session latest focus ({width}): receipt produced', bool(state), str(state))
+        for mode in ('memory', 'trace', 'results'):
+            for assertion in ('Ready', 'Focus', 'Latest', 'Page', 'Announcement', 'Outside'):
+                name = mode + assertion
+                page.check(f'session latest focus ({width}): {name}', state.get(name) is True, str(state))
+
+
 CASES = (
+    Case('session_latest_focus', run_session_latest_focus),
     Case('session_empty_navigation', run_session_empty_navigation),
     Case('session_discovery', run_session_discovery),
     Case('session_rail_renders_durable_sessions', run_session_rail_renders_durable_sessions, ('dom',)),

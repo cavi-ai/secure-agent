@@ -5,139 +5,239 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
-const app = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),
-  '../../../daemon/internal/api/web_dist/app.js'), 'utf8');
-const start = app.indexOf('  window.explainAct = async function(');
-const end = app.indexOf('  // A pattern card\'s served action', start);
-assert.ok(start >= 0 && end > start, 'finding action handler is present');
-const actionHandler = app.slice(start, end);
+const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../daemon/internal/api/web_dist');
+const plain = x => JSON.parse(JSON.stringify(x));
 
-for (const success of [true, false]) {
- test(`incident dismissal ${success ? 'clears the queue and keeps history' : 'restores the queue on a failed write'}`, async () => {
-  const begin = app.indexOf('  window.setIncidentStatus = async function(');
-  const finish = app.indexOf('  // Worktree actions.', begin);
-  const original = {incidents:[{id:'inc'}], posture:{items:[{kind:'incident',id:'inc'}]}};
-  const ctx = {window:{}, telemetryData:structuredClone(original), drawerMode:null,
-   mapAttentionItems:fn=>{ctx.telemetryData.posture.items=ctx.telemetryData.posture.items.map(fn).filter(Boolean);},
-   stage:(_keys,_dirty,fn)=>{fn();return ()=>{ctx.telemetryData=structuredClone(original);};},
-   apiFetch:async()=>({ok:success,json:async()=>({workflow:{status:'acknowledged'}}),text:async()=>'write unavailable'}),
-   showToast:()=>{},cardNote:()=>{},cssq:x=>x,fetchTelemetry:()=>{}};
-  vm.runInNewContext(app.slice(begin,finish),ctx);
-  await ctx.window.setIncidentStatus('inc','acknowledged');
-  assert.equal(ctx.telemetryData.posture.items.length,success?0:1);
-  assert.equal(ctx.telemetryData.incidents.length,1);
-  assert.equal(ctx.telemetryData.incidents[0].workflow?.status,success?'acknowledged':undefined);
- });
+// Builds the controller with fake collaborators. respond(url, req) answers
+// each request; a thrown error models a network failure.
+function build({ telemetry = {}, respond = () => ({ ok: true, json: async () => ({}) }), window: win = {}, flagList = [], dropFlag } = {}) {
+  const ctx = { Date, setTimeout: fn => { fn(); }, window: { saConfirm: async () => true, ...win } };
+  vm.createContext(ctx);
+  for (const file of ['lib.js', 'tab-findings.js', 'finding-actions.js']) {
+    vm.runInContext(readFileSync(path.join(web, file), 'utf8'), ctx, { filename: file });
+  }
+  const log = { requests: [], toasts: [], notes: [], refetches: 0, refills: 0, closed: [], dropped: 0 };
+  const state = { t: telemetry };
+  const stage = (keys, _panels, mutate) => {
+    const before = keys.map(k => state.t[k]);
+    mutate();
+    const after = keys.map(k => state.t[k]);
+    const revert = () => { keys.forEach((k, i) => { if (state.t[k] === after[i]) state.t[k] = before[i]; }); };
+    revert.commit = () => {};
+    return revert;
+  };
+  const actions = ctx.createFindingActions({
+    request: async (url, req) => {
+      log.requests.push({ url, method: req.method, body: req.body ? JSON.parse(req.body) : undefined });
+      return respond(url, req);
+    },
+    toast: (message, type) => log.toasts.push({ message, type }),
+    refetch: () => { log.refetches++; },
+    stage,
+    telemetry: () => state.t,
+    cardNote: (...args) => log.notes.push(args),
+    cssq: x => x,
+    loadPolicy: () => { log.policy = (log.policy || 0) + 1; },
+    flags: {
+      find: id => flagList.find(f => f.id === id),
+      drop: dropFlag || (() => { log.dropped++; const revert = () => { log.dropped--; }; revert.commit = () => {}; return revert; })
+    },
+    drawer: {
+      back: () => undefined,
+      refill: () => { log.refills++; },
+      refillOpen: () => { log.refills++; },
+      closeFlag: id => log.closed.push(id)
+    }
+  });
+  return { actions, state, log, ctx };
 }
 
-test('incident drawer loads current workflow and retains raw Markdown for copying', async () => {
- const begin=app.indexOf('  window.openIncidentReport = async function(');
- const finish=app.indexOf('  // Endpoint detail:',begin);
- const ctx={window:{},drawer:{},drawerSeq:1,btnDrawerCopy:{},drawerBody:{},openDrawer:()=>{},
-  apiFetch:async url=>({ok:true,text:async()=>'# Original report',json:async()=>({workflow:{status:'acknowledged'}})}),
-  incidentReportHTML:(id,wf,text)=>[id,wf.status,text].join('|'),loadPlanSlot:()=>{}};
- vm.runInNewContext(app.slice(begin,finish),ctx);
- await ctx.window.openIncidentReport('inc');
- assert.equal(ctx.currentRawMarkdown,'# Original report');
- assert.equal(ctx.drawerBody.innerHTML,'inc|acknowledged|# Original report');
-});
-
-test('group approval sends the selected served endpoint without a stale flag lookup', async () => {
-  const begin = app.indexOf('  window.patternAct = async function(');
-  const finish = app.indexOf('  window.unmuteFlag = async function(', begin);
-  const requests = [];
-  const body = { flag_id: 'older', path: '/home/.config/gh/hosts.yml', host: '140.82.114.6' };
-  const ctx = { window: { saConfirm: async () => true },
-    telemetryData: { patterns: [{ key: 'group', actions: [{id: 'expect', method: 'POST', path: '/expected', body, consequence: 'This endpoint only'}] }] },
-    apiFetch: async (url, req) => { requests.push([url, JSON.parse(req.body)]); return {ok: true}; },
-    showToast: () => {}, fetchTelemetry: () => {}, loadPolicy: () => {},
-  };
-  vm.runInNewContext(app.slice(begin, finish), ctx);
-  await ctx.window.patternAct('group', 'expect', body.host);
-  assert.deepEqual(requests, [['/expected', body]]);
-  ctx.window.saConfirm = async () => false;
-  await ctx.window.patternAct('group', 'expect', body.host);
-  assert.equal(requests.length, 1);
-});
-
-test('opening an older finding makes its served actions immediately clickable', async () => {
-  const begin = app.indexOf('  window.openFlagDetail = async function(');
-  const finish = app.indexOf('  async function openConsoleContext(', begin);
-  assert.ok(begin >= 0 && finish > begin, 'flag drawer handler is present');
-  const cache = new Map();
-  const flag = { id: 'older-flag', title: 'File access', rule: 'sensitive-read', agent: 'codex',
-    ts: '2026-09-29T12:00:00Z', evidence: [], explain: { actions: [] } };
-  const ctx = {
-    window: {}, drawer: {}, drawerMode: '', drawerFlag: '', drawerSeq: 1,
-    btnDrawerCopy: {}, drawerBody: {}, drawerTitle: {}, planFlagCache: cache,
-    telemetryData: { status: {} },
-    openDrawer: () => {}, apiFetch: async () => ({ ok: true, json: async () => flag }),
-    escapeHTML: x => String(x), explainLines: () => null, ruleTitle: () => 'File access',
-    explainActionsHTML: () => '', loadPlanSlot: () => {},
-  };
-  vm.runInNewContext(app.slice(begin, finish), ctx, { filename: 'app.js:openFlagDetail' });
-  await ctx.window.openFlagDetail(flag.id);
-  assert.equal(cache.get(flag.id), flag);
-  assert.match(ctx.drawerBody.innerHTML, /File access/);
-});
+const failing = { ok: false, text: async () => 'write unavailable' };
+const rejecting = () => { throw new Error('network down'); };
 
 for (const [id, route, body] of [
   ['allow-host', '/allowlist', { agent: 'codex', host: '203.0.113.24' }],
   ['allow-path', '/guard/path-allow', { agent: 'codex', rule_id: 'env-files', path: '/workspace/.env' }],
 ]) {
   test(`${id} from a loaded flag drawer saves the decision and clears the queue`, async () => {
-    const requests = [];
-    const toasts = [];
-    let dropped = 0;
-    let closed = 0;
     const flag = { id: 'flag-1', agent: 'codex', explain: { actions: [{ id, method: 'POST', path: route, body }] } };
-    const ctx = {
-      window: {}, telemetryData: { flags: [], flagsView: [] }, planFlagCache: new Map([[flag.id, flag]]),
-      drawerMode: 'flag', drawerFlag: flag.id, attentionSelection: null,
-      stageDropFlag: () => { dropped++; return () => { dropped--; }; },
-      stageAllow: () => () => {},
-      apiFetch: async (url, options) => {
-        requests.push({ url, body: JSON.parse(options.body) });
-        return { ok: true };
-      },
-      showToast: (message, type) => toasts.push({ message, type }),
-      fetchTelemetry: () => {}, closeDrawer: () => { closed++; }, cardNote: () => {},
-    };
-    vm.runInNewContext(actionHandler, ctx, { filename: 'app.js:explainAct' });
-    await ctx.window.explainAct(flag.id, id, body.host);
-    assert.deepEqual(requests.map(r => r.url), [route, '/flags/acknowledge']);
-    assert.deepEqual(requests[0].body, body);
-    assert.equal(requests[1].body.flag_id, flag.id);
-    assert.equal(dropped, 1);
-    assert.equal(closed, 1);
-    assert.equal(toasts.at(-1).type, 'success');
+    const { actions, log } = build({ telemetry: { flags: [], flagsView: [] }, flagList: [flag] });
+    await actions.explainAct(flag.id, id, body.host);
+    assert.deepEqual(log.requests.map(r => r.url), [route, '/flags/acknowledge']);
+    assert.deepEqual(log.requests[0].body, body);
+    assert.equal(log.requests[1].body.flag_id, flag.id);
+    assert.equal(log.dropped, 1);
+    assert.deepEqual(log.closed, [flag.id]);
+    assert.equal(log.toasts.at(-1).type, 'success');
   });
 }
 
 test('failed file exception keeps the finding in the queue', async () => {
-  let dropped = 0;
   const flag = { id: 'flag-2', explain: { actions: [{ id: 'allow-path', method: 'POST', path: '/guard/path-allow', body: { agent: 'codex', rule_id: 'env-files', path: '/workspace/.env' } }] } };
-  const ctx = {
-    window: {}, telemetryData: { flags: [flag] }, planFlagCache: new Map(),
-    stageDropFlag: () => { dropped++; return () => { dropped--; }; },
-    apiFetch: async () => ({ ok: false, text: async () => 'persist failed' }),
-    showToast: () => {}, fetchTelemetry: () => {},
-  };
-  vm.runInNewContext(actionHandler, ctx, { filename: 'app.js:explainAct' });
-  await ctx.window.explainAct(flag.id, 'allow-path');
-  assert.equal(dropped, 0);
+  const { actions, log } = build({ telemetry: { flags: [flag] }, flagList: [flag], respond: () => failing });
+  await actions.explainAct(flag.id, 'allow-path');
+  assert.equal(log.dropped, 0);
+  assert.equal(log.toasts.at(-1).type, 'danger');
 });
 
 test('selected finding enters local review without dismissal or shell execution', async () => {
- const calls=[];const flag={id:'selected',explain:{actions:[{id:'review-local',body:{flag_ids:['selected']}}]}};
- const ctx={window:{analyzeAgentActivity:async ids=>calls.push(Array.from(ids))},telemetryData:{flags:[flag]},planFlagCache:new Map(),showToast:()=>{}};
- vm.runInNewContext(actionHandler,ctx);
- await ctx.window.explainAct('selected','review-local');
- assert.deepEqual(calls,[['selected']]);assert.equal(ctx.telemetryData.flags.length,1);
+  const calls = [];
+  const flag = { id: 'selected', explain: { actions: [{ id: 'review-local', body: { flag_ids: ['selected'] } }] } };
+  const { actions, state } = build({ telemetry: { flags: [flag] }, flagList: [flag],
+    window: { analyzeAgentActivity: async ids => calls.push(Array.from(ids)) } });
+  await actions.explainAct('selected', 'review-local');
+  assert.deepEqual(calls, [['selected']]);
+  assert.equal(state.t.flags.length, 1);
 });
+
 test('file exception confirmation does not optimistically dismiss mixed evidence', async () => {
- const requests=[];const flag={id:'mixed',explain:{actions:[{id:'expect-file',path:'/expected',method:'POST',consequence:'Exact file only',body:{flag_id:'mixed',scope:'file'}}]}};
- const ctx={window:{saConfirm:async()=>true},telemetryData:{flags:[flag]},planFlagCache:new Map(),showToast:()=>{},loadPolicy:()=>{},fetchTelemetry:()=>{},apiFetch:async(route,opts)=>{requests.push([route,JSON.parse(opts.body)]);return {ok:true,json:async()=>({})}}};
- vm.runInNewContext(actionHandler,ctx);await ctx.window.explainAct('mixed','expect-file');
- assert.equal(requests.length,1);assert.deepEqual(requests[0],['/expected',{flag_id:'mixed',scope:'file'}]);assert.equal(ctx.telemetryData.flags.length,1);
+  const flag = { id: 'mixed', explain: { actions: [{ id: 'expect-file', path: '/expected', method: 'POST', consequence: 'Exact file only', body: { flag_id: 'mixed', scope: 'file' } }] } };
+  const { actions, state, log } = build({ telemetry: { flags: [flag] }, flagList: [flag] });
+  await actions.explainAct('mixed', 'expect-file');
+  assert.equal(log.requests.length, 1);
+  assert.deepEqual(log.requests[0], { url: '/expected', method: 'POST', body: { flag_id: 'mixed', scope: 'file' } });
+  assert.equal(state.t.flags.length, 1);
+});
+
+test('group approval sends the selected served endpoint without a stale flag lookup', async () => {
+  const body = { flag_id: 'older', path: '/home/.config/gh/hosts.yml', host: '140.82.114.6' };
+  const telemetry = { patterns: [{ key: 'group', actions: [{ id: 'expect', method: 'POST', path: '/expected', body, consequence: 'This endpoint only' }] }] };
+  const { actions, log, ctx } = build({ telemetry });
+  await actions.patternAct('group', 'expect', body.host);
+  assert.deepEqual(log.requests.map(r => [r.url, r.body]), [['/expected', body]]);
+  ctx.window.saConfirm = async () => false;
+  await actions.patternAct('group', 'expect', body.host);
+  assert.equal(log.requests.length, 1);
+});
+
+test('allowHost keeps the staged allowlist row, tells the operator and refetches', async () => {
+  const telemetry = { allowlist: [], suggestions: [{ agent: 'codex', host: 'h.example' }], uninspected: [{ agent: 'codex', host: 'h.example' }, { agent: 'codex', host: 'other.example' }] };
+  const { actions, state, log } = build({ telemetry });
+  await actions.allowHost('codex', 'h.example');
+  assert.deepEqual(log.requests, [{ url: '/allowlist', method: 'POST', body: { agent: 'codex', host: 'h.example' } }]);
+  assert.deepEqual(plain(state.t.allowlist), [{ agent: 'codex', host: 'h.example' }]);
+  assert.deepEqual(plain(state.t.suggestions), []);
+  assert.deepEqual(plain(state.t.uninspected), [{ agent: 'codex', host: 'other.example' }]);
+  assert.deepEqual(log.toasts, [{ message: 'Allowlisted h.example for codex', type: 'success' }]);
+  assert.equal(log.refetches, 1);
+  assert.equal(log.notes.length, 1);
+});
+
+for (const [name, respond, message] of [
+  ['rejected', () => failing, 'Failed to allowlist h.example.'],
+  ['unreachable', rejecting, 'Error allowlisting h.example: Error: network down'],
+]) {
+  test(`allowHost restores the telemetry when the write is ${name}`, async () => {
+    const telemetry = { allowlist: [], suggestions: [{ agent: 'codex', host: 'h.example' }], uninspected: [{ agent: 'codex', host: 'h.example' }] };
+    const before = plain(telemetry);
+    const { actions, state, log } = build({ telemetry, respond });
+    await actions.allowHost('codex', 'h.example');
+    assert.deepEqual(plain(state.t), before);
+    assert.deepEqual(log.toasts, [{ message, type: 'danger' }]);
+    assert.equal(log.refetches, 0);
+  });
+}
+
+test('bulkAllowHosts allowlists each host in order and reports the tally', async () => {
+  const { actions, state, log } = build({ telemetry: { allowlist: [] } });
+  await actions.bulkAllowHosts('codex', 'a.example,b.example');
+  assert.deepEqual(log.requests.map(r => r.body.host), ['a.example', 'b.example']);
+  assert.deepEqual(plain(state.t.allowlist).map(p => p.host), ['a.example', 'b.example']);
+  assert.deepEqual(log.toasts, [{ message: 'Allowlisted 2 of 2 hosts for codex', type: 'success' }]);
+  assert.equal(log.refetches, 1);
+});
+
+test('bulkAllowHosts restores the telemetry when no host lands', async () => {
+  const { actions, state, log } = build({ telemetry: { allowlist: [] }, respond: () => failing });
+  await actions.bulkAllowHosts('codex', 'a.example,b.example');
+  assert.deepEqual(plain(state.t.allowlist), []);
+  assert.deepEqual(log.toasts, [{ message: 'Allowlisted 0 of 2 hosts for codex', type: 'danger' }]);
+});
+
+test('assessHost loads a stored verdict and refreshes the open drawer', async () => {
+  const { actions, state, log } = build({ telemetry: { uninspected: [] }, respond: () => ({ ok: true, json: async () => ({ verdict: 'benign' }) }) });
+  await actions.assessHost('codex', 'h.example');
+  assert.deepEqual(log.requests, [{ url: '/advisor/assess-host', method: 'POST', body: { agent: 'codex', host: 'h.example' } }]);
+  assert.deepEqual(log.toasts, [{ message: 'Advisor verdict loaded', type: 'info' }]);
+  assert.equal(log.refetches, 1);
+  assert.equal(log.refills, 1);
+  assert.deepEqual(plain(state.t), { uninspected: [] });
+});
+
+test('assessHost reports a disabled advisor and a failed request without touching telemetry', async () => {
+  const off = build({ telemetry: { uninspected: [] }, respond: () => ({ ok: false, status: 503 }) });
+  await off.actions.assessHost('codex', 'h.example');
+  assert.deepEqual(off.log.toasts, [{ message: 'Advisor is off — enable it in Settings for endpoint guidance.', type: 'info' }]);
+  const bad = build({ telemetry: { uninspected: [] }, respond: () => ({ ok: false, status: 500, text: async () => 'boom' }) });
+  await bad.actions.assessHost('codex', 'h.example');
+  assert.deepEqual(bad.log.toasts, [{ message: 'Advisor assessment failed: boom', type: 'danger' }]);
+  for (const t of [off, bad]) {
+    assert.equal(t.log.refetches, 0);
+    assert.deepEqual(plain(t.state.t), { uninspected: [] });
+  }
+});
+
+function routineTelemetry() {
+  return { routine: [{ key: 'grp', flag_ids: ['f1', 'f2'] }], patterns: [], flags: [{ id: 'f1' }, { id: 'f2' }, { id: 'f3' }], flagsView: null, posture: undefined };
+}
+const dismissAll = { id: 'dismiss-all', label: 'Dismiss all', method: 'POST', path: '/flags/acknowledge', body: { flag_ids: ['f1', 'f2'] } };
+
+test('routineAct removes the group and its flags, then reports and refetches', async () => {
+  const telemetry = routineTelemetry();
+  telemetry.routine[0].actions = [dismissAll];
+  const { actions, state, log } = build({ telemetry });
+  await actions.routineAct('grp', 'dismiss-all');
+  assert.deepEqual(log.requests, [{ url: '/flags/acknowledge', method: 'POST', body: { flag_ids: ['f1', 'f2'] } }]);
+  assert.deepEqual(plain(state.t.routine), []);
+  assert.deepEqual(plain(state.t.flags), [{ id: 'f3' }]);
+  assert.deepEqual(log.toasts, [{ message: 'Dismissed 2 flags — the rules keep watching', type: 'success' }]);
+  assert.equal(log.refetches, 1);
+});
+
+test('routineAct puts the group and flags back when the write fails', async () => {
+  const telemetry = routineTelemetry();
+  telemetry.routine[0].actions = [dismissAll];
+  const before = plain(telemetry);
+  const { actions, state, log } = build({ telemetry, respond: () => failing });
+  await actions.routineAct('grp', 'dismiss-all');
+  assert.deepEqual(plain(state.t), before);
+  assert.deepEqual(log.toasts, [{ message: 'Dismiss all failed: write unavailable', type: 'danger' }]);
+  assert.equal(log.refetches, 0);
+});
+
+const statusTelemetry = () => ({ status: { firewall_stats: { 'rule-a': { mode: 'monitor' }, 'rule-b': { mode: 'monitor' } } } });
+
+test('promoteRule blocks only the chosen rule and announces it', async () => {
+  const { actions, state, log } = build({ telemetry: statusTelemetry() });
+  await actions.promoteRule('rule-a');
+  assert.deepEqual(log.requests, [{ url: '/firewall/mode', method: 'POST', body: { rule: 'rule-a', mode: 'block' } }]);
+  assert.equal(state.t.status.firewall_stats['rule-a'].mode, 'block');
+  assert.equal(state.t.status.firewall_stats['rule-b'].mode, 'monitor');
+  assert.deepEqual(log.toasts, [{ message: 'Rule “rule-a” promoted to block.', type: 'success' }]);
+  assert.equal(log.refetches, 1);
+});
+
+test('promoteRule restores the monitor mode when the write fails', async () => {
+  const { actions, state, log } = build({ telemetry: statusTelemetry(), respond: () => failing });
+  await actions.promoteRule('rule-a');
+  assert.equal(state.t.status.firewall_stats['rule-a'].mode, 'monitor');
+  assert.deepEqual(log.toasts, [{ message: 'Failed to promote “rule-a”.', type: 'danger' }]);
+  assert.equal(log.refetches, 0);
+});
+
+test('removeAllowlistEntry drops the row and tells the operator', async () => {
+  const telemetry = { allowlist: [{ agent: 'codex', host: 'a.example' }, { agent: 'codex', host: 'b.example' }] };
+  const { actions, state, log } = build({ telemetry });
+  await actions.removeAllowlistEntry('codex', 'a.example');
+  assert.deepEqual(log.requests, [{ url: '/allowlist', method: 'DELETE', body: { agent: 'codex', host: 'a.example' } }]);
+  assert.deepEqual(plain(state.t.allowlist), [{ agent: 'codex', host: 'b.example' }]);
+  assert.deepEqual(log.toasts, [{ message: 'Removed a.example for codex.', type: 'info' }]);
+});
+
+test('removeAllowlistEntry restores the row when the write fails', async () => {
+  const telemetry = { allowlist: [{ agent: 'codex', host: 'a.example' }] };
+  const { actions, state, log } = build({ telemetry, respond: () => failing });
+  await actions.removeAllowlistEntry('codex', 'a.example');
+  assert.deepEqual(plain(state.t.allowlist), [{ agent: 'codex', host: 'a.example' }]);
+  assert.deepEqual(log.toasts, [{ message: 'Failed to remove a.example.', type: 'danger' }]);
 });

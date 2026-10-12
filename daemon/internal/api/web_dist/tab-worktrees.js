@@ -409,13 +409,20 @@ function worktreeDiscussHTML(path) {
   return `<button type="button" class="link-btn" data-action="worktree-discuss" data-path="${escapeHTML(path)}">Discuss</button>`;
 }
 
+// worktreeAgentChipHTML: the warning on a row an agent is working in.
+function worktreeAgentChipHTML(w) {
+  if (!w.in_use) return '';
+  const who = w.active_agent || 'agent';
+  return `<span class="wt-agent-live" title="${escapeHTML(`${who} is working in this folder; removing it breaks that session`)}">${escapeHTML(who)} working here</span>`;
+}
+
 // worktreeTrashBlock: why a keep or review row cannot be moved to the Trash
 // from the console, or ''. The daemon refuses the same rows again.
 function worktreeTrashBlock(w) {
   if (w.error) return `could not inspect: ${w.error}`;
   if (w.git_operation) return `a git ${w.git_operation} is in progress; finish or abort it first`;
   if (w.submodules > 0) return 'it has populated submodules';
-  if (w.in_use) return 'an agent session is live here';
+  if (w.in_use) return w.active_agent ? `${w.active_agent} is working here` : 'an agent session is live here';
   if (w.locked) return 'it is locked; unlock it first';
   if (w.loose_commits > 0) return 'detached HEAD has commits on no branch; create a branch first';
   if (w.conflicts > 0) return 'a merge or rebase has unresolved conflicts; finish or abort it first';
@@ -486,7 +493,9 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable) {
     // that still records it (moved repo), or move it to the Trash.
     action = `<button type="button" class="btn btn-sm" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}">Open folder</button>`
       + (w.reconnect ? `<button type="button" class="btn btn-sm" data-action="worktree-reconnect" data-path="${escapeHTML(w.path)}" data-repo="${escapeHTML(w.reconnect)}">Reconnect</button>` : '')
-      + `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-trash-orphan" data-path="${escapeHTML(w.path)}">Move to Trash</button>`;
+      + (w.in_use
+        ? `<button type="button" class="btn btn-sm" disabled title="${escapeHTML('Cannot move to Trash: ' + worktreeTrashBlock({ in_use: true, active_agent: w.active_agent }))}">Move to Trash</button>`
+        : `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-trash-orphan" data-path="${escapeHTML(w.path)}">Move to Trash</button>`);
   } else if (w.state === 'remove') {
     const safe = 'Safe to remove' + ((w.reasons || [])[0] ? ': ' + w.reasons[0] : '');
     action = removal && removal.state === 'running'
@@ -516,7 +525,7 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable) {
         <button type="button" class="wt-path" data-action="copy-path" data-path="${escapeHTML(w.path)}" title="${escapeHTML(w.path)} — click to copy">${escapeHTML(worktreePathLabel(w.path, repo.path))}</button>
       </div>
       <div class="wt-facts">
-        <span class="wt-state">${escapeHTML(w.state)}</span>${w.stale ? '<span class="wt-stale">stale</span>' : ''}
+        <span class="wt-state">${escapeHTML(w.state)}</span>${w.stale ? '<span class="wt-stale">stale</span>' : ''}${worktreeAgentChipHTML(w)}
         <span class="wt-size">${escapeHTML(worktreeSizeLabel(w))}</span>
         <span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>
       </div>
