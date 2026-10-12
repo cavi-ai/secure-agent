@@ -151,7 +151,7 @@ func (s *Store) TouchSession(id string, ts time.Time) (writeErr error) {
 		status = CASE WHEN status = ? THEN ? ELSE status END
 		WHERE id = ? AND status != ? AND (`+timestampOrderExpr("last_seen_at")+` IS NULL OR `+timestampOrderExpr("last_seen_at")+` < ?)`,
 		ts.UTC().Format(time.RFC3339Nano),
-		model.SessionIdle, model.SessionActive, id, model.SessionEnded, ts.UTC().Format(activityTimeLayout))
+		model.SessionIdle, model.SessionActive, id, model.SessionEnded, instantArg(ts))
 	if err != nil {
 		return fmt.Errorf("touch session: %w", err)
 	}
@@ -186,7 +186,7 @@ func (s *Store) EndSession(id string, ts time.Time) (writeErr error) {
 	defer tx.Rollback()
 	t := ts.UTC().Format(time.RFC3339Nano)
 	sessionResult, err := tx.Exec(`UPDATE sessions SET status = ?, ended_at = ?, last_seen_at = CASE WHEN `+timestampOrderExpr("last_seen_at")+` IS NULL OR `+timestampOrderExpr("last_seen_at")+` < ? THEN ? ELSE last_seen_at END WHERE id = ? AND status != ?`,
-		model.SessionEnded, t, ts.UTC().Format(activityTimeLayout), t, id, model.SessionEnded)
+		model.SessionEnded, t, instantArg(ts), t, id, model.SessionEnded)
 	if err != nil {
 		return fmt.Errorf("end session: %w", err)
 	}
@@ -220,8 +220,8 @@ func (s *Store) SweepStaleRunningCalls(cutoff time.Time) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	res, err := s.db.Exec(`UPDATE events SET tool_status = 'error'
-		WHERE kind = ? AND tool_status = 'running' AND ts < ?`,
-		int(event.KindToolCall), cutoff.UTC().Format(time.RFC3339Nano))
+		WHERE kind = ? AND tool_status = 'running' AND `+instantBeforeSQL("ts"),
+		append([]any{int(event.KindToolCall)}, instantBound(cutoff)...)...)
 	if err != nil {
 		return 0
 	}
@@ -287,7 +287,7 @@ func (s *Store) MarkSessionsIdle(cutoff time.Time) (_ []string, writeErr error) 
 	}
 	defer tx.Rollback()
 
-	c := cutoff.UTC().Format(activityTimeLayout)
+	c := instantArg(cutoff)
 	rows, err := tx.Query(`SELECT id FROM sessions WHERE status = ? AND `+timestampOrderExpr("last_seen_at")+` < ?`, model.SessionActive, c)
 	if err != nil {
 		return nil, fmt.Errorf("select idle sessions: %w", err)
@@ -403,7 +403,7 @@ func (f SessionFilter) where() (string, []any) {
 		}
 	}
 	if !f.Since.IsZero() {
-		since := f.Since.UTC().Format(activityTimeLayout)
+		since := instantArg(f.Since)
 		clause.WriteString(" AND (" + timestampOrderExpr("started_at") + " >= ? OR " + timestampOrderExpr("last_seen_at") + " >= ?)")
 		args = append(args, since, since)
 	}
@@ -552,6 +552,6 @@ func (s *Store) GetSessionResult(id string) (_ model.Session, _ bool, readErr er
 // pruneSessionsLocked bounds the ended-session tail: ended rows older than
 // the event retention window are pure noise.
 func (s *Store) pruneSessionsLocked() {
-	cutoff := time.Now().Add(-30 * 24 * time.Hour).UTC().Format(activityTimeLayout)
+	cutoff := instantArg(time.Now().Add(-30 * 24 * time.Hour))
 	_, _ = s.db.Exec(`DELETE FROM sessions WHERE status = ? AND `+timestampOrderExpr("ended_at")+` < ?`, model.SessionEnded, cutoff)
 }

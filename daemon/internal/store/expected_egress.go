@@ -255,10 +255,11 @@ func (s *Store) ListExpectedEgressRulesResult() (out []ExpectedEgressRule, readE
 		return rows.Err()
 	}
 	columns := `SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at FROM expected_egress_rules`
-	if err := read(columns + ` WHERE revoked_at IS NULL ORDER BY created_at DESC,id DESC`); err != nil {
+	newest := ` ORDER BY ` + timestampOrderExpr("created_at") + ` DESC,id DESC`
+	if err := read(columns + ` WHERE revoked_at IS NULL` + newest); err != nil {
 		return nil, err
 	}
-	if err := read(columns + ` WHERE revoked_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 500`); err != nil {
+	if err := read(columns + ` WHERE revoked_at IS NOT NULL` + newest + ` LIMIT 500`); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -291,7 +292,7 @@ func (s *Store) ExpectedEgressMatcherResult() (match func(EgressEpisode) string,
 	defer func() { s.noteRead("expected egress matcher", readErr) }()
 	var rules []ExpectedEgressRule
 	rows, err := s.db.Query(`SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace FROM expected_egress_rules
-	 WHERE revoked_at IS NULL ORDER BY CASE WHEN kind='destination' THEN 0 ELSE 1 END, created_at DESC, id DESC`)
+	 WHERE revoked_at IS NULL ORDER BY CASE WHEN kind='destination' THEN 0 ELSE 1 END, ` + timestampOrderExpr("created_at") + ` DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}

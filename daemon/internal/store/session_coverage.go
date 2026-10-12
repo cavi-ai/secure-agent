@@ -55,8 +55,8 @@ func (s *Store) SessionCoverageSince(pids []int32, since, until time.Time) (out 
 // seek per session and kind, so its cost does not grow with a session's events.
 func sessionCoverageQuery(pids []int32, since, until time.Time) (string, []any) {
 	args := []any{}
-	lower := since.UTC().Format(activityTimeLayout)
-	upper := until.UTC().Format(activityTimeLayout)
+	lower := instantArg(since)
+	upper := instantArg(until)
 	order := timestampOrderExpr("e.ts")
 	window := order + " >= max(?, " + timestampOrderExpr("s.started_at") + ") AND " + order + " <= ?"
 	newest := func(kind event.Kind, extra string) string {
