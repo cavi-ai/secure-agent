@@ -681,6 +681,7 @@ type FlagFilter struct {
 
 // EventFilter narrows an event history query. Kind is a pointer because kind 0
 // (KindFileOpen) is a valid filter value distinct from "not set".
+// Since and Until are inclusive RFC3339 bounds, compared at nanosecond precision.
 type EventFilter struct {
 	Kind       *int   // exact kind; nil = any
 	PID        int32  // exact pid; 0 = any
@@ -1341,12 +1342,12 @@ func eventRecordQuery(f EventFilter, withID bool, beforeID int64) (string, []any
 		args = append(args, f.RemoteHost)
 	}
 	if f.Since != "" {
-		q += " AND datetime(ts) >= datetime(?)"
-		args = append(args, f.Since)
+		q += " AND " + timestampOrderExpr("ts") + " >= " + timestampOrderExpr(":event_since")
+		args = append(args, sql.Named("event_since", f.Since))
 	}
 	if f.Until != "" {
-		q += " AND datetime(ts) <= datetime(?)"
-		args = append(args, f.Until)
+		q += " AND " + timestampOrderExpr("ts") + " <= " + timestampOrderExpr(":event_until")
+		args = append(args, sql.Named("event_until", f.Until))
 	}
 	q += " ORDER BY id DESC LIMIT ?"
 	args = append(args, normalizeLimit(f.Limit))
