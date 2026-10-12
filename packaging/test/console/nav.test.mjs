@@ -39,30 +39,42 @@ test('legacy tab and file handoffs remain scoped to the console', () => {
 
 test('every old tab id resolves to its new tab[/sub]', () => {
   const want = {
-    overview: 'home', findings: 'home', agents: 'sessions/processes', resources: 'sessions/resources',
-    history: 'sessions/resources', worktrees: 'system', cleanup: 'system', clutter: 'system', events: 'sessions/events',
-    sessions: 'sessions/board', egress: 'protection/traffic', policy: 'protection/rules', system: 'system',
+    overview: 'home', findings: 'home', agents: 'sessions/processes', resources: 'system/resources',
+    history: 'system/resources', worktrees: 'system/worktrees', cleanup: 'system/clutter', clutter: 'system/clutter', events: 'sessions/events',
+    sessions: 'sessions/board', egress: 'protection/traffic', policy: 'protection/rules', system: 'system/worktrees',
   };
   for (const [id, route] of Object.entries(want)) assert.equal(key(id), route, id);
   assert.equal(resolveConsoleRoute('findings').focus, 'attention');
   assert.equal(resolveConsoleRoute('overview').focus, '');
 });
 
-test('System follows grouped Protection; the Cleanup sub-view left Sessions and its old routes land on System', () => {
-  const tabs = vm.runInContext('CONSOLE_TABS', ctx);
-  assert.deepEqual([...tabs], ['home', 'sessions', 'protection', 'system', 'agent']);
-  assert.deepEqual([...vm.runInContext('SESSIONS_SUBS', ctx)], ['board', 'processes', 'resources', 'events']);
-  // Saved views, the stored tab and bookmarks kept "sessions/worktrees".
-  for (const id of ['sessions/worktrees', '#sessions/worktrees', 'worktrees', 'cleanup', 'clutter', 'system']) {
-    const r = resolveConsoleRoute(id);
-    assert.deepEqual({ ...r }, { tab: 'system', sub: '', focus: '' }, id);
+test('System routes preserve Resources, Worktrees and Clutter legacy destinations', () => {
+  assert.deepEqual([...vm.runInContext('CONSOLE_TABS', ctx)], ['home', 'sessions', 'protection', 'system', 'agent']);
+  assert.deepEqual([...vm.runInContext('SESSIONS_SUBS', ctx)], ['board', 'processes', 'events']);
+  assert.deepEqual([...vm.runInContext('SYSTEM_SUBS', ctx)], ['resources', 'worktrees', 'clutter']);
+  const aliases = {
+    resources: 'resources', history: 'resources', 'sessions/resources': 'resources', 'sessions/history': 'resources',
+    worktrees: 'worktrees', 'sessions/worktrees': 'worktrees', system: 'worktrees', 'system/nope': 'worktrees',
+    cleanup: 'clutter', clutter: 'clutter',
+  };
+  for (const [id, sub] of Object.entries(aliases)) {
+    for (const route of [id, '#' + id]) {
+      assert.deepEqual({ ...resolveConsoleRoute(route) }, { tab: 'system', sub, focus: '' }, route);
+      assert.equal(consoleRouteHash(resolveConsoleRoute(route)), '#system/' + sub);
+    }
   }
-  assert.equal(consoleRouteHash(resolveConsoleRoute('sessions/worktrees')), '#system');
-  assert.equal(key('sessions/nope'), 'sessions/board');
+  for (const sub of ['resources', 'worktrees', 'clutter']) {
+    assert.equal(key('system/' + sub), 'system/' + sub);
+    assert.equal(isConsoleRoute('#system/' + sub), true);
+    const context = ctx.consoleContextFromHash('#ct=fixture&tab=' + encodeURIComponent('system/' + sub));
+    assert.equal(key(ctx.consoleContextHash(context)), 'system/' + sub);
+    assert.ok(!ctx.consoleContextHash(context).includes('ct='));
+  }
 });
 
 test('new ids, sub-view hashes and unknown ids', () => {
-  for (const id of ['home', 'system']) assert.equal(key(id), id);
+  assert.equal(key('home'), 'home');
+  assert.equal(key('system'), 'system/worktrees');
   assert.equal(key('#sessions/events'), 'sessions/events');
   assert.equal(key('sessions/processes'), 'sessions/processes');
   assert.equal(key('sessions/nope'), 'sessions/board');
@@ -131,29 +143,48 @@ test('Protection subviews retain selected ARIA and visibility without receiving 
     classList: { values: new Set(), toggle(name, on) { on ? this.values.add(name) : this.values.delete(name); } },
     setAttribute(name, value) { this.attributes[name] = value; },
     addEventListener(name, action) { this.listeners.push(action); },
+    click() { this.listeners.forEach(listener => listener()); },
   });
   const primary = ['home', 'sessions', 'protection', 'system', 'agent'].map(tab => make('tab-button-' + tab, {tab}));
   const sections = ['traffic', 'rules', 'sources', 'audit'].map(view => make('protection-' + view, {protectionSection:view}));
   const protection = sections.map(section => make('protection-tab-' + section.dataset.protectionSection, {protectionView:section.dataset.protectionSection}));
-  const sessions = ['board', 'processes', 'resources', 'events'].map(subtab => make('session-tab-' + subtab, {subtab}));
+  const sessions = ['board', 'processes', 'events'].map(subtab => make('session-tab-' + subtab, {subtab}));
+  const system = ['resources', 'worktrees', 'clutter'].map(systemSubtab => make('system-tab-' + systemSubtab, {systemSubtab}));
+  const systemViews = system.map(button => make('system-' + button.dataset.systemSubtab, {systemView:button.dataset.systemSubtab}));
+  const sessionViews = sessions.map(button => make('sub-' + button.dataset.subtab));
   const panels = ['home', 'sessions', 'egress', 'policy', 'system', 'agent'].map(tab => make('tab-' + tab));
   const nav = make('protection-nav');
   const document = {
     body: make('body'),
     querySelectorAll(selector) {
       return ({'.tab-btn':primary, '.tabpanel':panels, '[data-protection-section]':sections,
-        '[data-protection-view]':protection, '.subtab-btn[data-subtab]':sessions,
-        '.subtab-btn':[...sessions, ...protection], '.subview':[]})[selector] || [];
+        '[data-protection-view]':protection, '#tab-sessions .subtab-btn[data-subtab]':sessions,
+        '#tab-system [data-system-subtab]':system, '#tab-system .system-subview':systemViews,
+        '#tab-sessions .subview':sessionViews})[selector] || [];
+    },
+    querySelector(selector) {
+      return primary.find(button => selector === `.tab-btn[data-tab="${button.dataset.tab}"]`)
+        || system.find(button => selector === `#tab-system [data-system-subtab="${button.dataset.systemSubtab}"]`)
+        || sessions.find(button => selector === `#tab-sessions .subtab-btn[data-subtab="${button.dataset.subtab}"]`) || null;
     },
     getElementById(id) { return id === nav.id ? nav : null; },
   };
-  const runtime = {document, window:{history:{}}, sessionStorage:{setItem(){}},
-    activeTab:'home', activeSub:'board', activeProtection:'traffic', attentionSelection:null, protectionContext:null, clearProtectionContext(){},
-    PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){}};
+  const saved = new Map();
+  const hashes = [];
+  const loads = [];
+  const history = {replaceState(_a, _b, url) { hashes.push(url); }};
+  const runtime = {document, window:{history}, history, location:{pathname:'/console',search:''},
+    sessionStorage:{setItem(key, value){saved.set(key,value);}},
+    activeTab:'home', activeSub:'board', activeProtection:'traffic', activeSystemSub:'worktrees', attentionSelection:null, protectionContext:null, clearProtectionContext(){},
+    PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){},
+    WORKTREE_STALE_MS:60000, worktreesState:{report:null, ledger:null}, clutterState:{report:null},
+    loadWorktrees(){loads.push('worktrees');}, loadLedger(){loads.push('ledger');}, loadClutter(){loads.push('clutter');},
+    followWorktreeSizing(){}, followClutterSizing(){}};
   vm.createContext(runtime);
   vm.runInContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), runtime);
   vm.runInContext(source.slice(start, end), runtime);
   assert.equal(sessions.every(button => button.listeners.length === 1), true);
+  assert.equal(system.every(button => button.listeners.length === 1), true);
   assert.equal(protection.every(button => button.listeners.length === 0), true, 'Sessions handlers must not bind to Protection buttons');
   for (const [route, view] of [['egress','traffic'], ['policy','rules'], ['protection/sources','sources'], ['protection/audit','audit']]) {
     runtime.switchTab(route);
@@ -168,4 +199,133 @@ test('Protection subviews retain selected ARIA and visibility without receiving 
   assert.equal(runtime.activeSub, 'events');
   assert.equal(nav.hidden, true);
   assert.equal(protection.every(button => button.attributes['aria-selected'] === 'false'), true);
+  for (const view of ['resources', 'worktrees', 'clutter']) {
+    const before = loads.length;
+    system.find(button => button.dataset.systemSubtab === view).listeners[0]();
+    assert.equal(runtime.activeTab, 'system');
+    assert.equal(runtime.activeSystemSub, view);
+    assert.equal(runtime.activeSub, 'events', 'System navigation preserves the Sessions selection');
+    assert.deepEqual(systemViews.filter(section => !section.hidden).map(section => section.dataset.systemView), [view]);
+    assert.deepEqual(system.filter(button => button.attributes['aria-selected'] === 'true').map(button => button.dataset.systemSubtab), [view]);
+    assert.deepEqual(loads.slice(before), view === 'worktrees' ? ['worktrees','ledger'] : view === 'clutter' ? ['clutter'] : []);
+    assert.equal(saved.get('sa.console-tab'), 'system/' + view);
+    assert.equal(hashes.at(-1), '/console#system/' + view);
+  }
+  primary.find(button => button.dataset.tab === 'sessions').listeners[0]();
+  assert.equal(runtime.activeSub, 'events');
+  assert.deepEqual(sessionViews.filter(section => !section.hidden).map(section => section.id), ['sub-events']);
+  primary.find(button => button.dataset.tab === 'system').listeners[0]();
+  assert.equal(runtime.activeSystemSub, 'clutter', 'primary System reopens its last selected view');
+  runtime.switchTab('system/nope');
+  assert.equal(runtime.activeSystemSub, 'worktrees', 'invalid direct routes preserve the Worktrees landing');
+  const fixture = readFileSync(path.resolve(webDist, '../../../../packaging/test/console_dom/mock_dom.js'), 'utf8');
+  const helperStart = fixture.indexOf('  const openTab =');
+  const helperEnd = fixture.indexOf("  if (scenarios.has('authrecover'))", helperStart);
+  vm.runInContext(fixture.slice(helperStart, helperEnd) + '\n globalThis.fixtureOpenTab = openTab;', runtime);
+  for (const [route,sub] of [['resources','resources'],['system/clutter','clutter'],['worktrees','worktrees'],['sessions/history','resources']]) {
+    runtime.fixtureOpenTab(route);
+    assert.equal(runtime.activeTab, 'system', route);
+    assert.equal(runtime.activeSystemSub, sub, route);
+    assert.deepEqual(systemViews.filter(section => !section.hidden).map(section => section.dataset.systemView), [sub]);
+  }
+  runtime.fixtureOpenTab('sessions');
+  assert.equal(runtime.activeTab, 'sessions');
+  assert.equal(runtime.activeSub, 'board');
+});
+
+
+test('Resource and memory panels render only in System Resources', () => {
+  const source = readFileSync(path.join(webDist, 'app.js'), 'utf8');
+  const start = source.indexOf('  const PANEL_VIEW =');
+  const end = source.indexOf('  // Panel → the element', start);
+  const runtime = { activeTab:'home', activeSub:'board', activeProtection:'traffic', activeSystemSub:'worktrees', homeGroupOpen:() => true };
+  vm.createContext(runtime);
+  vm.runInContext(source.slice(start, end), runtime);
+  for (const name of ['resources', 'history', 'chart-memory', 'worktrees', 'clutter']) assert.equal(runtime.panelOnScreen(name), false, name);
+  runtime.activeTab = 'system';
+  for (const view of ['resources', 'worktrees', 'clutter']) {
+    runtime.activeSystemSub = view;
+    for (const name of ['resources', 'history', 'chart-memory', 'worktrees', 'clutter']) {
+      assert.equal(runtime.panelOnScreen(name), (['resources','history','chart-memory'].includes(name) ? 'resources' : name) === view, view + '/' + name);
+    }
+  }
+  runtime.activeTab = 'sessions'; runtime.activeSub = 'processes';
+  assert.equal(runtime.panelOnScreen('agents'), true);
+  assert.equal(runtime.panelOnScreen('chart-memory'), false);
+});
+
+test('saved views capture the independent System sub-view and retain filters', () => {
+  const source = readFileSync(path.join(webDist, 'app.js'), 'utf8');
+  const start = source.indexOf('  function currentViewSnapshot(');
+  const end = source.indexOf('  window.saveCurrentView', start);
+  const runtime = {activeTab:'system', activeSub:'events', activeProtection:'audit', activeSystemSub:'resources',
+    filters:{flags:{agent:'codex'},events:{type:'model'}}, document:{getElementById:() => ({value:'api-service'})}};
+  vm.createContext(runtime);
+  vm.runInContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), runtime);
+  vm.runInContext(source.slice(start, end), runtime);
+  for (const view of ['resources','worktrees','clutter']) {
+    runtime.activeSystemSub = view;
+    const saved = runtime.currentViewSnapshot('My view');
+    assert.equal(saved.tab, 'system/' + view);
+    assert.equal(saved.search, 'api-service');
+    assert.equal(saved.flags.agent, 'codex');
+    assert.equal(saved.events.type, 'model');
+    assert.notEqual(saved.flags, runtime.filters.flags);
+  }
+  runtime.activeTab = 'sessions';
+  assert.equal(runtime.currentViewSnapshot('My view').tab, 'sessions/events');
+});
+
+
+test('returning to a pending System report resumes bounded followup after its hidden-view timer expires', () => {
+  const source = readFileSync(path.join(webDist, 'app.js'), 'utf8');
+  const timers = new Map();
+  let timerID = 0;
+  const reads = [];
+  const runtime = {
+    document:{body:{classList:{toggle(){}}}, querySelectorAll:() => [], getElementById:() => null},
+    window:{history:{}}, sessionStorage:{setItem(){}},
+    activeTab:'home', activeSub:'board', activeProtection:'traffic', activeSystemSub:'worktrees',
+    attentionSelection:null, protectionContext:null,
+    PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){},
+    WORKTREE_STALE_MS:60000, WORKTREE_SIZING_POLL_MS:5000, WORKTREE_SIZING_POLLS:60, WORKTREE_REMOVAL_POLL_MS:1500,
+    worktreesState:{report:{},loadedAt:Date.now(),ledger:{},ledgerAt:Date.now()},
+    clutterState:{report:{},loadedAt:Date.now()},
+    worktreeSizingTimer:null, worktreeSizingFast:false, worktreeSizingPolls:0, clutterSizingTimer:null, clutterSizingPolls:0,
+    setTimeout(fn,delay){const id=++timerID; timers.set(id,{fn,delay}); return id;}, clearTimeout(id){timers.delete(id);},
+    loadWorktrees(){reads.push('worktrees');}, loadClutter(){reads.push('clutter');}, loadLedger(){reads.push('ledger');},
+  };
+  vm.createContext(runtime);
+  vm.runInContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), runtime);
+  const workStart = source.indexOf('  const removalRunning =');
+  vm.runInContext(source.slice(workStart, source.indexOf('  // Removal progress:', workStart)), runtime);
+  const clutterStart = source.indexOf('  function followClutterSizing(');
+  vm.runInContext(source.slice(clutterStart, source.indexOf('  async function loadClutter(', clutterStart)), runtime);
+  const switchStart = source.indexOf('  function switchTab(');
+  vm.runInContext(source.slice(switchStart, source.indexOf('  // Tab badges:', switchStart)), runtime);
+  const fire = () => {
+    assert.equal(timers.size, 1);
+    const [id,{fn,delay}] = [...timers][0]; timers.delete(id); fn(); return delay;
+  };
+  for (const [view,pending] of [['worktrees',{sizing:true}],['worktrees',{refreshing:true}],['worktrees',{asks:{task:{status:'running'}}}],['clutter',{sizing:true}],['clutter',{refreshing:true}]]) {
+    runtime.worktreesState.report = view === 'worktrees' ? pending : {};
+    runtime.clutterState.report = view === 'clutter' ? pending : {};
+    reads.length = 0;
+    runtime.switchTab('system/' + view);
+    assert.deepEqual(reads, [], 'a fresh pending report resumes its timer without an immediate scan');
+    runtime.switchTab('system/resources');
+    assert.equal(fire(), 5000);
+    assert.deepEqual(reads, [], 'sizing and asks stop rereading while their view is hidden');
+    runtime.switchTab('system/' + view);
+    assert.equal(fire(), 5000);
+    assert.deepEqual(reads, [view], 'reopening within 60 seconds resumes the pending report');
+  }
+  runtime.worktreeSizingPolls = 60; runtime.clutterSizingPolls = 60;
+  runtime.worktreesState.report = {sizing:true}; runtime.clutterState.report = {refreshing:true};
+  runtime.switchTab('system/worktrees'); runtime.switchTab('system/clutter');
+  assert.equal(timers.size, 0, 'navigation does not reset the existing sizing cap');
+  runtime.worktreesState.report = {removals:{path:{state:'running'}}};
+  runtime.switchTab('system/worktrees'); runtime.switchTab('system/resources');
+  assert.equal(fire(), 1500);
+  assert.equal(reads.at(-1), 'worktrees', 'running removals retain their cross-view followup');
 });

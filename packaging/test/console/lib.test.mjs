@@ -1719,3 +1719,22 @@ test('Processes row: a root whose /status tree root carries an origin names the 
   const bare = ctx.agentInstanceHTML({ root: a, children: [] }, Date.now(), {}, new Map());
   assert.match(bare, /<span class="agent-row-title">\.openclaw<\/span>/);
 });
+
+test('Processes identity stays escaped above factual metadata and preserves helper and terminate targets', () => {
+  const root = {pid:4412, name:'codex', cwd:'/workspace/fallback', started_at:'2026-10-10T09:00:00Z', last_seen_at:'2026-10-10T09:01:00Z', rss_bytes:1048576, is_orphan:true};
+  const children = [{pid:4413, name:'worker', cwd:'/workspace/fallback', started_at:'2026-10-10T09:02:00Z', rss_bytes:1048576}];
+  const roots = new Map([[4412, {pid:4412, repo:'api<service', branch:'feat/a&b', origin:'quill (openclaw)'}]]);
+  const html = ctx.agentInstanceHTML({root, children}, Date.parse('2026-10-10T10:00:00Z'), {4412:true}, roots);
+  assert.match(html, /agent-instance agent-row has-tree orphan stale/);
+  assert.match(html, /<span class="agent-row-title">api&lt;service@feat\/a&amp;b · quill<\/span>\s*<div class="agent-row-meta">/);
+  assert.ok(!html.includes('api<service'));
+  const meta = html.split('<div class="agent-row-meta">')[1].split('</div>')[0];
+  assert.match(meta, /PID 4412/);
+  assert.match(meta, /agent-status orphan">leftover/);
+  assert.match(meta, /active .* ago/);
+  assert.match(meta, /2\.0 MB/);
+  assert.match(html, /data-action="kill" data-pid="4412" data-started="2026-10-10T09:00:00Z" data-family="codex"/);
+  assert.match(html, /class="session-helpers agent-tree" data-pid="4412" open/);
+  assert.match(html, /data-action="kill" data-pid="4413" data-started="2026-10-10T09:02:00Z"/);
+  assert.match(ctx.agentInstanceHTML({root:{pid:42,name:'codex'},children:[]}, Date.now(), {}, new Map()), /agent-row-title">Codex<\/span>/);
+});

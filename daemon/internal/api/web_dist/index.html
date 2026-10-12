@@ -332,7 +332,7 @@
               </div>
             </div>
           </section>
-          <div class="chart-grid">
+          <div class="chart-grid chart-grid-single">
             <section class="panel chart-panel">
               <div class="panel-head">
                 <h2><svg class="icon"><use href="#i-alert"/></svg>Findings by rule</h2>
@@ -345,29 +345,16 @@
                 </div>
               </div>
             </section>
-            <section class="panel chart-panel">
-              <div class="panel-head">
-                <h2><svg class="icon"><use href="#i-agent"/></svg>Memory by family</h2>
-                <span class="badge" id="chart-mem-total">0</span>
-              </div>
-              <div class="panel-body">
-                <p class="report-health" data-reports="snapshot" role="status" hidden></p>
-                <div id="chart-memory" class="hbars">
-                  <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No attributed sessions yet</span></div>
-                </div>
-              </div>
-            </section>
           </div>
         </details>
       </div>
 
       <!-- Sessions: one sub-view at a time — the session board, the live
-           processes, resources and the raw event timeline. -->
+           processes and the raw event timeline. -->
       <div class="tabpanel" id="tab-sessions" role="tabpanel" hidden>
         <div class="subtabs" role="tablist" aria-label="Sessions views">
           <button type="button" class="subtab-btn active" data-subtab="board" role="tab" aria-selected="true" aria-controls="sub-board">Sessions<span class="tab-badge" id="subtab-badge-board" hidden></span></button>
           <button type="button" class="subtab-btn" data-subtab="processes" role="tab" aria-selected="false" aria-controls="sub-processes">Processes<span class="tab-badge" id="subtab-badge-processes" hidden></span></button>
-          <button type="button" class="subtab-btn" data-subtab="resources" role="tab" aria-selected="false" aria-controls="sub-resources">Resources</button>
           <button type="button" class="subtab-btn" data-subtab="events" role="tab" aria-selected="false" aria-controls="sub-events">Events</button>
         </div>
         <div class="subview" id="sub-board" role="tabpanel">
@@ -422,28 +409,6 @@
             </section>
           </div>
         </div>
-        </div>
-        <div class="subview" id="sub-resources" role="tabpanel" hidden>
-        <section class="panel resource-panel" id="resource-mission-control">
-          <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-activity"/></svg>Resources now</h2>
-            <span class="badge" id="resource-observed">Live</span>
-          </div>
-          <p class="report-health" data-reports="resources" role="status" hidden></p>
-          <div class="panel-body" id="resource-board">
-            <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>Waiting for attributed CPU and memory samples…</span></div>
-          </div>
-        </section>
-        <section class="panel resource-panel" id="history-panel">
-          <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-history"/></svg>Pressure history</h2>
-            <span class="badge" id="history-observed">—</span>
-          </div>
-          <p class="report-health" data-reports="resource episodes" role="status" hidden></p>
-          <div class="panel-body" id="history-board">
-            <div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>The recorder is armed. Episodes appear here when a session becomes heavy, grows rapidly, or leaves resource-holding processes behind.</span></div>
-          </div>
-        </section>
         </div>
         <div class="subview" id="sub-events" role="tabpanel" hidden>
         <section class="panel panel-grow">
@@ -538,9 +503,48 @@
         </div>
       </div>
 
-      <!-- System: what sits on this machine — agent worktrees and the clutter
-           they leave — and what can be cleaned up. -->
+      <!-- System: resources, agent worktrees and cleanup. -->
       <div class="tabpanel" id="tab-system" role="tabpanel" hidden>
+        <nav class="subtabs" role="tablist" aria-label="System views">
+          <button type="button" class="subtab-btn" id="system-tab-resources" data-system-subtab="resources" role="tab" aria-selected="false" aria-controls="sub-resources">Resources</button>
+          <button type="button" class="subtab-btn active" id="system-tab-worktrees" data-system-subtab="worktrees" role="tab" aria-selected="true" aria-controls="system-worktrees">Worktrees</button>
+          <button type="button" class="subtab-btn" id="system-tab-clutter" data-system-subtab="clutter" role="tab" aria-selected="false" aria-controls="system-clutter">Clutter</button>
+        </nav>
+        <div class="system-subview" id="sub-resources" data-system-view="resources" role="tabpanel" aria-labelledby="system-tab-resources" hidden>
+        <section class="panel resource-panel" id="resource-mission-control">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-activity"/></svg>Resources now</h2>
+            <span class="badge" id="resource-observed">Live</span>
+          </div>
+          <p class="report-health" data-reports="resources" role="status" hidden></p>
+          <div class="panel-body" id="resource-board">
+            <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>Waiting for attributed CPU and memory samples…</span></div>
+          </div>
+        </section>
+            <section class="panel chart-panel">
+              <div class="panel-head">
+                <h2><svg class="icon"><use href="#i-agent"/></svg>Memory by family</h2>
+                <span class="badge" id="chart-mem-total">0</span>
+              </div>
+              <div class="panel-body">
+                <p class="report-health" data-reports="snapshot" role="status" hidden></p>
+                <div id="chart-memory" class="hbars">
+                  <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No attributed sessions yet</span></div>
+                </div>
+              </div>
+            </section>
+        <section class="panel resource-panel" id="history-panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-history"/></svg>Pressure history</h2>
+            <span class="badge" id="history-observed">—</span>
+          </div>
+          <p class="report-health" data-reports="resource episodes" role="status" hidden></p>
+          <div class="panel-body" id="history-board">
+            <div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>The recorder is armed. Episodes appear here when a session becomes heavy, grows rapidly, or leaves resource-holding processes behind.</span></div>
+          </div>
+        </section>
+        </div>
+        <div class="system-subview" id="system-worktrees" data-system-view="worktrees" role="tabpanel" aria-labelledby="system-tab-worktrees">
         <section class="panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-branch"/></svg>Worktrees</h2>
@@ -569,6 +573,8 @@
             <div class="loading">Scanning worktrees…</div>
           </div>
         </section>
+        </div>
+        <div class="system-subview" id="system-clutter" data-system-view="clutter" role="tabpanel" aria-labelledby="system-tab-clutter" hidden>
         <section class="panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-server"/></svg>Clutter</h2>
@@ -582,6 +588,7 @@
             <div class="loading">Looking for clutter…</div>
           </div>
         </section>
+        </div>
       </div>
 
       <!-- Protection rules and audit retain their existing renderer targets. -->

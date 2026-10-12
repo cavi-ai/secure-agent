@@ -360,11 +360,13 @@ body {
 }
 .agent-instance.nested { margin-left: 16px; }
 .agent-instance.orphan { border-color: hsl(38 92% 56% / 0.45); }
-.agent-instance.stale { opacity: 0.62; }
+.agent-instance.stale .agent-row-meta { opacity: 0.75; }
 /* Instance row: what it works on first, the pid as the secondary fact. */
 .agent-instance.has-tree { flex-wrap: wrap; }
-.agent-row-main { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; flex: 1; min-width: 0; }
-.agent-row-title { font-weight: 650; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.agent-row-main { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; flex: 1; min-width: 0; }
+.agent-row-title { font: 650 14px/1.4 var(--font); color: var(--tx-1); padding: 5px 8px; border: 1px solid var(--line-2); border-radius: var(--r-sm); max-width: 100%; overflow-wrap: anywhere; }
+.agent-row-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.agent-row-meta .agent-meta-item, .agent-row-meta .agent-pid { color: var(--tx-2); }
 .agent-tree .agent-instance { margin-top: 6px; }
 /* Infrastructure: IDEs and model servers, set apart and never counted. */
 .agent-infra { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding-top: 12px; border-top: 1px dashed var(--line-2); }
@@ -1153,8 +1155,8 @@ body {
 }
 .subtab-btn:hover { color: var(--tx-1); }
 .subtab-btn.active { color: var(--tx-1); border-bottom-color: var(--brand); }
-.subview { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-.subview[hidden] { display: none; }
+.subview, .system-subview { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.subview[hidden], .system-subview[hidden] { display: none; }
 
 /* Home groups preserve user-controlled disclosure; usage starts expanded. */
 .home-group { min-width: 0; }
@@ -1493,6 +1495,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 @media (max-width: 400px) {
   .agent-group-meta .btn span { display: none; }
   .agent-instance { flex-wrap: wrap; }
+  .agent-row-main { flex-basis: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1924,6 +1927,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .chart-panel .panel-body { padding: 12px 16px 14px; }
 .chart-panel .act-body { padding: 14px 16px 8px; }
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+.chart-grid-single { grid-template-columns: 1fr; }
 @media (max-width: 900px) { .chart-grid { grid-template-columns: 1fr; } }
 
 /* Horizontal bar list — the readable "ranked" chart. */

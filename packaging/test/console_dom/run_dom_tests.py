@@ -470,7 +470,8 @@ def main():
         dom_wtremovefail = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo&removefaildemo")
         dom_wtsizing = dump_dom(chrome, tmp, "?tab=worktrees&sizingdemo")
         dom_wtrefresh = dump_dom(chrome, tmp, "?tab=worktrees&refreshdemo")
-        dom_clutter = dump_dom(chrome, tmp, "?tab=worktrees&clutterdemo")
+        dom_clutter_view = dump_dom(chrome, tmp, "?tab=system/clutter")
+        dom_clutter = dump_dom(chrome, tmp, "?tab=system/clutter&clutterdemo")
         dom_wtremovable = dump_dom(chrome, tmp, "?tab=worktrees&removeremovabledemo", fixture=payload_cases.batch_worktrees(multiple_repos=True))
         dom_wthistory = dump_dom(chrome, tmp, "?tab=worktrees&historydemo")
         dom_wtday = dump_dom(chrome, tmp, "?tab=worktrees&reclaimdaydemo")
@@ -478,7 +479,7 @@ def main():
         dom_wtsearch = dump_dom(chrome, tmp, "?tab=worktrees&wtsearchdemo")
         dom_wtadopt = dump_dom(chrome, tmp, "?tab=worktrees", fixture=payload_cases.running_worktree_removal())
         dom_wtcadence = dump_dom(chrome, tmp, "?tab=worktrees&removecadence")
-        dom_clutteradvise = dump_dom(chrome, tmp, "?tab=worktrees&clutteradvise")
+        dom_clutteradvise = dump_dom(chrome, tmp, "?tab=system/clutter&clutteradvise")
         dom_wtgroup = dump_dom(chrome, tmp, "?tab=worktrees&groupdemo")
         # The Agent tab is served under the daemon's CSP like the console.
         dom_agent = dump_dom(chrome, tmp, "?tab=agent", origin)
@@ -1189,18 +1190,21 @@ def main():
             check(f"hash {old_hash} opens the System tab",
                   dom_query(dom_old).has(None, {'class': 'tab-btn active', 'data-tab': 'system'})
                   and dom_query(dom_old).has(None, {'id': 'tab-system', 'role': 'tabpanel'})
-                  and 'id="tab-sessions" role="tabpanel" hidden' in dom_old)
+                  and 'id="tab-sessions" role="tabpanel" hidden' in dom_old
+                  and dom_query(dom_old).has(None, {'data-system-subtab': 'worktrees', 'aria-selected': 'true'})
+                  and dom_query(dom_old).has(None, {'id': 'system-clutter', 'hidden': ''})
+                  and dom_query(dom_old).has(None, {'id': 'sub-resources', 'hidden': ''}))
         check("hash #findings opens Home",
               dom_query(dom_hashfindings).has(None, {'class': 'tab-btn active', 'data-tab': 'home'})
               and dom_query(dom_hashfindings).has(None, {'id': 'tab-home', 'role': 'tabpanel'}))
         trends = (re.search(r'<pre id="trends-probe"[^>]*>(.*?)</pre>', dom_trends, re.S) or [None, ""])[1]
         tm = re.match(r"closed\(open=false\):activity=(\d+),chart-flags=(\d+),chart-memory=(\d+) \| opened:activity=(\d+),chart-flags=(\d+),chart-memory=(\d+)$", trends)
-        check("Trends closed: its chart panels render 0 times through a burst, then render when opened",
-              tm is not None and tm.group(1, 2, 3) == ("0", "0", "0") and all(int(x) >= 1 for x in tm.group(4, 5, 6)),
+        check("Trends charts render only when opened; Memory stays hidden in System Resources",
+              tm is not None and tm.group(1, 2, 3) == ("0", "0", "0") and all(int(x) >= 1 for x in tm.group(4, 5)) and tm.group(6) == '0',
               f"probe={trends!r}")
         # renderAll() (boot, Refresh, search) must not paint a panel that
         # isn't on screen: absolute render count 0 for the Trends charts and
-        # the Sessions/Resources sub-view through all three, then >= 1 once
+        # the System/Resources sub-view through all three, then >= 1 once
         # each is actually shown.
         hrp = (re.search(r'<pre id="hidden-render-probe"[^>]*>(.*?)</pre>', dom_hiddenrender, re.S) or [None, ""])[1]
         hrp_stages = dict(re.findall(r'(boot|refresh|search|shown):((?:[a-z-]+=\d+,?)+)', hrp))
@@ -1210,7 +1214,7 @@ def main():
         def hrp_shown():
             counts = dict(re.findall(r'([a-z-]+)=(\d+)', hrp_stages.get('shown', '')))
             return len(counts) == 4 and all(int(v) >= 1 for v in counts.values())
-        check("hidden panels (Trends charts, Sessions/Resources) render 0 times across boot, Refresh and search, then render once shown",
+        check("hidden panels (Trends charts, System/Resources) render 0 times across boot, Refresh and search, then render once shown",
               hrp_zero('boot') and hrp_zero('refresh') and hrp_zero('search') and hrp_shown(),
               f"probe={hrp!r}")
         class PolicyRowCounter(HTMLParser):
@@ -1383,8 +1387,8 @@ def main():
         check("View family opens the drawer with the family name; the tab stays Resources",
               len(dom_query(dom_fam).find_all('div', {'id': 'drawer', 'class': 'drawer'})) == 1
               and 'id="drawer-title-text">Codex · data-pipeline@feat/etl<' in fam_drawer
-              and dom_query(dom_fam).has(None, {'class': 'tab-btn active', 'data-tab': 'sessions'})
-              and dom_query(dom_fam).has(None, {'class': 'subtab-btn active', 'data-subtab': 'resources'}))
+              and dom_query(dom_fam).has(None, {'class': 'tab-btn active', 'data-tab': 'system'})
+              and dom_query(dom_fam).has(None, {'class': 'subtab-btn active', 'data-system-subtab': 'resources'}))
         check("family drawer: the process table shows 12 rows and Show 8 more, then expands in place",
               fam_probe == "rows=12 more=Show 8 more" and len(dom_query(fam_drawer).find_all(None, {'class': 'family-proc-row'})) == 20
               and not dom_query(fam_drawer).has(None, {'data-action': 'show-more'}), f"probe={fam_probe!r} rows={len(dom_query(fam_drawer).find_all(None, {'class': 'family-proc-row'}))}")
@@ -1445,11 +1449,17 @@ def main():
         check("home has no session board",
               'id="session-board"' not in dom.split('id="tab-home"', 1)[1].split('id="tab-sessions"', 1)[0])
         overview = dom.split('id="home-trends"', 1)[1].split('id="tab-sessions"', 1)[0]
-        # Trends is charts-only: the activity chart plus the two ranked-bar
-        # charts. Lists (sessions/agents/flags/events) live elsewhere.
+        # Trends contains activity and findings charts. Resource charts live in System.
         check("trends lead with the activity chart", dom_query(overview).has(None, {'id': 'activity-chart'}))
         check("trends have the findings-by-rule chart", dom_query(overview).has(None, {'id': 'chart-flags'}))
-        check("trends have the memory-by-family chart", dom_query(overview).has(None, {'id': 'chart-memory'}))
+        system_resources = dom_query(dom).find(None, {'id': 'sub-resources', 'data-system-view': 'resources'})
+        check("System Resources orders live usage, Memory by family and Pressure history",
+              system_resources is not None
+              and system_resources.has(None, {'id': 'resource-board'})
+              and system_resources.has(None, {'id': 'chart-memory'})
+              and system_resources.has(None, {'id': 'history-board'})
+              and system_resources.html.index('id="resource-board"') < system_resources.html.index('id="chart-memory"') < system_resources.html.index('id="history-board"')
+              and not dom_query(overview).has(None, {'id': 'chart-memory'}))
         mem_bars = dom_memfam.split('id="chart-memory"', 1)[1].split('</section>', 1)[0].split('class="hbar-row"')[1:]
         mem_badge = re.search(r'id="chart-mem-total">(\d+)<', dom_memfam)
         check("memory by family: three sessions on one root are one bar carrying 3 sessions",
@@ -1567,22 +1577,27 @@ def main():
         check("Policy lists reversible expected connections",
               'old.example.com:443' in dom_policylists
               and dom_query(dom_policylists).has(None, {'data-action': 'revoke-expected-egress', 'data-id': 'expected-older'}))
-        # Sessions holds one sub-view at a time.
+        # System Resources and Sessions Events have independent view owners.
+        resource_sub = dom_query(dom).find(None, {'id': 'sub-resources', 'class': 'system-subview'})
+        system_tab = dom_query(dom).find(None, {'id': 'tab-system'})
+        sessions_tab = dom_query(dom).find(None, {'id': 'tab-sessions'})
         check("resources and events are separate sub-views",
-              'id="sub-resources" role="tabpanel" hidden' in dom
-              and 'id="sub-events" role="tabpanel" hidden' in dom
-              and dom_query(dom).has(None, {'class': 'subtabs', 'role': 'tablist'}))
+              resource_sub is not None and 'hidden' in system_tab.attrs
+              and system_tab.has(None, {'id': 'sub-resources'})
+              and not sessions_tab.has(None, {'id': 'sub-resources'})
+              and sessions_tab.has(None, {'id': 'sub-events', 'hidden': ''})
+              and system_tab.has(None, {'class': 'subtabs', 'role': 'tablist', 'aria-label': 'System views'}))
         check("pressure history sits in the Resources sub-view",
-              dom.index('id="sub-resources"') < dom.index('id="history-panel"') < dom.index('id="sub-events"'))
+              resource_sub is not None and resource_sub.has(None, {'id': 'history-panel'}))
         check("resource panel lives in the resources sub-view",
-              dom.index('id="sub-resources"') < dom.index('id="resource-board"')
-              and dom.index('id="resource-board"') < dom.index('id="history-panel"'))
+              resource_sub is not None and resource_sub.has(None, {'id': 'resource-board'})
+              and resource_sub.html.index('id="resource-board"') < resource_sub.html.index('id="history-panel"'))
+        history_panel = resource_sub.find(None, {'id': 'history-panel'}) if resource_sub else None
         check("flight recorder lives in the resources sub-view",
-              dom.index('id="history-panel"') < dom.index('id="history-board"')
-              and dom.index('id="history-board"') < dom.index('id="sub-events"'))
+              history_panel is not None and history_panel.has(None, {'id': 'history-board'}))
         check("event timeline lives in the events sub-view",
-              dom.index('id="sub-events"') < dom.index('id="events-container"')
-              and dom.index('id="events-container"') < dom.index('id="tab-egress"'))
+              sessions_tab.find(None, {'id': 'sub-events'}).has(None, {'id': 'events-container'})
+              and not system_tab.has(None, {'id': 'events-container'}))
 
         # --- saved views, search, export (P5) ---
         check("saved-view menu is present", dom_query(dom).has(None, {'id': 'btn-views'}) and dom_query(dom).has(None, {'id': 'views-pop'}))
@@ -2031,7 +2046,7 @@ def main():
         check("worktrees: while the daemon is still measuring, the tab re-reads until sizes land",
               '<span class="wt-size">1.5 GB</span>' in wt_block(dom_wtsizing) and "measuring…" not in dom_wtsizing
               and "<b>Worktrees</b> 1.5 GB" in dom_wtsizing)
-        cl = cl_block(dom_wt)
+        cl = cl_block(dom_clutter_view)
         check("clutter: items grouped by project with kind, size, idle; Trash and Run only where the item offers them",
               len(dom_query(cl).find_all(None, {'class': 'wt-row cl-row'})) == 3
               and 'data-action="clutter-trash" data-path="/Users/dev/workspace/api-service/.tmp">Move to Trash</button>' in cl

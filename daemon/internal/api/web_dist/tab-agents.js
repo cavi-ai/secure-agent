@@ -95,10 +95,12 @@ function agentInstanceHTML(inst, now, treeOpen, roots) {
       <div class="agent-instance agent-row${n ? ' has-tree' : ''}${a.is_orphan ? ' orphan' : ''}${stale ? ' stale' : ''}">
         <div class="agent-row-main" title="${escapeHTML(a.cwd || a.workspace || '')}">
           <span class="agent-row-title">${escapeHTML(title)}</span>
+          <div class="agent-row-meta">
           <span class="agent-pid">PID ${escapeHTML(a.pid)}</span>
           ${a.is_orphan ? '<span class="agent-status orphan">leftover</span>' : ''}
           ${seenAge ? `<span class="agent-meta-item agent-lastseen" title="last event ${escapeHTML(a.last_seen_at)}">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
           ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
+          </div>
         </div>
         <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${escapeHTML(a.pid)}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
         ${tree}
