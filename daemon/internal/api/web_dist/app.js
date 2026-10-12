@@ -607,6 +607,7 @@ document.addEventListener('DOMContentLoaded', () => {
       el.hidden = previous.hidden;
     }
     pausedElements.clear();
+    if (activeTab === 'protection' && activeProtection === 'rules') loadPolicy();
     syncDrawerMode();
     if (handoff.has('tab')) switchTab(route, { skipHash: true });
     if (recoveryFocus?.isConnected) recoveryFocus.focus({ preventScroll: true });
@@ -1405,83 +1406,56 @@ document.addEventListener('DOMContentLoaded', () => {
   // Policy lists are not telemetry either: they load when Protection → Rules &
   // permissions opens and on its Refresh, never on the refresh cycle.
   const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null,
-    loading: false, error: '', readSeq: 0, scopeMutations: new Map(), expectedMutations: new Map(), expectedRemoval: null };
-  function resetPolicyState() {
-    Object.assign(policyState, { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null,
-      loading: false, error: '', expectedRemoval: null });
-    policyState.readSeq++;
-    policyState.scopeMutations.clear();
-    policyState.expectedMutations.clear();
-    markDirty('policy');
+    loading: false, error: '', scopeMutations: new Map(), expectedMutations: new Map(), expectedRemoval: null };
+  const policyRendered = new Map();
+  let policyController;
+  function consolePolicyControllerModule() {
+    return policyController ||= createConsolePolicy({
+      state: { policyState, get sessionEnded() { return sessionEnded; }, get handoffGeneration() { return handoffGeneration; } },
+      actions: { apiFetch: (...args) => apiFetch(...args), markDirty, decisionPermissionRows, validExpectedPatterns }
+    });
   }
-  async function loadPolicy() {
-    if (sessionEnded || policyState.loading) return;
-    const auth = handoffGeneration, seq = ++policyState.readSeq;
-    const current = () => !sessionEnded && auth === handoffGeneration && seq === policyState.readSeq;
-    policyState.loading = true;
-    policyState.error = '';
-    markDirty('policy');
-    const get = async (path) => {
-      const r = await apiFetch(path);
-      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
-      const payload = await r.json();
-      return path === '/expected' || path === '/decision-scopes' ? payload : payload || [];
-    };
-    try {
-      const [rules, paths, mutes, expected, scopes] = await Promise.all([get('/guard/rules'), get('/guard/path-allow'), get('/mute'), get('/expected'), get('/decision-scopes')]);
-      if (!validDecisionScopeRecords(scopes)) throw new Error('Invalid permission records');
-      if (!validExpectedPatterns(expected)) throw new Error('Invalid exception records');
-      if (!current()) return;
-      Object.assign(policyState, { guardRules: rules, pathAllows: paths, mutes, expected, scopes });
-      for (const [id, mutation] of policyState.scopeMutations) {
-        if (mutation.status === 'unconfirmed') policyState.scopeMutations.delete(id);
-      }
-      for (const [key, mutation] of policyState.expectedMutations) {
-        if (mutation.status === 'unconfirmed') policyState.expectedMutations.delete(key);
-      }
-    } catch (err) {
-      if (!current()) return;
-      policyState.error = "Couldn't load the policy lists: " + (err.message || err);
-    } finally {
-      if (current()) { policyState.loading = false; markDirty('policy'); }
-    }
-  }
+  function loadPolicy(kind) { return consolePolicyControllerModule().load(kind); }
+  function resetPolicyState() { return consolePolicyControllerModule().reset(); }
+  function policyReady(kind) { return consolePolicyControllerModule().ready(kind); }
   function renderPolicyLists() {
     const put = (id, badge, rows, html) => {
       const el = document.getElementById(id);
-      if (el && el.innerHTML !== html) {
-        const action = id === 'policy-scopes' ? 'revoke-scope' : id === 'policy-expected' ? 'forget-expected' : null;
-        const key = id === 'policy-scopes' ? 'id' : 'key';
-        const focused = action && el.contains(document.activeElement) && document.activeElement.dataset.action === action
-          ? document.activeElement.dataset[key] : null;
+      if (el && policyRendered.get(id) !== html) {
+        const active = document.activeElement;
+        const focused = el.contains(active) && active.dataset.action ? { ...active.dataset } : null;
         el.innerHTML = html;
+        policyRendered.set(id, html);
         if (focused) {
-          const target = Array.from(el.querySelectorAll('[data-action="' + action + '"]')).find(button => button.dataset[key] === focused && !button.disabled);
+          const target = Array.from(el.querySelectorAll('[data-action]')).find(button => !button.disabled &&
+            ['action', 'id', 'key', 'kind'].every(field => button.dataset[field] === focused[field]));
           if (target) target.focus({ preventScroll: true });
           else { el.tabIndex = -1; el.focus({ preventScroll: true }); }
         }
       }
       const b = document.getElementById(badge);
-      if (b) b.textContent = rows ? rows.length : 0;
+      if (b) b.textContent = rows ? rows.length : '—';
     };
     const st = policyState;
-    put('policy-guard-rules', 'badge-guard-rules', st.guardRules, policyListHTML('guard', st.guardRules, st));
-    put('policy-path-allows', 'badge-path-allows', st.pathAllows, policyListHTML('path', st.pathAllows, st));
-    put('policy-mutes', 'badge-mutes', st.mutes, policyListHTML('mute', st.mutes, st));
-    put('policy-expected', 'badge-expected', st.expected, policyListHTML('expected', st.expected, st));
-    put('policy-scopes', 'badge-scopes', st.scopes, policyListHTML('scope', st.scopes, st));
+    consolePolicyControllerModule();
+    const view = key => ({ ...st, ...st.reports[key] });
+    put('policy-guard-rules', 'badge-guard-rules', st.guardRules, policyListHTML('guard', st.guardRules, view('guardRules')));
+    put('policy-path-allows', 'badge-path-allows', st.pathAllows, policyListHTML('path', st.pathAllows, view('pathAllows')));
+    put('policy-mutes', 'badge-mutes', st.mutes, policyListHTML('mute', st.mutes, view('mutes')));
+    put('policy-expected', 'badge-expected', st.expected, policyListHTML('expected', st.expected, view('expected')));
+    put('policy-scopes', 'badge-scopes', st.scopes, policyListHTML('scope', st.scopes, view('scopes')));
   }
 
   window.revokeScope = async function(id) {
     const record = policyState.scopes?.find(r => r.id === id);
-    if (sessionEnded || policyState.loading || policyState.error || policyState.scopeMutations.has(id) || !decisionScopeApplicability(record).revoke) return;
+    if (!policyReady('scope') || policyState.scopeMutations.has(id) || !decisionScopeApplicability(record).revoke) return;
     const mutation = { auth: handoffGeneration, status: 'confirming' };
     const current = () => !sessionEnded && mutation.auth === handoffGeneration && policyState.scopeMutations.get(id) === mutation;
     policyState.scopeMutations.set(id, mutation);
     const confirmed = await window.saConfirm(`Revoke this saved permission for ${record.resource_path}${record.destination ? ' → ' + record.destination : ''}? Other permissions and policies may still allow matching activity. This does not undo past access or remediate past exposure.`, { title: 'Revoke permission', okLabel: 'Revoke permission' });
     if (!current()) return;
     if (!confirmed) { policyState.scopeMutations.delete(id); return; }
-    if (policyState.loading || policyState.error || !decisionScopeApplicability(policyState.scopes?.find(r => r.id === id)).revoke) {
+    if (!policyReady('scope') || !decisionScopeApplicability(policyState.scopes?.find(r => r.id === id)).revoke) {
       policyState.scopeMutations.delete(id); markDirty('policy'); return;
     }
     mutation.status = 'saving';
@@ -1490,10 +1464,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await apiFetch('/decision-scopes?id=' + encodeURIComponent(id), {method:'DELETE'});
       if (!res.ok || !validScopeRevocation(await res.json(), id)) throw new Error('Revocation not confirmed');
       if (!current()) return;
+      consolePolicyControllerModule().invalidate('scope');
       mutation.status = 'saved';
       markDirty('policy');
       showToast('Permission revocation saved. Other permissions may still apply; past access is unchanged.', 'success');
-      await loadPolicy();
+      await loadPolicy('scope');
     } catch {
       if (!current()) return;
       mutation.status = 'unconfirmed';
@@ -1504,7 +1479,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.forgetExpected = async function(key) {
     const records = policyState.expected;
-    if (sessionEnded || policyState.loading || policyState.error || !validExpectedPatterns(records) || policyState.expectedMutations.has(key)) return;
+    if (!policyReady('expected') || !validExpectedPatterns(records) || policyState.expectedMutations.has(key)) return;
     const record = records.find(r => r.key === key);
     if (!record) return;
     const mutation = { auth: handoffGeneration, status: 'confirming' };
@@ -1518,7 +1493,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!current()) return;
     if (!confirmed) { policyState.expectedMutations.delete(key); return; }
     const latest = policyState.expected?.find(r => r.key === key);
-    if (policyState.loading || policyState.error || !latest || ['agent', 'reader', 'path', 'dest', 'scope'].some(field => latest[field] !== record[field])) {
+    if (!policyReady('expected') || !latest || ['agent', 'reader', 'path', 'dest', 'scope'].some(field => latest[field] !== record[field])) {
       policyState.expectedMutations.delete(key); markDirty('policy'); return;
     }
     mutation.status = 'saving';
@@ -1530,14 +1505,13 @@ document.addEventListener('DOMContentLoaded', () => {
       if (receipt?.status !== 'ok' || receipt.key !== key) throw new Error('Removal not confirmed');
       if (!current()) return;
       // A read begun before this receipt cannot restore the removed row.
-      policyState.readSeq++;
-      policyState.loading = false;
+      consolePolicyControllerModule().invalidate('expected');
       policyState.expected = policyState.expected.filter(r => r.key !== key);
       policyState.expectedRemoval = { ...record };
       policyState.expectedMutations.delete(key);
       markDirty('policy');
       showToast('Exception removal saved. Remaining exceptions and policies still apply; past activity is unchanged.', 'success');
-      await loadPolicy();
+      await loadPolicy('expected');
     } catch {
       if (!current()) return;
       mutation.status = 'unconfirmed';
@@ -5207,6 +5181,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'policy-refresh':
         e.preventDefault();
         loadPolicy();
+        break;
+      case 'policy-refresh-report':
+        e.preventDefault();
+        loadPolicy(d.kind);
         break;
       case 'open-config':
         e.preventDefault();

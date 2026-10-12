@@ -24,10 +24,10 @@
     try {
       openTab('policy');
       const list = document.getElementById('policy-expected');
-      await wait(() => list.textContent.includes('Remove exception') || list.textContent.includes('Invalid exception records'));
+      await wait(() => list.textContent.includes('Remove exception') || list.textContent.includes('The daemon returned invalid records.'));
       await idle();
       if (scenarios.has('removalinvalid')) {
-        probe.unavailable = list.textContent.includes('Invalid exception records') && !list.querySelector('[data-action="forget-expected"]');
+        probe.unavailable = list.textContent.includes('The daemon returned invalid records.') && !list.querySelector('[data-action="forget-expected"]');
         probe.noWrite = !deletes;
       } else {
         const file = scenarios.has('expectedremove=file');
@@ -57,7 +57,7 @@
           probe.saved = list.textContent.includes('Exception removal saved') && !removeButtons().some(el => el.dataset.key === key);
           probe.remaining = document.getElementById('badge-expected').textContent === '1';
           probe.feedback = list.textContent.includes('Remaining exceptions and policies still apply; past activity is unchanged');
-          if (scenarios.has('removalreadfail')) probe.retained = list.textContent.includes('Current exceptions unavailable') && !list.querySelector('[data-action="forget-expected"]');
+          if (scenarios.has('removalreadfail')) probe.retained = list.textContent.includes('current status is unavailable') && !list.querySelector('[data-action="forget-expected"]');
         }
       }
       probe.fits = document.documentElement.scrollWidth <= innerWidth;

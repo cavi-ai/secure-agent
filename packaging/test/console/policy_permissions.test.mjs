@@ -18,7 +18,7 @@ function controller() {
     document: { getElementById: () => null }, markDirty() {}, showToast: (...args) => messages.push(args),
     apiFetch: (url, options) => new Promise(resolve => requests.push({ url, options, resolve, answered: false })) };
   vm.createContext(c);
-  for (const file of ['lib.js', 'decision-permissions.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), c);
+  for (const file of ['lib.js', 'decision-permissions.js', 'policy-controller.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), c);
   const start = app.indexOf('  // Policy lists are not telemetry');
   const end = app.indexOf('  // Agent tab:', start);
   assert.ok(start >= 0 && end > start);
@@ -34,7 +34,7 @@ function controller() {
     }
   };
   return { c, state, requests, messages, answer, answerReads,
-    html: () => c.policyListHTML('scope', state.scopes, state),
+    html: () => c.policyListHTML('scope', state.scopes, { ...state, ...state.reports.scopes }),
     async load(rows = [scope()], status = 200) { const pending = c.loadPolicy(); answerReads(rows, status); await pending; } };
 }
 
@@ -46,7 +46,7 @@ test('global permissions use daemon applicability and withhold revoke for unknow
   await t.load([scope({ applicability: undefined })]);
   assert.match(t.html(), /Applicability unknown/); assert.doesNotMatch(t.html(), /data-action="revoke-scope"/);
   await t.load(); await t.load(null, 503);
-  assert.match(t.html(), /Last known permission records/);
+  assert.match(t.html(), /Showing last known records/);
   assert.doesNotMatch(t.html(), /data-action="revoke-scope"/);
   await t.c.window.revokeScope('scope-a'); assert.equal(t.requests.length, 20);
 });
@@ -75,7 +75,7 @@ test('only an exact successful receipt confirms revocation; failed rereads retai
   assert.match(t.html(), /Revocation saved/);
   assert.doesNotMatch(t.html(), /data-action="revoke-scope"/);
   t.answerReads(null, 503); await pending;
-  assert.match(t.html(), /Revocation saved/); assert.match(t.html(), /Last known permission records/);
+  assert.match(t.html(), /Revocation saved/); assert.match(t.html(), /Showing last known records/);
   assert.equal(t.messages.filter(([, kind]) => kind === 'success').length, 1);
 });
 
@@ -119,7 +119,7 @@ test('malformed permission reads retain prior records and disable mutations', as
   for (const rows of [null, {}, [scope(), scope()], [scope({ resource_path: null })]]) {
     await t.load(rows);
     assert.equal(t.state.scopes, previous);
-    assert.match(t.html(), /Last known permission records/);
+    assert.match(t.html(), /Showing last known records/);
     assert.doesNotMatch(t.html(), /data-action="revoke-scope"/);
   }
 });
