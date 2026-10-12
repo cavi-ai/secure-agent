@@ -26,8 +26,9 @@ func (a *API) handleCleanup(w http.ResponseWriter, r *http.Request) {
 	}
 	rep := a.clutter.Report(r.Context(), r.URL.Query().Get("refresh") == "1")
 	if a.store != nil {
-		t := a.store.CleanupTotals(time.Now())
-		rep.Reclaimed = &t
+		if t, err := a.store.CleanupTotals(time.Now()); err == nil {
+			rep.Reclaimed = &t
+		}
 		subjectIDs := make([]string, len(rep.Projects))
 		for i, p := range rep.Projects {
 			subjectIDs[i] = advisor.ProjectSubjectID(p.Project)

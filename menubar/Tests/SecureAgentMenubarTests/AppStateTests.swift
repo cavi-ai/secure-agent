@@ -954,18 +954,18 @@ final class SSEDechunkerTests: XCTestCase {
 
 final class AdvisorConfigReaderTests: XCTestCase {
     func testCanonicalExistingSettingRoundTripsWithoutManagedKey() throws {
-        let saved = try SetupManager.advisorConfigSetting(
-            "proxy_enabled: true\n", mode: .existing,
+        let saved = try AdvisorPreferences.settingModel(
+            "proxy_enabled: true\n", managed: false,
             endpoint: "http://127.0.0.1:11434", model: "qwen3.8:27b-mlx")
         XCTAssertFalse(saved.contains("managed:"))
-        let restored = SetupManager.advisorConfig(saved)
+        let restored = AdvisorPreferences.persistedChoice(saved)
         XCTAssertEqual(restored.mode, "existing")
         XCTAssertEqual(restored.endpoint, "http://127.0.0.1:11434")
         XCTAssertEqual(restored.model, "qwen3.8:27b-mlx")
     }
 
     func testEnabledOnlyAdvisorBlockIsStillUnconfigured() {
-        let restored = SetupManager.advisorConfig("advisor:\n  enabled: true\n")
+        let restored = AdvisorPreferences.persistedChoice("advisor:\n  enabled: true\n")
         XCTAssertNil(restored.mode)
         XCTAssertNil(restored.endpoint)
         XCTAssertNil(restored.model)
@@ -978,7 +978,7 @@ final class AdvisorConfigReaderTests: XCTestCase {
           managed: true
           managed_model: "qwen3.8:27b-mlx"
         """
-        let c = SetupManager.advisorConfig(yaml)
+        let c = AdvisorPreferences.persistedChoice(yaml)
         XCTAssertEqual(c.mode, "managed")
         XCTAssertEqual(c.model, "qwen3.8:27b-mlx")
     }
@@ -992,14 +992,14 @@ final class AdvisorConfigReaderTests: XCTestCase {
           endpoint: "http://127.0.0.1:11434"
           model: "qwen3.8:27b-mlx"
         """
-        let c = SetupManager.advisorConfig(yaml)
+        let c = AdvisorPreferences.persistedChoice(yaml)
         XCTAssertEqual(c.mode, "existing")
         XCTAssertEqual(c.endpoint, "http://127.0.0.1:11434")
         XCTAssertEqual(c.model, "qwen3.8:27b-mlx")
     }
 
     func testMissingAdvisorBlockIsNilNotFalsePositive() {
-        let c = SetupManager.advisorConfig("other: 1\n")
+        let c = AdvisorPreferences.persistedChoice("other: 1\n")
         XCTAssertNil(c.mode)
         XCTAssertNil(c.model)
     }
@@ -1009,11 +1009,11 @@ final class AdvisorConfigReaderTests: XCTestCase {
 // MARK: - Provider toggles (disabled_agents)
 
 final class DisabledAgentsTests: XCTestCase {
-    func testReadsEmptyWhenAbsent() {
-        XCTAssertEqual(SetupManager.disabledAgents("advisor:\n  enabled: true\n"), [])
+    func testReadsEmptyWhenAbsent() throws {
+        XCTAssertNil(try ConfigDocument("advisor:\n  enabled: true\n").list("disabled_agents"))
     }
 
-    func testReadsList() {
+    func testReadsList() throws {
         let yaml = """
         disabled_agents:
           - cursor
@@ -1021,27 +1021,27 @@ final class DisabledAgentsTests: XCTestCase {
         advisor:
           enabled: true
         """
-        XCTAssertEqual(SetupManager.disabledAgents(yaml), ["cursor", "codex"])
+        XCTAssertEqual(try ConfigDocument(yaml).list("disabled_agents"), ["cursor", "codex"])
     }
 
-    func testWriteAppendsAtTopPreservingRest() {
+    func testWriteAppendsAtTopPreservingRest() throws {
         let yaml = "# comment\nadvisor:\n  enabled: true\n"
-        let out = SetupManager.setDisabledAgents(yaml, disabled: ["ollama"])
+        let out = try ConfigDocument(yaml).settingList("disabled_agents", to: ["ollama"]).text
         XCTAssertTrue(out.contains("disabled_agents:\n  - ollama"))
         XCTAssertTrue(out.contains("advisor:\n  enabled: true"))
     }
 
-    func testWriteReplacesExistingBlock() {
+    func testWriteReplacesExistingBlock() throws {
         let yaml = "disabled_agents:\n  - cursor\nadvisor:\n  enabled: true\n"
-        let out = SetupManager.setDisabledAgents(yaml, disabled: ["opencode"])
+        let out = try ConfigDocument(yaml).settingList("disabled_agents", to: ["opencode"]).text
         XCTAssertTrue(out.contains("- opencode"))
         XCTAssertFalse(out.contains("- cursor"))
-        XCTAssertEqual(SetupManager.disabledAgents(out), ["opencode"])
+        XCTAssertEqual(try ConfigDocument(out).list("disabled_agents"), ["opencode"])
     }
 
-    func testEmptyWriteRemovesBlock() {
+    func testEmptyWriteRemovesBlock() throws {
         let yaml = "disabled_agents:\n  - cursor\nother: 1\n"
-        let out = SetupManager.setDisabledAgents(yaml, disabled: [])
+        let out = try ConfigDocument(yaml).removing("disabled_agents").text
         XCTAssertFalse(out.contains("disabled_agents"))
         XCTAssertTrue(out.contains("other: 1"))
     }

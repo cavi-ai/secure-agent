@@ -144,12 +144,16 @@ function removableEverywhere(rep) {
 // reclaimTilesHTML: what the charted days freed, what recorded cleanups
 // freed, what Remove can free now (Remove all across repositories when two
 // or more rows are removable), and recorded moves to the Trash. Before the
-// ledger loads the report's totals stand in.
+// ledger loads the report's totals stand in; with neither, the recorded
+// tiles read unavailable rather than zero.
 function reclaimTilesHTML(rep, ledger) {
-  const totals = (ledger && ledger.totals) || (rep && rep.reclaimed) || {};
+  const totals = (ledger && ledger.totals) || (rep && rep.reclaimed) || null;
+  const t = totals || {};
   const daily = (ledger && ledger.daily) || null;
-  const freed = daily ? daily.reduce((n, d) => n + (Number(d.bytes) || 0), 0) : Number(totals.bytes_30d) || 0;
-  const freedCount = daily ? daily.reduce((n, d) => n + (Number(d.count) || 0), 0) : Number(totals.count_30d) || 0;
+  const freed = daily ? daily.reduce((n, d) => n + (Number(d.bytes) || 0), 0) : Number(t.bytes_30d) || 0;
+  const freedCount = daily ? daily.reduce((n, d) => n + (Number(d.count) || 0), 0) : Number(t.count_30d) || 0;
+  const known = !!(daily || totals);
+  const unavailable = 'cleanup history unavailable';
   const rm = removableEverywhere(rep);
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   const tile = (cls, label, value, hint, extra) => `<div class="rc-tile ${cls}">
@@ -160,10 +164,10 @@ function reclaimTilesHTML(rep, ledger) {
   const removeAll = rm.rows.length >= 2
     ? `<button type="button" class="btn btn-danger btn-sm rc-remove-all" data-action="worktrees-remove-removable">Remove all ${rm.rows.length}</button>`
     : '';
-  return tile('rc-freed', `Freed · last ${daily ? daily.length : RECLAIM_DAYS} days`, fmtDisk(freed), escapeHTML(plural(freedCount, 'cleanup', 'cleanups')))
-    + tile('rc-alltime', 'Freed · recorded', fmtDisk(totals.bytes), escapeHTML(plural(Number(totals.count) || 0, 'cleanup', 'cleanups')))
+  return tile('rc-freed', `Freed · last ${daily ? daily.length : RECLAIM_DAYS} days`, known ? fmtDisk(freed) : '—', known ? escapeHTML(plural(freedCount, 'cleanup', 'cleanups')) : unavailable)
+    + tile('rc-alltime', 'Freed · recorded', totals ? fmtDisk(t.bytes) : '—', totals ? escapeHTML(plural(Number(t.count) || 0, 'cleanup', 'cleanups')) : unavailable)
     + tile('rc-removable', 'Removable now', fmtDisk(rm.bytes), escapeHTML(plural(rm.rows.length, 'worktree', 'worktrees')) + (rep && rep.sizing ? ' · measuring…' : ''), removeAll)
-    + tile('rc-trash', 'Moved to the Trash', fmtDisk(totals.trashed_bytes), escapeHTML(plural(Number(totals.trashed_count) || 0, 'recorded cleanup', 'recorded cleanups')) + ' · current Trash size is not measured');
+    + tile('rc-trash', 'Moved to the Trash', totals ? fmtDisk(t.trashed_bytes) : '—', (totals ? escapeHTML(plural(Number(t.trashed_count) || 0, 'recorded cleanup', 'recorded cleanups')) : unavailable) + ' · current Trash size is not measured');
 }
 
 // reclaimDayText: a day's numbers as the column label and tooltip read

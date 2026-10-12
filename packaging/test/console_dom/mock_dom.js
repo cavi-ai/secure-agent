@@ -1,6 +1,8 @@
 // DOM test stub: replaces fetch + EventSource with deterministic telemetry so
 // the REAL console (index.html + lib.js + app.js + style.css) can be asserted
 // end-to-end in headless Chrome. Loaded between lib.js and app.js.
+// A case family's data, routes and steps live in its cases_<family>.js, which
+// runs after this file through window.DomTest.
 //
 // Auto-actions (driven by ?domtest-flags):
 //   sessiondemo — after 4s, filter the timeline to session 7f3a9c21…
@@ -8,11 +10,9 @@
 (() => {
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
+  const routes = new Map();
+  const realFetch = window.fetch.bind(window);
   const readingFetch = scenarios.has('readingdemo') || scenarios.has('worktreehierarchy') || scenarios.has('sessiondiscovery') || scenarios.has('sessionemptynav') || scenarios.has('sessionlatestfocus') || scenarios.has('sessionstatusfocus') ? window.fetch.bind(window) : null;
-  if (scenarios.has('expectedremove')) data['/expected'] = [
-    { key: 'claude|gh|/synthetic/credentials|example.test', agent: 'claude', reader: 'gh', path: '/synthetic/credentials', dest: 'example.test', created_at: iso(60000), hits: 2 },
-    { key: 'claude|*|/synthetic/.env.test|*', scope: 'file', agent: 'claude', reader: '*', path: '/synthetic/.env.test', dest: '*', created_at: iso(60000), hits: 0 },
-  ];
   if (scenarios.has('policyhealth')) data['/decision-scopes'] = [{
     id: 'policy-health-scope', kind: 'exact', agent: 'claude', rule_id: 'sensitive-read-then-connect',
     operation: 'read-connect', resource_path: '/synthetic/credentials', destination: 'example.test:443',
@@ -491,10 +491,14 @@
   stamp('fixture-posture', JSON.stringify(data['/posture']));
   const fixtureReads = {};
   stamp('fetch-count', '0');
-  window.fetch = async (path, opts) => {
+  const respond = async (path, opts) => {
     fetchCount++;
     stamp('fetch-count', String(fetchCount));
     const p = String(path).split('?')[0];
+    if (routes.has(p)) {
+      const routed = await routes.get(p)({ path: String(path), method: opts?.method || 'GET', query: new URLSearchParams(String(path).split('?')[1] || '') });
+      if (routed !== undefined) return routed;
+    }
     const scripted = fixture.responses[String(path)] || fixture.responses[p];
     if (scripted) {
       const index = fixtureReads[p] || 0;
@@ -508,17 +512,6 @@
       return new Response(JSON.stringify(data[String(path)] ?? data[p]), {status: 200, headers: {'Content-Type': 'application/json'}});
     }
     if (scenarios.has('authrecover') && opts?.method === 'POST') authRecoveryMutations++;
-    if (scenarios.has('expectedremove') && p === '/expected') {
-      if (opts?.method === 'DELETE') {
-        const key = new URLSearchParams(String(path).split('?')[1]).get('key');
-        if (!data[p].some(row => row.key === key)) throw new Error('Wrong exception target');
-        window.__expectedRemovalDeletes = (window.__expectedRemovalDeletes || 0) + 1;
-        data[p] = data[p].filter(row => row.key !== key);
-        return { ok: true, json: async () => ({ status: 'ok', key: scenarios.has('removaluncertain') ? 'wrong-key' : key }) };
-      }
-      if (scenarios.has('removalreadfail') && window.__expectedRemovalDeletes) return { ok: false, status: 503, text: async () => 'Unavailable' };
-      return { ok: true, json: async () => scenarios.has('removalinvalid') ? null : structuredClone(data[p]) };
-    }
     if (scenarios.has('policyhealth') && ['/guard/rules', '/guard/path-allow', '/mute', '/expected', '/decision-scopes'].includes(p)) {
       window.__policyReads ||= {};
       if (opts?.method === 'DELETE') { window.__policyWrites = (window.__policyWrites || 0) + 1; throw new Error('Unexpected policy write'); }
@@ -945,6 +938,11 @@
       json: async () => body,
       text: async () => JSON.stringify(body !== undefined ? body : null)
     };
+  };
+  let inFlight = 0;
+  window.fetch = async (path, opts) => {
+    inFlight++;
+    try { return await respond(path, opts); } finally { inFlight--; }
   };
 
   // SSE stub: drip live deltas so liveness paths (sparkline, fresh rows,
@@ -1490,48 +1488,6 @@
         receipt.bounds = document.documentElement.scrollWidth <= document.documentElement.clientWidth;
       } catch (error) { receipt.error = error.message; }
       document.body.dataset.sessionDiscovery = JSON.stringify(receipt);
-    }, 3500);
-  }
-  if (scenarios.has('sessionemptynav')) {
-    setTimeout(() => openTab('sessions'), 1500);
-    setTimeout(() => {
-      window.SA.harnessFilter.harnesses = {claude: false};
-      const input = document.getElementById('session-cwd-filter');
-      input.value = 'missing-project'; input.dispatchEvent(new Event('input', {bubbles: true}));
-    }, 2500);
-    setTimeout(async () => {
-      const receipt = {};
-      const checkpoint = () => readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
-      const detail = document.getElementById('session-detail');
-      const panel = document.getElementById('session-board-panel');
-      const input = document.getElementById('session-cwd-filter');
-      const narrow = window.matchMedia('(max-width: 900px)').matches;
-      const backs = () => [...detail.querySelectorAll('[data-action="session-list"]')].filter(node => node.getClientRects().length);
-      try {
-        await checkpoint();
-        const before = sessionStorage.getItem('sa.harness-filter'), selection = window.SA.selectedSessionId, hash = location.hash;
-        receipt.missingBack = backs().length === (narrow ? 1 : 0) && (!narrow || backs()[0].getBoundingClientRect().height >= 44);
-        receipt.copy = detail.textContent.includes('No live sessions match these filters.') && !!detail.querySelector('[data-action="clear-harness-filter"]');
-        if (narrow) backs()[0].click(); else window.showSessionList();
-        receipt.searchFocus = document.activeElement === input && !!input.getClientRects().length && panel.dataset.pane === 'list';
-        receipt.preserved = input.value === 'missing-project' && window.SA.harnessFilter.harnesses.claude === false && window.SA.harnessFilter.liveOnly
-          && sessionStorage.getItem('sa.harness-filter') === before && window.SA.selectedSessionId === selection && location.hash === hash;
-        // A retained selection disappearing keeps the existing unavailable route.
-        input.value = ''; input.dispatchEvent(new Event('input', {bubbles: true}));
-        await window.selectSession('sess-codex-3');
-        window.SA.t.sessions = [];
-        window.SA.renderSessionBoard(); await checkpoint();
-        receipt.unavailable = detail.textContent.includes('Session unavailable.') && backs().length === 1 && (!narrow || backs()[0].getBoundingClientRect().height >= 44);
-        window.SA.harnessFilter.harnesses = {};
-        const live = document.getElementById('session-live-only');
-        live.checked = false; live.dispatchEvent(new Event('change', {bubbles: true}));
-        await checkpoint();
-        receipt.noData = detail.textContent.includes('No sessions available.') && backs().length === (narrow ? 1 : 0);
-        if (narrow) backs()[0].click(); else window.showSessionList();
-        receipt.noDataFocus = document.activeElement === input && panel.dataset.pane === 'list';
-        receipt.bounds = document.documentElement.scrollWidth <= document.documentElement.clientWidth;
-      } catch (error) { receipt.error = error.message; }
-      document.body.dataset.sessionEmptyNavigation = JSON.stringify(receipt);
     }, 3500);
   }
   if (scenarios.has('readingdemo')) {
@@ -3437,53 +3393,6 @@
     setTimeout(() => document.querySelector('#policy-expected [data-action="forget-expected"]')?.click(), 7000);
     setTimeout(() => document.getElementById('confirm-ok')?.click(), 7500);
   }
-  if (scenarios.has('expectedremove')) {
-    setTimeout(async () => {
-      const probe = {};
-      const wait = async predicate => { for (let i = 0; i < 30; i++) { window.SA.flushRender(); if (predicate()) return true; await new Promise(resolve => setTimeout(resolve, 50)); } return false; };
-      try {
-        openTab('policy');
-        const list = document.getElementById('policy-expected');
-        await wait(() => list.textContent.includes('Remove exception') || list.textContent.includes('The daemon returned invalid records.'));
-        if (scenarios.has('removalinvalid')) {
-          probe.unavailable = list.textContent.includes('The daemon returned invalid records.') && !list.querySelector('[data-action="forget-expected"]');
-          probe.noWrite = !window.__expectedRemovalDeletes;
-        } else {
-          const file = scenarios.has('expectedremove=file');
-          const key = file ? 'claude|*|/synthetic/.env.test|*' : 'claude|gh|/synthetic/credentials|example.test';
-          const button = Array.from(list.querySelectorAll('[data-action="forget-expected"]')).find(el => el.dataset.key === key);
-          probe.label = button.textContent === 'Remove exception' && button.getAttribute('aria-label').includes(file ? '/synthetic/.env.test' : '/synthetic/credentials');
-          probe.target = button.getBoundingClientRect().height >= 44;
-          button.focus(); button.click();
-          const message = document.getElementById('confirm-message').textContent;
-          probe.scope = file ? message.includes('all readers and destinations for this agent and file') : message.includes('gh reads /synthetic/credentials, then reaches example.test');
-          probe.consequence = message.includes('remaining exceptions and policies') && message.includes('Past activity and exposure are unchanged');
-          if (scenarios.has('confirmonly')) return;
-          document.getElementById('confirm-cancel').click();
-          await new Promise(resolve => setTimeout(resolve, 50));
-          probe.cancelled = !window.__expectedRemovalDeletes && document.activeElement === button && button.isConnected;
-          button.click(); document.getElementById('confirm-ok').click();
-          await wait(() => list.textContent.includes('Exception removal saved') || list.textContent.includes('Removal not confirmed'));
-          probe.oneWrite = window.__expectedRemovalDeletes === 1;
-          if (scenarios.has('removaluncertain')) {
-            probe.uncertain = list.textContent.includes('Removal not confirmed') && !Array.from(list.querySelectorAll('[data-action="forget-expected"]')).some(el => el.dataset.key === key);
-            await window.forgetExpected(key);
-            probe.noReplay = window.__expectedRemovalDeletes === 1;
-            list.querySelector('[data-action="policy-refresh"]').click();
-            probe.refreshed = await wait(() => !list.textContent.includes('Removal not confirmed'));
-            probe.authoritative = !list.textContent.includes(file ? 'Non-secret file' : 'reads');
-          } else {
-            probe.saved = list.textContent.includes('Exception removal saved') && !Array.from(list.querySelectorAll('[data-action="forget-expected"]')).some(el => el.dataset.key === key);
-            probe.remaining = document.getElementById('badge-expected').textContent === '1';
-            probe.feedback = list.textContent.includes('Remaining exceptions and policies still apply; past activity is unchanged');
-            if (scenarios.has('removalreadfail')) probe.retained = list.textContent.includes('current status is unavailable') && !list.querySelector('[data-action="forget-expected"]');
-          }
-        }
-        probe.fits = document.documentElement.scrollWidth <= innerWidth;
-      } catch (error) { probe.error = String(error); }
-      document.body.dataset.expectedRemovalProbe = JSON.stringify(probe);
-    }, 4000);
-  }
   // explainact: Findings open, press flag-2's first served action (the
   // recommended allow) late enough that the inline note and the toast are
   // still up at dump time.
@@ -3692,4 +3601,33 @@
       stamp('usage-remodel-probe', JSON.stringify(checks));
     }, 500);
   }, 1500);
+
+  // Family scripts read fixture data, answer their routes before any other
+  // response, and poll for rendered state instead of waiting fixed delays.
+  // idle() resolves after three polls with no request in flight; ready()
+  // after the console's first posture and then idle().
+  const wait = async (predicate, tries = 30) => {
+    for (let i = 0; i < tries; i++) {
+      window.SA?.flushRender?.();
+      if (predicate()) return true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return false;
+  };
+  const idle = async () => {
+    let quiet = 0;
+    for (let i = 0; i < 200 && quiet < 3; i++) {
+      window.SA?.flushRender?.();
+      quiet = inFlight ? 0 : quiet + 1;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return quiet >= 3;
+  };
+  const loaded = new Promise(resolve => document.readyState === 'complete'
+    ? resolve() : window.addEventListener('load', resolve, { once: true }));
+  window.DomTest = {
+    data, scenarios, iso, stamp, openTab, wait, idle, realFetch,
+    route: (path, handler) => routes.set(path, handler),
+    ready: () => loaded.then(() => wait(() => !!window.SA?.t?.posture, 200)).then(idle),
+  };
 })();

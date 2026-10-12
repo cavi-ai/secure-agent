@@ -20,7 +20,7 @@ func WorktreeSubjectID(path, head string) string {
 // triage. The note is displayed only; nothing reads it back into the
 // worktree verdict or removal.
 func (s *Subscriber) EnqueueWorktree(req model.WorktreeAdviceRequest) bool {
-	t := task{kind: "worktree", subjectID: WorktreeSubjectID(req.Path, req.Head), worktree: req}
+	t := task{kind: worktreeKind, subjectID: WorktreeSubjectID(req.Path, req.Head), worktree: req}
 	select {
 	case s.queue <- t:
 		return true

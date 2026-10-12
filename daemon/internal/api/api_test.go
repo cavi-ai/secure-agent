@@ -551,8 +551,8 @@ func TestSnapshotBundlesHotTelemetry(t *testing.T) {
 	if snap.Posture.Generated == "" {
 		t.Fatal("posture not populated")
 	}
-	if snap.Status.UnactedFlags24h != 1 {
-		t.Fatalf("unacted_flags_24h = %d, want 1", snap.Status.UnactedFlags24h)
+	if snap.Status.UnactedFlags24h == nil || *snap.Status.UnactedFlags24h != 1 {
+		t.Fatalf("unacted_flags_24h = %v, want 1", snap.Status.UnactedFlags24h)
 	}
 }
 
@@ -576,8 +576,8 @@ func TestStatusCountsUnacted24hAndBusDrops(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.UnactedFlags24h != 1 {
-		t.Fatalf("unacted_flags_24h = %d, want 1 (fresh sev>=2 only)", got.UnactedFlags24h)
+	if got.UnactedFlags24h == nil || *got.UnactedFlags24h != 1 {
+		t.Fatalf("unacted_flags_24h = %v, want 1 (fresh sev>=2 only)", got.UnactedFlags24h)
 	}
 	if got.BusDrops != 7 {
 		t.Fatalf("bus_drops = %d, want 7", got.BusDrops)

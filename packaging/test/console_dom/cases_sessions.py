@@ -438,7 +438,8 @@ def run_session_discovery(page):
 
 def run_session_empty_navigation(page):
     for width in (375, 900, 1280):
-        dom = page.dom('?sessionemptynav', served=True, window_size=(width, 800))
+        dom = page.dom('?sessionemptynav', served=True, window_size=(width, 800),
+                       fixture={'script': 'cases_session_empty_navigation.js'})
         receipt = re.search(r'data-session-empty-navigation="([^"]+)"', dom)
         state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
         page.check(f'session empty navigation ({width}): receipt produced', bool(state), str(state))

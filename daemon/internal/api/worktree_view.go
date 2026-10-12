@@ -13,11 +13,11 @@ import (
 )
 
 type cleanupTotalsReader interface {
-	CleanupTotals(time.Time) model.CleanupTotals
+	CleanupTotals(time.Time) (model.CleanupTotals, error)
 }
 
 type agentAskReader interface {
-	AgentAsks(int) []model.AgentAsk
+	AgentAsks(int) ([]model.AgentAsk, error)
 }
 
 type activeSessionReader interface {
@@ -34,14 +34,16 @@ type worktreeReportStore interface {
 
 // enrichWorktreeReport adds advisor notes, the latest agent asks, the rows
 // whose agent can be asked, and reclaimed space. rep is the handler's copy.
+// Enrichment is optional: a failed read leaves its field out, never zeroed.
 func enrichWorktreeReport(st worktreeReportStore, rep worktreehunter.ScanReport, canAsk bool, now time.Time) worktreehunter.ScanReport {
 	rep.Advice = worktreeNotes(st, rep)
 	rep.Asks = latestAsks(st)
 	if canAsk {
 		rep.Askable = askableWorktrees(st, rep)
 	}
-	t := st.CleanupTotals(now)
-	rep.Reclaimed = &t
+	if t, err := st.CleanupTotals(now); err == nil {
+		rep.Reclaimed = &t
+	}
 	return rep
 }
 
@@ -72,10 +74,15 @@ func worktreeNotes(reader advisorVerdictsReader, rep worktreehunter.ScanReport) 
 	return notes
 }
 
-// latestAsks maps each worktree path to its newest agent ask.
+// latestAsks maps each worktree path to its newest agent ask. A failed read
+// offers no asks.
 func latestAsks(st agentAskReader) map[string]model.AgentAsk {
+	asks, err := st.AgentAsks(500)
+	if err != nil {
+		return nil
+	}
 	out := map[string]model.AgentAsk{}
-	for _, ask := range st.AgentAsks(500) {
+	for _, ask := range asks {
 		if _, seen := out[ask.Path]; !seen {
 			out[ask.Path] = ask
 		}
@@ -117,19 +124,29 @@ func askableWorktrees(st activeSessionReader, rep worktreehunter.ScanReport) map
 // cleanupLedgerStore is the cleanup ledger: removals, totals and daily sums.
 type cleanupLedgerStore interface {
 	cleanupTotalsReader
-	CleanupLog(int) []model.CleanupEntry
-	CleanupDaily(time.Time, int) []model.CleanupDay
+	CleanupLog(int) ([]model.CleanupEntry, error)
+	CleanupDaily(time.Time, int) ([]model.CleanupDay, error)
 }
 
 // readCleanupLedger returns the newest limit entries with all-time and 30-day
-// totals, plus the daily series of the days ending today when days > 0.
-func readCleanupLedger(st cleanupLedgerStore, now time.Time, limit, days int) map[string]any {
-	out := map[string]any{
-		"totals":  st.CleanupTotals(now),
-		"entries": st.CleanupLog(limit),
+// totals, plus the daily series of the days ending today when days > 0. Any
+// failed read rejects the whole ledger.
+func readCleanupLedger(st cleanupLedgerStore, now time.Time, limit, days int) (map[string]any, error) {
+	totals, err := st.CleanupTotals(now)
+	if err != nil {
+		return nil, err
 	}
+	entries, err := st.CleanupLog(limit)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{"totals": totals, "entries": entries}
 	if days > 0 {
-		out["daily"] = st.CleanupDaily(now, days)
+		daily, err := st.CleanupDaily(now, days)
+		if err != nil {
+			return nil, err
+		}
+		out["daily"] = daily
 	}
-	return out
+	return out, nil
 }
