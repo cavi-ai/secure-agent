@@ -8,7 +8,7 @@
 (() => {
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
-  const readingFetch = scenarios.has('readingdemo') ? window.fetch.bind(window) : null;
+  const readingFetch = scenarios.has('readingdemo') || scenarios.has('worktreehierarchy') ? window.fetch.bind(window) : null;
   if (scenarios.has('expectedremove')) data['/expected'] = [
     { key: 'claude|gh|/synthetic/credentials|example.test', agent: 'claude', reader: 'gh', path: '/synthetic/credentials', dest: 'example.test', created_at: iso(60000), hits: 2 },
     { key: 'claude|*|/synthetic/.env.test|*', scope: 'file', agent: 'claude', reader: '*', path: '/synthetic/.env.test', dest: '*', created_at: iso(60000), hits: 0 },
@@ -1392,6 +1392,34 @@
       await window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77');
       openTab('events');
     }, 4000);
+  }
+  if (scenarios.has('worktreehierarchy')) {
+    setTimeout(() => openTab('system/worktrees'), 1500);
+    setTimeout(async () => {
+      const receipt = {};
+      try {
+        const response = await readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+        if (!response.ok) throw new Error('Worktree layout checkpoint failed: ' + response.status);
+        const root = document.getElementById('system-worktrees');
+        const width = document.documentElement.clientWidth;
+        const identities = [...root.querySelectorAll('.wt-repo-name, .wt-repo-path, .wt-branch, .wt-path')];
+        const controls = [...root.querySelectorAll('button, input')].filter(node => node.getClientRects().length);
+        const full = node => getComputedStyle(node).whiteSpace === 'normal' && node.scrollWidth <= node.clientWidth + 1;
+        receipt.completeIdentities = identities.length >= 10 && identities.every(full);
+        const paths = [...root.querySelectorAll('.wt-repo-path')].map(node => node.textContent);
+        receipt.duplicateNames = [...root.querySelectorAll('.wt-repo-name')].every(node => node.textContent === 'service') && new Set(paths).size === 2;
+        receipt.bounds = [...identities, ...controls].every(node => {
+          const rect = node.getBoundingClientRect();
+          return rect.left >= -1 && rect.right <= width + 1;
+        }) && document.documentElement.scrollWidth <= width;
+        receipt.actions = root.querySelector('[data-action="worktree-ask"]').closest('.wt-actions').querySelectorAll('button').length === 5;
+        receipt.failure = root.querySelector('.wt-repo-error').textContent.includes('repository not found') && root.querySelectorAll('.wt-repo-actions')[0].querySelectorAll('button').length === 0;
+        receipt.touch = width > 720 || controls.every(node => node.getBoundingClientRect().height >= 44);
+        receipt.search = width > 720 || document.getElementById('worktree-search').getBoundingClientRect().width >= root.clientWidth - 40;
+        receipt.dimensions = {width, search: document.getElementById('worktree-search').getBoundingClientRect().width, branch: root.querySelector('.wt-branch').getBoundingClientRect().width};
+      } catch (error) { receipt.error = error.message; }
+      document.body.dataset.worktreeHierarchy = JSON.stringify(receipt);
+    }, 2500);
   }
   if (scenarios.has('readingdemo')) {
     setTimeout(() => openTab('sessions'), 1500);

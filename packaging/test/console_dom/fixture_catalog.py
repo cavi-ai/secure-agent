@@ -16,6 +16,8 @@ def scenario_payload(scenarios, now_ms=None):
         builders.append(payload_cases.filtered_history)
     if "reviewresult" in names:
         builders.append(payload_cases.review_result)
+    if "worktreehierarchy" in names:
+        builders.append(payload_cases.worktree_reading_hierarchy)
     spec = {}
     for builder in builders:
         part = builder(spec.get("now", now_ms))

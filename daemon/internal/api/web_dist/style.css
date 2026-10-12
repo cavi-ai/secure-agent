@@ -2035,6 +2035,35 @@ button.spend-day:focus-visible { outline: 2px solid var(--brand); outline-offset
 .wt-remove-all { margin-left: auto; }
 .wt-remove-all + .wt-hide, .wt-remove-all + .wt-group-ask, .wt-group-ask + .wt-group-ask, .wt-group-ask + .wt-hide { margin-left: 10px; }
 .wt-repo-error { margin-left: auto; font-size: 0.72rem; color: var(--warn); }
+/* Worktree identity and controls; Clutter retains its existing row layout. */
+#system-worktrees .wt-repo-head, #system-worktrees .wt-main { flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+#system-worktrees .wt-repo-identity { flex: 1 1 220px; min-width: 0; }
+#system-worktrees .wt-repo-name { margin: 0 0 4px; font: 650 14px/1.4 var(--font); color: var(--tx-1); overflow-wrap: anywhere; }
+#system-worktrees .wt-repo-path { display: block; font: 12px/1.5 var(--mono); color: var(--tx-2); overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
+#system-worktrees .wt-repo-facts, #system-worktrees .wt-facts { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
+#system-worktrees .wt-repo-meta { white-space: normal; overflow-wrap: anywhere; color: var(--tx-2); }
+#system-worktrees .wt-repo-actions, #system-worktrees .wt-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; max-width: 100%; }
+#system-worktrees .wt-repo-actions { flex: 0 1 auto; }
+#system-worktrees .wt-repo-actions > * { margin-left: 0; white-space: normal; overflow-wrap: anywhere; }
+#system-worktrees .wt-repo-error { color: var(--warn); }
+#system-worktrees .wt-identity { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex: 1 1 220px; min-width: 0; padding: 6px 8px; border: 1px solid var(--line-2); border-radius: var(--r-sm); }
+#system-worktrees .wt-branch { flex: initial; max-width: 100%; font: 650 14px/1.4 var(--font); color: var(--tx-1); white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+#system-worktrees .wt-path { flex: initial; order: initial; max-width: 100%; font: 12px/1.5 var(--mono); white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+#system-worktrees .wt-size { min-width: 0; text-align: left; }
+#system-worktrees .wt-idle, #system-worktrees .wt-stale { color: var(--tx-2); }
+#system-worktrees .wt-reasons, #system-worktrees .wt-advice, #system-worktrees .wt-ask, #system-worktrees .wt-removal { margin-left: 0; }
+#system-worktrees .wt-filters { gap: 10px; }
+#system-worktrees .wt-search { min-width: 0; }
+#system-worktrees .wt-add { min-width: 0; margin-left: 0; padding: 6px; border: 1px solid var(--line-2); border-radius: var(--r-sm); }
+@media (max-width: 720px) {
+  #system-worktrees .wt-repo-identity, #system-worktrees .wt-identity { flex-basis: 100%; }
+  #system-worktrees .wt-repo-facts, #system-worktrees .wt-facts, #system-worktrees .wt-repo-actions, #system-worktrees .wt-actions { width: 100%; }
+  #system-worktrees .wt-search { flex: 1 1 100%; width: 100%; max-width: none; margin-left: 0; }
+  #system-worktrees .wt-add { flex: 1 1 100%; width: 100%; max-width: none; }
+  #system-worktrees .wt-add input { flex: 1; min-width: 0; }
+  #system-worktrees button, #system-worktrees input { min-height: 44px; }
+  #system-worktrees button { min-width: 44px; }
+}
 .wt-row { padding: 8px 12px; border-top: 1px solid var(--line); }
 .wt-row:first-of-type { border-top: 0; }
 .wt-main { display: flex; align-items: center; gap: 10px; min-width: 0; }

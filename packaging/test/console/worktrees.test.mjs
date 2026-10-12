@@ -26,6 +26,31 @@ const { worktreeStateCounts, worktreeGroups, worktreeRowHTML, worktreeGroupHTML,
   localDayKey, fmtDayKey, fmtElapsed, removalToastModel, removalToastHTML, reclaimDayText } = ctx;
 
 const REPO = '/Users/x/code/app';
+test('worktree hierarchy keeps escaped complete identities and exact ordered action targets', () => {
+  const repo = {path: '/workspace/"team"/<service>', default_branch: 'origin/main', source: 'session'};
+  const row = {path: repo.path + '/.worktrees/long-identity', branch: 'feat/<complete>"identity"', state: 'review', reasons: ['1 uncommitted change']};
+  repo.worktrees = [row];
+  const html = worktreeGroupHTML({repo, rows: [row]}, null, null, null, {[row.path]: 'codex'});
+  assert.match(html, /<h3 class="wt-repo-name">&lt;service&gt;<\/h3>/);
+  assert.ok(html.includes('<span class="wt-repo-path" title="/workspace/&quot;team&quot;/&lt;service&gt;">/workspace/&quot;team&quot;/&lt;service&gt;</span>'));
+  assert.ok(html.includes('<span class="wt-branch">feat/&lt;complete&gt;&quot;identity&quot;</span>'));
+  const renderedRow = html.slice(html.indexOf('class="wt-row'));
+  assert.deepEqual([...renderedRow.matchAll(/data-action="([a-z-]+)"/g)].map(match => match[1]), ['copy-path', 'worktree-reveal', 'worktree-review-trash', 'worktree-ask', 'worktree-advise', 'worktree-discuss']);
+  for (const match of renderedRow.matchAll(/data-action="[a-z-]+" data-path="([^"]+)"/g)) {
+    assert.equal(match[1], '/workspace/&quot;team&quot;/&lt;service&gt;/.worktrees/long-identity');
+  }
+  assert.ok(renderedRow.indexOf('wt-identity') < renderedRow.indexOf('wt-facts') && renderedRow.indexOf('wt-facts') < renderedRow.indexOf('wt-actions'));
+  assert.ok(!html.includes('<complete>') && !html.includes('<service>'));
+});
+
+test('duplicate repository basenames retain distinct full paths', () => {
+  const groups = ['/workspace/team-one/service', '/workspace/team-two/service'].map(repoPath => {
+    const repo = {path: repoPath, worktrees: []};
+    return worktreeGroupHTML({repo, rows: []});
+  });
+  assert.ok(groups.every(html => html.includes('<h3 class="wt-repo-name">service</h3>')));
+  assert.ok(groups[0].includes('/workspace/team-one/service') && groups[1].includes('/workspace/team-two/service'));
+});
 test('unfinished Git operation disables reviewed Trash even without conflicts', () => {
   const row = { path: REPO + '/.worktrees/merge', state: 'keep', reasons: [], git_operation: 'merge' };
   const html = worktreeRowHTML(row, { path: REPO });
