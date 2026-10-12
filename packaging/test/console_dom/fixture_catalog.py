@@ -825,6 +825,14 @@ FIXTURES = {
         scenarios=('tab', 'tab=agent'),
         served=True,
     ),
+    'dom_agent_latest': Fixture(
+        query='?tab=agent', scenarios=('tab', 'tab=agent'), window_size=(1280, 900),
+        script='cases_agent_latest.js', served=True,
+    ),
+    'dom_agent_latest_mobile': Fixture(
+        query='?tab=agent', scenarios=('tab', 'tab=agent'), window_size=(375, 812),
+        script='cases_agent_latest.js', served=True,
+    ),
     'dom_agentworkspace': Fixture(
         query='?tab=agent&agentworkspace',
         scenarios=('tab', 'tab=agent', 'agentworkspace'),

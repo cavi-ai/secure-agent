@@ -1350,7 +1350,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const AGENT_POLL_MS = 1500;
   const AGENT_POLL_LIMIT = 1200;
   const AGENT_TIMEOUT_MS = 15000;
-  const agentState = { status: null, chat: null, plans: null, runs: null, recommendations: null, skills: null, error: '', sendError: '', sending: false, actionRequests: new Set(), readVersion: {}, polls: 0, lastCount: 0, seenMessageKeys: null };
+  const agentState = { status: null, chat: null, plans: null, runs: null, recommendations: null, skills: null, error: '', sendError: '', sending: false, actionRequests: new Set(), readVersion: {}, polls: 0, lastCount: 0, seenMessageKeys: null, unreadMessageKeys: new Set(), reading: null, restoreReading: false };
   // Literal paths: the proxy's console allow-list test reads them from here.
   const AGENT_PATHS = { status: '/agent/status', chat: '/agent/chat', plans: '/agent/plans', runs: '/agent/runs', recommendations: '/agent/recommendations' };
   let agentPollTimer = null;
@@ -1372,11 +1372,54 @@ document.addEventListener('DOMContentLoaded', () => {
     if (app && !sessionEnded) app.inert = agentDockOpen && !!(agentDockNarrow && agentDockNarrow.matches);
   }
   agentDockNarrow?.addEventListener('change', syncAgentDockInert);
-  // Moving the conversation resets its scroll; it reopens at the newest message.
-  function agentThreadToEnd() {
+  function captureAgentThreadReading() {
     const thread = document.getElementById('agent-thread');
-    if (thread) thread.scrollTop = thread.scrollHeight;
+    if (!thread?.getClientRects().length || !thread.clientHeight) return null;
+    const bounds = thread.getBoundingClientRect();
+    const anchor = Array.from(thread.children).find(node => node._saKey && node.getBoundingClientRect().bottom > bounds.top);
+    return { top: thread.scrollTop, follow: thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80,
+      anchor: anchor?._saKey, offset: anchor ? anchor.getBoundingClientRect().top - bounds.top : 0 };
   }
+  function restoreAgentThreadReading(reading) {
+    const thread = document.getElementById('agent-thread');
+    if (!thread?.getClientRects().length || !thread.clientHeight) return;
+    if (!reading || reading.follow) thread.scrollTop = thread.scrollHeight;
+    else {
+      thread.scrollTop = reading.top;
+      const anchor = Array.from(thread.children).find(node => node._saKey === reading.anchor);
+      if (anchor) thread.scrollTop += anchor.getBoundingClientRect().top - thread.getBoundingClientRect().top - reading.offset;
+    }
+    agentState.reading = captureAgentThreadReading();
+    agentState.restoreReading = false;
+  }
+  function updateAgentJumpLatest(reading) {
+    const button = document.getElementById('agent-jump-latest');
+    if (!button) return;
+    const messages = (agentState.chat?.messages || []).filter(message => message.origin !== 'analysis');
+    const empty = !agentState.status?.enabled || !messages.length;
+    if (empty || reading?.follow) agentState.unreadMessageKeys.clear();
+    const count = agentState.unreadMessageKeys.size;
+    button.textContent = count ? `${count} new message${count === 1 ? '' : 's'} · Jump to latest` : 'Jump to latest';
+    button.hidden = empty || !reading || reading.follow;
+  }
+  function jumpToLatestAgentMessage() {
+    const thread = document.getElementById('agent-thread');
+    if (!thread?.getClientRects().length || !thread.clientHeight) return;
+    thread.scrollTop = thread.scrollHeight;
+    const input = document.getElementById('agent-input');
+    if (input?.isConnected && !input.disabled && input.getClientRects().length) input.focus({preventScroll: true});
+    agentState.unreadMessageKeys.clear();
+    agentState.reading = captureAgentThreadReading();
+    updateAgentJumpLatest(agentState.reading);
+    restoreAgentThreadReading({follow: true});
+  }
+  document.getElementById('agent-thread')?.addEventListener('scroll', () => {
+    if (agentState.restoreReading) return;
+    const reading = captureAgentThreadReading();
+    if (!reading) return;
+    agentState.reading = reading;
+    updateAgentJumpLatest(reading);
+  }, {passive: true});
   function openAgentDock() {
     const dock = document.getElementById('agent-dock');
     const chat = document.getElementById('agent-chat');
@@ -1386,6 +1429,8 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     closeDrawer();
+    agentState.reading = captureAgentThreadReading() || agentState.reading;
+    agentState.restoreReading = true;
     if (!agentDockOpen) agentDockOpener = document.activeElement;
     if (chat.parentElement !== body) body.appendChild(chat);
     dock.hidden = false;
@@ -1393,7 +1438,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.classList.add('agent-docked');
     syncAgentDockInert();
     markDirty('agent');
-    agentThreadToEnd();
+    restoreAgentThreadReading(agentState.reading);
     loadAgent();
     const input = document.getElementById('agent-input');
     if (input) input.focus({ preventScroll: true });
@@ -1405,12 +1450,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const dock = document.getElementById('agent-dock');
     const chat = document.getElementById('agent-chat');
     const layout = document.querySelector('#tab-agent .agent-layout');
+    agentState.reading = captureAgentThreadReading() || agentState.reading;
+    agentState.restoreReading = true;
     if (chat && layout) layout.insertBefore(chat, layout.firstChild);
     if (dock) dock.hidden = true;
     agentDockOpen = false;
     document.body.classList.remove('agent-docked');
     syncAgentDockInert();
-    agentThreadToEnd();
+    restoreAgentThreadReading(agentState.reading);
     const opener = agentDockOpener;
     agentDockOpener = null;
     if (restoreFocus && opener && opener.isConnected) opener.focus({ preventScroll: true });
@@ -1543,17 +1590,22 @@ document.addEventListener('DOMContentLoaded', () => {
     if (analyzeBtn) analyzeBtn.title = !enabled ? 'Enable the local system agent in Settings' : (st && st.reason) || (agentBusy() ? 'The agent is already working' : 'Review recorded flags and actions with local Ollama');
     const thread = document.getElementById('agent-thread');
     if (thread && st && !enabled) {
+      agentState.unreadMessageKeys.clear();
+      agentState.reading = {top: 0, follow: true};
+      updateAgentJumpLatest(agentState.reading);
       if (thread._saEmpty !== 'off') { thread.innerHTML = agentOffHTML(); thread._saEmpty = 'off'; }
     } else if (thread) {
       const items = agentThreadItems(agentState.chat, st, agentState.runs, agentState);
-      const beforeHeight = thread.scrollHeight;
-      const follow = agentState.lastCount === 0 || beforeHeight - thread.scrollTop - thread.clientHeight < 80;
+      const reading = (agentState.restoreReading ? agentState.reading : captureAgentThreadReading()) || agentState.reading;
+      const follow = agentState.lastCount === 0 || !reading || reading.follow;
       patchList(thread, items, { key: i => i.key, html: i => i.html, empty: agentEmptyThreadHTML(st) });
       const pending = items.find(item => item.key === 'pending');
       const pendingLabel = thread.querySelector('.agent-pending-label');
       if (pendingLabel && pendingLabel.textContent !== pending.label) pendingLabel.textContent = pending.label;
       const arrivals = agentMessageArrivals(agentState.chat, agentState.seenMessageKeys);
       agentState.seenMessageKeys = arrivals.seen;
+      agentState.unreadMessageKeys = agentUnreadMessageKeys(items, arrivals.arrived, agentState.unreadMessageKeys, follow);
+      updateAgentJumpLatest(reading);
       if (arrivals.arrived.size && !(agentReducedMotion && agentReducedMotion.matches)) {
         const motion = getComputedStyle(thread);
         const duration = parseFloat(motion.getPropertyValue('--agent-message-enter')) || 160;
@@ -1566,7 +1618,7 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         });
       }
-      if (follow && (items.length !== agentState.lastCount || thread.scrollHeight !== beforeHeight)) thread.scrollTop = thread.scrollHeight;
+      restoreAgentThreadReading(follow ? {follow: true} : reading);
       agentState.lastCount = items.length;
     }
     const plans = agentState.plans;
@@ -4220,6 +4272,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'agent-refresh':
         e.preventDefault();
         loadAgent();
+        break;
+      case 'agent-jump-latest':
+        e.preventDefault();
+        jumpToLatestAgentMessage();
         break;
       case 'agent-panel':
         e.preventDefault();

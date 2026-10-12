@@ -258,7 +258,19 @@ def run_agent(page):
         ),
     )
 
+def run_agent_latest(page):
+    for viewport, fixture in [('desktop', 'dom_agent_latest'), ('mobile', 'dom_agent_latest_mobile')]:
+        dom = page.fixture(fixture)
+        receipt = re.search(r'data-agent-latest="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        page.check(f'agent latest ({viewport}): receipt produced', bool(state), str(state))
+        for name in ('initial', 'earlier', 'first', 'updates', 'second', 'manualBottom', 'jump', 'follow',
+                     'dockOpen', 'dockClose', 'dockExpand', 'dockFollow', 'returnFollow', 'empty', 'disabled', 'bounds'):
+            page.check(f'agent latest ({viewport}): {name}', state.get(name) is True, str(state))
+
+
 CASES = (
+    Case('agent_latest', run_agent_latest, ('dom_agent_latest', 'dom_agent_latest_mobile')),
     Case('agents_tab_renders_one_group_per_harness_newest_first', run_agents_tab_renders_one_group_per_harness_newest_first, ('dom',)),
     Case('agent_group_head', run_agent_group_head, ('dom',)),
     Case('agents_infra_section_sits_last_and_is_not_counted', run_agents_infra_section_sits_last_and_is_not_counted, ('dom',)),
