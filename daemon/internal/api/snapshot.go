@@ -47,11 +47,7 @@ func (a *API) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) currentSnapshot() (Snapshot, error) {
-	sessions, err := a.store.ListSessionsResult(store.SessionFilter{Limit: 100})
-	if err != nil {
-		return Snapshot{}, err
-	}
-	events, err := a.store.QueryEventsResult(store.EventFilter{Limit: 50})
+	sessions, events, err := readSnapshotRows(a.store)
 	if err != nil {
 		return Snapshot{}, err
 	}
