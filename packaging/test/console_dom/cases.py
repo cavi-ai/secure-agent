@@ -1,0 +1,11 @@
+"""All named browser cases and their fixture catalog."""
+from fixture_catalog import FIXTURES
+from cases_reports import CASES as reports
+from cases_sessions import CASES as sessions
+from cases_spend import CASES as spend
+from cases_agent import CASES as agent
+from cases_policy import CASES as policy
+from cases_worktrees import CASES as worktrees
+from cases_review_results import CASES as review_results
+
+CASES = (*reports, *sessions, *spend, *agent, *policy, *worktrees, *review_results)

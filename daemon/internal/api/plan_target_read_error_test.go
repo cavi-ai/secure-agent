@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -41,9 +42,10 @@ func TestPlanTargetReadFailuresRejectDecisionsAndRecover(t *testing.T) {
 			if _, err := st.PutEvent(event.Event{Kind: event.KindFileOpen, TS: time.Now(), PID: 1, Path: "/w/test.txt", SessionID: "s1"}); err != nil {
 				t.Fatal(err)
 			}
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+
 			rec := &planRecorder{ready: true, pending: map[string]bool{}}
-			a.plan = rec.funcs()
+
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Plan: rec.funcs()})
 			db, err := sql.Open("sqlite", path)
 			if err != nil {
 				t.Fatal(err)
@@ -68,7 +70,7 @@ func TestPlanTargetReadFailuresRejectDecisionsAndRecover(t *testing.T) {
 			if len(rec.reqs) != 0 {
 				t.Errorf("enqueued %d plans from failed target", len(rec.reqs))
 			}
-			if labels := st.SimilarLabels("secret-in-transcript", "codex", "", 5); len(labels) != 0 {
+			if labels := testutil.Read[[]model.OperatorLabel](t)(st.SimilarLabelsResult("secret-in-transcript", "codex", "", 5)); len(labels) != 0 {
 				t.Errorf("recorded judgments from failed target: %+v", labels)
 			}
 			if tc.repair != "" {
@@ -97,7 +99,7 @@ func TestPlanTargetReadFailuresRejectDecisionsAndRecover(t *testing.T) {
 }
 
 func TestMissingPlanTargetsRemainNotFound(t *testing.T) {
-	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }})
 	for _, subject := range []string{"flag:missing", "incident:missing", "file:/w/missing.txt"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			if code, _ := planCall(t, a, method, subject); code != http.StatusNotFound {
@@ -115,9 +117,10 @@ func TestPlanTargetIncidentAllowsMissingLinkedFlag(t *testing.T) {
 	if err := st.PutIncident(model.IncidentReport{ID: "i1", FlagID: "missing", Rule: "rule", Timestamp: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+
 	rec := &planRecorder{ready: true, pending: map[string]bool{}}
-	a.plan = rec.funcs()
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Plan: rec.funcs()})
 	if code, _ := planCall(t, a, http.MethodGet, "incident:i1"); code != http.StatusOK {
 		t.Fatalf("incident without linked flag: %d", code)
 	}

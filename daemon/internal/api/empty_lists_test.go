@@ -17,9 +17,8 @@ import (
 func TestListEndpointsEmitEmptyArrayNeverNull(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.correlator = nil
-	a.mutes = correlate.NewMuteStore(filepath.Join(t.TempDir(), "muted.json"))
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Correlator: nil, Mutes: correlate.NewMuteStore(filepath.Join(t.TempDir(), "muted.json"))})
 	mux := a.buildMux()
 
 	paths := []string{
@@ -53,7 +52,7 @@ func TestListEndpointsEmitEmptyArrayNeverNull(t *testing.T) {
 func TestCostsRowsEmitEmptyArrayNeverNull(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	rec := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/costs", nil))
 	body := strings.TrimSpace(rec.Body.String())
@@ -71,7 +70,7 @@ func TestDoctorChecksEmitArrayNeverNull(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	rec := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/doctor", nil))
 	body := strings.TrimSpace(rec.Body.String())

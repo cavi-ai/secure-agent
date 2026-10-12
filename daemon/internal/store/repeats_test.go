@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ func TestBumpFlagRepeat(t *testing.T) {
 	if s.BumpFlagRepeat("missing", base) {
 		t.Fatal("bump of an unknown flag reported success")
 	}
-	if f, _ := s.GetFlag("f1"); f.Repeats != 0 || f.LastSeen != nil {
+	if f, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("f1")); f.Repeats != 0 || f.LastSeen != nil {
 		t.Fatalf("fresh flag repeats/last_seen = %d/%v, want 0/nil", f.Repeats, f.LastSeen)
 	}
 	later := base.Add(5 * time.Minute)
@@ -23,11 +24,11 @@ func TestBumpFlagRepeat(t *testing.T) {
 			t.Fatal("bump failed")
 		}
 	}
-	f, _ := s.GetFlag("f1")
+	f, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("f1"))
 	if f.Repeats != 2 || f.LastSeen == nil || !f.LastSeen.Equal(later) {
 		t.Fatalf("repeats/last_seen = %d/%v, want 2/%v (an older repeat never moves it back)", f.Repeats, f.LastSeen, later)
 	}
-	q := s.QueryFlags(FlagFilter{Rule: "sensitive-read-then-connect"})
+	q := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Rule: "sensitive-read-then-connect"}))
 	if len(q) != 1 || q[0].Repeats != 2 || q[0].LastSeen == nil {
 		t.Fatalf("QueryFlags = %+v, want the repeats carried", q)
 	}

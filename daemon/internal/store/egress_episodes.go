@@ -330,11 +330,6 @@ func scanEgressEpisode(scanner interface{ Scan(...any) error }) (EgressEpisode, 
 	return e, nil
 }
 
-func (s *Store) GetEgressEpisode(id string) (EgressEpisode, bool) {
-	e, found, _ := s.GetEgressEpisodeResult(id)
-	return e, found
-}
-
 // GetEgressEpisodeResult distinguishes missing evidence from failed reads.
 func (s *Store) GetEgressEpisodeResult(id string) (episode EgressEpisode, found bool, readErr error) {
 	defer func() { s.noteRead("egress episode detail", readErr) }()
@@ -350,31 +345,19 @@ func (s *Store) GetEgressEpisodeResult(id string) (episode EgressEpisode, found 
 }
 
 // ListEgressEpisodes returns newest-first rows under a fixed query cap.
-func (s *Store) ListEgressEpisodes(limit int) []EgressEpisode {
+func (s *Store) ListEgressEpisodes(limit int) ([]EgressEpisode, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	if limit > maxEgressQuery {
 		limit = maxEgressQuery
 	}
-	return s.listEgressEpisodes(limit)
-}
-
-// ListEgressEpisodesForReview reads the entire bounded projection so an older
-// unresolved candidate cannot be hidden by newer one-off connections.
-func (s *Store) ListEgressEpisodesForReview() []EgressEpisode {
-	episodes, _ := s.ListEgressEpisodesForReviewResult()
-	return episodes
+	return s.listEgressEpisodesResult(limit)
 }
 
 // ListEgressEpisodesForReviewResult rejects incomplete core review evidence.
 func (s *Store) ListEgressEpisodesForReviewResult() ([]EgressEpisode, error) {
 	return s.listEgressEpisodesResult(maxEgressEpisodes)
-}
-
-func (s *Store) listEgressEpisodes(limit int) []EgressEpisode {
-	episodes, _ := s.listEgressEpisodesResult(limit)
-	return episodes
 }
 
 func (s *Store) listEgressEpisodesResult(limit int) (out []EgressEpisode, readErr error) {

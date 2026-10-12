@@ -40,9 +40,10 @@ func TestFileActionsRejectUnreadableEvidenceAndRecover(t *testing.T) {
 			if _, err := st.PutEvent(event.Event{Kind: event.KindFileOpen, TS: time.Now(), PID: 1, Path: p, SessionID: "s1"}); err != nil {
 				t.Fatal(err)
 			}
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+
 			rec := &openRecorder{}
-			a.openPath = rec.open
+
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, OpenPath: rec.open})
 			db, err := sql.Open("sqlite", dbPath)
 			if err != nil {
 				t.Fatal(err)
@@ -77,9 +78,10 @@ func TestFileActionsRejectUnreadableEvidenceAndRecover(t *testing.T) {
 func TestFileActionsUnavailableStoreIsNotMissingEvidence(t *testing.T) {
 	st := testStore(t)
 	st.Close()
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+
 	rec := &openRecorder{}
-	a.openPath = rec.open
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, OpenPath: rec.open})
 	for _, h := range []func(http.ResponseWriter, *http.Request){a.handleFileOpen, a.handleFileReveal} {
 		if w := postFile(a, h, http.MethodPost, "/w/missing.txt"); w.Code != http.StatusServiceUnavailable {
 			t.Errorf("closed store: %d %s", w.Code, w.Body.String())

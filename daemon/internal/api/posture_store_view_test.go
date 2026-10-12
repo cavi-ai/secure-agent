@@ -44,15 +44,19 @@ func (s *memoryPostureStore) GetFindingReview(string) (model.ReviewRecord, bool,
 	return s.review, true, nil
 }
 
-func (s *memoryPostureStore) RecentIncidentsResult(int) ([]model.IncidentReport, error) {
+func (s *memoryPostureStore) RecentIncidentDetails(int) ([]store.IncidentDetail, error) {
 	s.health.ReadActive = s.incidentHealth
-	return s.incidents, s.incidentErr
-}
-
-func (s *memoryPostureStore) IncidentStatusResult(string) (store.IncidentWorkflow, bool, error) {
-	s.workflowReads++
-	s.health.ReadActive = nil
-	return store.IncidentWorkflow{Status: "open"}, s.workflowFound, s.workflowErr
+	if s.incidentErr != nil {
+		return nil, s.incidentErr
+	}
+	if s.workflowErr != nil {
+		return nil, s.workflowErr
+	}
+	out := make([]store.IncidentDetail, len(s.incidents))
+	for i, report := range s.incidents {
+		out[i] = store.IncidentDetail{IncidentReport: report, Workflow: store.IncidentWorkflow{Status: "open"}}
+	}
+	return out, nil
 }
 
 func (s *memoryPostureStore) WriteHealth() store.WriteHealth { return s.health }
@@ -100,8 +104,9 @@ func TestPostureEvidenceFailureAndRecovery(t *testing.T) {
 				s.incidentErr = failed
 			case "incident workflows":
 				s.workflowErr = failed
+				want = "incidents"
 			case "missing workflow":
-				s.workflowFound, want = false, "incident workflows"
+				s.workflowErr, want = failed, "incidents"
 			}
 			input := postureInputs{Generated: at, Status: Status{Running: true, StorageHealth: &store.WriteHealth{}}}
 			in := loadPostureEvidence(s, input)
@@ -128,7 +133,7 @@ func TestPostureEvidenceRetainsEnrichmentFailuresBeforeRecovery(t *testing.T) {
 	initial[0] = "flags"
 	in := loadPostureEvidence(s, postureInputs{FailedReads: initial})
 	want := []string{"flags", "flag advisor verdicts", "incident advisor verdicts"}
-	if !reflect.DeepEqual(in.FailedReads, want) || len(s.health.ReadActive) != 0 {
+	if !reflect.DeepEqual(in.FailedReads, want) {
 		t.Fatalf("same-pass enrichment failures lost: %v, current health: %+v", in.FailedReads, s.health)
 	}
 	if !reflect.DeepEqual(initial[:cap(initial)], []string{"flags", "", "", ""}) {

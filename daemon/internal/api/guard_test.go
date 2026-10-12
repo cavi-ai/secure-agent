@@ -21,12 +21,11 @@ import (
 // still unresolved (the human decides).
 func TestGuardPendingAttachesAdvisorAdvice(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.guardBroker = newTestBroker()
-	a.guardAdvisor = func(req model.GuardAssessmentRequest) {
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: newTestBroker(), GuardAdvisor: func(req model.GuardAssessmentRequest) {
 		st.PutAdvisorVerdict(advisor.GuardSubjectID(req.Agent, req.RuleID, req.Path, req.Tool), "guard",
 			model.AdvisorVerdict{Assessment: "malicious", Confidence: 0.9, Rationale: "exfiltration shape"})
-	}
+	}})
 	// A blocked decision creates the pending prompt (and blocks; run async).
 	go func() {
 		req := httptest.NewRequest(http.MethodPost, "/guard/decision",
@@ -70,12 +69,13 @@ func TestGuardOutcomePersistence(t *testing.T) {
 			st := testStore(t)
 			now := time.Now()
 			st.UpsertSession(model.Session{ID: "session-1", Harness: "claude", StartedAt: now, LastSeenAt: now})
-			a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+
 			brokerTimeout := 25 * time.Millisecond
 			if tc.setup == "full" || tc.setup == "operator" {
 				brokerTimeout = time.Second
 			}
-			a.guardBroker = guard.NewBroker(brokerTimeout)
+
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(brokerTimeout)})
 			if tc.setup == "cached" {
 				st.PutGuardRule(store.GuardRule{Agent: "claude", RuleID: "cloud-creds", Decision: "deny"})
 			}
@@ -135,8 +135,8 @@ func TestGuardOutcomePersistence(t *testing.T) {
 
 func TestUnknownGuardSessionUnattributed(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.guardBroker = guard.NewBroker(time.Millisecond)
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(time.Millisecond)})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/guard/decision", strings.NewReader(`{"agent":"claude","tool":"Read","path":"/secret","rule_id":"cloud-creds","session_id":"unknown"}`))
 	a.handleGuardDecision(rec, req)
@@ -157,8 +157,8 @@ func TestDeduplicatedGuardRequestsPersistSeparately(t *testing.T) {
 	st := testStore(t)
 	now := time.Now()
 	st.UpsertSession(model.Session{ID: "session-1", Harness: "claude", StartedAt: now, LastSeenAt: now})
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.guardBroker = guard.NewBroker(2 * time.Second)
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(2 * time.Second)})
 	done := make(chan struct{}, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
@@ -213,8 +213,8 @@ func guardDecisionAsync(t *testing.T, a *API, ctx context.Context) (string, chan
 // resolves nothing, saves no rule, and the decision is recorded as a deny.
 func TestGuardAnswerAfterTheHookLeftSavesNoRule(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.guardBroker = guard.NewBroker(time.Minute)
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(time.Minute)})
 	ctx, cancel := context.WithCancel(context.Background())
 	id, out := guardDecisionAsync(t, a, ctx)
 	cancel()
@@ -247,8 +247,8 @@ func (endedAtAnswer) Err() error { return context.Canceled }
 // An Allow Always that lands as the hook leaves is not applied.
 func TestGuardAnswerRacingTheHookLeavingSavesNoRule(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.guardBroker = guard.NewBroker(time.Minute)
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(time.Minute)})
 	id, out := guardDecisionAsync(t, a, endedAtAnswer{context.Background()})
 	if !a.guardBroker.Resolve(id, guard.Decision{Verdict: "allow", Scope: "always"}) {
 		t.Fatal("resolve did not reach the request")

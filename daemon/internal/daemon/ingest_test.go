@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"testing"
 	"time"
 
@@ -27,7 +29,7 @@ func TestIngestStopDrainsProjectionAndRejectsLaterFeed(t *testing.T) {
 	if i.Feed(e) {
 		t.Fatal("stopped ingest accepted a new event")
 	}
-	if len(f.store.RecentEvents(10)) != 1 || len(f.store.ListEgressEpisodesForReview()) != 1 {
+	if len(testutil.Read[[]event.Event](t)(f.store.QueryEventsResult(store.EventFilter{Limit: 10}))) != 1 || len(testutil.Read[[]store.EgressEpisode](t)(f.store.ListEgressEpisodesForReviewResult())) != 1 {
 		t.Fatal("stop lost persisted activity or queued projection")
 	}
 }

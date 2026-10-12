@@ -72,7 +72,7 @@ func TestPostureReviewKeepsEvidenceAndReviewBoundary(t *testing.T) {
 	st := testStore(t)
 	st.PutFlag(f)
 	st.AcknowledgeFlag(f.ID)
-	p = newTestAPI("", st, nil, func() Status { return Status{Running: true} }).computePosture()
+	p = newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }}).computePosture()
 	if p.NeedsYou != 0 || p.State != "all-clear" || !strings.Contains(p.Summary, "remaining risk") {
 		t.Fatalf("review erased risk or retained a pending decision: %+v", p)
 	}

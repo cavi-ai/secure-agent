@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 func TestSnapshotIncidentRoundTripPreservesIntegerEvidence(t *testing.T) {
@@ -66,8 +67,8 @@ func TestSnapshotRejectsInvalidIncidentTypes(t *testing.T) {
 
 func TestSnapshotIncidentWireShape(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
-	read := func() []snapshotIncident {
+	a := newTestAPI(Deps{Store: st, Status: func() Status { return Status{Running: true} }})
+	read := func() []store.IncidentDetail {
 		t.Helper()
 		w := httptest.NewRecorder()
 		a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/snapshot", nil))
@@ -75,7 +76,7 @@ func TestSnapshotIncidentWireShape(t *testing.T) {
 			t.Fatalf("snapshot: %d %s", w.Code, w.Body.String())
 		}
 		var response struct {
-			Incidents []snapshotIncident `json:"incidents"`
+			Incidents []store.IncidentDetail `json:"incidents"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 			t.Fatal(err)
@@ -101,7 +102,7 @@ func TestSnapshotIncidentWireShape(t *testing.T) {
 	if err != nil || len(stored) != 1 {
 		t.Fatalf("stored reports: %+v err=%v", stored, err)
 	}
-	want := []snapshotIncident{{IncidentReport: stored[0], Workflow: wf}}
+	want := []store.IncidentDetail{{IncidentReport: stored[0], Workflow: wf}}
 	if got := read(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("incident response: got %+v want %+v", got, want)
 	}

@@ -88,13 +88,6 @@ type sessionReportReader interface {
 	SessionOutcomes(string) SessionOutcomeHistory
 }
 
-// SessionReport aggregates one session's events oldest-first. ok is false
-// when no session row has this id. Every slice is non-nil.
-func (s *Store) SessionReport(id string) (SessionReport, bool) {
-	rep, ok, _ := s.SessionReportResult(id)
-	return rep, ok
-}
-
 // SessionReportResult distinguishes unavailable identity from a missing session.
 // Source failures retain independently readable sections with explicit limits.
 func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr error) {

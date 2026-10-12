@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,14 +24,14 @@ func TestExpectedEgressAPIRequiresEpisodeAndAudits(t *testing.T) {
 		t.Fatal(err)
 	}
 	var id, incompleteID string
-	for _, episode := range st.ListEgressEpisodes(10) {
+	for _, episode := range testutil.Read[[]store.EgressEpisode](t)(st.ListEgressEpisodes(10)) {
 		if episode.ScopeComplete {
 			id = episode.ID
 		} else {
 			incompleteID = episode.ID
 		}
 	}
-	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	mux := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }}).buildMux()
 	post := func(body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/expected-egress", strings.NewReader(body)))

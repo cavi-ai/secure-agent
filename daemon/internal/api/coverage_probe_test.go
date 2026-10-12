@@ -22,7 +22,7 @@ func coverageProbeFixture(t *testing.T) (*API, string) {
 			t.Fatal(err)
 		}
 	}
-	return newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true, Agents: []AgentSummary{{PID: 40, Name: "claude"}}} }), dir
+	return newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true, Agents: []AgentSummary{{PID: 40, Name: "claude"}}} }}), dir
 }
 
 func probePost(a *API, path, body string) *httptest.ResponseRecorder {

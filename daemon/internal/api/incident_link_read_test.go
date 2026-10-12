@@ -42,7 +42,7 @@ func TestIncidentLinkEnrichmentKeepsFlagsAndBatchFailure(t *testing.T) {
 	if _, err := db.Exec(`UPDATE incidents SET report_json='null' WHERE id='bad-incident'`); err != nil {
 		t.Fatal(err)
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	request := func(path string) []model.Flag {
 		t.Helper()
 		w := httptest.NewRecorder()

@@ -22,7 +22,7 @@ func TestTranscriptCheckpointFailureVisibleThroughRecovery(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			st := testStore(t)
 			defer st.Close()
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 			dir := t.TempDir()
 			source := filepath.Join(dir, "activity.jsonl")
 			state := filepath.Join(dir, "offsets.json")
@@ -87,7 +87,7 @@ func TestTranscriptCheckpointFailureVisibleThroughRecovery(t *testing.T) {
 func TestResourceEpisodeFailureVisibleThroughRecovery(t *testing.T) {
 	st := testStore(t)
 	defer st.Close()
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	episode := resource.Episode{CapturedAt: time.Now(), Session: resource.Session{CPUPercent: math.Inf(1)}}
 	if err := st.PutResourceEpisode(episode); err == nil {
 		t.Fatal("invalid episode unexpectedly persisted")
@@ -126,13 +126,12 @@ func TestResourceEpisodeFailureVisibleThroughRecovery(t *testing.T) {
 }
 
 func TestPostureSurfacesBusLoss(t *testing.T) {
-	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
-	a.busDrops = func() uint64 { return 7 }
-	a.busDropAt = func() time.Time { return time.Now().Add(-collect.LossWindow - time.Minute) }
+	dropAt := time.Now().Add(-collect.LossWindow - time.Minute)
+	a := newTestAPI(Deps{Store: testStore(t), Status: func() Status { return Status{Running: true} }, BusDrops: func() uint64 { return 7 }, BusDropAt: func() time.Time { return dropAt }})
 	if p := a.computePosture(); p.State != "all-clear" {
 		t.Fatalf("posture after drops stopped = %+v, want all-clear", p)
 	}
-	a.busDropAt = time.Now
+	dropAt = time.Now()
 	p := a.computePosture()
 	if p.State != "attention" || p.NeedsYou != 0 || p.CoverageCount != 1 {
 		t.Fatalf("posture hides lost evidence: %+v", p)
@@ -147,7 +146,7 @@ func TestPostureSurfacesBusLoss(t *testing.T) {
 
 func TestStorageFailureVisibleInStatusPostureAndDoctor(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	st.Close()
 	st.PutEvent(event.Event{Kind: event.KindPluginAction, TS: time.Now(), Detail: "[REDACTED]"})
 	w := httptest.NewRecorder()

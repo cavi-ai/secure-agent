@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -70,7 +71,7 @@ func TestSessionActivityDoesNotRegress(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				got, ok := s.GetSession("s")
+				got, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("s"))
 				wantStatus := model.SessionIdle
 				if operation == "end" {
 					wantStatus = model.SessionEnded
@@ -103,13 +104,13 @@ func TestSessionReplayDoesNotReactivateIdle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got, _ := s.GetSession("s"); got.Status != model.SessionIdle {
+			if got, _ := testutil.Lookup[model.Session](t)(s.GetSessionResult("s")); got.Status != model.SessionIdle {
 				t.Fatalf("replay reactivated idle session: %+v", got)
 			}
 			if err := s.TouchSession("s", now.Add(time.Nanosecond)); err != nil {
 				t.Fatal(err)
 			}
-			if got, _ := s.GetSession("s"); got.Status != model.SessionActive || !got.LastSeenAt.Equal(now.Add(time.Nanosecond)) {
+			if got, _ := testutil.Lookup[model.Session](t)(s.GetSessionResult("s")); got.Status != model.SessionActive || !got.LastSeenAt.Equal(now.Add(time.Nanosecond)) {
 				t.Fatalf("new activity did not reactivate: %+v", got)
 			}
 			if err := s.EndSession("s", now.Add(2*time.Nanosecond)); err != nil {
@@ -121,7 +122,7 @@ func TestSessionReplayDoesNotReactivateIdle(t *testing.T) {
 			if err := s.UpsertSession(model.Session{ID: "s", Status: model.SessionActive, LastSeenAt: now}); err != nil {
 				t.Fatal(err)
 			}
-			if got, _ := s.GetSession("s"); got.Status != model.SessionEnded || !got.LastSeenAt.Equal(now.Add(2*time.Nanosecond)) {
+			if got, _ := testutil.Lookup[model.Session](t)(s.GetSessionResult("s")); got.Status != model.SessionEnded || !got.LastSeenAt.Equal(now.Add(2*time.Nanosecond)) {
 				t.Fatalf("ended activity regressed or reopened: %+v", got)
 			}
 		})
@@ -150,7 +151,7 @@ func activitySessions(t *testing.T) *Store {
 func TestSessionsOrderByActivityTime(t *testing.T) {
 	s := activitySessions(t)
 	for _, status := range []string{"", string(model.SessionActive)} {
-		got := s.ListSessions(SessionFilter{Status: status, Limit: 2})
+		got := testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{Status: status, Limit: 2}))
 		if len(got) != 2 || got[0].ID != "new" || got[1].ID != "boundary" {
 			t.Fatalf("status %q, activity order: %+v", status, got)
 		}
@@ -159,7 +160,7 @@ func TestSessionsOrderByActivityTime(t *testing.T) {
 
 func TestSessionSinceKeepsNanosecondBoundary(t *testing.T) {
 	s := activitySessions(t)
-	got := s.ListSessions(SessionFilter{Since: activityTime(t, "2026-10-07T23:00:00.000000002Z")})
+	got := testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{Since: activityTime(t, "2026-10-07T23:00:00.000000002Z")}))
 	if len(got) != 1 || got[0].ID != "new" {
 		t.Fatalf("since boundary includes older activity: %+v", got)
 	}
@@ -176,7 +177,7 @@ func TestSessionIdleCutoffUsesActivityTime(t *testing.T) {
 		t.Fatalf("idle IDs = %v, want only old", ids)
 	}
 	for _, id := range []string{"boundary", "new"} {
-		if got, _ := s.GetSession(id); got.Status != model.SessionActive {
+		if got, _ := testutil.Lookup[model.Session](t)(s.GetSessionResult(id)); got.Status != model.SessionActive {
 			t.Fatalf("fresh session marked idle: %+v", got)
 		}
 	}
@@ -192,7 +193,7 @@ func TestSessionEndAdvancesFractionalActivity(t *testing.T) {
 	if err := s.EndSession("s", ended); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.GetSession("s"); !got.LastSeenAt.Equal(ended) || got.EndedAt == nil || !got.EndedAt.Equal(ended) {
+	if got, _ := testutil.Lookup[model.Session](t)(s.GetSessionResult("s")); !got.LastSeenAt.Equal(ended) || got.EndedAt == nil || !got.EndedAt.Equal(ended) {
 		t.Fatalf("ending left stale activity: %+v", got)
 	}
 }
@@ -215,10 +216,10 @@ func TestSessionRetentionUsesChronologicalEndTime(t *testing.T) {
 		}
 	}
 	s.pruneSessionsLocked()
-	if _, ok := s.GetSession("expired"); ok {
+	if _, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("expired")); ok {
 		t.Fatal("expired offset session retained")
 	}
-	if _, ok := s.GetSession("retained"); !ok {
+	if _, ok := testutil.Lookup[model.Session](t)(s.GetSessionResult("retained")); !ok {
 		t.Fatal("recent offset session pruned")
 	}
 }

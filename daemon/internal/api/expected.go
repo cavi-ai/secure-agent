@@ -198,7 +198,10 @@ func (a *API) expectFlags(w http.ResponseWriter, ids []string) {
 
 // acknowledgeExpected reviews only findings fully covered by current exceptions.
 func (a *API) acknowledgeExpected() int {
-	open := a.store.QueryFlags(store.FlagFilter{Rule: readConnectRule, Unacted: true, Limit: math.MaxInt32})
+	open, err := a.store.QueryFlagsResult(store.FlagFilter{Rule: readConnectRule, Unacted: true, Limit: math.MaxInt32})
+	if err != nil {
+		return 0
+	}
 	var ids []string
 	for _, f := range open {
 		if a.flagFullyExpected(f) {

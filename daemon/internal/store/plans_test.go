@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"math"
 	"path/filepath"
 	"slices"
@@ -43,7 +44,7 @@ func TestAdvisorPlanPersistenceFailureAndRecovery(t *testing.T) {
 			if err := s.PutAdvisorPlan("subject", p); err == nil {
 				t.Fatal("failed plan reported persistence success")
 			}
-			if saved, ok := s.AdvisorPlanFor("subject"); !ok || saved.Summary != "saved" || saved.EvidenceKey != "saved-key" {
+			if saved, ok := testutil.Lookup[model.AdvisorPlan](t)(s.AdvisorPlanResultFor("subject")); !ok || saved.Summary != "saved" || saved.EvidenceKey != "saved-key" {
 				t.Fatalf("failed save overwrote the previous plan: %+v, %v", saved, ok)
 			}
 			h := s.WriteHealth()
@@ -62,7 +63,7 @@ func TestAdvisorPlanPersistenceFailureAndRecovery(t *testing.T) {
 			if err := s.PutAdvisorPlan("subject", p); err != nil {
 				t.Fatal(err)
 			}
-			if saved, ok := s.AdvisorPlanFor("subject"); !ok || saved.Summary != "new" || saved.EvidenceKey != "new-key" {
+			if saved, ok := testutil.Lookup[model.AdvisorPlan](t)(s.AdvisorPlanResultFor("subject")); !ok || saved.Summary != "new" || saved.EvidenceKey != "new-key" {
 				t.Fatalf("plan did not recover: %+v, %v", saved, ok)
 			}
 			h = s.WriteHealth()
@@ -80,20 +81,20 @@ func TestAdvisorPlanRoundTripAndReplace(t *testing.T) {
 	}
 	defer s.Close()
 
-	if _, ok := s.AdvisorPlanFor("file:/w/a"); ok {
+	if _, ok := testutil.Lookup[model.AdvisorPlan](t)(s.AdvisorPlanResultFor("file:/w/a")); ok {
 		t.Fatal("unknown subject must not have a plan")
 	}
 	p := model.AdvisorPlan{Summary: "first", Why: []string{"w"}, Risk: "high",
 		Prevent: []model.PlanStep{{Kind: "guard-rule", Step: "s", Detail: "d"}}, Behavior: []string{}, Remediate: []string{"r"},
 		Actions: []string{"dismiss"}, Confidence: 0.8, Model: "m", CreatedAt: time.Now().UTC().Truncate(time.Second), EvidenceKey: "k1"}
 	s.PutAdvisorPlan("file:/w/a", p)
-	got, ok := s.AdvisorPlanFor("file:/w/a")
+	got, ok := testutil.Lookup[model.AdvisorPlan](t)(s.AdvisorPlanResultFor("file:/w/a"))
 	if !ok || got.Summary != "first" || got.EvidenceKey != "k1" || got.Prevent[0].Kind != "guard-rule" || !got.CreatedAt.Equal(p.CreatedAt) {
 		t.Fatalf("round trip = %+v ok=%v", got, ok)
 	}
 	p.Summary, p.EvidenceKey = "second", "k2"
 	s.PutAdvisorPlan("file:/w/a", p)
-	if got, _ := s.AdvisorPlanFor("file:/w/a"); got.Summary != "second" || got.EvidenceKey != "k2" {
+	if got, _ := testutil.Lookup[model.AdvisorPlan](t)(s.AdvisorPlanResultFor("file:/w/a")); got.Summary != "second" || got.EvidenceKey != "k2" {
 		t.Fatalf("replace = %+v", got)
 	}
 }

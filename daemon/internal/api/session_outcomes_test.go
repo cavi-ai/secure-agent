@@ -66,7 +66,7 @@ func TestSessionOutcomesRetainReceiptsWithoutReadingActivity(t *testing.T) {
 	if _, err := db.Exec(`ALTER TABLE events RENAME TO unavailable_events`); err != nil {
 		t.Fatal(err)
 	}
-	mux := newTestAPI("", st, nil, nil).buildMux()
+	mux := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil}).buildMux()
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequest("GET", "/sessions/owned/outcomes", nil))
 	if w.Code != 200 {
@@ -171,7 +171,7 @@ func TestSessionOutcomesRetainReceiptsWithoutReadingActivity(t *testing.T) {
 
 func TestSessionOutcomesIdentityErrors(t *testing.T) {
 	st := testStore(t)
-	mux := newTestAPI("", st, nil, nil).buildMux()
+	mux := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil}).buildMux()
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequest("GET", "/sessions/missing/outcomes", nil))
 	if w.Code != 404 {

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func TestExpectedEgressMatchingAndPersistence(t *testing.T) {
 	if s.ExpectedEgressMatch(obs) {
 		t.Fatal("revoked broad rule matched after reopen")
 	}
-	if len(s.ListExpectedEgressRules()) != 2 {
+	if len(testutil.Read[[]ExpectedEgressRule](t)(s.ListExpectedEgressRulesResult())) != 2 {
 		t.Fatal("rules not persisted")
 	}
 }
@@ -104,7 +105,7 @@ func TestExpectedEgressActiveRuleSurvivesRevokedHistoryLimit(t *testing.T) {
 		}
 	}
 	found := false
-	for _, rule := range s.ListExpectedEgressRules() {
+	for _, rule := range testutil.Read[[]ExpectedEgressRule](t)(s.ListExpectedEgressRulesResult()) {
 		if rule.ID == active.ID {
 			found = true
 			break
@@ -125,7 +126,7 @@ func TestExpectedEgressMatcherReadsRulesOnce(t *testing.T) {
 	if err := s.RecordEgressObservationForTest(EgressObservation{Scope: scope, Host: "API.Example.COM.", Protocol: "TCP", Port: 443, At: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	eps := s.ListEgressEpisodes(10)
+	eps := testutil.Read[[]EgressEpisode](t)(s.ListEgressEpisodes(10))
 	if len(eps) != 1 {
 		t.Fatalf("episodes=%+v", eps)
 	}
@@ -134,7 +135,7 @@ func TestExpectedEgressMatcherReadsRulesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := s.ExpectedEgressMatcher()
+	before := testutil.Read[func(EgressEpisode) string](t)(s.ExpectedEgressMatcherResult())
 	exact, err := s.CreateExpectedEgressRule(ExpectedEgressRule{Agent: "claude", Kind: "destination", Host: "api.example.com", Protocol: "tcp", Port: 443})
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +143,7 @@ func TestExpectedEgressMatcherReadsRulesOnce(t *testing.T) {
 	if got := before(ep); got != broad.ID {
 		t.Fatalf("matcher read before the destination rule = %q, want the scope rule %q", got, broad.ID)
 	}
-	match := s.ExpectedEgressMatcher()
+	match := testutil.Read[func(EgressEpisode) string](t)(s.ExpectedEgressMatcherResult())
 	if got := match(ep); got != exact.ID {
 		t.Fatalf("matcher = %q, want the destination rule %q over the scope rule", got, exact.ID)
 	}

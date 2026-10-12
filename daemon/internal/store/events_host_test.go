@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -85,16 +86,16 @@ func TestHostLookupsReturnTheHostsEvents(t *testing.T) {
 	}
 
 	var pids []string
-	for _, e := range s.QueryEvents(EventFilter{RemoteHost: "a.example", Limit: 50}) {
+	for _, e := range testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{RemoteHost: "a.example", Limit: 50})) {
 		pids = append(pids, fmt.Sprint(e.PID))
 	}
 	if got := strings.Join(pids, ","); got != "6,4,1" {
 		t.Errorf("a.example events = %s, want 6,4,1", got)
 	}
-	if got := s.QueryEvents(EventFilter{RemoteHost: "a.example", Since: base.Add(2 * time.Minute).Format(time.RFC3339), Limit: 50}); len(got) != 2 {
+	if got := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{RemoteHost: "a.example", Since: base.Add(2 * time.Minute).Format(time.RFC3339), Limit: 50})); len(got) != 2 {
 		t.Errorf("a.example since +2m = %d events, want 2", len(got))
 	}
-	if got := s.QueryEvents(EventFilter{Limit: 50}); len(got) != len(hosts) {
+	if got := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 50})); len(got) != len(hosts) {
 		t.Errorf("unfiltered = %d events, want %d", len(got), len(hosts))
 	}
 	if tc := s.TrendFor("", "b.example"); !tc.HostKnown || tc.HostFirstSeen != base.Add(2*time.Minute).Format(time.RFC3339Nano) {
@@ -152,7 +153,7 @@ func BenchmarkQueryEventsByHost(b *testing.B) {
 	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		s.QueryEvents(EventFilter{RemoteHost: fmt.Sprintf("h%d.example", i%500), Since: since, Limit: 50})
+		testutil.Read[[]event.Event](b)(s.QueryEventsResult(EventFilter{RemoteHost: fmt.Sprintf("h%d.example", i%500), Since: since, Limit: 50}))
 	}
 }
 
@@ -161,7 +162,7 @@ func BenchmarkQueryEventsBusiestHost(b *testing.B) {
 	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		s.QueryEvents(EventFilter{RemoteHost: "hot.example", Since: since, Limit: 50})
+		testutil.Read[[]event.Event](b)(s.QueryEventsResult(EventFilter{RemoteHost: "hot.example", Since: since, Limit: 50}))
 	}
 }
 

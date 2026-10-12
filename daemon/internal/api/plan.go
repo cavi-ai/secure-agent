@@ -88,7 +88,7 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 		t.flag = &f
 		t.path = flagEvidencePath(f)
 	case "incident":
-		inc, err := a.store.GetIncident(id)
+		inc, err := a.store.GetIncidentDetail(id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return planTarget{}, false, nil
 		}
@@ -98,7 +98,7 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 		if inc == nil {
 			return planTarget{}, false, nil
 		}
-		t.incident = inc
+		t.incident = &inc.IncidentReport
 		if inc.FlagID != "" {
 			f, ok, err := a.store.GetFlagResult(inc.FlagID)
 			if err != nil {
@@ -149,12 +149,12 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 				}
 			}
 			if f.Kind == "incident" && t.incident == nil {
-				inc, err := a.store.GetIncident(f.ID)
+				inc, err := a.store.GetIncidentDetail(f.ID)
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
 					return planTarget{}, false, err
 				}
 				if inc != nil {
-					t.incident = inc
+					t.incident = &inc.IncidentReport
 				}
 			}
 		}

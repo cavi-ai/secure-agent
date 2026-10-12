@@ -81,7 +81,7 @@ func interfaceBody(t *testing.T, ts, name string) string {
 func TestTypeScriptPreservesCollidingWireTypes(t *testing.T) {
 	ts := Generate()
 	for name, fields := range map[string][]string{
-		"ApiSnapshot":      {"incidents: snapshotIncident[];", "sessions: ModelSession[];"},
+		"ApiSnapshot":      {"incidents: IncidentDetail[];", "sessions: ModelSession[];"},
 		"ResourceSnapshot": {"sessions: ResourceSession[];"},
 		"ModelSession":     {"id: string;"},
 		"ResourceSession":  {"key: string;"},
@@ -118,7 +118,7 @@ func TestTypeScriptSnapshotIncidentMatchesJSON(t *testing.T) {
 	if err := json.Unmarshal(payload, &fields); err != nil {
 		t.Fatal(err)
 	}
-	body := interfaceBody(t, Generate(), "snapshotIncident")
+	body := interfaceBody(t, Generate(), "IncidentDetail")
 	for field := range fields {
 		if !strings.Contains(body, "  "+field+":") && !strings.Contains(body, "  "+field+"?:") {
 			t.Errorf("missing JSON field %s", field)

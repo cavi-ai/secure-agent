@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 const assets = new URL('../../../daemon/internal/api/web_dist/', import.meta.url);
 const app = readFileSync(new URL('app.js', assets), 'utf8');
-const controller = app.slice(app.indexOf('  function clearProtectionContext('), app.indexOf('  async function saveExpectedEgress('));
+import { controller } from './controllers.mjs';
 function deferred() { let resolve; const promise = new Promise(r => {resolve=r;}); return {promise,resolve}; }
 const response = rules => ({ok:true,json:async()=>({rules})});
 function setup(rules = [], episodes = [{id:'origin',observed:{recurring:true}}]) {
@@ -33,7 +33,7 @@ function setup(rules = [], episodes = [{id:'origin',observed:{recurring:true}}])
   vm.createContext(ctx);
   vm.runInContext(readFileSync(new URL('lib.js',assets),'utf8'),ctx);
   vm.runInContext(readFileSync(new URL('telemetry-validation.js',assets),'utf8'),ctx);
-  vm.runInContext(controller,ctx);
+  Object.assign(ctx, controller('console-lifecycle.js', 'createConsoleLifecycle', ctx));
   return {ctx,calls,routes,focus,scroll,dirty};
 }
 

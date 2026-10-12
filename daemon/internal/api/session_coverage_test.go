@@ -52,7 +52,7 @@ func TestSessionCoverageNeverBorrowsSiblingEvidence(t *testing.T) {
 	st.PutEvent(event.Event{Kind: event.KindPluginAction, SessionID: "observed", TS: now, Detail: "secret-guard:deny"})
 	st.PutEvent(event.Event{Kind: event.KindToolCall, SessionID: "observed", TS: now, ToolName: "Read", CallID: "call"})
 	st.PutEvent(event.Event{Kind: event.KindPluginAction, SessionID: "silent", TS: now, Detail: "session-start"})
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true, Agents: agents} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true, Agents: agents} }})
 	rows := coverageTestRows(t, a)
 	if len(rows) != 2 {
 		t.Fatalf("want two independent session rows, got %+v", rows)
@@ -76,9 +76,9 @@ func TestSessionCoverageRejectsReusedPIDAndUnattributedEvidence(t *testing.T) {
 	st.UpsertSession(model.Session{ID: "old", Harness: "claude", RootPID: 42, RootStartedAt: old.Format(time.RFC3339Nano), StartedAt: old, LastSeenAt: now, Status: model.SessionActive})
 	st.PutEvent(event.Event{Kind: event.KindPluginAction, SessionID: "old", PID: 42, TS: now, Detail: "secret-guard:deny"})
 	st.PutEvent(event.Event{Kind: event.KindPluginAction, PID: 42, TS: now, Detail: "secret-guard:deny"})
-	a := newTestAPI("", st, nil, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status {
 		return Status{Running: true, Agents: []AgentSummary{{PID: 42, RootPID: 42, Name: "claude", StartedAt: now.Format(time.RFC3339Nano)}}}
-	})
+	}})
 	rows := coverageTestRows(t, a)
 	if len(rows) != 1 || rows[0].SessionID != "" || rows[0].Guard.LastSeen != "" {
 		t.Fatalf("PID reuse or unknown attribution borrowed evidence: %+v", rows)
@@ -92,9 +92,9 @@ func TestSessionCoverageUsesInstantOrderForGuardEvidence(t *testing.T) {
 	st.UpsertSession(model.Session{ID: "s", Harness: "claude", RootPID: 42, RootStartedAt: start.Format(time.RFC3339Nano), StartedAt: start, LastSeenAt: now, Status: model.SessionActive})
 	st.PutEvent(event.Event{Kind: event.KindPluginAction, SessionID: "s", TS: now, Detail: "secret-guard:deny"})
 	st.PutGuardDecisionForTest(store.GuardDecision{ID: "decision", SessionID: "s", At: now.Add(time.Nanosecond).Format(time.RFC3339Nano), Verdict: "deny", Scope: "once"})
-	a := newTestAPI("", st, nil, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status {
 		return Status{Agents: []AgentSummary{{PID: 42, RootPID: 42, Name: "claude", StartedAt: start.Format(time.RFC3339Nano)}}}
-	})
+	}})
 	rows := coverageTestRows(t, a)
 	if len(rows) != 1 {
 		t.Fatalf("rows: %+v", rows)
@@ -113,9 +113,9 @@ func TestSessionCoverageExcludesFutureAndPreSessionEvidenceAndKeepsStaleFacts(t 
 	for _, at := range []time.Time{start.Add(-time.Minute), now.Add(time.Hour)} {
 		st.PutEvent(event.Event{Kind: event.KindPluginAction, SessionID: "s", TS: at, Detail: "secret-guard:deny"})
 	}
-	a := newTestAPI("", st, nil, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status {
 		return Status{Agents: []AgentSummary{{PID: 42, RootPID: 42, Name: "claude", StartedAt: start.Format(time.RFC3339Nano)}}}
-	})
+	}})
 	if rows := coverageTestRows(t, a); len(rows) != 1 || rows[0].Guard.LastSeen != "" {
 		t.Fatalf("invalid time window credited: %+v", rows)
 	}
@@ -139,9 +139,9 @@ func TestSessionCoverageDoesNotCountAnInspectionGapAsPayloadInspection(t *testin
 	start := now.Add(-time.Hour)
 	st.UpsertSession(model.Session{ID: "s", Harness: "claude", RootPID: 42, RootStartedAt: start.Format(time.RFC3339Nano), StartedAt: start, LastSeenAt: now, Status: model.SessionActive})
 	st.PutEvent(event.Event{Kind: event.KindProxyHit, SessionID: "s", TS: now, Detail: "proxy-inspection-incomplete:body-limit"})
-	a := newTestAPI("", st, nil, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status {
 		return Status{ProxyEnabled: true, Agents: []AgentSummary{{PID: 42, RootPID: 42, Name: "claude", StartedAt: start.Format(time.RFC3339Nano)}}}
-	})
+	}})
 	rows := coverageTestRows(t, a)
 	if rows[0].Payload.LastSeen != "" || rows[0].Payload.State == "observed" {
 		t.Fatalf("inspection failure credited as inspected payload: %+v", rows[0].Payload)

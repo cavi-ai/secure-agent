@@ -16,7 +16,7 @@ type scopePeerChecker struct{}
 
 func (scopePeerChecker) PeerCred(net.Conn) (PeerCred, error) { return PeerCred{PID: 42}, nil }
 
-func scopedGuardAPI(t *testing.T) (*API, model.DecisionScope) {
+func scopedGuardDeps(t *testing.T) (Deps, model.DecisionScope) {
 	t.Helper()
 	st := testStore(t)
 	now := time.Now().UTC()
@@ -24,10 +24,15 @@ func scopedGuardAPI(t *testing.T) (*API, model.DecisionScope) {
 		t.Fatal(err)
 	}
 	identity := model.DecisionScope{Agent: "codex", SessionID: "session", Workspace: "/work", ReaderExe: "/bin/codex", IdentityBasis: "peer-process-tree"}
-	a := New(Deps{Store: st, Guard: guard.NewBroker(2 * time.Second), PeerChecker: scopePeerChecker{}, GuardIdentity: func(pid int32, id string) (model.DecisionScope, bool) {
+	deps := Deps{Store: st, Guard: guard.NewBroker(2 * time.Second), PeerChecker: scopePeerChecker{}, GuardIdentity: func(pid int32, id string) (model.DecisionScope, bool) {
 		return identity, pid == 42 && (id == "" || id == "session")
-	}})
-	return a, identity
+	}}
+	return deps, identity
+}
+
+func scopedGuardAPI(t *testing.T) (*API, model.DecisionScope) {
+	deps, identity := scopedGuardDeps(t)
+	return New(deps), identity
 }
 
 func enqueueScopeGuard(t *testing.T, a *API, session string) (guard.Pending, <-chan *httptest.ResponseRecorder) {
@@ -93,8 +98,9 @@ func TestGuardScopedResolveAndRevocation(t *testing.T) {
 }
 
 func TestGuardExistingSessionIsNotPermissionIdentity(t *testing.T) {
-	a, _ := scopedGuardAPI(t)
-	a.guardIdentity = nil
+	deps, _ := scopedGuardDeps(t)
+	deps.GuardIdentity = nil
+	a := New(deps)
 	p, done := enqueueScopeGuard(t, a, "session")
 	if len(p.AvailableScopes) != 1 || p.AvailableScopes[0].Kind != "once" {
 		t.Fatalf("client session gained reusable permission: %+v", p)
