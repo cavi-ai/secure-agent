@@ -412,3 +412,62 @@ test('workbench instances do not share selection, view or retained reads', async
   assert.equal(b.state.memory.rows[0].id, 'b-row');
   assert.equal(b.state.trace.length, 0);
 });
+
+test('detail context is keyed in the scrolling body while navigation and status remain in chrome', () => {
+  const c = controller();
+  const selected = {id:'a', harness:'codex', repo:'complete<identity', branch:'main', workspace:'/workspace/exact&path', confidence:'hook'};
+  for (const mode of ['memory','results','trace']) {
+    const html = c.context.sessionDetailHTML(selected, [], [], {sessionView:mode, sessionOverview:null, sessionMemoryPage:{rows:[]}});
+    const [chrome,body] = html.split('<div class="session-detail-body">');
+    assert.ok(chrome.includes('data-action="copy-report" data-id="a"'));
+    assert.ok(chrome.includes('data-action="session-list"'));
+    assert.ok(chrome.includes('data-action="session-status"'));
+    assert.ok(chrome.includes('<h3 tabindex="-1">complete&lt;identity@main</h3>'));
+    assert.ok(!chrome.includes('session-metadata') && !chrome.includes('data-action="session-events"'));
+    assert.ok(body.includes('data-session-part="session-context"'));
+    assert.ok(body.includes('data-action="session-events" data-id="a"'));
+    assert.ok(body.includes('data-action="copy-path" data-path="/workspace/exact&amp;path"'));
+    if (mode !== 'results') assert.ok(body.indexOf('data-session-part="current-head"') < body.indexOf('data-session-part="session-context"'));
+  }
+});
+
+test('workbench sizing reserves measured reading lines and rebinds chrome without observing height-driven panes', () => {
+  const source = readFileSync(path.join(web, 'session-workbench.js'), 'utf8');
+  const frames = [], observed = new Set(), removed = [], writes = [];
+  const rect = height => ({getClientRects:() => [1],getBoundingClientRect:() => ({height})});
+  const text = {style:{lineHeight:'24px'}};
+  const body = {...rect(240),style:{paddingTop:'0px',paddingBottom:'10px'},scrollHeight:1000,clientHeight:240,scrollTop:100,
+    querySelector:() => text};
+  let chrome = rect(220);
+  const toolbar = rect(0), latest = {};
+  const values = new Map();
+  const panel = {getClientRects:() => [1],getBoundingClientRect:() => ({top:400}),
+    classList:{contains:() => true,toggle(_name,on){panel.short=on;}},
+    style:{getPropertyValue:name => values.get(name),setProperty(name,value){writes.push([name,value]);values.set(name,value);}},
+    querySelector:selector => ({'.session-detail-body':body,'.session-detail-chrome':chrome,'.session-toolbar':toolbar,'[data-action="session-latest"]':latest})[selector]};
+  const upstream = {};
+  const context = {window:{innerHeight:700,addEventListener(){}},
+    document:{body:{},getElementById:() => panel,querySelector:() => upstream,querySelectorAll:() => [upstream]},
+    getComputedStyle:node => node === panel ? {borderTopWidth:'1px',borderBottomWidth:'1px'} : node === upstream ? {paddingBottom:'16px'} : node.style || {},
+    requestAnimationFrame:callback => {frames.push(callback);return frames.length;},
+    ResizeObserver:class {constructor(callback){this.callback=callback;} observe(node){observed.add(node);} unobserve(node){observed.delete(node);removed.push(node);}},
+  };
+  vm.createContext(context);
+  const start = source.indexOf('  let sessionHeightFrame =');
+  vm.runInContext(source.slice(start,source.indexOf('  async function loadSessionMemory(',start)),context);
+  context.scheduleSessionWorkbenchHeight();context.scheduleSessionWorkbenchHeight();
+  assert.equal(frames.length,1,'measurements coalesce');frames.shift()();
+  assert.equal(values.get('--session-split-height'),'466px'); // 220 chrome + 8×24 +44 action +10 padding
+  assert.equal(values.get('--session-workbench-height'),'468px');
+  assert.equal(panel.short,true);
+  assert.equal(body.scrollTop,100,'history position is preserved while sizing');
+  assert.ok(observed.has(chrome) && observed.has(upstream));
+  assert.ok(!observed.has(body) && !observed.has(panel));
+  const count = writes.length;
+  context.scheduleSessionWorkbenchHeight();frames.shift()();assert.equal(writes.length,count,'unchanged dimensions do not write styles');
+  const previous = chrome;chrome=rect(180);context.window.innerHeight=1000;
+  context.scheduleSessionWorkbenchHeight();frames.shift()();
+  assert.ok(removed.includes(previous) && observed.has(chrome));
+  assert.equal(panel.short,false);
+  assert.equal(values.get('--session-workbench-height'),'584px');
+});

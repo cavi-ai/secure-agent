@@ -1609,6 +1609,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 /* Durable Sessions workbench: fixed chrome and two independent reading panes. */
 #session-board-panel.session-workbench {
   --session-workbench-height: 560px;
+  --session-split-height: 320px;
   display: flex; flex-direction: column; height: var(--session-workbench-height, 560px);
   min-height: 300px; overflow: hidden;
 }
@@ -1624,7 +1625,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .session-workbench > .session-split { flex: 1; min-height: 0; }
 /* Short windows scroll the toolbar into view without unbounding the log. */
 #session-board-panel.session-workbench-short { height: auto; }
-.session-workbench-short > .session-split { flex: none; height: 320px; }
+.session-workbench-short > .session-split { flex: none; height: var(--session-split-height); }
 .session-rail {
   width: 320px; min-width: 280px; max-width: 380px; min-height: 0; resize: horizontal;
   border-right: 1px solid var(--line); overflow: auto; padding: 4px 0;
@@ -1750,6 +1751,9 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .session-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .session-detail > .empty { flex: 1; padding: 24px; }
 .session-detail-chrome { flex: none; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--bg-1); }
+.session-detail-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.session-detail-actions .sd-export { margin-left: auto; }
+.session-context { padding: 8px 0 12px; border-bottom: 1px solid var(--line); }
 .session-detail-head { display: flex; align-items: center; gap: 6px 8px; min-width: 0; }
 .session-detail-head h3 { flex: 1; margin: 0; font: 650 16px/1.35 var(--font); color: var(--tx-1); min-width: 0; overflow-wrap: anywhere; padding: 5px 8px; border: 1px solid var(--line-2); border-radius: var(--r-sm); }
 .session-detail-head h3:focus { outline: 2px solid var(--brand); outline-offset: 3px; }
@@ -1806,17 +1810,23 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
   .sm-content p { grid-column: 1; }
   .sm-chips { grid-column: 2; grid-row: 1 / span 2; }
 }
+@media (min-width: 901px) {
+  .session-detail-chrome { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; }
+  .session-detail-head { grid-column: 1; grid-row: 1; }
+  .session-detail-actions { grid-column: 2; grid-row: 1; margin-bottom: 0; }
+  .sd-detail-controls { grid-column: 1 / -1; }
+}
 @media (max-width: 900px) {
   .session-split { grid-template-columns: minmax(0, 1fr); }
   .session-rail { width: auto; min-width: 0; max-width: none; resize: none; border-right: 0; }
   #session-board-panel[data-pane="detail"] .session-rail { display: none; }
   #session-board-panel[data-pane="list"] .session-detail { display: none; }
-  .session-detail-head { flex-wrap: wrap; }
-  .sd-back { display: inline-flex; flex-basis: 100%; justify-content: flex-start; }
+  #session-board-panel[data-pane="detail"] .session-toolbar { display: none; }
+  .sd-back { display: inline-flex; justify-content: flex-start; }
   .session-toolbar .harness-filter-text { min-height: 44px; min-width: 0; max-width: none; flex-basis: 160px; }
   .session-toolbar .switch, .session-toolbar .harness-pill, .session-group-head,
   .session-ended-toggle, .session-metadata summary, .sd-view, .sd-export, .sd-latest, .sd-back,
-  .sm-earlier, .session-detail .link-btn, .sd-path { min-height: 44px; }
+  .sm-earlier, .session-detail .link-btn, .session-context .btn, .session-detail [data-action="session-status"], .sd-path { min-height: 44px; }
   .session-card .sc-kill { min-height: 44px; min-width: 44px; margin-right: 2px; }
   .session-detail-chrome { padding: 8px 10px; }
   .session-detail-body { padding: 0 10px 10px; }
@@ -1834,7 +1844,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 @media (pointer: coarse) {
   .session-toolbar .harness-filter-text, .session-toolbar .switch, .session-toolbar .harness-pill,
   .session-group-head, .session-ended-toggle, .session-metadata summary, .sd-view, .sd-export,
-  .sd-latest, .sd-back, .sm-earlier, .session-detail .link-btn, .sd-path { min-height: 44px; }
+  .sd-latest, .sd-back, .sm-earlier, .session-detail .link-btn, .session-context .btn, .session-detail [data-action="session-status"], .sd-path { min-height: 44px; }
   .session-card .sc-kill { min-height: 44px; min-width: 44px; }
 }
 

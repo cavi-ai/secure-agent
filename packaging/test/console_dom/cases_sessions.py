@@ -416,6 +416,16 @@ def run_session_workbench(page):
                 str(result),
             )
 
+def run_session_reading(page):
+    check = page.check
+    for label, size, query in [('long phone', (320, 800), '?readingdemo&readinglong'), ('short phone', (390, 800), '?readingdemo'), ('short viewport', (375, 480), '?readingdemo&readinglong')]:
+        reading_dom = page.dom(query, window_size=size, fixture=payload_cases.session_workbench(), served=True)
+        receipt = re.search(r'data-session-reading="([^"]+)"', reading_dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        check(f'session reading ({label}): receipt produced', bool(state), str(state))
+        for name in ('memoryBudget', 'contextInBody', 'latest', 'currentContext', 'detailsBudget', 'detailsDoNotGrowChrome', 'fullTitleRow', 'toolbar', 'actions', 'resultsBudget', 'traceBudget', 'fits'):
+            check(f'session reading ({label}): {name}', state.get(name) is True, str(state))
+
 CASES = (
     Case('session_rail_renders_durable_sessions', run_session_rail_renders_durable_sessions, ('dom',)),
     Case('rail_titles_are_repo_branch_not_harness_repo', run_rail_titles_are_repo_branch_not_harness_repo, ('dom',)),
@@ -448,4 +458,5 @@ CASES = (
     Case('context_handoff', run_context_handoff, ()),
     Case('session_results', run_session_results, ()),
     Case('session_workbench', run_session_workbench, ()),
+    Case('session_reading', run_session_reading, ()),
 )

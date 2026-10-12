@@ -21,7 +21,7 @@ for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
             query += '&resultrevoke'
         FIXTURES[name] = Fixture(query=query, scenarios=scenarios,
                                  window_size=size, served=True,
-                                 payload=payload_cases.scoped_review)
+                                 payload=payload_cases.review_result)
         REVIEW_FIXTURES.append((name, label, action))
 
 

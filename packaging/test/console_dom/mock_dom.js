@@ -8,6 +8,7 @@
 (() => {
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
+  const readingFetch = scenarios.has('readingdemo') ? window.fetch.bind(window) : null;
   if (scenarios.has('expectedremove')) data['/expected'] = [
     { key: 'claude|gh|/synthetic/credentials|example.test', agent: 'claude', reader: 'gh', path: '/synthetic/credentials', dest: 'example.test', created_at: iso(60000), hits: 2 },
     { key: 'claude|*|/synthetic/.env.test|*', scope: 'file', agent: 'claude', reader: '*', path: '/synthetic/.env.test', dest: '*', created_at: iso(60000), hits: 0 },
@@ -15,25 +16,14 @@
   let bookCleanup = () => {};
   let contextRuleReads = 0;
   const contextRules = data['/expected-egress'].rules;
-  if (scenarios.has('attentionactionfocus') || scenarios.has('attentionactionmanual')) {
-    const group = data['/posture'].groups.find(group => group.items.some(item => item.kind === 'guard'));
-    const guard = {...group.items.find(item => item.kind === 'guard')};
-    data['/posture'] = {...data['/posture'],needs_you:1,items:[guard],groups:[{...group,items:[guard]}]};
-    let facts = 0;
-    window.__attentionActionFocusRefresh = (mode = 'facts') => {
-      guard.detail = `Recorded guard facts ${++facts}`;
-      if (mode === 'remove') guard.available_scopes = guard.available_scopes.filter(scope => scope.expiry !== '24h');
-      window.SA.t.posture = data['/posture'];
-      window.SA.reconcileAttention();
-    };
-  }
-  if (scenarios.has('attentionremodel')) {
-    const ids = scenarios.has('attentionfinal') ? ['flag-1'] : ['flag-1', 'flag-2'];
-    const items = ids.map(id => ({kind:'flag', id, priority:2, title:'Fixture attention ' + id, detail:'Recorded fixture evidence'}));
-    data['/posture'] = {...data['/posture'], needs_you:items.length, items,
-      groups:[{key:'fixture-attention',agent:'codex',items}]};
-  }
 
+
+  if (scenarios.has('readinglong')) {
+    const session = data['/sessions'].find(session => session.id === 'sess-codex-3');
+    session.repo = 'session-workbench-complete-reading-identity-navigation';
+    session.branch = 'feat/long-session-reading-context';
+    session.workspace = '/workspace/session-workbench-complete-reading-identity-navigation';
+  }
 
   // ---------- failure-mode simulation ----------
   // These modes reproduce the exact "trouble connecting" regressions:
@@ -49,22 +39,11 @@
   //   tokenseed    — pre-seed sessionStorage (simulates a RELOADED tab: no
   //                  #ct fragment, token must come from storage).
   if (scenarios.has('incidentremediation')) {
-    const inc = data['/incidents'][0];
-    const item = {id:'key',name:'Fixture credential',category:'ENV_SECRETS',path:'/workspace/.env',risk:'HIGH',description:'Fixture only',action:'Revoke the affected credential in its provider console'};
-    inc.rotate_list = [item];
-    inc.remediation = {revision:1,evidence_revision:'fixture-evidence',steps:[
-      {id:'fixture-reported',item,status:'reported',verification:'unverified',reported_at:iso(10000),newer_evidence:true},
-      {id:'fixture-pending',item:{...item,name:'Second fixture credential',path:'/workspace/second/.env'},status:'pending',verification:'unverified',newer_evidence:false}
-    ]};
     setTimeout(async () => { await window.openIncidentReport('fixture-source-alias'); stamp('incident-remediation-probe', document.querySelector('.incident-remediation [data-action]')?.dataset.id || 'missing'); }, 500);
   }
   let authRecoveryExpired = false;
   let authRecoveryMutations = 0;
   let networkRecoveryUnreachable = false;
-  if (scenarios.has('filteredscope')) {
-    data['/flags'].push({ ...data['/flags'][0], id: 'history-broad-only', ts: iso(2 * 3600000) });
-    data['/events'].push({ ...data['/events'][0], ts: iso(2 * 3600000), detail: 'Broad-only history row' });
-  }
   const REQUIRE_TOKEN = scenarios.has('requiretoken');
   // expectdemo: Egress → Expect this destination retires the episode's
   // choices before POST /expected-egress answers; the posture queue is not
@@ -488,11 +467,20 @@
     rule_id: 'sensitive-read-then-connect', resource_path: '/synthetic/credentials', operation: 'read-connect',
     destination: 'example.test:443', created_at: iso(60000), expires_at: new Date(now+86400000).toISOString(),
     ...(scenarios.has('unknownscope') ? {} : { applicability: { label: 'Timed permission', revoke: true } }) }];
-  if (scenarios.has('reviewresult')) {
-    const review = data['/reviews'].reviews[0];
-    const item = {kind:'review',id:review.id,priority:2,title:'Recorded read and connection',review};
-    data['/posture'] = {...data['/posture'],needs_you:1,items:[item],
-      groups:[{key:'review-result',agent:'claude',items:[item]}]};
+  if (scenarios.has('attentionactionfocus') || scenarios.has('attentionactionmanual')) {
+    let facts = 0;
+    window.__attentionActionFocusRefresh = (mode = 'facts') => {
+      const detail = `Recorded guard facts ${++facts}`;
+      const posture = data['/posture'];
+      const guards = new Set([...posture.items, ...posture.groups.flatMap(group => group.items)]
+        .filter(item => item.kind === 'guard'));
+      for (const guard of guards) {
+        guard.detail = detail;
+        if (mode === 'remove') guard.available_scopes = guard.available_scopes.filter(scope => scope.expiry !== '24h');
+      }
+      window.SA.t.posture = posture;
+      window.SA.reconcileAttention();
+    };
   }
   stamp('fixture-posture', JSON.stringify(data['/posture']));
   const fixtureReads = {};
@@ -769,7 +757,7 @@
       };
     }
     // Dense workbench pages exercise real scroll anchoring and focus continuity.
-    if ((scenarios.has('sessionworkbench') || scenarios.has('authhistory')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
+    if ((scenarios.has('sessionworkbench') || scenarios.has('readingdemo') || scenarios.has('authhistory')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
       const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
       const start = before ? -30 : 0;
       const rows = Array.from({ length: before ? 30 : 90 }, (_, i) => ({ id: 'wb-row-' + (start + i),
@@ -1424,6 +1412,76 @@
       openTab('events');
     }, 4000);
   }
+  if (scenarios.has('readingdemo')) {
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(async () => {
+      const receipt = {};
+      const settle = async () => {
+        let previous = '', dimensions;
+        for (let attempt = 0; attempt < 6; attempt++) {
+          const panel = document.getElementById('session-board-panel');
+          const body = document.querySelector('#session-detail .session-detail-body');
+          const paragraph = body?.querySelector('.sm-content p, .sd-outcome p, .sm-state');
+          const line = paragraph ? parseFloat(getComputedStyle(paragraph).lineHeight) || 18 : 18;
+          const style = body && getComputedStyle(body);
+          const budget = Math.ceil(8 * line + 44 + (parseFloat(style?.paddingTop) || 0) + (parseFloat(style?.paddingBottom) || 0));
+          const rect = body?.getBoundingClientRect(), bounds = panel.getBoundingClientRect();
+          dimensions = { mode: window.SA.sessionView, budget, clientHeight: body?.clientHeight,
+            bodyTop: rect?.top, bodyBottom: rect?.bottom, panelTop: bounds.top, panelBottom: bounds.bottom,
+            chromeHeight: panel.querySelector('.session-detail-chrome')?.getBoundingClientRect().height };
+          const valid = body && body.clientHeight >= budget - 2 && rect.top >= bounds.top && rect.bottom <= bounds.bottom + 1;
+          const current = JSON.stringify(dimensions);
+          if (valid && current === previous) {
+            (receipt.dimensions ||= {})[window.SA.sessionView] = dimensions;
+            return;
+          }
+          previous = valid ? current : '';
+          // Virtual-time timers can outrun compositor frames. A pending HTTP
+          // checkpoint yields to native animation frames and ResizeObserver.
+          if (attempt < 5) {
+            const response = await readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+            if (!response.ok) throw new Error('Session reading frame checkpoint failed: ' + response.status);
+          }
+        }
+        throw new Error('Session reading layout did not settle: ' + JSON.stringify(dimensions));
+      };
+      try {
+        await window.selectSession('sess-codex-3'); await settle();
+        const panel = document.getElementById('session-board-panel');
+        const measure = () => {
+          const body = document.querySelector('#session-detail .session-detail-body');
+          const text = body.querySelector('.sm-content p, .sd-outcome p, .sm-state');
+          const line = text ? parseFloat(getComputedStyle(text).lineHeight) || 18 : 18;
+          const style = getComputedStyle(body);
+          const budget = Math.ceil(8 * line + 44 + (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0));
+          const rect = body.getBoundingClientRect(), bounds = panel.getBoundingClientRect();
+          return body.clientHeight >= budget - 2 && rect.top >= bounds.top && rect.bottom <= bounds.bottom + 1;
+        };
+        receipt.memoryBudget = measure();
+        const body = document.querySelector('#session-detail .session-detail-body');
+        receipt.contextInBody = !!body.querySelector('[data-session-part="session-context"] details.session-metadata')
+          && !document.querySelector('.session-detail-chrome .session-metadata');
+        receipt.latest = body.scrollHeight - body.clientHeight - body.scrollTop < 64;
+        document.querySelector('[data-action="session-status"]').click();
+        await settle();
+        receipt.currentContext = body.scrollTop === 0 && body.querySelector('.session-context').getBoundingClientRect().top < body.getBoundingClientRect().bottom;
+        const chrome = document.querySelector('.session-detail-chrome');
+        const before = chrome.getBoundingClientRect().height;
+        body.querySelector('details.session-metadata').open = true; await settle();
+        receipt.detailsBudget = measure();
+        receipt.detailsDoNotGrowChrome = Math.abs(chrome.getBoundingClientRect().height - before) < 1;
+        receipt.fullTitleRow = !document.querySelector('.session-detail-head [data-action="copy-report"]');
+        const narrow = matchMedia('(max-width:900px)').matches;
+        receipt.toolbar = (getComputedStyle(panel.querySelector('.session-toolbar')).display === 'none') === narrow;
+        receipt.actions = !narrow || Array.from(chrome.querySelectorAll('.sd-back, .sd-export, .sd-view, [data-action="session-status"]')).every(button => button.getBoundingClientRect().height >= 44);
+        for (const mode of ['results','trace']) {
+          await window.setSessionView(mode); await settle(); receipt[mode + 'Budget'] = measure();
+        }
+        receipt.fits = document.documentElement.scrollWidth <= document.documentElement.clientWidth;
+      } catch (error) { receipt.error = error.message; }
+      document.body.dataset.sessionReading = JSON.stringify(receipt);
+    }, 2500);
+  }
   if (scenarios.has('sessionworkbench')) {
     setTimeout(() => openTab('sessions'), 1500);
     setTimeout(async () => {
@@ -1649,7 +1707,7 @@
         write: async (items) => record(await (await items[0].getType('text/plain')).text())
       }
     });
-    setTimeout(() => document.querySelector('.session-detail-head [data-action="copy-report"]').click(), 9000);
+    setTimeout(() => document.querySelector('.session-detail-chrome [data-action="copy-report"]').click(), 9000);
   }
   // Auto-action: resolve the guard request once; the unified queue must
   // refresh and remove that blocked tool call. The styled confirm dialog

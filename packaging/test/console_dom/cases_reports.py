@@ -181,15 +181,17 @@ def run_detail_head(page):
 def run_detail_chrome_keeps_copy_report_reachable_and_the_copyable_path_in_expandable_details(page):
     check = page.check
     dom_rail = page.fixture('dom_rail')
-    detail_chrome = dom_rail.split('class="session-detail-chrome"', 1)[1].split('class="session-detail-body"', 1)[0]
-    metadata = detail_chrome.split('class="session-metadata"', 1)[1].split('</details>', 1)[0]
+    detail_node = dom_query(dom_rail).find(None, {'id': 'session-detail'})
+    detail_chrome = detail_node.find(None, {'class': 'session-detail-chrome'})
+    detail_body = detail_node.find(None, {'class': 'session-detail-body'})
+    metadata = detail_body.find('details', {'class': 'session-metadata'})
     check(
-        'detail chrome keeps Copy report reachable and the copyable path in expandable Details',
+        'detail chrome keeps Copy report reachable; scrolling context retains expandable Details and copyable path',
         (
-            'data-action="copy-report" data-id="sess-claude-1"' in detail_chrome.split('class="sd-detail-controls"', 1)[0]
-            and '>Copy report</button>' in detail_chrome
-            and '<summary>Details</summary>' in metadata
-            and dom_query(metadata).has(None, {'data-action': 'copy-path', 'data-path': '/Users/dev/workspace/api-service'})
+            detail_chrome.has(None, {'data-action': 'copy-report', 'data-id': 'sess-claude-1'})
+            and 'Copy report' in detail_chrome.text and not detail_chrome.has(None, {'class': 'session-metadata'})
+            and metadata is not None and metadata.has('summary')
+            and metadata.has(None, {'data-action': 'copy-path', 'data-path': '/Users/dev/workspace/api-service'})
         ),
     )
 

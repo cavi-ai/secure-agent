@@ -336,6 +336,72 @@ def scoped_review(now_ms=None):
     }], "degraded": False}}}
 
 
+def review_result(now_ms=None):
+    spec = scoped_review(now_ms)
+    review = spec["payloads"]["/reviews"]["reviews"][0]
+    item = {"kind": "review", "id": review["id"], "priority": 2,
+            "title": "Recorded read and connection", "review": review}
+    spec["patches"] = _fields("/posture", [], {
+        "needs_you": 1, "items": [item],
+        "groups": [{"key": "review-result", "agent": "claude", "items": [item]}],
+    })
+    return spec
+
+
+def attention_focus(now_ms=None):
+    now, _ = _clock(now_ms)
+    guard = {
+        "kind": "guard", "priority": 5, "id": "guard-1", "title": "Guard decision",
+        "detail": "Read wants access to /workspace/api-service/.env",
+        "rule": "cloud-creds", "path": "/workspace/api-service/.env",
+        "available_scopes": [{"kind": "once"}, {"kind": "session"},
+                             {"kind": "exact", "expiry": "24h"}, {"kind": "exact", "expiry": "7d"}],
+        "scopeText": "Future permissions cover this file, tool, workspace and observed executable path. Revoke under Protection → Rules & permissions.",
+    }
+    group = {"key": "session:5821:1789480800000000000", "label": "api-service", "agent": "claude",
+             "workspace": "/Users/dev/workspace/api-service", "rootPid": 5821, "pids": [5821, 5822],
+             "rssBytes": 5905580032, "cpuPercent": 132.5, "processCount": 2, "items": [guard]}
+    return {"now": now, "patches": _fields("/posture", [], {"needs_you": 1, "items": [guard], "groups": [group]})}
+
+
+def grouped_attention(now_ms=None, *, final=False):
+    now, _ = _clock(now_ms)
+    ids = ["flag-1"] if final else ["flag-1", "flag-2"]
+    items = [{"kind": "flag", "id": key, "priority": 2, "title": "Fixture attention " + key,
+              "detail": "Recorded fixture evidence"} for key in ids]
+    return {"now": now, "patches": _fields("/posture", [], {
+        "needs_you": len(items), "items": items,
+        "groups": [{"key": "fixture-attention", "agent": "codex", "items": items}],
+    })}
+
+
+def incident_remediation(now_ms=None):
+    now, iso = _clock(now_ms)
+    item = {"id": "key", "name": "Fixture credential", "category": "ENV_SECRETS", "path": "/workspace/.env",
+            "risk": "HIGH", "description": "Fixture only", "action": "Revoke the affected credential in its provider console"}
+    remediation = {"revision": 1, "evidence_revision": "fixture-evidence", "steps": [
+        {"id": "fixture-reported", "item": item, "status": "reported", "verification": "unverified",
+         "reported_at": iso(10000), "newer_evidence": True},
+        {"id": "fixture-pending", "item": {**item, "name": "Second fixture credential", "path": "/workspace/second/.env"},
+         "status": "pending", "verification": "unverified", "newer_evidence": False},
+    ]}
+    return {"now": now, "patches": _fields("/incidents", [0], {"rotate_list": [item], "remediation": remediation})}
+
+
+def filtered_history(now_ms=None):
+    now, iso = _clock(now_ms)
+    flag = {"id": "history-broad-only", "rule": "proxy-secret-leak", "agent": "cursor", "pid": 6033,
+            "severity": 3, "session_id": "b81d4fae-7dec-11d0-a765-00a0c91e6bf6", "ts": iso(2 * 3600000),
+            "evidence": [{"kind": "violation", "label": "proxy-secret-leak: anthropic-key", "sub": "payload inspection"},
+                         {"kind": "connect", "label": "logs.example.com:443", "sub": "destination"}],
+            "advisor": {"assessment": "suspicious", "confidence": 0.7,
+                        "rationale": "host is not a known vendor; first time this session", "suggested_action": "review once"}}
+    event = {"kind": 9, "ts": iso(2 * 3600000), "pid": 6033, "detail": "Broad-only history row",
+             "session_id": "b81d4fae-7dec-11d0-a765-00a0c91e6bf6"}
+    return {"now": now, "patches": [{"route": "/flags", "path": [], "append": [flag]},
+                                   {"route": "/events", "path": [], "append": [event]}]}
+
+
 def routine_review(now_ms=None):
     now, _ = _clock(now_ms)
     return {"now": now, "payloads": {"/routine": [{

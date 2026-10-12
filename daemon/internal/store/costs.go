@@ -1,7 +1,6 @@
 package store
 
 import (
-	"fmt"
 	"log"
 	"maps"
 	"slices"
@@ -94,9 +93,9 @@ func ValidCostGroup(by string) bool {
 
 // costFrom leaves out `<synthetic>` rows: Claude Code's zero-usage internal
 // turns, recorded as model calls before ingest dropped them.
-const costFrom = ` FROM events e LEFT JOIN sessions s ON s.id = e.session_id
+var costFrom = ` FROM events e LEFT JOIN sessions s ON s.id = e.session_id
 	WHERE e.kind = 14 AND COALESCE(e.model,'') != '<synthetic>'
-	AND datetime(e.ts) >= datetime(?) AND datetime(e.ts) < datetime(?)`
+	AND ` + instantSinceSQL("e.ts") + ` AND ` + instantBeforeSQL("e.ts")
 
 // CostReport sums model calls (kind 14) in [since, until) grouped by repo,
 // branch, harness, session, model, provider or local day. An unknown grouping
@@ -105,8 +104,7 @@ func (s *Store) CostReport(since, until time.Time, by string, opts CostOptions) 
 	if !ValidCostGroup(by) {
 		by = "repo"
 	}
-	sinceStr := since.UTC().Format(time.RFC3339Nano)
-	untilStr := until.UTC().Format(time.RFC3339Nano)
+	window := append(instantBound(since), instantBound(until)...)
 	rep := CostReport{
 		Since: since.UTC().Format(time.RFC3339),
 		Until: until.UTC().Format(time.RFC3339),
@@ -123,17 +121,17 @@ func (s *Store) CostReport(since, until time.Time, by string, opts CostOptions) 
 		keyExpr = costDayExpr(opts.TZMinutes)
 	case "provider":
 		// ProviderFor is caller code: it runs with s.mu released.
-		keyExpr, keyArgs = costProviderExpr(opts.ProviderFor, s.costProviderModels(opts.ProviderFor, sinceStr, untilStr))
+		keyExpr, keyArgs = costProviderExpr(opts.ProviderFor, s.costProviderModels(opts.ProviderFor, window))
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	windowArgs := func(extra ...any) []any {
-		return append(append(slices.Clone(keyArgs), sinceStr, untilStr), extra...)
+		return append(append(slices.Clone(keyArgs), window...), extra...)
 	}
 
 	t := &rep.Total
-	if err := s.db.QueryRow(`SELECT `+aggregates+costFrom, sinceStr, untilStr).
+	if err := s.db.QueryRow(`SELECT `+aggregates+costFrom, window...).
 		Scan(&t.Calls, &t.Sessions, &t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Unpriced); err != nil {
 		log.Printf("store: cost total error: %v", err)
 		return rep
@@ -203,19 +201,19 @@ func costDayExpr(tzMinutes int) string {
 	if tzMinutes < -MaxTZMinutes || tzMinutes > MaxTZMinutes {
 		tzMinutes = 0
 	}
-	return fmt.Sprintf(`substr(datetime(e.ts,'%+d minutes'),1,10)`, tzMinutes)
+	return instantDayExpr("e.ts", tzMinutes)
 }
 
 // costProviderModels lists the distinct model ids in the window with no
 // recorded provider, or nil when providerFor is nil. It takes s.mu.
-func (s *Store) costProviderModels(providerFor func(string) string, sinceStr, untilStr string) []string {
+func (s *Store) costProviderModels(providerFor func(string) string, window []any) []string {
 	if providerFor == nil {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(`SELECT DISTINCT COALESCE(e.model,'') AS m`+costFrom+`
-		AND COALESCE(e.provider,'') = '' ORDER BY m`, sinceStr, untilStr)
+		AND COALESCE(e.provider,'') = '' ORDER BY m`, window...)
 	if err != nil {
 		log.Printf("store: cost provider models error: %v", err)
 		return nil
