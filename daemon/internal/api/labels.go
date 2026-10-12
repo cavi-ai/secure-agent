@@ -51,6 +51,7 @@ func (a *API) recordLabel(l model.OperatorLabel) {
 		return
 	}
 	l.CreatedAt = time.Now()
+	// Best effort beside the action that triggered it; a failed write stays in write health.
 	_ = a.store.PutOperatorLabelResult(l)
 }
 
