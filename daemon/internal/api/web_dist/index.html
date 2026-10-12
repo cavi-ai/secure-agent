@@ -775,6 +775,18 @@
       </div>
     </main>
   </div>
+  <!-- Agent dock: the Agent tab's conversation beside the current page. -->
+  <aside id="agent-dock" class="agent-dock" aria-labelledby="agent-dock-title" hidden>
+    <header class="agent-dock-head">
+      <h3 id="agent-dock-title"><svg class="icon"><use href="#i-chat"/></svg><span>Secure Agent</span></h3>
+      <span class="agent-dock-state" id="agent-dock-state"></span>
+      <div class="agent-dock-actions">
+        <button type="button" class="btn btn-ghost btn-sm" data-action="agent-dock-expand">Open Agent tab</button>
+        <button type="button" class="btn btn-icon" data-action="agent-dock-close" aria-label="Close the agent panel"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>
+    </header>
+    <div class="agent-dock-body" id="agent-dock-body"></div>
+  </aside>
   <!-- Inspector docks when space permits; smaller viewports use a modal detail pane. -->
   <div id="drawer" class="drawer" hidden>
     <aside class="drawer-panel" role="complementary" aria-labelledby="drawer-title">

@@ -12,6 +12,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Settings: add, edit, and remove File Guard paths and Egress Firewall patterns, with validation and persistent saves.
 - API: `{"repo"}` on `POST /worktrees/advise` and `POST /agent/worktree` covers a whole repository.
 - Worktrees: **Ask advisor about all** and **Discuss all** on each repository group, counted over every row; the advisor gets one note at a time.
+- Console: **Discuss** opens the agent conversation in a panel docked beside the page.
 - Worktrees: a legend under the summary names the three Remove looks.
 
 ### Changed

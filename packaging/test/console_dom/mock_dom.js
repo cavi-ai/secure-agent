@@ -2381,6 +2381,42 @@
       if (btn) btn.click();
     }, scenarios.has('discussoff') ? 9000 : 3000);
   }
+  // dockcycle: Discuss opens the dock; the inspector drawer replaces it and
+  // Discuss again replaces the drawer; Escape while typing keeps it; Close
+  // returns the conversation to the Agent tab and focus to Discuss. Each
+  // step's state is stamped as JSON on #dock-cycle.
+  if (scenarios.has('dockcycle')) {
+    const state = () => {
+      const chat = document.getElementById('agent-chat');
+      const thread = document.getElementById('agent-thread');
+      return {
+        dock: !document.getElementById('agent-dock').hidden,
+        drawer: !document.getElementById('drawer').hidden,
+        chat: chat.parentElement.id || chat.parentElement.className,
+        tab: (document.querySelector('.tab-btn.active') || {}).dataset?.tab,
+        focus: document.activeElement.id || (document.activeElement.dataset || {}).action || document.activeElement.tagName,
+        end: thread.scrollHeight - thread.scrollTop - thread.clientHeight < 4,
+      };
+    };
+    const steps = {};
+    const discuss = () => document.querySelector('#worktrees-container .wt-row.wt-review [data-action="worktree-discuss"]');
+    setTimeout(() => { discuss().focus(); discuss().click(); }, 3000);
+    setTimeout(() => { steps.open = state(); document.querySelector('[data-action="worktrees-history"]').click(); }, 4500);
+    setTimeout(() => { steps.drawer = state(); discuss().focus(); discuss().click(); }, 5500);
+    setTimeout(() => {
+      steps.reopen = state();
+      const input = document.getElementById('agent-input');
+      input.value = 'half typed';
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    }, 7000);
+    setTimeout(() => {
+      steps.typing = state();
+      document.getElementById('agent-input').value = '';
+      document.querySelector('[data-action="agent-dock-close"]').click();
+    }, 7500);
+    setTimeout(() => { steps.closed = state(); stamp('dock-cycle', JSON.stringify(steps)); }, 8000);
+  }
   if (scenarios.has('worktreedemo')) {
     setTimeout(() => {
       const btn = document.querySelector('#worktrees-container [data-action="worktree-remove"]');

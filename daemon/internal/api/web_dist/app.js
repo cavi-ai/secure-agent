@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.classList.add(cached ? 'is-paused' : 'is-ended');
     const ended = document.getElementById('session-ended');
     recoveryFocus = document.activeElement;
-    document.querySelectorAll('.app > *, .masthead-right, #drawer, #confirm-layer').forEach(el => {
+    document.querySelectorAll('.app > *, .masthead-right, #drawer, #agent-dock, #confirm-layer').forEach(el => {
       if (el !== ended && !el.classList.contains('masthead')) {
         pausedElements.set(el, { inert: el.inert, hidden: el.hidden });
         el.inert = true;
@@ -79,6 +79,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // The drawer is a single reusable surface: title + body + optional footer
   // actions. Only one is open at a time; closing restores focus to the opener.
   let drawerOpener = null;
+  // Agent dock state (openAgentDock): the drawer closes it on open.
+  let agentDockOpen = false;
+  let agentDockOpener = null;
   let drawerOnClose = null;
   let drawerBack = null;
   // Bumped on every open: an async opener writes its body only while its
@@ -215,6 +218,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function openDrawer({ title, icon, body, foot, variant, onClose, back, attentionOrigin }) {
     if (!drawer) return false;
+    closeAgentDock();
     // A drawer opened from inside the open one keeps the original opener, so
     // closing still returns focus to the page.
     if (drawer.hidden) drawerOpener = document.activeElement;
@@ -1071,6 +1075,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function panelOnScreen(name) {
     const v = PANEL_VIEW[name];
     if (!v) return true;
+    // The docked conversation is on screen over any tab.
+    if (name === 'agent' && agentDockOpen) return true;
     const [route, group] = v.split(':');
     const [tab, sub] = route.split('/');
     if (tab !== activeTab || (sub && sub !== (tab === 'protection' ? activeProtection : tab === 'system' ? activeSystemSub : activeSub))) return false;
@@ -1535,6 +1541,68 @@ document.addEventListener('DOMContentLoaded', () => {
   // Literal paths: the proxy's console allow-list test reads them from here.
   const AGENT_PATHS = { status: '/agent/status', chat: '/agent/chat', plans: '/agent/plans', runs: '/agent/runs', recommendations: '/agent/recommendations' };
   let agentPollTimer = null;
+  // Agent dock: the Agent tab's conversation (#agent-chat) moved beside the
+  // current page, so asking about a worktree does not navigate away. It and
+  // the inspector drawer share the right edge: one is open at a time.
+  const agentDockNarrow = window.matchMedia ? window.matchMedia('(max-width: 900px)') : null;
+  // Below 900px the dock covers the page instead of narrowing it.
+  function syncAgentDockInert() {
+    const app = document.querySelector('.app');
+    if (app && !sessionEnded) app.inert = agentDockOpen && !!(agentDockNarrow && agentDockNarrow.matches);
+  }
+  agentDockNarrow?.addEventListener('change', syncAgentDockInert);
+  // Moving the conversation resets its scroll; it reopens at the newest message.
+  function agentThreadToEnd() {
+    const thread = document.getElementById('agent-thread');
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }
+  function openAgentDock() {
+    const dock = document.getElementById('agent-dock');
+    const chat = document.getElementById('agent-chat');
+    const body = document.getElementById('agent-dock-body');
+    if (activeTab === 'agent' || !dock || !chat || !body) {
+      switchTab('agent');
+      return;
+    }
+    closeDrawer();
+    if (!agentDockOpen) agentDockOpener = document.activeElement;
+    if (chat.parentElement !== body) body.appendChild(chat);
+    dock.hidden = false;
+    agentDockOpen = true;
+    document.body.classList.add('agent-docked');
+    syncAgentDockInert();
+    markDirty('agent');
+    agentThreadToEnd();
+    loadAgent();
+    const input = document.getElementById('agent-input');
+    if (input) input.focus({ preventScroll: true });
+  }
+  // restoreFocus returns focus to what opened the dock (Close, Escape); a
+  // move to the Agent tab focuses there instead.
+  function closeAgentDock(restoreFocus = false) {
+    if (!agentDockOpen) return;
+    const dock = document.getElementById('agent-dock');
+    const chat = document.getElementById('agent-chat');
+    const layout = document.querySelector('#tab-agent .agent-layout');
+    if (chat && layout) layout.insertBefore(chat, layout.firstChild);
+    if (dock) dock.hidden = true;
+    agentDockOpen = false;
+    document.body.classList.remove('agent-docked');
+    syncAgentDockInert();
+    agentThreadToEnd();
+    const opener = agentDockOpener;
+    agentDockOpener = null;
+    if (restoreFocus && opener && opener.isConnected) opener.focus({ preventScroll: true });
+  }
+  document.addEventListener('keydown', e => {
+    const dock = document.getElementById('agent-dock');
+    if (e.key !== 'Escape' || e.defaultPrevented || sessionEnded || !agentDockOpen || !dock || !dock.contains(document.activeElement)) return;
+    // Escape while writing a message keeps the panel.
+    const a = document.activeElement;
+    if (a.matches('textarea, input') && a.value) return;
+    e.preventDefault();
+    closeAgentDock(true);
+  });
   const agentComposer = document.getElementById('agent-composer');
   const agentInput = document.getElementById('agent-input');
   const agentHarnessSelect = document.getElementById('agent-harness');
@@ -1544,6 +1612,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let agentActivePane = '';
   function setAgentPanel(pane, toggle = false) {
     if (pane && !['queue', 'history', 'tools'].includes(pane)) return;
+    // The queue, history and tools live in the Agent tab: show it.
+    if (pane && agentDockOpen) switchTab('agent');
     if (toggle && pane === agentActivePane) pane = '';
     const previous = agentActivePane;
     agentActivePane = pane;
@@ -1609,7 +1679,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (wasBusy) loadAgent(['chat', 'plans', 'runs', 'recommendations']);
       return;
     }
-    if (agentPollTimer || activeTab !== 'agent' || agentState.polls >= AGENT_POLL_LIMIT) return;
+    if (agentPollTimer || (activeTab !== 'agent' && !agentDockOpen) || agentState.polls >= AGENT_POLL_LIMIT) return;
     agentState.polls++;
     agentPollTimer = setTimeout(() => {
       agentPollTimer = null;
@@ -1630,6 +1700,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const enabled = !!(st && st.enabled);
     const stateEl = document.getElementById('agent-state');
     if (stateEl) stateEl.textContent = agentState.error || agentStateText(st);
+    const dockStateEl = document.getElementById('agent-dock-state');
+    if (dockStateEl) dockStateEl.textContent = agentState.error || agentStateText(st);
     const advisorStateEl = document.getElementById('advisor-state');
     if (advisorStateEl) advisorStateEl.textContent = advisorStateText(telemetryData.status && telemetryData.status.advisor_health);
     const unavailable = !enabled || !!(st && st.reason) || agentBusy();
@@ -1866,6 +1938,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function switchTab(id, opts = {}) {
     if (protectionContext && !opts.keepProtectionContext) clearProtectionContext();
     const r = resolveConsoleRoute(id);
+    // The Agent tab shows the conversation itself: take it back from the dock.
+    if (r.tab === 'agent') closeAgentDock();
     const from = activeTab;
     activeTab = r.tab;
     document.body.classList.toggle('agent-page', activeTab === 'agent');
@@ -2541,7 +2615,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Discuss: the daemon writes the question from the worktree's fresh facts
   // (a repository's, from its cached report) and the local model answers in
-  // the Agent tab's conversation. target is {path} or {repo}.
+  // the conversation, docked beside the page. target is {path} or {repo}.
   async function discussWorktreeTarget(target) {
     try {
       const res = await agentFetch('/agent/worktree', { method: 'POST', body: target });
@@ -2555,7 +2629,7 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast(err.message || String(err), 'danger');
       return;
     }
-    switchTab('agent');
+    openAgentDock();
   }
   window.discussWorktree = path => discussWorktreeTarget({ path });
   window.discussWorktreeGroup = repo => discussWorktreeTarget({ repo });
@@ -4273,6 +4347,15 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'worktree-discuss':
         e.preventDefault();
         window.discussWorktree(d.path);
+        break;
+      case 'agent-dock-close':
+        e.preventDefault();
+        closeAgentDock(true);
+        break;
+      case 'agent-dock-expand':
+        e.preventDefault();
+        switchTab('agent');
+        document.getElementById('agent-input')?.focus({ preventScroll: true });
         break;
       case 'worktree-review-trash':
         e.preventDefault();
