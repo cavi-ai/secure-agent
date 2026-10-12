@@ -192,7 +192,7 @@ test('Protection subviews retain selected ARIA and visibility without receiving 
   const history = {replaceState(_a, _b, url) { hashes.push(url); }};
   const runtime = {document, window:{history}, history, location:{pathname:'/console',search:''},
     sessionStorage:{setItem(key, value){saved.set(key,value);}},
-    activeTab:'home', activeSub:'board', activeProtection:'traffic', activeSystemSub:'worktrees', attentionSelection:null, protectionContext:null, clearProtectionContext(){},
+    activeTab:'home', activeSub:'board', activeProtection:'traffic', activeSystemSub:'worktrees', detailDrawer:{selection:()=>null}, protectionContext:null, clearProtectionContext(){},
     PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){}};
   vm.createContext(runtime);
   vm.runInContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), runtime);
@@ -302,7 +302,7 @@ test('returning to a pending System report resumes bounded followup after its hi
     document:{body:{classList:{toggle(){}}}, querySelectorAll:() => [], getElementById:() => null},
     window:{history:{}}, sessionStorage:{setItem(){}},
     activeTab:'home', activeSub:'board', activeProtection:'traffic', activeSystemSub:'worktrees',
-    attentionSelection:null, protectionContext:null,
+    detailDrawer:{selection:()=>null}, protectionContext:null,
     PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){},
     setTimeout(fn,delay){const id=++timerID; timers.set(id,{fn,delay}); return id;}, clearTimeout(id){timers.delete(id);},
   };

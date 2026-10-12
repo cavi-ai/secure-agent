@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
+import {loadDrawer} from './drawer-harness.mjs';
 
 const lib=readFileSync(new URL('../../../daemon/internal/api/web_dist/lib.js',import.meta.url),'utf8');
 const app=readFileSync(new URL('../../../daemon/internal/api/web_dist/app.js',import.meta.url),'utf8');
@@ -182,21 +183,19 @@ test('dismissing the result clears feedback without issuing another decision',as
 
 test('evidence navigation returns to its original receipt and cannot cross authentication',()=>{
  const first={receipt,review:record};
- const drawers=[];
- const ctx=reviewController({reviewResult:first,drawerReviewResult:null,drawerMode:null,
-  drawer:{hidden:false},drawerBack:null,attentionSelection:null,openDrawer:options=>drawers.push(options)});
- const start=app.indexOf('  function currentDrawerBack()'),end=app.indexOf('  function fillFamilyDrawer()',start);
- vm.runInContext(app.slice(start,end),ctx);
+ const ctx=reviewController({reviewResult:first});
+ const h=loadDrawer({deps:{collaborators:{auth:{ended:()=>ctx.sessionEnded,generation:()=>ctx.handoffGeneration}}}});
+ ctx.detailDrawer=h.api;
  ctx.window.openReviewResult();
- const back=ctx.currentDrawerBack();
+ const back=h.api.back();
  assert.equal(back.label,'Review result');
  ctx.reviewResult={receipt:{...receipt,id:'new-review',revision:4},review:{...record,context:{resources:['new target']}}};
  back.reopen();
- assert.match(drawers[1].body,/&lt;credentials&gt;/);assert.match(drawers[1].body,/revision 2/);
- assert.doesNotMatch(drawers[1].body,/new target|revision 4/);
+ assert.match(h.dom.body.innerHTML,/&lt;credentials&gt;/);assert.match(h.dom.body.innerHTML,/revision 2/);
+ assert.doesNotMatch(h.dom.body.innerHTML,/new target|revision 4/);
  ctx.handoffGeneration++;
  back.reopen();
- assert.equal(drawers.length,2);
+ assert.equal(h.calls.closedDocks,2);
 });
 
 function home(records, flags = []) {
@@ -218,7 +217,7 @@ test('Home review row keeps revision-bound actions and its evidence detail',()=>
  assert.match(html,/data-action="select-attention" data-need-kind="review" data-need-id="context"/);assert.match(html,/Model-visible read/);
  const start=app.indexOf('  function selectAttention('),end=app.indexOf('  function attentionSignature',start);
  let inspector; Object.assign(ctx,{attentionItems:()=>[{kind:'review',id:record.id,review:record,group:{agent:'codex'}}],
-  drawerBody:{querySelectorAll:()=>[]},attentionGeneration:0,attentionSignature:()=> 'fixture',btnDrawerCopy:{hidden:false},openDrawer:options=>{inspector=options},renderAttention:()=>{}});
+  drawerBody:{querySelectorAll:()=>[]},attentionGeneration:0,attentionSignature:()=> 'fixture',detailDrawer:{setMode(){},setCopyVisible(){},open:options=>{inspector=options}},renderAttention:()=>{}});
  vm.runInContext(app.slice(start,end),ctx);ctx.selectAttention('review:context');
  assert.match(inspector.body,/View supporting evidence/);assert.match(inspector.body,/Model-visible read/);
  assert.match(inspector.foot,/data-revision="2"/);assert.equal(inspector.attentionOrigin.key,'review:context');
