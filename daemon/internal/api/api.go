@@ -1228,7 +1228,12 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, a.mutePairs())
+		mutes, err := a.mutes.LoadResult()
+		if err != nil {
+			http.Error(w, "Muted hosts are unavailable. Refresh before changing policy.", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, mutePairsFrom(mutes))
 	case http.MethodPost:
 		limitBody(w, r)
 		var req MutePair

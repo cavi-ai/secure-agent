@@ -62,7 +62,12 @@ func (a *API) handleExpected(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, a.expected.List())
+		patterns, err := a.expected.ListResult()
+		if err != nil {
+			http.Error(w, "Expected patterns are unavailable. Refresh before changing policy.", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, patterns)
 	case http.MethodPost:
 		limitBody(w, r)
 		var req struct {
