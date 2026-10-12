@@ -2227,9 +2227,21 @@ function policyListHTML(kind, rows, st) {
 function permissionChoiceLabel(choice, prefix = 'Expected') {
   return `${prefix} ${choice.kind === 'once' ? 'once' : choice.kind === 'session' ? 'for this session' : choice.expiry === '7d' ? 'for 7 days' : 'for 24 hours'}`;
 }
+function validReviewRevision(revision) {
+  return Number.isSafeInteger(revision) && revision > 0;
+}
+function validReviewScope(scope) {
+  if (!scope) return false;
+  if (scope.kind === 'once' || scope.kind === 'session') return scope.expiry === undefined || scope.expiry === '';
+  return scope.kind === 'exact' && (scope.expiry === '24h' || scope.expiry === '7d');
+}
+function validReviewDecision(revision, action, scope) {
+  return validReviewRevision(revision) && (action === 'expect' ? validReviewScope(scope)
+    : (action === 'acknowledge' || action === 'close_reported') && scope == null);
+}
 function reviewPermissionItems(r) {
-  if (!r.evidence_available || r.review_state === 'closed_reported' || r.decision && r.decision.action === 'expect' && r.decision.revision === r.revision) return [];
-  return (r.available_scopes || [{kind:'once'}]).map(choice => ({label:permissionChoiceLabel(choice),
+  if (!validReviewRevision(r.revision) || !r.evidence_available || r.review_state === 'closed_reported' || r.decision && r.decision.action === 'expect' && r.decision.revision === r.revision) return [];
+  return (r.available_scopes || [{kind:'once'}]).filter(validReviewScope).map(choice => ({label:permissionChoiceLabel(choice),
     attrs:`data-action="review-decision" data-id="${escapeHTML(r.id)}" data-revision="${Number(r.revision)}" data-decision="expect" data-scope="${escapeHTML(choice.kind)}"${choice.expiry ? ` data-expiry="${escapeHTML(choice.expiry)}"` : ''}`}));
 }
 function validReviewReceipt(receipt, id, revision, action) {
@@ -2264,6 +2276,7 @@ function reviewResultHTML(result, details = false) {
       : '<p>The evidence shown before this decision is unavailable. The server receipt remains.</p>'}</div>`;
 }
 function reviewHTML(r, draft, actions = true) {
+  actions = actions && validReviewRevision(r.revision);
   const c = r.context || {}, a = r.assessment || {};
   const state = r.review_state || 'unreviewed';
   const action = decision => `data-action="review-decision" data-id="${escapeHTML(r.id)}" data-revision="${Number(r.revision)}" data-decision="${decision}"`;

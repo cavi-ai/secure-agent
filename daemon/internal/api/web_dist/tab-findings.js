@@ -334,7 +334,7 @@ function needView(item, ctx) {
       const attrs = action => `data-action="review-decision" data-id="${id}" data-revision="${Number(r.revision)}" data-decision="${action}"`;
       return { ...v, agent: r.agent || v.agent, what: (c.resources || []).join(', ') || item.title,
         why: (r.assessment || {}).reason || '', at: r.last_seen,
-        items: r.evidence_available ? [
+        items: r.evidence_available && validReviewRevision(r.revision) ? [
           { label: 'Mark reviewed', title: 'Records this evidence revision as reviewed; risk and control outcomes stay unchanged.', attrs: attrs('acknowledge'), bar: true },
           { label: 'Report closure', attrs: attrs('close_reported') },
           ...reviewPermissionItems(r),

@@ -642,6 +642,10 @@ document.addEventListener('DOMContentLoaded', () => {
   let reviewResultSeq = 0;
   let drawerReviewResult = null;
   window.reviewAct = async function(id, revision, action, scope) {
+    if (!validReviewDecision(revision, action, scope)) {
+      showToast('Review decision unavailable. Refresh the evidence before choosing again.', 'danger');
+      return;
+    }
     const auth = handoffGeneration;
     if (scope && scope.kind !== 'once' && !await window.saConfirm('Count future activity as expected only for the recorded executable path, workspace, file and exact endpoint? ' + (scope.kind === 'session' ? 'This ends with the current session.' : `Expires after ${scope.expiry === '7d' ? '7 days' : '24 hours'}.`) + ' Firewall and payload checks remain active. Revoke under Protection → Rules & permissions.', {title:'Expected activity',okLabel:'Save permission'})) return;
     if (sessionEnded || auth !== handoffGeneration) return;
