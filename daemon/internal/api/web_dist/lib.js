@@ -2140,11 +2140,21 @@ function consoleBootState(hashToken, storedToken) {
 // policyListHTML: one read-only Policy list — guard decisions ('guard'),
 // file exceptions ('path'), muted flag classes ('mute'). st carries the
 // loading and error state; each empty list says what fills it.
+function validExpectedPatterns(records) {
+  return Array.isArray(records) && records.length <= 10000 && records.every(r => r &&
+    ['key', 'agent', 'reader', 'path', 'dest'].every(field => typeof r[field] === 'string' && r[field]) &&
+    (r.scope == null || r.scope === '' || r.scope === 'file')) &&
+    new Set(records.map(r => r.key)).size === records.length;
+}
+
 function policyListHTML(kind, rows, st) {
   const s = st || {};
-  const notice = kind === 'scope' && s.error ? '<p role="status">Last known permission records. Current status unavailable. Refresh before revoking.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh permissions</button>' : '';
+  const removal = kind === 'expected' && s.expectedRemoval;
+  const saved = removal ? `<p role="status">Exception removal saved for <code>${escapeHTML(removal.path)}</code> (${escapeHTML(removal.agent)}). Remaining exceptions and policies still apply; past activity is unchanged.</p>` : '';
+  const notice = saved + (kind === 'expected' && s.error ? '<p role="status">Current exceptions unavailable. Refresh before removing an exception.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh exceptions</button>' : '')
+    + (kind === 'scope' && s.error ? '<p role="status">Last known permission records. Current status unavailable. Refresh before revoking.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh permissions</button>' : '');
   if (!rows) {
-    if (s.error) return `<div class="empty"><span>${escapeHTML(s.error)}</span></div>`;
+    if (s.error) return `${notice}<div class="empty"><span>${escapeHTML(s.error)}</span></div>`;
     return `<div class="loading">Loading…</div>`;
   }
   const EMPTY = {
@@ -2154,7 +2164,8 @@ function policyListHTML(kind, rows, st) {
     expected: 'No expected secret reads. Expected, on a read-then-connect finding, adds one here.',
     scope: 'No scoped permissions. Choose a session or timed permission on a recorded finding or guard prompt.',
   };
-  if (!rows.length) return notice || `<div class="empty"><span>${EMPTY[kind]}</span></div>`;
+  if (!rows.length) return kind === 'scope' && notice ? notice
+    : `${notice}${kind === 'expected' && s.error ? '' : `<div class="empty"><span>${EMPTY[kind]}</span></div>`}`;
   const row = (main, sub, meta) => `<div class="policy-row"><div class="policy-row-main">${main}</div>`
     + `<div class="policy-row-sub">${sub}</div>${meta ? `<span class="policy-row-meta">${meta}</span>` : ''}</div>`;
   const when = r => r.created_at ? escapeHTML(String(r.created_at).slice(0, 10)) : '';
@@ -2181,15 +2192,21 @@ function policyListHTML(kind, rows, st) {
       return row(`<code>${escapeHTML(r.path || '')}</code>`, `Legacy policy · includes descendants · no expiry · ${escapeHTML(r.rule_id || '')} for ${escapeHTML(r.agent || '')}`, when(r));
     }
     if (kind === 'expected') {
+      const mutation = s.expectedMutations?.get(r.key);
+      const unconfirmed = mutation?.status === 'unconfirmed';
+      const feedback = unconfirmed ? '<p role="status">Removal not confirmed. Refresh exceptions before trying again.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh exceptions</button>'
+        : mutation?.status === 'saving' ? '<p role="status">Saving exception removal…</p>' : '';
+      const remove = s.error || unconfirmed || !validExpectedPatterns([r]) ? ''
+        : `<button type="button" class="btn btn-ghost btn-sm" data-action="forget-expected" data-key="${escapeHTML(r.key)}" aria-label="${escapeHTML('Remove exception for ' + r.agent + ': ' + r.path)}"${s.loading || mutation ? ' disabled' : ''}>Remove exception</button>`;
       if (r.scope === 'file') return row(`<b>Non-secret file</b> <code>${escapeHTML(r.path || '')}</code>`,
-        `${escapeHTML(r.agent || '')} only · all readers and destinations · ${Number(r.hits) || 0} matches`,
-        `${when(r)} <button class="source-remove" title="Revoke this file exception" data-action="forget-expected" data-key="${escapeHTML(r.key || '')}"><svg class="icon"><use href="#i-close"/></svg></button>`);
+        `${escapeHTML(r.agent || '')} only · all readers and destinations · ${Number(r.hits) || 0} matches${feedback}`,
+        `${when(r)} ${remove}`);
       const legacy = r.dest && r.dest !== String(r.dest).toLowerCase();
       const reader = r.reader === 'tool'  ? 'an agent tool' : (r.reader || '');
       const hits = Number(r.hits) || 0;
       return row(`<b>${escapeHTML(reader)}</b> reads <code>${escapeHTML(r.path || '')}</code>, then reaches <b>${escapeHTML(r.dest || '')}</b>`,
-        `${escapeHTML(r.agent || '')} · legacy policy · no expiry · ${legacy ? 'Legacy provider exception is inactive; review an exact host' : hits + ' since the daemon started'}`,
-        `${when(r)} <button class="source-remove" title="Forget: flag this pattern again" data-action="forget-expected" data-key="${escapeHTML(r.key || '')}"><svg class="icon"><use href="#i-close"/></svg></button>`);
+        `${escapeHTML(r.agent || '')} · legacy policy · no expiry · ${legacy ? 'Legacy provider exception is inactive; review an exact host' : hits + ' since the daemon started'}${feedback}`,
+        `${when(r)} ${remove}`);
     }
     const scope = (r.host === '*' ? 'all hosts' : escapeHTML(r.host || '')) + ' · ' + (r.agent ? escapeHTML(r.agent) : 'all agents');
     return row(`<b>${escapeHTML(r.title || r.rule || '')}</b>`, scope, '');

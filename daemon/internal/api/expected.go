@@ -147,7 +147,7 @@ func (a *API) handleExpected(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.store.PutAudit(store.AuditEntry{Action: "expect-remove", Rule: readConnectRule, Detail: "forgot expected pattern " + key})
-		writeJSON(w, map[string]string{"status": "ok"})
+		writeJSON(w, map[string]string{"status": "ok", "key": key})
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}

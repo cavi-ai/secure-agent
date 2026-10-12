@@ -516,12 +516,12 @@ document.addEventListener('DOMContentLoaded', () => {
         get isEventsFiltered() { return isEventsFiltered; },
         get isFlagsFiltered() { return isFlagsFiltered; },
         get markDirty() { return markDirty; },
+        get resetPolicyState() { return resetPolicyState; },
         get renderNow() { return renderNow; },
         get renderPosture() { return renderPosture; },
         get renderReportHealth() { return renderReportHealth; },
         get renderSnapshotHealth() { return renderSnapshotHealth; },
         get sessionStorage() { return sessionStorage; },
-        get resetPolicyState() { return resetPolicyState; },
         get showSessionEnded() { return showSessionEnded; },
         get showToast() { return showToast; },
         get switchTab() { return switchTab; },
@@ -1405,11 +1405,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // Policy lists are not telemetry either: they load when Protection → Rules &
   // permissions opens and on its Refresh, never on the refresh cycle.
   const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null,
-    loading: false, error: '', readSeq: 0, scopeMutations: new Map() };
+    loading: false, error: '', readSeq: 0, scopeMutations: new Map(), expectedMutations: new Map(), expectedRemoval: null };
   function resetPolicyState() {
-    Object.assign(policyState, { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null, loading: false, error: '' });
+    Object.assign(policyState, { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null,
+      loading: false, error: '', expectedRemoval: null });
     policyState.readSeq++;
     policyState.scopeMutations.clear();
+    policyState.expectedMutations.clear();
     markDirty('policy');
   }
   async function loadPolicy() {
@@ -1423,15 +1425,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const r = await apiFetch(path);
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
       const payload = await r.json();
-      return path === '/decision-scopes' ? payload : payload || [];
+      return path === '/expected' || path === '/decision-scopes' ? payload : payload || [];
     };
     try {
       const [rules, paths, mutes, expected, scopes] = await Promise.all([get('/guard/rules'), get('/guard/path-allow'), get('/mute'), get('/expected'), get('/decision-scopes')]);
       if (!validDecisionScopeRecords(scopes)) throw new Error('Invalid permission records');
+      if (!validExpectedPatterns(expected)) throw new Error('Invalid exception records');
       if (!current()) return;
       Object.assign(policyState, { guardRules: rules, pathAllows: paths, mutes, expected, scopes });
       for (const [id, mutation] of policyState.scopeMutations) {
         if (mutation.status === 'unconfirmed') policyState.scopeMutations.delete(id);
+      }
+      for (const [key, mutation] of policyState.expectedMutations) {
+        if (mutation.status === 'unconfirmed') policyState.expectedMutations.delete(key);
       }
     } catch (err) {
       if (!current()) return;
@@ -1444,11 +1450,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const put = (id, badge, rows, html) => {
       const el = document.getElementById(id);
       if (el && el.innerHTML !== html) {
-        const focused = id === 'policy-scopes' && el.contains(document.activeElement) && document.activeElement.dataset.action === 'revoke-scope'
-          ? document.activeElement.dataset.id : null;
+        const action = id === 'policy-scopes' ? 'revoke-scope' : id === 'policy-expected' ? 'forget-expected' : null;
+        const key = id === 'policy-scopes' ? 'id' : 'key';
+        const focused = action && el.contains(document.activeElement) && document.activeElement.dataset.action === action
+          ? document.activeElement.dataset[key] : null;
         el.innerHTML = html;
         if (focused) {
-          const target = Array.from(el.querySelectorAll('[data-action="revoke-scope"]')).find(button => button.dataset.id === focused && !button.disabled);
+          const target = Array.from(el.querySelectorAll('[data-action="' + action + '"]')).find(button => button.dataset[key] === focused && !button.disabled);
           if (target) target.focus({ preventScroll: true });
           else { el.tabIndex = -1; el.focus({ preventScroll: true }); }
         }
@@ -1491,6 +1499,50 @@ document.addEventListener('DOMContentLoaded', () => {
       mutation.status = 'unconfirmed';
       markDirty('policy');
       showToast('Revocation not confirmed. Refresh permissions before trying again.', 'danger');
+    }
+  };
+
+  window.forgetExpected = async function(key) {
+    const records = policyState.expected;
+    if (sessionEnded || policyState.loading || policyState.error || !validExpectedPatterns(records) || policyState.expectedMutations.has(key)) return;
+    const record = records.find(r => r.key === key);
+    if (!record) return;
+    const mutation = { auth: handoffGeneration, status: 'confirming' };
+    const current = () => !sessionEnded && mutation.auth === handoffGeneration && policyState.expectedMutations.get(key) === mutation;
+    policyState.expectedMutations.set(key, mutation);
+    const target = record.scope === 'file'
+      ? `Remove the non-secret file exception for ${record.agent}: ${record.path}? This exception covers all readers and destinations for this agent and file.`
+      : `Remove the expected read/connect exception for ${record.agent}: ${record.reader} reads ${record.path}, then reaches ${record.dest}?`;
+    const confirmed = await window.saConfirm(target + ' Future matching activity is evaluated under remaining exceptions and policies. Past activity and exposure are unchanged.',
+      { title: 'Remove exception', okLabel: 'Remove exception' });
+    if (!current()) return;
+    if (!confirmed) { policyState.expectedMutations.delete(key); return; }
+    const latest = policyState.expected?.find(r => r.key === key);
+    if (policyState.loading || policyState.error || !latest || ['agent', 'reader', 'path', 'dest', 'scope'].some(field => latest[field] !== record[field])) {
+      policyState.expectedMutations.delete(key); markDirty('policy'); return;
+    }
+    mutation.status = 'saving';
+    markDirty('policy');
+    try {
+      const response = await apiFetch('/expected?key=' + encodeURIComponent(key), { method: 'DELETE' });
+      if (!response.ok) throw new Error('Removal unavailable');
+      const receipt = await response.json();
+      if (receipt?.status !== 'ok' || receipt.key !== key) throw new Error('Removal not confirmed');
+      if (!current()) return;
+      // A read begun before this receipt cannot restore the removed row.
+      policyState.readSeq++;
+      policyState.loading = false;
+      policyState.expected = policyState.expected.filter(r => r.key !== key);
+      policyState.expectedRemoval = { ...record };
+      policyState.expectedMutations.delete(key);
+      markDirty('policy');
+      showToast('Exception removal saved. Remaining exceptions and policies still apply; past activity is unchanged.', 'success');
+      await loadPolicy();
+    } catch {
+      if (!current()) return;
+      mutation.status = 'unconfirmed';
+      markDirty('policy');
+      showToast('Removal not confirmed. Refresh exceptions before trying again.', 'danger');
     }
   };
 
@@ -5157,16 +5209,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'forget-expected':
         e.preventDefault();
-        (async () => {
-          try {
-            const res = await apiFetch(`/expected?key=${encodeURIComponent(d.key || '')}`, { method: 'DELETE' });
-            if (!res.ok) throw new Error((await res.text()).trim() || String(res.status));
-            showToast('Forgot the expected pattern; it flags again', 'info');
-          } catch (err) {
-            showToast(`Failed to forget: ${err.message || err}`, 'danger');
-          }
-          loadPolicy();
-        })();
+        window.forgetExpected(d.key);
         break;
       case 'agent-refresh':
         e.preventDefault();

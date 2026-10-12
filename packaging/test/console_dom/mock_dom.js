@@ -8,6 +8,10 @@
 (() => {
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
+  if (scenarios.has('expectedremove')) data['/expected'] = [
+    { key: 'claude|gh|/synthetic/credentials|example.test', agent: 'claude', reader: 'gh', path: '/synthetic/credentials', dest: 'example.test', created_at: iso(60000), hits: 2 },
+    { key: 'claude|*|/synthetic/.env.test|*', scope: 'file', agent: 'claude', reader: '*', path: '/synthetic/.env.test', dest: '*', created_at: iso(60000), hits: 0 },
+  ];
   let bookCleanup = () => {};
   let contextRuleReads = 0;
   const contextRules = data['/expected-egress'].rules;
@@ -510,6 +514,17 @@
       return new Response(JSON.stringify(data[String(path)] ?? data[p]), {status: 200, headers: {'Content-Type': 'application/json'}});
     }
     if (scenarios.has('authrecover') && opts?.method === 'POST') authRecoveryMutations++;
+    if (scenarios.has('expectedremove') && p === '/expected') {
+      if (opts?.method === 'DELETE') {
+        const key = new URLSearchParams(String(path).split('?')[1]).get('key');
+        if (!data[p].some(row => row.key === key)) throw new Error('Wrong exception target');
+        window.__expectedRemovalDeletes = (window.__expectedRemovalDeletes || 0) + 1;
+        data[p] = data[p].filter(row => row.key !== key);
+        return { ok: true, json: async () => ({ status: 'ok', key: scenarios.has('removaluncertain') ? 'wrong-key' : key }) };
+      }
+      if (scenarios.has('removalreadfail') && window.__expectedRemovalDeletes) return { ok: false, status: 503, text: async () => 'Unavailable' };
+      return { ok: true, json: async () => scenarios.has('removalinvalid') ? null : structuredClone(data[p]) };
+    }
     if (scenarios.has('reviewresult') && p === '/decision-scopes') {
       const rows = data['/decision-scopes'] || [];
       if (opts?.method === 'DELETE') {
@@ -668,6 +683,9 @@
       }
       reqLog.push(line);
       stamp('mock-requests', reqLog.join('\n'));
+      if (p === '/expected' && opts.method === 'DELETE') {
+        return { ok: true, json: async () => ({ status: 'ok', key: new URLSearchParams(String(path).split('?')[1]).get('key') }) };
+      }
       if (scenarios.has('incidentremediation') && p === '/incidents/remediation') {
         const req = JSON.parse(opts.body);
         const inc = data['/incidents'][0];
@@ -3009,6 +3027,54 @@
   // forgetexpected (with policylists): press Forget on the expected row.
   if (scenarios.has('forgetexpected')) {
     setTimeout(() => document.querySelector('#policy-expected [data-action="forget-expected"]')?.click(), 7000);
+    setTimeout(() => document.getElementById('confirm-ok')?.click(), 7500);
+  }
+  if (scenarios.has('expectedremove')) {
+    setTimeout(async () => {
+      const probe = {};
+      const wait = async predicate => { for (let i = 0; i < 30; i++) { window.SA.flushRender(); if (predicate()) return true; await new Promise(resolve => setTimeout(resolve, 50)); } return false; };
+      try {
+        openTab('policy');
+        const list = document.getElementById('policy-expected');
+        await wait(() => list.textContent.includes('Remove exception') || list.textContent.includes('Invalid exception records'));
+        if (scenarios.has('removalinvalid')) {
+          probe.unavailable = list.textContent.includes('Invalid exception records') && !list.querySelector('[data-action="forget-expected"]');
+          probe.noWrite = !window.__expectedRemovalDeletes;
+        } else {
+          const file = scenarios.has('expectedremove=file');
+          const key = file ? 'claude|*|/synthetic/.env.test|*' : 'claude|gh|/synthetic/credentials|example.test';
+          const button = Array.from(list.querySelectorAll('[data-action="forget-expected"]')).find(el => el.dataset.key === key);
+          probe.label = button.textContent === 'Remove exception' && button.getAttribute('aria-label').includes(file ? '/synthetic/.env.test' : '/synthetic/credentials');
+          probe.target = button.getBoundingClientRect().height >= 44;
+          button.focus(); button.click();
+          const message = document.getElementById('confirm-message').textContent;
+          probe.scope = file ? message.includes('all readers and destinations for this agent and file') : message.includes('gh reads /synthetic/credentials, then reaches example.test');
+          probe.consequence = message.includes('remaining exceptions and policies') && message.includes('Past activity and exposure are unchanged');
+          if (scenarios.has('confirmonly')) return;
+          document.getElementById('confirm-cancel').click();
+          await new Promise(resolve => setTimeout(resolve, 50));
+          probe.cancelled = !window.__expectedRemovalDeletes && document.activeElement === button && button.isConnected;
+          button.click(); document.getElementById('confirm-ok').click();
+          await wait(() => list.textContent.includes('Exception removal saved') || list.textContent.includes('Removal not confirmed'));
+          probe.oneWrite = window.__expectedRemovalDeletes === 1;
+          if (scenarios.has('removaluncertain')) {
+            probe.uncertain = list.textContent.includes('Removal not confirmed') && !Array.from(list.querySelectorAll('[data-action="forget-expected"]')).some(el => el.dataset.key === key);
+            await window.forgetExpected(key);
+            probe.noReplay = window.__expectedRemovalDeletes === 1;
+            list.querySelector('[data-action="policy-refresh"]').click();
+            probe.refreshed = await wait(() => !list.textContent.includes('Removal not confirmed'));
+            probe.authoritative = !list.textContent.includes(file ? 'Non-secret file' : 'reads');
+          } else {
+            probe.saved = list.textContent.includes('Exception removal saved') && !Array.from(list.querySelectorAll('[data-action="forget-expected"]')).some(el => el.dataset.key === key);
+            probe.remaining = document.getElementById('badge-expected').textContent === '1';
+            probe.feedback = list.textContent.includes('Remaining exceptions and policies still apply; past activity is unchanged');
+            if (scenarios.has('removalreadfail')) probe.retained = list.textContent.includes('Current exceptions unavailable') && !list.querySelector('[data-action="forget-expected"]');
+          }
+        }
+        probe.fits = document.documentElement.scrollWidth <= innerWidth;
+      } catch (error) { probe.error = String(error); }
+      document.body.dataset.expectedRemovalProbe = JSON.stringify(probe);
+    }, 4000);
   }
   // explainact: Findings open, press flag-2's first served action (the
   // recommended allow) late enough that the inline note and the toast are

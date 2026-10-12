@@ -122,6 +122,11 @@ func TestExpectedFlow(t *testing.T) {
 	}
 	if w := call(t, a, "DELETE", "/expected?key="+p.Key, ""); w.Code != 200 {
 		t.Fatalf("DELETE status %d", w.Code)
+	} else {
+		var receipt map[string]string
+		if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil || receipt["status"] != "ok" || receipt["key"] != p.Key {
+			t.Fatalf("DELETE receipt = %+v (%v)", receipt, err)
+		}
 	}
 	if w := call(t, a, "DELETE", "/expected?key="+p.Key, ""); w.Code != 404 {
 		t.Fatalf("second DELETE status %d, want 404", w.Code)
