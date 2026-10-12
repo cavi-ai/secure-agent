@@ -17,28 +17,38 @@ function reviewResultPermissionReceipt(result) {
   return decisionPermissionReceipt(decision, decision.id, typeof session === 'string' ? session : '');
 }
 
+function validDecisionScopeRecords(records) {
+  return Array.isArray(records) && records.length <= 10000 &&
+    records.every(r => r && ['id', 'kind', 'agent', 'rule_id', 'operation', 'resource_path', 'created_at'].every(key => typeof r[key] === 'string' && r[key]) &&
+      ['session_id', 'workspace', 'reader_exe', 'destination', 'expires_at', 'revoked_at'].every(key => r[key] == null || typeof r[key] === 'string')) &&
+    new Set(records.map(r => r.id)).size === records.length;
+}
+
+function decisionScopeApplicability(record) {
+  const a = record?.applicability;
+  return a && typeof a.label === 'string' && a.label && typeof a.revoke === 'boolean'
+    ? { label: a.label, revoke: a.revoke } : { label: 'Applicability unknown', revoke: false };
+}
+
+function validScopeRevocation(result, id) {
+  return result?.revoked === true && result.id === id;
+}
+
 // Projects one saved decision into display rows. Applicability comes from the
 // daemon's read response; it never authorizes a live request.
 function decisionPermissionRows(receipt, records) {
-  if (!Array.isArray(records) || records.length > 10000 ||
-      !records.every(r => r && ['id', 'kind', 'agent', 'rule_id', 'operation', 'resource_path', 'created_at'].every(key => typeof r[key] === 'string' && r[key]) &&
-        ['session_id', 'workspace', 'reader_exe', 'destination', 'expires_at', 'revoked_at'].every(key => r[key] == null || typeof r[key] === 'string')) ||
-      new Set(records.map(r => r.id)).size !== records.length) {
-    throw new Error('Invalid permission records');
-  }
+  if (!validDecisionScopeRecords(records)) throw new Error('Invalid permission records');
   const byID = new Map(records.map(record => [record.id, record]));
   return receipt.ids.map(id => {
     const record = byID.get(id);
     if (!record) return { id, record: null, label: 'Current status unknown', revoke: false };
-    const applicability = record.applicability;
-    const valid = applicability && typeof applicability.label === 'string' && applicability.label &&
-      typeof applicability.revoke === 'boolean';
+    const applicability = decisionScopeApplicability(record);
     const readConnect = record.operation === 'read-connect';
     const guarded = record.operation.startsWith('guard:');
     return {
       id, record,
-      label: valid ? applicability.label : 'Applicability unknown',
-      revoke: valid ? applicability.revoke : false,
+      label: applicability.label,
+      revoke: applicability.revoke,
       operation: readConnect ? 'Expected read/connect activity' : guarded ? 'Guarded ' + record.operation.slice(6) + ' access' : 'Operation unavailable',
       effect: readConnect ? 'Marks this matching read/connect pattern expected. It does not grant network access.' : guarded ? 'Allows matching guarded tool access when the daemon validates the recorded identity and scope.' : 'Permission effect unknown.',
       consequence: readConnect ? 'Future matching activity is evaluated under remaining expectations and policies.' : 'Future guard requests are evaluated under remaining permissions and policies.',

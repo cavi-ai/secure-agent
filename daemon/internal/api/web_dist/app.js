@@ -531,6 +531,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sessionEnded) return;
     sessionEnded = true;
     clearProtectionContext();
+    resetPolicyState();
     reviewResult = null;
     reviewResultSeq++;
     if (drawerMode === 'review-result' || drawerMode === 'permissions') closeDrawer();
@@ -1443,31 +1444,55 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Policy lists are not telemetry either: they load when Protection → Rules &
   // permissions opens and on its Refresh, never on the refresh cycle.
-  const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null, loading: false, error: '' };
+  const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null,
+    loading: false, error: '', readSeq: 0, scopeMutations: new Map() };
+  function resetPolicyState() {
+    Object.assign(policyState, { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null, loading: false, error: '' });
+    policyState.readSeq++;
+    policyState.scopeMutations.clear();
+    markDirty('policy');
+  }
   async function loadPolicy() {
-    if (policyState.loading) return;
+    if (sessionEnded || policyState.loading) return;
+    const auth = handoffGeneration, seq = ++policyState.readSeq;
+    const current = () => !sessionEnded && auth === handoffGeneration && seq === policyState.readSeq;
     policyState.loading = true;
     policyState.error = '';
     markDirty('policy');
     const get = async (path) => {
       const r = await apiFetch(path);
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
-      return (await r.json()) || [];
+      const payload = await r.json();
+      return path === '/decision-scopes' ? payload : payload || [];
     };
     try {
       const [rules, paths, mutes, expected, scopes] = await Promise.all([get('/guard/rules'), get('/guard/path-allow'), get('/mute'), get('/expected'), get('/decision-scopes')]);
+      if (!validDecisionScopeRecords(scopes)) throw new Error('Invalid permission records');
+      if (!current()) return;
       Object.assign(policyState, { guardRules: rules, pathAllows: paths, mutes, expected, scopes });
+      for (const [id, mutation] of policyState.scopeMutations) {
+        if (mutation.status === 'unconfirmed') policyState.scopeMutations.delete(id);
+      }
     } catch (err) {
+      if (!current()) return;
       policyState.error = "Couldn't load the policy lists: " + (err.message || err);
     } finally {
-      policyState.loading = false;
-      markDirty('policy');
+      if (current()) { policyState.loading = false; markDirty('policy'); }
     }
   }
   function renderPolicyLists() {
     const put = (id, badge, rows, html) => {
       const el = document.getElementById(id);
-      if (el) el.innerHTML = html;
+      if (el && el.innerHTML !== html) {
+        const focused = id === 'policy-scopes' && el.contains(document.activeElement) && document.activeElement.dataset.action === 'revoke-scope'
+          ? document.activeElement.dataset.id : null;
+        el.innerHTML = html;
+        if (focused) {
+          const target = Array.from(el.querySelectorAll('[data-action="revoke-scope"]')).find(button => button.dataset.id === focused && !button.disabled);
+          if (target) target.focus({ preventScroll: true });
+          else { el.tabIndex = -1; el.focus({ preventScroll: true }); }
+        }
+      }
       const b = document.getElementById(badge);
       if (b) b.textContent = rows ? rows.length : 0;
     };
@@ -1480,12 +1505,33 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   window.revokeScope = async function(id) {
+    const record = policyState.scopes?.find(r => r.id === id);
+    if (sessionEnded || policyState.loading || policyState.error || policyState.scopeMutations.has(id) || !decisionScopeApplicability(record).revoke) return;
+    const mutation = { auth: handoffGeneration, status: 'confirming' };
+    const current = () => !sessionEnded && mutation.auth === handoffGeneration && policyState.scopeMutations.get(id) === mutation;
+    policyState.scopeMutations.set(id, mutation);
+    const confirmed = await window.saConfirm(`Revoke this saved permission for ${record.resource_path}${record.destination ? ' → ' + record.destination : ''}? Other permissions and policies may still allow matching activity. This does not undo past access or remediate past exposure.`, { title: 'Revoke permission', okLabel: 'Revoke permission' });
+    if (!current()) return;
+    if (!confirmed) { policyState.scopeMutations.delete(id); return; }
+    if (policyState.loading || policyState.error || !decisionScopeApplicability(policyState.scopes?.find(r => r.id === id)).revoke) {
+      policyState.scopeMutations.delete(id); markDirty('policy'); return;
+    }
+    mutation.status = 'saving';
+    markDirty('policy');
     try {
       const res = await apiFetch('/decision-scopes?id=' + encodeURIComponent(id), {method:'DELETE'});
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok || !validScopeRevocation(await res.json(), id)) throw new Error('Revocation not confirmed');
+      if (!current()) return;
+      mutation.status = 'saved';
+      markDirty('policy');
+      showToast('Permission revocation saved. Other permissions may still apply; past access is unchanged.', 'success');
       await loadPolicy();
-      showToast('Permission revoked. The next matching request will be evaluated again.', 'success');
-    } catch (err) { showToast(`Revocation could not be saved: ${err}`, 'danger'); }
+    } catch {
+      if (!current()) return;
+      mutation.status = 'unconfirmed';
+      markDirty('policy');
+      showToast('Revocation not confirmed. Refresh permissions before trying again.', 'danger');
+    }
   };
 
   // Agent tab: the system agent's status, chat, plans and runs load when
@@ -3686,7 +3732,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await apiFetch('/decision-scopes?id=' + encodeURIComponent(id), { method: 'DELETE' });
       if (!response.ok) throw new Error('Revocation unavailable');
       const result = await response.json();
-      if (result?.revoked !== true || result.id !== id) throw new Error('Revocation confirmation unavailable');
+      if (!validScopeRevocation(result, id)) throw new Error('Revocation confirmation unavailable');
       if (!currentDecisionPermissions(st)) return;
       st.revoked.add(id);
       st.busy = '';

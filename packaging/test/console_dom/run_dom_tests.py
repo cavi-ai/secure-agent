@@ -192,6 +192,7 @@ def main():
     ap.add_argument('--session-investigation-only', action='store_true', help='run bounded session investigation return probes only')
     ap.add_argument('--session-activity-only', action='store_true', help='run retained session activity probes only')
     ap.add_argument('--review-results-only', action='store_true', help='run bounded review result interaction probes only')
+    ap.add_argument('--policy-permissions-only', action='store_true', help='run bounded global permission revocation probes only')
     args = ap.parse_args()
     chrome = find_chrome()
     if not chrome:
@@ -203,6 +204,22 @@ def main():
     try:
         build_harness(tmp)
         srv, origin = serve_with_csp(tmp)
+        if args.policy_permissions_only or not any(value for key, value in vars(args).items() if key.endswith('_only')):
+            for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+                for variant in ('confirmed', 'ambiguousrevoke', 'scopereadfail', 'unknownscope'):
+                    dom = dump_dom(chrome, tmp, '?scoperevoke&' + variant, origin, window_size=size)
+                    receipt = re.search(r'data-global-permissions-probe="([^"]+)"', dom)
+                    state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+                    names = ['loaded', 'fits'] + (['unknown'] if variant == 'unknownscope' else
+                        ['confirmation', 'cancelled', 'cancelFocus', 'once', 'noReplay'] +
+                        (['unconfirmed', 'refreshed'] if variant == 'ambiguousrevoke' else ['saved', *(['retained'] if variant == 'scopereadfail' else [])]))
+                    for name in names:
+                        check(f'global permissions ({label}, {variant}): {name}', state.get(name) is True, str(state))
+        if args.policy_permissions_only:
+            print(f'\n{len(passed)} passed, {len(failed)} failed')
+            if failed:
+                raise SystemExit(1)
+            return
         if args.review_results_only or not any(value for key, value in vars(args).items() if key.endswith('_only')):
             for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
                 for action in ('acknowledge', 'close_reported', 'expect'):
