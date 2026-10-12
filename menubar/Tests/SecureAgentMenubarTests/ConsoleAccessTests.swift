@@ -76,7 +76,7 @@ final class ConsoleAccessTests: XCTestCase {
 
     // MARK: proxy_enabled writer
 
-    func testProxyEnableReplacesTopLevelKeyOnly() {
+    func testProxyEnableReplacesTopLevelKeyOnly() throws {
         let yaml = """
         # user config
         net_sample_interval_ms: 2000
@@ -85,7 +85,7 @@ final class ConsoleAccessTests: XCTestCase {
           enabled: true
           # proxy_enabled: not-this-one
         """
-        let out = SetupManager.proxyEnabledUpdating(yaml, enabled: true)
+        let out = try ConfigDocument(yaml).setting("proxy_enabled", to: true).text
         XCTAssertTrue(out.contains("proxy_enabled: true"))
         XCTAssertTrue(out.contains("# user config"))
         XCTAssertTrue(out.contains("net_sample_interval_ms: 2000"))
@@ -96,51 +96,51 @@ final class ConsoleAccessTests: XCTestCase {
         XCTAssertEqual(out.components(separatedBy: "proxy_enabled:").count - 1, 2)
     }
 
-    func testProxyEnableAppendsWhenAbsent() {
-        let out = SetupManager.proxyEnabledUpdating("advisor:\n  enabled: false\n", enabled: true)
+    func testProxyEnableAppendsWhenAbsent() throws {
+        let out = try ConfigDocument("advisor:\n  enabled: false\n").setting("proxy_enabled", to: true).text
         XCTAssertTrue(out.hasPrefix("advisor:\n  enabled: false\n"))
         XCTAssertTrue(out.contains("proxy_enabled: true"))
     }
 
-    func testProxyEnableOnEmptyConfig() {
-        let out = SetupManager.proxyEnabledUpdating("", enabled: true)
+    func testProxyEnableOnEmptyConfig() throws {
+        let out = try ConfigDocument("").setting("proxy_enabled", to: true).text
         XCTAssertTrue(out.contains("proxy_enabled: true"))
     }
 
-    func testProxyDisableFlipsBack() {
-        let out = SetupManager.proxyEnabledUpdating("proxy_enabled: true\n", enabled: false)
+    func testProxyDisableFlipsBack() throws {
+        let out = try ConfigDocument("proxy_enabled: true\n").setting("proxy_enabled", to: false).text
         XCTAssertEqual(out, "proxy_enabled: false\n")
     }
 
-    func testSystemAgentTogglePreservesExistingModelAndOtherConfig() {
+    func testSystemAgentTogglePreservesExistingModelAndOtherConfig() throws {
         let yaml = "proxy_enabled: true\nsystem_agent:\n  enabled: false\n  model: qwen3\n  endpoint: \"http://127.0.0.1:11434\"\nadvisor:\n  enabled: true\n"
-        let on = SetupManager.systemAgentConfigUpdating(yaml, enabled: true)
-        XCTAssertTrue(SetupManager.systemAgentConfigIsEnabled(on))
+        let on = try ConfigDocument(yaml).setting("enabled", to: true, in: "system_agent").text
+        XCTAssertTrue(ConfigDocument(on).flag("enabled", in: "system_agent"))
         XCTAssertTrue(on.contains("model: qwen3\n"))
         XCTAssertTrue(on.contains("endpoint: \"http://127.0.0.1:11434\"\n"))
         XCTAssertTrue(on.contains("advisor:\n  enabled: true\n"))
-        let off = SetupManager.systemAgentConfigUpdating(on, enabled: false)
+        let off = try ConfigDocument(on).setting("enabled", to: false, in: "system_agent").text
         XCTAssertEqual(off, yaml)
     }
 
     /// auto_review is its own line in the system_agent block: added beside
     /// enabled, flipped in place, read without touching enabled.
-    func testSystemAgentAutoReviewToggle() {
+    func testSystemAgentAutoReviewToggle() throws {
         let yaml = "system_agent:\n  enabled: true\n  model: qwen3\nadvisor:\n  enabled: false\n"
-        let on = SetupManager.systemAgentConfigUpdating(yaml, key: "auto_review", enabled: true)
+        let on = try ConfigDocument(yaml).setting("auto_review", to: true, in: "system_agent").text
         XCTAssertEqual(on, "system_agent:\n  auto_review: true\n  enabled: true\n  model: qwen3\nadvisor:\n  enabled: false\n")
-        XCTAssertTrue(SetupManager.systemAgentConfigIsEnabled(on, key: "auto_review"))
-        XCTAssertTrue(SetupManager.systemAgentConfigIsEnabled(on))
-        let off = SetupManager.systemAgentConfigUpdating(on, key: "auto_review", enabled: false)
-        XCTAssertFalse(SetupManager.systemAgentConfigIsEnabled(off, key: "auto_review"))
+        XCTAssertTrue(ConfigDocument(on).flag("auto_review", in: "system_agent"))
+        XCTAssertTrue(ConfigDocument(on).flag("enabled", in: "system_agent"))
+        let off = try ConfigDocument(on).setting("auto_review", to: false, in: "system_agent").text
+        XCTAssertFalse(ConfigDocument(off).flag("auto_review", in: "system_agent"))
         XCTAssertTrue(off.contains("  enabled: true\n"))
-        XCTAssertFalse(SetupManager.systemAgentConfigIsEnabled(yaml, key: "auto_review"))
+        XCTAssertFalse(ConfigDocument(yaml).flag("auto_review", in: "system_agent"))
     }
 
-    func testSystemAgentToggleAddsMissingBlock() {
-        let out = SetupManager.systemAgentConfigUpdating("proxy_enabled: true\n", enabled: true)
+    func testSystemAgentToggleAddsMissingBlock() throws {
+        let out = try ConfigDocument("proxy_enabled: true\n").setting("enabled", to: true, in: "system_agent").text
         XCTAssertEqual(out, "proxy_enabled: true\nsystem_agent:\n  enabled: true\n")
-        XCTAssertTrue(SetupManager.systemAgentConfigIsEnabled(out))
+        XCTAssertTrue(ConfigDocument(out).flag("enabled", in: "system_agent"))
     }
 
     // MARK: focus-or-open scripts
