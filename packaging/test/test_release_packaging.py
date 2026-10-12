@@ -34,7 +34,7 @@ printf '%s' "$DMG_CONTENT" > "${@: -1}"
 set -eu
 touch "${@: -1}"
 ''')
-        for command in ("codesign", "xcrun", "spctl"):
+        for command in ("codesign", "xcrun", "spctl", "govulncheck"):
             self.write_script(self.bin / command, '''#!/bin/bash
 set -eu
 if [[ "$(basename "$0")" == "${FAIL_COMMAND:-}" ]]; then exit 1; fi
@@ -100,6 +100,19 @@ if [[ "${DIRTY_TREE:-0}" == 1 ]]; then exit 1; fi
     def test_release_rejects_dirty_tree_before_build(self):
         result = self.run_build(RELEASE_BUILD="1", NOTARY_PROFILE="fixture-notary",
                                 CODESIGN_IDENTITY="Developer ID Application: Fixture (FIXTURE)", DIRTY_TREE="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / "dist/built").exists())
+
+    def test_release_rejects_vulnerable_toolchain_before_build(self):
+        result = self.run_build(RELEASE_BUILD="1", NOTARY_PROFILE="fixture-notary",
+                                CODESIGN_IDENTITY="Developer ID Application: Fixture (FIXTURE)", FAIL_COMMAND="govulncheck")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / "dist/built").exists())
+
+    def test_release_requires_vulnerability_scanner_before_build(self):
+        (self.bin / "govulncheck").unlink()
+        result = self.run_build(RELEASE_BUILD="1", NOTARY_PROFILE="fixture-notary",
+                                CODESIGN_IDENTITY="Developer ID Application: Fixture (FIXTURE)")
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.root / "dist/built").exists())
 

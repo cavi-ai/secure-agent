@@ -18,4 +18,10 @@ require_release_settings() {
     echo "error: release builds require a clean committed tree" >&2
     return 1
   fi
+  if ! command -v govulncheck >/dev/null 2>&1; then
+    echo "error: release builds require govulncheck on PATH" >&2
+    return 1
+  fi
+  # Scan with the selected compiler before producing distribution artifacts.
+  govulncheck ./...
 }
