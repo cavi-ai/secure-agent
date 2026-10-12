@@ -2048,27 +2048,28 @@ function mapPostureAttention(p, fn) {
 }
 
 // ---------- console navigation ----------
-// Six tabs; Sessions holds four sub-views. Old tab ids (menu bar deep
+// Primary tabs and their subviews. Old tab ids (menu bar deep
 // links, saved views, the stored tab, in-page links) resolve through one
 // alias table.
 const CONSOLE_TABS = ['home', 'sessions', 'protection', 'system', 'agent'];
 const PROTECTION_SUBS = ['traffic', 'rules', 'sources', 'audit'];
-const SESSIONS_SUBS = ['board', 'processes', 'resources', 'events'];
+const SESSIONS_SUBS = ['board', 'processes', 'events'];
+const SYSTEM_SUBS = ['resources', 'worktrees', 'clutter'];
 const TAB_ALIASES = {
   egress: { tab: 'protection', sub: 'traffic' },
   policy: { tab: 'protection', sub: 'rules' },
   overview: { tab: 'home' },
   findings: { tab: 'home', focus: 'attention' },
   agents: { tab: 'sessions', sub: 'processes' },
-  resources: { tab: 'sessions', sub: 'resources' },
-  history: { tab: 'sessions', sub: 'resources' },
-  worktrees: { tab: 'system' },
-  cleanup: { tab: 'system' },
-  clutter: { tab: 'system' },
+  resources: { tab: 'system', sub: 'resources' },
+  history: { tab: 'system', sub: 'resources' },
+  worktrees: { tab: 'system', sub: 'worktrees' },
+  cleanup: { tab: 'system', sub: 'clutter' },
+  clutter: { tab: 'system', sub: 'clutter' },
   events: { tab: 'sessions', sub: 'events' },
 };
 // Sessions sub-views that moved to another tab ("#sessions/worktrees").
-const SESSIONS_SUB_ALIASES = { worktrees: 'system' };
+const SESSIONS_SUB_ALIASES = { resources: 'resources', history: 'resources', worktrees: 'worktrees' };
 
 // isConsoleRoute: whether id (a tab, "sessions/<sub>", an old tab id, with
 // or without "#") names a console view.
@@ -2077,33 +2078,34 @@ function isConsoleRoute(id) {
   return CONSOLE_TABS.includes(head) || Object.prototype.hasOwnProperty.call(TAB_ALIASES, head);
 }
 
-// resolveConsoleRoute: any route → { tab, sub, focus }. sub is the Sessions
-// sub-view ('board' by default, '' on other tabs); focus 'attention' scrolls
-// the attention panel into view. Unknown → Home.
+// resolveConsoleRoute: any route → { tab, sub, focus }. Grouped tabs carry
+// their sub-view; focus 'attention' scrolls the attention panel into view.
+// Unknown → Home.
 function resolveConsoleRoute(id) {
   const [head, rest] = String(id || '').replace(/^#/, '').split('?')[0].split('/');
   if (Object.prototype.hasOwnProperty.call(TAB_ALIASES, head)) {
     const a = TAB_ALIASES[head];
-    return { tab: a.tab, sub: ['sessions', 'protection'].includes(a.tab) ? a.sub : '', focus: a.focus || '' };
+    return { tab: a.tab, sub: ['sessions', 'protection', 'system'].includes(a.tab) ? a.sub : '', focus: a.focus || '' };
   }
   if (!CONSOLE_TABS.includes(head)) return { tab: 'home', sub: '', focus: '' };
   if (head === 'sessions' && Object.prototype.hasOwnProperty.call(SESSIONS_SUB_ALIASES, rest)) {
-    return { tab: SESSIONS_SUB_ALIASES[rest], sub: '', focus: '' };
+    return { tab: 'system', sub: SESSIONS_SUB_ALIASES[rest], focus: '' };
   }
   if (head === 'protection') return { tab: 'protection', sub: PROTECTION_SUBS.includes(rest) ? rest : 'traffic', focus: '' };
+  if (head === 'system') return { tab: 'system', sub: SYSTEM_SUBS.includes(rest) ? rest : 'worktrees', focus: '' };
   if (head === 'sessions') return { tab: 'sessions', sub: SESSIONS_SUBS.includes(rest) ? rest : 'board', focus: '' };
   return { tab: head, sub: '', focus: '' };
 }
 
-// routeKey: "tab" or "sessions/<sub>" — what the stored tab and saved views keep.
+// routeKey: the canonical route stored for tabs and saved views.
 function routeKey(r) {
-  return r.tab === 'protection' ? 'protection/' + (r.sub || 'traffic') : r.tab === 'sessions' ? 'sessions/' + (r.sub || 'board') : r.tab;
+  return r.tab === 'system' ? 'system/' + (r.sub || 'worktrees') : r.tab === 'protection' ? 'protection/' + (r.sub || 'traffic') : r.tab === 'sessions' ? 'sessions/' + (r.sub || 'board') : r.tab;
 }
 
 // consoleRouteHash: the address-bar form, "#sessions/<sub>" for a sub-view
 // and "#sessions" for the board.
 function consoleRouteHash(r) {
-  if (r.tab === 'protection') return '#' + routeKey(r);
+  if (r.tab === 'protection' || r.tab === 'system') return '#' + routeKey(r);
   return '#' + (r.tab === 'sessions' && r.sub && r.sub !== 'board' ? 'sessions/' + r.sub : r.tab);
 }
 

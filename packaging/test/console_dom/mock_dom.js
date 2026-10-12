@@ -983,7 +983,8 @@
     document.querySelector(`.tab-btn[data-tab="${r.tab}"]`).click();
     if (r.sub) document.querySelector(r.tab === 'protection'
       ? `[data-action="goto-protection"][data-protection-view="${r.sub}"]`
-      : `.subtab-btn[data-subtab="${r.sub}"]`).click();
+      : r.tab === 'system' ? `#tab-system [data-system-subtab="${r.sub}"]`
+      : `#tab-sessions .subtab-btn[data-subtab="${r.sub}"]`).click();
     const group = document.getElementById({ findings: 'home-findings', overview: 'home-trends' }[id] || '');
     if (group && !group.open) group.open = true;
     return r;
@@ -1312,9 +1313,10 @@
       }
       openTab('findings');
       openTab('overview');
-      openTab('system');
+      openTab('system/worktrees');
+      openTab('system/clutter');
       openTab('sessions/processes');
-      openTab('sessions/resources');
+      openTab('system/resources');
       openTab('sessions/events');
       openTab('sessions/board');
       openTab('egress');
@@ -1877,14 +1879,14 @@
   // shows one bar for that family with its session count, and the badge
   // counts agent families (5821, 4412, 6033), not sessions or infra (7001).
   if (scenarios.has('memfamilydemo')) {
-    // Memory by family is a Trends chart, under the Home:Trends group.
-    setTimeout(() => openTab('overview'), 1500);
+    // Memory by family shares System Resources with live usage and pressure history.
+    setTimeout(() => openTab('system/resources'), 1500);
   }
   // Post-mortem variant: every live session has exited, but persisted pressure
   // episodes must remain visible.
   if (scenarios.has('noresourcesdemo')) {
-    // The resource board and its flight recorder live on Sessions/Resources.
-    setTimeout(() => openTab('sessions/resources'), 1500);
+    // The resource board and its flight recorder live on System/Resources.
+    setTimeout(() => openTab('system/resources'), 1500);
   }
   if (scenarios.has('headroomhint') && !scenarios.has('phoneframe') && !scenarios.has('phonedemo')) {
     setTimeout(() => openTab('resources'), 5000);
@@ -2173,21 +2175,31 @@
       input.value = value;
       input.dispatchEvent(new Event('input', { bubbles: true }));
     };
-    const probe = id => stamp(id, JSON.stringify({
-      rows: document.querySelectorAll('#worktrees-container .wt-row').length,
-      clutter: document.querySelectorAll('#clutter-container .cl-row').length,
-      summary: (document.getElementById('worktrees-summary') || {}).textContent,
-      legend: (document.getElementById('worktrees-legend') || {}).hidden ? '' : (document.getElementById('worktrees-legend') || {}).textContent,
-      empty: Array.from(document.querySelectorAll('.empty span')).map(s => s.textContent),
-    }));
-    setTimeout(() => probe('gd-before'), 3000);
+    const probe = async id => {
+      const settle = () => new Promise(resolve => setTimeout(resolve, 300));
+      openTab('system/worktrees');
+      await settle();
+      const state = {
+        rows: document.querySelectorAll('#worktrees-container .wt-row').length,
+        summary: (document.getElementById('worktrees-summary') || {}).textContent,
+        legend: (document.getElementById('worktrees-legend') || {}).hidden ? '' : (document.getElementById('worktrees-legend') || {}).textContent,
+        empty: Array.from(document.querySelectorAll('#system-worktrees .empty span')).map(s => s.textContent),
+      };
+      openTab('system/clutter');
+      await settle();
+      state.clutter = document.querySelectorAll('#clutter-container .cl-row').length;
+      state.empty.push(...Array.from(document.querySelectorAll('#system-clutter .empty span')).map(s => s.textContent));
+      stamp(id, JSON.stringify(state));
+    };
+    setTimeout(() => probe('gd-before'), 2800);
     setTimeout(() => typeSearch('EVIDENCE'), 3500);
-    setTimeout(() => probe('gd-evidence'), 4600);
+    setTimeout(() => probe('gd-evidence'), 4000);
     setTimeout(() => typeSearch('huggingface'), 5000);
-    setTimeout(() => probe('gd-clutter'), 6100);
+    setTimeout(() => probe('gd-clutter'), 5400);
     setTimeout(() => typeSearch(''), 6500);
-    setTimeout(() => probe('gd-cleared'), 7600);
+    setTimeout(() => probe('gd-cleared'), 6900);
     setTimeout(() => {
+      openTab('system/worktrees');
       const btn = document.querySelector('#worktrees-container [data-action="worktree-advise-all"]');
       if (btn) btn.click();
     }, 8000);
@@ -2380,7 +2392,7 @@
   if (scenarios.has('cspdemo')) {
     const probes = [
       ['wf-bar', 'sessions', '.wf-bar'],
-      ['hbar-fill', 'overview', '#chart-memory .hbar-row:last-child .hbar-fill'],
+      ['hbar-fill', 'system/resources', '#chart-memory .hbar-row:last-child .hbar-fill'],
       ['resource-host-segment', 'resources', '.resource-host-segment.agent'],
     ];
     const widths = [];
@@ -2494,8 +2506,8 @@
   // Auto-action: select a session, open the resource policy editor, and add
   // its workspace as an override through the real delegated click path.
   if (scenarios.has('policydemo')) {
-    // The resource board (and its family drawer) lives on Sessions/Resources.
-    setTimeout(() => openTab('sessions/resources'), 1500);
+    // The resource board (and its family drawer) lives on System/Resources.
+    setTimeout(() => openTab('system/resources'), 1500);
     setTimeout(() => {
       document.querySelector('[data-action="view-family"]').click();
       document.querySelector('[data-action="edit-resource-policy"]').click();
@@ -2541,11 +2553,11 @@
       }, 2600);
     }, 4500);
   }
-  // memprobe: Overview open, every Memory by family row probed, then the same
+  // memprobe: System Resources open, every Memory by family row probed, then the same
   // session re-emitted three times. <pre id="mem-probe"> gets the chart-memory
   // renders in between and how many probed rows are still connected.
   if (scenarios.has('memprobe')) {
-    setTimeout(() => openTab('overview'), 3500);
+    setTimeout(() => openTab('system/resources'), 3500);
     setTimeout(() => {
       const rows = Array.from(document.querySelectorAll('#chart-memory .hbar-row'));
       rows.forEach(r => { r.dataset.probe = '1'; });
@@ -2801,7 +2813,7 @@
   }
   // hiddenrenderprobe: renderAll() (boot, Refresh, search) must not paint a
   // panel that isn't on screen — Home is active by default, so the Trends
-  // charts (closed group) and the Sessions/Resources sub-view stay hidden
+  // charts (closed group) and the System/Resources sub-view stay hidden
   // throughout. <pre id="hidden-render-probe"> reports each panel's
   // absolute render count after boot, after Refresh, after a search, and
   // again once each panel is actually shown.
@@ -2820,10 +2832,10 @@
           const afterSearch = snap();
           // The <details> "toggle" event queues as its own task, so it must
           // settle (and render Trends while Home is still the active tab)
-          // before switching to Sessions for the resources sub-view.
+          // before switching to System for the resources sub-view.
           document.querySelector('#home-trends > summary').click();
           setTimeout(() => {
-            openTab('sessions/resources');
+            openTab('system/resources');
             setTimeout(() => {
               stamp('hidden-render-probe',
                 `boot:${afterBoot} | refresh:${afterRefresh} | search:${afterSearch} | shown:${snap()}`);

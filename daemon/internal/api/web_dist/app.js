@@ -560,7 +560,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try { sessionStorage.setItem(SS_TOKEN_KEY, fresh); } catch { /* memory only */ }
     // Strip the credential immediately. A general reopen keeps the current
     // route; an explicit drill-down from the menu bar takes its requested tab.
-    let route = activeTab === 'sessions' ? 'sessions/' + activeSub : activeTab;
+    let route = routeKey({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeTab === 'system' ? activeSystemSub : activeSub });
     try { route = sessionStorage.getItem('sa.console-tab') || route; } catch { /* memory only */ }
     const context = consoleContextFromHash(location.hash);
     route = context.route || route || 'home';
@@ -916,7 +916,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function currentViewSnapshot(name) {
     return {
       name,
-      tab: routeKey({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeSub }),
+      tab: routeKey({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeTab === 'system' ? activeSystemSub : activeSub }),
       search: (document.getElementById('global-search') || {}).value || '',
       flags: { ...filters.flags },
       events: { ...filters.events },
@@ -1024,9 +1024,9 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // ---------- tabs ----------
-  // The console is organized by question (Home / Sessions / Egress /
-  // Policy / Agent), not by data source. State persists per tab-session; the hash
-  // carries the tab (and the Sessions sub-view) for deep links (#ct is lifted
+  // The console groups Home, Sessions, Protection, System and Agent.
+  // State persists per tab-session; the hash carries the tab and sub-view
+  // for deep links (#ct is lifted
   // and stripped BEFORE this runs, so the two never collide).
   // ---------- render scheduler ----------
   // A panel renders only when the telemetryData slice it reads changed
@@ -1050,12 +1050,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const PANEL_VIEW = {
     attention: 'home', spend: 'home', 'session-daily': 'home',
     flags: 'home:findings', incidents: 'home:findings',
-    activity: 'home:trends', 'chart-flags': 'home:trends', 'chart-memory': 'home:trends',
+    activity: 'home:trends', 'chart-flags': 'home:trends', 'chart-memory': 'system/resources',
     sessions: 'sessions/board', agents: 'sessions/processes', fleet: 'sessions/processes',
-    resources: 'sessions/resources', history: 'sessions/resources',
+    resources: 'system/resources', history: 'system/resources',
     events: 'sessions/events',
     endpoints: 'protection/traffic', 'recurring-egress': 'protection/traffic', firewall: 'protection/rules', sources: 'protection/sources',
-    worktrees: 'system', clutter: 'system',
+    worktrees: 'system/worktrees', clutter: 'system/clutter',
     notify: 'protection/rules', policy: 'protection/rules', 'expected-egress': 'protection/rules', audit: 'protection/audit', agent: 'agent'
   };
   // A panel is on screen when its tab is active, its sub-view is the open
@@ -1065,7 +1065,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!v) return true;
     const [route, group] = v.split(':');
     const [tab, sub] = route.split('/');
-    if (tab !== activeTab || (sub && sub !== (tab === 'protection' ? activeProtection : activeSub))) return false;
+    if (tab !== activeTab || (sub && sub !== (tab === 'protection' ? activeProtection : tab === 'system' ? activeSystemSub : activeSub))) return false;
     return !group || homeGroupOpen(group);
   }
   // Panel → the element whose focused control holds its render.
@@ -1168,6 +1168,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let activeProtection = 'traffic';
   let activeTab = 'home';
   let activeSub = 'board';
+  let activeSystemSub = 'worktrees';
 
   // Worktrees are not telemetry: the tab fetches its report when opened
   // (the daemon caches a scan for 10 minutes) and on Rescan, never on the
@@ -1195,7 +1196,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // A running removal keeps the re-reads going on any tab: its toast
     // follows it to the end.
     if (!rep || !(rep.sizing || rep.refreshing || asking || removing)) return;
-    if (!removing && activeTab !== 'system') return;
+    if (!removing && (activeTab !== 'system' || activeSystemSub !== 'worktrees')) return;
     if (worktreeSizingTimer) {
       // A removal that starts while a sizing re-read waits gets its own
       // cadence at once.
@@ -1206,7 +1207,10 @@ document.addEventListener('DOMContentLoaded', () => {
       worktreeSizingPolls++;
     }
     worktreeSizingFast = removing;
-    worktreeSizingTimer = setTimeout(() => { worktreeSizingTimer = null; loadWorktrees(false); }, removing ? WORKTREE_REMOVAL_POLL_MS : WORKTREE_SIZING_POLL_MS);
+    worktreeSizingTimer = setTimeout(() => {
+      worktreeSizingTimer = null;
+      if (removalRunning(worktreesState.report) || (activeTab === 'system' && activeSystemSub === 'worktrees')) loadWorktrees(false);
+    }, removing ? WORKTREE_REMOVAL_POLL_MS : WORKTREE_SIZING_POLL_MS);
   }
   // Removal progress: one toast follows the removals this page started or
   // saw running (another tab, the CLI) from the first step to what they
@@ -1364,6 +1368,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const clutterState = { report: null, loading: false, error: '', loadedAt: 0, filter: { kind: '' }, expanded: new Set() };
   let clutterSizingTimer = null;
   let clutterSizingPolls = 0;
+  function followClutterSizing() {
+    const rep = clutterState.report;
+    if (rep && (rep.sizing || rep.refreshing) && activeTab === 'system' && activeSystemSub === 'clutter' && !clutterSizingTimer && clutterSizingPolls < WORKTREE_SIZING_POLLS) {
+      clutterSizingPolls++;
+      clutterSizingTimer = setTimeout(() => {
+        clutterSizingTimer = null;
+        if (activeTab === 'system' && activeSystemSub === 'clutter') loadClutter(false);
+      }, WORKTREE_SIZING_POLL_MS);
+    }
+  }
   async function loadClutter(refresh) {
     if (clutterState.loading) return;
     clutterState.loading = true;
@@ -1381,11 +1395,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } finally {
       clutterState.loading = false;
       markDirty('clutter');
-      const rep = clutterState.report;
-      if (rep && (rep.sizing || rep.refreshing) && activeTab === 'system' && !clutterSizingTimer && clutterSizingPolls < WORKTREE_SIZING_POLLS) {
-        clutterSizingPolls++;
-        clutterSizingTimer = setTimeout(() => { clutterSizingTimer = null; loadClutter(false); }, WORKTREE_SIZING_POLL_MS);
-      }
+      followClutterSizing();
     }
   }
 
@@ -1838,6 +1848,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.classList.toggle('agent-page', activeTab === 'agent');
     if (r.tab === 'sessions') activeSub = r.sub;
     if (r.tab === 'protection') activeProtection = r.sub;
+    if (r.tab === 'system') activeSystemSub = r.sub;
     if (from === 'home' && activeTab !== 'home' && attentionSelection) closeDrawer();
     document.querySelectorAll('.tab-btn').forEach(b => {
       const on = b.dataset.tab === activeTab;
@@ -1852,30 +1863,40 @@ document.addEventListener('DOMContentLoaded', () => {
       const on = activeTab === 'protection' && b.dataset.protectionView === activeProtection;
       b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on));
     });
-    document.querySelectorAll('.subtab-btn[data-subtab]').forEach(b => {
+    document.querySelectorAll('#tab-sessions .subtab-btn[data-subtab]').forEach(b => {
       const on = b.dataset.subtab === activeSub;
       b.classList.toggle('active', on);
       b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
-    document.querySelectorAll('.subview').forEach(v => { v.hidden = v.id !== 'sub-' + activeSub; });
+    document.querySelectorAll('#tab-sessions .subview').forEach(v => { v.hidden = v.id !== 'sub-' + activeSub; });
+    document.querySelectorAll('#tab-system [data-system-subtab]').forEach(b => {
+      const on = b.dataset.systemSubtab === activeSystemSub;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', String(on));
+    });
+    document.querySelectorAll('#tab-system .system-subview').forEach(v => {
+      v.hidden = v.dataset.systemView !== activeSystemSub;
+    });
     const group = opts.group && document.getElementById('home-' + opts.group);
     if (group && activeTab === 'home' && !group.open) group.open = true;
-    const key = routeKey({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeSub });
+    const key = routeKey({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeTab === 'system' ? activeSystemSub : activeSub });
     try { sessionStorage.setItem('sa.console-tab', key); } catch { /* private mode */ }
     if (!opts.skipHash && window.history.replaceState) {
-      history.replaceState(null, '', location.pathname + location.search + consoleRouteHash({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeSub }));
+      history.replaceState(null, '', location.pathname + location.search + consoleRouteHash({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeTab === 'system' ? activeSystemSub : activeSub }));
     }
     PANELS.forEach(([name]) => { if (panelOnScreen(name)) dirtyPanels.add(name); });
     renderDirty();
-    if (activeTab === 'system'
+    if (activeTab === 'system' && activeSystemSub === 'worktrees'
       && (!worktreesState.report || Date.now() - worktreesState.loadedAt > WORKTREE_STALE_MS)) {
       loadWorktrees(false);
     }
-    if (activeTab === 'system'
+    if (activeTab === 'system' && activeSystemSub === 'clutter'
       && (!clutterState.report || Date.now() - clutterState.loadedAt > WORKTREE_STALE_MS)) {
       loadClutter(false);
     }
-    if (activeTab === 'system'
+    if (activeTab === 'system' && activeSystemSub === 'worktrees') followWorktreeSizing();
+    if (activeTab === 'system' && activeSystemSub === 'clutter') followClutterSizing();
+    if (activeTab === 'system' && activeSystemSub === 'worktrees'
       && (!worktreesState.ledger || Date.now() - worktreesState.ledgerAt > WORKTREE_STALE_MS)) {
       loadLedger();
     }
@@ -1885,11 +1906,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (focus && focus.scrollIntoView) focus.scrollIntoView({ behavior: 'auto', block: 'start' });
   }
 
-  // The Sessions tab reopens its last sub-view.
+  // Grouped primary tabs reopen their last sub-view.
   document.querySelectorAll('.tab-btn').forEach(b =>
-    b.addEventListener('click', () => switchTab(b.dataset.tab === 'sessions' ? 'sessions/' + activeSub : b.dataset.tab === 'protection' ? 'protection/' + activeProtection : b.dataset.tab)));
-  document.querySelectorAll('.subtab-btn[data-subtab]').forEach(b =>
+    b.addEventListener('click', () => switchTab(b.dataset.tab === 'sessions' ? 'sessions/' + activeSub : b.dataset.tab === 'protection' ? 'protection/' + activeProtection : b.dataset.tab === 'system' ? 'system/' + activeSystemSub : b.dataset.tab)));
+  document.querySelectorAll('#tab-sessions .subtab-btn[data-subtab]').forEach(b =>
     b.addEventListener('click', () => switchTab('sessions/' + b.dataset.subtab)));
+  document.querySelectorAll('#tab-system [data-system-subtab]').forEach(b =>
+    b.addEventListener('click', () => switchTab('system/' + b.dataset.systemSubtab)));
 
   // Tab badges: the "something needs you here" signal for hidden panels.
   // home, sessions, egress are tab badges; the sessions and processes
@@ -3900,7 +3923,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!res.ok) throw new Error(await res.text());
       revert.commit?.();
       showToast(decision === 'dismiss' ? 'Session kept running for the cooldown window.' : decision === 'resume' ? 'Session resumed.' : 'Intervention applied.', 'success');
-      cardNote('', '', activeTab === 'sessions' && activeSub === 'resources' ? 'resource-board' : 'attention-list', decision === 'dismiss' ? 'kept running' : decision === 'resume' ? 'resumed' : 'applied');
+      cardNote('', '', activeTab === 'system' && activeSystemSub === 'resources' ? 'resource-board' : 'attention-list', decision === 'dismiss' ? 'kept running' : decision === 'resume' ? 'resumed' : 'applied');
       fetchTelemetry({ slow: true });
     } catch (err) {
       revert();
