@@ -33,7 +33,7 @@ func TestIncidentLinkRejectsInvalidTargetsAndRecovers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if id, found, err := s.IncidentIDForFlagResult("source"); err == nil || found || id != "" {
+			if id, found, err := s.IncidentIDForFlag("source"); err == nil || found || id != "" {
 				t.Errorf("unusable incident link accepted: %q %v", id, found)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != 1 || !slices.Contains(h.ReadActive, "incident links") {
@@ -50,7 +50,7 @@ func TestIncidentLinkRejectsInvalidTargetsAndRecovers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if id, found := testutil.Lookup[string](t)(s.IncidentIDForFlagResult("source")); !found || id != "incident" {
+			if id, found := testutil.Lookup[string](t)(s.IncidentIDForFlag("source")); !found || id != "incident" {
 				t.Errorf("repaired target unavailable: %q %v", id, found)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 0 {
@@ -64,7 +64,7 @@ func TestIncidentLinkCheckedMissingAndBatchResults(t *testing.T) {
 	for _, ids := range [][]string{{"bad", "good", "bad", "missing"}, {"good", "bad", "missing", "bad"}} {
 		t.Run(ids[0], func(t *testing.T) {
 			s := reviewStore(t)
-			if id, found, err := s.IncidentIDForFlagResult("missing"); err != nil || found || id != "" {
+			if id, found, err := s.IncidentIDForFlag("missing"); err != nil || found || id != "" {
 				t.Fatalf("missing link: %q %v %v", id, found, err)
 			}
 			for _, id := range []string{"bad", "good"} {
@@ -85,13 +85,13 @@ func TestIncidentLinkCheckedMissingAndBatchResults(t *testing.T) {
 			if _, err := s.db.Exec(`ALTER TABLE incidents RENAME TO unavailable_incidents`); err != nil {
 				t.Fatal(err)
 			}
-			if id, found, err := s.IncidentIDForFlagResult("missing"); err == nil || found || id != "" {
+			if id, found, err := s.IncidentIDForFlag("missing"); err == nil || found || id != "" {
 				t.Errorf("unavailable link treated as missing: %q %v %v", id, found, err)
 			}
 			if _, err := s.db.Exec(`ALTER TABLE unavailable_incidents RENAME TO incidents`); err != nil {
 				t.Fatal(err)
 			}
-			if id, found, err := s.IncidentIDForFlagResult("missing"); err != nil || found || id != "" {
+			if id, found, err := s.IncidentIDForFlag("missing"); err != nil || found || id != "" {
 				t.Errorf("healthy missing lookup did not recover: %q %v %v", id, found, err)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != 2 || len(h.ReadActive) != 0 {

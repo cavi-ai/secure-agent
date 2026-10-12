@@ -36,7 +36,7 @@ func TestMuteLoadFailureDoesNotAcknowledgeFlags(t *testing.T) {
 			if response.Code != http.StatusInternalServerError {
 				t.Fatalf("status = %d, want 500; body = %s", response.Code, response.Body.String())
 			}
-			if flag, ok := testutil.Lookup[model.Flag](t)(st.GetFlagResult("open-flag")); !ok || flag.Acknowledged {
+			if flag, ok := testutil.Lookup[model.Flag](t)(st.GetFlag("open-flag")); !ok || flag.Acknowledged {
 				t.Fatalf("failed mute changed the open flag: %+v, found = %v", flag, ok)
 			}
 			if audit := st.RecentAudit(10); len(audit) != 0 {
@@ -81,12 +81,12 @@ func TestMuteFlowAcknowledgesExistingFlags(t *testing.T) {
 		t.Fatalf("mute POST: %d %s", w.Code, w.Body.String())
 	}
 	for _, id := range []string{"f1", "f2"} {
-		got, ok := testutil.Lookup[model.Flag](t)(st.GetFlagResult(id))
+		got, ok := testutil.Lookup[model.Flag](t)(st.GetFlag(id))
 		if !ok || !got.Acknowledged {
 			t.Fatalf("flag %s must be acknowledged by the mute (localhost alias family)", id)
 		}
 	}
-	got3, _ := testutil.Lookup[model.Flag](t)(st.GetFlagResult("f3"))
+	got3, _ := testutil.Lookup[model.Flag](t)(st.GetFlag("f3"))
 	if got3.Acknowledged {
 		t.Fatal("f3 (different host) must stay unacknowledged")
 	}
@@ -120,10 +120,10 @@ func TestMuteAgentRoundTrip(t *testing.T) {
 	if !mutes.Muted("keychain-access", "*", "codex") || mutes.Muted("keychain-access", "*", "claude") {
 		t.Fatal("the mute must cover codex only")
 	}
-	if f, _ := testutil.Lookup[model.Flag](t)(st.GetFlagResult("k1")); !f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(st.GetFlag("k1")); !f.Acknowledged {
 		t.Fatal("codex flag must be acknowledged")
 	}
-	if f, _ := testutil.Lookup[model.Flag](t)(st.GetFlagResult("k2")); f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(st.GetFlag("k2")); f.Acknowledged {
 		t.Fatal("claude flag must stay open")
 	}
 	if w := do("GET", "/mute", ""); !strings.Contains(w.Body.String(), `{"rule":"keychain-access","host":"*","agent":"codex","title":"Agent touched the keychain"}`) {
@@ -171,7 +171,7 @@ func TestFlagAcknowledgeEndpoint(t *testing.T) {
 	if w := ack("valid-id.1"); w.Code != 200 {
 		t.Fatalf("ack: %d %s", w.Code, w.Body.String())
 	}
-	got, ok := testutil.Lookup[model.Flag](t)(st.GetFlagResult("valid-id.1"))
+	got, ok := testutil.Lookup[model.Flag](t)(st.GetFlag("valid-id.1"))
 	if !ok || !got.Acknowledged {
 		t.Fatal("flag must be acknowledged after first ack")
 	}

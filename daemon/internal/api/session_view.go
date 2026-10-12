@@ -21,13 +21,13 @@ func sessionTimelineLimit(raw string) int {
 }
 
 type sessionTimelineStore interface {
-	QueryEventsResult(store.EventFilter) ([]event.Event, error)
+	QueryEvents(store.EventFilter) ([]event.Event, error)
 }
 
 // sessionTimeline answers one domain question, including its presentation
 // ordering, independent of HTTP and the concrete SQLite store.
 func sessionTimeline(st sessionTimelineStore, id string, limit int) ([]event.Event, error) {
-	rows, err := st.QueryEventsResult(store.EventFilter{SessionID: id, Limit: limit})
+	rows, err := st.QueryEvents(store.EventFilter{SessionID: id, Limit: limit})
 	if err != nil {
 		return nil, err
 	}

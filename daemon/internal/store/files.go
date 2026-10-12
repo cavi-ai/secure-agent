@@ -24,9 +24,9 @@ func jsonLike(path string) string {
 	return "%" + enc + "%"
 }
 
-// PathFindingsResult returns no partial findings when a query or candidate
+// PathFindings returns no partial findings when a query or candidate
 // row cannot be read. A successful empty result is non-nil.
-func (s *Store) PathFindingsResult(path string, limit int) (findings []model.FileFinding, readErr error) {
+func (s *Store) PathFindings(path string, limit int) (findings []model.FileFinding, readErr error) {
 	defer func() { s.noteRead("path findings", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -101,9 +101,9 @@ func (s *Store) PathFindingsResult(path string, limit int) (findings []model.Fil
 	return out, nil
 }
 
-// PathAccessesResult distinguishes unavailable access history from an empty
+// PathAccesses distinguishes unavailable access history from an empty
 // history and discards partial results on failure.
-func (s *Store) PathAccessesResult(path string, limit int) (accesses []model.FileAccess, readErr error) {
+func (s *Store) PathAccesses(path string, limit int) (accesses []model.FileAccess, readErr error) {
 	defer func() { s.noteRead("path accesses", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()

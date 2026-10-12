@@ -81,11 +81,11 @@ func TestForeignReviewMembershipRejectsHTTPDecisionAndRecovers(t *testing.T) {
 	}
 	request("GET", "/reviews", nil, 200)
 	request("POST", "/reviews/decision", body, 200)
-	first, found, err := st.GetFlagResult("first")
+	first, found, err := st.GetFlag("first")
 	if err != nil || !found || !first.Acknowledged {
 		t.Fatalf("valid decision failed after repair: %+v %v", first, err)
 	}
-	second, found, err := st.GetFlagResult("second")
+	second, found, err := st.GetFlag("second")
 	if err != nil || !found || second.Acknowledged {
 		t.Fatalf("valid decision crossed repaired membership: %+v %v", second, err)
 	}

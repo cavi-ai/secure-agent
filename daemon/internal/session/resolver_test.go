@@ -56,7 +56,7 @@ func TestResolveProcessTreeTier(t *testing.T) {
 	if id == "" || e.SessionID != id {
 		t.Fatalf("Resolve did not attribute: %q", id)
 	}
-	sessions := testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))
+	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 1 {
 		t.Fatalf("sessions = %d, want 1", len(sessions))
 	}
@@ -111,7 +111,7 @@ func TestChildProcessJoinsHarnessSession(t *testing.T) {
 	if child != want || root != want {
 		t.Fatalf("child=%q root=%q, want both %q", child, root, want)
 	}
-	sessions := testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))
+	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 1 {
 		t.Fatalf("sessions = %d, want 1: %+v", len(sessions), sessions)
 	}
@@ -129,7 +129,7 @@ func TestResolveHookStampedEvent(t *testing.T) {
 	if id := r.Resolve(&e); id != "hook-1" {
 		t.Fatalf("id = %q, want hook-1", id)
 	}
-	sessions := testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))
+	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 1 || sessions[0].Confidence != model.ConfHook || sessions[0].Harness != "claude" {
 		t.Fatalf("sessions = %+v", sessions)
 	}
@@ -147,7 +147,7 @@ func TestHandshakeRekeysProcessTreeSession(t *testing.T) {
 		Repo: "repo", Branch: "main", PID: 100, TS: time.Now(),
 	})
 
-	sessions := testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))
+	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 1 {
 		t.Fatalf("sessions = %d, want 1 after rekey (%+v)", len(sessions), sessions)
 	}
@@ -156,7 +156,7 @@ func TestHandshakeRekeysProcessTreeSession(t *testing.T) {
 		t.Fatalf("session = %+v", s)
 	}
 	// The old event followed the rekey.
-	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEventsResult(store.EventFilter{Limit: 10})) {
+	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEvents(store.EventFilter{Limit: 10})) {
 		if ev.SessionID == procID {
 			t.Fatalf("event still attributed to rekeyed id %q", procID)
 		}
@@ -180,9 +180,9 @@ func TestSweepEndsSessionsWhoseRootExited(t *testing.T) {
 	r.tagger.Refresh()
 	r.Sweep()
 
-	sessions := testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{Status: model.SessionEnded}))
+	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{Status: model.SessionEnded}))
 	if len(sessions) != 1 {
-		t.Fatalf("ended = %d, want 1 (%+v)", len(sessions), testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{})))
+		t.Fatalf("ended = %d, want 1 (%+v)", len(sessions), testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{})))
 	}
 }
 
@@ -300,7 +300,7 @@ func TestGitInfoReadFromWorkspace(t *testing.T) {
 	})
 	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now()}
 	r.Resolve(&e)
-	sessions := testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))
+	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 1 {
 		t.Fatalf("sessions = %d, want 1", len(sessions))
 	}
@@ -399,7 +399,7 @@ func TestSessionFloorDefersYoungRoots(t *testing.T) {
 	if id == "" {
 		t.Fatal("young root must still be attributed in memory")
 	}
-	if n := len(testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))); n != 0 {
+	if n := len(testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))); n != 0 {
 		t.Fatalf("young root persisted %d sessions, want 0 (deferred)", n)
 	}
 	// The root ages past the floor: the next touch persists it.
@@ -408,7 +408,7 @@ func TestSessionFloorDefersYoungRoots(t *testing.T) {
 	if id2 := r.Resolve(&e2); id2 != id {
 		t.Fatalf("id changed across touch: %q vs %q", id2, id)
 	}
-	if n := len(testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))); n != 1 {
+	if n := len(testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))); n != 1 {
 		t.Fatalf("sessions = %d, want 1 after floor", n)
 	}
 }
@@ -431,12 +431,12 @@ func TestSessionFloorDropsYoungDeaths(t *testing.T) {
 	// A late touch must not promote the dead stub.
 	r.mu.Lock()
 	r.touchLocked("proc-100-0", time.Now().Add(2*time.Minute).Add(31*time.Second))
-	rows := len(testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{})))
+	rows := len(testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{})))
 	r.mu.Unlock()
 	if rows != 0 {
 		t.Fatalf("sessions = %d, want 0 (young death promoted via Tag-failure)", rows)
 	}
-	if n := len(testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{Status: model.SessionEnded}))); n != 0 {
+	if n := len(testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{Status: model.SessionEnded}))); n != 0 {
 		t.Fatalf("ended rows = %d, want 0", n)
 	}
 }
@@ -453,7 +453,7 @@ func TestAgedWorkspacePersistsRegardlessOfPath(t *testing.T) {
 	if id := r.Resolve(&e); id == "" {
 		t.Fatal("must attribute in memory")
 	}
-	if n := len(testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))); n != 1 {
+	if n := len(testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))); n != 1 {
 		t.Fatalf("aged session persisted %d rows, want 1", n)
 	}
 }
@@ -565,7 +565,7 @@ func TestTranscriptSessionJoinsProcessTreeSession(t *testing.T) {
 	// Then the transcript names the conversation for the same workspace.
 	r.NoteTranscriptSession("conv-abc", "claude", "/repo", time.Now())
 
-	sessions := testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))
+	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 1 {
 		t.Fatalf("sessions = %d, want 1 (joined, not duplicated): %+v", len(sessions), sessions)
 	}
@@ -574,7 +574,7 @@ func TestTranscriptSessionJoinsProcessTreeSession(t *testing.T) {
 		t.Fatalf("joined session = %+v", s)
 	}
 	// The earlier OS event followed the rekey.
-	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEventsResult(store.EventFilter{Limit: 10})) {
+	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEvents(store.EventFilter{Limit: 10})) {
 		if ev.SessionID == procID {
 			t.Fatalf("event still on provisional id %q", procID)
 		}
@@ -593,7 +593,7 @@ func TestProcessTreeAdoptsPriorTranscriptSession(t *testing.T) {
 	if id != "conv-xyz" {
 		t.Fatalf("resolved id = %q, want conv-xyz (adopted)", id)
 	}
-	if n := len(testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))); n != 1 {
+	if n := len(testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))); n != 1 {
 		t.Fatalf("sessions = %d, want 1", n)
 	}
 }
@@ -609,7 +609,7 @@ func TestSecondTranscriptIdIsSiblingNotRekey(t *testing.T) {
 	r.NoteTranscriptSession("conv-1", "claude", "/repo", now)
 	r.NoteTranscriptSession("conv-2", "claude", "/repo", now.Add(time.Minute))
 
-	sessions := testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))
+	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 2 {
 		t.Fatalf("sessions = %d, want 2 sibling rows: %+v", len(sessions), sessions)
 	}
@@ -634,7 +634,7 @@ func TestTranscriptJoinThenSiblingStaysPut(t *testing.T) {
 	r.NoteTranscriptSession("conv-1", "claude", "/repo", time.Now())
 	r.NoteTranscriptSession("conv-2", "claude", "/repo", time.Now().Add(time.Minute))
 
-	sessions := testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))
+	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 2 {
 		t.Fatalf("sessions = %d, want 2 (joined conv-1 + sibling conv-2): %+v", len(sessions), sessions)
 	}
@@ -645,7 +645,7 @@ func TestTranscriptJoinThenSiblingStaysPut(t *testing.T) {
 	if !ids["conv-1"] || !ids["conv-2"] {
 		t.Fatalf("session ids = %v, want conv-1 and conv-2", ids)
 	}
-	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEventsResult(store.EventFilter{Limit: 10})) {
+	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEvents(store.EventFilter{Limit: 10})) {
 		if ev.SessionID == procID {
 			t.Fatalf("event still on provisional id %q", procID)
 		}
@@ -673,7 +673,7 @@ func TestHookEventJoinsProcessTree(t *testing.T) {
 	if id := resolvePID(t, r, 100); id != "hook-x" {
 		t.Fatalf("root pid resolves to %q, want hook-x", id)
 	}
-	if n := len(testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))); n != 1 {
+	if n := len(testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))); n != 1 {
 		t.Fatalf("sessions = %d, want 1 (no process-tree row beside the hook row)", n)
 	}
 }
@@ -694,12 +694,12 @@ func TestHookEventRekeysProcessTreeSession(t *testing.T) {
 	h := event.Event{Kind: event.KindPluginAction, PID: 100, SessionID: "hook-x", TS: time.Now()}
 	r.Resolve(&h)
 
-	sessions := testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))
+	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 1 || sessions[0].ID != "hook-x" || sessions[0].RootPID != 100 || sessions[0].Confidence != model.ConfHook {
 		t.Fatalf("sessions = %+v, want one hook-x rooted at 100", sessions)
 	}
 	moved := false
-	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEventsResult(store.EventFilter{Limit: 10})) {
+	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEvents(store.EventFilter{Limit: 10})) {
 		if ev.SessionID == procID {
 			t.Fatalf("event still attributed to rekeyed id %q", procID)
 		}
@@ -730,7 +730,7 @@ func TestHookEventPromotesDeferredSession(t *testing.T) {
 	if len(r.deferred) != 0 {
 		t.Fatalf("deferred = %+v, want empty after the hook join", r.deferred)
 	}
-	sessions := testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))
+	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 1 || sessions[0].ID != "hook-x" || sessions[0].RootPID != 100 {
 		t.Fatalf("sessions = %+v, want one hook-x rooted at 100", sessions)
 	}
@@ -876,13 +876,13 @@ func TestJoinTranscriptPIDRekeysProcessTreeSession(t *testing.T) {
 	procID := r.Resolve(&e)
 	st.PutEvent(e)
 	r.NoteTranscriptSession("rollout-a", "codex", "/teams/x", time.Now())
-	if n := len(testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))); n != 2 {
+	if n := len(testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))); n != 2 {
 		t.Fatalf("sessions before join = %d, want 2 (workspaces differ)", n)
 	}
 
 	r.JoinTranscriptPID("rollout-a", 100)
 
-	sessions := testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))
+	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 1 {
 		t.Fatalf("sessions = %+v, want one", sessions)
 	}
@@ -890,7 +890,7 @@ func TestJoinTranscriptPIDRekeysProcessTreeSession(t *testing.T) {
 	if s.ID != "rollout-a" || s.RootPID != 100 || s.RootStartedAt == "" || s.Confidence != model.ConfTranscript || s.Workspace != "/teams/x" {
 		t.Fatalf("session = %+v, want rollout-a rooted at 100, transcript, /teams/x", s)
 	}
-	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEventsResult(store.EventFilter{Limit: 10})) {
+	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEvents(store.EventFilter{Limit: 10})) {
 		if ev.Path == "/teams/x/a" && ev.SessionID != "rollout-a" {
 			t.Fatalf("process-tree event on %q, want rollout-a (was %q)", ev.SessionID, procID)
 		}
@@ -915,7 +915,7 @@ func TestJoinTranscriptPIDRepeatIsNoop(t *testing.T) {
 	if emitted != 0 || after != before {
 		t.Fatalf("repeat join emitted %d, row %+v → %+v; want a no-op", emitted, before, after)
 	}
-	if n := len(testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{}))); n != 1 {
+	if n := len(testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))); n != 1 {
 		t.Fatalf("sessions = %d, want 1", n)
 	}
 }
@@ -941,7 +941,7 @@ func TestJoinTranscriptPIDNewerRolloutTakesRoot(t *testing.T) {
 		t.Fatalf("a = %+v %v, b = %+v %v; want both rows rooted at 100", a, okA, b, okB)
 	}
 	kept := false
-	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEventsResult(store.EventFilter{Limit: 10})) {
+	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEvents(store.EventFilter{Limit: 10})) {
 		if ev.Path == "/teams/x/a" && ev.SessionID == "rollout-a" {
 			kept = true
 		}
@@ -1162,7 +1162,7 @@ func TestSameCwdTranscriptJoinsTheRootHoldingIt(t *testing.T) {
 	}
 
 	want := map[string]string{"/teams/a/x": "rollout-a", "/teams/b/x": "rollout-b"}
-	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEventsResult(store.EventFilter{Limit: 10})) {
+	for _, ev := range testutil.Read[[]event.Event](t)(st.QueryEvents(store.EventFilter{Limit: 10})) {
 		if w, ok := want[ev.Path]; ok && ev.SessionID != w {
 			t.Fatalf("event %s on %q, want %q", ev.Path, ev.SessionID, w)
 		}
@@ -1173,7 +1173,7 @@ func TestSameCwdTranscriptJoinsTheRootHoldingIt(t *testing.T) {
 		}
 	}
 	roots := map[int32]string{}
-	for _, s := range testutil.Read[[]model.Session](t)(st.ListSessionsResult(store.SessionFilter{Harness: "codex"})) {
+	for _, s := range testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{Harness: "codex"})) {
 		if prev, dup := roots[s.RootPID]; dup {
 			t.Fatalf("%q and %q share root %d", prev, s.ID, s.RootPID)
 		}

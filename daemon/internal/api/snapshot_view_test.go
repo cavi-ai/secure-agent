@@ -18,11 +18,11 @@ type memorySnapshotRowsStore struct {
 	eventReads int
 }
 
-func (s *memorySnapshotRowsStore) ListSessionsResult(store.SessionFilter) ([]model.Session, error) {
+func (s *memorySnapshotRowsStore) ListSessions(store.SessionFilter) ([]model.Session, error) {
 	return s.sessions, s.sessionErr
 }
 
-func (s *memorySnapshotRowsStore) QueryEventsResult(store.EventFilter) ([]event.Event, error) {
+func (s *memorySnapshotRowsStore) QueryEvents(store.EventFilter) ([]event.Event, error) {
 	s.eventReads++
 	return s.events, s.eventErr
 }

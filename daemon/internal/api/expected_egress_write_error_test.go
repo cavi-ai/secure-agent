@@ -43,7 +43,7 @@ func TestExpectedEgressWriteFailureAndRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			baseline := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRulesResult())
+			baseline := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRules())
 			mux := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil}).buildMux()
 			request := func(method, path, body string) *httptest.ResponseRecorder {
 				w := httptest.NewRecorder()
@@ -108,7 +108,7 @@ func TestExpectedEgressWriteFailureAndRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRulesResult()); !reflect.DeepEqual(got, baseline) {
+			if got := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRules()); !reflect.DeepEqual(got, baseline) {
 				t.Errorf("failed mutation changed rule state: got %+v, want %+v", got, baseline)
 			}
 			if w := request(http.MethodDelete, "/expected-egress?id=00000000000000000000000000000000", ""); w.Code != http.StatusNotFound {

@@ -7,18 +7,18 @@ import (
 )
 
 type snapshotRowsStore interface {
-	ListSessionsResult(store.SessionFilter) ([]model.Session, error)
-	QueryEventsResult(store.EventFilter) ([]event.Event, error)
+	ListSessions(store.SessionFilter) ([]model.Session, error)
+	QueryEvents(store.EventFilter) ([]event.Event, error)
 }
 
 // readSnapshotRows loads the bounded session and event rows used by the
 // snapshot. Neither source can produce a successful partial snapshot.
 func readSnapshotRows(st snapshotRowsStore) ([]model.Session, []event.Event, error) {
-	sessions, err := st.ListSessionsResult(store.SessionFilter{Limit: 100})
+	sessions, err := st.ListSessions(store.SessionFilter{Limit: 100})
 	if err != nil {
 		return nil, nil, err
 	}
-	events, err := st.QueryEventsResult(store.EventFilter{Limit: 50})
+	events, err := st.QueryEvents(store.EventFilter{Limit: 50})
 	if err != nil {
 		return nil, nil, err
 	}

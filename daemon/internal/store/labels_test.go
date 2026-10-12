@@ -26,13 +26,13 @@ func lbl(rule, agent, pattern, label, source string) model.OperatorLabel {
 
 func TestSimilarLabelsRejectPartialCorruptHistory(t *testing.T) {
 	s := labelStore(t)
-	s.PutOperatorLabelResult(lbl("r", "codex", "/fixture", "ok", "mark"))
-	s.PutOperatorLabelResult(lbl("r", "codex", "/fixture", "not_ok", "mark"))
+	s.PutOperatorLabel(lbl("r", "codex", "/fixture", "ok", "mark"))
+	s.PutOperatorLabel(lbl("r", "codex", "/fixture", "not_ok", "mark"))
 	badTimestamp := "malformed-timestamp-fixture"
 	if _, err := s.db.Exec(`UPDATE operator_labels SET created_at=? WHERE id=1`, badTimestamp); err != nil {
 		t.Fatal(err)
 	}
-	if labels, err := s.SimilarLabelsResult("r", "codex", "/fixture", 5); err == nil || len(labels) != 0 || strings.Contains(err.Error(), badTimestamp) {
+	if labels, err := s.SimilarLabels("r", "codex", "/fixture", 5); err == nil || len(labels) != 0 || strings.Contains(err.Error(), badTimestamp) {
 		t.Fatalf("corrupt history was not safely rejected: labels=%+v err=%v", labels, err)
 	}
 }
@@ -42,10 +42,10 @@ func TestOperatorLabelReadFailuresReachHealth(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.LabelSummaryResult("codex", "/fixture", "r"); err == nil {
+	if _, err := s.LabelSummary("codex", "/fixture", "r"); err == nil {
 		t.Fatal("closed summary read succeeded")
 	}
-	if _, err := s.SimilarLabelsResult("r", "codex", "/fixture", 5); err == nil {
+	if _, err := s.SimilarLabels("r", "codex", "/fixture", 5); err == nil {
 		t.Fatal("closed label history read succeeded")
 	}
 	if health := s.WriteHealth(); len(health.ReadActive) != 2 {
@@ -64,7 +64,7 @@ func TestOperatorLabelRetentionFailureRollsBackJudgment(t *testing.T) {
 	if _, err := s.db.Exec(`CREATE TRIGGER reject_label_prune BEFORE DELETE ON operator_labels BEGIN SELECT RAISE(ABORT, 'fixture prune failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutOperatorLabelResult(lbl("r", "codex", "/fixture", "not_ok", "mark")); err == nil {
+	if err := s.PutOperatorLabel(lbl("r", "codex", "/fixture", "not_ok", "mark")); err == nil {
 		t.Fatal("retention failure was reported as a saved judgment")
 	}
 	var count, notOK int
@@ -77,7 +77,7 @@ func TestOperatorLabelRetentionFailureRollsBackJudgment(t *testing.T) {
 	if _, err := s.db.Exec(`DROP TRIGGER reject_label_prune`); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutOperatorLabelResult(lbl("r", "codex", "/fixture", "not_ok", "mark")); err != nil {
+	if err := s.PutOperatorLabel(lbl("r", "codex", "/fixture", "not_ok", "mark")); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(label='not_ok'),0) FROM operator_labels`).Scan(&count, &notOK); err != nil {
@@ -93,7 +93,7 @@ func TestOperatorLabelResultReportsClosedStore(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutOperatorLabelResult(lbl("r", "codex", "/fixture", "ok", "mark")); err == nil {
+	if err := s.PutOperatorLabel(lbl("r", "codex", "/fixture", "ok", "mark")); err == nil {
 		t.Fatal("closed store reported a saved judgment")
 	}
 }
@@ -102,14 +102,14 @@ func TestOperatorLabelResultReportsClosedStore(t *testing.T) {
 // pattern, the same rule and agent, the same pattern, the same rule.
 func TestSimilarLabelsRanking(t *testing.T) {
 	s := labelStore(t)
-	s.PutOperatorLabelResult(lbl("r2", "", "", "ok", "mark"))              // same rule only
-	s.PutOperatorLabelResult(lbl("", "other", "/w/a", "ok", "allow-path")) // same pattern only
-	s.PutOperatorLabelResult(lbl("r1", "codex", "/w/b", "not_ok", "mark")) // same rule + agent
-	s.PutOperatorLabelResult(lbl("", "codex", "/w/a", "ok", "allow-path")) // same agent + pattern
-	s.PutOperatorLabelResult(lbl("r1", "codex", "/w/a", "ok", "mark"))     // exact
-	s.PutOperatorLabelResult(lbl("zz", "nobody", "/x", "not_ok", "mark"))  // unrelated
+	s.PutOperatorLabel(lbl("r2", "", "", "ok", "mark"))              // same rule only
+	s.PutOperatorLabel(lbl("", "other", "/w/a", "ok", "allow-path")) // same pattern only
+	s.PutOperatorLabel(lbl("r1", "codex", "/w/b", "not_ok", "mark")) // same rule + agent
+	s.PutOperatorLabel(lbl("", "codex", "/w/a", "ok", "allow-path")) // same agent + pattern
+	s.PutOperatorLabel(lbl("r1", "codex", "/w/a", "ok", "mark"))     // exact
+	s.PutOperatorLabel(lbl("zz", "nobody", "/x", "not_ok", "mark"))  // unrelated
 
-	got := testutil.Read[[]model.OperatorLabel](t)(s.SimilarLabelsResult("r1", "codex", "/w/a", 10))
+	got := testutil.Read[[]model.OperatorLabel](t)(s.SimilarLabels("r1", "codex", "/w/a", 10))
 	var order []string
 	for _, l := range got {
 		order = append(order, l.Rule+"|"+l.Agent+"|"+l.Pattern)
@@ -123,10 +123,10 @@ func TestSimilarLabelsRanking(t *testing.T) {
 			t.Fatalf("similar = %v, want %v", order, want)
 		}
 	}
-	if got := testutil.Read[[]model.OperatorLabel](t)(s.SimilarLabelsResult("r1", "codex", "/w/a", 2)); len(got) != 2 {
+	if got := testutil.Read[[]model.OperatorLabel](t)(s.SimilarLabels("r1", "codex", "/w/a", 2)); len(got) != 2 {
 		t.Fatalf("limit: %d", len(got))
 	}
-	if got := testutil.Read[[]model.OperatorLabel](t)(s.SimilarLabelsResult("", "", "", 10)); got == nil || len(got) != 0 {
+	if got := testutil.Read[[]model.OperatorLabel](t)(s.SimilarLabels("", "", "", 10)); got == nil || len(got) != 0 {
 		t.Fatalf("empty keys: %#v, want empty non-nil", got)
 	}
 }
@@ -135,19 +135,19 @@ func TestSimilarLabelsRanking(t *testing.T) {
 // and agent when there is no pattern; another agent never counts.
 func TestLabelSummaryIsPerCase(t *testing.T) {
 	s := labelStore(t)
-	s.PutOperatorLabelResult(lbl("r1", "codex", "/w/a", "ok", "mark"))
-	s.PutOperatorLabelResult(lbl("", "codex", "/w/a", "ok", "allow-path"))
-	s.PutOperatorLabelResult(lbl("r1", "codex", "/w/a", "not_ok", "kill"))
-	s.PutOperatorLabelResult(lbl("r1", "claude", "/w/a", "ok", "mark"))
-	s.PutOperatorLabelResult(lbl("r1", "codex", "", "not_ok", "mark"))
+	s.PutOperatorLabel(lbl("r1", "codex", "/w/a", "ok", "mark"))
+	s.PutOperatorLabel(lbl("", "codex", "/w/a", "ok", "allow-path"))
+	s.PutOperatorLabel(lbl("r1", "codex", "/w/a", "not_ok", "kill"))
+	s.PutOperatorLabel(lbl("r1", "claude", "/w/a", "ok", "mark"))
+	s.PutOperatorLabel(lbl("r1", "codex", "", "not_ok", "mark"))
 
-	if got := testutil.Read[model.LabelSummary](t)(s.LabelSummaryResult("codex", "/w/a", "r1")); got.OK != 2 || got.NotOK != 1 {
+	if got := testutil.Read[model.LabelSummary](t)(s.LabelSummary("codex", "/w/a", "r1")); got.OK != 2 || got.NotOK != 1 {
 		t.Fatalf("codex /w/a = %+v, want 2 ok 1 not ok", got)
 	}
-	if got := testutil.Read[model.LabelSummary](t)(s.LabelSummaryResult("codex", "", "r1")); got.OK != 0 || got.NotOK != 1 {
+	if got := testutil.Read[model.LabelSummary](t)(s.LabelSummary("codex", "", "r1")); got.OK != 0 || got.NotOK != 1 {
 		t.Fatalf("codex r1 no pattern = %+v, want 0 ok 1 not ok", got)
 	}
-	if got := testutil.Read[model.LabelSummary](t)(s.LabelSummaryResult("", "", "")); got.OK != 0 || got.NotOK != 0 {
+	if got := testutil.Read[model.LabelSummary](t)(s.LabelSummary("", "", "")); got.OK != 0 || got.NotOK != 0 {
 		t.Fatalf("empty = %+v", got)
 	}
 }

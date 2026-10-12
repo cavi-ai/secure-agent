@@ -320,7 +320,7 @@ func TestReviewWriteFailureRetainsSourceAndDecisionIsAtomic(t *testing.T) {
 	if err == nil {
 		t.Fatal("receipt failure accepted")
 	}
-	f, ok := testutil.Lookup[model.Flag](t)(s.GetFlagResult("source"))
+	f, ok := testutil.Lookup[model.Flag](t)(s.GetFlag("source"))
 	if !ok || f.Acknowledged {
 		t.Fatalf("partial acknowledgment: %+v", f)
 	}
@@ -333,7 +333,7 @@ func TestReviewWriteFailureRetainsSourceAndDecisionIsAtomic(t *testing.T) {
 	if err != nil || !result.Changed {
 		t.Fatalf("projection lost detection: %+v %v", result, err)
 	}
-	if _, ok = testutil.Lookup[model.Flag](t)(s.GetFlagResult("second")); !ok {
+	if _, ok = testutil.Lookup[model.Flag](t)(s.GetFlag("second")); !ok {
 		t.Fatal("source lost")
 	}
 	p, err := s.ListFindingReviews("", 100)

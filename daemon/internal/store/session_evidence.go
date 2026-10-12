@@ -47,7 +47,7 @@ func (s *Store) SessionFindings(id string) (SessionFindings, error) {
 	if !found {
 		return SessionFindings{}, ErrSessionFindingsMissing
 	}
-	flags, err := s.QueryFlagsResult(FlagFilter{SessionID: id, Limit: sessionFindingCap + 1})
+	flags, err := s.QueryFlags(FlagFilter{SessionID: id, Limit: sessionFindingCap + 1})
 	if err != nil {
 		return SessionFindings{}, fmt.Errorf("%w: %w", ErrSessionFindingsRead, err)
 	}
@@ -59,11 +59,11 @@ func (s *Store) SessionFindings(id string) (SessionFindings, error) {
 	return out, nil
 }
 
-// SessionOutcomeResult is the request-handler read of retained receipts.
+// SessionOutcome is the request-handler read of retained receipts.
 // Identity uses the bounded read. Receipt sources then fail independently
 // inside the history. Report aggregation already holds identity and calls
 // SessionOutcomes directly.
-func (s *Store) SessionOutcomeResult(id string) (SessionOutcomeHistory, bool, error) {
+func (s *Store) SessionOutcome(id string) (SessionOutcomeHistory, bool, error) {
 	_, found, err := s.GetSessionBounded(id)
 	if err != nil || !found {
 		return SessionOutcomeHistory{}, found, err

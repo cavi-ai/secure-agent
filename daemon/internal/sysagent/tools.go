@@ -38,9 +38,9 @@ type chatTool struct {
 	} `json:"function"`
 }
 type evidenceStore interface {
-	QueryFlagsResult(store.FlagFilter) ([]model.Flag, error)
-	GetFlagResult(string) (model.Flag, bool, error)
-	SessionReportResult(string) (store.SessionReport, bool, error)
+	QueryFlags(store.FlagFilter) ([]model.Flag, error)
+	GetFlag(string) (model.Flag, bool, error)
+	SessionReport(string) (store.SessionReport, bool, error)
 }
 type replyScope struct {
 	findings  map[string]model.Flag
@@ -62,7 +62,7 @@ func (a *Agent) captureScope(user model.SysAgentMessage) replyScope {
 			return scope
 		}
 		for _, id := range user.FlagIDs {
-			f, found, err := reader.GetFlagResult(id)
+			f, found, err := reader.GetFlag(id)
 			if err != nil || !found {
 				return scope
 			}
@@ -70,7 +70,7 @@ func (a *Agent) captureScope(user model.SysAgentMessage) replyScope {
 		}
 	} else {
 		var err error
-		flags, err = reader.QueryFlagsResult(store.FlagFilter{Limit: 8})
+		flags, err = reader.QueryFlags(store.FlagFilter{Limit: 8})
 		if err != nil {
 			return scope
 		}
@@ -204,7 +204,7 @@ func (a *Agent) readTool(ctx context.Context, scope replyScope, name, args strin
 		if !ok {
 			return `{"available":false}`, nil
 		}
-		rep, found, err := reader.SessionReportResult(id)
+		rep, found, err := reader.SessionReport(id)
 		if err != nil || !found {
 			return `{"available":false,"reason":"session evidence unavailable"}`, nil
 		}

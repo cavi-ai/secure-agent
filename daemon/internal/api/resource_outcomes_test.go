@@ -41,7 +41,7 @@ func TestResourceReceiptReachesAPIAndSessionExport(t *testing.T) {
 	if len(result.Interventions) != 1 || result.Interventions[0].Status != "applied" || result.Interventions[0].Verification != "pending" {
 		t.Fatalf("lost bounded result: %+v", result.Interventions)
 	}
-	report, ok := testutil.Lookup[store.SessionReport](t)(st.SessionReportResult("owned"))
+	report, ok := testutil.Lookup[store.SessionReport](t)(st.SessionReport("owned"))
 	if !ok || len(report.Interventions) != 1 || report.Interventions[0].SessionID != "owned" {
 		t.Fatalf("lost session linkage: %+v", report.Interventions)
 	}

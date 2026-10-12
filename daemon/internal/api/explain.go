@@ -99,7 +99,7 @@ func (a *API) lookupFlag(id string) (model.Flag, bool) {
 }
 
 func (a *API) lookupFlagResult(id string) (model.Flag, bool, error) {
-	f, found, err := a.store.GetFlagResult(id)
+	f, found, err := a.store.GetFlag(id)
 	if err != nil || !found {
 		return f, found, err
 	}
@@ -201,7 +201,7 @@ func (a *API) explainFlagIn(f model.Flag, full bool, env *explainEnv) *model.Fla
 	if pattern == "" {
 		pattern = flagEvidenceHost(f)
 	}
-	if sum, err := a.store.LabelSummaryResult(f.Agent, pattern, f.Rule); err == nil && sum.OK+sum.NotOK > 0 {
+	if sum, err := a.store.LabelSummary(f.Agent, pattern, f.Rule); err == nil && sum.OK+sum.NotOK > 0 {
 		ex.Labels = &sum
 	}
 	return ex
@@ -366,7 +366,7 @@ func (a *API) explainContext(f model.Flag, sess *model.Session, workspace string
 // within explainContextWindow either side.
 func (a *API) nearestEvent(sessionID string, kind event.Kind, anchor time.Time) (event.Event, bool) {
 	k := int(kind)
-	evs, err := a.store.QueryEventsResult(store.EventFilter{
+	evs, err := a.store.QueryEvents(store.EventFilter{
 		Kind:      &k,
 		SessionID: sessionID,
 		Since:     anchor.Add(-explainContextWindow).UTC().Format(time.RFC3339),

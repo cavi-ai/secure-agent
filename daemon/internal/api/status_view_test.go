@@ -24,7 +24,7 @@ func (s *memoryStatusEvidence) LastEventTimes(pids []int32) map[int32]string {
 	return s.times
 }
 func (s *memoryStatusEvidence) SessionsByRootPID() map[int32]model.Session { return s.byRoot }
-func (s *memoryStatusEvidence) QueryFlagsResult(f store.FlagFilter) ([]model.Flag, error) {
+func (s *memoryStatusEvidence) QueryFlags(f store.FlagFilter) ([]model.Flag, error) {
 	s.filter = f
 	s.flagRead++
 	return s.flags, s.flagErr

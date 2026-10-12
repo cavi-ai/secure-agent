@@ -38,7 +38,7 @@ func TestIncidentFlagAliasesSelectNewestInstant(t *testing.T) {
 				}
 			}
 			for _, alias := range []string{"first", "repeat"} {
-				if id, ok := testutil.Lookup[string](t)(s.IncidentIDForFlagResult(alias)); !ok || id != "a-newer" {
+				if id, ok := testutil.Lookup[string](t)(s.IncidentIDForFlag(alias)); !ok || id != "a-newer" {
 					t.Errorf("flag link %s: id=%q found=%v, want a-newer", alias, id, ok)
 				}
 				if report, err := s.GetIncident(alias); err != nil || report.ID != "a-newer" {

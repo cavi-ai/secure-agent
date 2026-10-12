@@ -23,7 +23,7 @@ func TestPutAndReadFlagRoundTrips(t *testing.T) {
 	}
 	defer s.Close()
 	s.PutFlag(model.Flag{ID: "f1", Rule: "r", Severity: 3, PID: 7, Agent: "cursor"})
-	got := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Limit: 10}))
+	got := testutil.Read[[]model.Flag](t)(s.QueryFlags(FlagFilter{Limit: 10}))
 	if len(got) != 1 || got[0].ID != "f1" {
 		t.Fatalf("RecentFlags = %+v", got)
 	}
@@ -120,7 +120,7 @@ func TestQueryFlagsFilters(t *testing.T) {
 		{"none", FlagFilter{}, 3},
 	}
 	for _, tc := range cases {
-		if got := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(tc.f)); len(got) != tc.want {
+		if got := testutil.Read[[]model.Flag](t)(s.QueryFlags(tc.f)); len(got) != tc.want {
 			t.Errorf("%s: got %d flags, want %d", tc.name, len(got), tc.want)
 		}
 	}
@@ -141,10 +141,10 @@ func TestQueryFlagsSinceNormalizesTimezone(t *testing.T) {
 	s.PutFlag(model.Flag{ID: "x", Rule: "r", Severity: 1, Agent: "claude", PID: 1,
 		TS: time.Date(2026, 8, 31, 10, 0, 0, 0, edt)}) // == 14:00Z
 
-	if got := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Since: "2026-08-31T13:00:00Z"})); len(got) != 1 {
+	if got := testutil.Read[[]model.Flag](t)(s.QueryFlags(FlagFilter{Since: "2026-08-31T13:00:00Z"})); len(got) != 1 {
 		t.Fatalf("since=13:00Z should include a 14:00Z flag, got %d", len(got))
 	}
-	if got := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Since: "2026-08-31T15:00:00Z"})); len(got) != 0 {
+	if got := testutil.Read[[]model.Flag](t)(s.QueryFlags(FlagFilter{Since: "2026-08-31T15:00:00Z"})); len(got) != 0 {
 		t.Fatalf("since=15:00Z should exclude a 14:00Z flag, got %d", len(got))
 	}
 }
@@ -163,16 +163,16 @@ func TestQueryEventsFilters(t *testing.T) {
 	s.PutEvent(event.Event{Kind: event.KindFileOpen, PID: 20, TS: now})
 
 	fileOpen := int(event.KindFileOpen)
-	if got := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Kind: &fileOpen})); len(got) != 2 {
+	if got := testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Kind: &fileOpen})); len(got) != 2 {
 		t.Errorf("kind=FileOpen (0) got %d, want 2", len(got))
 	}
-	if got := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{PID: 20})); len(got) != 2 {
+	if got := testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{PID: 20})); len(got) != 2 {
 		t.Errorf("pid=20 got %d, want 2", len(got))
 	}
-	if got := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Kind: &fileOpen, PID: 20})); len(got) != 1 {
+	if got := testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Kind: &fileOpen, PID: 20})); len(got) != 1 {
 		t.Errorf("kind=FileOpen pid=20 got %d, want 1", len(got))
 	}
-	if got := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{})); len(got) != 3 {
+	if got := testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{})); len(got) != 3 {
 		t.Errorf("no filter got %d, want 3", len(got))
 	}
 }
@@ -191,7 +191,7 @@ func TestEventRetentionBatchPruning(t *testing.T) {
 
 	setKindBudget(t, int(event.KindExec), 100)
 	s.PruneEvents()
-	eventsAfterPrune := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 2000}))
+	eventsAfterPrune := testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Limit: 2000}))
 	if len(eventsAfterPrune) != 100 {
 		t.Fatalf("events count after explicit prune = %d, want 100", len(eventsAfterPrune))
 	}
@@ -223,7 +223,7 @@ func TestEventRetentionPerKindTimeWindows(t *testing.T) {
 	s.PruneEvents()
 
 	got := map[event.Kind]int{}
-	for _, e := range testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 100})) {
+	for _, e := range testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Limit: 100})) {
 		got[e.Kind]++
 	}
 	want := map[event.Kind]int{
@@ -313,14 +313,14 @@ func TestIncidentStatusWorkflowForwardOnly(t *testing.T) {
 	id := "inc-wf-1"
 	s.PutIncident(model.IncidentReport{ID: id, Summary: "test", Risk: model.RiskHigh})
 
-	if wf, ok := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult(id)); !ok || wf.Status != "open" {
+	if wf, ok := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatus(id)); !ok || wf.Status != "open" {
 		t.Fatalf("initial status = %+v ok=%v, want open", wf, ok)
 	}
 
-	if _, ok, err := s.SetIncidentStatusResult(id, "acknowledged", ""); err != nil || !ok {
+	if _, ok, err := s.SetIncidentStatus(id, "acknowledged", ""); err != nil || !ok {
 		t.Fatalf("ack: ok=%v err=%v", ok, err)
 	}
-	wf, _ := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult(id))
+	wf, _ := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatus(id))
 	if wf.Status != "acknowledged" || wf.AcknowledgedAt == "" {
 		t.Fatalf("after ack = %+v", wf)
 	}
@@ -328,25 +328,25 @@ func TestIncidentStatusWorkflowForwardOnly(t *testing.T) {
 
 	// Re-ack keeps the first stamp.
 	time.Sleep(10 * time.Millisecond)
-	_, _, _ = s.SetIncidentStatusResult(id, "acknowledged", "")
-	wf, _ = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult(id))
+	_, _, _ = s.SetIncidentStatus(id, "acknowledged", "")
+	wf, _ = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatus(id))
 	if wf.AcknowledgedAt != firstAck {
 		t.Fatal("acknowledged_at must be stamped only once")
 	}
 
-	if _, ok, err := s.SetIncidentStatusResult(id, "resolved", "rotated keys"); err != nil || !ok {
+	if _, ok, err := s.SetIncidentStatus(id, "resolved", "rotated keys"); err != nil || !ok {
 		t.Fatalf("resolve: ok=%v err=%v", ok, err)
 	}
-	wf, _ = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult(id))
+	wf, _ = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatus(id))
 	if wf.Status != "resolved" || wf.ResolvedAt == "" || wf.ResolutionNote != "rotated keys" {
 		t.Fatalf("after resolve = %+v", wf)
 	}
 
 	// Unknown id must not be a silent success.
-	if _, ok, _ := s.SetIncidentStatusResult("nope", "resolved", ""); ok {
+	if _, ok, _ := s.SetIncidentStatus("nope", "resolved", ""); ok {
 		t.Fatal("unknown incident reported resolved")
 	}
-	if _, ok := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult("nope")); ok {
+	if _, ok := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatus("nope")); ok {
 		t.Fatal("unknown incident has status")
 	}
 }
@@ -360,7 +360,7 @@ func TestFlagSessionIDRoundTrips(t *testing.T) {
 	defer s.Close()
 	s.PutFlag(model.Flag{ID: "fs1", Rule: "sensitive-read-then-connect", Severity: 3,
 		PID: 42, Agent: "claude", SessionID: "sess-abc-123", TS: time.Now().UTC()})
-	flags := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Limit: 10}))
+	flags := testutil.Read[[]model.Flag](t)(s.QueryFlags(FlagFilter{Limit: 10}))
 	if len(flags) != 1 {
 		t.Fatalf("expected 1 flag, got %d", len(flags))
 	}
@@ -369,7 +369,7 @@ func TestFlagSessionIDRoundTrips(t *testing.T) {
 	}
 	// A flag without a session reads back empty, not an error.
 	s.PutFlag(model.Flag{ID: "fs2", Rule: "r", Severity: 1, TS: time.Now().UTC()})
-	if got := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Limit: 10})); len(got) != 2 {
+	if got := testutil.Read[[]model.Flag](t)(s.QueryFlags(FlagFilter{Limit: 10})); len(got) != 2 {
 		t.Fatalf("expected 2 flags, got %d", len(got))
 	}
 }
@@ -390,7 +390,7 @@ func TestCriticalFlagsMissingAdvisor(t *testing.T) {
 	// f4 already has a verdict — excluded.
 	st.PutAdvisorVerdict("f4", "flag", model.AdvisorVerdict{Assessment: "benign", Rationale: "x"})
 
-	got := testutil.Read[[]model.Flag](t)(st.CriticalFlagsMissingAdvisorResult(time.Now().Add(-7*24*time.Hour), 10))
+	got := testutil.Read[[]model.Flag](t)(st.CriticalFlagsMissingAdvisor(time.Now().Add(-7*24*time.Hour), 10))
 	if len(got) != 1 || got[0].ID != "f1" {
 		t.Fatalf("backfill set = %v, want [f1]", got)
 	}
@@ -521,15 +521,15 @@ func TestAcknowledgeRuleHost(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("acknowledged %d flags; want 2", n)
 	}
-	got, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("f1"))
+	got, _ := testutil.Lookup[model.Flag](t)(s.GetFlag("f1"))
 	if !got.Acknowledged {
 		t.Fatal("f1 must be acknowledged")
 	}
-	got2, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("f2"))
+	got2, _ := testutil.Lookup[model.Flag](t)(s.GetFlag("f2"))
 	if got2.Acknowledged {
 		t.Fatal("f2 (different host) must NOT be acknowledged")
 	}
-	got3, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("f3"))
+	got3, _ := testutil.Lookup[model.Flag](t)(s.GetFlag("f3"))
 	if !got3.Acknowledged {
 		t.Fatal("f3 (127.0.0.1 alias of localhost) must be acknowledged")
 	}
@@ -559,13 +559,13 @@ func TestAcknowledgeRuleHostWildcard(t *testing.T) {
 	if n := s.AcknowledgeRuleHost("keychain-access", "*", ""); n != 2 {
 		t.Fatalf("wildcard ack = %d, want 2", n)
 	}
-	if f, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("k1")); !f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(s.GetFlag("k1")); !f.Acknowledged {
 		t.Fatal("k1 must be acknowledged")
 	}
-	if f, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("k2")); !f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(s.GetFlag("k2")); !f.Acknowledged {
 		t.Fatal("k2 must be acknowledged")
 	}
-	if f, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("o1")); f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(s.GetFlag("o1")); f.Acknowledged {
 		t.Fatal("other rules must be untouched by the wildcard")
 	}
 }
@@ -586,21 +586,21 @@ func TestIncidentStatusWorkflow(t *testing.T) {
 	s.PutIncident(report)
 
 	// Acknowledge.
-	_, ok, err := s.SetIncidentStatusResult("inc-1", "acknowledged", "")
+	_, ok, err := s.SetIncidentStatus("inc-1", "acknowledged", "")
 	if err != nil || !ok {
 		t.Fatalf("acknowledge failed: %v ok=%v", err, ok)
 	}
-	wf, found := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult("inc-1"))
+	wf, found := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatus("inc-1"))
 	if !found || wf.Status != "acknowledged" {
 		t.Fatalf("status = %+v found=%v", wf, found)
 	}
 
 	// Resolve with note.
-	_, ok, err = s.SetIncidentStatusResult("inc-1", "resolved", "verified benign")
+	_, ok, err = s.SetIncidentStatus("inc-1", "resolved", "verified benign")
 	if err != nil || !ok {
 		t.Fatalf("resolve failed: %v ok=%v", err, ok)
 	}
-	wf, _ = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult("inc-1"))
+	wf, _ = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatus("inc-1"))
 	if wf.Status != "resolved" {
 		t.Fatalf("status after resolve = %q", wf.Status)
 	}
@@ -633,11 +633,11 @@ func TestPruneExemptsTraceKindsFromCountCap(t *testing.T) {
 	s.PruneEvents()
 
 	kind := int(event.KindToolCall)
-	if n := len(testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Kind: &kind}))); n != 20 {
+	if n := len(testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Kind: &kind}))); n != 20 {
 		t.Fatalf("trace rows after prune = %d, want 20 (cap must not evict trace)", n)
 	}
 	conn := int(event.KindConnOpen)
-	if n := len(testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Kind: &conn}))); n >= 60 {
+	if n := len(testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{Kind: &conn}))); n >= 60 {
 		t.Fatalf("OS rows after prune = %d, want evicted down to the cap", n)
 	}
 }
@@ -1054,7 +1054,7 @@ func TestQueryEventsUntil(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		s.PutEvent(event.Event{Kind: event.KindToolCall, TS: base.Add(time.Duration(i) * time.Minute), SessionID: "s", ToolName: fmt.Sprint(i), CallID: fmt.Sprint("c", i)})
 	}
-	got := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{SessionID: "s", Since: base.Add(time.Minute).Format(time.RFC3339), Until: base.Add(3 * time.Minute).Format(time.RFC3339)}))
+	got := testutil.Read[[]event.Event](t)(s.QueryEvents(EventFilter{SessionID: "s", Since: base.Add(time.Minute).Format(time.RFC3339), Until: base.Add(3 * time.Minute).Format(time.RFC3339)}))
 	if len(got) != 3 || got[0].ToolName != "3" || got[2].ToolName != "1" {
 		t.Fatalf("window = %+v, want tools 3,2,1", got)
 	}
@@ -1071,7 +1071,7 @@ func TestIncidentIDForFlag(t *testing.T) {
 	s.PutIncident(model.IncidentReport{ID: "inc-1", FlagID: "f1", Rule: "r", Timestamp: time.Now()})
 	s.AggregateIntoIncident("inc-1", "f2", time.Now())
 	for flagID, want := range map[string]string{"f1": "inc-1", "f2": "inc-1", "f3": ""} {
-		got, ok := testutil.Lookup[string](t)(s.IncidentIDForFlagResult(flagID))
+		got, ok := testutil.Lookup[string](t)(s.IncidentIDForFlag(flagID))
 		if got != want || ok != (want != "") {
 			t.Errorf("IncidentIDForFlag(%s) = %q,%v, want %q", flagID, got, ok, want)
 		}
@@ -1104,7 +1104,7 @@ func TestReattributeFlagsRelabelsUntaggedRowsForPIDInWindow(t *testing.T) {
 		"old": "untagged:node", "other-pid": "untagged:node", "tagged": "codex",
 	}
 	for id, agent := range want {
-		fl, ok := testutil.Lookup[model.Flag](t)(s.GetFlagResult(id))
+		fl, ok := testutil.Lookup[model.Flag](t)(s.GetFlag(id))
 		if !ok || fl.Agent != agent {
 			t.Errorf("flag %s agent = %q (found %v), want %q", id, fl.Agent, ok, agent)
 		}
@@ -1127,10 +1127,10 @@ func TestAcknowledgeRuleHostScopedToAgent(t *testing.T) {
 	if n := s.AcknowledgeRuleHost("keychain-access", "*", "codex"); n != 1 {
 		t.Fatalf("agent-scoped ack = %d, want 1", n)
 	}
-	if f, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("k1")); !f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(s.GetFlag("k1")); !f.Acknowledged {
 		t.Fatal("codex flag must be acknowledged")
 	}
-	if f, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("k2")); f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(s.GetFlag("k2")); f.Acknowledged {
 		t.Fatal("cursor flag must stay open")
 	}
 }
@@ -1145,16 +1145,16 @@ func TestFlagProcessAndAckReasonRoundTrip(t *testing.T) {
 	proc := &model.FlagProcess{Exe: "/bin/zsh", Name: "zsh", Args0: "-zsh", PPID: 200, Launcher: "Claude.app › claude-code 2.1.281"}
 	s.PutFlag(model.Flag{ID: "f1", Rule: "r", Severity: 3, TS: time.Now(), PID: 7, Agent: "claude", Process: proc})
 	s.PutFlag(model.Flag{ID: "f2", Rule: "r", Severity: 3, TS: time.Now(), PID: 8, Agent: "claude"})
-	if got, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("f1")); got.Process == nil || *got.Process != *proc {
+	if got, _ := testutil.Lookup[model.Flag](t)(s.GetFlag("f1")); got.Process == nil || *got.Process != *proc {
 		t.Fatalf("GetFlag process = %+v, want %+v", got.Process, proc)
 	}
-	if got, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("f2")); got.Process != nil {
+	if got, _ := testutil.Lookup[model.Flag](t)(s.GetFlag("f2")); got.Process != nil {
 		t.Fatalf("flag without a snapshot served process %+v", got.Process)
 	}
 	if n := s.AcknowledgeFlagsReason([]string{"f1"}, "why"); n != 1 {
 		t.Fatalf("acknowledged = %d", n)
 	}
-	for _, f := range testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Limit: 10})) {
+	for _, f := range testutil.Read[[]model.Flag](t)(s.QueryFlags(FlagFilter{Limit: 10})) {
 		switch f.ID {
 		case "f1":
 			if !f.Acknowledged || f.AckReason != "why" || f.Process == nil || f.Process.Launcher != proc.Launcher {
