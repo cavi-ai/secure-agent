@@ -84,6 +84,8 @@ jobs:
         run: python3 packaging/test/test_menu_bar_tracking.py
       - name: Smoke fixture tests
         run: python3 packaging/test/test_e2e_fixture.py
+      - name: Release packaging regression tests
+        run: python3 packaging/test/test_release_packaging.py
 
   linux:
     name: Linux CGO=0 build + vet + test

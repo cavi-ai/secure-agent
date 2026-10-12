@@ -41,8 +41,14 @@ Override the identity explicitly, e.g. for proper Gatekeeper distribution:
 export CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
 xcrun notarytool store-credentials secure-agent-notary --apple-id you@example.com --team-id TEAMID
 export NOTARY_PROFILE=secure-agent-notary
-make dmg   # signs, notarizes, and staples both the app and the DMG
+make release VERSION=v1.3.0
 ```
+
+`make release` requires a clean committed tree, a stable version, an explicit
+Developer ID Application identity, and a notarization profile. It signs and
+notarizes the app and DMG, validates both stapled tickets, and checks Gatekeeper
+acceptance before writing checksums. `make dmg` remains available for local
+development builds with optional notarization.
 
 ## Run validation
 
