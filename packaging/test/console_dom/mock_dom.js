@@ -8,7 +8,7 @@
 (() => {
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
-  const readingFetch = scenarios.has('readingdemo') || scenarios.has('worktreehierarchy') || scenarios.has('sessiondiscovery') || scenarios.has('sessionemptynav') ? window.fetch.bind(window) : null;
+  const readingFetch = scenarios.has('readingdemo') || scenarios.has('worktreehierarchy') || scenarios.has('sessiondiscovery') || scenarios.has('sessionemptynav') || scenarios.has('sessionlatestfocus') ? window.fetch.bind(window) : null;
   if (scenarios.has('expectedremove')) data['/expected'] = [
     { key: 'claude|gh|/synthetic/credentials|example.test', agent: 'claude', reader: 'gh', path: '/synthetic/credentials', dest: 'example.test', created_at: iso(60000), hits: 2 },
     { key: 'claude|*|/synthetic/.env.test|*', scope: 'file', agent: 'claude', reader: '*', path: '/synthetic/.env.test', dest: '*', created_at: iso(60000), hits: 0 },
@@ -775,7 +775,7 @@
       };
     }
     // Dense workbench pages exercise real scroll anchoring and focus continuity.
-    if ((scenarios.has('sessionworkbench') || scenarios.has('readingdemo') || scenarios.has('authhistory')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
+    if ((scenarios.has('sessionworkbench') || scenarios.has('readingdemo') || scenarios.has('authhistory') || scenarios.has('sessionlatestfocus')) && /^\/sessions\/[^/]+\/memory$/.test(p)) {
       const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
       const start = before ? -30 : 0;
       const rows = Array.from({ length: before ? 30 : 90 }, (_, i) => ({ id: 'wb-row-' + (start + i),
@@ -795,6 +795,7 @@
         interventions: own ? [{ id: 'synthetic-control', kind: 'pause', status: 'applied', verification: window.__resultsUpdate ? 'observed' : 'pending', requested_at: iso(60000), limits: ['Synthetic receipt; captured targets only.'] }] : [],
         incidents: own ? [{ id: 'synthetic-incident', remediation: { steps: [{ id: 'synthetic-step', item: { name: 'Synthetic key', action: 'Revoke key' }, status: 'reported', verification: 'unverified', reported_at: iso(30000), newer_evidence: true }] } }] : [],
       } };
+      if (scenarios.has('sessionlatestfocus')) body.history.reviews = Array.from({length: 60}, (_, i) => ({...body.history.reviews[0], id: 'latest-review-' + i}));
       return { ok: true, status: 200, json: async () => body };
     }
     const overviewMatch = p.match(/^\/sessions\/([^/]+)\/overview$/);
@@ -1601,6 +1602,47 @@
         receipt.fits = document.documentElement.scrollWidth <= document.documentElement.clientWidth;
       } catch (error) { receipt.error = error.message; }
       document.body.dataset.sessionReading = JSON.stringify(receipt);
+    }, 2500);
+  }
+  if (scenarios.has('sessionlatestfocus')) {
+    data['/sessions'].find(session => session.id === 'sess-claude-1')._timeline = Array.from({length: 90}, (_, i) => ({
+      id: 'latest-trace-' + i, session_id: 'sess-claude-1', kind: 12, ts: iso((90 - i) * 60000), tool: 'Retained trace ' + i, tool_status: 'ok', duration_ms: 10,
+    }));
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(async () => {
+      const receipt = {};
+      const checkpoint = () => readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+      const announcements = [];
+      const announce = window.saAnnounce;
+      window.saAnnounce = text => { announcements.push(text); announce(text); };
+      try {
+        await window.selectSession('sess-claude-1');
+        for (const mode of ['memory', 'trace', 'results']) {
+          await window.setSessionView(mode); await checkpoint();
+          const body = document.querySelector('#session-detail .session-detail-body');
+          const latest = document.querySelector('#session-detail [data-action="session-latest"]');
+          body.scrollTop = 0; body.dispatchEvent(new Event('scroll')); await checkpoint();
+          receipt[mode + 'Ready'] = body.scrollHeight > body.clientHeight + 64 && !latest.hidden;
+          latest.focus({preventScroll: true});
+          const x = scrollX, y = scrollY, before = announcements.length;
+          latest.click(); await checkpoint();
+          // The existing announcer publishes repeated text after its 30ms tick.
+          await new Promise(resolve => setTimeout(resolve, 40));
+          receipt[mode + 'Focus'] = document.activeElement === body && body.isConnected && !!body.getClientRects().length && body.getAttribute('tabindex') === '-1';
+          receipt[mode + 'Latest'] = latest.hidden && body.scrollHeight - body.clientHeight - body.scrollTop < 2;
+          receipt[mode + 'Page'] = scrollX === x && scrollY === y;
+          receipt[mode + 'Announcement'] = announcements.length === before + 1 && announcements.at(-1) === 'Moved to latest session content.'
+            && document.getElementById('a11y-live').textContent === 'Moved to latest session content.';
+          body.scrollTop = 0; body.dispatchEvent(new Event('scroll')); await checkpoint();
+          const outside = document.querySelector('.tab-btn[data-tab="sessions"]');
+          outside.focus({preventScroll: true});
+          const silent = announcements.length;
+          latest.click(); await checkpoint();
+          receipt[mode + 'Outside'] = document.activeElement === outside && announcements.length === silent && body.scrollHeight - body.clientHeight - body.scrollTop < 2;
+        }
+      } catch (error) { receipt.error = error.message; }
+      window.saAnnounce = announce;
+      document.body.dataset.sessionLatestFocus = JSON.stringify(receipt);
     }, 2500);
   }
   if (scenarios.has('sessionworkbench')) {

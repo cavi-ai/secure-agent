@@ -439,6 +439,8 @@ if [ "$ADVISOR_PASSED" = true ]; then
   echo "Advisor: flag carries the stub model's benign verdict."
 else
   echo "Advisor: MISSING verdict on /flags."
+  curl -s --unix-socket "$SOCKET_PATH" http://unix/status | python3 -c 'import json, sys; status = json.load(sys.stdin); print("Advisor health:", json.dumps({key: status.get(key) for key in ("advisor_enabled", "advisor_health")}))' || true
+  echo "Advisor stub log: $(cat "$tmp/advisor_stub.log" 2>/dev/null || true)"
 fi
 
 # ---------------------------------------------------------------------------
