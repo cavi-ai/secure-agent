@@ -129,9 +129,12 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		d = guard.Decision{Verdict: "deny", Scope: "once", Reason: "withdrawn"}
 	}
 	if d.Scope == "always" && d.Reason == "" {
-		// Only a saved rule is audited; a failed save stays in write health.
+		// Only a saved rule is audited. An unsaved one answers this request
+		// once and the failure stays in write health.
 		if err := a.store.PutGuardRule(store.GuardRule{Agent: req.Agent, RuleID: req.RuleID, Decision: d.Verdict, Source: "prompt"}); err == nil {
 			a.store.PutAudit(store.AuditEntry{Action: "guard-rule", Rule: req.Agent + "/" + req.RuleID, ToMode: d.Verdict})
+		} else {
+			d.Scope = "once"
 		}
 	}
 	record(d)

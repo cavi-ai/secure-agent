@@ -53,7 +53,7 @@ func TestGuardRuleSaveFailureIsReportedNotAudited(t *testing.T) {
 		}
 		return d
 	}
-	counts := func() (rules, audits int) {
+	counts := func() (rules, audits int, recorded string) {
 		t.Helper()
 		if err := db.QueryRow(`SELECT COUNT(*) FROM guard_rules`).Scan(&rules); err != nil {
 			t.Fatal(err)
@@ -61,17 +61,20 @@ func TestGuardRuleSaveFailureIsReportedNotAudited(t *testing.T) {
 		if err := db.QueryRow(`SELECT COUNT(*) FROM audit WHERE action = 'guard-rule'`).Scan(&audits); err != nil {
 			t.Fatal(err)
 		}
-		return rules, audits
+		if err := db.QueryRow(`SELECT scope FROM guard_decisions ORDER BY rowid DESC LIMIT 1`).Scan(&recorded); err != nil {
+			t.Fatal(err)
+		}
+		return rules, audits, recorded
 	}
 
 	if _, err := db.Exec(`CREATE TRIGGER deny_rule_save BEFORE INSERT ON guard_rules BEGIN SELECT RAISE(ABORT,'fixture save denied'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if d := answerAlways(); d.Verdict != "allow" || d.Scope != "always" {
-		t.Fatalf("the hook lost the operator's answer: %+v", d)
+	if d := answerAlways(); d.Verdict != "allow" || d.Scope != "once" {
+		t.Fatalf("unsaved rule must answer this request once: %+v", d)
 	}
-	if rules, audits := counts(); rules != 0 || audits != 0 {
-		t.Fatalf("unsaved rule audited: rules=%d audits=%d", rules, audits)
+	if rules, audits, recorded := counts(); rules != 0 || audits != 0 || recorded != "once" {
+		t.Fatalf("unsaved rule recorded as standing: rules=%d audits=%d scope=%q", rules, audits, recorded)
 	}
 	if h := st.WriteHealth(); !slices.Contains(h.Active, "guard rules") {
 		t.Fatalf("failed save missing from write health: %+v", h)
@@ -80,9 +83,11 @@ func TestGuardRuleSaveFailureIsReportedNotAudited(t *testing.T) {
 	if _, err := db.Exec(`DROP TRIGGER deny_rule_save`); err != nil {
 		t.Fatal(err)
 	}
-	answerAlways()
-	if rules, audits := counts(); rules != 1 || audits != 1 {
-		t.Fatalf("saved rule: rules=%d audits=%d", rules, audits)
+	if d := answerAlways(); d.Scope != "always" {
+		t.Fatalf("saved rule answer: %+v", d)
+	}
+	if rules, audits, recorded := counts(); rules != 1 || audits != 1 || recorded != "always" {
+		t.Fatalf("saved rule: rules=%d audits=%d scope=%q", rules, audits, recorded)
 	}
 	if h := st.WriteHealth(); slices.Contains(h.Active, "guard rules") {
 		t.Fatalf("successful save left the fault active: %+v", h)
