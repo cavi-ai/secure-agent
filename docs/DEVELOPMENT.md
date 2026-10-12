@@ -44,6 +44,12 @@ export NOTARY_PROFILE=secure-agent-notary
 make dmg   # signs, notarizes, and staples both the app and the DMG
 ```
 
+With a Developer ID certificate managed by Xcode (no local identity or notary profile), pass the team ID instead. The app is re-signed through an Xcode export, notarized with the signed-in Xcode account, and its stapled ticket is validated before packaging:
+
+```bash
+make release VERSION=v1.2.3 DEVELOPER_TEAM=TEAMID
+```
+
 ## Run validation
 
 For documentation, run `make docs-check docs-test docs-archive`. After changing CLI help, embedded defaults or API route metadata, run `make docs-reference` first and include the generated reference diff. CI retains a downloadable docs preview; the release workflow attaches verified docs assets to published stable product releases. See [Documentation artifacts](CONSUMER.md) for previews, release delivery and the host contract.
@@ -103,6 +109,7 @@ secure-agent/
 ├── packaging/
 │   ├── make_app.sh      # Universal app build and signing
 │   ├── make_dmg.sh      # DMG packaging and optional notarization
+│   ├── devid_export.sh  # Developer ID signing and notarization through Xcode
 │   ├── make_icon.sh     # AppIcon.icns generation
 │   ├── install.sh       # Build, install to /Applications, launch
 │   ├── uninstall.sh     # Legacy installation cleanup

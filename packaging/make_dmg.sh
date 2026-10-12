@@ -4,6 +4,10 @@
 #
 # Signing/notarization environment:
 #   CODESIGN_IDENTITY  Signing identity for make_app.sh (default "-" = ad-hoc).
+#   DEVELOPER_TEAM     Team ID: re-sign the app with the team's Developer ID
+#                      through an Xcode export and notarize it with the signed-in
+#                      Xcode account (devid_export.sh). Takes precedence over
+#                      NOTARY_PROFILE for the app.
 #   NOTARY_PROFILE     Keychain profile name for `xcrun notarytool` (created via
 #                      `xcrun notarytool store-credentials`). If unset, notarization
 #                      is skipped and the DMG will only run after right-click > Open
@@ -22,7 +26,12 @@ DMG_PATH="${REPO_ROOT}/dist/SecureAgent-${VERSION}.dmg"
 
 "${REPO_ROOT}/packaging/make_app.sh"
 
-if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+if [[ -n "${DEVELOPER_TEAM:-}" ]]; then
+  DEVID_DIR="${REPO_ROOT}/dist/devid"
+  rm -rf "${DEVID_DIR}"
+  "${REPO_ROOT}/packaging/devid_export.sh" "${APP_DIR}" "${DEVELOPER_TEAM}" "${DEVID_DIR}"
+  APP_DIR="${DEVID_DIR}/notarized/${APP_NAME}.app"
+elif [[ -n "${NOTARY_PROFILE:-}" ]]; then
   echo "==> Notarizing app..."
   ZIP_PATH="${REPO_ROOT}/dist/SecureAgent-notarize.zip"
   ditto -c -k --keepParent "${APP_DIR}" "${ZIP_PATH}"

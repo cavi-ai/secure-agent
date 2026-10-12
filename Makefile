@@ -27,10 +27,12 @@ dmg:
 #      packaging/lib/sign_identity.sh — for stable TCC grants)
 #      NOTARY_PROFILE (keychain profile for notarytool — required for
 #      distribution beyond this machine)
+#      DEVELOPER_TEAM (team ID — signs with that team's Developer ID through
+#      an Xcode export and notarizes with the signed-in Xcode account instead)
 release: VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 release: CODESIGN_IDENTITY ?= $(shell bash -c '. packaging/lib/sign_identity.sh && resolve_sign_identity' 2>/dev/null)
 release:
-	VERSION=$(VERSION) CODESIGN_IDENTITY="$(CODESIGN_IDENTITY)" NOTARY_PROFILE="$(NOTARY_PROFILE)" ./packaging/make_dmg.sh
+	VERSION=$(VERSION) CODESIGN_IDENTITY="$(CODESIGN_IDENTITY)" NOTARY_PROFILE="$(NOTARY_PROFILE)" DEVELOPER_TEAM="$(DEVELOPER_TEAM)" ./packaging/make_dmg.sh
 
 icon:
 	./packaging/make_icon.sh
@@ -91,6 +93,7 @@ test:
 	./packaging/test/check_console_css.sh
 	@echo "==> Checking app bundle layout..."
 	./packaging/test/check_bundle_layout.sh
+	bash packaging/test/test_devid_export.sh
 	@echo "==> Running console JS unit tests..."
 	node --test 'packaging/test/console/*.test.mjs'
 	@echo "==> Running console DOM tests..."
