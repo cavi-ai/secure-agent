@@ -50,6 +50,61 @@ function reviewController(overrides={}) {
  return ctx;
 }
 
+test('unsafe or malformed review revisions never issue a decision request',async()=>{
+ const rounded=JSON.parse('{"revision":9007199254740993}').revision;
+ for(const revision of [rounded, Number.MAX_SAFE_INTEGER+1, 0, -1, 1.5, '2', null, undefined, NaN, Infinity]) {
+  let writes=0;
+  const ctx=reviewController({apiFetch:async()=>{writes++;return{ok:true,json:async()=>({...receipt,revision})}}});
+  await ctx.window.reviewAct(record.id,revision,'acknowledge');
+  assert.equal(writes,0,`revision ${revision} must not be submitted`);
+  assert.equal(ctx.reviewDrafts.size,0);
+  assert.equal(ctx.reviewResult,null);
+ }
+});
+
+test('review requests accept supported decisions and safe boundary revisions',async()=>{
+ for(const revision of [1,Number.MAX_SAFE_INTEGER]) {
+  for(const [action,scope] of [['acknowledge'],['close_reported'],['expect',{kind:'once'}],
+   ['expect',{kind:'session'}],['expect',{kind:'exact',expiry:'24h'}],['expect',{kind:'exact',expiry:'7d'}]]) {
+   const calls=[];
+   const ctx=reviewController({apiFetch:async(url,options)=>{
+    calls.push(JSON.parse(options.body));return{ok:true,json:async()=>({...receipt,revision,action})};
+   }});
+   ctx.window.saConfirm=async()=>true;
+   await ctx.window.reviewAct(record.id,revision,action,scope);
+   assert.deepEqual(calls,[{id:record.id,revision,action,...(scope?{scope}:{})}]);
+   assert.equal(ctx.reviewResult.receipt.revision,revision);
+  }
+ }
+});
+
+test('unsupported decisions and permission scopes never prompt or write',async()=>{
+ for(const [action,scope] of [['future'],['expect'],['expect',{kind:'future'}],
+  ['expect',{kind:'exact',expiry:'forever'}],['expect',{kind:'once',expiry:'24h'}],
+  ['expect',{kind:'session',expiry:'7d'}],['acknowledge',{kind:'once'}]]) {
+  let writes=0,confirms=0;
+  const ctx=reviewController({apiFetch:async()=>{writes++}});
+  ctx.window.saConfirm=async()=>{confirms++;return true};
+  await ctx.window.reviewAct(record.id,2,action,scope);
+  assert.equal(writes,0);assert.equal(confirms,0);assert.equal(ctx.reviewDrafts.size,0);
+ }
+});
+
+test('review cards and attention actions withhold unsafe revisions and unknown scopes',()=>{
+ const ctx={SA:{reviewDrafts:new Map()}};
+ vm.createContext(ctx);vm.runInContext(lib,ctx);vm.runInContext(findings,ctx);
+ for(const revision of [JSON.parse('9007199254740993'),0,1.5,'2']) {
+  const r={...record,revision};
+  assert.doesNotMatch(ctx.reviewHTML(r),/data-action="review-decision"/);
+  assert.equal(ctx.reviewPermissionItems(r).length,0);
+  const view=ctx.needView({kind:'review',id:r.id,review:r},ctx);
+  assert.equal(view.items.length,0);
+ }
+ const r={...record,available_scopes:[{kind:'once'},{kind:'future'},{kind:'exact',expiry:'forever'},{kind:'exact',expiry:'7d'}]};
+ const choices=ctx.reviewPermissionItems(r);
+ assert.deepEqual(Array.from(choices,item=>item.label),['Expected once','Expected for 7 days']);
+});
+
 test('confirmed review retains its original evidence when the queue clears',async()=>{
  const original=structuredClone(record);
  const ctx=reviewController({attentionItems:()=>[{kind:'review',id:original.id,review:original}],fetchTelemetry:async()=>{

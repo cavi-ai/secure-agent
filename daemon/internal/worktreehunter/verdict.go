@@ -37,6 +37,9 @@ type Worktree struct {
 	LastActivity *time.Time `json:"last_activity,omitempty"`
 	IdleDays     int        `json:"idle_days"`
 	InUse        bool       `json:"in_use,omitempty"`
+	// ActiveAgent is the harness of the newest session working in the
+	// folder when InUse ("codex"), or "" when it is unknown.
+	ActiveAgent string `json:"active_agent,omitempty"`
 
 	Upstream     string `json:"upstream,omitempty"`
 	Ahead        int    `json:"ahead,omitempty"`
@@ -163,7 +166,7 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 		keep = append(keep, fmt.Sprintf("detached HEAD with %s on no branch (removal loses them)", plural(w.Loose, "commit", "commits")))
 	}
 	if w.InUse {
-		keep = append(keep, "an agent session is live here")
+		keep = append(keep, liveAgentReason(*w))
 	}
 	keep = append(keep, w.SubmoduleLocal...)
 
@@ -251,6 +254,14 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	if w.State == StateRemove && w.Submodules > 0 {
 		w.Reasons = append(w.Reasons, plural(w.Submodules, "submodule", "submodules")+" with every commit on a remote")
 	}
+}
+
+// liveAgentReason names the agent working in a worktree, when known.
+func liveAgentReason(w Worktree) string {
+	if w.ActiveAgent != "" {
+		return w.ActiveAgent + " is working here"
+	}
+	return "an agent session is live here"
 }
 
 func lockedReason(w *Worktree) string {

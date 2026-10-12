@@ -559,9 +559,12 @@ func (a *API) handleWorktreeTrash(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := a.worktrees.TrashOrphan(r.Context(), p)
+	var busy *worktreehunter.NotReviewableError
 	switch {
 	case errors.Is(err, worktreehunter.ErrNotOrphan):
 		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.As(err, &busy):
+		http.Error(w, err.Error(), http.StatusConflict)
 	case err != nil:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	default:

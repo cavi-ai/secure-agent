@@ -59,6 +59,55 @@ function controller(persisted = '', manualOverview = false) {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+test('Jump to latest captures owned focus before scroll hides the control and announces the visible reading body once', () => {
+  const c = controller();
+  const calls = [], announcements = [];
+  const latest = {};
+  let hidden = false;
+  Object.defineProperty(latest, 'hidden', {get: () => hidden, set(value) {hidden = value; calls.push('hide');}});
+  c.context.document.activeElement = latest;
+  const body = {isConnected: true, scrollHeight: 900, getClientRects: () => [{}], focus(options) {
+    assert.equal(options.preventScroll, true); calls.push('focus'); c.context.document.activeElement = body;
+  }};
+  Object.defineProperty(body, 'scrollTop', {set(value) {
+    assert.equal(value, 900); calls.push('scroll'); latest.hidden = true;
+    c.context.document.activeElement = null;
+  }});
+  c.context.document.querySelector = selector => selector.includes('session-latest') ? latest : body;
+  c.context.window.saAnnounce = text => announcements.push(text);
+  c.workbench.jumpToLatest();
+  assert.deepEqual(calls, ['scroll', 'hide', 'focus', 'hide']);
+  assert.equal(c.context.document.activeElement, body); assert.equal(latest.hidden, true);
+  assert.deepEqual(announcements, ['Moved to latest session content.']);
+});
+
+test('Jump to latest preserves outside focus and safely skips absent, hidden, or disconnected reading bodies', () => {
+  const c = controller();
+  let focusCalls = 0, announced = 0;
+  c.context.window.saAnnounce = () => {announced++;};
+  for (const kind of ['outside', 'missing', 'hidden', 'disconnected']) {
+    const latest = {}, outside = {};
+    const body = kind === 'missing' ? null : {isConnected: kind !== 'disconnected', scrollHeight: 900,
+      getClientRects: () => kind === 'hidden' ? [] : [{}], focus: () => {focusCalls++;}};
+    const initial = kind === 'outside' ? outside : latest;
+    c.context.document.activeElement = initial;
+    c.context.document.querySelector = selector => selector.includes('session-latest') ? latest : body;
+    c.workbench.jumpToLatest();
+    assert.equal(c.context.document.activeElement, initial, kind);
+    assert.equal(latest.hidden, true, kind);
+    if (body) assert.equal(body.scrollTop, 900, kind);
+  }
+  assert.equal(focusCalls, 0); assert.equal(announced, 0);
+});
+
+test('Memory, Trace, and Results reading bodies are programmatically focusable without a Tab stop', () => {
+  const c = controller();
+  for (const sessionView of ['memory', 'trace', 'results']) {
+    const html = c.context.sessionDetailHTML({...session('a'), harness: 'codex'}, [], [], {sessionView});
+    assert.match(html, /class="session-detail-body" tabindex="-1"/);
+  }
+});
+
 test('empty detail adds one narrow Back while preserving an existing unavailable Back', () => {
   const c = controller();
   for (const empty of [c.context.sessionEmptyHTML([], {text: 'missing-project', harnesses: {}, liveOnly: true}), '<div class="empty">No sessions available.</div>']) {
@@ -502,7 +551,7 @@ test('detail context is keyed in the scrolling body while navigation and status 
   const selected = {id:'a', harness:'codex', repo:'complete<identity', branch:'main', workspace:'/workspace/exact&path', confidence:'hook'};
   for (const mode of ['memory','results','trace']) {
     const html = c.context.sessionDetailHTML(selected, [], [], {sessionView:mode, sessionOverview:null, sessionMemoryPage:{rows:[]}});
-    const [chrome,body] = html.split('<div class="session-detail-body">');
+    const [chrome,body] = html.split('<div class="session-detail-body" tabindex="-1">');
     assert.ok(chrome.includes('data-action="copy-report" data-id="a"'));
     assert.ok(chrome.includes('data-action="session-list"'));
     assert.ok(chrome.includes('data-action="session-status"'));

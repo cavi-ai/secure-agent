@@ -1379,6 +1379,7 @@ export interface Worktree {
   last_activity?: string;
   idle_days: number;
   in_use?: boolean;
+  active_agent?: string;
   upstream?: string;
   ahead?: number;
   behind?: number;

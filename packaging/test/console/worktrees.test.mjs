@@ -126,6 +126,7 @@ test('Remove on review and keep rows: enabled, opens the Trash confirmation; blo
   assert.ok(!enabled.includes('worktree-remove"'), 'not git worktree remove');
   const blocked = {
     'an agent session is live here': { in_use: true },
+    'codex is working here': { in_use: true, active_agent: 'codex' },
     'it is locked; unlock it first': { locked: true },
     'detached HEAD has commits on no branch; create a branch first': { detached: true, branch: '', loose_commits: 2 },
     'it has populated submodules': { submodules: 1 },
@@ -141,6 +142,20 @@ test('Remove on review and keep rows: enabled, opens the Trash confirmation; blo
   assert.ok(done.includes('data-action="worktree-remove"') && !done.includes('worktree-review-trash'));
   const orphan = worktreeRowHTML(row({ state: 'review', orphan: true }), repo);
   assert.ok(orphan.includes('worktree-trash-orphan') && !orphan.includes('worktree-review-trash') && !orphan.includes('worktree-discuss'));
+});
+
+test('a row an agent is working in carries a warning chip naming the agent', () => {
+  const repo = { path: REPO };
+  const row = extra => ({ path: REPO + '/.worktrees/x', branch: 'feat/x', state: 'keep', idle_days: 0, reasons: [], ...extra });
+  const named = worktreeRowHTML(row({ in_use: true, active_agent: 'codex' }), repo);
+  assert.ok(named.includes('<span class="wt-agent-live" title="codex is working in this folder; removing it breaks that session">codex working here</span>'));
+  assert.ok(worktreeRowHTML(row({ in_use: true }), repo).includes('>agent working here</span>'));
+  assert.ok(!worktreeRowHTML(row(), repo).includes('wt-agent-live'));
+  assert.ok(worktreeRowHTML(row({ in_use: true, active_agent: '<b>x</b>' }), repo).includes('&lt;b&gt;x&lt;/b&gt; working here'));
+  // An orphan folder with an agent in it: Move to Trash is greyed with the reason.
+  const orphan = worktreeRowHTML(row({ orphan: true, state: 'keep', in_use: true, active_agent: 'codex' }), repo);
+  assert.ok(orphan.includes('<button type="button" class="btn btn-sm" disabled title="Cannot move to Trash: codex is working here">Move to Trash</button>'));
+  assert.ok(!orphan.includes('data-action="worktree-trash-orphan"'));
 });
 
 test('Remove has three looks: solid red when confirmed safe, amber outline when not confirmed, greyed when blocked', () => {

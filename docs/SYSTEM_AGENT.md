@@ -86,8 +86,10 @@ or alert stream is required.
 
 ## Worktree questions
 
-**Discuss** on a worktree in the **System** tab opens the Agent tab with the
-question "Can I delete this worktree?" (`POST /agent/worktree`). The daemon
+**Discuss** on a worktree in the **System** tab opens the conversation in a
+panel docked beside the page, with the question "Can I delete this
+worktree?" (`POST /agent/worktree`). **Open Agent tab** moves it to the
+Agent tab; closing the panel keeps the conversation there. The daemon
 builds it from fresh checker facts; repository text sits inside an
 `<evidence>` block the model is told to treat as data. The reply and later
 chat messages stay in the same conversation, and a reply may still propose a

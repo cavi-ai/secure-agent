@@ -26,11 +26,24 @@ const (
 )
 
 // WorkspaceActivity is the session record for one workspace directory: the
-// newest last_seen across its sessions and whether any is still live.
+// newest last_seen across its sessions, that session's harness, and whether
+// any is still live.
 type WorkspaceActivity struct {
 	Workspace string
 	LastSeen  time.Time
+	Harness   string
 	Live      bool
+}
+
+// WorkspaceActiveWindow is how recently a session must have been seen to
+// count as working in its workspace whatever its status says.
+const WorkspaceActiveWindow = 15 * time.Minute
+
+// ActiveAt reports whether an agent is working in the workspace at now: a
+// live session, or one seen within WorkspaceActiveWindow (an ended session
+// whose agent still writes is still there).
+func (a WorkspaceActivity) ActiveAt(now time.Time) bool {
+	return a.Live || (!a.LastSeen.IsZero() && now.Sub(a.LastSeen) < WorkspaceActiveWindow)
 }
 
 // WorktreeAdviceRequest is what the local advisor sees for one worktree:
