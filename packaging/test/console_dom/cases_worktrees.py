@@ -84,7 +84,7 @@ def run_worktrees(page):
             and '>Ask codex</button>' in wt
             and 'Ask the agent' not in wt
             and not dom_query(wt).has(None, {'data-action': 'worktree-review'})
-            and '<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://github.com/o/r/pull/9 ($0.21)</p>' in wt
+            and '<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://github.com/o/r/pull/9 (session $0.21)</p>' in wt
         ),
     )
     check(

@@ -238,7 +238,7 @@ func askLine(a wtAsk) string {
 		}
 		line := fmt.Sprintf("asked %s: %s — %s", a.Harness, a.Verdict, a.Detail)
 		if a.CostUSD > 0 {
-			line += fmt.Sprintf(" ($%.2f)", a.CostUSD)
+			line += fmt.Sprintf(" (session $%.2f)", a.CostUSD)
 		}
 		return line
 	default:
