@@ -7,5 +7,6 @@ from cases_agent import CASES as agent
 from cases_policy import CASES as policy
 from cases_worktrees import CASES as worktrees
 from cases_review_results import CASES as review_results
+from cases_expected_removal import CASES as expected_removal
 
-CASES = (*reports, *sessions, *spend, *agent, *policy, *worktrees, *review_results)
+CASES = (*reports, *sessions, *spend, *agent, *policy, *worktrees, *review_results, *expected_removal)
