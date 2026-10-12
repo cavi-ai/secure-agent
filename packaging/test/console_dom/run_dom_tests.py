@@ -128,6 +128,8 @@ def write_fixture(tmp, query_string, fixture=None):
         if value:
             scenarios.append(f"{key}={value}")
     spec = {"scenarios": scenarios, **(fixture or {})}
+    from fixture_catalog import scenario_payload
+    spec = {**scenario_payload(spec["scenarios"], spec.get("now")), **spec}
     with open(os.path.join(tmp, "fixture-config.js"), "w") as stream:
         stream.write("window.CONSOLE_TEST = " + json.dumps(spec) + ";\n"
                      "if (window.parent !== window) {\n"
@@ -249,9 +251,9 @@ def main():
             shot_dir = os.path.abspath(args.screenshot)
             os.makedirs(shot_dir, exist_ok=True)
             if args.review_results_only:
-                screenshot(chrome, origin, '?reviewresult&resultcard', os.path.join(shot_dir, 'review-result-card.png'), tmp, payload_cases.scoped_review())
-                screenshot(chrome, origin, '?reviewresult', os.path.join(shot_dir, 'review-result-detail.png'), tmp, payload_cases.scoped_review())
-                screenshot(chrome, origin, '?reviewresult=expect&resultpermissions', os.path.join(shot_dir, 'review-result-permissions.png'), tmp, payload_cases.scoped_review())
+                screenshot(chrome, origin, '?reviewresult&resultcard', os.path.join(shot_dir, 'review-result-card.png'), tmp, payload_cases.review_result())
+                screenshot(chrome, origin, '?reviewresult', os.path.join(shot_dir, 'review-result-detail.png'), tmp, payload_cases.review_result())
+                screenshot(chrome, origin, '?reviewresult=expect&resultpermissions', os.path.join(shot_dir, 'review-result-permissions.png'), tmp, payload_cases.review_result())
             for name, query, themes in (() if args.review_results_only else SHOTS):
                 for theme in themes:
                     path = os.path.join(shot_dir, f"{name}-{theme}.png")

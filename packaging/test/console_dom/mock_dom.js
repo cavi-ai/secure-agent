@@ -11,24 +11,6 @@
   let bookCleanup = () => {};
   let contextRuleReads = 0;
   const contextRules = data['/expected-egress'].rules;
-  if (scenarios.has('attentionactionfocus') || scenarios.has('attentionactionmanual')) {
-    const group = data['/posture'].groups.find(group => group.items.some(item => item.kind === 'guard'));
-    const guard = {...group.items.find(item => item.kind === 'guard')};
-    data['/posture'] = {...data['/posture'],needs_you:1,items:[guard],groups:[{...group,items:[guard]}]};
-    let facts = 0;
-    window.__attentionActionFocusRefresh = (mode = 'facts') => {
-      guard.detail = `Recorded guard facts ${++facts}`;
-      if (mode === 'remove') guard.available_scopes = guard.available_scopes.filter(scope => scope.expiry !== '24h');
-      window.SA.t.posture = data['/posture'];
-      window.SA.reconcileAttention();
-    };
-  }
-  if (scenarios.has('attentionremodel')) {
-    const ids = scenarios.has('attentionfinal') ? ['flag-1'] : ['flag-1', 'flag-2'];
-    const items = ids.map(id => ({kind:'flag', id, priority:2, title:'Fixture attention ' + id, detail:'Recorded fixture evidence'}));
-    data['/posture'] = {...data['/posture'], needs_you:items.length, items,
-      groups:[{key:'fixture-attention',agent:'codex',items}]};
-  }
 
 
   // ---------- failure-mode simulation ----------
@@ -45,22 +27,11 @@
   //   tokenseed    — pre-seed sessionStorage (simulates a RELOADED tab: no
   //                  #ct fragment, token must come from storage).
   if (scenarios.has('incidentremediation')) {
-    const inc = data['/incidents'][0];
-    const item = {id:'key',name:'Fixture credential',category:'ENV_SECRETS',path:'/workspace/.env',risk:'HIGH',description:'Fixture only',action:'Revoke the affected credential in its provider console'};
-    inc.rotate_list = [item];
-    inc.remediation = {revision:1,evidence_revision:'fixture-evidence',steps:[
-      {id:'fixture-reported',item,status:'reported',verification:'unverified',reported_at:iso(10000),newer_evidence:true},
-      {id:'fixture-pending',item:{...item,name:'Second fixture credential',path:'/workspace/second/.env'},status:'pending',verification:'unverified',newer_evidence:false}
-    ]};
     setTimeout(async () => { await window.openIncidentReport('fixture-source-alias'); stamp('incident-remediation-probe', document.querySelector('.incident-remediation [data-action]')?.dataset.id || 'missing'); }, 500);
   }
   let authRecoveryExpired = false;
   let authRecoveryMutations = 0;
   let networkRecoveryUnreachable = false;
-  if (scenarios.has('filteredscope')) {
-    data['/flags'].push({ ...data['/flags'][0], id: 'history-broad-only', ts: iso(2 * 3600000) });
-    data['/events'].push({ ...data['/events'][0], ts: iso(2 * 3600000), detail: 'Broad-only history row' });
-  }
   const REQUIRE_TOKEN = scenarios.has('requiretoken');
   // expectdemo: Egress → Expect this destination retires the episode's
   // choices before POST /expected-egress answers; the posture queue is not
@@ -479,11 +450,20 @@
   let slowShapeRecovered = false;
   let spendShapeBad = scenarios.has('firstload');
   window.ConsoleFixtures.apply(fixture);
-  if (scenarios.has('reviewresult')) {
-    const review = data['/reviews'].reviews[0];
-    const item = {kind:'review',id:review.id,priority:2,title:'Recorded read and connection',review};
-    data['/posture'] = {...data['/posture'],needs_you:1,items:[item],
-      groups:[{key:'review-result',agent:'claude',items:[item]}]};
+  if (scenarios.has('attentionactionfocus') || scenarios.has('attentionactionmanual')) {
+    let facts = 0;
+    window.__attentionActionFocusRefresh = (mode = 'facts') => {
+      const detail = `Recorded guard facts ${++facts}`;
+      const posture = data['/posture'];
+      const guards = new Set([...posture.items, ...posture.groups.flatMap(group => group.items)]
+        .filter(item => item.kind === 'guard'));
+      for (const guard of guards) {
+        guard.detail = detail;
+        if (mode === 'remove') guard.available_scopes = guard.available_scopes.filter(scope => scope.expiry !== '24h');
+      }
+      window.SA.t.posture = posture;
+      window.SA.reconcileAttention();
+    };
   }
   stamp('fixture-posture', JSON.stringify(data['/posture']));
   const fixtureReads = {};
