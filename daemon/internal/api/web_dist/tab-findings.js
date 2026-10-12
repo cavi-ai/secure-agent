@@ -415,6 +415,12 @@ function needRowHTML(v, open, nowMs) {
 
 function renderAttention() {
   const SA = window.SA;
+  const result = document.getElementById('review-result');
+  if (result) {
+    result.hidden = !SA.reviewResult;
+    const html = SA.reviewResult ? reviewResultHTML(SA.reviewResult) : '';
+    if (result.innerHTML !== html) result.innerHTML = html;
+  }
   const panel = document.getElementById('attention-center');
   const list = document.getElementById('attention-list');
   const badge = document.getElementById('badge-attention-count');
