@@ -157,16 +157,50 @@ def dump_dom(chrome, tmp, query="", origin=None, window_size=None, reduced_motio
     size = [f"--window-size={window_size[0]},{window_size[1]}"] if window_size else []
     # Exercise both motion modes explicitly, independent of host accessibility settings.
     motion = "--force-prefers-reduced-motion" if reduced_motion else "--force-prefers-no-reduced-motion"
-    with tempfile.TemporaryDirectory(prefix="chrome-profile-", dir=tmp) as profile:
-        out = subprocess.run(
+    with tempfile.TemporaryDirectory(prefix="chrome-profile-", dir=tmp, ignore_cleanup_errors=True) as profile, \
+            tempfile.TemporaryFile("w+", dir=tmp) as errors:
+        proc = subprocess.Popen(
             [chrome, f"--user-data-dir={profile}", "--no-first-run", "--disable-background-networking", "--headless=new", "--disable-gpu", "--no-sandbox", *size, motion,
              "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), "--dump-dom", url],
-            capture_output=True, text=True, timeout=120,
+            stdout=subprocess.PIPE, stderr=errors,
         )
-    if out.returncode != 0:
-        print(out.stderr[-2000:], file=sys.stderr)
-        raise SystemExit(f"chrome --dump-dom failed ({out.returncode}): {url}")
-    return out.stdout
+        out, complete = read_dump(proc, url, timeout=120)
+        errors.seek(0)
+        stderr = errors.read()
+    if not complete and proc.returncode != 0:
+        print(stderr[-2000:], file=sys.stderr)
+        raise SystemExit(f"chrome --dump-dom failed ({proc.returncode}): {url}")
+    return out
+
+
+def read_dump(proc, url, timeout):
+    """Collect Chrome's --dump-dom output. Chrome can stay alive after printing
+    the whole document; it is stopped then instead of waited on."""
+    chunks = []
+
+    def read():
+        while chunk := os.read(proc.stdout.fileno(), 1 << 16):
+            chunks.append(chunk)
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    deadline = time.monotonic() + timeout
+    while reader.is_alive() and not b"".join(chunks).rstrip().endswith(b"</html>"):
+        if time.monotonic() > deadline:
+            proc.kill()
+            proc.wait()
+            raise SystemExit(f"chrome --dump-dom timed out after {timeout}s: {url}")
+        time.sleep(0.05)
+    out = b"".join(chunks).decode()
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    reader.join(5)
+    return out, out.rstrip().endswith("</html>")
 
 
 SHOT_SIZE = (1280, 800)
