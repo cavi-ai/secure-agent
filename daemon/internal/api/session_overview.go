@@ -7,6 +7,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 // SessionOverview keeps current controls separate from retained evidence.
@@ -43,9 +44,9 @@ func (a *API) serveSessionOverview(w http.ResponseWriter, r *http.Request, id st
 	evidence, err := readSessionOverviewEvidence(a.store, id)
 	if err != nil {
 		switch {
-		case errors.Is(err, errSessionOverviewMissing):
+		case errors.Is(err, store.ErrSessionFindingsMissing):
 			http.Error(w, "session not found", http.StatusNotFound)
-		case errors.Is(err, errSessionOverviewStatus):
+		case errors.Is(err, store.ErrSessionFindingsIdentity):
 			http.Error(w, "session status unavailable", http.StatusServiceUnavailable)
 		default:
 			http.Error(w, "session findings unavailable", http.StatusServiceUnavailable)
