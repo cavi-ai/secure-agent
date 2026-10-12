@@ -403,7 +403,7 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
       <button type="button" class="btn btn-sm btn-ghost" data-action="session-status">Current status</button>
     </div>
     </div>
-    <div class="session-detail-body">${state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
+    <div class="session-detail-body" tabindex="-1">${state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
 }
 
 // One workbench owns selection, retained reads, rendering and reading position.
@@ -689,9 +689,14 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     if (rail) rail.scrollTop = scroll;
   }
   function jumpToLatestSession() {
+    const latest = document.querySelector('#session-detail [data-action="session-latest"]');
+    const ownsFocus = !!latest && document.activeElement === latest;
     const body = document.querySelector('#session-detail .session-detail-body');
     if (body) body.scrollTop = body.scrollHeight;
-    const latest = document.querySelector('#session-detail [data-action="session-latest"]');
+    if (ownsFocus && body?.isConnected && body.getClientRects().length) {
+      body.focus({ preventScroll: true });
+      if (document.activeElement === body && typeof window.saAnnounce === 'function') window.saAnnounce('Moved to latest session content.');
+    }
     if (latest) latest.hidden = true;
   }
   function showCurrentSessionStatus() {

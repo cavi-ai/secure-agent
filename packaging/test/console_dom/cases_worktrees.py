@@ -8,6 +8,7 @@ def run_worktrees(page):
     dom_wt = page.fixture('dom_wt')
     dom_wtdiscuss = page.fixture('dom_wtdiscuss')
     dom_wtdiscussoff = page.fixture('dom_wtdiscussoff')
+    dom_wtdockcycle = page.fixture('dom_wtdockcycle')
     dom_wtrefresh = page.fixture('dom_wtrefresh')
     dom_wtreview = page.fixture('dom_wtreview')
     dom_wtreviewtrash = page.fixture('dom_wtreviewtrash')
@@ -152,16 +153,31 @@ def run_worktrees(page):
             )
         ),
     )
-    dw_agent = dom_wtdiscuss.split('id="tab-agent"', 1)[-1].split('id="drawer"', 1)[0]
+    dw_agent = dom_wtdiscuss.split('id="agent-dock"', 1)[-1].split('id="drawer"', 1)[0]
     check(
-        'worktrees: Discuss posts the worktree to the agent, opens the Agent tab and shows the question as a card',
+        'worktrees: Discuss posts the worktree to the agent and shows the question as a card in the docked panel, staying on System',
         (
             'POST /agent/worktree' in pre(dom_wtdiscuss, 'mock-requests')
-            and dom_query(dom_wtdiscuss).has(None, {'class': 'tab-btn active', 'data-tab': 'agent'})
+            and dom_query(dom_wtdiscuss).has(None, {'class': 'tab-btn active', 'data-tab': 'system'})
+            and '<aside id="agent-dock" class="agent-dock" aria-labelledby="agent-dock-title">' in dom_wtdiscuss
+            and 'id="agent-dock-body"><section class="agent-chat" id="agent-chat"' in dw_agent
             and dw_agent.count('agent-worktree-card') == 1
             and '<b>Can I delete this worktree?</b>' in dw_agent
             and 'branch feat/evidence' in dw_agent
             and 'Only ignored scratch files would be lost.' in dw_agent
+        ),
+    )
+    cycle = json.loads(html.unescape(pre(dom_wtdockcycle, 'dock-cycle')) or '{}')
+    in_dock = {'dock': True, 'drawer': False, 'chat': 'agent-dock-body', 'tab': 'system', 'focus': 'agent-input', 'end': True}
+    check(
+        'worktrees: the agent dock and the drawer replace each other, Escape while typing keeps the dock, Close returns the chat and focus',
+        (
+            cycle.get('open') == in_dock
+            and {k: cycle.get('drawer', {}).get(k) for k in ('dock', 'drawer', 'chat', 'tab')} == {'dock': False, 'drawer': True, 'chat': 'agent-layout', 'tab': 'system'}
+            and cycle.get('reopen') == in_dock
+            and cycle.get('typing') == in_dock
+            and {k: cycle.get('closed', {}).get(k) for k in ('dock', 'drawer', 'chat', 'tab', 'focus')} == {'dock': False, 'drawer': False, 'chat': 'agent-layout', 'tab': 'system', 'focus': 'worktree-discuss'}
+            and 'class="agent-docked"' not in dom_wtdockcycle
         ),
     )
     check(
@@ -510,7 +526,7 @@ def run_worktrees_2(page):
         f'evidence={gd_evidence} clutter={gd_clutter}',
     )
     gd_reqs = html.unescape(pre(dom_wtgroup, 'mock-requests'))
-    gd_agent = dom_wtgroup.split('id="tab-agent"', 1)[-1].split('id="drawer"', 1)[0]
+    gd_agent = dom_wtgroup.split('id="agent-dock"', 1)[-1].split('id="drawer"', 1)[0]
     check(
         'worktrees: Ask advisor about all posts the repository and toasts how many worktrees it will work through',
         (
@@ -520,10 +536,11 @@ def run_worktrees_2(page):
         gd_reqs,
     )
     check(
-        'worktrees: Discuss all posts the repository and opens the Agent tab on the group question',
+        'worktrees: Discuss all posts the repository and shows the group question in the docked panel, staying on System',
         (
             'POST /agent/worktree body={"repo":"/Users/dev/workspace/api-service"}' in gd_reqs
-            and dom_query(dom_wtgroup).has(None, {'class': 'tab-btn active', 'data-tab': 'agent'})
+            and dom_query(dom_wtgroup).has(None, {'class': 'tab-btn active', 'data-tab': 'system'})
+            and '<aside id="agent-dock" class="agent-dock" aria-labelledby="agent-dock-title">' in dom_wtgroup
             and gd_agent.count('agent-worktree-card') == 1
             and '<b>Which of these worktrees in this repository can I delete?</b>' in gd_agent
             and 'feat/evidence · review · merged: no' in gd_agent
@@ -561,7 +578,7 @@ def run_worktree_hierarchy(page):
 
 CASES = (
     Case('worktree_hierarchy', run_worktree_hierarchy),
-    Case('worktrees', run_worktrees, ('dom_memfam', 'dom_wt', 'dom_wtdiscuss', 'dom_wtdiscussoff', 'dom_wtrefresh', 'dom_wtreview', 'dom_wtreviewtrash', 'dom_wtsizing')),
+    Case('worktrees', run_worktrees, ('dom_memfam', 'dom_wt', 'dom_wtdiscuss', 'dom_wtdiscussoff', 'dom_wtdockcycle', 'dom_wtrefresh', 'dom_wtreview', 'dom_wtreviewtrash', 'dom_wtsizing')),
     Case('clutter', run_clutter, ('dom_clutter', 'dom_clutteradvise', 'dom_clutter_view')),
     Case('worktrees_2', run_worktrees_2, ('dom_wtadopt', 'dom_wtbatch', 'dom_wtcadence', 'dom_wtday', 'dom_wtday_midnight', 'dom_wtgroup', 'dom_wthistory', 'dom_wtorphan', 'dom_wtorphantrash', 'dom_wtremovable', 'dom_wtremove', 'dom_wtremovefail', 'dom_wtremoving', 'dom_wtsearch')),
 )
