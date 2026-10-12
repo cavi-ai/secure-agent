@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { loadDrawer } from './drawer-harness.mjs';
 
 const web = new URL('../../../daemon/internal/api/web_dist/', import.meta.url);
 const app = readFileSync(new URL('app.js', web), 'utf8');
 function controller() {
   const start = app.indexOf('  // Session investigation return context.');
-  const end = app.indexOf('  // The open drawer as a way back', start);
+  const end = app.indexOf('  window.killProcess = async function(', start);
   assert.ok(start >= 0 && end > start, 'session investigation controller exists');
   const listeners = {}, entries = [{ state: null, url: '#sessions' }];
   let index = 0;
@@ -16,14 +17,13 @@ function controller() {
     closest: s => s === '#session-detail' ? {} : null, focus: () => { c.focused = 'opener'; } };
   const c = { console, URLSearchParams, selectedSessionId: 'a', sessionView: 'trace', activeTab: 'sessions', activeSub: 'board',
     handoffGeneration: 2, sessionEnded: false, timelineSession: 'prior', timelinePids: null, timelinePidLabel: '',
-    drawerBack: null,
     filters: { events: { kind: 'all', since: 'all' } }, syncHistoryViews() {},
     suppressFreshOnce: false, location: { pathname: '/dashboard/', search: '', hash: '#sessions' }, calls: [],
     window: { SA: {}, scrollY: 27, scrollTo: (_x, y) => { c.pageY = y; }, addEventListener: (name, fn) => { listeners[name] = fn; } },
     document: { querySelector: s => s === '#session-detail .session-detail-body' ? body : s === '#session-rail' ? rail : null,
       querySelectorAll: () => [opener] },
     renderNow: () => { c.calls.push('render'); }, renderEvents() {}, renderFlags() {}, renderIncidents() {}, paintScopeBar() {},
-    closeDrawer: () => { c.calls.push('close'); }, fetchTelemetry: () => { c.calls.push('read'); },
+    fetchTelemetry: () => { c.calls.push('read'); },
     openConsoleContext: (context, generation) => { c.calls.push({ freshContext: { ...context }, generation }); },
     switchTab: (route, opts) => { const r = c.resolveConsoleRoute(route); c.activeTab = r.tab; c.activeSub = r.sub; c.calls.push({ route, opts }); },
   };
@@ -38,6 +38,11 @@ function controller() {
   vm.runInContext(readFileSync(new URL('event-history.js', web), 'utf8'), c);
   c.eventHistoryPage = c.createEventHistoryPage();
   vm.runInContext(readFileSync(new URL('lib.js', web), 'utf8'), c);
+  const drawer = loadDrawer({ deps: { collaborators: {
+    auth: { ended: () => c.sessionEnded, generation: () => c.handoffGeneration },
+    session: { capture: el => c.captureSessionReturn(el), restore: st => c.restoreSessionReturn(st) }
+  } } });
+  c.detailDrawer = { ...drawer.api, close: () => { c.calls.push('close'); drawer.api.close(); } };
   c.sessionWorkbench = { get selectedSessionId() { return c.selectedSessionId; }, get sessionView() { return c.sessionView; } };
   c.sessionWorkbench.restoreView = view => { c.sessionView = view; };
   vm.runInContext(app.slice(start, end), c);
@@ -76,7 +81,7 @@ test('browser Back and Forward restore their own context without writing or repl
 
 test('resource Events carries the originating session through the process-family drawer', () => {
   const { c, opener } = controller();
-  const back = c.sessionDrawerBack(opener);
+  const back = c.detailDrawer.sessionBack(opener);
   assert.equal(back.label, 'session');
   assert.equal(c.window.openSessionFamilyEvents(back.sessionReturn, [8, 9], 'synthetic family'), true);
   assert.equal(c.activeTab, 'sessions'); assert.equal(c.activeSub, 'events');
@@ -106,7 +111,7 @@ test('recorded Events needs no live process family and returns to the original v
 test('changed authentication or selection invalidates an old return target and late browser navigation', () => {
   for (const change of [c => { c.handoffGeneration++; }, c => { c.sessionEnded = true; }, c => { c.selectedSessionId = 'b'; }]) {
     const { c, opener } = controller();
-    const back = c.sessionDrawerBack(opener);
+    const back = c.detailDrawer.sessionBack(opener);
     c.window.openSessionFindings('a', opener);
     change(c);
     const tab = c.activeTab;
@@ -132,7 +137,7 @@ test('Back and Forward preserve the event page and its frozen filter boundary', 
 
 test('drawer Back stays local and restores logical focus after its source element is replaced', () => {
   const { c, opener } = controller();
-  const back = c.sessionDrawerBack(opener);
+  const back = c.detailDrawer.sessionBack(opener);
   opener.isConnected = false;
   c.document.querySelectorAll = () => [{ dataset: { ...opener.dataset }, focus: () => { c.focused = 'replacement'; } }];
   back.reopen();
@@ -142,7 +147,7 @@ test('drawer Back stays local and restores logical focus after its source elemen
 
 test('a global or mismatched action cannot invent a session return target', () => {
   const { c, opener, entries } = controller();
-  assert.equal(c.sessionDrawerBack({ ...opener, closest: () => null }), null);
+  assert.equal(c.detailDrawer.sessionBack({ ...opener, closest: () => null }), null);
   c.window.openSessionFindings('different', opener);
   assert.equal(entries.length, 1);
   assert.equal(c.window.SA.sessionInvestigationReturn, false);
@@ -170,10 +175,10 @@ test('a cancelled origin uses ordinary authenticated route navigation instead of
 
 test('invalidating a session closes its nested drawer while retaining an unrelated global drawer', () => {
   const { c, opener } = controller();
-  c.drawerBack = c.sessionDrawerBack(opener);
+  c.detailDrawer.open({ title: 'Nested', back: c.detailDrawer.sessionBack(opener) });
   c.window.SA.clearSessionInvestigation();
   assert.ok(c.calls.includes('close'));
-  c.calls = []; c.drawerBack = { label: 'global evidence' };
+  c.calls = []; c.detailDrawer.open({ title: 'Global', back: { label: 'global evidence', reopen() {} } });
   c.window.SA.clearSessionInvestigation();
   assert.ok(!c.calls.includes('close'));
 });

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { loadDrawer } from './drawer-harness.mjs';
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../daemon/internal/api/web_dist');
 const app = readFileSync(path.join(web, 'app.js'), 'utf8');
@@ -14,7 +15,7 @@ for (const success of [true, false]) {
   const begin = app.indexOf('  window.setIncidentStatus = async function(');
   const finish = app.indexOf('  // Discuss:', begin);
   const original = {incidents:[{id:'inc'}], posture:{items:[{kind:'incident',id:'inc'}]}};
-  const ctx = {window:{}, telemetryData:structuredClone(original), drawerMode:null,
+  const ctx = {window:{}, telemetryData:structuredClone(original), detailDrawer:{isIncidentOpen:()=>false},
    mapAttentionItems:fn=>{const p=ctx.telemetryData.posture;ctx.telemetryData.posture={...p,items:p.items.map(fn).filter(Boolean)};},
    apiFetch:async()=>({ok:success,json:async()=>({workflow:{status:'acknowledged'}}),text:async()=>'write unavailable'}),
    showToast:()=>{},cardNote:()=>{},cssq:x=>x,fetchTelemetry:()=>{}};
@@ -31,34 +32,21 @@ for (const success of [true, false]) {
 }
 
 test('incident drawer loads current workflow and retains raw Markdown for copying', async () => {
- const begin=app.indexOf('  window.openIncidentReport = async function(');
- const finish=app.indexOf('  // Endpoint detail:',begin);
- const ctx={window:{},drawer:{},drawerSeq:1,btnDrawerCopy:{},drawerBody:{},openDrawer:()=>{},
-  apiFetch:async url=>({ok:true,text:async()=>'# Original report',json:async()=>({workflow:{status:'acknowledged'}})}),
-  incidentReportHTML:(id,wf,text)=>[id,wf.status,text].join('|'),loadPlanSlot:()=>{}};
- vm.runInNewContext(app.slice(begin,finish),ctx);
- await ctx.window.openIncidentReport('inc');
- assert.equal(ctx.currentRawMarkdown,'# Original report');
- assert.equal(ctx.drawerBody.innerHTML,'inc|acknowledged|# Original report');
+ const h=loadDrawer({deps:{respond:async()=>({ok:true,status:200,text:async()=>'# Original report',json:async()=>({workflow:{status:'acknowledged'}})})}});
+ h.ctx.incidentReportHTML=(id,wf,text)=>[id,wf.status,text].join('|');
+ await h.api.openIncidentReport('inc');
+ let copied=null;
+ h.ctx.navigator.clipboard={writeText:async text=>{copied=text;}};
+ await h.dom.copyButton.fire('click');
+ assert.equal(copied,'# Original report');
+ assert.equal(h.dom.body.innerHTML,'inc|acknowledged|# Original report');
 });
 
 test('opening an older finding makes its served actions immediately clickable', async () => {
-  const begin = app.indexOf('  window.openFlagDetail = async function(');
-  const finish = app.indexOf('  async function openConsoleContext(', begin);
-  assert.ok(begin >= 0 && finish > begin, 'flag drawer handler is present');
-  const cache = new Map();
   const flag = { id: 'older-flag', title: 'File access', rule: 'sensitive-read', agent: 'codex',
     ts: '2026-09-29T12:00:00Z', evidence: [], explain: { actions: [] } };
-  const ctx = {
-    window: {}, drawer: {}, drawerMode: '', drawerFlag: '', drawerSeq: 1,
-    btnDrawerCopy: {}, drawerBody: {}, drawerTitle: {}, planFlagCache: cache,
-    telemetryData: { status: {} },
-    openDrawer: () => {}, apiFetch: async () => ({ ok: true, json: async () => flag }),
-    escapeHTML: x => String(x), explainLines: () => null, ruleTitle: () => 'File access',
-    explainActionsHTML: () => '', loadPlanSlot: () => {},
-  };
-  vm.runInNewContext(app.slice(begin, finish), ctx, { filename: 'app.js:openFlagDetail' });
-  await ctx.window.openFlagDetail(flag.id);
-  assert.equal(cache.get(flag.id), flag);
-  assert.match(ctx.drawerBody.innerHTML, /File access/);
+  const h = loadDrawer({ deps: { respond: async () => ({ ok: true, status: 200, json: async () => flag }) } });
+  await h.api.openFlagDetail(flag.id);
+  assert.equal(h.calls.cachedFlags[0], flag);
+  assert.match(h.dom.body.innerHTML, /File access/);
 });
