@@ -1,7 +1,7 @@
 // Worktree Hunter and clutter: the two reports, their loaders and size
 // polling, the removal progress toast and the actions on both tabs.
 const WORKTREE_STALE_MS = 60000;
-function createWorktreeController({ request, toast, confirm, render, markDirty, visible, now, loadLedger, discuss, toastHost }) {
+function createWorktreeController({ request, toast, confirm, render, markDirty, visible, now, history, discuss, toastHost }) {
   // Worktrees are not telemetry: the tab fetches its report when opened
   // (the daemon caches a scan for 10 minutes) and on Rescan, never on the
   // refresh cycle.
@@ -149,6 +149,28 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
       worktreesState.loading = false;
       markDirty('worktrees');
       followWorktreeSizing();
+    }
+  }
+
+  // The cleanup ledger: the daily series behind the reclaimed chart and the
+  // entries behind the history drawer. Loaded with the tab, after a
+  // cleanup lands, and when the history opens.
+  const LEDGER_LIMIT = 500;
+  async function loadLedger() {
+    if (worktreesState.ledgerLoading) return;
+    worktreesState.ledgerLoading = true;
+    markDirty('worktrees');
+    try {
+      const r = await request(`/cleanup/ledger?days=${RECLAIM_DAYS}&limit=${LEDGER_LIMIT}`);
+      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
+      worktreesState.ledger = { ...(await r.json()), limit: LEDGER_LIMIT };
+      worktreesState.ledgerAt = now();
+    } catch (err) {
+      if (history.open()) toast("Couldn't read the cleanup history: " + (err.message || err), 'danger');
+    } finally {
+      worktreesState.ledgerLoading = false;
+      markDirty('worktrees');
+      history.paint();
     }
   }
 
@@ -565,6 +587,7 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
     get clutterState() { return clutterState; },
     loadWorktrees,
     loadClutter,
+    loadLedger,
     activate,
     closeRemovalToast,
     addRepo,

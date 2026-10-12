@@ -16,13 +16,15 @@ const { resolveConsoleRoute, routeKey, consoleRouteHash, isConsoleRoute, console
 const key = id => routeKey(resolveConsoleRoute(id));
 // The real worktree controller inside a switchTab runtime: request answers
 // each report read, visible follows the runtime's active System view.
-function attachWorktreeController(runtime, { request, loadLedger }) {
+const reportRead = url => (url === '/worktrees' ? 'worktrees' : url === '/cleanup' ? 'clutter' : 'ledger');
+function attachWorktreeController(runtime, request) {
   for (const file of ['tab-worktrees.js', 'worktree-controller.js']) {
     vm.runInContext(readFileSync(path.join(webDist, file), 'utf8'), runtime, { filename: file });
   }
   runtime.worktreeController = runtime.createWorktreeController({
-    request, loadLedger,
+    request,
     toast() {}, confirm: async () => false, render() {}, markDirty() {}, discuss() {},
+    history: { open: () => false, paint() {} },
     visible: view => runtime.activeTab === 'system' && runtime.activeSystemSub === view,
     now: Date.now,
     toastHost: { show() {}, hideWhenEmpty() {} }
@@ -194,10 +196,7 @@ test('Protection subviews retain selected ARIA and visibility without receiving 
     PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){}};
   vm.createContext(runtime);
   vm.runInContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), runtime);
-  attachWorktreeController(runtime, {
-    request(url) { loads.push(url === '/worktrees' ? 'worktrees' : 'clutter'); return new Promise(() => {}); },
-    loadLedger() { loads.push('ledger'); }
-  });
+  attachWorktreeController(runtime, url => { loads.push(reportRead(url)); return new Promise(() => {}); });
   vm.runInContext(source.slice(start, end), runtime);
   assert.equal(sessions.every(button => button.listeners.length === 1), true);
   assert.equal(system.every(button => button.listeners.length === 1), true);
@@ -309,12 +308,9 @@ test('returning to a pending System report resumes bounded followup after its hi
   };
   vm.createContext(runtime);
   vm.runInContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), runtime);
-  const controller = attachWorktreeController(runtime, {
-    async request(url) {
-      reads.push(url === '/worktrees' ? 'worktrees' : 'clutter');
-      return { ok: true, json: async () => served[url] };
-    },
-    loadLedger() { reads.push('ledger'); }
+  const controller = attachWorktreeController(runtime, async url => {
+    reads.push(reportRead(url));
+    return { ok: true, json: async () => served[url] || {} };
   });
   const switchStart = source.indexOf('  function switchTab(');
   vm.runInContext(source.slice(switchStart, source.indexOf('  // Tab badges:', switchStart)), runtime);

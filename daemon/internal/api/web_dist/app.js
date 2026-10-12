@@ -1192,7 +1192,7 @@ document.addEventListener('DOMContentLoaded', () => {
     markDirty,
     visible: view => activeTab === 'system' && activeSystemSub === view,
     now: Date.now,
-    loadLedger,
+    history: { open: () => !!historyState.seq, paint: () => paintHistory() },
     discuss: discussWorktreeTarget,
     toastHost: { show: showToastHost, hideWhenEmpty: hideToastHostWhenEmpty }
   });
@@ -1200,28 +1200,6 @@ document.addEventListener('DOMContentLoaded', () => {
     'trashOrphanWorktree', 'trashReviewedWorktree', 'discussWorktree', 'discussWorktreeGroup', 'adviseWorktree', 'adviseWorktreeGroup',
     'trashClutter', 'adviseClutterProject', 'cleanClutter', 'askWorktreeAgent', 'pruneWorktrees', 'hideWorktreeRepo']) {
     window[name] = (...args) => worktreeController[name](...args);
-  }
-  // The cleanup ledger: the daily series behind the reclaimed chart and the
-  // entries behind the history drawer. Loaded with the tab, after a
-  // cleanup lands, and when the history opens.
-  const LEDGER_LIMIT = 500;
-  async function loadLedger() {
-    const worktreesState = worktreeController.worktreesState;
-    if (worktreesState.ledgerLoading) return;
-    worktreesState.ledgerLoading = true;
-    markDirty('worktrees');
-    try {
-      const r = await apiFetch(`/cleanup/ledger?days=${RECLAIM_DAYS}&limit=${LEDGER_LIMIT}`);
-      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
-      worktreesState.ledger = { ...(await r.json()), limit: LEDGER_LIMIT };
-      worktreesState.ledgerAt = Date.now();
-    } catch (err) {
-      if (historyState.seq) showToast("Couldn't read the cleanup history: " + (err.message || err), 'danger');
-    } finally {
-      worktreesState.ledgerLoading = false;
-      markDirty('worktrees');
-      paintHistory();
-    }
   }
 
   // History drawer: the ledger grouped by day, filtered by kind or by the
@@ -1243,7 +1221,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!opened) return;
       historyState.seq = drawerSeq;
       const { ledger, ledgerAt } = worktreeController.worktreesState;
-      if (!ledger || Date.now() - ledgerAt > WORKTREE_STALE_MS) loadLedger();
+      if (!ledger || Date.now() - ledgerAt > WORKTREE_STALE_MS) worktreeController.loadLedger();
     }
     paintHistory();
   }
@@ -3857,7 +3835,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'worktrees-rescan':
         worktreeController.loadWorktrees(true);
-        loadLedger();
+        worktreeController.loadLedger();
         break;
       case 'worktrees-remove-removable':
         e.preventDefault();

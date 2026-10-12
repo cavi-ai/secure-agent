@@ -31,7 +31,7 @@ function fakeDocument() {
 
 // Builds the controller with fake collaborators. respond(url, req) answers
 // each request; a thrown error models a network failure.
-function build({ respond = () => reply({}), confirmed = true, shown = {}, nowMs = 1_000_000 } = {}) {
+function build({ respond = () => reply({}), confirmed = true, shown = {}, nowMs = 1_000_000, historyOpen = false, ledgerReply = () => reply({ days: [] }) } = {}) {
   const document = fakeDocument();
   const timers = [];
   const ctx = {
@@ -45,10 +45,15 @@ function build({ respond = () => reply({}), confirmed = true, shown = {}, nowMs 
   for (const file of ['lib.js', 'tab-worktrees.js', 'worktree-controller.js']) {
     vm.runInContext(readFileSync(path.join(web, file), 'utf8'), ctx, { filename: file });
   }
-  const log = { requests: [], toasts: [], confirms: [], renders: [], dirty: [], ledger: 0, discussed: [], hostShown: 0, hostHidden: 0 };
+  const log = { requests: [], toasts: [], confirms: [], renders: [], dirty: [], ledger: 0, ledgerUrls: [], painted: 0, discussed: [], hostShown: 0, hostHidden: 0 };
   const clock = { at: nowMs };
   const controller = ctx.createWorktreeController({
     request: async (url, req = {}) => {
+      if (url.startsWith('/cleanup/ledger')) {
+        log.ledger++;
+        log.ledgerUrls.push(url);
+        return ledgerReply();
+      }
       log.requests.push({ url, method: req.method || 'GET', body: req.body ? JSON.parse(req.body) : undefined });
       return respond(url, req);
     },
@@ -58,7 +63,7 @@ function build({ respond = () => reply({}), confirmed = true, shown = {}, nowMs 
     markDirty: (...names) => log.dirty.push(names),
     visible: view => shown[view] === true,
     now: () => clock.at,
-    loadLedger: () => { log.ledger++; },
+    history: { open: () => historyOpen, paint: () => { log.painted++; } },
     discuss: target => log.discussed.push(target),
     toastHost: { show: () => { log.hostShown++; }, hideWhenEmpty: () => { log.hostHidden++; } }
   });
@@ -331,4 +336,28 @@ test('discuss actions hand the collaborator a path or a repository target', () =
   controller.discussWorktree(WT);
   controller.discussWorktreeGroup(REPO);
   assert.deepEqual(plain(log.discussed), [{ path: WT }, { repo: REPO }]);
+});
+
+test('loadLedger stores the ledger with its limit, stamps the time and repaints the history', async () => {
+  const { controller, log } = build({ ledgerReply: () => reply({ days: [{ day: '2026-10-01' }] }) });
+  await controller.loadLedger();
+  assert.deepEqual(log.ledgerUrls, ['/cleanup/ledger?days=30&limit=500']);
+  assert.deepEqual(plain(controller.worktreesState.ledger), { days: [{ day: '2026-10-01' }], limit: 500 });
+  assert.equal(controller.worktreesState.ledgerAt, 1_000_000);
+  assert.equal(controller.worktreesState.ledgerLoading, false);
+  assert.deepEqual(plain(log.dirty), [['worktrees'], ['worktrees']]);
+  assert.equal(log.painted, 1);
+  assert.deepEqual(log.toasts, []);
+});
+
+test('loadLedger failure toasts only while the history drawer is open and keeps the old ledger', async () => {
+  for (const historyOpen of [true, false]) {
+    const { controller, log } = build({ historyOpen, ledgerReply: () => reply('ledger offline', false) });
+    controller.worktreesState.ledger = { days: [], limit: 500 };
+    await controller.loadLedger();
+    assert.deepEqual(plain(log.toasts), historyOpen ? [{ message: "Couldn't read the cleanup history: ledger offline", type: 'danger' }] : []);
+    assert.deepEqual(plain(controller.worktreesState.ledger), { days: [], limit: 500 });
+    assert.equal(controller.worktreesState.ledgerLoading, false);
+    assert.equal(log.painted, 1);
+  }
 });
