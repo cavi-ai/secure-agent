@@ -905,6 +905,12 @@ body {
 .drawer-body { padding: 20px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
 /* This pane restores its own reading position across loading/status changes. */
 .drawer-body:has([data-session-part="permissions-head"]) { overflow-anchor: none; }
+.drawer-body:has([data-session-part="permissions-head"]) .policy-row-main { display: grid; gap: 10px; font-size: .85rem; line-height: 1.55; }
+.drawer-body > [data-session-part="permissions-head"] { margin-bottom: 18px; }
+.drawer-body:has([data-session-part="permissions-head"]) .policy-row { display: block; padding: 18px 0; }
+.drawer-body:has([data-session-part="permissions-head"]) :is(h4, h5) { font-size: .95rem; }
+.drawer-body:has([data-session-part="permissions-head"]) p { margin: 0; }
+.drawer-body:has([data-session-part="permissions-head"]) button { justify-self: start; min-height: 44px; }
 .drawer-foot {
   display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px;
   padding: 14px 20px; border-top: 1px solid var(--line);
