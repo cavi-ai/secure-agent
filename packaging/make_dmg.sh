@@ -17,10 +17,19 @@ cd "${REPO_ROOT}"
 APP_NAME="Secure Agent"
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo 0.1.0)}"
 APP_DIR="${REPO_ROOT}/dist/${APP_NAME}.app"
-STAGING="${REPO_ROOT}/dist/dmg-staging"
 DMG_PATH="${REPO_ROOT}/dist/SecureAgent-${VERSION}.dmg"
 
+if [[ "${RELEASE_BUILD:-0}" == 1 ]]; then
+  source "${REPO_ROOT}/packaging/lib/release.sh"
+  require_release_settings
+fi
+
 "${REPO_ROOT}/packaging/make_app.sh"
+
+BUILD_DIR="$(mktemp -d "${REPO_ROOT}/dist/.dmg-build.XXXXXX")"
+trap 'rm -rf "${BUILD_DIR}"' EXIT
+STAGING="${BUILD_DIR}/staging"
+CANDIDATE_DMG="${BUILD_DIR}/$(basename "${DMG_PATH}")"
 
 if [[ -n "${NOTARY_PROFILE:-}" ]]; then
   echo "==> Notarizing app..."
@@ -37,7 +46,6 @@ elif [[ "${CODESIGN_IDENTITY:--}" == *"Developer ID Application"* ]]; then
 fi
 
 echo "==> Creating DMG..."
-rm -rf "${STAGING}" "${DMG_PATH}"
 mkdir -p "${STAGING}"
 cp -R "${APP_DIR}" "${STAGING}/"
 ln -s /Applications "${STAGING}/Applications"
@@ -46,25 +54,53 @@ hdiutil create \
   -volname "${APP_NAME}" \
   -srcfolder "${STAGING}" \
   -ov -format UDZO \
-  "${DMG_PATH}"
+  "${CANDIDATE_DMG}"
 
 if [[ -n "${NOTARY_PROFILE:-}" && "${CODESIGN_IDENTITY:--}" != "-" ]]; then
   # When a notary profile is configured, the user asked for a distributable
   # DMG — silently shipping an unnotarized one (old `|| true`) is a lie.
   # Fail loudly; for ad-hoc dev builds, just leave NOTARY_PROFILE unset.
-  codesign --force --sign "${CODESIGN_IDENTITY}" "${DMG_PATH}"
-  xcrun notarytool submit "${DMG_PATH}" --keychain-profile "${NOTARY_PROFILE}" --wait
-  xcrun stapler staple "${DMG_PATH}"
+  codesign --force --sign "${CODESIGN_IDENTITY}" "${CANDIDATE_DMG}"
+  xcrun notarytool submit "${CANDIDATE_DMG}" --keychain-profile "${NOTARY_PROFILE}" --wait
+  xcrun stapler staple "${CANDIDATE_DMG}"
+fi
+
+if [[ "${RELEASE_BUILD:-0}" == 1 ]]; then
+  codesign --verify --deep --strict "${APP_DIR}"
+  codesign --verify --strict "${CANDIDATE_DMG}"
+  xcrun stapler validate "${APP_DIR}"
+  xcrun stapler validate "${CANDIDATE_DMG}"
+  spctl --assess --type execute "${APP_DIR}"
+  spctl --assess --type open --context context:primary-signature "${CANDIDATE_DMG}"
 fi
 
 rm -rf "${STAGING}"
 
 # SHA-256 checksums: the in-app updater's stable channel verifies the DMG
-# against this file before mounting. Append (don't overwrite) so one release
-# can carry several artifacts.
+# against this file before mounting. Replace rebuilt artifacts while retaining
+# every other asset in the release.
 echo "==> Writing checksums..."
 CHECKSUMS="${REPO_ROOT}/dist/checksums.txt"
-shasum -a 256 "${DMG_PATH}" | sed "s|${REPO_ROOT}/||" >> "${CHECKSUMS}"
+CANDIDATE_CHECKSUMS="${BUILD_DIR}/checksums.txt"
+if [[ -f "${CHECKSUMS}" ]]; then
+  cp "${CHECKSUMS}" "${CANDIDATE_CHECKSUMS}"
+fi
+source "${REPO_ROOT}/packaging/lib/checksum.sh"
+write_artifact_checksum "${CANDIDATE_DMG}" "${CANDIDATE_CHECKSUMS}" "dist/$(basename "${DMG_PATH}")"
+# Preserve the previous image until both output files have been replaced.
+if [[ -f "${DMG_PATH}" ]]; then
+  ln "${DMG_PATH}" "${BUILD_DIR}/previous.dmg"
+fi
+mv -f "${CANDIDATE_DMG}" "${DMG_PATH}"
+if ! mv -f "${CANDIDATE_CHECKSUMS}" "${CHECKSUMS}"; then
+  if [[ -f "${BUILD_DIR}/previous.dmg" ]]; then
+    mv -f "${BUILD_DIR}/previous.dmg" "${DMG_PATH}"
+  else
+    rm -f "${DMG_PATH}"
+  fi
+  echo "error: could not publish the DMG checksum" >&2
+  exit 1
+fi
 echo "    $(tail -1 "${CHECKSUMS}")"
 
 echo "==> Done: ${DMG_PATH}"

@@ -211,6 +211,35 @@ func (s *Store) EndSession(id string, ts time.Time) (writeErr error) {
 	return nil
 }
 
+// ResumeSession reopens an ended session on activity recorded after its end;
+// activity at or before ended_at leaves it ended. last_seen_at only moves
+// forward. Reports whether the session reopened.
+func (s *Store) ResumeSession(id string, ts time.Time) (resumed bool, writeErr error) {
+	if id == "" {
+		return false, nil
+	}
+	defer func() {
+		if writeErr != nil || resumed {
+			s.noteWrite("session resumes", writeErr)
+		}
+	}()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := ts.UTC().Format(time.RFC3339Nano)
+	result, err := s.db.Exec(`UPDATE sessions SET status = ?, ended_at = NULL,
+		last_seen_at = CASE WHEN `+timestampOrderExpr("last_seen_at")+` IS NULL OR `+timestampOrderExpr("last_seen_at")+` < ? THEN ? ELSE last_seen_at END
+		WHERE id = ? AND status = ? AND `+timestampOrderExpr("ended_at")+` < ?`,
+		model.SessionActive, instantArg(ts), t, id, model.SessionEnded, instantArg(ts))
+	if err != nil {
+		return false, fmt.Errorf("resume session: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("resumed session rows affected: %w", err)
+	}
+	return n > 0, nil
+}
+
 // SweepStaleRunningCalls closes tool-call rows stuck at "running" past the
 // cutoff. EndSession sweeps its own session, but rows written before that
 // sweep existed (or whose completion line was lost) stay running forever; a

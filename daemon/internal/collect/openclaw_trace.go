@@ -338,7 +338,7 @@ func (c *OpenclawCollector) readMessages(db *sql.DB) (published int, ok, clean b
 		if r.sessionID == "" {
 			continue
 		}
-		ts := parseOpenclawTime(r.created)
+		ts, observed := parseOpenclawTime(r.created)
 		if !c.noted[r.sessionID] {
 			c.noted[r.sessionID] = true
 			if c.OnSessionSeen != nil {
@@ -348,6 +348,7 @@ func (c *OpenclawCollector) readMessages(db *sql.DB) (published int, ok, clean b
 		first := r.msgID != lastMsg
 		lastMsg = r.msgID
 		for _, e := range c.rowEvents(r, ts, first) {
+			e.ObservedTS = observed
 			c.bus.Publish(e)
 			published++
 		}
@@ -443,7 +444,8 @@ func (c *OpenclawCollector) endClosed(db *sql.DB) bool {
 			continue
 		}
 		c.ended[sid] = true
-		c.OnSessionEnded(sid, parseOpenclawTime(at.String))
+		ended, _ := parseOpenclawTime(at.String)
+		c.OnSessionEnded(sid, ended)
 	}
 	return rows.Err() == nil
 }
@@ -474,15 +476,16 @@ func openclawToolStatus(status string, failed bool) string {
 }
 
 // parseOpenclawTime reads lcm.db's UTC "YYYY-MM-DD HH:MM:SS" (RFC 3339
-// accepted too); an unreadable value is "now" rather than year 1.
-func parseOpenclawTime(s string) time.Time {
+// accepted too); an unreadable value is "now" rather than year 1, reported
+// as observed.
+func parseOpenclawTime(s string) (t time.Time, observed bool) {
 	if t, err := time.ParseInLocation(openclawTimeLayout, s, time.UTC); err == nil {
-		return t
+		return t, false
 	}
 	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
-		return t
+		return t, false
 	}
-	return time.Now()
+	return time.Now(), true
 }
 
 // openclawState is the persisted watermark, tied to the database it counts.

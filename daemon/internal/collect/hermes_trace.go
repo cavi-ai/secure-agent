@@ -476,6 +476,7 @@ func (c *HermesCollector) pollDB(d *hermesDB) int {
 		first := r.msgID != lastMsg
 		lastMsg = r.msgID
 		for _, e := range c.rowEvents(d, r, ts, first, usageMode, sessions[r.sessionID], lastTok[r.sessionID] == r.msgID) {
+			e.ObservedTS = r.ts <= 0
 			publish(e)
 		}
 	}
@@ -725,12 +726,12 @@ GROUP BY u.session_id, u.model ORDER BY u.session_id, u.model`,
 		if provider == "" {
 			provider = sessions[sid].provider
 		}
-		ts := time.Now().UTC()
+		ts, observed := time.Now().UTC(), true
 		if s := sessions[sid]; s.endedAt.Valid {
-			ts = hermesTime(s.endedAt.Float64)
+			ts, observed = hermesTime(s.endedAt.Float64), s.endedAt.Float64 <= 0
 		}
 		out = append(out, event.Event{
-			Kind: event.KindModelCall, TS: ts, SessionID: sid,
+			Kind: event.KindModelCall, TS: ts, SessionID: sid, ObservedTS: observed,
 			Model: model, Provider: provider, TokensIn: din, TokensOut: dout, CostUSD: dcost,
 		})
 	}

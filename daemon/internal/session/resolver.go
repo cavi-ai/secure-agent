@@ -190,6 +190,7 @@ type resolverStore interface {
 	MarkSessionsIdle(time.Time) ([]string, error)
 	SessionRoots() map[int32]string
 	EndSession(string, time.Time) error
+	ResumeSession(string, time.Time) (bool, error)
 }
 
 func NewResolver(st resolverStore, tg *agents.Tagger) *Resolver {
@@ -227,6 +228,7 @@ func (r *Resolver) Resolve(e *event.Event) string {
 	// Tier 1: hook/transcript-stamped id on the event itself.
 	if e.SessionID != "" {
 		if r.ensureHookSession(e) {
+			r.resumeLocked(e)
 			r.touchLocked(e.SessionID, e.TS)
 		}
 		if !isTraceKind(e.Kind) {
@@ -681,6 +683,65 @@ func (r *Resolver) ensureHookSession(e *event.Event) bool {
 		sess.Repo, sess.Branch = GitInfoFor(sess.Workspace)
 	}
 	return r.upsertAndEmitLocked(sess)
+}
+
+// resumeLocked reopens an ended session on the harness's own record of work
+// (a tool call, turn, model call or hook action) dated by the record after
+// the end. A root that no longer runs the recorded process keeps it ended
+// until the process holding the conversation joins. Caller holds mu, after
+// the session upsert.
+func (r *Resolver) resumeLocked(e *event.Event) {
+	if e.ObservedTS || (!isTraceKind(e.Kind) && e.Kind != event.KindPluginAction) {
+		return
+	}
+	sess, ok, err := r.st.GetSession(e.SessionID)
+	if err != nil || !ok || sess.Status != model.SessionEnded || !r.rootLive(sess) {
+		return
+	}
+	resumed, err := r.st.ResumeSession(sess.ID, e.TS)
+	if err != nil {
+		log.Printf("session: persist resume: %v", err)
+		return
+	}
+	if !resumed {
+		return
+	}
+	r.holdRootLocked(sess)
+	if saved, ok, err := r.st.GetSession(sess.ID); err == nil && ok {
+		r.emitLocked(saved)
+	}
+}
+
+// rootLive reports whether the session's root still runs the process it
+// recorded (the same start time, when recorded). A session without a root
+// counts as live.
+func (r *Resolver) rootLive(sess model.Session) bool {
+	if sess.RootPID == 0 {
+		return true
+	}
+	if start := rootStarted(sess); !start.IsZero() {
+		info, ok := r.tagger.Tag(sess.RootPID)
+		return ok && info.StartedAt.Equal(start)
+	}
+	return r.tagger.Alive(sess.RootPID)
+}
+
+// holdRootLocked gives a resumed session back the root endLocked released: a
+// free root is taken, a process-tree session holding it merges in, and a
+// sibling conversation holding it keeps it. Caller holds mu.
+func (r *Resolver) holdRootLocked(sess model.Session) {
+	root := sess.RootPID
+	if root == 0 {
+		return
+	}
+	if old, held := r.byRoot[root]; held && old != sess.ID {
+		confidence, err := r.confidenceLocked(old)
+		if err != nil || confidence != model.ConfProcessTree || !r.rekeyLocked(old, sess.ID) {
+			return
+		}
+	}
+	r.byRoot[root] = sess.ID
+	r.byPID[root] = sess.ID
 }
 
 // joinTreeLocked ties a stamped session to the process tree its event came

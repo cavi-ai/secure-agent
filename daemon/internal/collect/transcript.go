@@ -301,12 +301,12 @@ func parsePluginLine(line string) (event.Event, bool) {
 	if err := json.Unmarshal([]byte(line), &pl); err != nil || pl.Tool == "" {
 		return event.Event{}, false
 	}
-	ts := time.Now()
+	ts, observed := time.Now(), true
 	if pl.TS != "" {
 		if t, err := time.Parse(time.RFC3339Nano, pl.TS); err == nil {
-			ts = t
+			ts, observed = t, false
 		} else if t, err := time.Parse(time.RFC3339, pl.TS); err == nil {
-			ts = t
+			ts, observed = t, false
 		}
 	}
 	path := pl.FilePath
@@ -314,12 +314,13 @@ func parsePluginLine(line string) (event.Event, bool) {
 		path = pl.Command
 	}
 	return event.Event{
-		Kind:      event.KindPluginAction,
-		TS:        ts,
-		PID:       pl.PID,
-		SessionID: pl.SessionID,
-		Path:      path,
-		Detail:    pl.Tool,
+		Kind:       event.KindPluginAction,
+		TS:         ts,
+		ObservedTS: observed,
+		PID:        pl.PID,
+		SessionID:  pl.SessionID,
+		Path:       path,
+		Detail:     pl.Tool,
 	}, true
 }
 
@@ -768,7 +769,7 @@ func (ts *TranscriptScanner) eventsForLine(p, line string, lineStart, offset int
 		if at, err := time.Parse(time.RFC3339Nano, h.TS); err == nil {
 			e.TS = at
 		} else {
-			e.TS = time.Now()
+			e.TS, e.ObservedTS = time.Now(), true
 		}
 		return []event.Event{e}
 	}
