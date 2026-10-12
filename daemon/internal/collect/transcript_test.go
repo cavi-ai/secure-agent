@@ -149,15 +149,34 @@ func TestIdleFileAppendIsNotSkipped(t *testing.T) {
 	b := bus.New(16)
 	sub := b.Subscribe()
 	ts := NewTranscriptScanner(b, []string{projectsDir})
+	ts.OffsetStatePath = filepath.Join(dir, "offsets.json")
+	ts.saveEvery = 10 * time.Millisecond
 	ts.tailEvery = 20 * time.Millisecond
 	ts.resolveEvery = 50 * time.Millisecond
-	ts.activeWindowD = 100 * time.Millisecond
+	ts.activeWindowD = time.Second
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go ts.Run(ctx)
+	stopped := make(chan struct{})
+	go func() { ts.Run(ctx); close(stopped) }()
+	// Run writes its checkpoint on shutdown; let it finish before cleanup.
+	defer func() { cancel(); <-stopped }()
 
-	// Let the scanner seed the file, then age it out of the active set.
-	time.Sleep(200 * time.Millisecond)
+	// The checkpoint names the file once the scanner has seeded it; then age
+	// it out of the active set.
+	seeded := time.After(5 * time.Second)
+	for {
+		var checkpoint transcriptCheckpoint
+		data, _ := os.ReadFile(ts.OffsetStatePath)
+		if json.Unmarshal(data, &checkpoint) == nil {
+			if _, ok := checkpoint.Offsets[logPath]; ok {
+				break
+			}
+		}
+		select {
+		case <-seeded:
+			t.Fatal("scanner never seeded the transcript")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 	old := time.Now().Add(-time.Hour)
 	if err := os.Chtimes(logPath, old, old); err != nil {
 		t.Fatal(err)

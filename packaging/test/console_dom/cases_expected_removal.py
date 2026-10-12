@@ -16,7 +16,8 @@ for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
         name = f'expected_removal_{label}_{variant.replace(" ", "_")}'
         scenarios = tuple(item for key, value in parse_qsl(query.lstrip('?'), keep_blank_values=True)
                           for item in ((key, f'{key}={value}') if value else (key,)))
-        FIXTURES[name] = Fixture(query=query, scenarios=scenarios, window_size=size, served=True)
+        FIXTURES[name] = Fixture(query=query, scenarios=scenarios, window_size=size, served=True,
+                                 script='cases_expected_removal.js')
         REMOVAL_FIXTURES.append((name, label, variant))
 
 
