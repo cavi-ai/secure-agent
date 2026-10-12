@@ -8,7 +8,7 @@
 (() => {
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
-  const readingFetch = scenarios.has('readingdemo') ? window.fetch.bind(window) : null;
+  const readingFetch = scenarios.has('readingdemo') || scenarios.has('sessiondiscovery') ? window.fetch.bind(window) : null;
   if (scenarios.has('expectedremove')) data['/expected'] = [
     { key: 'claude|gh|/synthetic/credentials|example.test', agent: 'claude', reader: 'gh', path: '/synthetic/credentials', dest: 'example.test', created_at: iso(60000), hits: 2 },
     { key: 'claude|*|/synthetic/.env.test|*', scope: 'file', agent: 'claude', reader: '*', path: '/synthetic/.env.test', dest: '*', created_at: iso(60000), hits: 0 },
@@ -1393,6 +1393,39 @@
       openTab('events');
     }, 4000);
   }
+  if (scenarios.has('sessiondiscovery')) {
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(() => {
+      window.SA.harnessFilter.harnesses = {claude: false};
+      const input = document.getElementById('session-cwd-filter');
+      input.value = 'web-app';
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+    }, 2500);
+    setTimeout(async () => {
+      const receipt = {};
+      try {
+        await readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+        const panel = document.getElementById('session-board-panel');
+        const detail = document.getElementById('session-detail');
+        const rail = document.getElementById('session-rail');
+        const origin = window.matchMedia('(max-width: 900px)').matches ? detail : rail;
+        const action = origin.querySelector('[data-action="show-ended-sessions"]');
+        receipt.copy = origin.textContent.includes('No live sessions match these filters.') && origin.textContent.includes('Matching ended sessions are available.');
+        receipt.reachable = !!action?.getClientRects().length && action.getBoundingClientRect().height >= 44;
+        action.focus(); action.click();
+        await readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
+        const saved = JSON.parse(sessionStorage.getItem('sa.harness-filter'));
+        receipt.filters = saved.text === 'web-app' && saved.harnesses.claude === false && saved.liveOnly === false
+          && document.getElementById('session-cwd-filter').value === 'web-app' && !document.getElementById('session-live-only').checked;
+        receipt.list = !window.matchMedia('(max-width: 900px)').matches || panel.dataset.pane === 'list';
+        const focus = document.activeElement;
+        receipt.focus = focus?.dataset.id === 'sess-cursor-2' && focus.isConnected && !!focus.getClientRects().length && focus.getAttribute('aria-pressed') === 'true';
+        receipt.ended = !!rail.querySelector('[data-action="select-session"][data-id="sess-cursor-2"]')?.getClientRects().length;
+        receipt.bounds = document.documentElement.scrollWidth <= document.documentElement.clientWidth;
+      } catch (error) { receipt.error = error.message; }
+      document.body.dataset.sessionDiscovery = JSON.stringify(receipt);
+    }, 3500);
+  }
   if (scenarios.has('readingdemo')) {
     setTimeout(() => openTab('sessions'), 1500);
     setTimeout(async () => {
@@ -1535,7 +1568,7 @@
         receipt.filterReplacement = window.SA.selectedSessionId === 'wb-session-79';
         input.value = 'no-workbench-matches'; input.dispatchEvent(new Event('input', { bubbles: true }));
         await wait();
-        receipt.filterEmpty = window.SA.selectedSessionId === '' && detail().textContent.includes('No sessions match') && !!detail().querySelector('[data-action="clear-harness-filter"]');
+        receipt.filterEmpty = window.SA.selectedSessionId === '' && detail().textContent.includes('No live sessions match these filters.') && !!detail().querySelector('[data-action="clear-harness-filter"]');
         detail().querySelector('[data-action="clear-harness-filter"]').click();
         await wait();
         const selected = window.SA.selectedSessionId;

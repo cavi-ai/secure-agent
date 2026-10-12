@@ -3,6 +3,19 @@
 // the right. renderSessionBoard (app.js's panel registry) delegates here when
 // durable sessions exist; the legacy process-tree board remains the fallback.
 
+// Empty recovery considers ended sessions hidden only by Live only.
+function sessionEmptyHTML(groups, filter) {
+  const filtered = !!String(filter.text || '').trim() || Object.values(filter.harnesses || {}).some(value => value === false);
+  const visible = new Set(visibleSessionMembers(applySessionFilters(groups, filter)).map(session => session.id));
+  const hiddenEnded = filter.liveOnly && visibleSessionMembers(applySessionFilters(groups, {...filter, liveOnly: false}))
+    .some(session => session.status === 'ended' && !visible.has(session.id));
+  const message = filter.liveOnly ? (filtered ? 'No live sessions match these filters.' : 'No live sessions.')
+    : filtered ? 'No sessions match these filters.' : 'All quiet. Nothing is running.';
+  return `<div class="empty session-empty"><svg class="icon"><use href="#i-agent"/></svg><div><span>${message}</span>
+    ${hiddenEnded ? '<p>Matching ended sessions are available.</p><button type="button" class="btn btn-sm" data-action="show-ended-sessions">Show ended sessions</button>' : ''}
+    ${filtered ? '<button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button>' : ''}</div></div>`;
+}
+
 // liveTreeFor: the live process tree rooted at a session's root pid, if up.
 function liveTreeFor(s, trees) {
   if (!s.root_pid) return null;
@@ -816,6 +829,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
         applyInlineMetrics(pills);
       }
       const shown = applySessionFilters(groups, filter);
+      const emptyHTML = sessionEmptyHTML(groups, filter);
       reconcileSessionSelection(shown);
       const reveal = takeSessionReveal();
       const sessionGroups = stableSessionOrder(shown.filter(g => !g.infra), rail._sessionGroupOrder, g => g.key);
@@ -829,7 +843,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       // place (syncSessionGroupShell), never by rebuilding the group.
       const parts = sessionGroups.length
         ? sessionGroups.map(g => ({ key: 'group:' + g.key, group: g, shell: `group:${g.key}|${g.ended.length ? 'ended' : ''}`, html: sessionGroupHTML(g, visibleSessionMembers([g]).some(s => s.id === selectedSessionId), !!SA.endedSessionsOpen[g.key]) }))
-        : [{ key: filtered ? 'empty:nomatch' : 'empty:quiet', html: filtered ? noMatch : quiet }];
+        : [{ key: filtered ? 'empty:nomatch' : 'empty:quiet', html: emptyHTML }];
       if (infra) parts.push({ key: 'infra', html: sessionInfraGroupHTML(infra, false) });
       const railTop = rail.scrollTop;
       const railFocus = rail.contains(document.activeElement) ? document.activeElement : null;
@@ -873,7 +887,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       const selected = durable.find(s => s.id === selectedSessionId);
       const emptyDetail = selectedSessionId
         ? `<div class="empty"><span>Session unavailable. It is no longer listed. <button type="button" class="link-btn" data-action="session-list">Back to sessions</button></span></div>`
-        : filtered ? noMatch : `<div class="empty"><span>No sessions available. Start an agent session, then refresh.</span></div>`;
+        : filter.liveOnly || filtered ? emptyHTML : `<div class="empty"><span>No sessions available. Start an agent session, then refresh.</span></div>`;
       if (detail) renderSessionDetail(detail, selected, trees, emptyDetail);
       return;
     }

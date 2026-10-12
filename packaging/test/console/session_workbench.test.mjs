@@ -59,6 +59,55 @@ function controller(persisted = '', manualOverview = false) {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+test('empty Sessions recovery names only ended matches hidden by identical Live only filters', () => {
+  const c = controller();
+  const family = (id, status, repo) => ({session: {...session(id, status), repo}, children: []});
+  const ended = family('ended', 'ended', 'web-app');
+  const live = family('live', 'active', 'api');
+  const retained = [{key: 'cursor', live: [], ended: [ended]}];
+  const filter = {text: 'web-app', harnesses: {claude: false}, liveOnly: true};
+  const render = (data, options = filter) => c.context.sessionEmptyHTML(data, options);
+  assert.match(render(retained), /No live sessions match these filters\./);
+  assert.match(render(retained), /Matching ended sessions are available/);
+  assert.match(render(retained), /data-action="show-ended-sessions"/);
+  assert.doesNotMatch(render(retained, {...filter, harnesses: {cursor: false}}), /show-ended-sessions/);
+  assert.doesNotMatch(render(retained, {...filter, text: 'missing'}), /show-ended-sessions/);
+  assert.doesNotMatch(render([]), /show-ended-sessions/);
+  assert.match(render([], {...filter, text: '', harnesses: {}}), /No live sessions\./);
+  assert.doesNotMatch(render(retained, {...filter, liveOnly: false}), /show-ended-sessions|No live sessions/);
+  assert.match(render([], {text: '', harnesses: {}, liveOnly: false}), /All quiet\. Nothing is running\./);
+  const withTail = [{key: 'cursor', live: [live], ended: [ended]}];
+  assert.doesNotMatch(render(withTail, {...filter, text: ''}), /show-ended-sessions/, 'ended tails in live groups are already included');
+  assert.deepEqual(filter, {text: 'web-app', harnesses: {claude: false}, liveOnly: true});
+});
+
+test('Show ended sessions preserves filters, persists Live only, and restores visible list focus', () => {
+  const app = readFileSync(path.join(web, 'app.js'), 'utf8');
+  const start = app.indexOf("  const HARNESS_FILTER_KEY = 'sa.harness-filter';");
+  const end = app.indexOf('\n  syncHarnessFilterControls();', start);
+  assert.ok(start >= 0 && end > start);
+  for (const fromDetail of [false, true]) {
+    const saved = {harnesses: {claude: false}, text: 'web-app', liveOnly: true};
+    const storage = new Map([['sa.harness-filter', JSON.stringify(saved)]]);
+    let listCalls = 0, changes = 0, focused = '';
+    const checkbox = {checked: true, getClientRects: () => [{}], focus: () => {focused = 'checkbox';}};
+    const input = {value: 'web-app'};
+    const selected = {dataset: {id: 'ended'}, getClientRects: () => [{}], focus: () => {focused = 'ended';}};
+    const context = {sessionStorage: {getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value)},
+      document: {getElementById: id => id === 'session-live-only' ? checkbox : input, querySelectorAll: () => [selected]},
+      sessionWorkbench: {selectedSessionId: 'ended', filterChanged: () => {changes++;}, render() {}, showList: () => {listCalls++;}}, renderAgents() {}};
+    vm.createContext(context);
+    vm.runInContext(app.slice(start, end), context);
+    context.showEndedSessions({closest: () => fromDetail ? {} : null});
+    assert.deepEqual(JSON.parse(storage.get('sa.harness-filter')), {...saved, liveOnly: false});
+    assert.equal(checkbox.checked, false); assert.equal(input.value, 'web-app'); assert.equal(changes, 1);
+    assert.equal(listCalls, fromDetail ? 1 : 0); assert.equal(focused, 'ended');
+    selected.getClientRects = () => [];
+    context.showEndedSessions({closest: () => null});
+    assert.equal(focused, 'checkbox', 'hidden card never receives recovery focus');
+  }
+});
+
 test('malformed current status retains prior facts and keeps access decisions unavailable until recovery', async () => {
   const c = controller('', true);
   const selected = c.actions.selectSession('a');
