@@ -2151,10 +2151,12 @@ function policyListHTML(kind, rows, st) {
   const s = st || {};
   const removal = kind === 'expected' && s.expectedRemoval;
   const saved = removal ? `<p role="status">Exception removal saved for <code>${escapeHTML(removal.path)}</code> (${escapeHTML(removal.agent)}). Remaining exceptions and policies still apply; past activity is unchanged.</p>` : '';
-  const notice = saved + (kind === 'expected' && s.error ? '<p role="status">Current exceptions unavailable. Refresh before removing an exception.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh exceptions</button>' : '')
-    + (kind === 'scope' && s.error ? '<p role="status">Last known permission records. Current status unavailable. Refresh before revoking.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh permissions</button>' : '');
+  const label = s.label || { guard: 'Guard decisions', path: 'File exceptions', mute: 'Muted flag classes', expected: 'Expected secret reads', scope: 'Scoped permissions' }[kind];
+  const refreshed = rows != null && Number.isFinite(s.lastSuccessAt) ? ' Last successful refresh: ' + new Date(s.lastSuccessAt).toLocaleString() + '.' : '';
+  const notice = saved + (s.error ? `<div class="policy-read-status" role="status"><p>${escapeHTML(label)}: ${rows != null ? 'Refresh failed. Showing last known records; current status is unavailable.' : 'Unavailable. No successful read yet.'}${escapeHTML(refreshed)} ${escapeHTML(s.error)}</p><button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh-report" data-kind="${escapeHTML(kind)}"${s.loading ? ' disabled' : ''}>${escapeHTML('Refresh ' + label.toLowerCase())}</button></div>`
+    : s.loading && rows != null ? `<p class="policy-read-status" role="status">${escapeHTML('Refreshing ' + label.toLowerCase() + '…')}</p>` : '');
   if (!rows) {
-    if (s.error) return `${notice}<div class="empty"><span>${escapeHTML(s.error)}</span></div>`;
+    if (s.error) return notice;
     return `<div class="loading">Loading…</div>`;
   }
   const EMPTY = {
@@ -2164,8 +2166,7 @@ function policyListHTML(kind, rows, st) {
     expected: 'No expected secret reads. Expected, on a read-then-connect finding, adds one here.',
     scope: 'No scoped permissions. Choose a session or timed permission on a recorded finding or guard prompt.',
   };
-  if (!rows.length) return kind === 'scope' && notice ? notice
-    : `${notice}${kind === 'expected' && s.error ? '' : `<div class="empty"><span>${EMPTY[kind]}</span></div>`}`;
+  if (!rows.length) return notice + (s.error ? '' : `<div class="empty"><span>${EMPTY[kind]}</span></div>`);
   const row = (main, sub, meta) => `<div class="policy-row"><div class="policy-row-main">${main}</div>`
     + `<div class="policy-row-sub">${sub}</div>${meta ? `<span class="policy-row-meta">${meta}</span>` : ''}</div>`;
   const when = r => r.created_at ? escapeHTML(String(r.created_at).slice(0, 10)) : '';

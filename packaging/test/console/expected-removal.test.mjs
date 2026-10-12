@@ -29,10 +29,12 @@ function fixture({ records = [record()], confirm = async () => true, remove, rea
   vm.createContext(ctx);
   vm.runInContext(readFileSync(new URL('lib.js', root), 'utf8'), ctx);
   vm.runInContext(readFileSync(new URL('decision-permissions.js', root), 'utf8'), ctx);
+  vm.runInContext(readFileSync(new URL('policy-controller.js', root), 'utf8'), ctx);
   vm.runInContext(app.slice(start, end), ctx);
+  ctx.consolePolicyControllerModule();
   const state = vm.runInContext('policyState', ctx);
   state.expected = records;
-  const html = () => ctx.policyListHTML('expected', state.expected, state);
+  const html = () => ctx.policyListHTML('expected', state.expected, { ...state, ...state.reports.expected });
   const deletes = () => requests.filter(([, method]) => method === 'DELETE');
   return { ctx, state, requests, confirmations, toasts, html, deletes };
 }
@@ -70,7 +72,7 @@ test('exact removal receipt removes only its row and survives a failed reread', 
   assert.equal(f.state.expected[0].key, other.key);
   assert.equal(f.state.expectedRemoval.key, record().key);
   assert.match(f.html(), /Exception removal saved/);
-  assert.match(f.html(), /Current exceptions unavailable/);
+  assert.match(f.html(), /current status is unavailable/);
   assert.doesNotMatch(f.html(), /data-action="forget-expected"/);
   assert.equal(f.toasts.filter(([, kind]) => kind === 'success').length, 1);
 });
@@ -109,14 +111,14 @@ test('invalid lists cannot replace known exceptions or authorize removal', async
     const f = fixture({ read: async () => response(records) });
     await f.ctx.loadPolicy();
     assert.equal(f.state.expected[0].key, record().key);
-    assert.match(f.state.error, /Invalid exception records/);
+    assert.match(f.state.reports.expected.error, /invalid records/);
     await f.ctx.window.forgetExpected(record().key);
     assert.equal(f.deletes().length, 0);
   }
   const f = fixture();
-  f.state.loading = true;
+  f.state.reports.expected.loading = true;
   await f.ctx.window.forgetExpected(record().key);
-  f.state.loading = false;
+  f.state.reports.expected.loading = false;
   await f.ctx.window.forgetExpected('unknown');
   assert.equal(f.confirmations.length, 0);
 });
