@@ -148,14 +148,29 @@ document.addEventListener('DOMContentLoaded', () => {
     attentionSelection.signature = signature;
     const view = needView(item, homeContext(window.SA));
     const focused = drawer.contains(document.activeElement) ? document.activeElement : null;
-    const action = focused?.dataset.action, id = focused?.dataset.id;
+    // Every served data field contributes to the choice: verdict, scope,
+    // expiry, intervention and evidence revision must survive unchanged.
+    const identity = control => control?.dataset.action
+      ? JSON.stringify(Object.entries(control.dataset).sort(([a], [b]) => a.localeCompare(b))) : null;
+    const choice = identity(focused);
     drawerTitle.textContent = item.title || view.word;
     drawerBody.innerHTML = `<div class="panel-body attention-inspector"><p class="finding-why">${escapeHTML(view.agent)}</p><h3>${escapeHTML(view.what)}</h3><p>${escapeHTML(view.why)}</p>${view.body ? view.body() : `<p>${escapeHTML(item.detail || '')}</p>`}</div>`;
     drawerBody.querySelectorAll('details.body-evidence').forEach(part => { part.open = true; });
     drawerFoot.innerHTML = actionBarHTML(view.items);
     drawerFoot.hidden = !view.items.length;
     if (focused && !focused.isConnected) {
-      const replacement = Array.from(drawer.querySelectorAll('[data-action]')).find(b => b.dataset.action === action && b.dataset.id === id);
+      const replacement = choice && Array.from(drawer.querySelectorAll('[data-action]')).find(control => {
+        if (identity(control) !== choice || control.disabled || control.matches(':disabled')
+          || control.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+        for (let part = control; part && part !== drawer; part = part.parentElement) {
+          const style = getComputedStyle(part);
+          if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+        }
+        // Replaced More disclosures start closed. Reveal the same choice
+        // before restoring focus, without invoking or changing the action.
+        for (let part = control.closest('details'); part; part = part.parentElement?.closest('details')) part.open = true;
+        return control.getClientRects().length > 0;
+      });
       (replacement || btnDrawerClose)?.focus({ preventScroll: true });
     }
   }
@@ -442,48 +457,89 @@ document.addEventListener('DOMContentLoaded', () => {
   const failedEndpoints = new Set();
   const reportHealth = createConsoleReportHealth();
 
-  function noteEndpointFailure(key) {
-    if (failedEndpoints.has(key)) return;
-    failedEndpoints.add(key);
-    if (key === 'snapshot' && hasSnapshotHeadline()) return;
-    showToast(`Couldn't load ${key} — will keep retrying`, 'danger');
-  }
-
-  function hasSnapshotHeadline() {
-    const banner = document.getElementById('posture-banner');
-    return !!(banner && !banner.hidden && document.getElementById('posture-health'));
-  }
-  function renderSnapshotHealth() {
-    if (sessionEnded || !window.SA || !hasSnapshotHeadline()) return;
-    renderPosture();
-    paintTabsPosture();
-  }
-  function renderReportHealth() {
-    if (sessionEnded) return;
-    const snapshotInHeadline = hasSnapshotHeadline() && !document.getElementById('posture-health').hidden;
-    document.querySelectorAll('[data-reports]').forEach(el => {
-      const keys = el.dataset.reports.split('|').filter(key =>
-        !['spend', 'spend card', 'spend plans'].includes(key)
-        && (key !== 'snapshot' || !snapshotInHeadline)
-        && (key !== 'flags' || isFlagsFiltered() || homeGroupOpen('findings')) && (key !== 'events' || isEventsFiltered()));
-      const failures = reportHealth.failures(keys);
-      const text = consoleReportHealthText(failures);
-      if (el.textContent !== text) el.textContent = text;
-      el.hidden = failures.length === 0;
+  let consoleLifecycleController;
+  function consoleLifecycleControllerModule() {
+    return consoleLifecycleController ||= createConsoleLifecycle({
+      state: {
+        get SS_TOKEN_KEY() { return SS_TOKEN_KEY; },
+        get cancelDialog() { return cancelDialog; },
+        set cancelDialog(value) { cancelDialog = value; },
+        get consoleAuth() { return consoleAuth; },
+        get consoleToken() { return consoleToken; },
+        set consoleToken(value) { consoleToken = value; },
+        get eventHistoryPage() { return eventHistoryPage; },
+        set eventHistoryPage(value) { eventHistoryPage = value; },
+        get expectedEgressReadGen() { return expectedEgressReadGen; },
+        set expectedEgressReadGen(value) { expectedEgressReadGen = value; },
+        get failedEndpoints() { return failedEndpoints; },
+        get handoffGeneration() { return handoffGeneration; },
+        set handoffGeneration(value) { handoffGeneration = value; },
+        get liveUpdates() { return liveUpdates; },
+        set liveUpdates(value) { liveUpdates = value; },
+        get protectionContext() { return protectionContext; },
+        set protectionContext(value) { protectionContext = value; },
+        get protectionContextGeneration() { return protectionContextGeneration; },
+        set protectionContextGeneration(value) { protectionContextGeneration = value; },
+        get reviewResult() { return reviewResult; },
+        set reviewResult(value) { reviewResult = value; },
+        get reviewResultSeq() { return reviewResultSeq; },
+        set reviewResultSeq(value) { reviewResultSeq = value; },
+        get drawerReviewResult() { return drawerReviewResult; },
+        set drawerReviewResult(value) { drawerReviewResult = value; },
+        get drawerMode() { return drawerMode; },
+        get reportHealth() { return reportHealth; },
+        get sessionEnded() { return sessionEnded; },
+        set sessionEnded(value) { sessionEnded = value; },
+        get sessionWorkbench() { return sessionWorkbench; },
+        get sparkTimer() { return sparkTimer; },
+        set sparkTimer(value) { sparkTimer = value; },
+        get spendDayGen() { return spendDayGen; },
+        set spendDayGen(value) { spendDayGen = value; },
+        get spendGen() { return spendGen; },
+        set spendGen(value) { spendGen = value; },
+        get spendPollTimer() { return spendPollTimer; },
+        set spendPollTimer(value) { spendPollTimer = value; },
+        get telemetryData() { return telemetryData; },
+        set telemetryData(value) { telemetryData = value; }
+      },
+      actions: {
+        get closeDrawer() { return closeDrawer; },
+        get apiFetch() { return apiFetch; },
+        clearInterval: (...args) => window.clearInterval(...args),
+        clearTimeout: (...args) => window.clearTimeout(...args),
+        get consolePosturePresentation() { return consolePosturePresentation; },
+        get consoleReportHealthText() { return consoleReportHealthText; },
+        get createEventHistoryPage() { return createEventHistoryPage; },
+        get document() { return document; },
+        get homeGroupOpen() { return homeGroupOpen; },
+        get isConsoleReport() { return isConsoleReport; },
+        get isEventsFiltered() { return isEventsFiltered; },
+        get isFlagsFiltered() { return isFlagsFiltered; },
+        get markDirty() { return markDirty; },
+        get renderNow() { return renderNow; },
+        get renderPosture() { return renderPosture; },
+        get renderReportHealth() { return renderReportHealth; },
+        get renderSnapshotHealth() { return renderSnapshotHealth; },
+        get sessionStorage() { return sessionStorage; },
+        get showSessionEnded() { return showSessionEnded; },
+        get showToast() { return showToast; },
+        get switchTab() { return switchTab; },
+        get window() { return window; }
+      }
     });
   }
-  function reportSucceeded(key) {
-    reportHealth.success(key);
-    failedEndpoints.delete(key);
-    if (key === 'snapshot') renderSnapshotHealth();
-    renderReportHealth();
-  }
-  function reportFailed(key, reason) {
-    reportHealth.failure(key, reason);
-    if (key === 'snapshot') renderSnapshotHealth();
-    renderReportHealth();
-  }
-
+  function noteEndpointFailure(...args) { return consoleLifecycleControllerModule().noteEndpointFailure(...args); }
+  function hasSnapshotHeadline(...args) { return consoleLifecycleControllerModule().hasSnapshotHeadline(...args); }
+  function renderSnapshotHealth(...args) { return consoleLifecycleControllerModule().renderSnapshotHealth(...args); }
+  function renderReportHealth(...args) { return consoleLifecycleControllerModule().renderReportHealth(...args); }
+  function reportSucceeded(...args) { return consoleLifecycleControllerModule().reportSucceeded(...args); }
+  function reportFailed(...args) { return consoleLifecycleControllerModule().reportFailed(...args); }
+  function endSession(...args) { return consoleLifecycleControllerModule().endSession(...args); }
+  function clearProtectionContext(...args) { return consoleLifecycleControllerModule().clearProtectionContext(...args); }
+  function focusProtectionContext(...args) { return consoleLifecycleControllerModule().focusProtectionContext(...args); }
+  function viewEgressExpectation(...args) { return consoleLifecycleControllerModule().viewEgressExpectation(...args); }
+  function backToEgressContext(...args) { return consoleLifecycleControllerModule().backToEgressContext(...args); }
+  function paintTabsPosture(...args) { return consoleLifecycleControllerModule().paintTabsPosture(...args); }
   // parseUptimeSec reads Go duration strings ("20h3m44s", "2s", "1m5s").
   function parseUptimeSec(s) {
     if (!s) return 0;
@@ -509,35 +565,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Credential rejection stops delivery. No mutation is queued or replayed.
-  function endSession() {
-    consoleToken = '';
-    consoleAuth.replaceToken('');
-    try { sessionStorage.removeItem(SS_TOKEN_KEY); } catch { /* private mode */ }
-    if (sessionEnded) return;
-    sessionEnded = true;
-    clearProtectionContext();
-    if (cancelDialog) cancelDialog();
-    clearInterval(sparkTimer);
-    clearTimeout(spendPollTimer);
-    spendPollTimer = null;
-    spendDayGen++;
-    spendGen++; // invalidate spend responses already in flight
-    sessionMemoryGeneration++;
-    sessionTimelineRequest++;
-    sessionOverviewGeneration++;
-    sessionOutcomesGeneration++;
-    sessionMemoryState = { ...sessionMemoryState, loading: false, loadingEarlier: false };
-    sessionTimelineState = { ...sessionTimelineState, loading: false, error: 'unavailable' };
-    sessionOverviewState = { loading: false, error: 'unavailable' };
-    sessionOverviewRefreshAgain = false;
-    sessionOutcomesState = { loading: false, error: 'unavailable' };
-    eventHistoryPage = createEventHistoryPage();
-    window.SA.invalidateSessionPermissions?.();
-    window.SA.clearSessionInvestigation?.();
-    if (liveUpdates) liveUpdates.stop();
-    showSessionEnded();
-  }
-
   let handoffGeneration = 0;
   window.addEventListener('hashchange', async () => {
     const handoff = new URLSearchParams(location.hash.slice(1));
@@ -553,7 +580,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try { sessionStorage.setItem(SS_TOKEN_KEY, fresh); } catch { /* memory only */ }
     // Strip the credential immediately. A general reopen keeps the current
     // route; an explicit drill-down from the menu bar takes its requested tab.
-    let route = activeTab === 'sessions' ? 'sessions/' + activeSub : activeTab;
+    let route = routeKey({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeTab === 'system' ? activeSystemSub : activeSub });
     try { route = sessionStorage.getItem('sa.console-tab') || route; } catch { /* memory only */ }
     const context = consoleContextFromHash(location.hash);
     route = context.route || route || 'home';
@@ -588,7 +615,7 @@ document.addEventListener('DOMContentLoaded', () => {
     startLiveUpdates();
     clearInterval(sparkTimer);
     sparkTimer = setInterval(() => { sparkAdvance(); drawSpark(); }, 1000);
-    if (selectedSessionId && !pendingConsoleContext?.session) loadSelectedSession(selectedSessionId);
+    if (sessionWorkbench.selectedSessionId && !pendingConsoleContext?.session) sessionWorkbench.refresh();
   });
 
   function setConnState(next) {
@@ -609,26 +636,64 @@ document.addEventListener('DOMContentLoaded', () => {
   const reviewDrafts = new Map();
   let reviewCursor = '';
   let reviewPageSeq = 0;
+  let reviewResult = null;
+  let reviewResultSeq = 0;
+  let drawerReviewResult = null;
   window.reviewAct = async function(id, revision, action, scope) {
-    if (scope && scope.kind !== 'once' && !await window.saConfirm('Count future activity as expected only for the recorded executable path, workspace, file and exact endpoint? ' + (scope.kind === 'session' ? 'This ends with the current session.' : `Expires after ${scope.expiry === '7d' ? '7 days' : '24 hours'}.`) + ' Firewall and payload checks remain active. Revoke in Policies.', {title:'Expected activity',okLabel:'Save permission'})) return;
+    const auth = handoffGeneration;
+    if (scope && scope.kind !== 'once' && !await window.saConfirm('Count future activity as expected only for the recorded executable path, workspace, file and exact endpoint? ' + (scope.kind === 'session' ? 'This ends with the current session.' : `Expires after ${scope.expiry === '7d' ? '7 days' : '24 hours'}.`) + ' Firewall and payload checks remain active. Revoke under Protection → Rules & permissions.', {title:'Expected activity',okLabel:'Save permission'})) return;
+    if (sessionEnded || auth !== handoffGeneration) return;
+    const seq = ++reviewResultSeq;
+    const current = attentionItems().find(item => item.kind === 'review' && item.id === id)?.review
+      || telemetryData.reviews?.reviews?.find(review => review.id === id);
+    const review = current?.revision === revision ? JSON.parse(JSON.stringify(current)) : null;
     const finishAttention = beginAttentionWrite();
     reviewDrafts.set(id, { action, scope, conflict: false });
     try {
       const res = await apiFetch('/reviews/decision', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({id,revision,action,...(scope ? {scope} : {})}) });
+      if (sessionEnded || auth !== handoffGeneration) { finishAttention(false); return; }
       if (res.status === 409) {
         reviewDrafts.set(id, { action, scope, conflict: true });
         finishAttention(false);
         await fetchTelemetry();
+        if (sessionEnded || auth !== handoffGeneration) return;
         markDirty('flags', 'attention');
         showToast('Evidence changed. Review the new facts and choose again.', 'info');
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const receipt = await res.json();
+      if (sessionEnded || auth !== handoffGeneration) { finishAttention(false); return; }
+      if (!validReviewReceipt(receipt, id, revision, action)) throw new Error('Invalid decision receipt');
+      if (seq === reviewResultSeq) {
+        reviewResult = { receipt, review };
+        markDirty('attention');
+        window.saAnnounce(reviewResultLabel(receipt));
+      }
       reviewDrafts.delete(id);
+    } catch {
+      finishAttention(false);
+      if (sessionEnded || auth !== handoffGeneration) return;
+      showToast('Review not confirmed. Check history before deciding again.', 'danger');
       await fetchTelemetry();
-      finishAttention(true);
-      markDirty('flags', 'attention');
-    } catch (err) { finishAttention(false); showToast(`Could not save review: ${err}`, 'danger'); }
+      return;
+    }
+    await fetchTelemetry();
+    finishAttention(true);
+    if (!sessionEnded && auth === handoffGeneration) markDirty('flags', 'attention');
+  };
+  window.dismissReviewResult = function() {
+    reviewResult = null;
+    markDirty('attention');
+  };
+  window.openReviewResult = function(result = reviewResult) {
+    if (!result || sessionEnded) return;
+    drawerMode = 'review-result';
+    drawerReviewResult = result;
+    openDrawer({ title: reviewResultLabel(result.receipt), icon: 'shield',
+      body: reviewResultHTML(result, true), foot: '', onClose: () => {
+        if (drawerMode === 'review-result') { drawerMode = null; drawerReviewResult = null; }
+      } });
   };
   // Review pagination is explicit; each response is bounded to 100 records.
   window.loadReviewPage = async function(after) {
@@ -777,14 +842,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Posture pill on the stuck tab bar: the hero's count; a click goes back
   // to the top.
-  function paintTabsPosture() {
-    const pill = document.getElementById('tabs-posture');
-    const text = document.getElementById('tabs-posture-text');
-    if (!pill || !text) return;
-    const view = consolePosturePresentation(telemetryData.posture, window.SA?.postureHealth);
-    pill.dataset.state = view.state;
-    text.textContent = view.pill;
-  }
   const tabsBar = document.getElementById('tabs-bar');
   function syncTabsStuck() {
     if (!tabsBar) return;
@@ -809,91 +866,58 @@ document.addEventListener('DOMContentLoaded', () => {
     panel.classList.add('intercepted');
   }
 
-  function sinceParam(v) {
-    const ms = { '1h': 3600e3, '24h': 86400e3, '7d': 604800e3 }[v];
-    return ms ? new Date(Date.now() - ms).toISOString() : '';
+  let historyControllerController;
+  function historyControllerControllerModule() {
+    return historyControllerController ||= createHistoryController({
+      state: {
+        get eventHistoryPage() { return eventHistoryPage; },
+        set eventHistoryPage(value) { eventHistoryPage = value; },
+        get failedEndpoints() { return failedEndpoints; },
+        get filters() { return filters; },
+        get historyScopes() { return historyScopes; },
+        get reportHealth() { return reportHealth; },
+        get sessionEnded() { return sessionEnded; },
+        set sessionEnded(value) { sessionEnded = value; },
+        get suppressFreshOnce() { return suppressFreshOnce; },
+        set suppressFreshOnce(value) { suppressFreshOnce = value; },
+        get telemetryData() { return telemetryData; },
+        set telemetryData(value) { telemetryData = value; },
+        get timelineSession() { return timelineSession; },
+        set timelineSession(value) { timelineSession = value; }
+      },
+      actions: {
+        get createEventHistoryPage() { return createEventHistoryPage; },
+        get document() { return document; },
+        get fetchTelemetry() { return fetchTelemetry; },
+        get homeGroupOpen() { return homeGroupOpen; },
+        get isConsoleRoute() { return isConsoleRoute; },
+        get isEventsFiltered() { return isEventsFiltered; },
+        get isFlagsFiltered() { return isFlagsFiltered; },
+        get loadViews() { return loadViews; },
+        get markDirty() { return markDirty; },
+        get renderEvents() { return renderEvents; },
+        get renderNow() { return renderNow; },
+        get renderReportHealth() { return renderReportHealth; },
+        get requestEventHistoryPage() { return requestEventHistoryPage; },
+        get showToast() { return showToast; },
+        get switchTab() { return switchTab; },
+        get syncFilterControls() { return syncFilterControls; }
+      }
+    });
   }
-  function isFlagsFiltered() {
-    const f = filters.flags;
-    return f.agent !== 'all' || f.rule !== 'all' || f.minsev !== 'all' || f.since !== 'all';
-  }
-  function isEventsFiltered() {
-    const f = filters.events;
-    return !!timelineSession || f.kind !== 'all' || f.since !== 'all';
-  }
+  function sinceParam(...args) { return historyControllerControllerModule().sinceParam(...args); }
+  function isFlagsFiltered(...args) { return historyControllerControllerModule().isFlagsFiltered(...args); }
+  function isEventsFiltered(...args) { return historyControllerControllerModule().isEventsFiltered(...args); }
+  function eventsHistoryScope(...args) { return historyControllerControllerModule().eventsHistoryScope(...args); }
+  function syncHistoryViews(...args) { return historyControllerControllerModule().syncHistoryViews(...args); }
+  function flagsQuery(...args) { return historyControllerControllerModule().flagsQuery(...args); }
+  function eventsQuery(...args) { return historyControllerControllerModule().eventsQuery(...args); }
+  window.pageSessionEvents = (...args) => historyControllerControllerModule().pageSessionEvents(...args);
+  function wireFilter(...args) { return historyControllerControllerModule().wireFilter(...args); }
+  window.applyView = (...args) => historyControllerControllerModule().applyView(...args);
+  function bindFilters(...args) { return historyControllerControllerModule().bindFilters(...args); }
+  historyControllerControllerModule().bindFilters();
   let eventHistoryPage = createEventHistoryPage();
-  function eventsHistoryScope() {
-    return JSON.stringify({ ...filters.events, session: timelineSession || '' });
-  }
-  function syncHistoryViews() {
-    const changed = [];
-    for (const [name, filtered] of [['flags', isFlagsFiltered()], ['events', isEventsFiltered()]]) {
-      const requested = filtered || (name === 'flags' && homeGroupOpen('findings'));
-      const scope = requested ? (name === 'events' ? eventsHistoryScope() : JSON.stringify(filters[name])) : null;
-      const view = name + 'View';
-      if (scope !== historyScopes[name]) {
-        historyScopes[name] = scope;
-        if (name === 'events') eventHistoryPage = createEventHistoryPage(sinceParam(filters.events.since));
-        telemetryData[view] = requested ? null : telemetryData[name];
-        reportHealth.reset(name);
-        failedEndpoints.delete(name);
-        changed.push(name);
-      } else if (!requested) telemetryData[view] = telemetryData[name];
-    }
-    if (changed.length) {
-      renderReportHealth();
-      markDirty(...changed, 'tab-badges');
-    }
-  }
-
-  function flagsQuery() {
-    const f = filters.flags, p = new URLSearchParams();
-    if (f.agent !== 'all') p.set('agent', f.agent);
-    if (f.rule !== 'all') p.set('rule', f.rule);
-    if (f.minsev !== 'all') p.set('min_severity', f.minsev);
-    const since = sinceParam(f.since);
-    if (since) p.set('since', since);
-    p.set('limit', '200');
-    return '/flags?' + p.toString();
-  }
-  function eventsQuery() {
-    const f = filters.events, p = new URLSearchParams();
-    if (timelineSession) p.set('session_id', timelineSession);
-    if (f.kind !== 'all') p.set('kind', f.kind);
-    const since = timelineSession ? eventHistoryPage.since || sinceParam(f.since) : sinceParam(f.since);
-    if (since) p.set('since', since);
-    p.set('limit', '200');
-    if (timelineSession) {
-      p.set('page', '1');
-      const cursor = eventHistoryPage.pending?.cursor ?? eventHistoryPage.cursor;
-      if (cursor) p.set('before', cursor);
-    }
-    return '/events?' + p.toString();
-  }
-
-  window.pageSessionEvents = async function(direction) {
-    const page = eventHistoryPage;
-    if (sessionEnded || !timelineSession || !requestEventHistoryPage(eventHistoryPage, direction)) return;
-    suppressFreshOnce = true;
-    renderEvents();
-    await fetchTelemetry({ slow: false });
-    if (!sessionEnded && page === eventHistoryPage) {
-      suppressFreshOnce = true;
-      renderNow(['events']);
-    }
-  };
-
-  function wireFilter(id, obj, key) {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('change', () => { obj[key] = el.value; suppressFreshOnce = true; fetchTelemetry(); });
-  }
-  wireFilter('event-filter', filters.events, 'kind');
-  wireFilter('event-window', filters.events, 'since');
-  wireFilter('flags-agent', filters.flags, 'agent');
-  wireFilter('flags-rule', filters.flags, 'rule');
-  wireFilter('flags-severity', filters.flags, 'minsev');
-  wireFilter('flags-window', filters.flags, 'since');
-
   // ---------- saved views ----------
   // A view is a named snapshot of what the operator is looking at: the tab,
   // the flag/event filters, and the free-text search. Persisted in
@@ -909,7 +933,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function currentViewSnapshot(name) {
     return {
       name,
-      tab: routeKey({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeSub }),
+      tab: routeKey({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeTab === 'system' ? activeSystemSub : activeSub }),
       search: (document.getElementById('global-search') || {}).value || '',
       flags: { ...filters.flags },
       events: { ...filters.events },
@@ -925,21 +949,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (nameEl) nameEl.value = '';
     renderViews();
     showToast(`View saved: ${name}`, 'success');
-  };
-  window.applyView = function(name) {
-    const view = loadViews().find(v => v.name === name);
-    if (!view) return;
-    Object.assign(filters.flags, view.flags || {});
-    Object.assign(filters.events, view.events || {});
-    const search = document.getElementById('global-search');
-    if (search) search.value = view.search || '';
-    syncFilterControls();
-    const pop = document.getElementById('views-pop');
-    if (pop) pop.hidden = true;
-    if (view.tab && isConsoleRoute(view.tab)) switchTab(view.tab);
-    suppressFreshOnce = true;
-    fetchTelemetry();
-    showToast(`View applied: ${name}`, 'info');
   };
   window.removeView = function(name) {
     persistViews(loadViews().filter(v => v.name !== name));
@@ -1017,9 +1026,9 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // ---------- tabs ----------
-  // The console is organized by question (Home / Sessions / Egress /
-  // Policy / Agent), not by data source. State persists per tab-session; the hash
-  // carries the tab (and the Sessions sub-view) for deep links (#ct is lifted
+  // The console groups Home, Sessions, Protection, System and Agent.
+  // State persists per tab-session; the hash carries the tab and sub-view
+  // for deep links (#ct is lifted
   // and stripped BEFORE this runs, so the two never collide).
   // ---------- render scheduler ----------
   // A panel renders only when the telemetryData slice it reads changed
@@ -1030,7 +1039,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // pointer is down in <main>, or a control inside a panel has focus (up to
   // 3s), that panel waits: the node under the cursor or the caret survives.
   const PANELS = [
-    ['posture', renderPosture], ['status', renderStatus], ['resources', renderResourceMissionControl], ['history', renderResourceHistory], ['sessions', renderSessionBoard],
+    ['posture', renderPosture], ['status', renderStatus], ['resources', renderResourceMissionControl], ['history', renderResourceHistory], ['sessions', () => sessionWorkbench.render()],
     ['chart-flags', renderChartFlags], ['chart-memory', renderChartMemory], ['spend', renderSpend],
     ['agents', renderAgents],
     ['endpoints', renderEndpoints], ['recurring-egress', renderEgressEpisodes], ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
@@ -1043,12 +1052,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const PANEL_VIEW = {
     attention: 'home', spend: 'home', 'session-daily': 'home',
     flags: 'home:findings', incidents: 'home:findings',
-    activity: 'home:trends', 'chart-flags': 'home:trends', 'chart-memory': 'home:trends',
+    activity: 'home:trends', 'chart-flags': 'home:trends', 'chart-memory': 'system/resources',
     sessions: 'sessions/board', agents: 'sessions/processes', fleet: 'sessions/processes',
-    resources: 'sessions/resources', history: 'sessions/resources',
+    resources: 'system/resources', history: 'system/resources',
     events: 'sessions/events',
     endpoints: 'protection/traffic', 'recurring-egress': 'protection/traffic', firewall: 'protection/rules', sources: 'protection/sources',
-    worktrees: 'system', clutter: 'system',
+    worktrees: 'system/worktrees', clutter: 'system/clutter',
     notify: 'protection/rules', policy: 'protection/rules', 'expected-egress': 'protection/rules', audit: 'protection/audit', agent: 'agent'
   };
   // A panel is on screen when its tab is active, its sub-view is the open
@@ -1058,7 +1067,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!v) return true;
     const [route, group] = v.split(':');
     const [tab, sub] = route.split('/');
-    if (tab !== activeTab || (sub && sub !== (tab === 'protection' ? activeProtection : activeSub))) return false;
+    if (tab !== activeTab || (sub && sub !== (tab === 'protection' ? activeProtection : tab === 'system' ? activeSystemSub : activeSub))) return false;
     return !group || homeGroupOpen(group);
   }
   // Panel → the element whose focused control holds its render.
@@ -1161,6 +1170,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let activeProtection = 'traffic';
   let activeTab = 'home';
   let activeSub = 'board';
+  let activeSystemSub = 'worktrees';
 
   // Worktrees are not telemetry: the tab fetches its report when opened
   // (the daemon caches a scan for 10 minutes) and on Rescan, never on the
@@ -1188,7 +1198,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // A running removal keeps the re-reads going on any tab: its toast
     // follows it to the end.
     if (!rep || !(rep.sizing || rep.refreshing || asking || removing)) return;
-    if (!removing && activeTab !== 'system') return;
+    if (!removing && (activeTab !== 'system' || activeSystemSub !== 'worktrees')) return;
     if (worktreeSizingTimer) {
       // A removal that starts while a sizing re-read waits gets its own
       // cadence at once.
@@ -1199,7 +1209,10 @@ document.addEventListener('DOMContentLoaded', () => {
       worktreeSizingPolls++;
     }
     worktreeSizingFast = removing;
-    worktreeSizingTimer = setTimeout(() => { worktreeSizingTimer = null; loadWorktrees(false); }, removing ? WORKTREE_REMOVAL_POLL_MS : WORKTREE_SIZING_POLL_MS);
+    worktreeSizingTimer = setTimeout(() => {
+      worktreeSizingTimer = null;
+      if (removalRunning(worktreesState.report) || (activeTab === 'system' && activeSystemSub === 'worktrees')) loadWorktrees(false);
+    }, removing ? WORKTREE_REMOVAL_POLL_MS : WORKTREE_SIZING_POLL_MS);
   }
   // Removal progress: one toast follows the removals this page started or
   // saw running (another tab, the CLI) from the first step to what they
@@ -1357,6 +1370,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const clutterState = { report: null, loading: false, error: '', loadedAt: 0, filter: { kind: '' }, expanded: new Set() };
   let clutterSizingTimer = null;
   let clutterSizingPolls = 0;
+  function followClutterSizing() {
+    const rep = clutterState.report;
+    if (rep && (rep.sizing || rep.refreshing) && activeTab === 'system' && activeSystemSub === 'clutter' && !clutterSizingTimer && clutterSizingPolls < WORKTREE_SIZING_POLLS) {
+      clutterSizingPolls++;
+      clutterSizingTimer = setTimeout(() => {
+        clutterSizingTimer = null;
+        if (activeTab === 'system' && activeSystemSub === 'clutter') loadClutter(false);
+      }, WORKTREE_SIZING_POLL_MS);
+    }
+  }
   async function loadClutter(refresh) {
     if (clutterState.loading) return;
     clutterState.loading = true;
@@ -1374,16 +1397,12 @@ document.addEventListener('DOMContentLoaded', () => {
     } finally {
       clutterState.loading = false;
       markDirty('clutter');
-      const rep = clutterState.report;
-      if (rep && (rep.sizing || rep.refreshing) && activeTab === 'system' && !clutterSizingTimer && clutterSizingPolls < WORKTREE_SIZING_POLLS) {
-        clutterSizingPolls++;
-        clutterSizingTimer = setTimeout(() => { clutterSizingTimer = null; loadClutter(false); }, WORKTREE_SIZING_POLL_MS);
-      }
+      followClutterSizing();
     }
   }
 
-  // Policy lists are not telemetry either: they load when the Policy tab
-  // opens and on its Refresh, never on the refresh cycle.
+  // Policy lists are not telemetry either: they load when Protection → Rules &
+  // permissions opens and on its Refresh, never on the refresh cycle.
   const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null, loading: false, error: '' };
   async function loadPolicy() {
     if (policyState.loading) return;
@@ -1483,24 +1502,31 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!r.ok) throw new Error(text.trim() || String(r.status));
     try { return JSON.parse(text); } catch { return null; }
   }
-  function agentBusy() {
-    return !!(agentState.sending || agentState.actionRequests.size || (agentState.chat && agentState.chat.chatting) || (agentState.runs || []).some(r => r.status === 'running'));
+  let agentControllerController;
+  function agentControllerControllerModule() {
+    return agentControllerController ||= createAgentController({
+      state: {
+        get AGENT_PATHS() { return AGENT_PATHS; },
+        get agentInput() { return agentInput; },
+        get agentState() { return agentState; },
+        get agentWorkdirInput() { return agentWorkdirInput; }
+      },
+      actions: {
+        get agentFetch() { return agentFetch; },
+        get fillAgentHarnesses() { return fillAgentHarnesses; },
+        get followAgent() { return followAgent; },
+        get loadAgent() { return loadAgent; },
+        get markDirty() { return markDirty; },
+        get renderNow() { return renderNow; },
+        get showToast() { return showToast; },
+        get window() { return window; }
+      }
+    });
   }
-  async function loadAgent(parts) {
-    const want = parts || ['status', 'chat', 'plans', 'runs', 'recommendations'];
-    const wasBusy = agentBusy();
-    const versions = want.map(p => agentState.readVersion[p] = (agentState.readVersion[p] || 0) + 1);
-    try {
-      const got = await Promise.all(want.map(p => agentFetch(AGENT_PATHS[p])));
-      want.forEach((p, i) => { if (agentState.readVersion[p] === versions[i]) agentState[p] = got[i]; });
-      agentState.error = '';
-      if (want.includes('status')) fillAgentHarnesses();
-    } catch (err) {
-      agentState.error = "Couldn't load the system agent: " + (err.message || err);
-    }
-    markDirty('agent');
-    followAgent(wasBusy);
-  }
+  function agentBusy(...args) { return agentControllerControllerModule().agentBusy(...args); }
+  function loadAgent(...args) { return agentControllerControllerModule().loadAgent(...args); }
+  window.sendAgentMessage = (...args) => agentControllerControllerModule().sendAgentMessage(...args);
+  window.runLocalAgentAction = (...args) => agentControllerControllerModule().runLocalAgentAction(...args);
   function followAgent(wasBusy) {
     if (!agentBusy()) {
       agentState.polls = 0;
@@ -1584,41 +1610,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const sEl = document.getElementById('agent-skills');
     if (sEl) sEl.innerHTML = agentSkillsHTML(st);
   }
-  window.sendAgentMessage = async function() {
-    if (agentBusy()) return;
-    if (!agentState.status?.enabled || agentState.status.reason) {
-      agentState.sendError = agentState.status?.reason || (agentState.status
-        ? 'Enable chat in Settings → Secure Agent before sending.' : 'Still connecting to Secure Agent. Please wait.');
-      renderNow(['agent']);
-      return;
-    }
-    const draft = agentInput ? agentInput.value : '';
-    const text = draft.trim();
-    if (!text) return;
-    // Paint before the network request. The server alone masks and accepts
-    // message text; never create an optimistic copy of an unmasked draft.
-    agentState.sending = true;
-    agentState.sendError = '';
-    renderNow(['agent']);
-    try {
-      const res = await agentFetch('/agent/chat', { method: 'POST',
-        body: { message: text, workdir: agentWorkdirInput.value.trim() } });
-      if (!res?.message?.id) throw new Error('The daemon did not acknowledge the message');
-      if (agentInput.value === draft) agentInput.value = '';
-      const chat = agentState.chat || (agentState.chat = { messages: [] });
-      // An older GET cannot erase a message accepted after that GET started.
-      agentState.readVersion.chat = (agentState.readVersion.chat || 0) + 1;
-      if (!(chat.messages || []).some(m => m.id === res.message.id)) chat.messages = [...(chat.messages || []), res.message];
-      chat.chatting = true;
-    } catch (err) {
-      agentState.sendError = 'Delivery could not be confirmed: ' + (err.message || err) + '. Your draft is kept; check the conversation before retrying.';
-      await loadAgent(['chat']);
-    } finally {
-      agentState.sending = false;
-      renderNow(['agent']);
-      followAgent(false);
-    }
-  };
   window.saveAgentRequest = async function() {
     const text = agentHandoffInput ? agentHandoffInput.value.trim() : '';
     if (!text) { showToast("Write the request first — it becomes the plan's task", 'info'); return; }
@@ -1633,33 +1624,6 @@ document.addEventListener('DOMContentLoaded', () => {
       loadAgent(['plans']);
     } catch (err) {
       showToast('Not saved: ' + (err.message || err), 'danger');
-    }
-  };
-  window.runLocalAgentAction = async function(messageId) {
-    const m = [...((agentState.chat && agentState.chat.messages) || []), ...(agentState.recommendations || [])].find(x => x.id === messageId);
-    if (!m || !m.local_command || m.local_run_id || agentState.actionRequests.has(messageId)) return;
-    const action = m.local_command;
-    const mode = action.mode === 'terminal' ? 'in Terminal' : 'headless';
-    agentState.actionRequests.add(messageId);
-    renderNow(['agent']);
-    try {
-      const ok = await window.saConfirm(`Run this exact local command ${mode} in ${action.workdir}?\n\n${action.command}\n\nIt runs with your account's file and network access. No harness receives this chat or command.`,
-        { title: 'Confirm local command', okLabel: 'Run command', danger: true });
-      if (!ok) return;
-      const res = await agentFetch('/agent/actions', { method: 'POST', body: { message_id: messageId } });
-      m.local_run_id = res.run.id;
-      agentState.readVersion.chat = (agentState.readVersion.chat || 0) + 1;
-      agentState.readVersion.runs = (agentState.readVersion.runs || 0) + 1;
-      agentState.runs = [res.run, ...(agentState.runs || []).filter(r => r.id !== res.run.id)];
-      // Keep the conversation and focus in place; execution is visible on
-      // the command proposal as well as in History.
-      loadAgent(['chat', 'runs', 'recommendations']);
-    } catch (err) {
-      showToast('Local command not run: ' + (err.message || err), 'danger');
-    } finally {
-      agentState.actionRequests.delete(messageId);
-      renderNow(['agent']);
-      followAgent(false);
     }
   };
   window.analyzeAgentActivity = async function(flagIds) {
@@ -1831,6 +1795,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.classList.toggle('agent-page', activeTab === 'agent');
     if (r.tab === 'sessions') activeSub = r.sub;
     if (r.tab === 'protection') activeProtection = r.sub;
+    if (r.tab === 'system') activeSystemSub = r.sub;
     if (from === 'home' && activeTab !== 'home' && attentionSelection) closeDrawer();
     document.querySelectorAll('.tab-btn').forEach(b => {
       const on = b.dataset.tab === activeTab;
@@ -1845,30 +1810,40 @@ document.addEventListener('DOMContentLoaded', () => {
       const on = activeTab === 'protection' && b.dataset.protectionView === activeProtection;
       b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on));
     });
-    document.querySelectorAll('.subtab-btn[data-subtab]').forEach(b => {
+    document.querySelectorAll('#tab-sessions .subtab-btn[data-subtab]').forEach(b => {
       const on = b.dataset.subtab === activeSub;
       b.classList.toggle('active', on);
       b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
-    document.querySelectorAll('.subview').forEach(v => { v.hidden = v.id !== 'sub-' + activeSub; });
+    document.querySelectorAll('#tab-sessions .subview').forEach(v => { v.hidden = v.id !== 'sub-' + activeSub; });
+    document.querySelectorAll('#tab-system [data-system-subtab]').forEach(b => {
+      const on = b.dataset.systemSubtab === activeSystemSub;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', String(on));
+    });
+    document.querySelectorAll('#tab-system .system-subview').forEach(v => {
+      v.hidden = v.dataset.systemView !== activeSystemSub;
+    });
     const group = opts.group && document.getElementById('home-' + opts.group);
     if (group && activeTab === 'home' && !group.open) group.open = true;
-    const key = routeKey({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeSub });
+    const key = routeKey({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeTab === 'system' ? activeSystemSub : activeSub });
     try { sessionStorage.setItem('sa.console-tab', key); } catch { /* private mode */ }
     if (!opts.skipHash && window.history.replaceState) {
-      history.replaceState(null, '', location.pathname + location.search + consoleRouteHash({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeSub }));
+      history.replaceState(null, '', location.pathname + location.search + consoleRouteHash({ tab: activeTab, sub: activeTab === 'protection' ? activeProtection : activeTab === 'system' ? activeSystemSub : activeSub }));
     }
     PANELS.forEach(([name]) => { if (panelOnScreen(name)) dirtyPanels.add(name); });
     renderDirty();
-    if (activeTab === 'system'
+    if (activeTab === 'system' && activeSystemSub === 'worktrees'
       && (!worktreesState.report || Date.now() - worktreesState.loadedAt > WORKTREE_STALE_MS)) {
       loadWorktrees(false);
     }
-    if (activeTab === 'system'
+    if (activeTab === 'system' && activeSystemSub === 'clutter'
       && (!clutterState.report || Date.now() - clutterState.loadedAt > WORKTREE_STALE_MS)) {
       loadClutter(false);
     }
-    if (activeTab === 'system'
+    if (activeTab === 'system' && activeSystemSub === 'worktrees') followWorktreeSizing();
+    if (activeTab === 'system' && activeSystemSub === 'clutter') followClutterSizing();
+    if (activeTab === 'system' && activeSystemSub === 'worktrees'
       && (!worktreesState.ledger || Date.now() - worktreesState.ledgerAt > WORKTREE_STALE_MS)) {
       loadLedger();
     }
@@ -1878,11 +1853,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (focus && focus.scrollIntoView) focus.scrollIntoView({ behavior: 'auto', block: 'start' });
   }
 
-  // The Sessions tab reopens its last sub-view.
+  // Grouped primary tabs reopen their last sub-view.
   document.querySelectorAll('.tab-btn').forEach(b =>
-    b.addEventListener('click', () => switchTab(b.dataset.tab === 'sessions' ? 'sessions/' + activeSub : b.dataset.tab === 'protection' ? 'protection/' + activeProtection : b.dataset.tab)));
-  document.querySelectorAll('.subtab-btn[data-subtab]').forEach(b =>
+    b.addEventListener('click', () => switchTab(b.dataset.tab === 'sessions' ? 'sessions/' + activeSub : b.dataset.tab === 'protection' ? 'protection/' + activeProtection : b.dataset.tab === 'system' ? 'system/' + activeSystemSub : b.dataset.tab)));
+  document.querySelectorAll('#tab-sessions .subtab-btn[data-subtab]').forEach(b =>
     b.addEventListener('click', () => switchTab('sessions/' + b.dataset.subtab)));
+  document.querySelectorAll('#tab-system [data-system-subtab]').forEach(b =>
+    b.addEventListener('click', () => switchTab('system/' + b.dataset.systemSubtab)));
 
   // Tab badges: the "something needs you here" signal for hidden panels.
   // home, sessions, egress are tab badges; the sessions and processes
@@ -1908,175 +1885,78 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   switchTab(initialTab, { skipHash: true });
 
-  async function fetchTelemetry(opts) {
-    // The shared request gate handles credential rejection. Other failures mark that report stale
-    // or unavailable; snapshot failure also changes the connection status.
-    // A failed endpoint NEVER overwrites the panel's last good data.
-    if (sessionEnded) return;
-    const slow = !opts || opts.slow !== false;
-    const gen = ++telemetryFetchGen;
-    const slowGen = slow ? ++telemetrySlowGen : 0;
-    const expectedReadGen = slow ? ++expectedEgressReadGen : 0;
-    syncHistoryViews();
-    const current = () => !sessionEnded && gen === telemetryFetchGen;
-    const currentSlow = () => !sessionEnded && slow && slowGen === telemetrySlowGen;
-    let changedSlow = false;
-    let changedResources = false;
-    const obsolete = () => {
-      if (current()) return false;
-      if (!sessionEnded && changedSlow) {
-        markDirty(...PANELS.map(p => p[0]).filter(n => SLOW_ONLY.has(n)));
-        if (changedResources) fillFamilyDrawer();
+  let telemetryRefreshController;
+  function telemetryRefreshControllerModule() {
+    return telemetryRefreshController ||= createTelemetryRefresh({
+      state: {
+        get PANELS() { return PANELS; },
+        get SLOW_ONLY() { return SLOW_ONLY; },
+        get booted() { return booted; },
+        set booted(value) { booted = value; },
+        get eventHistoryPage() { return eventHistoryPage; },
+        set eventHistoryPage(value) { eventHistoryPage = value; },
+        get expectedEgressReadGen() { return expectedEgressReadGen; },
+        set expectedEgressReadGen(value) { expectedEgressReadGen = value; },
+        get firstEventRender() { return firstEventRender; },
+        set firstEventRender(value) { firstEventRender = value; },
+        get handoffGeneration() { return handoffGeneration; },
+        set handoffGeneration(value) { handoffGeneration = value; },
+        get lastSnapshotAt() { return lastSnapshotAt; },
+        set lastSnapshotAt(value) { lastSnapshotAt = value; },
+        get notifyCfgHash() { return notifyCfgHash; },
+        set notifyCfgHash(value) { notifyCfgHash = value; },
+        get pendingConsoleContext() { return pendingConsoleContext; },
+        set pendingConsoleContext(value) { pendingConsoleContext = value; },
+        get prevEventKeys() { return prevEventKeys; },
+        set prevEventKeys(value) { prevEventKeys = value; },
+        get prevUptimeSec() { return prevUptimeSec; },
+        set prevUptimeSec(value) { prevUptimeSec = value; },
+        get reportHealth() { return reportHealth; },
+        get reviewCursor() { return reviewCursor; },
+        set reviewCursor(value) { reviewCursor = value; },
+        get sessionEnded() { return sessionEnded; },
+        set sessionEnded(value) { sessionEnded = value; },
+        get telemetryData() { return telemetryData; },
+        set telemetryData(value) { telemetryData = value; },
+        get telemetryFetchGen() { return telemetryFetchGen; },
+        set telemetryFetchGen(value) { telemetryFetchGen = value; },
+        get telemetrySlowGen() { return telemetrySlowGen; },
+        set telemetrySlowGen(value) { telemetrySlowGen = value; },
+        get timelineSession() { return timelineSession; },
+        set timelineSession(value) { timelineSession = value; }
+      },
+      actions: {
+        get acceptEventHistoryPage() { return acceptEventHistoryPage; },
+        get apiFetch() { return apiFetch; },
+        get eventsHistoryScope() { return eventsHistoryScope; },
+        get eventsQuery() { return eventsQuery; },
+        get failEventHistoryPage() { return failEventHistoryPage; },
+        get fillFamilyDrawer() { return fillFamilyDrawer; },
+        get flagsQuery() { return flagsQuery; },
+        get homeGroupOpen() { return homeGroupOpen; },
+        get isConsoleReport() { return isConsoleReport; },
+        get isEventsFiltered() { return isEventsFiltered; },
+        get isFlagsFiltered() { return isFlagsFiltered; },
+        get loadSpend() { return loadSpend; },
+        get markDirty() { return markDirty; },
+        get noteEndpointFailure() { return noteEndpointFailure; },
+        get openConsoleContext() { return openConsoleContext; },
+        get parseUptimeSec() { return parseUptimeSec; },
+        get reconcileRetriage() { return reconcileRetriage; },
+        get renderAll() { return renderAll; },
+        get renderReportHealth() { return renderReportHealth; },
+        get reportFailed() { return reportFailed; },
+        get reportSucceeded() { return reportSucceeded; },
+        get setConnState() { return setConnState; },
+        get showToast() { return showToast; },
+        get sparkIngestEvents() { return sparkIngestEvents; },
+        get syncHistoryViews() { return syncHistoryViews; },
+        get validEventHistoryPage() { return validEventHistoryPage; },
+        get window() { return window; }
       }
-      return true;
-    };
-    const grab = async (key, path, ownsResult = current) => {
-      if (sessionEnded) return null;
-      try {
-        const r = await apiFetch(path);
-        if (sessionEnded) return null;
-        if (!ownsResult()) return null;
-        if (!r.ok) { noteEndpointFailure(key); reportFailed(key, `HTTP ${r.status}`); return null; }
-        const value = await r.json();
-        if (!ownsResult()) return null;
-        if (!isConsoleReport(key, value)) { reportFailed(key, 'Invalid response'); return null; }
-        if (key !== 'snapshot') reportSucceeded(key);
-        return value;
-      } catch {
-        if (ownsResult()) reportFailed(key, 'Request failed or response unreadable');
-        return null;
-      }
-    };
-
-    if (slow) loadSpend(); // beside this cycle: its reports never hold the first render
-    const requests = [grab('snapshot', '/snapshot'), grab('guard decisions', '/guard/pending')];
-    if (slow) requests.push(grab('resources', '/resources', currentSlow));
-    const reviewQueryCursor = reviewCursor;
-    if (reviewQueryCursor) requests.push(grab('reviews', '/reviews?limit=100&after=' + encodeURIComponent(reviewQueryCursor), () => current() && reviewCursor === reviewQueryCursor).then(page => { if (page) telemetryData.reviews = page; }));
-    const [snap, guardPending, resources] = await Promise.all(requests);
-    if (sessionEnded) return;
-    if (resources && currentSlow()) {
-      telemetryData.resources = resources;
-      changedResources = changedSlow = true;
-    }
-    if (current()) {
-      if (guardPending) telemetryData.guardPending = guardPending || [];
-      if (snap) {
-        lastSnapshotAt = Date.now();
-        const status = snap.status;
-        if (status) {
-          const up = parseUptimeSec(status.uptime);
-          if (prevUptimeSec > 0 && up < prevUptimeSec - 5) {
-            showToast('Daemon restarted — reconnected to the new instance', 'info');
-            prevEventKeys = new Set();
-            firstEventRender = true;
-          }
-          prevUptimeSec = up;
-          telemetryData.status = status;
-        }
-        if (snap.flags) telemetryData.flags = (snap.flags || []).filter(f => !f.acknowledged);
-        if (snap.reviews && !reviewCursor) telemetryData.reviews = snap.reviews;
-        if (snap.patterns) telemetryData.patterns = snap.patterns || [];
-        if (snap.routine) telemetryData.routine = snap.routine || [];
-        if (snap.incidents) telemetryData.incidents = snap.incidents || [];
-        if (snap.events) telemetryData.events = snap.events || [];
-        if (snap.posture) telemetryData.posture = snap.posture;
-        if (snap.suggestions) telemetryData.suggestions = snap.suggestions || [];
-        if (snap.mutes) telemetryData.mutes = snap.mutes || [];
-        if (snap.sessions) telemetryData.sessions = snap.sessions || [];
-        // Clear the snapshot failure only after its data has been published.
-        reportSucceeded('snapshot');
-      }
-    }
-
-    if (currentSlow()) {
-      const grabSlow = (key, path) => grab(key, path, currentSlow);
-      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes, egressEpisodes, expectedEgress] = await Promise.all([
-        grabSlow('fleet', '/fleet'),
-        grabSlow('audit', '/audit?limit=50'),
-        grabSlow('firewall sources', '/firewall/sources'),
-        grabSlow('activity rollup', '/stats/rollup?hours=168'),
-        grabSlow('uninspected egress', '/egress/uninspected?hours=24&limit=200'),
-        grabSlow('notification rules', '/notify/rules'),
-        grabSlow('allowlist', '/allowlist'),
-        grabSlow('resource episodes', '/resources/episodes'),
-        grabSlow('recurring egress', '/egress/episodes'),
-        grabSlow('expected egress', '/expected-egress')
-      ]);
-      if (sessionEnded) return;
-      if (currentSlow()) {
-        changedSlow = true;
-        if (fleet) telemetryData.fleet = fleet || [];
-        if (audit) telemetryData.audit = audit || [];
-        if (sources) telemetryData.sources = sources || [];
-        if (rollup) telemetryData.rollup = rollup || [];
-        if (uninspected) telemetryData.uninspected = uninspected || [];
-        if (episodes) telemetryData.episodes = episodes || [];
-        if (egressEpisodes) telemetryData.egressEpisodes = egressEpisodes.episodes || [];
-        if (expectedEgress && expectedReadGen === expectedEgressReadGen) telemetryData.expectedEgress = expectedEgress.rules || [];
-        if (notifyCfg) {
-          // A reconcile while the operator is typing a workspace path must not
-          // dirty (and re-render) the notify panel unless the served config
-          // actually changed — a stable hash, not the poll cadence, decides.
-          const h = JSON.stringify(notifyCfg);
-          if (h !== notifyCfgHash) { notifyCfgHash = h; telemetryData.notifyCfg = notifyCfg; markDirty('notify'); }
-        }
-        if (allowlist) telemetryData.allowlist = allowlist || [];
-      }
-    }
-
-    if (obsolete()) return;
-    syncHistoryViews();
-    sparkIngestEvents(telemetryData.events);
-    if (isFlagsFiltered() || homeGroupOpen('findings')) {
-      const v = await grab('flags', flagsQuery());
-      if (obsolete()) return;
-      if (v) telemetryData.flagsView = v || [];
-    }
-    if (isEventsFiltered()) {
-      const scope = eventsHistoryScope();
-      const page = eventHistoryPage;
-      const cursor = page.pending?.cursor ?? page.cursor;
-      const session = timelineSession;
-      page.loading = true;
-      const ownsPage = () => current() && scope === eventsHistoryScope() && page === eventHistoryPage
-        && cursor === (page.pending?.cursor ?? page.cursor);
-      const v = await grab('events', eventsQuery(), ownsPage);
-      if (obsolete()) return;
-      if (ownsPage()) {
-        if (v && (Array.isArray(v) || validEventHistoryPage(v, session))) {
-          telemetryData.eventsView = session ? acceptEventHistoryPage(page, v) : v;
-          page.loading = false;
-        } else {
-          if (v) reportFailed('events', 'Event page does not match this session');
-          failEventHistoryPage(page);
-        }
-      }
-    }
-
-    renderReportHealth(); // Filter changes can hide a failed filtered report.
-    telemetryData.connected = !!(snap && snap.status);
-    reconcileRetriage();
-
-    const invalidSnapshot = reportHealth.failures(['snapshot']).some(report => report.error === 'Invalid response');
-    setConnState(telemetryData.connected ? 'ok' : invalidSnapshot ? 'invalid-response' : 'unreachable');
-
-    if (!booted || (opts && opts.full)) renderAll();
-    // 'notify' is excluded here: it dirties itself above, only when its
-    // fetched config actually changed, so an unrelated poll tick never
-    // erases an in-progress workspace-scope edit.
-    else markDirty(...PANELS.map(p => p[0]).filter(n => (slow || !SLOW_ONLY.has(n)) && n !== 'notify'));
-    if (resources) fillFamilyDrawer();
-    if (window.SA && window.SA.refreshSessionOverview) window.SA.refreshSessionOverview(!!(opts && opts.full));
-    // Apply once, only after authenticated telemetry succeeds. A newer
-    // credential handoff invalidates an opener awaiting session data.
-    if (snap && pendingConsoleContext && current()) {
-      const context = pendingConsoleContext;
-      pendingConsoleContext = null;
-      await openConsoleContext(context, handoffGeneration);
-    }
+    });
   }
-
+  function fetchTelemetry(...args) { return telemetryRefreshControllerModule().fetchTelemetry(...args); }
   // Every panel is a candidate: initial load, Refresh, and actions that
   // reshape every list (search, session select). "Candidate" does not mean
   // "rendered" — renderDirty() still runs each through panelOnScreen, so a
@@ -2100,118 +1980,91 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // loadSpend reads the three spend reports from the usage cache; now renders
   // at once (a view the user just chose), else when the panel may.
-  async function loadSpend(now) {
-    if (sessionEnded) return;
-    const gen = ++spendGen;
-    clearTimeout(spendPollTimer);
-    spendPollTimer = null;
-    const cardPath = spendCardPath();
-    const cardTZ = Number(new URLSearchParams(cardPath.split('?')[1]).get('tz'));
-    telemetryData.spendRefresh = { loading: true, delayed: false };
-    if (now) renderNow(['spend']); else markDirty('spend');
-    const ownsResult = key => !sessionEnded && gen === spendGen && (key !== 'spend card' || cardPath === spendCardPath());
-    const grab = async (key, path) => {
-      if (sessionEnded) return null;
-      try {
-        const r = await apiFetch(path);
-        if (sessionEnded) return null;
-        if (!ownsResult(key)) return null;
-        if (!r.ok) { reportFailed(key, `HTTP ${r.status}`); return null; }
-        const value = await r.json();
-        if (!ownsResult(key)) return null;
-        if (!isConsoleReport(key, value)) { reportFailed(key, 'Invalid response'); return null; }
-        reportSucceeded(key);
-        return value;
-      } catch {
-        if (ownsResult(key)) reportFailed(key, 'Request failed or response unreadable');
-        return null;
+  let spendControllerController;
+  function spendControllerControllerModule() {
+    return spendControllerController ||= createSpendController({
+      state: {
+        get SPEND_BY() { return SPEND_BY; },
+        get SPEND_POLLS() { return SPEND_POLLS; },
+        get SPEND_POLL_MS() { return SPEND_POLL_MS; },
+        get SPEND_SINCE() { return SPEND_SINCE; },
+        get SPEND_VIEW_KEY() { return SPEND_VIEW_KEY; },
+        get expandedLists() { return expandedLists; },
+        get handoffGeneration() { return handoffGeneration; },
+        set handoffGeneration(value) { handoffGeneration = value; },
+        get reportHealth() { return reportHealth; },
+        get sessionEnded() { return sessionEnded; },
+        set sessionEnded(value) { sessionEnded = value; },
+        get spendBySel() { return spendBySel; },
+        get spendDayGen() { return spendDayGen; },
+        set spendDayGen(value) { spendDayGen = value; },
+        get spendGen() { return spendGen; },
+        set spendGen(value) { spendGen = value; },
+        get spendPollTimer() { return spendPollTimer; },
+        set spendPollTimer(value) { spendPollTimer = value; },
+        get spendPolls() { return spendPolls; },
+        set spendPolls(value) { spendPolls = value; },
+        get spendSinceSel() { return spendSinceSel; },
+        get spendView() { return spendView; },
+        set spendView(value) { spendView = value; },
+        get telemetryData() { return telemetryData; },
+        set telemetryData(value) { telemetryData = value; }
+      },
+      actions: {
+        get apiFetch() { return apiFetch; },
+        clearTimeout: (...args) => window.clearTimeout(...args),
+        get document() { return document; },
+        get isConsoleReport() { return isConsoleReport; },
+        get loadSpend() { return loadSpend; },
+        get markDirty() { return markDirty; },
+        get renderNow() { return renderNow; },
+        get renderReportHealth() { return renderReportHealth; },
+        get reportFailed() { return reportFailed; },
+        get reportSucceeded() { return reportSucceeded; },
+        get resetSpendDay() { return resetSpendDay; },
+        get sessionStorage() { return sessionStorage; },
+        setTimeout: (...args) => window.setTimeout(...args),
+        get spendCardPath() { return spendCardPath; },
+        get spendDayWindow() { return spendDayWindow; },
+        get syncSpendDayGuidance() { return syncSpendDayGuidance; },
+        get topCostRows() { return topCostRows; }
       }
-    };
-    const [costs, costsCard, costPlans] = await Promise.all([
-      grab('spend', '/costs?since=24h&by=repo&cached=1'),
-      grab('spend card', cardPath),
-      grab('spend plans', '/costs/plans')
-    ]);
-    if (sessionEnded || gen !== spendGen) return;
-    if (costs) telemetryData.costs = costs;
-    if (costPlans) telemetryData.costPlans = costPlans;
-    if (costsCard && cardPath === spendCardPath()) {
-      telemetryData.costsCard = costsCard;
-      telemetryData.costsCardTZ = cardTZ;
-      if (telemetryData.spendDay) {
-        if (!spendDayWindow(telemetryData.spendDay, costsCard, cardTZ)) resetSpendDay();
-        else loadSpendDay();
-      }
-    }
-    telemetryData.spendRefresh = { loading: false,
-      delayed: reportHealth.failures(['spend', 'spend card', 'spend plans']).length > 0 };
-    if (now) renderNow(['spend']); else markDirty('spend');
-    if (!telemetryData.spendRefresh.delayed && ![telemetryData.costs, telemetryData.costsCard].some(r => r && r.refreshing)) { spendPolls = 0; return; }
-    if (spendPolls >= SPEND_POLLS) return; // the slow cycle keeps asking
-    spendPolls++;
-    spendPollTimer = setTimeout(() => loadSpend(false), SPEND_POLL_MS);
+    });
   }
-
-  function resetSpendDay(focus = false) {
-    const day = telemetryData.spendDay;
-    spendDayGen++;
-    telemetryData.spendDay = '';
-    telemetryData.spendDayReport = null;
-    telemetryData.spendDayRefresh = {};
-    renderNow(['spend']);
-    if (focus) Array.from(document.querySelectorAll('[data-action="select-spend-day"]')).find(button => button.dataset.day === day)?.focus({ preventScroll: true });
-  }
-  async function loadSpendDay() {
-    const day = telemetryData.spendDay;
-    const range = spendDayWindow(day, telemetryData.costsCard, telemetryData.costsCardTZ);
-    if (!range || sessionEnded) return;
-    const gen = ++spendDayGen, auth = handoffGeneration;
-    const owns = () => !sessionEnded && auth === handoffGeneration && gen === spendDayGen && day === telemetryData.spendDay;
-    const params = new URLSearchParams({ since: range.since, until: range.until, by: 'repo', tz: String(range.tz), cached: '1' });
-    telemetryData.spendDayRefresh = { loading: true };
-    renderNow(['spend']);
-    try {
-      const res = await apiFetch('/costs?' + params);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const report = await res.json();
-      if (!owns()) return;
-      if (!isConsoleReport('spend card', report)) throw new Error('Invalid usage response');
-      if (report.by !== 'repo' || Date.parse(report.since) !== Date.parse(range.since) || Date.parse(report.until) !== Date.parse(range.until)) throw new Error('Usage response does not match the selected day');
-      telemetryData.spendDayReport = report;
-      telemetryData.spendDayRefresh = { loading: false, delayed: !!report.refreshing };
-    } catch (err) {
-      if (!owns()) return;
-      telemetryData.spendDayRefresh = { loading: false, delayed: true, error: 'Could not load this day: ' + (err.message || err) };
-    }
-    if (owns()) renderNow(['spend']);
-  }
-  function selectSpendDay(day) {
-    if (!spendDayWindow(day, telemetryData.costsCard, telemetryData.costsCardTZ)) return;
-    telemetryData.spendDay = day;
-    telemetryData.spendDayReport = null;
-    loadSpendDay();
-  }
-
+  function loadSpend(...args) { return spendControllerControllerModule().loadSpend(...args); }
+  function resetSpendDay(...args) { return spendControllerControllerModule().resetSpendDay(...args); }
+  function loadSpendDay(...args) { return spendControllerControllerModule().loadSpendDay(...args); }
+  function selectSpendDay(...args) { return spendControllerControllerModule().selectSpendDay(...args); }
+  function expandSpendDayRepositories(...args) { return spendControllerControllerModule().expandSpendDayRepositories(...args); }
+  const onSpendView = (...args) => spendControllerControllerModule().onSpendView(...args);
   // Spend card controls: a change saves the view, clears the card and loads
   // the new report.
   const spendBySel = document.getElementById('spend-by');
   const spendSinceSel = document.getElementById('spend-since');
   if (spendBySel) spendBySel.value = spendView.by;
   if (spendSinceSel) spendSinceSel.value = spendView.since;
-  const onSpendView = () => {
-    const by = spendBySel && spendBySel.value, since = spendSinceSel && spendSinceSel.value;
-    spendView = { by: SPEND_BY.includes(by) ? by : 'repo', since: SPEND_SINCE.includes(since) ? since : '24h' };
-    try { sessionStorage.setItem(SPEND_VIEW_KEY, JSON.stringify(spendView)); } catch { /* private mode */ }
-    resetSpendDay();
-    telemetryData.costsCard = null;
-    reportHealth.reset('spend card'); // The new query has no retained card yet.
-    renderReportHealth();
-    spendPolls = 0;
-    renderNow(['spend']);
-    loadSpend(true);
-  };
+  syncSpendDayGuidance();
   spendBySel?.addEventListener('change', onSpendView);
   spendSinceSel?.addEventListener('change', onSpendView);
+
+  function handleSpendDayKeydown(event) {
+    if (sessionEnded || event.defaultPrevented || event.isComposing
+      || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const current = event.target?.closest?.('button[data-action="select-spend-day"]');
+    const bars = current?.closest('.spend-bars');
+    if (!bars) return;
+    const buttons = Array.from(bars.querySelectorAll('button[data-action="select-spend-day"]'))
+      .filter(button => !button.disabled && !button.matches(':disabled') && button.closest('.spend-bars') === bars);
+    const index = buttons.indexOf(current);
+    if (index < 0) return;
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+      : Math.max(0, Math.min(buttons.length - 1, index + (event.key === 'ArrowLeft' ? -1 : 1)));
+    event.preventDefault();
+    // Move focus within the current chart; activation keeps its native meaning.
+    if (buttons[next] !== current) buttons[next].focus();
+  }
+  document.getElementById('spend-card')?.addEventListener('keydown', handleSpendDayKeydown);
 
   function renderStatus() {
     const chip = document.getElementById('system-status');
@@ -2323,8 +2176,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function harnessFilterChanged() {
     try { sessionStorage.setItem(HARNESS_FILTER_KEY, JSON.stringify(harnessFilter)); } catch { /* private mode */ }
     syncHarnessFilterControls();
-    sessionFilterTransition = true;
-    renderSessionBoard();
+    sessionWorkbench.filterChanged();
+    sessionWorkbench.render();
     renderAgents();
   }
   syncHarnessFilterControls();
@@ -3067,15 +2920,13 @@ document.addEventListener('DOMContentLoaded', () => {
     agentTreeOpen,
     expanded: expandedLists,
     reviewDrafts,
+    get reviewResult() { return reviewResult; },
     get reviewCursor() { return reviewCursor; },
     historySelected,
     historyRows: new Map(),
     harnessFilter,
-    reconcileSessionSelection,
     reconcileAttention,
     get attentionKey() { return attentionSelection?.key || ''; },
-    takeSessionReveal,
-    scheduleSessionWorkbenchHeight,
     setTabBadge,
     paintSessionChip,
     sessionScopeOn,
@@ -3103,6 +2954,24 @@ document.addEventListener('DOMContentLoaded', () => {
     if (el.matches('details.agent-group')) agentGroupOpen[el.dataset.harness] = el.open;
     else if (el.matches('details.agent-tree')) agentTreeOpen[el.dataset.pid] = el.open;
   }, true);
+  const sessionWorkbench = createSessionWorkbench({
+    apiFetch, renderNow,
+    onSelect(id) {
+      if (activeTab === 'sessions' && activeSub === 'board') {
+        history.replaceState(null, '', location.pathname + location.search + consoleContextHash({ route: 'sessions', session: id }));
+      }
+    },
+  });
+  window.selectSession = sessionWorkbench.selectSession;
+  window.setSessionView = sessionWorkbench.setView;
+  window.showSessionList = sessionWorkbench.showList;
+  window.jumpToLatestSession = sessionWorkbench.jumpToLatest;
+  window.showCurrentSessionStatus = sessionWorkbench.showCurrentStatus;
+  window.loadEarlierSessionMemory = sessionWorkbench.loadEarlier;
+  window.retrySessionTrace = sessionWorkbench.retryTrace;
+  window.SA.refreshSessionOverview = sessionWorkbench.refreshCurrent;
+  window.SA.renderSessionBoard = sessionWorkbench.render;
+
   Object.defineProperties(window.SA, {
     postureHealth: { get() { return { lastSnapshotAt, error: reportHealth.failures(['snapshot'])[0]?.error || '' }; } },
     activeTab: { get() { return activeTab; } },
@@ -3115,245 +2984,18 @@ document.addEventListener('DOMContentLoaded', () => {
     firstEventRender: { get() { return firstEventRender; }, set(v) { firstEventRender = v; } },
     suppressFreshOnce: { get() { return suppressFreshOnce; }, set(v) { suppressFreshOnce = v; } },
     selectedResourceKey: { get() { return selectedResourceKey; }, set(v) { selectedResourceKey = v; } },
-    selectedSessionId: { get() { return selectedSessionId; }, set(v) { selectedSessionId = v; } },
-    sessionTimeline: { get() { return sessionTimeline; }, set(v) { sessionTimeline = v; } },
-    sessionTimelineState: { get() { return sessionTimelineState; } },
-    sessionView: { get() { return sessionView; } },
-    sessionMemoryPage: { get() { return sessionMemoryPage; } },
-    sessionMemoryState: { get() { return sessionMemoryState; } },
-    sessionOverview: { get() { return sessionOverview; } },
-    sessionOverviewState: { get() { return sessionOverviewState; } },
-    sessionOutcomes: { get() { return sessionOutcomes; } },
-    sessionOutcomesState: { get() { return sessionOutcomesState; } },
+    selectedSessionId: { get() { return sessionWorkbench.selectedSessionId; } },
+    sessionTimeline: { get() { return sessionWorkbench.sessionTimeline; } },
+    sessionTimelineState: { get() { return sessionWorkbench.sessionTimelineState; } },
+    sessionView: { get() { return sessionWorkbench.sessionView; } },
+    sessionMemoryPage: { get() { return sessionWorkbench.sessionMemoryPage; } },
+    sessionMemoryState: { get() { return sessionWorkbench.sessionMemoryState; } },
+    sessionOverview: { get() { return sessionWorkbench.sessionOverview; } },
+    sessionOverviewState: { get() { return sessionWorkbench.sessionOverviewState; } },
+    sessionOutcomes: { get() { return sessionWorkbench.sessionOutcomes; } },
+    sessionOutcomesState: { get() { return sessionWorkbench.sessionOutcomesState; } },
   });
 
-  // The generation invalidates late responses when selection changes; it
-  // also protects an earlier-page request from writing into another session.
-  const SESSION_SELECTION_KEY = 'sa.selected-session';
-  let selectedSessionId = '';
-  try { selectedSessionId = sessionStorage.getItem(SESSION_SELECTION_KEY) || ''; } catch { /* memory only */ }
-  let sessionSelectionInitialized = false;
-  let sessionFilterTransition = false;
-  let sessionReveal = false;
-  let sessionPane = 'detail';
-  let sessionView = 'memory';
-  let sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
-  let sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
-  let sessionMemoryGeneration = 0;
-  let sessionMemoryAt = 0;
-  let sessionMemoryHistoryLoaded = false;
-  let sessionTimeline = [];
-  let sessionTimelineState = { loading: false, loaded: false, error: '' };
-  let sessionTimelineAt = 0;
-  let sessionTimelineRequest = 0;
-  let sessionOverview = null;
-  let sessionOverviewState = { loading: false, error: '' };
-  let sessionOverviewGeneration = 0;
-  let sessionOverviewAt = 0;
-  let sessionOverviewRefreshAgain = false;
-  let sessionOutcomes = null;
-  let sessionOutcomesState = { loading: false, error: '' };
-  let sessionOutcomesGeneration = 0;
-  let sessionOutcomesAt = 0;
-  window.SA.refreshSessionOverview = force => {
-    if (selectedSessionId) {
-      loadSessionOverview(selectedSessionId, force);
-      if (sessionView === 'results') loadSessionOutcomes(selectedSessionId, force);
-    }
-  };
-  async function loadSessionOutcomes(id, force = true) {
-    if (!id || id !== selectedSessionId || sessionOutcomesState.loading) return;
-    if (!force && Date.now() - sessionOutcomesAt < 5000) return;
-    sessionOutcomesAt = Date.now();
-    const generation = sessionOutcomesGeneration;
-    sessionOutcomesState = { loading: true, error: sessionOutcomesState.error };
-    renderNow(['sessions']);
-    try {
-      const response = await apiFetch('/sessions/' + encodeURIComponent(id) + '/outcomes');
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      const data = await response.json();
-      if (generation !== sessionOutcomesGeneration || id !== selectedSessionId) return;
-      if (!validSessionOutcomes(data, id)) throw new Error('Invalid response');
-      if (sessionOutcomes) for (const key of ['reviews', 'incidents', 'interventions']) {
-        if (!data.history.evidence[key].available) data.history[key] = sessionOutcomes.history[key];
-      }
-      sessionOutcomes = data;
-      sessionOutcomesState = { loading: false, error: '' };
-    } catch {
-      if (generation !== sessionOutcomesGeneration || id !== selectedSessionId) return;
-      sessionOutcomesState = { loading: false, error: 'unavailable' };
-    }
-    renderNow(['sessions']);
-  }
-  async function loadSessionOverview(id, force = true) {
-    if (!id || id !== selectedSessionId) return;
-    if (sessionOverviewState.loading) { if (force) sessionOverviewRefreshAgain = true; return; }
-    if (!force && Date.now() - sessionOverviewAt < 5000) return;
-    sessionOverviewAt = Date.now();
-    const generation = sessionOverviewGeneration;
-    sessionOverviewState = { loading: true, error: sessionOverviewState.error };
-    renderNow(['sessions']);
-    try {
-      const response = await apiFetch('/sessions/' + encodeURIComponent(id) + '/overview');
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      const overview = await response.json();
-      if (generation !== sessionOverviewGeneration || id !== selectedSessionId) return;
-      if (!validSessionOverview(overview, id)) throw new Error('Invalid response');
-      sessionOverview = overview;
-      sessionOverviewState = { loading: false, error: '' };
-    } catch {
-      if (generation !== sessionOverviewGeneration || id !== selectedSessionId) return;
-      sessionOverviewState = { loading: false, error: 'unavailable' };
-    }
-    renderNow(['sessions']);
-    if (sessionOverviewRefreshAgain) { sessionOverviewRefreshAgain = false; loadSessionOverview(id); }
-  }
-  function resetSessionMemory() {
-    sessionMemoryGeneration++;
-    sessionMemoryHistoryLoaded = false;
-    sessionMemoryAt = 0;
-    sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
-    sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
-    sessionTimelineAt = 0;
-    sessionTimelineState = { loading: false, loaded: false, error: '' };
-    sessionOverviewGeneration++;
-    sessionOverview = null;
-    sessionOverviewState = { loading: false, error: '' };
-    sessionOverviewAt = 0;
-    sessionOverviewRefreshAgain = false;
-    sessionOutcomesGeneration++;
-    sessionOutcomes = null;
-    sessionOutcomesState = { loading: false, error: '' };
-    sessionOutcomesAt = 0;
-  }
-  function takeSessionReveal() {
-    const reveal = sessionReveal;
-    sessionReveal = false;
-    return reveal;
-  }
-  function reconcileSessionSelection(groups) {
-    const visible = visibleSessionMembers(groups);
-    const transition = sessionFilterTransition;
-    sessionFilterTransition = false;
-    if (!sessionSelectionInitialized || transition) {
-      if (visible.length || transition) sessionSelectionInitialized = true;
-      const id = initialSessionId(visible, selectedSessionId);
-      if (id !== selectedSessionId) {
-        window.SA.closeSessionPermissions?.();
-        window.SA.clearSessionInvestigation?.();
-        selectedSessionId = id;
-        resetSessionMemory();
-        sessionTimeline = [];
-        try { id ? sessionStorage.setItem(SESSION_SELECTION_KEY, id) : sessionStorage.removeItem(SESSION_SELECTION_KEY); } catch { /* memory only */ }
-        if (id) queueMicrotask(() => loadSelectedSession(id));
-      } else if (id && !sessionMemoryState.loading && !sessionMemoryPage.rows.length && !sessionTimeline.length) {
-        queueMicrotask(() => loadSelectedSession(id));
-      }
-      sessionReveal = !!id;
-    }
-    const panel = document.getElementById('session-board-panel');
-    if (panel) panel.dataset.pane = sessionPane;
-  }
-  async function loadSelectedSession(id) {
-    const history = sessionView === 'trace'
-      ? loadSessionTimeline(id, true).catch(() => {}) : sessionView === 'results' ? loadSessionOutcomes(id) : loadSessionMemory(id);
-    await Promise.all([history, loadSessionOverview(id)]);
-    renderNow(['sessions']);
-  }
-  let sessionHeightFrame = 0;
-  function scheduleSessionWorkbenchHeight() {
-    if (sessionHeightFrame) return;
-    sessionHeightFrame = requestAnimationFrame(() => {
-      sessionHeightFrame = 0;
-      const panel = document.getElementById('session-board-panel');
-      if (!panel || !panel.classList.contains('session-workbench') || !panel.getClientRects().length) return;
-      const body = panel.querySelector('.session-detail-body');
-      const followLatest = body && body.scrollHeight - body.clientHeight - body.scrollTop < 64;
-      const bottom = parseFloat(getComputedStyle(document.querySelector('.app') || document.body).paddingBottom) || 16;
-      const height = Math.floor((window.visualViewport?.height || window.innerHeight) - panel.getBoundingClientRect().top - bottom);
-      // Very short windows use document scrolling so controls remain reachable.
-      panel.classList.toggle('session-workbench-short', height < 320);
-      const value = Math.max(320, height) + 'px';
-      if (panel.style.getPropertyValue('--session-workbench-height') !== value) panel.style.setProperty('--session-workbench-height', value);
-      // Sizing changes the scroll range after the initial detail render.
-      if (followLatest) body.scrollTop = body.scrollHeight;
-      const latest = panel.querySelector('[data-action="session-latest"]');
-      if (latest && body) latest.hidden = body.scrollHeight - body.clientHeight - body.scrollTop < 64;
-    });
-  }
-  window.addEventListener('resize', scheduleSessionWorkbenchHeight);
-  window.visualViewport?.addEventListener('resize', scheduleSessionWorkbenchHeight);
-  if (typeof ResizeObserver !== 'undefined') {
-    const observer = new ResizeObserver(scheduleSessionWorkbenchHeight);
-    for (const el of document.querySelectorAll('.masthead, .tab-nav, .subtabs, #session-board-panel .session-toolbar')) observer.observe(el);
-  }
-  async function loadSessionMemory(sessionID, before) {
-    if (!sessionID || sessionID !== selectedSessionId) return;
-    if (sessionMemoryState.loadingEarlier || (!before && sessionMemoryState.loading)) return;
-    const generation = ++sessionMemoryGeneration;
-    sessionMemoryAt = Date.now();
-    sessionMemoryState = { ...sessionMemoryState, loading: !before, loadingEarlier: !!before, error: '' };
-    renderNow(['sessions']);
-    try {
-      const query = before ? '?before=' + encodeURIComponent(before) : '';
-      const response = await apiFetch('/sessions/' + encodeURIComponent(sessionID) + '/memory' + query);
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      const page = await response.json();
-      if (generation !== sessionMemoryGeneration || sessionID !== selectedSessionId) return;
-      const incoming = Array.isArray(page.rows) ? page.rows : [];
-      if (before) {
-        sessionMemoryHistoryLoaded = true;
-        const seen = new Set((sessionMemoryPage.rows || []).map(row => row.id));
-        const older = incoming.filter(row => {
-          if (seen.has(row.id)) return false;
-          seen.add(row.id);
-          return true;
-        });
-        sessionMemoryPage = { rows: [...older, ...sessionMemoryPage.rows], has_earlier: !!page.has_earlier, next_cursor: page.next_cursor || '' };
-      } else if (sessionMemoryHistoryLoaded || sessionReadingHistory(sessionID, 'memory')) {
-        const merged = new Map(sessionMemoryPage.rows.map(row => [row.id, row]));
-        for (const row of incoming) merged.set(row.id, row);
-        sessionMemoryPage = { ...sessionMemoryPage, rows: [...merged.values()].sort((a, b) => String(a.at).localeCompare(String(b.at)) || String(a.id).localeCompare(String(b.id))) };
-      } else {
-        sessionMemoryPage = { rows: incoming, has_earlier: !!page.has_earlier, next_cursor: page.next_cursor || '' };
-      }
-      sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
-    } catch {
-      if (generation !== sessionMemoryGeneration || sessionID !== selectedSessionId) return;
-      sessionMemoryState = { loading: false, loadingEarlier: false, error: before ? 'earlier' : 'latest' };
-    }
-    renderNow(['sessions']);
-  }
-  async function loadSessionTimeline(id, force) {
-    if (!id || id !== selectedSessionId) return;
-    const generation = sessionMemoryGeneration;
-    // Throttle refetches: deltas for the selected session arrive per event.
-    if (!force && Date.now() - sessionTimelineAt < 2000) return;
-    sessionTimelineAt = Date.now();
-    const request = ++sessionTimelineRequest;
-    const current = () => id === selectedSessionId && generation === sessionMemoryGeneration
-      && request === sessionTimelineRequest && sessionView === 'trace';
-    sessionTimelineState = { ...sessionTimelineState, loading: true };
-    renderNow(['sessions']);
-    try {
-      const r = await apiFetch('/sessions/' + encodeURIComponent(id) + '/timeline?limit=500');
-      if (!r.ok) throw new Error('Trace unavailable');
-      const rows = await r.json();
-      if (!validSessionTrace(rows, id)) throw new Error('Invalid session trace');
-      if (!current()) return;
-      sessionTimeline = rows;
-      sessionTimelineState = { loading: false, loaded: true, error: '' };
-    } catch {
-      if (!current()) return;
-      sessionTimelineState = { ...sessionTimelineState, loading: false, error: 'unavailable' };
-    }
-    if (current()) renderNow(['sessions']);
-  }
-  window.retrySessionTrace = function() {
-    if (selectedSessionId && sessionView === 'trace' && !sessionTimelineState.loading) {
-      return loadSessionTimeline(selectedSessionId, true);
-    }
-  };
   // Export: copy the session's markdown report. Safari only honours a
   // clipboard write started inside the click, so where ClipboardItem exists
   // the write starts now with the report body still loading.
@@ -3378,72 +3020,6 @@ document.addEventListener('DOMContentLoaded', () => {
       () => showToast(partial ? 'Partial session report copied — review its evidence and limits' : 'Session report copied (markdown)', partial ? 'warning' : 'success'),
       err => showToast('Export failed: ' + ((err && err.message) || err), 'danger'));
   };
-  window.selectSession = async function(id) {
-    if (!id) return;
-    const changed = selectedSessionId !== id;
-    if (changed) window.SA.closeSessionPermissions?.();
-    if (changed) window.SA.clearSessionInvestigation?.();
-    selectedSessionId = id;
-    sessionSelectionInitialized = true;
-    sessionReveal = true;
-    sessionPane = 'detail';
-    try { sessionStorage.setItem(SESSION_SELECTION_KEY, id); } catch { /* memory only */ }
-    if (activeTab === 'sessions' && activeSub === 'board') {
-      history.replaceState(null, '', location.pathname + location.search + consoleContextHash({ route: 'sessions', session: id }));
-    }
-    if (changed) { resetSessionMemory(); sessionTimeline = []; }
-    renderNow(['sessions']);
-    if (window.matchMedia('(max-width: 900px)').matches) {
-      document.querySelector('#session-detail h3')?.focus({ preventScroll: true });
-    }
-    if (changed || (!sessionMemoryPage.rows.length && !sessionTimeline.length)) await loadSelectedSession(id);
-  };
-  window.showSessionList = function() {
-    // Capture the current reading position before narrow CSS hides detail.
-    renderNow(['sessions']);
-    sessionPane = 'list';
-    const panel = document.getElementById('session-board-panel');
-    if (panel) panel.dataset.pane = sessionPane;
-    const detail = document.getElementById('session-detail');
-    if (detail) detail._sessionReadingVisible = false;
-    const rail = document.getElementById('session-rail');
-    const scroll = rail?.scrollTop || 0;
-    const selected = Array.from(rail?.querySelectorAll('[data-action="select-session"]') || []).find(el => el.dataset.id === selectedSessionId);
-    const target = selected?.getClientRects().length ? selected : rail;
-    target?.focus({ preventScroll: true });
-    if (rail) rail.scrollTop = scroll;
-  };
-  window.jumpToLatestSession = function() {
-    const body = document.querySelector('#session-detail .session-detail-body');
-    if (body) body.scrollTop = body.scrollHeight;
-    const latest = document.querySelector('#session-detail [data-action="session-latest"]');
-    if (latest) latest.hidden = true;
-  };
-  window.showCurrentSessionStatus = function() {
-    if (sessionView === 'results') { window.setSessionView('memory').then(window.showCurrentSessionStatus); return; }
-    const body = document.querySelector('#session-detail .session-detail-body');
-    if (body) body.scrollTop = 0;
-    document.querySelector('#session-detail .sd-current-head h4')?.focus({ preventScroll: true });
-  };
-  window.setSessionView = async function(view) {
-    if (!['memory', 'trace', 'results'].includes(view)) return;
-    sessionView = view;
-    renderNow(['sessions']);
-    if (view === 'results' && selectedSessionId) {
-      await loadSessionOutcomes(selectedSessionId);
-    } else if (view === 'trace' && selectedSessionId) {
-      try { await loadSessionTimeline(selectedSessionId, true); } catch { /* trace retries on next activation */ }
-      renderNow(['sessions']);
-    } else if (view === 'memory' && selectedSessionId && !sessionMemoryPage.rows.length) {
-      await loadSessionMemory(selectedSessionId);
-    }
-  };
-  window.loadEarlierSessionMemory = function() {
-    if (selectedSessionId && sessionMemoryPage.has_earlier && sessionMemoryPage.next_cursor) {
-      return loadSessionMemory(selectedSessionId, sessionMemoryPage.next_cursor);
-    }
-  };
-
   // The drawer is shared by two views: the incident report (markdown, with a
   // Copy button) and the uninspected-egress drill-down (row actions, no
   // Copy). drawerMode tracks which one is open so action handlers can
@@ -3570,13 +3146,48 @@ document.addEventListener('DOMContentLoaded', () => {
   // Flags that come with a plan are kept so its action buttons work even when
   // the flag is outside the loaded list.
   const planFlagCache = new Map();
+  const planResponseCache = new Map();
+  const instructionRequests = new Map();
   const planPolls = new Map();
   const planSlots = subject => Array.from(document.querySelectorAll('.plan-slot'))
     .filter(el => el.dataset.planSubject === subject);
   function paintPlanSlots(subject, resp) {
     if (resp && resp.flag) planFlagCache.set(resp.flag.id, resp.flag);
-    planSlots(subject).forEach(el => { el.innerHTML = planHTML(resp); });
+    planResponseCache.set(subject, resp);
+    planSlots(subject).forEach(el => { el.innerHTML = planHTML(resp, undefined, instructionRequests.get(subject)); });
   }
+  window.applyAgentInstruction = async function(subject, revision) {
+    const resp = planResponseCache.get(subject);
+    const preview = resp?.instruction;
+    if (!preview?.ready || preview.applied || preview.revision !== revision || instructionRequests.get(subject)?.busy) return;
+    const state = { busy: true, error: '' };
+    instructionRequests.set(subject, state);
+    paintPlanSlots(subject, resp);
+    try {
+      const res = await apiFetch('/agent/instructions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject, revision })
+      });
+      if (!res.ok) throw new Error((await res.text()).trim() || 'Instruction update failed');
+      const result = await res.json();
+      if (!result?.applied || result.path !== preview.path || result.instruction !== preview.instruction) throw new Error('The update could not be confirmed; inspect the instruction file before retrying.');
+      const current = planResponseCache.get(subject);
+      if (current?.instruction?.path === preview.path && current.instruction.instruction === preview.instruction) {
+        current.instruction = { ...result, ready: true };
+      }
+      showToast('Safety rule applied to ' + result.path, 'success');
+    } catch (err) {
+      state.error = 'Could not confirm the update: ' + (err.message || err);
+      const current = planResponseCache.get(subject);
+      if (current?.instruction) current.instruction = { ...current.instruction, ready: false, reason: state.error };
+      // Refresh the file revision without automatically repeating a write.
+      await loadPlanSlot(subject);
+    } finally {
+      state.busy = false;
+      const current = planResponseCache.get(subject);
+      if (current) paintPlanSlots(subject, current);
+    }
+  };
   async function fetchPlan(subject) {
     const res = await apiFetch(`/advisor/plan?subject=${encodeURIComponent(subject)}`);
     if (!res.ok) throw new Error((await res.text()).trim() || 'no playbook');
@@ -3704,7 +3315,7 @@ document.addEventListener('DOMContentLoaded', () => {
       await window.selectSession(context.session);
     } else if (context.route) switchTab(context.route, { skipHash: true });
     if (!current()) return;
-    if (context.session && (selectedSessionId !== context.session || activeTab !== 'sessions' || activeSub !== 'board')) return;
+    if (context.session && (sessionWorkbench.selectedSessionId !== context.session || activeTab !== 'sessions' || activeSub !== 'board')) return;
     const hash = consoleContextHash(context);
     const returnToSession = () => {
       closeDrawer();
@@ -3726,13 +3337,13 @@ document.addEventListener('DOMContentLoaded', () => {
     history.replaceState(null, '', location.pathname + location.search + hash);
   }
 
-  // Permissions from one saved decision stay in its session. Reads and
+  // Permissions from one saved decision stay with their result. Reads and
   // confirmations are scoped to this drawer and authentication generation.
   let sessionPermissions = null;
-  function currentSessionPermissions(st) {
+  function currentDecisionPermissions(st) {
     return !!st && st === sessionPermissions && !sessionEnded && !drawer.hidden &&
       drawerMode === 'permissions' && st.seq === drawerSeq && st.auth === handoffGeneration &&
-      st.receipt.sessionID === selectedSessionId;
+      (st.origin !== 'session' || st.receipt.sessionID === sessionWorkbench.selectedSessionId);
   }
   function renderSessionPermissions(st) {
     const top = drawerBody.scrollTop;
@@ -3753,57 +3364,66 @@ document.addEventListener('DOMContentLoaded', () => {
     drawerBody.scrollTop = top;
   }
   window.SA.closeSessionPermissions = () => {
-    if (drawerMode === 'permissions') closeDrawer();
+    if (drawerMode === 'permissions' && sessionPermissions?.origin === 'session') closeDrawer();
   };
   window.SA.invalidateSessionPermissions = () => {
-    if (drawerMode !== 'permissions' || !sessionPermissions) return;
+    if (drawerMode !== 'permissions' || sessionPermissions?.origin !== 'session') return;
     Object.assign(sessionPermissions, { loading: false, busy: '', error: 'unavailable' });
     renderSessionPermissions(sessionPermissions);
   };
   window.openSessionPermissions = async function(reviewID, sessionID) {
-    const receipt = sessionPermissionReceipt(sessionOutcomes, reviewID, sessionID);
-    if (!drawer || !receipt || sessionID !== selectedSessionId || sessionEnded) return;
+    const receipt = sessionPermissionReceipt(sessionWorkbench.sessionOutcomes, reviewID, sessionID);
+    if (sessionID !== sessionWorkbench.selectedSessionId) return;
+    await openDecisionPermissions(receipt, 'session', { label: 'session result', reopen: closeDrawer });
+  };
+  window.openReviewResultPermissions = async function() {
+    if (!drawer || drawer.hidden || drawerMode !== 'review-result') return;
+    await openDecisionPermissions(reviewResultPermissionReceipt(drawerReviewResult), 'review-result', currentDrawerBack());
+  };
+  async function openDecisionPermissions(receipt, origin, back) {
+    if (!drawer || !receipt || sessionEnded) return;
     drawerMode = 'permissions';
     if (btnDrawerCopy) btnDrawerCopy.hidden = true;
     openDrawer({ title: 'Decision permissions', icon: 'doc',
-      back: { label: 'session result', reopen: closeDrawer },
+      back,
       onClose: () => { if (drawerMode === 'permissions') drawerMode = null; sessionPermissions = null; } });
-    sessionPermissions = { receipt, seq: drawerSeq, auth: handoffGeneration, rows: null,
+    sessionPermissions = { receipt, origin, seq: drawerSeq, auth: handoffGeneration, rows: null,
       loading: false, error: '', busy: '', mutationError: false, revoked: new Set() };
     btnDrawerClose?.focus({ preventScroll: true });
     await window.refreshSessionPermissions();
-  };
+  }
   window.refreshSessionPermissions = async function() {
     const st = sessionPermissions;
-    if (!currentSessionPermissions(st) || st.loading || st.busy) return;
+    if (!currentDecisionPermissions(st) || st.loading || st.busy) return;
     st.loading = true;
     renderSessionPermissions(st);
     try {
       const response = await apiFetch('/decision-scopes');
       if (!response.ok) throw new Error('Permissions unavailable');
       const rows = await response.json();
-      if (!validPermissionRecords(rows)) throw new Error('Invalid permission records');
-      if (!currentSessionPermissions(st)) return;
-      Object.assign(st, { rows: rows.filter(r => st.receipt.ids.includes(r.id)), error: '',
+      const viewRows = decisionPermissionRows(st.receipt, rows);
+      if (!currentDecisionPermissions(st)) return;
+      Object.assign(st, { rows: viewRows, error: '',
         mutationError: false, readAt: new Date().toISOString() });
     } catch {
-      if (!currentSessionPermissions(st)) return;
+      if (!currentDecisionPermissions(st)) return;
       st.error = 'unavailable';
     }
-    if (!currentSessionPermissions(st)) return;
+    if (!currentDecisionPermissions(st)) return;
     st.loading = false;
     renderSessionPermissions(st);
     window.saAnnounce(st.error ? 'Permission status unavailable. Last known records retained.' : 'Permission records loaded.');
   };
   window.revokeSessionPermission = async function(id) {
     const st = sessionPermissions;
-    if (!currentSessionPermissions(st) || st.loading || st.busy || st.error || st.mutationError || st.revoked.has(id)) return;
-    const record = st.rows?.find(r => r.id === id);
-    if (!st.receipt.ids.includes(id) || !record || !permissionApplicability(record).revoke) return;
+    if (!currentDecisionPermissions(st) || st.loading || st.busy || st.error || st.mutationError || st.revoked.has(id)) return;
+    const row = st.rows?.find(r => r.id === id);
+    if (!row?.revoke || !row.record) return;
+    const record = row.record;
     st.busy = id;
-    const consequence = record.operation === 'read-connect' ? 'Future matching activity is evaluated under remaining expectations and policies.' : 'Future guard requests are evaluated under remaining permissions and policies.';
+    const consequence = row.consequence;
     const confirmed = await window.saConfirm(`Revoke this saved scope for ${record.resource_path}${record.destination ? ' → ' + record.destination : ''}? ${consequence} This does not undo previous access or remediate past exposure.`, { title: 'Revoke permission', okLabel: 'Revoke permission' });
-    if (!currentSessionPermissions(st)) return;
+    if (!currentDecisionPermissions(st)) return;
     if (!confirmed) { st.busy = ''; renderSessionPermissions(st); return; }
     renderSessionPermissions(st);
     btnDrawerClose?.focus({ preventScroll: true });
@@ -3812,13 +3432,13 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!response.ok) throw new Error('Revocation unavailable');
       const result = await response.json();
       if (result?.revoked !== true || result.id !== id) throw new Error('Revocation confirmation unavailable');
-      if (!currentSessionPermissions(st)) return;
+      if (!currentDecisionPermissions(st)) return;
       st.revoked.add(id);
       st.busy = '';
       window.saAnnounce('Permission revocation saved. The original decision and remaining risk are retained.');
       await window.refreshSessionPermissions();
     } catch {
-      if (!currentSessionPermissions(st)) return;
+      if (!currentDecisionPermissions(st)) return;
       Object.assign(st, { busy: '', mutationError: true });
       renderSessionPermissions(st);
       window.saAnnounce('Revocation confirmation unavailable. Refresh permissions before retrying.');
@@ -3872,7 +3492,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // it never replays a decision or process-control action.
   let sessionInvestigation = null;
   let sessionReturnSequence = 0;
-  const validSessionReturn = st => !!st && !sessionEnded && st.auth === handoffGeneration && st.session === selectedSessionId;
+  const validSessionReturn = st => !!st && !sessionEnded && st.auth === handoffGeneration && st.session === sessionWorkbench.selectedSessionId;
   function applySessionEventFilters(saved) {
     if (!saved) return;
     Object.assign(filters.events, saved);
@@ -3882,8 +3502,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
   function captureSessionReturn(el) {
-    if (sessionEnded || activeTab !== 'sessions' || activeSub !== 'board' || !selectedSessionId || !el?.closest('#session-detail')) return null;
-    return { id: ++sessionReturnSequence, session: selectedSessionId, view: sessionView, auth: handoffGeneration,
+    if (sessionEnded || activeTab !== 'sessions' || activeSub !== 'board' || !sessionWorkbench.selectedSessionId || !el?.closest('#session-detail')) return null;
+    return { id: ++sessionReturnSequence, session: sessionWorkbench.selectedSessionId, view: sessionWorkbench.sessionView, auth: handoffGeneration,
       detailTop: document.querySelector('#session-detail .session-detail-body')?.scrollTop || 0,
       railTop: document.querySelector('#session-rail')?.scrollTop || 0, pageY: window.scrollY || 0,
       opener: el, target: { ...el.dataset },
@@ -3898,7 +3518,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     closeDrawer();
     if (sessionInvestigation?.id === st.id) sessionInvestigation.active = false;
-    sessionView = st.view;
+    sessionWorkbench.restoreView(st.view);
     timelineSession = st.scope.session; timelinePids = st.scope.pids; timelinePidLabel = st.scope.label;
     applySessionEventFilters(st.scope.events);
     syncHistoryViews();
@@ -3950,14 +3570,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (drawerBack?.sessionReturn) closeDrawer();
   };
   window.openSessionFindings = function(id, el) {
-    const st = id === selectedSessionId ? captureSessionReturn(el) : null;
+    const st = id === sessionWorkbench.selectedSessionId ? captureSessionReturn(el) : null;
     if (beginSessionInvestigation(st, { route: 'home', group: 'findings', session: id, pids: null, label: '' })) return;
     timelineSession = id; timelinePids = null; timelinePidLabel = ''; suppressFreshOnce = true;
     syncHistoryViews();
     paintScopeBar(); switchTab('home', { group: 'findings' }); fetchTelemetry();
   };
   window.openSessionEvents = function(id, el) {
-    const st = id === selectedSessionId ? captureSessionReturn(el) : null;
+    const st = id === sessionWorkbench.selectedSessionId ? captureSessionReturn(el) : null;
     if (beginSessionInvestigation(st, { route: 'events', session: id, pids: null, label: '' })) return;
     timelineSession = id; timelinePids = null; timelinePidLabel = ''; suppressFreshOnce = true;
     syncHistoryViews();
@@ -3990,14 +3610,21 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (marker.part === 'evidence') showSessionInvestigation(st);
   });
 
-  // The open drawer as a way back to it. reopen re-runs its opener (with the
-  // back it had), so the previous drawer renders from live data, never from
-  // stale HTML. The policy editor has none: reopening would drop its draft.
+  // The open drawer as a way back to it. Reopening refreshes live evidence
+  // readers; saved results retain the evidence belonging to their decision.
+  // The policy editor has no back target because reopening would drop its draft.
   function currentDrawerBack() {
     if (!drawer || drawer.hidden) return null;
     const back = drawerBack || undefined;
     const wrap = target => ({ ...target, sessionReturn: back?.sessionReturn, attentionOrigin: attentionSelection || back?.attentionOrigin });
     switch (drawerMode) {
+      case 'review-result': {
+        const result = drawerReviewResult;
+        const auth = handoffGeneration;
+        return result ? wrap({ label: 'Review result', reopen: () => {
+          if (auth === handoffGeneration) window.openReviewResult(result);
+        } }) : null;
+      }
       case 'attention': {
         const key = attentionSelection?.key;
         return wrap({ label: 'Needs you', reopen: () => selectAttention(key) });
@@ -4099,7 +3726,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!res.ok) throw new Error(await res.text());
       revert.commit?.();
       showToast(decision === 'dismiss' ? 'Session kept running for the cooldown window.' : decision === 'resume' ? 'Session resumed.' : 'Intervention applied.', 'success');
-      cardNote('', '', activeTab === 'sessions' && activeSub === 'resources' ? 'resource-board' : 'attention-list', decision === 'dismiss' ? 'kept running' : decision === 'resume' ? 'resumed' : 'applied');
+      cardNote('', '', activeTab === 'system' && activeSystemSub === 'resources' ? 'resource-board' : 'attention-list', decision === 'dismiss' ? 'kept running' : decision === 'resume' ? 'resumed' : 'applied');
       fetchTelemetry({ slow: true });
     } catch (err) {
       revert();
@@ -4112,7 +3739,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const action = verdict === 'allow'
       ? (scope === 'always' ? 'allow every future path matched by this rule' : scope === 'session' ? 'allow this file and tool in this session until it ends' : scope === 'exact' ? `allow this file and tool in this workspace for ${expiry === '7d' ? '7 days' : '24 hours'}` : 'allow this request once')
       : (scope === 'always' ? 'deny every future path matched by this rule' : 'deny this request once');
-    if (scope !== 'once' && !await saConfirm(`Apply guard decision: ${action}? Executable identity uses its observed path. File approvals do not authorize network access. Revoke in Policies.`, { title: 'Guard decision', okLabel: 'Apply' })) return;
+    if (scope !== 'once' && !await saConfirm(`Apply guard decision: ${action}? Executable identity uses its observed path. File approvals do not authorize network access. Revoke under Protection → Rules & permissions.`, { title: 'Guard decision', okLabel: 'Apply' })) return;
     const revert = stage(['guardPending', 'posture'], ['attention', 'posture', 'tab-badges'], () => {
       telemetryData.guardPending = (telemetryData.guardPending || []).filter(x => x.id !== id);
       mapAttentionItems(it => (it.kind === 'guard' && it.id === id ? null : it));
@@ -4128,7 +3755,7 @@ document.addEventListener('DOMContentLoaded', () => {
       revert.commit?.();
       showToast(`Guard decision saved: ${action}.`, 'success');
       cardNote('', '', 'attention-list', verdict === 'allow' ? 'allowed' : 'denied');
-      if (selectedSessionId) loadSessionOverview(selectedSessionId);
+      if (sessionWorkbench.selectedSessionId) sessionWorkbench.refresh('overview');
       fetchTelemetry({ slow: false });
     } catch (err) {
       revert();
@@ -4332,70 +3959,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (ok) list.forEach(host => cardNote(allowRowSel(agent, host), '.mute-row', 'firewall-container', 'allowlisted'));
     refillUninspected();
   };
-
-  function clearProtectionContext() {
-    if (!protectionContext) return;
-    protectionContext = null;
-    protectionContextGeneration++;
-    markDirty('expected-egress', 'recurring-egress');
-  }
-
-  function focusProtectionContext(context) {
-    const rules = context.phase === 'rules';
-    const container = document.getElementById(rules ? 'expected-egress-container' : 'recurring-egress-container');
-    const attr = rules ? 'expectedEgressRule' : 'egressEpisodeId';
-    const id = rules ? context.ruleId : context.episodeId;
-    const target = [...(container?.querySelectorAll(rules ? '[data-expected-egress-rule]' : '[data-egress-episode-id]') || [])].find(node => node.dataset[attr] === id);
-    const node = target || container?.querySelector('.protection-context');
-    if (node) {
-      node.focus({preventScroll:true});
-      node.scrollIntoView({behavior:'auto',block:'center'});
-    }
-    return node;
-  }
-
-  async function viewEgressExpectation(ruleId, episodeId) {
-    if (sessionEnded || typeof ruleId !== 'string' || !ruleId || typeof episodeId !== 'string' || !episodeId) return;
-    const generation = ++protectionContextGeneration;
-    const context = {ruleId,episodeId,phase:'rules',status:'loading',generation};
-    protectionContext = context;
-    const auth = handoffGeneration;
-    const ownsContext = () => !sessionEnded && protectionContext === context && generation === protectionContextGeneration && auth === handoffGeneration;
-    const found = (telemetryData.expectedEgress || []).some(rule => rule.id === ruleId && !rule.revoked_at);
-    if (found) context.status = 'ready';
-    switchTab('protection/rules', {keepProtectionContext:true});
-    renderNow(['expected-egress']);
-    const initialFocus = focusProtectionContext(context);
-    if (found) return;
-    const readGen = ++expectedEgressReadGen;
-    try {
-      const res = await apiFetch('/expected-egress');
-      if (!ownsContext()) return;
-      if (!res.ok) throw new Error('Expectation read failed');
-      const report = await res.json();
-      if (!ownsContext()) return;
-      if (!isConsoleReport('expected egress', report)) throw new Error('Invalid expectation response');
-      if (readGen === expectedEgressReadGen) telemetryData.expectedEgress = report.rules || [];
-      context.status = 'ready';
-    } catch {
-      if (!ownsContext()) return;
-      context.status = readGen === expectedEgressReadGen ? 'error' : 'ready';
-    }
-    if (!ownsContext()) return;
-    const retainFocus = document.activeElement === initialFocus;
-    renderNow(['expected-egress']);
-    if (retainFocus) focusProtectionContext(context);
-  }
-
-  function backToEgressContext() {
-    if (!protectionContext || sessionEnded) return;
-    protectionContext.phase = 'traffic';
-    protectionContext.status = 'ready';
-    protectionContext.generation = ++protectionContextGeneration;
-    switchTab('protection/traffic', {keepProtectionContext:true});
-    renderNow(['recurring-egress']);
-    focusProtectionContext(protectionContext);
-  }
 
   async function saveExpectedEgress(episodeId, kind) {
     if (!['destination', 'scope'].includes(kind)) return;
@@ -4981,7 +4544,7 @@ document.addEventListener('DOMContentLoaded', () => {
     switchTab('sessions');
     fetchTelemetry({ slow: false });
     await window.selectSession(sid);
-    if (selectedSessionId !== sid) return;
+    if (sessionWorkbench.selectedSessionId !== sid) return;
     renderNow(['sessions']);
     const card = document.querySelector(`#session-rail [data-action="select-session"][data-id="${cssq(sid)}"]`);
     if (card && card.scrollIntoView) {
@@ -5254,6 +4817,10 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         window.askAdvisorPlan(d.subject);
         break;
+      case 'apply-agent-instruction':
+        e.preventDefault();
+        window.applyAgentInstruction(d.subject, d.revision);
+        break;
       case 'mark-label':
         e.preventDefault();
         window.markLabel(d.subject, d.label);
@@ -5271,7 +4838,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'session-current':
         window.filterTimelineToSession(d.session).then(() => {
-          if (selectedSessionId === d.session) window.showCurrentSessionStatus();
+          if (sessionWorkbench.selectedSessionId === d.session) window.showCurrentSessionStatus();
         });
         break;
       case 'session-status':
@@ -5303,6 +4870,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'show-more':
         e.preventDefault();
+        if (d.key === 'spend' && expandSpendDayRepositories(el)) break;
         expandedLists.add(d.key || '');
         if (d.key === 'events') renderNow(['events']);
         else if (String(d.key).startsWith('agents:')) renderNow(['agents']);
@@ -5377,16 +4945,16 @@ document.addEventListener('DOMContentLoaded', () => {
         window.loadEarlierSessionMemory();
         break;
       case 'memory-retry':
-        if (selectedSessionId) loadSessionMemory(selectedSessionId);
+        if (sessionWorkbench.selectedSessionId) sessionWorkbench.refresh('memory');
         break;
       case 'trace-retry':
         window.retrySessionTrace();
         break;
       case 'session-overview-retry':
-        if (selectedSessionId) loadSessionOverview(selectedSessionId);
+        if (sessionWorkbench.selectedSessionId) sessionWorkbench.refresh('overview');
         break;
       case 'session-outcomes-retry':
-        if (selectedSessionId) loadSessionOutcomes(selectedSessionId);
+        if (sessionWorkbench.selectedSessionId) sessionWorkbench.refresh('results');
         break;
       case 'session-permissions':
         window.openSessionPermissions(d.review, d.session);
@@ -5414,11 +4982,11 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'toggle-ended-sessions':
         endedSessionsOpen[d.harness] = !endedSessionsOpen[d.harness];
-        renderSessionBoard();
+        sessionWorkbench.render();
         break;
       case 'toggle-session-dup':
         sessionDupOpen[(d.bucket ? d.bucket + '|' : '') + d.key] = el.getAttribute('aria-expanded') !== 'true';
-        renderSessionBoard();
+        sessionWorkbench.render();
         break;
       case 'toggle-family-dup':
         familyDupOpen[d.key] = el.getAttribute('aria-expanded') !== 'true';
@@ -5453,6 +5021,19 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'review-decision':
         window.reviewAct(d.id, Number(d.revision), d.decision, d.scope ? {kind:d.scope,...(d.expiry ? {expiry:d.expiry} : {})} : undefined);
+        break;
+      case 'open-review-result':
+        e.preventDefault();
+        window.openReviewResult();
+        break;
+      case 'open-review-result-permissions':
+        e.preventDefault();
+        window.openReviewResultPermissions();
+        break;
+      case 'dismiss-review-result':
+        e.preventDefault();
+        window.dismissReviewResult();
+        document.querySelector('.tab-btn[data-tab="home"]')?.focus({ preventScroll: true });
         break;
       case 'revoke-scope':
         window.revokeScope(d.id);
@@ -5782,8 +5363,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Notification rules live in the Policy tab (the header bell is a link to
-  // it); the panel keeps the popover's element ids.
+  // Notification rules live in Protection → Rules & permissions (the header
+  // bell is a link to it); the panel keeps the popover's element ids.
   const notifyPop = document.getElementById('notify-pop');
   if (notifyPop) {
     notifyPop.addEventListener('change', async (e) => {
@@ -5844,10 +5425,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (!isEventsFiltered()) telemetryData.eventsView = telemetryData.events;
           if (e.kind === 9) flashFirewallPanel(); // proxy-hit
           // Trace continues to follow event deltas while visible.
-          if (selectedSessionId && e.session_id === selectedSessionId) {
-            if (sessionView === 'trace') loadSessionTimeline(selectedSessionId).then(() => markDirty('sessions'));
-            else if (sessionView === 'memory' && Date.now() - sessionMemoryAt >= 2000) loadSessionMemory(selectedSessionId);
-          }
+          sessionWorkbench.activity(e);
         } catch { sparkBump(1, 0); /* unparseable frame still counts */ }
         markDirty('events');
       },

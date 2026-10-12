@@ -16,6 +16,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/playbook"
+	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 )
 
 // PlanFuncs connect /advisor/plan to the current advisor. A nil PlanFuncs
@@ -39,9 +40,10 @@ type PlanResponse struct {
 	Flag *model.Flag `json:"flag,omitempty"`
 	// Labels: the operator's earlier judgments on cases like this one and
 	// the suggestion they earn.
-	Labels       *model.LabelContext `json:"labels,omitempty"`
-	AdvisorReady bool                `json:"advisor_ready"`
-	Reason       string              `json:"reason,omitempty"`
+	Labels       *model.LabelContext          `json:"labels,omitempty"`
+	AdvisorReady bool                         `json:"advisor_ready"`
+	Reason       string                       `json:"reason,omitempty"`
+	Instruction  *sysagent.InstructionPreview `json:"instruction,omitempty"`
 }
 
 // Plan context bounds.
@@ -86,7 +88,7 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 		t.flag = &f
 		t.path = flagEvidencePath(f)
 	case "incident":
-		inc, err := a.store.GetIncident(id)
+		inc, err := a.store.GetIncidentDetail(id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return planTarget{}, false, nil
 		}
@@ -96,7 +98,7 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 		if inc == nil {
 			return planTarget{}, false, nil
 		}
-		t.incident = inc
+		t.incident = &inc.IncidentReport
 		if inc.FlagID != "" {
 			f, ok, err := a.store.GetFlagResult(inc.FlagID)
 			if err != nil {
@@ -147,12 +149,12 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 				}
 			}
 			if f.Kind == "incident" && t.incident == nil {
-				inc, err := a.store.GetIncident(f.ID)
+				inc, err := a.store.GetIncidentDetail(f.ID)
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
 					return planTarget{}, false, err
 				}
 				if inc != nil {
-					t.incident = inc
+					t.incident = &inc.IncidentReport
 				}
 			}
 		}
@@ -247,6 +249,7 @@ func (a *API) planSubject(w http.ResponseWriter, subject string) (planTarget, Pl
 		return planTarget{}, PlanResponse{}, false
 	}
 	resp.Labels = labels
+	resp.Instruction = a.planInstruction(t)
 	return t, resp, true
 }
 

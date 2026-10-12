@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ func TestEgressEpisodeRecurrenceAndScope(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rows := s.ListEgressEpisodes(10)
+	rows := testutil.Read[[]EgressEpisode](t)(s.ListEgressEpisodes(10))
 	if len(rows) != 2 {
 		t.Fatalf("episodes=%+v", rows)
 	}
@@ -48,7 +49,7 @@ func TestEgressEpisodeRecurrenceAndScope(t *testing.T) {
 	if err := s.RecordEgressObservationForTest(EgressObservation{Scope: scope, SessionID: "two", Host: "203.0.113.1", Protocol: "tcp", Port: 443, At: base.Add(5 * 30 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	rows = s.ListEgressEpisodes(10)
+	rows = testutil.Read[[]EgressEpisode](t)(s.ListEgressEpisodes(10))
 	for _, row := range rows {
 		if row.ID == spaced.ID && (row.Count != 6 || len(row.SessionIDs) != 2) {
 			t.Fatalf("continued=%+v", row)
@@ -57,7 +58,7 @@ func TestEgressEpisodeRecurrenceAndScope(t *testing.T) {
 	if err := s.RecordEgressObservationForTest(EgressObservation{Scope: EgressScope{Agent: "claude"}, Host: "203.0.113.3", Protocol: "tcp", Port: 443, At: base}); err != nil {
 		t.Fatal(err)
 	}
-	for _, row := range s.ListEgressEpisodes(10) {
+	for _, row := range testutil.Read[[]EgressEpisode](t)(s.ListEgressEpisodes(10)) {
 		if row.Host == "203.0.113.3" && row.ScopeComplete {
 			t.Fatalf("incomplete scope marked complete: %+v", row)
 		}
@@ -83,11 +84,11 @@ func TestEgressEpisodePersistenceAndBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	rows := s.ListEgressEpisodes(10)
+	rows := testutil.Read[[]EgressEpisode](t)(s.ListEgressEpisodes(10))
 	if len(rows) != 1 || rows[0].Count != 30 || len(rows[0].Intervals) > 16 || len(rows[0].SessionIDs) > 8 {
 		t.Fatalf("bounds/persistence=%+v", rows)
 	}
-	if len(s.ListEgressEpisodes(10000)) > 500 {
+	if len(testutil.Read[[]EgressEpisode](t)(s.ListEgressEpisodes(10000))) > 500 {
 		t.Fatal("query cap not enforced")
 	}
 }
@@ -133,7 +134,7 @@ func TestEgressEpisodeRetentionAndStorageCap(t *testing.T) {
 	if _, err := s.db.Exec(`UPDATE egress_episodes SET last_seen_ns=?`, now.Add(-8*24*time.Hour).UnixNano()); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.ListEgressEpisodes(10); len(got) != 0 {
+	if got := testutil.Read[[]EgressEpisode](t)(s.ListEgressEpisodes(10)); len(got) != 0 {
 		t.Fatalf("expired rows visible: %+v", got)
 	}
 }
@@ -180,7 +181,7 @@ func TestEgressObservationSurvivesConcurrentWriters(t *testing.T) {
 	if len(locked) > 0 {
 		t.Fatalf("%d of %d observations failed on a lock beside concurrent writers; first: %v", len(locked), n, locked[0])
 	}
-	eps := s.ListEgressEpisodes(10)
+	eps := testutil.Read[[]EgressEpisode](t)(s.ListEgressEpisodes(10))
 	if len(eps) != 1 || eps[0].Count != n {
 		t.Fatalf("episodes = %+v, want one with count %d", eps, n)
 	}
@@ -208,7 +209,7 @@ func TestEgressObservationDeadlineIsProductionOnly(t *testing.T) {
 	if err := stall(s.RecordEgressObservationForTest); err != nil {
 		t.Fatalf("fixture write behind a 300 ms stall = %v, want nil", err)
 	}
-	if eps := s.ListEgressEpisodes(10); len(eps) != 1 || eps[0].Count != 1 {
+	if eps := testutil.Read[[]EgressEpisode](t)(s.ListEgressEpisodes(10)); len(eps) != 1 || eps[0].Count != 1 {
 		t.Fatalf("episodes = %+v, want one with count 1", eps)
 	}
 }

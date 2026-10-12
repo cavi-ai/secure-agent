@@ -48,13 +48,15 @@ const (
 		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0)
 		FROM flags WHERE rule = ? AND agent = ?`
-	// reattributeFlagsSQL seeks idx_flags_pid.
-	reattributeFlagsSQL = `UPDATE flags SET agent = ? WHERE pid = ? AND agent LIKE 'untagged:%' AND datetime(ts) >= datetime(?)`
 	// hostFirstSeenSQL seeks idx_events_host; the advisor runs it for each
 	// flag, host and egress episode it triages. The partial index is usable
 	// only when the statement repeats the index's empty-host exclusion.
 	hostFirstSeenSQL = `SELECT MIN(ts) FROM events WHERE remote_host = ? AND remote_host != ''`
 )
+
+// reattributeFlagsSQL seeks idx_flags_pid. Numbered parameters reuse the cutoff
+// throughout its timestamp normalization without duplicating bound values.
+var reattributeFlagsSQL = `UPDATE flags SET agent = ?1 WHERE pid = ?2 AND agent LIKE 'untagged:%' AND ` + timestampOrderExpr("ts") + ` >= ` + timestampOrderExpr("?3")
 
 // Flag retention and lists share full timestamp precision and identity ties.
 var trimFlagsSQL = `DELETE FROM flags WHERE rowid IN (
@@ -665,8 +667,8 @@ func kindBudget(kind int) int {
 
 // FlagFilter narrows a flag history query. A zero value returns the most recent
 // flags — RecentFlags is exactly that. Since is any RFC3339 timestamp (any
-// offset); it is compared with SQLite's datetime() so stored local-offset
-// stamps and a UTC bound normalize to the same instant.
+// offset); stored timestamps and the bound are normalized to UTC with full
+// nanosecond precision before comparison.
 type FlagFilter struct {
 	Agent       string // exact match; empty = any
 	Rule        string // exact match; empty = any
@@ -681,6 +683,7 @@ type FlagFilter struct {
 
 // EventFilter narrows an event history query. Kind is a pointer because kind 0
 // (KindFileOpen) is a valid filter value distinct from "not set".
+// Since and Until are inclusive RFC3339 bounds, compared at nanosecond precision.
 type EventFilter struct {
 	Kind       *int   // exact kind; nil = any
 	PID        int32  // exact pid; 0 = any
@@ -689,10 +692,6 @@ type EventFilter struct {
 	Since      string // ts >= this; empty = any
 	Until      string // ts <= this; empty = any
 	Limit      int    // 0 = 50
-}
-
-func (s *Store) RecentFlags(limit int) []model.Flag {
-	return s.QueryFlags(FlagFilter{Limit: limit})
 }
 
 // GetFlag fetches one flag by ID (for the re-triage endpoint). Absent ID →
@@ -907,9 +906,9 @@ func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
 	defer s.mu.Unlock()
 	res, err := s.db.Exec(
 		`UPDATE flags SET repeats = COALESCE(repeats, 0) + 1,
-		 last_seen = CASE WHEN last_seen IS NULL OR datetime(last_seen) < datetime(?) THEN ? ELSE last_seen END
-		 WHERE id = ?`,
-		at.UTC().Format(time.RFC3339Nano), at.UTC().Format(time.RFC3339Nano), id)
+		 last_seen = CASE WHEN last_seen IS NULL OR `+timestampOrderExpr("last_seen")+` < `+timestampOrderExpr(":repeat_at")+` THEN :repeat_at ELSE last_seen END
+		 WHERE id = :flag_id`,
+		sql.Named("repeat_at", at.UTC().Format(time.RFC3339Nano)), sql.Named("flag_id", id))
 	if err != nil {
 		log.Printf("store: flag repeat %s: %v", id, err)
 		return false
@@ -922,11 +921,6 @@ func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
 		}
 	}
 	return n == 1
-}
-
-func (s *Store) GetFlag(id string) (model.Flag, bool) {
-	fl, found, _ := s.GetFlagResult(id)
-	return fl, found
 }
 
 // GetFlagResult distinguishes a missing row from an unavailable or malformed
@@ -964,7 +958,10 @@ func (s *Store) getFlagResultLocked(id string) (flag model.Flag, found bool, rea
 // a flag delta publishes (wire.go), so a verdict that lands after the flag
 // itself can be re-pushed with the same fields the popover already renders.
 func (s *Store) GetFlagWithAdvisor(id string) (model.Flag, bool) {
-	fl, ok := s.GetFlag(id)
+	fl, ok, err := s.GetFlagResult(id)
+	if err != nil {
+		return model.Flag{}, false
+	}
 	if !ok {
 		return fl, false
 	}
@@ -998,8 +995,8 @@ func flagQuery(f FlagFilter) (string, []any) {
 		args = append(args, f.MinSeverity)
 	}
 	if f.Since != "" {
-		q += " AND datetime(ts) >= datetime(?)"
-		args = append(args, f.Since)
+		q += " AND " + timestampOrderExpr("ts") + " >= " + timestampOrderExpr(":flag_since")
+		args = append(args, sql.Named("flag_since", f.Since))
 	}
 	if f.Unacted {
 		q += " AND (acknowledged IS NULL OR acknowledged = '')"
@@ -1010,11 +1007,6 @@ func flagQuery(f FlagFilter) (string, []any) {
 	q += " ORDER BY " + timestampOrderExpr("ts") + " DESC, id DESC LIMIT ?"
 	args = append(args, flagLimit(f.Limit))
 	return q, args
-}
-
-func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
-	flags, _ := s.QueryFlagsResult(f)
-	return flags
 }
 
 // QueryFlagsResult never returns partial flags after a query, decode or
@@ -1302,10 +1294,6 @@ func (s *Store) advisorVerdictResultLocked(subjectID, kind string) (model.Adviso
 	return v, true, nil
 }
 
-func (s *Store) RecentEvents(limit int) []event.Event {
-	return s.QueryEvents(EventFilter{Limit: limit})
-}
-
 // eventQuery builds QueryEvents' statement. A host filter repeats the index's
 // empty-host exclusion so it seeks idx_events_host.
 func eventQuery(f EventFilter) (string, []any) {
@@ -1341,21 +1329,16 @@ func eventRecordQuery(f EventFilter, withID bool, beforeID int64) (string, []any
 		args = append(args, f.RemoteHost)
 	}
 	if f.Since != "" {
-		q += " AND datetime(ts) >= datetime(?)"
-		args = append(args, f.Since)
+		q += " AND " + timestampOrderExpr("ts") + " >= " + timestampOrderExpr(":event_since")
+		args = append(args, sql.Named("event_since", f.Since))
 	}
 	if f.Until != "" {
-		q += " AND datetime(ts) <= datetime(?)"
-		args = append(args, f.Until)
+		q += " AND " + timestampOrderExpr("ts") + " <= " + timestampOrderExpr(":event_until")
+		args = append(args, sql.Named("event_until", f.Until))
 	}
 	q += " ORDER BY id DESC LIMIT ?"
 	args = append(args, normalizeLimit(f.Limit))
 	return q, args
-}
-
-func (s *Store) QueryEvents(f EventFilter) []event.Event {
-	rows, _ := s.QueryEventsResult(f)
-	return rows
 }
 
 // QueryEventsResult distinguishes a successful empty history from failed or
@@ -1480,14 +1463,6 @@ func nullFloat(f float64) any {
 	return f
 }
 
-// CriticalFlagsMissingAdvisor returns recent severity-3 flags that have no
-// advisor verdict yet — the backfill set for when the advisor is enabled
-// after flags already fired. Bounded by limit.
-func (s *Store) CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.Flag {
-	flags, _ := s.CriticalFlagsMissingAdvisorResult(since, limit)
-	return flags
-}
-
 // CriticalFlagsMissingAdvisorResult rejects failed reads without returning a
 // partial backfill. Nullable legacy metadata is decoded like other flag reads.
 func (s *Store) CriticalFlagsMissingAdvisorResult(since time.Time, limit int) (flags []model.Flag, readErr error) {
@@ -1530,12 +1505,6 @@ func (s *Store) LastEventTimes(pids []int32) map[int32]string {
 		}
 	}
 	return out
-}
-
-// AdvisorVerdictFor fetches one stored verdict (public read; absent = false).
-func (s *Store) AdvisorVerdictFor(subjectID, kind string) (model.AdvisorVerdict, bool) {
-	v, found, _ := s.AdvisorVerdictResultFor(subjectID, kind)
-	return v, found
 }
 
 // AdvisorVerdictResultFor distinguishes absent advice from unavailable or

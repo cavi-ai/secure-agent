@@ -168,6 +168,7 @@ var Table = []Route{
 	{Path: "/agent/recommendations", Handler: "API.handleAgentRecommendations", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/agent/worktree", Handler: "API.handleAgentWorktree", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/agent/actions", Handler: "API.handleAgentActions", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/agent/instructions", Handler: "API.handleAgentInstructions", Response: "sysagent.InstructionPreview", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/agent/plans", Handler: "API.handleAgentPlans", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
 	{Path: "/agent/dispatch", Handler: "API.handleAgentDispatch", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/agent/runs", Handler: "API.handleAgentRuns", Console: true, NoAgent: true},

@@ -49,7 +49,7 @@ func TestExpectedEgressReadFailureAndRecovery(t *testing.T) {
 			if err := st.RevokeExpectedEgressRule(revoked.ID); err != nil {
 				t.Fatal(err)
 			}
-			mux := newTestAPI("", st, nil, nil).buildMux()
+			mux := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil}).buildMux()
 			get := func(path string) *httptest.ResponseRecorder {
 				w := httptest.NewRecorder()
 				mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
@@ -149,7 +149,7 @@ func TestExpectedEgressReadFailureAndRecovery(t *testing.T) {
 
 func TestExpectedEgressReadsEmptyAndClosedStore(t *testing.T) {
 	st := testStore(t)
-	mux := newTestAPI("", st, nil, nil).buildMux()
+	mux := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil}).buildMux()
 	for _, closed := range []bool{false, true} {
 		if closed {
 			st.Close()

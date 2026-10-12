@@ -573,8 +573,16 @@ function renderChartMemory() {
 // unpriced calls are counted, never priced. While the daemon recomputes an
 // old report it answered from its usage cache (spendUpdating), the card head
 // says so and the tile's line ends "updating".
+function syncSpendDayGuidance() {
+  const guidance = document.getElementById('spend-day-guidance');
+  const showDayGuidance = document.getElementById('spend-by')?.value === 'day';
+  if (guidance) guidance.hidden = !showDayGuidance;
+  return showDayGuidance;
+}
+
 function renderSpend() {
   const SA = window.SA;
+  const showDayGuidance = syncSpendDayGuidance();
   const report = SA.t.costs;
   const total = (report && report.total) || {};
   const num = document.getElementById('count-spend');
@@ -620,8 +628,12 @@ function renderSpend() {
   const cls = day ? 'spend-bars' : 'spend-list';
   let wrap = body.firstElementChild;
   if (!wrap || body.childElementCount !== (day ? 2 : 1) || wrap.className !== cls) {
-    body.innerHTML = `<div class="${cls}"></div>${day ? '<div class="spend-day-inspector"></div>' : ''}`;
+    body.innerHTML = `<div class="${cls}"${day ? ' role="group" aria-label="Daily usage dates" aria-describedby="spend-day-guidance"' : ''}></div>${day ? '<div class="spend-day-inspector"></div>' : ''}`;
     wrap = body.firstElementChild;
+  }
+  if (day) {
+    if (showDayGuidance) wrap.setAttribute('aria-describedby', 'spend-day-guidance');
+    else wrap.removeAttribute('aria-describedby');
   }
   const left = wrap.scrollLeft;
   const focusedDay = wrap.contains(document.activeElement) ? document.activeElement.dataset.day : null;
@@ -633,13 +645,27 @@ function renderSpend() {
     const inspector = wrap.nextElementSibling;
     const selected = rows.find(row => row.key === SA.t.spendDay);
     const html = selected ? spendDayDetailHTML(selected, card, SA.t.costsCardTZ, SA.t.spendDayReport, SA.t.spendDayRefresh, SA.expanded) : '';
-    if (inspector._saMarkup !== html) {
-      const resetFocused = inspector.contains(document.activeElement) && document.activeElement.dataset.action === 'reset-spend-day';
-      inspector.innerHTML = html;
-      inspector._saMarkup = html;
-      if (resetFocused) inspector.querySelector('[data-action="reset-spend-day"]')?.focus({ preventScroll: true });
-    }
+    patchSpendDayInspector(inspector, html);
   }
+}
+
+// A refreshed breakdown may replace or reorder its rows. Restore only focus
+// already owned by this inspector, using repository identity rather than position.
+function patchSpendDayInspector(inspector, html) {
+  if (inspector._saMarkup === html) return;
+  const active = document.activeElement;
+  const owned = inspector.contains(active);
+  const repo = owned ? active.closest('[data-spend-repo]')?.dataset.spendRepo : undefined;
+  const action = owned ? active.dataset.action : undefined;
+  inspector.innerHTML = html;
+  inspector._saMarkup = html;
+  if (!owned) return;
+  const rows = Array.from(inspector.querySelectorAll('[data-spend-repo]'));
+  const target = repo !== undefined ? rows.find(node => node.dataset.spendRepo === repo)
+    : Array.from(inspector.querySelectorAll('[data-action]')).find(node => node.dataset.action === action);
+  (target || inspector.querySelector('[data-action="reset-spend-day"]')
+    || document.querySelector('[data-action="select-spend-day"][aria-pressed="true"]')
+    || document.querySelector('[data-action="select-spend-day"]'))?.focus({ preventScroll: true });
 }
 
 // Match the server's fixed-offset day buckets, including truncated boundary
@@ -689,7 +715,7 @@ function spendDayDetailHTML(row, card, tz, report, state, expanded) {
     : state.loading || (matching && report.refreshing) ? (available ? spendCacheText([report]) || 'Refreshing day breakdown…' : 'Loading day breakdown…')
     : !available ? 'Day breakdown unavailable.' : '';
   const rows = available && Array.isArray(report.rows) ? report.rows : [];
-  const breakdown = available ? `<h4>By repository</h4><div class="spend-list">${spendListItems(rows, 8, { by: 'repo', expanded }).map(item => item.html).join('') || '<p>No model calls recorded for this day.</p>'}</div>` : '';
+  const breakdown = available ? `<h4>By repository</h4><div class="spend-list">${spendListItems(rows, 8, { by: 'repo', expanded, dayDetail: true }).map(item => item.html).join('') || '<p>No model calls recorded for this day.</p>'}</div>` : '';
   return `<section class="spend-day-detail" aria-label="Selected day usage">
     <div class="spend-day-detail-head"><h3>${escapeHTML(row.key)}</h3><button type="button" class="btn btn-ghost btn-sm" data-action="reset-spend-day">Clear selection</button></div>
     <p class="spend-day-range">${escapeHTML(spendDayRangeText(row.key, range))}</p>
@@ -786,7 +812,9 @@ function spendListItems(rows, n, opts) {
   const row = r => {
     const calls = Number(r.calls) || 0;
     const unknown = opts.by === 'provider' && r.key === '(unknown)';
-    return `<div class="spend-row">
+    const label = [r.key, spendRowCost(r), spendHintText(r), Number(r.local_calls) ? `${Number(r.local_calls)} local` : ''].filter(Boolean).join(' · ');
+    const focus = opts.dayDetail ? ` data-spend-repo="${escapeHTML(r.key)}" tabindex="-1" role="group" aria-label="${escapeHTML(label)}"` : '';
+    return `<div class="spend-row"${focus}>
       <span class="spend-key" title="${escapeHTML(r.key)}">${escapeHTML(r.key)}</span>
       ${unknown ? '<span class="spend-hint">provider not recorded</span>' : ''}
       ${r.harness ? harnessChipHTML(r.harness) : ''}
@@ -858,207 +886,6 @@ function renderSessionStrip() {
   }
   if (panel) panel.hidden = false;
   el.innerHTML = sessionStripHTML(top, all.length, Date.now(), SA.t.flags);
-}
-
-// Reading state belongs to a session and a mode, not to a telemetry render.
-const sessionReadingState = new Map();
-function sessionReadingHistory(sessionId, mode) {
-  const key = sessionId + '|' + mode;
-  const detail = document.getElementById('session-detail');
-  const body = detail?._sessionReadingKey === key ? detail.querySelector('.session-detail-body') : null;
-  if (body?.getClientRects().length) return body.scrollHeight - body.clientHeight - body.scrollTop >= 64;
-  // Back hides the pane; zero geometry must not replace its saved reading state.
-  return sessionReadingState.get(key)?.nearLatest === false;
-}
-
-function renderSessionDetail(detail, selected, trees, emptyHTML) {
-  const SA = window.SA;
-  const key = SA.selectedSessionId + '|' + SA.sessionView;
-  const oldBody = detail.querySelector('.session-detail-body');
-  const oldKey = detail._sessionReadingKey;
-  const oldSession = detail._sessionSelectedId;
-  const focused = detail.contains(document.activeElement) ? document.activeElement : null;
-  const focusedRow = focused?.closest('[data-row-id]');
-  const focusWithinRow = focusedRow ? '[data-row-id="' + CSS.escape(focusedRow.dataset.rowId) + '"] ' : '';
-  const focusTarget = focused && (focused.tagName === 'SUMMARY' ? 'summary'
-    : focused.dataset.action ? '[data-action="' + focused.dataset.action + '"]' + (focused.dataset.view ? '[data-view="' + focused.dataset.view + '"]' : '') : focused.tagName === 'H3' ? 'h3' : null);
-  const focusKey = focusTarget && focusWithinRow + focusTarget;
-  if (oldBody && oldKey && oldBody.getClientRects().length && detail._sessionReadingVisible !== false) {
-    const bounds = oldBody.getBoundingClientRect();
-    const anchor = Array.from(oldBody.querySelectorAll('[data-row-id]')).find(row => row.getBoundingClientRect().bottom > bounds.top && row.getBoundingClientRect().top < bounds.bottom);
-    const prev = sessionReadingState.get(oldKey) || {};
-    sessionReadingState.set(oldKey, { ...prev, top: oldBody.scrollTop,
-      nearLatest: oldBody.scrollHeight - oldBody.clientHeight - oldBody.scrollTop < 64,
-      anchor: anchor?.dataset.rowId, offset: anchor ? anchor.getBoundingClientRect().top - bounds.top : 0,
-      first: oldBody.querySelector('[data-row-id]')?.dataset.rowId,
-      detailsOpen: !!detail.querySelector('details.session-metadata')?.open });
-  }
-  const html = selected ? sessionDetailHTML(selected, SA.sessionTimeline || [], trees) : emptyHTML;
-  if (detail._sessionMarkup !== html) {
-    const disclosures = new Map(Array.from(detail.querySelectorAll('[data-row-id]')).map(row =>
-      [row.dataset.rowId, Array.from(row.querySelectorAll('details'), d => d.open)]));
-    if (selected) patchSessionDetail(detail, selected.id, html);
-    else detail.innerHTML = html;
-    if (oldSession === SA.selectedSessionId) for (const row of detail.querySelectorAll('[data-row-id]')) {
-      const saved = disclosures.get(row.dataset.rowId);
-      if (saved) Array.from(row.querySelectorAll('details')).forEach((d, i) => { d.open = !!saved[i]; });
-    }
-    detail._sessionMarkup = html;
-    applyInlineMetrics(detail);
-  }
-  detail._sessionReadingKey = key;
-  detail._sessionSelectedId = SA.selectedSessionId;
-  const body = detail.querySelector('.session-detail-body');
-  detail._sessionReadingVisible = !!body?.getClientRects().length;
-  if (!body) return;
-  const state = sessionReadingState.get(key) || {};
-  const metadata = detail.querySelector('details.session-metadata');
-  if (metadata) metadata.open = !!state.detailsOpen;
-  const rows = Array.from(body.querySelectorAll('[data-row-id]'));
-  const loaded = SA.sessionView === 'trace' ? !!SA.sessionTimeline?.length : SA.sessionView === 'results' ? !!SA.sessionOutcomes : !!SA.sessionMemoryPage?.rows.length;
-  const prepended = state.first && rows.length && rows[0].dataset.rowId !== state.first && rows.some(row => row.dataset.rowId === state.first);
-  if (!detail._sessionReadingVisible) return;
-  if ((!state.loaded && loaded) || (state.nearLatest && !prepended)) body.scrollTop = body.scrollHeight;
-  else {
-    body.scrollTop = state.top || 0;
-    const anchor = state.anchor && rows.find(row => row.dataset.rowId === state.anchor);
-    if (anchor) body.scrollTop += anchor.getBoundingClientRect().top - body.getBoundingClientRect().top - state.offset;
-  }
-  sessionReadingState.set(key, { ...state, loaded: state.loaded || loaded });
-  const updateLatest = () => {
-    const latest = detail.querySelector('[data-action="session-latest"]');
-    if (latest) latest.hidden = body.scrollHeight - body.clientHeight - body.scrollTop < 64;
-  };
-  if (!body._sessionScrollBound) { body.addEventListener('scroll', updateLatest, { passive: true }); body._sessionScrollBound = true; }
-  updateLatest();
-  if (focusKey && oldSession === SA.selectedSessionId && !focused.isConnected) detail.querySelector(focusKey)?.focus({ preventScroll: true });
-}
-
-function renderSessionBoard() {
-  const SA = window.SA;
-
-  const rail = document.getElementById('session-rail');
-  const detail = document.getElementById('session-detail');
-  const legacy = document.getElementById('session-board');
-  const badge = document.getElementById('badge-session-count');
-  const pills = document.getElementById('session-harness-pills');
-  const strip = document.getElementById('session-count-strip');
-  if (!rail) return;
-  const agents = (SA.t.status && SA.t.status.agents) ? SA.t.status.agents : [];
-  const trees = SA.t.status && SA.t.status.trees;
-  const filter = SA.harnessFilter;
-  const q = filter.text || '';
-  const filtered = !!String(q).trim() || Object.values(filter.harnesses).some(v => v === false);
-  const noMatch = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No sessions match — <button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button></span></div>`;
-  const quiet = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>All quiet. Nothing is running.</span></div>`;
-  // The durable session spine (/sessions) is the source of truth when the
-  // daemon provides it; process-tree grouping is the fallback for older
-  // daemons.
-  const durable = SA.t.sessions;
-  const useDurable = Array.isArray(durable);
-  const panel = document.getElementById('session-board-panel');
-  if (panel) panel.classList.toggle('session-workbench', useDurable);
-  if (useDurable) SA.scheduleSessionWorkbenchHeight();
-
-  if (useDurable) {
-    if (legacy) legacy.hidden = true;
-    rail.hidden = false;
-    if (detail) detail.hidden = false;
-    // Rail: one group per harness, live work first; ended runs collapse
-    // into a per-harness tail and infra sits in the last group.
-    const groups = groupSessionsByHarness(durable, trees, agents);
-    const liveCount = groups.reduce((n, g) => n + (g.infra ? 0 : familySize(g.live)), 0);
-    if (badge) badge.textContent = liveCount;
-    SA.setTabBadge('sessions', liveCount);
-    if (strip) strip.textContent = sessionCountStrip(groups, SA.t.status && SA.t.status.coverage);
-    if (pills) {
-      const present = applySessionFilters(groups, { liveOnly: filter.liveOnly }).filter(g => !g.infra).map(g => g.key);
-      pills.innerHTML = harnessPillsHTML(present, filter.harnesses);
-      applyInlineMetrics(pills);
-    }
-    const shown = applySessionFilters(groups, filter);
-    SA.reconcileSessionSelection(shown);
-    const reveal = SA.takeSessionReveal();
-    const sessionGroups = stableSessionOrder(shown.filter(g => !g.infra), rail._sessionGroupOrder, g => g.key);
-    rail._sessionGroupOrder = sessionGroups.map(g => g.key);
-    const infra = shown.find(g => g.infra);
-    // A group's open state is DOM state: patchList keeps an unchanged group's
-    // node and carries open across a rebuilt one.
-    // Rows patch inside each group's shell, keyed by session id or folded
-    // title, so a selected or expanded row survives a reconcile. The shell
-    // hashes by key and whether it has an ended tail: its counts change in
-    // place (syncSessionGroupShell), never by rebuilding the group.
-    const parts = sessionGroups.length
-      ? sessionGroups.map(g => ({ key: 'group:' + g.key, group: g, shell: `group:${g.key}|${g.ended.length ? 'ended' : ''}`, html: sessionGroupHTML(g, visibleSessionMembers([g]).some(s => s.id === SA.selectedSessionId), !!SA.endedSessionsOpen[g.key]) }))
-      : [{ key: filtered ? 'empty:nomatch' : 'empty:quiet', html: filtered ? noMatch : quiet }];
-    if (infra) parts.push({ key: 'infra', html: sessionInfraGroupHTML(infra, false) });
-    const railTop = rail.scrollTop;
-    const railFocus = rail.contains(document.activeElement) ? document.activeElement : null;
-    const railFocusId = railFocus?.dataset.id;
-    patchList(rail, parts, { key: p => p.key, html: p => p.html, hash: p => p.shell || p.html });
-    const rowOpts = { key: r => r.key, html: r => r.html };
-    const rowOrders = rail._sessionRowOrders || (rail._sessionRowOrders = new Map());
-    const childOrders = rail._sessionChildOrders || (rail._sessionChildOrders = new Map());
-    for (const p of parts) {
-      if (!p.group) continue;
-      const node = Array.from(rail.children).find(n => n._saKey === p.key);
-      if (!node) continue;
-      if (reveal && visibleSessionMembers([p.group]).some(s => s.id === SA.selectedSessionId)) {
-        node.open = true;
-        if (visibleSessionMembers([{ ...p.group, live: [] }]).some(s => s.id === SA.selectedSessionId)) SA.endedSessionsOpen[p.group.key] = true;
-        for (const bucket of ['live', 'ended']) {
-          const titleOf = s => { const t = liveTreeFor(s, trees); return sessionTitle(s, t && t.root.cwd); };
-          for (const row of collapseSessionFamilies(p.group[bucket], p.group.key, titleOf)) {
-            if (row.dup && row.sessions.some(s => s.id === SA.selectedSessionId)) SA.sessionDupOpen[bucket + '|' + row.key] = true;
-          }
-        }
-      }
-      syncSessionGroupShell(node, p.group, !!SA.endedSessionsOpen[p.group.key]);
-      const rows = (fams, bucket) => {
-        for (const family of fams) {
-          const familyKey = p.group.key + '|' + bucket + '|' + family.session.id;
-          family.children = stableSessionOrder(family.children, childOrders.get(familyKey), child => child.id);
-          childOrders.set(familyKey, family.children.map(child => child.id));
-        }
-        const list = sessionRailRows(fams, p.group.key, trees, SA.selectedSessionId, SA.sessionDupOpen, bucket);
-        const orderKey = p.group.key + '|' + bucket;
-        const ordered = stableSessionOrder(list, rowOrders.get(orderKey), row => row.key);
-        rowOrders.set(orderKey, ordered.map(row => row.key));
-        return ordered;
-      };
-      patchList(node.querySelector('.session-rows'), rows(p.group.live, 'live'), rowOpts);
-      patchList(node.querySelector('.session-ended-body'), rows(p.group.ended, 'ended'), rowOpts);
-    }
-    rail.scrollTop = railTop;
-    if (railFocusId && !railFocus.isConnected) Array.from(rail.querySelectorAll('[data-action="select-session"]')).find(el => el.dataset.id === railFocusId)?.focus({ preventScroll: true });
-    const selected = durable.find(s => s.id === SA.selectedSessionId);
-    const emptyDetail = SA.selectedSessionId
-      ? `<div class="empty"><span>Session unavailable. It is no longer listed. <button type="button" class="link-btn" data-action="session-list">Back to sessions</button></span></div>`
-      : filtered ? noMatch : `<div class="empty"><span>No sessions available. Start an agent session, then refresh.</span></div>`;
-    if (detail) renderSessionDetail(detail, selected, trees, emptyDetail);
-    return;
-  }
-
-  // Legacy fallback: process-tree board, no rail, no harness grouping.
-  const rows = filterSessionRows(sessionRows(agents, trees), q);
-  if (badge) badge.textContent = rows.length;
-  SA.setTabBadge('sessions', rows.length);
-  if (pills) pills.innerHTML = '';
-  if (strip) strip.textContent = '';
-  rail.hidden = true;
-  if (detail) detail.hidden = true;
-  if (legacy) legacy.hidden = false;
-  if (rows.length === 0) {
-    legacy.innerHTML = String(q).trim() ? noMatch : quiet;
-    return;
-  }
-  const now = Date.now();
-  legacy.innerHTML = sessionBoardHTML(rows, now, SA.sessionHelpOpen);
-  legacy.querySelectorAll('details.session-helpers').forEach(el => {
-    el.addEventListener('toggle', () => {
-      SA.sessionHelpOpen[el.dataset.pid] = el.open;
-    });
-  });
 }
 
 // One posture item: severity dot, title, and the link to where it is acted on.

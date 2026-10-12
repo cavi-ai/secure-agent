@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +44,7 @@ func TestIncidentStatusFollowsFlagListAliasAndExactID(t *testing.T) {
 	if id, found, err := s.IncidentIDForFlagResult("listed"); err != nil || !found || id != "canonical" {
 		t.Fatalf("alias link: %q found=%v err=%v", id, found, err)
 	}
-	stored, found := s.IncidentStatus("canonical")
+	stored, found := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult("canonical"))
 	if !found || stored.Status != "acknowledged" {
 		t.Fatalf("canonical after ack: %+v found=%v", stored, found)
 	}
@@ -52,7 +53,7 @@ func TestIncidentStatusFollowsFlagListAliasAndExactID(t *testing.T) {
 	if err != nil || !updated || wf.Status != "resolved" || wf.ResolutionNote != "rotated" {
 		t.Fatalf("resolve by flag_ids alias: %+v updated=%v err=%v", wf, updated, err)
 	}
-	stored, found = s.IncidentStatus("canonical")
+	stored, found = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult("canonical"))
 	if !found || stored.Status != "resolved" || stored.ResolutionNote != "rotated" {
 		t.Fatalf("canonical after resolve: %+v found=%v", stored, found)
 	}
@@ -72,11 +73,11 @@ func TestIncidentStatusFollowsFlagListAliasAndExactID(t *testing.T) {
 	if err != nil || !updated || wf.Status != "acknowledged" {
 		t.Fatalf("exact id status: %+v updated=%v err=%v", wf, updated, err)
 	}
-	stored, found = s.IncidentStatus("canonical")
+	stored, found = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult("canonical"))
 	if !found || stored.Status != "resolved" || stored.ResolutionNote != "rotated" {
 		t.Fatalf("exact id status wrote the alias incident: %+v found=%v", stored, found)
 	}
-	exact, found := s.IncidentStatus("listed")
+	exact, found := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatusResult("listed"))
 	if !found || exact.Status != "acknowledged" {
 		t.Fatalf("exact row status: %+v found=%v", exact, found)
 	}

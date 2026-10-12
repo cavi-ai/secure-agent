@@ -3,6 +3,17 @@
 [Documentation](README.md) · [Project home](../README.md)
 
 The console's **Agent** tab chats directly with a model on your own Ollama.
+
+In a finding's **Prevent it** section, supported **Agent instructions** include
+the exact safety rule and destination file. **Apply to AGENTS.md** (Codex) or
+**Apply to CLAUDE.md** (Claude) appends that rule to the finding's recorded
+project folder in one click. Existing text and permissions are preserved;
+repeat clicks do not add duplicate rules. The system agent must be enabled,
+but this fixed action needs neither Ollama nor a harness. It supports transcript
+secrets, keychain command access, and prompt injection. Missing project metadata,
+unsafe instruction files, and changes since the preview prevent the update.
+These instructions guide future behavior; they do not rotate exposed credentials
+or enforce a guard rule.
 For local work, the model may propose one exact shell command, folder and mode.
 The daemon stores that proposal as data; you review and confirm it before it
 runs. An SSH key can be generated this way in Terminal, where `ssh-keygen`

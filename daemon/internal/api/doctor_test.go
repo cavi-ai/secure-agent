@@ -22,7 +22,7 @@ import (
 func getDoctor(t *testing.T, st *store.Store, status Status) (DoctorReport, string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	a := newTestAPI("", st, nil, func() Status { return status })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return status }})
 	rec := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/doctor", nil))
 	if rec.Code != http.StatusOK {
@@ -100,7 +100,7 @@ func TestDoctorEmptyStore(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	newTestAPI("", st, nil, func() Status { return Status{} }).buildMux().
+	newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{} }}).buildMux().
 		ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/doctor", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST /doctor: status %d, want 405", rec.Code)
@@ -227,7 +227,7 @@ func TestDoctorEgressAndBusFail(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
 	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s", ProxyEnabled: true, UninspectedEgress: 5, BusDrops: 7, BusDropping: true})
-	if c := doctorCheckByID(t, rep, "egress-routing"); c.State != doctorFail || !strings.Contains(c.Detail, "5") || !strings.Contains(c.Fix, "agent-env.sh") {
+	if c := doctorCheckByID(t, rep, "egress-routing"); c.State != doctorFail || !strings.Contains(c.Detail, "5") || !strings.Contains(c.Fix, "agent-env.sh") || !strings.Contains(c.Fix, "Protection → Traffic") {
 		t.Fatalf("egress-routing = %+v, want fail with the count and the routing fix", c)
 	}
 	if c := doctorCheckByID(t, rep, "bus"); c.State != doctorFail || !strings.Contains(c.Detail, "7") || !strings.Contains(c.Fix, "cannot recover") {

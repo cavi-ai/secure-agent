@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -34,7 +35,7 @@ func TestExpectedEgressWriteFailureAndRecovery(t *testing.T) {
 			if err := st.RecordEgressObservationForTest(store.EgressObservation{Scope: scope, Host: "203.0.113.1", Protocol: "tcp", Port: 443, At: time.Now().UTC()}); err != nil {
 				t.Fatal(err)
 			}
-			episodes := st.ListEgressEpisodes(10)
+			episodes := testutil.Read[[]store.EgressEpisode](t)(st.ListEgressEpisodes(10))
 			if len(episodes) != 1 {
 				t.Fatal("missing episode fixture")
 			}
@@ -42,8 +43,8 @@ func TestExpectedEgressWriteFailureAndRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			baseline := st.ListExpectedEgressRules()
-			mux := newTestAPI("", st, nil, nil).buildMux()
+			baseline := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRulesResult())
+			mux := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil}).buildMux()
 			request := func(method, path, body string) *httptest.ResponseRecorder {
 				w := httptest.NewRecorder()
 				mux.ServeHTTP(w, httptest.NewRequest(method, path, strings.NewReader(body)))
@@ -107,7 +108,7 @@ func TestExpectedEgressWriteFailureAndRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := st.ListExpectedEgressRules(); !reflect.DeepEqual(got, baseline) {
+			if got := testutil.Read[[]store.ExpectedEgressRule](t)(st.ListExpectedEgressRulesResult()); !reflect.DeepEqual(got, baseline) {
 				t.Errorf("failed mutation changed rule state: got %+v, want %+v", got, baseline)
 			}
 			if w := request(http.MethodDelete, "/expected-egress?id=00000000000000000000000000000000", ""); w.Code != http.StatusNotFound {

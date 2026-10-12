@@ -38,7 +38,7 @@ func TestAgentRoutesAreNoAgentAndConsoleAdmitted(t *testing.T) {
 }
 
 func TestAgentRoutesUnwired(t *testing.T) {
-	a := newTestAPI("", testStore(t), nil, func() Status { return Status{} })
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{} }})
 	for _, p := range []string{"/agent/status", "/agent/chat", "/agent/plans", "/agent/runs"} {
 		w := httptest.NewRecorder()
 		a.buildMux().ServeHTTP(w, httptest.NewRequest(http.MethodGet, p, nil))
@@ -523,7 +523,8 @@ func TestAgentWorktreeRefusesAnAgentPeer(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
 	agent := sysagent.New(st, t.TempDir(), func(s string) (string, bool) { return s, true })
-	a := New(Deps{Store: st, SysAgent: agent, Worktrees: worktreehunter.New(st, t.TempDir(), worktreehunter.Options{})})
+	agentPeer := true
+	a := New(Deps{Store: st, SysAgent: agent, Worktrees: worktreehunter.New(st, t.TempDir(), worktreehunter.Options{}), TCPClientPID: func(string) (int32, error) { return 777, nil }, IsAgentPID: func(pid int32) bool { return agentPeer && pid == 777 }})
 	h := a.ConsoleHandler()
 	post := func() int {
 		w := httptest.NewRecorder()
@@ -532,12 +533,11 @@ func TestAgentWorktreeRefusesAnAgentPeer(t *testing.T) {
 		h.ServeHTTP(w, r)
 		return w.Code
 	}
-	a.tcpClientPID = func(string) (int32, error) { return 777, nil }
-	a.isAgentPID = func(pid int32) bool { return pid == 777 }
+
 	if c := post(); c != http.StatusForbidden {
 		t.Fatalf("agent peer: %d, want 403", c)
 	}
-	a.isAgentPID = func(int32) bool { return false }
+	agentPeer = false
 	if c := post(); c != http.StatusBadRequest {
 		t.Fatalf("browser peer: %d, want 400 from the handler", c)
 	}

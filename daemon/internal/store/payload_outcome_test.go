@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func TestPayloadOutcomeSurvivesRestartAndMixedIncidentAggregation(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer s.Close()
-	flag, ok := s.GetFlag("flag-0")
+	flag, ok := testutil.Lookup[model.Flag](t)(s.GetFlagResult("flag-0"))
 	if !ok || model.AssessFinding(flag).Control != "blocked" {
 		t.Fatalf("stored outcome lost: %+v", flag)
 	}

@@ -81,18 +81,24 @@ const (
 // ReportTopN caps a SessionReport's Files and Hosts lists.
 const ReportTopN = 50
 
-// SessionReport aggregates one session's events oldest-first. ok is false
-// when no session row has this id. Every slice is non-nil.
-func (s *Store) SessionReport(id string) (SessionReport, bool) {
-	rep, ok, _ := s.SessionReportResult(id)
-	return rep, ok
+type sessionReportReader interface {
+	GetSessionResult(string) (model.Session, bool, error)
+	sessionEventsOldestFirst(string) ([]event.Event, error)
+	QueryFlagsResult(FlagFilter) ([]model.Flag, error)
+	SessionOutcomes(string) SessionOutcomeHistory
 }
 
 // SessionReportResult distinguishes unavailable identity from a missing session.
 // Source failures retain independently readable sections with explicit limits.
 func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr error) {
 	defer func() { s.noteRead("session reports", readErr) }()
-	sess, ok, err := s.GetSessionResult(id)
+	return readSessionReport(s, id)
+}
+
+// readSessionReport aggregates retained evidence independently of storage.
+// Identity must be readable before any evidence sources are queried.
+func readSessionReport(reader sessionReportReader, id string) (SessionReport, bool, error) {
+	sess, ok, err := reader.GetSessionResult(id)
 	if err != nil {
 		return SessionReport{}, false, err
 	}
@@ -124,7 +130,10 @@ func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr
 	models := map[string]*ReportModel{}
 	files := map[string]int{}
 	hosts := map[string]int{}
-	events, eventErr := s.sessionEventsOldestFirst(id)
+	events, eventErr := reader.sessionEventsOldestFirst(id)
+	if eventErr != nil {
+		events = nil
+	}
 	rep.Evidence.Events = ReportSourceEvidence{Available: eventErr == nil, AtLimit: len(events) >= reportEventCap, Limit: reportEventCap}
 	for _, e := range events {
 		rep.Events++
@@ -219,9 +228,12 @@ func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr
 	rep.Files = topCounts(files, ReportTopN)
 	rep.Hosts = topCounts(hosts, ReportTopN)
 	var flagErr error
-	rep.Flags, flagErr = s.QueryFlagsResult(FlagFilter{SessionID: id, Limit: reportFlagLimit})
+	rep.Flags, flagErr = reader.QueryFlagsResult(FlagFilter{SessionID: id, Limit: reportFlagLimit})
+	if flagErr != nil {
+		rep.Flags = nil
+	}
 	rep.Evidence.Flags = ReportSourceEvidence{Available: flagErr == nil, AtLimit: len(rep.Flags) >= reportFlagLimit, Limit: reportFlagLimit}
-	history := s.SessionOutcomes(id)
+	history := reader.SessionOutcomes(id)
 	rep.Reviews, rep.Incidents, rep.Interventions = history.Reviews, history.Incidents, history.Interventions
 	rep.Evidence.Reviews, rep.Evidence.Incidents, rep.Evidence.Interventions = history.Evidence.Reviews, history.Evidence.Incidents, history.Evidence.Interventions
 	rep.IncidentsAvailable, rep.InterventionsAvailable = history.Evidence.Incidents.Available, history.Evidence.Interventions.Available

@@ -159,46 +159,6 @@ func saveReview(tx *sql.Tx, r model.ReviewRecord) error {
 	return err
 }
 
-func assessmentRank(a model.FindingAssessment) int {
-	switch a.Risk {
-	case "critical":
-		return 4
-	case "high":
-		return 3
-	case "review":
-		return 2
-	case "informational":
-		return 1
-	}
-	return a.DetectorSeverity
-}
-
-// nextAssessmentOutranks chooses both the stored assessment and its evidence flag.
-func nextAssessmentOutranks(stored, next model.FindingAssessment) bool {
-	nextRank, storedRank := assessmentRank(next), assessmentRank(stored)
-	return nextRank > storedRank || (nextRank == storedRank && stored.Risk == "unknown" && next.Risk != "unknown")
-}
-
-// mergeReviewAssessment retains the strongest observed facts, including late
-// arrivals. Advice, timestamps, count and workflow are not semantic evidence.
-func mergeReviewAssessment(old, next model.FindingAssessment) (model.FindingAssessment, bool) {
-	basis := append(slices.Clone(old.EvidenceBasis), next.EvidenceBasis...)
-	slices.Sort(basis)
-	basis = slices.Compact(basis)
-	chosen := old
-	if nextAssessmentOutranks(old, next) {
-		chosen = next
-	}
-	if next.Control != "unknown" && next.Control != "" {
-		chosen.Control = next.Control
-	}
-	changed := !slices.Equal(basis, old.EvidenceBasis) || chosen.Risk != old.Risk || chosen.ResidualRisk != old.ResidualRisk || chosen.Control != old.Control || next.DetectorSeverity > old.DetectorSeverity
-	chosen.EvidenceBasis = basis
-	chosen.Advice = nil
-	chosen.DetectorSeverity = max(old.DetectorSeverity, next.DetectorSeverity)
-	return chosen, changed
-}
-
 func (s *Store) observeFindingReviewLocked(f model.Flag, a model.FindingAssessment) (model.ReviewRecord, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -296,13 +256,13 @@ func observeReviewTx(tx *sql.Tx, f model.Flag, a model.FindingAssessment) (r mod
 		if !f.Acknowledged && r.Decision == nil && r.ReviewState == "reviewed" {
 			r.ReviewState = "unreviewed"
 		}
-		if nextAssessmentOutranks(r.Assessment, a) {
+		merged := model.MergeFindingAssessment(r.Assessment, a)
+		if merged.NextEvidence {
 			r.EvidenceFlagID = f.ID
 		}
-		merged, changed := mergeReviewAssessment(r.Assessment, a)
-		r.Assessment = merged
+		r.Assessment = merged.Assessment
 		r.Severity = max(r.Severity, f.Severity)
-		if changed {
+		if merged.Changed {
 			r.Revision++
 			r.ReviewState = "unreviewed"
 		}
@@ -716,7 +676,10 @@ func (s *Store) backfillFindingReviews() error {
 		}
 		allIDs = append(allIDs, ids...)
 		for _, id := range ids {
-			f, ok := s.GetFlag(id)
+			f, ok, err := s.GetFlagResult(id)
+			if err != nil {
+				return err
+			}
 			if !ok {
 				continue
 			}

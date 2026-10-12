@@ -2,6 +2,7 @@ package session
 
 import (
 	"database/sql"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -71,7 +72,7 @@ func TestSessionMetadataPublishesOnlyAfterPersistence(t *testing.T) {
 				if len(emitted) != 0 {
 					t.Fatalf("failed metadata write published a session: %+v", emitted)
 				}
-				if saved, ok := st.GetSession(original.ID); !ok || saved != original {
+				if saved, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(original.ID)); !ok || saved != original {
 					t.Fatalf("failed metadata write changed saved state: %+v", saved)
 				}
 				if _, ok := r.touch[original.ID]; ok {
@@ -89,7 +90,7 @@ func TestSessionMetadataPublishesOnlyAfterPersistence(t *testing.T) {
 					t.Fatal(err)
 				}
 				attempt(now.Add(time.Second))
-				saved, _ := st.GetSession(original.ID)
+				saved, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult(original.ID))
 				if len(emitted) != 1 || emitted[0] != saved {
 					t.Fatalf("retry did not publish saved state: saved=%+v deltas=%+v", saved, emitted)
 				}

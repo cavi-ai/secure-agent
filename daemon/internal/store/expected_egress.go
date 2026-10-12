@@ -235,11 +235,6 @@ func (s *Store) commitExpectedEgressAudit(tx *sql.Tx, a AuditEntry) (writeErr er
 	return tx.Commit()
 }
 
-func (s *Store) ListExpectedEgressRules() []ExpectedEgressRule {
-	rules, _ := s.ListExpectedEgressRulesResult()
-	return rules
-}
-
 // ListExpectedEgressRulesResult rejects incomplete rule lists.
 func (s *Store) ListExpectedEgressRulesResult() (out []ExpectedEgressRule, readErr error) {
 	defer func() { s.noteRead("expected egress rules", readErr) }()
@@ -284,18 +279,11 @@ func (s *Store) ExpectedEgressMatchingRuleID(o EgressObservation) string {
 		return ""
 	}
 	o.Protocol = strings.ToLower(strings.TrimSpace(o.Protocol))
-	return s.ExpectedEgressMatcher()(EgressEpisode{Scope: normalizeEgressScope(o.Scope), Host: o.Host, Protocol: o.Protocol, Port: o.Port})
-}
-
-// ExpectedEgressMatcher reads the active rules once and answers
-// ExpectedEgressMatchingRuleID for any number of stored episodes, whose
-// scope, host and protocol were normalized when they were recorded.
-func (s *Store) ExpectedEgressMatcher() func(EgressEpisode) string {
 	match, err := s.ExpectedEgressMatcherResult()
 	if err != nil {
-		return func(EgressEpisode) string { return "" }
+		return ""
 	}
-	return match
+	return match(EgressEpisode{Scope: normalizeEgressScope(o.Scope), Host: o.Host, Protocol: o.Protocol, Port: o.Port})
 }
 
 // ExpectedEgressMatcherResult rejects failed reads before classifying episodes.

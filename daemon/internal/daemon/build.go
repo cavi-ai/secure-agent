@@ -132,13 +132,20 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	advisorStk := &advisorStackHolder{}
 	c.advisor = advisorStk
 	allowlistStore, muteStore, expectStore := loadEgressOverrides(cfg)
+	openReadFlags, err := st.QueryFlagsResult(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: 1024})
+	if err != nil {
+		log.Printf("daemon: retained read findings unavailable: %v", err)
+	}
 	correlator := correlate.New(tagger, classifier, cfg, correlate.Hooks{
 		AllowlistOverrides: func(agent string) []string { return allowlistStore.Load()[agent] },
 		Muted:              muteStore.Muted,
 		Expected:           expectStore.Match,
 		OnRepeat:           foldFlagRepeat(st, deltaHub),
-		OpenFlag:           func(id string) bool { f, ok := st.GetFlag(id); return ok && !f.Acknowledged },
-		OpenReadFlags:      st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: 1024}),
+		OpenFlag: func(id string) bool {
+			f, ok, err := st.GetFlagResult(id)
+			return err == nil && ok && !f.Acknowledged
+		},
+		OpenReadFlags: openReadFlags,
 		OnUninspected: func(agent, host string) {
 			if sub := advisorStk.Load().Sub; sub != nil {
 				sub.EnqueueHost(agent, host)
@@ -664,7 +671,10 @@ func repairStoredRows(st *store.Store) {
 // classifier no longer counts as a secret read. Returns how many it
 // acknowledged.
 func reclassifyReadFlags(st *store.Store, cl sensitive.Classifier, owners []config.CredentialOwner) int {
-	open := st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: math.MaxInt32})
+	open, err := st.QueryFlagsResult(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: math.MaxInt32})
+	if err != nil {
+		return 0
+	}
 	var weak []string
 	for _, f := range open {
 		if f.Severity == 3 && correlate.StoredReadConnectSeverity(f) == 2 {
@@ -742,7 +752,10 @@ func loadEgressOverrides(cfg config.Config) (*correlate.AllowlistStore, *correla
 func buildAdvisorHooks(st *store.Store, advisorStk *advisorStackHolder) (*api.RetriageFuncs, *api.HostAssessFuncs, func(model.GuardAssessmentRequest), func(model.WorktreeAdviceRequest) bool) {
 	// Re-triage: look up the stored flag, enqueue through the CURRENT stack.
 	retriage := &api.RetriageFuncs{
-		LookupFlag: func(id string) (model.Flag, bool) { return st.GetFlag(id) },
+		LookupFlag: func(id string) (model.Flag, bool) {
+			f, ok, err := st.GetFlagResult(id)
+			return f, ok && err == nil
+		},
 		Enqueue: func(fl model.Flag) bool {
 			if sub := advisorStk.Load().Sub; sub != nil {
 				return sub.RetriageFlag(fl)
@@ -756,7 +769,8 @@ func buildAdvisorHooks(st *store.Store, advisorStk *advisorStackHolder) (*api.Re
 	// flood the model.
 	hostAssess := &api.HostAssessFuncs{
 		GetVerdict: func(agent, host string) (model.AdvisorVerdict, bool) {
-			return st.AdvisorVerdictFor("host:"+agent+"|"+host, "host")
+			v, ok, err := st.AdvisorVerdictResultFor("host:"+agent+"|"+host, "host")
+			return v, ok && err == nil
 		},
 		Enqueue: func(agent, host string) bool {
 			if sub := advisorStk.Load().Sub; sub != nil {

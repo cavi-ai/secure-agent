@@ -13,10 +13,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -90,7 +88,6 @@ type Sink struct {
 	// manufacture a gap at that collector out of a delivery it never wanted.
 	state *sinkDeliveryState
 
-	logMu   sync.Mutex
 	logPath string
 }
 
@@ -250,15 +247,5 @@ func (s *Sink) record(kind EventKind, url string, status int, errMsg string) {
 	if err != nil {
 		return
 	}
-	s.logMu.Lock()
-	defer s.logMu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(s.logPath), 0o700); err != nil {
-		return
-	}
-	f, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, _ = f.Write(append(line, '\n'))
+	appendDeliveryLog(s.logPath, append(line, '\n'))
 }

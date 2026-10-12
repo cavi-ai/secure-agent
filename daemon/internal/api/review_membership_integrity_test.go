@@ -45,7 +45,7 @@ func TestForeignReviewMembershipRejectsHTTPDecisionAndRecovers(t *testing.T) {
 	if _, err := db.Exec(`UPDATE finding_review_members SET review_id=? WHERE flag_id='second'`, ids["first"]); err != nil {
 		t.Fatal(err)
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	body, err := json.Marshal(model.ReviewDecisionRequest{ID: ids["first"], Revision: 1, Action: "acknowledge"})
 	if err != nil {
 		t.Fatal(err)

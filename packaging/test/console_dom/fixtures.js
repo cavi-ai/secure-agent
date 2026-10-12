@@ -229,7 +229,7 @@
               detail: 'Read wants access to /workspace/api-service/.env',
               rule: 'cloud-creds', path: '/workspace/api-service/.env',
               available_scopes: [{kind:'once'},{kind:'session'},{kind:'exact',expiry:'24h'},{kind:'exact',expiry:'7d'}],
-              scopeText: 'Future permissions cover this file, tool, workspace and observed executable path. Revoke in Policies.' },
+              scopeText: 'Future permissions cover this file, tool, workspace and observed executable path. Revoke under Protection → Rules & permissions.' },
             { kind: 'resource', priority: 4, id: 'resource-1', action: 'pause',
               title: 'Resource pressure', detail: 'Memory grew 1.4 GB in 15 minutes.' },
           ]
@@ -408,7 +408,7 @@
       id: 'guard-1', agent: 'claude', tool: 'Read', path: '/workspace/api-service/.env',
       rule_id: 'cloud-creds', ts: iso(30000),
       available_scopes: [{kind:'once'},{kind:'session'},{kind:'exact',expiry:'24h'},{kind:'exact',expiry:'7d'}],
-      scope_text: 'Future permissions cover this file, tool, workspace and observed executable path. Revoke in Policies.'
+      scope_text: 'Future permissions cover this file, tool, workspace and observed executable path. Revoke under Protection → Rules & permissions.'
     }],
     '/stats/rollup': (() => {
       const pts = [];

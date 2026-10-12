@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const app = readFileSync(new URL('../../../daemon/internal/api/web_dist/app.js', import.meta.url), 'utf8');
 const start = app.indexOf('  window.copySessionReport = function(id)');
-const end = app.indexOf('  window.selectSession =',start);
+const end = app.indexOf('  // The drawer is shared by two views:', start);
 
 async function copy(response, failClipboard = false) {
   const copied = [], toasts = [], requests = [];

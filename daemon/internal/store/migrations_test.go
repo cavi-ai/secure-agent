@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -225,7 +226,7 @@ func TestSchemaBridgePreservesVersionThreeMetadata(t *testing.T) {
 		if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 3 {
 			t.Fatalf("bridge lowered version: %d, %v", version, err)
 		}
-		f, ok := s.GetFlag("f")
+		f, ok := testutil.Lookup[model.Flag](t)(s.GetFlagResult("f"))
 		if !ok || f.Severity != 3 || !f.Acknowledged || len(f.Evidence) != 1 || f.Evidence[0].String() != "preserved evidence" {
 			t.Fatalf("old read model lost canonical evidence: %+v", f)
 		}

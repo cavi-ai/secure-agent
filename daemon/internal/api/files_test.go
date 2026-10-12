@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,9 +27,10 @@ var fileSecret = "synthetic-" + "known-secret-" + "0123456789"
 
 func TestOpenConfigUsesConfiguredPath(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "nested", "config.yaml")
-	a := New(Deps{ConfigPath: p})
+	deps := Deps{ConfigPath: p}
 	var args []string
-	a.openPath = func(v ...string) error { args = append([]string(nil), v...); return nil }
+	deps.OpenPath = func(v ...string) error { args = append([]string(nil), v...); return nil }
+	a := newTestAPI(deps)
 	w := httptest.NewRecorder()
 	a.handleOpenConfig(w, httptest.NewRequest(http.MethodPost, "/ui/open-config", nil))
 	if w.Code != http.StatusOK || len(args) != 2 || args[0] != "-t" || args[1] != p {
@@ -50,9 +52,9 @@ func TestOpenConfigUsesConfiguredPath(t *testing.T) {
 	}
 }
 
-func fileTestAPI(t *testing.T) *API {
+func fileTestDeps(t *testing.T) Deps {
 	t.Helper()
-	a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	deps := Deps{Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }}
 	eng, err := firewall.NewEngine(config.FirewallConfig{
 		Mode:     "monitor",
 		Patterns: []config.PatternConfig{{ID: "aws-key", Type: "cloud-key", Re: `AKIA[0-9A-Z]{16}`, Mode: "monitor"}},
@@ -63,9 +65,11 @@ func fileTestAPI(t *testing.T) *API {
 	eng.SetFingerprints([]config.Fingerprint{
 		{ID: "fp1", Type: firewall.TypeEnvValue, Len: len(fileSecret), HMAC: firewall.Fingerprint([]byte("salt"), fileSecret)},
 	})
-	a.setFirewallForTest(FirewallControl{Engine: eng})
-	return a
+	deps.Firewall = FirewallControl{Engine: eng}
+	return deps
 }
+
+func fileTestAPI(t *testing.T) *API { return newTestAPI(fileTestDeps(t)) }
 
 // writeTranscript writes lines to a file and returns its path and the byte
 // offset of each line.
@@ -216,9 +220,10 @@ func postFile(a *API, h func(http.ResponseWriter, *http.Request), method, path s
 // Reveal runs open -R and Open runs open -t on an evidence file only; each is
 // audited.
 func TestFileRevealAndOpen(t *testing.T) {
-	a := fileTestAPI(t)
+	deps := fileTestDeps(t)
 	rec := &openRecorder{}
-	a.openPath = rec.open
+	deps.OpenPath = rec.open
+	a := newTestAPI(deps)
 	p, _ := writeTranscript(t, "one")
 	putTranscriptFlag(a, "f1", p, 0)
 	dir := t.TempDir()
@@ -261,8 +266,9 @@ func TestFileRevealAndOpen(t *testing.T) {
 
 // Off macOS, reveal and open report unsupported.
 func TestFileOpenUnsupported(t *testing.T) {
-	a := fileTestAPI(t)
-	a.openPath = func(...string) error { return errors.ErrUnsupported }
+	deps := fileTestDeps(t)
+	deps.OpenPath = func(...string) error { return errors.ErrUnsupported }
+	a := newTestAPI(deps)
 	p, _ := writeTranscript(t, "one")
 	putTranscriptFlag(a, "f1", p, 0)
 	if w := postFile(a, a.handleFileReveal, http.MethodPost, p); w.Code != http.StatusNotImplemented {
@@ -280,7 +286,7 @@ func TestFileRoutesAreNoAgent(t *testing.T) {
 	if !apiroutes.IsMutation("POST", "/files/reveal") || !apiroutes.IsMutation("POST", "/files/open") || apiroutes.IsMutation("GET", "/files/detail") {
 		t.Fatal("reveal/open must be mutations, detail a read")
 	}
-	a := &API{}
+	a := New(Deps{})
 	for _, c := range []struct {
 		r    role
 		want bool
@@ -294,32 +300,29 @@ func TestFileRoutesAreNoAgent(t *testing.T) {
 // On the console listener a NoAgent route serves only a TCP peer that is
 // identified and outside every agent family.
 func TestConsoleNoAgentChecksTheTCPPeer(t *testing.T) {
-	a := fileTestAPI(t)
-	h := a.ConsoleHandler()
-	get := func() int {
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodGet, "/files/detail?path=%2Fw%2Fnone", nil)
-		r.RemoteAddr = "127.0.0.1:50123"
-		h.ServeHTTP(w, r)
-		return w.Code
-	}
-	a.tcpClientPID = func(string) (int32, error) { return 777, nil }
-	a.isAgentPID = func(pid int32) bool { return pid == 777 }
-	if c := get(); c != http.StatusForbidden {
-		t.Fatalf("agent peer: %d, want 403", c)
-	}
-	a.isAgentPID = func(int32) bool { return false }
-	if c := get(); c != http.StatusNotFound {
-		t.Fatalf("browser peer: %d, want 404 from the handler", c)
-	}
-	a.tcpClientPID = func(string) (int32, error) { return 0, errors.New("no peer") }
-	if c := get(); c != http.StatusServiceUnavailable {
-		t.Fatalf("unidentified peer: %d, want 503 (refused, retryable)", c)
-	}
-	a.isAgentPID = nil
-	a.tcpClientPID = func(string) (int32, error) { return 777, nil }
-	if c := get(); c != http.StatusForbidden {
-		t.Fatalf("no agent check wired: %d, want 403", c)
+	for _, tc := range []struct {
+		name  string
+		peer  func(string) (int32, error)
+		agent func(int32) bool
+		want  int
+	}{
+		{"agent", func(string) (int32, error) { return 777, nil }, func(pid int32) bool { return pid == 777 }, http.StatusForbidden},
+		{"browser", func(string) (int32, error) { return 777, nil }, func(int32) bool { return false }, http.StatusNotFound},
+		{"unidentified", func(string) (int32, error) { return 0, errors.New("no peer") }, func(int32) bool { return false }, http.StatusServiceUnavailable},
+		{"unwired", func(string) (int32, error) { return 777, nil }, nil, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deps := fileTestDeps(t)
+			deps.TCPClientPID, deps.IsAgentPID = tc.peer, tc.agent
+			a := newTestAPI(deps)
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/files/detail?path=%2Fw%2Fnone", nil)
+			r.RemoteAddr = "127.0.0.1:50123"
+			a.ConsoleHandler().ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("peer gate: %d, want %d", w.Code, tc.want)
+			}
+		})
 	}
 }
 
@@ -328,11 +331,15 @@ func TestConsoleNoAgentChecksTheTCPPeer(t *testing.T) {
 func TestSocketNoAgentLiveFamilyCheck(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_noagent_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a := fileTestAPI(t)
-	a.socketPath = sock
-	a.setPeersForTest(loopbackChecker{NewPeerChecker()}, func() map[int32]struct{} { return nil })
+	deps := fileTestDeps(t)
+	deps.SocketPath = sock
+	deps.PeerChecker = loopbackChecker{NewPeerChecker()}
+	deps.AgentPIDs = func() map[int32]struct{} { return nil }
 	self := int32(os.Getpid())
-	a.isAgentPID = func(pid int32) bool { return pid == self }
+	var agentPeer atomic.Bool
+	agentPeer.Store(true)
+	deps.IsAgentPID = func(pid int32) bool { return agentPeer.Load() && pid == self }
+	a := newTestAPI(deps)
 	ctx, cancel := contextWithCancel()
 	defer cancel()
 	go a.Serve(ctx)
@@ -355,7 +362,7 @@ func TestSocketNoAgentLiveFamilyCheck(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("/status for the same peer: %d, want 200", resp.StatusCode)
 	}
-	a.isAgentPID = func(int32) bool { return false }
+	agentPeer.Store(false)
 	resp, err = cl.Get("http://unix/files/detail?path=%2Fw%2Fnone")
 	if err != nil {
 		t.Fatal(err)

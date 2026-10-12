@@ -151,11 +151,6 @@ func (s *Store) HookEventsSince(since time.Time) int {
 // session ID, never a guessed join by PID, workspace, or time.
 type HarnessActivity struct{ HookLastSeen, TraceLastSeen string }
 
-func (s *Store) HarnessActivitySince(since time.Time) map[string]HarnessActivity {
-	out, _ := s.HarnessActivitySinceResult(since)
-	return out
-}
-
 func (s *Store) HarnessActivitySinceResult(since time.Time) (out map[string]HarnessActivity, readErr error) {
 	defer func() { s.noteRead("harness activity", readErr) }()
 	s.mu.Lock()

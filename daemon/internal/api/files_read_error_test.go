@@ -39,7 +39,7 @@ func TestFileDetailRejectsUnreadableEvidenceAndRecovers(t *testing.T) {
 			if _, err := st.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now, PID: 1, Path: path, SessionID: "s1"}); err != nil {
 				t.Fatal(err)
 			}
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 			db, err := sql.Open("sqlite", dbPath)
 			if err != nil {
 				t.Fatal(err)
@@ -73,7 +73,7 @@ func TestFileDetailRejectsUnreadableEvidenceAndRecovers(t *testing.T) {
 func TestFileDetailUnavailableStoreIsNotMissingEvidence(t *testing.T) {
 	st := testStore(t)
 	st.Close()
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	if w, _ := getDetail(t, a, "/w/missing.jsonl"); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("closed store: %d %s", w.Code, w.Body.String())
 	}

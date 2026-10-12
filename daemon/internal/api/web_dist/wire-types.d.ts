@@ -104,6 +104,15 @@ export interface CoverageStatus {
   probes?: CoverageProbeReceipt[];
 }
 
+export interface RuleStat {
+  would_block: number;
+  blocked: number;
+  legit: number;
+  suspect: number;
+  mode: string;
+  type?: string;
+}
+
 export interface Health {
   name: string;
   running: boolean;
@@ -167,7 +176,7 @@ export interface Status {
   es_service?: ESServiceSnapshot;
 }
 
-export interface Session {
+export interface ModelSession {
   id: string;
   harness: string;
   workspace?: string;
@@ -527,7 +536,7 @@ export interface SessionReport {
   incidents_available: boolean;
   interventions: InterventionReceipt[];
   interventions_available: boolean;
-  session: Session;
+  session: ModelSession;
   duration_s: number;
   events: number;
   turns: number;
@@ -689,6 +698,43 @@ export interface HostSnapshot {
   capacity: string;
 }
 
+export interface Process {
+  name: string;
+  exe_path?: string;
+  cwd?: string;
+  pid: number;
+  ppid: number;
+  started_at: string;
+  rss_bytes: number;
+  cpu_percent?: number;
+  is_orphan?: boolean;
+}
+
+export interface Sample {
+  at: string;
+  rss_bytes: number;
+  cpu_percent?: number;
+}
+
+export interface ResourceSession {
+  key: string;
+  name: string;
+  kind?: string;
+  workspace?: string;
+  root_pid: number;
+  root_started_at: string;
+  last_seen_at?: string;
+  rss_bytes: number;
+  cpu_percent?: number;
+  process_count: number;
+  orphan_count: number;
+  estimated_reclaim_bytes?: number;
+  processes: Process[];
+  samples: Sample[];
+  diagnoses: Diagnosis[];
+  control?: SessionControl;
+}
+
 export interface EpisodeActivity {
   at: string;
   ended_at: string;
@@ -718,7 +764,7 @@ export interface Episode {
   activities?: EpisodeActivity[];
   correlations?: EpisodeCorrelation[];
   host?: HostSnapshot;
-  session: Session;
+  session: ResourceSession;
 }
 
 export interface InterventionStepSnapshot {
@@ -771,7 +817,7 @@ export interface ControlSnapshot {
   budget: BudgetSummary;
 }
 
-export interface Snapshot {
+export interface ResourceSnapshot {
   observed_at: string;
   host?: HostSnapshot;
   rss_bytes: number;
@@ -779,46 +825,10 @@ export interface Snapshot {
   process_count: number;
   session_count: number;
   infra_count?: number;
-  sessions: Session[];
+  sessions: ResourceSession[];
   episodes: Episode[];
   control?: ControlSnapshot;
   interventions?: InterventionReceipt[];
-}
-
-export interface PostureItem {
-  kind: string;
-  id: string;
-  title: string;
-  severity: number;
-  detail?: string;
-  ts?: string;
-  assessment?: FindingAssessment;
-}
-
-export interface AttentionGroup {
-  key: string;
-  label: string;
-  agent: string;
-  workspace?: string;
-  rootPid?: number;
-  pids?: number[];
-  rssBytes?: number;
-  cpuPercent?: number;
-  processCount?: number;
-  summary?: string;
-  items: AttentionItem[];
-}
-
-export interface Posture {
-  state: string;
-  needs_you: number;
-  coverage_count: number;
-  summary: string;
-  items: PostureItem[];
-  coverage_items: PostureItem[];
-  groups?: AttentionGroup[];
-  generated: string;
-  connected: boolean;
 }
 
 export interface ReviewPage {
@@ -865,6 +875,127 @@ export interface Pattern {
   summary: string;
   actions: ExplainAction[];
   flag_ids: string[];
+}
+
+export interface RoutineGroup {
+  key: string;
+  reader: string;
+  area: string;
+  files: number;
+  count: number;
+  agents: string[];
+  destinations?: PatternDestination[];
+  destination_count: number;
+  expectable: number;
+  disposition: Disposition;
+  assessment?: FindingAssessment;
+  summary: string;
+  actions: ExplainAction[];
+  flag_ids: string[];
+}
+
+export interface IncidentWorkflow {
+  status: string;
+  acknowledged_at?: string;
+  resolved_at?: string;
+  resolution_note?: string;
+}
+
+export interface IncidentDetail {
+  id: string;
+  flag_id: string;
+  pid: number;
+  agent: string;
+  timestamp: string;
+  rule: string;
+  session_id?: string;
+  subject?: string;
+  aggregate_count?: number;
+  last_flag_at?: string;
+  summary: string;
+  risk: string;
+  touched_files: string[];
+  connections: string[];
+  rotate_list: RotateItem[];
+  advisor_narrative?: string;
+  payload_outcomes?: PayloadOutcomeSummary;
+  remediation?: IncidentRemediation;
+  workflow: IncidentWorkflow;
+}
+
+export interface PostureItem {
+  kind: string;
+  id: string;
+  title: string;
+  severity: number;
+  detail?: string;
+  ts?: string;
+  assessment?: FindingAssessment;
+}
+
+export interface AttentionGroup {
+  key: string;
+  label: string;
+  agent: string;
+  workspace?: string;
+  rootPid?: number;
+  pids?: number[];
+  rssBytes?: number;
+  cpuPercent?: number;
+  processCount?: number;
+  summary?: string;
+  items: AttentionItem[];
+}
+
+export interface Posture {
+  state: string;
+  needs_you: number;
+  coverage_count: number;
+  summary: string;
+  items: PostureItem[];
+  coverage_items: PostureItem[];
+  groups?: AttentionGroup[];
+  generated: string;
+  connected: boolean;
+}
+
+export interface EndpointIdentity {
+  org?: string;
+  name?: string;
+  kind: string;
+  ip?: string;
+  class?: string;
+}
+
+export interface Suggestion {
+  agent: string;
+  host: string;
+  count: number;
+  identity: EndpointIdentity;
+  assessment?: string;
+  rationale?: string;
+  confidence?: number;
+}
+
+export interface MutePair {
+  rule: string;
+  host: string;
+  agent?: string;
+  title?: string;
+}
+
+export interface ApiSnapshot {
+  status: Status;
+  flags: Flag[];
+  reviews: ReviewPage;
+  patterns: Pattern[];
+  routine: RoutineGroup[];
+  incidents: IncidentDetail[];
+  events: Event[];
+  posture: Posture;
+  suggestions: Suggestion[];
+  mutes: MutePair[];
+  sessions: ModelSession[];
 }
 
 export interface CostRow {
@@ -972,7 +1103,7 @@ export interface FileDetail {
   mod_time?: string;
   owned_by_user: boolean;
   subject?: ExplainSubject;
-  session?: Session;
+  session?: ModelSession;
   findings: FileFinding[];
   accesses: FileAccess[];
   hits: FileHit[];
@@ -1041,6 +1172,15 @@ export interface LabelContext {
   suggestion?: LabelSuggestion;
 }
 
+export interface InstructionPreview {
+  path: string;
+  instruction: string;
+  revision: string;
+  applied: boolean;
+  ready: boolean;
+  reason?: string;
+}
+
 export interface PlanResponse {
   subject: string;
   status: string;
@@ -1050,6 +1190,7 @@ export interface PlanResponse {
   labels?: LabelContext;
   advisor_ready: boolean;
   reason?: string;
+  instruction?: InstructionPreview;
 }
 
 export interface ReviewDecisionRequest {
@@ -1057,23 +1198,6 @@ export interface ReviewDecisionRequest {
   revision: number;
   action: string;
   scope?: ScopeChoice;
-}
-
-export interface RoutineGroup {
-  key: string;
-  reader: string;
-  area: string;
-  files: number;
-  count: number;
-  agents: string[];
-  destinations?: PatternDestination[];
-  destination_count: number;
-  expectable: number;
-  disposition: Disposition;
-  assessment?: FindingAssessment;
-  summary: string;
-  actions: ExplainAction[];
-  flag_ids: string[];
 }
 
 export interface BudgetStatus {
@@ -1113,7 +1237,6 @@ export interface Recommendation {
   fit: string;
   note: string;
   recommended?: boolean;
-  rank: number;
 }
 
 export interface DiscoveredServer {
@@ -1142,14 +1265,6 @@ export interface PlanSnapshot {
   homes?: string[];
 }
 
-export interface EndpointIdentity {
-  org?: string;
-  name?: string;
-  kind: string;
-  ip?: string;
-  class?: string;
-}
-
 export interface UninspectedEndpoint {
   agent: string;
   host: string;
@@ -1173,30 +1288,13 @@ export interface EndpointDetail {
   host: string;
   identity: EndpointIdentity;
   agents: string[];
-  sessions: Session[];
+  sessions: ModelSession[];
   count: number;
   first_seen?: string;
   last_seen?: string;
   infra?: string;
   allowed?: EndpointAllowance[];
   events: Event[];
-}
-
-export interface Suggestion {
-  agent: string;
-  host: string;
-  count: number;
-  identity: EndpointIdentity;
-  assessment?: string;
-  rationale?: string;
-  confidence?: number;
-}
-
-export interface MutePair {
-  rule: string;
-  host: string;
-  agent?: string;
-  title?: string;
 }
 
 export interface ScanSummary {
@@ -1264,6 +1362,22 @@ export interface RepoReport {
   error?: string;
 }
 
+export interface Removal {
+  path: string;
+  state: string;
+  phase?: string;
+  step?: string;
+  step_at?: string;
+  error?: string;
+  row_state?: string;
+  reasons?: string[];
+  branch?: string;
+  bytes?: number;
+  files?: number;
+  started_at: string;
+  finished_at?: string;
+}
+
 export interface Volume {
   mount: string;
   total_bytes: number;
@@ -1277,6 +1391,21 @@ export interface CleanupTotals {
   count: number;
   bytes_30d: number;
   count_30d: number;
+}
+
+export interface AgentAsk {
+  id: number;
+  ts: string;
+  path: string;
+  repo?: string;
+  harness: string;
+  session_id: string;
+  status: string;
+  verdict?: string;
+  detail?: string;
+  cost_usd?: number;
+  output?: string;
+  finished_at?: string;
 }
 
 export interface ScanReport {
@@ -1295,22 +1424,6 @@ export interface ScanReport {
   asks?: Record<string, AgentAsk>;
   askable?: Record<string, string>;
   advice?: Record<string, AdvisorVerdict>;
-}
-
-export interface Removal {
-  path: string;
-  state: string;
-  phase?: string;
-  step?: string;
-  step_at?: string;
-  error?: string;
-  row_state?: string;
-  reasons?: string[];
-  branch?: string;
-  bytes?: number;
-  files?: number;
-  started_at: string;
-  finished_at?: string;
 }
 
 export interface ClutterItem {
@@ -1378,21 +1491,6 @@ export interface CleanupDay {
   count: number;
   trashed_bytes: number;
   trashed_count: number;
-}
-
-export interface AgentAsk {
-  id: number;
-  ts: string;
-  path: string;
-  repo?: string;
-  harness: string;
-  session_id: string;
-  status: string;
-  verdict?: string;
-  detail?: string;
-  cost_usd?: number;
-  output?: string;
-  finished_at?: string;
 }
 
 export interface SysAgentUsage {

@@ -18,6 +18,9 @@ test('review card preserves risk, context, receipts and explicit revision',()=>{
  assert.match(html,/data-revision="2"/);assert.match(html,/Evidence changed/);assert.match(html,/reviewed revision 1/i);
  assert.match(html,/data-id="stronger">View supporting evidence/);
  assert.match(html,/data-action="open-flag" data-id="stronger"/);
+ assert.match(html,/Revoke under Protection → Rules &amp; permissions\./);
+ assert.equal((app.match(/Revoke under Protection → Rules & permissions\./g)||[]).length,2);
+ assert.doesNotMatch(app+lib,/Revoke in Policies/);
  const expired=vm.runInContext('reviewHTML({...record,evidence_available:false})',ctx);
  assert.match(expired,/Source evidence has expired/);assert.doesNotMatch(expired,/data-action="review-decision"/);
 });
@@ -27,11 +30,118 @@ test('stale review decision retains choice, refreshes facts and never retries',a
  const end=app.indexOf('  // Review pagination',start);
  assert.ok(start>=0&&end>start,'review handler exists');
  const calls=[],drafts=new Map();let refreshed=0;
- const ctx={window:{},beginAttentionWrite:()=>()=>{},reviewDrafts:drafts,apiFetch:async(url,opts)=>{calls.push([url,JSON.parse(opts.body)]);return{ok:false,status:409}},showToast:()=>{},fetchTelemetry:async()=>{refreshed++},markDirty:()=>{}};
+ const ctx={window:{},handoffGeneration:0,sessionEnded:false,reviewResultSeq:0,reviewResult:null,attentionItems:()=>[],telemetryData:{reviews:{reviews:[record]}},beginAttentionWrite:()=>()=>{},reviewDrafts:drafts,apiFetch:async(url,opts)=>{calls.push([url,JSON.parse(opts.body)]);return{ok:false,status:409}},showToast:()=>{},fetchTelemetry:async()=>{refreshed++},markDirty:()=>{}};
+ vm.runInNewContext(lib,ctx);
  vm.runInNewContext(app.slice(start,end),ctx);
  await ctx.window.reviewAct('context',1,'acknowledge');
  assert.equal(calls.length,1);assert.deepEqual(calls[0],['/reviews/decision',{id:'context',revision:1,action:'acknowledge'}]);
  assert.equal(refreshed,1);assert.equal(drafts.get('context').action,'acknowledge');assert.equal(drafts.get('context').conflict,true);
+});
+
+const receipt={id:record.id,revision:record.revision,action:'acknowledge',at:'2026-10-11T12:00:00Z'};
+function reviewController(overrides={}) {
+ const ctx={window:{saAnnounce:()=>{}},handoffGeneration:0,sessionEnded:false,reviewResultSeq:0,reviewResult:null,
+  attentionItems:()=>[{kind:'review',id:record.id,review:record}],telemetryData:{reviews:{reviews:[record]}},
+  beginAttentionWrite:()=>()=>{},reviewDrafts:new Map(),markDirty:()=>{},showToast:()=>{},fetchTelemetry:async()=>{},
+  apiFetch:async()=>({ok:true,status:200,json:async()=>receipt}),...overrides};
+ vm.createContext(ctx);vm.runInContext(lib,ctx);
+ const start=app.indexOf('  window.reviewAct = async function('),end=app.indexOf('  // Review pagination',start);
+ vm.runInContext(app.slice(start,end),ctx);
+ return ctx;
+}
+
+test('confirmed review retains its original evidence when the queue clears',async()=>{
+ const original=structuredClone(record);
+ const ctx=reviewController({attentionItems:()=>[{kind:'review',id:original.id,review:original}],fetchTelemetry:async()=>{
+  original.revision=3;original.assessment.risk='low';original.context.resources=['new target'];
+ }});
+ await ctx.window.reviewAct(record.id,record.revision,'acknowledge');
+ assert.deepEqual({...ctx.reviewResult.receipt},receipt);
+ assert.equal(ctx.reviewResult.review.revision,2);assert.equal(ctx.reviewResult.review.assessment.risk,'critical');
+ assert.equal(ctx.reviewResult.review.context.resources[0],'<credentials>');
+ const html=ctx.reviewResultHTML(ctx.reviewResult,true);
+ assert.match(html,/Review recorded/);assert.match(html,/Evidence before this decision/);assert.match(html,/revision 2/);
+ assert.match(html,/&lt;credentials&gt;/);assert.match(html,/203\.0\.113\.5:443/);
+ assert.doesNotMatch(html,/data-action="review-decision"/);
+});
+
+test('unmatched or unreadable receipts never confirm a review or replay the write',async()=>{
+ for(const value of [null,{...receipt,id:'other'},{...receipt,revision:3},{...receipt,action:'expect'},{...receipt,at:'invalid'},{...receipt,scope_ids:['']},new Error('unreadable')]) {
+  let writes=0;const messages=[];
+  const ctx=reviewController({showToast:msg=>messages.push(msg),apiFetch:async()=>{
+   writes++;return{ok:true,status:200,json:async()=>{if(value instanceof Error)throw value;return value}};
+  }});
+  await ctx.window.reviewAct(record.id,record.revision,'acknowledge');
+  assert.equal(writes,1);assert.equal(ctx.reviewResult,null);assert.match(messages.join(' '),/not confirmed/i);
+  assert.equal(ctx.reviewDrafts.has(record.id),true);
+ }
+});
+
+test('late review receipts cannot cross an authentication boundary',async()=>{
+ for(const change of [ctx=>{ctx.handoffGeneration++},ctx=>{ctx.sessionEnded=true}]) {
+  let respond;let refreshed=0;
+  const ctx=reviewController({apiFetch:()=>new Promise(resolve=>{respond=resolve}),fetchTelemetry:async()=>{refreshed++}});
+  const pending=ctx.window.reviewAct(record.id,2,'acknowledge');change(ctx);
+  respond({ok:true,status:200,json:async()=>receipt});await pending;
+  assert.equal(ctx.reviewResult,null);assert.equal(refreshed,0);
+ }
+});
+
+test('an older response cannot replace the result of the latest decision',async()=>{
+ const replies=[];
+ const ctx=reviewController({apiFetch:()=>new Promise(resolve=>replies.push(resolve))});
+ const older=ctx.window.reviewAct(record.id,2,'acknowledge');
+ const newer=ctx.window.reviewAct('second',4,'close_reported');
+ replies[1]({ok:true,status:200,json:async()=>({...receipt,id:'second',revision:4,action:'close_reported'})});await newer;
+ replies[0]({ok:true,status:200,json:async()=>receipt});await older;
+ assert.equal(ctx.reviewResult.receipt.id,'second');assert.equal(ctx.reviewResult.receipt.action,'close_reported');
+});
+
+test('receipt labels preserve closure uncertainty and actual permission scope IDs',()=>{
+ const ctx={};vm.createContext(ctx);vm.runInContext(lib,ctx);
+ const closure=ctx.reviewResultHTML({receipt:{...receipt,action:'close_reported'},review:record},true);
+ assert.match(closure,/Closure reported/);assert.match(closure,/not been verified/);
+ const scoped=ctx.reviewResultHTML({receipt:{...receipt,action:'expect',scope_ids:['scope-one']},review:record},true);
+ assert.match(scoped,/Scoped permission recorded/);assert.match(scoped,/scope-one/);assert.match(scoped,/firewall and payload checks/i);
+ assert.match(scoped,/data-action="open-review-result-permissions"/);
+ assert.doesNotMatch(ctx.reviewResultHTML({receipt:{...receipt,action:'expect',scope_ids:['scope-one']},review:record}),/data-action="open-review-result-permissions"/);
+ const once=ctx.reviewResultHTML({receipt:{...receipt,action:'expect'},review:record},true);
+ assert.match(once,/Expected once/);assert.match(once,/No future permission/);
+ assert.doesNotMatch(once+closure,/data-action="open-review-result-permissions"/);
+ assert.doesNotMatch(scoped,/data-action="review-decision"/);
+});
+
+test('a credential change during permission confirmation prevents the write',async()=>{
+ let writes=0;const ctx=reviewController({apiFetch:async()=>{writes++}});
+ ctx.window.saConfirm=async()=>{ctx.handoffGeneration++;return true};
+ await ctx.window.reviewAct(record.id,2,'expect',{kind:'exact',expiry:'24h'});
+ assert.equal(writes,0);assert.equal(ctx.reviewResult,null);
+});
+
+test('dismissing the result clears feedback without issuing another decision',async()=>{
+ let writes=0;const ctx=reviewController({apiFetch:async()=>{writes++;return{ok:true,json:async()=>receipt}}});
+ await ctx.window.reviewAct(record.id,2,'acknowledge');
+ ctx.window.dismissReviewResult();
+ assert.equal(ctx.reviewResult,null);assert.equal(writes,1);
+});
+
+test('evidence navigation returns to its original receipt and cannot cross authentication',()=>{
+ const first={receipt,review:record};
+ const drawers=[];
+ const ctx=reviewController({reviewResult:first,drawerReviewResult:null,drawerMode:null,
+  drawer:{hidden:false},drawerBack:null,attentionSelection:null,openDrawer:options=>drawers.push(options)});
+ const start=app.indexOf('  function currentDrawerBack()'),end=app.indexOf('  function fillFamilyDrawer()',start);
+ vm.runInContext(app.slice(start,end),ctx);
+ ctx.window.openReviewResult();
+ const back=ctx.currentDrawerBack();
+ assert.equal(back.label,'Review result');
+ ctx.reviewResult={receipt:{...receipt,id:'new-review',revision:4},review:{...record,context:{resources:['new target']}}};
+ back.reopen();
+ assert.match(drawers[1].body,/&lt;credentials&gt;/);assert.match(drawers[1].body,/revision 2/);
+ assert.doesNotMatch(drawers[1].body,/new target|revision 4/);
+ ctx.handoffGeneration++;
+ back.reopen();
+ assert.equal(drawers.length,2);
 });
 
 function home(records, flags = []) {

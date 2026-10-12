@@ -11,6 +11,18 @@
   let bookCleanup = () => {};
   let contextRuleReads = 0;
   const contextRules = data['/expected-egress'].rules;
+  if (scenarios.has('attentionactionfocus') || scenarios.has('attentionactionmanual')) {
+    const group = data['/posture'].groups.find(group => group.items.some(item => item.kind === 'guard'));
+    const guard = {...group.items.find(item => item.kind === 'guard')};
+    data['/posture'] = {...data['/posture'],needs_you:1,items:[guard],groups:[{...group,items:[guard]}]};
+    let facts = 0;
+    window.__attentionActionFocusRefresh = (mode = 'facts') => {
+      guard.detail = `Recorded guard facts ${++facts}`;
+      if (mode === 'remove') guard.available_scopes = guard.available_scopes.filter(scope => scope.expiry !== '24h');
+      window.SA.t.posture = data['/posture'];
+      window.SA.reconcileAttention();
+    };
+  }
   if (scenarios.has('attentionremodel')) {
     const ids = scenarios.has('attentionfinal') ? ['flag-1'] : ['flag-1', 'flag-2'];
     const items = ids.map(id => ({kind:'flag', id, priority:2, title:'Fixture attention ' + id, detail:'Recorded fixture evidence'}));
@@ -136,7 +148,7 @@
     try { sessionStorage.setItem('sa.spend-view', JSON.stringify({ by: 'repo', since: '24h' })); } catch { /* ignored */ }
   }
   // spenddaydemo: a tab whose saved Spend view is by day over 7d (a reload).
-  if (scenarios.has('spenddaydemo')) {
+  if (scenarios.has('spenddaydemo') || scenarios.has('usagefocus')) {
     try { sessionStorage.setItem('sa.spend-view', JSON.stringify({ by: 'day', since: '7d' })); } catch { /* ignored */ }
   }
 
@@ -385,9 +397,15 @@
       return {status:'ok',resolved:true};
     }
     if (p === '/reviews/decision') {
-      const receipt={id:body.id,revision:body.revision,action:body.action,at:iso(0),scope_ids:['scope-browser']};
-      const review=data['/reviews'].reviews[0];review.review_state='reviewed';review.decision=receipt;
-      data['/decision-scopes']=[{id:'scope-browser',kind:body.scope.kind,agent:'claude',session_id:'sess-claude-1',workspace:'/Users/dev/workspace/api-service',reader_exe:'/usr/bin/cat',rule_id:'sensitive-read-then-connect',resource_path:'/work/.env',operation:'read-connect',destination:'api.example.com:443',created_at:iso(0),expires_at:new Date(now+86400000).toISOString(),identity_basis:'observed-session'}];
+      const future = body.action === 'expect' && body.scope?.kind !== 'once';
+      const receipt={id:body.id,revision:body.revision,action:body.action,at:iso(0),...(future ? {scope_ids:['scope-browser']} : {})};
+      const review=data['/reviews'].reviews.find(r=>r.id===body.id);
+      review.review_state=body.action==='close_reported'?'closed_reported':'reviewed';review.decision=receipt;
+      if (future) data['/decision-scopes']=[{id:'scope-browser',kind:body.scope.kind,agent:'claude',session_id:'sess-claude-1',workspace:'/Users/dev/workspace/api-service',reader_exe:'/usr/bin/cat',rule_id:'sensitive-read-then-connect',resource_path:'/work/.env',operation:'read-connect',destination:'api.example.com:443',created_at:iso(0),expires_at:new Date(now+86400000).toISOString(),identity_basis:'observed-session'}];
+      for (const group of data['/posture'].groups || []) group.items=group.items.filter(item=>item.kind!=='review'||item.id!==body.id);
+      data['/posture'].groups=data['/posture'].groups.filter(group=>group.items.length);
+      data['/posture'].items=data['/posture'].items.filter(item=>item.kind!=='review'||item.id!==body.id);
+      data['/posture'].needs_you=data['/posture'].groups.reduce((n,g)=>n+g.items.length,0);
       return receipt;
     }
     if (p === '/advisor/assess-host') {
@@ -461,6 +479,12 @@
   let slowShapeRecovered = false;
   let spendShapeBad = scenarios.has('firstload');
   window.ConsoleFixtures.apply(fixture);
+  if (scenarios.has('reviewresult')) {
+    const review = data['/reviews'].reviews[0];
+    const item = {kind:'review',id:review.id,priority:2,title:'Recorded read and connection',review};
+    data['/posture'] = {...data['/posture'],needs_you:1,items:[item],
+      groups:[{key:'review-result',agent:'claude',items:[item]}]};
+  }
   stamp('fixture-posture', JSON.stringify(data['/posture']));
   const fixtureReads = {};
   stamp('fetch-count', '0');
@@ -481,6 +505,22 @@
       return new Response(JSON.stringify(data[String(path)] ?? data[p]), {status: 200, headers: {'Content-Type': 'application/json'}});
     }
     if (scenarios.has('authrecover') && opts?.method === 'POST') authRecoveryMutations++;
+    if (scenarios.has('reviewresult') && p === '/decision-scopes') {
+      const rows = data['/decision-scopes'] || [];
+      if (opts?.method === 'DELETE') {
+        const id = new URLSearchParams(String(path).split('?')[1]).get('id');
+        if (id !== 'scope-browser') throw new Error('Wrong permission target');
+        window.__reviewPermissionDeletes = (window.__reviewPermissionDeletes || 0) + 1;
+        const record = rows.find(row => row.id === id);
+        record.revoked_at = iso(0);
+        record.applicability = { label: 'Revoked', revoke: false };
+        return { ok: true, json: async () => ({ revoked: true, id }) };
+      }
+      return { ok: true, json: async () => rows.length ? [
+        ...rows.map(row => ({ ...row, applicability: row.applicability || { label: 'Timed permission', revoke: true } })),
+        { ...rows[0], id: 'unrelated-permission', resource_path: '/unrelated/resource' },
+      ] : [] };
+    }
     if (scenarios.has('permissionsdemo') && p === '/decision-scopes') {
       if (opts?.method === 'DELETE') {
         const id = new URLSearchParams(String(path).split('?')[1]).get('id');
@@ -502,7 +542,7 @@
       };
       return { ok: true, json: async () => [scope('synthetic-scope'), scope('unrelated-permission')] };
     }
-    if ((scenarios.has('contexthandoff') || scenarios.has('investigationdemo')) && p.startsWith('/flags/') && p.endsWith('/explain')) {
+    if ((scenarios.has('contexthandoff') || scenarios.has('investigationdemo') || scenarios.has('reviewresult')) && p.startsWith('/flags/') && p.endsWith('/explain')) {
       const id = decodeURIComponent(p.split('/')[2]);
       const flag = data['/flags'].find(f => f.id === id);
       return {ok:!!flag,status:flag?200:404,json:async()=>flag,text:async()=>flag?JSON.stringify(flag):'flag unavailable'};
@@ -819,11 +859,16 @@
       const params = new URLSearchParams(String(path).split('?')[1] || '');
       const by = params.get('by');
       if (by && data['/costs?by=' + by]) body = data['/costs?by=' + by];
-      if (scenarios.has('remodelusage') && body) {
+      if ((scenarios.has('remodelusage') || scenarios.has('usagefocus')) && body) {
         const tz = Number(params.get('tz') || 0);
         if (by === 'day') {
-          const last = Date.parse(body.until) + tz * 60000;
-          body = {...body, rows:body.rows.map((row,i) => ({...row,key:new Date(last - (body.rows.length - 1 - i) * 86400000).toISOString().slice(0,10)}))};
+          if (scenarios.has('usagefocus')) {
+            body = {...body, since:'2026-10-08T00:00:00Z', until:'2026-10-11T00:00:00Z',
+              total:{calls:33,cost_usd:33}, rows:[{key:'2026-10-09',calls:11,cost_usd:11},{key:'2026-10-10',calls:22,cost_usd:22}]};
+          } else {
+            const last = Date.parse(body.until) + tz * 60000;
+            body = {...body, rows:body.rows.map((row,i) => ({...row,key:new Date(last - (body.rows.length - 1 - i) * 86400000).toISOString().slice(0,10)}))};
+          }
           data['/costs?by=day'] = body;
         } else if (params.get('until') && params.get('since')) {
           const day = new Date(Date.parse(params.get('since')) + tz * 60000).toISOString().slice(0,10);
@@ -831,6 +876,10 @@
           const total = row ? {...row,key:''} : {key:'',calls:0,cost_usd:0};
           body = {...body,by:'repo',since:params.get('since'),until:params.get('until'),total,
             rows:row ? [{...row,key:'fixture-repo'}] : []};
+          if (scenarios.has('usagefocus') && row) {
+            body.rows = Array.from({length:11}, (_,i) => ({key:`usage-repo-${String(i+1).padStart(2,'0')}`,
+              calls:row.calls/11,cost_usd:row.cost_usd*(11-i)/66}));
+          }
         }
       }
       costLog.push(String(path).split('?')[1] || '');
@@ -962,7 +1011,8 @@
     document.querySelector(`.tab-btn[data-tab="${r.tab}"]`).click();
     if (r.sub) document.querySelector(r.tab === 'protection'
       ? `[data-action="goto-protection"][data-protection-view="${r.sub}"]`
-      : `.subtab-btn[data-subtab="${r.sub}"]`).click();
+      : r.tab === 'system' ? `#tab-system [data-system-subtab="${r.sub}"]`
+      : `#tab-sessions .subtab-btn[data-subtab="${r.sub}"]`).click();
     const group = document.getElementById({ findings: 'home-findings', overview: 'home-trends' }[id] || '');
     if (group && !group.open) group.open = true;
     return r;
@@ -1291,9 +1341,10 @@
       }
       openTab('findings');
       openTab('overview');
-      openTab('system');
+      openTab('system/worktrees');
+      openTab('system/clutter');
       openTab('sessions/processes');
-      openTab('sessions/resources');
+      openTab('system/resources');
       openTab('sessions/events');
       openTab('sessions/board');
       openTab('egress');
@@ -1356,12 +1407,12 @@
         metadata.open = true;
         metadata.querySelector('summary').focus({ preventScroll: true });
         const top = body().scrollTop;
-        renderSessionBoard();
+        window.SA.renderSessionBoard();
         receipt.history = Math.abs(body().scrollTop - top) < 2;
         receipt.details = detail().querySelector('details.session-metadata').open;
         receipt.focus = document.activeElement === detail().querySelector('details.session-metadata summary');
         window.SA.sessionMemoryPage.rows.push({ id: 'new-activity', at: new Date(now).toISOString(), kind: 'activity', title: 'New activity' });
-        renderSessionBoard();
+        window.SA.renderSessionBoard();
         receipt.updateHistory = Math.abs(body().scrollTop - top) < 2 && !detail().querySelector('[data-action="session-latest"]').hidden;
         detail().querySelector('[data-action="session-latest"]').click();
         receipt.latest = near();
@@ -1375,13 +1426,13 @@
         receipt.earlier = detail().querySelectorAll('.sm-row').length === 121 && Math.abs(replacement.getBoundingClientRect().top - body().getBoundingClientRect().top - offset) < 2;
         const group = rail().querySelector('[data-harness="codex"]');
         group.open = false;
-        renderSessionBoard();
+        window.SA.renderSessionBoard();
         receipt.collapse = !rail().querySelector('[data-harness="codex"]').open;
         await window.selectSession(first);
         receipt.reveal = rail().querySelector('[data-harness="codex"]').open;
         const order = Array.from(rail().querySelectorAll('[data-action="select-session"]'), row => row.dataset.id).join(',');
         window.SA.t.sessions = window.SA.t.sessions.map(session => session.id === 'wb-session-79' ? { ...session, last_seen_at: new Date(now + 60000).toISOString() } : session);
-        renderSessionBoard();
+        window.SA.renderSessionBoard();
         receipt.order = Array.from(rail().querySelectorAll('[data-action="select-session"]'), row => row.dataset.id).join(',') === order;
         data['/sessions'].find(session => session.id === first)._timeline = Array.from({ length: 500 }, (_, i) => ({
           kind: 12, session_id: first, ts: iso(600000 - i * 1000), tool: 'RetainedTrace' + i, tool_status: 'ok', duration_ms: 100,
@@ -1398,7 +1449,7 @@
         const readingTop = body().scrollTop;
         window.showSessionList();
         const listTop = rail().scrollTop;
-        renderSessionBoard();
+        window.SA.renderSessionBoard();
         receipt.back = panel().dataset.pane === 'list' && rail().scrollTop === listTop && document.activeElement?.dataset.id === first;
         await window.selectSession(first);
         receipt.backReading = Math.abs(body().scrollTop - readingTop) < 2;
@@ -1413,7 +1464,7 @@
         await wait();
         const selected = window.SA.selectedSessionId;
         window.SA.t.sessions = window.SA.t.sessions.filter(session => session.id !== selected);
-        renderSessionBoard();
+        window.SA.renderSessionBoard();
         receipt.unavailable = window.SA.selectedSessionId === selected && detail().textContent.includes('Session unavailable');
         await window.selectSession('sess-claude-1');
         receipt.narrowFocus = !window.matchMedia('(max-width: 900px)').matches || document.activeElement === detail().querySelector('h3');
@@ -1856,14 +1907,14 @@
   // shows one bar for that family with its session count, and the badge
   // counts agent families (5821, 4412, 6033), not sessions or infra (7001).
   if (scenarios.has('memfamilydemo')) {
-    // Memory by family is a Trends chart, under the Home:Trends group.
-    setTimeout(() => openTab('overview'), 1500);
+    // Memory by family shares System Resources with live usage and pressure history.
+    setTimeout(() => openTab('system/resources'), 1500);
   }
   // Post-mortem variant: every live session has exited, but persisted pressure
   // episodes must remain visible.
   if (scenarios.has('noresourcesdemo')) {
-    // The resource board and its flight recorder live on Sessions/Resources.
-    setTimeout(() => openTab('sessions/resources'), 1500);
+    // The resource board and its flight recorder live on System/Resources.
+    setTimeout(() => openTab('system/resources'), 1500);
   }
   if (scenarios.has('headroomhint') && !scenarios.has('phoneframe') && !scenarios.has('phonedemo')) {
     setTimeout(() => openTab('resources'), 5000);
@@ -2152,21 +2203,31 @@
       input.value = value;
       input.dispatchEvent(new Event('input', { bubbles: true }));
     };
-    const probe = id => stamp(id, JSON.stringify({
-      rows: document.querySelectorAll('#worktrees-container .wt-row').length,
-      clutter: document.querySelectorAll('#clutter-container .cl-row').length,
-      summary: (document.getElementById('worktrees-summary') || {}).textContent,
-      legend: (document.getElementById('worktrees-legend') || {}).hidden ? '' : (document.getElementById('worktrees-legend') || {}).textContent,
-      empty: Array.from(document.querySelectorAll('.empty span')).map(s => s.textContent),
-    }));
-    setTimeout(() => probe('gd-before'), 3000);
+    const probe = async id => {
+      const settle = () => new Promise(resolve => setTimeout(resolve, 300));
+      openTab('system/worktrees');
+      await settle();
+      const state = {
+        rows: document.querySelectorAll('#worktrees-container .wt-row').length,
+        summary: (document.getElementById('worktrees-summary') || {}).textContent,
+        legend: (document.getElementById('worktrees-legend') || {}).hidden ? '' : (document.getElementById('worktrees-legend') || {}).textContent,
+        empty: Array.from(document.querySelectorAll('#system-worktrees .empty span')).map(s => s.textContent),
+      };
+      openTab('system/clutter');
+      await settle();
+      state.clutter = document.querySelectorAll('#clutter-container .cl-row').length;
+      state.empty.push(...Array.from(document.querySelectorAll('#system-clutter .empty span')).map(s => s.textContent));
+      stamp(id, JSON.stringify(state));
+    };
+    setTimeout(() => probe('gd-before'), 2800);
     setTimeout(() => typeSearch('EVIDENCE'), 3500);
-    setTimeout(() => probe('gd-evidence'), 4600);
+    setTimeout(() => probe('gd-evidence'), 4000);
     setTimeout(() => typeSearch('huggingface'), 5000);
-    setTimeout(() => probe('gd-clutter'), 6100);
+    setTimeout(() => probe('gd-clutter'), 5400);
     setTimeout(() => typeSearch(''), 6500);
-    setTimeout(() => probe('gd-cleared'), 7600);
+    setTimeout(() => probe('gd-cleared'), 6900);
     setTimeout(() => {
+      openTab('system/worktrees');
       const btn = document.querySelector('#worktrees-container [data-action="worktree-advise-all"]');
       if (btn) btn.click();
     }, 8000);
@@ -2359,7 +2420,7 @@
   if (scenarios.has('cspdemo')) {
     const probes = [
       ['wf-bar', 'sessions', '.wf-bar'],
-      ['hbar-fill', 'overview', '#chart-memory .hbar-row:last-child .hbar-fill'],
+      ['hbar-fill', 'system/resources', '#chart-memory .hbar-row:last-child .hbar-fill'],
       ['resource-host-segment', 'resources', '.resource-host-segment.agent'],
     ];
     const widths = [];
@@ -2473,8 +2534,8 @@
   // Auto-action: select a session, open the resource policy editor, and add
   // its workspace as an override through the real delegated click path.
   if (scenarios.has('policydemo')) {
-    // The resource board (and its family drawer) lives on Sessions/Resources.
-    setTimeout(() => openTab('sessions/resources'), 1500);
+    // The resource board (and its family drawer) lives on System/Resources.
+    setTimeout(() => openTab('system/resources'), 1500);
     setTimeout(() => {
       document.querySelector('[data-action="view-family"]').click();
       document.querySelector('[data-action="edit-resource-policy"]').click();
@@ -2520,11 +2581,11 @@
       }, 2600);
     }, 4500);
   }
-  // memprobe: Overview open, every Memory by family row probed, then the same
+  // memprobe: System Resources open, every Memory by family row probed, then the same
   // session re-emitted three times. <pre id="mem-probe"> gets the chart-memory
   // renders in between and how many probed rows are still connected.
   if (scenarios.has('memprobe')) {
-    setTimeout(() => openTab('overview'), 3500);
+    setTimeout(() => openTab('system/resources'), 3500);
     setTimeout(() => {
       const rows = Array.from(document.querySelectorAll('#chart-memory .hbar-row'));
       rows.forEach(r => { r.dataset.probe = '1'; });
@@ -2780,7 +2841,7 @@
   }
   // hiddenrenderprobe: renderAll() (boot, Refresh, search) must not paint a
   // panel that isn't on screen — Home is active by default, so the Trends
-  // charts (closed group) and the Sessions/Resources sub-view stay hidden
+  // charts (closed group) and the System/Resources sub-view stay hidden
   // throughout. <pre id="hidden-render-probe"> reports each panel's
   // absolute render count after boot, after Refresh, after a search, and
   // again once each panel is actually shown.
@@ -2799,10 +2860,10 @@
           const afterSearch = snap();
           // The <details> "toggle" event queues as its own task, so it must
           // settle (and render Trends while Home is still the active tab)
-          // before switching to Sessions for the resources sub-view.
+          // before switching to System for the resources sub-view.
           document.querySelector('#home-trends > summary').click();
           setTimeout(() => {
-            openTab('sessions/resources');
+            openTab('system/resources');
             setTimeout(() => {
               stamp('hidden-render-probe',
                 `boot:${afterBoot} | refresh:${afterRefresh} | search:${afterSearch} | shown:${snap()}`);
@@ -2813,6 +2874,67 @@
     }, 1000);
   }
   // policylists: the Policy tab, opened once telemetry has landed.
+  if (scenarios.has('reviewresult')) {
+    const action = scenarios.has('reviewresult=expect') ? 'expect' : scenarios.has('reviewresult=close_reported') ? 'close_reported' : 'acknowledge';
+    setTimeout(() => {
+      document.querySelector('#attention-list [data-action="select-attention"]')?.click();
+      const selector = `[data-decision="${action}"]${action === 'expect' ? '[data-scope="exact"][data-expiry="24h"]' : ''}`;
+      document.querySelector('#drawer ' + selector)?.click();
+      if (action === 'expect') setTimeout(() => document.getElementById('confirm-ok')?.click(), 100);
+    }, 1500);
+    setTimeout(async () => {
+      const result=document.getElementById('review-result');
+      const text=result.textContent;
+      const probe={queueCleared:document.getElementById('attention-center').hidden,
+        retained:!result.hidden && text.includes('/work/.env') && text.includes('revision 3'),
+        label:text.includes({acknowledge:'Review recorded',close_reported:'Closure reported',expect:'Scoped permission recorded'}[action]),
+        fits:result.getBoundingClientRect().right<=innerWidth && document.documentElement.scrollWidth<=innerWidth};
+      result.querySelector('[data-action="open-review-result"]')?.click();
+      const body=document.getElementById('drawer-body');
+      probe.evidence=body.textContent.includes('Evidence before this decision') && body.textContent.includes('api.example.com:443') && body.textContent.includes('Recorded risk: high');
+      probe.readOnly=!document.querySelector('#drawer [data-action="review-decision"]');
+      const before=body.textContent;
+      body.querySelector('[data-action="open-flag"]')?.click();
+      await new Promise(resolve=>setTimeout(resolve,100));
+      const back=document.getElementById('btn-drawer-back');
+      probe.evidenceEntry=!back?.hidden && back?.textContent.includes('Review result') && body.textContent.includes('Recorded evidence');
+      back?.click();
+      probe.evidenceReturn=body.textContent===before && !document.querySelector('#drawer [data-action="review-decision"]');
+      const permissions = body.querySelector('[data-action="open-review-result-permissions"]');
+      probe.permissionEntry = action === 'expect' ? !!permissions : !permissions;
+      if (action === 'expect') {
+        permissions?.click();
+        await new Promise(resolve=>setTimeout(resolve,100));
+        probe.permissionDetail=body.textContent.includes('Timed permission') && body.textContent.includes('/work/.env')
+          && body.textContent.includes('api.example.com:443') && body.textContent.includes('decision for revision 3');
+        probe.permissionScope=!!body.querySelector('[data-action="session-permission-revoke"][data-id="scope-browser"]')
+          && !body.textContent.includes('unrelated-permission') && !body.textContent.includes('/unrelated/resource');
+        probe.permissionFits=document.documentElement.scrollWidth<=innerWidth;
+        if (scenarios.has('resultrevoke')) {
+          body.querySelector('[data-action="session-permission-revoke"]')?.click();
+          document.getElementById('confirm-cancel')?.click();
+          await new Promise(resolve=>setTimeout(resolve,100));
+          probe.permissionCancelled=!window.__reviewPermissionDeletes && !!body.querySelector('[data-action="session-permission-revoke"]');
+          body.querySelector('[data-action="session-permission-revoke"]')?.click();
+          document.getElementById('confirm-ok')?.click();
+          await new Promise(resolve=>setTimeout(resolve,100));
+          probe.permissionRevoked=window.__reviewPermissionDeletes===1 && body.textContent.includes('Revocation saved')
+            && !body.querySelector('[data-action="session-permission-revoke"]');
+        }
+        if (!scenarios.has('resultpermissions')) {
+          back?.click();
+          probe.permissionReturn=body.textContent===before;
+        }
+      }
+      if (scenarios.has('resultcard') || scenarios.has('dismissresult')) document.getElementById('btn-drawer-close')?.click();
+      if (scenarios.has('dismissresult')) {
+        result.querySelector('[data-action="dismiss-review-result"]')?.click();
+        window.SA.flushRender();
+        probe.dismissed=result.hidden && document.activeElement?.dataset.tab==='home';
+      }
+      document.body.dataset.reviewResultProbe=JSON.stringify(probe);
+    }, 3500);
+  }
   if (scenarios.has('scopedpermission')) {
     setTimeout(()=>openTab('findings'),4000);
     setTimeout(()=>document.querySelector('#flags-list [data-decision="expect"][data-scope="exact"][data-expiry="24h"]')?.click(),7000);
@@ -2915,6 +3037,31 @@
       }, 500);
     }, 4000);
   }
+
+  // Focus continuity uses native served buttons without activating a decision.
+  if (scenarios.has('attentionactionfocus')) setTimeout(() => {
+    const checks = {};
+    const writes = () => reqLog.filter(line => /^(POST|DELETE|PUT|PATCH) /.test(line)).length;
+    const before = writes();
+    document.querySelector('#attention-list [data-action="select-attention"][data-need-kind="guard"]')?.click();
+    const deny = document.querySelector('#drawer-foot [data-action="guard-resolve"][data-verdict="deny"]');
+    checks.opened = !!deny;
+    deny?.focus({preventScroll:true});
+    window.__attentionActionFocusRefresh();
+    checks.deny = document.activeElement.dataset.verdict === 'deny';
+    const more = document.querySelector('#drawer-foot details.act-more');
+    if (more) more.open = true;
+    const choice = document.querySelector('#drawer-foot [data-scope="exact"][data-expiry="24h"]');
+    choice?.focus({preventScroll:true});
+    window.__attentionActionFocusRefresh();
+    checks.more = document.activeElement.dataset.scope === 'exact' && document.activeElement.dataset.expiry === '24h'
+      && document.activeElement.closest('details')?.open && document.activeElement.getClientRects().length > 0;
+    window.__attentionActionFocusRefresh('remove');
+    checks.removed = document.activeElement.id === 'btn-drawer-close';
+    checks.noWrites = writes() === before;
+    stamp('attention-action-focus-probe',JSON.stringify(checks));
+    document.body.dataset.attentionActionFocus = JSON.stringify(checks);
+  }, 1500);
 
   // One inspection round trip through real controls; no security writes.
   if (scenarios.has('protectioncontext') || scenarios.has('protectioncontextprobe')) {

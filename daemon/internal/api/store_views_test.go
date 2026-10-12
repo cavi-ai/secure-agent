@@ -59,3 +59,14 @@ func TestSessionTimelineViewOrdersEvidenceAndReturnsReadErrors(t *testing.T) {
 		t.Fatalf("read error hidden: %v", err)
 	}
 }
+
+func TestSessionTimelineLimitKeepsDefaultForMissingOrNonPositive(t *testing.T) {
+	for _, raw := range []string{"", "0", "-1", "nope"} {
+		if sessionTimelineLimit(raw) != sessionTimelineDefaultLimit {
+			t.Fatalf("limit %q changed the default", raw)
+		}
+	}
+	if sessionTimelineLimit("40") != 40 {
+		t.Fatal("explicit positive limit was ignored")
+	}
+}

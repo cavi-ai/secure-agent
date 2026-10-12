@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ func TestFoldFlagRepeatStoresAndPublishes(t *testing.T) {
 	fold("gone", now)
 	fold("f1", now.Add(time.Minute))
 
-	if f, _ := st.GetFlag("f1"); f.Repeats != 1 {
+	if f, _ := testutil.Lookup[model.Flag](t)(st.GetFlagResult("f1")); f.Repeats != 1 {
 		t.Fatalf("repeats = %d, want 1", f.Repeats)
 	}
 	select {

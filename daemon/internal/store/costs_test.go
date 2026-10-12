@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"math"
 	"reflect"
 	"strconv"
@@ -152,7 +153,7 @@ func TestCostReportProviderAndUnpricedGroups(t *testing.T) {
 
 	kind := int(event.KindModelCall)
 	var providers []string
-	for _, e := range s.QueryEvents(EventFilter{Kind: &kind, Limit: 10}) {
+	for _, e := range testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Kind: &kind, Limit: 10})) {
 		providers = append(providers, e.Provider)
 	}
 	if strings.Join(providers, ",") != ",custom,openrouter,kimi-for-coding,kimi-for-coding" {
@@ -313,7 +314,7 @@ func TestCostReportProviderResolverMayReenterStore(t *testing.T) {
 	now := time.Now()
 	s := seedCostStore(t, now)
 	resolve := func(m string) string {
-		s.QueryEvents(EventFilter{Limit: 1})
+		testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 1}))
 		return map[string]string{"m1": "anthropic", "m2": "openai"}[m]
 	}
 	done := make(chan CostReport, 1)

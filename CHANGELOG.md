@@ -15,6 +15,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: the same reads across agents are one decision with **Treat as routine** and **Dismiss all** (`flag_ids` on `POST /expected`).
 - Cursor: Secure Agent's tool hooks run beside the user's hooks.
 - Documentation: guides for setup, first session, coverage and troubleshooting, generated CLI, configuration and API references, and a docs archive on each stable release.
+- Findings: apply built-in prevention instructions to the recorded project's AGENTS.md or CLAUDE.md in one click, with a file and text preview.
 - Findings: evidence, control, residual risk and review state shown apart; reviews are saved per evidence revision, reopen on stronger evidence and keep the risk (`/reviews`).
 - Findings: send selected findings to the local agent's review queue.
 - Findings: agent-scoped `.env` exceptions for test and non-secret files.

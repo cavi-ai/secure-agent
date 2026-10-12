@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,8 +27,8 @@ func TestMuteLoadFailureDoesNotAcknowledgeFlags(t *testing.T) {
 			if _, err := st.PutFlag(flagFor("open-flag", "sensitive-read-then-connect", "then connected to api.example.com:443 at T")); err != nil {
 				t.Fatal(err)
 			}
-			a := newTestAPI("", st, nil, nil)
-			a.mutes = correlate.NewMuteStore(path)
+
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, Mutes: correlate.NewMuteStore(path)})
 			body := `{"rule":"sensitive-read-then-connect","host":"api.example.com"}`
 			request := httptest.NewRequest(method, "/mute?rule=sensitive-read-then-connect&host=api.example.com", strings.NewReader(body))
 			response := httptest.NewRecorder()
@@ -35,7 +36,7 @@ func TestMuteLoadFailureDoesNotAcknowledgeFlags(t *testing.T) {
 			if response.Code != http.StatusInternalServerError {
 				t.Fatalf("status = %d, want 500; body = %s", response.Code, response.Body.String())
 			}
-			if flag, ok := st.GetFlag("open-flag"); !ok || flag.Acknowledged {
+			if flag, ok := testutil.Lookup[model.Flag](t)(st.GetFlagResult("open-flag")); !ok || flag.Acknowledged {
 				t.Fatalf("failed mute changed the open flag: %+v, found = %v", flag, ok)
 			}
 			if audit := st.RecentAudit(10); len(audit) != 0 {
@@ -64,9 +65,8 @@ func TestMuteFlowAcknowledgesExistingFlags(t *testing.T) {
 	st.PutFlag(flagFor("f3", "sensitive-read-then-connect", "then connected to api.example.com:443 at T"))
 
 	mutes := correlate.NewMuteStore(dir + "/muted.json")
-	a := newTestAPI(dir+"/d.sock", st, nil, nil)
-	a.correlator = correlate.New(nil, nil, config.Config{}, correlate.Hooks{})
-	a.mutes = mutes // correlator nil-safe? use New(nil)
+
+	a := newTestAPI(Deps{SocketPath: dir + "/d.sock", Store: st, Killer: nil, Status: nil, Correlator: correlate.New(nil, nil, config.Config{}, correlate.Hooks{}), Mutes: mutes}) // correlator nil-safe? use New(nil)
 	if a.mutes == nil {
 		t.Fatal("mute store not set")
 	}
@@ -81,12 +81,12 @@ func TestMuteFlowAcknowledgesExistingFlags(t *testing.T) {
 		t.Fatalf("mute POST: %d %s", w.Code, w.Body.String())
 	}
 	for _, id := range []string{"f1", "f2"} {
-		got, ok := st.GetFlag(id)
+		got, ok := testutil.Lookup[model.Flag](t)(st.GetFlagResult(id))
 		if !ok || !got.Acknowledged {
 			t.Fatalf("flag %s must be acknowledged by the mute (localhost alias family)", id)
 		}
 	}
-	got3, _ := st.GetFlag("f3")
+	got3, _ := testutil.Lookup[model.Flag](t)(st.GetFlagResult("f3"))
 	if got3.Acknowledged {
 		t.Fatal("f3 (different host) must stay unacknowledged")
 	}
@@ -105,8 +105,8 @@ func TestMuteAgentRoundTrip(t *testing.T) {
 	st.PutFlag(model.Flag{ID: "k1", Rule: "keychain-access", Severity: 1, PID: 7, Agent: "codex"})
 	st.PutFlag(model.Flag{ID: "k2", Rule: "keychain-access", Severity: 1, PID: 9, Agent: "claude"})
 	mutes := correlate.NewMuteStore(dir + "/muted.json")
-	a := newTestAPI(dir+"/d.sock", st, nil, nil)
-	a.mutes = mutes
+
+	a := newTestAPI(Deps{SocketPath: dir + "/d.sock", Store: st, Killer: nil, Status: nil, Mutes: mutes})
 	h := a.buildMux()
 	do := func(method, target, body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
@@ -120,10 +120,10 @@ func TestMuteAgentRoundTrip(t *testing.T) {
 	if !mutes.Muted("keychain-access", "*", "codex") || mutes.Muted("keychain-access", "*", "claude") {
 		t.Fatal("the mute must cover codex only")
 	}
-	if f, _ := st.GetFlag("k1"); !f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(st.GetFlagResult("k1")); !f.Acknowledged {
 		t.Fatal("codex flag must be acknowledged")
 	}
-	if f, _ := st.GetFlag("k2"); f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(st.GetFlagResult("k2")); f.Acknowledged {
 		t.Fatal("claude flag must stay open")
 	}
 	if w := do("GET", "/mute", ""); !strings.Contains(w.Body.String(), `{"rule":"keychain-access","host":"*","agent":"codex","title":"Agent touched the keychain"}`) {
@@ -157,7 +157,7 @@ func TestFlagAcknowledgeEndpoint(t *testing.T) {
 	defer st.Close()
 	st.PutFlag(flagFor("valid-id.1", "sensitive-read-then-connect", "then connected to localhost:80 at T"))
 
-	a := newTestAPI(dir+"/d.sock", st, nil, nil)
+	a := newTestAPI(Deps{SocketPath: dir + "/d.sock", Store: st, Killer: nil, Status: nil})
 	h := a.buildMux()
 
 	ack := func(id string) *httptest.ResponseRecorder {
@@ -171,7 +171,7 @@ func TestFlagAcknowledgeEndpoint(t *testing.T) {
 	if w := ack("valid-id.1"); w.Code != 200 {
 		t.Fatalf("ack: %d %s", w.Code, w.Body.String())
 	}
-	got, ok := st.GetFlag("valid-id.1")
+	got, ok := testutil.Lookup[model.Flag](t)(st.GetFlagResult("valid-id.1"))
 	if !ok || !got.Acknowledged {
 		t.Fatal("flag must be acknowledged after first ack")
 	}

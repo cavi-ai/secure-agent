@@ -37,9 +37,9 @@ func (p *planRecorder) funcs() *PlanFuncs {
 	}
 }
 
-func planTestAPI(t *testing.T) (*API, *planRecorder) {
+func planTestDeps(t *testing.T) (Deps, *planRecorder) {
 	t.Helper()
-	a := explainTestAPI(t)
+	deps := explainTestDeps(t)
 	eng, err := firewall.NewEngine(config.FirewallConfig{Mode: "monitor"}, []byte("salt"))
 	if err != nil {
 		t.Fatal(err)
@@ -47,10 +47,15 @@ func planTestAPI(t *testing.T) (*API, *planRecorder) {
 	eng.SetFingerprints([]config.Fingerprint{
 		{ID: "fp1", Type: firewall.TypeEnvValue, Len: len(fileSecret), HMAC: firewall.Fingerprint([]byte("salt"), fileSecret)},
 	})
-	a.setFirewallForTest(FirewallControl{Engine: eng})
+	deps.Firewall = FirewallControl{Engine: eng}
 	rec := &planRecorder{pending: map[string]bool{}, ready: true}
-	a.plan = rec.funcs()
-	return a, rec
+	deps.Plan = rec.funcs()
+	return deps, rec
+}
+
+func planTestAPI(t *testing.T) (*API, *planRecorder) {
+	deps, rec := planTestDeps(t)
+	return newTestAPI(deps), rec
 }
 
 func planCall(t *testing.T, a *API, method, subject string) (int, PlanResponse) {
@@ -114,14 +119,16 @@ func TestPlanSubjectResolution(t *testing.T) {
 
 // Without a ready advisor, asking is 409 with the reason and the playbook.
 func TestPlanDisabledAdvisor(t *testing.T) {
-	a, rec := planTestAPI(t)
+	deps, rec := planTestDeps(t)
+	a := newTestAPI(deps)
 	seedTranscriptFinding(t, a)
 	rec.ready = false
 	code, resp := planCall(t, a, http.MethodPost, "flag:f1")
 	if code != http.StatusConflict || resp.Status != "disabled" || resp.Reason == "" || resp.Playbook.Why == "" || len(rec.reqs) != 0 {
 		t.Fatalf("%d %+v reqs=%d", code, resp, len(rec.reqs))
 	}
-	a.plan = nil
+	deps.Plan = nil
+	a = newTestAPI(deps)
 	if code, resp := planCall(t, a, http.MethodGet, "flag:f1"); code != http.StatusOK || resp.Status != "disabled" || resp.AdvisorReady {
 		t.Fatalf("unwired: %d %+v", code, resp)
 	}

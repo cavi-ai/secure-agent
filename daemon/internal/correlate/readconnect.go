@@ -30,14 +30,6 @@ type flagRepeat struct {
 	at time.Time
 }
 
-// SetOnRepeat wires the sink for repeats folded into an open flag. It runs
-// after Observe releases the correlator lock.
-func (c *Correlator) SetOnRepeat(fn func(flagID string, at time.Time)) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.onRepeat = fn
-}
-
 // CredentialOwnerUses counts connections judged a credential used with its
 // owner (recorded, not flagged).
 func (c *Correlator) CredentialOwnerUses() int {
@@ -141,20 +133,6 @@ func readConnectFoldKey(agent, sessionID string, r readMark, cm connMark) string
 		return sessionID + "\x00" + key
 	}
 	return key
-}
-
-// SetExpected wires the operator's expected patterns: match reports whether
-// every key is expected (and counts the hit).
-func (c *Correlator) SetExpected(match func(keys []string, at time.Time) bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.isExpected = match
-}
-
-func (c *Correlator) SetScopedExpected(match func([]model.DecisionScope, int32) bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.isScopedExpected = match
 }
 
 // ExpectedCount counts connections an expected pattern covered (recorded,
@@ -360,14 +338,6 @@ func (c *Correlator) foldLocked(key, id string, at time.Time, severity int) {
 	}
 }
 
-// SetOpenFlagChecker keeps an unresolved finding folded across hourly windows.
-// When unwired, the bounded in-memory window remains the fallback.
-func (c *Correlator) SetOpenFlagChecker(check func(string) bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.isOpenFlag = check
-}
-
 // StoredReadConnectSeverity re-evaluates causal strength from recorded
 // evidence only. Missing legacy process IDs retain their original severity.
 func StoredReadConnectSeverity(f model.Flag) int {
@@ -397,9 +367,9 @@ func StoredReadConnectSeverity(f model.Flag) int {
 	return readConnectSeverity(reads, conns)
 }
 
-// RestoreOpenReadFlags seeds folding from persisted unresolved findings.
+// restoreOpenReadFlags seeds folding from persisted unresolved findings.
 // Input is newest first; stronger prior evidence must not be overwritten.
-func (c *Correlator) RestoreOpenReadFlags(flags []model.Flag) {
+func (c *Correlator) restoreOpenReadFlags(flags []model.Flag) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, f := range flags {

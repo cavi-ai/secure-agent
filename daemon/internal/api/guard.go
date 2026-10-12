@@ -76,7 +76,12 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	// A supplied identity is only attributable if the durable session exists.
 	// Never guess from the agent, workspace, or request time.
 	if req.SessionID != "" {
-		if _, ok := a.store.GetSession(req.SessionID); !ok {
+		_, ok, err := a.store.GetSessionResult(req.SessionID)
+		if err != nil {
+			http.Error(w, "session data unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !ok {
 			req.SessionID = ""
 		}
 	}
@@ -133,7 +138,7 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		Workspace: identity.Workspace, ReaderExe: identity.ReaderExe, IdentityBasis: identity.IdentityBasis, PeerPID: peerPID, AvailableScopes: scopes,
 		// Disclose the blast radius of "allow always": the cached rule covers
 		// every path this rule matches for this agent, not just this file.
-		ScopeText: a.store.ExplainDecisionScope(identity) + " Once answers this request. Future permissions cover only this file, tool, workspace and observed executable path. Session permission ends with this session; timed permission expires after 24 hours or 7 days. Executable signatures are not verified. File approval does not authorize network access. Revoke in Policies.",
+		ScopeText: a.store.ExplainDecisionScope(identity) + " Once answers this request. Future permissions cover only this file, tool, workspace and observed executable path. Session permission ends with this session; timed permission expires after 24 hours or 7 days. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions.",
 	})
 	if r.Context().Err() != nil {
 		// The hook stopped waiting (its own deadline, or the harness killed

@@ -362,7 +362,7 @@ test('clutter: pills carry bytes per kind; summary counts clearable bytes and wh
   assert.ok(pills.includes('class="wt-pill on" data-action="clutter-filter" data-kind="tmp" aria-pressed="true">.tmp <b>1.0 MB</b>'));
   assert.ok(clutterSummaryText({ ...clutterReport(), refreshing: true }).startsWith('4 items · 8.0 GB clearable · refreshing…'));
   assert.equal(clutterSummaryText(clutterReport()),
-    '4 items · 8.0 GB clearable · 3.0 MB moved to the Trash by cleanups (frees when the Trash is emptied)');
+    '4 items · 8.0 GB clearable · 3.0 MB moved to the Trash by recorded cleanups');
 });
 
 test('clutter: a project shows 8 rows until expanded', () => {
@@ -487,7 +487,7 @@ test('niceBytesCeil: 1, 2 or 5 × a power of ten in the printed unit', () => {
   assert.equal(fmtDisk(niceBytesCeil(700 * GB)), fmtDisk(1000 * GB));
 });
 
-test('tiles: freed over the charted days, all time, removable now with Remove all across repositories, in the Trash', () => {
+test('tiles: charted and recorded freed totals, removable now, recorded Trash moves', () => {
   const GB = 1073741824;
   const rep = report();
   rep.repos[0].worktrees.push({ path: REPO + '/.worktrees/old', branch: 'feat/old', state: 'remove', size_bytes: GB, reasons: [] });
@@ -499,11 +499,12 @@ test('tiles: freed over the charted days, all time, removable now with Remove al
   const html = reclaimTilesHTML(rep, ledger);
   const tile = cls => html.split(`class="rc-tile ${cls}"`)[1].split('</div>')[0];
   assert.match(tile('rc-freed'), /Freed · last 2 days[\s\S]*3\.0 GB[\s\S]*3 cleanups/);
-  assert.match(tile('rc-alltime'), /Freed · all time[\s\S]*7\.0 GB[\s\S]*9 cleanups/);
+  assert.match(tile('rc-alltime'), /Freed · recorded[\s\S]*7\.0 GB[\s\S]*9 cleanups/);
   // Orphans and unreadable repositories never count as removable.
   assert.match(tile('rc-removable'), /Removable now[\s\S]*2\.0 GB[\s\S]*2 worktrees/);
   assert.ok(tile('rc-removable').includes('data-action="worktrees-remove-removable">Remove all 2</button>'));
-  assert.match(tile('rc-trash'), /In the Trash[\s\S]*512 MB[\s\S]*frees when the Trash is emptied/);
+  assert.match(tile('rc-trash'), /Moved to the Trash[\s\S]*512 MB[\s\S]*2 recorded cleanups/);
+  assert.ok(!html.includes('In the Trash') && !html.includes('frees when the Trash is emptied'));
   assert.equal(removableEverywhere(rep).rows.length, 2);
   // A running removal leaves the count; one removable row offers no Remove all.
   rep.removals = { [REPO + '/.worktrees/old']: { state: 'running' } };
@@ -512,6 +513,75 @@ test('tiles: freed over the charted days, all time, removable now with Remove al
   // Before the ledger loads, the report's totals stand in.
   const early = reclaimTilesHTML({ ...report(), reclaimed: { bytes: GB, count: 1, bytes_30d: GB, count_30d: 1, trashed_bytes: 0 } }, null);
   assert.match(early, /Freed · last 30 days[\s\S]*1\.0 GB[\s\S]*1 cleanup</);
+});
+
+test('cleanup values: historical Trash moves stay separate from current disk and removable space', () => {
+  const GB = 1073741824, TB = 1099511627776;
+  const rep = {
+    summary: { size_bytes: 8 * GB },
+    volumes: [{ mount: '/volume', total_bytes: 8 * TB, free_bytes: 512 * GB }],
+    repos: [{ path: REPO, worktrees: [
+      { path: REPO, state: 'main', size_bytes: 100 * GB },
+      { path: REPO + '/a', state: 'remove', size_bytes: 2 * GB },
+      { path: REPO + '/busy', state: 'remove', size_bytes: 3 * GB },
+      { path: REPO + '/review', state: 'review', size_bytes: 4 * GB },
+    ] }, { path: '/missing', error: 'not found', worktrees: [
+      { path: '/missing/a', state: 'remove', size_bytes: 100 * GB },
+    ] }],
+    removals: { [REPO + '/busy']: { state: 'running' } },
+    reclaimed: { bytes: 999 * GB, trashed_bytes: 999 * GB },
+  };
+  const ledger = { totals: { bytes: 7 * GB, count: 4, trashed_bytes: 516.1 * GB, trashed_count: 6 },
+    daily: [ { day: '2026-10-10', bytes: GB, count: 1, trashed_bytes: 5 * GB, trashed_count: 2 },
+      { day: '2026-10-11', bytes: 2 * GB, count: 2, trashed_bytes: 3 * GB, trashed_count: 1 } ] };
+  const before = JSON.stringify({ rep, ledger });
+  const tiles = reclaimTilesHTML(rep, ledger);
+  const tile = cls => tiles.split(`class="rc-tile ${cls}"`)[1].split('</div>')[0];
+  assert.match(tile('rc-freed'), /3\.0 GB[\s\S]*3 cleanups/);
+  assert.match(tile('rc-alltime'), /7\.0 GB[\s\S]*4 cleanups/);
+  assert.match(tile('rc-removable'), /2\.0 GB[\s\S]*1 worktree/);
+  assert.match(tile('rc-trash'), /Moved to the Trash[\s\S]*516\.1 GB[\s\S]*6 recorded cleanups/);
+  assert.match(tile('rc-trash'), /current Trash size is not measured/);
+  const chart = reclaimChartHTML(ledger.daily, '2026-10-11');
+  assert.match(chart, /data-freed="1073741824" data-count="1" data-trash="5368709120" data-trash-count="2"/);
+  assert.match(chart, /data-freed="2147483648" data-count="2" data-trash="3221225472" data-trash-count="1"/);
+  assert.match(chart, /<span>10\.0 GB<\/span><span>5\.0 GB<\/span><span>0<\/span>/);
+  const disk = worktreeDiskHTML(rep);
+  assert.match(disk, /512\.0 GB free of 8\.0 TB/);
+  assert.match(disk, /data-w="94"/);
+  assert.match(disk, /<b>Worktrees<\/b> 8\.0 GB/);
+  // Emptying Trash changes current free space, never the recorded moves.
+  rep.volumes[0].free_bytes = TB;
+  assert.match(worktreeDiskHTML(rep), /1\.0 TB free of 8\.0 TB/);
+  assert.match(worktreeDiskHTML(rep), /data-w="88"/);
+  assert.equal(reclaimTilesHTML(rep, ledger), tiles);
+  rep.volumes[0].free_bytes = 512 * GB;
+  assert.equal(JSON.stringify({ rep, ledger }), before);
+});
+
+test('cleanup values: zero, byte units, large rows and incomplete measurements', () => {
+  for (const [bytes, label] of [[0, '0 B'], [1023, '1023 B'], [1024, '1 KB'],
+    [1048576, '1.0 MB'], [1073741824, '1.0 GB'], [1099511627776, '1.0 TB']]) {
+    assert.equal(fmtDisk(bytes), label);
+  }
+  const bytes = Math.round(142.1 * 1073741824);
+  assert.equal(worktreeSizeLabel({ size_bytes: bytes }), '142.1 GB');
+  assert.equal(worktreeSizeLabel({ size_bytes: bytes, size_partial: true }), '≥142.1 GB');
+  const rep = { sizing: true, repos: [{ path: REPO, worktrees: [
+    { path: REPO + '/a', state: 'remove', size_bytes: bytes },
+  ] }] };
+  const tiles = reclaimTilesHTML(rep, { totals: {}, daily: [] });
+  assert.match(tiles, /Removable now[\s\S]*142\.1 GB[\s\S]*1 worktree · measuring…/);
+  assert.match(tiles, /Moved to the Trash[\s\S]*0 B[\s\S]*0 recorded cleanups/);
+  assert.equal((tiles.match(/rc-tile-value">0 B/g) || []).length, 3);
+  const disk = worktreeDiskHTML({ summary: { size_bytes: 0 }, volumes: [
+    { mount: '/empty', total_bytes: 1073741824, free_bytes: 1073741824 },
+    { mount: '/full', total_bytes: 1073741824, free_bytes: 0 },
+  ] });
+  assert.match(disk, /data-w="0"/);
+  assert.match(disk, /data-w="100"/);
+  assert.match(disk, /1\.0 GB free of 1\.0 GB/);
+  assert.match(disk, /0 B free of 1\.0 GB/);
 });
 
 test('chart: a column per day on one axis, freed under Trash, buttons only on days with cleanups, escaped', () => {

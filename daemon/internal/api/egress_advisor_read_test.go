@@ -36,7 +36,7 @@ func TestEgressAdvisorReadBatchFailureAndRecovery(t *testing.T) {
 					st.RecordEgressObservationForTest(store.EgressObservation{Scope: scope, SessionID: "s1", Host: host, Protocol: "tcp", Port: 443, At: at.Add(time.Duration(i-4) * time.Hour)})
 				}
 			}
-			a := newTestAPI("", st, nil, nil)
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil})
 			mux := a.buildMux()
 			request := func() []egressEpisodeView {
 				t.Helper()

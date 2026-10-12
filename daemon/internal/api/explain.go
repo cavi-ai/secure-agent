@@ -85,7 +85,7 @@ func (a *API) session(env *explainEnv, id string) *model.Session {
 		return s
 	}
 	var out *model.Session
-	if s, ok := a.store.GetSession(id); ok {
+	if s, ok, err := a.store.GetSessionResult(id); err == nil && ok {
 		out = &s
 	}
 	env.sessions[id] = out
@@ -174,7 +174,7 @@ func (a *API) explainFlagIn(f model.Flag, full bool, env *explainEnv) *model.Fla
 		links, _ := a.store.IncidentIDsForFlags([]string{f.ID})
 		env.incidentIDs[f.ID] = links[f.ID]
 	}
-	assessment := assessmentForFlag(f)
+	assessment := model.AssessFinding(f)
 	ex := &model.FlagExplain{Disposition: dispositionFor(f), Assessment: &assessment}
 	sess := a.session(env, f.SessionID)
 	workspace := f.Workspace
@@ -201,7 +201,7 @@ func (a *API) explainFlagIn(f model.Flag, full bool, env *explainEnv) *model.Fla
 	if pattern == "" {
 		pattern = flagEvidenceHost(f)
 	}
-	if sum := a.store.LabelSummary(f.Agent, pattern, f.Rule); sum.OK+sum.NotOK > 0 {
+	if sum, err := a.store.LabelSummaryResult(f.Agent, pattern, f.Rule); err == nil && sum.OK+sum.NotOK > 0 {
 		ex.Labels = &sum
 	}
 	return ex
@@ -366,13 +366,16 @@ func (a *API) explainContext(f model.Flag, sess *model.Session, workspace string
 // within explainContextWindow either side.
 func (a *API) nearestEvent(sessionID string, kind event.Kind, anchor time.Time) (event.Event, bool) {
 	k := int(kind)
-	evs := a.store.QueryEvents(store.EventFilter{
+	evs, err := a.store.QueryEventsResult(store.EventFilter{
 		Kind:      &k,
 		SessionID: sessionID,
 		Since:     anchor.Add(-explainContextWindow).UTC().Format(time.RFC3339),
 		Until:     anchor.Add(explainContextWindow).UTC().Format(time.RFC3339),
 		Limit:     200,
 	})
+	if err != nil {
+		return event.Event{}, false
+	}
 	var best event.Event
 	bestGap := explainContextWindow + 1
 	for _, e := range evs {

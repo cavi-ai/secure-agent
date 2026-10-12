@@ -56,7 +56,7 @@ printf '%s\n' '<node-id-1>=<secret-1>' > secrets.txt
 
 Liveness is heartbeat-aware: nodes sending `status` are stale after 3 missed minutes and "gone quiet" after 10; legacy event-only nodes keep the lenient 10/20-minute thresholds.
 
-Signatures are verified constant-time; unsigned, tampered, wrong-node, and unknown-node traffic is rejected. Deliveries retry (500ms/2s/5s) on network errors and 5xx/429 only; failures land in the node's `webhook-deliveries.jsonl`.
+Signatures are verified constant-time; unsigned, tampered, wrong-node, and unknown-node traffic is rejected. Deliveries retry (500ms/2s/5s) on network errors and 5xx/429 only. Delivery outcomes are logged best-effort in the node's `webhook-deliveries.jsonl`: one active file and one `.1` backup, each capped at 5 MiB. Oversized legacy logs and individual records are discarded; log-write failures do not prevent webhook delivery.
 
 The whole chain — node → signed webhook → verified envelope (flag **and** heartbeat) with contiguous sequence numbers → posture-aware rollup — plus the `fleet enroll` CLI flow, is covered by `packaging/test/e2e_smoke.sh` in CI.
 
