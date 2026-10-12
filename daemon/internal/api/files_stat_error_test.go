@@ -13,9 +13,10 @@ import (
 func TestFileActionsDistinguishStatFailureFromDeletedFile(t *testing.T) {
 	st := testStore(t)
 	defer st.Close()
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+
 	rec := &openRecorder{}
-	a.openPath = rec.open
+
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, OpenPath: rec.open})
 	p := filepath.Join(t.TempDir(), "evidence.jsonl")
 	if err := os.Symlink(p, p); err != nil {
 		t.Fatal(err)

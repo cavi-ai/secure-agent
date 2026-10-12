@@ -39,7 +39,7 @@ func TestReviewNullRecordIsUnavailableAndRecovers(t *testing.T) {
 	if _, err := db.Exec("UPDATE finding_reviews SET record_json='null' WHERE id=?", id); err != nil {
 		t.Fatal(err)
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	mux := a.buildMux()
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequest("GET", "/reviews", nil))

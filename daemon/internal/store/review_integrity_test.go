@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"testing"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -75,7 +76,7 @@ func TestReviewIntegrityRejectsReadsAndDecisions(t *testing.T) {
 				t.Errorf("corrupt record drove a decision: %+v %v", receipt, err)
 			}
 			for _, id := range []string{f.ID, g.ID} {
-				if flag, found := s.GetFlag(id); !found || flag.Acknowledged {
+				if flag, found := testutil.Lookup[model.Flag](t)(s.GetFlagResult(id)); !found || flag.Acknowledged {
 					t.Errorf("failed decision acknowledged source %s: %+v", id, flag)
 				}
 			}

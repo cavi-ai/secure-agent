@@ -31,14 +31,16 @@ func pinExplainHome(t *testing.T, home string) {
 	t.Cleanup(func() { explainHome = orig })
 }
 
-func explainTestAPI(t *testing.T, agents ...AgentSummary) *API {
+func explainTestDeps(t *testing.T, agents ...AgentSummary) Deps {
 	t.Helper()
-	a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status { return Status{Running: true, Agents: agents} })
+
 	dir := t.TempDir()
-	a.allowlist = correlate.NewAllowlistStore(filepath.Join(dir, "allowlist.json"))
-	a.mutes = correlate.NewMuteStore(filepath.Join(dir, "mutes.json"))
-	a.guardBroker = guard.NewBroker(time.Minute)
-	return a
+
+	return Deps{Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true, Agents: agents} }, Allowlist: correlate.NewAllowlistStore(filepath.Join(dir, "allowlist.json")), Mutes: correlate.NewMuteStore(filepath.Join(dir, "mutes.json")), Guard: guard.NewBroker(time.Minute)}
+}
+
+func explainTestAPI(t *testing.T, agents ...AgentSummary) *API {
+	return newTestAPI(explainTestDeps(t, agents...))
 }
 
 const liveFixturePath = "/Users/dev/.claude/skills/synced/00000000-0000-4000-8000-000000000001_00000000-0000-4000-8000-000000000002/example-skill/config"

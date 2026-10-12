@@ -138,7 +138,7 @@ type Handshake struct {
 
 // Resolver attributes events to sessions and maintains their lifecycle.
 type Resolver struct {
-	st     *store.Store
+	st     resolverStore
 	tagger *agents.Tagger
 
 	// OnSessionChange, when set, receives the session record after every
@@ -178,7 +178,21 @@ type sighting struct {
 // are dropped.
 const maxSightings = 10000
 
-func NewResolver(st *store.Store, tg *agents.Tagger) *Resolver {
+// resolverStore keeps identity reads and lifecycle writes explicit. A missing
+// session permits attribution; an unavailable read must not reassign ownership.
+type resolverStore interface {
+	GetSessionResult(string) (model.Session, bool, error)
+	ListSessionsResult(store.SessionFilter) ([]model.Session, error)
+	UpsertSession(model.Session) error
+	PromoteSession(model.Session, string) error
+	RekeySession(string, string) error
+	TouchSession(string, time.Time) error
+	MarkSessionsIdle(time.Time) ([]string, error)
+	SessionRoots() map[int32]string
+	EndSession(string, time.Time) error
+}
+
+func NewResolver(st resolverStore, tg *agents.Tagger) *Resolver {
 	return &Resolver{
 		st:       st,
 		tagger:   tg,
@@ -331,7 +345,10 @@ func (r *Resolver) Resolve(e *event.Event) string {
 // root is never overwritten, and the refusal is logged (once per session and
 // root: byRoot then holds the minted id). Caller holds mu.
 func (r *Resolver) adoptsByScopeLocked(id string, root int32, harness, workspace string) bool {
-	sess, ok := r.lookupLocked(id)
+	sess, ok, err := r.lookupLocked(id)
+	if err != nil {
+		return false
+	}
 	if !ok || sess.RootPID == 0 {
 		return !r.otherRootInScopeLocked(harness, workspace, root)
 	}
@@ -360,11 +377,11 @@ func (r *Resolver) otherRootInScopeLocked(harness, workspace string, root int32)
 
 // lookupLocked returns session id from the deferred set, then the store.
 // Caller holds mu.
-func (r *Resolver) lookupLocked(id string) (model.Session, bool) {
+func (r *Resolver) lookupLocked(id string) (model.Session, bool, error) {
 	if sess, ok := r.deferred[id]; ok {
-		return sess, true
+		return sess, true, nil
 	}
-	return r.st.GetSession(id)
+	return r.st.GetSessionResult(id)
 }
 
 // maxAncestry bounds the OS ancestry walk from a session root.
@@ -498,7 +515,11 @@ func (r *Resolver) NoteTranscriptSighting(s TranscriptSighting) {
 	// id is authoritative over a provisional one. A second transcript id in
 	// the same workspace is a sibling conversation, not a rename.
 	if workspace != "" && harness != "" {
-		if old, ok := r.findProvisionalLocked(id, harness, workspace); ok {
+		old, ok, err := r.findProvisionalLocked(id, harness, workspace)
+		if err != nil {
+			return
+		}
+		if ok {
 			if !r.rekeyLocked(old, id) {
 				return
 			}
@@ -583,37 +604,45 @@ func (r *Resolver) rekeyLocked(old, id string) bool {
 // scope. A sighting cannot tell which of two processes in one working
 // directory holds the transcript; JoinTranscriptPID settles it. Caller holds
 // mu.
-func (r *Resolver) findProvisionalLocked(id, harness, workspace string) (string, bool) {
+func (r *Resolver) findProvisionalLocked(id, harness, workspace string) (string, bool, error) {
 	old, ok := r.byScope[scopeKey(harness, workspace)]
 	if !ok || old == id {
-		return "", false
+		return "", false, nil
 	}
-	cand, ok := r.lookupLocked(old)
+	cand, ok, err := r.lookupLocked(old)
+	if err != nil {
+		return "", false, err
+	}
 	if !ok || cand.Confidence != model.ConfProcessTree {
-		return "", false
+		return "", false, nil
 	}
-	if t, ok := r.st.GetSession(id); ok && t.RootPID != 0 {
+	t, ok, err := r.st.GetSessionResult(id)
+	if err != nil {
+		return "", false, err
+	}
+	if ok && t.RootPID != 0 {
 		if t.RootPID != cand.RootPID {
-			return "", false
+			return "", false, nil
 		}
-		return old, true
+		return old, true, nil
 	}
 	if r.otherRootInScopeLocked(harness, workspace, cand.RootPID) {
-		return "", false
+		return "", false, nil
 	}
-	return old, true
+	return old, true, nil
 }
 
 // confidenceLocked reports the confidence tier of a session id: deferred
 // (in-memory) sessions first, then the store. Caller holds mu.
-func (r *Resolver) confidenceLocked(id string) string {
-	if sess, ok := r.deferred[id]; ok {
-		return sess.Confidence
+func (r *Resolver) confidenceLocked(id string) (string, error) {
+	sess, ok, err := r.lookupLocked(id)
+	if err != nil {
+		return "", err
 	}
-	if sess, ok := r.st.GetSession(id); ok {
-		return sess.Confidence
+	if ok {
+		return sess.Confidence, nil
 	}
-	return ""
+	return "", nil
 }
 
 // ensureHookSession creates a minimal record for a stamped id seen without a
@@ -683,7 +712,15 @@ func (r *Resolver) joinTreeLocked(sess *model.Session, pid int32, info agents.Ag
 		r.byPID[pid] = sess.ID
 		return true
 	}
-	if held && r.confidenceLocked(old) == model.ConfProcessTree {
+	var confidence string
+	if held {
+		var err error
+		confidence, err = r.confidenceLocked(old)
+		if err != nil {
+			return false
+		}
+	}
+	if held && confidence == model.ConfProcessTree {
 		// The rekeyed row carries its orchestrator parent with it.
 		if !r.rekeyLocked(old, sess.ID) {
 			return false
@@ -721,8 +758,8 @@ func (r *Resolver) JoinTranscriptPID(id string, pid int32) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	sess, ok := r.st.GetSession(id)
-	if !ok {
+	sess, ok, err := r.st.GetSessionResult(id)
+	if err != nil || !ok {
 		return
 	}
 	old, held := r.byRoot[root]
@@ -730,8 +767,16 @@ func (r *Resolver) JoinTranscriptPID(id string, pid int32) {
 		r.byPID[pid] = id
 		return
 	}
-	if held && old != id && r.confidenceLocked(old) != model.ConfProcessTree {
-		if newer, ok := r.st.GetSession(old); ok && newer.StartedAt.After(sess.StartedAt) {
+	if held && old != id {
+		confidence, err := r.confidenceLocked(old)
+		if err != nil {
+			return
+		}
+		newer, ok, err := r.st.GetSessionResult(old)
+		if err != nil {
+			return
+		}
+		if confidence != model.ConfProcessTree && ok && newer.StartedAt.After(sess.StartedAt) {
 			if sess.RootPID == root {
 				return
 			}
@@ -786,7 +831,7 @@ func (r *Resolver) SightedByHarness(since time.Time) map[string]int {
 	out := map[string]int{}
 	for id, harness := range ids {
 		if harness == "" {
-			if sess, ok := r.st.GetSession(id); ok {
+			if sess, ok, err := r.st.GetSessionResult(id); err == nil && ok {
 				harness = sess.Harness
 			}
 		}
@@ -819,7 +864,7 @@ func (r *Resolver) upsertAndEmitLocked(sess model.Session) bool {
 		log.Printf("session: persist metadata: %v", err)
 		return false
 	}
-	if saved, ok := r.st.GetSession(sess.ID); ok {
+	if saved, ok, err := r.st.GetSessionResult(sess.ID); err == nil && ok {
 		r.emitLocked(saved)
 	}
 	return true
@@ -853,7 +898,7 @@ func (r *Resolver) touchLocked(id string, ts time.Time) {
 		}
 		delete(r.deferred, id)
 		r.touch[id] = ts
-		if saved, ok := r.st.GetSession(id); ok {
+		if saved, ok, err := r.st.GetSessionResult(id); err == nil && ok {
 			r.emitLocked(saved)
 		}
 		return
@@ -885,7 +930,7 @@ func (r *Resolver) WorkspaceFor(sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
-	if sess, ok := r.st.GetSession(sessionID); ok {
+	if sess, ok, err := r.st.GetSessionResult(sessionID); err == nil && ok {
 		return sess.Workspace
 	}
 	return ""
@@ -904,8 +949,8 @@ func (r *Resolver) PermissionIdentity(pid int32, claimed string) (model.Decision
 	if id == "" || (claimed != "" && claimed != id) {
 		return model.DecisionScope{}, false
 	}
-	sess, ok := r.st.GetSession(id)
-	if !ok || (sess.Status != model.SessionActive && sess.Status != model.SessionIdle) || sess.RootPID != info.PID || !rootStarted(sess).Equal(info.StartedAt) || sess.Harness != info.Name || sess.Workspace != info.CWD {
+	sess, ok, err := r.st.GetSessionResult(id)
+	if err != nil || !ok || (sess.Status != model.SessionActive && sess.Status != model.SessionIdle) || sess.RootPID != info.PID || !rootStarted(sess).Equal(info.StartedAt) || sess.Harness != info.Name || sess.Workspace != info.CWD {
 		return model.DecisionScope{}, false
 	}
 	return model.DecisionScope{Agent: info.Name, SessionID: id, Workspace: info.CWD, ReaderExe: info.ExePath, IdentityBasis: "peer-process-tree"}, true
@@ -945,7 +990,11 @@ func (r *Resolver) Sweep() {
 			r.endLocked(id, now)
 		}
 	}
-	for _, sess := range r.st.ListSessions(store.SessionFilter{Status: model.SessionIdle, Limit: 500}) {
+	sessions, err := r.st.ListSessionsResult(store.SessionFilter{Status: model.SessionIdle, Limit: 500})
+	if err != nil {
+		return
+	}
+	for _, sess := range sessions {
 		if sess.RootPID == 0 && now.Sub(sess.LastSeenAt) > endSilentAfter {
 			r.endLocked(sess.ID, now)
 		}
@@ -962,7 +1011,7 @@ func (r *Resolver) Sweep() {
 	// Idle transitions ride the delta stream too (the console's status chip
 	// must move without a poll).
 	for _, id := range idled {
-		if sess, ok := r.st.GetSession(id); ok {
+		if sess, ok, err := r.st.GetSessionResult(id); err == nil && ok {
 			r.emitLocked(sess)
 		}
 	}
@@ -975,7 +1024,7 @@ func (r *Resolver) endLocked(id string, now time.Time) {
 		log.Printf("session: end tracked session: %v", err)
 		return
 	}
-	if sess, ok := r.st.GetSession(id); ok {
+	if sess, ok, err := r.st.GetSessionResult(id); err == nil && ok {
 		r.emitLocked(sess)
 	}
 	delete(r.deferred, id)

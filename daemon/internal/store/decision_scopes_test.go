@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"testing"
 	"time"
 )
@@ -84,7 +85,7 @@ func TestReviewScopeFailureRollsBackReceiptAndAcknowledgement(t *testing.T) {
 	if e != nil || len(g) != 0 {
 		t.Fatalf("failed receipt left grant: %v %v", g, e)
 	}
-	f, _ := s.GetFlag("source")
+	f, _ := testutil.Lookup[model.Flag](t)(s.GetFlagResult("source"))
 	if f.Acknowledged {
 		t.Fatal("failed transaction acknowledged source")
 	}

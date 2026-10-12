@@ -34,7 +34,7 @@ func TestEgressEpisodesReadFailureAndRecovery(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			a := newTestAPI("", st, nil, nil)
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil})
 			mux := a.buildMux()
 			request := func() *httptest.ResponseRecorder {
 				w := httptest.NewRecorder()
@@ -106,7 +106,7 @@ func TestEgressEpisodesReadFailureAndRecovery(t *testing.T) {
 
 func TestEgressEpisodesEmptyAndClosedStore(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, nil, nil)
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil})
 	mux := a.buildMux()
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequest("GET", "/egress/episodes", nil))

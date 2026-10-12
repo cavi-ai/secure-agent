@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"testing"
 	"time"
 
@@ -19,21 +20,21 @@ func TestEvictedToolCompletionUpdatesOriginalRow(t *testing.T) {
 	done := event.Event{Kind: event.KindToolCall, TS: now.Add(time.Second), SessionID: "s", CallID: "c", ToolStatus: "ok", Detail: "tool duration unavailable: start not retained"}
 	s.PutEvent(done)
 	s.PutEvent(start)
-	rows := s.RecentEvents(10)
+	rows := testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 10}))
 	if len(rows) != 1 || rows[0].ToolName != "Read" || rows[0].ToolStatus != "ok" || rows[0].Detail != done.Detail || rows[0].DurationMs != 0 || !rows[0].TS.Equal(now) {
 		t.Fatalf("late completion: %+v", rows)
 	}
 	done.DurationMs = 1000
 	done.Detail = ""
 	s.PutEvent(done)
-	rows = s.RecentEvents(10)
+	rows = testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 10}))
 	if rows[0].DurationMs != 1000 || rows[0].Detail != "" {
 		t.Fatalf("recovered timing: %+v", rows[0])
 	}
 	done.DurationMs = 0
 	done.Detail = "tool duration unavailable: start not retained"
 	s.PutEvent(done)
-	rows = s.RecentEvents(10)
+	rows = testutil.Read[[]event.Event](t)(s.QueryEventsResult(EventFilter{Limit: 10}))
 	if rows[0].DurationMs != 1000 || rows[0].Detail != "" {
 		t.Fatalf("replayed incomplete timing: %+v", rows[0])
 	}

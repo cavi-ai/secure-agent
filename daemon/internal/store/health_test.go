@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"math"
 	"os"
 	"path/filepath"
@@ -179,7 +180,7 @@ func TestFlagMirrorFailureRecoversOnNextWrite(t *testing.T) {
 	if h.Failures != 1 || len(h.Active) != 0 {
 		t.Fatalf("mirror did not reopen: %+v", h)
 	}
-	if got := s.RecentFlags(10); len(got) != 2 {
+	if got := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Limit: 10})); len(got) != 2 {
 		t.Fatalf("mirror fault stopped database writes: %+v", got)
 	}
 }
@@ -219,7 +220,7 @@ func TestFlagMirrorRotationFailureKeepsDatabaseAndRecovers(t *testing.T) {
 	if h.Failures != 1 || !slices.Equal(h.Active, []string{"flag mirror"}) {
 		t.Fatalf("rotation failure hidden: %+v", h)
 	}
-	if got := s.RecentFlags(10); len(got) != 2 {
+	if got := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Limit: 10})); len(got) != 2 {
 		t.Fatalf("rotation failure stopped database writes: %+v", got)
 	}
 	assertMirrorIDs(t, path, "before")
@@ -233,7 +234,7 @@ func TestFlagMirrorRotationFailureKeepsDatabaseAndRecovers(t *testing.T) {
 	}
 	assertMirrorIDs(t, path, "after")
 	assertMirrorIDs(t, path+".1", "before")
-	if got := s.RecentFlags(10); len(got) != 3 {
+	if got := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Limit: 10})); len(got) != 3 {
 		t.Fatalf("database lost flags across mirror recovery: %+v", got)
 	}
 }
@@ -271,7 +272,7 @@ func TestFlagMirrorRotationFailurePreservesPreviousArchive(t *testing.T) {
 		t.Fatal("failed rotation changed the previous archive")
 	}
 	assertMirrorIDs(t, path+".external", "active")
-	if got := s.RecentFlags(10); len(got) != 3 {
+	if got := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Limit: 10})); len(got) != 3 {
 		t.Fatalf("rotation failure stopped database writes: %+v", got)
 	}
 	s.PutFlag(model.Flag{ID: "after", TS: time.Now()})
@@ -281,7 +282,7 @@ func TestFlagMirrorRotationFailurePreservesPreviousArchive(t *testing.T) {
 	}
 	assertMirrorIDs(t, path, "after")
 	assertMirrorIDs(t, path+".1", "archived")
-	if got := s.RecentFlags(10); len(got) != 4 {
+	if got := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{Limit: 10})); len(got) != 4 {
 		t.Fatalf("database lost flags across recovery: %+v", got)
 	}
 }

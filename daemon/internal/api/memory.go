@@ -295,7 +295,12 @@ func presentMemoryFact(f store.MemoryFact) memoryRow {
 }
 
 func (a *API) serveSessionMemory(w http.ResponseWriter, r *http.Request, id string) {
-	if _, ok := a.store.GetSession(id); !ok {
+	_, ok, err := a.store.GetSessionResult(id)
+	if err != nil {
+		http.Error(w, "session data unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !ok {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}

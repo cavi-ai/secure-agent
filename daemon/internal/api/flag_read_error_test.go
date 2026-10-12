@@ -33,7 +33,7 @@ func TestFlagReadFailuresRejectPartialResponsesAndRecover(t *testing.T) {
 			if _, err := db.Exec("UPDATE flags SET " + damage + " WHERE id='bad'"); err != nil {
 				t.Fatal(err)
 			}
-			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 			for _, url := range []string{"/flags", "/patterns", "/snapshot"} {
 				w := httptest.NewRecorder()
 				a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", url, nil))
@@ -79,7 +79,7 @@ func TestSnapshotRejectsFailedPatternReadOutsideOpenFlagList(t *testing.T) {
 	if flags, err := st.QueryFlagsResult(store.FlagFilter{Unacted: true}); err != nil || len(flags) != 0 {
 		t.Fatalf("open flag list: %+v, %v", flags, err)
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	w := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/snapshot", nil))
 	if w.Code != 503 {

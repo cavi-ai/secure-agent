@@ -53,7 +53,7 @@ func TestReviewLinkEnrichmentKeepsCoreFlagsAndBatchFailures(t *testing.T) {
 	if _, err := db.Exec(`DELETE FROM finding_reviews WHERE id=?`, ids["bad"]); err != nil {
 		t.Fatal(err)
 	}
-	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})
 	request := func(path string) *httptest.ResponseRecorder {
 		t.Helper()
 		w := httptest.NewRecorder()

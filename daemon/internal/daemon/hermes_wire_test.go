@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,7 +55,7 @@ func TestHermesCollectorWiring(t *testing.T) {
 	cancel()
 	_ = h.Run(ctx) // one poll, then ctx is done
 
-	s, ok := st.GetSession("h-1")
+	s, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("h-1"))
 	if !ok || s.Harness != "hermes" || s.Workspace != "/nonexistent/proj" || s.Repo != "proj" || s.Branch != "main" || s.ParentID != "h-0" {
 		t.Fatalf("session = %+v (ok=%v)", s, ok)
 	}

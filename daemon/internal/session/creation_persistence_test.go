@@ -2,6 +2,7 @@ package session
 
 import (
 	"database/sql"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -50,7 +51,7 @@ func TestProcessTreeCreationRetriesFailedPersistence(t *testing.T) {
 				if id == "" || e.SessionID != id {
 					t.Fatal("failed persistence lost event attribution")
 				}
-				if _, ok := st.GetSession(id); ok || len(emitted) != 0 {
+				if _, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(id)); ok || len(emitted) != 0 {
 					t.Fatalf("failed creation saved or published a session: %+v", emitted)
 				}
 				if pending, ok := r.deferred[id]; !ok || pending.Workspace != "/repo" || pending.RootPID != 100 {
@@ -69,7 +70,7 @@ func TestProcessTreeCreationRetriesFailedPersistence(t *testing.T) {
 				if retried := r.Resolve(&retry); retried != id {
 					t.Fatalf("retry changed attribution: %q, want %q", retried, id)
 				}
-				saved, ok := st.GetSession(id)
+				saved, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(id))
 				if !ok || !saved.LastSeenAt.Equal(retry.TS) || saved.Workspace != "/repo" || len(emitted) != 1 || emitted[0] != saved {
 					t.Fatalf("retry did not persist and publish identity: saved=%+v deltas=%+v", saved, emitted)
 				}
@@ -111,7 +112,7 @@ func TestProcessTreeCreationJoinsRecentlyTouchedTranscript(t *testing.T) {
 	if id := r.Resolve(&e); id != "conversation" {
 		t.Fatalf("process tree did not adopt transcript identity: %q", id)
 	}
-	saved, _ := st.GetSession("conversation")
+	saved, _ := testutil.Lookup[model.Session](t)(st.GetSessionResult("conversation"))
 	if saved.RootPID != 100 || len(emitted) != 1 || emitted[0].RootPID != saved.RootPID || !saved.LastSeenAt.Equal(e.TS) {
 		t.Fatalf("activity throttle prevented root attachment: saved=%+v deltas=%+v", saved, emitted)
 	}

@@ -15,7 +15,11 @@ import (
 // storeActivity reads st's harness activity on every call, uncached.
 func storeActivity(st *store.Store) func() map[string]store.HarnessActivity {
 	return func() map[string]store.HarnessActivity {
-		return st.HarnessActivitySince(time.Now().Add(-hookActivityWindow))
+		activity, err := st.HarnessActivitySinceResult(time.Now().Add(-hookActivityWindow))
+		if err != nil {
+			return nil
+		}
+		return activity
 	}
 }
 
@@ -23,7 +27,7 @@ func storeActivity(st *store.Store) func() map[string]store.HarnessActivity {
 // harnessActivityTTL; the next read after it sees new activity.
 func TestHarnessActivityReadOncePerTTL(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	now := time.Now()
 	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", StartedAt: now, LastSeenAt: now})
 	if got := a.recentHarnessActivity(); got["codex"].TraceLastSeen != "" {
@@ -58,9 +62,9 @@ func TestHookActivityCannotCoverAnotherHarness(t *testing.T) {
 	now := time.Now()
 	st.UpsertSession(model.Session{ID: "claude-session", Harness: "claude", StartedAt: now, LastSeenAt: now})
 	st.PutEvent(event.Event{Kind: event.KindPluginAction, TS: now, SessionID: "claude-session"})
-	a := newTestAPI("", st, nil, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status {
 		return Status{Running: true, ActiveAgents: 2, Agents: []AgentSummary{{PID: 10, Name: "claude"}, {PID: 20, Name: "cursor"}}}
-	})
+	}})
 	p := a.computePosture()
 	for _, item := range p.CoverageItems {
 		if item.Kind == "harness_uncovered" && strings.Contains(item.Title, "cursor") {
@@ -72,9 +76,9 @@ func TestHookActivityCannotCoverAnotherHarness(t *testing.T) {
 
 func TestCodexDoesNotRequireClaudeGuardRegistration(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	a := newTestAPI("", testStore(t), nil, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status {
 		return Status{Running: true, ActiveAgents: 1, Agents: []AgentSummary{{PID: 20, Name: "codex"}}}
-	})
+	}})
 	p := a.computePosture()
 	for _, item := range p.CoverageItems {
 		if item.Kind == "guard_hook_unregistered" || item.Kind == "harness_uncovered" {
@@ -94,12 +98,12 @@ func TestStatusSeparatesHarnessTraceAndGuardCapabilities(t *testing.T) {
 	now := time.Now()
 	st.UpsertSession(model.Session{ID: "codex-session", Harness: "codex", StartedAt: now, LastSeenAt: now})
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now, SessionID: "codex-session", ToolName: "exec"})
-	a := newTestAPI("", st, nil, func() Status {
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status {
 		return Status{Running: true, ActiveAgents: 2, Agents: []AgentSummary{
 			{PID: 10, Name: "claude"}, {PID: 11, Name: "claude", RootPID: 10},
 			{PID: 20, Name: "codex"}, {PID: 30, Name: "ollama", Kind: "infra"},
 		}}
-	})
+	}})
 	w := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/status", nil))
 	var body struct {

@@ -45,7 +45,10 @@ func (a *API) askableWorktrees(rep worktreehunter.ScanReport) map[string]string 
 	if a.store == nil || a.asker == nil {
 		return nil
 	}
-	sessions := a.store.ListSessions(store.SessionFilter{Status: model.SessionActive, Limit: 10000})
+	sessions, err := a.store.ListSessionsResult(store.SessionFilter{Status: model.SessionActive, Limit: 10000})
+	if err != nil {
+		return nil
+	}
 	out := map[string]string{}
 	for _, repo := range rep.Repos {
 		for _, wt := range repo.Worktrees {
@@ -396,7 +399,11 @@ func (a *API) waitWorktreeNote(ctx context.Context, subject string, at time.Time
 	// Stored times may be whole seconds.
 	since := at.Truncate(time.Second)
 	for time.Now().Before(deadline) {
-		if v, ok := a.store.AdvisorVerdictFor(subject, "worktree"); ok && !v.CreatedAt.Before(since) {
+		v, ok, err := a.store.AdvisorVerdictResultFor(subject, "worktree")
+		if err != nil {
+			return false
+		}
+		if ok && !v.CreatedAt.Before(since) {
 			return true
 		}
 		select {

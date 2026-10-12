@@ -1,7 +1,6 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
 	"sort"
 	"time"
@@ -24,20 +23,15 @@ type Snapshot struct {
 	Patterns []model.Pattern `json:"patterns"`
 	// Routine are the same reads across agents (at least 3 flags spanning
 	// agents or files); the console renders one decision for each.
-	Routine     []model.RoutineGroup `json:"routine"`
-	Incidents   []snapshotIncident   `json:"incidents"`
-	Events      []event.Event        `json:"events"`
-	Posture     Posture              `json:"posture"`
-	Suggestions []Suggestion         `json:"suggestions"`
-	Mutes       []MutePair           `json:"mutes"`
+	Routine     []model.RoutineGroup   `json:"routine"`
+	Incidents   []store.IncidentDetail `json:"incidents"`
+	Events      []event.Event          `json:"events"`
+	Posture     Posture                `json:"posture"`
+	Suggestions []Suggestion           `json:"suggestions"`
+	Mutes       []MutePair             `json:"mutes"`
 	// Sessions is the durable session spine (live and recently ended) — the
 	// Sessions tab renders from this, not from process-tree guesswork.
 	Sessions []model.Session `json:"sessions"`
-}
-
-type snapshotIncident struct {
-	model.IncidentReport
-	Workflow store.IncidentWorkflow `json:"workflow"`
 }
 
 func (a *API) handleSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -65,23 +59,8 @@ func (a *API) currentSnapshot() (Snapshot, error) {
 	return a.snapshotWithSessions(sessions, events)
 }
 
-func (a *API) incidentListResult(limit int) ([]snapshotIncident, error) {
-	incidents, err := a.store.RecentIncidentsResult(limit)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]snapshotIncident, 0, len(incidents))
-	for i := range incidents {
-		wf, found, err := a.store.IncidentStatusResult(incidents[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		if !found {
-			return nil, fmt.Errorf("incident workflow unavailable")
-		}
-		out = append(out, snapshotIncident{IncidentReport: incidents[i], Workflow: wf})
-	}
-	return out, nil
+func (a *API) incidentListResult(limit int) ([]store.IncidentDetail, error) {
+	return a.store.RecentIncidentDetails(limit)
 }
 
 func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Event) (Snapshot, error) {

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -52,7 +53,7 @@ func TestTaggerCatchUpReattributesUntaggedFlags(t *testing.T) {
 	procs[200] = agents.ProcInfo{PID: 200, PPID: 100, Exe: "/usr/local/bin/node"}
 	tagger.Refresh()
 
-	if fl, _ := st.GetFlag("kc-1"); fl.Agent != "claude" {
+	if fl, _ := testutil.Lookup[model.Flag](t)(st.GetFlagResult("kc-1")); fl.Agent != "claude" {
 		t.Fatalf("flag agent = %q, want claude", fl.Agent)
 	}
 	select {

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"slices"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ func TestAdvisorReadRejectsCorruptionAndRecovers(t *testing.T) {
 			if _, err := s.db.Exec("UPDATE advisor_verdicts SET " + damage); err != nil {
 				t.Fatal(err)
 			}
-			if got, found := s.AdvisorVerdictFor("subject", "flag"); found || got != (model.AdvisorVerdict{}) {
+			if got, found, err := s.AdvisorVerdictResultFor("subject", "flag"); err == nil || found || got != (model.AdvisorVerdict{}) {
 				t.Errorf("corrupt verdict accepted: %+v %v", got, found)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != 1 || !slices.Equal(h.ReadActive, []string{"flag advisor verdicts"}) {
@@ -28,7 +29,7 @@ func TestAdvisorReadRejectsCorruptionAndRecovers(t *testing.T) {
 			if err := s.PutAdvisorVerdict("subject", "flag", v); err != nil {
 				t.Fatal(err)
 			}
-			if got, found := s.AdvisorVerdictFor("subject", "flag"); !found || !got.CreatedAt.Equal(v.CreatedAt) || got.Rationale != v.Rationale {
+			if got, found := testutil.Lookup[model.AdvisorVerdict](t)(s.AdvisorVerdictResultFor("subject", "flag")); !found || !got.CreatedAt.Equal(v.CreatedAt) || got.Rationale != v.Rationale {
 				t.Errorf("verdict recovery: %+v %v", got, found)
 			}
 			if h := s.WriteHealth(); h.ReadFailures != 1 || len(h.ReadActive) != 0 {
@@ -125,7 +126,7 @@ func TestAdvisorEnrichmentRetainsCoreFindingsAndBatchFailure(t *testing.T) {
 	if flags[0].ID != "bad-advisor" || flags[0].Advisor != nil || flags[1].Advisor == nil {
 		t.Errorf("invalid enrichment or valid sibling lost: %+v", flags)
 	}
-	if _, found := s.AdvisorVerdictFor("missing", "incident"); found {
+	if _, found := testutil.Lookup[model.AdvisorVerdict](t)(s.AdvisorVerdictResultFor("missing", "incident")); found {
 		t.Fatal("missing incident verdict reported present")
 	}
 	if h := s.WriteHealth(); h.ReadFailures != 1 || !slices.Equal(h.ReadActive, []string{"flag advisor verdicts"}) {

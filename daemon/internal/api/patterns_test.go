@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -236,7 +237,7 @@ func TestAcknowledgeFlagIDs(t *testing.T) {
 		t.Fatalf("flag_ids = %d %s", rec.Code, rec.Body)
 	}
 	for _, id := range []string{"f1", "f2", "f3"} {
-		if f, _ := a.store.GetFlag(id); !f.Acknowledged {
+		if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult(id)); !f.Acknowledged {
 			t.Fatalf("%s not acknowledged", id)
 		}
 	}
@@ -250,7 +251,7 @@ func TestAcknowledgeFlagIDs(t *testing.T) {
 			t.Fatalf("body %.40s = %d, want 400", body, rec.Code)
 		}
 	}
-	if f, _ := a.store.GetFlag("f4"); f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult("f4")); f.Acknowledged {
 		t.Fatal("f4 acknowledged by a rejected request")
 	}
 	if rec := post(`{"flag_id":"f4"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"acknowledged":true`) {

@@ -128,7 +128,7 @@ func (i *eventIngest) Feed(e event.Event) bool {
 			}
 		}
 		if e.SessionID != "" {
-			if sess, ok := st.GetSession(e.SessionID); ok {
+			if sess, ok, err := st.GetSessionResult(e.SessionID); err == nil && ok {
 				observation.Scope.Harness = sess.Harness
 				observation.Scope.Workspace = sess.Workspace
 			}
@@ -211,7 +211,10 @@ func (i *eventIngest) Feed(e event.Event) bool {
 			continue
 		}
 
-		recentEvs := st.RecentEvents(100)
+		recentEvs, err := st.QueryEventsResult(store.EventFilter{Limit: 100})
+		if err != nil {
+			continue
+		}
 		report := analyzer.Analyze(fl, recentEvs)
 		report.SessionID = fl.SessionID
 		report.Subject = subject

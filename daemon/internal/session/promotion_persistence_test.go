@@ -2,6 +2,7 @@ package session
 
 import (
 	"database/sql"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -57,7 +58,7 @@ func TestDeferredPromotionRetriesFailedPersistence(t *testing.T) {
 				r.OnSessionChange = func(s model.Session) { emitted = append(emitted, s) }
 				attempt := started.Add(2 * time.Minute)
 				r.touchLocked(id, attempt)
-				if _, ok := st.GetSession(id); ok || len(emitted) != 0 {
+				if _, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(id)); ok || len(emitted) != 0 {
 					t.Fatalf("failed promotion saved or published a session: %+v", emitted)
 				}
 				if _, ok := r.deferred[id]; !ok {
@@ -74,7 +75,7 @@ func TestDeferredPromotionRetriesFailedPersistence(t *testing.T) {
 				}
 				retry := attempt.Add(time.Second)
 				r.touchLocked(id, retry)
-				saved, ok := st.GetSession(id)
+				saved, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult(id))
 				if !ok || !saved.LastSeenAt.Equal(retry) || len(emitted) != 1 || !emitted[0].LastSeenAt.Equal(saved.LastSeenAt) {
 					t.Fatalf("retry did not persist and publish current activity: saved=%+v deltas=%+v", saved, emitted)
 				}

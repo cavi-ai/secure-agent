@@ -43,7 +43,7 @@ type functionTool struct {
 }
 type evidenceReader interface {
 	GetFlagResult(string) (model.Flag, bool, error)
-	SessionReport(string) (store.SessionReport, bool)
+	SessionReportResult(string) (store.SessionReport, bool, error)
 }
 
 func (s *Subscriber) mask(text string) (string, error) {
@@ -131,7 +131,10 @@ func (s *Subscriber) runEvidenceTool(ctx context.Context, name, user string) (st
 		if !ok {
 			return "", fmt.Errorf("session reader unavailable")
 		}
-		rep, found := reader.SessionReport(fl.SessionID)
+		rep, found, err := reader.SessionReportResult(fl.SessionID)
+		if err != nil {
+			return "", fmt.Errorf("session evidence unavailable: %w", err)
+		}
 		if !found {
 			result = map[string]any{"available": false}
 		} else {

@@ -50,11 +50,11 @@ type scopedTestSink struct {
 func (m *scopedTestSink) GetFlagResult(string) (model.Flag, bool, error) {
 	return model.Flag{}, false, nil
 }
-func (m *scopedTestSink) SessionReport(id string) (store.SessionReport, bool) {
+func (m *scopedTestSink) SessionReportResult(id string) (store.SessionReport, bool, error) {
 	m.requested = id
 	return store.SessionReport{Session: model.Session{ID: id}, ToolCalls: 2,
 		Tools:    []store.ReportCount{{Key: "Read", Count: 2}},
-		Timeline: []store.ReportLine{{Label: "raw command must stay out"}}}, true
+		Timeline: []store.ReportLine{{Label: "raw command must stay out"}}}, true, nil
 }
 
 func TestSessionToolUsesOnlyFindingSessionAndOmitsRawDetail(t *testing.T) {

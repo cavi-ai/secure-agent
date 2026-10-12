@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const assets = new URL('../../../daemon/internal/api/web_dist/', import.meta.url);
+import { controller } from './controllers.mjs';
 const app = readFileSync(new URL('app.js', assets), 'utf8');
 function fixture() {
   const ids = ['posture-banner', 'posture-state', 'posture-summary', 'posture-items', 'posture-health', 'posture-retry', 'tabs-posture', 'tabs-posture-text'];
@@ -22,10 +23,7 @@ function fixture() {
   Object.defineProperty(ctx.window.SA, 'postureHealth', { get() {
     return { lastSnapshotAt: 1234, error: ctx.reportHealth.failures(['snapshot'])[0]?.error || '' };
   } });
-  const begin = app.indexOf('  function noteEndpointFailure('), end = app.indexOf('  // parseUptimeSec reads', begin);
-  vm.runInContext(app.slice(begin, end), ctx);
-  const pillBegin = app.indexOf('  function paintTabsPosture()'), pillEnd = app.indexOf('\n  function ', pillBegin + 1);
-  vm.runInContext(app.slice(pillBegin, pillEnd), ctx);
+  Object.assign(ctx, controller('console-lifecycle.js', 'createConsoleLifecycle', ctx));
   ctx.renderPosture();
   return { ctx, nodes, panels, toasts };
 }

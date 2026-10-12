@@ -144,7 +144,7 @@ func (a *API) fileDetail(p string, findings []model.FileFinding, accesses []mode
 	}
 	var workspace, repo string
 	if sessionID != "" {
-		if s, ok := a.store.GetSession(sessionID); ok {
+		if s, ok, err := a.store.GetSessionResult(sessionID); err == nil && ok {
 			d.Session = &s
 			workspace, repo = s.Workspace, s.Repo
 		}

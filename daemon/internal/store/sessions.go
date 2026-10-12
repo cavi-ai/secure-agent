@@ -460,15 +460,6 @@ func scanSessions(rows *sql.Rows) []model.Session {
 	return out
 }
 
-// ListSessions returns sessions. The default (Status "") ordering: live
-// sessions by last_seen DESC, then the most recent ended ones, with the
-// whole result capped at Limit. ?status=ended still fetches the ended
-// population alone (the console's collapsible section paginates there).
-func (s *Store) ListSessions(f SessionFilter) []model.Session {
-	out, _ := s.ListSessionsResult(f)
-	return out
-}
-
 // ListSessionsResult distinguishes an empty population from an unavailable
 // query. HTTP consumers must not replace last-known data on a read failure.
 func (s *Store) ListSessionsResult(f SessionFilter) (out []model.Session, readErr error) {
@@ -536,11 +527,6 @@ func min(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// GetSession returns one session by id, whatever its status or age.
-func (s *Store) GetSession(id string) (model.Session, bool) {
-	return s.sessionByID(id)
 }
 
 // GetSessionResult distinguishes missing identity from failed evidence reads.

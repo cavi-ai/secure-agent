@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"reflect"
 	"sort"
 	"testing"
@@ -67,7 +68,7 @@ func TestSessionReportAggregates(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	s := seedReportStore(t, now)
 
-	rep, ok := s.SessionReport("s1")
+	rep, ok := testutil.Lookup[SessionReport](t)(s.SessionReportResult("s1"))
 	if !ok {
 		t.Fatal("s1 not found")
 	}
@@ -122,7 +123,7 @@ func TestSessionReportAggregates(t *testing.T) {
 
 func TestSessionReportEmptyAndUnknown(t *testing.T) {
 	s := seedReportStore(t, time.Now())
-	rep, ok := s.SessionReport("s4")
+	rep, ok := testutil.Lookup[SessionReport](t)(s.SessionReportResult("s4"))
 	if !ok {
 		t.Fatal("s4 not found")
 	}
@@ -133,7 +134,7 @@ func TestSessionReportEmptyAndUnknown(t *testing.T) {
 			t.Errorf("%s = %#v, want an empty non-nil slice", name, v)
 		}
 	}
-	if _, ok := s.SessionReport("nope"); ok {
+	if _, ok := testutil.Lookup[SessionReport](t)(s.SessionReportResult("nope")); ok {
 		t.Fatal("unknown id reported ok")
 	}
 }
@@ -149,7 +150,7 @@ func TestSessionReportFindsOldEndedSession(t *testing.T) {
 	}
 	old := now.Add(-48 * time.Hour)
 	s.UpsertSession(model.Session{ID: "old", Harness: "claude", StartedAt: old, LastSeenAt: old, EndedAt: &old, Status: model.SessionEnded})
-	if _, ok := s.SessionReport("old"); !ok {
+	if _, ok := testutil.Lookup[SessionReport](t)(s.SessionReportResult("old")); !ok {
 		t.Fatal("old ended session not found")
 	}
 }
@@ -159,7 +160,7 @@ func TestListSessionsFilters(t *testing.T) {
 	s := seedReportStore(t, now)
 	ids := func(f SessionFilter) []string {
 		var out []string
-		for _, sess := range s.ListSessions(f) {
+		for _, sess := range testutil.Read[[]model.Session](t)(s.ListSessionsResult(f)) {
 			out = append(out, sess.ID)
 		}
 		sort.Strings(out)
@@ -186,11 +187,11 @@ func TestListSessionsFilters(t *testing.T) {
 
 func TestQueryFlagsBySession(t *testing.T) {
 	s := seedReportStore(t, time.Now())
-	got := s.QueryFlags(FlagFilter{SessionID: "s2"})
+	got := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{SessionID: "s2"}))
 	if len(got) != 1 || got[0].ID != "f2" {
 		t.Fatalf("flags for s2 = %+v, want only f2", got)
 	}
-	if all := s.QueryFlags(FlagFilter{}); len(all) != 2 {
+	if all := testutil.Read[[]model.Flag](t)(s.QueryFlagsResult(FlagFilter{})); len(all) != 2 {
 		t.Fatalf("unfiltered flags = %d, want 2", len(all))
 	}
 }

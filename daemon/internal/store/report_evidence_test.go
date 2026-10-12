@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 	"testing"
 	"time"
 
@@ -67,7 +68,7 @@ func TestSessionReportDoesNotTreatFailedEvidenceAsEmpty(t *testing.T) {
 			if _, err := s.db.Exec(tc.sql); err != nil {
 				t.Fatal(err)
 			}
-			rep, ok := s.SessionReport("s1")
+			rep, ok := testutil.Lookup[SessionReport](t)(s.SessionReportResult("s1"))
 			if !ok {
 				t.Fatal("available session identity was lost")
 			}
@@ -90,7 +91,7 @@ func TestSessionReportDistinguishesBoundedHistoryAndLegacyNullFields(t *testing.
 	if _, err := s.db.Exec(`UPDATE events SET path=NULL,remote_host=NULL,detail=NULL WHERE session_id='s1'`); err != nil {
 		t.Fatal(err)
 	}
-	rep, ok := s.SessionReport("s1")
+	rep, ok := testutil.Lookup[SessionReport](t)(s.SessionReportResult("s1"))
 	if !ok || !rep.Evidence.Events.Available || rep.Events != 15 {
 		t.Fatalf("legacy optional fields discarded history: %+v", rep.Evidence)
 	}
@@ -99,7 +100,7 @@ func TestSessionReportDistinguishesBoundedHistoryAndLegacyNullFields(t *testing.
  SELECT 'bounded-'||n,'synthetic',1,'2026-10-09T00:00:00Z',1,'s1','[]' FROM count`); err != nil {
 		t.Fatal(err)
 	}
-	rep, ok = s.SessionReport("s1")
+	rep, ok = testutil.Lookup[SessionReport](t)(s.SessionReportResult("s1"))
 	if !ok || !rep.Evidence.Flags.Available || !rep.Evidence.Flags.AtLimit || len(rep.Flags) != rep.Evidence.Flags.Limit {
 		t.Fatalf("bounded findings reported complete: %+v", rep.Evidence)
 	}
@@ -127,7 +128,7 @@ func TestSessionReportRetainsReviewDecisionAndRevisionScope(t *testing.T) {
 	if _, err := s.PutFlag(other); err != nil {
 		t.Fatal(err)
 	}
-	rep, ok := s.SessionReport("session")
+	rep, ok := testutil.Lookup[SessionReport](t)(s.SessionReportResult("session"))
 	if !ok {
 		t.Fatal("session not found")
 	}
@@ -143,7 +144,7 @@ func TestSessionReportRetainsReviewDecisionAndRevisionScope(t *testing.T) {
 	if _, err := s.db.Exec(`DELETE FROM flags WHERE id=?`, f.ID); err != nil {
 		t.Fatal(err)
 	}
-	rep, _ = s.SessionReport("session")
+	rep, _ = testutil.Lookup[SessionReport](t)(s.SessionReportResult("session"))
 	exported = reportJSON(t, rep)["reviews"].([]any)[0].(map[string]any)
 	if exported["evidence_available"] != false || exported["decision"] == nil {
 		t.Fatal("source expiry erased decision history or invented evidence")

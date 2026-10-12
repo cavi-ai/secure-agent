@@ -18,8 +18,7 @@ type postureEvidenceStore interface {
 	findingReviewStore
 	advisorReadHealthStore
 	QueryFlagsResult(store.FlagFilter) ([]model.Flag, error)
-	RecentIncidentsResult(int) ([]model.IncidentReport, error)
-	IncidentStatusResult(string) (store.IncidentWorkflow, bool, error)
+	RecentIncidentDetails(int) ([]store.IncidentDetail, error)
 }
 
 func advisorReadFailuresFrom(st advisorReadHealthStore, kind string) []string {
@@ -72,23 +71,19 @@ func loadPostureEvidence(st postureEvidenceStore, in postureInputs) postureInput
 			lookup(f.ID)
 		}
 	}
-	incidents, err := st.RecentIncidentsResult(25)
-	in.Incidents = incidents
+	incidents, err := st.RecentIncidentDetails(25)
+	in.Incidents = nil
 	in.FailedReads = append(in.FailedReads, advisorReadFailuresFrom(st, "incident")...)
 	if err != nil {
 		in.FailedReads = append(in.FailedReads, "incidents")
 	}
 	for _, inc := range incidents {
+		in.Incidents = append(in.Incidents, inc.IncidentReport)
 		lookup(inc.FlagID)
 		if r, ok := in.FlagReviews[inc.FlagID]; ok && r.Context.Attribution == "stored-session" {
 			continue
 		}
-		wf, found, err := st.IncidentStatusResult(inc.ID)
-		if err != nil || !found {
-			in.FailedReads = append(in.FailedReads, "incident workflows")
-			continue
-		}
-		in.IncidentStates[inc.ID] = wf.Status
+		in.IncidentStates[inc.ID] = inc.Workflow.Status
 	}
 	return in
 }
