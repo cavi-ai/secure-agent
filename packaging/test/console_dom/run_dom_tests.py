@@ -2041,13 +2041,17 @@ def main():
         def tile(dom_text, cls):
             return rc_block(dom_text).split(f'class="rc-tile {cls}"', 1)[-1].split('</div>', 1)[0]
         rc = rc_block(dom_wt)
-        check("worktrees: tiles lead the tab: freed in 30 days, all time, removable now, in the Trash",
+        check("worktrees: tiles distinguish recorded cleanup history from current removable space",
               "Freed · last 30 days" in tile(dom_wt, "rc-freed") and "1.0 GB" in tile(dom_wt, "rc-freed")
               and "1 cleanup<" in tile(dom_wt, "rc-freed")
+              and "Freed · recorded" in tile(dom_wt, "rc-alltime")
               and "3.0 GB" in tile(dom_wt, "rc-alltime") and "2 cleanups" in tile(dom_wt, "rc-alltime")
               and "1.5 GB" in tile(dom_wt, "rc-removable") and "1 worktree<" in tile(dom_wt, "rc-removable")
               and "worktrees-remove-removable" not in rc
-              and "50 MB" in tile(dom_wt, "rc-trash"),
+              and "50 MB" in tile(dom_wt, "rc-trash") and "Moved to the Trash" in tile(dom_wt, "rc-trash")
+              and "1 recorded cleanup" in tile(dom_wt, "rc-trash")
+              and "current Trash size is not measured" in tile(dom_wt, "rc-trash")
+              and "In the Trash" not in rc and "frees when the Trash is emptied" not in rc,
               rc[:600])
         check("worktrees: the reclaimed chart has a column per day; only days with cleanups are buttons, labeled with their numbers",
               len(dom_query(rc).find_all(None, {'class': 'rc-col'})) == 30 and len(dom_query(rc).find_all(None, {'data-action': 'reclaim-day'})) == 1
@@ -2081,9 +2085,9 @@ def main():
               "POST /cleanup/advise" in pre(dom_clutteradvise, "mock-requests")
               and '<b>Advisor:</b> Caches are small; nothing urgent.<ol><li>Run go clean -cache</li></ol>' in cla)
         clr = cl_block(dom_clutter)
-        check("clutter: Move to Trash posts after the dialog, drops the row and counts it as in the Trash",
+        check("clutter: Move to Trash posts after the dialog, drops the row and records the moved bytes",
               "POST /cleanup/trash" in pre(dom_clutter, "mock-requests") and "/api-service/.tmp" not in clr
-              and "1.0 MB moved to the Trash by cleanups" in dom_clutter)
+              and "1.0 MB moved to the Trash by recorded cleanups" in dom_clutter)
         wtr = wt_block(dom_wtremove)
         wtr_rows = len(dom_query(wtr).find_all(None, {'class': 'wt-row'}))
         wt_reqs = pre(dom_wtremove, "mock-requests")
