@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -150,14 +151,15 @@ func (s *Store) PutCleanup(e model.CleanupEntry) {
 	_, _ = s.db.Exec(`DELETE FROM cleanup_log WHERE id NOT IN (SELECT id FROM cleanup_log ORDER BY id DESC LIMIT ?)`, maxCleanupLog)
 }
 
-// CleanupLog returns the newest ledger rows first.
-func (s *Store) CleanupLog(limit int) []model.CleanupEntry {
+// CleanupLog returns the newest ledger rows first, or an error without partial
+// rows if the read fails.
+func (s *Store) CleanupLog(limit int) (_ []model.CleanupEntry, readErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { s.noteReadLogged("cleanup log", readErr) }()
 	rows, err := s.db.Query(`SELECT id, ts, action, path, COALESCE(repo, ''), bytes, COALESCE(detail, '') FROM cleanup_log ORDER BY id DESC LIMIT ?`, normalizeLimit(limit))
 	if err != nil {
-		log.Printf("store: query cleanup log: %v", err)
-		return nil
+		return nil, fmt.Errorf("query cleanup log: %w", err)
 	}
 	defer rows.Close()
 	out := []model.CleanupEntry{}
@@ -165,22 +167,26 @@ func (s *Store) CleanupLog(limit int) []model.CleanupEntry {
 		var e model.CleanupEntry
 		var ts string
 		if err := rows.Scan(&e.ID, &ts, &e.Action, &e.Path, &e.Repo, &e.Bytes, &e.Detail); err != nil {
-			continue
+			return nil, fmt.Errorf("scan cleanup log: %w", err)
 		}
-		e.TS, _ = time.Parse(time.RFC3339Nano, ts)
+		if e.TS, err = time.Parse(time.RFC3339Nano, ts); err != nil {
+			return nil, fmt.Errorf("parse cleanup log time: %w", err)
+		}
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("store: cleanup log cursor error (result may be truncated): %v", err)
+		return nil, fmt.Errorf("read cleanup log: %w", err)
 	}
-	return out
+	return out, nil
 }
 
 // CleanupTotals sums the ledger over all time and the 30 days before now.
 // An agent's answer (ask:*) is history, not a cleanup: it is not counted.
-func (s *Store) CleanupTotals(now time.Time) model.CleanupTotals {
+// A failed read returns an error, never zero totals.
+func (s *Store) CleanupTotals(now time.Time) (_ model.CleanupTotals, readErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { s.noteReadLogged("cleanup totals", readErr) }()
 	var t model.CleanupTotals
 	cut := instantArg(now.Add(-30 * 24 * time.Hour))
 	err := s.db.QueryRow(`SELECT
@@ -190,9 +196,9 @@ func (s *Store) CleanupTotals(now time.Time) model.CleanupTotals {
 		FROM (SELECT `+timestampOrderExpr("ts")+` AS at, bytes, action LIKE 'trash:%' AS trashed FROM cleanup_log WHERE action NOT LIKE 'ask:%')`, cut, cut).
 		Scan(&t.Bytes, &t.Count, &t.Bytes30d, &t.Count30d, &t.TrashedBytes, &t.TrashedCount)
 	if err != nil {
-		log.Printf("store: cleanup totals: %v", err)
+		return model.CleanupTotals{}, fmt.Errorf("cleanup totals: %w", err)
 	}
-	return t
+	return t, nil
 }
 
 // maxCleanupDays bounds the daily series.
@@ -201,10 +207,11 @@ const maxCleanupDays = 366
 // CleanupDaily sums the ledger per calendar day in now's location for the
 // days days ending today, oldest first; a day without cleanups is listed
 // with zeros. Like CleanupTotals, moves to the Trash sum and count apart
-// and an agent's answer is not counted.
-func (s *Store) CleanupDaily(now time.Time, days int) []model.CleanupDay {
+// and an agent's answer is not counted. A failed read returns an error, never
+// a series of zero days.
+func (s *Store) CleanupDaily(now time.Time, days int) (_ []model.CleanupDay, readErr error) {
 	if days <= 0 {
-		return nil
+		return nil, nil
 	}
 	if days > maxCleanupDays {
 		days = maxCleanupDays
@@ -220,22 +227,22 @@ func (s *Store) CleanupDaily(now time.Time, days int) []model.CleanupDay {
 	first := time.Date(y, m, d-days+1, 0, 0, 0, 0, loc)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { s.noteReadLogged("cleanup daily", readErr) }()
 	rows, err := s.db.Query(`SELECT ts, action, bytes FROM cleanup_log WHERE `+timestampOrderExpr("ts")+` >= ? AND action NOT LIKE 'ask:%'`,
 		instantArg(first))
 	if err != nil {
-		log.Printf("store: cleanup daily: %v", err)
-		return out
+		return nil, fmt.Errorf("query cleanup daily: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var ts, action string
 		var bytes int64
 		if err := rows.Scan(&ts, &action, &bytes); err != nil {
-			continue
+			return nil, fmt.Errorf("scan cleanup daily: %w", err)
 		}
 		at, err := time.Parse(time.RFC3339Nano, ts)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("parse cleanup daily time: %w", err)
 		}
 		i, ok := index[at.In(loc).Format(time.DateOnly)]
 		if !ok {
@@ -250,9 +257,9 @@ func (s *Store) CleanupDaily(now time.Time, days int) []model.CleanupDay {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("store: cleanup daily cursor error (result may be truncated): %v", err)
+		return nil, fmt.Errorf("read cleanup daily: %w", err)
 	}
-	return out
+	return out, nil
 }
 
 // agent_asks records each request to a worktree's owning agent and what
@@ -305,16 +312,17 @@ func (s *Store) FinishAgentAsk(a model.AgentAsk) {
 	}
 }
 
-// AgentAsks returns asks newest first.
-func (s *Store) AgentAsks(limit int) []model.AgentAsk {
+// AgentAsks returns asks newest first, or an error without partial asks if the
+// read fails.
+func (s *Store) AgentAsks(limit int) (_ []model.AgentAsk, readErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { s.noteReadLogged("agent asks", readErr) }()
 	rows, err := s.db.Query(`SELECT id, ts, path, COALESCE(repo, ''), harness, session_id, status, COALESCE(verdict, ''),
 		COALESCE(detail, ''), COALESCE(cost_usd, 0), COALESCE(output, ''), COALESCE(finished_at, '')
 		FROM agent_asks ORDER BY id DESC LIMIT ?`, normalizeLimit(limit))
 	if err != nil {
-		log.Printf("store: query agent asks: %v", err)
-		return nil
+		return nil, fmt.Errorf("query agent asks: %w", err)
 	}
 	defer rows.Close()
 	out := []model.AgentAsk{}
@@ -322,18 +330,24 @@ func (s *Store) AgentAsks(limit int) []model.AgentAsk {
 		var a model.AgentAsk
 		var ts, fin string
 		if err := rows.Scan(&a.ID, &ts, &a.Path, &a.Repo, &a.Harness, &a.SessionID, &a.Status, &a.Verdict, &a.Detail, &a.CostUSD, &a.Output, &fin); err != nil {
-			continue
+			return nil, fmt.Errorf("scan agent ask: %w", err)
 		}
-		a.TS, _ = time.Parse(time.RFC3339Nano, ts)
-		if t, err := time.Parse(time.RFC3339Nano, fin); err == nil {
+		if a.TS, err = time.Parse(time.RFC3339Nano, ts); err != nil {
+			return nil, fmt.Errorf("parse agent ask time: %w", err)
+		}
+		if fin != "" {
+			t, err := time.Parse(time.RFC3339Nano, fin)
+			if err != nil {
+				return nil, fmt.Errorf("parse agent ask finish time: %w", err)
+			}
 			a.FinishedAt = &t
 		}
 		out = append(out, a)
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("store: agent asks cursor error (result may be truncated): %v", err)
+		return nil, fmt.Errorf("read agent asks: %w", err)
 	}
-	return out
+	return out, nil
 }
 
 // SessionsInWorkspace returns hook- and transcript-identified sessions

@@ -42,6 +42,15 @@ func (s *Store) noteRead(operation string, err error) {
 	h.readActive[operation] = true
 }
 
+// noteReadLogged also logs the cause of a failed read, which the health label
+// does not carry.
+func (s *Store) noteReadLogged(operation string, err error) {
+	if err != nil {
+		log.Printf("store: %s: %v", operation, err)
+	}
+	s.noteRead(operation, err)
+}
+
 // noteWrite reports whether the visible health state changed. Repeated
 // failures count as changes; a healthy write is quiet unless it clears a fault.
 func (s *Store) noteWrite(operation string, err error) bool {

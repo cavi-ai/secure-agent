@@ -138,8 +138,9 @@ type Status struct {
 	// the console hides the fleet panel until then.
 	FleetConfigured bool `json:"fleet_configured,omitempty"`
 	// UnactedFlags24h is severity>=2 flags in the last 24h the operator has
-	// not acknowledged — the console KPI, matching posture.
-	UnactedFlags24h int `json:"unacted_flags_24h"`
+	// not acknowledged — the console KPI, matching posture. Null when the
+	// flags could not be read.
+	UnactedFlags24h *int `json:"unacted_flags_24h"`
 	// BusDrops counts in-process events a subscriber missed because its
 	// buffer was full. Zero is healthy; growth under N-agent bursts is the
 	// hot-path signal to surface.

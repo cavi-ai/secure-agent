@@ -14,18 +14,22 @@ import (
 type memoryWorktreeStore struct {
 	memoryAdvisorVerdicts
 	asks        []model.AgentAsk
+	askErr      error
 	sessions    []model.Session
 	sessionErr  error
 	sessionRead int
 	totals      model.CleanupTotals
+	totalsErr   error
 	totalsAt    time.Time
 	entries     []model.CleanupEntry
+	entryErr    error
 	entryLimit  int
 	daily       []model.CleanupDay
+	dailyErr    error
 	dailyDays   int
 }
 
-func (s *memoryWorktreeStore) AgentAsks(int) []model.AgentAsk { return s.asks }
+func (s *memoryWorktreeStore) AgentAsks(int) ([]model.AgentAsk, error) { return s.asks, s.askErr }
 func (s *memoryWorktreeStore) ListSessions(f store.SessionFilter) ([]model.Session, error) {
 	s.sessionRead++
 	if f.Status != model.SessionActive || f.Limit != 10000 {
@@ -33,17 +37,17 @@ func (s *memoryWorktreeStore) ListSessions(f store.SessionFilter) ([]model.Sessi
 	}
 	return s.sessions, s.sessionErr
 }
-func (s *memoryWorktreeStore) CleanupTotals(at time.Time) model.CleanupTotals {
+func (s *memoryWorktreeStore) CleanupTotals(at time.Time) (model.CleanupTotals, error) {
 	s.totalsAt = at
-	return s.totals
+	return s.totals, s.totalsErr
 }
-func (s *memoryWorktreeStore) CleanupLog(limit int) []model.CleanupEntry {
+func (s *memoryWorktreeStore) CleanupLog(limit int) ([]model.CleanupEntry, error) {
 	s.entryLimit = limit
-	return s.entries
+	return s.entries, s.entryErr
 }
-func (s *memoryWorktreeStore) CleanupDaily(_ time.Time, days int) []model.CleanupDay {
+func (s *memoryWorktreeStore) CleanupDaily(_ time.Time, days int) ([]model.CleanupDay, error) {
 	s.dailyDays = days
-	return s.daily
+	return s.daily, s.dailyErr
 }
 
 func worktreeViewReport() worktreehunter.ScanReport {
@@ -99,15 +103,46 @@ func TestWorktreeReportWithoutAskerOrSessions(t *testing.T) {
 	}
 }
 
+func TestWorktreeReportLeavesOutUnreadableEnrichment(t *testing.T) {
+	failed := errors.New("ledger unavailable")
+	st := &memoryWorktreeStore{
+		asks:   []model.AgentAsk{{ID: 1, Path: "/r/.worktrees/a"}},
+		askErr: failed, totals: model.CleanupTotals{Bytes: 42}, totalsErr: failed,
+	}
+	rep := enrichWorktreeReport(st, worktreeViewReport(), false, time.Now())
+	if rep.Reclaimed != nil || rep.Asks != nil {
+		t.Fatalf("failed reads shown as values: reclaimed %+v, asks %+v", rep.Reclaimed, rep.Asks)
+	}
+	st.askErr, st.totalsErr = nil, nil
+	if rep := enrichWorktreeReport(st, worktreeViewReport(), false, time.Now()); rep.Reclaimed == nil || rep.Reclaimed.Bytes != 42 || len(rep.Asks) != 1 {
+		t.Fatalf("recovered reads not shown: reclaimed %+v, asks %+v", rep.Reclaimed, rep.Asks)
+	}
+}
+
 func TestCleanupLedgerDailySeriesOnlyWhenAsked(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	st := &memoryWorktreeStore{totals: model.CleanupTotals{Bytes: 7}, entries: []model.CleanupEntry{{ID: 1}}, daily: []model.CleanupDay{{Day: "2023-11-14"}}}
-	got := readCleanupLedger(st, now, 25, 0)
-	if _, ok := got["daily"]; ok || st.dailyDays != 0 || st.entryLimit != 25 || !st.totalsAt.Equal(now) {
-		t.Fatalf("ledger without days: %+v (days read %d, limit %d)", got, st.dailyDays, st.entryLimit)
+	got, err := readCleanupLedger(st, now, 25, 0)
+	if _, ok := got["daily"]; err != nil || ok || st.dailyDays != 0 || st.entryLimit != 25 || !st.totalsAt.Equal(now) {
+		t.Fatalf("ledger without days: %+v, %v (days read %d, limit %d)", got, err, st.dailyDays, st.entryLimit)
 	}
-	got = readCleanupLedger(st, now, 25, 30)
-	if !reflect.DeepEqual(got, map[string]any{"totals": st.totals, "entries": st.entries, "daily": st.daily}) || st.dailyDays != 30 {
-		t.Fatalf("ledger with days: %+v", got)
+	got, err = readCleanupLedger(st, now, 25, 30)
+	if err != nil || !reflect.DeepEqual(got, map[string]any{"totals": st.totals, "entries": st.entries, "daily": st.daily}) || st.dailyDays != 30 {
+		t.Fatalf("ledger with days: %+v, %v", got, err)
+	}
+}
+
+func TestCleanupLedgerRejectsAnyFailedRead(t *testing.T) {
+	failed := errors.New("ledger unavailable")
+	for name, fail := range map[string]func(*memoryWorktreeStore){
+		"totals":  func(s *memoryWorktreeStore) { s.totalsErr = failed },
+		"entries": func(s *memoryWorktreeStore) { s.entryErr = failed },
+		"daily":   func(s *memoryWorktreeStore) { s.dailyErr = failed },
+	} {
+		st := &memoryWorktreeStore{entries: []model.CleanupEntry{{ID: 1}}, daily: []model.CleanupDay{{Day: "2023-11-14"}}}
+		fail(st)
+		if got, err := readCleanupLedger(st, time.Now(), 25, 30); !errors.Is(err, failed) || got != nil {
+			t.Fatalf("%s failure returned %+v, %v", name, got, err)
+		}
 	}
 }

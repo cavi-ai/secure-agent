@@ -162,7 +162,7 @@ export interface Status {
   credential_owner_uses: number;
   expected_flags: number;
   fleet_configured?: boolean;
-  unacted_flags_24h: number;
+  unacted_flags_24h: number | null;
   bus_drops?: number;
   delta_drops?: number;
   bus_drop_at?: string;
