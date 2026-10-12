@@ -59,11 +59,20 @@ func NewMuteStore(path string) *MuteStore {
 	return &MuteStore{path: path}
 }
 
-// Load returns rule -> muted hosts.
+// Load returns rule -> muted hosts, treating unreadable policy as no mutes
+// for event matching. Operator-facing reads should use LoadResult.
 func (s *MuteStore) Load() map[string][]Mute {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.loadLocked()
+}
+
+// LoadResult returns the full mute policy or an error without partial entries.
+// A missing file is an empty policy; a later read can load a repaired file.
+func (s *MuteStore) LoadResult() (map[string][]Mute, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readLocked()
 }
 
 // Muted reports whether a mute covers (rule, host) for agent.

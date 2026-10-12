@@ -1,5 +1,5 @@
 """Console reports cases."""
-from case_support import html, json, re, HTMLParser, dom_query, starts_with, payload_cases, pre, log_rows, PolicyRowCounter
+from case_support import html, json, re, HTMLParser, dom_query, starts_with, payload_cases, pre, log_rows, log_row_nodes, PolicyRowCounter
 from case_types import Case
 
 def run_resource_results(page):
@@ -758,15 +758,16 @@ def run_incident_row_reads_its_risk_and_workflow(page):
 def run_payload_incident_preserves_mixed_results_after_reported_resolution(page):
     check = page.check
     dom_payload = page.fixture('dom_payload')
-    payload_row = log_rows(dom_payload).get('incident:inc-20260907-6033-a1b2', '')
+    payload_row = log_row_nodes(dom_payload).get('incident:inc-20260907-6033-a1b2')
     check(
         'payload incident preserves mixed results after reported resolution',
         (
-            '2 blocked before forwarding' in payload_row
-            and '1 observed only' in payload_row
-            and '3 outcome unknown' in payload_row
-            and 'Operator reported credential revocation' in payload_row
-            and 'revocation are not verified' in payload_row
+            payload_row is not None
+            and '2 blocked before forwarding' in payload_row.text
+            and '1 observed only' in payload_row.text
+            and '3 outcome unknown' in payload_row.text
+            and 'Operator reported credential revocation' in payload_row.text
+            and 'revocation are not verified' in payload_row.text
         ),
     )
 
@@ -810,7 +811,7 @@ def run_chain_rendered_with_3_nodes(page):
     dom = page.fixture('dom')
     check(
         'chain rendered with 3 nodes',
-        dom.count('chain-node') >= 3,
+        len(dom_query(dom).find_all(None, {'class': 'chain-node'})) >= 3,
     )
 
 def run_chain_node(page):
@@ -848,7 +849,10 @@ def run_chain_verdict_node(page):
 def run_history_lists_every_flag_as_one_log_row_the_critical_ones_first(page):
     check = page.check
     dom = page.fixture('dom')
-    history_rows = re.findall('<li class="log-row[^"]*" data-row-key="(flag:[^"]+)"', dom)
+    flags = dom_query(dom).find(attrs={'id': 'flags-list'})
+    history_rows = [node.attrs['data-row-key'] for node in flags.find_all('li', {
+        'class': 'log-row', 'data-row-key': starts_with('flag:'),
+    })]
     check(
         'history lists every flag as one log row, the critical ones first',
         (
@@ -861,14 +865,15 @@ def run_history_lists_every_flag_as_one_log_row_the_critical_ones_first(page):
 def run_an_unexplained_flag_s_evidence_rows_render_as_text_not_object_object(page):
     check = page.check
     dom = page.fixture('dom')
-    flag1_card = log_rows(dom).get('flag:flag-1', '')
-    flags_region = dom.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+    flags_region = dom_query(dom).find(attrs={'id': 'flags-list'})
+    flag1_card = log_row_nodes(flags_region).get('flag:flag-1')
     check(
         "an unexplained flag's evidence rows render as text, not [object Object]",
         (
-            '<div>proxy-secret-leak: anthropic-key (payload inspection)</div>' in flag1_card
-            and '<div>logs.example.com:443 (destination)</div>' in flag1_card
-            and '[object Object]' not in flags_region
+            flag1_card is not None
+            and flag1_card.has('div', text='proxy-secret-leak: anthropic-key (payload inspection)')
+            and flag1_card.has('div', text='logs.example.com:443 (destination)')
+            and '[object Object]' not in flags_region.text
         ),
     )
 
@@ -877,7 +882,7 @@ def run_sparkline_has_points(page):
     dom = page.fixture('dom')
     check(
         'sparkline has points',
-        re.search('id="spark-line" points="[\\d.,\\- ]{20,}"', dom) is not None,
+        dom_query(dom).has('polyline', {'id': 'spark-line', 'points': lambda value: re.fullmatch(r'[\d.,\- ]{20,}', value or '') is not None}),
     )
 
 def run_sparkline_rate_label(page):
@@ -885,7 +890,7 @@ def run_sparkline_rate_label(page):
     dom = page.fixture('dom')
     check(
         'sparkline rate label',
-        re.search('id="spark-rate">\\d+/s<', dom) is not None,
+        any(re.fullmatch(r'\d+/s', node.text) for node in dom_query(dom).find_all(attrs={'id': 'spark-rate'})),
     )
 
 def run_fresh_timeline_rows_after_sse_drip(page):
@@ -901,7 +906,9 @@ def run_timeline_times_are_hh(page):
     dom = page.fixture('dom')
     check(
         'timeline times are HH:MM:SS',
-        re.search('class="t">\\d{2}:\\d{2}:\\d{2}<', dom) is not None,
+        any(re.fullmatch(r'\d{2}:\d{2}:\d{2}', clock.text)
+            for row in dom_query(dom).find_all(attrs={'class': 'timeline-item'})
+            for clock in row.find_all(attrs={'class': 't'})),
     )
 
 def run_advisor_chip_rendered_with_assessment_class(page):
@@ -967,13 +974,12 @@ def run_advisor_posture_line_separates_opinion_from_evidence_and_risk_off_home(p
 def run_incident_narrative_rendered_in_its_row_s_body(page):
     check = page.check
     dom = page.fixture('dom')
-    dom_csp = page.fixture('dom_csp')
-    csp_widths = (re.search('data-csp-widths="([^"]*)"', dom_csp) or [None, ''])[1]
-    widths = {k: float(v) for k, v in (kv.split(':') for kv in csp_widths.split(',') if kv)}
+    rows = log_row_nodes(dom)
+    incident = rows.get('incident:inc-20260907-6033-a1b2')
     check(
         "incident narrative rendered in its row's body",
-        'Rotate the key first' in log_rows(dom).get('incident:inc-20260907-6033-a1b2', ''),
-        sorted((k for k in log_rows(dom) if k.startswith('incident:'))),
+        incident is not None and 'Rotate the key first' in incident.text,
+        sorted(k for k in rows if k.startswith('incident:')),
     )
 
 def run_egress_suggestion_rendered(page):
@@ -1706,61 +1712,60 @@ def run_successful_recovery_clears_stale_and_unavailable_notices(page):
 
 def run_failed_filtered_refresh_preserves_matching_rows_and_warns_stale(page):
     check = page.check
-    dom = page.fixture('dom')
     dom_historyevents = page.fixture('dom_historyevents')
     dom_historyeventschanged = page.fixture('dom_historyeventschanged')
     dom_historyflags = page.fixture('dom_historyflags')
     dom_historyflagschanged = page.fixture('dom_historyflagschanged')
 
     def health_notice(dom, report):
-        match = re.search('<p class="report-health" data-reports="' + re.escape(report) + '"[^>]*>[^<]*</p>', dom)
-        return match.group(0) if match else ''
+        return dom_query(dom).find('p', {'class': 'report-health', 'data-reports': report})
 
     def history_content(dom, flags):
-        anchor = 'id="flags-list"' if flags else 'id="events-container"'
-        return dom.split(anchor, 1)[1].split('</section>', 1)[0]
+        return dom_query(dom).find(attrs={'id': 'flags-list' if flags else 'events-container'})
+
+    def has_match(content, flags):
+        return content.has('li', {'data-row-key': 'flag:history-filtered-match'}) if flags else 'Filtered-history match' in content.text
+
+    def has_broad_row(content):
+        return content.has('li', {'data-row-key': 'flag:history-broad-only'}) or 'Broad-only history row' in content.text
+
     for flags, retained, changed in ((True, dom_historyflags, dom_historyflagschanged), (False, dom_historyevents, dom_historyeventschanged)):
         name = 'findings' if flags else 'events'
-        marker = 'history-filtered-match' if flags else 'Filtered-history match'
         keys = 'snapshot|flags' if flags else 'snapshot|events'
+        retained_content, changed_content = history_content(retained, flags), history_content(changed, flags)
+        retained_notice, changed_notice = health_notice(retained, keys), health_notice(changed, keys)
         check(
             f'failed filtered {name} refresh preserves matching rows and warns stale',
             (
-                marker in history_content(retained, flags)
-                and 'history-broad-only' not in history_content(retained, flags)
-                and 'Broad-only history row' not in history_content(retained, flags)
-                and 'Stale' in health_notice(retained, keys)
+                has_match(retained_content, flags)
+                and not has_broad_row(retained_content)
+                and retained_notice is not None and 'hidden' not in retained_notice.attrs
+                and 'Stale' in retained_notice.text
             ),
         )
         check(
             f'changed {name} filters show unavailable results without leaking old or live rows',
             (
-                marker not in history_content(changed, flags)
-                and 'history-broad-only' not in history_content(changed, flags)
-                and 'Broad-only history row' not in history_content(changed, flags)
-                and 'not loaded yet' in history_content(changed, flags)
-                and 'Unavailable' in health_notice(changed, keys)
+                not has_match(changed_content, flags)
+                and not has_broad_row(changed_content)
+                and 'not loaded yet' in changed_content.text
+                and changed_notice is not None and 'hidden' not in changed_notice.attrs
+                and 'Unavailable' in changed_notice.text
             ),
         )
 
 def run_empty_filtered_findings_recover_successfully_and_clear_the_stale_warning(page):
     check = page.check
-    dom = page.fixture('dom')
     dom_historyrecover = page.fixture('dom_historyrecover')
-
-    def health_notice(dom, report):
-        match = re.search('<p class="report-health" data-reports="' + re.escape(report) + '"[^>]*>[^<]*</p>', dom)
-        return match.group(0) if match else ''
-
-    def history_content(dom, flags):
-        anchor = 'id="flags-list"' if flags else 'id="events-container"'
-        return dom.split(anchor, 1)[1].split('</section>', 1)[0]
+    root = dom_query(dom_historyrecover)
+    flags = root.find(attrs={'id': 'flags-list'})
+    notice = root.find('p', {'class': 'report-health', 'data-reports': 'snapshot|flags'})
     check(
         'empty filtered findings recover successfully and clear the stale warning',
         (
             'Stale' in pre(dom_historyrecover, 'history-before-recovery')
-            and 'No flags match the current filter' in history_content(dom_historyrecover, True)
-            and 'hidden' in health_notice(dom_historyrecover, 'snapshot|flags')
+            and flags is not None and 'No flags match the current filter' in flags.text
+            and notice is not None and 'hidden' in notice.attrs
         ),
     )
 
@@ -2810,21 +2815,24 @@ def run_needs_you_shows_the_api_service_session_s_decisions_as_flat_rows_with_it
 
 def run_a_pattern_never_reaches_needs_you_it_is_one_history_row_with_its_count(page):
     check = page.check
-    dom_pattern = page.fixture('dom_pattern')
-    pat_need = dom_pattern.split('id="attention-center"', 1)[-1].split('id="coverage-center"', 1)[0]
-    pat_row = log_rows(dom_pattern).get('pattern:codex|keychain-access|/Users/dev/Library/Keychains/login.keychain-db', '')
+    root = dom_query(page.fixture('dom_pattern'))
+    attention = root.find(attrs={'id': 'attention-center'})
+    flags = root.find(attrs={'id': 'flags-list'})
+    row = log_row_nodes(flags).get('pattern:codex|keychain-access|/Users/dev/Library/Keychains/login.keychain-db') if flags else None
     check(
         'a pattern never reaches Needs you; it is one history row with its count',
         (
-            'data-pattern-key' not in pat_need
-            and not dom_query(pat_need).has(None, {'data-kind': 'pattern'})
+            attention is not None
+            and not attention.has(attrs={'data-pattern-key': None})
+            and not attention.has(attrs={'data-kind': 'pattern'})
             and (
-                'codex activity' not in dom_query(dom_pattern).text
-                and not dom_query(dom_pattern).has(None, {'title': lambda value: 'codex activity' in (value or '')})
+                'codex activity' not in root.text
+                and not root.has(attrs={'title': lambda value: 'codex activity' in (value or '')})
             )
-            and '<span class="c-count">323×</span>' in pat_row
+            and row is not None
+            and row.has('span', {'class': 'c-count'}, text='323×')
         ),
-        f'row={pat_row[:200]!r}',
+        f'row={row.text[:200] if row else None!r}',
     )
 
 def run_needs_you_unifies_guard_resource_incident_and_critical_finding_rows_highest_priority_first(page):
@@ -3262,14 +3270,18 @@ def run_zero_inline_onclick_handlers_in_rendered_dom(page):
 def run_view_session_in_timeline_opens_the_session_in_the_sessions_tab(page):
     check = page.check
     dom_sesslink = page.fixture('dom_sesslink')
-    link_rail = dom_sesslink.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
+    root = dom_query(dom_sesslink)
+    link_rail = root.find(attrs={'id': 'session-rail'})
+    detail = root.find(attrs={'id': 'session-detail'})
     check(
         'View session in timeline opens the session in the Sessions tab: card selected, trace rendered',
         (
-            dom_query(dom_sesslink).has(None, {'class': 'tab-btn active', 'data-tab': 'sessions'})
-            and re.search('<div class="session-card active selected">\\s*<button type="button" class="sc-main" data-action="select-session" data-id="sess-claude-1" aria-pressed="true"', link_rail) is not None
-            and re.search('<h3[^>]*>api-service@main</h3>', dom_sesslink.split('id="session-detail"', 1)[1]) is not None
-            and dom_query(dom_sesslink).has(None, {'class': 'wf-bar'})
+            root.has(None, {'class': 'tab-btn active', 'data-tab': 'sessions'})
+            and any(card.has('button', {'class': 'sc-main', 'data-action': 'select-session',
+                'data-id': 'sess-claude-1', 'aria-pressed': 'true'})
+                for card in link_rail.find_all('div', {'class': 'session-card active selected'}))
+            and detail.has('h3', text='api-service@main')
+            and detail.has(None, {'class': 'wf-bar'})
         ),
     )
 
@@ -3454,12 +3466,12 @@ def run_burst_2(page):
 def run_burst_3(page):
     check = page.check
     dom_click = page.fixture('dom_click')
-    flags_click = dom_click.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+    flags_click = dom_query(dom_click).find(attrs={'id': 'flags-list'})
     check(
         'burst: a click spanning renders lands (POST /flags/acknowledge, card gone)',
         (
             'POST /flags/acknowledge' in pre(dom_click, 'mock-requests')
-            and not dom_query(flags_click).has(None, {'data-id': 'flag-3'})
+            and not flags_click.has(None, {'data-id': 'flag-3'})
         ),
         f"requests={pre(dom_click, 'mock-requests')!r}",
     )
@@ -3505,66 +3517,70 @@ def run_finding_row(page):
     check = page.check
     dom_explain = page.fixture('dom_explain')
 
-    def visible(markup):
-        return re.sub('<[^>]*>', ' ', markup)
-    card = log_rows(dom_explain).get('flag:flag-2', '')
-    head = (re.search('<button type="button" class="log-head".*?</button>', card, re.S) or [''])[0]
-    outside = re.sub('<details.*?</details>', '', card, flags=re.S)
+    card = log_row_nodes(dom_explain).get('flag:flag-2')
+    head = card.find('button', {'class': 'log-head'}) if card else None
+    outside = card.text_without('details') if card else ''
     check(
         'finding row: the head shows the title, never the rule id; no pid or IPv6 outside Evidence',
         (
-            card != ''
-            and 'Sensitive file read near an outside connection' in head
-            and 'sensitive-read-then-connect' not in visible(head)
-            and not re.search('\\bpid\\b', visible(outside), re.I)
-            and '6033' not in visible(outside)
-            and '2606:' not in visible(outside)
+            head is not None
+            and 'Sensitive file read near an outside connection' in head.text
+            and 'sensitive-read-then-connect' not in head.text
+            and not re.search(r'\bpid\b', outside, re.I)
+            and '6033' not in outside
+            and '2606:' not in outside
         ),
-        f'card={card[:240]!r}',
+        f'card={card.text[:240] if card else None!r}',
     )
 
 def run_finding_row_carries_no_inline_handlers_or_styles(page):
     check = page.check
     dom_explain = page.fixture('dom_explain')
-    card = log_rows(dom_explain).get('flag:flag-2', '')
+    card = log_row_nodes(dom_explain).get('flag:flag-2')
     check(
         'finding row carries no inline handlers or styles',
         (
-            card != ''
-            and not dom_query(card).has(None, {'onclick': None})
-            and not dom_query(card).has(None, {'style': None})
+            card is not None
+            and 'onclick' not in card.attrs and 'style' not in card.attrs
+            and not card.has(None, {'onclick': None})
+            and not card.has(None, {'style': None})
         ),
     )
 
 def run_finding_row_2(page):
     check = page.check
     dom_explain = page.fixture('dom_explain')
-    card = log_rows(dom_explain).get('flag:flag-2', '')
-    buttons = re.findall('<button class="btn ([a-z-]+) btn-sm" data-action="explain-act" data-flag-id="flag-2" data-action-id="([a-z-]+)"', card)
-    menu = re.findall('<button class="act-menu-item( danger)?" data-action="explain-act" data-flag-id="flag-2" data-action-id="([a-z-]+)"', card)
+    card = log_row_nodes(dom_explain).get('flag:flag-2')
+    buttons = [(set(node.attrs['class'].split()) - {'btn', 'btn-sm'}, node.attrs['data-action-id'])
+        for node in card.find_all('button', {'class': 'btn btn-sm', 'data-action': 'explain-act',
+            'data-flag-id': 'flag-2', 'data-action-id': None})] if card else []
+    menu = [('danger' in node.attrs['class'].split(), node.attrs['data-action-id'])
+        for node in card.find_all('button', {'class': 'act-menu-item', 'data-action': 'explain-act',
+            'data-flag-id': 'flag-2', 'data-action-id': None})] if card else []
     check(
         'finding row: who, what and verdict; the recommended action leads the bar, the rest sit under More',
         (
-            '>cursor · web-app@main</span>' in card
-            and '<p class="body-lead">Cursor read AWS credentials (~/.aws/credentials), then reached Cloudflare 3 s later.</p>' in card
-            and '<p class="body-verdict">Likely benign (advisor 93 %): Cloudflare fronts the package registry this project installs from.</p>' in card
-            and buttons == [('btn-primary', 'allow-host'), ('btn-ghost', 'dismiss')]
-            and menu == [('', 'allow-path'), (' danger', 'kill')]
+            card is not None
+            and card.has('span', text='cursor · web-app@main')
+            and card.has('p', {'class': 'body-lead'}, text='Cursor read AWS credentials (~/.aws/credentials), then reached Cloudflare 3 s later.')
+            and card.has('p', {'class': 'body-verdict'}, text='Likely benign (advisor 93 %): Cloudflare fronts the package registry this project installs from.')
+            and buttons == [({'btn-primary'}, 'allow-host'), ({'btn-ghost'}, 'dismiss')]
+            and menu == [(False, 'allow-path'), (True, 'kill')]
         ),
         f'buttons={buttons} menu={menu}',
     )
-    details = (re.search('<details class="body-evidence">(.*?)</details></div>', card, re.S) or [None, ''])[1]
+    details = card.find('details', {'class': 'body-evidence'}) if card else None
     check(
         'finding row: Evidence is closed by default and holds the chain, pid, full address and ISO timestamp',
         (
-            details != ''
-            and dom_query(details).has(None, {'class': 'chain'})
-            and '2026-09-22T16:05:01Z' in details
-            and '6033' in details
-            and '[2606:4700::6810:84e5]:443' in details
-            and '/Users/dev/.aws/credentials' in details
+            details is not None and 'open' not in details.attrs
+            and details.has(None, {'class': 'chain'})
+            and '2026-09-22T16:05:01Z' in details.text
+            and '6033' in details.text
+            and '[2606:4700::6810:84e5]:443' in details.text
+            and '/Users/dev/.aws/credentials' in details.text
         ),
-        f'details={details[:200]!r}',
+        f'details={details.text[:200] if details else None!r}',
     )
 
 def run_finding_card(page):
@@ -3573,15 +3589,15 @@ def run_finding_card(page):
     dom_explainact = page.fixture('dom_explainact')
     dom_orgallow = page.fixture('dom_orgallow')
     act_reqs = pre(dom_explainact, 'mock-requests')
-    flags_act = dom_explainact.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+    flags_act = dom_query(dom_explainact).find(attrs={'id': 'flags-list'})
     check(
         'finding card: the recommended action sends the served request; the card leaves with an inline note',
         (
             'POST /allowlist' in act_reqs
             and 'body={"agent":"cursor","host":"2606:4700::6810:84e5"}' in act_reqs
             and 'POST /flags/acknowledge' in act_reqs
-            and not dom_query(flags_act).has(None, {'data-flag-id': 'flag-2'})
-            and 'class="card-note">allowlisted<' in dom_explainact
+            and not flags_act.has(None, {'data-flag-id': 'flag-2'})
+            and dom_query(dom_explainact).has(None, {'class': 'card-note'}, text='allowlisted')
         ),
         f'requests={act_reqs!r}',
     )
@@ -3628,13 +3644,13 @@ def run_finding_card_2(page):
     check = page.check
     dom_explainfail = page.fixture('dom_explainfail')
     fail_reqs = pre(dom_explainfail, 'mock-requests')
-    flags_fail = dom_explainfail.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+    flags_fail = dom_query(dom_explainfail).find(attrs={'id': 'flags-list'})
     check(
         'finding card: a failed allow puts the card back and toasts danger',
         (
             'POST /allowlist' in fail_reqs
             and 'POST /flags/acknowledge' not in fail_reqs
-            and dom_query(flags_fail).has('div', {'class': 'row-body', 'data-flag-id': 'flag-2'})
+            and flags_fail.has('div', {'class': 'row-body', 'data-flag-id': 'flag-2'})
             and dom_query(dom_explainfail).has(None, {'class': 'toast danger'})
         ),
         f'requests={fail_reqs!r}',
@@ -3643,17 +3659,19 @@ def run_finding_card_2(page):
 def run_attention(page):
     check = page.check
     dom_explain = page.fixture('dom_explain')
-    attn = dom_explain.split('id="attention-center"', 1)[-1].split('id="coverage-center"', 1)[0]
-    flag2_row = log_rows(dom_explain).get('flag:flag-2', '')
+    attn = dom_query(dom_explain).find(attrs={'id': 'attention-center'})
+    flag2_row = log_row_nodes(dom_explain).get('flag:flag-2')
     check(
         'attention: a benign-likely explained finding is not a decision; it is a history row with its verdict',
         (
-            'flag-2' not in attn
-            and 'Sensitive file read near an outside connection' in flag2_row
-            and '<span class="c-verdict-text">Likely benign (advisor 93 %)</span>' in flag2_row
-            and dom_query(flag2_row).has(None, {'data-action': 'explain-act', 'data-flag-id': 'flag-2', 'data-action-id': 'allow-host'})
+            not attn.has(None, {'data-need-id': 'flag-2'})
+            and not attn.has(None, {'data-id': 'flag-2'})
+            and flag2_row is not None
+            and 'Sensitive file read near an outside connection' in flag2_row.text
+            and flag2_row.has('span', {'class': 'c-verdict-text'}, text='Likely benign (advisor 93 %)')
+            and flag2_row.has(None, {'data-action': 'explain-act', 'data-flag-id': 'flag-2', 'data-action-id': 'allow-host'})
         ),
-        f'row={flag2_row[:200]!r}',
+        f'row={flag2_row.text[:200] if flag2_row else None!r}',
     )
 
 def run_finding_row_3(page):
@@ -3666,15 +3684,16 @@ def run_finding_row_3(page):
         probe == 'kept',
         f'probe={probe!r}',
     )
-    flag3 = log_rows(dom_explain).get('flag:flag-3', '')
+    flag3 = log_row_nodes(dom_explain).get('flag:flag-3')
     check(
         "finding row: a flag without explain opens to its evidence lines and the console's Dismiss and Kill",
         (
-            dom_query(flag3).has(None, {'class': 'flag-evidence'})
-            and dom_query(flag3).has(None, {'data-action': 'dismiss-flag', 'data-id': 'flag-3'})
-            and dom_query(flag3).has(None, {'data-action': 'kill'})
+            flag3 is not None
+            and flag3.has(None, {'class': 'flag-evidence'})
+            and flag3.has(None, {'data-action': 'dismiss-flag', 'data-id': 'flag-3'})
+            and flag3.has(None, {'data-action': 'kill'})
         ),
-        f'row={flag3[:200]!r}',
+        f'row={flag3.text[:200] if flag3 else None!r}',
     )
 
 def run_sticky_tabs(page):
@@ -3780,67 +3799,63 @@ def run_github_approval_posts_the_served_exact_scope_and_reconciles_to_reviewed(
 
 def run_patterns(page):
     check = page.check
-    dom_csp = page.fixture('dom_csp')
-    dom_hiddenrender = page.fixture('dom_hiddenrender')
-    dom_pattern = page.fixture('dom_pattern')
+    root = dom_query(page.fixture('dom_pattern'))
     dom_patternact = page.fixture('dom_patternact')
     dom_patternphone = page.fixture('dom_patternphone')
     dom_patternstream = page.fixture('dom_patternstream')
-    csp_widths = (re.search('data-csp-widths="([^"]*)"', dom_csp) or [None, ''])[1]
-    widths = {k: float(v) for k, v in (kv.split(':') for kv in csp_widths.split(',') if kv)}
-    hrp = (re.search('<pre id="hidden-render-probe"[^>]*>(.*?)</pre>', dom_hiddenrender, re.S) or [None, ''])[1]
-    hrp_stages = dict(re.findall('(boot|refresh|search|shown):((?:[a-z-]+=\\d+,?)+)', hrp))
-
-    def hrp_zero(stage):
-        counts = dict(re.findall('([a-z-]+)=(\\d+)', hrp_stages.get(stage, '')))
-        return len(counts) == 4 and all((v == '0' for v in counts.values()))
-
-    def hrp_shown():
-        counts = dict(re.findall('([a-z-]+)=(\\d+)', hrp_stages.get('shown', '')))
-        return len(counts) == 4 and all((int(v) >= 1 for v in counts.values()))
-    pat_flags = dom_pattern.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
-    pat_rows = log_rows(pat_flags)
-    pat_cards = [(k, v) for k, v in pat_rows.items() if k.startswith('pattern:')]
+    flags = root.find(attrs={'id': 'flags-list'})
+    rows = log_row_nodes(flags) if flags else {}
+    cards = [row for key, row in rows.items() if key.startswith('pattern:')]
+    card = cards[0] if len(cards) == 1 else None
+    bars = card.find('span', {'class': 'pattern-bars', 'role': 'img'}) if card else None
     check(
         'patterns: History shows the storm as one row, its body with the count, summary, 24 bars and open count',
         (
-            len(pat_cards) == 1
-            and '323×' in pat_cards[0][1]
-            and 'codex touched the login keychain 323 times' in pat_cards[0][1]
-            and len(re.findall('<i class="h\\d"></i>', (re.search('<span class="pattern-bars" role="img"[^>]*>(.*?)</span>', pat_cards[0][1], re.S) or [None, ''])[1])) == 24
-            and '<b class="pattern-open">323 open</b>' in pat_cards[0][1]
-            and not dom_query(pat_flags).has(None, {'data-row-key': 'flag:flag-6'})
-            and not dom_query(pat_flags).has(None, {'data-row-key': 'flag:flag-7'})
-            and all((f'data-action="open-flag" data-id="{fid}"' in pat_cards[0][1] for fid in ('flag-6', 'flag-7')))
+            card is not None
+            and card.has('span', {'class': 'c-count'}, text='323×')
+            and 'codex touched the login keychain 323 times' in card.text
+            and bars is not None
+            and len(bars.find_all('i', {'class': lambda value: any(re.fullmatch(r'h\d', token) for token in (value or '').split())})) == 24
+            and card.has('b', {'class': 'pattern-open'}, text='323 open')
+            and 'flag:flag-6' not in rows
+            and 'flag:flag-7' not in rows
+            and all(card.has(attrs={'data-action': 'open-flag', 'data-id': fid}) for fid in ('flag-6', 'flag-7'))
         ),
-        f'cards={len(pat_cards)}',
+        f'cards={len(cards)}',
     )
-    pat_standalone = ''.join((v for k, v in pat_rows.items() if not k.startswith('pattern:')))
+    standalone = [row for key, row in rows.items() if not key.startswith('pattern:')]
+    critical, warning = rows.get('flag:flag-1'), rows.get('flag:flag-3')
     check(
         'patterns: critical individual flags lead warnings without duplicating covered flags',
         (
-            dom_query(pat_flags).has(None, {'data-pattern-key': starts_with('codex|keychain-access|')})
-            and pat_flags.index('data-id="flag-1"') < pat_flags.index('data-pattern-key=') < pat_flags.index('data-id="flag-3"')
-            and not any((f'data-id="{fid}"' in pat_standalone or f'data-flag-id="{fid}"' in pat_standalone for fid in ('flag-6', 'flag-7')))
-            and '(PID 40844)' not in pat_flags
-            and '(PID 51364)' not in pat_flags
-            and dom_query(pat_flags).has(None, {'data-id': 'flag-3'})
+            flags is not None
+            and flags.has(attrs={'data-pattern-key': starts_with('codex|keychain-access|')})
+            and critical is not None and card is not None and warning is not None
+            and critical.start < card.start < warning.start
+            and not any(row.has(attrs={attribute: fid}) for row in standalone for attribute in ('data-id', 'data-flag-id') for fid in ('flag-6', 'flag-7'))
+            and '(PID 40844)' not in flags.text
+            and '(PID 51364)' not in flags.text
+            and flags.has(attrs={'data-id': 'flag-3'})
         ),
     )
-    pat_reqs = pre(dom_patternact, 'mock-requests')
+    requests = pre(dom_patternact, 'mock-requests')
+    acted = dom_query(dom_patternact)
+    body = acted.find('div', {'class': 'row-body', 'data-pattern-key': None})
     check(
         'patterns: dismiss-all posts the served flag_ids and the row shows 0 open',
         (
-            'POST /flags/acknowledge body={"flag_ids":["flag-7","flag-6"]}' in pat_reqs
-            and re.search('<div class="row-body" data-pattern-key="[^"]+">.*?<b class="pattern-open">0 open</b>', dom_patternact, re.S) is not None
-            and '<b class="pattern-open">323 open</b>' not in dom_patternact
+            'POST /flags/acknowledge body={"flag_ids":["flag-7","flag-6"]}' in requests
+            and body is not None
+            and body.has('b', {'class': 'pattern-open'}, text='0 open')
+            and not acted.has('b', {'class': 'pattern-open'}, text='323 open')
         ),
-        f'requests={pat_reqs!r}',
+        f'requests={requests!r}',
     )
+    phone = dom_query(dom_patternphone).find(attrs={'data-hscroll': None})
     check(
         "patterns: the page still fits a 375px phone, the pattern card's tab included",
-        dom_query(dom_patternphone).has(None, {'data-hscroll': 'sessions:0,agents:0,resources:0,findings:0'}),
-        (re.search('data-hscroll="[^"]*"', dom_patternphone) or [None])[0],
+        phone is not None and phone.attrs['data-hscroll'] == 'sessions:0,agents:0,resources:0,findings:0',
+        phone.attrs.get('data-hscroll') if phone else None,
     )
     stream = pre(dom_patternstream, 'pattern-stream-probe')
     check(
@@ -3864,36 +3879,17 @@ def run_history(page):
 
 def run_a_61_flag_pattern_is_exactly_one_history_row_reading_61(page):
     check = page.check
-    dom_csp = page.fixture('dom_csp')
-    dom_hiddenrender = page.fixture('dom_hiddenrender')
-    dom_pattern = page.fixture('dom_pattern')
-    dom_patternbig = page.fixture('dom_patternbig')
-    csp_widths = (re.search('data-csp-widths="([^"]*)"', dom_csp) or [None, ''])[1]
-    widths = {k: float(v) for k, v in (kv.split(':') for kv in csp_widths.split(',') if kv)}
-    hrp = (re.search('<pre id="hidden-render-probe"[^>]*>(.*?)</pre>', dom_hiddenrender, re.S) or [None, ''])[1]
-    hrp_stages = dict(re.findall('(boot|refresh|search|shown):((?:[a-z-]+=\\d+,?)+)', hrp))
-
-    def hrp_zero(stage):
-        counts = dict(re.findall('([a-z-]+)=(\\d+)', hrp_stages.get(stage, '')))
-        return len(counts) == 4 and all((v == '0' for v in counts.values()))
-
-    def hrp_shown():
-        counts = dict(re.findall('([a-z-]+)=(\\d+)', hrp_stages.get('shown', '')))
-        return len(counts) == 4 and all((int(v) >= 1 for v in counts.values()))
-    pat_flags = dom_pattern.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
-    pat_rows = log_rows(pat_flags)
-    pat_cards = [(k, v) for k, v in pat_rows.items() if k.startswith('pattern:')]
-    pat_standalone = ''.join((v for k, v in pat_rows.items() if not k.startswith('pattern:')))
-    big_rows = log_rows(dom_patternbig)
-    big_pattern = [k for k in big_rows if k.startswith('pattern:')]
+    flags = dom_query(page.fixture('dom_patternbig')).find(attrs={'id': 'flags-list'})
+    rows = log_row_nodes(flags) if flags else {}
+    patterns = [row for key, row in rows.items() if key.startswith('pattern:')]
     check(
         'a 61-flag pattern is exactly one history row reading 61×',
         (
-            len(big_pattern) == 1
-            and '<span class="c-count">61×</span>' in big_rows[big_pattern[0]]
-            and not [k for k in big_rows if k.startswith('flag:kc-')]
+            len(patterns) == 1
+            and patterns[0].has('span', {'class': 'c-count'}, text='61×')
+            and not any(key.startswith('flag:kc-') for key in rows)
         ),
-        f'rows={list(big_rows)[:6]}',
+        f'rows={list(rows)[:6]}',
     )
 
 def run_bulk_mark_reviewed_on_two_selected_rows_asks_one_confirm_and_sends_one_acknowledge_batch(page):

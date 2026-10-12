@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -116,11 +117,15 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 }
 
 func (a *API) mutePairs() []MutePair {
-	out := []MutePair{}
 	if a.mutes == nil {
-		return out
+		return []MutePair{}
 	}
-	for rule, mutes := range a.mutes.Load() {
+	return mutePairsFrom(a.mutes.Load())
+}
+
+func mutePairsFrom(policy map[string][]correlate.Mute) []MutePair {
+	out := []MutePair{}
+	for rule, mutes := range policy {
 		for _, m := range mutes {
 			out = append(out, MutePair{Rule: rule, Host: m.Host, Agent: m.Agent, Title: humanFlagTitle(rule)})
 		}
