@@ -109,7 +109,7 @@ for (const name of ['lib.js', 'tab-agent.js']) {
 }
 test('sending and model wait states expose animated, accessible feedback without echoing unmasked input', () => {
   const items = render.agentThreadItems({ messages: [] }, {}, [], { sending: true });
-  assert.match(items.at(-1).html, /Sending your message/);
+  assert.match(items.at(-1).label, /Sending your message/);
   assert.match(items.at(-1).html, /agent-spinner/);
   assert.match(items.at(-1).html, /role="status"/);
   assert.match(render.agentThreadItems({ messages: [], chatting: true }, {}).at(-1).html, /agent-spinner/);
