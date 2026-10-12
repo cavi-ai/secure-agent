@@ -52,6 +52,17 @@ def run_worktrees(page):
         ),
     )
     check(
+        'worktrees: reasons are tags toned by kind, and the agent chip replaces the agent reason',
+        (
+            '<li class="wt-reason wt-reason-keep">2 uncommitted changes</li>' in wt
+            and '<li class="wt-reason wt-reason-review">ignored files that only live here: .tmp/ (3 files, 1.2 MB)</li>' in wt
+            and '<li class="wt-reason wt-reason-safe">merged into origin/main (squash)</li>' in wt
+            and '<li class="wt-reason wt-reason-info">directory is gone; git still lists it</li>' in wt
+            and 'an agent session is live here</li>' not in wt
+            and '<div class="wt-title"><span class="wt-branch">(detached)</span><span class="wt-agent-live"' in wt
+        ),
+    )
+    check(
         'worktrees: state pills carry counts and the summary line reads the scan',
         (
             'data-state="" aria-pressed="true">All <b>4</b></button>' in dom_wt

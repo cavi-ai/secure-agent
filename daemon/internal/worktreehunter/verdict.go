@@ -15,6 +15,15 @@ const (
 	StateRemove = "remove" // clean, merged or pushed and idle: safe to remove
 )
 
+// Reason kinds: what each entry of Reasons says about removing the folder.
+const (
+	ReasonKeep   = "keep"   // removal would lose work or cut into a git operation
+	ReasonAgent  = "agent"  // an agent is working in the folder
+	ReasonReview = "review" // something only lives here; look before removing
+	ReasonSafe   = "safe"   // the work is kept elsewhere
+	ReasonInfo   = "info"   // context
+)
+
 // Worktree is one row of the report: the facts and the verdict.
 type Worktree struct {
 	Path     string `json:"path"`
@@ -32,7 +41,10 @@ type Worktree struct {
 
 	State   string   `json:"state"`
 	Reasons []string `json:"reasons"`
-	Stale   bool     `json:"stale,omitempty"`
+	// ReasonKinds holds the kind of each entry of Reasons, in order
+	// (ReasonKeep, ReasonAgent, ReasonReview, ReasonSafe, ReasonInfo).
+	ReasonKinds []string `json:"reason_kinds"`
+	Stale       bool     `json:"stale,omitempty"`
 
 	LastActivity *time.Time `json:"last_activity,omitempty"`
 	IdleDays     int        `json:"idle_days"`
@@ -128,56 +140,60 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	idle := !last.IsZero() && now.Sub(last) > staleAfter
 	recent := !last.IsZero() && now.Sub(last) < activeGrace
 	w.Stale = idle || ((merged || w.UpstreamGone) && !recent)
-	w.Reasons = []string{}
+	w.Reasons, w.ReasonKinds = []string{}, []string{}
 
 	switch {
 	case f.Main:
 		w.State = StateMain
-		w.Reasons = append(w.Reasons, "main worktree of the repository")
+		w.reason(ReasonInfo, "main worktree of the repository")
 		return
 	case f.Missing && w.Locked:
 		// git worktree prune skips locked entries.
 		w.State = StateKeep
-		w.Reasons = append(w.Reasons, lockedReason(w), "directory is gone; unlock it to prune")
+		w.reason(ReasonKeep, lockedReason(w))
+		w.reason(ReasonInfo, "directory is gone; unlock it to prune")
 		return
 	case f.Missing:
 		w.State = StatePrune
-		w.Reasons = append(w.Reasons, "directory is gone; git still lists it")
+		w.reason(ReasonInfo, "directory is gone; git still lists it")
 		return
 	}
 
-	var keep, review []string
+	type entry struct{ kind, text string }
+	var keep, review []entry
 	if w.Operation != "" {
-		keep = append(keep, "a git "+w.Operation+" is in progress; finish or abort it first")
+		keep = append(keep, entry{ReasonKeep, "a git " + w.Operation + " is in progress; finish or abort it first"})
 	}
 	if w.Locked {
-		keep = append(keep, lockedReason(w))
+		keep = append(keep, entry{ReasonKeep, lockedReason(w)})
 	}
 	if w.Conflicts > 0 {
-		keep = append(keep, plural(w.Conflicts, "unresolved conflict", "unresolved conflicts"))
+		keep = append(keep, entry{ReasonKeep, plural(w.Conflicts, "unresolved conflict", "unresolved conflicts")})
 	}
 	if w.Changed > 0 {
-		keep = append(keep, plural(w.Changed, "uncommitted change", "uncommitted changes"))
+		keep = append(keep, entry{ReasonKeep, plural(w.Changed, "uncommitted change", "uncommitted changes")})
 	}
 	if w.Untracked > 0 {
-		keep = append(keep, plural(w.Untracked, "untracked file or directory", "untracked files or directories"))
+		keep = append(keep, entry{ReasonKeep, plural(w.Untracked, "untracked file or directory", "untracked files or directories")})
 	}
 	if w.Loose > 0 {
-		keep = append(keep, fmt.Sprintf("detached HEAD with %s on no branch (removal loses them)", plural(w.Loose, "commit", "commits")))
+		keep = append(keep, entry{ReasonKeep, fmt.Sprintf("detached HEAD with %s on no branch (removal loses them)", plural(w.Loose, "commit", "commits"))})
 	}
 	if w.InUse {
-		keep = append(keep, liveAgentReason(*w))
+		keep = append(keep, entry{ReasonAgent, liveAgentReason(*w)})
 	}
-	keep = append(keep, w.SubmoduleLocal...)
+	for _, s := range w.SubmoduleLocal {
+		keep = append(keep, entry{ReasonKeep, s})
+	}
 
 	if w.Orphan {
-		review = append(review, "directory is not registered with git; its files are the only copy")
+		review = append(review, entry{ReasonReview, "directory is not registered with git; its files are the only copy"})
 	}
 	if w.Error != "" {
-		review = append(review, "could not inspect: "+w.Error)
+		review = append(review, entry{ReasonReview, "could not inspect: " + w.Error})
 	}
 	if len(w.PreciousIgnored) > 0 {
-		review = append(review, "ignored files that only live here: "+strings.Join(w.PreciousIgnored, ", "))
+		review = append(review, entry{ReasonReview, "ignored files that only live here: " + strings.Join(w.PreciousIgnored, ", ")})
 	}
 	def := orDefault(f.DefaultBranch)
 	longer := ""
@@ -214,46 +230,51 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 		case len(measure) > 0:
 			reason += "; " + strings.Join(measure, "; ")
 		}
-		review = append(review, reason)
+		review = append(review, entry{ReasonReview, reason})
 	}
 	mr := mergedReason(w.Merged, f.DefaultBranch)
 	if w.Stashes > 0 {
-		review = append(review, plural(w.Stashes, "stash", "stashes")+" on this branch")
+		review = append(review, entry{ReasonReview, plural(w.Stashes, "stash", "stashes") + " on this branch"})
 	}
 
 	switch {
-	case len(keep) > 0:
-		w.State = StateKeep
-		w.Reasons = append(keep, review...)
-		if merged {
-			w.Reasons = append(w.Reasons, mr)
-		}
-	case len(review) > 0:
+	case len(keep) > 0 || len(review) > 0:
 		w.State = StateReview
-		w.Reasons = review
+		if len(keep) > 0 {
+			w.State = StateKeep
+		}
+		for _, e := range append(keep, review...) {
+			w.reason(e.kind, e.text)
+		}
 		if merged {
-			w.Reasons = append(w.Reasons, mr)
+			w.reason(ReasonSafe, mr)
 		}
 	case merged && recent:
 		w.State = StateKeep
-		w.Reasons = append(w.Reasons, mr+"; active in the last 24 hours")
+		w.reason(ReasonInfo, mr+"; active in the last 24 hours")
 	case merged:
 		w.State = StateRemove
-		w.Reasons = append(w.Reasons, mr)
+		w.reason(ReasonSafe, mr)
 	case w.Unique == 0 && idle:
 		w.State = StateRemove
-		w.Reasons = append(w.Reasons, fmt.Sprintf("every commit is on a remote; idle %d days", w.IdleDays))
+		w.reason(ReasonSafe, fmt.Sprintf("every commit is on a remote; idle %d days", w.IdleDays))
 	default:
 		w.State = StateKeep
 		if last.IsZero() {
-			w.Reasons = append(w.Reasons, "not merged")
+			w.reason(ReasonInfo, "not merged")
 		} else {
-			w.Reasons = append(w.Reasons, fmt.Sprintf("not merged; active %d days ago", w.IdleDays))
+			w.reason(ReasonInfo, fmt.Sprintf("not merged; active %d days ago", w.IdleDays))
 		}
 	}
 	if w.State == StateRemove && w.Submodules > 0 {
-		w.Reasons = append(w.Reasons, plural(w.Submodules, "submodule", "submodules")+" with every commit on a remote")
+		w.reason(ReasonSafe, plural(w.Submodules, "submodule", "submodules")+" with every commit on a remote")
 	}
+}
+
+// reason appends text to Reasons and its kind to ReasonKinds.
+func (w *Worktree) reason(kind, text string) {
+	w.Reasons = append(w.Reasons, text)
+	w.ReasonKinds = append(w.ReasonKinds, kind)
 }
 
 // liveAgentReason names the agent working in a worktree, when known.

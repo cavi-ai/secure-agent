@@ -46,6 +46,9 @@ func TestOrphansOfMovedAndDeletedRepositories(t *testing.T) {
 	if !w.Orphan || w.Reconnect != newMain || !strings.Contains(strings.Join(w.Reasons, ";"), "Reconnect links it again") {
 		t.Fatalf("moved repo orphan = %+v", w)
 	}
+	if n := len(w.ReasonKinds); n != len(w.Reasons) || w.ReasonKinds[n-1] != ReasonInfo {
+		t.Fatalf("moved repo orphan kinds %q for reasons %q, want one each ending in info", w.ReasonKinds, w.Reasons)
+	}
 	l := findRow(t, rep, lost)
 	if !l.Orphan || l.Reconnect != "" {
 		t.Fatalf("deleted repo orphan = %+v", l)

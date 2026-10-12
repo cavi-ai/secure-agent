@@ -20,6 +20,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Providers: show only harness names and prioritize Codex, Cursor, OpenClaw, and Hermes.
 - Console and menu bar: Home and the hero list only decisions that need you; warnings and recurring connections stay in the findings history, now a compact log.
 - Worktrees: **Remove** is solid red when confirmed safe, **Remove…** is an amber outline when not confirmed (goes to the Trash), and a blocked row is greyed.
+- Worktrees: rows lead with their state, and reasons are tags colored by what they mean for removal (`reason_kinds` on `GET /worktrees`).
 - Console: disabled buttons are dimmed.
 
 ### Fixed

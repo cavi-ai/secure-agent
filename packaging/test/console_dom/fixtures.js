@@ -526,11 +526,11 @@
     reclaimed: { bytes: 3221225472, count: 3, bytes_30d: 1073741824, count_30d: 1 },
     repos: [{
       path: WT_REPO, source: 'session', default_branch: 'origin/main', size_bytes: 1612709888, worktrees: [
-        { path: WT_REPO, branch: 'main', state: 'main', reasons: ['main worktree of the repository'], idle_days: 0 },
-        { path: WT_REPO + '/.worktrees/done', branch: 'feat/done', state: 'remove', stale: true, last_activity: iso(21 * 86400000), idle_days: 21, size_bytes: 1610612736, reasons: ['merged into origin/main (squash)'] },
-        { path: WT_REPO + '/.worktrees/evidence', branch: 'feat/evidence', head: '123abc', state: 'review', last_activity: iso(3600000), idle_days: 0, reasons: ['ignored files that only live here: .tmp/ (3 files, 1.2 MB)', '<b>not bold</b>'] },
-        { path: '/Users/dev/.codex/worktrees/ab12/api-service', branch: '', detached: true, state: 'keep', in_use: true, last_activity: iso(60000), idle_days: 0, reasons: ['2 uncommitted changes', 'an agent session is live here'] },
-        { path: WT_REPO + '/.worktrees/gone', branch: 'feat/gone', state: 'prune', stale: true, idle_days: 0, reasons: ['directory is gone; git still lists it'] }
+        { path: WT_REPO, branch: 'main', state: 'main', reasons: ['main worktree of the repository'], reason_kinds: ['info'], idle_days: 0 },
+        { path: WT_REPO + '/.worktrees/done', branch: 'feat/done', state: 'remove', stale: true, last_activity: iso(21 * 86400000), idle_days: 21, size_bytes: 1610612736, reasons: ['merged into origin/main (squash)'], reason_kinds: ['safe'] },
+        { path: WT_REPO + '/.worktrees/evidence', branch: 'feat/evidence', head: '123abc', state: 'review', last_activity: iso(3600000), idle_days: 0, reasons: ['ignored files that only live here: .tmp/ (3 files, 1.2 MB)', '<b>not bold</b>', 'contained in origin/main'], reason_kinds: ['review', 'review', 'safe'] },
+        { path: '/Users/dev/.codex/worktrees/ab12/api-service', branch: '', detached: true, state: 'keep', in_use: true, last_activity: iso(60000), idle_days: 0, reasons: ['2 uncommitted changes', 'an agent session is live here', 'submodule vendor/x has 3 commits on no remote (removal loses them)'], reason_kinds: ['keep', 'agent', 'keep'] },
+        { path: WT_REPO + '/.worktrees/gone', branch: 'feat/gone', state: 'prune', stale: true, idle_days: 0, reasons: ['directory is gone; git still lists it'], reason_kinds: ['info'] }
       ]
     }],
     errors: [],

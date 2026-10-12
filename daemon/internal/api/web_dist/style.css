@@ -2050,17 +2050,36 @@ button.spend-day:focus-visible { outline: 2px solid var(--brand); outline-offset
 #system-worktrees .wt-repo-actions { flex: 0 1 auto; }
 #system-worktrees .wt-repo-actions > * { margin-left: 0; white-space: normal; overflow-wrap: anywhere; }
 #system-worktrees .wt-repo-error { color: var(--warn); }
-#system-worktrees .wt-identity { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex: 1 1 220px; min-width: 0; padding: 6px 8px; border: 1px solid var(--line-2); border-radius: var(--r-sm); }
+#system-worktrees .wt-row { padding: 12px 14px; }
+#system-worktrees .wt-identity { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; flex: 1 1 220px; min-width: 0; }
+#system-worktrees .wt-title { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; max-width: 100%; }
 #system-worktrees .wt-branch { flex: initial; max-width: 100%; font: 650 14px/1.4 var(--font); color: var(--tx-1); white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 #system-worktrees .wt-path { flex: initial; order: initial; max-width: 100%; font: 12px/1.5 var(--mono); white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 #system-worktrees .wt-size { min-width: 0; text-align: left; }
 #system-worktrees .wt-idle, #system-worktrees .wt-stale { color: var(--tx-2); }
-#system-worktrees .wt-reasons, #system-worktrees .wt-advice, #system-worktrees .wt-ask, #system-worktrees .wt-removal { margin-left: 0; }
+/* Reasons, advice, asks and removals sit under the name, past the state chip. */
+#system-worktrees .wt-reasons, #system-worktrees .wt-advice, #system-worktrees .wt-ask, #system-worktrees .wt-removal { margin-left: 70px; }
+#system-worktrees .wt-reason-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding: 0; list-style: none; }
+/* A reason's tone and mark say what it means for removal, matching the state
+   chips: a violet dot for work that would be lost (keep), an amber ring for
+   something to look at (review), a green check for work kept elsewhere, a
+   dashed outline for context. */
+.wt-reason { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; margin: 0; padding: 3px 8px; border: 1px solid var(--line-2); border-radius: var(--r-sm); font-size: 0.74rem; line-height: 1.35; color: var(--tx-2); overflow-wrap: anywhere; }
+.wt-reasons .wt-reason { margin: 0; }
+.wt-reason::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--tx-3); }
+.wt-reason-keep { border-color: transparent; background: var(--brand-bg); color: var(--tx-1); }
+.wt-reason-keep::before { background: var(--brand); }
+.wt-reason-review { color: var(--tx-1); }
+.wt-reason-review::before { background: none; box-shadow: inset 0 0 0 1.5px var(--warn); }
+.wt-reason-safe { border-color: transparent; background: var(--ok-bg); color: var(--tx-1); }
+.wt-reason-safe::before { content: '✓'; width: auto; height: auto; border-radius: 0; background: none; color: var(--ok); font-weight: 700; line-height: 1; }
+.wt-reason-info { border-style: dashed; color: var(--tx-2); }
 #system-worktrees .wt-filters { gap: 10px; }
 #system-worktrees .wt-search { min-width: 0; }
 #system-worktrees .wt-add { min-width: 0; margin-left: 0; padding: 6px; border: 1px solid var(--line-2); border-radius: var(--r-sm); }
 @media (max-width: 720px) {
   #system-worktrees .wt-repo-identity, #system-worktrees .wt-identity { flex-basis: 100%; }
+  #system-worktrees .wt-reasons, #system-worktrees .wt-advice, #system-worktrees .wt-ask, #system-worktrees .wt-removal { margin-left: 0; }
   #system-worktrees .wt-repo-facts, #system-worktrees .wt-facts, #system-worktrees .wt-repo-actions, #system-worktrees .wt-actions { width: 100%; }
   #system-worktrees .wt-search { flex: 1 1 100%; width: 100%; max-width: none; margin-left: 0; }
   #system-worktrees .wt-add { flex: 1 1 100%; width: 100%; max-width: none; }

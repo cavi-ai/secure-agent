@@ -144,6 +144,29 @@ test('Remove on review and keep rows: enabled, opens the Trash confirmation; blo
   assert.ok(orphan.includes('worktree-trash-orphan') && !orphan.includes('worktree-review-trash') && !orphan.includes('worktree-discuss'));
 });
 
+test('a row reads state, name with its chips, then reasons as tags toned by kind', () => {
+  const repo = { path: REPO };
+  const html = worktreeRowHTML({
+    path: REPO + '/.worktrees/x', branch: 'feat/x', state: 'keep', stale: true, idle_days: 0, in_use: true, active_agent: 'codex',
+    reasons: ['11 uncommitted changes', 'codex is working here', 'ignored files that only live here: .tmp/', 'merged into origin/main (squash)', 'a <b>note</b>', 'odd'],
+    reason_kinds: ['keep', 'agent', 'review', 'safe', 'info', 'keep wt-x'],
+  }, repo);
+  const main = html.slice(html.indexOf('wt-main'), html.indexOf('wt-actions'));
+  assert.ok(main.indexOf('wt-state') < main.indexOf('wt-identity'), 'state chip leads the row');
+  assert.match(main, /<div class="wt-title"><span class="wt-branch">feat\/x<\/span><span class="wt-agent-live"[^>]*>codex working here<\/span><span class="wt-stale">stale<\/span><\/div>/);
+  assert.ok(html.includes('<ul class="wt-reasons wt-reason-tags" role="list">'
+    + '<li class="wt-reason wt-reason-keep">11 uncommitted changes</li>'
+    + '<li class="wt-reason wt-reason-review">ignored files that only live here: .tmp/</li>'
+    + '<li class="wt-reason wt-reason-safe">merged into origin/main (squash)</li>'
+    + '<li class="wt-reason wt-reason-info">a &lt;b&gt;note&lt;/b&gt;</li>'
+    + '<li class="wt-reason">odd</li></ul>'), html);
+  assert.ok(!html.includes('<li class="wt-reason wt-reason-agent">'), 'the chip stands for the agent reason');
+  // Without kinds every reason is a neutral tag.
+  const plain = worktreeRowHTML({ path: REPO + '/.worktrees/y', branch: 'feat/y', state: 'review', reasons: ['1 stash on this branch'] }, repo);
+  assert.ok(plain.includes('<ul class="wt-reasons wt-reason-tags" role="list"><li class="wt-reason">1 stash on this branch</li></ul>'));
+  assert.ok(!worktreeRowHTML({ path: REPO + '/.worktrees/z', branch: 'feat/z', state: 'keep', in_use: true, reasons: ['an agent session is live here'], reason_kinds: ['agent'] }, repo).includes('wt-reasons'));
+});
+
 test('a row an agent is working in carries a warning chip naming the agent', () => {
   const repo = { path: REPO };
   const row = extra => ({ path: REPO + '/.worktrees/x', branch: 'feat/x', state: 'keep', idle_days: 0, reasons: [], ...extra });
@@ -453,6 +476,12 @@ test('state styles: each state has its own stripe and chip color; keep is not re
   const chips = ['remove', 'review', 'keep'].map(st => rule(`.wt-${st} .wt-state`).match(/color: (var\(--[a-z0-9-]+\))/)?.[1]);
   assert.equal(new Set(chips).size, 3, `chips ${chips}`);
   assert.ok(!rule('.wt-keep .wt-state').includes('--bad') && !rule('.wt-row.wt-keep').includes('--bad'), 'keep must not use the error red');
+  // Reason tags carry the state colors: keep violet, review amber, safe green;
+  // context text keeps body contrast.
+  assert.ok(rule('.wt-reason-keep::before').includes('var(--brand)'), 'keep tag');
+  assert.ok(rule('.wt-reason-review::before').includes('var(--warn)'), 'review tag');
+  assert.ok(rule('.wt-reason-safe::before').includes('var(--ok)') && rule('.wt-reason-safe::before').includes("content: '✓'"), 'safe tag');
+  assert.ok(!rule('.wt-reason-info').includes('--tx-3'), 'info tag contrast');
 });
 
 test('orphans: a missing repository comes first with its error; its folders offer Open folder, Reconnect when possible, Move to Trash', () => {

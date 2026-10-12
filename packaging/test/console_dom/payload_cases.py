@@ -57,15 +57,15 @@ def worktree_reading_hierarchy(now_ms=None):
     rows = [
         {"path": path, "branch": 'feat/' + long, "state": "review", "idle_days": 21,
          "last_activity": iso(21 * 86400000), "size_bytes": 1610612736, "stale": True,
-         "reasons": ["1 uncommitted change"]},
+         "reasons": ["1 uncommitted change"], "reason_kinds": ["keep"]},
         {"path": first + '/.worktrees/detached', "detached": True, "state": "keep", "in_use": True,
-         "idle_days": 0, "last_activity": iso(60000), "reasons": ["an agent session is live here"]},
+         "idle_days": 0, "last_activity": iso(60000), "reasons": ["an agent session is live here"], "reason_kinds": ["agent"]},
     ]
     report = {"summary": {"repos": 2, "worktrees": 3}, "repos": [
         {"path": first, "default_branch": "origin/main", "source": "session", "size_bytes": 1610612736, "worktrees": rows},
         {"path": second, "error": "repository not found (moved or deleted)", "worktrees": [
             {"path": second + '/.worktrees/' + long, "branch": 'feat/' + long, "state": "review", "orphan": True,
-             "reconnect": first, "reasons": ["git no longer records this folder"]}]},
+             "reconnect": first, "reasons": ["git no longer records this folder"], "reason_kinds": ["review"]}]},
     ], "askable": {path: "codex"}, "volumes": [], "errors": [], "advice": {}, "asks": {}, "removals": {}}
     return {"now": now, "payloads": {"/worktrees": report}}
 
