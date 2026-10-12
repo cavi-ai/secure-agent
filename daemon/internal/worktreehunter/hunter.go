@@ -533,7 +533,7 @@ func (h *Hunter) scan(ctx context.Context, opts Options) ScanReport {
 	for i := range repos {
 		rep.Repos = append(rep.Repos, dropBare(repos[i]))
 	}
-	rep.Repos = attachOrphans(rep.Repos, d.Orphans, now, staleAfter)
+	rep.Repos = attachOrphans(rep.Repos, d.Orphans, activity, now, staleAfter)
 	sort.Slice(rep.Repos, func(i, j int) bool { return rep.Repos[i].Path < rep.Repos[j].Path })
 	for _, r := range rep.Repos {
 		if r.Error == "" {
@@ -607,15 +607,7 @@ func (h *Hunter) inspectOne(ctx context.Context, rs *repoScan, isMain bool, l li
 		return w, f
 	}
 
-	prefix := strings.TrimSuffix(l.Path, "/") + "/"
-	for _, a := range activity {
-		if a.Workspace == l.Path || strings.HasPrefix(a.Workspace, prefix) {
-			if a.LastSeen.After(f.LastSession) {
-				f.LastSession = a.LastSeen
-			}
-			w.InUse = w.InUse || a.Live
-		}
-	}
+	w.InUse, w.ActiveAgent, f.LastSession = agentAt(l.Path, activity, h.now())
 	f.HeadTime = headTime(ctx, l.Path)
 	f.IndexTime = indexTime(l.Path)
 
@@ -737,10 +729,12 @@ func dropBare(r RepoReport) RepoReport {
 
 // attachOrphans files each orphan directory under the repository its dead
 // gitdir pointed into, creating a group when that repo was not found.
-func attachOrphans(repos []RepoReport, orphans []orphanDir, now time.Time, staleAfter time.Duration) []RepoReport {
+func attachOrphans(repos []RepoReport, orphans []orphanDir, activity []model.WorkspaceActivity, now time.Time, staleAfter time.Duration) []RepoReport {
 	for _, o := range orphans {
 		w := Worktree{Path: o.Path, Orphan: true}
-		classify(&w, facts{IndexTime: dirTime(o.Path)}, now, staleAfter)
+		f := facts{IndexTime: dirTime(o.Path)}
+		w.InUse, w.ActiveAgent, f.LastSession = agentAt(o.Path, activity, now)
+		classify(&w, f, now, staleAfter)
 		i := -1
 		for k := range repos {
 			if repos[k].Path == o.Main {
@@ -763,6 +757,32 @@ func attachOrphans(repos []RepoReport, orphans []orphanDir, now time.Time, stale
 		repos[i].Worktrees = append(repos[i].Worktrees, w)
 	}
 	return repos
+}
+
+// agentAt reads the sessions working in dir or under it at now: whether any
+// is active (model.WorkspaceActivity.ActiveAt), the harness of the one to
+// name (a live session before an ended one, then the newest), and the newest
+// last_seen among all of them.
+func agentAt(dir string, activity []model.WorkspaceActivity, now time.Time) (inUse bool, agent string, lastSeen time.Time) {
+	prefix := strings.TrimSuffix(dir, "/") + "/"
+	var named model.WorkspaceActivity
+	for _, a := range activity {
+		if a.Workspace != dir && !strings.HasPrefix(a.Workspace, prefix) {
+			continue
+		}
+		if a.LastSeen.After(lastSeen) {
+			lastSeen = a.LastSeen
+		}
+		if !a.ActiveAt(now) {
+			continue
+		}
+		inUse = true
+		if a.Harness != "" && (named.Harness == "" || (a.Live && !named.Live) ||
+			(a.Live == named.Live && a.LastSeen.After(named.LastSeen))) {
+			named = a
+		}
+	}
+	return inUse, named.Harness, lastSeen
 }
 
 func dirTime(p string) time.Time {

@@ -46,7 +46,7 @@ func trashBlocker(row Worktree) string {
 	case row.Submodules != 0:
 		return "it has populated submodules"
 	case row.InUse:
-		return "an agent session is live here"
+		return liveAgentReason(row)
 	case row.Locked:
 		return "it is locked; unlock it first"
 	case row.Loose > 0:
