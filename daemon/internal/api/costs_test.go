@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -297,7 +299,20 @@ func TestCostsSplitPlanAndLocalFromUnpriced(t *testing.T) {
 // GET /costs/plans serves the recorded plan headroom; other methods are 405.
 func TestCostsPlansServesSnapshot(t *testing.T) {
 	seen := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
-	collect.RecordPlan("/Users/dev/.codex", collect.PlanSnapshot{
+	home, shared, removed := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, dir := range []string{home, shared} {
+		if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte(`{"tokens":{"account_id":"fixture-account"}}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dir := range []string{shared, removed} {
+		collect.RecordPlan(dir, collect.PlanSnapshot{
+			Harness: "codex", Home: filepath.Base(dir), PlanType: "pro", LimitID: "codex",
+			Windows: []collect.PlanWindow{{WindowMinutes: 10080, UsedPercent: 71, ResetsAt: "2026-09-27T14:30:38Z"}},
+			SeenAt:  seen.Add(-48 * time.Hour),
+		})
+	}
+	collect.RecordPlan(home, collect.PlanSnapshot{
 		Harness: "codex", Home: "codex", PlanType: "pro", LimitID: "codex",
 		Windows: []collect.PlanWindow{{WindowMinutes: 10080, UsedPercent: 52, ResetsAt: "2026-09-29T14:30:38Z"}},
 		SeenAt:  seen,
@@ -320,7 +335,7 @@ func TestCostsPlansServesSnapshot(t *testing.T) {
 		t.Fatalf("plans = %+v", body.Plans)
 	}
 	p := body.Plans[0]
-	if p.Harness != "codex" || p.Home != "codex" || p.PlanType != "pro" || !p.SeenAt.Equal(seen) ||
+	if p.Harness != "codex" || p.Home != "shared account" || len(p.Homes) != 2 || p.PlanType != "pro" || !p.SeenAt.Equal(seen) ||
 		len(p.Windows) != 1 || p.Windows[0].WindowMinutes != 10080 || p.Windows[0].UsedPercent != 52 {
 		t.Fatalf("plan = %+v", p)
 	}

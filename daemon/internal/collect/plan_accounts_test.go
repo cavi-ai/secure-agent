@@ -82,3 +82,29 @@ func TestCodexPlanIdentityOpaqueAndReflectsLoginChanges(t *testing.T) {
 		t.Fatal("malformed auth guessed an identity")
 	}
 }
+
+func TestAccountPlansExcludesRemovedLogins(t *testing.T) {
+	current, removed := t.TempDir(), t.TempDir()
+	for _, home := range []string{current, removed} {
+		if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"tokens":{"account_id":"fixture-account"}}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	account, _ := codexPlanIdentity(current)
+	if err := os.Remove(filepath.Join(removed, "auth.json")); err != nil {
+		t.Fatal(err)
+	}
+	older := time.Date(2026, 10, 10, 19, 19, 36, 0, time.UTC)
+	newer := time.Date(2026, 10, 12, 21, 20, 46, 0, time.UTC)
+	for _, recordedAccount := range []string{"", account} {
+		out := accountPlans([]PlanSnapshot{
+			{Harness: "codex", Home: "removed", HomePath: removed, PlanType: "pro", LimitID: "codex", SeenAt: older,
+				AccountKey: recordedAccount, Windows: []PlanWindow{{WindowMinutes: 10080, UsedPercent: 71}}},
+			{Harness: "codex", Home: "current", HomePath: current, PlanType: "pro", LimitID: "codex", SeenAt: newer,
+				AccountKey: account, Windows: []PlanWindow{{WindowMinutes: 10080, UsedPercent: 27}}},
+		}, codexPlanIdentity)
+		if len(out) != 1 || out[0].Home != "current" || out[0].Windows[0].UsedPercent != 27 || !out[0].SeenAt.Equal(newer) {
+			t.Fatalf("removed login must not expose a historical quota as current: %+v", out)
+		}
+	}
+}
