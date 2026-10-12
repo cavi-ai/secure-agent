@@ -79,7 +79,7 @@ func TestEgressEpisodesReadFailureAndRecovery(t *testing.T) {
 			if h.ReadFailures != 1 || !slices.Contains(h.ReadActive, "egress episodes") {
 				t.Errorf("core egress read failure hidden: %+v", h)
 			}
-			if rows, err := st.ListEgressEpisodesForReviewResult(); err == nil || rows != nil {
+			if rows, err := st.ListEgressEpisodesForReview(); err == nil || rows != nil {
 				t.Errorf("checked store returned incomplete evidence: rows=%+v err=%v", rows, err)
 			}
 			h = st.WriteHealth()

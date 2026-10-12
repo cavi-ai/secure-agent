@@ -76,7 +76,7 @@ func TestSnapshotRejectsFailedPatternReadOutsideOpenFlagList(t *testing.T) {
 	if _, err := db.Exec("UPDATE flags SET acknowledged='reviewed', evidence='invalid' WHERE id='reviewed'"); err != nil {
 		t.Fatal(err)
 	}
-	if flags, err := st.QueryFlagsResult(store.FlagFilter{Unacted: true}); err != nil || len(flags) != 0 {
+	if flags, err := st.QueryFlags(store.FlagFilter{Unacted: true}); err != nil || len(flags) != 0 {
 		t.Fatalf("open flag list: %+v, %v", flags, err)
 	}
 	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }})

@@ -44,7 +44,7 @@ type memoryTimelineStore struct {
 	err    error
 }
 
-func (s memoryTimelineStore) QueryEventsResult(store.EventFilter) ([]event.Event, error) {
+func (s memoryTimelineStore) QueryEvents(store.EventFilter) ([]event.Event, error) {
 	return append([]event.Event(nil), s.events...), s.err
 }
 

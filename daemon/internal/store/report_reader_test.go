@@ -32,7 +32,7 @@ func (r *memoryReportReader) sessionEventsOldestFirst(id string) ([]event.Event,
 	return r.events, r.eventErr
 }
 
-func (r *memoryReportReader) QueryFlagsResult(filter FlagFilter) ([]model.Flag, error) {
+func (r *memoryReportReader) QueryFlags(filter FlagFilter) ([]model.Flag, error) {
 	r.reads = append(r.reads, "flags:"+filter.SessionID)
 	r.filter = filter
 	return r.flags, r.flagErr

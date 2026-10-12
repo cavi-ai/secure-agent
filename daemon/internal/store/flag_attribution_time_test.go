@@ -43,7 +43,7 @@ func TestReattributeFlagsHonorsNanosecondCutoff(t *testing.T) {
 				t.Fatalf("reattributed %d flags, want 2", n)
 			}
 			for id, agent := range map[string]string{"before": "untagged:node", "at": "claude", "after": "claude", "other-pid": "untagged:node", "tagged": "codex"} {
-				f, found, err := s.GetFlagResult(id)
+				f, found, err := s.GetFlag(id)
 				if err != nil || !found || f.Agent != agent {
 					t.Fatalf("flag %s: agent=%q found=%v err=%v, want %q", id, f.Agent, found, err, agent)
 				}

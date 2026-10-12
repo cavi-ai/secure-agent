@@ -151,7 +151,7 @@ func activitySessions(t *testing.T) *Store {
 func TestSessionsOrderByActivityTime(t *testing.T) {
 	s := activitySessions(t)
 	for _, status := range []string{"", string(model.SessionActive)} {
-		got := testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{Status: status, Limit: 2}))
+		got := testutil.Read[[]model.Session](t)(s.ListSessions(SessionFilter{Status: status, Limit: 2}))
 		if len(got) != 2 || got[0].ID != "new" || got[1].ID != "boundary" {
 			t.Fatalf("status %q, activity order: %+v", status, got)
 		}
@@ -160,7 +160,7 @@ func TestSessionsOrderByActivityTime(t *testing.T) {
 
 func TestSessionSinceKeepsNanosecondBoundary(t *testing.T) {
 	s := activitySessions(t)
-	got := testutil.Read[[]model.Session](t)(s.ListSessionsResult(SessionFilter{Since: activityTime(t, "2026-10-07T23:00:00.000000002Z")}))
+	got := testutil.Read[[]model.Session](t)(s.ListSessions(SessionFilter{Since: activityTime(t, "2026-10-07T23:00:00.000000002Z")}))
 	if len(got) != 1 || got[0].ID != "new" {
 		t.Fatalf("since boundary includes older activity: %+v", got)
 	}

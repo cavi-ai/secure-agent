@@ -42,7 +42,7 @@ func (a *API) recentHarnessActivity() map[string]store.HarnessActivity {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.at.IsZero() || time.Since(c.at) >= harnessActivityTTL {
-		data, err := a.store.HarnessActivitySinceResult(time.Now().Add(-hookActivityWindow))
+		data, err := a.store.HarnessActivitySince(time.Now().Add(-hookActivityWindow))
 		if err == nil {
 			c.data = data
 		}

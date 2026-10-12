@@ -45,7 +45,7 @@ func TestOpenSurvivesStampsTheTimeIndexesRefuse(t *testing.T) {
 	if err := s.db.QueryRow("SELECT count(*) FROM flags").Scan(&count); err != nil || count != 4 {
 		t.Fatalf("flags retained after open: count=%d err=%v", count, err)
 	}
-	if got, err := s.QueryFlagsResult(FlagFilter{Limit: 10}); err == nil || got != nil {
+	if got, err := s.QueryFlags(FlagFilter{Limit: 10}); err == nil || got != nil {
 		t.Fatalf("malformed timestamps returned as valid flags: %+v, %v", got, err)
 	}
 	if _, err := s.db.Exec(trimFlagsSQL, 2); err != nil {
@@ -54,7 +54,7 @@ func TestOpenSurvivesStampsTheTimeIndexesRefuse(t *testing.T) {
 	if _, err := s.db.Exec("UPDATE flags SET ts='2026-10-07T12:00:00Z' WHERE ts='now' OR ts='garbage'"); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.QueryFlagsResult(FlagFilter{Limit: 10}); err != nil || len(got) != 2 {
+	if got, err := s.QueryFlags(FlagFilter{Limit: 10}); err != nil || len(got) != 2 {
 		t.Fatalf("read after timestamp repair: %+v, %v", got, err)
 	}
 }

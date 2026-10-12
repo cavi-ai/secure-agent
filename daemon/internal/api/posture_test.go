@@ -74,7 +74,7 @@ func TestIncidentDismissalPushesPostureAndRetainsReport(t *testing.T) {
 	if p := fresh.computePosture(); p.NeedsYou != 0 {
 		t.Fatalf("fresh API restored dismissed incident: %+v", p)
 	}
-	wf, found, err := st.IncidentStatusResult("test-incident")
+	wf, found, err := st.IncidentStatus("test-incident")
 	if err != nil || !found || wf.Status != "acknowledged" {
 		t.Fatalf("saved workflow: %+v %v %v", wf, found, err)
 	}

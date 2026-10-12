@@ -21,7 +21,7 @@ type agentAskReader interface {
 }
 
 type activeSessionReader interface {
-	ListSessionsResult(store.SessionFilter) ([]model.Session, error)
+	ListSessions(store.SessionFilter) ([]model.Session, error)
 }
 
 // worktreeReportStore supplies the stored context shown beside scanned rows.
@@ -89,7 +89,7 @@ func latestAsks(st agentAskReader) map[string]model.AgentAsk {
 // askableWorktrees names the harness of a live, identified session working
 // inside each keep or review row. A failed session read offers no row.
 func askableWorktrees(st activeSessionReader, rep worktreehunter.ScanReport) map[string]string {
-	sessions, err := st.ListSessionsResult(store.SessionFilter{Status: model.SessionActive, Limit: 10000})
+	sessions, err := st.ListSessions(store.SessionFilter{Status: model.SessionActive, Limit: 10000})
 	if err != nil {
 		return nil
 	}

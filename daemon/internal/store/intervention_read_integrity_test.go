@@ -46,7 +46,7 @@ func TestInterventionReadsRejectCorruptReceiptsAndRecover(t *testing.T) {
 			if h := st.WriteHealth(); h.ReadFailures != 1 || !slices.Equal(h.ReadActive, []string{"intervention receipts"}) || h.Failures != 0 {
 				t.Errorf("corrupt receipt health: %+v", h)
 			}
-			if rep, found, err := st.SessionReportResult("s1"); err != nil || !found || rep.InterventionsAvailable || rep.Evidence.Interventions.Available || len(rep.Interventions) != 0 || !rep.Evidence.Events.Available {
+			if rep, found, err := st.SessionReport("s1"); err != nil || !found || rep.InterventionsAvailable || rep.Evidence.Interventions.Available || len(rep.Interventions) != 0 || !rep.Evidence.Events.Available {
 				t.Errorf("report accepted corrupt receipts or lost activity: %+v, %v, %v", rep, found, err)
 			}
 			if out := st.SessionOutcomes("s1"); out.Evidence.Interventions.Available || len(out.Interventions) != 0 || !out.Evidence.Incidents.Available || !out.Evidence.Reviews.Available {

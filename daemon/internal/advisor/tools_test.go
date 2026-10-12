@@ -47,10 +47,10 @@ type scopedTestSink struct {
 	requested string
 }
 
-func (m *scopedTestSink) GetFlagResult(string) (model.Flag, bool, error) {
+func (m *scopedTestSink) GetFlag(string) (model.Flag, bool, error) {
 	return model.Flag{}, false, nil
 }
-func (m *scopedTestSink) SessionReportResult(id string) (store.SessionReport, bool, error) {
+func (m *scopedTestSink) SessionReport(id string) (store.SessionReport, bool, error) {
 	m.requested = id
 	return store.SessionReport{Session: model.Session{ID: id}, ToolCalls: 2,
 		Tools:    []store.ReportCount{{Key: "Read", Count: 2}},

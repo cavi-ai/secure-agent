@@ -182,7 +182,7 @@ const maxSightings = 10000
 // session permits attribution; an unavailable read must not reassign ownership.
 type resolverStore interface {
 	GetSession(string) (model.Session, bool, error)
-	ListSessionsResult(store.SessionFilter) ([]model.Session, error)
+	ListSessions(store.SessionFilter) ([]model.Session, error)
 	UpsertSession(model.Session) error
 	PromoteSession(model.Session, string) error
 	RekeySession(string, string) error
@@ -990,7 +990,7 @@ func (r *Resolver) Sweep() {
 			r.endLocked(id, now)
 		}
 	}
-	sessions, err := r.st.ListSessionsResult(store.SessionFilter{Status: model.SessionIdle, Limit: 500})
+	sessions, err := r.st.ListSessions(store.SessionFilter{Status: model.SessionIdle, Limit: 500})
 	if err != nil {
 		return
 	}

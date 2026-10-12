@@ -678,7 +678,7 @@ func (s *Store) backfillFindingReviews() error {
 		}
 		allIDs = append(allIDs, ids...)
 		for _, id := range ids {
-			f, ok, err := s.GetFlagResult(id)
+			f, ok, err := s.GetFlag(id)
 			if err != nil {
 				return err
 			}

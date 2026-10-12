@@ -16,7 +16,7 @@ func (a *API) serveSessionReport(w http.ResponseWriter, r *http.Request, id stri
 		http.Error(w, "format must be json or md", http.StatusBadRequest)
 		return
 	}
-	rep, ok, err := a.store.SessionReportResult(id)
+	rep, ok, err := a.store.SessionReport(id)
 	if err != nil {
 		http.Error(w, "Session report unavailable; retry", http.StatusServiceUnavailable)
 		return

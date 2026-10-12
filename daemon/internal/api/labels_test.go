@@ -47,7 +47,7 @@ func TestAdvisorPlanRejectsUnavailableLabelHistoryAndRecovers(t *testing.T) {
 			defer st.Close()
 			st.PutFlag(model.Flag{ID: "f1", Rule: "secret-in-transcript", Agent: "codex", TS: time.Now(), Severity: 3})
 			for i := 0; i < 3; i++ {
-				if err := st.PutOperatorLabelResult(model.OperatorLabel{Kind: "flag", Rule: "secret-in-transcript", Agent: "codex", Label: "ok", Source: "mark"}); err != nil {
+				if err := st.PutOperatorLabel(model.OperatorLabel{Kind: "flag", Rule: "secret-in-transcript", Agent: "codex", Label: "ok", Source: "mark"}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -130,7 +130,7 @@ func TestExplicitLabelsReportFailedWriteAndAllowRetry(t *testing.T) {
 			if health := st.WriteHealth(); !slices.Contains(health.Active, "operator labels") {
 				t.Fatalf("failed label write hidden from health: %+v", health)
 			}
-			if got := testutil.Read[model.LabelSummary](t)(st.LabelSummaryResult("codex", "", "secret-in-transcript")); got.OK != 0 {
+			if got := testutil.Read[model.LabelSummary](t)(st.LabelSummary("codex", "", "secret-in-transcript")); got.OK != 0 {
 				t.Fatalf("failed judgment persisted: %+v", got)
 			}
 			if _, err := db.Exec(`DROP TRIGGER reject_label_insert`); err != nil {
@@ -139,7 +139,7 @@ func TestExplicitLabelsReportFailedWriteAndAllowRetry(t *testing.T) {
 			if w := postJSON(a.handleLabels, "/labels", body); w.Code != http.StatusOK {
 				t.Fatalf("retry: %d %s", w.Code, w.Body.String())
 			}
-			if got := testutil.Read[model.LabelSummary](t)(st.LabelSummaryResult("codex", "", "secret-in-transcript")); got.OK != 1 {
+			if got := testutil.Read[model.LabelSummary](t)(st.LabelSummary("codex", "", "secret-in-transcript")); got.OK != 1 {
 				t.Fatalf("retry judgment: %+v", got)
 			}
 			if health := st.WriteHealth(); slices.Contains(health.Active, "operator labels") {
@@ -157,7 +157,7 @@ func TestPostLabelMarksAFinding(t *testing.T) {
 	if w := postJSON(a.handleLabels, "/labels", map[string]string{"subject": "flag:f1", "label": "ok", "reason": "my own <test> key"}); w.Code != http.StatusOK {
 		t.Fatalf("mark: %d %s", w.Code, w.Body.String())
 	}
-	got := testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabelsResult("secret-in-transcript", "codex", p, 5))
+	got := testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabels("secret-in-transcript", "codex", p, 5))
 	if len(got) != 1 || got[0].Label != "ok" || got[0].Source != "mark" || got[0].Pattern != p || got[0].Reason != "my own <test> key" {
 		t.Fatalf("stored = %+v", got)
 	}
@@ -214,7 +214,7 @@ func TestDispositionsRecordLabels(t *testing.T) {
 
 	check := func(rule, agent, pattern, label, source string) {
 		t.Helper()
-		for _, l := range testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabelsResult(rule, agent, pattern, 20)) {
+		for _, l := range testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabels(rule, agent, pattern, 20)) {
 			if l.Rule == rule && l.Agent == agent && l.Pattern == pattern && l.Label == label && l.Source == source {
 				return
 			}
@@ -225,7 +225,7 @@ func TestDispositionsRecordLabels(t *testing.T) {
 	check("sensitive-read-then-connect", "", "api.example.com", "ok", "mute")
 	check("env-files", "codex", "/w/api/.env", "ok", "allow-path")
 	check("cloud-creds", "codex", "/w/api/secrets.json", "not_ok", "guard-deny")
-	if n := len(testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabelsResult("", "", "unknown", 5))); n != 0 {
+	if n := len(testutil.Read[[]model.OperatorLabel](t)(a.store.SimilarLabels("", "", "unknown", 5))); n != 0 {
 		t.Fatalf("unknown guard id wrote %d labels", n)
 	}
 }

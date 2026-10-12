@@ -88,7 +88,7 @@ func TestDrainLoopIncidentPublicationRequiresPersistence(t *testing.T) {
 		}
 		h := st.WriteHealth()
 		if !recovering {
-			if len(testutil.Read[[]model.IncidentReport](t)(st.RecentIncidentsResult(10))) != 0 || len(incidentDeltas) != 0 || deliveries.Load() != 0 || advisorCalls != 1 {
+			if len(testutil.Read[[]model.IncidentReport](t)(st.RecentIncidents(10))) != 0 || len(incidentDeltas) != 0 || deliveries.Load() != 0 || advisorCalls != 1 {
 				t.Fatalf("unpersisted incident escaped: deltas=%v fleet=%d advisor lookups=%d", incidentDeltas, deliveries.Load(), advisorCalls)
 			}
 			if h.Failures != 1 || len(h.Active) != 1 || h.Active[0] != "incidents" {

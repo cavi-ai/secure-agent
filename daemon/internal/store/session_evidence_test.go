@@ -96,7 +96,7 @@ func TestSessionOutcomeResultChecksIdentityBeforeReceipts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	history, found, err := s.SessionOutcomeResult("missing")
+	history, found, err := s.SessionOutcome("missing")
 	if err != nil || found || len(history.Reviews) != 0 {
 		t.Fatalf("missing session: %+v %v %v", history, found, err)
 	}
@@ -104,14 +104,14 @@ func TestSessionOutcomeResultChecksIdentityBeforeReceipts(t *testing.T) {
 	if err := s.UpsertSession(model.Session{ID: "owned", StartedAt: at, Status: model.SessionEnded}); err != nil {
 		t.Fatal(err)
 	}
-	history, found, err = s.SessionOutcomeResult("owned")
+	history, found, err = s.SessionOutcome("owned")
 	if err != nil || !found || !history.Evidence.Reviews.Available || !history.Evidence.Incidents.Available || !history.Evidence.Interventions.Available || history.Reviews == nil {
 		t.Fatalf("empty receipts: %+v %v %v", history, found, err)
 	}
 	if _, err := s.db.Exec(`ALTER TABLE sessions RENAME TO sessions_hidden`); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err = s.SessionOutcomeResult("owned"); err == nil || found {
+	if _, found, err = s.SessionOutcome("owned"); err == nil || found {
 		t.Fatalf("identity failure returned receipts: %v %v", found, err)
 	}
 }

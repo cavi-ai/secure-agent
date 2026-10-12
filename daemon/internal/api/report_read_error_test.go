@@ -42,7 +42,7 @@ func TestSessionReportReadFailuresRejectReportsAndPlans(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if events, err := st.QueryEventsResult(store.EventFilter{SessionID: "s1"}); err != nil || len(events) != 2 {
+			if events, err := st.QueryEvents(store.EventFilter{SessionID: "s1"}); err != nil || len(events) != 2 {
 				t.Fatalf("two-event fixture: %d events, %v", len(events), err)
 			}
 			if _, err := st.PutFlag(model.Flag{ID: "f1", Rule: "rule", TS: now, SessionID: "s1"}); err != nil {

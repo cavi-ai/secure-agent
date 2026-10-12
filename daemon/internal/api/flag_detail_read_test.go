@@ -58,7 +58,7 @@ func TestUnavailableFlagDetailDoesNotApplyExceptions(t *testing.T) {
 			if audits := st.RecentAudit(10); len(audits) != 0 {
 				t.Errorf("failed edit wrote audit: %+v", audits)
 			}
-			if labels, err := st.SimilarLabelsResult(readConnectRule, "", "", 10); err != nil || len(labels) != 0 {
+			if labels, err := st.SimilarLabels(readConnectRule, "", "", 10); err != nil || len(labels) != 0 {
 				t.Errorf("failed edit wrote labels: %+v %v", labels, err)
 			}
 			var acknowledged int

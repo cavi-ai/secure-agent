@@ -37,7 +37,7 @@ func TestFlagEvidenceKeepsNewestInstant(t *testing.T) {
 				}
 			}
 			for _, filter := range []FlagFilter{{Limit: 1}, {Limit: 2}, {Rule: "r", Agent: "codex", SessionID: "owned", MinSeverity: 2, Unacted: true, Limit: 1}} {
-				got, err := s.QueryFlagsResult(filter)
+				got, err := s.QueryFlags(filter)
 				if err != nil || len(got) != filter.Limit || got[0].ID != "z-newer" {
 					t.Fatalf("flag limit %+v: flags=%+v err=%v", filter, got, err)
 				}
@@ -58,7 +58,7 @@ func TestFlagEvidenceKeepsNewestInstant(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			got, err := s.QueryFlagsResult(FlagFilter{Limit: 2})
+			got, err := s.QueryFlags(FlagFilter{Limit: 2})
 			if err != nil || len(got) != 1 || got[0].ID != "z-newer" {
 				t.Fatalf("retained flag after reopen: flags=%+v err=%v", got, err)
 			}

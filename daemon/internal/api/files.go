@@ -61,11 +61,11 @@ const (
 // fileEvidence reads at most limit findings and limit session accesses that
 // name path.
 func (a *API) fileEvidence(path string, limit int) ([]model.FileFinding, []model.FileAccess, fileEvidenceGate, error) {
-	findings, err := a.store.PathFindingsResult(path, limit)
+	findings, err := a.store.PathFindings(path, limit)
 	if err != nil {
 		return nil, nil, fileEvidenceUnavailable, err
 	}
-	accesses, err := a.store.PathAccessesResult(path, limit)
+	accesses, err := a.store.PathAccesses(path, limit)
 	if err != nil {
 		return nil, nil, fileEvidenceUnavailable, err
 	}

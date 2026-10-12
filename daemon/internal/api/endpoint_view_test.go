@@ -21,7 +21,7 @@ type memoryEndpointEvidence struct {
 	looked     []string
 }
 
-func (s *memoryEndpointEvidence) QueryEventsResult(f store.EventFilter) ([]event.Event, error) {
+func (s *memoryEndpointEvidence) QueryEvents(f store.EventFilter) ([]event.Event, error) {
 	s.filter = f
 	return s.events, s.eventErr
 }

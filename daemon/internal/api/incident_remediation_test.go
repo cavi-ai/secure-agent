@@ -75,7 +75,7 @@ func TestIncidentRemediationReportsRemainUnverifiedAndRevisionBound(t *testing.T
 	if first["status"] != "reported" || first["verification"] != "unverified" || first["reported_at"] == nil || second["status"] != "pending" {
 		t.Fatalf("untruthful or cross-item result: %+v", rem)
 	}
-	report, found := testutil.Lookup[store.SessionReport](t)(st.SessionReportResult("session"))
+	report, found := testutil.Lookup[store.SessionReport](t)(st.SessionReport("session"))
 	if !found || !report.IncidentsAvailable || len(report.Incidents) != 1 {
 		t.Fatalf("missing session export: %+v", report)
 	}

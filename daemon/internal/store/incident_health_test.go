@@ -23,7 +23,7 @@ func TestIncidentCreationMarshalFailureIsTracked(t *testing.T) {
 	if h.Failures != 1 || !slices.Equal(h.Active, []string{"incidents"}) {
 		t.Fatalf("incident serialization failure hidden: %+v", h)
 	}
-	if got := testutil.Read[[]model.IncidentReport](t)(s.RecentIncidentsResult(10)); len(got) != 0 {
+	if got := testutil.Read[[]model.IncidentReport](t)(s.RecentIncidents(10)); len(got) != 0 {
 		t.Fatalf("invalid incident was persisted: %+v", got)
 	}
 }
@@ -45,7 +45,7 @@ func TestIncidentCreationRejectsZeroRowInsert(t *testing.T) {
 	if h.Failures != 1 || !slices.Equal(h.Active, []string{"incidents"}) {
 		t.Fatalf("zero-row incident failure hidden: %+v", h)
 	}
-	if got := testutil.Read[[]model.IncidentReport](t)(s.RecentIncidentsResult(10)); len(got) != 0 {
+	if got := testutil.Read[[]model.IncidentReport](t)(s.RecentIncidents(10)); len(got) != 0 {
 		t.Fatalf("rejected incident was persisted: %+v", got)
 	}
 	if _, err := s.db.Exec("DROP TRIGGER skip_incident"); err != nil {
@@ -77,7 +77,7 @@ func TestIncidentAggregationFailureAndRecovery(t *testing.T) {
 	if got, err := s.GetIncident("incident"); err != nil || got.AggregateCount != 1 || got.LastFlagAt != nil {
 		t.Fatalf("failed aggregation changed the saved report: %+v, %v", got, err)
 	}
-	if _, ok := testutil.Lookup[string](t)(s.IncidentIDForFlagResult("second")); ok {
+	if _, ok := testutil.Lookup[string](t)(s.IncidentIDForFlag("second")); ok {
 		t.Fatal("failed aggregation saved the new flag link")
 	}
 	h := s.WriteHealth()
@@ -117,7 +117,7 @@ func TestIncidentAggregationFailureAndRecovery(t *testing.T) {
 	if got, err := s.GetIncident("incident"); err != nil || got.AggregateCount != report.AggregateCount || got.LastFlagAt == nil || !got.LastFlagAt.Equal(*report.LastFlagAt) {
 		t.Fatalf("delta disagrees with persisted report: %+v, %v", got, err)
 	}
-	if id, ok := testutil.Lookup[string](t)(s.IncidentIDForFlagResult("second")); !ok || id != "incident" {
+	if id, ok := testutil.Lookup[string](t)(s.IncidentIDForFlag("second")); !ok || id != "incident" {
 		t.Fatal("recovered aggregation did not save the flag link")
 	}
 	h = s.WriteHealth()
@@ -202,7 +202,7 @@ func TestIncidentAggregationAcceptsLegacyMissingFlagIDs(t *testing.T) {
 	if report, ok := s.AggregateIntoIncident("incident", "second", latest); !ok || report.ID != "incident" || report.AggregateCount != 2 || report.LastFlagAt == nil || !report.LastFlagAt.Equal(latest) {
 		t.Fatalf("legacy evidence failed to aggregate: %+v, %v", report, ok)
 	}
-	if id, ok := testutil.Lookup[string](t)(s.IncidentIDForFlagResult("second")); !ok || id != "incident" {
+	if id, ok := testutil.Lookup[string](t)(s.IncidentIDForFlag("second")); !ok || id != "incident" {
 		t.Fatal("legacy aggregation did not save the new evidence link")
 	}
 	for _, flagID := range []string{"first", "second"} {

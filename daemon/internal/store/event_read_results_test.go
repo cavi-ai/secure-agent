@@ -23,7 +23,7 @@ func TestEventReadResultsDiscardPartialRowsAndRecover(t *testing.T) {
 	if _, err := s.db.Exec("UPDATE events SET pid='invalid' WHERE session_id='bad'"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.QueryEventsResult(EventFilter{})
+	got, err := s.QueryEvents(EventFilter{})
 	if err == nil || got != nil {
 		t.Fatalf("partial rows returned: %+v, %v", got, err)
 	}
@@ -34,7 +34,7 @@ func TestEventReadResultsDiscardPartialRowsAndRecover(t *testing.T) {
 	if _, err := s.db.Exec("UPDATE events SET pid=0 WHERE session_id='bad'"); err != nil {
 		t.Fatal(err)
 	}
-	got, err = s.QueryEventsResult(EventFilter{})
+	got, err = s.QueryEvents(EventFilter{})
 	if err != nil || len(got) != 2 {
 		t.Fatalf("read did not recover: %+v, %v", got, err)
 	}
@@ -42,7 +42,7 @@ func TestEventReadResultsDiscardPartialRowsAndRecover(t *testing.T) {
 	if h.ReadFailures != 1 || len(h.ReadActive) != 0 {
 		t.Fatalf("recovery erased failures or retained fault: %+v", h)
 	}
-	got, err = s.QueryEventsResult(EventFilter{SessionID: "empty"})
+	got, err = s.QueryEvents(EventFilter{SessionID: "empty"})
 	if err != nil || got == nil || len(got) != 0 {
 		t.Fatalf("successful empty read: %+v, %v", got, err)
 	}

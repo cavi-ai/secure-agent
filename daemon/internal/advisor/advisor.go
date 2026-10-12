@@ -52,14 +52,14 @@ type Sink interface {
 	// TrendFor supplies the week-over-week context that makes triage more
 	// than a one-shot guess: is this rule/host routine on this machine?
 	TrendFor(rule, host string) model.TrendContext
-	// CriticalFlagsMissingAdvisorResult feeds the startup backfill: flags that
+	// CriticalFlagsMissingAdvisor feeds the startup backfill: flags that
 	// fired while the advisor was off and have no verdict yet.
-	CriticalFlagsMissingAdvisorResult(since time.Time, limit int) ([]model.Flag, error)
+	CriticalFlagsMissingAdvisor(since time.Time, limit int) ([]model.Flag, error)
 	// PutAdvisorPlan stores a plan keyed by its subject.
 	PutAdvisorPlan(subject string, p model.AdvisorPlan) error
 	// SimilarLabels returns the operator's judgments on cases like this
 	// one (rule, agent, and the file path or host involved).
-	SimilarLabelsResult(rule, agent, pattern string, limit int) ([]model.OperatorLabel, error)
+	SimilarLabels(rule, agent, pattern string, limit int) ([]model.OperatorLabel, error)
 }
 
 // IsLoopbackEndpoint reports whether the endpoint URL targets this machine.
@@ -393,7 +393,7 @@ const (
 // critical flags that fired while the advisor was off — the triage queue
 // should never show "no verdict" just because the flag predates the opt-in.
 func (s *Subscriber) Run(ctx context.Context) error {
-	flags, err := s.sink.CriticalFlagsMissingAdvisorResult(time.Now().Add(-backfillWindow), backfillLimit)
+	flags, err := s.sink.CriticalFlagsMissingAdvisor(time.Now().Add(-backfillWindow), backfillLimit)
 	if err != nil {
 		// A failed historical read must not restart the live worker or admit
 		// partial history. Store read health records the failure separately.
@@ -699,7 +699,7 @@ func (s *Subscriber) operatorHistory(fl model.Flag) string {
 	if pattern == "" {
 		pattern = evidenceHost(fl)
 	}
-	labels, err := s.sink.SimilarLabelsResult(fl.Rule, fl.Agent, pattern, operatorHistoryLimit)
+	labels, err := s.sink.SimilarLabels(fl.Rule, fl.Agent, pattern, operatorHistoryLimit)
 	if err != nil {
 		return "\noperator history unavailable"
 	}

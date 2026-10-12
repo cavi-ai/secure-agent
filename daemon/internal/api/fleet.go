@@ -40,7 +40,7 @@ func (a *API) handleFleet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	st := a.statusFn()
-	flags, err := a.store.QueryFlagsResult(store.FlagFilter{Limit: 100})
+	flags, err := a.store.QueryFlags(store.FlagFilter{Limit: 100})
 	if err != nil {
 		http.Error(w, "fleet findings unavailable", http.StatusServiceUnavailable)
 		return
