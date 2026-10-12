@@ -35,15 +35,15 @@ func TestRecentIncidentsOrderByInstant(t *testing.T) {
 				}
 			}
 			for _, limit := range []int{1, 2} {
-				got, err := s.RecentIncidentsResult(limit)
+				got, err := s.RecentIncidents(limit)
 				if err != nil || len(got) != limit || got[0].ID != "z-newer" {
 					t.Fatalf("limit %d: reports=%+v err=%v", limit, got, err)
 				}
 			}
-			if _, _, err := s.SetIncidentStatusResult("z-newer", "resolved", "reviewed"); err != nil {
+			if _, _, err := s.SetIncidentStatus("z-newer", "resolved", "reviewed"); err != nil {
 				t.Fatal(err)
 			}
-			got, err := s.RecentIncidentsResult(1)
+			got, err := s.RecentIncidents(1)
 			if err != nil || len(got) != 1 || got[0].ID != "a-older" {
 				t.Fatalf("resolved report consumed active limit: reports=%+v err=%v", got, err)
 			}

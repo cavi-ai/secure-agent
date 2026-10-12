@@ -30,7 +30,7 @@ func (s *memoryOverviewStore) GetSessionBounded(id string) (model.Session, bool,
 	return s.session, s.found, s.sessionErr
 }
 
-func (s *memoryOverviewStore) QueryFlagsResult(filter store.FlagFilter) ([]model.Flag, error) {
+func (s *memoryOverviewStore) QueryFlags(filter store.FlagFilter) ([]model.Flag, error) {
 	s.filter = filter
 	s.findingReads++
 	return s.flags, s.flagsErr

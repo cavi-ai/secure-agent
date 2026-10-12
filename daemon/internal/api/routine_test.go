@@ -118,7 +118,7 @@ func TestRoutineExpectsOnlyTheGroupsReads(t *testing.T) {
 			t.Fatalf("expected a read the group does not name: %+v", p)
 		}
 	}
-	if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult("mixed")); f.Acknowledged {
+	if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlag("mixed")); f.Acknowledged {
 		t.Fatal("the mixed flag was reviewed by the bulk expectation")
 	}
 }
@@ -204,7 +204,7 @@ func TestExpectFlagsMarksEveryPair(t *testing.T) {
 		t.Fatalf("response = %s (%v)", w.Body, err)
 	}
 	for id, acked := range map[string]bool{"a": true, "b": true, "later": false, "noreader": false} {
-		if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlagResult(id)); f.Acknowledged != acked {
+		if f, _ := testutil.Lookup[model.Flag](t)(a.store.GetFlag(id)); f.Acknowledged != acked {
 			t.Errorf("%s acknowledged = %v, want %v", id, f.Acknowledged, acked)
 		}
 	}

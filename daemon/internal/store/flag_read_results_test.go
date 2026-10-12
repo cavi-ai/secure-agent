@@ -25,7 +25,7 @@ func TestFlagReadResultsDiscardPartialRowsAndRecover(t *testing.T) {
 			if _, err := s.db.Exec("UPDATE flags SET " + damage + " WHERE id='bad'"); err != nil {
 				t.Fatal(err)
 			}
-			got, err := s.QueryFlagsResult(FlagFilter{})
+			got, err := s.QueryFlags(FlagFilter{})
 			if err == nil || got != nil {
 				t.Fatalf("partial flags returned: %+v, %v", got, err)
 			}
@@ -36,7 +36,7 @@ func TestFlagReadResultsDiscardPartialRowsAndRecover(t *testing.T) {
 			if _, err := s.db.Exec("UPDATE flags SET pid=1, ts=?, evidence=NULL, process=NULL, last_seen=NULL WHERE id='bad'", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 				t.Fatal(err)
 			}
-			got, err = s.QueryFlagsResult(FlagFilter{})
+			got, err = s.QueryFlags(FlagFilter{})
 			if err != nil || len(got) != 2 {
 				t.Fatalf("read did not recover: %+v, %v", got, err)
 			}
@@ -44,7 +44,7 @@ func TestFlagReadResultsDiscardPartialRowsAndRecover(t *testing.T) {
 			if h.ReadFailures != 1 || len(h.ReadActive) != 0 {
 				t.Fatalf("recovery health: %+v", h)
 			}
-			got, err = s.QueryFlagsResult(FlagFilter{Agent: "empty"})
+			got, err = s.QueryFlags(FlagFilter{Agent: "empty"})
 			if err != nil || got == nil || len(got) != 0 {
 				t.Fatalf("healthy empty read: %+v, %v", got, err)
 			}
@@ -58,7 +58,7 @@ func TestFlagReadQueryFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Close()
-	got, err := s.QueryFlagsResult(FlagFilter{})
+	got, err := s.QueryFlags(FlagFilter{})
 	if err == nil || got != nil {
 		t.Fatalf("closed database read: %+v, %v", got, err)
 	}
@@ -76,11 +76,11 @@ func TestFlagReadAcceptsLegacyNullableFields(t *testing.T) {
 	if _, err := s.db.Exec("INSERT INTO flags (id,severity,ts,pid) VALUES ('legacy',3,?,1)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.QueryFlagsResult(FlagFilter{})
+	got, err := s.QueryFlags(FlagFilter{})
 	if err != nil || len(got) != 1 || got[0].ID != "legacy" || got[0].Process != nil || got[0].LastSeen != nil {
 		t.Fatalf("nullable flag read: %+v, %v", got, err)
 	}
-	flag, found, err := s.GetFlagResult("legacy")
+	flag, found, err := s.GetFlag("legacy")
 	if err != nil || !found || flag.ID != "legacy" || flag.Process != nil || flag.LastSeen != nil {
 		t.Fatalf("nullable flag detail: %+v, %v, %v", flag, found, err)
 	}
@@ -92,11 +92,11 @@ func TestGetFlagResultDistinguishesMissingAndUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if flag, found, err := s.GetFlagResult("missing"); err != nil || found || flag.ID != "" {
+	if flag, found, err := s.GetFlag("missing"); err != nil || found || flag.ID != "" {
 		t.Fatalf("missing flag: %+v, %v, %v", flag, found, err)
 	}
 	s.Close()
-	if flag, found, err := s.GetFlagResult("missing"); err == nil || found || flag.ID != "" {
+	if flag, found, err := s.GetFlag("missing"); err == nil || found || flag.ID != "" {
 		t.Fatalf("unavailable flag: %+v, %v, %v", flag, found, err)
 	}
 	if h := s.WriteHealth(); h.ReadFailures != 1 || !slices.Equal(h.ReadActive, []string{"flag detail"}) {

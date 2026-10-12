@@ -132,7 +132,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	advisorStk := &advisorStackHolder{}
 	c.advisor = advisorStk
 	allowlistStore, muteStore, expectStore := loadEgressOverrides(cfg)
-	openReadFlags, err := st.QueryFlagsResult(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: 1024})
+	openReadFlags, err := st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: 1024})
 	if err != nil {
 		log.Printf("daemon: retained read findings unavailable: %v", err)
 	}
@@ -142,7 +142,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		Expected:           expectStore.Match,
 		OnRepeat:           foldFlagRepeat(st, deltaHub),
 		OpenFlag: func(id string) bool {
-			f, ok, err := st.GetFlagResult(id)
+			f, ok, err := st.GetFlag(id)
 			return err == nil && ok && !f.Acknowledged
 		},
 		OpenReadFlags: openReadFlags,
@@ -671,7 +671,7 @@ func repairStoredRows(st *store.Store) {
 // classifier no longer counts as a secret read. Returns how many it
 // acknowledged.
 func reclassifyReadFlags(st *store.Store, cl sensitive.Classifier, owners []config.CredentialOwner) int {
-	open, err := st.QueryFlagsResult(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: math.MaxInt32})
+	open, err := st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: math.MaxInt32})
 	if err != nil {
 		return 0
 	}
@@ -753,7 +753,7 @@ func buildAdvisorHooks(st *store.Store, advisorStk *advisorStackHolder) (*api.Re
 	// Re-triage: look up the stored flag, enqueue through the CURRENT stack.
 	retriage := &api.RetriageFuncs{
 		LookupFlag: func(id string) (model.Flag, bool) {
-			f, ok, err := st.GetFlagResult(id)
+			f, ok, err := st.GetFlag(id)
 			return f, ok && err == nil
 		},
 		Enqueue: func(fl model.Flag) bool {

@@ -53,7 +53,7 @@ func TestTaggerCatchUpReattributesUntaggedFlags(t *testing.T) {
 	procs[200] = agents.ProcInfo{PID: 200, PPID: 100, Exe: "/usr/local/bin/node"}
 	tagger.Refresh()
 
-	if fl, _ := testutil.Lookup[model.Flag](t)(st.GetFlagResult("kc-1")); fl.Agent != "claude" {
+	if fl, _ := testutil.Lookup[model.Flag](t)(st.GetFlag("kc-1")); fl.Agent != "claude" {
 		t.Fatalf("flag agent = %q, want claude", fl.Agent)
 	}
 	select {
@@ -88,7 +88,7 @@ func TestReattributionCutoffMatchesPublishedDeltas(t *testing.T) {
 	sub := hub.Subscribe()
 	defer hub.Unsubscribe(sub)
 	reattributeUntaggedFlags(st, hub, func() time.Time { return at.Add(time.Hour) })(200, agents.AgentInfo{Name: "claude"})
-	if f, found, err := st.GetFlagResult("before"); err != nil || !found || f.Agent != "untagged:node" {
+	if f, found, err := st.GetFlag("before"); err != nil || !found || f.Agent != "untagged:node" {
 		t.Fatalf("pre-cutoff flag=%+v found=%v err=%v", f, found, err)
 	}
 	seen := make(map[string]bool)

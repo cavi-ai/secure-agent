@@ -71,7 +71,7 @@ func TestSessionOutcomesIncidentLimitKeepsNewest(t *testing.T) {
 	if _, err := s.ReportIncidentRemediation(model.IncidentRemediationRequest{ID: inc.ID, StepID: view.Steps[0].ID, ExpectedRevision: view.Revision, ExpectedEvidence: view.EvidenceRevision, Status: "reported"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.SetIncidentStatusResult("newest", "resolved", "reviewed"); err != nil {
+	if _, _, err := s.SetIncidentStatus("newest", "resolved", "reviewed"); err != nil {
 		t.Fatal(err)
 	}
 	history := s.SessionOutcomes("owned")

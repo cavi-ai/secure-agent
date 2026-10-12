@@ -40,23 +40,23 @@ func TestIncidentWorkflowTargetsOneReport(t *testing.T) {
 			if report, err := s.GetIncident(tc.alias); err != nil || report.ID != tc.target {
 				t.Fatalf("detail identity: %+v %v", report, err)
 			}
-			protected, updated, err := s.SetIncidentStatusResult("other", "acknowledged", "")
+			protected, updated, err := s.SetIncidentStatus("other", "acknowledged", "")
 			if err != nil || !updated {
 				t.Fatal("could not acknowledge sibling", err)
 			}
-			if wf, found, err := s.IncidentStatusResult(tc.alias); err != nil || !found || wf.Status != "open" {
+			if wf, found, err := s.IncidentStatus(tc.alias); err != nil || !found || wf.Status != "open" {
 				t.Errorf("workflow disagrees with detail: %+v %v %v", wf, found, err)
 			}
-			wf, updated, err := s.SetIncidentStatusResult(tc.alias, "resolved", "reviewed")
+			wf, updated, err := s.SetIncidentStatus(tc.alias, "resolved", "reviewed")
 			if err != nil || !updated || wf.Status != "resolved" || wf.ResolutionNote != "reviewed" {
 				t.Errorf("alias resolution: %+v %v %v", wf, updated, err)
 			}
 			assertSaved := func(s *Store) {
 				t.Helper()
-				if got, found, err := s.IncidentStatusResult(tc.target); err != nil || !found || got != wf {
+				if got, found, err := s.IncidentStatus(tc.target); err != nil || !found || got != wf {
 					t.Errorf("target differs from returned workflow: %+v %v %v", got, found, err)
 				}
-				if got, found, err := s.IncidentStatusResult("other"); err != nil || !found || got != protected {
+				if got, found, err := s.IncidentStatus("other"); err != nil || !found || got != protected {
 					t.Errorf("alias update changed sibling: %+v %v %v", got, found, err)
 				}
 			}

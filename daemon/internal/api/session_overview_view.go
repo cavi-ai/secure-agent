@@ -19,7 +19,7 @@ var (
 
 type sessionOverviewStore interface {
 	GetSessionBounded(string) (model.Session, bool, error)
-	QueryFlagsResult(store.FlagFilter) ([]model.Flag, error)
+	QueryFlags(store.FlagFilter) ([]model.Flag, error)
 }
 
 type sessionOverviewEvidence struct {
@@ -39,7 +39,7 @@ func readSessionOverviewEvidence(st sessionOverviewStore, id string) (sessionOve
 		return sessionOverviewEvidence{}, errSessionOverviewMissing
 	}
 	const findingCap = 20
-	flags, err := st.QueryFlagsResult(store.FlagFilter{SessionID: id, Limit: findingCap + 1})
+	flags, err := st.QueryFlags(store.FlagFilter{SessionID: id, Limit: findingCap + 1})
 	if err != nil {
 		return sessionOverviewEvidence{}, fmt.Errorf("%w: %w", errSessionOverviewFindings, err)
 	}

@@ -26,7 +26,7 @@ type memoryWorktreeStore struct {
 }
 
 func (s *memoryWorktreeStore) AgentAsks(int) []model.AgentAsk { return s.asks }
-func (s *memoryWorktreeStore) ListSessionsResult(f store.SessionFilter) ([]model.Session, error) {
+func (s *memoryWorktreeStore) ListSessions(f store.SessionFilter) ([]model.Session, error) {
 	s.sessionRead++
 	if f.Status != model.SessionActive || f.Limit != 10000 {
 		return nil, errors.New("askable rows read every active session")

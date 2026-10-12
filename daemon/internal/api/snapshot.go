@@ -64,7 +64,7 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 		return Snapshot{}, err
 	}
 	failedReads := a.advisorReadFailures("incident")
-	flags, err := a.store.QueryFlagsResult(store.FlagFilter{
+	flags, err := a.store.QueryFlags(store.FlagFilter{
 		Unacted: true,
 		Since:   time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
 		Limit:   200,

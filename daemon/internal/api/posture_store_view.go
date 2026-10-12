@@ -17,7 +17,7 @@ type advisorReadHealthStore interface {
 type postureEvidenceStore interface {
 	findingReviewStore
 	advisorReadHealthStore
-	QueryFlagsResult(store.FlagFilter) ([]model.Flag, error)
+	QueryFlags(store.FlagFilter) ([]model.Flag, error)
 	RecentIncidentDetails(int) ([]store.IncidentDetail, error)
 }
 
@@ -42,7 +42,7 @@ func loadPostureEvidence(st postureEvidenceStore, in postureInputs) postureInput
 	} else {
 		in.Reviews = page.Reviews
 	}
-	flags, err := st.QueryFlagsResult(store.FlagFilter{MinSeverity: 3, Limit: 25, Unacted: true})
+	flags, err := st.QueryFlags(store.FlagFilter{MinSeverity: 3, Limit: 25, Unacted: true})
 	in.Flags = nil
 	if err == nil {
 		for _, f := range flags {

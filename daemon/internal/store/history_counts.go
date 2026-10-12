@@ -2,9 +2,9 @@ package store
 
 import "time"
 
-// RuleCountsResult distinguishes a healthy empty history from a failed read.
+// RuleCounts distinguishes a healthy empty history from a failed read.
 // Failed reads return no partial counts.
-func (s *Store) RuleCountsResult(rule, agent string, now time.Time) (last7, last30 int, readErr error) {
+func (s *Store) RuleCounts(rule, agent string, now time.Time) (last7, last30 int, readErr error) {
 	defer func() { s.noteRead("rule history", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()

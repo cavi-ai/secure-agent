@@ -42,7 +42,7 @@ func TestFlagSinceUsesInclusiveNanosecondCutoff(t *testing.T) {
 			}
 			check := func(filter FlagFilter) {
 				t.Helper()
-				got, err := s.QueryFlagsResult(filter)
+				got, err := s.QueryFlags(filter)
 				var ids []string
 				for _, flag := range got {
 					ids = append(ids, flag.ID)

@@ -853,7 +853,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		f.Since = t
 	}
-	sessions, err := a.store.ListSessionsResult(f)
+	sessions, err := a.store.ListSessions(f)
 	if err != nil {
 		http.Error(w, "session data unavailable", http.StatusServiceUnavailable)
 		return
@@ -935,7 +935,7 @@ func (a *API) currentStatus() Status {
 			}
 		}
 	}
-	flags, err := a.store.QueryFlagsResult(store.FlagFilter{
+	flags, err := a.store.QueryFlags(store.FlagFilter{
 		Unacted:     true,
 		MinSeverity: 2,
 		Since:       time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
@@ -1001,7 +1001,7 @@ func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
 	// ?unacted=1 excludes acknowledged flags — reviewed rows must not bury
 	// the open ones inside a limit window full of handled noise.
 	f.Unacted = q.Get("unacted") == "1" || q.Get("unacted") == "true"
-	flags, err := a.store.QueryFlagsResult(f)
+	flags, err := a.store.QueryFlags(f)
 	if err != nil {
 		http.Error(w, "flag data unavailable", http.StatusServiceUnavailable)
 		return
@@ -1039,7 +1039,7 @@ func (a *API) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if pid := queryInt(q.Get("pid"), 0); pid > 0 {
 		f.PID = int32(pid)
 	}
-	events, err := a.store.QueryEventsResult(f)
+	events, err := a.store.QueryEvents(f)
 	if err != nil {
 		http.Error(w, "event data unavailable", http.StatusServiceUnavailable)
 		return
@@ -1138,7 +1138,7 @@ func (a *API) handleIncidentStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `Invalid payload: {"id","status":"open|acknowledged|resolved","note":"..."}`, http.StatusBadRequest)
 		return
 	}
-	wf, ok, err := a.store.SetIncidentStatusResult(req.ID, req.Status, req.Note)
+	wf, ok, err := a.store.SetIncidentStatus(req.ID, req.Status, req.Note)
 	if errors.Is(err, store.ErrInvalidIncidentStatus) {
 		http.Error(w, "Invalid incident status: open|acknowledged|resolved", http.StatusBadRequest)
 		return
@@ -1484,7 +1484,7 @@ func (a *API) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 
 	// Recent connection events to this host, and the durable sessions behind
 	// them (so "claude reached it" comes with the repo/branch it was working in).
-	evs, err := a.store.QueryEventsResult(store.EventFilter{
+	evs, err := a.store.QueryEvents(store.EventFilter{
 		RemoteHost: host,
 		Since:      time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339),
 		Limit:      50,

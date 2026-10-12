@@ -83,9 +83,9 @@ func TestRuleCountsHonorSubsecondWindow(t *testing.T) {
 		}
 		restamp(t, s, `UPDATE flags SET ts=? WHERE id=?`, offsetStamp(at), id)
 	}
-	last7, last30, err := s.RuleCountsResult("keychain-access", "codex", now)
+	last7, last30, err := s.RuleCounts("keychain-access", "codex", now)
 	if err != nil || last7 != 2 || last30 != 3 {
-		t.Fatalf("RuleCountsResult = %d, %d, %v; want 2, 3", last7, last30, err)
+		t.Fatalf("RuleCounts =%d, %d, %v; want 2, 3", last7, last30, err)
 	}
 }
 
@@ -163,7 +163,7 @@ func TestAdvisorBackfillHonorsSubsecondSinceAndOffsets(t *testing.T) {
 			restamp(t, s, `UPDATE flags SET ts=? WHERE id=?`, offsetStamp(at), id)
 		}
 	}
-	flags := testutil.Read[[]model.Flag](t)(s.CriticalFlagsMissingAdvisorResult(subsecond, 10))
+	flags := testutil.Read[[]model.Flag](t)(s.CriticalFlagsMissingAdvisor(subsecond, 10))
 	if len(flags) != 2 || flags[0].ID != "newer-utc" || flags[1].ID != "older-offset" {
 		t.Fatalf("backfill = %v, want newer-utc then older-offset", flagIDs(flags))
 	}
@@ -185,9 +185,9 @@ func TestPathFindingsNewestFirstAcrossFractionWidths(t *testing.T) {
 		s.PutFlag(model.Flag{ID: id, Rule: "secret-in-transcript", Severity: 3, TS: at, Agent: "codex",
 			Evidence: []model.EvidenceItem{{Kind: "transcript", Label: path, Rule: "fp-1"}}})
 	}
-	got := testutil.Read[[]model.FileFinding](t)(s.PathFindingsResult(path, 1))
+	got := testutil.Read[[]model.FileFinding](t)(s.PathFindings(path, 1))
 	if len(got) != 1 || got[0].ID != "half-second" {
-		t.Fatalf("PathFindingsResult = %+v, want half-second first", got)
+		t.Fatalf("PathFindings =%+v, want half-second first", got)
 	}
 }
 

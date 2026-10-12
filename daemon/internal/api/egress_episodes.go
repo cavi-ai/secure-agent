@@ -58,8 +58,8 @@ func (a *API) egressEpisodeViews() ([]egressEpisodeView, error) {
 }
 
 type egressEpisodeStore interface {
-	ExpectedEgressMatcherResult() (func(store.EgressEpisode) string, error)
-	ListEgressEpisodesForReviewResult() ([]store.EgressEpisode, error)
+	ExpectedEgressMatcher() (func(store.EgressEpisode) string, error)
+	ListEgressEpisodesForReview() ([]store.EgressEpisode, error)
 	AdvisorVerdictsFor([]string, string) (map[string]model.AdvisorVerdict, error)
 }
 
@@ -69,11 +69,11 @@ func readEgressEpisodeViews(st egressEpisodeStore) ([]egressEpisodeView, error) 
 	if st == nil {
 		return other, nil
 	}
-	episodes, err := st.ListEgressEpisodesForReviewResult()
+	episodes, err := st.ListEgressEpisodesForReview()
 	if err != nil {
 		return nil, err
 	}
-	match, err := st.ExpectedEgressMatcherResult()
+	match, err := st.ExpectedEgressMatcher()
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,7 @@ func (a *API) handleEgressEpisodeSubpath(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
-	e, ok, err := a.store.GetEgressEpisodeResult(parts[0])
+	e, ok, err := a.store.GetEgressEpisode(parts[0])
 	if err != nil {
 		http.Error(w, "egress episode unavailable", http.StatusServiceUnavailable)
 		return
