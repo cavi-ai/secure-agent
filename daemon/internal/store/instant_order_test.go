@@ -85,7 +85,7 @@ func TestRuleCountsHonorSubsecondWindow(t *testing.T) {
 	}
 	last7, last30, err := s.RuleCounts("keychain-access", "codex", now)
 	if err != nil || last7 != 2 || last30 != 3 {
-		t.Fatalf("RuleCounts =%d, %d, %v; want 2, 3", last7, last30, err)
+		t.Fatalf("RuleCounts = %d, %d, %v; want 2, 3", last7, last30, err)
 	}
 }
 
@@ -187,7 +187,7 @@ func TestPathFindingsNewestFirstAcrossFractionWidths(t *testing.T) {
 	}
 	got := testutil.Read[[]model.FileFinding](t)(s.PathFindings(path, 1))
 	if len(got) != 1 || got[0].ID != "half-second" {
-		t.Fatalf("PathFindings =%+v, want half-second first", got)
+		t.Fatalf("PathFindings = %+v, want half-second first", got)
 	}
 }
 
