@@ -3,6 +3,7 @@ package api
 
 import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -138,10 +139,16 @@ func RouteWireTypes() []any {
 		new(store.ReviewPage),
 		new(model.ReviewDecisionReceipt),
 		new(model.Flag),
+		new([]store.AuditEntry),
+		new([]store.GuardPathAllow),
 		new([]model.Pattern),
+		new([]store.RollupPoint),
 		new(store.CostReport),
 		new(DoctorReport),
+		new(RoutingInfo),
 		new(FleetNodeStatus),
+		new([]guard.Pending),
+		new([]store.GuardRule),
 		new(model.FileDetail),
 		new(PlanResponse),
 		new(sysagent.InstructionPreview),
