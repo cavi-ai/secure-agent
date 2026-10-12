@@ -28,7 +28,7 @@ func TestDebugLogsContainMetadataAndExcludePromptAndReplyText(t *testing.T) {
 	srv := newStubServer(t, stub)
 	s := New(Config{Enabled: true, Endpoint: srv.URL, Debug: true}, &memSink{})
 	for i := 0; i < 3; i++ {
-		s.process(context.Background(), task{kind: "flag", flag: model.Flag{Rule: "private-fixture-rule", Evidence: []model.EvidenceItem{{Text: "private-fixture-evidence"}}}})
+		s.process(context.Background(), task{kind: flagKind, flag: model.Flag{Rule: "private-fixture-rule", Evidence: []model.EvidenceItem{{Text: "private-fixture-evidence"}}}})
 	}
 	output := logs.String()
 	if !strings.Contains(output, "advisor debug: request bytes=") || !strings.Contains(output, "completed=false") || strings.Contains(output, "private-fixture") {
@@ -60,7 +60,7 @@ func (m *scopedTestSink) SessionReport(id string) (store.SessionReport, bool, er
 func TestSessionToolUsesOnlyFindingSessionAndOmitsRawDetail(t *testing.T) {
 	sink := &scopedTestSink{}
 	s := New(Config{Enabled: true, Endpoint: "http://127.0.0.1:1"}, sink)
-	ctx := context.WithValue(context.Background(), reviewScopeKey{}, task{kind: "flag", flag: model.Flag{SessionID: "finding-session"}})
+	ctx := context.WithValue(context.Background(), reviewScopeKey{}, task{kind: flagKind, flag: model.Flag{SessionID: "finding-session"}})
 	result, err := s.runEvidenceTool(ctx, "inspect_session_activity", "fixture")
 	if err != nil || sink.requested != "finding-session" || !strings.Contains(result, "Read") || strings.Contains(result, "raw command") {
 		t.Fatalf("session tool escaped its scope or exposed detail: %s %v", result, err)
@@ -86,7 +86,7 @@ func TestToolResultReuseIsConfinedToOneTask(t *testing.T) {
 	defer modelServer.Close()
 	s := New(Config{Enabled: true, Endpoint: modelServer.URL, ClassifierEndpoint: classifier.URL}, &memSink{})
 	for i := 0; i < 2; i++ {
-		ctx := context.WithValue(context.Background(), reviewScopeKey{}, task{kind: "flag"})
+		ctx := context.WithValue(context.Background(), reviewScopeKey{}, task{kind: flagKind})
 		if _, err := s.chat(ctx, "system", "fixture", 100); err != nil {
 			t.Fatal(err)
 		}
@@ -127,7 +127,7 @@ func TestAdvisorFollowsScopedToolCall(t *testing.T) {
 	defer srv.Close()
 	sink := &memSink{rows: map[string]model.AdvisorVerdict{}}
 	s := New(Config{Enabled: true, Endpoint: srv.URL, Model: "test", Timeout: time.Second}, sink)
-	s.process(context.Background(), task{kind: "flag", subjectID: "f", flag: model.Flag{ID: "f", Rule: "test", Evidence: []model.EvidenceItem{{Kind: "text", Text: "fixture evidence"}}}})
+	s.process(context.Background(), task{kind: flagKind, subjectID: "f", flag: model.Flag{ID: "f", Rule: "test", Evidence: []model.EvidenceItem{{Kind: "text", Text: "fixture evidence"}}}})
 	if requests != 2 || sink.rows["f"].Assessment != "suspicious" {
 		t.Fatalf("tool review did not produce a verdict: calls=%d rows=%v", requests, sink.rows)
 	}
@@ -144,7 +144,7 @@ func TestAdvisorReportsActiveTask(t *testing.T) {
 	s := New(Config{Enabled: true, Endpoint: srv.URL, Timeout: time.Second}, &memSink{rows: map[string]model.AdvisorVerdict{}})
 	done := make(chan struct{})
 	go func() {
-		s.process(context.Background(), task{kind: "flag", subjectID: "f", flag: model.Flag{ID: "f"}})
+		s.process(context.Background(), task{kind: flagKind, subjectID: "f", flag: model.Flag{ID: "f"}})
 		close(done)
 	}()
 	<-started
@@ -169,7 +169,7 @@ func TestAdvisorRejectsToolsOutsideSubjectScope(t *testing.T) {
 			defer srv.Close()
 			sink := &memSink{rows: map[string]model.AdvisorVerdict{}}
 			s := New(Config{Enabled: true, Endpoint: srv.URL, Timeout: time.Second}, sink)
-			s.process(context.Background(), task{kind: "flag", subjectID: "f", flag: model.Flag{ID: "f"}})
+			s.process(context.Background(), task{kind: flagKind, subjectID: "f", flag: model.Flag{ID: "f"}})
 			if calls != 1 || len(sink.rows) != 0 || s.Health().LastError == "" {
 				t.Fatalf("unscoped tool was accepted: calls=%d rows=%v", calls, sink.rows)
 			}
@@ -186,7 +186,7 @@ func TestAdvisorStopsRepeatedToolRequests(t *testing.T) {
 	defer srv.Close()
 	sink := &memSink{rows: map[string]model.AdvisorVerdict{}}
 	s := New(Config{Enabled: true, Endpoint: srv.URL, Timeout: time.Second}, sink)
-	s.process(context.Background(), task{kind: "flag", subjectID: "f", flag: model.Flag{ID: "f"}})
+	s.process(context.Background(), task{kind: flagKind, subjectID: "f", flag: model.Flag{ID: "f"}})
 	if calls != 4 || len(sink.rows) != 0 || !strings.Contains(s.Health().LastError, "budget exhausted") {
 		t.Fatalf("tool loop not bounded: calls=%d health=%+v", calls, s.Health())
 	}

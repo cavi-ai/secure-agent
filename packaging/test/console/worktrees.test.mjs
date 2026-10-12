@@ -555,6 +555,16 @@ test('tiles: charted and recorded freed totals, removable now, recorded Trash mo
   assert.match(early, /Freed · last 30 days[\s\S]*1\.0 GB[\s\S]*1 cleanup</);
 });
 
+test('tiles: unreadable cleanup history reads unavailable, never zero', () => {
+  const html = reclaimTilesHTML(report(), null);
+  const tile = cls => html.split(`class="rc-tile ${cls}"`)[1].split('</div>')[0];
+  for (const cls of ['rc-freed', 'rc-alltime', 'rc-trash']) {
+    assert.match(tile(cls), /—[\s\S]*cleanup history unavailable/, cls);
+    assert.ok(!tile(cls).includes('0 B') && !tile(cls).includes('0 cleanups'), cls);
+  }
+  assert.ok(!tile('rc-removable').includes('unavailable'));
+});
+
 test('cleanup values: historical Trash moves stay separate from current disk and removable space', () => {
   const GB = 1073741824, TB = 1099511627776;
   const rep = {

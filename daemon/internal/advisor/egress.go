@@ -64,7 +64,7 @@ func (s *Subscriber) EnqueueEgressEpisode(e store.EgressEpisode) bool {
 	s.egressInflight[id] = struct{}{}
 	s.mu.Unlock()
 	select {
-	case s.queue <- task{kind: "egress", subjectID: id, egress: e}:
+	case s.queue <- task{kind: egressKind, subjectID: id, egress: e}:
 		return true
 	default:
 		s.clearEgressInflight(id)

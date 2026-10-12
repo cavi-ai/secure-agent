@@ -165,8 +165,8 @@ func (a *Agent) ApplyInstruction(workspace, agent, rule, revision string) (Instr
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.running != 0 {
-		return InstructionPreview{}, fmt.Errorf("%w: a local run is in progress", ErrBusy)
+	if err := a.runBusy(); err != nil {
+		return InstructionPreview{}, err
 	}
 	f, err := readInstructionFile(workspace, name, true)
 	if err != nil {

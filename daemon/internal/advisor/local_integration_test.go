@@ -22,7 +22,7 @@ func TestLocalAdvisorToolIntegration(t *testing.T) {
 	if s == nil || s.cfg.ClassifierEndpoint == "" {
 		t.Fatal("local model and classifier endpoints are required")
 	}
-	ctx := context.WithValue(context.Background(), reviewScopeKey{}, task{kind: "flag", flag: model.Flag{ID: "integration-fixture", SessionID: "fixture-session"}})
+	ctx := context.WithValue(context.Background(), reviewScopeKey{}, task{kind: flagKind, flag: model.Flag{ID: "integration-fixture", SessionID: "fixture-session"}})
 	classified, err := s.classifyEvidence(ctx, "Synthetic fixture: a test harness read README.md twice. No credentials or network events.")
 	if err != nil || !strings.Contains(classified, `"available":true`) {
 		t.Fatalf("local classifier did not return a valid routing result: %s %v", classified, err)

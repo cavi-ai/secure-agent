@@ -2712,9 +2712,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const rep = clutterState.report;
       if (rep) {
         rep.items = (rep.items || []).filter(it => it.path !== path);
-        const t = rep.reclaimed || (rep.reclaimed = { bytes: 0, count: 0, bytes_30d: 0, count_30d: 0, trashed_bytes: 0, trashed_count: 0 });
-        t.trashed_bytes = (Number(t.trashed_bytes) || 0) + bytes;
-        t.trashed_count = (Number(t.trashed_count) || 0) + 1;
+        // Unknown totals stay unknown; the ledger reload reports the move.
+        const t = rep.reclaimed;
+        if (t) {
+          t.trashed_bytes = (Number(t.trashed_bytes) || 0) + bytes;
+          t.trashed_count = (Number(t.trashed_count) || 0) + 1;
+        }
       }
       renderNow(['clutter']);
       showToast(`Moved ${path} to the Trash — ${fmtDisk(bytes)} frees when you empty it`, 'success');
