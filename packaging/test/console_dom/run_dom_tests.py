@@ -84,7 +84,7 @@ def build_harness(tmp):
     html = open(os.path.join(WEB_DIST, "index.html")).read()
     needle = '<script src="lib.js"></script>'
     assert needle in html, "lib.js script tag not found in index.html"
-    html = html.replace(needle, needle + '\n  <script src="fixture-config.js"></script>\n  <script src="fixtures.js"></script>\n  <script src="mock_dom.js"></script>')
+    html = html.replace(needle, needle + '\n  <script src="fixture-config.js"></script>\n  <script src="fixtures.js"></script>\n  <script src="mock_dom.js"></script>\n  <script src="case-script.js"></script>')
     with open(os.path.join(tmp, "harness.html"), "w") as f:
         f.write(html)
 
@@ -140,6 +140,9 @@ def write_fixture(tmp, query_string, fixture=None):
     spec = {"scenarios": scenarios, **(fixture or {})}
     from fixture_catalog import scenario_payload
     spec = {**scenario_payload(spec["scenarios"], spec.get("now")), **spec}
+    script = spec.pop("script", "")
+    with open(os.path.join(tmp, "case-script.js"), "w") as stream:
+        stream.write(open(os.path.join(os.path.dirname(MOCK), script)).read() if script else "")
     with open(os.path.join(tmp, "fixture-config.js"), "w") as stream:
         stream.write("window.CONSOLE_TEST = " + json.dumps(spec) + ";\n"
                      "if (window.parent !== window) {\n"
