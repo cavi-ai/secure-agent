@@ -19,7 +19,7 @@ make install    # build "Secure Agent.app", install it to /Applications and laun
 
 `make install` replaces `/Applications/Secure Agent.app` (the previous copy goes to the Trash) and opens only that copy. The build output in `dist/` is never registered or opened: macOS binds the file-telemetry helper to the copy that registered it, so only the copy in `/Applications` registers, re-registers or repairs it. Any other copy shows "Secure Agent must run from /Applications to manage file telemetry".
 
-`make build` includes the collector and the macOS menu bar. On Linux, use `make daemon cli collector`. Production Go binaries use `CGO_ENABLED=0`; the Go race detector in macOS CI uses cgo for instrumentation.
+`make build` includes the collector and the macOS menu bar. On Linux, use `make daemon cli collector`. Production Go binaries use `CGO_ENABLED=0`; the Go race detector in CI uses cgo for instrumentation.
 
 ## Build an app or DMG
 
@@ -48,7 +48,7 @@ make dmg   # signs, notarizes, and staples both the app and the DMG
 
 For documentation, run `make docs-check docs-test docs-archive`. After changing CLI help, embedded defaults or API route metadata, run `make docs-reference` first and include the generated reference diff. CI retains a downloadable docs preview; the release workflow attaches verified docs assets to published stable product releases. See [Documentation artifacts](CONSUMER.md) for previews, release delivery and the host contract.
 
-`make lint` runs Go vet and formatting checks. `make test` runs the local aggregate suite. The commands below let you run each component directly; CI also checks Linux builds, Go races, dependency vulnerabilities, packaging helpers, personal paths and secret scanning. See the [workflow](../.github/workflows/ci.yml) for its exact commands.
+`make lint` runs Go vet and formatting checks. `make test` runs the local aggregate suite. The commands below let you run each component directly; PR and main CI run Go races, CGO-disabled Linux builds, Python hooks, console tests, documentation checks, dependency checks and secret scanning on Ubuntu. macOS Go tests, Swift SDK tests and packaging/acceptance checks run in [Release validation](../.github/workflows/release-validation.yml), triggered by a published release or an explicit manual dispatch. See [CI](../.github/workflows/ci.yml) for the ordinary checks. Before releasing, dispatch Release validation against the candidate ref and require all of its checks to pass.
 
 The repository includes test suites across Go, Python, Swift, and end-to-end shell smoke testing.
 
