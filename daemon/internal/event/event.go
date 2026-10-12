@@ -119,6 +119,10 @@ type Event struct {
 	// their kind's row budget (time retention still applies); never
 	// serialized.
 	Record bool `json:"-"`
+	// ObservedTS marks a TS read from the collector's clock because the
+	// record carried no time of its own; a re-read stamps it again. Never
+	// stored or serialized.
+	ObservedTS bool `json:"-"`
 	// PPID is the parent pid Endpoint Security recorded at event time (ES
 	// events only). Session attribution falls back to it for a process that
 	// exited before its event was resolved; never stored or serialized.
