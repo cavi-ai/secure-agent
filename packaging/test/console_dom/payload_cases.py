@@ -48,6 +48,28 @@ def session_workbench(now_ms=None):
     ]}
 
 
+def worktree_reading_hierarchy(now_ms=None):
+    now, iso = _clock(now_ms)
+    long = 'complete-worktree-identity-with-continuity-and-navigation'
+    first = '/workspace/' + long + '/team-one/service'
+    second = '/workspace/' + long + '/team-two/service'
+    path = first + '/.worktrees/' + long
+    rows = [
+        {"path": path, "branch": 'feat/' + long, "state": "review", "idle_days": 21,
+         "last_activity": iso(21 * 86400000), "size_bytes": 1610612736, "stale": True,
+         "reasons": ["1 uncommitted change"]},
+        {"path": first + '/.worktrees/detached', "detached": True, "state": "keep", "in_use": True,
+         "idle_days": 0, "last_activity": iso(60000), "reasons": ["an agent session is live here"]},
+    ]
+    report = {"summary": {"repos": 2, "worktrees": 3}, "repos": [
+        {"path": first, "default_branch": "origin/main", "source": "session", "size_bytes": 1610612736, "worktrees": rows},
+        {"path": second, "error": "repository not found (moved or deleted)", "worktrees": [
+            {"path": second + '/.worktrees/' + long, "branch": 'feat/' + long, "state": "review", "orphan": True,
+             "reconnect": first, "reasons": ["git no longer records this folder"]}]},
+    ], "askable": {path: "codex"}, "volumes": [], "errors": [], "advice": {}, "asks": {}, "removals": {}}
+    return {"now": now, "payloads": {"/worktrees": report}}
+
+
 def quiet_sessions(now_ms=None):
     now, _ = _clock(now_ms)
     return {"now": now, "patches": [

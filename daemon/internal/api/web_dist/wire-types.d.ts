@@ -998,6 +998,29 @@ export interface ApiSnapshot {
   sessions: ModelSession[] | null;
 }
 
+export interface AuditEntry {
+  id: number;
+  ts: string;
+  action: string;
+  rule?: string;
+  from_mode?: string;
+  to_mode?: string;
+  detail?: string;
+}
+
+export interface GuardPathAllow {
+  agent: string;
+  rule_id: string;
+  path: string;
+  created_at: string;
+}
+
+export interface RollupPoint {
+  bucket: string;
+  kind: string;
+  count: number;
+}
+
 export interface CostRow {
   key: string;
   harness?: string;
@@ -1048,6 +1071,13 @@ export interface DoctorReport {
   checks: DoctorCheck[] | null;
 }
 
+export interface RoutingInfo {
+  ready: boolean;
+  reason?: string;
+  env?: Record<string, string>;
+  bash_env_path?: string;
+}
+
 export interface FleetNodeStatus {
   hostname: string;
   os: string;
@@ -1062,6 +1092,31 @@ export interface FleetNodeStatus {
   proxy_enabled: boolean;
   proxy_port: number;
   fleet_configured: boolean;
+}
+
+export interface Pending {
+  id: string;
+  session_id?: string;
+  agent: string;
+  tool: string;
+  path: string;
+  rule_id: string;
+  workspace?: string;
+  reader_exe?: string;
+  identity_basis?: string;
+  available_scopes?: ScopeChoice[];
+  ts: string;
+  scope_text?: string;
+  advisor?: AdvisorVerdict;
+}
+
+export interface GuardRule {
+  id: number;
+  agent: string;
+  rule_id: string;
+  decision: string;
+  source: string;
+  created_at: string;
 }
 
 export interface FileFinding {

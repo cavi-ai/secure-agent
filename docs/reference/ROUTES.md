@@ -33,7 +33,7 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 | `/incidents` | GET, HEAD | — | — | — |
 | `/incidents/status` | GET, HEAD, POST | POST | — | — |
 | `/incidents/remediation` | GET, HEAD, POST | POST | no agents | — |
-| `/audit` | GET, HEAD | — | — | — |
+| `/audit` | GET, HEAD | — | — | `[]store.AuditEntry` |
 | `/allowlist/suggestions` | GET, HEAD | — | — | — |
 | `/allowlist` | DELETE, GET, HEAD, POST | POST | — | — |
 | `/egress/uninspected` | GET, HEAD | — | — | — |
@@ -42,7 +42,7 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 | `/egress/episodes/{id}/assess` | GET, HEAD, POST | POST | no agents | — |
 | `/expected-egress` | DELETE, GET, HEAD, POST | POST, DELETE | no agents | — |
 | `/notify/rules` | GET, HEAD, POST | — | — | — |
-| `/guard/path-allow` | GET, HEAD, POST | POST | — | — |
+| `/guard/path-allow` | GET, HEAD, POST | POST | — | `[]store.GuardPathAllow` |
 | `/mute` | DELETE, GET, HEAD, POST | POST | — | — |
 | `/expected` | DELETE, GET, HEAD, POST | POST | no agents | — |
 | `/advisor/retriage` | GET, HEAD, POST | POST | — | — |
@@ -53,13 +53,13 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 | `/guard/config` | — | POST | no agents | — |
 | `/ui/open-fda` | GET, HEAD, POST | POST | — | — |
 | `/ui/open-config` | GET, HEAD, POST | POST | no agents | — |
-| `/stats/rollup` | GET, HEAD | — | — | — |
+| `/stats/rollup` | GET, HEAD | — | — | `[]store.RollupPoint` |
 | `/costs` | GET, HEAD | — | — | `store.CostReport` |
 | `/costs/unpriced` | GET, HEAD | — | — | — |
 | `/costs/plans` | GET, HEAD | — | — | — |
 | `/doctor` | GET, HEAD | — | — | `api.DoctorReport` |
 | `/coverage/probe` | GET, HEAD, POST | POST | no agents | — |
-| `/routing/claude` | — | — | no agents | — |
+| `/routing/claude` | — | — | no agents | `api.RoutingInfo` |
 | `/worktrees` | GET, HEAD | — | no agents | — |
 | `/worktrees/repos` | GET, HEAD, POST | POST | no agents | — |
 | `/worktrees/remove` | GET, HEAD, POST | POST | no agents | — |
@@ -83,9 +83,9 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 | `/firewall/fingerprints/ingest` | GET, HEAD, POST | POST | — | — |
 | `/firewall/sources` | GET, HEAD, POST | POST | — | — |
 | `/guard/decision` | — | — | guard decision | — |
-| `/guard/pending` | GET, HEAD | — | — | — |
+| `/guard/pending` | GET, HEAD | — | — | `[]guard.Pending` |
 | `/guard/resolve` | GET, HEAD, POST | POST | — | — |
-| `/guard/rules` | GET, HEAD, POST | POST | — | — |
+| `/guard/rules` | GET, HEAD, POST | POST | — | `[]store.GuardRule` |
 | `/debug/pprof/` | — | — | owner only | — |
 | `/files/detail` | GET, HEAD | — | no agents | `model.FileDetail` |
 | `/files/reveal` | GET, HEAD, POST | POST | no agents | — |
