@@ -62,7 +62,7 @@ func (s *Store) SaveIntervention(r model.InterventionReceipt) (writeErr error) {
 		return fmt.Errorf("intervention intent missing or result stale")
 	}
 	// Bound completed history without dropping an in-flight intent.
-	_, err = s.db.ExecContext(ctx, `DELETE FROM interventions WHERE json_extract(receipt_json,'$.status')!='requested' AND id NOT IN (SELECT id FROM interventions ORDER BY requested_at DESC,id DESC LIMIT 200)`)
+	_, err = s.db.ExecContext(ctx, `DELETE FROM interventions WHERE json_extract(receipt_json,'$.status')!='requested' AND id NOT IN (SELECT id FROM interventions ORDER BY `+timestampOrderExpr("requested_at")+` DESC,id DESC LIMIT 200)`)
 	return err
 }
 
@@ -78,7 +78,7 @@ func (s *Store) RecentInterventions(sessionID string, limit int) (_ []model.Inte
 		query += ` WHERE session_id=?`
 		args = append(args, sessionID)
 	}
-	query += ` ORDER BY requested_at DESC,id DESC LIMIT ?`
+	query += ` ORDER BY ` + timestampOrderExpr("requested_at") + ` DESC,id DESC LIMIT ?`
 	args = append(args, min(normalizeLimit(limit), 200))
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

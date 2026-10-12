@@ -265,7 +265,7 @@ func (s *Store) sessionEventsOldestFirst(id string) (out []event.Event, readErr 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	rows, err := s.db.QueryContext(ctx, `SELECT kind, ts, COALESCE(path,''), COALESCE(remote_host,''), COALESCE(detail,''), tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd
-		FROM events WHERE session_id = ? ORDER BY julianday(ts) ASC, id ASC LIMIT ?`, id, reportEventCap)
+		FROM events WHERE session_id = ? ORDER BY `+timestampOrderExpr("ts")+` ASC, id ASC LIMIT ?`, id, reportEventCap)
 	if err != nil {
 		return nil, err
 	}

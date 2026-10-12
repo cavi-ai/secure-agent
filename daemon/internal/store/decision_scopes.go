@@ -59,12 +59,13 @@ func insertDecisionScope(tx *sql.Tx, g model.DecisionScope) error {
 // bounded grant table over the lifetime of the installation. Receipts remain
 // historical; replay never recreates expired or revoked permissions.
 func pruneDecisionScopes(tx *sql.Tx) error {
-	cutoff := time.Now().Add(-30 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	cutoff := instantBound(time.Now().Add(-30 * 24 * time.Hour))
 	_, err := tx.Exec(`DELETE FROM decision_scopes WHERE
- julianday(json_extract(record_json,'$.expires_at')) < julianday(?) OR
- julianday(json_extract(record_json,'$.revoked_at')) < julianday(?) OR
- (json_extract(record_json,'$.kind')='session' AND julianday(json_extract(record_json,'$.created_at'))<julianday(?)
- AND NOT EXISTS(SELECT 1 FROM sessions WHERE id=json_extract(decision_scopes.record_json,'$.session_id') AND status!='ended'))`, cutoff, cutoff, cutoff)
+ `+instantBeforeSQL("json_extract(record_json,'$.expires_at')")+` OR
+ `+instantBeforeSQL("json_extract(record_json,'$.revoked_at')")+` OR
+ (json_extract(record_json,'$.kind')='session' AND `+instantBeforeSQL("json_extract(record_json,'$.created_at')")+`
+ AND NOT EXISTS(SELECT 1 FROM sessions WHERE id=json_extract(decision_scopes.record_json,'$.session_id') AND status!='ended'))`,
+		append(append(append([]any{}, cutoff...), cutoff...), cutoff...)...)
 	return err
 }
 

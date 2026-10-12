@@ -41,19 +41,18 @@ const (
 )
 
 // Flag statements on hot paths, each served by an index (see Open).
-const (
+var (
 	// ruleCountsSQL counts a rule's flags for one agent in two windows; it
 	// seeks idx_flags_rule_agent.
 	ruleCountsSQL = `SELECT
-		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0)
+		COALESCE(SUM(CASE WHEN ` + timestampOrderExpr("ts") + ` >= ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN ` + timestampOrderExpr("ts") + ` >= ? THEN 1 ELSE 0 END), 0)
 		FROM flags WHERE rule = ? AND agent = ?`
+	// hostFirstSeenSQL seeks idx_events_host; the advisor runs it for each
+	// flag, host and egress episode it triages. The partial index is usable
+	// only when the statement repeats the index's empty-host exclusion.
+	hostFirstSeenSQL = `SELECT substr(MIN(` + timestampOrderExpr("ts") + ` || ts),31) FROM events WHERE remote_host = ? AND remote_host != ''`
 )
-
-// hostFirstSeenSQL seeks idx_events_host; the advisor runs it for each
-// flag, host and egress episode it triages. Normalize before taking the
-// minimum so offsets and fractional widths cannot change chronology.
-var hostFirstSeenSQL = `SELECT MIN(` + timestampOrderExpr("ts") + `) FROM events WHERE remote_host = ? AND remote_host != ''`
 
 // reattributeFlagsSQL seeks idx_flags_pid. Numbered parameters reuse the cutoff
 // throughout its timestamp normalization without duplicating bound values.
@@ -500,9 +499,9 @@ func (s *Store) PruneEvents() {
 }
 
 func (s *Store) pruneEventsLocked() {
-	// Time-based per kind first (datetime() normalizes any legacy local-offset
-	// ts values), then per-kind row budgets as a pure backstop. Every kind
-	// present in the table is capped on its own budget (kindBudgets, else
+	// Time-based per kind first (instantBeforeSQL normalizes any legacy
+	// local-offset ts values), then per-kind row budgets as a pure backstop.
+	// Every kind present in the table is capped on its own budget (kindBudgets, else
 	// defaultKindBudget), so one kind's volume never evicts another kind's
 	// rows. Time retention still applies to every kind.
 	conn := s.connRetention
@@ -514,12 +513,11 @@ func (s *Store) pruneEventsLocked() {
 		other = DefaultEventRetention
 	}
 	now := time.Now().UTC()
-	connCutoff := now.Add(-conn).Format(time.RFC3339Nano)
-	otherCutoff := now.Add(-other).Format(time.RFC3339Nano)
-	_, _ = s.db.Exec(`DELETE FROM events WHERE kind IN (?, ?) AND datetime(ts) < datetime(?)`,
-		int(event.KindConnOpen), int(event.KindConnClose), connCutoff)
-	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND datetime(ts) < datetime(?)`,
-		int(event.KindConnOpen), int(event.KindConnClose), otherCutoff)
+	connKinds := []any{int(event.KindConnOpen), int(event.KindConnClose)}
+	_, _ = s.db.Exec(`DELETE FROM events WHERE kind IN (?, ?) AND `+instantBeforeSQL("ts"),
+		append(connKinds, instantBound(now.Add(-conn))...)...)
+	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND `+instantBeforeSQL("ts"),
+		append(connKinds, instantBound(now.Add(-other))...)...)
 	// Distinct kinds by index skip-scan: one MIN(kind) seek per kind.
 	rows, err := s.db.Query(`WITH RECURSIVE k(v) AS (
 			SELECT MIN(kind) FROM events
@@ -1177,12 +1175,13 @@ func (s *Store) trendCounts(rule, host string) (model.TrendContext, func() map[s
 	defer s.mu.Unlock()
 	var tc model.TrendContext
 	now := time.Now().UTC()
-	wk := now.Add(-7 * 24 * time.Hour).Format(time.RFC3339Nano)
-	prior := now.Add(-14 * 24 * time.Hour).Format(time.RFC3339Nano)
+	wk := instantArg(now.Add(-7 * 24 * time.Hour))
+	prior := instantArg(now.Add(-14 * 24 * time.Hour))
+	at := timestampOrderExpr("ts")
 	_ = s.db.QueryRow(
 		`SELECT
-		   SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END),
-		   SUM(CASE WHEN datetime(ts) >= datetime(?) AND datetime(ts) < datetime(?) THEN 1 ELSE 0 END)
+		   SUM(CASE WHEN `+at+` >= ? THEN 1 ELSE 0 END),
+		   SUM(CASE WHEN `+at+` >= ? AND `+at+` < ? THEN 1 ELSE 0 END)
 		 FROM flags WHERE rule = ?`,
 		wk, prior, wk, rule,
 	).Scan(&tc.RuleLast7d, &tc.RulePrior7d)
@@ -1474,12 +1473,13 @@ func (s *Store) CriticalFlagsMissingAdvisorResult(since time.Time, limit int) (f
 	defer s.mu.Unlock()
 	// Invalid dates must reach the decoder rather than disappear from the
 	// time filter or fall beyond the limit behind valid rows.
+	at := timestampOrderExpr("ts")
 	rows, err := s.db.Query(
 		flagSelect+` WHERE severity >= 3
 		 AND NOT EXISTS (SELECT 1 FROM advisor_verdicts v WHERE v.subject_id = flags.id AND v.kind = 'flag')
-		 AND (datetime(ts) IS NULL OR datetime(ts) >= datetime(?))
-		 ORDER BY datetime(ts) IS NULL DESC, datetime(ts) DESC, ts DESC LIMIT ?`,
-		since.UTC().Format(time.RFC3339Nano), normalizeLimit(limit),
+		 AND (`+at+` IS NULL OR `+at+` >= ?)
+		 ORDER BY `+at+` IS NULL DESC, `+at+` DESC, ts DESC LIMIT ?`,
+		instantArg(since), normalizeLimit(limit),
 	)
 	if err != nil {
 		return nil, err
@@ -1702,15 +1702,15 @@ func (s *Store) attachResourceEpisodeActivity(ctx context.Context, episode resou
 	// exited before capture is in the session but not in the family list.
 	if len(pids) > 0 {
 		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pids)), ",")
-		args := make([]any, 0, len(pids)+2)
+		args := make([]any, 0, len(pids)+6)
 		for _, pid := range pids {
 			args = append(args, pid)
 		}
-		args = append(args, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
+		args = append(append(args, instantBound(start)...), instantBound(end.Add(time.Nanosecond))...)
 		err := s.scanResourceActivity(ctx, `SELECT `+resourceActivityColumns+`
 			FROM events WHERE pid IN (`+placeholders+`)
-			AND datetime(ts) >= datetime(?) AND datetime(ts) <= datetime(?)
-			ORDER BY datetime(ts) DESC, id DESC`, args, func(e event.Event) {
+			AND `+instantSinceSQL("ts")+` AND `+instantBeforeSQL("ts")+`
+			ORDER BY `+timestampOrderExpr("ts")+` DESC, id DESC`, args, func(e event.Event) {
 			process := processes[e.PID]
 			if e.TS.Before(start) || e.TS.After(end) || (!process.StartedAt.IsZero() && e.TS.Before(process.StartedAt)) {
 				return
@@ -1724,7 +1724,7 @@ func (s *Store) attachResourceEpisodeActivity(ctx context.Context, episode resou
 	if episode.SessionID != "" {
 		at := memoryTimestampExpr("ts")
 		err := s.scanResourceActivity(ctx, `SELECT `+resourceActivityColumns+`
-			FROM events WHERE session_id = ? AND strftime('%s', ts) IS NOT NULL
+			FROM events WHERE session_id = ?
 			AND `+at+` >= ? AND `+at+` <= ?
 			ORDER BY `+at+` DESC, id DESC`,
 			[]any{episode.SessionID, start.UnixNano(), end.UnixNano()}, func(e event.Event) {
@@ -2132,7 +2132,7 @@ func (s *Store) ListGuardPathAllows(limit int) []GuardPathAllow {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
-		`SELECT agent, rule_id, path, created_at FROM guard_path_allows ORDER BY datetime(created_at) DESC LIMIT ?`,
+		`SELECT agent, rule_id, path, created_at FROM guard_path_allows ORDER BY `+timestampOrderExpr("created_at")+` DESC LIMIT ?`,
 		normalizeLimit(limit),
 	)
 	if err != nil {
@@ -2199,7 +2199,7 @@ func (s *Store) ListGuardRules(limit int) []GuardRule {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
-		`SELECT agent, rule_id, decision, source, created_at FROM guard_rules ORDER BY datetime(created_at) DESC LIMIT ?`,
+		`SELECT agent, rule_id, decision, source, created_at FROM guard_rules ORDER BY `+timestampOrderExpr("created_at")+` DESC LIMIT ?`,
 		normalizeLimit(limit),
 	)
 	if err != nil {

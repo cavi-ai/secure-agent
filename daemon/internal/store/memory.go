@@ -78,7 +78,7 @@ func createMemoryIndexes(db *sql.Tx) error {
 func memoryRows(tx *sql.Tx, table, atColumn, idColumn, extra, filter string, args []any, rank int, before *MemoryCursor, limit int) (*sql.Rows, error) {
 	atExpr := memoryTimestampExpr(atColumn)
 	idExpr := "CAST(" + idColumn + " AS TEXT)"
-	where := "(" + filter + ") AND strftime('%s'," + atColumn + ") IS NOT NULL"
+	where := "(" + filter + ") AND " + atExpr + " IS NOT NULL"
 	if before != nil {
 		boundary := before.At.UnixNano()
 		switch {

@@ -34,7 +34,7 @@ func (s *Store) PathFindingsResult(path string, limit int) (findings []model.Fil
 	like := jsonLike(path)
 
 	rows, err := s.db.Query(`SELECT id, rule, severity, ts, agent, session_id, evidence, COALESCE(acknowledged, '')
-		FROM flags WHERE evidence LIKE ? ESCAPE '\' ORDER BY ts DESC LIMIT ?`, like, pathScanCap)
+		FROM flags WHERE evidence LIKE ? ESCAPE '\' ORDER BY `+timestampOrderExpr("ts")+` DESC LIMIT ?`, like, pathScanCap)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +71,7 @@ func (s *Store) PathFindingsResult(path string, limit int) (findings []model.Fil
 	rows.Close()
 
 	rows, err = s.db.Query(`SELECT report_json, COALESCE(status, 'open') FROM incidents
-		WHERE report_json LIKE ? ESCAPE '\' ORDER BY datetime(created_at) DESC LIMIT ?`, like, pathScanCap)
+		WHERE report_json LIKE ? ESCAPE '\' ORDER BY `+timestampOrderExpr("created_at")+` DESC LIMIT ?`, like, pathScanCap)
 	if err != nil {
 		return nil, err
 	}
