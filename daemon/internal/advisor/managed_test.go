@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -60,38 +61,52 @@ func TestDiscoverServersIgnoresNonModelServers(t *testing.T) {
 	}
 }
 
-// fakeModelServer writes a tiny executable shell script that behaves like
-// mlx_lm.server enough for LaunchManaged: parse --port, serve /v1/models.
+// fakeModelServer launches the test binary as a model server, keeping the
+// process-launch test independent of an installed Python interpreter.
 func fakeModelServer(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script")
 	}
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "mlx_lm.server")
-	script := `#!/bin/sh
-port=8080
-while [ $# -gt 0 ]; do
-  if [ "$1" = "--port" ]; then port=$2; shift 2; continue; fi
-  shift
-done
-exec python3 -c "
-import http.server, json, sys
-class H(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        body = json.dumps({'data': [{'id': 'fake-4b'}]}).encode()
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-    def log_message(self, *a): pass
-http.server.HTTPServer(('127.0.0.1', $port), H).serve_forever()
-"
-`
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	quotedBinary := "'" + strings.ReplaceAll(testBinary, "'", "'\"'\"'") + "'"
+	script := "#!/bin/sh\nexport SA_ADVISOR_TEST_SERVER=1\nexec " + quotedBinary + " -test.run='^TestManagedModelServerProcess$' -- \"$@\"\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return bin
+}
+
+func TestManagedModelServerProcess(t *testing.T) {
+	if os.Getenv("SA_ADVISOR_TEST_SERVER") != "1" {
+		return
+	}
+	var port string
+	for i, arg := range os.Args {
+		if arg == "--port" && i+1 < len(os.Args) {
+			port = os.Args[i+1]
+			break
+		}
+	}
+	if port == "" {
+		t.Fatal("model server helper requires --port")
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "fake-4b"}}})
+	})}
+	if err := server.Serve(listener); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestLaunchManagedSpawnsAndServes(t *testing.T) {
@@ -100,7 +115,10 @@ func TestLaunchManagedSpawnsAndServes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LaunchManaged: %v", err)
 	}
-	defer cmd.Process.Kill()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
 
 	if !strings.HasPrefix(endpoint, "http://127.0.0.1:") {
 		t.Fatalf("endpoint must be loopback, got %q", endpoint)
