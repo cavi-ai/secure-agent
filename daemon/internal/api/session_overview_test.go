@@ -72,6 +72,21 @@ func TestSessionOverviewKeepsEvidenceAndLiveIdentitySeparate(t *testing.T) {
 	}
 }
 
+func TestSessionOverviewBuildsEvidenceStatusOnce(t *testing.T) {
+	st := testStore(t)
+	now := time.Now().UTC()
+	st.UpsertSession(model.Session{ID: "own", Harness: "claude", RootPID: 40, StartedAt: now.Add(-time.Hour), LastSeenAt: now, Status: model.SessionActive})
+	passes := 0
+	a := newTestAPI(Deps{Store: st, Status: func() Status { return Status{Running: true} }, BusDrops: func() uint64 {
+		passes++
+		return 0
+	}})
+	overviewJSON(t, a, "own")
+	if passes != 1 {
+		t.Fatalf("evidence status built %d times for one overview, want 1", passes)
+	}
+}
+
 func TestSessionOverviewGuardUsesExplicitSessionID(t *testing.T) {
 	a, _ := scopedGuardAPI(t)
 	p, done := enqueueScopeGuard(t, a, "")
