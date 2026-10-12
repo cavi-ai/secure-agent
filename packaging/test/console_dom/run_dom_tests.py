@@ -2065,9 +2065,9 @@ def main():
               "POST /cleanup/advise" in pre(dom_clutteradvise, "mock-requests")
               and '<b>Advisor:</b> Caches are small; nothing urgent.<ol><li>Run go clean -cache</li></ol>' in cla)
         clr = cl_block(dom_clutter)
-        check("clutter: Move to Trash posts after the dialog, drops the row and counts it as in the Trash",
+        check("clutter: Move to Trash posts after the dialog, drops the row and records the moved bytes",
               "POST /cleanup/trash" in pre(dom_clutter, "mock-requests") and "/api-service/.tmp" not in clr
-              and "1.0 MB moved to the Trash by cleanups" in dom_clutter)
+              and "1.0 MB moved to the Trash by recorded cleanups" in dom_clutter)
         wtr = wt_block(dom_wtremove)
         wtr_rows = len(dom_query(wtr).find_all(None, {'class': 'wt-row'}))
         wt_reqs = pre(dom_wtremove, "mock-requests")
