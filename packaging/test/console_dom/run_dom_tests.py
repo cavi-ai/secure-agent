@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import payload_cases
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -106,6 +107,15 @@ def serve_with_csp(tmp):
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *a, **kw):
             super().__init__(*a, directory=tmp, **kw)
+
+        def do_GET(self):
+            if self.path == '/__console_frame_checkpoint':
+                time.sleep(0.05)
+                self.send_response(204)
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                return
+            super().do_GET()
 
         def end_headers(self):
             self.send_header("Content-Security-Policy", policy)
