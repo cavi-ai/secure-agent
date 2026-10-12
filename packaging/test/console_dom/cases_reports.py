@@ -43,45 +43,53 @@ def run_resource_results(page):
 def run_group_head_carries_mark_display_name_and_counts(page):
     check = page.check
     dom = page.fixture('dom')
-    rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
+    rail = dom_query(dom).find(attrs={'id': 'session-rail'})
     check(
         'group head carries mark, display name and counts',
         (
-            '<span class="harness-label">Claude Code</span>' in rail
-            and '1 active · 1 idle · 1 ended' in rail
-            and dom_query(rail).has(None, {'data-harness': 'codex', 'open': ''})
-            and dom_query(rail).has(None, {'class': 'session-card active selected'})
+            rail.has('span', {'class': 'harness-label'}, text='Claude Code')
+            and '1 active · 1 idle · 1 ended' in rail.text
+            and rail.has(None, {'data-harness': 'codex', 'open': ''})
+            and rail.has(None, {'class': 'session-card active selected'})
         ),
     )
 
 def run_sub_session_nests_under_its_parent(page):
     check = page.check
     dom = page.fixture('dom')
-    rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
-    claude_group = rail.split('data-harness="claude"', 1)[1].split('<details', 1)[0]
+    rail = dom_query(dom).find(attrs={'id': 'session-rail'})
+    claude_group = rail.find('details', {'data-harness': 'claude'})
+    families = claude_group.find_all('div', {'class': 'session-family'})
     check(
         'sub-session nests under its parent',
-        claude_group.index('data-id="sess-claude-1"') < claude_group.index('session-card idle nested') < claude_group.index('data-id="sess-claude-sub"'),
+        any(
+            (parent := family.find(None, {'data-id': 'sess-claude-1'})) is not None
+            and (child := family.find('div', {'class': 'session-card idle nested'})) is not None
+            and child.has(None, {'data-id': 'sess-claude-sub'})
+            and parent.start < child.start
+            for family in families
+        ),
     )
 
 def run_live_only_hides_a_harness_with_nothing_running(page):
     check = page.check
     dom = page.fixture('dom')
-    rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
+    rail = dom_query(dom).find(attrs={'id': 'session-rail'})
     check(
         'live only hides a harness with nothing running',
-        not dom_query(rail).has(None, {'data-harness': 'cursor'}),
+        not rail.has(None, {'data-harness': 'cursor'}),
     )
 
 def run_live_cards_carry_kill_ended_cards_do_not(page):
     check = page.check
     dom = page.fixture('dom')
-    rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
+    rail = dom_query(dom).find(attrs={'id': 'session-rail'})
+    ended = rail.find('div', {'class': 'session-ended-body'})
     check(
         'live cards carry kill, ended cards do not',
         (
-            dom_query(rail).has(None, {'data-action': 'kill', 'data-pid': '5821'})
-            and 'data-action="kill"' not in rail.split('class="session-ended-body"', 1)[1].split('</details>', 1)[0]
+            rail.has(None, {'data-action': 'kill', 'data-pid': '5821'})
+            and ended is not None and not ended.has(None, {'data-action': 'kill'})
         ),
     )
 
@@ -90,26 +98,29 @@ def run_count_strip_shows_sessions_harnesses_and_coverage(page):
     dom = page.fixture('dom')
     check(
         'count strip shows sessions, harnesses and coverage',
-        re.search('id="session-count-strip"[^>]*>Sessions 3 · Harnesses 2 · seeing 2/3<', dom) is not None,
+        dom_query(dom).has(None, {'id': 'session-count-strip'}, text='Sessions 3 · Harnesses 2 · seeing 2/3'),
     )
 
 def run_one_filter_pill_per_live_harness(page):
     check = page.check
     dom = page.fixture('dom')
+    pills = dom_query(dom).find(attrs={'id': 'session-harness-pills'})
     check(
         'one filter pill per live harness',
-        re.findall('data-action="toggle-harness" data-harness="([^"]+)" aria-pressed="true"', dom.split('id="session-harness-pills"', 1)[1].split('</div>', 1)[0]) == ['codex', 'claude'],
+        [node.attrs['data-harness'] for node in pills.find_all(None, {
+            'data-action': 'toggle-harness', 'data-harness': None, 'aria-pressed': 'true',
+        })] == ['codex', 'claude'],
     )
 
 def run_a_switched_off_pill_hides_its_group(page):
     check = page.check
     dom_pill = page.fixture('dom_pill')
-    pill_rail = dom_pill.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
+    pill_rail = dom_query(dom_pill).find(attrs={'id': 'session-rail'})
     check(
         'a switched-off pill hides its group',
         (
-            not dom_query(pill_rail).has(None, {'data-harness': 'claude'})
-            and dom_query(pill_rail).has(None, {'data-harness': 'codex'})
+            not pill_rail.has(None, {'data-harness': 'claude'})
+            and pill_rail.has(None, {'data-harness': 'codex'})
             and dom_query(dom_pill).has(None, {'class': 'harness-pill off', 'data-action': 'toggle-harness', 'data-harness': 'claude', 'aria-pressed': 'false'})
         ),
     )
@@ -145,7 +156,7 @@ def run_the_page_posture_banner_included_fits_a_375px_phone_on_sessions_agents_a
     check(
         'the page, posture banner included, fits a 375px phone on Sessions, Agents and Resources',
         dom_query(dom_phone).has(None, {'data-hscroll': 'sessions:0,agents:0,resources:0'}),
-        (re.search('data-hscroll="[^"]*"', dom_phone) or [None])[0],
+        dom_query(dom_phone).find(attrs={'data-hscroll': None}).attrs['data-hscroll'],
     )
 
 def run_phone_overflow_probe(page):
@@ -166,15 +177,17 @@ def run_phone_overflow_probe(page):
 def run_detail_head(page):
     check = page.check
     dom_rail = page.fixture('dom_rail')
-    detail_head = dom_rail.split('class="session-detail-head"', 1)[1].split('class="wf', 1)[0]
+    detail = dom_query(dom_rail).find(attrs={'id': 'session-detail'})
+    detail_head = detail.find(attrs={'class': 'session-detail-head'})
+    metadata = detail.find('details', {'class': 'session-metadata'})
     check(
-        'detail head: mark, repo@branch, harness, confidence, copyable path',
+        'detail: heading carries mark and repo@branch; metadata carries harness, confidence, and copyable path',
         (
-            re.search('<h3[^>]*>api-service@main</h3>', detail_head) is not None
-            and '#logo-claude' in detail_head
-            and '<span class="sd-harness">Claude Code</span>' in detail_head
-            and '>hook</span>' in detail_head
-            and dom_query(detail_head).has(None, {'data-action': 'copy-path', 'data-path': '/Users/dev/workspace/api-service'})
+            detail_head.has('h3', text='api-service@main')
+            and detail_head.has('use', {'href': '#logo-claude'})
+            and metadata.has('span', {'class': 'sd-harness'}, text='Claude Code')
+            and metadata.has('span', {'class': 'sd-conf'}, text='hook')
+            and metadata.has(None, {'data-action': 'copy-path', 'data-path': '/Users/dev/workspace/api-service'})
         ),
     )
 
@@ -198,13 +211,14 @@ def run_detail_chrome_keeps_copy_report_reachable_and_the_copyable_path_in_expan
 def run_export_copies_the_markdown_session_report_and_toasts(page):
     check = page.check
     dom_export = page.fixture('dom_export')
-    clip = (re.search('data-clipboard="([^"]*)"', dom_export) or [None, ''])[1]
+    clip_node = dom_query(dom_export).find(attrs={'data-clipboard': None})
+    clip = clip_node.attrs['data-clipboard'] if clip_node else ''
     check(
         'Export copies the markdown session report and toasts',
         (
             clip.startswith('# claude · api-service@main')
             and '## Summary' in clip
-            and 'class="toast success">Session report copied (markdown)<' in dom_export
+            and dom_query(dom_export).has(None, {'class': 'toast success'}, text='Session report copied (markdown)')
         ),
         f'clipboard={clip[:60]!r}',
     )
@@ -212,16 +226,20 @@ def run_export_copies_the_markdown_session_report_and_toasts(page):
 def run_home_session_opens_its_current_controls_evidence_and_observed_coverage(page):
     check = page.check
     dom_overview = page.fixture('dom_overview')
-    current = dom_overview.split('id="session-detail"', 1)[1].split('id="session-board"', 1)[0]
+    current = dom_query(dom_overview).find(attrs={'id': 'session-detail'})
+    current_head = current.find(attrs={'data-session-part': 'current-head'})
+    memory = current.find(attrs={'class': 'session-memory'})
     check(
         'Home session opens its current controls, evidence, and observed coverage',
         (
-            'Read wants access to .env' in current
-            and 'Own session finding' in current
-            and 'Reviewed' in current
-            and 'Model exposure' in current
-            and 'Other traffic may be uninspected.' in current
-            and current.index('Current session status') < current.index('class="session-memory"')
+            'Read wants access to .env' in current.text
+            and 'Own session finding' in current.text
+            and 'Reviewed' in current.text
+            and 'Model exposure' in current.text
+            and 'Other traffic may be uninspected.' in current.text
+            and current_head is not None and memory is not None
+            and current_head.has('h4', text='Current session status')
+            and current_head.start < memory.start
         ),
     )
 
@@ -236,26 +254,26 @@ def run_home_session_opens_current_status_in_the_workbench_viewport(page):
 def run_failed_overview_refresh_preserves_facts_with_disabled_controls_and_a_visible_stale_warning(page):
     check = page.check
     dom_overview_stale = page.fixture('dom_overview_stale')
-    stale = dom_overview_stale.split('id="session-detail"', 1)[1].split('id="session-board"', 1)[0]
+    stale = dom_query(dom_overview_stale).find(attrs={'id': 'session-detail'})
     check(
         'failed overview refresh preserves facts with disabled controls and a visible stale warning',
         (
-            'Last known session status' in stale
-            and 'Own session finding' in stale
-            and re.search('<fieldset[^>]*class="sd-request"[^>]*disabled', stale) is not None
+            'Last known session status' in stale.text
+            and 'Own session finding' in stale.text
+            and stale.has('fieldset', {'class': 'sd-request', 'disabled': None})
         ),
     )
 
 def run_late_session_overview_cannot_overwrite_the_newly_selected_session(page):
     check = page.check
     dom_overview_race = page.fixture('dom_overview_race')
-    race = dom_overview_race.split('id="session-detail"', 1)[1].split('id="session-board"', 1)[0]
+    race = dom_query(dom_overview_race).find(attrs={'id': 'session-detail'})
     check(
         'late session overview cannot overwrite the newly selected session',
         (
-            re.search('<h3[^>]*>data-pipeline@feat/etl</h3>', race) is not None
-            and 'Own session finding' not in race
-            and 'Read wants access to .env' not in race
+            race.has('h3', text='data-pipeline@feat/etl')
+            and 'Own session finding' not in race.text
+            and 'Read wants access to .env' not in race.text
         ),
     )
 
@@ -270,14 +288,15 @@ def run_new_findings_preserve_the_focused_guard_control(page):
 def run_late_response_from_previous_selection_cannot_replace_memory(page):
     check = page.check
     dom_memory_race = page.fixture('dom_memory_race')
+    detail = dom_query(dom_memory_race).find(attrs={'id': 'session-detail'})
     check(
         'late response from previous selection cannot replace Memory',
         (
             dom_query(dom_memory_race).has(None, {'data-memory-race': 'B'})
-            and re.search('<h3[^>]*>data-pipeline@feat/etl</h3>', dom_memory_race.split('id="session-detail"', 1)[1]) is not None
-            and 'A-only memory' not in dom_memory_race.split('id="session-detail"', 1)[1]
+            and detail.has('h3', text='data-pipeline@feat/etl')
+            and 'A-only memory' not in detail.text
         ),
-        dom_memory_race.split('id="session-detail"', 1)[1][:700],
+        detail.text[:700],
     )
 
 def run_trace_refetches_after_an_event_arrives_while_memory_is_active(page):
@@ -289,7 +308,7 @@ def run_trace_refetches_after_an_event_arrives_while_memory_is_active(page):
             dom_query(dom_trace_reactivation).has(None, {'data-trace-was-cached': 'true'})
             and dom_query(dom_trace_reactivation).has(None, {'data-trace-reactivated': 'true'})
         ),
-        (re.search('data-trace-(?:was-cached|reactivated)="[^"]*"', dom_trace_reactivation) or [None])[0],
+        str(dom_query(dom_trace_reactivation).find('body').attrs),
     )
 
 def run_waterfall_carries_model_usage_row(page):
@@ -320,7 +339,8 @@ def run_waterfall_marks_tool_errors(page):
 def run_theme(page):
     check = page.check
     dom_themefirst = page.fixture('dom_themefirst')
-    theme_first = (re.search('<pre id="theme-first"[^>]*>([^<]*)<', dom_themefirst) or [None, ''])[1]
+    theme_node = dom_query(dom_themefirst).find('pre', {'id': 'theme-first'})
+    theme_first = theme_node.text if theme_node else ''
     check(
         'theme: a stored light theme is on <html> before app.js runs, under the served CSP',
         theme_first == 'before-app=light',
@@ -330,7 +350,8 @@ def run_theme(page):
 def run_under_the_daemon_csp_the_waterfall_bar_ranked_bar_and_memory_segment_keep_their_widths(page):
     check = page.check
     dom_csp = page.fixture('dom_csp')
-    csp_widths = (re.search('data-csp-widths="([^"]*)"', dom_csp) or [None, ''])[1]
+    width_node = dom_query(dom_csp).find(attrs={'data-csp-widths': None})
+    csp_widths = width_node.attrs['data-csp-widths'] if width_node else ''
     widths = {k: float(v) for k, v in (kv.split(':') for kv in csp_widths.split(',') if kv)}
     check(
         'under the daemon CSP the waterfall bar, ranked bar and memory segment keep their widths',
@@ -347,7 +368,7 @@ def run_version_badge_comes_from_status(page):
     dom = page.fixture('dom')
     check(
         'version badge comes from /status',
-        'id="app-version">v9.9.9-domtest<' in dom,
+        dom_query(dom).has(None, {'id': 'app-version'}, text='v9.9.9-domtest'),
     )
 
 def run_posture_banner_is_critical(page):
@@ -363,7 +384,7 @@ def run_posture_headline_rendered(page):
     dom = page.fixture('dom')
     check(
         'posture headline rendered',
-        'id="posture-state">Urgent review<' in dom,
+        dom_query(dom).has(None, {'id': 'posture-state'}, text='Urgent review'),
     )
 
 def run_kpi_agents_count(page):
@@ -371,7 +392,7 @@ def run_kpi_agents_count(page):
     dom = page.fixture('dom')
     check(
         'KPI agents count',
-        'id="count-agents">3<' in dom,
+        dom_query(dom).has(None, {'id': 'count-agents'}, text='3'),
     )
 
 def run_kpi_flags_are_unacted_last_24h(page):
@@ -379,7 +400,7 @@ def run_kpi_flags_are_unacted_last_24h(page):
     dom = page.fixture('dom')
     check(
         'KPI flags are unacted last 24h',
-        'id="count-flags">2<' in dom,
+        dom_query(dom).has(None, {'id': 'count-flags'}, text='2'),
     )
 
 def run_kpi_incidents_count(page):
@@ -387,22 +408,20 @@ def run_kpi_incidents_count(page):
     dom = page.fixture('dom')
     check(
         'KPI incidents count',
-        'id="count-incidents">1<' in dom,
+        dom_query(dom).has(None, {'id': 'count-incidents'}, text='1'),
     )
 
 def run_empty_spend_report(page):
     check = page.check
     dom_nocosts = page.fixture('dom_nocosts')
 
-    def spend_card_of(d):
-        card = dom_query(d).find(None, {'id': 'spend-card'})
-        return card.inner_html if card else ''
+    card = dom_query(dom_nocosts).find(attrs={'id': 'spend-card'})
     check(
         'empty spend report: tile reads an em dash, card shows its empty state',
         (
-            'id="count-spend">—<' in dom_nocosts
-            and 'id="hint-spend"><' in dom_nocosts
-            and 'No model calls in this window.' in spend_card_of(dom_nocosts)
+            dom_query(dom_nocosts).has(None, {'id': 'count-spend'}, text='—')
+            and dom_query(dom_nocosts).has(None, {'id': 'hint-spend'}, text='')
+            and card is not None and 'No model calls in this window.' in card.text
         ),
     )
 

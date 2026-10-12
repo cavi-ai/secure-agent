@@ -47,8 +47,8 @@ class Node:
     def find(self, tag=None, attrs=None):
         return next(iter(self.find_all(tag, attrs)), None)
 
-    def has(self, tag=None, attrs=None):
-        return self.find(tag, attrs) is not None
+    def has(self, tag=None, attrs=None, *, text=None):
+        return any(text is None or node.text == text for node in self.find_all(tag, attrs))
 
 
 class _Parser(HTMLParser):
