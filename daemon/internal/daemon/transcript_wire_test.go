@@ -26,11 +26,11 @@ func TestTranscriptSightingWiring(t *testing.T) {
 	seen(collect.TraceSession{ID: "c-1", Harness: "codex", Workspace: "/nonexistent/proj", Origin: "quill (openclaw)", At: time.Now()})
 	seen(collect.TraceSession{ID: "cl-1", Harness: "claude", Workspace: "/nonexistent/proj", At: time.Now()})
 
-	s, ok := testutil.Lookup[model.Session](t)(st.GetSessionResult("c-1"))
+	s, ok := testutil.Lookup[model.Session](t)(st.GetSession("c-1"))
 	if !ok || s.Harness != "codex" || s.Workspace != "/nonexistent/proj" || s.Origin != "quill (openclaw)" {
 		t.Fatalf("codex session = %+v (ok=%v)", s, ok)
 	}
-	s, ok = testutil.Lookup[model.Session](t)(st.GetSessionResult("cl-1"))
+	s, ok = testutil.Lookup[model.Session](t)(st.GetSession("cl-1"))
 	if !ok || s.Harness != "claude" || s.Origin != "" {
 		t.Fatalf("claude session = %+v (ok=%v)", s, ok)
 	}
