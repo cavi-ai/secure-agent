@@ -2155,19 +2155,27 @@ func (s *Store) ListGuardPathAllows(limit int) ([]GuardPathAllow, error) {
 }
 
 // DeleteGuardPathAllow revokes one exception; removing an absent one is a no-op.
-func (s *Store) DeleteGuardPathAllow(agent, ruleID, path string) bool {
+// Storage failures return an error rather than reporting an absent exception.
+func (s *Store) DeleteGuardPathAllow(agent, ruleID, path string) (removed bool, writeErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		if writeErr != nil || removed {
+			s.noteWrite("guard path revocations", writeErr)
+		}
+	}()
 	res, err := s.db.Exec(
 		`DELETE FROM guard_path_allows WHERE agent = ? AND rule_id = ? AND path = ?`,
 		agent, ruleID, path,
 	)
 	if err != nil {
-		log.Printf("store: delete guard_path_allows error: %v", err)
-		return false
+		return false, fmt.Errorf("delete guard path allow: %w", err)
 	}
-	n, _ := res.RowsAffected()
-	return n > 0
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("guard path allow deletion result: %w", err)
+	}
+	return n > 0, nil
 }
 
 func (s *Store) PutGuardRule(g GuardRule) {
@@ -2226,16 +2234,25 @@ func (s *Store) ListGuardRules(limit int) ([]GuardRule, error) {
 	return out, nil
 }
 
-func (s *Store) DeleteGuardRule(agent, ruleID string) bool {
+// DeleteGuardRule revokes one decision; removing an absent one is a no-op.
+// Storage failures return an error rather than reporting an absent decision.
+func (s *Store) DeleteGuardRule(agent, ruleID string) (removed bool, writeErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		if writeErr != nil || removed {
+			s.noteWrite("guard rule revocations", writeErr)
+		}
+	}()
 	res, err := s.db.Exec(`DELETE FROM guard_rules WHERE agent = ? AND rule_id = ?`, agent, ruleID)
 	if err != nil {
-		log.Printf("store: delete guard rule error: %v", err)
-		return false
+		return false, fmt.Errorf("delete guard rule: %w", err)
 	}
-	n, _ := res.RowsAffected()
-	return n > 0
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("guard rule deletion result: %w", err)
+	}
+	return n > 0, nil
 }
 
 // ReclassifyReadConnectSeverity changes only unresolved weak correlations.

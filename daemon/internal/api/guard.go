@@ -288,7 +288,11 @@ func (a *API) handleGuardPathAllow(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "agent, rule_id and path required", http.StatusBadRequest)
 			return
 		}
-		removed := a.store.DeleteGuardPathAllow(agent, ruleID, path)
+		removed, err := a.store.DeleteGuardPathAllow(agent, ruleID, path)
+		if err != nil {
+			http.Error(w, "Could not revoke the file exception. Refresh before trying again.", http.StatusServiceUnavailable)
+			return
+		}
 		if removed {
 			a.store.PutAudit(store.AuditEntry{Action: "guard-path-allow-revoke", Rule: agent + "/" + ruleID, Detail: "revoked path " + path})
 		}
@@ -315,7 +319,11 @@ func (a *API) handleGuardRules(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "agent and rule_id required, matching ^[A-Za-z0-9_.-]+$", http.StatusBadRequest)
 			return
 		}
-		removed := a.store.DeleteGuardRule(agent, ruleID)
+		removed, err := a.store.DeleteGuardRule(agent, ruleID)
+		if err != nil {
+			http.Error(w, "Could not revoke the guard decision. Refresh before trying again.", http.StatusServiceUnavailable)
+			return
+		}
 		if removed {
 			a.store.PutAudit(store.AuditEntry{Action: "guard-rule-revoke", Rule: agent + "/" + ruleID})
 		}

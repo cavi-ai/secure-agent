@@ -270,8 +270,8 @@ func TestGuardRuleRoundTrip(t *testing.T) {
 	if err != nil || len(rules) != 1 {
 		t.Fatalf("ListGuardRules = %d rows, err=%v, want 1", len(rules), err)
 	}
-	if !s.DeleteGuardRule("claude", "cloud-creds") {
-		t.Fatal("delete returned false")
+	if removed, err := s.DeleteGuardRule("claude", "cloud-creds"); err != nil || !removed {
+		t.Fatalf("delete returned removed=%v err=%v", removed, err)
 	}
 	if _, ok := s.LookupGuardRule("claude", "cloud-creds"); ok {
 		t.Fatal("rule survived delete")
@@ -459,8 +459,8 @@ func TestGuardPathAllows(t *testing.T) {
 	if got, err := s.ListGuardPathAllows(100); err != nil || len(got) != 1 {
 		t.Fatalf("upsert must not duplicate, got %d rows, err=%v", len(got), err)
 	}
-	if !s.DeleteGuardPathAllow("claude", "ssh-keys", "/Users/x/.ssh/config") {
-		t.Fatal("delete of an existing allow must report removed")
+	if removed, err := s.DeleteGuardPathAllow("claude", "ssh-keys", "/Users/x/.ssh/config"); err != nil || !removed {
+		t.Fatalf("delete of an existing allow: removed=%v err=%v", removed, err)
 	}
 	if s.GuardPathAllowed("claude", "ssh-keys", "/Users/x/.ssh/config") {
 		t.Fatal("revoked path must not be allowed")
