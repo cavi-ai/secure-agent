@@ -523,7 +523,7 @@ test('agent asks: status line under the row, escaped; Ask <harness> disabled whi
   const keep = rep.repos[1].worktrees[0];
   const answered = worktreeRowHTML(keep, rep.repos[1], null,
     { harness: 'claude', status: 'answered', verdict: 'pr', detail: 'https://x/pull/<9>', cost_usd: 0.21 });
-  assert.ok(answered.includes('<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://x/pull/&lt;9&gt; ($0.21)</p>'));
+  assert.ok(answered.includes('<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://x/pull/&lt;9&gt; (session $0.21)</p>'));
   const running = worktreeRowHTML(keep, rep.repos[1], null, { harness: 'codex', status: 'running' }, null, 'codex');
   assert.ok(running.includes("waiting for codex&#39;s answer…") || running.includes("waiting for codex's answer…"));
   assert.match(running, /data-action="worktree-ask" data-path="[^"]+" title="Ask active codex agent" disabled>Ask codex<\/button>/);

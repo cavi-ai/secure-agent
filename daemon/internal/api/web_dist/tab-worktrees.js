@@ -462,7 +462,7 @@ function worktreeAskHTML(ask) {
   let text;
   if (ask.status === 'running') text = `waiting for ${ask.harness}'s answer…`;
   else if (ask.status === 'answered' && ask.verdict !== 'none') {
-    text = `${ask.verdict}${ask.detail ? ' — ' + ask.detail : ''}${ask.cost_usd ? ` ($${Number(ask.cost_usd).toFixed(2)})` : ''}`;
+    text = `${ask.verdict}${ask.detail ? ' — ' + ask.detail : ''}${ask.cost_usd ? ` (session $${Number(ask.cost_usd).toFixed(2)})` : ''}`;
   } else text = `${ask.status}${ask.detail ? ' — ' + ask.detail : ''}`;
   return `<p class="wt-ask wt-ask-${escapeHTML(ask.status)}"><b>Asked ${escapeHTML(ask.harness)}:</b> ${escapeHTML(text)}</p>`;
 }
