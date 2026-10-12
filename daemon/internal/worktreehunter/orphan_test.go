@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +104,58 @@ func TestOrphansOfMovedAndDeletedRepositories(t *testing.T) {
 	}
 	if !h.Listed(wt) || h.Listed(lost) || h.Listed("/nowhere") {
 		t.Fatal("Listed does not follow the report")
+	}
+	h.bgWG.Wait()
+}
+
+// agentAt reads every session at or under a folder: in use when any is
+// active, named by a live session before a newer ended one, and the newest
+// last_seen of all of them.
+func TestAgentAt(t *testing.T) {
+	now := time.Date(2026, 10, 12, 19, 0, 0, 0, time.UTC)
+	activity := []model.WorkspaceActivity{
+		{Workspace: "/r/.worktrees/x", Harness: "claude", Live: true, LastSeen: now.Add(-3 * time.Hour)},
+		{Workspace: "/r/.worktrees/x/sub", Harness: "codex", LastSeen: now.Add(-time.Minute)},
+		{Workspace: "/r/.worktrees/xy", Harness: "cursor", Live: true, LastSeen: now},
+		{Workspace: "/r/.worktrees/old", Harness: "codex", LastSeen: now.Add(-time.Hour)},
+	}
+	if in, agent, seen := agentAt("/r/.worktrees/x", activity, now); !in || agent != "claude" || !seen.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("x: in=%v agent=%q seen=%v, want in use, claude (live), newest last_seen", in, agent, seen)
+	}
+	if in, agent, _ := agentAt("/r/.worktrees/old", activity, now); in || agent != "" {
+		t.Fatalf("old: in=%v agent=%q, want not in use", in, agent)
+	}
+}
+
+// An orphan folder an agent is working in is kept, names the agent, and
+// refuses the move to the Trash.
+func TestTrashOrphanRefusesAnAgentWorkingThere(t *testing.T) {
+	home := isolateGit(t)
+	deleted := newFixture(t)
+	lost := filepath.Join(deleted.root, "agents", "lost")
+	run(t, deleted.main, "worktree", "add", "-q", "-b", "feat/lost", lost, "main")
+	write(t, filepath.Join(lost, "notes.txt"), "only copy\n")
+	if err := os.RemoveAll(deleted.main); err != nil {
+		t.Fatal(err)
+	}
+	st := newMemStore()
+	h := New(st, home, Options{})
+	now := time.Now()
+	h.now = func() time.Time { return now }
+	h.goos = "darwin"
+	// Ended an hour ago by its status, still seen two minutes ago.
+	st.activity = []model.WorkspaceActivity{{Workspace: filepath.Join(lost, "src"), Harness: "codex", LastSeen: now.Add(-2 * time.Minute)}}
+	row := findRow(t, h.Report(context.Background(), true), lost)
+	if !row.Orphan || !row.InUse || row.ActiveAgent != "codex" || row.State != StateKeep || !slices.Contains(row.Reasons, "codex is working here") {
+		t.Fatalf("orphan row = %+v, want a kept orphan naming codex", row)
+	}
+	_, err := h.TrashOrphan(context.Background(), lost)
+	var refused *NotReviewableError
+	if !errors.As(err, &refused) || refused.Why != "codex is working here" {
+		t.Fatalf("TrashOrphan = %v, want refused: codex is working here", err)
+	}
+	if _, err := os.Stat(filepath.Join(lost, "notes.txt")); err != nil {
+		t.Fatalf("the refused folder moved: %v", err)
 	}
 	h.bgWG.Wait()
 }

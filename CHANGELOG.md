@@ -24,6 +24,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ### Fixed
 - Credential reads by the owning program, directory opens, and files an agent wrote itself no longer raise sensitive-read findings.
 - Console: the header search filters the System tab's worktrees and clutter.
+- Worktrees: a folder whose agent was seen in the last 15 minutes cannot be removed, and its row names the agent.
 
 ## [1.3.0] - 2026-10-08
 
