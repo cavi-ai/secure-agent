@@ -427,7 +427,10 @@ func TestConsoleAPIPathsCoverWebApp(t *testing.T) {
 	if !isConsoleAPIPath("/sessions/sess-1/outcomes") {
 		t.Error("dynamic /sessions/{id}/outcomes route is not console-allowed — the results panel 407s on the proxy listener")
 	}
-	fragments := map[string]bool{"/timeline": true, "/report": true, "/memory": true, "/overview": true, "/outcomes": true, "/sessions": true}
+	if !isConsoleAPIPath("/sessions/sess-1/hooks") {
+		t.Error("dynamic /sessions/{id}/hooks route is not console-allowed — the Hooks panel 407s on the proxy listener")
+	}
+	fragments := map[string]bool{"/timeline": true, "/report": true, "/memory": true, "/overview": true, "/outcomes": true, "/hooks": true, "/sessions": true}
 	for p := range seen {
 		if isConsoleAPIPath(p) {
 			continue

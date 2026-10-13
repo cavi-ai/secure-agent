@@ -62,6 +62,8 @@ Secure Agent parses agent-semantic trace events (tool calls, model calls, turns)
 
 **See decisions and results in the session.** The Results view keeps saved reviews, process-control receipts, and reported incident actions together. Applied controls, later observations, and unverified external actions remain distinct. Source failures retain the last known receipts with a retry message; bounded and expired history stay visible as limits.
 
+**See the hooks that ran in the session.** The Hooks view lists each Claude Code hook that ran in the session, read from its transcript: runs, failed and blocked counts, characters the hook returned, and time spent. Rows with failed runs are highlighted. A hook that blocks a tool call does not record its command, so its script reads not recorded. Hook output text is never stored.
+
 **Inspect the permissions from a decision.** View permissions in Results opens only the scope IDs saved with that decision, with their exact resources, recipients, expiry, and revocation records. Missing records have unknown status; failed refreshes retain labeled last-known data and disable revocation. Revocation requires confirmation and a matching saved response. It does not undo past access or remaining exposure, and other permissions or legacy policies may still allow access. Back returns to the same session result.
 
 **Return to the session after investigating.** Session evidence and resource drawers keep a session Back link. Findings history and resource Events preserve the originating view, reading position, and evidence filters through Back to session and browser Back/Forward. Clearing evidence filters retains the return path; changing sessions or credentials discards the old context.

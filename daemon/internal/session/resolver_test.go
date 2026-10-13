@@ -843,6 +843,13 @@ func TestTraceEventCreatesTranscriptSession(t *testing.T) {
 	if s, _ := testutil.Lookup[model.Session](t)(st.GetSession("conv-2")); s.Confidence != model.ConfTranscript || s.Harness != "openclaw" {
 		t.Fatalf("session = %+v, want openclaw transcript kept", s)
 	}
+	// A hook run read from the transcript is transcript activity too: it must
+	// not claim a plugin hook identified the session.
+	e3 := event.Event{Kind: event.KindHookRun, SessionID: "conv-3", CallID: "u1", ToolName: "SessionStart:startup", TS: time.Now()}
+	r.Resolve(&e3)
+	if s, ok := testutil.Lookup[model.Session](t)(st.GetSession("conv-3")); !ok || s.Confidence != model.ConfTranscript {
+		t.Fatalf("session = %+v, want confidence transcript from a hook run", s)
+	}
 }
 
 // The harness's own state ending a conversation ends its session.

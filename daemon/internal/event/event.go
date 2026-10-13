@@ -25,6 +25,9 @@ const (
 	KindToolCall  // a tool_use → tool_result pair (or unpaired start)
 	KindTurn      // a user→assistant turn boundary
 	KindModelCall // one model API call with usage
+	// KindHookRun is one harness hook execution read from a transcript. It is
+	// stored in hook_runs, never in events, and never published as a delta.
+	KindHookRun
 )
 
 func (k Kind) String() string {
@@ -59,6 +62,8 @@ func (k Kind) String() string {
 		return "turn"
 	case KindModelCall:
 		return "model-call"
+	case KindHookRun:
+		return "hook-run"
 	default:
 		return "unknown"
 	}
@@ -106,6 +111,12 @@ type Event struct {
 	// unknown-model, unpriced-model), stamped on the rows the API serves;
 	// never stored.
 	PriceClass string `json:"price_class,omitempty"`
+	// Hook runs (KindHookRun) reuse ToolName (hook event, e.g.
+	// "PreToolUse:Bash"), Detail (the hook command's script name), ToolStatus
+	// (ok | inject | deny | block | error | cancelled), DurationMs and CallID
+	// (the transcript record id). Chars counts the characters the hook
+	// returned to the harness, never the text itself.
+	Chars int64 `json:"chars,omitempty"`
 	// CallID is the harness's own id for the call: the tool-call id for a
 	// tool_call (Claude tool_use id, Codex call_id, opencode callID), the API
 	// message id for a Claude model_call. It makes the row keyed and

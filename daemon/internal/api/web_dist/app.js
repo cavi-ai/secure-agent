@@ -2521,6 +2521,8 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionOverviewState: { get() { return sessionWorkbench.sessionOverviewState; } },
     sessionOutcomes: { get() { return sessionWorkbench.sessionOutcomes; } },
     sessionOutcomesState: { get() { return sessionWorkbench.sessionOutcomesState; } },
+    sessionHooks: { get() { return sessionWorkbench.sessionHooks; } },
+    sessionHooksState: { get() { return sessionWorkbench.sessionHooksState; } },
   });
 
   // Export: copy the session's markdown report. Safari only honours a
@@ -3709,6 +3711,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'session-outcomes-retry':
         if (sessionWorkbench.selectedSessionId) sessionWorkbench.refresh('results');
+        break;
+      case 'session-hooks-retry':
+        if (sessionWorkbench.selectedSessionId) sessionWorkbench.refresh('hooks');
         break;
       case 'session-permissions':
         window.openSessionPermissions(d.review, d.session);

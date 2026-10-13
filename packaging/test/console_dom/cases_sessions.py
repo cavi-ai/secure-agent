@@ -372,6 +372,15 @@ def run_context_handoff(page):
                 str(result),
             )
 
+def run_session_hooks(page):
+    for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+        dom = page.dom('?sessionhooks', window_size=size, served=True,
+                       fixture={'script': 'cases_session_hooks.js'})
+        receipt = re.search(r'data-hooks-probe="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        for name in ('table', 'failedRow', 'unrecorded', 'fits', 'reloaded'):
+            page.check(f'session hooks ({label}): {name}', state.get(name) is True, str(state))
+
 def run_session_results(page):
     check = page.check
     for label, query, size in [('desktop', '?resultsdemo', (1280, 800)), ('narrow stale', '?resultsdemo&resultsstale', (375, 800))]:
@@ -520,6 +529,7 @@ CASES = (
     Case('session_permissions', run_session_permissions, ()),
     Case('context_handoff', run_context_handoff, ()),
     Case('session_results', run_session_results, ()),
+    Case('session_hooks', run_session_hooks, ()),
     Case('session_workbench', run_session_workbench, ()),
     Case('session_reading', run_session_reading, ()),
 )

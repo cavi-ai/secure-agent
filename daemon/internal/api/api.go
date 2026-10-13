@@ -892,6 +892,17 @@ func (a *API) serveSessionTimeline(w http.ResponseWriter, r *http.Request, id st
 	writeJSON(w, events)
 }
 
+// serveSessionHooks serves one session's harness hook totals, one row per
+// hook event and script. Path shape: /sessions/{id}/hooks.
+func (a *API) serveSessionHooks(w http.ResponseWriter, r *http.Request, id string) {
+	rows, err := a.store.SessionHooks(id)
+	if err != nil {
+		http.Error(w, "hook data unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, rows)
+}
+
 func (a *API) currentStatus() Status {
 	return a.evidenceStatus(joinStatusEvidence(a.store, a.statusFn(), time.Now()))
 }
