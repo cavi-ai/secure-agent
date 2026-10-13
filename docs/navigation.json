@@ -13,6 +13,7 @@
       "title": "Guides",
       "pages": [
         {"title": "Console and CLI", "path": "docs/USAGE.md"},
+        {"title": "Hook history", "path": "docs/HOOKS.md"},
         {"title": "File and egress protection", "path": "docs/PROTECTION.md"},
         {"title": "Local chat and commands", "path": "docs/SYSTEM_AGENT.md"},
         {"title": "Fleet", "path": "docs/FLEET.md"},

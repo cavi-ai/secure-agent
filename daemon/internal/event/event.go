@@ -25,7 +25,7 @@ const (
 	KindToolCall  // a tool_use → tool_result pair (or unpaired start)
 	KindTurn      // a user→assistant turn boundary
 	KindModelCall // one model API call with usage
-	// KindHookRun is one harness hook execution read from a transcript. It is
+	// KindHookRun is one completed harness hook execution. It is
 	// stored in hook_runs, never in events, and never published as a delta.
 	KindHookRun
 )
@@ -114,7 +114,7 @@ type Event struct {
 	// Hook runs (KindHookRun) reuse ToolName (hook event, e.g.
 	// "PreToolUse:Bash"), Detail (the hook command's script name), ToolStatus
 	// (ok | inject | deny | block | error | cancelled), DurationMs and CallID
-	// (the transcript record id). Chars counts the characters the hook
+	// (the transcript record id or host delivery id). Chars counts the characters the hook
 	// returned to the harness, never the text itself.
 	Chars int64 `json:"chars,omitempty"`
 	// CallID is the harness's own id for the call: the tool-call id for a

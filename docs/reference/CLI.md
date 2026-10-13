@@ -20,6 +20,7 @@ Usage:
                                            --tz: minutes east of UTC for --by day (default: this machine's offset)
   secure-agent sessions [--harness H] [--repo R] [--branch B] [--since D] [--status S] [--limit N]  List sessions (--json for the raw body)
   secure-agent session <id-or-prefix>      Print what one session did — tools, models, cost, files, hosts, guard decisions, findings — as markdown (--json for the JSON report)
+  secure-agent hooks record --format codex|record [--output path]  Record forwarded hook completions from stdin as metadata
   secure-agent doctor [--json]             Self-check: hooks, file telemetry, collectors, traces, sessions, pairing, pricing, retention, egress; exit 1 on any failure
   secure-agent worktrees [--state S] [--repo R] [--stale] [--refresh] [--json]  Find every git worktree and say whether it can be removed (remove|review|keep|prune) and why
   secure-agent worktrees add|hide <path>   Put a repository on the worktree hunter's saved list, or hide it from reports

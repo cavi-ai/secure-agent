@@ -1,0 +1,82 @@
+package hookrun
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
+
+// Fixtures follow Codex app-server v2's camelCase HookCompletedNotification.
+// The native id identifies a handler, not an execution; the host's envelope
+// id must survive retries and differ between distinct completions.
+func codexCompletion(id, status string) []byte {
+	return []byte(`{"id":"` + id + `","notification":{"method":"hook/completed","params":{"threadId":"thread-1","turnId":"turn-1","run":{"id":"pre-tool-use:0:/home/example/.codex/hooks.json","eventName":"preToolUse","handlerType":"command","status":"` + status + `","startedAt":1791882000,"completedAt":1791882001,"durationMs":12,"sourcePath":"/home/example/.codex/hooks.json","statusMessage":"private status","entries":[{"kind":"context","text":"héllo 🌍"},{"kind":"warning","text":"private warning"},{"kind":"error","text":"private error"}]}}}}`)
+}
+
+func TestCodexDecoderNormalizesMetadata(t *testing.T) {
+	for _, tc := range []struct{ native, want string }{
+		{"completed", "inject"}, {"failed", "error"}, {"blocked", "block"}, {"stopped", "block"},
+	} {
+		t.Run(tc.native, func(t *testing.T) {
+			r, ok, err := (CodexDecoder{}).Decode(codexCompletion("delivery-1", tc.native))
+			if err != nil || !ok {
+				t.Fatalf("decoded=%v error=%v", ok, err)
+			}
+			if r.ID != "codex:delivery-1" || r.SessionID != "thread-1" || r.Harness != "codex" || r.Event != "PreToolUse" || r.Status != tc.want || r.Chars != 7 || r.DurationMs != 12 || r.Script != "" || !r.TS.Equal(time.Unix(1791882001, 0)) {
+				t.Fatalf("record = %+v", r)
+			}
+			data, err := json.Marshal(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, private := range []string{"/home/", "private", "héllo", "sourcePath", "turn-1"} {
+				if strings.Contains(string(data), private) {
+					t.Fatalf("record retained %q", private)
+				}
+			}
+		})
+	}
+}
+
+func TestCodexDeliveryIdentity(t *testing.T) {
+	a, _, _ := (CodexDecoder{}).Decode(codexCompletion("delivery-1", "completed"))
+	b, _, _ := (CodexDecoder{}).Decode(codexCompletion("delivery-2", "completed"))
+	retry, _, _ := (CodexDecoder{}).Decode(codexCompletion("delivery-1", "completed"))
+	if a.ID == b.ID || a != retry {
+		t.Fatal("distinct runs collapsed or retry changed")
+	}
+}
+
+func TestCodexDecoderUsesOnlyExplicitSafeScriptLabel(t *testing.T) {
+	input := strings.Replace(string(codexCompletion("delivery-1", "completed")), `"notification":`, `"script":"guard.py","notification":`, 1)
+	r, ok, err := (CodexDecoder{}).Decode([]byte(input))
+	if err != nil || !ok || r.Script != "guard.py" {
+		t.Fatalf("script label = %q, %v, %v", r.Script, ok, err)
+	}
+	input = strings.Replace(input, `"script":"guard.py"`, `"script":"/home/private/guard.py"`, 1)
+	if _, _, err := (CodexDecoder{}).Decode([]byte(input)); err == nil {
+		t.Fatal("script path accepted")
+	}
+}
+
+func TestCodexDecoderSkipsOtherNotificationsAndRejectsBadCompletions(t *testing.T) {
+	for _, line := range []string{`{"method":"hook/started","params":{}}`, `{"method":"turn/completed"}`, `{"id":1,"result":{}}`} {
+		if _, ok, err := (CodexDecoder{}).Decode([]byte(line)); ok || err != nil {
+			t.Fatalf("unrelated notification: ok=%v err=%v", ok, err)
+		}
+	}
+	for _, line := range []string{
+		strings.Replace(string(codexCompletion("delivery-1", "completed")), `"id":"delivery-1",`, "", 1),
+		string(codexCompletion("delivery-1", "future_status")),
+		strings.Replace(string(codexCompletion("delivery-1", "completed")), `"thread-1"`, `""`, 1),
+		strings.Replace(string(codexCompletion("delivery-1", "completed")), `"durationMs":12`, `"durationMs":-1`, 1),
+		strings.Replace(string(codexCompletion("delivery-1", "completed")), `"completedAt":1791882001`, `"completedAt":null`, 1),
+		string(codexCompletion("/home/private", "completed")),
+		`{"id":"x","notification":{"method":"hook/completed","params":{}}}`,
+	} {
+		if _, _, err := (CodexDecoder{}).Decode([]byte(line)); err == nil {
+			t.Fatal("bad completion accepted")
+		}
+	}
+}

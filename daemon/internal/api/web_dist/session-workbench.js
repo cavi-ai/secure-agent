@@ -212,7 +212,7 @@ function sessionHooksHTML(rows, state) {
   const retry = `<button type="button" class="link-btn" data-action="session-hooks-retry"${state.loading ? ' disabled' : ''}>Retry hooks</button>`;
   const notice = state.error ? `Hook runs unavailable.${rows ? ' Showing the last loaded totals; they may be out of date.' : ''} ${retry}`
     : !rows ? 'Loading hook runs…' : '';
-  const head = `<header data-session-part="hooks-head"><h4>Hooks</h4><p>Every harness hook that ran in this session, read from its transcript. Failed counts errors and cancelled runs; blocked counts denied tool calls and blocked turns.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
+  const head = `<header data-session-part="hooks-head"><h4>Hooks</h4><p>Recorded hook completions from session transcripts and connected hosts. Failed counts errors and cancelled runs; blocked counts denied tool calls and blocked turns.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
   if (!rows) return head;
   if (!rows.length) return head + '<p data-session-part="hooks-empty">No hook runs recorded for this session.</p>';
   const body = rows.map(r => `<tr${r.errors > 0 ? ' class="sd-hook-failed"' : ''}>

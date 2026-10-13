@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/hookrun"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
@@ -761,6 +762,15 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 // eventsForLine parses a complete bounded line once. Session sightings still
 // describe observed source activity; OnProduce describes accepted delivery.
 func (ts *TranscriptScanner) eventsForLine(p, line string, lineStart, offset int64, source io.ReaderAt) []event.Event {
+	if r, ok, err := hookrun.DecodeRecord([]byte(line)); ok {
+		if err != nil {
+			return ts.transcriptHits(line, p, "unknown", "", lineStart)
+		}
+		if ts.OnSessionSeen != nil {
+			ts.OnSessionSeen(TraceSession{ID: r.SessionID, Harness: r.Harness, At: r.TS})
+		}
+		return append([]event.Event{hookRunEvent(r)}, ts.transcriptHits(line, p, r.Harness, r.SessionID, lineStart)...)
+	}
 	if h, ok := ParseHandshake(line); ok {
 		if ts.OnHandshake != nil {
 			ts.OnHandshake(h)

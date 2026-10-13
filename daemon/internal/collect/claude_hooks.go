@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/cavi-ai/secure-agent/daemon/hookrun"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
@@ -61,11 +62,12 @@ func (t *ClaudeTracer) hookRun(rec *claudeRecord, ts time.Time) (event.Event, bo
 		t.holdStopOutput(a.ToolUseID, hookScript(a.Command), stopOutput{hook: a.HookName, status: status, chars: chars})
 		return event.Event{}, false
 	}
-	return event.Event{
-		Kind: event.KindHookRun, TS: ts, SessionID: rec.SessionID, CallID: rec.UUID,
-		ToolName: a.HookName, Detail: hookScript(a.Command), ToolStatus: status,
+	return hookRunEvent(hookrun.Record{
+		Type: "hook_run", Version: 1, Harness: "claude",
+		TS: ts, SessionID: rec.SessionID, ID: rec.UUID,
+		Event: a.HookName, Script: hookScript(a.Command), Status: status,
 		DurationMs: a.DurationMs, Chars: chars,
-	}, true
+	}), true
 }
 
 func isStopHook(a *claudeAttachment) bool {
@@ -113,10 +115,11 @@ func (t *ClaudeTracer) stopHookRuns(rec *claudeRecord, ts time.Time) []event.Eve
 		if chars, ok := blocked[script]; ok {
 			run.status, run.chars = "block", run.chars+chars
 		}
-		events = append(events, event.Event{
-			Kind: event.KindHookRun, TS: ts, SessionID: rec.SessionID, CallID: rec.UUID + ":" + strconv.Itoa(i),
-			ToolName: run.hook, Detail: script, ToolStatus: run.status, DurationMs: info.DurationMs, Chars: run.chars,
-		})
+		events = append(events, hookRunEvent(hookrun.Record{
+			Type: "hook_run", Version: 1, Harness: "claude",
+			TS: ts, SessionID: rec.SessionID, ID: rec.UUID + ":" + strconv.Itoa(i),
+			Event: run.hook, Script: script, Status: run.status, DurationMs: info.DurationMs, Chars: run.chars,
+		}))
 	}
 	return events
 }
@@ -171,10 +174,11 @@ func blockedByHook(c claudeContent, sessionID string, ts time.Time) (event.Event
 	if m == nil {
 		return event.Event{}, false
 	}
-	return event.Event{
-		Kind: event.KindHookRun, TS: ts, SessionID: sessionID, CallID: "block:" + c.ToolUseID,
-		ToolName: text[m[2]:m[3]], ToolStatus: "block", Chars: runeCount(text[m[1]:]),
-	}, true
+	return hookRunEvent(hookrun.Record{
+		Type: "hook_run", Version: 1, Harness: "claude",
+		TS: ts, SessionID: sessionID, ID: "block:" + c.ToolUseID,
+		Event: text[m[2]:m[3]], Status: "block", Chars: runeCount(text[m[1]:]),
+	}), true
 }
 
 // toolResultText returns a tool_result body's text: the string itself, or
