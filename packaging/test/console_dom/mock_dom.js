@@ -2778,7 +2778,8 @@
       data['/status'].firewall_stats['quiet-00'].legit = 1;
       window.__sse.emit('guard-resolved', {});
     }, 4000);
-    setTimeout(() => {
+    setTimeout(async () => {
+      await window.DomTest.wait(() => document.querySelectorAll('#firewall-container > .fw-rule [data-rule]').length === 3);
       stamp('fold-after', probe());
       const kept = !!focusedPromote && document.contains(focusedPromote) && document.activeElement === focusedPromote;
       stamp('fold-focus', `kept=${kept ? 1 : 0}`);

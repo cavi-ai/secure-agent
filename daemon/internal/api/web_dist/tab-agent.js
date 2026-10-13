@@ -244,6 +244,12 @@ function agentMessageArrivals(chat, seen) {
   return { seen: new Set([...(seen || []), ...keys]), arrived };
 }
 
+function agentUnreadMessageKeys(items, arrived, unread, follow) {
+  if (follow) return new Set();
+  const present = new Set(items.filter(item => item.key !== 'pending').map(item => item.key));
+  return new Set([...unread, ...arrived].filter(key => present.has(key)));
+}
+
 // agentEmptyThreadHTML: an enabled agent before the first message.
 function agentEmptyThreadHTML(status) {
   const ready = status && status.enabled && !status.reason;
