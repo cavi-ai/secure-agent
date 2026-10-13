@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/clutter"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
@@ -144,5 +145,22 @@ func TestCleanupLedgerRejectsAnyFailedRead(t *testing.T) {
 		if got, err := readCleanupLedger(st, time.Now(), 25, 30); !errors.Is(err, failed) || got != nil {
 			t.Fatalf("%s failure returned %+v, %v", name, got, err)
 		}
+	}
+}
+
+func TestClutterAdviceBatchKeepsValidPlansOnFailure(t *testing.T) {
+	projects := []clutter.ClutterProjectTotal{{Project: "/r/app"}, {Project: "machine"}}
+	r := &memoryAdvisorVerdicts{err: errors.New("plans unavailable"), verdicts: map[string]model.AdvisorVerdict{
+		"project:machine": {Rationale: "Clear tool caches"},
+	}}
+	got := clutterAdvice(r, projects)
+	if r.reads != 1 || r.kind != "project" || !reflect.DeepEqual(r.ids, []string{"project:/r/app", "project:machine"}) {
+		t.Fatalf("plan batch: %+v", r)
+	}
+	if !reflect.DeepEqual(got, map[string]model.AdvisorVerdict{"machine": {Rationale: "Clear tool caches"}}) {
+		t.Fatalf("plans = %+v, want the valid plan keyed by project", got)
+	}
+	if got := clutterAdvice(&memoryAdvisorVerdicts{}, projects); got != nil {
+		t.Fatalf("no plans must leave advice out: %+v", got)
 	}
 }

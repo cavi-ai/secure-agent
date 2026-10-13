@@ -154,8 +154,9 @@ The app bundle has one identity, `com.cavi-ai.secure-agent`, for Launch Services
   Databases migrate transactionally to schema v3, adding review records, source links, and revision-bound operator receipts. Detector flags and incident reports retain their ownership of evidence. Review writes are best effort: failures remain visible in storage health and original findings remain available. Versions above v3 are rejected before schema initialization. Rollback requires the earlier v3-aware compatibility build or a later compatible build; older binaries reject v3. Do not lower the version, drop evidence, or replace newer data with an older backup to make an older binary start.
 - **Endpoint identity (`daemon/internal/hostid`)**: Names a host or IP by owning org, class, and CDN/cloud infrastructure, and holds the one host match rule for vendor and user-approved hosts. Standard library only; shared by the correlator, store, and API.
 
-Core evidence writes (events, flags, incidents, guard decisions, sessions,
-resource episodes, episode enrichment, operator audit, and the flag JSONL mirror)
+Core evidence writes (events, flags, incidents, guard decisions, saved guard
+rules, sessions, resource episodes, episode enrichment, operator audit, and the
+flag JSONL mirror)
 report fixed operation labels to an in-memory health tracker with a mutex
 independent of database IO. Status,
 posture, and Doctor consume the same snapshot. Active faults clear on a

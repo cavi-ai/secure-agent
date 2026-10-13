@@ -39,6 +39,7 @@ import shlex
 import socket as _socket
 import sys
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 _HOOK_DIR = os.path.dirname(os.path.abspath(__file__))
 if _HOOK_DIR not in sys.path:
@@ -87,7 +88,7 @@ READERS = {
 # Wrappers to strip before reading the real command word.
 # NOTE: xargs is deliberately NOT here — it is an executor whose target arrives
 # via stdin (`echo ~/.zshrc | xargs rm`); stripping it would hide the bypass.
-# It gets explicit handling in check_command.
+# It gets explicit handling in evaluate_command.
 WRAPPERS = {
     "sudo", "env", "command", "nohup", "time", "nice", "builtin",
     "exec", "doas", "stdbuf", "caffeinate", "script",
@@ -717,27 +718,49 @@ def cmd_name(argv: list) -> str:
 
 # --- main -------------------------------------------------------------------
 
-def check_command(command: str, event: str) -> list:
-    """Returns the protected surfaces this command touched and was allowed to.
-
-    Denials exit inside this function. What survives to the return value is the
-    permitted traffic that still touched a guarded surface — reading an rc file,
+class Verdict(NamedTuple):
+    """A guard decision with no effects attached. ``touched`` is the permitted
+    traffic that still went near a guarded surface — reading an rc file,
     listing the keychain dir. Logging only denials would make the log answer
     "what did I stop" when the question after an incident is "who went near this".
     """
+    kind: str
+    rule: str = ""
+    user_msg: str = ""
+    agent_msg: str = ""
+    broker: bool = False
+    touched: tuple = ()
+
+
+ALLOW_VERDICT = Verdict("allow")
+
+
+def denied(rule: str, user_msg: str, agent_msg: str) -> Verdict:
+    return Verdict("deny", rule, user_msg, agent_msg)
+
+
+def apply_verdict(verdict: Verdict, command: str, event: str) -> None:
+    """Audit, reply and exit for a verdict."""
+    if verdict.kind == "deny":
+        deny(verdict.rule, verdict.user_msg, verdict.agent_msg, command, event, verdict.broker)
+    allow(",".join(verdict.touched), command, event)
+
+
+def evaluate_command(command: str) -> Verdict:
+    """Decide a shell command: the first matching rule denies, otherwise allow
+    carrying the guarded surfaces it touched."""
     touched = []
     for argv, raw in segments(command):
         name = cmd_name(argv)
 
         # 1. security(1) — total ban from agent shells.
         if name == "security":
-            deny(
+            return denied(
                 "keychain-security-cli",
                 "Blocked: an agent tried to run the macOS `security` tool.",
                 "DENIED: agents have no keychain access, read or write. If you need a "
                 "credential, say what you need and why; propose it to the user instead "
                 "of reaching for the keychain, another client, or a subagent.",
-                command, event,
             )
 
         # 1a. Network clients driving the guard's own control socket / HTTP
@@ -776,7 +799,7 @@ def check_command(command: str, event: str) -> list:
                 sanctioned = (not guard_url and read_only
                               and url_path in READONLY_SOCKET_PATHS)
                 if not sanctioned:
-                    deny(
+                    return denied(
                         "guard-control-network",
                         "Blocked: an agent tried to drive the guard's own control socket.",
                         "DENIED: writing to the daemon's control socket (curl/nc/wget/etc "
@@ -784,7 +807,6 @@ def check_command(command: str, event: str) -> list:
                         "own allow decision. Read-only status (GET /status, /resources) is "
                         "permitted; everything else goes through the tool calls the guard "
                         "already mediates.",
-                        command, event,
                     )
 
         # 1b. Executors whose dangerous target arrives outside their own argv:
@@ -795,44 +817,40 @@ def check_command(command: str, event: str) -> list:
             subcmds = [t for t in argv[1:] if not t.startswith("-")]
             if any(os.path.basename(t) in MUTATORS | READERS for t in subcmds):
                 if command_references_protected(command):
-                    deny(
+                    return denied(
                         "executor-bypass",
                         "Blocked: an agent piped a protected path into xargs.",
                         "DENIED: `xargs` with a mutator/reader fed from a protected path "
                         "is the same action as running that command on the path directly. "
                         "Ask the user to run it themselves.",
-                        command, event,
                     )
         if name == "find" and any(f in argv for f in ("-exec", "-ok", "-delete", "-execdir")):
             if command_references_protected(command):
-                deny(
+                return denied(
                     "executor-bypass",
                     "Blocked: an agent used find -exec/-delete against a protected path.",
                     "DENIED: `find` with -exec/-delete over a protected directory reads or "
                     "mutates everything beneath it without any single-file check. Ask the "
                     "user to run it themselves.",
-                    command, event,
                 )
         if name in ARCHIVERS and command_references_protected(command):
-            deny(
+            return denied(
                 "secret-archive",
                 "Blocked: an agent tried to archive a protected directory.",
                 "DENIED: archiving/copying a protected directory (ssh keys, cloud creds, "
                 "keychain) is bulk exfiltration, whatever the stated purpose.",
-                command, event,
             )
 
         # 2. Anything pointed at the keychain files.
         if name in MUTATORS or name in READERS:
             for tok in argv[1:]:
                 if is_keychain_path(tok):
-                    deny(
+                    return denied(
                         "keychain-file-op",
                         "Blocked: an agent tried to touch a keychain file directly.",
                         "DENIED: keychain files are off limits — copying, moving, "
                         "chmod/chflags, deleting or reading them. This is the exact class of "
                         "action that can corrupt or lock a user out of their keyring.",
-                        command, event,
                     )
 
         # 3. Shell rc mutation (reads stay allowed).
@@ -857,43 +875,39 @@ def check_command(command: str, event: str) -> list:
             if not unlocking:
                 touched.append("shell-rc-lock")
                 continue
-            deny(
+            return denied(
                 "shell-rc-unlock",
                 f"Blocked: an agent tried to clear the immutable flag on a shell rc file.",
                 "DENIED: clearing uchg/schg on shell config is how an agent gets write access "
                 "to it. Setting the flag is allowed; removing it is the user's call alone.",
-                command, event,
             )
 
         if name in MUTATORS:
             for tok in argv[1:]:
                 if is_shell_rc(tok):
-                    deny(
+                    return denied(
                         "shell-rc-mutation",
                         f"Blocked: an agent tried to modify {norm(tok)}.",
                         "DENIED: shell config is read-only to agents. `.zshenv` derives every "
                         "root and PATH for the whole shell; a silent edit there can break every "
                         "session at once. Read it, propose the diff to the user, let them apply it.",
-                        command, event,
                     )
                 if is_guard_control_path(tok):
-                    deny(
+                    return denied(
                         "guard-control-mutation",
                         f"Blocked: an agent tried to modify {norm(tok)}.",
                         "DENIED: the guard's own config and socket directory "
                         "(~/.config/secure-agent/) is not agent-writable. Editing "
                         "guard-modes.json or touching daemon.sock is how an agent would "
                         "disable the guard that is watching it.",
-                        command, event,
                     )
                 if is_harness_config_path(tok):
-                    deny(
+                    return denied(
                         "harness-config-mutation",
                         f"Blocked: an agent tried to modify {norm(tok)}.",
                         "DENIED: harness settings and hook scripts are the guard's "
                         "enforcement plane — modifying them is how an agent removes or "
                         "neuters the guard watching it. Propose the change to the user.",
-                        command, event,
                     )
 
         # 4. Redirects into rc files, keychain paths, or the guard's own
@@ -901,36 +915,32 @@ def check_command(command: str, event: str) -> list:
         for m in REDIRECT_RE.finditer(raw):
             tgt = m.group(1)
             if is_shell_rc(tgt):
-                deny(
+                return denied(
                     "shell-rc-redirect",
                     f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
                     "DENIED: shell config is read-only to agents. Propose the diff to the user.",
-                    command, event,
                 )
             if is_keychain_path(tgt):
-                deny(
+                return denied(
                     "keychain-redirect",
                     "Blocked: an agent tried to redirect output into a keychain path.",
                     "DENIED: keychain files are off limits.",
-                    command, event,
                 )
             if is_guard_control_path(tgt):
-                deny(
+                return denied(
                     "guard-control-redirect",
                     f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
                     "DENIED: the guard's own config and socket directory is not "
                     "agent-writable — this is how an agent would disable the guard "
                     "that is watching it.",
-                    command, event,
                 )
             if is_harness_config_path(tgt):
-                deny(
+                return denied(
                     "harness-config-redirect",
                     f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
                     "DENIED: harness settings and hook scripts are the guard's "
                     "enforcement plane — this is how an agent would disable the "
                     "guard that is watching it.",
-                    command, event,
                 )
 
         # 5. Inline interpreter code is the obvious way around an argv check:
@@ -956,36 +966,33 @@ def check_command(command: str, event: str) -> list:
                     )
                 )
                 if names_protected:
-                    deny(
+                    return denied(
                         "interpreter-write-bypass",
                         "Blocked: an agent tried to write protected config through an interpreter.",
                         "DENIED: routing a write to shell config, the keychain or a credential "
                         "file through python/perl/node does not make it allowed. Propose the "
                         "diff to the user.",
-                        command, event,
                     )
                 if OBFUSCATION_RE.search(tok):
-                    deny(
+                    return denied(
                         "interpreter-obfuscated-write",
                         "Blocked: an agent hid a file write behind runtime path composition.",
                         "DENIED: this inline code combines a file write with dynamic string "
                         "construction (chr/base64/env lookups) — the signature of hiding the "
                         "target path from static inspection. Write it as a plain script with "
                         "literal paths, or ask the user to run it.",
-                        command, event,
                     )
 
         # 6. Printing raw credential files / private keys.
         if name in READERS:
             for tok in argv[1:]:
                 if is_secret_file(tok):
-                    deny(
+                    return denied(
                         "secret-file-read",
                         "Blocked: an agent tried to print a credential file.",
                         "DENIED: credential files reach a process through `source`, never "
                         "through stdout. Printing one puts the secret in a transcript. "
                         "Ask the user for the value you actually need instead.",
-                        command, event,
                     )
 
         # 6a. Directory Guard modes apply to Bash reads/mutations too, not
@@ -1008,12 +1015,11 @@ def check_command(command: str, event: str) -> list:
                     if scan_rid:
                         rule_id, mode = scan_rid, mode_for_dir_scan(scan_rid)
                 if mode in ("deny", "prompt"):
-                    deny(
+                    return denied(
                         "guard-deny:" + rule_id,
                         f"Blocked: access to {norm(tok)} is denied by Directory Guard ({rule_id}).",
                         f"DENIED by Directory Guard ({rule_id}). Propose the change to the "
                         "user, or ask them to add an allow rule, then retry.",
-                        command, event,
                     )
 
         # 7. Permitted traffic that still went near a guarded surface.
@@ -1025,44 +1031,42 @@ def check_command(command: str, event: str) -> list:
             elif is_secret_file(tok):
                 touched.append("secret-file-touch")
 
-    return sorted(set(touched))
+    return Verdict("allow", touched=tuple(sorted(set(touched))))
 
 
-def check_file_write(path: str, command: str, event: str) -> None:
+def evaluate_file_write(path: str) -> Verdict:
+    """Decide a file-tool write to ``path``."""
     if is_shell_rc(path):
-        deny(
+        return denied(
             "shell-rc-write-tool",
             f"Blocked: an agent tried to edit {norm(path)}.",
             "DENIED: shell config is read-only to agents. `.zshenv` derives every root and "
             "PATH for the shell. Propose the diff to the user instead of writing it.",
-            command, event,
         )
     if is_guard_control_path(path):
-        deny(
+        return denied(
             "guard-control-write-tool",
             f"Blocked: an agent tried to write {norm(path)}.",
             "DENIED: the guard's own config directory (~/.config/secure-agent/) is not "
             "agent-writable — this is how an agent would disable the guard watching it. "
             "Reads stay allowed; propose the change to the user instead.",
-            command, event,
         )
     if is_harness_config_path(path):
-        deny(
+        return denied(
             "harness-config-write-tool",
             f"Blocked: an agent tried to write {norm(path)}.",
             "DENIED: harness settings and hook scripts (~/.claude/, ~/.cursor/, "
             "~/.config/opencode/) are the guard's enforcement plane — editing them is "
             "how an agent removes or neuters the guard watching it. Reads stay allowed; "
             "propose the change to the user instead.",
-            command, event,
         )
     if is_keychain_path(path) or is_secret_file(path):
-        deny(
+        return denied(
             "protected-write-tool",
             f"Blocked: an agent tried to write {norm(path)}.",
             "DENIED: keychain and credential files are not agent-writable.",
-            command, event,
         )
+    return ALLOW_VERDICT
 
 
 def main() -> int:
@@ -1171,11 +1175,14 @@ def main() -> int:
             elif scan_mode == "prompt":
                 resolve_prompt(runtime(), tool, search_root, scan_rid, command or search_root, event)
 
-    touched = check_command(command, event) if command else []
-    if file_path and tool in {"Write", "Edit", "MultiEdit", "NotebookEdit"}:
-        check_file_write(file_path, command or file_path, event)
+    verdict = evaluate_command(command) if command else ALLOW_VERDICT
+    if (verdict.kind == "allow" and file_path
+            and tool in {"Write", "Edit", "MultiEdit", "NotebookEdit"}):
+        write_verdict = evaluate_file_write(file_path)
+        if write_verdict.kind == "deny":
+            verdict = write_verdict
 
-    allow(",".join(touched), command or file_path, event)
+    apply_verdict(verdict, command or file_path, event)
     return 0
 
 

@@ -59,7 +59,7 @@ func (a *API) serveSessionOverview(w http.ResponseWriter, r *http.Request, id st
 	}
 	if live.StatusAvailable {
 		live.Coverage = func() []SessionCoverage {
-			st := a.evidenceStatus(a.currentStatus())
+			st := a.currentStatus()
 			if st.Coverage == nil {
 				return nil
 			}

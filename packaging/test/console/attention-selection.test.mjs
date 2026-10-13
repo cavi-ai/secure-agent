@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { loadDrawer } from './drawer-harness.mjs';
 const assets = new URL('../../../daemon/internal/api/web_dist/', import.meta.url);
 const app = readFileSync(new URL('app.js', assets), 'utf8');
 function fn(name, next) {
@@ -21,12 +22,16 @@ function load(keys = ['flag:a', 'guard:b', 'incident:c']) {
     attentionItems: () => ctx.telemetryData.posture.groups.flatMap(g => g.items),
     refreshAttentionInspector() {}, renderNow() { ctx.reconcileAttention(); },
     selectAttention(key, options) { ctx.selected.push(key); ctx.attentionSelection = { key, order: ctx.attentionItems().map(i => i.kind + ':' + i.id) }; ctx.focused = options.focus; },
-    openDrawer(options) { ctx.empty = options; }, selected: [], focused: false,
+    detailDrawer: {
+      selection: () => ctx.attentionSelection, clearSelection() { ctx.attentionSelection = null; },
+      seq: () => ctx.drawerSeq, setMode() {}, open(options) { ctx.empty = options; }
+    },
+    selected: [], focused: false,
   };
   vm.createContext(ctx);
   vm.runInContext(readFileSync(new URL('lib.js', assets), 'utf8'), ctx);
   vm.runInContext(fn('reconcileAttention', '  function beginAttentionWrite'), ctx);
-  vm.runInContext(fn('beginAttentionWrite', '  function openDrawer'), ctx);
+  vm.runInContext(fn('beginAttentionWrite', '  // Confirmation / prompt.'), ctx);
   vm.runInContext(readFileSync(new URL('staged-write.js', assets), 'utf8'), ctx);
   ctx.stage = ctx.createStagedWrite({
     telemetry: () => ctx.telemetryData, render: names => ctx.renderNow(names),
@@ -114,26 +119,18 @@ test('failed mutation restores existing disabled state rather than enabling unav
 });
 
 test('actual drawer role container retains its title relationship across overlay and docked modes', () => {
-  const attributes = new Map();
-  const ctx = {
-    window: { innerWidth: 390 }, drawerDockMedia: null, drawerWideDockMedia: null, sessionEnded: false, drawerModal: false, drawerInert: new Map(),
-    drawer: { hidden: false, classList: { contains: () => false }, dataset: {},
-      setAttribute: (key, value) => attributes.set(key, value), removeAttribute: key => attributes.delete(key) },
-    document: { querySelectorAll: () => [] },
-  };
-  vm.createContext(ctx);
-  vm.runInContext(fn('syncDrawerMode', "  window.addEventListener('resize'"), ctx);
-  ctx.syncDrawerMode();
-  assert.equal(attributes.get('role'), 'dialog');
-  assert.equal(attributes.get('aria-modal'), 'true');
-  assert.equal(attributes.get('aria-labelledby'), 'drawer-title');
+  const { api, dom } = loadDrawer({ width: 390 });
+  api.open({ title: 'Drawer' });
+  assert.equal(dom.drawer.attributes.get('role'), 'dialog');
+  assert.equal(dom.drawer.attributes.get('aria-modal'), 'true');
+  assert.equal(dom.drawer.attributes.get('aria-labelledby'), 'drawer-title');
   const html = readFileSync(new URL('index.html', assets), 'utf8');
   assert.match(html, /id="drawer-title"/);
-  ctx.window.innerWidth = 1900;
-  ctx.syncDrawerMode();
-  assert.equal(attributes.get('role'), 'complementary');
-  assert.equal(attributes.has('aria-modal'), false);
-  assert.equal(attributes.get('aria-labelledby'), 'drawer-title');
+  dom.document.documentElement.clientWidth = 1900;
+  api.syncMode();
+  assert.equal(dom.drawer.attributes.get('role'), 'complementary');
+  assert.equal(dom.drawer.attributes.has('aria-modal'), false);
+  assert.equal(dom.drawer.attributes.get('aria-labelledby'), 'drawer-title');
 });
 
 test('Home restoration respects saved closed/open booleans and preserves defaults for absent or invalid keys', () => {
@@ -153,43 +150,35 @@ test('Home restoration respects saved closed/open booleans and preserves default
 });
 
 test('drawer mode follows CSS media changes even when innerWidth remains stale', () => {
-  const attributes = new Map(), listeners = new Map();
-  let wide = false;
-  const main = { inert: false, contains: () => false };
+  const listeners = new Map();
   const media = new Map(['(min-width: 1180px)', '(min-width: 1340px)'].map(query => [query, {
     matches: false, addEventListener: (event, fn) => listeners.set(query, fn)
   }]));
-  const ctx = {
-    window: { innerWidth: 1900, matchMedia: query => media.get(query), addEventListener() {} },
-    sessionEnded: false, drawerModal: false, drawerInert: new Map(),
-    drawer: { hidden: false, classList: { contains: () => wide }, dataset: {},
-      setAttribute: (key, value) => attributes.set(key, value), removeAttribute: key => attributes.delete(key) },
-    document: { documentElement: { clientWidth: 1179 }, querySelectorAll: () => [main] },
-  };
-  vm.createContext(ctx);
-  const start = app.indexOf('  const drawerDockMedia =');
-  const end = app.indexOf('  function attentionItems()', start);
-  vm.runInContext(app.slice(start, end), ctx);
-  ctx.syncDrawerMode();
+  const { api, dom } = loadDrawer({ width: 1179, media });
+  dom.window.innerWidth = 1900;
+  const main = dom.inertSiblings[0];
+  api.open({ title: 'Drawer' });
+  const attributes = dom.drawer.attributes;
   assert.equal(attributes.get('role'), 'dialog');
   assert.equal(main.inert, true);
   media.get('(min-width: 1180px)').matches = true;
   listeners.get('(min-width: 1180px)')();
   assert.equal(attributes.get('role'), 'complementary');
   assert.equal(main.inert, false);
-  wide = true;
-  ctx.syncDrawerMode();
+  dom.drawer.className = 'drawer resource-policy';
+  api.syncMode();
   assert.equal(attributes.get('role'), 'dialog');
   assert.equal(main.inert, true);
   media.get('(min-width: 1340px)').matches = true;
   listeners.get('(min-width: 1340px)')();
   assert.equal(attributes.get('role'), 'complementary');
   assert.equal(main.inert, false);
-  assert.equal(ctx.window.innerWidth, 1900);
+  assert.equal(dom.window.innerWidth, 1900);
 });
 
 function inspectorHarness() {
   const controls = [], focusCalls = [];
+  const selection = { signature: 'old' };
   const document = { activeElement: null };
   const drawer = { contains: node => controls.includes(node) || node === close,
     querySelectorAll: () => controls };
@@ -206,7 +195,7 @@ function inspectorHarness() {
     };
     return button;
   };
-  const ctx = {document,drawer,btnDrawerClose:close,drawerMode:'attention',attentionSelection:{signature:'old'},
+  const ctx = {document,drawer,btnDrawerClose:close,detailDrawer:{mode:()=>'attention',selection:()=>selection},
     attentionSignature:()=>ctx.signature,signature:'new',homeContext:()=>({}),
     needView:()=>({word:'Request',agent:'codex',what:'Recorded request',why:'Recorded evidence',items:[{}]}),
     window:{SA:{}},escapeHTML:s=>s,actionBarHTML:()=>'',drawerTitle:{},

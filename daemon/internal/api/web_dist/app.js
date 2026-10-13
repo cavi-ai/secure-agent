@@ -53,13 +53,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const apiFetch = consoleAuth.fetch;
 
   const btnRefresh = document.getElementById('btn-refresh');
-  const drawer = document.getElementById('drawer');
-  const drawerBody = document.getElementById('drawer-body');
-  const drawerFoot = document.getElementById('drawer-foot');
-  const drawerTitle = document.getElementById('drawer-title-text');
-  const drawerTitleIcon = document.querySelector('#drawer-title use');
-  const btnDrawerClose = document.getElementById('btn-drawer-close');
-  const btnDrawerCopy = document.getElementById('btn-drawer-copy');
 
   // Screen-reader announcements for state the eye would catch on its own.
   const liveRegion = document.getElementById('a11y-live');
@@ -70,58 +63,36 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => { liveRegion.textContent = text; }, 30);
   };
 
-  // ---------- drawer ----------
-  // One slide-over replaces every native <dialog>. A native modal's backdrop
-  // is painted by the UA from the SYSTEM color-scheme, which inverted fg/bg
-  // when the page theme was pinned to the other scheme. This surface is plain
-  // DOM styled only from our tokens, so it always matches the page.
-  //
-  // The drawer is a single reusable surface: title + body + optional footer
-  // actions. Only one is open at a time; closing restores focus to the opener.
-  let drawerOpener = null;
   // Agent dock state (openAgentDock): the drawer closes it on open.
   let agentDockOpen = false;
   let agentDockOpener = null;
-  let drawerOnClose = null;
-  let drawerBack = null;
-  // Bumped on every open: an async opener writes its body only while its
-  // drawer is still the one showing.
-  let drawerSeq = 0;
-  const drawerHead = drawer && drawer.querySelector('.drawer-head');
-  const drawerTitleEl = document.getElementById('drawer-title');
-  let attentionSelection = null;
   let attentionGeneration = 0;
   const attentionWrites = new Set();
-  let drawerModal = false;
-  const drawerInert = new Map();
-  // Match the CSS dock breakpoints, including browser viewport emulation.
-  const drawerDockMedia = window.matchMedia?.('(min-width: 1180px)');
-  const drawerWideDockMedia = window.matchMedia?.('(min-width: 1340px)');
-  function syncDrawerMode() {
-    if (!drawer || sessionEnded) return;
-    const wide = drawer.classList.contains('resource-policy');
-    const media = wide ? drawerWideDockMedia : drawerDockMedia;
-    const docked = media ? media.matches : (document.documentElement?.clientWidth || window.innerWidth) >= (wide ? 1340 : 1180);
-    const modal = !drawer.hidden && !docked;
-    drawerModal = modal;
-    drawer.setAttribute('role', modal ? 'dialog' : 'complementary');
-    drawer.setAttribute('aria-labelledby', 'drawer-title');
-    if (modal) drawer.setAttribute('aria-modal', 'true'); else drawer.removeAttribute('aria-modal');
-    drawer.dataset.modal = String(modal);
-    if (modal) {
-      document.querySelectorAll('.app > *').forEach(el => {
-        if (el.contains(drawer) || el.id === 'confirm-layer' || el.id === 'session-ended') return;
-        if (!drawerInert.has(el)) drawerInert.set(el, el.inert);
-        el.inert = true;
-      });
-    } else {
-      for (const [el, previous] of drawerInert) el.inert = previous;
-      drawerInert.clear();
-    }
-  }
-  window.addEventListener('resize', syncDrawerMode);
-  drawerDockMedia?.addEventListener('change', syncDrawerMode);
-  drawerWideDockMedia?.addEventListener('change', syncDrawerMode);
+  const detailDrawer = createDrawer({
+    request: (...args) => apiFetch(...args),
+    toast: (...args) => showToast(...args),
+    markDirty: (...names) => markDirty(...names),
+    closeAgentDock: () => closeAgentDock(),
+    auth: { ended: () => sessionEnded, generation: () => handoffGeneration },
+    attention: { select: key => selectAttention(key), bumpGeneration: () => { attentionGeneration++; } },
+    family: {
+      byKey: key => familyByKey(key),
+      label: fam => familyLabel(fam, telemetryData.sessions),
+      select: key => { selectedResourceKey = key; },
+      sections: fam => familyDrawerSections(fam, {
+        sessions: telemetryData.sessions, events: telemetryData.events, flags: telemetryData.flags,
+        expanded: expandedLists, now: Date.now(),
+      })
+    },
+    plan: { load: subject => loadPlanSlot(subject) },
+    flag: {
+      cache: f => planFlagCache.set(f.id, f),
+      advisorEnabled: () => !!(telemetryData.status && telemetryData.status.advisor_enabled)
+    },
+    session: { capture: el => captureSessionReturn(el), restore: st => restoreSessionReturn(st) }
+  });
+  const { root: drawer, body: drawerBody, foot: drawerFoot, title: drawerTitle, closeButton: btnDrawerClose } = detailDrawer;
+  window.saCloseDrawer = detailDrawer.close;
 
   function attentionItems() { return needsItems(telemetryData.posture); }
   function selectAttention(key, { focus = false } = {}) {
@@ -131,11 +102,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const origin = { key, order: items.map(it => `${it.kind}:${it.id}`), generation: ++attentionGeneration };
     const view = needView(item, homeContext(window.SA));
     origin.signature = attentionSignature(item);
-    drawerMode = 'attention';
-    btnDrawerCopy.hidden = true;
-    openDrawer({ title: item.title || view.word, icon: 'shield', attentionOrigin: origin,
+    detailDrawer.setMode('attention');
+    detailDrawer.setCopyVisible(false);
+    detailDrawer.open({ title: item.title || view.word, icon: 'shield', attentionOrigin: origin,
       body: `<div class="panel-body attention-inspector"><p class="finding-why">${escapeHTML(view.agent)}</p><h3>${escapeHTML(view.what)}</h3><p>${escapeHTML(view.why)}</p>${view.body ? view.body() : `<p>${escapeHTML(item.detail || '')}</p>`}</div>`,
-      foot: actionBarHTML(view.items), onClose: () => { drawerMode = null; } });
+      foot: actionBarHTML(view.items), onClose: () => { detailDrawer.setMode(null); } });
     drawerBody.querySelectorAll('details.body-evidence').forEach(part => { part.open = true; });
     renderAttention();
     if (focus) btnDrawerClose?.focus({ preventScroll: true });
@@ -145,10 +116,11 @@ document.addEventListener('DOMContentLoaded', () => {
     return JSON.stringify([item, ctx.flags.get(item.id), ctx.patterns.get(item.id), ctx.routine.get(item.id), ctx.incidents.get(item.id), reviewDrafts.get(item.id)]);
   }
   function refreshAttentionInspector(item) {
-    if (drawerMode !== 'attention' || !attentionSelection) return;
+    const selection = detailDrawer.selection();
+    if (detailDrawer.mode() !== 'attention' || !selection) return;
     const signature = attentionSignature(item);
-    if (attentionSelection.signature === signature) return;
-    attentionSelection.signature = signature;
+    if (selection.signature === signature) return;
+    selection.signature = signature;
     const view = needView(item, homeContext(window.SA));
     const focused = drawer.contains(document.activeElement) ? document.activeElement : null;
     // Every served data field contributes to the choice: verdict, scope,
@@ -178,11 +150,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
   function reconcileAttention({ previous, focus = false } = {}) {
-    if (!attentionSelection || drawer.hidden || sessionEnded || attentionWrites.size) return;
+    const selection = detailDrawer.selection();
+    if (!selection || drawer.hidden || sessionEnded || attentionWrites.size) return;
     const items = attentionItems();
-    const next = nextAttentionKey(attentionSelection.key, previous || attentionSelection.order, items);
-    if (next === attentionSelection.key) {
-      attentionSelection.order = items.map(it => `${it.kind}:${it.id}`);
+    const next = nextAttentionKey(selection.key, previous || selection.order, items);
+    if (next === selection.key) {
+      selection.order = items.map(it => `${it.kind}:${it.id}`);
       refreshAttentionInspector(items.find(it => `${it.kind}:${it.id}` === next));
       return;
     }
@@ -190,97 +163,29 @@ document.addEventListener('DOMContentLoaded', () => {
       selectAttention(next, { focus });
       window.saAnnounce('Showing the next item that needs you.');
     } else {
-      attentionSelection = null;
+      detailDrawer.clearSelection();
       attentionGeneration++;
-      drawerMode = 'attention-empty';
-      openDrawer({ title: 'Needs you', icon: 'shield', body: '<div class="empty" role="status"><span>No items need your attention. New requests will appear in the queue.</span></div>', foot: '' });
+      detailDrawer.setMode('attention-empty');
+      detailDrawer.open({ title: 'Needs you', icon: 'shield', body: '<div class="empty" role="status"><span>No items need your attention. New requests will appear in the queue.</span></div>', foot: '' });
       if (focus) btnDrawerClose?.focus({ preventScroll: true });
       window.saAnnounce('No items need your attention.');
     }
   }
   function beginAttentionWrite() {
-    const selection = attentionSelection;
-    const ticket = { selection, seq: drawerSeq, auth: handoffGeneration, order: attentionItems().map(it => `${it.kind}:${it.id}`) };
+    const selection = detailDrawer.selection();
+    const ticket = { selection, seq: detailDrawer.seq(), auth: handoffGeneration, order: attentionItems().map(it => `${it.kind}:${it.id}`) };
     attentionWrites.add(ticket);
     const pausedButtons = new Map();
     if (selection) drawer.querySelectorAll('button[data-action]').forEach(b => { pausedButtons.set(b, b.disabled); b.disabled = true; });
     const finish = (success) => {
       attentionWrites.delete(ticket);
-      if (!selection || attentionSelection !== selection || ticket.seq !== drawerSeq || ticket.auth !== handoffGeneration || sessionEnded) return false;
+      if (!selection || detailDrawer.selection() !== selection || ticket.seq !== detailDrawer.seq() || ticket.auth !== handoffGeneration || sessionEnded) return false;
       for (const [button, disabled] of pausedButtons) button.disabled = disabled;
       if (success) reconcileAttention({ previous: ticket.order, focus: true });
       return true;
     };
-    finish.isCurrent = () => ticket.seq === drawerSeq && ticket.auth === handoffGeneration && !sessionEnded;
+    finish.isCurrent = () => ticket.seq === detailDrawer.seq() && ticket.auth === handoffGeneration && !sessionEnded;
     return finish;
-  }
-
-
-  function openDrawer({ title, icon, body, foot, variant, onClose, back, attentionOrigin }) {
-    if (!drawer) return false;
-    closeAgentDock();
-    // A drawer opened from inside the open one keeps the original opener, so
-    // closing still returns focus to the page.
-    if (drawer.hidden) drawerOpener = document.activeElement;
-    attentionSelection = attentionOrigin || back?.attentionOrigin || null;
-    drawerOnClose = onClose || null;
-    drawerBack = back || null;
-    drawerSeq++;
-    if (drawerHead && drawerTitleEl) paintDrawerBack(drawerHead, drawerTitleEl, drawerBack);
-    drawerTitle.textContent = title || 'Details';
-    if (icon && drawerTitleIcon) drawerTitleIcon.setAttribute('href', '#i-' + icon);
-    drawerBody.innerHTML = body || '';
-    drawerFoot.innerHTML = foot || '';
-    drawerFoot.hidden = !foot;
-    drawer.className = 'drawer' + (variant ? ' ' + variant : '');
-    drawer.hidden = false;
-    syncDrawerMode();
-    if (drawerModal || back?.sessionReturn) btnDrawerClose?.focus({ preventScroll: true });
-    // Reserve room so the panel docks beside the content instead of covering
-    // it — this is an inspector, not a modal.
-    const app = document.querySelector('.app');
-    if (app) {
-      app.classList.add('drawer-open');
-      app.classList.toggle('drawer-wide', !!variant);
-    }
-    return true;
-  }
-
-  function closeDrawer() {
-    if (!drawer || drawer.hidden) return;
-    drawer.hidden = true;
-    drawerSeq++;
-    attentionSelection = null;
-    attentionGeneration++;
-    syncDrawerMode();
-    drawerBody.innerHTML = '';
-    drawerFoot.innerHTML = '';
-    drawerFoot.hidden = true;
-    drawerBack = null;
-    if (drawerHead && drawerTitleEl) paintDrawerBack(drawerHead, drawerTitleEl, null);
-    const app = document.querySelector('.app');
-    if (app) app.classList.remove('drawer-open', 'drawer-wide');
-    const fn = drawerOnClose;
-    drawerOnClose = null;
-    if (drawerOpener?.isConnected && typeof drawerOpener.focus === 'function') drawerOpener.focus();
-    else document.querySelector('#attention-list .need-head')?.focus({ preventScroll: true });
-    drawerOpener = null;
-    if (fn) fn();
-  }
-  window.saCloseDrawer = closeDrawer;
-
-  if (btnDrawerClose) btnDrawerClose.addEventListener('click', closeDrawer);
-  if (drawer) {
-    document.addEventListener('keydown', (e) => {
-      if (sessionEnded) return;
-      if (e.key === 'Escape' && drawer && !drawer.hidden && (!confirmLayer || confirmLayer.hidden)) closeDrawer();
-      if (e.key === 'Tab' && drawerModal && !drawer.hidden && (!confirmLayer || confirmLayer.hidden)) {
-        const controls = Array.from(drawer.querySelectorAll('button, input, select, textarea, a[href], summary, [tabindex="0"]')).filter(el => !el.disabled && !el.hidden && el.getClientRects().length);
-        const first = controls[0], last = controls[controls.length - 1];
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
-      }
-    });
   }
 
   // Confirmation / prompt. A small stacked card (z-index above the drawer),
@@ -360,8 +265,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (mq && mq.addEventListener) mq.addEventListener('change', () => { if (mode === 'system') apply('system'); });
   })();
 
-  let currentRawMarkdown = '';
-
   btnRefresh.addEventListener('click', () => {
     fetchTelemetry({ full: true });
     showToast('Refreshing telemetry data...', 'info');
@@ -372,18 +275,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const sourceInput = document.getElementById('source-input');
   if (btnAddSource) btnAddSource.addEventListener('click', () => window.addSource());
   if (sourceInput) sourceInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') window.addSource(); });
-
-  if (btnDrawerCopy) {
-    btnDrawerCopy.addEventListener('click', async () => {
-      if (!currentRawMarkdown) return;
-      try {
-        await navigator.clipboard.writeText(currentRawMarkdown);
-        showToast('Incident report copied to clipboard!', 'success');
-      } catch (err) {
-        showToast('Failed to copy report: ' + err, 'danger');
-      }
-    });
-  }
 
   let telemetryData = {
     status: null,
@@ -488,9 +379,9 @@ document.addEventListener('DOMContentLoaded', () => {
         set reviewResult(value) { reviewResult = value; },
         get reviewResultSeq() { return reviewResultSeq; },
         set reviewResultSeq(value) { reviewResultSeq = value; },
-        get drawerReviewResult() { return drawerReviewResult; },
-        set drawerReviewResult(value) { drawerReviewResult = value; },
-        get drawerMode() { return drawerMode; },
+        get drawerReviewResult() { return detailDrawer.reviewResult(); },
+        set drawerReviewResult(value) { detailDrawer.setReviewResult(value); },
+        get drawerMode() { return detailDrawer.mode(); },
         get reportHealth() { return reportHealth; },
         get sessionEnded() { return sessionEnded; },
         set sessionEnded(value) { sessionEnded = value; },
@@ -507,7 +398,7 @@ document.addEventListener('DOMContentLoaded', () => {
         set telemetryData(value) { telemetryData = value; }
       },
       actions: {
-        get closeDrawer() { return closeDrawer; },
+        get closeDrawer() { return detailDrawer.close; },
         get apiFetch() { return apiFetch; },
         clearInterval: (...args) => window.clearInterval(...args),
         clearTimeout: (...args) => window.clearTimeout(...args),
@@ -612,7 +503,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     pausedElements.clear();
     if (activeTab === 'protection' && activeProtection === 'rules') loadPolicy();
-    syncDrawerMode();
+    detailDrawer.syncMode();
     if (handoff.has('tab')) switchTab(route, { skipHash: true });
     if (recoveryFocus?.isConnected) recoveryFocus.focus({ preventScroll: true });
     telemetryFetchGen++;
@@ -644,7 +535,6 @@ document.addEventListener('DOMContentLoaded', () => {
   let reviewPageSeq = 0;
   let reviewResult = null;
   let reviewResultSeq = 0;
-  let drawerReviewResult = null;
   window.reviewAct = async function(id, revision, action, scope) {
     if (!validReviewDecision(revision, action, scope)) {
       showToast('Review decision unavailable. Refresh the evidence before choosing again.', 'danger');
@@ -697,13 +587,7 @@ document.addEventListener('DOMContentLoaded', () => {
     markDirty('attention');
   };
   window.openReviewResult = function(result = reviewResult) {
-    if (!result || sessionEnded) return;
-    drawerMode = 'review-result';
-    drawerReviewResult = result;
-    openDrawer({ title: reviewResultLabel(result.receipt), icon: 'shield',
-      body: reviewResultHTML(result, true), foot: '', onClose: () => {
-        if (drawerMode === 'review-result') { drawerMode = null; drawerReviewResult = null; }
-      } });
+    detailDrawer.openReviewResult(result);
   };
   // Review pagination is explicit; each response is bounded to 100 records.
   window.loadReviewPage = async function(after) {
@@ -1207,7 +1091,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // never writes into another drawer.
   const historyState = { seq: 0, kind: '', day: '' };
   function paintHistory() {
-    if (!historyState.seq || historyState.seq !== drawerSeq || drawer.hidden) return;
+    if (!historyState.seq || historyState.seq !== detailDrawer.seq() || drawer.hidden) return;
     const { ledger } = worktreeController.worktreesState;
     drawerBody.innerHTML = ledger
       ? cleanupHistoryHTML(ledger, historyState, Date.now())
@@ -1215,11 +1099,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   function openHistory(day) {
     if (day !== undefined) historyState.day = day;
-    if (!(historyState.seq && historyState.seq === drawerSeq && !drawer.hidden)) {
-      const opened = openDrawer({ title: 'Cleanup history', icon: 'history',
+    if (!(historyState.seq && historyState.seq === detailDrawer.seq() && !drawer.hidden)) {
+      const opened = detailDrawer.open({ title: 'Cleanup history', icon: 'history',
         onClose: () => Object.assign(historyState, { seq: 0, kind: '', day: '' }) });
       if (!opened) return;
-      historyState.seq = drawerSeq;
+      historyState.seq = detailDrawer.seq();
       const { ledger, ledgerAt } = worktreeController.worktreesState;
       if (!ledger || Date.now() - ledgerAt > WORKTREE_STALE_MS) worktreeController.loadLedger();
     }
@@ -1428,7 +1312,7 @@ document.addEventListener('DOMContentLoaded', () => {
       switchTab('agent');
       return;
     }
-    closeDrawer();
+    detailDrawer.close();
     agentState.reading = captureAgentThreadReading() || agentState.reading;
     agentState.restoreReading = true;
     if (!agentDockOpen) agentDockOpener = document.activeElement;
@@ -1755,7 +1639,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!agentState.skills) agentState.skills = await agentFetch('/agent/skills');
       const s = (agentState.skills || []).find(x => x.id === id);
       if (!s) return;
-      openDrawer({ title: s.title, icon: 'doc',
+      detailDrawer.open({ title: s.title, icon: 'doc',
         body: `<div class="panel-body"><p>${escapeHTML(s.summary)}</p><pre class="agent-skill-body">${escapeHTML(s.body)}</pre></div>` });
     } catch (err) {
       showToast("Couldn't load the skill: " + (err.message || err), 'danger');
@@ -1814,7 +1698,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (r.tab === 'sessions') activeSub = r.sub;
     if (r.tab === 'protection') activeProtection = r.sub;
     if (r.tab === 'system') activeSystemSub = r.sub;
-    if (from === 'home' && activeTab !== 'home' && attentionSelection) closeDrawer();
+    if (from === 'home' && activeTab !== 'home' && detailDrawer.selection()) detailDrawer.close();
     document.querySelectorAll('.tab-btn').forEach(b => {
       const on = b.dataset.tab === activeTab;
       b.classList.toggle('active', on);
@@ -1936,7 +1820,7 @@ document.addEventListener('DOMContentLoaded', () => {
         get eventsHistoryScope() { return eventsHistoryScope; },
         get eventsQuery() { return eventsQuery; },
         get failEventHistoryPage() { return failEventHistoryPage; },
-        get fillFamilyDrawer() { return fillFamilyDrawer; },
+        get fillFamilyDrawer() { return detailDrawer.fillFamily; },
         get flagsQuery() { return flagsQuery; },
         get homeGroupOpen() { return homeGroupOpen; },
         get isConsoleReport() { return isConsoleReport; },
@@ -2244,14 +2128,6 @@ document.addEventListener('DOMContentLoaded', () => {
     at.appendChild(note);
     setTimeout(() => note.remove(), 4000);
   }
-  function refillUninspectedDrawer() {
-    if (drawerMode === 'uninspected' && drawer && !drawer.hidden) fillUninspected(drawerBody);
-  }
-  function refillUninspected() {
-    markDirty('endpoints');
-    refillUninspectedDrawer();
-  }
-
   // Posture headline: the one-glance answer, plus clickable jump-off points
   // into the panels below (drill-down without leaving the page).
 
@@ -2275,7 +2151,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ok: async r => {
         const result = await r.json();
         revert.commit?.();
-        if (revert.isCurrent?.() !== false && drawerMode === 'incident' && drawerIncident === id) {
+        if (revert.isCurrent?.() !== false && detailDrawer.isIncidentOpen(id)) {
           const actions = drawerBody.querySelector('.incident-workflow-actions');
           if (actions) actions.innerHTML = incidentWorkflowHTML(id, result.workflow);
         }
@@ -2298,7 +2174,7 @@ document.addEventListener('DOMContentLoaded', () => {
         { id, step_id: stepId, expected_revision: revision, expected_evidence: evidence, status });
       const result = await r.json();
       if (!result.incident || !result.incident.remediation) throw new Error('Saved remediation result unavailable');
-      if (drawerMode === 'incident' && drawerIncident === id) {
+      if (detailDrawer.isIncidentOpen(id)) {
         const section = drawerBody.querySelector('.incident-remediation');
         if (section) section.outerHTML = incidentRemediationHTML(id, result.incident.remediation);
       }
@@ -2307,7 +2183,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       showToast('Failed to record remediation: ' + err.message, 'danger');
       fetchTelemetry();
-      if (drawerMode === 'incident' && drawerIncident === id) window.openIncidentReport(id);
+      if (detailDrawer.isIncidentOpen(id)) window.openIncidentReport(id);
     } finally {
       incidentRemediationInFlight.delete(id);
       buttons.forEach(button => { button.disabled = false; });
@@ -2451,8 +2327,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (f && advisorSig(f.advisor) !== p.baseline) {
         pendingRetriage.delete(id);
         showToast(`Advisor verdict updated for ${f.rule}`, 'success');
-        if (drawerMode === 'flag' && drawerFlag === id && drawer && !drawer.hidden) {
-          window.openFlagDetail(id, { back: drawerBack });
+        if (detailDrawer.isFlagOpen(id)) {
+          window.openFlagDetail(id, { back: detailDrawer.returnTarget() });
         }
       } else if (Date.now() - p.at > RETRIAGE_TIMEOUT_MS && !advisorRetriageIsActive(health, id)) {
         pendingRetriage.delete(id);
@@ -2495,7 +2371,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ok: () => {
         revert.commit?.();
         showToast('Flag dismissed — the rule keeps watching', 'info');
-        if (revert.isCurrent?.() !== false && !attentionSelection && drawerMode === 'flag' && drawerFlag === id) closeDrawer();
+        if (revert.isCurrent?.() !== false && !detailDrawer.selection() && detailDrawer.isFlagOpen(id)) detailDrawer.close();
         cardNote('', '', 'flags-list', 'dismissed');
         fetchTelemetry();
       },
@@ -2577,7 +2453,7 @@ document.addEventListener('DOMContentLoaded', () => {
     historyRows: new Map(),
     harnessFilter,
     reconcileAttention,
-    get attentionKey() { return attentionSelection?.key || ''; },
+    get attentionKey() { return detailDrawer.selection()?.key || ''; },
     setTabBadge,
     paintSessionChip,
     sessionScopeOn,
@@ -2671,112 +2547,9 @@ document.addEventListener('DOMContentLoaded', () => {
       () => showToast(partial ? 'Partial session report copied — review its evidence and limits' : 'Session report copied (markdown)', partial ? 'warning' : 'success'),
       err => showToast('Export failed: ' + ((err && err.message) || err), 'danger'));
   };
-  // The drawer is shared by two views: the incident report (markdown, with a
-  // Copy button) and the uninspected-egress drill-down (row actions, no
-  // Copy). drawerMode tracks which one is open so action handlers can
-  // re-render the right content after a mutation.
-  let drawerMode = null; // 'incident' | 'endpoint' | 'file' | 'flag' | 'plan' | 'uninspected' | 'family' | 'policy' | null
-  let drawerFile = '';
-  let drawerPlan = '';
-  let drawerFlag = '';
-
-  let drawerIncident = '';
-  let drawerEndpoint = null;
-  window.openIncidentReport = async function(incidentId, { back } = {}) {
-    if (!drawer) return;
-    drawerMode = 'incident';
-    drawerIncident = incidentId;
-    if (btnDrawerCopy) btnDrawerCopy.hidden = false;
-    openDrawer({
-      title: `Incident report — ${incidentId}`,
-      icon: 'doc',
-      body: `<div class="loading-spinner">Fetching incident report…</div>`,
-      onClose: () => { drawerMode = null; },
-      back,
-    });
-    const seq = drawerSeq;
-
-    try {
-      const url = `/incidents?id=${encodeURIComponent(incidentId)}`;
-      const [res, detail] = await Promise.all([apiFetch(url + '&format=markdown'), apiFetch(url)]);
-      if (seq !== drawerSeq) return;
-      if (res.ok && detail.ok) {
-        const [text, report] = await Promise.all([res.text(), detail.json()]);
-        if (seq !== drawerSeq) return;
-        currentRawMarkdown = text;
-        incidentId = report.incident && report.incident.id || incidentId;
-        drawerIncident = incidentId;
-        drawerBody.innerHTML = incidentReportHTML(incidentId, report.workflow, text, report.incident && report.incident.remediation);
-        loadPlanSlot('incident:' + incidentId);
-      } else {
-        const message = res.status === 404 || detail.status === 404
-          ? 'This incident report is no longer available. Its source may have expired; the retained session summary does not replace the report.'
-          : 'Failed to load the incident report.';
-        drawerBody.innerHTML = `<div class="empty" role="status"><svg class="icon"><use href="#i-doc"/></svg><span>${message}</span></div>`;
-      }
-    } catch (err) {
-      if (seq !== drawerSeq) return;
-      drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Error: ${escapeHTML(err.message)}</span></div>`;
-    }
-  };
-
-  // Endpoint detail: "what IS this address?" The Evidence action opens this so
-  // an unknown IPv6 is explained (owner org, PTR name, which agents/sessions
-  // reached it, recent connections) instead of being a bare address that looks
-  // safe to block.
-  window.openEndpointDetail = async function(host, agent, { back } = {}) {
-    if (!drawer) return;
-    drawerMode = 'endpoint';
-    drawerEndpoint = { host, agent };
-    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
-    openDrawer({
-      title: 'Endpoint detail',
-      icon: 'globe',
-      onClose: () => { drawerMode = null; },
-      back,
-    });
-    const seq = drawerSeq;
-    drawerBody.innerHTML = `<div class="loading-spinner">Identifying ${escapeHTML(host)}…</div>`;
-    try {
-      const res = await apiFetch(`/egress/endpoint?host=${encodeURIComponent(host)}`);
-      if (!res.ok) throw new Error((await res.text()).trim() || 'lookup failed');
-      const detail = await res.json();
-      if (seq !== drawerSeq) return;
-      drawerBody.innerHTML = endpointDetailHTML(detail, agent);
-    } catch (err) {
-      if (seq !== drawerSeq) return;
-      drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>Could not identify this endpoint: ${escapeHTML(err.message || err)}</span></div>`;
-    }
-  };
-
-  // File detail: an evidence path opens what the daemon knows about the file —
-  // facts, the masked excerpt around each secret, findings and agent access —
-  // with Reveal in Finder and Open in editor.
-  window.openFileDetail = async function(path, { back } = {}) {
-    if (!drawer) return;
-    drawerMode = 'file';
-    drawerFile = path;
-    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
-    openDrawer({
-      title: 'File',
-      icon: 'doc',
-      onClose: () => { drawerMode = null; },
-      back,
-    });
-    const seq = drawerSeq;
-    drawerBody.innerHTML = `<div class="loading-spinner">Reading ${escapeHTML(path)}…</div>`;
-    try {
-      const res = await apiFetch(`/files/detail?path=${encodeURIComponent(path)}`);
-      if (!res.ok) throw new Error((await res.text()).trim() || 'lookup failed');
-      const detail = await res.json();
-      if (seq !== drawerSeq) return;
-      drawerBody.innerHTML = fileDetailHTML(detail) + planSlotHTML('file:' + path);
-      loadPlanSlot('file:' + path);
-    } catch (err) {
-      if (seq !== drawerSeq) return;
-      drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Could not read this file: ${escapeHTML(err.message || err)}</span></div>`;
-    }
-  };
+  for (const name of ['openIncidentReport', 'openEndpointDetail', 'openFileDetail', 'openPlanDrawer', 'openFlagDetail', 'openUninspected', 'openFamilyDrawer']) {
+    window[name] = (...args) => detailDrawer[name](...args);
+  }
 
   window.fileAction = async function(action, path) {
     try {
@@ -2898,55 +2671,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  window.openPlanDrawer = function(subject, { back } = {}) {
-    if (!drawer) return;
-    drawerMode = 'plan';
-    drawerPlan = subject;
-    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
-    openDrawer({ title: 'What to do', icon: 'doc', onClose: () => { drawerMode = null; }, back });
-    drawerBody.innerHTML = `<div class="plan-slot" data-plan-subject="${escapeHTML(subject)}"><div class="loading-spinner">Loading the playbook…</div></div>`;
-    loadPlanSlot(subject);
-  };
-
-  window.openFlagDetail = async function(id, { back } = {}) {
-    if (!drawer) return;
-    drawerMode = 'flag';
-    drawerFlag = id;
-    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
-    openDrawer({ title: 'Security flag', icon: 'alert', body: '<div class="loading-spinner">Loading flag evidence…</div>',
-      onClose: () => { if (drawerMode === 'flag') drawerMode = null; drawerFlag = ''; }, back });
-    const seq = drawerSeq;
-    try {
-      const res = await apiFetch(`/flags/${encodeURIComponent(id)}/explain`);
-      if (res.status === 404) throw new Error('Finding evidence is no longer available. Its source may have expired; the retained session summary does not replace the evidence.');
-      if (!res.ok) throw new Error((await res.text()).trim() || 'flag unavailable');
-      const f = await res.json();
-      if (seq !== drawerSeq) return;
-      // The drawer can open a flag outside the current telemetry window. Its
-      // served actions must still be available to the click handler now.
-      planFlagCache.set(f.id, f);
-      const subject = 'flag:' + f.id;
-      const evidence = (f.evidence || []).map(ev => `<li>${escapeHTML(typeof ev === 'string' ? ev : ev.text || (ev.sub ? `${ev.label || ''} (${ev.sub})` : ev.label || ''))}</li>`).join('');
-      const advisor = f.advisor ? `<p><b>Advisor:</b> ${escapeHTML(f.advisor.assessment || 'unrated')} · ${escapeHTML(f.advisor.rationale || '')}</p>` : '';
-      const reading = explainLines(f);
-      drawerTitle.textContent = f.title || ruleTitle(f.rule);
-      drawerBody.innerHTML = `<div class="panel-body flag-inspector">
-      <p>${escapeHTML(f.title || ruleTitle(f.rule))} · severity ${Number(f.severity) || 0} · ${escapeHTML(f.agent || 'unknown agent')}</p>
-      <dl class="finding-facts"><dt>Raised</dt><dd>${escapeHTML(new Date(f.ts).toLocaleString())}</dd><dt>Process</dt><dd>PID ${Number(f.pid) || 0}</dd>
-        <dt>Session</dt><dd>${escapeHTML(f.session_id || 'unknown')}</dd><dt>Workspace</dt><dd>${escapeHTML(f.workspace || 'unknown')}</dd><dt>Flag ID</dt><dd>${escapeHTML(f.id)}</dd></dl>
-      ${reading ? `<p class="finding-what">${escapeHTML(reading.what || '')}</p>${factChipsHTML(f, '')}<p class="finding-verdict">${escapeHTML(reading.verdict || '')}</p>` : ''}
-      ${f.explain?.assessment ? assessmentHTML(f.explain.assessment) : advisor}<h4>Recorded evidence</h4>${evidence ? `<ul class="plan-list">${evidence}</ul>` : '<p>No evidence rows were recorded for this flag.</p>'}
-      <div class="flag-actions-row">${f.explain
-        ? explainActionsHTML(f, telemetryData.status && telemetryData.status.advisor_enabled ? [{ label: 'Re-run advisor', attrs: `data-action="retriage" data-id="${escapeHTML(f.id)}"` }] : [])
-        : `<button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(f.id)}">Dismiss flag</button>`}</div>
-      <h4>What to do</h4><div class="plan-slot" data-plan-subject="${escapeHTML(subject)}"><div class="loading-spinner">Loading the playbook…</div></div>
-    </div>`;
-      loadPlanSlot(subject);
-    } catch (err) {
-      if (seq === drawerSeq) drawerBody.innerHTML = `<div class="empty"><span>Could not load this flag: ${escapeHTML(err.message || err)}</span></div>`;
-    }
-  };
-
   async function openConsoleContext(context, generation) {
     const current = () => !sessionEnded && generation === handoffGeneration;
     if (!current()) return;
@@ -2969,7 +2693,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (context.session && (sessionWorkbench.selectedSessionId !== context.session || activeTab !== 'sessions' || activeSub !== 'board')) return;
     const hash = consoleContextHash(context);
     const returnToSession = () => {
-      closeDrawer();
+      detailDrawer.close();
       window.filterTimelineToSession(context.session);
       history.replaceState(null, '', location.pathname + location.search + consoleContextHash({ route: 'sessions', session: context.session }));
     };
@@ -2978,12 +2702,10 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (context.incident) window.openIncidentReport(context.incident, { back });
     else if (context.file) window.openFileDetail(context.file);
     if (context.flag || context.incident || context.file) {
-      const onClose = drawerOnClose;
-      drawerOnClose = () => {
-        if (onClose) onClose();
+      detailDrawer.afterClose(() => {
         if (location.hash === hash) history.replaceState(null, '', location.pathname + location.search
           + consoleContextHash({ route: context.route, session: context.session }));
-      };
+      });
     }
     history.replaceState(null, '', location.pathname + location.search + hash);
   }
@@ -2993,7 +2715,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let sessionPermissions = null;
   function currentDecisionPermissions(st) {
     return !!st && st === sessionPermissions && !sessionEnded && !drawer.hidden &&
-      drawerMode === 'permissions' && st.seq === drawerSeq && st.auth === handoffGeneration &&
+      detailDrawer.mode() === 'permissions' && st.seq === detailDrawer.seq() && st.auth === handoffGeneration &&
       (st.origin !== 'session' || st.receipt.sessionID === sessionWorkbench.selectedSessionId);
   }
   function renderSessionPermissions(st) {
@@ -3015,30 +2737,30 @@ document.addEventListener('DOMContentLoaded', () => {
     drawerBody.scrollTop = top;
   }
   window.SA.closeSessionPermissions = () => {
-    if (drawerMode === 'permissions' && sessionPermissions?.origin === 'session') closeDrawer();
+    if (detailDrawer.mode() === 'permissions' && sessionPermissions?.origin === 'session') detailDrawer.close();
   };
   window.SA.invalidateSessionPermissions = () => {
-    if (drawerMode !== 'permissions' || sessionPermissions?.origin !== 'session') return;
+    if (detailDrawer.mode() !== 'permissions' || sessionPermissions?.origin !== 'session') return;
     Object.assign(sessionPermissions, { loading: false, busy: '', error: 'unavailable' });
     renderSessionPermissions(sessionPermissions);
   };
   window.openSessionPermissions = async function(reviewID, sessionID) {
     const receipt = sessionPermissionReceipt(sessionWorkbench.sessionOutcomes, reviewID, sessionID);
     if (sessionID !== sessionWorkbench.selectedSessionId) return;
-    await openDecisionPermissions(receipt, 'session', { label: 'session result', reopen: closeDrawer });
+    await openDecisionPermissions(receipt, 'session', { label: 'session result', reopen: detailDrawer.close });
   };
   window.openReviewResultPermissions = async function() {
-    if (!drawer || drawer.hidden || drawerMode !== 'review-result') return;
-    await openDecisionPermissions(reviewResultPermissionReceipt(drawerReviewResult), 'review-result', currentDrawerBack());
+    if (!drawer || drawer.hidden || detailDrawer.mode() !== 'review-result') return;
+    await openDecisionPermissions(reviewResultPermissionReceipt(detailDrawer.reviewResult()), 'review-result', detailDrawer.back());
   };
   async function openDecisionPermissions(receipt, origin, back) {
     if (!drawer || !receipt || sessionEnded) return;
-    drawerMode = 'permissions';
-    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
-    openDrawer({ title: 'Decision permissions', icon: 'doc',
+    detailDrawer.setMode('permissions');
+    detailDrawer.setCopyVisible(false);
+    detailDrawer.open({ title: 'Decision permissions', icon: 'doc',
       back,
-      onClose: () => { if (drawerMode === 'permissions') drawerMode = null; sessionPermissions = null; } });
-    sessionPermissions = { receipt, origin, seq: drawerSeq, auth: handoffGeneration, rows: null,
+      onClose: () => { if (detailDrawer.mode() === 'permissions') detailDrawer.setMode(null); sessionPermissions = null; } });
+    sessionPermissions = { receipt, origin, seq: detailDrawer.seq(), auth: handoffGeneration, rows: null,
       loading: false, error: '', busy: '', mutationError: false, revoked: new Set() };
     btnDrawerClose?.focus({ preventScroll: true });
     await window.refreshSessionPermissions();
@@ -3096,48 +2818,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  // Uninspected-egress drill-down: the count in the firewall panel becomes a
-  // list the operator can act on (allow the endpoint, read the advisor's
-  // verdict) instead of a dead end.
-
-  window.openUninspected = function({ back } = {}) {
-    if (!drawer) return;
-    drawerMode = 'uninspected';
-    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
-    openDrawer({
-      title: 'Uninspected egress — last 24h',
-      icon: 'globe',
-      onClose: () => { drawerMode = null; },
-      back,
-    });
-    fillUninspected(drawerBody);
-  };
-
-  // Family drawer: View family on the Resources board opens the docked
-  // inspector for one process family — no tab switch. The 30s reconcile
-  // refills it in place (fetchTelemetry); the process table's Show more
-  // state lives in expandedLists. Open in Events is the way out to the full
-  // timeline.
-  let familyDrawerKey = '';
   const familyByKey = key => ((telemetryData.resources && telemetryData.resources.sessions) || []).find(f => f.key === key);
-  window.openFamilyDrawer = function(key, { back } = {}) {
-    const fam = familyByKey(key);
-    if (!drawer || !fam) return;
-    // View family on the family already showing keeps its own way back.
-    if (drawerMode === 'family' && familyDrawerKey === key && !drawer.hidden) back = drawerBack;
-    drawerMode = 'family';
-    familyDrawerKey = key;
-    selectedResourceKey = key;
-    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
-    openDrawer({
-      title: familyLabel(fam, telemetryData.sessions),
-      icon: 'activity',
-      onClose: () => { drawerMode = null; familyDrawerKey = ''; },
-      back,
-    });
-    drawerFoot._saFoot = undefined;
-    fillFamilyDrawer();
-  };
 
   // Session investigation return context. Navigation restores reading state;
   // it never replays a decision or process-control action.
@@ -3167,7 +2848,7 @@ document.addEventListener('DOMContentLoaded', () => {
       st.destination.events = { ...filters.events };
       st.destination.page = copyEventHistoryPage(eventHistoryPage);
     }
-    closeDrawer();
+    detailDrawer.close();
     if (sessionInvestigation?.id === st.id) sessionInvestigation.active = false;
     sessionWorkbench.restoreView(st.view);
     timelineSession = st.scope.session; timelinePids = st.scope.pids; timelinePidLabel = st.scope.label;
@@ -3187,10 +2868,6 @@ document.addEventListener('DOMContentLoaded', () => {
       .find(el => Object.entries(st.target).every(([key, value]) => el.dataset[key] === value));
     target?.focus({ preventScroll: true });
     fetchTelemetry({ slow: false });
-  }
-  function sessionDrawerBack(el) {
-    const st = captureSessionReturn(el);
-    return st ? { label: 'session', sessionReturn: st, reopen: () => restoreSessionReturn(st) } : null;
   }
   function showSessionInvestigation(st) {
     if (!validSessionReturn(st)) return;
@@ -3218,7 +2895,7 @@ document.addEventListener('DOMContentLoaded', () => {
   Object.defineProperty(window.SA, 'sessionInvestigationReturn', { get: () => !!sessionInvestigation?.active && validSessionReturn(sessionInvestigation) });
   window.SA.clearSessionInvestigation = () => {
     sessionInvestigation = null;
-    if (drawerBack?.sessionReturn) closeDrawer();
+    if (detailDrawer.returnTarget()?.sessionReturn) detailDrawer.close();
   };
   window.openSessionFindings = function(id, el) {
     const st = id === sessionWorkbench.selectedSessionId ? captureSessionReturn(el) : null;
@@ -3260,79 +2937,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (marker.part === 'session') restoreSessionReturn(st);
     else if (marker.part === 'evidence') showSessionInvestigation(st);
   });
-
-  // The open drawer as a way back to it. Reopening refreshes live evidence
-  // readers; saved results retain the evidence belonging to their decision.
-  // The policy editor has no back target because reopening would drop its draft.
-  function currentDrawerBack() {
-    if (!drawer || drawer.hidden) return null;
-    const back = drawerBack || undefined;
-    const wrap = target => ({ ...target, sessionReturn: back?.sessionReturn, attentionOrigin: attentionSelection || back?.attentionOrigin });
-    switch (drawerMode) {
-      case 'review-result': {
-        const result = drawerReviewResult;
-        const auth = handoffGeneration;
-        return result ? wrap({ label: 'Review result', reopen: () => {
-          if (auth === handoffGeneration) window.openReviewResult(result);
-        } }) : null;
-      }
-      case 'attention': {
-        const key = attentionSelection?.key;
-        return wrap({ label: 'Needs you', reopen: () => selectAttention(key) });
-      }
-      case 'uninspected':
-        return wrap({ label: 'Uninspected egress', reopen: () => window.openUninspected({ back }) });
-      case 'endpoint': {
-        const { host, agent } = drawerEndpoint;
-        return wrap({ label: 'Endpoint detail', reopen: () => window.openEndpointDetail(host, agent, { back }) });
-      }
-      case 'incident': {
-        const id = drawerIncident;
-        return wrap({ label: 'Incident report', reopen: () => window.openIncidentReport(id, { back }) });
-      }
-      case 'file': {
-        const p = drawerFile;
-        return wrap({ label: 'File', reopen: () => window.openFileDetail(p, { back }) });
-      }
-      case 'plan': {
-        const s = drawerPlan;
-        return wrap({ label: 'What to do', reopen: () => window.openPlanDrawer(s, { back }) });
-      }
-      case 'flag': {
-        const id = drawerFlag;
-        return wrap({ label: 'Security flag', reopen: () => window.openFlagDetail(id, { back }) });
-      }
-      case 'family': {
-        const key = familyDrawerKey;
-        const fam = familyByKey(key);
-        return wrap({ label: fam ? familyLabel(fam, telemetryData.sessions) : 'Process family', reopen: () => window.openFamilyDrawer(key, { back }) });
-      }
-    }
-    return null;
-  }
-  function fillFamilyDrawer() {
-    if (drawerMode !== 'family' || !drawer || drawer.hidden) return;
-    const fam = familyByKey(familyDrawerKey);
-    if (!fam) {
-      drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>This family is no longer running.</span></div>`;
-      drawerFoot.innerHTML = '';
-      drawerFoot._saFoot = undefined;
-      drawerFoot.hidden = true;
-      return;
-    }
-    const label = familyLabel(fam, telemetryData.sessions);
-    drawerTitle.textContent = label;
-    patchList(drawerBody, familyDrawerSections(fam, {
-      sessions: telemetryData.sessions, events: telemetryData.events, flags: telemetryData.flags,
-      expanded: expandedLists, now: Date.now(),
-    }), { key: p => p.key, html: p => p.html });
-    const foot = familyDrawerFootHTML(fam, label);
-    if (drawerFoot._saFoot !== foot) {
-      drawerFoot.innerHTML = foot;
-      drawerFoot._saFoot = foot;
-    }
-    drawerFoot.hidden = false;
-  }
 
   window.killProcess = async function(pid, startedAt, family) {
     const when = startedAt ? ` started ${startedAt}` : '';
@@ -3481,17 +3085,17 @@ document.addEventListener('DOMContentLoaded', () => {
       default: resourcePolicyFromSnapshot(control),
       overrides: (control.workspace_overrides || []).map(resourcePolicyFromSnapshot)
     };
-    drawerMode = 'policy';
-    openDrawer({
+    detailDrawer.setMode('policy');
+    detailDrawer.open({
       title: 'Resource policy editor',
       icon: 'activity',
       variant: 'resource-policy',
       foot: `<button type="button" class="btn btn-ghost" data-action="policy-cancel">Cancel</button>`
         + `<button type="button" class="btn btn-primary" data-action="policy-save">Save and apply</button>`,
-      onClose: () => { resourcePolicyDraft = null; drawerMode = null; },
+      onClose: () => { resourcePolicyDraft = null; detailDrawer.setMode(null); },
     });
     renderResourcePolicyEditor();
-    drawerFoot.querySelector('[data-action="policy-cancel"]')?.addEventListener('click', closeDrawer);
+    drawerFoot.querySelector('[data-action="policy-cancel"]')?.addEventListener('click', detailDrawer.close);
     drawerFoot.querySelector('[data-action="policy-save"]')?.addEventListener('click', saveResourcePolicy);
   };
 
@@ -3535,7 +3139,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const res = await apiFetch('/resources/policy', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.text()).trim() || 'save failed');
-      closeDrawer();
+      detailDrawer.close();
       showToast('Resource policy saved and applied.', 'success');
       fetchTelemetry({ slow: true });
     } catch (err) {
@@ -3653,10 +3257,10 @@ document.addEventListener('DOMContentLoaded', () => {
       drop: stageDropFlag
     },
     drawer: {
-      back: currentDrawerBack,
-      refill: refillUninspected,
-      refillOpen: refillUninspectedDrawer,
-      closeFlag: id => { if (!attentionSelection && drawerMode === 'flag' && drawerFlag === id) closeDrawer(); }
+      back: detailDrawer.back,
+      refill: detailDrawer.refillUninspected,
+      refillOpen: detailDrawer.refillUninspectedDrawer,
+      closeFlag: id => { if (!detailDrawer.selection() && detailDrawer.isFlagOpen(id)) detailDrawer.close(); }
     }
   });
   for (const name of ['bulkAllowHosts', 'assessHost', 'allowHost', 'openFDASettings', 'muteFlag', 'explainAct', 'routineAct',
@@ -3745,14 +3349,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const d = el.dataset;
     // Queue drill-downs keep their queue origin; historical openers do not.
     const back = () => {
-      if (el.closest('#drawer')) return currentDrawerBack();
+      if (el.closest('#drawer')) return detailDrawer.back();
       const row = el.closest('#attention-list [data-need-key]');
       if (row && activeTab === 'home') {
         const key = row.dataset.needKey;
         const origin = { key, order: attentionItems().map(it => `${it.kind}:${it.id}`), generation: ++attentionGeneration };
         return { label: 'Needs you', attentionOrigin: origin, reopen: () => selectAttention(key) };
       }
-      return sessionDrawerBack(el);
+      return detailDrawer.sessionBack(el);
     };
     switch (d.action) {
       case 'toggle-row': {
@@ -4005,8 +3609,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!fam) break;
         const pids = [Number(fam.root_pid), ...(fam.processes || []).map(p => Number(p.pid))];
         const label = familyLabel(fam, telemetryData.sessions);
-        const origin = drawerBack?.sessionReturn;
-        closeDrawer();
+        const origin = detailDrawer.returnTarget()?.sessionReturn;
+        detailDrawer.close();
         if (!window.openSessionFamilyEvents(origin, pids, label)) window.filterTimelineToPids([...new Set(pids)], label);
         break;
       }
@@ -4025,7 +3629,7 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (d.key === 'history') renderNow(['flags']);
         else if (d.key === 'history-incidents') renderNow(['incidents']);
         else if (d.key === 'spend') renderNow(['spend']);
-        else fillFamilyDrawer();
+        else detailDrawer.fillFamily();
         break;
       case 'resource-control':
         e.preventDefault();
