@@ -18,10 +18,20 @@ import (
 // tracer reads. Unknown fields are ignored — the schema evolves, the trace
 // degrades to fewer events, never wrong ones.
 type claudeRecord struct {
-	Type      string `json:"type"`      // assistant | user | ...
+	Type      string `json:"type"`      // assistant | user | attachment | ...
 	SessionID string `json:"sessionId"` // matches CLAUDE_SESSION_ID the hook sees
 	CWD       string `json:"cwd"`
 	Timestamp string `json:"timestamp"`
+	UUID      string `json:"uuid"` // the record's own id; keys a hook run
+	// Attachment is set on attachment records; hook_* types report one hook
+	// execution each.
+	Attachment *claudeAttachment `json:"attachment"`
+	// System records with subtype stop_hook_summary list every Stop hook
+	// that ran for the stop identified by ToolUseID.
+	Subtype    string           `json:"subtype"`
+	ToolUseID  string           `json:"toolUseID"`
+	HookInfos  []claudeHookInfo `json:"hookInfos"`
+	HookErrors []string         `json:"hookErrors"`
 	// isMeta records are harness-injected context (system reminders,
 	// command wrappers), never operator prompts. isSidechain records are
 	// subagent side conversations. Both must not count as turns: counting
@@ -75,6 +85,22 @@ type claudeContent struct {
 	ToolUseID string `json:"tool_use_id"`
 	IsError   bool   `json:"is_error"`
 	Text      string `json:"text"`
+	// Content is a tool_result's body: a string or an array of blocks.
+	Content json.RawMessage `json:"content"`
+}
+
+// claudeAttachment is the subset of a hook attachment record the tracer reads.
+// Content is a string on hook_success and an array on context records.
+type claudeAttachment struct {
+	Type       string          `json:"type"`
+	HookName   string          `json:"hookName"`  // "PreToolUse:Bash", "Stop", ...
+	HookEvent  string          `json:"hookEvent"` // "PreToolUse", "Stop", ...
+	ToolUseID  string          `json:"toolUseID"` // for a Stop hook, the stop its summary names
+	Command    string          `json:"command"`
+	ExitCode   json.RawMessage `json:"exitCode"`
+	DurationMs int64           `json:"durationMs"`
+	Content    json.RawMessage `json:"content"`
+	Stdout     string          `json:"stdout"`
 }
 
 // pendingTool is an open tool_use awaiting its tool_result.
@@ -106,6 +132,9 @@ type ClaudeTracer struct {
 	msgRing   [claudeMsgMemory]string
 	msgNext   int
 	sessionID string // the last record's session id
+	// stops holds Stop hook attachments until the stop_hook_summary for the
+	// same stop: stop toolUseID → script → output.
+	stops map[string]map[string]stopOutput
 }
 
 func NewClaudeTracer() *ClaudeTracer {
@@ -135,7 +164,8 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 	if err := json.Unmarshal([]byte(trimmed), &rec); err != nil || rec.SessionID == "" {
 		return nil, "", false
 	}
-	if rec.Type != "assistant" && rec.Type != "user" {
+	stopSummary := rec.Type == "system" && rec.Subtype == "stop_hook_summary"
+	if rec.Type != "assistant" && rec.Type != "user" && rec.Type != "attachment" && !stopSummary {
 		return nil, "", false
 	}
 	if t.sessionID != "" && t.sessionID != rec.SessionID {
@@ -143,6 +173,7 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 		t.msgs = map[string]claudeMsg{}
 		t.msgRing = [claudeMsgMemory]string{}
 		t.msgNext = 0
+		t.stops = nil
 	}
 	t.sessionID = rec.SessionID
 	ts, observed := time.Now(), true
@@ -159,6 +190,12 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 	events = append(events, t.pending.expire(ts)...)
 
 	switch rec.Type {
+	case "attachment":
+		if e, ok := t.hookRun(&rec, ts); ok {
+			events = append(events, e)
+		}
+	case "system":
+		events = append(events, t.stopHookRuns(&rec, ts)...)
 	case "assistant":
 		if mc, ok := t.modelCall(&rec, ts); ok {
 			events = append(events, mc)
@@ -186,6 +223,9 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 				status = "error"
 			}
 			if e, found := t.pending.completion(c.ToolUseID, rec.SessionID, status, ts); found {
+				events = append(events, e)
+			}
+			if e, ok := blockedByHook(c, rec.SessionID, ts); ok {
 				events = append(events, e)
 			}
 		}

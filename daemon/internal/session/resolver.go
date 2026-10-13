@@ -909,7 +909,7 @@ func (r *Resolver) SightedByHarness(since time.Time) map[string]int {
 
 func isTraceKind(k event.Kind) bool {
 	switch k {
-	case event.KindToolCall, event.KindTurn, event.KindModelCall:
+	case event.KindToolCall, event.KindTurn, event.KindModelCall, event.KindHookRun:
 		return true
 	}
 	return false

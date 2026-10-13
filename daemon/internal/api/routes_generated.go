@@ -116,6 +116,8 @@ func (a *API) handleSessionSubpathLeaf(w http.ResponseWriter, r *http.Request, i
 		a.serveSessionOverview(w, r, id)
 	case "outcomes":
 		a.serveSessionOutcomes(w, r, id)
+	case "hooks":
+		a.serveSessionHooks(w, r, id)
 	default:
 		return false
 	}
@@ -132,6 +134,7 @@ func RouteWireTypes() []any {
 		new(memoryResponse),
 		new(SessionOverview),
 		new(SessionOutcomes),
+		new([]store.HookSummary),
 		new(resource.Snapshot),
 		new(Snapshot),
 		new(Posture),

@@ -199,6 +199,32 @@ function sessionTraceHTML(events, state) {
   return notice + limit + sessionWaterfallHTML(events);
 }
 
+// Hook totals for one session, one row per hook event and script.
+function validSessionHooks(rows) {
+  const count = v => Number.isInteger(v) && v >= 0;
+  return Array.isArray(rows) && rows.every(r => r && typeof r === 'object' && !Array.isArray(r)
+    && typeof r.event === 'string' && typeof r.script === 'string' && typeof r.last_at === 'string'
+    && ['runs', 'errors', 'blocks', 'chars', 'total_ms'].every(k => count(r[k])));
+}
+
+function sessionHooksHTML(rows, state) {
+  state = state || {};
+  const retry = `<button type="button" class="link-btn" data-action="session-hooks-retry"${state.loading ? ' disabled' : ''}>Retry hooks</button>`;
+  const notice = state.error ? `Hook runs unavailable.${rows ? ' Showing the last loaded totals; they may be out of date.' : ''} ${retry}`
+    : !rows ? 'Loading hook runs…' : '';
+  const head = `<header data-session-part="hooks-head"><h4>Hooks</h4><p>Every harness hook that ran in this session, read from its transcript. Failed counts errors and cancelled runs; blocked counts denied tool calls and blocked turns.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
+  if (!rows) return head;
+  if (!rows.length) return head + '<p data-session-part="hooks-empty">No hook runs recorded for this session.</p>';
+  const body = rows.map(r => `<tr${r.errors > 0 ? ' class="sd-hook-failed"' : ''}>
+      <td>${escapeHTML(r.event)}</td><td>${escapeHTML(r.script || 'not recorded')}</td>
+      <td>${r.runs}</td><td>${r.errors}</td><td>${r.blocks}</td>
+      <td>${escapeHTML(fmtCompact(r.chars))}</td><td>${escapeHTML(fmtDurationMs(r.total_ms))}</td></tr>`).join('');
+  return head + `<table class="sd-hooks" data-session-part="hooks-table"><thead><tr>
+      <th scope="col">Event</th><th scope="col">Script</th><th scope="col">Runs</th><th scope="col">Failed</th>
+      <th scope="col">Blocked</th><th scope="col">Chars returned</th><th scope="col">Time</th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+}
+
 // Durable IDs are the entry point; live process counts and setup checks do
 // not substitute for a session's own record.
 function sessionDailyHTML(sessions, coverage) {
@@ -398,12 +424,13 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
         <button type="button" class="sd-view${state.sessionView === 'memory' ? ' active' : ''}" data-action="session-view" data-view="memory" aria-pressed="${state.sessionView === 'memory'}">Memory</button>
         <button type="button" class="sd-view${state.sessionView === 'results' ? ' active' : ''}" data-action="session-view" data-view="results" aria-pressed="${state.sessionView === 'results'}">Results</button>
         <button type="button" class="sd-view${state.sessionView === 'trace' ? ' active' : ''}" data-action="session-view" data-view="trace" aria-pressed="${state.sessionView === 'trace'}">Trace</button>
+        <button type="button" class="sd-view${state.sessionView === 'hooks' ? ' active' : ''}" data-action="session-view" data-view="hooks" aria-pressed="${state.sessionView === 'hooks'}">Hooks</button>
       </div>
       <button type="button" class="btn btn-sm btn-ghost sd-latest" data-action="session-latest" hidden>Jump to latest</button>
       <button type="button" class="btn btn-sm btn-ghost" data-action="session-status">Current status</button>
     </div>
     </div>
-    <div class="session-detail-body" tabindex="-1">${state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
+    <div class="session-detail-body" tabindex="-1">${state.sessionView === 'hooks' ? contextHTML + sessionHooksHTML(state.sessionHooks, state.sessionHooksState) : state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
 }
 
 // One workbench owns selection, retained reads, rendering and reading position.
@@ -436,10 +463,14 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
   let sessionOutcomesState = { loading: false, error: '' };
   let sessionOutcomesGeneration = 0;
   let sessionOutcomesAt = 0;
+  let sessionHooks = null;
+  let sessionHooksState = { loading: false, error: '' };
+  let sessionHooksAt = 0;
   function refreshCurrent(force) {
     if (selectedSessionId) {
       loadSessionOverview(selectedSessionId, force);
       if (sessionView === 'results') loadSessionOutcomes(selectedSessionId, force);
+      if (sessionView === 'hooks') loadSessionHooks(selectedSessionId, force);
     }
   }
   async function loadSessionOutcomes(id, force = true) {
@@ -463,6 +494,28 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     } catch {
       if (generation !== sessionOutcomesGeneration || id !== selectedSessionId) return;
       sessionOutcomesState = { loading: false, error: 'unavailable' };
+    }
+    renderNow(['sessions']);
+  }
+  async function loadSessionHooks(id, force = true) {
+    if (!id || id !== selectedSessionId || sessionHooksState.loading) return;
+    if (!force && Date.now() - sessionHooksAt < 5000) return;
+    sessionHooksAt = Date.now();
+    const generation = sessionMemoryGeneration;
+    const current = () => id === selectedSessionId && generation === sessionMemoryGeneration;
+    sessionHooksState = { loading: true, error: sessionHooksState.error };
+    renderNow(['sessions']);
+    try {
+      const response = await apiFetch('/sessions/' + encodeURIComponent(id) + '/hooks');
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const rows = await response.json();
+      if (!current()) return;
+      if (!validSessionHooks(rows)) throw new Error('Invalid response');
+      sessionHooks = rows;
+      sessionHooksState = { loading: false, error: '' };
+    } catch {
+      if (!current()) return;
+      sessionHooksState = { loading: false, error: 'unavailable' };
     }
     renderNow(['sessions']);
   }
@@ -506,6 +559,9 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     sessionOutcomes = null;
     sessionOutcomesState = { loading: false, error: '' };
     sessionOutcomesAt = 0;
+    sessionHooks = null;
+    sessionHooksState = { loading: false, error: '' };
+    sessionHooksAt = 0;
   }
   function takeSessionReveal() {
     const reveal = sessionReveal;
@@ -536,8 +592,9 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     if (panel) panel.dataset.pane = sessionPane;
   }
   async function loadSelectedSession(id) {
-    const history = sessionView === 'trace'
-      ? loadSessionTimeline(id, true).catch(() => {}) : sessionView === 'results' ? loadSessionOutcomes(id) : loadSessionMemory(id);
+    const history = sessionView === 'trace' ? loadSessionTimeline(id, true).catch(() => {})
+      : sessionView === 'results' ? loadSessionOutcomes(id)
+        : sessionView === 'hooks' ? loadSessionHooks(id) : loadSessionMemory(id);
     await Promise.all([history, loadSessionOverview(id)]);
     renderNow(['sessions']);
   }
@@ -700,17 +757,19 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     if (latest) latest.hidden = true;
   }
   function showCurrentSessionStatus() {
-    if (sessionView === 'results') { setSessionView('memory').then(showCurrentSessionStatus); return; }
+    if (sessionView === 'results' || sessionView === 'hooks') { setSessionView('memory').then(showCurrentSessionStatus); return; }
     const body = document.querySelector('#session-detail .session-detail-body');
     if (body) body.scrollTop = 0;
     document.querySelector('#session-detail .sd-current-head h4')?.focus({ preventScroll: true });
   }
   async function setSessionView(view) {
-    if (!['memory', 'trace', 'results'].includes(view)) return;
+    if (!['memory', 'trace', 'results', 'hooks'].includes(view)) return;
     sessionView = view;
     renderNow(['sessions']);
     if (view === 'results' && selectedSessionId) {
       await loadSessionOutcomes(selectedSessionId);
+    } else if (view === 'hooks' && selectedSessionId) {
+      await loadSessionHooks(selectedSessionId);
     } else if (view === 'trace' && selectedSessionId) {
       try { await loadSessionTimeline(selectedSessionId, true); } catch { /* trace retries on next activation */ }
       renderNow(['sessions']);
@@ -939,23 +998,26 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     sessionOverviewState = { loading: false, error: 'unavailable' };
     sessionOverviewRefreshAgain = false;
     sessionOutcomesState = { loading: false, error: 'unavailable' };
+    sessionHooksState = { loading: false, error: 'unavailable' };
   }
   function refresh(kind, { id = selectedSessionId, before, force = true } = {}) {
     if (kind === 'memory') return loadSessionMemory(id, before);
     if (kind === 'trace') return loadSessionTimeline(id, force);
     if (kind === 'results') return loadSessionOutcomes(id, force);
+    if (kind === 'hooks') return loadSessionHooks(id, force);
     if (kind === 'overview') return loadSessionOverview(id, force);
     return loadSelectedSession(id);
   }
   function activity(event) {
     if (!selectedSessionId || event.session_id !== selectedSessionId) return;
     if (sessionView === 'trace') return loadSessionTimeline(selectedSessionId);
+    if (sessionView === 'hooks') return loadSessionHooks(selectedSessionId, false);
     if (sessionView === 'memory' && Date.now() - sessionMemoryAt >= 2000) return loadSessionMemory(selectedSessionId);
   }
   function restoreView(view) {
-    if (['memory', 'trace', 'results'].includes(view)) sessionView = view;
+    if (['memory', 'trace', 'results', 'hooks'].includes(view)) sessionView = view;
   }
-  function snapshot() { return { selectedSessionId, sessionTimeline, sessionTimelineState, sessionView, sessionMemoryPage, sessionMemoryState, sessionOverview, sessionOverviewState, sessionOutcomes, sessionOutcomesState }; }
+  function snapshot() { return { selectedSessionId, sessionTimeline, sessionTimelineState, sessionView, sessionMemoryPage, sessionMemoryState, sessionOverview, sessionOverviewState, sessionOutcomes, sessionOutcomesState, sessionHooks, sessionHooksState }; }
   return {
     selectSession, setView: setSessionView, render: renderSessionBoard,
     refresh, refreshCurrent, activity, invalidate, restoreView,
@@ -974,5 +1036,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     get sessionOverviewState() { return sessionOverviewState; },
     get sessionOutcomes() { return sessionOutcomes; },
     get sessionOutcomesState() { return sessionOutcomesState; },
+    get sessionHooks() { return sessionHooks; },
+    get sessionHooksState() { return sessionHooksState; },
   };
 }

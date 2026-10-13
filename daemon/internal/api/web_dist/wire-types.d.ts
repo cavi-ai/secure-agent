@@ -223,6 +223,7 @@ export interface Event {
   tokens_out?: number;
   cost_usd?: number;
   price_class?: string;
+  chars?: number;
   call_id?: string;
 }
 
@@ -672,6 +673,17 @@ export interface SessionOutcomes {
   session_id: string;
   observed_at: string;
   history: SessionOutcomeHistory;
+}
+
+export interface HookSummary {
+  event: string;
+  script: string;
+  runs: number;
+  errors: number;
+  blocks: number;
+  chars: number;
+  total_ms: number;
+  last_at: string;
 }
 
 export interface HostSnapshot {

@@ -4,6 +4,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Sessions: a Hooks view with each Claude Code hook's runs, failures, blocks, returned characters and time, read from the transcript (`/sessions/{id}/hooks`).
+
 ## [1.3.0] - 2026-10-12
 
 ### Added

@@ -733,3 +733,51 @@ test('workbench sizing reserves measured reading lines and rebinds chrome withou
   assert.equal(panel.short,false);
   assert.equal(values.get('--session-workbench-height'),'584px');
 });
+
+const hookRow = (over = {}) => ({ event: 'PreToolUse', script: 'secret_guard.py', runs: 3, errors: 3, blocks: 0, chars: 0, total_ms: 90, last_at: '2026-09-23T10:00:00.000000000Z', ...over });
+
+test('Hooks view loads the session hook totals and renders failures, blocks and unrecorded scripts', async () => {
+  const c = controller();
+  const select = c.actions.selectSession('a');
+  c.answer(0, { rows: [], has_earlier: false, next_cursor: '' }); await select;
+  const view = c.actions.setSessionView('hooks');
+  const req = c.requests.find(r => r.url === '/sessions/a/hooks');
+  assert.ok(req, 'the Hooks view reads /sessions/a/hooks');
+  req.resolve({ ok: true, json: async () => [hookRow(), hookRow({ script: '', runs: 1, errors: 0, blocks: 1, chars: 1200, total_ms: 0 })] });
+  await view;
+  assert.equal(c.state.mode, 'hooks');
+  const html = c.context.sessionDetailHTML({ id: 'a', harness: 'claude', status: 'active' }, [], [],
+    { sessionView: 'hooks', sessionHooks: c.workbench.sessionHooks, sessionHooksState: c.workbench.sessionHooksState });
+  assert.match(html, /data-view="hooks" aria-pressed="true"/);
+  assert.match(html, /<tr class="sd-hook-failed">[\s\S]*secret_guard\.py[\s\S]*<td>3<\/td><td>3<\/td>/);
+  assert.match(html, /not recorded[\s\S]*<td>1<\/td><td>0<\/td><td>1<\/td>[\s\S]*1\.2k/);
+});
+
+test('Hooks rendering distinguishes loading, unavailable, stale and empty', () => {
+  const c = controller();
+  const render = (rows, state) => c.context.sessionHooksHTML(rows, state);
+  assert.match(render(null, { loading: true, error: '' }), /Loading hook runs/);
+  const failed = render(null, { loading: false, error: 'unavailable' });
+  assert.match(failed, /Hook runs unavailable/);
+  assert.match(failed, /data-action="session-hooks-retry"/);
+  assert.match(render([hookRow()], { loading: false, error: 'unavailable' }), /last loaded totals[\s\S]*secret_guard\.py/);
+  assert.match(render([], { loading: false, error: '' }), /No hook runs recorded/);
+  assert.equal(c.context.validSessionHooks([hookRow({ runs: -1 })]), false);
+  assert.equal(c.context.validSessionHooks([hookRow()]), true);
+});
+
+test('normal console refresh reloads the selected Hooks view without timeline activity', async () => {
+  const c = controller();
+  const select = c.actions.selectSession('a');
+  c.answer(0, { rows: [], has_earlier: false, next_cursor: '' }); await select;
+  const view = c.actions.setSessionView('hooks');
+  c.answer(1, [hookRow({ runs: 1 })]); await view;
+  c.workbench.refreshCurrent(true);
+  const refresh = c.requests[2];
+  assert.equal(refresh?.url, '/sessions/a/hooks');
+  refresh.resolve({ ok: true, json: async () => [hookRow({ runs: 4 })] });
+  await settle();
+  assert.equal(c.workbench.sessionHooks[0].runs, 4);
+  c.workbench.refreshCurrent(false);
+  assert.equal(c.requests.length, 3, 'automatic refresh respects the existing interval');
+});

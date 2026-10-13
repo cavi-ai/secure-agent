@@ -165,6 +165,7 @@ func initializeSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_interventions_session ON interventions(session_id,requested_at);`,
 		agentAsksSchema,
 		scanCacheSchema,
+		hookRunsSchema,
 	}
 	createQueries = append(createQueries, sysAgentSchemas...)
 

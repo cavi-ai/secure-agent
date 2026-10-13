@@ -387,6 +387,9 @@ func (s *Store) PutEvent(e event.Event) (result WriteResult, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if e.Kind == event.KindHookRun {
+		return s.putHookRunLocked(e)
+	}
 	tsStr := e.TS.UTC().Format(time.RFC3339Nano)
 	var res sql.Result
 	switch {
@@ -518,6 +521,7 @@ func (s *Store) pruneEventsLocked() {
 		append(connKinds, instantBound(now.Add(-conn))...)...)
 	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND `+instantBeforeSQL("ts"),
 		append(connKinds, instantBound(now.Add(-other))...)...)
+	s.pruneHookRunsLocked(now.Add(-other))
 	// Distinct kinds by index skip-scan: one MIN(kind) seek per kind.
 	rows, err := s.db.Query(`WITH RECURSIVE k(v) AS (
 			SELECT MIN(kind) FROM events

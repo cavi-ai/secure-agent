@@ -137,7 +137,9 @@ func (i *eventIngest) Feed(e event.Event) bool {
 		enqueueEgressProjection(projection, observation, st)
 	}
 	guardLifecycle := e.Kind == event.KindGuardPrompt || e.Kind == event.KindGuardResolved
-	if deltas != nil && (eventSaved || guardLifecycle) {
+	// Hook runs are read through /sessions/{id}/hooks; as generic event
+	// deltas the console would draw them into session timelines.
+	if deltas != nil && (eventSaved || guardLifecycle) && e.Kind != event.KindHookRun {
 		// Guard lifecycle keeps its own delta names (the menubar's
 		// instant prompt path keys on them); everything else is a
 		// generic typed event for timeline/console patching.
