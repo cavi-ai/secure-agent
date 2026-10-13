@@ -8,6 +8,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Added
 - Sessions: a Hooks view with each Claude Code hook's runs, failures, blocks, returned characters and time, read from the transcript (`/sessions/{id}/hooks`).
+- Codex: record forwarded app-server hook completions with `secure-agent hooks record`, using a shared metadata contract and stable host delivery IDs.
 
 ## [1.3.0] - 2026-10-12
 
