@@ -259,18 +259,21 @@ def run_agent(page):
     )
 
 def run_agent_latest(page):
-    for viewport, fixture in [('desktop', 'dom_agent_latest'), ('mobile', 'dom_agent_latest_mobile')]:
+    for viewport, fixture in [('desktop', 'dom_agent_latest'), ('narrow window', 'dom_agent_latest_narrow')]:
         dom = page.fixture(fixture)
         receipt = re.search(r'data-agent-latest="([^"]+)"', dom)
         state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
         page.check(f'agent latest ({viewport}): receipt produced', bool(state), str(state))
-        for name in ('initial', 'earlier', 'first', 'updates', 'second', 'manualBottom', 'jump', 'follow',
+        page.check(f'agent latest ({viewport}): expected viewport class and usable height',
+                   bool(state.get('viewport') and (state['viewport'][0] <= 900) == (viewport == 'narrow window')
+                        and (viewport != 'narrow window' or state['viewport'][1] >= 812)), str(state))
+        for name in ('initial', 'earlier', 'readingGeometry', 'first', 'updates', 'second', 'manualBottom', 'jump', 'follow',
                      'dockOpen', 'dockClose', 'dockExpand', 'dockFollow', 'returnFollow', 'empty', 'disabled', 'bounds'):
             page.check(f'agent latest ({viewport}): {name}', state.get(name) is True, str(state))
 
 
 CASES = (
-    Case('agent_latest', run_agent_latest, ('dom_agent_latest', 'dom_agent_latest_mobile')),
+    Case('agent_latest', run_agent_latest, ('dom_agent_latest', 'dom_agent_latest_narrow')),
     Case('agents_tab_renders_one_group_per_harness_newest_first', run_agents_tab_renders_one_group_per_harness_newest_first, ('dom',)),
     Case('agent_group_head', run_agent_group_head, ('dom',)),
     Case('agents_infra_section_sits_last_and_is_not_counted', run_agents_infra_section_sits_last_and_is_not_counted, ('dom',)),

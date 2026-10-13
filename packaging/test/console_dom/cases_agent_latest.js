@@ -29,10 +29,13 @@
     const receipt = {};
     try {
       await ready(); openTab('agent'); await idle(); await checkpoint();
+      receipt.viewport = [innerWidth, innerHeight];
       receipt.initial = hidden() && bottom();
       input().value = 'Keep this draft';
       await scroll(500);
       receipt.earlier = !button().hidden && !!button().getClientRects().length && button().textContent === 'Jump to latest';
+      receipt.readingGeometry = thread().clientHeight > 0 && thread().getBoundingClientRect().height > 0
+        && button().getBoundingClientRect().height >= 44;
       const reading = anchor();
       add(41); await refresh();
       receipt.first = button().textContent === '1 new message · Jump to latest' && preserved(reading);
