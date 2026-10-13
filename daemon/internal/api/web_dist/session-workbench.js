@@ -470,6 +470,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     if (selectedSessionId) {
       loadSessionOverview(selectedSessionId, force);
       if (sessionView === 'results') loadSessionOutcomes(selectedSessionId, force);
+      if (sessionView === 'hooks') loadSessionHooks(selectedSessionId, force);
     }
   }
   async function loadSessionOutcomes(id, force = true) {

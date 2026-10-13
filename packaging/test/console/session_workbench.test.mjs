@@ -765,3 +765,19 @@ test('Hooks rendering distinguishes loading, unavailable, stale and empty', () =
   assert.equal(c.context.validSessionHooks([hookRow({ runs: -1 })]), false);
   assert.equal(c.context.validSessionHooks([hookRow()]), true);
 });
+
+test('normal console refresh reloads the selected Hooks view without timeline activity', async () => {
+  const c = controller();
+  const select = c.actions.selectSession('a');
+  c.answer(0, { rows: [], has_earlier: false, next_cursor: '' }); await select;
+  const view = c.actions.setSessionView('hooks');
+  c.answer(1, [hookRow({ runs: 1 })]); await view;
+  c.workbench.refreshCurrent(true);
+  const refresh = c.requests[2];
+  assert.equal(refresh?.url, '/sessions/a/hooks');
+  refresh.resolve({ ok: true, json: async () => [hookRow({ runs: 4 })] });
+  await settle();
+  assert.equal(c.workbench.sessionHooks[0].runs, 4);
+  c.workbench.refreshCurrent(false);
+  assert.equal(c.requests.length, 3, 'automatic refresh respects the existing interval');
+});

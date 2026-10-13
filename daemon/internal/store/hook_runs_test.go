@@ -79,3 +79,44 @@ func TestPruneBoundsHookRuns(t *testing.T) {
 		t.Fatalf("after prune = %+v %v, want the newest 2 runs", got, err)
 	}
 }
+
+func TestRekeyPreservesHookRuns(t *testing.T) {
+	s := rekeyFixture(t)
+	at := time.Now().UTC()
+	for _, run := range []event.Event{
+		hookRun("old", "unique", "Stop", "stop.py", "ok", 5, 0, at),
+		hookRun("old", "duplicate", "Stop", "stop.py", "error", 9, 0, at),
+		hookRun("new", "duplicate", "Stop", "stop.py", "inject", 7, 4, at),
+	} {
+		if _, err := s.PutEvent(run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.Exec(`CREATE TRIGGER fail_hook_rekey BEFORE UPDATE ON hook_runs BEGIN SELECT RAISE(ABORT,'injected rekey failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RekeySession("old", "new"); err == nil {
+		t.Fatal("hook update failure did not reject the rekey")
+	}
+	old, err := s.SessionHooks("old")
+	if err != nil || len(old) != 1 || old[0].Runs != 2 {
+		t.Fatalf("rollback lost old hook runs: %+v %v", old, err)
+	}
+	if _, found, err := s.GetSession("old"); err != nil || !found {
+		t.Fatalf("rollback lost the old session: %v %v", found, err)
+	}
+	if _, err := s.db.Exec(`DROP TRIGGER fail_hook_rekey`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RekeySession("old", "new"); err != nil {
+		t.Fatal(err)
+	}
+	old, err = s.SessionHooks("old")
+	if err != nil || len(old) != 0 {
+		t.Fatalf("orphan hook runs: %+v %v", old, err)
+	}
+	got, err := s.SessionHooks("new")
+	if err != nil || len(got) != 1 || got[0].Runs != 2 || got[0].Errors != 0 || got[0].TotalMs != 12 || got[0].Chars != 4 {
+		t.Fatalf("rekey did not retain unique and canonical runs: %+v %v", got, err)
+	}
+}

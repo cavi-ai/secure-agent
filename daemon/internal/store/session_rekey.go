@@ -93,6 +93,11 @@ func (s *Store) rekeySession(oldID, newID string, provisional *model.Session) (e
 	if err := exec(`DELETE FROM events WHERE kind=13 AND session_id=? AND ts IN (SELECT ts FROM events WHERE kind=13 AND session_id=?)`, oldID, newID); err != nil {
 		return err
 	}
+	// A hook run is immutable and keyed by its transcript record. Retain
+	// the canonical copy when both identities have observed the same run.
+	if err := exec(`DELETE FROM hook_runs WHERE session_id=? AND run_id IN (SELECT run_id FROM hook_runs WHERE session_id=?)`, oldID, newID); err != nil {
+		return err
+	}
 	var target int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM sessions WHERE id=?`, newID).Scan(&target); err != nil {
 		return err
@@ -116,6 +121,7 @@ func (s *Store) rekeySession(oldID, newID string, provisional *model.Session) (e
 	}{
 		{`UPDATE sessions SET parent_id=CASE WHEN id=? THEN '' ELSE ? END WHERE parent_id=?`, []any{newID, newID, oldID}},
 		{`UPDATE events SET session_id=? WHERE session_id=?`, []any{newID, oldID}},
+		{`UPDATE hook_runs SET session_id=? WHERE session_id=?`, []any{newID, oldID}},
 		{`UPDATE flags SET session_id=? WHERE session_id=?`, []any{newID, oldID}},
 		{`UPDATE guard_decisions SET session_id=? WHERE session_id=?`, []any{newID, oldID}},
 		{`UPDATE resource_episodes SET session_id=?,episode_json=json_set(episode_json,'$.session_id',?) WHERE session_id=?`, []any{newID, newID, oldID}},
