@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/cavi-ai/secure-agent/daemon/hookrun"
+	"github.com/cavi-ai/secure-agent/daemon/hookrun/codex"
 )
 
 func handleHooks() {
@@ -36,7 +37,7 @@ func runHooks(in io.Reader, args []string) (err error) {
 	var decoder hookrun.Decoder
 	switch *format {
 	case "codex":
-		decoder = hookrun.CodexDecoder{}
+		decoder = codex.Decoder{}
 	case "record":
 		decoder = hookrun.RecordDecoder{}
 	default:

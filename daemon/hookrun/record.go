@@ -43,6 +43,17 @@ func (RecordDecoder) Decode(line []byte) (Record, bool, error) {
 }
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+
+// ExecutionID namespaces a host delivery ID without retaining native handler
+// IDs or paths. Hosts reuse deliveryID on retries, and assign it once per run.
+func ExecutionID(harness, deliveryID string) (string, error) {
+	id := harness + ":" + deliveryID
+	if !identifier.MatchString(harness) || !identifier.MatchString(deliveryID) || !identifier.MatchString(id) {
+		return "", errors.New("invalid hook execution id")
+	}
+	return id, nil
+}
+
 var label = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 var scriptLabel = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 

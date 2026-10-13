@@ -1,4 +1,4 @@
-package hookrun
+package codex
 
 import (
 	"encoding/json"
@@ -19,7 +19,7 @@ func TestCodexDecoderNormalizesMetadata(t *testing.T) {
 		{"completed", "inject"}, {"failed", "error"}, {"blocked", "block"}, {"stopped", "block"},
 	} {
 		t.Run(tc.native, func(t *testing.T) {
-			r, ok, err := (CodexDecoder{}).Decode(codexCompletion("delivery-1", tc.native))
+			r, ok, err := (Decoder{}).Decode(codexCompletion("delivery-1", tc.native))
 			if err != nil || !ok {
 				t.Fatalf("decoded=%v error=%v", ok, err)
 			}
@@ -40,9 +40,9 @@ func TestCodexDecoderNormalizesMetadata(t *testing.T) {
 }
 
 func TestCodexDeliveryIdentity(t *testing.T) {
-	a, _, _ := (CodexDecoder{}).Decode(codexCompletion("delivery-1", "completed"))
-	b, _, _ := (CodexDecoder{}).Decode(codexCompletion("delivery-2", "completed"))
-	retry, _, _ := (CodexDecoder{}).Decode(codexCompletion("delivery-1", "completed"))
+	a, _, _ := (Decoder{}).Decode(codexCompletion("delivery-1", "completed"))
+	b, _, _ := (Decoder{}).Decode(codexCompletion("delivery-2", "completed"))
+	retry, _, _ := (Decoder{}).Decode(codexCompletion("delivery-1", "completed"))
 	if a.ID == b.ID || a != retry {
 		t.Fatal("distinct runs collapsed or retry changed")
 	}
@@ -50,19 +50,19 @@ func TestCodexDeliveryIdentity(t *testing.T) {
 
 func TestCodexDecoderUsesOnlyExplicitSafeScriptLabel(t *testing.T) {
 	input := strings.Replace(string(codexCompletion("delivery-1", "completed")), `"notification":`, `"script":"guard.py","notification":`, 1)
-	r, ok, err := (CodexDecoder{}).Decode([]byte(input))
+	r, ok, err := (Decoder{}).Decode([]byte(input))
 	if err != nil || !ok || r.Script != "guard.py" {
 		t.Fatalf("script label = %q, %v, %v", r.Script, ok, err)
 	}
 	input = strings.Replace(input, `"script":"guard.py"`, `"script":"/home/private/guard.py"`, 1)
-	if _, _, err := (CodexDecoder{}).Decode([]byte(input)); err == nil {
+	if _, _, err := (Decoder{}).Decode([]byte(input)); err == nil {
 		t.Fatal("script path accepted")
 	}
 }
 
 func TestCodexDecoderSkipsOtherNotificationsAndRejectsBadCompletions(t *testing.T) {
 	for _, line := range []string{`{"method":"hook/started","params":{}}`, `{"method":"turn/completed"}`, `{"id":1,"result":{}}`} {
-		if _, ok, err := (CodexDecoder{}).Decode([]byte(line)); ok || err != nil {
+		if _, ok, err := (Decoder{}).Decode([]byte(line)); ok || err != nil {
 			t.Fatalf("unrelated notification: ok=%v err=%v", ok, err)
 		}
 	}
@@ -75,7 +75,7 @@ func TestCodexDecoderSkipsOtherNotificationsAndRejectsBadCompletions(t *testing.
 		string(codexCompletion("/home/private", "completed")),
 		`{"id":"x","notification":{"method":"hook/completed","params":{}}}`,
 	} {
-		if _, _, err := (CodexDecoder{}).Decode([]byte(line)); err == nil {
+		if _, _, err := (Decoder{}).Decode([]byte(line)); err == nil {
 			t.Fatal("bad completion accepted")
 		}
 	}

@@ -10,23 +10,27 @@ import (
 )
 
 func TestForwardedHookRunAttribution(t *testing.T) {
-	r := hookrun.Record{Type: "hook_run", Version: 1, Harness: "codex", SessionID: "thread-1", ID: "codex:delivery-1",
-		TS: time.Date(2026, 10, 13, 10, 0, 0, 0, time.UTC), Event: "PreToolUse", Status: "block", DurationMs: 12, Chars: 4}
-	data, err := json.Marshal(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var seen TraceSession
-	ts := &TranscriptScanner{OnSessionSeen: func(s TraceSession) { seen = s }}
-	events := ts.eventsForLine("/logs/activity.jsonl", string(data), 0, 0, nil)
-	if len(events) != 1 || events[0].Kind != event.KindHookRun || events[0].SessionID != r.SessionID || events[0].CallID != r.ID || events[0].ToolName != r.Event || events[0].ToolStatus != r.Status || events[0].DurationMs != 12 || events[0].Chars != 4 {
-		t.Fatalf("events = %+v", events)
-	}
-	if seen.Harness != "codex" || seen.ID != r.SessionID || !seen.At.Equal(r.TS) {
-		t.Fatalf("session = %+v", seen)
-	}
-	if ts.SessionForPath("/logs/activity.jsonl") != "" {
-		t.Fatal("shared activity log associated with a single session")
+	for _, harness := range []string{"claude", "codex", "openclaw", "hermes", "opencode"} {
+		t.Run(harness, func(t *testing.T) {
+			r := hookrun.Record{Type: "hook_run", Version: 1, Harness: harness, SessionID: "session-1", ID: harness + ":delivery-1",
+				TS: time.Date(2026, 10, 13, 10, 0, 0, 0, time.UTC), Event: "before_tool", Status: "block", DurationMs: 12, Chars: 4}
+			data, err := json.Marshal(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var seen TraceSession
+			ts := &TranscriptScanner{OnSessionSeen: func(s TraceSession) { seen = s }}
+			events := ts.eventsForLine("/logs/activity.jsonl", string(data), 0, 0, nil)
+			if len(events) != 1 || events[0].Kind != event.KindHookRun || events[0].SessionID != r.SessionID || events[0].CallID != r.ID || events[0].ToolName != r.Event || events[0].ToolStatus != r.Status || events[0].DurationMs != 12 || events[0].Chars != 4 {
+				t.Fatalf("events = %+v", events)
+			}
+			if seen.Harness != harness || seen.ID != r.SessionID || !seen.At.Equal(r.TS) {
+				t.Fatalf("session = %+v", seen)
+			}
+			if ts.SessionForPath("/logs/activity.jsonl") != "" {
+				t.Fatal("shared activity log associated with a single session")
+			}
+		})
 	}
 }
 
