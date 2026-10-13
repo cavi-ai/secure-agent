@@ -7,6 +7,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agentask"
+	"github.com/cavi-ai/secure-agent/daemon/internal/clutter"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
@@ -149,4 +150,24 @@ func readCleanupLedger(st cleanupLedgerStore, now time.Time, limit, days int) (m
 		out["daily"] = daily
 	}
 	return out, nil
+}
+
+// clutterAdvice maps each project to its stored advisor plan in one batch.
+// Plans are optional: a failed read keeps any valid plans.
+func clutterAdvice(reader advisorVerdictsReader, projects []clutter.ClutterProjectTotal) map[string]model.AdvisorVerdict {
+	subjectIDs := make([]string, len(projects))
+	for i, p := range projects {
+		subjectIDs[i] = advisor.ProjectSubjectID(p.Project)
+	}
+	verdicts, _ := reader.AdvisorVerdictsFor(subjectIDs, "project")
+	var out map[string]model.AdvisorVerdict
+	for i, p := range projects {
+		if v, ok := verdicts[subjectIDs[i]]; ok {
+			if out == nil {
+				out = map[string]model.AdvisorVerdict{}
+			}
+			out[p.Project] = v
+		}
+	}
+	return out
 }

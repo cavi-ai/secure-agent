@@ -2178,9 +2178,12 @@ func (s *Store) DeleteGuardPathAllow(agent, ruleID, path string) (removed bool, 
 	return n > 0, nil
 }
 
-func (s *Store) PutGuardRule(g GuardRule) {
+// PutGuardRule saves an agent's rule-wide answer. A failed save is returned
+// and stays in write health until a later save succeeds.
+func (s *Store) PutGuardRule(g GuardRule) (writeErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { s.noteWrite("guard rules", writeErr) }()
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.Exec(
 		`INSERT INTO guard_rules (agent, rule_id, decision, source, created_at)
@@ -2190,7 +2193,9 @@ func (s *Store) PutGuardRule(g GuardRule) {
 	)
 	if err != nil {
 		log.Printf("store: failed to put guard rule %s/%s: %v", g.Agent, g.RuleID, err)
+		return fmt.Errorf("put guard rule: %w", err)
 	}
+	return nil
 }
 
 func (s *Store) LookupGuardRule(agent, ruleID string) (GuardRule, bool) {

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { loadDrawer } from './drawer-harness.mjs';
 
 const web = new URL('../../../daemon/internal/api/web_dist/', import.meta.url);
 const app = readFileSync(new URL('app.js', web), 'utf8');
@@ -21,28 +22,25 @@ function context() {
 function controller() {
   const requests = [], announcements = [], drawers = [];
   const c = context();
-  const body = { innerHTML: '', contains: () => false, querySelectorAll: () => [], scrollTop: 0 };
-  Object.assign(c, { selectedSessionId: 'session-a', sessionEnded: false, handoffGeneration: 0, drawerSeq: 0,
-    drawerMode: null, drawerBack: null, drawerReviewResult: null, reviewResult: null, attentionSelection: null,
-    drawer: { hidden: true }, drawerBody: body, document: { activeElement: null }, btnDrawerCopy: {}, btnDrawerClose: { focus() {} },
+  const h = loadDrawer({ deps: { collaborators: { auth: { ended: () => c.sessionEnded, generation: () => c.handoffGeneration } } } });
+  const body = Object.assign(h.dom.body, { contains: () => false, querySelectorAll: () => [], scrollTop: 0 });
+  Object.assign(c, { selectedSessionId: 'session-a', sessionEnded: false, handoffGeneration: 0, reviewResult: null,
+    drawer: h.dom.drawer, drawerBody: body, document: h.dom.document, btnDrawerClose: h.dom.closeButton,
+    detailDrawer: { ...h.api, open: options => { drawers.push(options); return h.api.open(options); } },
     sessionOutcomes: { session_id: 'session-a', history: { reviews: [{ id: 'review-a', decision: { revision: 1, at, scope_ids: receipt.ids } }] } },
     patchSessionDetail: (_el, _id, html) => { body.innerHTML = html; },
-    openDrawer: options => { drawers.push(options); c.drawerSeq++; c.drawer.hidden = false; if (options.body) body.innerHTML = options.body; },
-    closeDrawer: () => { c.drawer.hidden = true; c.drawerMode = null; },
     apiFetch: (url, options) => new Promise(resolve => requests.push({ url, options, resolve })),
   });
   c.window.saConfirm = async () => true;
   c.window.saAnnounce = text => announcements.push(text);
   const start = app.indexOf('  // Permissions from one saved decision');
-  const end = app.indexOf('  // Uninspected-egress drill-down:', start);
+  const end = app.indexOf('  const familyByKey = key =>', start);
   assert.ok(start >= 0 && end > start, 'permission controller exists');
   c.sessionWorkbench = { get selectedSessionId() { return c.selectedSessionId; }, get sessionOutcomes() { return c.sessionOutcomes; } };
   vm.runInContext(app.slice(start, end), c);
   const resultStart = app.indexOf('  window.openReviewResult = function(');
   vm.runInContext(app.slice(resultStart, app.indexOf('  // Review pagination', resultStart)), c);
-  const backStart = app.indexOf('  function currentDrawerBack()');
-  vm.runInContext(app.slice(backStart, app.indexOf('  function fillFamilyDrawer()', backStart)), c);
-  return { c, body, requests, announcements, drawers,
+  return { c, h, body, requests, announcements, drawers,
     answer(i, payload, status = 200) { requests[i].resolve({ ok: status === 200, status, json: async () => payload }); } };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -60,13 +58,14 @@ test('result permissions use the original receipt without requiring session hist
   t.answer(0, [scope(), scope('unrelated')]); await open;
   assert.match(t.body.innerHTML, /scope-missing/);
   assert.doesNotMatch(t.body.innerHTML, /unrelated/);
-  assert.equal(t.drawers[1].back.label, 'Review result');
-  t.drawers[1].back.reopen();
+  const back = t.drawers[0].back;
+  assert.equal(back.label, 'Review result');
+  back.reopen();
   assert.match(t.body.innerHTML, /review-a|\/work\/a\/\.env/);
   assert.doesNotMatch(t.body.innerHTML, /new-review|unrelated/);
   assert.deepEqual(original.receipt.scope_ids, receipt.ids);
-  t.c.handoffGeneration++; t.drawers[1].back.reopen();
-  assert.equal(t.drawers.length, 3, 'the return cannot cross authentication');
+  t.c.handoffGeneration++; back.reopen();
+  assert.equal(t.h.calls.closedDocks, 3, 'the return cannot cross authentication');
 });
 
 test('result permissions remain tied to their drawer and authentication while session views change', async () => {
@@ -90,7 +89,7 @@ test('result permission entry rejects once-only, malformed, hidden, and expired-
     t.c.window.openReviewResult(result); await t.c.window.openReviewResultPermissions();
     assert.equal(t.requests.length, 0);
   }
-  for (const change of [c => { c.drawer.hidden = true; }, c => { c.drawerMode = 'flag'; }, c => { c.sessionEnded = true; }]) {
+  for (const change of [c => { c.drawer.hidden = true; }, c => { c.detailDrawer.setMode('flag'); }, c => { c.sessionEnded = true; }]) {
     const t = controller(); t.c.window.openReviewResult(savedResult()); change(t.c);
     await t.c.window.openReviewResultPermissions(); assert.equal(t.requests.length, 0);
   }
@@ -115,13 +114,13 @@ test('result permission revocation confirms only its linked scope and preserves 
   t.answer(1, { revoked: true, id: 'scope-a' }); await settle();
   t.answer(2, [scope('scope-a', { revoked_at: at, applicability: { label: 'Revoked', revoke: false } })]); await revoke;
   assert.match(t.body.innerHTML, /Revocation saved/);
-  t.drawers[1].back.reopen();
+  t.drawers[0].back.reopen();
   assert.match(t.body.innerHTML, /Scoped permission recorded/);
   assert.deepEqual(result.receipt.scope_ids, receipt.ids);
 });
 
 test('a delayed result permission confirmation cannot revoke after authentication or drawer changes', async () => {
-  for (const invalidate of [c => { c.handoffGeneration++; }, c => { c.drawerSeq++; }, c => { c.sessionEnded = true; }]) {
+  for (const invalidate of [c => { c.handoffGeneration++; }, c => { c.detailDrawer.open({ title: 'Another' }); }, c => { c.sessionEnded = true; }]) {
     const t = controller(); t.c.window.openReviewResult(savedResult());
     const open = t.c.window.openReviewResultPermissions(); t.answer(0, [scope()]); await open;
     let confirm; t.c.window.saConfirm = () => new Promise(resolve => { confirm = resolve; });
@@ -232,7 +231,7 @@ test('opening and retrying read only the canonical scope endpoint, retaining evi
 });
 
 test('late reads and delayed confirmations cannot populate another drawer or mutate after selection/auth changes', async () => {
-  for (const invalidate of [c => c.drawerSeq++, c => { c.selectedSessionId = 'b'; }, c => c.handoffGeneration++, c => { c.sessionEnded = true; }]) {
+  for (const invalidate of [c => c.detailDrawer.open({ title: 'Another' }), c => { c.selectedSessionId = 'b'; }, c => c.handoffGeneration++, c => { c.sessionEnded = true; }]) {
     const t = controller();
     const open = t.c.window.openSessionPermissions('review-a', 'session-a');
     invalidate(t.c); t.body.innerHTML = 'new view'; t.answer(0, [scope()]); await open;

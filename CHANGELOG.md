@@ -116,6 +116,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Fleet: security alerts keep delivery capacity when traces fill the queue.
 - Fleet: delivery logs are capped at 5 MiB with one backup, and the collector keeps critical counts through replay.
 - Forensic archive: kept when rotation fails.
+- Guard: an **Always** answer that cannot be saved applies to that request only and shows in Doctor.
 - Incidents: a report opens from any aggregated flag, workflow actions change only that report, and it keeps its newest evidence time, original flag and saved remediation; a duplicate never replaces it.
 - Menu bar: a hidden status item is recreated once per loss.
 - Menu bar: an action's result stays visible after its finding leaves the queue.
