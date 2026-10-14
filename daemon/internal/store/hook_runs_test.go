@@ -44,9 +44,9 @@ func TestSessionHooksSummarizesRunsPerHook(t *testing.T) {
 	last := at.Add(time.Second).Format("2006-01-02T15:04:05") + ".000000000Z"
 	first := at.Format("2006-01-02T15:04:05") + ".000000000Z"
 	want := []HookSummary{
-		{Event: "PreToolUse", Script: "secret_guard.py", Runs: 2, Errors: 1, TotalMs: 70, LastAt: last},
-		{Event: "PreToolUse", Script: "", Runs: 1, Blocks: 1, Chars: 9, LastAt: first},
-		{Event: "UserPromptSubmit", Script: "user-prompt-hook.sh", Runs: 1, Chars: 11, TotalMs: 16, LastAt: first},
+		{Event: "PreToolUse", Script: "secret_guard.py", Runs: 2, Errors: 1, TotalMs: 70, DurationSamples: 2, LastAt: last},
+		{Event: "PreToolUse", Script: "", Runs: 1, Blocks: 1, Chars: 9, CharSamples: 1, LastAt: first},
+		{Event: "UserPromptSubmit", Script: "user-prompt-hook.sh", Runs: 1, Chars: 11, TotalMs: 16, DurationSamples: 1, CharSamples: 1, LastAt: first},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("summary =\n%+v\nwant\n%+v", got, want)

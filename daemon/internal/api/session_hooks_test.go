@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -60,6 +62,99 @@ func TestSessionHooksEndpoint(t *testing.T) {
 	decodeInto(t, resp, &tl)
 	if len(tl) != 1 || tl[0].Kind != event.KindToolCall {
 		t.Fatalf("timeline = %+v, want only the tool call", tl)
+	}
+}
+
+func TestHookEvidenceReachesOverviewAndAttention(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_hh_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	st := testStore(t)
+	now := time.Now().UTC()
+	if err := st.UpsertSession(model.Session{ID: "s", Harness: "hermes", StartedAt: now.Add(-time.Hour), LastSeenAt: now, Status: model.SessionActive}); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(t.TempDir(), "activity.jsonl")
+	if err := os.WriteFile(logPath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New(16)
+	defer b.Close()
+	sub := b.Subscribe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scanner := collect.NewTranscriptScanner(b, []string{logPath})
+	go scanner.Run(ctx)
+	time.Sleep(250 * time.Millisecond)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		input := fmt.Sprintf(`{"type":"hook_completed","version":2,"harness":"hermes","session_id":"s","id":"delivery-%d","ts":%q,"event":"pre_tool_call","script":"guard.py","state":"error","duration_ms":0,"evidence":{"handler_id":"h","config_id":"c","reason_code":"timeout","control_role":"security","action_outcome":"proceeded"}}`, i, now.Add(time.Duration(i-5)*time.Second).Format(time.RFC3339Nano))
+		r, ok, err := (hermes.Decoder{}).Decode([]byte(input))
+		if err != nil || !ok {
+			t.Fatalf("decode: %v", err)
+		}
+		data, _ := json.Marshal(r)
+		if _, err := f.Write(append(data, '\n')); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		select {
+		case e := <-sub:
+			if _, err := st.PutEvent(e); err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("missing forwarded run")
+		}
+	}
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+	resp, err := unixClient(sock).Get("http://unix/sessions/s/overview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overview SessionOverview
+	decodeInto(t, resp, &overview)
+	if overview.HookHealth == nil || !overview.HookHealth.Available || len(overview.HookHealth.Findings) != 1 || overview.HookHealth.Findings[0].Title != "Security hook repeatedly failed" {
+		t.Fatalf("overview = %+v", overview)
+	}
+	resp, err = unixClient(sock).Get("http://unix/posture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var posture Posture
+	decodeInto(t, resp, &posture)
+	count := 0
+	for _, g := range posture.Groups {
+		for _, item := range g.Items {
+			if item.Kind == "hook" {
+				count++
+				if item.SessionID != "s" || item.HookFinding == nil || item.HookFinding.ID != overview.HookHealth.Findings[0].ID {
+					t.Fatalf("lost attribution: %+v", item)
+				}
+			}
+		}
+	}
+	if count != 1 || posture.NeedsYou != 1 {
+		t.Fatalf("attention=%+v", posture)
+	}
+	if err := st.EndSession("s", now); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = unixClient(sock).Get("http://unix/posture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodeInto(t, resp, &posture)
+	if posture.NeedsYou != 0 {
+		t.Fatalf("ended session retained live repair attention: %+v", posture)
 	}
 }
 
@@ -113,10 +208,27 @@ func TestForwardedNativeHooksReachSessionAPI(t *testing.T) {
 			}
 		}
 	}
+	// Native Codex identity alone must attribute repeated failures. No host
+	// evidence mapping is supplied, and replayed delivery IDs stay idempotent.
+	now := time.Now().UTC()
+	if err := st.UpsertSession(model.Session{ID: "codex-repair", Harness: "codex", StartedAt: now.Add(-time.Minute), Status: model.SessionActive}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"native-0", "native-1", "native-2", "native-0"} {
+		line := fmt.Sprintf(`{"id":%q,"notification":{"method":"hook/completed","params":{"threadId":"codex-repair","run":{"id":"pre-tool-use:0:/home/example/hooks.json","eventName":"preToolUse","status":"failed","completedAt":%d,"durationMs":5,"entries":[]}}}}`, id, now.Add(-5*time.Second).Unix())
+		r, ok, err := (codex.Decoder{}).Decode([]byte(line))
+		if err != nil || !ok {
+			t.Fatalf("native decode: %v", err)
+		}
+		data, _ := json.Marshal(r)
+		if _, err := f.Write(append(data, '\n')); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for range 3 * len(adapters) {
+	for range 3*len(adapters) + 4 {
 		select {
 		case e := <-sub:
 			if e.Kind != event.KindHookRun {
@@ -149,5 +261,18 @@ func TestForwardedNativeHooksReachSessionAPI(t *testing.T) {
 		if err != nil || len(timeline) != 0 {
 			t.Fatalf("hook leaked into timeline: %+v %v", timeline, err)
 		}
+	}
+	resp, err := unixClient(sock).Get("http://unix/sessions/codex-repair/overview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overview SessionOverview
+	decodeInto(t, resp, &overview)
+	if overview.HookHealth == nil || len(overview.HookHealth.Findings) != 1 {
+		t.Fatalf("native identity did not reach findings: %+v", overview.HookHealth)
+	}
+	finding := overview.HookHealth.Findings[0]
+	if finding.Kind != "execution-errors" || finding.Count != 3 || !strings.HasPrefix(finding.HandlerID, "codex-handler:") || finding.ConfigID != "" {
+		t.Fatalf("native finding = %+v", finding)
 	}
 }

@@ -1791,7 +1791,8 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .sd-outcome h5 { margin: 0; font-size: 13px; }
 .sd-outcome time { font: 11px/1.4 var(--mono); color: var(--tx-2); }
 .sd-outcome p { margin: 6px 0; font-size: 12px; }
-.sd-hooks { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+.sd-hooks-scroll { max-width: 100%; overflow-x: auto; }
+.sd-hooks { width: 100%; min-width: 720px; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
 .sd-hooks th, .sd-hooks td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; overflow-wrap: anywhere; }
 .sd-hooks th { color: var(--tx-2); font-weight: 600; }
 .sd-hooks :is(th, td):nth-child(n+3) { text-align: right; font-family: var(--mono); }

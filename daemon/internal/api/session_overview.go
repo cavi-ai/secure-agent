@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/hookhealth"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -13,13 +14,14 @@ import (
 // SessionOverview keeps current controls separate from retained evidence.
 // Attribution is never inferred from a shared workspace or harness name.
 type SessionOverview struct {
-	SessionID         string            `json:"session_id"`
-	ObservedAt        time.Time         `json:"observed_at"`
-	Requests          []AttentionItem   `json:"requests"`
-	Findings          []SessionFinding  `json:"findings"`
-	FindingsTruncated bool              `json:"findings_truncated"`
-	Coverage          *SessionCoverage  `json:"coverage"`
-	Resources         *SessionResources `json:"resources"`
+	SessionID         string                 `json:"session_id"`
+	ObservedAt        time.Time              `json:"observed_at"`
+	Requests          []AttentionItem        `json:"requests"`
+	Findings          []SessionFinding       `json:"findings"`
+	FindingsTruncated bool                   `json:"findings_truncated"`
+	Coverage          *SessionCoverage       `json:"coverage"`
+	Resources         *SessionResources      `json:"resources"`
+	HookHealth        *hookhealth.Assessment `json:"hook_health"`
 }
 
 type SessionFinding struct {
@@ -54,6 +56,11 @@ func (a *API) serveSessionOverview(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 	live := sessionOverviewLive{Now: time.Now().UTC(), StatusAvailable: a.statusFn != nil}
+	hooks, hookErr := a.store.SessionHookHealth(id, live.Now)
+	if hookErr != nil {
+		hooks = hookhealth.Assessment{Available: false, Findings: []hookhealth.Finding{}}
+	}
+	evidence.HookHealth = &hooks
 	if a.guardBroker != nil {
 		live.Pending = a.guardBroker.Pending()
 	}

@@ -26,3 +26,15 @@ func TestCompletionEnvelopeRejectsInvalidMetadata(t *testing.T) {
 		t.Fatalf("metadata=%+v %v %v", r, ok, err)
 	}
 }
+
+func TestCompletionEvidencePreservesAttributionAndKnownZero(t *testing.T) {
+	line := []byte(`{"type":"hook_completed","version":2,"harness":"hermes","id":"r","session_id":"s","ts":"2026-10-13T10:00:00Z","event":"pre_tool_call","state":"error","duration_ms":0,"evidence":{"handler_id":"h","reason_code":"timeout"}}`)
+	_, r, _, err := DecodeCompletion(line, "hermes")
+	if err != nil || r.Evidence == nil || r.Evidence.HandlerID != "h" || !r.Evidence.DurationKnown {
+		t.Fatalf("lost evidence: %+v %v", r, err)
+	}
+	_, r, _, err = DecodeCompletion([]byte(strings.Replace(string(line), `"duration_ms":0,`, "", 1)), "hermes")
+	if err != nil || r.Evidence.DurationKnown {
+		t.Fatalf("missing duration became zero: %+v %v", r, err)
+	}
+}

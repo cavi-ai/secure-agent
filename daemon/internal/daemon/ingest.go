@@ -32,6 +32,9 @@ type ingestDeps struct {
 	PostureChanged func()
 	Advisor        func() *advisor.Subscriber
 	NewFlag        func(model.Flag)
+	// Defaults to the bounded production writer. Persistence fixtures can use
+	// the store's deadline-free writer without changing production behavior.
+	RecordEgressObservation func(store.EgressObservation) error
 }
 
 // eventIngest owns persistence ordering and the bounded, best-effort egress
@@ -52,11 +55,14 @@ func newEventIngest(d ingestDeps) *eventIngest {
 	if d.Store == nil || d.Correlator == nil || d.Resolver == nil || d.Tagger == nil {
 		panic("event ingest requires store, correlator, resolver, and tagger")
 	}
+	if d.RecordEgressObservation == nil {
+		d.RecordEgressObservation = d.Store.RecordEgressObservation
+	}
 	i := &eventIngest{deps: d, analyzer: intel.NewAnalyzer(), projection: make(chan store.EgressObservation, 128), projectionDone: make(chan struct{}), done: make(chan struct{})}
 	go func() {
 		defer close(i.projectionDone)
 		for observation := range i.projection {
-			err := d.Store.RecordEgressObservation(observation)
+			err := d.RecordEgressObservation(observation)
 			if d.Store.NoteEgressProjectionWrite(err) && d.PostureChanged != nil {
 				d.PostureChanged()
 			}

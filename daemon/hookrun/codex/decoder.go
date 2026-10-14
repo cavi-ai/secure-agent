@@ -17,9 +17,10 @@ var _ hookrun.Decoder = Decoder{}
 
 func (Decoder) Decode(line []byte) (hookrun.Record, bool, error) {
 	var envelope struct {
-		ID           json.RawMessage `json:"id"`
-		Notification json.RawMessage `json:"notification"`
-		Script       string          `json:"script"`
+		ID           json.RawMessage   `json:"id"`
+		Notification json.RawMessage   `json:"notification"`
+		Script       string            `json:"script"`
+		Evidence     *hookrun.Evidence `json:"evidence"`
 	}
 	if json.Unmarshal(line, &envelope) != nil {
 		return hookrun.Record{}, false, errors.New("invalid notification JSON")
@@ -49,6 +50,7 @@ func (Decoder) Decode(line []byte) (hookrun.Record, bool, error) {
 	var params struct {
 		ThreadID string `json:"threadId"`
 		Run      struct {
+			ID          string `json:"id"`
 			EventName   string `json:"eventName"`
 			Status      string `json:"status"`
 			CompletedAt *int64 `json:"completedAt"`
@@ -66,12 +68,30 @@ func (Decoder) Decode(line []byte) (hookrun.Record, bool, error) {
 	if !found || params.Run.CompletedAt == nil || *params.Run.CompletedAt <= 0 {
 		return hookrun.Record{}, true, errors.New("hook completion requires a supported event and completion time")
 	}
-	r := hookrun.Record{Type: "hook_run", Version: 1, Harness: "codex", SessionID: params.ThreadID,
+	evidence := envelope.Evidence
+	if evidence == nil {
+		evidence = &hookrun.Evidence{}
+	}
+	if evidence.HandlerID == "" {
+		evidence.HandlerID = nativeHandlerID(params.Run.ID)
+	}
+	evidence.DurationKnown = params.Run.DurationMs != nil
+	evidence.CharsKnown = params.Run.Entries != nil
+	contextChars := int64(0)
+	evidence.ContextChars = nil
+	if evidence.CharsKnown {
+		evidence.ContextChars = &contextChars
+	}
+	r := hookrun.Record{Type: "hook_run", Version: 2, Harness: "codex", SessionID: params.ThreadID,
 		ID: executionID, TS: time.Unix(*params.Run.CompletedAt, 0).UTC(), Event: eventName, Script: envelope.Script}
+	r.Evidence = evidence
 	if params.Run.DurationMs != nil {
 		r.DurationMs = *params.Run.DurationMs
 	}
 	for _, entry := range params.Run.Entries {
+		if entry.Kind == "context" {
+			contextChars += int64(utf8.RuneCountInString(entry.Text))
+		}
 		// Only model-facing context and decision feedback count as returned
 		// characters. UI warnings, diagnostics and status messages do not.
 		switch entry.Kind {

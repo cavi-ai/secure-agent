@@ -408,7 +408,7 @@ func TestStartDrainLoopPersistsAndCloses(t *testing.T) {
 	b := bus.New(64)
 	res := session.NewResolver(st, tagger)
 	var offered []model.Flag // the local agent's automatic review hook
-	done := runEventIngest(b.Subscribe(), ingestDeps{Store: st, Correlator: cr, Fleet: fleet.NewPublisher(), Resolver: res, Tagger: tagger, NewFlag: func(fl model.Flag) { offered = append(offered, fl) }}).Done()
+	done := runEventIngest(b.Subscribe(), ingestDeps{Store: st, Correlator: cr, Fleet: fleet.NewPublisher(), Resolver: res, Tagger: tagger, RecordEgressObservation: st.RecordEgressObservationForTest, NewFlag: func(fl model.Flag) { offered = append(offered, fl) }}).Done()
 
 	now := time.Now()
 	b.Publish(event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"})

@@ -180,6 +180,20 @@ func initializeSchema(db *sql.DB) error {
 		}
 	}
 	// NULL preserves legacy incidents as having no operator step reports.
+	for _, col := range []struct{ name, typ string }{{"harness", "TEXT NOT NULL DEFAULT ''"}, {"evidence_json", "TEXT NOT NULL DEFAULT '{}'"}} {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('hook_runs') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := tx.Exec(`ALTER TABLE hook_runs ADD COLUMN ` + col.name + ` ` + col.typ); err != nil {
+				return fmt.Errorf("migrate hook metadata: %w", err)
+			}
+		}
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_hook_runs_session_time ON hook_runs(session_id, ` + timestampOrderExpr("ts") + ` DESC, run_id DESC)`); err != nil {
+		return err
+	}
 	var remediationN int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('incidents') WHERE name='remediation_json'`).Scan(&remediationN); err != nil {
 		return err

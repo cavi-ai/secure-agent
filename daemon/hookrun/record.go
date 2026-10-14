@@ -23,6 +23,7 @@ type Record struct {
 	Status     string    `json:"status"`
 	DurationMs int64     `json:"duration_ms"`
 	Chars      int64     `json:"chars"`
+	Evidence   *Evidence `json:"evidence,omitempty"`
 }
 
 // Decoder converts one host event into a completed hook record. Unrelated
@@ -60,7 +61,7 @@ var scriptLabel = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 // Validate enforces the versioned metadata contract before it crosses the
 // collection boundary. Error messages never include rejected input values.
 func (r Record) Validate() error {
-	if r.Type != "hook_run" || r.Version != 1 {
+	if r.Type != "hook_run" || (r.Version != 1 && r.Version != 2) {
 		return errors.New("unsupported hook record version")
 	}
 	switch r.Harness {
@@ -82,6 +83,12 @@ func (r Record) Validate() error {
 	if r.TS.IsZero() || r.TS.Year() < 1 || r.TS.Year() > 9999 || r.DurationMs < 0 || r.Chars < 0 {
 		return errors.New("invalid hook time or count")
 	}
+	if r.Version == 1 && r.Evidence != nil || r.Version == 2 && r.Evidence == nil {
+		return errors.New("hook evidence requires version 2")
+	}
+	if r.Evidence != nil {
+		return r.Evidence.Validate()
+	}
 	return nil
 }
 
@@ -102,6 +109,15 @@ func DecodeRecord(line []byte) (Record, bool, error) {
 	d.DisallowUnknownFields()
 	if d.Decode(&r) != nil {
 		return Record{}, true, errors.New("invalid hook record")
+	}
+	if r.Evidence != nil {
+		var measured struct {
+			DurationMs *int64 `json:"duration_ms"`
+			Chars      *int64 `json:"chars"`
+		}
+		if json.Unmarshal(line, &measured) != nil || (r.Evidence.DurationKnown && measured.DurationMs == nil) || (r.Evidence.CharsKnown && measured.Chars == nil) {
+			return Record{}, true, errors.New("known hook measurements require numeric values")
+		}
 	}
 	return r, true, r.Validate()
 }

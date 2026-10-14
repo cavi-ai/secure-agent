@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/hookhealth"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 )
@@ -41,6 +42,8 @@ type AttentionItem struct {
 	Disposition *model.Disposition       `json:"disposition,omitempty"`
 	Assessment  *model.FindingAssessment `json:"assessment,omitempty"`
 	Review      *model.ReviewRecord      `json:"review,omitempty"`
+	SessionID   string                   `json:"session_id,omitempty"`
+	HookFinding *hookhealth.Finding      `json:"hook_finding,omitempty"`
 }
 
 // AttentionGroup is one agent session, an explicit unattributed bucket, or
@@ -257,6 +260,19 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 		}
 		items = append(items, headline)
 		g.Items = append(g.Items, item)
+	}
+
+	// Hook repair findings retain durable identity without borrowing a PID or
+	// another session merely because its harness or workspace matches.
+	for _, hf := range in.HookFindings {
+		f := hf.Finding
+		key := "durable-session:" + hf.SessionID
+		g := groups[key]
+		if g == nil {
+			g = &AttentionGroup{Key: key, Label: "Session " + hf.SessionID, Agent: f.Harness, Items: []AttentionItem{}}
+			groups[key] = g
+		}
+		add(g, PostureItem{Kind: "hook", ID: f.ID, Title: f.Title, Severity: 1, Detail: f.Detail, Timestamp: f.LastAt.UTC().Format(time.RFC3339Nano)}, AttentionItem{Kind: "hook", Priority: 1, ID: f.ID, SessionID: hf.SessionID, Title: f.Title, Detail: f.Detail, HookFinding: &f})
 	}
 
 	// Flags — the security signal. Unacted only, and only when the

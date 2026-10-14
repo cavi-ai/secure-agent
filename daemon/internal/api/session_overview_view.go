@@ -4,15 +4,17 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
+	"github.com/cavi-ai/secure-agent/daemon/internal/hookhealth"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 type sessionOverviewEvidence struct {
-	Session   model.Session
-	Findings  []SessionFinding
-	Truncated bool
+	Session    model.Session
+	Findings   []SessionFinding
+	Truncated  bool
+	HookHealth *hookhealth.Assessment
 }
 
 // readSessionOverviewEvidence maps retained session findings onto console
@@ -49,6 +51,7 @@ func composeSessionOverview(id string, evidence sessionOverviewEvidence, live se
 		Requests:          []AttentionItem{},
 		Findings:          evidence.Findings,
 		FindingsTruncated: evidence.Truncated,
+		HookHealth:        evidence.HookHealth,
 	}
 	for _, p := range live.Pending {
 		if p.SessionID == id {

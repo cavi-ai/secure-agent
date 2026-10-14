@@ -954,8 +954,26 @@ Current access requests, retained findings, observed coverage and machine impact
 - `findings` contains the latest 20 session-attributed findings, including reviewed findings. Each carries `id`, `title`, `at` and the existing finding `assessment`; review does not erase risk. `findings_truncated` signals additional history.
 - `coverage` is the existing session coverage projection, or `null` without an unambiguous live process match.
 - `resources` carries `key`, `observed_at`, `rss_bytes`, `cpu_percent`, `process_count`, `diagnoses` and optional `control`. It requires the same root PID, start time and harness as the live session; otherwise it is `null`.
+- `hook_health` carries `available`, `since`, `until`, `observed_runs`, `unattributed_runs`, `truncated` and up to 20 `findings` from the latest 1,000 completions within 30 minutes. Findings include stable identity, evidence counts/times, `needs_action`, `next_action` and `limits`. A hook read failure sets `available: false` without discarding other session evidence. These are operational diagnoses, not protection coverage. See [hook findings](HOOKS.md#actionable-findings).
 - Ended sessions retain findings without claiming live coverage or resources. Workspace similarity does not confer attribution.
 - An unknown session returns `404`; a failed session or findings read returns `503`. The console retains the previous response with a stale warning and disables its controls until refreshed.
+
+### `GET /sessions/{id}/hooks`
+
+Read-level; console-allowed. Returns hook history totals grouped by harness,
+event, script, handler identity and configuration when supplied. Fields are
+`event`, `script`, `harness`, `handler_id`, `config_id`, `runs`, `errors`,
+`cancelled`, `blocks`, `chars`, `total_ms`, `duration_samples`, `char_samples`
+and `last_at`. Optional identities are omitted when unknown. Errors exclude
+cancellations. Measurement sample counts distinguish unknown values from
+measured zero and identify partial totals; runtime can include overlapping
+callbacks. A failed read returns `503`.
+
+Live-session repair findings also enter `/posture` as kind `hook`, priority 1,
+with `session_id` and `hook_finding`. Advisories stay in the session. Global
+analysis is bounded to the latest 1,000 live-session completions and 20 repair
+findings; a `hook_analysis_limit` coverage note reports truncation without
+claiming a monitoring outage.
 
 ### 18c. `GET /routing/claude`
 

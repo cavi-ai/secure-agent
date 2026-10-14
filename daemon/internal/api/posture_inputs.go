@@ -19,6 +19,11 @@ func (a *API) loadPostureInputs(st Status, patterns []model.Pattern, routine []m
 		in.Pending = a.guardBroker.Pending()
 	}
 	in = loadPostureEvidence(a.store, in)
+	var hookErr error
+	in.HookFindings, in.HookHealthTruncated, hookErr = a.store.ActiveHookFindings(in.Generated)
+	if hookErr != nil {
+		in.FailedReads = append(in.FailedReads, "hook health")
+	}
 	in.Status = a.evidenceStatus(st)
 	in.HookGap = guardHookUnregisteredItem(in.Status)
 	return in

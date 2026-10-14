@@ -38,6 +38,9 @@ func TestHooksRecorderWritesOnlyCompletionMetadata(t *testing.T) {
 		if r.ID != "codex:delivery-1" || r.Status != "block" || r.Chars != 15 || r.DurationMs != 7 {
 			t.Fatalf("record = %+v", r)
 		}
+		if r.Evidence == nil || r.Evidence.HandlerID == "" {
+			t.Fatal("recorder lost native handler identity")
+		}
 		if bytes.Contains(line, []byte("/home/")) || bytes.Contains(line, []byte("retry carefully")) {
 			t.Fatal("private input persisted")
 		}
