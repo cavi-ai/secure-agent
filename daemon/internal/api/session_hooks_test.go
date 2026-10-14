@@ -173,8 +173,15 @@ func TestHookEvidenceReachesOverviewAndAttention(t *testing.T) {
 	var posture Posture
 	decodeInto(t, resp, &posture)
 	count := 0
+	deliveryCount := 0
 	for _, g := range posture.Groups {
 		for _, item := range g.Items {
+			if item.Kind == "hook_delivery" {
+				deliveryCount++
+				if item.SessionID != "report-only" || item.HookDelivery == nil {
+					t.Fatalf("delivery scope lost: %+v", item)
+				}
+			}
 			if item.Kind == "hook" {
 				count++
 				if item.SessionID != "s" || item.HookFinding == nil || item.HookFinding.ID != overview.HookHealth.Findings[0].ID {
@@ -183,7 +190,7 @@ func TestHookEvidenceReachesOverviewAndAttention(t *testing.T) {
 			}
 		}
 	}
-	if count != 1 || posture.NeedsYou != 1 {
+	if count != 1 || deliveryCount != 1 || posture.NeedsYou != 2 {
 		t.Fatalf("attention=%+v", posture)
 	}
 	if err := st.EndSession("s", now); err != nil {
@@ -194,7 +201,7 @@ func TestHookEvidenceReachesOverviewAndAttention(t *testing.T) {
 		t.Fatal(err)
 	}
 	decodeInto(t, resp, &posture)
-	if posture.NeedsYou != 0 {
+	if posture.NeedsYou != 1 || len(posture.Items) != 1 || posture.Items[0].Kind != "hook_delivery" {
 		t.Fatalf("ended session retained live repair attention: %+v", posture)
 	}
 }

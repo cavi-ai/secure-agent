@@ -41,6 +41,61 @@ policy or automatic permission changes.
 
 ## Ingestion diagnostics
 
+### Delivery issues in Attention
+
+Recent, valid host reports with active source, capture, delivery or persistence
+errors create one Attention item per forwarding instance. Inspect delivery opens
+the same assessment used by session diagnostics, including queue counts,
+persistence when reported, safe error codes and specific recovery guidance.
+Explicit session scope is retained; an unscoped host report does not borrow a
+session, workspace or process identity.
+
+Backlog, cumulative delivery failures, an intentional source disconnect and a
+previous failed report attempt do not by themselves create an active alert. A
+new report clearing the active errors removes the alert. Reported drops remain
+a separate evidence gap. Stale or unverified error reports move to monitoring
+coverage as unknown; they are never described as recovered. Reports and these
+assessments describe the current daemon run, not a durable incident history.
+
+### Inspecting recorded evidence
+
+Findings and attributed history groups link to their recorded runs. The evidence
+drawer reads up to 100 matching completions from the last 30 minutes, filtered
+by the exact session, harness, event, script, handler and configuration. It
+shows outcomes, safe reason codes, reported action outcomes and measured values;
+unknown measurements remain unknown. Older rows without handler identity can
+be inspected as their event/script group without creating a handler diagnosis.
+
+Truncation and the evidence window are visible. Equal timestamps do not establish
+execution order. An empty window or a failed read does not confirm recovery or
+prove that no hooks ran. Refresh evidence reloads metadata; it does not rerun a
+hook or change policy. Commands, source paths and output text are not returned.
+
+The read-only endpoint is `GET /sessions/{id}/hook-evidence`. Required query
+parameters are `harness` and `event`; `event_scope=exact` selects the full event
+label for a finding. The default `event_scope=group` matches a history group’s
+event name before its optional tool suffix. Optional `script`, `handler_id` and
+`config_id` default to the empty value of that exact history group, not a
+wildcard. Unknown or repeated parameters return 400. Storage errors return 503.
+The response includes the filter, window, rows and a truncation indicator.
+
+### Setup and verification
+
+Hook setup and verification is available from Home monitoring coverage, the
+Hooks view and the delivery inspector. It covers Claude Code, Codex, OpenClaw,
+Hermes and OpenCode. Claude
+reads retained transcript completions; the other sources require the existing
+host to forward the individual completions it observes. OpenCode requires the
+supported v2 protocol. The guide explains those boundaries and shows last-known
+daemon receipts when available.
+
+Confirm a real completion during normal use, then inspect its session history
+and delivery diagnostics. Configured hooks, setup steps and connected reports
+alone do not establish complete delivery or protection coverage. The guide does
+not install runtime integrations or generate synthetic completion evidence.
+
+### Daemon receipts and rejections
+
 Current session status and the Hooks view include expandable daemon ingestion
 diagnostics across all sessions. They show accepted deliveries by harness and
 the last local receipt time, plus a global count and last time of recognized

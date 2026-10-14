@@ -5,15 +5,17 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/hookrun"
+	"github.com/cavi-ai/secure-agent/daemon/internal/hookhealth"
 )
 
 const forwarderLimit = 128
 const forwarderFreshnessWindow = 2 * time.Minute
 
 type HookForwarderSnapshot struct {
-	Report     hookrun.ForwarderReport `json:"report"`
-	ReceivedAt time.Time               `json:"received_at"`
-	Freshness  string                  `json:"freshness"`
+	Report     hookrun.ForwarderReport       `json:"report"`
+	ReceivedAt time.Time                     `json:"received_at"`
+	Freshness  string                        `json:"freshness"`
+	Assessment hookhealth.DeliveryAssessment `json:"assessment"`
 }
 
 func (s *Store) NoteHookForwarder(r hookrun.ForwarderReport) {
@@ -85,6 +87,7 @@ func forwarderSnapshots(rows map[string]HookForwarderSnapshot, now time.Time) []
 		} else if now.Sub(row.Report.TS) > forwarderFreshnessWindow {
 			row.Freshness = "stale"
 		}
+		row.Assessment = hookhealth.AssessDelivery(row.Report, row.Freshness)
 		out = append(out, row)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Report.ForwarderID < out[j].Report.ForwarderID })

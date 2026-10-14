@@ -95,10 +95,25 @@ export interface ForwarderReport {
   health?: ForwarderHealth;
 }
 
+export interface DeliveryIssue {
+  stage: string;
+  code: string;
+  next_action: string;
+}
+
+export interface DeliveryAssessment {
+  state: string;
+  title: string;
+  issues: DeliveryIssue[] | null;
+  evidence_gap: boolean;
+  limits: string[] | null;
+}
+
 export interface HookForwarderSnapshot {
   report: ForwarderReport;
   received_at: string;
   freshness: string;
+  assessment: DeliveryAssessment;
 }
 
 export interface HookIngestionSnapshot {
@@ -666,6 +681,7 @@ export interface AttentionItem {
   review?: ReviewRecord;
   session_id?: string;
   hook_finding?: Finding;
+  hook_delivery?: HookForwarderSnapshot;
 }
 
 export interface SessionFinding {
@@ -775,6 +791,46 @@ export interface HookSummary {
   chars: number;
   total_ms: number;
   last_at: string;
+}
+
+export interface HookEvidenceFilter {
+  harness: string;
+  event: string;
+  event_scope: string;
+  handler_id: string;
+  config_id: string;
+  script: string;
+}
+
+export interface Evidence {
+  handler_id?: string;
+  config_id?: string;
+  operation_id?: string;
+  execution_mode?: string;
+  reason_code?: string;
+  control_role?: string;
+  action_outcome?: string;
+  duration_known: boolean;
+  chars_known: boolean;
+  context_chars?: number;
+}
+
+export interface HookEvidenceRun {
+  id: string;
+  ts: string;
+  status: string;
+  duration_ms?: number;
+  chars?: number;
+  evidence?: Evidence;
+}
+
+export interface HookEvidencePage {
+  session_id: string;
+  filter: HookEvidenceFilter;
+  since: string;
+  until: string;
+  rows: HookEvidenceRun[] | null;
+  truncated: boolean;
 }
 
 export interface HostSnapshot {

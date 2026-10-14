@@ -430,7 +430,10 @@ func TestConsoleAPIPathsCoverWebApp(t *testing.T) {
 	if !isConsoleAPIPath("/sessions/sess-1/hooks") {
 		t.Error("dynamic /sessions/{id}/hooks route is not console-allowed — the Hooks panel 407s on the proxy listener")
 	}
-	fragments := map[string]bool{"/timeline": true, "/report": true, "/memory": true, "/overview": true, "/outcomes": true, "/hooks": true, "/sessions": true}
+	if !isConsoleAPIPath("/sessions/sess-1/hook-evidence") {
+		t.Error("dynamic /sessions/{id}/hook-evidence route is not console-allowed")
+	}
+	fragments := map[string]bool{"/hook-evidence": true, "/timeline": true, "/report": true, "/memory": true, "/overview": true, "/outcomes": true, "/hooks": true, "/sessions": true}
 	for p := range seen {
 		if isConsoleAPIPath(p) {
 			continue
@@ -762,6 +765,9 @@ func TestConsoleSessionTimelinePathGate(t *testing.T) {
 	}
 	if !isConsoleAPIPath("/sessions/sess-1/memory") {
 		t.Fatal("the session memory route must be console-allowed")
+	}
+	if !isConsoleAPIPath("/sessions/sess-1/hook-evidence") || isConsoleAPIPath("/sessions//hook-evidence") || isConsoleAPIPath("/sessions/sess-1/hook-evidence/extra") || isConsoleAPIPath("/hook-evidence") {
+		t.Fatal("only the exact session hook evidence path must be console-allowed")
 	}
 	if !isConsoleAPIPath("/sessions/sess-1/outcomes") || isConsoleAPIPath("/sessions//outcomes") || isConsoleAPIPath("/sessions/sess-1/outcomes/extra") || isConsoleAPIPath("/outcomes") {
 		t.Fatal("only the exact session outcome path must be console-allowed")

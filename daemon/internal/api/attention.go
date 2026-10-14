@@ -10,6 +10,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/hookhealth"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 // Attention queue: computed once here and served from /posture. A signal is
@@ -39,11 +40,12 @@ type AttentionItem struct {
 	Advisor         *model.AdvisorVerdict `json:"advisor,omitempty"`
 	// Disposition is set on flag items (the same verdict /flags/{id}/explain
 	// serves) and pattern items (the worst open flag's).
-	Disposition *model.Disposition       `json:"disposition,omitempty"`
-	Assessment  *model.FindingAssessment `json:"assessment,omitempty"`
-	Review      *model.ReviewRecord      `json:"review,omitempty"`
-	SessionID   string                   `json:"session_id,omitempty"`
-	HookFinding *hookhealth.Finding      `json:"hook_finding,omitempty"`
+	Disposition  *model.Disposition           `json:"disposition,omitempty"`
+	Assessment   *model.FindingAssessment     `json:"assessment,omitempty"`
+	Review       *model.ReviewRecord          `json:"review,omitempty"`
+	SessionID    string                       `json:"session_id,omitempty"`
+	HookFinding  *hookhealth.Finding          `json:"hook_finding,omitempty"`
+	HookDelivery *store.HookForwarderSnapshot `json:"hook_delivery,omitempty"`
 }
 
 // AttentionGroup is one agent session, an explicit unattributed bucket, or
@@ -273,6 +275,27 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 			groups[key] = g
 		}
 		add(g, PostureItem{Kind: "hook", ID: f.ID, Title: f.Title, Severity: 1, Detail: f.Detail, Timestamp: f.LastAt.UTC().Format(time.RFC3339Nano)}, AttentionItem{Kind: "hook", Priority: 1, ID: f.ID, SessionID: hf.SessionID, Title: f.Title, Detail: f.Detail, HookFinding: &f})
+	}
+
+	if h := in.Status.HookIngestion; h != nil {
+		for _, row := range h.Forwarders {
+			if row.Assessment.State != "needs-action" {
+				continue
+			}
+			r := row.Report
+			key, label := "hook-host:"+r.ForwarderID, familyTitle(r.Harness)+" forwarding host"
+			if r.SessionID != "" {
+				key, label = "durable-session:"+r.SessionID, "Host-reported session "+r.SessionID
+			}
+			g := groups[key]
+			if g == nil {
+				g = &AttentionGroup{Key: key, Label: label, Agent: r.Harness, Items: []AttentionItem{}}
+				groups[key] = g
+			}
+			id, title := "hook-delivery:"+r.ForwarderID, familyTitle(r.Harness)+" hook delivery needs attention"
+			detail := fmt.Sprintf("%d queued completions; inspect the host's current delivery diagnostics.", r.Pending)
+			add(g, PostureItem{Kind: "hook_delivery", ID: id, Title: title, Detail: detail, Severity: 1, Timestamp: row.ReceivedAt.UTC().Format(time.RFC3339Nano)}, AttentionItem{Kind: "hook_delivery", Priority: 1, ID: id, Title: title, Detail: detail, SessionID: r.SessionID, HookDelivery: &row})
+		}
 	}
 
 	// Flags — the security signal. Unacted only, and only when the

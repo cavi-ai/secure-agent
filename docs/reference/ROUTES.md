@@ -18,6 +18,7 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 | `/sessions/{id}/overview` | GET, HEAD | — | — | `api.SessionOverview` |
 | `/sessions/{id}/outcomes` | GET, HEAD | — | — | `api.SessionOutcomes` |
 | `/sessions/{id}/hooks` | GET, HEAD | — | — | `[]store.HookSummary` |
+| `/sessions/{id}/hook-evidence` | GET, HEAD | — | — | `store.HookEvidencePage` |
 | `/resources` | GET, HEAD | — | — | `resource.Snapshot` |
 | `/resources/episodes` | GET, HEAD | — | — | — |
 | `/resources/control` | GET, HEAD, POST | POST | — | — |

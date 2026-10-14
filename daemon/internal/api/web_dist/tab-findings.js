@@ -17,11 +17,16 @@ function renderCoverage() {
   const harnesses = (status.coverage && status.coverage.harnesses) || [];
   const sessions = (status.coverage && status.coverage.sessions) || [];
   const probes = (status.coverage && status.coverage.probes) || [];
-  panel.hidden = items.length === 0 && sessions.length === 0 && probes.length === 0;
-  if (badge) badge.textContent = items.length ? Number(p.coverage_count) || items.length : `${sessions.length} sessions`;
+  const hookSetup = status.hook_ingestion?.available === true;
+  panel.hidden = items.length === 0 && sessions.length === 0 && probes.length === 0 && !hookSetup;
+  if (badge) badge.textContent = items.length ? Number(p.coverage_count) || items.length : sessions.length ? `${sessions.length} sessions` : hookSetup ? 'Hook diagnostics' : '0 sessions';
   if (panel.hidden) return;
   list.innerHTML = items.map(it => {
-    const action = it.kind === 'uninspected_egress'
+    const hookIssue = ['hook_evidence_gap','hook_delivery_unknown'].includes(it.kind);
+    const host = hookIssue && (status.hook_ingestion?.forwarders || []).find(row => 'hook-gap:'+row.report.forwarder_id === it.id || 'hook-unknown:'+row.report.forwarder_id === it.id);
+    const action = hookIssue
+      ? `<button type="button" class="btn btn-ghost btn-sm" ${host ? `data-action="hook-delivery-inspect" data-id="${escapeHTML(host.report.forwarder_id)}"` : 'data-action="hook-setup"'}>${host ? 'Inspect delivery' : 'Hook setup and verification'}</button>`
+      : it.kind === 'uninspected_egress'
       ? '<button type="button" class="btn btn-ghost btn-sm" data-action="open-uninspected">Review endpoints</button>'
       : it.kind === 'collector_down' && it.id === 'eslogger'
         ? '<button type="button" class="btn btn-ghost btn-sm" data-action="open-fda">Open permissions</button>'
@@ -31,7 +36,7 @@ function renderCoverage() {
             ? '<span class="coverage-guidance">Run Doctor to review lost telemetry. Restarting cannot restore missing evidence.</span>'
         : '<span class="coverage-guidance">Check Setup &amp; Permissions in the menu bar</span>';
     return `<div class="coverage-row"><span><strong>${escapeHTML(it.title)}</strong><span>${escapeHTML(it.detail || '')}</span></span>${action}</div>`;
-  }).join('') + (sessions.length ? `<details class="coverage-harness"><summary>Per-session coverage · ${sessions.length}</summary>${sessions.map(s => {
+  }).join('') + (hookSetup ? '<button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button>' : '') + (sessions.length ? `<details class="coverage-harness"><summary>Per-session coverage · ${sessions.length}</summary>${sessions.map(s => {
     const path = (name, p = {}) => {
       p = p || {};
       return `<span>${name}: ${escapeHTML(coveragePathLabel(p))}${p.last_seen ? ` · ${escapeHTML(p.last_seen)}` : ''}</span><span class="coverage-guidance">${escapeHTML(p.detail || '')}</span>`;
@@ -330,8 +335,14 @@ function needView(item, ctx) {
     case 'hook': {
       const f = item.hook_finding;
       return { ...v, sev: 'sev-warn', word: 'hook repair', what: item.title || 'Hook needs repair', why: f ? f.detail : item.detail || '',
-        at: f ? f.last_at : '', body: f ? () => hookFindingBodyHTML(f) : null,
+        at: f ? f.last_at : '', body: f ? () => hookFindingBodyHTML(f, item.session_id) : null,
         items: item.session_id ? [{ label: 'Inspect session hooks', attrs: `data-action="session-current" data-session="${escapeHTML(item.session_id)}"`, bar: true }] : [] };
+    }
+    case 'hook_delivery': {
+      const row = item.hook_delivery;
+      if (!validHookForwarder(row)) return { ...v, sev:'sev-warn', word:'hook delivery', what:'Delivery evidence unavailable' };
+      return { ...v, sev:'sev-warn', word:'hook delivery', what:item.title || 'Hook delivery needs attention', why:item.detail || '', at:row.received_at,
+        body:() => hookForwardersHTML([row],false), items:[{label:'Inspect delivery',attrs:`data-action="hook-delivery-inspect" data-id="${escapeHTML(row.report.forwarder_id)}"`,bar:true}] };
     }
     case 'review': {
       const r = item.review;
