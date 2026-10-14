@@ -14,10 +14,11 @@
   };
   let unavailable = false;
   let recovered = false;
+  let hostStale = false;
   const finding = { id: 'hook:handler-1', kind: 'execution-errors', harness: 'codex', event: 'PreToolUse', handler_id: 'handler-1', config_id: 'revision-1', script: 'secret_guard.py', title: 'Hook repeatedly failed', detail: 'Three consecutive observed execution errors.', next_action: 'Repair the unavailable dependency, then retry.', limits: ["The associated action's outcome is unknown."], count: 3, first_at: iso(3000), last_at: iso(1000), needs_action: true };
   for (const id of Object.keys(hooks)) route('/sessions/' + id + '/overview', () => ({
     ok: true, status: 200, json: async () => ({ session_id: id, observed_at: iso(0), requests: [], findings: [], coverage: null, resources: null,
-      hook_ingestion: { available: true, since: iso(30000), rejected: 2, last_rejected_at: iso(1000), harnesses: [{ harness: 'codex', accepted: 12, last_received_at: iso(1000) }] },
+      hook_ingestion: { available: true, since: iso(30000), rejected: 2, last_rejected_at: iso(1000), harnesses: [{ harness: 'codex', accepted: 12, last_received_at: iso(1000) }], forwarders: [{ report: { type: 'hook_forwarder', version: 1, harness: 'codex', forwarder_id: 'bridge-1', sequence: recovered ? 2 : 1, ts: iso(1000), state: recovered || hostStale ? 'connected' : 'error', pending: recovered ? 0 : 3, delivery_failures: 2, dropped: 1 }, received_at: iso(1000), freshness: hostStale ? 'stale' : 'recent' }] },
       hook_health: unavailable ? { available: false, findings: [] } : { available: true, since: iso(1800000), until: iso(0), observed_runs: 50, unattributed_runs: 1, truncated: false, findings: recovered || id !== 'sess-claude-1' ? [] : [finding] } }),
   }));
   for (const [id, rows] of Object.entries(hooks)) {
@@ -43,10 +44,16 @@
       probe.actionable = detail.textContent.includes('Repair the unavailable dependency') && detail.textContent.includes("action's outcome is unknown") && detail.textContent.includes('Handler: handler-1');
       const ingestion = detail.querySelector('[data-session-part="hook-ingestion"]');
       ingestion.open = true;
-      probe.ingestion = ingestion.textContent.includes('all sessions') && ingestion.textContent.includes('12 accepted deliveries') && ingestion.textContent.includes('2 rejected') && ingestion.textContent.includes('connectivity is unknown') && ingestion.textContent.includes('original delivery IDs');
+      probe.ingestion = ingestion.textContent.includes('all sessions') && ingestion.textContent.includes('12 accepted deliveries') && ingestion.textContent.includes('2 rejected') && ingestion.textContent.includes('original delivery IDs');
+      probe.hostHealth = ingestion.textContent.includes('Forwarding error (host reported)') && ingestion.textContent.includes('3 queued') && ingestion.textContent.includes('1 dropped') && ingestion.textContent.includes('not establish complete delivery');
       probe.startsAtFindings = detail.querySelector('.session-detail-body').scrollTop === 0;
       probe.fits = detail.scrollWidth <= detail.clientWidth && document.documentElement.scrollWidth <= innerWidth;
       if (scenarios.has('shot')) { document.body.dataset.hooksProbe = JSON.stringify(probe); return; }
+      hostStale = true;
+      window.SA.refreshSessionOverview(true);
+      await wait(() => window.SA.sessionOverview?.hook_ingestion?.forwarders?.[0]?.freshness === 'stale'); await idle();
+      probe.hostStale = detail.textContent.includes('current connection state unknown') && !detail.textContent.includes('Source connected');
+      hostStale = false;
       unavailable = true;
       window.SA.refreshSessionOverview(true);
       await wait(() => window.SA.sessionOverview?.hook_health?.available === false); await idle();
@@ -55,6 +62,7 @@
       window.SA.refreshSessionOverview(true);
       await wait(() => window.SA.sessionOverview?.hook_health?.available === true); await idle();
       probe.recovery = detail.textContent.includes('No repair or advisory pattern') && !detail.textContent.includes('Needs repair');
+      probe.hostRecovery = detail.textContent.includes('Source connected (host reported)') && detail.textContent.includes('0 queued') && detail.textContent.includes('1 dropped') && detail.textContent.includes('may not be recoverable');
       // Selecting another session while Hooks is open loads that session's hooks.
       await window.selectSession('sess-cursor-2');
       probe.reloaded = window.SA.sessionView === 'hooks' && requested.includes('sess-cursor-2')

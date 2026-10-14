@@ -54,9 +54,68 @@ retries can count again even when history deduplicates the execution.
 
 No observations do not establish a broken forwarder. Host connectivity remains
 unknown without host evidence. Errors before a shared record reaches the daemon,
-including recorder input and output failures, are not visible here. For rejected
+including recorder input and output failures, are visible only if the host
+explicitly reports them. For rejected
 records, check the host and recorder diagnostics, validate the shared format,
 and retry retained completions with their original delivery IDs.
+
+## Host forwarding reports
+
+Hosts may send optional `hook_forwarder` reports alongside completions to
+`secure-agent hooks record --format codex`. The same shared report works with
+the other recorder formats; its harness must match the selected format, except
+`--format record`, which accepts all supported harnesses. Codex app-server
+notifications do not supply this report: the forwarding host must produce it
+from its own source subscription and delivery queue.
+
+```json
+{
+  "type": "hook_forwarder",
+  "version": 1,
+  "harness": "codex",
+  "forwarder_id": "forwarder-instance-uuid",
+  "sequence": 1,
+  "ts": "2026-10-13T10:00:00Z",
+  "state": "error",
+  "pending": 3,
+  "delivery_failures": 2,
+  "dropped": 0
+}
+```
+
+Use a globally unique opaque `forwarder_id` for one reporting instance and
+scope, with a new ID after restart or a session-scope change. An optional opaque
+`session_id` explicitly scopes the host's report; omitting it leaves session
+attribution unknown. Reports do not create sessions or hook runs. Never send
+commands, source paths, output text, credentials or raw errors in this contract.
+
+`sequence` starts at 1 and increases for each new snapshot. Retry a snapshot
+with its original sequence and timestamp; duplicate or older sequences do not
+refresh receipt time. `pending` is the current number of queued completion
+deliveries. `delivery_failures` counts failed completion delivery attempts,
+including retries; `dropped` counts completions discarded by the host. Both
+counters are cumulative for the reporting instance and cannot decrease. All
+three counters are required, including measured zero; integers must be at most
+9,007,199,254,740,991.
+
+`connected` reports a connected hook-source subscription. `disconnected` reports
+a disconnected source. `error` reports an active source or delivery problem.
+These are host observations, not independently verified connection states.
+Send a new report on state changes and about every 30 seconds while active.
+Reports become stale after two minutes without a new receipt or when the host
+timestamp is older than two minutes. Freshness requires a host timestamp no
+later than its original local receipt; a future timestamp remains unverified
+until a newer valid report arrives or the receipt becomes stale. Stale and
+unverified reports leave the current connection state
+unknown; they do not establish disconnection or disabled protection.
+
+The daemon retains at most 128 recently received forwarder instances in memory,
+with a visible truncation indicator when others have been omitted. Reports reset
+on daemon restart. Older hosts remain unknown. A connected report does not
+establish complete delivery, erase cumulative drops or prove protection coverage.
+For queued deliveries or an active error, check the host and recorder and retry
+retained completions with their original delivery IDs. Dropped completions may
+not be recoverable.
 
 ## Forward Codex completions
 

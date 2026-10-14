@@ -13,6 +13,30 @@ import (
 
 const forwardedHook = `{"id":"delivery-1","notification":{"method":"hook/completed","params":{"threadId":"session-1","run":{"id":"stop:0:/home/example/hooks.json","eventName":"stop","status":"blocked","completedAt":1791882001,"durationMs":7,"entries":[{"kind":"feedback","text":"retry carefully"}]}}}}`
 
+func TestCodexRecorderMixedHostHealthAndCompletions(t *testing.T) {
+	report := `{"type":"hook_forwarder","version":1,"harness":"codex","forwarder_id":"instance-1","sequence":1,"ts":"2026-10-13T10:00:00Z","state":"connected","pending":0,"delivery_failures":0,"dropped":0}`
+	p := filepath.Join(t.TempDir(), "activity.jsonl")
+	if err := runHooks(strings.NewReader(report+"\n"+forwardedHook+"\n"), []string{"record", "--format", "codex", "--output", p}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(p)
+	lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
+	if len(lines) != 2 {
+		t.Fatalf("records=%d", len(lines))
+	}
+	if _, ok, err := hookrun.DecodeForwarderReport(lines[0]); !ok || err != nil {
+		t.Fatalf("report missing: %v", err)
+	}
+	if _, ok, err := hookrun.DecodeRecord(lines[1]); !ok || err != nil {
+		t.Fatalf("completion missing: %v", err)
+	}
+	for _, bad := range []string{strings.Replace(report, `"codex"`, `"hermes"`, 1), strings.Replace(report, `"pending":0`, `"pending":null`, 1)} {
+		if err := runHooks(strings.NewReader(bad+"\n"), []string{"record", "--format", "codex", "--output", p}); err == nil {
+			t.Fatal("invalid or mismatched report accepted")
+		}
+	}
+}
+
 func TestHooksRecorderWritesOnlyCompletionMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "activity.jsonl")
 	input := `{"method":"hook/started","params":{}}` + "\n" + forwardedHook + "\n"

@@ -378,7 +378,7 @@ def run_session_hooks(page):
                        fixture={'script': 'cases_session_hooks.js'})
         receipt = re.search(r'data-hooks-probe="([^"]+)"', dom)
         state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
-        for name in ('table', 'failedRow', 'unrecorded', 'cancelled', 'actionable', 'ingestion', 'startsAtFindings', 'fits', 'unavailable', 'recovery', 'reloaded'):
+        for name in ('table', 'failedRow', 'unrecorded', 'cancelled', 'actionable', 'ingestion', 'hostHealth', 'hostStale', 'hostRecovery', 'startsAtFindings', 'fits', 'unavailable', 'recovery', 'reloaded'):
             page.check(f'session hooks ({label}): {name}', state.get(name) is True, str(state))
 
 def run_session_results(page):

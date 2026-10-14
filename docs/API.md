@@ -120,10 +120,16 @@ sessions: `available`, `since`, `harnesses` (each with `harness`, `accepted` and
 `last_received_at`), `rejected`, and optional `last_rejected_at`. Receipt times
 come from the daemon clock, not host completion timestamps. Counts describe
 accepted deliveries, including retries, rather than unique persisted runs.
-Rejected counts cover recognized invalid shared records without attributing
-untrusted identities. Unwired collectors report `available: false`. Silence
-does not establish connectivity or protection coverage. Recorder failures
-before a shared record reaches the daemon are outside these diagnostics.
+Rejected counts cover recognized invalid shared completion and forwarder records
+without attributing untrusted identities. Unwired collectors report
+`available: false`. Optional `forwarders` contains up to 128 entries with the
+validated host `report`, local `received_at`, and computed `freshness` (`recent`,
+`stale` or `unverified`). `forwarders_truncated` indicates omitted instances.
+Duplicate or older report sequences do not refresh receipt time. Stale or
+future-dated reports cannot establish current connectivity. Recorder failures
+are visible only when explicitly reported by the host. These observations do
+not establish complete delivery or protection coverage. See the shared
+[host reporting contract](HOOKS.md#host-forwarding-reports).
 
 ### Installed-hook check: `POST /coverage/probe`
 
