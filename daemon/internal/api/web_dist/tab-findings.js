@@ -327,6 +327,12 @@ function needView(item, ctx) {
   const v = { key: `${item.kind}:${item.id}`, kind: item.kind, agent: g.agent || '', sev: 'sev-bad', word: a ? assessmentDisplay(a).text : 'critical', assessment: a,
     what: item.detail || item.title || '', why: '', at: '', items: [], body: null };
   switch (item.kind) {
+    case 'hook': {
+      const f = item.hook_finding;
+      return { ...v, sev: 'sev-warn', word: 'hook repair', what: item.title || 'Hook needs repair', why: f ? f.detail : item.detail || '',
+        at: f ? f.last_at : '', body: f ? () => hookFindingBodyHTML(f) : null,
+        items: item.session_id ? [{ label: 'Inspect session hooks', attrs: `data-action="session-current" data-session="${escapeHTML(item.session_id)}"`, bar: true }] : [] };
+    }
     case 'review': {
       const r = item.review;
       if (!r) return v;

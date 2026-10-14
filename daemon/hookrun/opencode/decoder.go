@@ -41,6 +41,7 @@ func (Decoder) Decode(line []byte) (hookrun.Record, bool, error) {
 			r.Status = "deny"
 			r.Chars = int64(utf8.RuneCountInString(after.Message))
 		}
+		r.Evidence.CharsKnown = true
 	case "session.context", "session.compaction", "session.generate", "session.title":
 		if !snapshot(c.Before) || !snapshot(c.Result) {
 			return hookrun.Record{}, true, errors.New("OpenCode context hook requires before and after snapshots")
@@ -78,6 +79,9 @@ func (Decoder) Decode(line []byte) (hookrun.Record, bool, error) {
 		if r.Chars > 0 {
 			r.Status = "inject"
 		}
+		r.Evidence.CharsKnown = true
+		n := r.Chars
+		r.Evidence.ContextChars = &n
 	}
 	return r, true, nil
 }

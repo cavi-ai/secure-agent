@@ -40,6 +40,7 @@ func (Decoder) Decode(line []byte) (hookrun.Record, bool, error) {
 	default:
 		return r, true, nil
 	}
+	r.Evidence.CharsKnown = true
 	switch c.Event {
 	case "before_tool_call", "before_message_write":
 		if result.Block {
@@ -53,6 +54,8 @@ func (Decoder) Decode(line []byte) (hookrun.Record, bool, error) {
 		if r.Chars > 0 {
 			r.Status = "inject"
 		}
+		n := r.Chars
+		r.Evidence.ContextChars = &n
 	case "message_sending", "reply_payload_sending":
 		if result.Cancel {
 			r.Status = "block"

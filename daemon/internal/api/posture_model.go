@@ -11,24 +11,27 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 // postureInputs is a snapshot of the facts needed for one derivation. Storage
 // and live-service reads happen at the boundary; ranking has no handler access.
 type postureInputs struct {
-	Status         Status
-	Generated      time.Time
-	Patterns       []model.Pattern
-	Routine        []model.RoutineGroup
-	Resources      []resource.Session
-	HookGap        *PostureItem
-	Pending        []guard.Pending
-	Flags          []model.Flag
-	Reviews        []model.ReviewRecord
-	FlagReviews    map[string]model.ReviewRecord
-	Incidents      []model.IncidentReport
-	IncidentStates map[string]string
-	FailedReads    []string
+	Status              Status
+	Generated           time.Time
+	Patterns            []model.Pattern
+	Routine             []model.RoutineGroup
+	Resources           []resource.Session
+	HookGap             *PostureItem
+	Pending             []guard.Pending
+	Flags               []model.Flag
+	Reviews             []model.ReviewRecord
+	FlagReviews         map[string]model.ReviewRecord
+	Incidents           []model.IncidentReport
+	IncidentStates      map[string]string
+	FailedReads         []string
+	HookFindings        []store.SessionHookFinding
+	HookHealthTruncated bool
 }
 
 func derivePosture(in postureInputs) Posture {
@@ -50,6 +53,9 @@ func derivePosture(in postureInputs) Posture {
 		st.StorageHealth = &h
 	}
 	posture.CoverageItems = coverageItems(in.Generated, st, in.HookGap)
+	if in.HookHealthTruncated {
+		posture.CoverageItems = append(posture.CoverageItems, PostureItem{Kind: "hook_analysis_limit", ID: "hook-analysis", Title: "Hook analysis is limited to recent samples", Detail: "The latest 1,000 live-session completions and up to 20 repair findings are assessed. Open a session for its own assessment."})
+	}
 	posture.CoverageCount = len(posture.CoverageItems)
 	switch {
 	case posture.NeedsYou == 0 && !hasMonitoringGap(posture.CoverageItems):
@@ -87,7 +93,7 @@ func coverageItems(now time.Time, st Status, hookGap *PostureItem) []PostureItem
 // egress is a coverage note, not a gap: alone it leaves posture all-clear.
 func hasMonitoringGap(items []PostureItem) bool {
 	for _, it := range items {
-		if it.Kind != "uninspected_egress" {
+		if it.Kind != "uninspected_egress" && it.Kind != "hook_analysis_limit" {
 			return true
 		}
 	}

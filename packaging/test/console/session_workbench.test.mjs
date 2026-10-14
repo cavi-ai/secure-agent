@@ -708,7 +708,7 @@ test('workbench sizing reserves measured reading lines and rebinds chrome withou
     style:{getPropertyValue:name => values.get(name),setProperty(name,value){writes.push([name,value]);values.set(name,value);}},
     querySelector:selector => ({'.session-detail-body':body,'.session-detail-chrome':chrome,'.session-toolbar':toolbar,'[data-action="session-latest"]':latest})[selector]};
   const upstream = {};
-  const context = {window:{innerHeight:700,addEventListener(){}},
+  const context = {sessionView:'memory',window:{innerHeight:700,addEventListener(){}},
     document:{body:{},getElementById:() => panel,querySelector:() => upstream,querySelectorAll:() => [upstream]},
     getComputedStyle:node => node === panel ? {borderTopWidth:'1px',borderBottomWidth:'1px'} : node === upstream ? {paddingBottom:'16px'} : node.style || {},
     requestAnimationFrame:callback => {frames.push(callback);return frames.length;},
@@ -732,6 +732,9 @@ test('workbench sizing reserves measured reading lines and rebinds chrome withou
   assert.ok(removed.includes(previous) && observed.has(chrome));
   assert.equal(panel.short,false);
   assert.equal(values.get('--session-workbench-height'),'584px');
+  context.sessionView='hooks';
+  context.scheduleSessionWorkbenchHeight();frames.shift()();
+  assert.equal(latest.hidden,true,'hook summaries have no chronological tail to jump to');
 });
 
 const hookRow = (over = {}) => ({ event: 'PreToolUse', script: 'secret_guard.py', runs: 3, errors: 3, blocks: 0, chars: 0, total_ms: 90, last_at: '2026-09-23T10:00:00.000000000Z', ...over });

@@ -43,6 +43,7 @@ func (Decoder) Decode(line []byte) (hookrun.Record, bool, error) {
 	} else {
 		return r, true, nil
 	}
+	r.Evidence.CharsKnown = true
 	switch c.Event {
 	case "pre_tool_call":
 		if result.Action == "block" && result.Message != "" {
@@ -54,6 +55,8 @@ func (Decoder) Decode(line []byte) (hookrun.Record, bool, error) {
 			r.Status = "inject"
 			r.Chars = int64(utf8.RuneCountInString(result.Context))
 		}
+		n := r.Chars
+		r.Evidence.ContextChars = &n
 	case "pre_verify":
 		action := result.Action
 		if action == "" {

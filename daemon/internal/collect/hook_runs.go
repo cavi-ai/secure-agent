@@ -10,5 +10,6 @@ import (
 // not need to know which transport or harness produced the completion.
 func hookRunEvent(r hookrun.Record) event.Event {
 	return event.Event{Kind: event.KindHookRun, TS: r.TS, SessionID: r.SessionID, CallID: r.ID,
-		ToolName: r.Event, Detail: r.Script, ToolStatus: r.Status, DurationMs: r.DurationMs, Chars: r.Chars}
+		ToolName: r.Event, Detail: r.Script, ToolStatus: r.Status, DurationMs: r.DurationMs, Chars: r.Chars,
+		HookHarness: r.Harness, HookEvidence: r.Evidence}
 }

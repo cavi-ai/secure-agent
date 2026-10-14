@@ -199,30 +199,67 @@ function sessionTraceHTML(events, state) {
   return notice + limit + sessionWaterfallHTML(events);
 }
 
-// Hook totals for one session, one row per hook event and script.
+function validHookHealth(h) {
+  const record = v => v && typeof v === 'object' && !Array.isArray(v);
+  const count = v => Number.isSafeInteger(v) && v >= 0;
+  const time = v => typeof v === 'string' && Number.isFinite(Date.parse(v));
+  if (!record(h) || typeof h.available !== 'boolean' || !Array.isArray(h.findings) || h.findings.length > 20) return false;
+  if (!h.available) return h.findings.length === 0;
+  return time(h.since) && time(h.until) && count(h.observed_runs) && count(h.unattributed_runs)
+    && h.unattributed_runs <= h.observed_runs && typeof h.truncated === 'boolean'
+    && h.findings.every(f => record(f) && ['id', 'kind', 'harness', 'event', 'handler_id', 'title', 'detail', 'next_action'].every(k => typeof f[k] === 'string' && f[k].length > 0)
+      && ['script', 'config_id', 'operation_id'].every(k => f[k] === undefined || typeof f[k] === 'string')
+      && count(f.count) && typeof f.needs_action === 'boolean' && time(f.first_at) && time(f.last_at)
+      && Array.isArray(f.limits) && f.limits.every(v => typeof v === 'string'));
+}
+
+function hookFindingBodyHTML(f) {
+  return `<p>${escapeHTML(f.detail)}</p><p><strong>Next action:</strong> ${escapeHTML(f.next_action)}</p>
+    <p>${escapeHTML(f.event)}${f.script ? ' · ' + escapeHTML(f.script) : ''} · Handler: ${escapeHTML(f.handler_id)}${f.config_id ? ' · Configuration: ' + escapeHTML(f.config_id) : ''}</p>
+    <p>${Number(f.count)} observed runs · <time>${escapeHTML(f.first_at)}</time> to <time>${escapeHTML(f.last_at)}</time></p>
+    ${(f.limits || []).map(limit => `<p class="sd-context-limit">${escapeHTML(limit)}</p>`).join('')}`;
+}
+
+function sessionHookHealthHTML(health, state) {
+  const head = '<h4>Hook findings</h4>';
+  if (!health || !health.available) return `<section data-session-part="hook-health" class="sd-findings-head">${head}<p role="status">Hook assessment unavailable. Refresh current session status to retry.</p></section>`;
+  const stale = state && state.error ? '<p role="status">Showing the last loaded hook assessment; it may be out of date.</p>' : '';
+  const limits = `${health.truncated ? '<p>Analysis is limited to recent samples and up to 20 findings.</p>' : ''}${health.unattributed_runs ? `<p>${Number(health.unattributed_runs)} recorded ${health.unattributed_runs === 1 ? 'run lacks' : 'runs lack'} handler identity and cannot support handler-specific findings.</p>` : ''}`;
+  const rows = health.findings.map(f => `<article class="sd-finding"><h5>${escapeHTML(f.title)} · ${f.needs_action ? 'Needs repair' : 'Advisory'}</h5>${hookFindingBodyHTML(f)}</article>`).join('');
+  return `<section data-session-part="hook-health" class="sd-findings-head">${head}${stale}<p>${Number(health.observed_runs)} recorded completions assessed from ${escapeHTML(health.since)} to ${escapeHTML(health.until)}. This does not establish protection coverage.</p>${limits}${rows || '<p>No repair or advisory pattern was found in the assessed records.</p>'}</section>`;
+}
+
+// Identified handlers stay separate; legacy rows remain event/script totals.
 function validSessionHooks(rows) {
   const count = v => Number.isInteger(v) && v >= 0;
   return Array.isArray(rows) && rows.every(r => r && typeof r === 'object' && !Array.isArray(r)
     && typeof r.event === 'string' && typeof r.script === 'string' && typeof r.last_at === 'string'
-    && ['runs', 'errors', 'blocks', 'chars', 'total_ms'].every(k => count(r[k])));
+    && ['runs', 'errors', 'blocks', 'chars', 'total_ms'].every(k => count(r[k]))
+    && ['cancelled', 'duration_samples', 'char_samples'].every(k => r[k] === undefined || (count(r[k]) && r[k] <= r.runs))
+    && ['harness', 'handler_id', 'config_id'].every(k => r[k] === undefined || typeof r[k] === 'string'));
 }
 
-function sessionHooksHTML(rows, state) {
+function sessionHooksHTML(rows, state, health, healthState) {
   state = state || {};
   const retry = `<button type="button" class="link-btn" data-action="session-hooks-retry"${state.loading ? ' disabled' : ''}>Retry hooks</button>`;
   const notice = state.error ? `Hook runs unavailable.${rows ? ' Showing the last loaded totals; they may be out of date.' : ''} ${retry}`
     : !rows ? 'Loading hook runs…' : '';
-  const head = `<header data-session-part="hooks-head"><h4>Hooks</h4><p>Recorded hook completions from session transcripts and connected hosts. Failed counts errors and cancelled runs; blocked counts hook decisions that stop an action.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
+  const head = sessionHookHealthHTML(health, healthState) + `<header data-session-part="hooks-head"><h4>Hook history</h4><p>Recorded completions from session transcripts and connected hosts. Errors and cancellations are separate. Blocks can be expected protection or validation decisions. Cumulative runtime can include overlapping callbacks.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
   if (!rows) return head;
   if (!rows.length) return head + '<p data-session-part="hooks-empty">No hook runs recorded for this session.</p>';
+  const metric = (r, key, samples, format) => {
+    const n = r[samples];
+    if (n === 0 || (n === undefined && r[key] === 0)) return 'unknown';
+    return escapeHTML(format(r[key])) + (n !== undefined && n < r.runs ? ` (${n}/${r.runs} measured)` : '');
+  };
   const body = rows.map(r => `<tr${r.errors > 0 ? ' class="sd-hook-failed"' : ''}>
-      <td>${escapeHTML(r.event)}</td><td>${escapeHTML(r.script || 'not recorded')}</td>
-      <td>${r.runs}</td><td>${r.errors}</td><td>${r.blocks}</td>
-      <td>${escapeHTML(fmtCompact(r.chars))}</td><td>${escapeHTML(fmtDurationMs(r.total_ms))}</td></tr>`).join('');
-  return head + `<table class="sd-hooks" data-session-part="hooks-table"><thead><tr>
-      <th scope="col">Event</th><th scope="col">Script</th><th scope="col">Runs</th><th scope="col">Failed</th>
-      <th scope="col">Blocked</th><th scope="col">Chars returned</th><th scope="col">Time</th>
-    </tr></thead><tbody>${body}</tbody></table>`;
+      <td>${escapeHTML(r.event)}</td><td>${escapeHTML(r.script || 'not recorded')}${r.handler_id ? `<br>Handler: ${escapeHTML(r.handler_id)}${r.config_id ? `<br>Configuration: ${escapeHTML(r.config_id)}` : ''}` : '<br>Handler identity unavailable'}</td>
+      <td>${r.runs}</td><td>${r.errors}</td><td>${r.blocks}</td><td>${r.cancelled || 0}</td>
+      <td>${metric(r, 'chars', 'char_samples', fmtCompact)}</td><td>${metric(r, 'total_ms', 'duration_samples', fmtDurationMs)}</td></tr>`).join('');
+  return head + `<div class="sd-hooks-scroll" data-session-part="hooks-table" role="region" aria-label="Hook history" tabindex="0"><table class="sd-hooks"><thead><tr>
+      <th scope="col">Event</th><th scope="col">Handler</th><th scope="col">Runs</th><th scope="col">Errors</th>
+      <th scope="col">Blocked</th><th scope="col">Cancelled</th><th scope="col">Chars returned</th><th scope="col">Cumulative runtime</th>
+    </tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 // Durable IDs are the entry point; live process counts and setup checks do
@@ -265,6 +302,7 @@ function validSessionOverview(data, id) {
   if (!record(data) || data.session_id !== id || !time(data.observed_at)
     || !Array.isArray(data.requests) || !Array.isArray(data.findings) || data.findings.length > 20
     || (data.findings_truncated !== undefined && typeof data.findings_truncated !== 'boolean')) return false;
+  if (data.hook_health != null && !validHookHealth(data.hook_health)) return false;
   if (!data.requests.every(r => record(r) && r.kind === 'guard' && typeof r.id === 'string' && r.id.length > 0
     && text(r, ['title', 'detail', 'path', 'rule', 'scopeText', 'reader_exe'])
     && rows(r.available_scopes, c => record(c) && typeof c.kind === 'string' && text(c, ['expiry'])))) return false;
@@ -309,6 +347,7 @@ function sessionOverviewHTML(data, state, contextHTML = '') {
   const findings = (data.findings || []).map(f => `<article class="sd-finding" data-session-part="finding:${escapeHTML(f.id)}"><h5>${escapeHTML(f.title || 'Finding')}</h5><p>Risk: ${escapeHTML((f.assessment || {}).risk || 'unknown')} · ${escapeHTML((f.assessment || {}).reason || 'Evidence interpretation unavailable')}</p>${assessmentHTML(f.assessment)}
     <button type="button" class="link-btn" data-action="open-flag" data-id="${escapeHTML(f.id)}">View evidence</button></article>`).join('');
   return head + requests
+    + sessionHookHealthHTML(data.hook_health, state)
     + `<section class="sd-coverage" data-session-part="coverage" aria-label="Observed session coverage">${paths}</section>`
     + `<fieldset class="sd-impact" data-session-part="impact"${disabled}><legend>Machine impact</legend>${impact}</fieldset>`
     + `<div class="sd-findings-head" data-session-part="findings-head"><h4>Retained findings</h4><p>${data.findings_truncated ? 'More findings exist than the 20 most recent shown here.' : (data.findings || []).length ? 'Review and remaining risk are shown separately.' : 'No retained findings are attributed to this session. This is not a safety verdict.'}
@@ -430,7 +469,7 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
       <button type="button" class="btn btn-sm btn-ghost" data-action="session-status">Current status</button>
     </div>
     </div>
-    <div class="session-detail-body" tabindex="-1">${state.sessionView === 'hooks' ? contextHTML + sessionHooksHTML(state.sessionHooks, state.sessionHooksState) : state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
+    <div class="session-detail-body" tabindex="-1">${state.sessionView === 'hooks' ? contextHTML + sessionHooksHTML(state.sessionHooks, state.sessionHooksState, state.sessionOverview && state.sessionOverview.hook_health, state.sessionOverviewState) : state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
 }
 
 // One workbench owns selection, retained reads, rendering and reading position.
@@ -636,7 +675,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       // Sizing changes the scroll range after the initial detail render.
       if (followLatest) body.scrollTop = body.scrollHeight;
       const latest = panel.querySelector('[data-action="session-latest"]');
-      if (latest && body) latest.hidden = body.scrollHeight - body.clientHeight - body.scrollTop < 64;
+      if (latest && body) latest.hidden = sessionView === 'hooks' || body.scrollHeight - body.clientHeight - body.scrollTop < 64;
     });
   }
   window.addEventListener('resize', scheduleSessionWorkbenchHeight);
@@ -838,10 +877,10 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     const metadata = detail.querySelector('details.session-metadata');
     if (metadata) metadata.open = !!state.detailsOpen;
     const rows = Array.from(body.querySelectorAll('[data-row-id]'));
-    const loaded = sessionView === 'trace' ? !!sessionTimeline?.length : sessionView === 'results' ? !!sessionOutcomes : !!sessionMemoryPage?.rows.length;
+    const loaded = sessionView === 'trace' ? !!sessionTimeline?.length : sessionView === 'results' ? !!sessionOutcomes : sessionView === 'hooks' ? !!sessionHooks : !!sessionMemoryPage?.rows.length;
     const prepended = state.first && rows.length && rows[0].dataset.rowId !== state.first && rows.some(row => row.dataset.rowId === state.first);
     if (!detail._sessionReadingVisible) return;
-    if ((!state.loaded && loaded) || (state.nearLatest && !prepended)) body.scrollTop = body.scrollHeight;
+    if (sessionView !== 'hooks' && ((!state.loaded && loaded) || (state.nearLatest && !prepended))) body.scrollTop = body.scrollHeight;
     else {
       body.scrollTop = state.top || 0;
       const anchor = state.anchor && rows.find(row => row.dataset.rowId === state.anchor);
@@ -850,7 +889,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     sessionReadingState.set(key, { ...state, loaded: state.loaded || loaded });
     const updateLatest = () => {
       const latest = detail.querySelector('[data-action="session-latest"]');
-      if (latest) latest.hidden = body.scrollHeight - body.clientHeight - body.scrollTop < 64;
+      if (latest) latest.hidden = sessionView === 'hooks' || body.scrollHeight - body.clientHeight - body.scrollTop < 64;
     };
     if (!body._sessionScrollBound) { body.addEventListener('scroll', updateLatest, { passive: true }); body._sessionScrollBound = true; }
     updateLatest();

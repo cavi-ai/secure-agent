@@ -1,6 +1,7 @@
 package event
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/hookrun"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"time"
 )
@@ -116,7 +117,9 @@ type Event struct {
 	// (ok | inject | deny | block | error | cancelled), DurationMs and CallID
 	// (the transcript record id or host delivery id). Chars counts the characters the hook
 	// returned to the harness, never the text itself.
-	Chars int64 `json:"chars,omitempty"`
+	Chars        int64             `json:"chars,omitempty"`
+	HookHarness  string            `json:"-"`
+	HookEvidence *hookrun.Evidence `json:"-"`
 	// CallID is the harness's own id for the call: the tool-call id for a
 	// tool_call (Claude tool_use id, Codex call_id, opencode callID), the API
 	// message id for a Claude model_call. It makes the row keyed and

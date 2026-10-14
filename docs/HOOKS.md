@@ -2,12 +2,42 @@
 
 [Documentation](README.md) · [Session workflows](USAGE.md)
 
-The session Hooks view summarizes recorded completions: runs, failures, blocks,
-returned characters and time. Claude Code completions come from transcripts.
+The session Hooks view summarizes recorded completions: runs, execution errors,
+cancellations, blocks, returned characters and cumulative runtime. Unknown
+measurements are shown separately from measured zero. Claude Code completions come from transcripts.
 Codex completions come from an existing host forwarding app-server notifications.
 OpenClaw, Hermes and OpenCode hosts forward individual handler completions to
 their native result adapters.
 An empty history does not establish that no hooks ran.
+
+## Actionable findings
+
+Current session status and the Hooks view assess the latest 1,000 retained
+completions within 30 minutes, with up to 20 findings. The view reports when
+the sample is limited. Completions without a stable handler identity remain
+in history but cannot support handler-specific diagnoses.
+
+- **Repeated execution errors:** three consecutive observed errors for one
+  handler and configuration produce a repair finding. Later success,
+  cancellation or a new observed configuration ends that pattern. Cancellation
+  is not treated as evidence of repair. Live-session repair findings also appear
+  in Attention and link to the exact session.
+- **Repeated blocks:** three consecutive block decisions for the same
+  host-correlated action produce an advisory. They may represent correct
+  protection or a validation retry; overall task progress remains unknown.
+- **Slow foreground callbacks:** three consecutive measured foreground runs
+  of at least 2,000 ms produce an optimization advisory. Durations may overlap
+  and do not measure total task delay.
+- **Substantial context:** three consecutive measured contributions of at
+  least 10,000 context characters produce a scope-review advisory. Character
+  counts do not establish token cost, duplicate content or malicious injection.
+
+Each finding shows its evidence window, handler, configuration when known,
+observed consequence, next action and limitations. A security role and the
+associated action outcome are displayed only when reported by the forwarding
+host. Neither hook names nor successful completions establish protection
+coverage. The thresholds above are fixed diagnosis defaults, not security
+policy or automatic permission changes.
 
 ## Forward Codex completions
 
@@ -180,9 +210,67 @@ record` and send the versioned contract directly:
 colons and hyphens, with a maximum of 256 characters. Event labels are bounded
 to 128 characters; script labels additionally exclude colons. Counts must be
 nonnegative. Supported outcomes are `ok`, `inject`, `deny`, `block`, `error` and
-`cancelled`. Unknown fields and versions are rejected. The supported harness
+`cancelled`. Versions 1 and 2 are accepted; unknown fields and other versions are rejected. The supported harness
 names are `claude`, `codex`, `openclaw`, `hermes` and `opencode`; accepting a name
 in this contract does not supply a native adapter for that harness.
+
+### Version 2 evidence metadata
+
+Version 1 remains supported. To provide attributable findings, hosts sending
+normalized records use version 2 and an `evidence` object:
+
+```json
+{
+  "type": "hook_run",
+  "version": 2,
+  "harness": "hermes",
+  "session_id": "session-uuid",
+  "run_id": "hermes:completion-uuid",
+  "ts": "2026-10-13T09:00:01Z",
+  "event": "pre_tool_call",
+  "script": "policy.py",
+  "status": "error",
+  "duration_ms": 2000,
+  "chars": 0,
+  "evidence": {
+    "handler_id": "handler-uuid",
+    "config_id": "revision-uuid",
+    "operation_id": "action-uuid",
+    "execution_mode": "foreground",
+    "reason_code": "timeout",
+    "control_role": "security",
+    "action_outcome": "stopped",
+    "duration_known": true,
+    "chars_known": false
+  }
+}
+```
+
+`handler_id` identifies a registered handler across invocations; `config_id`
+changes when that handler's configuration changes. `operation_id` identifies
+one attempted action, not a turn containing several different actions. These
+are opaque host inventory tokens, never commands, paths, arguments or output.
+Do not derive handler identity from a script basename. These fields use the
+same bounded identifier syntax as record IDs.
+
+`execution_mode` is `foreground` or `background`; omit it when unknown.
+`control_role` is `security` or `other`; `action_outcome` is `stopped` or
+`proceeded`. Both describe observed host facts, not conclusions inferred from
+the callback status. `reason_code` accepts `timeout`, `dependency-unavailable`,
+`invalid-output`, `permission-denied`, `execution-failed` or `policy-block`.
+Do not include diagnostic text. Omitted fields remain unknown.
+
+`duration_known` and `chars_known` distinguish measured zero from unknown.
+Optional `context_chars` counts only model context contributed by this handler,
+excluding decision feedback and diagnostics; omit it when not measured. Legacy
+positive counts remain visible, but legacy zeros cannot prove a measurement.
+
+OpenClaw, Hermes and OpenCode forwarding envelopes also accept version 2 with
+`evidence`. Codex wrappers accept the same optional `evidence` object alongside
+`id` and `notification`. Native adapters derive measurement availability and
+recognized context counts from their native inputs. They do not infer handler
+inventory or execution mode. Claude transcript records currently lack stable
+registered-handler identity and therefore remain history totals.
 
 Storage deduplicates on session ID and run ID. Completions stay outside the
 general event timeline and retain the existing history retention and row budget.

@@ -574,6 +574,25 @@ export interface memoryResponse {
   next_cursor?: string;
 }
 
+export interface Finding {
+  id: string;
+  kind: string;
+  harness: string;
+  event: string;
+  script?: string;
+  handler_id: string;
+  config_id?: string;
+  operation_id?: string;
+  title: string;
+  detail: string;
+  next_action: string;
+  limits: string[] | null;
+  count: number;
+  first_at: string;
+  last_at: string;
+  needs_action: boolean;
+}
+
 export interface AttentionItem {
   kind: string;
   priority: number;
@@ -593,6 +612,8 @@ export interface AttentionItem {
   disposition?: Disposition;
   assessment?: FindingAssessment;
   review?: ReviewRecord;
+  session_id?: string;
+  hook_finding?: Finding;
 }
 
 export interface SessionFinding {
@@ -646,6 +667,16 @@ export interface SessionResources {
   control?: SessionControl;
 }
 
+export interface Assessment {
+  available: boolean;
+  since: string;
+  until: string;
+  observed_runs: number;
+  unattributed_runs: number;
+  truncated: boolean;
+  findings: Finding[] | null;
+}
+
 export interface SessionOverview {
   session_id: string;
   observed_at: string;
@@ -654,6 +685,7 @@ export interface SessionOverview {
   findings_truncated: boolean;
   coverage: SessionCoverage | null;
   resources: SessionResources | null;
+  hook_health: Assessment | null;
 }
 
 export interface SessionOutcomeEvidence {
@@ -680,6 +712,12 @@ export interface HookSummary {
   script: string;
   runs: number;
   errors: number;
+  cancelled: number;
+  harness?: string;
+  handler_id?: string;
+  config_id?: string;
+  duration_samples: number;
+  char_samples: number;
   blocks: number;
   chars: number;
   total_ms: number;

@@ -33,6 +33,9 @@ func TestNativeOpenClawResults(t *testing.T) {
 				t.Fatalf("record = %+v, %v, %v", r, ok, err)
 			}
 			data, _ := json.Marshal(r)
+			if tc.event == "before_prompt_build" && tc.state == "completed" && (r.Evidence == nil || r.Evidence.ContextChars == nil || *r.Evidence.ContextChars != tc.chars || !r.Evidence.CharsKnown) {
+				t.Fatalf("lost measured context: %+v", r)
+			}
 			if strings.Contains(string(data), "private") || strings.Contains(string(data), "héllo") {
 				t.Fatal("native text persisted")
 			}

@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -43,8 +44,30 @@ func TestCodexDeliveryIdentity(t *testing.T) {
 	a, _, _ := (Decoder{}).Decode(codexCompletion("delivery-1", "completed"))
 	b, _, _ := (Decoder{}).Decode(codexCompletion("delivery-2", "completed"))
 	retry, _, _ := (Decoder{}).Decode(codexCompletion("delivery-1", "completed"))
-	if a.ID == b.ID || a != retry {
+	if a.ID == b.ID || !reflect.DeepEqual(a, retry) {
 		t.Fatal("distinct runs collapsed or retry changed")
+	}
+}
+
+func TestCodexEvidenceAndContextSemantics(t *testing.T) {
+	line := strings.Replace(string(codexCompletion("r", "completed")), `"notification":`, `"evidence":{"handler_id":"h","config_id":"c","operation_id":"o","execution_mode":"foreground"},"notification":`, 1)
+	r, _, err := (Decoder{}).Decode([]byte(line))
+	if err != nil || r.Evidence == nil || r.Evidence.HandlerID != "h" || r.Evidence.ContextChars == nil || *r.Evidence.ContextChars != 7 || !r.Evidence.DurationKnown {
+		t.Fatalf("evidence = %+v %v", r, err)
+	}
+	line = strings.Replace(line, `"durationMs":12`, `"durationMs":null`, 1)
+	line = strings.Replace(line, `"kind":"context"`, `"kind":"feedback"`, 1)
+	r, _, err = (Decoder{}).Decode([]byte(line))
+	if err != nil || r.Evidence.DurationKnown || *r.Evidence.ContextChars != 0 || r.Chars != 7 {
+		t.Fatalf("guessed measurement = %+v %v", r, err)
+	}
+}
+
+func TestCodexMissingEntriesAreUnknown(t *testing.T) {
+	line := `{"id":"r","notification":{"method":"hook/completed","params":{"threadId":"t","run":{"eventName":"preToolUse","status":"completed","completedAt":1791882001}}}}`
+	r, _, err := (Decoder{}).Decode([]byte(line))
+	if err != nil || r.Evidence == nil || r.Evidence.CharsKnown || r.Evidence.ContextChars != nil {
+		t.Fatalf("missing entries became measured zero: %+v %v", r, err)
 	}
 }
 
