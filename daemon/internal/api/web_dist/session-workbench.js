@@ -204,13 +204,52 @@ function validHookForwarder(row) {
   const id = v => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(v);
   const time = v => typeof v === 'string' && Number.isFinite(Date.parse(v));
   const count = v => Number.isSafeInteger(v) && v >= 0;
-  return !!r && r.type === 'hook_forwarder' && r.version === 1 && id(r.forwarder_id)
+  const codes = (v, allowed) => v === undefined || v === '' || (typeof v === 'string' && allowed.includes(v));
+  const h = r && r.health;
+  let healthValid = r && r.version === 1 && h == null;
+  if (r && r.version === 2 && h && typeof h === 'object' && !Array.isArray(h)) {
+    const box = h.outbox;
+    const boxValid = box == null || (box && typeof box === 'object' && !Array.isArray(box)
+      && count(box.persisted) && box.persisted <= r.pending && count(box.recovered)
+      && codes(box.error, ['outbox-failed', 'outbox-full']));
+    const state = h.capture_error || h.delivery_error || (box && box.error) ? 'error' : h.source_state;
+    healthValid = ['connected', 'disconnected', 'error'].includes(h.source_state) && typeof h.report_error === 'boolean'
+      && codes(h.capture_error, ['invalid-input', 'unsupported-protocol', 'scope-mismatch', 'delivery-conflict', 'queue-full'])
+      && codes(h.delivery_error, ['recorder-unavailable', 'recorder-failed']) && boxValid && r.state === state;
+  }
+  return !!r && r.type === 'hook_forwarder' && healthValid && id(r.forwarder_id)
     && (r.session_id === undefined || id(r.session_id))
     && ['claude', 'codex', 'openclaw', 'hermes', 'opencode'].includes(r.harness)
     && ['connected', 'disconnected', 'error'].includes(r.state)
     && ['recent', 'stale', 'unverified'].includes(row.freshness)
     && ['sequence', 'pending', 'delivery_failures', 'dropped'].every(k => count(r[k])) && r.sequence > 0
     && time(r.ts) && time(row.received_at);
+}
+
+function hookForwarderHealthHTML(r, freshness) {
+  const h = r.health;
+  if (!h) return '<p>Detailed source, delivery and persistence diagnostics are unavailable from this host.</p>';
+  const stale = freshness !== 'recent';
+  const source = stale ? '<p>Last reported diagnostics follow; their current state is unknown.</p>'
+    : `<p>${({ connected: 'Source connected', disconnected: 'Source disconnected', error: 'Source error' })[h.source_state]} (host reported).${h.source_state === 'connected' ? '' : ' Check the host subscription and restore the source connection.'}</p>`;
+  const actions = {
+    'invalid-input': 'Validate the completion metadata against the shared contract, then submit the corrected completion.',
+    'unsupported-protocol': 'Use the supported native hook protocol and required snapshots, then submit the corrected completion.',
+    'scope-mismatch': 'Route the completion to the forwarder for its harness and session.',
+    'delivery-conflict': 'Keep one execution ID for identical retry metadata; use a new ID for a different execution.',
+    'queue-full': 'Restore delivery and allow the queue to drain. Some rejected completions may be unrecoverable.',
+    'recorder-unavailable': 'Restore the installed recorder executable and its permissions. Retry retained completions using their original delivery IDs.',
+    'recorder-failed': 'Check the recorder and its output storage. Retry retained completions using their original delivery IDs.',
+    'outbox-full': 'Free outbox storage or increase its configured budget. Keep the existing outbox to preserve pending evidence.',
+    'outbox-failed': 'Check outbox storage availability and permissions. Keep the existing outbox to preserve pending evidence.'
+  };
+  const errors = [['Capture', h.capture_error], ['Delivery', h.delivery_error], ['Persistence', h.outbox && h.outbox.error]]
+    .filter(([, code]) => code).map(([stage, code]) => `<p>${stale ? 'Last reported ' : ''}${stage} error: ${escapeHTML(code)}. ${escapeHTML(actions[code] || 'Check the reporting host diagnostics.')}</p>`).join('');
+  const persistence = h.outbox
+    ? `<p>${Number(h.outbox.persisted)} persisted of ${Number(r.pending)} queued · ${Number(h.outbox.recovered)} recovered after host restart. Persisted completions can survive host restart; recorder acceptance does not establish daemon storage.</p>`
+    : '<p>Host outbox persistence is disabled. Queued completions are held in memory and may be lost if the host exits.</p>';
+  const reporting = h.report_error ? '<p>A previous health report failed to reach the recorder. This received report shows reporting has resumed.</p>' : '';
+  return source + errors + persistence + reporting;
 }
 
 function hookForwardersHTML(rows, truncated, readFailed) {
@@ -224,9 +263,9 @@ function hookForwardersHTML(rows, truncated, readFailed) {
       : ({ connected: 'Source connected', disconnected: 'Source disconnected', error: 'Forwarding error' })[r.state];
     let action = '';
     if (freshness !== 'recent') action = '<p>Check the reporting host, recorder and clocks, then obtain a new report.</p>';
-    else if (r.state !== 'connected' || r.pending > 0) action = '<p>Check the source connection and recorder. Retry retained completions using their original delivery IDs.</p>';
+    else if (!r.health && (r.state !== 'connected' || r.pending > 0)) action = '<p>Check the source connection and recorder. Retry retained completions using their original delivery IDs.</p>';
     const gap = r.dropped > 0 ? '<p>The host reports dropped completions. Some evidence may be missing; inspect host diagnostics and retry retained deliveries. Dropped completions may not be recoverable.</p>' : '';
-    return `<article class="sd-finding"><h5>${escapeHTML(r.harness)} · ${escapeHTML(state)} (host reported)</h5><p>Forwarder: ${escapeHTML(r.forwarder_id)} · Report ${Number(r.sequence)}${r.session_id ? ' · Host-supplied session: ' + escapeHTML(r.session_id) : ' · Session ID not supplied'}</p><p>${Number(r.pending)} queued · ${Number(r.delivery_failures)} delivery failures · ${Number(r.dropped)} dropped. Failure and drop counts are cumulative for this forwarder instance.</p><p>Host report time: <time>${escapeHTML(r.ts)}</time> · Local receipt: <time>${escapeHTML(row.received_at)}</time></p>${action}${gap}</article>`;
+    return `<article class="sd-finding"><h5>${escapeHTML(r.harness)} · ${escapeHTML(state)} (host reported)</h5><p>Forwarder: ${escapeHTML(r.forwarder_id)} · Report ${Number(r.sequence)}${r.session_id ? ' · Host-supplied session: ' + escapeHTML(r.session_id) : ' · Session ID not supplied'}</p><p>${Number(r.pending)} queued · ${Number(r.delivery_failures)} delivery failures · ${Number(r.dropped)} dropped. Failure and drop counts are cumulative for this forwarder instance.</p><p>Host report time: <time>${escapeHTML(r.ts)}</time> · Local receipt: <time>${escapeHTML(row.received_at)}</time></p>${hookForwarderHealthHTML(r, freshness)}${action}${gap}</article>`;
   }).join('')}<p>Host reports do not establish complete delivery or protection coverage.</p>`;
 }
 

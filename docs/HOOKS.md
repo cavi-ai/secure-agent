@@ -71,7 +71,7 @@ from its own source subscription and delivery queue.
 ```json
 {
   "type": "hook_forwarder",
-  "version": 1,
+  "version": 2,
   "harness": "codex",
   "forwarder_id": "forwarder-instance-uuid",
   "sequence": 1,
@@ -79,9 +79,52 @@ from its own source subscription and delivery queue.
   "state": "error",
   "pending": 3,
   "delivery_failures": 2,
-  "dropped": 0
+  "dropped": 0,
+  "health": {
+    "source_state": "connected",
+    "delivery_error": "recorder-failed",
+    "report_error": false,
+    "outbox": { "persisted": 3, "recovered": 0 }
+  }
 }
 ```
+
+Version 2 reports separate source connection, capture, delivery and persistence
+health for every harness. Version 1 reports remain readable, with detailed
+health shown as unavailable. Report versions are independent of completion
+record versions. The shared forwarding client emits version 2 reports and
+requires a recorder that accepts them; an older recorder rejecting reports
+leaves reporting errors visible locally. Completion delivery is independent.
+
+`health.source_state` is the host's source observation. Aggregate `state` is
+`error` when capture, delivery or outbox errors are active; otherwise it matches
+the source state. A connected source can coexist with failed delivery or
+persistence. Optional error fields accept only these safe codes:
+
+| Stage | Codes | Recovery |
+| --- | --- | --- |
+| Capture | `invalid-input`, `unsupported-protocol` | Correct the completion metadata or native protocol and required snapshots. |
+| Capture | `scope-mismatch`, `delivery-conflict` | Use the correct harness/session forwarder and preserve identical metadata for each retry ID. |
+| Capture | `queue-full` | Restore delivery and let the queue drain; rejected completions may be unrecoverable. |
+| Delivery | `recorder-unavailable` | Restore the recorder executable and its permissions. |
+| Delivery | `recorder-failed` | Check the recorder and output storage, then retry retained completions with their original IDs. |
+| Persistence | `outbox-full`, `outbox-failed` | Restore storage access, free space or increase the budget; preserve the existing outbox. |
+
+Capture errors clear after a valid admission, including an identical pending
+retry. A queue-full error also clears when delivery frees capacity. Delivery
+and persistence errors clear only after their respective operations succeed.
+Unrelated messages and hook execution outcomes do not clear forwarding errors.
+Failures and drops remain cumulative after recovery.
+
+With an outbox enabled, `persisted` is the subset of `pending` confirmed on disk;
+`recovered` is the number loaded when this host instance opened its outbox and
+does not decrease as deliveries drain. Both counts are required, including
+zero. Omitting `outbox` in version 2 means persistence is disabled; queued
+completions may be lost on host exit. In version 1, persistence is unknown.
+`report_error` is required and describes the preceding report attempt. A
+received report carrying this flag shows reporting has resumed; an ongoing
+report outage is visible only in the host's local diagnostics. Shutdown
+cancellation does not create a reporting or completion-delivery failure.
 
 Use a globally unique opaque `forwarder_id` for one reporting instance and
 scope, with a new ID after restart or a session-scope change. An optional opaque
@@ -130,6 +173,27 @@ client, err := forwarder.NewCodex(forwarder.Config{
     Sender: forwarder.Recorder{Executable: recorderPath},
 })
 ```
+
+OpenClaw, Hermes and OpenCode hosts use `NewAdapter` with their native decoder
+and the same client configuration, lifecycle, diagnostics and retry behavior:
+
+```go
+client, err := forwarder.NewAdapter(forwarder.Config{
+    Harness: "hermes",
+    Sender: forwarder.Recorder{Executable: recorderPath},
+}, hermes.Decoder{})
+```
+
+Use `openclaw.Decoder{}` or `opencode.Decoder{}` with the matching harness for
+those hosts. `Submit` accepts the documented per-handler completion envelope,
+including its host-assigned execution ID. Identical pending retries do not add
+queue entries. `NewCodex.Submit` instead accepts a native notification and
+assigns the delivery ID once. Hosts already supplying normalized metadata can
+use `NewAdapter` with `hookrun.RecordDecoder{}`, or call `Client.Enqueue`.
+Input to either adapter is limited to 1 MiB. `hookrun.ErrorCode(err)` extracts
+the safe diagnostic code without parsing error messages. Claude transcript
+collection remains independent of host forwarding and does not imply a source
+subscription or an outbox.
 
 `recorderPath` must be the absolute path to the installed `secure-agent` CLI.
 An optional `Recorder.Output` selects the activity log; configure the daemon to

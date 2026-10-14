@@ -66,6 +66,20 @@ export interface HookIngestionHarness {
   last_received_at: string;
 }
 
+export interface OutboxHealth {
+  persisted: number;
+  recovered: number;
+  error?: string;
+}
+
+export interface ForwarderHealth {
+  source_state: string;
+  capture_error?: string;
+  delivery_error?: string;
+  report_error: boolean;
+  outbox?: OutboxHealth;
+}
+
 export interface ForwarderReport {
   type: string;
   version: number;
@@ -78,6 +92,7 @@ export interface ForwarderReport {
   pending: number;
   delivery_failures: number;
   dropped: number;
+  health?: ForwarderHealth;
 }
 
 export interface HookForwarderSnapshot {

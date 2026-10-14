@@ -71,3 +71,32 @@ func TestFutureHostReportCannotBecomeRecentWithoutNewReceipt(t *testing.T) {
 		t.Fatalf("expired receipt = %s", got)
 	}
 }
+
+func TestStructuredHostHealthOwnsMutableMetadataAndRejectsDowngrade(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.TrackHookIngestion()
+	now := time.Now().UTC()
+	r := hookrun.ForwarderReport{Type: "hook_forwarder", Version: 2, Harness: "hermes", ForwarderID: "host", Sequence: 1, TS: now, State: "error", Pending: 2,
+		Health: &hookrun.ForwarderHealth{SourceState: "connected", DeliveryError: hookrun.ErrRecorderFailed, Outbox: &hookrun.OutboxHealth{Persisted: 1, Recovered: 1}}}
+	s.noteHookForwarder(r, now)
+	r.Health.Outbox.Persisted = 0
+	r.Health.DeliveryError = ""
+	h := s.HookIngestion()
+	if h.Forwarders[0].Report.Health.Outbox.Persisted != 1 || h.Forwarders[0].Report.Health.DeliveryError != "recorder-failed" {
+		t.Fatal("caller mutation changed retained health")
+	}
+	h.Forwarders[0].Report.Health.SourceState = "disconnected"
+	h.Forwarders[0].Report.Health.Outbox.Persisted = 0
+	if h := s.HookIngestion(); h.Forwarders[0].Report.Health.SourceState != "connected" || h.Forwarders[0].Report.Health.Outbox.Persisted != 1 {
+		t.Fatal("snapshot mutation changed retained health")
+	}
+	r.Version, r.Health, r.State, r.Sequence = 1, nil, "connected", 2
+	s.noteHookForwarder(r, now)
+	if h := s.HookIngestion(); h.Rejected != 1 || h.Forwarders[0].Report.Sequence != 1 {
+		t.Fatal("same-instance downgrade erased structured failure")
+	}
+}

@@ -156,10 +156,13 @@ func TestOutboxBudgetAndStorageFailureDoNotBlockCapture(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- c.Run(ctx) }()
-	eventually(t, func() bool { return c.Snapshot().StorageFull })
+	eventually(t, func() bool { s := c.Snapshot(); return s.StorageFull && s.DeliveryFailures > 0 })
 	s := c.Snapshot()
 	if !s.StorageError || s.Pending != 100 || s.Persisted == 0 || s.Persisted == 100 {
 		t.Fatalf("storage quota: %+v", s)
+	}
+	if s.Health.Outbox == nil || s.Health.Outbox.Error != "outbox-full" || s.Health.Outbox.Persisted != s.Persisted || s.Health.DeliveryError == "" {
+		t.Fatalf("storage and recorder failures were not kept separate: %+v", s.Health)
 	}
 	if fi, err := os.Stat(filepath.Join(dir, "outbox.db")); err != nil || fi.Size() > 65536 {
 		t.Fatalf("disk budget exceeded: %v %v", fi, err)

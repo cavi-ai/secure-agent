@@ -9,6 +9,30 @@ for (const file of ['lib.js', 'tab-findings.js', 'session-workbench.js']) vm.run
 const finding = (over = {}) => ({ id: 'hook:h', kind: 'execution-errors', harness: 'hermes', event: 'pre_tool_call', handler_id: 'h', config_id: 'c', title: 'Hook repeatedly failed', detail: 'Three observed errors', next_action: 'Repair the dependency, then retry', limits: ['Action outcome unknown'], count: 3, first_at: '2026-10-13T10:00:00Z', last_at: '2026-10-13T10:01:00Z', needs_action: true, ...over });
 const health = (over = {}) => ({ available: true, since: '2026-10-13T09:30:00Z', until: '2026-10-13T10:00:00Z', observed_runs: 3, unattributed_runs: 0, truncated: false, findings: [finding()], ...over });
 
+test('all harnesses separate source, capture, delivery and persistence health', () => {
+  for (const harness of ['claude', 'codex', 'openclaw', 'hermes', 'opencode']) {
+    const report = { type: 'hook_forwarder', version: 2, harness, forwarder_id: 'host-1', sequence: 1,
+      ts: '2026-10-13T10:00:00Z', state: 'error', pending: 3, delivery_failures: 2, dropped: 1,
+      health: { source_state: 'connected', capture_error: 'unsupported-protocol', delivery_error: 'recorder-unavailable', report_error: false,
+        outbox: { persisted: 2, recovered: 1, error: 'outbox-full' } } };
+    const row = { report, received_at: '2026-10-13T10:00:01Z', freshness: 'recent' };
+    assert.equal(ctx.validHookForwarder(row), true, harness);
+    const html = ctx.hookForwardersHTML([row], false);
+    for (const text of ['Source connected', 'unsupported-protocol', 'recorder-unavailable', 'outbox-full', '2 persisted', '1 recovered', 'original delivery IDs']) assert.ok(html.includes(text), harness + ': ' + text);
+    const stale = ctx.hookForwardersHTML([{ ...row, freshness: 'stale' }], false);
+    assert.ok(!stale.includes('Source connected'), harness);
+    assert.match(stale, /current connection state unknown/);
+    const recovered = { ...row, report: { ...report, state: 'connected', pending: 0, health: { source_state: 'connected', report_error: false, outbox: { persisted: 0, recovered: 1 } } } };
+    const after = ctx.hookForwardersHTML([recovered], false);
+    assert.ok(!after.includes('recorder-unavailable') && !after.includes('outbox-full'));
+    assert.match(after, /2 delivery failures/);
+    assert.match(after, /1 dropped/);
+    assert.equal(ctx.validHookForwarder({ ...row, report: { ...report, health: { ...report.health, capture_error: '<script>' } } }), false);
+    assert.equal(ctx.validHookForwarder({ ...row, report: { ...report, state: 'connected' } }), false);
+    assert.equal(ctx.validHookForwarder({ ...row, report: { ...report, health: { ...report.health, outbox: { persisted: 4, recovered: 1 } } } }), false);
+  }
+});
+
 test('host health reports qualify freshness, attribution and delivery evidence', () => {
   const report = { type: 'hook_forwarder', version: 1, harness: 'codex', forwarder_id: 'bridge-1', sequence: 2, ts: '2026-10-13T10:00:00Z', state: 'error', pending: 3, delivery_failures: 2, dropped: 1 };
   const row = { report, received_at: '2026-10-13T10:00:01Z', freshness: 'recent' };

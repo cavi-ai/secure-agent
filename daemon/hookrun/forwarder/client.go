@@ -17,8 +17,8 @@ import (
 )
 
 var (
-	ErrFull     = errors.New("hook delivery queue is full; completion dropped")
-	ErrConflict = errors.New("hook delivery id already queued with different metadata")
+	ErrFull     = hookrun.ErrQueueFull
+	ErrConflict = hookrun.ErrDeliveryConflict
 	ErrRunning  = errors.New("hook forwarder is already running")
 )
 
@@ -58,6 +58,7 @@ type Snapshot struct {
 	StorageError     bool
 	StorageFull      bool
 	Closed           bool
+	Health           hookrun.ForwarderHealth
 }
 
 type queued struct {
@@ -75,7 +76,8 @@ type Client struct {
 	source                                               string
 	queue                                                []queued
 	failures, dropped, sequence                          uint64
-	deliveryError, reportError, running                  bool
+	reportError, running                                 bool
+	captureError, deliveryCode                           hookrun.FailureCode
 	wake                                                 chan struct{}
 	persistWake                                          chan struct{}
 	outbox                                               *outbox
@@ -142,19 +144,20 @@ func newID() (string, error) {
 // Enqueue freezes a validated metadata record. Duplicate pending IDs with the
 // same metadata are idempotent. Overflow rejects the newest record and leaves
 // previously accepted records intact. Invalid records do not count as drops.
-func (c *Client) Enqueue(record hookrun.Record) error {
+func (c *Client) Enqueue(record hookrun.Record) (err error) {
 	if err := record.Validate(); err != nil {
-		return err
+		return c.captureResult(err)
 	}
 	if record.Harness != c.config.Harness || c.config.SessionID != "" && record.SessionID != c.config.SessionID {
-		return errors.New("hook completion does not match forwarder scope")
+		return c.captureResult(hookrun.ErrScopeMismatch)
 	}
 	data, err := json.Marshal(record)
 	if err != nil {
-		return errors.New("cannot encode hook completion metadata")
+		return c.captureResult(hookrun.ErrInvalidInput)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer func() { err = c.captureResultLocked(err) }()
 	if c.closed {
 		return ErrClosed
 	}
@@ -178,6 +181,31 @@ func (c *Client) Enqueue(record hookrun.Record) error {
 	default:
 	}
 	return nil
+}
+
+// Only safe, operation-specific codes enter diagnostics. A valid admission
+// clears capture failures; it never clears delivery or persistence failures.
+func (c *Client) captureResult(err error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.captureResultLocked(err)
+}
+
+func (c *Client) captureResultLocked(err error) error {
+	code := hookrun.ErrorCode(err)
+	if err != nil && !errors.Is(err, ErrClosed) {
+		switch code {
+		case hookrun.ErrInvalidInput, hookrun.ErrUnsupportedProtocol, hookrun.ErrScopeMismatch, hookrun.ErrDeliveryConflict, hookrun.ErrQueueFull:
+		default:
+			code = hookrun.ErrInvalidInput
+		}
+		err = code
+	}
+	if !c.closed && c.captureError != code {
+		c.captureError = code
+		c.notify()
+	}
+	return err
 }
 
 // SetSourceState takes an explicit host observation: connected, disconnected,
@@ -207,17 +235,23 @@ func (c *Client) notify() {
 }
 
 func (c *Client) snapshotLocked() Snapshot {
-	state := c.source
-	if c.deliveryError || c.persistError || c.ackError {
-		state = "error"
-	}
 	var persisted uint64
 	for _, item := range c.queue {
 		if item.persisted {
 			persisted++
 		}
 	}
-	return Snapshot{ForwarderID: c.id, State: state, Pending: uint64(len(c.queue)), DeliveryFailures: c.failures, Dropped: c.dropped, ReportError: c.reportError, Running: c.running, Persisted: persisted, Recovered: c.recovered, StorageError: c.persistError || c.ackError, StorageFull: c.persistFull || c.ackFull, Closed: c.closed}
+	h := hookrun.ForwarderHealth{SourceState: c.source, CaptureError: c.captureError, DeliveryError: c.deliveryCode, ReportError: c.reportError}
+	if c.outbox != nil {
+		h.Outbox = &hookrun.OutboxHealth{Persisted: persisted, Recovered: c.recovered}
+		if c.persistError || c.ackError {
+			h.Outbox.Error = hookrun.ErrOutboxFailed
+		}
+		if c.persistFull || c.ackFull {
+			h.Outbox.Error = hookrun.ErrOutboxFull
+		}
+	}
+	return Snapshot{ForwarderID: c.id, State: h.State(), Pending: uint64(len(c.queue)), DeliveryFailures: c.failures, Dropped: c.dropped, ReportError: c.reportError, Running: c.running, Persisted: persisted, Recovered: c.recovered, StorageError: c.persistError || c.ackError, StorageFull: c.persistFull || c.ackFull, Closed: c.closed, Health: h}
 }
 
 func (c *Client) Snapshot() Snapshot {
@@ -240,14 +274,19 @@ func (c *Client) report(ctx context.Context) (failed bool) {
 	}
 	c.sequence++
 	s := c.snapshotLocked()
-	r := hookrun.ForwarderReport{Type: "hook_forwarder", Version: 1, Harness: c.config.Harness, SessionID: c.config.SessionID, ForwarderID: c.id, Sequence: c.sequence, TS: time.Now().UTC(), State: s.State, Pending: s.Pending, DeliveryFailures: s.DeliveryFailures, Dropped: s.Dropped}
+	r := hookrun.ForwarderReport{Type: "hook_forwarder", Version: 2, Harness: c.config.Harness, SessionID: c.config.SessionID, ForwarderID: c.id, Sequence: c.sequence, TS: time.Now().UTC(), State: s.State, Pending: s.Pending, DeliveryFailures: s.DeliveryFailures, Dropped: s.Dropped, Health: &s.Health}
 	c.mu.Unlock()
 	data, err := json.Marshal(r)
 	if err == nil {
 		err = c.send(ctx, data)
 	}
 	c.mu.Lock()
-	c.reportError = err != nil
+	if ctx.Err() == nil {
+		if c.reportError && err == nil {
+			c.notify()
+		}
+		c.reportError = err != nil
+	}
 	c.mu.Unlock()
 	return err != nil
 }
@@ -275,11 +314,15 @@ func (c *Client) deliverOne(ctx context.Context) (failed bool) {
 			// original metadata queued, including an ambiguous append.
 			if ctx.Err() == nil {
 				c.failures++
-				c.deliveryError = true
+				c.deliveryCode = hookrun.ErrorCode(err)
+				if c.deliveryCode != hookrun.ErrRecorderUnavailable {
+					c.deliveryCode = hookrun.ErrRecorderFailed
+				}
 			}
 			c.mu.Unlock()
 			return true
 		}
+		c.deliveryCode = ""
 		c.mu.Unlock()
 		if c.outbox != nil {
 			err = c.outbox.ack(ctx, item)
@@ -300,7 +343,9 @@ func (c *Client) deliverOne(ctx context.Context) (failed bool) {
 		c.mu.Lock()
 		c.queue[0] = queued{}
 		c.queue = c.queue[1:]
-		c.deliveryError = false
+		if c.captureError == hookrun.ErrQueueFull {
+			c.captureError = ""
+		}
 		c.mu.Unlock()
 	}
 	return false

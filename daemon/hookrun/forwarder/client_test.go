@@ -158,7 +158,7 @@ func TestBlockedDestinationCannotBlockCaptureAndOverflowIsExplicit(t *testing.T)
 	if _, err := c.Submit([]byte(completion)); !errors.Is(err, forwarder.ErrFull) {
 		t.Fatalf("overflow: %v", err)
 	}
-	if s := c.Snapshot(); s.Pending != 1 || s.Dropped != 1 || s.State != "disconnected" {
+	if s := c.Snapshot(); s.Pending != 1 || s.Dropped != 1 || s.State != "error" || s.Health.SourceState != "disconnected" {
 		t.Fatalf("queue: %+v", s)
 	}
 }

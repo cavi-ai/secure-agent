@@ -13,6 +13,9 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/hookrun"
 	"github.com/cavi-ai/secure-agent/daemon/hookrun/forwarder"
+	"github.com/cavi-ai/secure-agent/daemon/hookrun/hermes"
+	"github.com/cavi-ai/secure-agent/daemon/hookrun/openclaw"
+	"github.com/cavi-ai/secure-agent/daemon/hookrun/opencode"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -22,13 +25,23 @@ import (
 // Exercise a real recorder process, collector, SQLite store and read API across
 // recorder unavailability and recovery. Native notification input is a fixture;
 // live app-server validation is separate from this deterministic regression.
-func TestCodexForwarderRecoversThroughRecorderAndSessionAPI(t *testing.T) {
-	for _, durable := range []bool{false, true} {
-		t.Run(fmt.Sprintf("durable=%v", durable), func(t *testing.T) { testCodexForwarderRecovery(t, durable) })
+func TestNativeForwardersRecoverThroughRecorderAndSessionAPI(t *testing.T) {
+	for _, harness := range []string{"codex", "openclaw", "hermes", "opencode"} {
+		for _, durable := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/durable=%v", harness, durable), func(t *testing.T) { testNativeForwarderRecovery(t, harness, durable) })
+		}
 	}
 }
 
-func testCodexForwarderRecovery(t *testing.T, durable bool) {
+type nativeForwarder interface {
+	Submit([]byte) (string, error)
+	SetSourceState(string) error
+	Snapshot() forwarder.Snapshot
+	Run(context.Context) error
+	Close() error
+}
+
+func testNativeForwarderRecovery(t *testing.T, harness string, durable bool) {
 	root := t.TempDir()
 	binary := filepath.Join(root, "recorder")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -75,7 +88,15 @@ func testCodexForwarderRecovery(t *testing.T, durable bool) {
 	if durable {
 		cfg.OutboxDir = filepath.Join(root, "outbox")
 	}
-	c, err := forwarder.NewCodex(cfg)
+	var c nativeForwarder
+	var err error
+	if harness == "codex" {
+		c, err = forwarder.NewCodex(cfg)
+	} else {
+		cfg.Harness = harness
+		decoder := map[string]hookrun.Decoder{"openclaw": openclaw.Decoder{}, "hermes": hermes.Decoder{}, "opencode": opencode.Decoder{}}[harness]
+		c, err = forwarder.NewAdapter(cfg, decoder)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,12 +104,12 @@ func testCodexForwarderRecovery(t *testing.T, durable bool) {
 	if err := c.SetSourceState("connected"); err != nil {
 		t.Fatal(err)
 	}
-	native := []byte(`{"method":"hook/completed","params":{"threadId":"forwarded-session","run":{"id":"stop:0:/private/hooks.json","eventName":"stop","status":"blocked","completedAt":1791882001,"durationMs":7,"entries":[{"kind":"feedback","text":"private feedback"}]}}}`)
+	native := nativeBlockedCompletion(harness, "one")
 	id, err := c.Submit(native)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Submit(native); err != forwarder.ErrFull {
+	if _, err := c.Submit(nativeBlockedCompletion(harness, "two")); err != forwarder.ErrFull {
 		t.Fatalf("overflow: %v", err)
 	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
@@ -195,8 +216,25 @@ func testCodexForwarderRecovery(t *testing.T, durable bool) {
 		t.Fatal("forwarder report missing")
 	}
 	r := status.HookIngestion.Forwarders[0].Report
-	if r.State != "connected" || r.Pending != 0 || r.DeliveryFailures < 1 || r.Dropped != 1 {
+	if r.State != "connected" || r.Pending != 0 || r.DeliveryFailures < 1 || r.Dropped != 1 || r.Health == nil || r.Health.SourceState != "connected" || r.Health.DeliveryError != "" || r.Health.CaptureError != "" {
 		raw, _ := json.Marshal(r)
 		t.Fatalf("recovery erased evidence: %s", raw)
 	}
+	if durable && (r.Health.Outbox == nil || r.Health.Outbox.Persisted != 0 || r.Health.Outbox.Error != "") || !durable && r.Health.Outbox != nil {
+		t.Fatalf("persistence health mismatch: %+v", r.Health)
+	}
+}
+
+func nativeBlockedCompletion(harness, id string) []byte {
+	if harness == "codex" {
+		return []byte(`{"method":"hook/completed","params":{"threadId":"forwarded-session","run":{"id":"stop:0:/private/hooks.json","eventName":"stop","status":"blocked","completedAt":1791882001,"durationMs":7,"entries":[{"kind":"feedback","text":"private feedback"}]}}}`)
+	}
+	eventName, result, extra := "before_tool_call", `{"block":true,"blockReason":"private feedback"}`, ""
+	switch harness {
+	case "hermes":
+		eventName, result = "pre_tool_call", `{"action":"block","message":"private feedback"}`
+	case "opencode":
+		eventName, result, extra = "permission.evaluate", `{"effect":"deny","message":"private feedback"}`, `,"protocol":"opencode-v2","before":{"effect":"allow"}`
+	}
+	return []byte(fmt.Sprintf(`{"type":"hook_completed","version":2,"harness":%q,"id":%q,"session_id":"forwarded-session","ts":"2026-10-13T10:00:01Z","event":%q,"state":"completed","duration_ms":7,"result":%s,"evidence":{"handler_id":"handler-1"}%s}`, harness, id, eventName, result, extra))
 }
