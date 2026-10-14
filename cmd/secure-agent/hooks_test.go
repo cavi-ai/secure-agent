@@ -87,3 +87,30 @@ func TestCommonRecorderRejectsMalformedJSON(t *testing.T) {
 		t.Fatal("malformed input written")
 	}
 }
+
+func TestRecorderNativeAdapters(t *testing.T) {
+	for _, tc := range []struct {
+		harness, event, result, extra, status string
+		chars                                 int64
+	}{
+		{"openclaw", "before_tool_call", `{"block":true,"blockReason":"no"}`, "", "block", 2},
+		{"hermes", "pre_llm_call", `{"context":"héllo"}`, "", "inject", 5},
+		{"opencode", "permission.evaluate", `{"effect":"deny","message":"no"}`, `,"protocol":"opencode-v2","before":{"effect":"allow"}`, "deny", 2},
+	} {
+		t.Run(tc.harness, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "activity.jsonl")
+			input := `{"type":"hook_completed","version":1,"harness":"` + tc.harness + `","id":"delivery-1","session_id":"session-1","ts":"2026-10-13T10:00:00Z","event":"` + tc.event + `","state":"completed","duration_ms":9,"result":` + tc.result + tc.extra + `}`
+			if err := runHooks(strings.NewReader(input+"\n"), []string{"record", "--format", tc.harness, "--output", path}); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, ok, err := hookrun.DecodeRecord(bytes.TrimSpace(data))
+			if err != nil || !ok || r.Status != tc.status || r.Chars != tc.chars || r.Harness != tc.harness {
+				t.Fatalf("record=%+v %v %v", r, ok, err)
+			}
+		})
+	}
+}

@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/hookrun"
 	"github.com/cavi-ai/secure-agent/daemon/hookrun/codex"
+	"github.com/cavi-ai/secure-agent/daemon/hookrun/hermes"
+	"github.com/cavi-ai/secure-agent/daemon/hookrun/openclaw"
+	"github.com/cavi-ai/secure-agent/daemon/hookrun/opencode"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -62,7 +65,16 @@ func TestSessionHooksEndpoint(t *testing.T) {
 
 // A host may retry a completion, while the same native handler can run more
 // than once in a turn. Exercise the shared log, collector, SQLite and API.
-func TestForwardedCodexHooksReachSessionAPI(t *testing.T) {
+func TestForwardedNativeHooksReachSessionAPI(t *testing.T) {
+	adapters := []struct {
+		name, event, result, extra string
+		decoder                    hookrun.Decoder
+	}{
+		{"codex", "PreToolUse", "", "", codex.Decoder{}},
+		{"openclaw", "before_tool_call", `{"block":true,"blockReason":"no"}`, "", openclaw.Decoder{}},
+		{"hermes", "pre_tool_call", `{"action":"block","message":"no"}`, "", hermes.Decoder{}},
+		{"opencode", "permission.evaluate", `{"effect":"deny","message":"no"}`, `,"protocol":"opencode-v2","before":{"effect":"allow"}`, opencode.Decoder{}},
+	}
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "activity.jsonl")
 	if err := os.WriteFile(logPath, nil, 0600); err != nil {
@@ -82,24 +94,29 @@ func TestForwardedCodexHooksReachSessionAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"delivery-1", "delivery-2", "delivery-1"} {
-		line := `{"id":"` + id + `","notification":{"method":"hook/completed","params":{"threadId":"codex-thread","run":{"id":"same-handler","eventName":"preToolUse","status":"blocked","completedAt":1791882001,"durationMs":5,"entries":[{"kind":"feedback","text":"no"}]}}}}`
-		r, ok, err := (codex.Decoder{}).Decode([]byte(line))
-		if err != nil || !ok {
-			t.Fatalf("decode=%v error=%v", ok, err)
-		}
-		data, err := json.Marshal(r)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.Write(append(data, '\n')); err != nil {
-			t.Fatal(err)
+	for _, adapter := range adapters {
+		for _, id := range []string{"delivery-1", "delivery-2", "delivery-1"} {
+			line := `{"id":"` + id + `","notification":{"method":"hook/completed","params":{"threadId":"codex-thread","run":{"id":"same-handler","eventName":"preToolUse","status":"blocked","completedAt":1791882001,"durationMs":5,"entries":[{"kind":"feedback","text":"no"}]}}}}`
+			if adapter.name != "codex" {
+				line = `{"type":"hook_completed","version":1,"harness":"` + adapter.name + `","id":"` + id + `","session_id":"` + adapter.name + `-thread","ts":"2026-10-13T10:00:00Z","event":"` + adapter.event + `","state":"completed","duration_ms":5,"result":` + adapter.result + adapter.extra + `}`
+			}
+			r, ok, err := adapter.decoder.Decode([]byte(line))
+			if err != nil || !ok {
+				t.Fatalf("decode=%v error=%v", ok, err)
+			}
+			data, err := json.Marshal(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.Write(append(data, '\n')); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for range 3 {
+	for range 3 * len(adapters) {
 		select {
 		case e := <-sub:
 			if e.Kind != event.KindHookRun {
@@ -117,22 +134,20 @@ func TestForwardedCodexHooksReachSessionAPI(t *testing.T) {
 	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }})
 	go a.Serve(ctx)
 	waitForSocket(t, sock)
-	resp, err := unixClient(sock).Get("http://unix/sessions/codex-thread/hooks")
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("GET hooks: %v %v", resp, err)
-	}
-	var rows []store.HookSummary
-	decodeInto(t, resp, &rows)
-	if len(rows) != 1 || rows[0].Runs != 2 || rows[0].Blocks != 2 || rows[0].Chars != 4 || rows[0].TotalMs != 10 || rows[0].Event != "PreToolUse" || rows[0].Script != "" {
-		t.Fatalf("hook summary = %+v", rows)
-	}
-	timeline, err := st.QueryEvents(store.EventFilter{SessionID: "codex-thread", Limit: 10})
-	if err != nil || len(timeline) != 0 {
-		t.Fatalf("hook leaked into timeline: %+v %v", timeline, err)
-	}
-	for _, row := range rows {
-		if strings.Contains(row.Script, "same-handler") {
-			t.Fatal("native handler id retained")
+	for _, adapter := range adapters {
+		id := adapter.name + "-thread"
+		resp, err := unixClient(sock).Get("http://unix/sessions/" + id + "/hooks")
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("GET hooks: %v %v", resp, err)
+		}
+		var rows []store.HookSummary
+		decodeInto(t, resp, &rows)
+		if len(rows) != 1 || rows[0].Runs != 2 || rows[0].Blocks != 2 || rows[0].Chars != 4 || rows[0].TotalMs != 10 || rows[0].Event != adapter.event || rows[0].Script != "" {
+			t.Fatalf("hook summary = %+v", rows)
+		}
+		timeline, err := st.QueryEvents(store.EventFilter{SessionID: id, Limit: 10})
+		if err != nil || len(timeline) != 0 {
+			t.Fatalf("hook leaked into timeline: %+v %v", timeline, err)
 		}
 	}
 }
