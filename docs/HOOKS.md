@@ -63,6 +63,7 @@ Wrap each `hook/completed` notification in an envelope:
     "params": {
       "threadId": "thread-uuid",
       "run": {
+        "id": "pre-tool-use:0:/path/to/hooks.json",
         "eventName": "preToolUse",
         "status": "completed",
         "completedAt": 1791882001,
@@ -77,13 +78,28 @@ Wrap each `hook/completed` notification in an envelope:
 The `notification` is the host's original app-server v2 notification. Assign the
 envelope `id` once per completion, before queuing it, and reuse that ID for every
 retry. Use a UUID or another opaque identifier. Codex's `run.id` identifies the
-configured handler, repeats between executions and can include a source path;
-it is unsuitable as a completion ID and is not stored.
+configured handler, repeats between executions and can include a source path.
+It is unsuitable as a completion ID. The adapter derives an opaque handler ID
+from this native ID; the raw value is not stored. Separate configured handlers
+therefore stay separate even when their script labels are missing.
+
+The derived ID is `codex-handler:` followed by the SHA-256 digest of
+`secure-agent:codex:handler:v1`, a zero byte, and the native `run.id` in UTF-8.
+The adapter preserves an explicit host-supplied `evidence.handler_id` instead
+when present. Missing or null native IDs remain unattributed unless the host
+supplies an identity. The adapter never substitutes a delivery ID, source path
+or script basename for a missing native handler ID.
+
+Identity follows Codex's configured-handler ID and can change if Codex reorders
+or relocates that handler. Configuration revisions still require a host-supplied
+`config_id`; a stable handler ID does not establish an unchanged configuration.
+Hosts can provide their own durable inventory identity to span such changes.
 
 Completion notifications do not identify the executed command. If the host has
 a trusted mapping from its hook inventory, it may include an optional envelope
 `script`, such as `guard.py`. Only a basename is accepted. Without it the console
-shows **not recorded** and combines runs with the same event and missing script.
+shows **not recorded**. Records lacking handler identity are combined by event
+and script; identified handlers retain their own rows.
 The recorder never treats a configuration filename as the executed script.
 
 `completed` becomes `ok`, or `inject` when it returned model-facing text. `failed`
@@ -268,8 +284,10 @@ positive counts remain visible, but legacy zeros cannot prove a measurement.
 OpenClaw, Hermes and OpenCode forwarding envelopes also accept version 2 with
 `evidence`. Codex wrappers accept the same optional `evidence` object alongside
 `id` and `notification`. Native adapters derive measurement availability and
-recognized context counts from their native inputs. They do not infer handler
-inventory or execution mode. Claude transcript records currently lack stable
+recognized context counts from their native inputs. Codex derives opaque
+handler identity from its native `run.id`; the other native adapters require
+host inventory IDs. Configuration revisions and execution mode remain
+host-supplied. Claude transcript records currently lack stable
 registered-handler identity and therefore remain history totals.
 
 Storage deduplicates on session ID and run ID. Completions stay outside the

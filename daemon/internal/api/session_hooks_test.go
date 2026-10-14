@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -207,10 +208,27 @@ func TestForwardedNativeHooksReachSessionAPI(t *testing.T) {
 			}
 		}
 	}
+	// Native Codex identity alone must attribute repeated failures. No host
+	// evidence mapping is supplied, and replayed delivery IDs stay idempotent.
+	now := time.Now().UTC()
+	if err := st.UpsertSession(model.Session{ID: "codex-repair", Harness: "codex", StartedAt: now.Add(-time.Minute), Status: model.SessionActive}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"native-0", "native-1", "native-2", "native-0"} {
+		line := fmt.Sprintf(`{"id":%q,"notification":{"method":"hook/completed","params":{"threadId":"codex-repair","run":{"id":"pre-tool-use:0:/home/example/hooks.json","eventName":"preToolUse","status":"failed","completedAt":%d,"durationMs":5,"entries":[]}}}}`, id, now.Add(-5*time.Second).Unix())
+		r, ok, err := (codex.Decoder{}).Decode([]byte(line))
+		if err != nil || !ok {
+			t.Fatalf("native decode: %v", err)
+		}
+		data, _ := json.Marshal(r)
+		if _, err := f.Write(append(data, '\n')); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for range 3 * len(adapters) {
+	for range 3*len(adapters) + 4 {
 		select {
 		case e := <-sub:
 			if e.Kind != event.KindHookRun {
@@ -243,5 +261,18 @@ func TestForwardedNativeHooksReachSessionAPI(t *testing.T) {
 		if err != nil || len(timeline) != 0 {
 			t.Fatalf("hook leaked into timeline: %+v %v", timeline, err)
 		}
+	}
+	resp, err := unixClient(sock).Get("http://unix/sessions/codex-repair/overview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overview SessionOverview
+	decodeInto(t, resp, &overview)
+	if overview.HookHealth == nil || len(overview.HookHealth.Findings) != 1 {
+		t.Fatalf("native identity did not reach findings: %+v", overview.HookHealth)
+	}
+	finding := overview.HookHealth.Findings[0]
+	if finding.Kind != "execution-errors" || finding.Count != 3 || !strings.HasPrefix(finding.HandlerID, "codex-handler:") || finding.ConfigID != "" {
+		t.Fatalf("native finding = %+v", finding)
 	}
 }

@@ -50,6 +50,7 @@ func (Decoder) Decode(line []byte) (hookrun.Record, bool, error) {
 	var params struct {
 		ThreadID string `json:"threadId"`
 		Run      struct {
+			ID          string `json:"id"`
 			EventName   string `json:"eventName"`
 			Status      string `json:"status"`
 			CompletedAt *int64 `json:"completedAt"`
@@ -70,6 +71,9 @@ func (Decoder) Decode(line []byte) (hookrun.Record, bool, error) {
 	evidence := envelope.Evidence
 	if evidence == nil {
 		evidence = &hookrun.Evidence{}
+	}
+	if evidence.HandlerID == "" {
+		evidence.HandlerID = nativeHandlerID(params.Run.ID)
 	}
 	evidence.DurationKnown = params.Run.DurationMs != nil
 	evidence.CharsKnown = params.Run.Entries != nil

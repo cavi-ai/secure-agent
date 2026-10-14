@@ -49,6 +49,61 @@ func TestCodexDeliveryIdentity(t *testing.T) {
 	}
 }
 
+func TestCodexNativeHandlerIdentity(t *testing.T) {
+	a, _, err := (Decoder{}).Decode(codexCompletion("first", "failed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := (Decoder{}).Decode(codexCompletion("second", "failed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Evidence.HandlerID == "" || a.Evidence.HandlerID != b.Evidence.HandlerID || a.ID == b.ID {
+		t.Fatalf("handler and execution identities mixed: %+v %+v", a, b)
+	}
+	if !strings.HasPrefix(a.Evidence.HandlerID, "codex-handler:") || len(a.Evidence.HandlerID) != 78 {
+		t.Fatalf("unexpected handler identity: %q", a.Evidence.HandlerID)
+	}
+	if a.Evidence.HandlerID != "codex-handler:7cd6c94d75aeffff78642e6e1cc48f1df25f995ae96d71f2bdffd5e00a6a0652" {
+		t.Fatal("native handler identity format changed")
+	}
+	for _, replacement := range []string{"pre-tool-use:1:/home/example/.codex/hooks.json", "pre-tool-use:0:/home/other/.codex/hooks.json"} {
+		line := strings.Replace(string(codexCompletion("second", "failed")), "pre-tool-use:0:/home/example/.codex/hooks.json", replacement, 1)
+		r, _, err := (Decoder{}).Decode([]byte(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Evidence.HandlerID == a.Evidence.HandlerID {
+			t.Fatal("different configured handlers collapsed")
+		}
+	}
+	data, _ := json.Marshal(a)
+	for _, raw := range []string{"/home/", "hooks.json", "pre-tool-use:0:"} {
+		if strings.Contains(string(data), raw) {
+			t.Fatalf("raw native identity retained: %q", raw)
+		}
+	}
+	if a.Evidence.ConfigID != "" || a.Evidence.OperationID != "" || a.Script != "" {
+		t.Fatalf("handler identity invented other metadata: %+v", a)
+	}
+}
+
+func TestCodexHandlerIdentityMissingAndOverride(t *testing.T) {
+	base := string(codexCompletion("r", "failed"))
+	for _, native := range []string{`""`, `null`} {
+		line := strings.Replace(base, `"pre-tool-use:0:/home/example/.codex/hooks.json"`, native, 1)
+		r, _, err := (Decoder{}).Decode([]byte(line))
+		if err != nil || r.Evidence.HandlerID != "" {
+			t.Fatalf("missing identity inferred: %+v %v", r, err)
+		}
+	}
+	line := strings.Replace(base, `"notification":`, `"evidence":{"handler_id":"host-handler","config_id":"revision"},"notification":`, 1)
+	r, _, err := (Decoder{}).Decode([]byte(line))
+	if err != nil || r.Evidence.HandlerID != "host-handler" || r.Evidence.ConfigID != "revision" {
+		t.Fatalf("host identity lost: %+v %v", r, err)
+	}
+}
+
 func TestCodexEvidenceAndContextSemantics(t *testing.T) {
 	line := strings.Replace(string(codexCompletion("r", "completed")), `"notification":`, `"evidence":{"handler_id":"h","config_id":"c","operation_id":"o","execution_mode":"foreground"},"notification":`, 1)
 	r, _, err := (Decoder{}).Decode([]byte(line))
