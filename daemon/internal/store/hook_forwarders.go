@@ -38,7 +38,7 @@ func (s *Store) noteHookForwarder(r hookrun.ForwarderReport, now time.Time) {
 		if r.Sequence <= old.Report.Sequence {
 			return
 		}
-		if r.Harness != old.Report.Harness || r.SessionID != old.Report.SessionID || r.DeliveryFailures < old.Report.DeliveryFailures || r.Dropped < old.Report.Dropped {
+		if r.Harness != old.Report.Harness || r.SessionID != old.Report.SessionID || r.Version < old.Report.Version || r.DeliveryFailures < old.Report.DeliveryFailures || r.Dropped < old.Report.Dropped {
 			h.Rejected++
 			h.LastRejectedAt = &now
 			return
@@ -55,12 +55,25 @@ func (s *Store) noteHookForwarder(r hookrun.ForwarderReport, now time.Time) {
 		delete(h.forwarders, oldest)
 		h.ForwardersTruncated = true
 	}
-	h.forwarders[r.ForwarderID] = HookForwarderSnapshot{Report: r, ReceivedAt: now}
+	h.forwarders[r.ForwarderID] = HookForwarderSnapshot{Report: cloneForwarderReport(r), ReceivedAt: now}
+}
+
+func cloneForwarderReport(r hookrun.ForwarderReport) hookrun.ForwarderReport {
+	if r.Health != nil {
+		h := *r.Health
+		if h.Outbox != nil {
+			box := *h.Outbox
+			h.Outbox = &box
+		}
+		r.Health = &h
+	}
+	return r
 }
 
 func forwarderSnapshots(rows map[string]HookForwarderSnapshot, now time.Time) []HookForwarderSnapshot {
 	out := make([]HookForwarderSnapshot, 0, len(rows))
 	for _, row := range rows {
+		row.Report = cloneForwarderReport(row.Report)
 		row.Freshness = "recent"
 		if now.Before(row.ReceivedAt) {
 			row.Freshness = "unverified"

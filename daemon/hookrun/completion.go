@@ -43,7 +43,13 @@ func DecodeCompletion(line []byte, harness string) (Completion, Record, bool, er
 	var c Completion
 	d := json.NewDecoder(bytes.NewReader(line))
 	d.DisallowUnknownFields()
-	if d.Decode(&c) != nil || (c.Version != 1 && c.Version != 2) || c.Harness != harness || (c.Version == 2 && c.Evidence == nil) || (c.Version == 1 && c.Evidence != nil) {
+	if d.Decode(&c) != nil {
+		return Completion{}, Record{}, true, ErrInvalidInput
+	}
+	if c.Version != 1 && c.Version != 2 {
+		return Completion{}, Record{}, true, ErrUnsupportedProtocol
+	}
+	if c.Harness != harness || (c.Version == 2 && c.Evidence == nil) || (c.Version == 1 && c.Evidence != nil) {
 		return Completion{}, Record{}, true, errors.New("invalid hook completion envelope or harness")
 	}
 	id, err := ExecutionID(harness, c.ID)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/cavi-ai/secure-agent/daemon/hookrun"
 	"github.com/cavi-ai/secure-agent/daemon/hookrun/codex"
 )
 
@@ -29,34 +30,27 @@ func NewCodex(config Config) (*Codex, error) {
 // ID is the normalized execution ID, including its codex namespace.
 func (c *Codex) Submit(notification []byte) (string, error) {
 	if len(notification) > 1024*1024 {
-		return "", errors.New("hook notification exceeds 1 MiB")
+		return "", c.captureResult(hookrun.ErrInvalidInput)
 	}
 	var head struct {
 		Method string `json:"method"`
 	}
 	if json.Unmarshal(notification, &head) != nil {
-		return "", errors.New("invalid Codex notification")
+		return "", c.captureResult(hookrun.ErrInvalidInput)
 	}
 	if head.Method != "hook/completed" {
 		return "", nil
 	}
 	id, err := newID()
 	if err != nil {
-		return "", err
+		return "", c.captureResult(err)
 	}
 	envelope, err := json.Marshal(struct {
 		ID           string          `json:"id"`
 		Notification json.RawMessage `json:"notification"`
 	}{id, notification})
 	if err != nil {
-		return "", errors.New("invalid Codex notification")
+		return "", c.captureResult(hookrun.ErrInvalidInput)
 	}
-	r, ok, err := (codex.Decoder{}).Decode(envelope)
-	if err != nil {
-		return "", err
-	}
-	if !ok {
-		return "", errors.New("invalid Codex completion")
-	}
-	return r.ID, c.Enqueue(r)
+	return c.submit(envelope, codex.Decoder{})
 }

@@ -61,8 +61,11 @@ var scriptLabel = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 // Validate enforces the versioned metadata contract before it crosses the
 // collection boundary. Error messages never include rejected input values.
 func (r Record) Validate() error {
-	if r.Type != "hook_run" || (r.Version != 1 && r.Version != 2) {
-		return errors.New("unsupported hook record version")
+	if r.Type != "hook_run" {
+		return ErrInvalidInput
+	}
+	if r.Version != 1 && r.Version != 2 {
+		return ErrUnsupportedProtocol
 	}
 	switch r.Harness {
 	case "claude", "codex", "openclaw", "hermes", "opencode":

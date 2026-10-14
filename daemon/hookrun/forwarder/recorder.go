@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/cavi-ai/secure-agent/daemon/hookrun"
 )
 
 // Recorder delivers one metadata record through the installed recorder. Each
@@ -26,7 +29,7 @@ func (r Recorder) SendDurable(ctx context.Context, metadata []byte) error {
 
 func (r Recorder) send(ctx context.Context, metadata []byte, durable bool) error {
 	if !filepath.IsAbs(r.Executable) {
-		return errors.New("hook recorder requires an absolute executable path")
+		return hookrun.ErrRecorderUnavailable
 	}
 	args := []string{"hooks", "record", "--format", "record"}
 	if durable {
@@ -39,7 +42,10 @@ func (r Recorder) send(ctx context.Context, metadata []byte, durable bool) error
 	cmd.Stdin = bytes.NewReader(append(bytes.Clone(metadata), '\n'))
 	// Child output is discarded: paths and OS error text must not reach reports.
 	if err := cmd.Run(); err != nil {
-		return errors.New("hook recorder did not confirm append")
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || errors.Is(err, exec.ErrNotFound) {
+			return hookrun.ErrRecorderUnavailable
+		}
+		return hookrun.ErrRecorderFailed
 	}
 	return nil
 }

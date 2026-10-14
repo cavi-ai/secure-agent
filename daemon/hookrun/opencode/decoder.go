@@ -20,7 +20,7 @@ func (Decoder) Decode(line []byte) (hookrun.Record, bool, error) {
 		return r, ok, err
 	}
 	if c.Protocol != "opencode-v2" {
-		return hookrun.Record{}, true, errors.New("unsupported OpenCode hook protocol")
+		return hookrun.Record{}, true, hookrun.ErrUnsupportedProtocol
 	}
 	if c.State != "completed" {
 		return r, true, nil
