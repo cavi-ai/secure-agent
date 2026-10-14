@@ -117,6 +117,59 @@ For queued deliveries or an active error, check the host and recorder and retry
 retained completions with their original delivery IDs. Dropped completions may
 not be recoverable.
 
+## Shared host delivery client
+
+Go hosts can embed `daemon/hookrun/forwarder` to keep recorder I/O off their
+hook callback. `NewCodex` accepts native app-server notifications through
+`Submit`; it assigns one opaque execution ID, normalizes metadata immediately,
+and retains that same metadata and ID for retries. Unrelated notifications are
+ignored. Raw output and source paths are never queued.
+
+```go
+client, err := forwarder.NewCodex(forwarder.Config{
+    Sender: forwarder.Recorder{Executable: recorderPath},
+})
+```
+
+`recorderPath` must be the absolute path to the installed `secure-agent` CLI.
+An optional `Recorder.Output` selects the activity log; configure the daemon to
+tail that path. Run `client.Run(ctx)` in a host-owned background worker and
+observe its result. Call `client.Submit(notificationJSON)` once per native
+completion in the existing notification callback. A returned error must remain
+visible in host diagnostics without changing the hook's result. Do not resubmit
+the notification for client-owned retries: doing so allocates a new execution
+ID. A full queue returns `ErrFull`, counts the rejected completion as dropped,
+and preserves previously accepted completions.
+
+Call `SetSourceState("connected")`, `SetSourceState("disconnected")`, or
+`SetSourceState("error")` from the actual subscription lifecycle. Initial source
+state is unknown; no host report is emitted until the host supplies a state.
+Completion traffic and stopping the delivery worker do not establish source
+connectivity. The client sends reports on changes and every 30 seconds while
+running. `Snapshot()` exposes pending deliveries, cumulative failures and drops,
+worker state, and report errors locally, including during a recorder outage.
+Reports use the same delivery path, so an unavailable recorder cannot carry
+fresh diagnostics to the console until it recovers.
+
+Defaults are 256 queued completions, a one-second retry delay, and a ten-second
+timeout per send. Capacity includes the in-flight completion and is capped at
+4096. Capture never waits for recorder I/O; new completions cannot bypass a
+failed delivery's retry delay. The queue is in memory: releasing the client or
+exiting the host loses pending metadata. Cancellation retains pending records
+for another `Run` on the same client. Each new client has a new reporting ID.
+
+The recorder transport waits for process exit after each metadata record.
+Success confirms an activity-log append, not fsync, collector receipt, or
+database persistence. Uncertain failures can cause duplicate appends; stable
+execution IDs let stored hook history deduplicate them. Delivery recovery clears
+the active delivery error but preserves cumulative failures and drops.
+
+Other Go hosts use `New` with their harness and call `Enqueue` with validated
+shared records from their adapter. Set `SessionID` only for a client dedicated
+to one session; otherwise reports cover the host's reporting instance. Custom
+`Sender` implementations must honor context cancellation and acknowledge actual
+destination acceptance, rather than merely accepting a write to a pipe.
+
 ## Forward Codex completions
 
 Run the recorder as a separate consumer of the host's event stream:
