@@ -83,10 +83,17 @@ func TestHookEvidenceReachesOverviewAndAttention(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	scanner := collect.NewTranscriptScanner(b, []string{logPath})
+	st.TrackHookIngestion()
+	accepted := make(chan struct{}, 3)
+	scanner.OnHookAccepted = func(h string) { st.NoteHookAccepted(h); accepted <- struct{}{} }
+	scanner.OnHookRejected = st.NoteHookRejected
 	go scanner.Run(ctx)
 	time.Sleep(250 * time.Millisecond)
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("{\"type\":\"hook_run\",\"version\":999,\"harness\":\"untrusted\",\"session_id\":\"other\"}\n"); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
@@ -104,6 +111,11 @@ func TestHookEvidenceReachesOverviewAndAttention(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 3 {
+		select {
+		case <-accepted:
+		case <-time.After(5 * time.Second):
+			t.Fatal("missing ingestion receipt")
+		}
 		select {
 		case e := <-sub:
 			if _, err := st.PutEvent(e); err != nil {
@@ -124,6 +136,18 @@ func TestHookEvidenceReachesOverviewAndAttention(t *testing.T) {
 	decodeInto(t, resp, &overview)
 	if overview.HookHealth == nil || !overview.HookHealth.Available || len(overview.HookHealth.Findings) != 1 || overview.HookHealth.Findings[0].Title != "Security hook repeatedly failed" {
 		t.Fatalf("overview = %+v", overview)
+	}
+	if h := overview.HookIngestion; h == nil || !h.Available || h.Rejected != 1 || len(h.Harnesses) != 1 || h.Harnesses[0].Harness != "hermes" || h.Harnesses[0].Accepted != 3 || h.Harnesses[0].LastReceivedAt.Before(now) {
+		t.Fatalf("ingestion = %+v", h)
+	}
+	resp, err = unixClient(sock).Get("http://unix/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status Status
+	decodeInto(t, resp, &status)
+	if status.HookIngestion == nil || status.HookIngestion.Rejected != 1 || status.HookIngestion.Harnesses[0].Accepted != 3 {
+		t.Fatalf("status ingestion = %+v", status.HookIngestion)
 	}
 	resp, err = unixClient(sock).Get("http://unix/posture")
 	if err != nil {

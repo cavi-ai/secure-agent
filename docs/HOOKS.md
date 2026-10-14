@@ -39,6 +39,25 @@ host. Neither hook names nor successful completions establish protection
 coverage. The thresholds above are fixed diagnosis defaults, not security
 policy or automatic permission changes.
 
+## Ingestion diagnostics
+
+Current session status and the Hooks view include expandable daemon ingestion
+diagnostics across all sessions. They show accepted deliveries by harness and
+the last local receipt time, plus a global count and last time of recognized
+shared hook records rejected by validation. Rejected payloads and their claimed
+session or harness identities are not retained in these diagnostics.
+
+Counters begin when diagnostics are enabled in the current daemon run and reset
+when the daemon restarts. Receipt means the collector delivered an event for
+processing; durable storage is reported separately by storage health. Delivery
+retries can count again even when history deduplicates the execution.
+
+No observations do not establish a broken forwarder. Host connectivity remains
+unknown without host evidence. Errors before a shared record reaches the daemon,
+including recorder input and output failures, are not visible here. For rejected
+records, check the host and recorder diagnostics, validate the shared format,
+and retry retained completions with their original delivery IDs.
+
 ## Forward Codex completions
 
 Run the recorder as a separate consumer of the host's event stream:

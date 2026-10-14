@@ -34,8 +34,10 @@ func readSessionOverviewEvidence(st *store.Store, id string) (sessionOverviewEvi
 
 // sessionOverviewLive is the current-control input for one overview.
 // Coverage and Resources run only for an active or idle session when status
-// is available, so an ended session does not read live snapshots.
+// is available, so ended sessions do not resolve live coverage or resources.
+// HookIngestion describes the current daemon across all sessions.
 type sessionOverviewLive struct {
+	HookIngestion   *store.HookIngestionSnapshot
 	Now             time.Time
 	StatusAvailable bool
 	Pending         []guard.Pending
@@ -52,6 +54,7 @@ func composeSessionOverview(id string, evidence sessionOverviewEvidence, live se
 		Findings:          evidence.Findings,
 		FindingsTruncated: evidence.Truncated,
 		HookHealth:        evidence.HookHealth,
+		HookIngestion:     live.HookIngestion,
 	}
 	for _, p := range live.Pending {
 		if p.SessionID == id {

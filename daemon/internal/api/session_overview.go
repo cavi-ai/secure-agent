@@ -14,14 +14,15 @@ import (
 // SessionOverview keeps current controls separate from retained evidence.
 // Attribution is never inferred from a shared workspace or harness name.
 type SessionOverview struct {
-	SessionID         string                 `json:"session_id"`
-	ObservedAt        time.Time              `json:"observed_at"`
-	Requests          []AttentionItem        `json:"requests"`
-	Findings          []SessionFinding       `json:"findings"`
-	FindingsTruncated bool                   `json:"findings_truncated"`
-	Coverage          *SessionCoverage       `json:"coverage"`
-	Resources         *SessionResources      `json:"resources"`
-	HookHealth        *hookhealth.Assessment `json:"hook_health"`
+	SessionID         string                       `json:"session_id"`
+	ObservedAt        time.Time                    `json:"observed_at"`
+	Requests          []AttentionItem              `json:"requests"`
+	Findings          []SessionFinding             `json:"findings"`
+	FindingsTruncated bool                         `json:"findings_truncated"`
+	Coverage          *SessionCoverage             `json:"coverage"`
+	Resources         *SessionResources            `json:"resources"`
+	HookHealth        *hookhealth.Assessment       `json:"hook_health"`
+	HookIngestion     *store.HookIngestionSnapshot `json:"hook_ingestion,omitempty"`
 }
 
 type SessionFinding struct {
@@ -56,6 +57,8 @@ func (a *API) serveSessionOverview(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 	live := sessionOverviewLive{Now: time.Now().UTC(), StatusAvailable: a.statusFn != nil}
+	ingestion := a.store.HookIngestion()
+	live.HookIngestion = &ingestion
 	hooks, hookErr := a.store.SessionHookHealth(id, live.Now)
 	if hookErr != nil {
 		hooks = hookhealth.Assessment{Available: false, Findings: []hookhealth.Finding{}}

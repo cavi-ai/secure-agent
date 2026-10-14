@@ -935,8 +935,11 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	})
 
 	home, _ := os.UserHomeDir()
+	st.TrackHookIngestion()
 	go sup.Run(ctx, "transcript", func(c context.Context) error {
 		ts := collect.NewTranscriptScanner(b, transcriptTailTargets(home, cfg.JSONLPath))
+		ts.OnHookAccepted = st.NoteHookAccepted
+		ts.OnHookRejected = st.NoteHookRejected
 		ts.OffsetStatePath = filepath.Join(filepath.Dir(cfg.DBPath), "transcript-offsets.json")
 		ts.OnCheckpointWrite = st.NoteTranscriptCheckpointWrite
 		ts.ExtraTargets = func() []string { return codexSessionTargets(tagger, home) }

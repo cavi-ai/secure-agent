@@ -154,6 +154,7 @@ type Status struct {
 	BusDropping            bool                          `json:"bus_dropping,omitempty"`
 	StorageHealth          *store.WriteHealth            `json:"storage_health,omitempty"`
 	EgressProjectionHealth *store.EgressProjectionHealth `json:"egress_projection_health,omitempty"`
+	HookIngestion          *store.HookIngestionSnapshot  `json:"hook_ingestion,omitempty"`
 	OTLPDropped            uint64                        `json:"otlp_dropped,omitempty"`
 
 	// Coverage reports how many running harnesses the daemon is actually
@@ -941,6 +942,8 @@ func (a *API) evidenceStatus(st Status) Status {
 		st.StorageHealth = &h
 		projection := a.store.EgressProjectionHealth()
 		st.EgressProjectionHealth = &projection
+		hooks := a.store.HookIngestion()
+		st.HookIngestion = &hooks
 	}
 	return st
 }

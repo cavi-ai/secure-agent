@@ -115,6 +115,16 @@ matches cannot establish session inspection. `sessions_stale` marks a failed
 refresh; `sessions_truncated` reports that more than 128 live roots exist.
 Older daemons omit these additive fields.
 
+`hook_ingestion` reports process-local hook collection diagnostics across all
+sessions: `available`, `since`, `harnesses` (each with `harness`, `accepted` and
+`last_received_at`), `rejected`, and optional `last_rejected_at`. Receipt times
+come from the daemon clock, not host completion timestamps. Counts describe
+accepted deliveries, including retries, rather than unique persisted runs.
+Rejected counts cover recognized invalid shared records without attributing
+untrusted identities. Unwired collectors report `available: false`. Silence
+does not establish connectivity or protection coverage. Recorder failures
+before a shared record reaches the daemon are outside these diagnostics.
+
 ### Installed-hook check: `POST /coverage/probe`
 
 Pinned UI/console mutation, unavailable to agent peers. Start with
@@ -955,6 +965,7 @@ Current access requests, retained findings, observed coverage and machine impact
 - `coverage` is the existing session coverage projection, or `null` without an unambiguous live process match.
 - `resources` carries `key`, `observed_at`, `rss_bytes`, `cpu_percent`, `process_count`, `diagnoses` and optional `control`. It requires the same root PID, start time and harness as the live session; otherwise it is `null`.
 - `hook_health` carries `available`, `since`, `until`, `observed_runs`, `unattributed_runs`, `truncated` and up to 20 `findings` from the latest 1,000 completions within 30 minutes. Findings include stable identity, evidence counts/times, `needs_action`, `next_action` and `limits`. A hook read failure sets `available: false` without discarding other session evidence. These are operational diagnoses, not protection coverage. See [hook findings](HOOKS.md#actionable-findings).
+- `hook_ingestion` carries the same current daemon-wide diagnostics as `/status`, across all sessions. It is not evidence about this session's connectivity or historical delivery completeness. See [ingestion diagnostics](HOOKS.md#ingestion-diagnostics).
 - Ended sessions retain findings without claiming live coverage or resources. Workspace similarity does not confer attribution.
 - An unknown session returns `404`; a failed session or findings read returns `503`. The console retains the previous response with a stale warning and disables its controls until refreshed.
 

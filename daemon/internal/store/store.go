@@ -112,6 +112,7 @@ var (
 var pruneMinInterval = 30 * time.Second
 
 type Store struct {
+	hookIngestion          hookIngestionHealth
 	egressProjectionHealth egressProjectionHealth
 	writeHealth            writeHealth
 	mu                     sync.Mutex
