@@ -77,7 +77,7 @@ func (f persistenceFixture) drain(t *testing.T, events ...event.Event) ([]api.De
 	var health []store.WriteHealth
 	var healthMu sync.Mutex
 	cr := correlate.New(f.tagger, sensitive.New(f.cfg), f.cfg, correlate.Hooks{})
-	done := runEventIngest(input, ingestDeps{Store: f.store, Correlator: cr, Resolver: session.NewResolver(f.store, f.tagger), Tagger: f.tagger, Deltas: hub, PostureChanged: func() {
+	done := runEventIngest(input, ingestDeps{Store: f.store, Correlator: cr, Resolver: session.NewResolver(f.store, f.tagger), Tagger: f.tagger, Deltas: hub, RecordEgressObservation: f.store.RecordEgressObservationForTest, PostureChanged: func() {
 		healthMu.Lock()
 		defer healthMu.Unlock()
 		health = append(health, f.store.WriteHealth())
