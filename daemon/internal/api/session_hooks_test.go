@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/hookrun"
+	"github.com/cavi-ai/secure-agent/daemon/hookrun/codex"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -84,7 +84,7 @@ func TestForwardedCodexHooksReachSessionAPI(t *testing.T) {
 	}
 	for _, id := range []string{"delivery-1", "delivery-2", "delivery-1"} {
 		line := `{"id":"` + id + `","notification":{"method":"hook/completed","params":{"threadId":"codex-thread","run":{"id":"same-handler","eventName":"preToolUse","status":"blocked","completedAt":1791882001,"durationMs":5,"entries":[{"kind":"feedback","text":"no"}]}}}}`
-		r, ok, err := (hookrun.CodexDecoder{}).Decode([]byte(line))
+		r, ok, err := (codex.Decoder{}).Decode([]byte(line))
 		if err != nil || !ok {
 			t.Fatalf("decode=%v error=%v", ok, err)
 		}

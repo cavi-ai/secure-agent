@@ -71,10 +71,17 @@ Codex's current rollout policy omits hook lifecycle events.
 
 ## Shared adapter contract
 
-Go adapters implement `hookrun.Decoder` in `daemon/hookrun`: one input message
-produces a `hookrun.Record`, a recognition boolean and an error. Parsing belongs
-to the adapter; collection, session attribution, storage and rendering remain
-shared. Claude's transcript parser uses the same record-to-event conversion.
+The shared contract for every harness is `hookrun.Record` in `daemon/hookrun`.
+Host adapters implement `hookrun.Decoder`: one input message produces a record,
+a recognition boolean and an error. The shared package owns record validation
+and execution ID construction, without importing native harness adapters.
+
+Codex's `codex.Decoder` lives in `daemon/hookrun/codex` and implements that shared
+interface. It owns notification parsing and native outcome mapping. The CLI
+selects the adapter through `hookrun.Decoder`; collection, session attribution,
+storage and rendering consume the shared record. Claude's transcript parser
+uses the same record-to-event conversion. Additional native adapters follow
+this dependency direction and keep their protocols out of the shared package.
 
 Hosts that already normalize events can use `secure-agent hooks record --format
 record` and send the versioned contract directly:
