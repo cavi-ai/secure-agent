@@ -37,6 +37,56 @@ func TestCodexRecorderMixedHostHealthAndCompletions(t *testing.T) {
 	}
 }
 
+func TestDurableHookRecorderCreatesAndSyncsLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "new", "state", "activity.jsonl")
+	if err := runHooks(strings.NewReader(forwardedHook+"\n"), []string{"record", "--format", "codex", "--durable", "--output", path}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, ok, err := hookrun.DecodeRecord(bytes.TrimSpace(data)); !ok || err != nil || r.ID != "codex:delivery-1" {
+		t.Fatalf("durable metadata: %+v %v", r, err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("log permissions: %v %v", info, err)
+	}
+	if err := runHooks(strings.NewReader(forwardedHook+"\n"), []string{"record", "--durable", "--output", "/dev/null"}); err == nil {
+		t.Fatal("non-regular destination acknowledged durable append")
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := runHooks(strings.NewReader(forwardedHook+"\n"), []string{"record", "--durable", "--output", link}); err == nil {
+		t.Fatal("symlink destination accepted")
+	}
+}
+
+func TestDurableHookRecorderSeparatesTornPreviousAppend(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "activity.jsonl")
+	if err := os.WriteFile(path, []byte(`{"type":"hook_run","run_id":"torn`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runHooks(strings.NewReader(forwardedHook+"\n"), []string{"record", "--format", "codex", "--durable", "--output", path}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := 0
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		if r, ok, err := hookrun.DecodeRecord(line); ok && err == nil && r.ID == "codex:delivery-1" {
+			valid++
+		}
+	}
+	if valid != 1 {
+		t.Fatal("acknowledged completion was swallowed by torn log tail")
+	}
+}
+
 func TestHooksRecorderWritesOnlyCompletionMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "activity.jsonl")
 	input := `{"method":"hook/started","params":{}}` + "\n" + forwardedHook + "\n"

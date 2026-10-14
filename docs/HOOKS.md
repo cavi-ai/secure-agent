@@ -117,6 +117,102 @@ For queued deliveries or an active error, check the host and recorder and retry
 retained completions with their original delivery IDs. Dropped completions may
 not be recoverable.
 
+## Shared host delivery client
+
+Go hosts can embed `daemon/hookrun/forwarder` to keep recorder I/O off their
+hook callback. `NewCodex` accepts native app-server notifications through
+`Submit`; it assigns one opaque execution ID, normalizes metadata immediately,
+and retains that same metadata and ID for retries. Unrelated notifications are
+ignored. Raw output and source paths are never queued.
+
+```go
+client, err := forwarder.NewCodex(forwarder.Config{
+    Sender: forwarder.Recorder{Executable: recorderPath},
+})
+```
+
+`recorderPath` must be the absolute path to the installed `secure-agent` CLI.
+An optional `Recorder.Output` selects the activity log; configure the daemon to
+tail that path. Run `client.Run(ctx)` in a host-owned background worker and
+observe its result. Call `client.Submit(notificationJSON)` once per native
+completion in the existing notification callback. A returned error must remain
+visible in host diagnostics without changing the hook's result. Do not resubmit
+the notification for client-owned retries: doing so allocates a new execution
+ID. A full queue returns `ErrFull`, counts the rejected completion as dropped,
+and preserves previously accepted completions.
+
+Call `SetSourceState("connected")`, `SetSourceState("disconnected")`, or
+`SetSourceState("error")` from the actual subscription lifecycle. Initial source
+state is unknown; no host report is emitted until the host supplies a state.
+Completion traffic and stopping the delivery worker do not establish source
+connectivity. The client sends reports on changes and every 30 seconds while
+running. `Snapshot()` exposes pending deliveries, cumulative failures and drops,
+worker state, and report errors locally, including during a recorder outage.
+Reports use the same delivery path, so an unavailable recorder cannot carry
+fresh diagnostics to the console until it recovers.
+
+Defaults are 256 queued completions, a one-second retry delay, and a ten-second
+timeout per send. Capacity includes the in-flight completion and is capped at
+4096. Capture never waits for recorder I/O; new completions cannot bypass a
+failed delivery's retry delay. By default the queue is in memory: releasing the
+client or exiting the host loses pending metadata. Cancellation retains pending
+records for another `Run` on the same client. Each new client has a new reporting
+ID. An optional durable outbox preserves confirmed records across host restarts.
+
+The recorder transport waits for process exit after each metadata record.
+Success confirms an activity-log append, not fsync, collector receipt, or
+database persistence. Uncertain failures can cause duplicate appends; stable
+execution IDs let stored hook history deduplicate them. Delivery recovery clears
+the active delivery error but preserves cumulative failures and drops.
+
+### Durable outbox
+
+Set `Config.OutboxDir` to a stable absolute directory dedicated to one client
+scope. The client creates missing directories privately. Existing directories
+must be owned by the current user and have no group or other permissions. One
+client owns an outbox until `Close`; concurrent owners and a changed harness or
+session scope are rejected. Do not share an outbox between independent hosts.
+
+Capture still performs no disk I/O. A separate worker commits normalized
+metadata to SQLite with full synchronization, even while recorder delivery is
+blocked. `Snapshot.Pending` counts all queued completions; `Persisted` is the
+subset confirmed in the outbox. A successful `Submit` or `Enqueue` confirms
+memory admission only. A crash can lose records not yet confirmed persisted.
+`StorageError` and `StorageFull` identify local persistence or acknowledgment
+problems; affected records remain pending. Capacity overflow remains an explicit
+drop. Storage errors do not count as failed recorder delivery attempts.
+
+The database budget, `OutboxMaxBytes`, defaults to 8 MiB, with a minimum of
+64 KiB and maximum of 1 GiB. SQLite enforces the budget in whole pages and reclaims
+freed pages. Rollback journals require temporary space in addition to the
+database budget. A full outbox retains unsaved records in the bounded memory
+queue and retries storage; it never evicts accepted records to make space.
+
+The recorder transport uses `hooks record --durable` for outbox completions.
+It confirms success only after syncing the activity file and its directory.
+Durable appends include a newline separator so a torn earlier append cannot
+swallow a replayed completion; the collector ignores empty separator lines.
+Only this durable acknowledgment permits removing the outbox entry. An older
+recorder that rejects `--durable` leaves the entry pending. Custom transports
+must implement `DurableSender` with the same storage acknowledgment guarantee.
+This confirms durable activity-log delivery, not collector receipt or durable
+database ingestion.
+
+On restart, reopen the same outbox and scope. `Recovered` counts the records
+loaded at open. Execution IDs survive restart; the new reporting instance gets
+a new ID, unknown source state, and new per-instance failure/drop counters.
+Stop and join `Run` before `Close` releases ownership. Wait for
+`Persisted == Pending` before graceful shutdown if captured records must survive;
+`Close` reports `ErrUnpersisted` when memory-only records remain. Unsupported,
+corrupt, over-budget, or mismatched outboxes are preserved and rejected rather
+than silently reset. Fix the reported storage/configuration issue and reopen.
+
+Other Go hosts use `New` with their harness and call `Enqueue` with validated
+shared records from their adapter. Set `SessionID` only for a client dedicated
+to one session; otherwise reports cover the host's reporting instance. Custom
+`Sender` implementations must honor context cancellation and acknowledge actual
+destination acceptance, rather than merely accepting a write to a pipe.
+
 ## Forward Codex completions
 
 Run the recorder as a separate consumer of the host's event stream:
