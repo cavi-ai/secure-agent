@@ -77,6 +77,17 @@ func derivePosture(in postureInputs) Posture {
 
 func coverageItems(now time.Time, st Status, hookGap *PostureItem) []PostureItem {
 	items := machineAttentionItems(now, st, hookGap)
+	if h := st.HookIngestion; h != nil {
+		for _, row := range h.Forwarders {
+			r := row.Report
+			if row.Assessment.EvidenceGap {
+				items = append(items, PostureItem{Kind: "hook_evidence_gap", ID: "hook-gap:" + r.ForwarderID, Title: familyTitle(r.Harness) + " hook evidence is incomplete", Detail: "The host reported dropped completions. Restored delivery cannot recover evidence that was discarded."})
+			}
+			if row.Assessment.State == "unknown" && r.State == "error" {
+				items = append(items, PostureItem{Kind: "hook_delivery_unknown", ID: "hook-unknown:" + r.ForwarderID, Title: familyTitle(r.Harness) + " hook delivery error needs fresh evidence", Detail: "The previous error report is stale or unverified. Obtain a new host report; recovery has not been confirmed."})
+			}
+		}
+	}
 	if st.UninspectedEgress > 0 {
 		items = append(items, PostureItem{
 			Kind: "uninspected_egress", ID: "uninspected-egress",
