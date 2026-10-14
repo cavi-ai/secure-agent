@@ -8,11 +8,13 @@ import (
 // HookIngestionSnapshot describes collector delivery in this daemon run,
 // across all sessions. Acceptance is not proof of storage or host connectivity.
 type HookIngestionSnapshot struct {
-	Available      bool                   `json:"available"`
-	Since          time.Time              `json:"since"`
-	Harnesses      []HookIngestionHarness `json:"harnesses"`
-	Rejected       uint64                 `json:"rejected"`
-	LastRejectedAt *time.Time             `json:"last_rejected_at,omitempty"`
+	Available           bool                    `json:"available"`
+	Since               time.Time               `json:"since"`
+	Harnesses           []HookIngestionHarness  `json:"harnesses"`
+	Rejected            uint64                  `json:"rejected"`
+	LastRejectedAt      *time.Time              `json:"last_rejected_at,omitempty"`
+	Forwarders          []HookForwarderSnapshot `json:"forwarders,omitempty"`
+	ForwardersTruncated bool                    `json:"forwarders_truncated,omitempty"`
 }
 
 type HookIngestionHarness struct {
@@ -24,6 +26,7 @@ type HookIngestionHarness struct {
 type hookIngestionHealth struct {
 	mu sync.Mutex
 	HookIngestionSnapshot
+	forwarders map[string]HookForwarderSnapshot
 }
 
 // TrackHookIngestion enables diagnostics once, preserving counters across
@@ -77,11 +80,16 @@ func (s *Store) NoteHookRejected() {
 }
 
 func (s *Store) HookIngestion() HookIngestionSnapshot {
+	return s.hookIngestionAt(time.Now().UTC())
+}
+
+func (s *Store) hookIngestionAt(now time.Time) HookIngestionSnapshot {
 	h := &s.hookIngestion
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	out := h.HookIngestionSnapshot
 	out.Harnesses = append([]HookIngestionHarness{}, h.Harnesses...)
+	out.Forwarders = forwarderSnapshots(h.forwarders, now)
 	if h.LastRejectedAt != nil {
 		at := *h.LastRejectedAt
 		out.LastRejectedAt = &at

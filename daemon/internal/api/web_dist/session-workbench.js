@@ -199,12 +199,46 @@ function sessionTraceHTML(events, state) {
   return notice + limit + sessionWaterfallHTML(events);
 }
 
+function validHookForwarder(row) {
+  const r = row && row.report;
+  const id = v => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(v);
+  const time = v => typeof v === 'string' && Number.isFinite(Date.parse(v));
+  const count = v => Number.isSafeInteger(v) && v >= 0;
+  return !!r && r.type === 'hook_forwarder' && r.version === 1 && id(r.forwarder_id)
+    && (r.session_id === undefined || id(r.session_id))
+    && ['claude', 'codex', 'openclaw', 'hermes', 'opencode'].includes(r.harness)
+    && ['connected', 'disconnected', 'error'].includes(r.state)
+    && ['recent', 'stale', 'unverified'].includes(row.freshness)
+    && ['sequence', 'pending', 'delivery_failures', 'dropped'].every(k => count(r[k])) && r.sequence > 0
+    && time(r.ts) && time(row.received_at);
+}
+
+function hookForwardersHTML(rows, truncated, readFailed) {
+  if (!rows || !rows.length) return '<p>No host health reports received. Host connectivity is unknown.</p>';
+  const limit = truncated ? '<p>Only the 128 most recently received forwarder instances are retained; other reports may be omitted.</p>' : '';
+  return `<h5>Host reports</h5>${limit}${rows.map(row => {
+    const r = row.report;
+    const freshness = readFailed ? 'unverified' : row.freshness;
+    const state = freshness === 'stale' ? 'Report stale; current connection state unknown'
+      : freshness === 'unverified' ? 'Report freshness unverified; current connection state unknown'
+      : ({ connected: 'Source connected', disconnected: 'Source disconnected', error: 'Forwarding error' })[r.state];
+    let action = '';
+    if (freshness !== 'recent') action = '<p>Check the reporting host, recorder and clocks, then obtain a new report.</p>';
+    else if (r.state !== 'connected' || r.pending > 0) action = '<p>Check the source connection and recorder. Retry retained completions using their original delivery IDs.</p>';
+    const gap = r.dropped > 0 ? '<p>The host reports dropped completions. Some evidence may be missing; inspect host diagnostics and retry retained deliveries. Dropped completions may not be recoverable.</p>' : '';
+    return `<article class="sd-finding"><h5>${escapeHTML(r.harness)} · ${escapeHTML(state)} (host reported)</h5><p>Forwarder: ${escapeHTML(r.forwarder_id)} · Report ${Number(r.sequence)}${r.session_id ? ' · Host-supplied session: ' + escapeHTML(r.session_id) : ' · Session ID not supplied'}</p><p>${Number(r.pending)} queued · ${Number(r.delivery_failures)} delivery failures · ${Number(r.dropped)} dropped. Failure and drop counts are cumulative for this forwarder instance.</p><p>Host report time: <time>${escapeHTML(r.ts)}</time> · Local receipt: <time>${escapeHTML(row.received_at)}</time></p>${action}${gap}</article>`;
+  }).join('')}<p>Host reports do not establish complete delivery or protection coverage.</p>`;
+}
+
 function validHookIngestion(h) {
   const time = v => typeof v === 'string' && Number.isFinite(Date.parse(v));
   const count = v => Number.isSafeInteger(v) && v >= 0;
   if (!h || typeof h !== 'object' || Array.isArray(h) || typeof h.available !== 'boolean'
     || !count(h.rejected) || !Array.isArray(h.harnesses) || h.harnesses.length > 5) return false;
-  if (!h.available) return h.rejected === 0 && h.harnesses.length === 0;
+  if (h.forwarders !== undefined && (!Array.isArray(h.forwarders) || h.forwarders.length > 128 || !h.forwarders.every(validHookForwarder)
+    || new Set(h.forwarders.map(r => r.report.forwarder_id)).size !== h.forwarders.length)) return false;
+  if (h.forwarders_truncated !== undefined && typeof h.forwarders_truncated !== 'boolean') return false;
+  if (!h.available) return h.rejected === 0 && h.harnesses.length === 0 && !(h.forwarders || []).length;
   return time(h.since) && (h.rejected === 0 ? h.last_rejected_at == null : time(h.last_rejected_at))
     && new Set(h.harnesses.map(r => r && r.harness)).size === h.harnesses.length
     && h.harnesses.every(r => r && ['claude', 'codex', 'openclaw', 'hermes', 'opencode'].includes(r.harness)
@@ -217,7 +251,7 @@ function hookIngestionHTML(h, state) {
   const stale = state && state.error ? '<p role="status">Showing the last loaded ingestion diagnostics; they may be out of date.</p>' : '';
   const rows = h.harnesses.map(r => `<p>${escapeHTML(r.harness)}: ${Number(r.accepted)} accepted deliveries · Last local receipt: <time>${escapeHTML(r.last_received_at)}</time></p>`).join('');
   const rejected = h.rejected ? `<p>${Number(h.rejected)} rejected shared hook records · Last rejection: <time>${escapeHTML(h.last_rejected_at)}</time></p><p>Check the forwarding host and recorder diagnostics, validate the shared record format, then retry retained completions with their original delivery IDs. Rejected records cannot be attributed to a session or harness.</p>` : '<p>No recognized shared hook records rejected.</p>';
-  return `<details class="sd-findings-head" data-session-part="hook-ingestion">${head}${stale}<p>Counts since <time>${escapeHTML(h.since)}</time> in this daemon run, across all sessions.</p>${rows || '<p>No hook deliveries observed in this daemon run.</p>'}${rejected}<p>Receipt confirms collection, not durable storage or a unique execution. Retries can count again. Host connectivity is unknown; silence does not establish a forwarding failure. Errors before the recorder writes a shared record are not visible here.</p></details>`;
+  return `<details class="sd-findings-head" data-session-part="hook-ingestion">${head}${stale}<p>Counts since <time>${escapeHTML(h.since)}</time> in this daemon run, across all sessions.</p>${rows || '<p>No hook deliveries observed in this daemon run.</p>'}${rejected}<p>Receipt confirms collection, not durable storage or a unique execution. Retries can count again. Silence does not establish a forwarding failure. Errors before the recorder writes a shared record are visible only when the host reports them.</p>${hookForwardersHTML(h.forwarders, h.forwarders_truncated, state && state.error)}</details>`;
 }
 
 function validHookHealth(h) {

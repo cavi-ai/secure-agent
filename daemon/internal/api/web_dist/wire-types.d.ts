@@ -66,12 +66,34 @@ export interface HookIngestionHarness {
   last_received_at: string;
 }
 
+export interface ForwarderReport {
+  type: string;
+  version: number;
+  harness: string;
+  forwarder_id: string;
+  sequence: number;
+  session_id?: string;
+  ts: string;
+  state: string;
+  pending: number;
+  delivery_failures: number;
+  dropped: number;
+}
+
+export interface HookForwarderSnapshot {
+  report: ForwarderReport;
+  received_at: string;
+  freshness: string;
+}
+
 export interface HookIngestionSnapshot {
   available: boolean;
   since: string;
   harnesses: HookIngestionHarness[] | null;
   rejected: number;
   last_rejected_at?: string;
+  forwarders?: HookForwarderSnapshot[];
+  forwarders_truncated?: boolean;
 }
 
 export interface HarnessCoverage {

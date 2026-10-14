@@ -74,14 +74,27 @@ func runHooks(in io.Reader, args []string) (err error) {
 	lines := bufio.NewScanner(in)
 	lines.Buffer(make([]byte, 4096), 1024*1024)
 	for n := 1; lines.Scan(); n++ {
-		r, ok, err := decoder.Decode(lines.Bytes())
+		var record any
+		report, reportOK, err := hookrun.DecodeForwarderReport(lines.Bytes())
+		if reportOK && err == nil && *format != "record" && report.Harness != *format {
+			err = errors.New("hook forwarder harness does not match input format")
+		}
 		if err != nil {
 			return fmt.Errorf("hook input line %d: %w", n, err)
 		}
-		if !ok {
-			continue
+		if reportOK {
+			record = report
+		} else {
+			r, ok, err := decoder.Decode(lines.Bytes())
+			if err != nil {
+				return fmt.Errorf("hook input line %d: %w", n, err)
+			}
+			if !ok {
+				continue
+			}
+			record = r
 		}
-		data, err := json.Marshal(r)
+		data, err := json.Marshal(record)
 		if err != nil {
 			return errors.New("cannot encode hook metadata")
 		}

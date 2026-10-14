@@ -940,6 +940,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 		ts := collect.NewTranscriptScanner(b, transcriptTailTargets(home, cfg.JSONLPath))
 		ts.OnHookAccepted = st.NoteHookAccepted
 		ts.OnHookRejected = st.NoteHookRejected
+		ts.OnHookForwarder = st.NoteHookForwarder
 		ts.OffsetStatePath = filepath.Join(filepath.Dir(cfg.DBPath), "transcript-offsets.json")
 		ts.OnCheckpointWrite = st.NoteTranscriptCheckpointWrite
 		ts.ExtraTargets = func() []string { return codexSessionTargets(tagger, home) }

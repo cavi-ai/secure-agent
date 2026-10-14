@@ -9,6 +9,24 @@ for (const file of ['lib.js', 'tab-findings.js', 'session-workbench.js']) vm.run
 const finding = (over = {}) => ({ id: 'hook:h', kind: 'execution-errors', harness: 'hermes', event: 'pre_tool_call', handler_id: 'h', config_id: 'c', title: 'Hook repeatedly failed', detail: 'Three observed errors', next_action: 'Repair the dependency, then retry', limits: ['Action outcome unknown'], count: 3, first_at: '2026-10-13T10:00:00Z', last_at: '2026-10-13T10:01:00Z', needs_action: true, ...over });
 const health = (over = {}) => ({ available: true, since: '2026-10-13T09:30:00Z', until: '2026-10-13T10:00:00Z', observed_runs: 3, unattributed_runs: 0, truncated: false, findings: [finding()], ...over });
 
+test('host health reports qualify freshness, attribution and delivery evidence', () => {
+  const report = { type: 'hook_forwarder', version: 1, harness: 'codex', forwarder_id: 'bridge-1', sequence: 2, ts: '2026-10-13T10:00:00Z', state: 'error', pending: 3, delivery_failures: 2, dropped: 1 };
+  const row = { report, received_at: '2026-10-13T10:00:01Z', freshness: 'recent' };
+  assert.equal(ctx.validHookForwarder(row), true);
+  assert.equal(ctx.validHookForwarder({ ...row, report: { ...report, pending: null } }), false);
+  assert.equal(ctx.validHookForwarder({ ...row, freshness: 'healthy' }), false);
+  const html = ctx.hookForwardersHTML([row], false);
+  for (const text of ['Host reports', '3 queued', '2 delivery failures', '1 dropped', 'original delivery IDs', 'not establish complete delivery']) assert.ok(html.includes(text), text);
+  const stale = ctx.hookForwardersHTML([{ ...row, freshness: 'stale', report: { ...report, state: 'connected' } }], false);
+  assert.match(stale, /current connection state unknown/i);
+  assert.ok(!stale.includes('Source connected'));
+  assert.ok(!ctx.hookForwardersHTML([{ ...row, report: { ...report, state: 'connected' } }], false, true).includes('Source connected'));
+  assert.match(ctx.hookForwardersHTML([{ ...row, freshness: 'unverified' }], true), /freshness unverified/i);
+  assert.match(ctx.hookForwardersHTML([], false), /unknown/i);
+  const hostile = ctx.hookForwardersHTML([{ ...row, report: { ...report, forwarder_id: '<img>', session_id: '<svg>' } }], false);
+  assert.ok(!hostile.includes('<img>') && !hostile.includes('<svg>'));
+});
+
 test('ingestion diagnostics distinguish receipt, rejection and unknown connectivity', () => {
   const ingestion = { available: true, since: '2026-10-13T09:30:00Z', rejected: 2, last_rejected_at: '2026-10-13T10:00:00Z', harnesses: [{ harness: 'codex', accepted: 4, last_received_at: '2026-10-13T10:00:00Z' }] };
   assert.equal(ctx.validHookIngestion(ingestion), true);

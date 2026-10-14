@@ -71,8 +71,9 @@ type TranscriptScanner struct {
 
 	// Hook diagnostics describe accepted bus deliveries and recognized invalid
 	// shared records. Rejections carry no untrusted source or identity values.
-	OnHookAccepted func(harness string)
-	OnHookRejected func()
+	OnHookAccepted  func(harness string)
+	OnHookRejected  func()
+	OnHookForwarder func(hookrun.ForwarderReport)
 
 	// ExtraTargets, when set, is consulted on every resolve pass for
 	// dynamically discovered targets (e.g. CODEX_HOME read off live codex
@@ -770,6 +771,18 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 // eventsForLine parses a complete bounded line once. Session sightings still
 // describe observed source activity; OnProduce describes accepted delivery.
 func (ts *TranscriptScanner) eventsForLine(p, line string, lineStart, offset int64, source io.ReaderAt) []event.Event {
+	if r, ok, err := hookrun.DecodeForwarderReport([]byte(line)); ok {
+		if err != nil {
+			if ts.OnHookRejected != nil {
+				ts.OnHookRejected()
+			}
+			return ts.transcriptHits(line, p, "unknown", "", lineStart)
+		}
+		if ts.OnHookForwarder != nil {
+			ts.OnHookForwarder(r)
+		}
+		return ts.transcriptHits(line, p, r.Harness, r.SessionID, lineStart)
+	}
 	if r, ok, err := hookrun.DecodeRecord([]byte(line)); ok {
 		if err != nil {
 			if ts.OnHookRejected != nil {

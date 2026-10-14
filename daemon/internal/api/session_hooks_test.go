@@ -87,6 +87,7 @@ func TestHookEvidenceReachesOverviewAndAttention(t *testing.T) {
 	accepted := make(chan struct{}, 3)
 	scanner.OnHookAccepted = func(h string) { st.NoteHookAccepted(h); accepted <- struct{}{} }
 	scanner.OnHookRejected = st.NoteHookRejected
+	scanner.OnHookForwarder = st.NoteHookForwarder
 	go scanner.Run(ctx)
 	time.Sleep(250 * time.Millisecond)
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0600)
@@ -94,6 +95,13 @@ func TestHookEvidenceReachesOverviewAndAttention(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := f.WriteString("{\"type\":\"hook_run\",\"version\":999,\"harness\":\"untrusted\",\"session_id\":\"other\"}\n"); err != nil {
+		t.Fatal(err)
+	}
+	report, err := json.Marshal(hookrun.ForwarderReport{Type: "hook_forwarder", Version: 1, Harness: "codex", ForwarderID: "bridge-1", Sequence: 1, SessionID: "report-only", TS: now, State: "error", Pending: 3, DeliveryFailures: 2, Dropped: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(append(report, '\n')); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
@@ -134,11 +142,17 @@ func TestHookEvidenceReachesOverviewAndAttention(t *testing.T) {
 	}
 	var overview SessionOverview
 	decodeInto(t, resp, &overview)
-	if overview.HookHealth == nil || !overview.HookHealth.Available || len(overview.HookHealth.Findings) != 1 || overview.HookHealth.Findings[0].Title != "Security hook repeatedly failed" {
+	if overview.HookHealth == nil || !overview.HookHealth.Available || overview.HookHealth.ObservedRuns != 3 || len(overview.HookHealth.Findings) != 1 || overview.HookHealth.Findings[0].Title != "Security hook repeatedly failed" {
 		t.Fatalf("overview = %+v", overview)
 	}
 	if h := overview.HookIngestion; h == nil || !h.Available || h.Rejected != 1 || len(h.Harnesses) != 1 || h.Harnesses[0].Harness != "hermes" || h.Harnesses[0].Accepted != 3 || h.Harnesses[0].LastReceivedAt.Before(now) {
 		t.Fatalf("ingestion = %+v", h)
+	}
+	if h := overview.HookIngestion; len(h.Forwarders) != 1 || h.Forwarders[0].Report.ForwarderID != "bridge-1" || h.Forwarders[0].Freshness != "recent" || h.Forwarders[0].Report.SessionID != "report-only" || h.Forwarders[0].Report.Pending != 3 {
+		t.Fatalf("host report=%+v", h)
+	}
+	if _, found, err := st.GetSession("report-only"); err != nil || found {
+		t.Fatalf("report invented session: found=%v err=%v", found, err)
 	}
 	resp, err = unixClient(sock).Get("http://unix/status")
 	if err != nil {
@@ -148,6 +162,9 @@ func TestHookEvidenceReachesOverviewAndAttention(t *testing.T) {
 	decodeInto(t, resp, &status)
 	if status.HookIngestion == nil || status.HookIngestion.Rejected != 1 || status.HookIngestion.Harnesses[0].Accepted != 3 {
 		t.Fatalf("status ingestion = %+v", status.HookIngestion)
+	}
+	if h := status.HookIngestion; len(h.Forwarders) != 1 || h.Forwarders[0].Report.State != "error" || h.Forwarders[0].Report.Dropped != 1 {
+		t.Fatalf("status report=%+v", h)
 	}
 	resp, err = unixClient(sock).Get("http://unix/posture")
 	if err != nil {
