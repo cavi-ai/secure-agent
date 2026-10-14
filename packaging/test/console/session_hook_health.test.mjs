@@ -9,6 +9,18 @@ for (const file of ['lib.js', 'tab-findings.js', 'session-workbench.js']) vm.run
 const finding = (over = {}) => ({ id: 'hook:h', kind: 'execution-errors', harness: 'hermes', event: 'pre_tool_call', handler_id: 'h', config_id: 'c', title: 'Hook repeatedly failed', detail: 'Three observed errors', next_action: 'Repair the dependency, then retry', limits: ['Action outcome unknown'], count: 3, first_at: '2026-10-13T10:00:00Z', last_at: '2026-10-13T10:01:00Z', needs_action: true, ...over });
 const health = (over = {}) => ({ available: true, since: '2026-10-13T09:30:00Z', until: '2026-10-13T10:00:00Z', observed_runs: 3, unattributed_runs: 0, truncated: false, findings: [finding()], ...over });
 
+test('ingestion diagnostics distinguish receipt, rejection and unknown connectivity', () => {
+  const ingestion = { available: true, since: '2026-10-13T09:30:00Z', rejected: 2, last_rejected_at: '2026-10-13T10:00:00Z', harnesses: [{ harness: 'codex', accepted: 4, last_received_at: '2026-10-13T10:00:00Z' }] };
+  assert.equal(ctx.validHookIngestion(ingestion), true);
+  assert.equal(ctx.validHookIngestion({ ...ingestion, harnesses: [{ ...ingestion.harnesses[0], accepted: -1 }] }), false);
+  assert.equal(ctx.validHookIngestion({ ...ingestion, harnesses: [{ ...ingestion.harnesses[0], harness: '<img>' }] }), false);
+  const html = ctx.hookIngestionHTML(ingestion, {});
+  for (const text of ['all sessions', '4 accepted deliveries', '2 rejected', 'connectivity is unknown', 'local receipt', 'recorder', '2026-10-13T10:00:00Z']) assert.ok(html.includes(text), text);
+  assert.match(ctx.hookIngestionHTML(ingestion, { error: 'failed' }), /may be out of date/);
+  assert.match(ctx.hookIngestionHTML({ ...ingestion, rejected: 0, last_rejected_at: undefined, harnesses: [] }, {}), /No hook deliveries observed/);
+  assert.match(ctx.hookIngestionHTML(null, {}), /unavailable/i);
+});
+
 test('hook findings explain evidence, attribution, action and uncertainty', () => {
   const html = ctx.sessionHookHealthHTML(health(), {});
   for (const text of ['Hook repeatedly failed', 'Three observed errors', 'Repair the dependency', 'Action outcome unknown', 'Handler: h', 'Configuration: c', 'Needs repair']) assert.ok(html.includes(text), text);

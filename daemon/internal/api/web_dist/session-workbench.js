@@ -199,6 +199,27 @@ function sessionTraceHTML(events, state) {
   return notice + limit + sessionWaterfallHTML(events);
 }
 
+function validHookIngestion(h) {
+  const time = v => typeof v === 'string' && Number.isFinite(Date.parse(v));
+  const count = v => Number.isSafeInteger(v) && v >= 0;
+  if (!h || typeof h !== 'object' || Array.isArray(h) || typeof h.available !== 'boolean'
+    || !count(h.rejected) || !Array.isArray(h.harnesses) || h.harnesses.length > 5) return false;
+  if (!h.available) return h.rejected === 0 && h.harnesses.length === 0;
+  return time(h.since) && (h.rejected === 0 ? h.last_rejected_at == null : time(h.last_rejected_at))
+    && new Set(h.harnesses.map(r => r && r.harness)).size === h.harnesses.length
+    && h.harnesses.every(r => r && ['claude', 'codex', 'openclaw', 'hermes', 'opencode'].includes(r.harness)
+      && count(r.accepted) && r.accepted > 0 && time(r.last_received_at));
+}
+
+function hookIngestionHTML(h, state) {
+  const head = '<summary>Daemon hook ingestion · all sessions</summary>';
+  if (!h || !h.available) return `<details class="sd-findings-head" data-session-part="hook-ingestion">${head}<p>Ingestion diagnostics unavailable.</p></details>`;
+  const stale = state && state.error ? '<p role="status">Showing the last loaded ingestion diagnostics; they may be out of date.</p>' : '';
+  const rows = h.harnesses.map(r => `<p>${escapeHTML(r.harness)}: ${Number(r.accepted)} accepted deliveries · Last local receipt: <time>${escapeHTML(r.last_received_at)}</time></p>`).join('');
+  const rejected = h.rejected ? `<p>${Number(h.rejected)} rejected shared hook records · Last rejection: <time>${escapeHTML(h.last_rejected_at)}</time></p><p>Check the forwarding host and recorder diagnostics, validate the shared record format, then retry retained completions with their original delivery IDs. Rejected records cannot be attributed to a session or harness.</p>` : '<p>No recognized shared hook records rejected.</p>';
+  return `<details class="sd-findings-head" data-session-part="hook-ingestion">${head}${stale}<p>Counts since <time>${escapeHTML(h.since)}</time> in this daemon run, across all sessions.</p>${rows || '<p>No hook deliveries observed in this daemon run.</p>'}${rejected}<p>Receipt confirms collection, not durable storage or a unique execution. Retries can count again. Host connectivity is unknown; silence does not establish a forwarding failure. Errors before the recorder writes a shared record are not visible here.</p></details>`;
+}
+
 function validHookHealth(h) {
   const record = v => v && typeof v === 'object' && !Array.isArray(v);
   const count = v => Number.isSafeInteger(v) && v >= 0;
@@ -239,12 +260,12 @@ function validSessionHooks(rows) {
     && ['harness', 'handler_id', 'config_id'].every(k => r[k] === undefined || typeof r[k] === 'string'));
 }
 
-function sessionHooksHTML(rows, state, health, healthState) {
+function sessionHooksHTML(rows, state, health, healthState, ingestion) {
   state = state || {};
   const retry = `<button type="button" class="link-btn" data-action="session-hooks-retry"${state.loading ? ' disabled' : ''}>Retry hooks</button>`;
   const notice = state.error ? `Hook runs unavailable.${rows ? ' Showing the last loaded totals; they may be out of date.' : ''} ${retry}`
     : !rows ? 'Loading hook runs…' : '';
-  const head = sessionHookHealthHTML(health, healthState) + `<header data-session-part="hooks-head"><h4>Hook history</h4><p>Recorded completions from session transcripts and connected hosts. Errors and cancellations are separate. Blocks can be expected protection or validation decisions. Cumulative runtime can include overlapping callbacks.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
+  const head = sessionHookHealthHTML(health, healthState) + hookIngestionHTML(ingestion, healthState) + `<header data-session-part="hooks-head"><h4>Hook history</h4><p>Recorded completions from session transcripts and connected hosts. Errors and cancellations are separate. Blocks can be expected protection or validation decisions. Cumulative runtime can include overlapping callbacks.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
   if (!rows) return head;
   if (!rows.length) return head + '<p data-session-part="hooks-empty">No hook runs recorded for this session.</p>';
   const metric = (r, key, samples, format) => {
@@ -303,6 +324,7 @@ function validSessionOverview(data, id) {
     || !Array.isArray(data.requests) || !Array.isArray(data.findings) || data.findings.length > 20
     || (data.findings_truncated !== undefined && typeof data.findings_truncated !== 'boolean')) return false;
   if (data.hook_health != null && !validHookHealth(data.hook_health)) return false;
+  if (data.hook_ingestion != null && !validHookIngestion(data.hook_ingestion)) return false;
   if (!data.requests.every(r => record(r) && r.kind === 'guard' && typeof r.id === 'string' && r.id.length > 0
     && text(r, ['title', 'detail', 'path', 'rule', 'scopeText', 'reader_exe'])
     && rows(r.available_scopes, c => record(c) && typeof c.kind === 'string' && text(c, ['expiry'])))) return false;
@@ -348,6 +370,7 @@ function sessionOverviewHTML(data, state, contextHTML = '') {
     <button type="button" class="link-btn" data-action="open-flag" data-id="${escapeHTML(f.id)}">View evidence</button></article>`).join('');
   return head + requests
     + sessionHookHealthHTML(data.hook_health, state)
+    + hookIngestionHTML(data.hook_ingestion, state)
     + `<section class="sd-coverage" data-session-part="coverage" aria-label="Observed session coverage">${paths}</section>`
     + `<fieldset class="sd-impact" data-session-part="impact"${disabled}><legend>Machine impact</legend>${impact}</fieldset>`
     + `<div class="sd-findings-head" data-session-part="findings-head"><h4>Retained findings</h4><p>${data.findings_truncated ? 'More findings exist than the 20 most recent shown here.' : (data.findings || []).length ? 'Review and remaining risk are shown separately.' : 'No retained findings are attributed to this session. This is not a safety verdict.'}
@@ -469,7 +492,7 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
       <button type="button" class="btn btn-sm btn-ghost" data-action="session-status">Current status</button>
     </div>
     </div>
-    <div class="session-detail-body" tabindex="-1">${state.sessionView === 'hooks' ? contextHTML + sessionHooksHTML(state.sessionHooks, state.sessionHooksState, state.sessionOverview && state.sessionOverview.hook_health, state.sessionOverviewState) : state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
+    <div class="session-detail-body" tabindex="-1">${state.sessionView === 'hooks' ? contextHTML + sessionHooksHTML(state.sessionHooks, state.sessionHooksState, state.sessionOverview && state.sessionOverview.hook_health, state.sessionOverviewState, state.sessionOverview && state.sessionOverview.hook_ingestion) : state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
 }
 
 // One workbench owns selection, retained reads, rendering and reading position.

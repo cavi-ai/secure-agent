@@ -69,6 +69,11 @@ type TranscriptScanner struct {
 	// dirty and retry on the existing save cadence without stopping collection.
 	OnCheckpointWrite func(error)
 
+	// Hook diagnostics describe accepted bus deliveries and recognized invalid
+	// shared records. Rejections carry no untrusted source or identity values.
+	OnHookAccepted func(harness string)
+	OnHookRejected func()
+
 	// ExtraTargets, when set, is consulted on every resolve pass for
 	// dynamically discovered targets (e.g. CODEX_HOME read off live codex
 	// processes — a launcher that relocates the rollout store must not
@@ -653,6 +658,9 @@ func (ts *TranscriptScanner) deliverPending(p string, offsets map[string]int64, 
 		if !ts.bus.TryPublish(pending.events[0]) {
 			return false
 		}
+		if e := pending.events[0]; e.Kind == event.KindHookRun && ts.OnHookAccepted != nil {
+			ts.OnHookAccepted(e.HookHarness)
+		}
 		pending.events[0] = event.Event{}
 		pending.events = pending.events[1:]
 		produced = true
@@ -764,6 +772,9 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 func (ts *TranscriptScanner) eventsForLine(p, line string, lineStart, offset int64, source io.ReaderAt) []event.Event {
 	if r, ok, err := hookrun.DecodeRecord([]byte(line)); ok {
 		if err != nil {
+			if ts.OnHookRejected != nil {
+				ts.OnHookRejected()
+			}
 			return ts.transcriptHits(line, p, "unknown", "", lineStart)
 		}
 		if ts.OnSessionSeen != nil {

@@ -60,6 +60,20 @@ export interface EgressProjectionHealth {
   write_failing: boolean;
 }
 
+export interface HookIngestionHarness {
+  harness: string;
+  accepted: number;
+  last_received_at: string;
+}
+
+export interface HookIngestionSnapshot {
+  available: boolean;
+  since: string;
+  harnesses: HookIngestionHarness[] | null;
+  rejected: number;
+  last_rejected_at?: string;
+}
+
 export interface HarnessCoverage {
   name: string;
   guard_supported: boolean;
@@ -169,6 +183,7 @@ export interface Status {
   bus_dropping?: boolean;
   storage_health?: WriteHealth;
   egress_projection_health?: EgressProjectionHealth;
+  hook_ingestion?: HookIngestionSnapshot;
   otlp_dropped?: number;
   coverage?: CoverageStatus;
   firewall_stats?: Record<string, RuleStat>;
@@ -686,6 +701,7 @@ export interface SessionOverview {
   coverage: SessionCoverage | null;
   resources: SessionResources | null;
   hook_health: Assessment | null;
+  hook_ingestion?: HookIngestionSnapshot;
 }
 
 export interface SessionOutcomeEvidence {
