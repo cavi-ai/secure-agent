@@ -1,6 +1,6 @@
 // Package forwarder delivers normalized hook metadata independently of hook
 // execution. The host owns source subscriptions and calls SetSourceState when
-// their state changes. Queues are bounded, in memory, and do not survive exit.
+// their state changes. Queues are bounded; optional outboxes persist metadata.
 package forwarder
 
 import (
@@ -38,6 +38,8 @@ type Config struct {
 	RetryInterval  time.Duration // Default one second.
 	ReportInterval time.Duration // Default 30 seconds, maximum one minute.
 	SendTimeout    time.Duration // Default ten seconds.
+	OutboxDir      string        // Optional absolute private directory, owned until Close.
+	OutboxMaxBytes int64         // Database budget, default 8 MiB; rollback journals can use additional space.
 }
 
 // Snapshot is local host diagnostics, available even when reports cannot reach
@@ -51,24 +53,34 @@ type Snapshot struct {
 	Dropped          uint64
 	ReportError      bool
 	Running          bool
+	Persisted        uint64 // Subset of Pending committed to the optional outbox.
+	Recovered        uint64 // Pending records loaded when this client opened its outbox.
+	StorageError     bool
+	StorageFull      bool
+	Closed           bool
 }
 
 type queued struct {
 	id, session string
 	data        []byte
+	persisted   bool
 }
 
 // Client permits concurrent capture and diagnostics while one Run worker owns
 // delivery. Enqueue does no I/O and never waits for the destination.
 type Client struct {
-	mu                                  sync.Mutex
-	config                              Config
-	id                                  string
-	source                              string
-	queue                               []queued
-	failures, dropped, sequence         uint64
-	deliveryError, reportError, running bool
-	wake                                chan struct{}
+	mu                                                   sync.Mutex
+	config                                               Config
+	id                                                   string
+	source                                               string
+	queue                                                []queued
+	failures, dropped, sequence                          uint64
+	deliveryError, reportError, running                  bool
+	wake                                                 chan struct{}
+	persistWake                                          chan struct{}
+	outbox                                               *outbox
+	recovered                                            uint64
+	persistError, ackError, persistFull, ackFull, closed bool
 }
 
 func New(config Config) (*Client, error) {
@@ -84,6 +96,19 @@ func New(config Config) (*Client, error) {
 	if config.SendTimeout == 0 {
 		config.SendTimeout = 10 * time.Second
 	}
+	if config.OutboxDir != "" {
+		if config.OutboxMaxBytes == 0 {
+			config.OutboxMaxBytes = 8 * 1024 * 1024
+		}
+		if config.OutboxMaxBytes < 65536 || config.OutboxMaxBytes > 1024*1024*1024 {
+			return nil, errors.New("invalid hook outbox budget")
+		}
+		if _, ok := config.Sender.(DurableSender); !ok {
+			return nil, errors.New("hook outbox requires durable destination acknowledgment")
+		}
+	} else if config.OutboxMaxBytes != 0 {
+		return nil, errors.New("hook outbox budget requires a directory")
+	}
 	if config.Sender == nil || config.Capacity < 1 || config.Capacity > 4096 || config.RetryInterval < 0 || config.ReportInterval < 0 || config.ReportInterval > time.Minute || config.SendTimeout < 0 {
 		return nil, errors.New("invalid hook forwarder configuration")
 	}
@@ -95,7 +120,15 @@ func New(config Config) (*Client, error) {
 	if err := r.Validate(); err != nil {
 		return nil, err
 	}
-	return &Client{config: config, id: id, source: "unknown", wake: make(chan struct{}, 1)}, nil
+	c := &Client{config: config, id: id, source: "unknown", wake: make(chan struct{}, 1), persistWake: make(chan struct{}, 1)}
+	if config.OutboxDir != "" {
+		c.outbox, c.queue, err = openOutbox(config)
+		if err != nil {
+			return nil, err
+		}
+		c.recovered = uint64(len(c.queue))
+	}
+	return c, nil
 }
 
 func newID() (string, error) {
@@ -122,6 +155,9 @@ func (c *Client) Enqueue(record hookrun.Record) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return ErrClosed
+	}
 	for _, item := range c.queue {
 		if item.id == record.ID && item.session == record.SessionID {
 			if bytes.Equal(item.data, data) {
@@ -137,6 +173,10 @@ func (c *Client) Enqueue(record hookrun.Record) error {
 	}
 	c.queue = append(c.queue, queued{id: record.ID, session: record.SessionID, data: data})
 	c.notify()
+	select {
+	case c.persistWake <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
@@ -149,6 +189,9 @@ func (c *Client) SetSourceState(state string) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return ErrClosed
+	}
 	if state != c.source {
 		c.source = state
 		c.notify()
@@ -165,10 +208,16 @@ func (c *Client) notify() {
 
 func (c *Client) snapshotLocked() Snapshot {
 	state := c.source
-	if c.deliveryError {
+	if c.deliveryError || c.persistError || c.ackError {
 		state = "error"
 	}
-	return Snapshot{ForwarderID: c.id, State: state, Pending: uint64(len(c.queue)), DeliveryFailures: c.failures, Dropped: c.dropped, ReportError: c.reportError, Running: c.running}
+	var persisted uint64
+	for _, item := range c.queue {
+		if item.persisted {
+			persisted++
+		}
+	}
+	return Snapshot{ForwarderID: c.id, State: state, Pending: uint64(len(c.queue)), DeliveryFailures: c.failures, Dropped: c.dropped, ReportError: c.reportError, Running: c.running, Persisted: persisted, Recovered: c.recovered, StorageError: c.persistError || c.ackError, StorageFull: c.persistFull || c.ackFull, Closed: c.closed}
 }
 
 func (c *Client) Snapshot() Snapshot {
@@ -212,7 +261,14 @@ func (c *Client) deliverOne(ctx context.Context) (failed bool) {
 		}
 		item := c.queue[0]
 		c.mu.Unlock()
-		err := c.send(ctx, item.data)
+		var err error
+		if c.outbox != nil {
+			attempt, cancel := context.WithTimeout(ctx, c.config.SendTimeout)
+			err = c.config.Sender.(DurableSender).SendDurable(attempt, bytes.Clone(item.data))
+			cancel()
+		} else {
+			err = c.send(ctx, item.data)
+		}
 		c.mu.Lock()
 		if err != nil {
 			// Shutdown cancellation is not a failed delivery attempt. Keep the
@@ -224,6 +280,24 @@ func (c *Client) deliverOne(ctx context.Context) (failed bool) {
 			c.mu.Unlock()
 			return true
 		}
+		c.mu.Unlock()
+		if c.outbox != nil {
+			err = c.outbox.ack(ctx, item)
+			c.mu.Lock()
+			if ctx.Err() == nil {
+				c.ackError = err != nil
+				c.ackFull = isOutboxFull(err)
+			}
+			c.mu.Unlock()
+			if err != nil {
+				return true
+			}
+			select {
+			case c.persistWake <- struct{}{}:
+			default:
+			}
+		}
+		c.mu.Lock()
 		c.queue[0] = queued{}
 		c.queue = c.queue[1:]
 		c.deliveryError = false
@@ -234,9 +308,14 @@ func (c *Client) deliverOne(ctx context.Context) (failed bool) {
 
 // Run delivers until cancellation. There is one worker per client. Cancellation
 // retains pending metadata for a later Run on this same client; it does not
-// claim delivery or persistence. Releasing the client loses its in-memory queue.
+// claim delivery or persistence. With an outbox, only confirmed persisted
+// records survive releasing the client. Close releases outbox ownership.
 func (c *Client) Run(ctx context.Context) error {
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return ErrClosed
+	}
 	if c.running {
 		c.mu.Unlock()
 		return ErrRunning
@@ -244,6 +323,12 @@ func (c *Client) Run(ctx context.Context) error {
 	c.running = true
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); c.running = false; c.mu.Unlock() }()
+	if c.outbox != nil {
+		persistCtx, stop := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); c.persist(persistCtx) }()
+		defer func() { stop(); <-done }()
+	}
 	retry := time.NewTicker(c.config.RetryInterval)
 	heartbeat := time.NewTicker(c.config.ReportInterval)
 	defer retry.Stop()
@@ -267,7 +352,7 @@ func (c *Client) Run(ctx context.Context) error {
 		}
 		if deliver {
 			report()
-			if !time.Now().Before(nextAttempt) && c.Snapshot().Pending > 0 {
+			if !time.Now().Before(nextAttempt) && c.deliveryReady() {
 				failed := c.deliverOne(ctx)
 				if ctx.Err() != nil {
 					return ctx.Err()
@@ -280,7 +365,7 @@ func (c *Client) Run(ctx context.Context) error {
 					nextAttempt = time.Time{}
 					// Service source observations and reports between records,
 					// including during a continuously replenished backlog.
-					if c.Snapshot().Pending > 0 {
+					if c.deliveryReady() {
 						continue
 					}
 				}
@@ -299,4 +384,36 @@ func (c *Client) Run(ctx context.Context) error {
 			deliver = s.Pending > 0 || s.ReportError
 		}
 	}
+}
+
+func (c *Client) deliveryReady() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.queue) > 0 && (c.outbox == nil || c.queue[0].persisted)
+}
+
+// Close releases outbox ownership after Run has stopped. It rejects concurrent
+// delivery and reports any accepted metadata not yet confirmed on disk. Close
+// does not flush capture synchronously; wait for Persisted == Pending first.
+func (c *Client) Close() error {
+	c.mu.Lock()
+	if c.running {
+		c.mu.Unlock()
+		return ErrRunning
+	}
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	s := c.snapshotLocked()
+	c.mu.Unlock()
+	var err error
+	if c.outbox != nil && c.outbox.close() != nil {
+		err = ErrStorage
+	}
+	if s.Pending > s.Persisted {
+		err = errors.Join(err, ErrUnpersisted)
+	}
+	return err
 }

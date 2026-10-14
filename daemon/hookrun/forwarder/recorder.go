@@ -15,10 +15,23 @@ import (
 type Recorder struct{ Executable, Output string }
 
 func (r Recorder) Send(ctx context.Context, metadata []byte) error {
+	return r.send(ctx, metadata, false)
+}
+
+// SendDurable requires a recorder supporting --durable. Successful exit follows
+// file and directory synchronization. Older recorders fail without fallback.
+func (r Recorder) SendDurable(ctx context.Context, metadata []byte) error {
+	return r.send(ctx, metadata, true)
+}
+
+func (r Recorder) send(ctx context.Context, metadata []byte, durable bool) error {
 	if !filepath.IsAbs(r.Executable) {
 		return errors.New("hook recorder requires an absolute executable path")
 	}
 	args := []string{"hooks", "record", "--format", "record"}
+	if durable {
+		args = append(args, "--durable")
+	}
 	if r.Output != "" {
 		args = append(args, "--output", r.Output)
 	}

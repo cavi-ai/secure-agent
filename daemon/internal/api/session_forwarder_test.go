@@ -23,6 +23,12 @@ import (
 // recorder unavailability and recovery. Native notification input is a fixture;
 // live app-server validation is separate from this deterministic regression.
 func TestCodexForwarderRecoversThroughRecorderAndSessionAPI(t *testing.T) {
+	for _, durable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("durable=%v", durable), func(t *testing.T) { testCodexForwarderRecovery(t, durable) })
+	}
+}
+
+func testCodexForwarderRecovery(t *testing.T, durable bool) {
 	root := t.TempDir()
 	binary := filepath.Join(root, "recorder")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -65,10 +71,15 @@ func TestCodexForwarderRecoversThroughRecorderAndSessionAPI(t *testing.T) {
 		t.Fatal("collector did not seed source")
 	}
 	sink := forwarder.Recorder{Executable: binary, Output: output}
-	c, err := forwarder.NewCodex(forwarder.Config{Sender: sink, Capacity: 1, RetryInterval: 20 * time.Millisecond})
+	cfg := forwarder.Config{Sender: sink, Capacity: 1, RetryInterval: 20 * time.Millisecond}
+	if durable {
+		cfg.OutboxDir = filepath.Join(root, "outbox")
+	}
+	c, err := forwarder.NewCodex(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer c.Close()
 	if err := c.SetSourceState("connected"); err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +101,20 @@ func TestCodexForwarderRecoversThroughRecorderAndSessionAPI(t *testing.T) {
 	}
 	if s := c.Snapshot(); s.State != "error" || s.Pending != 1 || s.Dropped != 1 || !s.ReportError {
 		t.Fatalf("outage: %+v", s)
+	}
+	if durable {
+		if c.Snapshot().Persisted != 1 {
+			t.Fatal("delivery attempted before local persistence")
+		}
+		f, err := os.OpenFile(output, os.O_WRONLY|os.O_APPEND, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = f.WriteString(`{"type":"hook_run","run_id":"torn-prefix`)
+		f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.Rename(binary+"-held", binary); err != nil {
 		t.Fatal(err)
@@ -127,7 +152,11 @@ func TestCodexForwarderRecoversThroughRecorderAndSessionAPI(t *testing.T) {
 	}
 	// An uncertain acknowledgement may cause the same accepted ID to be sent
 	// again. Replaying through the real recorder must not add hook history.
-	if err := sink.Send(ctx, replay); err != nil {
+	resend := sink.Send
+	if durable {
+		resend = sink.SendDurable
+	}
+	if err := resend(ctx, replay); err != nil {
 		t.Fatal(err)
 	}
 	put(false)
