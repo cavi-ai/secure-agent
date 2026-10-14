@@ -12,6 +12,9 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/hookrun"
 	"github.com/cavi-ai/secure-agent/daemon/hookrun/codex"
+	"github.com/cavi-ai/secure-agent/daemon/hookrun/hermes"
+	"github.com/cavi-ai/secure-agent/daemon/hookrun/openclaw"
+	"github.com/cavi-ai/secure-agent/daemon/hookrun/opencode"
 )
 
 func handleHooks() {
@@ -25,7 +28,7 @@ func handleHooks() {
 // ownership of a harness. The daemon already tails this shared activity log.
 func runHooks(in io.Reader, args []string) (err error) {
 	if len(args) == 0 || args[0] != "record" {
-		return errors.New("usage: secure-agent hooks record --format codex|record [--output path]")
+		return errors.New("usage: secure-agent hooks record --format codex|openclaw|hermes|opencode|record [--output path]")
 	}
 	flags := flag.NewFlagSet("hooks record", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -38,6 +41,12 @@ func runHooks(in io.Reader, args []string) (err error) {
 	switch *format {
 	case "codex":
 		decoder = codex.Decoder{}
+	case "openclaw":
+		decoder = openclaw.Decoder{}
+	case "hermes":
+		decoder = hermes.Decoder{}
+	case "opencode":
+		decoder = opencode.Decoder{}
 	case "record":
 		decoder = hookrun.RecordDecoder{}
 	default:
