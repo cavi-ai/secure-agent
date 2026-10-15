@@ -59,6 +59,45 @@ public struct GuardResolveRequest: Codable, Sendable {
 	}
 }
 
+public struct GuardResolveReceipt: Codable, Sendable {
+    public let id: String
+    public let sessionID: String?
+    public let ruleID: String
+    public let verdict: String
+    public let scope: String
+    public let at: String
+    public let scopeIDs: [String]?
+    enum CodingKeys: String, CodingKey {
+        case id, verdict, scope, at
+        case sessionID = "session_id", ruleID = "rule_id", scopeIDs = "scope_ids"
+    }
+    public func matches(_ request: GuardResolveRequest) -> Bool {
+        id == request.id && !id.isEmpty && verdict == request.verdict && scope == request.scope &&
+        ["allow", "deny"].contains(verdict) && ["once", "always", "session", "exact"].contains(scope) &&
+        !ruleID.isEmpty && EventTime.parse(at) != nil && (scopeIDs?.count ?? 0) <= 128 &&
+        !(scopeIDs?.contains(where: { $0.isEmpty }) ?? false) &&
+        ((scopeIDs?.isEmpty ?? true) || (verdict == "allow" && ["session", "exact"].contains(scope)))
+    }
+}
+
+public struct GuardResolveResponse: Decodable, Sendable {
+    public let resolved: Bool
+    public let receipt: GuardResolveReceipt?
+}
+
+public struct GuardDecisionResult: Sendable {
+    public let request: GuardResolveRequest
+    public let receipt: GuardResolveReceipt?
+    public let sessionID: String?
+    public let unconfirmed: Bool
+    public var title: String { unconfirmed ? "Answer not confirmed" : "Answer submitted" }
+    public var detail: String {
+        if unconfirmed { return "Check session results and permissions before deciding again. The answer may have reached the daemon." }
+        let limit = "Submission does not prove tool receipt, completed access, or saved request history."
+        return receipt == nil ? "Detailed receipt unavailable from this daemon. " + limit : limit
+    }
+}
+
 public struct GuardRuleModel: Codable, Identifiable, Sendable {
     public var id: String { "\(agent)/\(ruleID)" }
     public let agent: String

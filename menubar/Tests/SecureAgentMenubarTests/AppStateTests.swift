@@ -76,7 +76,11 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
         if let guardError { throw guardError }
         return pending
     }
-    func resolveGuard(_ req: GuardResolveRequest) async throws {}
+    var resolveGuardError: Error?
+    func resolveGuard(_ req: GuardResolveRequest) async throws -> GuardResolveReceipt? {
+        if let resolveGuardError { throw resolveGuardError }
+        return nil
+    }
     func killProcess(pid: Int32) async throws -> Bool { true }
     func deleteGuardRule(agent: String, ruleID: String) async throws {}
     var setFirewallModeCalls: [(rule: String, mode: String)] = []

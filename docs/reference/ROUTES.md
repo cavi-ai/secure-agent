@@ -86,7 +86,7 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 | `/firewall/sources` | GET, HEAD, POST | POST | — | — |
 | `/guard/decision` | — | — | guard decision | — |
 | `/guard/pending` | GET, HEAD | — | — | `[]guard.Pending` |
-| `/guard/resolve` | GET, HEAD, POST | POST | — | — |
+| `/guard/resolve` | GET, HEAD, POST | POST | — | `api.GuardResolveResponse` |
 | `/guard/rules` | GET, HEAD, POST | POST | — | `[]store.GuardRule` |
 | `/debug/pprof/` | — | — | owner only | — |
 | `/files/detail` | GET, HEAD | — | no agents | `model.FileDetail` |

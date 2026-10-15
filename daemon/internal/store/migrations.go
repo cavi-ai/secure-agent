@@ -180,6 +180,15 @@ func initializeSchema(db *sql.DB) error {
 		}
 	}
 	// NULL preserves legacy incidents as having no operator step reports.
+	var guardReceiptN int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('guard_decisions') WHERE name='receipt_json'`).Scan(&guardReceiptN); err != nil {
+		return err
+	}
+	if guardReceiptN == 0 {
+		if _, err := tx.Exec(`ALTER TABLE guard_decisions ADD COLUMN receipt_json TEXT NOT NULL DEFAULT '{}'`); err != nil {
+			return fmt.Errorf("migrate guard receipts: %w", err)
+		}
+	}
 	for _, col := range []struct{ name, typ string }{{"harness", "TEXT NOT NULL DEFAULT ''"}, {"evidence_json", "TEXT NOT NULL DEFAULT '{}'"}} {
 		var n int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('hook_runs') WHERE name=?`, col.name).Scan(&n); err != nil {

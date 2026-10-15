@@ -45,7 +45,7 @@ public protocol DaemonClientProtocol: Sendable {
     func fetchPosture() async throws -> PostureModel
     func fetchGuardRules() async throws -> [GuardRuleModel]
     func fetchGuardPending() async throws -> [GuardPending]
-    func resolveGuard(_ req: GuardResolveRequest) async throws
+    @discardableResult func resolveGuard(_ req: GuardResolveRequest) async throws -> GuardResolveReceipt?
     func killProcess(pid: Int32) async throws -> Bool
     func deleteGuardRule(agent: String, ruleID: String) async throws
     func setFirewallMode(rule: String, mode: String) async throws
@@ -184,14 +184,17 @@ public final class DaemonClient: Sendable {
         try await getDecodable("/guard/pending")
     }
 
-    public func resolveGuard(_ req: GuardResolveRequest) async throws {
+    @discardableResult public func resolveGuard(_ req: GuardResolveRequest) async throws -> GuardResolveReceipt? {
         let data = try JSONEncoder().encode(req)
 		let response = try await request(method: "POST", path: "/guard/resolve", body: data)
-		struct Receipt: Decodable { let resolved: Bool }
-		let receipt = try JSONDecoder().decode(Receipt.self, from: response)
+		let receipt = try JSONDecoder().decode(GuardResolveResponse.self, from: response)
 		guard receipt.resolved else {
 			throw NSError(domain: "GuardDecision", code: 409, userInfo: [NSLocalizedDescriptionKey: "Request unavailable for this decision; refresh requests and permissions."])
 		}
+        if let detail = receipt.receipt, !detail.matches(req) {
+            throw NSError(domain: "GuardDecision", code: 502, userInfo: [NSLocalizedDescriptionKey: "Answer confirmation did not match this request."])
+        }
+        return receipt.receipt
     }
 
     public func fetchGuardRules() async throws -> [GuardRuleModel] {

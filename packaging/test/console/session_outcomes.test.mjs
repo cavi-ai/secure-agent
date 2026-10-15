@@ -10,6 +10,18 @@ for (const file of ['lib.js', 'tab-overview.js', 'session-workbench.js']) vm.run
 const at = '2026-10-09T12:00:00Z';
 const evidence = Object.fromEntries(['reviews', 'interventions', 'incidents'].map(k => [k, { available: true, at_limit: false, limit: 100 }]));
 
+test('Results includes guard outcomes, unknown legacy permissions, and independent guard read failures', () => {
+ const html = ctx.sessionOutcomesHTML({session_id:'own',history:{evidence:{...evidence,guards:{available:true,at_limit:false,limit:200}},reviews:[],interventions:[],incidents:[],guards:[
+  {id:'new',session_id:'own',rule_id:'credentials',verdict:'allow',scope:'session',at,scope_ids:['permission']},
+  {id:'old',session_id:'own',rule_id:'credentials',verdict:'deny',scope:'once',at,reason:'timeout'},
+  {id:'legacy',session_id:'own',rule_id:'credentials',verdict:'allow',scope:'always',at},
+ ]}},{});
+ for(const text of ['Guard allowed','Guard denied','timeout','Permission linkage unavailable','session-guard-permissions']) assert.ok(html.includes(text),text);
+ const unavailable=ctx.sessionOutcomesHTML({history:{evidence:{...evidence,guards:{available:false,limit:200}},guards:[],reviews:[],interventions:[],incidents:[]}},{});
+ assert.match(unavailable,/Guard decisions unavailable/);
+ assert.match(ctx.sessionOutcomesHTML({history:{evidence,reviews:[],interventions:[],incidents:[]}},{}),/Guard decision history unavailable from this daemon/);
+});
+
 test('Results keeps receipt revisions, remaining risk, and reported versus verified outcomes distinct', () => {
   const html = ctx.sessionOutcomesHTML({ session_id: 'own', history: { evidence,
     reviews: [{ id: 'review', revision: 2, context: { rule: 'sensitive-read-then-connect' }, decision: { action: 'acknowledge', revision: 1, at }, assessment: { residual_risk: 'possible-exposure' }, evidence_available: false }],

@@ -2,18 +2,23 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 )
 
 // GuardDecision is a redacted outcome of one guard request. A path, command,
 // and prompt never enter this table.
 type GuardDecision struct {
-	ID        string `json:"id"`
-	SessionID string `json:"session_id,omitempty"`
-	RuleID    string `json:"rule_id"`
-	Verdict   string `json:"verdict"`
-	Scope     string `json:"scope"`
-	At        string `json:"at"`
+	ID           string   `json:"id"`
+	SessionID    string   `json:"session_id,omitempty"`
+	RuleID       string   `json:"rule_id"`
+	Verdict      string   `json:"verdict"`
+	Scope        string   `json:"scope"`
+	At           string   `json:"at"`
+	ResolutionID string   `json:"resolution_id,omitempty"`
+	ScopeIDs     []string `json:"scope_ids,omitempty"`
+	Reason       string   `json:"reason,omitempty"`
 }
 
 const guardDecisionsSchema = `CREATE TABLE IF NOT EXISTS guard_decisions (
@@ -63,8 +68,16 @@ func (s *Store) putGuardDecision(d GuardDecision, bound func() (context.Context,
 	d.At = at.UTC().Format(guardDecisionTimeLayout)
 	ctx, cancel := bound()
 	defer cancel()
-	result, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO guard_decisions (id, session_id, rule_id, verdict, scope, at) VALUES (?, ?, ?, ?, ?, ?)`,
-		d.ID, d.SessionID, d.RuleID, d.Verdict, d.Scope, d.At)
+	metadata, err := json.Marshal(struct {
+		ResolutionID string   `json:"resolution_id,omitempty"`
+		ScopeIDs     []string `json:"scope_ids,omitempty"`
+		Reason       string   `json:"reason,omitempty"`
+	}{d.ResolutionID, d.ScopeIDs, d.Reason})
+	if err != nil {
+		return
+	}
+	result, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO guard_decisions (id, session_id, rule_id, verdict, scope, at, receipt_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		d.ID, d.SessionID, d.RuleID, d.Verdict, d.Scope, d.At, string(metadata))
 	s.noteWrite("guard decisions", err)
 	if err != nil {
 		return
@@ -99,23 +112,40 @@ func (s *Store) pruneGuardDecisions(ctx context.Context, retention time.Duration
 
 // ListGuardDecisions selects only rows explicitly attributed to sessionID.
 func (s *Store) ListGuardDecisions(sessionID string, limit int) []GuardDecision {
+	out, _ := s.GuardDecisionHistory(sessionID, limit)
+	return out
+}
+
+// GuardDecisionHistory distinguishes unavailable storage from empty history.
+func (s *Store) GuardDecisionHistory(sessionID string, limit int) ([]GuardDecision, error) {
 	if limit <= 0 {
-		return nil
+		return nil, nil
 	}
 	if limit > 500 {
 		limit = 500
 	}
-	rows, err := s.db.Query(`SELECT id, session_id, rule_id, verdict, scope, at FROM guard_decisions WHERE session_id = ? ORDER BY at DESC, id DESC LIMIT ?`, sessionID, limit)
+	rows, err := s.db.Query(`SELECT id, session_id, rule_id, verdict, scope, at, receipt_json FROM guard_decisions WHERE session_id = ? ORDER BY at DESC, id DESC LIMIT ?`, sessionID, limit)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 	out := make([]GuardDecision, 0)
 	for rows.Next() {
 		var d GuardDecision
-		if rows.Scan(&d.ID, &d.SessionID, &d.RuleID, &d.Verdict, &d.Scope, &d.At) == nil {
-			out = append(out, d)
+		var metadata string
+		if err := rows.Scan(&d.ID, &d.SessionID, &d.RuleID, &d.Verdict, &d.Scope, &d.At, &metadata); err != nil {
+			return nil, err
 		}
+		var extra struct {
+			ResolutionID string   `json:"resolution_id"`
+			ScopeIDs     []string `json:"scope_ids"`
+			Reason       string   `json:"reason"`
+		}
+		if err := json.Unmarshal([]byte(metadata), &extra); err != nil {
+			return nil, fmt.Errorf("guard receipt metadata: %w", err)
+		}
+		d.ResolutionID, d.ScopeIDs, d.Reason = extra.ResolutionID, extra.ScopeIDs, extra.Reason
+		out = append(out, d)
 	}
-	return out
+	return out, rows.Err()
 }

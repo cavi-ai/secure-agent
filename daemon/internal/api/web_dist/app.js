@@ -410,6 +410,7 @@ document.addEventListener('DOMContentLoaded', () => {
         set telemetryData(value) { telemetryData = value; }
       },
       actions: {
+        clearGuardResult: () => guardDecisions.clear(),
         get closeDrawer() { return detailDrawer.close; },
         get apiFetch() { return apiFetch; },
         clearInterval: (...args) => window.clearInterval(...args),
@@ -2843,6 +2844,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sessionID !== sessionWorkbench.selectedSessionId) return;
     await openDecisionPermissions(receipt, 'session', { label: 'session result', reopen: detailDrawer.close });
   };
+  window.openSessionGuardPermissions = async function(id, sessionID) {
+    if (sessionID !== sessionWorkbench.selectedSessionId || sessionWorkbench.sessionOutcomes?.session_id !== sessionID) return;
+    const decision = sessionWorkbench.sessionOutcomes.history.guards?.find(r => r.id === id);
+    await openDecisionPermissions(guardPermissionReceipt(decision,sessionID), 'session', {label:'session result',reopen:detailDrawer.close});
+  };
   window.openReviewResultPermissions = async function() {
     if (!drawer || drawer.hidden || detailDrawer.mode() !== 'review-result') return;
     await openDecisionPermissions(reviewResultPermissionReceipt(detailDrawer.reviewResult()), 'review-result', detailDrawer.back());
@@ -3081,28 +3087,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   };
 
-  window.resolveGuardPrompt = async function(id, verdict, scope, expiry) {
-    const action = verdict === 'allow'
-      ? (scope === 'always' ? 'allow every future path matched by this rule' : scope === 'session' ? 'allow this file and tool in this session until it ends' : scope === 'exact' ? `allow this file and tool in this workspace for ${expiry === '7d' ? '7 days' : '24 hours'}` : 'allow this request once')
-      : (scope === 'always' ? 'deny every future path matched by this rule' : 'deny this request once');
-    if (scope !== 'once' && !await saConfirm(`Apply guard decision: ${action}? Executable identity uses its observed path. File approvals do not authorize network access. Revoke under Protection → Rules & permissions.`, { title: 'Guard decision', okLabel: 'Apply' })) return;
-    const revert = stagedWrite.stage(['guardPending', 'posture'], ['attention', 'posture', 'tab-badges'], () => {
-      telemetryData.guardPending = (telemetryData.guardPending || []).filter(x => x.id !== id);
-      mapAttentionItems(it => (it.kind === 'guard' && it.id === id ? null : it));
-    });
-    await stagedWrite.write(revert, () => stagedWrite.send('POST', '/guard/resolve', { id, verdict, scope, ...(expiry ? {expiry} : {}) }), {
-      ok: async res => {
-        const receipt = await res.json();
-        if (!receipt.resolved) throw new Error('This request is unavailable for that decision. Refresh requests and permissions.');
-        revert.commit?.();
-        showToast(`Guard decision saved: ${action}.`, 'success');
-        cardNote('', '', 'attention-list', verdict === 'allow' ? 'allowed' : 'denied');
-        if (sessionWorkbench.selectedSessionId) sessionWorkbench.refresh('overview');
-        fetchTelemetry({ slow: false });
-      },
-      error: err => showToast(`Guard decision failed: ${err}`, 'danger')
-    });
-  };
+  const guardDecisions = createGuardDecisionController({request:apiFetch,confirm:saConfirm,
+    context:id => (telemetryData.guardPending || []).find(p=>p.id===id),generation:()=>handoffGeneration,ended:()=>sessionEnded,
+    paint:result => { const el=document.getElementById('guard-result'); if(!el) return; el.hidden=!result; el.innerHTML=result ? guardResultHTML(result) : ''; },
+    announce:text => window.saAnnounce(text),
+    refetch:()=> { fetchTelemetry({slow:false}); if(sessionWorkbench.selectedSessionId) { sessionWorkbench.refresh('overview'); sessionWorkbench.refresh('results'); } },
+    openPermissions:receipt => { const auth=handoffGeneration; return openDecisionPermissions(receipt,'guard-result',{label:'Guard result',reopen:()=>{if(!sessionEnded && handoffGeneration===auth) {detailDrawer.close();switchTab('home');document.getElementById('guard-result')?.scrollIntoView({block:'nearest'});} }}); },
+    openResults:async id=>{const auth=handoffGeneration;switchTab('sessions');await window.selectSession(id);if(!sessionEnded && auth===handoffGeneration && sessionWorkbench.selectedSessionId===id) window.setSessionView('results');},
+  });
+  window.resolveGuardPrompt = guardDecisions.resolve;
 
   let resourcePolicyDraft = null;
 
@@ -3762,6 +3755,14 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         window.resolveGuardPrompt(d.id, d.verdict, d.scope, d.expiry);
         break;
+      case 'guard-result-dismiss':
+        guardDecisions.clear(); document.querySelector('.tab-btn[data-tab="home"]')?.focus({preventScroll:true}); break;
+      case 'guard-result-permissions':
+        guardDecisions.permissions(); break;
+      case 'guard-result-history':
+        guardDecisions.history(); break;
+      case 'session-guard-permissions':
+        window.openSessionGuardPermissions(d.id,d.session); break;
       case 'edit-resource-policy':
         window.openResourcePolicyEditor();
         break;

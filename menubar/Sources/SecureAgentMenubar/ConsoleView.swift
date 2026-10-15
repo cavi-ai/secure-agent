@@ -48,6 +48,7 @@ struct ConsoleView: View {
             }
             if showsHero { hero }
             if let pending = state.pendingGuard, state.connected { guardDecisionCard(pending) }
+            if let result = state.guardResult { guardResultCard(result) }
             if let result = actionResultModel { actionResultCard(result) }
             if !state.agentRoots.isEmpty { sessionCards }
             if let incident = state.incidents.first(where: { $0.remediation?.steps.contains { $0.status == "reported" } == true }), let remediation = incident.remediation {
@@ -416,6 +417,21 @@ struct ConsoleView: View {
     }
 
     // MARK: guard decision (inline consent)
+
+    private func guardResultCard(_ result: GuardDecisionResult) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(result.title).font(.system(size: 12, weight: .semibold))
+            Text("\(result.request.verdict) · \(result.request.scope)").font(.system(size: 11))
+            Text(result.detail).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("Open session") {
+                    state.openDashboard(tab: "sessions", destination: result.sessionID.flatMap { $0.isEmpty ? nil : .session($0) })
+                }.help("Open the session and choose Results to inspect recorded answers and linked permissions")
+                Button("Dismiss") { state.dismissGuardResult() }
+            }.font(.system(size: 11))
+        }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 8))
+    }
 
     /// The pending guard decision, inline. The native NSAlert remains the
     /// always-on path (it fires even with the popover closed); when the

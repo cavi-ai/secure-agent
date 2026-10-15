@@ -154,6 +154,7 @@ func RouteWireTypes() []any {
 		new(RoutingInfo),
 		new(FleetNodeStatus),
 		new([]guard.Pending),
+		new(GuardResolveResponse),
 		new([]store.GuardRule),
 		new(model.FileDetail),
 		new(PlanResponse),

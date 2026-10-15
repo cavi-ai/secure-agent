@@ -18,6 +18,9 @@ type Decision struct {
 	Verdict string `json:"verdict"`
 	Scope   string `json:"scope"`
 	Reason  string `json:"reason,omitempty"`
+	// Operator receipt metadata stays local; hook responses retain their contract.
+	ResolutionID string `json:"-"`
+	ScopeID      string `json:"-"`
 }
 
 type Pending struct {

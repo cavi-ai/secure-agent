@@ -717,6 +717,16 @@ Returns the queued guard prompts oldest-first. Each item carries a `scope_text` 
 
 Resolves a pending prompt: `{"id","verdict":"allow|deny","scope":"once|always"}`.
 
+Attested requests also support `scope:"session"` or `scope:"exact"` with
+`expiry:"24h"` or `"7d"` for exact scope. A successful submission returns
+`resolved:true` and a `receipt` containing `id`, `session_id` when known,
+`rule_id`, `verdict`, `scope`, `at`, and committed `scope_ids` for reusable
+permissions. This confirms broker submission, not tool delivery, completed
+access, or a durable request-history write. An unavailable or already answered
+request returns `resolved:false` without a receipt. `/sessions/{id}/outcomes`
+includes retained `guards` and independent `evidence.guards` availability and
+history limits; old records have no inferred permission IDs.
+
 ### 15. `GET|DELETE /guard/rules`
 
 Lists stored guard decisions (GET); revokes one (DELETE `?agent=&rule_id=`), forcing a fresh prompt next time.

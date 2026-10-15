@@ -85,9 +85,14 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	record := func(d guard.Decision) {
+		var scopeIDs []string
+		if d.ScopeID != "" {
+			scopeIDs = []string{d.ScopeID}
+		}
 		a.store.PutGuardDecision(store.GuardDecision{
 			ID: id, SessionID: req.SessionID, RuleID: req.RuleID,
 			Verdict: d.Verdict, Scope: d.Scope, At: time.Now().UTC().Format(time.RFC3339Nano),
+			ResolutionID: d.ResolutionID, ScopeIDs: scopeIDs, Reason: d.Reason,
 		})
 	}
 	identity.RuleID = req.RuleID
@@ -177,6 +182,24 @@ type guardResolveRequest struct {
 	Expiry  string `json:"expiry,omitempty"`
 }
 
+// GuardResolveReceipt confirms broker submission, not tool execution or a
+// durable request-history write. Request outcomes are stored independently.
+type GuardResolveReceipt struct {
+	ID        string   `json:"id"`
+	SessionID string   `json:"session_id,omitempty"`
+	RuleID    string   `json:"rule_id"`
+	Verdict   string   `json:"verdict"`
+	Scope     string   `json:"scope"`
+	At        string   `json:"at"`
+	ScopeIDs  []string `json:"scope_ids,omitempty"`
+}
+
+type GuardResolveResponse struct {
+	Status   string               `json:"status"`
+	Resolved bool                 `json:"resolved"`
+	Receipt  *GuardResolveReceipt `json:"receipt,omitempty"`
+}
+
 func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -221,7 +244,11 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 			return a.store.PrepareDecisionScope(ctx, g)
 		}
 	}
-	ok, err := a.guardBroker.ResolveWith(req.ID, guard.Decision{Verdict: req.Verdict, Scope: req.Scope}, prepare)
+	decision := guard.Decision{Verdict: req.Verdict, Scope: req.Scope, ResolutionID: req.ID}
+	if req.Scope == "session" || req.Scope == "exact" {
+		decision.ScopeID = req.ID
+	}
+	ok, err := a.guardBroker.ResolveWith(req.ID, decision, prepare)
 	if err != nil {
 		http.Error(w, "Permission could not be saved. Refresh requests before trying again. "+err.Error(), 503)
 		return
@@ -237,7 +264,15 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 				Label: label, Source: "guard-" + req.Verdict})
 		}
 	}
-	writeJSON(w, map[string]any{"status": "ok", "resolved": ok})
+	response := GuardResolveResponse{Status: "ok", Resolved: ok}
+	if ok && pend != nil {
+		var scopeIDs []string
+		if decision.ScopeID != "" {
+			scopeIDs = []string{decision.ScopeID}
+		}
+		response.Receipt = &GuardResolveReceipt{ID: req.ID, SessionID: pend.SessionID, RuleID: pend.RuleID, Verdict: req.Verdict, Scope: req.Scope, At: time.Now().UTC().Format(time.RFC3339Nano), ScopeIDs: scopeIDs}
+	}
+	writeJSON(w, response)
 }
 
 // handleGuardPathAllow manages per-path guard exceptions: list (GET),

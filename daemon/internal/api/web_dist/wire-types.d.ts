@@ -757,13 +757,27 @@ export interface SessionOverview {
   hook_ingestion?: HookIngestionSnapshot;
 }
 
+export interface GuardDecision {
+  id: string;
+  session_id?: string;
+  rule_id: string;
+  verdict: string;
+  scope: string;
+  at: string;
+  resolution_id?: string;
+  scope_ids?: string[];
+  reason?: string;
+}
+
 export interface SessionOutcomeEvidence {
+  guards: ReportSourceEvidence;
   reviews: ReportSourceEvidence;
   incidents: ReportSourceEvidence;
   interventions: ReportSourceEvidence;
 }
 
 export interface SessionOutcomeHistory {
+  guards: GuardDecision[] | null;
   reviews: ReviewRecord[] | null;
   incidents: IncidentReport[] | null;
   interventions: InterventionReceipt[] | null;
@@ -1281,6 +1295,22 @@ export interface Pending {
   ts: string;
   scope_text?: string;
   advisor?: AdvisorVerdict;
+}
+
+export interface GuardResolveReceipt {
+  id: string;
+  session_id?: string;
+  rule_id: string;
+  verdict: string;
+  scope: string;
+  at: string;
+  scope_ids?: string[];
+}
+
+export interface GuardResolveResponse {
+  status: string;
+  resolved: boolean;
+  receipt?: GuardResolveReceipt;
 }
 
 export interface GuardRule {

@@ -399,6 +399,15 @@ def run_hook_diagnostics(page):
         for name in ('copy', 'metadata', 'failure', 'retry', 'cleared', 'readFailure', 'readRetry', 'repair', 'delivery', 'fits', 'busy', 'copyOwnership', 'loading', 'readOwnership'):
             page.check(f'hook diagnostics ({label}): {name}', state.get(name) is True, str(state))
 
+def run_guard_receipts(page):
+    for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+        dom = page.dom('?guardreceipts', window_size=size, served=True,
+                       fixture={'script': 'cases_guard_receipts.js'})
+        receipt = re.search(r'data-guard-receipt-probe="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        for name in ('submitted', 'fits', 'permission', 'stale', 'revoked', 'history', 'historyPermission'):
+            page.check(f'guard receipts ({label}): {name}', state.get(name) is True, str(state))
+
 def run_session_hooks(page):
     for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
         dom = page.dom('?sessionhooks', window_size=size, served=True,
@@ -556,6 +565,7 @@ CASES = (
     Case('session_permissions', run_session_permissions, ()),
     Case('context_handoff', run_context_handoff, ()),
     Case('session_results', run_session_results, ()),
+    Case('guard_receipts', run_guard_receipts, ()),
     Case('hook_monitoring', run_hook_monitoring, ()),
     Case('hook_history', run_hook_history, ()),
     Case('hook_diagnostics', run_hook_diagnostics, ()),

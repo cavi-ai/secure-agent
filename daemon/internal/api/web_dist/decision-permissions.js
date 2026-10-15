@@ -17,6 +17,69 @@ function reviewResultPermissionReceipt(result) {
   return decisionPermissionReceipt(decision, decision.id, typeof session === 'string' ? session : '');
 }
 
+function validGuardReceipt(r, request) {
+  return !!r && r.id === request.id && r.verdict === request.verdict && r.scope === request.scope &&
+    typeof r.id === 'string' && !!r.id && ['allow','deny'].includes(r.verdict) &&
+    ['once','always','session','exact'].includes(r.scope) && typeof r.rule_id === 'string' && !!r.rule_id &&
+    typeof r.at === 'string' && Number.isFinite(Date.parse(r.at)) &&
+    (r.session_id == null || typeof r.session_id === 'string') &&
+    (r.scope_ids == null || (Array.isArray(r.scope_ids) && r.scope_ids.length <= 128 && r.scope_ids.every(id => typeof id === 'string' && !!id))) &&
+    (!r.scope_ids?.length || (r.verdict === 'allow' && ['session','exact'].includes(r.scope)));
+}
+
+function guardPermissionReceipt(decision, sessionID) {
+  if (!decision || decision.session_id !== sessionID || !validGuardReceipt(decision,decision) || !decision.scope_ids?.length) return null;
+  return {kind:'guard',sessionID,reviewID:decision.id,at:decision.at,ids:[...new Set(decision.scope_ids)]};
+}
+
+function guardResultHTML(result) {
+  const r = result.receipt;
+  const title = result.unconfirmed ? 'Answer not confirmed' : 'Answer submitted';
+  const meaning = result.unconfirmed ? 'Check session results and permissions before deciding again. The answer may have reached the daemon.'
+    : 'The daemon submitted this answer to the waiting request. This does not prove the tool received it, completed access, or saved request history.';
+  const decision = r || result.request;
+  return `<div class="panel-head"><h2 id="guard-result-title">${title}</h2><button type="button" class="btn btn-ghost btn-sm" data-action="guard-result-dismiss">Dismiss</button></div>
+    <div class="panel-body"><p>${escapeHTML(decision.verdict)} · ${escapeHTML(decision.scope)}${r ? ` · ${escapeHTML(r.rule_id)} · ${escapeHTML(r.at)}` : ''}</p><p>${meaning}</p>
+    ${!r && !result.unconfirmed ? '<p>Detailed receipt unavailable from this daemon.</p>' : ''}
+    ${guardPermissionReceipt(r,r?.session_id) ? '<button type="button" class="btn btn-ghost btn-sm" data-action="guard-result-permissions">View permissions</button>' : ''}
+    ${(r?.session_id || result.sessionID) ? '<button type="button" class="btn btn-ghost btn-sm" data-action="guard-result-history">Check session results</button>' : '<p>Session identity unavailable; inspect Rules &amp; permissions for current policy.</p>'}</div>`;
+}
+
+// No optimistic permission or receipt: only a matching daemon answer confirms
+// submission. Failed responses are ambiguous and never replay automatically.
+function createGuardDecisionController({request,confirm,context,generation,ended,paint,announce,refetch,openPermissions,openResults}) {
+  let result = null, sequence = 0, resultGeneration = null;
+  const pending = new Set();
+  function clear() { sequence++; result=null; resultGeneration=null; paint(null); }
+  async function resolve(id,verdict,scope,expiry) {
+    if (ended() || pending.has(id) || !['allow','deny'].includes(verdict) || !['once','always','session','exact'].includes(scope)) return;
+    pending.add(id);
+    const auth = generation(), seq = ++sequence;
+    const current = () => !ended() && generation() === auth;
+    const sessionID = context(id)?.session_id || '';
+    const body = {id,verdict,scope,...(expiry ? {expiry} : {})};
+    try {
+      const effect = scope === 'always' ? `${verdict} every future path matched by this rule` : scope === 'session' ? 'allow this file and tool in this session until it ends' : `allow this file and tool in this workspace for ${expiry === '7d' ? '7 days' : '24 hours'}`;
+      if(scope !== 'once' && !await confirm(`Apply guard decision: ${effect}? Executable identity uses its observed path. File approval does not authorize network access. Revoke under Protection → Rules & permissions.`,{title:'Guard decision',okLabel:'Apply'})) return;
+      if(!current()) return;
+      const response = await request('/guard/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const data = await response.json();
+      if(!current()) return;
+      if(!response.ok || data.resolved !== true || (data.receipt != null && !validGuardReceipt(data.receipt,body))) throw new Error('Unconfirmed answer');
+      if(seq === sequence) { result={request:body,receipt:data.receipt || null,sessionID}; resultGeneration=auth; paint(result); announce('Guard answer submitted.'); }
+    } catch {
+      if(current() && seq === sequence) { result={request:body,sessionID,unconfirmed:true}; resultGeneration=auth; paint(result); announce('Guard answer not confirmed. Check results before deciding again.'); }
+    } finally {
+      pending.delete(id);
+      if(current()) refetch();
+    }
+  }
+  return {resolve,clear,
+    permissions() { const r=guardPermissionReceipt(result?.receipt,result?.receipt?.session_id); if(r && !ended() && resultGeneration===generation()) openPermissions(r); },
+    history() { const id=result?.receipt?.session_id || result?.sessionID; if(id && !ended() && resultGeneration===generation()) openResults(id); },
+  };
+}
+
 function validDecisionScopeRecords(records) {
   return Array.isArray(records) && records.length <= 10000 &&
     records.every(r => r && ['id', 'kind', 'agent', 'rule_id', 'operation', 'resource_path', 'created_at'].every(key => typeof r[key] === 'string' && r[key]) &&
@@ -63,7 +126,7 @@ function sessionPermissionsHTML(receipt, state) {
     : st.loading ? 'Loading permission records…' : '';
   const head = `<header class="policy-row-main" data-session-part="permissions-head">
     <h4>Permissions from this decision</h4>
-    <p>${receipt.sessionID ? `Session ${escapeHTML(receipt.sessionID)}` : 'Session unavailable'} · decision for revision ${receipt.revision}<br>Saved ${escapeHTML(receipt.at || 'time unavailable')}</p>
+    <p>${receipt.sessionID ? `Session ${escapeHTML(receipt.sessionID)}` : 'Session unavailable'} · ${receipt.kind === 'guard' ? 'Guard decision' : `decision for revision ${receipt.revision}`}<br>Recorded ${escapeHTML(receipt.at || 'time unavailable')}</p>
     <p>The daemon rechecks live session and identity before applying a saved scope. These records do not establish that a request is currently allowed.</p>
     <p>Other permissions and legacy policies may still allow matching access. Revocation does not undo past access.</p>
     ${st.readAt ? `<p>Read at ${escapeHTML(st.readAt)}</p>` : ''}

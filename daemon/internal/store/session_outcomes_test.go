@@ -20,6 +20,10 @@ type memoryOutcomeReader struct {
 	interventionLimit int
 }
 
+func (s *memoryOutcomeReader) GuardDecisionHistory(string, int) ([]GuardDecision, error) {
+	return []GuardDecision{}, nil
+}
+
 func (s *memoryOutcomeReader) ListSessionFindingReviews(id string) (ReviewPage, error) {
 	s.sessions["reviews"] = id
 	return s.reviews, s.reviewErr
@@ -103,6 +107,7 @@ func TestOutcomeHistoryLimitsAndEmptySources(t *testing.T) {
 			}
 			out := readSessionOutcomeHistory(s, "owned")
 			want := SessionOutcomeEvidence{
+				Guards:        ReportSourceEvidence{Available: true, Limit: 200},
 				Reviews:       ReportSourceEvidence{Available: true, AtLimit: counts[0] == 100, Limit: 100},
 				Incidents:     ReportSourceEvidence{Available: true, AtLimit: counts[1] == 100, Limit: 100},
 				Interventions: ReportSourceEvidence{Available: true, AtLimit: counts[2] == 200, Limit: 200},
