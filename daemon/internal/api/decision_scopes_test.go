@@ -87,6 +87,19 @@ func TestGuardScopedResolveAndRevocation(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatal(rows, err)
 	}
+	var resolved struct {
+		Receipt GuardResolveReceipt `json:"receipt"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resolved); err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Receipt.ID != p.ID || resolved.Receipt.SessionID != "session" || len(resolved.Receipt.ScopeIDs) != 1 || resolved.Receipt.ScopeIDs[0] != rows[0].ID {
+		t.Fatalf("receipt did not identify committed permission: %+v %+v", resolved, rows)
+	}
+	history := a.store.SessionOutcomes("session")
+	if len(history.Guards) != 1 || history.Guards[0].ResolutionID != p.ID || len(history.Guards[0].ScopeIDs) != 1 || history.Guards[0].ScopeIDs[0] != rows[0].ID {
+		t.Fatalf("history lost permission: %+v", history.Guards)
+	}
 	revoke := httptest.NewRecorder()
 	a.handleDecisionScopes(revoke, httptest.NewRequest("DELETE", "/decision-scopes?id="+rows[0].ID, nil))
 	if revoke.Code != 200 || a.store.MatchDecisionScopes([]model.DecisionScope{g}) {

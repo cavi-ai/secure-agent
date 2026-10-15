@@ -79,6 +79,14 @@ Secure Agent parses agent-semantic trace events (tool calls, model calls, turns)
 
 **Inspect the permissions from a decision.** View permissions in Results opens only the scope IDs saved with that decision, with their exact resources, recipients, expiry, and revocation records. Missing records have unknown status; failed refreshes retain labeled last-known data and disable revocation. Revocation requires confirmation and a matching saved response. It does not undo past access or remaining exposure, and other permissions or legacy policies may still allow access. Back returns to the same session result.
 
+**Follow a guard answer.** Home and the menu bar distinguish an answer submitted
+to a waiting request from an unconfirmed response. Submission does not prove
+that the tool received the answer or completed access. Session Results includes
+retained guard outcomes, including timeout and withdrawn requests. Newly recorded
+session and timed approvals link to their exact saved permission IDs. Older
+records without those IDs cannot establish current permission status. After a
+lost response, check Results and permissions before deciding again.
+
 **Return to the session after investigating.** Session evidence and resource drawers keep a session Back link. Findings history and resource Events preserve the originating view, reading position, and evidence filters through Back to session and browser Back/Forward. Clearing evidence filters retains the return path; changing sessions or credentials discards the old context.
 
 Finding and incident titles in session Memory open their retained evidence or report directly. Back returns to the same Memory view, reading position, and title. Missing sources are labeled unavailable; a retained summary does not reconstruct expired evidence.

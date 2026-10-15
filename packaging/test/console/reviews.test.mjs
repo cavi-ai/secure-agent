@@ -6,6 +6,7 @@ import {loadDrawer} from './drawer-harness.mjs';
 
 const lib=readFileSync(new URL('../../../daemon/internal/api/web_dist/lib.js',import.meta.url),'utf8');
 const app=readFileSync(new URL('../../../daemon/internal/api/web_dist/app.js',import.meta.url),'utf8');
+const permissions=readFileSync(new URL('../../../daemon/internal/api/web_dist/decision-permissions.js',import.meta.url),'utf8');
 const findings=readFileSync(new URL('../../../daemon/internal/api/web_dist/tab-findings.js',import.meta.url),'utf8');
 const record={id:'context',revision:2,review_state:'unreviewed',reviewed_revision:1,count:8,evidence_available:true,
  context:{rule:'sensitive-read-then-connect',session_id:'session',resources:['<credentials>'],destinations:['203.0.113.5:443']},
@@ -20,7 +21,7 @@ test('review card preserves risk, context, receipts and explicit revision',()=>{
  assert.match(html,/data-id="stronger">View supporting evidence/);
  assert.match(html,/data-action="open-flag" data-id="stronger"/);
  assert.match(html,/Revoke under Protection → Rules &amp; permissions\./);
- assert.equal((app.match(/Revoke under Protection → Rules & permissions\./g)||[]).length,2);
+ assert.equal(((app+permissions).match(/Revoke under Protection → Rules & permissions\./g)||[]).length,2);
  assert.doesNotMatch(app+lib,/Revoke in Policies/);
  const expired=vm.runInContext('reviewHTML({...record,evidence_available:false})',ctx);
  assert.match(expired,/Source evidence has expired/);assert.doesNotMatch(expired,/data-action="review-decision"/);

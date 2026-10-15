@@ -12,6 +12,7 @@ final class WirePayloadContractTests: XCTestCase {
         assertDecodes("/flags", as: [FlagModel].self)
         assertDecodes("/posture", as: PostureModel.self)
         assertDecodes("/guard/pending", as: [GuardPending].self)
+        assertDecodes("/guard/resolve", as: GuardResolveResponse.self)
         assertDecodes("/guard/rules", as: [GuardRuleModel].self)
         assertDecodes("/stats/rollup", as: [RollupPointModel].self)
         assertDecodes("/audit", as: [AuditEntryModel].self)

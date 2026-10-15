@@ -151,7 +151,7 @@ var Table = []Route{
 	{Path: "/firewall/sources", Handler: "API.handleFirewallSources", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/guard/decision", Handler: "API.handleGuardDecision", Decide: true},
 	{Path: "/guard/pending", Handler: "API.handleGuardPending", Response: "[]guard.Pending", Console: true},
-	{Path: "/guard/resolve", Handler: "API.handleGuardResolve", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/guard/resolve", Handler: "API.handleGuardResolve", Response: "api.GuardResolveResponse", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/guard/rules", Handler: "API.handleGuardRules", Response: "[]store.GuardRule", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/debug/pprof/", Handler: "handlePprof", Prefix: true, Console: false, OwnerOnly: true},
 	{Path: "/files/detail", Handler: "API.handleFileDetail", Response: "model.FileDetail", Console: true, NoAgent: true},

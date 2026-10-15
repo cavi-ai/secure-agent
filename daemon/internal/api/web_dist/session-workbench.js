@@ -737,6 +737,7 @@ function validSessionOutcomes(data, id) {
     Array.isArray(h[key]) && h[key].every(record) && h.evidence &&
     typeof h.evidence[key]?.available === 'boolean' && typeof h.evidence[key]?.at_limit === 'boolean' && Number.isInteger(h.evidence[key]?.limit) && h.evidence[key].limit > 0) &&
     h.reviews.every(r => !r.decision || (typeof r.decision.action === 'string' && Number.isInteger(r.decision.revision))) &&
+    (h.guards == null || (Array.isArray(h.guards) && h.guards.every(r => record(r) && r.session_id === id && typeof r.rule_id === 'string' && ['allow','deny'].includes(r.verdict) && typeof r.scope === 'string' && typeof r.at === 'string' && Number.isFinite(Date.parse(r.at)) && (r.scope_ids == null || (Array.isArray(r.scope_ids) && r.scope_ids.every(s => typeof s === 'string' && !!s)))) && h.evidence.guards && typeof h.evidence.guards.available === 'boolean' && Number.isInteger(h.evidence.guards.limit) && h.evidence.guards.limit > 0)) &&
     h.interventions.every(r => optionalArray(r.after) && optionalArray(r.limits)) &&
     h.incidents.every(inc => !inc.remediation || (Array.isArray(inc.remediation.steps) && inc.remediation.steps.every(step => record(step) && step.item && typeof step.item === 'object')));
 }
@@ -746,15 +747,22 @@ function sessionOutcomesHTML(data, state) {
   const retry = '<button type="button" class="link-btn" data-action="session-outcomes-retry">Retry results</button>';
   const notice = state.error ? `Last known results. Refresh failed; later decisions or observations may be missing. ${retry}`
     : !data ? state.loading ? 'Loading decisions and results…' : `Results unavailable. ${retry}` : '';
-  const head = `<header data-session-part="outcomes-head"><h4>Decisions and results</h4><p>Latest saved decision per finding context and latest result per operation. These receipts do not establish task completion. Guard and payload outcomes remain in Memory.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
+  const head = `<header data-session-part="outcomes-head"><h4>Decisions and results</h4><p>Latest saved decision per finding context, recorded guard answers, and latest result per operation. These receipts do not establish task completion or prove tool access. Payload outcomes remain in Memory.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
   if (!data) return head;
   const h = data.history;
-  const limits = [['reviews', 'Review decisions'], ['interventions', 'Process results'], ['incidents', 'Incident reports']].map(([key, label]) => {
+  const limits = [['reviews', 'Review decisions'], ['interventions', 'Process results'], ['incidents', 'Incident reports'], ['guards','Guard decisions']].map(([key, label]) => {
     const source = h.evidence[key];
+    if(!source) return key === 'guards' ? '<p>Guard decision history unavailable from this daemon.</p>' : '';
     return !source.available ? `<p role="status">${label} unavailable.${h[key].length ? ' Showing last known receipts; later changes may be missing.' : ''}</p>`
       : source.at_limit ? `<p>${label}: bounded to ${Number(source.limit) || 0} retained records; earlier history may be omitted.</p>` : '';
   }).join('');
   const rows = [];
+  for(const g of h.guards || []) {
+    const linked = Array.isArray(g.scope_ids) && g.scope_ids.length && g.verdict === 'allow' && ['session','exact'].includes(g.scope);
+    const permission = linked ? `<button type="button" class="link-btn" data-action="session-guard-permissions" data-id="${escapeHTML(g.id)}" data-session="${escapeHTML(data.session_id || '')}">View permissions</button>`
+      : ['always','scoped','session','exact'].includes(g.scope) ? '<p>Permission linkage unavailable. Inspect Rules &amp; permissions; this record does not establish current access.</p>' : '<p>No future permission IDs recorded with this outcome. Other permissions may still apply.</p>';
+    rows.push({key:'guard:'+g.id,at:g.at,title:g.verdict === 'allow' ? 'Guard allowed' : 'Guard denied',html:`<p>${escapeHTML(g.rule_id)} · ${escapeHTML(g.scope)}${g.reason ? ` · ${escapeHTML(g.reason)}` : ''}</p><p>Recorded request outcome; tool receipt and completed access are not verified.</p>${permission}`});
+  }
   for (const r of h.reviews) {
     if (!r.decision) continue;
     const d = r.decision;
@@ -884,8 +892,8 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       const data = await response.json();
       if (generation !== sessionOutcomesGeneration || id !== selectedSessionId) return;
       if (!validSessionOutcomes(data, id)) throw new Error('Invalid response');
-      if (sessionOutcomes) for (const key of ['reviews', 'incidents', 'interventions']) {
-        if (!data.history.evidence[key].available) data.history[key] = sessionOutcomes.history[key];
+      if (sessionOutcomes) for (const key of ['reviews', 'incidents', 'interventions', 'guards']) {
+        if (data.history.evidence[key] && !data.history.evidence[key].available) data.history[key] = sessionOutcomes.history[key] || [];
       }
       sessionOutcomes = data;
       sessionOutcomesState = { loading: false, error: '' };

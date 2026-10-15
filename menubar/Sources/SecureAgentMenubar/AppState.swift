@@ -26,6 +26,9 @@ public final class AppState: ObservableObject {
     /// inline (the native NSAlert remains the always-on consent path; this is
     /// the glance-and-act affordance when the popover is open).
     @Published public private(set) var pendingGuard: GuardPending?
+    @Published public private(set) var guardResult: GuardDecisionResult?
+
+    public func dismissGuardResult() { guardResult = nil }
     /// Per-rule notification overrides from the daemon (true = always page,
     /// false = never). Layered over notifyDefaultMinSeverity in shouldNotify.
     @Published public private(set) var notifyOverrides: [String: Bool] = [:]
@@ -819,9 +822,10 @@ public final class AppState: ObservableObject {
         // server-side and will re-prompt.
         Task {
             do {
-                try await client.resolveGuard(decision)
+                let receipt = try await client.resolveGuard(decision)
+                self.guardResult = GuardDecisionResult(request: decision, receipt: receipt, sessionID: receipt?.sessionID ?? p.sessionID, unconfirmed: false)
             } catch {
-                self.lastError = "Decision was not saved: \(error.localizedDescription)"
+                self.guardResult = GuardDecisionResult(request: decision, receipt: nil, sessionID: p.sessionID, unconfirmed: true)
             }
             self.promptingID = nil
             self.fetch()
@@ -838,10 +842,12 @@ public final class AppState: ObservableObject {
         guard let p = pendingGuard else { return }
         promptingID = p.id
         pendingGuard = nil // optimistic: the poll/stream re-adds it if unresolved
+        let decision = GuardResolveRequest(id: p.id, verdict: verdict, scope: scope, expiry: expiry)
         do {
-            try await uiClient.resolveGuard(GuardResolveRequest(id: p.id, verdict: verdict, scope: scope, expiry: expiry))
+            let receipt = try await uiClient.resolveGuard(decision)
+            guardResult = GuardDecisionResult(request: decision, receipt: receipt, sessionID: receipt?.sessionID ?? p.sessionID, unconfirmed: false)
         } catch {
-            lastError = "Decision was not saved: \(error.localizedDescription)"
+            guardResult = GuardDecisionResult(request: decision, receipt: nil, sessionID: p.sessionID, unconfirmed: true)
         }
         promptingID = nil
         fetch()

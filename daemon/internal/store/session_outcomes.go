@@ -12,6 +12,7 @@ import (
 // aggregation calls it after its own identity read. Request handlers use
 // SessionOutcome.
 type SessionOutcomeHistory struct {
+	Guards        []GuardDecision             `json:"guards"`
 	Reviews       []model.ReviewRecord        `json:"reviews"`
 	Incidents     []model.IncidentReport      `json:"incidents"`
 	Interventions []model.InterventionReceipt `json:"interventions"`
@@ -19,12 +20,14 @@ type SessionOutcomeHistory struct {
 }
 
 type SessionOutcomeEvidence struct {
+	Guards        ReportSourceEvidence `json:"guards"`
 	Reviews       ReportSourceEvidence `json:"reviews"`
 	Incidents     ReportSourceEvidence `json:"incidents"`
 	Interventions ReportSourceEvidence `json:"interventions"`
 }
 
 type sessionOutcomeReader interface {
+	GuardDecisionHistory(string, int) ([]GuardDecision, error)
 	ListSessionFindingReviews(string) (ReviewPage, error)
 	RecentInterventions(string, int) ([]model.InterventionReceipt, error)
 	SessionIncidents(string) ([]model.IncidentReport, error)
@@ -38,6 +41,12 @@ func (s *Store) SessionOutcomes(id string) SessionOutcomeHistory {
 // The returned review rows do not carry authority to create a new scope.
 func readSessionOutcomeHistory(reader sessionOutcomeReader, id string) SessionOutcomeHistory {
 	out := SessionOutcomeHistory{Reviews: []model.ReviewRecord{}, Incidents: []model.IncidentReport{}, Interventions: []model.InterventionReceipt{}}
+	out.Guards = []GuardDecision{}
+	guards, guardErr := reader.GuardDecisionHistory(id, 200)
+	if guardErr == nil {
+		out.Guards = guards
+	}
+	out.Evidence.Guards = ReportSourceEvidence{Available: guardErr == nil, AtLimit: len(out.Guards) >= 200, Limit: 200}
 	page, reviewErr := reader.ListSessionFindingReviews(id)
 	if reviewErr == nil && !page.Degraded {
 		out.Reviews = slices.Clone(page.Reviews)

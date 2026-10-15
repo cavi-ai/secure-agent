@@ -36,7 +36,7 @@ func TestRekeyMergesCallsAndAllReferences(t *testing.T) {
 	s.PutEvent(event.Event{Kind: event.KindModelCall, SessionID: "new", CallID: "known", TS: now, Model: "canonical-model", Provider: "canonical-provider"})
 	s.PutEvent(event.Event{Kind: event.KindModelCall, SessionID: "old", CallID: "known", TS: now, Model: "provisional-model", Provider: "provisional-provider"})
 	for _, q := range []string{
-		`INSERT INTO guard_decisions VALUES ('g','old','r','deny','once','2026-10-07T00:00:00Z')`,
+		`INSERT INTO guard_decisions (id,session_id,rule_id,verdict,scope,at) VALUES ('g','old','r','deny','once','2026-10-07T00:00:00Z')`,
 		`INSERT INTO incidents (id,session_id,report_json) VALUES ('i','old','{"session_id":"old","summary":"old remains literal text"}')`,
 		`INSERT INTO egress_episodes VALUES ('e','','','','','host','tcp',443,1,1,2,'[]','["old","new","other"]')`,
 	} {

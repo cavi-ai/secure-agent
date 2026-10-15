@@ -507,7 +507,17 @@ done
 if [ -n "$PENDING_ID" ]; then
   echo "Guard: pending prompt id=$PENDING_ID, resolving allow/always..."
   curl -s --unix-socket "$SOCKET_PATH" -X POST http://unix/guard/resolve \
-    -d "{\"id\":\"$PENDING_ID\",\"verdict\":\"allow\",\"scope\":\"always\"}" >/dev/null 2>&1 || true
+    -d "{\"id\":\"$PENDING_ID\",\"verdict\":\"allow\",\"scope\":\"always\"}" > "$tmp/guard-resolution.json"
+  python3 -c '
+import json,sys
+with open(sys.argv[1]) as source: answer=json.load(source)
+receipt=answer.get("receipt",{})
+assert answer.get("resolved") is True
+assert receipt.get("id")==sys.argv[2] and receipt.get("verdict")=="allow" and receipt.get("scope")=="always"
+assert receipt.get("rule_id")==sys.argv[3] and receipt.get("at")
+assert not receipt.get("scope_ids"), "legacy rule must not invent a scoped permission"
+print("Guard receipt: submitted answer matches the live request.")
+' "$tmp/guard-resolution.json" "$PENDING_ID" "$GUARD_RULE_ID"
 
   wait "$DECISION1_PID" 2>/dev/null || true
   DECISION1_BODY=$(cat "$DECISION1_OUT" 2>/dev/null || true)
