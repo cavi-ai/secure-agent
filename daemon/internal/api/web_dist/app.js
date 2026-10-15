@@ -3646,6 +3646,14 @@ document.addEventListener('DOMContentLoaded', () => {
           if (sessionWorkbench.selectedSessionId === d.session) window.showCurrentSessionStatus();
         });
         break;
+      case 'hook-session-open':
+        e.preventDefault();
+        if (!(telemetryData.sessions || []).some(s=>s.id===d.session)) break;
+        detailDrawer.close();
+        window.filterTimelineToSession(d.session).then(()=>{
+          if (sessionWorkbench.selectedSessionId===d.session) window.setSessionView('hooks');
+        });
+        break;
       case 'hook-repair-check':
         e.preventDefault();
         openHookInspector('repair',d,{back:back() || detailDrawer.returnTarget()});

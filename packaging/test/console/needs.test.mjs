@@ -7,13 +7,13 @@ const assets = new URL('../../../daemon/internal/api/web_dist/', import.meta.url
 
 function load(posture, t = {}) {
   const nodes = new Map(['attention-center', 'attention-list', 'badge-attention-count', 'coverage-center', 'coverage-list', 'badge-coverage-count']
-    .map(id => [id, { hidden: false, innerHTML: '', textContent: '', children: [] }]));
+    .map(id => [id, { hidden: false, innerHTML: '', dataset: {}, textContent: '', children: [] }]));
   const badges = [];
   const sa = { t: { status: {}, flags: [], incidents: [], patterns: [], routine: [], posture, ...t },
     expanded: new Set(), setTabBadge: (id, n) => badges.push([id, n]) };
   const ctx = { window: { SA: sa }, document: { getElementById: id => nodes.get(id) } };
   vm.createContext(ctx);
-  for (const name of ['lib.js', 'tab-findings.js']) vm.runInContext(readFileSync(new URL(name, assets), 'utf8'), ctx);
+  for (const name of ['lib.js', 'session-workbench.js', 'tab-findings.js']) vm.runInContext(readFileSync(new URL(name, assets), 'utf8'), ctx);
   const patched = [];
   ctx.patchList = (_node, items, opts) => patched.push({ items, opts });
   return { ctx, nodes, badges, patched, sa };

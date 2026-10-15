@@ -41,6 +41,27 @@ policy or automatic permission changes.
 
 ## Ingestion diagnostics
 
+### Home monitoring overview
+
+Home shows a hook-monitoring row for each supported runtime observed in
+retained sessions, daemon receipts or forwarding-host reports. Unobserved
+runtimes are not added to the list. Each row separates the last completion
+receipt from forwarding errors, unknown host state and reported evidence gaps.
+Independent host instances remain separate, so a connected host cannot hide
+another host's failure or dropped evidence.
+
+Open session hooks links to the selected durable session. Inspect delivery
+opens the exact forwarding instance, including hosts without session scope.
+Setup and verification opens guidance for that runtime. Forwarding-instance and
+session lists expand on demand and retain their reading state during updates.
+
+Failed or old telemetry refreshes label retained observations as last known.
+Refresh monitoring retries the snapshot. Receipt counters reset with the daemon;
+no receipts in a new daemon run leave delivery unknown. Rejected shared records
+remain unattributed, and omitted host reports are identified explicitly.
+Receipt confirms collection, not unique execution, durable storage or protection
+coverage. Silence does not establish a forwarding failure.
+
 ### Delivery issues in Attention
 
 Recent, valid host reports with active source, capture, delivery or persistence
