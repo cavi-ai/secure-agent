@@ -1,5 +1,7 @@
 # secure-agent
 
+<img src="daemon/internal/api/web_dist/brand-icon.png" alt="Secure Agent app icon" width="72">
+
 [![CI](https://github.com/cavi-ai/secure-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/cavi-ai/secure-agent/actions/workflows/ci.yml)
 [![macOS](https://img.shields.io/badge/macOS-14.0+-000000?style=flat&logo=apple)](https://apple.com/macos)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -9,8 +11,21 @@
 Secure Agent combines a native macOS menu bar app, a local web console, a Go daemon and harness hooks. It tracks agent sessions, process families, model-call costs, file activity and network destinations. Optional guards can stop supported tool calls; an opt-in proxy inspects routed payloads for secret leaks.
 
 <p align="center">
-  <img src="assets/screenshots/console.png" alt="Secure Agent security console" width="920">
+  <img src="assets/screenshots/overview-dark.jpg" alt="Secure Agent overview with an access request, monitoring coverage and active sessions" width="1120">
 </p>
+
+Screenshots use synthetic demonstration data.
+
+<details>
+<summary>Session inspection, protection and menu bar</summary>
+
+<img src="assets/screenshots/sessions-dark.jpg" alt="Session inspection with current status, access requests and recorded coverage" width="1120">
+
+<img src="assets/screenshots/protection-dark.jpg" alt="Protection settings with per-rule monitoring and blocking controls" width="1120">
+
+<img src="assets/screenshots/menubar-dark.png" alt="Menu bar popover with an observed finding, session and console actions" width="340">
+
+</details>
 
 ## Get started
 
