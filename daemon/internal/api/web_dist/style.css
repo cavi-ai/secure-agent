@@ -1226,7 +1226,7 @@ main { min-width: 0; }
 .protection-view { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .protection-view .panel-head p { max-width: 72ch; margin-top: 4px; font-size: .78rem; color: var(--tx-2); }
 .protection-view .notify-pop-sub, .drawer-body > p { max-width: 72ch; }
-.needs { display: grid; gap: 16px; margin-bottom: 32px; }
+.needs { display: grid; gap: 12px; margin-bottom: 0; }
 .needs[hidden] { display: none; }
 .review-result[hidden] { display: none; }
 .review-result .panel-head { flex-wrap: wrap; }
@@ -1268,7 +1268,7 @@ button.need-head:hover .need-what { text-decoration: underline; text-decoration-
 .need-detail { grid-column: 1 / -1; display: grid; gap: 10px; padding: 4px 0 4px 30px; }
 .need-detail[hidden], .log-detail[hidden] { display: none; }
 
-.coverage-panel { background: transparent; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; margin-bottom: 32px; padding-bottom: 20px; }
+.coverage-panel { background: transparent; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; margin-bottom: 0; padding-bottom: 16px; }
 .coverage-panel .panel-head { padding: 0 0 12px; border: 0; }
 .coverage-panel .panel-body { padding-left: 0; padding-right: 0; }
 .coverage-panel[data-gap="true"] h2 { color: var(--warn); }
@@ -1795,11 +1795,15 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .sd-outcome h5 { margin: 0; font-size: 13px; }
 .sd-outcome time { font: 11px/1.4 var(--mono); color: var(--tx-2); }
 .sd-outcome p { margin: 6px 0; font-size: 12px; }
-.attention-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; }
-.attention-summary-card { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-sm); overflow-wrap: anywhere; }
-.attention-summary-card h3 { margin: 0 0 8px; font-size: 13px; }
-.attention-summary-card p { margin: 6px 0; color: var(--tx-2); }
+.attention-overview { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+.attention-overview .panel-head { padding: 0 0 12px; border: 0; }
+.attention-overview .panel-body { padding: 0 0 16px; }
+.attention-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px 24px; }
+.attention-summary-card { min-width: 0; padding: 0; overflow-wrap: anywhere; }
+.attention-summary-card h3 { margin: 0 0 6px; font-size: 13px; }
+.attention-summary-card p { margin: 4px 0; color: var(--tx-2); font-size: 12px; }
 .attention-summary-card .link-btn { min-height: 44px; }
+#attention-summary > p { margin: 8px 0 0; color: var(--tx-3); font-size: 12px; }
 .sd-hooks-scroll { max-width: 100%; overflow-x: auto; }
 .sd-hook-evidence { min-width: 0; overflow-wrap: anywhere; }
 .hook-diagnostic-preview { min-width: 0; margin-top: 16px; }

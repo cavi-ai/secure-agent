@@ -2204,6 +2204,10 @@ document.addEventListener('DOMContentLoaded', () => {
   function clearHarnessFilter(origin) {
     const fromSessions = !!origin?.closest('#session-board-panel');
     const searchId = fromSessions ? 'session-cwd-filter' : origin?.closest('#agents-container') ? 'agent-filter-text' : null;
+    if (fromSessions) {
+      globalSearch = '';
+      document.getElementById('global-search').value = '';
+    }
     harnessFilter.harnesses = {};
     harnessFilter.text = '';
     harnessFilterChanged();
@@ -3926,6 +3930,12 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'all-harnesses':
         harnessFilter.harnesses = {};
         harnessFilterChanged();
+        break;
+      case 'clear-global-search':
+        globalSearch = '';
+        document.getElementById('global-search').value = '';
+        renderAll();
+        document.getElementById('global-search').focus({preventScroll:true});
         break;
       case 'clear-harness-filter':
         clearHarnessFilter(el);
