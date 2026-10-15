@@ -15,6 +15,19 @@ Start with [installation and setup](GETTING_STARTED.md). Keep Secure Agent runni
 
 Home shows decisions that need your attention. Open the selected finding's evidence before deciding whether to acknowledge it, change policy or report remediation. History remains available in Findings even when an item does not page you.
 
+The **Attention overview** separates waiting access/resource decisions, security
+reviews, and monitoring problems. Counts and the first item in each category
+come from the daemon's existing queue; the queue keeps its original priority
+and actions. Monitoring gaps are counted separately from queued items. Unknown
+item types remain visible under Other attention. Zero queued items is not a
+safety verdict.
+
+Home links to the exact queued request or evidence and to monitoring details.
+The menu bar shows the same category counts. Failed refreshes label retained
+observations as last known, including critical headlines. Category links wait
+for fresh telemetry; the retained queue and its evidence remain available.
+Older or incompatible summaries leave the existing queue and headline intact.
+
 The web console shows active AI agent process trees, secret-exposure incident reports, correlated security flags, and proxy payload inspection streams. Its **Attention** view groups resource approvals, blocked guard requests, critical findings and incidents, and uninspected egress by complete session, with workspace, memory, CPU, process count, and scoped actions in one queue.
 
 Individual security flags open an evidence drawer with the local advisor's plan and actions. **Inspect file details** shows supported `.env` variable names without values. **Send to local agent review** routes the selected finding into the Agent recommendation queue. Expected-read exceptions cover an exact host; test/non-secret `.env` exceptions cover one exact file for the named agent and are reversible under Policy. Cloud/CDN identity is infrastructure context, not proof of secret transmission.

@@ -608,13 +608,49 @@ public struct PostureModel: Codable, Sendable, Equatable {
     public let summary: String
     public let connected: Bool
     public let items: [PostureItemModel]?
+    public let coverageCount: Int?
+    public let attentionSummary: AttentionSummaryModel?
 
-    public init(state: String, needsYou: Int, summary: String, connected: Bool, items: [PostureItemModel]? = nil) {
+    public init(state: String, needsYou: Int, summary: String, connected: Bool, items: [PostureItemModel]? = nil, coverageCount: Int? = nil, attentionSummary: AttentionSummaryModel? = nil) {
         self.state = state
         self.needsYou = needsYou
         self.summary = summary
         self.connected = connected
         self.items = items
+        self.coverageCount = coverageCount
+        self.attentionSummary = attentionSummary
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = try c.decode(String.self, forKey: .state)
+        needsYou = try c.decode(Int.self, forKey: .needsYou)
+        summary = try c.decode(String.self, forKey: .summary)
+        connected = try c.decode(Bool.self, forKey: .connected)
+        items = try c.decodeIfPresent([PostureItemModel].self, forKey: .items)
+        coverageCount = try? c.decodeIfPresent(Int.self, forKey: .coverageCount)
+        // An optional presentation cannot discard the existing queue/headline.
+        attentionSummary = try? c.decodeIfPresent(AttentionSummaryModel.self, forKey: .attentionSummary)
+    }
+
+    public var validatedAttentionSummary: AttentionSummaryModel? {
+        guard let s = attentionSummary, s.version == 1, [3, 4].contains(s.buckets.count),
+              needsYou >= 0, let coverageCount, coverageCount >= 0 else { return nil }
+        let order = ["decisions", "security", "monitoring", "other"]
+        var total = 0
+        for (index, b) in s.buckets.enumerated() {
+            guard b.kind == order[index], b.count >= 0, b.coverageCount >= 0, b.coverageCount <= coverageCount,
+                  b.kind == "monitoring" || b.coverageCount == 0 else { return nil }
+            let sum = total.addingReportingOverflow(b.count)
+            guard !sum.overflow else { return nil }
+            total = sum.partialValue
+            if b.count == 0 { if b.first != nil { return nil }; continue }
+            guard let f = b.first, !f.id.isEmpty else { return nil }
+            let aliases = ["guard_pending": "guard", "resource_pressure": "resource", "uninspected_egress": "egress"]
+            let matches = (items ?? []).filter { (aliases[$0.kind] ?? $0.kind) == f.kind && $0.id == f.id }
+            guard matches.count == 1 else { return nil }
+        }
+        return total == needsYou ? s : nil
     }
 
     public var criticalItem: PostureItemModel? { items?.first { $0.severity >= 3 } }
@@ -625,7 +661,38 @@ public struct PostureModel: Codable, Sendable, Equatable {
         case summary
         case connected
         case items
+        case coverageCount = "coverage_count"
+        case attentionSummary = "attention_summary"
     }
+}
+
+public struct AttentionSummaryModel: Codable, Sendable, Equatable {
+    public let version: Int
+    public let buckets: [AttentionBucketModel]
+}
+
+public struct AttentionBucketModel: Codable, Sendable, Equatable {
+    public let kind: String
+    public let count: Int
+    public let coverageCount: Int
+    public let first: AttentionReferenceModel?
+    enum CodingKeys: String, CodingKey { case kind, count, first; case coverageCount = "coverage_count" }
+    public var title: String {
+        switch kind {
+        case "decisions": "Waiting for your decision"
+        case "security": "Security review"
+        case "monitoring": "Monitoring problems"
+        default: "Other attention"
+        }
+    }
+}
+
+public struct AttentionReferenceModel: Codable, Sendable, Equatable {
+    public let kind: String
+    public let id: String
+    public let title: String
+    public let sessionID: String?
+    enum CodingKeys: String, CodingKey { case kind, id, title; case sessionID = "session_id" }
 }
 
 public struct PostureItemModel: Codable, Sendable, Equatable {

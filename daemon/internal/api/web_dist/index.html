@@ -206,6 +206,10 @@
     <main>
       <!-- Home: decisions and coverage first; detail opens on demand. -->
       <div class="tabpanel" id="tab-home" role="tabpanel">
+        <section class="panel" aria-labelledby="attention-summary-title">
+          <div class="panel-head"><h2 id="attention-summary-title" tabindex="-1">Attention overview</h2></div>
+          <div class="panel-body" id="attention-summary"></div>
+        </section>
         <section class="needs" id="attention-center" aria-labelledby="needs-title" hidden>
           <h2 class="needs-title" id="needs-title">Needs you <span class="needs-count" id="badge-attention-count">0</span></h2>
           <p class="report-health" data-reports="snapshot|guard decisions" role="status" hidden></p>
@@ -214,7 +218,7 @@
 
         <section class="panel coverage-panel" id="coverage-center" hidden>
           <div class="panel-head">
-            <h2 id="coverage-title">Monitoring</h2>
+            <h2 id="coverage-title" tabindex="-1">Monitoring</h2>
             <span class="badge" id="badge-coverage-count">0</span>
           </div>
           <p class="report-health" data-reports="snapshot" role="status" hidden></p>

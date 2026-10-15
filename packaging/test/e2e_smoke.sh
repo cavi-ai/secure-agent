@@ -566,6 +566,22 @@ fi
 # work there.
 # ---------------------------------------------------------------------------
 CONSOLE_PASSED=false
+# The shared overview is derived from this daemon's actual queue, including
+# monitoring gaps that must not inflate the queued decision count.
+curl -fsS --unix-socket "$SOCKET_PATH" http://unix/posture | python3 -c '
+import json,sys
+p=json.load(sys.stdin); s=p["attention_summary"]; buckets=s["buckets"]
+assert s["version"] == 1
+assert [b["kind"] for b in buckets[:3]] == ["decisions","security","monitoring"]
+assert sum(b["count"] for b in buckets) == p["needs_you"]
+assert buckets[2]["coverage_count"] == sum(i["kind"] not in ("uninspected_egress","hook_analysis_limit") for i in (p.get("coverage_items") or []))
+items={(i["kind"],i["id"]):i for g in p.get("groups",[]) for i in g["items"]}
+for b in buckets:
+    if b["count"]:
+        f=b["first"]; item=items[(f["kind"],f["id"])]
+        assert f.get("session_id", "") == item.get("session_id", "")
+print("Attention overview: canonical categories, counts and identities match the live queue.")
+'
 PROXY_PORT=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/status 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("proxy_port", 0))' 2>/dev/null || echo 0)
 if [ "$PROXY_PORT" != "0" ] && [ -f "$tmp/console-token" ]; then
   CT=$(tr -d '[:space:]' < "$tmp/console-token")

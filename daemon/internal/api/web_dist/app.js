@@ -3817,6 +3817,13 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'session-view':
         window.setSessionView(d.view);
         break;
+      case 'view-monitoring': {
+        switchTab('home');
+        const heading = document.getElementById('coverage-title');
+        heading?.scrollIntoView({block:'start'});
+        heading?.focus({preventScroll:true});
+        break;
+      }
       case 'hook-history-clear':
         sessionWorkbench.setHookHistory({ query: '', outcome: 'all', sort: 'runs' });
         break;

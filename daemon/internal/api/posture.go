@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"reflect"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -35,9 +36,10 @@ type Posture struct {
 	CoverageItems []PostureItem `json:"coverage_items"`
 	// Groups is the session-grouped attention queue every surface renders;
 	// agent-less items sit in the "machine" group.
-	Groups    []AttentionGroup `json:"groups,omitempty"`
-	Generated string           `json:"generated"`
-	Connected bool             `json:"connected"`
+	Groups           []AttentionGroup  `json:"groups,omitempty"`
+	Generated        string            `json:"generated"`
+	Connected        bool              `json:"connected"`
+	AttentionSummary *AttentionSummary `json:"attention_summary,omitempty"`
 }
 
 // handlePosture serves the operator headline. The computation lives in
@@ -85,13 +87,14 @@ func (a *API) publishPosture(gen uint64, p Posture, force bool) {
 	if gen < a.lastPostureGen {
 		return
 	}
-	if !force && p.State == a.lastPostureState && p.NeedsYou == a.lastPostureCount && p.CoverageCount == a.lastPostureCoverage {
+	if !force && p.State == a.lastPostureState && p.NeedsYou == a.lastPostureCount && p.CoverageCount == a.lastPostureCoverage && reflect.DeepEqual(p.AttentionSummary, a.lastPostureAttention) {
 		return
 	}
 	a.lastPostureGen = gen
 	a.lastPostureState = p.State
 	a.lastPostureCount = p.NeedsYou
 	a.lastPostureCoverage = p.CoverageCount
+	a.lastPostureAttention = p.AttentionSummary
 	a.deltaHub.Publish(Delta{Type: "posture", Data: p})
 }
 

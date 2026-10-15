@@ -1120,6 +1120,25 @@ export interface AttentionGroup {
   items: AttentionItem[] | null;
 }
 
+export interface AttentionReference {
+  kind: string;
+  id: string;
+  title: string;
+  session_id?: string;
+}
+
+export interface AttentionBucket {
+  kind: string;
+  count: number;
+  coverage_count: number;
+  first?: AttentionReference;
+}
+
+export interface AttentionSummary {
+  version: number;
+  buckets: AttentionBucket[] | null;
+}
+
 export interface Posture {
   state: string;
   needs_you: number;
@@ -1130,6 +1149,7 @@ export interface Posture {
   groups?: AttentionGroup[];
   generated: string;
   connected: boolean;
+  attention_summary?: AttentionSummary;
 }
 
 export interface EndpointIdentity {

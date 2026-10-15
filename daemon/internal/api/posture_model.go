@@ -57,6 +57,7 @@ func derivePosture(in postureInputs) Posture {
 		posture.CoverageItems = append(posture.CoverageItems, PostureItem{Kind: "hook_analysis_limit", ID: "hook-analysis", Title: "Hook analysis is limited to recent samples", Detail: "The latest 1,000 live-session completions and up to 20 repair findings are assessed. Open a session for its own assessment."})
 	}
 	posture.CoverageCount = len(posture.CoverageItems)
+	posture.AttentionSummary = deriveAttentionSummary(posture.Groups, posture.CoverageItems)
 	switch {
 	case posture.NeedsYou == 0 && !hasMonitoringGap(posture.CoverageItems):
 		posture.State = "all-clear"
@@ -104,7 +105,7 @@ func coverageItems(now time.Time, st Status, hookGap *PostureItem) []PostureItem
 // egress is a coverage note, not a gap: alone it leaves posture all-clear.
 func hasMonitoringGap(items []PostureItem) bool {
 	for _, it := range items {
-		if it.Kind != "uninspected_egress" && it.Kind != "hook_analysis_limit" {
+		if isMonitoringGap(it) {
 			return true
 		}
 	}
