@@ -414,6 +414,82 @@ function hookEvidenceHTML(page) {
   return `<section class="sd-hook-evidence"><p>${escapeHTML(page.filter.harness)} · ${escapeHTML(page.filter.event)} · Handler: ${escapeHTML(page.filter.handler_id || 'unattributed')} · Configuration: ${escapeHTML(page.filter.config_id || 'not supplied')}</p><p>Retained completions from <time>${escapeHTML(page.since)}</time> to <time>${escapeHTML(page.until)}</time>. ${page.truncated ? 'Evidence is limited to the latest 100 matching runs.' : ''} Equal timestamps do not establish execution order.</p>${rows || '<p>No matching retained completions in this window. This does not establish recovery or prove that no hooks ran.</p>'}<p>Only normalized metadata is shown. These records do not establish protection coverage.</p></section>`;
 }
 
+// Build an allowlisted handoff from the same validated snapshot as the inspector.
+// Do not serialize the payload: it may gain fields unsuitable for sharing.
+function hookDiagnosticSummary(kind, scope, payload) {
+  const clean = value => String(value ?? 'unknown').replace(/[\u0000-\u001f\u007f]/g, ' ');
+  const lines = ['Hook diagnostic summary', 'Snapshot of loaded evidence; refresh before assessing current state.'];
+  const add = (label, value) => lines.push(label + ': ' + clean(value));
+  const limits = values => { for (const value of values || []) add('Limit', value); };
+  if (kind === 'delivery') {
+    const ingestion = payload?.hook_ingestion;
+    if (!validHookIngestion(ingestion) || !ingestion.available) return null;
+    const row = ingestion.forwarders?.find(r => r.report.forwarder_id === scope.id);
+    if (!row) return null;
+    const r = row.report, health = r.health;
+    add('Type', 'Forwarding delivery');
+    add('Runtime', r.harness); add('Forwarder', r.forwarder_id); add('Session', r.session_id || 'not supplied');
+    add('Host report time', r.ts); add('Local receipt', row.received_at); add('Report sequence', r.sequence);
+    add('Freshness at load', row.freshness);
+    add('Host-reported state', r.state);
+    add('Assessment', row.freshness === 'recent' ? row.assessment?.title || 'Assessment unavailable' : 'current state unknown');
+    add('Queued completions', r.pending); add('Delivery failures (cumulative)', r.delivery_failures); add('Dropped completions (cumulative)', r.dropped);
+    if (r.dropped) lines.push('Evidence gap: dropped completions may be unrecoverable.');
+    add('Host-reported source state', health?.source_state || 'unknown');
+    add('Persisted queued completions', health?.outbox?.persisted);
+    add('Recovered after host restart', health?.outbox?.recovered);
+    if (row.freshness !== 'recent') lines.push('Next action: Check the reporting host, recorder and clocks, then obtain a new report.');
+    else for (const issue of row.assessment?.issues || []) {
+      add('Issue', issue.stage + ' / ' + issue.code); add('Next action', issue.next_action);
+    }
+    if (row.freshness === 'recent' && !row.assessment?.issues?.length) lines.push('Next action: Inspect the reporting host diagnostics and refresh its report before assessing recovery.');
+    limits(row.assessment?.limits);
+    if (ingestion.forwarders_truncated) lines.push('Limit: Other forwarding instances may be omitted.');
+    lines.push('Host reports do not establish complete delivery, durable daemon storage or protection coverage.');
+  } else if (kind === 'evidence' || kind === 'repair') {
+    const repair = kind === 'repair';
+    if (!(repair ? validHookRepair(payload, scope) : validHookEvidence(payload, scope))) return null;
+    const p = payload, f = p.filter;
+    add('Type', repair ? 'Repair verification' : 'Recorded completions');
+    add('Runtime', f.harness); add('Session', p.session_id); add('Event', f.event);
+    add('Event scope', f.event_scope || 'group'); add('Handler', f.handler_id || 'unattributed'); add('Original configuration', f.config_id || 'not supplied');
+    add('Observation window', p.since + ' to ' + p.until);
+    if (repair) {
+      add('Original failure', scope.problem || 'Hook repeatedly failed'); add('Original observation', scope.explanation || 'not supplied');
+      add('Last original failure', scope.after); add('Original guidance', scope.guidance || 'not supplied');
+      const v = p.verification;
+      add('Verification state', v.state); add('Verification result', v.title); add('Observation', v.detail);
+      add('Newest observed completion', v.observed_at); add('Observed configuration', v.config_id || 'not supplied');
+      add('Verification run IDs', v.run_ids.slice(0, 20).join(', ') || 'none reported');
+      if (v.run_ids.length > 20) add('Verification sample', '20 of ' + v.run_ids.length + ' returned run IDs');
+      if (v.reason_code) add('Reported reason', v.reason_code);
+      if (v.truncated) lines.push('Limit: Verification evidence is truncated; repair remains unconfirmed.');
+      limits(v.limits);
+      lines.push('Original-configuration completions follow; they are separate from the newer verification result.');
+    }
+    add('Completion sample', Math.min(20, p.rows.length) + ' of ' + p.rows.length + ' returned rows');
+    if (p.truncated) lines.push('Limit: Evidence is limited to the latest 100 matching runs.');
+    if (p.rows.length > 20) lines.push('Limit: This summary includes only the first 20 returned rows; inspect the remaining rows in Secure Agent.');
+    if (!p.rows.length) lines.push('No matching retained completions; recovery and whether hooks ran remain unknown.');
+    for (const r of p.rows.slice(0, 20)) {
+      lines.push(''); add('Run', r.id); add('Time', r.ts); add('Outcome', r.status);
+      add('Reported reason', r.evidence?.reason_code || 'not reported');
+      add('Duration', r.duration_ms === undefined ? 'unknown' : fmtDurationMs(r.duration_ms));
+      add('Returned characters', r.chars === undefined ? 'unknown' : r.chars);
+      add('Host-reported action outcome', r.evidence?.action_outcome || 'unknown');
+      add('Host-reported control role', r.evidence?.control_role || 'unknown');
+    }
+    lines.push('Equal timestamps do not establish execution order.');
+    if (!repair) lines.push('Next action: Compare these outcomes with the handler configuration, then refresh evidence after a real completion.');
+    lines.push('Recorded completions do not establish lasting repair, total task delay, token cost or protection coverage.');
+  } else return null;
+  return lines.join('\n');
+}
+
+function hookDiagnosticPreviewHTML(summary) {
+  return `<details class="hook-diagnostic-preview"><summary>Preview diagnostic summary</summary><label>Diagnostic summary<textarea readonly rows="10" spellcheck="false">${escapeHTML(summary)}</textarea></label><p>Only normalized metadata is included. Review this snapshot before sharing it.</p></details><p id="hook-diagnostic-status" role="status"></p>`;
+}
+
 function hookEvidenceButtonHTML(f, sessionId, exact = false) {
   if (!sessionId || !['claude','codex','openclaw','hermes','opencode'].includes(f.harness)) return '';
   return `<button type="button" class="link-btn" data-action="hook-evidence" data-session="${escapeHTML(sessionId)}" data-harness="${escapeHTML(f.harness)}" data-event="${escapeHTML(f.event)}" data-event_scope="${exact ? 'exact' : 'group'}" data-script="${escapeHTML(f.script || '')}" data-handler="${escapeHTML(f.handler_id || '')}" data-config="${escapeHTML(f.config_id || '')}">Inspect recorded runs</button>`;
