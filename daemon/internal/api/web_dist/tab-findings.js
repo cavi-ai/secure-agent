@@ -42,7 +42,7 @@ function renderCoverage() {
             ? '<span class="coverage-guidance">Run Doctor to review lost telemetry. Restarting cannot restore missing evidence.</span>'
         : '<span class="coverage-guidance">Check Setup &amp; Permissions in the menu bar</span>';
     return `<div class="coverage-row"><span><strong>${escapeHTML(it.title)}</strong><span>${escapeHTML(it.detail || '')}</span></span>${action}</div>`;
-  }).join('') + (showHooks ? hookMonitoringHTML(hooks) : '') + (hookSetup ? '<button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button>' : '') + (sessions.length ? `<details class="coverage-harness"><summary>Per-session coverage · ${sessions.length}</summary>${sessions.map(s => {
+  }).join('') + (showHooks ? `<details class="coverage-diagnostics" data-hook-disclosure="monitoring"><summary>Hook monitoring details</summary>${hookMonitoringHTML(hooks)}</details>` : '') + (hookSetup ? '<button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button>' : '') + (sessions.length ? `<details class="coverage-harness"><summary>Per-session coverage · ${sessions.length}</summary>${sessions.map(s => {
     const path = (name, p = {}) => {
       p = p || {};
       return `<span>${name}: ${escapeHTML(coveragePathLabel(p))}${p.last_seen ? ` · ${escapeHTML(p.last_seen)}` : ''}</span><span class="coverage-guidance">${escapeHTML(p.detail || '')}</span>`;
@@ -494,6 +494,8 @@ function renderAttention() {
   // same set the menubar shows.
   const count = attentionCount(SA.t.posture);
   if (badge) badge.textContent = count;
+  const title = document.getElementById('needs-title-label');
+  if (title) title.textContent = count === 1 ? 'One item needs you' : `${count} items need you`;
   SA.setTabBadge('home', count);
   if (panel) panel.hidden = count === 0;
   const ctx = homeContext(SA);

@@ -15,8 +15,10 @@
 The firewall inspects routed outbound requests for secret exposure. Its opt-in HTTP/HTTPS proxy listens on `127.0.0.1:8443` by default. For inspected HTTPS hosts it generates certificates with Secure Agent's local CA, scans request streams for credentials, and scans response streams for prompt injection. Enable routing and client CA trust explicitly; tunneled connections remain unopened.
 
 <p align="center">
-  <img src="../assets/screenshots/firewall.png" alt="Egress firewall — per-rule stats and promote-to-block" width="720">
+  <img src="../assets/screenshots/protection-dark.jpg" alt="Protection settings with per-rule monitoring and blocking controls" width="1120">
 </p>
+
+Screenshot uses synthetic demonstration data.
 
 **Detection layers** (`daemon/internal/firewall/`):
 

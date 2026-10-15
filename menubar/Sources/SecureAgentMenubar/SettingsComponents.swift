@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A white symbol on a tinted rounded square: the sidebar and page-header
+/// A quiet tinted symbol: the sidebar and page-header
 /// icon of each Settings page.
 struct SettingsIconTile: View {
     let symbol: String
@@ -10,11 +10,11 @@ struct SettingsIconTile: View {
     var body: some View {
         Image(systemName: symbol)
             .font(.system(size: size * 0.52, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(tint)
             .frame(width: size, height: size)
             .background(
                 RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
-                    .fill(tint.gradient)
+                    .fill(tint.opacity(0.12))
             )
             .accessibilityHidden(true)
     }

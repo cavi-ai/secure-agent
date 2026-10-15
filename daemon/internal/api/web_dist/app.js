@@ -750,6 +750,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // Posture pill on the stuck tab bar: the hero's count; a click goes back
   // to the top.
   const tabsBar = document.getElementById('tabs-bar');
+  const compactNavigation = window.matchMedia('(max-width: 1099px)');
+  function syncNavigationLayout() {
+    const options = document.getElementById('console-options');
+    if (options) options.open = !compactNavigation.matches;
+    const tabs = tabsBar?.querySelector('[role="tablist"]');
+    if (tabs) tabs.setAttribute('aria-orientation', compactNavigation.matches ? 'horizontal' : 'vertical');
+  }
+  syncNavigationLayout();
+  compactNavigation.addEventListener?.('change', syncNavigationLayout);
   function syncTabsStuck() {
     if (!tabsBar) return;
     const stuck = window.scrollY > 0 && tabsBar.getBoundingClientRect().top <= 0;
@@ -1780,6 +1789,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (r.tab === 'agent') closeAgentDock();
     const from = activeTab;
     activeTab = r.tab;
+    const headings = {
+      home: ['Overview', 'Monitor local AI activity and respond to security findings.'],
+      sessions: ['Sessions', 'Follow your agents, inspect activity, and review session evidence.'],
+      protection: ['Protection', 'Review observed traffic and manage file and egress rules.'],
+      system: ['System', 'Inspect resources, worktrees, and local storage.'],
+      agent: ['Agent', 'Work with your local assistant.'],
+    };
+    const heading = headings[activeTab];
+    const title = document.getElementById('page-title');
+    const description = document.getElementById('page-description');
+    if (title) title.textContent = heading[0];
+    if (description) description.textContent = heading[1];
+
     document.body.classList.toggle('agent-page', activeTab === 'agent');
     if (r.tab === 'sessions') activeSub = r.sub;
     if (r.tab === 'protection') activeProtection = r.sub;
@@ -1831,6 +1853,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // Grouped primary tabs reopen their last sub-view.
   document.querySelectorAll('.tab-btn').forEach(b =>
     b.addEventListener('click', () => switchTab(b.dataset.tab === 'sessions' ? 'sessions/' + activeSub : b.dataset.tab === 'protection' ? 'protection/' + activeProtection : b.dataset.tab === 'system' ? 'system/' + activeSystemSub : b.dataset.tab)));
+  document.querySelectorAll('.tab-btn').forEach(button => button.addEventListener('keydown', e => {
+    const tabs = [...document.querySelectorAll('.tab-btn')];
+    const current = tabs.indexOf(document.activeElement);
+    if (current < 0) return;
+    let next;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') next = (current + 1) % tabs.length;
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') next = (current - 1 + tabs.length) % tabs.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = tabs.length - 1;
+    else return;
+    e.preventDefault();
+    tabs[next].focus();
+    tabs[next].click();
+  }));
   document.querySelectorAll('#tab-sessions .subtab-btn[data-subtab]').forEach(b =>
     b.addEventListener('click', () => switchTab('sessions/' + b.dataset.subtab)));
   document.querySelectorAll('#tab-system [data-system-subtab]').forEach(b =>

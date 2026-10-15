@@ -76,7 +76,7 @@ def build_harness(tmp):
     for f in ("index.html", "style.css", "lib.js", "event-history.js", "live-updates.js", "console-auth.js", "report-health.js", "telemetry-validation.js", "app.js",
               "telemetry-refresh.js", "spend-controller.js", "agent-controller.js", "history-controller.js", "console-lifecycle.js", "policy-controller.js", "drawer.js", "staged-write.js", "finding-actions.js", "worktree-controller.js",
               "tab-overview.js", "session-workbench.js", "decision-permissions.js", "tab-agents.js", "tab-egress.js", "tab-findings.js",
-              "tab-worktrees.js", "tab-agent.js", "theme-init.js", "icon.svg"):
+              "tab-worktrees.js", "tab-agent.js", "theme-init.js", "icon.svg", "brand-icon.png"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))
     os.symlink(MOCK, os.path.join(tmp, "mock_dom.js"))
     os.symlink(os.path.join(os.path.dirname(MOCK), "fixtures.js"), os.path.join(tmp, "fixtures.js"))

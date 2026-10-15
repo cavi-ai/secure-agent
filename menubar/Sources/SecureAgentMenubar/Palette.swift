@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// App palette, shared by every surface (popover, sheets, settings). Kept in
@@ -5,12 +6,28 @@ import SwiftUI
 /// ShapeStyle surfaces are covered so `.brand` works in either inference
 /// position (foregroundStyle/tint/foregroundStyle(Color)).
 extension Color {
-    static let brand = Color(.sRGB, red: 0.52, green: 0.44, blue: 0.97, opacity: 1)
+    static let brand = Color(.sRGB, red: 0.67, green: 0.65, blue: 1, opacity: 1)
+    static let brandAction = Color(.sRGB, red: 0.40, green: 0.35, blue: 0.87, opacity: 1)
+    static let appSurface = Color(.sRGB, red: 0.063, green: 0.067, blue: 0.078, opacity: 1)
     static let ok = Color(.sRGB, red: 0.30, green: 0.80, blue: 0.55, opacity: 1)
     static let warn = Color(.sRGB, red: 0.96, green: 0.62, blue: 0.20, opacity: 1)
     static let bad = Color(.sRGB, red: 0.92, green: 0.35, blue: 0.45, opacity: 1)
     /// The dim-but-visible text tier between .tertiary and .secondary.
     static let tertiaryText = Color(white: 0.62)
+}
+
+/// Uses the same packaged artwork as Finder and the console.
+struct AppBrandMark: View {
+    var size: CGFloat = 36
+
+    var body: some View {
+        Image(nsImage: NSApp.applicationIconImage)
+            .resizable()
+            .interpolation(.high)
+            .scaledToFit()
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
 }
 
 extension ShapeStyle where Self == Color {

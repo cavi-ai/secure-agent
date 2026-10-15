@@ -1931,11 +1931,11 @@
     // event a real scroll fires; dispatch it after scrolling.
     setTimeout(() => { window.scrollTo(0, 5000); window.dispatchEvent(new Event('scroll')); }, 4500);
     setTimeout(() => {
-      const nav = document.querySelector('nav.tabs[role="tablist"]');
+      const nav = document.querySelector('.sidebar');
       const pill = document.getElementById('tabs-posture');
       const shown = pill && !pill.hidden && getComputedStyle(pill).display !== 'none' && pill.getBoundingClientRect().height > 0;
       stamp('sticky-probe', `top=${Math.round(nav.getBoundingClientRect().top)} scroll=${Math.round(window.scrollY)} `
-        + `stuck=${document.getElementById('tabs-bar').classList.contains('is-stuck')} pill=${shown ? 'visible' : 'hidden'}:${pill ? pill.textContent.trim() : ''}`);
+        + `stuck=${['fixed', 'sticky'].includes(getComputedStyle(nav).position)} pill=${shown ? 'visible' : 'hidden'}:${document.getElementById('tab-badge-home').textContent.trim()}`);
     }, 5500);
   }
   // drawerbackdemo: Uninspected drawer → first Evidence → Back; <pre

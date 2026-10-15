@@ -38,6 +38,7 @@ public final class SettingsWindowController: NSObject, NSWindowDelegate {
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "Secure Agent Settings"
+        window.appearance = NSAppearance(named: .darkAqua)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.setContentSize(NSSize(width: 860, height: 640))
         window.contentMinSize = NSSize(width: 760, height: 520)
@@ -205,6 +206,9 @@ struct SettingsView: View {
             }
         }
         .frame(minWidth: 760, minHeight: 520)
+        .background(Color.appSurface)
+        .tint(Color.brand)
+        .preferredColorScheme(.dark)
         .sheet(item: $ruleEdit) { edit in
             ProtectionRuleEditor(edit: edit, settings: protection) { state.refresh() }
         }

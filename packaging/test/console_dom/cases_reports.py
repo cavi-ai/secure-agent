@@ -1946,7 +1946,7 @@ def run_no_token_at_load(page):
         (
             re.search('<section[^>]*id="session-ended"[^>]*>', dom_notoken) is not None
             and re.search('<section class="posture" id="posture-banner"[^>]*\\bhidden\\b', dom_notoken) is not None
-            and re.search('<section class="statstrip"[^>]*\\bhidden\\b', dom_notoken) is not None
+            and re.search('<aside class="sidebar"[^>]*\\bhidden\\b', dom_notoken) is not None
             and nt_fetches == '0'
             and not dom_query(dom_notoken).has(None, {'id': 'sse-state'})
         ),
@@ -3719,14 +3719,14 @@ def run_sticky_tabs(page):
     sticky = pre(dom_sticky, 'sticky-probe')
     m = re.match('top=(-?\\d+) scroll=(\\d+) stuck=(\\w+) pill=(\\w+):(.*)$', sticky)
     check(
-        'sticky tabs: after scrolling 5000 px on Attention the tablist sits at the top with the posture pill',
+        'sidebar: navigation and attention count stay reachable after scrolling',
         (
             m is not None
             and 0 <= int(m.group(1)) < 60
             and int(m.group(2)) > 0
             and m.group(3) == 'true'
-            and m.group(4) == 'visible'
-            and m.group(5) == f'{needs_you} need you'
+            and m.group(4) == 'hidden'
+            and m.group(5) == str(needs_you)
         ),
         f'probe={sticky!r}',
     )
