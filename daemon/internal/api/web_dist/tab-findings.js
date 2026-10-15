@@ -448,6 +448,33 @@ function needRowHTML(v, open, nowMs) {
     + `<div class="need-actions">${actionBarHTML(v.items)}</div></li>`;
 }
 
+function attentionSummaryHTML(posture, stale) {
+  if (!validAttentionSummary(posture)) return '<p>Attention breakdown unavailable. Review the retained queue and monitoring details below.</p>';
+  const titles = { decisions: 'Waiting for your decision', security: 'Security review', monitoring: 'Monitoring problems', other: 'Other attention' };
+  return `${stale ? '<p role="status">Last known attention breakdown; current counts and requests may have changed. Refresh telemetry before relying on these observations.</p>' : ''}<div class="attention-summary-grid">${posture.attention_summary.buckets.map(b => {
+    const first = b.first;
+    const inspect = !stale && first ? `<button type="button" class="link-btn" data-action="select-attention" data-need-kind="${escapeHTML(first.kind)}" data-need-id="${escapeHTML(first.id)}">${b.kind === 'decisions' ? 'Review request' : b.kind === 'security' ? 'Review evidence' : 'Inspect issue'}</button>` : '';
+    const gaps = b.coverage_count ? `<p>${b.coverage_count} monitoring gap${b.coverage_count === 1 ? '' : 's'} counted separately</p>${!stale ? '<button type="button" class="link-btn" data-action="view-monitoring">View monitoring</button>' : ''}` : '';
+    return `<article class="attention-summary-card"><h3>${titles[b.kind]}</h3><p>${b.count} queued item${b.count === 1 ? '' : 's'}</p>${first ? `<p>${escapeHTML(first.title)}</p>` : ''}${inspect}${gaps}</article>`;
+  }).join('')}</div><p>Queue categories preserve the existing priority and actions. Zero queued items is not a safety verdict.</p>`;
+}
+
+function renderAttentionSummary(SA) {
+  const el = document.getElementById('attention-summary');
+  if (!el) return;
+  const health = SA.postureHealth || {};
+  const stale = !!health.error || !health.lastSnapshotAt || Date.now() - health.lastSnapshotAt > 120000;
+  const html = attentionSummaryHTML(SA.t.posture, stale);
+  if (el._summaryHTML === html) return;
+  const focused = document.activeElement;
+  const key = el.contains(focused) && focused.dataset.action ? JSON.stringify(focused.dataset) : null;
+  el.innerHTML = html; el._summaryHTML = html;
+  if (key) {
+    const replacement = [...el.querySelectorAll('[data-action]')].find(button => JSON.stringify(button.dataset) === key);
+    (replacement || document.getElementById('attention-summary-title'))?.focus({preventScroll:true});
+  }
+}
+
 function renderAttention() {
   const SA = window.SA;
   const result = document.getElementById('review-result');
@@ -460,6 +487,7 @@ function renderAttention() {
   const list = document.getElementById('attention-list');
   const badge = document.getElementById('badge-attention-count');
   if (!list) return;
+  renderAttentionSummary(SA);
   SA.reconcileAttention?.();
   renderCoverage();
   // The daemon serves the queue on /posture; needs_you counts its items, the

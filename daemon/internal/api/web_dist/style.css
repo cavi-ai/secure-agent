@@ -1801,6 +1801,11 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .sd-outcome h5 { margin: 0; font-size: 13px; }
 .sd-outcome time { font: 11px/1.4 var(--mono); color: var(--tx-2); }
 .sd-outcome p { margin: 6px 0; font-size: 12px; }
+.attention-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; }
+.attention-summary-card { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-sm); overflow-wrap: anywhere; }
+.attention-summary-card h3 { margin: 0 0 8px; font-size: 13px; }
+.attention-summary-card p { margin: 6px 0; color: var(--tx-2); }
+.attention-summary-card .link-btn { min-height: 44px; }
 .sd-hooks-scroll { max-width: 100%; overflow-x: auto; }
 .sd-hook-evidence { min-width: 0; overflow-wrap: anywhere; }
 .sd-hooks { width: 100%; min-width: 720px; border-collapse: collapse; margin-top: 8px; font-size: 12px; }

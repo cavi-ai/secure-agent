@@ -2046,6 +2046,24 @@ function attentionItemKind(kind) {
 // too and needs_you is items.length, so the count, the headline items and
 // the groups agree until the next snapshot. state and summary stay the
 // daemon's.
+function validAttentionSummary(p) {
+  const s = p?.attention_summary, order = ['decisions', 'security', 'monitoring', 'other'];
+  const count = v => Number.isSafeInteger(v) && v >= 0;
+  if (s?.version !== 1 || !Array.isArray(s.buckets) || ![3, 4].includes(s.buckets.length) || !count(p.needs_you) || !count(p.coverage_count)) return false;
+  let total = 0;
+  for (const [index, b] of s.buckets.entries()) {
+    if (!b || b.kind !== order[index] || !count(b.count) || !count(b.coverage_count)
+      || (b.kind !== 'monitoring' && b.coverage_count !== 0) || b.coverage_count > p.coverage_count) return false;
+    total += b.count;
+    if (!b.count) { if (b.first != null) return false; continue; }
+    const f = b.first;
+    if (!f || typeof f.id !== 'string' || !f.id || typeof f.kind !== 'string' || typeof f.title !== 'string') return false;
+    const matches = (p.groups || []).flatMap(g => g.items || []).filter(it => it.kind === f.kind && it.id === f.id);
+    if (matches.length !== 1 || matches[0].title !== f.title || (matches[0].session_id || '') !== (f.session_id || '')) return false;
+  }
+  return total === p.needs_you;
+}
+
 function mapPostureAttention(p, fn) {
   if (!p || !p.groups) return p;
   const dropped = new Set();
@@ -2058,7 +2076,7 @@ function mapPostureAttention(p, fn) {
     }).filter(Boolean),
   })).filter(g => g.items.length);
   const items = (p.items || []).filter(it => !dropped.has(attentionItemKind(it.kind) + '|' + it.id));
-  return { ...p, groups, items, needs_you: items.length };
+  return { ...p, groups, items, needs_you: items.length, attention_summary: undefined };
 }
 
 // ---------- console navigation ----------

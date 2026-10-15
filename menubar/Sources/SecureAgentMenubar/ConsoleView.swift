@@ -208,6 +208,27 @@ struct ConsoleView: View {
                 }
                 Spacer(minLength: 0)
             }
+            if let summary = state.posture?.validatedAttentionSummary {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(summary.buckets, id: \.kind) { bucket in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(bucket.title): \(bucket.count) queued")
+                                .font(.system(size: 11, weight: .semibold))
+                            if let first = bucket.first {
+                                Text(first.title).font(.system(size: 11)).foregroundStyle(.secondary)
+                            }
+                            if bucket.coverageCount > 0 {
+                                Text("\(bucket.coverageCount) monitoring gaps counted separately")
+                                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                            }
+                        }.fixedSize(horizontal: false, vertical: true)
+                    }
+                    Button("Review attention in console") { state.openDashboard(tab: "home") }
+                        .buttonStyle(.bordered).controlSize(.small)
+                    Text("Zero queued items is not a safety verdict.")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            }
             if let flag = m.flag {
                 heroFlagBlock(flag, lines: m.flagLines, action: m.action, label: m.buttonLabel)
             } else if let item = m.item {
@@ -381,7 +402,7 @@ struct ConsoleView: View {
 						 subtitle: warning, flag: top, action: action)
 		}
         let summary = state.posture?.summary ?? ""
-        let subtitle = summary.isEmpty ? monitoredLine : summary
+        let subtitle = Self.postureSubtitle(summary.isEmpty ? monitoredLine : summary, warning: state.staleDataWarning)
         switch state.posture?.state ?? fallbackPostureState {
         case "critical":
             return HeroModel(icon: "exclamationmark.shield.fill", color: .bad, title: "Urgent review",
@@ -393,6 +414,11 @@ struct ConsoleView: View {
             return HeroModel(icon: "checkmark.shield.fill", color: .ok, title: "No pending decisions",
                              subtitle: subtitle, flag: top, action: action)
         }
+    }
+
+    static func postureSubtitle(_ summary: String, warning: String?) -> String {
+        guard let warning else { return summary }
+        return "Last known observations. \(warning) \(summary)"
     }
 
     /// The hero shows only when there is something to say: paused,
