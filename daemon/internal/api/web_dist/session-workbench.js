@@ -485,27 +485,61 @@ function validSessionHooks(rows) {
     && ['harness', 'handler_id', 'config_id'].every(k => r[k] === undefined || typeof r[k] === 'string'));
 }
 
-function sessionHooksHTML(rows, state, health, healthState, ingestion, sessionId) {
+// Group totals remain scoped to the selected session; these controls only
+// narrow the retained response and never change the current diagnosis.
+function hookMeasurementKnown(row, key, samples) {
+  return row[samples] === undefined ? row[key] > 0 : row[samples] > 0;
+}
+
+function selectHookHistory(rows, controls = {}) {
+  const query = String(controls.query || '').trim().toLowerCase();
+  const outcome = ['errors', 'blocks', 'cancelled'].includes(controls.outcome) ? controls.outcome : 'all';
+  const sort = ['runs', 'total_ms', 'chars'].includes(controls.sort) ? controls.sort : 'runs';
+  const samples = sort === 'total_ms' ? 'duration_samples' : 'char_samples';
+  const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+  const identity = r => JSON.stringify([r.harness || '', r.event, r.script || '', r.handler_id || '', r.config_id || '']);
+  return rows.filter(r => (outcome === 'all' || r[outcome] > 0)
+    && (!query || [r.event, r.script, r.handler_id].some(v => String(v || '').toLowerCase().includes(query))))
+    .sort((a, b) => {
+      if (sort !== 'runs') {
+        const knownA = hookMeasurementKnown(a, sort, samples), knownB = hookMeasurementKnown(b, sort, samples);
+        if (knownA !== knownB) return knownA ? -1 : 1;
+        if (!knownA) return compare(identity(a), identity(b));
+      }
+      return b[sort] - a[sort] || compare(identity(a), identity(b));
+    });
+}
+
+function sessionHooksHTML(rows, state, health, healthState, ingestion, sessionId, controls = {}) {
   state = state || {};
-  const retry = `<button type="button" class="link-btn" data-action="session-hooks-retry"${state.loading ? ' disabled' : ''}>Retry hooks</button>`;
+  const retry = '<button type="button" class="link-btn" data-action="session-hooks-retry">Retry hooks</button>';
   const notice = state.error ? `Hook runs unavailable.${rows ? ' Showing the last loaded totals; they may be out of date.' : ''} ${retry}`
     : !rows ? 'Loading hook runs…' : '';
-  const head = sessionHookHealthHTML(health, healthState, sessionId) + hookIngestionHTML(ingestion, healthState) + `<header data-session-part="hooks-head"><h4>Hook history</h4><button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button><p>Recorded completions from session transcripts and connected hosts. Errors and cancellations are separate. Blocks can be expected protection or validation decisions. Cumulative runtime can include overlapping callbacks.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
+  const head = sessionHookHealthHTML(health, healthState, sessionId) + hookIngestionHTML(ingestion, healthState) + `<header data-session-part="hooks-head"><h4>Hook history</h4><button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button><p>Recorded completions from session transcripts and connected hosts. Errors and cancellations are separate. Blocks can be expected protection or validation decisions. Cumulative runtime can include overlapping callbacks. Outcome counts are historical; current repair findings are assessed separately. Measurement sorts use reported totals; unknown values sort last.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
+  // Static markup keeps native inputs and their caret stable during refreshes.
+  const tools = `<div class="sd-hook-controls" data-session-part="hooks-controls" role="group" aria-label="Filter hook history">
+    <label>Search hook history<input type="search" maxlength="256" data-hook-history="query" placeholder="Event, script or handler ID"></label>
+    <label>Outcome<select data-hook-history="outcome"><option value="all">All outcomes</option><option value="errors">Execution errors</option><option value="blocks">Blocks</option><option value="cancelled">Cancellations</option></select></label>
+    <label>Sort by<select data-hook-history="sort"><option value="runs">Most runs</option><option value="total_ms">Cumulative runtime</option><option value="chars">Returned characters</option></select></label>
+    <button type="button" class="link-btn" data-action="hook-history-clear">Clear filters</button></div>`;
   if (!rows) return head;
-  if (!rows.length) return head + '<p data-session-part="hooks-empty">No hook runs recorded for this session.</p>';
+  const selected = selectHookHistory(rows, controls);
+  const count = `<p data-session-part="hooks-count" role="status">${selected.length} of ${rows.length} recorded hook groups.</p>`;
+  if (!rows.length) return head + tools + count + '<p data-session-part="hooks-empty">No hook runs recorded for this session.</p>';
+  if (!selected.length) return head + tools + count + '<p data-session-part="hooks-empty">No hook groups match these filters. Clear filters to see retained history.</p>';
   const metric = (r, key, samples, format) => {
-    const n = r[samples];
-    if (n === 0 || (n === undefined && r[key] === 0)) return 'unknown';
-    return escapeHTML(format(r[key])) + (n !== undefined && n < r.runs ? ` (${n}/${r.runs} measured)` : '');
+    if (!hookMeasurementKnown(r, key, samples)) return 'unknown';
+    return escapeHTML(format(r[key])) + (r[samples] !== undefined && r[samples] < r.runs ? ` (${r[samples]}/${r.runs} measured)` : '');
   };
-  const body = rows.map(r => `<tr${r.errors > 0 ? ' class="sd-hook-failed"' : ''}>
-      <td>${escapeHTML(r.event)}</td><td>${escapeHTML(r.script || 'not recorded')}${r.handler_id ? `<br>Handler: ${escapeHTML(r.handler_id)}${r.config_id ? `<br>Configuration: ${escapeHTML(r.config_id)}` : ''}` : '<br>Handler identity unavailable'}<br>${hookEvidenceButtonHTML(r, sessionId)}</td>
-      <td>${r.runs}</td><td>${r.errors}</td><td>${r.blocks}</td><td>${r.cancelled || 0}</td>
-      <td>${metric(r, 'chars', 'char_samples', fmtCompact)}</td><td>${metric(r, 'total_ms', 'duration_samples', fmtDurationMs)}</td></tr>`).join('');
-  return head + `<div class="sd-hooks-scroll" data-session-part="hooks-table" role="region" aria-label="Hook history" tabindex="0"><table class="sd-hooks"><thead><tr>
-      <th scope="col">Event</th><th scope="col">Handler</th><th scope="col">Runs</th><th scope="col">Errors</th>
-      <th scope="col">Blocked</th><th scope="col">Cancelled</th><th scope="col">Chars returned</th><th scope="col">Cumulative runtime</th>
-    </tr></thead><tbody>${body}</tbody></table></div>`;
+  const cell = (label, value) => `<td role="cell" data-label="${label}">${value}</td>`;
+  const body = selected.map(r => `<tr${r.errors > 0 ? ' class="sd-hook-failed"' : ''} role="row" data-row-id="${escapeHTML(JSON.stringify([r.harness || '',r.event,r.script || '',r.handler_id || '',r.config_id || '']))}">
+      ${cell('Event',escapeHTML(r.event))}${cell('Handler',`${escapeHTML(r.script || 'not recorded')}<details><summary>Handler details</summary><p>Handler: ${escapeHTML(r.handler_id || 'identity unavailable')}<br>Configuration: ${escapeHTML(r.config_id || 'not supplied')}</p></details>${hookEvidenceButtonHTML(r, sessionId)}`)}
+      ${cell('Runs',r.runs)}${cell('Errors',r.errors)}${cell('Blocked',r.blocks)}${cell('Cancelled',r.cancelled || 0)}
+      ${cell('Chars returned',metric(r, 'chars', 'char_samples', fmtCompact))}${cell('Cumulative runtime',metric(r, 'total_ms', 'duration_samples', fmtDurationMs))}</tr>`).join('');
+  return head + tools + count + `<div class="sd-hooks-scroll" data-session-part="hooks-table" role="region" aria-label="Hook history" tabindex="0"><table class="sd-hooks" role="table"><thead role="rowgroup"><tr role="row">
+      <th scope="col" role="columnheader">Event</th><th scope="col" role="columnheader">Handler</th><th scope="col" role="columnheader">Runs</th><th scope="col" role="columnheader">Errors</th>
+      <th scope="col" role="columnheader">Blocked</th><th scope="col" role="columnheader">Cancelled</th><th scope="col" role="columnheader">Chars returned</th><th scope="col" role="columnheader">Cumulative runtime</th>
+    </tr></thead><tbody role="rowgroup">${body}</tbody></table></div>`;
 }
 
 // Durable IDs are the entry point; live process counts and setup checks do
@@ -717,7 +751,7 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
       <button type="button" class="btn btn-sm btn-ghost" data-action="session-status">Current status</button>
     </div>
     </div>
-    <div class="session-detail-body" tabindex="-1">${state.sessionView === 'hooks' ? contextHTML + sessionHooksHTML(state.sessionHooks, state.sessionHooksState, state.sessionOverview && state.sessionOverview.hook_health, state.sessionOverviewState, state.sessionOverview && state.sessionOverview.hook_ingestion, state.selectedSessionId) : state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
+    <div class="session-detail-body" tabindex="-1">${state.sessionView === 'hooks' ? contextHTML + sessionHooksHTML(state.sessionHooks, state.sessionHooksState, state.sessionOverview && state.sessionOverview.hook_health, state.sessionOverviewState, state.sessionOverview && state.sessionOverview.hook_ingestion, state.selectedSessionId, state.sessionHookHistory) : state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
 }
 
 // One workbench owns selection, retained reads, rendering and reading position.
@@ -753,6 +787,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
   let sessionHooks = null;
   let sessionHooksState = { loading: false, error: '' };
   let sessionHooksAt = 0;
+  let sessionHookHistory = { query: '', outcome: 'all', sort: 'runs' };
   function refreshCurrent(force) {
     if (selectedSessionId) {
       loadSessionOverview(selectedSessionId, force);
@@ -849,6 +884,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     sessionHooks = null;
     sessionHooksState = { loading: false, error: '' };
     sessionHooksAt = 0;
+    sessionHookHistory = { query: '', outcome: 'all', sort: 'runs' };
   }
   function takeSessionReveal() {
     const reveal = sessionReveal;
@@ -1116,6 +1152,10 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       detail._sessionMarkup = html;
       applyInlineMetrics(detail);
     }
+    for (const input of detail.querySelectorAll('[data-hook-history]')) {
+      const value = sessionHookHistory[input.dataset.hookHistory];
+      if (input.value !== value) input.value = value;
+    }
     detail._sessionReadingKey = key;
     detail._sessionSelectedId = selectedSessionId;
     const body = detail.querySelector('.session-detail-body');
@@ -1304,8 +1344,18 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
   function restoreView(view) {
     if (['memory', 'trace', 'results', 'hooks'].includes(view)) sessionView = view;
   }
-  function snapshot() { return { selectedSessionId, sessionTimeline, sessionTimelineState, sessionView, sessionMemoryPage, sessionMemoryState, sessionOverview, sessionOverviewState, sessionOutcomes, sessionOutcomesState, sessionHooks, sessionHooksState }; }
+  function setHookHistory(update = {}) {
+    sessionHookHistory = {
+      query: typeof update.query === 'string' ? update.query.slice(0, 256) : sessionHookHistory.query,
+      outcome: ['all', 'errors', 'blocks', 'cancelled'].includes(update.outcome) ? update.outcome : sessionHookHistory.outcome,
+      sort: ['runs', 'total_ms', 'chars'].includes(update.sort) ? update.sort : sessionHookHistory.sort,
+    };
+    renderNow(['sessions']);
+  }
+  function snapshot() { return { sessionHookHistory, selectedSessionId, sessionTimeline, sessionTimelineState, sessionView, sessionMemoryPage, sessionMemoryState, sessionOverview, sessionOverviewState, sessionOutcomes, sessionOutcomesState, sessionHooks, sessionHooksState }; }
   return {
+    setHookHistory,
+    get sessionHookHistory() { return { ...sessionHookHistory }; },
     selectSession, setView: setSessionView, render: renderSessionBoard,
     refresh, refreshCurrent, activity, invalidate, restoreView,
     showList: showSessionList, jumpToLatest: jumpToLatestSession, showCurrentStatus: showCurrentSessionStatus,

@@ -10,6 +10,16 @@ OpenClaw, Hermes and OpenCode hosts forward individual handler completions to
 their native result adapters.
 An empty history does not establish that no hooks ran.
 
+Search the session history by recorded event, script label or handler ID, and
+filter groups containing execution errors, blocks or cancellations. Sort by run
+count, cumulative runtime or returned characters. Measurement sorts use reported
+totals, with unknown values last; partial sample counts remain visible. These
+controls narrow retained history and do not change the current repair assessment.
+Filters persist during refreshes and reset when selecting another session.
+On narrow screens, each group displays a compact summary with handler and
+configuration identifiers in expandable details. Inspect recorded runs opens
+the same evidence scope from either layout.
+
 ## Actionable findings
 
 Current session status and the Hooks view assess the latest 1,000 retained

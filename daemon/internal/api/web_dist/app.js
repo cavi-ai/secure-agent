@@ -2575,6 +2575,13 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionOutcomesState: { get() { return sessionWorkbench.sessionOutcomesState; } },
     sessionHooks: { get() { return sessionWorkbench.sessionHooks; } },
     sessionHooksState: { get() { return sessionWorkbench.sessionHooksState; } },
+    sessionHookHistory: { get() { return sessionWorkbench.sessionHookHistory; } },
+  });
+
+  for (const type of ['input', 'change']) document.addEventListener(type, event => {
+    const input = event.target.closest('#session-detail [data-hook-history]');
+    if (!input || (input.dataset.hookHistory === 'query' ? type !== 'input' : type !== 'change')) return;
+    sessionWorkbench.setHookHistory({ [input.dataset.hookHistory]: input.value });
   });
 
   // Export: copy the session's markdown report. Safari only honours a
@@ -3772,6 +3779,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'session-view':
         window.setSessionView(d.view);
+        break;
+      case 'hook-history-clear':
+        sessionWorkbench.setHookHistory({ query: '', outcome: 'all', sort: 'runs' });
         break;
       case 'memory-earlier':
         window.loadEarlierSessionMemory();
