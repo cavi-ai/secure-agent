@@ -97,6 +97,18 @@ shows outcomes, safe reason codes, reported action outcomes and measured values;
 unknown measurements remain unknown. Older rows without handler identity can
 be inspected as their event/script group without creating a handler diagnosis.
 
+Recorded-run, repair and delivery inspectors offer **Copy diagnostic summary**
+after a validated response loads. Expand **Preview diagnostic summary** to
+review or select the same text before sharing it. Summaries contain scoped
+identities, observation times, outcomes, guidance and evidence limits; commands,
+source paths and raw output are excluded. They include at most 20 returned
+completion rows and 20 verification run IDs, with omissions identified.
+
+Refreshing clears the previous summary until a new validated response arrives.
+Failed reads leave copying unavailable. Clipboard failures keep the preview
+selectable for manual copying. A copied summary describes its loaded snapshot;
+it does not establish current delivery, lasting repair or protection coverage.
+
 Truncation and the evidence window are visible. Equal timestamps do not establish
 execution order. An empty window or a failed read does not confirm recovery or
 prove that no hooks ran. Refresh evidence reloads metadata; it does not rerun a

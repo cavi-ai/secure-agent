@@ -1803,6 +1803,10 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .sd-outcome p { margin: 6px 0; font-size: 12px; }
 .sd-hooks-scroll { max-width: 100%; overflow-x: auto; }
 .sd-hook-evidence { min-width: 0; overflow-wrap: anywhere; }
+.hook-diagnostic-preview { min-width: 0; margin-top: 16px; }
+.hook-diagnostic-preview summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+.hook-diagnostic-preview label { display: grid; gap: 8px; min-width: 0; }
+.hook-diagnostic-preview textarea { box-sizing: border-box; width: 100%; min-width: 0; max-height: 24rem; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--tx-1); background: var(--bg-2); font: 12px/1.5 var(--mono); resize: vertical; }
 .sd-hooks { width: 100%; min-width: 720px; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
 .sd-hooks th, .sd-hooks td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; overflow-wrap: anywhere; }
 .sd-hooks th { color: var(--tx-2); font-weight: 600; }
