@@ -390,6 +390,15 @@ def run_hook_history(page):
         for name in ('initial', 'errors', 'blocks', 'cancelled', 'runtime', 'chars', 'search', 'empty', 'refresh', 'stale', 'retry', 'clear', 'mobile', 'fits', 'selection'):
             page.check(f'hook history ({label}): {name}', state.get(name) is True, str(state))
 
+def run_home_ux(page):
+    for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+        dom = page.dom('?homeux', window_size=size, served=True,
+                       fixture={'script': 'cases_home_ux.js'})
+        receipt = re.search(r'data-home-ux-probe="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        for name in ('reading', 'focus', 'empty', 'clear', 'match', 'rail', 'railClear', 'fits'):
+            page.check(f'Home UX ({label}): {name}', state.get(name) is True, str(state))
+
 def run_attention_summary(page):
     for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
         dom = page.dom('?attentionsummary', window_size=size, served=True,
@@ -576,6 +585,7 @@ CASES = (
     Case('guard_receipts', run_guard_receipts, ()),
     Case('hook_monitoring', run_hook_monitoring, ()),
     Case('hook_history', run_hook_history, ()),
+    Case('home_ux', run_home_ux, ()),
     Case('attention_summary', run_attention_summary, ()),
     Case('hook_diagnostics', run_hook_diagnostics, ()),
     Case('session_hooks', run_session_hooks, ()),

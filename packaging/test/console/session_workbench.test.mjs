@@ -276,10 +276,11 @@ test('Clear filter preserves Live only and resets shared controls before returni
     const panel = {dataset: {pane: originKind === 'rail' ? 'list' : 'detail'}};
     const input = id => ({value: saved.text, isConnected: true, getClientRects: () => [{}],
       focus(options) {assert.equal(options.preventScroll, true); calls.push(id);}});
+    const globalSearchInput = input('global');
     const sessionSearch = input('sessions'), agentSearch = input('agents'), checkbox = {checked: liveOnly};
-    const context = {sessionStorage: {getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value)},
+    const context = {globalSearch: 'existing-query', sessionStorage: {getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value)},
       document: {getElementById: id => ({'session-cwd-filter': sessionSearch, 'agent-filter-text': agentSearch,
-        'session-live-only': checkbox, 'session-board-panel': panel})[id]},
+        'global-search': globalSearchInput, 'session-live-only': checkbox, 'session-board-panel': panel})[id]},
       sessionWorkbench: {filterChanged: () => calls.push('reconcile'), render: () => calls.push('sessions-render'),
         showList: () => {calls.push('list'); panel.dataset.pane = 'list';}}, renderAgents: () => calls.push('agents-render')};
     vm.createContext(context); vm.runInContext(app.slice(start, end), context);
@@ -292,6 +293,8 @@ test('Clear filter preserves Live only and resets shared controls before returni
         : selector === '#agents-container' && originKind === 'agents' ? {} : null;
     }});
     assert.deepEqual(JSON.parse(storage.get('sa.harness-filter')), {harnesses: {}, text: '', liveOnly});
+    assert.equal(context.globalSearch, fromSessions ? '' : 'existing-query');
+    assert.equal(globalSearchInput.value, fromSessions ? '' : saved.text);
     assert.equal(sessionSearch.value, ''); assert.equal(agentSearch.value, ''); assert.equal(checkbox.checked, liveOnly);
     assert.deepEqual(calls.slice(0, 3), ['reconcile', 'sessions-render', 'agents-render']);
     assert.equal(calls.includes('list'), fromSessions && originKind !== 'rail');

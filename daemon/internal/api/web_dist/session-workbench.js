@@ -5,7 +5,7 @@
 
 // Empty recovery considers ended sessions hidden only by Live only.
 function sessionEmptyHTML(groups, filter) {
-  const filtered = !!String(filter.text || '').trim() || Object.values(filter.harnesses || {}).some(value => value === false);
+  const filtered = !!String(filter.text || filter.search || '').trim() || Object.values(filter.harnesses || {}).some(value => value === false);
   const visible = new Set(visibleSessionMembers(applySessionFilters(groups, filter)).map(session => session.id));
   const hiddenEnded = filter.liveOnly && visibleSessionMembers(applySessionFilters(groups, {...filter, liveOnly: false}))
     .some(session => session.status === 'ended' && !visible.has(session.id));
@@ -620,9 +620,10 @@ function sessionHooksHTML(rows, state, health, healthState, ingestion, sessionId
 
 // Durable IDs are the entry point; live process counts and setup checks do
 // not substitute for a session's own record.
-function sessionDailyHTML(sessions, coverage) {
+function sessionDailyHTML(sessions, coverage, search) {
   if (!Array.isArray(sessions)) return '<p role="status">Session data unavailable.</p>';
-  const live = sessions.filter(s => s.status === 'active' || s.status === 'idle');
+  const live = sessions.filter(s => (s.status === 'active' || s.status === 'idle') && sessionMatchesText(s, search));
+  if (!live.length && String(search || '').trim()) return '<p role="status">No live sessions match your search. <button type="button" class="link-btn" data-action="clear-global-search">Clear search</button></p>';
   if (!live.length) return '<p>No live sessions recorded. Active processes may not yet have an attributed session.</p>';
   const rows = live.slice(0, 6).map(s => {
     const observed = ((coverage && coverage.sessions) || []).find(c => c.session_id === s.id);
@@ -640,7 +641,7 @@ function renderSessionDaily() {
   const el = document.getElementById('session-daily');
   if (!el) return;
   const SA = window.SA;
-  const html = sessionDailyHTML(SA.t.sessions, SA.t.status && SA.t.status.coverage);
+  const html = sessionDailyHTML(SA.t.sessions, SA.t.status && SA.t.status.coverage, window.globalSearchTerm?.());
   if (el._saHTML !== html) { el.innerHTML = html; el._saHTML = html; }
 }
 
@@ -1284,9 +1285,9 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     if (!rail) return;
     const agents = (SA.t.status && SA.t.status.agents) ? SA.t.status.agents : [];
     const trees = SA.t.status && SA.t.status.trees;
-    const filter = SA.harnessFilter;
+    const filter = {...SA.harnessFilter, search: window.globalSearchTerm?.() || ''};
     const q = filter.text || '';
-    const filtered = !!String(q).trim() || Object.values(filter.harnesses).some(v => v === false);
+    const filtered = !!String(q || filter.search).trim() || Object.values(filter.harnesses).some(v => v === false);
     const noMatch = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No sessions match — <button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button></span></div>`;
     const quiet = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>All quiet. Nothing is running.</span></div>`;
     // The durable session spine (/sessions) is the source of truth when the
@@ -1379,7 +1380,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     }
 
     // Legacy fallback: process-tree board, no rail, no harness grouping.
-    const rows = filterSessionRows(sessionRows(agents, trees), q);
+    const rows = filterSessionRows(filterSessionRows(sessionRows(agents, trees), q), filter.search);
     if (badge) badge.textContent = rows.length;
     SA.setTabBadge('sessions', rows.length);
     if (pills) pills.innerHTML = '';
@@ -1388,7 +1389,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     if (detail) detail.hidden = true;
     if (legacy) legacy.hidden = false;
     if (rows.length === 0) {
-      legacy.innerHTML = String(q).trim() ? noMatch : quiet;
+      legacy.innerHTML = filtered ? noMatch : quiet;
       return;
     }
     const now = Date.now();

@@ -761,19 +761,19 @@ function sessionMatchesText(s, text) {
   const q = String(text || '').trim().toLowerCase();
   if (!q) return true;
   const repoBranch = s.repo ? `${s.repo}${s.branch ? '@' + s.branch : ''}` : '';
-  return [s.repo, s.branch, repoBranch, s.workspace, originAgent(s), s.origin]
+  return [s.id, s.harness, harnessMeta(s.harness).label, s.repo, s.branch, repoBranch, s.workspace, originAgent(s), s.origin]
     .some(f => String(f || '').toLowerCase().includes(q));
 }
 
 // applySessionFilters: the rail's filter row over groupSessionsByHarness
 // output. opts.harnesses maps a harness key to false when its pill is off;
-// opts.text keeps a family when any member matches; opts.liveOnly drops
+// opts.text and opts.search intersect on a matching family member; opts.liveOnly drops
 // groups with nothing live. The infra group carries totals, not sessions, and
 // is never filtered. Pure; returns new group objects.
 function applySessionFilters(groups, opts) {
   const o = opts || {};
   const off = o.harnesses || {};
-  const keep = (fams) => fams.filter(f => [f.session, ...f.children].some(s => sessionMatchesText(s, o.text)));
+  const keep = (fams) => fams.filter(f => [f.session, ...f.children].some(s => sessionMatchesText(s, o.text) && sessionMatchesText(s, o.search)));
   const out = [];
   for (const g of groups || []) {
     if (g.infra) { out.push(g); continue; }

@@ -60,3 +60,27 @@ test('retained activity remains reachable when a session has no live resource fa
   assert.ok(!html.includes('data-action="view-family"'));
   assert.match(html, /data-action="session-events" data-id="ended"/);
 });
+
+
+test('Home search matches session identity and reports no matches', () => {
+  const sessions = [{ id: 'session-a', harness: 'claude', repo: 'api-service', branch: 'main', workspace: '/workspace/api-service', status: 'active' }, { id: 'session-b', harness: 'codex', repo: 'web-app', status: 'idle' }];
+  for (const query of ['API-SERVICE', 'session-a', 'claude', 'main', '/workspace/api']) {
+    const html = ctx.sessionDailyHTML(sessions, null, query);
+    assert.match(html, /data-session="session-a"/);
+    assert.ok(!html.includes('data-session="session-b"'));
+  }
+  assert.match(ctx.sessionDailyHTML(sessions, null, 'unmatched'), /No live sessions match/);
+  assert.match(ctx.sessionDailyHTML(sessions, null, 'unmatched'), /data-action="clear-global-search"/);
+  assert.match(ctx.sessionDailyHTML(null, null, 'unmatched'), /Session data unavailable/);
+});
+
+
+test('session search intersects the workspace filter and keeps harness exclusions', () => {
+  const a = {id:'a', harness:'claude', repo:'api', branch:'main', status:'active'};
+  const b = {id:'b', harness:'claude', repo:'api', branch:'release', status:'active'};
+  const groups = ctx.groupSessionsByHarness([a,b], [], []);
+  const selected = ctx.visibleSessionMembers(ctx.applySessionFilters(groups, {text:'api', search:'release'}));
+  assert.deepEqual(Array.from(selected, s => s.id), ['b']);
+  assert.equal(ctx.visibleSessionMembers(ctx.applySessionFilters(groups, {text:'api', search:'release', harnesses:{claude:false}})).length, 0);
+  assert.equal(ctx.visibleSessionMembers(ctx.applySessionFilters(groups, {text:'missing', search:'release'})).length, 0);
+});

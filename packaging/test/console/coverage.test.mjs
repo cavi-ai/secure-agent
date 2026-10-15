@@ -42,7 +42,7 @@ test('coverage distinguishes harness capabilities and activity from payload insp
   const nodes = render(harnesses, {coverage_count: 1, coverage_items: [{kind: 'collector_silent', title: 'Silent', detail: 'No events'}]});
   assert.equal(nodes.get('coverage-center').hidden, false);
   const html = nodes.get('coverage-list').innerHTML;
-  assert.match(html, /<details class="coverage-harness"><summary>Per-agent coverage<\/summary>/);
+  assert.match(html, /<details class="coverage-harness"[^>]*><summary>Per-agent coverage<\/summary>/);
   assert.match(html, /codex/);
   assert.match(html, /Trace: activity observed/);
   assert.match(html, /Guard: not supported/);

@@ -42,15 +42,15 @@ function renderCoverage() {
             ? '<span class="coverage-guidance">Run Doctor to review lost telemetry. Restarting cannot restore missing evidence.</span>'
         : '<span class="coverage-guidance">Check Setup &amp; Permissions in the menu bar</span>';
     return `<div class="coverage-row"><span><strong>${escapeHTML(it.title)}</strong><span>${escapeHTML(it.detail || '')}</span></span>${action}</div>`;
-  }).join('') + (showHooks ? `<details class="coverage-diagnostics" data-hook-disclosure="monitoring"><summary>Hook monitoring details</summary>${hookMonitoringHTML(hooks)}</details>` : '') + (hookSetup ? '<button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button>' : '') + (sessions.length ? `<details class="coverage-harness"><summary>Per-session coverage · ${sessions.length}</summary>${sessions.map(s => {
+  }).join('') + (showHooks ? `<details class="coverage-diagnostics" data-hook-disclosure="monitoring"><summary>Hook monitoring details</summary>${hookMonitoringHTML(hooks)}</details>` : '') + (hookSetup ? '<button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button>' : '') + (sessions.length ? `<details class="coverage-harness" data-coverage-disclosure="sessions"><summary>Per-session coverage · ${sessions.length}</summary>${sessions.map(s => {
     const path = (name, p = {}) => {
       p = p || {};
       return `<span>${name}: ${escapeHTML(coveragePathLabel(p))}${p.last_seen ? ` · ${escapeHTML(p.last_seen)}` : ''}</span><span class="coverage-guidance">${escapeHTML(p.detail || '')}</span>`;
     };
-    return `<details class="coverage-session" data-session-id="${escapeHTML(s.session_id || '')}"><summary>${escapeHTML(s.workspace || s.harness || 'Unresolved session')} · Guard: ${escapeHTML(coveragePathLabel(s.guard))}</summary><div class="coverage-row"><span><strong>${escapeHTML(s.harness || '')}${s.session_id ? '' : ' · session identity unresolved'}</strong>${path('Trace', s.trace)}${path('Guard', s.guard)}${path('Payload inspection', s.payload)}</span></div></details>`;
+    return `<details class="coverage-session" data-coverage-disclosure="${escapeHTML(JSON.stringify(s.session_id ? ['session', s.session_id] : ['unresolved', s.harness || '', s.workspace || '']))}" data-session-id="${escapeHTML(s.session_id || '')}"><summary>${escapeHTML(s.workspace || s.harness || 'Unresolved session')} · Guard: ${escapeHTML(coveragePathLabel(s.guard))}</summary><div class="coverage-row"><span><strong>${escapeHTML(s.harness || '')}${s.session_id ? '' : ' · session identity unresolved'}</strong>${path('Trace', s.trace)}${path('Guard', s.guard)}${path('Payload inspection', s.payload)}</span></div></details>`;
   }).join('')}<p class="coverage-guidance">Observations belong to each session. An installed-hook check and activity in another session do not prove this session is protected.</p>${status.coverage.sessions_truncated ? '<p class="coverage-guidance">More sessions are running than this list can show. Coverage for the remaining sessions is not shown.</p>' : ''}</details>` : '')
-  + (probes.length ? `<details class="coverage-harness"><summary>Installed hook checks</summary>${probes.map(p => `<div class="coverage-row"><span><strong>${escapeHTML(p.harness)} · ${escapeHTML(p.state)}</strong><span>${escapeHTML(p.hook_path)}</span><span>Checked ${escapeHTML(p.checked_at)}</span><span>${escapeHTML(p.detail)}</span></span></div>`).join('')}</details>` : '')
-  + (harnesses.length ? `<details class="coverage-harness"><summary>Per-agent coverage</summary>${harnesses.map(h => {
+  + (probes.length ? `<details class="coverage-harness" data-coverage-disclosure="probes"><summary>Installed hook checks</summary>${probes.map(p => `<div class="coverage-row"><span><strong>${escapeHTML(p.harness)} · ${escapeHTML(p.state)}</strong><span>${escapeHTML(p.hook_path)}</span><span>Checked ${escapeHTML(p.checked_at)}</span><span>${escapeHTML(p.detail)}</span></span></div>`).join('')}</details>` : '')
+  + (harnesses.length ? `<details class="coverage-harness" data-coverage-disclosure="agents"><summary>Per-agent coverage</summary>${harnesses.map(h => {
     const trace = !h.trace_supported ? 'not supported' : h.trace_last_seen ? 'activity observed in 24h' : 'supported; no activity observed in 24h';
     const guard = !h.guard_supported ? 'not supported' : h.hook_last_seen ? 'hook activity observed in 24h' : 'supported; no hook activity observed in 24h';
     return `<div class="coverage-row"><span><strong>${escapeHTML(h.name)}</strong><span>Trace: ${escapeHTML(trace)} · Guard: ${escapeHTML(guard)}</span></span></div>`;
@@ -58,16 +58,18 @@ function renderCoverage() {
     ? 'Payload inspection covers connections routed through the proxy; review Egress for coverage.'
     : 'Payload inspection is off (proxy disabled).'} Recent harness activity does not prove every current session is guarded.</p></details>` : '');
   if (list.coverageHTML === html) return;
-  const open=new Set([...(list.querySelectorAll?.('[data-hook-disclosure][open]') || [])].map(el=>el.dataset.hookDisclosure));
+  const disclosures = '[data-hook-disclosure], [data-coverage-disclosure]';
+  const key = el => el?.dataset.hookDisclosure ? 'hook:' + el.dataset.hookDisclosure : el?.dataset.coverageDisclosure ? 'coverage:' + el.dataset.coverageDisclosure : null;
+  const open=new Set([...(list.querySelectorAll?.(disclosures) || [])].filter(el=>el.open).map(key));
   const focused=document.activeElement;
   const action=focused?.closest?.('[data-action]');
   const focusKey=action && list.contains?.(action) ? JSON.stringify(action.dataset) : null;
-  const summaryKey=focused?.matches?.('summary') && focused.parentElement?.dataset.hookDisclosure;
+  const summaryKey=focused?.matches?.('summary') && key(focused.parentElement);
   list.innerHTML=html;
   list.coverageHTML=html;
-  for(const el of list.querySelectorAll?.('[data-hook-disclosure]') || []) if(open.has(el.dataset.hookDisclosure)) el.open=true;
+  for(const el of list.querySelectorAll?.(disclosures) || []) if(open.has(key(el))) el.open=true;
   const replacement=focusKey ? [...(list.querySelectorAll?.('[data-action]') || [])].find(el=>JSON.stringify(el.dataset)===focusKey)
-    : summaryKey ? [...(list.querySelectorAll?.('[data-hook-disclosure]') || [])].find(el=>el.dataset.hookDisclosure===summaryKey)?.querySelector('summary') : null;
+    : summaryKey ? [...(list.querySelectorAll?.(disclosures) || [])].find(el=>key(el)===summaryKey)?.querySelector('summary') : null;
   replacement?.focus({preventScroll:true});
 }
 
@@ -456,7 +458,7 @@ function attentionSummaryHTML(posture, stale) {
     const inspect = !stale && first ? `<button type="button" class="link-btn" data-action="select-attention" data-need-kind="${escapeHTML(first.kind)}" data-need-id="${escapeHTML(first.id)}">${b.kind === 'decisions' ? 'Review request' : b.kind === 'security' ? 'Review evidence' : 'Inspect issue'}</button>` : '';
     const gaps = b.coverage_count ? `<p>${b.coverage_count} monitoring gap${b.coverage_count === 1 ? '' : 's'} counted separately</p>${!stale ? '<button type="button" class="link-btn" data-action="view-monitoring">View monitoring</button>' : ''}` : '';
     return `<article class="attention-summary-card"><h3>${titles[b.kind]}</h3><p>${b.count} queued item${b.count === 1 ? '' : 's'}</p>${first ? `<p>${escapeHTML(first.title)}</p>` : ''}${inspect}${gaps}</article>`;
-  }).join('')}</div><p>Queue categories preserve the existing priority and actions. Zero queued items is not a safety verdict.</p>`;
+  }).join('')}</div><p>Zero queued items is not a safety verdict.</p>`;
 }
 
 function renderAttentionSummary(SA) {
