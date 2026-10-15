@@ -297,6 +297,54 @@ function validHookIngestion(h) {
       && count(r.accepted) && r.accepted > 0 && time(r.last_received_at));
 }
 
+// Summarize observations without merging independent forwarding instances or
+// borrowing one session's evidence to describe another session's coverage.
+function hookMonitoringModel(h, sessions = [], health = {}, now = Date.now()) {
+  const supported=['claude','codex','openclaw','hermes','opencode'];
+  const available=validHookIngestion(h) && h.available;
+  const stale=!!health.error || !(health.lastSnapshotAt>0) || now-health.lastSnapshotAt>120000 || now<health.lastSnapshotAt;
+  const rows=new Map();
+  const get=name=>{
+    if (!supported.includes(name)) return null;
+    if (!rows.has(name)) rows.set(name,{harness:name,receipt:null,reports:[],sessions:[],errors:0,unknown:0,gaps:0});
+    return rows.get(name);
+  };
+  for(const s of Array.isArray(sessions)?sessions:[]) {
+    if (!s || typeof s.id!=='string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(s.id)) continue;
+    const row=get(s.harness);
+    if (row && !row.sessions.some(other=>other.id===s.id)) row.sessions.push(s);
+  }
+  if (available) {
+    for(const receipt of h.harnesses) get(receipt.harness).receipt=receipt;
+    for(const report of h.forwarders || []) get(report.report.harness).reports.push(report);
+  }
+  for(const row of rows.values()) {
+    row.errors=stale?0:row.reports.filter(r=>r.freshness==='recent' && r.report.state==='error').length;
+    row.unknown=row.reports.filter(r=>stale || r.freshness!=='recent').length;
+    row.gaps=row.reports.filter(r=>r.report.dropped>0).length;
+    row.sessions.sort((a,b)=>Number(!['active','idle'].includes(a.status))-Number(!['active','idle'].includes(b.status)) || (Date.parse(b.last_seen_at)||0)-(Date.parse(a.last_seen_at)||0) || a.id.localeCompare(b.id));
+  }
+  return {available,stale,since:available?h.since:'',rejected:available?h.rejected:0,truncated:available && !!h.forwarders_truncated,
+    rows:[...rows.values()].sort((a,b)=>b.errors-a.errors || b.gaps-a.gaps || a.harness.localeCompare(b.harness))};
+}
+
+function hookMonitoringHTML(m) {
+  const plural=(n,single,many)=>`${n} ${n===1?single:many}`;
+  const labels={claude:'Claude Code',codex:'Codex',openclaw:'OpenClaw',hermes:'Hermes',opencode:'OpenCode'};
+  const rows=m.rows.map(row=>{
+    const receipt=!m.available ? 'Completion receipt unavailable.' : row.receipt
+      ? `${m.stale?'Last known completion receipt':'Last completion receipt'}: <time>${escapeHTML(row.receipt.last_received_at)}</time> · ${Number(row.receipt.accepted)} accepted deliveries.`
+      : 'No completion received in this daemon run. Delivery is unknown.';
+    const forwarding=!row.reports.length ? 'Forwarding state unknown; no host report received.'
+      : [row.errors?plural(row.errors,'host with active errors','hosts with active errors'):'',row.unknown?plural(row.unknown,'host with unknown current state','hosts with unknown current state'):'',
+        row.reports.length-row.errors-row.unknown?plural(row.reports.length-row.errors-row.unknown,'host reporting no active error','hosts reporting no active error'):''].filter(Boolean).join(' · ')+'.';
+    const hosts=row.reports.map(r=>`<button type="button" class="link-btn" data-action="hook-delivery-inspect" data-id="${escapeHTML(r.report.forwarder_id)}">Inspect delivery${row.reports.length>1?' · '+escapeHTML(r.report.forwarder_id):''}</button>`).join('');
+    const sessions=row.sessions.slice(0,5).map(s=>`<button type="button" class="link-btn" data-action="hook-session-open" data-session="${escapeHTML(s.id)}">Open session hooks · ${escapeHTML(sessionTitle(s))}${s.status?' · '+escapeHTML(s.status):''}</button>`).join('');
+    return `<article class="hook-monitoring-row" data-hook-runtime="${row.harness}"><h4>${labels[row.harness]}</h4><p>${receipt}</p><p>${forwarding}</p>${row.gaps?`<p>Evidence gap: ${plural(row.gaps,'host instance reported drops','host instances reported drops')}. Missing evidence may be unrecoverable.</p>`:''}<div class="hook-monitoring-actions">${row.reports.length>1?`<details data-hook-disclosure="hosts:${row.harness}"><summary>Inspect ${row.reports.length} forwarding hosts</summary>${hosts}</details>`:hosts}${row.sessions.length?`<details data-hook-disclosure="sessions:${row.harness}"><summary>${plural(row.sessions.length,'retained session','retained sessions')}</summary>${sessions}${row.sessions.length>5?'<button type="button" class="link-btn" data-action="goto-tab" data-tab="sessions">View all sessions</button>':''}</details>`:''}<button type="button" class="link-btn" data-action="hook-setup" data-harness="${row.harness}">Setup and verification</button></div></article>`;
+  }).join('');
+  return `<section class="hook-monitoring" aria-label="Hook monitoring"><h3>Hook monitoring</h3>${!m.available?'<p role="status">Ingestion diagnostics unavailable. Current receipt and forwarding states are unknown.</p><button type="button" class="link-btn" data-action="retry-posture">Refresh monitoring</button>':m.stale?'<p role="status">Last loaded observations; current receipt and forwarding states are unknown. Refresh telemetry to retry.</p><button type="button" class="link-btn" data-action="retry-posture">Refresh monitoring</button>':''}${m.available?`<p>Receipts across all sessions since <time>${escapeHTML(m.since)}</time> in this daemon run.</p>`:''}${rows || '<p>No supported runtimes observed in retained sessions or hook diagnostics.</p>'}${m.rejected?`<p>${Number(m.rejected)} rejected shared records; rejections cannot be attributed to a runtime or session. Review the reporting host diagnostics.</p>`:''}${m.truncated?'<p>Other forwarding instances may be omitted from the retained reports.</p>':''}<p>Receipt does not confirm durable storage or protection coverage. Retries can count again; silence does not establish a forwarding failure.</p></section>`;
+}
+
 function hookIngestionHTML(h, state) {
   const head = '<summary>Daemon hook ingestion · all sessions</summary>';
   if (!h || !h.available) return `<details class="sd-findings-head" data-session-part="hook-ingestion">${head}<p>Ingestion diagnostics unavailable.</p></details>`;
@@ -321,6 +369,7 @@ function validHookHealth(h) {
 }
 
 function hookSetupHTML(harness, ingestion) {
+  if (!validHookIngestion(ingestion)) ingestion=null;
   const sources = {
     claude: ['Claude Code', 'Secure Agent reads retained hook completions from Claude Code transcripts. Check that the daemon can read this session’s transcript. Stable registered-handler identity is unavailable in these records.'],
     codex: ['Codex', 'Your existing Codex host must forward app-server hook completion notifications. Installing Secure Agent alone does not connect another host or recover hook completions from rollouts.'],

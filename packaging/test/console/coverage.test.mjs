@@ -5,10 +5,10 @@ import vm from 'node:vm';
 
 const assets = new URL('../../../daemon/internal/api/web_dist/', import.meta.url);
 function render(status, posture = {}) {
-  const nodes = new Map(['coverage-center', 'coverage-list', 'badge-coverage-count'].map(id => [id, {hidden: false, innerHTML: '', textContent: ''}]));
+  const nodes = new Map(['coverage-center', 'coverage-list', 'badge-coverage-count', 'coverage-title'].map(id => [id, {hidden: false, innerHTML: '', dataset: {}, textContent: ''}]));
   const ctx = {window: {SA: {t: {status, posture}}}, document: {getElementById: id => nodes.get(id)}};
   vm.createContext(ctx);
-  for (const name of ['lib.js', 'tab-findings.js']) vm.runInContext(readFileSync(new URL(name, assets), 'utf8'), ctx);
+  for (const name of ['lib.js', 'session-workbench.js', 'tab-findings.js']) vm.runInContext(readFileSync(new URL(name, assets), 'utf8'), ctx);
   ctx.renderCoverage();
   return nodes;
 }
@@ -56,4 +56,15 @@ test('storage loss gives a storage remedy instead of a hook setup instruction', 
   const html = nodes.get('coverage-list').innerHTML;
   assert.match(html, /disk space/);
   assert.doesNotMatch(html, /Check Setup/);
+});
+
+
+test('observed hook receipts show neutral monitoring without adding a coverage gap', () => {
+  const h={available:true,since:'2026-10-15T13:00:00Z',rejected:0,harnesses:[{harness:'codex',accepted:3,last_received_at:'2026-10-15T13:59:00Z'}]};
+  const nodes=render({hook_ingestion:h},{coverage_count:0,coverage_items:[]});
+  assert.equal(nodes.get('coverage-center').hidden,false);
+  assert.equal(nodes.get('coverage-center').dataset.gap,'false');
+  assert.equal(nodes.get('coverage-title').textContent,'Monitoring');
+  assert.match(nodes.get('coverage-list').innerHTML,/data-hook-runtime="codex"/);
+  assert.match(nodes.get('badge-coverage-count').textContent,/1 runtime/);
 });

@@ -3926,10 +3926,11 @@ def run_empty_posture(page):
     dom_empty = page.fixture('dom_empty')
     empty_need = dom_empty.split('id="attention-center"', 1)[-1].split('id="home-spend"', 1)[0]
     check(
-        'empty posture: Needs you, the Monitoring gap and the Home tab badge are all hidden',
+        'empty posture: decisions stay hidden while neutral hook monitoring remains available',
         (
             re.search('<section[^>]*id="attention-center"[^>]*\\bhidden', dom_empty) is not None
-            and re.search('id="coverage-center"[^>]*\\bhidden', dom_empty) is not None
+            and dom_query(dom_empty).has(None, {'id':'coverage-center','data-gap':'false'})
+            and dom_query(dom_empty).has(None, {'class':'hook-monitoring'})
             and re.search('id="tab-badge-home"[^>]*\\bhidden', dom_empty) is not None
             and 'No pending decisions' not in empty_need
             and not dom_query(empty_need).has(None, {'class': 'need '})

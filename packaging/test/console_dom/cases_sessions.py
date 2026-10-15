@@ -372,6 +372,15 @@ def run_context_handoff(page):
                 str(result),
             )
 
+def run_hook_monitoring(page):
+    for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+        dom = page.dom('?hookmonitoring', window_size=size, served=True,
+                       fixture={'script': 'cases_hook_monitoring.js'})
+        receipt = re.search(r'data-monitoring-probe="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        for name in ('usedOnly','neutral','receipt','unknown','limits','reading','sessionLink','mixed','allSupported','gapStyle','unattributed','truncated','hostLink','setup','stale','retry','restart','malformed','fits'):
+            page.check(f'hook monitoring ({label}): {name}', state.get(name) is True, str(state))
+
 def run_session_hooks(page):
     for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
         dom = page.dom('?sessionhooks', window_size=size, served=True,
@@ -529,6 +538,7 @@ CASES = (
     Case('session_permissions', run_session_permissions, ()),
     Case('context_handoff', run_context_handoff, ()),
     Case('session_results', run_session_results, ()),
+    Case('hook_monitoring', run_hook_monitoring, ()),
     Case('session_hooks', run_session_hooks, ()),
     Case('session_workbench', run_session_workbench, ()),
     Case('session_reading', run_session_reading, ()),

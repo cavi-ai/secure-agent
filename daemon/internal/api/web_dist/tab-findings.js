@@ -17,13 +17,19 @@ function renderCoverage() {
   const harnesses = (status.coverage && status.coverage.harnesses) || [];
   const sessions = (status.coverage && status.coverage.sessions) || [];
   const probes = (status.coverage && status.coverage.probes) || [];
-  const hookSetup = status.hook_ingestion?.available === true;
-  panel.hidden = items.length === 0 && sessions.length === 0 && probes.length === 0 && !hookSetup;
-  if (badge) badge.textContent = items.length ? Number(p.coverage_count) || items.length : sessions.length ? `${sessions.length} sessions` : hookSetup ? 'Hook diagnostics' : '0 sessions';
+  const hooks = hookMonitoringModel(status.hook_ingestion,window.SA.t.sessions,window.SA.postureHealth);
+  const hookSetup = hooks.available;
+  const showHooks=hookSetup || hooks.rows.length>0;
+  panel.hidden = items.length === 0 && sessions.length === 0 && probes.length === 0 && !showHooks;
+  const monitoringIssue=items.length>0 || hooks.rows.some(row=>row.errors>0 || row.gaps>0);
+  panel.dataset.gap=String(monitoringIssue);
+  const title=document.getElementById('coverage-title');
+  if(title) title.textContent=monitoringIssue?'Monitoring needs attention':'Monitoring';
+  if (badge) badge.textContent = items.length ? Number(p.coverage_count) || items.length : sessions.length ? `${sessions.length} sessions` : showHooks ? hooks.rows.length ? `${hooks.rows.length} runtime${hooks.rows.length===1?'':'s'}` : 'Hook diagnostics' : '0 sessions';
   if (panel.hidden) return;
-  list.innerHTML = items.map(it => {
+  const html = items.map(it => {
     const hookIssue = ['hook_evidence_gap','hook_delivery_unknown'].includes(it.kind);
-    const host = hookIssue && (status.hook_ingestion?.forwarders || []).find(row => 'hook-gap:'+row.report.forwarder_id === it.id || 'hook-unknown:'+row.report.forwarder_id === it.id);
+    const host = hookIssue && hooks.rows.flatMap(row=>row.reports).find(row => 'hook-gap:'+row.report.forwarder_id === it.id || 'hook-unknown:'+row.report.forwarder_id === it.id);
     const action = hookIssue
       ? `<button type="button" class="btn btn-ghost btn-sm" ${host ? `data-action="hook-delivery-inspect" data-id="${escapeHTML(host.report.forwarder_id)}"` : 'data-action="hook-setup"'}>${host ? 'Inspect delivery' : 'Hook setup and verification'}</button>`
       : it.kind === 'uninspected_egress'
@@ -36,7 +42,7 @@ function renderCoverage() {
             ? '<span class="coverage-guidance">Run Doctor to review lost telemetry. Restarting cannot restore missing evidence.</span>'
         : '<span class="coverage-guidance">Check Setup &amp; Permissions in the menu bar</span>';
     return `<div class="coverage-row"><span><strong>${escapeHTML(it.title)}</strong><span>${escapeHTML(it.detail || '')}</span></span>${action}</div>`;
-  }).join('') + (hookSetup ? '<button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button>' : '') + (sessions.length ? `<details class="coverage-harness"><summary>Per-session coverage · ${sessions.length}</summary>${sessions.map(s => {
+  }).join('') + (showHooks ? hookMonitoringHTML(hooks) : '') + (hookSetup ? '<button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button>' : '') + (sessions.length ? `<details class="coverage-harness"><summary>Per-session coverage · ${sessions.length}</summary>${sessions.map(s => {
     const path = (name, p = {}) => {
       p = p || {};
       return `<span>${name}: ${escapeHTML(coveragePathLabel(p))}${p.last_seen ? ` · ${escapeHTML(p.last_seen)}` : ''}</span><span class="coverage-guidance">${escapeHTML(p.detail || '')}</span>`;
@@ -51,6 +57,18 @@ function renderCoverage() {
   }).join('')}<p class="coverage-guidance">${status.proxy_enabled
     ? 'Payload inspection covers connections routed through the proxy; review Egress for coverage.'
     : 'Payload inspection is off (proxy disabled).'} Recent harness activity does not prove every current session is guarded.</p></details>` : '');
+  if (list.coverageHTML === html) return;
+  const open=new Set([...(list.querySelectorAll?.('[data-hook-disclosure][open]') || [])].map(el=>el.dataset.hookDisclosure));
+  const focused=document.activeElement;
+  const action=focused?.closest?.('[data-action]');
+  const focusKey=action && list.contains?.(action) ? JSON.stringify(action.dataset) : null;
+  const summaryKey=focused?.matches?.('summary') && focused.parentElement?.dataset.hookDisclosure;
+  list.innerHTML=html;
+  list.coverageHTML=html;
+  for(const el of list.querySelectorAll?.('[data-hook-disclosure]') || []) if(open.has(el.dataset.hookDisclosure)) el.open=true;
+  const replacement=focusKey ? [...(list.querySelectorAll?.('[data-action]') || [])].find(el=>JSON.stringify(el.dataset)===focusKey)
+    : summaryKey ? [...(list.querySelectorAll?.('[data-hook-disclosure]') || [])].find(el=>el.dataset.hookDisclosure===summaryKey)?.querySelector('summary') : null;
+  replacement?.focus({preventScroll:true});
 }
 
 // ---------- shared row parts ----------
