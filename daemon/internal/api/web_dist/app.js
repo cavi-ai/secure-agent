@@ -1098,8 +1098,34 @@ document.addEventListener('DOMContentLoaded', () => {
     window[name] = (...args) => worktreeController[name](...args);
   }
 
+  let hookDiagnostic = null;
+  async function copyHookDiagnostic() {
+    const report = hookDiagnostic;
+    const current = () => report && hookDiagnostic === report && !sessionEnded && report.auth === handoffGeneration && report.seq === detailDrawer.seq() && !drawer.hidden;
+    if (!current() || report.busy) return;
+    const button = document.querySelector('#drawer-foot [data-action="hook-diagnostic-copy"]');
+    const status = document.getElementById('hook-diagnostic-status');
+    report.busy = true;
+    if (button) button.disabled = true;
+    try {
+      await navigator.clipboard.writeText(report.text);
+      if (current() && status) status.textContent = 'Diagnostic summary copied.';
+    } catch {
+      if (current()) {
+        if (status) status.textContent = 'Copy failed. Select the preview text and copy it manually, or try again.';
+        const preview = drawerBody.querySelector('.hook-diagnostic-preview');
+        if (preview) preview.open = true;
+        const text = preview?.querySelector('textarea');
+        text?.focus(); text?.select();
+      }
+    } finally {
+      if (current()) { report.busy = false; if (button) button.disabled = false; }
+    }
+  }
+
   async function openHookInspector(kind, data, options = {}) {
     if (sessionEnded) return;
+    hookDiagnostic = null;
     const repair=kind==='repair', evidence=kind==='evidence' || repair;
     const scope = {session:data.session || '',harness:data.harness || '',event:data.event || '',event_scope:repair?'exact':data.event_scope || 'group',handler:data.handler || '',config:data.config || '',script:data.script || '',id:data.id || '',
       ...(repair?{after:data.after || '',problem:data.problem || '',explanation:data.explanation || '',guidance:data.guidance || ''}:{})};
@@ -1107,7 +1133,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const retry = `<button type="button" class="btn btn-ghost btn-sm" ${attrs}>${repair?'Check again':'Refresh '+(evidence?'evidence':'delivery')}</button>`;
     detailDrawer.setMode('hook-' + kind);
     detailDrawer.setCopyVisible(false);
-    if (!detailDrawer.open({title:repair?'Check hook repair':evidence ? 'Recorded hook runs' : 'Hook delivery',icon:'history',body:repair?hookRepairHTML(scope):'<p role="status">Loading hook evidence…</p>',foot:retry,back:options.back})) return;
+    const copy = '<button type="button" class="btn btn-ghost btn-sm" data-action="hook-diagnostic-copy" disabled>Copy diagnostic summary</button>';
+    if (!detailDrawer.open({title:repair?'Check hook repair':evidence ? 'Recorded hook runs' : 'Hook delivery',icon:'history',body:repair?hookRepairHTML(scope):'<p role="status">Loading hook evidence…</p>',foot:retry+copy,back:options.back,onClose:()=>{hookDiagnostic=null;}})) return;
     const seq=detailDrawer.seq(), auth=handoffGeneration;
     const current=()=>!sessionEnded && auth===handoffGeneration && seq===detailDrawer.seq() && !drawer.hidden;
     try {
@@ -1125,6 +1152,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (row && !validHookForwarder(row)) throw new Error('Invalid delivery evidence');
         drawerBody.innerHTML=(row ? hookForwardersHTML([row],false) : '<p>No report for this forwarding instance is available. Current delivery state and recovery are unknown.</p>')
           +`<button type="button" class="link-btn" data-action="hook-setup" data-harness="${escapeHTML(row?.report.harness || '')}">Hook setup and verification</button>`;
+      }
+      const summary = hookDiagnosticSummary(kind, scope, payload);
+      if (summary) {
+        hookDiagnostic = { text: summary, seq, auth, busy: false };
+        drawerBody.insertAdjacentHTML('beforeend', hookDiagnosticPreviewHTML(summary));
+        document.querySelector('#drawer-foot [data-action="hook-diagnostic-copy"]').disabled = false;
       }
     } catch {
       if (current()) drawerBody.innerHTML=repair?hookRepairHTML(scope,null,'Verification unavailable. Check again; repair remains unconfirmed.'):'<p role="status">Hook evidence unavailable. Refresh to retry; recovery is unknown.</p>';
@@ -3664,6 +3697,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'hook-repair-check':
         e.preventDefault();
         openHookInspector('repair',d,{back:back() || detailDrawer.returnTarget()});
+        break;
+      case 'hook-diagnostic-copy':
+        e.preventDefault();
+        copyHookDiagnostic();
         break;
       case 'hook-evidence':
         e.preventDefault();

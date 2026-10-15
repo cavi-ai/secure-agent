@@ -398,6 +398,14 @@ def run_attention_summary(page):
         state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
         for name in ('categories', 'counts', 'identity', 'monitoring', 'stale', 'recovery', 'invalid', 'legacy', 'focus', 'fits'):
             page.check(f'attention summary ({label}): {name}', state.get(name) is True, str(state))
+def run_hook_diagnostics(page):
+    for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+        dom = page.dom('?hookdiagnostics', window_size=size, served=True,
+                       fixture={'script': 'cases_hook_diagnostics.js'})
+        receipt = re.search(r'data-diagnostic-probe="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        for name in ('copy', 'metadata', 'failure', 'retry', 'cleared', 'readFailure', 'readRetry', 'repair', 'delivery', 'fits', 'busy', 'copyOwnership', 'loading', 'readOwnership'):
+            page.check(f'hook diagnostics ({label}): {name}', state.get(name) is True, str(state))
 
 def run_session_hooks(page):
     for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
@@ -559,6 +567,7 @@ CASES = (
     Case('hook_monitoring', run_hook_monitoring, ()),
     Case('hook_history', run_hook_history, ()),
     Case('attention_summary', run_attention_summary, ()),
+    Case('hook_diagnostics', run_hook_diagnostics, ()),
     Case('session_hooks', run_session_hooks, ()),
     Case('session_workbench', run_session_workbench, ()),
     Case('session_reading', run_session_reading, ()),
