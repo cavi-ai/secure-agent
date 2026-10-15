@@ -378,7 +378,7 @@ def run_session_hooks(page):
                        fixture={'script': 'cases_session_hooks.js'})
         receipt = re.search(r'data-hooks-probe="([^"]+)"', dom)
         state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
-        for name in ('setupEntry','coverageDelivery','deliveryAttention','deliveryUnscoped','deliveryUnverified','evidence','evidenceFits','evidenceFailure','evidenceRetry','evidenceOwnership','setup','table', 'failedRow', 'unrecorded', 'cancelled', 'actionable', 'ingestion', 'hostHealth', 'harnessParity', 'hostStale', 'hostRecovery', 'healthRecovery', 'startsAtFindings', 'fits', 'unavailable', 'recovery', 'reloaded'):
+        for name in ('repairWaiting','repairFits','repairsuccess','repairfailure','repaircancel','repairchanged','repairexpired','repairReadFailure','repairRetry','repairOwnership','repairAttention','setupEntry','coverageDelivery','deliveryAttention','deliveryUnscoped','deliveryUnverified','evidence','evidenceFits','evidenceFailure','evidenceRetry','evidenceOwnership','setup','table', 'failedRow', 'unrecorded', 'cancelled', 'actionable', 'ingestion', 'hostHealth', 'harnessParity', 'hostStale', 'hostRecovery', 'healthRecovery', 'startsAtFindings', 'fits', 'unavailable', 'recovery', 'reloaded'):
             page.check(f'session hooks ({label}): {name}', state.get(name) is True, str(state))
 
 def run_session_results(page):

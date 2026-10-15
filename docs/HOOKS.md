@@ -81,6 +81,33 @@ The response includes the filter, window, rows and a truncation indicator.
 
 ### Setup and verification
 
+Execution repair findings offer **Check repair**. The inspector keeps the
+original failure and guidance visible while checking newer retained completions
+for the same session, harness, exact event and registered handler. **Check
+again** refreshes evidence; it does not execute a hook or change policy. An open
+execution finding that leaves Attention opens this check instead of implying
+recovery from the disappearance alone.
+
+The newest timestamp group determines the observation: successful completion,
+continued execution error, block decision or cancellation. A different reported
+configuration is shown separately. Mixed outcomes or configurations at a tied
+timestamp leave execution order unknown. Missing configuration revisions remain
+explicitly unknown. A successful completion is an observation, not proof of
+lasting repair or security protection.
+
+Checks require the original failing completion to remain in the 30-minute
+window. Missing original evidence, limited samples and failed reads leave repair
+unconfirmed. Sources without stable handler identity retain history inspection
+without handler-specific verification.
+
+For API clients, `verify_after` optionally adds a verification result to the
+evidence response. It is the original failure's RFC 3339 timestamp and requires
+`event_scope=exact` and `handler_id`. Original-configuration evidence rows remain
+filtered as requested; verification separately examines up to 1,000 completions
+across configurations of that handler and exact event. Its result includes the
+newest observed timestamp and run IDs when available, the reported configuration,
+safe reason code and limits. A limited sample cannot confirm verification.
+
 Hook setup and verification is available from Home monitoring coverage, the
 Hooks view and the delivery inspector. It covers Claude Code, Codex, OpenClaw,
 Hermes and OpenCode. Claude

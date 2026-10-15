@@ -370,11 +370,51 @@ function hookEvidenceButtonHTML(f, sessionId, exact = false) {
   return `<button type="button" class="link-btn" data-action="hook-evidence" data-session="${escapeHTML(sessionId)}" data-harness="${escapeHTML(f.harness)}" data-event="${escapeHTML(f.event)}" data-event_scope="${exact ? 'exact' : 'group'}" data-script="${escapeHTML(f.script || '')}" data-handler="${escapeHTML(f.handler_id || '')}" data-config="${escapeHTML(f.config_id || '')}">Inspect recorded runs</button>`;
 }
 
+function hookRepairScope(f, session) {
+  if (!session || f?.kind !== 'execution-errors' || !f.handler_id) return null;
+  return {session,harness:f.harness,event:f.event,event_scope:'exact',handler:f.handler_id,config:f.config_id || '',script:f.script || '',after:f.last_at,
+    problem:f.title,explanation:f.detail,guidance:f.next_action};
+}
+
+function hookInstant(value) {
+  const m=typeof value==='string' && value.match(/^(.*T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/);
+  if (!m || !Number.isFinite(Date.parse(m[1]+m[3]))) return null;
+  return BigInt(Date.parse(m[1]+m[3]))*1000000n + BigInt((m[2] || '').padEnd(9,'0'));
+}
+
+function validHookRepair(page, scope) {
+  if (!validHookEvidence(page,scope) || page.filter.event_scope !== 'exact' || !scope.handler
+    || !page.filter.verify_after || page.filter.verify_after !== scope.after) return false;
+  const v=page.verification, time=s=>typeof s==='string' && Number.isFinite(Date.parse(s));
+  const id=s=>typeof s==='string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(s);
+  return !!v && typeof v==='object' && !Array.isArray(v)
+    && ['awaiting-completion','successful-completion','still-failing','decision-observed','configuration-changed','unconfirmed'].includes(v.state)
+    && ['title','detail'].every(k=>typeof v[k]==='string' && v[k].length>0 && v[k].length<=2048)
+    && typeof v.config_id==='string' && (v.config_id==='' || id(v.config_id))
+    && typeof v.truncated==='boolean' && (!v.truncated || v.state==='unconfirmed')
+    && Array.isArray(v.run_ids) && v.run_ids.length<=1000 && v.run_ids.every(id) && new Set(v.run_ids).size===v.run_ids.length
+    && Array.isArray(v.limits) && v.limits.length>0 && v.limits.length<=5 && v.limits.every(s=>typeof s==='string' && s.length<=2048)
+    && (v.reason_code===undefined || ['timeout','dependency-unavailable','invalid-output','permission-denied','execution-failed','policy-block'].includes(v.reason_code))
+    && (v.observed_at===undefined ? v.run_ids.length===0 && ['unconfirmed','awaiting-completion'].includes(v.state)
+      : time(v.observed_at) && hookInstant(v.observed_at)!==null && hookInstant(scope.after)!==null && hookInstant(v.observed_at)>hookInstant(scope.after) && Date.parse(v.observed_at)<=Date.parse(page.until) && v.run_ids.length>0)
+    && (v.state!=='configuration-changed' || v.config_id!=='' && v.config_id!==scope.config)
+    && (!['successful-completion','still-failing','decision-observed'].includes(v.state) || v.config_id===scope.config);
+}
+
+function hookRepairHTML(scope, page, message) {
+  const baseline=`<section class="sd-finding"><h4>Original failure: ${escapeHTML(scope.problem || 'Hook repeatedly failed')}</h4><p>${escapeHTML(scope.explanation || '')}</p><p>Last observed failure: <time>${escapeHTML(scope.after)}</time></p><details><summary>Original failure details</summary><p>Handler: ${escapeHTML(scope.handler)} · Configuration: ${escapeHTML(scope.config || 'not supplied')}</p><p>Original guidance: ${escapeHTML(scope.guidance || '')}</p></details></section>`;
+  const v=page?.verification;
+  if (!v) return `<section class="sd-hook-evidence">${baseline}<p role="status">${escapeHTML(message || 'Loading verification evidence…')}</p></section>`;
+  return `<section class="sd-hook-evidence">${baseline}<section aria-label="Repair check result" role="status"><h4>${escapeHTML(v.title)}</h4><p>${escapeHTML(v.detail)}</p>${v.observed_at ? `<p>Newest observed completion: <time>${escapeHTML(v.observed_at)}</time> · Configuration: ${v.config_id && v.config_id===scope.config ? 'Matches the original reported revision' : escapeHTML(v.config_id || 'not supplied')}</p><details><summary>Completion identifiers</summary><p>Run IDs: ${v.run_ids.map(escapeHTML).join(', ')}</p></details>` : ''}${v.reason_code ? `<p>Reported reason: ${escapeHTML(v.reason_code)}</p>` : ''}${v.limits.map(s=>`<p>${escapeHTML(s)}</p>`).join('')}</section><details><summary>Recorded runs for the original configuration</summary>${hookEvidenceHTML(page)}</details></section>`;
+}
+
 function hookFindingBodyHTML(f, sessionId) {
+  const repair=hookRepairScope(f,sessionId);
+  const check=repair ? `<button type="button" class="link-btn" data-action="hook-repair-check" ${Object.entries(repair).map(([k,v])=>`data-${k}="${escapeHTML(v)}"`).join(' ')}>Check repair</button>` : '';
   return `<p>${escapeHTML(f.detail)}</p><p><strong>Next action:</strong> ${escapeHTML(f.next_action)}</p>
     <p>${escapeHTML(f.event)}${f.script ? ' · ' + escapeHTML(f.script) : ''} · Handler: ${escapeHTML(f.handler_id)}${f.config_id ? ' · Configuration: ' + escapeHTML(f.config_id) : ''}</p>
     <p>${Number(f.count)} observed runs · <time>${escapeHTML(f.first_at)}</time> to <time>${escapeHTML(f.last_at)}</time></p>
-    ${(f.limits || []).map(limit => `<p class="sd-context-limit">${escapeHTML(limit)}</p>`).join('')}${hookEvidenceButtonHTML(f, sessionId, true)}`;
+    ${(f.limits || []).map(limit => `<p class="sd-context-limit">${escapeHTML(limit)}</p>`).join('')}${check}${hookEvidenceButtonHTML(f, sessionId, true)}`;
 }
 
 function sessionHookHealthHTML(health, state, sessionId) {
