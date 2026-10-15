@@ -101,6 +101,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!item) return;
     const origin = { key, order: items.map(it => `${it.kind}:${it.id}`), generation: ++attentionGeneration };
     if (item.kind==='hook_delivery') origin.hookForwarderID=item.hook_delivery?.report.forwarder_id;
+    if (item.kind==='hook') origin.hookRepair=hookRepairScope(item.hook_finding,item.session_id);
     const view = needView(item, homeContext(window.SA));
     origin.signature = attentionSignature(item);
     detailDrawer.setMode('attention');
@@ -155,6 +156,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!selection || drawer.hidden || sessionEnded || attentionWrites.size) return;
     const items = attentionItems();
     const next = nextAttentionKey(selection.key, previous || selection.order, items);
+    if (selection.hookRepair && next!==selection.key) {
+      openHookInspector('repair',selection.hookRepair,{back:{label:'Needs you',reopen:()=>{detailDrawer.close();switchTab('home');}}});
+      window.saAnnounce('Hook finding changed. Checking newer evidence.');
+      return;
+    }
     if (selection.hookForwarderID && next!==selection.key) {
       openHookInspector('delivery',{id:selection.hookForwarderID},{back:{label:'Needs you',reopen:()=>{detailDrawer.close();switchTab('home');}}});
       window.saAnnounce('Delivery finding changed. Loading current evidence.');
@@ -1094,23 +1100,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function openHookInspector(kind, data, options = {}) {
     if (sessionEnded) return;
-    const scope = {session:data.session || '',harness:data.harness || '',event:data.event || '',event_scope:data.event_scope || 'group',handler:data.handler || '',config:data.config || '',script:data.script || '',id:data.id || ''};
-    const attrs = `data-action="${kind === 'evidence' ? 'hook-evidence' : 'hook-delivery-inspect'}" ` + Object.entries(scope).map(([k,v]) => `data-${k}="${escapeHTML(v)}"`).join(' ');
-    const retry = `<button type="button" class="btn btn-ghost btn-sm" ${attrs}>Refresh ${kind === 'evidence' ? 'evidence' : 'delivery'}</button>`;
+    const repair=kind==='repair', evidence=kind==='evidence' || repair;
+    const scope = {session:data.session || '',harness:data.harness || '',event:data.event || '',event_scope:repair?'exact':data.event_scope || 'group',handler:data.handler || '',config:data.config || '',script:data.script || '',id:data.id || '',
+      ...(repair?{after:data.after || '',problem:data.problem || '',explanation:data.explanation || '',guidance:data.guidance || ''}:{})};
+    const attrs = `data-action="${repair ? 'hook-repair-check' : evidence ? 'hook-evidence' : 'hook-delivery-inspect'}" ` + Object.entries(scope).map(([k,v]) => `data-${k}="${escapeHTML(v)}"`).join(' ');
+    const retry = `<button type="button" class="btn btn-ghost btn-sm" ${attrs}>${repair?'Check again':'Refresh '+(evidence?'evidence':'delivery')}</button>`;
     detailDrawer.setMode('hook-' + kind);
     detailDrawer.setCopyVisible(false);
-    if (!detailDrawer.open({title:kind === 'evidence' ? 'Recorded hook runs' : 'Hook delivery',icon:'history',body:'<p role="status">Loading hook evidence…</p>',foot:retry,back:options.back})) return;
+    if (!detailDrawer.open({title:repair?'Check hook repair':evidence ? 'Recorded hook runs' : 'Hook delivery',icon:'history',body:repair?hookRepairHTML(scope):'<p role="status">Loading hook evidence…</p>',foot:retry,back:options.back})) return;
     const seq=detailDrawer.seq(), auth=handoffGeneration;
     const current=()=>!sessionEnded && auth===handoffGeneration && seq===detailDrawer.seq() && !drawer.hidden;
     try {
       const query = new URLSearchParams({harness:scope.harness,event:scope.event,event_scope:scope.event_scope,handler_id:scope.handler,config_id:scope.config,script:scope.script});
-      const response=await apiFetch(kind === 'evidence' ? '/sessions/'+encodeURIComponent(scope.session)+'/hook-evidence?'+query : '/status');
+      if(repair) query.set('verify_after',scope.after);
+      const response=await apiFetch(evidence ? '/sessions/'+encodeURIComponent(scope.session)+'/hook-evidence?'+query : '/status');
       if (!response.ok) throw new Error('Hook evidence unavailable');
       const payload=await response.json();
       if (!current()) return;
-      if (kind === 'evidence') {
-        if (!validHookEvidence(payload,scope)) throw new Error('Invalid hook evidence');
-        drawerBody.innerHTML=hookEvidenceHTML(payload);
+      if (evidence) {
+        if (!(repair?validHookRepair(payload,scope):validHookEvidence(payload,scope))) throw new Error('Invalid hook evidence');
+        drawerBody.innerHTML=repair?hookRepairHTML(scope,payload):hookEvidenceHTML(payload);
       } else {
         const row=payload.hook_ingestion?.forwarders?.find(r=>r.report?.forwarder_id===scope.id);
         if (row && !validHookForwarder(row)) throw new Error('Invalid delivery evidence');
@@ -1118,7 +1127,7 @@ document.addEventListener('DOMContentLoaded', () => {
           +`<button type="button" class="link-btn" data-action="hook-setup" data-harness="${escapeHTML(row?.report.harness || '')}">Hook setup and verification</button>`;
       }
     } catch {
-      if (current()) drawerBody.innerHTML='<p role="status">Hook evidence unavailable. Refresh to retry; recovery is unknown.</p>';
+      if (current()) drawerBody.innerHTML=repair?hookRepairHTML(scope,null,'Verification unavailable. Check again; repair remains unconfirmed.'):'<p role="status">Hook evidence unavailable. Refresh to retry; recovery is unknown.</p>';
     }
   }
 
@@ -3636,6 +3645,10 @@ document.addEventListener('DOMContentLoaded', () => {
         window.filterTimelineToSession(d.session).then(() => {
           if (sessionWorkbench.selectedSessionId === d.session) window.showCurrentSessionStatus();
         });
+        break;
+      case 'hook-repair-check':
+        e.preventDefault();
+        openHookInspector('repair',d,{back:back() || detailDrawer.returnTarget()});
         break;
       case 'hook-evidence':
         e.preventDefault();

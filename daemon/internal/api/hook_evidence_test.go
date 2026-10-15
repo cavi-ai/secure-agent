@@ -102,4 +102,53 @@ func TestHookEvidenceEndpointBoundsScopeAndMeasurements(t *testing.T) {
 	if h := st.WriteHealth(); len(h.ReadActive) != 0 {
 		t.Fatalf("invalid query invented a storage failure: %+v", h)
 	}
+	verifyPath := path + "&event_scope=exact&verify_after=" + url.QueryEscape(now.Add(-time.Second).Format(time.RFC3339Nano))
+	readVerification := func() string {
+		t.Helper()
+		resp, err := cl.Get(verifyPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			t.Fatalf("repair verification status=%d", resp.StatusCode)
+		}
+		var page struct {
+			Verification struct {
+				State  string
+				RunIDs []string `json:"run_ids"`
+			}
+		}
+		decodeInto(t, resp, &page)
+		return page.Verification.State
+	}
+	if got := readVerification(); got != "configuration-changed" {
+		t.Fatalf("configuration change lost: %s", got)
+	}
+	for _, e := range []event.Event{
+		{Kind: event.KindHookRun, SessionID: "s", CallID: "new-success", TS: now.Add(time.Nanosecond), HookHarness: "hermes", ToolName: "pre_tool_call", ToolStatus: "ok", HookEvidence: &hookrun.Evidence{HandlerID: "h", ConfigID: "c"}},
+		{Kind: event.KindHookRun, SessionID: "other", CallID: "foreign-failure", TS: now.Add(2 * time.Nanosecond), HookHarness: "hermes", ToolName: "pre_tool_call", ToolStatus: "error", HookEvidence: &hookrun.Evidence{HandlerID: "h", ConfigID: "c"}},
+		{Kind: event.KindHookRun, SessionID: "s", CallID: "foreign-handler", TS: now.Add(2 * time.Nanosecond), HookHarness: "hermes", ToolName: "pre_tool_call", ToolStatus: "error", HookEvidence: &hookrun.Evidence{HandlerID: "different", ConfigID: "c"}},
+	} {
+		if _, err := st.PutEvent(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := readVerification(); got != "successful-completion" {
+		t.Fatalf("foreign scope changed verification: %s", got)
+	}
+	for _, query := range []string{
+		"harness=hermes&event=x&event_scope=exact&handler_id=h&verify_after=invalid",
+		"harness=hermes&event=x&event_scope=exact&verify_after=" + url.QueryEscape(now.Format(time.RFC3339Nano)),
+		"harness=hermes&event=x&handler_id=h&verify_after=" + url.QueryEscape(now.Format(time.RFC3339Nano)),
+	} {
+		resp, err := cl.Get("http://unix/sessions/s/hook-evidence?" + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 400 {
+			t.Fatalf("invalid verification admitted: %d", resp.StatusCode)
+		}
+	}
 }

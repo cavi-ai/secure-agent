@@ -61,3 +61,36 @@ test('recorded evidence preserves unknown measurements and rejects foreign scope
   assert.equal(ctx.validHookEvidence({...page,rows:[{...page.rows[0],status:'protected'}]},scope),false);
   assert.equal(ctx.validHookEvidence({...page,rows:[{...page.rows[0],duration_ms:undefined}]},scope),false);
 });
+
+
+test('repair checks retain the original failure and exact identity', () => {
+  assert.equal(typeof ctx.hookRepairScope,'function');
+  const f={kind:'execution-errors',harness:'codex',event:'PreToolUse',handler_id:'h',config_id:'c',script:'guard.py',last_at:'2026-10-14T09:59:00Z',title:'Hook repeatedly failed',detail:'Three execution errors.',next_action:'Restore dependency.'};
+  const scope=ctx.hookRepairScope(f,'s');
+  assert.equal(scope.after,f.last_at);
+  assert.equal(scope.handler,'h');
+  assert.equal(scope.config,'c');
+  assert.equal(scope.event_scope,'exact');
+  assert.equal(ctx.hookRepairScope({...f,handler_id:''},'s'),null);
+  const html=ctx.hookFindingBodyHTML(f,'s');
+  assert.match(html,/Check repair/);
+  assert.match(html,/data-action="hook-repair-check"/);
+  const pending=ctx.hookRepairHTML(scope,null,'Verification unavailable. Check again.');
+  for(const text of [f.title,f.detail,f.next_action,'Original failure','Verification unavailable']) assert.ok(pending.includes(text),text);
+});
+
+test('repair responses must match the original failure and keep their limits visible', () => {
+  assert.equal(typeof ctx.validHookRepair,'function');
+  const scope={session:'s',harness:'codex',event:'PreToolUse',event_scope:'exact',handler:'h',config:'c',script:'guard.py',after:'2026-10-14T09:59:00Z',problem:'Original problem'};
+  const page={session_id:'s',filter:{harness:'codex',event:'PreToolUse',event_scope:'exact',handler_id:'h',config_id:'c',script:'guard.py',verify_after:scope.after},since:'2026-10-14T09:30:00Z',until:'2026-10-14T10:00:00Z',truncated:false,rows:[],
+    verification:{state:'successful-completion',title:'Successful completion observed',detail:'A newer completion succeeded.',observed_at:'2026-10-14T09:59:01Z',run_ids:['new-run'],config_id:'c',truncated:false,limits:['This does not establish protection coverage.']}};
+  assert.equal(ctx.validHookRepair(page,scope),true);
+  assert.equal(ctx.validHookRepair({...page,filter:{...page.filter,verify_after:'2026-10-14T09:58:00Z'}},scope),false);
+  assert.equal(ctx.validHookRepair({...page,verification:{...page.verification,state:'repaired'}},scope),false);
+  assert.equal(ctx.validHookRepair({...page,verification:{...page.verification,observed_at:scope.after}},scope),false);
+  const nanoScope={...scope,after:'2026-10-14T09:59:00.000000001Z'};
+  assert.equal(ctx.validHookRepair({...page,filter:{...page.filter,verify_after:nanoScope.after},verification:{...page.verification,observed_at:'2026-10-14T09:59:00.000000002Z'}},nanoScope),true);
+  assert.equal(ctx.validHookRepair({...page,verification:{...page.verification,observed_at:'2026-10-14T05:59:01-04:00'}},scope),true);
+  const html=ctx.hookRepairHTML(scope,page);
+  for(const text of ['Original problem','Successful completion observed','new-run','protection coverage']) assert.ok(html.includes(text),text);
+});

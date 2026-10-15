@@ -800,6 +800,7 @@ export interface HookEvidenceFilter {
   handler_id: string;
   config_id: string;
   script: string;
+  verify_after?: string;
 }
 
 export interface Evidence {
@@ -824,6 +825,18 @@ export interface HookEvidenceRun {
   evidence?: Evidence;
 }
 
+export interface RepairVerification {
+  state: string;
+  title: string;
+  detail: string;
+  observed_at?: string;
+  run_ids: string[] | null;
+  config_id: string;
+  reason_code?: string;
+  truncated: boolean;
+  limits: string[] | null;
+}
+
 export interface HookEvidencePage {
   session_id: string;
   filter: HookEvidenceFilter;
@@ -831,6 +844,7 @@ export interface HookEvidencePage {
   until: string;
   rows: HookEvidenceRun[] | null;
   truncated: boolean;
+  verification?: RepairVerification;
 }
 
 export interface HostSnapshot {

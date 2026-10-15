@@ -14,21 +14,23 @@ const hookEvidenceLimit = 100
 var ErrHookEvidenceQuery = errors.New("invalid hook evidence query")
 
 type HookEvidenceFilter struct {
-	Harness    string `json:"harness"`
-	Event      string `json:"event"`
-	EventScope string `json:"event_scope"`
-	HandlerID  string `json:"handler_id"`
-	ConfigID   string `json:"config_id"`
-	Script     string `json:"script"`
+	Harness     string     `json:"harness"`
+	Event       string     `json:"event"`
+	EventScope  string     `json:"event_scope"`
+	HandlerID   string     `json:"handler_id"`
+	ConfigID    string     `json:"config_id"`
+	Script      string     `json:"script"`
+	VerifyAfter *time.Time `json:"verify_after,omitempty"`
 }
 
 type HookEvidencePage struct {
-	SessionID string             `json:"session_id"`
-	Filter    HookEvidenceFilter `json:"filter"`
-	Since     time.Time          `json:"since"`
-	Until     time.Time          `json:"until"`
-	Rows      []HookEvidenceRun  `json:"rows"`
-	Truncated bool               `json:"truncated"`
+	SessionID    string                         `json:"session_id"`
+	Filter       HookEvidenceFilter             `json:"filter"`
+	Since        time.Time                      `json:"since"`
+	Until        time.Time                      `json:"until"`
+	Rows         []HookEvidenceRun              `json:"rows"`
+	Truncated    bool                           `json:"truncated"`
+	Verification *hookhealth.RepairVerification `json:"verification,omitempty"`
 }
 
 type HookEvidenceRun struct {
@@ -52,6 +54,9 @@ func (s *Store) SessionHookEvidence(session string, f HookEvidenceFilter, now ti
 	}
 	check := hookrun.Record{Type: "hook_run", Version: 2, Harness: f.Harness, SessionID: session, ID: "query", TS: now, Event: f.Event, Script: f.Script, Status: "ok", Evidence: &hookrun.Evidence{HandlerID: f.HandlerID, ConfigID: f.ConfigID}}
 	if check.Validate() != nil {
+		return out, ErrHookEvidenceQuery
+	}
+	if f.VerifyAfter != nil && (f.EventScope != "exact" || f.HandlerID == "" || f.VerifyAfter.IsZero() || f.VerifyAfter.After(now)) {
 		return out, ErrHookEvidenceQuery
 	}
 	defer func() { s.noteRead("hook evidence", readErr) }()
@@ -106,6 +111,14 @@ func (s *Store) SessionHookEvidence(session string, f HookEvidenceFilter, now ti
 	if len(out.Rows) > hookEvidenceLimit {
 		out.Truncated = true
 		out.Rows = out.Rows[:hookEvidenceLimit]
+	}
+	if f.VerifyAfter != nil {
+		runs, truncated, err := s.hookHealthRunsLocked("session_id=? AND harness=? AND hook=? AND COALESCE(json_extract(evidence_json,'$.handler_id'),'')=?", []any{session, f.Harness, f.Event, f.HandlerID}, now)
+		if err != nil {
+			return out, err
+		}
+		v := hookhealth.VerifyRepair(runs, f.ConfigID, f.Script, *f.VerifyAfter, now, truncated)
+		out.Verification = &v
 	}
 	return out, nil
 }

@@ -25,13 +25,21 @@ func (a *API) serveHookEvidence(w http.ResponseWriter, r *http.Request, id strin
 			return
 		}
 		switch key {
-		case "harness", "event", "event_scope", "handler_id", "config_id", "script":
+		case "harness", "event", "event_scope", "handler_id", "config_id", "script", "verify_after":
 		default:
 			http.Error(w, "invalid hook evidence filters", http.StatusBadRequest)
 			return
 		}
 	}
 	f := store.HookEvidenceFilter{Harness: q.Get("harness"), Event: q.Get("event"), EventScope: q.Get("event_scope"), HandlerID: q.Get("handler_id"), ConfigID: q.Get("config_id"), Script: q.Get("script")}
+	if value, ok := q["verify_after"]; ok {
+		after, err := time.Parse(time.RFC3339Nano, value[0])
+		if err != nil {
+			http.Error(w, "invalid hook evidence filters", http.StatusBadRequest)
+			return
+		}
+		f.VerifyAfter = &after
+	}
 	page, err := a.store.SessionHookEvidence(id, f, time.Now().UTC())
 	if err != nil {
 		if errors.Is(err, store.ErrHookEvidenceQuery) {
