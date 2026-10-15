@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Secure Agent — Console</title>
-  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="icon" href="brand-icon.png" type="image/png">
   <script src="theme-init.js"></script>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -51,16 +51,92 @@
     </defs>
   </svg>
 
+  <a class="skip-link" href="#main-content">Skip to content</a>
   <div class="app">
-    <!-- Header -->
-    <header class="masthead">
+    <aside class="sidebar" aria-label="Secure Agent">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true"><svg class="icon"><use href="#i-shield"/></svg></span>
+        <img class="brand-mark" src="brand-icon.png" width="44" height="44" alt="">
         <div class="brand-text">
-          <div class="brand-name">Secure&nbsp;Agent<span class="brand-ver" id="app-version"></span></div>
-          <div class="brand-tag">Egress inspection &amp; secret-leak firewall for local AI agents</div>
+          <div class="brand-name">Secure&nbsp;Agent</div>
+          <div class="brand-tag">Local agent security</div>
         </div>
       </div>
+    <div class="tabs-bar" id="tabs-bar">
+    <div class="tabs-row">
+    <nav class="tabs" role="tablist" aria-label="Console sections" aria-orientation="vertical">
+      <button class="tab-btn active" data-tab="home" role="tab" aria-selected="true" aria-controls="tab-home">
+        <svg class="icon"><use href="#i-activity"/></svg><span>Home</span>
+        <span class="tab-badge tab-badge-warn" id="tab-badge-home" hidden></span>
+      </button>
+      <button class="tab-btn" data-tab="sessions" role="tab" aria-selected="false" aria-controls="tab-sessions">
+        <svg class="icon"><use href="#i-agent"/></svg><span>Sessions</span>
+        <span class="tab-badge" id="tab-badge-sessions" hidden></span>
+      </button>
+      <button class="tab-btn" data-tab="protection" role="tab" aria-selected="false" aria-controls="tab-egress tab-policy">
+        <svg class="icon"><use href="#i-shield"/></svg><span>Protection</span>
+      </button>
+      <button class="tab-btn" data-tab="system" role="tab" aria-selected="false" aria-controls="tab-system">
+        <svg class="icon"><use href="#i-server"/></svg><span>System</span>
+      </button>
+
+      <button class="tab-btn" data-tab="agent" role="tab" aria-selected="false" aria-controls="tab-agent">
+        <svg class="icon"><use href="#i-chat"/></svg><span>Agent</span>
+      </button>
+    </nav>
+      <button type="button" class="tabs-posture" id="tabs-posture" data-action="goto-top" title="Back to top" data-state="unknown" hidden><span class="dot" aria-hidden="true"></span><span id="tabs-posture-text">Waiting for telemetry</span></button>
+    </div>
+    </div>
+      <details class="sidebar-footer" id="console-options" open>
+        <summary>Console options</summary>
+        <details class="sidebar-summary"><summary>Activity summary</summary>
+    <section class="statstrip" aria-label="At a glance">
+      <div class="ss-item">
+        <span class="ss-num" id="count-agents">0</span>
+        <span class="ss-label">agents</span>
+        <span class="ss-hint" id="hint-agents"></span>
+      </div>
+      <div class="ss-item">
+        <span class="ss-num" id="count-flags">0</span>
+        <span class="ss-label">flags · 24h</span>
+      </div>
+      <div class="ss-item">
+        <span class="ss-num" id="count-incidents">0</span>
+        <span class="ss-label">incidents · 24h</span>
+      </div>
+      <div class="ss-item">
+        <span class="ss-num" id="count-proxy">0</span>
+        <span class="ss-label">proxy hits</span>
+      </div>
+      <div class="ss-item">
+        <span class="ss-num" id="count-spend">—</span>
+        <span class="ss-label">spend · 24h</span>
+        <span class="ss-hint" id="hint-spend"></span>
+      </div>
+      <span class="ss-spacer"></span>
+      <div class="ss-meta">
+        <span class="ss-chip" id="coverage-chip" hidden></span>
+        <span id="uptime-meta">--</span>
+      </div>
+    </section>
+        </details>
+        <div class="status-chip active" id="system-status">
+          <span class="status-dot"></span>
+          <span id="status-text">Daemon Active</span>
+        </div>
+        <span class="brand-ver" id="app-version"></span>
+        <div class="sidebar-tools">
+        <button type="button" class="btn btn-ghost btn-sm" data-action="open-config" title="Open the active config file in a text editor">Config</button>
+        <div class="theme-toggle" role="group" aria-label="Theme">
+          <button type="button" id="theme-system" aria-pressed="false" aria-label="System theme" title="Follow the system theme"><svg class="icon"><use href="#i-activity"/></svg></button>
+          <button type="button" id="theme-light" aria-pressed="false" aria-label="Light theme" title="Light theme">Light</button>
+          <button type="button" id="theme-dark" aria-pressed="false" aria-label="Dark theme" title="Dark theme">Dark</button>
+        </div>
+        </div>
+      </details>
+    </aside>
+    <!-- Header -->
+    <header class="masthead">
+      <div class="page-heading"><h1 id="page-title">Overview</h1><p id="page-description">Monitor local AI activity and respond to security findings.</p></div>
       <div class="masthead-right">
         <div class="spark" title="Agent events per second, last 60s">
           <svg id="spark-svg" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true">
@@ -68,10 +144,7 @@
           </svg>
           <span class="spark-v" id="spark-rate">0/s</span>
         </div>
-        <div class="status-chip active" id="system-status">
-          <span class="status-dot"></span>
-          <span id="status-text">Daemon Active</span>
-        </div>
+
         <!-- Uptime + proxy are kept as hidden readouts: the status chip's
              tooltip carries them, the JS keeps writing them, and the header
              stays one line instead of a row of stat blocks. -->
@@ -98,12 +171,8 @@
             <svg class="icon"><use href="#i-bell"/></svg>
           </button>
         </div>
-        <div class="theme-toggle" role="group" aria-label="Theme">
-          <button type="button" id="theme-system" aria-pressed="false" title="Follow the system theme"><svg class="icon"><use href="#i-activity"/></svg></button>
-          <button type="button" id="theme-light" aria-pressed="false" title="Light theme">L</button>
-          <button type="button" id="theme-dark" aria-pressed="false" title="Dark theme">D</button>
-        </div>
-        <button type="button" class="btn btn-ghost btn-sm" data-action="open-config" title="Open the active config file in a text editor">Config</button>
+
+
         <button class="btn btn-ghost btn-icon" id="btn-refresh" title="Refresh telemetry">
           <svg class="icon"><use href="#i-refresh"/></svg>
         </button>
@@ -142,72 +211,16 @@
     <!-- Thin one-line metrics strip. The old four-tile KPI block ate a third
          of the first screen before any chart; the numbers are the same, the
          real estate is not. -->
-    <section class="statstrip" aria-label="At a glance">
-      <div class="ss-item">
-        <span class="ss-num" id="count-agents">0</span>
-        <span class="ss-label">agents</span>
-        <span class="ss-hint" id="hint-agents"></span>
-      </div>
-      <div class="ss-item">
-        <span class="ss-num" id="count-flags">0</span>
-        <span class="ss-label">flags · 24h</span>
-      </div>
-      <div class="ss-item">
-        <span class="ss-num" id="count-incidents">0</span>
-        <span class="ss-label">incidents · 24h</span>
-      </div>
-      <div class="ss-item">
-        <span class="ss-num" id="count-proxy">0</span>
-        <span class="ss-label">proxy hits</span>
-      </div>
-      <div class="ss-item">
-        <span class="ss-num" id="count-spend">—</span>
-        <span class="ss-label">spend · 24h</span>
-        <span class="ss-hint" id="hint-spend"></span>
-      </div>
-      <span class="ss-spacer"></span>
-      <div class="ss-meta">
-        <span class="ss-chip" id="coverage-chip" hidden></span>
-        <span id="uptime-meta">--</span>
-      </div>
-    </section>
 
-    <!-- Primary navigation groups observed traffic and its rules under Protection. -->
-    <!-- The tab bar stays on screen while the page scrolls: once stuck it
-         carries the posture pill (back to top), and the scope bar under it
-         says when Events, Flags and Incidents are narrowed to one session. -->
-    <div class="tabs-bar" id="tabs-bar">
-    <div class="tabs-row">
-    <nav class="tabs" role="tablist" aria-label="Console sections">
-      <button class="tab-btn active" data-tab="home" role="tab" aria-selected="true" aria-controls="tab-home">
-        <svg class="icon"><use href="#i-alert"/></svg><span>Home</span>
-        <span class="tab-badge tab-badge-warn" id="tab-badge-home" hidden></span>
-      </button>
-      <button class="tab-btn" data-tab="sessions" role="tab" aria-selected="false" aria-controls="tab-sessions">
-        <svg class="icon"><use href="#i-agent"/></svg><span>Sessions</span>
-        <span class="tab-badge" id="tab-badge-sessions" hidden></span>
-      </button>
-      <button class="tab-btn" data-tab="protection" role="tab" aria-selected="false" aria-controls="tab-egress tab-policy">
-        <svg class="icon"><use href="#i-shield"/></svg><span>Protection</span>
-      </button>
-      <button class="tab-btn" data-tab="system" role="tab" aria-selected="false" aria-controls="tab-system">
-        <svg class="icon"><use href="#i-server"/></svg><span>System</span>
-      </button>
 
-      <button class="tab-btn" data-tab="agent" role="tab" aria-selected="false" aria-controls="tab-agent">
-        <svg class="icon"><use href="#i-chat"/></svg><span>Agent</span>
-      </button>
-    </nav>
-      <button type="button" class="tabs-posture" id="tabs-posture" data-action="goto-top" title="Back to top" data-state="unknown" hidden><span class="dot" aria-hidden="true"></span><span id="tabs-posture-text">Waiting for telemetry</span></button>
-    </div>
     <div class="scope-bar" id="scope-bar" role="status" hidden></div>
-    </div>
 
-    <main>
+    <main id="main-content" tabindex="-1">
       <!-- Home: decisions and coverage first; detail opens on demand. -->
       <div class="tabpanel" id="tab-home" role="tabpanel">
         <section class="needs" id="attention-center" aria-labelledby="needs-title" hidden>
-          <h2 class="needs-title" id="needs-title">Needs you <span class="needs-count" id="badge-attention-count">0</span></h2>
+          <p class="section-eyebrow">Needs you</p>
+          <h2 class="needs-title" id="needs-title"><span id="needs-title-label">Items to review</span><span class="needs-count sr-only" id="badge-attention-count">0</span></h2>
           <p class="report-health" data-reports="snapshot|guard decisions" role="status" hidden></p>
           <ol class="needs-list" id="attention-list"></ol>
         </section>

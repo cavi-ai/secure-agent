@@ -15,6 +15,7 @@
     try {
       openTab('home');
       await wait(()=>!!overview());
+      document.querySelector('[data-hook-disclosure="monitoring"]').open=true;
       probe.usedOnly=[...overview().querySelectorAll('[data-hook-runtime]')].map(r=>r.dataset.hookRuntime).sort().join(',')==='claude,codex';
       probe.neutral=document.querySelector('#coverage-center').dataset.gap==='false' && document.querySelector('#coverage-title').textContent==='Monitoring';
       probe.receipt=overview().textContent.includes('3 accepted deliveries') && overview().textContent.includes('across all sessions');

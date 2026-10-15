@@ -627,12 +627,13 @@ function sessionDailyHTML(sessions, coverage) {
   const rows = live.slice(0, 6).map(s => {
     const observed = ((coverage && coverage.sessions) || []).find(c => c.session_id === s.id);
     return `<button type="button" class="session-daily-card" data-action="session-current" data-session="${escapeHTML(s.id)}">
-      <span>${harnessChipHTML(s.harness)}<strong>${escapeHTML(sessionTitle(s))}</strong></span>
-      <span>${escapeHTML(s.status)} · ${escapeHTML(sessionShort(s.id))}</span>
-      <span>Guard: ${observed ? escapeHTML(coveragePathLabel(observed.guard)) : 'session coverage unavailable'}</span>
+      <span class="session-daily-identity">${harnessChipHTML(s.harness)}<span><strong>${escapeHTML(harnessMeta(s.harness).label)}</strong><small>${escapeHTML(s.status)} · ${escapeHTML(sessionShort(s.id))}</small></span></span>
+      <span class="session-daily-cell"><strong>${escapeHTML(s.repo || sessionTitle(s))}</strong><small>${escapeHTML(s.branch || 'Branch not recorded')}</small></span>
+      <span class="session-daily-cell">${observed ? escapeHTML(coveragePathLabel(observed.guard)) : 'Session coverage unavailable'}<small>Guard activity</small></span>
+      <svg class="session-daily-chevron" aria-hidden="true"><use href="#i-arrow"/></svg>
     </button>`;
   }).join('');
-  return `<div class="session-daily-grid">${rows}</div>${live.length > 6 ? `<p>${live.length - 6} more live sessions. <button type="button" class="link-btn" data-action="goto-tab" data-tab="sessions">View all sessions</button></p>` : ''}`;
+  return `<div class="session-daily-grid"><div class="session-daily-labels" aria-hidden="true"><span>Agent</span><span>Workspace</span><span>Guard activity</span><span></span></div>${rows}</div>${live.length > 6 ? `<p>${live.length - 6} more live sessions. <button type="button" class="link-btn" data-action="goto-tab" data-tab="sessions">View all sessions</button></p>` : ''}`;
 }
 
 function renderSessionDaily() {

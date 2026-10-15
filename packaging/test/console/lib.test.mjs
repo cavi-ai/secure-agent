@@ -1462,12 +1462,14 @@ test('attentionCount is posture.needs_you', () => {
   assert.equal(ctx.attentionCount(null), 0);
 });
 
-test('the tab bar is sticky and holds the posture pill and the scope bar', () => {
-  const bar = indexHTML.split('id="tabs-bar"', 2)[1].split('<main>', 1)[0];
+test('persistent sidebar navigation leaves scoped evidence in the reading area', () => {
+  const bar = indexHTML.split('id="tabs-bar"', 2)[1].split('</aside>', 1)[0];
   assert.ok(bar.indexOf('<nav class="tabs" role="tablist"') >= 0);
   assert.ok(bar.indexOf('id="tabs-posture" data-action="goto-top"') > bar.indexOf('</nav>'));
-  assert.ok(bar.indexOf('id="scope-bar"') > bar.indexOf('id="tabs-posture"'));
-  assert.match(styleCSS, /\.tabs-bar \{\s*position: sticky; top: 0; z-index: 50;[^}]*background: var\(--bg-0\);/);
+  assert.ok(!bar.includes('id="scope-bar"'));
+  assert.ok(indexHTML.indexOf('id="scope-bar"') > indexHTML.indexOf('</aside>'));
+  assert.match(styleCSS, /\.sidebar \{\s*position: fixed;[^}]*overflow-y: auto;/);
+  assert.match(indexHTML, /aria-orientation="vertical"/);
 });
 
 // ---------- optimistic attention removal ----------
