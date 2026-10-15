@@ -97,8 +97,8 @@
       const rows = [...detail.querySelectorAll('table.sd-hooks tbody tr')];
       probe.table = rows.length === 4 && rows[0].textContent.includes('secret_guard.py');
       probe.failedRow = rows[0].classList.contains('sd-hook-failed') && !rows[1].classList.contains('sd-hook-failed');
-      probe.unrecorded = rows[2].textContent.includes('not recorded');
-      probe.cancelled = !rows[3].classList.contains('sd-hook-failed') && rows[3].textContent.includes('unknown') && detail.textContent.includes('Cancelled');
+      probe.unrecorded = [...rows].some(row => row.querySelector('[data-label="Handler"]')?.firstChild.textContent === 'not recorded' && row.querySelector('[data-label="Blocked"]')?.textContent === '1');
+      probe.cancelled = rows.some(row => !row.classList.contains('sd-hook-failed') && row.textContent.includes('cancelled.py') && row.querySelector('[data-label="Cancelled"]')?.textContent === '2' && row.querySelector('[data-label="Cumulative runtime"]')?.textContent === 'unknown');
       probe.actionable = detail.textContent.includes('Repair the unavailable dependency') && detail.textContent.includes("action's outcome is unknown") && detail.textContent.includes('Handler: codex-handler:');
       const ingestion = detail.querySelector('[data-session-part="hook-ingestion"]');
       ingestion.open = true;

@@ -381,6 +381,15 @@ def run_hook_monitoring(page):
         for name in ('usedOnly','neutral','receipt','unknown','limits','reading','sessionLink','mixed','allSupported','gapStyle','unattributed','truncated','hostLink','setup','stale','retry','restart','malformed','fits'):
             page.check(f'hook monitoring ({label}): {name}', state.get(name) is True, str(state))
 
+def run_hook_history(page):
+    for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+        dom = page.dom('?hookhistory', window_size=size, served=True,
+                       fixture={'script': 'cases_hook_history.js'})
+        receipt = re.search(r'data-history-probe="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        for name in ('initial', 'errors', 'blocks', 'cancelled', 'runtime', 'chars', 'search', 'empty', 'refresh', 'stale', 'retry', 'clear', 'mobile', 'fits', 'selection'):
+            page.check(f'hook history ({label}): {name}', state.get(name) is True, str(state))
+
 def run_session_hooks(page):
     for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
         dom = page.dom('?sessionhooks', window_size=size, served=True,
@@ -539,6 +548,7 @@ CASES = (
     Case('context_handoff', run_context_handoff, ()),
     Case('session_results', run_session_results, ()),
     Case('hook_monitoring', run_hook_monitoring, ()),
+    Case('hook_history', run_hook_history, ()),
     Case('session_hooks', run_session_hooks, ()),
     Case('session_workbench', run_session_workbench, ()),
     Case('session_reading', run_session_reading, ()),

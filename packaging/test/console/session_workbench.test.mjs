@@ -739,6 +739,31 @@ test('workbench sizing reserves measured reading lines and rebinds chrome withou
 
 const hookRow = (over = {}) => ({ event: 'PreToolUse', script: 'secret_guard.py', runs: 3, errors: 3, blocks: 0, chars: 0, total_ms: 90, last_at: '2026-09-23T10:00:00.000000000Z', ...over });
 
+test('hook controls survive a failed refresh and reset before another session receives rows', async () => {
+  const c = controller();
+  const select = c.actions.selectSession('a');
+  c.answer(0, { rows: [], has_earlier: false, next_cursor: '' }); await select;
+  const view = c.actions.setSessionView('hooks');
+  c.answer(1, [hookRow()]); await view;
+  c.workbench.setHookHistory({query:'guard',outcome:'errors',sort:'chars'});
+  assert.equal(c.requests.length,2,'client-side controls must not trigger a read');
+  const retry=c.workbench.refresh('hooks');
+  c.requests[2].resolve({ok:false,status:503}); await retry;
+  assert.equal(c.workbench.sessionHookHistory.query,'guard');
+  assert.equal(c.workbench.sessionHooks[0].script,'secret_guard.py');
+  assert.equal(c.workbench.sessionHooksState.error,'unavailable');
+  const late=c.workbench.refresh('hooks');
+  const other=c.actions.selectSession('b');
+  assert.equal(c.workbench.sessionHookHistory.query,'');
+  assert.equal(c.workbench.sessionHookHistory.outcome,'all');
+  assert.equal(c.workbench.sessionHookHistory.sort,'runs');
+  assert.equal(c.workbench.sessionHooks,null);
+  c.requests[3].resolve({ok:true,json:async()=>[hookRow({script:'late.py'})]}); await late;
+  c.requests.find(r=>r.url==='/sessions/b/hooks').resolve({ok:true,json:async()=>[]});
+  await other;
+  assert.equal(c.workbench.sessionHooks.length,0);
+});
+
 test('Hooks view loads the session hook totals and renders failures, blocks and unrecorded scripts', async () => {
   const c = controller();
   const select = c.actions.selectSession('a');
@@ -752,8 +777,8 @@ test('Hooks view loads the session hook totals and renders failures, blocks and 
   const html = c.context.sessionDetailHTML({ id: 'a', harness: 'claude', status: 'active' }, [], [],
     { sessionView: 'hooks', sessionHooks: c.workbench.sessionHooks, sessionHooksState: c.workbench.sessionHooksState });
   assert.match(html, /data-view="hooks" aria-pressed="true"/);
-  assert.match(html, /<tr class="sd-hook-failed">[\s\S]*secret_guard\.py[\s\S]*<td>3<\/td><td>3<\/td>/);
-  assert.match(html, /not recorded[\s\S]*<td>1<\/td><td>0<\/td><td>1<\/td>[\s\S]*1\.2k/);
+  assert.match(html, /<tr class="sd-hook-failed"[^>]*>[\s\S]*secret_guard\.py[\s\S]*data-label="Runs">3<\/td><td[^>]*data-label="Errors">3<\/td>/);
+  assert.match(html, /not recorded[\s\S]*data-label="Runs">1<\/td><td[^>]*data-label="Errors">0<\/td><td[^>]*data-label="Blocked">1<\/td>[\s\S]*1\.2k/);
 });
 
 test('Hooks rendering distinguishes loading, unavailable, stale and empty', () => {
