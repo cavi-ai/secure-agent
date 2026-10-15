@@ -25,6 +25,12 @@ final class SnapshotTests: XCTestCase {
         NSApp.finishLaunching()
         NSApp.activate(ignoringOtherApps: true)
         defer { NSApp.setActivationPolicy(priorPolicy) }
+        let previousIcon = NSApp.applicationIconImage
+        let artwork = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("packaging/AppIcon.icns")
+        NSApp.applicationIconImage = try XCTUnwrap(NSImage(contentsOf: artwork))
+        defer { NSApp.applicationIconImage = previousIcon }
         for (name, basis, risk, control, residual, reason) in [
             ("unknown", "", "unknown", "unknown", "unknown", "Exposure and control outcome are unknown."),
             ("model-visible", "model-visible-read", "critical", "unknown", "model-exposure", "A sensitive file became model-visible."),

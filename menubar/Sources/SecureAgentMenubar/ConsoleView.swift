@@ -27,20 +27,22 @@ struct ConsoleView: View {
             header
             Divider()
             if scrollable {
-                ScrollView { sections.padding(14) }.frame(maxHeight: 420)
+                ScrollView { sections.padding(16) }.frame(maxHeight: 420)
             } else {
-                sections.padding(14)
+                sections.padding(16)
             }
             Divider()
             footer
         }
         .frame(width: 340)
+        .background(Color.appSurface)
+        .preferredColorScheme(.dark)
     }
 
     // MARK: sections
 
     private var sections: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 20) {
             if let err = state.lastError { banner(err, icon: "exclamationmark.triangle.fill", tint: .warn) }
             if let notice = state.advisorNotice { advisorNoticeBanner(notice) }
             if let abandoned = state.abandonedCollectors, !abandoned.isEmpty {
@@ -222,7 +224,7 @@ struct ConsoleView: View {
                     default: state.openDashboard(tab: "home")
                     }
                 }
-                .buttonStyle(.borderedProminent).tint(Color.brand).controlSize(.small)
+                .buttonStyle(.borderedProminent).tint(Color.brandAction).controlSize(.small)
             }
         }
         .padding(12)
@@ -257,7 +259,7 @@ struct ConsoleView: View {
                         .lineLimit(2).multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .buttonStyle(.borderedProminent).tint(Color.brand).controlSize(.small)
+                .buttonStyle(.borderedProminent).tint(Color.brandAction).controlSize(.small)
                 .disabled(Self.actionIsDisabled(action, phase: run?.phase))
                 .help(Self.actionHelp(action))
             }
@@ -567,15 +569,9 @@ struct ConsoleView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "shield.lefthalf.filled")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 30, height: 30)
-                .background(LinearGradient(colors: [.brand, Color(.sRGB, red: 0.62, green: 0.36, blue: 0.9, opacity: 1)],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+            AppBrandMark(size: 38)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Secure Agent").font(.system(size: 13, weight: .bold))
+                Text("Secure Agent").font(.system(size: 15, weight: .semibold))
                 HStack(spacing: 5) {
                     Circle().fill(state.connected ? Color.ok : Color.bad).frame(width: 6, height: 6)
                     Text(state.statusText).font(.system(size: 11)).foregroundStyle(.secondary)
@@ -617,7 +613,7 @@ struct ConsoleView: View {
                     Button { supervisor.restart(); state.refresh() } label: {
                         Text("Restart").font(.system(size: 11, weight: .semibold))
                     }
-                    .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
+                    .buttonStyle(.borderedProminent).tint(Color.brandAction).controlSize(.small)
                 }
                 .padding(10)
                 .background(Color.bad.opacity(0.10))
@@ -648,7 +644,7 @@ struct ConsoleView: View {
                         Label("Open console", systemImage: "square.grid.2x2").font(.system(size: 12, weight: .semibold))
                     }
                 }
-                .buttonStyle(.borderedProminent).tint(.brand).controlSize(.regular)
+                .buttonStyle(.borderedProminent).tint(Color.brandAction).controlSize(.regular)
                 .disabled(!state.connected || state.isEnablingConsole)
                 .help(consoleButtonHelp)
                 .confirmationDialog(
@@ -661,19 +657,23 @@ struct ConsoleView: View {
                 } message: {
                     Text("The console is served by the loopback inspection proxy (127.0.0.1) — it also inspects agent egress for secret leaks, in monitor mode (nothing is blocked). Turning it on restarts the background monitor for a second.")
                 }
+            }
+            HStack(spacing: 18) {
                 Spacer()
                 Button { SettingsWindowController.shared.show(state: state) } label: {
                     Image(systemName: "gearshape").font(.system(size: 13))
-                }.buttonStyle(.borderless).help("Settings")
+                }.buttonStyle(.borderless).help("Settings").accessibilityLabel("Settings")
                 Button { state.togglePause() } label: {
                     Image(systemName: state.isPaused ? "play.circle" : "pause.circle").font(.system(size: 14))
                 }.buttonStyle(.borderless).help(state.isPaused ? "Resume alerts" : "Pause alerts")
+                    .accessibilityLabel(state.isPaused ? "Resume alerts" : "Pause alerts")
                 Button { state.refresh() } label: {
                     Image(systemName: "arrow.clockwise").font(.system(size: 13))
                 }
                 .buttonStyle(.borderless)
                 .disabled(state.isPaused)
                 .help(state.isPaused ? "Paused — resume to refresh" : "Refresh")
+                .accessibilityLabel("Refresh")
                 Button { NSApp.terminate(nil) } label: {
                     Image(systemName: "power").font(.system(size: 13))
                 }

@@ -18,6 +18,7 @@ public final class OnboardingWindowController: NSObject, NSWindowDelegate {
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "Secure Agent Setup"
+        window.appearance = NSAppearance(named: .darkAqua)
         window.styleMask = [.titled, .closable, .resizable]
         window.setContentSize(NSSize(width: 560, height: 650))
         window.contentMinSize = NSSize(width: 520, height: 580)

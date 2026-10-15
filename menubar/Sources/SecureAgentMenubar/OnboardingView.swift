@@ -30,7 +30,10 @@ struct OnboardingView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Set up one agent path").font(.title2).bold()
+                HStack(spacing: 12) {
+                    AppBrandMark(size: 44)
+                    Text("Set up one agent path").font(.title2.weight(.semibold))
+                }
                 HStack(spacing: 18) {
                     step("Choose", active: stage == .choose)
                     step("Enable", active: stage == .enable)
@@ -58,6 +61,9 @@ struct OnboardingView: View {
             footer.padding(.horizontal, 24).padding(.vertical, 14)
         }
         .frame(minWidth: 520, minHeight: 580)
+        .background(Color.appSurface)
+        .tint(Color.brand)
+        .preferredColorScheme(.dark)
         .task {
             guard refreshAutomatically else { return }
             await setup.refreshState()
