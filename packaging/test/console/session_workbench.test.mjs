@@ -31,6 +31,7 @@ function controller(persisted = '', manualOverview = false) {
   vm.createContext(context);
   vm.runInContext(readFileSync(path.join(web, 'lib.js'), 'utf8'), context);
   vm.runInContext(readFileSync(path.join(web, 'session-workbench.js'), 'utf8'), context);
+  vm.runInContext(readFileSync(path.join(web, 'decision-permissions.js'), 'utf8'), context);
   const workbench = context.createSessionWorkbench({
     apiFetch: context.apiFetch, renderNow: context.renderNow,
     onSelect: id => context.history.replaceState(null, '', '#sessions?session=' + id),
@@ -368,6 +369,58 @@ const outcomes = (session_id, id = 'saved') => ({ session_id, history: {
   reviews: [], incidents: [], interventions: [{ id, requested_at: '2026-10-09T10:00:00Z', status: 'failed', verification: 'unknown' }],
   evidence: Object.fromEntries(['reviews', 'incidents', 'interventions'].map(k => [k, { available: true, at_limit: false, limit: 100 }])),
 } });
+
+const permissionOutcomes = id => {
+  const data = outcomes(id);
+  data.history.reviews = [{ id: 'review', revision: 1, decision: { action: 'expect', revision: 1, scope_ids: ['scope'] } }];
+  return data;
+};
+
+test('Results reads linked permission status independently and rejects late reads after selection or invalidation', async () => {
+  const c = controller();
+  const first = c.actions.selectSession('a'); c.answer(0, { rows: [] }); await first;
+  const open = c.actions.setSessionView('results'); c.answer(1, permissionOutcomes('a')); await settle();
+  assert.equal(c.requests[2].url, '/decision-scopes');
+  assert.equal(c.state.results.session_id, 'a', 'results remain readable while permission status is loading');
+  assert.equal(c.state.resultState.loading, false);
+  assert.equal(c.state.resultState.permissions.loading, true);
+  c.requests[2].resolve({ ok: false, status: 503 }); await open;
+  assert.equal(c.state.resultState.error, '', 'permission failure must not discard results');
+  assert.equal(c.state.resultState.permissions.error, 'unavailable');
+  const retry = c.state.resultRefresh('a'); c.answer(3, permissionOutcomes('a')); await settle();
+  c.answer(4, []); await retry;
+  assert.equal(c.state.resultState.permissions.error, '');
+  assert.ok(c.state.resultState.permissions.readAt);
+  const stale = c.state.resultRefresh('a'); c.answer(5, permissionOutcomes('a')); await settle();
+  const next = c.actions.selectSession('b'); c.answer(7, outcomes('b')); await next;
+  c.answer(6, []); await stale;
+  assert.equal(c.state.results.session_id, 'b');
+  assert.equal(c.state.resultState.permissions, undefined);
+  const invalid = c.state.resultRefresh('b'); c.answer(8, permissionOutcomes('b')); await settle();
+  c.workbench.invalidate(); c.answer(9, []); await invalid;
+  assert.equal(c.state.resultState.error, 'unavailable');
+  assert.equal(c.state.resultState.permissions, undefined);
+});
+
+test('Results rejects malformed permission records without treating them as expired or revoked', async () => {
+  const c = controller();
+  const first = c.actions.selectSession('a'); c.answer(0, { rows: [] }); await first;
+  const open = c.actions.setSessionView('results'); c.answer(1, permissionOutcomes('a')); await settle();
+  c.answer(2, [{ id: 'scope' }]); await open;
+  assert.equal(c.state.resultState.error, '');
+  assert.equal(c.state.resultState.permissions.error, 'unavailable');
+  assert.equal(c.state.resultState.permissions.records, null);
+});
+
+test('a slow permission read cannot replace a newer Results refresh', async () => {
+  const c = controller();
+  const first = c.actions.selectSession('a'); c.answer(0, { rows: [] }); await first;
+  const old = c.actions.setSessionView('results'); c.answer(1, permissionOutcomes('a')); await settle();
+  const newer = c.state.resultRefresh('a'); c.answer(3, outcomes('a', 'new-result')); await newer;
+  c.answer(2, []); await old;
+  assert.equal(c.state.results.history.interventions[0].id, 'new-result');
+  assert.equal(c.state.resultState.permissions, undefined);
+});
 
 test('Results stays scoped through A to B to A and rejects late obsolete receipts', async () => {
   const c = controller();

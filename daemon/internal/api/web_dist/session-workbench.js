@@ -776,6 +776,66 @@ function validSessionOutcomes(data, id) {
     h.incidents.every(inc => !inc.remediation || (Array.isArray(inc.remediation.steps) && inc.remediation.steps.every(step => record(step) && step.item && typeof step.item === 'object')));
 }
 
+// Only IDs saved with this session's decisions can contribute permission rows.
+// A receipt alone never establishes current applicability.
+function sessionOutcomePermissionLinks(data) {
+  const validIDs = ids => Array.isArray(ids) && ids.length > 0 && ids.length <= 128 && ids.every(id => typeof id === 'string' && !!id);
+  const links = [];
+  for (const r of data.history.reviews) {
+    if (r.decision && Number.isSafeInteger(r.decision.revision) && r.decision.revision > 0 && validIDs(r.decision.scope_ids)) {
+      links.push({ id: r.id, kind: 'review', ids: [...new Set(r.decision.scope_ids)], title: r.context?.rule || 'Review decision' });
+    }
+  }
+  for (const g of data.history.guards || []) {
+    if (g.session_id === data.session_id && g.verdict === 'allow' && ['session', 'exact'].includes(g.scope) && validIDs(g.scope_ids)) {
+      links.push({ id: g.id, kind: 'guard', ids: [...new Set(g.scope_ids)], title: g.rule_id });
+    }
+  }
+  return links;
+}
+
+function sessionFollowUpHTML(data, state = {}) {
+  if (!data) return '';
+  const h = data.history, stale = !!state.error || !!state.loading;
+  // Read-only drill-downs re-read their own evidence. Keep them stable during
+  // refresh so keyboard focus survives; suppress them after a failed read.
+  const current = key => !state.error && h.evidence[key]?.available === true;
+  const evidenceRows = h.reviews.filter(r => r.decision && Number.isInteger(r.revision) && r.revision > r.decision.revision).map(r => {
+    const link = current('reviews') && r.evidence_available && r.evidence_flag_available && r.evidence_flag_id
+      ? `<button type="button" class="link-btn" data-action="open-flag" data-id="${escapeHTML(r.evidence_flag_id)}">Review newer evidence</button>` : `<p>${stale ? 'Refresh results before reviewing newer evidence.' : 'Source evidence unavailable. Refresh results before reviewing.'}</p>`;
+    return `<li data-row-id="follow-up:review:${escapeHTML(r.id)}"><strong>${escapeHTML(r.context?.rule || 'Finding review')}</strong><p>Decision for revision ${Number(r.decision.revision)} · now revision ${Number(r.revision)}. The saved decision does not cover this evidence.</p>${link}</li>`;
+  });
+  const actionRows = h.interventions.filter(r => r.status !== 'cancelled' && !(r.status === 'applied' && (r.verification === 'observed' || (r.verification === 'verified' && r.verified_by === 'captured-family-absent')))).map(r =>
+    `<li data-row-id="follow-up:control:${escapeHTML(r.id)}" data-follow-up-id="${escapeHTML(r.id)}"><strong>Check process result</strong>${resourceOutcomeHTML(r)}<p>Inspect the recorded result before deciding whether another action is needed.</p></li>`);
+  for (const inc of h.incidents) {
+    for (const step of inc.remediation?.steps || []) {
+      if (step.status !== 'reported') continue;
+      actionRows.push(`<li data-row-id="follow-up:incident:${escapeHTML(inc.id)}:${escapeHTML(step.id)}"><strong>${escapeHTML(step.item.name)} · ${escapeHTML(step.item.action)}</strong><p>Action reported, not technically verified.${step.newer_evidence ? ' Newer evidence exists; this report does not cover it.' : ''}</p>${current('incidents') ? `<button type="button" class="link-btn" data-action="open-incident" data-id="${escapeHTML(inc.id)}">Review incident report</button>` : ''}</li>`);
+    }
+  }
+  const permissions = state.permissions;
+  const records = !stale && permissions?.records ? new Map(permissions.records.map(r => [r.id, r])) : null;
+  const permissionRows = sessionOutcomePermissionLinks(data).map(link => {
+    const rows = link.ids.map(id => {
+      const r = records?.get(id);
+      return r ? `<li><strong>${escapeHTML(decisionScopeApplicability(r).label)}</strong> · <code>${escapeHTML(r.resource_path)}</code>${r.expires_at ? `<p>Expires ${escapeHTML(r.expires_at)}</p>` : ''}${r.revoked_at ? `<p>Revoked ${escapeHTML(r.revoked_at)}</p>` : ''}</li>` : '<li>Current status unknown. The record is missing or unavailable; expiry or revocation cannot be established.</li>';
+    }).join('');
+    const action = !state.error ? `<button type="button" class="link-btn" data-action="${link.kind === 'guard' ? 'session-guard-permissions' : 'session-permissions'}" ${link.kind === 'guard' ? 'data-id' : 'data-review'}="${escapeHTML(link.id)}" data-session="${escapeHTML(data.session_id)}">Inspect permissions</button>` : '';
+    return `<li data-row-id="follow-up:permission:${link.kind}:${escapeHTML(link.id)}"><strong>${escapeHTML(link.title)}</strong><ul>${rows}</ul>${action}</li>`;
+  });
+  const group = (key, title, rows) => rows.length ? `<div data-row-id="follow-up:group:${key}"><details data-session-details data-follow-up-group="${key}"><summary>${title}<span>${rows.length}</span></summary><ul>${rows.join('')}</ul></details></div>` : '';
+  const partial = ['reviews', 'interventions', 'incidents', 'guards'].some(key => !h.evidence[key]?.available || h.evidence[key]?.at_limit);
+  const count = evidenceRows.length + actionRows.length + permissionRows.length;
+  return `<section class="sd-follow-up" data-session-part="follow-up" aria-label="Session follow-up">
+    <div class="sd-follow-up-head"><h4>Needs follow-up</h4><button type="button" class="link-btn" data-action="session-outcomes-retry"${state.loading ? ' disabled' : ''}>${state.loading ? 'Refreshing…' : 'Refresh results'}</button></div>
+    ${stale ? `<p role="status">${state.loading ? 'Refreshing follow-up' : 'Last known follow-up'}. Refresh must succeed before relying on these records.</p>` : data.observed_at ? `<p>Results read at ${escapeHTML(data.observed_at)}</p>` : ''}
+    ${partial ? '<p>Follow-up uses missing or bounded history. Other work may be absent.</p>' : ''}
+    ${!count ? '<p>No follow-up identified in the loaded records. This is not a safety verdict.</p>' : ''}
+    ${group('evidence', 'New evidence', evidenceRows)}${group('actions', 'Actions to check', actionRows)}${group('permissions', 'Permissions from decisions', permissionRows)}
+    ${permissionRows.length ? `<p>${permissions?.loading ? 'Loading permission status…' : records ? `Permissions read at ${escapeHTML(permissions.readAt)}. Applicability can change; inspect before relying on access.` : 'Permission status unavailable. Inspect permissions to retry the current scope and expiry.'}</p>` : ''}
+  </section>`;
+}
+
 function sessionOutcomesHTML(data, state) {
   state = state || {};
   const retry = '<button type="button" class="link-btn" data-action="session-outcomes-retry">Retry results</button>';
@@ -823,7 +883,7 @@ function sessionOutcomesHTML(data, state) {
     const time = Number.isNaN(date.getTime()) ? 'Time unavailable' : date.toLocaleString();
     return `<article class="sd-outcome" data-session-part="${escapeHTML(row.key)}" data-row-id="${escapeHTML(row.key)}"><h5>${escapeHTML(row.title)}</h5><time datetime="${escapeHTML(row.at || '')}">${escapeHTML(time)}</time>${row.html}</article>`;
   }).join('');
-  return head + `<div data-session-part="outcomes-limits">${limits}${Object.values(h.evidence).some(source => !source.available) ? retry : ''}${!rows.length && !limits ? '<p>No saved decisions or results in the retained history. This is not a safety verdict.</p>' : ''}</div>` + history;
+  return sessionFollowUpHTML(data, state) + head + `<div data-session-part="outcomes-limits">${limits}${Object.values(h.evidence).some(source => !source.available) ? retry : ''}${!rows.length && !limits ? '<p>No saved decisions or results in the retained history. This is not a safety verdict.</p>' : ''}</div>` + history;
 }
 
 function sessionDetailHTML(sess, events, trees, state = window.SA) {
@@ -917,7 +977,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     if (!id || id !== selectedSessionId || sessionOutcomesState.loading) return;
     if (!force && Date.now() - sessionOutcomesAt < 5000) return;
     sessionOutcomesAt = Date.now();
-    const generation = sessionOutcomesGeneration;
+    const generation = ++sessionOutcomesGeneration;
     sessionOutcomesState = { loading: true, error: sessionOutcomesState.error };
     renderNow(['sessions']);
     try {
@@ -929,8 +989,25 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       if (sessionOutcomes) for (const key of ['reviews', 'incidents', 'interventions', 'guards']) {
         if (data.history.evidence[key] && !data.history.evidence[key].available) data.history[key] = sessionOutcomes.history[key] || [];
       }
+      let permissions;
+      if (sessionOutcomePermissionLinks(data).length) {
+        sessionOutcomes = data;
+        sessionOutcomesState = { loading: false, error: '', permissions: { loading: true, records: null } };
+        renderNow(['sessions']);
+        try {
+          const response = await apiFetch('/decision-scopes');
+          if (!response.ok) throw new Error('Permissions unavailable');
+          const records = await response.json();
+          if (!validDecisionScopeRecords(records)) throw new Error('Invalid permissions');
+          const ids = new Set(sessionOutcomePermissionLinks(data).flatMap(link => link.ids));
+          permissions = { records: records.filter(r => ids.has(r.id)), readAt: new Date().toISOString(), error: '' };
+        } catch {
+          permissions = { records: null, error: 'unavailable' };
+        }
+        if (generation !== sessionOutcomesGeneration || id !== selectedSessionId) return;
+      }
       sessionOutcomes = data;
-      sessionOutcomesState = { loading: false, error: '' };
+      sessionOutcomesState = { loading: false, error: '', ...(permissions ? { permissions } : {}) };
     } catch {
       if (generation !== sessionOutcomesGeneration || id !== selectedSessionId) return;
       sessionOutcomesState = { loading: false, error: 'unavailable' };
@@ -1286,7 +1363,8 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     const loaded = sessionView === 'trace' ? !!sessionTimeline?.length : sessionView === 'results' ? !!sessionOutcomes : sessionView === 'hooks' ? !!sessionHooks : !!sessionMemoryPage?.rows.length;
     const prepended = state.first && rows.length && rows[0].dataset.rowId !== state.first && rows.some(row => row.dataset.rowId === state.first);
     if (!detail._sessionReadingVisible) return;
-    if (sessionView !== 'hooks' && ((!state.loaded && loaded) || (state.nearLatest && !prepended))) body.scrollTop = body.scrollHeight;
+    if (sessionView === 'results' && !state.loaded && loaded) body.scrollTop = 0;
+    else if (sessionView !== 'hooks' && sessionView !== 'results' && ((!state.loaded && loaded) || (state.nearLatest && !prepended))) body.scrollTop = body.scrollHeight;
     else {
       body.scrollTop = state.top || 0;
       const anchor = state.anchor && rows.find(row => row.dataset.rowId === state.anchor);

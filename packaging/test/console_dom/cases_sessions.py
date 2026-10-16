@@ -399,6 +399,15 @@ def run_session_coverage(page):
         for name in ('paths', 'guard', 'guideBack', 'traffic', 'trafficBack', 'forward', 'events', 'eventsBack', 'unattributed', 'stale', 'retry', 'unknown', 'unsupported', 'fits', 'selection'):
             page.check(f'session coverage ({label}): {name}', state.get(name) is True, str(state))
 
+def run_session_follow_up(page):
+    for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+        dom = page.dom('?followup', window_size=size, served=True,
+                       fixture={'script': 'cases_session_follow_up.js'})
+        receipt = re.search(r'data-follow-up-probe="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        for name in ('initial', 'groups', 'reading', 'back', 'scoped', 'permissions', 'revoked', 'independent', 'stale', 'retry', 'fits', 'selection'):
+            page.check(f'session follow-up ({label}): {name}', state.get(name) is True, str(state))
+
 def run_home_ux(page):
     for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
         dom = page.dom('?homeux', window_size=size, served=True,
@@ -595,6 +604,7 @@ CASES = (
     Case('hook_monitoring', run_hook_monitoring, ()),
     Case('hook_history', run_hook_history, ()),
     Case('session_coverage', run_session_coverage, ()),
+    Case('session_follow_up', run_session_follow_up, ()),
     Case('home_ux', run_home_ux, ()),
     Case('attention_summary', run_attention_summary, ()),
     Case('hook_diagnostics', run_hook_diagnostics, ()),
