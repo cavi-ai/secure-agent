@@ -443,7 +443,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderReportHealth(...args) { return consoleLifecycleControllerModule().renderReportHealth(...args); }
   function reportSucceeded(...args) { return consoleLifecycleControllerModule().reportSucceeded(...args); }
   function reportFailed(...args) { return consoleLifecycleControllerModule().reportFailed(...args); }
-  function endSession(...args) { return consoleLifecycleControllerModule().endSession(...args); }
+  function endSession(...args) { window.SA?.clearRecentWorkReturn?.(); return consoleLifecycleControllerModule().endSession(...args); }
   function clearProtectionContext(...args) { return consoleLifecycleControllerModule().clearProtectionContext(...args); }
   function focusProtectionContext(...args) { return consoleLifecycleControllerModule().focusProtectionContext(...args); }
   function viewEgressExpectation(...args) { return consoleLifecycleControllerModule().viewEgressExpectation(...args); }
@@ -1853,7 +1853,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Grouped primary tabs reopen their last sub-view.
   document.querySelectorAll('.tab-btn').forEach(b =>
-    b.addEventListener('click', () => switchTab(b.dataset.tab === 'sessions' ? 'sessions/' + activeSub : b.dataset.tab === 'protection' ? 'protection/' + activeProtection : b.dataset.tab === 'system' ? 'system/' + activeSystemSub : b.dataset.tab)));
+    b.addEventListener('click', () => {
+      if (b.dataset.tab === 'home' && window.SA?.recentWorkReturn) { window.returnToRecentWork(); return; }
+      window.SA?.clearRecentWorkReturn?.();
+      switchTab(b.dataset.tab === 'sessions' ? 'sessions/' + activeSub : b.dataset.tab === 'protection' ? 'protection/' + activeProtection : b.dataset.tab === 'system' ? 'system/' + activeSystemSub : b.dataset.tab);
+    }));
   document.querySelectorAll('.tab-btn').forEach(button => button.addEventListener('keydown', e => {
     const tabs = [...document.querySelectorAll('.tab-btn')];
     const current = tabs.indexOf(document.activeElement);
@@ -2962,6 +2966,82 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const familyByKey = key => ((telemetryData.resources && telemetryData.resources.sessions) || []).find(f => f.key === key);
 
+  // Home recent work keeps its search, scope, filters and reading position.
+  let recentWorkReturn = null;
+  let recentWorkSequence = 0;
+  const validRecentWork = st => !!st && !sessionEnded && st.auth === handoffGeneration;
+  const recentWorkMark = (st, part) => ({ saRecentWork: { id: st.id, part } });
+  function restoreRecentWorkHome(st) {
+    if (!validRecentWork(st)) return;
+    st.active = false;
+    detailDrawer.close();
+    globalSearch = st.search.trim().toLowerCase();
+    const input = document.getElementById('global-search');
+    if (input) input.value = st.search;
+    Object.assign(harnessFilter, st.filter, { harnesses: { ...st.filter.harnesses } });
+    syncHarnessFilterControls();
+    sessionWorkbench.filterChanged();
+    try { sessionStorage.setItem(HARNESS_FILTER_KEY, JSON.stringify(harnessFilter)); } catch { /* private mode */ }
+    timelineSession = st.scope.session; timelinePids = st.scope.pids; timelinePidLabel = st.scope.label;
+    syncHistoryViews(); paintScopeBar();
+    switchTab('home', {skipHash:true}); renderAll();
+    const opener = Array.from(document.querySelectorAll('#session-daily [data-action="recent-session-results"]')).find(el => el.dataset.session === st.session);
+    window.scrollTo({top:st.pageY,behavior:'instant'});
+    (opener || document.getElementById('session-daily-title'))?.focus({preventScroll:true});
+  }
+  async function showRecentWorkResults(st) {
+    if (!validRecentWork(st)) return;
+    if (!(telemetryData.sessions || []).some(s => s.id === st.session)) {
+      restoreRecentWorkHome(st);
+      history.replaceState(recentWorkMark(st,'home'),'',location.pathname+location.search+'#home');
+      showToast('This session is no longer in the loaded history.','info');
+      return;
+    }
+    st.active = true;
+    Object.assign(harnessFilter,{text:'',harnesses:{},liveOnly:false});
+    syncHarnessFilterControls();
+    await window.filterTimelineToSession(st.session);
+    if (!validRecentWork(st) || recentWorkReturn !== st || !st.active || activeTab !== 'sessions' || sessionWorkbench.selectedSessionId !== st.session) return;
+    await window.setSessionView('results');
+    if (!validRecentWork(st) || recentWorkReturn !== st || !st.active || activeTab !== 'sessions' || sessionWorkbench.selectedSessionId !== st.session) return;
+    history.replaceState(recentWorkMark(st,'results'),'',location.pathname+location.search+consoleContextHash({route:'sessions',session:st.session}));
+    renderNow(['sessions']);
+    document.querySelector('#session-detail [data-action="recent-work-home"]')?.focus({preventScroll:true});
+  }
+  window.openRecentSessionResults = function(id, el) {
+    if (sessionEnded || activeTab !== 'home' || !el?.closest('#session-daily') || !(telemetryData.sessions || []).some(s => s.id === id)) return;
+    window.SA.clearRecentWorkReturn();
+    const st = recentWorkReturn = {id:++recentWorkSequence,session:id,auth:handoffGeneration,active:true,
+      search:document.getElementById('global-search')?.value || '',pageY:window.scrollY || 0,
+      filter:{...harnessFilter,harnesses:{...harnessFilter.harnesses}},scope:{session:timelineSession,pids:timelinePids && [...timelinePids],label:timelinePidLabel}};
+    // This flow restores page position itself; scope-bar changes must not
+    // also move the document's scroll anchor.
+    document.documentElement.classList.add('recent-work-navigation');
+    history.replaceState(recentWorkMark(st,'home'),'',location.pathname+location.search+'#home');
+    history.pushState(recentWorkMark(st,'results'),'',location.pathname+location.search+consoleContextHash({route:'sessions',session:id}));
+    return showRecentWorkResults(st);
+  };
+  window.returnToRecentWork = function() {
+    const st = recentWorkReturn;
+    if (!validRecentWork(st)) return;
+    if (history.state?.saRecentWork?.id === st.id && history.state.saRecentWork.part === 'results' && !history.state.saSessionInvestigation) history.back();
+    else { restoreRecentWorkHome(st); history.replaceState(recentWorkMark(st,'home'),'',location.pathname+location.search+'#home'); }
+  };
+  window.SA.restoreRecentWorkHistory = marker => {
+    const st = recentWorkReturn;
+    if (!validRecentWork(st) || marker?.id !== st.id) return false;
+    if (marker.part === 'home') restoreRecentWorkHome(st);
+    else if (marker.part === 'results') showRecentWorkResults(st);
+    return true;
+  };
+  window.SA.clearRecentWorkReturn = id => {
+    if (recentWorkReturn && (id == null || recentWorkReturn.session !== id)) {
+      document.documentElement.classList.remove('recent-work-navigation');
+      recentWorkReturn = null;
+    }
+  };
+  Object.defineProperty(window.SA,'recentWorkReturn',{get:()=>validRecentWork(recentWorkReturn) && recentWorkReturn.active && recentWorkReturn.session === sessionWorkbench.selectedSessionId});
+
   // Session investigation return context. Navigation restores reading state;
   // it never replays a decision or process-control action.
   let sessionInvestigation = null;
@@ -3076,6 +3156,8 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('popstate', e => {
     const st = sessionInvestigation;
     const marker = e.state?.saSessionInvestigation;
+    if (!marker && window.SA.restoreRecentWorkHistory?.(e.state?.saRecentWork)) return;
+    if (!marker) window.SA.clearRecentWorkReturn?.();
     if (!validSessionReturn(st) || marker?.id !== st.id) {
       window.SA.clearSessionInvestigation(); paintScopeBar();
       if (!sessionEnded) {
@@ -3725,10 +3807,19 @@ document.addEventListener('DOMContentLoaded', () => {
         window.filterTimelineToSession(d.session);
         break;
       case 'session-current':
+        if (activeTab === 'home' && (telemetryData.sessions || []).find(s=>s.id===d.session)?.status === 'ended') { window.openRecentSessionResults(d.session,el); break; }
         window.filterTimelineToSession(d.session).then(() => {
           if (sessionWorkbench.selectedSessionId === d.session) window.showCurrentSessionStatus();
         });
         break;
+      case 'recent-session-results':
+        window.openRecentSessionResults(d.session,el); break;
+      case 'recent-work-home':
+        window.returnToRecentWork(); break;
+      case 'recent-work-all':
+        window.SA.clearRecentWorkReturn();
+        Object.assign(harnessFilter,{text:'',harnesses:{},liveOnly:false});
+        harnessFilterChanged(); switchTab('sessions'); sessionWorkbench.showList(); break;
       case 'hook-session-open':
         e.preventDefault();
         if (!(telemetryData.sessions || []).some(s=>s.id===d.session)) break;
@@ -4053,6 +4144,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'goto-tab':
         e.preventDefault();
+        window.SA.clearRecentWorkReturn?.();
         switchTab(d.tab, { group: d.group });
         break;
       case 'policy-refresh':

@@ -622,19 +622,26 @@ function sessionHooksHTML(rows, state, health, healthState, ingestion, sessionId
 // not substitute for a session's own record.
 function sessionDailyHTML(sessions, coverage, search) {
   if (!Array.isArray(sessions)) return '<p role="status">Session data unavailable.</p>';
-  const live = sessions.filter(s => (s.status === 'active' || s.status === 'idle') && sessionMatchesText(s, search));
-  if (!live.length && String(search || '').trim()) return '<p role="status">No live sessions match your search. <button type="button" class="link-btn" data-action="clear-global-search">Clear search</button></p>';
-  if (!live.length) return '<p>No live sessions recorded. Active processes may not yet have an attributed session.</p>';
-  const rows = live.slice(0, 6).map(s => {
-    const observed = ((coverage && coverage.sessions) || []).find(c => c.session_id === s.id);
-    return `<button type="button" class="session-daily-card" data-action="session-current" data-session="${escapeHTML(s.id)}">
+  const activity = s => {
+    for (const [at, label] of [[s.ended_at, 'Ended'], [s.last_seen_at, 'Last observed'], [s.started_at, 'Started']]) {
+      if (at && Number.isFinite(Date.parse(at))) return { at, label, ms: Date.parse(at) };
+    }
+    return { ms: 0 };
+  };
+  const recent = sessions.filter(s => ['active', 'idle', 'ended'].includes(s.status) && sessionMatchesText(s, search))
+    .sort((a, b) => activity(b).ms - activity(a).ms || a.id.localeCompare(b.id));
+  if (!recent.length && String(search || '').trim()) return '<p role="status">No sessions match your search. <button type="button" class="link-btn" data-action="clear-global-search">Clear search</button></p>';
+  if (!recent.length) return '<p>No sessions recorded in the loaded history.</p>';
+  const rows = recent.slice(0, 6).map(s => {
+    const seen = activity(s);
+    return `<div class="session-daily-row"><button type="button" class="session-daily-card" data-action="session-current" data-session="${escapeHTML(s.id)}">
       <span class="session-daily-identity">${harnessChipHTML(s.harness)}<span><strong>${escapeHTML(harnessMeta(s.harness).label)}</strong><small>${escapeHTML(s.status)} · ${escapeHTML(sessionShort(s.id))}</small></span></span>
       <span class="session-daily-cell"><strong>${escapeHTML(s.repo || sessionTitle(s))}</strong><small>${escapeHTML(s.branch || 'Branch not recorded')}</small></span>
-      <span class="session-daily-cell">${observed ? escapeHTML(coveragePathLabel(observed.guard)) : 'Session coverage unavailable'}<small>Guard activity</small></span>
+      <span class="session-daily-cell">${seen.at ? `<time datetime="${escapeHTML(seen.at)}">${escapeHTML(new Date(seen.at).toLocaleString())}</time><small>${seen.label}</small>` : '<small>Activity time unavailable</small>'}</span>
       <svg class="session-daily-chevron" aria-hidden="true"><use href="#i-arrow"/></svg>
-    </button>`;
+    </button><button type="button" class="btn btn-ghost btn-sm session-daily-results" data-action="recent-session-results" data-session="${escapeHTML(s.id)}" aria-label="Review results for ${escapeHTML(s.repo || sessionTitle(s))} · ${escapeHTML(s.id)}">Review results</button></div>`;
   }).join('');
-  return `<div class="session-daily-grid"><div class="session-daily-labels" aria-hidden="true"><span>Agent</span><span>Workspace</span><span>Guard activity</span><span></span></div>${rows}</div>${live.length > 6 ? `<p>${live.length - 6} more live sessions. <button type="button" class="link-btn" data-action="goto-tab" data-tab="sessions">View all sessions</button></p>` : ''}`;
+  return `<div class="session-daily-grid"><div class="session-daily-labels" aria-hidden="true"><span>Agent</span><span>Workspace</span><span>Activity time</span><span></span></div>${rows}</div>${recent.length > 6 ? `<p>Showing 6 of ${recent.length} loaded sessions. Use View all sessions for more history.</p>` : ''}`;
 }
 
 function renderSessionDaily() {
@@ -642,7 +649,12 @@ function renderSessionDaily() {
   if (!el) return;
   const SA = window.SA;
   const html = sessionDailyHTML(SA.t.sessions, SA.t.status && SA.t.status.coverage, window.globalSearchTerm?.());
-  if (el._saHTML !== html) { el.innerHTML = html; el._saHTML = html; }
+  if (el._saHTML !== html) {
+    const focused = el.contains(document.activeElement) ? document.activeElement : null;
+    const target = focused?.dataset;
+    el.innerHTML = html; el._saHTML = html;
+    if (target?.action && target.session) Array.from(el.querySelectorAll('[data-action]')).find(node => node.dataset.action === target.action && node.dataset.session === target.session)?.focus({preventScroll:true});
+  }
 }
 
 // Validate the fields consumed by the current-status view before replacing
@@ -911,6 +923,7 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
     </section>`;
   return `<div class="session-detail-chrome">
     <div class="session-detail-actions">
+      ${window.SA.recentWorkReturn ? '<button type="button" class="btn btn-sm btn-ghost" data-action="recent-work-home">Back to Home</button>' : ''}
       <button type="button" class="btn btn-sm btn-ghost sd-back" data-action="session-list">Back to sessions</button>
       <button type="button" class="btn btn-sm btn-ghost sd-export" data-action="copy-report" data-id="${escapeHTML(sess.id)}" title="Copy this session's report as markdown"><svg class="icon"><use href="#i-copy"/></svg>Copy report</button>
     </div>
@@ -1234,6 +1247,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     const changed = selectedSessionId !== id;
     if (changed) window.SA.closeSessionPermissions?.();
     if (changed) window.SA.clearSessionInvestigation?.();
+    if (changed) window.SA.clearRecentWorkReturn?.(id);
     selectedSessionId = id;
     sessionSelectionInitialized = true;
     sessionReveal = true;

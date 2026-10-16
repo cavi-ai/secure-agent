@@ -381,12 +381,19 @@ body {
 .session-daily-panel .panel-head { padding: 0 0 18px; border: 0; }
 .session-daily-panel .panel-head h2 { font-size: 23px; letter-spacing: -.025em; }
 .session-daily-panel .panel-body { padding: 0; }
-.session-daily-grid { display: grid; min-width: 0; }
+.session-daily-grid {
+  --recent-results-width: 124px;
+  display: grid; min-width: 0;
+}
+html.recent-work-navigation { overflow-anchor: none; }
+.session-daily-row { display: grid; grid-template-columns: minmax(0, 1fr) var(--recent-results-width); align-items: center; border-top: 1px solid var(--line); }
+.session-daily-row .session-daily-card { border-top: 0; }
+.session-daily-results { margin-inline: 8px; min-height: 44px; }
 .session-daily-labels, .session-daily-card {
   display: grid; grid-template-columns: minmax(140px, 1fr) minmax(120px, 1.2fr) minmax(180px, 1.4fr) 20px;
   align-items: center; gap: 18px; min-width: 0;
 }
-.session-daily-labels { padding: 10px 16px; color: var(--tx-3); font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+.session-daily-labels { padding: 10px 16px; margin-inline-end: var(--recent-results-width); color: var(--tx-3); font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
 .session-daily-card { padding: 20px 16px; text-align: left; border: 0; border-top: 1px solid var(--line); border-radius: 0; color: var(--tx-1); background: transparent; cursor: pointer; font: inherit; transition: background .16s var(--ease); }
 .session-daily-card:hover { background: var(--brand-bg); border-radius: var(--r-sm); }
 .session-daily-card:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; background: var(--brand-bg); }
@@ -2578,6 +2585,8 @@ button.rc-col:hover .rc-seg-freed { background: var(--brand-2); }
   .agent-page .sidebar-footer, .agent-page .page-heading { display: none; }
   .views-pop { position: fixed; top: 240px; left: 16px; right: 16px; width: auto; max-height: calc(100dvh - 260px); overflow-y: auto; }
   .session-daily-labels { display: none; }
+  .session-daily-row { grid-template-columns: minmax(0, 1fr); padding-bottom: 8px; }
+  .session-daily-results { justify-self: start; margin-left: 40px; }
   .session-daily-card { grid-template-columns: minmax(0, 1fr) 16px; gap: 10px; padding: 18px 8px; }
   .session-daily-identity { grid-column: 1; }
   .session-daily-cell { grid-column: 1; padding-left: 32px; }
