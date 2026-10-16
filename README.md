@@ -17,11 +17,13 @@ Secure Agent combines a native macOS menu bar app, a local web console, a Go dae
 Screenshots use synthetic demonstration data.
 
 <details>
-<summary>Session inspection, protection and menu bar</summary>
+<summary>Session inspection, protection, setup and menu bar</summary>
 
 <img src="assets/screenshots/sessions-dark.jpg" alt="Session inspection with current status, access requests and recorded coverage" width="1120">
 
 <img src="assets/screenshots/protection-dark.jpg" alt="Protection settings with per-rule monitoring and blocking controls" width="1120">
+
+<img src="assets/screenshots/setup-first-session.png" alt="Setup with a sample task, observed session paths and a link to session evidence" width="560">
 
 <img src="assets/screenshots/menubar-dark.png" alt="Menu bar popover with an observed finding, session and console actions" width="340">
 

@@ -33,6 +33,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         }
         setupPopover()
         SettingsWindowController.shared.appState = state
+        OnboardingWindowController.shared.appState = state
         launchTask = Task { [weak self] in
             guard let self else { return }
             guard await AppInstanceGuard.shared.claimOrExplain() else {

@@ -32,7 +32,7 @@ Saved Secure Agent preferences and monitoring data remain in their existing loca
 
 ## Check what is working
 
-Start a session in the selected harness, then recheck **Observed session coverage** in Setup. Guarding, recorded activity and payload inspection have separate results. An absent observation remains unknown; it does not mean that every action was protected or that nothing happened.
+In Setup’s **Your first observed session** section, copy the sample task into a selected-harness session, then choose **Refresh session observations**. Match its workspace and session ID and select **Open session evidence**. Guarding, recorded activity and payload inspection have separate results. An absent observation remains unknown; it does not mean that every action was protected or that nothing happened.
 
 Use **Run Doctor…** from the menu bar for diagnostics. If you install the CLI under Optional capabilities, these commands provide the same starting checks:
 
