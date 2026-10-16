@@ -21,6 +21,8 @@ Screenshots use synthetic demonstration data.
 
 <img src="assets/screenshots/sessions-dark.jpg" alt="Session inspection with current status, access requests and recorded coverage" width="1120">
 
+<img src="assets/screenshots/session-coverage-dark.jpg" alt="Session coverage with guard setup guidance, recorded events and Traffic review actions" width="1120">
+
 <img src="assets/screenshots/protection-dark.jpg" alt="Protection settings with per-rule monitoring and blocking controls" width="1120">
 
 <img src="assets/screenshots/setup-first-session.png" alt="Setup with a sample task, observed session paths and a link to session evidence" width="560">

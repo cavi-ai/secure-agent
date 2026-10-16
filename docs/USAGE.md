@@ -64,6 +64,10 @@ Session cards in the menu bar open that same session in the console. Finding and
 
 For installation checks and missing telemetry, use [Troubleshooting](GETTING_STARTED.md#troubleshooting). Guard and firewall enforcement limits are in [Protection](PROTECTION.md).
 
+**Act on session coverage.** Current session status keeps Guard, recorded activity, and payload inspection separate. Use **View recorded session events** for retained evidence, **Review guard setup** for the selected harness's guarding path, and **Review activity sources** when activity is missing. No observation alone establishes a broken setup. Unsupported paths explain available alternatives, and failed refreshes retain labeled last-known observations with a retry action.
+
+**Review Traffic settings** opens machine-wide Traffic with an explicit scope label. Those observations do not establish the selected session's payload coverage. **Back to session** and browser Back/Forward preserve the originating session view and reading context. Opening guidance or Traffic does not enable routing, change policy, or install hooks. Guard installation and hook-completion reporting remain separate integrations.
+
 ## Inspect session history
 
 Secure Agent parses agent-semantic trace events (tool calls, model calls, turns) from Claude Code, Codex, Cursor, Antigravity (agy), opencode, OpenClaw, and Hermes Agent records. The semantic trace contains metadata only (names, durations, models, tokens; never message or tool-call content). opencode stores its trace in SQLite and is read by a read-only, watermarked poller. See the [per-harness coverage table](ARCHITECTURE.md#collectors).
