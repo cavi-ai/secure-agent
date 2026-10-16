@@ -4,16 +4,21 @@ import SwiftUI
 @MainActor
 struct OnboardingView: View {
     @ObservedObject var setup: SetupManager
+    @ObservedObject var appState: AppState
+    var onOpenConsole: ((ConsoleDestination?) -> Void)?
     var onDone: () -> Void
     var refreshAutomatically = true
     @StateObject private var flow: FirstUseSetupFlow
     @State private var selectionInitialized = false
     @State private var optionsExpanded = false
     @State private var installing = false
+    @State private var sampleCopyStatus: String?
 
-    init(setup: SetupManager = .shared, flow: FirstUseSetupFlow? = nil,
-         refreshAutomatically: Bool = true, onDone: @escaping () -> Void) {
+    init(setup: SetupManager = .shared, appState: AppState, flow: FirstUseSetupFlow? = nil,
+         refreshAutomatically: Bool = true, onOpenConsole: ((ConsoleDestination?) -> Void)? = nil, onDone: @escaping () -> Void) {
         self.setup = setup
+        self.appState = appState
+        self.onOpenConsole = onOpenConsole
         self.onDone = onDone
         self.refreshAutomatically = refreshAutomatically
         _flow = StateObject(wrappedValue: flow ?? FirstUseSetupFlow())
@@ -189,34 +194,100 @@ struct OnboardingView: View {
     }
 
     private var sessionCoverage: some View {
-        GroupBox("Observed session coverage") {
-            VStack(alignment: .leading, spacing: 10) {
+        GroupBox("Your first observed session") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("In \(harnessTitle), open a project you recognize and try this task. Keep the session open while checking its observations.")
+                    .font(.callout).foregroundStyle(.secondary)
+                Text(FirstUseSetupState.sampleTask).font(.callout).textSelection(.enabled)
+                Button("Copy sample task") {
+                    NSPasteboard.general.clearContents()
+                    sampleCopyStatus = NSPasteboard.general.setString(FirstUseSetupState.sampleTask, forType: .string)
+                        ? "Sample task copied." : "Could not copy. Select the sample text to copy it manually."
+                }
+                if let sampleCopyStatus { Text(sampleCopyStatus).font(.caption).foregroundStyle(.secondary) }
+                Button("Refresh session observations") { Task { await setup.refreshState() } }
+                    .disabled(setup.hookSelfTestRunning)
                 let sessions = state.sessions.filter { $0.harness == selectedHarness }
-                if state.sessionsUnavailable {
-                    Text("Session coverage is incomplete or unavailable. Refresh before relying on these observations.")
+                if !state.daemonAvailable || state.sessionsUnavailable {
+                    Label("Current session observations are unavailable. Recheck the monitor, then refresh. Retained results do not establish current coverage.", systemImage: "exclamationmark.triangle")
                         .font(.callout).foregroundStyle(.orange)
-                }
-                if sessions.isEmpty {
-                    Text("No session coverage available for \(harnessTitle). Start a session, then recheck. A passed hook check does not establish session coverage.")
+                } else if sessions.isEmpty {
+                    Text("No session observed for \(harnessTitle) yet. Run the sample task, then refresh. If it is still missing, check the selected harness in Setup and its supported observation path.")
                         .font(.callout).foregroundStyle(.secondary)
+                    Button("Review agent setup") { flow.stage = supported ? .enable : .choose }
                 }
-                ForEach(Array(sessions.prefix(3).enumerated()), id: \.offset) { _, session in
+                if sessions.count > 1 {
+                    Text("Choose the workspace and session that match your task.").font(.callout.weight(.medium))
+                }
+                ForEach(Array(sessions.prefix(3).enumerated()), id: \.offset) { index, session in
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(session.workspace ?? "Workspace unknown").font(.callout.weight(.medium))
+                        Text(session.workspace ?? "Workspace unknown").font(.callout.weight(.medium)).textSelection(.enabled)
+                        if let id = session.sessionID, !id.isEmpty {
+                            Text("Session: \(id)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
                         coveragePath("Guard", session.guardPath)
-                        coveragePath("Trace", session.trace)
-                        coveragePath("Payload", session.payload)
+                        coveragePath("Recorded activity", session.trace)
+                        coveragePath("Payload inspection", session.payload)
+                        if state.sessionDestination(for: session, harness: selectedHarness) != nil {
+                            Button("Open session evidence") { openSession(session) }
+                                .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+                                .accessibilityLabel("Open session evidence for \(session.workspace ?? "unknown workspace"), session \(session.sessionID ?? "")")
+                                .disabled(appState.dashboardUnavailableReason != nil)
+                        } else if session.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                            Text("Session identity is unresolved. Refresh after more activity; a process ID alone cannot select its evidence.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
+                    if sessions.count > 1 { Divider() }
                 }
-                if sessions.count > 3 { Text("Additional sessions are available in the console.").font(.caption) }
+                if state.sessionsTruncated || sessions.count > 3 {
+                    Text("This setup list shows only part of the observed sessions. Browse Sessions to find another workspace.").font(.caption).foregroundStyle(.secondary)
+                    Button("Browse all sessions") { openConsole(nil) }
+                        .keyboardShortcut("0", modifiers: .command)
+                        .disabled(appState.dashboardUnavailableReason != nil)
+                }
+                if let reason = appState.dashboardUnavailableReason {
+                    Text("Console unavailable: \(reason). Open Settings to review console and traffic options; no routing is enabled by this step.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Open Settings…") { SettingsWindowController.shared.show() }
+                }
+                if let error = appState.lastError {
+                    Text(error).font(.callout).foregroundStyle(.orange)
+                }
+                Text("A passed hook check confirms its manual round trip. These session observations cover only recorded activity; they do not establish complete protection.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading).padding(4)
         }
     }
 
+    private func openSession(_ session: SessionCoverageModel) {
+        guard let destination = state.sessionDestination(for: session, harness: selectedHarness) else { return }
+        openConsole(destination)
+    }
+
+    private func openConsole(_ destination: ConsoleDestination?) {
+        guard appState.dashboardUnavailableReason == nil else { return }
+        if let onOpenConsole { onOpenConsole(destination) }
+        else { appState.openDashboard(tab: "sessions", destination: destination) }
+    }
+
     private func coveragePath(_ title: String, _ path: CoveragePathModel) -> some View {
-        Text("\(title): \(path.state) — \(path.detail)").font(.caption).foregroundStyle(.secondary)
+        let labels = ["observed": "activity observed", "not-observed": "no activity observed yet",
+                      "unsupported": "not supported", "unattributed": "not attributed to this session",
+                      "stale": "last-known observation", "off": "off"]
+        return VStack(alignment: .leading, spacing: 2) {
+            Text("\(title): \(labels[path.state] ?? "unknown")").font(.caption.weight(.medium))
+            Text(path.detail).font(.caption).foregroundStyle(.secondary)
+            if let seen = path.lastSeen { Text("Last observed: \(seen)").font(.caption).foregroundStyle(.secondary) }
+            if path.state == "not-observed" && path.supported {
+                Text(title == "Payload inspection" ? "Traffic routing is a separate opt-in. Review Traffic in Settings if needed." : "Run the sample task, then refresh. Check this harness's setup if activity is still missing.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if path.state == "stale" || !["observed", "not-observed", "unsupported", "unattributed", "off"].contains(path.state) {
+                Text("Refresh observations before relying on this result.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func capability(_ title: String, detail: String) -> some View {
@@ -246,7 +317,7 @@ struct OnboardingView: View {
         switch stage {
         case .choose: return supported ? "Continue" : "View Observation Result"
         case .enable: return installing ? "Installing…" : installed ? "Run Hook Check" : "Install \(harnessTitle) Hooks"
-        case .result: return "Done"
+        case .result: return "Close setup"
         }
     }
 

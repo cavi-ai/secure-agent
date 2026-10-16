@@ -11,6 +11,16 @@ struct FirstUseSetupState {
     var probes: [CoverageProbeReceiptModel] = []
     var sessions: [SessionCoverageModel] = []
     var sessionsUnavailable = false
+    var sessionsTruncated = false
+
+    static let sampleTask = "List this project's files and summarize its README. Do not change files, read secrets, or contact external services."
+
+    func sessionDestination(for session: SessionCoverageModel, harness: String) -> ConsoleDestination? {
+        guard daemonAvailable, !sessionsUnavailable, session.harness == harness,
+              let id = session.sessionID, !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              sessions.contains(where: { $0.sessionID == id && $0.harness == harness }) else { return nil }
+        return .session(id)
+    }
 
     static func supportsHook(_ harness: String) -> Bool { harness == "claude" || harness == "cursor" }
 

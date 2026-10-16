@@ -217,7 +217,8 @@ public final class SetupManager: ObservableObject {
             configuredHarnesses: Set(["claude", "cursor"].filter { fm.fileExists(atPath: "\(home)/.\($0)") }),
             activeHarnesses: Set((status?.agents ?? []).filter { $0.kind != "infra" }.map(\.name)),
             probes: status?.coverage?.probes ?? [], sessions: status?.coverage?.sessions ?? [],
-            sessionsUnavailable: status?.coverage == nil || status?.coverage?.sessionsStale == true || status?.coverage?.sessionsTruncated == true)
+            sessionsUnavailable: status?.coverage == nil || status?.coverage?.sessionsStale == true,
+            sessionsTruncated: status?.coverage?.sessionsTruncated == true)
         refreshESState()
         claudeRoutingApplied = ClaudeRouting.isApplied(at: Self.claudeSettingsPath)
         // ALL harnesses must carry the hook — `contains` used to announce

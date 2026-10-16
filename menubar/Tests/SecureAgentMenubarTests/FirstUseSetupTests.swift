@@ -99,6 +99,32 @@ final class FirstUseSetupTests: XCTestCase {
         }
     }
 
+    func testSessionHandoffRequiresCurrentSelectedHarnessAndDurableIdentity() throws {
+        func row(_ id: String?, _ harness: String = "claude") -> SessionCoverageModel {
+            let path = CoveragePathModel(supported: true, state: "not-observed", lastSeen: nil, detail: "No activity observed yet")
+            return SessionCoverageModel(sessionID: id, harness: harness, workspace: "/workspace/api", rootPID: 123,
+                identityBasis: "process-tree", guardPath: path, trace: path, payload: path)
+        }
+        let first = row("first"), second = row("second"), foreign = row("foreign", "cursor"), unresolved = row(nil)
+        var state = FirstUseSetupState(daemonAvailable: true, sessions: [first, second, foreign, unresolved])
+        XCTAssertEqual(state.sessionDestination(for: first, harness: "claude"), .session("first"))
+        XCTAssertEqual(state.sessionDestination(for: second, harness: "claude"), .session("second"))
+        XCTAssertNil(state.sessionDestination(for: foreign, harness: "claude"))
+        XCTAssertNil(state.sessionDestination(for: unresolved, harness: "claude"))
+        XCTAssertNil(state.sessionDestination(for: row(" "), harness: "claude"))
+        XCTAssertNil(state.sessionDestination(for: row("missing"), harness: "claude"))
+        state.sessionsTruncated = true
+        XCTAssertEqual(state.sessionDestination(for: first, harness: "claude"), .session("first"), "A partial list does not erase this observed session's identity")
+        state.sessionsUnavailable = true
+        XCTAssertNil(state.sessionDestination(for: first, harness: "claude"))
+        state.sessionsUnavailable = false
+        state.daemonAvailable = false
+        XCTAssertNil(state.sessionDestination(for: first, harness: "claude"))
+        state.daemonAvailable = true
+        state.sessions = [second]
+        XCTAssertNil(state.sessionDestination(for: first, harness: "claude"), "A removed session cannot be selected from a stale setup row")
+    }
+
     @MainActor func testFirstUseDefersOptionalTelemetryUntilExplicitEnable() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "FirstUseSetupTests.\(UUID().uuidString)"))
         let service = FakeESService()

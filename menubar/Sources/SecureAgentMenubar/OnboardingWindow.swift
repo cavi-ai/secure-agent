@@ -7,14 +7,16 @@ public final class OnboardingWindowController: NSObject, NSWindowDelegate {
     public static let shared = OnboardingWindowController()
 
     private var window: NSWindow?
+    public var appState: AppState?
 
     public func show() {
+        guard let appState else { return }
         if let window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let view = OnboardingView(onDone: { [weak self] in self?.close() })
+        let view = OnboardingView(appState: appState, onDone: { [weak self] in self?.close() })
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "Secure Agent Setup"
