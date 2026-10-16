@@ -70,6 +70,8 @@ For installation checks and missing telemetry, use [Troubleshooting](GETTING_STA
 
 ## Inspect session history
 
+**Revisit recent work from Home.** Recent work shows up to six active, idle, or ended sessions ordered by their recorded activity time. Each row names the workspace and harness and offers **Review results** for that session. **Back to Home** and browser Back restore your search, session filters, focus, and reading position. **View all sessions** includes ended sessions. The list uses loaded history; an ended session does not establish that its task succeeded.
+
 Secure Agent parses agent-semantic trace events (tool calls, model calls, turns) from Claude Code, Codex, Cursor, Antigravity (agy), opencode, OpenClaw, and Hermes Agent records. The semantic trace contains metadata only (names, durations, models, tokens; never message or tool-call content). opencode stores its trace in SQLite and is read by a read-only, watermarked poller. See the [per-harness coverage table](ARCHITECTURE.md#collectors).
 
 - `/costs` and `secure-agent cost`: model-call spend by repo, branch, harness, session, model, provider, or local day at the `tz` / `--tz` offset, across every traced harness.
