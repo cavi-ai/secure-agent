@@ -1262,7 +1262,7 @@
       const tick = () => new Promise(resolve => setTimeout(resolve, 0));
       await window.filterTimelineToSession('sess-claude-1');
       await window.setSessionView('results');
-      const opener = document.querySelector('[data-action="session-permissions"]');
+      const opener = document.querySelector('.sd-outcome [data-action="session-permissions"]');
       opener.focus(); opener.click(); await tick();
       const body = document.getElementById('drawer-body');
       receipt.scoped = body.textContent.includes('example.test:443') && body.textContent.includes('Current status unknown')
@@ -1783,12 +1783,12 @@
       openTab('sessions');
       await window.selectSession('sess-claude-1');
       await window.setSessionView('results');
-      const summary = document.querySelector('#session-detail .resource-action-result summary');
+      const summary = document.querySelector('#session-detail .sd-outcome .resource-action-result summary');
       if (summary) { summary.parentElement.open = true; summary.focus(); }
       window.__resultsUpdate = true;
       window.SA.refreshSessionOverview(true);
       setTimeout(() => {
-        const current = document.querySelector('#session-detail .resource-action-result summary');
+        const current = document.querySelector('#session-detail .sd-outcome .resource-action-result summary');
         document.body.dataset.resultsFocus = String(!!current && current.parentElement.open && document.activeElement === current && current.textContent.includes('Resource samples observed'));
         const detail = document.querySelector('#session-detail');
         document.body.dataset.resultsFits = String(detail.scrollWidth <= detail.clientWidth && document.documentElement.scrollWidth <= innerWidth);

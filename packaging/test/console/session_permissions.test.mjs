@@ -262,6 +262,8 @@ test('revocation requires a current linked ID, explicit confirmation, exact rece
 
 test('confirmed revocation survives failed reread and keeps the original saved decision unchanged', async () => {
   const t = controller(); const open = t.c.window.openSessionPermissions('review-a', 'session-a'); t.answer(0, [scope()]); await open;
+  const refreshed = [];
+  t.c.sessionWorkbench.refresh = kind => refreshed.push(kind);
   const revoke = t.c.window.revokeSessionPermission('scope-a'); await settle();
   t.answer(1, { revoked: true, id: 'scope-a' }); await settle();
   t.answer(2, null, 503); await revoke;
@@ -269,4 +271,5 @@ test('confirmed revocation survives failed reread and keeps the original saved d
   assert.match(t.body.innerHTML, /Last known permission records/);
   assert.ok(!t.body.innerHTML.includes('data-action="session-permission-revoke"'));
   assert.deepEqual(Array.from(t.c.sessionOutcomes.history.reviews[0].decision.scope_ids), receipt.ids);
+  assert.deepEqual(refreshed, ['results'], 'confirmed revocation refreshes the selected session follow-up');
 });

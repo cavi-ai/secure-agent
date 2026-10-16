@@ -2951,6 +2951,7 @@ document.addEventListener('DOMContentLoaded', () => {
       st.busy = '';
       window.saAnnounce('Permission revocation saved. The original decision and remaining risk are retained.');
       await window.refreshSessionPermissions();
+      if (currentDecisionPermissions(st) && st.origin === 'session' && st.receipt.sessionID === sessionWorkbench.selectedSessionId) sessionWorkbench.refresh?.('results');
     } catch {
       if (!currentDecisionPermissions(st)) return;
       Object.assign(st, { busy: '', mutationError: true });

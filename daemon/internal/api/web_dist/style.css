@@ -1800,6 +1800,16 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .sd-outcome h5 { margin: 0; font-size: 13px; }
 .sd-outcome time { font: 11px/1.4 var(--mono); color: var(--tx-2); }
 .sd-outcome p { margin: 6px 0; font-size: 12px; }
+.sd-follow-up { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-sm); overflow-wrap: anywhere; }
+.sd-follow-up-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.sd-follow-up h4 { margin: 0; font-size: .9rem; }
+.sd-follow-up p { margin: 6px 0; font-size: .75rem; line-height: 1.5; color: var(--tx-2); }
+.sd-follow-up details { border-top: 1px solid var(--line); margin-top: 8px; }
+.sd-follow-up summary { min-height: 44px; padding: 12px 0; cursor: pointer; font-size: .8rem; }
+.sd-follow-up summary span { margin-inline-start: 8px; font: .75rem var(--mono); color: var(--tx-2); }
+.sd-follow-up ul { margin: 0; padding-inline-start: 20px; font-size: .8rem; }
+.sd-follow-up li { padding: 6px 0; }
+.sd-follow-up .link-btn { min-height: 44px; text-align: left; }
 .attention-overview { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
 .attention-overview .panel-head { padding: 0 0 12px; border: 0; }
 .attention-overview .panel-body { padding: 0 0 16px; }
