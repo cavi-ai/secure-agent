@@ -23,7 +23,7 @@
       const input = document.querySelector('#global-search');
       const search = async value => {input.value = value; input.dispatchEvent(new Event('input', {bubbles:true})); await idle();};
       await search('no-such-session');
-      probe.empty = !document.querySelector('#session-daily .session-daily-card') && document.querySelector('#session-daily').textContent.includes('No live sessions match');
+      probe.empty = !document.querySelector('#session-daily .session-daily-card') && document.querySelector('#session-daily').textContent.includes('No sessions match');
       document.querySelector('#session-daily [data-action="clear-global-search"]')?.click();
       await idle();
       probe.clear = input.value === '' && document.activeElement === input && !!document.querySelector('#session-daily .session-daily-card');

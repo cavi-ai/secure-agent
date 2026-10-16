@@ -45,13 +45,14 @@ test('overview escapes identifiers and labels at the DOM boundary', () => {
   assert.ok(html.includes('&lt;img'));
 });
 
-test('Home uses durable active sessions and links to their exact record', () => {
+test('Home recent work includes ended sessions and links to their exact results', () => {
   const html = ctx.sessionDailyHTML([{ id: 'a', harness: 'claude', repo: 'project', status: 'active' }, { id: 'b', harness: 'claude', repo: 'project', status: 'idle' }, { id: 'old', status: 'ended' }], null);
   assert.match(html, /data-action="session-current" data-session="a"/);
   assert.match(html, /data-action="session-current" data-session="b"/);
-  assert.ok(!html.includes('data-session="old"'));
+  assert.match(html, /data-action="recent-session-results" data-session="old"/);
+  assert.match(html, /Review results/);
   assert.match(ctx.sessionDailyHTML(null, null), /Session data unavailable/);
-  assert.match(ctx.sessionDailyHTML([], null), /No live sessions/);
+  assert.match(ctx.sessionDailyHTML([], null), /No sessions recorded/);
 });
 
 test('retained activity remains reachable when a session has no live resource family', () => {
@@ -69,7 +70,7 @@ test('Home search matches session identity and reports no matches', () => {
     assert.match(html, /data-session="session-a"/);
     assert.ok(!html.includes('data-session="session-b"'));
   }
-  assert.match(ctx.sessionDailyHTML(sessions, null, 'unmatched'), /No live sessions match/);
+  assert.match(ctx.sessionDailyHTML(sessions, null, 'unmatched'), /No sessions match/);
   assert.match(ctx.sessionDailyHTML(sessions, null, 'unmatched'), /data-action="clear-global-search"/);
   assert.match(ctx.sessionDailyHTML(null, null, 'unmatched'), /Session data unavailable/);
 });
