@@ -21,7 +21,11 @@ Expect status to report a running daemon. Doctor can report failures for an enab
 
 Open the selected harness in a project you recognize. Ask it to list the project's files and summarize its README, without changing files or contacting external services. Use a disposable project if you prefer. Keep the session open while checking the results.
 
-Open **Open console** from the menu bar, then inspect Sessions. Find the session using its harness, workspace and start time. In Setup, refresh **Observed session coverage** for the running session.
+In Setup, use **Refresh session observations** under **Your first observed session**. Choose the workspace and session ID that match your task, then select **Open session evidence**. With several sessions, choose explicitly; Setup does not select a session from a process ID. The first three evidence buttons also support ⌘1–⌘3. If the list is partial, **Browse all sessions** (⌘0) opens the console’s Sessions list.
+
+If no session appears, run the sample task and refresh. Missing activity requires checking the selected harness’s supported observation path; a passed installed-hook check alone does not establish live coverage. Unavailable or stale observations require another refresh. Console links stay disabled while its listener is unavailable; use Settings to review console and traffic options. Setup does not enable traffic routing automatically.
+
+You can also use **Open console** from the menu bar and find the session by harness, workspace and start time.
 
 | Signal | What to look for | What the result establishes |
 |---|---|---|
