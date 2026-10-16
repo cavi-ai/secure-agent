@@ -84,3 +84,49 @@ test('session search intersects the workspace filter and keeps harness exclusion
   assert.equal(ctx.visibleSessionMembers(ctx.applySessionFilters(groups, {text:'api', search:'release', harnesses:{claude:false}})).length, 0);
   assert.equal(ctx.visibleSessionMembers(ctx.applySessionFilters(groups, {text:'missing', search:'release'})).length, 0);
 });
+
+
+const coverageBox = (data, state = {}) => ctx.sessionOverviewHTML({session_id:'own', requests:[], findings:[], ...data}, state).match(/<section class="sd-coverage"[^>]*>([\s\S]*?)<\/section>/)[1];
+const coveragePath = (state, supported = true) => ({state, supported, detail:'Only reported activity', last_seen:'2026-10-15T12:00:00Z'});
+
+test('coverage provides scoped evidence, setup guidance and deliberate traffic review', () => {
+  const html = coverageBox({coverage:{guard:coveragePath('not-observed'), trace:coveragePath('observed'), payload:coveragePath('off')}});
+  assert.match(html, /data-action="session-coverage-guide" data-id="own" data-path="guard"/);
+  assert.match(html, /data-action="session-events" data-id="own"/);
+  assert.match(html, /data-action="session-coverage-traffic" data-id="own"/);
+  assert.match(html, /data-action="session-overview-retry"/);
+  assert.match(html, /Last observed/);
+  assert.ok(!html.includes('data-action="hook-setup"'), 'Guard setup is distinct from hook-completion integration');
+});
+
+test('unsupported, unknown and stale paths do not offer configuration changes', () => {
+  for (const state of ['unsupported', 'future-state', 'stale']) {
+    const html = coverageBox({coverage:{guard:coveragePath(state,false), trace:coveragePath(state,false), payload:coveragePath(state,false)}});
+    assert.ok(!html.includes('session-coverage-traffic'));
+    assert.ok(!html.includes('data-action="session-events"'));
+    assert.match(html, /Refresh observations|Retry/);
+  }
+});
+
+test('unattributed inspection leads to clearly separate machine traffic', () => {
+  const html = coverageBox({coverage:{guard:coveragePath('unsupported',false), trace:coveragePath('not-observed'), payload:coveragePath('unattributed')}});
+  assert.match(html, /Machine-wide traffic/);
+  assert.match(html, /does not establish this session/);
+  assert.match(html, /data-action="session-coverage-traffic" data-id="own"/);
+});
+
+test('failed overview retains observations and offers only refresh', () => {
+  const html = coverageBox({coverage:{guard:coveragePath('observed'), trace:coveragePath('not-observed'), payload:coveragePath('off')}}, {error:'unavailable'});
+  assert.match(html, /Last known/);
+  assert.ok(!html.includes('data-action="session-events"'));
+  assert.ok(!html.includes('session-coverage-traffic'));
+  assert.ok(!html.includes('session-coverage-guide'));
+  assert.match(html, /data-action="session-overview-retry"/);
+});
+
+test('absent current coverage keeps retained events reachable without claiming live protection', () => {
+  const html = coverageBox({coverage:null});
+  assert.match(html, /No current coverage/);
+  assert.match(html, /data-action="session-events" data-id="own"/);
+  assert.ok(!html.includes('session-coverage-guide'));
+});
