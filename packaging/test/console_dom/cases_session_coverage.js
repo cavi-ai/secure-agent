@@ -1,0 +1,66 @@
+// Coverage navigation uses production handlers with controlled source states.
+(() => {
+  const {ready,wait,idle,route,openTab,iso}=window.DomTest;
+  const path=(state,detail,supported=true)=>({state,detail,supported,last_seen:iso(1000)});
+  const overview={session_id:'sess-claude-1',observed_at:iso(0),requests:[],findings:[],coverage:{session_id:'sess-claude-1',guard:path('not-observed','No guard invocation recorded.'),trace:path('observed','Recorded tools from this session.'),payload:path('off','Payload inspection is disabled.')}};
+  let failed=false;
+  route('/sessions/sess-claude-1/overview',()=>failed ? {ok:false,status:503,json:async()=>({})} : {ok:true,json:async()=>structuredClone(overview)});
+  const box=()=>document.querySelector('#session-detail .sd-coverage');
+  const action=(key,name)=>box()?.querySelector(`[data-coverage-path="${key}"] [data-action="${name}"]`);
+  const home=()=>window.SA.activeTab==='sessions' && !!box();
+  const refresh=async()=>{box().querySelector('[data-action="session-overview-retry"]').click();await idle();};
+  ready().then(async()=>{
+    const probe={};
+    try {
+      openTab('home');
+      await wait(()=>!!document.querySelector('#session-daily [data-session="sess-claude-1"]'));
+      document.querySelector('#session-daily [data-session="sess-claude-1"]').click();
+      await wait(()=>!!action('guard','session-coverage-guide'));await idle();
+      probe.paths=box().querySelectorAll('[data-coverage-path]').length===3 && box().textContent.includes('Last observed');
+      const body=()=>document.querySelector('#session-detail .session-detail-body');
+      body().scrollTop=80;const top=body().scrollTop,view=window.SA.sessionView;
+      action('guard','session-coverage-guide').click();
+      await wait(()=>document.querySelector('#drawer-title-text').textContent==='Guard observations and setup');
+      const drawer=document.querySelector('#drawer-body');
+      probe.guard=drawer.textContent.includes('Claude Code') && drawer.textContent.includes('manual monitor round trip') && drawer.textContent.includes('Hook-completion reporting is a separate integration');
+      overview.coverage.guard.detail='Updated guard observation detail.';
+      document.querySelector('#btn-refresh').click();
+      await wait(()=>box().textContent.includes('Updated guard observation detail.'));
+      document.querySelector('#btn-drawer-back').click();await idle();
+      probe.guideBack=home() && window.SA.sessionView===view && document.activeElement.dataset.coverageOrigin==='guard' && Math.abs(body().scrollTop-top)<3;
+      action('payload','session-coverage-traffic').click();
+      await wait(()=>window.SA.activeTab==='protection');await idle();
+      probe.traffic=document.querySelector('#scope-bar').textContent.includes('Machine-wide traffic') && !document.querySelector('#scope-bar').textContent.includes('Scoped to session') && window.SA.selectedSessionId==='sess-claude-1';
+      document.querySelector('#scope-bar [data-action="session-investigation-return"]').click();
+      await wait(home);await idle();
+      probe.trafficBack=window.SA.sessionView===view && document.activeElement.dataset.coverageOrigin==='payload';
+      history.forward();await wait(()=>window.SA.activeTab==='protection');
+      probe.forward=document.querySelector('#scope-bar').textContent.includes('Machine-wide traffic');
+      history.back();await wait(home);await idle();
+      action('trace','session-events').click();
+      await wait(()=>window.SA.activeSub==='events');await idle();
+      probe.events=document.querySelector('#scope-bar').textContent.includes('Scoped to session') && window.SA.selectedSessionId==='sess-claude-1';
+      document.querySelector('#scope-bar [data-action="session-investigation-return"]').click();await wait(home);await idle();
+      probe.eventsBack=window.SA.sessionView===view && document.activeElement.dataset.coverageOrigin==='trace';
+      overview.coverage.payload=path('unattributed','Traffic has no session identity.');await refresh();
+      await wait(()=>box().textContent.includes('Traffic has no session identity.'));
+      probe.unattributed=!!action('payload','session-coverage-traffic') && box().textContent.includes('does not establish this session');
+      failed=true;await refresh();await wait(()=>box().textContent.includes('Last known observations'));
+      probe.stale=!box().querySelector('[data-action="session-coverage-guide"], [data-action="session-coverage-traffic"], [data-action="session-events"]');
+      failed=false;await refresh();await wait(()=>!!action('guard','session-coverage-guide'));
+      probe.retry=!box().textContent.includes('Last known observations');
+      overview.coverage.guard=path('unsupported','Guard unsupported.',false);
+      overview.coverage.trace=path('future-state','Source state unknown.');await refresh();
+      await wait(()=>box().textContent.includes('Source state unknown.'));
+      probe.unknown=!action('trace','session-events') && !action('trace','session-coverage-guide');
+      action('guard','session-coverage-guide').click();
+      await wait(()=>document.querySelector('#drawer-body').textContent.includes('An unsupported path is not a failed setup check'));
+      probe.unsupported=!document.querySelector('#drawer-body').textContent.includes('installed guard hooks');
+      document.querySelector('#btn-drawer-back').click();await idle();
+      probe.fits=document.documentElement.scrollWidth<=innerWidth && box().scrollWidth<=box().clientWidth;
+      openTab('sessions');document.querySelector('#session-rail [data-id="sess-codex-3"]').click();await idle();
+      probe.selection=window.SA.selectedSessionId==='sess-codex-3' && !window.SA.sessionInvestigationReturn;
+    } catch(error) {probe.error=error.message;}
+    document.body.dataset.sessionCoverageProbe=JSON.stringify(probe);
+  });
+})();

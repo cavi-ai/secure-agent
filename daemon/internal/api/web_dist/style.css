@@ -406,6 +406,11 @@ body {
 .sd-request .btn { margin: 4px 6px 0 0; }
 .sd-context-limit, .sd-coverage p, .sd-findings-head p { color: var(--tx-2); }
 .sd-coverage { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 12px; }
+.sd-coverage-head, .sd-coverage-notice { grid-column: 1 / -1; }
+.sd-coverage-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.sd-coverage-head h5 { margin: 0; font-size: .8rem; }
+.session-coverage-guide ol { margin: 8px 0; padding-inline-start: 24px; }
+.sd-coverage .link-btn { min-height: 44px; text-align: left; }
 .sd-coverage b, .sd-coverage time { font-size: .75rem; }
 .sd-coverage time { color: var(--tx-2); }
 .session-strip {

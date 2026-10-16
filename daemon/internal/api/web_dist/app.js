@@ -737,6 +737,7 @@ document.addEventListener('DOMContentLoaded', () => {
       events: scopedBySession(t.eventsView || [], timelineSession, timelinePids).length,
       flags: scopedBySession(t.flagsView || [], timelineSession, timelinePids).length,
       returnToSession: window.SA.sessionInvestigationReturn,
+      machineTraffic: window.SA.sessionInvestigationMachineTraffic,
     }) : '';
     bar.hidden = !html;
     if (bar._saHTML !== html) {
@@ -3033,6 +3034,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return true;
   }
   Object.defineProperty(window.SA, 'sessionInvestigationReturn', { get: () => !!sessionInvestigation?.active && validSessionReturn(sessionInvestigation) });
+  Object.defineProperty(window.SA, 'sessionInvestigationMachineTraffic', { get: () => !!sessionInvestigation?.active && validSessionReturn(sessionInvestigation) && !!sessionInvestigation.destination.machineTraffic });
   window.SA.clearSessionInvestigation = () => {
     sessionInvestigation = null;
     if (detailDrawer.returnTarget()?.sessionReturn) detailDrawer.close();
@@ -3050,6 +3052,13 @@ document.addEventListener('DOMContentLoaded', () => {
     timelineSession = id; timelinePids = null; timelinePidLabel = ''; suppressFreshOnce = true;
     syncHistoryViews();
     paintScopeBar(); switchTab('events'); fetchTelemetry({ slow: false });
+  };
+  window.openSessionCoverageTraffic = function(id, el) {
+    const data = sessionWorkbench.sessionOverview;
+    if (sessionEnded || id !== sessionWorkbench.selectedSessionId || data?.session_id !== id || sessionWorkbench.sessionOverviewState.error) return;
+    const path = data.coverage?.payload;
+    if (!path || path.supported === false || !['observed','off','unattributed','not-observed'].includes(path.state)) return;
+    beginSessionInvestigation(captureSessionReturn(el), { route: 'protection/traffic', session: null, pids: null, label: '', machineTraffic: true });
   };
   window.openSessionFamilyEvents = (st, pids, label) => beginSessionInvestigation(st,
     { route: 'events', session: null, pids: [...new Set(pids)], label });
@@ -3876,6 +3885,20 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'trace-retry':
         window.retrySessionTrace();
+        break;
+      case 'session-coverage-guide': {
+        const data = sessionWorkbench.sessionOverview;
+        if (sessionEnded || d.id !== sessionWorkbench.selectedSessionId || data?.session_id !== d.id || sessionWorkbench.sessionOverviewState.error || !['guard','trace','payload'].includes(d.path)) break;
+        const path = data.coverage?.[d.path];
+        if (!path || path.state === 'stale') break;
+        const session = telemetryData.sessions?.find(s => s.id === d.id);
+        detailDrawer.setMode('session-coverage');
+        detailDrawer.setCopyVisible(false);
+        detailDrawer.open({ title: d.path === 'guard' ? 'Guard observations and setup' : 'Session observation sources', icon: 'history', body: `<div class="session-coverage-guide">${sessionCoverageGuideHTML(session, d.path, path)}</div>`, back: back() });
+        break;
+      }
+      case 'session-coverage-traffic':
+        window.openSessionCoverageTraffic(d.id, el);
         break;
       case 'session-overview-retry':
         if (sessionWorkbench.selectedSessionId) sessionWorkbench.refresh('overview');

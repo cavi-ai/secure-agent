@@ -678,6 +678,40 @@ function validSessionOverview(data, id) {
     && (r.control == null || (record(r.control) && text(r.control, ['state', 'last_error']))));
 }
 
+// Coverage states describe observations, not a diagnosis that setup is broken.
+function sessionCoverageHTML(data, state = {}) {
+  const id = escapeHTML(data.session_id);
+  const refresh = `<button type="button" class="link-btn" data-action="session-overview-retry"${state.loading ? ' disabled' : ''}>${state.loading ? 'Refreshing observations…' : 'Refresh observations'}</button>`;
+  const head = `<header class="sd-coverage-head"><h5>Observed paths</h5>${refresh}</header>`;
+  const events = `<button type="button" class="link-btn" data-action="session-events" data-id="${id}">View recorded session events</button>`;
+  if (!data.coverage) return head + '<p>No current coverage is attributed to this session. Retained events do not establish live protection.</p>' + (state.error ? '' : events);
+  return head + (state.error ? '<p class="sd-coverage-notice" role="status">Last known observations. Refresh before relying on current coverage.</p>' : '')
+    + [['guard','Guard'],['trace','Recorded activity'],['payload','Payload inspection']].map(([key,label]) => {
+      const path = data.coverage[key] || {};
+      const stale = !!state.error || path.state === 'stale';
+      const guide = `<button type="button" class="link-btn" data-action="session-coverage-guide" data-id="${id}" data-path="${key}">${path.state === 'unsupported' || path.supported === false ? 'Review available paths' : key === 'guard' ? 'Review guard setup' : 'Review activity sources'}</button>`;
+      const traffic = `<button type="button" class="link-btn" data-action="session-coverage-traffic" data-id="${id}">Review Traffic settings</button>`;
+      let next = '', action = '';
+      if (stale) next = 'Refresh observations before relying on this result.';
+      else if (path.state === 'unsupported' || path.supported === false) { next = 'This path is not supported by this source. Other observation paths may still be available.'; action = guide; }
+      else if (path.state === 'observed') { next = 'This observation does not establish coverage of every operation.'; action = key === 'payload' ? traffic : events; }
+      else if (key === 'payload' && ['off','unattributed','not-observed'].includes(path.state)) {
+        next = 'Machine-wide traffic does not establish this session’s payload coverage. Routing and inspection are separate opt-ins.'; action = traffic;
+      } else if (path.state === 'not-observed') { next = 'Run a small supported task, then refresh. Missing activity alone does not mean setup is broken.'; action = guide; }
+      else if (path.state === 'unattributed') { next = 'Session identity is unresolved. Compare the harness and workspace before relying on attribution.'; action = guide; }
+      else if (path.state === 'off') { next = 'Review this capability’s configuration if you need it. Nothing is enabled automatically.'; action = guide; }
+      else next = 'The current state is unknown. Refresh observations before choosing a setup change.';
+      return `<article data-coverage-path="${key}"><b>${label}: ${escapeHTML(coveragePathLabel(path))}</b><p>${escapeHTML(path.detail || '')}</p>${path.last_seen ? `<time datetime="${escapeHTML(path.last_seen)}">Last observed: ${escapeHTML(path.last_seen)}</time>` : ''}<p class="sd-coverage-next">${next}</p>${action ? action.replace('<button ', `<button data-coverage-origin="${key}" `) : ''}</article>`;
+    }).join('');
+}
+
+function sessionCoverageGuideHTML(session, key, path) {
+  const name = escapeHTML(harnessMeta(session?.harness).label);
+  if (path.state === 'unsupported' || path.supported === false) return `<p>This source does not support this observation path. An unsupported path is not a failed setup check.</p><p>Review the other observed paths for ${name}; each has its own limits.</p><p><a href="https://github.com/cavi-ai/secure-agent/blob/main/docs/ARCHITECTURE.md#collectors" target="_blank" rel="noopener noreferrer">Harness observation sources</a></p>`;
+  if (key === 'guard') return `<p>Guard observations record invocations attributed to this session. No invocation observed does not by itself establish a broken installation.</p>${['claude','cursor'].includes(session?.harness) ? `<ol><li>Open Secure Agent’s Setup &amp; Permissions and select ${name}.</li><li>Review the selected harness’s installed guard hooks and run its installed-hook check if needed.</li><li>Run a small ordinary task in the same workspace, then return here and refresh observations.</li></ol>` : `<p>Review ${name} in Setup &amp; Permissions and check its supported guarding path before changing configuration.</p>`}<p>An installed-hook check establishes its manual monitor round trip. It does not prove that a running session invokes the guard or that traffic is inspected. Hook-completion reporting is a separate integration.</p>`;
+  return `<p>Recorded activity depends on the supported process, transcript, or tool sources for ${name}. Missing activity may reflect a quiet task, an unavailable source, or unresolved session identity.</p><ol><li>In the same harness and workspace, ask for a file listing and README summary without changing files or reading secrets.</li><li>Refresh observations and inspect recorded session events.</li><li>If activity is still missing, review this harness’s observation sources in Setup &amp; Permissions.</li></ol><p>Hook-completion reporting alone does not establish trace or guard coverage.</p><p><a href="https://github.com/cavi-ai/secure-agent/blob/main/docs/FIRST_SESSION.md" target="_blank" rel="noopener noreferrer">First observed session guide</a></p>`;
+}
+
 function sessionOverviewHTML(data, state, contextHTML = '') {
   state = state || {};
   const retry = `<button type="button" class="link-btn" data-action="session-overview-retry"${state.loading ? ' disabled' : ''}>${state.loading ? 'Retrying current status…' : 'Retry current status'}</button>`;
@@ -693,9 +727,7 @@ function sessionOverviewHTML(data, state, contextHTML = '') {
       <p class="sd-context-limit">${escapeHTML(r.scopeText || 'This request does not grant future access.')}</p>${actionBarHTML(actions)}
     </fieldset>`;
   }).join('');
-  const coverage = data.coverage;
-  const paths = coverage ? [['Guard', coverage.guard], ['Trace', coverage.trace], ['Payload inspection', coverage.payload]].map(([label, p]) =>
-    `<div><b>${label}: ${escapeHTML(coveragePathLabel(p))}</b><p>${escapeHTML((p || {}).detail || '')}</p>${p && p.last_seen ? `<time>${escapeHTML(p.last_seen)}</time>` : ''}</div>`).join('') : '<p>No current coverage is attributed to this session. Ended sessions retain their evidence without claiming live protection.</p>';
+  const paths = sessionCoverageHTML(data, state);
   const resources = data.resources;
   const control = resources && resources.control;
   const impact = resources ? `<p>${escapeHTML(fmtRSS(resources.rss_bytes) || '—')} memory · ${escapeHTML(fmtCPU(resources.cpu_percent) || '—')} CPU · ${Number(resources.process_count) || 0} processes</p>
