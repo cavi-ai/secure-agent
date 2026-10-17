@@ -172,8 +172,8 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		log.Printf("store: cleared the record mark on %d file rows that are not secret reads", n)
 	}
 
-	// postureHook is armed once the API server exists (it owns posture).
-	postureHook := &postureHookHolder{}
+	// postureHook starts once the API server exists (it owns posture).
+	postureHook := newPostureHook(postureRecomputeDelay)
 	// newFlagHook is armed with the API's automatic review once it exists.
 	newFlagHook := &flagHookHolder{}
 
@@ -380,7 +380,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			deltaHub: deltaHub, postureChanged: postureHook.run, advisorMask: sysAgentMask(fw.Engine),
 		})
 	}
-	postureHook.fn = apiServer.PublishPostureIfChanged
+	postureHook.start(ctx, apiServer.PublishPostureIfChanged)
 	newFlagHook.fn = apiServer.NoteNewFlag
 
 	// The browser console's telemetry fetches are same-origin with the
@@ -519,16 +519,56 @@ func (k *realKiller) Kill(pid int32) error {
 	return nil
 }
 
-// postureHookHolder defers arming the posture-delta hook until the API
-// server exists (it owns posture computation); the drain loop starts first.
-type postureHookHolder struct {
-	fn func()
+// postureRecomputeDelay is how long a posture mark waits for the rest of its
+// burst before one recompute covers them all.
+const postureRecomputeDelay = 250 * time.Millisecond
+
+// postureHook moves posture recomputation off its callers: run marks posture
+// dirty without blocking, and one worker recomputes after a short trailing
+// delay, so a burst of flags costs one recompute and never stalls the drain
+// loop. The worker starts once the API server exists (it owns posture); marks
+// made before that wait for it.
+type postureHook struct {
+	dirty chan struct{}
+	delay time.Duration
 }
 
-func (h *postureHookHolder) run() {
-	if h.fn != nil {
-		h.fn()
+func newPostureHook(delay time.Duration) *postureHook {
+	return &postureHook{dirty: make(chan struct{}, 1), delay: delay}
+}
+
+func (h *postureHook) run() {
+	select {
+	case h.dirty <- struct{}{}:
+	default:
 	}
+}
+
+// start runs recompute after each burst of marks until ctx ends. Marks made
+// during the delay fold into that pass; a mark made during recompute starts
+// another one.
+func (h *postureHook) start(ctx context.Context, recompute func()) {
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-h.dirty:
+			}
+			timer := time.NewTimer(h.delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			select {
+			case <-h.dirty:
+			default:
+			}
+			recompute()
+		}
+	}()
 }
 
 // flagHookHolder defers arming the new-flag hook until the API server exists.
