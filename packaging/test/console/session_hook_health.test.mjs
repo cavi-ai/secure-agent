@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const ctx = { Date, window: { SA: {} } };
 vm.createContext(ctx);
-for (const file of ['lib.js', 'tab-findings.js', 'session-workbench.js']) vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/' + file, import.meta.url), 'utf8'), ctx);
+for (const file of ['lib.js', 'tab-findings.js', 'session-layout.js', 'session-workbench.js']) vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/' + file, import.meta.url), 'utf8'), ctx);
 const finding = (over = {}) => ({ id: 'hook:h', kind: 'execution-errors', harness: 'hermes', event: 'pre_tool_call', handler_id: 'h', config_id: 'c', title: 'Hook repeatedly failed', detail: 'Three observed errors', next_action: 'Repair the dependency, then retry', limits: ['Action outcome unknown'], count: 3, first_at: '2026-10-13T10:00:00Z', last_at: '2026-10-13T10:01:00Z', needs_action: true, ...over });
 const health = (over = {}) => ({ available: true, since: '2026-10-13T09:30:00Z', until: '2026-10-13T10:00:00Z', observed_runs: 3, unattributed_runs: 0, truncated: false, findings: [finding()], ...over });
 

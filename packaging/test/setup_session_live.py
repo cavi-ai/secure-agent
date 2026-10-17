@@ -148,10 +148,22 @@ def main():
                     stop(child)
                 except OSError as error:
                     cleanup_errors.append(str(error))
-            for name in ("daemon.log", "native.log", "harness.jsonl", "harness.stderr", "stage"):
+            for name in ("daemon.log", "native.log", "harness.jsonl", "harness.stderr", "stage", "console-state.json"):
                 source = root / name
                 if source.exists():
                     shutil.copyfile(source, build / name)
+            shapes = []
+            for source in (codex_home / "sessions").rglob("*.jsonl"):
+                for line in source.read_text().splitlines():
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if record.get("type") == "response_item":
+                        payload = record.get("payload", {})
+                        shapes.append({key: payload[key] for key in ("type", "name", "call_id") if key in payload})
+            # Schema diagnostics only; never retain message text or arguments.
+            (build / "trace-shapes.json").write_text(json.dumps(shapes))
             if cleanup_errors:
                 raise RuntimeError("Child process cleanup failed: " + "; ".join(cleanup_errors))
     print("PASS: fresh-profile Setup → live Codex trace → selected session console")

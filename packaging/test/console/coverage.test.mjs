@@ -8,7 +8,7 @@ function render(status, posture = {}) {
   const nodes = new Map(['coverage-center', 'coverage-list', 'badge-coverage-count', 'coverage-title'].map(id => [id, {hidden: false, innerHTML: '', dataset: {}, textContent: ''}]));
   const ctx = {window: {SA: {t: {status, posture}}}, document: {getElementById: id => nodes.get(id)}};
   vm.createContext(ctx);
-  for (const name of ['lib.js', 'session-workbench.js', 'tab-findings.js']) vm.runInContext(readFileSync(new URL(name, assets), 'utf8'), ctx);
+  for (const name of ['lib.js', 'session-layout.js', 'session-workbench.js', 'tab-findings.js']) vm.runInContext(readFileSync(new URL(name, assets), 'utf8'), ctx);
   ctx.renderCoverage();
   return nodes;
 }
