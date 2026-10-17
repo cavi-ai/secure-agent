@@ -730,6 +730,31 @@ func TestPruneKeepsRecordRowsPastTheBudget(t *testing.T) {
 	}
 }
 
+// A retention prune that cannot delete is reported in write health instead of
+// letting the store grow silently; the next clean prune clears it.
+func TestPruneFailureShowsInWriteHealth(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.PutEvent(event.Event{Kind: event.KindFileOpen, PID: 1, TS: time.Now().Add(-365 * 24 * time.Hour), Path: "/tmp/old"})
+	if _, err := s.db.Exec(`CREATE TRIGGER block_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	s.PruneEvents()
+	if h := s.WriteHealth(); !slices.Contains(h.Active, "event retention") {
+		t.Fatalf("write health after a failed prune: %+v", h)
+	}
+	if _, err := s.db.Exec(`DROP TRIGGER block_delete`); err != nil {
+		t.Fatal(err)
+	}
+	s.PruneEvents()
+	if h := s.WriteHealth(); slices.Contains(h.Active, "event retention") {
+		t.Fatalf("write health after a clean prune: %+v", h)
+	}
+}
+
 // Record rows keep their own newest recordBudget.
 func TestPruneCapsRecordRows(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")

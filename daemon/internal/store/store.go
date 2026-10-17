@@ -516,12 +516,21 @@ func (s *Store) pruneEventsLocked() {
 	if other <= 0 {
 		other = DefaultEventRetention
 	}
+	// A store that stops pruning grows without bound: the first failure is
+	// reported in write health and clears on the next clean prune.
+	var pruneErr error
+	defer func() { s.noteWrite("event retention", pruneErr) }()
+	keep := func(_ sql.Result, err error) {
+		if pruneErr == nil {
+			pruneErr = err
+		}
+	}
 	now := time.Now().UTC()
 	connKinds := []any{int(event.KindConnOpen), int(event.KindConnClose)}
-	_, _ = s.db.Exec(`DELETE FROM events WHERE kind IN (?, ?) AND `+instantBeforeSQL("ts"),
-		append(connKinds, instantBound(now.Add(-conn))...)...)
-	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND `+instantBeforeSQL("ts"),
-		append(connKinds, instantBound(now.Add(-other))...)...)
+	keep(s.db.Exec(`DELETE FROM events WHERE kind IN (?, ?) AND `+instantBeforeSQL("ts"),
+		append(connKinds, instantBound(now.Add(-conn))...)...))
+	keep(s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND `+instantBeforeSQL("ts"),
+		append(connKinds, instantBound(now.Add(-other))...)...))
 	s.pruneHookRunsLocked(now.Add(-other))
 	// Distinct kinds by index skip-scan: one MIN(kind) seek per kind.
 	rows, err := s.db.Query(`WITH RECURSIVE k(v) AS (
@@ -530,6 +539,7 @@ func (s *Store) pruneEventsLocked() {
 			SELECT (SELECT MIN(kind) FROM events WHERE kind > k.v) FROM k WHERE k.v IS NOT NULL)
 		SELECT v FROM k WHERE v IS NOT NULL`)
 	if err != nil {
+		keep(nil, err)
 		return
 	}
 	var kinds []int
@@ -548,10 +558,10 @@ func (s *Store) pruneEventsLocked() {
 	// and delete nothing. Record rows then keep their own newest
 	// recordBudget, so the security record outlives a build's file flood.
 	for _, k := range kinds {
-		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND record = 0 AND id <
-			(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, k, k, kindBudget(k)-1)
-		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND record = 1 AND id <
-			(SELECT id FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?)`, k, k, recordBudget-1)
+		keep(s.db.Exec(`DELETE FROM events WHERE kind = ? AND record = 0 AND id <
+			(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, k, k, kindBudget(k)-1))
+		keep(s.db.Exec(`DELETE FROM events WHERE kind = ? AND record = 1 AND id <
+			(SELECT id FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?)`, k, k, recordBudget-1))
 	}
 }
 
