@@ -11,6 +11,27 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Codex: record forwarded app-server hook completions with `secure-agent hooks record`, using a shared metadata contract and stable host delivery IDs.
 - Hooks: native result adapters for host-forwarded OpenClaw, Hermes and OpenCode v2 handler completions.
 
+### Changed
+- Performance: posture, snapshots and finding lists read advisor verdicts in batches and reuse 24-hour flag reads until a flag changes; posture is recomputed off the event ingest path, and event retention runs beside persistence in short batches.
+- Console: assets revalidate by content hash, and the brand icon is 128 px.
+- Menu bar: polls every 30 s while the event stream is live, whichever connected first.
+- Config: YAML is parsed with the maintained `go.yaml.in/yaml/v3`.
+
+### Fixed
+- Menu bar: the native guard alert closes when its request is answered elsewhere, and polling continues while it is open.
+- Menu bar: removing the old file-telemetry helper and the launch migration no longer freeze the menu bar.
+- Console: the polling fallback keeps refreshing every 2 s, posture shows stale after two minutes without a refresh, and review changes refresh the console.
+- Console: an older worktree read no longer overwrites a newer one, and markup escapes single quotes.
+- File telemetry starts when the collector appears after launch, and an oversized spool line is skipped and counted as lost instead of dropping the unread tail.
+- Probes: `lsof` and `launchctl` calls time out instead of hanging.
+- Retention: prune failures show in write health.
+- Findings: flags, incidents and the guard hook classify sensitive paths with one rule.
+- Session reports for very long sessions no longer time out and lose their events.
+- The transcript worker no longer leaks a goroutine on each restart.
+- The coverage file is replaced whole, so it is never read half-written.
+- Collector: `-config` help describes the node secrets file.
+- Uninstall removes only the hook files Secure Agent installed.
+
 ### Security
 - Console: on the proxy listener, every change (guard answers, rules, mutes, acknowledgements, kills) refuses agent processes, as reads of protected routes already did.
 - Updates: the in-app updater installs only a bundle that satisfies the running app's signing requirement, not any valid signature.
@@ -1120,7 +1141,7 @@ All notable changes to `secure-agent` are documented here. The format follows
   writable ones, and the expected pre-grant eslogger permission failure retries
   inside the process (60s backoff) instead of respawn-churning through launchd.
 
-## [v1.1.0] — 2026-09-11
+## [1.1.0] - 2026-09-11
 
 Released: https://github.com/cavi-ai/secure-agent/releases/tag/v1.1.0
 Signed with an Apple Development certificate (stable TCC grants across
@@ -1212,7 +1233,7 @@ below is the delta that earns the "stable" label.
   cdhash every build, silently invalidating every Full Disk Access grant
   on each update. Noted for the release pipeline.
 
-## [v1.0.0] — 2026-09-10
+## [1.0.0] - 2026-09-10
 
 The first stable release. rc.3 was folded into 1.0 rather than published
 separately — everything below ships in v1.0.0:
@@ -1392,7 +1413,7 @@ separately — everything below ships in v1.0.0:
   evidence chain, secret sources, policy audit, fleet, and the correct
   version badge.
 
-## [v0.9.0-rc.2] — 2026-09-07
+## [0.9.0-rc.2] - 2026-09-07
 
 Release candidate 2: the full audit hardening pass (hooks, daemon,
 menubar, CI/packaging), SSE push for both UIs, the console-auth
@@ -1583,7 +1604,7 @@ fix, session evidence chains, and the guard policy editor.
   pause semantics.
 
 
-## [v0.9.0-rc.1] — 2026-09-02
+## [0.9.0-rc.1] - 2026-09-02
 
 First release candidate. Everything below has CI enforcement: Go (vet, test,
 `-race`), Swift package tests, 138 Python hook cases, an end-to-end smoke test
@@ -1672,3 +1693,11 @@ scanning of the repository itself.
 
 Development history lives in the git log; this changelog starts at the first
 tagged release.
+
+[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/cavi-ai/secure-agent/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/cavi-ai/secure-agent/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/cavi-ai/secure-agent/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/cavi-ai/secure-agent/compare/v0.9.0-rc.2...v1.0.0
+[0.9.0-rc.2]: https://github.com/cavi-ai/secure-agent/compare/v0.9.0-rc.1...v0.9.0-rc.2
+[0.9.0-rc.1]: https://github.com/cavi-ai/secure-agent/tree/v0.9.0-rc.1
