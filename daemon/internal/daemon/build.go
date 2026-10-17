@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -241,11 +242,18 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// Resolve the file-feed dependency before any status consumer starts.
 	// Each daemon owns its probe and tailer; startup must not mutate a global
 	// function while the API or fleet heartbeat reads it.
-	var spoolTailer *collect.SpoolTailer
-	var esServiceProbe func() (collect.ESServiceSnapshot, error)
+	// The tailer can also appear later: a collector installed after launch is
+	// picked up by watchSpool (startCollectors) without a daemon restart.
+	spool := new(atomic.Pointer[collect.SpoolTailer])
 	if collect.SpoolAvailable() {
-		spoolTailer = collect.NewSpoolTailer(b)
-		esServiceProbe = spoolServiceProbe(spoolTailer)
+		spool.Store(collect.NewSpoolTailer(b))
+	}
+	esServiceProbe := func() (collect.ESServiceSnapshot, error) {
+		t := spool.Load()
+		if t == nil {
+			return collect.ESServiceSnapshot{}, errNoSpool
+		}
+		return spoolServiceProbe(t)()
 	}
 
 	// Supervisor with a shared health registry so /status reports each collector's
@@ -397,7 +405,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		}
 	}()
 
-	startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spoolTailer)
+	startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spool)
 
 	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
 	return c, nil
@@ -902,21 +910,24 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, procSource 
 //  1. Spool tail from the root ES LaunchDaemon (sanctioned path).
 //  2. Direct eslogger child (root dev runs only).
 //  3. Neither: degraded, not crash-looped; the transcript scanner remains.
-func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spoolTailer *collect.SpoolTailer) {
+func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer]) {
 	if proxyServer != nil {
 		go sup.Run(ctx, "proxyserver", func(c context.Context) error {
 			return proxyServer.Serve(c)
 		})
 	}
 
-	switch {
-	case spoolTailer != nil:
+	tailSpool := func(t *collect.SpoolTailer) {
 		st.TrackFileFeed()
 		go sup.Run(ctx, "eslogger", func(c context.Context) error {
-			spoolTailer.OnProduce = func() { supReg.MarkProduced("eslogger") }
-			return spoolTailer.Run(c)
+			t.OnProduce = func() { supReg.MarkProduced("eslogger") }
+			return t.Run(c)
 		})
 		log.Printf("file telemetry: tailing privileged ES collector spool")
+	}
+	switch {
+	case spool.Load() != nil:
+		tailSpool(spool.Load())
 	case os.Geteuid() == 0 && collect.ESLoggerAvailable():
 		st.TrackFileFeed()
 		go sup.Run(ctx, "eslogger", func(c context.Context) error {
@@ -925,7 +936,12 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 			return es.Run(c)
 		})
 	default:
-		log.Printf("file telemetry unavailable: ES requires a privileged collector (install it from Settings); transcript + network signals still active")
+		log.Printf("file telemetry unavailable: ES requires a privileged collector (install it from Settings); transcript + network signals still active; starts when the collector's spool appears")
+		go watchSpool(ctx, spoolWatchInterval, collect.SpoolAvailable, func() {
+			t := collect.NewSpoolTailer(b)
+			spool.Store(t)
+			tailSpool(t)
+		})
 	}
 
 	go sup.Run(ctx, "netsampler", func(c context.Context) error {
@@ -1007,6 +1023,30 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	})
 
 	go advisorStk.Run(ctx, sup)
+}
+
+// spoolWatchInterval is how often a daemon without file telemetry checks for
+// a privileged collector installed after launch.
+const spoolWatchInterval = 10 * time.Second
+
+var errNoSpool = errors.New("file telemetry is not spool-based")
+
+// watchSpool calls start once, when available first reports true; it stops
+// when ctx ends.
+func watchSpool(ctx context.Context, every time.Duration, available func() bool, start func()) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if available() {
+				start()
+				return
+			}
+		}
+	}
 }
 
 // newHermesCollector builds the Hermes Agent poller: state.db and every
