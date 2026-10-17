@@ -58,7 +58,7 @@ func loadConfig() Config {
 	cfg.StoreDir = strings.TrimSuffix(home, "/") + "/.local/state/secure-agent-collector"
 
 	var cfgPath string
-	flag.StringVar(&cfgPath, "config", "", "path to collector.yaml (flags override)")
+	flag.StringVar(&cfgPath, "config", "", "path to a node secrets file: node_id=secret lines, # comments allowed (-secrets adds to it)")
 	flag.StringVar(&cfg.Addr, "addr", cfg.Addr, "listen address")
 	flag.StringVar(&cfg.StoreDir, "store", cfg.StoreDir, "JSONL store directory")
 	var secretsRaw string
@@ -67,10 +67,8 @@ func loadConfig() Config {
 		"bearer token required on read endpoints (/fleet, /nodes/*, /) — set this when binding beyond loopback")
 	flag.Parse()
 
-	// Minimal YAML: node secrets as "node_id: secret" lines under "secrets:".
-	// Stdlib-only collector: no YAML dependency, so we accept a flat file of
-	// "node_id=secret" lines OR the comma list. YAML support can come later
-	// without changing the wire contract.
+	// Node secrets come from a flat file of "node_id=secret" lines, the
+	// comma list, or both (the list wins on a repeated node id).
 	if cfgPath != "" {
 		if pairs, err := parseSecretsFile(cfgPath); err == nil {
 			cfg.Secrets = pairs
