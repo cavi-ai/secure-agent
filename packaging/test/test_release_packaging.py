@@ -49,6 +49,12 @@ mkdir -p "$3/notarized/Secure Agent.app"
         self.write_script(self.bin / "git", '''#!/bin/bash
 set -eu
 if [[ "${DIRTY_TREE:-0}" == 1 ]]; then exit 1; fi
+if [[ "${1:-}" == rev-parse ]]; then
+  case "${*: -1}" in
+    HEAD) echo "${HEAD_SHA:-1111}" ;;
+    refs/tags/*) [[ -n "${TAG_SHA-1111}" ]] || exit 1; echo "${TAG_SHA-1111}" ;;
+  esac
+fi
 ''')
         self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + os.defpath,
                     "VERSION": "v1.3.0", "DMG_CONTENT": "first", "CALLS": str(self.calls)}
@@ -128,6 +134,15 @@ if [[ "${DIRTY_TREE:-0}" == 1 ]]; then exit 1; fi
                                 CODESIGN_IDENTITY="Developer ID Application: Fixture (FIXTURE)", DIRTY_TREE="1")
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.root / "dist/built").exists())
+
+    def test_release_requires_its_tag_at_head_before_build(self):
+        for name, settings in (("untagged", {"TAG_SHA": ""}), ("tag elsewhere", {"TAG_SHA": "2222"})):
+            with self.subTest(name):
+                result = self.run_build(RELEASE_BUILD="1", NOTARY_PROFILE="fixture-notary",
+                                        CODESIGN_IDENTITY="Developer ID Application: Fixture (FIXTURE)", **settings)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("tag v1.3.0 at HEAD", result.stderr)
+                self.assertFalse((self.root / "dist/built").exists())
 
     def test_release_rejects_vulnerable_toolchain_before_build(self):
         result = self.run_build(RELEASE_BUILD="1", NOTARY_PROFILE="fixture-notary",

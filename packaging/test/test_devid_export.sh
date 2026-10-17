@@ -85,7 +85,11 @@ run_export() {
   echo "${status}"
 }
 
-value() { plutil -extract "$2" raw -o - "$1" 2>/dev/null || echo "<missing>"; }
+# Some plutil versions print the extraction error on stdout; keep output only on success.
+value() {
+  local v
+  if v="$(plutil -extract "$2" raw -o - "$1" 2>/dev/null)"; then printf '%s\n' "$v"; else echo "<missing>"; fi
+}
 
 # --- notarized on the first attempt ---
 OUT="${WORK}/ok"

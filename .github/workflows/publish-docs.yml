@@ -35,7 +35,9 @@ concurrency:
 
 jobs:
   build:
-    if: github.event_name != 'release' || !github.event.release.prerelease
+    # A caller passing a tag (release validation, after promotion) decides;
+    # a pre-release's own published event does not build documentation.
+    if: inputs.tag != '' || github.event_name != 'release' || !github.event.release.prerelease
     permissions:
       contents: read
     runs-on: ubuntu-24.04
