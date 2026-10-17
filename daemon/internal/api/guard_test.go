@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -183,11 +184,26 @@ func TestDeduplicatedGuardRequestsPersistSeparately(t *testing.T) {
 	if len(pending) != 1 {
 		t.Fatalf("pending=%+v", pending)
 	}
-	// Give the second request time to join the first waiter's fan-out.
+	// Give the second request time to join the first waiter's fan-out. One
+	// that arrives later gets its own prompt, which is answered the same way.
 	time.Sleep(20 * time.Millisecond)
-	a.guardBroker.Resolve(pending[0].ID, guard.Decision{Verdict: "deny", Scope: "once"})
-	<-done
-	<-done
+	for answered, deadline := 0, time.After(10*time.Second); answered < 2; {
+		for _, p := range a.guardBroker.Pending() {
+			a.guardBroker.Resolve(p.ID, guard.Decision{Verdict: "deny", Scope: "once"})
+		}
+		select {
+		case <-done:
+			answered++
+		case <-time.After(5 * time.Millisecond):
+		case <-deadline:
+			t.Fatalf("answered %d of 2 requests", answered)
+		}
+	}
+	// The production write is best effort with a 100 ms bound; a host too
+	// busy to meet it drops the row and says so in write health.
+	if h := st.WriteHealth(); slices.Contains(h.Active, "guard decisions") {
+		t.Skipf("guard decision write exceeded its production bound on this host: %+v", h)
+	}
 	rows := st.ListGuardDecisions("session-1", 10)
 	if len(rows) != 2 || rows[0].ID == rows[1].ID {
 		t.Fatalf("rows=%+v, want distinct persisted outcomes", rows)

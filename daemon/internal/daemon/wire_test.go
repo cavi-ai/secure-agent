@@ -607,16 +607,25 @@ func TestFleetHeartbeatLoopPushesOnTransition(t *testing.T) {
 
 	// Heartbeat far in the future: only boot + transition pushes should fire.
 	go fleetHeartbeatLoop(ctx, push, stateFn, func() time.Duration { return time.Hour }, 20*time.Millisecond)
+	count := func() int { mu.Lock(); defer mu.Unlock(); return pushes }
+	waitFor := func(n int) {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); count() < n; time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("pushes = %d, want %d", count(), n)
+			}
+		}
+	}
+	waitFor(1) // boot
 	time.Sleep(60 * time.Millisecond)
 	mu.Lock()
 	state = "critical"
 	mu.Unlock()
+	waitFor(2) // transition
+	// No heartbeat is due for an hour: a few more poll intervals add nothing.
 	time.Sleep(100 * time.Millisecond)
-
-	mu.Lock()
-	defer mu.Unlock()
-	if pushes != 2 {
-		t.Fatalf("pushes = %d, want 2 (boot + transition)", pushes)
+	if got := count(); got != 2 {
+		t.Fatalf("pushes = %d, want 2 (boot + transition)", got)
 	}
 }
 
@@ -630,12 +639,12 @@ func TestFleetHeartbeatLoopTicks(t *testing.T) {
 	stateFn := func() string { return "all-clear" }
 
 	go fleetHeartbeatLoop(ctx, push, stateFn, func() time.Duration { return 30 * time.Millisecond }, time.Hour)
-	time.Sleep(110 * time.Millisecond)
-
-	mu.Lock()
-	defer mu.Unlock()
-	if pushes < 3 { // boot + at least 2 ticks
-		t.Fatalf("pushes = %d, want >= 3 (boot + ticks)", pushes)
+	// boot + at least 2 ticks, however slowly the host schedules them
+	count := func() int { mu.Lock(); defer mu.Unlock(); return pushes }
+	for deadline := time.Now().Add(10 * time.Second); count() < 3; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("pushes = %d, want >= 3 (boot + ticks)", count())
+		}
 	}
 }
 
