@@ -288,7 +288,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnAddSource) btnAddSource.addEventListener('click', () => window.addSource());
   if (sourceInput) sourceInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') window.addSource(); });
 
-  let telemetryData = {
+  const telemetryData = {
     status: null,
     resources: null,
     flags: [],       // unfiltered — feeds KPIs
@@ -312,10 +312,9 @@ document.addEventListener('DOMContentLoaded', () => {
     costPlans: null,  // /costs/plans — plan headroom per harness home
     connected: true
   };
-  // Last-seen /notify/rules payload hash — gates 'notify' dirty-marking on
-  // the reconcile poll so a config that hasn't changed never re-renders the
-  // panel (and erases an in-progress edit); see fetchTelemetry.
-  let notifyCfgHash = '';
+  // The refresh, the expectation inspector and the credential handoff publish
+  // into telemetryData only through this store.
+  const telemetryStore = createTelemetryStore(telemetryData);
 
   // Spend card view: dimension and window, kept for the tab in
   // sessionStorage. The tile keeps its own 24h/by-repo fetch.
@@ -353,12 +352,6 @@ document.addEventListener('DOMContentLoaded', () => {
   let connState = 'ok';
   let sessionEnded = !consoleToken;
   let liveUpdates = null;
-  let lastSnapshotAt = 0;
-  // Fast refreshes supersede fast state without starving slower reports.
-  let telemetryFetchGen = 0;
-  let telemetrySlowGen = 0;
-  let expectedEgressReadGen = 0;
-  let prevUptimeSec = 0;
   // Deduplicate report failure toasts until the next successful read. Snapshot
   // failures have a persistent headline instead of a second transient alert.
   const failedEndpoints = new Set();
@@ -367,6 +360,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let consoleLifecycleController;
   function consoleLifecycleControllerModule() {
     return consoleLifecycleController ||= createConsoleLifecycle({
+      store: telemetryStore,
       state: {
         get SS_TOKEN_KEY() { return SS_TOKEN_KEY; },
         get cancelDialog() { return cancelDialog; },
@@ -376,8 +370,6 @@ document.addEventListener('DOMContentLoaded', () => {
         set consoleToken(value) { consoleToken = value; },
         get eventHistoryPage() { return eventHistoryPage; },
         set eventHistoryPage(value) { eventHistoryPage = value; },
-        get expectedEgressReadGen() { return expectedEgressReadGen; },
-        set expectedEgressReadGen(value) { expectedEgressReadGen = value; },
         get failedEndpoints() { return failedEndpoints; },
         get handoffGeneration() { return handoffGeneration; },
         set handoffGeneration(value) { handoffGeneration = value; },
@@ -405,9 +397,7 @@ document.addEventListener('DOMContentLoaded', () => {
         get spendGen() { return spendGen; },
         set spendGen(value) { spendGen = value; },
         get spendPollTimer() { return spendPollTimer; },
-        set spendPollTimer(value) { spendPollTimer = value; },
-        get telemetryData() { return telemetryData; },
-        set telemetryData(value) { telemetryData = value; }
+        set spendPollTimer(value) { spendPollTimer = value; }
       },
       actions: {
         clearGuardResult: () => guardDecisions.clear(),
@@ -469,7 +459,7 @@ document.addEventListener('DOMContentLoaded', () => {
     banner.hidden = false;
     if (text) text.textContent = connState === 'invalid-response'
       ? "The daemon returned invalid telemetry — showing the last known state and retrying…"
-      : (lastSnapshotAt ? `Can't reach Secure Agent. Last connected at ${new Date(lastSnapshotAt).toLocaleTimeString()} — retrying automatically.`
+      : (telemetryStore.lastSnapshotAt ? `Can't reach Secure Agent. Last connected at ${new Date(telemetryStore.lastSnapshotAt).toLocaleTimeString()} — retrying automatically.`
         : 'Waiting for Secure Agent. No live data received — retrying automatically.');
   }
 
@@ -519,8 +509,7 @@ document.addEventListener('DOMContentLoaded', () => {
     detailDrawer.syncMode();
     if (handoff.has('tab')) switchTab(route, { skipHash: true });
     if (recoveryFocus?.isConnected) recoveryFocus.focus({ preventScroll: true });
-    telemetryFetchGen++;
-    telemetrySlowGen++;
+    telemetryStore.invalidate();
     if (liveUpdates) liveUpdates.stop();
     startLiveUpdates();
     clearInterval(sparkTimer);
@@ -699,6 +688,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // new rows animate (polling re-renders must never flicker).
   let prevEventKeys = new Set();
   let firstEventRender = true;
+  function resetEventFreshness() { prevEventKeys = new Set(); firstEventRender = true; }
   // Filter changes re-render with deeper-history rows that are "new" to the
   // view but not to the user — suppress the fresh animation for that render.
   let suppressFreshOnce = false;
@@ -799,7 +789,6 @@ document.addEventListener('DOMContentLoaded', () => {
         get suppressFreshOnce() { return suppressFreshOnce; },
         set suppressFreshOnce(value) { suppressFreshOnce = value; },
         get telemetryData() { return telemetryData; },
-        set telemetryData(value) { telemetryData = value; },
         get timelineSession() { return timelineSession; },
         set timelineSession(value) { timelineSession = value; }
       },
@@ -1915,42 +1904,19 @@ document.addEventListener('DOMContentLoaded', () => {
   let telemetryRefreshController;
   function telemetryRefreshControllerModule() {
     return telemetryRefreshController ||= createTelemetryRefresh({
+      store: telemetryStore,
       state: {
         get PANELS() { return PANELS; },
         get SLOW_ONLY() { return SLOW_ONLY; },
         get booted() { return booted; },
-        set booted(value) { booted = value; },
         get eventHistoryPage() { return eventHistoryPage; },
-        set eventHistoryPage(value) { eventHistoryPage = value; },
-        get expectedEgressReadGen() { return expectedEgressReadGen; },
-        set expectedEgressReadGen(value) { expectedEgressReadGen = value; },
-        get firstEventRender() { return firstEventRender; },
-        set firstEventRender(value) { firstEventRender = value; },
         get handoffGeneration() { return handoffGeneration; },
-        set handoffGeneration(value) { handoffGeneration = value; },
-        get lastSnapshotAt() { return lastSnapshotAt; },
-        set lastSnapshotAt(value) { lastSnapshotAt = value; },
-        get notifyCfgHash() { return notifyCfgHash; },
-        set notifyCfgHash(value) { notifyCfgHash = value; },
         get pendingConsoleContext() { return pendingConsoleContext; },
         set pendingConsoleContext(value) { pendingConsoleContext = value; },
-        get prevEventKeys() { return prevEventKeys; },
-        set prevEventKeys(value) { prevEventKeys = value; },
-        get prevUptimeSec() { return prevUptimeSec; },
-        set prevUptimeSec(value) { prevUptimeSec = value; },
         get reportHealth() { return reportHealth; },
         get reviewCursor() { return reviewCursor; },
-        set reviewCursor(value) { reviewCursor = value; },
         get sessionEnded() { return sessionEnded; },
-        set sessionEnded(value) { sessionEnded = value; },
-        get telemetryData() { return telemetryData; },
-        set telemetryData(value) { telemetryData = value; },
-        get telemetryFetchGen() { return telemetryFetchGen; },
-        set telemetryFetchGen(value) { telemetryFetchGen = value; },
-        get telemetrySlowGen() { return telemetrySlowGen; },
-        set telemetrySlowGen(value) { telemetrySlowGen = value; },
-        get timelineSession() { return timelineSession; },
-        set timelineSession(value) { timelineSession = value; }
+        get timelineSession() { return timelineSession; }
       },
       actions: {
         get acceptEventHistoryPage() { return acceptEventHistoryPage; },
@@ -1974,6 +1940,7 @@ document.addEventListener('DOMContentLoaded', () => {
         get renderReportHealth() { return renderReportHealth; },
         get reportFailed() { return reportFailed; },
         get reportSucceeded() { return reportSucceeded; },
+        get resetEventFreshness() { return resetEventFreshness; },
         get setConnState() { return setConnState; },
         get showToast() { return showToast; },
         get sparkIngestEvents() { return sparkIngestEvents; },
@@ -2034,8 +2001,7 @@ document.addEventListener('DOMContentLoaded', () => {
         get spendSinceSel() { return spendSinceSel; },
         get spendView() { return spendView; },
         set spendView(value) { spendView = value; },
-        get telemetryData() { return telemetryData; },
-        set telemetryData(value) { telemetryData = value; }
+        get telemetryData() { return telemetryData; }
       },
       actions: {
         get apiFetch() { return apiFetch; },
@@ -2642,7 +2608,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.SA.renderSessionBoard = sessionWorkbench.render;
 
   Object.defineProperties(window.SA, {
-    postureHealth: { get() { return postureFreshness(lastSnapshotAt, reportHealth.failures(['snapshot'])[0]?.error || ''); } },
+    postureHealth: { get() { return postureFreshness(telemetryStore.lastSnapshotAt, reportHealth.failures(['snapshot'])[0]?.error || ''); } },
     activeTab: { get() { return activeTab; } },
     timelineSession: { get() { return timelineSession; }, set(v) { timelineSession = v; } },
     timelinePids: { get() { return timelinePids; }, set(v) { timelinePids = v; } },

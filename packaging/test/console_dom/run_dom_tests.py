@@ -74,7 +74,7 @@ def build_harness(tmp):
     """Harness page = real index.html with mock_dom.js injected between lib.js
     and app.js. Real assets are symlinked so relative paths resolve."""
     for f in ("index.html", "style.css", "lib.js", "event-history.js", "live-updates.js", "console-auth.js", "report-health.js", "telemetry-validation.js", "app.js",
-              "telemetry-refresh.js", "spend-controller.js", "agent-controller.js", "history-controller.js", "console-lifecycle.js", "policy-controller.js", "drawer.js", "staged-write.js", "finding-actions.js", "worktree-controller.js",
+              "telemetry-store.js", "telemetry-refresh.js", "spend-controller.js", "agent-controller.js", "history-controller.js", "console-lifecycle.js", "policy-controller.js", "drawer.js", "staged-write.js", "finding-actions.js", "worktree-controller.js",
               "tab-overview.js", "session-workbench.js", "decision-permissions.js", "tab-agents.js", "tab-egress.js", "tab-findings.js",
               "tab-worktrees.js", "tab-agent.js", "theme-init.js", "icon.svg", "brand-icon.png"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))

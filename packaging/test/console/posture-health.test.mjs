@@ -13,9 +13,10 @@ function fixture(posture, health = { lastSnapshotAt: 1234, error: '' }) {
     document: { getElementById: id => nodes.get(id) } };
   ctx.telemetryData = ctx.window.SA.t;
   vm.createContext(ctx);
-  for (const name of ['lib.js', 'report-health.js', 'tab-overview.js']) {
+  for (const name of ['lib.js', 'report-health.js', 'tab-overview.js', 'telemetry-store.js']) {
     vm.runInContext(readFileSync(new URL(name, assets), 'utf8'), ctx);
   }
+  ctx.telemetryStore = ctx.createTelemetryStore(ctx.telemetryData);
   Object.assign(ctx, controller('console-lifecycle.js', 'createConsoleLifecycle', ctx));
   return { ctx, nodes, paint() { ctx.renderPosture(); ctx.paintTabsPosture(); } };
 }

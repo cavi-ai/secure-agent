@@ -18,7 +18,8 @@ function fixture() {
     showToast: (...args) => toasts.push(args), isFlagsFiltered: () => true, isEventsFiltered: () => false, homeGroupOpen: () => false };
   ctx.telemetryData = ctx.window.SA.t;
   vm.createContext(ctx);
-  for (const name of ['lib.js', 'report-health.js', 'tab-overview.js']) vm.runInContext(readFileSync(new URL(name, assets), 'utf8'), ctx);
+  for (const name of ['lib.js', 'report-health.js', 'tab-overview.js', 'telemetry-store.js']) vm.runInContext(readFileSync(new URL(name, assets), 'utf8'), ctx);
+  ctx.telemetryStore = ctx.createTelemetryStore(ctx.telemetryData);
   ctx.reportHealth = ctx.createConsoleReportHealth({ now: () => 1234 });
   Object.defineProperty(ctx.window.SA, 'postureHealth', { get() {
     return { lastSnapshotAt: 1234, error: ctx.reportHealth.failures(['snapshot'])[0]?.error || '' };

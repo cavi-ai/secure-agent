@@ -6,5 +6,5 @@ import vm from 'node:vm';
 export function controller(file, factory, context) {
   const runtime = vm.createContext({ URLSearchParams });
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/' + file, import.meta.url), 'utf8'), runtime);
-  return runtime[factory]({ state: context, actions: context });
+  return runtime[factory]({ store: context.telemetryStore, state: context, actions: context });
 }
