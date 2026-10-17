@@ -133,6 +133,12 @@ type Store struct {
 	// lastPrune gates the insert-driven prune to pruneMinInterval, so a
 	// high-rate producer does not trigger it every 1000 inserts.
 	lastPrune time.Time
+	// retaining is set while an insert-driven retention pass runs beside
+	// persistence; retention lets Close wait for it. closed (under mu) stops
+	// new passes once Close begins.
+	retaining atomic.Bool
+	retention sync.WaitGroup
+	closed    bool
 	// Per-kind time-based retention. Socket churn (conn open/close) ages out
 	// in hours; security-relevant kinds keep days. Count-based pruning stays
 	// as a backstop — a busy machine must never let conn noise evict the
@@ -501,62 +507,120 @@ func (s *Store) PutEvent(e event.Event) (result WriteResult, err error) {
 	}
 
 	s.insertCount++
-	if s.insertCount%1000 == 0 && time.Since(s.lastPrune) >= pruneMinInterval {
-		s.pruneEventsLocked()
-		s.pruneRollupLocked()
-		s.pruneSessionsLocked()
-		refreshPlannerStats(s.db)
+	if s.insertCount%1000 == 0 && time.Since(s.lastPrune) >= pruneMinInterval && !s.closed && s.retaining.CompareAndSwap(false, true) {
 		s.lastPrune = time.Now()
+		s.retention.Add(1)
+		go func() {
+			defer s.retention.Done()
+			defer s.retaining.Store(false)
+			s.retain()
+		}()
 	}
 	return result, err
 }
 
-func (s *Store) PruneEvents() {
+// retain applies every retention pass. It runs beside persistence, not
+// inside it: each statement takes mu on its own.
+func (s *Store) retain() {
+	s.PruneEvents()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pruneEventsLocked()
+	s.pruneRollupLocked()
+	s.pruneSessionsLocked()
+	refreshPlannerStats(s.db)
 }
 
-func (s *Store) pruneEventsLocked() {
+// pruneBatch is the most rows one retention statement deletes, so no
+// statement holds mu for long while a backlog drains.
+var pruneBatch = 5000
+
+// Each kind keeps its newest budget rows; record rows keep their own newest
+// recordBudget. The cutoff is the id of the budget-th newest row.
+const (
+	kindCutoffSQL       = `SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?`
+	recordCutoffSQL     = `SELECT id FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?`
+	kindBudgetCondSQL   = `kind = ? AND record = 0 AND id < ?`
+	recordBudgetCondSQL = `kind = ? AND record = 1 AND id < ?`
+)
+
+// PruneEvents applies event retention one bounded statement at a time, each
+// under mu, so event persistence and reads interleave with a long prune.
+func (s *Store) PruneEvents() {
 	// Time-based per kind first (instantBeforeSQL normalizes any legacy
 	// local-offset ts values), then per-kind row budgets as a pure backstop.
 	// Every kind present in the table is capped on its own budget (kindBudgets, else
 	// defaultKindBudget), so one kind's volume never evicts another kind's
 	// rows. Time retention still applies to every kind.
-	conn := s.connRetention
+	s.mu.Lock()
+	conn, other := s.connRetention, s.eventRetention
+	s.mu.Unlock()
 	if conn <= 0 {
 		conn = DefaultConnEventRetention
 	}
-	other := s.eventRetention
 	if other <= 0 {
 		other = DefaultEventRetention
 	}
 	// A store that stops pruning grows without bound: the first failure is
 	// reported in write health and clears on the next clean prune.
 	var pruneErr error
-	defer func() { s.noteWrite("event retention", pruneErr) }()
-	keep := func(_ sql.Result, err error) {
+	defer func() {
+		s.mu.Lock()
+		s.noteWrite("event retention", pruneErr)
+		s.mu.Unlock()
+	}()
+	keep := func(err error) {
 		if pruneErr == nil {
 			pruneErr = err
 		}
 	}
 	now := time.Now().UTC()
 	connKinds := []any{int(event.KindConnOpen), int(event.KindConnClose)}
-	keep(s.db.Exec(`DELETE FROM events WHERE kind IN (?, ?) AND `+instantBeforeSQL("ts"),
-		append(connKinds, instantBound(now.Add(-conn))...)...))
-	keep(s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND `+instantBeforeSQL("ts"),
-		append(connKinds, instantBound(now.Add(-other))...)...))
+	keep(s.deleteEventsBatched(`kind IN (?, ?) AND `+instantBeforeSQL("ts"), append(connKinds, instantBound(now.Add(-conn))...)...))
+	keep(s.deleteEventsBatched(`kind NOT IN (?, ?) AND `+instantBeforeSQL("ts"), append(connKinds, instantBound(now.Add(-other))...)...))
+	s.mu.Lock()
 	s.pruneHookRunsLocked(now.Add(-other))
-	// Distinct kinds by index skip-scan: one MIN(kind) seek per kind.
+	kinds, err := s.eventKindsLocked()
+	s.mu.Unlock()
+	if err != nil {
+		keep(err)
+		return
+	}
+	// Fewer rows than the budget leave no cutoff and delete nothing. Record
+	// rows keep their own budget, so the security record outlives a build's
+	// file flood.
+	for _, k := range kinds {
+		for _, b := range []struct {
+			cutoff, cond string
+			budget       int
+		}{{kindCutoffSQL, kindBudgetCondSQL, kindBudget(k)}, {recordCutoffSQL, recordBudgetCondSQL, recordBudget}} {
+			s.mu.Lock()
+			var cutoff int64
+			err := s.db.QueryRow(b.cutoff, k, b.budget-1).Scan(&cutoff)
+			s.mu.Unlock()
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				keep(err)
+				continue
+			}
+			keep(s.deleteEventsBatched(b.cond, k, cutoff))
+		}
+	}
+}
+
+// eventKindsLocked lists the kinds in the table by index skip-scan: one
+// MIN(kind) seek per kind (caller holds mu).
+func (s *Store) eventKindsLocked() ([]int, error) {
 	rows, err := s.db.Query(`WITH RECURSIVE k(v) AS (
 			SELECT MIN(kind) FROM events
 			UNION ALL
 			SELECT (SELECT MIN(kind) FROM events WHERE kind > k.v) FROM k WHERE k.v IS NOT NULL)
 		SELECT v FROM k WHERE v IS NOT NULL`)
 	if err != nil {
-		keep(nil, err)
-		return
+		return nil, err
 	}
+	defer rows.Close()
 	var kinds []int
 	for rows.Next() {
 		var k int
@@ -567,16 +631,25 @@ func (s *Store) pruneEventsLocked() {
 	if err := rows.Err(); err != nil {
 		log.Printf("store: prune kinds: %v", err)
 	}
-	rows.Close()
-	// Keep each kind's newest budget rows: delete below the budget-th newest
-	// id, except record rows. Fewer rows than the budget yield a NULL cutoff
-	// and delete nothing. Record rows then keep their own newest
-	// recordBudget, so the security record outlives a build's file flood.
-	for _, k := range kinds {
-		keep(s.db.Exec(`DELETE FROM events WHERE kind = ? AND record = 0 AND id <
-			(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, k, k, kindBudget(k)-1))
-		keep(s.db.Exec(`DELETE FROM events WHERE kind = ? AND record = 1 AND id <
-			(SELECT id FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?)`, k, k, recordBudget-1))
+	return kinds, nil
+}
+
+// deleteEventsBatched deletes the events cond selects, pruneBatch rows per
+// statement, taking mu for each statement.
+func (s *Store) deleteEventsBatched(cond string, args ...any) error {
+	q := `DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ` + cond + ` LIMIT ?)`
+	args = append(args[:len(args):len(args)], pruneBatch)
+	for {
+		s.mu.Lock()
+		res, err := s.db.Exec(q, args...)
+		s.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil || n < int64(pruneBatch) {
+			return err
+		}
 	}
 }
 
@@ -2163,6 +2236,10 @@ func mergeResourceActivities(existing, additional []resource.EpisodeActivity) []
 }
 
 func (s *Store) Close() error {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	s.retention.Wait()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

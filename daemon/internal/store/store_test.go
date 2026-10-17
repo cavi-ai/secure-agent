@@ -893,6 +893,7 @@ func TestInsertDrivenPruneGatedByMinInterval(t *testing.T) {
 		for i := 0; i < n; i++ {
 			s.PutEvent(event.Event{Kind: event.KindExec, PID: 1, TS: time.Now()})
 		}
+		s.retention.Wait()
 	}
 
 	put(1000)
@@ -923,13 +924,14 @@ func TestPruneBudgetQueryUsesKindIndex(t *testing.T) {
 	}
 	defer s.Close()
 
-	joined := queryPlan(t, s, `DELETE FROM events WHERE kind = ? AND record = 0 AND id <
-		(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, 0, 0, 9)
+	batch := func(cond string) string {
+		return `DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ` + cond + ` LIMIT ?)`
+	}
+	joined := queryPlan(t, s, kindCutoffSQL, 0, 9) + " | " + queryPlan(t, s, batch(kindBudgetCondSQL), 0, 5, pruneBatch)
 	if strings.Contains(joined, "SCAN events") || !strings.Contains(joined, "idx_events_kind_id") {
 		t.Fatalf("budget delete plan = %q, want index seeks on idx_events_kind_id", joined)
 	}
-	joined = queryPlan(t, s, `DELETE FROM events WHERE kind = ? AND record = 1 AND id <
-		(SELECT id FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?)`, 0, 0, 9)
+	joined = queryPlan(t, s, recordCutoffSQL, 0, 9) + " | " + queryPlan(t, s, batch(recordBudgetCondSQL), 0, 5, pruneBatch)
 	if strings.Contains(joined, "SCAN events") || !strings.Contains(joined, "idx_events_record") {
 		t.Fatalf("record delete plan = %q, want index seeks on idx_events_record", joined)
 	}
