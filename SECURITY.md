@@ -2,12 +2,13 @@
 
 ## 🔒 Supported Versions
 
-We actively maintain and provide security updates for the latest release on the `main` branch.
+Releases are cut from `main`, and security fixes ship in the next release. Upgrade to the latest release to receive them.
 
 | Version | Supported |
 | ------- | ------------------ |
 | `main`  | ✅ Yes             |
-| < 1.0   | ⚠️ Best Effort     |
+| Latest 1.x release | ✅ Yes |
+| Earlier releases | ⚠️ Best Effort |
 
 ---
 
