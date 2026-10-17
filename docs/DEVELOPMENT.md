@@ -109,7 +109,7 @@ The source installer changes `/Applications` and launches the app. Unit tests an
 
 ### Live workflow checks
 
-`make test-guard-workflow-live` builds a daemon and a tracked tool-caller fixture in disposable directories. It invokes the production Claude guard and activity hooks, checks attributed identity, allow-once and deny results, session/timed permission reuse, rejection of a different file, revocation, timeout, late answers, unavailable-daemon consent fallback and daemon restart. The fixture reads its synthetic file only after the hook allows it. This checks the hook/daemon contract; it does not run Claude Code or exercise the native consent dialog. Ordinary Go CI runs this check on Linux.
+`make test-guard-workflow-live` builds a daemon and a tracked tool-caller fixture in disposable directories. It invokes the production Claude guard and activity hooks, checks attributed identity, allow-once and deny results, session/timed permission reuse, rejection of a different file, revocation, timeout, late answers and unavailable-daemon consent fallback. It restarts the daemon against the same database and checks active and ended session identities, retained decisions, revoked permissions and bounded JSON/Markdown reports. The fixture reads its synthetic file only after the hook allows it. This checks the hook/daemon contract; it does not run Claude Code or exercise the native consent dialog. Ordinary Go CI runs this check on Linux.
 
 To check another built, packaged or installed daemon without changing its installation or monitoring state, pass its binary explicitly:
 
@@ -117,7 +117,17 @@ To check another built, packaged or installed daemon without changing its instal
 python3 packaging/test/guard_workflow_live.py --daemon 'dist/Secure Agent.app/Contents/Helpers/secure-agentd'
 ```
 
-`make test-setup-session-live` separately checks fresh native Setup through a real Codex task to attributed tool evidence in the console. It requires macOS, a graphical login and an authenticated Codex CLI. It copies only the CLI credential into a disposable profile and removes that copy afterward. It does not install an app, change system permissions, register hooks or enable routing. Codex trace observation does not establish guard or payload-inspection coverage.
+`make test-setup-session-live` separately checks fresh native Setup through a real Codex task to attributed tool evidence in the console and JSON/Markdown CLI exports. It requires macOS, a graphical login and an authenticated Codex CLI. It copies only the CLI credential into a disposable profile and removes that copy afterward. It does not install an app, change system permissions, register hooks or enable routing. Codex trace observation does not establish guard or payload-inspection coverage.
+
+To include concurrent Claude Code activity, use an authenticated Claude CLI:
+
+```bash
+python3 packaging/test/setup_session_live.py --with-claude
+```
+
+The runner uses the existing `CLAUDE_CONFIG_DIR` or `~/.claude` for authentication; `--claude-config-dir` can select another existing profile. It checks authentication before launching a model. Personal user settings are excluded from the test session, which explicitly loads production hooks installed in a disposable HOME. Only the current session's transcript is exposed to the collector. The extended check requires real allowed and denied Read results, distinct concurrent session identities, rendered console evidence, and CLI exports in JSON and Markdown. The runner does not rewrite authentication, user settings or installed hooks. Claude can retain its normal authentication metadata and the synthetic session record. Native permissions remain in effect, and Codex remains observation-only.
+
+`python3 packaging/test/test_setup_session_live.py` checks runner authentication, failure and cleanup handling without launching a model. These regression tests also run in `make test` and CI.
 
 ## Repository layout
 

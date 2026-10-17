@@ -76,6 +76,45 @@ func TestGuardDecisionRetentionAndRowCap(t *testing.T) {
 	}
 }
 
+func TestGuardDecisionRetentionAfterReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "guard.db")
+	s, err := Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC()
+	s.PutGuardDecisionForTest(GuardDecision{ID: "expired", SessionID: "s1", RuleID: "r", Verdict: "deny", Scope: "once", At: base.Add(-2 * time.Hour).Format(time.RFC3339Nano)})
+	for i := 0; i < 4; i++ {
+		s.PutGuardDecisionForTest(GuardDecision{ID: fmt.Sprintf("fresh-%d", i), SessionID: "s1", RuleID: "r", Verdict: "allow", Scope: "once", At: base.Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano)})
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.SetEventRetention(time.Hour, time.Hour)
+	if err := s.pruneGuardDecisions(context.Background(), time.Hour, 10); err != nil {
+		t.Fatal(err)
+	}
+	rows := s.ListGuardDecisions("s1", 500)
+	if len(rows) != 4 || rows[0].ID != "fresh-3" || rows[3].ID != "fresh-0" {
+		t.Fatalf("age pruning after reopen = %+v, want all four fresh rows and no expired row", rows)
+	}
+	if err := s.pruneGuardDecisions(context.Background(), time.Hour, 3); err != nil {
+		t.Fatal(err)
+	}
+	rows = s.ListGuardDecisions("s1", 500)
+	if len(rows) != 3 || rows[0].ID != "fresh-3" || rows[1].ID != "fresh-2" || rows[2].ID != "fresh-1" {
+		t.Fatalf("reopened decision history = %+v, want newest three", rows)
+	}
+	if got := s.ListGuardDecisions("other-session", 500); len(got) != 0 {
+		t.Fatalf("decision rows crossed session boundary: %+v", got)
+	}
+}
+
 // Production keeps its best-effort bound; the fixture path waits out a stall.
 func TestGuardDecisionDeadlineIsProductionOnly(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "guard.db"), "")

@@ -200,7 +200,7 @@ func TestEventRetentionBatchPruning(t *testing.T) {
 // Retention is time-based per kind: socket churn ages out in hours so it can
 // never evict the security record again (the 10k-row, zero-activity window),
 // while file/exec/guard kinds keep days.
-func TestEventRetentionPerKindTimeWindows(t *testing.T) {
+func TestEventRetentionAfterReopen(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(filepath.Join(dir, "e.db"), "")
 	if err != nil {
@@ -219,7 +219,15 @@ func TestEventRetentionPerKindTimeWindows(t *testing.T) {
 	put(event.KindExec, 48*time.Hour)          // 2d old, within 7d: kept
 	put(event.KindFileOpen, 30*24*time.Hour)   // 30d old: pruned
 	put(event.KindGuardPrompt, 6*24*time.Hour) // 6d old, within 7d: kept
-
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.SetEventRetention(24*time.Hour, 7*24*time.Hour)
 	s.PruneEvents()
 
 	got := map[event.Kind]int{}

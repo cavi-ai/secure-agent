@@ -88,6 +88,8 @@ jobs:
         run: python3 packaging/test/test_e2e_fixture.py
       - name: Release packaging regression tests
         run: python3 packaging/test/test_release_packaging.py
+      - name: Live setup runner regression tests
+        run: python3 packaging/test/test_setup_session_live.py
 
   linux:
     name: Linux CGO=0 build + vet + test

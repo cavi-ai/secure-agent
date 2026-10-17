@@ -96,7 +96,7 @@ def run(daemon_binary, harness_binary):
             "SECURE_AGENT_GUARD_MODES": str(modes), "SECURE_AGENT_PROMPT_DEADLINE_S": "10",
         })
 
-        def api(route, body=None, method=None):
+        def api(route, body=None, method=None, decode_json=True):
             connection = http.client.HTTPConnection("localhost", timeout=5)
             connection.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             connection.sock.settimeout(5)
@@ -108,7 +108,7 @@ def run(daemon_binary, harness_binary):
                 response = connection.getresponse()
                 content = response.read()
                 require(response.status == 200, f"{route}: HTTP {response.status}")
-                return json.loads(content)
+                return json.loads(content) if decode_json else content.decode("utf-8")
             finally:
                 connection.close()
 
@@ -157,6 +157,9 @@ def run(daemon_binary, harness_binary):
                 result("allow")
                 sessions = wait_for("attributed tool caller", lambda: [s for s in api("/sessions") if s.get("root_pid") == harness.pid])
                 session_id = sessions[0]["id"]
+                active_identity = {key: sessions[0].get(key) for key in ("id", "harness", "workspace", "root_pid", "root_started_at")}
+                require(active_identity["harness"] == "claude" and active_identity["workspace"] == str(workspace),
+                        "Active session identity is incomplete")
 
                 pending = request()
                 require(pending["session_id"] == session_id and pending["workspace"] == str(workspace), "Request identity does not match the observed session")
@@ -168,6 +171,7 @@ def run(daemon_binary, harness_binary):
                 result("deny")
                 print("PASS: allow once and deny control the fixture read", flush=True)
 
+                revoked_ids = []
                 for scope, expiry, label in (("session", None, "Session permission"), ("exact", "24h", "Timed permission")):
                     pending = request()
                     receipt = resolve(pending, scope=scope, expiry=expiry)
@@ -189,6 +193,7 @@ def run(daemon_binary, harness_binary):
                     result("deny")
                     revoked = api("/decision-scopes?id=" + quote(ids[0]), method="DELETE")
                     require(revoked["revoked"] and revoked["id"] == ids[0], "Revocation was not confirmed")
+                    revoked_ids.append(ids[0])
                     resolve(request(), "deny")
                     result("deny")
                     print("PASS: " + label + " exact-file reuse, different-file denial and revocation", flush=True)
@@ -200,15 +205,73 @@ def run(daemon_binary, harness_binary):
                 require(outcomes["reason"] == "timeout" and outcomes["verdict"] == "deny", "Timeout was not recorded as deny")
                 print("PASS: timeout denies the read and rejects a late answer", flush=True)
 
+                ended_env = dict(environment)
+                ended_env["SECURE_AGENT_SESSION_ID"] = "guard-ended-" + uuid.uuid4().hex
+                ended_harness = subprocess.Popen([str(harness_binary), sys.executable, str(REPO / "plugin/hooks/secret_guard.py"), str(resource), str(other_resource)],
+                                                 cwd=workspace, env=ended_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                                 stderr=harness_log, text=True, start_new_session=True)
+                ended_harness.stdin.write("observe\n"); ended_harness.stdin.flush()
+                wait_for("ended caller session", lambda: [s for s in api("/sessions") if s.get("root_pid") == ended_harness.pid])
+                ended_identity = next(s for s in api("/sessions") if s.get("root_pid") == ended_harness.pid)
+                readable, _, _ = select.select([ended_harness.stdout], [], [], 12)
+                require(readable, "Ended tool caller did not return its observe result")
+                ended_line = ended_harness.stdout.readline()
+                require(ended_line, "Ended tool caller exited without an observe result")
+                ended_result = json.loads(ended_line)
+                require(ended_result["permission"] == "allow" and ended_result["bytes_read"] == len(fixture),
+                        "Ended caller observe did not complete the fixture read")
+                ended_harness.stdin.close()
+                ended_harness.wait(timeout=5)
+                ended_id = ended_identity["id"]
+                require(ended_id != session_id, "Distinct callers were assigned the same session ID")
+                ended_identity = {key: ended_identity.get(key) for key in ("id", "harness", "workspace", "root_pid", "root_started_at")}
+                require(ended_identity["harness"] == "claude" and ended_identity["workspace"] == str(workspace),
+                        "Ended session identity is incomplete")
+                wait_for("ended caller status", lambda: next((s for s in api("/sessions") if s.get("id") == ended_id and s.get("status") == "ended"), None))
+                print("PASS: second isolated caller is recorded as an ended session", flush=True)
+
                 stop(daemon)
                 harness.stdin.write("read\n"); harness.stdin.flush()
                 result("ask")
                 print("PASS: unavailable daemon requests Claude consent without reading", flush=True)
                 daemon = start_daemon()
                 wait_for("restarted daemon", ready)
-                wait_for("restored session", lambda: [s for s in api("/sessions") if s.get("root_pid") == harness.pid])
+                restored = wait_for("restored active session", lambda: next((s for s in api("/sessions") if s.get("id") == session_id and s.get("status") != "ended"), None))
+                ended_restored = wait_for("restored ended session", lambda: next((s for s in api("/sessions") if s.get("id") == ended_id and s.get("status") == "ended"), None))
+                for expected, actual in ((active_identity, restored), (ended_identity, ended_restored)):
+                    require(all(actual.get(key) == value for key, value in expected.items()), "Session identity changed across daemon restart")
                 rows = api("/decision-scopes")
-                require(len(rows) == 2 and all(r.get("revoked_at") for r in rows), "Revocations were not retained after restart")
+                require(len(rows) == 2 and {r["id"] for r in rows} == set(revoked_ids)
+                        and all(r.get("revoked_at") for r in rows), "Revocations were not retained after restart")
+                history = api("/sessions/" + quote(session_id) + "/outcomes")
+                saved_timeout = next((g for g in history["history"]["guards"] if g["id"] == pending["id"]), None)
+                require(history["session_id"] == session_id and saved_timeout is not None
+                        and saved_timeout["verdict"] == "deny" and saved_timeout["reason"] == "timeout",
+                        "Timeout outcome changed or crossed sessions after restart")
+                foreign_history = api("/sessions/" + quote(ended_id) + "/outcomes")
+                require(foreign_history["session_id"] == ended_id
+                        and all(g["id"] != pending["id"] for g in foreign_history["history"]["guards"]),
+                        "Timeout outcome leaked into the ended session")
+                json_report = api("/sessions/" + quote(session_id) + "/report?format=json")
+                require(json_report["session"]["id"] == session_id and len(json_report["files"]) <= 50
+                        and len(json_report["hosts"]) <= 50 and len(json_report["timeline"]) <= 500,
+                        "JSON report identity or bounds are invalid")
+                md_report = api("/sessions/" + quote(session_id) + "/report?format=md", decode_json=False)
+                require(len(md_report) <= 100_000 and "Session `" + session_id + "`" in md_report
+                        and "Evidence and limits" in md_report,
+                        "Markdown report identity or bounds are invalid")
+                ended_json_report = api("/sessions/" + quote(ended_id) + "/report?format=json")
+                require(ended_json_report["session"]["id"] == ended_id and ended_json_report["session"]["status"] == "ended"
+                        and len(ended_json_report["files"]) <= 50 and len(ended_json_report["timeline"]) <= 500,
+                        "Ended-session JSON report identity or bounds are invalid")
+                ended_md_report = api("/sessions/" + quote(ended_id) + "/report?format=md", decode_json=False)
+                require(len(ended_md_report) <= 100_000 and "Session `" + ended_id + "`" in ended_md_report
+                        and pending["id"] not in ended_md_report,
+                        "Ended-session Markdown report identity, bounds or isolation are invalid")
+                require(str(resource) not in json.dumps(ended_json_report)
+                        and str(resource) not in ended_md_report,
+                        "Active-session credential path leaked into the ended-session report")
+                print("PASS: restart retains session outcomes and bounded JSON/Markdown reports", flush=True)
                 resolve(request(), "deny")
                 result("deny")
                 print("PASS: restart retains revocations and permits a fresh decision", flush=True)
@@ -219,6 +282,11 @@ def run(daemon_binary, harness_binary):
                     sys.stderr.write(stream.read()[-4000:])
                 raise
             finally:
+                stop(ended_harness if "ended_harness" in locals() else None)
+                if "ended_harness" in locals() and ended_harness.stdin and not ended_harness.stdin.closed:
+                    ended_harness.stdin.close()
+                if "ended_harness" in locals() and ended_harness.stdout:
+                    ended_harness.stdout.close()
                 stop(harness)
                 stop(daemon)
                 if harness:
