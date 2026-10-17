@@ -217,7 +217,7 @@ test('flag bursts reconcile two seconds after the last flag', () => {
 
 test('typed deltas reach their existing handlers unchanged', () => {
   const received = [];
-  const kinds = ['event', 'flag', 'incident', 'session', 'posture'];
+  const kinds = ['event', 'flag', 'incident', 'session', 'posture', 'review'];
   const message = { data: 'fixture' };
   const handlers = Object.fromEntries(kinds.map(kind => [kind, msg => received.push([kind, msg])]));
   const f = fixture({ handlers });

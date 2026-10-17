@@ -70,6 +70,32 @@ function build({ respond = () => reply({}), confirmed = true, shown = {}, nowMs 
   return { controller, log, document, timers, clock, ctx };
 }
 
+// A note poll that started before a rescan and lands after it must not put
+// the older report (with its removed rows) back.
+test('an older worktree read landing last does not overwrite a newer report', async () => {
+  let landPoll;
+  const older = { repos: [{ path: REPO, worktrees: [{ path: WT, branch: 'feat/a', state: 'remove' }] }], advice: {} };
+  const newer = { repos: [{ path: REPO, worktrees: [] }], advice: {} };
+  const { controller, timers } = build({
+    respond: (url, req) => {
+      if (url === '/worktrees/advise') return reply({ queued: true });
+      if (url === '/worktrees') return new Promise(resolve => { landPoll = () => resolve(reply(older)); });
+      if (url === '/worktrees?refresh=1') return reply(newer);
+      return reply({});
+    }
+  });
+  const advising = controller.adviseWorktree(WT);
+  for (let i = 0; i < 20 && !timers.length; i++) await new Promise(resolve => setImmediate(resolve));
+  timers.shift().fn(); // the note poll's wait ends; its read is now in flight
+  for (let i = 0; i < 20 && !landPoll; i++) await new Promise(resolve => setImmediate(resolve));
+  await controller.loadWorktrees(true);
+  assert.equal(controller.worktreesState.report, newer);
+  landPoll();
+  for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(controller.worktreesState.report, newer, 'the older read landed last and was applied');
+  void advising;
+});
+
 const worktreeReport = () => ({
   repos: [{
     path: REPO, size_bytes: 3000,

@@ -83,7 +83,7 @@ function createConsoleLiveUpdates({ refresh, streamURL, prepareStream = null, ha
       // hard-closed or after more than five consecutive failures.
       if (source.readyState === EventSourceImpl.CLOSED || failures > 5) startPolling();
     };
-    for (const kind of ['event', 'flag', 'incident', 'session', 'posture']) {
+    for (const kind of ['event', 'flag', 'incident', 'session', 'posture', 'review']) {
       source.addEventListener(kind, message => {
         if (stopped) return;
         if (handlers[kind]) handlers[kind](message);
