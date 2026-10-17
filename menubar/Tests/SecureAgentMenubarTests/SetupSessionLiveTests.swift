@@ -125,10 +125,11 @@ final class SetupSessionLiveTests: XCTestCase {
             try await wait("real console renders attributed tool evidence", seconds: 45) {
                 _ = try? await web.evaluateJavaScript("document.querySelector('[data-action=\"session-view\"][data-view=\"trace\"]')?.click()")
                 let result = try? await web.evaluateJavaScript("""
-                    window.SA?.selectedSessionId === \(expectedID) &&
+                    window.SA?.selectedSessionId === \(expectedID) && window.SA?.sessionView === 'trace' &&
                     window.SA?.sessionTimeline?.some(e => e.session_id === \(expectedID) && e.kind === 12 &&
-                        e.call_id && e.tool &&
-                        document.querySelector('#session-detail .session-detail-body')?.textContent.includes(e.tool))
+                        e.call_id && e.tool && e.tool !== 'wait' &&
+                        Array.from(document.querySelectorAll('#session-detail .session-detail-body .wf-name'))
+                          .some(label => label.getClientRects().length && label.firstChild?.textContent === e.tool))
                     """)
                 return result as? Bool == true
             }

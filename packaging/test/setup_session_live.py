@@ -159,9 +159,10 @@ def main():
                         record = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if record.get("type") == "response_item":
+                    if isinstance(record, dict) and record.get("type") == "response_item":
                         payload = record.get("payload", {})
-                        shapes.append({key: payload[key] for key in ("type", "name", "call_id") if key in payload})
+                        if isinstance(payload, dict):
+                            shapes.append({key: payload[key] for key in ("type", "name", "call_id") if key in payload})
             # Schema diagnostics only; never retain message text or arguments.
             (build / "trace-shapes.json").write_text(json.dumps(shapes))
             if cleanup_errors:
