@@ -16,7 +16,7 @@ const scope = (id = 'scope-a', extra = {}) => ({ id, kind: 'exact', agent: 'clau
 function context() {
   const c = { Date, URLSearchParams, window: { SA: {} } };
   vm.createContext(c);
-  for (const file of ['lib.js', 'tab-overview.js', 'session-workbench.js', 'decision-permissions.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), c);
+  for (const file of ['lib.js', 'tab-overview.js', 'session-layout.js', 'session-workbench.js', 'decision-permissions.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), c);
   return c;
 }
 function controller() {

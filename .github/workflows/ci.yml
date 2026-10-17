@@ -60,6 +60,8 @@ jobs:
       # -race requires cgo. Production builds are CGO_ENABLED=0 (linux job).
       - name: go test
         run: go test ./... -count=1 -race -shuffle=on -timeout 10m
+      - name: Live hook and daemon workflow
+        run: make test-guard-workflow-live
 
   hooks:
     name: Python hook tests

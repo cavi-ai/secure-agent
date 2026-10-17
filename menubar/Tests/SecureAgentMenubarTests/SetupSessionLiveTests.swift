@@ -110,16 +110,33 @@ final class SetupSessionLiveTests: XCTestCase {
         }
         let expectedID = String(data: try JSONSerialization.data(withJSONObject: id, options: .fragmentsAllowed), encoding: .utf8)!
         try stage("waiting for rendered tool evidence in console")
-        try await wait("real console renders attributed tool evidence", seconds: 45) {
-            _ = try? await web.evaluateJavaScript("document.querySelector('[data-action=\"session-view\"][data-view=\"trace\"]')?.click()")
-            let result = try? await web.evaluateJavaScript("""
-                window.SA?.selectedSessionId === \(expectedID) &&
-                window.SA?.sessionTimeline?.some(e => e.session_id === \(expectedID) && e.kind === 12 &&
-                    e.call_id && e.tool &&
-                    document.querySelector('#session-detail .session-detail-body')?.textContent.includes(e.tool))
-                """)
-            return result as? Bool == true
+        func captureConsoleState() async {
+            // Retain fixture evidence without URLs, credentials or payloads.
+            if let snapshot = try? await web.evaluateJavaScript("""
+                JSON.stringify({selected: window.SA?.selectedSessionId, view: window.SA?.sessionView,
+                  traceState: window.SA?.sessionTimelineState,
+                  trace: window.SA?.sessionTimeline?.map(e => ({session: e.session_id, kind: e.kind, tool: e.tool, call: e.call_id})),
+                  text: document.querySelector('#session-detail')?.textContent.slice(0,8000)})
+                """) as? String {
+                try? snapshot.write(to: root.appendingPathComponent("console-state.json"), atomically: true, encoding: .utf8)
+            }
         }
+        do {
+            try await wait("real console renders attributed tool evidence", seconds: 45) {
+                _ = try? await web.evaluateJavaScript("document.querySelector('[data-action=\"session-view\"][data-view=\"trace\"]')?.click()")
+                let result = try? await web.evaluateJavaScript("""
+                    window.SA?.selectedSessionId === \(expectedID) &&
+                    window.SA?.sessionTimeline?.some(e => e.session_id === \(expectedID) && e.kind === 12 &&
+                        e.call_id && e.tool &&
+                        document.querySelector('#session-detail .session-detail-body')?.textContent.includes(e.tool))
+                    """)
+                return result as? Bool == true
+            }
+        } catch {
+            await captureConsoleState()
+            throw error
+        }
+        await captureConsoleState()
         try stage("native session evidence assertions passed")
     }
 

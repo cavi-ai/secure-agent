@@ -1183,6 +1183,8 @@ html.recent-work-navigation { overflow-anchor: none; }
 
 /* Policy: read-only lists. */
 .policy-list { display: flex; flex-direction: column; }
+.policy-effect { margin: 12px 16px; color: var(--tx-2); font-size: .875rem; line-height: 1.55; }
+#notify-pop .policy-effect { margin: 12px 0; }
 .policy-read-status { border-left: 3px solid var(--line); padding: 8px 12px; margin: 0 0 12px; font-size: .8rem; overflow-wrap: anywhere; }
 .policy-read-status p { margin: 0 0 8px; }
 .policy-read-status button { min-height: 44px; white-space: normal; }
@@ -1834,6 +1836,8 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .sd-metadata-body { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 0 0; }
 .session-detail-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 0 12px 12px; scrollbar-gutter: stable; overflow-anchor: none; }
 .session-memory { min-width: 0; }
+.session-detail-body .sm-content p, .session-detail-body .sd-outcome p,
+.session-detail-body .sd-follow-up p, .session-detail-body .sm-state { font-size: .875rem; line-height: 1.55; }
 .sd-outcome { padding: 12px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .sd-outcome h5 { margin: 0; font-size: 13px; }
 .sd-outcome time { font: 11px/1.4 var(--mono); color: var(--tx-2); }

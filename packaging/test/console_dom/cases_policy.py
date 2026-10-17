@@ -67,8 +67,8 @@ def run_policy_empty_lists_say_what_fills_them(page):
         'Policy empty lists say what fills them',
         (
             (
-                'No guard decisions yet.' in dom_query(dom_policyempty).text
-                or dom_query(dom_policyempty).has(None, {'title': lambda value: 'No guard decisions yet.' in (value or '')})
+                'No legacy guard decisions.' in dom_query(dom_policyempty).text
+                or dom_query(dom_policyempty).has(None, {'title': lambda value: 'No legacy guard decisions.' in (value or '')})
             )
             and (
                 'No file exceptions yet.' in dom_query(dom_policyempty).text
