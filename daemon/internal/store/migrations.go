@@ -350,6 +350,7 @@ func createIndexes(tx *sql.Tx, tableIndexes []string) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_turn_dedupe ON events(kind,session_id,ts) WHERE kind=13 AND session_id!=''`,
 		traceActivityIndexSQL,
 		sessionActivityIndexSQL,
+		sessionTimeIndexSQL,
 		// Incident indexes follow the column migration: findOpenIncidentSQL's
 		// expressions and lookups by flag id.
 		`CREATE INDEX IF NOT EXISTS idx_incidents_open_key ON incidents(COALESCE(rule,''), COALESCE(session_id,''), COALESCE(subject,''));`,

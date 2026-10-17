@@ -98,6 +98,9 @@ var (
 		event.KindPluginAction, event.KindProxyHit, event.KindToolCall, event.KindTurn, event.KindModelCall)
 	sessionActivityIndexSQL = `CREATE INDEX IF NOT EXISTS idx_events_session_activity ON events(session_id, kind, ` + timestampOrderExpr("ts") + `, ts)
 		WHERE kind IN (` + sessionActivityKinds + `)`
+	// A session report reads one session's events in instant order
+	// (sessionEventsSQL); this index serves that order without a sort.
+	sessionTimeIndexSQL = `CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_id, ` + timestampOrderExpr("ts") + `, id)`
 	// Prefix each candidate with a fixed-width UTC sort key. Strip that key
 	// after MAX so callers receive the original RFC3339 timestamp.
 	harnessActivitySQL = fmt.Sprintf(`SELECT s.harness,
@@ -1444,12 +1447,15 @@ func eventRecordQuery(f EventFilter, withID bool, beforeID int64) (string, []any
 		q += " AND remote_host = ? AND remote_host != ''"
 		args = append(args, f.RemoteHost)
 	}
+	// The unary + (a no-op on the value) keeps idx_events_session_time from
+	// serving the time bounds: newest-first paging by id stops at LIMIT on the
+	// session and kind indexes, where a time-range seek sorts the whole window.
 	if f.Since != "" {
-		q += " AND " + timestampOrderExpr("ts") + " >= " + timestampOrderExpr(":event_since")
+		q += " AND " + timestampOrderExpr("+ts") + " >= " + timestampOrderExpr(":event_since")
 		args = append(args, sql.Named("event_since", f.Since))
 	}
 	if f.Until != "" {
-		q += " AND " + timestampOrderExpr("ts") + " <= " + timestampOrderExpr(":event_until")
+		q += " AND " + timestampOrderExpr("+ts") + " <= " + timestampOrderExpr(":event_until")
 		args = append(args, sql.Named("event_until", f.Until))
 	}
 	q += " ORDER BY id DESC LIMIT ?"
