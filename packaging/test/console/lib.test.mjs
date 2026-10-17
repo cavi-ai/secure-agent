@@ -124,6 +124,9 @@ test('resourceDiagnosisText provides fallback copy and escapes server text', () 
 test('escapeHTML escapes the HTML-significant set', () => {
   assert.equal(escapeHTML('<a href="x">&</a>'), '&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;');
 });
+test('escapeHTML keeps a value inside a single-quoted attribute', () => {
+  assert.equal(escapeHTML("x' onmouseover='alert(1)"), 'x&#39; onmouseover=&#39;alert(1)');
+});
 test('escapeHTML tolerates null/undefined/numbers', () => {
   assert.equal(escapeHTML(null), '');
   assert.equal(escapeHTML(undefined), '');

@@ -245,7 +245,7 @@ test('agentRunHTML: status, escaped output, the command, and a copyable command 
   assert.match(html, /env &#39;A=b&#39;|env 'A=b'/);
   const manual = { ...run, mode: 'terminal', status: 'manual', output: '', detail: "Run it in a terminal: sh '/Users/x/.config/secure-agent/sysagent/terminal-4-1.sh'" };
   assert.equal(agentRunCommand(manual), "sh '/Users/x/.config/secure-agent/sysagent/terminal-4-1.sh'");
-  assert.match(agentRunHTML(manual, status(), now), /data-action="agent-copy" data-text="sh '\/Users\/x\/\.config\/secure-agent\/sysagent\/terminal-4-1\.sh'"/);
+  assert.match(agentRunHTML(manual, status(), now), /data-action="agent-copy" data-text="sh &#39;\/Users\/x\/\.config\/secure-agent\/sysagent\/terminal-4-1\.sh&#39;"/);
   assert.equal(agentRunCommand({ ...manual, status: 'opened' }), '');
 });
 
