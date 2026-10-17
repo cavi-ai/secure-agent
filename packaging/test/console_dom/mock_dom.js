@@ -3310,23 +3310,23 @@
           }
           await wait(() => scopes.querySelector('[data-action="policy-refresh-report"]'));
           healthy = expected.querySelector('[data-action="forget-expected"]:not([disabled])');
-          probe.qualified = scenarios.has('policyhealth=stale') ? scopes.textContent.includes('Showing last known records') && scopes.textContent.includes('Last successful refresh') && scopes.textContent.includes('/synthetic/credentials')
+          probe.qualified = scenarios.has('policyhealth=stale') ? scopes.textContent.includes('Showing last known records') && scopes.textContent.includes('Last successful read') && scopes.textContent.includes('/synthetic/credentials')
             : scopes.textContent.includes('Unavailable. No successful read yet') && document.getElementById('badge-scopes').textContent === '—';
-          probe.noEmptyClaim = !scopes.textContent.includes('No scoped permissions');
+          probe.noEmptyClaim = !scopes.querySelector('.empty');
           probe.readOnly = !scopes.querySelector('[data-action="revoke-scope"]');
           await window.revokeScope('policy-health-scope');
           probe.noWrite = !window.__policyWrites;
           const retry = scopes.querySelector('[data-action="policy-refresh-report"]');
-          probe.retryLabel = retry.textContent === 'Refresh scoped permissions' && retry.getBoundingClientRect().height >= 44;
+          probe.retryLabel = retry.textContent === 'Refresh saved permissions' && retry.getBoundingClientRect().height >= 44;
           const before = { ...window.__policyReads };
           healthy.focus(); window.__policyRecovered = true; retry.click();
-          probe.recovered = await wait(() => scopes.textContent.includes('No scoped permissions') && !scopes.querySelector('[data-action="policy-refresh-report"]'));
+          probe.recovered = await wait(() => !!scopes.querySelector('.empty') && document.getElementById('badge-scopes').textContent === '0' && !scopes.querySelector('[data-action="policy-refresh-report"]'));
           probe.bounded = window.__policyReads['/decision-scopes'] === before['/decision-scopes'] + 1 && Object.keys(before).filter(path => path !== '/decision-scopes').every(path => before[path] === window.__policyReads[path]);
           probe.focus = document.activeElement === healthy && healthy.isConnected;
           if (scenarios.has('policyhealth=reconnect')) {
             const reads = window.__policyReads['/decision-scopes'];
             location.hash = 'ct=fixture-restored';
-            probe.reconnected = await wait(() => !document.body.classList.contains('is-ended') && window.__policyReads['/decision-scopes'] > reads && scopes.textContent.includes('No scoped permissions'));
+            probe.reconnected = await wait(() => !document.body.classList.contains('is-ended') && window.__policyReads['/decision-scopes'] > reads && !!scopes.querySelector('.empty') && document.getElementById('badge-scopes').textContent === '0');
             probe.reloaded = !!expected.querySelector('[data-action="forget-expected"]:not([disabled])');
           }
         }

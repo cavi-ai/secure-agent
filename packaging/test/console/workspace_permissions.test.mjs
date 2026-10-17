@@ -48,3 +48,8 @@ test('authentication reset clears workspace and status along with permission rec
  assert.equal(state.policyState.scopeWorkspace,'all');
  assert.equal(state.policyState.scopeStatus,'all');
 });
+test('a failed refresh of an empty snapshot never claims current emptiness',()=>{
+ const html=c.workspacePermissionsHTML([],{workspace:'all',status:'all'},{lastSuccessAt:1,error:'Unavailable'});
+ assert.match(html,/current status is unavailable/);
+ assert.doesNotMatch(html,/No saved permissions/);
+});
