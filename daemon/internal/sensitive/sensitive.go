@@ -69,15 +69,33 @@ type Classifier interface {
 }
 
 type classifierImpl struct {
-	cfg      config.Config
-	sshKeyRe *regexp.Regexp
+	cfg config.Config
 }
 
 func New(cfg config.Config) Classifier {
-	return &classifierImpl{
-		cfg:      cfg,
-		sshKeyRe: regexp.MustCompile(`/\.ssh/(id_[a-z0-9_-]+|.*_(rsa|dsa|ecdsa|ed25519))$`),
+	return &classifierImpl{cfg: cfg}
+}
+
+// sshPrivateKeyRe is the one SSH private key rule: id_* or *_rsa|_dsa|_ecdsa|
+// _ed25519 under a .ssh directory. A name ending in a dotted suffix
+// (id_ed25519.pub) is not a key. plugin/hooks/secret_guard.py mirrors it,
+// and testdata/paths.json pins both.
+var sshPrivateKeyRe = regexp.MustCompile(`(?i)/\.ssh/(?:[^/]+/)*(id_[a-z0-9_-]+|[^/]*_(rsa|dsa|ecdsa|ed25519))$`)
+
+// SSHPrivateKey reports whether path is a private SSH key.
+func SSHPrivateKey(path string) bool {
+	return sshPrivateKeyRe.MatchString(filepath.Clean(path))
+}
+
+// EnvSecret reports whether a file name is an environment file holding
+// values: .env or .env.<name>, but not a committed template (.env.example,
+// .env.sample, .env.template, .env.dist).
+func EnvSecret(base string) bool {
+	lower := strings.ToLower(base)
+	if envTemplates[lower] {
+		return false
 	}
+	return lower == ".env" || strings.HasPrefix(lower, ".env.")
 }
 
 func (c *classifierImpl) Classify(path string) (Category, bool) {
@@ -109,11 +127,9 @@ func (c *classifierImpl) Match(path string) (Match, bool) {
 		}
 	}
 
-	// 2. SSH key paths
-	if strings.Contains(lower, "/.ssh/") || strings.HasSuffix(lower, "/.ssh") {
-		if c.sshKeyRe.MatchString(clean) || strings.Contains(lower, "/.ssh/id_") {
-			return Match{CatSSHKey, "ssh-key"}, true
-		}
+	// 2. SSH private keys (public keys and ~/.ssh/config are not secrets)
+	if SSHPrivateKey(clean) {
+		return Match{CatSSHKey, "ssh-key"}, true
 	}
 
 	// 3. AWS credentials
@@ -135,7 +151,7 @@ func (c *classifierImpl) Match(path string) (Match, bool) {
 	if envTemplates[strings.ToLower(base)] {
 		return Match{Category: CatOther}, false
 	}
-	if base == ".env" || strings.HasPrefix(base, ".env.") {
+	if EnvSecret(base) {
 		return Match{CatEnvFile, "env-file"}, true
 	}
 

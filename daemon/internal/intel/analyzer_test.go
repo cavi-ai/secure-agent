@@ -1,6 +1,9 @@
 package intel
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -121,6 +124,44 @@ func TestAnalyzer_ClassifyPaths_NoFalsePositives(t *testing.T) {
 	} {
 		if item := analyzer.classifyPath(p); item != nil {
 			t.Errorf("classifyPath(%s) = %+v; want nil (no false-positive critical)", p, item)
+		}
+	}
+}
+
+// The incident analyzer and the flag classifier agree on environment files
+// and SSH keys (daemon/internal/sensitive/testdata/paths.json): a template
+// such as .env.example is not a Critical rotate item.
+func TestAnalyzerFollowsTheSharedPathRules(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "sensitive", "testdata", "paths.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Cases []struct {
+			Path          string `json:"path"`
+			SSHPrivateKey bool   `json:"ssh_private_key"`
+			EnvSecret     bool   `json:"env_secret"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	analyzer := NewAnalyzer()
+	for _, tc := range f.Cases {
+		item := analyzer.classifyPath(tc.Path)
+		switch {
+		case tc.SSHPrivateKey:
+			if item == nil || item.Category != model.CategorySSHKeys {
+				t.Errorf("classifyPath(%s) = %+v, want an SSH key item", tc.Path, item)
+			}
+		case tc.EnvSecret:
+			if item == nil || item.Category != model.CategoryEnvSecrets {
+				t.Errorf("classifyPath(%s) = %+v, want an environment file item", tc.Path, item)
+			}
+		default:
+			if item != nil {
+				t.Errorf("classifyPath(%s) = %+v, want nothing to rotate", tc.Path, item)
+			}
 		}
 	}
 }

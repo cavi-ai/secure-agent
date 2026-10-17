@@ -9,6 +9,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 )
 
 // attributionWindow bounds how far from the flag time an event may be and still
@@ -213,28 +214,13 @@ func (a *Analyzer) Analyze(flag model.Flag, events []event.Event) model.Incident
 	return report
 }
 
-// isSSHPrivateKey reports whether a basename looks like an SSH private key,
-// excluding public keys and non-key files under ~/.ssh (config, known_hosts).
-func isSSHPrivateKey(base string) bool {
-	if strings.HasSuffix(base, ".pub") {
-		return false
-	}
-	if strings.HasPrefix(base, "id_") {
-		return true
-	}
-	for _, suf := range []string{"_rsa", "_dsa", "_ecdsa", "_ed25519"} {
-		if strings.HasSuffix(base, suf) {
-			return true
-		}
-	}
-	return false
-}
-
+// classifyPath uses the sensitive package's rules for environment files and
+// SSH keys, so an incident and the flag behind it agree on what a path is.
 func (a *Analyzer) classifyPath(path string) *model.RotateItem {
 	cleanPath := strings.ToLower(filepath.Clean(path))
 	baseName := filepath.Base(cleanPath)
 
-	if strings.Contains(baseName, ".env") {
+	if sensitive.EnvSecret(baseName) {
 		return &model.RotateItem{
 			ID:          fmt.Sprintf("rot-env-%s", baseName),
 			Category:    model.CategoryEnvSecrets,
@@ -261,9 +247,8 @@ func (a *Analyzer) classifyPath(path string) *model.RotateItem {
 		}
 	}
 
-	// SSH: only actual private keys (id_* or *_rsa/_dsa/_ecdsa/_ed25519, not
-	// .pub) — not ~/.ssh/config or known_hosts.
-	if isSSHPrivateKey(baseName) {
+	// SSH: only actual private keys — not .pub, ~/.ssh/config or known_hosts.
+	if sensitive.SSHPrivateKey(path) {
 		return &model.RotateItem{
 			ID:          fmt.Sprintf("rot-ssh-%s", baseName),
 			Category:    model.CategorySSHKeys,
