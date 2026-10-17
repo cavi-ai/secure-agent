@@ -50,7 +50,7 @@ func (a *API) handlePatterns(w http.ResponseWriter, r *http.Request) {
 // computePatternsResult groups the flags raised since `since` by agent, rule
 // and served subject, keeps groups of at least min flags, most open first.
 func (a *API) computePatternsResult(since time.Time, min int) ([]model.Pattern, error) {
-	flags, err := a.store.QueryFlags(store.FlagFilter{Since: since.UTC().Format(time.RFC3339), Limit: patternFlagLimit})
+	flags, err := a.flagReads.read(a.store, store.FlagFilter{Since: since.UTC().Format(time.RFC3339), Limit: patternFlagLimit})
 	if err != nil {
 		return nil, err
 	}

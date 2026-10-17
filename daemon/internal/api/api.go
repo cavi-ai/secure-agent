@@ -265,6 +265,7 @@ type API struct {
 	harnessActivity harnessActivityCache
 	sessionCoverage sessionCoverageCache
 	coverageProbes  coverageProbeState
+	flagReads       flagReadCache
 }
 
 // GuardEventSink receives guard decisions (allow/deny) for downstream

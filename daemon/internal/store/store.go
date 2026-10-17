@@ -148,7 +148,18 @@ type Store struct {
 	// (Unix ns) of the newest ES event the drain loop has finished with.
 	fileFeed       atomic.Bool
 	fileFeedNewest atomic.Int64
+	// flagGen advances on every write to flags or advisor verdicts. Writers
+	// bump it under mu, and QueryFlags reads under mu, so a reader that loads
+	// it before querying never pairs a newer value with older rows.
+	flagGen atomic.Uint64
 }
+
+// FlagGeneration changes after every write to flags or advisor verdicts, so
+// a caller can reuse a flag read until it does.
+func (s *Store) FlagGeneration() uint64 { return s.flagGen.Load() }
+
+// flagsChanged records a write to flags or advisor verdicts (caller holds mu).
+func (s *Store) flagsChanged() { s.flagGen.Add(1) }
 
 // SetAllowlistSource wires the operator allowlist (agent -> hosts) that
 // TrendFor reports as AllowedFor.
@@ -362,6 +373,7 @@ func (s *Store) PutFlag(fl model.Flag) (result WriteResult, err error) {
 		return result, err
 	}
 	result.Changed = true
+	s.flagsChanged()
 	if fl.Rule == "sensitive-read-then-connect" {
 		_, reviewErr := s.observeFindingReviewLocked(fl, model.AssessFinding(fl))
 		result.HealthChanged = s.noteWrite("finding reviews", reviewErr) || result.HealthChanged
@@ -759,6 +771,9 @@ func (s *Store) AcknowledgeRuleHost(rule, host, agent string) int {
 			n++
 		}
 	}
+	if n > 0 {
+		s.flagsChanged()
+	}
 	return n
 }
 
@@ -826,6 +841,7 @@ func (s *Store) AcknowledgeFlag(id string) bool {
 	}
 	n, _ := res.RowsAffected()
 	if n > 0 {
+		s.flagsChanged()
 		s.syncLegacyReviewsLocked([]string{id})
 	}
 	return n > 0
@@ -874,6 +890,9 @@ func (s *Store) AcknowledgeFlagsReason(ids []string, reason string) int {
 		log.Printf("store: acknowledge flags commit: %v", err)
 		return 0
 	}
+	if n > 0 {
+		s.flagsChanged()
+	}
 	s.syncLegacyReviewsLocked(ids)
 	return n
 }
@@ -890,6 +909,9 @@ func (s *Store) ReattributeFlags(pid int32, agent string, since time.Time) int {
 		return 0
 	}
 	n, _ := res.RowsAffected()
+	if n > 0 {
+		s.flagsChanged()
+	}
 	return int(n)
 }
 
@@ -929,6 +951,7 @@ func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
 	}
 	n, _ := res.RowsAffected()
 	if n == 1 {
+		s.flagsChanged()
 		if f, ok := s.getFlagLocked(id); ok && f.Rule == "sensitive-read-then-connect" {
 			_, reviewErr := s.observeFindingReviewLocked(f, model.AssessFinding(f))
 			s.noteWrite("finding reviews", reviewErr)
@@ -1237,6 +1260,7 @@ func (s *Store) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict
 	if inserted != 1 {
 		return fmt.Errorf("advisor verdict insert affected %d rows", inserted)
 	}
+	s.flagsChanged()
 	return nil
 }
 
@@ -2364,6 +2388,9 @@ func (s *Store) ReclassifyReadConnectSeverity(ids []string) int {
 		}
 		count, _ := res.RowsAffected()
 		n += int(count)
+	}
+	if n > 0 {
+		s.flagsChanged()
 	}
 	return n
 }

@@ -102,7 +102,7 @@ func (a *API) publishPosture(gen uint64, p Posture, force bool) {
 // Deliberately derived, not persisted: posture is a view over state, never a
 // second source of truth.
 func (a *API) computePosture() Posture {
-	since := time.Now().Add(-24 * time.Hour)
+	since := dayWindow(time.Now())
 	patterns, patternErr := a.computePatternsResult(since, patternDefaultMin)
 	failedReads := a.advisorReadFailures("flag")
 	routine, routineErr := a.routineGroupsResult(since)

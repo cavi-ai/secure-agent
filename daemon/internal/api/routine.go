@@ -68,7 +68,7 @@ func (a *API) routineGroupsResult(since time.Time) ([]model.RoutineGroup, error)
 	if a.store == nil {
 		return []model.RoutineGroup{}, nil
 	}
-	flags, err := a.store.QueryFlags(store.FlagFilter{Rule: readConnectRule, Unacted: true, Since: since.UTC().Format(time.RFC3339), Limit: patternFlagLimit})
+	flags, err := a.flagReads.read(a.store, store.FlagFilter{Rule: readConnectRule, Unacted: true, Since: since.UTC().Format(time.RFC3339), Limit: patternFlagLimit})
 	if err != nil {
 		return nil, err
 	}

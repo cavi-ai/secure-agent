@@ -82,7 +82,7 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 		flags[i].Title = humanFlagTitle(flags[i].Rule)
 	}
 	a.stampExplains(flags)
-	since := time.Now().Add(-24 * time.Hour)
+	since := dayWindow(time.Now())
 	patterns, err := a.computePatternsResult(since, patternDefaultMin)
 	if err != nil {
 		return Snapshot{}, err

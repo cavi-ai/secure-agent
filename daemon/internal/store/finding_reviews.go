@@ -170,6 +170,7 @@ func (s *Store) observeFindingReviewLocked(f model.Flag, a model.FindingAssessme
 		err = tx.Commit()
 	}
 	if err == nil {
+		s.flagsChanged() // observeReviewTx may acknowledge the flag
 		s.reviewWrites++
 		if s.reviewWrites%100 == 0 {
 			_, err = s.db.Exec(`DELETE FROM finding_review_members WHERE flag_id NOT IN (SELECT id FROM flags)`)
@@ -640,6 +641,7 @@ func (s *Store) DecideFindingReview(req model.ReviewDecisionRequest) (receipt mo
 	}
 	err = tx.Commit()
 	if err == nil {
+		s.flagsChanged()
 		s.noteWrite("finding reviews", nil)
 	}
 	return
