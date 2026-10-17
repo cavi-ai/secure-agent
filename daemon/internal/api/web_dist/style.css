@@ -1273,6 +1273,10 @@ button.need-head:hover .need-what { text-decoration: underline; text-decoration-
 [aria-expanded="true"] > .need-meta > .need-chev, [aria-expanded="true"] > .log-chev { transform: rotate(90deg); }
 .need-actions { display: flex; align-items: center; gap: 8px; }
 .need-actions:empty { display: none; }
+.guard-request-summary { grid-column: 1 / -1; min-width: 0; }
+.guard-request-facts { margin: 0; gap: 6px 16px; }
+.guard-request-summary p { margin: 12px 0 0; color: var(--tx-3); font-size: 12px; }
+.need[data-kind="guard"] .need-head, .need[data-kind="guard"] .need-actions { grid-column: 1 / -1; }
 .need-assessed .need-head, .need-assessment, .need-consequence { grid-column: 1 / -1; }
 .need-assessed .need-what, .need-assessed .need-why { white-space: normal; overflow-wrap: anywhere; }
 .need-assessment { padding-left: 30px; }

@@ -452,6 +452,15 @@ def run_guard_receipts(page):
         for name in ('submitted', 'fits', 'permission', 'stale', 'revoked', 'history', 'historyPermission'):
             page.check(f'guard receipts ({label}): {name}', state.get(name) is True, str(state))
 
+def run_guard_review(page):
+    for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+        dom = page.dom('?guardreview', window_size=size, served=True,
+                       fixture={'script': 'cases_guard_review.js'})
+        receipt = re.search(r'data-guard-review-probe="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        for name in ('facts', 'inspect', 'return', 'confirm', 'cancelFocused', 'cancel', 'expired', 'fits'):
+            page.check(f'guard review ({label}): {name}', state.get(name) is True, str(state))
+
 def run_session_hooks(page):
     for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
         dom = page.dom('?sessionhooks', window_size=size, served=True,
@@ -610,6 +619,7 @@ CASES = (
     Case('context_handoff', run_context_handoff, ()),
     Case('session_results', run_session_results, ()),
     Case('guard_receipts', run_guard_receipts, ()),
+    Case('guard_review', run_guard_review, ()),
     Case('hook_monitoring', run_hook_monitoring, ()),
     Case('hook_history', run_hook_history, ()),
     Case('session_coverage', run_session_coverage, ()),

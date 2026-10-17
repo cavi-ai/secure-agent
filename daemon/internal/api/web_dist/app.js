@@ -212,7 +212,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const confirmCancelEl = document.getElementById('confirm-cancel');
   let cancelDialog = null;
 
-  function saDialog({ title, message, okLabel, withInput, placeholder, danger }) {
+  function saDialog({ title, message, okLabel, withInput, placeholder, danger, focusCancel }) {
     if (sessionEnded) return Promise.resolve(withInput ? null : false);
     if (cancelDialog) cancelDialog();
     const opener = document.activeElement;
@@ -228,7 +228,7 @@ document.addEventListener('DOMContentLoaded', () => {
     confirmInputEl.value = '';
     if (withInput) confirmInputEl.placeholder = placeholder || '';
     confirmLayer.hidden = false;
-    (withInput ? confirmInputEl : confirmOkEl).focus();
+    (withInput ? confirmInputEl : focusCancel ? confirmCancelEl : confirmOkEl).focus();
 
     return new Promise((resolve) => {
       const finish = (value) => {
@@ -2985,7 +2985,8 @@ document.addEventListener('DOMContentLoaded', () => {
     timelineSession = st.scope.session; timelinePids = st.scope.pids; timelinePidLabel = st.scope.label;
     syncHistoryViews(); paintScopeBar();
     switchTab('home', {skipHash:true}); renderAll();
-    const opener = Array.from(document.querySelectorAll('#session-daily [data-action="recent-session-results"]')).find(el => el.dataset.session === st.session);
+    const opener = st.guardID ? Array.from(document.querySelectorAll('#attention-list [data-action="guard-inspect"]')).find(el => el.dataset.id === st.guardID)
+      : Array.from(document.querySelectorAll('#session-daily [data-action="recent-session-results"]')).find(el => el.dataset.session === st.session);
     window.scrollTo({top:st.pageY,behavior:'instant'});
     (opener || document.getElementById('session-daily-title'))?.focus({preventScroll:true});
   }
@@ -3002,16 +3003,18 @@ document.addEventListener('DOMContentLoaded', () => {
     syncHarnessFilterControls();
     await window.filterTimelineToSession(st.session);
     if (!validRecentWork(st) || recentWorkReturn !== st || !st.active || activeTab !== 'sessions' || sessionWorkbench.selectedSessionId !== st.session) return;
-    await window.setSessionView('results');
+    await window.setSessionView(st.guardID ? 'memory' : 'results');
     if (!validRecentWork(st) || recentWorkReturn !== st || !st.active || activeTab !== 'sessions' || sessionWorkbench.selectedSessionId !== st.session) return;
     history.replaceState(recentWorkMark(st,'results'),'',location.pathname+location.search+consoleContextHash({route:'sessions',session:st.session}));
     renderNow(['sessions']);
+    if (st.guardID) window.showCurrentSessionStatus();
     document.querySelector('#session-detail [data-action="recent-work-home"]')?.focus({preventScroll:true});
   }
   window.openRecentSessionResults = function(id, el) {
-    if (sessionEnded || activeTab !== 'home' || !el?.closest('#session-daily') || !(telemetryData.sessions || []).some(s => s.id === id)) return;
+    if (sessionEnded || activeTab !== 'home' || !(el?.closest('#session-daily') || el?.dataset.action === 'guard-inspect') || !(telemetryData.sessions || []).some(s => s.id === id)) return;
     window.SA.clearRecentWorkReturn();
     const st = recentWorkReturn = {id:++recentWorkSequence,session:id,auth:handoffGeneration,active:true,
+      guardID:el.dataset.action === 'guard-inspect' ? el.dataset.id : null,
       search:document.getElementById('global-search')?.value || '',pageY:window.scrollY || 0,
       filter:{...harnessFilter,harnesses:{...harnessFilter.harnesses}},scope:{session:timelineSession,pids:timelinePids && [...timelinePids],label:timelinePidLabel}};
     // This flow restores page position itself; scope-bar changes must not
@@ -3226,6 +3229,10 @@ document.addEventListener('DOMContentLoaded', () => {
     refetch:()=> { fetchTelemetry({slow:false}); if(sessionWorkbench.selectedSessionId) { sessionWorkbench.refresh('overview'); sessionWorkbench.refresh('results'); } },
     openPermissions:receipt => { const auth=handoffGeneration; return openDecisionPermissions(receipt,'guard-result',{label:'Guard result',reopen:()=>{if(!sessionEnded && handoffGeneration===auth) {detailDrawer.close();switchTab('home');document.getElementById('guard-result')?.scrollIntoView({block:'nearest'});} }}); },
     openResults:async id=>{const auth=handoffGeneration;switchTab('sessions');await window.selectSession(id);if(!sessionEnded && auth===handoffGeneration && sessionWorkbench.selectedSessionId===id) window.setSessionView('results');},
+    openInspection:(id,el)=>{
+      if (!(telemetryData.sessions || []).some(s=>s.id===id)) { showToast('This session is not in the loaded history. Refresh sessions before inspecting.','info'); return; }
+      return window.openRecentSessionResults(id,el);
+    },
   });
   window.resolveGuardPrompt = guardDecisions.resolve;
 
@@ -3895,6 +3902,11 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'guard-resolve':
         e.preventDefault();
         window.resolveGuardPrompt(d.id, d.verdict, d.scope, d.expiry);
+        break;
+      case 'guard-inspect':
+        e.preventDefault();
+        detailDrawer.close();
+        guardDecisions.inspect(d.id, el);
         break;
       case 'guard-result-dismiss':
         guardDecisions.clear(); document.querySelector('.tab-btn[data-tab="home"]')?.focus({preventScroll:true}); break;

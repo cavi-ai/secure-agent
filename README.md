@@ -19,6 +19,10 @@ Screenshots use synthetic demonstration data.
 <details>
 <summary>Session inspection, protection, setup and menu bar</summary>
 
+<img src="assets/screenshots/access-request-dark.png" alt="Access request with its operation, resource, workspace and matched rule visible before Allow or Deny" width="1120">
+
+<img src="assets/screenshots/native-access-request-dark.png" alt="Native access request with recorded identity, future access choices and Inspect session" width="340">
+
 <img src="assets/screenshots/home-recent-work-dark.png" alt="Home Recent work with active and ended sessions and direct Review results actions" width="1120">
 
 <img src="assets/screenshots/sessions-dark.jpg" alt="Session inspection with current status, access requests and recorded coverage" width="1120">

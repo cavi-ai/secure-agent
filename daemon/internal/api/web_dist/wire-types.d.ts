@@ -669,6 +669,8 @@ export interface AttentionItem {
   detail?: string;
   rule?: string;
   path?: string;
+  tool?: string;
+  workspace?: string;
   scopeText?: string;
   available_scopes?: ScopeChoice[];
   reader_exe?: string;

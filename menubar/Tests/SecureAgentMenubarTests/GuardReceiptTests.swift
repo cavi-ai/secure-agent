@@ -16,6 +16,7 @@ final class GuardReceiptTests: XCTestCase {
         for (name, error) in [("submitted", nil as Error?), ("unconfirmed", NSError(domain: "fixture", code: 1) as Error?)] {
             client.resolveGuardError = error
             state.seedPostureForTesting(nil, pendingGuard: GuardPending(id: "prompt", agent: "codex", tool: "Read", path: "/fixture", ruleID: "env", ts: "", scopeText: nil, advisor: nil, sessionID: "session"))
+            client.pending = [state.pendingGuard!]
             await state.resolvePendingGuard(verdict: "allow", scope: "once")
             let controller = NSHostingController(rootView: ConsoleView(state: state, scrollable: false))
             let window = NSWindow(contentViewController: controller)
@@ -56,6 +57,7 @@ final class GuardReceiptTests: XCTestCase {
         let state = AppState(client: client)
         let pending = GuardPending(id: "prompt", agent: "codex", tool: "Read", path: "/fixture", ruleID: "env", ts: "", scopeText: nil, advisor: nil, sessionID: "session")
         state.seedPostureForTesting(nil, pendingGuard: pending)
+        client.pending = [pending]
         await state.resolvePendingGuard(verdict: "allow", scope: "once")
         XCTAssertEqual(state.guardResult?.title, "Answer submitted")
         XCTAssertTrue(state.guardResult?.detail.contains("receipt unavailable") == true)
@@ -63,6 +65,7 @@ final class GuardReceiptTests: XCTestCase {
         XCTAssertNil(state.guardResult)
         client.resolveGuardError = NSError(domain: "fixture", code: 1)
         state.seedPostureForTesting(nil, pendingGuard: pending)
+        client.pending = [pending]
         await state.resolvePendingGuard(verdict: "deny", scope: "once")
         XCTAssertEqual(state.guardResult?.title, "Answer not confirmed")
         XCTAssertTrue(state.guardResult?.detail.contains("before deciding again") == true)

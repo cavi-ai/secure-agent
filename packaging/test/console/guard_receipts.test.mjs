@@ -38,7 +38,7 @@ function controller() {
  const calls=[], views=[], permissions=[], sessions=[];
  let gen=1, stopped=false;
  const t=c.createGuardDecisionController({request:(url,options)=>new Promise((resolve,reject)=>calls.push({url,body:JSON.parse(options.body),resolve,reject})),confirm:async()=>true,
-  context:()=>({session_id:'owned'}),generation:()=>gen,ended:()=>stopped,paint:r=>views.push(r),announce:()=>{},refetch:()=>{},openPermissions:r=>permissions.push(r),openResults:id=>sessions.push(id)});
+  context:()=>({id:'prompt',session_id:'owned',available_scopes:[{kind:'once'},{kind:'exact',expiry:'24h'}]}),generation:()=>gen,ended:()=>stopped,paint:r=>views.push(r),announce:()=>{},refetch:()=>{},openPermissions:r=>permissions.push(r),openResults:id=>sessions.push(id)});
  return {t,calls,views,permissions,sessions,auth(){gen++;},stop(){stopped=true;},answer(payload){calls.at(-1).resolve({ok:true,json:async()=>payload});}};
 }
 
@@ -59,7 +59,8 @@ test('lost, expired, mismatched, and legacy responses never invent a permission 
   if(mode==='lost')h.calls[0].reject(new Error('lost response'));
   else h.answer(mode==='expired'?{resolved:false}:mode==='legacy'?{resolved:true}:{resolved:true,receipt});
   await pending;assert.equal(h.calls.length,1);h.t.permissions();assert.equal(h.permissions.length,0);
-  assert.equal(!!h.views.at(-1).unconfirmed,mode!=='legacy');
+  assert.equal(!!h.views.at(-1).unconfirmed,mode==='lost' || mode==='mismatch');
+  assert.equal(!!h.views.at(-1).expired,mode==='expired');
  }
 });
 

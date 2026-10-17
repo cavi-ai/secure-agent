@@ -77,7 +77,9 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
         return pending
     }
     var resolveGuardError: Error?
+    var guardResolveCalls: [GuardResolveRequest] = []
     func resolveGuard(_ req: GuardResolveRequest) async throws -> GuardResolveReceipt? {
+        guardResolveCalls.append(req)
         if let resolveGuardError { throw resolveGuardError }
         return nil
     }
