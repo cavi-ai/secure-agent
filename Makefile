@@ -94,6 +94,7 @@ test:
 	python3 plugin/hooks/test_activity_log.py
 	python3 plugin/hooks/test_cursor_hooks.py
 	python3 packaging/test/test_release_packaging.py
+	python3 packaging/test/test_setup_session_live.py
 	$(MAKE) test-guard-workflow-live
 	@echo "==> Checking console assets..."
 	./packaging/test/check_console_css.sh

@@ -34,6 +34,8 @@ final class SetupSessionLiveTests: XCTestCase {
         let setup = SetupManager(defaults: defaults, deferAutomaticTelemetry: true)
         let client = DaemonClient()
         let app = AppState(client: client)
+        let withClaude = ProcessInfo.processInfo.environment["SECURE_AGENT_SETUP_E2E_WITH_CLAUDE"] == "1"
+        if withClaude { app.testHookSkipPromptDialog = true }
         app.start()
         defer { app.stop() }
         try await wait("fresh daemon") {
@@ -96,6 +98,7 @@ final class SetupSessionLiveTests: XCTestCase {
         let id = try XCTUnwrap(harnessID)
         let coverage = try XCTUnwrap(setup.firstUseState.sessions.first { $0.sessionID == id })
         XCTAssertEqual(coverage.workspace, root.appendingPathComponent("project").path)
+        XCTAssertEqual(coverage.rootPID, try childPID(root, marker: "harness-started"))
         XCTAssertEqual(coverage.guardPath.state, "unsupported")
         XCTAssertNotEqual(coverage.payload.state, "observed")
         XCTAssertFalse(setup.firstUseState.sessionsUnavailable)
@@ -138,6 +141,90 @@ final class SetupSessionLiveTests: XCTestCase {
             throw error
         }
         await captureConsoleState()
+        if withClaude {
+            let hooks = try XCTUnwrap(ProcessInfo.processInfo.environment["SECURE_AGENT_SETUP_E2E_HOOKS_DIR"])
+            try HookRegistry.installSelectedHooks(harness: "claude", bundledDir: hooks, home: home)
+            let guardModes = URL(fileURLWithPath: home).appendingPathComponent(".config/secure-agent/guard-modes.json")
+            try FileManager.default.createDirectory(at: guardModes.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(["env-files": "prompt"]).write(to: guardModes, options: .atomic)
+            try stage("isolated Claude hooks installed")
+            try Data().write(to: root.appendingPathComponent("claude-ready"))
+            try await wait("Claude process started", seconds: 150) {
+                FileManager.default.fileExists(atPath: root.appendingPathComponent("claude-started").path)
+            }
+            let claudePID = try childPID(root, marker: "claude-started")
+            let claudeExecutable = try String(contentsOf: root.appendingPathComponent("claude-executable"), encoding: .utf8)
+            app.refresh()
+            try await wait("isolated Claude executable is tagged by the daemon", seconds: 30) {
+                return app.status?.agents?.contains { agent in
+                    agent.pid == claudePID && agent.name == "claude" &&
+                        URL(fileURLWithPath: agent.exePath ?? "").lastPathComponent ==
+                        URL(fileURLWithPath: claudeExecutable).lastPathComponent
+                } == true
+            }
+            try stage("waiting for native allow decision")
+            try await wait("Claude allow request", seconds: 90) {
+                guard let pending = app.pendingGuard else { return false }
+                return pending.path.hasSuffix("/.env.allowed") && pending.sessionID?.isEmpty == false
+            }
+            guard let allowedRequest = app.pendingGuard else { throw Failure.timeout("Claude allow request") }
+            XCTAssertEqual(allowedRequest.agent, "claude")
+            XCTAssertEqual(allowedRequest.ruleID, "env-files")
+            await app.resolvePendingGuard(id: allowedRequest.id, verdict: "allow", scope: "once")
+            try stage("waiting for native deny decision")
+            try await wait("Claude deny request", seconds: 90) {
+                guard let pending = app.pendingGuard else { return false }
+                return pending.path.hasSuffix("/.env.denied") && pending.sessionID?.isEmpty == false
+            }
+            guard let deniedRequest = app.pendingGuard else { throw Failure.timeout("Claude deny request") }
+            XCTAssertEqual(deniedRequest.agent, "claude")
+            XCTAssertEqual(deniedRequest.ruleID, "env-files")
+            await app.resolvePendingGuard(id: deniedRequest.id, verdict: "deny", scope: "once")
+            try await wait("real Claude tool results and report checks", seconds: 200) {
+                FileManager.default.fileExists(atPath: root.appendingPathComponent("claude-finished").path)
+            }
+            let claudeID = try XCTUnwrap(self.claudeSessionID(in: root.appendingPathComponent("claude-stream.jsonl")))
+            XCTAssertNotEqual(claudeID, id, "Codex and Claude must retain separate durable session identities")
+            try stage("waiting for Claude session coverage")
+            try await wait("attributed Claude trace and guard activity", seconds: 45) {
+                await setup.refreshState()
+                return setup.firstUseState.sessions.contains {
+                    $0.sessionID == claudeID && $0.harness == "claude" &&
+                        $0.workspace == root.appendingPathComponent("project").path &&
+                        $0.trace.state == "observed" && $0.guardPath.state == "observed"
+                }
+            }
+            let claudeCoverage = try XCTUnwrap(setup.firstUseState.sessions.first { $0.sessionID == claudeID })
+            XCTAssertEqual(claudeCoverage.harness, "claude")
+            XCTAssertEqual(claudeCoverage.workspace, root.appendingPathComponent("project").path)
+            XCTAssertEqual(claudeCoverage.rootPID, claudePID)
+            XCTAssertEqual(claudeCoverage.trace.state, "observed")
+            XCTAssertEqual(claudeCoverage.guardPath.state, "observed")
+            XCTAssertNotEqual(claudeCoverage.payload.state, "observed")
+            flow.selectedHarness = "claude"
+            opened.removeAll()
+            try await settle()
+            XCTAssertTrue(try key("1", code: 18, modifiers: .command, in: window))
+            XCTAssertEqual(opened, [.session(claudeID)])
+            let claudeExpectedID = String(data: try JSONSerialization.data(withJSONObject: claudeID, options: .fragmentsAllowed), encoding: .utf8)!
+            try await wait("console selects Claude durable session", seconds: 45) {
+                let result = try? await web.evaluateJavaScript("window.SA?.selectedSessionId || ''")
+                return result as? String == claudeID
+            }
+            try stage("waiting for rendered Claude tool evidence")
+            try await wait("real console renders Claude tool evidence", seconds: 45) {
+                _ = try? await web.evaluateJavaScript("document.querySelector('[data-action=\"session-view\"][data-view=\"trace\"]')?.click()")
+                let result = try? await web.evaluateJavaScript("""
+                    window.SA?.selectedSessionId === \(claudeExpectedID) && window.SA?.sessionView === 'trace' &&
+                    window.SA?.sessionTimeline?.some(e => e.session_id === \(claudeExpectedID) && e.kind === 12 &&
+                        e.call_id && e.tool && e.tool.toLowerCase() === 'read' &&
+                        Array.from(document.querySelectorAll('#session-detail .session-detail-body .wf-name'))
+                          .some(label => label.getClientRects().length && label.firstChild?.textContent?.toLowerCase() === e.tool.toLowerCase()))
+                    """)
+                return result as? Bool == true
+            }
+            await captureConsoleState()
+        }
         try stage("native session evidence assertions passed")
     }
 
@@ -182,6 +269,22 @@ final class SetupSessionLiveTests: XCTestCase {
                row["type"] as? String == "thread.started" { return row["thread_id"] as? String }
         }
         return nil
+    }
+
+    private func claudeSessionID(in url: URL) -> String? {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        for line in text.split(separator: "\n") {
+            if let row = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+               row["type"] as? String == "system", row["subtype"] as? String == "init" {
+                return row["session_id"] as? String
+            }
+        }
+        return nil
+    }
+
+    private func childPID(_ root: URL, marker: String) throws -> Int32 {
+        let value = try String(contentsOf: root.appendingPathComponent(marker), encoding: .utf8)
+        return try XCTUnwrap(Int32(value))
     }
 
 }
