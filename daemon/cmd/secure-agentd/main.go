@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -42,9 +41,7 @@ func main() {
 
 	configPathUsed := *configPath
 	if configPathUsed == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			configPathUsed = filepath.Join(home, ".config", "secure-agent", "config.yaml")
-		}
+		configPathUsed = config.DefaultConfigPath()
 	}
 	configPathUsed = config.ExpandPath(configPathUsed)
 	cfg, overlayErr, err := config.LoadWithOverlay(*configPath)

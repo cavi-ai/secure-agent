@@ -106,7 +106,7 @@ func TestCoverageProbeInstalledHookLive(t *testing.T) {
 	if rows := testutil.Read[[]event.Event](t)(a.store.QueryEvents(store.EventFilter{Limit: 20})); len(rows) != 0 {
 		t.Fatal("synthetic probe manufactured session evidence")
 	}
-	if rows := a.store.ListGuardDecisions("", 20); len(rows) != 0 {
+	if rows := guardDecisionRows(t, a.store, "", 20); len(rows) != 0 {
 		t.Fatal("synthetic probe manufactured real guard decisions")
 	}
 	home := filepath.Dir(filepath.Dir(dir))

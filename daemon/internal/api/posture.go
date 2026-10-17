@@ -122,12 +122,8 @@ func (a *API) advisorReadFailures(kind string) []string {
 	return advisorReadFailuresFrom(a.store, kind)
 }
 
-// postureWith is computePosture over the 24 h patterns and routine groups
-// the caller already computed.
-func (a *API) postureWith(patterns []model.Pattern, routine []model.RoutineGroup) Posture {
-	return a.postureWithReadHealth(patterns, routine, nil)
-}
-
+// postureWithReadHealth is computePosture over the 24 h patterns and routine
+// groups the caller already computed.
 func (a *API) postureWithReadHealth(patterns []model.Pattern, routine []model.RoutineGroup, failedReads []string) Posture {
 	return derivePosture(a.loadPostureInputs(a.statusFn(), patterns, routine, failedReads))
 }

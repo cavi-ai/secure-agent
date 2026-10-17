@@ -34,13 +34,6 @@ release:
 icon:
 	./packaging/make_icon.sh
 
-
-# Binaries
-BIN_DIR := $(HOME)/.local/bin
-DAEMON_BIN := $(BIN_DIR)/secure-agentd
-CLI_BIN := $(BIN_DIR)/secure-agent
-MENUBAR_BIN := $(BIN_DIR)/secure-agent-menubar
-
 all: build
 
 build: daemon cli menubar collector

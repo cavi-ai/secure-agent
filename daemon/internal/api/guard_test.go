@@ -126,7 +126,7 @@ func TestGuardOutcomePersistence(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("HTTP %d: %s", rec.Code, rec.Body.String())
 			}
-			rows := st.ListGuardDecisions("session-1", 10)
+			rows := guardDecisionRows(t, st, "session-1", 10)
 			if len(rows) != 1 {
 				t.Fatalf("rows=%+v, want one", rows)
 			}
@@ -156,7 +156,7 @@ func TestUnknownGuardSessionUnattributed(t *testing.T) {
 	if decision.Verdict != "deny" {
 		t.Fatalf("decision=%+v", decision)
 	}
-	rows := st.ListGuardDecisions("", 10)
+	rows := guardDecisionRows(t, st, "", 10)
 	if len(rows) != 1 || rows[0].SessionID != "" {
 		t.Fatalf("rows=%+v", rows)
 	}
@@ -204,7 +204,7 @@ func TestDeduplicatedGuardRequestsPersistSeparately(t *testing.T) {
 	if h := st.WriteHealth(); slices.Contains(h.Active, "guard decisions") {
 		t.Skipf("guard decision write exceeded its production bound on this host: %+v", h)
 	}
-	rows := st.ListGuardDecisions("session-1", 10)
+	rows := guardDecisionRows(t, st, "session-1", 10)
 	if len(rows) != 2 || rows[0].ID == rows[1].ID {
 		t.Fatalf("rows=%+v, want distinct persisted outcomes", rows)
 	}
@@ -256,7 +256,7 @@ func TestGuardAnswerAfterTheHookLeftSavesNoRule(t *testing.T) {
 	if _, ok := st.LookupGuardRule("claude", "cloud-creds"); ok {
 		t.Fatal("late Allow Always saved a guard rule")
 	}
-	if rows := st.ListGuardDecisions("", 10); len(rows) != 1 || rows[0].Verdict != "deny" {
+	if rows := guardDecisionRows(t, st, "", 10); len(rows) != 1 || rows[0].Verdict != "deny" {
 		t.Fatalf("recorded = %+v, want one deny", rows)
 	}
 }

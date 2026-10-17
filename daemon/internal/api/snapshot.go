@@ -142,11 +142,6 @@ func mutePairsFrom(policy map[string][]correlate.Mute) []MutePair {
 	return out
 }
 
-func (a *API) suggestionList() []Suggestion {
-	out, _ := a.suggestionListResult()
-	return out
-}
-
 func (a *API) suggestionListResult() ([]Suggestion, error) {
 	if a.correlator == nil {
 		return []Suggestion{}, nil

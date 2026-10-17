@@ -47,13 +47,8 @@ func (a *API) handlePatterns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, patterns)
 }
 
-// computePatterns groups the flags raised since `since` by agent, rule and
-// served subject, keeps groups of at least min flags, most open first.
-func (a *API) computePatterns(since time.Time, min int) []model.Pattern {
-	patterns, _ := a.computePatternsResult(since, min)
-	return patterns
-}
-
+// computePatternsResult groups the flags raised since `since` by agent, rule
+// and served subject, keeps groups of at least min flags, most open first.
 func (a *API) computePatternsResult(since time.Time, min int) ([]model.Pattern, error) {
 	flags, err := a.store.QueryFlags(store.FlagFilter{Since: since.UTC().Format(time.RFC3339), Limit: patternFlagLimit})
 	if err != nil {

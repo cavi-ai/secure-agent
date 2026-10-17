@@ -1308,7 +1308,11 @@ func (a *API) handleAllowlistSuggestions(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, a.suggestionList())
+	// The rows come from live egress; only their advisor notes are read from
+	// the store. A failed note read leaves the notes empty, keeps the rows,
+	// and stays visible in storage read health.
+	suggestions, _ := a.suggestionListResult()
+	writeJSON(w, suggestions)
 }
 
 // UninspectedEndpoint is one blind-spot row for the drill-down behind the

@@ -61,14 +61,9 @@ func routineExpectable(f model.Flag, reader, area, home string) bool {
 	return reads > 0 && len(expectedPairs(f)) > 0
 }
 
-// routineGroups groups the open read-then-connect flags raised since since
-// by reader and area, whichever agent raised them. A group is kept when it
-// holds routineMin flags and spans agents or files; most flags first.
-func (a *API) routineGroups(since time.Time) []model.RoutineGroup {
-	groups, _ := a.routineGroupsResult(since)
-	return groups
-}
-
+// routineGroupsResult groups the open read-then-connect flags raised since
+// since by reader and area, whichever agent raised them. A group is kept when
+// it holds routineMin flags and spans agents or files; most flags first.
 func (a *API) routineGroupsResult(since time.Time) ([]model.RoutineGroup, error) {
 	if a.store == nil {
 		return []model.RoutineGroup{}, nil
