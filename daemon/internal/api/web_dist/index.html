@@ -628,6 +628,7 @@
               <span class="badge" id="badge-firewall-mode">monitor</span>
             </div>
             <p class="report-health" data-reports="snapshot|allowlist" role="status" hidden></p>
+            <p class="policy-effect">Monitor reports matches; Block stops matching inspected requests. Traffic outside inspection is not covered.</p>
             <div class="panel-body" id="firewall-container">
               <div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>
             </div>
@@ -635,16 +636,18 @@
           <section class="panel" id="expected-egress-panel">
             <div class="panel-head"><h2><svg class="icon"><use href="#i-globe"/></svg>Expected connections</h2><span class="badge" id="badge-expected-egress">0</span></div>
             <p class="report-health" data-reports="expected egress" role="status" hidden></p>
+            <p class="policy-effect">Classifies matching connections as expected. Does not route or inspect traffic, or grant file access.</p>
             <div class="panel-body" id="expected-egress-container"><div class="empty"><span>No expected connections saved</span></div></div>
           </section>
           <div class="grid protection-rule-grid">
             <div class="col">
               <section class="panel" id="policy-guard-panel">
                 <div class="panel-head">
-                  <h2><svg class="icon"><use href="#i-shield"/></svg>Guard decisions</h2>
+                  <h2><svg class="icon"><use href="#i-shield"/></svg>Legacy guard decisions</h2>
                   <span class="badge" id="badge-guard-rules">0</span>
                   <button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh" title="Reload the policy lists"><svg class="icon"><use href="#i-refresh"/></svg><span>Refresh</span></button>
                 </div>
+                <p class="policy-effect">Agent-wide allow or deny decisions for a rule, with no expiry. Session and timed permissions are listed above.</p>
                 <div class="panel-body" id="policy-guard-rules">
                   <div class="loading">Loading guard decisions…</div>
                 </div>
@@ -654,6 +657,7 @@
                   <h2><svg class="icon"><use href="#i-doc"/></svg>File exceptions</h2>
                   <span class="badge" id="badge-path-allows">0</span>
                 </div>
+                <p class="policy-effect">Approves matching guarded paths, including descendants. Independent hard-deny checks still apply.</p>
                 <div class="panel-body" id="policy-path-allows">
                   <div class="loading">Loading file exceptions…</div>
                 </div>
@@ -663,6 +667,7 @@
                   <h2><svg class="icon"><use href="#i-bell"/></svg>Muted flag classes</h2>
                   <span class="badge" id="badge-mutes">0</span>
                 </div>
+                <p class="policy-effect">Suppresses matching finding classes. Does not grant file or network access.</p>
                 <div class="panel-body" id="policy-mutes">
                   <div class="loading">Loading muted flag classes…</div>
                 </div>
@@ -672,6 +677,7 @@
                   <h2><svg class="icon"><use href="#i-key"/></svg>Expected secret reads</h2>
                   <span class="badge" id="badge-expected">0</span>
                 </div>
+                <p class="policy-effect">Changes how matching read/connect activity is classified. File guards and payload rules remain separate.</p>
                 <div class="panel-body" id="policy-expected">
                   <div class="loading">Loading expected secret reads…</div>
                 </div>
@@ -684,6 +690,7 @@
                 </div>
                 <div class="panel-body">
                   <div class="notify-pop-sub">Default: only critical flags notify. Strongest rule first: a workspace scope beats a per-rule override, which beats the default. Applies to the menu bar app and this console.</div>
+                  <p class="policy-effect">Changes notifications. Monitoring and protection rules are unchanged.</p>
                   <p class="report-health" data-reports="notification rules" role="status" hidden></p>
                   <div id="notify-rules-list"></div>
                   <div class="notify-pop-head notify-scope-head">Per-workspace scopes</div>

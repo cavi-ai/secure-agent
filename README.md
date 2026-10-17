@@ -23,6 +23,8 @@ Screenshots use synthetic demonstration data.
 
 <img src="assets/screenshots/workspace-permissions-dark.png" alt="Saved permissions filtered to a workspace with lifetime, status, session inspection and individual revocation" width="1120">
 
+<img src="assets/screenshots/policy-effects-dark.png" alt="Policy lists explaining connection expectations, legacy guard decisions and notification effects" width="1120">
+
 <img src="assets/screenshots/native-access-request-dark.png" alt="Native access request with recorded identity, future access choices and Inspect session" width="340">
 
 <img src="assets/screenshots/home-recent-work-dark.png" alt="Home Recent work with active and ended sessions and direct Review results actions" width="1120">

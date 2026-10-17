@@ -135,7 +135,7 @@ test('policy lists: rows escaped, empty states say what fills them, loading and 
   const scoped = policyListHTML('mute', [{ rule: 'keychain-access', host: '*', agent: 'co<dex' }, { rule: 'keychain-access', host: '*' }], {});
   assert.ok(scoped.includes('all hosts · co&lt;dex') && scoped.includes('all hosts · all agents'), 'a scoped mute names its agent; an unscoped one says all agents');
   assert.ok(policyListHTML('path', [], {}).includes('No file exceptions yet.'));
-  assert.ok(policyListHTML('guard', [], {}).includes('No guard decisions yet.'));
+  assert.ok(policyListHTML('guard', [], {}).includes('No legacy guard decisions.'));
   assert.ok(policyListHTML('mute', [], {}).includes('No muted flag classes.'));
   assert.ok(policyListHTML('expected', [], {}).includes('No expected secret reads.'));
   const expected = policyListHTML('expected', [

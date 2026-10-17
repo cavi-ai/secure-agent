@@ -50,6 +50,28 @@ const {
 
 // ---------- spend ----------
 
+test('record timestamps show local time and timezone while preserving the recorded instant', () => {
+  const original = process.env.TZ;
+  try {
+    process.env.TZ = 'UTC';
+    const instant = '2026-07-12T12:00:00Z';
+    const utc = ctx.localTimestampHTML(instant);
+    assert.ok(utc.includes('datetime="' + instant + '"'));
+    assert.ok(utc.includes('12:00 PM UTC'));
+    process.env.TZ = 'America/New_York';
+    const local = ctx.localTimestampHTML(instant);
+    assert.ok(local.includes('8:00 AM EDT'));
+    assert.ok(local.includes('datetime="' + instant + '"'));
+    for (const value of [undefined, null, '', ' ', 'not-a-time', '<script>']) {
+      assert.equal(ctx.localTimestampHTML(value), 'Time unavailable');
+    }
+    assert.ok(ctx.localTimestampHTML(0).includes('datetime="1970-01-01T00:00:00.000Z"'));
+  } finally {
+    if (original === undefined) delete process.env.TZ;
+    else process.env.TZ = original;
+  }
+});
+
 test('fmtUSD: two decimals, thousands separators, sub-cent floor', () => {
   assert.equal(fmtUSD(0), '$0.00');
   assert.equal(fmtUSD(0.004), '<$0.01');
