@@ -1,0 +1,55 @@
+name: macOS
+
+# Pull requests that touch macOS-only code build and test it on macOS before
+# merge. Release validation still runs the full macOS set on publication.
+on:
+  pull_request:
+    paths:
+      - "menubar/**"
+      - "packaging/**"
+      - "**/*_darwin.go"
+      - "**/*_darwin_test.go"
+      - ".github/workflows/macos.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: macOS Go vet + test
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4 (SHA-pinned)
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5 (SHA-pinned)
+        with:
+          go-version-file: go.mod
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./... -count=1 -race -shuffle=on -timeout 10m
+
+  menubar:
+    name: Swift tests + app bundle layout
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4 (SHA-pinned)
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5 (SHA-pinned)
+        with:
+          go-version-file: go.mod
+      - name: swift test
+        run: bash packaging/swift_macos.sh test --package-path menubar
+      - name: build the app (ad hoc)
+        run: CODESIGN_IDENTITY=- ./packaging/make_app.sh
+      - name: bundle identity and layout
+        run: ./packaging/test/check_bundle_layout.sh
