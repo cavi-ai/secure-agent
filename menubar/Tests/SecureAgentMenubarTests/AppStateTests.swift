@@ -618,6 +618,47 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
         XCTAssertEqual(state.promptingIDForTesting, "g1")
     }
 
+    /// A request answered in the console (or expired) leaves the pending list;
+    /// the native alert for it is withdrawn, not left up with stale content.
+    func testNativeGuardAlertWithdrawsWhenAnsweredElsewhere() async {
+        let stub = StubDaemonClient()
+        stub.pending = [GuardPending(id: "g1", agent: "claude", tool: "Read",
+                                     path: "/Users/x/.ssh/id_ed25519", ruleID: "ssh-keys",
+                                     ts: "", scopeText: nil, advisor: nil)]
+        let (state, _) = makeState(stub)
+        state.testHookSkipPromptDialog = true
+        var withdrawn = 0
+        state.withdrawGuardAlert = { withdrawn += 1 }
+        await state.performFetch()
+        XCTAssertEqual(state.promptingIDForTesting, "g1")
+        stub.pending = []
+        await state.performFetch()
+        XCTAssertEqual(withdrawn, 1)
+        XCTAssertNil(state.promptingIDForTesting)
+    }
+
+    /// The alert runs after the fetch that found the request has returned, so
+    /// the next poll is not frozen behind it; a withdrawn alert answers nothing.
+    func testGuardAlertDoesNotHoldTheFetchLoop() async {
+        let stub = StubDaemonClient()
+        stub.pending = [GuardPending(id: "g1", agent: "claude", tool: "Read",
+                                     path: "/Users/x/.ssh/id_ed25519", ruleID: "ssh-keys",
+                                     ts: "", scopeText: nil, advisor: nil)]
+        let (state, _) = makeState(stub)
+        var fetchingWhileShown: Bool?
+        state.runGuardAlert = { _ in
+            fetchingWhileShown = state.isFetchingForTesting
+            return .abort
+        }
+        state.fetch()
+        for _ in 0..<100 where fetchingWhileShown == nil {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(fetchingWhileShown, false)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(stub.guardResolveCalls.count, 0, "a withdrawn alert must not submit an answer")
+    }
+
     // MARK: - Agent tree grouping
 
     private func agent(_ pid: Int32, root: Int32? = nil, ppid: Int32? = nil,

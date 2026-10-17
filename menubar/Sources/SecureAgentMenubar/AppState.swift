@@ -98,6 +98,12 @@ public final class AppState: ObservableObject {
     /// The pending-prompt id currently shown in an NSAlert, so the 1Hz poll
     /// doesn't stack a second dialog on top while one is already up.
     private var promptingID: String?
+    /// The request shown in the native alert right now, if any.
+    private var nativePromptID: String?
+    /// Runs the native guard alert; tests replace the modal.
+    var runGuardAlert: (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }
+    /// Ends the native guard alert's modal loop with .abort.
+    var withdrawGuardAlert: () -> Void = { if NSApp?.modalWindow != nil { NSApp.abortModal() } }
     private var deferredGuardID: String?
     private var resolvingGuardIDs: Set<String> = []
     /// SSE push channel. When live, events drive refreshes and the poll timer
@@ -296,9 +302,12 @@ public final class AppState: ObservableObject {
 
     private func scheduleTimer(_ interval: TimeInterval) {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+        // Common modes: polling continues while a guard alert's modal loop runs.
+        let next = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.fetch() }
         }
+        RunLoop.main.add(next, forMode: .common)
+        timer = next
     }
 
     public func fetch() {
@@ -390,8 +399,7 @@ public final class AppState: ObservableObject {
                 guard !self.isPaused else { return }
 				self.lastError = staleDataWarning
 				self.onChange?()
-                // Presented last: runModal() blocks this Task until the user
-                // responds, so the icon/console refresh above isn't held up.
+                // Presented last; the alert itself runs in its own task.
                 self.presentGuardPromptIfNeeded(pending)
             } catch {
                 self.lastError = "guard check failed: \(error.localizedDescription)"
@@ -776,6 +784,13 @@ public final class AppState: ObservableObject {
     /// Shows one native prompt for the oldest pending guard decision, deduping
     /// by id so the 1Hz poll doesn't stack a dialog on top of an open one.
     private func presentGuardPromptIfNeeded(_ pending: [GuardPending]) {
+        // A request answered elsewhere (console, popover) or expired leaves
+        // the list: its alert is withdrawn instead of staying up stale.
+        if let shown = nativePromptID, !pending.contains(where: { $0.id == shown }) {
+            nativePromptID = nil
+            if promptingID == shown { promptingID = nil }
+            withdrawGuardAlert()
+        }
         // Keep the glanceable copy current even when the native alert is
         // already up (or suppressed by the test hook).
         self.pendingGuard = pending.first
@@ -786,8 +801,15 @@ public final class AppState: ObservableObject {
         #if DEBUG
         // Test hook: NSAlert.runModal() cannot run in a test host; tests
         // assert on the dedupe id to prove the prompt path went live.
-        if testHookSkipPromptDialog { return }
+        if testHookSkipPromptDialog { nativePromptID = p.id; return }
         #endif
+        // The alert runs in its own task: the fetch that found the request
+        // returns, so polling and the stream keep refreshing while it is up.
+        Task { @MainActor [weak self] in self?.showGuardAlert(p) }
+    }
+
+    private func showGuardAlert(_ p: GuardPending) {
+        guard promptingID == p.id else { return } // withdrawn before it was shown
         let alert = NSAlert()
         alert.messageText = Self.guardPromptHeadline(p)
         alert.informativeText = p.requestFacts + "\n\nOnce answers only this request. Inspection leaves it unanswered; its timeout continues. Future access requires a separate confirmation."
@@ -804,8 +826,12 @@ public final class AppState: ObservableObject {
         // modal appears — an accidental Return must deny, never approve.
         allowOnceButton.keyEquivalent = ""
         denyButton.keyEquivalent = "\r"
-        NSApp.activate(ignoringOtherApps: true)
-        let r = alert.runModal()
+        NSApp?.activate(ignoringOtherApps: true)
+        nativePromptID = p.id
+        let r = runGuardAlert(alert)
+        if nativePromptID == p.id { nativePromptID = nil }
+        // Withdrawn while shown: nothing to answer or remember.
+        if r == .abort { return }
         deferredGuardID = p.id
         promptingID = nil
         let inspectIndex = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 + choices.count
@@ -831,6 +857,7 @@ public final class AppState: ObservableObject {
 
     /// True when the app is showing a guard NSAlert — one at a time.
     public var promptingIDForTesting: String? { promptingID }
+    var isFetchingForTesting: Bool { isFetching }
 
     /// Opening the exact recorded session leaves the request and its deadline unchanged.
     func inspectPendingGuard(id: String, open: ((ConsoleDestination) -> Void)? = nil) {
