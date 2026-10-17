@@ -1245,18 +1245,73 @@ func (s *Store) attachAdvisorLocked(flags []model.Flag) {
 	if len(flags) == 0 {
 		return
 	}
-	var readErr error
+	ids := make([]string, len(flags))
 	for i := range flags {
-		v, ok, err := s.advisorVerdictResultLocked(flags[i].ID, "flag")
-		if readErr == nil {
-			readErr = err
-		}
-		if ok {
-			vv := v
-			flags[i].Advisor = &vv
+		ids[i] = flags[i].ID
+	}
+	verdicts, readErr := s.advisorVerdictsLocked(ids, "flag")
+	for i := range flags {
+		if v, ok := verdicts[flags[i].ID]; ok {
+			flags[i].Advisor = &v
 		}
 	}
 	s.noteRead(advisorReadKind("flag"), readErr)
+}
+
+// advisorVerdictBatch bounds one verdict query's IN list well under SQLite's
+// host-parameter limit.
+const advisorVerdictBatch = 500
+
+// advisorVerdictsLocked reads the verdicts of ids with one query per batch
+// (caller holds mu). A row that does not decode is left out and the first
+// error returned; the other verdicts are kept. Missing advice is not an error.
+func (s *Store) advisorVerdictsLocked(ids []string, kind string) (map[string]model.AdvisorVerdict, error) {
+	verdicts := make(map[string]model.AdvisorVerdict, len(ids))
+	unique := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			unique = append(unique, id)
+		}
+	}
+	var readErr error
+	note := func(err error) {
+		if readErr == nil {
+			readErr = err
+		}
+	}
+	for start := 0; start < len(unique); start += advisorVerdictBatch {
+		batch := unique[start:min(start+advisorVerdictBatch, len(unique))]
+		args := make([]any, 0, len(batch)+1)
+		args = append(args, kind)
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		rows, err := s.db.Query(`SELECT subject_id, `+advisorVerdictColumns+` FROM advisor_verdicts
+			WHERE kind = ? AND subject_id IN (?`+strings.Repeat(", ?", len(batch)-1)+`)`, args...)
+		if err != nil {
+			note(err)
+			continue
+		}
+		for rows.Next() {
+			var id string
+			var r advisorVerdictRow
+			if err := rows.Scan(append([]any{&id}, r.dest()...)...); err != nil {
+				note(err)
+				continue
+			}
+			v, err := r.verdict()
+			if err != nil {
+				note(err)
+				continue
+			}
+			verdicts[id] = v
+		}
+		note(rows.Err())
+		rows.Close()
+	}
+	return verdicts, readErr
 }
 
 // advisorVerdictLocked fetches one verdict (caller holds mu).
@@ -1278,37 +1333,57 @@ func advisorReadKind(kind string) string {
 }
 
 func (s *Store) advisorVerdictResultLocked(subjectID, kind string) (model.AdvisorVerdict, bool, error) {
-	var v model.AdvisorVerdict
-	var conf sql.NullFloat64
-	var assessment, action, modelName, created sql.NullString
-	var rationale string
-	err := s.db.QueryRow(
-		`SELECT assessment, confidence, rationale, suggested_action, model, created_at
-		 FROM advisor_verdicts WHERE subject_id = ? AND kind = ?`, subjectID, kind,
-	).Scan(&assessment, &conf, &rationale, &action, &modelName, &created)
+	var r advisorVerdictRow
+	err := s.db.QueryRow(`SELECT `+advisorVerdictColumns+` FROM advisor_verdicts WHERE subject_id = ? AND kind = ?`,
+		subjectID, kind).Scan(r.dest()...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.AdvisorVerdict{}, false, nil
 	}
 	if err != nil {
 		return model.AdvisorVerdict{}, false, err
 	}
-	if math.IsNaN(conf.Float64) || math.IsInf(conf.Float64, 0) {
-		return model.AdvisorVerdict{}, false, fmt.Errorf("invalid advisor confidence")
+	v, err := r.verdict()
+	if err != nil {
+		return model.AdvisorVerdict{}, false, err
 	}
-	if created.String != "" {
-		v.CreatedAt, err = time.Parse(time.RFC3339Nano, created.String)
-		if err != nil {
-			return model.AdvisorVerdict{}, false, fmt.Errorf("invalid advisor timestamp: %w", err)
-		}
-	}
-	v.Assessment = assessment.String
-	if conf.Valid {
-		v.Confidence = conf.Float64
-	}
-	v.Rationale = rationale
-	v.SuggestedAction = action.String
-	v.Model = modelName.String
 	return v, true, nil
+}
+
+const advisorVerdictColumns = `assessment, confidence, rationale, suggested_action, model, created_at`
+
+// advisorVerdictRow is one advisor_verdicts row as scanned; every column but
+// rationale may be NULL in older rows.
+type advisorVerdictRow struct {
+	conf                                   sql.NullFloat64
+	assessment, action, modelName, created sql.NullString
+	rationale                              string
+}
+
+// dest lists the scan targets in advisorVerdictColumns order.
+func (r *advisorVerdictRow) dest() []any {
+	return []any{&r.assessment, &r.conf, &r.rationale, &r.action, &r.modelName, &r.created}
+}
+
+func (r *advisorVerdictRow) verdict() (model.AdvisorVerdict, error) {
+	if math.IsNaN(r.conf.Float64) || math.IsInf(r.conf.Float64, 0) {
+		return model.AdvisorVerdict{}, fmt.Errorf("invalid advisor confidence")
+	}
+	var v model.AdvisorVerdict
+	if r.created.String != "" {
+		at, err := time.Parse(time.RFC3339Nano, r.created.String)
+		if err != nil {
+			return model.AdvisorVerdict{}, fmt.Errorf("invalid advisor timestamp: %w", err)
+		}
+		v.CreatedAt = at
+	}
+	v.Assessment = r.assessment.String
+	if r.conf.Valid {
+		v.Confidence = r.conf.Float64
+	}
+	v.Rationale = r.rationale
+	v.SuggestedAction = r.action.String
+	v.Model = r.modelName.String
+	return v, nil
 }
 
 // eventQuery builds QueryEvents' statement. A host filter repeats the index's

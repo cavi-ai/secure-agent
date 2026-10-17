@@ -110,3 +110,25 @@ func BenchmarkQueryFlagsAtCap(b *testing.B) {
 		testutil.Read[[]model.Flag](b)(s.QueryFlags(FlagFilter{Limit: 100}))
 	}
 }
+
+// The posture and snapshot reads ask for 5000 flags; half carry a verdict.
+func BenchmarkQueryFlagsWithVerdictsAtCap(b *testing.B) {
+	s, base := seedFlagsAtCap(b)
+	tx, err := s.db.Begin()
+	if err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < maxFlags; i += 2 {
+		if _, err := tx.Exec(`INSERT INTO advisor_verdicts (subject_id, kind, assessment, confidence, rationale, created_at) VALUES (?, 'flag', 'benign', 0.9, 'seeded', ?)`,
+			fmt.Sprintf("seed-%d", i), base.Format(time.RFC3339Nano)); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		testutil.Read[[]model.Flag](b)(s.QueryFlags(FlagFilter{Limit: 5000}))
+	}
+}
