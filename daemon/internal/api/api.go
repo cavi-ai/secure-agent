@@ -693,9 +693,9 @@ func (a *API) handleNotifyRules(w http.ResponseWriter, r *http.Request) {
 // buildMux registers every API route on a fresh mux, driven by apiroutes.Table
 // so the mux, the peer-role gate and the console allow-list cannot drift.
 // Serve() wraps it with the peer-credential gate for the unix socket;
-// ConsoleHandler() exposes it ungated for the proxy listener, where
-// authentication is the console token (peer creds don't exist on a TCP
-// connection).
+// ConsoleHandler() exposes it for the proxy listener, where authentication
+// is the console token (peer creds don't exist on a TCP connection) and
+// state changes and NoAgent routes also need a non-agent TCP client.
 func (a *API) buildMux() *http.ServeMux { return a.mux(true) }
 
 // mux registers the table's routes; OwnerOnly routes only on the socket mux.
@@ -707,8 +707,8 @@ func (a *API) mux(socket bool) *http.ServeMux {
 			continue
 		}
 		if h, ok := handlers[r.Path]; ok {
-			if r.NoAgent && !socket {
-				h = a.consoleNoAgent(h)
+			if !socket {
+				h = a.consoleAgentGate(r.NoAgent, h)
 			}
 			mux.HandleFunc(r.Path, func(w http.ResponseWriter, req *http.Request) {
 				h(w, req)

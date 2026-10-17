@@ -447,6 +447,20 @@ func (a *API) consoleNoAgent(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// consoleAgentGate applies consoleNoAgent on the console listener to every
+// request of a NoAgent route and to every request that is not GET or HEAD:
+// an agent that can read the console token still cannot change state with it.
+func (a *API) consoleAgentGate(noAgent bool, h http.HandlerFunc) http.HandlerFunc {
+	gated := a.consoleNoAgent(h)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if noAgent || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+			gated(w, r)
+			return
+		}
+		h(w, r)
+	}
+}
+
 var envAssignment = regexp.MustCompile(`^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]{0,127})[ \t]*=`)
 
 // envVariableNames returns names only for a small, regular, operator-owned

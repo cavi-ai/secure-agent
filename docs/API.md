@@ -1325,6 +1325,7 @@ The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches teleme
 - The token lives at `~/.config/secure-agent/console-token` (0600), distinct from the proxy token on purpose: agents routed through the proxy carry the proxy token in their environment and must not be able to read telemetry or resolve guard prompts with it.
 - `/guard/decision` is **not** served on this listener at all — it stays on the peer-attested unix socket.
 - Admission is method-aware: GET/HEAD pass on every whitelisted route, but a mutating method is admitted only when `apiroutes.Table` lists it in that route's `MutatingMethods` or `ConsoleMethods` — so the console token can drive `POST /guard/path-allow` and `DELETE /mute` but not `DELETE /guard/rules` or `DELETE /guard/path-allow`, which stay owner-level on the unix socket.
+- Every admitted method other than GET and HEAD also needs a client process outside every agent family, identified as for NoAgent routes: an agent that reads the console token can read telemetry but cannot resolve guard prompts, change rules, mute, acknowledge or kill. Off macOS the console listener refuses these requests.
 
 Besides telemetry kinds (`file-open`, `conn-open`, `proxy-hit`, …), the stream carries the guard lifecycle:
 
