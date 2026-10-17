@@ -1792,6 +1792,15 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 }
 .session-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .session-detail > .empty { flex: 1; padding: 24px; }
+.sd-list-toggle { min-height: 44px; }
+@media (min-width: 901px) {
+  .session-list-collapsed[data-pane="detail"] .session-rail,
+  .session-list-collapsed[data-pane="detail"] .session-toolbar { display: none; }
+  .session-list-collapsed[data-pane="detail"] .session-split { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 900px) {
+  .sd-list-toggle { display: none; }
+}
 .session-detail-chrome { flex: none; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--bg-1); }
 .session-detail-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .session-detail-actions .sd-export { margin-left: auto; }
@@ -2245,6 +2254,12 @@ button.spend-day:focus-visible { outline: 2px solid var(--brand); outline-offset
 
 /* ---------- Agent tab: system agent chat, plans, runs ---------- */
 .agent-posture-link { display: none; }
+.session-page #page-description, .session-page .posture-items { display: none; }
+.session-page .posture { align-items: center; flex-direction: row; flex-wrap: wrap; gap: 8px 16px; padding-bottom: 12px; }
+.session-page .agent-posture-link { display: inline-flex; flex: none; min-height: 44px; }
+@media (min-width: 901px) {
+  .session-page .posture { position: sticky; top: 0; z-index: 20; background: var(--bg-0); }
+}
 /* Agent dock: the conversation beside the page; the page narrows to it. */
 .agent-dock {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 150;

@@ -775,22 +775,34 @@ test('workbench sizing reserves measured reading lines and rebinds chrome withou
   vm.runInContext(source.slice(start,source.indexOf('  async function loadSessionMemory(',start)),context);
   context.scheduleSessionWorkbenchHeight();context.scheduleSessionWorkbenchHeight();
   assert.equal(frames.length,1,'measurements coalesce');frames.shift()();
-  assert.equal(values.get('--session-split-height'),'466px'); // 220 chrome + 8×24 +44 action +10 padding
-  assert.equal(values.get('--session-workbench-height'),'468px');
+  assert.equal(values.get('--session-split-height'),'570px'); // 220 chrome + half the 700px viewport
+  assert.equal(values.get('--session-workbench-height'),'572px');
   assert.equal(panel.short,true);
   assert.equal(body.scrollTop,100,'history position is preserved while sizing');
   assert.ok(observed.has(chrome) && observed.has(upstream));
   assert.ok(!observed.has(body) && !observed.has(panel));
   const count = writes.length;
   context.scheduleSessionWorkbenchHeight();frames.shift()();assert.equal(writes.length,count,'unchanged dimensions do not write styles');
-  const previous = chrome;chrome=rect(180);context.window.innerHeight=1000;
+  const previous = chrome;chrome=rect(180);context.window.innerHeight=1400;
   context.scheduleSessionWorkbenchHeight();frames.shift()();
   assert.ok(removed.includes(previous) && observed.has(chrome));
   assert.equal(panel.short,false);
-  assert.equal(values.get('--session-workbench-height'),'584px');
+  assert.equal(values.get('--session-workbench-height'),'984px');
   context.sessionView='hooks';
   context.scheduleSessionWorkbenchHeight();frames.shift()();
   assert.equal(latest.hidden,true,'hook summaries have no chronological tail to jump to');
+});
+
+test('collapsing the session list preserves selection, view and requests', () => {
+  const c = controller('a');
+  assert.equal(c.workbench.sessionListCollapsed, false);
+  c.workbench.toggleList();
+  assert.equal(c.workbench.sessionListCollapsed, true);
+  assert.equal(c.state.selected, 'a');
+  assert.equal(c.state.mode, 'memory');
+  assert.equal(c.requests.length, 0);
+  c.workbench.toggleList();
+  assert.equal(c.workbench.sessionListCollapsed, false);
 });
 
 const hookRow = (over = {}) => ({ event: 'PreToolUse', script: 'secret_guard.py', runs: 3, errors: 3, blocks: 0, chars: 0, total_ms: 90, last_at: '2026-09-23T10:00:00.000000000Z', ...over });

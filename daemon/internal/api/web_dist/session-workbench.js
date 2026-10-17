@@ -925,6 +925,7 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
     <div class="session-detail-actions">
       ${window.SA.recentWorkReturn ? '<button type="button" class="btn btn-sm btn-ghost" data-action="recent-work-home">Back to Home</button>' : ''}
       <button type="button" class="btn btn-sm btn-ghost sd-back" data-action="session-list">Back to sessions</button>
+      <button type="button" class="btn btn-sm btn-ghost sd-list-toggle" data-action="session-toggle-list" aria-controls="session-rail" aria-expanded="${!state.sessionListCollapsed}">${state.sessionListCollapsed ? 'Show' : 'Hide'} session list</button>
       <button type="button" class="btn btn-sm btn-ghost sd-export" data-action="copy-report" data-id="${escapeHTML(sess.id)}" title="Copy this session's report as markdown"><svg class="icon"><use href="#i-copy"/></svg>Copy report</button>
       ${sess.workspace ? `<button type="button" class="btn btn-sm btn-ghost" data-action="workspace-permissions" data-session="${escapeHTML(sess.id)}">Workspace permissions</button>` : ''}
     </div>
@@ -957,6 +958,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
   let sessionFilterTransition = false;
   let sessionReveal = false;
   let sessionPane = 'detail';
+  let sessionListCollapsed = false;
   let sessionView = 'memory';
   let sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
   let sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
@@ -1151,15 +1153,16 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       const bodyStyle = body && getComputedStyle(body);
       const paragraph = body?.querySelector('.sm-content p, .sd-outcome p, .sm-state');
       const lineHeight = paragraph ? parseFloat(getComputedStyle(paragraph).lineHeight) || 18 : 18;
-      const readingReserve = Math.ceil(8 * lineHeight + 44
-        + (parseFloat(bodyStyle?.paddingTop) || 0) + (parseFloat(bodyStyle?.paddingBottom) || 0));
+      const viewportHeight = window.visualViewport?.height || window.innerHeight;
+      const readingReserve = Math.max(Math.ceil(viewportHeight / 2), Math.ceil(8 * lineHeight + 44
+        + (parseFloat(bodyStyle?.paddingTop) || 0) + (parseFloat(bodyStyle?.paddingBottom) || 0)));
       const visibleHeight = el => el?.getClientRects().length ? el.getBoundingClientRect().height : 0;
       const detailVisible = !!body?.getClientRects().length;
       const splitMinimum = (detailVisible ? visibleHeight(chrome) : 0) + readingReserve;
       const minimum = visibleHeight(panel.querySelector('.session-toolbar')) + splitMinimum
         + (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0);
       const bottom = parseFloat(getComputedStyle(document.querySelector('.app') || document.body).paddingBottom) || 16;
-      const height = Math.floor((window.visualViewport?.height || window.innerHeight) - panel.getBoundingClientRect().top - bottom);
+      const height = Math.floor(viewportHeight - panel.getBoundingClientRect().top - bottom);
       // When chrome and a useful reading area cannot fit, the document scrolls.
       panel.classList.toggle('session-workbench-short', height < minimum);
       for (const [name, value] of [['--session-workbench-height', Math.max(minimum, height) + 'px'], ['--session-split-height', splitMinimum + 'px']]) {
@@ -1277,6 +1280,14 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     const target = selected?.getClientRects().length ? selected : search?.getClientRects().length ? search : rail;
     target?.focus({ preventScroll: true });
     if (rail) rail.scrollTop = scroll;
+  }
+  function toggleSessionList() {
+    // Save the reading anchor before changing the available width.
+    renderNow(['sessions']);
+    const detail = document.getElementById('session-detail');
+    if (detail) detail._sessionReadingVisible = false;
+    sessionListCollapsed = !sessionListCollapsed;
+    renderNow(['sessions']);
   }
   function jumpToLatestSession() {
     const latest = document.querySelector('#session-detail [data-action="session-latest"]');
@@ -1422,6 +1433,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     const useDurable = Array.isArray(durable);
     const panel = document.getElementById('session-board-panel');
     if (panel) panel.classList.toggle('session-workbench', useDurable);
+    if (panel) panel.classList.toggle('session-list-collapsed', sessionListCollapsed && !!selectedSessionId);
     if (useDurable) scheduleSessionWorkbenchHeight();
 
     if (useDurable) {
@@ -1563,13 +1575,15 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     };
     renderNow(['sessions']);
   }
-  function snapshot() { return { sessionHookHistory, selectedSessionId, sessionTimeline, sessionTimelineState, sessionView, sessionMemoryPage, sessionMemoryState, sessionOverview, sessionOverviewState, sessionOutcomes, sessionOutcomesState, sessionHooks, sessionHooksState }; }
+  function snapshot() { return { sessionListCollapsed, sessionHookHistory, selectedSessionId, sessionTimeline, sessionTimelineState, sessionView, sessionMemoryPage, sessionMemoryState, sessionOverview, sessionOverviewState, sessionOutcomes, sessionOutcomesState, sessionHooks, sessionHooksState }; }
   return {
     setHookHistory,
     get sessionHookHistory() { return { ...sessionHookHistory }; },
     selectSession, setView: setSessionView, render: renderSessionBoard,
     refresh, refreshCurrent, activity, invalidate, restoreView,
     showList: showSessionList, jumpToLatest: jumpToLatestSession, showCurrentStatus: showCurrentSessionStatus,
+    toggleList: toggleSessionList,
+    get sessionListCollapsed() { return sessionListCollapsed; },
     loadEarlier: loadEarlierSessionMemory, retryTrace: retrySessionTrace,
     reconcileSelection: reconcileSessionSelection, takeReveal: takeSessionReveal,
     filterChanged() { sessionFilterTransition = true; },

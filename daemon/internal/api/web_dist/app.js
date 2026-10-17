@@ -1815,6 +1815,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (description) description.textContent = heading[1];
 
     document.body.classList.toggle('agent-page', activeTab === 'agent');
+    document.body.classList.toggle('session-page', activeTab === 'sessions' && r.sub === 'board');
     if (r.tab === 'sessions') activeSub = r.sub;
     if (r.tab === 'protection') activeProtection = r.sub;
     if (r.tab === 'system') activeSystemSub = r.sub;
@@ -3988,6 +3989,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'session-list':
         window.showSessionList();
+        break;
+      case 'session-toggle-list':
+        sessionWorkbench.toggleList();
         break;
       case 'show-ended-sessions':
         showEndedSessions(el);
