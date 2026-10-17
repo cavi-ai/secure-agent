@@ -289,13 +289,17 @@ func (s *Supervisor) Run(ctx context.Context, name string, fn func(context.Conte
 
 // runOnce runs fn and converts a panic into an error so one worker's panic
 // cannot crash the whole daemon; the supervisor restarts it like any error.
+// Each attempt gets its own context, cancelled when the attempt returns, so
+// goroutines an attempt starts do not accumulate across restarts.
 func runOnce(ctx context.Context, fn func(context.Context) error) (err error) {
+	attempt, cancel := context.WithCancel(ctx)
+	defer cancel()
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic: %v", r)
 		}
 	}()
-	return fn(ctx)
+	return fn(attempt)
 }
 
 // Run is the untracked, default-tuned convenience wrapper.
