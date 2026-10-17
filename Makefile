@@ -1,4 +1,4 @@
-.PHONY: all build test test-menubar-rendering install uninstall clean daemon menubar cli collector smoke app dmg release icon lint docs docs-reference docs-check docs-test docs-archive
+.PHONY: all build test test-menubar-rendering test-setup-session-live install uninstall clean daemon menubar cli collector smoke app dmg release icon lint docs docs-reference docs-check docs-test docs-archive
 
 docs-reference:
 	python3 packaging/docs/build.py reference
@@ -73,6 +73,10 @@ menubar:
 test-menubar-rendering:
 	python3 packaging/check_menu_bar.py
 	bash packaging/test/test_status_item_rendering.sh
+
+# Opt-in: graphical macOS login and authenticated Codex; no installed app changes.
+test-setup-session-live:
+	python3 packaging/test/setup_session_live.py
 
 test:
 	@echo "==> Running Go unit tests..."
