@@ -87,6 +87,8 @@ Results opens with **Needs follow-up**: newer evidence after a saved decision, p
 
 **Inspect the permissions from a decision.** View permissions in Results opens only the scope IDs saved with that decision, with their exact resources, recipients, expiry, and revocation records. Missing records have unknown status; failed refreshes retain labeled last-known data and disable revocation. Revocation requires confirmation and a matching saved response. It does not undo past access or remaining exposure, and other permissions or legacy policies may still allow access. Back returns to the same session result.
 
+**Review an access request before answering.** Home and the menu bar show the requested operation, full resource path, workspace, matched rule, and observed executable path before consent. Missing identity stays unknown; a rule match does not establish file contents or the agent's intent. **Inspect session** opens the recorded session without answering or extending the request's timeout. Console inspection requires the session in loaded history; **Back to Home** restores your reading position and request control when it remains available. Native inspection requires a recorded session and an available console. Future access opens a separate confirmation with the selected lifetime and recorded identity. Cancelling leaves the request unanswered. File approval does not authorize network access, and executable signatures are not verified.
+
 **Follow a guard answer.** Home and the menu bar distinguish an answer submitted
 to a waiting request from an unconfirmed response. Submission does not prove
 that the tool received the answer or completed access. Session Results includes
