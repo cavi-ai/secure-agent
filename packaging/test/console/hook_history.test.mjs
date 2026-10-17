@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const ctx = { Date, window: { SA: {} } };
 vm.createContext(ctx);
-for (const file of ['lib.js', 'session-workbench.js']) vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/' + file, import.meta.url), 'utf8'), ctx);
+for (const file of ['lib.js', 'session-layout.js', 'session-workbench.js']) vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/' + file, import.meta.url), 'utf8'), ctx);
 const row = (script, extra = {}) => ({ harness:'codex', event:'PreToolUse', script, handler_id:script+'-id', config_id:'v1', runs:3, errors:0, blocks:0, cancelled:0, chars:0, total_ms:0, duration_samples:0, char_samples:0, last_at:'2026-10-15T10:00:00Z', ...extra });
 const scripts = rows => Array.from(rows, r=>r.script);
 
