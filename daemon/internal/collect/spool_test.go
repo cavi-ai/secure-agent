@@ -272,6 +272,45 @@ func TestSpoolTailerSkipsFloodPastBudget(t *testing.T) {
 	}
 }
 
+// One corrupt oversized line costs only itself: the valid backlog after it,
+// however large, is read on later ticks, and the skipped bytes are reported
+// as lost evidence.
+func TestSpoolOversizedLineSkipsOnlyThatLine(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	giant := append(bytes.Repeat([]byte("x"), 2<<20), '\n')
+	valid := esOpenLine(11) + "\n"
+	backlog := bytes.Repeat([]byte(valid), (8<<20)/len(valid)) // > 8 MiB after the giant line
+	if err := os.WriteFile(path, append(append([]byte{}, giant...), backlog...), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	tailer := NewSpoolTailerAt(bus.New(64), path)
+	resume, _ := tailer.drainOnce(path, 0)
+	if resume != int64(len(giant)) {
+		t.Fatalf("resume = %d, want %d (just past the oversized line; file is %d bytes)", resume, len(giant), len(giant)+len(backlog))
+	}
+	if s := tailer.Stats(); s.BytesLost != uint64(len(giant)) || s.Skipped != 1 {
+		t.Fatalf("stats = %+v, want the oversized line counted as lost", s)
+	}
+	if _, _ = tailer.drainOnce(path, resume); tailer.Stats().Parsed == 0 {
+		t.Fatal("the valid backlog after the oversized line was not read")
+	}
+}
+
+// A flood's start time comes from the tailer's clock, like its other times.
+func TestSpoolFloodSinceUsesTheTailerClock(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	if err := os.WriteFile(path, bytes.Repeat([]byte("ab\n"), (10<<20)/3), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	tailer := NewSpoolTailerAt(bus.New(8), path)
+	at := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	tailer.now = func() time.Time { return at }
+	tailer.poll(spoolCursor{})
+	if got := tailer.Stats().FloodSince; !got.Equal(at) {
+		t.Fatalf("FloodSince = %v, want the injected clock %v", got, at)
+	}
+}
+
 // A burst of valid lines exceeding the byte budget must stay on disk for
 // later polls, rather than being skipped or mistaken for garbage.
 func TestSpoolTailerBudgetHitOverValidLinesCountsOnlyReadLines(t *testing.T) {
