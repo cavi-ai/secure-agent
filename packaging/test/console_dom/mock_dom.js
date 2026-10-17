@@ -943,6 +943,8 @@
   };
   let inFlight = 0;
   window.fetch = async (path, opts) => {
+    // The proxy sets the stream cookie; the stub only acknowledges it.
+    if (path === '/console/stream-auth' && opts?.method === 'POST') return { ok: true, status: 204, json: async () => null, text: async () => '' };
     inFlight++;
     try { return await respond(path, opts); } finally { inFlight--; }
   };
@@ -954,6 +956,7 @@
     constructor() {
       window.__sse = this;
       this.readyState = 1;
+      stamp('sse-state', 'open');
       this._listeners = {};
       setTimeout(() => this.onopen && this.onopen(), 0);
       const drip = [

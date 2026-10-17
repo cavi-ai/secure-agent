@@ -35,7 +35,7 @@ function clock() {
   };
 }
 
-function fixture({ streaming = true, handlers = {} } = {}) {
+function fixture({ streaming = true, handlers = {}, prepareStream = null } = {}) {
   const timers = clock(), calls = [], streams = [];
   class Stream {
     static CLOSED = 2;
@@ -53,8 +53,9 @@ function fixture({ streaming = true, handlers = {} } = {}) {
   vm.runInContext(source, context);
   const controller = context.createConsoleLiveUpdates({
     refresh: options => calls.push(options?.slow === false ? 'fast' : 'full'),
-    streamURL: '/events/stream?ct=fixture',
+    streamURL: '/events/stream',
     EventSourceImpl: streaming ? Stream : null,
+    prepareStream,
     handlers,
     timers
   });
@@ -67,7 +68,7 @@ test('streaming starts once, keeps the slow refresh, and stops cleanly', () => {
   f.controller.start();
   assert.deepEqual(f.calls, ['full']);
   assert.equal(f.streams.length, 1);
-  assert.equal(f.streams[0].url, '/events/stream?ct=fixture');
+  assert.equal(f.streams[0].url, '/events/stream');
   f.streams[0].open();
   f.timers.tick(30000);
   assert.deepEqual(f.calls, ['full', 'full', 'full']);
@@ -77,6 +78,37 @@ test('streaming starts once, keeps the slow refresh, and stops cleanly', () => {
   assert.equal(f.streams[0].closes, 1);
   assert.equal(f.timers.pending.size, 0);
   assert.equal(f.streams.length, 1);
+});
+
+test('the stream opens only after its authorization settles, without a token in the URL', async () => {
+  let authorize;
+  const f = fixture({ prepareStream: () => new Promise(resolve => { authorize = resolve; }) });
+  f.controller.start();
+  await Promise.resolve();
+  assert.equal(f.streams.length, 0, 'no stream before authorization');
+  authorize();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.streams.length, 1);
+  assert.equal(f.streams[0].url, '/events/stream');
+});
+
+test('a failed stream authorization falls back to polling', async () => {
+  const f = fixture({ prepareStream: () => Promise.reject(new Error('403')) });
+  f.controller.start();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.streams.length, 0);
+  f.timers.tick(2000);
+  assert.deepEqual(f.calls, ['full', 'full']);
+});
+
+test('stopping during stream authorization never opens a stream', async () => {
+  let authorize;
+  const f = fixture({ prepareStream: () => new Promise(resolve => { authorize = resolve; }) });
+  f.controller.start();
+  f.controller.stop();
+  authorize();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.streams.length, 0);
 });
 
 test('without a stream, polling refreshes every two seconds', () => {

@@ -112,12 +112,75 @@ func TestConsoleAuthRejectsProxyToken(t *testing.T) {
 	if !consoleAuthorized(req) {
 		t.Fatal("console token header must pass")
 	}
-	req2, err := http.NewRequest("GET", "http://127.0.0.1/status?ct="+ct, nil)
-	if err != nil {
-		t.Fatal(err)
+	for _, path := range []string{"/status?ct=" + ct, "/events/stream?ct=" + ct} {
+		q, err := http.NewRequest("GET", "http://127.0.0.1"+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if consoleAuthorized(q) {
+			t.Fatalf("%s: the token in the URL must not authorize", path)
+		}
 	}
-	if !consoleAuthorized(req2) {
-		t.Fatal("ct query must pass")
+}
+
+// The stream cookie is derived from the console token and admits only GET
+// /events/stream.
+func TestConsoleStreamCookieAdmitsOnlyTheStream(t *testing.T) {
+	t.Cleanup(clearConsoleToken)
+	ct := LoadConsoleToken(filepath.Join(t.TempDir(), "console-token"))
+	cookie := &http.Cookie{Name: consoleStreamCookie, Value: streamCookieValue(ct)}
+	for _, c := range []struct {
+		method, path string
+		cookie       *http.Cookie
+		want         bool
+	}{
+		{"GET", "/events/stream", cookie, true},
+		{"GET", "/events/stream", &http.Cookie{Name: consoleStreamCookie, Value: ct}, false},
+		{"GET", "/events/stream", nil, false},
+		{"GET", "/status", cookie, false},
+		{"POST", "/guard/resolve", cookie, false},
+	} {
+		r, err := http.NewRequest(c.method, "http://127.0.0.1"+c.path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.cookie != nil {
+			r.AddCookie(c.cookie)
+		}
+		if got := consoleAuthorized(r); got != c.want {
+			t.Errorf("%s %s cookie=%v: %v, want %v", c.method, c.path, c.cookie != nil, got, c.want)
+		}
+	}
+}
+
+// DNS rebinding: a console request must name the loopback host, and any
+// Origin must be that same host.
+func TestConsoleOriginAllowed(t *testing.T) {
+	for _, c := range []struct {
+		host, origin string
+		want         bool
+	}{
+		{"127.0.0.1:8899", "", true},
+		{"localhost:8899", "http://localhost:8899", true},
+		{"[::1]:8899", "http://[::1]:8899", true},
+		{"127.0.0.1:8899", "http://127.0.0.1:8899", true},
+		{"attacker.example:8899", "", false},
+		{"attacker.example:8899", "http://attacker.example:8899", false},
+		{"127.0.0.1:8899", "http://attacker.example:8899", false},
+		{"127.0.0.1:8899", "null", false},
+		{"127.0.0.1:8899", "https://127.0.0.1:8899", false},
+	} {
+		r, err := http.NewRequest("GET", "http://127.0.0.1:8899/status", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Host = c.host
+		if c.origin != "" {
+			r.Header.Set("Origin", c.origin)
+		}
+		if got := consoleOriginAllowed(r); got != c.want {
+			t.Errorf("host %q origin %q: %v, want %v", c.host, c.origin, got, c.want)
+		}
 	}
 }
 

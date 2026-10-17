@@ -4524,7 +4524,13 @@ document.addEventListener('DOMContentLoaded', () => {
   function startLiveUpdates() {
   liveUpdates = createConsoleLiveUpdates({
     refresh: fetchTelemetry,
-    streamURL: '/events/stream' + (consoleToken ? '?ct=' + encodeURIComponent(consoleToken) : ''),
+    streamURL: '/events/stream',
+    // EventSource cannot send the token header; the daemon sets an HttpOnly
+    // cookie that admits only the stream.
+    prepareStream: async () => {
+      const res = await apiFetch('/console/stream-auth', { method: 'POST' });
+      if (!res.ok) throw new Error('stream auth ' + res.status);
+    },
     EventSourceImpl: noSSE ? null : window.EventSource,
     // Typed deltas: patch local state and mark only the panels that read the
     // changed slice; the scheduler renders the visible ones.

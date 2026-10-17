@@ -285,11 +285,21 @@ func (ps *ProxyServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// proxy token challenge) and the console rendered a permanent offline
 	// banner. Gated by the console token — a credential agents do NOT hold,
 	// unlike the proxy token they carry for egress.
+	if r.URL.Path == consoleStreamAuthPath {
+		if !consoleOriginAllowed(r) {
+			refuseConsole(w, "console requests must come from the loopback console")
+			return
+		}
+		serveStreamAuth(w, r)
+		return
+	}
 	if isConsoleAPIPath(r.URL.Path) {
+		if !consoleOriginAllowed(r) {
+			refuseConsole(w, "console requests must come from the loopback console")
+			return
+		}
 		if ps.consoleAPI == nil || !consoleAuthorized(r) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"error":"console token required"}`))
+			refuseConsole(w, "console token required")
 			return
 		}
 		// The path is on the console surface, but the console token does not
@@ -299,9 +309,7 @@ func (ps *ProxyServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		// owner credential — could reach an owner-level DELETE such as
 		// /guard/rules or /guard/path-allow.
 		if !apiroutes.ConsoleAllowed(r.Method, r.URL.Path) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"error":"method not permitted for the console token"}`))
+			refuseConsole(w, "method not permitted for the console token")
 			return
 		}
 		ps.consoleAPI.ServeHTTP(w, r)
