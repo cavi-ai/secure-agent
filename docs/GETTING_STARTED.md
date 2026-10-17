@@ -75,7 +75,10 @@ The menu bar's **Settings… → Updates** tab offers two channels:
 - **Stable** — the latest GitHub release. The app downloads the DMG, verifies
   it against the release's SHA-256 `checksums.txt` **before mounting** (a
   mismatch or a missing checksum is a loud refusal, never a silent install),
-  replaces the app bundle in place, and relaunches (the daemon, a child of
+  requires the new bundle to satisfy the running app's code-signing
+  requirement (same identifier and signer; a local development build
+  therefore does not take release updates), replaces the app bundle in
+  place, and relaunches (the daemon, a child of
   the app, comes down and back up with it).
 - **Nightly** — builds from the current `origin/main` of a local checkout via
   `packaging/update_nightly.sh` (fetch → ff-only merge → `make install`).

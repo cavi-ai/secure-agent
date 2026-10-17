@@ -70,4 +70,36 @@ final class UpdateManagerTests: XCTestCase {
             XCTAssertEqual(UpdateManager.discoverRepo(from: app), root.path)
         }
     }
+
+    /// A validly signed bundle that does not satisfy the running app's
+    /// requirement is refused; one that does is accepted.
+    func testStagedBundleMustSatisfyTheSigningRequirement() async throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("update-signature-\(UUID().uuidString)")
+        let bundle = dir.appendingPathComponent("Fixture.app")
+        let macOS = bundle.appendingPathComponent("Contents/MacOS")
+        try fm.createDirectory(at: macOS, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        try fm.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: macOS.appendingPathComponent("Fixture"))
+        let plist: [String: Any] = ["CFBundleIdentifier": "com.example.update-fixture", "CFBundleExecutable": "Fixture",
+                                    "CFBundlePackageType": "APPL"]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+        let sign = Process()
+        sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        sign.arguments = ["--force", "--sign", "-", "--identifier", "com.example.update-fixture", bundle.path]
+        try sign.run()
+        sign.waitUntilExit()
+        XCTAssertEqual(sign.terminationStatus, 0, "ad hoc signing the fixture")
+
+        try await UpdateManager.verifyStagedBundle(bundle, requirement: "identifier \"com.example.update-fixture\"")
+        do {
+            try await UpdateManager.verifyStagedBundle(bundle,
+                requirement: "identifier \"com.example.update-fixture\" and anchor apple generic")
+            XCTFail("an ad hoc bundle passed a Developer ID requirement")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("not signed like this app"), "\(error)")
+        }
+        XCTAssertFalse(try UpdateManager.runningDesignatedRequirement().isEmpty)
+    }
 }
