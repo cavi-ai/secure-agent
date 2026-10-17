@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -40,6 +42,47 @@ func TestDashboardServesDeclaredFavicon(t *testing.T) {
 	ct := iconRec.Header().Get("Content-Type")
 	if !strings.HasPrefix(ct, "image/") {
 		t.Fatalf("favicon %s content-type = %q, want an image/* type", href, ct)
+	}
+}
+
+// A revalidating browser gets a 304 for an unchanged asset, and the tag
+// follows the file's content.
+func TestDashboardAssetsRevalidateByContent(t *testing.T) {
+	h := DashboardHandler()
+	tags := map[string]string{}
+	for _, p := range []string{"/", "/app.js", "/style.css", "/brand-icon.png"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		tag := rec.Header().Get("ETag")
+		if rec.Code != http.StatusOK || tag == "" {
+			t.Fatalf("GET %s = %d with ETag %q", p, rec.Code, tag)
+		}
+		tags[p] = tag
+		again := httptest.NewRequest(http.MethodGet, p, nil)
+		again.Header.Set("If-None-Match", tag)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, again)
+		if rec.Code != http.StatusNotModified || rec.Body.Len() != 0 {
+			t.Fatalf("revalidated GET %s = %d with %d bytes, want 304", p, rec.Code, rec.Body.Len())
+		}
+	}
+	if tags["/app.js"] == tags["/style.css"] {
+		t.Fatal("different files share an ETag")
+	}
+}
+
+// The console shows the brand mark at 44 px; the embedded file stays small.
+func TestBrandIconIsSizedForTheConsole(t *testing.T) {
+	b, err := webFS.ReadFile("web_dist/brand-icon.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) > 64<<10 || cfg.Width > 256 || cfg.Height > 256 {
+		t.Fatalf("brand-icon.png is %dx%d, %d bytes", cfg.Width, cfg.Height, len(b))
 	}
 }
 
