@@ -95,7 +95,7 @@ var Table = []Route{
 	{Path: "/flags", Handler: "API.handleFlags", Response: "[]model.Flag", Console: true},
 	{Path: "/reviews", Handler: "API.handleReviews", Response: "store.ReviewPage", Console: true, NoAgent: true},
 	{Path: "/reviews/decision", Handler: "API.handleReviewDecision", Response: "model.ReviewDecisionReceipt", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/decision-scopes", Handler: "API.handleDecisionScopes", Console: true, NoAgent: true, MutatingMethods: []string{"DELETE"}, ConsoleMethods: []string{"GET", "DELETE"}},
+	{Path: "/decision-scopes", Handler: "API.handleDecisionScopes", Console: true, NoAgent: true, MutatingMethods: []string{"DELETE"}},
 	{Path: "/flags/", Handler: "API.handleFlagExplain", Prefix: true, Leaves: []Leaf{{Path: "explain", Response: "model.Flag"}}, Console: true},
 	{Path: "/events", Handler: "API.handleEvents", Response: "[]event.Event", Console: true},
 	{Path: "/events/stream", Handler: "API.handleEventStream", Console: true},
