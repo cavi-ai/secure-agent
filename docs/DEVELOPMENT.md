@@ -112,8 +112,10 @@ The source installer changes `/Applications` and launches the app. Unit tests an
 ```text
 secure-agent/
 ├── cmd/                  # CLI and reference fleet collector
+├── internal/             # Packages shared by the CLI and the hook forwarder (durable directory sync)
 ├── daemon/
 │   ├── cmd/              # secure-agentd entry point
+│   ├── hookrun/          # Hook-run contract shared by harness adapters and the hook forwarder
 │   └── internal/         # Collectors, bus, correlation, store, API, config
 │       └── api/web_dist/ # Embedded console assets (canonical source)
 ├── plugin/
