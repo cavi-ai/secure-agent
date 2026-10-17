@@ -23,20 +23,40 @@ type AttentionReference struct {
 	SessionID string `json:"session_id,omitempty"`
 }
 
+// AttentionBuckets are the summary's buckets in served order; clients
+// validate against this order (lib.js ATTENTION_BUCKETS, Models.swift
+// attentionBuckets, pinned by a drift test in daemon/internal/wiregen).
+var AttentionBuckets = []string{"decisions", "security", "monitoring", "other"}
+
+// PostureItemAttentionKinds maps a posture item's kind to the kind of the
+// group item that represents it, where they differ; clients use it to match
+// the two (lib.js POSTURE_ITEM_ATTENTION_KINDS, Models.swift
+// postureItemAttentionKinds).
+var PostureItemAttentionKinds = map[string]string{"guard_pending": "guard", "resource_pressure": "resource"}
+
+// attentionBucket is the index in AttentionBuckets of a group item kind;
+// unknown kinds count as "other".
+func attentionBucket(kind string) int {
+	switch kind {
+	case "guard", "resource":
+		return 0
+	case "review", "incident", "flag", "pattern", "routine":
+		return 1
+	case "hook", "hook_delivery":
+		return 2
+	}
+	return 3
+}
+
 func deriveAttentionSummary(groups []AttentionGroup, coverage []PostureItem) *AttentionSummary {
-	s := &AttentionSummary{Version: 1, Buckets: []AttentionBucket{{Kind: "decisions"}, {Kind: "security"}, {Kind: "monitoring"}, {Kind: "other"}}}
+	s := &AttentionSummary{Version: 1}
+	for _, kind := range AttentionBuckets {
+		s.Buckets = append(s.Buckets, AttentionBucket{Kind: kind})
+	}
 	priorities := [4]int{}
 	for _, group := range groups {
 		for _, item := range group.Items {
-			i := 3
-			switch item.Kind {
-			case "guard", "resource":
-				i = 0
-			case "review", "incident", "flag", "pattern", "routine":
-				i = 1
-			case "hook", "hook_delivery":
-				i = 2
-			}
+			i := attentionBucket(item.Kind)
 			b := &s.Buckets[i]
 			b.Count++
 			if b.First == nil || item.Priority > priorities[i] {

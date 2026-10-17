@@ -633,10 +633,15 @@ public struct PostureModel: Codable, Sendable, Equatable {
         attentionSummary = try? c.decodeIfPresent(AttentionSummaryModel.self, forKey: .attentionSummary)
     }
 
+    /// Daemon enumerations, pinned to api.AttentionBuckets and
+    /// api.PostureItemAttentionKinds by a drift test in daemon/internal/wiregen.
+    static let attentionBuckets = ["decisions", "security", "monitoring", "other"]
+    static let postureItemAttentionKinds = ["guard_pending": "guard", "resource_pressure": "resource"]
+
     public var validatedAttentionSummary: AttentionSummaryModel? {
         guard let s = attentionSummary, s.version == 1, [3, 4].contains(s.buckets.count),
               needsYou >= 0, let coverageCount, coverageCount >= 0 else { return nil }
-        let order = ["decisions", "security", "monitoring", "other"]
+        let order = Self.attentionBuckets
         var total = 0
         for (index, b) in s.buckets.enumerated() {
             guard b.kind == order[index], b.count >= 0, b.coverageCount >= 0, b.coverageCount <= coverageCount,
@@ -646,8 +651,7 @@ public struct PostureModel: Codable, Sendable, Equatable {
             total = sum.partialValue
             if b.count == 0 { if b.first != nil { return nil }; continue }
             guard let f = b.first, !f.id.isEmpty else { return nil }
-            let aliases = ["guard_pending": "guard", "resource_pressure": "resource", "uninspected_egress": "egress"]
-            let matches = (items ?? []).filter { (aliases[$0.kind] ?? $0.kind) == f.kind && $0.id == f.id }
+            let matches = (items ?? []).filter { (Self.postureItemAttentionKinds[$0.kind] ?? $0.kind) == f.kind && $0.id == f.id }
             guard matches.count == 1 else { return nil }
         }
         return total == needsYou ? s : nil
