@@ -906,10 +906,10 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, procSource 
 	}
 }
 
-// startCollectors launches the supervised collectors. File telemetry:
-//  1. Spool tail from the root ES LaunchDaemon (sanctioned path).
-//  2. Direct eslogger child (root dev runs only).
-//  3. Neither: degraded, not crash-looped; the transcript scanner remains.
+// startCollectors launches the supervised collectors. File telemetry is the
+// spool tail of the root ES collector (the LaunchDaemon, or a developer's
+// `secure-agentd -es-collector` run as root); without a spool it is degraded,
+// not crash-looped, and starts when the spool appears.
 func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer]) {
 	if proxyServer != nil {
 		go sup.Run(ctx, "proxyserver", func(c context.Context) error {
@@ -928,13 +928,6 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	switch {
 	case spool.Load() != nil:
 		tailSpool(spool.Load())
-	case os.Geteuid() == 0 && collect.ESLoggerAvailable():
-		st.TrackFileFeed()
-		go sup.Run(ctx, "eslogger", func(c context.Context) error {
-			es := collect.NewESLogger(b)
-			es.OnProduce = func() { supReg.MarkProduced("eslogger") }
-			return es.Run(c)
-		})
 	default:
 		log.Printf("file telemetry unavailable: ES requires a privileged collector (install it from Settings); transcript + network signals still active; starts when the collector's spool appears")
 		go watchSpool(ctx, spoolWatchInterval, collect.SpoolAvailable, func() {
