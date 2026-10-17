@@ -516,12 +516,12 @@ def run_session_workbench(page):
 
 def run_session_reading(page):
     check = page.check
-    for label, size, query in [('long phone', (320, 800), '?readingdemo&readinglong'), ('short phone', (390, 800), '?readingdemo'), ('short viewport', (375, 480), '?readingdemo&readinglong')]:
+    for label, size, query in [('desktop', (1280, 720), '?readingdemo'), ('long phone', (320, 800), '?readingdemo&readinglong'), ('short phone', (390, 800), '?readingdemo'), ('short viewport', (375, 480), '?readingdemo&readinglong')]:
         reading_dom = page.dom(query, window_size=size, fixture=payload_cases.session_workbench(), served=True)
         receipt = re.search(r'data-session-reading="([^"]+)"', reading_dom)
         state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
         check(f'session reading ({label}): receipt produced', bool(state), str(state))
-        for name in ('memoryBudget', 'contextInBody', 'latest', 'currentContext', 'detailsBudget', 'detailsDoNotGrowChrome', 'fullTitleRow', 'toolbar', 'actions', 'resultsBudget', 'traceBudget', 'fits'):
+        for name in ('memoryBudget', 'contextInBody', 'latest', 'currentContext', 'detailsBudget', 'detailsDoNotGrowChrome', 'fullTitleRow', 'toolbar', 'actions', 'resultsBudget', 'traceBudget', 'railToggle', 'alertsReachable', 'fits'):
             check(f'session reading ({label}): {name}', state.get(name) is True, str(state))
 
 def run_session_discovery(page):

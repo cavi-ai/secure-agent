@@ -84,7 +84,7 @@ type codexRateWindow struct {
 const codexPlanProvider = "chatgpt"
 
 type codexResponseItem struct {
-	Type   string `json:"type"` // function_call | function_call_output | ...
+	Type   string `json:"type"` // function/custom_tool call or output; payload content is intentionally omitted.
 	ID     string `json:"id"`
 	CallID string `json:"call_id"`
 	Name   string `json:"name"`
@@ -258,7 +258,7 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 			return nil, false
 		}
 		switch item.Type {
-		case "function_call":
+		case "function_call", "custom_tool_call":
 			if item.CallID == "" || item.Name == "" {
 				return nil, true
 			}
@@ -267,7 +267,7 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 				Kind: event.KindToolCall, TS: ts, SessionID: t.sessionID,
 				CallID: item.CallID, ToolName: item.Name, ToolStatus: "running",
 			}), true
-		case "function_call_output":
+		case "function_call_output", "custom_tool_call_output":
 			if e, found := t.pending.completion(item.CallID, t.sessionID, "ok", ts); found {
 				return []event.Event{e}, true
 			}

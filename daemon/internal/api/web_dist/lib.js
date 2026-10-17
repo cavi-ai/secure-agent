@@ -88,6 +88,17 @@ function fmtTime(d) {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+// Absolute record times include the user's timezone; the recorded value stays
+// available to assistive technology and in the tooltip.
+function localTimestampHTML(value) {
+  if ((typeof value !== 'string' && typeof value !== 'number') || (typeof value === 'string' && !value.trim())) return 'Time unavailable';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return 'Time unavailable';
+  const recorded = typeof value === 'string' ? value : date.toISOString();
+  const label = date.toLocaleString(undefined, {year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'});
+  return `<time datetime="${escapeHTML(recorded)}" title="${escapeHTML(recorded)}">${escapeHTML(label)}</time>`;
+}
+
 // fmtDayClock: deterministic local "Fri 3:10 PM", built by hand like
 // fmtTime.
 function fmtDayClock(d) {
@@ -2194,15 +2205,15 @@ function policyListHTML(kind, rows, st) {
   const removal = kind === 'expected' && s.expectedRemoval;
   const saved = removal ? `<p role="status">Exception removal saved for <code>${escapeHTML(removal.path)}</code> (${escapeHTML(removal.agent)}). Remaining exceptions and policies still apply; past activity is unchanged.</p>` : '';
   const label = s.label || { guard: 'Guard decisions', path: 'File exceptions', mute: 'Muted flag classes', expected: 'Expected secret reads', scope: 'Scoped permissions' }[kind];
-  const refreshed = rows != null && Number.isFinite(s.lastSuccessAt) ? ' Last successful refresh: ' + new Date(s.lastSuccessAt).toLocaleString() + '.' : '';
-  const notice = s.hideNotice ? '' : saved + (s.error ? `<div class="policy-read-status" role="status"><p>${escapeHTML(label)}: ${rows != null ? 'Refresh failed. Showing last known records; current status is unavailable.' : 'Unavailable. No successful read yet.'}${escapeHTML(refreshed)} ${escapeHTML(s.error)}</p><button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh-report" data-kind="${escapeHTML(kind)}"${s.loading ? ' disabled' : ''}>${escapeHTML('Refresh ' + label.toLowerCase())}</button></div>`
+  const refreshed = rows != null && Number.isFinite(s.lastSuccessAt) ? ' Last successful refresh: ' + localTimestampHTML(s.lastSuccessAt) + '.' : '';
+  const notice = s.hideNotice ? '' : saved + (s.error ? `<div class="policy-read-status" role="status"><p>${escapeHTML(label)}: ${rows != null ? 'Refresh failed. Showing last known records; current status is unavailable.' : 'Unavailable. No successful read yet.'}${refreshed} ${escapeHTML(s.error)}</p><button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh-report" data-kind="${escapeHTML(kind)}"${s.loading ? ' disabled' : ''}>${escapeHTML('Refresh ' + label.toLowerCase())}</button></div>`
     : s.loading && rows != null ? `<p class="policy-read-status" role="status">${escapeHTML('Refreshing ' + label.toLowerCase() + '…')}</p>` : '');
   if (!rows) {
     if (s.error) return notice;
     return `<div class="loading">Loading…</div>`;
   }
   const EMPTY = {
-    guard: 'No guard decisions yet. Answering a guard prompt with Always allow or Always deny stores one here.',
+    guard: 'No legacy guard decisions. Session and timed permissions are listed above.',
     path: 'No file exceptions yet. Always allow this file, on a finding, adds one here.',
     mute: 'No muted flag classes. Stop flagging this, on a finding, adds one here.',
     expected: 'No expected secret reads. Expected, on a read-then-connect finding, adds one here.',
@@ -2211,23 +2222,21 @@ function policyListHTML(kind, rows, st) {
   if (!rows.length) return notice + (s.error ? '' : `<div class="empty"><span>${EMPTY[kind]}</span></div>`);
   const row = (main, sub, meta) => `<div class="policy-row"><div class="policy-row-main">${main}</div>`
     + `<div class="policy-row-sub">${sub}</div>${meta ? `<span class="policy-row-meta">${meta}</span>` : ''}</div>`;
-  const when = r => r.created_at ? escapeHTML(String(r.created_at).slice(0, 10)) : '';
+  const when = r => r.created_at ? localTimestampHTML(r.created_at) : '';
   const items = rows.map(r => {
     if (kind === 'scope') {
       const applicability = decisionScopeApplicability(r), mutation = s.scopeMutations?.get(r.id);
-      const timestamp = value => Number.isFinite(Date.parse(value))
-        ? `<time datetime="${escapeHTML(value)}" title="${escapeHTML(value)}">${escapeHTML(new Date(value).toLocaleString(undefined,{year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}))}</time>` : 'Time unavailable';
       const saved = mutation?.status === 'saved', unconfirmed = mutation?.status === 'unconfirmed';
       const pending = mutation?.status === 'confirming' || mutation?.status === 'saving';
       const lifetime = saved ? 'Revoked' : applicability.label;
-      const duration = r.expires_at ? ` · Expires ${timestamp(r.expires_at)}` : r.kind === 'session' && r.session_id ? ` · Session ${escapeHTML(r.session_id)}` : '';
+      const duration = r.expires_at ? ` · Expires ${localTimestampHTML(r.expires_at)}` : r.kind === 'session' && r.session_id ? ` · Session ${escapeHTML(r.session_id)}` : '';
       const feedback = saved ? '<p role="status">Revocation saved. Other permissions may still apply; past access is unchanged.</p>'
         : unconfirmed ? '<p role="status">Revocation not confirmed. Refresh permissions before trying again.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh permissions</button>'
         : mutation?.status === 'saving' ? '<p role="status">Saving revocation…</p>' : '';
       const recipient = r.destination ? ` → ${r.destination}` : '';
       const operation = r.operation.startsWith('guard:') ? 'Guarded ' + r.operation.slice(6) + ' access' : r.operation === 'read-connect' ? 'Expected read/connect activity' : 'Operation unavailable';
       return row(`<b>${escapeHTML(r.agent)}</b> · ${escapeHTML(operation)} <code>${escapeHTML(r.resource_path)}</code>${escapeHTML(recipient)}`,
-        `${escapeHTML(r.workspace || 'Workspace not recorded')} · executable path ${escapeHTML(r.reader_exe || 'Unknown')} (observed, not signature verified) · ${escapeHTML(lifetime)}${duration}<br>Saved ${timestamp(r.created_at)} · Permission ${escapeHTML(r.id)}${feedback}`,
+        `${escapeHTML(r.workspace || 'Workspace not recorded')} · executable path ${escapeHTML(r.reader_exe || 'Unknown')} (observed, not signature verified) · ${escapeHTML(lifetime)}${duration}<br>Saved ${localTimestampHTML(r.created_at)} · Permission ${escapeHTML(r.id)}${feedback}`,
         `${r.session_id ? `<button type="button" class="btn btn-ghost btn-sm" data-action="permission-session" data-id="${escapeHTML(r.id)}">Inspect session</button>` : ''}${!applicability.revoke || saved || unconfirmed || s.error ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-action="revoke-scope" data-id="${escapeHTML(r.id)}"${s.loading || pending ? ' disabled' : ''}>Revoke</button>`}`);
     }
     if (kind === 'guard') {

@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,34 @@ const codexMetaLine = `{"timestamp":"2026-07-13T00:37:32.822Z","ordinal":0,"type
 const codexTokenLine = `{"timestamp":"2026-09-18T19:21:47.166Z","ordinal":79022,"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":94510,"cached_input_tokens":94080,"output_tokens":1200}}}}`
 const codexCallLine = `{"timestamp":"2026-09-18T19:21:50.000Z","type":"response_item","payload":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"shell","arguments":"{}"}}`
 const codexOutputLine = `{"timestamp":"2026-09-18T19:21:52.500Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"{}"}}`
+
+func TestCodexTraceCustomToolPairingWithoutPayloads(t *testing.T) {
+	tr := NewCodexTracer("")
+	tr.ParseLine(codexMetaLine)
+	call := `{"timestamp":"2026-09-18T19:21:50.000Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"custom_1","name":"exec","input":"private fixture input"}}`
+	output := `{"timestamp":"2026-09-18T19:21:52.500Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"custom_1","output":"private fixture output"}}`
+	start, ok := tr.ParseLine(call)
+	if !ok || len(start) != 1 || start[0].Kind != event.KindToolCall || start[0].ToolName != "exec" || start[0].CallID != "custom_1" || start[0].ToolStatus != "running" {
+		t.Fatalf("custom tool start = %+v, recognized=%v", start, ok)
+	}
+	// An ordinary call can be in flight beside a custom call.
+	tr.ParseLine(codexCallLine)
+	finish, ok := tr.ParseLine(output)
+	if !ok || len(finish) != 1 || finish[0].CallID != "custom_1" || finish[0].ToolName != "exec" || finish[0].ToolStatus != "ok" || finish[0].DurationMs != 2500 || finish[0].SessionID != start[0].SessionID {
+		t.Fatalf("custom tool completion = %+v, recognized=%v", finish, ok)
+	}
+	ordinary, _ := tr.ParseLine(codexOutputLine)
+	if len(ordinary) != 1 || ordinary[0].CallID != "call_1" {
+		t.Fatalf("ordinary call pairing changed: %+v", ordinary)
+	}
+	encoded, err := json.Marshal(append(start, finish...))
+	if err != nil || strings.Contains(string(encoded), "private fixture") {
+		t.Fatalf("custom input or output retained in metadata: %s, %v", encoded, err)
+	}
+	if orphan, _ := tr.ParseLine(output); len(orphan) != 0 {
+		t.Fatalf("repeated output created another event: %+v", orphan)
+	}
+}
 
 func TestCodexTraceMetaTokensAndToolPairing(t *testing.T) {
 	tr := NewCodexTracer("")

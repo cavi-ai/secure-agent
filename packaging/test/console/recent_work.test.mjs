@@ -6,7 +6,7 @@ import vm from 'node:vm';
 const web = new URL('../../../daemon/internal/api/web_dist/', import.meta.url);
 const c = { Date, window: { SA: {} } };
 vm.createContext(c);
-for (const file of ['lib.js', 'session-workbench.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), c);
+for (const file of ['lib.js', 'session-layout.js', 'session-workbench.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), c);
 const session = (id, status, at) => ({ id, status, harness: 'claude', repo: 'project', last_seen_at: at });
 
 test('recent work orders by recorded activity, uses durable IDs and bounds the loaded list', () => {

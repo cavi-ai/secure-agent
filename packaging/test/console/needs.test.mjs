@@ -13,7 +13,7 @@ function load(posture, t = {}) {
     expanded: new Set(), setTabBadge: (id, n) => badges.push([id, n]) };
   const ctx = { window: { SA: sa }, document: { getElementById: id => nodes.get(id) } };
   vm.createContext(ctx);
-  for (const name of ['lib.js', 'session-workbench.js', 'tab-findings.js']) vm.runInContext(readFileSync(new URL(name, assets), 'utf8'), ctx);
+  for (const name of ['lib.js', 'session-layout.js', 'session-workbench.js', 'tab-findings.js']) vm.runInContext(readFileSync(new URL(name, assets), 'utf8'), ctx);
   const patched = [];
   ctx.patchList = (_node, items, opts) => patched.push({ items, opts });
   return { ctx, nodes, badges, patched, sa };

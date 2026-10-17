@@ -57,6 +57,8 @@ jobs:
       # are CGO_ENABLED=0, see the linux job).
       - name: make test-go
         run: make test-go
+      - name: Live hook and daemon workflow
+        run: make test-guard-workflow-live
 
   hooks:
     name: Python hook tests (${{ matrix.python }})

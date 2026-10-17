@@ -141,7 +141,7 @@ function sessionPermissionsHTML(receipt, state) {
     <p>${receipt.sessionID ? `Session ${escapeHTML(receipt.sessionID)}` : 'Session unavailable'} · ${receipt.kind === 'guard' ? 'Guard decision' : `decision for revision ${receipt.revision}`}<br>Recorded ${escapeHTML(receipt.at || 'time unavailable')}</p>
     <p>The daemon rechecks live session and identity before applying a saved scope. These records do not establish that a request is currently allowed.</p>
     <p>Other permissions and legacy policies may still allow matching access. Revocation does not undo past access.</p>
-    ${st.readAt ? `<p>Read at ${escapeHTML(st.readAt)}</p>` : ''}
+    ${st.readAt ? `<p>Read at ${localTimestampHTML(st.readAt)}</p>` : ''}
     <p role="status">${notice}${st.mutationError ? ' Revocation confirmation unavailable. Refresh before retrying.' : ''}${st.busy ? ' Revocation awaiting confirmation or save.' : ''}</p>${refresh}
   </header>`;
   return head + (st.rows || decisionPermissionRows(receipt, [])).map(row => {

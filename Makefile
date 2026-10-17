@@ -1,4 +1,4 @@
-.PHONY: all build test test-go test-linux test-hooks test-console test-macos test-menubar-rendering test-setup-session-live install uninstall clean daemon menubar cli collector smoke app dmg release icon lint docs docs-reference docs-check docs-test docs-archive
+.PHONY: all build test test-go test-guard-workflow-live test-linux test-hooks test-console test-macos test-menubar-rendering test-setup-session-live install uninstall clean daemon menubar cli collector smoke app dmg release icon lint docs docs-reference docs-check docs-test docs-archive
 
 docs-reference:
 	python3 packaging/docs/build.py reference
@@ -71,9 +71,13 @@ test-menubar-rendering:
 test-setup-session-live:
 	python3 packaging/test/setup_session_live.py
 
-# CI runs test-go, test-linux, test-hooks and test-console as its jobs; `make
-# test` runs those, the documentation checks and the macOS-only suites.
-test: test-go test-linux test-hooks test-console docs-check docs-test test-macos
+# CI runs test-go with test-guard-workflow-live, test-linux, test-hooks and
+# test-console as its jobs; `make test` runs those, the documentation checks
+# and the macOS-only suites.
+test: test-go test-guard-workflow-live test-linux test-hooks test-console docs-check docs-test test-macos
+
+test-guard-workflow-live:
+	python3 packaging/test/guard_workflow_live.py
 
 test-go:
 	@echo "==> gofmt, go vet, go test -race..."

@@ -82,7 +82,7 @@ When an agent tool call touches a guarded path (SSH keys, cloud credentials, the
 | Mode | Behavior |
 |---|---|
 | `monitor` (default) | The named path rule logs access without a prompt. Independent hard-deny checks still apply. |
-| `prompt` | The hook holds the tool call while the menu bar raises a native **Allow Once / Allow Always / Deny** prompt. Your answer is remembered per `(agent, rule)` — "Allow Always" is cached, so the same agent hitting the same rule again is resolved instantly with no further prompt. |
+| `prompt` | The hook holds the tool call for **Allow Once** or **Deny**. When recorded identity permits it, session and timed access choices require a separate confirmation of the file, tool, workspace, executable path and lifetime. **Inspect session** leaves the request unanswered while its timeout continues. |
 | `deny` | Blocked outright, no prompt. |
 
 **Quiet by default.** Every named path rule ships `monitor`. Independent hard-deny checks still block credential-printing and mutations to the guard or harness enforcement plane, even in monitor mode. The **Guard My Secrets** button under Optional capabilities is the explicit opt-in that promotes SSH keys, cloud credentials, the keychain, and harness configuration to `prompt`, written to `~/.config/secure-agent/guard-modes.json`.
@@ -110,3 +110,5 @@ secure-agent guard revoke claude ssh-keys
 ```
 
 Revocation forces a new decision for that cached agent/rule pair; it does not undo prior access. Per-project policies and prompt deadlines are documented in [Configuration](CONFIGURATION.md#directory_guard-map).
+
+In **Protection → Rules & permissions**, review session and timed records under **Saved permissions**. **Legacy guard decisions** lists older agent/rule-wide decisions without expiry. File exceptions, expected activity and notification settings have separate effects explained beside each list; revoking one record does not remove other matching policies.

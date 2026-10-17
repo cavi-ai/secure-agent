@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const ctx = { Date, window: { SA: {} } };
 vm.createContext(ctx);
-for (const file of ['lib.js', 'tab-findings.js', 'session-workbench.js']) vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/' + file, import.meta.url), 'utf8'), ctx);
+for (const file of ['lib.js', 'tab-findings.js', 'session-layout.js', 'session-workbench.js']) vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/' + file, import.meta.url), 'utf8'), ctx);
 const row = () => ({ report: { type:'hook_forwarder',version:2,harness:'hermes',forwarder_id:'host-1',sequence:1,ts:'2026-10-14T10:00:00Z',state:'error',pending:3,delivery_failures:2,dropped:1,
   health:{source_state:'connected',delivery_error:'recorder-failed',report_error:false} }, received_at:'2026-10-14T10:00:01Z',freshness:'recent',
   assessment:{state:'needs-action',title:'Hook delivery needs attention',issues:[{stage:'delivery',code:'recorder-failed',next_action:'Restore recorder output storage.'}],evidence_gap:true,limits:['Host observations only']} });

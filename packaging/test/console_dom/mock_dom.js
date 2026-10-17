@@ -1507,7 +1507,7 @@
           const paragraph = body?.querySelector('.sm-content p, .sd-outcome p, .sm-state');
           const line = paragraph ? parseFloat(getComputedStyle(paragraph).lineHeight) || 18 : 18;
           const style = body && getComputedStyle(body);
-          const budget = Math.ceil(8 * line + 44 + (parseFloat(style?.paddingTop) || 0) + (parseFloat(style?.paddingBottom) || 0));
+          const budget = Math.max(Math.ceil((window.visualViewport?.height || innerHeight) / 2), Math.ceil(8 * line + 44 + (parseFloat(style?.paddingTop) || 0) + (parseFloat(style?.paddingBottom) || 0)));
           const rect = body?.getBoundingClientRect(), bounds = panel.getBoundingClientRect();
           dimensions = { mode: window.SA.sessionView, budget, clientHeight: body?.clientHeight,
             bodyTop: rect?.top, bodyBottom: rect?.bottom, panelTop: bounds.top, panelBottom: bounds.bottom,
@@ -1536,7 +1536,7 @@
           const text = body.querySelector('.sm-content p, .sd-outcome p, .sm-state');
           const line = text ? parseFloat(getComputedStyle(text).lineHeight) || 18 : 18;
           const style = getComputedStyle(body);
-          const budget = Math.ceil(8 * line + 44 + (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0));
+          const budget = Math.max(Math.ceil((window.visualViewport?.height || innerHeight) / 2), Math.ceil(8 * line + 44 + (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0)));
           const rect = body.getBoundingClientRect(), bounds = panel.getBoundingClientRect();
           return body.clientHeight >= budget - 2 && rect.top >= bounds.top && rect.bottom <= bounds.bottom + 1;
         };
@@ -1557,6 +1557,22 @@
         const narrow = matchMedia('(max-width:900px)').matches;
         receipt.toolbar = (getComputedStyle(panel.querySelector('.session-toolbar')).display === 'none') === narrow;
         receipt.actions = !narrow || Array.from(chrome.querySelectorAll('.sd-back, .sd-export, .sd-view, [data-action="session-status"]')).every(button => button.getBoundingClientRect().height >= 44);
+        const toggle = () => document.querySelector('[data-action="session-toggle-list"]');
+        receipt.railToggle = narrow;
+        if (!narrow) {
+          const selected = window.SA.selectedSessionId, top = body.scrollTop;
+          toggle()?.click(); await settle();
+          receipt.railToggle = !document.getElementById('session-rail').getClientRects().length
+            && !panel.querySelector('.session-toolbar').getClientRects().length
+            && toggle()?.getAttribute('aria-expanded') === 'false'
+            && window.SA.selectedSessionId === selected && body.scrollTop === top;
+          toggle()?.click(); await settle();
+          receipt.railToggle &&= !!document.getElementById('session-rail').getClientRects().length
+            && toggle()?.getAttribute('aria-expanded') === 'true';
+        }
+        receipt.alertsReachable = !!document.querySelector('#posture-state').getClientRects().length
+          && !!document.querySelector('#posture-summary').getClientRects().length
+          && !!document.querySelector('#posture-banner .agent-posture-link').getClientRects().length;
         for (const mode of ['results','trace']) {
           await window.setSessionView(mode); await settle(); receipt[mode + 'Budget'] = measure();
         }

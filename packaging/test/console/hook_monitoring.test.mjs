@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const ctx={window:{SA:{}}};
 vm.createContext(ctx);
-for(const file of ['lib.js','session-workbench.js']) vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/'+file,import.meta.url),'utf8'),ctx);
+for(const file of ['lib.js','session-layout.js', 'session-workbench.js']) vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/'+file,import.meta.url),'utf8'),ctx);
 const now=Date.parse('2026-10-15T14:00:00Z');
 const health={lastSnapshotAt:now,error:''};
 const ingestion=()=>({available:true,since:'2026-10-15T13:00:00Z',rejected:0,harnesses:[{harness:'codex',accepted:3,last_received_at:'2026-10-15T13:59:00Z'}],forwarders:[]});

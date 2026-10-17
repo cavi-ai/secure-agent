@@ -1183,6 +1183,8 @@ html.recent-work-navigation { overflow-anchor: none; }
 
 /* Policy: read-only lists. */
 .policy-list { display: flex; flex-direction: column; }
+.policy-effect { margin: 12px 16px; color: var(--tx-2); font-size: .875rem; line-height: 1.55; }
+#notify-pop .policy-effect { margin: 12px 0; }
 .policy-read-status { border-left: 3px solid var(--line); padding: 8px 12px; margin: 0 0 12px; font-size: .8rem; overflow-wrap: anywhere; }
 .policy-read-status p { margin: 0 0 8px; }
 .policy-read-status button { min-height: 44px; white-space: normal; }
@@ -1792,6 +1794,15 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 }
 .session-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .session-detail > .empty { flex: 1; padding: 24px; }
+.sd-list-toggle { min-height: 44px; }
+@media (min-width: 901px) {
+  .session-list-collapsed[data-pane="detail"] .session-rail,
+  .session-list-collapsed[data-pane="detail"] .session-toolbar { display: none; }
+  .session-list-collapsed[data-pane="detail"] .session-split { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 900px) {
+  .sd-list-toggle { display: none; }
+}
 .session-detail-chrome { flex: none; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--bg-1); }
 .session-detail-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .session-detail-actions .sd-export { margin-left: auto; }
@@ -1825,6 +1836,8 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .sd-metadata-body { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 0 0; }
 .session-detail-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 0 12px 12px; scrollbar-gutter: stable; overflow-anchor: none; }
 .session-memory { min-width: 0; }
+.session-detail-body .sm-content p, .session-detail-body .sd-outcome p,
+.session-detail-body .sd-follow-up p, .session-detail-body .sm-state { font-size: .875rem; line-height: 1.55; }
 .sd-outcome { padding: 12px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .sd-outcome h5 { margin: 0; font-size: 13px; }
 .sd-outcome time { font: 11px/1.4 var(--mono); color: var(--tx-2); }
@@ -2245,6 +2258,12 @@ button.spend-day:focus-visible { outline: 2px solid var(--brand); outline-offset
 
 /* ---------- Agent tab: system agent chat, plans, runs ---------- */
 .agent-posture-link { display: none; }
+.session-page #page-description, .session-page .posture-items { display: none; }
+.session-page .posture { align-items: center; flex-direction: row; flex-wrap: wrap; gap: 8px 16px; padding-bottom: 12px; }
+.session-page .agent-posture-link { display: inline-flex; flex: none; min-height: 44px; }
+@media (min-width: 901px) {
+  .session-page .posture { position: sticky; top: 0; z-index: 20; background: var(--bg-0); }
+}
 /* Agent dock: the conversation beside the page; the page narrows to it. */
 .agent-dock {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 150;

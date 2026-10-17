@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const ctx={Date,window:{SA:{}}};vm.createContext(ctx);
-for(const file of ['lib.js','session-workbench.js']) vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/'+file,import.meta.url),'utf8'),ctx);
+for(const file of ['lib.js','session-layout.js', 'session-workbench.js']) vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/'+file,import.meta.url),'utf8'),ctx);
 const scope={session:'session-1',harness:'codex',event:'PreToolUse',event_scope:'exact',handler:'handler-1',config:'revision-1',script:'/private/guard.py',after:'2026-10-15T09:59:00Z',problem:'Repeated execution errors',explanation:'Three errors observed.',guidance:'Restore the handler dependency.'};
 const page=()=>({session_id:scope.session,filter:{harness:scope.harness,event:scope.event,event_scope:'exact',handler_id:scope.handler,config_id:scope.config,script:scope.script},since:'2026-10-15T09:30:00Z',until:'2026-10-15T10:00:00Z',truncated:false,rows:[{id:'run-1',ts:'2026-10-15T09:59:00Z',status:'error',duration_ms:0,evidence:{handler_id:scope.handler,config_id:scope.config,duration_known:true,chars_known:false,reason_code:'timeout'}}]});
 const host=()=>({report:{type:'hook_forwarder',version:2,harness:'hermes',forwarder_id:'host-1',sequence:2,ts:'2026-10-15T10:00:00Z',state:'error',pending:3,delivery_failures:4,dropped:1,health:{source_state:'connected',delivery_error:'recorder-failed',report_error:false}},received_at:'2026-10-15T10:00:01Z',freshness:'recent',assessment:{state:'needs-action',title:'Hook delivery needs attention',issues:[{stage:'delivery',code:'recorder-failed',next_action:'Restore recorder storage.'}],evidence_gap:true,limits:['Host observations only.']}});

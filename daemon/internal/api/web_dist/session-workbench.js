@@ -834,7 +834,7 @@ function sessionFollowUpHTML(data, state = {}) {
   const permissionRows = sessionOutcomePermissionLinks(data).map(link => {
     const rows = link.ids.map(id => {
       const r = records?.get(id);
-      return r ? `<li><strong>${escapeHTML(decisionScopeApplicability(r).label)}</strong> · <code>${escapeHTML(r.resource_path)}</code>${r.expires_at ? `<p>Expires ${escapeHTML(r.expires_at)}</p>` : ''}${r.revoked_at ? `<p>Revoked ${escapeHTML(r.revoked_at)}</p>` : ''}</li>` : '<li>Current status unknown. The record is missing or unavailable; expiry or revocation cannot be established.</li>';
+      return r ? `<li><strong>${escapeHTML(decisionScopeApplicability(r).label)}</strong> · <code>${escapeHTML(r.resource_path)}</code>${r.expires_at ? `<p>Expires ${localTimestampHTML(r.expires_at)}</p>` : ''}${r.revoked_at ? `<p>Revoked ${localTimestampHTML(r.revoked_at)}</p>` : ''}</li>` : '<li>Current status unknown. The record is missing or unavailable; expiry or revocation cannot be established.</li>';
     }).join('');
     const action = !state.error ? `<button type="button" class="link-btn" data-action="${link.kind === 'guard' ? 'session-guard-permissions' : 'session-permissions'}" ${link.kind === 'guard' ? 'data-id' : 'data-review'}="${escapeHTML(link.id)}" data-session="${escapeHTML(data.session_id)}">Inspect permissions</button>` : '';
     return `<li data-row-id="follow-up:permission:${link.kind}:${escapeHTML(link.id)}"><strong>${escapeHTML(link.title)}</strong><ul>${rows}</ul>${action}</li>`;
@@ -844,11 +844,11 @@ function sessionFollowUpHTML(data, state = {}) {
   const count = evidenceRows.length + actionRows.length + permissionRows.length;
   return `<section class="sd-follow-up" data-session-part="follow-up" aria-label="Session follow-up">
     <div class="sd-follow-up-head"><h4>Needs follow-up</h4><button type="button" class="link-btn" data-action="session-outcomes-retry"${state.loading ? ' disabled' : ''}>${state.loading ? 'Refreshing…' : 'Refresh results'}</button></div>
-    ${stale ? `<p role="status">${state.loading ? 'Refreshing follow-up' : 'Last known follow-up'}. Refresh must succeed before relying on these records.</p>` : data.observed_at ? `<p>Results read at ${escapeHTML(data.observed_at)}</p>` : ''}
+    ${stale ? `<p role="status">${state.loading ? 'Refreshing follow-up' : 'Last known follow-up'}. Refresh must succeed before relying on these records.</p>` : data.observed_at ? `<p>Results read at ${localTimestampHTML(data.observed_at)}</p>` : ''}
     ${partial ? '<p>Follow-up uses missing or bounded history. Other work may be absent.</p>' : ''}
     ${!count ? '<p>No follow-up identified in the loaded records. This is not a safety verdict.</p>' : ''}
     ${group('evidence', 'New evidence', evidenceRows)}${group('actions', 'Actions to check', actionRows)}${group('permissions', 'Permissions from decisions', permissionRows)}
-    ${permissionRows.length ? `<p>${permissions?.loading ? 'Loading permission status…' : records ? `Permissions read at ${escapeHTML(permissions.readAt)}. Applicability can change; inspect before relying on access.` : 'Permission status unavailable. Inspect permissions to retry the current scope and expiry.'}</p>` : ''}
+    ${permissionRows.length ? `<p>${permissions?.loading ? 'Loading permission status…' : records ? `Permissions read at ${localTimestampHTML(permissions.readAt)}. Applicability can change; inspect before relying on access.` : 'Permission status unavailable. Inspect permissions to retry the current scope and expiry.'}</p>` : ''}
   </section>`;
 }
 
@@ -857,7 +857,7 @@ function sessionOutcomesHTML(data, state) {
   const retry = '<button type="button" class="link-btn" data-action="session-outcomes-retry">Retry results</button>';
   const notice = state.error ? `Last known results. Refresh failed; later decisions or observations may be missing. ${retry}`
     : !data ? state.loading ? 'Loading decisions and results…' : `Results unavailable. ${retry}` : '';
-  const head = `<header data-session-part="outcomes-head"><h4>Decisions and results</h4><p>Latest saved decision per finding context, recorded guard answers, and latest result per operation. These receipts do not establish task completion or prove tool access. Payload outcomes remain in Memory.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
+  const head = `<header data-session-part="outcomes-head"><h4>Decisions and results</h4><p>Saved decisions and action receipts. They do not prove task completion or tool access. Review payload outcomes in Evidence.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
   if (!data) return head;
   const h = data.history;
   const limits = [['reviews', 'Review decisions'], ['interventions', 'Process results'], ['incidents', 'Incident reports'], ['guards','Guard decisions']].map(([key, label]) => {
@@ -895,16 +895,14 @@ function sessionOutcomesHTML(data, state) {
   }
   rows.sort((a, b) => (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0) || a.key.localeCompare(b.key));
   const history = rows.map(row => {
-    const date = new Date(row.at);
-    const time = Number.isNaN(date.getTime()) ? 'Time unavailable' : date.toLocaleString();
-    return `<article class="sd-outcome" data-session-part="${escapeHTML(row.key)}" data-row-id="${escapeHTML(row.key)}"><h5>${escapeHTML(row.title)}</h5><time datetime="${escapeHTML(row.at || '')}">${escapeHTML(time)}</time>${row.html}</article>`;
+    return `<article class="sd-outcome" data-session-part="${escapeHTML(row.key)}" data-row-id="${escapeHTML(row.key)}"><h5>${escapeHTML(row.title)}</h5>${localTimestampHTML(row.at)}${row.html}</article>`;
   }).join('');
   return sessionFollowUpHTML(data, state) + head + `<div data-session-part="outcomes-limits">${limits}${Object.values(h.evidence).some(source => !source.available) ? retry : ''}${!rows.length && !limits ? '<p>No saved decisions or results in the retained history. This is not a safety verdict.</p>' : ''}</div>` + history;
 }
 
 function sessionDetailHTML(sess, events, trees, state = window.SA) {
   if (!sess) {
-    return `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>Select a session to see its memory</span></div>`;
+    return `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>Select a session to inspect its evidence</span></div>`;
   }
   const tree = liveTreeFor(sess, trees);
   const title = sessionTitle(sess, tree && tree.root.cwd);
@@ -929,6 +927,7 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
     <div class="session-detail-actions">
       ${window.SA.recentWorkReturn ? '<button type="button" class="btn btn-sm btn-ghost" data-action="recent-work-home">Back to Home</button>' : ''}
       <button type="button" class="btn btn-sm btn-ghost sd-back" data-action="session-list">Back to sessions</button>
+      <button type="button" class="btn btn-sm btn-ghost sd-list-toggle" data-action="session-toggle-list" aria-controls="session-rail" aria-expanded="${!state.sessionListCollapsed}">${state.sessionListCollapsed ? 'Show' : 'Hide'} session list</button>
       <button type="button" class="btn btn-sm btn-ghost sd-export" data-action="copy-report" data-id="${escapeHTML(sess.id)}" title="Copy this session's report as markdown"><svg class="icon"><use href="#i-copy"/></svg>Copy report</button>
       ${sess.workspace ? `<button type="button" class="btn btn-sm btn-ghost" data-action="workspace-permissions" data-session="${escapeHTML(sess.id)}">Workspace permissions</button>` : ''}
     </div>
@@ -938,7 +937,7 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
     </div>
     <div class="sd-detail-controls">
       <div class="sd-view-switch" role="group" aria-label="Session detail view">
-        <button type="button" class="sd-view${state.sessionView === 'memory' ? ' active' : ''}" data-action="session-view" data-view="memory" aria-pressed="${state.sessionView === 'memory'}">Memory</button>
+        <button type="button" class="sd-view${state.sessionView === 'memory' ? ' active' : ''}" data-action="session-view" data-view="memory" aria-pressed="${state.sessionView === 'memory'}">Evidence</button>
         <button type="button" class="sd-view${state.sessionView === 'results' ? ' active' : ''}" data-action="session-view" data-view="results" aria-pressed="${state.sessionView === 'results'}">Results</button>
         <button type="button" class="sd-view${state.sessionView === 'trace' ? ' active' : ''}" data-action="session-view" data-view="trace" aria-pressed="${state.sessionView === 'trace'}">Trace</button>
         <button type="button" class="sd-view${state.sessionView === 'hooks' ? ' active' : ''}" data-action="session-view" data-view="hooks" aria-pressed="${state.sessionView === 'hooks'}">Hooks</button>
@@ -961,6 +960,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
   let sessionFilterTransition = false;
   let sessionReveal = false;
   let sessionPane = 'detail';
+  let sessionListCollapsed = false;
   let sessionView = 'memory';
   let sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
   let sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
@@ -1134,52 +1134,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     await Promise.all([history, loadSessionOverview(id)]);
     renderNow(['sessions']);
   }
-  let sessionHeightFrame = 0;
-  let sessionHeightChrome = null;
-  const sessionHeightObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(scheduleSessionWorkbenchHeight) : null;
-  function scheduleSessionWorkbenchHeight() {
-    if (sessionHeightFrame) return;
-    sessionHeightFrame = requestAnimationFrame(() => {
-      sessionHeightFrame = 0;
-      const panel = document.getElementById('session-board-panel');
-      if (!panel || !panel.classList.contains('session-workbench') || !panel.getClientRects().length) return;
-      const body = panel.querySelector('.session-detail-body');
-      const followLatest = body && body.scrollHeight - body.clientHeight - body.scrollTop < 64;
-      const chrome = panel.querySelector('.session-detail-chrome');
-      if (sessionHeightObserver && chrome !== sessionHeightChrome) {
-        if (sessionHeightChrome) sessionHeightObserver.unobserve(sessionHeightChrome);
-        if (chrome) sessionHeightObserver.observe(chrome);
-        sessionHeightChrome = chrome;
-      }
-      const style = getComputedStyle(panel);
-      const bodyStyle = body && getComputedStyle(body);
-      const paragraph = body?.querySelector('.sm-content p, .sd-outcome p, .sm-state');
-      const lineHeight = paragraph ? parseFloat(getComputedStyle(paragraph).lineHeight) || 18 : 18;
-      const readingReserve = Math.ceil(8 * lineHeight + 44
-        + (parseFloat(bodyStyle?.paddingTop) || 0) + (parseFloat(bodyStyle?.paddingBottom) || 0));
-      const visibleHeight = el => el?.getClientRects().length ? el.getBoundingClientRect().height : 0;
-      const detailVisible = !!body?.getClientRects().length;
-      const splitMinimum = (detailVisible ? visibleHeight(chrome) : 0) + readingReserve;
-      const minimum = visibleHeight(panel.querySelector('.session-toolbar')) + splitMinimum
-        + (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0);
-      const bottom = parseFloat(getComputedStyle(document.querySelector('.app') || document.body).paddingBottom) || 16;
-      const height = Math.floor((window.visualViewport?.height || window.innerHeight) - panel.getBoundingClientRect().top - bottom);
-      // When chrome and a useful reading area cannot fit, the document scrolls.
-      panel.classList.toggle('session-workbench-short', height < minimum);
-      for (const [name, value] of [['--session-workbench-height', Math.max(minimum, height) + 'px'], ['--session-split-height', splitMinimum + 'px']]) {
-        if (panel.style.getPropertyValue(name) !== value) panel.style.setProperty(name, value);
-      }
-      // Sizing changes the scroll range after the initial detail render.
-      if (followLatest) body.scrollTop = body.scrollHeight;
-      const latest = panel.querySelector('[data-action="session-latest"]');
-      if (latest && body) latest.hidden = sessionView === 'hooks' || body.scrollHeight - body.clientHeight - body.scrollTop < 64;
-    });
-  }
-  window.addEventListener('resize', scheduleSessionWorkbenchHeight);
-  window.visualViewport?.addEventListener('resize', scheduleSessionWorkbenchHeight);
-  if (sessionHeightObserver) {
-    for (const el of document.querySelectorAll('.masthead, #tabs-bar, .subtabs, #session-board-panel .session-toolbar')) sessionHeightObserver.observe(el);
-  }
+  const sessionLayout = createSessionLayout({getView: () => sessionView});
   async function loadSessionMemory(sessionID, before) {
     if (!sessionID || sessionID !== selectedSessionId) return;
     if (sessionMemoryState.loadingEarlier || (!before && sessionMemoryState.loading)) return;
@@ -1281,6 +1236,14 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     const target = selected?.getClientRects().length ? selected : search?.getClientRects().length ? search : rail;
     target?.focus({ preventScroll: true });
     if (rail) rail.scrollTop = scroll;
+  }
+  function toggleSessionList() {
+    // Save the reading anchor before changing the available width.
+    renderNow(['sessions']);
+    const detail = document.getElementById('session-detail');
+    if (detail) detail._sessionReadingVisible = false;
+    sessionListCollapsed = !sessionListCollapsed;
+    renderNow(['sessions']);
   }
   function jumpToLatestSession() {
     const latest = document.querySelector('#session-detail [data-action="session-latest"]');
@@ -1426,7 +1389,8 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     const useDurable = Array.isArray(durable);
     const panel = document.getElementById('session-board-panel');
     if (panel) panel.classList.toggle('session-workbench', useDurable);
-    if (useDurable) scheduleSessionWorkbenchHeight();
+    if (panel) panel.classList.toggle('session-list-collapsed', sessionListCollapsed && !!selectedSessionId);
+    if (useDurable) sessionLayout.schedule();
 
     if (useDurable) {
       if (legacy) legacy.hidden = true;
@@ -1567,13 +1531,15 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     };
     renderNow(['sessions']);
   }
-  function snapshot() { return { sessionHookHistory, selectedSessionId, sessionTimeline, sessionTimelineState, sessionView, sessionMemoryPage, sessionMemoryState, sessionOverview, sessionOverviewState, sessionOutcomes, sessionOutcomesState, sessionHooks, sessionHooksState }; }
+  function snapshot() { return { sessionListCollapsed, sessionHookHistory, selectedSessionId, sessionTimeline, sessionTimelineState, sessionView, sessionMemoryPage, sessionMemoryState, sessionOverview, sessionOverviewState, sessionOutcomes, sessionOutcomesState, sessionHooks, sessionHooksState }; }
   return {
     setHookHistory,
     get sessionHookHistory() { return { ...sessionHookHistory }; },
     selectSession, setView: setSessionView, render: renderSessionBoard,
     refresh, refreshCurrent, activity, invalidate, restoreView,
     showList: showSessionList, jumpToLatest: jumpToLatestSession, showCurrentStatus: showCurrentSessionStatus,
+    toggleList: toggleSessionList,
+    get sessionListCollapsed() { return sessionListCollapsed; },
     loadEarlier: loadEarlierSessionMemory, retryTrace: retrySessionTrace,
     reconcileSelection: reconcileSessionSelection, takeReveal: takeSessionReveal,
     filterChanged() { sessionFilterTransition = true; },
