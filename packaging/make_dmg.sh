@@ -3,7 +3,8 @@
 # packages a distributable DMG.
 #
 # Signing/notarization environment:
-#   CODESIGN_IDENTITY  Signing identity for make_app.sh (default "-" = ad-hoc).
+#   CODESIGN_IDENTITY  Signing identity for the app and the DMG. Unset resolves
+#                      once, via packaging/lib/sign_identity.sh, for both.
 #   DEVELOPER_TEAM     Team ID: re-sign the app with the team's Developer ID
 #                      through an Xcode export and notarize it with the signed-in
 #                      Xcode account (devid_export.sh). The DMG is then signed
@@ -28,6 +29,12 @@ if [[ "${RELEASE_BUILD:-0}" == 1 ]]; then
   source "${REPO_ROOT}/packaging/lib/release.sh"
   require_release_settings
 fi
+
+# One identity for the app and the DMG: resolved here, make_app.sh's own
+# resolution would leave the DMG signing step below without it.
+source "${REPO_ROOT}/packaging/lib/sign_identity.sh"
+CODESIGN_IDENTITY="$(resolve_sign_identity)"
+export CODESIGN_IDENTITY
 
 "${REPO_ROOT}/packaging/make_app.sh"
 
