@@ -240,7 +240,17 @@ def run_policy_permissions(page):
             for name in names:
                 check(f'global permissions ({label}, {variant}): {name}', state.get(name) is True, str(state))
 
+def run_workspace_permissions(page):
+    for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
+        dom = page.dom('?workspacepermissions', window_size=size, served=True,
+                       fixture={'script': 'cases_workspace_permissions.js'})
+        receipt = re.search(r'data-workspace-permissions-probe="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        for name in ('entry','groups','limits','confirm','cancel','revoked','reading','unassigned','stale','retry','back','forward','empty','clear','fits','inspect'):
+            page.check(f'workspace permissions ({label}): {name}', state.get(name) is True, str(state))
+
 CASES = (
+    Case('workspace_permissions', run_workspace_permissions, ()),
     Case('policy_permissions', run_policy_permissions, ()),
     Case('allowlist_entries_render_with_remove', run_allowlist_entries_render_with_remove, ('dom',)),
     Case('mute_action_on_advisor_benign_flag', run_mute_action_on_advisor_benign_flag, ('dom',)),
