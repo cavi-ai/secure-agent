@@ -107,6 +107,18 @@ On macOS, run the E2E script from Terminal, or grant the app launching it Local 
 
 The source installer changes `/Applications` and launches the app. Unit tests and builds do not require installing over your running app. Use a temporary config/socket when running a test daemon rather than replacing your personal monitoring state.
 
+### Live workflow checks
+
+`make test-guard-workflow-live` builds a daemon and a tracked tool-caller fixture in disposable directories. It invokes the production Claude guard and activity hooks, checks attributed identity, allow-once and deny results, session/timed permission reuse, rejection of a different file, revocation, timeout, late answers, unavailable-daemon consent fallback and daemon restart. The fixture reads its synthetic file only after the hook allows it. This checks the hook/daemon contract; it does not run Claude Code or exercise the native consent dialog. Ordinary Go CI runs this check on Linux.
+
+To check another built, packaged or installed daemon without changing its installation or monitoring state, pass its binary explicitly:
+
+```bash
+python3 packaging/test/guard_workflow_live.py --daemon 'dist/Secure Agent.app/Contents/Helpers/secure-agentd'
+```
+
+`make test-setup-session-live` separately checks fresh native Setup through a real Codex task to attributed tool evidence in the console. It requires macOS, a graphical login and an authenticated Codex CLI. It copies only the CLI credential into a disposable profile and removes that copy afterward. It does not install an app, change system permissions, register hooks or enable routing. Codex trace observation does not establish guard or payload-inspection coverage.
+
 ## Repository layout
 
 ```text

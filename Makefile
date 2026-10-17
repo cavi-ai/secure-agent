@@ -1,4 +1,4 @@
-.PHONY: all build test test-menubar-rendering test-setup-session-live install uninstall clean daemon menubar cli collector smoke app dmg release icon lint docs docs-reference docs-check docs-test docs-archive
+.PHONY: all build test test-menubar-rendering test-setup-session-live test-guard-workflow-live install uninstall clean daemon menubar cli collector smoke app dmg release icon lint docs docs-reference docs-check docs-test docs-archive
 
 docs-reference:
 	python3 packaging/docs/build.py reference
@@ -78,6 +78,9 @@ test-menubar-rendering:
 test-setup-session-live:
 	python3 packaging/test/setup_session_live.py
 
+test-guard-workflow-live:
+	python3 packaging/test/guard_workflow_live.py
+
 test:
 	@echo "==> Running Go unit tests..."
 	go test ./... -count=1
@@ -91,6 +94,7 @@ test:
 	python3 plugin/hooks/test_activity_log.py
 	python3 plugin/hooks/test_cursor_hooks.py
 	python3 packaging/test/test_release_packaging.py
+	$(MAKE) test-guard-workflow-live
 	@echo "==> Checking console assets..."
 	./packaging/test/check_console_css.sh
 	@echo "==> Checking app bundle layout..."
