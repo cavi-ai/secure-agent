@@ -7,10 +7,12 @@ import (
 	"strings"
 )
 
-// initializeSchema upgrades legacy layouts atomically. Each column is checked
-// independently so interrupted migrations from earlier releases can resume.
-// Review metadata is additive to the v2 read model; the earlier v3-aware
-// compatibility build can still read detector evidence after rollback.
+// initializeSchema upgrades legacy layouts atomically, in four ordered
+// steps: create missing tables, add missing columns, migrate data, create
+// indexes. Each column is checked independently so interrupted migrations
+// from earlier releases can resume. Review metadata is additive to the v2
+// read model; the earlier v3-aware compatibility build can still read
+// detector evidence after rollback. testdata/schema.golden pins the result.
 func initializeSchema(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -24,6 +26,30 @@ func initializeSchema(db *sql.DB) error {
 	if version > 3 {
 		return fmt.Errorf("unsupported database schema version %d", version)
 	}
+	tableIndexes, err := createTables(tx)
+	if err != nil {
+		return err
+	}
+	if err := addMissingColumns(tx); err != nil {
+		return err
+	}
+	if err := migrateData(tx, version); err != nil {
+		return err
+	}
+	if err := createIndexes(tx, tableIndexes); err != nil {
+		return err
+	}
+	if version < 3 {
+		if _, err := tx.Exec(`PRAGMA user_version=3`); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// createTables creates every missing table and returns the CREATE INDEX
+// statements listed beside them, which run after the column migration.
+func createTables(tx *sql.Tx) ([]string, error) {
 	createQueries := []string{
 		`CREATE TABLE IF NOT EXISTS flags (
 			id TEXT PRIMARY KEY,
@@ -176,95 +202,81 @@ func initializeSchema(db *sql.DB) error {
 			continue
 		}
 		if _, err := tx.Exec(q); err != nil {
-			return fmt.Errorf("failed to init db schema: %w", err)
+			return nil, fmt.Errorf("failed to init db schema: %w", err)
 		}
 	}
-	// NULL preserves legacy incidents as having no operator step reports.
-	var guardReceiptN int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('guard_decisions') WHERE name='receipt_json'`).Scan(&guardReceiptN); err != nil {
-		return err
-	}
-	if guardReceiptN == 0 {
-		if _, err := tx.Exec(`ALTER TABLE guard_decisions ADD COLUMN receipt_json TEXT NOT NULL DEFAULT '{}'`); err != nil {
-			return fmt.Errorf("migrate guard receipts: %w", err)
-		}
-	}
-	for _, col := range []struct{ name, typ string }{{"harness", "TEXT NOT NULL DEFAULT ''"}, {"evidence_json", "TEXT NOT NULL DEFAULT '{}'"}} {
+	return indexes, nil
+}
+
+type column struct{ name, typ string }
+
+// addColumns adds each missing column to table in order; a column an
+// earlier release or an interrupted upgrade already added is left as it is.
+// Checked via PRAGMA so a fresh database logs no duplicate-column errors.
+func addColumns(tx *sql.Tx, table string, cols ...column) error {
+	for _, c := range cols {
 		var n int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('hook_runs') WHERE name=?`, col.name).Scan(&n); err != nil {
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, c.name).Scan(&n); err != nil {
+			return fmt.Errorf("inspect %s.%s: %w", table, c.name, err)
+		}
+		if n > 0 {
+			continue
+		}
+		if _, err := tx.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + c.name + ` ` + c.typ); err != nil {
+			return fmt.Errorf("migrate %s.%s: %w", table, c.name, err)
+		}
+		log.Printf("store: migrated %s: added %s column", table, c.name)
+	}
+	return nil
+}
+
+// addMissingColumns brings tables created by older releases (where CREATE
+// TABLE IF NOT EXISTS is a no-op) up to the current columns. Each table's
+// columns are added in the order they were introduced.
+func addMissingColumns(tx *sql.Tx) error {
+	for _, step := range []struct {
+		table string
+		cols  []column
+	}{
+		{"guard_decisions", []column{{"receipt_json", "TEXT NOT NULL DEFAULT '{}'"}}},
+		{"hook_runs", []column{{"harness", "TEXT NOT NULL DEFAULT ''"}, {"evidence_json", "TEXT NOT NULL DEFAULT '{}'"}}},
+		// NULL preserves legacy incidents as having no operator step reports.
+		{"incidents", []column{{"remediation_json", "TEXT"}}},
+		// Older resource tables retain their original rows and family key. A
+		// nullable attribution column only applies to new exact-identity captures.
+		{"resource_episodes", []column{{"session_id", "TEXT"}}},
+		{"events", []column{{"session_id", "TEXT"}}},
+		// flags.workspace (P5): the key for per-workspace notification scopes.
+		{"flags", []column{{"session_id", "TEXT"}, {"workspace", "TEXT"}}},
+		// sessions.origin: who spawned a session (an openclaw agent's Codex).
+		{"sessions", []column{{"origin", "TEXT"}}},
+		// Trace columns (P2).
+		{"events", []column{{"tool", "TEXT"}, {"tool_status", "TEXT"}, {"duration_ms", "INTEGER"}, {"model", "TEXT"},
+			{"tokens_in", "INTEGER"}, {"tokens_out", "INTEGER"}, {"cost_usd", "REAL"}, {"call_id", "TEXT"}, {"provider", "TEXT"},
+			{"record", "INTEGER NOT NULL DEFAULT 0"}}},
+		// Flags gain an acknowledged marker: when the operator acts on a flag
+		// (applies any disposition), the flag stops counting as critical and
+		// dims in the UI — "acted upon" is a first-class state. Then the
+		// daemon's own acknowledge reason, the raising process snapshot (JSON),
+		// so a finding still names its process after the process exits, and
+		// the repeats folded into the flag.
+		{"flags", []column{{"acknowledged", "TEXT"}, {"ack_reason", "TEXT"}, {"process", "TEXT"}, {"repeats", "INTEGER"}, {"last_seen", "TEXT"}}},
+		// Incidents workflow columns: the acknowledge/resolve endpoints write
+		// status/acknowledged_at/resolved_at/resolution_note; without them
+		// those writes fail with "no such column".
+		{"incidents", []column{{"status", "TEXT DEFAULT 'open'"}, {"acknowledged_at", "TEXT"}, {"resolved_at", "TEXT"}, {"resolution_note", "TEXT"},
+			{"rule", "TEXT"}, {"session_id", "TEXT"}, {"subject", "TEXT"}, {"aggregate_count", "INTEGER"}, {"last_flag_at", "TEXT"}, {"flag_ids", "TEXT"}}},
+	} {
+		if err := addColumns(tx, step.table, step.cols...); err != nil {
 			return err
 		}
-		if n == 0 {
-			if _, err := tx.Exec(`ALTER TABLE hook_runs ADD COLUMN ` + col.name + ` ` + col.typ); err != nil {
-				return fmt.Errorf("migrate hook metadata: %w", err)
-			}
-		}
 	}
-	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_hook_runs_session_time ON hook_runs(session_id, ` + timestampOrderExpr("ts") + ` DESC, run_id DESC)`); err != nil {
-		return err
-	}
-	var remediationN int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('incidents') WHERE name='remediation_json'`).Scan(&remediationN); err != nil {
-		return err
-	}
-	if remediationN == 0 {
-		if _, err := tx.Exec(`ALTER TABLE incidents ADD COLUMN remediation_json TEXT`); err != nil {
-			return fmt.Errorf("migrate incident remediation: %w", err)
-		}
-	}
-	// Older resource tables retain their original rows and family key. A
-	// nullable attribution column only applies to new exact-identity captures.
-	var episodeSessionN int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('resource_episodes') WHERE name='session_id'`).Scan(&episodeSessionN); err != nil {
-		return fmt.Errorf("failed to inspect resource_episodes.session_id: %w", err)
-	}
-	if episodeSessionN == 0 {
-		if _, err := tx.Exec(`ALTER TABLE resource_episodes ADD COLUMN session_id TEXT`); err != nil {
-			return fmt.Errorf("failed to migrate resource_episodes.session_id: %w", err)
-		}
-	}
-	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_resource_episodes_session_at ON resource_episodes(session_id, captured_at, id)`); err != nil {
-		return fmt.Errorf("failed to index resource_episodes.session_id: %w", err)
-	}
-	// Pre-session_id databases (CREATE TABLE IF NOT EXISTS is a no-op on them)
-	// get the column added in place. Checked via PRAGMA so a fresh database
-	// doesn't log a scary "duplicate column" error on every start.
-	for _, table := range []string{"events", "flags"} {
-		var n int
-		if err := tx.QueryRow(
-			`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name='session_id'`, table,
-		).Scan(&n); err != nil {
-			return fmt.Errorf("failed to inspect %s schema: %w", table, err)
-		}
-		if n == 0 {
-			if _, err := tx.Exec(`ALTER TABLE ` + table + ` ADD COLUMN session_id TEXT`); err != nil {
-				return fmt.Errorf("failed to migrate %s.session_id: %w", table, err)
-			}
-			log.Printf("store: migrated %s: added session_id column", table)
-		}
-	}
-	// flags.workspace (P5): the key for per-workspace notification scopes.
-	var wsN int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('flags') WHERE name='workspace'`).Scan(&wsN); err != nil {
-		return fmt.Errorf("failed to inspect flags.workspace: %w", err)
-	}
-	if wsN == 0 {
-		if _, err := tx.Exec(`ALTER TABLE flags ADD COLUMN workspace TEXT`); err != nil {
-			return fmt.Errorf("failed to migrate flags.workspace: %w", err)
-		}
-		log.Printf("store: migrated flags: added workspace column")
-	}
-	// sessions.origin: who spawned a session (an openclaw agent's Codex).
-	var originN int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='origin'`).Scan(&originN); err != nil {
-		return fmt.Errorf("failed to inspect sessions.origin: %w", err)
-	}
-	if originN == 0 {
-		if _, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN origin TEXT`); err != nil {
-			return fmt.Errorf("failed to migrate sessions.origin: %w", err)
-		}
-		log.Printf("store: migrated sessions: added origin column")
-	}
+	return nil
+}
+
+// migrateData rewrites rows an older release stored differently. It runs
+// after the columns exist and before indexes that depend on the rewrite.
+func migrateData(tx *sql.Tx, version int) error {
 	// Antigravity transcript sessions were stored as harness "agy", its CLI
 	// name; the agent (config, tagger, app) is "antigravity".
 	if res, err := tx.Exec(`UPDATE sessions SET harness = 'antigravity' WHERE harness = 'agy'`); err != nil {
@@ -272,44 +284,52 @@ func initializeSchema(db *sql.DB) error {
 	} else if n, _ := res.RowsAffected(); n > 0 {
 		log.Printf("store: renamed %d agy sessions to antigravity", n)
 	}
-	// Trace columns (P2): older databases gain them in place.
-	for _, col := range []string{"tool", "tool_status", "duration_ms", "model", "tokens_in", "tokens_out", "cost_usd", "call_id", "provider", "record"} {
-		var n int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('events') WHERE name=?`, col).Scan(&n); err != nil {
-			return fmt.Errorf("failed to inspect events schema: %w", err)
+	// Timestamp identity applies only to turns. Model calls with source IDs
+	// use idx_events_call; ID-less calls remain distinct observations. Never
+	// infer that equal usage or nearby timestamps identify the same API call.
+	if version < 2 {
+		if _, err := tx.Exec(`DROP INDEX IF EXISTS idx_events_turn_dedupe`); err != nil {
+			return err
 		}
-		if n == 0 {
-			typ := "TEXT"
-			switch col {
-			case "duration_ms", "tokens_in", "tokens_out":
-				typ = "INTEGER"
-			case "cost_usd":
-				typ = "REAL"
-			case "record":
-				typ = "INTEGER NOT NULL DEFAULT 0"
-			}
-			if _, err := tx.Exec(`ALTER TABLE events ADD COLUMN ` + col + ` ` + typ); err != nil {
-				return fmt.Errorf("failed to migrate events.%s: %w", col, err)
-			}
-			log.Printf("store: migrated events: added %s column", col)
+		if _, err := tx.Exec(`DELETE FROM events WHERE kind=13 AND COALESCE(session_id,'')!='' AND id NOT IN (SELECT MIN(id) FROM events WHERE kind=13 GROUP BY session_id,ts)`); err != nil {
+			return err
 		}
 	}
-	// Record rows are pruned on their own budget; the partial index keeps
-	// that walk off the bulk rows.
-	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_events_record ON events(kind, id) WHERE record = 1;`); err != nil {
-		return fmt.Errorf("failed to create events record index: %w", err)
+	// Earlier upgrades added status without the fresh schema's open default.
+	// Initialize only untouched legacy workflows; recorded decisions and
+	// malformed current-schema workflows must remain subject to strict reads.
+	var legacyIncidentDefault bool
+	if err := tx.QueryRow(`SELECT dflt_value IS NULL FROM pragma_table_info('incidents') WHERE name='status'`).Scan(&legacyIncidentDefault); err != nil {
+		return fmt.Errorf("inspect incident workflow default: %w", err)
 	}
-	// One row per harness tool call: a completion (same session+call_id)
-	// upserts the start row instead of appending a second. A plain UNIQUE
-	// index (not partial) so ON CONFLICT(session_id, call_id) resolves;
-	// SQLite treats NULL call_ids as distinct, so non-tool events (NULL)
-	// never collide.
-	//
-	// Created HERE, after the call_id migration above: on an older database
-	// the index would otherwise reference a column that did not yet exist and
-	// Open() would fail.
-	if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_call ON events(session_id, call_id);`); err != nil {
-		return fmt.Errorf("failed to create events call index: %w", err)
+	if legacyIncidentDefault {
+		if _, err := tx.Exec(`UPDATE incidents SET status='open' WHERE status IS NULL
+			AND COALESCE(acknowledged_at,'')='' AND COALESCE(resolved_at,'')='' AND COALESCE(resolution_note,'')=''`); err != nil {
+			return fmt.Errorf("initialize legacy incident workflows: %w", err)
+		}
+	}
+	return nil
+}
+
+// createIndexes creates or repairs every index once the columns they cover
+// exist, then the ones listed beside the tables.
+func createIndexes(tx *sql.Tx, tableIndexes []string) error {
+	for _, q := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_hook_runs_session_time ON hook_runs(session_id, ` + timestampOrderExpr("ts") + ` DESC, run_id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_resource_episodes_session_at ON resource_episodes(session_id, captured_at, id)`,
+		// Record rows are pruned on their own budget; the partial index keeps
+		// that walk off the bulk rows.
+		`CREATE INDEX IF NOT EXISTS idx_events_record ON events(kind, id) WHERE record = 1;`,
+		// One row per harness tool call: a completion (same session+call_id)
+		// upserts the start row instead of appending a second. A plain UNIQUE
+		// index (not partial) so ON CONFLICT(session_id, call_id) resolves;
+		// SQLite treats NULL call_ids as distinct, so non-tool events (NULL)
+		// never collide.
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_call ON events(session_id, call_id);`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("create schema index: %w", err)
+		}
 	}
 	// A partial idx_events_call from an earlier build does not satisfy
 	// ON CONFLICT(session_id, call_id). Detect the stale, same-name partial
@@ -326,103 +346,17 @@ func initializeSchema(db *sql.DB) error {
 			log.Printf("store: replaced partial idx_events_call with a full unique index")
 		}
 	}
-	// Timestamp identity applies only to turns. Model calls with source IDs
-	// use idx_events_call; ID-less calls remain distinct observations. Never
-	// infer that equal usage or nearby timestamps identify the same API call.
-	if version < 2 {
-		if _, err := tx.Exec(`DROP INDEX IF EXISTS idx_events_turn_dedupe`); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`DELETE FROM events WHERE kind=13 AND COALESCE(session_id,'')!='' AND id NOT IN (SELECT MIN(id) FROM events WHERE kind=13 GROUP BY session_id,ts)`); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_turn_dedupe ON events(kind,session_id,ts) WHERE kind=13 AND session_id!=''`); err != nil {
-		return fmt.Errorf("create turn dedupe index: %w", err)
-	}
-	if _, err := tx.Exec(traceActivityIndexSQL); err != nil {
-		return fmt.Errorf("create trace activity index: %w", err)
-	}
-	if _, err := tx.Exec(sessionActivityIndexSQL); err != nil {
-		return fmt.Errorf("create session activity index: %w", err)
-	}
-	// Flags gain an acknowledged marker: when the operator acts on a flag
-	// (applies any disposition), the flag stops counting as critical and
-	// dims in the UI — "acted upon" is a first-class state, not an endless
-	// red row. Same PRAGMA-checked migration pattern as session_id.
-	var ackN int
-	if err := tx.QueryRow(
-		`SELECT COUNT(*) FROM pragma_table_info('flags') WHERE name='acknowledged'`,
-	).Scan(&ackN); err != nil {
-		return fmt.Errorf("failed to inspect flags schema: %w", err)
-	}
-	if ackN == 0 {
-		if _, err := tx.Exec(`ALTER TABLE flags ADD COLUMN acknowledged TEXT`); err != nil {
-			return fmt.Errorf("failed to migrate flags.acknowledged: %w", err)
-		}
-		log.Printf("store: migrated flags: added acknowledged column")
-	}
-	// Flags gain the daemon's own acknowledge reason, the raising process
-	// snapshot (JSON), so a finding still names its process after the
-	// process exits, and the repeats folded into the flag.
-	for _, col := range []string{"ack_reason", "process", "repeats", "last_seen"} {
-		var n int
-		if err := tx.QueryRow(
-			`SELECT COUNT(*) FROM pragma_table_info('flags') WHERE name=?`, col,
-		).Scan(&n); err != nil {
-			return fmt.Errorf("failed to inspect flags schema: %w", err)
-		}
-		if n == 0 {
-			typ := "TEXT"
-			if col == "repeats" {
-				typ = "INTEGER"
-			}
-			if _, err := tx.Exec(`ALTER TABLE flags ADD COLUMN ` + col + ` ` + typ); err != nil {
-				return fmt.Errorf("failed to migrate flags.%s: %w", col, err)
-			}
-			log.Printf("store: migrated flags: added %s column", col)
-		}
-	}
-	// Incidents workflow columns: the acknowledge/resolve endpoints write
-	// status/acknowledged_at/resolved_at/resolution_note. Without this
-	// migration those writes fail with "no such column" and the dashboard's
-	// Acknowledge/Resolve buttons are dead (the exact "dismiss doesn't
-	// work" dogfood complaint).
-	for _, col := range []struct{ name, typ string }{
-		{"status", "TEXT DEFAULT 'open'"}, {"acknowledged_at", "TEXT"}, {"resolved_at", "TEXT"}, {"resolution_note", "TEXT"},
-		{"rule", "TEXT"}, {"session_id", "TEXT"}, {"subject", "TEXT"}, {"aggregate_count", "INTEGER"}, {"last_flag_at", "TEXT"}, {"flag_ids", "TEXT"},
-	} {
-		var n int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('incidents') WHERE name=?`, col.name).Scan(&n); err != nil {
-			return fmt.Errorf("inspect incidents.%s: %w", col.name, err)
-		}
-		if n == 0 {
-			if _, err := tx.Exec(`ALTER TABLE incidents ADD COLUMN ` + col.name + ` ` + col.typ); err != nil {
-				return fmt.Errorf("migrate incidents.%s: %w", col.name, err)
-			}
-		}
-	}
-	// Earlier upgrades added status without the fresh schema's open default.
-	// Initialize only untouched legacy workflows; recorded decisions and
-	// malformed current-schema workflows must remain subject to strict reads.
-	var legacyIncidentDefault bool
-	if err := tx.QueryRow(`SELECT dflt_value IS NULL FROM pragma_table_info('incidents') WHERE name='status'`).Scan(&legacyIncidentDefault); err != nil {
-		return fmt.Errorf("inspect incident workflow default: %w", err)
-	}
-	if legacyIncidentDefault {
-		if _, err := tx.Exec(`UPDATE incidents SET status='open' WHERE status IS NULL
-			AND COALESCE(acknowledged_at,'')='' AND COALESCE(resolved_at,'')='' AND COALESCE(resolution_note,'')=''`); err != nil {
-			return fmt.Errorf("initialize legacy incident workflows: %w", err)
-		}
-	}
-	// Incident indexes follow the column migration: findOpenIncidentSQL's
-	// expressions and lookups by flag id.
 	for _, q := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_turn_dedupe ON events(kind,session_id,ts) WHERE kind=13 AND session_id!=''`,
+		traceActivityIndexSQL,
+		sessionActivityIndexSQL,
+		// Incident indexes follow the column migration: findOpenIncidentSQL's
+		// expressions and lookups by flag id.
 		`CREATE INDEX IF NOT EXISTS idx_incidents_open_key ON incidents(COALESCE(rule,''), COALESCE(session_id,''), COALESCE(subject,''));`,
 		`CREATE INDEX IF NOT EXISTS idx_incidents_flag ON incidents(flag_id);`,
 	} {
 		if _, err := tx.Exec(q); err != nil {
-			return fmt.Errorf("failed to index incidents: %w", err)
+			return fmt.Errorf("create schema index: %w", err)
 		}
 	}
 	if _, err := tx.Exec(flagTimeIndexSQL); err != nil {
@@ -431,11 +365,9 @@ func initializeSchema(db *sql.DB) error {
 	if _, err := tx.Exec(incidentRetentionIndexSQL); err != nil {
 		log.Printf("store: incident time index skipped, retention and lists scan instead: %v", err)
 	}
-
 	if err := createMemoryIndexes(tx); err != nil {
 		return err
 	}
-
 	// An earlier build created idx_events_host on (remote_host, ts), which
 	// sorts a host's rows for the newest-first list; rebuild it below.
 	var hostIdxSQL string
@@ -446,15 +378,10 @@ func initializeSchema(db *sql.DB) error {
 		}
 		log.Printf("store: rebuilding idx_events_host on (remote_host, id, ts)")
 	}
-	for _, q := range indexes {
+	for _, q := range tableIndexes {
 		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("create schema index: %w", err)
 		}
 	}
-	if version < 3 {
-		if _, err := tx.Exec(`PRAGMA user_version=3`); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+	return nil
 }
