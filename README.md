@@ -33,6 +33,8 @@ Screenshots use synthetic demonstration data.
 
 <img src="assets/screenshots/session-follow-up-dark.png" alt="Session Results with follow-up for newer evidence, actions to check and linked permissions" width="1120">
 
+<img src="assets/screenshots/session-reading-dark.png" alt="Session Results with the session list hidden for reading and a compact alert banner" width="1120">
+
 <img src="assets/screenshots/protection-dark.jpg" alt="Protection settings with per-rule monitoring and blocking controls" width="1120">
 
 <img src="assets/screenshots/setup-first-session.png" alt="Setup with a sample task, observed session paths and a link to session evidence" width="560">
