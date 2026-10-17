@@ -2642,7 +2642,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.SA.renderSessionBoard = sessionWorkbench.render;
 
   Object.defineProperties(window.SA, {
-    postureHealth: { get() { return { lastSnapshotAt, error: reportHealth.failures(['snapshot'])[0]?.error || '' }; } },
+    postureHealth: { get() { return postureFreshness(lastSnapshotAt, reportHealth.failures(['snapshot'])[0]?.error || ''); } },
     activeTab: { get() { return activeTab; } },
     timelineSession: { get() { return timelineSession; }, set(v) { timelineSession = v; } },
     timelinePids: { get() { return timelinePids; }, set(v) { timelinePids = v; } },

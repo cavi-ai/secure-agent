@@ -20,6 +20,19 @@ function fixture(posture, health = { lastSnapshotAt: 1234, error: '' }) {
   return { ctx, nodes, paint() { ctx.renderPosture(); ctx.paintTabsPosture(); } };
 }
 
+test('an all-clear snapshot that stopped refreshing without an error is stale', () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(readFileSync(new URL('report-health.js', assets), 'utf8'), ctx);
+  const at = 1_000_000;
+  assert.deepEqual({ ...ctx.postureFreshness(at, '', at + 60_000) }, { lastSnapshotAt: at, error: '' });
+  assert.deepEqual({ ...ctx.postureFreshness(at, '', at + 121_000) }, { lastSnapshotAt: at, error: 'No refresh for over two minutes' });
+  assert.deepEqual({ ...ctx.postureFreshness(at, 'HTTP 503', at + 121_000) }, { lastSnapshotAt: at, error: 'HTTP 503' });
+  assert.deepEqual({ ...ctx.postureFreshness(0, '', at) }, { lastSnapshotAt: 0, error: '' });
+  const f = fixture({ state: 'all-clear', needs_you: 0, summary: 'Agents monitored' }, ctx.postureFreshness(at, '', at + 121_000));
+  f.paint();
+  assert.equal(f.nodes.get('posture-state').textContent, 'Status stale');
+});
+
 test('both primary status surfaces wait for a published snapshot without claiming all clear', () => {
   const f = fixture({ state: 'all-clear', needs_you: 0, summary: 'Agents monitored, no action needed' }, { lastSnapshotAt: 0, error: '' });
   f.paint();

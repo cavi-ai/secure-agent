@@ -9,12 +9,21 @@ function createConsoleLiveUpdates({ refresh, streamURL, prepareStream = null, ha
   let failures = 0;
 
   const refreshFull = () => { if (!stopped) refresh(); };
+  // Polling fallback: the fast set every two seconds (the 30 s slow timer
+  // keeps the rest), and never a new cycle over an unfinished one — a newer
+  // cycle supersedes the older, so overlapping slow cycles never publish.
+  let polling = false;
+  const pollFast = () => {
+    if (stopped || polling) return;
+    polling = true;
+    new Promise(resolve => resolve(refresh({ slow: false }))).finally(() => { polling = false; });
+  };
   const stopPolling = () => {
     if (pollTimer !== null) timers.clearInterval(pollTimer);
     pollTimer = null;
   };
   const startPolling = () => {
-    if (!stopped && pollTimer === null) pollTimer = timers.setInterval(refreshFull, 2000);
+    if (!stopped && pollTimer === null) pollTimer = timers.setInterval(pollFast, 2000);
   };
   // Guard decisions coalesce for 400ms from the first frame of a burst.
   const scheduleGuard = () => {

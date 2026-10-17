@@ -98,7 +98,7 @@ test('a failed stream authorization falls back to polling', async () => {
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.streams.length, 0);
   f.timers.tick(2000);
-  assert.deepEqual(f.calls, ['full', 'full']);
+  assert.deepEqual(f.calls, ['full', 'fast']);
 });
 
 test('stopping during stream authorization never opens a stream', async () => {
@@ -111,15 +111,41 @@ test('stopping during stream authorization never opens a stream', async () => {
   assert.equal(f.streams.length, 0);
 });
 
-test('without a stream, polling refreshes every two seconds', () => {
+test('without a stream, polling refreshes the fast set every two seconds', async () => {
   const f = fixture({ streaming: false });
   f.controller.start();
-  f.timers.tick(4000);
-  assert.deepEqual(f.calls, ['full', 'full', 'full']);
+  f.timers.tick(2000);
+  await new Promise(resolve => setImmediate(resolve));
+  f.timers.tick(2000);
+  assert.deepEqual(f.calls, ['full', 'fast', 'fast']);
   assert.equal(f.streams.length, 0);
   f.controller.stop();
   f.timers.tick(30000);
   assert.equal(f.calls.length, 3);
+});
+
+test('a polling cycle slower than the interval finishes before the next starts', async () => {
+  const timers = clock(), calls = [];
+  let finish;
+  const context = vm.createContext({});
+  vm.runInContext(source, context);
+  const controller = context.createConsoleLiveUpdates({
+    refresh: options => {
+      calls.push(options?.slow === false ? 'fast' : 'full');
+      if (options?.slow === false) return new Promise(resolve => { finish = resolve; });
+    },
+    streamURL: '/events/stream', EventSourceImpl: null, timers
+  });
+  controller.start();
+  timers.tick(2000);
+  timers.tick(2000);
+  timers.tick(2000);
+  assert.deepEqual(calls, ['full', 'fast'], 'an unfinished cycle is not superseded');
+  finish();
+  await new Promise(resolve => setImmediate(resolve));
+  timers.tick(2000);
+  assert.deepEqual(calls, ['full', 'fast', 'fast']);
+  controller.stop();
 });
 
 test('repeated stream errors fall back once and an open resets the failure count', () => {
