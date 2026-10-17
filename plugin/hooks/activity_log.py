@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# secure-agent-hook: activity_log
 """PostToolUse hook: logs agent tool activity to activity.jsonl for the daemon to tail."""
 
 from __future__ import annotations

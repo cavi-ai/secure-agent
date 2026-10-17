@@ -99,6 +99,7 @@ test-hooks:
 	python3 packaging/test/test_menu_bar_tracking.py
 	python3 packaging/test/test_e2e_fixture.py
 	python3 packaging/test/test_release_packaging.py
+	python3 packaging/test/test_uninstall_hooks.py
 
 test-console:
 	@echo "==> Console assets, JS and DOM tests..."

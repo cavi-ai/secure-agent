@@ -34,21 +34,22 @@ for path in "${LEGACY_ESD[@]}"; do
 done
 
 echo "Unlinking plugin hooks..."
-# Only remove symlinks (what the installer creates) or files carrying our
-# marker comment — a user's own replacement file must not be deleted.
+# Only remove symlinks (what the development installer creates) or copies
+# carrying the hook's own marker line (what the app installs) — a user's own
+# file with the same name must not be deleted.
 remove_hook() {
-  local path="$1"
+  local path="$1" marker="# secure-agent-hook: $2"
   if [ -L "$path" ]; then
     rm -f "$path"
-  elif [ -f "$path" ] && grep -q "secure-agent" "$path" 2>/dev/null; then
+  elif [ -f "$path" ] && grep -qxF "$marker" "$path" 2>/dev/null; then
     rm -f "$path"
   elif [ -e "$path" ]; then
     echo "  kept (not ours): $path"
   fi
 }
 for target in "${HOME}/.claude/hooks" "${HOME}/.cursor/hooks" "${HOME}/.config/opencode/hooks"; do
-  for hook in secret_guard.py injection_scan.py activity_log.py; do
-    remove_hook "${target}/${hook}"
+  for hook in secret_guard injection_scan activity_log; do
+    remove_hook "${target}/${hook}.py" "$hook"
   done
 done
 

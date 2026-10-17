@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# secure-agent-hook: secret_guard
 """Deny agent mutation of the keychain and shell config; keep secrets out of agent reach.
 
 Shared single copy. Symlinked into ~/.cursor/hooks/ and ~/.claude/hooks/.
