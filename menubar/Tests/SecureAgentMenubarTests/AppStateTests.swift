@@ -110,6 +110,25 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
 
 @MainActor
 final class AppStateTests: XCTestCase {
+    /// The poll slows to an uptime check while the stream delivers frames,
+    /// even when the poll connected first, and returns to 1 Hz when the
+    /// stream drops.
+    func testPollCadenceFollowsStreamHealth() async throws {
+        let stub = StubDaemonClient()
+        let state = AppState(client: stub)
+        await state.performFetch() // the poll connects first
+        state.handleStreamEvent(SSEFrame(event: "event", data: "{}"))
+        var calls = stub.fetchGuardPendingCalls
+        try await Task.sleep(nanoseconds: 3_200_000_000)
+        XCTAssertEqual(stub.fetchGuardPendingCalls, calls, "the 1 Hz poll kept running beside a live stream")
+        XCTAssertEqual(state.pollInterval, 30)
+        state.streamDidFail()
+        calls = stub.fetchGuardPendingCalls
+        try await Task.sleep(nanoseconds: 2_500_000_000)
+        XCTAssertGreaterThanOrEqual(stub.fetchGuardPendingCalls - calls, 2, "no 1 Hz poll after the stream dropped")
+        XCTAssertEqual(state.pollInterval, 1)
+    }
+
     func testFailedStreamRefreshStillFetchesGuardDecisions() async {
         let stub = StubDaemonClient()
         let state = AppState(client: stub)

@@ -117,6 +117,14 @@ public final class AppState: ObservableObject {
     /// Debounces SSE-driven refreshes (one event per syscall would otherwise
     /// refetch per event).
     private var refreshTask: Task<Void, Never>?
+    /// True while /events/stream delivers frames. The poll cadence follows
+    /// it, not the order in which the poll and the stream first connected.
+    private var streamLive = false
+    /// The poll timer's interval while connected: slow while the stream
+    /// carries freshness, 1 Hz without it.
+    private var connectedPollInterval: TimeInterval { streamLive ? 30.0 : 1.0 }
+    /// The interval the poll timer runs at now.
+    private(set) var pollInterval: TimeInterval = 0
 
     public init(client: DaemonClientProtocol = DaemonClient()) {
         self.client = client
@@ -152,7 +160,7 @@ public final class AppState: ObservableObject {
 
     public func start() {
         fetch()
-        scheduleTimer(1.0)
+        scheduleTimer(connectedPollInterval)
         startEventStream()
     }
 
@@ -182,9 +190,7 @@ public final class AppState: ObservableObject {
                     self.streamUnavailable = true
                     return // old daemon: polling carries the session
                 } catch {
-                    self.streamFailureCount += 1
-                    // While the stream is down, the existing poll cadence
-                    // (1s connected / 5s disconnected) covers freshness.
+                    self.streamDidFail()
                     try? await Task.sleep(nanoseconds: backoff)
                     // ±20% jitter so reconnects don't phase-lock.
                     let jitter = UInt64.random(in: 0...(backoff / 5 + 1))
@@ -196,13 +202,17 @@ public final class AppState: ObservableObject {
 
     func handleStreamEvent(_ frame: SSEFrame) {
         streamFailureCount = 0
-        // The stream being alive at all is proof of daemon liveness. On
-        // reconnect, pull full state once (events seen while disconnected
-        // are not replayed — the refetch closes the gap).
-        if !connected {
-            connected = true
-            scheduleTimer(30.0) // stream carries freshness; slow poll for uptime
-            fetch()
+        // The stream being alive at all is proof of daemon liveness. When it
+        // goes live the poll slows to an uptime check, whether or not the poll
+        // connected first. On reconnect, pull full state once (events seen
+        // while disconnected are not replayed — the refetch closes the gap).
+        if !streamLive || !connected {
+            streamLive = true
+            scheduleTimer(connectedPollInterval)
+            if !connected {
+                connected = true
+                fetch()
+            }
         }
         let need = Self.streamRefresh(for: frame.event)
         guard !need.isEmpty else { return }
@@ -300,7 +310,17 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// The stream dropped: until it delivers again, the poll at its connected
+    /// 1 Hz cadence (5 s while disconnected) covers freshness.
+    func streamDidFail() {
+        streamFailureCount += 1
+        guard streamLive else { return }
+        streamLive = false
+        if connected { scheduleTimer(connectedPollInterval) }
+    }
+
     private func scheduleTimer(_ interval: TimeInterval) {
+        pollInterval = interval
         timer?.invalidate()
         // Common modes: polling continues while a guard alert's modal loop runs.
         let next = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
@@ -379,7 +399,7 @@ public final class AppState: ObservableObject {
             self.connected = true
             self.lastError = staleDataWarning
             self.transportFailureStreak = 0
-            if wasDisconnected { self.scheduleTimer(1.0) }
+            if wasDisconnected { self.scheduleTimer(self.connectedPollInterval) }
             self.eventsRefreshTick += 1
             self.processNewFlags(flags)
             // Withdraw banners for flags the operator already dealt with —
