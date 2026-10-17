@@ -426,12 +426,18 @@ public final class SetupManager: ObservableObject {
     /// versions ran the daemon under launchd, so it respawned when killed and
     /// kept running after the menu bar app was quit. Now the app owns the
     /// daemon's lifetime directly, so any leftover agent must be torn down.
-    public func migrateLegacyLaunchAgent() {
+    /// launchctl runs off the main actor.
+    public func migrateLegacyLaunchAgent() async {
         guard fm.fileExists(atPath: daemonPlistPath) else { return }
         let uid = getuid()
-        Self.run(["/bin/launchctl", "bootout", "gui/\(uid)/\(Self.daemonLabel)"])
+        _ = await runProcess("/bin/launchctl", ["bootout", "gui/\(uid)/\(Self.daemonLabel)"])
         try? fm.removeItem(atPath: daemonPlistPath)
         NSLog("[secure-agent] removed legacy daemon LaunchAgent")
+    }
+
+    /// Runs a helper binary off the main actor; tests replace it.
+    var runProcess: @Sendable (String, [String]) async -> ProcessRunner.Result = { bin, args in
+        await ProcessRunner.run(bin, args)
     }
 
     // MARK: - Harness hooks
@@ -829,42 +835,30 @@ public final class SetupManager: ObservableObject {
     /// (it shares the launchd label with the in-bundle daemon): boot out the
     /// job, delete its plist, helper binary and integrity hash. The only
     /// admin prompt in the app.
-    public func removeLegacyESHelper() {
+    public func removeLegacyESHelper() async {
         lastError = nil
         let plist = Self.legacyESPlistPath
         let shell =
             "launchctl bootout system '\(plist)' 2>/dev/null;" +
             " rm -f '\(plist)' '\(Self.legacyESHelperPath)' '\(Self.legacyESHashPath)'"
         let script = "do shell script \(shellAppleScriptLiteral(shell)) with administrator privileges"
-        _ = runAppleScriptAdmin(script)
+        _ = await runAppleScriptAdmin(script)
         esLegacyHelperInstalled = fm.fileExists(atPath: plist)
     }
 
-    /// Runs an AppleScript that shells out with administrator privileges.
-    /// Returns false on user-cancel or failure. The password never passes
-    /// through our process — Apple's SecurityAgent prompt owns it.
-    private func runAppleScriptAdmin(_ script: String) -> Bool {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        p.arguments = ["-e", script]
-        p.standardOutput = FileHandle.nullDevice
-        let errPipe = Pipe()
-        p.standardError = errPipe
-        do {
-            try p.run()
-            p.waitUntilExit()
-            if p.terminationStatus != 0 {
-                let msg = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                if !msg.contains("User canceled") {
-                    lastError = "old helper removal failed: \(msg.prefix(160))"
-                }
-                return false
+    /// Runs an AppleScript that shells out with administrator privileges, off
+    /// the main actor: the prompt can stay open for minutes. Returns false on
+    /// user-cancel or failure. The password never passes through our process —
+    /// Apple's SecurityAgent prompt owns it.
+    private func runAppleScriptAdmin(_ script: String) async -> Bool {
+        let result = await runProcess("/usr/bin/osascript", ["-e", script])
+        guard result.status == 0 else {
+            if !result.stderr.contains("User canceled") {
+                lastError = "old helper removal failed: \(result.stderr.prefix(160))"
             }
-            return true
-        } catch {
-            lastError = "old helper removal failed: \(error.localizedDescription)"
             return false
         }
+        return true
     }
 
     // MARK: - CLI symlink
@@ -1095,7 +1089,10 @@ public final class SetupManager: ObservableObject {
             do { _ = try TelemetryDoctor.setAsideSpool(spoolPath: Self.esSpoolPath, now: Date()) }
             catch { report(error) }
         case .removeLegacy:
-            removeLegacyESHelper()
+            Task {
+                await removeLegacyESHelper()
+                refreshESState()
+            }
         case .openHarnessSetup:
             OnboardingWindowController.shared.show()
         }

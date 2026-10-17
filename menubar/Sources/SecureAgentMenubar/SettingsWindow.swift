@@ -1301,8 +1301,10 @@ struct ESFileTelemetryCard: View {
         switch stage {
         case .legacyInstalled:
             Button("Remove old helper") {
-                setup.removeLegacyESHelper()
-                Task { await setup.refreshState() }
+                Task {
+                    await setup.removeLegacyESHelper()
+                    await setup.refreshState()
+                }
             }
             .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
         case .notRegistered:
