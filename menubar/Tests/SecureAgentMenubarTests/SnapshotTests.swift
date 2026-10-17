@@ -136,7 +136,7 @@ final class SnapshotTests: XCTestCase {
                              path: "/Users/x/.aws/credentials", ruleID: "cloud-creds",
                              ts: "", scopeText: nil, advisor: nil)
         XCTAssertEqual(ConsoleView.guardPromptHeadline(p),
-                       "Claude wants to read a cloud credential file")
+                       "Claude requests Read access")
         XCTAssertTrue(ConsoleView.guardPromptDetail(p).contains("credentials"))
     }
 

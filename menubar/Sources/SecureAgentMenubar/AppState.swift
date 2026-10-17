@@ -27,6 +27,7 @@ public final class AppState: ObservableObject {
     /// the glance-and-act affordance when the popover is open).
     @Published public private(set) var pendingGuard: GuardPending?
     @Published public private(set) var guardResult: GuardDecisionResult?
+    @Published public private(set) var guardRequestNotice: String?
 
     public func dismissGuardResult() { guardResult = nil }
     /// Per-rule notification overrides from the daemon (true = always page,
@@ -97,6 +98,8 @@ public final class AppState: ObservableObject {
     /// The pending-prompt id currently shown in an NSAlert, so the 1Hz poll
     /// doesn't stack a second dialog on top while one is already up.
     private var promptingID: String?
+    private var deferredGuardID: String?
+    private var resolvingGuardIDs: Set<String> = []
     /// SSE push channel. When live, events drive refreshes and the poll timer
     /// drops to a slow status cadence; when the endpoint is missing (old
     /// daemon) or keeps failing, we fall back to the 1Hz poll.
@@ -776,7 +779,9 @@ public final class AppState: ObservableObject {
         // Keep the glanceable copy current even when the native alert is
         // already up (or suppressed by the test hook).
         self.pendingGuard = pending.first
-        guard promptingID == nil, let p = pending.first else { return }
+        if let deferredGuardID, !pending.contains(where: { $0.id == deferredGuardID }) { self.deferredGuardID = nil }
+        guard promptingID == nil, let p = pending.first, p.id != deferredGuardID else { return }
+        guardRequestNotice = nil
         promptingID = p.id
         #if DEBUG
         // Test hook: NSAlert.runModal() cannot run in a test host; tests
@@ -785,19 +790,15 @@ public final class AppState: ObservableObject {
         #endif
         let alert = NSAlert()
         alert.messageText = Self.guardPromptHeadline(p)
-        var informative = Self.guardPromptDetail(p)
-		if let executable = p.readerExe { informative += "\nExecutable path: \(executable)" }
-		if let workspace = p.workspace { informative += "\nWorkspace: \(workspace)" }
-		if let session = p.sessionID { informative += "\nSession: \(session)" }
-        // Disclose the file, identity and lifetime before future access is approved.
-        if let scope = p.scopeText, !scope.isEmpty {
-            informative += "\n\n⚠️ \(scope)"
-        }
-        alert.informativeText = informative
+        alert.informativeText = p.requestFacts + "\n\nOnce answers only this request. Inspection leaves it unanswered; its timeout continues. Future access requires a separate confirmation."
         let allowOnceButton = alert.addButton(withTitle: "Allow Once")
         let denyButton = alert.addButton(withTitle: "Deny")
 		let choices = (p.availableScopes ?? []).filter { $0.kind != "once" }
 		for choice in choices { let button = alert.addButton(withTitle: choice.label); button.keyEquivalent = "" }
+        let inspect = alert.addButton(withTitle: "Inspect session")
+        inspect.keyEquivalent = ""
+        inspect.isEnabled = p.sessionID?.isEmpty == false && dashboardUnavailableReason == nil
+        inspect.toolTip = p.sessionID?.isEmpty == false ? dashboardUnavailableReason : "Session identity unavailable"
         // Safe default: NSAlert binds Return to the first button unless told
         // otherwise, and NSApp.activate below can steal focus right as this
         // modal appears — an accidental Return must deny, never approve.
@@ -805,6 +806,13 @@ public final class AppState: ObservableObject {
         denyButton.keyEquivalent = "\r"
         NSApp.activate(ignoringOtherApps: true)
         let r = alert.runModal()
+        deferredGuardID = p.id
+        promptingID = nil
+        let inspectIndex = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 + choices.count
+        if r.rawValue == inspectIndex {
+            inspectPendingGuard(id: p.id)
+            return
+        }
         let decision: GuardResolveRequest
         switch r {
         case .alertFirstButtonReturn:  decision = .init(id: p.id, verdict: "allow", scope: "once")
@@ -816,41 +824,68 @@ public final class AppState: ObservableObject {
 				decision = .init(id: p.id, verdict: "allow", scope: choice.kind, expiry: choice.expiry)
 			} else { decision = .init(id: p.id, verdict: "deny", scope: "once") }
         }
-        // A resolve failure must be visible: the user believes they decided,
-        // and a silently dropped decision re-prompts a second later with no
-        // explanation. Keep the error on screen; the pending item stays
-        // server-side and will re-prompt.
         Task {
-            do {
-                let receipt = try await client.resolveGuard(decision)
-                self.guardResult = GuardDecisionResult(request: decision, receipt: receipt, sessionID: receipt?.sessionID ?? p.sessionID, unconfirmed: false)
-            } catch {
-                self.guardResult = GuardDecisionResult(request: decision, receipt: nil, sessionID: p.sessionID, unconfirmed: true)
-            }
-            self.promptingID = nil
-            self.fetch()
+            await resolvePendingGuard(id: p.id, verdict: decision.verdict, scope: decision.scope, expiry: decision.expiry)
         }
     }
 
     /// True when the app is showing a guard NSAlert — one at a time.
     public var promptingIDForTesting: String? { promptingID }
 
-    /// Resolve a pending guard decision from the popover's inline prompt.
-    /// Claims the id the same way the native alert does, so the two consent
-    /// paths never race a double-prompt.
-    public func resolvePendingGuard(verdict: String, scope: String, expiry: String? = nil) async {
-        guard let p = pendingGuard else { return }
+    /// Opening the exact recorded session leaves the request and its deadline unchanged.
+    func inspectPendingGuard(id: String, open: ((ConsoleDestination) -> Void)? = nil) {
+        guard let p = pendingGuard, p.id == id, let session = p.sessionID, !session.isEmpty else { return }
+        deferredGuardID = id
+        if let open { open(.session(session)) }
+        else { openDashboard(destination: .session(session)) }
+    }
+
+    private static func confirmFutureGuardAccess(_ text: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Confirm future access"
+        alert.informativeText = text
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
+        alert.addButton(withTitle: "Allow future access").keyEquivalent = ""
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    public func resolvePendingGuard(id: String? = nil, verdict: String, scope: String, expiry: String? = nil, confirm: ((String) -> Bool)? = nil) async {
+        guard let p = pendingGuard, id == nil || p.id == id, !resolvingGuardIDs.contains(p.id) else { return }
+        guard ["allow", "deny"].contains(verdict), scope == "once" || verdict == "allow" else { return }
+        if scope != "once" {
+            guard let text = p.confirmation(scope: scope, expiry: expiry) else { return }
+            deferredGuardID = p.id
+            guard (confirm ?? Self.confirmFutureGuardAccess)(text) else { return }
+        }
+        guardRequestNotice = nil
+        guardResult = nil
+        resolvingGuardIDs.insert(p.id)
         promptingID = p.id
-        pendingGuard = nil // optimistic: the poll/stream re-adds it if unresolved
+        deferredGuardID = p.id
+        defer { resolvingGuardIDs.remove(p.id); promptingID = nil; fetch() }
         let decision = GuardResolveRequest(id: p.id, verdict: verdict, scope: scope, expiry: expiry)
+        let current: [GuardPending]
+        do {
+            current = try await uiClient.fetchGuardPending()
+        } catch {
+            guardResult = nil
+            guardRequestNotice = "Pending requests unavailable. No answer was submitted. Refresh before trying again."
+            return
+        }
+        guard current.contains(where: { $0.id == p.id }) else {
+            guardRequestNotice = "Request no longer pending. No answer was submitted."
+            return
+        }
+        guard pendingGuard?.id == p.id else {
+            guardRequestNotice = "Request selection changed. No answer was submitted."
+            return
+        }
         do {
             let receipt = try await uiClient.resolveGuard(decision)
             guardResult = GuardDecisionResult(request: decision, receipt: receipt, sessionID: receipt?.sessionID ?? p.sessionID, unconfirmed: false)
         } catch {
             guardResult = GuardDecisionResult(request: decision, receipt: nil, sessionID: p.sessionID, unconfirmed: true)
         }
-        promptingID = nil
-        fetch()
     }
 
     /// Test hook: skip the modal NSAlert (untestable) while still proving the
@@ -861,37 +896,12 @@ public final class AppState: ObservableObject {
 
     /// Plain-language headline: what is this file, and who wants it.
     static func guardPromptHeadline(_ p: GuardPending) -> String {
-        switch p.ruleID {
-        case "ssh-keys": return "\(p.agent.capitalized) wants to read an SSH private key"
-        case "cloud-creds": return "\(p.agent.capitalized) wants to read a cloud credential file"
-        case "keychain": return "\(p.agent.capitalized) wants to touch your keychain"
-        case "env-files": return "\(p.agent.capitalized) wants to read an environment file (secrets inside)"
-        case "shell-rc": return "\(p.agent.capitalized) wants to access a shell config file"
-        default: return "Allow \(p.agent) to access this?"
-        }
+        "\(p.agent.capitalized) requests \(p.tool) access"
     }
 
     /// Detail line: the concrete file, why it matters, what is being asked.
     static func guardPromptDetail(_ p: GuardPending) -> String {
-        let why: String
-        switch p.ruleID {
-        case "ssh-keys":
-            why = "A leaked SSH key grants access to every server it authenticates."
-        case "cloud-creds":
-            why = "A leaked cloud key can create resources, read data, or run workloads on your account."
-        case "keychain":
-            why = "The keychain holds every password and certificate on this Mac."
-        case "env-files":
-            why = ".env files carry API keys and database passwords for this project."
-        case "shell-rc":
-            why = "Shell config controls every future terminal session — a silent edit affects everything."
-        default:
-            why = ""
-        }
-        var lines = "\(p.tool) → \(p.path)"
-        if !why.isEmpty { lines += "\n\n\(why)" }
-        lines += "\nRule: \(p.ruleID)"
-        return lines
+        p.requestFacts
     }
 
     /// Why "Open console" is unavailable right now, for tooltip/disabled

@@ -50,6 +50,7 @@ struct ConsoleView: View {
             }
             if showsHero { hero }
             if let pending = state.pendingGuard, state.connected { guardDecisionCard(pending) }
+            if let notice = state.guardRequestNotice { Text(notice).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             if let result = state.guardResult { guardResultCard(result) }
             if let result = actionResultModel { actionResultCard(result) }
             if !state.agentRoots.isEmpty { sessionCards }
@@ -479,16 +480,14 @@ struct ConsoleView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if let scope = p.scopeText, !scope.isEmpty {
-                Text("⚠️ \(scope)")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text("Once answers only this request. Inspection leaves it unanswered; its timeout continues.")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             if let advice = p.advisor {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: Self.advisorSymbol(advice.recommendation))
                         .font(.system(size: 10)).foregroundStyle(Self.advisorColor(advice.recommendation))
-                    Text("Advisor: \(advice.rationale)")
+                    Text("Advisor interpretation: \(advice.rationale)")
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -497,20 +496,24 @@ struct ConsoleView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6))
             }
             HStack(spacing: 6) {
-                Button { Task { await state.resolvePendingGuard(verdict: "allow", scope: "once") } } label: {
+                Button { Task { await state.resolvePendingGuard(id: p.id, verdict: "allow", scope: "once") } } label: {
                     Text("Allow Once").font(.system(size: 11, weight: .semibold))
                 }.buttonStyle(.bordered).controlSize(.small).tint(.brand)
 				if let scopes = p.availableScopes, scopes.contains(where: { $0.kind != "once" }) {
 					Menu("Future access") {
 						ForEach(scopes.filter { $0.kind != "once" }) { choice in
-							Button(choice.label) { Task { await state.resolvePendingGuard(verdict: "allow", scope: choice.kind, expiry: choice.expiry) } }
+							Button(choice.label) { Task { await state.resolvePendingGuard(id: p.id, verdict: "allow", scope: choice.kind, expiry: choice.expiry) } }
 						}
 					}.controlSize(.small)
 				}
-                Button { Task { await state.resolvePendingGuard(verdict: "deny", scope: "once") } } label: {
+                Button { Task { await state.resolvePendingGuard(id: p.id, verdict: "deny", scope: "once") } } label: {
                     Text("Deny").font(.system(size: 11, weight: .semibold))
                 }.buttonStyle(.borderedProminent).controlSize(.small).tint(.bad)
             }
+            Button("Inspect session") { state.inspectPendingGuard(id: p.id) }
+                .font(.system(size: 11)).buttonStyle(.bordered).controlSize(.small)
+                .disabled(p.sessionID?.isEmpty != false || state.dashboardUnavailableReason != nil)
+                .help(p.sessionID?.isEmpty == false ? state.dashboardUnavailableReason ?? "Open this session without answering" : "Session identity unavailable")
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -772,27 +775,11 @@ struct ConsoleView: View {
 
     /// Plain-language headline: what is this file, and who wants it.
     static func guardPromptHeadline(_ p: GuardPending) -> String {
-        switch p.ruleID {
-        case "ssh-keys": return "\(p.agent.capitalized) wants to read an SSH private key"
-        case "cloud-creds": return "\(p.agent.capitalized) wants to read a cloud credential file"
-        case "keychain": return "\(p.agent.capitalized) wants to touch your keychain"
-        case "env-files": return "\(p.agent.capitalized) wants to read an environment file (secrets inside)"
-        case "shell-rc": return "\(p.agent.capitalized) wants to access a shell config file"
-        default: return "Allow \(p.agent) to access this?"
-        }
+        AppState.guardPromptHeadline(p)
     }
 
-    /// Detail line: the concrete file, why it matters, what is being asked.
     static func guardPromptDetail(_ p: GuardPending) -> String {
-        let file = (p.path as NSString).lastPathComponent
-        switch p.ruleID {
-        case "ssh-keys": return "\(file) — private keys grant server access; leaking one is a full compromise."
-        case "cloud-creds": return "\(file) — cloud credentials can be used from anywhere once leaked."
-        case "keychain": return "\(file) — the keychain holds saved passwords and tokens."
-        case "env-files": return "\(file) — environment files often carry API keys and database passwords."
-        case "shell-rc": return "\(file) — shell config runs on every new terminal."
-        default: return "\(file)"
-        }
+        p.requestFacts
     }
 
     /// Advisor recommendation → symbol/color. "allow" reads green, "deny" red,

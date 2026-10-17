@@ -378,17 +378,18 @@ function needView(item, ctx) {
         ] : [], body: () => reviewHTML(r, ctx.SA.reviewDrafts && ctx.SA.reviewDrafts.get(r.id), false) };
     }
     case 'guard': {
-      const workspace = String(g.workspace || '').split('/').filter(Boolean).pop() || '';
+      const workspace = String(item.workspace || '').split('/').filter(Boolean).pop() || '';
       const a = (verdict, scope, expiry) => `data-action="guard-resolve" data-id="${id}" data-verdict="${verdict}" data-scope="${scope}"${expiry ? ` data-expiry="${escapeHTML(expiry)}"` : ''}`;
-      return { ...v, sev: 'sev-warn', word: 'guard',
+      const facts = `<dl class="finding-facts guard-request-facts"><dt>Operation</dt><dd>${escapeHTML(item.tool || 'Unknown')}</dd><dt>Resource</dt><dd>${escapeHTML(item.path || 'Unknown')}</dd><dt>Workspace</dt><dd>${escapeHTML(item.workspace || 'Unknown')}</dd><dt>Matched rule</dt><dd>${escapeHTML(item.rule || item.rule_id || 'Unknown')}</dd><dt>Executable path</dt><dd>${escapeHTML(item.reader_exe || 'Unknown; once only')}</dd></dl>`;
+      return { ...v, sev: 'sev-warn', word: 'access request', facts,
         why: [`${v.agent || 'The agent'} is paused until you answer`, (item.available_scopes || []).some(s => s.kind !== 'once') ? 'Future access requires a chosen limit' : 'Identity incomplete; once only', workspace].filter(Boolean).join(' · '),
         items: [
           { label: 'Allow once', attrs: a('allow', 'once'), bar: true },
           { label: 'Deny', attrs: a('deny', 'once'), kind: 'danger', bar: true },
+          ...(item.session_id ? [{ label:'Inspect session',attrs:`data-action="guard-inspect" data-id="${id}"`,bar:true }] : []),
           ...(item.available_scopes || []).filter(s => s.kind !== 'once').map(s => ({label:permissionChoiceLabel(s,'Allow'),attrs:a('allow',s.kind,s.expiry)})),
         ],
-        body: () => `<dl class="finding-facts"><dt>Path</dt><dd>${escapeHTML(item.path || '')}</dd><dt>Rule</dt><dd>${escapeHTML(item.rule || '')}</dd>`
-          + `<dt>Executable</dt><dd>${escapeHTML(item.reader_exe || 'Unknown; once only')}</dd><dt>Scope</dt><dd>${escapeHTML(item.scopeText || '')}</dd></dl>${item.advisor ? advisorAdviceHTML(item.advisor) : ''}` };
+        body: () => facts + `<p>Once answers only this request. Future access requires a separate confirmation.</p><p>${escapeHTML(item.scopeText || item.scope_text || '')}</p>${item.advisor ? '<p>Advisor interpretation; not proof of intent or safety.</p>' + advisorAdviceHTML(item.advisor) : ''}` };
     }
     case 'resource':
       return { ...v, sev: 'sev-warn', word: 'resource',
@@ -446,6 +447,7 @@ function needRowHTML(v, open, nowMs) {
   const lead = (v.items || []).find(i => i.bar);
   return `<li class="need need-row ${v.sev}${v.assessment ? ' need-assessed' : ''}${selected ? ' is-selected' : ''}" data-kind="${escapeHTML(v.kind)}" data-need-key="${escapeHTML(v.key)}">${head}`
     + (v.assessment ? `<div class="need-assessment">${assessmentHTML(v.assessment)}</div>` : '')
+    + (v.facts ? `<div class="guard-request-summary">${v.facts}<p>Once answers only this request. Inspection leaves it unanswered; its timeout continues.</p></div>` : '')
     + (lead && lead.title ? `<p class="need-consequence">${escapeHTML(lead.title)}</p>` : '')
     + `<div class="need-actions">${actionBarHTML(v.items)}</div></li>`;
 }

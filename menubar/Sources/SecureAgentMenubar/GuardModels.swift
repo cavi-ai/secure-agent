@@ -31,6 +31,23 @@ public struct GuardScopeChoice: Codable, Sendable, Identifiable {
 	}
 }
 
+extension GuardPending {
+    var requestFacts: String {
+        "Operation: \(tool)\nResource: \(path)\nWorkspace: \(workspace ?? "Unknown")\nMatched rule: \(ruleID)\nExecutable path: \(readerExe ?? "Unknown; once only")\nSession: \(sessionID ?? "Unknown")"
+    }
+
+    func confirmation(scope: String, expiry: String?) -> String? {
+        guard availableScopes?.contains(where: { $0.kind == scope && $0.expiry == expiry }) == true else { return nil }
+        let effect: String
+        switch scope {
+        case "session": effect = "Allow this file and tool until this session ends."
+        case "exact" where expiry == "24h" || expiry == "7d": effect = "Allow this file and tool for \(expiry == "7d" ? "7 days" : "24 hours")."
+        default: return nil
+        }
+        return "\(effect)\n\nAgent: \(agent)\n\(requestFacts)\n\nExecutable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions."
+    }
+}
+
 /// The advisor's read on a blocked guard prompt (decoded from the shared
 /// AdvisorVerdict wire shape). assessment: benign|suspicious|malicious.
 public struct GuardAdvice: Codable, Sendable {

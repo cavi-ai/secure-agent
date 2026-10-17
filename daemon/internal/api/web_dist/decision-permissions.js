@@ -34,20 +34,26 @@ function guardPermissionReceipt(decision, sessionID) {
 
 function guardResultHTML(result) {
   const r = result.receipt;
-  const title = result.unconfirmed ? 'Answer not confirmed' : 'Answer submitted';
-  const meaning = result.unconfirmed ? 'Check session results and permissions before deciding again. The answer may have reached the daemon.'
+  const title = result.expired ? 'Request no longer pending' : result.unconfirmed ? 'Answer not confirmed' : 'Answer submitted';
+  const meaning = result.expired ? 'This answer was not submitted to a waiting request. Check session results for the recorded outcome.' : result.unconfirmed ? 'Check session results and permissions before deciding again. The answer may have reached the daemon.'
     : 'The daemon submitted this answer to the waiting request. This does not prove the tool received it, completed access, or saved request history.';
   const decision = r || result.request;
   return `<div class="panel-head"><h2 id="guard-result-title">${title}</h2><button type="button" class="btn btn-ghost btn-sm" data-action="guard-result-dismiss">Dismiss</button></div>
     <div class="panel-body"><p>${escapeHTML(decision.verdict)} · ${escapeHTML(decision.scope)}${r ? ` · ${escapeHTML(r.rule_id)} · ${escapeHTML(r.at)}` : ''}</p><p>${meaning}</p>
-    ${!r && !result.unconfirmed ? '<p>Detailed receipt unavailable from this daemon.</p>' : ''}
+    ${!r && !result.unconfirmed && !result.expired ? '<p>Detailed receipt unavailable from this daemon.</p>' : ''}
     ${guardPermissionReceipt(r,r?.session_id) ? '<button type="button" class="btn btn-ghost btn-sm" data-action="guard-result-permissions">View permissions</button>' : ''}
     ${(r?.session_id || result.sessionID) ? '<button type="button" class="btn btn-ghost btn-sm" data-action="guard-result-history">Check session results</button>' : '<p>Session identity unavailable; inspect Rules &amp; permissions for current policy.</p>'}</div>`;
 }
 
 // No optimistic permission or receipt: only a matching daemon answer confirms
 // submission. Failed responses are ambiguous and never replay automatically.
-function createGuardDecisionController({request,confirm,context,generation,ended,paint,announce,refetch,openPermissions,openResults}) {
+function guardScopeConfirmation(p, verdict, scope, expiry) {
+  const effect = scope === 'always' ? `${verdict} every future path matched by rule ${p.rule_id || p.rule || 'unavailable'}`
+    : `allow this file and tool ${scope === 'session' ? 'until this session ends' : `for ${expiry === '7d' ? '7 days' : '24 hours'}`}`;
+  return `${effect}.\n\nAgent: ${p.agent || p.group?.agent || 'Unknown'}\nOperation: ${p.tool || 'Unknown'}\nResource: ${p.path || 'Unknown'}\nWorkspace: ${p.workspace || p.group?.workspace || 'Unknown'}\nExecutable path: ${p.reader_exe || 'Unknown'}\nSession: ${p.session_id || 'Unknown'}\n\nExecutable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions.`;
+}
+
+function createGuardDecisionController({request,confirm,context,generation,ended,paint,announce,refetch,openPermissions,openResults,openInspection}) {
   let result = null, sequence = 0, resultGeneration = null;
   const pending = new Set();
   function clear() { sequence++; result=null; resultGeneration=null; paint(null); }
@@ -56,15 +62,20 @@ function createGuardDecisionController({request,confirm,context,generation,ended
     pending.add(id);
     const auth = generation(), seq = ++sequence;
     const current = () => !ended() && generation() === auth;
-    const sessionID = context(id)?.session_id || '';
+    const p = context(id);
+    const sessionID = p?.session_id || '';
     const body = {id,verdict,scope,...(expiry ? {expiry} : {})};
     try {
-      const effect = scope === 'always' ? `${verdict} every future path matched by this rule` : scope === 'session' ? 'allow this file and tool in this session until it ends' : `allow this file and tool in this workspace for ${expiry === '7d' ? '7 days' : '24 hours'}`;
-      if(scope !== 'once' && !await confirm(`Apply guard decision: ${effect}? Executable identity uses its observed path. File approval does not authorize network access. Revoke under Protection → Rules & permissions.`,{title:'Guard decision',okLabel:'Apply'})) return;
-      if(!current()) return;
+      if (!p || p.id !== id || (scope !== 'once' && !(p.available_scopes || []).some(s => s.kind === scope && (s.expiry || '') === (expiry || '')))) return;
+      if(scope !== 'once' && !await confirm(guardScopeConfirmation(p,verdict,scope,expiry),{title:'Confirm future access',okLabel:'Allow future access',focusCancel:true})) return;
+      if(!current() || context(id)?.id !== id) return;
       const response = await request('/guard/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       const data = await response.json();
       if(!current()) return;
+      if(response.ok && data.resolved === false) {
+        if(seq === sequence) { result={request:body,sessionID,expired:true}; resultGeneration=auth; paint(result); announce('Request no longer pending.'); }
+        return;
+      }
       if(!response.ok || data.resolved !== true || (data.receipt != null && !validGuardReceipt(data.receipt,body))) throw new Error('Unconfirmed answer');
       if(seq === sequence) { result={request:body,receipt:data.receipt || null,sessionID}; resultGeneration=auth; paint(result); announce('Guard answer submitted.'); }
     } catch {
@@ -75,6 +86,7 @@ function createGuardDecisionController({request,confirm,context,generation,ended
     }
   }
   return {resolve,clear,
+    inspect(id, el) { const p=context(id); if(!ended() && p?.id === id && p.session_id) openInspection?.(p.session_id,el); },
     permissions() { const r=guardPermissionReceipt(result?.receipt,result?.receipt?.session_id); if(r && !ended() && resultGeneration===generation()) openPermissions(r); },
     history() { const id=result?.receipt?.session_id || result?.sessionID; if(id && !ended() && resultGeneration===generation()) openResults(id); },
   };

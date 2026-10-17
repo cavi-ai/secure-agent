@@ -75,6 +75,7 @@ func TestAttentionGroupsGuardPendingJoinsLiveSession(t *testing.T) {
 	// it time out after the test — the prompt stays pending meanwhile.
 	go a.guardBroker.Request(context.Background(), guard.Pending{
 		ID: "g1", Agent: "codex", Tool: "Bash", Path: "/Users/x/.ssh/id_ed25519",
+		SessionID: "durable-session", Workspace: "/work/request", ReaderExe: "/bin/codex",
 	})
 	waitFor(t, func() bool { return len(a.guardBroker.Pending()) == 1 })
 	groups := attentionGroups(a)
@@ -87,6 +88,10 @@ func TestAttentionGroupsGuardPendingJoinsLiveSession(t *testing.T) {
 	}
 	if len(g.Items) != 1 || g.Items[0].Kind != "guard" || g.Items[0].Priority != 5 {
 		t.Fatalf("items = %+v, want one guard item at priority 5", g.Items)
+	}
+	item := g.Items[0]
+	if item.Tool != "Bash" || item.SessionID != "durable-session" || item.Workspace != "/work/request" || item.ReaderExe != "/bin/codex" {
+		t.Fatalf("guard request identity lost or replaced with group identity: %+v", item)
 	}
 }
 

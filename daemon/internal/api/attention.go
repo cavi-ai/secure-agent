@@ -31,6 +31,8 @@ type AttentionItem struct {
 	Detail          string                `json:"detail,omitempty"`
 	Rule            string                `json:"rule,omitempty"`
 	Path            string                `json:"path,omitempty"`
+	Tool            string                `json:"tool,omitempty"`
+	Workspace       string                `json:"workspace,omitempty"`
 	ScopeText       string                `json:"scopeText,omitempty"`
 	AvailableScopes []model.ScopeChoice   `json:"available_scopes,omitempty"`
 	ReaderExe       string                `json:"reader_exe,omitempty"`
@@ -446,6 +448,7 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 			Title:  "Guard decision",
 			Detail: tool + " wants access to " + path,
 			Rule:   p.RuleID, Path: p.Path,
+			Tool: p.Tool, Workspace: p.Workspace, SessionID: p.SessionID,
 			ScopeText: p.ScopeText, Advisor: p.Advisor,
 			AvailableScopes: p.AvailableScopes, ReaderExe: p.ReaderExe,
 		})
