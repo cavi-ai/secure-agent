@@ -33,7 +33,17 @@ def run(*args, input=None):
 
 
 def documents():
-    return [ROOT / name for name in ("README.md", "CONTRIBUTING.md", "SECURITY.md", "CHANGELOG.md")] + sorted((ROOT / "docs").rglob("*.md"))
+    return [ROOT / name for name in ("README.md", "CONTRIBUTING.md", "SECURITY.md", "CHANGELOG.md")] + docs_pages()
+
+
+def docs_pages():
+    """Markdown under docs/: the tracked pages in a git checkout of ROOT, every
+    page in an exported tree. Local untracked notes are not documentation."""
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=ROOT, capture_output=True, text=True)
+    if top.returncode or Path(top.stdout.strip()).resolve() != ROOT.resolve():
+        return sorted((ROOT / "docs").rglob("*.md"))
+    listed = subprocess.run(["git", "ls-files", "-z", "--", "docs"], cwd=ROOT, capture_output=True, text=True, check=True)
+    return sorted(ROOT / name for name in listed.stdout.split("\0") if name.endswith(".md"))
 
 
 def anchors(text):
