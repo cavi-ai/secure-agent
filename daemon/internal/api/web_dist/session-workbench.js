@@ -926,6 +926,7 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
       ${window.SA.recentWorkReturn ? '<button type="button" class="btn btn-sm btn-ghost" data-action="recent-work-home">Back to Home</button>' : ''}
       <button type="button" class="btn btn-sm btn-ghost sd-back" data-action="session-list">Back to sessions</button>
       <button type="button" class="btn btn-sm btn-ghost sd-export" data-action="copy-report" data-id="${escapeHTML(sess.id)}" title="Copy this session's report as markdown"><svg class="icon"><use href="#i-copy"/></svg>Copy report</button>
+      ${sess.workspace ? `<button type="button" class="btn btn-sm btn-ghost" data-action="workspace-permissions" data-session="${escapeHTML(sess.id)}">Workspace permissions</button>` : ''}
     </div>
     <div class="session-detail-head">
       ${harnessChipHTML(sess.harness)}

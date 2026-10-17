@@ -608,13 +608,14 @@ function scopedBySession(items, sessionId, pids) {
 
 // Scope bar under the tabs: names the session (or process family) Events,
 // Flags and Incidents are narrowed to, with its counts; '' when unscoped.
-function scopeBarHTML({ session, pids, pidLabel, events, flags, returnToSession, machineTraffic }) {
+function scopeBarHTML({ session, pids, pidLabel, events, flags, returnToSession, machineTraffic, workspacePermissions }) {
   const n = Number(events) || 0;
   const m = Number(flags) || 0;
   const counts = ` · ${n} event${n === 1 ? '' : 's'} · ${m} flag${m === 1 ? '' : 's'}`;
   const clear = '<button type="button" class="btn btn-ghost btn-sm" data-action="clear-scope">Clear</button>';
   const back = returnToSession ? '<button type="button" class="btn btn-ghost btn-sm" data-action="session-investigation-return">Back to session</button>'
     : session ? `<button type="button" class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${escapeHTML(session)}">Back to session</button>` : '';
+  if (workspacePermissions && returnToSession) return `<span>Saved permissions · includes other sessions</span><span class="scope-actions">${back}</span>`;
   if (machineTraffic && returnToSession) return `<span>Machine-wide traffic · not attributed to this session</span><span class="scope-actions">${back}</span>`;
   if (session) return `<span>Scoped to session <b>${escapeHTML(sessionShort(session))}</b>${counts}</span><span class="scope-actions">${back}${clear}</span>`;
   if (pids && pids.length) {
@@ -2186,7 +2187,7 @@ function policyListHTML(kind, rows, st) {
   const saved = removal ? `<p role="status">Exception removal saved for <code>${escapeHTML(removal.path)}</code> (${escapeHTML(removal.agent)}). Remaining exceptions and policies still apply; past activity is unchanged.</p>` : '';
   const label = s.label || { guard: 'Guard decisions', path: 'File exceptions', mute: 'Muted flag classes', expected: 'Expected secret reads', scope: 'Scoped permissions' }[kind];
   const refreshed = rows != null && Number.isFinite(s.lastSuccessAt) ? ' Last successful refresh: ' + new Date(s.lastSuccessAt).toLocaleString() + '.' : '';
-  const notice = saved + (s.error ? `<div class="policy-read-status" role="status"><p>${escapeHTML(label)}: ${rows != null ? 'Refresh failed. Showing last known records; current status is unavailable.' : 'Unavailable. No successful read yet.'}${escapeHTML(refreshed)} ${escapeHTML(s.error)}</p><button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh-report" data-kind="${escapeHTML(kind)}"${s.loading ? ' disabled' : ''}>${escapeHTML('Refresh ' + label.toLowerCase())}</button></div>`
+  const notice = s.hideNotice ? '' : saved + (s.error ? `<div class="policy-read-status" role="status"><p>${escapeHTML(label)}: ${rows != null ? 'Refresh failed. Showing last known records; current status is unavailable.' : 'Unavailable. No successful read yet.'}${escapeHTML(refreshed)} ${escapeHTML(s.error)}</p><button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh-report" data-kind="${escapeHTML(kind)}"${s.loading ? ' disabled' : ''}>${escapeHTML('Refresh ' + label.toLowerCase())}</button></div>`
     : s.loading && rows != null ? `<p class="policy-read-status" role="status">${escapeHTML('Refreshing ' + label.toLowerCase() + '…')}</p>` : '');
   if (!rows) {
     if (s.error) return notice;
@@ -2206,17 +2207,20 @@ function policyListHTML(kind, rows, st) {
   const items = rows.map(r => {
     if (kind === 'scope') {
       const applicability = decisionScopeApplicability(r), mutation = s.scopeMutations?.get(r.id);
+      const timestamp = value => Number.isFinite(Date.parse(value))
+        ? `<time datetime="${escapeHTML(value)}" title="${escapeHTML(value)}">${escapeHTML(new Date(value).toLocaleString(undefined,{year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}))}</time>` : 'Time unavailable';
       const saved = mutation?.status === 'saved', unconfirmed = mutation?.status === 'unconfirmed';
       const pending = mutation?.status === 'confirming' || mutation?.status === 'saving';
       const lifetime = saved ? 'Revoked' : applicability.label;
-      const duration = r.expires_at ? ` · Expires ${r.expires_at}` : r.kind === 'session' && r.session_id ? ` · Session ${r.session_id}` : '';
+      const duration = r.expires_at ? ` · Expires ${timestamp(r.expires_at)}` : r.kind === 'session' && r.session_id ? ` · Session ${escapeHTML(r.session_id)}` : '';
       const feedback = saved ? '<p role="status">Revocation saved. Other permissions may still apply; past access is unchanged.</p>'
         : unconfirmed ? '<p role="status">Revocation not confirmed. Refresh permissions before trying again.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh permissions</button>'
         : mutation?.status === 'saving' ? '<p role="status">Saving revocation…</p>' : '';
       const recipient = r.destination ? ` → ${r.destination}` : '';
-      return row(`<b>${escapeHTML(r.agent)}</b> · ${escapeHTML(r.operation)} <code>${escapeHTML(r.resource_path)}</code>${escapeHTML(recipient)}`,
-        `${escapeHTML(r.workspace)} · executable path ${escapeHTML(r.reader_exe)} (observed, not signature verified) · ${escapeHTML(lifetime + duration)}${feedback}`,
-        !applicability.revoke || saved || unconfirmed || s.error ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-action="revoke-scope" data-id="${escapeHTML(r.id)}"${s.loading || pending ? ' disabled' : ''}>Revoke</button>`);
+      const operation = r.operation.startsWith('guard:') ? 'Guarded ' + r.operation.slice(6) + ' access' : r.operation === 'read-connect' ? 'Expected read/connect activity' : 'Operation unavailable';
+      return row(`<b>${escapeHTML(r.agent)}</b> · ${escapeHTML(operation)} <code>${escapeHTML(r.resource_path)}</code>${escapeHTML(recipient)}`,
+        `${escapeHTML(r.workspace || 'Workspace not recorded')} · executable path ${escapeHTML(r.reader_exe || 'Unknown')} (observed, not signature verified) · ${escapeHTML(lifetime)}${duration}<br>Saved ${timestamp(r.created_at)} · Permission ${escapeHTML(r.id)}${feedback}`,
+        `${r.session_id ? `<button type="button" class="btn btn-ghost btn-sm" data-action="permission-session" data-id="${escapeHTML(r.id)}">Inspect session</button>` : ''}${!applicability.revoke || saved || unconfirmed || s.error ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-action="revoke-scope" data-id="${escapeHTML(r.id)}"${s.loading || pending ? ' disabled' : ''}>Revoke</button>`}`);
     }
     if (kind === 'guard') {
       return row(`<span class="policy-decision ${r.decision === 'deny' ? 'deny' : 'allow'}">${escapeHTML(r.decision || '')}</span> `

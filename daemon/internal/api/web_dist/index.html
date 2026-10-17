@@ -613,6 +613,15 @@
       <!-- Protection rules and audit retain their existing renderer targets. -->
       <div class="tabpanel" id="tab-policy" role="tabpanel" hidden>
         <div class="protection-view" id="protection-rules" data-protection-section="rules" role="tabpanel" aria-labelledby="protection-tab-rules" hidden>
+          <section class="panel" id="workspace-permissions-panel" aria-labelledby="workspace-permissions-title">
+            <div class="panel-head"><h2 id="workspace-permissions-title" tabindex="-1">Saved permissions</h2><span class="badge" id="badge-scopes">0</span><button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh-report" data-kind="scope">Refresh permissions</button></div>
+            <div class="permission-review-intro"><p>Review saved permissions by project. These records do not establish current access; live session and identity checks still apply. Expected read/connect activity does not grant network access.</p>
+              <div class="permission-filters"><label>Workspace<select class="select" id="permission-workspace"><option value="all">All workspaces</option><option value="unassigned">Workspace not recorded</option></select></label><label>Status<select class="select" id="permission-status"><option value="all">All statuses</option><option value="saved">Session &amp; timed</option><option value="unknown">Unknown</option><option value="expired">Expired</option><option value="revoked">Revoked</option></select></label></div>
+              <button type="button" class="link-btn" data-action="permission-broader">Review broader policies and expectations</button>
+            </div>
+            <div class="panel-body" id="policy-scopes"><div class="loading">Loading permissions…</div></div>
+          </section>
+          <div class="permission-broader-head"><h2 id="broader-policies-title" tabindex="-1">Other policies &amp; expectations</h2><p>These controls are not filtered by workspace. Broader rules and exceptions may still affect matching activity after a scoped permission is revoked.</p></div>
           <section class="panel" id="firewall-panel">
             <div class="panel-head">
               <h2><svg class="icon"><use href="#i-shield"/></svg>Egress firewall</h2>
@@ -666,10 +675,6 @@
                 <div class="panel-body" id="policy-expected">
                   <div class="loading">Loading expected secret reads…</div>
                 </div>
-              </section>
-              <section class="panel">
-                <div class="panel-head"><h2>Scoped permissions</h2><span class="badge" id="badge-scopes">0</span></div>
-                <div class="panel-body" id="policy-scopes"><div class="loading">Loading permissions…</div></div>
               </section>
             </div>
             <div class="col">

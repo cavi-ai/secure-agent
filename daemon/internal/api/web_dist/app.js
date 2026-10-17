@@ -738,6 +738,7 @@ document.addEventListener('DOMContentLoaded', () => {
       flags: scopedBySession(t.flagsView || [], timelineSession, timelinePids).length,
       returnToSession: window.SA.sessionInvestigationReturn,
       machineTraffic: window.SA.sessionInvestigationMachineTraffic,
+      workspacePermissions: window.SA.sessionInvestigationPermissions,
     }) : '';
     bar.hidden = !html;
     if (bar._saHTML !== html) {
@@ -1209,7 +1210,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // Policy lists are not telemetry either: they load when Protection → Rules &
   // permissions opens and on its Refresh, never on the refresh cycle.
   const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, scopes: null,
-    loading: false, error: '', scopeMutations: new Map(), expectedMutations: new Map(), expectedRemoval: null };
+    loading: false, error: '', scopeMutations: new Map(), expectedMutations: new Map(), expectedRemoval: null, scopeWorkspace:'all', scopeStatus:'all' };
+  for (const [id,key] of [['permission-workspace','scopeWorkspace'],['permission-status','scopeStatus']]) {
+    document.getElementById(id)?.addEventListener('change',e=>{ policyState[key]=e.target.value; markDirty('policy'); });
+  }
   const policyRendered = new Map();
   let policyController;
   function consolePolicyControllerModule() {
@@ -1246,7 +1250,14 @@ document.addEventListener('DOMContentLoaded', () => {
     put('policy-path-allows', 'badge-path-allows', st.pathAllows, policyListHTML('path', st.pathAllows, view('pathAllows')));
     put('policy-mutes', 'badge-mutes', st.mutes, policyListHTML('mute', st.mutes, view('mutes')));
     put('policy-expected', 'badge-expected', st.expected, policyListHTML('expected', st.expected, view('expected')));
-    put('policy-scopes', 'badge-scopes', st.scopes, policyListHTML('scope', st.scopes, view('scopes')));
+    const options = permissionWorkspaceOptions(st.scopes,st.scopeWorkspace);
+    const workspace = document.getElementById('permission-workspace');
+    if (workspace && workspace._options !== options) { workspace.innerHTML=options; workspace._options=options; }
+    if (workspace) workspace.value=st.scopeWorkspace;
+    const status = document.getElementById('permission-status');
+    if (status) status.value=st.scopeStatus;
+    const filters = {workspace:st.scopeWorkspace,status:st.scopeStatus};
+    put('policy-scopes', 'badge-scopes', st.scopes && workspacePermissionReview(st.scopes,st.scopeWorkspace,st.scopeStatus,st.scopeMutations).rows, workspacePermissionsHTML(st.scopes,filters,view('scopes')));
   }
 
   window.revokeScope = async function(id) {
@@ -1255,7 +1266,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const mutation = { auth: handoffGeneration, status: 'confirming' };
     const current = () => !sessionEnded && mutation.auth === handoffGeneration && policyState.scopeMutations.get(id) === mutation;
     policyState.scopeMutations.set(id, mutation);
-    const confirmed = await window.saConfirm(`Revoke this saved permission for ${record.resource_path}${record.destination ? ' → ' + record.destination : ''}? Other permissions and policies may still allow matching activity. This does not undo past access or remediate past exposure.`, { title: 'Revoke permission', okLabel: 'Revoke permission' });
+    const confirmed = await window.saConfirm(`Revoke this saved permission for ${record.resource_path}${record.destination ? ' → ' + record.destination : ''}?\nPermission: ${record.id}\nWorkspace: ${record.workspace || 'Not recorded'}\nOperation: ${record.operation}\nOther permissions and policies may still allow matching activity. This does not undo past access or remediate past exposure.`, { title: 'Revoke permission', okLabel: 'Revoke permission', focusCancel:true });
     if (!current()) return;
     if (!confirmed) { policyState.scopeMutations.delete(id); return; }
     if (!policyReady('scope') || !decisionScopeApplicability(policyState.scopes?.find(r => r.id === id)).revoke) {
@@ -3072,6 +3083,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sessionInvestigation?.id === st.id && st.active) {
       st.destination.events = { ...filters.events };
       st.destination.page = copyEventHistoryPage(eventHistoryPage);
+      if (st.destination.workspacePermissions) st.destination.workspacePermissions = {workspace:policyState.scopeWorkspace,status:policyState.scopeStatus};
     }
     detailDrawer.close();
     if (sessionInvestigation?.id === st.id) sessionInvestigation.active = false;
@@ -3104,8 +3116,17 @@ document.addEventListener('DOMContentLoaded', () => {
     if (st.destination.page) eventHistoryPage = copyEventHistoryPage(st.destination.page);
     suppressFreshOnce = true;
     renderEvents(); renderFlags(); renderIncidents(); paintScopeBar();
+    if (st.destination.workspacePermissions) {
+      policyState.scopeWorkspace = st.destination.workspacePermissions.workspace;
+      policyState.scopeStatus = st.destination.workspacePermissions.status;
+    }
     switchTab(st.destination.route, { group: st.destination.group, skipHash: true });
     document.querySelector('#scope-bar [data-action="session-investigation-return"]')?.focus({ preventScroll: true });
+    if (st.destination.workspacePermissions) {
+      renderNow(['policy']);
+      document.getElementById('workspace-permissions-panel')?.scrollIntoView({block:'start'});
+      document.getElementById('permission-workspace')?.focus({preventScroll:true});
+    }
     fetchTelemetry();
   }
   function beginSessionInvestigation(st, destination) {
@@ -3119,6 +3140,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   Object.defineProperty(window.SA, 'sessionInvestigationReturn', { get: () => !!sessionInvestigation?.active && validSessionReturn(sessionInvestigation) });
   Object.defineProperty(window.SA, 'sessionInvestigationMachineTraffic', { get: () => !!sessionInvestigation?.active && validSessionReturn(sessionInvestigation) && !!sessionInvestigation.destination.machineTraffic });
+  Object.defineProperty(window.SA, 'sessionInvestigationPermissions', { get: () => !!sessionInvestigation?.active && validSessionReturn(sessionInvestigation) && !!sessionInvestigation.destination.workspacePermissions });
   window.SA.clearSessionInvestigation = () => {
     sessionInvestigation = null;
     if (detailDrawer.returnTarget()?.sessionReturn) detailDrawer.close();
@@ -3136,6 +3158,11 @@ document.addEventListener('DOMContentLoaded', () => {
     timelineSession = id; timelinePids = null; timelinePidLabel = ''; suppressFreshOnce = true;
     syncHistoryViews();
     paintScopeBar(); switchTab('events'); fetchTelemetry({ slow: false });
+  };
+  window.openWorkspacePermissions = function(id, el) {
+    const session = (telemetryData.sessions || []).find(s=>s.id===id);
+    if (sessionEnded || id !== sessionWorkbench.selectedSessionId || !session?.workspace) return;
+    beginSessionInvestigation(captureSessionReturn(el), {route:'protection/rules',session:null,pids:null,label:'',workspacePermissions:{workspace:'workspace:'+session.workspace,status:'all'}});
   };
   window.openSessionCoverageTraffic = function(id, el) {
     const data = sessionWorkbench.sessionOverview;
@@ -4162,6 +4189,30 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'policy-refresh':
         e.preventDefault();
         loadPolicy();
+        break;
+      case 'workspace-permissions':
+        e.preventDefault();
+        window.openWorkspacePermissions(d.session,el);
+        break;
+      case 'permission-session': {
+        e.preventDefault();
+        const record = policyState.scopes?.find(r=>r.id===d.id), auth=handoffGeneration;
+        if (sessionEnded || !record?.session_id) break;
+        window.SA.clearSessionInvestigation();
+        openConsoleContext({route:'sessions',session:record.session_id},auth).then(()=>{
+          if (!sessionEnded && auth===handoffGeneration && activeTab==='sessions' && sessionWorkbench.selectedSessionId===record.session_id) window.showCurrentSessionStatus();
+        });
+        break;
+      }
+      case 'permission-filter-clear':
+        e.preventDefault();
+        policyState.scopeWorkspace='all'; policyState.scopeStatus='all'; renderNow(['policy']);
+        document.getElementById('permission-workspace')?.focus({preventScroll:true});
+        break;
+      case 'permission-broader':
+        e.preventDefault();
+        document.getElementById('broader-policies-title')?.scrollIntoView({block:'start'});
+        document.getElementById('broader-policies-title')?.focus({preventScroll:true});
         break;
       case 'policy-refresh-report':
         e.preventDefault();
