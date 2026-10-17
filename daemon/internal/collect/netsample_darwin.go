@@ -5,12 +5,14 @@ package collect
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"log"
 	"net"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type DarwinSocketLister struct{}
@@ -33,7 +35,11 @@ func (d *DarwinSocketLister) SocketsFor(pid int32) []connKey {
 		lsofBin = "/usr/sbin/lsof"
 	}
 
-	cmd := exec.Command(lsofBin, args...)
+	// A hung lsof (a stale network mount) must not pin the sampler forever.
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, lsofBin, args...)
+	cmd.WaitDelay = time.Second
 	out, err := cmd.Output()
 	if err != nil {
 		// lsof exits nonzero when a pid vanished mid-scan (benign) but also on

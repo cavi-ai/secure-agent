@@ -183,6 +183,13 @@ func (s ESServiceSnapshot) SpoolStateAt(now time.Time) string {
 // real state. Overridable in tests; production uses ESServiceState.
 var ESServiceProbe = ESServiceState
 
+// probeTimeout bounds each lsof and launchctl run; launchctlPath is the
+// binary ESServiceState reads. Both are variables for tests.
+var (
+	probeTimeout  = 10 * time.Second
+	launchctlPath = "/bin/launchctl"
+)
+
 // ESServiceState probes the privileged collector's real health the only way
 // an unprivileged daemon can: stat the spool (size + mtime), read the
 // launchd service state via launchctl print, and stat the program that
@@ -191,7 +198,16 @@ var ESServiceProbe = ESServiceState
 func ESServiceState() (ESServiceSnapshot, error) {
 	var s ESServiceSnapshot
 	s.SpoolSize, s.SpoolMtime = spoolFacts(ESPoolPath)
-	out, cerr := exec.Command("/bin/launchctl", "print", "system/"+ESServiceLabel).Output()
+	// /status waits on this probe: a hung launchctl must not hang it.
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, launchctlPath, "print", "system/"+ESServiceLabel)
+	cmd.WaitDelay = time.Second
+	out, cerr := cmd.Output()
+	if ctx.Err() != nil {
+		// Unanswered is not "not loaded": the service state is unknown.
+		return s, fmt.Errorf("launchctl print did not answer within %v", probeTimeout)
+	}
 	if cerr != nil {
 		// Not loaded / not running as root: report the file facts anyway.
 		s.State = "not-loaded"
