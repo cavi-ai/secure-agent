@@ -26,13 +26,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5 (SHA-pinned)
         with:
           go-version-file: go.mod
-      - name: gofmt check
-        run: test -z "$(gofmt -l daemon cmd)" || { gofmt -l daemon cmd; exit 1; }
-      - name: go vet
-        run: go vet ./...
-      # -race requires cgo. Production builds are CGO_ENABLED=0 (ordinary CI).
-      - name: go test
-        run: go test ./... -count=1 -race -shuffle=on -timeout 10m
+      # gofmt, go vet, go test -race, as in ordinary CI.
+      - name: make test-go
+        run: make test-go
 
   menubar:
     name: Swift package tests (macOS 27 SDK)
