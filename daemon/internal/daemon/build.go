@@ -35,6 +35,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/session"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -607,7 +608,8 @@ func loadLastProduced(dbPath string) map[string]string {
 }
 
 // persistLastProduced writes the registry's coverage heartbeats for the next
-// run. Best-effort and cheap (a few hundred bytes on the tagger cadence).
+// run. Best-effort and cheap (a few hundred bytes on the tagger cadence); the
+// file is replaced whole, so a reader or a crash never sees a torn one.
 func persistLastProduced(dbPath string, reg *supervise.Registry) {
 	snap := reg.PersistLastProduced()
 	if snap == nil {
@@ -621,7 +623,7 @@ func persistLastProduced(dbPath string, reg *supervise.Registry) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return
 	}
-	_ = os.WriteFile(path, data, 0o600)
+	_ = safefile.ReplaceFile(path, data, 0o600)
 }
 
 func owningUIPID() int32 {

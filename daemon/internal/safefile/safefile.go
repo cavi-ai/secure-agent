@@ -18,6 +18,17 @@ import (
 // before rename, so it takes effect even when replacing an existing file with
 // different permissions (unlike os.WriteFile, which preserves the old mode).
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	return replace(path, data, perm, true)
+}
+
+// ReplaceFile is WriteFileAtomic without the fsync, for best-effort files
+// rewritten every few seconds: a crash can lose the latest write, but a
+// reader never sees a torn file.
+func ReplaceFile(path string, data []byte, perm os.FileMode) error {
+	return replace(path, data, perm, false)
+}
+
+func replace(path string, data []byte, perm os.FileMode, durable bool) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("safefile: mkdir %s: %w", dir, err)
@@ -36,9 +47,11 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		tmp.Close()
 		return fmt.Errorf("safefile: write temp for %s: %w", path, err)
 	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("safefile: fsync temp for %s: %w", path, err)
+	if durable {
+		if err := tmp.Sync(); err != nil {
+			tmp.Close()
+			return fmt.Errorf("safefile: fsync temp for %s: %w", path, err)
+		}
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("safefile: close temp for %s: %w", path, err)
