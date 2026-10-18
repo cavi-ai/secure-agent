@@ -3,12 +3,14 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // sessionRow mirrors the fields of the daemon's GET /sessions rows that the
@@ -74,69 +76,106 @@ func handleSession(client *http.Client) {
 	if slices.Contains(args, "--json") {
 		format = "json"
 	}
-	code, body := request(client, http.MethodGet, sessionReportURL(arg, format), "")
-	if code == http.StatusNotFound {
-		var known []sessionRow
-		for _, path := range []string{"http://unix/sessions?limit=500", "http://unix/sessions?status=ended&limit=500"} {
-			lcode, lbody := request(client, http.MethodGet, path, "")
-			var rows []sessionRow
-			if lcode == 200 && json.Unmarshal([]byte(lbody), &rows) == nil {
-				known = append(known, rows...)
-			}
-		}
-		id, msg, exit := resolveSessionID(arg, known)
-		if exit != 0 {
-			fmt.Print(msg)
-			os.Exit(exit)
-		}
-		code, body = request(client, http.MethodGet, sessionReportURL(id, format), "")
-	}
-	if code != 200 {
-		fmt.Printf("session failed (%d): %s\n", code, strings.TrimSpace(body))
+	if err := runSession(client, arg, format, os.Stdout); err != nil {
+		fmt.Println(err)
 		os.Exit(1)
 	}
-	fmt.Print(body)
-	if !strings.HasSuffix(body, "\n") {
-		fmt.Println()
+}
+
+func runSession(client *http.Client, arg, format string, out io.Writer) error {
+	code, body, err := sessionRequest(client, sessionReportURL(arg, format))
+	if err != nil {
+		return fmt.Errorf("session failed: %w", err)
 	}
+	if code == http.StatusNotFound {
+		if !utf8.ValidString(arg) {
+			return fmt.Errorf("session id prefix must be valid UTF-8")
+		}
+		if utf8.RuneCountInString(arg) < minSessionPrefix {
+			return fmt.Errorf("no session %q (an id prefix needs at least %d characters)", arg, minSessionPrefix)
+		}
+		id, err := resolveSessionPrefix(client, arg)
+		if err != nil {
+			return err
+		}
+		code, body, err = sessionRequest(client, sessionReportURL(id, format))
+		if err != nil {
+			return fmt.Errorf("session failed: %w", err)
+		}
+	}
+	if code != http.StatusOK {
+		return fmt.Errorf("session failed (%d): %s", code, strings.TrimSpace(body))
+	}
+	if _, err := io.WriteString(out, body); err != nil {
+		return err
+	}
+	if !strings.HasSuffix(body, "\n") {
+		_, err := io.WriteString(out, "\n")
+		return err
+	}
+	return nil
+}
+
+func resolveSessionPrefix(client *http.Client, prefix string) (string, error) {
+	q := url.Values{"prefix": []string{prefix}}
+	code, body, err := sessionRequest(client, "http://unix/sessions/resolve?"+q.Encode())
+	if err != nil {
+		return "", fmt.Errorf("session prefix lookup unavailable: %w", err)
+	}
+	if code == http.StatusNotFound {
+		return "", fmt.Errorf("daemon does not support session prefix lookup; use a full session ID or update daemon")
+	}
+	if code != http.StatusOK {
+		return "", fmt.Errorf("session prefix lookup unavailable (%d)", code)
+	}
+	var matches []sessionRow
+	trimmed := strings.TrimSpace(body)
+	if !strings.HasPrefix(trimmed, "[") || json.Unmarshal([]byte(trimmed), &matches) != nil || len(matches) > 2 {
+		return "", fmt.Errorf("invalid session prefix response")
+	}
+	seen := make(map[string]bool, len(matches))
+	var exact string
+	for _, match := range matches {
+		if match.ID == "" || !strings.HasPrefix(match.ID, prefix) || seen[match.ID] {
+			return "", fmt.Errorf("invalid session prefix response")
+		}
+		seen[match.ID] = true
+		if match.ID == prefix {
+			exact = match.ID
+		}
+	}
+	if exact != "" {
+		return exact, nil
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no session matches %q", prefix)
+	case 1:
+		return matches[0].ID, nil
+	default:
+		return "", fmt.Errorf("%q matches multiple sessions (at least 2); use a longer prefix:\n  %s  %s  %s\n  %s  %s  %s",
+			prefix,
+			matches[0].ID, matches[0].Harness, sessionWhere(matches[0]),
+			matches[1].ID, matches[1].Harness, sessionWhere(matches[1]))
+	}
+}
+
+func sessionRequest(client *http.Client, path string) (int, string, error) {
+	req, err := http.NewRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body), err
 }
 
 func sessionReportURL(id, format string) string {
 	return "http://unix/sessions/" + url.PathEscape(id) + "/report?format=" + format
-}
-
-// resolveSessionID resolves arg against known sessions: an exact id wins,
-// else a prefix of at least minSessionPrefix characters must match exactly
-// one session. On failure it returns the message to print and exit code 1;
-// an ambiguous prefix lists the candidates.
-func resolveSessionID(arg string, known []sessionRow) (string, string, int) {
-	seen := map[string]bool{}
-	var matches []sessionRow
-	for _, s := range known {
-		if s.ID == arg {
-			return s.ID, "", 0
-		}
-		if strings.HasPrefix(s.ID, arg) && !seen[s.ID] {
-			seen[s.ID] = true
-			matches = append(matches, s)
-		}
-	}
-	if len(arg) < minSessionPrefix {
-		return "", fmt.Sprintf("no session %q (an id prefix needs at least %d characters)\n", arg, minSessionPrefix), 1
-	}
-	switch len(matches) {
-	case 0:
-		return "", fmt.Sprintf("no session matches %q\n", arg), 1
-	case 1:
-		return matches[0].ID, "", 0
-	default:
-		var b strings.Builder
-		fmt.Fprintf(&b, "%q matches %d sessions:\n", arg, len(matches))
-		for _, s := range matches {
-			fmt.Fprintf(&b, "  %s  %s  %s\n", s.ID, s.Harness, sessionWhere(s))
-		}
-		return "", b.String(), 1
-	}
 }
 
 const sessionWhereMaxWidth = 48

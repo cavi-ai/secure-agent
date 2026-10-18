@@ -79,6 +79,8 @@ Secure Agent parses agent-semantic trace events (tool calls, model calls, turns)
 
 **Export recorded session history.** Session reports include the latest saved review decisions, the evidence revisions they apply to, residual risk, and intervention/remediation results. Missing source history and export limits are explicit. Copying a partial report shows a warning; an export does not establish task completion or current permission.
 
+The CLI accepts a full session ID or a unique prefix of at least six characters. Prefix lookup searches all retained sessions, including older ended sessions. Ambiguous prefixes show candidates and require a longer prefix or full ID. With an older daemon that lacks prefix lookup, use the full ID or update the daemon.
+
 **See decisions and results in the session.** The Results view keeps saved reviews, process-control receipts, and reported incident actions together. Applied controls, later observations, and unverified external actions remain distinct. Source failures retain the last known receipts with a retry message; bounded and expired history stay visible as limits.
 
 Results opens with **Needs follow-up**: newer evidence after a saved decision, process actions whose result needs checking, reported incident actions, and permissions linked to saved decisions. Expand a group to inspect evidence or current permission scope and expiry. Permission status is read separately; missing records remain unknown. Refresh results to update the snapshot. These groups describe retained records, not a safety verdict or proof that an external action succeeded.
