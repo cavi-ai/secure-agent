@@ -11,6 +11,7 @@ type SessionOutcomes struct {
 	SessionID  string                      `json:"session_id"`
 	ObservedAt time.Time                   `json:"observed_at"`
 	History    store.SessionOutcomeHistory `json:"history"`
+	FollowUp   SessionFollowUp             `json:"follow_up"`
 }
 
 // serveSessionOutcomes reads receipts without scanning the session's activity.
@@ -24,5 +25,6 @@ func (a *API) serveSessionOutcomes(w http.ResponseWriter, r *http.Request, id st
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, SessionOutcomes{SessionID: id, ObservedAt: time.Now().UTC(), History: history})
+	observedAt := time.Now().UTC()
+	writeJSON(w, SessionOutcomes{SessionID: id, ObservedAt: observedAt, History: history, FollowUp: buildSessionFollowUp(id, observedAt, history)})
 }

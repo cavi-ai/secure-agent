@@ -46,6 +46,7 @@ Use the session's export controls to save its report. With the CLI, list session
 secure-agent sessions
 secure-agent session SESSION_ID
 secure-agent session SESSION_ID --json
+secure-agent session SESSION_ID --follow-up
 ```
 
 The first report is Markdown; `--json` returns the structured report. See [Session history](USAGE.md#inspect-session-history) for report contents and filtering.

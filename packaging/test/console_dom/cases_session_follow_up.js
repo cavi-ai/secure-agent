@@ -10,6 +10,12 @@
     interventions:[{id:'process-follow-up',kind:'pause',requested_at:iso(10000),status:'applied',verification:'pending'}],
     incidents:[{id:'incident-follow-up',remediation:{steps:[{id:'step-follow-up',item:{name:'Example API key',action:'Revoke key'},status:'reported',verification:'unverified',reported_at:iso(5000),newer_evidence:true}]}}],
   }};
+  data.follow_up={schema_version:1,session_id:sid,observed_at:data.observed_at,partial:false,sources:structuredClone(data.history.evidence),
+    newer_evidence:[{id:'review-follow-up',title:'Sensitive file read',revision:2,decision_revision:1,evidence_flag_id:'follow-up-flag',evidence_available:true}],
+    process_actions:[{id:'process-follow-up',kind:'pause',status:'applied',verification:'pending',verified_by:'',limits:[]}],
+    reported_actions:[{incident_id:'incident-follow-up',step_id:'step-follow-up',title:'Example API key',action:'Revoke key',newer_evidence:true,verification:'not_verified'}],
+    permissions:[{id:'guard-follow-up',kind:'guard',ids:['scope-follow-up','scope-missing'],title:'credentials',status:'unknown'}],
+  };
   route('/sessions/'+sid+'/outcomes',()=>failed?{ok:false,status:503}:response(data));
   route('/decision-scopes',()=>permissionsFailed?{ok:false,status:503}:response([
     {id:'scope-follow-up',kind:'exact',agent:'claude',rule_id:'credentials',operation:'guard:Read',resource_path:'/workspace/api-service/.env',created_at:iso(20000),expires_at:new Date(Date.now()+86400000).toISOString(),...(scopeRevoked?{revoked_at:iso(0)}:{}),applicability:{label:scopeRevoked?'Revoked':'Timed permission',revoke:!scopeRevoked}},

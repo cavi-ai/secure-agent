@@ -10,6 +10,64 @@ for (const file of ['lib.js', 'tab-overview.js', 'session-layout.js', 'session-w
 const at = '2026-10-09T12:00:00Z';
 const evidence = Object.fromEntries(['reviews', 'interventions', 'incidents'].map(k => [k, { available: true, at_limit: false, limit: 100 }]));
 
+function canonicalFollowUpData() {
+  const sources = { ...structuredClone(evidence), guards: { available: true, at_limit: false, limit: 200 } };
+  const review = id => ({ id, revision: 2, context: { rule: id }, decision: { action: 'acknowledge', revision: 1 }, evidence_available: true, evidence_flag_available: true, evidence_flag_id: id + '-flag' });
+  const process = id => ({ id, kind: 'pause', requested_at: at, status: 'applied', verification: 'pending', limits: [] });
+  const guard = id => ({ id, session_id: 'own', rule_id: 'credentials', verdict: 'allow', scope: 'exact', at, scope_ids: [id + '-scope'] });
+  return {
+    session_id: 'own', observed_at: at,
+    history: { evidence: structuredClone(sources), reviews: [review('review-one'), review('review-two')], interventions: [process('process-one'), process('process-two')], incidents: [], guards: [guard('guard-one'), guard('guard-two')] },
+    follow_up: {
+      schema_version: 1, session_id: 'own', observed_at: at, partial: false, sources,
+      newer_evidence: [{ id: 'review-one', title: 'review-one', revision: 2, decision_revision: 1, evidence_flag_id: 'review-one-flag', evidence_available: true }],
+      process_actions: [{ id: 'process-one', kind: 'pause', status: 'applied', verification: 'pending', verified_by: '', limits: [] }],
+      reported_actions: [],
+      permissions: [{ id: 'guard-one', kind: 'guard', ids: ['guard-one-scope'], title: 'credentials', status: 'unknown' }],
+    },
+  };
+}
+
+test('follow-up uses the daemon selection for available sources', () => {
+  const data = canonicalFollowUpData();
+  assert.equal(ctx.validSessionOutcomes(data, 'own'), true);
+  const html = ctx.sessionFollowUpHTML(data);
+  for (const id of ['follow-up:review:review-one', 'follow-up:control:process-one', 'follow-up:permission:guard:guard-one']) assert.ok(html.includes(id), id);
+  for (const id of ['follow-up:review:review-two', 'follow-up:control:process-two', 'follow-up:permission:guard:guard-two']) assert.ok(!html.includes(id), id);
+  assert.match(html, /Current status unknown/);
+});
+
+test('outcomes reject malformed canonical follow-up instead of showing an empty result', () => {
+  for (const mutate of [
+    d => { d.follow_up.session_id = 'other'; },
+    d => { d.follow_up.schema_version = 2; },
+    d => { d.follow_up.newer_evidence = null; },
+    d => { d.follow_up.process_actions[0].id = 'foreign'; },
+    d => { d.follow_up.permissions[0].ids = ['foreign-scope']; },
+    d => { d.follow_up.permissions[0].status = 'active'; },
+    d => { d.follow_up.sources.reviews.available = false; },
+    d => { d.follow_up.partial = true; },
+  ]) {
+    const data = canonicalFollowUpData();
+    mutate(data);
+    assert.equal(ctx.validSessionOutcomes(data, 'own'), false);
+  }
+});
+
+test('an unavailable source preserves last-known follow-up rows and suppresses source actions', () => {
+  const data = canonicalFollowUpData();
+  data.history.evidence.reviews.available = false;
+  data.follow_up.sources.reviews.available = false;
+  data.follow_up.partial = true;
+  data.follow_up.newer_evidence = [];
+  const html = ctx.sessionFollowUpHTML(data);
+  assert.match(html, /follow-up:review:review-one/);
+  assert.match(html, /follow-up:review:review-two/);
+  assert.ok(!html.includes('data-action="open-flag"'));
+  delete data.follow_up;
+  assert.match(ctx.sessionFollowUpHTML(data), /follow-up:control:process-two/);
+});
+
 test('Results includes guard outcomes, unknown legacy permissions, and independent guard read failures', () => {
  const html = ctx.sessionOutcomesHTML({session_id:'own',history:{evidence:{...evidence,guards:{available:true,at_limit:false,limit:200}},reviews:[],interventions:[],incidents:[],guards:[
   {id:'new',session_id:'own',rule_id:'credentials',verdict:'allow',scope:'session',at,scope_ids:['permission']},
