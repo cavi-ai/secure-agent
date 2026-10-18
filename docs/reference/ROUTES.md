@@ -12,6 +12,7 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 |---|---|---|---|---|
 | `/status` | GET, HEAD | — | — | `api.Status` |
 | `/sessions` | GET, HEAD | — | — | `[]model.Session` |
+| `/sessions/resolve` | GET, HEAD | — | — | `[]model.Session` |
 | `/sessions/{id}/timeline` | GET, HEAD | — | — | `[]event.Event` |
 | `/sessions/{id}/report` | GET, HEAD | — | — | `store.SessionReport` |
 | `/sessions/{id}/memory` | GET, HEAD | — | — | `api.memoryResponse` |

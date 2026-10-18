@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agentask"
@@ -857,6 +858,26 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		f.Since = t
 	}
 	sessions, err := a.store.ListSessions(f)
+	if err != nil {
+		http.Error(w, "session data unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, sessions)
+}
+
+// handleResolveSessionPrefix returns up to two retained sessions so callers
+// can resolve a unique ID prefix without searching a truncated session list.
+func (a *API) handleResolveSessionPrefix(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	prefix := r.URL.Query().Get("prefix")
+	if !utf8.ValidString(prefix) || utf8.RuneCountInString(prefix) < 6 {
+		http.Error(w, "prefix must contain at least 6 characters", http.StatusBadRequest)
+		return
+	}
+	sessions, err := a.store.FindSessionsByPrefix(prefix)
 	if err != nil {
 		http.Error(w, "session data unavailable", http.StatusServiceUnavailable)
 		return

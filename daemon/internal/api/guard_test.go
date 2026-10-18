@@ -167,12 +167,17 @@ func TestDeduplicatedGuardRequestsPersistSeparately(t *testing.T) {
 	st.UpsertSession(model.Session{ID: "session-1", Harness: "claude", StartedAt: now, LastSeenAt: now})
 
 	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(2 * time.Second)})
-	done := make(chan struct{}, 2)
+	type response struct {
+		status int
+		body   string
+	}
+	done := make(chan response, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
+			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/guard/decision", strings.NewReader(`{"agent":"claude","tool":"Read","path":"/secret","rule_id":"cloud-creds","session_id":"session-1"}`))
-			a.handleGuardDecision(httptest.NewRecorder(), req)
-			done <- struct{}{}
+			a.handleGuardDecision(rec, req)
+			done <- response{status: rec.Code, body: rec.Body.String()}
 		}()
 	}
 	deadline := time.Now().Add(time.Second)
@@ -186,8 +191,12 @@ func TestDeduplicatedGuardRequestsPersistSeparately(t *testing.T) {
 	// Give the second request time to join the first waiter's fan-out.
 	time.Sleep(20 * time.Millisecond)
 	a.guardBroker.Resolve(pending[0].ID, guard.Decision{Verdict: "deny", Scope: "once"})
-	<-done
-	<-done
+	responses := []response{<-done, <-done}
+	for i, got := range responses {
+		if got.status != http.StatusOK {
+			t.Fatalf("request %d returned HTTP %d: %s", i+1, got.status, got.body)
+		}
+	}
 	rows := st.ListGuardDecisions("session-1", 10)
 	if len(rows) != 2 || rows[0].ID == rows[1].ID {
 		t.Fatalf("rows=%+v, want distinct persisted outcomes", rows)
