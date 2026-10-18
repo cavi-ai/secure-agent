@@ -32,6 +32,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
+	"github.com/cavi-ai/secure-agent/daemon/internal/shellreview"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
@@ -176,6 +177,7 @@ type Status struct {
 type StatusFunc func() Status
 
 type API struct {
+	shellReviews    *shellreview.Service
 	socketPath      string
 	configPath      string
 	store           *store.Store
@@ -308,11 +310,12 @@ type HostAssessFuncs struct {
 // Optional fields may be left zero — the handlers degrade to their documented
 // "not enabled" response.
 type Deps struct {
-	SocketPath string
-	ConfigPath string
-	Store      *store.Store
-	Killer     Killer
-	Status     StatusFunc
+	ShellReviews *shellreview.Service
+	SocketPath   string
+	ConfigPath   string
+	Store        *store.Store
+	Killer       Killer
+	Status       StatusFunc
 
 	// Local process and path operations use system implementations by default.
 	OpenPath     func(...string) error
@@ -426,6 +429,7 @@ func New(d Deps) *API {
 		fwSources:       d.Firewall.Sources,
 		fwBaseSources:   d.Firewall.BaseSources,
 		guardBroker:     d.Guard,
+		shellReviews:    d.ShellReviews,
 		guardIdentity:   d.GuardIdentity,
 		correlator:      d.Correlator,
 		allowlist:       d.Allowlist,

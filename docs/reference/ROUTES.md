@@ -10,6 +10,9 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 
 | Path | Console methods | UI mutations | Additional restriction | Response type |
 |---|---|---|---|---|
+| `/guard/shell-review` | — | — | guard decision | — |
+| `/guard/shell-check` | — | — | guard decision | — |
+| `/guard/shell-reviews` | GET, HEAD | — | no agents | — |
 | `/status` | GET, HEAD | — | — | `api.Status` |
 | `/sessions` | GET, HEAD | — | — | `[]model.Session` |
 | `/sessions/{id}/timeline` | GET, HEAD | — | — | `[]event.Event` |

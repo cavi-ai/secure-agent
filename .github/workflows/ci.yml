@@ -76,6 +76,10 @@ jobs:
           python-version: "3.11"
       - name: secret_guard
         run: python3 plugin/hooks/test_secret_guard.py
+      - name: Shell review hook tests
+        run: python3 plugin/hooks/test_shell_review.py
+      - name: Classifier customization contract tests
+        run: python3 -m unittest discover -s packaging/classifier -p 'test_*.py'
       - name: injection_scan
         run: python3 plugin/hooks/test_injection_scan.py
       - name: activity_log

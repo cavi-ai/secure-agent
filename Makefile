@@ -90,6 +90,8 @@ test:
 	python3 packaging/test/test_menu_bar_tracking.py
 	@echo "==> Running Python hook tests..."
 	python3 plugin/hooks/test_secret_guard.py
+	python3 plugin/hooks/test_shell_review.py
+	python3 -m unittest discover -s packaging/classifier -p 'test_*.py'
 	python3 plugin/hooks/test_injection_scan.py
 	python3 plugin/hooks/test_activity_log.py
 	python3 plugin/hooks/test_cursor_hooks.py

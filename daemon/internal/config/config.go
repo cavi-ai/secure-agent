@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/loopback"
+	"github.com/cavi-ai/secure-agent/daemon/internal/shellreview"
 	"gopkg.in/yaml.v3"
 )
 
@@ -199,8 +200,9 @@ type CwdOverride struct {
 // answers 3 s before it; a hook that stops waiting first withdraws its
 // prompt) and the per-project overrides it writes for the hook.
 type DirectoryGuardConfig struct {
-	PromptDeadlineMS int           `yaml:"prompt_deadline_ms"`
-	CwdOverrides     []CwdOverride `yaml:"cwd_overrides"`
+	ShellReview      shellreview.Config `yaml:"shell_review"`
+	PromptDeadlineMS int                `yaml:"prompt_deadline_ms"`
+	CwdOverrides     []CwdOverride      `yaml:"cwd_overrides"`
 }
 
 // ResourceControlConfig governs whole attributed session families. Zero
@@ -628,6 +630,9 @@ func validPrice(v float64) bool { return v > 0 && !math.IsInf(v, 0) }
 // runtime. A non-positive sample interval reaches time.NewTicker, which panics
 // — the supervisor then recovers a permanently crash-looping collector.
 func (c Config) Validate() error {
+	if err := c.DirectoryGuard.ShellReview.Validate(); err != nil {
+		return err
+	}
 	if c.Advisor.ClassifierEndpoint != "" && !loopback.ValidEndpoint(c.Advisor.ClassifierEndpoint) {
 		return fmt.Errorf("advisor.classifier_endpoint must be loopback")
 	}
