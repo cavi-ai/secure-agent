@@ -130,6 +130,12 @@ firewall:
     treat_body_secret_as_leak: true
 directory_guard:
   prompt_deadline_ms: 45000
+  shell_review:
+    enabled: false
+    mode: observe
+    endpoint: ""
+    model: "kev-latest"
+    timeout_ms: 1000
 
 # Whole-session resource budgets. Limits of zero disable enforcement for that
 # metric. Observe is the safe default; prompt/terminate require explicit opt-in.

@@ -227,6 +227,155 @@ The hook waits for a prompt decision for its own deadline, `SECURE_AGENT_PROMPT_
 
 The daemon writes these entries at every start to `guard-cwd-overrides.json` in the directory of `socket_path` (default `~/.config/secure-agent/guard-cwd-overrides.json`, the path the hook reads). A daemon run with a socket elsewhere writes its own copy beside that socket and leaves the default file untouched.
 
+#### Optional shell risk observations
+
+Shell review records local classifier hints for Bash calls without changing
+permissions in `observe` mode. It is disabled by
+default and requires a running loopback Kev-compatible `/v1/systemone` server:
+
+```yaml
+directory_guard:
+  shell_review:
+    enabled: true
+    mode: observe
+    endpoint: http://127.0.0.1:8009
+    model: kev-latest
+    timeout_ms: 1000
+```
+
+Restart the daemon after changing these settings. Install the updated guard
+hook, then set `SECURE_AGENT_SHELL_REVIEW=1` in the environment of the Claude
+Code or Cursor process invoking it. Both opt-ins are required. Unsetting the
+environment variable stops submissions; setting `enabled: false` and
+restarting stops the daemon worker. Other harnesses are not covered.
+
+In observe mode, the hook spends at most approximately 100 ms attempting local delivery and
+never waits for inference. The daemon uses one worker and 32 queue slots, with
+a default one-second model deadline (maximum five seconds). Oversized commands
+are refused rather than truncated. Missing delivery acknowledgments are
+recorded without command text in the hook audit log. Queue drops, model
+failures, and storage failures are reported separately.
+
+Read observations from an operator terminal outside an agent process:
+
+```sh
+curl --unix-socket "$HOME/.config/secure-agent/daemon.sock" \
+  'http://localhost/guard/shell-reviews?limit=1000'
+```
+
+`POST /guard/shell-review` accepts hook observations on the control socket;
+it cannot approve a tool. `GET /guard/shell-reviews` returns health and recent
+observations (100 by default; `limit` accepts 1–1000). The database retains at
+most 1,000 observations; results older than seven days are excluded from reads
+and removed on the next write. Commands and working directories are masked
+before model calls and are never stored in this table. Results retain the
+redacted command's digest, hook-reported session/call IDs, the existing guard
+verdict, configured model name, policy version, latency, and validated scores.
+These records do not prove that a command executed or that the reported
+identity is authentic.
+
+##### Optional shell blocking
+
+`mode: block` makes `POST /guard/shell-check` available. To use it, set
+`SECURE_AGENT_SHELL_REVIEW=block` in the Claude Code or Cursor harness
+environment after restarting the daemon with that mode. Both settings are
+required; a mode mismatch denies the checked command. Observe remains the
+default. Blocking is experimental and can deny ordinary development commands.
+
+The hook runs the existing guard first. Its hard denials never consult the
+model and cannot be overridden. For an otherwise allowed Bash command, the
+additional check permits continuation only when the model result is routine,
+meets the probability floor below, has unredacted evidence, and has a stored
+receipt. Review, unknown, model error, malformed input, queue pressure, missing
+receipt storage, and unavailable transport deny the command. There is no
+interactive approval or automatic retry, and no standing permission is saved.
+
+The total daemon deadline covers queue wait, model inference, and receipt
+storage; it is the configured model deadline plus 200 ms. The hook has a
+six-second absolute transport deadline and validates each reply against the
+submitted command and working directory. It never reuses an earlier reply.
+Stored `proposed_verdict` is the decision before delivery, not proof that the
+hook received it or executed a command. `request_digest` binds that proposal
+to the submitted input without storing the command or working directory.
+
+The history response reports `enforcement_configured`, the configured mode,
+and check/denial counters. These do not establish coverage of every tool call.
+Only supported hooks using the check endpoint are gated. An unrestricted
+same-user process can bypass the hook or alter its environment; this feature
+does not provide filesystem or network isolation. Model mistakes can still
+pass the additional check. Existing hard rules and OS restrictions remain
+necessary when operating with broad permissions.
+
+The classifier returns `routine`, `review`, or `unknown`. These are uncalibrated
+risk hints; `routine` is not permission or a safety guarantee. A routine answer
+requires at least 0.9 reported probability; otherwise the observation is unknown
+with reason `uncertain_classification`. That cutoff is an abstention policy,
+not a measured accuracy rate. Uncertain routine answers preserve the original
+`model_choice` and scores so an abstention cannot hide a model mistake. Health counts
+abstentions separately from unavailable or invalid model responses.
+Invalid or unavailable model output produces `unknown` with a reason. A routine
+answer on redacted evidence is also downgraded to unknown. User authorization is not
+assessed: no trusted user intent is supplied. Opaque scripts and unresolved
+runtime behavior are explicitly presented to the classifier as unknowns.
+Existing hook and OS-level coverage limits still apply.
+
+The model sees the command and working directory. The hook-reported guard
+verdict is recorded for comparison but is excluded from model input, so it
+cannot bias the model toward trusting an earlier permission.
+
+##### Customizing a local shell classifier
+
+`packaging/classifier/customize.py` adapts an existing local Kev LoRA adapter
+and decision head. It uses the daemon's embedded `shellreview/policy.json`,
+including its option order and command/working-directory format. It requires
+a Python environment containing Kev's dependencies and a local Kev source
+checkout. Base weights must already be cached; tuning runs offline and never
+executes dataset commands.
+
+Supply a private JSON dataset with `version: 1` and a `rows` array. Each row
+requires string fields `id`, `family`, `split`, `label`, `command`, and `cwd`.
+Splits are `train`, `development`, and `test`; labels are `routine`, `review`,
+and `unknown`. Each split must contain every label. Keep related command
+templates in one family and one split. Duplicate commands, shared families
+across splits, and oversized inputs are rejected. Use synthetic examples;
+do not export private commands or credentials into training data.
+
+Freeze the dataset and policy, then tune into a separate directory:
+
+```sh
+python3 packaging/classifier/customize.py freeze \
+  --suite .remember/shell-suite.json --manifest .remember/shell-manifest.json
+python3 packaging/classifier/customize.py tune \
+  --suite .remember/shell-suite.json --manifest .remember/shell-manifest.json \
+  --kev-source /path/to/kev --checkpoint /path/to/local/checkpoint \
+  --out .remember/shell-run
+```
+
+The output contains a `candidate` checkpoint, input hashes, training settings,
+development results, and `comparison.json`. Candidate selection uses only the
+development split; the test split is scored after selection against both the
+candidate and original checkpoint. Reports separate label accuracy, routine
+coverage, abstention, and non-routine examples that would pass the gate's 0.9
+reported-probability floor. Tuning exits with status 2 and records rejection
+reasons if any non-routine test command would be allowed, label accuracy
+regresses, or routine coverage regresses. Synthetic results do not establish a production
+false-allow rate. Training does not change the running model or daemon settings;
+evaluate the candidate through the actual hook before enabling it. Use a separate
+endpoint for the shell candidate: adaptation can change decisions on other tasks.
+
+An opt-in acceptance probe evaluates a small fixed set of synthetic shell
+commands through the production classifier path. It never executes those
+commands or changes the running daemon's configuration:
+
+```sh
+SECURE_AGENT_TEST_CLASSIFIER_ENDPOINT=http://127.0.0.1:8009 \
+  go test ./daemon/internal/shellreview -run '^TestLocalShellReviewEvaluation$' -count=1 -v
+```
+
+The probe uses the supported five-second maximum deadline to separate decision
+quality from cold-request timeouts. It reports a failed test when a classification
+misses its expected category; ordinary unit tests do not run the live probe.
+
 ### `firewall` (Map)
 
 Controls fingerprint and typed-pattern detection for inspected requests and tailed transcripts. The firewall defaults to `monitor`; request blocking requires explicit opt-in. The entropy backstop is monitor-only. See [Protection](PROTECTION.md#egress-secret-leak-firewall) for routing and [the threat model](FIREWALL_THREAT_MODEL.md) for inspection limits.

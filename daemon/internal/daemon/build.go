@@ -36,6 +36,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/session"
+	"github.com/cavi-ai/secure-agent/daemon/internal/shellreview"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
@@ -58,9 +59,10 @@ type Options struct {
 // Shutdown. Build is the composition root; main() is CLI parsing plus process
 // lifecycle, not component construction.
 type Components struct {
-	cfg   config.Config
-	store *store.Store
-	bus   *bus.Bus
+	shellReviews *shellreview.Service
+	cfg          config.Config
+	store        *store.Store
+	bus          *bus.Bus
 
 	// started goroutines and their shutdown handles.
 	drainDone   <-chan struct{}
@@ -194,6 +196,11 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	// Build the firewall before either agent receives its masking policy.
 	fw := setupFirewall(cfg)
+	c.shellReviews, err = shellreview.New(ctx, cfg.DirectoryGuard.ShellReview, sysAgentMask(fw.Engine), st.PutShellReview)
+	if err != nil {
+		c.Shutdown()
+		return nil, err
+	}
 
 	// Local triage advisor (opt-in): flags/incidents are offered to it from
 	// the drain loop; it never touches the enforcement path.
@@ -310,6 +317,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			BaseSources: fw.BaseSources,
 		},
 		Guard:         guardBroker,
+		ShellReviews:  c.shellReviews,
 		GuardIdentity: resolver.PermissionIdentity,
 		Correlator:    correlator,
 		Allowlist:     allowlistStore,
@@ -435,6 +443,7 @@ func (c *Components) Shutdown() {
 		if c.advisor != nil {
 			c.advisor.Close()
 		}
+		c.shellReviews.Close()
 		if c.apiListener != nil {
 			c.apiListener.Close()
 		}

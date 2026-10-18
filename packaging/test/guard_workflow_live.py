@@ -119,6 +119,16 @@ def run(daemon_binary, harness_binary):
             except (OSError, http.client.HTTPException):
                 return None
 
+        def attributed_session(pid, sid):
+            # The handshake is persisted before its activity event joins the
+            # process tree. Capture the baseline only after that join finishes.
+            return wait_for("attributed tool caller", lambda: next((
+                s for s in api("/sessions")
+                if s.get("id") == sid and s.get("root_pid") == pid
+                and s.get("root_started_at") and s.get("harness") == "claude"
+                and s.get("workspace") == str(workspace)
+            ), None))
+
         def request(operation="read", target=resource):
             harness.stdin.write(operation + "\n")
             harness.stdin.flush()
@@ -155,11 +165,9 @@ def run(daemon_binary, harness_binary):
                                            stderr=harness_log, text=True, start_new_session=True)
                 harness.stdin.write("observe\n"); harness.stdin.flush()
                 result("allow")
-                sessions = wait_for("attributed tool caller", lambda: [s for s in api("/sessions") if s.get("root_pid") == harness.pid])
-                session_id = sessions[0]["id"]
-                active_identity = {key: sessions[0].get(key) for key in ("id", "harness", "workspace", "root_pid", "root_started_at")}
-                require(active_identity["harness"] == "claude" and active_identity["workspace"] == str(workspace),
-                        "Active session identity is incomplete")
+                active_session = attributed_session(harness.pid, environment["SECURE_AGENT_SESSION_ID"])
+                session_id = active_session["id"]
+                active_identity = {key: active_session.get(key) for key in ("id", "harness", "workspace", "root_pid", "root_started_at")}
 
                 pending = request()
                 require(pending["session_id"] == session_id and pending["workspace"] == str(workspace), "Request identity does not match the observed session")
@@ -211,8 +219,7 @@ def run(daemon_binary, harness_binary):
                                                  cwd=workspace, env=ended_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                                  stderr=harness_log, text=True, start_new_session=True)
                 ended_harness.stdin.write("observe\n"); ended_harness.stdin.flush()
-                wait_for("ended caller session", lambda: [s for s in api("/sessions") if s.get("root_pid") == ended_harness.pid])
-                ended_identity = next(s for s in api("/sessions") if s.get("root_pid") == ended_harness.pid)
+                ended_identity = attributed_session(ended_harness.pid, ended_env["SECURE_AGENT_SESSION_ID"])
                 readable, _, _ = select.select([ended_harness.stdout], [], [], 12)
                 require(readable, "Ended tool caller did not return its observe result")
                 ended_line = ended_harness.stdout.readline()
@@ -239,7 +246,9 @@ def run(daemon_binary, harness_binary):
                 restored = wait_for("restored active session", lambda: next((s for s in api("/sessions") if s.get("id") == session_id and s.get("status") != "ended"), None))
                 ended_restored = wait_for("restored ended session", lambda: next((s for s in api("/sessions") if s.get("id") == ended_id and s.get("status") == "ended"), None))
                 for expected, actual in ((active_identity, restored), (ended_identity, ended_restored)):
-                    require(all(actual.get(key) == value for key, value in expected.items()), "Session identity changed across daemon restart")
+                    changes = {key: {"before": value, "after": actual.get(key)}
+                               for key, value in expected.items() if actual.get(key) != value}
+                    require(not changes, "Session identity changed across daemon restart: " + json.dumps(changes))
                 rows = api("/decision-scopes")
                 require(len(rows) == 2 and {r["id"] for r in rows} == set(revoked_ids)
                         and all(r.get("revoked_at") for r in rows), "Revocations were not retained after restart")

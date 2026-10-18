@@ -86,9 +86,49 @@ Enforcement points, honestly labeled:
 
 ## Failure posture
 
+### Shell classifier observations
+
+The optional shell review worker is independent of the advisor. Observe mode
+records risk hints asynchronously. Opt-in block mode adds a synchronous check
+after the existing guard permits a Bash command. Hard denials never consult
+the model and cannot become allows. Neither mode writes guard rules, resolves
+prompts, or covers unhooked harnesses.
+
+The block check permits continuation only for an unredacted routine result
+with a stored receipt. Review, unknown, invalid input or output, queue overflow,
+deadline expiry, and storage or transport failure deny. Its deadline includes
+queue wait. Replies bind to the submitted command and working directory, and
+no reply or receipt authorizes a subsequent call. A stored proposed verdict
+does not prove the hook received the reply or that a command executed.
+
+This is an optional extra restriction, not an OS security boundary. A fully
+privileged same-user process can bypass hooks, change their environment, or
+forge observations. Classifier mistakes can permit actions the existing guard
+does not deny. Enabling the daemon's block mode does not establish that a live
+harness invokes the check; per-session coverage still needs direct evidence.
+
+The classifier receives masked command and working-directory text as
+untrusted evidence, with no trusted user authorization. Hook-reported permission
+decisions are excluded from that input. It has no tools or
+filesystem access. Transport is loopback-only, ignores proxy environment
+variables, and refuses redirects. Model errors and invalid probability
+distributions produce unknown results. Routine answers below 0.9 reported
+probability become unknown observations, while the original model choice and
+scores remain inspectable. This cutoff is not a validated error bound; model
+confidence is not calibrated security confidence. Submitted identities and verdicts are hook-reported,
+not authenticated action receipts. A same-user process can forge observations.
+
+Inference, queue size, input size, response size, and stored history are
+bounded. Queue drops and write failures are visible in the observation API;
+unconfirmed hook delivery is recorded in the hook audit log. Missing records
+must not be interpreted as safe actions or complete coverage. See
+[shell review configuration](CONFIGURATION.md#optional-shell-risk-observations).
+
+### Guard failures
+
 | Failure | Behavior |
 |---|---|
-| Malformed hook payload (can't parse stdin) | **Fail open** (allow) — a crashed hook must not brick every tool call; harnesses failClosed covers hook crashes. |
+| Malformed hook payload (can't parse stdin) | **Fail closed** when shell block mode is selected; otherwise **fail open**, retaining the observation-only hook's behavior. |
 | Daemon unreachable in `prompt` mode | Claude: harness `ask`. Cursor: **fail closed** (deny). |
 | Daemon hangs in `prompt` mode | **Fail closed** after `SECURE_AGENT_PROMPT_DEADLINE_S` (default 45s). |
 | Corrupt `guard-modes.json` / cwd overrides | **Fail closed** (deny) + loud audit record. Never silently reverts to `monitor`. |

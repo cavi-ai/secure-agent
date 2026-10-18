@@ -81,6 +81,9 @@ type Route struct {
 
 // Table is the canonical API surface, ordered as registered.
 var Table = []Route{
+	{Path: "/guard/shell-review", Handler: "API.handleShellReview", Decide: true},
+	{Path: "/guard/shell-check", Handler: "API.handleShellCheck", Decide: true},
+	{Path: "/guard/shell-reviews", Handler: "API.handleShellReviews", Console: true, NoAgent: true},
 	{Path: "/status", Handler: "API.handleStatus", Response: "api.Status", Console: true},
 	{Path: "/sessions", Handler: "API.handleSessions", Response: "[]model.Session", Console: true},
 	{Path: "/sessions/", Handler: "API.handleSessionSubpath", Prefix: true, Leaves: []Leaf{{Path: "timeline", Handler: "serveSessionTimeline", Response: "[]event.Event"}, {Path: "report", Handler: "serveSessionReport", Response: "store.SessionReport"}, {Path: "memory", Handler: "serveSessionMemory", Response: "api.memoryResponse"}, {Path: "overview", Handler: "serveSessionOverview", Response: "api.SessionOverview"}, {Path: "outcomes", Handler: "serveSessionOutcomes", Response: "api.SessionOutcomes"}, {Path: "hooks", Handler: "serveSessionHooks", Response: "[]store.HookSummary"}, {Path: "hook-evidence", Handler: "serveHookEvidence", Response: "store.HookEvidencePage"}}, Console: true},
