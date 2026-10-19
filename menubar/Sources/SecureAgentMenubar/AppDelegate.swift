@@ -74,7 +74,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         launched = true
         if telemetryRepairRequested {
             telemetryRepairRequested = false
-            SetupManager.shared.reregisterESService()
+            Task { await SetupManager.shared.reregisterESService() }
         }
 
         state.onChange = { [weak self] in self?.updateStatusIcon() }
@@ -103,7 +103,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         }
         guard urls.contains(where: ESAutopilot.isRepairURL) else { return }
         if launched {
-            SetupManager.shared.reregisterESService()
+            Task { await SetupManager.shared.reregisterESService() }
         } else {
             telemetryRepairRequested = true
         }

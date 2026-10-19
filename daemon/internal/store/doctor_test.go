@@ -71,8 +71,8 @@ func TestDoctorSessionStats(t *testing.T) {
 	since := now.Add(-time.Hour)
 
 	total, named, withWS, withRepo := s.SessionIdentityStats(since)
-	if total != 5 || named != 4 || withWS != 2 || withRepo != 1 {
-		t.Fatalf("SessionIdentityStats = total %d named %d withWorkspace %d withRepo %d, want 5 4 2 1", total, named, withWS, withRepo)
+	if total != 4 || named != 3 || withWS != 2 || withRepo != 1 {
+		t.Fatalf("SessionIdentityStats = total %d named %d withWorkspace %d withRepo %d, want 4 3 2 1 (e started before since)", total, named, withWS, withRepo)
 	}
 	rows, err := s.DoctorWorkspaceRepos(since)
 	if err != nil || len(rows) != 2 || rows[0] != [2]string{"/w/a", "A"} || rows[1] != [2]string{"/w/b", ""} {

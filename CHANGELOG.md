@@ -23,7 +23,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: removing the old file-telemetry helper and the launch migration no longer freeze the menu bar.
 - Console: the polling fallback keeps refreshing every 2 s, posture shows stale after two minutes without a refresh, and review changes refresh the console.
 - Console: an older worktree read no longer overwrites a newer one, and markup escapes single quotes.
-- File telemetry starts when the collector appears after launch, and an oversized spool line is skipped and counted as lost instead of dropping the unread tail.
+- File telemetry starts when the collector appears after launch, restarts its helper from the new build after an update, and its repair no longer leaves the helper unregistered; an oversized spool line is skipped and counted as lost instead of dropping the unread tail.
+- Doctor: session identity counts sessions started since boot, so old unnamed sessions no longer fail it.
 - Probes: `lsof` and `launchctl` calls time out instead of hanging.
 - Retention: prune failures show in write health.
 - Findings: flags, incidents and the guard hook classify sensitive paths with one rule.

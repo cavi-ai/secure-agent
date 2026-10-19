@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -129,6 +130,92 @@ func TestVerifyExecutableRefusesWritableBinary(t *testing.T) {
 	}
 	if *asked != "" {
 		t.Fatal("a writable binary must be refused before the signature check")
+	}
+}
+
+// replaceFile swaps path for new content the way an app update does: a new
+// file renamed over the old one.
+func replaceFile(t *testing.T, path string, content string) {
+	t.Helper()
+	next := path + ".new"
+	if err := os.WriteFile(next, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutableReplaced(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "secure-agent-esd")
+	if err := os.WriteFile(exe, []byte("build 1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	started, err := os.Stat(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executableReplaced(exe, started) {
+		t.Fatal("the binary this process started from reads as replaced")
+	}
+	replaceFile(t, exe, "build 2")
+	if !executableReplaced(exe, started) {
+		t.Fatal("a binary renamed over the started one reads as unchanged")
+	}
+	if err := os.Remove(exe); err != nil {
+		t.Fatal(err)
+	}
+	if !executableReplaced(exe, started) {
+		t.Fatal("a removed binary reads as unchanged")
+	}
+}
+
+const esDenied = "eslogger exited: exit status 1 (stderr: Failed to create ES client: Not permitted to create an ES Client, " +
+	"responsible process needs TCC Full Disk Access authorization (ES_NEW_CLIENT_RESULT_ERR_NOT_PERMITTED))"
+
+// A collector whose binary an app update replaced exits nonzero at the first
+// denial so launchd starts the new binary: TCC never grants the stale one.
+func TestSuperviseESLoggerExitsWhenTheBinaryWasReplaced(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "secure-agent-esd")
+	if err := os.WriteFile(exe, []byte("build 1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	started, err := os.Stat(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaceFile(t, exe, "build 2")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runs := 0
+	err = superviseESLogger(ctx,
+		func() error { runs++; return errors.New(esDenied) },
+		func() bool { return executableReplaced(exe, started) })
+	if !errors.Is(err, errESReplaced) {
+		t.Fatalf("superviseESLogger = %v, want errESReplaced", err)
+	}
+	if IsESPermanentFailure(err) {
+		t.Fatal("a replaced binary must exit nonzero so launchd restarts the job")
+	}
+	if runs != 1 {
+		t.Fatalf("eslogger ran %d times, want 1", runs)
+	}
+}
+
+// An unchanged binary keeps waiting for the grant inside the process.
+func TestSuperviseESLoggerWaitsForTheGrantWhenUnchanged(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	runs := 0
+	err := superviseESLogger(ctx,
+		func() error { runs++; return errors.New(esDenied) },
+		func() bool { return false })
+	if err != nil {
+		t.Fatalf("superviseESLogger = %v, want nil on shutdown", err)
+	}
+	if runs != 1 {
+		t.Fatalf("eslogger ran %d times inside esRetryInterval, want 1", runs)
 	}
 }
 

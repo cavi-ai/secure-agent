@@ -327,6 +327,53 @@ final class TelemetryDoctorTests: XCTestCase {
         assertCheck(fresh, "full-disk-access", .pass, nil)
     }
 
+    /// An update replaced the bundle under the running collector: the cure
+    /// is a restart, not another Full Disk Access switch.
+    func testRunningHelperOlderThanItsBinaryOffersReregister() {
+        let checks = TelemetryDoctor.evaluate(facts {
+            $0.helperStale = true
+            $0.helperLogLastLine = "2026/10/19 15:33:17 es-collector: eslogger exited: exit status 1 (stderr: Failed to create ES client: "
+                + "Not permitted to create an ES Client, responsible process needs TCC Full Disk Access authorization "
+                + "(ES_NEW_CLIENT_RESULT_ERR_NOT_PERMITTED)) — waiting 1m0s for the eslogger permission grant"
+            $0.spoolMtime = self.now.addingTimeInterval(-3 * 86400)
+        })
+        assertCheck(checks, "launchd", .fail, .reregister)
+        XCTAssertTrue(check(checks, "launchd")?.cause.contains("pid 812 started before this build's helper was installed") == true)
+        assertCheck(checks, "full-disk-access", .warn, nil)
+
+        let awaitingApproval = TelemetryDoctor.evaluate(facts {
+            $0.helperStale = true
+            $0.serviceStatus = .requiresApproval
+        })
+        assertCheck(awaitingApproval, "launchd", .fail, nil)
+    }
+
+    func testHelperStaleOnlyWhenTheRunningProcessPredatesTheBinary() {
+        let running = LaunchdProbe.loaded(state: "running", pid: 577, lastExitCode: "(never exited)")
+        let started = now.addingTimeInterval(-4 * 86400)
+        XCTAssertTrue(TelemetryDoctor.helperStale(launchd: running, processStart: started, helperChanged: now))
+        XCTAssertFalse(TelemetryDoctor.helperStale(launchd: running, processStart: now, helperChanged: started))
+        XCTAssertFalse(TelemetryDoctor.helperStale(launchd: running, processStart: nil, helperChanged: now))
+        XCTAssertFalse(TelemetryDoctor.helperStale(launchd: running, processStart: started, helperChanged: nil))
+        XCTAssertFalse(TelemetryDoctor.helperStale(launchd: .loaded(state: "spawn scheduled", pid: nil, lastExitCode: "1"),
+                                                   processStart: started, helperChanged: now))
+        XCTAssertFalse(TelemetryDoctor.helperStale(launchd: .notFound, processStart: started, helperChanged: now))
+    }
+
+    func testProcessStartAndStatusChangeReadTheSystem() throws {
+        let before = Date()
+        let start = try XCTUnwrap(SetupManager.processStart(pid: Int(getpid())))
+        XCTAssertLessThanOrEqual(start, before)
+        XCTAssertGreaterThan(start, before.addingTimeInterval(-86400))
+
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("helper-\(UUID().uuidString)")
+        try Data("bin".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let changed = try XCTUnwrap(SetupManager.statusChangeDate(path: file.path))
+        XCTAssertGreaterThan(changed, start, "a file written now changed after this process started")
+        XCTAssertNil(SetupManager.statusChangeDate(path: file.path + ".missing"))
+    }
+
     func testAdhocSigned() {
         let checks = TelemetryDoctor.evaluate(facts {
             $0.appSignature = CodeSignature.parse(Self.codesignAdhocApp)

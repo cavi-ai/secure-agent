@@ -56,6 +56,11 @@ const (
 // errESBehind marks an eslogger the collector stopped for falling behind.
 var errESBehind = errors.New("eslogger fell behind")
 
+// errESReplaced marks a collector whose executable was replaced on disk after
+// it started. TCC refuses new ES clients to the stale process, so it exits
+// nonzero and launchd starts the job again from the new binary.
+var errESReplaced = errors.New("es-collector executable replaced since start")
+
 // esNow is the collector's clock; tests replace it.
 var esNow = time.Now
 
@@ -102,6 +107,33 @@ func verifyOwnIntegrity() error {
 	return verifyExecutable(exe)
 }
 
+// startedExecutable resolves and stats this process's executable, so the
+// file info names the binary that was exec'd.
+func startedExecutable() (string, os.FileInfo, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve self: %w", err)
+	}
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	info, err := os.Stat(exe)
+	if err != nil {
+		return "", nil, fmt.Errorf("stat self: %w", err)
+	}
+	return exe, info, nil
+}
+
+// executableReplaced reports whether exe is no longer the file described by
+// started: an app update swaps the bundle under the running collector.
+func executableReplaced(exe string, started os.FileInfo) bool {
+	now, err := os.Stat(exe)
+	if err != nil {
+		return true
+	}
+	return !os.SameFile(started, now) || !now.ModTime().Equal(started.ModTime()) || now.Size() != started.Size()
+}
+
 func verifyExecutable(exe string) error {
 	info, err := os.Stat(exe)
 	if err != nil {
@@ -120,6 +152,10 @@ func verifyExecutable(exe string) error {
 func runESCollector() error {
 	if os.Geteuid() != 0 {
 		return permanent(fmt.Errorf("must run as root (Endpoint Security requires it)"))
+	}
+	exe, started, err := startedExecutable()
+	if err != nil {
+		return permanent(err)
 	}
 	// Fail closed on a modified or writable binary. This runs BEFORE
 	// anything else touches the spool or eslogger.
@@ -142,13 +178,25 @@ func runESCollector() error {
 	health := newESCollectorHealth(collect.ESCollectorStatusPath, os.Getpid(), 30*time.Second)
 	defer health.Close()
 
+	return superviseESLogger(ctx,
+		func() error { return runESLoggerOnce(ctx, health) },
+		func() bool { return executableReplaced(exe, started) })
+}
+
+// superviseESLogger runs eslogger until shutdown or a clean exit: it restarts
+// one that fell behind and retries a denied one every esRetryInterval. Once
+// replaced reports a new binary on disk it returns errESReplaced instead.
+func superviseESLogger(ctx context.Context, runOnce func() error, replaced func() bool) error {
 	for {
-		err := runESLoggerOnce(ctx, health)
+		err := runOnce()
 		if ctx.Err() != nil {
 			return nil // shutdown: eslogger was killed by the context
 		}
 		if err == nil {
 			return nil
+		}
+		if replaced() {
+			return fmt.Errorf("%w: %v", errESReplaced, err)
 		}
 		if errors.Is(err, errESBehind) {
 			log.Printf("es-collector: %v — restarting eslogger and dropping the events it still held", err)
