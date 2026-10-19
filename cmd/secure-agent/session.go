@@ -69,12 +69,20 @@ func handleSession(client *http.Client) {
 		}
 	}
 	if arg == "" {
-		fmt.Println("usage: secure-agent session <id-or-prefix> [--json]")
+		fmt.Println("usage: secure-agent session <id-or-prefix> [--follow-up] [--json]")
 		os.Exit(1)
 	}
 	format := "md"
-	if slices.Contains(args, "--json") {
+	asJSON := slices.Contains(args, "--json")
+	if asJSON {
 		format = "json"
+	}
+	if slices.Contains(args, "--follow-up") {
+		if err := runSessionFollowUp(client, arg, asJSON, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, terminalSafe(err.Error()))
+			os.Exit(1)
+		}
+		return
 	}
 	if err := runSession(client, arg, format, os.Stdout); err != nil {
 		fmt.Println(err)

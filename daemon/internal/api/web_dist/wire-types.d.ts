@@ -786,10 +786,58 @@ export interface SessionOutcomeHistory {
   evidence: SessionOutcomeEvidence;
 }
 
+export interface SessionFollowUpEvidence {
+  id: string;
+  title: string;
+  revision: number;
+  decision_revision: number;
+  evidence_flag_id: string;
+  evidence_available: boolean;
+}
+
+export interface SessionProcessAction {
+  id: string;
+  kind: string;
+  status: string;
+  verification: string;
+  verified_by: string;
+  limits: string[] | null;
+}
+
+export interface SessionReportedAction {
+  incident_id: string;
+  step_id: string;
+  title: string;
+  action: string;
+  newer_evidence: boolean;
+  verification: string;
+}
+
+export interface SessionPermissionLink {
+  id: string;
+  kind: string;
+  ids: string[] | null;
+  title: string;
+  status: string;
+}
+
+export interface SessionFollowUp {
+  schema_version: number;
+  session_id: string;
+  observed_at: string;
+  partial: boolean;
+  sources: SessionOutcomeEvidence;
+  newer_evidence: SessionFollowUpEvidence[] | null;
+  process_actions: SessionProcessAction[] | null;
+  reported_actions: SessionReportedAction[] | null;
+  permissions: SessionPermissionLink[] | null;
+}
+
 export interface SessionOutcomes {
   session_id: string;
   observed_at: string;
   history: SessionOutcomeHistory;
+  follow_up: SessionFollowUp;
 }
 
 export interface HookSummary {

@@ -79,6 +79,9 @@ func TestSessionOutcomesRetainReceiptsWithoutReadingActivity(t *testing.T) {
 	if out.SessionID != "owned" || len(out.History.Incidents) != 1 || out.History.Incidents[0].ID != "owned-incident" || out.History.Incidents[0].Remediation.Steps[0].Status != "reported" {
 		t.Fatalf("lost receipt or crossed session boundary: %+v", out)
 	}
+	if out.FollowUp.SessionID != "owned" || out.FollowUp.Partial || out.FollowUp.ObservedAt != out.ObservedAt || len(out.FollowUp.ReportedActions) != 1 || out.FollowUp.ReportedActions[0].IncidentID != "owned-incident" {
+		t.Fatalf("follow-up lost identity, time, or retained reported action: %+v", out.FollowUp)
+	}
 	if len(out.History.Reviews) != 1 || out.History.Reviews[0].Decision == nil || out.History.Reviews[0].Context.SessionID != "owned" || out.History.Reviews[0].AvailableScopes != nil {
 		t.Fatalf("missing, actionable, or cross-session review: %+v", out.History.Reviews)
 	}
@@ -166,6 +169,9 @@ func TestSessionOutcomesRetainReceiptsWithoutReadingActivity(t *testing.T) {
 	}
 	if out.History.Evidence.Interventions.Available || !out.History.Evidence.Incidents.Available || len(out.History.Incidents) != 1 {
 		t.Fatalf("source failure erased readable receipts: %+v", out)
+	}
+	if !out.FollowUp.Partial || out.FollowUp.Sources.Interventions.Available || len(out.FollowUp.ReportedActions) != 1 {
+		t.Fatalf("partial source state lost or available sibling follow-up omitted: %+v", out.FollowUp)
 	}
 }
 

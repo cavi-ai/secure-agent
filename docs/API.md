@@ -952,6 +952,12 @@ A session row carries `origin` when an agent spawned it: `"<agent> (openclaw)"` 
 
 ---
 
+### `GET /sessions/{id}/outcomes`
+
+Returns retained `history` with independently available sources and a canonical `follow_up` view. The response's `session_id` and `observed_at` also appear in `follow_up`, alongside `schema_version: 1`, `partial`, `sources`, and four arrays: `newer_evidence`, `process_actions`, `reported_actions`, and `permissions`. CLI: `secure-agent session <id-or-prefix> --follow-up [--json]`.
+
+`sources` preserves each history source's `available`, `at_limit`, and `limit` fields. `partial` is true when any source is unavailable or at its record limit. Sources are read independently; the timestamp marks assembly, not an atomic snapshot. Permission links retain their saved scope IDs with status `unknown`; the endpoint does not check current applicability. Reported external actions have verification `not_verified`. Empty arrays describe retained records, not task success or complete inspection. A missing session returns `404`; a failed session identity lookup returns `503`, while independently unavailable receipt sources remain explicit in a `200` partial response. This read does not authorize or perform an action.
+
 ### 18b. `GET /sessions/{id}/memory`
 
 One session's retained history in time order: activity, findings, incidents, guard decisions and resource episodes. Rows carry allowlisted summaries only; raw paths, event detail, evidence and incident narratives stay in their source tables.

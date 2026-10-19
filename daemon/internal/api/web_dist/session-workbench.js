@@ -785,12 +785,47 @@ function validSessionOutcomes(data, id) {
     h.reviews.every(r => !r.decision || (typeof r.decision.action === 'string' && Number.isInteger(r.decision.revision))) &&
     (h.guards == null || (Array.isArray(h.guards) && h.guards.every(r => record(r) && r.session_id === id && typeof r.rule_id === 'string' && ['allow','deny'].includes(r.verdict) && typeof r.scope === 'string' && typeof r.at === 'string' && Number.isFinite(Date.parse(r.at)) && (r.scope_ids == null || (Array.isArray(r.scope_ids) && r.scope_ids.every(s => typeof s === 'string' && !!s)))) && h.evidence.guards && typeof h.evidence.guards.available === 'boolean' && Number.isInteger(h.evidence.guards.limit) && h.evidence.guards.limit > 0)) &&
     h.interventions.every(r => optionalArray(r.after) && optionalArray(r.limits)) &&
-    h.incidents.every(inc => !inc.remediation || (Array.isArray(inc.remediation.steps) && inc.remediation.steps.every(step => record(step) && step.item && typeof step.item === 'object')));
+    h.incidents.every(inc => !inc.remediation || (Array.isArray(inc.remediation.steps) && inc.remediation.steps.every(step => record(step) && step.item && typeof step.item === 'object'))) &&
+    validSessionFollowUp(data, id);
+}
+
+function validSessionFollowUp(data, id) {
+  if (!Object.prototype.hasOwnProperty.call(data, 'follow_up')) return true;
+  const f = data.follow_up, h = data.history;
+  const keys = ['reviews', 'incidents', 'interventions', 'guards'];
+  if (!f || f.schema_version !== 1 || f.session_id !== id || f.observed_at !== data.observed_at ||
+      !Number.isFinite(Date.parse(f.observed_at)) || typeof f.partial !== 'boolean' ||
+      !keys.every(key => {
+        const source = f.sources?.[key], expected = h.evidence[key];
+        return source && expected && typeof source.available === 'boolean' && typeof source.at_limit === 'boolean' &&
+          Number.isSafeInteger(source.limit) && source.limit > 0 && source.available === expected.available &&
+          source.at_limit === expected.at_limit && source.limit === expected.limit;
+      }) || f.partial !== keys.some(key => !f.sources[key].available || f.sources[key].at_limit) ||
+      !['newer_evidence', 'process_actions', 'reported_actions', 'permissions'].every(key => Array.isArray(f[key]))) return false;
+  const string = value => typeof value === 'string';
+  const unique = (rows, key) => new Set(rows.map(key)).size === rows.length;
+  if (!f.newer_evidence.every(row => row && string(row.id) && row.id && string(row.title) &&
+      Number.isSafeInteger(row.revision) && Number.isSafeInteger(row.decision_revision) &&
+      typeof row.evidence_available === 'boolean' && string(row.evidence_flag_id) &&
+      h.reviews.some(r => r.id === row.id && r.revision === row.revision && r.decision?.revision === row.decision_revision)) ||
+      !unique(f.newer_evidence, row => row.id)) return false;
+  if (!f.process_actions.every(row => row && string(row.id) && row.id && string(row.kind) && string(row.status) && string(row.verification) &&
+      Array.isArray(row.limits) && row.limits.every(string) && h.interventions.some(r => r.id === row.id)) ||
+      !unique(f.process_actions, row => row.id)) return false;
+  if (!f.reported_actions.every(row => row && string(row.incident_id) && string(row.step_id) && string(row.title) && string(row.action) &&
+      typeof row.newer_evidence === 'boolean' && row.verification === 'not_verified' &&
+      h.incidents.some(inc => inc.id === row.incident_id && inc.remediation?.steps.some(step => step.id === row.step_id))) ||
+      !unique(f.reported_actions, row => JSON.stringify([row.incident_id, row.step_id]))) return false;
+  const allowed = new Map(legacySessionOutcomePermissionLinks(data).map(link => [link.kind + ':' + link.id, new Set(link.ids)]));
+  return f.permissions.every(row => row && string(row.id) && string(row.title) && row.status === 'unknown' &&
+    ['review', 'guard'].includes(row.kind) && Array.isArray(row.ids) && row.ids.length > 0 && row.ids.length <= 128 &&
+    row.ids.every(value => string(value) && value && allowed.get(row.kind + ':' + row.id)?.has(value)) &&
+    new Set(row.ids).size === row.ids.length) && unique(f.permissions, row => row.kind + ':' + row.id);
 }
 
 // Only IDs saved with this session's decisions can contribute permission rows.
 // A receipt alone never establishes current applicability.
-function sessionOutcomePermissionLinks(data) {
+function legacySessionOutcomePermissionLinks(data) {
   const validIDs = ids => Array.isArray(ids) && ids.length > 0 && ids.length <= 128 && ids.every(id => typeof id === 'string' && !!id);
   const links = [];
   for (const r of data.history.reviews) {
@@ -806,22 +841,35 @@ function sessionOutcomePermissionLinks(data) {
   return links;
 }
 
+function sessionOutcomePermissionLinks(data) {
+  const legacy = legacySessionOutcomePermissionLinks(data);
+  if (!data.follow_up) return legacy;
+  return ['review', 'guard'].flatMap(kind => data.history.evidence[kind === 'review' ? 'reviews' : 'guards']?.available === true
+    ? data.follow_up.permissions.filter(link => link.kind === kind)
+    : legacy.filter(link => link.kind === kind));
+}
+
 function sessionFollowUpHTML(data, state = {}) {
   if (!data) return '';
   const h = data.history, stale = !!state.error || !!state.loading;
   // Read-only drill-downs re-read their own evidence. Keep them stable during
   // refresh so keyboard focus survives; suppress them after a failed read.
   const current = key => !state.error && h.evidence[key]?.available === true;
-  const evidenceRows = h.reviews.filter(r => r.decision && Number.isInteger(r.revision) && r.revision > r.decision.revision).map(r => {
+  const canonicalIDs = (key, source, identify = row => row.id) => data.follow_up && h.evidence[source]?.available === true
+    ? new Set(data.follow_up[key].map(identify)) : null;
+  const evidenceIDs = canonicalIDs('newer_evidence', 'reviews');
+  const processIDs = canonicalIDs('process_actions', 'interventions');
+  const reportedIDs = canonicalIDs('reported_actions', 'incidents', row => JSON.stringify([row.incident_id, row.step_id]));
+  const evidenceRows = h.reviews.filter(r => evidenceIDs ? evidenceIDs.has(r.id) : r.decision && Number.isInteger(r.revision) && r.revision > r.decision.revision).map(r => {
     const link = current('reviews') && r.evidence_available && r.evidence_flag_available && r.evidence_flag_id
       ? `<button type="button" class="link-btn" data-action="open-flag" data-id="${escapeHTML(r.evidence_flag_id)}">Review newer evidence</button>` : `<p>${stale ? 'Refresh results before reviewing newer evidence.' : 'Source evidence unavailable. Refresh results before reviewing.'}</p>`;
     return `<li data-row-id="follow-up:review:${escapeHTML(r.id)}"><strong>${escapeHTML(r.context?.rule || 'Finding review')}</strong><p>Decision for revision ${Number(r.decision.revision)} · now revision ${Number(r.revision)}. The saved decision does not cover this evidence.</p>${link}</li>`;
   });
-  const actionRows = h.interventions.filter(r => r.status !== 'cancelled' && !(r.status === 'applied' && (r.verification === 'observed' || (r.verification === 'verified' && r.verified_by === 'captured-family-absent')))).map(r =>
+  const actionRows = h.interventions.filter(r => processIDs ? processIDs.has(r.id) : r.status !== 'cancelled' && !(r.status === 'applied' && (r.verification === 'observed' || (r.verification === 'verified' && r.verified_by === 'captured-family-absent')))).map(r =>
     `<li data-row-id="follow-up:control:${escapeHTML(r.id)}" data-follow-up-id="${escapeHTML(r.id)}"><strong>Check process result</strong>${resourceOutcomeHTML(r)}<p>Inspect the recorded result before deciding whether another action is needed.</p></li>`);
   for (const inc of h.incidents) {
     for (const step of inc.remediation?.steps || []) {
-      if (step.status !== 'reported') continue;
+      if (reportedIDs ? !reportedIDs.has(JSON.stringify([inc.id, step.id])) : step.status !== 'reported') continue;
       actionRows.push(`<li data-row-id="follow-up:incident:${escapeHTML(inc.id)}:${escapeHTML(step.id)}"><strong>${escapeHTML(step.item.name)} · ${escapeHTML(step.item.action)}</strong><p>Action reported, not technically verified.${step.newer_evidence ? ' Newer evidence exists; this report does not cover it.' : ''}</p>${current('incidents') ? `<button type="button" class="link-btn" data-action="open-incident" data-id="${escapeHTML(inc.id)}">Review incident report</button>` : ''}</li>`);
     }
   }
