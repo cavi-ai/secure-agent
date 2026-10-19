@@ -7,7 +7,7 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
   // refresh cycle.
   const WORKTREE_TIMEOUT_MS = 200000;
   const worktreesState = { report: null, loading: false, error: '', loadedAt: 0, filter: { state: '', stale: false, q: '' },
-    ledger: null, ledgerLoading: false, ledgerAt: 0 };
+    ledger: null, ledgerLoading: false, ledgerAt: 0, selected: new Map(), selectionBusy: false, pendingRemovalSelections: new Map() };
   // While the daemon is still measuring sizes, the open tab re-reads the
   // cached report (cheap: no rescan) until the sizes land.
   const WORKTREE_SIZING_POLL_MS = 5000;
@@ -144,6 +144,7 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
       const rep = await r.json();
       if (read !== reportReads) return;
       worktreesState.report = rep;
+      reconcileWorktreeSelection();
       worktreesState.loadedAt = now();
       adoptRemovals(worktreesState.report);
       if (removalGroup.paths.length) paintRemovalToast();
@@ -251,6 +252,137 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
         }
       }
     }
+    for (const path of gone) {
+      worktreesState.selected.delete(path);
+      worktreesState.pendingRemovalSelections.delete(path);
+    }
+    reconcileWorktreeSelection();
+  }
+
+  function selectedWorktree(path) {
+    const rep = worktreesState.report;
+    for (const repo of (rep && rep.repos) || []) {
+      const w = (repo.worktrees || []).find(w => w.path === path);
+      if (w) return { w, repo, approval: worktreeSelectionApproval(w, repo, rep) };
+    }
+    return null;
+  }
+
+  const sameApproval = (a, b) => !!a && !!b && JSON.stringify(a) === JSON.stringify(b);
+
+  function reconcileWorktreeSelection() {
+    const restored = [];
+    for (const [path, approved] of worktreesState.pendingRemovalSelections) {
+      const current = selectedWorktree(path);
+      const removal = ((worktreesState.report && worktreesState.report.removals) || {})[path];
+      if (!current || (removal && removal.state === 'removed')) worktreesState.pendingRemovalSelections.delete(path);
+      else if (removal && removal.state === 'failed') {
+        worktreesState.pendingRemovalSelections.delete(path);
+        if (sameApproval(approved, current.approval)) {
+          worktreesState.selected.set(path, approved);
+          restored.push(path);
+        }
+      }
+    }
+    if (restored.length) toast(`Removal failed; marked again for review: ${restored.join(', ')}`, 'info');
+    const changed = [];
+    for (const [path, approved] of worktreesState.selected) {
+      const current = selectedWorktree(path);
+      if (current && sameApproval(approved, current.approval)) continue;
+      worktreesState.selected.delete(path);
+      changed.push(path);
+    }
+    if (changed.length) toast(`Removed from selection because inspection facts changed or the worktree is no longer eligible: ${changed.join(', ')}`, 'info');
+  }
+
+  function toggleWorktreeSelection(path) {
+    if (worktreesState.selectionBusy) return;
+    if (worktreesState.selected.has(path)) worktreesState.selected.delete(path);
+    else {
+      const current = selectedWorktree(path);
+      if (!current || !current.approval) return;
+      worktreesState.selected.set(path, current.approval);
+    }
+    render(['worktrees']);
+  }
+
+  function selectVisibleWorktrees(globalSearchTerm) {
+    if (worktreesState.selectionBusy) return;
+    const rep = worktreesState.report;
+    for (const { repo, rows } of worktreeGroups(rep, worktreesState.filter, globalSearchTerm)) {
+      for (const w of rows) {
+        const approval = worktreeSelectionApproval(w, repo, rep);
+        if (approval) worktreesState.selected.set(w.path, approval);
+      }
+    }
+    render(['worktrees']);
+  }
+
+  function clearWorktreeSelection() {
+    if (worktreesState.selectionBusy) return;
+    worktreesState.selected.clear();
+    worktreesState.pendingRemovalSelections.clear();
+    render(['worktrees']);
+  }
+
+  async function removeSelectedWorktrees() {
+    if (worktreesState.selectionBusy) return;
+    reconcileWorktreeSelection();
+    if (!worktreesState.selected.size) { render(['worktrees']); return; }
+    // Capture the exact approvals and displayed estimates before opening the
+    // dialog. A later refresh may invalidate them, never expand the batch.
+    const rows = [...worktreesState.selected].map(([path, approval]) => {
+      const { w } = selectedWorktree(path);
+      return Object.freeze({ approval, size: Object.freeze({ size_bytes: w.size_bytes, size_partial: w.size_partial }) });
+    });
+    worktreesState.selectionBusy = true;
+    render(['worktrees']);
+    const started = [];
+    const labels = {};
+    let attempted = false;
+    try {
+      const ok = await confirm(worktreeSelectionConfirm(rows), { title: 'Remove selected worktrees', okLabel: `Remove ${rows.length}` });
+      if (!ok) return;
+      for (const { approval } of rows) {
+        const path = approval.path;
+        const current = selectedWorktree(path);
+        if (!sameApproval(worktreesState.selected.get(path), approval) || !current || !sameApproval(current.approval, approval)) {
+          worktreesState.selected.delete(path);
+          toast(`Skipped ${path}: its inspection facts or selection changed. Review it again before removal.`, 'info');
+          continue;
+        }
+        attempted = true;
+        try {
+          if (approval.state === 'remove') {
+            const { r, text, json } = await postWorktree('/worktrees/remove', { path, async: true });
+            if (!r.ok || !json || !json.removal) throw new Error(text.trim() || String(r.status));
+            const rep = worktreesState.report;
+            if (rep) (rep.removals || (rep.removals = {}))[path] = json.removal;
+            worktreesState.pendingRemovalSelections.set(path, approval);
+            started.push(path);
+            if (approval.branch) labels[path] = approval.branch;
+            worktreesState.selected.delete(path);
+          } else {
+            const { r, text } = await postWorktree('/worktrees/review-trash', { path, head: approval.head, reasons: approval.reasons });
+            if (!r.ok) throw new Error(text.trim() || String(r.status));
+            dropWorktreeRows([path]);
+            toast(`Moved ${path} to the Trash`, 'success');
+          }
+        } catch (err) {
+          // A failed response may follow a completed operation. Refresh once
+          // after the batch; leave retries to an explicit user action.
+          toast(`Could not remove ${path}: ${err.message || err}`, 'danger');
+        }
+      }
+    } catch (err) {
+      toast(`Could not review selected worktrees: ${err.message || err}`, 'danger');
+    } finally {
+      trackRemovals(started, labels);
+      if (attempted) await Promise.all([loadWorktrees(false), loadLedger()]);
+      worktreesState.selectionBusy = false;
+      render(['worktrees']);
+      followWorktreeSizing();
+    }
   }
 
   // Worktree actions. The daemon re-inspects before removing and answers 409
@@ -298,6 +430,7 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
 
   // Remove all: every removable row of one repository after one dialog.
   async function removeAllWorktrees(repoPath) {
+    if (worktreesState.selectionBusy) return;
     const rep = worktreesState.report;
     const repo = rep && (rep.repos || []).find(r => r.path === repoPath);
     const rows = removableRows(repo, rep && rep.removals);
@@ -313,6 +446,7 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
   // Remove every removable worktree of every repository after one dialog
   // that counts them per repository.
   async function removeAllRemovable() {
+    if (worktreesState.selectionBusy) return;
     const { rows, bytes } = removableEverywhere(worktreesState.report);
     if (!rows.length) return;
     const perRepo = new Map();
@@ -413,6 +547,7 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
       const rep = await g.json();
       if (read === reportReads) {
         worktreesState.report = rep;
+        reconcileWorktreeSelection();
         adoptRemovals(rep);
         markDirty('worktrees');
       }
@@ -540,6 +675,7 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
       const ask = json && json.ask;
       const rep = worktreesState.report;
       if (rep && ask) (rep.asks || (rep.asks = {}))[path] = ask;
+      reconcileWorktreeSelection();
       render(['worktrees']);
       toast(`Asked ${ask ? ask.harness : 'the agent'} — its answer shows under the row`, 'info');
       worktreeSizingPolls = 0;
@@ -572,6 +708,7 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
       if (!r.ok) throw new Error(text.trim() || String(r.status));
       const rep = worktreesState.report;
       if (rep) rep.repos = (rep.repos || []).filter(x => x.path !== repo);
+      reconcileWorktreeSelection();
       render(['worktrees']);
       toast(`Hidden ${repo} — adding it again brings it back`, 'info');
     } catch (err) {
@@ -610,6 +747,10 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
     removeWorktree,
     removeAllWorktrees,
     removeAllRemovable,
+    toggleWorktreeSelection,
+    selectVisibleWorktrees,
+    clearWorktreeSelection,
+    removeSelectedWorktrees,
     revealWorktree,
     reconnectWorktree,
     trashOrphanWorktree,

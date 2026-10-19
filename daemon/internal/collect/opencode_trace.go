@@ -200,6 +200,7 @@ func (c *OpencodeCollector) pollOnce() int {
 	defer rows.Close()
 	published := 0
 	read := 0
+	backpressured := false
 	for rows.Next() {
 		var updated int64
 		var partID, sessionID, data, workspace string
@@ -208,11 +209,13 @@ func (c *OpencodeCollector) pollOnce() int {
 			return published
 		}
 		read++
-		position.Time, position.ID = updated, partID
-		if !c.rememberPart(partID, data) {
+		if !c.partChanged(partID, data) {
+			position.Time, position.ID = updated, partID
 			continue
 		}
-		for _, e := range OpencodePartEvents(sessionID, data, updated) {
+		events := OpencodePartEvents(sessionID, data, updated)
+		partComplete := true
+		for _, e := range events {
 			if e.CallID == "" {
 				e.CallID = "opencode-part:" + partID
 			}
@@ -225,19 +228,28 @@ func (c *OpencodeCollector) pollOnce() int {
 					e.CostUSD = ModelCostUSD(e.Model, e.TokensIn, e.TokensOut)
 				}
 			}
-			c.bus.Publish(e)
+			if !c.bus.TryPublish(e) {
+				partComplete = false
+				backpressured = true
+				break
+			}
 			published++
 			if c.OnSessionSeen != nil && workspace != "" {
 				c.OnSessionSeen(sessionID, "opencode", workspace, e.TS)
 			}
 		}
+		if !partComplete {
+			break
+		}
+		c.rememberPart(partID, data)
+		position.Time, position.ID = updated, partID
 	}
 	if err := rows.Err(); err != nil {
 		log.Printf("opencode: cursor error (partial poll): %v", err)
 		return published
 	}
 	*c.scan = position
-	if read < maxOpencodeRows {
+	if read < maxOpencodeRows && !backpressured {
 		c.watermark = max(c.watermark, position.Ceiling)
 		c.scan = nil
 	}
@@ -250,6 +262,11 @@ func (c *OpencodeCollector) pollOnce() int {
 		c.change.done(fp)
 	}
 	return published
+}
+
+func (c *OpencodeCollector) partChanged(id, data string) bool {
+	old, ok := c.seen[id]
+	return !ok || old != sha256.Sum256([]byte(data))
 }
 
 // opencodeModel is a session's model id and provider id.
