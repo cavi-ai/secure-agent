@@ -158,8 +158,8 @@ type Store struct {
 	fileFeed       atomic.Bool
 	fileFeedNewest atomic.Int64
 	// flagGen advances on every write to flags or advisor verdicts. Writers
-	// bump it under mu, and QueryFlags reads under mu, so a reader that loads
-	// it before querying never pairs a newer value with older rows.
+	// bump it after the write commits, so a reader that loads it before
+	// querying never pairs a newer value with older rows.
 	flagGen atomic.Uint64
 }
 
@@ -1038,9 +1038,8 @@ func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
 
 // GetFlag distinguishes a missing row from an unavailable or malformed
 // detail, using the same checked decoder as flag history.
+// GetFlag is one read statement, so it does not take mu.
 func (s *Store) GetFlag(id string) (model.Flag, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.getFlagResultLocked(id)
 }
 
@@ -1080,9 +1079,7 @@ func (s *Store) GetFlagWithAdvisor(id string) (model.Flag, bool) {
 	}
 	flags := []model.Flag{fl}
 	_ = s.AttachFindingReviewIDs(flags)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.attachAdvisorLocked(flags)
+	s.attachAdvisor(flags)
 	return flags[0], true
 }
 
@@ -1123,12 +1120,11 @@ func flagQuery(f FlagFilter) (string, []any) {
 }
 
 // QueryFlags never returns partial flags after a query, decode or
-// cursor error. Nullable optional fields in older schemas remain valid.
+// cursor error. Nullable optional fields in older schemas remain valid. It
+// is one read statement plus advice lookups, so it does not take mu: WAL
+// readers see the last committed state while a write is in progress.
 func (s *Store) QueryFlags(f FlagFilter) (out []model.Flag, readErr error) {
 	defer func() { s.noteRead("flags", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	q, args := flagQuery(f)
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
@@ -1138,7 +1134,7 @@ func (s *Store) QueryFlags(f FlagFilter) (out []model.Flag, readErr error) {
 	if err != nil {
 		return nil, err
 	}
-	s.attachAdvisorLocked(flags)
+	s.attachAdvisor(flags)
 	return flags, nil
 }
 
@@ -1340,8 +1336,9 @@ func (s *Store) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict
 	return nil
 }
 
-// attachAdvisorLocked joins stored verdicts onto flags (caller holds mu).
-func (s *Store) attachAdvisorLocked(flags []model.Flag) {
+// attachAdvisor joins stored verdicts onto flags. It only reads, so it needs
+// no mu.
+func (s *Store) attachAdvisor(flags []model.Flag) {
 	if len(flags) == 0 {
 		return
 	}
@@ -1349,7 +1346,7 @@ func (s *Store) attachAdvisorLocked(flags []model.Flag) {
 	for i := range flags {
 		ids[i] = flags[i].ID
 	}
-	verdicts, readErr := s.advisorVerdictsLocked(ids, "flag")
+	verdicts, readErr := s.advisorVerdicts(ids, "flag")
 	for i := range flags {
 		if v, ok := verdicts[flags[i].ID]; ok {
 			flags[i].Advisor = &v
@@ -1362,10 +1359,11 @@ func (s *Store) attachAdvisorLocked(flags []model.Flag) {
 // host-parameter limit.
 const advisorVerdictBatch = 500
 
-// advisorVerdictsLocked reads the verdicts of ids with one query per batch
-// (caller holds mu). A row that does not decode is left out and the first
-// error returned; the other verdicts are kept. Missing advice is not an error.
-func (s *Store) advisorVerdictsLocked(ids []string, kind string) (map[string]model.AdvisorVerdict, error) {
+// advisorVerdicts reads the verdicts of ids with one query per batch; it only
+// reads, so it needs no mu. A row that does not decode is left out and the
+// first error returned; the other verdicts are kept. Missing advice is not an
+// error.
+func (s *Store) advisorVerdicts(ids []string, kind string) (map[string]model.AdvisorVerdict, error) {
 	verdicts := make(map[string]model.AdvisorVerdict, len(ids))
 	unique := make([]string, 0, len(ids))
 	seen := make(map[string]struct{}, len(ids))
@@ -1540,9 +1538,6 @@ func eventRecordQuery(f EventFilter, withID bool, beforeID int64) (string, []any
 // incomplete reads. Decode and cursor errors never return partial evidence.
 func (s *Store) QueryEvents(f EventFilter) (out []event.Event, readErr error) {
 	defer func() { s.noteRead("events", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	q, args := eventQuery(f)
 	rows, err := s.db.Query(q, args...)
 	if err != nil {

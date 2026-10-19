@@ -473,13 +473,12 @@ func (s *Store) FindingReviewID(flagID string) (id string, readErr error) {
 }
 
 // AttachFindingReviewIDs preserves core flags and valid sibling links while
-// reporting a failed enrichment once for the whole batch.
+// reporting a failed enrichment once for the whole batch. It only reads, so
+// it does not take mu.
 func (s *Store) AttachFindingReviewIDs(flags []model.Flag) error {
 	if len(flags) == 0 {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var readErr error
 	for i := range flags {
 		id, err := s.findingReviewIDLocked(flags[i].ID)

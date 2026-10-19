@@ -9,10 +9,10 @@ type RecordedEvent struct {
 	Event event.Event
 }
 
+// QueryRecordedEvents reads one page without mu: it is a single read
+// statement, which WAL lets run beside a write.
 func (s *Store) QueryRecordedEvents(f EventFilter, beforeID int64) (out []RecordedEvent, earlier bool, readErr error) {
 	defer func() { s.noteRead("events", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	limit := f.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 200
