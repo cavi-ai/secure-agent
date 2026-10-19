@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +57,39 @@ func sessionTestClient(handler http.Handler) *http.Client {
 		handler.ServeHTTP(r, req)
 		return r.Result(), nil
 	})}
+}
+
+func TestHandleSessionFollowUpReadsOutcomes(t *testing.T) {
+	oldArgs := os.Args
+	os.Args = []string{"secure-agent", "session", "session-1", "--follow-up"}
+	t.Cleanup(func() { os.Args = oldArgs })
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	t.Cleanup(func() { os.Stdout = oldStdout; reader.Close(); writer.Close() })
+	outcomesCalled := false
+	client := sessionTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sessions/session-1/outcomes" {
+			outcomesCalled = true
+			io.WriteString(w, followUpEnvelope)
+			return
+		}
+		if r.URL.Path == "/sessions/session-1/report" {
+			io.WriteString(w, "full report\n")
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	handleSession(client)
+	writer.Close()
+	os.Stdout = oldStdout
+	reader.Close()
+	if !outcomesCalled {
+		t.Fatal("--follow-up did not request the session outcomes endpoint")
+	}
 }
 
 func TestRunSessionResolvesPrefixThroughEndpoint(t *testing.T) {

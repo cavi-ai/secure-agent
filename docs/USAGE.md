@@ -85,6 +85,10 @@ The CLI accepts a full session ID or a unique prefix of at least six characters.
 
 Results opens with **Needs follow-up**: newer evidence after a saved decision, process actions whose result needs checking, reported incident actions, and permissions linked to saved decisions. Expand a group to inspect evidence or current permission scope and expiry. Permission status is read separately; missing records remain unknown. Refresh results to update the snapshot. These groups describe retained records, not a safety verdict or proof that an external action succeeded.
 
+**Review follow-up from the terminal.** Run `secure-agent session <id-or-prefix> --follow-up` for those same groups, or add `--json` for a compact structured result. The output includes the session ID, read time, source availability and record limits. Linked permission IDs have unknown current status until their records are read separately. Reported remediation remains unverified.
+
+A successful follow-up read can be partial: JSON consumers must check `partial` and `sources`. An unavailable source or a reached record limit does not mean there is no work to review. Empty retained results do not establish task completion or safety. Read errors and unsupported older daemons exit nonzero; ordinary session exports remain available. Follow-up sources are read independently, so the timestamp describes the assembled view rather than an atomic snapshot. The command does not perform actions or change permissions.
+
 **Inspect hook findings and history.** Current session status and the Hooks view show repeated execution errors with a repair action, plus evidence-qualified advisories for repeated blocks, slow foreground callbacks and substantial context contributions. Findings require stable handler identity and the relevant measurements from a connected host. Live-session repair findings appear in Attention. History keeps errors separate from cancellations, distinguishes unknown measurements from zero, and shows cumulative runtime. Hook output text is never stored. An empty history does not establish that no hooks ran. See [hook history and host forwarding](HOOKS.md).
 
 **Inspect the permissions from a decision.** View permissions in Results opens only the scope IDs saved with that decision, with their exact resources, recipients, expiry, and revocation records. Missing records have unknown status; failed refreshes retain labeled last-known data and disable revocation. Revocation requires confirmation and a matching saved response. It does not undo past access or remaining exposure, and other permissions or legacy policies may still allow access. Back returns to the same session result.
@@ -198,6 +202,7 @@ Install the CLI from Setup's Optional capabilities. A source build places it at 
 | Read raw events or policy audit | `secure-agent events --limit 20`, `secure-agent audit --limit 20` |
 | List sessions | `secure-agent sessions` |
 | Export one retained session | `secure-agent session <id-or-prefix>` |
+| Review decisions and actions to check | `secure-agent session <id-or-prefix> --follow-up [--json]` |
 | Review model-call spend | `secure-agent cost --by repo`, `secure-agent cost --by day --tz 0` |
 | Inspect worktrees or cleanup history | `secure-agent worktrees`, `secure-agent cleanup log` |
 | Inspect remembered guard decisions | `secure-agent guard list` |
