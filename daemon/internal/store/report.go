@@ -76,6 +76,10 @@ const (
 	reportEventCap    = 20000
 	reportTimelineCap = 500
 	reportFlagLimit   = 1000
+	// Pool pressure must not delay reports, but decoding the supported
+	// event cap needs more time than a small indexed lookup.
+	reportEventAcquireTimeout = 100 * time.Millisecond
+	reportEventReadTimeout    = time.Second
 )
 
 // ReportTopN caps a SessionReport's Files and Hosts lists.
@@ -267,14 +271,30 @@ var sessionEventsSQL = `SELECT kind, ts, COALESCE(path,''), COALESCE(remote_host
 // in time order (insertion order breaks ties).
 func (s *Store) sessionEventsOldestFirst(id string) (out []event.Event, readErr error) {
 	defer func() { s.noteRead("session report events", readErr) }()
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	rows, err := s.db.QueryContext(ctx, sessionEventsSQL, id, reportEventCap)
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), reportEventAcquireTimeout)
+	conn, err := s.db.Conn(waitCtx)
+	cancelWait()
 	if err != nil {
 		return nil, err
 	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), reportEventReadTimeout)
+	defer cancel()
+	rows, err := conn.QueryContext(ctx, sessionEventsSQL, id, reportEventCap)
+	if err != nil {
+		return nil, err
+	}
+	return scanSessionEvents(ctx, rows)
+}
+
+// scanSessionEvents discards the entire source on cancellation, decode or
+// cursor failure.
+func scanSessionEvents(ctx context.Context, rows *sql.Rows) ([]event.Event, error) {
 	defer rows.Close()
-	out = []event.Event{}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out := []event.Event{}
 	for rows.Next() {
 		var e event.Event
 		var kind int
@@ -287,10 +307,11 @@ func (s *Store) sessionEventsOldestFirst(id string) (out []event.Event, readErr 
 			return nil, err
 		}
 		e.Kind = event.Kind(kind)
-		e.TS, err = time.Parse(time.RFC3339Nano, ts)
+		at, err := time.Parse(time.RFC3339Nano, ts)
 		if err != nil {
 			return nil, errors.New("invalid session event timestamp")
 		}
+		e.TS = at
 		if math.IsInf(cost.Float64, 0) || math.IsNaN(cost.Float64) {
 			return nil, errors.New("nonfinite session report event cost")
 		}
@@ -302,6 +323,9 @@ func (s *Store) sessionEventsOldestFirst(id string) (out []event.Event, readErr 
 		return nil, err
 	}
 	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return out, nil
