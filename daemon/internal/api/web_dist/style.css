@@ -1654,7 +1654,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
   --session-workbench-height: 560px;
   --session-split-height: 320px;
   display: flex; flex-direction: column; height: var(--session-workbench-height, 560px);
-  min-height: 300px; overflow: hidden;
+  min-height: 300px; overflow: hidden; container: session-board / inline-size;
 }
 .session-toolbar { flex: none; gap: 6px 10px; padding: 8px 12px; }
 .session-toolbar .harness-filter-text { max-width: 300px; min-width: 160px; margin-left: auto; }
@@ -1792,7 +1792,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
   .session-card .sc-pulse.active { animation: sc-breathe 2.4s ease-in-out infinite; }
   @keyframes sc-breathe { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 }
-.session-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.session-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; container: session-detail / inline-size; }
 .session-detail > .empty { flex: 1; padding: 24px; }
 .sd-list-toggle { min-height: 44px; }
 @media (min-width: 901px) {
@@ -1921,6 +1921,20 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
   .session-detail-head { grid-column: 1; grid-row: 1; }
   .session-detail-actions { grid-column: 2; grid-row: 1; margin-bottom: 0; }
   .sd-detail-controls { grid-column: 1 / -1; }
+}
+@container session-board (max-width: 720px) {
+  .session-split { grid-template-columns: minmax(160px, 42%) minmax(0, 1fr); }
+  .session-rail { width: auto; min-width: 160px; max-width: none; }
+}
+@container session-detail (max-width: 640px) {
+  .session-detail-chrome { display: flex; flex-direction: column; }
+  .session-detail-actions { justify-content: flex-start; flex-wrap: wrap; }
+  .session-detail-actions .sd-export { margin-left: 0; }
+}
+@container session-detail (max-width: 220px) {
+  .session-detail-head { flex-wrap: wrap; }
+  .session-detail-head h3 { flex-basis: 100%; order: 1; }
+  .session-detail-chrome { padding-inline: 4px; }
 }
 @media (max-width: 900px) {
   .session-split { grid-template-columns: minmax(0, 1fr); }

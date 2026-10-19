@@ -27,7 +27,8 @@
   const body=()=>document.querySelector('#session-detail .session-detail-body');
   const refresh=async()=>{box().querySelector('[data-action="session-outcomes-retry"]').click();await idle();};
   ready().then(async()=>{
-    const probe={};
+    const probe={viewport:{innerWidth,innerHeight,visualViewportWidth:window.visualViewport?.width||0,
+      visualViewportHeight:window.visualViewport?.height||0,devicePixelRatio:window.devicePixelRatio,screenWidth:screen.width}};
     try {
       openTab('sessions');await wait(()=>!!document.querySelector(`#session-rail [data-id="${sid}"]`));
       document.querySelector(`#session-rail [data-id="${sid}"]`).click();await idle();
@@ -42,9 +43,32 @@
       box().querySelector('[data-action="open-flag"]').click();await wait(()=>document.querySelector('#drawer-body').textContent.includes('New sensitive read'));await idle();
       document.querySelector('#btn-drawer-back').click();await idle();
       probe.back=window.SA.sessionView==='results' && document.activeElement.dataset.id==='follow-up-flag';
+      const closedTitle=document.querySelector('#session-detail .session-detail-head h3');
+      probe.closedHeader={sessionId:window.SA.selectedSessionId,title:closedTitle.textContent,
+        titleWidth:closedTitle.getBoundingClientRect().width,titleFont:getComputedStyle(closedTitle).fontSize,
+        detailWidth:document.querySelector('#session-detail').getBoundingClientRect().width};
       group('permissions').querySelector('summary').click();await idle();
       probe.scoped=box().textContent.includes('Timed permission') && box().textContent.includes('Current status unknown') && !box().textContent.includes('unrelated-resource');
-      box().querySelector('[data-action="session-guard-permissions"]').click();await wait(()=>document.querySelector('#drawer-body').textContent.includes('scope-missing'));await idle();
+      const linkedPermission=box().querySelector('[data-action="session-guard-permissions"]');
+      linkedPermission.click();await wait(()=>document.querySelector('#drawer-body').textContent.includes('scope-missing'));await idle();
+      const drawer=document.querySelector('#drawer');
+      drawer.getAnimations({subtree:true}).forEach(animation=>{try{animation.finish();}catch{}});
+      const title=document.querySelector('#session-detail .session-detail-head h3');
+      const titleRect=title.getBoundingClientRect();
+      const drawerTitle=document.querySelector('#drawer .drawer-head h3');
+      const drawerTitleRect=drawerTitle.getBoundingClientRect();
+      const permissionHead=document.querySelector('#drawer-body [data-session-part="permissions-head"]');
+      const panel=document.querySelector('#drawer .drawer-panel');
+      const panelRect=panel.getBoundingClientRect();
+      const rectOf=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {left:r.left,right:r.right,width:r.width};};
+      const controls=['#btn-drawer-back','#btn-drawer-close','#drawer-body [data-action="session-permissions-refresh"]']
+        .map(selector=>{const node=document.querySelector(selector);if(!node)return {selector,missing:true};const r=node.getBoundingClientRect();const style=getComputedStyle(node);const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {selector,width:r.width,height:r.height,left:r.left,right:r.right,top:r.top,bottom:r.bottom,hidden:node.hidden||style.display==='none'||style.visibility==='hidden',hittable:!!hit&&(node===hit||node.contains(hit))};});
+      probe.layout={sessionId:window.SA.selectedSessionId,title:title.textContent,titleWidth:titleRect.width,titleFont:getComputedStyle(title).fontSize,
+        drawerTitle:drawerTitle.textContent,drawerTitleWidth:drawerTitleRect.width,drawerTitleFont:getComputedStyle(drawerTitle).fontSize,
+        sessionIdentityVisible:!!permissionHead&&permissionHead.textContent.includes(sid)&&permissionHead.getClientRects().length>0,
+        board:rectOf('#session-board-panel'),split:rectOf('#session-board-panel .session-split'),
+        rail:rectOf('#session-rail'),detail:rectOf('#session-detail'),
+        panelWidth:panelRect.width,panelLeft:panelRect.left,panelRight:panelRect.right,controls};
       probe.permissions=document.querySelector('#drawer-body').textContent.includes('Expires') && !document.querySelector('#drawer-body').textContent.includes('unrelated-resource');
       document.querySelector('#btn-drawer-back').click();await idle();
       scopeRevoked=true;await refresh();probe.revoked=box().textContent.includes('Revoked');
