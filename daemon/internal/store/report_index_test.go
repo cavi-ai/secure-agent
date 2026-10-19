@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -110,11 +111,62 @@ func TestReportEventsReadTheOldestEventsAtTheCap(t *testing.T) {
 		SELECT 1, '2026-10-19T00:00:00.' || printf('%09d',20001-x) || 'Z', 'owned', '/fixture', 'example.test', 'fixture', 'Read', 'ok', 3, 'model', 7, 2, 0.1 FROM n`); err != nil {
 		t.Fatal(err)
 	}
-	events, err := s.sessionEventsOldestFirst("owned")
+	// Verify the production query and decoder independently of elapsed time:
+	// race instrumentation and runner load can consume the read budget.
+	rows, err := s.db.QueryContext(t.Context(), sessionEventsSQL, "owned", reportEventCap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := scanSessionEvents(t.Context(), rows)
 	if err != nil || len(events) != 20000 {
 		t.Fatalf("capped report read = %d events, %v", len(events), err)
 	}
 	if first, last := events[0], events[len(events)-1]; first.TS.Nanosecond() != 0 || last.TS.Nanosecond() != 19999 || first.TokensIn != 7 || last.ToolName != "Read" {
 		t.Fatalf("report selected the wrong boundary rows: first=%+v last=%+v", first, last)
+	}
+}
+
+func TestReportEventDecoderRejectsCanceledCursor(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.db.Exec(`INSERT INTO events(kind,ts,session_id) VALUES (1,'2026-10-19T00:00:00Z','owned')`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, sessionEventsSQL, "owned", reportEventCap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	events, err := scanSessionEvents(ctx, rows)
+	if !errors.Is(err, context.Canceled) || events != nil {
+		t.Fatalf("canceled cursor returned evidence: %v, %v", events, err)
+	}
+	if events, err := s.sessionEventsOldestFirst("owned"); err != nil || len(events) != 1 {
+		t.Fatalf("cursor cancellation prevented recovery: %v, %v", events, err)
+	}
+}
+
+func TestReportEventDecoderDiscardsRowsBeforeInvalidCost(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.db.Exec(`INSERT INTO events(kind,ts,session_id,cost_usd) VALUES
+		(1,'2026-10-19T00:00:00Z','owned',1),
+		(1,'2026-10-19T00:00:01Z','owned',?)`, math.Inf(1)); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.db.QueryContext(t.Context(), sessionEventsSQL, "owned", reportEventCap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events, err := scanSessionEvents(t.Context(), rows); err == nil || events != nil {
+		t.Fatalf("invalid later row returned partial evidence: %v, %v", events, err)
 	}
 }

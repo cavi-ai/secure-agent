@@ -284,8 +284,17 @@ func (s *Store) sessionEventsOldestFirst(id string) (out []event.Event, readErr 
 	if err != nil {
 		return nil, err
 	}
+	return scanSessionEvents(ctx, rows)
+}
+
+// scanSessionEvents discards the entire source on cancellation, decode or
+// cursor failure.
+func scanSessionEvents(ctx context.Context, rows *sql.Rows) ([]event.Event, error) {
 	defer rows.Close()
-	out = []event.Event{}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out := []event.Event{}
 	for rows.Next() {
 		var e event.Event
 		var kind int
@@ -298,10 +307,11 @@ func (s *Store) sessionEventsOldestFirst(id string) (out []event.Event, readErr 
 			return nil, err
 		}
 		e.Kind = event.Kind(kind)
-		e.TS, err = time.Parse(time.RFC3339Nano, ts)
+		at, err := time.Parse(time.RFC3339Nano, ts)
 		if err != nil {
 			return nil, errors.New("invalid session event timestamp")
 		}
+		e.TS = at
 		if math.IsInf(cost.Float64, 0) || math.IsNaN(cost.Float64) {
 			return nil, errors.New("nonfinite session report event cost")
 		}
@@ -313,6 +323,9 @@ func (s *Store) sessionEventsOldestFirst(id string) (out []event.Event, readErr 
 		return nil, err
 	}
 	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return out, nil
