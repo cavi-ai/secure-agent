@@ -2,6 +2,7 @@ package collect
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -256,6 +257,298 @@ func TestHermesWatermarkPersists(t *testing.T) {
 	}
 	if st := c2.Status(); st.DBs[0].Watermark != 6 {
 		t.Fatalf("status = %+v, want the root db at 6", st)
+	}
+}
+
+func TestHermesRetriesRejectedEventsAfterRestart(t *testing.T) {
+	root, _, _ := hermesFixture(t)
+	state := filepath.Join(t.TempDir(), "hermes-watermark.json")
+	b := bus.New(1)
+	sub := b.Subscribe()
+	c := NewHermesCollector(b, time.Second)
+	c.Configured = root
+	c.StatePath = state
+	c.now = func() time.Time { return hermesAt(3600) }
+	c.pollOnce()
+	// Re-poll the unchanged databases while the subscriber remains full, then
+	// drain and retry without inserting rows or touching the source files.
+	if n := c.pollOnce(); n != 0 {
+		t.Fatalf("full subscriber accepted %d additional events", n)
+	}
+	var got []event.Event
+	select {
+	case e := <-sub:
+		got = append(got, e)
+	default:
+		t.Fatal("initial event was not present in the capacity-one subscriber")
+	}
+	for i := 0; i < 20; i++ {
+		c.pollOnce()
+		select {
+		case e := <-sub:
+			got = append(got, e)
+		default:
+		}
+	}
+	var turns, toolEvents, toolStarts, modelCalls int
+	for _, e := range got {
+		switch e.Kind {
+		case event.KindTurn:
+			turns++
+		case event.KindToolCall:
+			toolEvents++
+			if e.ToolStatus == "running" {
+				toolStarts++
+			}
+		case event.KindModelCall:
+			modelCalls++
+		}
+	}
+	if len(got) < 2 || got[1].Kind != event.KindToolCall || got[1].CallID != "call-1" || got[1].ToolStatus != "running" {
+		t.Fatalf("first retried assistant row event = %+v, want call-1 start before its second call", got)
+	}
+	if len(got) != 9 || turns != 2 || toolEvents != 4 || toolStarts != 2 || modelCalls != 3 {
+		t.Fatalf("retried %d events (turns=%d tool events=%d tool starts=%d model calls=%d), want all retained row and usage events", len(got), turns, toolEvents, toolStarts, modelCalls)
+	}
+	// A fresh collector loads the checkpoint written after complete delivery.
+	b2 := bus.New(1)
+	c2 := NewHermesCollector(b2, time.Second)
+	c2.Configured = root
+	c2.StatePath = state
+	c2.now = func() time.Time { return hermesAt(3600) }
+	if n := c2.pollOnce(); n != 0 {
+		t.Fatalf("reloaded checkpoint emitted %d events after complete delivery", n)
+	}
+}
+
+func TestHermesRetriesPendingBatchAfterRestartPastFirstSightWindow(t *testing.T) {
+	root, main, _ := hermesFixture(t)
+	// Keep a nonzero first-sight checkpoint, with newer rows still to collect.
+	hermesExec(t, main, fmt.Sprintf(`UPDATE messages SET timestamp = %f WHERE id = 1`, hermesT0-48*60*60))
+	hermesExec(t, main,
+		fmt.Sprintf(`INSERT INTO sessions (id, source, model, started_at, input_tokens) VALUES ('s-new', 'cli', 'gpt-5', %f, 20)`, hermesT0+20),
+		fmt.Sprintf(`INSERT INTO messages (id, session_id, role, timestamp, token_count) VALUES
+			(6, 's-new', 'user', %f, 2), (7, 's-new', 'assistant', %f, 10)`, hermesT0+20, hermesT0+21),
+		`INSERT INTO session_model_usage (session_id, model, task, input_tokens, output_tokens, estimated_cost_usd) VALUES
+			('s-new', 'gpt-5', 'main', 20, 10, 0.001)`)
+	state := filepath.Join(t.TempDir(), "hermes-watermark.json")
+	b := bus.New(1)
+	sub := b.Subscribe()
+	c := NewHermesCollector(b, time.Second)
+	c.Configured = root
+	c.StatePath = state
+	c.now = func() time.Time { return hermesAt(3600) }
+	c.pollOnce()
+	select {
+	case e := <-sub:
+		if e.Kind != event.KindToolCall || e.CallID != "call-1" || e.ToolStatus != "running" {
+			t.Fatalf("first accepted event = %+v, want call-1 start", e)
+		}
+	default:
+		t.Fatal("first accepted event missing")
+	}
+	data, err := os.ReadFile(state)
+	if err != nil {
+		t.Fatalf("read first-sight checkpoint while delivery is pending: %v", err)
+	}
+	var checkpoint hermesState
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
+		t.Fatalf("decode first-sight checkpoint: %v", err)
+	}
+	if checkpoint.DBs[filepath.Join(root, "state.db")] != 1 {
+		t.Fatalf("persisted root checkpoint = %d, want first-sight watermark 1", checkpoint.DBs[filepath.Join(root, "state.db")])
+	}
+
+	// The source is unchanged, but its rows are now outside first-sight's
+	// lookback. Only the persisted watermark can resume this pending batch.
+	b2 := bus.New(1)
+	sub2 := b2.Subscribe()
+	c2 := NewHermesCollector(b2, time.Second)
+	c2.Configured = root
+	c2.StatePath = state
+	c2.now = func() time.Time { return hermesAt(3600 + 3*24*60*60) }
+	var retried []event.Event
+	for i := 0; i < 20; i++ {
+		c2.pollOnce()
+		select {
+		case e := <-sub2:
+			retried = append(retried, e)
+		default:
+		}
+	}
+	var turns, toolEvents, modelCalls int
+	foundSibling := false
+	for _, e := range retried {
+		switch e.Kind {
+		case event.KindTurn:
+			turns++
+		case event.KindToolCall:
+			toolEvents++
+			foundSibling = foundSibling || (e.CallID == "call-2" && e.ToolStatus == "running")
+		case event.KindModelCall:
+			modelCalls++
+		}
+	}
+	if len(retried) != 8 || turns != 2 || toolEvents != 4 || modelCalls != 2 || !foundSibling {
+		t.Fatalf("restarted collector retried %d events (turn=%d tool=%d model=%d sibling=%v), want all rejected row and usage events", len(retried), turns, toolEvents, modelCalls, foundSibling)
+	}
+}
+
+func TestHermesRetriesExistingSessionUsageDeltaAfterRestart(t *testing.T) {
+	root, main, profile := hermesFixture(t)
+	state := filepath.Join(t.TempDir(), "hermes-watermark.json")
+	b0 := bus.New(64)
+	sub0 := b0.Subscribe()
+	c0 := NewHermesCollector(b0, time.Second)
+	c0.Configured = root
+	c0.StatePath = state
+	c0.now = func() time.Time { return hermesAt(3600) }
+	drainOpenclaw(sub0, c0.pollOnce())
+
+	// Grow usage for a pre-existing session without changing its messages, and
+	// add one profile event that can checkpoint while the root usage is pending.
+	hermesExec(t, main, `UPDATE session_model_usage SET input_tokens = input_tokens + 200, output_tokens = output_tokens + 30,
+		estimated_cost_usd = estimated_cost_usd + 0.001 WHERE task = 'main'`)
+	hermesExec(t, profile, fmt.Sprintf(`INSERT INTO messages (session_id, role, content, timestamp, token_count)
+		VALUES ('p-1', 'assistant', 'new output', %f, 15)`, hermesT0+12))
+
+	b1 := bus.New(1)
+	sub1 := b1.Subscribe()
+	b1.Publish(event.Event{Kind: event.KindTurn, SessionID: "capacity-sentinel"})
+	c1 := NewHermesCollector(b1, time.Second)
+	c1.Configured = root
+	c1.StatePath = state
+	c1.now = func() time.Time { return hermesAt(3600) }
+	c1.pollOnce() // root delta is rejected; the profile event is also pending.
+	select {
+	case e := <-sub1:
+		if e.SessionID != "capacity-sentinel" {
+			t.Fatalf("buffered event = %+v, want capacity sentinel", e)
+		}
+	default:
+		t.Fatal("capacity sentinel missing")
+	}
+	profilePath := filepath.Join(root, "profiles", "work", "state.db")
+	if n := c1.pollDB(c1.dbs[profilePath]); n != 1 {
+		t.Fatalf("profile pending event accepted %d, want one", n)
+	}
+	if e := <-sub1; e.SessionID != "p-1" {
+		t.Fatalf("profile checkpoint event = %+v, want p-1", e)
+	}
+
+	// The profile's successful saveState must not persist the root's mutated
+	// working usage baseline while its event batch is still rejected.
+	b2 := bus.New(1)
+	sub2 := b2.Subscribe()
+	c2 := NewHermesCollector(b2, time.Second)
+	c2.Configured = root
+	c2.StatePath = state
+	c2.now = func() time.Time { return hermesAt(3600) }
+	if n := c2.pollOnce(); n != 1 {
+		t.Fatalf("restarted root usage poll accepted %d events, want one delta", n)
+	}
+	select {
+	case e := <-sub2:
+		if e.Kind != event.KindModelCall || e.SessionID != "s-child" || e.TokensIn != 200 || e.TokensOut != 30 {
+			t.Fatalf("recovered usage delta = %+v, want s-child +200/+30", e)
+		}
+	default:
+		t.Fatal("restarted collector did not emit the rejected existing-session usage delta")
+	}
+	if n := c2.pollOnce(); n != 0 {
+		t.Fatalf("unchanged usage poll emitted %d duplicate events", n)
+	}
+	select {
+	case e := <-sub2:
+		t.Fatalf("unchanged usage poll duplicated event %+v", e)
+	default:
+	}
+}
+
+func TestHermesLoadsLegacyWatermarkWithoutHistoricalUsage(t *testing.T) {
+	root, _, _ := hermesFixture(t)
+	mainPath := filepath.Join(root, "state.db")
+	state := filepath.Join(t.TempDir(), "legacy-watermark.json")
+	data, err := json.Marshal(hermesState{DBs: map[string]int64{mainPath: 5}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(state, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New(4)
+	sub := b.Subscribe()
+	c := NewHermesCollector(b, time.Second)
+	c.Configured = root
+	c.StatePath = state
+	c.loadState()
+	d := c.db(mainPath)
+	if !d.started || d.watermark != 5 || len(d.usage) != 0 || len(d.live) != 0 {
+		t.Fatalf("legacy checkpoint loaded as %+v", d)
+	}
+	if n := c.pollDB(d); n != 0 {
+		t.Fatalf("legacy watermark emitted %d historical usage events", n)
+	}
+	select {
+	case e := <-sub:
+		t.Fatalf("legacy watermark emitted historical event %+v", e)
+	default:
+	}
+}
+
+func TestHermesPersistsZeroDeltaUsageBaseline(t *testing.T) {
+	root, _, _ := hermesFixture(t)
+	state := filepath.Join(t.TempDir(), "hermes-watermark.json")
+	b0 := bus.New(64)
+	c0 := NewHermesCollector(b0, time.Second)
+	c0.Configured = root
+	c0.StatePath = state
+	c0.now = func() time.Time { return hermesAt(3600) }
+	c0.pollOnce()
+
+	// Load the committed live-session baseline, remove its backing file, then
+	// read unchanged SQLite state. A zero-event poll must recreate the checkpoint.
+	b1 := bus.New(4)
+	c1 := NewHermesCollector(b1, time.Second)
+	c1.Configured = root
+	c1.StatePath = state
+	c1.loadState()
+	if err := os.Remove(state); err != nil {
+		t.Fatal(err)
+	}
+	d := c1.db(filepath.Join(root, "state.db"))
+	if n := c1.pollDB(d); n != 0 {
+		t.Fatalf("unchanged usage baseline emitted %d events", n)
+	}
+	if _, err := os.Stat(state); err != nil {
+		t.Fatalf("zero-delta usage read did not persist its baseline: %v", err)
+	}
+}
+
+func TestHermesPendingFlushPreservesReadError(t *testing.T) {
+	root, _, _ := hermesFixture(t)
+	b := bus.New(1)
+	sub := b.Subscribe()
+	c := NewHermesCollector(b, time.Second)
+	d := c.db(filepath.Join(root, "state.db"))
+	d.lastErr = "usage query: transient failure"
+	d.pending = &hermesPending{
+		events: []event.Event{{Kind: event.KindTurn, SessionID: "s-child"}},
+		clean:  true, sessions: map[string]hermesSession{},
+	}
+	if n := c.pollDB(d); n != 1 {
+		t.Fatalf("pending flush accepted %d events, want 1", n)
+	}
+	select {
+	case <-sub:
+	default:
+		t.Fatal("pending event was not delivered")
+	}
+	if d.lastErr != "usage query: transient failure" {
+		t.Fatalf("pending flush cleared read error without a read: %q", d.lastErr)
+	}
+	if n := c.pollDB(d); n != 0 || d.lastErr != "" {
+		t.Fatalf("successful follow-up read = events %d, error %q; want cleared error", n, d.lastErr)
 	}
 }
 
