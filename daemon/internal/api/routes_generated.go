@@ -13,8 +13,12 @@ import (
 
 func (a *API) routes() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
+		"/guard/shell-review":           a.handleShellReview,
+		"/guard/shell-check":            a.handleShellCheck,
+		"/guard/shell-reviews":          a.handleShellReviews,
 		"/status":                       a.handleStatus,
 		"/sessions":                     a.handleSessions,
+		"/sessions/resolve":             a.handleResolveSessionPrefix,
 		"/sessions/":                    a.handleSessionSubpath,
 		"/resources":                    a.handleResources,
 		"/resources/episodes":           a.handleResourceEpisodes,

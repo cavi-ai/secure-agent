@@ -946,6 +946,8 @@ Empty sections read `none`. Costs use the console's rule: two decimals, `<$0.01`
 
 `GET /sessions` (the session list) narrows with exact-match `harness`, `repo` and `branch`, and `since` (`24h`, `7d` or RFC3339, as `/costs`; a session matches when it started or was last seen at or after it), alongside `status` (`active`, `idle`, `ended`; default: live sessions, then the 25 most recent ended ones) and `limit` (default 100). A malformed `since` returns `400`. CLI: `secure-agent sessions [--harness H] [--repo R] [--branch B] [--since D] [--status S] [--limit N] [--json]`.
 
+`GET /sessions/resolve?prefix=<id-prefix>` searches all retained session IDs for a literal, case-sensitive prefix of at least six characters. It returns a session array ordered by ID with at most two candidates: `[]` means no match, one row means unique, and two rows establish ambiguity without giving the total match count. Prefix matching happens before the response limit and includes active, idle and ended sessions. Invalid prefixes return `400`; failed reads return `503` rather than an empty result. This is a read-only endpoint with the same access rules as `/sessions`. The CLI uses it after an exact-ID report lookup returns `404`.
+
 A session row carries `origin` when an agent spawned it: `"<agent> (openclaw)"` for a Codex session whose rollout is under an openclaw agent's Codex home (`…/.openclaw/agents/<agent>/agent/codex-home`). It is omitted for the user's own `~/.codex` and every other harness, set on first sight, and kept by later updates that carry none. The same field is on `/snapshot` `sessions` and the `/sessions/{id}/report` `session`.
 
 ---

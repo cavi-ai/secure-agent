@@ -97,6 +97,8 @@ test-linux:
 test-hooks:
 	@echo "==> Python hook and packaging tests..."
 	python3 plugin/hooks/test_secret_guard.py
+	python3 plugin/hooks/test_shell_review.py
+	python3 -m unittest discover -s packaging/classifier -p 'test_*.py'
 	python3 plugin/hooks/test_injection_scan.py
 	python3 plugin/hooks/test_activity_log.py
 	python3 plugin/hooks/test_cursor_hooks.py
@@ -104,6 +106,7 @@ test-hooks:
 	python3 packaging/test/test_e2e_fixture.py
 	python3 packaging/test/test_release_packaging.py
 	python3 packaging/test/test_uninstall_hooks.py
+	python3 packaging/test/test_setup_session_live.py
 
 test-console:
 	@echo "==> Console assets, JS and DOM tests..."

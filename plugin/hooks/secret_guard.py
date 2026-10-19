@@ -33,12 +33,15 @@ This layer raises the bar; it is not a complete seal.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
+import http.client
 import json
 import os
 import re
 import shlex
 import socket as _socket
 import sys
+import time
 from datetime import datetime, timezone
 from typing import NamedTuple
 
@@ -258,14 +261,17 @@ def audit(verdict: str, rule: str, command: str, event: str, broker: bool = Fals
 
 
 def allow(rule: str = "", command: str = "", event: str = "", broker: bool = False) -> None:
+    enforce_shell(command, event)
     if rule:
         audit("allow", rule, command, event, broker)
+    observe_shell("allow", command, event)
     emit({"permission": "allow"})
     sys.exit(0)
 
 
 def deny(rule: str, user_msg: str, agent_msg: str, command: str, event: str, broker: bool = False) -> None:
     audit("deny", rule, command, event, broker)
+    observe_shell("deny", command, event)
     emit({
         "permission": "deny",
         "user_message": user_msg,
@@ -582,6 +588,153 @@ def mode_for_dir_scan(rid: str) -> str:
 # --- directory guard: prompt-mode daemon resolution --------------------------
 
 SOCK_PATH = os.environ.get("SECURE_AGENT_SOCK") or os.path.join(HOME, ".config", "secure-agent", "daemon.sock")
+
+
+def _shell_command(event: str):
+    if event not in {"PreToolUse", "preToolUse", "beforeShellExecution"}:
+        return None
+    tool_input = _PAYLOAD.get("tool_input")
+    command = _PAYLOAD.get("command") or (tool_input.get("command") if isinstance(tool_input, dict) else None)
+    tool = _PAYLOAD.get("tool_name")
+    if tool not in {"Bash", "Shell"} and event != "beforeShellExecution":
+        if not (event == "preToolUse" and not tool and command is not None):
+            return None
+    return command if isinstance(command, str) else ""
+
+
+def _shell_check_query(payload: dict):
+    """One HTTP exchange bounded by body size and an absolute deadline."""
+    body = json.dumps(payload).encode("utf-8")
+    if len(body) > 32768:
+        return None
+    deadline = time.monotonic() + 6
+
+    class DeadlineSocket(_socket.socket):
+        def budget(self):
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError("shell check deadline")
+            self.settimeout(left)
+
+        def sendall(self, *args, **kwargs):
+            self.budget()
+            return super().sendall(*args, **kwargs)
+
+        def recv_into(self, *args, **kwargs):
+            self.budget()
+            return super().recv_into(*args, **kwargs)
+
+    with DeadlineSocket(_socket.AF_UNIX, _socket.SOCK_STREAM) as sock:
+        sock.budget()
+        sock.connect(SOCK_PATH)
+        client = http.client.HTTPConnection("localhost")
+        client.sock = sock
+        try:
+            client.request("POST", "/guard/shell-check", body=body,
+                           headers={"Content-Type": "application/json", "Connection": "close"})
+            response = client.getresponse()
+            if response.status != 200:
+                return None
+            data = response.read(8193)
+            if len(data) > 8192:
+                return None
+            return json.loads(data.decode("utf-8"))
+        finally:
+            client.close()
+
+
+def enforce_shell(command: str, event: str) -> None:
+    if os.environ.get("SECURE_AGENT_SHELL_REVIEW") != "block":
+        return
+    command = _shell_command(event)
+    if command is None:
+        return
+    reason = "unavailable"
+    try:
+        safe = redact_str(command)
+        cwd = redact_str(_cwd_for_request())
+        if not command:
+            reason = "invalid_input"
+        elif len(command.encode("utf-8")) > 8192 or len(safe.encode("utf-8")) > 8192:
+            reason = "evidence_too_large"
+        else:
+            payload = {"command": safe, "cwd": cwd, "session_id": redact_str(session_id()),
+                       "call_id": redact_str(str(_PAYLOAD.get("tool_use_id") or "")), "guard_verdict": "allow"}
+            response = _shell_check_query(payload)
+            digest = hashlib.sha256((safe + "\x00" + cwd).encode("utf-8")).hexdigest()
+            if isinstance(response, dict) and response.get("mode") == "block" and response.get("request_digest") == digest:
+                verdict = response.get("verdict")
+                receipt = response.get("observation_id")
+                if (verdict == "allow" and not response.get("reason")
+                        and isinstance(receipt, str) and re.fullmatch(r"[0-9a-f]{32}", receipt)):
+                    return
+                supplied = response.get("reason")
+                if verdict == "deny" and isinstance(supplied, str) and re.fullmatch(r"[a-z_]{1,64}", supplied):
+                    reason = supplied
+                else:
+                    reason = "invalid_response"
+            elif response is not None:
+                reason = "invalid_response"
+    except Exception:
+        pass
+    deny("shell-review:" + reason,
+         "Blocked: this shell command needs review or its safety check is unavailable.",
+         "Secure Agent did not permit this shell command. Ask the operator to review the action and the shell safeguard status before retrying.",
+         command, event)
+
+
+def observe_shell(verdict: str, command: str, event: str) -> None:
+    """Opt-in, best-effort observation. No response can change the guard verdict.
+
+    The daemon queues inference; only bounded local delivery happens here.
+    Oversized commands are refused in full, never classified after truncation.
+    """
+    if os.environ.get("SECURE_AGENT_SHELL_REVIEW") != "1" or not command:
+        return
+    shell_command = _shell_command(event)
+    if not shell_command:
+        return
+    command = shell_command
+    reason = "transport_unavailable"
+    try:
+        safe = redact_str(command)
+        if len(command.encode("utf-8")) > 8192 or len(safe.encode("utf-8")) > 8192:
+            reason = "evidence_too_large"
+            return
+        body = json.dumps({"command": safe, "cwd": redact_str(_cwd_for_request()),
+                           "session_id": redact_str(session_id()),
+                           "call_id": redact_str(str(_PAYLOAD.get("tool_use_id") or "")),
+                           "guard_verdict": verdict}).encode("utf-8")
+        if len(body) > 32768:
+            reason = "evidence_too_large"
+            return
+        request = ("POST /guard/shell-review HTTP/1.1\r\nHost: localhost\r\n"
+                   "Content-Type: application/json\r\nConnection: close\r\n"
+                   f"Content-Length: {len(body)}\r\n\r\n").encode("ascii") + body
+        with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as sock:
+            deadline = time.monotonic() + 0.1
+            sock.settimeout(0.1)
+            sock.connect(SOCK_PATH)
+            sock.settimeout(max(0.000001, deadline - time.monotonic()))
+            sock.sendall(request)
+            # Read only a bounded status line; never interpret a model or
+            # permission response. A slow/broken daemon cannot hold the hook.
+            sock.settimeout(max(0.000001, deadline - time.monotonic()))
+            response = sock.recv(256)
+            if response.startswith(b"HTTP/1.1 202 ") or response.startswith(b"HTTP/1.0 202 "):
+                reason = ""
+            else:
+                reason = "not_accepted"
+    except Exception:
+        pass
+    finally:
+        if reason:
+            try:
+                _secure_append(AUDIT_LOG, json.dumps({"ts": now(), "event": "shell-review",
+                               "status": "not_confirmed", "reason": reason}) + "\n")
+            except Exception:
+                pass
+
 try:
     PROMPT_DEADLINE_S = float(os.environ.get("SECURE_AGENT_PROMPT_DEADLINE_S", "45"))
 except ValueError:
@@ -1077,7 +1230,14 @@ def main() -> int:
     try:
         raw = sys.stdin.read()
         data = json.loads(raw) if raw.strip() else {}
+        if os.environ.get("SECURE_AGENT_SHELL_REVIEW") == "block" and (
+                not isinstance(data, dict) or not data or
+                (data.get("tool_input") is not None and not isinstance(data.get("tool_input"), dict))):
+            raise ValueError("invalid shell hook payload")
     except Exception:
+        if os.environ.get("SECURE_AGENT_SHELL_REVIEW") == "block":
+            deny("shell-review:invalid_input", "Blocked: the shell check received invalid input.",
+                 "Secure Agent could not validate the hook payload. Ask the operator to check the harness hook setup.", "", "")
         # Malformed payload is not evidence of wrongdoing. Cursor's `failClosed`
         # covers a hook that actually crashes; denying real work here is the bug
         # that got the previous hook disabled.

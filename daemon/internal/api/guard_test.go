@@ -168,12 +168,17 @@ func TestDeduplicatedGuardRequestsPersistSeparately(t *testing.T) {
 	st.UpsertSession(model.Session{ID: "session-1", Harness: "claude", StartedAt: now, LastSeenAt: now})
 
 	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(2 * time.Second)}})
-	done := make(chan struct{}, 2)
+	type response struct {
+		status int
+		body   string
+	}
+	done := make(chan response, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
+			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/guard/decision", strings.NewReader(`{"agent":"claude","tool":"Read","path":"/secret","rule_id":"cloud-creds","session_id":"session-1"}`))
-			a.handleGuardDecision(httptest.NewRecorder(), req)
-			done <- struct{}{}
+			a.handleGuardDecision(rec, req)
+			done <- response{status: rec.Code, body: rec.Body.String()}
 		}()
 	}
 	deadline := time.Now().Add(time.Second)
@@ -192,8 +197,11 @@ func TestDeduplicatedGuardRequestsPersistSeparately(t *testing.T) {
 			a.guardBroker.Resolve(p.ID, guard.Decision{Verdict: "deny", Scope: "once"})
 		}
 		select {
-		case <-done:
+		case got := <-done:
 			answered++
+			if got.status != http.StatusOK {
+				t.Fatalf("request %d returned HTTP %d: %s", answered, got.status, got.body)
+			}
 		case <-time.After(5 * time.Millisecond):
 		case <-deadline:
 			t.Fatalf("answered %d of 2 requests", answered)

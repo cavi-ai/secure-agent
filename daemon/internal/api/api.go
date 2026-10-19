@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agentask"
@@ -32,6 +33,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
+	"github.com/cavi-ai/secure-agent/daemon/internal/shellreview"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
@@ -176,6 +178,7 @@ type Status struct {
 type StatusFunc func() Status
 
 type API struct {
+	shellReviews    *shellreview.Service
 	socketPath      string
 	configPath      string
 	store           *store.Store
@@ -350,6 +353,8 @@ type GuardDeps struct {
 	// Advisor, when set, is offered each newly blocked guard prompt for an
 	// advisory recommendation. NEVER resolves the prompt — the human decides.
 	Advisor func(model.GuardAssessmentRequest)
+	// ShellReviews checks and records shell commands for the shell gate.
+	ShellReviews *shellreview.Service
 }
 
 // PolicyDeps are the correlator and the operator's policy stores (optional).
@@ -452,6 +457,7 @@ func New(d Deps) *API {
 		fwSources:       d.Firewall.Sources,
 		fwBaseSources:   d.Firewall.BaseSources,
 		guardBroker:     d.Guard.Broker,
+		shellReviews:    d.Guard.ShellReviews,
 		guardIdentity:   d.Guard.Identity,
 		correlator:      d.Policy.Correlator,
 		allowlist:       d.Policy.Allowlist,
@@ -883,6 +889,26 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		f.Since = t
 	}
 	sessions, err := a.store.ListSessions(f)
+	if err != nil {
+		http.Error(w, "session data unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, sessions)
+}
+
+// handleResolveSessionPrefix returns up to two retained sessions so callers
+// can resolve a unique ID prefix without searching a truncated session list.
+func (a *API) handleResolveSessionPrefix(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	prefix := r.URL.Query().Get("prefix")
+	if !utf8.ValidString(prefix) || utf8.RuneCountInString(prefix) < 6 {
+		http.Error(w, "prefix must contain at least 6 characters", http.StatusBadRequest)
+		return
+	}
+	sessions, err := a.store.FindSessionsByPrefix(prefix)
 	if err != nil {
 		http.Error(w, "session data unavailable", http.StatusServiceUnavailable)
 		return
