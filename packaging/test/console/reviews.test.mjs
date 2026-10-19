@@ -230,7 +230,7 @@ test('history represents a durable review once and preserves risk and revision o
  ctx.renderFlags();
  assert.equal(rows().length,1);assert.equal(rows()[0].kind,'review');
  assert.equal(rows()[0].risk.critical,true);assert.deepEqual({...rows()[0].review},{id:'context',revision:2});
- assert.equal(sa.historyRows.get('review:context'),rows()[0]);
+ assert.equal(ctx.selectableHistoryRows().get('review:context'),rows()[0]);
  const detail=rows()[0].body();assert.match(detail,/reviewed revision 1/i);assert.match(detail,/data-revision="2"/);
 });
 
@@ -238,7 +238,7 @@ test('expired review evidence preserves history but disables bulk decisions',()=
  const {ctx,sa,rows}=home([{...record,evidence_available:false,evidence_flag_available:false}]);
  ctx.renderFlags();
  assert.equal(rows()[0].reviewed,false);assert.equal(rows()[0].risk.critical,true);
- assert.equal(sa.historyRows.size,0);
+ assert.equal(ctx.selectableHistoryRows().size,0);
  assert.match(ctx.logRowHTML(rows()[0],false,Date.now()),/class="log-check"[^>]* disabled/);
  assert.match(rows()[0].body(),/Source evidence has expired/);
 });

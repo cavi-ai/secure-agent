@@ -802,7 +802,7 @@ test('changing a filter after applying a saved view updates the active query', (
   Object.assign(f.ctx, { window: {}, URLSearchParams, sinceParam: () => '',
     document: { getElementById: id => id === 'flags-agent' ? select : null },
     loadViews: () => [{ name: 'saved', flags: { agent: 'claude' } }],
-    syncFilterControls() { select.value = f.ctx.filters.flags.agent; },
+    syncFilterControls() { select.value = f.ctx.filters.flags.agent; }, suppressFresh() {},
     fetchTelemetry: () => queries.push(f.ctx.flagsQuery()) });
   const history = install(f.ctx, 'history-controller.js', 'createHistoryController', ['flagsQuery', 'eventsQuery']);
   f.ctx.window.applyView = history.applyView;

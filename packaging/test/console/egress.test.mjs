@@ -141,7 +141,7 @@ test('the Egress tab paints no badge for coverage observations or recurring conn
       needs_you: 0, items: [], coverage_items: [{ kind: 'uninspected_egress' }]
     } },
     setTabBadge: (id, n) => painted.push([id, n]),
-    prevFwStats: null, reducedMotion: true,
+    reducedMotion: true,
   } };
   ctx.renderFirewall();
   ctx.window.SA.t.posture.items = [{ kind: 'guard_pending' }];

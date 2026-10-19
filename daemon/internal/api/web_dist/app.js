@@ -685,13 +685,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Track which timeline events the user has already seen, so only genuinely
-  // new rows animate (polling re-renders must never flicker).
-  let prevEventKeys = new Set();
-  let firstEventRender = true;
-  function resetEventFreshness() { prevEventKeys = new Set(); firstEventRender = true; }
-  // Filter changes re-render with deeper-history rows that are "new" to the
-  // view but not to the user — suppress the fresh animation for that render.
-  let suppressFreshOnce = false;
+  // new rows animate (polling re-renders must never flicker). Filter changes
+  // re-render with deeper-history rows that are "new" to the view but not to
+  // the user: suppressNext() skips the fresh animation for that render.
+  const eventFreshness = createEventFreshness();
+  function resetEventFreshness() { eventFreshness.reset(); }
   // Session drill-down: set from a flag card ("view session in timeline"),
   // filters the timeline client-side (lib.js filterEventsBySession).
   let timelineSession = null;
@@ -761,10 +759,6 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('scroll', syncTabsStuck, { passive: true });
   window.addEventListener('resize', syncTabsStuck);
 
-  // Firewall diff: which rules gained blocked/would-block counts since the
-  // last render (i.e. a fresh interception).
-  let prevFwStats = null;
-
   function flashFirewallPanel() {
     if (reducedMotion) return;
     const panel = document.getElementById('firewall-panel');
@@ -786,13 +780,12 @@ document.addEventListener('DOMContentLoaded', () => {
         get reportHealth() { return reportHealth; },
         get sessionEnded() { return sessionEnded; },
         set sessionEnded(value) { sessionEnded = value; },
-        get suppressFreshOnce() { return suppressFreshOnce; },
-        set suppressFreshOnce(value) { suppressFreshOnce = value; },
         get telemetryData() { return telemetryData; },
         get timelineSession() { return timelineSession; },
         set timelineSession(value) { timelineSession = value; }
       },
       actions: {
+        get suppressFresh() { return eventFreshness.suppressNext; },
         get createEventHistoryPage() { return createEventHistoryPage; },
         get document() { return document; },
         get fetchTelemetry() { return fetchTelemetry; },
@@ -907,7 +900,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const el = document.getElementById('global-search');
     if (el) el.addEventListener('input', () => {
       globalSearch = el.value.trim().toLowerCase();
-      suppressFreshOnce = true;
+      eventFreshness.suppressNext();
       renderAll();
     });
   }
@@ -2559,7 +2552,7 @@ document.addEventListener('DOMContentLoaded', () => {
     get reviewResult() { return reviewResult; },
     get reviewCursor() { return reviewCursor; },
     historySelected,
-    historyRows: new Map(),
+    get historyRows() { return selectableHistoryRows(); },
     harnessFilter,
     reconcileAttention,
     get attentionKey() { return detailDrawer.selection()?.key || ''; },
@@ -2615,11 +2608,9 @@ document.addEventListener('DOMContentLoaded', () => {
     timelinePids: { get() { return timelinePids; }, set(v) { timelinePids = v; } },
     timelinePidLabel: { get() { return timelinePidLabel; }, set(v) { timelinePidLabel = v; } },
     eventHistoryPage: { get() { return eventHistoryPage; } },
-    prevFwStats: { get() { return prevFwStats; }, set(v) { prevFwStats = v; } },
-    prevEventKeys: { get() { return prevEventKeys; }, set(v) { prevEventKeys = v; } },
-    firstEventRender: { get() { return firstEventRender; }, set(v) { firstEventRender = v; } },
-    suppressFreshOnce: { get() { return suppressFreshOnce; }, set(v) { suppressFreshOnce = v; } },
-    selectedResourceKey: { get() { return selectedResourceKey; }, set(v) { selectedResourceKey = v; } },
+    eventFreshness: { get() { return eventFreshness; } },
+    selectedResourceKey: { get() { return selectedResourceKey; } },
+    clearResourceSelection: { value: () => { selectedResourceKey = ''; } },
     selectedSessionId: { get() { return sessionWorkbench.selectedSessionId; } },
     sessionTimeline: { get() { return sessionWorkbench.sessionTimeline; } },
     sessionTimelineState: { get() { return sessionWorkbench.sessionTimelineState; } },
@@ -3059,7 +3050,7 @@ document.addEventListener('DOMContentLoaded', () => {
     applySessionEventFilters(st.scope.events);
     syncHistoryViews();
     eventHistoryPage = copyEventHistoryPage(st.scope.page);
-    suppressFreshOnce = true;
+    eventFreshness.suppressNext();
     renderEvents(); renderFlags(); renderIncidents(); paintScopeBar();
     switchTab('sessions', { skipHash: true });
     renderNow(['sessions']);
@@ -3081,7 +3072,7 @@ document.addEventListener('DOMContentLoaded', () => {
     applySessionEventFilters(st.destination.events);
     syncHistoryViews();
     if (st.destination.page) eventHistoryPage = copyEventHistoryPage(st.destination.page);
-    suppressFreshOnce = true;
+    eventFreshness.suppressNext();
     renderEvents(); renderFlags(); renderIncidents(); paintScopeBar();
     if (st.destination.workspacePermissions) {
       policyState.scopeWorkspace = st.destination.workspacePermissions.workspace;
@@ -3115,14 +3106,14 @@ document.addEventListener('DOMContentLoaded', () => {
   window.openSessionFindings = function(id, el) {
     const st = id === sessionWorkbench.selectedSessionId ? captureSessionReturn(el) : null;
     if (beginSessionInvestigation(st, { route: 'home', group: 'findings', session: id, pids: null, label: '' })) return;
-    timelineSession = id; timelinePids = null; timelinePidLabel = ''; suppressFreshOnce = true;
+    timelineSession = id; timelinePids = null; timelinePidLabel = ''; eventFreshness.suppressNext();
     syncHistoryViews();
     paintScopeBar(); switchTab('home', { group: 'findings' }); fetchTelemetry();
   };
   window.openSessionEvents = function(id, el) {
     const st = id === sessionWorkbench.selectedSessionId ? captureSessionReturn(el) : null;
     if (beginSessionInvestigation(st, { route: 'events', session: id, pids: null, label: '' })) return;
-    timelineSession = id; timelinePids = null; timelinePidLabel = ''; suppressFreshOnce = true;
+    timelineSession = id; timelinePids = null; timelinePidLabel = ''; eventFreshness.suppressNext();
     syncHistoryViews();
     paintScopeBar(); switchTab('events'); fetchTelemetry({ slow: false });
   };
@@ -3497,7 +3488,7 @@ document.addEventListener('DOMContentLoaded', () => {
     timelineSession = sid;
     timelinePids = null;
     timelinePidLabel = '';
-    suppressFreshOnce = true;
+    eventFreshness.suppressNext();
     syncHistoryViews();
     renderEvents();
     renderFlags();
@@ -3518,7 +3509,7 @@ document.addEventListener('DOMContentLoaded', () => {
     timelineSession = null;
     timelinePids = (pids || []).map(Number).filter(n => n > 0);
     timelinePidLabel = label || '';
-    suppressFreshOnce = true;
+    eventFreshness.suppressNext();
     syncHistoryViews();
     renderEvents();
     renderFlags();
@@ -3536,7 +3527,7 @@ document.addEventListener('DOMContentLoaded', () => {
     timelineSession = null;
     timelinePids = null;
     timelinePidLabel = '';
-    suppressFreshOnce = true;
+    eventFreshness.suppressNext();
     syncHistoryViews();
     renderEvents();
     renderFlags();

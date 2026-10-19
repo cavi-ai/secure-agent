@@ -65,18 +65,18 @@ function createHistoryController({ state, actions }) {
   async function pageSessionEvents(direction) {
     const page = state.eventHistoryPage;
     if (state.sessionEnded || !state.timelineSession || !actions.requestEventHistoryPage(state.eventHistoryPage, direction)) return;
-    state.suppressFreshOnce = true;
+    actions.suppressFresh();
     actions.renderEvents();
     await actions.fetchTelemetry({ slow: false });
     if (!state.sessionEnded && page === state.eventHistoryPage) {
-      state.suppressFreshOnce = true;
+      actions.suppressFresh();
       actions.renderNow(['events']);
     }
   };
 
   function wireFilter(id, obj, key) {
     const el = actions.document.getElementById(id);
-    if (el) el.addEventListener('change', () => { obj[key] = el.value; state.suppressFreshOnce = true; actions.fetchTelemetry(); });
+    if (el) el.addEventListener('change', () => { obj[key] = el.value; actions.suppressFresh(); actions.fetchTelemetry(); });
   }
   function bindFilters() {
   wireFilter('event-filter', state.filters.events, 'kind');
@@ -99,7 +99,7 @@ function createHistoryController({ state, actions }) {
     const pop = actions.document.getElementById('views-pop');
     if (pop) pop.hidden = true;
     if (view.tab && actions.isConsoleRoute(view.tab)) actions.switchTab(view.tab);
-    state.suppressFreshOnce = true;
+    actions.suppressFresh();
     actions.fetchTelemetry();
     actions.showToast(`View applied: ${name}`, 'info');
   };

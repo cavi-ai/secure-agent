@@ -191,6 +191,19 @@ function eventKey(e) {
   return `${e.ts}|${e.pid}|${e.kind}|${e.detail || e.path || e.remote_host || ''}`;
 }
 
+// createEventFreshness: which timeline rows are new to the user. The first
+// render after reset() and a render after suppressNext() mark nothing fresh;
+// rendered() records the keys on screen and clears the suppression.
+function createEventFreshness() {
+  let seen = new Set(), first = true, suppressed = false;
+  return {
+    isFresh: key => !first && !suppressed && !seen.has(key),
+    rendered: keys => { seen = new Set(keys); first = false; suppressed = false; },
+    reset: () => { seen = new Set(); first = true; },
+    suppressNext: () => { suppressed = true; },
+  };
+}
+
 // advisorAdviceHTML: the advisor's recommendation on a blocked guard prompt.
 // Advisory only — it never resolves the prompt; it informs the human's choice.
 // assessment (benign|suspicious|malicious) maps to allow|look|deny.

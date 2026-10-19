@@ -2,6 +2,10 @@
 // endpoints), firewall rules, watched sources, and the uninspected drill-down
 // drawer.
 
+// Firewall diff: the stats of the last render, so a rule whose blocked or
+// would-block counts grew since then (a fresh interception) can flash.
+let firewallStatsSeen = null;
+
 function renderFirewall() {
   const SA = window.SA;
 
@@ -18,7 +22,7 @@ function renderFirewall() {
 
   if (rules.length === 0 && uninspected === 0) {
     container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>`;
-    SA.prevFwStats = stats;
+    firewallStatsSeen = stats;
     return;
   }
 
@@ -46,8 +50,8 @@ function renderFirewall() {
   // just intercepted something — flash its row once.
   const grew = r => {
     const st = stats[r];
-    const prev = SA.prevFwStats ? SA.prevFwStats[r] : null;
-    return !SA.reducedMotion && SA.prevFwStats !== null &&
+    const prev = firewallStatsSeen ? firewallStatsSeen[r] : null;
+    return !SA.reducedMotion && firewallStatsSeen !== null &&
       !!prev && ((st.blocked || 0) > (prev.blocked || 0) || (st.would_block || 0) > (prev.would_block || 0));
   };
   // Rules with hits stay listed; the rest fold into one collapsed row. The
@@ -77,7 +81,7 @@ function renderFirewall() {
     fold.querySelector('summary').textContent = `${quiet.length} rule${quiet.length === 1 ? '' : 's'} with no hits in 24 h`;
     patchList(fold.querySelector('.fw-fold-rows'), quiet.map(r => ({ key: r, html: fwRuleHTML(r, stats[r], false) })), { key: p => p.key, html: p => p.html });
   }
-  SA.prevFwStats = stats;
+  firewallStatsSeen = stats;
 }
 
 // Split rule ids into those with any would-block, blocked or legit hit and

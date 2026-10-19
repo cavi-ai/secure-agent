@@ -18,7 +18,7 @@ function controller() {
   const c = { console, URLSearchParams, selectedSessionId: 'a', sessionView: 'trace', activeTab: 'sessions', activeSub: 'board',
     handoffGeneration: 2, sessionEnded: false, timelineSession: 'prior', timelinePids: null, timelinePidLabel: '',
     filters: { events: { kind: 'all', since: 'all' } }, syncHistoryViews() {},
-    suppressFreshOnce: false, location: { pathname: '/dashboard/', search: '', hash: '#sessions' }, calls: [],
+    eventFreshness: { suppressNext() {} }, location: { pathname: '/dashboard/', search: '', hash: '#sessions' }, calls: [],
     window: { SA: {}, scrollY: 27, scrollTo: (_x, y) => { c.pageY = y; }, addEventListener: (name, fn) => { listeners[name] = fn; } },
     document: { querySelector: s => s === '#session-detail .session-detail-body' ? body : s === '#session-rail' ? rail : null,
       querySelectorAll: () => [opener] },

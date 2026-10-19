@@ -333,7 +333,7 @@ function renderResourceMissionControl() {
 
   const families = snapshot.sessions || [];
   if (SA.selectedResourceKey && !families.some(f => f.key === SA.selectedResourceKey)) {
-    SA.selectedResourceKey = '';
+    SA.clearResourceSelection();
   }
   const parts = [];
   let rowsOf = null;
@@ -1024,9 +1024,7 @@ function renderEvents() {
         ? `No events for ${SA.timelinePidLabel || 'this session'} in the loaded window`
       : SA.isEventsFiltered() ? 'No events match the current filter' : 'No system events logged';
     container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>${msg}</span></div>`;
-    SA.prevEventKeys = new Set();
-    SA.firstEventRender = false;
-    SA.suppressFreshOnce = false;
+    SA.eventFreshness.rendered([]);
     return;
   }
 
@@ -1060,12 +1058,10 @@ function renderEvents() {
     key: e => (e.more !== undefined ? 'show-more' : eventKey(e)),
     hash: e => (e.more !== undefined ? e.more : row(e, '')),
     html: e => (e.more !== undefined ? `<div class="list-more">${e.more}</div>`
-      : row(e, !SA.reducedMotion && !SA.firstEventRender && !SA.suppressFreshOnce && !SA.prevEventKeys.has(eventKey(e))
+      : row(e, !SA.reducedMotion && SA.eventFreshness.isFresh(eventKey(e))
         ? (e.kind === 9 ? ' fresh-sev' : ' fresh') : '')),
   });
   applyInlineMetrics(container);
 
-  SA.prevEventKeys = new Set(events.map(eventKey));
-  SA.firstEventRender = false;
-  SA.suppressFreshOnce = false;
+  SA.eventFreshness.rendered(events.map(eventKey));
 }
