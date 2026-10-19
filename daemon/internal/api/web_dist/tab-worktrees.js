@@ -146,7 +146,7 @@ function removableEverywhere(rep) {
 // or more rows are removable), and recorded moves to the Trash. Before the
 // ledger loads the report's totals stand in; with neither, the recorded
 // tiles read unavailable rather than zero.
-function reclaimTilesHTML(rep, ledger) {
+function reclaimTilesHTML(rep, ledger, selectionBusy = false) {
   const totals = (ledger && ledger.totals) || (rep && rep.reclaimed) || null;
   const t = totals || {};
   const daily = (ledger && ledger.daily) || null;
@@ -162,7 +162,7 @@ function reclaimTilesHTML(rep, ledger) {
       <span class="rc-tile-hint">${hint}</span>${extra || ''}
     </div>`;
   const removeAll = rm.rows.length >= 2
-    ? `<button type="button" class="btn btn-danger btn-sm rc-remove-all" data-action="worktrees-remove-removable">Remove all ${rm.rows.length}</button>`
+    ? `<button type="button" class="btn btn-danger btn-sm rc-remove-all" data-action="worktrees-remove-removable"${selectionBusy ? ' disabled' : ''}>Remove all ${rm.rows.length}</button>`
     : '';
   return tile('rc-freed', `Freed · last ${daily ? daily.length : RECLAIM_DAYS} days`, known ? fmtDisk(freed) : '—', known ? escapeHTML(plural(freedCount, 'cleanup', 'cleanups')) : unavailable)
     + tile('rc-alltime', 'Freed · recorded', totals ? fmtDisk(t.bytes) : '—', totals ? escapeHTML(plural(Number(t.count) || 0, 'cleanup', 'cleanups')) : unavailable)
@@ -401,11 +401,11 @@ function worktreeIdleLabel(w) {
 // worktreeNoteHTML: the local advisor's note, shown under the reasons. It
 // is advice only; the state and the buttons never depend on it. With a path
 // it ends in Discuss, which carries the question to the Agent tab.
-function worktreeNoteHTML(note, path) {
+function worktreeNoteHTML(note, path, selection = '') {
   if (!note) return '';
   const conf = note.confidence ? ` ${Math.round(note.confidence * 100)}%` : '';
   const discuss = path ? ` ${worktreeDiscussHTML(path)}` : '';
-  return `<p class="wt-advice"><b>Advisor: ${escapeHTML(note.assessment || '')}</b>${escapeHTML(conf)} · ${escapeHTML(note.rationale || '')}${discuss}</p>`;
+  return `<p class="wt-advice"><b>Advisor: ${escapeHTML(note.assessment || '')}</b>${escapeHTML(conf)} · ${escapeHTML(note.rationale || '')}${discuss}${note.assessment === 'remove' && selection ? ' ' + selection : ''}</p>`;
 }
 
 // worktreeDiscussHTML: the link that asks the Agent tab about one worktree.
@@ -445,6 +445,89 @@ function worktreeTrashBlock(w) {
   if (w.conflicts > 0) return 'a merge or rebase has unresolved conflicts; finish or abort it first';
   if (w.partly_staged > 0) return `${w.partly_staged === 1 ? '1 file has' : w.partly_staged + ' files have'} staged changes that differ from the working copy; commit or unstage them first`;
   return '';
+}
+
+// Selection never changes a checker verdict. Both routes retain the same
+// blockers, and reviewed Trash needs the facts the daemon checks again.
+function worktreeSelectionBlock(w, repo, removal, ask) {
+  if (repo.error) return `could not inspect repository: ${repo.error}`;
+  if (w.orphan || !['remove', 'review', 'keep'].includes(w.state)) return 'this row cannot be marked for removal';
+  if (removal && removal.state === 'running') return 'removal is already running';
+  if (ask && ask.status === 'running') return 'waiting for the owning agent to finish';
+  const block = worktreeTrashBlock(w);
+  if (block) return block;
+  if (w.state !== 'remove' && (!w.head || !Array.isArray(w.reasons) || !w.reasons.length)) return 'inspection details are missing; rescan first';
+  return '';
+}
+
+function worktreeSelectionApproval(w, repo, rep) {
+  if (worktreeSelectionBlock(w, repo, (rep.removals || {})[w.path], (rep.asks || {})[w.path])) return null;
+  // Sizes and advisor notes may arrive later without changing approval.
+  // Keep the property order stable for exact comparisons after a refresh.
+  return Object.freeze({ path: w.path, repo: repo.path, head: w.head || '', state: w.state,
+    branch: w.branch || '', detached: !!w.detached, reasons: Object.freeze([...(w.reasons || [])]),
+    error: w.error || '', git_operation: w.git_operation || '', submodules: Number(w.submodules) || 0,
+    in_use: !!w.in_use, active_agent: w.active_agent || '', locked: !!w.locked,
+    loose_commits: Number(w.loose_commits) || 0, conflicts: Number(w.conflicts) || 0,
+    partly_staged: Number(w.partly_staged) || 0, changed: Number(w.changed) || 0,
+    untracked: Number(w.untracked) || 0, ignored: Number(w.ignored) || 0,
+    last_activity: w.last_activity || '', idle_days: w.idle_days == null ? null : w.idle_days });
+}
+
+function worktreeSelectHTML(w, repo, removal, ask, state = {}) {
+  if (w.orphan || !['remove', 'review', 'keep'].includes(w.state)) return '';
+  const marked = !!(state.selected && state.selected.has(w.path));
+  const block = worktreeSelectionBlock(w, repo, removal, ask);
+  const disabled = !!state.selectionBusy || !!block;
+  return `<button type="button" class="btn btn-sm wt-select${marked ? ' on' : ''}" data-action="worktree-select" data-path="${escapeHTML(w.path)}" aria-pressed="${marked}"${disabled ? ' disabled' : ''}${block ? ` title="${escapeHTML('Cannot mark for removal: ' + block)}"` : ''}>${marked ? 'Marked for removal' : 'Mark for removal'}</button>`
+    + (block ? `<span class="wt-selection-block">${escapeHTML(block)}</span>` : '');
+}
+
+function worktreeSelectionSize(rows) {
+  const known = rows.filter(w => Number(w.size_bytes) > 0);
+  const bytes = known.reduce((sum, w) => sum + Number(w.size_bytes), 0);
+  const unknown = rows.length - known.length;
+  const partial = known.some(w => w.size_partial);
+  if (!known.length) return 'size unknown';
+  return `${partial || unknown ? 'at least ' : 'estimated '}${fmtDisk(bytes)}${partial ? ' (partial measurement)' : ''}`
+    + (unknown ? `; ${unknown} size${unknown === 1 ? '' : 's'} unknown` : '');
+}
+
+function worktreeSelectionHTML(rep, state, groups) {
+  const selected = state.selected || new Map();
+  const pending = state.pendingRemovalSelections ? state.pendingRemovalSelections.size : 0;
+  const visible = groups.flatMap(g => g.rows.map(w => ({ w, repo: g.repo })));
+  const eligible = visible.filter(({ w, repo }) => !worktreeSelectionBlock(w, repo, (rep.removals || {})[w.path], (rep.asks || {})[w.path]));
+  if (!selected.size && !eligible.length && !pending) return '';
+  const rows = (rep.repos || []).flatMap(repo => (repo.worktrees || []).filter(w => selected.has(w.path)));
+  const hidden = selected.size - visible.filter(({ w }) => selected.has(w.path)).length;
+  const disabled = state.selectionBusy ? ' disabled' : '';
+  return `<div class="wt-selection" role="group" aria-label="Worktree removal selection">
+    <span class="wt-selection-summary" role="status">${selected.size} selected${selected.size ? ' · ' + escapeHTML(worktreeSelectionSize(rows)) : ''}${hidden ? ` · ${hidden} hidden by filters` : ''}${pending ? ` · ${pending} pending removal${pending === 1 ? '' : 's'}` : ''}</span>
+    <div class="wt-selection-actions">
+      <button type="button" class="btn btn-sm" data-action="worktrees-select-visible"${disabled || !eligible.length ? ' disabled' : ''}>Select shown${eligible.length ? ' ' + eligible.length : ''}</button>
+      <button type="button" class="btn btn-sm" data-action="worktrees-clear-selection"${disabled || (!selected.size && !pending) ? ' disabled' : ''}${pending ? ' title="Clear marks and cancel restoring marks after failures; removals already started continue"' : ''}>Clear selection</button>
+      <button type="button" class="btn btn-danger btn-sm" data-action="worktrees-remove-selected"${disabled || !selected.size ? ' disabled' : ''}>Remove selected…</button>
+    </div>
+  </div>`;
+}
+
+function worktreeSelectionConfirm(rows) {
+  const lines = [`Remove ${rows.length} selected worktree${rows.length === 1 ? '' : 's'}? ${worktreeSelectionSize(rows.map(r => r.size))}.`];
+  for (const [state, title] of [['remove', 'Checked deletion'], ['trash', 'Move to Trash']]) {
+    const group = rows.filter(r => (r.approval.state === 'remove' ? 'remove' : 'trash') === state);
+    if (!group.length) continue;
+    lines.push('', `${title} (${group.length}):`);
+    for (const { approval: w, size } of group) {
+      lines.push(`${w.path} — ${worktreeSelectionSize([size])}`, `Repository: ${w.repo}`, `State: ${w.state}; HEAD: ${w.head || 'unavailable'}; branch: ${w.branch || '(detached)'}`,
+        `Reasons: ${w.reasons.join('; ') || 'none reported'}`);
+      if (state === 'trash' && w.last_activity && w.idle_days === 0) lines.push('Active in the last 24 hours; check that its work is no longer needed.');
+    }
+  }
+  lines.push('', 'Checked deletion permanently deletes the folder, including ignored files; each worktree is checked again before deletion.',
+    'Reviewed folders move to the Trash and are unregistered. Uncommitted changes, untracked and ignored files go with the folder.',
+    'Branches and commits stay in git; stashes stay in git. Files in the Trash remain until it is emptied; putting them back does not register the worktree again. Moving to Trash does not free disk space until it is emptied.');
+  return lines.join('\n');
 }
 
 // Checker reasons that name files living only in the folder.
@@ -501,7 +584,7 @@ function worktreeRemovalHTML(rm) {
 // request. Ask <harness> only for live eligible sessions; Ask advisor on
 // review and keep. Discuss on every row the daemon can inspect. A running
 // removal disables Remove and shows its step.
-function worktreeRowHTML(w, repo, note, ask, removal, askable) {
+function worktreeRowHTML(w, repo, note, ask, removal, askable, selectionState) {
   const branch = w.branch || (w.detached ? '(detached)' : '');
   let action = '';
   if (w.orphan) {
@@ -534,6 +617,7 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable) {
   // in their actions already.
   const open = w.orphan || w.state === 'prune' ? ''
     : `<button type="button" class="btn btn-ghost btn-sm wt-open" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}" title="Show in Finder" aria-label="Show ${escapeHTML(branch || w.path)} in Finder"><svg class="icon"><use href="#i-folder"/></svg></button>`;
+  const selection = worktreeSelectHTML(w, repo, removal, ask, selectionState);
   return `<div class="wt-row wt-${escapeHTML(w.state)}" data-path="${escapeHTML(w.path)}">
     <div class="wt-main">
       <span class="wt-state">${escapeHTML(w.state)}</span>
@@ -545,10 +629,10 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable) {
         <span class="wt-size">${escapeHTML(worktreeSizeLabel(w))}</span>
         <span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>
       </div>
-      <div class="wt-actions">${open}${action}${discuss}</div>
+      <div class="wt-actions">${open}${action}${selection}${discuss}</div>
     </div>
     ${worktreeReasonsHTML(w)}
-    ${worktreeNoteHTML(note, discuss ? w.path : '')}
+    ${worktreeNoteHTML(note, discuss ? w.path : '', selection)}
     ${worktreeAskHTML(ask)}
     ${worktreeRemovalHTML(removal)}
   </div>`;
@@ -596,7 +680,7 @@ function worktreeGroupAskText(res) {
 // Hide button. Two or more removable rows add Remove all with their count and
 // size. advice, asks and removals map a worktree path to its advisor note,
 // latest ask and latest removal.
-function worktreeGroupHTML(g, advice, asks, removals, askable) {
+function worktreeGroupHTML(g, advice, asks, removals, askable, selectionState) {
   const meta = [g.repo.default_branch, g.repo.source].filter(Boolean).join(' · ');
   const name = String(g.repo.path || '').replace(/\/$/, '').split('/').pop() || g.repo.path;
   return `<section class="wt-repo">
@@ -611,18 +695,18 @@ function worktreeGroupHTML(g, advice, asks, removals, askable) {
       </div>
       <div class="wt-repo-actions">${g.repo.error
         ? `<span class="wt-repo-error">${escapeHTML(g.repo.error)} — the folders below still point to it</span>`
-        : worktreeRemoveAllHTML(g.repo, removals) + worktreeGroupAsksHTML(g)
+        : worktreeRemoveAllHTML(g.repo, removals, !!(selectionState && selectionState.selectionBusy)) + worktreeGroupAsksHTML(g)
           + `<button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>`}</div>
     </div>
-    ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path], (removals || {})[w.path], (askable || {})[w.path])).join('')}
+    ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path], (removals || {})[w.path], (askable || {})[w.path], selectionState)).join('')}
   </section>`;
 }
 
-function worktreeRemoveAllHTML(repo, removals) {
+function worktreeRemoveAllHTML(repo, removals, selectionBusy = false) {
   const rows = removableRows(repo, removals);
   if (rows.length < 2) return '';
   const bytes = rows.reduce((n, w) => n + (Number(w.size_bytes) || 0), 0);
-  return `<button type="button" class="btn btn-danger btn-sm wt-remove-all" data-action="worktree-remove-all" data-repo="${escapeHTML(repo.path)}">Remove all ${rows.length}${bytes ? ' · ' + escapeHTML(fmtDisk(bytes)) : ''}</button>`;
+  return `<button type="button" class="btn btn-danger btn-sm wt-remove-all" data-action="worktree-remove-all" data-repo="${escapeHTML(repo.path)}"${selectionBusy ? ' disabled' : ''}>Remove all ${rows.length}${bytes ? ' · ' + escapeHTML(fmtDisk(bytes)) : ''}</button>`;
 }
 
 // worktreeFilterHTML: one pill per state with its count, then stale.
@@ -670,7 +754,7 @@ function renderWorktrees() {
   if (reclaim) {
     const ledger = state.ledger;
     reclaim.innerHTML = rep || ledger
-      ? `<div class="rc-tiles">${reclaimTilesHTML(rep, ledger)}</div>${ledger ? reclaimChartHTML(ledger.daily, localDayKey(new Date())) : ''}`
+      ? `<div class="rc-tiles">${reclaimTilesHTML(rep, ledger, state.selectionBusy)}</div>${ledger ? reclaimChartHTML(ledger.daily, localDayKey(new Date())) : ''}`
       : '';
     reclaim.classList.toggle('rc-reloading', !!state.ledgerLoading && !!ledger);
     applyInlineMetrics(reclaim);
@@ -706,9 +790,9 @@ function renderWorktrees() {
     errors.hidden = list.length === 0;
     errors.innerHTML = list.map(e => `<li>${escapeHTML(e)}</li>`).join('');
   }
-  container.innerHTML = groups.length
-    ? groups.map(g => worktreeGroupHTML(g, rep.advice, rep.asks, rep.removals, rep.askable)).join('')
-    : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${worktreeStateCounts(rep).all ? 'No worktree matches this filter.' : 'No linked worktrees found. Add a repository above if one is missing.'}</span></div>`;
+  container.innerHTML = worktreeSelectionHTML(rep, state, groups) + (groups.length
+    ? groups.map(g => worktreeGroupHTML(g, rep.advice, rep.asks, rep.removals, rep.askable, state)).join('')
+    : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${worktreeStateCounts(rep).all ? 'No worktree matches this filter.' : 'No linked worktrees found. Add a repository above if one is missing.'}</span></div>`);
 }
 
 // ---------- clutter ----------

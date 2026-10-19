@@ -58,7 +58,7 @@ function build({ respond = () => reply({}), confirmed = true, shown = {}, nowMs 
       return respond(url, req);
     },
     toast: (message, type) => log.toasts.push({ message, type }),
-    confirm: async (message, opts) => { log.confirms.push({ message, opts }); return confirmed; },
+    confirm: async (message, opts) => { log.confirms.push({ message, opts }); return typeof confirmed === 'function' ? confirmed(message, opts) : confirmed; },
     render: names => log.renders.push(names),
     markDirty: (...names) => log.dirty.push(names),
     visible: view => shown[view] === true,
@@ -106,6 +106,230 @@ const worktreeReport = () => ({
     ]
   }],
   summary: { worktrees: 3, size_bytes: 3000, removable_bytes: 3000 }
+});
+
+const selectionReport = () => ({
+  repos: [
+    { path: REPO, worktrees: [
+      { path: WT, branch: 'feat/a', state: 'remove', head: 'aaa', reasons: ['merged into origin/main'], size_bytes: 1024 },
+      { path: `${REPO}/review`, branch: 'feat/review', state: 'review', head: 'bbb', reasons: ['1 untracked file'], size_partial: true, size_bytes: 2048 },
+      { path: `${REPO}/keep`, branch: 'feat/keep', state: 'keep', head: 'ccc', reasons: ['unmerged commits'] }
+    ] },
+    { path: '/code/lib', worktrees: [{ path: '/code/lib/other', branch: 'feat/other', state: 'remove', head: 'ddd', reasons: [] }] }
+  ]
+});
+
+test('selection spans repositories and filters; select shown respects both searches and excludes unsafe rows', async () => {
+  const rep = selectionReport();
+  const { controller } = build({ respond: () => reply(rep) });
+  await controller.loadWorktrees(false);
+  controller.setWorktreeSearch('other');
+  controller.selectVisibleWorktrees('feat/other');
+  controller.setWorktreeSearch('');
+  controller.setWorktreeFilter('review');
+  controller.selectVisibleWorktrees('untracked');
+  assert.deepEqual([...controller.worktreesState.selected.keys()], ['/code/lib/other', `${REPO}/review`]);
+  controller.toggleWorktreeSelection(WT);
+  assert.equal(controller.worktreesState.selected.size, 3);
+  controller.toggleWorktreeSelection(WT);
+  assert.equal(controller.worktreesState.selected.size, 2);
+  for (const extra of [{ state: 'main' }, { state: 'prune' }, { orphan: true }, { locked: true }, { in_use: true }, { conflicts: 1 }, { git_operation: 'rebase' }, { partly_staged: 1 }, { submodules: 1 }, { loose_commits: 1 }, { error: 'unreadable' }]) {
+    Object.assign(rep.repos[0].worktrees[0], selectionReport().repos[0].worktrees[0], extra);
+    controller.toggleWorktreeSelection(WT);
+    assert.equal(controller.worktreesState.selected.has(WT), false, JSON.stringify(extra));
+    rep.repos[0].worktrees[0] = selectionReport().repos[0].worktrees[0];
+  }
+  rep.removals = { [WT]: { state: 'running' } };
+  controller.toggleWorktreeSelection(WT);
+  assert.equal(controller.worktreesState.selected.has(WT), false);
+  rep.removals = {};
+  rep.asks = { [WT]: { status: 'running' } };
+  controller.toggleWorktreeSelection(WT);
+  assert.equal(controller.worktreesState.selected.has(WT), false);
+  rep.asks = {};
+  rep.repos[0].error = 'missing repository';
+  controller.toggleWorktreeSelection(WT);
+  assert.equal(controller.worktreesState.selected.has(WT), false);
+  controller.clearWorktreeSelection();
+  assert.equal(controller.worktreesState.selected.size, 0);
+});
+
+test('selection approvals copy reasons and survive sizing or advisor updates, but invalidate once when facts change', async () => {
+  const rep = selectionReport();
+  const { controller, log } = build({ respond: () => reply(rep) });
+  await controller.loadWorktrees(false);
+  controller.toggleWorktreeSelection(WT);
+  const approval = controller.worktreesState.selected.get(WT);
+  assert.ok(Object.isFrozen(approval) && Object.isFrozen(approval.reasons));
+  rep.repos[0].worktrees[0].size_bytes = 9999;
+  rep.advice = { [WT]: { assessment: 'keep' } };
+  await controller.loadWorktrees(false);
+  assert.equal(controller.worktreesState.selected.get(WT), approval);
+  rep.repos[0].worktrees[0].reasons.push('new local files');
+  assert.equal(approval.reasons.length, 1);
+  await controller.loadWorktrees(false);
+  assert.equal(controller.worktreesState.selected.size, 0);
+  assert.match(log.toasts.at(-1).message, /selection.*changed|changed.*selection/i);
+  const messages = log.toasts.length;
+  await controller.loadWorktrees(false);
+  assert.equal(log.toasts.length, messages);
+});
+
+test('note polling reconciles changed selections, and dropped rows lose their approvals', async () => {
+  let rep = selectionReport();
+  const { controller, timers } = build({ respond: url => url === '/worktrees/advise' ? reply({ queued: true }) : url === '/worktrees/remove' ? reply({ pruned: [WT] }) : reply(rep) });
+  await controller.loadWorktrees(false);
+  controller.toggleWorktreeSelection(`${REPO}/review`);
+  const advising = controller.adviseWorktree(`${REPO}/review`);
+  for (let i = 0; i < 20 && !timers.length; i++) await new Promise(resolve => setImmediate(resolve));
+  rep = selectionReport();
+  rep.repos[0].worktrees[1].head = 'new-head';
+  rep.advice = { [`${REPO}/review`]: { assessment: 'remove' } };
+  timers.shift().fn();
+  await advising;
+  assert.equal(controller.worktreesState.selected.size, 0);
+  controller.toggleWorktreeSelection(WT);
+  await controller.pruneWorktrees(REPO);
+  assert.equal(controller.worktreesState.selected.size, 0);
+});
+
+test('bulk selection is single flight from dialog start; cancel preserves marks and sends no writes', async () => {
+  let decide;
+  const { controller, log } = build({ respond: () => reply(selectionReport()), confirmed: () => new Promise(resolve => { decide = resolve; }) });
+  await controller.loadWorktrees(false);
+  controller.toggleWorktreeSelection(WT);
+  const removing = controller.removeSelectedWorktrees();
+  assert.equal(controller.worktreesState.selectionBusy, true);
+  controller.clearWorktreeSelection();
+  controller.toggleWorktreeSelection('/code/lib/other');
+  controller.selectVisibleWorktrees('');
+  await controller.removeSelectedWorktrees();
+  await controller.removeAllRemovable();
+  await controller.removeAllWorktrees(REPO);
+  assert.equal(log.confirms.length, 1);
+  assert.equal(controller.worktreesState.selected.size, 1);
+  decide(false);
+  await removing;
+  assert.equal(controller.worktreesState.selectionBusy, false);
+  assert.equal(controller.worktreesState.selected.size, 1);
+  assert.equal(log.requests.filter(r => r.method === 'POST').length, 0);
+});
+
+test('bulk removal stays single flight while a request is pending and keeps failed approvals for explicit retry', async () => {
+  let finish;
+  const rep = selectionReport();
+  const { controller, log } = build({ respond: url => url === '/worktrees' ? reply(rep) : new Promise(resolve => { finish = resolve; }) });
+  await controller.loadWorktrees(false);
+  controller.toggleWorktreeSelection(WT);
+  const removing = controller.removeSelectedWorktrees();
+  for (let i = 0; i < 20 && !finish; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(controller.worktreesState.selectionBusy, true);
+  await controller.removeSelectedWorktrees();
+  controller.toggleWorktreeSelection('/code/lib/other');
+  assert.equal(log.confirms.length, 1);
+  assert.equal(log.requests.filter(r => r.method === 'POST').length, 1);
+  finish(reply('connection closed after request', false));
+  await removing;
+  assert.equal(controller.worktreesState.selected.size, 1);
+  assert.equal(controller.worktreesState.selected.has(WT), true);
+  assert.equal(controller.worktreesState.selectionBusy, false);
+  assert.equal(log.requests.filter(r => r.method === 'POST').length, 1, 'no automatic retry');
+});
+
+test('an accepted async removal restores its mark after unchanged terminal failure without retrying', async () => {
+  let rep = selectionReport();
+  const { controller, log } = build({ respond: (url, req) => url === '/worktrees' ? reply(rep) : reply({ removal: { path: JSON.parse(req.body).path, state: 'running' } }) });
+  await controller.loadWorktrees(false);
+  controller.toggleWorktreeSelection(WT);
+  const approved = controller.worktreesState.selected.get(WT);
+  await controller.removeSelectedWorktrees();
+  assert.equal(controller.worktreesState.selected.has(WT), false);
+  await controller.loadWorktrees(false);
+  assert.equal(controller.worktreesState.selected.has(WT), false, 'still running');
+  rep = selectionReport();
+  rep.removals = { [WT]: { path: WT, state: 'failed', error: 'permission denied' } };
+  await controller.loadWorktrees(false);
+  assert.equal(controller.worktreesState.selected.get(WT), approved);
+  assert.equal(log.requests.filter(r => r.method === 'POST').length, 1, 'restoring a mark sends no write');
+  controller.clearWorktreeSelection();
+  await controller.loadWorktrees(false);
+  assert.equal(controller.worktreesState.selected.has(WT), false, 'terminal restoration is consumed once');
+});
+
+test('async failure does not restore changed approvals, removed rows, missing rows, or cleared intent', async () => {
+  for (const outcome of ['changed', 'removed', 'missing', 'clear']) {
+    let rep = selectionReport();
+    const { controller, log } = build({ respond: (url, req) => url === '/worktrees' ? reply(rep) : reply({ removal: { path: JSON.parse(req.body).path, state: 'running' } }) });
+    await controller.loadWorktrees(false);
+    controller.toggleWorktreeSelection(WT);
+    await controller.removeSelectedWorktrees();
+    if (outcome === 'clear') controller.clearWorktreeSelection();
+    rep = selectionReport();
+    rep.removals = { [WT]: { path: WT, state: outcome === 'removed' ? 'removed' : 'failed' } };
+    if (outcome === 'changed') rep.repos[0].worktrees[0].head = 'new-head';
+    if (outcome === 'missing') rep.repos[0].worktrees.shift();
+    await controller.loadWorktrees(false);
+    assert.equal(controller.worktreesState.selected.has(WT), false, outcome);
+    rep = selectionReport();
+    rep.removals = { [WT]: { path: WT, state: 'failed' } };
+    await controller.loadWorktrees(false);
+    assert.equal(controller.worktreesState.selected.has(WT), false, `${outcome} cannot restore stale intent later`);
+    assert.equal(log.requests.filter(r => r.method === 'POST').length, 1);
+  }
+});
+
+test('bulk review names every path and route, sends captured head/reasons, and continues after per-path failure', async () => {
+  const rep = selectionReport();
+  const { controller, log, document } = build({ respond: (url, req) => {
+    if (url === '/worktrees') return reply(rep);
+    const body = JSON.parse(req.body);
+    if (body.path === `${REPO}/keep`) return reply('permission denied', false);
+    if (url === '/worktrees/remove') return reply({ removal: { path: body.path, state: 'running' } });
+    return reply({ result: { trash_path: '/trash/review' } });
+  } });
+  await controller.loadWorktrees(false);
+  for (const p of [WT, `${REPO}/keep`, `${REPO}/review`, '/code/lib/other']) controller.toggleWorktreeSelection(p);
+  await controller.removeSelectedWorktrees();
+  const dialog = log.confirms[0].message;
+  for (const p of [WT, `${REPO}/keep`, `${REPO}/review`, '/code/lib/other']) assert.ok(dialog.includes(p));
+  assert.match(dialog, /Checked deletion/);
+  assert.match(dialog, /Trash/);
+  assert.match(dialog, /1 untracked file/);
+  assert.match(dialog, /branches and commits stay/i);
+  assert.match(dialog, /does not register/i);
+  assert.match(dialog, /unknown/i);
+  assert.match(dialog, /partial|at least/i);
+  assert.deepEqual(plain(log.requests.filter(r => r.method === 'POST')), [
+    { url: '/worktrees/remove', method: 'POST', body: { path: WT, async: true } },
+    { url: '/worktrees/review-trash', method: 'POST', body: { path: `${REPO}/keep`, head: 'ccc', reasons: ['unmerged commits'] } },
+    { url: '/worktrees/review-trash', method: 'POST', body: { path: `${REPO}/review`, head: 'bbb', reasons: ['1 untracked file'] } },
+    { url: '/worktrees/remove', method: 'POST', body: { path: '/code/lib/other', async: true } }
+  ]);
+  assert.deepEqual([...controller.worktreesState.selected.keys()], [`${REPO}/keep`]);
+  assert.match(log.toasts.find(t => t.message.includes('permission denied')).message, new RegExp(`${REPO}/keep`));
+  assert.match(document.getElementById('removal-toast').innerHTML, /Removing/);
+  assert.equal(log.ledger, 1);
+  assert.equal(log.requests.filter(r => r.method === 'GET').length, 2, 'one final report read');
+});
+
+test('bulk confirmation cannot promote routes or include new selections, and revalidates before each request', async () => {
+  const rep = selectionReport();
+  let controller;
+  const built = build({ respond: (url, req) => {
+    if (url === '/worktrees') return reply(rep);
+    rep.repos[0].worktrees[1].head = 'changed-during-first-request';
+    return reply({ removal: { path: JSON.parse(req.body).path, state: 'running' } });
+  }, confirmed: () => {
+    rep.repos[0].worktrees[2].state = 'remove';
+    controller.worktreesState.selected.set('/code/lib/other', { path: '/code/lib/other' });
+    return true;
+  } });
+  controller = built.controller;
+  await controller.loadWorktrees(false);
+  for (const p of [WT, `${REPO}/review`, `${REPO}/keep`]) controller.toggleWorktreeSelection(p);
+  await controller.removeSelectedWorktrees();
+  assert.deepEqual(built.log.requests.filter(r => r.method === 'POST').map(r => r.body.path), [WT]);
+  assert.equal(built.log.requests.some(r => r.url === '/worktrees/review-trash'), false);
 });
 
 test('loadWorktrees reads the report, stamps the time and marks the panel dirty around the request', async () => {

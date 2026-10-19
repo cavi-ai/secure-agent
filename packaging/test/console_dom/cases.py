@@ -10,6 +10,7 @@ from cases_review_results import CASES as review_results
 from cases_expected_removal import CASES as expected_removal
 from cases_policy_health import CASES as policy_health
 from cases_protection_context import CASES as protection_context
+from cases_worktree_selection import CASES as worktree_selection
 
 CASES = (*reports, *sessions, *spend, *agent, *policy, *worktrees, *review_results, *expected_removal, *policy_health,
-         *protection_context)
+         *protection_context, *worktree_selection)
