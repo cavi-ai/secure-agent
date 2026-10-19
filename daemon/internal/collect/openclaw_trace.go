@@ -89,16 +89,28 @@ type OpenclawCollector struct {
 	// archived.
 	OnSessionEnded func(sessionID string, at time.Time)
 
-	dbPath    string // resolved lcm.db; "" until found
-	watermark int64  // highest messages.message_id read
-	now       func() time.Time
-	resumed   bool   // watermark came from StatePath
-	started   bool   // the starting watermark is known
-	startErr  string // the first-sight failure last logged
-	noted     map[string]bool
-	ended     map[string]bool
-	callStart map[string]time.Time // session\x00call id → call message time
-	change    dbChange             // skips a poll while lcm.db is unchanged
+	dbPath     string // resolved lcm.db; "" until found
+	watermark  int64  // highest messages.message_id read
+	now        func() time.Time
+	resumed    bool   // watermark came from StatePath
+	started    bool   // the starting watermark is known
+	startErr   string // the first-sight failure last logged
+	noted      map[string]bool
+	ended      map[string]bool
+	callStart  map[string]time.Time // session\x00call id → call message time
+	change     dbChange             // skips a poll while lcm.db is unchanged
+	scanMsg    int64                // accepted message-part prefix since watermark
+	scanPart   int
+	scanPartID string
+	pending    *openclawPendingRow
+}
+
+type openclawPendingRow struct {
+	msgID   int64
+	ordinal int
+	partID  string
+	events  []event.Event
+	next    int
 }
 
 // NewOpenclawCollector builds the poller. dbPath, when non-empty, pins the
@@ -204,6 +216,8 @@ func (c *OpenclawCollector) openReadOnly() (*sql.DB, error) {
 // openclawRow is one message × part row of a poll. No content column.
 type openclawRow struct {
 	msgID                         int64
+	ordinal                       int
+	partID                        string
 	role, created, sessionID, key string
 	partType, callID, toolName    string
 	toolStatus                    string
@@ -220,6 +234,7 @@ type openclawRow struct {
 // not fail the batch.
 const openclawMessagesQuery = `
 SELECT m.message_id, m.role, m.created_at, c.session_id, COALESCE(c.session_key, ''),
+       COALESCE(p.ordinal, -1), COALESCE(p.part_id, ''),
        COALESCE(p.part_type, ''), COALESCE(p.tool_call_id, ''), COALESCE(p.tool_name, ''),
        COALESCE(p.tool_status, ''), COALESCE(p.tool_error, '') != '',
        COALESCE(p.step_cost, 0), COALESCE(p.step_tokens_in, 0), COALESCE(p.step_tokens_out, 0),
@@ -232,7 +247,9 @@ FROM messages m
 JOIN conversations c ON c.conversation_id = m.conversation_id
 LEFT JOIN message_parts p ON p.message_id = m.message_id
 WHERE m.message_id IN (SELECT message_id FROM messages WHERE message_id > ? ORDER BY message_id LIMIT ?)
-ORDER BY m.message_id, p.ordinal`
+  AND (? = 0 OR m.message_id > ? OR (m.message_id = ? AND
+       (COALESCE(p.ordinal, -1) > ? OR (COALESCE(p.ordinal, -1) = ? AND COALESCE(p.part_id, '') > ?))))
+ORDER BY m.message_id, p.ordinal, p.part_id`
 
 // openclawStateQuery reports, per session, whether any conversation is still
 // live, when the last one was archived or updated, and its newest message.
@@ -247,31 +264,40 @@ GROUP BY c.session_id`
 // pollOnce reads messages past the watermark, publishes their events, ends
 // conversations openclaw closed, and returns how many events were published.
 func (c *OpenclawCollector) pollOnce() int {
+	prefixPublished := 0
+	if c.pending != nil {
+		prefixPublished = c.publishPending()
+		if c.pending != nil {
+			return prefixPublished
+		}
+	}
 	if !c.resolve() {
-		return 0
+		return prefixPublished
 	}
 	fp, run := c.change.begin(c.dbPath)
 	if !run {
-		return 0
+		return prefixPublished
 	}
 	db, err := c.openReadOnly()
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			log.Printf("openclaw: cannot read %s: %v", c.dbPath, err)
 		}
-		return 0
+		return prefixPublished
 	}
 	defer db.Close()
 
 	if !c.start(db) {
-		return 0
+		return prefixPublished
 	}
 	from := c.watermark
 	published, ok, clean := c.readMessages(db)
-	if ok && c.endClosed(db) && clean && c.watermark == from {
-		c.change.done(fp)
+	if ok && clean {
+		if c.endClosed(db) && c.watermark == from {
+			c.change.done(fp)
+		}
 	}
-	return published
+	return prefixPublished + published
 }
 
 // start fixes the starting watermark on the first open: the persisted one,
@@ -294,6 +320,7 @@ func (c *OpenclawCollector) start(db *sql.DB) bool {
 		return false
 	}
 	c.watermark, c.started = wm, true
+	c.saveState()
 	log.Printf("openclaw: polling %s from message %d (first sight: last 24h)", c.dbPath, wm)
 	return true
 }
@@ -315,27 +342,29 @@ func openclawFirstSightMark(db *sql.DB, cutoff time.Time) (int64, error) {
 // readMessages publishes the next batch past the watermark. ok is false when
 // the query failed; clean is false when the query or its cursor failed.
 func (c *OpenclawCollector) readMessages(db *sql.DB) (published int, ok, clean bool) {
-	rows, err := db.Query(openclawMessagesQuery, c.watermark, maxOpenclawMessages)
+	rows, err := db.Query(openclawMessagesQuery, c.watermark, maxOpenclawMessages,
+		c.scanMsg, c.scanMsg, c.scanMsg, c.scanPart, c.scanPart, c.scanPartID)
 	if err != nil {
 		log.Printf("openclaw: query failed (schema drift?): %v", err)
 		return 0, false, false
 	}
 	defer rows.Close()
 
-	maxSeen := c.watermark
 	var lastMsg int64
+	clean = true
 	for rows.Next() {
 		var r openclawRow
-		if err := rows.Scan(&r.msgID, &r.role, &r.created, &r.sessionID, &r.key,
+		if err := rows.Scan(&r.msgID, &r.role, &r.created, &r.sessionID, &r.key, &r.ordinal,
+			&r.partID,
 			&r.partType, &r.callID, &r.toolName, &r.toolStatus, &r.toolFailed,
 			&r.stepCost, &r.tokIn, &r.tokOut,
 			&r.resultCallID, &r.resultTool, &r.resultError, &r.modelID, &r.modelProvider); err != nil {
-			continue
-		}
-		if r.msgID > maxSeen {
-			maxSeen = r.msgID
+			log.Printf("openclaw: scan row: %v", err)
+			clean = false
+			break
 		}
 		if r.sessionID == "" {
+			c.scanMsg, c.scanPart, c.scanPartID = r.msgID, r.ordinal, r.partID
 			continue
 		}
 		ts, observed := parseOpenclawTime(r.created)
@@ -345,24 +374,47 @@ func (c *OpenclawCollector) readMessages(db *sql.DB) (published int, ok, clean b
 				c.OnSessionSeen(r.sessionID, "openclaw", OpenclawWorkspaceLabel(r.key), ts)
 			}
 		}
-		first := r.msgID != lastMsg
+		first := r.msgID != lastMsg && r.msgID != c.scanMsg
 		lastMsg = r.msgID
-		for _, e := range c.rowEvents(r, ts, first) {
-			e.ObservedTS = observed
-			c.bus.Publish(e)
-			published++
+		events := c.rowEvents(r, ts, first)
+		for i := range events {
+			events[i].ObservedTS = observed
+		}
+		c.pending = &openclawPendingRow{msgID: r.msgID, ordinal: r.ordinal, partID: r.partID, events: events}
+		published += c.publishPending()
+		if c.pending != nil {
+			return published, true, false
 		}
 	}
-	clean = true
 	if err := rows.Err(); err != nil {
 		log.Printf("openclaw: cursor error (partial poll): %v", err)
 		clean = false
 	}
-	if maxSeen > c.watermark {
-		c.watermark = maxSeen
+	if clean && c.scanMsg > c.watermark {
+		c.watermark = c.scanMsg
+		c.scanMsg, c.scanPart, c.scanPartID = 0, 0, ""
 		c.saveState()
 	}
 	return published, true, clean
+}
+
+// publishPending retries only the rejected suffix of one source row. Each
+// row produces at most two events, so retry memory remains bounded.
+func (c *OpenclawCollector) publishPending() int {
+	if c.pending == nil {
+		return 0
+	}
+	p := c.pending
+	start := p.next
+	for p.next < len(p.events) {
+		if !c.bus.TryPublish(p.events[p.next]) {
+			return p.next - start
+		}
+		p.next++
+	}
+	c.scanMsg, c.scanPart, c.scanPartID = p.msgID, p.ordinal, p.partID
+	c.pending = nil
+	return p.next - start
 }
 
 // rowEvents maps one message × part row to trace events. first is true for

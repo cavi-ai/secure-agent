@@ -8,7 +8,71 @@ import (
 	"testing"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
+
+func TestOpencodeRetriesRejectedPartsAfterCheckpointReload(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "opencode.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE session (id TEXT PRIMARY KEY,directory TEXT);
+		CREATE TABLE part (id TEXT PRIMARY KEY,session_id TEXT,time_updated INTEGER,data TEXT);
+		INSERT INTO session VALUES ('s','/workspace')`); err != nil {
+		t.Fatal(err)
+	}
+
+	state := filepath.Join(dir, "checkpoint.json")
+	b1 := bus.New(1)
+	defer b1.Close()
+	sub1 := b1.Subscribe()
+	c1 := NewOpencodeCollector(b1, path, 0)
+	c1.StatePath = state
+	c1.primeWatermark()
+	if err := c1.saveState(); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		id := fmt.Sprintf("part-%d", i)
+		call := fmt.Sprintf("call-%d", i)
+		if _, err := db.Exec(`INSERT INTO part VALUES (?, 's', 200, ?)`, id,
+			`{"type":"tool","tool":"read","callID":"`+call+`","state":{"status":"running"}}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b1.Publish(event.Event{CallID: "blocker"})
+	c1.pollOnce()
+	if got := receiveCollectorRetryEvent(t, sub1).CallID; got != "blocker" {
+		t.Fatalf("blocker = %q", got)
+	}
+
+	b2 := bus.New(1)
+	defer b2.Close()
+	sub2 := b2.Subscribe()
+	c2 := NewOpencodeCollector(b2, path, 0)
+	c2.StatePath = state
+	if !c2.loadState() {
+		t.Fatal("restart did not load the on-disk checkpoint")
+	}
+	var calls []string
+	for range 6 {
+		c2.pollOnce()
+		select {
+		case e := <-sub2:
+			calls = append(calls, e.CallID)
+		default:
+		}
+		if len(calls) == 3 {
+			break
+		}
+	}
+	if got := fmt.Sprint(calls); got != "[call-0 call-1 call-2]" {
+		t.Fatalf("checkpoint reload returned source calls %s, want [call-0 call-1 call-2]", got)
+	}
+}
 
 func TestOpencodeDrainsTiesAndReconcilesLateChanges(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "opencode.db")

@@ -126,11 +126,13 @@ type HermesCollector struct {
 	// (the per-database watermarks are in Status).
 	OnPoll func(source string, watermark int64)
 
-	now       func() time.Time // the clock the first-sight window counts back from
-	loaded    bool
-	persisted map[string]int64
-	idle      bool // the "not found" line was logged
-	dbs       map[string]*hermesDB
+	now            func() time.Time // the clock the first-sight window counts back from
+	loaded         bool
+	persisted      map[string]int64
+	persistedUsage map[string]map[string]hermesUsageState
+	persistedLive  map[string]map[string]time.Time
+	idle           bool // the "not found" line was logged
+	dbs            map[string]*hermesDB
 
 	mu     sync.Mutex // guards status, read by the API
 	status HermesStatus
@@ -145,21 +147,44 @@ type hermesDB struct {
 	startMark int64
 	// started is true once the starting watermark is known: persisted, or
 	// found in the database on first sight.
-	started   bool
-	lastErr   string // this poll's read failure, for the doctor
-	logged    string // the failure last logged; cleared by a clean poll
-	noted     map[string]bool
-	ended     map[string]bool
-	live      map[string]time.Time // session → last activity; re-read each poll
-	inputSeen map[string]int64     // session → input_tokens already attributed
-	usage     map[string]hermesUsage
-	callStart map[string]hermesCall
-	change    dbChange // skips a poll while the database is unchanged
+	started         bool
+	lastErr         string // this poll's read failure, for the doctor
+	logged          string // the failure last logged; cleared by a clean poll
+	noted           map[string]bool
+	ended           map[string]bool
+	live            map[string]time.Time // session → last activity; re-read each poll
+	inputSeen       map[string]int64     // session → input_tokens already attributed
+	usage           map[string]hermesUsage
+	callStart       map[string]hermesCall
+	change          dbChange // skips a poll while the database is unchanged
+	pending         *hermesPending
+	checkpointUsage map[string]hermesUsage
+	checkpointLive  map[string]time.Time
+}
+
+// hermesPending retains one bounded poll's unaccepted event suffix and its
+// candidate checkpoint. The watermark is committed only after delivery.
+type hermesPending struct {
+	events    []event.Event
+	next      int
+	watermark int64
+	from      int64
+	fp        dbFingerprint
+	clean     bool
+	dirty     bool
+	usageRead bool
+	sessions  map[string]hermesSession
 }
 
 type hermesUsage struct {
 	in, out int64
 	cost    float64
+}
+
+type hermesUsageState struct {
+	In   int64   `json:"in"`
+	Out  int64   `json:"out"`
+	Cost float64 `json:"cost"`
 }
 
 type hermesCall struct {
@@ -291,6 +316,14 @@ func (c *HermesCollector) db(path string) *hermesDB {
 		path: path, watermark: wm, startMark: wm, started: resumed,
 		noted: map[string]bool{}, ended: map[string]bool{}, live: map[string]time.Time{},
 		inputSeen: map[string]int64{}, usage: map[string]hermesUsage{}, callStart: map[string]hermesCall{},
+		checkpointUsage: map[string]hermesUsage{}, checkpointLive: map[string]time.Time{},
+	}
+	for key, usage := range c.persistedUsage[path] {
+		v := hermesUsage{in: usage.In, out: usage.Out, cost: usage.Cost}
+		d.usage[key], d.checkpointUsage[key] = v, v
+	}
+	for id, at := range c.persistedLive[path] {
+		d.live[id], d.checkpointLive[id] = at, at
 	}
 	c.dbs[path] = d
 	if resumed {
@@ -383,6 +416,9 @@ func (d *hermesDB) fail(what string, err error) {
 // pollDB reads one database: the next batch of messages, the sessions they
 // and the live set belong to, usage totals, and ends.
 func (c *HermesCollector) pollDB(d *hermesDB) int {
+	if d.pending != nil {
+		return c.flushPending(d)
+	}
 	d.lastErr = ""
 	fp, run := d.change.begin(d.path)
 	if !run {
@@ -416,6 +452,9 @@ func (c *HermesCollector) pollDB(d *hermesDB) int {
 		}
 		d.watermark, d.startMark, d.started = wm, wm, true
 		log.Printf("hermes: polling %s from message %d (first sight: last 24h)", d.path, wm)
+		// Persist the first-sight boundary before producing events so a restart
+		// can resume pending rows even after they age out of the lookback.
+		c.saveState()
 	}
 	sessCols, err := hermesTableColumns(db, "sessions")
 	if err == nil && !sessCols["id"] {
@@ -457,15 +496,11 @@ func (c *HermesCollector) pollDB(d *hermesDB) int {
 		return 0
 	}
 
-	published := 0
-	publish := func(e event.Event) {
-		c.bus.Publish(e)
-		published++
-	}
+	pending := &hermesPending{watermark: d.watermark, from: from, fp: fp, clean: clean, sessions: sessions}
 	var lastMsg int64
 	for _, r := range rows {
-		if r.msgID > d.watermark {
-			d.watermark = r.msgID
+		if r.msgID > pending.watermark {
+			pending.watermark = r.msgID
 		}
 		if r.sessionID == "" {
 			continue
@@ -477,25 +512,53 @@ func (c *HermesCollector) pollDB(d *hermesDB) int {
 		lastMsg = r.msgID
 		for _, e := range c.rowEvents(d, r, ts, first, usageMode, sessions[r.sessionID], lastTok[r.sessionID] == r.msgID) {
 			e.ObservedTS = r.ts <= 0
-			publish(e)
+			pending.events = append(pending.events, e)
 		}
 	}
 	if usageMode {
-		for _, e := range c.usageEvents(db, d, usageCols, sessions) {
-			publish(e)
-		}
+		var usageRead bool
+		var usageEvents []event.Event
+		usageEvents, usageRead = c.usageEvents(db, d, usageCols, sessions)
+		pending.events = append(pending.events, usageEvents...)
+		pending.usageRead = usageRead
 	}
-	c.endSessions(d, sessions)
+	pending.dirty = len(rows) > 0 || len(pending.events) > 0 || pending.usageRead
+	d.pending = pending
+	return c.flushPending(d)
+}
+
+// flushPending offers the staged batch's remaining suffix. TryPublish rejects
+// atomically when any subscriber is full, leaving the event for the next poll.
+func (c *HermesCollector) flushPending(d *hermesDB) int {
+	p := d.pending
+	published := 0
+	for p.next < len(p.events) {
+		if !c.bus.TryPublish(p.events[p.next]) {
+			break
+		}
+		p.next++
+		published++
+	}
+	if p.next != len(p.events) {
+		return published
+	}
+	d.watermark = p.watermark
+	c.endSessions(d, p.sessions)
 	c.pruneLive(d)
 	if d.lastErr == "" {
 		d.logged = ""
-		if clean && d.watermark == from {
-			d.change.done(fp)
+		if p.clean && d.watermark == p.from {
+			d.change.done(p.fp)
 		}
 	}
-	if published > 0 || len(rows) > 0 {
+	if p.dirty {
+		d.checkpointLive = cloneHermesLive(d.live)
+		if p.usageRead {
+			d.checkpointUsage = snapshotHermesUsage(d.usage, d.live)
+		}
 		c.saveState()
 	}
+	d.pending = nil
 	return published
 }
 
@@ -666,9 +729,9 @@ func (c *HermesCollector) rowEvents(d *hermesDB, r hermesRow, ts time.Time, firs
 
 // usageEvents emits, per session and model, the growth of its
 // session_model_usage totals since the last poll.
-func (c *HermesCollector) usageEvents(db *sql.DB, d *hermesDB, cols hermesCols, sessions map[string]hermesSession) []event.Event {
+func (c *HermesCollector) usageEvents(db *sql.DB, d *hermesDB, cols hermesCols, sessions map[string]hermesSession) ([]event.Event, bool) {
 	if len(sessions) == 0 {
-		return nil
+		return nil, true
 	}
 	cost := "NULL"
 	for _, name := range []string{"actual_cost_usd", "estimated_cost_usd", "cost_usd"} {
@@ -696,7 +759,7 @@ GROUP BY u.session_id, u.model ORDER BY u.session_id, u.model`,
 	rows, err := db.Query(q, args...)
 	if err != nil {
 		d.fail("usage query", err)
-		return nil
+		return nil, false
 	}
 	defer rows.Close()
 	var out []event.Event
@@ -737,8 +800,10 @@ GROUP BY u.session_id, u.model ORDER BY u.session_id, u.model`,
 	}
 	if err := rows.Err(); err != nil {
 		log.Printf("hermes: %s: usage cursor error: %v", d.path, err)
+		d.fail("usage cursor", err)
+		return out, false
 	}
-	return out
+	return out, true
 }
 
 // endSessions ends each noted session Hermes gave an ended_at, once all of
@@ -785,13 +850,38 @@ func hermesTime(sec float64) time.Time {
 	return time.Unix(0, int64(sec*1e9)).UTC()
 }
 
-// hermesState is the persisted per-database watermarks.
+// hermesState stores per-database watermarks and bounded live-session usage.
 type hermesState struct {
-	DBs map[string]int64 `json:"dbs"`
+	DBs   map[string]int64                       `json:"dbs"`
+	Usage map[string]map[string]hermesUsageState `json:"usage,omitempty"`
+	Live  map[string]map[string]time.Time        `json:"live,omitempty"`
+}
+
+func snapshotHermesUsage(usage map[string]hermesUsage, live map[string]time.Time) map[string]hermesUsage {
+	out := make(map[string]hermesUsage)
+	for key, value := range usage {
+		sessionID, _, ok := strings.Cut(key, "\x00")
+		if ok {
+			if _, isLive := live[sessionID]; isLive {
+				out[key] = value
+			}
+		}
+	}
+	return out
+}
+
+func cloneHermesLive(live map[string]time.Time) map[string]time.Time {
+	out := make(map[string]time.Time, min(len(live), maxHermesLive))
+	for id, at := range live {
+		out[id] = at
+	}
+	return out
 }
 
 func (c *HermesCollector) loadState() {
 	c.persisted = map[string]int64{}
+	c.persistedUsage = map[string]map[string]hermesUsageState{}
+	c.persistedLive = map[string]map[string]time.Time{}
 	if c.StatePath == "" {
 		return
 	}
@@ -807,6 +897,28 @@ func (c *HermesCollector) loadState() {
 		for p, wm := range st.DBs {
 			c.persisted[p] = wm
 		}
+		for p, live := range st.Live {
+			if len(live) > maxHermesLive {
+				continue
+			}
+			c.persistedLive[p] = live
+		}
+		for p, usage := range st.Usage {
+			live := c.persistedLive[p]
+			if len(live) == 0 {
+				continue
+			}
+			filtered := make(map[string]hermesUsageState)
+			for key, value := range usage {
+				sessionID, _, ok := strings.Cut(key, "\x00")
+				if ok {
+					if _, retained := live[sessionID]; retained {
+						filtered[key] = value
+					}
+				}
+			}
+			c.persistedUsage[p] = filtered
+		}
 	}
 }
 
@@ -814,12 +926,28 @@ func (c *HermesCollector) saveState() {
 	if c.StatePath == "" {
 		return
 	}
-	st := hermesState{DBs: map[string]int64{}}
+	st := hermesState{
+		DBs: map[string]int64{}, Usage: map[string]map[string]hermesUsageState{},
+		Live: map[string]map[string]time.Time{},
+	}
 	for p, wm := range c.persisted {
 		st.DBs[p] = wm
 	}
+	for p, usage := range c.persistedUsage {
+		st.Usage[p] = usage
+	}
+	for p, live := range c.persistedLive {
+		st.Live[p] = live
+	}
 	for p, d := range c.dbs {
-		st.DBs[p] = d.watermark
+		if d.started {
+			st.DBs[p] = d.watermark
+			st.Usage[p] = make(map[string]hermesUsageState, len(d.checkpointUsage))
+			for key, usage := range d.checkpointUsage {
+				st.Usage[p][key] = hermesUsageState{In: usage.in, Out: usage.out, Cost: usage.cost}
+			}
+			st.Live[p] = cloneHermesLive(d.checkpointLive)
+		}
 	}
 	data, err := json.Marshal(st)
 	if err != nil {
