@@ -69,7 +69,7 @@ func handleSession(client *http.Client) {
 		}
 	}
 	if arg == "" {
-		fmt.Println("usage: secure-agent session <id-or-prefix> [--follow-up] [--json]")
+		fmt.Println("usage: secure-agent session <id-or-prefix> [--follow-up [--inspect-permissions]] [--json]")
 		os.Exit(1)
 	}
 	format := "md"
@@ -77,7 +77,21 @@ func handleSession(client *http.Client) {
 	if asJSON {
 		format = "json"
 	}
-	if slices.Contains(args, "--follow-up") {
+	followUp := slices.Contains(args, "--follow-up")
+	inspectPermissions := slices.Contains(args, "--inspect-permissions")
+	if inspectPermissions && !followUp {
+		fmt.Fprintln(os.Stderr, "--inspect-permissions requires --follow-up")
+		fmt.Fprintln(os.Stderr, "usage: secure-agent session <id-or-prefix> --follow-up --inspect-permissions [--json]")
+		os.Exit(1)
+	}
+	if followUp {
+		if inspectPermissions {
+			if err := runSessionFollowUpInspection(client, arg, asJSON, os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, terminalSafe(err.Error()))
+				os.Exit(1)
+			}
+			return
+		}
 		if err := runSessionFollowUp(client, arg, asJSON, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, terminalSafe(err.Error()))
 			os.Exit(1)
