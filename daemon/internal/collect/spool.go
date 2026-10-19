@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
@@ -114,11 +116,12 @@ func spoolFacts(path string) (int64, time.Time) {
 // mtime of the program launchd runs for it (zero when absent). The probe is injectable
 // (ESServiceProbe) so tests never shell out.
 type ESServiceSnapshot struct {
-	BytesLost   uint64    `json:"bytes_lost"`
-	State       string    `json:"state"`
-	SpoolSize   int64     `json:"spool_size"`
-	SpoolMtime  time.Time `json:"spool_mtime"`
-	HelperMtime time.Time `json:"helper_mtime"`
+	BytesLost   uint64             `json:"bytes_lost"`
+	State       string             `json:"state"`
+	SpoolSize   int64              `json:"spool_size"`
+	SpoolMtime  time.Time          `json:"spool_mtime"`
+	HelperMtime time.Time          `json:"helper_mtime"`
+	Collector   *ESCollectorStatus `json:"collector,omitempty"`
 
 	// Flooding and UnparsedShare come from the tailer's drain stats (nil
 	// when the daemon does not tail a spool): Flooding is true while the
@@ -175,6 +178,10 @@ func ESServiceState() (ESServiceSnapshot, error) {
 	}
 	s.State = parseLaunchctlState(string(out))
 	s.HelperMtime = helperMtime(string(out))
+	s.Collector = readESCollectorStatus(ESCollectorStatusPath, launchctlPID(string(out)), time.Now())
+	if s.Collector != nil && s.Collector.HelperMtime != nil {
+		s.HelperMtime = *s.Collector.HelperMtime
+	}
 	return s, nil
 }
 
@@ -182,6 +189,13 @@ func ESServiceState() (ESServiceSnapshot, error) {
 // `launchctl print` output; zero when the line or the file is absent.
 func helperMtime(out string) time.Time {
 	program := parseLaunchctlProgram(out)
+	if program == "" && launchctlValue(out, "program identifier") != "" {
+		if pid := launchctlPID(out); pid > 0 {
+			if info, ok := agents.NewProcSource().Info(int32(pid)); ok {
+				program = info.Exe
+			}
+		}
+	}
 	if program == "" {
 		return time.Time{}
 	}
@@ -196,12 +210,24 @@ func helperMtime(out string) time.Time {
 // `program =` line of `launchctl print` output, or "" when there is none.
 // Same indentation rule as parseLaunchctlState.
 func parseLaunchctlProgram(out string) string {
+	if program := launchctlValue(out, "program"); filepath.IsAbs(program) {
+		return program
+	}
+	return ""
+}
+
+func launchctlPID(out string) int {
+	pid, err := strconv.ParseInt(launchctlValue(out, "pid"), 10, 32)
+	if err == nil && pid > 0 {
+		return int(pid)
+	}
+	return 0
+}
+
+func launchctlValue(out, key string) string {
 	for line := range strings.SplitSeq(out, "\n") {
-		if !strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "\t\t") {
-			continue
-		}
-		if program, ok := strings.CutPrefix(strings.TrimSpace(line), "program = "); ok && filepath.IsAbs(program) {
-			return program
+		if value, ok := strings.CutPrefix(line, "\t"+key+" = "); ok {
+			return value
 		}
 	}
 	return ""

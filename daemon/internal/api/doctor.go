@@ -216,9 +216,13 @@ func checkFileTelemetry(f doctorFacts) (string, string) {
 	if es == nil {
 		return doctorSkip, "not spool-based"
 	}
-	switch {
-	case es.Losing:
+	if es.Losing {
 		return doctorFail, esLossDetail(*es)
+	}
+	if title, detail := collectorFailure(f.now, *es); title != "" {
+		return doctorFail, detail
+	}
+	switch {
 	case esServiceFlooding(f.now, *es):
 		return doctorFail, esFloodingDetail(*es)
 	case esServiceLagging(f.now, *es):
@@ -472,7 +476,7 @@ func checkStorage(f doctorFacts) (string, string) {
 		return doctorSkip, "storage health unavailable"
 	}
 	if len(h.ReadActive) > 0 {
-		return doctorFail, "evidence reads unavailable: " + strings.Join(h.ReadActive, ", ")
+		return doctorFail, "evidence reads unavailable: " + strings.Join(h.ReadActive, ", ") + readIssueDetail(*h)
 	}
 	if h.Failures == 0 {
 		return doctorPass, "no failed evidence writes"

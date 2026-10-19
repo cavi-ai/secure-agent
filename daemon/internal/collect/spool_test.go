@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -116,6 +117,24 @@ func TestHelperMtimeStatsTheLaunchctlProgram(t *testing.T) {
 	}
 	if got := helperMtime("\tprogram = " + helper + ".missing\n"); !got.IsZero() {
 		t.Fatalf("missing program file: helperMtime = %v, want zero", got)
+	}
+}
+
+func TestHelperMtimeResolvesSMAppServiceProcess(t *testing.T) {
+	out := "\tstate = running\n\tprogram identifier = Contents/MacOS/secure-agent-esd (mode: 2)\n\tpid = " + strconv.Itoa(os.Getpid()) + "\n"
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := helperMtime(out); !got.Equal(info.ModTime()) {
+		t.Fatalf("SMAppService helper mtime = %v, want %v", got, info.ModTime())
+	}
+	if got := helperMtime("\tprogram identifier = Contents/MacOS/secure-agent-esd (mode: 2)\n\tpid = 0\n"); !got.IsZero() {
+		t.Fatalf("missing process supplied helper mtime: %v", got)
 	}
 }
 

@@ -47,11 +47,21 @@ export interface HealthSnapshot {
   retry_at: string;
 }
 
+export interface ReadIssue {
+  operation: string;
+  category: string;
+  failures: number;
+  first_failure_at: string;
+  last_failure_at: string;
+  recovered_at?: string;
+}
+
 export interface WriteHealth {
   failures: number;
   active: string[] | null;
   read_failures?: number;
   read_active?: string[];
+  read_issues?: ReadIssue[];
 }
 
 export interface EgressProjectionHealth {
@@ -191,12 +201,21 @@ export interface Health {
   watermark?: number;
 }
 
+export interface ESCollectorStatus {
+  pid: number;
+  state: string;
+  updated_at: string;
+  last_delivery_at?: string;
+  helper_mtime?: string;
+}
+
 export interface ESServiceSnapshot {
   bytes_lost: number;
   state: string;
   spool_size: number;
   spool_mtime: string;
   helper_mtime: string;
+  collector?: ESCollectorStatus;
   flooding: boolean;
   unparsed_share: number;
   bytes_skipped: number;
