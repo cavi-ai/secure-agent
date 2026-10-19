@@ -76,6 +76,10 @@ const (
 	reportEventCap    = 20000
 	reportTimelineCap = 500
 	reportFlagLimit   = 1000
+	// Pool pressure must not delay reports, but decoding the supported
+	// event cap needs more time than a small indexed lookup.
+	reportEventAcquireTimeout = 100 * time.Millisecond
+	reportEventReadTimeout    = time.Second
 )
 
 // ReportTopN caps a SessionReport's Files and Hosts lists.
@@ -267,9 +271,16 @@ var sessionEventsSQL = `SELECT kind, ts, COALESCE(path,''), COALESCE(remote_host
 // in time order (insertion order breaks ties).
 func (s *Store) sessionEventsOldestFirst(id string) (out []event.Event, readErr error) {
 	defer func() { s.noteRead("session report events", readErr) }()
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), reportEventAcquireTimeout)
+	conn, err := s.db.Conn(waitCtx)
+	cancelWait()
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), reportEventReadTimeout)
 	defer cancel()
-	rows, err := s.db.QueryContext(ctx, sessionEventsSQL, id, reportEventCap)
+	rows, err := conn.QueryContext(ctx, sessionEventsSQL, id, reportEventCap)
 	if err != nil {
 		return nil, err
 	}
