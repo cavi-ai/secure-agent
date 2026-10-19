@@ -26,6 +26,61 @@ const { worktreeStateCounts, worktreeGroups, worktreeRowHTML, worktreeGroupHTML,
   localDayKey, fmtDayKey, fmtElapsed, removalToastModel, removalToastHTML, reclaimDayText } = ctx;
 
 const REPO = '/Users/x/code/app';
+test('row selection is accessible, reflects marks, and explains blocked rows beside advisor recommendations', () => {
+  const repo = { path: REPO };
+  const row = { path: `${REPO}/review`, state: 'review', head: 'abc', reasons: ['1 untracked file'] };
+  const state = { selected: new Map([[row.path, {}]]), selectionBusy: false };
+  const note = { assessment: 'remove', confidence: 0.92, rationale: 'squashed commits' };
+  const html = worktreeRowHTML(row, repo, note, null, null, null, state);
+  assert.equal((html.match(/data-action="worktree-select"/g) || []).length, 2);
+  assert.equal((html.match(/aria-pressed="true"/g) || []).length, 2);
+  assert.match(html, /Marked for removal/);
+  const blocked = worktreeRowHTML({ ...row, locked: true }, repo, note);
+  assert.match(blocked, /data-action="worktree-select"[^>]*disabled/);
+  assert.match(blocked, /locked; unlock it first/);
+  for (const extra of [{ head: '' }, { reasons: [] }, { reasons: undefined }]) {
+    const missing = worktreeRowHTML({ ...row, ...extra }, repo, note);
+    assert.match(missing, /data-action="worktree-select"[^>]*disabled/);
+    assert.match(missing, /inspection details are missing/);
+  }
+  for (const extra of [{ state: 'main' }, { state: 'prune' }, { orphan: true }]) {
+    assert.ok(!worktreeRowHTML({ ...row, ...extra }, repo, note).includes('worktree-select'));
+  }
+});
+
+test('selection summary preserves hidden marks and labels partial and unknown sizes', () => {
+  const rep = { repos: [{ path: REPO, worktrees: [
+    { path: '/one', state: 'remove', size_bytes: 1024, size_partial: true },
+    { path: '/two', state: 'remove' }
+  ] }] };
+  const selected = new Map([['/one', {}], ['/two', {}]]);
+  const html = ctx.worktreeSelectionHTML(rep, { selected, selectionBusy: false }, []);
+  assert.match(html, /2 selected/);
+  assert.match(html, /2 hidden/);
+  assert.match(html, /partial|at least/);
+  assert.match(html, /unknown/);
+  assert.match(html, /worktrees-clear-selection/);
+  assert.match(html, /worktrees-remove-selected/);
+  const busy = ctx.worktreeSelectionHTML(rep, { selected, selectionBusy: true }, []);
+  assert.match(busy, /data-action="worktrees-remove-selected" disabled>Remove selected…/);
+  assert.ok(!busy.includes('Removing selected'));
+  const pending = ctx.worktreeSelectionHTML(rep, { selected: new Map(), pendingRemovalSelections: new Map([['/one', {}]]) }, []);
+  assert.match(pending, /1 pending removal/);
+  assert.match(pending, /data-action="worktrees-clear-selection" title=/);
+});
+
+test('long removal confirmations scroll their message while keeping title and action buttons visible', () => {
+  const css = readFileSync(path.join(webDist, 'style.css'), 'utf8');
+  const rule = selector => (css.match(new RegExp('(?:^|\\n)' + selector.replace(/[.[\]():]/g, '\\$&') + '\\s*\\{([^}]*)\\}')) || [])[1] || '';
+  assert.match(rule('.confirm-card'), /display: flex/);
+  assert.match(rule('.confirm-card'), /flex-direction: column/);
+  assert.match(rule('.confirm-card'), /max-height: calc\(100vh - 32px\)/);
+  assert.match(rule('.confirm-card'), /max-height: calc\(100dvh - 32px\)/);
+  assert.match(rule('.confirm-message'), /min-height: 0/);
+  assert.match(rule('.confirm-message'), /overflow-y: auto/);
+  assert.match(rule('.confirm-actions'), /flex-shrink: 0/);
+  assert.match(rule('.confirm-card h3'), /flex-shrink: 0/);
+});
 test('worktree hierarchy keeps escaped complete identities and exact ordered action targets', () => {
   const repo = {path: '/workspace/"team"/<service>', default_branch: 'origin/main', source: 'session'};
   const row = {path: repo.path + '/.worktrees/long-identity', branch: 'feat/<complete>"identity"', state: 'review', reasons: ['1 uncommitted change']};
@@ -35,7 +90,7 @@ test('worktree hierarchy keeps escaped complete identities and exact ordered act
   assert.ok(html.includes('<span class="wt-repo-path" title="/workspace/&quot;team&quot;/&lt;service&gt;">/workspace/&quot;team&quot;/&lt;service&gt;</span>'));
   assert.ok(html.includes('<span class="wt-branch">feat/&lt;complete&gt;&quot;identity&quot;</span>'));
   const renderedRow = html.slice(html.indexOf('class="wt-row'));
-  assert.deepEqual([...renderedRow.matchAll(/data-action="([a-z-]+)"/g)].map(match => match[1]), ['copy-path', 'worktree-reveal', 'worktree-review-trash', 'worktree-ask', 'worktree-advise', 'worktree-discuss']);
+  assert.deepEqual([...renderedRow.matchAll(/data-action="([a-z-]+)"/g)].map(match => match[1]), ['copy-path', 'worktree-reveal', 'worktree-review-trash', 'worktree-ask', 'worktree-advise', 'worktree-select', 'worktree-discuss']);
   for (const match of renderedRow.matchAll(/data-action="[a-z-]+" data-path="([^"]+)"/g)) {
     assert.equal(match[1], '/workspace/&quot;team&quot;/&lt;service&gt;/.worktrees/long-identity');
   }
@@ -100,13 +155,13 @@ test('worktreeRowHTML: Remove on remove, review and keep rows, Prune only on pru
   assert.match(goneHTML, /data-action="worktree-prune" data-repo="\/Users\/x\/code\/app"/);
   assert.match(goneHTML, /<span class="wt-idle">—<\/span>/);
   const keepHTML = worktreeRowHTML(keep, rep.repos[1], null, null, null, 'codex');
-  assert.deepEqual([...keepHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['copy-path', 'worktree-reveal', 'worktree-review-trash', 'worktree-ask', 'worktree-advise', 'worktree-discuss']);
+  assert.deepEqual([...keepHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['copy-path', 'worktree-reveal', 'worktree-review-trash', 'worktree-ask', 'worktree-advise', 'worktree-select', 'worktree-discuss']);
   assert.match(keepHTML, /class="btn btn-primary btn-sm" data-action="worktree-ask"/);
   assert.match(keepHTML, />Ask codex<\/button>/, 'the live-session button names the harness, not "the agent"');
   assert.ok(keepHTML.includes('&lt;img src=x onerror=alert(1)&gt;') && !keepHTML.includes('<img'));
   assert.match(keepHTML, /<span class="wt-branch">\(detached\)<\/span>/);
   const reviewHTML = worktreeRowHTML(review, rep.repos[1]);
-  assert.deepEqual([...reviewHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['copy-path', 'worktree-reveal', 'worktree-review-trash', 'worktree-advise', 'worktree-discuss']);
+  assert.deepEqual([...reviewHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['copy-path', 'worktree-reveal', 'worktree-review-trash', 'worktree-advise', 'worktree-select', 'worktree-discuss']);
   assert.ok(!reviewHTML.includes('worktree-review"'), 'no review drawer');
   assert.ok(!reviewHTML.includes('worktree-ask'), 'no active agent means no Ask button');
   // The path copies the full path; Show in Finder on every folder still on
@@ -338,13 +393,13 @@ test('worktreeFilterHTML and summary line', () => {
     '2 repos · 4 worktrees · stale after 14 idle days · scanned 12m ago · refreshing…');
 });
 
-test('advisor notes: shown under their row, escaped, and never change the actions', () => {
+test('advisor notes: escaped, retain checker actions, and offer separate removal selection', () => {
   const rep = report();
   const keep = rep.repos[1].worktrees[0];
   const note = { assessment: 'remove', confidence: 0.8, rationale: '<script>alert(1)</script> looks disposable' };
   const html = worktreeRowHTML(keep, rep.repos[1], note);
   const discuss = `<button type="button" class="link-btn" data-action="worktree-discuss" data-path="${keep.path}">Discuss</button>`;
-  assert.ok(html.includes(`<p class="wt-advice"><b>Advisor: remove</b> 80% · &lt;script&gt;alert(1)&lt;/script&gt; looks disposable ${discuss}</p>`), 'the note ends in Discuss');
+  assert.ok(html.includes(`<p class="wt-advice"><b>Advisor: remove</b> 80% · &lt;script&gt;alert(1)&lt;/script&gt; looks disposable ${discuss} <button`), 'the recommendation includes discussion and selection');
   assert.ok(!html.includes('worktree-remove"'), 'a remove note must not add a git worktree remove button');
   assert.equal(ctx.worktreeNoteHTML(note, ''), '<p class="wt-advice"><b>Advisor: remove</b> 80% · &lt;script&gt;alert(1)&lt;/script&gt; looks disposable</p>');
   // Discuss sits on every row the daemon can inspect, not on prune rows.

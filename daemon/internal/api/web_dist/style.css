@@ -1029,10 +1029,11 @@ html.recent-work-navigation { overflow-anchor: none; }
 .confirm-scrim { position: absolute; inset: 0; background: hsl(224 40% 3% / 0.45); }
 .confirm-card {
   position: relative; width: min(440px, 92vw); padding: 20px;
+  display: flex; flex-direction: column; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px);
   background: var(--bg-1); color: var(--tx-1);
   border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--sh-2);
 }
-.confirm-card h3 { font-size: 0.95rem; font-weight: 650; margin-bottom: 6px; }
+.confirm-card h3 { flex-shrink: 0; font-size: 0.95rem; font-weight: 650; margin-bottom: 6px; }
 
 /* markdown */
 .markdown-view { font-size: 0.86rem; color: var(--tx-2); }
@@ -1980,9 +1981,9 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 }
 /* Icon sprite sheets: out of flow, so the 0x0 <svg> adds no line box. */
 .sprite-sheet { position: absolute; }
-.confirm-message { color: var(--tx-2); margin: 6px 0 12px; white-space: pre-line; overflow-wrap: anywhere; }
-.confirm-input { width: 100%; margin-bottom: 12px; }
-.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.confirm-message { min-height: 0; overflow-y: auto; color: var(--tx-2); margin: 6px 0 12px; white-space: pre-line; overflow-wrap: anywhere; }
+.confirm-input { flex-shrink: 0; width: 100%; margin-bottom: 12px; }
+.confirm-actions { flex-shrink: 0; display: flex; justify-content: flex-end; gap: 8px; }
 
 /* Overview head: names the tab and states the drill-down path, so the page
    reads as a summary with pointers rather than an undifferentiated stack. */
@@ -2195,6 +2196,11 @@ button.spend-day:focus-visible { outline: 2px solid var(--brand); outline-offset
 }
 .wt-row { padding: 8px 12px; border-top: 1px solid var(--line); }
 .wt-row:first-of-type { border-top: 0; }
+.wt-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 12px; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: var(--r-sm); background: var(--bg-2); }
+.wt-selection-summary { flex: 1 1 200px; font-size: 0.78rem; color: var(--tx-1); overflow-wrap: anywhere; }
+.wt-selection-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.wt-select[aria-pressed="true"] { border-color: var(--brand); background: var(--brand-bg); color: var(--tx-1); }
+.wt-selection-block { max-width: 320px; color: var(--tx-2); font-size: 0.72rem; overflow-wrap: anywhere; }
 .wt-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .wt-state {
   flex: none; min-width: 58px; text-align: center;

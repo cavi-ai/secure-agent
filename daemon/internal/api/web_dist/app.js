@@ -3630,6 +3630,25 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         window.removeWorktree(d.path, d.branch);
         break;
+      case 'worktree-select':
+        e.preventDefault();
+        worktreeController.toggleWorktreeSelection(d.path);
+        Array.from(document.querySelectorAll('[data-action="worktree-select"]')).find(button => button.dataset.path === d.path)?.focus({ preventScroll: true });
+        break;
+      case 'worktrees-select-visible':
+        e.preventDefault();
+        worktreeController.selectVisibleWorktrees(globalSearchTerm());
+        document.querySelector('[data-action="worktrees-select-visible"]')?.focus({ preventScroll: true });
+        break;
+      case 'worktrees-clear-selection':
+        e.preventDefault();
+        worktreeController.clearWorktreeSelection();
+        document.querySelector('[data-action="worktrees-select-visible"]')?.focus({ preventScroll: true });
+        break;
+      case 'worktrees-remove-selected':
+        e.preventDefault();
+        worktreeController.removeSelectedWorktrees();
+        break;
       case 'worktree-prune':
         e.preventDefault();
         window.pruneWorktrees(d.repo);

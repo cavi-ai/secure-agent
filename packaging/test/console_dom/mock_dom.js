@@ -1453,7 +1453,11 @@
           const rect = node.getBoundingClientRect();
           return rect.left >= -1 && rect.right <= width + 1;
         }) && document.documentElement.scrollWidth <= width;
-        receipt.actions = root.querySelector('[data-action="worktree-ask"]').closest('.wt-actions').querySelectorAll('button').length === 5;
+        const actionRow = root.querySelector('[data-action="worktree-ask"]').closest('.wt-row');
+        const actions = [...actionRow.querySelectorAll('.wt-actions button')];
+        receipt.actions = JSON.stringify(actions.map(button => button.dataset.action)) === JSON.stringify([
+          'worktree-reveal', 'worktree-review-trash', 'worktree-ask', 'worktree-advise', 'worktree-select', 'worktree-discuss',
+        ]) && actions.every(button => button.dataset.path === actionRow.dataset.path);
         receipt.failure = root.querySelector('.wt-repo-error').textContent.includes('repository not found') && root.querySelectorAll('.wt-repo-actions')[0].querySelectorAll('button').length === 0;
         receipt.touch = width > 720 || controls.every(node => node.getBoundingClientRect().height >= 44);
         receipt.search = width > 720 || document.getElementById('worktree-search').getBoundingClientRect().width >= root.clientWidth - 40;
