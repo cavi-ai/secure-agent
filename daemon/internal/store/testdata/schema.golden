@@ -62,6 +62,7 @@ table resource_episodes: captured_at TEXT notnull=1 default=; episode_json TEXT 
 table rollup_hourly: bucket TEXT notnull=1 default=; count INT notnull=1 default=; kind TEXT notnull=1 default=
 table scan_cache: body BLOB notnull=1 default=; name TEXT notnull=0 default=; saved_at TEXT notnull=1 default=
 table sessions: branch TEXT notnull=0 default=; confidence TEXT notnull=0 default=; ended_at TEXT notnull=0 default=; harness TEXT notnull=0 default=; id TEXT notnull=0 default=; last_seen_at TEXT notnull=0 default=; origin TEXT notnull=0 default=; parent_id TEXT notnull=0 default=; repo TEXT notnull=0 default=; root_pid INTEGER notnull=0 default=; root_started_at TEXT notnull=0 default=; started_at TEXT notnull=0 default=; status TEXT notnull=0 default=; workspace TEXT notnull=0 default=
+table shell_reviews: at TEXT notnull=1 default=; id INTEGER notnull=0 default=; result_json TEXT notnull=1 default=
 table sysagent_messages: body TEXT notnull=1 default=; id INTEGER notnull=0 default=; ts TEXT notnull=1 default=
 table sysagent_plans: body TEXT notnull=1 default=; id INTEGER notnull=0 default=; ts TEXT notnull=1 default=
 table sysagent_runs: body TEXT notnull=1 default=; id INTEGER notnull=0 default=; ts TEXT notnull=1 default=
