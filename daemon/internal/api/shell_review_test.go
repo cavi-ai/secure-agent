@@ -63,7 +63,9 @@ func TestShellReviewHookTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := `{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"call-1","session_id":"session-1","tool_input":{"command":"security dump-keychain"}}`
-	commandCtx, commandCancel := context.WithTimeout(ctx, 2*time.Second)
+	// The hook bounds its daemon round trip at 100 ms; this budget only covers
+	// a cold interpreter launch on a busy host.
+	commandCtx, commandCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer commandCancel()
 	command := exec.CommandContext(commandCtx, "python3", hook)
 	command.Env = append(os.Environ(), "HOME="+home, "SECURE_AGENT_SOCK="+sock, "SECURE_AGENT_ACTIVITY_LOG="+filepath.Join(home, "activity.jsonl"), "SECURE_AGENT_SHELL_REVIEW=1")
