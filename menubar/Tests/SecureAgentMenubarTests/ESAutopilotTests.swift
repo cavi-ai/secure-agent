@@ -105,21 +105,27 @@ final class ESAutopilotTests: XCTestCase {
 
     func testReregisterOnlyAnEnabledJobLaunchdRefusesToSpawn() {
         let refused = LaunchdProbe.loaded(state: "spawn scheduled", pid: nil, lastExitCode: "78: EX_CONFIG")
-        let rows: [(SMAppService.Status, Bool, Bool, LaunchdProbe, Bool, String)] = [
-            // status, userDisabled, attemptedThisLaunch, launchd job -> re-register
-            (.enabled, false, false, refused, true, "enabled, not removed, launchd refuses the job"),
-            (.enabled, false, true, refused, false, "already attempted this launch"),
-            (.enabled, true, false, refused, false, "removed by the user"),
-            (.enabled, false, false, .loaded(state: "running", pid: 412, lastExitCode: "78: EX_CONFIG"), false, "running job"),
-            (.enabled, false, false, .loaded(state: "spawn scheduled", pid: nil, lastExitCode: "1"), false, "other exit code"),
-            (.enabled, false, false, .loaded(state: "waiting", pid: nil, lastExitCode: "(never exited)"), false, "never exited"),
-            (.requiresApproval, false, false, refused, false, "not enabled"),
-            (.enabled, false, false, .notFound, false, "no job"),
-            (.enabled, false, false, .unreadable, false, "unreadable job"),
+        let running = LaunchdProbe.loaded(state: "running", pid: 412, lastExitCode: "(never exited)")
+        let rows: [(SMAppService.Status, Bool, Bool, LaunchdProbe, Bool, Bool, String)] = [
+            // status, userDisabled, attemptedThisLaunch, launchd job, helper stale -> re-register
+            (.enabled, false, false, refused, false, true, "enabled, not removed, launchd refuses the job"),
+            (.enabled, false, true, refused, false, false, "already attempted this launch"),
+            (.enabled, true, false, refused, false, false, "removed by the user"),
+            (.enabled, false, false, .loaded(state: "running", pid: 412, lastExitCode: "78: EX_CONFIG"), false, false, "running job"),
+            (.enabled, false, false, .loaded(state: "spawn scheduled", pid: nil, lastExitCode: "1"), false, false, "other exit code"),
+            (.enabled, false, false, .loaded(state: "waiting", pid: nil, lastExitCode: "(never exited)"), false, false, "never exited"),
+            (.requiresApproval, false, false, refused, false, false, "not enabled"),
+            (.enabled, false, false, .notFound, false, false, "no job"),
+            (.enabled, false, false, .unreadable, false, false, "unreadable job"),
+            (.enabled, false, false, running, true, true, "running process predates the helper on disk"),
+            (.enabled, false, true, running, true, false, "stale, already attempted this launch"),
+            (.enabled, true, false, running, true, false, "stale, removed by the user"),
+            (.requiresApproval, false, false, running, true, false, "stale, not enabled"),
         ]
-        for (status, disabled, attempted, job, want, why) in rows {
+        for (status, disabled, attempted, job, stale, want, why) in rows {
             XCTAssertEqual(ESAutopilot.needsReregister(serviceStatus: status, userDisabled: disabled,
-                                                       attemptedThisLaunch: attempted, launchd: job), want, why)
+                                                       attemptedThisLaunch: attempted, launchd: job,
+                                                       helperStale: stale), want, why)
         }
     }
 
@@ -188,6 +194,7 @@ final class ESAutopilotTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
         let setup = SetupManager(esService: service, defaults: defaults, plistPresent: { true }, openPane: { _ in },
                                  launchdProbe: { .loaded(state: "running", pid: 412, lastExitCode: nil) },
+                                 helperStaleProbe: { _ in false },
                                  appURL: installedCopy)
 
         setup.refreshESState()
@@ -195,6 +202,31 @@ final class ESAutopilotTests: XCTestCase {
         await probe.value
         XCTAssertEqual(service.unregisterCount, 0)
         XCTAssertEqual(service.registerCount, 0)
+    }
+
+    /// A running collector older than the helper on disk is restarted once:
+    /// macOS refuses it file events whatever Full Disk Access says.
+    @MainActor func testRefreshRestartsARunningJobOlderThanItsHelperOncePerLaunch() async throws {
+        try XCTSkipIf(FileManager.default.fileExists(atPath: SetupManager.legacyESPlistPath),
+                      "an old helper on this Mac makes the stage legacyInstalled")
+        let service = FakeESService()
+        service.status = .enabled
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
+        let running = LaunchdProbe.loaded(state: "running", pid: 577, lastExitCode: "(never exited)")
+        let setup = SetupManager(esService: service, defaults: defaults, plistPresent: { true }, openPane: { _ in },
+                                 launchdProbe: { running },
+                                 helperStaleProbe: { $0 == running },
+                                 appURL: installedCopy)
+
+        setup.refreshESState()
+        let probe = try XCTUnwrap(setup.esRepairProbe, "an enabled service's job is probed")
+        await probe.value
+        XCTAssertEqual(service.unregisterCount, 1, "unregisters the stale job")
+        XCTAssertEqual(service.registerCount, 1, "and registers it again from this build")
+
+        setup.refreshESState()
+        XCTAssertNil(setup.esRepairProbe, "no second probe this launch")
+        XCTAssertEqual(service.registerCount, 1)
     }
 }
 

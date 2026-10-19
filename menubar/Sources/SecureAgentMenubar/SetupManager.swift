@@ -118,6 +118,8 @@ public final class SetupManager: ObservableObject {
     private var esRegisterAttemptedThisLaunch = false
     /// Reads the collector's launchd job; called off the main actor.
     private let esLaunchdProbe: @Sendable () -> LaunchdProbe
+    /// Whether that job's process predates the helper on disk; off the main actor.
+    private let esHelperStaleProbe: @Sendable (LaunchdProbe) -> Bool
     /// This copy's bundle; only the copy in /Applications manages the helper.
     private let appURL: URL
     private let esLocationAllowed: Bool
@@ -178,12 +180,15 @@ public final class SetupManager: ObservableObject {
          plistPresent: (() -> Bool)? = nil,
          openPane: ((ESSettingsPane) -> Void)? = nil,
          launchdProbe: (@Sendable () -> LaunchdProbe)? = nil,
+         helperStaleProbe: (@Sendable (LaunchdProbe) -> Bool)? = nil,
          appURL: URL = Bundle.main.bundleURL,
          deferAutomaticTelemetry: Bool = false) {
         self.esService = esService
         self.appURL = appURL
         esLocationAllowed = AppIdentity.isInstalledCopy(appURL)
         esLaunchdProbe = launchdProbe ?? { SetupManager.esLaunchdJob() }
+        let helperPath = appURL.appendingPathComponent(Self.esCollectorExecutable).path
+        esHelperStaleProbe = helperStaleProbe ?? { SetupManager.esHelperStale(job: $0, helperPath: helperPath) }
         prefs = defaults
         self.deferAutomaticTelemetry = deferAutomaticTelemetry
         if deferAutomaticTelemetry { defaults.set(true, forKey: Self.firstUseTelemetryConsentKey) }
@@ -723,14 +728,18 @@ public final class SetupManager: ObservableObject {
               esRepairProbeStarted.map({ Date().timeIntervalSince($0) >= 30 }) ?? true else { return }
         esRepairProbeStarted = Date()
         let probe = esLaunchdProbe
+        let staleProbe = esHelperStaleProbe
         esRepairProbe = Task { [weak self] in
-            let job = await Task.detached { probe() }.value
+            let (job, stale) = await Task.detached { () -> (LaunchdProbe, Bool) in
+                let job = probe()
+                return (job, staleProbe(job))
+            }.value
             guard let self else { return }
             self.esRepairProbe = nil
             if ESAutopilot.needsReregister(serviceStatus: self.esService.status,
                                            userDisabled: self.esMemory.userDisabled,
                                            attemptedThisLaunch: self.esRegisterAttemptedThisLaunch,
-                                           launchd: job) {
+                                           launchd: job, helperStale: stale) {
                 self.reregisterESService()
             }
         }
@@ -1018,13 +1027,14 @@ public final class SetupManager: ObservableObject {
         let otherCopies = NSWorkspace.shared.urlsForApplications(withBundleIdentifier: AppIdentity.bundleIdentifier)
             .map { $0.resolvingSymlinksInPath().path }
             .filter { $0 != thisCopy }
-        let probe = await Task.detached { () -> (CodeSignature?, CodeSignature?, LaunchdProbe, String?, Date?) in
+        let staleProbe = esHelperStaleProbe
+        let probe = await Task.detached { () -> (CodeSignature?, CodeSignature?, LaunchdProbe, String?, Date?, Bool) in
             let app = CodeSignature.parse(Self.capture(["/usr/bin/codesign", "-dv", appPath]))
             let helper = CodeSignature.parse(Self.capture(["/usr/bin/codesign", "-dv", helperPath]))
             let job = Self.esLaunchdJob()
             let logLine = TelemetryDoctor.lastLine(ofFileAt: Self.esHelperLogPath)
             let mtime = (try? FileManager.default.attributesOfItem(atPath: Self.esSpoolPath))?[.modificationDate] as? Date
-            return (app, helper, job, logLine, mtime)
+            return (app, helper, job, logLine, mtime, staleProbe(job))
         }.value
         let client = DaemonClient()
         let status = try? await client.fetchStatus()
@@ -1034,7 +1044,7 @@ public final class SetupManager: ObservableObject {
             plistPresent: esPlistPresent, serviceStatus: esService.status, launchd: probe.2,
             helperLogLastLine: probe.3, spoolMtime: probe.4, esService: status?.esService,
             legacyInstalled: fm.fileExists(atPath: Self.legacyESPlistPath), daemonChecks: doctor?.checks,
-            locationAllowed: esLocationAllowed, otherCopies: otherCopies)
+            locationAllowed: esLocationAllowed, otherCopies: otherCopies, helperStale: probe.5)
     }
 
     /// Runs the Doctor once and publishes its checks.
@@ -1102,6 +1112,31 @@ public final class SetupManager: ObservableObject {
     /// `launchctl print` for the collector's job.
     nonisolated static func esLaunchdJob() -> LaunchdProbe {
         LaunchdProbe.parse(capture(["/bin/launchctl", "print", "system/\(esCollectorLabel)"]))
+    }
+
+    /// Whether the job's running process started before the helper at
+    /// `helperPath` last changed on disk.
+    nonisolated static func esHelperStale(job: LaunchdProbe, helperPath: String) -> Bool {
+        guard case let .loaded(_, .some(pid), _) = job else { return false }
+        return TelemetryDoctor.helperStale(launchd: job, processStart: processStart(pid: pid),
+                                           helperChanged: statusChangeDate(path: helperPath))
+    }
+
+    /// The start time of `pid`; nil when no such process.
+    nonisolated static func processStart(pid: Int) -> Date? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, Int32(pid)]
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        let start = info.kp_proc.p_un.__p_starttime
+        return Date(timeIntervalSince1970: TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1_000_000)
+    }
+
+    /// The file's ctime: copies that keep the source mtime still set it.
+    nonisolated static func statusChangeDate(path: String) -> Date? {
+        var st = stat()
+        guard stat(path, &st) == 0 else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(st.st_ctimespec.tv_sec) + TimeInterval(st.st_ctimespec.tv_nsec) / 1_000_000_000)
     }
 
     /// Runs a read-only tool and returns stdout and stderr together.

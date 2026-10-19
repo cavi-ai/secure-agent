@@ -36,13 +36,15 @@ enum ESAutopilot {
     }
 
     /// Whether to unregister and register the service again: it is enabled
-    /// and not removed by the user, but launchd holds its job with no pid and
+    /// and not removed by the user, and either its running process predates
+    /// the helper binary on disk, or launchd holds its job with no pid and
     /// last refused to spawn it (EX_CONFIG, e.g. a registration bound to a
     /// bundle path that no longer exists). Once per launch.
     static func needsReregister(serviceStatus: SMAppService.Status, userDisabled: Bool,
-                                attemptedThisLaunch: Bool, launchd: LaunchdProbe) -> Bool {
-        guard !userDisabled, !attemptedThisLaunch, serviceStatus == .enabled,
-              case let .loaded(_, pid, lastExit) = launchd, pid == nil else { return false }
+                                attemptedThisLaunch: Bool, launchd: LaunchdProbe, helperStale: Bool) -> Bool {
+        guard !userDisabled, !attemptedThisLaunch, serviceStatus == .enabled else { return false }
+        if helperStale { return true }
+        guard case let .loaded(_, pid, lastExit) = launchd, pid == nil else { return false }
         return TelemetryDoctor.exitCode(lastExit) == TelemetryDoctor.exConfig
     }
 
@@ -208,6 +210,9 @@ struct TelemetryFacts: Sendable {
     var locationAllowed = true
     /// Other copies LaunchServices has registered under the app's identifier.
     var otherCopies: [String] = []
+    /// Whether launchd's running collector started before its binary on disk
+    /// was written (see `TelemetryDoctor.helperStale`).
+    var helperStale = false
 }
 
 // MARK: - Doctor
@@ -313,6 +318,11 @@ enum TelemetryDoctor {
                                cause: "no job yet; waits on registration and Login Items approval", fix: nil)
         case let .loaded(state, pid, lastExit):
             let exitNote = lastExit.map { ", last exit code \($0)" } ?? ""
+            if let pid, f.helperStale {
+                return DoctorCheck(id: "launchd", title: title, state: .fail,
+                                   cause: "\(state), pid \(pid) started before this build's helper was installed; macOS denies it file events until it restarts",
+                                   fix: enabled ? .reregister : nil)
+            }
             if let pid {
                 return DoctorCheck(id: "launchd", title: title, state: .pass,
                                    cause: "\(state), pid \(pid)\(exitNote)", fix: nil)
@@ -344,6 +354,14 @@ enum TelemetryDoctor {
         return Int(head.trimmingCharacters(in: .whitespaces))
     }
 
+    /// Whether launchd's running collector started before its executable on
+    /// disk last changed: an update replaced the bundle under the process,
+    /// and TCC refuses ES clients to it whatever the grant says.
+    static func helperStale(launchd: LaunchdProbe, processStart: Date?, helperChanged: Date?) -> Bool {
+        guard case .loaded(_, .some, _) = launchd, let processStart, let helperChanged else { return false }
+        return processStart < helperChanged
+    }
+
     /// Whether the helper's last log line is its wait for the grant.
     static func logWaitsForGrant(_ line: String?) -> Bool {
         guard let line else { return false }
@@ -355,6 +373,10 @@ enum TelemetryDoctor {
         guard case .loaded(_, .some, _) = f.launchd else {
             return DoctorCheck(id: "full-disk-access", title: title, state: .warn,
                                cause: "waits on a running launchd job", fix: nil)
+        }
+        if f.helperStale {
+            return DoctorCheck(id: "full-disk-access", title: title, state: .warn,
+                               cause: "waits on a restart of the service from this build", fix: nil)
         }
         if logWaitsForGrant(f.helperLogLastLine) {
             return DoctorCheck(id: "full-disk-access", title: title, state: .fail,
