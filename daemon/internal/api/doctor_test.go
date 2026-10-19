@@ -306,7 +306,14 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 			f := steady
 			f.sessionsTotal, f.sessionsNamed = 10, 7
 			return f
-		}(), doctorFail, "7 of 10"},
+		}(), doctorFail, "7 of 10 sessions since boot"},
+		{"session identity waits out the boot window", checkSessionIdentity, func() doctorFacts {
+			f := steady
+			f.grace = true
+			f.sessionsTotal, f.sessionsNamed = 10, 7
+			return f
+		}(), doctorSkip, doctorGraceDetail},
+		{"no sessions since boot", checkSessionIdentity, steady, doctorSkip, "no sessions since boot"},
 		{"attribution drop", checkSessionRepo, func() doctorFacts {
 			f := steady
 			f.sessionsByHarness = map[string]int{"claude": 3}

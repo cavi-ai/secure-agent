@@ -59,20 +59,19 @@ func (s *Store) doctorCountByKey(q string, args ...any) map[string]int {
 	return out
 }
 
-// SessionIdentityStats returns the all-time session count and how many carry
-// a harness name, plus, among named sessions started at or after since, how
-// many carry a workspace and how many of those also carry a repo.
+// SessionIdentityStats counts sessions started at or after since: all of
+// them, those carrying a harness name, the named ones carrying a workspace,
+// and of those the ones also carrying a repo.
 func (s *Store) SessionIdentityStats(since time.Time) (total, named, withWorkspace, withRepo int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	arg, started := instantArg(since), timestampOrderExpr("started_at")
 	err := s.db.QueryRow(`SELECT COUNT(*),
 		COALESCE(SUM(CASE WHEN COALESCE(harness,'') != '' THEN 1 ELSE 0 END),0),
-		COALESCE(SUM(CASE WHEN COALESCE(harness,'') != '' AND COALESCE(workspace,'') != ''
-			AND `+started+` >= ? THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN COALESCE(harness,'') != '' AND COALESCE(workspace,'') != '' THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN COALESCE(harness,'') != '' AND COALESCE(workspace,'') != '' AND COALESCE(repo,'') != ''
-			AND `+started+` >= ? THEN 1 ELSE 0 END),0)
-		FROM sessions`, arg, arg).Scan(&total, &named, &withWorkspace, &withRepo)
+			THEN 1 ELSE 0 END),0)
+		FROM sessions WHERE `+started+` >= ?`, arg).Scan(&total, &named, &withWorkspace, &withRepo)
 	if err != nil {
 		log.Printf("store: session identity stats error: %v", err)
 	}

@@ -338,10 +338,13 @@ func checkTraceCoverage(f doctorFacts) (string, string) {
 }
 
 func checkSessionIdentity(f doctorFacts) (string, string) {
-	if f.sessionsTotal == 0 {
-		return doctorSkip, "no sessions"
+	if f.grace {
+		return doctorSkip, doctorGraceDetail
 	}
-	detail := fmt.Sprintf("%d of %d sessions carry a harness (%d%%)", f.sessionsNamed, f.sessionsTotal, pct(f.sessionsNamed, f.sessionsTotal))
+	if f.sessionsTotal == 0 {
+		return doctorSkip, "no sessions since boot"
+	}
+	detail := fmt.Sprintf("%d of %d sessions since boot carry a harness (%d%%)", f.sessionsNamed, f.sessionsTotal, pct(f.sessionsNamed, f.sessionsTotal))
 	if f.sessionsNamed*100 < f.sessionsTotal*80 {
 		return doctorFail, detail + ", want ≥ 80%"
 	}
