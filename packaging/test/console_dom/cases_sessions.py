@@ -400,9 +400,11 @@ def run_session_coverage(page):
             page.check(f'session coverage ({label}): {name}', state.get(name) is True, str(state))
 
 def run_session_follow_up(page):
-    for label, size in [('desktop', (1280, 800)), ('dock-start', (1180, 800)),
-                        ('dock-above', (1190, 800)), ('narrow', (375, 800))]:
-        dom = page.dom('?followup', window_size=size, served=True,
+    viewports = [('desktop', (1280, 800)), ('dock-start', (1180, 800)),
+                 ('dock-above', (1190, 800)), ('narrow', (375, 800))]
+    for label, size in viewports:
+        query = '?followup'
+        dom = page.dom(query, window_size=size, served=True,
                        fixture={'script': 'cases_session_follow_up.js'})
         receipt = re.search(r'data-follow-up-probe="([^"]+)"', dom)
         state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
@@ -410,12 +412,15 @@ def run_session_follow_up(page):
             page.check(f'session follow-up ({label}): {name}', state.get(name) is True, str(state))
         viewport = state.get('viewport', {})
         width, height = viewport.get('innerWidth', 0), viewport.get('innerHeight', 0)
+        client_width = viewport.get('clientWidth', 0)
+        client_height = viewport.get('clientHeight', 0)
         page.check(f'session follow-up ({label}): actual viewport',
                    width > 0 and height > 0
-                   and abs(viewport.get('visualViewportWidth', 0) - width) <= 1
-                   and abs(viewport.get('visualViewportHeight', 0) - height) <= 1
+                   and client_width > 0 and client_height > 0
+                   and abs(viewport.get('visualViewportWidth', 0) - client_width) <= 1
+                   and abs(viewport.get('visualViewportHeight', 0) - client_height) <= 1
                    and (width <= 600 if size[0] <= 600 else abs(width - size[0]) <= 1),
-                   f"requested={size[0]}x{size[1]} actual={width}x{height} visual={viewport.get('visualViewportWidth')}x{viewport.get('visualViewportHeight')} dpr={viewport.get('devicePixelRatio')}")
+                   f"requested={size[0]}x{size[1]} inner={width}x{height} client={client_width}x{client_height} visual={viewport.get('visualViewportWidth')}x{viewport.get('visualViewportHeight')} dpr={viewport.get('devicePixelRatio')}")
         closed = state.get('closedHeader', {})
         closed_font = float(str(closed.get('titleFont', '0px')).removesuffix('px') or 0)
         page.check(f'session follow-up ({label}): title readable after drawer back',
@@ -440,12 +445,12 @@ def run_session_follow_up(page):
                    len(controls) == 3 and all(
                        not control.get('missing') and not control.get('hidden')
                        and control.get('hittable') is True
-                       and control.get('left', -1) >= 0 and control.get('right', width + 1) <= width
-                       and control.get('top', -1) >= 0 and control.get('bottom', height + 1) <= height
+                       and control.get('left', -1) >= 0 and control.get('right', client_width + 1) <= client_width
+                       and control.get('top', -1) >= 0 and control.get('bottom', client_height + 1) <= client_height
                        and (width > 600 or control.get('height', 0) >= 44)
                        for control in controls)
-                   and layout.get('panelLeft', -1) >= 0 and layout.get('panelRight', width + 1) <= width,
-                   f"panel={layout.get('panelLeft')}..{layout.get('panelRight')} width={layout.get('panelWidth')} viewport={width} controls={controls}")
+                   and layout.get('panelLeft', -1) >= 0 and layout.get('panelRight', client_width + 1) <= client_width,
+                   f"panel={layout.get('panelLeft')}..{layout.get('panelRight')} width={layout.get('panelWidth')} viewport={client_width} controls={controls}")
         print(f"session follow-up geometry ({label}): " + json.dumps({
             'requested': size, 'viewport': viewport, 'closedHeader': closed,
             'open': {key: layout.get(key) for key in ('sessionId', 'title', 'titleWidth', 'titleFont', 'board', 'split', 'rail', 'detail', 'panelLeft', 'panelRight', 'panelWidth', 'controls')},

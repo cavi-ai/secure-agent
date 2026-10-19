@@ -27,8 +27,10 @@
   const body=()=>document.querySelector('#session-detail .session-detail-body');
   const refresh=async()=>{box().querySelector('[data-action="session-outcomes-retry"]').click();await idle();};
   ready().then(async()=>{
-    const probe={viewport:{innerWidth,innerHeight,visualViewportWidth:window.visualViewport?.width||0,
-      visualViewportHeight:window.visualViewport?.height||0,devicePixelRatio:window.devicePixelRatio,screenWidth:screen.width}};
+    const probe={viewport:{innerWidth,innerHeight,clientWidth:document.documentElement.clientWidth,
+      clientHeight:document.documentElement.clientHeight,
+      visualViewportWidth:window.visualViewport?.width||0,visualViewportHeight:window.visualViewport?.height||0,
+      devicePixelRatio:window.devicePixelRatio,screenWidth:screen.width}};
     try {
       openTab('sessions');await wait(()=>!!document.querySelector(`#session-rail [data-id="${sid}"]`));
       document.querySelector(`#session-rail [data-id="${sid}"]`).click();await idle();

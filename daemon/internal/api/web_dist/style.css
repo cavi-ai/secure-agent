@@ -1923,8 +1923,8 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
   .sd-detail-controls { grid-column: 1 / -1; }
 }
 @container session-board (max-width: 720px) {
-  .session-split { grid-template-columns: minmax(160px, 42%) minmax(0, 1fr); }
-  .session-rail { width: auto; min-width: 160px; max-width: none; }
+  .session-split { grid-template-columns: minmax(0, 42%) minmax(0, 1fr); }
+  .session-rail { width: auto; min-width: 0; max-width: none; }
 }
 @container session-detail (max-width: 640px) {
   .session-detail-chrome { display: flex; flex-direction: column; }
