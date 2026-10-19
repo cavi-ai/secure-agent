@@ -740,7 +740,7 @@ public final class SetupManager: ObservableObject {
                                            userDisabled: self.esMemory.userDisabled,
                                            attemptedThisLaunch: self.esRegisterAttemptedThisLaunch,
                                            launchd: job, helperStale: stale) {
-                self.reregisterESService()
+                await self.reregisterESService()
             }
         }
     }
@@ -748,7 +748,7 @@ public final class SetupManager: ObservableObject {
     /// Unregisters and registers the collector again: the Doctor's
     /// Re-register, the autopilot's repair and `secure-agent://telemetry/repair`.
     /// Counts as this launch's registration attempt.
-    public func reregisterESService() {
+    public func reregisterESService() async {
         guard esLocationAllowed else {
             report(SetupError.notInstalledCopy)
             return
@@ -756,8 +756,19 @@ public final class SetupManager: ObservableObject {
         esRegisterAttemptedThisLaunch = true
         do {
             try? esService.unregister()
+            await waitForESUnregister()
             try installESCollector()
         } catch { report(error) }
+    }
+
+    /// macOS applies an unregister after the call returns: a register before
+    /// then finds the item still enabled and fails, leaving the service
+    /// unregistered. Waits up to 5 s for the status to leave `.enabled`.
+    private func waitForESUnregister() async {
+        let deadline = Date().addingTimeInterval(5)
+        while esService.status == .enabled, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 
     /// Polls once a second while the stage waits on a System Settings switch
@@ -1062,7 +1073,7 @@ public final class SetupManager: ObservableObject {
         guard let fix = check.fix else { return }
         doctorFixing = check.id
         defer { doctorFixing = nil }
-        applyDoctorFix(fix)
+        await applyDoctorFix(fix)
         await runDoctor()
         guard waitForUser, fix.needsUser else { return }
         let deadline = Date().addingTimeInterval(300)
@@ -1084,13 +1095,13 @@ public final class SetupManager: ObservableObject {
         }
     }
 
-    private func applyDoctorFix(_ fix: DoctorFix) {
+    private func applyDoctorFix(_ fix: DoctorFix) async {
         lastError = nil
         switch fix {
         case .register:
             do { try installESCollector() } catch { report(error) }
         case .reregister:
-            reregisterESService()
+            await reregisterESService()
         case .openLoginItems:
             openESLoginItems()
         case .openFullDiskAccess:

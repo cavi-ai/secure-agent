@@ -160,12 +160,12 @@ final class ESAutopilotTests: XCTestCase {
         XCTAssertNil(setup.esRepairProbe, "no second probe this launch")
         XCTAssertEqual(service.registerCount, 1)
 
-        setup.reregisterESService()
+        await setup.reregisterESService()
         XCTAssertEqual(service.unregisterCount, 2, "the repair URL's path ignores this launch's attempt")
         XCTAssertEqual(service.registerCount, 2)
     }
 
-    @MainActor func testACopyOutsideApplicationsNeverRegistersOrRepairsTheHelper() throws {
+    @MainActor func testACopyOutsideApplicationsNeverRegistersOrRepairsTheHelper() async throws {
         let service = FakeESService()
         service.status = .enabled
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
@@ -178,7 +178,7 @@ final class ESAutopilotTests: XCTestCase {
         setup.refreshESState()
         XCTAssertEqual(setup.esStage, .wrongLocation)
         XCTAssertNil(setup.esRepairProbe, "no launchd probe, no repair")
-        setup.reregisterESService()
+        await setup.reregisterESService()
         XCTAssertEqual(setup.lastError, AppIdentity.wrongLocationMessage)
         XCTAssertThrowsError(try setup.installESCollector())
         XCTAssertEqual(service.registerCount, 0)
@@ -228,6 +228,24 @@ final class ESAutopilotTests: XCTestCase {
         XCTAssertNil(setup.esRepairProbe, "no second probe this launch")
         XCTAssertEqual(service.registerCount, 1)
     }
+
+    /// macOS applies the unregister of a running job after the call returns;
+    /// the repair registers only once it has, or the helper is left unregistered.
+    @MainActor func testReregisterWaitsForTheUnregisterToApply() async throws {
+        let service = FakeESService()
+        service.status = .enabled
+        service.unregisterLag = 3
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
+        let setup = SetupManager(esService: service, defaults: defaults, plistPresent: { true }, openPane: { _ in },
+                                 launchdProbe: { .notFound }, helperStaleProbe: { _ in false },
+                                 appURL: installedCopy)
+
+        await setup.reregisterESService()
+        XCTAssertNil(setup.lastError)
+        XCTAssertEqual(service.unregisterCount, 1)
+        XCTAssertEqual(service.registerCount, 1, "one register, after the unregister applied")
+        XCTAssertEqual(service.status, .requiresApproval)
+    }
 }
 
 private let installedCopy = URL(fileURLWithPath: AppIdentity.installedAppPath)
@@ -235,19 +253,36 @@ private let installedCopy = URL(fileURLWithPath: AppIdentity.installedAppPath)
 /// Stands in for SMAppService: register moves to requiresApproval, as a
 /// first registration does on macOS.
 final class FakeESService: ESServiceControl {
-    var status: SMAppService.Status = .notFound
     var registerCount = 0
     var unregisterCount = 0
     var registerError: Error?
+    /// Reads of `status` that still answer `.enabled` after an unregister, as
+    /// macOS applies it late; a register before they run out fails.
+    var unregisterLag = 0
+    private var lagLeft = 0
+    private var stored: SMAppService.Status = .notFound
+
+    var status: SMAppService.Status {
+        get {
+            guard lagLeft == 0 else {
+                lagLeft -= 1
+                return .enabled
+            }
+            return stored
+        }
+        set { stored = newValue }
+    }
 
     func register() throws {
         registerCount += 1
+        if lagLeft > 0 { throw NSError(domain: "SMAppServiceErrorDomain", code: 1) }
         if let registerError { throw registerError }
-        status = .requiresApproval
+        stored = .requiresApproval
     }
 
     func unregister() throws {
         unregisterCount += 1
-        status = .notRegistered
+        stored = .notRegistered
+        lagLeft = unregisterLag
     }
 }
