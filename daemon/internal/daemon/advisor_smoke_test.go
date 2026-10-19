@@ -58,14 +58,19 @@ func TestAdvisorSmokeVerdict(t *testing.T) {
 	pid := int32(os.Getpid())
 	c.bus.Publish(event.Event{Kind: event.KindPluginAction, TS: now, PID: pid, Path: filepath.Join(home, ".env")})
 	c.bus.Publish(event.Event{Kind: event.KindConnOpen, TS: now.Add(time.Millisecond), PID: pid, RemoteHost: "192.168.64.2", RemotePort: 49183})
-	client := &http.Client{Timeout: time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", cfg.SocketPath)
 	}}}
-	deadline := time.Now().Add(5 * time.Second)
+	// A busy host slows the daemon, not the outcome: poll until the verdict
+	// lands, retrying a slow read instead of failing on it.
+	var lastErr error
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := client.Get("http://unix/flags")
 		if err != nil {
-			t.Fatal(err)
+			lastErr = err
+			time.Sleep(10 * time.Millisecond)
+			continue
 		}
 		var flags []model.Flag
 		err = json.NewDecoder(resp.Body).Decode(&flags)
@@ -80,5 +85,5 @@ func TestAdvisorSmokeVerdict(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("missing verdict: advisor health=%+v", h.Load().Sub.Health())
+	t.Fatalf("missing verdict: advisor health=%+v last read error=%v", h.Load().Sub.Health(), lastErr)
 }

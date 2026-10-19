@@ -45,7 +45,7 @@ func TestPlanTargetReadFailuresRejectDecisionsAndRecover(t *testing.T) {
 
 			rec := &planRecorder{ready: true, pending: map[string]bool{}}
 
-			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Plan: rec.funcs()})
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Advisors: AdvisorDeps{Plan: rec.funcs()}})
 			db, err := sql.Open("sqlite", path)
 			if err != nil {
 				t.Fatal(err)
@@ -120,7 +120,7 @@ func TestPlanTargetIncidentAllowsMissingLinkedFlag(t *testing.T) {
 
 	rec := &planRecorder{ready: true, pending: map[string]bool{}}
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Plan: rec.funcs()})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Advisors: AdvisorDeps{Plan: rec.funcs()}})
 	if code, _ := planCall(t, a, http.MethodGet, "incident:i1"); code != http.StatusOK {
 		t.Fatalf("incident without linked flag: %d", code)
 	}

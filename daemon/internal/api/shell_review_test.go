@@ -53,7 +53,7 @@ func TestShellReviewHookTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer svc.Close()
-	a := newTestAPI(Deps{SocketPath: sock, Store: st, ShellReviews: svc, Status: func() Status { return Status{Running: true} }})
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Guard: GuardDeps{ShellReviews: svc}, Status: func() Status { return Status{Running: true} }})
 	done := make(chan error, 1)
 	go func() { done <- a.Serve(ctx) }()
 	defer func() { cancel(); <-done }()
@@ -63,7 +63,9 @@ func TestShellReviewHookTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := `{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"call-1","session_id":"session-1","tool_input":{"command":"security dump-keychain"}}`
-	commandCtx, commandCancel := context.WithTimeout(ctx, 2*time.Second)
+	// The hook bounds its daemon round trip at 100 ms; this budget only covers
+	// a cold interpreter launch on a busy host.
+	commandCtx, commandCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer commandCancel()
 	command := exec.CommandContext(commandCtx, "python3", hook)
 	command.Env = append(os.Environ(), "HOME="+home, "SECURE_AGENT_SOCK="+sock, "SECURE_AGENT_ACTIVITY_LOG="+filepath.Join(home, "activity.jsonl"), "SECURE_AGENT_SHELL_REVIEW=1")
@@ -165,7 +167,7 @@ func TestShellCheckHookUsesDaemon(t *testing.T) {
 			}
 			defer svc.Close()
 			sock := filepath.Join(home, "d.sock")
-			a := newTestAPI(Deps{SocketPath: sock, Store: st, ShellReviews: svc})
+			a := newTestAPI(Deps{SocketPath: sock, Store: st, Guard: GuardDeps{ShellReviews: svc}})
 			done := make(chan error, 1)
 			go func() { done <- a.Serve(ctx) }()
 			defer func() { cancel(); <-done }()

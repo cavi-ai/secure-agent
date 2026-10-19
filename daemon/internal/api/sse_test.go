@@ -19,7 +19,7 @@ func TestEventStreamDeliversBusEvents(t *testing.T) {
 	// Typed deltas: the stream serves the delta hub, not the raw bus.
 	hub := NewDeltaHub()
 
-	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, DeltaHub: hub})
+	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Telemetry: TelemetryDeps{DeltaHub: hub}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# secure-agent-hook: injection_scan
 """PostToolUse hook: scans tool results for prompt injection patterns (ECG Layer 2 port).
 
 Detection is warn-only by design, but the detector itself should not be

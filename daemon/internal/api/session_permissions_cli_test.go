@@ -208,7 +208,7 @@ func startSessionPermissionsServer(t *testing.T, st *store.Store, socket string,
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := New(Deps{Store: st, PeerChecker: NewPeerChecker(), IsAgentPID: isAgentPID})
+	a := New(Deps{Store: st, Peers: PeerDeps{Checker: NewPeerChecker(), IsAgentPID: isAgentPID}})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- a.ServeListener(ctx, listener) }()

@@ -73,7 +73,7 @@ func TestAgentChatPlansDispatch(t *testing.T) {
 	// A harness model that is not pulled: no plan is ready, whatever is
 	// installed on the machine running the test.
 	agent.SetConfig(config.SystemAgentConfig{Enabled: true, Endpoint: ollama.URL, HarnessModel: "absent-model", TimeoutMinutes: 1})
-	a := New(Deps{Store: st, SysAgent: agent})
+	a := New(Deps{Store: st, Workspace: WorkspaceDeps{SysAgent: agent}})
 	mux := a.buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
@@ -160,7 +160,7 @@ func TestAnalyzeFlagsCreatesReviewOnlyRecommendation(t *testing.T) {
 	st.PutAudit(store.AuditEntry{Action: "flag-ack", Detail: "reviewed older finding"})
 	agent := sysagent.New(st, t.TempDir(), func(s string) (string, bool) { return s, true })
 	agent.SetConfig(config.SystemAgentConfig{Enabled: true, Endpoint: ollama.URL, TimeoutMinutes: 1})
-	a := New(Deps{Store: st, SysAgent: agent})
+	a := New(Deps{Store: st, Workspace: WorkspaceDeps{SysAgent: agent}})
 	mux := a.buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
@@ -223,7 +223,7 @@ func TestAnalyzeCarriesTestValueEvidence(t *testing.T) {
 	}})
 	agent := sysagent.New(st, t.TempDir(), func(s string) (string, bool) { return s, true })
 	agent.SetConfig(config.SystemAgentConfig{Enabled: true, Endpoint: ollama.URL, TimeoutMinutes: 1})
-	a := New(Deps{Store: st, SysAgent: agent})
+	a := New(Deps{Store: st, Workspace: WorkspaceDeps{SysAgent: agent}})
 	w := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/agent/analyze", strings.NewReader(`{"flag_ids":["flag-tv"]}`)))
 	if w.Code != http.StatusAccepted {
@@ -255,7 +255,7 @@ func TestAgentWorktreeStartsAConversationAboutOneWorktree(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	agent := sysagent.New(st, t.TempDir(), func(s string) (string, bool) { return s, true })
 	agent.SetConfig(config.SystemAgentConfig{Enabled: true, Endpoint: ollama.URL, TimeoutMinutes: 1})
-	a := New(Deps{Store: st, SysAgent: agent, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})})
+	a := New(Deps{Store: st, Workspace: WorkspaceDeps{SysAgent: agent, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}})
 	mux := a.buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
@@ -379,7 +379,7 @@ func TestAgentWorktreeStartsAConversationAboutOneRepository(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	agent := sysagent.New(st, t.TempDir(), func(s string) (string, bool) { return s, true })
 	agent.SetConfig(config.SystemAgentConfig{Enabled: true, Endpoint: ollama.URL, TimeoutMinutes: 1})
-	a := New(Deps{Store: st, SysAgent: agent, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})})
+	a := New(Deps{Store: st, Workspace: WorkspaceDeps{SysAgent: agent, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}})
 	mux := a.buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
@@ -524,7 +524,9 @@ func TestAgentWorktreeRefusesAnAgentPeer(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	agent := sysagent.New(st, t.TempDir(), func(s string) (string, bool) { return s, true })
 	agentPeer := true
-	a := New(Deps{Store: st, SysAgent: agent, Worktrees: worktreehunter.New(st, t.TempDir(), worktreehunter.Options{}), TCPClientPID: func(string) (int32, error) { return 777, nil }, IsAgentPID: func(pid int32) bool { return agentPeer && pid == 777 }})
+	a := New(Deps{Store: st, Workspace: WorkspaceDeps{SysAgent: agent, Worktrees: worktreehunter.New(st, t.TempDir(), worktreehunter.Options{})},
+		System: SystemDeps{TCPClientPID: func(string) (int32, error) { return 777, nil }},
+		Peers:  PeerDeps{IsAgentPID: func(pid int32) bool { return agentPeer && pid == 777 }}})
 	h := a.ConsoleHandler()
 	post := func() int {
 		w := httptest.NewRecorder()

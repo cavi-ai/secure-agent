@@ -1,5 +1,5 @@
 // Own the console lifecycle workflow through explicit state and callbacks.
-function createConsoleLifecycle({ state, actions }) {
+function createConsoleLifecycle({ store, state, actions }) {
   function noteEndpointFailure(key) {
     if (state.failedEndpoints.has(key)) return;
     state.failedEndpoints.add(key);
@@ -99,13 +99,13 @@ function createConsoleLifecycle({ state, actions }) {
     state.protectionContext = context;
     const auth = state.handoffGeneration;
     const ownsContext = () => !state.sessionEnded && state.protectionContext === context && generation === state.protectionContextGeneration && auth === state.handoffGeneration;
-    const found = (state.telemetryData.expectedEgress || []).some(rule => rule.id === ruleId && !rule.revoked_at);
+    const found = (store.data.expectedEgress || []).some(rule => rule.id === ruleId && !rule.revoked_at);
     if (found) context.status = 'ready';
     actions.switchTab('protection/rules', {keepProtectionContext:true});
     actions.renderNow(['expected-egress']);
     const initialFocus = focusProtectionContext(context);
     if (found) return;
-    const readGen = ++state.expectedEgressReadGen;
+    const ownsRead = store.beginExpectedEgressRead();
     try {
       const res = await actions.apiFetch('/expected-egress');
       if (!ownsContext()) return;
@@ -113,11 +113,11 @@ function createConsoleLifecycle({ state, actions }) {
       const report = await res.json();
       if (!ownsContext()) return;
       if (!actions.isConsoleReport('expected egress', report)) throw new Error('Invalid expectation response');
-      if (readGen === state.expectedEgressReadGen) state.telemetryData.expectedEgress = report.rules || [];
+      if (ownsRead()) store.data.expectedEgress = report.rules || [];
       context.status = 'ready';
     } catch {
       if (!ownsContext()) return;
-      context.status = readGen === state.expectedEgressReadGen ? 'error' : 'ready';
+      context.status = ownsRead() ? 'error' : 'ready';
     }
     if (!ownsContext()) return;
     const retainFocus = actions.document.activeElement === initialFocus;
@@ -140,7 +140,7 @@ function createConsoleLifecycle({ state, actions }) {
     const pill = actions.document.getElementById('tabs-posture');
     const text = actions.document.getElementById('tabs-posture-text');
     if (!pill || !text) return;
-    const view = actions.consolePosturePresentation(state.telemetryData.posture, actions.window.SA?.postureHealth);
+    const view = actions.consolePosturePresentation(store.data.posture, actions.window.SA?.postureHealth);
     pill.dataset.state = view.state;
     text.textContent = view.pill;
   }

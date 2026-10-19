@@ -39,7 +39,7 @@ func TestResourcesEndpoint(t *testing.T) {
 			Diagnoses: []resource.Diagnosis{{Code: "heavy-cpu", Severity: "critical", Summary: "busy", Evidence: []string{"CPU 75"}, Threshold: "test", Confidence: "high"}},
 		}},
 	}
-	deps.Resources = func() resource.Snapshot { return want }
+	deps.Resources.Snapshot = func() resource.Snapshot { return want }
 	a = newTestAPI(deps)
 
 	method := httptest.NewRecorder()
@@ -73,7 +73,7 @@ func TestResourcesEndpointIncludesPressureEpisodes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Resources: func() resource.Snapshot { return resource.Snapshot{ObservedAt: now} }})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Resources: ResourceDeps{Snapshot: func() resource.Snapshot { return resource.Snapshot{ObservedAt: now} }}})
 
 	// Episodes moved off the hot /resources payload onto their own endpoint.
 	response := httptest.NewRecorder()
@@ -107,11 +107,11 @@ func TestResourcePolicyEndpointPersistsBeforeApply(t *testing.T) {
 
 	var persisted config.ResourceControlConfig
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, ResourceControl: control, ResourcePolicyUpdater: func(next config.ResourceControlConfig) error {
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Resources: ResourceDeps{Control: control, PolicyUpdater: func(next config.ResourceControlConfig) error {
 		persisted = next
 		control.SetPolicySet(testResourcePolicySet(next))
 		return nil
-	}})
+	}}})
 	body := strings.NewReader(`{"mode":"prompt","max_rss_mb":2048,"max_cpu_percent":150,"sustain_seconds":30,"cooldown_seconds":300,"interventions":[{"action":"notify","after_seconds":0},{"action":"pause","after_seconds":60}],"workspace_overrides":[{"cwd_prefix":"/work/app","mode":"terminate","max_rss_mb":4096,"max_cpu_percent":200,"sustain_seconds":60,"cooldown_seconds":600}]}`)
 	response := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/resources/policy", body))
@@ -155,7 +155,7 @@ func TestResourcePolicyEndpointLeavesActivePolicyOnWriteFailure(t *testing.T) {
 
 	control := resource.NewController(resource.Policy{Mode: resource.ModeObserve, MaxRSSBytes: 100}, nil)
 
-	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, ResourceControl: control, ResourcePolicyUpdater: func(config.ResourceControlConfig) error { return fmt.Errorf("disk full") }})
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Resources: ResourceDeps{Control: control, PolicyUpdater: func(config.ResourceControlConfig) error { return fmt.Errorf("disk full") }}})
 	response := httptest.NewRecorder()
 	body := strings.NewReader(`{"mode":"terminate","max_rss_mb":2048,"sustain_seconds":30,"cooldown_seconds":300}`)
 	a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/resources/policy", body))
@@ -180,7 +180,7 @@ func TestResourcePolicyEndpointAuditsRejectedUpdates(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			st := testStore(t)
 
-			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, ResourcePolicyUpdater: func(config.ResourceControlConfig) error { return nil }})
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Resources: ResourceDeps{PolicyUpdater: func(config.ResourceControlConfig) error { return nil }}})
 			response := httptest.NewRecorder()
 			a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/resources/policy", strings.NewReader(tt.body)))
 			if response.Code != http.StatusBadRequest {
@@ -198,14 +198,14 @@ func TestResourcePolicyEndpointSerializesPersistAndApply(t *testing.T) {
 
 	var active, overlap atomic.Int32
 
-	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, ResourcePolicyUpdater: func(config.ResourceControlConfig) error {
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Resources: ResourceDeps{PolicyUpdater: func(config.ResourceControlConfig) error {
 		if active.Add(1) != 1 {
 			overlap.Store(1)
 		}
 		time.Sleep(10 * time.Millisecond)
 		active.Add(-1)
 		return nil
-	}})
+	}}})
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
@@ -240,7 +240,7 @@ func TestResourceControlResolveEndpoint(t *testing.T) {
 		t.Fatalf("pending=%v", pending)
 	}
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, ResourceControl: control})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Resources: ResourceDeps{Control: control}})
 
 	response := httptest.NewRecorder()
 	body := strings.NewReader(`{"id":"` + pending[0].ID + `","decision":"dismiss"}`)
@@ -270,7 +270,7 @@ func TestResourceControlResumeEndpoint(t *testing.T) {
 		Processes: []resource.Process{{PID: 10, StartedAt: now}},
 	}}}, now)
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, ResourceControl: control})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Resources: ResourceDeps{Control: control}})
 
 	response := httptest.NewRecorder()
 	body := strings.NewReader(`{"session_key":"s1","decision":"resume"}`)

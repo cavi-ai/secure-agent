@@ -172,291 +172,340 @@ type attentionQueueResult struct {
 }
 
 func deriveAttention(in postureInputs) attentionQueueResult {
-	st, patterns, routine := in.Status, in.Patterns, in.Routine
-	var sessions []attentionSession
-	if len(in.Resources) > 0 {
-		for _, s := range in.Resources {
-			sess := attentionSession{
-				key:          firstNonEmpty([]string{s.Key, fmt.Sprint(s.RootPID)}),
-				agent:        s.Name,
-				workspace:    s.Workspace,
-				label:        firstNonEmpty([]string{cwdBase(s.Workspace), s.Name, "Unknown"}),
-				rootPID:      s.RootPID,
-				rssBytes:     s.RSSBytes,
-				cpuPercent:   s.CPUPercent,
-				processCount: s.ProcessCount,
-				diagnoses:    s.Diagnoses,
-				control:      s.Control,
-			}
-			for _, p := range s.Processes {
-				sess.pids = append(sess.pids, p.PID)
-			}
-			if sess.processCount == 0 {
-				sess.processCount = len(sess.pids)
-			}
-			sessions = append(sessions, sess)
-		}
-	}
-	if len(sessions) == 0 {
-		// Fallback: no resource tracker — group by the process trees.
-		for _, t := range st.Trees {
-			sess := attentionSession{
-				key:          fmt.Sprint(firstPID(t.Root.RootPID, t.Root.PID)),
-				agent:        t.Root.Name,
-				workspace:    t.Root.CWD,
-				label:        firstNonEmpty([]string{cwdBase(t.Root.CWD), t.Root.Name, "Unknown"}),
-				rootPID:      t.Root.PID,
-				rssBytes:     t.RSSBytes,
-				processCount: 1 + len(t.Children),
-			}
-			for _, c := range t.Children {
-				sess.pids = append(sess.pids, c.PID)
-			}
-			sessions = append(sessions, sess)
-		}
-	}
+	b := newAttentionBuilder(in)
+	b.addHookFindings()
+	b.addHookDeliveries()
+	b.addFlags(b.addReviews())
+	b.addGuardPending()
+	b.addIncidents()
+	b.addResourcePressure()
+	return b.result()
+}
 
-	byPID := map[int32]*attentionSession{}
-	byAgent := map[string][]*attentionSession{}
-	for i := range sessions {
-		s := &sessions[i]
+// attentionBuilder holds one derivation's sessions and groups; each add step
+// appends one source's items, in queue order.
+type attentionBuilder struct {
+	in       postureInputs
+	sessions []attentionSession
+	byPID    map[int32]*attentionSession
+	byAgent  map[string][]*attentionSession
+	groups   map[string]*AttentionGroup
+	facts    map[string]*agentGroupFacts
+	items    []PostureItem
+}
+
+func newAttentionBuilder(in postureInputs) *attentionBuilder {
+	b := &attentionBuilder{
+		in:       in,
+		sessions: attentionSessions(in),
+		byPID:    map[int32]*attentionSession{},
+		byAgent:  map[string][]*attentionSession{},
+		groups:   map[string]*AttentionGroup{},
+		facts:    map[string]*agentGroupFacts{},
+		items:    []PostureItem{},
+	}
+	for i := range b.sessions {
+		s := &b.sessions[i]
 		for _, pid := range s.pids {
-			byPID[pid] = s
+			b.byPID[pid] = s
 		}
 		if s.rootPID != 0 {
-			byPID[s.rootPID] = s
+			b.byPID[s.rootPID] = s
 		}
 		if k := strings.ToLower(s.agent); k != "" {
-			byAgent[k] = append(byAgent[k], s)
+			b.byAgent[k] = append(b.byAgent[k], s)
 		}
 	}
+	return b
+}
 
-	groups := map[string]*AttentionGroup{}
-	groupFor := func(agent string, pid int32) *AttentionGroup {
-		var sess *attentionSession
-		if direct, ok := byPID[pid]; ok {
-			sess = direct
-		} else if matches := byAgent[strings.ToLower(agent)]; len(matches) == 1 {
-			sess = matches[0]
+// attentionSessions lists the resource tracker's sessions, or one session
+// per process tree when it has none.
+func attentionSessions(in postureInputs) []attentionSession {
+	var sessions []attentionSession
+	for _, s := range in.Resources {
+		sess := attentionSession{
+			key:          firstNonEmpty([]string{s.Key, fmt.Sprint(s.RootPID)}),
+			agent:        s.Name,
+			workspace:    s.Workspace,
+			label:        firstNonEmpty([]string{cwdBase(s.Workspace), s.Name, "Unknown"}),
+			rootPID:      s.RootPID,
+			rssBytes:     s.RSSBytes,
+			cpuPercent:   s.CPUPercent,
+			processCount: s.ProcessCount,
+			diagnoses:    s.Diagnoses,
+			control:      s.Control,
 		}
-		var key string
-		if sess != nil {
-			key = "session:" + sess.key
-		} else {
-			key = "agent:" + firstNonEmpty([]string{agent, "unattributed"})
+		for _, p := range s.Processes {
+			sess.pids = append(sess.pids, p.PID)
 		}
-		g, ok := groups[key]
-		if !ok {
-			g = &AttentionGroup{Key: key, Items: []AttentionItem{}}
-			if sess != nil {
-				g.Label = sess.label
-				g.Agent = sess.agent
-				g.Workspace = sess.workspace
-				g.RootPID = sess.rootPID
-				g.PIDs = sess.pids
-				g.RSSBytes = sess.rssBytes
-				g.CPUPercent = sess.cpuPercent
-				g.ProcessCount = sess.processCount
-			} else {
-				g.Label = firstNonEmpty([]string{agent, "Unattributed"}) + " activity"
-				g.Agent = firstNonEmpty([]string{agent, "unknown"})
-			}
-			groups[key] = g
+		if sess.processCount == 0 {
+			sess.processCount = len(sess.pids)
 		}
+		sessions = append(sessions, sess)
+	}
+	if len(sessions) > 0 {
+		return sessions
+	}
+	for _, t := range in.Status.Trees {
+		sess := attentionSession{
+			key:          fmt.Sprint(firstPID(t.Root.RootPID, t.Root.PID)),
+			agent:        t.Root.Name,
+			workspace:    t.Root.CWD,
+			label:        firstNonEmpty([]string{cwdBase(t.Root.CWD), t.Root.Name, "Unknown"}),
+			rootPID:      t.Root.PID,
+			rssBytes:     t.RSSBytes,
+			processCount: 1 + len(t.Children),
+		}
+		for _, c := range t.Children {
+			sess.pids = append(sess.pids, c.PID)
+		}
+		sessions = append(sessions, sess)
+	}
+	return sessions
+}
+
+// keyed returns the group stored under key, creating it from init.
+func (b *attentionBuilder) keyed(key string, init AttentionGroup) *AttentionGroup {
+	if g := b.groups[key]; g != nil {
 		return g
 	}
-	facts := map[string]*agentGroupFacts{}
-	factsFor := func(g *AttentionGroup) *agentGroupFacts {
-		if !strings.HasPrefix(g.Key, "agent:") {
-			return nil
-		}
-		if facts[g.Key] == nil {
-			facts[g.Key] = newAgentGroupFacts()
-		}
-		return facts[g.Key]
-	}
-	items := []PostureItem{}
-	add := func(g *AttentionGroup, headline PostureItem, item AttentionItem) {
-		headline.Assessment = item.Assessment
-		if item.Assessment != nil && item.Assessment.Risk == "unknown" {
-			headline.Title = "Finding needs evidence review"
-		}
-		items = append(items, headline)
-		g.Items = append(g.Items, item)
-	}
+	init.Key, init.Items = key, []AttentionItem{}
+	b.groups[key] = &init
+	return &init
+}
 
-	// Hook repair findings retain durable identity without borrowing a PID or
-	// another session merely because its harness or workspace matches.
-	for _, hf := range in.HookFindings {
+// groupFor is the group of the session that owns pid, else of the agent's
+// only session, else of the agent itself.
+func (b *attentionBuilder) groupFor(agent string, pid int32) *AttentionGroup {
+	sess := b.byPID[pid]
+	if sess == nil {
+		if matches := b.byAgent[strings.ToLower(agent)]; len(matches) == 1 {
+			sess = matches[0]
+		}
+	}
+	if sess == nil {
+		return b.keyed("agent:"+firstNonEmpty([]string{agent, "unattributed"}), AttentionGroup{
+			Label: firstNonEmpty([]string{agent, "Unattributed"}) + " activity",
+			Agent: firstNonEmpty([]string{agent, "unknown"}),
+		})
+	}
+	return b.keyed("session:"+sess.key, AttentionGroup{
+		Label:        sess.label,
+		Agent:        sess.agent,
+		Workspace:    sess.workspace,
+		RootPID:      sess.rootPID,
+		PIDs:         sess.pids,
+		RSSBytes:     sess.rssBytes,
+		CPUPercent:   sess.cpuPercent,
+		ProcessCount: sess.processCount,
+	})
+}
+
+// factsFor is the fact sheet of an agent group; session groups have none.
+func (b *attentionBuilder) factsFor(g *AttentionGroup) *agentGroupFacts {
+	if !strings.HasPrefix(g.Key, "agent:") {
+		return nil
+	}
+	if b.facts[g.Key] == nil {
+		b.facts[g.Key] = newAgentGroupFacts()
+	}
+	return b.facts[g.Key]
+}
+
+// add appends item to g and its headline to the queue.
+func (b *attentionBuilder) add(g *AttentionGroup, headline PostureItem, item AttentionItem) {
+	headline.Assessment = item.Assessment
+	if item.Assessment != nil && item.Assessment.Risk == "unknown" {
+		headline.Title = "Finding needs evidence review"
+	}
+	b.items = append(b.items, headline)
+	g.Items = append(g.Items, item)
+}
+
+// addHookFindings adds hook repair findings. They keep their durable session
+// identity rather than borrow a PID or another session merely because its
+// harness or workspace matches.
+func (b *attentionBuilder) addHookFindings() {
+	for _, hf := range b.in.HookFindings {
 		f := hf.Finding
-		key := "durable-session:" + hf.SessionID
-		g := groups[key]
-		if g == nil {
-			g = &AttentionGroup{Key: key, Label: "Session " + hf.SessionID, Agent: f.Harness, Items: []AttentionItem{}}
-			groups[key] = g
-		}
-		add(g, PostureItem{Kind: "hook", ID: f.ID, Title: f.Title, Severity: 1, Detail: f.Detail, Timestamp: f.LastAt.UTC().Format(time.RFC3339Nano)}, AttentionItem{Kind: "hook", Priority: 1, ID: f.ID, SessionID: hf.SessionID, Title: f.Title, Detail: f.Detail, HookFinding: &f})
+		g := b.keyed("durable-session:"+hf.SessionID, AttentionGroup{Label: "Session " + hf.SessionID, Agent: f.Harness})
+		b.add(g, PostureItem{Kind: "hook", ID: f.ID, Title: f.Title, Severity: 1, Detail: f.Detail, Timestamp: f.LastAt.UTC().Format(time.RFC3339Nano)}, AttentionItem{Kind: "hook", Priority: 1, ID: f.ID, SessionID: hf.SessionID, Title: f.Title, Detail: f.Detail, HookFinding: &f})
 	}
+}
 
-	if h := in.Status.HookIngestion; h != nil {
-		for _, row := range h.Forwarders {
-			if row.Assessment.State != "needs-action" {
-				continue
-			}
-			r := row.Report
-			key, label := "hook-host:"+r.ForwarderID, familyTitle(r.Harness)+" forwarding host"
-			if r.SessionID != "" {
-				key, label = "durable-session:"+r.SessionID, "Host-reported session "+r.SessionID
-			}
-			g := groups[key]
-			if g == nil {
-				g = &AttentionGroup{Key: key, Label: label, Agent: r.Harness, Items: []AttentionItem{}}
-				groups[key] = g
-			}
-			id, title := "hook-delivery:"+r.ForwarderID, familyTitle(r.Harness)+" hook delivery needs attention"
-			detail := fmt.Sprintf("%d queued completions; inspect the host's current delivery diagnostics.", r.Pending)
-			add(g, PostureItem{Kind: "hook_delivery", ID: id, Title: title, Detail: detail, Severity: 1, Timestamp: row.ReceivedAt.UTC().Format(time.RFC3339Nano)}, AttentionItem{Kind: "hook_delivery", Priority: 1, ID: id, Title: title, Detail: detail, SessionID: r.SessionID, HookDelivery: &row})
-		}
+// addHookDeliveries adds the forwarding hosts whose delivery needs action.
+func (b *attentionBuilder) addHookDeliveries() {
+	h := b.in.Status.HookIngestion
+	if h == nil {
+		return
 	}
+	for _, row := range h.Forwarders {
+		if row.Assessment.State != "needs-action" {
+			continue
+		}
+		r := row.Report
+		key, label := "hook-host:"+r.ForwarderID, familyTitle(r.Harness)+" forwarding host"
+		if r.SessionID != "" {
+			key, label = "durable-session:"+r.SessionID, "Host-reported session "+r.SessionID
+		}
+		g := b.keyed(key, AttentionGroup{Label: label, Agent: r.Harness})
+		id, title := "hook-delivery:"+r.ForwarderID, familyTitle(r.Harness)+" hook delivery needs attention"
+		detail := fmt.Sprintf("%d queued completions; inspect the host's current delivery diagnostics.", r.Pending)
+		b.add(g, PostureItem{Kind: "hook_delivery", ID: id, Title: title, Detail: detail, Severity: 1, Timestamp: row.ReceivedAt.UTC().Format(time.RFC3339Nano)}, AttentionItem{Kind: "hook_delivery", Priority: 1, ID: id, Title: title, Detail: detail, SessionID: r.SessionID, HookDelivery: &row})
+	}
+}
 
-	// Flags — the security signal. Unacted only, and only when the
-	// disposition is critical: warning and benign-likely flags stay in the
-	// findings history. Flags a routine group covers are ONE routine item in
-	// the routine group, whichever agents raised them; flags a pattern covers
-	// are ONE pattern item (headline and group), in the group of its newest
-	// flag.
-	routineOf := map[string]int{}
-	for i, rg := range routine {
-		for _, id := range rg.FlagIDs {
-			routineOf[id] = i
-		}
-	}
-	routineAdded := map[int]bool{}
-	patternOf := map[string]int{}
-	for i, p := range patterns {
-		for _, id := range p.FlagIDs {
-			patternOf[id] = i
-		}
-	}
-	patternAdded := map[int]bool{}
-	coveredReviews := map[string]bool{}
-	for _, r := range in.Reviews {
+// addReviews adds stored-session reviews of severity 3 or more. It returns
+// the ID of every stored-session review with evidence; addFlags skips the
+// read-connect flags those reviews cover.
+func (b *attentionBuilder) addReviews() map[string]bool {
+	covered := map[string]bool{}
+	for _, r := range b.in.Reviews {
 		if !r.EvidenceAvailable || r.Context.Attribution != "stored-session" {
 			continue
 		}
-		coveredReviews[r.ID] = true
+		covered[r.ID] = true
 		severity := model.GroupFindingSeverity(r.Assessment, r.Severity)
 		if severity < 3 {
 			continue
 		}
-		key := "session:" + r.Context.SessionID
-		g := groups[key]
-		if g == nil {
-			g = &AttentionGroup{Key: key, Label: firstNonEmpty([]string{cwdBase(r.Context.Workspace), r.Agent, "Session"}), Agent: r.Agent, Workspace: r.Context.Workspace, Summary: "Recorded session " + r.Context.SessionID, Items: []AttentionItem{}}
-			groups[key] = g
-		}
-		add(g, PostureItem{Kind: "review", ID: r.ID, Title: humanFlagTitle(r.Context.Rule), Severity: severity, Detail: r.Assessment.Reason, Timestamp: r.LastSeen.UTC().Format(time.RFC3339)}, AttentionItem{Kind: "review", ID: r.ID, Priority: 1 + severity/3, Title: humanFlagTitle(r.Context.Rule), Detail: r.Assessment.Reason, Count: r.Count, Assessment: &r.Assessment, Review: &r})
+		g := b.keyed("session:"+r.Context.SessionID, AttentionGroup{Label: firstNonEmpty([]string{cwdBase(r.Context.Workspace), r.Agent, "Session"}), Agent: r.Agent, Workspace: r.Context.Workspace, Summary: "Recorded session " + r.Context.SessionID})
+		b.add(g, PostureItem{Kind: "review", ID: r.ID, Title: humanFlagTitle(r.Context.Rule), Severity: severity, Detail: r.Assessment.Reason, Timestamp: r.LastSeen.UTC().Format(time.RFC3339)}, AttentionItem{Kind: "review", ID: r.ID, Priority: 1 + severity/3, Title: humanFlagTitle(r.Context.Rule), Detail: r.Assessment.Reason, Count: r.Count, Assessment: &r.Assessment, Review: &r})
 	}
-	for _, f := range in.Flags {
+	return covered
+}
+
+// addFlags adds the security signal: unacted flags whose disposition is
+// critical; warning and benign-likely flags stay in the findings history.
+// Flags a routine group covers are ONE routine item in the routine group,
+// whichever agents raised them; flags a pattern covers are ONE pattern item
+// (headline and group), in the group of its newest flag.
+func (b *attentionBuilder) addFlags(coveredReviews map[string]bool) {
+	routineOf := map[string]int{}
+	for i, rg := range b.in.Routine {
+		for _, id := range rg.FlagIDs {
+			routineOf[id] = i
+		}
+	}
+	patternOf := map[string]int{}
+	for i, p := range b.in.Patterns {
+		for _, id := range p.FlagIDs {
+			patternOf[id] = i
+		}
+	}
+	routineAdded, patternAdded := map[int]bool{}, map[int]bool{}
+	for _, f := range b.in.Flags {
 		if f.Rule == readConnectRule {
-			if r, ok := in.FlagReviews[f.ID]; ok && (coveredReviews[r.ID] || r.Context.Attribution == "stored-session" && r.ReviewState != "unreviewed") {
+			if r, ok := b.in.FlagReviews[f.ID]; ok && (coveredReviews[r.ID] || r.Context.Attribution == "stored-session" && r.ReviewState != "unreviewed") {
 				continue
 			}
 		}
 		if i, ok := routineOf[f.ID]; ok {
 			if !routineAdded[i] {
 				routineAdded[i] = true
-				rg := routine[i]
-				d := rg.Disposition
-				severity := f.Severity
-				if rg.Assessment != nil {
-					severity = model.GroupFindingSeverity(*rg.Assessment, 0)
-				}
-				if severity < 3 {
-					continue
-				}
-				g := groups[routineGroupKey]
-				if g == nil {
-					g = &AttentionGroup{Key: routineGroupKey, Label: "Recurring across agents", Items: []AttentionItem{},
-						Summary: "The same process reading the same files under several agents"}
-					groups[routineGroupKey] = g
-				}
-				add(g, PostureItem{
-					Kind: "routine", ID: rg.Key,
-					Title:     fmt.Sprintf("Recurring read — %d×", rg.Count),
-					Severity:  severity,
-					Detail:    rg.Summary,
-					Timestamp: f.TS.UTC().Format(time.RFC3339),
-				}, AttentionItem{
-					Kind: "routine", Priority: 2, ID: rg.Key,
-					Count: rg.Count, Title: "Recurring read", Detail: rg.Summary,
-					Disposition: &d, Assessment: rg.Assessment, Rule: readConnectRule,
-				})
+				b.addRoutine(b.in.Routine[i], f)
 			}
 			continue
 		}
 		if i, ok := patternOf[f.ID]; ok {
 			if !patternAdded[i] {
 				patternAdded[i] = true
-				p := patterns[i]
-				d := p.Disposition
-				severity := f.Severity
-				if p.Assessment != nil {
-					severity = model.GroupFindingSeverity(*p.Assessment, 0)
-				}
-				if severity < 3 {
-					continue
-				}
-				g := groupFor(f.Agent, f.PID)
-				if gf := factsFor(g); gf != nil {
-					gf.addPattern(p)
-				}
-				add(g, PostureItem{
-					Kind: "pattern", ID: p.Key,
-					Title:     fmt.Sprintf("%s — %d×", p.Title, p.Count),
-					Severity:  severity,
-					Detail:    p.Summary,
-					Timestamp: p.Last.UTC().Format(time.RFC3339),
-				}, AttentionItem{
-					Kind: "pattern", Priority: 2, ID: p.Key,
-					Count: p.Count, Title: p.Title, Detail: p.Summary,
-					Disposition: &d, Assessment: p.Assessment, Rule: p.Rule,
-				})
+				b.addPattern(b.in.Patterns[i], f)
 			}
 			continue
 		}
-		d := dispositionFor(f)
-		assessment := model.AssessFinding(f)
-		severity := model.GroupFindingSeverity(assessment, f.Severity)
-		if severity < 3 {
-			continue
-		}
-		detail := f.Rule
-		if len(f.Evidence) > 0 {
-			detail = f.Rule + " — " + f.Evidence[0].String()
-		}
-		item := AttentionItem{
-			Kind: "flag", Priority: 2, ID: f.ID,
-			Title: "Critical finding", Detail: detail, Disposition: &d, Assessment: &assessment,
-		}
-		g := groupFor(f.Agent, f.PID)
-		if gf := factsFor(g); gf != nil {
-			gf.addFlag(f)
-		}
-		add(g, PostureItem{
-			Kind: "flag", ID: f.ID,
-			Title:     humanFlagTitle(f.Rule),
-			Severity:  severity,
-			Detail:    assessment.Reason,
-			Timestamp: f.TS.UTC().Format(time.RFC3339),
-		}, item)
+		b.addFlag(f)
 	}
+}
 
-	// Guard prompts waiting — the operator is actively being asked.
-	for _, p := range in.Pending {
+// addRoutine adds routine group rg, reached through its flag f.
+func (b *attentionBuilder) addRoutine(rg model.RoutineGroup, f model.Flag) {
+	d := rg.Disposition
+	severity := f.Severity
+	if rg.Assessment != nil {
+		severity = model.GroupFindingSeverity(*rg.Assessment, 0)
+	}
+	if severity < 3 {
+		return
+	}
+	g := b.keyed(routineGroupKey, AttentionGroup{Label: "Recurring across agents",
+		Summary: "The same process reading the same files under several agents"})
+	b.add(g, PostureItem{
+		Kind: "routine", ID: rg.Key,
+		Title:     fmt.Sprintf("Recurring read — %d×", rg.Count),
+		Severity:  severity,
+		Detail:    rg.Summary,
+		Timestamp: f.TS.UTC().Format(time.RFC3339),
+	}, AttentionItem{
+		Kind: "routine", Priority: 2, ID: rg.Key,
+		Count: rg.Count, Title: "Recurring read", Detail: rg.Summary,
+		Disposition: &d, Assessment: rg.Assessment, Rule: readConnectRule,
+	})
+}
+
+// addPattern adds pattern p to the group of its flag f.
+func (b *attentionBuilder) addPattern(p model.Pattern, f model.Flag) {
+	d := p.Disposition
+	severity := f.Severity
+	if p.Assessment != nil {
+		severity = model.GroupFindingSeverity(*p.Assessment, 0)
+	}
+	if severity < 3 {
+		return
+	}
+	g := b.groupFor(f.Agent, f.PID)
+	if gf := b.factsFor(g); gf != nil {
+		gf.addPattern(p)
+	}
+	b.add(g, PostureItem{
+		Kind: "pattern", ID: p.Key,
+		Title:     fmt.Sprintf("%s — %d×", p.Title, p.Count),
+		Severity:  severity,
+		Detail:    p.Summary,
+		Timestamp: p.Last.UTC().Format(time.RFC3339),
+	}, AttentionItem{
+		Kind: "pattern", Priority: 2, ID: p.Key,
+		Count: p.Count, Title: p.Title, Detail: p.Summary,
+		Disposition: &d, Assessment: p.Assessment, Rule: p.Rule,
+	})
+}
+
+// addFlag adds a flag no routine group or pattern covers.
+func (b *attentionBuilder) addFlag(f model.Flag) {
+	d := dispositionFor(f)
+	assessment := model.AssessFinding(f)
+	severity := model.GroupFindingSeverity(assessment, f.Severity)
+	if severity < 3 {
+		return
+	}
+	detail := f.Rule
+	if len(f.Evidence) > 0 {
+		detail = f.Rule + " — " + f.Evidence[0].String()
+	}
+	item := AttentionItem{
+		Kind: "flag", Priority: 2, ID: f.ID,
+		Title: "Critical finding", Detail: detail, Disposition: &d, Assessment: &assessment,
+	}
+	g := b.groupFor(f.Agent, f.PID)
+	if gf := b.factsFor(g); gf != nil {
+		gf.addFlag(f)
+	}
+	b.add(g, PostureItem{
+		Kind: "flag", ID: f.ID,
+		Title:     humanFlagTitle(f.Rule),
+		Severity:  severity,
+		Detail:    assessment.Reason,
+		Timestamp: f.TS.UTC().Format(time.RFC3339),
+	}, item)
+}
+
+// addGuardPending adds the guard prompts waiting on the operator.
+func (b *attentionBuilder) addGuardPending() {
+	for _, p := range b.in.Pending {
 		tool := firstNonEmpty([]string{p.Tool, "Tool"})
 		path := firstNonEmpty([]string{p.Path, "a protected path"})
-		add(groupFor(p.Agent, 0), PostureItem{
+		b.add(b.groupFor(p.Agent, 0), PostureItem{
 			Kind: "guard_pending", ID: p.ID,
 			Title:     p.Agent + " wants " + humanPath(p.Path),
 			Severity:  1,
@@ -472,14 +521,16 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 			AvailableScopes: p.AvailableScopes, ReaderExe: p.ReaderExe,
 		})
 	}
+}
 
-	// Open incidents of high or critical risk; lower-risk ones stay in the
-	// findings history.
-	for _, inc := range in.Incidents {
-		if r, ok := in.FlagReviews[inc.FlagID]; ok && r.Context.Attribution == "stored-session" {
+// addIncidents adds open incidents of high or critical risk; lower-risk ones
+// stay in the findings history.
+func (b *attentionBuilder) addIncidents() {
+	for _, inc := range b.in.Incidents {
+		if r, ok := b.in.FlagReviews[inc.FlagID]; ok && r.Context.Attribution == "stored-session" {
 			continue
 		}
-		status, found := in.IncidentStates[inc.ID]
+		status, found := b.in.IncidentStates[inc.ID]
 		if !found {
 			continue
 		}
@@ -504,12 +555,14 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 			headline.Severity = 3
 			item.Title = "Critical incident"
 		}
-		add(groupFor(inc.Agent, inc.PID), headline, item)
+		b.add(b.groupFor(inc.Agent, inc.PID), headline, item)
 	}
+}
 
-	// Resource pressure: sessions with a pending intervention decision.
-	for i := range sessions {
-		s := &sessions[i]
+// addResourcePressure adds the sessions with a pending intervention decision.
+func (b *attentionBuilder) addResourcePressure() {
+	for i := range b.sessions {
+		s := &b.sessions[i]
 		if s.control == nil || s.control.PendingID == "" {
 			continue
 		}
@@ -517,7 +570,7 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 		if len(s.diagnoses) > 0 && s.diagnoses[0].Summary != "" {
 			detail = s.diagnoses[0].Summary
 		}
-		add(groupFor(s.agent, s.rootPID), PostureItem{
+		b.add(b.groupFor(s.agent, s.rootPID), PostureItem{
 			Kind: "resource_pressure", ID: s.control.PendingID,
 			Title:    "Resource pressure: " + s.label,
 			Severity: 1,
@@ -528,23 +581,28 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 			Title:  "Resource pressure", Detail: detail,
 		})
 	}
+}
 
+// result summarizes agent groups against the live PIDs and orders the
+// non-empty groups: highest item priority, then the routine group, then more
+// items, then label.
+func (b *attentionBuilder) result() attentionQueueResult {
 	live := map[int32]bool{}
-	for pid := range byPID {
+	for pid := range b.byPID {
 		live[pid] = true
 	}
-	for _, t := range st.Trees {
+	for _, t := range b.in.Status.Trees {
 		live[t.Root.PID] = true
 		for _, c := range t.Children {
 			live[c.PID] = true
 		}
 	}
-	for key, gf := range facts {
-		groups[key].Summary = gf.summary(live)
+	for key, gf := range b.facts {
+		b.groups[key].Summary = gf.summary(live)
 	}
 
-	out := make([]AttentionGroup, 0, len(groups))
-	for _, g := range groups {
+	out := make([]AttentionGroup, 0, len(b.groups))
+	for _, g := range b.groups {
 		if len(g.Items) == 0 {
 			continue
 		}
@@ -564,7 +622,7 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 		}
 		return out[i].Label < out[j].Label
 	})
-	return attentionQueueResult{Items: items, Groups: out}
+	return attentionQueueResult{Items: b.items, Groups: out}
 }
 
 func cwdBase(cwd string) string {

@@ -1,12 +1,54 @@
 package store
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
+
+// Verdicts attach across query batches, and a corrupt row leaves the rest of
+// its batch attached.
+func TestQueryFlagsAttachesVerdictsAcrossBatches(t *testing.T) {
+	s := reviewStore(t)
+	n := 2*advisorVerdictBatch + 7
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("f-%d", i)
+		if _, err := s.db.Exec(`INSERT INTO flags (id, rule, severity, ts, pid, agent) VALUES (?, 'r', 2, ?, ?, 'claude')`,
+			id, base.Add(time.Duration(i)*time.Second).Format(time.RFC3339Nano), i); err != nil {
+			t.Fatal(err)
+		}
+		if i%3 != 0 {
+			if err := s.PutAdvisorVerdict(id, "flag", model.AdvisorVerdict{Rationale: id, CreatedAt: base}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	corrupt := fmt.Sprintf("f-%d", advisorVerdictBatch+2) // in the second batch, with a verdict
+	if _, err := s.db.Exec(`UPDATE advisor_verdicts SET created_at='invalid' WHERE subject_id=?`, corrupt); err != nil {
+		t.Fatal(err)
+	}
+	flags, err := s.QueryFlags(FlagFilter{Limit: n})
+	if err != nil || len(flags) != n {
+		t.Fatalf("flags: %d %v", len(flags), err)
+	}
+	for _, f := range flags {
+		var i int
+		if _, err := fmt.Sscanf(f.ID, "f-%d", &i); err != nil {
+			t.Fatal(err)
+		}
+		want := i%3 != 0 && f.ID != corrupt
+		if (f.Advisor != nil) != want || want && f.Advisor.Rationale != f.ID {
+			t.Errorf("%s advisor = %+v, want attached %v", f.ID, f.Advisor, want)
+		}
+	}
+	if h := s.WriteHealth(); !slices.Equal(h.ReadActive, []string{"flag advisor verdicts"}) {
+		t.Errorf("corrupt verdict not reported: %+v", h)
+	}
+}
 
 func TestAdvisorVerdictBatchRetainsFailuresAndValidSiblings(t *testing.T) {
 	for _, ids := range [][]string{{"bad", "good", "missing", "bad"}, {"good", "bad", "missing", "bad"}} {

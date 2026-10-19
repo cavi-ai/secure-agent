@@ -35,6 +35,18 @@ function consoleReportHealthText(failures, formatTime = ms => new Date(ms).toLoc
   }).join(' ');
 }
 
+// A snapshot older than this is not current, even without a reported error:
+// four missed 30-second refreshes.
+const POSTURE_STALE_MS = 120000;
+
+// postureFreshness is the snapshot health the posture surfaces read: a
+// snapshot that stopped refreshing without an error (a stalled stream or
+// poll) is reported stale instead of current.
+function postureFreshness(lastSnapshotAt, error, now = Date.now()) {
+  if (!error && lastSnapshotAt && now - lastSnapshotAt > POSTURE_STALE_MS) error = 'No refresh for over two minutes';
+  return { lastSnapshotAt, error };
+}
+
 // A quiet posture is meaningful only after a complete snapshot is published.
 // Known risks remain actionable even while that snapshot cannot be refreshed.
 function consolePosturePresentation(posture, { lastSnapshotAt = 0, error = '' } = {},

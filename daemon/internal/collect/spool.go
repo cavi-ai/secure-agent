@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -26,6 +27,29 @@ import (
 // Past the budget the rest of the tail is skipped in bulk — counted, never
 // scanned line by line.
 const spoolDrainBudget = 4 << 20 // 4 MiB
+
+// spoolSkipScan bounds how far one tick scans for the end of an oversized
+// line; a longer line is skipped over several ticks.
+const spoolSkipScan = 8 << 20 // 8 MiB
+
+// skipLine returns how many bytes from start, at most limit, end the current
+// line: through its newline when one is found, else all of limit.
+func skipLine(f io.ReaderAt, start, limit int64) int64 {
+	buf := make([]byte, 64*1024)
+	var scanned int64
+	for scanned < limit {
+		n := min(int64(len(buf)), limit-scanned)
+		read, _ := f.ReadAt(buf[:n], start+scanned)
+		if read <= 0 {
+			break
+		}
+		if i := indexByte(buf[:read], '\n'); i >= 0 {
+			return scanned + int64(i) + 1
+		}
+		scanned += int64(read)
+	}
+	return scanned
+}
 
 // SpoolStats are the tailer's counters from its most recent drain. Lines and
 // Parsed count only the lines the scanner actually read and attempted to
@@ -162,6 +186,13 @@ func (s ESServiceSnapshot) SpoolStateAt(now time.Time) string {
 // real state. Overridable in tests; production uses ESServiceState.
 var ESServiceProbe = ESServiceState
 
+// probeTimeout bounds each lsof and launchctl run; launchctlPath is the
+// binary ESServiceState reads. Both are variables for tests.
+var (
+	probeTimeout  = 10 * time.Second
+	launchctlPath = "/bin/launchctl"
+)
+
 // ESServiceState probes the privileged collector's real health the only way
 // an unprivileged daemon can: stat the spool (size + mtime), read the
 // launchd service state via launchctl print, and stat the program that
@@ -170,7 +201,16 @@ var ESServiceProbe = ESServiceState
 func ESServiceState() (ESServiceSnapshot, error) {
 	var s ESServiceSnapshot
 	s.SpoolSize, s.SpoolMtime = spoolFacts(ESPoolPath)
-	out, cerr := exec.Command("/bin/launchctl", "print", "system/"+ESServiceLabel).Output()
+	// /status waits on this probe: a hung launchctl must not hang it.
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, launchctlPath, "print", "system/"+ESServiceLabel)
+	cmd.WaitDelay = time.Second
+	out, cerr := cmd.Output()
+	if ctx.Err() != nil {
+		// Unanswered is not "not loaded": the service state is unknown.
+		return s, fmt.Errorf("launchctl print did not answer within %v", probeTimeout)
+	}
 	if cerr != nil {
 		// Not loaded / not running as root: report the file facts anyway.
 		s.State = "not-loaded"
@@ -358,7 +398,7 @@ func (t *SpoolTailer) recordDrain(s SpoolStats, skipped bool) {
 	defer t.statsMu.Unlock()
 	if skipped {
 		if t.stats.FloodSince.IsZero() {
-			s.FloodSince = time.Now()
+			s.FloodSince = t.clock()
 		} else {
 			s.FloodSince = t.stats.FloodSince
 		}
@@ -535,38 +575,17 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 	}
 	// An oversized line (>1MB, a corrupt spool write) errors the scanner
 	// and would otherwise leave the offset frozen on it forever — every
-	// poll retries the same giant line. Skip past it: the tail resumes on
-	// the next tick. lastGood only counts complete lines, so finding the
-	// next newline past the current position recovers cleanly.
+	// poll retries the same giant line. Skip only that line: scan forward
+	// for its newline, at most spoolSkipScan bytes per tick, and count every
+	// skipped byte as lost evidence. Valid lines after it are read next tick.
 	if err := scanner.Err(); err != nil {
 		if info, statErr := f.Stat(); statErr == nil {
 			if rest := info.Size() - offset - lastGood; rest > 0 {
-				// Skip the stuck line plus its terminator.
-				if skip := rest; skip > 8<<20 {
-					resume := offset + lastGood + skip // giant garbage: drop it all
-					t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick, Skipped: 1, BytesSkipped: uint64(skip)}, false)
-					return resume, st
-				}
-				skipBuf := make([]byte, 64*1024)
-				for rest := info.Size() - offset - lastGood; rest > 0; {
-					n := int64(len(skipBuf))
-					if rest < n {
-						n = rest
-					}
-					read, _ := f.ReadAt(skipBuf, offset+lastGood)
-					if read <= 0 {
-						break
-					}
-					if i := indexByte(skipBuf[:read], '\n'); i >= 0 {
-						resume := offset + lastGood + int64(i) + 1
-						t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick}, false)
-						return resume, st
-					}
-					rest -= int64(read)
-					lastGood += int64(read)
-				}
-				t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick}, false)
-				return offset + lastGood, st
+				start := offset + lastGood
+				skipped := skipLine(f, start, min(rest, spoolSkipScan))
+				t.recordLost(uint64(skipped))
+				t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick, Skipped: 1, BytesSkipped: uint64(skipped)}, false)
+				return start + skipped, st
 			}
 		}
 		log.Printf("collect: spool scanner error at offset %d: %v", offset+lastGood, err)

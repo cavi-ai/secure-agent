@@ -41,6 +41,11 @@ set -eu
 echo "$(basename "$0") $*" >> "$CALLS"
 if [[ "$(basename "$0")" == "${FAIL_COMMAND:-}" ]]; then exit 1; fi
 ''')
+        # The keychain's identities, as `security find-identity` lists them.
+        self.write_script(self.bin / "security", '''#!/bin/bash
+echo "security $*" >> "$CALLS"
+printf '%s\\n' "${SECURITY_IDENTITIES:-}"
+''')
         self.write_script(packaging / "devid_export.sh", '''#!/bin/bash
 set -eu
 echo "devid_export $*" >> "$CALLS"
@@ -49,10 +54,16 @@ mkdir -p "$3/notarized/Secure Agent.app"
         self.write_script(self.bin / "git", '''#!/bin/bash
 set -eu
 if [[ "${DIRTY_TREE:-0}" == 1 ]]; then exit 1; fi
+if [[ "${1:-}" == rev-parse ]]; then
+  case "${*: -1}" in
+    HEAD) echo "${HEAD_SHA:-1111}" ;;
+    refs/tags/*) [[ -n "${TAG_SHA-1111}" ]] || exit 1; echo "${TAG_SHA-1111}" ;;
+  esac
+fi
 ''')
         self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + os.defpath,
                     "VERSION": "v1.3.0", "DMG_CONTENT": "first", "CALLS": str(self.calls)}
-        for key in ("CODESIGN_IDENTITY", "NOTARY_PROFILE", "DEVELOPER_TEAM", "RELEASE_BUILD", "FAIL_COMMAND", "DIRTY_TREE"):
+        for key in ("CODESIGN_IDENTITY", "NOTARY_PROFILE", "DEVELOPER_TEAM", "RELEASE_BUILD", "FAIL_COMMAND", "DIRTY_TREE", "SECURITY_IDENTITIES"):
             self.env.pop(key, None)
 
     def write_script(self, path, body):
@@ -128,6 +139,25 @@ if [[ "${DIRTY_TREE:-0}" == 1 ]]; then exit 1; fi
                                 CODESIGN_IDENTITY="Developer ID Application: Fixture (FIXTURE)", DIRTY_TREE="1")
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.root / "dist/built").exists())
+
+    def test_notarized_dmg_is_signed_with_the_resolved_identity(self):
+        identity = "Developer ID Application: Fixture (FIXTURE)"
+        result = self.run_build(NOTARY_PROFILE="fixture-notary",
+                                SECURITY_IDENTITIES=f'  1) ABCDEF "{identity}"')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.calls.read_text().splitlines()
+        signed = [c for c in calls if c.startswith(f"codesign --force --sign {identity} ") and c.endswith(".dmg")]
+        self.assertEqual(len(signed), 1, calls)
+        self.assertTrue(any(c.startswith("xcrun notarytool submit ") and c.split()[3].endswith(".dmg") for c in calls), calls)
+
+    def test_release_requires_its_tag_at_head_before_build(self):
+        for name, settings in (("untagged", {"TAG_SHA": ""}), ("tag elsewhere", {"TAG_SHA": "2222"})):
+            with self.subTest(name):
+                result = self.run_build(RELEASE_BUILD="1", NOTARY_PROFILE="fixture-notary",
+                                        CODESIGN_IDENTITY="Developer ID Application: Fixture (FIXTURE)", **settings)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("tag v1.3.0 at HEAD", result.stderr)
+                self.assertFalse((self.root / "dist/built").exists())
 
     def test_release_rejects_vulnerable_toolchain_before_build(self):
         result = self.run_build(RELEASE_BUILD="1", NOTARY_PROFILE="fixture-notary",

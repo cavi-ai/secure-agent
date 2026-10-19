@@ -127,7 +127,7 @@ func TestResourceEpisodeFailureVisibleThroughRecovery(t *testing.T) {
 
 func TestPostureSurfacesBusLoss(t *testing.T) {
 	dropAt := time.Now().Add(-collect.LossWindow - time.Minute)
-	a := newTestAPI(Deps{Store: testStore(t), Status: func() Status { return Status{Running: true} }, BusDrops: func() uint64 { return 7 }, BusDropAt: func() time.Time { return dropAt }})
+	a := newTestAPI(Deps{Store: testStore(t), Status: func() Status { return Status{Running: true} }, Telemetry: TelemetryDeps{BusDrops: func() uint64 { return 7 }, BusDropAt: func() time.Time { return dropAt }}})
 	if p := a.computePosture(); p.State != "all-clear" {
 		t.Fatalf("posture after drops stopped = %+v, want all-clear", p)
 	}

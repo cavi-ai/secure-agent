@@ -4,8 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -180,7 +182,9 @@ echo "progress noise"
 
 func TestAskTimeoutBusyAndNoSession(t *testing.T) {
 	a, st, wt, bin := setup(t, "claude")
-	fakeCLI(t, bin, "claude", "sleep 5\n")
+	// The agent starts a long-lived tool and records its pid.
+	pidFile := filepath.Join(filepath.Dir(bin), "tool.pid")
+	fakeCLI(t, bin, "claude", "sleep 60 &\necho $! > '"+pidFile+"'\nwait\n")
 	a.timeout = 300 * time.Millisecond
 	ask, err := a.Ask(Request{Path: wt})
 	if err != nil {
@@ -189,13 +193,22 @@ func TestAskTimeoutBusyAndNoSession(t *testing.T) {
 	if _, err := a.Ask(Request{Path: wt}); !errors.Is(err, ErrBusy) {
 		t.Fatalf("second ask while running: %v, want ErrBusy", err)
 	}
-	start := time.Now()
 	a.Wait()
 	if got := st.asks[ask.ID]; got.Status != "timeout" || got.Verdict != "none" {
 		t.Fatalf("timed-out ask = %+v", got)
 	}
-	if waited := time.Since(start); waited > 3*time.Second {
-		t.Fatalf("a timed-out ask took %v to stop: its children kept running", waited)
+	// The timeout kills the agent's whole process group: the tool it started
+	// must be gone, however long the host took to deliver the kill.
+	if raw, err := os.ReadFile(pidFile); err == nil {
+		pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for deadline := time.Now().Add(10 * time.Second); syscall.Kill(pid, 0) == nil; time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("the agent's tool (pid %d) outlived the timed-out ask", pid)
+			}
+		}
 	}
 
 	st.sessions = []model.Session{{ID: "x", Harness: "cursor-ide", Workspace: wt}}

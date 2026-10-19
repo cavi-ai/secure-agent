@@ -54,7 +54,7 @@ func newAutoReviewRig(t *testing.T, enabled, autoReview bool, release chan struc
 	st := testStore(t)
 	agent := sysagent.New(st, t.TempDir(), func(s string) (string, bool) { return s, true })
 	agent.SetConfig(config.SystemAgentConfig{Enabled: enabled, Endpoint: ollama.URL, TimeoutMinutes: 1, AutoReview: autoReview})
-	rig := &autoReviewRig{a: New(Deps{Store: st, SysAgent: agent}), agent: agent, st: st, endpoint: ollama.URL}
+	rig := &autoReviewRig{a: New(Deps{Store: st, Workspace: WorkspaceDeps{SysAgent: agent}}), agent: agent, st: st, endpoint: ollama.URL}
 	at := time.Now()
 	rig.a.autoReview.now = func() time.Time { return at }
 	rig.a.autoReview.schedule = func(d time.Duration, f func()) {

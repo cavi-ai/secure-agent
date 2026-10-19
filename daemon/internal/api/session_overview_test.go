@@ -46,9 +46,9 @@ func TestSessionOverviewKeepsEvidenceAndLiveIdentitySeparate(t *testing.T) {
 
 	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status {
 		return Status{Running: true, Agents: []AgentSummary{{PID: 40, RootPID: 40, Name: "claude", StartedAt: start.Format(time.RFC3339Nano)}}}
-	}, Resources: func() resource.Snapshot {
+	}, Resources: ResourceDeps{Snapshot: func() resource.Snapshot {
 		return resource.Snapshot{Sessions: []resource.Session{{Key: "root", RootPID: 40, RootStartedAt: rootStart, Name: "claude", RSSBytes: 1024, ProcessCount: 2}}}
-	}})
+	}}})
 	out := overviewJSON(t, a, "own")
 	findings := out["findings"].([]any)
 	if len(findings) != 1 || findings[0].(map[string]any)["id"] != "own" {
@@ -77,10 +77,10 @@ func TestSessionOverviewBuildsEvidenceStatusOnce(t *testing.T) {
 	now := time.Now().UTC()
 	st.UpsertSession(model.Session{ID: "own", Harness: "claude", RootPID: 40, StartedAt: now.Add(-time.Hour), LastSeenAt: now, Status: model.SessionActive})
 	passes := 0
-	a := newTestAPI(Deps{Store: st, Status: func() Status { return Status{Running: true} }, BusDrops: func() uint64 {
+	a := newTestAPI(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Telemetry: TelemetryDeps{BusDrops: func() uint64 {
 		passes++
 		return 0
-	}})
+	}}})
 	overviewJSON(t, a, "own")
 	if passes != 1 {
 		t.Fatalf("evidence status built %d times for one overview, want 1", passes)

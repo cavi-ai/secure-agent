@@ -1,17 +1,17 @@
-// Own the telemetry refresh workflow through explicit state and callbacks.
-function createTelemetryRefresh({ state, actions }) {
+// Own the telemetry refresh workflow: it publishes into the telemetry store
+// and reaches the rest of the console through explicit state and callbacks.
+function createTelemetryRefresh({ store, state, actions }) {
+  const data = store.data;
   async function fetchTelemetry(opts) {
     // The shared request gate handles credential rejection. Other failures mark that report stale
     // or unavailable; snapshot failure also changes the connection status.
     // A failed endpoint NEVER overwrites the panel's last good data.
     if (state.sessionEnded) return;
     const slow = !opts || opts.slow !== false;
-    const gen = ++state.telemetryFetchGen;
-    const slowGen = slow ? ++state.telemetrySlowGen : 0;
-    const expectedReadGen = slow ? ++state.expectedEgressReadGen : 0;
+    const ticket = store.beginRefresh(slow);
     actions.syncHistoryViews();
-    const current = () => !state.sessionEnded && gen === state.telemetryFetchGen;
-    const currentSlow = () => !state.sessionEnded && slow && slowGen === state.telemetrySlowGen;
+    const current = () => !state.sessionEnded && ticket.current();
+    const currentSlow = () => !state.sessionEnded && ticket.currentSlow();
     let changedSlow = false;
     let changedResources = false;
     const obsolete = () => {
@@ -44,38 +44,21 @@ function createTelemetryRefresh({ state, actions }) {
     const requests = [grab('snapshot', '/snapshot'), grab('guard decisions', '/guard/pending')];
     if (slow) requests.push(grab('resources', '/resources', currentSlow));
     const reviewQueryCursor = state.reviewCursor;
-    if (reviewQueryCursor) requests.push(grab('reviews', '/reviews?limit=100&after=' + encodeURIComponent(reviewQueryCursor), () => current() && state.reviewCursor === reviewQueryCursor).then(page => { if (page) state.telemetryData.reviews = page; }));
+    if (reviewQueryCursor) requests.push(grab('reviews', '/reviews?limit=100&after=' + encodeURIComponent(reviewQueryCursor), () => current() && state.reviewCursor === reviewQueryCursor).then(page => { if (page) data.reviews = page; }));
     const [snap, guardPending, resources] = await Promise.all(requests);
     if (state.sessionEnded) return;
     if (resources && currentSlow()) {
-      state.telemetryData.resources = resources;
+      data.resources = resources;
       changedResources = changedSlow = true;
     }
     if (current()) {
-      if (guardPending) state.telemetryData.guardPending = guardPending || [];
+      if (guardPending) data.guardPending = guardPending;
       if (snap) {
-        state.lastSnapshotAt = Date.now();
-        const status = snap.status;
-        if (status) {
-          const up = actions.parseUptimeSec(status.uptime);
-          if (state.prevUptimeSec > 0 && up < state.prevUptimeSec - 5) {
-            actions.showToast('Daemon restarted — reconnected to the new instance', 'info');
-            state.prevEventKeys = new Set();
-            state.firstEventRender = true;
-          }
-          state.prevUptimeSec = up;
-          state.telemetryData.status = status;
+        const uptime = snap.status ? actions.parseUptimeSec(snap.status.uptime) : 0;
+        if (store.applySnapshot(snap, { uptime, keepReviews: !!state.reviewCursor })) {
+          actions.showToast('Daemon restarted — reconnected to the new instance', 'info');
+          actions.resetEventFreshness();
         }
-        if (snap.flags) state.telemetryData.flags = (snap.flags || []).filter(f => !f.acknowledged);
-        if (snap.reviews && !state.reviewCursor) state.telemetryData.reviews = snap.reviews;
-        if (snap.patterns) state.telemetryData.patterns = snap.patterns || [];
-        if (snap.routine) state.telemetryData.routine = snap.routine || [];
-        if (snap.incidents) state.telemetryData.incidents = snap.incidents || [];
-        if (snap.events) state.telemetryData.events = snap.events || [];
-        if (snap.posture) state.telemetryData.posture = snap.posture;
-        if (snap.suggestions) state.telemetryData.suggestions = snap.suggestions || [];
-        if (snap.mutes) state.telemetryData.mutes = snap.mutes || [];
-        if (snap.sessions) state.telemetryData.sessions = snap.sessions || [];
         // Clear the snapshot failure only after its data has been published.
         actions.reportSucceeded('snapshot');
       }
@@ -98,32 +81,22 @@ function createTelemetryRefresh({ state, actions }) {
       if (state.sessionEnded) return;
       if (currentSlow()) {
         changedSlow = true;
-        if (fleet) state.telemetryData.fleet = fleet || [];
-        if (audit) state.telemetryData.audit = audit || [];
-        if (sources) state.telemetryData.sources = sources || [];
-        if (rollup) state.telemetryData.rollup = rollup || [];
-        if (uninspected) state.telemetryData.uninspected = uninspected || [];
-        if (episodes) state.telemetryData.episodes = episodes || [];
-        if (egressEpisodes) state.telemetryData.egressEpisodes = egressEpisodes.episodes || [];
-        if (expectedEgress && expectedReadGen === state.expectedEgressReadGen) state.telemetryData.expectedEgress = expectedEgress.rules || [];
-        if (notifyCfg) {
-          // A reconcile while the operator is typing a workspace path must not
-          // dirty (and re-render) the notify panel unless the served config
-          // actually changed — a stable hash, not the poll cadence, decides.
-          const h = JSON.stringify(notifyCfg);
-          if (h !== state.notifyCfgHash) { state.notifyCfgHash = h; state.telemetryData.notifyCfg = notifyCfg; actions.markDirty('notify'); }
-        }
-        if (allowlist) state.telemetryData.allowlist = allowlist || [];
+        // A reconcile while the operator is typing a workspace path must not
+        // dirty (and re-render) the notify panel unless the served config
+        // actually changed — a stable hash, not the poll cadence, decides.
+        const notifyChanged = store.applySlowReports({ fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist,
+          episodes, egressEpisodes, expectedEgress }, ticket.ownsExpectedEgress());
+        if (notifyChanged) actions.markDirty('notify');
       }
     }
 
     if (obsolete()) return;
     actions.syncHistoryViews();
-    actions.sparkIngestEvents(state.telemetryData.events);
+    actions.sparkIngestEvents(data.events);
     if (actions.isFlagsFiltered() || actions.homeGroupOpen('findings')) {
       const v = await grab('flags', actions.flagsQuery());
       if (obsolete()) return;
-      if (v) state.telemetryData.flagsView = v || [];
+      if (v) data.flagsView = v;
     }
     if (actions.isEventsFiltered()) {
       const scope = actions.eventsHistoryScope();
@@ -137,7 +110,7 @@ function createTelemetryRefresh({ state, actions }) {
       if (obsolete()) return;
       if (ownsPage()) {
         if (v && (Array.isArray(v) || actions.validEventHistoryPage(v, session))) {
-          state.telemetryData.eventsView = session ? actions.acceptEventHistoryPage(page, v) : v;
+          data.eventsView = session ? actions.acceptEventHistoryPage(page, v) : v;
           page.loading = false;
         } else {
           if (v) actions.reportFailed('events', 'Event page does not match this session');
@@ -147,11 +120,11 @@ function createTelemetryRefresh({ state, actions }) {
     }
 
     actions.renderReportHealth(); // Filter changes can hide a failed filtered report.
-    state.telemetryData.connected = !!(snap && snap.status);
+    data.connected = !!(snap && snap.status);
     actions.reconcileRetriage();
 
     const invalidSnapshot = state.reportHealth.failures(['snapshot']).some(report => report.error === 'Invalid response');
-    actions.setConnState(state.telemetryData.connected ? 'ok' : invalidSnapshot ? 'invalid-response' : 'unreachable');
+    actions.setConnState(data.connected ? 'ok' : invalidSnapshot ? 'invalid-response' : 'unreachable');
 
     if (!state.booted || (opts && opts.full)) actions.renderAll();
     // 'notify' is excluded here: it dirties itself above, only when its

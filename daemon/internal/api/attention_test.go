@@ -20,7 +20,7 @@ import (
 func attentionDeps(t *testing.T, sessions []resource.Session) Deps {
 	t.Helper()
 
-	return Deps{Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Resources: func() resource.Snapshot { return resource.Snapshot{Sessions: sessions} }}
+	return Deps{Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Resources: ResourceDeps{Snapshot: func() resource.Snapshot { return resource.Snapshot{Sessions: sessions} }}}
 }
 
 func attentionAPI(t *testing.T, sessions []resource.Session) *API {
@@ -69,7 +69,7 @@ func TestAttentionGroupsEmptyWhenNothingPending(t *testing.T) {
 
 func TestAttentionGroupsGuardPendingJoinsLiveSession(t *testing.T) {
 	deps := attentionDeps(t, []resource.Session{mkResourceSession(42, "codex", "/work/repo")})
-	deps.Guard = guard.NewBroker(time.Minute)
+	deps.Guard.Broker = guard.NewBroker(time.Minute)
 	a := newTestAPI(deps)
 	// Request blocks until a decision lands; run it in the background and let
 	// it time out after the test — the prompt stays pending meanwhile.
@@ -97,7 +97,7 @@ func TestAttentionGroupsGuardPendingJoinsLiveSession(t *testing.T) {
 
 func TestAttentionGroupLabelKeepsAgentIDCaseAtRootWorkspace(t *testing.T) {
 	deps := attentionDeps(t, []resource.Session{mkResourceSession(43, "cursor-ide", "/")})
-	deps.Guard = guard.NewBroker(time.Minute)
+	deps.Guard.Broker = guard.NewBroker(time.Minute)
 	a := newTestAPI(deps)
 	go a.guardBroker.Request(context.Background(), guard.Pending{ID: "g3", Agent: "cursor-ide", Tool: "Read", Path: "/Users/x/.aws/credentials"})
 	waitFor(t, func() bool { return len(a.guardBroker.Pending()) == 1 })
@@ -109,7 +109,7 @@ func TestAttentionGroupLabelKeepsAgentIDCaseAtRootWorkspace(t *testing.T) {
 
 func TestAttentionGroupsUnmatchedGuardGetsAgentBucket(t *testing.T) {
 	deps := attentionDeps(t, nil)
-	deps.Guard = guard.NewBroker(time.Minute)
+	deps.Guard.Broker = guard.NewBroker(time.Minute)
 	a := newTestAPI(deps)
 	go a.guardBroker.Request(context.Background(), guard.Pending{ID: "g2", Agent: "codex", Tool: "Write", Path: "/tmp/x"})
 	waitFor(t, func() bool { return len(a.guardBroker.Pending()) == 1 })
@@ -253,7 +253,7 @@ func TestAttentionGroupsCoverEveryPostureItem(t *testing.T) {
 		Collectors: []supervise.Health{{Name: "transcript", Running: true}},
 	}
 
-	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return status }, Correlator: cr})
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return status }, Policy: PolicyDeps{Correlator: cr}})
 	a.store.PutFlag(model.Flag{ID: "crit", Rule: "tcc-tamper", Severity: 3, TS: now, PID: 42, Agent: "cursor"})
 	a.store.PutFlag(model.Flag{ID: "high", Rule: "keychain-access", Severity: 2, TS: now, PID: 42, Agent: "cursor"})
 
@@ -322,7 +322,7 @@ func TestAttentionEgressCoverageSkipsCarriers(t *testing.T) {
 
 		a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status {
 			return Status{Running: true, UninspectedEgress: cr.UninspectedEgressCountWindow(24 * time.Hour)}
-		}, Correlator: cr})
+		}, Policy: PolicyDeps{Correlator: cr}})
 		return a, cr
 	}
 	const carrier, unknown = "104.16.0.1", "unknown.example.com"

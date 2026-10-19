@@ -434,7 +434,7 @@ func TestDoctorHermes(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	t.Setenv("HOME", t.TempDir())
 	a := New(Deps{Store: st, Status: func() Status { return Status{Uptime: "1h0m0s"} },
-		Hermes: func() collect.HermesStatus { return collect.HermesStatus{Root: "/h", LastError: "boom"} }})
+		Doctor: DoctorDeps{Hermes: func() collect.HermesStatus { return collect.HermesStatus{Root: "/h", LastError: "boom"} }}})
 	if c := doctorCheckByID(t, a.doctorReport(polled), "hermes"); c.State != doctorFail || c.Detail != "boom" || c.Fix == "" {
 		t.Fatalf("hermes check = %+v, want fail with a fix", c)
 	}

@@ -170,6 +170,7 @@ func (s *Store) observeFindingReviewLocked(f model.Flag, a model.FindingAssessme
 		err = tx.Commit()
 	}
 	if err == nil {
+		s.flagsChanged() // observeReviewTx may acknowledge the flag
 		s.reviewWrites++
 		if s.reviewWrites%100 == 0 {
 			_, err = s.db.Exec(`DELETE FROM finding_review_members WHERE flag_id NOT IN (SELECT id FROM flags)`)
@@ -472,13 +473,12 @@ func (s *Store) FindingReviewID(flagID string) (id string, readErr error) {
 }
 
 // AttachFindingReviewIDs preserves core flags and valid sibling links while
-// reporting a failed enrichment once for the whole batch.
+// reporting a failed enrichment once for the whole batch. It only reads, so
+// it does not take mu.
 func (s *Store) AttachFindingReviewIDs(flags []model.Flag) error {
 	if len(flags) == 0 {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var readErr error
 	for i := range flags {
 		id, err := s.findingReviewIDLocked(flags[i].ID)
@@ -640,6 +640,7 @@ func (s *Store) DecideFindingReview(req model.ReviewDecisionRequest) (receipt mo
 	}
 	err = tx.Commit()
 	if err == nil {
+		s.flagsChanged()
 		s.noteWrite("finding reviews", nil)
 	}
 	return

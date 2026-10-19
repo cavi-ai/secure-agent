@@ -2,12 +2,13 @@
 
 ## 🔒 Supported Versions
 
-We actively maintain and provide security updates for the latest release on the `main` branch.
+Releases are cut from `main`, and security fixes ship in the next release. Upgrade to the latest release to receive them.
 
 | Version | Supported |
 | ------- | ------------------ |
 | `main`  | ✅ Yes             |
-| < 1.0   | ⚠️ Best Effort     |
+| Latest 1.x release | ✅ Yes |
+| Earlier releases | ⚠️ Best Effort |
 
 ---
 
@@ -33,7 +34,7 @@ To help us triage and investigate the issue efficiently, please include:
 ## 🛡️ Security & Privacy Practices in `secure-agent`
 
 - **Redaction**: Detected secret values are masked with `[REDACTED]` before inclusion in stored/displayed evidence and local model context. Detection has limits: an unregistered value that matches no pattern can be missed. See [secret handling](docs/FIREWALL_THREAT_MODEL.md#handling-of-secret-material).
-- **Local access**: The daemon's Unix socket is owner-scoped (`0600`) with peer authorization. An enabled loopback proxy also serves the console API behind a separate console token; some routes further refuse agent processes. See [API authentication](docs/API.md#peer-authentication--endpoint-roles).
+- **Local access**: The daemon's Unix socket is owner-scoped (`0600`) with peer authorization. An enabled loopback proxy also serves the console API behind a separate console token; changes made through it, and some read routes, further refuse agent processes. See [API authentication](docs/API.md#peer-authentication--endpoint-roles).
 - **External destinations**: Fleet webhooks and OTLP export are opt-in and send selected telemetry to configured destinations. Local chat and advisor calls require loopback model endpoints. Routed agent requests still go to their original upstream destinations. Review [configuration](docs/CONFIGURATION.md) and the [advisor threat model](docs/ADVISOR_THREAT_MODEL.md) for the scope of each path.
 
 ---

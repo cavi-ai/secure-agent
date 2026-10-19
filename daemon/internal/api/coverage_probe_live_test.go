@@ -38,7 +38,7 @@ func TestCoverageProbeInstalledHookLive(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	a = New(Deps{Store: a.store, Status: a.statusFn, PeerChecker: NewPeerChecker(), UIPID: int32(os.Getpid())})
+	a = New(Deps{Store: a.store, Status: a.statusFn, Peers: PeerDeps{Checker: NewPeerChecker(), UIPID: int32(os.Getpid())}})
 	sockDir, err := os.MkdirTemp("", "probe-")
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +106,7 @@ func TestCoverageProbeInstalledHookLive(t *testing.T) {
 	if rows := testutil.Read[[]event.Event](t)(a.store.QueryEvents(store.EventFilter{Limit: 20})); len(rows) != 0 {
 		t.Fatal("synthetic probe manufactured session evidence")
 	}
-	if rows := a.store.ListGuardDecisions("", 20); len(rows) != 0 {
+	if rows := guardDecisionRows(t, a.store, "", 20); len(rows) != 0 {
 		t.Fatal("synthetic probe manufactured real guard decisions")
 	}
 	home := filepath.Dir(filepath.Dir(dir))

@@ -11,7 +11,8 @@ function escapeHTML(str) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // applyInlineMetrics: the console CSP (style-src 'self') drops style
@@ -188,6 +189,19 @@ function eventKey(e) {
     return `${k}|${e.session_id || ''}|${e.ts}|${e.model || ''}|${e.tokens_in || 0}|${e.tokens_out || 0}`;
   }
   return `${e.ts}|${e.pid}|${e.kind}|${e.detail || e.path || e.remote_host || ''}`;
+}
+
+// createEventFreshness: which timeline rows are new to the user. The first
+// render after reset() and a render after suppressNext() mark nothing fresh;
+// rendered() records the keys on screen and clears the suppression.
+function createEventFreshness() {
+  let seen = new Set(), first = true, suppressed = false;
+  return {
+    isFresh: key => !first && !suppressed && !seen.has(key),
+    rendered: keys => { seen = new Set(keys); first = false; suppressed = false; },
+    reset: () => { seen = new Set(); first = true; },
+    suppressNext: () => { suppressed = true; },
+  };
 }
 
 // advisorAdviceHTML: the advisor's recommendation on a blocked guard prompt.
@@ -2050,17 +2064,19 @@ function vendorKeyPromoteHTML(ids) {
 function sseNeedsSnapshot(kind) {
   return kind === 'exec' || kind === 'guard-prompt' || kind === 'guard-resolved' || kind === 'proxy-hit';
 }
+// Daemon enumerations, pinned to their Go sources by a drift test in
+// daemon/internal/wiregen: api.PostureItemAttentionKinds, api.AttentionBuckets.
+const POSTURE_ITEM_ATTENTION_KINDS = { 'guard_pending': 'guard', 'resource_pressure': 'resource' };
+const ATTENTION_BUCKETS = ['decisions', 'security', 'monitoring', 'other'];
+
 // attentionItemKind: the group-item kind a /posture headline item belongs to.
 function attentionItemKind(kind) {
-  return { guard_pending: 'guard', resource_pressure: 'resource', uninspected_egress: 'egress' }[kind] || kind;
+  return POSTURE_ITEM_ATTENTION_KINDS[kind] || kind;
 }
-// mapPostureAttention: the posture after an optimistic attention change. fn
-// maps each group item (null drops it); a dropped item leaves posture.items
-// too and needs_you is items.length, so the count, the headline items and
-// the groups agree until the next snapshot. state and summary stay the
-// daemon's.
+// validAttentionSummary: the daemon's attention summary is used only when its
+// buckets, counts and first references agree with this posture's queue.
 function validAttentionSummary(p) {
-  const s = p?.attention_summary, order = ['decisions', 'security', 'monitoring', 'other'];
+  const s = p?.attention_summary, order = ATTENTION_BUCKETS;
   const count = v => Number.isSafeInteger(v) && v >= 0;
   if (s?.version !== 1 || !Array.isArray(s.buckets) || ![3, 4].includes(s.buckets.length) || !count(p.needs_you) || !count(p.coverage_count)) return false;
   let total = 0;
@@ -2077,6 +2093,11 @@ function validAttentionSummary(p) {
   return total === p.needs_you;
 }
 
+// mapPostureAttention: the posture after an optimistic attention change. fn
+// maps each group item (null drops it); a dropped item leaves posture.items
+// too and needs_you is items.length, so the count, the headline items and
+// the groups agree until the next snapshot. state and summary stay the
+// daemon's.
 function mapPostureAttention(p, fn) {
   if (!p || !p.groups) return p;
   const dropped = new Set();

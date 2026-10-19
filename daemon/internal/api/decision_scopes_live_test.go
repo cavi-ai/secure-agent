@@ -34,7 +34,7 @@ func TestGuardKernelPeerScopeLifecycle(t *testing.T) {
 	e := event.Event{Kind: event.KindFileOpen, PID: pid, TS: time.Now()}
 	resolver.Resolve(&e)
 	resolver.HandleHandshake(session.Handshake{SessionID: "scope-live", Harness: "scope-proof", Workspace: info.CWD, PID: pid, TS: time.Now()})
-	a := New(Deps{Store: st, Guard: guard.NewBroker(2 * time.Second), GuardIdentity: resolver.PermissionIdentity, PeerChecker: NewPeerChecker(), UIPID: pid})
+	a := New(Deps{Store: st, Guard: GuardDeps{Broker: guard.NewBroker(2 * time.Second), Identity: resolver.PermissionIdentity}, Peers: PeerDeps{Checker: NewPeerChecker(), UIPID: pid}})
 	dir, err := os.MkdirTemp("", "scope-")
 	if err != nil {
 		t.Fatal(err)

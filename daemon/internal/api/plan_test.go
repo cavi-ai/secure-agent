@@ -49,7 +49,7 @@ func planTestDeps(t *testing.T) (Deps, *planRecorder) {
 	})
 	deps.Firewall = FirewallControl{Engine: eng}
 	rec := &planRecorder{pending: map[string]bool{}, ready: true}
-	deps.Plan = rec.funcs()
+	deps.Advisors.Plan = rec.funcs()
 	return deps, rec
 }
 
@@ -127,7 +127,7 @@ func TestPlanDisabledAdvisor(t *testing.T) {
 	if code != http.StatusConflict || resp.Status != "disabled" || resp.Reason == "" || resp.Playbook.Why == "" || len(rec.reqs) != 0 {
 		t.Fatalf("%d %+v reqs=%d", code, resp, len(rec.reqs))
 	}
-	deps.Plan = nil
+	deps.Advisors.Plan = nil
 	a = newTestAPI(deps)
 	if code, resp := planCall(t, a, http.MethodGet, "flag:f1"); code != http.StatusOK || resp.Status != "disabled" || resp.AdvisorReady {
 		t.Fatalf("unwired: %d %+v", code, resp)

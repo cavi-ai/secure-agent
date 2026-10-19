@@ -1,4 +1,4 @@
-.PHONY: all build test test-menubar-rendering test-setup-session-live test-guard-workflow-live install uninstall clean daemon menubar cli collector smoke app dmg release icon lint docs docs-reference docs-check docs-test docs-archive
+.PHONY: all build test test-go test-guard-workflow-live test-linux test-hooks test-console test-macos test-menubar-rendering test-setup-session-live install uninstall clean daemon menubar cli collector smoke app dmg release icon lint docs docs-reference docs-check docs-test docs-archive
 
 docs-reference:
 	python3 packaging/docs/build.py reference
@@ -34,13 +34,6 @@ release:
 icon:
 	./packaging/make_icon.sh
 
-
-# Binaries
-BIN_DIR := $(HOME)/.local/bin
-DAEMON_BIN := $(BIN_DIR)/secure-agentd
-CLI_BIN := $(BIN_DIR)/secure-agent
-MENUBAR_BIN := $(BIN_DIR)/secure-agent-menubar
-
 all: build
 
 build: daemon cli menubar collector
@@ -49,7 +42,7 @@ lint:
 	@echo "==> go vet ./..."
 	go vet ./...
 	@echo "==> gofmt check..."
-	@test -z "$$(gofmt -l daemon cmd)" || { echo "gofmt needed:"; gofmt -l daemon cmd; exit 1; }
+	@test -z "$$(gofmt -l daemon cmd internal)" || { echo "gofmt needed:"; gofmt -l daemon cmd internal; exit 1; }
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
@@ -78,37 +71,57 @@ test-menubar-rendering:
 test-setup-session-live:
 	python3 packaging/test/setup_session_live.py
 
+# CI runs test-go with test-guard-workflow-live, test-linux, test-hooks and
+# test-console as its jobs; `make test` runs those, the documentation checks
+# and the macOS-only suites.
+test: test-go test-guard-workflow-live test-linux test-hooks test-console docs-check docs-test test-macos
+
 test-guard-workflow-live:
 	python3 packaging/test/guard_workflow_live.py
 
-test:
-	@echo "==> Running Go unit tests..."
-	go test ./... -count=1
-	@echo "==> Running Swift package tests..."
-	bash packaging/swift_macos.sh test --package-path menubar
-	bash packaging/test/test_status_item_lifecycle.sh
-	python3 packaging/test/test_menu_bar_tracking.py
-	@echo "==> Running Python hook tests..."
+test-go:
+	@echo "==> gofmt, go vet, go test -race..."
+	@test -z "$$(gofmt -l daemon cmd internal)" || { echo "gofmt needed:"; gofmt -l daemon cmd internal; exit 1; }
+	go vet ./...
+	go test ./... -count=1 -race -shuffle=on -timeout 10m
+
+test-linux:
+	@echo "==> CGO-disabled build, darwin vet, go test, go mod tidy..."
+	@out="$$(CGO_ENABLED=0 go list -f '{{if .CgoFiles}}{{.ImportPath}} {{.CgoFiles}}{{end}}' ./...)"; test -z "$$out" || { echo "cgo sources forbidden: $$out"; exit 1; }
+	CGO_ENABLED=0 go build -trimpath ./...
+	CGO_ENABLED=0 go vet ./...
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go vet ./...
+	CGO_ENABLED=0 go test ./... -count=1 -shuffle=on -timeout 8m
+	go mod tidy -diff
+
+test-hooks:
+	@echo "==> Python hook and packaging tests..."
 	python3 plugin/hooks/test_secret_guard.py
 	python3 plugin/hooks/test_shell_review.py
 	python3 -m unittest discover -s packaging/classifier -p 'test_*.py'
 	python3 plugin/hooks/test_injection_scan.py
 	python3 plugin/hooks/test_activity_log.py
 	python3 plugin/hooks/test_cursor_hooks.py
+	python3 packaging/test/test_menu_bar_tracking.py
+	python3 packaging/test/test_e2e_fixture.py
 	python3 packaging/test/test_release_packaging.py
+	python3 packaging/test/test_uninstall_hooks.py
 	python3 packaging/test/test_setup_session_live.py
-	$(MAKE) test-guard-workflow-live
-	@echo "==> Checking console assets..."
+
+test-console:
+	@echo "==> Console assets, JS and DOM tests..."
+	./packaging/test/check_no_personal_paths.sh
 	./packaging/test/check_console_css.sh
-	@echo "==> Checking app bundle layout..."
-	./packaging/test/check_bundle_layout.sh
-	bash packaging/test/test_devid_export.sh
-	@echo "==> Running console JS unit tests..."
 	node --test 'packaging/test/console/*.test.mjs'
-	@echo "==> Running console DOM tests..."
 	python3 -m unittest discover -s packaging/test/console_dom -p 'test_*.py'
 	python3 packaging/test/console_dom/run_dom_tests.py
-	@echo "==> Running E2E smoke test scenario..."
+
+test-macos:
+	@echo "==> Swift, app bundle, packaging and E2E smoke..."
+	bash packaging/swift_macos.sh test --package-path menubar
+	bash packaging/test/test_status_item_lifecycle.sh
+	./packaging/test/check_bundle_layout.sh
+	bash packaging/test/test_devid_export.sh
 	./packaging/test/e2e_smoke.sh
 
 smoke:

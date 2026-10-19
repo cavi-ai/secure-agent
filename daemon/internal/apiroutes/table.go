@@ -40,7 +40,9 @@ type Route struct {
 	// and "memory" for /sessions/{id}/…, "explain" for /flags/{id}/explain).
 	Leaves []Leaf
 	// Console is true when the console token admits this path on the proxy
-	// listener (the browser console's same-origin telemetry surface).
+	// listener (the browser console's same-origin telemetry surface). There,
+	// any method other than GET or HEAD also requires an identified TCP
+	// client outside every agent family, as NoAgent does for all methods.
 	Console bool
 	// MutatingMethods lists the HTTP methods on this path that require the
 	// pinned UI (or the owner uid when no UI is pinned). Empty = not a
@@ -97,7 +99,7 @@ var Table = []Route{
 	{Path: "/flags", Handler: "API.handleFlags", Response: "[]model.Flag", Console: true},
 	{Path: "/reviews", Handler: "API.handleReviews", Response: "store.ReviewPage", Console: true, NoAgent: true},
 	{Path: "/reviews/decision", Handler: "API.handleReviewDecision", Response: "model.ReviewDecisionReceipt", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
-	{Path: "/decision-scopes", Handler: "API.handleDecisionScopes", Console: true, NoAgent: true, MutatingMethods: []string{"DELETE"}, ConsoleMethods: []string{"GET", "DELETE"}},
+	{Path: "/decision-scopes", Handler: "API.handleDecisionScopes", Console: true, NoAgent: true, MutatingMethods: []string{"DELETE"}},
 	{Path: "/flags/", Handler: "API.handleFlagExplain", Prefix: true, Leaves: []Leaf{{Path: "explain", Response: "model.Flag"}}, Console: true},
 	{Path: "/events", Handler: "API.handleEvents", Response: "[]event.Event", Console: true},
 	{Path: "/events/stream", Handler: "API.handleEventStream", Console: true},

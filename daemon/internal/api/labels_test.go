@@ -54,7 +54,7 @@ func TestAdvisorPlanRejectsUnavailableLabelHistoryAndRecovers(t *testing.T) {
 
 			rec := &planRecorder{ready: true, pending: map[string]bool{}}
 
-			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Plan: rec.funcs()})
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Advisors: AdvisorDeps{Plan: rec.funcs()}})
 			db, err := sql.Open("sqlite", path)
 			if err != nil {
 				t.Fatal(err)
@@ -187,7 +187,7 @@ func TestDispositionsRecordLabels(t *testing.T) {
 	}
 	tg := agents.New(cfg, allowlistProcSource{})
 	tg.Refresh()
-	deps.Correlator = correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
+	deps.Policy.Correlator = correlate.New(tg, sensitive.New(cfg), cfg, correlate.Hooks{})
 	a := newTestAPI(deps)
 	if w := postJSON(a.handleAllowlistAdd, "/allowlist", map[string]string{"agent": "codex", "host": "api.openai.com"}); w.Code != http.StatusOK {
 		t.Fatalf("allowlist: %d %s", w.Code, w.Body.String())

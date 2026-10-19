@@ -26,7 +26,7 @@ func TestResourceReceiptReachesAPIAndSessionExport(t *testing.T) {
 	c.Observe(resource.Snapshot{ObservedAt: now, Sessions: []resource.Session{{Key: "family", RootPID: 10, RootStartedAt: started, RSSBytes: 200, Processes: []resource.Process{{PID: 10, StartedAt: started}}}}}, now)
 	id := c.Snapshot().Control.Pending[0].ID
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Resources: c.Snapshot, ResourceControl: c})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Resources: ResourceDeps{Snapshot: c.Snapshot, Control: c}})
 	w := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/resources/control", strings.NewReader(`{"id":"`+id+`","decision":"apply"}`)))
 	if w.Code != http.StatusOK {

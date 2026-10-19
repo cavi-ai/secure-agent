@@ -59,9 +59,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     private func finishLaunching() {
         // Self-heal any legacy KeepAlive LaunchAgent, then run the daemon as a
         // child of this app so it lives and dies with the visible menu bar icon.
-        SetupManager.shared.migrateLegacyLaunchAgent()
+        // The migration's launchctl call runs off the main thread; the daemon
+        // starts once it is done.
+        Task { @MainActor in
+            await SetupManager.shared.migrateLegacyLaunchAgent()
+            DaemonSupervisor.shared.start()
+        }
         SetupManager.shared.refreshInstalledHooks()
-        DaemonSupervisor.shared.start()
         NotificationManager.shared.requestAuthorization()
         UNUserNotificationCenter.current().delegate = self
         // Existing telemetry choices keep their repair path. First-use setup

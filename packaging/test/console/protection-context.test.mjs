@@ -10,7 +10,7 @@ const response = rules => ({ok:true,json:async()=>({rules})});
 function setup(rules = [], episodes = [{id:'origin',observed:{recurring:true}}]) {
   const calls = [], routes = [], focus = [], scroll = [], dirty = [];
   const ctx = {window:{}, URLSearchParams, sessionEnded:false, handoffGeneration:1, protectionContext:null, protectionContextGeneration:0,
-    expectedEgressReadGen:0, telemetryData:{expectedEgress:rules,egressEpisodes:episodes},
+    telemetryData:{expectedEgress:rules,egressEpisodes:episodes},
     markDirty(...names){dirty.push(...names);},
     apiFetch(path, options){ calls.push({path,options}); return ctx.nextResponse ? ctx.nextResponse() : Promise.resolve(response([])); },
   };
@@ -33,6 +33,8 @@ function setup(rules = [], episodes = [{id:'origin',observed:{recurring:true}}])
   vm.createContext(ctx);
   vm.runInContext(readFileSync(new URL('lib.js',assets),'utf8'),ctx);
   vm.runInContext(readFileSync(new URL('telemetry-validation.js',assets),'utf8'),ctx);
+  vm.runInContext(readFileSync(new URL('telemetry-store.js',assets),'utf8'),ctx);
+  ctx.telemetryStore = ctx.createTelemetryStore(ctx.telemetryData);
   Object.assign(ctx, controller('console-lifecycle.js', 'createConsoleLifecycle', ctx));
   return {ctx,calls,routes,focus,scroll,dirty};
 }
@@ -87,7 +89,7 @@ for (const race of ['manual navigation','Back','auth generation','new context','
     ctx.nextResponse = async()=>response([{id:'new'}]);
     await ctx.viewEgressExpectation('new','another');
   }
-  if (race === 'new telemetry') {ctx.expectedEgressReadGen++;ctx.telemetryData.expectedEgress=[{id:'fresh'}];}
+  if (race === 'new telemetry') {ctx.telemetryStore.beginRefresh(true);ctx.telemetryData.expectedEgress=[{id:'fresh'}];}
   const expected = ctx.telemetryData.expectedEgress;
   const selected = ctx.document.activeElement;
   pending.resolve(response([{id:'obsolete'}]));

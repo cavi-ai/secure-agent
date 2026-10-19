@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // WriteResourceControl atomically replaces only the resource_control mapping

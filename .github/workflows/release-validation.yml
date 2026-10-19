@@ -1,5 +1,7 @@
 name: Release validation
 
+# Publish a release as a pre-release: the updater and the latest-release link
+# ignore it until every job below passes and promote marks it the latest.
 on:
   release:
     types: [published]
@@ -18,26 +20,22 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4 (SHA-pinned)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5 (SHA-pinned)
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: gofmt check
-        run: test -z "$(gofmt -l daemon cmd)" || { gofmt -l daemon cmd; exit 1; }
-      - name: go vet
-        run: go vet ./...
-      # -race requires cgo. Production builds are CGO_ENABLED=0 (ordinary CI).
-      - name: go test
-        run: go test ./... -count=1 -race -shuffle=on -timeout 10m
+      # gofmt, go vet, go test -race, as in ordinary CI.
+      - name: make test-go
+        run: make test-go
 
   menubar:
     name: Swift package tests (macOS 27 SDK)
     runs-on: xcode-27
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4 (SHA-pinned)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: swift test
@@ -50,10 +48,10 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4 (SHA-pinned)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5 (SHA-pinned)
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - name: smoke
@@ -70,3 +68,31 @@ jobs:
         run: bash packaging/test/test_replaced_bundle.sh
       - name: live acceptance unit tests
         run: python3 packaging/test/test_live_acceptance.py
+
+  promote:
+    name: Promote the validated pre-release
+    needs: [macos-go, menubar, e2e]
+    if: github.event_name == 'release' && github.event.release.prerelease
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: mark as the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
+
+  # A release edited with the workflow token starts no other workflow, so the
+  # documentation for the promoted release is published from here.
+  docs:
+    name: Publish documentation for the promoted release
+    needs: promote
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-docs.yml
+    with:
+      tag: ${{ github.event.release.tag_name }}
+      publish: true
+    secrets: inherit

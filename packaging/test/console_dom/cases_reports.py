@@ -1909,6 +1909,11 @@ def run_auth_expired_shows_the_ended_state_not_daemon_down(page):
         ),
     )
 
+def stream_not_live(dom):
+    """No stream was opened, or the one opened was closed."""
+    state = re.search('<pre id="sse-state"[^>]*>([^<]*)</pre>', dom)
+    return state is None or state.group(1) == 'closed'
+
 def run_a_403_hides_the_posture_counts_and_panels_and_closes_the_stream(page):
     check = page.check
     dom_authfail = page.fixture('dom_authfail')
@@ -1918,7 +1923,7 @@ def run_a_403_hides_the_posture_counts_and_panels_and_closes_the_stream(page):
             dom_query(dom_authfail).has(None, {'class': 'is-ended'})
             and re.search('<section class="posture" id="posture-banner"[^>]*\\bhidden\\b', dom_authfail) is not None
             and re.search('<main[^>]*\\bhidden\\b', dom_authfail) is not None
-            and '<pre id="sse-state" hidden="">closed</pre>' in dom_authfail
+            and stream_not_live(dom_authfail)
         ),
         (re.search('<pre id="sse-state"[^>]*>[^<]*</pre>', dom_authfail) or [None])[0],
     )
@@ -1933,7 +1938,7 @@ def run_endpoint_403_ends_the_console_even_when_snapshot_succeeds(page):
             (
                 dom_query(expired).has(None, {'class': 'is-ended'})
                 and re.search('<main[^>]*\\bhidden\\b', expired) is not None
-                and '<pre id="sse-state" hidden="">closed</pre>' in expired
+                and stream_not_live(expired)
             ),
         )
 

@@ -414,7 +414,7 @@ func TestGuardPendingSortedByTSAscending(t *testing.T) {
 
 	broker := guard.NewBroker(2 * time.Second)
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: broker})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: broker}})
 
 	// Enqueue with explicit, out-of-order timestamps. The broker keys its
 	// waiters by a map, which has no inherent order, so the handler must
@@ -459,7 +459,7 @@ func TestGuardDecisionCachedRule(t *testing.T) {
 	st := testStore(t)
 	st.PutGuardRule(store.GuardRule{Agent: "claude", RuleID: "cloud-creds", Decision: "allow", Source: "onboarding"})
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(time.Second)})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(time.Second)}})
 
 	body := `{"agent":"claude","tool":"Read","path":"/Users/x/.aws/credentials","rule_id":"cloud-creds"}`
 	rr := httptest.NewRecorder()
@@ -477,7 +477,7 @@ func TestGuardDecisionCachedRule(t *testing.T) {
 func TestGuardDecisionRejectsInvalidAgent(t *testing.T) {
 	st := testStore(t)
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(time.Second)})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(time.Second)}})
 
 	// A shell metacharacter in "agent" is exactly what a forged control-plane
 	// call (see the hook's guard-control-network denial) would try to smuggle
@@ -565,7 +565,7 @@ func TestStatusCountsUnacted24hAndBusDrops(t *testing.T) {
 	st.AcknowledgeFlag("ack")
 	st.PutFlag(model.Flag{ID: "info", Rule: "keychain-access", Severity: 1, Agent: "claude", PID: 1, TS: now})
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, BusDrops: func() uint64 { return 7 }})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Telemetry: TelemetryDeps{BusDrops: func() uint64 { return 7 }}})
 
 	rr := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(rr, httptest.NewRequest("GET", "/status", nil))
@@ -713,7 +713,7 @@ func TestTerminateAgentTreeUsesLiveHelperWhenRootExited(t *testing.T) {
 			{PID: 11, Name: "claude", RootPID: 10, StartedAt: started, IsOrphan: true},
 			{PID: 12, Name: "claude", RootPID: 10, IsOrphan: true},
 		}}
-	}, AgentPIDs: func() map[int32]struct{} { return map[int32]struct{}{11: {}, 12: {}} }})
+	}, Peers: PeerDeps{AgentPIDs: func() map[int32]struct{} { return map[int32]struct{}{11: {}, 12: {}} }}})
 	if a.peerRole != nil {
 		a.peerRole.AgentPIDs = func() map[int32]struct{} { return map[int32]struct{}{11: {}, 12: {}} }
 	}
@@ -736,7 +736,7 @@ func TestTerminateAgentTreeVerifiedRejectsReusedChildPID(t *testing.T) {
 			{PID: 10, Name: "claude", RootPID: 10, StartedAt: rootStarted.Format(time.RFC3339Nano)},
 			{PID: 11, Name: "claude", RootPID: 10, StartedAt: childStarted.Add(time.Second).Format(time.RFC3339Nano)},
 		}}
-	}, AgentPIDs: func() map[int32]struct{} { return map[int32]struct{}{10: {}, 11: {}} }})
+	}, Peers: PeerDeps{AgentPIDs: func() map[int32]struct{} { return map[int32]struct{}{10: {}, 11: {}} }}})
 	if a.peerRole != nil {
 		a.peerRole.AgentPIDs = func() map[int32]struct{} { return map[int32]struct{}{10: {}, 11: {}} }
 	}

@@ -3,7 +3,7 @@
 ## Execution and Approval Rules
 
 1. **Pre-approved Development & Testing Commands**:
-   - Building Go binaries (`go build`), running test suites (`go test ./...`), executing Python hook tests (`python3 -m pytest` or `python3 test_*.py`), and running local shell smoke scripts (`packaging/test/e2e_smoke.sh`) are **pre-approved**.
+   - Building Go binaries (`go build`), running test suites (`go test ./...`, `make test-go`, `make test-linux`), executing the Python hook and packaging tests (`make test-hooks`, which runs each `python3 plugin/hooks/test_*.py` script), running the console tests (`make test-console`), and running local shell smoke scripts (`packaging/test/e2e_smoke.sh`) are **pre-approved**.
    - Do not prompt the user for permission when executing commands in the workspace terminal for building, testing, linting, or debugging `secure-agent`.
 
 2. **Data & Security Safety Rules**:
@@ -12,7 +12,7 @@
    - Implementation plans and scratch specs stay local; only the published docs (README, CHANGELOG, `docs/*.md`) are committed.
 
 3. **Go Systems Programming Standards**:
-   - Keep the core daemon pure Go (`cgo` disabled) to ensure portability across macOS architectures and future Linux builds.
+   - Keep the core daemon pure Go (`cgo` disabled) so it builds for both macOS architectures and for Linux, which CI builds and tests.
    - Maintain non-blocking channel pub/sub and best-effort storage writes so low-level system monitoring is resilient to storage delays.
 
 <!-- code-review-graph MCP tools -->

@@ -18,8 +18,8 @@ func TestPprofOwnerOnly(t *testing.T) {
 	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }}
 	var asAgent atomic.Bool
 	selfPID := int32(os.Getpid())
-	deps.PeerChecker = loopbackChecker{NewPeerChecker()}
-	deps.AgentPIDs = func() map[int32]struct{} {
+	deps.Peers.Checker = loopbackChecker{NewPeerChecker()}
+	deps.Peers.AgentPIDs = func() map[int32]struct{} {
 		if asAgent.Load() {
 			return map[int32]struct{}{selfPID: {}}
 		}

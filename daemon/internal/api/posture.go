@@ -102,7 +102,7 @@ func (a *API) publishPosture(gen uint64, p Posture, force bool) {
 // Deliberately derived, not persisted: posture is a view over state, never a
 // second source of truth.
 func (a *API) computePosture() Posture {
-	since := time.Now().Add(-24 * time.Hour)
+	since := dayWindow(time.Now())
 	patterns, patternErr := a.computePatternsResult(since, patternDefaultMin)
 	failedReads := a.advisorReadFailures("flag")
 	routine, routineErr := a.routineGroupsResult(since)
@@ -122,12 +122,8 @@ func (a *API) advisorReadFailures(kind string) []string {
 	return advisorReadFailuresFrom(a.store, kind)
 }
 
-// postureWith is computePosture over the 24 h patterns and routine groups
-// the caller already computed.
-func (a *API) postureWith(patterns []model.Pattern, routine []model.RoutineGroup) Posture {
-	return a.postureWithReadHealth(patterns, routine, nil)
-}
-
+// postureWithReadHealth is computePosture over the 24 h patterns and routine
+// groups the caller already computed.
 func (a *API) postureWithReadHealth(patterns []model.Pattern, routine []model.RoutineGroup, failedReads []string) Posture {
 	return derivePosture(a.loadPostureInputs(a.statusFn(), patterns, routine, failedReads))
 }

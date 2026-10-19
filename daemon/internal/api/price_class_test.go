@@ -64,7 +64,7 @@ func TestPriceClassOnServedEventSurfaces(t *testing.T) {
 
 	hub := NewDeltaHub()
 
-	a2 := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, DeltaHub: hub})
+	a2 := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Telemetry: TelemetryDeps{DeltaHub: hub}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a2.Serve(ctx)

@@ -6,7 +6,7 @@ import vm from 'node:vm';
 function install(ctx, file, factory, methods) {
   const moduleContext = vm.createContext({ URLSearchParams });
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/' + file, import.meta.url), 'utf8'), moduleContext);
-  const module = moduleContext[factory]({ state: ctx, actions: ctx });
+  const module = moduleContext[factory]({ store: ctx.telemetryStore, state: ctx, actions: ctx });
   for (const method of methods) ctx[method] = module[method];
   return module;
 }
@@ -24,8 +24,7 @@ function fixture(fetch) {
   let stops = 0, ended = 0;
   const ctx = {
     window: { SA: {} }, URLSearchParams,
-    sessionEnded: false, SS_TOKEN_KEY: 'fixture', consoleToken: 'fixture', lastSnapshotAt: 0, cancelDialog: null,
-    telemetryFetchGen: 0, telemetrySlowGen: 0, expectedEgressReadGen: 0,
+    sessionEnded: false, SS_TOKEN_KEY: 'fixture', consoleToken: 'fixture', cancelDialog: null,
     protectionContext: null, protectionContextGeneration: 0,
     resetPolicyState() { ctx.policyReset = true; },
     pendingConsoleContext: null, handoffGeneration: 0, openConsoleContext: async () => {},
@@ -43,18 +42,20 @@ function fixture(fetch) {
     apiFetch: path => { requests.push(path); return fetch(path); },
     telemetryData: { status: { uptime: 'prior' }, flags: [], events: [], guardPending: [{ id: 'prior' }], costs: { refreshing: true } },
     failedEndpoints: new Set(), noteEndpointFailure: key => failures.push(key),
-    prevUptimeSec: 0, parseUptimeSec: () => 1, showToast() {},
+    parseUptimeSec: () => 1, showToast() {}, resetEventFreshness() {},
     renderReportHealth() {}, renderSnapshotHealth() {}, loadSpend() {}, sparkIngestEvents() {}, reconcileRetriage() {},
     isFlagsFiltered: () => false, isEventsFiltered: () => false, homeGroupOpen: () => false,
     flagsQuery: () => '/flags?fixture', eventsQuery: () => '/events?fixture',
     setConnState: state => connections.push(state),
-    booted: true, PANELS: [['flags'], ['notify'], ['resources'], ['audit']], SLOW_ONLY: new Set(['resources', 'audit']), notifyCfgHash: '',
+    booted: true, PANELS: [['flags'], ['notify'], ['resources'], ['audit']], SLOW_ONLY: new Set(['resources', 'audit']),
     markDirty: (...panels) => renders.push(panels), renderAll: () => renders.push('all'),
     fillFamilyDrawer() {}, renderNow: panels => renders.push(panels),
     spendDayGen: 0, resetSpendDay() {}, spendGen: 0, spendPollTimer: 2, spendPolls: 0, SPEND_POLLS: 30, SPEND_POLL_MS: 2000,
     spendCardPath: () => '/costs?card'
   };
   vm.createContext(ctx);
+  vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/telemetry-store.js', import.meta.url), 'utf8'), ctx);
+  ctx.telemetryStore = ctx.createTelemetryStore(ctx.telemetryData);
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/event-history.js', import.meta.url), 'utf8'), ctx);
   ctx.eventHistoryPage = ctx.createEventHistoryPage();
   const authContext = vm.createContext({ AbortController, DOMException, Headers, setTimeout, clearTimeout });
@@ -99,12 +100,12 @@ test('snapshot recovery clears its failure only after the replacement data is pu
   const read = f.ctx.fetchTelemetry({ slow: false });
   await new Promise(setImmediate);
   assert.equal(f.ctx.telemetryData.status, prior);
-  assert.equal(f.ctx.lastSnapshotAt, 0);
+  assert.equal(f.ctx.telemetryStore.lastSnapshotAt, 0);
   assert.equal(f.ctx.reportHealth.failures(['snapshot'])[0].error, 'HTTP 503');
   guard.resolve(response([]));
   await read;
   assert.equal(f.ctx.telemetryData.status.uptime, 'new');
-  assert.ok(f.ctx.lastSnapshotAt > 0);
+  assert.ok(f.ctx.telemetryStore.lastSnapshotAt > 0);
   assert.equal(f.ctx.reportHealth.failures(['snapshot']).length, 0);
 });
 
@@ -801,7 +802,7 @@ test('changing a filter after applying a saved view updates the active query', (
   Object.assign(f.ctx, { window: {}, URLSearchParams, sinceParam: () => '',
     document: { getElementById: id => id === 'flags-agent' ? select : null },
     loadViews: () => [{ name: 'saved', flags: { agent: 'claude' } }],
-    syncFilterControls() { select.value = f.ctx.filters.flags.agent; },
+    syncFilterControls() { select.value = f.ctx.filters.flags.agent; }, suppressFresh() {},
     fetchTelemetry: () => queries.push(f.ctx.flagsQuery()) });
   const history = install(f.ctx, 'history-controller.js', 'createHistoryController', ['flagsQuery', 'eventsQuery']);
   f.ctx.window.applyView = history.applyView;

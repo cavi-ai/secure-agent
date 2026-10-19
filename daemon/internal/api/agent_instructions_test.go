@@ -20,7 +20,7 @@ func TestAgentInstructionAppliesRecordedFindingOnly(t *testing.T) {
 	st := testStore(t)
 	agent := sysagent.New(st, t.TempDir(), nil)
 	agent.SetConfig(config.SystemAgentConfig{Enabled: true, Endpoint: "http://127.0.0.1:11434"})
-	a := New(Deps{Store: st, SysAgent: agent})
+	a := New(Deps{Store: st, Workspace: WorkspaceDeps{SysAgent: agent}})
 	dir := t.TempDir()
 	if _, err := st.PutFlag(model.Flag{ID: "instruction-finding", Rule: "secret-in-transcript", Agent: "codex", Workspace: dir, TS: time.Now()}); err != nil {
 		t.Fatal(err)

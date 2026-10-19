@@ -1344,10 +1344,12 @@ Live feed of every stored event as `event: <kind>` / `data: <json>`, with a 15s 
 
 The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/posture/flags/events/incidents/audit/fleet/firewall sources + guard pending/rules/resolve/path-allow + kill + rollup + mute + allowlist(+suggestions) + `/egress/uninspected` + `/notify/rules` + advisor retriage + `/sessions/{id}/timeline` and `/sessions/{id}/report` + `/flags/{id}/explain` + this SSE stream) behind the **console token**. The whitelist is kept in lockstep with the console's fetches by `TestConsoleAPIPathsCoverWebApp` — a path the console fetches but the listener doesn't whitelist 407s and the panel dies silently, which is exactly the drift that test exists to catch:
 
-- Header `X-SecureAgent-Console-Token: <token>` (fetch/XHR) or `?ct=<token>` (EventSource can't set headers).
+- Header `X-SecureAgent-Console-Token: <token>` on every request. EventSource cannot set headers, so the console first sends `POST /console/stream-auth` with the header; the response sets an HttpOnly, SameSite=Strict cookie scoped to `/events/stream` and derived from the token, which admits only `GET /events/stream`. The token is never accepted in a URL.
+- The request's Host must be `127.0.0.1`, `localhost` or `::1`, and an `Origin` header, when present, must be that same `http://` host and port; anything else gets 403 (DNS rebinding).
 - The token lives at `~/.config/secure-agent/console-token` (0600), distinct from the proxy token on purpose: agents routed through the proxy carry the proxy token in their environment and must not be able to read telemetry or resolve guard prompts with it.
 - `/guard/decision` is **not** served on this listener at all — it stays on the peer-attested unix socket.
 - Admission is method-aware: GET/HEAD pass on every whitelisted route, but a mutating method is admitted only when `apiroutes.Table` lists it in that route's `MutatingMethods` or `ConsoleMethods` — so the console token can drive `POST /guard/path-allow` and `DELETE /mute` but not `DELETE /guard/rules` or `DELETE /guard/path-allow`, which stay owner-level on the unix socket.
+- Every admitted method other than GET and HEAD also needs a client process outside every agent family, identified as for NoAgent routes: an agent that reads the console token can read telemetry but cannot resolve guard prompts, change rules, mute, acknowledge or kill. Off macOS the console listener refuses these requests.
 
 Besides telemetry kinds (`file-open`, `conn-open`, `proxy-hit`, …), the stream carries the guard lifecycle:
 

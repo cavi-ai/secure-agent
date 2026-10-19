@@ -136,5 +136,11 @@ func (s *Store) rekeySession(oldID, newID string, provisional *model.Session) (e
 	if err := rekeyFindingReviewsTx(tx, oldID, newID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if changed {
+		s.flagsChanged()
+	}
+	return nil
 }

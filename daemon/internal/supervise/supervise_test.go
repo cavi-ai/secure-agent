@@ -33,6 +33,39 @@ func TestSupervisorRestartsAndStopsOnCancel(t *testing.T) {
 	t.Fatalf("worker count = %d, want >= 3", atomic.LoadInt32(&count))
 }
 
+// A failed attempt's background work ends with the attempt: after three
+// failures and a live fourth attempt, one child goroutine is running, not four.
+func TestSupervisorCancelsEachFailedAttemptsChildren(t *testing.T) {
+	s := New(nil)
+	s.MaxBackoff = time.Millisecond
+	s.MinHealthy = time.Hour
+	s.AbandonAfter = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var attempts, live int32
+	started := make(chan struct{})
+	go s.Run(ctx, "spawner", func(c context.Context) error {
+		atomic.AddInt32(&live, 1)
+		go func() { <-c.Done(); atomic.AddInt32(&live, -1) }()
+		if atomic.AddInt32(&attempts, 1) < 4 {
+			return errors.New("transient")
+		}
+		close(started)
+		<-c.Done()
+		return c.Err()
+	})
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fourth attempt never started")
+	}
+	for deadline := time.Now().Add(10 * time.Second); atomic.LoadInt32(&live) != 1; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d children running after 3 failed attempts, want 1", atomic.LoadInt32(&live))
+		}
+	}
+}
+
 // A worker that keeps failing must be restarted through the grace window (a boot
 // transient must not permanently disable a collector) and only then abandoned —
 // visibly, in the health registry, never as a silent Running:true.

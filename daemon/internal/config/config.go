@@ -14,7 +14,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/loopback"
 	"github.com/cavi-ai/secure-agent/daemon/internal/shellreview"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 //go:embed defaults.yaml
@@ -478,6 +478,17 @@ func LoadWithOverlay(explicitPath string) (cfg Config, overlayErr, err error) {
 	return cfg, overlayErr, nil
 }
 
+// DefaultConfigPath is the operator overlay used when no -config path is
+// given: ~/.config/secure-agent/config.yaml, or "" without a home directory.
+// The loader reads it when it exists; the daemon watches and writes it.
+func DefaultConfigPath() string {
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".config", "secure-agent", "config.yaml")
+}
+
 // loadWithOverlayError returns the config AND whether the overlay was
 // malformed (the settings it failed to set keep their defaults: all of them
 // for a YAML syntax error, the mistyped fields for a type error). The
@@ -493,9 +504,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 
 	targetPath := explicitPath
 	if targetPath == "" || targetPath == "/nonexistent" {
-		home, _ := os.UserHomeDir()
-		if home != "" {
-			defaultOverlay := filepath.Join(home, ".config", "secure-agent", "config.yaml")
+		if defaultOverlay := DefaultConfigPath(); defaultOverlay != "" {
 			if _, err := os.Stat(defaultOverlay); err == nil {
 				targetPath = defaultOverlay
 			}

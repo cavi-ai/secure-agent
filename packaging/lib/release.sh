@@ -27,6 +27,12 @@ require_release_settings() {
     echo "error: release builds require a clean committed tree" >&2
     return 1
   fi
+  local tag="v${VERSION#v}" head tagged
+  head="$(git rev-parse HEAD)" || return 1
+  if ! tagged="$(git rev-parse -q --verify "refs/tags/${tag}^{commit}")" || [[ -z "${head}" || "${tagged}" != "${head}" ]]; then
+    echo "error: release builds require tag ${tag} at HEAD" >&2
+    return 1
+  fi
   if ! command -v govulncheck >/dev/null 2>&1; then
     echo "error: release builds require govulncheck on PATH" >&2
     return 1

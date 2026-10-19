@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -38,6 +39,16 @@ class DocumentationTests(unittest.TestCase):
     def seal(self, directory):
         manifest = {**self.manifest, "contentSha256": build.digest(directory)}
         (directory / "manifest.json").write_text(json.dumps(manifest))
+
+    def test_untracked_pages_are_not_documentation_in_a_checkout(self):
+        (self.root / "docs").mkdir()
+        (self.root / "docs/tracked.md").write_text("# Tracked\n")
+        (self.root / "docs/scratch.md").write_text("```json\n{not json\n```\n")
+        with patch.object(build, "ROOT", self.root):
+            self.assertEqual(build.docs_pages(), [self.root / "docs/scratch.md", self.root / "docs/tracked.md"], "export: every page")
+            for args in (["init", "-q"], ["add", "docs/tracked.md"]):
+                subprocess.run(["git", *args], cwd=self.root, check=True)
+            self.assertEqual(build.docs_pages(), [self.root / "docs/tracked.md"], "checkout: tracked pages only")
 
     def test_digest_matches_published_contract_and_detects_tampering(self):
         directory = self.artifact()

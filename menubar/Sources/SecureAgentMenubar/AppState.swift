@@ -98,6 +98,12 @@ public final class AppState: ObservableObject {
     /// The pending-prompt id currently shown in an NSAlert, so the 1Hz poll
     /// doesn't stack a second dialog on top while one is already up.
     private var promptingID: String?
+    /// The request shown in the native alert right now, if any.
+    private var nativePromptID: String?
+    /// Runs the native guard alert; tests replace the modal.
+    var runGuardAlert: (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }
+    /// Ends the native guard alert's modal loop with .abort.
+    var withdrawGuardAlert: () -> Void = { if NSApp?.modalWindow != nil { NSApp.abortModal() } }
     private var deferredGuardID: String?
     private var resolvingGuardIDs: Set<String> = []
     /// SSE push channel. When live, events drive refreshes and the poll timer
@@ -111,6 +117,14 @@ public final class AppState: ObservableObject {
     /// Debounces SSE-driven refreshes (one event per syscall would otherwise
     /// refetch per event).
     private var refreshTask: Task<Void, Never>?
+    /// True while /events/stream delivers frames. The poll cadence follows
+    /// it, not the order in which the poll and the stream first connected.
+    private var streamLive = false
+    /// The poll timer's interval while connected: slow while the stream
+    /// carries freshness, 1 Hz without it.
+    private var connectedPollInterval: TimeInterval { streamLive ? 30.0 : 1.0 }
+    /// The interval the poll timer runs at now.
+    private(set) var pollInterval: TimeInterval = 0
 
     public init(client: DaemonClientProtocol = DaemonClient()) {
         self.client = client
@@ -146,7 +160,7 @@ public final class AppState: ObservableObject {
 
     public func start() {
         fetch()
-        scheduleTimer(1.0)
+        scheduleTimer(connectedPollInterval)
         startEventStream()
     }
 
@@ -176,9 +190,7 @@ public final class AppState: ObservableObject {
                     self.streamUnavailable = true
                     return // old daemon: polling carries the session
                 } catch {
-                    self.streamFailureCount += 1
-                    // While the stream is down, the existing poll cadence
-                    // (1s connected / 5s disconnected) covers freshness.
+                    self.streamDidFail()
                     try? await Task.sleep(nanoseconds: backoff)
                     // ±20% jitter so reconnects don't phase-lock.
                     let jitter = UInt64.random(in: 0...(backoff / 5 + 1))
@@ -190,13 +202,17 @@ public final class AppState: ObservableObject {
 
     func handleStreamEvent(_ frame: SSEFrame) {
         streamFailureCount = 0
-        // The stream being alive at all is proof of daemon liveness. On
-        // reconnect, pull full state once (events seen while disconnected
-        // are not replayed — the refetch closes the gap).
-        if !connected {
-            connected = true
-            scheduleTimer(30.0) // stream carries freshness; slow poll for uptime
-            fetch()
+        // The stream being alive at all is proof of daemon liveness. When it
+        // goes live the poll slows to an uptime check, whether or not the poll
+        // connected first. On reconnect, pull full state once (events seen
+        // while disconnected are not replayed — the refetch closes the gap).
+        if !streamLive || !connected {
+            streamLive = true
+            scheduleTimer(connectedPollInterval)
+            if !connected {
+                connected = true
+                fetch()
+            }
         }
         let need = Self.streamRefresh(for: frame.event)
         guard !need.isEmpty else { return }
@@ -294,11 +310,24 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// The stream dropped: until it delivers again, the poll at its connected
+    /// 1 Hz cadence (5 s while disconnected) covers freshness.
+    func streamDidFail() {
+        streamFailureCount += 1
+        guard streamLive else { return }
+        streamLive = false
+        if connected { scheduleTimer(connectedPollInterval) }
+    }
+
     private func scheduleTimer(_ interval: TimeInterval) {
+        pollInterval = interval
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+        // Common modes: polling continues while a guard alert's modal loop runs.
+        let next = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.fetch() }
         }
+        RunLoop.main.add(next, forMode: .common)
+        timer = next
     }
 
     public func fetch() {
@@ -370,7 +399,7 @@ public final class AppState: ObservableObject {
             self.connected = true
             self.lastError = staleDataWarning
             self.transportFailureStreak = 0
-            if wasDisconnected { self.scheduleTimer(1.0) }
+            if wasDisconnected { self.scheduleTimer(self.connectedPollInterval) }
             self.eventsRefreshTick += 1
             self.processNewFlags(flags)
             // Withdraw banners for flags the operator already dealt with —
@@ -390,8 +419,7 @@ public final class AppState: ObservableObject {
                 guard !self.isPaused else { return }
 				self.lastError = staleDataWarning
 				self.onChange?()
-                // Presented last: runModal() blocks this Task until the user
-                // responds, so the icon/console refresh above isn't held up.
+                // Presented last; the alert itself runs in its own task.
                 self.presentGuardPromptIfNeeded(pending)
             } catch {
                 self.lastError = "guard check failed: \(error.localizedDescription)"
@@ -776,6 +804,13 @@ public final class AppState: ObservableObject {
     /// Shows one native prompt for the oldest pending guard decision, deduping
     /// by id so the 1Hz poll doesn't stack a dialog on top of an open one.
     private func presentGuardPromptIfNeeded(_ pending: [GuardPending]) {
+        // A request answered elsewhere (console, popover) or expired leaves
+        // the list: its alert is withdrawn instead of staying up stale.
+        if let shown = nativePromptID, !pending.contains(where: { $0.id == shown }) {
+            nativePromptID = nil
+            if promptingID == shown { promptingID = nil }
+            withdrawGuardAlert()
+        }
         // Keep the glanceable copy current even when the native alert is
         // already up (or suppressed by the test hook).
         self.pendingGuard = pending.first
@@ -786,8 +821,15 @@ public final class AppState: ObservableObject {
         #if DEBUG
         // Test hook: NSAlert.runModal() cannot run in a test host; tests
         // assert on the dedupe id to prove the prompt path went live.
-        if testHookSkipPromptDialog { return }
+        if testHookSkipPromptDialog { nativePromptID = p.id; return }
         #endif
+        // The alert runs in its own task: the fetch that found the request
+        // returns, so polling and the stream keep refreshing while it is up.
+        Task { @MainActor [weak self] in self?.showGuardAlert(p) }
+    }
+
+    private func showGuardAlert(_ p: GuardPending) {
+        guard promptingID == p.id else { return } // withdrawn before it was shown
         let alert = NSAlert()
         alert.messageText = Self.guardPromptHeadline(p)
         alert.informativeText = p.requestFacts + "\n\nOnce answers only this request. Inspection leaves it unanswered; its timeout continues. Future access requires a separate confirmation."
@@ -804,8 +846,12 @@ public final class AppState: ObservableObject {
         // modal appears — an accidental Return must deny, never approve.
         allowOnceButton.keyEquivalent = ""
         denyButton.keyEquivalent = "\r"
-        NSApp.activate(ignoringOtherApps: true)
-        let r = alert.runModal()
+        NSApp?.activate(ignoringOtherApps: true)
+        nativePromptID = p.id
+        let r = runGuardAlert(alert)
+        if nativePromptID == p.id { nativePromptID = nil }
+        // Withdrawn while shown: nothing to answer or remember.
+        if r == .abort { return }
         deferredGuardID = p.id
         promptingID = nil
         let inspectIndex = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 + choices.count
@@ -831,6 +877,7 @@ public final class AppState: ObservableObject {
 
     /// True when the app is showing a guard NSAlert — one at a time.
     public var promptingIDForTesting: String? { promptingID }
+    var isFetchingForTesting: Bool { isFetching }
 
     /// Opening the exact recorded session leaves the request and its deadline unchanged.
     func inspectPendingGuard(id: String, open: ((ConsoleDestination) -> Void)? = nil) {

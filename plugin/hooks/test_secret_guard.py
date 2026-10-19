@@ -988,7 +988,19 @@ def _test_evaluate_file_write_decides_per_path():
         assert secret_guard.evaluate_file_write("/tmp/project/main.go").kind == "allow"
 
 
+def _test_private_key_rule_matches_the_daemon():
+    # One fixture pins the daemon classifier, the incident analyzer and this hook.
+    fixture = os.path.join(os.path.dirname(HOOK), "..", "..", "daemon", "internal", "sensitive", "testdata", "paths.json")
+    with open(fixture) as f:
+        cases = json.load(f)["cases"]
+    assert cases
+    for case in cases:
+        got = secret_guard.PRIVATE_KEY_RE.search(case["path"]) is not None
+        assert got == case["ssh_private_key"], (case["path"], got)
+
+
 EXTRA_TESTS += [
+    _test_private_key_rule_matches_the_daemon,
     _test_verdicts_match_allow_and_deny_tables,
     _test_deny_reply_carries_the_verdict_texts,
     _test_group_1_security_cli_and_control_plane_executors,

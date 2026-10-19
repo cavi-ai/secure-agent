@@ -288,7 +288,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnAddSource) btnAddSource.addEventListener('click', () => window.addSource());
   if (sourceInput) sourceInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') window.addSource(); });
 
-  let telemetryData = {
+  const telemetryData = {
     status: null,
     resources: null,
     flags: [],       // unfiltered — feeds KPIs
@@ -312,10 +312,9 @@ document.addEventListener('DOMContentLoaded', () => {
     costPlans: null,  // /costs/plans — plan headroom per harness home
     connected: true
   };
-  // Last-seen /notify/rules payload hash — gates 'notify' dirty-marking on
-  // the reconcile poll so a config that hasn't changed never re-renders the
-  // panel (and erases an in-progress edit); see fetchTelemetry.
-  let notifyCfgHash = '';
+  // The refresh, the expectation inspector and the credential handoff publish
+  // into telemetryData only through this store.
+  const telemetryStore = createTelemetryStore(telemetryData);
 
   // Spend card view: dimension and window, kept for the tab in
   // sessionStorage. The tile keeps its own 24h/by-repo fetch.
@@ -353,12 +352,6 @@ document.addEventListener('DOMContentLoaded', () => {
   let connState = 'ok';
   let sessionEnded = !consoleToken;
   let liveUpdates = null;
-  let lastSnapshotAt = 0;
-  // Fast refreshes supersede fast state without starving slower reports.
-  let telemetryFetchGen = 0;
-  let telemetrySlowGen = 0;
-  let expectedEgressReadGen = 0;
-  let prevUptimeSec = 0;
   // Deduplicate report failure toasts until the next successful read. Snapshot
   // failures have a persistent headline instead of a second transient alert.
   const failedEndpoints = new Set();
@@ -367,6 +360,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let consoleLifecycleController;
   function consoleLifecycleControllerModule() {
     return consoleLifecycleController ||= createConsoleLifecycle({
+      store: telemetryStore,
       state: {
         get SS_TOKEN_KEY() { return SS_TOKEN_KEY; },
         get cancelDialog() { return cancelDialog; },
@@ -376,8 +370,6 @@ document.addEventListener('DOMContentLoaded', () => {
         set consoleToken(value) { consoleToken = value; },
         get eventHistoryPage() { return eventHistoryPage; },
         set eventHistoryPage(value) { eventHistoryPage = value; },
-        get expectedEgressReadGen() { return expectedEgressReadGen; },
-        set expectedEgressReadGen(value) { expectedEgressReadGen = value; },
         get failedEndpoints() { return failedEndpoints; },
         get handoffGeneration() { return handoffGeneration; },
         set handoffGeneration(value) { handoffGeneration = value; },
@@ -405,9 +397,7 @@ document.addEventListener('DOMContentLoaded', () => {
         get spendGen() { return spendGen; },
         set spendGen(value) { spendGen = value; },
         get spendPollTimer() { return spendPollTimer; },
-        set spendPollTimer(value) { spendPollTimer = value; },
-        get telemetryData() { return telemetryData; },
-        set telemetryData(value) { telemetryData = value; }
+        set spendPollTimer(value) { spendPollTimer = value; }
       },
       actions: {
         clearGuardResult: () => guardDecisions.clear(),
@@ -469,7 +459,7 @@ document.addEventListener('DOMContentLoaded', () => {
     banner.hidden = false;
     if (text) text.textContent = connState === 'invalid-response'
       ? "The daemon returned invalid telemetry — showing the last known state and retrying…"
-      : (lastSnapshotAt ? `Can't reach Secure Agent. Last connected at ${new Date(lastSnapshotAt).toLocaleTimeString()} — retrying automatically.`
+      : (telemetryStore.lastSnapshotAt ? `Can't reach Secure Agent. Last connected at ${new Date(telemetryStore.lastSnapshotAt).toLocaleTimeString()} — retrying automatically.`
         : 'Waiting for Secure Agent. No live data received — retrying automatically.');
   }
 
@@ -519,8 +509,7 @@ document.addEventListener('DOMContentLoaded', () => {
     detailDrawer.syncMode();
     if (handoff.has('tab')) switchTab(route, { skipHash: true });
     if (recoveryFocus?.isConnected) recoveryFocus.focus({ preventScroll: true });
-    telemetryFetchGen++;
-    telemetrySlowGen++;
+    telemetryStore.invalidate();
     if (liveUpdates) liveUpdates.stop();
     startLiveUpdates();
     clearInterval(sparkTimer);
@@ -696,12 +685,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Track which timeline events the user has already seen, so only genuinely
-  // new rows animate (polling re-renders must never flicker).
-  let prevEventKeys = new Set();
-  let firstEventRender = true;
-  // Filter changes re-render with deeper-history rows that are "new" to the
-  // view but not to the user — suppress the fresh animation for that render.
-  let suppressFreshOnce = false;
+  // new rows animate (polling re-renders must never flicker). Filter changes
+  // re-render with deeper-history rows that are "new" to the view but not to
+  // the user: suppressNext() skips the fresh animation for that render.
+  const eventFreshness = createEventFreshness();
+  function resetEventFreshness() { eventFreshness.reset(); }
   // Session drill-down: set from a flag card ("view session in timeline"),
   // filters the timeline client-side (lib.js filterEventsBySession).
   let timelineSession = null;
@@ -771,10 +759,6 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('scroll', syncTabsStuck, { passive: true });
   window.addEventListener('resize', syncTabsStuck);
 
-  // Firewall diff: which rules gained blocked/would-block counts since the
-  // last render (i.e. a fresh interception).
-  let prevFwStats = null;
-
   function flashFirewallPanel() {
     if (reducedMotion) return;
     const panel = document.getElementById('firewall-panel');
@@ -796,14 +780,12 @@ document.addEventListener('DOMContentLoaded', () => {
         get reportHealth() { return reportHealth; },
         get sessionEnded() { return sessionEnded; },
         set sessionEnded(value) { sessionEnded = value; },
-        get suppressFreshOnce() { return suppressFreshOnce; },
-        set suppressFreshOnce(value) { suppressFreshOnce = value; },
         get telemetryData() { return telemetryData; },
-        set telemetryData(value) { telemetryData = value; },
         get timelineSession() { return timelineSession; },
         set timelineSession(value) { timelineSession = value; }
       },
       actions: {
+        get suppressFresh() { return eventFreshness.suppressNext; },
         get createEventHistoryPage() { return createEventHistoryPage; },
         get document() { return document; },
         get fetchTelemetry() { return fetchTelemetry; },
@@ -918,7 +900,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const el = document.getElementById('global-search');
     if (el) el.addEventListener('input', () => {
       globalSearch = el.value.trim().toLowerCase();
-      suppressFreshOnce = true;
+      eventFreshness.suppressNext();
       renderAll();
     });
   }
@@ -1916,42 +1898,19 @@ document.addEventListener('DOMContentLoaded', () => {
   let telemetryRefreshController;
   function telemetryRefreshControllerModule() {
     return telemetryRefreshController ||= createTelemetryRefresh({
+      store: telemetryStore,
       state: {
         get PANELS() { return PANELS; },
         get SLOW_ONLY() { return SLOW_ONLY; },
         get booted() { return booted; },
-        set booted(value) { booted = value; },
         get eventHistoryPage() { return eventHistoryPage; },
-        set eventHistoryPage(value) { eventHistoryPage = value; },
-        get expectedEgressReadGen() { return expectedEgressReadGen; },
-        set expectedEgressReadGen(value) { expectedEgressReadGen = value; },
-        get firstEventRender() { return firstEventRender; },
-        set firstEventRender(value) { firstEventRender = value; },
         get handoffGeneration() { return handoffGeneration; },
-        set handoffGeneration(value) { handoffGeneration = value; },
-        get lastSnapshotAt() { return lastSnapshotAt; },
-        set lastSnapshotAt(value) { lastSnapshotAt = value; },
-        get notifyCfgHash() { return notifyCfgHash; },
-        set notifyCfgHash(value) { notifyCfgHash = value; },
         get pendingConsoleContext() { return pendingConsoleContext; },
         set pendingConsoleContext(value) { pendingConsoleContext = value; },
-        get prevEventKeys() { return prevEventKeys; },
-        set prevEventKeys(value) { prevEventKeys = value; },
-        get prevUptimeSec() { return prevUptimeSec; },
-        set prevUptimeSec(value) { prevUptimeSec = value; },
         get reportHealth() { return reportHealth; },
         get reviewCursor() { return reviewCursor; },
-        set reviewCursor(value) { reviewCursor = value; },
         get sessionEnded() { return sessionEnded; },
-        set sessionEnded(value) { sessionEnded = value; },
-        get telemetryData() { return telemetryData; },
-        set telemetryData(value) { telemetryData = value; },
-        get telemetryFetchGen() { return telemetryFetchGen; },
-        set telemetryFetchGen(value) { telemetryFetchGen = value; },
-        get telemetrySlowGen() { return telemetrySlowGen; },
-        set telemetrySlowGen(value) { telemetrySlowGen = value; },
-        get timelineSession() { return timelineSession; },
-        set timelineSession(value) { timelineSession = value; }
+        get timelineSession() { return timelineSession; }
       },
       actions: {
         get acceptEventHistoryPage() { return acceptEventHistoryPage; },
@@ -1975,6 +1934,7 @@ document.addEventListener('DOMContentLoaded', () => {
         get renderReportHealth() { return renderReportHealth; },
         get reportFailed() { return reportFailed; },
         get reportSucceeded() { return reportSucceeded; },
+        get resetEventFreshness() { return resetEventFreshness; },
         get setConnState() { return setConnState; },
         get showToast() { return showToast; },
         get sparkIngestEvents() { return sparkIngestEvents; },
@@ -2035,8 +1995,7 @@ document.addEventListener('DOMContentLoaded', () => {
         get spendSinceSel() { return spendSinceSel; },
         get spendView() { return spendView; },
         set spendView(value) { spendView = value; },
-        get telemetryData() { return telemetryData; },
-        set telemetryData(value) { telemetryData = value; }
+        get telemetryData() { return telemetryData; }
       },
       actions: {
         get apiFetch() { return apiFetch; },
@@ -2593,7 +2552,7 @@ document.addEventListener('DOMContentLoaded', () => {
     get reviewResult() { return reviewResult; },
     get reviewCursor() { return reviewCursor; },
     historySelected,
-    historyRows: new Map(),
+    get historyRows() { return selectableHistoryRows(); },
     harnessFilter,
     reconcileAttention,
     get attentionKey() { return detailDrawer.selection()?.key || ''; },
@@ -2643,17 +2602,15 @@ document.addEventListener('DOMContentLoaded', () => {
   window.SA.renderSessionBoard = sessionWorkbench.render;
 
   Object.defineProperties(window.SA, {
-    postureHealth: { get() { return { lastSnapshotAt, error: reportHealth.failures(['snapshot'])[0]?.error || '' }; } },
+    postureHealth: { get() { return postureFreshness(telemetryStore.lastSnapshotAt, reportHealth.failures(['snapshot'])[0]?.error || ''); } },
     activeTab: { get() { return activeTab; } },
     timelineSession: { get() { return timelineSession; }, set(v) { timelineSession = v; } },
     timelinePids: { get() { return timelinePids; }, set(v) { timelinePids = v; } },
     timelinePidLabel: { get() { return timelinePidLabel; }, set(v) { timelinePidLabel = v; } },
     eventHistoryPage: { get() { return eventHistoryPage; } },
-    prevFwStats: { get() { return prevFwStats; }, set(v) { prevFwStats = v; } },
-    prevEventKeys: { get() { return prevEventKeys; }, set(v) { prevEventKeys = v; } },
-    firstEventRender: { get() { return firstEventRender; }, set(v) { firstEventRender = v; } },
-    suppressFreshOnce: { get() { return suppressFreshOnce; }, set(v) { suppressFreshOnce = v; } },
-    selectedResourceKey: { get() { return selectedResourceKey; }, set(v) { selectedResourceKey = v; } },
+    eventFreshness: { get() { return eventFreshness; } },
+    selectedResourceKey: { get() { return selectedResourceKey; } },
+    clearResourceSelection: { value: () => { selectedResourceKey = ''; } },
     selectedSessionId: { get() { return sessionWorkbench.selectedSessionId; } },
     sessionTimeline: { get() { return sessionWorkbench.sessionTimeline; } },
     sessionTimelineState: { get() { return sessionWorkbench.sessionTimelineState; } },
@@ -3093,7 +3050,7 @@ document.addEventListener('DOMContentLoaded', () => {
     applySessionEventFilters(st.scope.events);
     syncHistoryViews();
     eventHistoryPage = copyEventHistoryPage(st.scope.page);
-    suppressFreshOnce = true;
+    eventFreshness.suppressNext();
     renderEvents(); renderFlags(); renderIncidents(); paintScopeBar();
     switchTab('sessions', { skipHash: true });
     renderNow(['sessions']);
@@ -3115,7 +3072,7 @@ document.addEventListener('DOMContentLoaded', () => {
     applySessionEventFilters(st.destination.events);
     syncHistoryViews();
     if (st.destination.page) eventHistoryPage = copyEventHistoryPage(st.destination.page);
-    suppressFreshOnce = true;
+    eventFreshness.suppressNext();
     renderEvents(); renderFlags(); renderIncidents(); paintScopeBar();
     if (st.destination.workspacePermissions) {
       policyState.scopeWorkspace = st.destination.workspacePermissions.workspace;
@@ -3149,14 +3106,14 @@ document.addEventListener('DOMContentLoaded', () => {
   window.openSessionFindings = function(id, el) {
     const st = id === sessionWorkbench.selectedSessionId ? captureSessionReturn(el) : null;
     if (beginSessionInvestigation(st, { route: 'home', group: 'findings', session: id, pids: null, label: '' })) return;
-    timelineSession = id; timelinePids = null; timelinePidLabel = ''; suppressFreshOnce = true;
+    timelineSession = id; timelinePids = null; timelinePidLabel = ''; eventFreshness.suppressNext();
     syncHistoryViews();
     paintScopeBar(); switchTab('home', { group: 'findings' }); fetchTelemetry();
   };
   window.openSessionEvents = function(id, el) {
     const st = id === sessionWorkbench.selectedSessionId ? captureSessionReturn(el) : null;
     if (beginSessionInvestigation(st, { route: 'events', session: id, pids: null, label: '' })) return;
-    timelineSession = id; timelinePids = null; timelinePidLabel = ''; suppressFreshOnce = true;
+    timelineSession = id; timelinePids = null; timelinePidLabel = ''; eventFreshness.suppressNext();
     syncHistoryViews();
     paintScopeBar(); switchTab('events'); fetchTelemetry({ slow: false });
   };
@@ -3531,7 +3488,7 @@ document.addEventListener('DOMContentLoaded', () => {
     timelineSession = sid;
     timelinePids = null;
     timelinePidLabel = '';
-    suppressFreshOnce = true;
+    eventFreshness.suppressNext();
     syncHistoryViews();
     renderEvents();
     renderFlags();
@@ -3552,7 +3509,7 @@ document.addEventListener('DOMContentLoaded', () => {
     timelineSession = null;
     timelinePids = (pids || []).map(Number).filter(n => n > 0);
     timelinePidLabel = label || '';
-    suppressFreshOnce = true;
+    eventFreshness.suppressNext();
     syncHistoryViews();
     renderEvents();
     renderFlags();
@@ -3570,7 +3527,7 @@ document.addEventListener('DOMContentLoaded', () => {
     timelineSession = null;
     timelinePids = null;
     timelinePidLabel = '';
-    suppressFreshOnce = true;
+    eventFreshness.suppressNext();
     syncHistoryViews();
     renderEvents();
     renderFlags();
@@ -4528,7 +4485,13 @@ document.addEventListener('DOMContentLoaded', () => {
   function startLiveUpdates() {
   liveUpdates = createConsoleLiveUpdates({
     refresh: fetchTelemetry,
-    streamURL: '/events/stream' + (consoleToken ? '?ct=' + encodeURIComponent(consoleToken) : ''),
+    streamURL: '/events/stream',
+    // EventSource cannot send the token header; the daemon sets an HttpOnly
+    // cookie that admits only the stream.
+    prepareStream: async () => {
+      const res = await apiFetch('/console/stream-auth', { method: 'POST' });
+      if (!res.ok) throw new Error('stream auth ' + res.status);
+    },
     EventSourceImpl: noSSE ? null : window.EventSource,
     // Typed deltas: patch local state and mark only the panels that read the
     // changed slice; the scheduler renders the visible ones.

@@ -6,7 +6,7 @@
 
 Generated from `apiroutes.Table`, the same registry used by the daemon and console admission checks. This is a route and access-policy inventory, not an OpenAPI schema or a complete list of handler-supported methods. Consult the API guide for request and response contracts.
 
-**Console methods** lists methods admitted with the console credential. **UI mutations** require the pinned UI (or the owner when no UI is pinned) on the Unix socket. Owner-only routes exclude agents and the console; no-agent routes exclude agent processes; guard decisions use the separate decision policy. These classifications do not grant access by themselves.
+**Console methods** lists methods admitted with the console credential. **UI mutations** require the pinned UI (or the owner when no UI is pinned) on the Unix socket. Owner-only routes exclude agents and the console; no-agent routes, and console methods other than GET and HEAD, exclude agent processes; guard decisions use the separate decision policy. These classifications do not grant access by themselves.
 
 | Path | Console methods | UI mutations | Additional restriction | Response type |
 |---|---|---|---|---|

@@ -52,8 +52,40 @@ func TestPostureServesSummaryWithoutReclassifyingItsState(t *testing.T) {
 	}
 }
 
+// Every headline item pairs with the group item the clients match it to:
+// the same kind, or the one PostureItemAttentionKinds names.
+func TestPostureItemsPairWithTheirGroupItems(t *testing.T) {
+	p := derivePosture(postureInputs{Generated: time.Now(), Status: Status{Running: true}, Pending: []guard.Pending{
+		{ID: "a", Agent: "claude", Tool: "Read", Path: "/work/.env"},
+		{ID: "b", Agent: "codex", Tool: "Read", Path: "/work/.aws/credentials"},
+	}})
+	if len(p.Items) != 2 {
+		t.Fatalf("items: %+v", p.Items)
+	}
+	for _, item := range p.Items {
+		want := item.Kind
+		if alias, ok := PostureItemAttentionKinds[item.Kind]; ok {
+			want = alias
+		}
+		matches := 0
+		for _, g := range p.Groups {
+			for _, gi := range g.Items {
+				if gi.Kind == want && gi.ID == item.ID {
+					matches++
+				}
+			}
+		}
+		if matches != 1 {
+			t.Errorf("posture item %s/%s pairs with %d group items of kind %q, want 1", item.Kind, item.ID, matches, want)
+		}
+	}
+	if s := deriveAttentionSummary(nil, nil); len(s.Buckets) != 3 || s.Buckets[0].Kind != AttentionBuckets[0] {
+		t.Fatalf("buckets: %+v", s.Buckets)
+	}
+}
+
 func TestPosturePublishesCategoryChangesAtUnchangedCounts(t *testing.T) {
-	a := newTestAPI(Deps{DeltaHub: NewDeltaHub()})
+	a := newTestAPI(Deps{Telemetry: TelemetryDeps{DeltaHub: NewDeltaHub()}})
 	ch := a.deltaHub.Subscribe()
 	defer a.deltaHub.Unsubscribe(ch)
 	p := Posture{State: "attention", NeedsYou: 1, AttentionSummary: deriveAttentionSummary([]AttentionGroup{{Items: []AttentionItem{{Kind: "guard", ID: "one"}}}}, nil)}

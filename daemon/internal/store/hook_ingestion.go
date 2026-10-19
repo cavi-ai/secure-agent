@@ -3,6 +3,8 @@ package store
 import (
 	"sync"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
 // HookIngestionSnapshot describes collector delivery in this daemon run,
@@ -43,9 +45,7 @@ func (s *Store) TrackHookIngestion() {
 
 func (s *Store) NoteHookAccepted(harness string) {
 	// Bound cardinality to the shared contract, even for a mistaken caller.
-	switch harness {
-	case "claude", "codex", "openclaw", "hermes", "opencode":
-	default:
+	if !model.IsHookHarness(harness) {
 		return
 	}
 	h := &s.hookIngestion

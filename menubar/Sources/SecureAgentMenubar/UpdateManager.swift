@@ -1,6 +1,7 @@
 import AppKit
 import CryptoKit
 import Foundation
+import Security
 
 /// In-app updates, two channels:
 ///   - Stable: the latest GitHub release DMG, SHA-256-verified against the
@@ -257,6 +258,7 @@ public final class UpdateManager: ObservableObject {
     /// an independent helper before exiting. Installation errors retain the
     /// running bundle; filesystem permissions are reported to the operator.
     private static func installDMG(at dmg: URL) async throws {
+        let requirement = try runningDesignatedRequirement()
         let mount = await run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", dmg.path])
         guard mount.status == 0 else { throw UpdateError.shell("hdiutil attach: \(mount.stderr)") }
         guard let mountPoint = mount.stdout.split(separator: "\n").last?
@@ -270,10 +272,7 @@ public final class UpdateManager: ObservableObject {
                 from: URL(fileURLWithPath: mountPoint).appendingPathComponent("Secure Agent.app"),
                 to: destination,
                 verify: { staged in
-                    let verify = await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", staged.path])
-                    guard verify.status == 0 else {
-                        throw UpdateError.shell("downloaded bundle failed signature verification: \(verify.stderr)")
-                    }
+                    try await verifyStagedBundle(staged, requirement: requirement)
                     // The staged copy no longer needs the mounted image. Finish
                     // unmounting before starting any relaunch helper.
                     let detach = await run("/usr/bin/hdiutil", ["detach", mountPoint])
@@ -289,6 +288,32 @@ public final class UpdateManager: ObservableObject {
             throw error
         }
         NSApp.terminate(nil)
+    }
+
+    /// The running app's designated requirement. An update must satisfy it,
+    /// so a bundle signed by another team, or ad hoc, is refused even with a
+    /// valid signature and a matching release checksum.
+    nonisolated static func runningDesignatedRequirement() throws -> String {
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        var requirement: SecRequirement?
+        var text: CFString?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
+              SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+              SecCodeCopyDesignatedRequirement(staticCode, [], &requirement) == errSecSuccess, let requirement,
+              SecRequirementCopyString(requirement, [], &text) == errSecSuccess, let text else {
+            throw UpdateError.shell("this app's signing requirement could not be read; not installing")
+        }
+        return text as String
+    }
+
+    /// Deep, strict signature check of a staged bundle against requirement.
+    nonisolated static func verifyStagedBundle(_ staged: URL, requirement: String) async throws {
+        let verify = await run("/usr/bin/codesign",
+                               ["--verify", "--deep", "--strict", "--test-requirement", "=" + requirement, staged.path])
+        guard verify.status == 0 else {
+            throw UpdateError.shell("downloaded bundle is not signed like this app; not installing: \(verify.stderr)")
+        }
     }
 
     private func applyNightly() async {
@@ -341,37 +366,10 @@ public final class UpdateManager: ObservableObject {
         }
     }
 
-    /// Drain a pipe fully on a side thread. Reading AFTER waitUntilExit()
-    /// deadlocks once a pipe's 64KB buffer fills, so both pipes must be
-    /// drained concurrently while the child runs.
-    nonisolated private static func drainToEnd(_ handle: FileHandle) async -> String {
-        await Task.detached {
-            String(decoding: handle.readDataToEndOfFile(), as: UTF8.self)
-        }.value
-    }
-
     /// Run a short helper binary off the main thread: hdiutil/ditto/git can
     /// take tens of seconds and the UI must not freeze through them.
     @discardableResult
-    nonisolated private static func run(_ bin: String, _ args: [String]) async -> (status: Int32, stdout: String, stderr: String) {
-        let bin = bin
-        let args = args
-        return await Task.detached {
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: bin)
-            p.arguments = args
-            let out = Pipe(), err = Pipe()
-            p.standardOutput = out
-            p.standardError = err
-            do {
-                try p.run()
-            } catch {
-                return (-1, "", "\(error.localizedDescription)")
-            }
-            async let stdout = drainToEnd(out.fileHandleForReading)
-            async let stderr = drainToEnd(err.fileHandleForReading)
-            p.waitUntilExit() // bounded: pipes are drained concurrently
-            return (p.terminationStatus, await stdout, await stderr)
-        }.value
+    nonisolated private static func run(_ bin: String, _ args: [String]) async -> ProcessRunner.Result {
+        await ProcessRunner.run(bin, args)
     }
 }

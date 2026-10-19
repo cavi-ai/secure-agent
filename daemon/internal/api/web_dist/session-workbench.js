@@ -3,6 +3,10 @@
 // the right. renderSessionBoard (app.js's panel registry) delegates here when
 // durable sessions exist; the legacy process-tree board remains the fallback.
 
+// The hosts whose hook completions the daemon records (model.HookHarnesses,
+// pinned by a drift test in daemon/internal/wiregen).
+const HOOK_HARNESSES = ['claude', 'codex', 'openclaw', 'hermes', 'opencode'];
+
 // Empty recovery considers ended sessions hidden only by Live only.
 function sessionEmptyHTML(groups, filter) {
   const filtered = !!String(filter.text || filter.search || '').trim() || Object.values(filter.harnesses || {}).some(value => value === false);
@@ -228,7 +232,7 @@ function validHookForwarder(row) {
     && Array.isArray(a.limits) && a.limits.length <= 5 && a.limits.every(v => typeof v === 'string' && v.length <= 1024));
   return !!r && r.type === 'hook_forwarder' && healthValid && assessmentValid && id(r.forwarder_id)
     && (r.session_id === undefined || id(r.session_id))
-    && ['claude', 'codex', 'openclaw', 'hermes', 'opencode'].includes(r.harness)
+    && HOOK_HARNESSES.includes(r.harness)
     && ['connected', 'disconnected', 'error'].includes(r.state)
     && ['recent', 'stale', 'unverified'].includes(row.freshness)
     && ['sequence', 'pending', 'delivery_failures', 'dropped'].every(k => count(r[k])) && r.sequence > 0
@@ -293,14 +297,14 @@ function validHookIngestion(h) {
   if (!h.available) return h.rejected === 0 && h.harnesses.length === 0 && !(h.forwarders || []).length;
   return time(h.since) && (h.rejected === 0 ? h.last_rejected_at == null : time(h.last_rejected_at))
     && new Set(h.harnesses.map(r => r && r.harness)).size === h.harnesses.length
-    && h.harnesses.every(r => r && ['claude', 'codex', 'openclaw', 'hermes', 'opencode'].includes(r.harness)
+    && h.harnesses.every(r => r && HOOK_HARNESSES.includes(r.harness)
       && count(r.accepted) && r.accepted > 0 && time(r.last_received_at));
 }
 
 // Summarize observations without merging independent forwarding instances or
 // borrowing one session's evidence to describe another session's coverage.
 function hookMonitoringModel(h, sessions = [], health = {}, now = Date.now()) {
-  const supported=['claude','codex','openclaw','hermes','opencode'];
+  const supported=HOOK_HARNESSES;
   const available=validHookIngestion(h) && h.available;
   const stale=!!health.error || !(health.lastSnapshotAt>0) || now-health.lastSnapshotAt>120000 || now<health.lastSnapshotAt;
   const rows=new Map();
@@ -491,7 +495,7 @@ function hookDiagnosticPreviewHTML(summary) {
 }
 
 function hookEvidenceButtonHTML(f, sessionId, exact = false) {
-  if (!sessionId || !['claude','codex','openclaw','hermes','opencode'].includes(f.harness)) return '';
+  if (!sessionId || !HOOK_HARNESSES.includes(f.harness)) return '';
   return `<button type="button" class="link-btn" data-action="hook-evidence" data-session="${escapeHTML(sessionId)}" data-harness="${escapeHTML(f.harness)}" data-event="${escapeHTML(f.event)}" data-event_scope="${exact ? 'exact' : 'group'}" data-script="${escapeHTML(f.script || '')}" data-handler="${escapeHTML(f.handler_id || '')}" data-config="${escapeHTML(f.config_id || '')}">Inspect recorded runs</button>`;
 }
 

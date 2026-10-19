@@ -7,6 +7,8 @@ import (
 	"errors"
 	"regexp"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
 // Record contains only completion metadata. Adapters must not copy arguments,
@@ -67,9 +69,7 @@ func (r Record) Validate() error {
 	if r.Version != 1 && r.Version != 2 {
 		return ErrUnsupportedProtocol
 	}
-	switch r.Harness {
-	case "claude", "codex", "openclaw", "hermes", "opencode":
-	default:
+	if !model.IsHookHarness(r.Harness) {
 		return errors.New("unsupported hook harness")
 	}
 	if !identifier.MatchString(r.ID) || !identifier.MatchString(r.SessionID) {

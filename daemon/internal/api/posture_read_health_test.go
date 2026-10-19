@@ -57,7 +57,7 @@ func TestPostureReadFailureVisibleOnFirstPassAndRecovery(t *testing.T) {
 					}
 				}
 
-				a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, DeltaHub: NewDeltaHub()})
+				a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Telemetry: TelemetryDeps{DeltaHub: NewDeltaHub()}})
 				defer a.deltaHub.Close()
 				ch := a.deltaHub.Subscribe()
 				read := func() Posture {

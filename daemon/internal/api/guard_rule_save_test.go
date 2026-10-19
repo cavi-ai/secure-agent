@@ -27,7 +27,7 @@ func TestGuardRuleSaveFailureIsReportedNotAudited(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	a := newTestAPI(Deps{Store: st, Guard: guard.NewBroker(time.Second)})
+	a := newTestAPI(Deps{Store: st, Guard: GuardDeps{Broker: guard.NewBroker(time.Second)}})
 	answerAlways := func() guard.Decision {
 		t.Helper()
 		rec := httptest.NewRecorder()

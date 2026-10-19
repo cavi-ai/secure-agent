@@ -110,13 +110,8 @@ func (s *Store) pruneGuardDecisions(ctx context.Context, retention time.Duration
 	return err
 }
 
-// ListGuardDecisions selects only rows explicitly attributed to sessionID.
-func (s *Store) ListGuardDecisions(sessionID string, limit int) []GuardDecision {
-	out, _ := s.GuardDecisionHistory(sessionID, limit)
-	return out
-}
-
-// GuardDecisionHistory distinguishes unavailable storage from empty history.
+// GuardDecisionHistory selects only rows explicitly attributed to sessionID,
+// and distinguishes unavailable storage from empty history.
 func (s *Store) GuardDecisionHistory(sessionID string, limit int) ([]GuardDecision, error) {
 	if limit <= 0 {
 		return nil, nil

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# secure-agent-hook: secret_guard
 """Deny agent mutation of the keychain and shell config; keep secrets out of agent reach.
 
 Shared single copy. Symlinked into ~/.cursor/hooks/ and ~/.claude/hooks/.
@@ -72,7 +73,9 @@ KEYCHAIN_MARKERS = ("library/keychains", ".keychain-db", "login.keychain")
 
 # Public keys (`.pub`) are designed to be shared — denying them was a false
 # positive that got the predecessor hook disabled.
-PRIVATE_KEY_RE = re.compile(r"/\.ssh/(id_[a-z0-9]+|.*_(rsa|dsa|ecdsa|ed25519))$", re.I)
+# The daemon's rule (daemon/internal/sensitive): id_* or *_rsa|_dsa|_ecdsa|_ed25519
+# under ~/.ssh, never .pub. daemon/internal/sensitive/testdata/paths.json pins both.
+PRIVATE_KEY_RE = re.compile(r"/\.ssh/(?:[^/]+/)*(id_[a-z0-9_-]+|[^/]*_(rsa|dsa|ecdsa|ed25519))$", re.I)
 
 # Commands that write to whatever path they are handed.
 MUTATORS = {

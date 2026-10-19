@@ -441,6 +441,9 @@ func TestConsoleAPIPathsCoverWebApp(t *testing.T) {
 		if fragments[p] {
 			continue // part of a dynamic session route, checked above
 		}
+		if p == consoleStreamAuthPath {
+			continue // served by the proxy itself (stream cookie)
+		}
 		t.Errorf("console fetches %s but the console allow-list lacks it — that panel 407s on the proxy listener", p)
 	}
 }
@@ -503,8 +506,56 @@ func TestConsoleAPIGate(t *testing.T) {
 	if code := get(base+"/status", map[string]string{"X-SecureAgent-Console-Token": ct}); code != http.StatusOK {
 		t.Fatalf("/status with console token: %d, want 200", code)
 	}
-	if code := get(base+"/status?ct="+ct, nil); code != http.StatusOK {
-		t.Fatalf("/status with ct query: %d, want 200 (EventSource can't set headers)", code)
+	if code := get(base+"/status?ct="+ct, nil); code != http.StatusForbidden {
+		t.Fatalf("/status with ct query: %d, want 403 (no credential in URLs)", code)
+	}
+	rebound, _ := http.NewRequest("GET", base+"/status", nil)
+	rebound.Host = fmt.Sprintf("rebound.example:%d", port)
+	rebound.Header.Set("X-SecureAgent-Console-Token", ct)
+	if r, err := http.DefaultClient.Do(rebound); err != nil {
+		t.Fatal(err)
+	} else if r.Body.Close(); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("/status with a foreign Host: %d, want 403", r.StatusCode)
+	}
+	if code := get(base+"/status", map[string]string{"X-SecureAgent-Console-Token": ct, "Origin": "http://evil.example"}); code != http.StatusForbidden {
+		t.Fatalf("/status with a foreign Origin: %d, want 403", code)
+	}
+	// The stream cookie: issued for a header-authenticated POST, accepted on
+	// the stream only.
+	authReq, _ := http.NewRequest("POST", base+"/console/stream-auth", nil)
+	authReq.Header.Set("X-SecureAgent-Console-Token", ct)
+	authResp, err := http.DefaultClient.Do(authReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authResp.Body.Close()
+	var streamCookie *http.Cookie
+	for _, c := range authResp.Cookies() {
+		if c.Name == consoleStreamCookie {
+			streamCookie = c
+		}
+	}
+	if authResp.StatusCode != http.StatusNoContent || streamCookie == nil || !streamCookie.HttpOnly || streamCookie.Path != "/events/stream" {
+		t.Fatalf("stream auth: %d cookie=%+v", authResp.StatusCode, streamCookie)
+	}
+	if code := get(base+"/console/stream-auth", map[string]string{"X-SecureAgent-Console-Token": ct}); code != http.StatusForbidden {
+		t.Fatalf("GET stream auth: %d, want 403", code)
+	}
+	withCookie := func(path string) int {
+		req, _ := http.NewRequest("GET", path, nil)
+		req.AddCookie(streamCookie)
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		return r.StatusCode
+	}
+	if code := withCookie(base + "/events/stream"); code != http.StatusOK {
+		t.Fatalf("stream with cookie: %d, want 200", code)
+	}
+	if code := withCookie(base + "/status"); code != http.StatusForbidden {
+		t.Fatalf("/status with the stream cookie: %d, want 403", code)
 	}
 	for _, test := range []struct {
 		headers map[string]string

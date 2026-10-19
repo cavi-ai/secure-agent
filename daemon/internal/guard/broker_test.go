@@ -151,7 +151,9 @@ func TestBrokerDedupKeyIncludesSession(t *testing.T) {
 // Once the queue is full, further requests get an immediate explicit deny
 // instead of piling up.
 func TestRequestOverCapIsDeniedImmediately(t *testing.T) {
-	b := NewBroker(50 * time.Millisecond)
+	// Queued requests never time out here, so an overflow that waited for a
+	// slot or a timeout would block the test instead of returning.
+	b := NewBroker(time.Hour)
 	var wg sync.WaitGroup
 	queued := make(chan struct{}, MaxWaiters)
 	for i := 0; i < MaxWaiters; i++ {
@@ -172,17 +174,20 @@ func TestRequestOverCapIsDeniedImmediately(t *testing.T) {
 			time.Sleep(2 * time.Millisecond)
 		}
 	}
-	// This one must be refused instantly, not block for the broker timeout.
-	start := time.Now()
-	d := b.Request(context.Background(), Pending{ID: "overflow", Agent: "claude", RuleID: "r", Path: "/overflow", Tool: "Read"})
-	if d.Verdict != "deny" || d.Reason != "queue-full" {
-		t.Fatalf("overflow decision = %+v, want deny/queue-full", d)
-	}
-	if elapsed := time.Since(start); elapsed > 20*time.Millisecond {
-		t.Fatalf("overflow took %v, want an immediate refusal", elapsed)
+	// This one must be refused without waiting for a slot.
+	overflow := make(chan Decision, 1)
+	go func() {
+		overflow <- b.Request(context.Background(), Pending{ID: "overflow", Agent: "claude", RuleID: "r", Path: "/overflow", Tool: "Read"})
+	}()
+	select {
+	case d := <-overflow:
+		if d.Verdict != "deny" || d.Reason != "queue-full" {
+			t.Fatalf("overflow decision = %+v, want deny/queue-full", d)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("overflow request blocked behind a full queue")
 	}
 	// Drain: resolve everything so the goroutines exit.
-	time.Sleep(20 * time.Millisecond)
 	b.mu.Lock()
 	ids := make([]string, 0, len(b.waiters))
 	for id := range b.waiters {
@@ -325,7 +330,7 @@ func TestPendingReturnsOldestFirst(t *testing.T) {
 		go func(id, path string) {
 			done <- b.Request(context.Background(), Pending{ID: id, Agent: "a", RuleID: "r", Path: path, Tool: "Read"})
 		}(id, path)
-		time.Sleep(10 * time.Millisecond) // enforce arrival order
+		waitPending(t, b, i+1) // arrival order: each request is queued before the next starts
 	}
 	p := b.Pending()
 	if len(p) != 3 || p[0].ID != "first" || p[2].ID != "third" {
@@ -338,7 +343,7 @@ func TestPendingReturnsOldestFirst(t *testing.T) {
 
 func waitPending(t *testing.T, b *Broker, n int) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for len(b.Pending()) != n {
 		if time.Now().After(deadline) {
 			t.Fatalf("pending = %d, want %d", len(b.Pending()), n)

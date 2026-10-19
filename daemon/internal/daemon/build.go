@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -34,6 +35,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/session"
 	"github.com/cavi-ai/secure-agent/daemon/internal/shellreview"
@@ -173,8 +175,8 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		log.Printf("store: cleared the record mark on %d file rows that are not secret reads", n)
 	}
 
-	// postureHook is armed once the API server exists (it owns posture).
-	postureHook := &postureHookHolder{}
+	// postureHook starts once the API server exists (it owns posture).
+	postureHook := newPostureHook(postureRecomputeDelay)
 	// newFlagHook is armed with the API's automatic review once it exists.
 	newFlagHook := &flagHookHolder{}
 
@@ -248,11 +250,18 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// Resolve the file-feed dependency before any status consumer starts.
 	// Each daemon owns its probe and tailer; startup must not mutate a global
 	// function while the API or fleet heartbeat reads it.
-	var spoolTailer *collect.SpoolTailer
-	var esServiceProbe func() (collect.ESServiceSnapshot, error)
+	// The tailer can also appear later: a collector installed after launch is
+	// picked up by watchSpool (startCollectors) without a daemon restart.
+	spool := new(atomic.Pointer[collect.SpoolTailer])
 	if collect.SpoolAvailable() {
-		spoolTailer = collect.NewSpoolTailer(b)
-		esServiceProbe = spoolServiceProbe(spoolTailer)
+		spool.Store(collect.NewSpoolTailer(b))
+	}
+	esServiceProbe := func() (collect.ESServiceSnapshot, error) {
+		t := spool.Load()
+		if t == nil {
+			return collect.ESServiceSnapshot{}, errNoSpool
+		}
+		return spoolServiceProbe(t)()
 	}
 
 	// Supervisor with a shared health registry so /status reports each collector's
@@ -298,16 +307,11 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	sysAgent.SetConfig(cfg.SystemAgent)
 	sysAgent.Recover()
 	apiServer := api.New(api.Deps{
-		SocketPath:            cfg.SocketPath,
-		ConfigPath:            opts.ConfigPath,
-		Store:                 st,
-		Killer:                &realKiller{},
-		Status:                statusFn,
-		BusDrops:              b.Dropped,
-		BusDropAt:             b.DroppedAt,
-		Resources:             resourceControl.Snapshot,
-		ResourceControl:       resourceControl,
-		ResourcePolicyUpdater: resourcePolicyUpdater,
+		SocketPath: cfg.SocketPath,
+		ConfigPath: opts.ConfigPath,
+		Store:      st,
+		Killer:     &realKiller{},
+		Status:     statusFn,
 		Firewall: api.FirewallControl{
 			Engine:      fw.Engine,
 			Modes:       fw.Modes,
@@ -316,46 +320,67 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			Sources:     fw.Sources,
 			BaseSources: fw.BaseSources,
 		},
-		Guard:         guardBroker,
-		ShellReviews:  c.shellReviews,
-		GuardIdentity: resolver.PermissionIdentity,
-		Correlator:    correlator,
-		Allowlist:     allowlistStore,
-		Mutes:         muteStore,
-		Expected:      expectStore,
-		NotifyRules:   notifyRuleStore,
-		NotifyScopes:  notifyScopeStore,
-		Retriage:      retriageFuncs,
-		Plan:          planFuncs,
-		HostAssess:    hostAssessFuncs,
-		GuardAdvisor:  guardAdvisor,
-		PeerChecker:   api.NewPeerChecker(),
-		AgentPIDs:     agentPIDSet,
-		UIPID:         uiPID,
-		IsAgentPID: func(pid int32) bool {
-			_, isAgent := tagger.Tag(pid)
-			return isAgent
+		Resources: api.ResourceDeps{
+			Snapshot:      resourceControl.Snapshot,
+			Control:       resourceControl,
+			PolicyUpdater: resourcePolicyUpdater,
 		},
-		FleetSink:       fleetPub,
-		OTLPDropped:     otlpExp.Dropped,
-		FleetConfigured: fleetOn.Load,
-		PublishEvent:    b.Publish,
-		DeltaHub:        deltaHub,
-		Hermes:          hermes.Status,
-		Routing:         claudeRouting(proxyServer, cfg.ProxyCACertPath),
-		Sightings:       resolver.SightedByHarness,
-		Worktrees:       hunter,
-		WorktreeAdvisor: worktreeAdvisor,
-		EgressAdvisor: func(e store.EgressEpisode) bool {
-			if sub := advisorStk.Load().Sub; sub != nil {
-				return sub.EnqueueEgressEpisode(e)
-			}
-			return false
+		Guard: api.GuardDeps{
+			Broker:       guardBroker,
+			Identity:     resolver.PermissionIdentity,
+			Advisor:      guardAdvisor,
+			ShellReviews: c.shellReviews,
 		},
-		Clutter:        cleanup,
-		Asker:          asker,
-		SysAgent:       sysAgent,
-		ProjectAdvisor: projectAdvisor,
+		Policy: api.PolicyDeps{
+			Correlator:   correlator,
+			Allowlist:    allowlistStore,
+			Mutes:        muteStore,
+			Expected:     expectStore,
+			NotifyRules:  notifyRuleStore,
+			NotifyScopes: notifyScopeStore,
+		},
+		Advisors: api.AdvisorDeps{
+			Retriage:   retriageFuncs,
+			Plan:       planFuncs,
+			HostAssess: hostAssessFuncs,
+			Project:    projectAdvisor,
+			Worktree:   worktreeAdvisor,
+			Egress: func(e store.EgressEpisode) bool {
+				if sub := advisorStk.Load().Sub; sub != nil {
+					return sub.EnqueueEgressEpisode(e)
+				}
+				return false
+			},
+		},
+		Peers: api.PeerDeps{
+			Checker:   api.NewPeerChecker(),
+			AgentPIDs: agentPIDSet,
+			UIPID:     uiPID,
+			IsAgentPID: func(pid int32) bool {
+				_, isAgent := tagger.Tag(pid)
+				return isAgent
+			},
+		},
+		Telemetry: api.TelemetryDeps{
+			FleetSink:       fleetPub,
+			FleetConfigured: fleetOn.Load,
+			BusDrops:        b.Dropped,
+			BusDropAt:       b.DroppedAt,
+			OTLPDropped:     otlpExp.Dropped,
+			PublishEvent:    b.Publish,
+			DeltaHub:        deltaHub,
+		},
+		Doctor: api.DoctorDeps{
+			Hermes:    hermes.Status,
+			Sightings: resolver.SightedByHarness,
+			Routing:   claudeRouting(proxyServer, cfg.ProxyCACertPath),
+		},
+		Workspace: api.WorkspaceDeps{
+			Worktrees: hunter,
+			Clutter:   cleanup,
+			Asker:     asker,
+			SysAgent:  sysAgent,
+		},
 	})
 
 	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, procSource, st))
@@ -380,7 +405,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			deltaHub: deltaHub, postureChanged: postureHook.run, advisorMask: sysAgentMask(fw.Engine),
 		})
 	}
-	postureHook.fn = apiServer.PublishPostureIfChanged
+	postureHook.start(ctx, apiServer.PublishPostureIfChanged)
 	newFlagHook.fn = apiServer.NoteNewFlag
 
 	// The browser console's telemetry fetches are same-origin with the
@@ -405,7 +430,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		}
 	}()
 
-	startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spoolTailer)
+	startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spool)
 
 	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
 	return c, nil
@@ -520,16 +545,56 @@ func (k *realKiller) Kill(pid int32) error {
 	return nil
 }
 
-// postureHookHolder defers arming the posture-delta hook until the API
-// server exists (it owns posture computation); the drain loop starts first.
-type postureHookHolder struct {
-	fn func()
+// postureRecomputeDelay is how long a posture mark waits for the rest of its
+// burst before one recompute covers them all.
+const postureRecomputeDelay = 250 * time.Millisecond
+
+// postureHook moves posture recomputation off its callers: run marks posture
+// dirty without blocking, and one worker recomputes after a short trailing
+// delay, so a burst of flags costs one recompute and never stalls the drain
+// loop. The worker starts once the API server exists (it owns posture); marks
+// made before that wait for it.
+type postureHook struct {
+	dirty chan struct{}
+	delay time.Duration
 }
 
-func (h *postureHookHolder) run() {
-	if h.fn != nil {
-		h.fn()
+func newPostureHook(delay time.Duration) *postureHook {
+	return &postureHook{dirty: make(chan struct{}, 1), delay: delay}
+}
+
+func (h *postureHook) run() {
+	select {
+	case h.dirty <- struct{}{}:
+	default:
 	}
+}
+
+// start runs recompute after each burst of marks until ctx ends. Marks made
+// during the delay fold into that pass; a mark made during recompute starts
+// another one.
+func (h *postureHook) start(ctx context.Context, recompute func()) {
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-h.dirty:
+			}
+			timer := time.NewTimer(h.delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			select {
+			case <-h.dirty:
+			default:
+			}
+			recompute()
+		}
+	}()
 }
 
 // flagHookHolder defers arming the new-flag hook until the API server exists.
@@ -568,7 +633,8 @@ func loadLastProduced(dbPath string) map[string]string {
 }
 
 // persistLastProduced writes the registry's coverage heartbeats for the next
-// run. Best-effort and cheap (a few hundred bytes on the tagger cadence).
+// run. Best-effort and cheap (a few hundred bytes on the tagger cadence); the
+// file is replaced whole, so a reader or a crash never sees a torn one.
 func persistLastProduced(dbPath string, reg *supervise.Registry) {
 	snap := reg.PersistLastProduced()
 	if snap == nil {
@@ -582,7 +648,7 @@ func persistLastProduced(dbPath string, reg *supervise.Registry) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return
 	}
-	_ = os.WriteFile(path, data, 0o600)
+	_ = safefile.ReplaceFile(path, data, 0o600)
 }
 
 func owningUIPID() int32 {
@@ -907,34 +973,35 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, procSource 
 	}
 }
 
-// startCollectors launches the supervised collectors. File telemetry:
-//  1. Spool tail from the root ES LaunchDaemon (sanctioned path).
-//  2. Direct eslogger child (root dev runs only).
-//  3. Neither: degraded, not crash-looped; the transcript scanner remains.
-func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spoolTailer *collect.SpoolTailer) {
+// startCollectors launches the supervised collectors. File telemetry is the
+// spool tail of the root ES collector (the LaunchDaemon, or a developer's
+// `secure-agentd -es-collector` run as root); without a spool it is degraded,
+// not crash-looped, and starts when the spool appears.
+func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer]) {
 	if proxyServer != nil {
 		go sup.Run(ctx, "proxyserver", func(c context.Context) error {
 			return proxyServer.Serve(c)
 		})
 	}
 
-	switch {
-	case spoolTailer != nil:
+	tailSpool := func(t *collect.SpoolTailer) {
 		st.TrackFileFeed()
 		go sup.Run(ctx, "eslogger", func(c context.Context) error {
-			spoolTailer.OnProduce = func() { supReg.MarkProduced("eslogger") }
-			return spoolTailer.Run(c)
+			t.OnProduce = func() { supReg.MarkProduced("eslogger") }
+			return t.Run(c)
 		})
 		log.Printf("file telemetry: tailing privileged ES collector spool")
-	case os.Geteuid() == 0 && collect.ESLoggerAvailable():
-		st.TrackFileFeed()
-		go sup.Run(ctx, "eslogger", func(c context.Context) error {
-			es := collect.NewESLogger(b)
-			es.OnProduce = func() { supReg.MarkProduced("eslogger") }
-			return es.Run(c)
-		})
+	}
+	switch {
+	case spool.Load() != nil:
+		tailSpool(spool.Load())
 	default:
-		log.Printf("file telemetry unavailable: ES requires a privileged collector (install it from Settings); transcript + network signals still active")
+		log.Printf("file telemetry unavailable: ES requires a privileged collector (install it from Settings); transcript + network signals still active; starts when the collector's spool appears")
+		go watchSpool(ctx, spoolWatchInterval, collect.SpoolAvailable, func() {
+			t := collect.NewSpoolTailer(b)
+			spool.Store(t)
+			tailSpool(t)
+		})
 	}
 
 	go sup.Run(ctx, "netsampler", func(c context.Context) error {
@@ -1016,6 +1083,30 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	})
 
 	go advisorStk.Run(ctx, sup)
+}
+
+// spoolWatchInterval is how often a daemon without file telemetry checks for
+// a privileged collector installed after launch.
+const spoolWatchInterval = 10 * time.Second
+
+var errNoSpool = errors.New("file telemetry is not spool-based")
+
+// watchSpool calls start once, when available first reports true; it stops
+// when ctx ends.
+func watchSpool(ctx context.Context, every time.Duration, available func() bool, start func()) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if available() {
+				start()
+				return
+			}
+		}
+	}
 }
 
 // newHermesCollector builds the Hermes Agent poller: state.db and every

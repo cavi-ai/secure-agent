@@ -71,7 +71,7 @@ func TestLocalShellGateIntegration(t *testing.T) {
 	}
 	defer svc.Close()
 	sock := filepath.Join(home, "d.sock")
-	a := newTestAPI(Deps{SocketPath: sock, Store: st, ShellReviews: svc})
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Guard: GuardDeps{ShellReviews: svc}})
 	done := make(chan error, 1)
 	go func() { done <- a.Serve(ctx) }()
 	defer func() { cancel(); <-done }()

@@ -129,20 +129,27 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
     tickRemovalElapsed();
     if (running && !removalTicker) removalTicker = setInterval(tickRemovalElapsed, 1000);
   }
+  // Every report read takes a number; only the newest read started may set
+  // the report, so a slow older read never overwrites a newer one.
+  let reportReads = 0;
   async function loadWorktrees(refresh) {
     if (worktreesState.loading) return;
     worktreesState.loading = true;
     worktreesState.error = '';
     markDirty('worktrees');
+    const read = ++reportReads;
     try {
       const r = await request('/worktrees' + (refresh ? '?refresh=1' : ''), { timeoutMs: WORKTREE_TIMEOUT_MS });
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
-      worktreesState.report = await r.json();
+      const rep = await r.json();
+      if (read !== reportReads) return;
+      worktreesState.report = rep;
       worktreesState.loadedAt = now();
       adoptRemovals(worktreesState.report);
       if (removalGroup.paths.length) paintRemovalToast();
       if (!worktreesState.report.sizing && !worktreesState.report.refreshing && !Object.values(worktreesState.report.asks || {}).some(a => a.status === 'running')) worktreeSizingPolls = 0;
     } catch (err) {
+      if (read !== reportReads) return;
       worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
       if (worktreesState.report) toast(worktreesState.error, 'danger');
     } finally {
@@ -400,12 +407,16 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
   async function pollWorktreeNotes(polls, answered) {
     for (let i = 0; i < polls; i++) {
       await new Promise(res => setTimeout(res, WORKTREE_NOTE_EVERY_MS));
+      const read = ++reportReads;
       const g = await request('/worktrees', { timeoutMs: WORKTREE_TIMEOUT_MS });
       if (!g.ok) break;
       const rep = await g.json();
-      worktreesState.report = rep;
-      markDirty('worktrees');
-      if (answered(rep.advice || {})) break;
+      if (read === reportReads) {
+        worktreesState.report = rep;
+        adoptRemovals(rep);
+        markDirty('worktrees');
+      }
+      if (answered((worktreesState.report && worktreesState.report.advice) || {})) break;
     }
   }
   async function adviseWorktree(path) {

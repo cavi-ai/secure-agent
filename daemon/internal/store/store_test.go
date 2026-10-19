@@ -738,6 +738,31 @@ func TestPruneKeepsRecordRowsPastTheBudget(t *testing.T) {
 	}
 }
 
+// A retention prune that cannot delete is reported in write health instead of
+// letting the store grow silently; the next clean prune clears it.
+func TestPruneFailureShowsInWriteHealth(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.PutEvent(event.Event{Kind: event.KindFileOpen, PID: 1, TS: time.Now().Add(-365 * 24 * time.Hour), Path: "/tmp/old"})
+	if _, err := s.db.Exec(`CREATE TRIGGER block_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	s.PruneEvents()
+	if h := s.WriteHealth(); !slices.Contains(h.Active, "event retention") {
+		t.Fatalf("write health after a failed prune: %+v", h)
+	}
+	if _, err := s.db.Exec(`DROP TRIGGER block_delete`); err != nil {
+		t.Fatal(err)
+	}
+	s.PruneEvents()
+	if h := s.WriteHealth(); slices.Contains(h.Active, "event retention") {
+		t.Fatalf("write health after a clean prune: %+v", h)
+	}
+}
+
 // Record rows keep their own newest recordBudget.
 func TestPruneCapsRecordRows(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
@@ -876,6 +901,7 @@ func TestInsertDrivenPruneGatedByMinInterval(t *testing.T) {
 		for i := 0; i < n; i++ {
 			s.PutEvent(event.Event{Kind: event.KindExec, PID: 1, TS: time.Now()})
 		}
+		s.retention.Wait()
 	}
 
 	put(1000)
@@ -906,13 +932,14 @@ func TestPruneBudgetQueryUsesKindIndex(t *testing.T) {
 	}
 	defer s.Close()
 
-	joined := queryPlan(t, s, `DELETE FROM events WHERE kind = ? AND record = 0 AND id <
-		(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, 0, 0, 9)
+	batch := func(cond string) string {
+		return `DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ` + cond + ` LIMIT ?)`
+	}
+	joined := queryPlan(t, s, kindCutoffSQL, 0, 9) + " | " + queryPlan(t, s, batch(kindBudgetCondSQL), 0, 5, pruneBatch)
 	if strings.Contains(joined, "SCAN events") || !strings.Contains(joined, "idx_events_kind_id") {
 		t.Fatalf("budget delete plan = %q, want index seeks on idx_events_kind_id", joined)
 	}
-	joined = queryPlan(t, s, `DELETE FROM events WHERE kind = ? AND record = 1 AND id <
-		(SELECT id FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?)`, 0, 0, 9)
+	joined = queryPlan(t, s, recordCutoffSQL, 0, 9) + " | " + queryPlan(t, s, batch(recordBudgetCondSQL), 0, 5, pruneBatch)
 	if strings.Contains(joined, "SCAN events") || !strings.Contains(joined, "idx_events_record") {
 		t.Fatalf("record delete plan = %q, want index seeks on idx_events_record", joined)
 	}

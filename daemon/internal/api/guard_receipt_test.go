@@ -13,7 +13,7 @@ import (
 
 func TestGuardResolveReceiptMatchesAnswerAndRejectsReplay(t *testing.T) {
 	st := testStore(t)
-	a := newTestAPI(Deps{Store: st, Guard: guard.NewBroker(time.Second)})
+	a := newTestAPI(Deps{Store: st, Guard: GuardDeps{Broker: guard.NewBroker(time.Second)}})
 	id, done := guardDecisionAsync(t, a, context.Background())
 	resolve := func() map[string]any {
 		w := httptest.NewRecorder()

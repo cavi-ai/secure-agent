@@ -8,7 +8,9 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
     public static let killAction = "secure-agent.kill"
     public static let openAction = "secure-agent.open"
 
-    private var isSupported: Bool { Bundle.main.bundleIdentifier != nil }
+    /// The notification center needs an app bundle; a test runner or a bare
+    /// executable has none, and the center throws.
+    private var isSupported: Bool { Bundle.main.bundleURL.pathExtension == "app" }
 
     /// Internal (not private) so tests build an instance with their own
     /// clock and reconcile seam.
@@ -138,7 +140,7 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
         // NSInternalInconsistencyException in the xctest host, where Bundle
         // lookups otherwise succeed (bundleURL ends in usr/bin, not .app).
         // Skip the whole path when we're not inside a real .app bundle.
-        guard isSupported, Bundle.main.bundleURL.pathExtension == "app" else { return }
+        guard isSupported else { return }
         UNUserNotificationCenter.current().getDeliveredNotifications { notes in
             let pairs = notes.map { (id: $0.request.identifier, date: $0.date) }
             let remove = Self.identifiersToRemove(delivered: pairs, acknowledgedIDs: acknowledgedIDs,

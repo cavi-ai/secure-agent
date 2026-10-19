@@ -60,7 +60,7 @@ func TestSessionFollowUpCLIIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := New(Deps{Store: st, PeerChecker: NewPeerChecker()})
+	a := New(Deps{Store: st, Peers: PeerDeps{Checker: NewPeerChecker()}})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- a.ServeListener(ctx, listener) }()

@@ -1,0 +1,26 @@
+{
+  "comment": "Built-in path rules shared by the daemon classifier, the incident analyzer and the guard hook. ssh_private_key: a private SSH key under ~/.ssh. env_secret: an environment file that holds values, not a committed template.",
+  "cases": [
+    {"path": "/Users/x/.ssh/id_ed25519", "ssh_private_key": true, "env_secret": false},
+    {"path": "/Users/x/.ssh/id_rsa", "ssh_private_key": true, "env_secret": false},
+    {"path": "/Users/x/.ssh/id_ed25519_sk", "ssh_private_key": true, "env_secret": false},
+    {"path": "/Users/x/.ssh/deploy_rsa", "ssh_private_key": true, "env_secret": false},
+    {"path": "/Users/x/.ssh/keys/deploy_ed25519", "ssh_private_key": true, "env_secret": false},
+    {"path": "/Users/x/.ssh/keys/id_rsa", "ssh_private_key": true, "env_secret": false},
+    {"path": "/Users/x/.ssh/github_ed25519", "ssh_private_key": true, "env_secret": false},
+    {"path": "/Users/x/.ssh/id_ed25519.pub", "ssh_private_key": false, "env_secret": false},
+    {"path": "/Users/x/.ssh/id_ed25519_sk.pub", "ssh_private_key": false, "env_secret": false},
+    {"path": "/Users/x/.ssh/config", "ssh_private_key": false, "env_secret": false},
+    {"path": "/Users/x/.ssh/known_hosts", "ssh_private_key": false, "env_secret": false},
+    {"path": "/Users/x/project/id_mapping.json", "ssh_private_key": false, "env_secret": false},
+    {"path": "/Users/x/project/.env", "ssh_private_key": false, "env_secret": true},
+    {"path": "/Users/x/project/.env.local", "ssh_private_key": false, "env_secret": true},
+    {"path": "/Users/x/project/.env.production", "ssh_private_key": false, "env_secret": true},
+    {"path": "/Users/x/project/.env.example", "ssh_private_key": false, "env_secret": false},
+    {"path": "/Users/x/project/.env.sample", "ssh_private_key": false, "env_secret": false},
+    {"path": "/Users/x/project/.env.template", "ssh_private_key": false, "env_secret": false},
+    {"path": "/Users/x/project/.env.dist", "ssh_private_key": false, "env_secret": false},
+    {"path": "/Users/x/project/.envrc", "ssh_private_key": false, "env_secret": false},
+    {"path": "/Users/x/project/src/env.go", "ssh_private_key": false, "env_secret": false}
+  ]
+}

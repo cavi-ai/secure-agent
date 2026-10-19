@@ -702,7 +702,7 @@ function renderFlags() {
   badge.textContent = total;
 
   if (total === 0 && !reviewPage.next && !SA.reviewCursor) {
-    SA.historyRows = new Map();
+    historyOpenRows = new Map();
     paintHistoryBulk(SA);
     const msg = SA.sessionScopeOn()
       ? `No flags for ${SA.sessionScopeTag()} in the loaded window`
@@ -729,11 +729,16 @@ function renderFlags() {
   }
 
   // Selection lives on the visible open rows only.
-  SA.historyRows = new Map(shown.filter(r => !r.reviewed && r.selectable !== false).map(r => [logKey(r), r]));
-  for (const k of Array.from(SA.historySelected)) if (!SA.historyRows.has(k)) SA.historySelected.delete(k);
+  historyOpenRows = new Map(shown.filter(r => !r.reviewed && r.selectable !== false).map(r => [logKey(r), r]));
+  for (const k of Array.from(SA.historySelected)) if (!historyOpenRows.has(k)) SA.historySelected.delete(k);
   for (const c of container.querySelectorAll('.log-check')) c.checked = SA.historySelected.has(c.dataset.rowKey);
   paintHistoryBulk(SA);
 }
+
+// The visible open history rows a selection can hold, keyed by logKey.
+// renderFlags replaces them on every paint.
+let historyOpenRows = new Map();
+function selectableHistoryRows() { return historyOpenRows; }
 
 // paintHistoryBulk: the selection bar and the header checkbox follow the
 // visible open rows and the selection.
@@ -748,7 +753,7 @@ function paintHistoryBulk(SA) {
       + `<button type="button" class="btn btn-ghost btn-sm" data-action="history-bulk-clear">Clear</button>`;
   }
   if (all) {
-    const open = SA.historyRows ? SA.historyRows.size : 0;
+    const open = historyOpenRows.size;
     all.disabled = open === 0;
     all.checked = open > 0 && n === open;
     all.indeterminate = n > 0 && n < open;

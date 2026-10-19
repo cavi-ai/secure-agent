@@ -98,6 +98,9 @@ var (
 		event.KindPluginAction, event.KindProxyHit, event.KindToolCall, event.KindTurn, event.KindModelCall)
 	sessionActivityIndexSQL = `CREATE INDEX IF NOT EXISTS idx_events_session_activity ON events(session_id, kind, ` + timestampOrderExpr("ts") + `, ts)
 		WHERE kind IN (` + sessionActivityKinds + `)`
+	// A session report reads one session's events in instant order
+	// (sessionEventsSQL); this index serves that order without a sort.
+	sessionTimeIndexSQL = `CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_id, ` + timestampOrderExpr("ts") + `, id)`
 	// Prefix each candidate with a fixed-width UTC sort key. Strip that key
 	// after MAX so callers receive the original RFC3339 timestamp.
 	harnessActivitySQL = fmt.Sprintf(`SELECT s.harness,
@@ -130,6 +133,12 @@ type Store struct {
 	// lastPrune gates the insert-driven prune to pruneMinInterval, so a
 	// high-rate producer does not trigger it every 1000 inserts.
 	lastPrune time.Time
+	// retaining is set while an insert-driven retention pass runs beside
+	// persistence; retention lets Close wait for it. closed (under mu) stops
+	// new passes once Close begins.
+	retaining atomic.Bool
+	retention sync.WaitGroup
+	closed    bool
 	// Per-kind time-based retention. Socket churn (conn open/close) ages out
 	// in hours; security-relevant kinds keep days. Count-based pruning stays
 	// as a backstop — a busy machine must never let conn noise evict the
@@ -148,7 +157,18 @@ type Store struct {
 	// (Unix ns) of the newest ES event the drain loop has finished with.
 	fileFeed       atomic.Bool
 	fileFeedNewest atomic.Int64
+	// flagGen advances on every write to flags or advisor verdicts. Writers
+	// bump it after the write commits, so a reader that loads it before
+	// querying never pairs a newer value with older rows.
+	flagGen atomic.Uint64
 }
+
+// FlagGeneration changes after every write to flags or advisor verdicts, so
+// a caller can reuse a flag read until it does.
+func (s *Store) FlagGeneration() uint64 { return s.flagGen.Load() }
+
+// flagsChanged records a write to flags or advisor verdicts (caller holds mu).
+func (s *Store) flagsChanged() { s.flagGen.Add(1) }
 
 // SetAllowlistSource wires the operator allowlist (agent -> hosts) that
 // TrendFor reports as AllowedFor.
@@ -362,6 +382,7 @@ func (s *Store) PutFlag(fl model.Flag) (result WriteResult, err error) {
 		return result, err
 	}
 	result.Changed = true
+	s.flagsChanged()
 	if fl.Rule == "sensitive-read-then-connect" {
 		_, reviewErr := s.observeFindingReviewLocked(fl, model.AssessFinding(fl))
 		result.HealthChanged = s.noteWrite("finding reviews", reviewErr) || result.HealthChanged
@@ -486,52 +507,120 @@ func (s *Store) PutEvent(e event.Event) (result WriteResult, err error) {
 	}
 
 	s.insertCount++
-	if s.insertCount%1000 == 0 && time.Since(s.lastPrune) >= pruneMinInterval {
-		s.pruneEventsLocked()
-		s.pruneRollupLocked()
-		s.pruneSessionsLocked()
-		refreshPlannerStats(s.db)
+	if s.insertCount%1000 == 0 && time.Since(s.lastPrune) >= pruneMinInterval && !s.closed && s.retaining.CompareAndSwap(false, true) {
 		s.lastPrune = time.Now()
+		s.retention.Add(1)
+		go func() {
+			defer s.retention.Done()
+			defer s.retaining.Store(false)
+			s.retain()
+		}()
 	}
 	return result, err
 }
 
-func (s *Store) PruneEvents() {
+// retain applies every retention pass. It runs beside persistence, not
+// inside it: each statement takes mu on its own.
+func (s *Store) retain() {
+	s.PruneEvents()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pruneEventsLocked()
+	s.pruneRollupLocked()
+	s.pruneSessionsLocked()
+	refreshPlannerStats(s.db)
 }
 
-func (s *Store) pruneEventsLocked() {
+// pruneBatch is the most rows one retention statement deletes, so no
+// statement holds mu for long while a backlog drains.
+var pruneBatch = 5000
+
+// Each kind keeps its newest budget rows; record rows keep their own newest
+// recordBudget. The cutoff is the id of the budget-th newest row.
+const (
+	kindCutoffSQL       = `SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?`
+	recordCutoffSQL     = `SELECT id FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?`
+	kindBudgetCondSQL   = `kind = ? AND record = 0 AND id < ?`
+	recordBudgetCondSQL = `kind = ? AND record = 1 AND id < ?`
+)
+
+// PruneEvents applies event retention one bounded statement at a time, each
+// under mu, so event persistence and reads interleave with a long prune.
+func (s *Store) PruneEvents() {
 	// Time-based per kind first (instantBeforeSQL normalizes any legacy
 	// local-offset ts values), then per-kind row budgets as a pure backstop.
 	// Every kind present in the table is capped on its own budget (kindBudgets, else
 	// defaultKindBudget), so one kind's volume never evicts another kind's
 	// rows. Time retention still applies to every kind.
-	conn := s.connRetention
+	s.mu.Lock()
+	conn, other := s.connRetention, s.eventRetention
+	s.mu.Unlock()
 	if conn <= 0 {
 		conn = DefaultConnEventRetention
 	}
-	other := s.eventRetention
 	if other <= 0 {
 		other = DefaultEventRetention
 	}
+	// A store that stops pruning grows without bound: the first failure is
+	// reported in write health and clears on the next clean prune.
+	var pruneErr error
+	defer func() {
+		s.mu.Lock()
+		s.noteWrite("event retention", pruneErr)
+		s.mu.Unlock()
+	}()
+	keep := func(err error) {
+		if pruneErr == nil {
+			pruneErr = err
+		}
+	}
 	now := time.Now().UTC()
 	connKinds := []any{int(event.KindConnOpen), int(event.KindConnClose)}
-	_, _ = s.db.Exec(`DELETE FROM events WHERE kind IN (?, ?) AND `+instantBeforeSQL("ts"),
-		append(connKinds, instantBound(now.Add(-conn))...)...)
-	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND `+instantBeforeSQL("ts"),
-		append(connKinds, instantBound(now.Add(-other))...)...)
+	keep(s.deleteEventsBatched(`kind IN (?, ?) AND `+instantBeforeSQL("ts"), append(connKinds, instantBound(now.Add(-conn))...)...))
+	keep(s.deleteEventsBatched(`kind NOT IN (?, ?) AND `+instantBeforeSQL("ts"), append(connKinds, instantBound(now.Add(-other))...)...))
+	s.mu.Lock()
 	s.pruneHookRunsLocked(now.Add(-other))
-	// Distinct kinds by index skip-scan: one MIN(kind) seek per kind.
+	kinds, err := s.eventKindsLocked()
+	s.mu.Unlock()
+	if err != nil {
+		keep(err)
+		return
+	}
+	// Fewer rows than the budget leave no cutoff and delete nothing. Record
+	// rows keep their own budget, so the security record outlives a build's
+	// file flood.
+	for _, k := range kinds {
+		for _, b := range []struct {
+			cutoff, cond string
+			budget       int
+		}{{kindCutoffSQL, kindBudgetCondSQL, kindBudget(k)}, {recordCutoffSQL, recordBudgetCondSQL, recordBudget}} {
+			s.mu.Lock()
+			var cutoff int64
+			err := s.db.QueryRow(b.cutoff, k, b.budget-1).Scan(&cutoff)
+			s.mu.Unlock()
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				keep(err)
+				continue
+			}
+			keep(s.deleteEventsBatched(b.cond, k, cutoff))
+		}
+	}
+}
+
+// eventKindsLocked lists the kinds in the table by index skip-scan: one
+// MIN(kind) seek per kind (caller holds mu).
+func (s *Store) eventKindsLocked() ([]int, error) {
 	rows, err := s.db.Query(`WITH RECURSIVE k(v) AS (
 			SELECT MIN(kind) FROM events
 			UNION ALL
 			SELECT (SELECT MIN(kind) FROM events WHERE kind > k.v) FROM k WHERE k.v IS NOT NULL)
 		SELECT v FROM k WHERE v IS NOT NULL`)
 	if err != nil {
-		return
+		return nil, err
 	}
+	defer rows.Close()
 	var kinds []int
 	for rows.Next() {
 		var k int
@@ -542,16 +631,25 @@ func (s *Store) pruneEventsLocked() {
 	if err := rows.Err(); err != nil {
 		log.Printf("store: prune kinds: %v", err)
 	}
-	rows.Close()
-	// Keep each kind's newest budget rows: delete below the budget-th newest
-	// id, except record rows. Fewer rows than the budget yield a NULL cutoff
-	// and delete nothing. Record rows then keep their own newest
-	// recordBudget, so the security record outlives a build's file flood.
-	for _, k := range kinds {
-		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND record = 0 AND id <
-			(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, k, k, kindBudget(k)-1)
-		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND record = 1 AND id <
-			(SELECT id FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?)`, k, k, recordBudget-1)
+	return kinds, nil
+}
+
+// deleteEventsBatched deletes the events cond selects, pruneBatch rows per
+// statement, taking mu for each statement.
+func (s *Store) deleteEventsBatched(cond string, args ...any) error {
+	q := `DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ` + cond + ` LIMIT ?)`
+	args = append(args[:len(args):len(args)], pruneBatch)
+	for {
+		s.mu.Lock()
+		res, err := s.db.Exec(q, args...)
+		s.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil || n < int64(pruneBatch) {
+			return err
+		}
 	}
 }
 
@@ -749,6 +847,9 @@ func (s *Store) AcknowledgeRuleHost(rule, host, agent string) int {
 			n++
 		}
 	}
+	if n > 0 {
+		s.flagsChanged()
+	}
 	return n
 }
 
@@ -816,6 +917,7 @@ func (s *Store) AcknowledgeFlag(id string) bool {
 	}
 	n, _ := res.RowsAffected()
 	if n > 0 {
+		s.flagsChanged()
 		s.syncLegacyReviewsLocked([]string{id})
 	}
 	return n > 0
@@ -864,6 +966,9 @@ func (s *Store) AcknowledgeFlagsReason(ids []string, reason string) int {
 		log.Printf("store: acknowledge flags commit: %v", err)
 		return 0
 	}
+	if n > 0 {
+		s.flagsChanged()
+	}
 	s.syncLegacyReviewsLocked(ids)
 	return n
 }
@@ -880,6 +985,9 @@ func (s *Store) ReattributeFlags(pid int32, agent string, since time.Time) int {
 		return 0
 	}
 	n, _ := res.RowsAffected()
+	if n > 0 {
+		s.flagsChanged()
+	}
 	return int(n)
 }
 
@@ -919,6 +1027,7 @@ func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
 	}
 	n, _ := res.RowsAffected()
 	if n == 1 {
+		s.flagsChanged()
 		if f, ok := s.getFlagLocked(id); ok && f.Rule == "sensitive-read-then-connect" {
 			_, reviewErr := s.observeFindingReviewLocked(f, model.AssessFinding(f))
 			s.noteWrite("finding reviews", reviewErr)
@@ -929,9 +1038,8 @@ func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
 
 // GetFlag distinguishes a missing row from an unavailable or malformed
 // detail, using the same checked decoder as flag history.
+// GetFlag is one read statement, so it does not take mu.
 func (s *Store) GetFlag(id string) (model.Flag, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.getFlagResultLocked(id)
 }
 
@@ -971,9 +1079,7 @@ func (s *Store) GetFlagWithAdvisor(id string) (model.Flag, bool) {
 	}
 	flags := []model.Flag{fl}
 	_ = s.AttachFindingReviewIDs(flags)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.attachAdvisorLocked(flags)
+	s.attachAdvisor(flags)
 	return flags[0], true
 }
 
@@ -1014,12 +1120,11 @@ func flagQuery(f FlagFilter) (string, []any) {
 }
 
 // QueryFlags never returns partial flags after a query, decode or
-// cursor error. Nullable optional fields in older schemas remain valid.
+// cursor error. Nullable optional fields in older schemas remain valid. It
+// is one read statement plus advice lookups, so it does not take mu: WAL
+// readers see the last committed state while a write is in progress.
 func (s *Store) QueryFlags(f FlagFilter) (out []model.Flag, readErr error) {
 	defer func() { s.noteRead("flags", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	q, args := flagQuery(f)
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
@@ -1029,7 +1134,7 @@ func (s *Store) QueryFlags(f FlagFilter) (out []model.Flag, readErr error) {
 	if err != nil {
 		return nil, err
 	}
-	s.attachAdvisorLocked(flags)
+	s.attachAdvisor(flags)
 	return flags, nil
 }
 
@@ -1227,26 +1332,84 @@ func (s *Store) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict
 	if inserted != 1 {
 		return fmt.Errorf("advisor verdict insert affected %d rows", inserted)
 	}
+	s.flagsChanged()
 	return nil
 }
 
-// attachAdvisorLocked joins stored verdicts onto flags (caller holds mu).
-func (s *Store) attachAdvisorLocked(flags []model.Flag) {
+// attachAdvisor joins stored verdicts onto flags. It only reads, so it needs
+// no mu.
+func (s *Store) attachAdvisor(flags []model.Flag) {
 	if len(flags) == 0 {
 		return
 	}
-	var readErr error
+	ids := make([]string, len(flags))
 	for i := range flags {
-		v, ok, err := s.advisorVerdictResultLocked(flags[i].ID, "flag")
-		if readErr == nil {
-			readErr = err
-		}
-		if ok {
-			vv := v
-			flags[i].Advisor = &vv
+		ids[i] = flags[i].ID
+	}
+	verdicts, readErr := s.advisorVerdicts(ids, "flag")
+	for i := range flags {
+		if v, ok := verdicts[flags[i].ID]; ok {
+			flags[i].Advisor = &v
 		}
 	}
 	s.noteRead(advisorReadKind("flag"), readErr)
+}
+
+// advisorVerdictBatch bounds one verdict query's IN list well under SQLite's
+// host-parameter limit.
+const advisorVerdictBatch = 500
+
+// advisorVerdicts reads the verdicts of ids with one query per batch; it only
+// reads, so it needs no mu. A row that does not decode is left out and the
+// first error returned; the other verdicts are kept. Missing advice is not an
+// error.
+func (s *Store) advisorVerdicts(ids []string, kind string) (map[string]model.AdvisorVerdict, error) {
+	verdicts := make(map[string]model.AdvisorVerdict, len(ids))
+	unique := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			unique = append(unique, id)
+		}
+	}
+	var readErr error
+	note := func(err error) {
+		if readErr == nil {
+			readErr = err
+		}
+	}
+	for start := 0; start < len(unique); start += advisorVerdictBatch {
+		batch := unique[start:min(start+advisorVerdictBatch, len(unique))]
+		args := make([]any, 0, len(batch)+1)
+		args = append(args, kind)
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		rows, err := s.db.Query(`SELECT subject_id, `+advisorVerdictColumns+` FROM advisor_verdicts
+			WHERE kind = ? AND subject_id IN (?`+strings.Repeat(", ?", len(batch)-1)+`)`, args...)
+		if err != nil {
+			note(err)
+			continue
+		}
+		for rows.Next() {
+			var id string
+			var r advisorVerdictRow
+			if err := rows.Scan(append([]any{&id}, r.dest()...)...); err != nil {
+				note(err)
+				continue
+			}
+			v, err := r.verdict()
+			if err != nil {
+				note(err)
+				continue
+			}
+			verdicts[id] = v
+		}
+		note(rows.Err())
+		rows.Close()
+	}
+	return verdicts, readErr
 }
 
 // advisorVerdictLocked fetches one verdict (caller holds mu).
@@ -1268,37 +1431,57 @@ func advisorReadKind(kind string) string {
 }
 
 func (s *Store) advisorVerdictResultLocked(subjectID, kind string) (model.AdvisorVerdict, bool, error) {
-	var v model.AdvisorVerdict
-	var conf sql.NullFloat64
-	var assessment, action, modelName, created sql.NullString
-	var rationale string
-	err := s.db.QueryRow(
-		`SELECT assessment, confidence, rationale, suggested_action, model, created_at
-		 FROM advisor_verdicts WHERE subject_id = ? AND kind = ?`, subjectID, kind,
-	).Scan(&assessment, &conf, &rationale, &action, &modelName, &created)
+	var r advisorVerdictRow
+	err := s.db.QueryRow(`SELECT `+advisorVerdictColumns+` FROM advisor_verdicts WHERE subject_id = ? AND kind = ?`,
+		subjectID, kind).Scan(r.dest()...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.AdvisorVerdict{}, false, nil
 	}
 	if err != nil {
 		return model.AdvisorVerdict{}, false, err
 	}
-	if math.IsNaN(conf.Float64) || math.IsInf(conf.Float64, 0) {
-		return model.AdvisorVerdict{}, false, fmt.Errorf("invalid advisor confidence")
+	v, err := r.verdict()
+	if err != nil {
+		return model.AdvisorVerdict{}, false, err
 	}
-	if created.String != "" {
-		v.CreatedAt, err = time.Parse(time.RFC3339Nano, created.String)
-		if err != nil {
-			return model.AdvisorVerdict{}, false, fmt.Errorf("invalid advisor timestamp: %w", err)
-		}
-	}
-	v.Assessment = assessment.String
-	if conf.Valid {
-		v.Confidence = conf.Float64
-	}
-	v.Rationale = rationale
-	v.SuggestedAction = action.String
-	v.Model = modelName.String
 	return v, true, nil
+}
+
+const advisorVerdictColumns = `assessment, confidence, rationale, suggested_action, model, created_at`
+
+// advisorVerdictRow is one advisor_verdicts row as scanned; every column but
+// rationale may be NULL in older rows.
+type advisorVerdictRow struct {
+	conf                                   sql.NullFloat64
+	assessment, action, modelName, created sql.NullString
+	rationale                              string
+}
+
+// dest lists the scan targets in advisorVerdictColumns order.
+func (r *advisorVerdictRow) dest() []any {
+	return []any{&r.assessment, &r.conf, &r.rationale, &r.action, &r.modelName, &r.created}
+}
+
+func (r *advisorVerdictRow) verdict() (model.AdvisorVerdict, error) {
+	if math.IsNaN(r.conf.Float64) || math.IsInf(r.conf.Float64, 0) {
+		return model.AdvisorVerdict{}, fmt.Errorf("invalid advisor confidence")
+	}
+	var v model.AdvisorVerdict
+	if r.created.String != "" {
+		at, err := time.Parse(time.RFC3339Nano, r.created.String)
+		if err != nil {
+			return model.AdvisorVerdict{}, fmt.Errorf("invalid advisor timestamp: %w", err)
+		}
+		v.CreatedAt = at
+	}
+	v.Assessment = r.assessment.String
+	if r.conf.Valid {
+		v.Confidence = r.conf.Float64
+	}
+	v.Rationale = r.rationale
+	v.SuggestedAction = r.action.String
+	v.Model = r.modelName.String
+	return v, nil
 }
 
 // eventQuery builds QueryEvents' statement. A host filter repeats the index's
@@ -1335,12 +1518,15 @@ func eventRecordQuery(f EventFilter, withID bool, beforeID int64) (string, []any
 		q += " AND remote_host = ? AND remote_host != ''"
 		args = append(args, f.RemoteHost)
 	}
+	// The unary + (a no-op on the value) keeps idx_events_session_time from
+	// serving the time bounds: newest-first paging by id stops at LIMIT on the
+	// session and kind indexes, where a time-range seek sorts the whole window.
 	if f.Since != "" {
-		q += " AND " + timestampOrderExpr("ts") + " >= " + timestampOrderExpr(":event_since")
+		q += " AND " + timestampOrderExpr("+ts") + " >= " + timestampOrderExpr(":event_since")
 		args = append(args, sql.Named("event_since", f.Since))
 	}
 	if f.Until != "" {
-		q += " AND " + timestampOrderExpr("ts") + " <= " + timestampOrderExpr(":event_until")
+		q += " AND " + timestampOrderExpr("+ts") + " <= " + timestampOrderExpr(":event_until")
 		args = append(args, sql.Named("event_until", f.Until))
 	}
 	q += " ORDER BY id DESC LIMIT ?"
@@ -1352,9 +1538,6 @@ func eventRecordQuery(f EventFilter, withID bool, beforeID int64) (string, []any
 // incomplete reads. Decode and cursor errors never return partial evidence.
 func (s *Store) QueryEvents(f EventFilter) (out []event.Event, readErr error) {
 	defer func() { s.noteRead("events", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	q, args := eventQuery(f)
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
@@ -2049,6 +2232,10 @@ func mergeResourceActivities(existing, additional []resource.EpisodeActivity) []
 
 func (s *Store) Close() error {
 	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	s.retention.Wait()
+	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.flagMirror != nil {
@@ -2279,6 +2466,9 @@ func (s *Store) ReclassifyReadConnectSeverity(ids []string) int {
 		}
 		count, _ := res.RowsAffected()
 		n += int(count)
+	}
+	if n > 0 {
+		s.flagsChanged()
 	}
 	return n
 }

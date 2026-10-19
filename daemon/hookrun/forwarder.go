@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
 // ForwarderReport is an optional host observation, not a hook completion or a
@@ -32,9 +34,7 @@ func (r ForwarderReport) Validate() error {
 	if r.Version == 1 && r.Health != nil || r.Version == 2 && (r.Health == nil || !r.Health.valid(r.Pending) || r.State != r.Health.State()) {
 		return errors.New("invalid hook forwarder health")
 	}
-	switch r.Harness {
-	case "claude", "codex", "openclaw", "hermes", "opencode":
-	default:
+	if !model.IsHookHarness(r.Harness) {
 		return errors.New("unsupported hook forwarder harness")
 	}
 	if !identifier.MatchString(r.ForwarderID) || (r.SessionID != "" && !identifier.MatchString(r.SessionID)) {

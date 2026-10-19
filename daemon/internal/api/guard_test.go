@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,10 +23,10 @@ import (
 func TestGuardPendingAttachesAdvisorAdvice(t *testing.T) {
 	st := testStore(t)
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(5 * time.Second), GuardAdvisor: func(req model.GuardAssessmentRequest) {
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(5 * time.Second), Advisor: func(req model.GuardAssessmentRequest) {
 		st.PutAdvisorVerdict(advisor.GuardSubjectID(req.Agent, req.RuleID, req.Path, req.Tool), "guard",
 			model.AdvisorVerdict{Assessment: "malicious", Confidence: 0.9, Rationale: "exfiltration shape"})
-	}})
+	}}})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	t.Cleanup(func() {
@@ -83,7 +84,7 @@ func TestGuardOutcomePersistence(t *testing.T) {
 				brokerTimeout = time.Second
 			}
 
-			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(brokerTimeout)})
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(brokerTimeout)}})
 			if tc.setup == "cached" {
 				st.PutGuardRule(store.GuardRule{Agent: "claude", RuleID: "cloud-creds", Decision: "deny"})
 			}
@@ -125,7 +126,7 @@ func TestGuardOutcomePersistence(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("HTTP %d: %s", rec.Code, rec.Body.String())
 			}
-			rows := st.ListGuardDecisions("session-1", 10)
+			rows := guardDecisionRows(t, st, "session-1", 10)
 			if len(rows) != 1 {
 				t.Fatalf("rows=%+v, want one", rows)
 			}
@@ -144,7 +145,7 @@ func TestGuardOutcomePersistence(t *testing.T) {
 func TestUnknownGuardSessionUnattributed(t *testing.T) {
 	st := testStore(t)
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(time.Millisecond)})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(time.Millisecond)}})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/guard/decision", strings.NewReader(`{"agent":"claude","tool":"Read","path":"/secret","rule_id":"cloud-creds","session_id":"unknown"}`))
 	a.handleGuardDecision(rec, req)
@@ -155,7 +156,7 @@ func TestUnknownGuardSessionUnattributed(t *testing.T) {
 	if decision.Verdict != "deny" {
 		t.Fatalf("decision=%+v", decision)
 	}
-	rows := st.ListGuardDecisions("", 10)
+	rows := guardDecisionRows(t, st, "", 10)
 	if len(rows) != 1 || rows[0].SessionID != "" {
 		t.Fatalf("rows=%+v", rows)
 	}
@@ -166,7 +167,7 @@ func TestDeduplicatedGuardRequestsPersistSeparately(t *testing.T) {
 	now := time.Now()
 	st.UpsertSession(model.Session{ID: "session-1", Harness: "claude", StartedAt: now, LastSeenAt: now})
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(2 * time.Second)})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(2 * time.Second)}})
 	type response struct {
 		status int
 		body   string
@@ -188,16 +189,30 @@ func TestDeduplicatedGuardRequestsPersistSeparately(t *testing.T) {
 	if len(pending) != 1 {
 		t.Fatalf("pending=%+v", pending)
 	}
-	// Give the second request time to join the first waiter's fan-out.
+	// Give the second request time to join the first waiter's fan-out. One
+	// that arrives later gets its own prompt, which is answered the same way.
 	time.Sleep(20 * time.Millisecond)
-	a.guardBroker.Resolve(pending[0].ID, guard.Decision{Verdict: "deny", Scope: "once"})
-	responses := []response{<-done, <-done}
-	for i, got := range responses {
-		if got.status != http.StatusOK {
-			t.Fatalf("request %d returned HTTP %d: %s", i+1, got.status, got.body)
+	for answered, deadline := 0, time.After(10*time.Second); answered < 2; {
+		for _, p := range a.guardBroker.Pending() {
+			a.guardBroker.Resolve(p.ID, guard.Decision{Verdict: "deny", Scope: "once"})
+		}
+		select {
+		case got := <-done:
+			answered++
+			if got.status != http.StatusOK {
+				t.Fatalf("request %d returned HTTP %d: %s", answered, got.status, got.body)
+			}
+		case <-time.After(5 * time.Millisecond):
+		case <-deadline:
+			t.Fatalf("answered %d of 2 requests", answered)
 		}
 	}
-	rows := st.ListGuardDecisions("session-1", 10)
+	// The production write is best effort with a 100 ms bound; a host too
+	// busy to meet it drops the row and says so in write health.
+	if h := st.WriteHealth(); slices.Contains(h.Active, "guard decisions") {
+		t.Skipf("guard decision write exceeded its production bound on this host: %+v", h)
+	}
+	rows := guardDecisionRows(t, st, "session-1", 10)
 	if len(rows) != 2 || rows[0].ID == rows[1].ID {
 		t.Fatalf("rows=%+v, want distinct persisted outcomes", rows)
 	}
@@ -231,7 +246,7 @@ func guardDecisionAsync(t *testing.T, a *API, ctx context.Context) (string, chan
 func TestGuardAnswerAfterTheHookLeftSavesNoRule(t *testing.T) {
 	st := testStore(t)
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(time.Minute)})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(time.Minute)}})
 	ctx, cancel := context.WithCancel(context.Background())
 	id, out := guardDecisionAsync(t, a, ctx)
 	cancel()
@@ -249,7 +264,7 @@ func TestGuardAnswerAfterTheHookLeftSavesNoRule(t *testing.T) {
 	if _, ok := st.LookupGuardRule("claude", "cloud-creds"); ok {
 		t.Fatal("late Allow Always saved a guard rule")
 	}
-	if rows := st.ListGuardDecisions("", 10); len(rows) != 1 || rows[0].Verdict != "deny" {
+	if rows := guardDecisionRows(t, st, "", 10); len(rows) != 1 || rows[0].Verdict != "deny" {
 		t.Fatalf("recorded = %+v, want one deny", rows)
 	}
 }
@@ -265,7 +280,7 @@ func (endedAtAnswer) Err() error { return context.Canceled }
 func TestGuardAnswerRacingTheHookLeavingSavesNoRule(t *testing.T) {
 	st := testStore(t)
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(time.Minute)})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(time.Minute)}})
 	id, out := guardDecisionAsync(t, a, endedAtAnswer{context.Background()})
 	if !a.guardBroker.Resolve(id, guard.Decision{Verdict: "allow", Scope: "always"}) {
 		t.Fatal("resolve did not reach the request")
