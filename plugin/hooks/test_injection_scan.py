@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import atexit
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -9,16 +11,42 @@ sys.setrecursionlimit(20000)  # the deep-nesting case must survive json.dumps he
 
 HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "injection_scan.py")
 
+# Hermetic HOME: the hook appends every call to the activity log the running
+# daemon tails, so each spawn gets a temp HOME, activity log and socket.
+HOME = tempfile.mkdtemp(prefix="injection-scan-test-home-")
+atexit.register(shutil.rmtree, HOME, True)
+ACTIVITY_LOG = os.path.join(HOME, "activity.jsonl")
+
+
+def hook_env(**overrides: str) -> dict:
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SECURE_AGENT_")}
+    env.update(HOME=HOME, SECURE_AGENT_SOCK=os.path.join(HOME, "daemon.sock"),
+               SECURE_AGENT_ACTIVITY_LOG=ACTIVITY_LOG)
+    env.update(overrides)
+    return env
+
+
+def logged_records() -> int:
+    if not os.path.exists(ACTIVITY_LOG):
+        return 0
+    with open(ACTIVITY_LOG) as f:
+        return sum(1 for line in f if line.strip())
+
+
 def run(payload: dict) -> dict:
+    before = logged_records()
     p = subprocess.run(
         [sys.executable, HOOK],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
+        env=hook_env(),
         timeout=5,
     )
     if p.returncode != 0:
         raise AssertionError(f"hook exited {p.returncode}: {p.stderr}")
+    if logged_records() <= before:
+        raise AssertionError(f"hook did not log to the test's activity log {ACTIVITY_LOG}")
     return json.loads(p.stdout or "{}")
 
 def main():
@@ -74,8 +102,7 @@ def main():
     # 4. Same spawn also appends activity.jsonl (one python3 per PostToolUse).
     with tempfile.TemporaryDirectory() as tmpdir:
         logfile = os.path.join(tmpdir, "activity.jsonl")
-        env = os.environ.copy()
-        env["SECURE_AGENT_ACTIVITY_LOG"] = logfile
+        env = hook_env(SECURE_AGENT_ACTIVITY_LOG=logfile)
         p = subprocess.run(
             [sys.executable, HOOK],
             input=json.dumps({
