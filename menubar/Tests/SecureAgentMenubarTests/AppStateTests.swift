@@ -807,6 +807,19 @@ final class WeeklyDigestTests: XCTestCase {
         XCTAssertEqual(AppState.weeklyDigestText(flags7d: 1, blockedLeaks: 2, approvals: 1, openIncidents: 1),
                        "1 flag · 2 blocked leaks · 1 allowlist approval · 1 open incident")
     }
+
+    // The digest goes through the shared notification manager, which needs an
+    // app bundle; the test runner is not one.
+    func testWeeklyDigestOutsideAnAppBundleDoesNotThrow() async {
+        let state = AppState(client: StubDaemonClient())
+        let key = "weeklyDigestLastWeek"
+        let saved = AppPreferences.shared.string(forKey: key)
+        defer { AppPreferences.shared.set(saved, forKey: key) }
+        AppPreferences.shared.removeObject(forKey: key)
+        let monday = Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 19, hour: 9, minute: 15))!
+        await state.maybeSendWeeklyDigest(now: monday)
+        XCTAssertEqual(AppPreferences.shared.string(forKey: key), AppState.currentWeekKey(now: monday))
+    }
 }
 
 
