@@ -36,7 +36,7 @@ func explainTestDeps(t *testing.T, agents ...AgentSummary) Deps {
 
 	dir := t.TempDir()
 
-	return Deps{Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true, Agents: agents} }, Allowlist: correlate.NewAllowlistStore(filepath.Join(dir, "allowlist.json")), Mutes: correlate.NewMuteStore(filepath.Join(dir, "mutes.json")), Guard: guard.NewBroker(time.Minute)}
+	return Deps{Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true, Agents: agents} }, Policy: PolicyDeps{Allowlist: correlate.NewAllowlistStore(filepath.Join(dir, "allowlist.json")), Mutes: correlate.NewMuteStore(filepath.Join(dir, "mutes.json"))}, Guard: GuardDeps{Broker: guard.NewBroker(time.Minute)}}
 }
 
 func explainTestAPI(t *testing.T, agents ...AgentSummary) *API {

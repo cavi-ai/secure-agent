@@ -28,7 +28,7 @@ func TestMuteLoadFailureDoesNotAcknowledgeFlags(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, Mutes: correlate.NewMuteStore(path)})
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, Policy: PolicyDeps{Mutes: correlate.NewMuteStore(path)}})
 			body := `{"rule":"sensitive-read-then-connect","host":"api.example.com"}`
 			request := httptest.NewRequest(method, "/mute?rule=sensitive-read-then-connect&host=api.example.com", strings.NewReader(body))
 			response := httptest.NewRecorder()
@@ -66,7 +66,7 @@ func TestMuteFlowAcknowledgesExistingFlags(t *testing.T) {
 
 	mutes := correlate.NewMuteStore(dir + "/muted.json")
 
-	a := newTestAPI(Deps{SocketPath: dir + "/d.sock", Store: st, Killer: nil, Status: nil, Correlator: correlate.New(nil, nil, config.Config{}, correlate.Hooks{}), Mutes: mutes}) // correlator nil-safe? use New(nil)
+	a := newTestAPI(Deps{SocketPath: dir + "/d.sock", Store: st, Killer: nil, Status: nil, Policy: PolicyDeps{Correlator: correlate.New(nil, nil, config.Config{}, correlate.Hooks{}), Mutes: mutes}}) // correlator nil-safe? use New(nil)
 	if a.mutes == nil {
 		t.Fatal("mute store not set")
 	}
@@ -106,7 +106,7 @@ func TestMuteAgentRoundTrip(t *testing.T) {
 	st.PutFlag(model.Flag{ID: "k2", Rule: "keychain-access", Severity: 1, PID: 9, Agent: "claude"})
 	mutes := correlate.NewMuteStore(dir + "/muted.json")
 
-	a := newTestAPI(Deps{SocketPath: dir + "/d.sock", Store: st, Killer: nil, Status: nil, Mutes: mutes})
+	a := newTestAPI(Deps{SocketPath: dir + "/d.sock", Store: st, Killer: nil, Status: nil, Policy: PolicyDeps{Mutes: mutes}})
 	h := a.buildMux()
 	do := func(method, target, body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()

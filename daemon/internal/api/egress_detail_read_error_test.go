@@ -50,13 +50,13 @@ func TestEgressDetailReadFailurePreventsActionsAndRecovers(t *testing.T) {
 
 			queued := 0
 
-			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, EgressAdvisor: func(e store.EgressEpisode) bool {
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, Advisors: AdvisorDeps{Egress: func(e store.EgressEpisode) bool {
 				queued++
 				if !reflect.DeepEqual(e, baseline) {
 					t.Errorf("advisor received changed evidence: got %+v, want %+v", e, baseline)
 				}
 				return true
-			}})
+			}}})
 			mux := a.buildMux()
 			assess := func() *httptest.ResponseRecorder {
 				w := httptest.NewRecorder()
@@ -128,7 +128,7 @@ func TestEgressDetailMissingAndClosedStore(t *testing.T) {
 
 	queued := 0
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, EgressAdvisor: func(store.EgressEpisode) bool { queued++; return true }})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, Advisors: AdvisorDeps{Egress: func(store.EgressEpisode) bool { queued++; return true }}})
 	mux := a.buildMux()
 	const id = "00000000000000000000000000000000"
 	for _, closed := range []bool{false, true} {

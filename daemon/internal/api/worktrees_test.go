@@ -37,7 +37,7 @@ func TestWorktreesEndpoints(t *testing.T) {
 
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	a := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})})
+	a := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}})
 	mux := a.buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -166,7 +166,7 @@ func TestWorktreeRemoveAsync(t *testing.T) {
 	home, _, _, clean, dirty, _ := worktreeFixture(t)
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}).buildMux()
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}}).buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
@@ -211,7 +211,7 @@ func TestWorktreeRemoveEndpoint(t *testing.T) {
 
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}).buildMux()
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}}).buildMux()
 	post := func(body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/remove", strings.NewReader(body)))
@@ -318,8 +318,8 @@ func TestWorktreeAdviseAndNotes(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	var queued []model.WorktreeAdviceRequest
 	hunter := worktreehunter.New(st, home, worktreehunter.Options{})
-	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: hunter,
-		WorktreeAdvisor: func(r model.WorktreeAdviceRequest) bool { queued = append(queued, r); return true }}).buildMux()
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: hunter},
+		Advisors: AdvisorDeps{Worktree: func(r model.WorktreeAdviceRequest) bool { queued = append(queued, r); return true }}}).buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
@@ -375,7 +375,7 @@ func TestWorktreeAdviseAndNotes(t *testing.T) {
 		t.Fatal("/worktrees/advise must be a console-admitted mutation")
 	}
 
-	unwired := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: hunter}).buildMux()
+	unwired := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: hunter}}).buildMux()
 	rec = httptest.NewRecorder()
 	unwired.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/advise", strings.NewReader(`{"path":"`+dirty+`"}`)))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -401,7 +401,7 @@ func TestWorktreeAskEndpoint(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin:/bin")
 	asker := agentask.New(st, home).WithBinDirs([]string{bin})
 	hunter := worktreehunter.New(st, home, worktreehunter.Options{})
-	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: hunter, Asker: asker}).buildMux()
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: hunter, Asker: asker}}).buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
@@ -473,7 +473,7 @@ func TestWorktreeReviewTrashEndpoint(t *testing.T) {
 	if err != nil || row.State != worktreehunter.StateReview {
 		t.Fatalf("review row: %+v, %v", row, err)
 	}
-	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: hunter}).buildMux()
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: hunter}}).buildMux()
 	post := func(head string) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(map[string]any{"path": clean, "head": head, "reasons": row.Reasons})
 		rec := httptest.NewRecorder()
@@ -527,9 +527,9 @@ func TestWorktreeOrphanEndpoints(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	st.UpsertSession(model.Session{ID: "s-lost", Harness: "claude", Workspace: orphan, Status: model.SessionEnded,
 		StartedAt: time.Now().Add(-72 * time.Hour), LastSeenAt: time.Now().Add(-72 * time.Hour)})
-	deps := Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}
+	deps := Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}}
 	var opened []string
-	deps.OpenPath = func(args ...string) error { opened = append(opened, strings.Join(args, " ")); return nil }
+	deps.System.OpenPath = func(args ...string) error { opened = append(opened, strings.Join(args, " ")); return nil }
 	a := newTestAPI(deps)
 	mux := a.buildMux()
 	do := func(path, body string) *httptest.ResponseRecorder {
@@ -601,8 +601,8 @@ func TestWorktreeAdviseWholeRepository(t *testing.T) {
 	var queued []model.WorktreeAdviceRequest
 	answer, panicOn := true, 0
 	hunter := worktreehunter.New(st, home, worktreehunter.Options{})
-	a := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: hunter,
-		WorktreeAdvisor: func(r model.WorktreeAdviceRequest) bool {
+	a := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: hunter},
+		Advisors: AdvisorDeps{Worktree: func(r model.WorktreeAdviceRequest) bool {
 			mu.Lock()
 			defer mu.Unlock()
 			queued = append(queued, r)
@@ -610,7 +610,7 @@ func TestWorktreeAdviseWholeRepository(t *testing.T) {
 				panic("advisor hook failed")
 			}
 			return answer
-		}})
+		}}})
 	oldPoll := groupAdvisePoll
 	groupAdvisePoll = 5 * time.Millisecond
 	t.Cleanup(func() { groupAdvisePoll = oldPoll })
@@ -742,8 +742,8 @@ func TestWorktreeAdviseWholeRepository(t *testing.T) {
 	// they are now.
 	st2 := testStore(t)
 	t.Cleanup(func() { st2.Close() })
-	fresh := New(Deps{Store: st2, Status: func() Status { return Status{Running: true} }, Worktrees: worktreehunter.New(st2, home, worktreehunter.Options{}),
-		WorktreeAdvisor: func(model.WorktreeAdviceRequest) bool { return true }}).buildMux()
+	fresh := New(Deps{Store: st2, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: worktreehunter.New(st2, home, worktreehunter.Options{})},
+		Advisors: AdvisorDeps{Worktree: func(model.WorktreeAdviceRequest) bool { return true }}}).buildMux()
 	rec = httptest.NewRecorder()
 	fresh.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/repos", strings.NewReader(`{"path":"`+repo+`"}`)))
 	if rec.Code != http.StatusOK {
@@ -755,7 +755,7 @@ func TestWorktreeAdviseWholeRepository(t *testing.T) {
 		t.Fatalf("group ask with no askable rows: %d %s, want 409", rec.Code, rec.Body.String())
 	}
 
-	unwired := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: hunter}).buildMux()
+	unwired := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: hunter}}).buildMux()
 	rec = httptest.NewRecorder()
 	unwired.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/advise", strings.NewReader(`{"repo":"`+repo+`"}`)))
 	if rec.Code != http.StatusServiceUnavailable {

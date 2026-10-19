@@ -66,7 +66,7 @@ func TestServeListenerFailureClosesAcceptedStream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	a := newTestAPI(Deps{SocketPath: path, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{} }, DeltaHub: NewDeltaHub()})
+	a := newTestAPI(Deps{SocketPath: path, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{} }, Telemetry: TelemetryDeps{DeltaHub: NewDeltaHub()}})
 	defer a.deltaHub.Close()
 	done := make(chan error, 1)
 	go func() { done <- a.ServeListener(ctx, listener) }()

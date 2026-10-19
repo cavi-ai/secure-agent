@@ -77,8 +77,8 @@ func TestGateAllowsPinnedUIMutation(t *testing.T) {
 	// Checker set: all connections resolve to this process (owner uid).
 	// Pin this process as the menubar UI; the request must then be allowed
 	// and reach the killer (a foreign uid would be refused by classify).
-	deps.PeerChecker = loopbackChecker{NewPeerChecker()}
-	deps.AgentPIDs = nil
+	deps.Peers.Checker = loopbackChecker{NewPeerChecker()}
+	deps.Peers.AgentPIDs = nil
 	a := newTestAPI(deps)
 	a.peerRole.UIPID = int32(os.Getpid())
 	ctx, cancel := contextWithCancel()
@@ -103,8 +103,8 @@ func TestGateAllowsOwnerReadsWithCheckerSet(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_gate2_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
 	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }}
-	deps.PeerChecker = loopbackChecker{NewPeerChecker()}
-	deps.AgentPIDs = nil
+	deps.Peers.Checker = loopbackChecker{NewPeerChecker()}
+	deps.Peers.AgentPIDs = nil
 	a := newTestAPI(deps)
 	ctx, cancel := contextWithCancel()
 	defer cancel()
@@ -125,9 +125,9 @@ func TestGateAllowsGuardDecisionForOwner(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_gate3_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
 
-	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: newTestBroker()}
-	deps.PeerChecker = loopbackChecker{NewPeerChecker()}
-	deps.AgentPIDs = nil
+	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: newTestBroker()}}
+	deps.Peers.Checker = loopbackChecker{NewPeerChecker()}
+	deps.Peers.AgentPIDs = nil
 	a := newTestAPI(deps)
 	ctx, cancel := contextWithCancel()
 	defer cancel()
@@ -159,7 +159,7 @@ func TestKillEndpointRejectsNonAgentPIDWhenAllowlistSet(t *testing.T) {
 	// No peer checker (open, as in tests) but the agent allowlist is active —
 	// the kill restriction is independent of peer gating.
 
-	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: fk, Status: func() Status { return Status{Running: true} }, AgentPIDs: func() map[int32]struct{} { return map[int32]struct{}{42: {}} }})
+	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: fk, Status: func() Status { return Status{Running: true} }, Peers: PeerDeps{AgentPIDs: func() map[int32]struct{} { return map[int32]struct{}{42: {}} }}})
 	if a.peerRole != nil {
 		a.peerRole.AgentPIDs = func() map[int32]struct{} { return map[int32]struct{}{42: {}} }
 	}
@@ -209,8 +209,8 @@ func TestGateRejectsNonUIMutationWhenUIPinned(t *testing.T) {
 	defer os.Remove(sock)
 	fk := &fakeKiller{}
 	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: fk, Status: func() Status { return Status{Running: true} }}
-	deps.PeerChecker = NewPeerChecker()
-	deps.AgentPIDs = nil
+	deps.Peers.Checker = NewPeerChecker()
+	deps.Peers.AgentPIDs = nil
 	a := newTestAPI(deps)
 	a.peerRole.UIPID = int32(os.Getpid()) + 9999 // a pid that is NOT this test process
 	ctx, cancel := context.WithCancel(context.Background())
@@ -251,8 +251,8 @@ func TestGateDispositionEndpointsPolicy(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_dispo_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
 	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }}
-	deps.PeerChecker = NewPeerChecker()
-	deps.AgentPIDs = nil
+	deps.Peers.Checker = NewPeerChecker()
+	deps.Peers.AgentPIDs = nil
 	a := newTestAPI(deps)
 	a.peerRole.UIPID = int32(os.Getpid()) + 9999 // not this process
 	ctx, cancel := context.WithCancel(context.Background())
@@ -319,8 +319,8 @@ func TestGateDispositionEndpointsAsPinnedUI(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_dispoui_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
 	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }}
-	deps.PeerChecker = NewPeerChecker()
-	deps.AgentPIDs = nil
+	deps.Peers.Checker = NewPeerChecker()
+	deps.Peers.AgentPIDs = nil
 	a := newTestAPI(deps)
 	a.peerRole.UIPID = int32(os.Getpid())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -366,11 +366,11 @@ func TestGateAgentRolePolicy(t *testing.T) {
 	defer os.Remove(sock)
 	fk := &fakeKiller{}
 
-	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: fk, Status: func() Status { return Status{Running: true} }, Guard: newTestBroker()}
+	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: fk, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: newTestBroker()}}
 	// Classify this test process's connections as a tagged agent.
 	selfPID := int32(os.Getpid())
-	deps.PeerChecker = loopbackChecker{NewPeerChecker()}
-	deps.AgentPIDs = func() map[int32]struct{} {
+	deps.Peers.Checker = loopbackChecker{NewPeerChecker()}
+	deps.Peers.AgentPIDs = func() map[int32]struct{} {
 		return map[int32]struct{}{selfPID: {}}
 	}
 	a := newTestAPI(deps)
@@ -445,8 +445,8 @@ func TestGateAllowsOwnerMutationWithoutUIPin(t *testing.T) {
 	defer os.Remove(sock)
 	fk := &fakeKiller{}
 	deps := Deps{SocketPath: sock, Store: testStore(t), Killer: fk, Status: func() Status { return Status{Running: true} }}
-	deps.PeerChecker = NewPeerChecker()
-	deps.AgentPIDs = nil
+	deps.Peers.Checker = NewPeerChecker()
+	deps.Peers.AgentPIDs = nil
 	a := newTestAPI(deps)
 	// UIPID stays 0.
 	ctx, cancel := context.WithCancel(context.Background())

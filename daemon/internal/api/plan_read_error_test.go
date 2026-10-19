@@ -26,7 +26,7 @@ func TestStoredPlanReadFailureAndRecovery(t *testing.T) {
 
 			rec := &planRecorder{ready: true, pending: map[string]bool{}}
 
-			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Plan: rec.funcs()})
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Advisors: AdvisorDeps{Plan: rec.funcs()}})
 			const subject = "flag:plan-source"
 			if code, response := planCall(t, a, http.MethodGet, subject); code != http.StatusOK || response.Status != "none" || response.Plan != nil {
 				t.Fatalf("healthy missing plan: %d %+v", code, response)

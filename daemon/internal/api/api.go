@@ -315,50 +315,83 @@ type Deps struct {
 	Killer     Killer
 	Status     StatusFunc
 
-	// Local process and path operations use system implementations by default.
-	OpenPath     func(...string) error
-	TCPClientPID func(string) (int32, error)
-
-	// Resources / control (optional).
-	Resources             func() resource.Snapshot
-	ResourceControl       *resource.Controller
-	ResourcePolicyUpdater func(config.ResourceControlConfig) error
-
 	// Firewall (optional).
 	Firewall FirewallControl
 
-	// Directory guard (optional).
-	Guard         *guard.Broker
-	GuardIdentity func(int32, string) (model.DecisionScope, bool)
+	System    SystemDeps
+	Resources ResourceDeps
+	Guard     GuardDeps
+	Policy    PolicyDeps
+	Advisors  AdvisorDeps
+	Peers     PeerDeps
+	Telemetry TelemetryDeps
+	Doctor    DoctorDeps
+	Workspace WorkspaceDeps
+}
 
-	// Correlator-derived stores (optional).
+// SystemDeps are local process and path operations; unset ones use the
+// system implementations.
+type SystemDeps struct {
+	OpenPath     func(...string) error
+	TCPClientPID func(string) (int32, error)
+}
+
+// ResourceDeps feed /resources and resource interventions (optional).
+type ResourceDeps struct {
+	Snapshot      func() resource.Snapshot
+	Control       *resource.Controller
+	PolicyUpdater func(config.ResourceControlConfig) error
+}
+
+// GuardDeps are the directory guard (optional).
+type GuardDeps struct {
+	Broker   *guard.Broker
+	Identity func(int32, string) (model.DecisionScope, bool)
+	// Advisor, when set, is offered each newly blocked guard prompt for an
+	// advisory recommendation. NEVER resolves the prompt — the human decides.
+	Advisor func(model.GuardAssessmentRequest)
+}
+
+// PolicyDeps are the correlator and the operator's policy stores (optional).
+type PolicyDeps struct {
 	Correlator   *correlate.Correlator
 	Allowlist    *correlate.AllowlistStore
 	Mutes        *correlate.MuteStore
 	Expected     *correlate.ExpectStore
 	NotifyRules  *correlate.NotifyRuleStore
 	NotifyScopes *correlate.NotifyScopeStore
+}
 
-	// Advisor hooks (optional).
+// AdvisorDeps are the local advisor's hooks (optional).
+type AdvisorDeps struct {
 	Retriage   *RetriageFuncs
 	HostAssess *HostAssessFuncs
 	Plan       *PlanFuncs
+	// Project queues a project for a cleanup plan and reports whether it was
+	// queued.
+	Project func(model.ProjectCleanupRequest) bool
+	// Worktree queues a worktree for an advisory note and reports whether it
+	// was queued (false: advisor off or queue full).
+	Worktree func(model.WorktreeAdviceRequest) bool
+	Egress   func(store.EgressEpisode) bool
+}
 
-	// GuardAdvisor, when set, is offered each newly blocked guard prompt for an
-	// advisory recommendation. NEVER resolves the prompt — the human decides.
-	GuardAdvisor func(model.GuardAssessmentRequest)
-
-	// Peers (optional). An empty Checker leaves the API ungated.
-	PeerChecker PeerChecker
-	AgentPIDs   func() map[int32]struct{}
-	UIPID       int32
+// PeerDeps identify callers (optional). An empty Checker leaves the API
+// ungated.
+type PeerDeps struct {
+	Checker   PeerChecker
+	AgentPIDs func() map[int32]struct{}
+	UIPID     int32
 	// IsAgentPID reports whether pid belongs to an agent family, walking its
 	// ancestry live. NoAgent routes refuse such peers; unwired, the console
 	// listener refuses every NoAgent request.
 	IsAgentPID func(pid int32) bool
+}
 
-	// Fleet + telemetry (optional). FleetConfigured is the live fact /status
-	// serves too; the config watcher updates it.
+// TelemetryDeps are fleet, OTLP and event-bus facts (optional).
+// FleetConfigured is the live fact /status serves too; the config watcher
+// updates it.
+type TelemetryDeps struct {
 	FleetSink       GuardEventSink
 	FleetConfigured func() bool
 	BusDrops        func() uint64
@@ -366,36 +399,28 @@ type Deps struct {
 	OTLPDropped     func() uint64
 	PublishEvent    func(event.Event)
 	DeltaHub        *DeltaHub
+}
 
-	// Hermes reports the Hermes Agent collector's state for /doctor
-	// (optional; unwired reads "not wired").
+// DoctorDeps answer /doctor and /routing/claude (optional).
+type DoctorDeps struct {
+	// Hermes reports the Hermes Agent collector's state (unwired reads "not
+	// wired").
 	Hermes func() collect.HermesStatus
 	// Sightings counts sessions with a transcript or hook sighting since a
-	// time, by harness, for /doctor trace coverage (optional; unwired skips
-	// the check).
+	// time, by harness, for trace coverage (unwired skips the check).
 	Sightings func(since time.Time) map[string]int
-	// Routing answers GET /routing/claude (optional; unwired reports not
-	// ready).
+	// Routing answers GET /routing/claude (unwired reports not ready).
 	Routing func() RoutingInfo
+}
 
-	// Worktrees is the worktree hunter behind /worktrees (optional; unwired
-	// answers 503).
+// WorkspaceDeps serve /worktrees, /cleanup and /agent/* (optional; unwired
+// answers 503).
+type WorkspaceDeps struct {
 	Worktrees *worktreehunter.Hunter
-	// Clutter is the cleanup inventory behind /cleanup (optional; unwired
-	// answers 503).
-	Clutter *clutter.Clutter
-	// Asker resumes a worktree's owning agent for /worktrees/ask (optional).
-	Asker *agentask.Asker
-	// SysAgent is the system agent behind /agent/* (optional; unwired
-	// answers 503).
+	Clutter   *clutter.Clutter
+	// Asker resumes a worktree's owning agent for /worktrees/ask.
+	Asker    *agentask.Asker
 	SysAgent *sysagent.Agent
-	// ProjectAdvisor queues a project for a cleanup plan and reports
-	// whether it was queued (optional).
-	ProjectAdvisor func(model.ProjectCleanupRequest) bool
-	// WorktreeAdvisor, when set, queues a worktree for an advisory note and
-	// reports whether it was queued (false: advisor off or queue full).
-	WorktreeAdvisor func(model.WorktreeAdviceRequest) bool
-	EgressAdvisor   func(store.EgressEpisode) bool
 }
 
 // New builds the API from its resolved dependencies.
@@ -406,49 +431,49 @@ func New(d Deps) *API {
 		store:           d.Store,
 		killer:          d.Killer,
 		statusFn:        d.Status,
-		hermes:          d.Hermes,
-		sightings:       d.Sightings,
-		routing:         d.Routing,
-		worktrees:       d.Worktrees,
-		worktreeAdvisor: d.WorktreeAdvisor,
-		egressAdvisor:   d.EgressAdvisor,
-		clutter:         d.Clutter,
-		asker:           d.Asker,
-		sysAgent:        d.SysAgent,
+		hermes:          d.Doctor.Hermes,
+		sightings:       d.Doctor.Sightings,
+		routing:         d.Doctor.Routing,
+		worktrees:       d.Workspace.Worktrees,
+		worktreeAdvisor: d.Advisors.Worktree,
+		egressAdvisor:   d.Advisors.Egress,
+		clutter:         d.Workspace.Clutter,
+		asker:           d.Workspace.Asker,
+		sysAgent:        d.Workspace.SysAgent,
 		autoReview:      newAutoReviewer(),
-		projectAdvisor:  d.ProjectAdvisor,
-		resources:       d.Resources,
-		resourceControl: d.ResourceControl,
-		resourcePolicy:  d.ResourcePolicyUpdater,
+		projectAdvisor:  d.Advisors.Project,
+		resources:       d.Resources.Snapshot,
+		resourceControl: d.Resources.Control,
+		resourcePolicy:  d.Resources.PolicyUpdater,
 		fwEngine:        d.Firewall.Engine,
 		fwModes:         d.Firewall.Modes,
 		fwReload:        d.Firewall.Reload,
 		fwIngest:        d.Firewall.Ingest,
 		fwSources:       d.Firewall.Sources,
 		fwBaseSources:   d.Firewall.BaseSources,
-		guardBroker:     d.Guard,
-		guardIdentity:   d.GuardIdentity,
-		correlator:      d.Correlator,
-		allowlist:       d.Allowlist,
-		mutes:           d.Mutes,
-		expected:        d.Expected,
-		notifyRules:     d.NotifyRules,
-		notifyScopes:    d.NotifyScopes,
-		retriage:        d.Retriage,
-		hostAssess:      d.HostAssess,
-		guardAdvisor:    d.GuardAdvisor,
-		agentPIDs:       d.AgentPIDs,
-		fleetSinks:      d.FleetSink,
-		fleetConfigured: d.FleetConfigured,
-		busDrops:        d.BusDrops,
-		busDropAt:       d.BusDropAt,
-		otlpDropped:     d.OTLPDropped,
-		publishEvent:    d.PublishEvent,
-		deltaHub:        d.DeltaHub,
-		isAgentPID:      d.IsAgentPID,
-		plan:            d.Plan,
-		tcpClientPID:    d.TCPClientPID,
-		openPath:        d.OpenPath,
+		guardBroker:     d.Guard.Broker,
+		guardIdentity:   d.Guard.Identity,
+		correlator:      d.Policy.Correlator,
+		allowlist:       d.Policy.Allowlist,
+		mutes:           d.Policy.Mutes,
+		expected:        d.Policy.Expected,
+		notifyRules:     d.Policy.NotifyRules,
+		notifyScopes:    d.Policy.NotifyScopes,
+		retriage:        d.Advisors.Retriage,
+		hostAssess:      d.Advisors.HostAssess,
+		guardAdvisor:    d.Guard.Advisor,
+		agentPIDs:       d.Peers.AgentPIDs,
+		fleetSinks:      d.Telemetry.FleetSink,
+		fleetConfigured: d.Telemetry.FleetConfigured,
+		busDrops:        d.Telemetry.BusDrops,
+		busDropAt:       d.Telemetry.BusDropAt,
+		otlpDropped:     d.Telemetry.OTLPDropped,
+		publishEvent:    d.Telemetry.PublishEvent,
+		deltaHub:        d.Telemetry.DeltaHub,
+		isAgentPID:      d.Peers.IsAgentPID,
+		plan:            d.Advisors.Plan,
+		tcpClientPID:    d.System.TCPClientPID,
+		openPath:        d.System.OpenPath,
 	}
 	if a.tcpClientPID == nil {
 		a.tcpClientPID = TCPClientPID
@@ -456,9 +481,9 @@ func New(d Deps) *API {
 	if a.openPath == nil {
 		a.openPath = openWithSystem
 	}
-	a.peerChk = d.PeerChecker
-	if d.PeerChecker != nil {
-		a.peerRole = &peers{OwnerUID: os.Getuid(), UIPID: d.UIPID, AgentPIDs: d.AgentPIDs}
+	a.peerChk = d.Peers.Checker
+	if d.Peers.Checker != nil {
+		a.peerRole = &peers{OwnerUID: os.Getuid(), UIPID: d.Peers.UIPID, AgentPIDs: d.Peers.AgentPIDs}
 	}
 	if d.Store != nil {
 		a.costs.st, a.costs.saveAs = d.Store, costsCacheName

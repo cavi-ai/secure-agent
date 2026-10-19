@@ -32,7 +32,7 @@ func TestNotifyRulesRejectInvalidPersistedPolicy(t *testing.T) {
 				}
 				st := testStore(t)
 
-				a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, NotifyRules: correlate.NewNotifyRuleStore(path), NotifyScopes: correlate.NewNotifyScopeStore(path)})
+				a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Policy: PolicyDeps{NotifyRules: correlate.NewNotifyRuleStore(path), NotifyScopes: correlate.NewNotifyScopeStore(path)}})
 				body := fmt.Sprintf(`{"rule":"proxy-secret-leak","workspace":%q,"notify":%s}`, workspace, notify)
 				r := httptest.NewRequest(http.MethodPost, "/notify/rules", strings.NewReader(body))
 				w := httptest.NewRecorder()
@@ -72,7 +72,7 @@ func TestUninspectedEgressEndpoint(t *testing.T) {
 	cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: now.Add(-time.Hour), RemoteHost: "fresh.example.com", RemotePort: 443})
 	cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: now.Add(-48 * time.Hour), RemoteHost: "stale.example.com", RemotePort: 443})
 
-	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Correlator: cr, Allowlist: nil})
+	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Policy: PolicyDeps{Correlator: cr, Allowlist: nil}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -119,7 +119,7 @@ func TestNotifyRulesEndpoint(t *testing.T) {
 
 	st := testStore(t)
 
-	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, NotifyRules: correlate.NewNotifyRuleStore(filepath.Join(dir, "notify-rules.json"))})
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Policy: PolicyDeps{NotifyRules: correlate.NewNotifyRuleStore(filepath.Join(dir, "notify-rules.json"))}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -215,7 +215,7 @@ func TestAdvisorAssessHostEndpoint(t *testing.T) {
 
 	queued := []string{}
 
-	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, HostAssess: &HostAssessFuncs{
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Advisors: AdvisorDeps{HostAssess: &HostAssessFuncs{
 		GetVerdict: func(agent, host string) (model.AdvisorVerdict, bool) {
 			if host == "known.example.com" {
 				return model.AdvisorVerdict{Assessment: "benign", Rationale: "routine vendor traffic"}, true
@@ -226,7 +226,7 @@ func TestAdvisorAssessHostEndpoint(t *testing.T) {
 			queued = append(queued, agent+"|"+host)
 			return true
 		},
-	}})
+	}}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -302,7 +302,7 @@ func TestNotifyWorkspaceScopes(t *testing.T) {
 	defer os.Remove(sock)
 	dir := t.TempDir()
 
-	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, NotifyRules: correlate.NewNotifyRuleStore(filepath.Join(dir, "notify-rules.json")), NotifyScopes: correlate.NewNotifyScopeStore(filepath.Join(dir, "notify-scopes.json"))})
+	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Policy: PolicyDeps{NotifyRules: correlate.NewNotifyRuleStore(filepath.Join(dir, "notify-rules.json")), NotifyScopes: correlate.NewNotifyScopeStore(filepath.Join(dir, "notify-scopes.json"))}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)

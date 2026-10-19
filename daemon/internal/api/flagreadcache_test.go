@@ -64,8 +64,9 @@ func BenchmarkComputePostureAtThreeThousandFlags(b *testing.B) {
 	}
 	b.Cleanup(func() { st.Close() })
 	a := newTestAPI(Deps{Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} },
-		Allowlist: correlate.NewAllowlistStore(filepath.Join(dir, "allowlist.json")),
-		Mutes:     correlate.NewMuteStore(filepath.Join(dir, "mutes.json")), Guard: guard.NewBroker(time.Minute)})
+		Policy: PolicyDeps{Allowlist: correlate.NewAllowlistStore(filepath.Join(dir, "allowlist.json")),
+			Mutes: correlate.NewMuteStore(filepath.Join(dir, "mutes.json"))},
+		Guard: GuardDeps{Broker: guard.NewBroker(time.Minute)}})
 	now := time.Now()
 	for i := 0; i < 3000; i++ {
 		f := keychainFlag(fmt.Sprintf("b%04d", i), fmt.Sprintf("agent%d", i%30), int32(1000+i%30), now.Add(-time.Duration(i)*time.Second), 2)

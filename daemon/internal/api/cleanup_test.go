@@ -49,7 +49,7 @@ func TestCleanupEndpoints(t *testing.T) {
 	c := clutter.New(st, home, func(context.Context) []clutter.Place {
 		return []clutter.Place{{Path: repo, Project: repo}}
 	})
-	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Clutter: c}).buildMux()
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Clutter: c}}).buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
@@ -146,9 +146,8 @@ func TestCleanupAdviseEndpoint(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	c := clutter.New(st, home, func(context.Context) []clutter.Place { return []clutter.Place{{Path: repo, Project: repo}} })
 	var queued []model.ProjectCleanupRequest
-	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Clutter: c,
-		Worktrees:      worktreehunter.New(st, home, worktreehunter.Options{}),
-		ProjectAdvisor: func(r model.ProjectCleanupRequest) bool { queued = append(queued, r); return true }}).buildMux()
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Clutter: c, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})},
+		Advisors: AdvisorDeps{Project: func(r model.ProjectCleanupRequest) bool { queued = append(queued, r); return true }}}).buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
@@ -180,7 +179,7 @@ func TestCleanupAdviseEndpoint(t *testing.T) {
 		t.Fatalf("report advice = %+v (%v)", rep.Advice, err)
 	}
 
-	unwired := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Clutter: c}).buildMux()
+	unwired := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Clutter: c}}).buildMux()
 	rec = httptest.NewRecorder()
 	unwired.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/cleanup/advise", strings.NewReader(`{"project":"`+repo+`"}`)))
 	if rec.Code != http.StatusServiceUnavailable {

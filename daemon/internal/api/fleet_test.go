@@ -19,7 +19,7 @@ func TestFleetConfiguredFollowsTheLiveFact(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
 	var on atomic.Bool
-	a := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, FleetConfigured: on.Load})
+	a := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Telemetry: TelemetryDeps{FleetConfigured: on.Load}})
 	mux := a.buildMux()
 	get := func() bool {
 		rec := httptest.NewRecorder()

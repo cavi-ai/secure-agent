@@ -300,16 +300,11 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	sysAgent.SetConfig(cfg.SystemAgent)
 	sysAgent.Recover()
 	apiServer := api.New(api.Deps{
-		SocketPath:            cfg.SocketPath,
-		ConfigPath:            opts.ConfigPath,
-		Store:                 st,
-		Killer:                &realKiller{},
-		Status:                statusFn,
-		BusDrops:              b.Dropped,
-		BusDropAt:             b.DroppedAt,
-		Resources:             resourceControl.Snapshot,
-		ResourceControl:       resourceControl,
-		ResourcePolicyUpdater: resourcePolicyUpdater,
+		SocketPath: cfg.SocketPath,
+		ConfigPath: opts.ConfigPath,
+		Store:      st,
+		Killer:     &realKiller{},
+		Status:     statusFn,
 		Firewall: api.FirewallControl{
 			Engine:      fw.Engine,
 			Modes:       fw.Modes,
@@ -318,45 +313,66 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			Sources:     fw.Sources,
 			BaseSources: fw.BaseSources,
 		},
-		Guard:         guardBroker,
-		GuardIdentity: resolver.PermissionIdentity,
-		Correlator:    correlator,
-		Allowlist:     allowlistStore,
-		Mutes:         muteStore,
-		Expected:      expectStore,
-		NotifyRules:   notifyRuleStore,
-		NotifyScopes:  notifyScopeStore,
-		Retriage:      retriageFuncs,
-		Plan:          planFuncs,
-		HostAssess:    hostAssessFuncs,
-		GuardAdvisor:  guardAdvisor,
-		PeerChecker:   api.NewPeerChecker(),
-		AgentPIDs:     agentPIDSet,
-		UIPID:         uiPID,
-		IsAgentPID: func(pid int32) bool {
-			_, isAgent := tagger.Tag(pid)
-			return isAgent
+		Resources: api.ResourceDeps{
+			Snapshot:      resourceControl.Snapshot,
+			Control:       resourceControl,
+			PolicyUpdater: resourcePolicyUpdater,
 		},
-		FleetSink:       fleetPub,
-		OTLPDropped:     otlpExp.Dropped,
-		FleetConfigured: fleetOn.Load,
-		PublishEvent:    b.Publish,
-		DeltaHub:        deltaHub,
-		Hermes:          hermes.Status,
-		Routing:         claudeRouting(proxyServer, cfg.ProxyCACertPath),
-		Sightings:       resolver.SightedByHarness,
-		Worktrees:       hunter,
-		WorktreeAdvisor: worktreeAdvisor,
-		EgressAdvisor: func(e store.EgressEpisode) bool {
-			if sub := advisorStk.Load().Sub; sub != nil {
-				return sub.EnqueueEgressEpisode(e)
-			}
-			return false
+		Guard: api.GuardDeps{
+			Broker:   guardBroker,
+			Identity: resolver.PermissionIdentity,
+			Advisor:  guardAdvisor,
 		},
-		Clutter:        cleanup,
-		Asker:          asker,
-		SysAgent:       sysAgent,
-		ProjectAdvisor: projectAdvisor,
+		Policy: api.PolicyDeps{
+			Correlator:   correlator,
+			Allowlist:    allowlistStore,
+			Mutes:        muteStore,
+			Expected:     expectStore,
+			NotifyRules:  notifyRuleStore,
+			NotifyScopes: notifyScopeStore,
+		},
+		Advisors: api.AdvisorDeps{
+			Retriage:   retriageFuncs,
+			Plan:       planFuncs,
+			HostAssess: hostAssessFuncs,
+			Project:    projectAdvisor,
+			Worktree:   worktreeAdvisor,
+			Egress: func(e store.EgressEpisode) bool {
+				if sub := advisorStk.Load().Sub; sub != nil {
+					return sub.EnqueueEgressEpisode(e)
+				}
+				return false
+			},
+		},
+		Peers: api.PeerDeps{
+			Checker:   api.NewPeerChecker(),
+			AgentPIDs: agentPIDSet,
+			UIPID:     uiPID,
+			IsAgentPID: func(pid int32) bool {
+				_, isAgent := tagger.Tag(pid)
+				return isAgent
+			},
+		},
+		Telemetry: api.TelemetryDeps{
+			FleetSink:       fleetPub,
+			FleetConfigured: fleetOn.Load,
+			BusDrops:        b.Dropped,
+			BusDropAt:       b.DroppedAt,
+			OTLPDropped:     otlpExp.Dropped,
+			PublishEvent:    b.Publish,
+			DeltaHub:        deltaHub,
+		},
+		Doctor: api.DoctorDeps{
+			Hermes:    hermes.Status,
+			Sightings: resolver.SightedByHarness,
+			Routing:   claudeRouting(proxyServer, cfg.ProxyCACertPath),
+		},
+		Workspace: api.WorkspaceDeps{
+			Worktrees: hunter,
+			Clutter:   cleanup,
+			Asker:     asker,
+			SysAgent:  sysAgent,
+		},
 	})
 
 	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, procSource, st))

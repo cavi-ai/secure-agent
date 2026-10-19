@@ -23,10 +23,10 @@ import (
 func TestGuardPendingAttachesAdvisorAdvice(t *testing.T) {
 	st := testStore(t)
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(5 * time.Second), GuardAdvisor: func(req model.GuardAssessmentRequest) {
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(5 * time.Second), Advisor: func(req model.GuardAssessmentRequest) {
 		st.PutAdvisorVerdict(advisor.GuardSubjectID(req.Agent, req.RuleID, req.Path, req.Tool), "guard",
 			model.AdvisorVerdict{Assessment: "malicious", Confidence: 0.9, Rationale: "exfiltration shape"})
-	}})
+	}}})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	t.Cleanup(func() {
@@ -84,7 +84,7 @@ func TestGuardOutcomePersistence(t *testing.T) {
 				brokerTimeout = time.Second
 			}
 
-			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(brokerTimeout)})
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(brokerTimeout)}})
 			if tc.setup == "cached" {
 				st.PutGuardRule(store.GuardRule{Agent: "claude", RuleID: "cloud-creds", Decision: "deny"})
 			}
@@ -145,7 +145,7 @@ func TestGuardOutcomePersistence(t *testing.T) {
 func TestUnknownGuardSessionUnattributed(t *testing.T) {
 	st := testStore(t)
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(time.Millisecond)})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(time.Millisecond)}})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/guard/decision", strings.NewReader(`{"agent":"claude","tool":"Read","path":"/secret","rule_id":"cloud-creds","session_id":"unknown"}`))
 	a.handleGuardDecision(rec, req)
@@ -167,7 +167,7 @@ func TestDeduplicatedGuardRequestsPersistSeparately(t *testing.T) {
 	now := time.Now()
 	st.UpsertSession(model.Session{ID: "session-1", Harness: "claude", StartedAt: now, LastSeenAt: now})
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(2 * time.Second)})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(2 * time.Second)}})
 	done := make(chan struct{}, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
@@ -238,7 +238,7 @@ func guardDecisionAsync(t *testing.T, a *API, ctx context.Context) (string, chan
 func TestGuardAnswerAfterTheHookLeftSavesNoRule(t *testing.T) {
 	st := testStore(t)
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(time.Minute)})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(time.Minute)}})
 	ctx, cancel := context.WithCancel(context.Background())
 	id, out := guardDecisionAsync(t, a, ctx)
 	cancel()
@@ -272,7 +272,7 @@ func (endedAtAnswer) Err() error { return context.Canceled }
 func TestGuardAnswerRacingTheHookLeavingSavesNoRule(t *testing.T) {
 	st := testStore(t)
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: guard.NewBroker(time.Minute)})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: guard.NewBroker(time.Minute)}})
 	id, out := guardDecisionAsync(t, a, endedAtAnswer{context.Background()})
 	if !a.guardBroker.Resolve(id, guard.Decision{Verdict: "allow", Scope: "always"}) {
 		t.Fatal("resolve did not reach the request")

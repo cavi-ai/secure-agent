@@ -53,7 +53,7 @@ func TestAllowlistLoadFailurePreservesUninspectedEgress(t *testing.T) {
 			}
 			st := testStore(t)
 
-			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, Allowlist: correlate.NewAllowlistStore(path), Correlator: cr})
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, Policy: PolicyDeps{Allowlist: correlate.NewAllowlistStore(path), Correlator: cr}})
 			body := `{"agent":"cursor","host":"new.example.com"}`
 			r := httptest.NewRequest(method, "/allowlist", strings.NewReader(body))
 			w := httptest.NewRecorder()
@@ -99,7 +99,7 @@ func TestAllowlistSuggestApproveRoundTrip(t *testing.T) {
 
 	st := testStore(t)
 
-	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Correlator: cr, Allowlist: al})
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Policy: PolicyDeps{Correlator: cr, Allowlist: al}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -190,7 +190,7 @@ func TestMuteEndpointRoundTrip(t *testing.T) {
 
 	st := testStore(t)
 
-	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Correlator: cr, Mutes: ms})
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Policy: PolicyDeps{Correlator: cr, Mutes: ms}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -280,7 +280,7 @@ func TestAllowlistListAndRemove(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
 
-	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Correlator: cr, Allowlist: alStore})
+	a := newTestAPI(Deps{SocketPath: sock, Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Policy: PolicyDeps{Correlator: cr, Allowlist: alStore}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)

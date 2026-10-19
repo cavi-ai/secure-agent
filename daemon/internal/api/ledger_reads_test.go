@@ -29,7 +29,7 @@ func TestCleanupInventoryLeavesOutUnreadableReclaimed(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	st.PutCleanup(model.CleanupEntry{Action: "worktree-remove", Path: "/r/.worktrees/a", Bytes: 9})
 	c := clutter.New(st, t.TempDir(), func(context.Context) []clutter.Place { return nil })
-	mux := newTestAPI(Deps{Store: st, Clutter: c}).buildMux()
+	mux := newTestAPI(Deps{Store: st, Workspace: WorkspaceDeps{Clutter: c}}).buildMux()
 	reclaimed := func() string {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/cleanup?refresh=1", nil))

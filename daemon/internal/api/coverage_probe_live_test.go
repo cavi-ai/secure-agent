@@ -38,7 +38,7 @@ func TestCoverageProbeInstalledHookLive(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	a = New(Deps{Store: a.store, Status: a.statusFn, PeerChecker: NewPeerChecker(), UIPID: int32(os.Getpid())})
+	a = New(Deps{Store: a.store, Status: a.statusFn, Peers: PeerDeps{Checker: NewPeerChecker(), UIPID: int32(os.Getpid())}})
 	sockDir, err := os.MkdirTemp("", "probe-")
 	if err != nil {
 		t.Fatal(err)

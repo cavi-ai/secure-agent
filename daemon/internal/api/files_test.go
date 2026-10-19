@@ -29,7 +29,7 @@ func TestOpenConfigUsesConfiguredPath(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "nested", "config.yaml")
 	deps := Deps{ConfigPath: p}
 	var args []string
-	deps.OpenPath = func(v ...string) error { args = append([]string(nil), v...); return nil }
+	deps.System.OpenPath = func(v ...string) error { args = append([]string(nil), v...); return nil }
 	a := newTestAPI(deps)
 	w := httptest.NewRecorder()
 	a.handleOpenConfig(w, httptest.NewRequest(http.MethodPost, "/ui/open-config", nil))
@@ -222,7 +222,7 @@ func postFile(a *API, h func(http.ResponseWriter, *http.Request), method, path s
 func TestFileRevealAndOpen(t *testing.T) {
 	deps := fileTestDeps(t)
 	rec := &openRecorder{}
-	deps.OpenPath = rec.open
+	deps.System.OpenPath = rec.open
 	a := newTestAPI(deps)
 	p, _ := writeTranscript(t, "one")
 	putTranscriptFlag(a, "f1", p, 0)
@@ -267,7 +267,7 @@ func TestFileRevealAndOpen(t *testing.T) {
 // Off macOS, reveal and open report unsupported.
 func TestFileOpenUnsupported(t *testing.T) {
 	deps := fileTestDeps(t)
-	deps.OpenPath = func(...string) error { return errors.ErrUnsupported }
+	deps.System.OpenPath = func(...string) error { return errors.ErrUnsupported }
 	a := newTestAPI(deps)
 	p, _ := writeTranscript(t, "one")
 	putTranscriptFlag(a, "f1", p, 0)
@@ -313,7 +313,7 @@ func TestConsoleNoAgentChecksTheTCPPeer(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			deps := fileTestDeps(t)
-			deps.TCPClientPID, deps.IsAgentPID = tc.peer, tc.agent
+			deps.System.TCPClientPID, deps.Peers.IsAgentPID = tc.peer, tc.agent
 			a := newTestAPI(deps)
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodGet, "/files/detail?path=%2Fw%2Fnone", nil)
@@ -333,12 +333,12 @@ func TestSocketNoAgentLiveFamilyCheck(t *testing.T) {
 	defer os.Remove(sock)
 	deps := fileTestDeps(t)
 	deps.SocketPath = sock
-	deps.PeerChecker = loopbackChecker{NewPeerChecker()}
-	deps.AgentPIDs = func() map[int32]struct{} { return nil }
+	deps.Peers.Checker = loopbackChecker{NewPeerChecker()}
+	deps.Peers.AgentPIDs = func() map[int32]struct{} { return nil }
 	self := int32(os.Getpid())
 	var agentPeer atomic.Bool
 	agentPeer.Store(true)
-	deps.IsAgentPID = func(pid int32) bool { return agentPeer.Load() && pid == self }
+	deps.Peers.IsAgentPID = func(pid int32) bool { return agentPeer.Load() && pid == self }
 	a := newTestAPI(deps)
 	ctx, cancel := contextWithCancel()
 	defer cancel()

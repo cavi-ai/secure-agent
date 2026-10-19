@@ -85,7 +85,7 @@ func TestPostureItemsPairWithTheirGroupItems(t *testing.T) {
 }
 
 func TestPosturePublishesCategoryChangesAtUnchangedCounts(t *testing.T) {
-	a := newTestAPI(Deps{DeltaHub: NewDeltaHub()})
+	a := newTestAPI(Deps{Telemetry: TelemetryDeps{DeltaHub: NewDeltaHub()}})
 	ch := a.deltaHub.Subscribe()
 	defer a.deltaHub.Unsubscribe(ch)
 	p := Posture{State: "attention", NeedsYou: 1, AttentionSummary: deriveAttentionSummary([]AttentionGroup{{Items: []AttentionItem{{Kind: "guard", ID: "one"}}}}, nil)}

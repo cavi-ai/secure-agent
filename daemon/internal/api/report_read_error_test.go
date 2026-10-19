@@ -54,7 +54,7 @@ func TestSessionReportReadFailuresRejectReportsAndPlans(t *testing.T) {
 
 			rec := &planRecorder{ready: true, pending: map[string]bool{}}
 
-			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Plan: rec.funcs()})
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Advisors: AdvisorDeps{Plan: rec.funcs()}})
 			db, err := sql.Open("sqlite", path)
 			if err != nil {
 				t.Fatal(err)

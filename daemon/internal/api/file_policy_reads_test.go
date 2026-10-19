@@ -47,7 +47,7 @@ func TestFilePolicyReadsReportFailureAndRecover(t *testing.T) {
 				}
 				st := testStore(t)
 				t.Cleanup(func() { _ = st.Close() })
-				a := newTestAPI(Deps{Store: st, Mutes: correlate.NewMuteStore(path), Expected: correlate.NewExpectStore(path)})
+				a := newTestAPI(Deps{Store: st, Policy: PolicyDeps{Mutes: correlate.NewMuteStore(path), Expected: correlate.NewExpectStore(path)}})
 				w := call(t, a, http.MethodGet, route, "")
 				if fault == "missing" || fault == "empty" {
 					if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "[]" {

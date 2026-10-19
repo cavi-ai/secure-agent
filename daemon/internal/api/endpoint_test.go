@@ -62,7 +62,7 @@ func TestEndpointDetail(t *testing.T) {
 // same rule the correlator applies; a look-alike suffix does not.
 func TestEndpointDetailAllowedCoversSubdomain(t *testing.T) {
 
-	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Allowlist: correlate.NewAllowlistStore(filepath.Join(t.TempDir(), "allowlist.json"))})
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Policy: PolicyDeps{Allowlist: correlate.NewAllowlistStore(filepath.Join(t.TempDir(), "allowlist.json"))}})
 	if err := a.allowlist.Add("claude", "anthropic.com"); err != nil {
 		t.Fatal(err)
 	}

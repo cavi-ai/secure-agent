@@ -17,7 +17,7 @@ import (
 func TestMuteListCarriesTitle(t *testing.T) {
 	dir := t.TempDir()
 
-	a := newTestAPI(Deps{SocketPath: filepath.Join(dir, "d.sock"), Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Mutes: correlate.NewMuteStore(filepath.Join(dir, "muted.json"))})
+	a := newTestAPI(Deps{SocketPath: filepath.Join(dir, "d.sock"), Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Policy: PolicyDeps{Mutes: correlate.NewMuteStore(filepath.Join(dir, "muted.json"))}})
 
 	post := httptest.NewRecorder()
 	a.handleMute(post, httptest.NewRequest(http.MethodPost, "/mute",

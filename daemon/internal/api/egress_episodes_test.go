@@ -31,7 +31,7 @@ func TestEgressEpisodesCandidateAndAssessment(t *testing.T) {
 
 	queued := 0
 
-	api := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, EgressAdvisor: func(store.EgressEpisode) bool { queued++; return true }})
+	api := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: nil, Advisors: AdvisorDeps{Egress: func(store.EgressEpisode) bool { queued++; return true }}})
 	mux := api.buildMux()
 	read := func() []egressEpisodeView {
 		w := httptest.NewRecorder()

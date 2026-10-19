@@ -23,7 +23,7 @@ func TestDismissPushesAllClearPosture(t *testing.T) {
 			st := testStore(t)
 			st.PutFlag(model.Flag{ID: "last", Rule: "transcript-secret-leak", Severity: 2, TS: time.Now()})
 
-			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, DeltaHub: NewDeltaHub()})
+			a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Telemetry: TelemetryDeps{DeltaHub: NewDeltaHub()}})
 			ch := a.deltaHub.Subscribe()
 			defer a.deltaHub.Unsubscribe(ch)
 			a.PublishPostureIfChanged()
@@ -50,7 +50,7 @@ func TestIncidentDismissalPushesPostureAndRetainsReport(t *testing.T) {
 	st := testStore(t)
 	st.PutIncident(model.IncidentReport{ID: "test-incident", Rule: "secret-in-transcript", Agent: "codex", Risk: model.RiskCritical, Timestamp: time.Now(), Summary: "Test fixture"})
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, DeltaHub: NewDeltaHub()})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, Telemetry: TelemetryDeps{DeltaHub: NewDeltaHub()}})
 	ch := a.deltaHub.Subscribe()
 	defer a.deltaHub.Unsubscribe(ch)
 	a.PublishPostureIfChanged()
@@ -87,7 +87,7 @@ func TestDecisionPushesPostureAtUnchangedCount(t *testing.T) {
 	st := testStore(t)
 	st.PutFlag(model.Flag{ID: "a", Rule: "transcript-secret-leak", Severity: 3, TS: time.Now()})
 
-	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, DeltaHub: NewDeltaHub()})
+	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Telemetry: TelemetryDeps{DeltaHub: NewDeltaHub()}})
 	ch := a.deltaHub.Subscribe()
 	defer a.deltaHub.Unsubscribe(ch)
 	a.PublishPostureIfChanged()
@@ -113,7 +113,7 @@ func TestDecisionPushesPostureAtUnchangedCount(t *testing.T) {
 
 func TestOlderPostureNeverFollowsNewer(t *testing.T) {
 
-	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, DeltaHub: NewDeltaHub()})
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} }, Telemetry: TelemetryDeps{DeltaHub: NewDeltaHub()}})
 	ch := a.deltaHub.Subscribe()
 	defer a.deltaHub.Unsubscribe(ch)
 	a.publishPosture(2, Posture{State: "attention", NeedsYou: 1}, true)

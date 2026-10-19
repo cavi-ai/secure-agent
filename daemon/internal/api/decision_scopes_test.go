@@ -24,9 +24,9 @@ func scopedGuardDeps(t *testing.T) (Deps, model.DecisionScope) {
 		t.Fatal(err)
 	}
 	identity := model.DecisionScope{Agent: "codex", SessionID: "session", Workspace: "/work", ReaderExe: "/bin/codex", IdentityBasis: "peer-process-tree"}
-	deps := Deps{Store: st, Guard: guard.NewBroker(2 * time.Second), PeerChecker: scopePeerChecker{}, GuardIdentity: func(pid int32, id string) (model.DecisionScope, bool) {
+	deps := Deps{Store: st, Peers: PeerDeps{Checker: scopePeerChecker{}}, Guard: GuardDeps{Broker: guard.NewBroker(2 * time.Second), Identity: func(pid int32, id string) (model.DecisionScope, bool) {
 		return identity, pid == 42 && (id == "" || id == "session")
-	}}
+	}}}
 	return deps, identity
 }
 
@@ -112,7 +112,7 @@ func TestGuardScopedResolveAndRevocation(t *testing.T) {
 
 func TestGuardExistingSessionIsNotPermissionIdentity(t *testing.T) {
 	deps, _ := scopedGuardDeps(t)
-	deps.GuardIdentity = nil
+	deps.Guard.Identity = nil
 	a := New(deps)
 	p, done := enqueueScopeGuard(t, a, "session")
 	if len(p.AvailableScopes) != 1 || p.AvailableScopes[0].Kind != "once" {

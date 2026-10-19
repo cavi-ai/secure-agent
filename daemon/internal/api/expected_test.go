@@ -25,7 +25,7 @@ func TestExpectedLoadFailureHasNoMutationSideEffects(t *testing.T) {
 				if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				deps.Expected = correlate.NewExpectStore(path)
+				deps.Policy.Expected = correlate.NewExpectStore(path)
 				a := newTestAPI(deps)
 				f := ghFlag("fixture", time.Now(), ghRead("sensitive read", 900, "GitHub"), "evil.example.com")
 				a.store.PutFlag(f)
@@ -66,7 +66,7 @@ func expectedTestDeps(t *testing.T) Deps {
 	t.Helper()
 	pinExplainHome(t, "/Users/dev")
 	deps := explainTestDeps(t)
-	deps.Expected = correlate.NewExpectStore(filepath.Join(t.TempDir(), "expected.json"))
+	deps.Policy.Expected = correlate.NewExpectStore(filepath.Join(t.TempDir(), "expected.json"))
 	return deps
 }
 

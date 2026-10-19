@@ -30,7 +30,7 @@ func TestUninspectedEgressRows(t *testing.T) {
 	cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: first, RemoteHost: "160.79.104.10", RemotePort: 443, SessionID: "sess-a"})
 	cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: time.Now(), RemoteHost: "160.79.104.10", RemotePort: 443, SessionID: "sess-b"})
 
-	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Correlator: cr})
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Policy: PolicyDeps{Correlator: cr}})
 	rec := httptest.NewRecorder()
 	a.handleUninspectedEgress(rec, httptest.NewRequest(http.MethodGet, "/egress/uninspected", nil))
 	if rec.Code != http.StatusOK {
@@ -99,7 +99,7 @@ func TestSuggestionListSkipsVendor(t *testing.T) {
 		}
 	}
 
-	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Correlator: cr})
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Policy: PolicyDeps{Correlator: cr}})
 	got := a.suggestionList()
 	if len(got) != 1 || got[0].Host != "34.120.1.1" || got[0].Identity.Org != "Google Cloud" || got[0].Identity.Class != "cloud" {
 		t.Fatalf("suggestions = %+v, want only the Google Cloud host", got)
@@ -141,7 +141,7 @@ func TestInfraAppRowsCarryKindAndAreNotSuggested(t *testing.T) {
 		}
 	}
 
-	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Correlator: cr})
+	a := newTestAPI(Deps{SocketPath: "", Store: testStore(t), Killer: nil, Status: func() Status { return Status{Running: true} }, Policy: PolicyDeps{Correlator: cr}})
 
 	rec := httptest.NewRecorder()
 	a.handleUninspectedEgress(rec, httptest.NewRequest(http.MethodGet, "/egress/uninspected", nil))
