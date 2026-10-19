@@ -109,7 +109,7 @@ func machineAttentionItems(now time.Time, st Status, hookGap *PostureItem) []Pos
 			Detail: fmt.Sprintf("%d subscriber deliveries dropped since daemon start. Monitoring history may be incomplete.", st.BusDrops)})
 	}
 	if h := st.StorageHealth; h != nil && len(h.ReadActive) > 0 {
-		items = append(items, PostureItem{Kind: "storage_read_failure", ID: "storage-reads", Severity: 2, Title: "Evidence could not be read", Detail: "Last known activity may be stale. Reads failing: " + strings.Join(h.ReadActive, ", ") + "."})
+		items = append(items, PostureItem{Kind: "storage_read_failure", ID: "storage-reads", Severity: 2, Title: "Evidence could not be read", Detail: "Last known activity may be stale. Reads failing: " + strings.Join(h.ReadActive, ", ") + "." + readIssueDetail(*h)})
 	}
 	if h := st.StorageHealth; h != nil && h.Failures > 0 {
 		detail := fmt.Sprintf("%d evidence persistence attempts failed since daemon start. Monitoring history may be incomplete.", h.Failures)
@@ -145,6 +145,25 @@ func machineAttentionItems(now time.Time, st Status, hookGap *PostureItem) []Pos
 		}
 	}
 	return items
+}
+
+// readIssueDetail adds the newest safe diagnostic for an active operation.
+// The complete per-operation history remains available in storage_health.
+func readIssueDetail(h store.WriteHealth) string {
+	var latest *store.ReadIssue
+	for i := range h.ReadIssues {
+		issue := &h.ReadIssues[i]
+		if issue.RecoveredAt != nil {
+			continue
+		}
+		if latest == nil || issue.LastFailureAt.After(latest.LastFailureAt) {
+			latest = issue
+		}
+	}
+	if latest == nil {
+		return ""
+	}
+	return " Last read failure: " + latest.Operation + " (" + latest.Category + ") at " + latest.LastFailureAt.UTC().Format(time.RFC3339) + "."
 }
 
 type attentionQueueResult struct {

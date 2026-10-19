@@ -93,12 +93,27 @@ like dead buttons. Absent on older daemons.
 `otlp_dropped` counts spans lost to export capacity limits or failed exports
 since daemon start. `storage_health.read_failures` counts failed session and
 harness-activity reads; `read_active` lists the operations still failing.
+`read_issues` retains each failing operation's count, safe error category,
+first and last failure times, and recovery time after a successful read.
+Categories are `deadline`, `cancelled`, `closed`, `busy`, `corrupt`, `io`,
+or `unavailable`. Raw errors, SQL, paths and evidence values are excluded.
 Coverage retains its last known activity after a failed read and reports that
 it may be stale through posture and Doctor. `/sessions` and `/snapshot`
 return HTTP 503 when their session query fails rather than returning an empty
 population. Read-health fields are omitted when empty. `unacted_flags_24h`
 counts severity 2+ findings from the last 24 hours not yet acted on; it is
 `null` when findings cannot be read.
+
+For spool-based file telemetry, `es_service.collector` carries the helper's
+process ID, state, heartbeat time, executable modification time and last
+successful spool delivery time. The helper supplies its own executable
+metadata so discovery also works when macOS restricts process inspection.
+States are `starting`, `collecting`, `permission_denied`, `restarting`,
+`failed` and `stopped`. Status is omitted for older helpers, stale heartbeats
+(over 90 seconds), or a different launchd process. A fresh authorization
+denial appears in posture and Doctor even during startup or with a fresh
+spool. Grant Full Disk Access to Secure Agent; the helper retries automatically.
+Health metadata does not establish complete file-event coverage.
 
 Each `trees[].root` whose pid roots a recorded session carries that session's
 `session_id`, `workspace`, `repo`, `branch` and `origin` (the spawning agent,

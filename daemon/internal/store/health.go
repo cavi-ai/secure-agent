@@ -1,9 +1,13 @@
 package store
 
 import (
+	"context"
+	"database/sql"
+	"errors"
 	"log"
 	"sort"
 	"sync"
+	"time"
 )
 
 // WriteHealth describes best-effort evidence persistence during this daemon
@@ -13,10 +17,22 @@ import (
 // Operation names are fixed labels, never paths, SQL, or error/payload text.
 // ReadActive independently reports unavailable reads until that query succeeds.
 type WriteHealth struct {
-	Failures     uint64   `json:"failures"`
-	Active       []string `json:"active"`
-	ReadFailures uint64   `json:"read_failures,omitempty"`
-	ReadActive   []string `json:"read_active,omitempty"`
+	Failures     uint64      `json:"failures"`
+	Active       []string    `json:"active"`
+	ReadFailures uint64      `json:"read_failures,omitempty"`
+	ReadActive   []string    `json:"read_active,omitempty"`
+	ReadIssues   []ReadIssue `json:"read_issues,omitempty"`
+}
+
+// ReadIssue retains a bounded diagnostic per fixed operation label. Raw error
+// text, SQL, paths and evidence values never enter the status response.
+type ReadIssue struct {
+	Operation      string     `json:"operation"`
+	Category       string     `json:"category"`
+	Failures       uint64     `json:"failures"`
+	FirstFailureAt time.Time  `json:"first_failure_at"`
+	LastFailureAt  time.Time  `json:"last_failure_at"`
+	RecoveredAt    *time.Time `json:"recovered_at,omitempty"`
 }
 
 type writeHealth struct {
@@ -25,6 +41,7 @@ type writeHealth struct {
 	active       map[string]bool
 	readFailures uint64
 	readActive   map[string]bool
+	readIssues   map[string]ReadIssue
 }
 
 func (s *Store) noteRead(operation string, err error) {
@@ -33,6 +50,11 @@ func (s *Store) noteRead(operation string, err error) {
 	defer h.mu.Unlock()
 	if err == nil {
 		delete(h.readActive, operation)
+		if issue, ok := h.readIssues[operation]; ok && issue.RecoveredAt == nil {
+			now := time.Now().UTC()
+			issue.RecoveredAt = &now
+			h.readIssues[operation] = issue
+		}
 		return
 	}
 	h.readFailures++
@@ -40,6 +62,41 @@ func (s *Store) noteRead(operation string, err error) {
 		h.readActive = make(map[string]bool)
 	}
 	h.readActive[operation] = true
+	if h.readIssues == nil {
+		h.readIssues = make(map[string]ReadIssue)
+	}
+	issue := h.readIssues[operation]
+	issue.Operation, issue.Category = operation, readFailureCategory(err)
+	issue.Failures++
+	issue.LastFailureAt = time.Now().UTC()
+	if issue.FirstFailureAt.IsZero() {
+		issue.FirstFailureAt = issue.LastFailureAt
+	}
+	issue.RecoveredAt = nil
+	h.readIssues[operation] = issue
+}
+
+func readFailureCategory(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	case errors.Is(err, sql.ErrConnDone), err.Error() == "sql: database is closed":
+		return "closed"
+	}
+	var coded interface{ Code() int }
+	if errors.As(err, &coded) {
+		switch coded.Code() & 0xff {
+		case 5, 6:
+			return "busy"
+		case 11, 26:
+			return "corrupt"
+		case 10, 13, 14:
+			return "io"
+		}
+	}
+	return "unavailable"
 }
 
 // noteReadLogged also logs the cause of a failed read, which the health label
@@ -99,5 +156,13 @@ func (s *Store) WriteHealth() WriteHealth {
 		snapshot.ReadActive = append(snapshot.ReadActive, operation)
 	}
 	sort.Strings(snapshot.ReadActive)
+	for _, issue := range h.readIssues {
+		if issue.RecoveredAt != nil {
+			at := *issue.RecoveredAt
+			issue.RecoveredAt = &at
+		}
+		snapshot.ReadIssues = append(snapshot.ReadIssues, issue)
+	}
+	sort.Slice(snapshot.ReadIssues, func(i, j int) bool { return snapshot.ReadIssues[i].Operation < snapshot.ReadIssues[j].Operation })
 	return snapshot
 }

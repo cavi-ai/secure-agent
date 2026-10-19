@@ -139,9 +139,11 @@ func runESCollector() error {
 	if err := chownSpoolToConsoleUser(); err != nil {
 		log.Printf("es-collector: chown spool (daemon may not read it): %v", err)
 	}
+	health := newESCollectorHealth(collect.ESCollectorStatusPath, os.Getpid(), 30*time.Second)
+	defer health.Close()
 
 	for {
-		err := runESLoggerOnce(ctx)
+		err := runESLoggerOnce(ctx, health)
 		if ctx.Err() != nil {
 			return nil // shutdown: eslogger was killed by the context
 		}
@@ -170,8 +172,25 @@ func runESCollector() error {
 
 // runESLoggerOnce runs eslogger to completion (or ctx cancellation) and
 // pumps its JSON to the spool.
-func runESLoggerOnce(ctx context.Context) error {
+func runESLoggerOnce(ctx context.Context, health *esCollectorHealth) error {
 	cmd := exec.CommandContext(ctx, "eslogger", "open", "exec", "unlink", "rename", "tcc_modify", "--format", "json")
+	return runESLoggerCommand(ctx, cmd, health, collect.ESPoolPath)
+}
+
+func runESLoggerCommand(ctx context.Context, cmd *exec.Cmd, health *esCollectorHealth, spoolPath string) (result error) {
+	health.setState("starting")
+	defer func() {
+		state := "failed"
+		switch {
+		case ctx.Err() != nil || result == nil:
+			state = "stopped"
+		case isESPermissionFailure(result):
+			state = "permission_denied"
+		case errors.Is(result, errESBehind):
+			state = "restarting"
+		}
+		health.setState(state)
+	}()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("eslogger stdout pipe: %w", err)
@@ -181,9 +200,9 @@ func runESLoggerOnce(ctx context.Context) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start eslogger: %w", err)
 	}
-	log.Printf("es-collector: eslogger started (pid %d), spool %s", cmd.Process.Pid, collect.ESPoolPath)
+	log.Printf("es-collector: eslogger started (pid %d), spool %s", cmd.Process.Pid, spoolPath)
 
-	writeErr := pumpToSpool(stdout)
+	writeErr := pumpToSpoolObserved(stdout, spoolPath, health.delivered)
 	_ = cmd.Process.Kill()
 	waitErr := cmd.Wait()
 	if errors.Is(writeErr, errESBehind) {
@@ -201,7 +220,11 @@ func runESLoggerOnce(ctx context.Context) error {
 // isESPermissionFailure reports whether an eslogger failure is the expected
 // "no ES client permission yet" denial rather than a real crash.
 func isESPermissionFailure(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not permitted")
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "es_new_client_result_err_not_permitted") || strings.Contains(message, "responsible process needs tcc full disk access authorization")
 }
 
 // spoolWriter serializes appends with size-capped rotation.
@@ -286,6 +309,10 @@ func pumpToSpool(stdout interface{ Read([]byte) (int, error) }) error {
 // count goes to the log once a minute. It returns errESBehind once records
 // have trailed the clock by more than esMaxLag for esLagConfirm.
 func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) error {
+	return pumpToSpoolObserved(stdout, path, nil)
+}
+
+func pumpToSpoolObserved(stdout interface{ Read([]byte) (int, error) }, path string, delivered func()) error {
 	w := &spoolWriter{path: path}
 	// Open WITHOUT rotating: the spool may hold events the tailer has not
 	// drained yet (this process may have crash-looped; destroying unread
@@ -301,6 +328,7 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 	var lag esLagWatch
 	for {
 		n, err := stdout.Read(tmp)
+		wrote := false
 		if n > 0 {
 			buf = append(buf, tmp[:n]...)
 			for {
@@ -322,6 +350,7 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 							return fmt.Errorf("spool write: %w", err)
 						}
 						stats.kept++
+						wrote = true
 					} else {
 						stats.dropped++
 					}
@@ -331,6 +360,9 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 				}
 				buf = append(buf[:0], buf[nl+1:]...)
 			}
+		}
+		if wrote && delivered != nil {
+			delivered()
 		}
 		if err != nil {
 			if err.Error() == "EOF" {

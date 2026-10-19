@@ -264,6 +264,9 @@ func esServiceItems(now time.Time, s collect.ESServiceSnapshot) []PostureItem {
 	if s.Losing {
 		return []PostureItem{{Kind: "collector_silent", ID: "eslogger", Title: "File monitoring evidence was lost", Severity: 2, Detail: esLossDetail(s)}}
 	}
+	if title, detail := collectorFailure(now, s); title != "" {
+		return []PostureItem{{Kind: "collector_silent", ID: "eslogger", Title: title, Severity: 2, Detail: detail}}
+	}
 	if esServiceFlooding(now, s) {
 		return []PostureItem{{
 			Kind: "collector_silent", ID: "eslogger",
@@ -326,6 +329,19 @@ func esServiceItems(now time.Time, s collect.ESServiceSnapshot) []PostureItem {
 		})
 	}
 	return items
+}
+
+func collectorFailure(now time.Time, s collect.ESServiceSnapshot) (string, string) {
+	if s.Collector == nil || !s.Collector.Fresh(now) || !esServiceRunning(s.State) {
+		return "", ""
+	}
+	switch s.Collector.State {
+	case "permission_denied":
+		return "File monitoring needs Full Disk Access", "macOS denied the file collector authorization. Grant Full Disk Access to Secure Agent in System Settings → Privacy & Security → Full Disk Access. The collector will retry automatically."
+	case "failed", "stopped":
+		return "File monitoring collector is unavailable", "The file collector reported " + s.Collector.State + ". Check the file telemetry helper in Setup & Permissions."
+	}
+	return "", ""
 }
 
 func esLossDetail(s collect.ESServiceSnapshot) string {
