@@ -712,8 +712,12 @@ func (a *API) mux(socket bool) *http.ServeMux {
 			continue
 		}
 		if h, ok := handlers[r.Path]; ok {
-			if r.NoAgent && !socket {
-				h = a.consoleNoAgent(h)
+			if !socket {
+				if r.NoAgent {
+					h = a.consoleNoAgent(h)
+				} else {
+					h = a.consoleNoAgentWrites(h)
+				}
 			}
 			mux.HandleFunc(r.Path, func(w http.ResponseWriter, req *http.Request) {
 				h(w, req)

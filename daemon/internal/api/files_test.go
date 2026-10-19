@@ -326,6 +326,68 @@ func TestConsoleNoAgentChecksTheTCPPeer(t *testing.T) {
 	}
 }
 
+// Every write the console token admits is refused to an agent-family TCP
+// peer, on every route in the table, not only NoAgent ones.
+func TestConsoleWritesRefuseAgentPeers(t *testing.T) {
+	const gate = "agent processes cannot use this endpoint"
+	serve := func(t *testing.T, agent bool, method, path string) *httptest.ResponseRecorder {
+		t.Helper()
+		deps := fileTestDeps(t)
+		deps.TCPClientPID = func(string) (int32, error) { return 777, nil }
+		deps.IsAgentPID = func(int32) bool { return agent }
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(method, path, strings.NewReader("{}"))
+		r.RemoteAddr = "127.0.0.1:50123"
+		defer func() {
+			if p := recover(); p != nil {
+				t.Fatalf("%s %s: handler ran (panicked: %v)", method, path, p)
+			}
+		}()
+		newTestAPI(deps).ConsoleHandler().ServeHTTP(w, r)
+		return w
+	}
+	checked := 0
+	for _, rt := range apiroutes.Table {
+		if !rt.Console {
+			continue
+		}
+		path := rt.Path
+		if rt.Prefix {
+			if len(rt.Leaves) == 0 {
+				continue
+			}
+			path += "id1/" + rt.Leaves[0].Path
+		}
+		for _, method := range append(append([]string{}, rt.MutatingMethods...), rt.ConsoleMethods...) {
+			if method == http.MethodGet || method == http.MethodHead || !apiroutes.ConsoleAllowed(method, path) {
+				continue
+			}
+			checked++
+			t.Run(method+" "+path, func(t *testing.T) {
+				w := serve(t, true, method, path)
+				if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), gate) {
+					t.Fatalf("agent peer: %d %q, want 403 from the peer gate", w.Code, strings.TrimSpace(w.Body.String()))
+				}
+			})
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no console-admitted writes in apiroutes.Table")
+	}
+	t.Run("browser peer reaches the handler", func(t *testing.T) {
+		w := serve(t, false, http.MethodPost, "/guard/path-allow")
+		if strings.Contains(w.Body.String(), gate) {
+			t.Fatalf("browser peer refused by the agent gate: %d %q", w.Code, strings.TrimSpace(w.Body.String()))
+		}
+	})
+	t.Run("agent peer keeps console reads", func(t *testing.T) {
+		w := serve(t, true, http.MethodGet, "/guard/path-allow")
+		if strings.Contains(w.Body.String(), gate) {
+			t.Fatalf("agent peer refused a read: %d %q", w.Code, strings.TrimSpace(w.Body.String()))
+		}
+	})
+}
+
 // On the socket an owner-uid peer that the live family check calls an agent
 // is refused a NoAgent route; other routes keep the owner's access.
 func TestSocketNoAgentLiveFamilyCheck(t *testing.T) {

@@ -20,8 +20,9 @@ import (
 // to). It is deliberately a DIFFERENT credential from the proxy token:
 // agents routed through the proxy legitimately carry the proxy token in
 // their environment, and must not be able to turn that into self-approval
-// of guard prompts or telemetry reads. Only the menubar (same uid, reads
-// the 0600 file) holds the console token.
+// of guard prompts or telemetry reads. The 0600 file keeps other uids out,
+// not a same-uid agent, so every write behind this token also requires a TCP
+// peer outside every agent family (api.consoleNoAgentWrites).
 var consoleToken atomic.Value // string
 
 // LoadConsoleToken returns the per-install console token at path, creating a

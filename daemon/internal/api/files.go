@@ -447,6 +447,19 @@ func (a *API) consoleNoAgent(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// consoleNoAgentWrites applies the consoleNoAgent peer check to every method
+// but GET and HEAD: the console token alone admits an agent to reads only.
+func (a *API) consoleNoAgentWrites(h http.HandlerFunc) http.HandlerFunc {
+	gated := a.consoleNoAgent(h)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			h(w, r)
+			return
+		}
+		gated(w, r)
+	}
+}
+
 var envAssignment = regexp.MustCompile(`^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]{0,127})[ \t]*=`)
 
 // envVariableNames returns names only for a small, regular, operator-owned

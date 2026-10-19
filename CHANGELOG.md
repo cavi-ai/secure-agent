@@ -11,6 +11,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Codex: record forwarded app-server hook completions with `secure-agent hooks record`, using a shared metadata contract and stable host delivery IDs.
 - Hooks: native result adapters for host-forwarded OpenClaw, Hermes and OpenCode v2 handler completions.
 
+### Security
+- Console: writes on the proxy-port console listener refuse agent processes; the console token alone admits reads only.
+
 ## [1.3.0] - 2026-10-12
 
 ### Added
