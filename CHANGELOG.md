@@ -12,7 +12,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Hooks: native result adapters for host-forwarded OpenClaw, Hermes and OpenCode v2 handler completions.
 
 ### Changed
-- Performance: posture, snapshots and finding lists read advisor verdicts in batches and reuse 24-hour flag reads until a flag changes; posture is recomputed off the event ingest path, and event retention runs beside persistence in short batches.
+- Performance: posture, snapshots and finding lists read advisor verdicts in batches and reuse 24-hour flag reads until a flag changes; posture is recomputed off the event ingest path, event retention runs beside persistence in short batches, and flag and event reads no longer wait for writes.
 - Console: assets revalidate by content hash, and the brand icon is 128 px.
 - Menu bar: polls every 30 s while the event stream is live, whichever connected first.
 - Config: YAML is parsed with the maintained `go.yaml.in/yaml/v3`.
