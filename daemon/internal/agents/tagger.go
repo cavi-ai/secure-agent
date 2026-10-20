@@ -9,14 +9,16 @@ import (
 )
 
 type ProcInfo struct {
-	PID       int32
-	PPID      int32
-	Comm      string
-	Exe       string
-	CWD       string
-	StartTime time.Time
-	RSSBytes  uint64
-	CPUTime   time.Duration
+	PID  int32
+	PPID int32
+	Comm string
+	Exe  string
+	// RuntimeProgram is a Node entry point, never its arguments or environment.
+	RuntimeProgram string
+	CWD            string
+	StartTime      time.Time
+	RSSBytes       uint64
+	CPUTime        time.Duration
 }
 
 type AgentInfo struct {
@@ -79,19 +81,8 @@ func (t *Tagger) isCandidateLocked(pid int32) bool {
 		if !ok {
 			break
 		}
-		targetStr := pInfo.Comm
-		if pInfo.Exe != "" {
-			targetStr = pInfo.Exe
-		}
-		if targetStr != "" {
-			targetLower := strings.ToLower(targetStr)
-			for _, agentDef := range t.cfg.Agents {
-				for _, matchStr := range agentDef.Match {
-					if strings.Contains(targetLower, strings.ToLower(matchStr)) {
-						return true
-					}
-				}
-			}
+		if _, matched := t.matchLocked(pInfo); matched {
+			return true
 		}
 		curr = pInfo.PPID
 	}
@@ -433,8 +424,15 @@ func (t *Tagger) matchLocked(p ProcInfo) (config.AgentDef, bool) {
 	}
 	matchTargetLower := strings.ToLower(matchTarget)
 	for _, agentDef := range t.cfg.Agents {
+		target := matchTargetLower
+		if agentDef.Name == "openclaw" && nodeExecutable(p.Exe) {
+			target = strings.ToLower(p.RuntimeProgram)
+			if target == "" {
+				target = strings.ToLower(p.Comm)
+			}
+		}
 		for _, matchStr := range agentDef.Match {
-			if strings.Contains(matchTargetLower, strings.ToLower(matchStr)) {
+			if strings.Contains(target, strings.ToLower(matchStr)) {
 				return agentDef, true
 			}
 		}

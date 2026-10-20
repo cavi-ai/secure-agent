@@ -48,7 +48,9 @@ agents:
   - { name: aider,       match: ["aider"] }
   - { name: codeium,     match: ["codeium"] }
   - { name: copilot,     match: ["copilot"] }
-  - { name: openclaw,    match: ["/.openclaw/"] }
+  # Node's install directory may be shared by unrelated MCP/plugin hosts.
+  # For Node, match the running program or process title instead.
+  - { name: openclaw,    match: ["openclaw"] }
   - { name: hermes,      match: ["hermes-agent", "/.hermes/"] }
   # Local model infrastructure: tracked (killable, monitored) but their
   # loopback traffic is never flagged — they're what the advisor talks to.

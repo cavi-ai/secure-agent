@@ -123,11 +123,10 @@ func TestClaudeDesktopIsInfraAndConversationIsItsOwnRoot(t *testing.T) {
 	}
 }
 
-// OpenClaw runs its bundled node from under ~/.openclaw; the path segment,
-// not the node basename, is what identifies the harness.
+// A named OpenClaw process remains an agent when it uses bundled Node.
 func TestTagOpenClawAsAgent(t *testing.T) {
 	fake := fakeProcs{
-		100: {PID: 100, PPID: 1, Exe: "/Volumes/x/.openclaw/node-v24/bin/node"},
+		100: {PID: 100, PPID: 1, Comm: "openclaw-gateway", Exe: "/Volumes/x/.openclaw/node-v24/bin/node"},
 	}
 	c, _ := config.Load("/nonexistent")
 	tg := New(c, fake)
@@ -135,6 +134,52 @@ func TestTagOpenClawAsAgent(t *testing.T) {
 	info, ok := tg.Tag(100)
 	if !ok || info.Name != "openclaw" || info.Kind != "agent" {
 		t.Fatalf("Tag(100) = %+v, %v; want openclaw/agent", info, ok)
+	}
+}
+
+func TestSharedNodeRuntimeInheritsItsHost(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/Applications/Codex.app/Contents/MacOS/Codex"},
+		200: {PID: 200, PPID: 100, Comm: "node", Exe: "/opt/.openclaw/node/bin/node", CWD: "/plugins/creative-production"},
+		201: {PID: 201, PPID: 200, Exe: "/usr/bin/python3"},
+		300: {PID: 300, PPID: 1, Comm: "node", Exe: "/opt/.openclaw/node/bin/node"},
+	}
+	c, err := config.Load("/nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg := New(c, fake)
+	tg.Refresh()
+	for _, pid := range []int32{200, 201} {
+		if info, ok := tg.Tag(pid); !ok || info.Name != "codex" || info.RootPID != 100 {
+			t.Errorf("Tag(%d) = %+v, %v; want codex rooted at 100", pid, info, ok)
+		}
+	}
+	if info, ok := tg.Tag(300); ok {
+		t.Errorf("standalone shared runtime tagged without a harness program: %+v", info)
+	}
+}
+
+func TestOpenClawNodeProgramKeepsItsOwnFamily(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/codex"},
+		200: {PID: 200, PPID: 100, Comm: "node", Exe: "/opt/.openclaw/node/bin/node", RuntimeProgram: "/opt/openclaw/dist/index.js"},
+		201: {PID: 201, PPID: 200, Comm: "node", Exe: "/opt/.openclaw/node/bin/node", RuntimeProgram: "/plugins/mcp/server.mjs"},
+		300: {PID: 300, PPID: 100, Comm: "node", Exe: "/usr/bin/node", RuntimeProgram: "/opt/openclaw/openclaw.mjs"},
+	}
+	c, err := config.Load("/nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg := New(c, fake)
+	tg.Refresh()
+	for _, pair := range [][2]int32{{200, 200}, {201, 200}, {300, 300}} {
+		if info, ok := tg.Tag(pair[0]); !ok || info.Name != "openclaw" || info.RootPID != pair[1] {
+			t.Errorf("Tag(%d)=%+v,%v; want openclaw rooted at %d", pair[0], info, ok, pair[1])
+		}
+	}
+	if name, ok := tg.MatchExe("/opt/.openclaw/node/bin/node"); ok {
+		t.Errorf("executable-only match=%q; shared Node is not OpenClaw", name)
 	}
 }
 

@@ -502,8 +502,8 @@ func TestAgedWorkspacePersistsRegardlessOfPath(t *testing.T) {
 func orchestratorTree() fakeProcs {
 	started := time.Now().Add(-time.Hour)
 	return fakeProcs{
-		100: {PID: 100, PPID: 1, Exe: "/Users/u/.openclaw/node/bin/node", CWD: "/ws", StartTime: started},
-		101: {PID: 101, PPID: 100, Exe: "/Users/u/.openclaw/node/bin/node", CWD: "/ws", StartTime: started},
+		100: {PID: 100, PPID: 1, Exe: "/Users/u/.openclaw/node/bin/node", RuntimeProgram: "/opt/openclaw/dist/index.js", CWD: "/ws", StartTime: started},
+		101: {PID: 101, PPID: 100, Exe: "/Users/u/.openclaw/node/bin/node", RuntimeProgram: "/plugins/helper/server.mjs", CWD: "/ws", StartTime: started},
 		102: {PID: 102, PPID: 101, Exe: "/opt/homebrew/bin/codex", CWD: "/ws/run", StartTime: started},
 	}
 }
@@ -1165,7 +1165,7 @@ func TestResolveStampsEveryEventFromCachedPID(t *testing.T) {
 func sharedCwdTree() fakeProcs {
 	started := time.Now().Add(-time.Hour)
 	return fakeProcs{
-		100: {PID: 100, PPID: 1, Exe: "/Users/u/.openclaw/node/bin/node", CWD: "/Users/u/.openclaw", StartTime: started},
+		100: {PID: 100, PPID: 1, Exe: "/Users/u/.openclaw/node/bin/node", RuntimeProgram: "/opt/openclaw/dist/index.js", CWD: "/Users/u/.openclaw", StartTime: started},
 		300: {PID: 300, PPID: 100, Exe: "/opt/homebrew/bin/codex", CWD: "/Users/u/.openclaw", StartTime: started.Add(time.Minute)},
 		301: {PID: 301, PPID: 300, Exe: "/bin/zsh", CWD: "/teams/a", StartTime: started.Add(2 * time.Minute)},
 		400: {PID: 400, PPID: 100, Exe: "/opt/homebrew/bin/codex", CWD: "/Users/u/.openclaw", StartTime: started.Add(3 * time.Minute)},

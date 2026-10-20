@@ -4,15 +4,35 @@ package agents
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
+
+func TestProcArgvStopsBeforeEnvironment(t *testing.T) {
+	buf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(buf, 3)
+	buf = append(buf, []byte("/opt/.openclaw/node/bin/node\x00\x00\x00node\x00./mcp/server.mjs\x00[REDACTED]\x00\x00OPENCLAW_HOME=[REDACTED]\x00")...)
+	args := procArgv(buf)
+	if !reflect.DeepEqual(args, []string{"node", "./mcp/server.mjs", "[REDACTED]"}) {
+		t.Fatal("argument parsing included unexpected fields")
+	}
+	if got := nodeProgram(args, "/plugins/provider"); got != "/plugins/provider/mcp/server.mjs" {
+		t.Fatalf("program=%q", got)
+	}
+	for _, invalid := range [][]byte{nil, {0, 0, 0, 0}, {255, 255, 255, 255}, {100, 0, 0, 0, 0}, {1, 0, 0, 0, 'x'}} {
+		if procArgv(invalid) != nil {
+			t.Error("accepted malformed argument buffer")
+		}
+	}
+}
 
 func getProcPathSysctl(pid int32) string {
 	mib := []int32{1 /* CTL_KERN */, 49 /* KERN_PROCARGS2 */, pid}

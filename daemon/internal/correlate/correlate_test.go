@@ -174,8 +174,9 @@ func TestUntaggedLabelVersionBasename(t *testing.T) {
 	if got := observe(cfg, 997, claudeExe); got != "claude" {
 		t.Fatalf("default cfg agent = %q, want claude (the match strings name the exe)", got)
 	}
-	if got := observe(cfg, 996, "/Volumes/x/.openclaw/node-v24/bin/node"); got != "openclaw" {
-		t.Fatalf("openclaw node agent = %q, want openclaw", got)
+	// The access still flags, but a shared Node path cannot name its harness.
+	if got := observe(cfg, 996, "/Volumes/x/.openclaw/node-v24/bin/node"); got != "untagged:node" {
+		t.Fatalf("shared node agent = %q, want untagged:node", got)
 	}
 	noClaude := cfg
 	noClaude.Agents = nil
