@@ -1263,23 +1263,26 @@ public final class SetupManager: ObservableObject {
     // MARK: - Claude Code routing
 
     /// The operator's choice to route Claude Code through the proxy. The app
-    /// re-applies it at launch and withdraws it at quit, so new Claude Code
-    /// sessions never point at a proxy that is not running.
+    /// re-applies it at launch when Claude is stopped and withdraws it at quit.
     static let routeClaudeCodeKey = "routeClaudeCode"
 
     /// Whether ~/.claude/settings.json carries Secure Agent's routing now.
     @Published public private(set) var claudeRoutingApplied = false
+    @Published public private(set) var claudeRoutingChanging = false
 
     /// Turns routing on (fetches the running daemon's environment and writes
     /// it) or off, and records the choice.
     public func setClaudeRouting(_ on: Bool) async {
+        guard !claudeRoutingChanging else { return }
+        claudeRoutingChanging = true
+        defer { claudeRoutingChanging = false }
         lastError = nil
         do {
             if on {
                 let info = try await DaemonClient().fetchRouting()
-                try ClaudeRouting.apply(at: Self.claudeSettingsPath, info: info)
+                try ClaudeRouting.update(at: Self.claudeSettingsPath, info: info)
             } else {
-                try ClaudeRouting.remove(at: Self.claudeSettingsPath)
+                try ClaudeRouting.update(at: Self.claudeSettingsPath, info: nil)
             }
             prefs.set(on, forKey: Self.routeClaudeCodeKey)
         } catch {
@@ -1290,14 +1293,18 @@ public final class SetupManager: ObservableObject {
 
     /// At launch: when routing is on, write the running daemon's port and
     /// token again. The child daemon may still be starting, so this waits up
-    /// to 10 s for it; until then Claude Code stays unrouted.
+    /// to 10 s for it. Never apply network settings to a running Claude client.
     public func reapplyClaudeRouting() async {
-        defer { claudeRoutingApplied = ClaudeRouting.isApplied(at: Self.claudeSettingsPath) }
-        guard prefs.bool(forKey: Self.routeClaudeCodeKey) else { return }
+        guard !claudeRoutingChanging, prefs.bool(forKey: Self.routeClaudeCodeKey) else { return }
+        claudeRoutingChanging = true
+        defer {
+            claudeRoutingChanging = false
+            claudeRoutingApplied = ClaudeRouting.isApplied(at: Self.claudeSettingsPath)
+        }
         for _ in 0..<20 {
             if let info = try? await DaemonClient().fetchRouting(), info.ready {
                 do {
-                    try ClaudeRouting.apply(at: Self.claudeSettingsPath, info: info)
+                    try ClaudeRouting.update(at: Self.claudeSettingsPath, info: info)
                 } catch {
                     report(error)
                 }

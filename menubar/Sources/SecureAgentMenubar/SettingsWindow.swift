@@ -713,7 +713,10 @@ struct SettingsView: View {
                 get: { setup.claudeRoutingApplied },
                 set: { on in Task { await setup.setClaudeRouting(on) } }
             ))
-            Text("New Claude Code sessions send their traffic through Secure Agent's proxy: API requests to Anthropic are decrypted and scanned; every other connection, including Bash commands, passes through unopened. Quitting Secure Agent turns routing off until the next launch; if it stops unexpectedly, reopen it before starting Claude Code.")
+            .disabled(setup.claudeRoutingChanging)
+            Text("Quit Claude Desktop and exit Claude Code before changing routing, then reopen them so the proxy and certificate settings load together.")
+                .font(.caption)
+            Text("Routed Claude Code sessions send their traffic through Secure Agent's proxy: API requests to Anthropic are decrypted and scanned; every other connection, including Bash commands, passes through unopened. Close routed sessions before quitting Secure Agent. If Secure Agent stops unexpectedly, reopen it, then restart Claude.")
                 .font(.caption).foregroundStyle(.secondary)
             Text("Other agents: source the snippet in the shell where you launch them; their connections pass through unopened.")
                 .font(.caption).foregroundStyle(.secondary)

@@ -602,7 +602,11 @@ writes the inspect-mode environment and the CA into the `env` block of
 tunnel-mode snippet to each session's Bash environment (`CLAUDE_ENV_FILE`). It
 refuses when the file already sets one of those keys itself, records the keys
 it added (`SECURE_AGENT_ROUTED_KEYS`), and removes only those when turned off
-or when the app quits; the next launch writes them again. `/status` counts
+or when the app quits. Quit Claude Desktop and exit Claude Code before changing
+routing, then reopen them so the proxy and certificate settings load together.
+Routing changes, including reapplication at app launch, are refused while Claude
+is running. Close routed sessions before quitting Secure Agent; removing settings
+does not clear the proxy from an existing process. `/status` counts
 `proxy_tunneled` and `proxy_decrypted` connections since start.
 
 ### Runtime overrides (not in this file)
