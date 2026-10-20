@@ -54,7 +54,8 @@ final class DaemonSupervisorTests: XCTestCase {
                                           retryDelay: 0.01, maxRetryDelay: 0.01)
         defer { supervisor.stop(); try? FileManager.default.removeItem(at: f.dir) }
         supervisor.start()
-        let retried = await waitUntil({ self.starts(f.starts).count == 2 })
+        // A hang bound: on a loaded machine the restart has taken over 2 s.
+        let retried = await waitUntil({ self.starts(f.starts).count == 2 }, timeout: 10)
         XCTAssertTrue(retried)
         blockActor(for: 0.8)
         let abandoned = await waitUntil({ supervisor.gaveUpRestarting }, timeout: 0.15)

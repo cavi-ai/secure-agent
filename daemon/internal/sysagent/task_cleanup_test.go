@@ -55,7 +55,9 @@ func TestTerminalTaskDeletesWorkspaceOnEveryExit(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// A bound on a hung task, not a speed check: on a loaded machine the
+			// script alone has taken more than 5 s.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "/bin/sh", script)
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

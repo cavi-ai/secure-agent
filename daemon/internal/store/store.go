@@ -127,6 +127,8 @@ type Store struct {
 	guardDecisionWrites    atomic.Uint64
 	// Test seam for the identity-to-insert boundary; nil in production.
 	resourceEpisodeAfterLookup func()
+	// Test seam between a retention scan and its delete; nil in production.
+	pruneScanned func()
 	// openID is the newest event id when the store opened: rows above it
 	// were written since this daemon started, whatever their own timestamp.
 	openID int64
@@ -550,8 +552,9 @@ const (
 	recordBudgetCondSQL = `kind = ? AND record = 1 AND id < ?`
 )
 
-// PruneEvents applies event retention one bounded statement at a time, each
-// under mu, so event persistence and reads interleave with a long prune.
+// PruneEvents applies event retention one bounded statement at a time. Its
+// scans, kind list and budget cutoffs read without mu; only each delete takes
+// it, so event persistence never waits on a scan of the events table.
 func (s *Store) PruneEvents() {
 	// Time-based per kind first (instantBeforeSQL normalizes any legacy
 	// local-offset ts values), then per-kind row budgets as a pure backstop.
@@ -586,8 +589,8 @@ func (s *Store) PruneEvents() {
 	keep(s.deleteEventsBatched(`kind NOT IN (?, ?) AND `+instantBeforeSQL("ts"), append(connKinds, instantBound(now.Add(-other))...)...))
 	s.mu.Lock()
 	s.pruneHookRunsLocked(now.Add(-other))
-	kinds, err := s.eventKindsLocked()
 	s.mu.Unlock()
+	kinds, err := s.eventKinds()
 	if err != nil {
 		keep(err)
 		return
@@ -600,10 +603,8 @@ func (s *Store) PruneEvents() {
 			cutoff, cond string
 			budget       int
 		}{{kindCutoffSQL, kindBudgetCondSQL, kindBudget(k)}, {recordCutoffSQL, recordBudgetCondSQL, recordBudget}} {
-			s.mu.Lock()
 			var cutoff int64
 			err := s.db.QueryRow(b.cutoff, k, b.budget-1).Scan(&cutoff)
-			s.mu.Unlock()
 			if errors.Is(err, sql.ErrNoRows) {
 				continue
 			}
@@ -616,9 +617,9 @@ func (s *Store) PruneEvents() {
 	}
 }
 
-// eventKindsLocked lists the kinds in the table by index skip-scan: one
-// MIN(kind) seek per kind (caller holds mu).
-func (s *Store) eventKindsLocked() ([]int, error) {
+// eventKinds lists the kinds in the table by index skip-scan: one MIN(kind)
+// seek per kind.
+func (s *Store) eventKinds() ([]int, error) {
 	rows, err := s.db.Query(`WITH RECURSIVE k(v) AS (
 			SELECT MIN(kind) FROM events
 			UNION ALL
@@ -642,22 +643,53 @@ func (s *Store) eventKindsLocked() ([]int, error) {
 }
 
 // deleteEventsBatched deletes the events cond selects, pruneBatch rows per
-// statement, taking mu for each statement.
+// statement. The rows are found without mu (cond may scan the table); each
+// delete takes mu, removes them by id and checks cond again, so a row changed
+// since the scan is kept.
 func (s *Store) deleteEventsBatched(cond string, args ...any) error {
-	q := `DELETE FROM events WHERE id IN (SELECT id FROM events WHERE ` + cond + ` LIMIT ?)`
-	args = append(args[:len(args):len(args)], pruneBatch)
+	sel := `SELECT id FROM events WHERE ` + cond + ` LIMIT ?`
+	del := `DELETE FROM events WHERE id IN (SELECT value FROM json_each(?)) AND ` + cond
 	for {
+		ids, err := s.eventIDs(sel, append(args[:len(args):len(args)], pruneBatch)...)
+		if err != nil || len(ids) == 0 {
+			return err
+		}
+		if s.pruneScanned != nil {
+			s.pruneScanned()
+		}
+		list, err := json.Marshal(ids)
+		if err != nil {
+			return err
+		}
 		s.mu.Lock()
-		res, err := s.db.Exec(q, args...)
+		res, err := s.db.Exec(del, append([]any{string(list)}, args...)...)
 		s.mu.Unlock()
 		if err != nil {
 			return err
 		}
 		n, err := res.RowsAffected()
-		if err != nil || n < int64(pruneBatch) {
+		if err != nil || n == 0 || len(ids) < pruneBatch {
 			return err
 		}
 	}
+}
+
+// eventIDs runs a query that selects event ids.
+func (s *Store) eventIDs(q string, args ...any) ([]int64, error) {
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // recordBudget caps a kind's record rows (event.Record) — a backstop for an

@@ -8,7 +8,8 @@ import (
 )
 
 // Read-only stats behind GET /doctor. Each answers one coverage question
-// about the stored data; none of them writes.
+// about the stored data; none of them writes, so none takes mu: a count over
+// a full store takes seconds and must not hold up event persistence.
 
 // KindRetention is one event kind's stored row count against its row budget,
 // and its record rows (event.Record) against theirs.
@@ -30,8 +31,6 @@ type KindRetention struct {
 }
 
 func (s *Store) doctorCount(q string, args ...any) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var n int
 	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
 		log.Printf("store: doctor count error: %v", err)
@@ -40,8 +39,6 @@ func (s *Store) doctorCount(q string, args ...any) int {
 }
 
 func (s *Store) doctorCountByKey(q string, args ...any) map[string]int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	out := map[string]int{}
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
@@ -63,8 +60,6 @@ func (s *Store) doctorCountByKey(q string, args ...any) map[string]int {
 // them, those carrying a harness name, the named ones carrying a workspace,
 // and of those the ones also carrying a repo.
 func (s *Store) SessionIdentityStats(since time.Time) (total, named, withWorkspace, withRepo int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	arg, started := instantArg(since), timestampOrderExpr("started_at")
 	err := s.db.QueryRow(`SELECT COUNT(*),
 		COALESCE(SUM(CASE WHEN COALESCE(harness,'') != '' THEN 1 ELSE 0 END),0),
@@ -81,8 +76,6 @@ func (s *Store) SessionIdentityStats(since time.Time) (total, named, withWorkspa
 // DoctorWorkspaceRepos returns named sessions with a workspace since boot so
 // Doctor can measure repo coverage only where a Git checkout actually exists.
 func (s *Store) DoctorWorkspaceRepos(since time.Time) ([][2]string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	started := timestampOrderExpr("started_at")
 	rows, err := s.db.Query(`SELECT workspace, COALESCE(repo,'') FROM sessions
 		WHERE COALESCE(harness,'') != '' AND COALESCE(workspace,'') != ''
@@ -123,8 +116,6 @@ func (s *Store) ToolCallStats(since time.Time) (dupePairs, idlessSince int) {
 // PricingStats counts model calls: Claude-model calls with and without a
 // cost, and all calls without a cost out of all calls.
 func (s *Store) PricingStats() (claudePriced, claudeUnpriced, allUnpriced, allCalls int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	err := s.db.QueryRow(`SELECT
 		COALESCE(SUM(CASE WHEN model LIKE 'claude-%' AND cost_usd > 0 THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN model LIKE 'claude-%' AND (cost_usd IS NULL OR cost_usd = 0) THEN 1 ELSE 0 END),0),
@@ -151,8 +142,6 @@ type HarnessActivity struct{ HookLastSeen, TraceLastSeen string }
 
 func (s *Store) HarnessActivitySince(since time.Time) (out map[string]HarnessActivity, readErr error) {
 	defer func() { s.noteRead("harness activity", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	out = map[string]HarnessActivity{}
 	rows, err := s.db.Query(harnessActivitySQL, instantArg(since))
 	if err != nil {
@@ -200,8 +189,6 @@ func (s *Store) SessionsByHarness(since time.Time) map[string]int {
 // counts, their budgets and how far back each cap keeps the kind, ordered by
 // kind. Never nil.
 func (s *Store) RetentionReport() []KindRetention {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	out := []KindRetention{}
 	rows, err := s.db.Query(`SELECT kind, COUNT(*), SUM(record) FROM events GROUP BY kind ORDER BY kind`)
 	if err != nil {
@@ -228,15 +215,15 @@ func (s *Store) RetentionReport() []KindRetention {
 	at := timestampOrderExpr("ts")
 	for i := range out {
 		r := &out[i]
-		r.HorizonTS = s.nthNewestTSLocked(`SELECT `+at+` FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?`, r.Kind, r.Budget-1)
-		r.RecordHorizonTS = s.nthNewestTSLocked(`SELECT `+at+` FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?`, r.Kind, r.RecordBudget-1)
+		r.HorizonTS = s.nthNewestTS(`SELECT `+at+` FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?`, r.Kind, r.Budget-1)
+		r.RecordHorizonTS = s.nthNewestTS(`SELECT `+at+` FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?`, r.Kind, r.RecordBudget-1)
 	}
 	return out
 }
 
-// nthNewestTSLocked runs a one-row timestamp query and returns it as RFC3339
-// UTC, or "" when there is no such row. Caller holds mu.
-func (s *Store) nthNewestTSLocked(q string, kind, offset int) string {
+// nthNewestTS runs a one-row timestamp query and returns it as RFC3339 UTC,
+// or "" when there is no such row.
+func (s *Store) nthNewestTS(q string, kind, offset int) string {
 	var ts string
 	if err := s.db.QueryRow(q, kind, offset).Scan(&ts); err != nil {
 		return ""

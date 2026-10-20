@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -191,36 +192,54 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 		<-consumerDone
 	})
 
+	// The server and collectors write into dir as they stop (the transcript
+	// scanner saves its offsets): they finish before dir is removed.
+	var running sync.WaitGroup
+	t.Cleanup(func() {
+		cancel()
+		running.Wait()
+	})
+	running.Add(3)
+
 	statusFn := func() api.Status { return api.Status{Running: true} }
 	apiServer := api.New(api.Deps{SocketPath: sockPath, Store: st, Killer: nil, Status: statusFn})
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- apiServer.Serve(ctx) }()
+	go func() {
+		defer running.Done()
+		serveErr <- apiServer.Serve(ctx)
+	}()
 
 	fixture := &smokeSocketLister{pid: int32(os.Getpid())}
-	go supervise.Run(ctx, "netsample", func(c context.Context) error {
-		ns := collect.NewNetSampler(b, tg, cfg.NetSampleInterval, fixture)
-		return ns.Run(c)
-	})
+	go func() {
+		defer running.Done()
+		supervise.Run(ctx, "netsample", func(c context.Context) error {
+			ns := collect.NewNetSampler(b, tg, cfg.NetSampleInterval, fixture)
+			return ns.Run(c)
+		})
+	}()
 
 	scannerReady := make(chan error, 1)
 	transcriptProduced := make(chan struct{}, 1)
-	go supervise.Run(ctx, "transcript", func(c context.Context) error {
-		ts := collect.NewTranscriptScanner(b, []string{actPath})
-		ts.OffsetStatePath = filepath.Join(dir, "transcript-offsets.json")
-		ts.OnCheckpointWrite = func(err error) {
-			select {
-			case scannerReady <- err:
-			default:
+	go func() {
+		defer running.Done()
+		supervise.Run(ctx, "transcript", func(c context.Context) error {
+			ts := collect.NewTranscriptScanner(b, []string{actPath})
+			ts.OffsetStatePath = filepath.Join(dir, "transcript-offsets.json")
+			ts.OnCheckpointWrite = func(err error) {
+				select {
+				case scannerReady <- err:
+				default:
+				}
 			}
-		}
-		ts.OnProduce = func() {
-			select {
-			case transcriptProduced <- struct{}{}:
-			default:
+			ts.OnProduce = func() {
+				select {
+				case transcriptProduced <- struct{}{}:
+				default:
+				}
 			}
-		}
-		return ts.Run(c)
-	})
+			return ts.Run(c)
+		})
+	}()
 
 	// Socket and collectors must be live before the activity file is written.
 	// Starting the transcript scanner after that write seeds its offset at EOF
