@@ -64,7 +64,7 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 | `/costs/unpriced` | GET, HEAD | — | — | — |
 | `/costs/plans` | GET, HEAD | — | — | — |
 | `/doctor` | GET, HEAD | — | — | `api.DoctorReport` |
-| `/doctor/seen` | — | POST | no agents | `api.DoctorSeen` |
+| `/doctor/seen` | GET, HEAD, POST | POST | no agents | `api.DoctorSeen` |
 | `/coverage/probe` | GET, HEAD, POST | POST | no agents | — |
 | `/routing/claude` | — | — | no agents | `api.RoutingInfo` |
 | `/worktrees` | GET, HEAD | — | no agents | — |

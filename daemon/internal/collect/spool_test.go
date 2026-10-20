@@ -665,6 +665,13 @@ func TestSpoolRetainedLineRetriesBeforeTheNextPoll(t *testing.T) {
 func TestSpoolLossSurvivesHealthyPollAfterOverwrittenRotation(t *testing.T) {
 	path := t.TempDir() + "/spool.jsonl"
 	appendSpool(t, path, esOpenLine(1)+"\n"+esOpenLine(2)+"\n")
+	// Keep the overwritten inode allocated so a replacement cannot reuse it
+	// and appear to be a truncation instead of a rotation.
+	original, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = original.Close() })
 	b := bus.New(1)
 	defer b.Close()
 	sub := b.Subscribe()
