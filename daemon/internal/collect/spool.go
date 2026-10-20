@@ -325,6 +325,14 @@ type SpoolTailer struct {
 	// growing must not read as healthy coverage.
 	OnProduce func()
 
+	// StatePath, when set, keeps the read position across daemon runs: a
+	// restart resumes where the last run stopped (see startCursor).
+	StatePath string
+	// The last saved position; owned by the poll loop.
+	savedAt     time.Time
+	savedOffset int64
+	savedFile   os.FileInfo
+
 	statsMu sync.Mutex
 	stats   SpoolStats
 	lost    uint64
@@ -438,11 +446,13 @@ func (t *SpoolTailer) Run(ctx context.Context) error {
 }
 
 func (t *SpoolTailer) follow(ctx context.Context) error {
-	var c spoolCursor
+	c := t.startCursor()
 	for {
 		c = t.poll(c)
+		t.savePosition(c, false)
 		select {
 		case <-ctx.Done():
+			t.savePosition(c, true)
 			return ctx.Err()
 		case <-time.After(200 * time.Millisecond):
 		}

@@ -254,14 +254,17 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// picked up by watchSpool (startCollectors) without a daemon restart.
 	spool := new(atomic.Pointer[collect.SpoolTailer])
 	if collect.SpoolAvailable() {
-		spool.Store(collect.NewSpoolTailer(b))
+		spool.Store(newSpoolTailer(b, cfg))
 	}
+	// lossSeen is the operator's mark that spool loss and bus drops so far
+	// were seen; Doctor and posture stop failing on them until they grow.
+	lossSeen := new(collect.LossSeen)
 	esServiceProbe := func() (collect.ESServiceSnapshot, error) {
 		t := spool.Load()
 		if t == nil {
 			return collect.ESServiceSnapshot{}, errNoSpool
 		}
-		return spoolServiceProbe(t)()
+		return spoolServiceProbe(t, lossSeen)()
 	}
 
 	// Supervisor with a shared health registry so /status reports each collector's
@@ -366,6 +369,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			FleetConfigured: fleetOn.Load,
 			BusDrops:        b.Dropped,
 			BusDropAt:       b.DroppedAt,
+			LossSeen:        lossSeen,
 			OTLPDropped:     otlpExp.Dropped,
 			PublishEvent:    b.Publish,
 			DeltaHub:        deltaHub,
@@ -998,7 +1002,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	default:
 		log.Printf("file telemetry unavailable: ES requires a privileged collector (install it from Settings); transcript + network signals still active; starts when the collector's spool appears")
 		go watchSpool(ctx, spoolWatchInterval, collect.SpoolAvailable, func() {
-			t := collect.NewSpoolTailer(b)
+			t := newSpoolTailer(b, cfg)
 			spool.Store(t)
 			tailSpool(t)
 		})
@@ -1162,11 +1166,19 @@ func openclawExes(tagger *agents.Tagger) []string {
 	return out
 }
 
+// newSpoolTailer tails the privileged collector's spool, keeping its read
+// position beside the store so a restart resumes it.
+func newSpoolTailer(b *bus.Bus, cfg config.Config) *collect.SpoolTailer {
+	t := collect.NewSpoolTailer(b)
+	t.StatePath = filepath.Join(filepath.Dir(cfg.DBPath), "spool-position.json")
+	return t
+}
+
 // spoolServiceProbe wraps collect.ESServiceState with the live tailer's
 // drain stats, so a flooding writer (garbage lines drowning the per-tick
 // budget) reads as a posture/doctor failure even while the root service and
 // the tailer's own produce-heartbeat both look healthy.
-func spoolServiceProbe(t *collect.SpoolTailer) func() (collect.ESServiceSnapshot, error) {
+func spoolServiceProbe(t *collect.SpoolTailer, seen *collect.LossSeen) func() (collect.ESServiceSnapshot, error) {
 	return func() (collect.ESServiceSnapshot, error) {
 		snap, err := collect.ESServiceState()
 		if err != nil {
@@ -1176,7 +1188,7 @@ func spoolServiceProbe(t *collect.SpoolTailer) func() (collect.ESServiceSnapshot
 		snap.BytesLost = stats.BytesLost
 		if lostAt := stats.LostAt; !lostAt.IsZero() {
 			snap.LostAt = &lostAt
-			snap.Losing = collect.LossGrowing(lostAt, time.Now())
+			snap.Losing = seen.Growing(lostAt, time.Now())
 		}
 		snap.Flooding = !stats.FloodSince.IsZero()
 		if since := stats.FloodSince; !since.IsZero() {

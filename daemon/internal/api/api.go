@@ -247,6 +247,8 @@ type API struct {
 	busDrops     func() uint64
 	busDropAt    func() time.Time
 	otlpDropped  func() uint64
+	// lossSeen marks spool loss and bus drops seen (POST /doctor/seen).
+	lossSeen *collect.LossSeen
 
 	// deltas is the typed state-change fan-out the SSE stream serves.
 	// lastPosture dedupes posture deltas (state + item count); postureGen
@@ -401,9 +403,12 @@ type TelemetryDeps struct {
 	FleetConfigured func() bool
 	BusDrops        func() uint64
 	BusDropAt       func() time.Time
-	OTLPDropped     func() uint64
-	PublishEvent    func(event.Event)
-	DeltaHub        *DeltaHub
+	// LossSeen is shared with the spool probe: marking it clears both the
+	// spool-loss and the bus-drop failure until either grows again.
+	LossSeen     *collect.LossSeen
+	OTLPDropped  func() uint64
+	PublishEvent func(event.Event)
+	DeltaHub     *DeltaHub
 }
 
 // DoctorDeps answer /doctor and /routing/claude (optional).
@@ -473,6 +478,7 @@ func New(d Deps) *API {
 		fleetConfigured: d.Telemetry.FleetConfigured,
 		busDrops:        d.Telemetry.BusDrops,
 		busDropAt:       d.Telemetry.BusDropAt,
+		lossSeen:        d.Telemetry.LossSeen,
 		otlpDropped:     d.Telemetry.OTLPDropped,
 		publishEvent:    d.Telemetry.PublishEvent,
 		deltaHub:        d.Telemetry.DeltaHub,
@@ -975,7 +981,7 @@ func (a *API) evidenceStatus(st Status) Status {
 	if a.busDropAt != nil {
 		if at := a.busDropAt(); !at.IsZero() {
 			st.BusDropAt = &at
-			st.BusDropping = collect.LossGrowing(at, time.Now())
+			st.BusDropping = a.lossSeen.Growing(at, time.Now())
 		}
 	}
 	rows := harnessCoverage(st, a.recentHarnessActivity)

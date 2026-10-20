@@ -123,6 +123,29 @@ func (a *API) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, a.doctorReport(time.Now()))
 }
 
+// DoctorSeen is when spool loss and bus drops were marked seen.
+type DoctorSeen struct {
+	SeenAt string `json:"seen_at"`
+}
+
+// handleDoctorSeen marks the spool loss and bus drops so far as seen: their
+// checks pass until either grows again. The counts stay in status.
+//
+//	POST /doctor/seen
+func (a *API) handleDoctorSeen(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.lossSeen == nil {
+		http.Error(w, "loss tracking unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	now := time.Now()
+	a.lossSeen.Mark(now)
+	writeJSON(w, DoctorSeen{SeenAt: now.UTC().Format(time.RFC3339Nano)})
+}
+
 func (a *API) doctorReport(now time.Time) DoctorReport {
 	f := a.doctorFacts(now)
 	rep := DoctorReport{
