@@ -567,9 +567,13 @@ func min(a, b int) int {
 // GetSessionBounded is the request-handler session read: bounded by a 100 ms
 // deadline, it never waits on the collector mutex.
 func (s *Store) GetSessionBounded(id string) (_ model.Session, _ bool, readErr error) {
-	defer func() { s.noteRead("session lookup", readErr) }()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
+	return s.getSessionContext(ctx, id)
+}
+
+func (s *Store) getSessionContext(ctx context.Context, id string) (_ model.Session, _ bool, readErr error) {
+	defer func() { s.noteRead("session lookup", readErr) }()
 	rows, err := s.db.QueryContext(ctx, sessionSelect+` WHERE id = ?`, id)
 	if err != nil {
 		return model.Session{}, false, err

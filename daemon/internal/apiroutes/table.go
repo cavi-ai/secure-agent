@@ -131,7 +131,7 @@ var Table = []Route{
 	{Path: "/costs/unpriced", Handler: "API.handleCostsUnpriced", Console: true},
 	{Path: "/costs/plans", Handler: "API.handleCostsPlans", Console: true},
 	{Path: "/doctor", Handler: "API.handleDoctor", Response: "api.DoctorReport", Console: true},
-	{Path: "/doctor/seen", Handler: "API.handleDoctorSeen", Response: "api.DoctorSeen", NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/doctor/seen", Handler: "API.handleDoctorSeen", Response: "api.DoctorSeen", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/coverage/probe", Handler: "API.handleCoverageProbe", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/routing/claude", Handler: "API.handleRoutingClaude", Response: "api.RoutingInfo", NoAgent: true},
 	{Path: "/worktrees", Handler: "API.handleWorktrees", Console: true, NoAgent: true},

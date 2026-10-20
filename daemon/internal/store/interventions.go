@@ -70,8 +70,7 @@ func (s *Store) RecentInterventions(sessionID string, limit int) (_ []model.Inte
 	defer func() { s.noteRead("intervention receipts", readErr) }()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// This read uses only the database snapshot, not mutable collector state.
 	query := `SELECT id,session_id,session_key,requested_at,revision,receipt_json FROM interventions`
 	args := []any{}
 	if sessionID != "" {

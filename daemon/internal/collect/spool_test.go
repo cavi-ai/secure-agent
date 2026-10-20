@@ -696,6 +696,9 @@ func TestSpoolLossSurvivesHealthyPollAfterOverwrittenRotation(t *testing.T) {
 	if tailer.Stats().Losing {
 		t.Fatal("catching up did not recover current delivery")
 	}
+	if got := tailer.Stats().LossCause; got != "rotation" {
+		t.Fatalf("loss cause=%q, want rotation", got)
+	}
 	<-sub
 	tailer.now = func() time.Time { return lossTime.Add(time.Hour) }
 	tailer.poll(c)

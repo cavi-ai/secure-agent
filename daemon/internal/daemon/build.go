@@ -1225,6 +1225,7 @@ func spoolServiceProbe(t *collect.SpoolTailer, seen *collect.LossSeen) func() (c
 		}
 		stats := t.Stats()
 		snap.BytesLost = stats.BytesLost
+		snap.LossCause = stats.LossCause
 		if lostAt := stats.LostAt; !lostAt.IsZero() {
 			snap.LostAt = &lostAt
 			snap.Losing = stats.Losing

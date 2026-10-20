@@ -5,6 +5,19 @@ import (
 	"time"
 )
 
+func TestLossSeenOlderAcknowledgementCannotUndoNewerOne(t *testing.T) {
+	var seen LossSeen
+	now := time.Now()
+	seen.Mark(now)
+	seen.Mark(now.Add(-time.Minute))
+	if seen.Growing(now.Add(-time.Second), now) {
+		t.Fatal("older acknowledgement made reviewed loss actionable again")
+	}
+	if !seen.Growing(now.Add(time.Second), now.Add(2*time.Second)) {
+		t.Fatal("new loss was hidden")
+	}
+}
+
 // Marking loss seen stops growth up to the mark from counting; later growth,
 // or no mark at all, still counts.
 func TestLossSeenStopsGrowthMarkedSeen(t *testing.T) {

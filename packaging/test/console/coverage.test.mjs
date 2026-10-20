@@ -45,10 +45,20 @@ test('coverage distinguishes harness capabilities and activity from payload insp
   assert.doesNotMatch(html, /<unknown>/);
 });
 
-test('storage loss gives a storage remedy instead of a hook setup instruction', () => {
+test('storage loss opens diagnostics instead of a hook setup instruction', () => {
   const nodes = render({}, {coverage_count: 1, coverage_items: [{kind: 'storage_loss', title: 'Evidence could not be saved', detail: 'One write failed'}]});
   const html = nodes.get('coverage-list').innerHTML;
-  assert.match(html, /disk space/);
+  assert.match(html, /data-action="monitoring-diagnostics"/);
+  assert.doesNotMatch(html, /Check Setup/);
+});
+
+test('loss warnings open diagnostics without sending the operator to permissions', () => {
+  const nodes = render({}, {coverage_items: [
+    {kind:'event_loss', id:'event-bus', title:'Telemetry was dropped'},
+    {kind:'collector_silent', id:'eslogger', title:'File monitoring evidence was lost'},
+  ]});
+  const html = nodes.get('coverage-list').innerHTML;
+  assert.equal((html.match(/data-action="monitoring-diagnostics"/g) || []).length, 2);
   assert.doesNotMatch(html, /Check Setup/);
 });
 

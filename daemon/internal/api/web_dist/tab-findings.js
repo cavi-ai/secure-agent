@@ -35,10 +35,8 @@ function renderCoverage() {
       ? '<button type="button" class="btn btn-ghost btn-sm" data-action="open-uninspected">Review endpoints</button>'
       : it.kind === 'collector_down' && it.id === 'eslogger'
         ? '<button type="button" class="btn btn-ghost btn-sm" data-action="open-fda">Open permissions</button>'
-        : it.kind === 'storage_loss'
-          ? '<span class="coverage-guidance">Check disk space and state-directory permissions. Run Doctor for details.</span>'
-          : it.kind === 'event_loss'
-            ? '<span class="coverage-guidance">Run Doctor to review lost telemetry. Restarting cannot restore missing evidence.</span>'
+        : ['event_loss', 'storage_loss', 'storage_read_failure'].includes(it.kind) || it.id === 'eslogger'
+          ? '<button type="button" class="btn btn-ghost btn-sm" data-action="monitoring-diagnostics">Inspect monitoring</button>'
         : '<span class="coverage-guidance">Check Setup &amp; Permissions in the menu bar</span>';
     return `<div class="coverage-row"><span><strong>${escapeHTML(it.title)}</strong><span>${escapeHTML(it.detail || '')}</span></span>${action}</div>`;
   }).join('');
