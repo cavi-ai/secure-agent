@@ -11,7 +11,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Sessions: a Hooks view with each Claude Code hook's runs, failures, blocks, returned characters and time, read from the transcript (`/sessions/{id}/hooks`).
 - Codex: record forwarded app-server hook completions with `secure-agent hooks record`, using a shared metadata contract and stable host delivery IDs.
 - Hooks: native result adapters for host-forwarded OpenClaw, Hermes and OpenCode v2 handler completions.
-- Doctor: Fix all is offered whenever a check is not passing; it restarts the daemon, unregisters other copies of the app, marks spool loss and bus drops seen (`POST /doctor/seen`) and opens Traffic for egress.
+- Doctor: Fix all is offered whenever a check is not passing; it restarts the daemon, unregisters other copies of the app, marks spool loss, bus drops and recovered storage failures seen (`POST /doctor/seen`) and opens Traffic for egress.
 
 ### Changed
 - Performance: posture, snapshots and finding lists read advisor verdicts in batches and reuse 24-hour flag reads until a flag changes; posture is recomputed off the event ingest path, event retention runs beside persistence in short batches, and flag and event reads no longer wait for writes.
@@ -27,8 +27,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the popover opens in front of fullscreen apps on every Space.
 - Console: the polling fallback keeps refreshing every 2 s, posture shows stale after two minutes without a refresh, and review changes refresh the console.
 - Console: an older worktree read no longer overwrites a newer one, and markup escapes single quotes.
-- File telemetry starts when the collector appears after launch, restarts its helper from the new build after an update, its repair no longer leaves the helper unregistered, and a restarted daemon resumes the spool where its last run stopped instead of losing the backlog; an oversized spool line is skipped and counted as lost instead of dropping the unread tail.
-- Doctor: session identity counts sessions started since boot, so old unnamed sessions no longer fail it.
+- File telemetry starts when the collector appears after launch, restarts its helper from the new build after an update, its repair no longer leaves the helper unregistered, and a restarted daemon resumes the spool where its last run stopped instead of losing the backlog, and retries within milliseconds when the event bus is full instead of falling behind heavy file activity; an oversized spool line is skipped and counted as lost instead of dropping the unread tail.
+- Doctor: session identity counts sessions started since boot, so old unnamed sessions no longer fail it; spool loss no longer also fails Collectors as a silent eslogger; Storage passes once its recovered write failures are 10 minutes old or marked seen.
 - Probes: `lsof` and `launchctl` calls time out instead of hanging.
 - Retention: prune failures show in write health.
 - Findings: flags, incidents and the guard hook classify sensitive paths with one rule.

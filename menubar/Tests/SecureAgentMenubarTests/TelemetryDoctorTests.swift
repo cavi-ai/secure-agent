@@ -472,6 +472,7 @@ final class TelemetryDoctorTests: XCTestCase {
                     DaemonDoctorCheckModel(id: "egress-routing", title: "Egress routing", state: "fail", detail: "1 endpoints"),
                     DaemonDoctorCheckModel(id: "bus", title: "Event bus", state: "fail", detail: "3 dropped"),
                     DaemonDoctorCheckModel(id: "file-telemetry", title: "File telemetry", state: "fail", detail: "lost"),
+                    DaemonDoctorCheckModel(id: "storage", title: "Storage", state: "fail", detail: "new writes recovered"),
                     DaemonDoctorCheckModel(id: "session-rate", title: "Session creation rate", state: "skip", detail: "grace"),
                 ]
             })
@@ -482,6 +483,7 @@ final class TelemetryDoctorTests: XCTestCase {
         assertCheck(losing, "daemon.egress-routing", .fail, .openTraffic)
         assertCheck(losing, "daemon.bus", .fail, .markLossSeen)
         assertCheck(losing, "daemon.file-telemetry", .fail, .markLossSeen)
+        assertCheck(losing, "daemon.storage", .fail, .markLossSeen)
         assertCheck(losing, "daemon.session-rate", .warn, nil)
         assertCheck(fixes(losing: false), "daemon.file-telemetry", .fail, nil)
     }
