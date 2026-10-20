@@ -167,6 +167,14 @@ a failure, without a retry loop or blocking collectors.
 The native Telemetry Doctor displays the daemon's recovery guidance and opens
 hook setup for failed registration or activity checks. Lost bus deliveries
 remain an evidence gap for that run; restarting cannot recover them.
+Its Fix all is offered while any check is not passing: it restarts the daemon
+for silent collectors or traces, unregisters other copies of the app from
+Launch Services, opens Traffic for the egress choice, and marks spool loss and
+bus drops seen (`POST /doctor/seen`, `daemon/internal/collect/loss_seen.go`),
+so those checks pass until either grows again.
+A restarted daemon resumes the spool at the position its last run saved
+(`daemon/internal/collect/spool_position.go`); with none it starts at the
+spool's end instead of a backlog it cannot catch up on before rotation.
 The ES spool reader offers events without blocking and retains rejected lines
 for the next poll, including the tail of the retained rotated spool. Valid
 bursts past the parse budget remain on disk for later polls. If rotation
