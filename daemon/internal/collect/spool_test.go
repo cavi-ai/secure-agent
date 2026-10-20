@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -147,6 +148,47 @@ func TestSpoolTailerParsesAndPublishes(t *testing.T) {
 	}
 	if got[0].Kind != 0 || got[0].PID != 4242 || got[0].Path != "/Users/x/.ssh/id_ed25519" {
 		t.Fatalf("wrong event decoded: %+v", got[0])
+	}
+}
+
+func TestSpoolCollectionPausesWhenDisabled(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	appendSpool(t, path, esOpenLine(42)+"\n")
+	b := bus.New(4)
+	defer b.Close()
+	sub := b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+	var enabled atomic.Bool
+	checked := make(chan struct{}, 1)
+	tailer.Enabled = func() bool {
+		select {
+		case checked <- struct{}{}:
+		default:
+		}
+		return enabled.Load()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- tailer.follow(ctx) }()
+	defer func() { cancel(); <-done }()
+	select {
+	case <-checked:
+	case <-time.After(time.Second):
+		t.Fatal("collection choice was not checked")
+	}
+	select {
+	case <-sub:
+		t.Fatal("disabled file telemetry published an event")
+	case <-time.After(50 * time.Millisecond):
+	}
+	enabled.Store(true)
+	select {
+	case e := <-sub:
+		if e.PID != 42 {
+			t.Fatalf("unexpected event: %+v", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("file telemetry did not resume")
 	}
 }
 
@@ -650,6 +692,9 @@ func TestSpoolLossSurvivesHealthyPollAfterOverwrittenRotation(t *testing.T) {
 	}
 	if got := tailer.Stats().LostAt; !got.Equal(lossTime) {
 		t.Fatalf("LostAt = %v, want the loss time %v", got, lossTime)
+	}
+	if tailer.Stats().Losing {
+		t.Fatal("catching up did not recover current delivery")
 	}
 	<-sub
 	tailer.now = func() time.Time { return lossTime.Add(time.Hour) }

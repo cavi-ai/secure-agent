@@ -17,6 +17,8 @@ type PostureItem struct {
 	Detail     string                   `json:"detail,omitempty"`
 	Timestamp  string                   `json:"ts,omitempty"`
 	Assessment *model.FindingAssessment `json:"assessment,omitempty"`
+	// MonitoringState separates an active fault from configuration and history.
+	MonitoringState string `json:"monitoring_state,omitempty"`
 }
 
 // Posture is the single headline answer: "do I need to look at this machine,
@@ -24,9 +26,9 @@ type PostureItem struct {
 // fleet collector) renders from this instead of re-deriving it from raw lists.
 //
 // Invariant: every pending decision in Items appears in exactly one Group,
-// and group item counts sum to NeedsYou (= len(Items)). CoverageItems are
-// monitoring gaps and informational uninspected egress, counted separately;
-// only a gap moves State off all-clear.
+// and group item counts sum to NeedsYou (= len(Items)). CoverageItems retain
+// active faults, configuration notes and historical gaps. CoverageCount counts
+// only active faults; historical gaps do not claim current delivery is failing.
 type Posture struct {
 	State         string        `json:"state"` // all-clear | attention | critical
 	NeedsYou      int           `json:"needs_you"`
@@ -87,13 +89,14 @@ func (a *API) publishPosture(gen uint64, p Posture, force bool) {
 	if gen < a.lastPostureGen {
 		return
 	}
-	if !force && p.State == a.lastPostureState && p.NeedsYou == a.lastPostureCount && p.CoverageCount == a.lastPostureCoverage && reflect.DeepEqual(p.AttentionSummary, a.lastPostureAttention) {
+	if !force && p.State == a.lastPostureState && p.NeedsYou == a.lastPostureCount && p.CoverageCount == a.lastPostureCoverage && reflect.DeepEqual(p.AttentionSummary, a.lastPostureAttention) && reflect.DeepEqual(p.CoverageItems, a.lastPostureEvidence) {
 		return
 	}
 	a.lastPostureGen = gen
 	a.lastPostureState = p.State
 	a.lastPostureCount = p.NeedsYou
 	a.lastPostureCoverage = p.CoverageCount
+	a.lastPostureEvidence = p.CoverageItems
 	a.lastPostureAttention = p.AttentionSummary
 	a.deltaHub.Publish(Delta{Type: "posture", Data: p})
 }

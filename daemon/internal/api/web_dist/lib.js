@@ -2120,6 +2120,13 @@ function mapPostureAttention(p, fn) {
 // alias table.
 const CONSOLE_TABS = ['home', 'sessions', 'monitoring', 'protection', 'system', 'agent'];
 const PROTECTION_SUBS = ['traffic', 'rules', 'sources', 'audit'];
+
+// The daemon owns current monitoring health. Missing states support older daemons.
+function monitoringItemActive(item) {
+  if (['historical', 'informational', 'disabled'].includes(item?.monitoring_state)) return false;
+  if (item?.monitoring_state === 'active') return true;
+  return !['uninspected_egress', 'hook_analysis_limit'].includes(item?.kind);
+}
 const SESSIONS_SUBS = ['board', 'processes', 'events'];
 const SYSTEM_SUBS = ['resources', 'worktrees', 'clutter'];
 const TAB_ALIASES = {

@@ -67,11 +67,18 @@ test('failed refresh retains critical severity, decisions and evidence with a vi
   assert.equal(f.nodes.get('tabs-posture-text').textContent, '2 need you · refresh failed');
 });
 
-test('coverage gaps remain visible even with zero pending decisions and an all-clear input', () => {
+test('the daemon headline is authoritative when coverage contains neutral notes', () => {
   const f = fixture({ state: 'all-clear', needs_you: 0, coverage_count: 1, summary: 'One collector is silent' });
   f.paint();
+  assert.equal(f.nodes.get('posture-state').textContent, 'No pending decisions');
+  assert.equal(f.nodes.get('tabs-posture-text').textContent, 'No pending decisions');
+  assert.equal(f.nodes.get('tabs-posture').dataset.state, 'all-clear');
+});
+
+test('an active monitoring failure remains a warning with zero pending decisions', () => {
+  const f = fixture({state:'attention',needs_you:0,coverage_count:1,summary:'Delivery is failing'});
+  f.paint();
   assert.equal(f.nodes.get('posture-state').textContent, 'Monitoring needs attention');
-  assert.equal(f.nodes.get('tabs-posture-text').textContent, 'Monitoring gap');
   assert.equal(f.nodes.get('tabs-posture').dataset.state, 'attention');
 });
 

@@ -212,18 +212,17 @@ struct ConsoleView: View {
                 }
                 Spacer(minLength: 0)
             }
-            if let summary = state.posture?.validatedAttentionSummary {
+            if let summary = state.posture?.validatedAttentionSummary,
+               summary.buckets.contains(where: { $0.count + $0.coverageCount > 0 }) {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(summary.buckets, id: \.kind) { bucket in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("\(bucket.title): \(bucket.count) queued")
+                            Text(bucket.kind == "monitoring"
+                                 ? "\(bucket.title): \(bucket.count + bucket.coverageCount) current problem\(bucket.count + bucket.coverageCount == 1 ? "" : "s")"
+                                 : "\(bucket.title): \(bucket.count) queued")
                                 .font(.system(size: 11, weight: .semibold))
                             if let first = bucket.first {
                                 Text(first.title).font(.system(size: 11)).foregroundStyle(.secondary)
-                            }
-                            if bucket.coverageCount > 0 {
-                                Text("\(bucket.coverageCount) monitoring gaps counted separately")
-                                    .font(.system(size: 11)).foregroundStyle(.secondary)
                             }
                         }.fixedSize(horizontal: false, vertical: true)
                     }

@@ -220,7 +220,7 @@ func TestPostureEgressNoteAloneIsAllClear(t *testing.T) {
 		return Status{Running: true, UninspectedEgress: 9}
 	}})
 	p := a.computePosture()
-	if p.State != "all-clear" || p.NeedsYou != 0 || p.CoverageCount != 1 || p.CoverageItems[0].Kind != "uninspected_egress" {
+	if p.State != "all-clear" || p.NeedsYou != 0 || p.CoverageCount != 0 || p.CoverageItems[0].Kind != "uninspected_egress" {
 		t.Fatalf("posture = %+v, want all-clear with the egress note listed", p)
 	}
 	if p.Summary != "No pending decisions. See finding history and incidents for remaining risk." {
@@ -250,8 +250,8 @@ func TestPostureSeparatesUninspectedEgressAndDeadCollectorsFromDecisions(t *test
 	}
 	var p Posture
 	decodeInto(t, resp, &p)
-	if p.State != "attention" || p.NeedsYou != 0 || p.CoverageCount != 2 {
-		t.Fatalf("posture = %+v, want attention with 0 decisions and 2 coverage gaps", p)
+	if p.State != "attention" || p.NeedsYou != 0 || p.CoverageCount != 1 {
+		t.Fatalf("posture = %+v, want attention with 0 decisions and 1 active monitoring failure", p)
 	}
 	kinds := map[string]bool{}
 	for _, it := range p.CoverageItems {
@@ -292,7 +292,7 @@ func TestPostureSeparatesUninspectedEgressAndDeadCollectorsFromDecisions(t *test
 
 // A running collector that produces nothing while agents are active is the
 // monitor's worst failure mode: green lights, blind sensors.
-func TestPostureFlagsSilentCollectorsAndUncoveredHarnesses(t *testing.T) {
+func TestPostureKeepsIdleCollectorsAndUnconfiguredHooksNeutral(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture5_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
 	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status {
@@ -322,14 +322,14 @@ func TestPostureFlagsSilentCollectorsAndUncoveredHarnesses(t *testing.T) {
 	for _, it := range p.CoverageItems {
 		kinds[it.Kind] = it.ID
 	}
-	if kinds["collector_silent"] != "eslogger" {
-		t.Fatalf("expected collector_silent for eslogger, got %+v", p.CoverageItems)
+	if kinds["collector_idle"] != "eslogger" {
+		t.Fatalf("expected an idle observation for eslogger, got %+v", p.CoverageItems)
 	}
 	if kinds["harness_uncovered"] == "" {
 		t.Fatalf("expected harness_uncovered (agents active, zero hook events), got %+v", p.CoverageItems)
 	}
-	if p.NeedsYou != 0 {
-		t.Fatalf("monitoring gaps are not decisions: %+v", p)
+	if p.NeedsYou != 0 || p.CoverageCount != 0 || p.State != "all-clear" {
+		t.Fatalf("idle observations became warnings: %+v", p)
 	}
 	for _, it := range p.CoverageItems {
 		if it.Kind == "collector_silent" && it.ID == "netsampler" {

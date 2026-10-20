@@ -66,7 +66,7 @@
     const probe = {};
     try {
       openTab('home');
-      probe.setupEntry=!!document.querySelector('#coverage-list [data-action="hook-setup"]');
+      probe.setupEntry=!!document.querySelector('#monitoring-diagnostic-list [data-action="hook-setup"]');
       probe.coverageDelivery=!!document.querySelector('#coverage-list [data-action="hook-delivery-inspect"][data-id="hermes-bridge"]');
       const priorSession=window.SA.selectedSessionId;
       const head=[...document.querySelectorAll('#attention-list .need-head')].find(el=>el.textContent.includes('Hermes hook delivery'));

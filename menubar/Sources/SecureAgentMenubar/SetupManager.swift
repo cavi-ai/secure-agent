@@ -177,6 +177,7 @@ public final class SetupManager: ObservableObject {
     /// the app uses the defaults.
     init(esService: any ESServiceControl = SMAppService.daemon(plistName: SetupManager.esCollectorPlistName),
          defaults: UserDefaults = AppPreferences.shared,
+         configurationHome: String? = nil,
          plistPresent: (() -> Bool)? = nil,
          openPane: ((ESSettingsPane) -> Void)? = nil,
          launchdProbe: (@Sendable () -> LaunchdProbe)? = nil,
@@ -184,6 +185,7 @@ public final class SetupManager: ObservableObject {
          appURL: URL = Bundle.main.bundleURL,
          deferAutomaticTelemetry: Bool = false) {
         self.esService = esService
+        configStore = ConfigStore(home: configurationHome ?? NSHomeDirectory())
         self.appURL = appURL
         esLocationAllowed = AppIdentity.isInstalledCopy(appURL)
         esLaunchdProbe = launchdProbe ?? { SetupManager.esLaunchdJob() }
@@ -269,7 +271,7 @@ public final class SetupManager: ObservableObject {
 
     // MARK: - Local advisor
 
-    private lazy var configStore = ConfigStore(home: home)
+    private let configStore: ConfigStore
 
     /// The current file; empty when it is missing or unreadable.
     private var configDocument: ConfigDocument {
@@ -644,6 +646,8 @@ public final class SetupManager: ObservableObject {
     /// The card's Enable: clears the user's Remove and registers the
     /// in-bundle collector daemon.
     public func installESCollector() throws {
+        guard esLocationAllowed else { throw SetupError.notInstalledCopy }
+        try configStore.update { try ConfigDocument($0).setting("file_telemetry_enabled", to: true).text }
         lastError = nil
         deferAutomaticTelemetry = false
         prefs.set(false, forKey: Self.firstUseTelemetryConsentKey)
@@ -698,7 +702,7 @@ public final class SetupManager: ObservableObject {
     /// the follow-up step after a registration terminates.
     private func runESAutopilot() {
         guard !deferAutomaticTelemetry else { return }
-        let action = ESAutopilot.decide(stage: esStage, userDisabled: esMemory.userDisabled,
+        let action = ESAutopilot.decide(stage: esStage, userDisabled: esUserDisabled,
                                         attemptedThisLaunch: esRegisterAttemptedThisLaunch,
                                         panesOpenedForBuild: esMemory.panesOpenedForBuild)
         switch action {
@@ -723,7 +727,7 @@ public final class SetupManager: ObservableObject {
     /// will not start its job. The launchd probe runs off the main actor, one
     /// at a time, at most every 30 s.
     private func repairStuckESJob() {
-        guard esLocationAllowed, esRepairProbe == nil, !esRegisterAttemptedThisLaunch, !esMemory.userDisabled,
+        guard esLocationAllowed, esRepairProbe == nil, !esRegisterAttemptedThisLaunch, !esUserDisabled,
               esServiceStatus == .enabled,
               esRepairProbeStarted.map({ Date().timeIntervalSince($0) >= 30 }) ?? true else { return }
         esRepairProbeStarted = Date()
@@ -737,7 +741,7 @@ public final class SetupManager: ObservableObject {
             guard let self else { return }
             self.esRepairProbe = nil
             if ESAutopilot.needsReregister(serviceStatus: self.esService.status,
-                                           userDisabled: self.esMemory.userDisabled,
+                                           userDisabled: self.esUserDisabled,
                                            attemptedThisLaunch: self.esRegisterAttemptedThisLaunch,
                                            launchd: job, helperStale: stale) {
                 await self.reregisterESService()
@@ -774,7 +778,7 @@ public final class SetupManager: ObservableObject {
     /// Polls once a second while the stage waits on a System Settings switch
     /// and the user has not removed file telemetry; stops otherwise.
     private func manageESPoll() {
-        let wanted = esStage.awaitsUser && !esMemory.userDisabled && !deferAutomaticTelemetry
+        let wanted = esStage.awaitsUser && !esUserDisabled && !deferAutomaticTelemetry
         if wanted, esPollTask == nil {
             esPollTask = Task { [weak self] in
                 while !Task.isCancelled {
@@ -843,13 +847,30 @@ public final class SetupManager: ObservableObject {
     /// The card's Remove: records the user's choice so the autopilot stops
     /// registering, then unregisters.
     public func removeESCollector() throws {
+        try configStore.update { try ConfigDocument($0).setting("file_telemetry_enabled", to: false).text }
         esMemory.userDisabled = true
         defer { refreshESState() }
         try uninstallESCollector()
     }
 
     /// Whether the user removed file telemetry (cleared by Enable).
-    var esUserDisabled: Bool { esMemory.userDisabled }
+    var esUserDisabled: Bool {
+        if let choice = try? configStore.document().scalar("file_telemetry_enabled"),
+           ["true", "false"].contains(choice.text) { return choice.text == "false" }
+        return esMemory.userDisabled
+    }
+
+    /// Bring an explicit opt-out from older app preferences into daemon config.
+    func migrateTelemetryChoice() {
+        guard esMemory.userDisabled || deferAutomaticTelemetry else { return }
+        do {
+            try configStore.update { text in
+                let document = ConfigDocument(text)
+                guard try document.scalar("file_telemetry_enabled") == nil else { return text }
+                return try document.setting("file_telemetry_enabled", to: false).text
+            }
+        } catch { report(error) }
+    }
 
     /// Removes the collector an earlier version installed outside the bundle
     /// (it shares the launchd label with the in-bundle daemon): boot out the

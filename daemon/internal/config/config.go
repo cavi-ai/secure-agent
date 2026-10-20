@@ -333,58 +333,60 @@ type priceYAML struct {
 }
 
 type rawConfig struct {
-	DisabledAgents      []string              `yaml:"disabled_agents"`
-	SensitiveGlobs      []string              `yaml:"sensitive_globs"`
-	SensitivePaths      []string              `yaml:"sensitive_paths"`
-	NotSecretPaths      []string              `yaml:"not_secret_paths"`
-	KeychainMarkers     []string              `yaml:"keychain_markers"`
-	Agents              []AgentDef            `yaml:"agents"`
-	VendorAllowlist     map[string][]string   `yaml:"vendor_allowlist"`
-	CredentialOwners    []CredentialOwner     `yaml:"credential_owners"`
-	NetSampleIntervalMS int64                 `yaml:"net_sample_interval_ms"`
-	SocketPath          string                `yaml:"socket_path"`
-	DBPath              string                `yaml:"db_path"`
-	JSONLPath           string                `yaml:"jsonl_path"`
-	OpenclawHome        string                `yaml:"openclaw_home"`
-	HermesHome          string                `yaml:"hermes_home"`
-	ProxyEnabled        bool                  `yaml:"proxy_enabled"`
-	ProxyPort           int                   `yaml:"proxy_port"`
-	ProxyCACertPath     string                `yaml:"proxy_ca_cert_path"`
-	ProxyCAKeyPath      string                `yaml:"proxy_ca_key_path"`
-	ProxyInspectHosts   []string              `yaml:"proxy_inspect_hosts"`
-	Firewall            FirewallConfig        `yaml:"firewall"`
-	DirectoryGuard      DirectoryGuardConfig  `yaml:"directory_guard"`
-	ResourceControl     ResourceControlConfig `yaml:"resource_control"`
-	Fleet               FleetConfig           `yaml:"fleet"`
-	Advisor             AdvisorYAML           `yaml:"advisor"`
-	Retention           RetentionYAML         `yaml:"retention"`
-	OTLP                OTLPConfig            `yaml:"otlp"`
-	Worktrees           WorktreesConfig       `yaml:"worktrees"`
-	SystemAgent         SystemAgentConfig     `yaml:"system_agent"`
+	DisabledAgents       []string              `yaml:"disabled_agents"`
+	SensitiveGlobs       []string              `yaml:"sensitive_globs"`
+	SensitivePaths       []string              `yaml:"sensitive_paths"`
+	NotSecretPaths       []string              `yaml:"not_secret_paths"`
+	KeychainMarkers      []string              `yaml:"keychain_markers"`
+	Agents               []AgentDef            `yaml:"agents"`
+	VendorAllowlist      map[string][]string   `yaml:"vendor_allowlist"`
+	CredentialOwners     []CredentialOwner     `yaml:"credential_owners"`
+	NetSampleIntervalMS  int64                 `yaml:"net_sample_interval_ms"`
+	SocketPath           string                `yaml:"socket_path"`
+	DBPath               string                `yaml:"db_path"`
+	JSONLPath            string                `yaml:"jsonl_path"`
+	OpenclawHome         string                `yaml:"openclaw_home"`
+	HermesHome           string                `yaml:"hermes_home"`
+	ProxyEnabled         bool                  `yaml:"proxy_enabled"`
+	FileTelemetryEnabled *bool                 `yaml:"file_telemetry_enabled"`
+	ProxyPort            int                   `yaml:"proxy_port"`
+	ProxyCACertPath      string                `yaml:"proxy_ca_cert_path"`
+	ProxyCAKeyPath       string                `yaml:"proxy_ca_key_path"`
+	ProxyInspectHosts    []string              `yaml:"proxy_inspect_hosts"`
+	Firewall             FirewallConfig        `yaml:"firewall"`
+	DirectoryGuard       DirectoryGuardConfig  `yaml:"directory_guard"`
+	ResourceControl      ResourceControlConfig `yaml:"resource_control"`
+	Fleet                FleetConfig           `yaml:"fleet"`
+	Advisor              AdvisorYAML           `yaml:"advisor"`
+	Retention            RetentionYAML         `yaml:"retention"`
+	OTLP                 OTLPConfig            `yaml:"otlp"`
+	Worktrees            WorktreesConfig       `yaml:"worktrees"`
+	SystemAgent          SystemAgentConfig     `yaml:"system_agent"`
 	// Pricing entries are decoded one by one (parsePricing) so a single
 	// malformed entry is dropped instead of failing the whole overlay.
 	Pricing map[string]yaml.Node `yaml:"pricing"`
 }
 
 type Config struct {
-	SensitiveGlobs    []string
-	SensitivePaths    []string
-	NotSecretPaths    []string
-	KeychainMarkers   []string
-	Agents            []AgentDef
-	VendorAllowlist   map[string][]string
-	CredentialOwners  []CredentialOwner
-	DisabledAgents    []string
-	NetSampleInterval time.Duration
-	SocketPath        string
-	DBPath            string
-	JSONLPath         string
-	OpenclawHome      string // openclaw state dir holding lcm.db; "" = resolved at runtime
-	HermesHome        string // Hermes state root; empty uses environment or discovery
-	ProxyEnabled      bool
-	ProxyPort         int
-	ProxyCACertPath   string
-	ProxyCAKeyPath    string
+	SensitiveGlobs       []string
+	SensitivePaths       []string
+	NotSecretPaths       []string
+	KeychainMarkers      []string
+	Agents               []AgentDef
+	VendorAllowlist      map[string][]string
+	CredentialOwners     []CredentialOwner
+	DisabledAgents       []string
+	NetSampleInterval    time.Duration
+	SocketPath           string
+	DBPath               string
+	JSONLPath            string
+	OpenclawHome         string // openclaw state dir holding lcm.db; "" = resolved at runtime
+	HermesHome           string // Hermes state root; empty uses environment or discovery
+	ProxyEnabled         bool
+	FileTelemetryEnabled *bool
+	ProxyPort            int
+	ProxyCACertPath      string
+	ProxyCAKeyPath       string
 	// ProxyInspectHosts are the hosts an inspect-mode client's CONNECTs are
 	// decrypted and scanned for; every other routed connection is tunneled.
 	ProxyInspectHosts []string
@@ -529,29 +531,30 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 	}
 
 	cfg := Config{
-		SensitiveGlobs:    expandPaths(raw.SensitiveGlobs),
-		SensitivePaths:    expandPaths(raw.SensitivePaths),
-		NotSecretPaths:    expandPaths(raw.NotSecretPaths),
-		KeychainMarkers:   raw.KeychainMarkers,
-		Agents:            normalizeAgentKinds(filterDisabledAgents(raw.Agents, raw.DisabledAgents)),
-		DisabledAgents:    raw.DisabledAgents,
-		VendorAllowlist:   raw.VendorAllowlist,
-		CredentialOwners:  expandOwners(raw.CredentialOwners),
-		NetSampleInterval: time.Duration(raw.NetSampleIntervalMS) * time.Millisecond,
-		SocketPath:        expandPath(raw.SocketPath),
-		DBPath:            expandPath(raw.DBPath),
-		JSONLPath:         expandPath(raw.JSONLPath),
-		OpenclawHome:      expandPath(raw.OpenclawHome),
-		HermesHome:        expandPath(raw.HermesHome),
-		ProxyEnabled:      raw.ProxyEnabled,
-		ProxyPort:         raw.ProxyPort,
-		ProxyCACertPath:   expandPath(raw.ProxyCACertPath),
-		ProxyCAKeyPath:    expandPath(raw.ProxyCAKeyPath),
-		ProxyInspectHosts: raw.ProxyInspectHosts,
-		Firewall:          raw.Firewall,
-		DirectoryGuard:    raw.DirectoryGuard,
-		ResourceControl:   raw.ResourceControl,
-		Fleet:             raw.Fleet,
+		SensitiveGlobs:       expandPaths(raw.SensitiveGlobs),
+		SensitivePaths:       expandPaths(raw.SensitivePaths),
+		NotSecretPaths:       expandPaths(raw.NotSecretPaths),
+		KeychainMarkers:      raw.KeychainMarkers,
+		Agents:               normalizeAgentKinds(filterDisabledAgents(raw.Agents, raw.DisabledAgents)),
+		DisabledAgents:       raw.DisabledAgents,
+		VendorAllowlist:      raw.VendorAllowlist,
+		CredentialOwners:     expandOwners(raw.CredentialOwners),
+		NetSampleInterval:    time.Duration(raw.NetSampleIntervalMS) * time.Millisecond,
+		SocketPath:           expandPath(raw.SocketPath),
+		DBPath:               expandPath(raw.DBPath),
+		JSONLPath:            expandPath(raw.JSONLPath),
+		OpenclawHome:         expandPath(raw.OpenclawHome),
+		HermesHome:           expandPath(raw.HermesHome),
+		ProxyEnabled:         raw.ProxyEnabled,
+		FileTelemetryEnabled: raw.FileTelemetryEnabled,
+		ProxyPort:            raw.ProxyPort,
+		ProxyCACertPath:      expandPath(raw.ProxyCACertPath),
+		ProxyCAKeyPath:       expandPath(raw.ProxyCAKeyPath),
+		ProxyInspectHosts:    raw.ProxyInspectHosts,
+		Firewall:             raw.Firewall,
+		DirectoryGuard:       raw.DirectoryGuard,
+		ResourceControl:      raw.ResourceControl,
+		Fleet:                raw.Fleet,
 		Retention: RetentionConfig{
 			ConnEvent: time.Duration(raw.Retention.ConnEventHours) * time.Hour,
 			Event:     time.Duration(raw.Retention.EventDays) * 24 * time.Hour,

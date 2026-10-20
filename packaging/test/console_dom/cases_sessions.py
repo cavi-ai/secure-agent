@@ -254,7 +254,8 @@ def run_session_coverage_remains_available_without_a_global_monitoring_gap(page)
                 'Per-session coverage · 2' in dom_query(dom_session_coverage).text
                 or dom_query(dom_session_coverage).has(None, {'title': lambda value: 'Per-session coverage · 2' in (value or '')})
             )
-            and re.search('id="coverage-center"[^>]*\\bhidden', dom_session_coverage) is None
+            and dom_query(dom_session_coverage).has(None, {'id': 'coverage-center', 'hidden': None})
+            and re.search('id="monitoring-diagnostics"[^>]*\\bhidden', dom_session_coverage) is None
         ),
     )
 

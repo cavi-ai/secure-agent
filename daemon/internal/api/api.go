@@ -146,18 +146,19 @@ type Status struct {
 	// BusDrops counts in-process events a subscriber missed because its
 	// buffer was full. Zero is healthy; growth under N-agent bursts is the
 	// hot-path signal to surface.
-	BusDrops uint64 `json:"bus_drops,omitempty"`
+	BusDrops             uint64 `json:"bus_drops,omitempty"`
+	FileTelemetryEnabled *bool  `json:"file_telemetry_enabled,omitempty"`
 	// DeltaDrops counts missed live-update deliveries before a slow subscriber
 	// was disconnected. Clients reconcile from snapshots; stored evidence remains.
 	DeltaDrops uint64 `json:"delta_drops,omitempty"`
-	// BusDropAt is when the last drop happened; BusDropping is true within
-	// collect.LossWindow of it.
+	// BusDropAt records history; BusDropping reports current delivery pressure.
 	BusDropAt              *time.Time                    `json:"bus_drop_at,omitempty"`
 	BusDropping            bool                          `json:"bus_dropping,omitempty"`
 	StorageHealth          *store.WriteHealth            `json:"storage_health,omitempty"`
 	EgressProjectionHealth *store.EgressProjectionHealth `json:"egress_projection_health,omitempty"`
 	HookIngestion          *store.HookIngestionSnapshot  `json:"hook_ingestion,omitempty"`
 	OTLPDropped            uint64                        `json:"otlp_dropped,omitempty"`
+	OTLPFailing            bool                          `json:"otlp_failing,omitempty"`
 
 	// Coverage reports how many running harnesses the daemon is actually
 	// seeing ("seeing 2 of 3 harnesses") — liveness is not coverage.
@@ -246,7 +247,9 @@ type API struct {
 	publishEvent func(event.Event)
 	busDrops     func() uint64
 	busDropAt    func() time.Time
+	busDropping  func() bool
 	otlpDropped  func() uint64
+	otlpFailing  func() bool
 	// lossSeen marks spool loss and bus drops seen (POST /doctor/seen).
 	lossSeen *collect.LossSeen
 
@@ -260,6 +263,7 @@ type API struct {
 	lastPostureState     string
 	lastPostureCount     int
 	lastPostureCoverage  int
+	lastPostureEvidence  []PostureItem
 	lastPostureAttention *AttentionSummary
 
 	// costs caches /costs reports, saved in the store; unpriced caches
@@ -403,10 +407,11 @@ type TelemetryDeps struct {
 	FleetConfigured func() bool
 	BusDrops        func() uint64
 	BusDropAt       func() time.Time
-	// LossSeen is shared with the spool probe: marking it clears both the
-	// spool-loss and the bus-drop failure until either grows again.
+	BusDropping     func() bool
+	// LossSeen supports legacy producers without a current delivery-health callback.
 	LossSeen     *collect.LossSeen
 	OTLPDropped  func() uint64
+	OTLPFailing  func() bool
 	PublishEvent func(event.Event)
 	DeltaHub     *DeltaHub
 }
@@ -478,8 +483,10 @@ func New(d Deps) *API {
 		fleetConfigured: d.Telemetry.FleetConfigured,
 		busDrops:        d.Telemetry.BusDrops,
 		busDropAt:       d.Telemetry.BusDropAt,
+		busDropping:     d.Telemetry.BusDropping,
 		lossSeen:        d.Telemetry.LossSeen,
 		otlpDropped:     d.Telemetry.OTLPDropped,
+		otlpFailing:     d.Telemetry.OTLPFailing,
 		publishEvent:    d.Telemetry.PublishEvent,
 		deltaHub:        d.Telemetry.DeltaHub,
 		isAgentPID:      d.Peers.IsAgentPID,
@@ -975,6 +982,9 @@ func (a *API) evidenceStatus(st Status) Status {
 	if a.otlpDropped != nil {
 		st.OTLPDropped = a.otlpDropped()
 	}
+	if a.otlpFailing != nil {
+		st.OTLPFailing = a.otlpFailing()
+	}
 	if a.busDrops != nil {
 		st.BusDrops = a.busDrops()
 	}
@@ -983,6 +993,9 @@ func (a *API) evidenceStatus(st Status) Status {
 			st.BusDropAt = &at
 			st.BusDropping = a.lossSeen.Growing(at, time.Now())
 		}
+	}
+	if a.busDropping != nil {
+		st.BusDropping = a.busDropping()
 	}
 	rows := harnessCoverage(st, a.recentHarnessActivity)
 	probes := a.coverageProbeReceipts()

@@ -14,7 +14,7 @@
       const box=()=>document.querySelector('#attention-summary');
       const refresh=async()=>{document.querySelector('#btn-refresh').click();await idle();};
       probe.categories=['Waiting for your decision','Security review','Monitoring problems'].every(t=>box().textContent.includes(t));
-      probe.counts=box().textContent.includes('1 queued item') && box().textContent.includes('1 monitoring gap') && document.querySelector('#badge-attention-count').textContent==='2';
+      probe.counts=box().textContent.includes('1 queued item') && box().textContent.includes('2 current problems') && document.querySelector('#badge-attention-count').textContent==='2';
       box().querySelector('[data-need-id="decision-1"]').click();await idle();
       probe.identity=document.querySelector('#drawer-title-text').textContent==='Access request' && !!document.querySelector('#drawer-foot [data-id="decision-1"][data-action="guard-resolve"]');
       document.querySelector('#btn-drawer-close').click();

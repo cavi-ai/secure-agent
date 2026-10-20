@@ -24,6 +24,40 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
+// Explicit choices and discovery mode update collection and posture live.
+func TestWatchConfigAppliesFileTelemetry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("file_telemetry_enabled: false\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadStrict(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var enabled atomic.Bool
+	var choice atomic.Pointer[bool]
+	var refreshes atomic.Int32
+	enabled.Store(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		watchConfig(ctx, path, configWatchDeps{initialConfig: &cfg, fileTelemetryOn: &enabled,
+			fileTelemetryChoice: &choice, postureChanged: func() { refreshes.Add(1) }})
+	}()
+	defer func() { cancel(); <-done }()
+	waitFor(t, 4*time.Second, func() bool { return !enabled.Load() })
+	if err := os.WriteFile(path, []byte("file_telemetry_enabled: true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 4*time.Second, func() bool { return enabled.Load() && choice.Load() != nil && *choice.Load() })
+	previousRefreshes := refreshes.Load()
+	if err := os.WriteFile(path, []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 4*time.Second, func() bool { return enabled.Load() && choice.Load() == nil && refreshes.Load() > previousRefreshes })
+}
+
 // The hot-reload loop swaps the advisor stack when config.yaml changes, and
 // keeps the CURRENT stack when the config is unreadable (a half-written file
 // must never disable a working advisor).
