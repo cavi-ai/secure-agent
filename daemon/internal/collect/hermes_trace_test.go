@@ -582,9 +582,112 @@ func TestHermesHomeResolution(t *testing.T) {
 	}
 }
 
+func TestHermesStateDirectoryPriority(t *testing.T) {
+	getenv := func(key string) string {
+		return map[string]string{"HERMES_STATE_DIR": "/state", "HERMES_HOME": "/home"}[key]
+	}
+	if got := HermesHome("/configured", getenv, "/user"); got != "/configured" {
+		t.Fatalf("configured root = %q, want /configured", got)
+	}
+	if got := HermesHome("", getenv, "/user"); got != "/state" {
+		t.Fatalf("state directory = %q, want /state", got)
+	}
+}
+
+func TestHermesHonoursStateDirectoryEnv(t *testing.T) {
+	root, _, _ := hermesFixture(t)
+	t.Setenv("HERMES_STATE_DIR", root)
+	t.Setenv("HERMES_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	c, sub, _, _ := newTestHermes(t, "")
+	if n := c.pollOnce(); n != 9 {
+		t.Fatalf("pollOnce via HERMES_STATE_DIR published %d, want 9", n)
+	} else {
+		drainOpenclaw(sub, n)
+	}
+	if st := c.Status(); st.Root != root || len(st.DBs) != 2 {
+		t.Fatalf("status = %+v, want selected root with 2 databases", st)
+	}
+}
+
+func TestHermesProcessStateDiscovery(t *testing.T) {
+	root, _, _ := hermesFixture(t)
+	emptyEnv := func(string) string { return "" }
+	home := t.TempDir()
+	exe := filepath.Join(root, "hermes-agent", "venv", "bin", "python3")
+	if got := HermesHome("", emptyEnv, home, exe); got != root {
+		t.Fatalf("discovered root = %q, want %q", got, root)
+	}
+	installed := filepath.Join(t.TempDir(), ".hermes")
+	if err := os.Symlink(root, installed); err != nil {
+		t.Fatal(err)
+	}
+	if got := HermesHome("", emptyEnv, home, filepath.Join(installed, "bin", "hermes")); got != installed {
+		t.Fatalf("discovered .hermes root = %q, want %q", got, installed)
+	}
+	// Explicit roots stay authoritative even before their database exists.
+	configured := filepath.Join(t.TempDir(), "not-created")
+	if got := HermesHome(configured, emptyEnv, home, exe); got != configured {
+		t.Fatalf("configured root changed to %q", got)
+	}
+	for _, key := range []string{"HERMES_STATE_DIR", "HERMES_HOME"} {
+		getenv := func(k string) string {
+			if k == key {
+				return "  " + configured + "  "
+			}
+			return ""
+		}
+		if got := HermesHome("", getenv, home, exe); got != configured {
+			t.Fatalf("%s root changed to %q", key, got)
+		}
+	}
+	// A default home containing only a profile database still takes priority.
+	profile := filepath.Join(home, ".hermes", "profiles", "work")
+	if err := os.MkdirAll(profile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profile, "state.db"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := HermesHome("", emptyEnv, home, exe); got != filepath.Join(home, ".hermes") {
+		t.Fatalf("default profile root = %q", got)
+	}
+	// A tagged executable alone does not prove that a state database exists.
+	otherHome := t.TempDir()
+	if got := HermesHome("", emptyEnv, otherHome, filepath.Join(t.TempDir(), ".hermes", "bin", "hermes")); got != filepath.Join(otherHome, ".hermes") {
+		t.Fatalf("nonexistent database selected: %q", got)
+	}
+}
+
+func TestHermesDiscoversLateProcessStateWithoutEnvironment(t *testing.T) {
+	root, _, _ := hermesFixture(t)
+	t.Setenv("HERMES_STATE_DIR", "")
+	t.Setenv("HERMES_HOME", "")
+	t.Setenv("HOME", t.TempDir())
+	c, sub, _, _ := newTestHermes(t, "")
+	var exes []string
+	c.ProcessExes = func() []string { return exes }
+	if n := c.pollOnce(); n != 0 {
+		t.Fatalf("published %d before Hermes started", n)
+	}
+	exes = []string{filepath.Join(root, "hermes-agent", "venv", "bin", "python3")}
+	if n := c.pollOnce(); n != 9 {
+		t.Fatalf("discovered process published %d, want 9", n)
+	} else {
+		drainOpenclaw(sub, n)
+	}
+	if st := c.Status(); st.Root != root || len(st.DBs) != 2 {
+		t.Fatalf("discovered state = %+v", st)
+	}
+	if n := c.pollOnce(); n != 0 {
+		t.Fatalf("replayed %d events from the discovered database", n)
+	}
+}
+
 // With no configured root the collector follows $HERMES_HOME.
 func TestHermesHonoursHermesHomeEnv(t *testing.T) {
 	root, _, _ := hermesFixture(t)
+	t.Setenv("HERMES_STATE_DIR", "")
 	t.Setenv("HERMES_HOME", root)
 	t.Setenv("HOME", t.TempDir())
 	c, sub, _, _ := newTestHermes(t, "")

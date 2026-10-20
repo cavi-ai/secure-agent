@@ -456,7 +456,7 @@ func TestDoctorHermes(t *testing.T) {
 		state, detail string
 	}{
 		"unwired": {nil, doctorSkip, "not wired"},
-		"absent":  {&collect.HermesStatus{Root: "/h", LastPoll: polled}, doctorSkip, "not installed (no state.db under /h)"},
+		"absent":  {&collect.HermesStatus{Root: "/h", LastPoll: polled}, doctorSkip, "state.db not found under /h; set hermes_home or provide HERMES_STATE_DIR/HERMES_HOME to the daemon"},
 		"read": {&collect.HermesStatus{Root: "/h", LastPoll: polled, DBs: []collect.HermesDBStatus{
 			{Path: "/h/state.db", Watermark: 42}, {Path: "/h/profiles/w/state.db", Watermark: 3}}},
 			doctorPass, "/h/state.db @ message 42, /h/profiles/w/state.db @ message 3 · polled 2026-09-23T08:00:00Z"},

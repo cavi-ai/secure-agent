@@ -89,7 +89,7 @@ def run(daemon_binary, harness_binary):
         environment = {key: os.environ[key] for key in ("PATH", "USER", "LOGNAME", "SHELL") if key in os.environ}
         environment.update({
             "HOME": str(home), "CFFIXED_USER_HOME": str(home),
-            "CODEX_HOME": str(home / ".codex"), "HERMES_HOME": str(home / ".hermes"),
+            "CODEX_HOME": str(home / ".codex"), "HERMES_HOME": str(home / ".hermes"), "HERMES_STATE_DIR": str(home / ".hermes"),
             "OPENCLAW_HOME": str(home / ".openclaw"),
             "CLAUDE_CODE_ENTRYPOINT": "cli", "SECURE_AGENT_SOCK": str(sock),
             "SECURE_AGENT_SESSION_ID": "guard-workflow-" + uuid.uuid4().hex,

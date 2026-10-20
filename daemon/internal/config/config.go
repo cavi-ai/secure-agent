@@ -380,7 +380,7 @@ type Config struct {
 	DBPath            string
 	JSONLPath         string
 	OpenclawHome      string // openclaw state dir holding lcm.db; "" = resolved at runtime
-	HermesHome        string // Hermes Agent root holding state.db; "" = $HERMES_HOME or ~/.hermes
+	HermesHome        string // Hermes state root; empty uses environment or discovery
 	ProxyEnabled      bool
 	ProxyPort         int
 	ProxyCACertPath   string

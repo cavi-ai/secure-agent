@@ -301,7 +301,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	// Hermes Agent's collector is built before the API so /doctor reads its
 	// state; startCollectors runs it.
-	hermes := newHermesCollector(cfg, b, supReg, resolver)
+	hermes := newHermesCollector(cfg, b, supReg, resolver, tagger)
 	resourcePolicyUpdater := buildResourcePolicyUpdater(opts.ConfigPath, resourceControl)
 
 	hunter := worktreehunter.New(st, "", worktreeOptions(cfg.Worktrees))
@@ -1090,7 +1090,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	ocl := collect.NewOpenclawCollector(b, "", 0)
 	ocl.Configured = cfg.OpenclawHome
 	ocl.StatePath = filepath.Join(filepath.Dir(cfg.DBPath), "openclaw-watermark.json")
-	ocl.ProcessExes = func() []string { return openclawExes(tagger) }
+	ocl.ProcessExes = func() []string { return harnessExes(tagger, "openclaw") }
 	ocl.OnProduce = func() { supReg.MarkProduced("openclaw") }
 	ocl.OnPoll = func(src string, wm int64) { supReg.MarkPolled("openclaw", src, wm) }
 	ocl.OnSessionSeen = resolver.NoteTranscriptSession
@@ -1134,12 +1134,13 @@ func watchSpool(ctx context.Context, every time.Duration, available func() bool,
 }
 
 // newHermesCollector builds the Hermes Agent poller: state.db and every
-// profile's state.db under hermes_home, $HERMES_HOME or ~/.hermes, read-only
+// profile's state.db under the configured or discovered Hermes root, read-only
 // and watermarked (the watermarks persist beside the store); none found → a
 // silent no-op that keeps looking.
-func newHermesCollector(cfg config.Config, b *bus.Bus, supReg *supervise.Registry, resolver *session.Resolver) *collect.HermesCollector {
+func newHermesCollector(cfg config.Config, b *bus.Bus, supReg *supervise.Registry, resolver *session.Resolver, tagger *agents.Tagger) *collect.HermesCollector {
 	h := collect.NewHermesCollector(b, 0)
 	h.Configured = cfg.HermesHome
+	h.ProcessExes = func() []string { return harnessExes(tagger, "hermes") }
 	h.StatePath = filepath.Join(filepath.Dir(cfg.DBPath), "hermes-watermark.json")
 	h.OnProduce = func() { supReg.MarkProduced("hermes") }
 	h.OnPoll = func(src string, wm int64) { supReg.MarkPolled("hermes", src, wm) }
@@ -1174,12 +1175,14 @@ func codexPIDs(tagger *agents.Tagger) []int32 {
 	return out
 }
 
-// openclawExes lists the executable paths of tagged openclaw processes, the
-// last-resort locator for openclaw's state directory.
-func openclawExes(tagger *agents.Tagger) []string {
+// harnessExes supplies tagged process paths for state directory discovery.
+func harnessExes(tagger *agents.Tagger, harness string) []string {
 	var out []string
+	if tagger == nil {
+		return out
+	}
 	for _, info := range tagger.TaggedPIDs() {
-		if info.Name == "openclaw" && info.ExePath != "" {
+		if info.Name == harness && info.ExePath != "" {
 			out = append(out, info.ExePath)
 		}
 	}
