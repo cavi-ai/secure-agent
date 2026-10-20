@@ -1340,7 +1340,7 @@ struct TelemetryDoctorSection: View {
     @ObservedObject var setup: SetupManager
 
     private var busy: Bool { setup.doctorRunning || setup.doctorFixing != nil }
-    private var hasFixes: Bool { setup.doctorChecks.contains { $0.state != .pass && $0.fix != nil } }
+    private var hasFixes: Bool { DoctorFix.canFixAll(setup.doctorChecks) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

@@ -221,7 +221,7 @@ final class TelemetryDoctorTests: XCTestCase {
 
     func testAnotherRegisteredCopyWarns() {
         let checks = TelemetryDoctor.evaluate(facts { $0.otherCopies = ["/Users/dev/secure-agent/dist/Secure Agent.app"] })
-        assertCheck(checks, "location", .warn, nil)
+        assertCheck(checks, "location", .warn, .unregisterOtherCopies)
         XCTAssertTrue(check(checks, "location")?.cause.contains("dist/Secure Agent.app") == true)
     }
 
@@ -409,7 +409,7 @@ final class TelemetryDoctorTests: XCTestCase {
             $0.esService = ESServiceSnapshotModel(state: "running", spoolMtime: self.iso(self.now),
                                                   flooding: false, unparsedShare: 0, bytesLost: 123, losing: true)
         })
-        assertCheck(growing, "spool", .fail, nil)
+        assertCheck(growing, "spool", .fail, .markLossSeen)
         XCTAssertTrue(check(growing, "spool")?.cause.contains("123 unread spool bytes") == true)
 
         let stopped = TelemetryDoctor.evaluate(facts {
@@ -456,7 +456,44 @@ final class TelemetryDoctorTests: XCTestCase {
         XCTAssertEqual(check(checks, "daemon.pairing")?.cause, "skip")
 
         let silent = TelemetryDoctor.evaluate(facts { $0.daemonChecks = nil })
-        assertCheck(silent, "daemon", .fail, nil)
+        assertCheck(silent, "daemon", .fail, .restartDaemon)
+    }
+
+    /// Each failing daemon check carries the fix that clears it; a warning
+    /// (a skipped check) carries none.
+    func testDaemonFailuresMapToTheirFixes() {
+        func fixes(losing: Bool) -> [DoctorCheck] {
+            TelemetryDoctor.evaluate(facts {
+                $0.esService = ESServiceSnapshotModel(state: "running", spoolMtime: self.iso(self.now),
+                                                      flooding: false, unparsedShare: 0, bytesLost: 9, losing: losing)
+                $0.daemonChecks = [
+                    DaemonDoctorCheckModel(id: "collectors", title: "Collectors", state: "fail", detail: "silent: eslogger"),
+                    DaemonDoctorCheckModel(id: "trace-coverage", title: "Trace coverage", state: "fail", detail: "no trace rows"),
+                    DaemonDoctorCheckModel(id: "egress-routing", title: "Egress routing", state: "fail", detail: "1 endpoints"),
+                    DaemonDoctorCheckModel(id: "bus", title: "Event bus", state: "fail", detail: "3 dropped"),
+                    DaemonDoctorCheckModel(id: "file-telemetry", title: "File telemetry", state: "fail", detail: "lost"),
+                    DaemonDoctorCheckModel(id: "session-rate", title: "Session creation rate", state: "skip", detail: "grace"),
+                ]
+            })
+        }
+        let losing = fixes(losing: true)
+        assertCheck(losing, "daemon.collectors", .fail, .restartDaemon)
+        assertCheck(losing, "daemon.trace-coverage", .fail, .restartDaemon)
+        assertCheck(losing, "daemon.egress-routing", .fail, .openTraffic)
+        assertCheck(losing, "daemon.bus", .fail, .markLossSeen)
+        assertCheck(losing, "daemon.file-telemetry", .fail, .markLossSeen)
+        assertCheck(losing, "daemon.session-rate", .warn, nil)
+        assertCheck(fixes(losing: false), "daemon.file-telemetry", .fail, nil)
+    }
+
+    /// Fix all is offered whenever a check is not passing, fix or not.
+    func testFixAllIsOfferedWheneverACheckIsNotPassing() {
+        let pass = DoctorCheck(id: "a", title: "A", state: .pass, cause: "", fix: nil)
+        let warn = DoctorCheck(id: "b", title: "B", state: .warn, cause: "", fix: nil)
+        let fail = DoctorCheck(id: "c", title: "C", state: .fail, cause: "", fix: nil)
+        XCTAssertFalse(DoctorFix.canFixAll([pass]))
+        XCTAssertTrue(DoctorFix.canFixAll([pass, warn]))
+        XCTAssertTrue(DoctorFix.canFixAll([pass, fail]))
     }
 
     func testOnlyPaneFixesWaitForTheUser() {
@@ -479,7 +516,7 @@ final class TelemetryDoctorTests: XCTestCase {
         XCTAssertEqual(check(checks, "daemon.hook-registered")?.fix?.title, "Open hook setup")
         XCTAssertTrue(check(checks, "daemon.hook-active")?.cause.contains("Start a new harness session") == true)
         XCTAssertTrue(check(checks, "daemon.bus")?.cause.contains("cannot be recovered") == true)
-        XCTAssertNil(check(checks, "daemon.bus")?.fix)
+        XCTAssertEqual(check(checks, "daemon.bus")?.fix, .markLossSeen)
         XCTAssertTrue(check(checks, "daemon.pricing")?.cause.contains("Update Secure Agent") == true)
         XCTAssertNil(check(checks, "daemon.pricing")?.fix)
     }

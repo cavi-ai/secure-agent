@@ -901,6 +901,8 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 
 (The example shows three of the sixteen checks.) Read-level. CLI: `secure-agent doctor [--json]` prints one `PASS`/`FAIL`/`SKIP` line per check, a `fix:` line under each failure and a summary line, and exits `1` when any check fails.
 
+`POST /doctor/seen` marks the spool loss and bus drops so far as seen: `file-telemetry` and `bus` pass, still naming their counts, until either grows again. It returns `{"seen_at": "<RFC 3339>"}`. Mutating (pinned UI or owner); refused to agents.
+
 ### 18. `GET /sessions/{id}/report`
 
 What one session did — tools, models, spend, files, hosts, guard decisions, findings and secret-rule hits — as JSON or markdown. It carries tool names, model ids, paths, hosts, rule ids and counts; never content or matched text.

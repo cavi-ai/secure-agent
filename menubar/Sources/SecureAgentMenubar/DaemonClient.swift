@@ -114,6 +114,11 @@ public final class DaemonClient: Sendable {
         try await getDecodable("/doctor")
     }
 
+    /// Marks the daemon's spool loss and bus drops so far as seen.
+    public func markLossSeen() async throws {
+        _ = try await request(method: "POST", path: "/doctor/seen")
+    }
+
     public func startCoverageProbe(harness: String) async throws -> CoverageProbeChallengeModel {
         let body = try JSONSerialization.data(withJSONObject: ["harness": harness])
         return try JSONDecoder().decode(CoverageProbeChallengeModel.self, from: await request(method: "POST", path: "/coverage/probe", body: body))

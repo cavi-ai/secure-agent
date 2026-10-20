@@ -35,11 +35,13 @@ class ShellReviewTests(unittest.TestCase):
             with socket.socket(socket.AF_UNIX) as server:
                 server.bind(home + "/d.sock")
                 server.listen()
-                server.settimeout(1)
+                # Wait as long as run_hook lets the hook run: a cold start
+                # under load connects well after a second.
+                server.settimeout(8)
                 def serve():
                     try:
                         conn, _ = server.accept()
-                    except TimeoutError:
+                    except OSError:
                         return
                     with conn:
                         data = b""

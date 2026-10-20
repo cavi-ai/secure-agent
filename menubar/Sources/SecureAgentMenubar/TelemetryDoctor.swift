@@ -106,6 +106,7 @@ enum DoctorState: String, Sendable {
 
 enum DoctorFix: String, CaseIterable, Sendable {
     case register, reregister, openLoginItems, openFullDiskAccess, setAsideSpool, removeLegacy, openHarnessSetup
+    case restartDaemon, unregisterOtherCopies, markLossSeen, openTraffic
 
     var title: String {
         switch self {
@@ -116,7 +117,17 @@ enum DoctorFix: String, CaseIterable, Sendable {
         case .setAsideSpool: return "Set spool aside"
         case .removeLegacy: return "Remove old helper"
         case .openHarnessSetup: return "Open hook setup"
+        case .restartDaemon: return "Restart daemon"
+        case .unregisterOtherCopies: return "Unregister other copies"
+        case .markLossSeen: return "Mark as seen"
+        case .openTraffic: return "Open Traffic"
         }
+    }
+
+    /// Fix all is offered whenever a check fails or warns; it runs every fix
+    /// those checks offer and runs the Doctor again.
+    static func canFixAll(_ checks: [DoctorCheck]) -> Bool {
+        checks.contains { $0.state != .pass }
     }
 
     /// Fixes that finish only when the user flips a switch in System Settings.
@@ -245,7 +256,7 @@ enum TelemetryDoctor {
         if !f.otherCopies.isEmpty {
             return DoctorCheck(id: "location", title: title, state: .warn,
                                cause: "another copy is registered with macOS: \(f.otherCopies.joined(separator: ", "))",
-                               fix: nil)
+                               fix: .unregisterOtherCopies)
         }
         return DoctorCheck(id: "location", title: title, state: .pass,
                            cause: "runs from \(AppIdentity.installedAppPath)", fix: nil)
@@ -403,7 +414,8 @@ enum TelemetryDoctor {
         }
         if es.losing == true, let lost = es.bytesLost {
             return DoctorCheck(id: "spool", title: title, state: .fail,
-                               cause: "at least \(lost) unread spool bytes were lost during this run; later healthy delivery cannot recover them", fix: nil)
+                               cause: "at least \(lost) unread spool bytes were lost during this run; later healthy delivery cannot recover them",
+                               fix: .markLossSeen)
         }
         let earlierLoss = (es.bytesLost ?? 0) > 0 ? ", \(es.bytesLost ?? 0) bytes lost earlier, none since" : ""
         let share = es.unparsedShare ?? 0
@@ -432,16 +444,30 @@ enum TelemetryDoctor {
     static func daemonChecks(_ f: TelemetryFacts) -> [DoctorCheck] {
         guard let checks = f.daemonChecks else {
             return [DoctorCheck(id: "daemon", title: "Daemon", state: .fail,
-                                cause: "the daemon did not answer /doctor", fix: nil)]
+                                cause: "the daemon did not answer /doctor", fix: .restartDaemon)]
         }
         return checks.filter { $0.state != "pass" }.map { c in
             let detail = c.detail.flatMap { $0.isEmpty ? nil : $0 } ?? c.state
             let guidance = c.fix?.trimmingCharacters(in: .whitespacesAndNewlines)
             let cause = guidance.flatMap { $0.isEmpty ? nil : "\(detail)\n\($0)" } ?? detail
-            let fix: DoctorFix? = c.state == "fail" && ["hook-registered", "hook-active"].contains(c.id)
-                ? .openHarnessSetup : nil
+            let fix = c.state == "fail" ? daemonFix(c.id, f) : nil
             return DoctorCheck(id: "daemon.\(c.id)", title: c.title, state: c.state == "fail" ? .fail : .warn,
                                cause: cause, fix: fix)
+        }
+    }
+
+    /// The fix for a failing daemon check: hook setup for the hook checks,
+    /// Mark as seen for spool loss and bus drops, a daemon restart for silent
+    /// collectors and traces, and the Traffic pane for the egress policy
+    /// choice. Nil when no fix applies.
+    static func daemonFix(_ id: String, _ f: TelemetryFacts) -> DoctorFix? {
+        switch id {
+        case "hook-registered", "hook-active": return .openHarnessSetup
+        case "bus": return .markLossSeen
+        case "file-telemetry": return f.esService?.losing == true ? .markLossSeen : nil
+        case "collectors", "trace-coverage": return .restartDaemon
+        case "egress-routing": return .openTraffic
+        default: return nil
         }
     }
 

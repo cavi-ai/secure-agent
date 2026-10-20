@@ -1116,8 +1116,34 @@ public final class SetupManager: ObservableObject {
             }
         case .openHarnessSetup:
             OnboardingWindowController.shared.show()
+        case .restartDaemon:
+            DaemonSupervisor.shared.restart()
+        case .unregisterOtherCopies:
+            await unregisterOtherCopies()
+        case .markLossSeen:
+            do { try await DaemonClient().markLossSeen() } catch { report(error) }
+        case .openTraffic:
+            SettingsWindowController.shared.show(tab: .traffic)
         }
         refreshESState()
+    }
+
+    /// Launch Services' registration tool.
+    nonisolated static let lsregisterPath =
+        "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+
+    /// Removes every other copy of the app from Launch Services, so the app's
+    /// identifier resolves to this copy alone; the copies stay on disk.
+    func unregisterOtherCopies() async {
+        let thisCopy = appURL.resolvingSymlinksInPath().path
+        let others = NSWorkspace.shared.urlsForApplications(withBundleIdentifier: AppIdentity.bundleIdentifier)
+            .map { $0.resolvingSymlinksInPath().path }
+            .filter { $0 != thisCopy }
+        await Task.detached {
+            for path in others {
+                _ = Self.capture([Self.lsregisterPath, "-u", path])
+            }
+        }.value
     }
 
     /// `launchctl print` for the collector's job.
