@@ -8,7 +8,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     private lazy var statusItemController = StatusItemController { [weak self] in self?.makeStatusItem() }
     private var statusItem: NSStatusItem? { statusItemController.item }
     private let state = AppState()
-    private let popover = NSPopover()
+    let popover = NSPopover()
     private var launchTask: Task<Void, Never>?
     /// A repair URL that arrives before launch finishes waits for it.
     private var launched = false
@@ -164,7 +164,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         return item
     }
 
-    private func setupPopover() {
+    func setupPopover() {
         popover.behavior = .transient
         popover.animates = true
         popover.contentViewController = NSHostingController(rootView: ConsoleView(state: state))
@@ -179,15 +179,21 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         }
     }
 
-    private func togglePopover(_ button: NSStatusBarButton) {
+    func togglePopover(_ button: NSStatusBarButton) {
         if popover.isShown {
             popover.performClose(nil)
         } else {
             state.refresh()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+            guard let window = popover.contentViewController?.view.window else { return }
+            window.collectionBehavior.formUnion(Self.popoverSpaces)
+            window.makeKey()
         }
     }
+
+    /// A Dock app's windows stay off another app's fullscreen Space; the
+    /// popover joins whichever Space is in front, like other menu bar items.
+    static let popoverSpaces: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
     /// A small native menu on right-click: the quick actions that don't belong
     /// in the popover (Pause, Setup, Uninstall, Quit).

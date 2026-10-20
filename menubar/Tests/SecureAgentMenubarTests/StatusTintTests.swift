@@ -86,4 +86,20 @@ final class StatusTintTests: XCTestCase {
         XCTAssertNotNil(button.action)
     }
 
+    func testPopoverJoinsTheSpaceInFront() throws {
+        let delegate = AppDelegate()
+        delegate.setupPopover()
+        let host = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 120, height: 40),
+                            styleMask: .borderless, backing: .buffered, defer: false)
+        let button = NSStatusBarButton(frame: NSRect(x: 0, y: 0, width: 24, height: 22))
+        host.contentView?.addSubview(button)
+        host.orderFrontRegardless()
+        defer { host.orderOut(nil) }
+        delegate.togglePopover(button)
+        defer { delegate.popover.close() }
+        let window = try XCTUnwrap(delegate.popover.contentViewController?.view.window)
+        XCTAssertTrue(window.collectionBehavior.isSuperset(of: [.canJoinAllSpaces, .fullScreenAuxiliary]),
+                      "The popover must show over another app's fullscreen Space")
+    }
+
 }

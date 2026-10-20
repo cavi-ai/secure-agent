@@ -21,6 +21,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Traces: OpenCode, Hermes and OpenClaw retry database events when the event bus is full without advancing past undelivered events.
 - Menu bar: the native guard alert closes when its request is answered elsewhere, and polling continues while it is open.
 - Menu bar: removing the old file-telemetry helper and the launch migration no longer freeze the menu bar.
+- Menu bar: the popover opens in front of fullscreen apps on every Space.
 - Console: the polling fallback keeps refreshing every 2 s, posture shows stale after two minutes without a refresh, and review changes refresh the console.
 - Console: an older worktree read no longer overwrites a newer one, and markup escapes single quotes.
 - File telemetry starts when the collector appears after launch, restarts its helper from the new build after an update, and its repair no longer leaves the helper unregistered; an oversized spool line is skipped and counted as lost instead of dropping the unread tail.
