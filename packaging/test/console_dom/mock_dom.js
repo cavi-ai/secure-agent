@@ -1442,6 +1442,7 @@
         const response = await readingFetch('/__console_frame_checkpoint', {cache: 'no-store'});
         if (!response.ok) throw new Error('Worktree layout checkpoint failed: ' + response.status);
         const root = document.getElementById('system-worktrees');
+        root.querySelectorAll('details.wt-row, details.wt-repo-options').forEach(node => { node.open = true; });
         const width = document.documentElement.clientWidth;
         const identities = [...root.querySelectorAll('.wt-repo-name, .wt-repo-path, .wt-branch, .wt-path')];
         const controls = [...root.querySelectorAll('button, input')].filter(node => node.getClientRects().length);
@@ -1456,10 +1457,10 @@
         const actionRow = root.querySelector('[data-action="worktree-ask"]').closest('.wt-row');
         const actions = [...actionRow.querySelectorAll('.wt-actions button')];
         receipt.actions = JSON.stringify(actions.map(button => button.dataset.action)) === JSON.stringify([
-          'worktree-reveal', 'worktree-review-trash', 'worktree-ask', 'worktree-advise', 'worktree-select', 'worktree-discuss',
+          'worktree-reveal', 'worktree-review-trash', 'worktree-ask', 'worktree-advise', 'worktree-discuss',
         ]) && actions.every(button => button.dataset.path === actionRow.dataset.path);
         receipt.failure = root.querySelector('.wt-repo-error').textContent.includes('repository not found') && root.querySelectorAll('.wt-repo-actions')[0].querySelectorAll('button').length === 0;
-        receipt.touch = width > 720 || controls.every(node => node.getBoundingClientRect().height >= 44);
+        receipt.touch = width > 720 || controls.every(node => (node.matches('input[type="checkbox"]') ? node.closest('label') : node).getBoundingClientRect().height >= 44);
         receipt.search = width > 720 || document.getElementById('worktree-search').getBoundingClientRect().width >= root.clientWidth - 40;
         receipt.dimensions = {width, search: document.getElementById('worktree-search').getBoundingClientRect().width, branch: root.querySelector('.wt-branch').getBoundingClientRect().width};
       } catch (error) { receipt.error = error.message; }
@@ -2320,11 +2321,12 @@
       }, 100);
     }, 4000);
   }
-  // batchdemo: three removable worktrees in one repository; Remove all
-  // removes them after one dialog.
+  // Three checked worktrees selected explicitly, reviewed in one dialog.
   if (scenarios.has('batchdemo')) {
     setTimeout(() => {
-      const btn = document.querySelector('#worktrees-container [data-action="worktree-remove-all"]');
+      const paths = [...document.querySelectorAll('#worktrees-container .wt-row.wt-remove')].map(row => row.dataset.path);
+      for (const path of paths) [...document.querySelectorAll('[data-action="worktree-select"]')].find(input => input.dataset.path === path)?.click();
+      const btn = document.querySelector('#worktrees-container [data-action="worktrees-remove-selected"]');
       if (btn) btn.click();
       let n = 0;
       const iv = setInterval(() => {
@@ -2428,7 +2430,7 @@
     };
     const steps = {};
     const discuss = () => document.querySelector('#worktrees-container .wt-row.wt-review [data-action="worktree-discuss"]');
-    setTimeout(() => { discuss().focus(); discuss().click(); }, 3000);
+    setTimeout(() => { discuss().closest('details.wt-row').open = true; discuss().focus(); discuss().click(); }, 3000);
     setTimeout(() => { steps.open = state(); document.querySelector('[data-action="worktrees-history"]').click(); }, 4500);
     setTimeout(() => { steps.drawer = state(); discuss().focus(); discuss().click(); }, 5500);
     setTimeout(() => {

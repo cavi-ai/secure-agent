@@ -64,10 +64,10 @@
       probe.blocked = !select(live) || select(live).disabled && select(live).title.includes('working here');
       toggle(review);
       await idle();
-      probe.marked = marked().has(review) && select(review).getAttribute('aria-pressed') === 'true';
+      probe.marked = marked().has(review) && select(review).checked;
       probe.keyboardFocus = document.activeElement === select(review);
       const advisor = document.querySelector('.wt-advice');
-      probe.marked = probe.marked && advisor.textContent.includes('92%') && !!advisor.querySelector('[data-action="worktree-select"]');
+      probe.marked = probe.marked && !advisor.textContent.includes('92%') && !advisor.querySelector('[data-action="worktree-select"]');
       toggle(selectedSafe);
       await idle();
       probe.crossRepo = marked().size === 2 && marked().has(review) && marked().has(selectedSafe);

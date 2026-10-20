@@ -52,14 +52,14 @@ def run_worktrees(page):
         ),
     )
     check(
-        'worktrees: reasons are tags toned by kind, and the agent chip replaces the agent reason',
+        'worktrees: inspection retains semantic facts and active-session context',
         (
             '<li class="wt-reason wt-reason-keep">2 uncommitted changes</li>' in wt
             and '<li class="wt-reason wt-reason-review">ignored files that only live here: .tmp/ (3 files, 1.2 MB)</li>' in wt
             and '<li class="wt-reason wt-reason-safe">merged into origin/main (squash)</li>' in wt
             and '<li class="wt-reason wt-reason-info">directory is gone; git still lists it</li>' in wt
             and 'an agent session is live here</li>' not in wt
-            and '<div class="wt-title"><span class="wt-branch">(detached)</span><span class="wt-agent-live"' in wt
+            and 'class="wt-inspection-meta"' in wt
         ),
     )
     check(
@@ -74,16 +74,18 @@ def run_worktrees(page):
         ),
     )
     check(
-        'worktrees: the advisor note renders escaped under its row and ends in Discuss; Ask advisor sits on review and keep rows only',
+        'worktrees: advice is escaped, secondary, and omits confidence scores',
         (
-            '<p class="wt-advice"><b>Advisor: review</b> 60% · &lt;i&gt;look&lt;/i&gt; at .tmp before removing <button type="button" class="link-btn" data-action="worktree-discuss" data-path="/Users/dev/workspace/api-service/.worktrees/evidence">Discuss</button></p>' in wt
+            '<p class="wt-advice"><b>Advisor: review</b> · &lt;i&gt;look&lt;/i&gt; at .tmp before removing</p>' in wt
+            and '60%' not in wt
+            and 'Advice and agent responses' in wt
             and len(dom_query(wt).find_all(None, {'data-action': 'worktree-advise'})) == 2
         ),
     )
     check(
-        'worktrees: Discuss sits on the remove, review and keep rows and the note, not on the prune row',
+        'worktrees: each inspectable row has one Discuss action',
         (
-            len(dom_query(wt).find_all(None, {'data-action': 'worktree-discuss'})) == 4
+            len(dom_query(wt).find_all(None, {'data-action': 'worktree-discuss'})) == 3
             and not dom_query(wt).has(None, {'data-action': 'worktree-discuss', 'data-path': '/Users/dev/workspace/api-service/.worktrees/gone'})
         ),
     )
@@ -99,34 +101,29 @@ def run_worktrees(page):
         ),
     )
     check(
-        'worktrees: review and keep rows carry Remove; the row with a live agent session is disabled and says why',
+        'worktrees: active work is excluded from removal selection with a resolution explanation',
         (
             len(dom_query(wt).find_all(None, {'data-action': 'worktree-review-trash'})) == 1
             and dom_query(wt).has(None, {'data-action': 'worktree-review-trash', 'data-path': '/Users/dev/workspace/api-service/.worktrees/evidence'})
-            and wt.count('>Remove</button>') == 2
-            and wt.count('>Remove…</button>') == 1
-            and 'disabled="" title="Cannot remove: an agent session is live here">Remove</button>' in wt
+            and not dom_query(wt).has(None, {'data-action': 'worktree-select', 'data-path': '/Users/dev/.codex/worktrees/ab12/api-service'})
+            and 'Open folder to resolve' in wt
+            and 'an agent session is live here' in wt
         ),
     )
     check(
-        'worktrees: Remove has three looks: solid red when confirmed safe, amber outline when not confirmed, greyed when blocked; a legend explains them',
+        'worktrees: the queue separates checked removals, decisions, and active sessions',
         (
-            '<button type="button" class="btn btn-danger-solid btn-sm" data-action="worktree-remove" data-path="/Users/dev/workspace/api-service/.worktrees/done" data-branch="feat/done" title="Safe to remove: merged into origin/main (squash)">Remove</button>' in wt
-            and dom_query(wt).has('button', {'type': 'button', 'class': 'btn btn-warn-outline btn-sm', 'data-action': 'worktree-review-trash', 'data-path': '/Users/dev/workspace/api-service/.worktrees/evidence'})
-            and dom_query(wt).has(None, {'title': starts_with('Not confirmed safe: ignored files that only live here: .tmp/ (3 files, 1.2 MB); ')})
-            and 'not bold' in wt
-            and '. Moves the folder to the Trash; the branch stays in git">Remove…</button>' in wt
-            and '<button type="button" class="btn btn-sm" disabled="" title="Cannot remove: an agent session is live here">Remove</button>' in wt
-            and 'btn btn-danger btn-sm" data-action="worktree-review-trash"' not in wt
-            and 'btn btn-danger btn-sm" disabled' not in wt
+            wt.index('Ready for removal') < wt.index('Needs a decision') < wt.index('In use')
+            and dom_query(wt).has('details', {'class': 'wt-row wt-remove'})
+            and dom_query(wt).has('details', {'class': 'wt-row wt-review'})
+            and dom_query(wt).has(None, {'data-action': 'worktree-remove'})
+            and dom_query(wt).has(None, {'data-action': 'worktree-review-trash'})
+            and 'data-action="worktrees-remove-selected"' in wt
         ),
     )
     check(
-        'worktrees: the legend under the summary names the three Remove looks and is visible with a scan',
-        (
-            '<p class="wt-legend" id="worktrees-legend">Remove: confirmed safe · Remove…: not confirmed, goes to the Trash · greyed: blocked</p>' in dom_wt
-            and '<p class="wt-legend" id="worktrees-legend" hidden' not in dom_wt
-        ),
+        'worktrees: primary guidance uses section headings rather than a button-color legend',
+        'id="worktrees-legend"' not in dom_wt and 'Review the exceptions. Remove only what you choose.' in dom_wt,
     )
     check(
         'worktrees: the repository group offers Ask advisor about all and Discuss all beside Hide repo, counted over every row',

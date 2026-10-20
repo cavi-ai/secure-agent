@@ -55,7 +55,7 @@ def worktree_reading_hierarchy(now_ms=None):
     second = '/workspace/' + long + '/team-two/service'
     path = first + '/.worktrees/' + long
     rows = [
-        {"path": path, "branch": 'feat/' + long, "state": "review", "idle_days": 21,
+        {"path": path, "branch": 'feat/' + long, "head": "a" * 40, "state": "review", "idle_days": 21,
          "last_activity": iso(21 * 86400000), "size_bytes": 1610612736, "stale": True,
          "reasons": ["1 uncommitted change"], "reason_kinds": ["keep"]},
         {"path": first + '/.worktrees/detached', "detached": True, "state": "keep", "in_use": True,
