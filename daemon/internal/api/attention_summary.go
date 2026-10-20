@@ -77,5 +77,11 @@ func deriveAttentionSummary(groups []AttentionGroup, coverage []PostureItem) *At
 }
 
 func isMonitoringGap(item PostureItem) bool {
-	return item.Kind != "uninspected_egress" && item.Kind != "hook_analysis_limit"
+	switch item.MonitoringState {
+	case monitoringHistorical, monitoringInformational, monitoringDisabled:
+		return false
+	case monitoringActive:
+		return true
+	}
+	return item.Kind != "uninspected_egress" && item.Kind != "hook_analysis_limit" && item.Kind != "collector_idle"
 }

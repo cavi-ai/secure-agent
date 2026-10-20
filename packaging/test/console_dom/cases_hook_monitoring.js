@@ -13,11 +13,12 @@
   ready().then(async()=>{
     const probe={};
     try {
-      openTab('home');
+      openTab('monitoring');
+      document.querySelector('#monitoring-diagnostics').open=true;
       await wait(()=>!!overview());
       document.querySelector('[data-hook-disclosure="monitoring"]').open=true;
       probe.usedOnly=[...overview().querySelectorAll('[data-hook-runtime]')].map(r=>r.dataset.hookRuntime).sort().join(',')==='claude,codex';
-      probe.neutral=document.querySelector('#coverage-center').dataset.gap==='false' && document.querySelector('#coverage-title').textContent==='Monitoring';
+      probe.neutral=document.querySelector('#coverage-center').hidden && document.querySelector('#coverage-center').dataset.gap==='false';
       probe.receipt=overview().textContent.includes('3 accepted deliveries') && overview().textContent.includes('across all sessions');
       probe.unknown=overview().querySelector('[data-hook-runtime="codex"]').textContent.includes('No completion received in this daemon run') && overview().textContent.includes('Forwarding state unknown');
       probe.limits=overview().textContent.includes('not confirm durable storage or protection coverage');
@@ -31,7 +32,7 @@
       overview().querySelector('[data-session="sess-claude-1"]').click();
       await wait(()=>window.SA.selectedSessionId==='sess-claude-1' && window.SA.sessionView==='hooks');
       probe.sessionLink=window.SA.selectedSessionId==='sess-claude-1' && window.SA.sessionView==='hooks';
-      openTab('home');
+      openTab('monitoring');
       const h=data['/status'].hook_ingestion;
       h.forwarders=[report('codex-good','codex'),report('codex-bad','codex','error'),report('codex-old','codex','error','stale',1),report('hermes-host','hermes'),report('opencode-host','opencode'),report('openclaw-host','openclaw')];
       h.rejected=2;h.last_rejected_at=iso(1000);h.forwarders_truncated=true;
@@ -39,7 +40,7 @@
       const codex=overview().querySelector('[data-hook-runtime="codex"]');
       probe.mixed=codex.textContent.includes('1 host with active errors') && codex.textContent.includes('1 host with unknown current state') && codex.textContent.includes('Evidence gap');
       probe.allSupported=overview().querySelectorAll('[data-hook-runtime]').length===5;
-      probe.gapStyle=document.querySelector('#coverage-center').dataset.gap==='true';
+      probe.gapStyle=document.querySelector('#coverage-center').hidden;
       probe.unattributed=overview().textContent.includes('2 rejected shared records') && overview().textContent.includes('cannot be attributed to a runtime');
       probe.truncated=overview().textContent.includes('Other forwarding instances may be omitted');
       codex.querySelector('[data-hook-disclosure^="hosts:"]').open=true;
@@ -58,7 +59,7 @@
       overview().querySelector('[data-action="retry-posture"]').click();
       await wait(()=>!window.SA.postureHealth.error);await idle();
       probe.retry=overview().textContent.includes('host with active errors') && !overview().textContent.includes('Last loaded observations');
-      if(scenarios.has('monitoringshot')) {for(const el of overview().querySelectorAll('details')) el.open=false; document.querySelector('#coverage-center').scrollIntoView();window.scrollBy(0,-160);document.body.dataset.monitoringProbe=JSON.stringify(probe);return;}
+      if(scenarios.has('monitoringshot')) {for(const el of overview().querySelectorAll('details')) el.open=false; document.querySelector('#monitoring-diagnostics').scrollIntoView();window.scrollBy(0,-160);document.body.dataset.monitoringProbe=JSON.stringify(probe);return;}
       data['/status'].hook_ingestion={...initial,since:iso(0),harnesses:[],forwarders:[]};
       await refresh();
       probe.restart=!overview().textContent.includes('4 accepted') && !overview().querySelector('[data-id="codex-bad"]') && overview().textContent.includes('No completion received in this daemon run');

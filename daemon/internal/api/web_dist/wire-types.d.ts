@@ -67,6 +67,7 @@ export interface WriteHealth {
 
 export interface EgressProjectionHealth {
   queue_drops: number;
+  queue_dropping: boolean;
   write_failures: number;
   write_failing: boolean;
 }
@@ -250,6 +251,7 @@ export interface Status {
   fleet_configured?: boolean;
   unacted_flags_24h: number | null;
   bus_drops?: number;
+  file_telemetry_enabled?: boolean;
   delta_drops?: number;
   bus_drop_at?: string;
   bus_dropping?: boolean;
@@ -257,6 +259,7 @@ export interface Status {
   egress_projection_health?: EgressProjectionHealth;
   hook_ingestion?: HookIngestionSnapshot;
   otlp_dropped?: number;
+  otlp_failing?: boolean;
   coverage?: CoverageStatus;
   firewall_stats?: Record<string, RuleStat>;
   collectors?: Health[];
@@ -1188,6 +1191,7 @@ export interface PostureItem {
   detail?: string;
   ts?: string;
   assessment?: FindingAssessment;
+  monitoring_state?: string;
 }
 
 export interface AttentionGroup {

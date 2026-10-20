@@ -222,6 +222,14 @@
     <main id="main-content" tabindex="-1">
       <div class="tabpanel" id="tab-monitoring" role="tabpanel" hidden>
         <div id="monitoring-notice"></div>
+        <details class="monitoring-issues" id="monitoring-diagnostics" hidden>
+          <summary>Collection details</summary>
+          <div id="monitoring-diagnostic-list"></div>
+        </details>
+        <details class="monitoring-issues" id="monitoring-notes" hidden>
+          <summary>History and configuration</summary>
+          <ul id="monitoring-note-list"></ul>
+        </details>
         <details class="monitoring-issues" id="monitoring-issues" hidden>
           <summary tabindex="0">Monitoring issues</summary>
           <ul id="monitoring-issue-list"></ul>
@@ -595,33 +603,31 @@
         </section>
         </div>
         <div class="system-subview" id="system-worktrees" data-system-view="worktrees" role="tabpanel" aria-labelledby="system-tab-worktrees">
-        <section class="panel">
+        <section class="panel wt-workspace">
           <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-branch"/></svg>Worktrees</h2>
+            <div class="wt-page-heading"><h2>Clean up worktrees</h2><p>Review the exceptions. Remove only what you choose.</p></div>
             <div class="wt-head-actions">
+              <input type="search" id="worktree-search" class="input harness-filter-text wt-search" placeholder="Filter by branch, folder or repo…" aria-label="Filter worktrees by branch, folder or repository" autocomplete="off" spellcheck="false">
               <button type="button" class="btn btn-sm" data-action="worktrees-history"><svg class="icon"><use href="#i-history"/></svg>History</button>
               <button type="button" class="btn btn-sm" data-action="worktrees-rescan"><svg class="icon"><use href="#i-refresh"/></svg>Rescan</button>
-            </div>
-          </div>
-          <div class="rc-wrap">
-            <div class="rc" id="worktrees-reclaim"></div>
-            <div class="rc-tip" id="reclaim-tip" role="tooltip" hidden></div>
-          </div>
-          <div class="wt-disk" id="worktrees-disk"></div>
-          <div class="harness-filter wt-filters">
-            <div class="harness-pills" id="worktree-pills"></div>
-            <input type="search" id="worktree-search" class="input harness-filter-text wt-search" placeholder="Filter by branch, folder or repo…" aria-label="Filter worktrees by branch, folder or repository" autocomplete="off" spellcheck="false">
+            <details class="wt-tool"><summary>Filters</summary><div class="harness-pills" id="worktree-pills"></div></details>
+            <details class="wt-tool"><summary>Add repository</summary>
             <form class="wt-add" id="worktree-add-form">
               <input type="text" id="worktree-add-input" class="input harness-filter-text" placeholder="Add a repository: /path/to/repo" aria-label="Repository path to add" autocomplete="off" spellcheck="false">
               <button type="submit" class="btn btn-sm">Add</button>
             </form>
+            </details>
+            </div>
           </div>
-          <p class="wt-summary" id="worktrees-summary"></p>
-          <p class="wt-legend" id="worktrees-legend" hidden></p>
           <ul class="wt-errors" id="worktrees-errors" hidden></ul>
           <div class="panel-body" id="worktrees-container">
             <div class="loading">Scanning worktrees…</div>
           </div>
+          <details class="wt-metrics"><summary>Disk usage and cleanup activity</summary>
+            <p class="wt-summary" id="worktrees-summary"></p>
+            <div class="wt-disk" id="worktrees-disk"></div>
+            <div class="rc-wrap"><div class="rc" id="worktrees-reclaim"></div><div class="rc-tip" id="reclaim-tip" role="tooltip" hidden></div></div>
+          </details>
         </section>
         </div>
         <div class="system-subview" id="system-clutter" data-system-view="clutter" role="tabpanel" aria-labelledby="system-tab-clutter" hidden>
@@ -873,7 +879,7 @@
     <div class="confirm-scrim"></div>
     <div class="confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message">
       <h3 id="confirm-title">Confirm</h3>
-      <p id="confirm-message" class="confirm-message"></p>
+      <div id="confirm-message" class="confirm-message"></div>
       <textarea id="confirm-input" class="input confirm-input" rows="2" placeholder="Why? (optional)" hidden></textarea>
       <div class="confirm-actions">
         <button type="button" class="btn btn-ghost" id="confirm-cancel">Cancel</button>

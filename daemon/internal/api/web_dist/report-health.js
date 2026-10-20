@@ -55,14 +55,14 @@ function consolePosturePresentation(posture, { lastSnapshotAt = 0, error = '' } 
   const needs = attentionCount(p);
   const coverage = Number(p.coverage_count) || 0;
   const critical = p.state === 'critical';
-  const attention = needs > 0 || coverage > 0 || p.state === 'attention';
+  const attention = needs > 0 || p.state === 'attention';
   const current = lastSnapshotAt > 0 && !error && p.state === 'all-clear';
   const state = critical ? 'critical' : attention ? 'attention' : current ? 'all-clear' : 'unknown';
   const title = critical ? 'Urgent review' : attention ? (!needs && coverage ? 'Monitoring needs attention' : 'Needs attention')
     : error ? (lastSnapshotAt ? 'Status stale' : 'Telemetry unavailable')
     : current ? 'No pending decisions' : lastSnapshotAt ? 'Status unavailable' : 'Waiting for telemetry';
   let pill = needs ? `${needs} need${needs === 1 ? 's' : ''} you`
-    : critical ? 'Urgent review' : coverage ? 'Monitoring gap' : title;
+    : critical ? 'Urgent review' : attention && coverage ? 'Monitoring gap' : title;
   if (error && (critical || attention)) pill += ' · refresh failed';
   const health = error ? (lastSnapshotAt
     ? `Status stale — last complete telemetry at ${formatTime(lastSnapshotAt)}. Retained observations may have changed.`

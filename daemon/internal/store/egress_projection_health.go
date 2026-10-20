@@ -8,6 +8,7 @@ import "sync"
 // Recovery clears WriteFailing but cannot restore missed observations.
 type EgressProjectionHealth struct {
 	QueueDrops    uint64 `json:"queue_drops"`
+	QueueDropping bool   `json:"queue_dropping"`
 	WriteFailures uint64 `json:"write_failures"`
 	WriteFailing  bool   `json:"write_failing"`
 }
@@ -22,6 +23,7 @@ func (s *Store) NoteEgressProjectionDrop() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.QueueDrops++
+	h.QueueDropping = true
 }
 
 // NoteEgressProjectionWrite reports whether visible projection health changed.
@@ -31,6 +33,10 @@ func (s *Store) NoteEgressProjectionWrite(err error) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	changed := h.WriteFailing
+	if err == nil && h.QueueDropping {
+		h.QueueDropping = false
+		changed = true
+	}
 	h.WriteFailing = err != nil
 	if err != nil {
 		h.WriteFailures++

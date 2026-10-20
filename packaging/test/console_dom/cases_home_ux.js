@@ -6,7 +6,8 @@
   ready().then(async () => {
     const probe = {};
     try {
-      openTab('home');
+      openTab('monitoring');
+      document.querySelector('#monitoring-diagnostics').open = true;
       await wait(() => !!document.querySelector('.coverage-session'));
       const root = document.querySelector('.coverage-session').parentElement;
       root.open = true;
@@ -15,11 +16,12 @@
       row.querySelector('summary').focus();
       sample.guard.last_seen = '2026-10-15T12:01:00Z';
       document.querySelector('#btn-refresh').click();
-      await wait(() => document.querySelector('#coverage-list').textContent.includes('12:01:00'));
+      await wait(() => document.querySelector('#monitoring-diagnostic-list').textContent.includes('12:01:00'));
       await idle();
       const updated = document.querySelector('.coverage-session');
       probe.reading = updated.open && updated.parentElement.open;
       probe.focus = document.activeElement === updated.querySelector('summary');
+      openTab('home');
       const input = document.querySelector('#global-search');
       const search = async value => {input.value = value; input.dispatchEvent(new Event('input', {bubbles:true})); await idle();};
       await search('no-such-session');

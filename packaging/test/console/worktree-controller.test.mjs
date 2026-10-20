@@ -133,7 +133,7 @@ test('selection spans repositories and filters; select shown respects both searc
   assert.equal(controller.worktreesState.selected.size, 3);
   controller.toggleWorktreeSelection(WT);
   assert.equal(controller.worktreesState.selected.size, 2);
-  for (const extra of [{ state: 'main' }, { state: 'prune' }, { orphan: true }, { locked: true }, { in_use: true }, { conflicts: 1 }, { git_operation: 'rebase' }, { partly_staged: 1 }, { submodules: 1 }, { loose_commits: 1 }, { error: 'unreadable' }]) {
+  for (const extra of [{ state: 'main' }, { state: 'prune' }, { orphan: true }, { locked: true }, { in_use: true }, { conflicts: 1 }, { git_operation: 'rebase' }, { partly_staged: 1 }, { submodules: 1, submodule_local: ['submodule lib has a stash (removal loses it)'] }, { loose_commits: 1 }, { error: 'unreadable' }]) {
     Object.assign(rep.repos[0].worktrees[0], selectionReport().repos[0].worktrees[0], extra);
     controller.toggleWorktreeSelection(WT);
     assert.equal(controller.worktreesState.selected.has(WT), false, JSON.stringify(extra));

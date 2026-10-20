@@ -56,6 +56,7 @@ type Exporter struct {
 	sem     chan struct{}
 	wg      sync.WaitGroup
 	dropped atomic.Uint64
+	failing atomic.Bool
 
 	// Batch tuning: small bursts flush fast; a busy session batches.
 	flushInterval time.Duration
@@ -180,6 +181,7 @@ func (e *Exporter) enqueue(s span) {
 	if e.closed || len(e.batch) >= e.maxBatch {
 		e.mu.Unlock()
 		e.dropped.Add(1)
+		e.failing.Store(true)
 		return
 	}
 	e.batch = append(e.batch, s)
@@ -225,6 +227,7 @@ func (e *Exporter) flushLocked() {
 	case e.sem <- struct{}{}:
 	default:
 		e.dropped.Add(uint64(len(batch)))
+		e.failing.Store(true)
 		return
 	}
 	e.wg.Add(1)
@@ -232,8 +235,11 @@ func (e *Exporter) flushLocked() {
 		defer e.wg.Done()
 		defer func() { <-e.sem }()
 		if err := e.post(batch); err != nil {
+			e.failing.Store(true)
 			e.dropped.Add(uint64(len(batch)))
 			log.Printf("otlp: export failed (%d spans): %v", len(batch), err)
+		} else {
+			e.failing.Store(false)
 		}
 	}()
 }
@@ -259,6 +265,8 @@ func (e *Exporter) Dropped() uint64 {
 	}
 	return e.dropped.Load()
 }
+
+func (e *Exporter) Failing() bool { return e != nil && e.failing.Load() }
 
 // post serializes the OTLP envelope and POSTs it.
 func (e *Exporter) post(batch []span) error {

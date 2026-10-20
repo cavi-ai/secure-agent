@@ -93,6 +93,22 @@ func (b *Bus) TryPublish(e event.Event) bool {
 // Dropped is the number of per-subscriber publishes that found a full buffer.
 func (b *Bus) Dropped() uint64 { return b.dropped.Load() }
 
+// Dropping reports current delivery pressure, not the lifetime loss count.
+// Once consumers free capacity, earlier losses remain in Dropped and DroppedAt.
+func (b *Bus) Dropping() bool {
+	if b.Dropped() == 0 {
+		return false
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, ch := range b.subs {
+		if len(ch) == cap(ch) {
+			return true
+		}
+	}
+	return false
+}
+
 // DroppedAt is when the last drop happened; zero before any.
 func (b *Bus) DroppedAt() time.Time {
 	if ns := b.droppedAt.Load(); ns != 0 {

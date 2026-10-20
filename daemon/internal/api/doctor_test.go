@@ -205,14 +205,14 @@ func TestDoctorFileTelemetryStaleFloodReportsNotLoaded(t *testing.T) {
 	}
 }
 
-func TestDoctorHookActiveFailsWithAgentsAndNoHookEvents(t *testing.T) {
+func TestDoctorHookActivityAbsenceIsNotFailure(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
 	status := Status{Running: true, Uptime: "1h0m0s", ActiveAgents: 3, Agents: []AgentSummary{{PID: 42, Name: "claude"}}}
 	rep, _ := getDoctor(t, st, status)
 	c := doctorCheckByID(t, rep, "hook-active")
-	if c.State != doctorFail || !strings.Contains(c.Fix, "Setup") || !strings.Contains(c.Fix, "Bash") {
-		t.Fatalf("hook-active = %+v, want fail naming the Setup step and Bash tool calls", c)
+	if c.State != doctorSkip || !strings.Contains(c.Detail, "claude") || c.Fix != "" {
+		t.Fatalf("hook-active = %+v, absent observations must stay neutral", c)
 	}
 
 	st.UpsertSession(model.Session{ID: "claude-session", Harness: "claude", StartedAt: time.Now(), LastSeenAt: time.Now()})
@@ -267,6 +267,13 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 			f.st.Collectors = []supervise.Health{{Name: "netsampler", Running: true}}
 			return f
 		}(), doctorPass, "1 collectors running"},
+		{"disabled file collector", checkCollectors, func() doctorFacts {
+			f := steady
+			disabled := false
+			f.st.FileTelemetryEnabled = &disabled
+			f.st.Collectors = []supervise.Health{{Name: "eslogger"}, {Name: "netsampler", Running: true}}
+			return f
+		}(), doctorPass, "1 collectors running"},
 		{"harness without trace", checkTraceCoverage, func() doctorFacts {
 			f := steady
 			f.seenByHarness = map[string]int{"claude": 2, "codex": 1}
@@ -319,13 +326,13 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 			at := now.Add(-time.Minute)
 			f.st.StorageHealth = &store.WriteHealth{Failures: 2, LastFailureAt: &at, Active: []string{}}
 			return f
-		}(), doctorFail, "new writes recovered; 2 earlier failures"},
+		}(), doctorPass, "new writes recovered; 2 earlier failures"},
 		{"old recovered write failure", checkStorage, func() doctorFacts {
 			f := steady
 			at := now.Add(-collect.LossWindow - time.Minute)
 			f.st.StorageHealth = &store.WriteHealth{Failures: 2, LastFailureAt: &at, Active: []string{}}
 			return f
-		}(), doctorPass, "2 earlier failed writes may have left evidence gaps"},
+		}(), doctorPass, "2 earlier failures may have left evidence gaps"},
 		{"recovered write failure marked seen", checkStorage, func() doctorFacts {
 			f := steady
 			at := now.Add(-time.Minute)
@@ -333,7 +340,7 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 			f.lossSeen = new(collect.LossSeen)
 			f.lossSeen.Mark(now)
 			return f
-		}(), doctorPass, "none since"},
+		}(), doctorPass, "new writes recovered"},
 		{"unnamed sessions", checkSessionIdentity, func() doctorFacts {
 			f := steady
 			f.sessionsTotal, f.sessionsNamed = 10, 7

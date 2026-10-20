@@ -1088,7 +1088,7 @@ def run_keychain_flag_carries_class_dismiss_action(page):
 
 def run_uninspected_warning_is_a_clickable_drill_down(page):
     check = page.check
-    dom = page.fixture('dom')
+    dom = page.dom('?tab=monitoring')
     check(
         'uninspected warning is a clickable drill-down',
         dom_query(dom).has(None, {'data-action': 'open-uninspected'}),
@@ -2887,9 +2887,9 @@ def run_home_keeps_coverage_outside_the_decisions_count(page):
     check(
         'Home keeps coverage outside the decisions count',
         (
-            'id="badge-coverage-count">2<' in coverage
+            'id="badge-coverage-count">1<' in coverage
             and 'File monitoring is off' in coverage
-            and '2 connections bypassed inspection' in coverage
+            and '2 connections bypassed inspection' not in coverage
             and 'Uninspected egress' not in decisions
         ),
     )
@@ -2905,7 +2905,7 @@ def run_home_with_only_coverage_gaps_hides_needs_you_and_shows_the_gap(page):
             and 'id="posture-state">Monitoring needs attention<' in dom_coverage
             and 'id="tabs-posture-text">Monitoring gap<' in dom_coverage
             and 'id="coverage-center" hidden' not in dom_coverage
-            and 'id="badge-coverage-count">2<' in dom_coverage
+            and 'id="badge-coverage-count">1<' in dom_coverage
         ),
     )
 
@@ -2981,12 +2981,10 @@ def run_attention_keeps_scope_disclosure_compact(page):
 
 def run_coverage_egress_opens_endpoint_evidence(page):
     check = page.check
-    dom = page.fixture('dom')
-    attention = dom.split('id="attention-center"', 1)[1].split('id="security-findings-grid"', 1)[0]
-    coverage = attention.split('id="coverage-center"', 1)[1].split('id="home-spend"', 1)[0]
+    dom = page.dom('?tab=monitoring')
     check(
-        'coverage egress opens endpoint evidence',
-        dom_query(coverage).has(None, {'data-action': 'open-uninspected'}),
+        'monitoring history opens endpoint evidence',
+        dom_query(dom).has(None, {'data-action': 'open-uninspected'}),
     )
 
 def run_resolved_guard_request_leaves_the_attention_queue(page):

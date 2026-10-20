@@ -213,7 +213,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const confirmCancelEl = document.getElementById('confirm-cancel');
   let cancelDialog = null;
 
-  function saDialog({ title, message, okLabel, withInput, placeholder, danger, focusCancel }) {
+  function saDialog({ title, message, messageHTML, okLabel, withInput, placeholder, danger, focusCancel }) {
     if (sessionEnded) return Promise.resolve(withInput ? null : false);
     if (cancelDialog) cancelDialog();
     const opener = document.activeElement;
@@ -223,6 +223,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     confirmTitleEl.textContent = title || 'Confirm';
     confirmMessageEl.textContent = message || '';
+    // HTML comes only from escaped, local renderers; ordinary dialogs keep
+    // their text-only message path.
+    if (messageHTML) confirmMessageEl.innerHTML = messageHTML;
     confirmOkEl.textContent = okLabel || 'Confirm';
     confirmOkEl.className = 'btn ' + (danger === false ? 'btn-primary' : 'btn-danger');
     confirmInputEl.hidden = !withInput;
@@ -2326,6 +2329,13 @@ document.addEventListener('DOMContentLoaded', () => {
     openAgentDock();
   }
   const worktreeSearch = document.getElementById('worktree-search');
+  document.getElementById('worktrees-container')?.addEventListener('toggle', e => {
+    const row = e.target;
+    if (!row.matches('details.wt-row')) return;
+    const expanded = worktreeController.worktreesState.expanded;
+    if (row.open) expanded.add(row.dataset.path);
+    else expanded.delete(row.dataset.path);
+  }, true);
   if (worktreeSearch) worktreeSearch.addEventListener('input', () => {
     worktreeController.setWorktreeSearch(worktreeSearch.value);
     renderNow(['worktrees']);

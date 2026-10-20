@@ -1,0 +1,59 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+
+const context = vm.createContext({ window: {} });
+const web = new URL('../../../daemon/internal/api/web_dist/', import.meta.url);
+for (const file of ['lib.js', 'tab-worktrees.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), context);
+const repo = { path: '/code/app' };
+const row = (name, extra = {}) => ({ path: `/code/app/${name}`, branch: name, state: 'keep', head: 'abc', reasons: ['1 untracked file'], ...extra });
+
+test('the cleanup queue groups checked removals, decisions, and active work', () => {
+  const rows = [row('active', { in_use: true }), row('review'), row('ready', { state: 'remove' })];
+  const html = context.worktreeGroupHTML({ repo: { ...repo, worktrees: rows }, rows });
+  assert.ok(html.indexOf('Ready for removal') < html.indexOf('Needs a decision'));
+  assert.ok(html.indexOf('Needs a decision') < html.indexOf('In use'));
+  assert.match(html, /<details class="wt-row wt-remove"/);
+  const active = html.slice(html.indexOf('data-path="/code/app/active"'));
+  assert.ok(!active.includes('data-action="worktree-select"'));
+});
+
+test('collapsed queue rows show one selection control and keep actions in their disclosure', () => {
+  const w = row('review');
+  const html = context.worktreeRowHTML(w, repo, { assessment: 'remove', confidence: 0.9, rationale: 'Review the files.' });
+  assert.equal((html.match(/data-action="worktree-select"/g) || []).length, 1);
+  const summary = html.split('</summary>')[0];
+  assert.ok(!summary.includes('worktree-advise') && !summary.includes('worktree-review-trash'));
+  assert.match(summary, /aria-label="Select review for removal"/);
+  assert.ok(!html.includes('90%'));
+});
+
+test('populated submodules can be reviewed while local-only submodule state stays protected', () => {
+  assert.equal(context.worktreeTrashBlock(row('clean', { submodules: 2 })), '');
+  const why = 'submodule lib has a stash (removal loses it)';
+  assert.equal(context.worktreeTrashBlock(row('local', { submodules: 1, submodule_local: [why] })), why);
+  const html = context.worktreeRowHTML(row('local', { submodules: 1, submodule_local: [why] }), repo);
+  assert.ok(!html.includes('data-action="worktree-review-trash"'));
+  assert.match(html, /Open folder to resolve/);
+});
+
+test('batch review separates reclaimable space from files moved to Trash', () => {
+  const rows = [row('ready', { state: 'remove', size_bytes: 1024 }), row('review', { size_bytes: 1048576 })];
+  const rep = { repos: [{ ...repo, worktrees: rows }] };
+  const html = context.worktreeSelectionHTML(rep, { selected: new Map(rows.map(w => [w.path, {}])) }, [{ repo, rows }]);
+  assert.match(html, /Review 2 removals/);
+  assert.match(html, /Reclaim estimate: 1 KB/);
+  assert.match(html, /1 to Trash/);
+  assert.match(html, /does not free disk space/);
+});
+
+test('removal review separates routes and escapes every worktree-provided value', () => {
+  const approval = { ...row('<script>alert(1)</script>'), repo: '/code/<app>', submodules: 2, reasons: ['ignored .tmp/ <img src=x>'] };
+  const html = context.worktreeSelectionReviewHTML([{ approval, size: { size_bytes: 1024 } }]);
+  assert.match(html, /Move to Trash/);
+  assert.match(html, /2 inspected submodules/);
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.ok(!html.includes('<script>') && !html.includes('<img'));
+  assert.ok(!html.includes('State:') && !html.includes('HEAD:'));
+});

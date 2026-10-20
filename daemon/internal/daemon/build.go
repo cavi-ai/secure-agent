@@ -254,11 +254,15 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// The tailer can also appear later: a collector installed after launch is
 	// picked up by watchSpool (startCollectors) without a daemon restart.
 	spool := new(atomic.Pointer[collect.SpoolTailer])
+	fileTelemetryOn := new(atomic.Bool)
+	fileTelemetryOn.Store(cfg.FileTelemetryOn())
+	fileTelemetryChoice := new(atomic.Pointer[bool])
+	fileTelemetryChoice.Store(cfg.FileTelemetryEnabled)
 	if collect.SpoolAvailable() {
 		spool.Store(newSpoolTailer(b, cfg))
 	}
-	// lossSeen is the operator's mark that spool loss and bus drops so far
-	// were seen; Doctor and posture stop failing on them until they grow.
+	// Retain the legacy acknowledgment endpoint; current producer health
+	// determines recovery independently of whether history was acknowledged.
 	lossSeen := new(collect.LossSeen)
 	esServiceProbe := func() (collect.ESServiceSnapshot, error) {
 		t := spool.Load()
@@ -270,9 +274,14 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	// Supervisor with a shared health registry so /status reports each collector's
 	// real state (running / restarting / abandoned) instead of a blanket "running".
-	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, st, time.Now(),
+	baseStatusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, st, time.Now(),
 		func() advisor.HealthSnapshot { return advisorStk.Load().Sub.Health() },
 		fleetOn.Load, esServiceProbe)
+	statusFn := func() api.Status {
+		status := baseStatusFn()
+		status.FileTelemetryEnabled = fileTelemetryChoice.Load()
+		return status
+	}
 
 	// Start Control API. Every dependency is resolved here, once: the API no
 	// longer exposes twenty optional setters that must be called in the right
@@ -370,8 +379,10 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			FleetConfigured: fleetOn.Load,
 			BusDrops:        b.Dropped,
 			BusDropAt:       b.DroppedAt,
+			BusDropping:     b.Dropping,
 			LossSeen:        lossSeen,
 			OTLPDropped:     otlpExp.Dropped,
+			OTLPFailing:     otlpExp.Failing,
 			PublishEvent:    b.Publish,
 			DeltaHub:        deltaHub,
 		},
@@ -407,7 +418,9 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,
 			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer, resourceControl: resourceControl,
 			initialConfig: &cfg, worktrees: hunter, sysAgent: sysAgent, tagger: tagger, fleetOn: fleetOn,
-			deltaHub: deltaHub, postureChanged: postureHook.run, advisorMask: sysAgentMask(fw.Engine),
+			fileTelemetryOn:     fileTelemetryOn,
+			fileTelemetryChoice: fileTelemetryChoice,
+			deltaHub:            deltaHub, postureChanged: postureHook.run, advisorMask: sysAgentMask(fw.Engine),
 		})
 	}
 	postureHook.start(ctx, apiServer.PublishPostureIfChanged)
@@ -435,7 +448,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		}
 	}()
 
-	c.collectorsDone = startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spool)
+	c.collectorsDone = startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spool, fileTelemetryOn)
 
 	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
 	return c, nil
@@ -989,7 +1002,7 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, procSource 
 // spool tail of the root ES collector (the LaunchDaemon, or a developer's
 // `secure-agentd -es-collector` run as root); without a spool it is degraded,
 // not crash-looped, and starts when the spool appears.
-func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer]) <-chan struct{} {
+func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer], fileTelemetryOn *atomic.Bool) <-chan struct{} {
 	var workers sync.WaitGroup
 	run := func(name string, fn func(context.Context) error) {
 		workers.Go(func() { sup.Run(ctx, name, fn) })
@@ -1001,6 +1014,9 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	}
 
 	tailSpool := func(t *collect.SpoolTailer) {
+		if fileTelemetryOn != nil {
+			t.Enabled = fileTelemetryOn.Load
+		}
 		st.TrackFileFeed()
 		run("eslogger", func(c context.Context) error {
 			t.OnProduce = func() { supReg.MarkProduced("eslogger") }
@@ -1211,7 +1227,7 @@ func spoolServiceProbe(t *collect.SpoolTailer, seen *collect.LossSeen) func() (c
 		snap.BytesLost = stats.BytesLost
 		if lostAt := stats.LostAt; !lostAt.IsZero() {
 			snap.LostAt = &lostAt
-			snap.Losing = seen.Growing(lostAt, time.Now())
+			snap.Losing = stats.Losing
 		}
 		snap.Flooding = !stats.FloodSince.IsZero()
 		if since := stats.FloodSince; !since.IsZero() {

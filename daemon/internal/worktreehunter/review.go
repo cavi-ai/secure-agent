@@ -43,8 +43,8 @@ func trashBlocker(row Worktree) string {
 		return "could not inspect: " + row.Error
 	case row.Operation != "":
 		return "a git " + row.Operation + " is in progress; finish or abort it first"
-	case row.Submodules != 0:
-		return "it has populated submodules"
+	case len(row.SubmoduleLocal) != 0:
+		return strings.Join(row.SubmoduleLocal, "; ")
 	case row.InUse:
 		return liveAgentReason(row)
 	case row.Locked:

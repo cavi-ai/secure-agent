@@ -54,9 +54,13 @@ func derivePosture(in postureInputs) Posture {
 	}
 	posture.CoverageItems = coverageItems(in.Generated, st, in.HookGap)
 	if in.HookHealthTruncated {
-		posture.CoverageItems = append(posture.CoverageItems, PostureItem{Kind: "hook_analysis_limit", ID: "hook-analysis", Title: "Hook analysis is limited to recent samples", Detail: "The latest 1,000 live-session completions and up to 20 repair findings are assessed. Open a session for its own assessment."})
+		posture.CoverageItems = append(posture.CoverageItems, PostureItem{Kind: "hook_analysis_limit", ID: "hook-analysis", MonitoringState: monitoringInformational, Title: "Hook analysis is limited to recent samples", Detail: "The latest 1,000 live-session completions and up to 20 repair findings are assessed. Open a session for its own assessment."})
 	}
-	posture.CoverageCount = len(posture.CoverageItems)
+	for _, item := range posture.CoverageItems {
+		if isMonitoringGap(item) {
+			posture.CoverageCount++
+		}
+	}
 	posture.AttentionSummary = deriveAttentionSummary(posture.Groups, posture.CoverageItems)
 	switch {
 	case posture.NeedsYou == 0 && !hasMonitoringGap(posture.CoverageItems):
@@ -97,12 +101,11 @@ func coverageItems(now time.Time, st Status, hookGap *PostureItem) []PostureItem
 			Detail:   "Review endpoints that bypassed inspection in Egress.",
 		})
 	}
-	return items
+	return classifyMonitoring(items, st)
 }
 
-// hasMonitoringGap reports whether coverage holds a gap the operator must fix
-// (a collector down or silent, a hook missing, a harness unseen). Uninspected
-// egress is a coverage note, not a gap: alone it leaves posture all-clear.
+// hasMonitoringGap reports current failures. Configuration notes, idle
+// sources and historical losses remain inspectable without requiring attention.
 func hasMonitoringGap(items []PostureItem) bool {
 	for _, it := range items {
 		if isMonitoringGap(it) {
@@ -180,9 +183,8 @@ func attentionSummary(items []PostureItem) string {
 
 // collectorSilenceWindows: how long a producer collector may publish nothing
 // while agents are active before posture calls it blind. Netsampler is
-// excluded: an idle-but-working agent legitimately opens no sockets for long
-// stretches, so its silence is ambiguous. File and transcript telemetry are
-// not ambiguous — an active harness touches files constantly.
+// excluded. A quiet source is an observation, not evidence of a failure:
+// long-lived processes and helpers can remain present without doing work.
 var collectorSilenceWindows = map[string]time.Duration{
 	"eslogger":   30 * time.Minute,
 	"transcript": 30 * time.Minute,
@@ -205,6 +207,9 @@ func silentCollectorItems(now time.Time, st Status) []PostureItem {
 	// the daemon tails the spool (an eslogger collector row that came from
 	// a direct root eslogger child has no external service).
 	for _, c := range st.Collectors {
+		if c.Name == "eslogger" && fileTelemetryDisabled(st) {
+			continue
+		}
 		if c.Name == "eslogger" && c.Running && !c.Abandoned && st.ESService != nil {
 			svcItems := esServiceItems(now, *st.ESService)
 			items = append(items, svcItems...)
@@ -226,10 +231,9 @@ func silentCollectorItems(now time.Time, st Status) []PostureItem {
 		if c.LastProduced == "" {
 			if uptime >= collectorBootGrace {
 				items = append(items, PostureItem{
-					Kind: "collector_silent", ID: c.Name,
-					Title:    humanCollectorSilentTitle(c.Name) + " is producing nothing",
-					Severity: 2,
-					Detail:   "collector is running but has published no events since daemon start — telemetry source may be dead",
+					Kind: "collector_idle", ID: c.Name,
+					Title:  humanCollectorSilentTitle(c.Name) + ": no activity observed",
+					Detail: "The collector is running. No events have been observed during this run.",
 				})
 			}
 			continue
@@ -240,10 +244,9 @@ func silentCollectorItems(now time.Time, st Status) []PostureItem {
 		}
 		if now.Sub(last) > window {
 			items = append(items, PostureItem{
-				Kind: "collector_silent", ID: c.Name,
-				Title:    humanCollectorSilentTitle(c.Name) + " went quiet",
-				Severity: 2,
-				Detail:   "no events for more than " + window.String() + " while agents are active — check the telemetry source",
+				Kind: "collector_idle", ID: c.Name,
+				Title:  humanCollectorSilentTitle(c.Name) + ": no recent activity",
+				Detail: "The collector is running. Its last event was over " + window.String() + " ago.",
 			})
 		}
 	}
@@ -314,6 +317,9 @@ func esServiceItems(now time.Time, s collect.ESServiceSnapshot) []PostureItem {
 			Detail:   "root ES collector service state: " + s.State + " — spool " + s.SpoolStateAt(now) + " — " + next,
 		})
 	} else if now.Sub(s.SpoolMtime) > 30*time.Minute {
+		if esServiceRunning(s.State) && s.Collector != nil && s.Collector.Fresh(now) && s.Collector.State == "collecting" {
+			return []PostureItem{{Kind: "collector_idle", ID: "eslogger", Title: "No recent file activity", Detail: "The file collector reports that it is ready. No recent file events were observed."}}
+		}
 		detail := "root ES collector reports " + s.State + " but the spool " + s.SpoolStateAt(now) + " — file telemetry may be blind"
 		// An ad-hoc signed build's privacy grant is bound to that build: a
 		// collector binary installed after the last spool write lost it.
