@@ -85,6 +85,7 @@ def build_harness(tmp):
     needle = '<script src="lib.js"></script>'
     assert needle in html, "lib.js script tag not found in index.html"
     html = html.replace(needle, needle + '\n  <script src="fixture-config.js"></script>\n  <script src="fixtures.js"></script>\n  <script src="mock_dom.js"></script>\n  <script src="case-script.js"></script>')
+    html = html.replace('<div class="brand-text">', '<div class="brand-text"><span class="brand-sub" id="fixture-notice">Synthetic preview · test data</span>')
     with open(os.path.join(tmp, "harness.html"), "w") as f:
         f.write(html)
 

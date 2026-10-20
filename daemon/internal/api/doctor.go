@@ -322,7 +322,7 @@ func checkCollectors(f doctorFacts) (string, string) {
 	return doctorPass, fmt.Sprintf("%d collectors running", len(f.st.Collectors)) + polls
 }
 
-// checkHermes reports the Hermes Agent collector: not installed when no
+// checkHermes reports the Hermes Agent collector: state not found when no
 // state.db exists under its root, else each database's watermark and the
 // last poll, failing when a database could not be read.
 func checkHermes(f doctorFacts) (string, string) {
@@ -333,7 +333,7 @@ func checkHermes(f doctorFacts) (string, string) {
 	case h.LastError != "":
 		return doctorFail, h.LastError
 	case len(h.DBs) == 0:
-		return doctorSkip, fmt.Sprintf("not installed (no state.db under %s)", h.Root)
+		return doctorSkip, fmt.Sprintf("state.db not found under %s; set hermes_home or provide HERMES_STATE_DIR/HERMES_HOME to the daemon", h.Root)
 	}
 	dbs := make([]string, len(h.DBs))
 	for i, d := range h.DBs {

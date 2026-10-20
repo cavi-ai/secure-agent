@@ -64,7 +64,7 @@ func TestLsofRolloutFilesBatchesPIDs(t *testing.T) {
 	for i := range pids {
 		pids[i] = int32(i + 1)
 	}
-	got, err := lsofRolloutFiles(run, "/usr/sbin/lsof", pids)
+	got, err := lsofRolloutFiles(context.Background(), run, "/usr/sbin/lsof", pids)
 	if err == nil {
 		t.Fatal("runner error not reported")
 	}
@@ -84,6 +84,46 @@ func TestLsofRolloutFilesBatchesPIDs(t *testing.T) {
 	}
 }
 
+func TestLsofRolloutFilesCancelsInFlightProbe(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	calls := 0
+	run := func(probeCtx context.Context, _ string, _ ...string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			close(started)
+		}
+		select {
+		case <-probeCtx.Done():
+			return nil, probeCtx.Err()
+		case <-release:
+			return nil, errors.New("probe released without cancellation")
+		}
+	}
+	pids := make([]int32, maxProbePIDs+1)
+	for i := range pids {
+		pids[i] = int32(i + 1)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := lsofRolloutFiles(ctx, run, "lsof", pids); done <- err }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("probe did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) || calls != 1 {
+			t.Fatalf("cancelled probe: error=%v calls=%d", err, calls)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancellation did not interrupt the in-flight probe")
+	}
+}
+
 // The joiner probes only live codex pids and joins each open rollout's
 // session to the pid holding it; a path with no session id is skipped.
 func TestRolloutJoinerTick(t *testing.T) {
@@ -95,14 +135,14 @@ func TestRolloutJoinerTick(t *testing.T) {
 	var joins []join
 	j := &RolloutJoiner{
 		PIDs: func() []int32 { return []int32{300, 100} },
-		Probe: func(pids []int32) (map[int32][]string, error) {
+		Probe: func(_ context.Context, pids []int32) (map[int32][]string, error) {
 			probed = append(probed, pids...)
 			return map[int32][]string{100: {rolloutA}, 300: {rolloutB, "/x/sessions/rollout-bad.jsonl"}}, nil
 		},
 		SessionFor: func(path string) string { return RolloutSessionID(path) },
 		Join:       func(sid string, pid int32) { joins = append(joins, join{sid, pid}) },
 	}
-	j.tick(time.Now())
+	j.tick(context.Background(), time.Now())
 	if !reflect.DeepEqual(probed, []int32{100, 300}) {
 		t.Fatalf("probed = %v, want [100 300]", probed)
 	}
@@ -115,10 +155,51 @@ func TestRolloutJoinerTick(t *testing.T) {
 // No live codex pid: no probe runs.
 func TestRolloutJoinerSkipsProbeWithoutPIDs(t *testing.T) {
 	j := &RolloutJoiner{
-		PIDs:  func() []int32 { return nil },
-		Probe: func([]int32) (map[int32][]string, error) { t.Fatal("probe ran with no pids"); return nil, nil },
+		PIDs: func() []int32 { return nil },
+		Probe: func(context.Context, []int32) (map[int32][]string, error) {
+			t.Fatal("probe ran with no pids")
+			return nil, nil
+		},
 	}
-	j.tick(time.Now())
+	j.tick(context.Background(), time.Now())
+}
+
+func TestRolloutJoinerDoesNotJoinAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started, release, done := make(chan struct{}, 1), make(chan struct{}), make(chan struct{})
+	joins := 0
+	j := &RolloutJoiner{
+		interval: time.Millisecond,
+		PIDs:     func() []int32 { return []int32{100} },
+		Probe: func(context.Context, []int32) (map[int32][]string, error) {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+			return map[int32][]string{100: {rolloutA}}, nil
+		},
+		SessionFor: RolloutSessionID,
+		Join:       func(string, int32) { joins++ },
+	}
+	go func() { defer close(done); _ = j.Run(ctx) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("joiner did not begin its probe")
+	}
+	cancel()
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("joiner did not stop after cancellation")
+	}
+	if joins != 0 {
+		t.Fatalf("cancelled probe joined %d sessions", joins)
+	}
 }
 
 // The scanner names a rollout's session: the tracer's session_meta id once

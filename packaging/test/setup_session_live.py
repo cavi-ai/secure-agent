@@ -320,7 +320,7 @@ def main(argv=None):
                        if key in os.environ}
         environment.update({
             "HOME": str(home), "CFFIXED_USER_HOME": str(home),
-            "HERMES_HOME": str(home / ".hermes"), "OPENCLAW_HOME": str(home / ".openclaw"),
+            "HERMES_HOME": str(home / ".hermes"), "HERMES_STATE_DIR": str(home / ".hermes"), "OPENCLAW_HOME": str(home / ".openclaw"),
             "CODEX_HOME": str(codex_home), "SECURE_AGENT_SETUP_E2E_ROOT": str(root),
         })
         if arguments.with_claude:

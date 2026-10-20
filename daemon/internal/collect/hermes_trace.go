@@ -23,7 +23,8 @@ import (
 //
 // Hermes keeps its sessions in SQLite: <root>/state.db, plus one state.db
 // per named profile at <root>/profiles/<name>/state.db, where the root is
-// hermes_home, else $HERMES_HOME, else ~/.hermes. sessions records the model,
+// hermes_home, $HERMES_STATE_DIR, $HERMES_HOME, or discovered at runtime.
+// sessions records the model,
 // billing provider, cwd, git repo root and branch, parent session, start and
 // end (REAL epoch seconds) and running token totals; messages records role,
 // tool_calls JSON, tool_call_id, tool_name, token_count, finish_reason and a
@@ -111,6 +112,9 @@ type HermesCollector struct {
 
 	// Configured is the hermes_home setting; when set it is the root.
 	Configured string
+	// ProcessExes supplies tagged Hermes executable paths when the daemon
+	// does not inherit Hermes's environment.
+	ProcessExes func() []string
 	// StatePath, when set, persists the per-database watermarks across
 	// daemon restarts.
 	StatePath string
@@ -200,19 +204,40 @@ func NewHermesCollector(b *bus.Bus, interval time.Duration) *HermesCollector {
 	return &HermesCollector{bus: b, interval: interval, now: time.Now, dbs: map[string]*hermesDB{}}
 }
 
-// HermesHome picks Hermes's root: the configured path, else $HERMES_HOME,
-// else ~/.hermes. "" when none is known.
-func HermesHome(configured string, getenv func(string) string, home string) string {
+// HermesHome honors explicit configuration and environment before discovery.
+// With neither, use ~/.hermes when it holds a database, then a tagged Hermes
+// installation's state directory. Keep the default path for diagnostics when
+// no database is found.
+func HermesHome(configured string, getenv func(string) string, home string, exePaths ...string) string {
 	if configured != "" {
 		return configured
 	}
-	if v := getenv("HERMES_HOME"); v != "" {
-		return v
+	for _, key := range []string{"HERMES_STATE_DIR", "HERMES_HOME"} {
+		if v := strings.TrimSpace(getenv(key)); v != "" {
+			return v
+		}
 	}
+	var fallback string
 	if home != "" {
-		return filepath.Join(home, ".hermes")
+		fallback = filepath.Join(home, ".hermes")
+		if len(hermesDBPaths(fallback)) > 0 {
+			return fallback
+		}
 	}
-	return ""
+	for _, exe := range exePaths {
+		for _, marker := range []string{"/.hermes/", "/hermes-agent/"} {
+			if i := strings.Index(filepath.ToSlash(exe), marker); i >= 0 {
+				root := exe[:i]
+				if marker == "/.hermes/" {
+					root = filepath.Join(root, ".hermes")
+				}
+				if len(hermesDBPaths(root)) > 0 {
+					return root
+				}
+			}
+		}
+	}
+	return fallback
 }
 
 // hermesDBPaths lists the databases under root: state.db first, then each
@@ -281,7 +306,11 @@ func (c *HermesCollector) pollOnce() int {
 		c.loadState()
 	}
 	home, _ := os.UserHomeDir()
-	root := HermesHome(c.Configured, os.Getenv, home)
+	var exes []string
+	if c.ProcessExes != nil {
+		exes = c.ProcessExes()
+	}
+	root := HermesHome(c.Configured, os.Getenv, home, exes...)
 	paths := hermesDBPaths(root)
 	if len(paths) == 0 && !c.idle {
 		c.idle = true

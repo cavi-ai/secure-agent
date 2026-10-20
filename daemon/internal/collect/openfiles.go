@@ -59,8 +59,8 @@ func RolloutSessionID(path string) string {
 // OpenRolloutFiles returns, for each pid, the codex rollout files it holds
 // open (paths under a codex sessions directory). Pids are probed at most
 // maxProbePIDs per call.
-func OpenRolloutFiles(pids []int32) (map[int32][]string, error) {
-	return openRolloutFiles(pids)
+func OpenRolloutFiles(ctx context.Context, pids []int32) (map[int32][]string, error) {
+	return openRolloutFiles(ctx, pids)
 }
 
 // cmdRunner runs a command and returns its stdout; the lsof seam for tests.
@@ -70,17 +70,23 @@ type cmdRunner func(ctx context.Context, name string, args ...string) ([]byte, e
 // maxProbePIDs pids and keeps the rollout paths. lsof exits nonzero when a
 // named pid exited mid-scan; the files it did list are kept and the error is
 // returned for the caller's rate-limited log.
-func lsofRolloutFiles(run cmdRunner, bin string, pids []int32) (map[int32][]string, error) {
+func lsofRolloutFiles(ctx context.Context, run cmdRunner, bin string, pids []int32) (map[int32][]string, error) {
 	out := map[int32][]string{}
 	var firstErr error
 	for chunk := range slices.Chunk(pids, maxProbePIDs) {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		list := make([]string, len(chunk))
 		for i, p := range chunk {
 			list[i] = strconv.Itoa(int(p))
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), openFilesTimeout)
-		b, err := run(ctx, bin, "-w", "-p", strings.Join(list, ","), "-Fn")
+		probeCtx, cancel := context.WithTimeout(ctx, openFilesTimeout)
+		b, err := run(probeCtx, bin, "-w", "-p", strings.Join(list, ","), "-Fn")
 		cancel()
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -126,7 +132,7 @@ type RolloutJoiner struct {
 	// PIDs lists the live pids the tagger names codex.
 	PIDs func() []int32
 	// Probe returns each pid's open rollout paths (OpenRolloutFiles).
-	Probe func(pids []int32) (map[int32][]string, error)
+	Probe func(context.Context, []int32) (map[int32][]string, error)
 	// SessionFor names the session a rollout path belongs to ("" if unknown).
 	SessionFor func(path string) string
 	// Join ties the session to the pid (Resolver.JoinTranscriptPID).
@@ -149,20 +155,26 @@ func (j *RolloutJoiner) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case now := <-ticker.C:
-			j.tick(now)
+			j.tick(ctx, now)
 		}
 	}
 }
 
 // tick probes the live codex pids once and joins every open rollout. A pid's
 // rollouts are joined oldest file name first.
-func (j *RolloutJoiner) tick(now time.Time) {
+func (j *RolloutJoiner) tick(ctx context.Context, now time.Time) {
+	if ctx.Err() != nil {
+		return
+	}
 	pids := j.PIDs()
 	if len(pids) == 0 {
 		return
 	}
 	slices.Sort(pids)
-	files, err := j.Probe(pids)
+	files, err := j.Probe(ctx, pids)
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil && now.Sub(j.lastErrAt) >= probeErrorLogEvery {
 		j.lastErrAt = now
 		log.Printf("collect: open-rollout probe: %v", err)
@@ -171,6 +183,9 @@ func (j *RolloutJoiner) tick(now time.Time) {
 		paths := slices.Clone(files[pid])
 		slices.Sort(paths)
 		for _, p := range paths {
+			if ctx.Err() != nil {
+				return
+			}
 			if sid := j.SessionFor(p); sid != "" {
 				j.Join(sid, pid)
 			}

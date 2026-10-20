@@ -350,7 +350,7 @@
     if (p === '/flags/acknowledge') {
       const ids = new Set(body.flag_ids || [body.flag_id]);
       data['/flags'] = data['/flags'].filter(f => !ids.has(f.id));
-      if (scenarios.has('attentionremodel')) {
+      {
         const post = data['/posture'];
         post.groups = post.groups.map(g => ({...g,items:g.items.filter(it => it.kind !== 'flag' || !ids.has(it.id))})).filter(g => g.items.length);
         post.items = post.items.filter(it => it.kind !== 'flag' || !ids.has(it.id));
@@ -496,7 +496,7 @@
     stamp('fetch-count', String(fetchCount));
     const p = String(path).split('?')[0];
     if (routes.has(p)) {
-      const routed = await routes.get(p)({ path: String(path), method: opts?.method || 'GET', query: new URLSearchParams(String(path).split('?')[1] || '') });
+      const routed = await routes.get(p)({ path: String(path), method: opts?.method || 'GET', body: opts?.body, query: new URLSearchParams(String(path).split('?')[1] || '') });
       if (routed !== undefined) return routed;
     }
     const scripted = fixture.responses[String(path)] || fixture.responses[p];
@@ -572,11 +572,6 @@
       };
       return { ok: true, json: async () => [scope('synthetic-scope'), scope('unrelated-permission')] };
     }
-    if ((scenarios.has('contexthandoff') || scenarios.has('investigationdemo') || scenarios.has('reviewresult')) && p.startsWith('/flags/') && p.endsWith('/explain')) {
-      const id = decodeURIComponent(p.split('/')[2]);
-      const flag = data['/flags'].find(f => f.id === id);
-      return {ok:!!flag,status:flag?200:404,json:async()=>flag,text:async()=>flag?JSON.stringify(flag):'flag unavailable'};
-    }
     if ((scenarios.has('contexthandoff') || scenarios.has('investigationdemo')) && p === '/incidents' && !String(path).includes('format=markdown')) {
       const id = new URLSearchParams(String(path).split('?')[1] || '').get('id');
       if (id) {
@@ -602,6 +597,11 @@
         json: async () => ({ error: 'console token required' }),
         text: async () => '{"error":"console token required"}'
       };
+    }
+    if (/^\/flags\/[^/]+\/explain$/.test(p)) {
+      const id = decodeURIComponent(p.split('/')[2]);
+      const flag = data['/flags'].find(f => f.id === id);
+      return {ok:!!flag,status:flag?200:404,json:async()=>flag,text:async()=>flag?JSON.stringify(flag):'flag unavailable'};
     }
     if (scenarios.has('filteredscope') && p === (scenarios.has('historyflags') ? '/flags' : '/events')) {
       if (historyRecovered) return { ok: true, status: 200, json: async () => [] };

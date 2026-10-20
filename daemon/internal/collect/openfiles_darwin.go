@@ -9,8 +9,8 @@ import (
 	"os/exec"
 )
 
-func openRolloutFiles(pids []int32) (map[int32][]string, error) {
-	return lsofRolloutFiles(execOutput, lsofBinary(), pids)
+func openRolloutFiles(ctx context.Context, pids []int32) (map[int32][]string, error) {
+	return lsofRolloutFiles(ctx, execOutput, lsofBinary(), pids)
 }
 
 // lsofBinary resolves lsof as the net sampler does: PATH, then /usr/sbin.

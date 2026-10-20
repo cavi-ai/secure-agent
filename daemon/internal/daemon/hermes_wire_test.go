@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/session"
@@ -21,6 +22,13 @@ import (
 // The Hermes collector built for the daemon reads hermes_home and lands each
 // session in the store as a hermes session with its repo, branch and parent.
 func TestHermesCollectorWiring(t *testing.T) {
+	for _, source := range []string{"configured", "process"} {
+		t.Run(source, func(t *testing.T) { testHermesCollectorWiring(t, source) })
+	}
+}
+
+func testHermesCollectorWiring(t *testing.T, source string) {
+	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
 	if err != nil {
@@ -50,7 +58,17 @@ func TestHermesCollectorWiring(t *testing.T) {
 	}
 
 	cfg := config.Config{HermesHome: root, DBPath: filepath.Join(dir, "e.db")}
-	h := newHermesCollector(cfg, bus.New(8), supervise.NewRegistry(), session.NewResolver(st, nil))
+	var tagger *agents.Tagger
+	if source == "process" {
+		t.Setenv("HERMES_STATE_DIR", "")
+		t.Setenv("HERMES_HOME", "")
+		t.Setenv("HOME", t.TempDir())
+		cfg.HermesHome = ""
+		cfg.Agents = []config.AgentDef{{Name: "hermes", Match: []string{"hermes-agent"}}}
+		tagger = agents.New(cfg, mapProcSource{900: {PID: 900, PPID: 1, Exe: filepath.Join(root, "hermes-agent", "venv", "bin", "python3")}})
+		tagger.Refresh()
+	}
+	h := newHermesCollector(cfg, bus.New(8), supervise.NewRegistry(), session.NewResolver(st, nil), tagger)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_ = h.Run(ctx) // one poll, then ctx is done

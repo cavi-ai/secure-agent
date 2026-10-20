@@ -40,9 +40,10 @@ function applyInlineMetrics(root) {
 function patchList(container, items, opts) {
   if (!container) return;
   if (!items.length) {
-    if (container._saEmpty !== opts.empty) {
-      container.innerHTML = opts.empty || '';
-      container._saEmpty = opts.empty;
+    const empty = opts.empty || '';
+    if (container._saEmpty !== empty) {
+      container.innerHTML = empty;
+      container._saEmpty = empty;
     }
     return;
   }

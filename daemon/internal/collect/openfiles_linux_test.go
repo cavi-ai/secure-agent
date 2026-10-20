@@ -3,6 +3,7 @@
 package collect
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -24,7 +25,7 @@ func TestOpenRolloutFilesReadsProcFD(t *testing.T) {
 	prev := procRoot
 	procRoot = root
 	defer func() { procRoot = prev }()
-	got, err := OpenRolloutFiles([]int32{100, 200})
+	got, err := OpenRolloutFiles(context.Background(), []int32{100, 200})
 	if err != nil || !reflect.DeepEqual(got, map[int32][]string{100: {rolloutA}}) {
 		t.Fatalf("OpenRolloutFiles = %v, %v; want pid 100 → rolloutA", got, err)
 	}

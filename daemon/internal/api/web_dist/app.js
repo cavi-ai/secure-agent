@@ -87,6 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
     plan: { load: subject => loadPlanSlot(subject) },
     flag: {
       cache: f => planFlagCache.set(f.id, f),
+      summary: id => attentionItems().find(it => it.kind === 'flag' && it.id === id),
       advisorEnabled: () => !!(telemetryData.status && telemetryData.status.advisor_enabled)
     },
     session: { capture: el => captureSessionReturn(el), restore: st => restoreSessionReturn(st) }
@@ -2483,7 +2484,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   window.dismissFlag = async function(id) {
     const revert = stageDropFlag(id);
-    await stagedWrite.write(revert, () => stagedWrite.send('POST', '/flags/acknowledge', { flag_id: id }), {
+    await stagedWrite.write(revert, async () => {
+      const res = await stagedWrite.send('POST', '/flags/acknowledge', { flag_id: id });
+      const receipt = await res.json();
+      if (receipt.acknowledged !== true) throw new Error('Flag was not marked reviewed. Refresh the queue and try again.');
+      return res;
+    }, {
       ok: () => {
         revert.commit?.();
         showToast('Flag dismissed — the rule keeps watching', 'info');
@@ -4104,6 +4110,10 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'dismiss-flag':
         window.dismissFlag(d.id);
+        break;
+      case 'refresh-finding-queue':
+        detailDrawer.close();
+        fetchTelemetry();
         break;
       case 'review-decision':
         window.reviewAct(d.id, Number(d.revision), d.decision, d.scope ? {kind:d.scope,...(d.expiry ? {expiry:d.expiry} : {})} : undefined);

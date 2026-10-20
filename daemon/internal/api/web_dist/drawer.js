@@ -276,9 +276,12 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
     open({ title: 'Security flag', icon: 'alert', body: '<div class="loading-spinner">Loading flag evidence…</div>',
       onClose: () => { if (mode === 'flag') mode = null; flagId = ''; }, back });
     const mine = seq;
+    const summary = flag.summary?.(id);
+    let missing = false;
     try {
       const res = await request(`/flags/${encodeURIComponent(id)}/explain`);
-      if (res.status === 404) throw new Error('Finding evidence is no longer available. Its source may have expired; the retained session summary does not replace the evidence.');
+      missing = res.status === 404;
+      if (missing) throw new Error('Finding evidence is no longer available. Its source may have expired; the retained session summary does not replace the evidence.');
       if (!res.ok) throw new Error((await res.text()).trim() || 'flag unavailable');
       const f = await res.json();
       if (mine !== seq) return;
@@ -303,7 +306,21 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
     </div>`;
       plan.load(subject);
     } catch (err) {
-      if (mine === seq) body.innerHTML = `<div class="empty"><span>Could not load this flag: ${escapeHTML(err.message || err)}</span></div>`;
+      if (mine !== seq) return;
+      title.textContent = summary?.title || 'Security flag';
+      const facts = [['Flag ID', id], ['Rule', summary?.rule], ['Session', summary?.session_id], ['Workspace', summary?.group?.workspace]].filter(([, value]) => value);
+      body.innerHTML = `<div class="panel-body flag-inspector">
+        <h3>${missing ? 'Evidence unavailable' : 'Evidence could not be loaded'}</h3>
+        ${summary ? `<p>${escapeHTML(summary.detail || summary.title)}</p><p>This is the queued summary, not the source evidence.</p>` : ''}
+        <p role="status">${escapeHTML(err.message || err)}</p>
+        <dl class="finding-facts">${facts.map(([label, value]) => `<dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value)}</dd>`).join('')}</dl>
+        ${summary || !missing ? `<div class="flag-actions-row">
+          <button type="button" class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${escapeHTML(id)}">Retry evidence</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-action="refresh-finding-queue">Refresh queue</button>
+          ${!missing && summary ? `<button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(id)}">Dismiss flag</button>` : ''}
+        </div>` : ''}
+        <p>${missing ? (summary ? 'Refresh the queue to reconcile this missing record.' : 'The retained history does not replace the missing source evidence.') : 'Dismissing marks the flag reviewed. The rule keeps watching.'}</p>
+      </div>`;
     }
   }
 

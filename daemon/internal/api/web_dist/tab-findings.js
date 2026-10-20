@@ -406,7 +406,12 @@ function needView(item, ctx) {
     }
     case 'flag': {
       const f = ctx.flags.get(item.id);
-      if (!f) return { ...v, items: [{ label: 'View evidence', attrs: `data-action="open-flag" data-id="${id}"`, bar: true }] };
+      if (!f) return { ...v, word: a ? v.word : item.disposition?.text || 'needs review',
+        why: 'Evidence is outside the current event view. Dismiss marks this flag reviewed; the rule keeps watching.',
+        items: [
+          { label: 'View evidence', attrs: `data-action="open-flag" data-id="${id}"`, bar: true },
+          { label: 'Dismiss', attrs: `data-action="dismiss-flag" data-id="${id}"`, title: 'Mark reviewed; the rule keeps watching', bar: true },
+        ] };
       const l = explainLines(f, ctx.now);
       const plan = { label: 'What to do', attrs: `data-action="open-plan" data-subject="flag:${id}"` };
       const assessment = (f.explain || {}).assessment || a;
