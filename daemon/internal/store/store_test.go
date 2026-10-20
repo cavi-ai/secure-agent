@@ -197,6 +197,69 @@ func TestEventRetentionBatchPruning(t *testing.T) {
 	}
 }
 
+// A retention scan reads the events table without the store lock, so event
+// persistence never waits on it; only the delete that follows takes the lock.
+func TestRetentionScansWithoutTheStoreLock(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.SetEventRetention(time.Hour, time.Hour)
+	for i := 0; i < 10; i++ {
+		s.PutEvent(event.Event{Kind: event.KindExec, PID: int32(i), TS: time.Now().Add(-48 * time.Hour)})
+	}
+	scans, unlocked := 0, 0
+	s.pruneScanned = func() {
+		scans++
+		if s.mu.TryLock() {
+			unlocked++
+			s.mu.Unlock()
+		}
+	}
+	s.PruneEvents()
+	if scans == 0 || unlocked != scans {
+		t.Fatalf("%d of %d retention scans ran without the store lock", unlocked, scans)
+	}
+	if n := countKind(t, s, int(event.KindExec)); n != 0 {
+		t.Fatalf("%d expired exec rows kept", n)
+	}
+}
+
+// The /doctor stats never wait for the store lock.
+func TestDoctorReadsDoNotWaitForTheStoreLock(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.PutEvent(event.Event{Kind: event.KindExec, PID: 1, TS: time.Now()})
+	since := time.Now().Add(-time.Hour)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	done := make(chan []KindRetention, 1)
+	go func() {
+		s.SessionIdentityStats(since)
+		_, _ = s.DoctorWorkspaceRepos(since)
+		s.SessionsCreatedSince(since)
+		s.SessionsByHarness(since)
+		s.TraceRowsWrittenByHarness()
+		s.ToolCallStats(since)
+		s.PricingStats()
+		s.HookEventsSince(since)
+		_, _ = s.HarnessActivitySince(since)
+		done <- s.RetentionReport()
+	}()
+	select {
+	case report := <-done:
+		if len(report) != 1 || report[0].Rows != 1 {
+			t.Fatalf("report = %+v", report)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a /doctor stat waited for the store lock")
+	}
+}
+
 // Retention is time-based per kind: socket churn ages out in hours so it can
 // never evict the security record again (the 10k-row, zero-activity window),
 // while file/exec/guard kinds keep days.

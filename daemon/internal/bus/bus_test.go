@@ -61,6 +61,26 @@ func TestDroppedAtIsZeroBeforeAnyDrop(t *testing.T) {
 	}
 }
 
+// A retrying source fills at most three quarters of a subscriber's buffer, so
+// Publish, which cannot retry, still has room behind a durable backlog.
+func TestTryPublishLeavesRoomForPublish(t *testing.T) {
+	b := New(8)
+	defer b.Close()
+	sub := b.Subscribe()
+	accepted := 0
+	for b.TryPublish(event.Event{PID: 1}) {
+		accepted++
+	}
+	if accepted != 6 {
+		t.Fatalf("TryPublish accepted %d of 8 slots, want 6", accepted)
+	}
+	b.Publish(event.Event{PID: 2})
+	b.Publish(event.Event{PID: 3})
+	if b.Dropped() != 0 || len(sub) != 8 {
+		t.Fatalf("dropped %d with %d queued; Publish must fit behind the retrying backlog", b.Dropped(), len(sub))
+	}
+}
+
 func TestTryPublishIsAtomicAndRetryable(t *testing.T) {
 	b := New(1)
 	defer b.Close()

@@ -282,7 +282,7 @@ func TestSpoolTailerSkipsFloodPastBudget(t *testing.T) {
 	if err := os.WriteFile(path, body, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	b := bus.New(128) // capacity for the 100 valid recovery events
+	b := bus.New(160) // retrying capacity (three quarters) for the 100 valid recovery events
 	sub := b.Subscribe()
 	tailer := NewSpoolTailerAt(b, path)
 
