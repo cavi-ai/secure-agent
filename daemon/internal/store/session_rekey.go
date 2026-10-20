@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
@@ -18,6 +19,37 @@ func (s *Store) RekeySession(oldID, newID string) error {
 // evidence atomically, before the resolver publishes its canonical identity.
 func (s *Store) PromoteSession(provisional model.Session, newID string) error {
 	return s.rekeySession(provisional.ID, newID, &provisional)
+}
+
+// maxSessionAliases bounds the rekeys event writes still follow.
+const maxSessionAliases = 4096
+
+// noteSessionAliasLocked records that oldID's rows now live under newID.
+// newID is live again if an earlier rekey had moved it away.
+func (s *Store) noteSessionAliasLocked(oldID, newID string) {
+	if s.sessionAliases == nil {
+		s.sessionAliases = map[string]string{}
+	}
+	delete(s.sessionAliases, newID)
+	if _, ok := s.sessionAliases[oldID]; !ok {
+		s.sessionAliasOrder = append(s.sessionAliasOrder, oldID)
+		if len(s.sessionAliasOrder) > maxSessionAliases {
+			delete(s.sessionAliases, s.sessionAliasOrder[0])
+			s.sessionAliasOrder = s.sessionAliasOrder[1:]
+		}
+	}
+	s.sessionAliases[oldID] = newID
+}
+
+// aliasSessionLocked rewrites e's session id to where rekeys moved it.
+func (s *Store) aliasSessionLocked(e *event.Event) {
+	for hops := 0; hops < 8 && e.SessionID != ""; hops++ {
+		next, ok := s.sessionAliases[e.SessionID]
+		if !ok {
+			return
+		}
+		e.SessionID = next
+	}
 }
 
 func (s *Store) rekeySession(oldID, newID string, provisional *model.Session) (err error) {
@@ -139,6 +171,7 @@ func (s *Store) rekeySession(oldID, newID string, provisional *model.Session) (e
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	s.noteSessionAliasLocked(oldID, newID)
 	if changed {
 		s.flagsChanged()
 	}

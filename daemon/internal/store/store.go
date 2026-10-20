@@ -150,6 +150,11 @@ type Store struct {
 	// instead of a MAX(ts) GROUP BY scan over the events table (measured
 	// 2–4s at ~400 live pids — past the UI's 3s socket timeout).
 	lastSeen map[int32]time.Time
+	// sessionAliases maps a rekeyed session id to the id its rows moved to,
+	// oldest first in sessionAliasOrder; an event resolved before the rekey
+	// is written where its session went.
+	sessionAliases    map[string]string
+	sessionAliasOrder []string
 	// allowlist returns the operator's approved hosts per agent (nil until
 	// wired); TrendFor reads it for the advisor's host prompt.
 	allowlist func() map[string][]string
@@ -405,10 +410,12 @@ func (s *Store) PutFlag(fl model.Flag) (result WriteResult, err error) {
 
 // PutEvent reports whether SQLite changed a row. Intentional deduplication
 // returns an unchanged result; it cannot clear an outstanding write fault.
+// An event of a rekeyed session is written under the session's new id.
 func (s *Store) PutEvent(e event.Event) (result WriteResult, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.aliasSessionLocked(&e)
 	if e.Kind == event.KindHookRun {
 		return s.putHookRunLocked(e)
 	}
