@@ -1,5 +1,5 @@
-// Sessions tab: session-first. A rail of durable sessions (the P1 spine)
-// grouped by harness on the left; the selected session's memory or trace on
+// Sessions tab: durable sessions grouped by harness or workspace on the left;
+// the selected session's memory or trace on
 // the right. renderSessionBoard (app.js's panel registry) delegates here when
 // durable sessions exist; the legacy process-tree board remains the fallback.
 
@@ -31,29 +31,48 @@ function liveTreeFor(s, trees) {
   return (trees || []).find(t => t.root && Number(t.root.pid) === Number(s.root_pid)) || null;
 }
 
-// One rail card per session: title (the group head already names the
-// harness), state chip, last activity, live RSS when the tree is up, a pulse
-// while active. Kill stays on live cards only. nested indents a sub-session
+// One rail row per session: repository and branch, one activity marker,
+// and last activity. Destructive controls belong to selected-row actions.
+// nested indents a sub-session
 // under its parent; label, when set, replaces the title (a collapsed row's
 // member reads by its start time).
-function sessionRailCardHTML(s, trees, selectedId, nested, label) {
+function sessionRailCardHTML(s, trees, selectedId, nested, label, workspaceView = false) {
   const tree = liveTreeFor(s, trees);
-  const rss = tree ? fmtRSS(tree.rss_bytes) : '';
   const status = s.status || 'active';
-  const pulse = status === 'active' ? '<span class="sc-pulse active" aria-hidden="true"></span>' : '';
+  const pulse = `<span class="sc-pulse ${escapeHTML(status)}" aria-hidden="true"></span>`;
   const seen = s.last_seen_at ? fmtAge(s.last_seen_at, Date.now()) + ' ago' : '';
   const selected = s.id === selectedId;
   const identity = sessionTitle(s, tree && tree.root.cwd);
-  const title = label || identity;
-  const kill = tree && status !== 'ended'
-    ? `<button type="button" class="btn btn-danger btn-sm sc-kill" data-action="kill" data-pid="${escapeHTML(tree.root.pid)}" data-started="${escapeHTML(tree.root.started_at || '')}" data-family="${escapeHTML(s.harness || '')}" title="Terminate" aria-label="Terminate ${escapeHTML(title)}"><svg class="icon"><use href="#i-power"/></svg></button>`
+  const title = label || (workspaceView ? s.branch || 'Branch not recorded' : s.repo || cwdLabel(s.workspace) || cwdLabel(tree && tree.root.cwd) || sessionShort(s.id));
+  const secondary = workspaceView ? harnessMeta(s.harness).label : label ? originAgent(s) : [s.branch, originAgent(s)].filter(Boolean).join(' · ');
+  const kill = selected && tree && status !== 'ended'
+    ? `<details class="sc-actions"><summary aria-label="Actions for ${escapeHTML(identity)}">Actions</summary><div><button type="button" class="btn btn-danger btn-sm sc-kill" data-action="kill" data-pid="${escapeHTML(tree.root.pid)}" data-started="${escapeHTML(tree.root.started_at || '')}" data-family="${escapeHTML(s.harness || '')}">Terminate session</button></div></details>`
     : '';
   return `<div class="session-card ${escapeHTML(status)}${selected ? ' selected' : ''}${nested ? ' nested' : ''}">
     <button type="button" class="sc-main" data-action="select-session" data-id="${escapeHTML(s.id)}" aria-pressed="${selected}" title="${escapeHTML(identity)}" aria-label="${escapeHTML(label ? identity + ', ' + title : identity)}">
-      <span class="sc-head">${pulse}<span class="sc-label">${escapeHTML(title)}</span></span>
-      <span class="sc-meta"><span class="sc-state ${escapeHTML(status)}">${escapeHTML(status)}</span>${seen ? `<span>${escapeHTML(seen)}</span>` : ''}${rss ? `<span>${escapeHTML(rss)}</span>` : ''}</span>
+      ${pulse}<span class="sc-identity"><span class="sc-label">${escapeHTML(title)}</span>${secondary ? `<span class="sc-branch">${escapeHTML(secondary)}</span>` : ''}</span>
+      <span class="sc-meta"><span class="sr-only">${escapeHTML(status)}</span>${seen ? `<span>${escapeHTML(seen)}</span>` : ''}</span>
     </button>${kill}
   </div>`;
+}
+
+// Workspace paths are identities; equal repository names alone never merge
+// unrelated checkouts. Sessions without a path retain their own identity.
+function groupSessionWorkspaces(groups) {
+  const workspaces = new Map();
+  for (const s of visibleSessionMembers(groups)) {
+    const path = String(s.workspace || '').replace(/\/+$/, '');
+    const key = path ? 'workspace:' + path : 'session:' + s.id;
+    if (!workspaces.has(key)) workspaces.set(key, {key, workspaceView: true,
+      label: s.repo || cwdLabel(path) || 'Workspace not recorded', workspace: path, live: [], ended: []});
+    workspaces.get(key)[s.status === 'ended' ? 'ended' : 'live'].push({session: s, children: []});
+  }
+  return [...workspaces.values(), ...(groups || []).filter(g => g.infra)];
+}
+
+function sessionNavigationCounts(g) {
+  const count = familySize(g.live) + familySize(g.ended);
+  return g.workspaceView ? `${count} session${count === 1 ? '' : 's'}` : sessionGroupCounts(g);
 }
 
 // One harness group's shell: mark + display name + counts in a collapsible
@@ -68,7 +87,7 @@ function sessionGroupHTML(g, open, endedOpen) {
       </div>`
     : '';
   return `<details class="session-group" data-harness="${escapeHTML(g.key)}"${open ? ' open' : ''}>
-    <summary class="session-group-head">${harnessChipHTML(g.key, { label: true })}<span class="session-group-counts">${escapeHTML(sessionGroupCounts(g))}</span><svg class="icon session-group-disclosure" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+    <summary class="session-group-head">${g.workspaceView ? `<svg class="icon session-workspace-icon" aria-hidden="true"><use href="#i-folder"/></svg><span class="session-workspace-name" title="${escapeHTML(g.workspace || '')}">${escapeHTML(g.label)}</span>` : harnessChipHTML(g.key, { label: true })}<span class="session-group-counts">${escapeHTML(sessionNavigationCounts(g))}</span><svg class="icon session-group-disclosure" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
     <div class="session-group-body"><div class="session-rows"></div>${ended}</div>
   </details>`;
 }
@@ -78,7 +97,7 @@ function sessionGroupHTML(g, open, endedOpen) {
 // status change never rebuilds the group or its rows.
 function syncSessionGroupShell(node, g, endedOpen) {
   const counts = node.querySelector('.session-group-counts');
-  const text = sessionGroupCounts(g);
+  const text = sessionNavigationCounts(g);
   if (counts && counts.textContent !== text) counts.textContent = text;
   const ended = node.querySelector('.session-ended');
   if (!ended) return;
@@ -96,7 +115,8 @@ function syncSessionGroupShell(node, g, endedOpen) {
 // sessions folded by collapseSessionFamilies. dupOpen maps '<bucket>|<key>'
 // to a folded row's expanded state, so a live and an ended fold with one
 // title open apart; unset, a row is open while it holds the selected session.
-function sessionRailRows(fams, harness, trees, selectedId, dupOpen, bucket) {
+function sessionRailRows(fams, harness, trees, selectedId, dupOpen, bucket, workspaceView = false) {
+  if (workspaceView) return fams.map(f => ({key: f.session.id, html: sessionRailCardHTML(f.session, trees, selectedId, true, null, true)}));
   const titleOf = s => { const t = liveTreeFor(s, trees); return sessionTitle(s, t && t.root.cwd); };
   return collapseSessionFamilies(fams, harness, titleOf).map(r => {
     if (!r.dup) {
@@ -116,14 +136,17 @@ function sessionRailRows(fams, harness, trees, selectedId, dupOpen, bucket) {
 // lists each member by start time (HH:MM) and status, selectable as a card.
 function sessionDupRowHTML(r, trees, selectedId, open, bucket) {
   const status = r.status;
-  const pulse = status === 'active' ? '<span class="sc-pulse active" aria-hidden="true"></span>' : '';
+  const pulse = `<span class="sc-pulse ${escapeHTML(status)}" aria-hidden="true"></span>`;
+  const first = r.sessions[0] || {};
+  const title = first.repo || cwdLabel(first.workspace) || r.title;
+  const secondary = [first.branch, originAgent(first)].filter(Boolean).join(' · ');
   const members = open
     ? `<div class="session-dup-body">${r.sessions.map(s => sessionRailCardHTML(s, trees, selectedId, true, fmtHHMM(s.started_at) || sessionShort(s.id))).join('')}</div>`
     : '';
   return `<div class="session-dup ${escapeHTML(status)}${open ? ' open' : ''}">
     <button type="button" class="session-dup-toggle" data-action="toggle-session-dup" data-key="${escapeHTML(r.key)}" aria-expanded="${open}"${bucket ? ` data-bucket="${escapeHTML(bucket)}"` : ''}>
-      <span class="sc-head">${pulse}<span class="sc-label">${escapeHTML(r.title)}</span><span class="session-dup-count">×${r.sessions.length}</span><svg class="icon"><use href="#i-arrow"/></svg></span>
-      <span class="sc-meta"><span class="sc-state ${escapeHTML(status)}">${escapeHTML(status)}</span></span>
+      <span class="sc-head">${pulse}<span class="sc-label" title="${escapeHTML(r.title)}">${escapeHTML(title)}</span><span class="session-dup-count">×${r.sessions.length}</span><svg class="icon"><use href="#i-arrow"/></svg></span>
+      <span class="sc-meta"><span class="sc-branch">${escapeHTML(secondary || status)}</span></span>
     </button>${members}
   </div>`;
 }
@@ -1003,6 +1026,8 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
   // also protects an earlier-page request from writing into another session.
   const SESSION_SELECTION_KEY = 'sa.selected-session';
   let selectedSessionId = '';
+  let sessionListView = 'harness';
+  try { if (localStorage.getItem('sa.session-list-view') === 'sessions') sessionListView = 'sessions'; } catch { /* memory only */ }
   try { selectedSessionId = sessionStorage.getItem(SESSION_SELECTION_KEY) || ''; } catch { /* memory only */ }
   let sessionSelectionInitialized = false;
   let sessionFilterTransition = false;
@@ -1423,6 +1448,8 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     const pills = document.getElementById('session-harness-pills');
     const strip = document.getElementById('session-count-strip');
     if (!rail) return;
+    rail.dataset.view = sessionListView;
+    for (const button of document.querySelectorAll('[data-action="session-list-view"]')) button.setAttribute('aria-pressed', String(button.dataset.view === sessionListView));
     const agents = (SA.t.status && SA.t.status.agents) ? SA.t.status.agents : [];
     const trees = SA.t.status && SA.t.status.trees;
     const filter = {...SA.harnessFilter, search: window.globalSearchTerm?.() || ''};
@@ -1450,7 +1477,10 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       const liveCount = groups.reduce((n, g) => n + (g.infra ? 0 : familySize(g.live)), 0);
       if (badge) badge.textContent = liveCount;
       SA.setTabBadge('sessions', liveCount);
-      if (strip) strip.textContent = sessionCountStrip(groups, SA.t.status && SA.t.status.coverage);
+      if (strip) {
+        strip.textContent = `${groups.filter(g => !g.infra && g.live.length).length} harnesses`;
+        strip.title = sessionCountStrip(groups, SA.t.status && SA.t.status.coverage);
+      }
       if (pills) {
         const present = applySessionFilters(groups, { liveOnly: filter.liveOnly }).filter(g => !g.infra).map(g => g.key);
         renderFilterPills(pills, harnessPillsHTML(present, filter.harnesses));
@@ -1460,8 +1490,10 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       const emptyHTML = sessionEmptyHTML(groups, filter);
       reconcileSessionSelection(shown);
       const reveal = takeSessionReveal();
-      const sessionGroups = stableSessionOrder(shown.filter(g => !g.infra), rail._sessionGroupOrder, g => g.key);
-      rail._sessionGroupOrder = sessionGroups.map(g => g.key);
+      const navigationGroups = sessionListView === 'sessions' ? groupSessionWorkspaces(shown).filter(g => g.infra || !filter.liveOnly || g.live.length) : shown;
+      const orders = rail._sessionGroupOrders || (rail._sessionGroupOrders = {});
+      const sessionGroups = stableSessionOrder(navigationGroups.filter(g => !g.infra), orders[sessionListView], g => g.key);
+      orders[sessionListView] = sessionGroups.map(g => g.key);
       const infra = shown.find(g => g.infra);
       // A group's open state is DOM state: patchList keeps an unchanged group's
       // node and carries open across a rebuilt one.
@@ -1501,7 +1533,7 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
             family.children = stableSessionOrder(family.children, childOrders.get(familyKey), child => child.id);
             childOrders.set(familyKey, family.children.map(child => child.id));
           }
-          const list = sessionRailRows(fams, p.group.key, trees, selectedSessionId, SA.sessionDupOpen, bucket);
+          const list = sessionRailRows(fams, p.group.key, trees, selectedSessionId, SA.sessionDupOpen, bucket, p.group.workspaceView);
           const orderKey = p.group.key + '|' + bucket;
           const ordered = stableSessionOrder(list, rowOrders.get(orderKey), row => row.key);
           rowOrders.set(orderKey, ordered.map(row => row.key));
@@ -1581,6 +1613,14 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
   }
   function snapshot() { return { sessionListCollapsed, sessionHookHistory, selectedSessionId, sessionTimeline, sessionTimelineState, sessionView, sessionMemoryPage, sessionMemoryState, sessionOverview, sessionOverviewState, sessionOutcomes, sessionOutcomesState, sessionHooks, sessionHooksState }; }
   return {
+    setListView(view) {
+      if (!['harness', 'sessions'].includes(view) || view === sessionListView) return;
+      sessionListView = view;
+      sessionReveal = true;
+      try { localStorage.setItem('sa.session-list-view', view); } catch { /* memory only */ }
+      renderNow(['sessions']);
+    },
+    get sessionListView() { return sessionListView; },
     setHookHistory,
     get sessionHookHistory() { return { ...sessionHookHistory }; },
     selectSession, setView: setSessionView, render: renderSessionBoard,

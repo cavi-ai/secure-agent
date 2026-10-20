@@ -1657,12 +1657,21 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
   display: flex; flex-direction: column; height: var(--session-workbench-height, 560px);
   min-height: 300px; overflow: hidden; container: session-board / inline-size;
 }
-.session-toolbar { flex: none; gap: 6px 10px; padding: 8px 12px; }
+.session-toolbar { flex: none; gap: 10px 14px; padding: 16px; }
+.session-toolbar-title { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 650; letter-spacing: -0.03em; }
+.session-toolbar-title .badge { font-size: 12px; letter-spacing: 0; }
+.session-view-switch { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.session-view-switch button { min-height: 36px; padding: 6px 12px; background: none; border: 0; border-radius: 5px; color: var(--tx-2); font: 550 13px var(--font); cursor: pointer; }
+.session-view-switch button[aria-pressed="true"] { color: var(--brand-2); background: var(--brand-bg); }
+.session-view-switch button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.session-filter-options { position: relative; font-size: 12px; color: var(--tx-2); }
+.session-filter-options > summary { cursor: pointer; padding: 8px; min-height: 36px; }
+.session-filter-options[open] .harness-pills { position: absolute; top: 100%; right: 0; min-width: 220px; padding: 12px; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-sm); z-index: 4; }
 .session-toolbar .harness-filter-text { max-width: 300px; min-width: 160px; margin-left: auto; }
 .session-toolbar .badge { flex: none; }
 .session-toolbar .switch { min-height: 32px; white-space: nowrap; }
 .session-empty [data-action="show-ended-sessions"] { min-height: 44px; }
-.session-count-strip { font: 500 0.7rem/1.4 var(--mono); color: var(--tx-3); }
+.session-count-strip { font: 400 12px/1.4 var(--font); color: var(--tx-2); }
 .session-count-strip:empty { display: none; }
 .session-toolbar .harness-pills { gap: 4px; }
 .session-toolbar .harness-pill { min-height: 30px; }
@@ -1679,7 +1688,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 /* Harness heads remain distinct while rows use separators and a selected tint. */
 .session-group-head {
   display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px;
-  min-height: 36px; padding: 4px 10px; cursor: pointer; list-style: none;
+  min-height: 56px; padding: 12px 16px; cursor: pointer; list-style: none;
 }
 .session-group-head::-webkit-details-marker { display: none; }
 .session-group-head::marker { display: none; content: ''; }
@@ -1692,6 +1701,8 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .session-group-body { display: flex; flex-direction: column; padding: 0 0 4px; }
 .session-group.infra { margin-top: 4px; border-top: 1px solid var(--line); padding-top: 4px; }
 .session-group-title { font-size: 11px; font-weight: 700; color: var(--tx-3); }
+.session-workspace-icon { width: 20px; height: 20px; color: var(--tx-2); }
+.session-workspace-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 650; }
 .infra-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 10px; color: var(--tx-2); }
 .session-ended-toggle {
   display: flex; align-items: center; gap: 6px; width: 100%; min-height: 30px; padding: 5px 10px;
@@ -1709,7 +1720,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
   border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--tx-1);
 }
 .session-card .sc-main {
-  flex: 1; min-width: 0; min-height: 44px; display: block; padding: 5px 10px; text-align: left;
+  flex: 1; min-width: 0; min-height: 64px; display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 12px 16px; text-align: left;
   background: none; border: 0; font: inherit; color: inherit; cursor: pointer;
 }
 .session-card .sc-main:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
@@ -1720,14 +1731,21 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .session-card.ended { color: var(--tx-2); }
 .session-card .sc-label, .session-dup-toggle .sc-label {
   display: block; min-width: 0; font: 650 14px/1.4 var(--font); color: var(--tx-1);
-  padding: 5px 8px; border: 1px solid var(--line-2); border-radius: var(--r-sm);
-  white-space: normal; overflow-wrap: anywhere;
+  padding: 0; border: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.sc-identity { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.sc-branch { font: 400 12px/1.4 var(--mono); color: var(--tx-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-actions { position: relative; flex: none; margin-right: 10px; font-size: 11px; color: var(--tx-2); }
+.sc-actions summary { cursor: pointer; list-style: none; padding: 8px 5px; min-height: 36px; }
+.sc-actions summary::-webkit-details-marker { display: none; }
+.sc-actions summary:focus-visible { outline: 2px solid var(--brand); }
+.sc-actions > div { position: absolute; right: 0; top: 100%; min-width: 150px; padding: 6px; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-sm); z-index: 3; }
 .session-rows, .session-family, .session-dup-body { display: flex; flex-direction: column; }
 .session-dup { display: flex; flex-direction: column; border-bottom: 1px solid var(--line); background: transparent; }
 .session-dup.ended { color: var(--tx-2); }
 .session-dup-toggle {
-  display: block; width: 100%; min-width: 0; min-height: 44px; padding: 5px 10px; text-align: left;
+  display: block; width: 100%; min-width: 0; min-height: 64px; padding: 12px 16px; text-align: left;
   background: none; border: 0; font: inherit; color: var(--tx-1); cursor: pointer;
 }
 .session-dup-toggle:hover { background: var(--bg-2); }
@@ -1788,7 +1806,12 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .sc-state.idle { color: var(--warn); background: var(--warn-bg); }
 .sc-state.ended { color: var(--tx-3); background: var(--bg-2); }
 /* The heartbeat: a working session breathes; an idle one rests. */
-.session-card .sc-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
+.session-card .sc-pulse, .session-dup .sc-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--tx-3); flex: none; }
+.session-card .sc-pulse.active, .session-dup .sc-pulse.active { background: var(--ok); }
+.session-card .sc-meta { flex-wrap: nowrap; margin-top: 0; font: 400 11px/1.4 var(--font); }
+.session-card .sc-meta .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.session-dup-toggle .sc-state { color: var(--tx-2); background: none; text-transform: none; }
+.session-dup-toggle .sc-meta { margin: 4px 0 0 17px; }
 @media (prefers-reduced-motion: no-preference) {
   .session-card .sc-pulse.active { animation: sc-breathe 2.4s ease-in-out infinite; }
   @keyframes sc-breathe { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
