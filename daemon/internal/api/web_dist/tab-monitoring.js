@@ -69,10 +69,10 @@ function monitoringDetailHTML(row, model) {
       return `<article class="monitoring-path" data-monitoring-path="${key}"><svg class="icon" aria-hidden="true"><use href="#i-${icon}"/></svg><h3>${title}</h3><div>${monitoringStateHTML(state)}<p>${escapeHTML(state.detail || '')}</p>${path.last_seen ? `<time datetime="${escapeHTML(path.last_seen)}">Last observed ${escapeHTML(new Date(path.last_seen).toLocaleString())}</time>` : ''}</div></article>`;
     }).join('')}</div>
     <p class="monitoring-caveat">An observation does not prove every tool call is guarded. Machine-wide traffic does not establish this session’s inspection.</p>
-    ${row.id ? `<button type="button" class="btn btn-primary monitoring-open" data-monitoring-action="open"${model.stale ? ' disabled' : ''}>Open session evidence<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>${model.stale ? '<p class="monitoring-muted">Refresh observations before opening current session evidence.</p>' : ''}` : ''}
-    <details class="monitoring-identity" id="monitoring-identity"><summary>Identity and technical details</summary><dl>
+    ${row.id ? `<button type="button" id="monitoring-open" class="btn btn-primary monitoring-open" data-monitoring-action="open"${model.stale ? ' disabled' : ''}>Open session evidence<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>${model.stale ? '<p class="monitoring-muted">Refresh observations before opening current session evidence.</p>' : ''}` : ''}
+    <details class="monitoring-identity" id="monitoring-identity"><summary id="monitoring-identity-summary">Identity and technical details</summary><dl>
       ${[['Session', row.id || 'Not identified'], ['Harness', row.harness], ['Workspace', row.workspace && row.workspace !== '/' ? row.workspace : 'Not identified'], ['Root process', String(row.root_pid)], ['Attribution', row.identity_basis || 'unresolved'], ['Branch', row.session?.branch || 'Not recorded']].map(([name, value]) => `<div><dt>${name}</dt><dd>${escapeHTML(value)}</dd></div>`).join('')}
-      </dl><details><summary>Source observation details</summary>${paths.map(([key, title]) => `<p><strong>${title}</strong> ${escapeHTML(row[key]?.detail || 'No detail provided.')}</p>`).join('')}</details></details>`;
+      </dl><details id="monitoring-source"><summary id="monitoring-source-summary">Source observation details</summary>${paths.map(([key, title]) => `<p><strong>${title}</strong> ${escapeHTML(row[key]?.detail || 'No detail provided.')}</p>`).join('')}</details></details>`;
 }
 
 function createMonitoringController({ root, data, health, openSession, retry, openTraffic }) {
@@ -84,10 +84,12 @@ function createMonitoringController({ root, data, health, openSession, retry, op
     const target = element(id);
     if (!target) return;
     const focused = document.activeElement?.closest('[data-monitoring-key]')?.dataset.monitoringKey;
-    const identityOpen = id === 'monitoring-detail' && element('monitoring-identity')?.open;
+    const focusedId = target.contains(document.activeElement) ? document.activeElement.id : '';
+    const expanded = id === 'monitoring-detail' ? [...target.querySelectorAll('details[open]')].map(details => details.id) : [];
     target.innerHTML = value;
     rendered.set(id, value);
-    if (identityOpen) element('monitoring-identity').open = true;
+    for (const detailsId of expanded) { const details = element(detailsId); if (details) details.open = true; }
+    if (focusedId) element(focusedId)?.focus({ preventScroll: true });
     if (focused) [...target.querySelectorAll('[data-monitoring-key]')].find(el => el.dataset.monitoringKey === focused)?.focus({ preventScroll: true });
   };
   function render() {
@@ -121,8 +123,7 @@ function createMonitoringController({ root, data, health, openSession, retry, op
     if (button.dataset.monitoringKey) {
       selected = button.dataset.monitoringKey;
       rendered.delete('monitoring-detail');
-      const identity = element('monitoring-identity');
-      if (identity) identity.open = false;
+      element('monitoring-detail')?.querySelectorAll('details').forEach(details => { details.open = false; });
       render();
       if (window.matchMedia('(max-width: 800px)').matches) {
         const sidebar = document.querySelector('.sidebar');

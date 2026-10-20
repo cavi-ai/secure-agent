@@ -30,6 +30,14 @@
       document.querySelector('[data-monitoring-action="issues"]').click();
       document.activeElement.blur(); select('session:sess-claude-1');
       document.getElementById('monitoring-identity').open = true;
+      const source = detail().querySelector('.monitoring-identity details');
+      source.open = true;
+      source.querySelector('summary').focus();
+      const updatedTime = iso(2000);
+      data['/status'].coverage.sessions[0].trace.last_seen = updatedTime;
+      document.getElementById('btn-refresh').click();
+      await wait(() => !!detail().querySelector(`time[datetime="${updatedTime}"]`));
+      probe.continuity = detail().querySelector('.monitoring-identity details').open && document.activeElement === detail().querySelector('.monitoring-identity details summary');
       data['/status'].coverage.sessions_stale = true; document.getElementById('btn-refresh').click();
       await wait(() => detail().querySelector('[data-monitoring-action="open"]')?.disabled);
       probe.stale = document.getElementById('monitoring-notice').textContent.includes('stale') && !detail().querySelector('.monitoring-state.observed') && document.getElementById('monitoring-identity').open;
