@@ -46,6 +46,7 @@ type eventIngest struct {
 	projection     chan store.EgressObservation
 	projectionDone chan struct{}
 	done           chan struct{}
+	repeats        repeatOpens // under mu
 	mu             sync.Mutex
 	stopped        bool
 	stopOnce       sync.Once
@@ -58,7 +59,8 @@ func newEventIngest(d ingestDeps) *eventIngest {
 	if d.RecordEgressObservation == nil {
 		d.RecordEgressObservation = d.Store.RecordEgressObservation
 	}
-	i := &eventIngest{deps: d, analyzer: intel.NewAnalyzer(), projection: make(chan store.EgressObservation, 128), projectionDone: make(chan struct{}), done: make(chan struct{})}
+	i := &eventIngest{deps: d, analyzer: intel.NewAnalyzer(), projection: make(chan store.EgressObservation, 128), projectionDone: make(chan struct{}), done: make(chan struct{}),
+		repeats: repeatOpens{window: repeatOpenWindow}}
 	go func() {
 		defer close(i.projectionDone)
 		for observation := range i.projection {
@@ -122,8 +124,18 @@ func (i *eventIngest) Feed(e event.Event) bool {
 		return true
 	}
 	e.Record = len(flags) > 0 || cr.SensitiveFile(e)
+	// A process reopening a file adds no evidence: its stored open stands
+	// for the repeats, and every stored row is one retention must delete.
+	foldable := len(flags) == 0 && !e.Record
+	if foldable && i.repeats.seen(e) {
+		noteFileFeed(st, e)
+		return true
+	}
 	eventWrite, eventErr := st.PutEvent(e)
 	eventSaved := eventErr == nil && eventWrite.Changed
+	if foldable && eventSaved {
+		i.repeats.remember(e)
+	}
 	healthChanged := eventWrite.HealthChanged
 	noteFileFeed(st, e)
 	if e.Kind == event.KindConnOpen && e.RemoteHost != "" && e.RemotePort > 0 {

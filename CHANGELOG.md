@@ -16,6 +16,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: assets revalidate by content hash, and the brand icon is 128 px.
 - Menu bar: polls every 30 s while the event stream is live, whichever connected first.
 - Config: YAML is parsed with the maintained `go.yaml.in/yaml/v3`.
+- File telemetry: a process's repeated opens of a file within a minute are stored once.
 
 ### Fixed
 - Traces: OpenCode, Hermes and OpenClaw retry database events when the event bus is full without advancing past undelivered events.
@@ -30,6 +31,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Retention: prune failures show in write health.
 - Findings: flags, incidents and the guard hook classify sensitive paths with one rule.
 - Session reports for very long sessions no longer time out and lose their events.
+- Sessions: an event resolved just before its session is rekeyed is stored under the new session id.
 - The transcript worker no longer leaks a goroutine on each restart.
 - The coverage file is replaced whole, so it is never read half-written.
 - Collector: `-config` help describes the node secrets file.
