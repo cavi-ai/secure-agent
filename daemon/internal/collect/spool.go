@@ -72,6 +72,7 @@ type SpoolStats struct {
 	// rotation or truncation during this run. A later healthy tick cannot
 	// reconstruct that evidence or clear the gap.
 	BytesLost uint64
+	LossCause string
 	// LostAt is when BytesLost last grew (zero before any loss).
 	LostAt       time.Time
 	Losing       bool
@@ -174,6 +175,7 @@ type ESServiceSnapshot struct {
 	// LostAt records history. Losing remains true until the tailer catches up
 	// after a loss; catching up does not restore the overwritten evidence.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
+	LossCause  string     `json:"loss_cause,omitempty"`
 	Losing     bool       `json:"losing,omitempty"`
 	LagSeconds int64      `json:"lag_seconds"`
 }
@@ -348,6 +350,7 @@ type SpoolTailer struct {
 	stats         SpoolStats
 	lost          uint64
 	lostAt        time.Time
+	lostCause     string
 	recoveredLost uint64
 	newest        time.Time
 	lag           time.Duration
@@ -374,6 +377,7 @@ func (t *SpoolTailer) Stats() SpoolStats {
 	s.BytesLost = t.lost
 	s.LostAt = t.lostAt
 	s.Losing = t.lost > t.recoveredLost
+	s.LossCause = t.lostCause
 	s.NewestEvent = t.newest
 	if !t.lagAt.IsZero() && t.clock().Sub(t.lagAt) <= spoolLagFresh {
 		s.Lag = t.lag
@@ -405,11 +409,12 @@ func (t *SpoolTailer) recordPendingLag(at time.Time) {
 	t.lag = max(0, t.lagAt.Sub(at))
 }
 
-func (t *SpoolTailer) recordLost(bytes uint64) {
+func (t *SpoolTailer) recordLost(bytes uint64, cause string) {
 	t.statsMu.Lock()
 	defer t.statsMu.Unlock()
 	t.lost += bytes
 	t.lostAt = t.clock()
+	t.lostCause = cause
 }
 
 // Catching up restores current delivery; the lifetime evidence gap remains.
@@ -518,14 +523,14 @@ func (t *SpoolTailer) poll(c spoolCursor) spoolCursor {
 				return spoolCursor{offset: offset, size: old.Size(), mod: old.ModTime(), file: file}
 			}
 			if offset < old.Size() {
-				t.recordLost(uint64(old.Size() - offset))
+				t.recordLost(uint64(old.Size()-offset), "rotation")
 			}
 		} else if c.offset < c.size {
-			t.recordLost(uint64(c.size - c.offset))
+			t.recordLost(uint64(c.size-c.offset), "rotation")
 		}
 		c = spoolCursor{}
 	} else if st.Size() < c.size && c.offset < c.size {
-		t.recordLost(uint64(c.size - c.offset))
+		t.recordLost(uint64(c.size-c.offset), "truncation")
 		c = spoolCursor{} // the replacement content starts at byte zero
 	}
 	if st.Size() == c.size && st.ModTime().Equal(c.mod) && c.offset >= c.size {
@@ -620,7 +625,7 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 			if rest := info.Size() - offset - lastGood; rest > 0 {
 				start := offset + lastGood
 				skipped := skipLine(f, start, min(rest, spoolSkipScan))
-				t.recordLost(uint64(skipped))
+				t.recordLost(uint64(skipped), "invalid_record")
 				t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick, Skipped: 1, BytesSkipped: uint64(skipped)}, false)
 				return start + skipped, st
 			}
@@ -644,7 +649,7 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 		// mid-tail (not on a parse error): the rest is skipped in bulk —
 		// counted by newline, never handed to the scanner or the parser.
 		skipTo, skippedLines, skippedBytes := skipTail(f, resume, st.Size())
-		t.recordLost(skippedBytes)
+		t.recordLost(skippedBytes, "malformed_flood")
 		t.recordDrain(SpoolStats{
 			Lines:        linesThisTick,
 			Parsed:       parsedThisTick,

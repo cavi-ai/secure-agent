@@ -91,7 +91,20 @@ func runEventIngest(source <-chan event.Event, d ingestDeps) *eventIngest {
 	go func() {
 		defer i.Stop()
 		for e := range source {
-			i.Feed(e)
+			batch := []event.Event{e}
+		gather:
+			for len(batch) < store.MaxFileBatch {
+				select {
+				case next, ok := <-source:
+					if !ok {
+						break gather
+					}
+					batch = append(batch, next)
+				default:
+					break gather
+				}
+			}
+			i.feedBatch(batch)
 		}
 	}()
 	return i
@@ -105,6 +118,12 @@ func (i *eventIngest) Feed(e event.Event) bool {
 	if i.stopped {
 		return false
 	}
+	i.deps.Resolver.Resolve(&e)
+	flags := i.deps.Correlator.Observe(e)
+	return i.feedResolvedLocked(e, flags)
+}
+
+func (i *eventIngest) feedResolvedLocked(e event.Event, flags []model.Flag) bool {
 	d := i.deps
 	st, cr, res, tagger := d.Store, d.Correlator, d.Resolver, d.Tagger
 	pub, deltas, otlpExp := d.Fleet, d.Deltas, d.OTLP
@@ -112,8 +131,6 @@ func (i *eventIngest) Feed(e event.Event) bool {
 	projection := i.projection
 	// Attribute before anything else: the stored event, the flags it
 	// triggers, and the incident all carry the session id.
-	res.Resolve(&e)
-	flags := cr.Observe(e)
 	// File activity outside every agent family is kept only as the
 	// evidence of a flag it raised: system-wide opens (indexers,
 	// builds, the daemon itself) outnumber agent file activity by

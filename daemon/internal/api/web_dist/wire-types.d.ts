@@ -224,6 +224,7 @@ export interface ESServiceSnapshot {
   flooding_since?: string;
   newest_event_at?: string;
   lost_at?: string;
+  loss_cause?: string;
   losing?: boolean;
   lag_seconds: number;
 }

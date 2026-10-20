@@ -12,4 +12,13 @@ def run_monitoring(page):
             page.check(f'Monitoring ({label}): {name}', state.get(name) is True, str(state))
 
 
-CASES = (Case('monitoring', run_monitoring),)
+def run_monitoring_loss(page):
+    for label, size in [('desktop', (1440, 1024)), ('phone', (390, 844))]:
+        dom = page.dom('', served=True, window_size=size, fixture={'script': 'cases_monitoring_loss.js'})
+        receipt = re.search(r'data-monitoring-loss-probe="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        for name in ('open', 'loss', 'fits', 'cutoff', 'retained', 'neutral'):
+            page.check(f'Monitoring loss ({label}): {name}', state.get(name) is True, str(state))
+
+
+CASES = (Case('monitoring', run_monitoring), Case('monitoring_loss', run_monitoring_loss))

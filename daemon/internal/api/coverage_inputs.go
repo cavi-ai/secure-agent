@@ -140,7 +140,7 @@ func humanFlagTitle(rule string) string {
 
 func uninspectedTitle(n int) string {
 	if n == 1 {
-		return "1 connection bypassed the egress firewall"
+		return "1 endpoint reached outside the inspection proxy"
 	}
-	return fmt.Sprintf("%d connections bypassed the egress firewall", n)
+	return fmt.Sprintf("%d endpoints reached outside the inspection proxy", n)
 }

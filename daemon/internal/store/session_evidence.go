@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -64,7 +65,15 @@ func (s *Store) SessionFindings(id string) (SessionFindings, error) {
 // inside the history. Report aggregation already holds identity and calls
 // SessionOutcomes directly.
 func (s *Store) SessionOutcome(id string) (SessionOutcomeHistory, bool, error) {
-	_, found, err := s.GetSessionBounded(id)
+	return s.SessionOutcomeContext(context.Background(), id)
+}
+
+// SessionOutcomeContext gives retained history a bounded identity lookup
+// independent of the guard's latency budget. Client cancellation still wins.
+func (s *Store) SessionOutcomeContext(parent context.Context, id string) (SessionOutcomeHistory, bool, error) {
+	ctx, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel()
+	_, found, err := s.getSessionContext(ctx, id)
 	if err != nil || !found {
 		return SessionOutcomeHistory{}, found, err
 	}
