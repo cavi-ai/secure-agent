@@ -7,7 +7,7 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
   // refresh cycle.
   const WORKTREE_TIMEOUT_MS = 200000;
   const worktreesState = { report: null, loading: false, error: '', loadedAt: 0, filter: { state: '', stale: false, q: '' },
-    ledger: null, ledgerLoading: false, ledgerAt: 0, selected: new Map(), selectionBusy: false, pendingRemovalSelections: new Map() };
+    ledger: null, ledgerLoading: false, ledgerAt: 0, selected: new Map(), expanded: new Set(), selectionBusy: false, pendingRemovalSelections: new Map() };
   // While the daemon is still measuring sizes, the open tab re-reads the
   // cached report (cheap: no rescan) until the sizes land.
   const WORKTREE_SIZING_POLL_MS = 5000;
@@ -341,7 +341,7 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
     const labels = {};
     let attempted = false;
     try {
-      const ok = await confirm(worktreeSelectionConfirm(rows), { title: 'Remove selected worktrees', okLabel: `Remove ${rows.length}` });
+      const ok = await confirm(worktreeSelectionConfirm(rows), { title: 'Review worktree removal', okLabel: `Confirm ${rows.length} removal${rows.length === 1 ? '' : 's'}`, messageHTML: worktreeSelectionReviewHTML(rows), focusCancel: true });
       if (!ok) return;
       for (const { approval } of rows) {
         const path = approval.path;

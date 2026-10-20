@@ -13,6 +13,7 @@
     const rows = () => document.querySelectorAll('#worktrees-container .wt-row').length;
     try {
       const total = rows();
+      wt('prune').closest('details').open = true;
       wt('prune').focus(); wt('prune').click(); await settle();
       receipt.state = rows() === 1 && wt('prune').getAttribute('aria-pressed') === 'true';
       receipt.focus = document.activeElement === wt('prune');

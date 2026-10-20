@@ -357,8 +357,8 @@ type submoduleFacts struct {
 	Local     []string
 }
 
-// readSubmodules lists populated submodules (recursively) and, for each,
-// commits on its branches or HEAD that no remote has, and a stash.
+// readSubmodules recursively checks populated submodules for local-only
+// commits, stashes, operation state and staged versions not held on disk.
 func readSubmodules(ctx context.Context, dir string) (submoduleFacts, error) {
 	var s submoduleFacts
 	_, errMods := os.Stat(filepath.Join(dir, ".gitmodules"))
@@ -381,6 +381,23 @@ func readSubmodules(ctx context.Context, dir string) (submoduleFacts, error) {
 		path := fields[1]
 		sub := filepath.Join(dir, path)
 		s.Populated++
+		status, err := readStatus(ctx, sub)
+		if err != nil {
+			return s, err
+		}
+		operation, err := gitOperation(ctx, sub)
+		if err != nil {
+			return s, err
+		}
+		if operation != "" {
+			s.Local = append(s.Local, "submodule "+path+" has a git "+operation+" in progress; finish or abort it first")
+		}
+		if status.Conflicts > 0 {
+			s.Local = append(s.Local, "submodule "+path+" has unresolved conflicts; finish or abort them first")
+		}
+		if status.PartlyStaged > 0 {
+			s.Local = append(s.Local, "submodule "+path+" has staged changes that differ from the working copy; commit or unstage them first")
+		}
 		n, err := countCommits(ctx, sub, "--branches", "HEAD", "--not", "--remotes")
 		if err != nil {
 			return s, err
