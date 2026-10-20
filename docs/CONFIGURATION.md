@@ -164,6 +164,18 @@ credential_owners:
 
 ---
 
+### `file_telemetry_enabled` (Optional Boolean)
+
+The menu bar's File Telemetry Enable and Remove controls save this choice.
+`false` pauses privileged file-feed ingestion, including reads from an old
+spool. The Remove control also unregisters the helper. `true` permits ingestion;
+the helper still needs macOS approval and Full Disk Access. Changes apply live.
+When omitted, existing collector discovery is preserved.
+
+Disabled monitoring and unconfigured optional hooks are neutral observations.
+Active failures still require attention. Recovery clears the current fault
+while retaining loss counters and historical gaps in Monitoring.
+
 ### `net_sample_interval_ms` (Integer)
 Frequency in milliseconds at which the socket sampler (`lsof`) lists active open network sockets for tagged agent processes (default: `2000` ms). Loopback endpoints are never recorded — local-only traffic is not egress.
 

@@ -18,8 +18,10 @@ function monitoringModel(data, query = '', health = {}) {
   return { available, stale, truncated: coverage?.sessions_truncated === true, rows,
     linkedCount: rows.filter(r => r.id).length, unlinkedCount: rows.filter(r => !r.id).length,
     linked: rows.filter(r => r.id && matches(r)), unlinked: rows.filter(r => !r.id && matches(r)),
-    issues: data.posture?.coverage_items || [], historyIncomplete: data.status?.es_service?.losing === true
-      || (data.posture?.coverage_items || []).some(item => ['event_loss', 'storage_loss', 'hook_evidence_gap'].includes(item.kind)), health };
+    issues: (data.posture?.coverage_items || []).filter(monitoringItemActive),
+    notes: (data.posture?.coverage_items || []).filter(item => !monitoringItemActive(item)),
+    historyIncomplete: data.status?.es_service?.bytes_lost > 0 || data.status?.bus_drops > 0
+      || (data.posture?.coverage_items || []).some(item => item.monitoring_state === 'historical'), health };
 }
 
 function monitoringSelection(model, key) {
@@ -97,13 +99,17 @@ function createMonitoringController({ root, data, health, openSession, retry, op
     current = monitoringModel(data(), query, health());
     const row = monitoringSelection(current, selected);
     if (selected === null && row) selected = row.key;
-    const incomplete = current.historyIncomplete;
     const warning = current.stale || !current.available || current.issues.length > 0;
     const title = current.stale ? 'Observations are stale' : !current.available ? 'Session observations unavailable'
-      : incomplete ? 'Monitoring history is incomplete' : current.issues.length ? 'Monitoring needs attention' : 'Session observations';
+      : current.issues.length ? 'Monitoring needs attention' : 'Session observations';
     html('monitoring-notice', `<div class="monitoring-notice${warning ? ' warning' : ''}" role="status"><svg class="icon" aria-hidden="true"><use href="#i-${warning ? 'alert' : 'activity'}"/></svg><div><strong>${title}</strong><p>${current.stale ? 'Showing last-known data. Refresh before relying on current coverage.' : current.issues.length ? escapeHTML(current.issues.slice(0, 2).map(item => item.title).join(' · ')) : current.available ? 'Observations describe recorded activity, not a guarantee of protection.' : 'The daemon has not provided a current per-session report.'}</p></div><button type="button" class="link-btn" data-monitoring-action="${current.stale || !current.available ? 'retry' : 'issues'}"${!warning ? ' hidden' : ''}>${current.stale || !current.available ? 'Retry' : 'Review issues'}</button></div>`);
     element('monitoring-issues').hidden = !current.issues.length || !issuesOpen;
     html('monitoring-issue-list', current.issues.map(item => `<li><strong>${escapeHTML(item.title)}</strong><p>${escapeHTML(item.detail || '')}</p>${item.kind === 'uninspected_egress' ? '<button type="button" class="link-btn" data-monitoring-action="traffic">Review machine-wide traffic</button>' : ''}</li>`).join(''));
+    const notes = element('monitoring-notes');
+    if (notes) {
+      notes.hidden = current.notes.length === 0;
+      html('monitoring-note-list', current.notes.map(item => `<li><strong>${escapeHTML(item.title)}</strong><p>${escapeHTML(item.detail || '')}</p>${item.kind === 'uninspected_egress' ? '<button type="button" class="link-btn" data-action="open-uninspected">Review endpoints</button>' : ''}</li>`).join(''));
+    }
     element('monitoring-count').textContent = `Linked sessions · ${current.linkedCount}${current.stale ? ' · last known' : ''}`;
     html('monitoring-sessions', current.linked.map(item => monitoringRowHTML(item, selected, current.stale)).join('') || `<p class="monitoring-muted">${query ? 'No linked sessions match your search.' : 'No running session has been linked yet.'}</p>`);
     element('monitoring-other-count').textContent = `Other detections · ${current.unlinkedCount} not linked`;

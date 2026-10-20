@@ -12,15 +12,16 @@ import (
 // liveFields are the Config fields the config watcher applies without a
 // restart, each with the watcher test that proves it.
 var liveFields = map[string]string{
-	"Agents":          "TestWatchConfigAppliesDisabledAgents",
-	"DisabledAgents":  "TestWatchConfigAppliesDisabledAgents",
-	"Advisor":         "TestWatchAdvisorConfigHotSwaps",
-	"Fleet":           "TestWatchConfigHotSwapsFleet",
-	"Pricing":         "TestWatchConfigAppliesPricingLive",
-	"PricingSkipped":  "TestWatchConfigAppliesPricingLive",
-	"ResourceControl": "TestWatchConfigHotSwapsResourcePolicy",
-	"SystemAgent":     "TestWatchConfigAppliesSystemAgent",
-	"Worktrees":       "TestWatchConfigAppliesWorktrees",
+	"FileTelemetryEnabled": "TestWatchConfigAppliesFileTelemetry",
+	"Agents":               "TestWatchConfigAppliesDisabledAgents",
+	"DisabledAgents":       "TestWatchConfigAppliesDisabledAgents",
+	"Advisor":              "TestWatchAdvisorConfigHotSwaps",
+	"Fleet":                "TestWatchConfigHotSwapsFleet",
+	"Pricing":              "TestWatchConfigAppliesPricingLive",
+	"PricingSkipped":       "TestWatchConfigAppliesPricingLive",
+	"ResourceControl":      "TestWatchConfigHotSwapsResourcePolicy",
+	"SystemAgent":          "TestWatchConfigAppliesSystemAgent",
+	"Worktrees":            "TestWatchConfigAppliesWorktrees",
 }
 
 // Every live field names a watcher test that exists.

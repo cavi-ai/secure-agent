@@ -284,7 +284,7 @@ func TestAttentionGroupsCoverEveryPostureItem(t *testing.T) {
 	for _, it := range p.CoverageItems {
 		coverage[it.Kind] = true
 	}
-	for _, kind := range []string{"collector_silent", "harness_uncovered", "uninspected_egress"} {
+	for _, kind := range []string{"collector_idle", "harness_uncovered", "uninspected_egress"} {
 		if !coverage[kind] {
 			t.Fatalf("missing %s from coverage: %+v", kind, p.CoverageItems)
 		}
@@ -343,7 +343,7 @@ func TestAttentionEgressCoverageSkipsCarriers(t *testing.T) {
 		t.Fatalf("unknown row missing from summary")
 	}
 	p := a.computePosture()
-	if p.NeedsYou != 0 || p.CoverageCount != 1 || p.CoverageItems[0].Kind != "uninspected_egress" {
+	if p.NeedsYou != 0 || p.CoverageCount != 0 || p.CoverageItems[0].Kind != "uninspected_egress" {
 		t.Fatalf("posture = %+v, want one coverage item and no decisions", p)
 	}
 

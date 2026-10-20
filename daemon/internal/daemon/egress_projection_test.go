@@ -55,7 +55,11 @@ func TestRejectedEgressProjectionVisibleThroughRecovery(t *testing.T) {
 				if err := json.Unmarshal(w.Body.Bytes(), &posture); err != nil {
 					t.Fatal(err)
 				}
-				if posture.State != "attention" || posture.NeedsYou != 0 || posture.CoverageCount != 1 || posture.CoverageItems[0].Kind != "projection_loss" {
+				wantState, wantCount := "attention", 1
+				if recovering {
+					wantState, wantCount = "all-clear", 0
+				}
+				if posture.State != wantState || posture.NeedsYou != 0 || posture.CoverageCount != wantCount || posture.CoverageItems[0].Kind != "projection_loss" {
 					t.Fatalf("summary gap hidden or mislabeled: %+v", posture)
 				}
 			}

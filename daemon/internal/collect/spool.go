@@ -74,6 +74,7 @@ type SpoolStats struct {
 	BytesLost uint64
 	// LostAt is when BytesLost last grew (zero before any loss).
 	LostAt       time.Time
+	Losing       bool
 	Lines        uint64
 	Parsed       uint64
 	Skipped      uint64
@@ -170,8 +171,8 @@ type ESServiceSnapshot struct {
 	// NewestEventAt and LagSeconds carry SpoolStats.NewestEvent and Lag: how
 	// late file events reach the daemon, whatever the spool's own mtime says.
 	NewestEventAt *time.Time `json:"newest_event_at,omitempty"`
-	// LostAt is when BytesLost last grew; Losing is true within LossWindow
-	// of it.
+	// LostAt records history. Losing remains true until the tailer catches up
+	// after a loss; catching up does not restore the overwritten evidence.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	Losing     bool       `json:"losing,omitempty"`
 	LagSeconds int64      `json:"lag_seconds"`
@@ -332,6 +333,8 @@ type SpoolTailer struct {
 	// the supervisor's coverage heartbeat: a tailer whose spool stopped
 	// growing must not read as healthy coverage.
 	OnProduce func()
+	// Enabled is a live collection choice; nil preserves collector discovery.
+	Enabled func() bool
 
 	// StatePath, when set, keeps the read position across daemon runs: a
 	// restart resumes where the last run stopped (see startCursor).
@@ -341,13 +344,14 @@ type SpoolTailer struct {
 	savedOffset int64
 	savedFile   os.FileInfo
 
-	statsMu sync.Mutex
-	stats   SpoolStats
-	lost    uint64
-	lostAt  time.Time
-	newest  time.Time
-	lag     time.Duration
-	lagAt   time.Time
+	statsMu       sync.Mutex
+	stats         SpoolStats
+	lost          uint64
+	lostAt        time.Time
+	recoveredLost uint64
+	newest        time.Time
+	lag           time.Duration
+	lagAt         time.Time
 
 	// now is the clock; nil means time.Now (test seam).
 	now func() time.Time
@@ -369,6 +373,7 @@ func (t *SpoolTailer) Stats() SpoolStats {
 	s := t.stats
 	s.BytesLost = t.lost
 	s.LostAt = t.lostAt
+	s.Losing = t.lost > t.recoveredLost
 	s.NewestEvent = t.newest
 	if !t.lagAt.IsZero() && t.clock().Sub(t.lagAt) <= spoolLagFresh {
 		s.Lag = t.lag
@@ -405,6 +410,13 @@ func (t *SpoolTailer) recordLost(bytes uint64) {
 	defer t.statsMu.Unlock()
 	t.lost += bytes
 	t.lostAt = t.clock()
+}
+
+// Catching up restores current delivery; the lifetime evidence gap remains.
+func (t *SpoolTailer) recordCaughtUp() {
+	t.statsMu.Lock()
+	defer t.statsMu.Unlock()
+	t.recoveredLost = t.lost
 }
 
 // recordDrain publishes one tick's counters. FloodSince starts on the first
@@ -456,10 +468,13 @@ func (t *SpoolTailer) Run(ctx context.Context) error {
 func (t *SpoolTailer) follow(ctx context.Context) error {
 	c := t.startCursor()
 	for {
-		c = t.poll(c)
+		enabled := t.Enabled == nil || t.Enabled()
+		if enabled {
+			c = t.poll(c)
+		}
 		t.savePosition(c, false)
 		wait := spoolPollInterval
-		if t.retained {
+		if enabled && t.retained {
 			wait = spoolRetainedRetry
 		}
 		select {
@@ -616,7 +631,10 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 	resume := offset + lastGood
 	if budgetHit {
 		if parsedThisTick > 0 {
-			t.retained = true
+			t.retained = resume < st.Size()
+			if !t.retained {
+				t.recordCaughtUp()
+			}
 			// A valid burst is durable backlog, not malformed input. Bound
 			// parsing work per poll without skipping the remaining evidence.
 			t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick}, false)
@@ -636,6 +654,9 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 		return skipTo, st
 	}
 	t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick}, false)
+	if parsedThisTick > 0 && resume >= st.Size() {
+		t.recordCaughtUp()
+	}
 	return resume, st
 }
 

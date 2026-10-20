@@ -79,7 +79,7 @@ final class AttentionSummaryTests: XCTestCase {
             throw XCTSkip("text recognition unavailable on this host: \(error)")
         }
         let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
-        for label in ["Waiting for your decision: 1 queued", "Security review: 0 queued", "Monitoring problems: 0 queued", "2 monitoring gaps"] { XCTAssertTrue(text.contains(label), text) }
+        for label in ["Waiting for your decision: 1 queued", "Security review: 0 queued", "Monitoring problems: 2 current problems"] { XCTAssertTrue(text.contains(label), text) }
         let root = URL(fileURLWithPath: ".build/attention-qa", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: root.appendingPathComponent("overview.png"))

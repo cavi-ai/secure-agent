@@ -63,11 +63,15 @@ func TestTranscriptCheckpointFailureVisibleThroughRecovery(t *testing.T) {
 				if (!recovering && (len(active) != 1 || active[0] != "transcript checkpoints")) || (recovering && len(active) != 0) {
 					t.Fatalf("incorrect checkpoint recovery state: %+v", status.StorageHealth)
 				}
-				if state, _ := checkStorage(a.doctorFacts(time.Now())); state != doctorFail {
-					t.Fatal("Doctor hides earlier checkpoint failures")
+				wantState, wantCount, wantDoctor := "attention", 1, doctorFail
+				if recovering {
+					wantState, wantCount, wantDoctor = "all-clear", 0, doctorPass
+				}
+				if state, _ := checkStorage(a.doctorFacts(time.Now())); state != wantDoctor {
+					t.Fatal("Doctor disagrees with current checkpoint health")
 				}
 				p := a.computePosture()
-				if p.State != "attention" || p.CoverageCount != 1 || p.CoverageItems[0].Kind != "storage_loss" {
+				if p.State != wantState || p.CoverageCount != wantCount || p.CoverageItems[0].Kind != "storage_loss" {
 					t.Fatalf("posture hides checkpoint fault: %+v", p)
 				}
 				if recovering {
@@ -113,14 +117,18 @@ func TestResourceEpisodeFailureVisibleThroughRecovery(t *testing.T) {
 			t.Fatalf("status reports incorrect recovery state: %+v", status.StorageHealth)
 		}
 		p := a.computePosture()
-		if p.State != "attention" || p.CoverageCount != 1 || p.CoverageItems[0].Kind != "storage_loss" {
+		wantState, wantCount, wantDoctor := "attention", 1, doctorFail
+		if recovering {
+			wantState, wantCount, wantDoctor = "all-clear", 0, doctorPass
+		}
+		if p.State != wantState || p.CoverageCount != wantCount || p.CoverageItems[0].Kind != "storage_loss" {
 			t.Fatalf("posture hides resource evidence loss: %+v", p)
 		}
 		if !recovering && !strings.Contains(p.CoverageItems[0].Detail, "resource episodes") {
 			t.Fatalf("posture omits the failed operation: %+v", p.CoverageItems)
 		}
-		if state, _ := checkStorage(a.doctorFacts(time.Now())); state != doctorFail {
-			t.Fatal("Doctor hides resource evidence loss")
+		if state, _ := checkStorage(a.doctorFacts(time.Now())); state != wantDoctor {
+			t.Fatal("Doctor disagrees with current resource evidence health")
 		}
 	}
 }

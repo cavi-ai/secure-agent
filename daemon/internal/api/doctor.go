@@ -223,7 +223,7 @@ func checkHookRegistered(f doctorFacts) (string, string) {
 	case !f.settingsKnown:
 		return doctorSkip, "home directory unknown"
 	case !f.hookRegistered:
-		return doctorFail, "~/.claude/settings.json does not register the guard hook for PreToolUse and PostToolUse"
+		return doctorSkip, "optional guard hooks are not configured"
 	}
 	return doctorPass, "registered for PreToolUse and PostToolUse"
 }
@@ -233,12 +233,27 @@ func checkHookActive(f doctorFacts) (string, string) {
 		return doctorSkip, "no active harness with a supported guard hook"
 	}
 	if len(f.missingHookHarnesses) > 0 {
-		return doctorFail, "no attributed hook activity in 24h: " + strings.Join(f.missingHookHarnesses, ", ")
+		return doctorSkip, "no attributed hook activity in 24h: " + strings.Join(f.missingHookHarnesses, ", ")
 	}
 	return doctorPass, "recent attributed hook activity: " + strings.Join(f.hookHarnesses, ", ")
 }
 
 func checkFileTelemetry(f doctorFacts) (string, string) {
+	if fileTelemetryDisabled(f.st) {
+		return doctorSkip, "file telemetry is disabled in configuration"
+	}
+	if fileTelemetryUnavailable(f.st) {
+		return doctorFail, "file telemetry is enabled but no file collector is available"
+	}
+	if f.st.FileTelemetryEnabled == nil && f.st.ESService == nil {
+		configured := false
+		for _, c := range f.st.Collectors {
+			configured = configured || c.Name == "eslogger"
+		}
+		if !configured {
+			return doctorSkip, "optional file telemetry is not configured"
+		}
+	}
 	es := f.st.ESService
 	if es == nil {
 		return doctorSkip, "not spool-based"
@@ -263,6 +278,8 @@ func checkFileTelemetry(f doctorFacts) (string, string) {
 		return doctorFail, "root service not loaded"
 	case esServiceRefused(es.State):
 		return doctorFail, "root service state: " + es.State + " — " + esReregisterHint
+	case esServiceRunning(es.State) && es.Collector != nil && es.Collector.Fresh(f.now) && es.Collector.State == "collecting":
+		return doctorPass, "file collector is ready"
 	case esServiceFailing(es.State):
 		return doctorFail, "root service state: " + es.State
 	case esServiceRunning(es.State) && f.st.ActiveAgents > 0 && !f.grace && f.now.Sub(es.SpoolMtime) > doctorSpoolStale:
@@ -282,7 +299,12 @@ func checkCollectors(f doctorFacts) (string, string) {
 		return doctorSkip, doctorGraceDetail
 	}
 	var down, silent []string
+	var enabledCount int
 	for _, c := range f.st.Collectors {
+		if c.Name == "eslogger" && fileTelemetryDisabled(f.st) {
+			continue
+		}
+		enabledCount++
 		switch {
 		case c.Abandoned:
 			down = append(down, c.Name+" (abandoned)")
@@ -290,11 +312,14 @@ func checkCollectors(f doctorFacts) (string, string) {
 			down = append(down, c.Name+" (stopped)")
 		}
 	}
-	// Silence only means blindness while agents are active (as in posture).
+	// Readiness failures are actionable; an idle source alone is not.
 	// The spool service's own failures are the file-telemetry check's.
 	spoolFailing := f.st.ESService != nil && len(esServiceItems(f.now, *f.st.ESService)) > 0
 	if f.st.ActiveAgents > 0 {
 		for _, it := range silentCollectorItems(f.now, f.st) {
+			if !isMonitoringGap(it) {
+				continue
+			}
 			if it.ID == "eslogger" && spoolFailing {
 				continue
 			}
@@ -312,6 +337,9 @@ func checkCollectors(f doctorFacts) (string, string) {
 	// whatever the verdict.
 	var polls string
 	for _, c := range f.st.Collectors {
+		if c.Name == "eslogger" && fileTelemetryDisabled(f.st) {
+			continue
+		}
 		if c.Source != "" {
 			polls += fmt.Sprintf(" · %s %s @ %d polled %s", c.Name, c.Source, c.Watermark, c.LastPoll)
 		}
@@ -319,7 +347,7 @@ func checkCollectors(f doctorFacts) (string, string) {
 	if len(parts) > 0 {
 		return doctorFail, strings.Join(parts, " · ") + polls
 	}
-	return doctorPass, fmt.Sprintf("%d collectors running", len(f.st.Collectors)) + polls
+	return doctorPass, fmt.Sprintf("%d collectors running", enabledCount) + polls
 }
 
 // checkHermes reports the Hermes Agent collector: state not found when no
@@ -519,11 +547,5 @@ func checkStorage(f doctorFacts) (string, string) {
 	if len(h.Active) > 0 {
 		return doctorFail, fmt.Sprintf("%d failed persistence attempts since start; still failing: %s", h.Failures, strings.Join(h.Active, ", "))
 	}
-	// Recovered failures fail like other evidence loss: while recent and not
-	// marked seen.
-	if at := h.LastFailureAt; at != nil && !f.lossSeen.Growing(*at, f.now) {
-		return doctorPass, fmt.Sprintf("%d earlier failed writes may have left evidence gaps, the last at %s, none since",
-			h.Failures, at.Local().Format("15:04"))
-	}
-	return doctorFail, fmt.Sprintf("new writes recovered; %d earlier failures may have left evidence gaps", h.Failures)
+	return doctorPass, fmt.Sprintf("new writes recovered; %d earlier failures may have left evidence gaps", h.Failures)
 }

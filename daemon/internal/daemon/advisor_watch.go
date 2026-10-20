@@ -161,18 +161,20 @@ func (h *advisorStackHolder) Close() {
 
 // configWatchDeps bundles everything the live config watcher may swap.
 type configWatchDeps struct {
-	st              *store.Store
-	stk             *advisorStackHolder
-	pub             *fleet.Publisher
-	fleetCfg        *fleetConfigHolder
-	logDir          string       // webhook delivery log dir (filepath.Dir(cfg.DBPath))
-	apiServer       *api.API     // config reload problems for Doctor
-	fleetOn         *atomic.Bool // fleet_configured for /status and /fleet
-	resourceControl *resource.Controller
-	worktrees       *worktreehunter.Hunter
-	sysAgent        *sysagent.Agent
-	tagger          *agents.Tagger // follows agents minus disabled_agents
-	initialConfig   *config.Config
+	st                  *store.Store
+	stk                 *advisorStackHolder
+	pub                 *fleet.Publisher
+	fleetCfg            *fleetConfigHolder
+	logDir              string       // webhook delivery log dir (filepath.Dir(cfg.DBPath))
+	apiServer           *api.API     // config reload problems for Doctor
+	fleetOn             *atomic.Bool // fleet_configured for /status and /fleet
+	fileTelemetryOn     *atomic.Bool
+	fileTelemetryChoice *atomic.Pointer[bool]
+	resourceControl     *resource.Controller
+	worktrees           *worktreehunter.Hunter
+	sysAgent            *sysagent.Agent
+	tagger              *agents.Tagger // follows agents minus disabled_agents
+	initialConfig       *config.Config
 	// deltaHub/postureChanged follow the advisor stack into setupAdvisor so
 	// a verdict landing after a config-driven advisor swap still gets the
 	// immediate flag delta (see verdictPublishingSink in wire.go).
@@ -220,6 +222,19 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 		}
 		if deps.apiServer != nil && deps.initialConfig != nil {
 			deps.apiServer.SetConfigRestartNeeded(config.RestartSettings(*deps.initialConfig, data))
+		}
+		telemetryChanged := false
+		if deps.fileTelemetryChoice != nil {
+			previous := deps.fileTelemetryChoice.Swap(data.FileTelemetryEnabled)
+			next := data.FileTelemetryEnabled
+			telemetryChanged = (previous == nil) != (next == nil) || previous != nil && next != nil && *previous != *next
+		}
+		if deps.fileTelemetryOn != nil {
+			on := data.FileTelemetryOn()
+			telemetryChanged = deps.fileTelemetryOn.Swap(on) != on || telemetryChanged
+		}
+		if telemetryChanged && deps.postureChanged != nil {
+			deps.postureChanged()
 		}
 		if key := advisorConfigKey(data.Advisor); key != lastAdvisorKey {
 			lastAdvisorKey = key

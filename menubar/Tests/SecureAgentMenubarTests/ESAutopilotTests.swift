@@ -5,6 +5,52 @@ import XCTest
 /// The file-telemetry autopilot: register once per launch, open each System
 /// Settings pane once per build, and never act after the user's Remove.
 final class ESAutopilotTests: XCTestCase {
+    private func temporaryHome() -> String {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return url.path
+    }
+
+    @MainActor func testTelemetryChoiceReachesDaemonConfiguration() throws {
+        let home = temporaryHome()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        let setup = SetupManager(esService: FakeESService(), defaults: defaults, configurationHome: home,
+                                 plistPresent: { true }, openPane: { _ in }, appURL: installedCopy)
+        try setup.removeESCollector()
+        XCTAssertEqual(try ConfigStore(home: home).document().scalar("file_telemetry_enabled")?.text, "false")
+        try setup.installESCollector()
+        XCTAssertEqual(try ConfigStore(home: home).document().scalar("file_telemetry_enabled")?.text, "true")
+    }
+
+    @MainActor func testTelemetryMigrationPreservesExplicitConfig() throws {
+        let home = temporaryHome()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        defaults.set(true, forKey: ESAutopilotMemory.userDisabledKey)
+        let setup = SetupManager(esService: FakeESService(), defaults: defaults, configurationHome: home,
+                                 plistPresent: { true }, openPane: { _ in }, appURL: installedCopy)
+        setup.migrateTelemetryChoice()
+        XCTAssertEqual(try ConfigStore(home: home).document().scalar("file_telemetry_enabled")?.text, "false")
+        try ConfigStore(home: home).update { try ConfigDocument($0).setting("file_telemetry_enabled", to: true).text }
+        setup.migrateTelemetryChoice()
+        XCTAssertEqual(try ConfigStore(home: home).document().scalar("file_telemetry_enabled")?.text, "true")
+    }
+
+    @MainActor func testConfigOptOutPreventsAutomaticRegistrationAndRepair() throws {
+        let home = temporaryHome()
+        try ConfigStore(home: home).update { try ConfigDocument($0).setting("file_telemetry_enabled", to: false).text }
+        let service = FakeESService()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        let setup = SetupManager(esService: service, defaults: defaults, configurationHome: home,
+                                 plistPresent: { true }, openPane: { _ in }, appURL: installedCopy)
+        setup.refreshESState()
+        XCTAssertTrue(setup.esUserDisabled)
+        XCTAssertEqual(service.registerCount, 0)
+        service.status = .enabled
+        setup.refreshESState()
+        XCTAssertNil(setup.esRepairProbe)
+        XCTAssertEqual(service.unregisterCount, 0)
+    }
+
     func testDecisionTable() {
         let rows: [(ESStage, Bool, Bool, Set<ESSettingsPane>, ESAutopilotAction)] = [
             // stage, userDisabled, attemptedThisLaunch, panesOpenedForBuild -> action
@@ -61,7 +107,7 @@ final class ESAutopilotTests: XCTestCase {
         let service = FakeESService()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
         var opened: [ESSettingsPane] = []
-        let setup = SetupManager(esService: service, defaults: defaults,
+        let setup = SetupManager(esService: service, defaults: defaults, configurationHome: temporaryHome(),
                                  plistPresent: { true }, openPane: { opened.append($0) },
                                  appURL: installedCopy)
 
@@ -76,7 +122,7 @@ final class ESAutopilotTests: XCTestCase {
         XCTAssertTrue(setup.esUserDisabled)
         XCTAssertEqual(service.unregisterCount, 1)
 
-        let relaunch = SetupManager(esService: service, defaults: defaults,
+        let relaunch = SetupManager(esService: service, defaults: defaults, configurationHome: temporaryHome(),
                                     plistPresent: { true }, openPane: { opened.append($0) },
                                  appURL: installedCopy)
         relaunch.refreshESState()
@@ -95,7 +141,7 @@ final class ESAutopilotTests: XCTestCase {
         service.registerError = NSError(domain: "SMAppServiceErrorDomain", code: 1,
                                         userInfo: [NSLocalizedDescriptionKey: "Operation not permitted"])
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
-        let setup = SetupManager(esService: service, defaults: defaults,
+        let setup = SetupManager(esService: service, defaults: defaults, configurationHome: temporaryHome(),
                                  plistPresent: { true }, openPane: { _ in }, appURL: installedCopy)
         setup.refreshESState()
         setup.refreshESState()
@@ -146,7 +192,7 @@ final class ESAutopilotTests: XCTestCase {
         let service = FakeESService()
         service.status = .enabled
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
-        let setup = SetupManager(esService: service, defaults: defaults, plistPresent: { true }, openPane: { _ in },
+        let setup = SetupManager(esService: service, defaults: defaults, configurationHome: temporaryHome(), plistPresent: { true }, openPane: { _ in },
                                  launchdProbe: { .loaded(state: "spawn scheduled", pid: nil, lastExitCode: "78: EX_CONFIG") },
                                  appURL: installedCopy)
 
@@ -170,7 +216,7 @@ final class ESAutopilotTests: XCTestCase {
         service.status = .enabled
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
         var opened: [ESSettingsPane] = []
-        let setup = SetupManager(esService: service, defaults: defaults, plistPresent: { true },
+        let setup = SetupManager(esService: service, defaults: defaults, configurationHome: temporaryHome(), plistPresent: { true },
                                  openPane: { opened.append($0) },
                                  launchdProbe: { .loaded(state: "spawn scheduled", pid: nil, lastExitCode: "78: EX_CONFIG") },
                                  appURL: URL(fileURLWithPath: "/Users/dev/secure-agent/dist/Secure Agent.app"))
@@ -192,7 +238,7 @@ final class ESAutopilotTests: XCTestCase {
         let service = FakeESService()
         service.status = .enabled
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
-        let setup = SetupManager(esService: service, defaults: defaults, plistPresent: { true }, openPane: { _ in },
+        let setup = SetupManager(esService: service, defaults: defaults, configurationHome: temporaryHome(), plistPresent: { true }, openPane: { _ in },
                                  launchdProbe: { .loaded(state: "running", pid: 412, lastExitCode: nil) },
                                  helperStaleProbe: { _ in false },
                                  appURL: installedCopy)
@@ -213,7 +259,7 @@ final class ESAutopilotTests: XCTestCase {
         service.status = .enabled
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
         let running = LaunchdProbe.loaded(state: "running", pid: 577, lastExitCode: "(never exited)")
-        let setup = SetupManager(esService: service, defaults: defaults, plistPresent: { true }, openPane: { _ in },
+        let setup = SetupManager(esService: service, defaults: defaults, configurationHome: temporaryHome(), plistPresent: { true }, openPane: { _ in },
                                  launchdProbe: { running },
                                  helperStaleProbe: { $0 == running },
                                  appURL: installedCopy)
@@ -236,7 +282,7 @@ final class ESAutopilotTests: XCTestCase {
         service.status = .enabled
         service.unregisterLag = 3
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
-        let setup = SetupManager(esService: service, defaults: defaults, plistPresent: { true }, openPane: { _ in },
+        let setup = SetupManager(esService: service, defaults: defaults, configurationHome: temporaryHome(), plistPresent: { true }, openPane: { _ in },
                                  launchdProbe: { .notFound }, helperStaleProbe: { _ in false },
                                  appURL: installedCopy)
 

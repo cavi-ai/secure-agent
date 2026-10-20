@@ -63,6 +63,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         // starts once it is done.
         Task { @MainActor in
             await SetupManager.shared.migrateLegacyLaunchAgent()
+            SetupManager.shared.migrateTelemetryChoice()
             DaemonSupervisor.shared.start()
         }
         SetupManager.shared.refreshInstalledHooks()

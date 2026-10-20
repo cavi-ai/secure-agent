@@ -91,6 +91,11 @@ type attentionSession struct {
 // while agents are active, silent collectors and missing hooks.
 func machineAttentionItems(now time.Time, st Status, hookGap *PostureItem) []PostureItem {
 	var items []PostureItem
+	if fileTelemetryDisabled(st) {
+		items = append(items, PostureItem{Kind: "collector_disabled", ID: "eslogger", Title: "File monitoring is off", Detail: "File telemetry is disabled in configuration."})
+	} else if fileTelemetryUnavailable(st) {
+		items = append(items, PostureItem{Kind: "collector_down", ID: "eslogger", Severity: 2, Title: "File monitoring is unavailable", Detail: "File telemetry is enabled but no file collector is available. Check Setup & Permissions in the menu bar."})
+	}
 	if h := st.EgressProjectionHealth; h != nil && (h.QueueDrops > 0 || h.WriteFailures > 0) {
 		detail := fmt.Sprintf("%d observations missed the summary queue; %d summary writes failed since daemon start. Recurring egress summaries may be incomplete. Connection evidence has separate storage health.", h.QueueDrops, h.WriteFailures)
 		if h.WriteFailing {
@@ -103,10 +108,13 @@ func machineAttentionItems(now time.Time, st Status, hookGap *PostureItem) []Pos
 	if st.OTLPDropped > 0 {
 		items = append(items, PostureItem{Kind: "export_loss", ID: "otlp", Severity: 2, Title: "Trace export lost spans", Detail: fmt.Sprintf("%d spans could not be exported since daemon start. Local evidence is retained separately.", st.OTLPDropped)})
 	}
-	if st.BusDropping {
+	if st.BusDropping || st.BusDrops > 0 {
 		items = append(items, PostureItem{Kind: "event_loss", ID: "event-bus", Severity: 2,
 			Title:  "Telemetry was dropped",
 			Detail: fmt.Sprintf("%d subscriber deliveries dropped since daemon start. Monitoring history may be incomplete.", st.BusDrops)})
+	}
+	if s := st.ESService; s != nil && s.BytesLost > 0 && (!s.Losing || fileTelemetryDisabled(st)) {
+		items = append(items, PostureItem{Kind: "file_evidence_loss", ID: "es-history", Title: "Earlier file monitoring evidence was lost", Detail: esLossDetail(*s)})
 	}
 	if h := st.StorageHealth; h != nil && len(h.ReadActive) > 0 {
 		items = append(items, PostureItem{Kind: "storage_read_failure", ID: "storage-reads", Severity: 2, Title: "Evidence could not be read", Detail: "Last known activity may be stale. Reads failing: " + strings.Join(h.ReadActive, ", ") + "." + readIssueDetail(*h)})
@@ -123,6 +131,9 @@ func machineAttentionItems(now time.Time, st Status, hookGap *PostureItem) []Pos
 	}
 	// A monitor that stopped is a blind spot, not a detail.
 	for _, c := range st.Collectors {
+		if c.Name == "eslogger" && fileTelemetryDisabled(st) {
+			continue
+		}
 		if !c.Running || c.Abandoned {
 			items = append(items, PostureItem{
 				Kind: "collector_down", ID: c.Name,

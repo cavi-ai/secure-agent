@@ -203,11 +203,11 @@
     '/posture': {
       state: 'critical',
       needs_you: 6,
-      coverage_count: 2,
+      coverage_count: 1,
       summary: '6 decisions pending — first: proxy-secret-leak — cursor sent an anthropic-key to logs.example.com — act now.',
       coverage_items: [
-        { severity: 2, kind: 'collector_down', id: 'eslogger', title: 'File monitoring is off', detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' },
-        { severity: 1, kind: 'uninspected_egress', id: 'uninspected-egress', title: '2 connections bypassed inspection' }
+        { severity: 2, kind: 'collector_down', monitoring_state: 'active', id: 'eslogger', title: 'File monitoring is off', detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' },
+        { severity: 0, kind: 'uninspected_egress', monitoring_state: 'informational', id: 'uninspected-egress', title: '2 connections bypassed inspection' }
       ],
       items: [
         { severity: 3, kind: 'flag', id: 'flag-1', title: 'proxy-secret-leak — cursor sent an anthropic-key to logs.example.com' },

@@ -13,20 +13,19 @@ function renderCoverage() {
   const list = document.getElementById('coverage-list');
   const badge = document.getElementById('badge-coverage-count');
   if (!panel || !list) return;
-  const items = p.coverage_items || [];
+  const items = (p.coverage_items || []).filter(monitoringItemActive);
   const harnesses = (status.coverage && status.coverage.harnesses) || [];
   const sessions = (status.coverage && status.coverage.sessions) || [];
   const probes = (status.coverage && status.coverage.probes) || [];
   const hooks = hookMonitoringModel(status.hook_ingestion,window.SA.t.sessions,window.SA.postureHealth);
   const hookSetup = hooks.available;
   const showHooks=hookSetup || hooks.rows.length>0;
-  panel.hidden = items.length === 0 && sessions.length === 0 && probes.length === 0 && !showHooks;
-  const monitoringIssue=items.length>0 || hooks.rows.some(row=>row.errors>0 || row.gaps>0);
+  panel.hidden = items.length === 0;
+  const monitoringIssue=items.length>0;
   panel.dataset.gap=String(monitoringIssue);
   const title=document.getElementById('coverage-title');
   if(title) title.textContent=monitoringIssue?'Monitoring needs attention':'Monitoring';
   if (badge) badge.textContent = items.length ? Number(p.coverage_count) || items.length : sessions.length ? `${sessions.length} sessions` : showHooks ? hooks.rows.length ? `${hooks.rows.length} runtime${hooks.rows.length===1?'':'s'}` : 'Hook diagnostics' : '0 sessions';
-  if (panel.hidden) return;
   const html = items.map(it => {
     const hookIssue = ['hook_evidence_gap','hook_delivery_unknown'].includes(it.kind);
     const host = hookIssue && hooks.rows.flatMap(row=>row.reports).find(row => 'hook-gap:'+row.report.forwarder_id === it.id || 'hook-unknown:'+row.report.forwarder_id === it.id);
@@ -42,7 +41,11 @@ function renderCoverage() {
             ? '<span class="coverage-guidance">Run Doctor to review lost telemetry. Restarting cannot restore missing evidence.</span>'
         : '<span class="coverage-guidance">Check Setup &amp; Permissions in the menu bar</span>';
     return `<div class="coverage-row"><span><strong>${escapeHTML(it.title)}</strong><span>${escapeHTML(it.detail || '')}</span></span>${action}</div>`;
-  }).join('') + (showHooks ? `<details class="coverage-diagnostics" data-hook-disclosure="monitoring"><summary>Hook monitoring details</summary>${hookMonitoringHTML(hooks)}</details>` : '') + (hookSetup ? '<button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button>' : '') + (sessions.length ? `<details class="coverage-harness" data-coverage-disclosure="sessions"><summary>Per-session coverage · ${sessions.length}</summary>${sessions.map(s => {
+  }).join('');
+  renderCoverageContent(list, html);
+  const diagnostics = document.getElementById('monitoring-diagnostics');
+  if (diagnostics) diagnostics.hidden = !showHooks && !sessions.length && !probes.length && !harnesses.length;
+  const diagnosticsHTML = (showHooks ? `<details class="coverage-diagnostics" data-hook-disclosure="monitoring"><summary>Hook monitoring details</summary>${hookMonitoringHTML(hooks)}</details>` : '') + (hookSetup ? '<button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button>' : '') + (sessions.length ? `<details class="coverage-harness" data-coverage-disclosure="sessions"><summary>Per-session coverage · ${sessions.length}</summary>${sessions.map(s => {
     const path = (name, p = {}) => {
       p = p || {};
       return `<span>${name}: ${escapeHTML(coveragePathLabel(p))}${p.last_seen ? ` · ${escapeHTML(p.last_seen)}` : ''}</span><span class="coverage-guidance">${escapeHTML(p.detail || '')}</span>`;
@@ -57,7 +60,11 @@ function renderCoverage() {
   }).join('')}<p class="coverage-guidance">${status.proxy_enabled
     ? 'Payload inspection covers connections routed through the proxy; review Egress for coverage.'
     : 'Payload inspection is off (proxy disabled).'} Recent harness activity does not prove every current session is guarded.</p></details>` : '');
-  if (list.coverageHTML === html) return;
+  renderCoverageContent(document.getElementById('monitoring-diagnostic-list'), diagnosticsHTML);
+}
+
+function renderCoverageContent(list, html) {
+  if (!list || list.coverageHTML === html) return;
   const disclosures = '[data-hook-disclosure], [data-coverage-disclosure]';
   const key = el => el?.dataset.hookDisclosure ? 'hook:' + el.dataset.hookDisclosure : el?.dataset.coverageDisclosure ? 'coverage:' + el.dataset.coverageDisclosure : null;
   const open=new Set([...(list.querySelectorAll?.(disclosures) || [])].filter(el=>el.open).map(key));
@@ -463,8 +470,10 @@ function attentionSummaryHTML(posture, stale) {
   return `${stale ? '<p role="status">Last known attention breakdown; current counts and requests may have changed. Refresh telemetry before relying on these observations.</p>' : ''}<div class="attention-summary-grid">${posture.attention_summary.buckets.map(b => {
     const first = b.first;
     const inspect = !stale && first ? `<button type="button" class="link-btn" data-action="select-attention" data-need-kind="${escapeHTML(first.kind)}" data-need-id="${escapeHTML(first.id)}">${b.kind === 'decisions' ? 'Review request' : b.kind === 'security' ? 'Review evidence' : 'Inspect issue'}</button>` : '';
-    const gaps = b.coverage_count ? `<p>${b.coverage_count} monitoring gap${b.coverage_count === 1 ? '' : 's'} counted separately</p>${!stale ? '<button type="button" class="link-btn" data-action="view-monitoring">View monitoring</button>' : ''}` : '';
-    return `<article class="attention-summary-card"><h3>${titles[b.kind]}</h3><p>${b.count} queued item${b.count === 1 ? '' : 's'}</p>${first ? `<p>${escapeHTML(first.title)}</p>` : ''}${inspect}${gaps}</article>`;
+    const gaps = b.coverage_count && !stale ? '<button type="button" class="link-btn" data-action="view-monitoring">View monitoring</button>' : '';
+    const total = b.count + b.coverage_count;
+    const count = b.kind === 'monitoring' ? `${total} current problem${total === 1 ? '' : 's'}` : `${b.count} queued item${b.count === 1 ? '' : 's'}`;
+    return `<article class="attention-summary-card"><h3>${titles[b.kind]}</h3><p>${count}</p>${first ? `<p>${escapeHTML(first.title)}</p>` : ''}${inspect}${gaps}</article>`;
   }).join('')}</div><p>Zero queued items is not a safety verdict.</p>`;
 }
 
@@ -473,6 +482,9 @@ function renderAttentionSummary(SA) {
   if (!el) return;
   const health = SA.postureHealth || {};
   const stale = !!health.error || !health.lastSnapshotAt || Date.now() - health.lastSnapshotAt > 120000;
+  const panel = el.closest?.('.attention-overview');
+  if (panel) panel.hidden = !stale && SA.t.posture?.state === 'all-clear' && validAttentionSummary(SA.t.posture)
+    && SA.t.posture.needs_you === 0 && SA.t.posture.coverage_count === 0;
   const html = attentionSummaryHTML(SA.t.posture, stale);
   if (el._summaryHTML === html) return;
   const focused = document.activeElement;

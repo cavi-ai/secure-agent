@@ -40,15 +40,19 @@ func TestDerivePostureUsesSnapshotTimeForCollectorFreshness(t *testing.T) {
 		},
 	}
 	for _, item := range derivePosture(in).CoverageItems {
-		if item.Kind == "collector_silent" {
+		if item.Kind == "collector_idle" {
 			t.Fatalf("snapshot used wall clock: %+v", item)
 		}
 	}
 	in.Generated = at.Add(24 * time.Hour)
-	for _, item := range derivePosture(in).CoverageItems {
-		if item.Kind == "collector_silent" {
+	p := derivePosture(in)
+	if p.State != "all-clear" || p.CoverageCount != 0 {
+		t.Fatalf("an idle collector became a failure: %+v", p)
+	}
+	for _, item := range p.CoverageItems {
+		if item.Kind == "collector_idle" {
 			return
 		}
 	}
-	t.Fatal("snapshot time advance did not expose stale collector")
+	t.Fatal("snapshot time advance did not expose idle collector")
 }
