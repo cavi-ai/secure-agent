@@ -40,8 +40,6 @@ func (s *Store) PutOperatorLabel(l model.OperatorLabel) (err error) {
 // SimilarLabels rejects incomplete history rather than returning the
 // rows preceding a query, scan, cursor or timestamp failure.
 func (s *Store) SimilarLabels(rule, agent, pattern string, limit int) (out []model.OperatorLabel, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer func() { s.noteRead("similar operator labels", err) }()
 	out = []model.OperatorLabel{}
 	rows, err := s.db.Query(`SELECT id, kind, rule, agent, pattern, label, reason, source, created_at FROM operator_labels
@@ -86,8 +84,6 @@ func (s *Store) LabelSummary(agent, pattern, rule string) (sum model.LabelSummar
 	if pattern == "" && rule == "" {
 		return sum, nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer func() { s.noteRead("operator label summary", err) }()
 	q := `SELECT COALESCE(SUM(label = 'ok'), 0), COALESCE(SUM(label = 'not_ok'), 0) FROM operator_labels WHERE agent = ? AND pattern = ?`
 	args := []any{agent, pattern}

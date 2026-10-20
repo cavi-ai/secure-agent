@@ -14,7 +14,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Doctor: Fix all is offered whenever a check is not passing; it restarts the daemon, unregisters other copies of the app, marks spool loss, bus drops and recovered storage failures seen (`POST /doctor/seen`) and opens Traffic for egress.
 
 ### Changed
-- Performance: posture, snapshots and finding lists read advisor verdicts in batches and reuse 24-hour flag reads until a flag changes; posture is recomputed off the event ingest path, event retention runs beside persistence in short batches and no longer pauses it to scan the event table, and flag, event and Doctor reads no longer wait for writes.
+- Performance: posture, snapshots and finding lists read advisor verdicts in batches and reuse 24-hour flag reads until a flag changes; posture is recomputed off the event ingest path, event retention runs beside persistence in short batches and no longer pauses it to scan the event table, and store reads (flags, events, sessions, incidents, finding reviews, spend, hooks, guard rules, worktrees, Doctor) no longer wait for writes or pause event persistence.
 - Console: assets revalidate by content hash, and the brand icon is 128 px.
 - Menu bar: polls every 30 s while the event stream is live, whichever connected first.
 - Config: YAML is parsed with the maintained `go.yaml.in/yaml/v3`.

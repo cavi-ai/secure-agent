@@ -42,8 +42,6 @@ func (s *Store) PutAdvisorPlan(subject string, p model.AdvisorPlan) (writeErr er
 // malformed stored plan. Failed reads never return partial plan content.
 func (s *Store) AdvisorPlanResultFor(subject string) (plan model.AdvisorPlan, found bool, readErr error) {
 	defer func() { s.noteRead("advisor plans", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var data string
 	var created sql.NullString
 	err := s.db.QueryRow(`SELECT plan_json, created_at FROM advisor_plans WHERE subject_id = ?`, subject).Scan(&data, &created)

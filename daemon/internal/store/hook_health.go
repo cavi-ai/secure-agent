@@ -13,9 +13,7 @@ import (
 // fixed recent window. It never loads output text or infers a missing hook.
 func (s *Store) SessionHookHealth(sessionID string, now time.Time) (out hookhealth.Assessment, readErr error) {
 	defer func() { s.noteRead("hook health", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	runs, truncated, err := s.hookHealthRunsLocked("session_id=?", []any{sessionID}, now)
+	runs, truncated, err := s.hookHealthRuns("session_id=?", []any{sessionID}, now)
 	if err != nil {
 		return out, err
 	}
@@ -31,9 +29,7 @@ type SessionHookFinding struct {
 // Ended and unattributed sessions cannot acquire live attention items.
 func (s *Store) ActiveHookFindings(now time.Time) (out []SessionHookFinding, truncated bool, readErr error) {
 	defer func() { s.noteRead("hook health", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	runs, truncated, err := s.hookHealthRunsLocked("session_id IN (SELECT id FROM sessions WHERE status IN ('active','idle'))", nil, now)
+	runs, truncated, err := s.hookHealthRuns("session_id IN (SELECT id FROM sessions WHERE status IN ('active','idle'))", nil, now)
 	if err != nil {
 		return nil, false, err
 	}
@@ -56,7 +52,7 @@ func (s *Store) ActiveHookFindings(now time.Time) (out []SessionHookFinding, tru
 	return out, truncated, nil
 }
 
-func (s *Store) hookHealthRunsLocked(filter string, args []any, now time.Time) ([]hookrun.Record, bool, error) {
+func (s *Store) hookHealthRuns(filter string, args []any, now time.Time) ([]hookrun.Record, bool, error) {
 	args = append(args, now.Add(-hookhealth.Window).UTC().Format("2006-01-02T15:04:05.000000000Z"), now.UTC().Format("2006-01-02T15:04:05.000000000Z"), hookhealth.RunLimit+1)
 	rows, err := s.db.Query(`SELECT run_id,ts,hook,script,status,duration_ms,chars,harness,evidence_json,session_id FROM hook_runs
 		WHERE `+filter+` AND `+timestampOrderExpr("ts")+`>=? AND `+timestampOrderExpr("ts")+`<=?

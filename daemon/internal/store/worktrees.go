@@ -60,8 +60,6 @@ func (s *Store) SetWorktreeRepoHidden(path string, hidden bool) bool {
 
 // WorktreeRepos returns the saved list ordered by path, hidden rows included.
 func (s *Store) WorktreeRepos() []model.WorktreeRepo {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	rows, err := s.db.Query(`SELECT path, source, first_seen, COALESCE(last_scan, ''), hidden FROM worktree_repos ORDER BY path`)
 	if err != nil {
 		log.Printf("store: query worktree repos: %v", err)
@@ -90,8 +88,6 @@ func (s *Store) WorktreeRepos() []model.WorktreeRepo {
 // session's before an ended one's, a named one before an unnamed one, then
 // the newest), and whether any of them is still active or idle (not ended).
 func (s *Store) WorkspaceActivity() []model.WorkspaceActivity {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	order := timestampOrderExpr("last_seen_at")
 	// Two flag characters ahead of the 30-character order key.
 	rows, err := s.db.Query(`SELECT workspace, substr(MAX(`+order+` || last_seen_at),31),
@@ -154,8 +150,6 @@ func (s *Store) PutCleanup(e model.CleanupEntry) {
 // CleanupLog returns the newest ledger rows first, or an error without partial
 // rows if the read fails.
 func (s *Store) CleanupLog(limit int) (_ []model.CleanupEntry, readErr error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer func() { s.noteReadLogged("cleanup log", readErr) }()
 	rows, err := s.db.Query(`SELECT id, ts, action, path, COALESCE(repo, ''), bytes, COALESCE(detail, '') FROM cleanup_log ORDER BY id DESC LIMIT ?`, normalizeLimit(limit))
 	if err != nil {
@@ -184,8 +178,6 @@ func (s *Store) CleanupLog(limit int) (_ []model.CleanupEntry, readErr error) {
 // An agent's answer (ask:*) is history, not a cleanup: it is not counted.
 // A failed read returns an error, never zero totals.
 func (s *Store) CleanupTotals(now time.Time) (_ model.CleanupTotals, readErr error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer func() { s.noteReadLogged("cleanup totals", readErr) }()
 	var t model.CleanupTotals
 	cut := instantArg(now.Add(-30 * 24 * time.Hour))
@@ -225,8 +217,6 @@ func (s *Store) CleanupDaily(now time.Time, days int) (_ []model.CleanupDay, rea
 		index[out[i].Day] = i
 	}
 	first := time.Date(y, m, d-days+1, 0, 0, 0, 0, loc)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer func() { s.noteReadLogged("cleanup daily", readErr) }()
 	rows, err := s.db.Query(`SELECT ts, action, bytes FROM cleanup_log WHERE `+timestampOrderExpr("ts")+` >= ? AND action NOT LIKE 'ask:%'`,
 		instantArg(first))
@@ -315,8 +305,6 @@ func (s *Store) FinishAgentAsk(a model.AgentAsk) {
 // AgentAsks returns asks newest first, or an error without partial asks if the
 // read fails.
 func (s *Store) AgentAsks(limit int) (_ []model.AgentAsk, readErr error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer func() { s.noteReadLogged("agent asks", readErr) }()
 	rows, err := s.db.Query(`SELECT id, ts, path, COALESCE(repo, ''), harness, session_id, status, COALESCE(verdict, ''),
 		COALESCE(detail, ''), COALESCE(cost_usd, 0), COALESCE(output, ''), COALESCE(finished_at, '')
@@ -354,8 +342,6 @@ func (s *Store) AgentAsks(limit int) (_ []model.AgentAsk, readErr error) {
 // whose workspace is dir or under it, newest first: their ids are the
 // harness's own, so they can be resumed.
 func (s *Store) SessionsInWorkspace(dir string) []model.Session {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	rows, err := s.db.Query(sessionSelect+` WHERE (workspace = ? OR workspace LIKE ? ESCAPE '\') AND confidence IN (?, ?)
 		ORDER BY `+timestampOrderExpr("last_seen_at")+` DESC LIMIT 20`,
 		dir, likePrefix(dir)+"/%", model.ConfHook, model.ConfTranscript)

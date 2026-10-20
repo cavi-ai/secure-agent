@@ -68,10 +68,14 @@ func (s *Store) GetIncident(id string) (report *model.IncidentReport, readErr er
 			s.noteRead("incidents", readErr)
 		}
 	}()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// The identity, report and remediation come from one snapshot.
+	tx, err := s.readTx()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 
-	storedID, reportJSON, err := s.resolveIncidentRowLocked(s.db, id)
+	storedID, reportJSON, err := resolveIncidentRow(tx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -80,10 +84,11 @@ func (s *Store) GetIncident(id string) (report *model.IncidentReport, readErr er
 	if err != nil {
 		return nil, err
 	}
-	if err := s.attachIncidentRemediationLocked(inc); err != nil {
+	if err := attachIncidentRemediation(tx, inc); err != nil {
 		return nil, err
 	}
-	if v, ok := s.advisorVerdictLocked(inc.ID, "incident"); ok {
+	tx.Rollback()
+	if v, ok := s.advisorVerdict(inc.ID, "incident"); ok {
 		inc.AdvisorNarrative = v.Rationale
 	}
 	return inc, nil
@@ -104,8 +109,6 @@ func decodeIncidentReport(id, reportJSON string) (*model.IncidentReport, error) 
 // unavailable or invalid stored identity. Callers creating reports must use it.
 func (s *Store) FindOpenIncident(rule, sessionID, subject string) (id string, found bool, readErr error) {
 	defer func() { s.noteRead("incident lookup", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return findOpenIncident(s.db, rule, sessionID, subject)
 }
 
@@ -299,13 +302,18 @@ func (s *Store) aggregateIncidentLocked(tx *sql.Tx, id, flagID string, ts time.T
 // decode or cursor failure. Resolved reports remain outside the active set.
 func (s *Store) RecentIncidents(limit int) (out []model.IncidentReport, readErr error) {
 	defer func() { s.noteRead("incidents", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// The reports and their remediation come from one snapshot, so a report
+	// trimmed after the list is read cannot fail it.
+	tx, err := s.readTx()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 
 	// Resolved incidents stay in the audit trail but leave the active set:
 	// the operator dismissed them, so they must not keep rendering as
 	// critical rows in the popover.
-	rows, err := s.db.Query(recentIncidentsQuery, normalizeLimit(limit))
+	rows, err := tx.Query(recentIncidentsQuery, normalizeLimit(limit))
 	if err != nil {
 		return nil, err
 	}
@@ -314,11 +322,12 @@ func (s *Store) RecentIncidents(limit int) (out []model.IncidentReport, readErr 
 		return nil, err
 	}
 	for i := range list {
-		if err := s.attachIncidentRemediationLocked(&list[i]); err != nil {
+		if err := attachIncidentRemediation(tx, &list[i]); err != nil {
 			return nil, err
 		}
 	}
-	s.attachNarrativesLocked(list)
+	tx.Rollback()
+	s.attachNarratives(list)
 	return list, nil
 }
 
@@ -349,18 +358,14 @@ func scanIncidentsResult(rows *sql.Rows) ([]model.IncidentReport, error) {
 // IncidentIDForFlag distinguishes absent reports from unavailable or
 // invalid targets using the same identity decoder as incident detail.
 func (s *Store) IncidentIDForFlag(flagID string) (id string, found bool, readErr error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer func() { s.noteRead("incident links", readErr) }()
-	return s.incidentIDForFlagLocked(flagID)
+	return s.linkedIncidentID(flagID)
 }
 
 // IncidentIDsForFlags preserves valid sibling links and records one health
 // result for the whole enrichment batch. Empty values mark missing or failed
 // lookups so a consumer does not repeat them within the same calculation.
 func (s *Store) IncidentIDsForFlags(flagIDs []string) (map[string]string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	links := make(map[string]string, len(flagIDs))
 	var readErr error
 	for _, flagID := range flagIDs {
@@ -368,7 +373,7 @@ func (s *Store) IncidentIDsForFlags(flagIDs []string) (map[string]string, error)
 			continue
 		}
 		links[flagID] = ""
-		id, found, err := s.incidentIDForFlagLocked(flagID)
+		id, found, err := s.linkedIncidentID(flagID)
 		if readErr == nil {
 			readErr = err
 		}
@@ -381,15 +386,15 @@ func (s *Store) IncidentIDsForFlags(flagIDs []string) (map[string]string, error)
 }
 
 // incidentRowQueryer is the subset of *sql.DB and *sql.Tx that can resolve one
-// incident identity. Callers hold Store.mu.
+// incident identity.
 type incidentRowQueryer interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
 
-// resolveIncidentRowLocked selects the exact incident id first. An alias cannot
+// resolveIncidentRow selects the exact incident id first. An alias cannot
 // shadow that row. Otherwise it selects the newest incident whose opening
 // flag_id or aggregated flag_ids contains the key.
-func (s *Store) resolveIncidentRowLocked(q incidentRowQueryer, key string) (id, reportJSON string, err error) {
+func resolveIncidentRow(q incidentRowQueryer, key string) (id, reportJSON string, err error) {
 	id, err = resolveIncidentID(q, key)
 	if err != nil {
 		return id, reportJSON, err
@@ -412,11 +417,11 @@ func resolveIncidentID(q incidentRowQueryer, id string) (string, error) {
 	return storedID, err
 }
 
-func (s *Store) incidentIDForFlagLocked(flagID string) (string, bool, error) {
+func (s *Store) linkedIncidentID(flagID string) (string, bool, error) {
 	if flagID == "" {
 		return "", false, nil
 	}
-	id, raw, err := s.resolveIncidentRowLocked(s.db, flagID)
+	id, raw, err := resolveIncidentRow(s.db, flagID)
 	if err == sql.ErrNoRows {
 		return "", false, nil
 	}
@@ -510,17 +515,21 @@ func (s *Store) SetIncidentStatus(id, status, note string) (workflow IncidentWor
 // malformed workflow. Missing rows are healthy reads, not storage failures.
 func (s *Store) IncidentStatus(id string) (workflow IncidentWorkflow, found bool, readErr error) {
 	defer func() { s.noteRead("incident workflows", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// The identity and its workflow come from one snapshot.
+	tx, err := s.readTx()
+	if err != nil {
+		return IncidentWorkflow{Status: "unknown"}, false, err
+	}
+	defer tx.Rollback()
 
-	storedID, err := resolveIncidentID(s.db, id)
+	storedID, err := resolveIncidentID(tx, id)
 	if err == sql.ErrNoRows {
 		return IncidentWorkflow{Status: "unknown"}, false, nil
 	}
 	if err != nil {
 		return IncidentWorkflow{Status: "unknown"}, false, err
 	}
-	wf, err := scanIncidentWorkflow(s.db.QueryRow(
+	wf, err := scanIncidentWorkflow(tx.QueryRow(
 		`SELECT status, acknowledged_at, resolved_at, resolution_note FROM incidents WHERE id = ?`, storedID))
 	if err != nil {
 		return IncidentWorkflow{Status: "unknown"}, false, err

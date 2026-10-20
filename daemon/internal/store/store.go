@@ -118,7 +118,7 @@ type Store struct {
 	hookIngestion          hookIngestionHealth
 	egressProjectionHealth egressProjectionHealth
 	writeHealth            writeHealth
-	mu                     sync.Mutex
+	mu                     sync.Mutex // serializes writes and guards in-memory state; reads never hold it around SQL
 	egressMu               sync.Mutex // serializes episode read-modify-write without blocking event state
 	db                     *sql.DB
 	flagMirror             *flagMirror
@@ -176,6 +176,20 @@ func (s *Store) FlagGeneration() uint64 { return s.flagGen.Load() }
 
 // flagsChanged records a write to flags or advisor verdicts (caller holds mu).
 func (s *Store) flagsChanged() { s.flagGen.Add(1) }
+
+// querier is the read surface *sql.DB and *sql.Tx share.
+type querier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// readTx begins a read-only transaction: its statements share one snapshot
+// and never reserve the writer, so a read whose statements must agree needs
+// no mu. Nothing else may use s.db until it ends: a :memory: store has one
+// connection.
+func (s *Store) readTx() (*sql.Tx, error) {
+	return s.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+}
 
 // SetAllowlistSource wires the operator allowlist (agent -> hosts) that
 // TrendFor reports as AllowedFor.
@@ -1078,19 +1092,19 @@ func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
 // detail, using the same checked decoder as flag history.
 // GetFlag is one read statement, so it does not take mu.
 func (s *Store) GetFlag(id string) (model.Flag, bool, error) {
-	return s.getFlagResultLocked(id)
+	return s.getFlagResult(s.db, id)
 }
 
 func (s *Store) getFlagLocked(id string) (model.Flag, bool) {
-	fl, found, _ := s.getFlagResultLocked(id)
+	fl, found, _ := s.getFlagResult(s.db, id)
 	return fl, found
 }
 
 const flagSelect = `SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process, repeats, last_seen FROM flags`
 
-func (s *Store) getFlagResultLocked(id string) (flag model.Flag, found bool, readErr error) {
+func (s *Store) getFlagResult(q querier, id string) (flag model.Flag, found bool, readErr error) {
 	defer func() { s.noteRead("flag detail", readErr) }()
-	rows, err := s.db.Query(flagSelect+" WHERE id = ?", id)
+	rows, err := q.Query(flagSelect+" WHERE id = ?", id)
 	if err != nil {
 		return model.Flag{}, false, err
 	}
@@ -1267,8 +1281,6 @@ type RollupPoint struct {
 
 // RollupRange returns hourly counters since the given time (UTC).
 func (s *Store) RollupRange(since time.Time) []RollupPoint {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	rows, err := s.db.Query(
 		`SELECT bucket, kind, count FROM rollup_hourly WHERE bucket >= ? ORDER BY bucket`,
 		rollupBucket(since),
@@ -1316,11 +1328,12 @@ func (s *Store) TrendFor(rule, host string) model.TrendContext {
 	return tc
 }
 
-// trendCounts reads the rule/host counts under the lock and returns the
-// allowlist source so TrendFor calls it without holding mu.
+// trendCounts reads the rule/host counts and returns the allowlist source,
+// read under mu, so TrendFor calls it without holding mu.
 func (s *Store) trendCounts(rule, host string) (model.TrendContext, func() map[string][]string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	allow := s.allowlist
+	s.mu.Unlock()
 	var tc model.TrendContext
 	now := time.Now().UTC()
 	wk := instantArg(now.Add(-7 * 24 * time.Hour))
@@ -1343,7 +1356,7 @@ func (s *Store) trendCounts(rule, host string) (model.TrendContext, func() map[s
 			}
 		}
 	}
-	return tc, s.allowlist
+	return tc, allow
 }
 
 // PutAdvisorVerdict stores (or replaces) the local advisor's verdict for a
@@ -1450,9 +1463,9 @@ func (s *Store) advisorVerdicts(ids []string, kind string) (map[string]model.Adv
 	return verdicts, readErr
 }
 
-// advisorVerdictLocked fetches one verdict (caller holds mu).
-func (s *Store) advisorVerdictLocked(subjectID, kind string) (model.AdvisorVerdict, bool) {
-	v, found, err := s.advisorVerdictResultLocked(subjectID, kind)
+// advisorVerdict fetches one verdict and records the read's health.
+func (s *Store) advisorVerdict(subjectID, kind string) (model.AdvisorVerdict, bool) {
+	v, found, err := s.advisorVerdictResult(subjectID, kind)
 	s.noteRead(advisorReadKind(kind), err)
 	return v, found
 }
@@ -1468,7 +1481,7 @@ func advisorReadKind(kind string) string {
 	}
 }
 
-func (s *Store) advisorVerdictResultLocked(subjectID, kind string) (model.AdvisorVerdict, bool, error) {
+func (s *Store) advisorVerdictResult(subjectID, kind string) (model.AdvisorVerdict, bool, error) {
 	var r advisorVerdictRow
 	err := s.db.QueryRow(`SELECT `+advisorVerdictColumns+` FROM advisor_verdicts WHERE subject_id = ? AND kind = ?`,
 		subjectID, kind).Scan(r.dest()...)
@@ -1695,8 +1708,6 @@ func nullFloat(f float64) any {
 // partial backfill. Nullable legacy metadata is decoded like other flag reads.
 func (s *Store) CriticalFlagsMissingAdvisor(since time.Time, limit int) (flags []model.Flag, readErr error) {
 	defer func() { s.noteRead("advisor backfill", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	// Invalid dates must reach the decoder rather than disappear from the
 	// time filter or fall beyond the limit behind valid rows.
 	at := timestampOrderExpr("ts")
@@ -1740,20 +1751,17 @@ func (s *Store) LastEventTimes(pids []int32) map[int32]string {
 // malformed stored advice without returning a partial verdict.
 func (s *Store) AdvisorVerdictResultFor(subjectID, kind string) (v model.AdvisorVerdict, found bool, readErr error) {
 	defer func() { s.noteRead(advisorReadKind(kind), readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.advisorVerdictResultLocked(subjectID, kind)
+	return s.advisorVerdictResult(subjectID, kind)
 }
 
-// attachNarrativesLocked joins advisor narratives onto incidents (caller
-// holds mu).
-func (s *Store) attachNarrativesLocked(list []model.IncidentReport) {
+// attachNarratives joins advisor narratives onto incidents.
+func (s *Store) attachNarratives(list []model.IncidentReport) {
 	if len(list) == 0 {
 		return
 	}
 	var readErr error
 	for i := range list {
-		v, ok, err := s.advisorVerdictResultLocked(list[i].ID, "incident")
+		v, ok, err := s.advisorVerdictResult(list[i].ID, "incident")
 		if readErr == nil {
 			readErr = err
 		}
@@ -1786,9 +1794,6 @@ func (s *Store) PutAudit(a AuditEntry) {
 }
 
 func (s *Store) RecentAudit(limit int) []AuditEntry {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	rows, err := s.db.Query(`SELECT id, ts, action, rule, from_mode, to_mode, detail FROM audit ORDER BY id DESC LIMIT ?`, normalizeLimit(limit))
 	if err != nil {
 		log.Printf("store: query audit error: %v", err)
@@ -1821,7 +1826,7 @@ func (s *Store) PutResourceEpisode(episode resource.Episode) (writeErr error) {
 	probe.SessionID = ""
 	if episode.Session.Kind != "infra" {
 		s.mu.Lock()
-		probe.SessionID = s.sessionIDForRootLocked(episode.Session.RootPID, episode.Session.RootStartedAt)
+		probe.SessionID = s.sessionIDForRoot(episode.Session.RootPID, episode.Session.RootStartedAt)
 		s.mu.Unlock()
 	}
 	enriched, enrichErr := s.attachResourceEpisodeActivity(ctx, probe)
@@ -1834,7 +1839,7 @@ func (s *Store) PutResourceEpisode(episode resource.Episode) (writeErr error) {
 	// process identity can attach an agent episode to a durable session.
 	episode.SessionID = ""
 	if episode.Session.Kind != "infra" {
-		episode.SessionID = s.sessionIDForRootLocked(episode.Session.RootPID, episode.Session.RootStartedAt)
+		episode.SessionID = s.sessionIDForRoot(episode.Session.RootPID, episode.Session.RootStartedAt)
 	}
 	if s.resourceEpisodeAfterLookup != nil {
 		s.resourceEpisodeAfterLookup()
@@ -2135,10 +2140,8 @@ func truncateResourceActivity(value string, limit int) string {
 }
 
 func (s *Store) RecentResourceEpisodes(limit int) []resource.Episode {
-	s.mu.Lock()
 	rows, err := s.db.Query(`SELECT id, episode_json FROM resource_episodes ORDER BY id DESC LIMIT ?`, normalizeLimit(limit))
 	if err != nil {
-		s.mu.Unlock()
 		log.Printf("store: query resource episodes error: %v", err)
 		return []resource.Episode{}
 	}
@@ -2164,7 +2167,6 @@ func (s *Store) RecentResourceEpisodes(limit int) []resource.Episode {
 		log.Printf("store: resource episode cursor error (result may be truncated): %v", err)
 	}
 	rows.Close()
-	s.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -2326,8 +2328,7 @@ func (s *Store) PutGuardPathAllow(g GuardPathAllow) error {
 // guardPathAllowed answers whether path is allowed for agent/ruleID:
 // exact match, or any ancestor-prefix match (an allow on ~/.ssh/config
 // covers ~/.ssh/config/sub too — descendants inherit, siblings don't).
-// Callers must hold s.mu.
-func (s *Store) guardPathAllowedLocked(agent, ruleID, path string) bool {
+func (s *Store) guardPathAllowed(agent, ruleID, path string) bool {
 	rows, err := s.db.Query(
 		`SELECT path FROM guard_path_allows WHERE agent = ? AND rule_id = ?`,
 		agent, ruleID,
@@ -2352,16 +2353,12 @@ func (s *Store) guardPathAllowedLocked(agent, ruleID, path string) bool {
 // GuardPathAllowed is the public check used by /guard/decision. Path is
 // cleaned so "a/b/" and "a//b" match their canonical form.
 func (s *Store) GuardPathAllowed(agent, ruleID, path string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.guardPathAllowedLocked(agent, ruleID, filepath.Clean(path))
+	return s.guardPathAllowed(agent, ruleID, filepath.Clean(path))
 }
 
 // ListGuardPathAllows returns recent per-path allows, newest first, or an error
 // without partial records if the read fails.
 func (s *Store) ListGuardPathAllows(limit int) ([]GuardPathAllow, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	rows, err := s.db.Query(
 		`SELECT agent, rule_id, path, created_at FROM guard_path_allows ORDER BY `+timestampOrderExpr("created_at")+` DESC LIMIT ?`,
 		normalizeLimit(limit),
@@ -2429,8 +2426,6 @@ func (s *Store) PutGuardRule(g GuardRule) (writeErr error) {
 }
 
 func (s *Store) LookupGuardRule(agent, ruleID string) (GuardRule, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var g GuardRule
 	err := s.db.QueryRow(
 		`SELECT agent, rule_id, decision, source, created_at FROM guard_rules WHERE agent = ? AND rule_id = ?`,
@@ -2445,8 +2440,6 @@ func (s *Store) LookupGuardRule(agent, ruleID string) (GuardRule, bool) {
 // ListGuardRules returns recent decisions, newest first, or an error without
 // partial records if the read fails.
 func (s *Store) ListGuardRules(limit int) ([]GuardRule, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	rows, err := s.db.Query(
 		`SELECT agent, rule_id, decision, source, created_at FROM guard_rules ORDER BY `+timestampOrderExpr("created_at")+` DESC LIMIT ?`,
 		normalizeLimit(limit),

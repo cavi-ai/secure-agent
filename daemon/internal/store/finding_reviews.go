@@ -297,21 +297,25 @@ func observeReviewTx(tx *sql.Tx, f model.Flag, a model.FindingAssessment) (r mod
 }
 
 func (s *Store) GetFindingReview(id string) (r model.ReviewRecord, ok bool, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer func() { s.noteRead("finding reviews", err) }()
-	r, err = reviewFromRow(s.db.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE id=?`, id))
+	// The review and its links come from one snapshot.
+	tx, err := s.readTx()
+	if err != nil {
+		return r, false, err
+	}
+	defer tx.Rollback()
+	r, err = reviewFromRow(tx.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, false, nil
 	}
 	if err == nil {
-		err = s.reviewLinksLocked(&r)
+		err = s.reviewLinks(tx, &r)
 	}
 	return r, err == nil, err
 }
 
-func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
-	rows, err := s.db.Query(`SELECT m.flag_id FROM finding_review_members m JOIN flags f ON f.id=m.flag_id WHERE m.review_id=? ORDER BY `+timestampOrderExpr("m.last_seen")+` DESC,m.flag_id LIMIT 100`, r.ID)
+func (s *Store) reviewLinks(q querier, r *model.ReviewRecord) error {
+	rows, err := q.Query(`SELECT m.flag_id FROM finding_review_members m JOIN flags f ON f.id=m.flag_id WHERE m.review_id=? ORDER BY `+timestampOrderExpr("m.last_seen")+` DESC,m.flag_id LIMIT 100`, r.ID)
 	if err != nil {
 		return err
 	}
@@ -332,7 +336,7 @@ func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
 	}
 	sourceFlags := make([]model.Flag, 0, len(r.SourceIDs))
 	for _, id := range r.SourceIDs {
-		f, found, err := s.getFlagResultLocked(id)
+		f, found, err := s.getFlagResult(q, id)
 		if err != nil {
 			return err
 		}
@@ -343,7 +347,7 @@ func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
 	}
 	r.EvidenceAvailable = len(r.SourceIDs) > 0
 	var available int
-	if err = s.db.QueryRow(`SELECT COUNT(*) FROM flags WHERE id=?`, r.EvidenceFlagID).Scan(&available); err != nil {
+	if err = q.QueryRow(`SELECT COUNT(*) FROM flags WHERE id=?`, r.EvidenceFlagID).Scan(&available); err != nil {
 		return err
 	}
 	r.EvidenceFlagAvailable = available == 1
@@ -359,7 +363,7 @@ func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
 			}
 			for _, g := range coordinates {
 				model.ScopeChoice{Kind: "session"}.Apply(&g, time.Now().UTC())
-				if g.Validate() != nil || !scopeSession(s.db, g) {
+				if g.Validate() != nil || !scopeSession(q, g) {
 					complete = false
 					break
 				}
@@ -372,7 +376,7 @@ func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
 			r.AvailableScopes = append(r.AvailableScopes, model.ScopeChoice{Kind: "session"}, model.ScopeChoice{Kind: "exact", Expiry: "24h"}, model.ScopeChoice{Kind: "exact", Expiry: "7d"})
 		}
 	}
-	rows, err = s.db.Query(`SELECT id FROM incidents WHERE flag_id IN (SELECT flag_id FROM finding_review_members WHERE review_id=?)
+	rows, err = q.Query(`SELECT id FROM incidents WHERE flag_id IN (SELECT flag_id FROM finding_review_members WHERE review_id=?)
  UNION SELECT id FROM incidents WHERE COALESCE(rule,'')=? AND COALESCE(session_id,'')=? AND EXISTS(SELECT 1 FROM json_each(flag_ids) WHERE value IN (SELECT flag_id FROM finding_review_members WHERE review_id=?)) ORDER BY id LIMIT 100`, r.ID, r.Context.Rule, r.Context.SessionID, r.ID)
 	if err != nil {
 		return err
@@ -413,14 +417,18 @@ func (s *Store) ListSessionFindingReviews(sessionID string) (ReviewPage, error) 
 }
 
 func (s *Store) listFindingReviews(after string, limit int, state, sessionID string) (page ReviewPage, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer func() {
 		s.noteRead("finding reviews", err)
 		if err != nil {
 			page = ReviewPage{Reviews: []model.ReviewRecord{}, Degraded: true}
 		}
 	}()
+	// The page and its links come from one snapshot.
+	tx, err := s.readTx()
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
 	limit = min(max(limit, 1), 100)
 	page.Reviews = []model.ReviewRecord{}
 	query := `SELECT id,state,record_json FROM finding_reviews WHERE id>? AND (?='' OR state=?) ORDER BY id LIMIT ?`
@@ -429,7 +437,7 @@ func (s *Store) listFindingReviews(after string, limit int, state, sessionID str
 		query = `SELECT id,state,record_json FROM finding_reviews WHERE session_id=? ORDER BY ` + timestampOrderExpr("last_seen") + ` DESC,id DESC LIMIT ?`
 		args = []any{sessionID, limit + 1}
 	}
-	rows, err := s.db.Query(query, args...)
+	rows, err := tx.Query(query, args...)
 	if err != nil {
 		page.Degraded = true
 		return
@@ -454,7 +462,7 @@ func (s *Store) listFindingReviews(after string, limit int, state, sessionID str
 		page.Next = page.Reviews[limit-1].ID
 	}
 	for i := range page.Reviews {
-		if err = s.reviewLinksLocked(&page.Reviews[i]); err != nil {
+		if err = s.reviewLinks(tx, &page.Reviews[i]); err != nil {
 			page.Degraded = true
 			return
 		}
@@ -466,10 +474,14 @@ func (s *Store) listFindingReviews(after string, limit int, state, sessionID str
 
 // FindingReviewID resolves coverage without returning bounded history links.
 func (s *Store) FindingReviewID(flagID string) (id string, readErr error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer func() { s.noteRead("finding reviews", readErr) }()
-	return s.findingReviewIDLocked(flagID)
+	// The membership, flag and review come from one snapshot.
+	tx, err := s.readTx()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	return s.findingReviewID(tx, flagID)
 }
 
 // AttachFindingReviewIDs preserves core flags and valid sibling links while
@@ -481,7 +493,7 @@ func (s *Store) AttachFindingReviewIDs(flags []model.Flag) error {
 	}
 	var readErr error
 	for i := range flags {
-		id, err := s.findingReviewIDLocked(flags[i].ID)
+		id, err := s.findingReviewID(s.db, flags[i].ID)
 		flags[i].ReviewID = id
 		if readErr == nil {
 			readErr = err
@@ -491,16 +503,16 @@ func (s *Store) AttachFindingReviewIDs(flags []model.Flag) error {
 	return readErr
 }
 
-func (s *Store) findingReviewIDLocked(flagID string) (string, error) {
+func (s *Store) findingReviewID(q querier, flagID string) (string, error) {
 	var id, key string
-	err := s.db.QueryRow(`SELECT review_id,source_key FROM finding_review_members WHERE flag_id=?`, flagID).Scan(&id, &key)
+	err := q.QueryRow(`SELECT review_id,source_key FROM finding_review_members WHERE flag_id=?`, flagID).Scan(&id, &key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	f, found, err := s.getFlagResultLocked(flagID)
+	f, found, err := s.getFlagResult(q, flagID)
 	if err != nil {
 		return "", err
 	}
@@ -509,7 +521,7 @@ func (s *Store) findingReviewIDLocked(flagID string) (string, error) {
 	}
 	// Membership alone is not a usable link: the canonical target must still
 	// exist and satisfy the same identity/state checks as review detail reads.
-	r, err := reviewFromRow(s.db.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE id=?`, id))
+	r, err := reviewFromRow(q.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", errors.New("finding review link target missing")
 	}

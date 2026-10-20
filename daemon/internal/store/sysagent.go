@@ -82,8 +82,6 @@ func (s *Store) putSysAgentRow(table string, id int64, ts time.Time, v any, max 
 
 // getSysAgentRow decodes row id into v.
 func (s *Store) getSysAgentRow(table string, id int64, v any) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var body string
 	if err := s.db.QueryRow(`SELECT body FROM `+table+` WHERE id = ?`, id).Scan(&body); err != nil {
 		return false
@@ -98,8 +96,6 @@ func (s *Store) getSysAgentRow(table string, id int64, v any) bool {
 // sysAgentRows calls each with the id and body of the newest limit rows,
 // newest first.
 func (s *Store) sysAgentRows(table string, limit int, each func(id int64, body []byte)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	rows, err := s.db.Query(`SELECT id, body FROM `+table+` ORDER BY id DESC LIMIT ?`, normalizeLimit(limit))
 	if err != nil {
 		log.Printf("store: query %s: %v", table, err)
@@ -183,8 +179,6 @@ func (s *Store) ClearSysAgentMessages() {
 // replies. The command stays on its assistant message for one-time claiming.
 func (s *Store) SysAgentRecommendations(limit int) []model.SysAgentMessage {
 	out := []model.SysAgentMessage{}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	rows, err := s.db.Query(`SELECT id, body FROM sysagent_messages
 		WHERE json_extract(body, '$.origin') = 'analysis' AND json_extract(body, '$.role') = 'assistant'
 		ORDER BY CASE WHEN COALESCE(json_extract(body, '$.review_state'), 'pending') = 'pending' THEN 0 ELSE 1 END, id DESC LIMIT ?`, normalizeLimit(limit))
@@ -208,8 +202,6 @@ func (s *Store) SysAgentRecommendations(limit int) []model.SysAgentMessage {
 }
 
 func (s *Store) PendingSysAgentRecommendations() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var n int
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sysagent_messages WHERE json_extract(body, '$.origin') = 'analysis'
 		AND json_extract(body, '$.role') = 'assistant'
