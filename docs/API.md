@@ -901,7 +901,7 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 
 (The example shows three of the sixteen checks.) Read-level. CLI: `secure-agent doctor [--json]` prints one `PASS`/`FAIL`/`SKIP` line per check, a `fix:` line under each failure and a summary line, and exits `1` when any check fails.
 
-`POST /doctor/seen` marks the spool loss and bus drops so far as seen: `file-telemetry` and `bus` pass, still naming their counts, until either grows again. It returns `{"seen_at": "<RFC 3339>"}`. Mutating (pinned UI or owner); refused to agents.
+`POST /doctor/seen` marks the spool loss, bus drops and recovered storage write failures so far as seen: `file-telemetry`, `bus` and `storage` pass, still naming their counts, until one grows again. `storage` also passes once its last failed write is more than 10 minutes old and no write is still failing. It returns `{"seen_at": "<RFC 3339>"}`. Mutating (pinned UI or owner); refused to agents.
 
 ### 18. `GET /sessions/{id}/report`
 

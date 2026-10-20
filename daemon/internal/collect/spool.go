@@ -32,6 +32,14 @@ const spoolDrainBudget = 4 << 20 // 4 MiB
 // line; a longer line is skipped over several ticks.
 const spoolSkipScan = 8 << 20 // 8 MiB
 
+// spoolPollInterval paces an idle or drained spool. Retained events are
+// retried after spoolRetainedRetry, so ingest frees bus capacity and is fed
+// again within milliseconds instead of idling for a full poll interval.
+const (
+	spoolPollInterval  = 200 * time.Millisecond
+	spoolRetainedRetry = 5 * time.Millisecond
+)
+
 // skipLine returns how many bytes from start, at most limit, end the current
 // line: through its newline when one is found, else all of limit.
 func skipLine(f io.ReaderAt, start, limit int64) int64 {
@@ -450,11 +458,15 @@ func (t *SpoolTailer) follow(ctx context.Context) error {
 	for {
 		c = t.poll(c)
 		t.savePosition(c, false)
+		wait := spoolPollInterval
+		if t.retained {
+			wait = spoolRetainedRetry
+		}
 		select {
 		case <-ctx.Done():
 			t.savePosition(c, true)
 			return ctx.Err()
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(wait):
 		}
 	}
 }

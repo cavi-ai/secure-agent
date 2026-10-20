@@ -593,6 +593,33 @@ func TestSpoolRetainsRejectedLineAcrossPollsAndRotation(t *testing.T) {
 	}
 }
 
+// A full bus retries the retained line within milliseconds: a consumer
+// slower than the spool is fed again as soon as it frees a slot.
+func TestSpoolRetainedLineRetriesBeforeTheNextPoll(t *testing.T) {
+	const n = 100
+	path := t.TempDir() + "/spool.jsonl"
+	var body string
+	for pid := 1; pid <= n; pid++ {
+		body += esOpenLine(pid) + "\n"
+	}
+	appendSpool(t, path, body)
+	b := bus.New(1)
+	defer b.Close()
+	sub := b.Subscribe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = NewSpoolTailerAt(b, path).Run(ctx) }()
+	deadline := time.After(3 * time.Second)
+	for got := 0; got < n; got++ {
+		select {
+		case <-sub:
+			time.Sleep(time.Millisecond)
+		case <-deadline:
+			t.Fatalf("delivered %d of %d events in 3s", got, n)
+		}
+	}
+}
+
 func TestSpoolLossSurvivesHealthyPollAfterOverwrittenRotation(t *testing.T) {
 	path := t.TempDir() + "/spool.jsonl"
 	appendSpool(t, path, esOpenLine(1)+"\n"+esOpenLine(2)+"\n")

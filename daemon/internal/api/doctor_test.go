@@ -302,6 +302,38 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 			f.st.Collectors = []supervise.Health{{Name: "eslogger"}, {Name: "opencode", Running: true, Source: "/y/opencode.db", Watermark: 7, LastPoll: "2026-09-23T04:00:00Z"}}
 			return f
 		}(), doctorFail, "down: eslogger (stopped) · opencode /y/opencode.db @ 7 polled 2026-09-23T04:00:00Z"},
+		{"spool loss is file telemetry's, not a silent collector", checkCollectors, func() doctorFacts {
+			f := steady
+			f.st.Collectors = []supervise.Health{{Name: "eslogger", Running: true, LastProduced: now.Format(time.RFC3339)}}
+			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: now, Losing: true, BytesLost: 9}
+			return f
+		}(), doctorPass, "1 collectors running"},
+		{"still failing writes", checkStorage, func() doctorFacts {
+			f := steady
+			at := now.Add(-time.Hour)
+			f.st.StorageHealth = &store.WriteHealth{Failures: 2, LastFailureAt: &at, Active: []string{"events"}}
+			return f
+		}(), doctorFail, "still failing: events"},
+		{"recent recovered write failure", checkStorage, func() doctorFacts {
+			f := steady
+			at := now.Add(-time.Minute)
+			f.st.StorageHealth = &store.WriteHealth{Failures: 2, LastFailureAt: &at, Active: []string{}}
+			return f
+		}(), doctorFail, "new writes recovered; 2 earlier failures"},
+		{"old recovered write failure", checkStorage, func() doctorFacts {
+			f := steady
+			at := now.Add(-collect.LossWindow - time.Minute)
+			f.st.StorageHealth = &store.WriteHealth{Failures: 2, LastFailureAt: &at, Active: []string{}}
+			return f
+		}(), doctorPass, "2 earlier failed writes may have left evidence gaps"},
+		{"recovered write failure marked seen", checkStorage, func() doctorFacts {
+			f := steady
+			at := now.Add(-time.Minute)
+			f.st.StorageHealth = &store.WriteHealth{Failures: 2, LastFailureAt: &at, Active: []string{}}
+			f.lossSeen = new(collect.LossSeen)
+			f.lossSeen.Mark(now)
+			return f
+		}(), doctorPass, "none since"},
 		{"unnamed sessions", checkSessionIdentity, func() doctorFacts {
 			f := steady
 			f.sessionsTotal, f.sessionsNamed = 10, 7

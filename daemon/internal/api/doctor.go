@@ -85,6 +85,9 @@ type doctorFacts struct {
 
 	configBoot, configReload string
 	configRestart            []string
+
+	// lossSeen is the operator's mark that earlier losses were seen.
+	lossSeen *collect.LossSeen
 }
 
 type doctorProbe struct {
@@ -179,10 +182,11 @@ func (a *API) doctorFacts(now time.Time) doctorFacts {
 	st := a.evidenceStatus(a.statusFn())
 	uptime, _ := time.ParseDuration(st.Uptime)
 	f := doctorFacts{
-		now:   now,
-		boot:  now.Add(-uptime),
-		grace: uptime < collectorBootGrace,
-		st:    st,
+		now:      now,
+		boot:     now.Add(-uptime),
+		grace:    uptime < collectorBootGrace,
+		st:       st,
+		lossSeen: a.lossSeen,
 	}
 	if path, err := claudeSettingsPath(); err == nil {
 		f.settingsKnown = true
@@ -287,8 +291,13 @@ func checkCollectors(f doctorFacts) (string, string) {
 		}
 	}
 	// Silence only means blindness while agents are active (as in posture).
+	// The spool service's own failures are the file-telemetry check's.
+	spoolFailing := f.st.ESService != nil && len(esServiceItems(f.now, *f.st.ESService)) > 0
 	if f.st.ActiveAgents > 0 {
 		for _, it := range silentCollectorItems(f.now, f.st) {
+			if it.ID == "eslogger" && spoolFailing {
+				continue
+			}
 			silent = append(silent, it.ID)
 		}
 	}
@@ -509,6 +518,12 @@ func checkStorage(f doctorFacts) (string, string) {
 	}
 	if len(h.Active) > 0 {
 		return doctorFail, fmt.Sprintf("%d failed persistence attempts since start; still failing: %s", h.Failures, strings.Join(h.Active, ", "))
+	}
+	// Recovered failures fail like other evidence loss: while recent and not
+	// marked seen.
+	if at := h.LastFailureAt; at != nil && !f.lossSeen.Growing(*at, f.now) {
+		return doctorPass, fmt.Sprintf("%d earlier failed writes may have left evidence gaps, the last at %s, none since",
+			h.Failures, at.Local().Format("15:04"))
 	}
 	return doctorFail, fmt.Sprintf("new writes recovered; %d earlier failures may have left evidence gaps", h.Failures)
 }
