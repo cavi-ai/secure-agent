@@ -414,9 +414,13 @@
         <div class="subview" id="sub-board" role="tabpanel">
         <section class="panel" id="session-board-panel" data-pane="detail">
           <div class="harness-filter session-toolbar" role="group" aria-label="Filter sessions">
-            <span class="badge" id="badge-session-count" aria-label="Session count">0</span>
+            <span class="session-toolbar-title">Sessions <span class="badge" id="badge-session-count" aria-label="Session count">0</span></span>
+            <div class="session-view-switch" role="group" aria-label="Group sessions by">
+              <button type="button" data-action="session-list-view" data-view="harness" aria-pressed="true">Harness</button>
+              <button type="button" data-action="session-list-view" data-view="sessions" aria-pressed="false">Sessions</button>
+            </div>
             <div class="session-count-strip" id="session-count-strip" role="status"></div>
-            <div class="harness-pills" id="session-harness-pills"></div>
+            <details class="session-filter-options"><summary>Filters</summary><div class="harness-pills" id="session-harness-pills"></div></details>
             <input type="search" id="session-cwd-filter" class="input harness-filter-text" placeholder="Filter by repo, branch, or folder…" aria-label="Filter sessions by repo, branch, or folder" autocomplete="off" spellcheck="false">
             <label class="switch"><input type="checkbox" id="session-live-only" checked><span>Live only</span></label>
           </div>

@@ -4078,6 +4078,9 @@ document.addEventListener('DOMContentLoaded', () => {
         endedSessionsOpen[d.harness] = !endedSessionsOpen[d.harness];
         sessionWorkbench.render();
         break;
+      case 'session-list-view':
+        sessionWorkbench.setListView(d.view);
+        break;
       case 'toggle-session-dup':
         sessionDupOpen[(d.bucket ? d.bucket + '|' : '') + d.key] = el.getAttribute('aria-expanded') !== 'true';
         sessionWorkbench.render();

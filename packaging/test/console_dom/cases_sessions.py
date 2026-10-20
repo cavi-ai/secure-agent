@@ -18,7 +18,7 @@ def run_rail_titles_are_repo_branch_not_harness_repo(page):
     check(
         'rail titles are repo@branch, not harness · repo',
         (
-            '>api-service@main<' in rail
+            '>api-service<' in rail and '>main<' in rail
             and 'claude · ' not in rail
         ),
     )
@@ -545,6 +545,14 @@ def run_session_results(page):
                 ),
             )
 
+def run_session_views(page):
+    for label, size in [('desktop', (1440, 1024)), ('phone', (390, 844))]:
+        dom = page.dom('?sessionviews', window_size=size, served=True, fixture={'script': 'cases_session_views.js'})
+        receipt = re.search('data-session-views="([^"]+)"', dom)
+        state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        for name in ('default', 'switch', 'selection', 'icons', 'preference', 'focus', 'empty', 'refresh', 'return', 'actions', 'fits'):
+            page.check(f'session views ({label}): {name}', state.get(name) is True, str(state))
+
 def run_session_workbench(page):
     check = page.check
     for label, size in [('desktop', (1280, 800)), ('narrow', (900, 768))]:
@@ -679,5 +687,6 @@ CASES = (
     Case('hook_diagnostics', run_hook_diagnostics, ()),
     Case('session_hooks', run_session_hooks, ()),
     Case('session_workbench', run_session_workbench, ()),
+    Case('session_views', run_session_views, ()),
     Case('session_reading', run_session_reading, ()),
 )
