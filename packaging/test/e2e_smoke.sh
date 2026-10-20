@@ -584,7 +584,8 @@ p=json.load(sys.stdin); s=p["attention_summary"]; buckets=s["buckets"]
 assert s["version"] == 1
 assert [b["kind"] for b in buckets[:3]] == ["decisions","security","monitoring"]
 assert sum(b["count"] for b in buckets) == p["needs_you"]
-assert buckets[2]["coverage_count"] == sum(i["kind"] not in ("uninspected_egress","hook_analysis_limit") for i in (p.get("coverage_items") or []))
+gap=lambda i: i["monitoring_state"] == "active" if i.get("monitoring_state") else i["kind"] not in ("uninspected_egress","hook_analysis_limit","collector_idle")
+assert buckets[2]["coverage_count"] == sum(gap(i) for i in (p.get("coverage_items") or []))
 items={(i["kind"],i["id"]):i for g in p.get("groups",[]) for i in g["items"]}
 for b in buckets:
     if b["count"]:
