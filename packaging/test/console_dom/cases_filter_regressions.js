@@ -31,13 +31,15 @@
       openTab('sessions/board'); await settle();
       const pill = () => document.querySelector('#session-harness-pills [data-harness="codex"]');
       const all = () => document.querySelector('#session-harness-pills [data-action="all-harnesses"]');
+      const filters = document.querySelector('.session-filter-options');
       // Narrow screens open the detail pane, which hides the filters.
       // Return through the visible Back control before testing focus.
-      if (!pill().getClientRects().length) {
+      if (!filters.querySelector('summary').getClientRects().length) {
         document.querySelector('#session-detail [data-action="session-list"]').click();
         await settle();
       }
-      receipt.harnessVisible = !!pill().getClientRects().length;
+      filters.querySelector('summary').click(); await settle();
+      receipt.harnessVisible = filters.open && pill().checkVisibility();
       pill().focus(); pill().click(); await settle();
       receipt.harnessOff = pill().getAttribute('aria-pressed') === 'false' && !document.querySelector('#session-rail [data-harness="codex"]');
       receipt.harnessFocus = document.activeElement === pill();
