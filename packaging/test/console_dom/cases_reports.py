@@ -2069,17 +2069,17 @@ def run_panels_after_fleet_still_render(page):
         ),
     )
 
-def run_tab_bar_renders_five_tabs_with_protection_grouping_and_agent_last(page):
+def run_tab_bar_renders_six_tabs_with_protection_grouping_and_agent_last(page):
     check = page.check
     dom = page.fixture('dom')
     tab_ids = re.findall('class="tab-btn[^"]*" data-tab="(\\w+)"', dom)
     tab_labels = re.findall('data-tab="\\w+" role="tab"[^>]*>\\s*<svg[^>]*>.*?</svg><span>([^<]+)</span>', dom, re.S)
     check(
-        'tab bar renders five tabs with Protection grouping and Agent last',
+        'tab bar renders six tabs with Protection grouping and Agent last',
         (
-            len(dom_query(dom).find_all(None, {'class': 'tab-btn'})) == 5
-            and tab_ids == ['home', 'sessions', 'protection', 'system', 'agent']
-            and tab_labels == ['Home', 'Sessions', 'Protection', 'System', 'Agent']
+            len(dom_query(dom).find_all(None, {'class': 'tab-btn'})) == 6
+            and tab_ids == ['home', 'sessions', 'monitoring', 'protection', 'system', 'agent']
+            and tab_labels == ['Home', 'Sessions', 'Monitoring', 'Protection', 'System', 'Agent']
         ),
         f'ids={tab_ids} labels={tab_labels}',
     )
@@ -4132,7 +4132,7 @@ CASES = (
     Case('fleet_panel_visible_when_a_collector_is_configured', run_fleet_panel_visible_when_a_collector_is_configured, ('dom',)),
     Case('fleet_panel_hides_when_no_collector_is_configured', run_fleet_panel_hides_when_no_collector_is_configured, ('dom_nofleet',)),
     Case('panels_after_fleet_still_render', run_panels_after_fleet_still_render, ('dom',)),
-    Case('tab_bar_renders_five_tabs_with_protection_grouping_and_agent_last', run_tab_bar_renders_five_tabs_with_protection_grouping_and_agent_last, ('dom',)),
+    Case('tab_bar_renders_six_tabs_with_protection_grouping_and_agent_last', run_tab_bar_renders_six_tabs_with_protection_grouping_and_agent_last, ('dom',)),
     Case('the_attention_panel_lives_in_home_first', run_the_attention_panel_lives_in_home_first, ('dom',)),
     Case('home_tab_active_by_default', run_home_tab_active_by_default, ('dom',)),
     Case('non_active_panels_hidden', run_non_active_panels_hidden, ('dom',)),

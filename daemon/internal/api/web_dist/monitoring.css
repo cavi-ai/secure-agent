@@ -1,0 +1,87 @@
+/* Monitoring uses the console's shared palette, type and harness artwork. */
+.monitoring-page .posture, .monitoring-page .scope-bar,
+.monitoring-page .masthead-right > :not(#btn-refresh) { display: none; }
+#tab-monitoring { gap: 0; }
+.monitoring-page .page-heading h1 { font-size: 32px; }
+.monitoring-notice {
+  display: flex; align-items: center; gap: 12px; padding: 14px 18px;
+  margin-bottom: 20px; border: 1px solid var(--line); border-radius: var(--r-md);
+  color: var(--tx-2);
+}
+.monitoring-notice.warning { background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
+.monitoring-notice > .icon { flex: 0 0 20px; color: var(--warn); }
+.monitoring-notice > div { flex: 1; min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 12px; }
+.monitoring-notice strong { color: var(--tx-1); font-size: 14px; font-weight: 600; }
+.monitoring-notice p { font-size: 13px; line-height: 1.5; }
+.monitoring-notice .link-btn { flex-shrink: 0; font-size: 13px; }
+.monitoring-workbench { display: grid; grid-template-columns: minmax(270px, 0.9fr) minmax(0, 1.4fr); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; min-height: 620px; }
+.monitoring-rail { padding: 20px; border-right: 1px solid var(--line); max-height: max(620px, calc(100dvh - 220px)); overflow-y: auto; scrollbar-gutter: stable; }
+.monitoring-search { display: grid; gap: 8px; font-size: 13px; color: var(--tx-2); }
+.monitoring-search input { min-width: 0; width: 100%; padding: 12px; background: var(--bg-1); border: 1px solid var(--line-2); border-radius: var(--r-sm); font: inherit; font-size: 14px; color: var(--tx-1); }
+.monitoring-search input::placeholder { color: var(--tx-3); }
+#monitoring-count { font-size: 13px; font-weight: 500; color: var(--tx-2); margin: 24px 0 12px; }
+.monitoring-row { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: center; gap: 3px 12px; width: 100%; padding: 16px 12px; text-align: left; font: inherit; color: var(--tx-1); background: transparent; border: 0; border-bottom: 1px solid var(--line); cursor: pointer; border-radius: 0; }
+.monitoring-row:hover { background: var(--bg-2); }
+.monitoring-row[aria-pressed="true"] { background: var(--brand-bg); border-radius: var(--r-sm); border-bottom-color: transparent; }
+.monitoring-row .harness-chip { grid-row: span 2; --harness-tile: 34px; }
+.monitoring-row-name { display: grid; gap: 5px; min-width: 0; }
+.monitoring-row-name strong { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.monitoring-row-name > span { font-size: 13px; color: var(--tx-2); }
+.monitoring-row > .monitoring-state { grid-column: 2; margin-top: 5px; font-size: 12px; }
+.monitoring-state { display: inline-flex; align-items: center; gap: 9px; font-size: 14px; color: var(--tx-2); line-height: 1.5; }
+.monitoring-state > span { width: 8px; height: 8px; border-radius: 50%; background: var(--tx-3); flex-shrink: 0; }
+.monitoring-state.observed { color: var(--ok); }
+.monitoring-state.observed > span { background: var(--ok); }
+.monitoring-other { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 18px; }
+.monitoring-other > summary { font-size: 13px; color: var(--tx-2); cursor: pointer; line-height: 1.6; }
+.monitoring-muted { color: var(--tx-2); font-size: 13px; line-height: 1.6; margin: 14px 0; }
+.monitoring-detail { min-width: 0; padding: 30px; }
+.monitoring-detail-heading { display: flex; gap: 16px; align-items: center; padding-bottom: 26px; border-bottom: 1px solid var(--line); }
+.monitoring-detail-heading .harness-chip { --harness-tile: 46px; }
+.monitoring-detail-heading > div { min-width: 0; }
+.monitoring-detail-heading h2 { font-size: 24px; letter-spacing: -0.02em; line-height: 1.35; overflow-wrap: anywhere; }
+.monitoring-detail-heading p { margin-top: 7px; color: var(--tx-2); font-size: 13px; line-height: 1.6; }
+.monitoring-identity-state { margin-left: 12px; padding-left: 12px; border-left: 1px solid var(--line-2); }
+.monitoring-path { display: grid; grid-template-columns: 30px minmax(105px, 0.75fr) minmax(0, 1.3fr); align-items: start; gap: 16px; padding: 26px 0; border-bottom: 1px solid var(--line); }
+.monitoring-path > .icon { width: 25px; height: 25px; color: var(--tx-2); }
+.monitoring-path h3 { font-size: 14px; font-weight: 600; line-height: 1.6; }
+.monitoring-path p { margin-top: 8px; font-size: 13px; line-height: 1.65; color: var(--tx-2); max-width: 60ch; }
+.monitoring-path time { display: block; margin-top: 8px; color: var(--tx-3); font-size: 12px; line-height: 1.5; }
+.monitoring-caveat, .monitoring-unlinked-note { color: var(--tx-2); font-size: 13px; line-height: 1.65; margin: 20px 0; max-width: 65ch; }
+.monitoring-open { width: 100%; justify-content: space-between; padding: 13px 16px; margin: 4px 0 24px; }
+.monitoring-identity { border-top: 1px solid var(--line); padding: 20px 0; font-size: 13px; }
+.monitoring-identity summary { cursor: pointer; color: var(--tx-2); line-height: 1.6; }
+.monitoring-identity dl { margin: 18px 0; }
+.monitoring-identity dl > div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; padding: 8px 0; }
+.monitoring-identity dt { color: var(--tx-2); }
+.monitoring-identity dd { overflow-wrap: anywhere; user-select: text; }
+.monitoring-identity details p { margin-top: 12px; color: var(--tx-2); line-height: 1.65; overflow-wrap: anywhere; }
+.monitoring-empty { padding: 50px 12px; }
+.monitoring-empty h2 { font-size: 22px; margin-bottom: 12px; }
+.monitoring-empty p { color: var(--tx-2); line-height: 1.6; max-width: 48ch; }
+.monitoring-issues { margin-bottom: 20px; padding: 18px; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.monitoring-issues > summary { cursor: pointer; font-size: 14px; }
+.monitoring-issues ul { list-style: none; }
+.monitoring-issues li { margin-top: 18px; font-size: 14px; }
+.monitoring-issues li p { font-size: 13px; line-height: 1.6; color: var(--tx-2); margin-top: 6px; max-width: 80ch; }
+.monitoring-issues li .link-btn { margin-top: 8px; }
+@media (min-width: 1200px) {
+  .monitoring-row { grid-template-columns: 36px minmax(0, 1fr) auto; }
+  .monitoring-row > .monitoring-state { grid-column: 3; grid-row: 1; }
+  .monitoring-row .harness-chip { grid-row: 1; }
+}
+@media (max-width: 1100px) {
+  .monitoring-detail { padding: 24px; }
+  .monitoring-path { grid-template-columns: 26px minmax(0, 1fr); gap: 10px 14px; }
+  .monitoring-path > div { grid-column: 2; }
+  .monitoring-workbench { grid-template-columns: minmax(240px, 0.85fr) minmax(0, 1.15fr); }
+}
+@media (max-width: 800px) {
+  .monitoring-workbench { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .monitoring-rail { border-right: 0; border-bottom: 1px solid var(--line); max-height: 46dvh; }
+  .monitoring-notice { align-items: start; flex-wrap: wrap; }
+  .monitoring-notice .link-btn { margin-left: 32px; min-height: 32px; }
+  .monitoring-detail { padding: 22px 18px; }
+  .monitoring-detail-heading h2 { font-size: 21px; }
+  .monitoring-identity dl > div { grid-template-columns: 90px minmax(0, 1fr); }
+}
