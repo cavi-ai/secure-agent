@@ -1080,12 +1080,15 @@ document.addEventListener('DOMContentLoaded', () => {
   let activeSub = 'board';
   let activeSystemSub = 'worktrees';
 
+  const monitoringDiagnostics = createMonitoringDiagnostics({ request:apiFetch, drawer:detailDrawer,
+    generation:() => handoffGeneration, ended:() => sessionEnded, refresh:options => fetchTelemetry(options) });
   const monitoringController = createMonitoringController({
     root: document.getElementById('tab-monitoring'),
     data: () => telemetryData,
     health: () => postureFreshness(telemetryStore.lastSnapshotAt, reportHealth.failures(['snapshot'])[0]?.error || ''),
     openSession: id => window.filterTimelineToSession(id),
     openTraffic: () => switchTab('protection/traffic'),
+    openDiagnostics: () => monitoringDiagnostics.open(),
     retry: () => fetchTelemetry({ full: true }),
   });
   function renderMonitoring() { monitoringController.render(); }
@@ -3600,6 +3603,18 @@ document.addEventListener('DOMContentLoaded', () => {
       return detailDrawer.sessionBack(el);
     };
     switch (d.action) {
+      case 'monitoring-diagnostics':
+        e.preventDefault();
+        monitoringDiagnostics.open({back:back()});
+        break;
+      case 'monitoring-diagnostics-refresh':
+        e.preventDefault();
+        monitoringDiagnostics.refresh();
+        break;
+      case 'monitoring-loss-seen':
+        e.preventDefault();
+        monitoringDiagnostics.acknowledge();
+        break;
       case 'toggle-row': {
         e.preventDefault();
         if (!expandedLists.delete(d.key)) expandedLists.add(d.key);
@@ -4077,6 +4092,9 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'toggle-ended-sessions':
         endedSessionsOpen[d.harness] = !endedSessionsOpen[d.harness];
         sessionWorkbench.render();
+        break;
+      case 'session-list-view':
+        sessionWorkbench.setListView(d.view);
         break;
       case 'toggle-session-dup':
         sessionDupOpen[(d.bucket ? d.bucket + '|' : '') + d.key] = el.getAttribute('aria-expanded') !== 'true';

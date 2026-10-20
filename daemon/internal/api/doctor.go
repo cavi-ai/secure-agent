@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -145,8 +147,26 @@ func (a *API) handleDoctorSeen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	a.lossSeen.Mark(now)
-	writeJSON(w, DoctorSeen{SeenAt: now.UTC().Format(time.RFC3339Nano)})
+	seenAt := now
+	// A console acknowledges only the report it displayed. Newer losses
+	// remain actionable even if they arrive while the request is in flight.
+	if r.Body != nil {
+		limitBody(w, r)
+		var req DoctorSeen
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != io.EOF {
+			at, parseErr := time.Parse(time.RFC3339Nano, req.SeenAt)
+			var extra any
+			if err != nil || parseErr != nil || at.After(now) || decoder.Decode(&extra) != io.EOF {
+				http.Error(w, "Invalid loss acknowledgement", http.StatusBadRequest)
+				return
+			}
+			seenAt = at
+		}
+	}
+	a.lossSeen.Mark(seenAt)
+	writeJSON(w, DoctorSeen{SeenAt: seenAt.UTC().Format(time.RFC3339Nano)})
 }
 
 func (a *API) doctorReport(now time.Time) DoctorReport {

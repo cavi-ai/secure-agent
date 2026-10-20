@@ -192,26 +192,17 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 		<-consumerDone
 	})
 
-	// The server and collectors write into dir as they stop (the transcript
-	// scanner saves its offsets): they finish before dir is removed.
-	var running sync.WaitGroup
-	t.Cleanup(func() {
-		cancel()
-		running.Wait()
-	})
-	running.Add(3)
-
 	statusFn := func() api.Status { return api.Status{Running: true} }
 	apiServer := api.New(api.Deps{SocketPath: sockPath, Store: st, Killer: nil, Status: statusFn})
 	serveErr := make(chan error, 1)
-	go func() {
-		defer running.Done()
-		serveErr <- apiServer.Serve(ctx)
-	}()
+	apiDone := make(chan struct{})
+	go func() { defer close(apiDone); serveErr <- apiServer.Serve(ctx) }()
 
 	fixture := &smokeSocketLister{pid: int32(os.Getpid())}
+	var producers sync.WaitGroup
+	producers.Add(2)
 	go func() {
-		defer running.Done()
+		defer producers.Done()
 		supervise.Run(ctx, "netsample", func(c context.Context) error {
 			ns := collect.NewNetSampler(b, tg, cfg.NetSampleInterval, fixture)
 			return ns.Run(c)
@@ -221,7 +212,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	scannerReady := make(chan error, 1)
 	transcriptProduced := make(chan struct{}, 1)
 	go func() {
-		defer running.Done()
+		defer producers.Done()
 		supervise.Run(ctx, "transcript", func(c context.Context) error {
 			ts := collect.NewTranscriptScanner(b, []string{actPath})
 			ts.OffsetStatePath = filepath.Join(dir, "transcript-offsets.json")
@@ -240,6 +231,11 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 			return ts.Run(c)
 		})
 	}()
+	t.Cleanup(func() {
+		cancel()
+		producers.Wait()
+		<-apiDone
+	})
 
 	// Socket and collectors must be live before the activity file is written.
 	// Starting the transcript scanner after that write seeds its offset at EOF

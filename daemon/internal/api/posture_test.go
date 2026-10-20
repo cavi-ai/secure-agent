@@ -266,7 +266,7 @@ func TestPostureSeparatesUninspectedEgressAndDeadCollectorsFromDecisions(t *test
 			egressTitle = it.Title
 		}
 	}
-	if !strings.Contains(egressTitle, "3 connections") {
+	if !strings.Contains(egressTitle, "3 endpoints") {
 		t.Fatalf("egress title = %q", egressTitle)
 	}
 	// Collector items read as operator language, not process jargon.

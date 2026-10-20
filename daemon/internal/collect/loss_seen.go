@@ -10,7 +10,14 @@ import (
 type LossSeen struct{ at atomic.Int64 }
 
 // Mark records that every loss up to at has been seen.
-func (l *LossSeen) Mark(at time.Time) { l.at.Store(at.UnixNano()) }
+func (l *LossSeen) Mark(at time.Time) {
+	for {
+		previous := l.at.Load()
+		if at.UnixNano() <= previous || l.at.CompareAndSwap(previous, at.UnixNano()) {
+			return
+		}
+	}
+}
 
 // Growing is LossGrowing for a counter last grown at lastGrew, and false when
 // that growth was marked seen.

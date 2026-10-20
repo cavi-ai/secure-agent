@@ -476,12 +476,7 @@ func (s *Store) PutEvent(e event.Event) (result WriteResult, err error) {
 		if e.Kind == event.KindTurn {
 			verb = "INSERT OR IGNORE"
 		}
-		res, err = s.db.Exec(
-			verb+` INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, provider, record)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
-			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), nullStr(e.Provider), e.Record,
-		)
+		res, err = s.db.Exec(verb+eventInsertColumns, eventInsertArgs(e)...)
 	}
 	var n int64
 	if err == nil {
@@ -503,6 +498,11 @@ func (s *Store) PutEvent(e event.Event) (result WriteResult, err error) {
 		s.bumpRollupLocked("event:"+e.Kind.String(), e.TS)
 	}
 
+	s.recordEventActivityLocked(e)
+	return result, err
+}
+
+func (s *Store) recordEventActivityLocked(e event.Event) {
 	// In-memory last-seen: the /status agents panel reads this per poll
 	// (every 1–5s across all pids). The SQL MAX(ts) GROUP BY equivalent
 	// measured 2–4s with ~400 live pids — past the client's 3s socket
@@ -525,7 +525,6 @@ func (s *Store) PutEvent(e event.Event) (result WriteResult, err error) {
 			s.retain()
 		}()
 	}
-	return result, err
 }
 
 // retain applies every retention pass. It runs beside persistence, not

@@ -85,10 +85,16 @@ def run_live_cards_carry_kill_ended_cards_do_not(page):
     dom = page.fixture('dom')
     rail = dom_query(dom).find(attrs={'id': 'session-rail'})
     ended = rail.find('div', {'class': 'session-ended-body'})
+    selected = rail.find('div', {'class': 'session-card selected'})
+    actions = selected.find('details', {'class': 'sc-actions'}) if selected else None
     check(
-        'live cards carry kill, ended cards do not',
+        'only the selected live card exposes termination with process identity',
         (
-            rail.has(None, {'data-action': 'kill', 'data-pid': '5821'})
+            selected is not None and selected.has('button', {'data-id': 'sess-codex-3'})
+            and actions is not None and actions.has('button', {
+                'data-action': 'kill', 'data-pid': '4412', 'data-started': '2026-09-09T13:00:00Z',
+            })
+            and len(rail.find_all('button', {'data-action': 'kill'})) == 1
             and ended is not None and not ended.has(None, {'data-action': 'kill'})
         ),
     )
@@ -97,8 +103,13 @@ def run_count_strip_shows_sessions_harnesses_and_coverage(page):
     check = page.check
     dom = page.fixture('dom')
     check(
-        'count strip shows sessions, harnesses and coverage',
-        dom_query(dom).has(None, {'id': 'session-count-strip'}, text='Sessions 3 · Harnesses 2 · seeing 2/3'),
+        'toolbar shows session and harness counts with coverage in the count tooltip',
+        (
+            dom_query(dom).has(None, {'id': 'badge-session-count'}, text='3')
+            and dom_query(dom).has(None, {
+                'id': 'session-count-strip', 'title': 'Sessions 3 · Harnesses 2 · seeing 2/3',
+            }, text='2 harnesses')
+        ),
     )
 
 def run_one_filter_pill_per_live_harness(page):
@@ -3343,14 +3354,22 @@ def run_burst(page):
 def run_identical_title_sessions_fold_into_one_row_titled_with_the_spawning_agent(page):
     check = page.check
     dom_dup = page.fixture('dom_dup')
-    dup_rail = dom_dup.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
+    rail = dom_query(dom_dup).find(attrs={'id': 'session-rail'})
     quill_key = 'group:codex|demo-app@main · quill'
+    quill = rail.find('button', {'data-action': 'toggle-session-dup', 'data-key': quill_key})
+    fennel = rail.find('button', {'data-action': 'toggle-session-dup', 'data-key': 'group:codex|.openclaw · fennel'})
     check(
         'identical-title sessions fold into one row titled with the spawning agent',
         (
-            dup_rail.count(f'data-action="toggle-session-dup" data-key="{quill_key}"') == 1
-            and '<span class="sc-label">demo-app@main · quill</span><span class="session-dup-count">×5</span>' in dup_rail
-            and '<span class="sc-label">.openclaw · fennel</span><span class="session-dup-count">×3</span>' in dup_rail
+            len(rail.find_all('button', {'data-action': 'toggle-session-dup', 'data-key': quill_key})) == 1
+            and quill is not None
+            and quill.has('span', {'class': 'sc-label', 'title': 'demo-app@main · quill'}, text='demo-app')
+            and quill.has('span', {'class': 'sc-branch'}, text='main · quill')
+            and quill.has('span', {'class': 'session-dup-count'}, text='×5')
+            and fennel is not None
+            and fennel.has('span', {'class': 'sc-label', 'title': '.openclaw · fennel'}, text='.openclaw')
+            and fennel.has('span', {'class': 'sc-branch'}, text='fennel')
+            and fennel.has('span', {'class': 'session-dup-count'}, text='×3')
         ),
     )
 

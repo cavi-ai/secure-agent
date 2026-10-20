@@ -85,3 +85,10 @@
   .monitoring-detail-heading h2 { font-size: 21px; }
   .monitoring-identity dl > div { grid-template-columns: 90px minmax(0, 1fr); }
 }
+.monitoring-diagnostic-facts { display: grid; gap: 10px; }
+.monitoring-diagnostic-facts > div { display: grid; grid-template-columns: minmax(110px, 1fr) 2fr; gap: 12px; }
+.monitoring-diagnostic-facts dt { color: var(--tx-2); }
+.monitoring-diagnostic-facts dd { margin: 0; overflow-wrap: anywhere; }
+.monitoring-diagnostic-check { padding: 12px 0; border-top: 1px solid var(--line); }
+.monitoring-diagnostic-check p { color: var(--tx-2); margin: 6px 0 0; }
+.monitoring-diagnostic-error { color: var(--bad); }

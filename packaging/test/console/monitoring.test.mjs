@@ -13,6 +13,13 @@ function load() {
   return c;
 }
 const path = (state = 'observed') => ({ state, supported: state !== 'unsupported', last_seen: '2026-10-20T16:00:00Z' });
+
+test('acknowledged loss remains an incomplete history even with no active issue', () => {
+  const c = load();
+  const model = c.monitoringModel({status:{active_agents:0,coverage:{sessions:[]},bus_drops:22,bus_dropping:false,es_service:{bytes_lost:30937721,losing:false}},posture:{coverage_items:[]}});
+  assert.equal(model.historyIncomplete,true);
+  assert.equal(model.issues.length,0);
+});
 const row = (session_id, root_pid, workspace = '/work/api') => ({ session_id, root_pid, workspace, harness: 'codex', identity_basis: 'transcript', guard: path('unsupported'), trace: path(), payload: path('not-observed') });
 const data = rows => ({ status: { coverage: { sessions: rows } }, sessions: [{ id: 'one', repo: 'api', branch: 'main' }], posture: { coverage_items: [] } });
 
