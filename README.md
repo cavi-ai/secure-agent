@@ -69,6 +69,8 @@ These docs describe the current `main` checkout. The published release may have 
 
 ## Understand the coverage
 
+Open **Monitoring** in the console to review each running session’s file guard, recorded activity, and traffic inspection evidence. Select a session to inspect its observations, or expand **Other detections** for processes without a linked session. **Review issues** explains monitoring gaps; unsupported capabilities and quiet sessions are shown separately from failures.
+
 File guarding, system observation and payload inspection are separate capabilities. Claude Code and Cursor have supported guard hooks; other harnesses have varying process and transcript coverage. See the [harness coverage table](docs/ARCHITECTURE.md#collectors).
 
 Named guard rules and the firewall default to monitoring. Some hook safety checks always deny credential-printing and guard/harness mutations. Guard prompts, firewall blocking and automatic resource interventions require separate configuration. Unrouted or tunneled traffic is not payload-inspected, and a manual hook check does not prove a live session invokes it. Read the [protection guide and limits](docs/PROTECTION.md) before relying on enforcement.

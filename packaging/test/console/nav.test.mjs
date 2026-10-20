@@ -66,7 +66,7 @@ test('every old tab id resolves to its new tab[/sub]', () => {
 });
 
 test('System routes preserve Resources, Worktrees and Clutter legacy destinations', () => {
-  assert.deepEqual([...vm.runInContext('CONSOLE_TABS', ctx)], ['home', 'sessions', 'protection', 'system', 'agent']);
+  assert.deepEqual([...vm.runInContext('CONSOLE_TABS', ctx)], ['home', 'sessions', 'monitoring', 'protection', 'system', 'agent']);
   assert.deepEqual([...vm.runInContext('SESSIONS_SUBS', ctx)], ['board', 'processes', 'events']);
   assert.deepEqual([...vm.runInContext('SYSTEM_SUBS', ctx)], ['resources', 'worktrees', 'clutter']);
   const aliases = {

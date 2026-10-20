@@ -27,7 +27,7 @@ def run_worktrees(page):
         (
             dom_query(dom_wt).has(None, {'class': 'tab-btn active', 'data-tab': 'system'})
             and not dom_query(dom_wt).has(None, {'data-subtab': 'worktrees'})
-            and [b.attrs.get('data-tab') for b in dom_query(dom_wt).find_all(None, {'class': 'tab-btn'})] == ['home', 'sessions', 'protection', 'system', 'agent']
+            and [b.attrs.get('data-tab') for b in dom_query(dom_wt).find_all(None, {'class': 'tab-btn'})] == ['home', 'sessions', 'monitoring', 'protection', 'system', 'agent']
             and wt_rows == 4
             and all((f'class="wt-row wt-{s}"' in wt for s in ('remove', 'review', 'keep', 'prune')))
             and 'main worktree of the repository' not in wt

@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Console: a Monitoring section with a searchable session list, observation details, monitoring issues, and separate unlinked process detections.
 - Sessions: a Hooks view with each Claude Code hook's runs, failures, blocks, returned characters and time, read from the transcript (`/sessions/{id}/hooks`).
 - Codex: record forwarded app-server hook completions with `secure-agent hooks record`, using a shared metadata contract and stable host delivery IDs.
 - Hooks: native result adapters for host-forwarded OpenClaw, Hermes and OpenCode v2 handler completions.
