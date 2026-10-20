@@ -21,6 +21,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - File telemetry: a process's repeated opens of a file within a minute are stored once.
 
 ### Fixed
+- Agent detection: identify Node-based OpenClaw by its running program so unrelated MCP helpers using the same Node binary keep their parent harness attribution.
 - Traces: OpenCode, Hermes and OpenClaw retry database events when the event bus is full without advancing past undelivered events.
 - Menu bar: the native guard alert closes when its request is answered elsewhere, and polling continues while it is open.
 - Menu bar: removing the old file-telemetry helper and the launch migration no longer freeze the menu bar.

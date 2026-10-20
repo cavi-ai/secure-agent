@@ -65,7 +65,7 @@ public final class SetupManager: ObservableObject {
     public static let knownAgents: [(name: String, matches: [String])] = [
         ("codex", ["codex"]),
         ("cursor", ["cursor"]),
-        ("openclaw", ["/.openclaw/"]),
+        ("openclaw", ["openclaw"]),
         ("hermes", ["hermes-agent", "/.hermes/"]),
         ("claude", ["claude"]),
         ("opencode", ["opencode", "OpenCode Helper"]),

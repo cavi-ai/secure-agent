@@ -48,7 +48,8 @@ func (d *DarwinProcSource) List() []ProcInfo {
 }
 
 func (d *DarwinProcSource) Info(pid int32) (ProcInfo, bool) {
-	exe := getProcPath(pid)
+	args := procArgs2(pid)
+	exe := procPath(args)
 	ppid := int32(0)
 	commStr := ""
 	start := time.Time{}
@@ -73,15 +74,21 @@ func (d *DarwinProcSource) Info(pid int32) (ProcInfo, bool) {
 	}
 
 	rss, cpu := procUsage(pid)
+	cwd := procCWD(pid)
+	program := ""
+	if nodeExecutable(exe) {
+		program = nodeProgram(procArgv(args), cwd)
+	}
 	return ProcInfo{
-		PID:       pid,
-		PPID:      ppid,
-		Comm:      commStr,
-		Exe:       exe,
-		StartTime: start,
-		RSSBytes:  rss,
-		CPUTime:   cpu,
-		CWD:       procCWD(pid),
+		PID:            pid,
+		PPID:           ppid,
+		Comm:           commStr,
+		Exe:            exe,
+		RuntimeProgram: program,
+		StartTime:      start,
+		RSSBytes:       rss,
+		CPUTime:        cpu,
+		CWD:            cwd,
 	}, true
 }
 
@@ -188,7 +195,10 @@ func procArgs2(pid int32) []byte {
 }
 
 func getProcPath(pid int32) string {
-	buf := procArgs2(pid)
+	return procPath(procArgs2(pid))
+}
+
+func procPath(buf []byte) string {
 	if len(buf) <= 4 {
 		return ""
 	}
@@ -198,6 +208,37 @@ func getProcPath(pid int32) string {
 		return string(pathBuf[:idx])
 	}
 	return ""
+}
+
+// procArgv stops at the kernel's argument count, before the environment.
+// Callers retain only the program identity, never these argument strings.
+func procArgv(buf []byte) []string {
+	if len(buf) <= 4 {
+		return nil
+	}
+	argc := int(int32(binary.LittleEndian.Uint32(buf[:4])))
+	if argc <= 0 || argc > len(buf) {
+		return nil
+	}
+	rest := buf[4:]
+	i := bytes.IndexByte(rest, 0)
+	if i < 0 {
+		return nil
+	}
+	rest = rest[i+1:]
+	for len(rest) > 0 && rest[0] == 0 {
+		rest = rest[1:]
+	}
+	args := make([]string, 0, min(argc, 32))
+	for range argc {
+		i = bytes.IndexByte(rest, 0)
+		if i < 0 {
+			return nil
+		}
+		args = append(args, string(rest[:i]))
+		rest = rest[i+1:]
+	}
+	return args
 }
 
 // Argv0 reads argv[0] out of the KERN_PROCARGS2 buffer; "" when unreadable.

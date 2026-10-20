@@ -110,6 +110,8 @@ agents:
 
 Definitions are checked in order: first match wins. `kind: infra` keeps shared infrastructure visible without counting it as an agent session or reclaimable agent memory. Defaults classify the Claude desktop app and Cursor IDE as infrastructure before matching their harness processes. Preserve that ordering when customizing matches. An `agents` overlay replaces the complete list; the example below demonstrates Cursor classification only, so copy other desired agents from the defaults too.
 
+For OpenClaw running under Node, matches apply to the program entry point or process title rather than Node's installation directory. Unrelated helpers using OpenClaw's bundled Node inherit their parent harness. Custom OpenClaw match strings should identify its program; a shared Node executable path alone does not establish OpenClaw identity. Arguments and environment values are not retained as program identity.
+
 ```yaml
 agents:
   - name: cursor-ide

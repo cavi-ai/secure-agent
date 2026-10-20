@@ -89,15 +89,22 @@ func (p *ProcProcSource) Info(pid int32) (ProcInfo, bool) {
 	if comm == "" && exe == "" {
 		return ProcInfo{}, false
 	}
+	program := ""
+	if nodeExecutable(exe) {
+		if args, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(int(pid)), "cmdline")); err == nil {
+			program = nodeProgram(strings.Split(strings.TrimRight(string(args), "\x00"), "\x00"), cwd)
+		}
+	}
 	return ProcInfo{
-		PID:       pid,
-		PPID:      ppid,
-		Comm:      comm,
-		Exe:       exe,
-		StartTime: start,
-		RSSBytes:  readRSS(pid),
-		CPUTime:   cpu,
-		CWD:       cwd,
+		PID:            pid,
+		PPID:           ppid,
+		Comm:           comm,
+		Exe:            exe,
+		RuntimeProgram: program,
+		StartTime:      start,
+		RSSBytes:       readRSS(pid),
+		CPUTime:        cpu,
+		CWD:            cwd,
 	}, true
 }
 
