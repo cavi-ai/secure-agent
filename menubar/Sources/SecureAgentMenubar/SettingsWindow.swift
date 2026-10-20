@@ -391,26 +391,13 @@ struct SettingsView: View {
                          : "A collector is degraded — see the menu bar banner for details")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if let coverage = state.status?.coverage, let sessions = coverage.sessions, !sessions.isEmpty {
-                    DisclosureGroup("Per-session observations") {
-                        if coverage.sessionsStale == true {
-                            Label("Coverage refresh failed. These are last-known observations.", systemImage: "exclamationmark.triangle")
-                                .font(.caption).foregroundStyle(Color.warn)
-                        }
-                        ForEach(sessions, id: \.rootPID) { session in
-                            DisclosureGroup(session.workspace ?? session.harness) {
-                                Text(session.harness).font(.caption).foregroundStyle(.secondary)
-                                sessionCoverageLine("Guard", session.guardPath)
-                                sessionCoverageLine("Trace", session.trace)
-                                sessionCoverageLine("Payload inspection", session.payload)
-                            }
-                        }
-                        Text("Activity in another session and a manual installed-hook check do not prove this session is protected.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        if coverage.sessionsTruncated == true {
-                            Text("More sessions are running; coverage for the remaining sessions is not shown.")
-                                .font(.caption).foregroundStyle(Color.warn)
-                        }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Review session observations and monitoring issues in the console.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Open Monitoring") { state.openDashboard(tab: "monitoring") }
+                        .disabled(state.dashboardUnavailableReason != nil)
+                    if let reason = state.dashboardUnavailableReason {
+                        Text(reason).font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -421,15 +408,6 @@ struct SettingsView: View {
     @ObservedObject private var supervisorForTab = DaemonSupervisor.shared
     private var supervisorCollectorOK: Bool {
         !(state.status?.collectors ?? []).contains { $0.abandoned }
-    }
-
-    private func sessionCoverageLine(_ name: String, _ path: CoveragePathModel) -> some View {
-        let label = ["observed": "activity observed", "not-observed": "not observed", "unsupported": "not supported", "unattributed": "session identity unresolved", "stale": "last-known data; refresh failed", "off": "proxy off"][path.state] ?? "unknown"
-        return VStack(alignment: .leading, spacing: 2) {
-            Text("\(name): \(label)").font(.caption)
-            if let lastSeen = path.lastSeen { Text(lastSeen).font(.caption2).foregroundStyle(.secondary) }
-            Text(path.detail).font(.caption2).foregroundStyle(.secondary)
-        }
     }
 
     // MARK: Notifications — which flags page the operator

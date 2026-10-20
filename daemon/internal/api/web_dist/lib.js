@@ -2117,7 +2117,7 @@ function mapPostureAttention(p, fn) {
 // Primary tabs and their subviews. Old tab ids (menu bar deep
 // links, saved views, the stored tab, in-page links) resolve through one
 // alias table.
-const CONSOLE_TABS = ['home', 'sessions', 'protection', 'system', 'agent'];
+const CONSOLE_TABS = ['home', 'sessions', 'monitoring', 'protection', 'system', 'agent'];
 const PROTECTION_SUBS = ['traffic', 'rules', 'sources', 'audit'];
 const SESSIONS_SUBS = ['board', 'processes', 'events'];
 const SYSTEM_SUBS = ['resources', 'worktrees', 'clutter'];

@@ -58,6 +58,7 @@ export interface ReadIssue {
 
 export interface WriteHealth {
   failures: number;
+  last_failure_at?: string;
   active: string[] | null;
   read_failures?: number;
   read_active?: string[];

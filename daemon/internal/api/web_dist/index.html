@@ -7,6 +7,7 @@
   <link rel="icon" href="brand-icon.png" type="image/png">
   <script src="theme-init.js"></script>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="monitoring.css">
 </head>
 <body>
   <!-- Icon sprite: one cohesive line-icon set (1.5px stroke, currentColor). -->
@@ -71,6 +72,9 @@
       <button class="tab-btn" data-tab="sessions" role="tab" aria-selected="false" aria-controls="tab-sessions">
         <svg class="icon"><use href="#i-agent"/></svg><span>Sessions</span>
         <span class="tab-badge" id="tab-badge-sessions" hidden></span>
+      </button>
+      <button class="tab-btn" data-tab="monitoring" role="tab" aria-selected="false" aria-controls="tab-monitoring">
+        <svg class="icon"><use href="#i-activity"/></svg><span>Monitoring</span>
       </button>
       <button class="tab-btn" data-tab="protection" role="tab" aria-selected="false" aria-controls="tab-egress tab-policy">
         <svg class="icon"><use href="#i-shield"/></svg><span>Protection</span>
@@ -216,6 +220,29 @@
     <div class="scope-bar" id="scope-bar" role="status" hidden></div>
 
     <main id="main-content" tabindex="-1">
+      <div class="tabpanel" id="tab-monitoring" role="tabpanel" hidden>
+        <div id="monitoring-notice"></div>
+        <details class="monitoring-issues" id="monitoring-issues" hidden>
+          <summary tabindex="0">Monitoring issues</summary>
+          <ul id="monitoring-issue-list"></ul>
+        </details>
+        <div class="monitoring-workbench">
+          <aside class="monitoring-rail" aria-label="Sessions and detected processes">
+            <label class="monitoring-search" for="monitoring-search">Find a session or workspace
+              <input type="search" id="monitoring-search" placeholder="Find a session or workspace…" autocomplete="off">
+            </label>
+            <h2 id="monitoring-count">Linked sessions</h2>
+            <div id="monitoring-sessions"></div>
+            <details class="monitoring-other" id="monitoring-other" hidden>
+              <summary><span id="monitoring-other-count">Other detections</span></summary>
+              <p class="monitoring-muted">Processes without a durable session identity, including possible helpers and plugin hosts.</p>
+              <div id="monitoring-other-list"></div>
+            </details>
+            <p class="monitoring-muted" id="monitoring-truncated" hidden>More processes are running. This report shows the first 128 detections.</p>
+          </aside>
+          <section class="monitoring-detail" id="monitoring-detail" aria-label="Selected session observations" tabindex="-1"></section>
+        </div>
+      </div>
       <!-- Home: decisions and coverage first; detail opens on demand. -->
       <div class="tabpanel" id="tab-home" role="tabpanel">
         <section class="panel attention-overview" aria-labelledby="attention-summary-title">
@@ -862,6 +889,7 @@
   <script src="lib.js"></script>
   <script src="event-history.js"></script>
   <script src="tab-overview.js"></script>
+  <script src="tab-monitoring.js"></script>
   <script src="session-layout.js"></script>
   <script src="session-workbench.js"></script>
   <script src="decision-permissions.js"></script>

@@ -939,6 +939,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // pointer is down in <main>, or a control inside a panel has focus (up to
   // 3s), that panel waits: the node under the cursor or the caret survives.
   const PANELS = [
+    ['monitoring', renderMonitoring],
     ['posture', renderPosture], ['status', renderStatus], ['resources', renderResourceMissionControl], ['history', renderResourceHistory], ['sessions', () => sessionWorkbench.render()],
     ['chart-flags', renderChartFlags], ['chart-memory', renderChartMemory], ['spend', renderSpend],
     ['agents', renderAgents],
@@ -950,6 +951,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Panel → where it lives: tab, tab/sub-view, or tab:group (a Home
   // <details> group). A panel absent here is global (always on screen).
   const PANEL_VIEW = {
+    monitoring: 'monitoring',
     attention: 'home', spend: 'home', 'session-daily': 'home',
     flags: 'home:findings', incidents: 'home:findings',
     activity: 'home:trends', 'chart-flags': 'home:trends', 'chart-memory': 'system/resources',
@@ -1073,6 +1075,16 @@ document.addEventListener('DOMContentLoaded', () => {
   let activeTab = 'home';
   let activeSub = 'board';
   let activeSystemSub = 'worktrees';
+
+  const monitoringController = createMonitoringController({
+    root: document.getElementById('tab-monitoring'),
+    data: () => telemetryData,
+    health: () => postureFreshness(telemetryStore.lastSnapshotAt, reportHealth.failures(['snapshot'])[0]?.error || ''),
+    openSession: id => window.filterTimelineToSession(id),
+    openTraffic: () => switchTab('protection/traffic'),
+    retry: () => fetchTelemetry({ full: true }),
+  });
+  function renderMonitoring() { monitoringController.render(); }
 
   const worktreeController = createWorktreeController({
     request: apiFetch,
@@ -1786,6 +1798,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const headings = {
       home: ['Overview', 'Monitor local AI activity and respond to security findings.'],
       sessions: ['Sessions', 'Follow your agents, inspect activity, and review session evidence.'],
+      monitoring: ['Monitoring', 'Understand the evidence for each running session.'],
       protection: ['Protection', 'Review observed traffic and manage file and egress rules.'],
       system: ['System', 'Inspect resources, worktrees, and local storage.'],
       agent: ['Agent', 'Work with your local assistant.'],
@@ -1798,6 +1811,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.body.classList.toggle('agent-page', activeTab === 'agent');
     document.body.classList.toggle('session-page', activeTab === 'sessions' && r.sub === 'board');
+    document.body.classList.toggle('monitoring-page', activeTab === 'monitoring');
     if (r.tab === 'sessions') activeSub = r.sub;
     if (r.tab === 'protection') activeProtection = r.sub;
     if (r.tab === 'system') activeSystemSub = r.sub;

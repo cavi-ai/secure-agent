@@ -463,7 +463,7 @@ enum TelemetryDoctor {
     static func daemonFix(_ id: String, _ f: TelemetryFacts) -> DoctorFix? {
         switch id {
         case "hook-registered", "hook-active": return .openHarnessSetup
-        case "bus": return .markLossSeen
+        case "bus", "storage": return .markLossSeen
         case "file-telemetry": return f.esService?.losing == true ? .markLossSeen : nil
         case "collectors", "trace-coverage": return .restartDaemon
         case "egress-routing": return .openTraffic

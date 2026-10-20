@@ -1,3 +1,15 @@
+function validSessionCoverage(row) {
+  const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  return record(row) && typeof row.harness === 'string' && !!row.harness.trim()
+    && Number.isInteger(row.root_pid) && row.root_pid > 0
+    && (row.session_id == null || typeof row.session_id === 'string')
+    && (row.workspace == null || typeof row.workspace === 'string')
+    && ['guard', 'trace', 'payload'].every(key => record(row[key])
+      && typeof row[key].state === 'string' && typeof row[key].supported === 'boolean'
+      && (row[key].detail == null || typeof row[key].detail === 'string')
+      && (row[key].last_seen == null || typeof row[key].last_seen === 'string'));
+}
+
 // Validate the containers consumed by console renderers before publishing state.
 // Optional fields may be absent (older daemons) or null (Go nil slices), and
 // unknown fields remain compatible. This is not a full wire-schema validator.
@@ -63,6 +75,11 @@ function isConsoleReport(key, value) {
   }
   if (!optionalRecord(value.status, 'coverage')) return false;
   if (value.status.coverage && !optionalRows(value.status.coverage, 'harnesses')) return false;
+  // Older reports can omit per-path capability fields. Keep the rest of the
+  // snapshot usable; Monitoring validates complete rows before crediting them.
+  if (value.status.coverage && !optionalRows(value.status.coverage, 'sessions')) return false;
+  if ((value.status.coverage?.sessions || []).some(row =>
+    !['guard', 'trace', 'payload'].every(key => optionalRecord(row, key)))) return false;
   if (!optionalRecord(value, 'posture')) return false;
   if (!optionalRecord(value, 'reviews')) return false;
   if (value.reviews && !optionalRows(value.reviews, 'reviews')) return false;

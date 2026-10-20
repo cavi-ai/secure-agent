@@ -17,11 +17,13 @@ import (
 // Operation names are fixed labels, never paths, SQL, or error/payload text.
 // ReadActive independently reports unavailable reads until that query succeeds.
 type WriteHealth struct {
-	Failures     uint64      `json:"failures"`
-	Active       []string    `json:"active"`
-	ReadFailures uint64      `json:"read_failures,omitempty"`
-	ReadActive   []string    `json:"read_active,omitempty"`
-	ReadIssues   []ReadIssue `json:"read_issues,omitempty"`
+	Failures uint64 `json:"failures"`
+	// LastFailureAt is when Failures last grew; nil before any failure.
+	LastFailureAt *time.Time  `json:"last_failure_at,omitempty"`
+	Active        []string    `json:"active"`
+	ReadFailures  uint64      `json:"read_failures,omitempty"`
+	ReadActive    []string    `json:"read_active,omitempty"`
+	ReadIssues    []ReadIssue `json:"read_issues,omitempty"`
 }
 
 // ReadIssue retains a bounded diagnostic per fixed operation label. Raw error
@@ -36,12 +38,13 @@ type ReadIssue struct {
 }
 
 type writeHealth struct {
-	mu           sync.Mutex // independent of database IO and Store.mu
-	failures     uint64
-	active       map[string]bool
-	readFailures uint64
-	readActive   map[string]bool
-	readIssues   map[string]ReadIssue
+	mu            sync.Mutex // independent of database IO and Store.mu
+	failures      uint64
+	lastFailureAt time.Time
+	active        map[string]bool
+	readFailures  uint64
+	readActive    map[string]bool
+	readIssues    map[string]ReadIssue
 }
 
 func (s *Store) noteRead(operation string, err error) {
@@ -120,6 +123,7 @@ func (s *Store) noteWrite(operation string, err error) bool {
 		return changed
 	}
 	h.failures++
+	h.lastFailureAt = time.Now().UTC()
 	if operation == "finding reviews" && !h.active[operation] {
 		log.Printf("store: finding review write failed: %v", err)
 	}
@@ -147,6 +151,10 @@ func (s *Store) WriteHealth() WriteHealth {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	snapshot := WriteHealth{Failures: h.failures, Active: []string{}}
+	if !h.lastFailureAt.IsZero() {
+		at := h.lastFailureAt
+		snapshot.LastFailureAt = &at
+	}
 	for operation := range h.active {
 		snapshot.Active = append(snapshot.Active, operation)
 	}
