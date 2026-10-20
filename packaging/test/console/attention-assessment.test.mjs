@@ -54,12 +54,14 @@ test('the served recommendation shows its exact consequence before execution', (
   assert.doesNotMatch(unknown, /need-consequence[^]*Trust future traffic/);
 });
 
-test('missing flag details offer evidence inspection without a premature dismissal', () => {
+test('retained flag actions preserve unknown risk and control outcomes', () => {
   const view = ctx.needView({ kind: 'flag', id: 'missing', assessment: assessment(), detail: 'Unknown exposure' }, { flags: new Map() });
   const html = ctx.needRowHTML(view, false, 0);
   assert.match(html, /data-action="open-flag" data-id="missing"/);
-  assert.doesNotMatch(html, /dismiss-flag/);
+  assert.match(html, /data-action="dismiss-flag" data-id="missing"/);
+  assert.match(html, /Risk unknown/);
   assert.match(html, /Control outcome unknown/);
+  assert.doesNotMatch(html, /data-action="(?:mute-flag|kill)"/);
 });
 
 test('headline evidence link targets its exact flag and review links to Home', () => {
