@@ -1347,6 +1347,10 @@ export interface DoctorReport {
   checks: DoctorCheck[] | null;
 }
 
+export interface DoctorSeen {
+  seen_at: string;
+}
+
 export interface RoutingInfo {
   ready: boolean;
   reason?: string;
