@@ -67,12 +67,13 @@ type Components struct {
 	bus          *bus.Bus
 
 	// started goroutines and their shutdown handles.
-	drainDone   <-chan struct{}
-	apiListener net.Listener
-	apiErrors   chan error
-	fleetPub    *fleet.Publisher
-	otlp        *otlp.Exporter
-	advisor     *advisorStackHolder
+	drainDone      <-chan struct{}
+	collectorsDone <-chan struct{}
+	apiListener    net.Listener
+	apiErrors      chan error
+	fleetPub       *fleet.Publisher
+	otlp           *otlp.Exporter
+	advisor        *advisorStackHolder
 
 	deltaHub         *api.DeltaHub
 	resourceEpisodes *resourceEpisodeWriter
@@ -434,7 +435,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		}
 	}()
 
-	startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spool)
+	c.collectorsDone = startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spool)
 
 	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
 	return c, nil
@@ -460,8 +461,8 @@ func (c *Components) WaitForShutdown(ctx context.Context) error {
 }
 
 // Shutdown stops the daemon in the order shutdown depends on: stop the
-// collectors/servers, close the bus so the drain goroutine finishes buffered
-// events, wait (bounded) for the drain, the fleet webhooks and the OTLP
+// collectors/servers, wait (bounded) for collectors' final work, close the bus
+// so the drain goroutine finishes buffered events, wait for the drain, fleet webhooks and OTLP
 // exporter, then release the store and episodic state. Idempotent.
 func (c *Components) Shutdown() {
 	c.shutdownOnce.Do(func() {
@@ -475,6 +476,13 @@ func (c *Components) Shutdown() {
 		c.shellReviews.Close()
 		if c.apiListener != nil {
 			c.apiListener.Close()
+		}
+		if c.collectorsDone != nil {
+			select {
+			case <-c.collectorsDone:
+			case <-time.After(3 * time.Second):
+				log.Println("secure-agentd: collector shutdown timed out; final events and checkpoints may be incomplete")
+			}
 		}
 		if c.bus != nil {
 			c.bus.Close() // close the subscriber channel so the drain goroutine finishes buffered events
@@ -981,16 +989,20 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, procSource 
 // spool tail of the root ES collector (the LaunchDaemon, or a developer's
 // `secure-agentd -es-collector` run as root); without a spool it is degraded,
 // not crash-looped, and starts when the spool appears.
-func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer]) {
+func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer]) <-chan struct{} {
+	var workers sync.WaitGroup
+	run := func(name string, fn func(context.Context) error) {
+		workers.Go(func() { sup.Run(ctx, name, fn) })
+	}
 	if proxyServer != nil {
-		go sup.Run(ctx, "proxyserver", func(c context.Context) error {
+		run("proxyserver", func(c context.Context) error {
 			return proxyServer.Serve(c)
 		})
 	}
 
 	tailSpool := func(t *collect.SpoolTailer) {
 		st.TrackFileFeed()
-		go sup.Run(ctx, "eslogger", func(c context.Context) error {
+		run("eslogger", func(c context.Context) error {
 			t.OnProduce = func() { supReg.MarkProduced("eslogger") }
 			return t.Run(c)
 		})
@@ -1001,14 +1013,16 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 		tailSpool(spool.Load())
 	default:
 		log.Printf("file telemetry unavailable: ES requires a privileged collector (install it from Settings); transcript + network signals still active; starts when the collector's spool appears")
-		go watchSpool(ctx, spoolWatchInterval, collect.SpoolAvailable, func() {
-			t := newSpoolTailer(b, cfg)
-			spool.Store(t)
-			tailSpool(t)
+		workers.Go(func() {
+			watchSpool(ctx, spoolWatchInterval, collect.SpoolAvailable, func() {
+				t := newSpoolTailer(b, cfg)
+				spool.Store(t)
+				tailSpool(t)
+			})
 		})
 	}
 
-	go sup.Run(ctx, "netsampler", func(c context.Context) error {
+	run("netsampler", func(c context.Context) error {
 		ns := collect.NewNetSampler(b, tagger, cfg.NetSampleInterval, nil)
 		ns.OnProduce = func() { supReg.MarkProduced("netsampler") }
 		return ns.Run(c)
@@ -1016,7 +1030,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 
 	home, _ := os.UserHomeDir()
 	st.TrackHookIngestion()
-	go sup.Run(ctx, "transcript", func(c context.Context) error {
+	run("transcript", func(c context.Context) error {
 		ts := collect.NewTranscriptScanner(b, transcriptTailTargets(home, cfg.JSONLPath))
 		ts.OnHookAccepted = st.NoteHookAccepted
 		ts.OnHookRejected = st.NoteHookRejected
@@ -1041,7 +1055,10 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 			SessionFor: ts.SessionForPath,
 			Join:       resolver.JoinTranscriptPID,
 		}
-		go func() { _ = joiner.Run(c) }()
+		joinCtx, cancelJoin := context.WithCancel(c)
+		joinDone := make(chan struct{})
+		go func() { defer close(joinDone); _ = joiner.Run(joinCtx) }()
+		defer func() { cancelJoin(); <-joinDone }()
 		// Transcript lines get the firewall's known-secret and typed-pattern
 		// scan; a nil engine keeps the redact fallback (and avoids a typed-nil
 		// interface).
@@ -1060,7 +1077,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	oc.OnProduce = func() { supReg.MarkProduced("opencode") }
 	oc.OnPoll = func(src string, wm int64) { supReg.MarkPolled("opencode", src, wm) }
 	oc.OnSessionSeen = resolver.NoteTranscriptSession
-	go sup.Run(ctx, "opencode", func(c context.Context) error {
+	run("opencode", func(c context.Context) error {
 		return oc.Run(c)
 	})
 
@@ -1078,15 +1095,18 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	ocl.OnPoll = func(src string, wm int64) { supReg.MarkPolled("openclaw", src, wm) }
 	ocl.OnSessionSeen = resolver.NoteTranscriptSession
 	ocl.OnSessionEnded = resolver.EndTranscriptSession
-	go sup.Run(ctx, "openclaw", func(c context.Context) error {
+	run("openclaw", func(c context.Context) error {
 		return ocl.Run(c)
 	})
 
-	go sup.Run(ctx, "hermes", func(c context.Context) error {
+	run("hermes", func(c context.Context) error {
 		return hermes.Run(c)
 	})
 
-	go advisorStk.Run(ctx, sup)
+	workers.Go(func() { advisorStk.Run(ctx, sup) })
+	done := make(chan struct{})
+	go func() { workers.Wait(); close(done) }()
+	return done
 }
 
 // spoolWatchInterval is how often a daemon without file telemetry checks for
