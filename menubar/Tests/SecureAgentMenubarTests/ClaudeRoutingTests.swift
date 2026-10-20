@@ -142,4 +142,39 @@ final class ClaudeRoutingTests: XCTestCase {
         XCTAssertEqual(String(data: FileManager.default.contents(atPath: settingsPath)!, encoding: .utf8), original)
         try ClaudeRouting.remove(at: dir + "/missing.json")
     }
+
+    func testEnablingWhileClaudeRunsDoesNotWriteSettings() throws {
+        let original = #"{"env":{"FOO":"bar"},"model":"opus"}"#
+        write(original)
+        XCTAssertThrowsError(try ClaudeRouting.update(at: settingsPath, info: info(), clientsRunning: { true }))
+        XCTAssertEqual(try String(contentsOfFile: settingsPath, encoding: .utf8), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: settingsPath + ".bak-secure-agent"))
+    }
+
+    func testDisablingWhileClaudeRunsKeepsRoutingIntact() throws {
+        try ClaudeRouting.apply(at: settingsPath, info: info())
+        let original = try Data(contentsOf: URL(fileURLWithPath: settingsPath))
+        XCTAssertThrowsError(try ClaudeRouting.update(at: settingsPath, info: nil, clientsRunning: { true }))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: settingsPath)), original)
+        XCTAssertTrue(ClaudeRouting.isApplied(at: settingsPath))
+    }
+
+    func testRoutingCanBeEnabledAndDisabledAfterClaudeExits() throws {
+        write(#"{"env":{"FOO":"bar"}}"#)
+        try ClaudeRouting.update(at: settingsPath, info: info(), clientsRunning: { false })
+        XCTAssertTrue(ClaudeRouting.isApplied(at: settingsPath))
+        try ClaudeRouting.update(at: settingsPath, info: nil, clientsRunning: { false })
+        XCTAssertFalse(ClaudeRouting.isApplied(at: settingsPath))
+        XCTAssertEqual(try readSettings()["env"] as? [String: String], ["FOO": "bar"])
+        XCTAssertEqual(sessionStartCommands(try readSettings()), [])
+    }
+
+    func testUnavailableProcessCheckDoesNotChangeRouting() throws {
+        try ClaudeRouting.apply(at: settingsPath, info: info())
+        let original = try Data(contentsOf: URL(fileURLWithPath: settingsPath))
+        XCTAssertThrowsError(try ClaudeRouting.update(at: settingsPath, info: nil, clientsRunning: {
+            throw CocoaError(.executableNotLoadable)
+        }))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: settingsPath)), original)
+    }
 }

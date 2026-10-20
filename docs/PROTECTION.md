@@ -43,6 +43,8 @@ For YAML policies loaded at daemon start, see [firewall configuration](CONFIGURA
 
 **Route Claude Code through the proxy** with **Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent** (opt-in; no keychain or system-trust changes). The app writes the proxy and Secure Agent's CA (`NODE_EXTRA_CA_CERTS`) into the `env` block of `~/.claude/settings.json`, plus a SessionStart hook that gives each session's Bash commands the tunnel-mode snippet. API requests to the hosts in `proxy_inspect_hosts` (default `api.anthropic.com`) are decrypted and scanned; every other connection passes through unopened, so tools that do not trust Secure Agent's CA (gh, git, curl) keep working. Quitting the app takes the routing back out; while routing is on, start Secure Agent before Claude Code.
 
+Quit Claude Desktop and exit Claude Code before turning routing on or off, then reopen Claude. Secure Agent refuses routing changes while either is running: changing proxy settings in an existing session can leave it using cached certificate or proxy settings. Close routed sessions before quitting Secure Agent as well; removing settings does not reset a running Claude process. If a session reports a certificate or connection error after a routing change, fully quit and reopen Claude.
+
 **Route other agents** by sourcing the tunnel-mode snippet the daemon writes to `~/.config/secure-agent/agent-env.sh` where you launch them (scoped to that shell; every connection passes through unopened):
 
 ```bash

@@ -25,10 +25,46 @@ enum ClaudeRouting {
     /// Every routing hook command reads the snippet at this path suffix.
     static let snippetSuffix = "/secure-agent/agent-env.sh"
 
+    /// Apply network settings only across a clean Claude process boundary.
+    /// nil info disables routing.
+    static func update(at path: String, info: RoutingInfo?,
+                       clientsRunning: () throws -> Bool = runningClients) throws {
+        guard try !clientsRunning() else { throw RoutingError.clientsRunning }
+        if let info {
+            try apply(at: path, info: info)
+        } else {
+            try remove(at: path)
+        }
+    }
+
+    /// Check both the Desktop host and standalone Code processes for this user.
+    /// Do not inspect arguments or environments, which may contain credentials.
+    static func runningClients() throws -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-u", String(getuid()), "-x", "Claude|claude"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            throw RoutingError.processCheckFailed
+        }
+        guard process.terminationReason == .exit else { throw RoutingError.processCheckFailed }
+        switch process.terminationStatus {
+        case 0: return true
+        case 1: return false
+        default: throw RoutingError.processCheckFailed
+        }
+    }
+
     enum RoutingError: LocalizedError, Equatable {
         case invalidJSON
         case notReady(String)
         case conflict(String)
+        case clientsRunning
+        case processCheckFailed
 
         var errorDescription: String? {
             switch self {
@@ -38,6 +74,10 @@ enum ClaudeRouting {
                 return "Claude Code routing is not available: \(reason)"
             case .conflict(let key):
                 return "~/.claude/settings.json already sets \(key); Secure Agent will not replace it"
+            case .clientsRunning:
+                return "Quit Claude Desktop and exit Claude Code before changing routing, then reopen them. Running sessions can retain old proxy or certificate settings. No routing settings were changed."
+            case .processCheckFailed:
+                return "Could not check whether Claude is running. No routing settings were changed."
             }
         }
     }
