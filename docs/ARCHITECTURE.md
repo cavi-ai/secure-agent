@@ -174,6 +174,9 @@ overwrites unread bytes, or the garbage budget skips a tail, status reports a
 cumulative lower bound in `es_service.bytes_lost`; Doctor and posture keep that
 gap visible for the run. Spool retention is bounded, so sustained overload can
 still lose evidence.
+Ingest stores a process's repeated opens of one file once per minute or more
+(`daemon/internal/daemon/repeat_opens.go`); flagged and sensitive opens are
+always stored.
 The transcript scanner retains one parsed line per blocked file and retries
 its undelivered events without replaying stateful trace parsers. Hook activity,
 trace events, and secret findings share a checkpoint that advances only after
