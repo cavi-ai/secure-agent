@@ -27,9 +27,23 @@ test('the cleanup queue sorts rows into lanes: safe, local work, check, not merg
     const section = html.slice(at(`wt-lane-${lane}"`)).split('<section class="wt-lane ')[0];
     assert.ok(section.includes(`data-path="/code/app/${name}"`), `${name} in ${lane}`);
   }
-  assert.match(html, /<details class="wt-row wt-remove"/);
+  assert.match(html, /<details class="wt-row wt-remove wt-in-safe"/);
   const active = html.slice(at('data-path="/code/app/active"'));
   assert.ok(!active.includes('data-action="worktree-select"'));
+});
+
+test('a collapsed row tones its reason by kind, counts the other concerns, and shows idle age', () => {
+  const html = w => context.worktreeRowHTML(w, repo).split('</summary>')[0];
+  const work = html(row('work', { reasons: ['1 uncommitted change', '2 untracked files or directories', 'ignored files that only live here: .env (17 B)', 'no commits outside origin/main'],
+    reason_kinds: ['keep', 'keep', 'review', 'safe'], last_activity: '2026-10-18T12:00:00Z', idle_days: 3 }));
+  assert.match(html(row('x')), /class="wt-subtitle wt-tone-info"/, 'a reason with no kind is plain');
+  assert.match(work, /<span class="wt-subtitle wt-tone-keep">Scan: 1 uncommitted change <span class="wt-more">\+2 more<\/span><\/span>/);
+  assert.match(work, /<span class="wt-idle">3d idle<\/span>/);
+  assert.match(work, /<details class="wt-row wt-keep wt-in-work"/);
+  const safe = html(row('done', { state: 'remove', reasons: ['merged into origin/main (squash)'], reason_kinds: ['safe'] }));
+  assert.match(safe, /<span class="wt-subtitle wt-tone-safe">Scan: merged into origin\/main \(squash\)<\/span>/);
+  const live = html(row('live', { in_use: true, active_agent: 'codex', reasons: ['codex is working here'], reason_kinds: ['agent'] }));
+  assert.match(live, /<span class="wt-subtitle wt-tone-agent">Scan: codex session active<\/span>/);
 });
 
 test('collapsed queue rows show one selection control and keep actions in their disclosure', () => {
