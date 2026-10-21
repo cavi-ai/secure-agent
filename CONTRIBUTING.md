@@ -12,7 +12,7 @@ cd secure-agent
 git checkout -b feat/my-change
 ```
 
-Use the Go version declared in `go.mod` (currently 1.26.9). macOS app builds and Swift tests require Swift 6 and the macOS 27.0 SDK, selected by `packaging/swift_macos.sh`; deployment targets macOS 14+. Python 3.10+ runs the hooks; Node.js and Chrome/Chromium run the console tests. Follow the [development validation commands](docs/DEVELOPMENT.md#run-validation), including `make app` before the aggregate `make test` bundle check.
+Use the Go version declared in `go.mod` (currently 1.26.10). macOS app builds and Swift tests require Swift 6 and the macOS 27.0 SDK, selected by `packaging/swift_macos.sh`; deployment targets macOS 14+. Python 3.10+ runs the hooks; Node.js and Chrome/Chromium run the console tests. Follow the [development validation commands](docs/DEVELOPMENT.md#run-validation), including `make app` before the aggregate `make test` bundle check.
 
 ## Component standards
 
