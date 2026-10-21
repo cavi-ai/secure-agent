@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/localmodel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/loopback"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -68,6 +69,11 @@ type Store interface {
 	PutSysAgentRun(model.SysAgentRun) int64
 	SysAgentRuns(limit int) []model.SysAgentRun
 	PutAudit(store.AuditEntry)
+	PutSysAgentSession(model.SysAgentSession) int64
+	SysAgentSessions() []model.SysAgentSession
+	PutSysAgentMemory(model.SysAgentMemory) int64
+	SysAgentMemory() []model.SysAgentMemory
+	ForgetSysAgentMemory() error
 }
 
 // Bounds on what the agent takes and keeps.
@@ -95,13 +101,20 @@ type Agent struct {
 	now          func() time.Time
 	client       *http.Client
 
-	mu          sync.Mutex
-	cfg         config.SystemAgentConfig
-	chatting    bool
-	work        model.SysAgentWork
-	workStarted time.Time
-	running     int64 // run id of the headless run in flight
-	wg          sync.WaitGroup
+	mu             sync.Mutex
+	cfg            config.SystemAgentConfig
+	chatting       bool
+	work           model.SysAgentWork
+	workStarted    time.Time
+	running        int64 // run id of the headless run in flight
+	replyCancel    context.CancelFunc
+	runCancel      context.CancelFunc
+	stoppedRun     int64
+	storageError   string
+	persistent     bool
+	initializeOnce sync.Once
+	historyKey     func(string) ([]byte, error)
+	wg             sync.WaitGroup
 }
 
 // New builds the agent. stateDir holds pinned harness configs and terminal
@@ -123,9 +136,20 @@ func New(st Store, stateDir string, mask func(string) (string, bool)) *Agent {
 
 // SetConfig applies a (hot-reloaded) configuration.
 func (a *Agent) SetConfig(cfg config.SystemAgentConfig) {
+	if cfg.Enabled && a.persistent {
+		a.initializeOnce.Do(a.initializeHistory)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	cfg.Endpoint = strings.TrimSuffix(strings.TrimSpace(cfg.Endpoint), "/")
+	if !cfg.Enabled || cfg.Endpoint != a.cfg.Endpoint || cfg.Model != a.cfg.Model {
+		if a.replyCancel != nil {
+			a.replyCancel()
+		}
+		if !cfg.Enabled && a.runCancel != nil {
+			a.runCancel()
+		}
+	}
 	a.cfg = cfg
 }
 
@@ -186,18 +210,22 @@ type SkillInfo struct {
 
 // AgentStatus is the agent's state for the console.
 type AgentStatus struct {
-	Enabled       bool            `json:"enabled"`
-	Endpoint      string          `json:"endpoint"`
-	Reachable     bool            `json:"reachable"`
-	OllamaVersion string          `json:"ollama_version,omitempty"`
-	Reason        string          `json:"reason,omitempty"`
-	Model         string          `json:"model,omitempty"`
-	HarnessModel  string          `json:"harness_model,omitempty"`
-	Models        []string        `json:"models"`
-	Harnesses     []HarnessStatus `json:"harnesses"`
-	Skills        []SkillInfo     `json:"skills"`
-	Chatting      bool            `json:"chatting"`
-	RunningRun    int64           `json:"running_run,omitempty"`
+	Resources     localmodel.Status     `json:"resources"`
+	Residency     localmodel.Residency  `json:"residency"`
+	Session       model.SysAgentSession `json:"session"`
+	StorageError  string                `json:"storage_error,omitempty"`
+	Enabled       bool                  `json:"enabled"`
+	Endpoint      string                `json:"endpoint"`
+	Reachable     bool                  `json:"reachable"`
+	OllamaVersion string                `json:"ollama_version,omitempty"`
+	Reason        string                `json:"reason,omitempty"`
+	Model         string                `json:"model,omitempty"`
+	HarnessModel  string                `json:"harness_model,omitempty"`
+	Models        []string              `json:"models"`
+	Harnesses     []HarnessStatus       `json:"harnesses"`
+	Skills        []SkillInfo           `json:"skills"`
+	Chatting      bool                  `json:"chatting"`
+	RunningRun    int64                 `json:"running_run,omitempty"`
 	// Terminal is true when a dispatch can open a terminal window here;
 	// otherwise terminal mode hands the command to the operator.
 	Terminal bool   `json:"terminal"`
@@ -222,6 +250,17 @@ func (a *Agent) Status(ctx context.Context) AgentStatus {
 		st.HarnessModel = harnessModel(cfg, info, "")
 	}
 	st.Reason = a.agentReason(cfg, info)
+	st.Resources = localmodel.Default.Snapshot()
+	if cfg.Enabled {
+		st.Residency = localmodel.ResidencyAt(ctx, a.client, cfg.Endpoint, st.Model)
+	}
+	st.Session = a.Session()
+	a.mu.Lock()
+	st.StorageError = a.storageError
+	a.mu.Unlock()
+	if st.StorageError != "" {
+		st.Reason = st.StorageError
+	}
 	for _, h := range Harnesses {
 		hs := HarnessStatus{ID: h.ID, Label: h.Label, Bin: h.Bin, MinOllama: h.MinOllama, Path: a.look(h.Bin)}
 		hs.Installed = hs.Path != ""
@@ -308,7 +347,19 @@ func harnessModel(cfg config.SystemAgentConfig, info ollamaInfo, planModel strin
 func (a *Agent) Wait() { a.wg.Wait() }
 
 // Messages returns the newest limit chat messages, oldest first.
-func (a *Agent) Messages(limit int) []model.SysAgentMessage { return a.st.SysAgentMessages(limit) }
+func (a *Agent) Messages(limit int) []model.SysAgentMessage {
+	session := a.Session()
+	out := []model.SysAgentMessage{}
+	for _, m := range a.st.SysAgentMessages(600) {
+		if m.Origin == "analysis" || (session.ID == 0 && m.SessionID == 0) || (session.ClosedAt == nil && m.SessionID == session.ID) {
+			out = append(out, m)
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out
+}
 
 // Work reports current reply activity without another model-server probe.
 func (a *Agent) Work() model.SysAgentWork {
@@ -348,11 +399,13 @@ func (a *Agent) Runs(limit int) []model.SysAgentRun { return a.st.SysAgentRuns(l
 func (a *Agent) Clear() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.storageError != "" {
+		return ErrUnavailable
+	}
 	if a.chatting {
 		return fmt.Errorf("%w: the agent is answering", ErrBusy)
 	}
-	a.st.ClearSysAgentMessages()
-	return nil
+	return a.closeSession()
 }
 
 // cleanWorkdir returns dir cleaned when absolute, else fallback.

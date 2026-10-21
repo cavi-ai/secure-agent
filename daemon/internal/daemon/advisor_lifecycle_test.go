@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -78,8 +79,15 @@ func TestAdvisorReloadStartsAndReplacesWorker(t *testing.T) {
 	}
 }
 
+type managedTestCommand struct {
+	*exec.Cmd
+	once sync.Once
+}
+
+func (c *managedTestCommand) Close() { c.once.Do(func() { _ = c.Process.Kill(); _ = c.Wait() }) }
+
 func TestAdvisorOwnerReapsManagedProcessOnReplaceAndClose(t *testing.T) {
-	start := func() *exec.Cmd {
+	start := func() *managedTestCommand {
 		cmd := exec.Command("sleep", "60")
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -90,7 +98,7 @@ func TestAdvisorOwnerReapsManagedProcessOnReplaceAndClose(t *testing.T) {
 				_ = cmd.Wait()
 			}
 		})
-		return cmd
+		return &managedTestCommand{Cmd: cmd}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

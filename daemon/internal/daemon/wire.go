@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -364,7 +363,7 @@ func enqueueEgressProjection(queue chan<- store.EgressObservation, observation s
 // server process the daemon supervises.
 type advisorStack struct {
 	Sub     *advisor.Subscriber
-	Managed *exec.Cmd // nil unless advisor.managed
+	Managed interface{ Close() } // owned lazy server; nil for external providers
 }
 
 // verdictPublishingSink lets an async advisor verdict update the popover
@@ -417,14 +416,15 @@ func (v *verdictPublishingSink) PutAdvisorVerdict(subjectID, kind string, verdic
 func setupAdvisor(cfg config.Config, st *store.Store, deltaHub *api.DeltaHub, postureChanged func(), masks ...func(string) (string, bool)) advisorStack {
 	endpoint := cfg.Advisor.Endpoint
 	model := cfg.Advisor.Model
-	var managed *exec.Cmd
+	var managed interface{ Close() }
+	var transport http.RoundTripper
 	if cfg.Advisor.Enabled && cfg.Advisor.Managed {
-		cmd, ep, err := advisor.LaunchManaged(advisor.ManagedSpec{Model: cfg.Advisor.ManagedModel})
+		server, err := advisor.NewManagedTransport(advisor.ManagedSpec{Model: cfg.Advisor.ManagedModel})
 		if err != nil {
-			log.Printf("advisor: managed mode unavailable (%v) — advisor disabled", err)
+			log.Printf("advisor: managed model unavailable; advisor disabled")
 			return advisorStack{}
 		}
-		managed, endpoint, model = cmd, ep, cfg.Advisor.ManagedModel
+		managed, transport, endpoint, model = server, server, "http://127.0.0.1", cfg.Advisor.ManagedModel
 	}
 	var sink advisor.Sink = st
 	mask := sysAgentMask(nil)
@@ -436,6 +436,8 @@ func setupAdvisor(cfg config.Config, st *store.Store, deltaHub *api.DeltaHub, po
 	}
 	sub := advisor.New(advisor.Config{
 		Enabled:            cfg.Advisor.Enabled,
+		Transport:          transport,
+		Ollama:             !cfg.Advisor.Managed && (cfg.Advisor.Protocol == "ollama" || (cfg.Advisor.Protocol == "" && strings.HasSuffix(strings.TrimRight(endpoint, "/"), ":11434"))),
 		Endpoint:           endpoint,
 		Model:              model,
 		Timeout:            cfg.Advisor.Timeout,
@@ -449,8 +451,7 @@ func setupAdvisor(cfg config.Config, st *store.Store, deltaHub *api.DeltaHub, po
 	} else if managed != nil {
 		// Subscriber refused (shouldn't happen post-validation) — don't leave
 		// an orphan server behind.
-		_ = managed.Process.Kill()
-		_ = managed.Wait()
+		managed.Close()
 		managed = nil
 	}
 	return advisorStack{Sub: sub, Managed: managed}

@@ -239,6 +239,7 @@ type ResourceControlOverride struct {
 
 // AdvisorYAML is the on-disk shape of the local advisor config.
 type AdvisorYAML struct {
+	Protocol           string `yaml:"protocol"`
 	Enabled            bool   `yaml:"enabled"`
 	Endpoint           string `yaml:"endpoint"`
 	Model              string `yaml:"model"`
@@ -256,6 +257,7 @@ type AdvisorYAML struct {
 // Managed mode: the daemon spawns/supervises the model server itself and
 // computes the endpoint — Endpoint is ignored (and must not be set).
 type AdvisorConfig struct {
+	Protocol           string
 	Enabled            bool
 	Endpoint           string
 	Model              string
@@ -566,6 +568,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 		},
 		SystemAgent: raw.SystemAgent,
 		Advisor: AdvisorConfig{
+			Protocol:           raw.Advisor.Protocol,
 			Enabled:            raw.Advisor.Enabled,
 			Endpoint:           raw.Advisor.Endpoint,
 			Model:              raw.Advisor.Model,
@@ -642,6 +645,9 @@ func validPrice(v float64) bool { return v > 0 && !math.IsInf(v, 0) }
 // runtime. A non-positive sample interval reaches time.NewTicker, which panics
 // — the supervisor then recovers a permanently crash-looping collector.
 func (c Config) Validate() error {
+	if c.Advisor.Protocol != "" && c.Advisor.Protocol != "ollama" && c.Advisor.Protocol != "openai" {
+		return fmt.Errorf("advisor.protocol must be ollama or openai")
+	}
 	if err := c.DirectoryGuard.ShellReview.Validate(); err != nil {
 		return err
 	}

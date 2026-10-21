@@ -1,6 +1,10 @@
 package store
 
 import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"time"
@@ -8,153 +12,178 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
-// The system agent's chat, plans and runs (console Agent tab). Each row is
-// its id, a timestamp and the JSON of the model type; content arrives
-// masked (sysagent masks before it stores).
+// Only routing and retention metadata remains outside authenticated ciphertext.
 var sysAgentSchemas = []string{
-	`CREATE TABLE IF NOT EXISTS sysagent_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, body TEXT NOT NULL);`,
-	`CREATE TABLE IF NOT EXISTS sysagent_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, body TEXT NOT NULL);`,
-	`CREATE TABLE IF NOT EXISTS sysagent_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, body TEXT NOT NULL);`,
+	`CREATE TABLE IF NOT EXISTS sysagent_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, body TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}');`,
+	`CREATE TABLE IF NOT EXISTS sysagent_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, body TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}');`,
+	`CREATE TABLE IF NOT EXISTS sysagent_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, body TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}');`,
+	`CREATE TABLE IF NOT EXISTS sysagent_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, body TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}');`,
+	`CREATE TABLE IF NOT EXISTS sysagent_memory (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, body TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}');`,
 }
 
-// Bounds on the tables (rows come from console actions).
 const (
 	maxSysAgentMessages = 500
 	maxSysAgentPlans    = 500
 	maxSysAgentRuns     = 1000
 )
 
-// putSysAgentRow inserts v (id 0) or replaces row id, keeping the newest
-// max rows. table is one of the constants above, never input.
-func (s *Store) putSysAgentRow(table string, id int64, ts time.Time, v any, max int) int64 {
-	body, err := json.Marshal(v)
-	if err != nil {
-		log.Printf("store: %s: %v", table, err)
-		return 0
+func (s *Store) agentMetadata(table string, body []byte) string {
+	if table == "sysagent_memory" {
+		var f model.SysAgentMemory
+		if json.Unmarshal(body, &f) != nil {
+			return "{}"
+		}
+		h := hmac.New(sha256.New, s.agentIndexKey[:])
+		h.Write([]byte(f.Scope))
+		meta, _ := json.Marshal(map[string]string{"scope": hex.EncodeToString(h.Sum(nil))})
+		return string(meta)
 	}
+
+	if table != "sysagent_messages" {
+		return "{}"
+	}
+	var m model.SysAgentMessage
+	if json.Unmarshal(body, &m) != nil {
+		return "{}"
+	}
+	meta, _ := json.Marshal(struct {
+		Role   string `json:"role"`
+		Origin string `json:"origin"`
+		Review string `json:"review_state"`
+	}{m.Role, m.Origin, m.ReviewState})
+	return string(meta)
+}
+
+func (s *Store) putSysAgentRow(table string, id int64, ts time.Time, v any, max int) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if id != 0 {
-		query := `UPDATE ` + table + ` SET body = ? WHERE id = ?`
-		args := []any{string(body), id}
-		if table == "sysagent_messages" {
-			// A stale chat/plan update cannot undo a durable action claim or
-			// reopen a reviewed recommendation. Only the claim marker may be
-			// advanced to the run id after the run has been recorded.
-			query = `UPDATE sysagent_messages SET body = json_set(?,
-				'$.local_run_id', CASE WHEN COALESCE(json_extract(body, '$.local_run_id'), 0) != 0
-				AND COALESCE(json_extract(?, '$.local_run_id'), 0) = 0
-				THEN json_extract(body, '$.local_run_id') ELSE COALESCE(json_extract(?, '$.local_run_id'), 0) END,
-				'$.review_state', CASE WHEN json_extract(body, '$.review_state') IN ('saved', 'dismissed', 'approved')
-				THEN json_extract(body, '$.review_state') ELSE COALESCE(json_extract(?, '$.review_state'), '') END)
-				WHERE id = ?`
-			args = []any{string(body), string(body), string(body), string(body), id}
-		}
-		res, err := s.db.Exec(query, args...)
-		if err != nil {
-			log.Printf("store: update %s %d: %v", table, id, err)
-			return 0
-		}
-		if n, err := res.RowsAffected(); err != nil || n != 1 {
-			return 0
-		}
-		return id
-	}
-	res, err := s.db.Exec(`INSERT INTO `+table+` (ts, body) VALUES (?, ?)`, ts.UTC().Format(time.RFC3339Nano), string(body))
-	if err != nil {
-		log.Printf("store: insert %s: %v", table, err)
+	s.agentCryptoMu.RLock()
+	defer s.agentCryptoMu.RUnlock()
+	if s.agentLocked {
 		return 0
 	}
-	if table == "sysagent_messages" {
-		// Keep pending recommendations even when ordinary chat exceeds its
-		// rolling history. SendAnalysis caps pending items at 100.
-		_, _ = s.db.Exec(`DELETE FROM sysagent_messages WHERE id NOT IN
-			(SELECT id FROM sysagent_messages ORDER BY id DESC LIMIT ?)
-			AND NOT (COALESCE(json_extract(body, '$.origin'), '') = 'analysis'
-			AND COALESCE(json_extract(body, '$.role'), '') = 'assistant'
-			AND COALESCE(json_extract(body, '$.review_state'), 'pending') = 'pending')`, max)
-	} else {
-		_, _ = s.db.Exec(`DELETE FROM `+table+` WHERE id NOT IN (SELECT id FROM `+table+` ORDER BY id DESC LIMIT ?)`, max)
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return 0
 	}
-	id, _ = res.LastInsertId()
+	defer tx.Rollback()
+	if id != 0 && table == "sysagent_messages" {
+		var old, meta string
+		if tx.QueryRow("SELECT body,meta FROM "+table+" WHERE id=?", id).Scan(&old, &meta) != nil {
+			return 0
+		}
+		data, err := s.openAgentRow(table, id, meta, old)
+		if err != nil {
+			return 0
+		}
+		var prior model.SysAgentMessage
+		if json.Unmarshal(data, &prior) != nil {
+			return 0
+		}
+		m, ok := v.(model.SysAgentMessage)
+		if !ok {
+			return 0
+		}
+		if prior.LocalRunID != 0 && m.LocalRunID == 0 {
+			m.LocalRunID = prior.LocalRunID
+		}
+		if prior.ReviewState == "saved" || prior.ReviewState == "dismissed" || prior.ReviewState == "approved" {
+			m.ReviewState = prior.ReviewState
+		}
+		v = m
+	}
+	body, err := json.Marshal(v)
+	if err != nil {
+		return 0
+	}
+	if id == 0 {
+		res, err := tx.Exec("INSERT INTO "+table+"(ts,body) VALUES (?, '')", ts.UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			return 0
+		}
+		id, err = res.LastInsertId()
+		if err != nil {
+			return 0
+		}
+	}
+	meta := s.agentMetadata(table, body)
+	encoded, err := s.sealAgentRow(table, id, meta, body)
+	if err != nil {
+		return 0
+	}
+	res, err := tx.Exec("UPDATE "+table+" SET body=?,meta=?,ts=? WHERE id=?", encoded, meta, ts.UTC().Format(time.RFC3339Nano), id)
+	if err != nil {
+		return 0
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return 0
+	}
+	query := "DELETE FROM " + table + " WHERE id NOT IN (SELECT id FROM " + table + " ORDER BY id DESC LIMIT ?)"
+	if table == "sysagent_messages" {
+		query += ` AND NOT (json_extract(meta,'$.origin')='analysis' AND json_extract(meta,'$.role')='assistant' AND COALESCE(NULLIF(json_extract(meta,'$.review_state'),''),'pending')='pending')`
+	}
+	if _, err = tx.Exec(query, max); err != nil {
+		return 0
+	}
+	if tx.Commit() != nil {
+		return 0
+	}
 	return id
 }
 
-// getSysAgentRow decodes row id into v.
 func (s *Store) getSysAgentRow(table string, id int64, v any) bool {
-	var body string
-	if err := s.db.QueryRow(`SELECT body FROM `+table+` WHERE id = ?`, id).Scan(&body); err != nil {
+	s.agentCryptoMu.RLock()
+	defer s.agentCryptoMu.RUnlock()
+	if s.agentLocked {
 		return false
 	}
-	if err := json.Unmarshal([]byte(body), v); err != nil {
-		log.Printf("store: %s %d: %v", table, id, err)
+	var raw, meta string
+	if s.db.QueryRow("SELECT body,meta FROM "+table+" WHERE id=?", id).Scan(&raw, &meta) != nil {
 		return false
 	}
-	return true
+	body, err := s.openAgentRow(table, id, meta, raw)
+	return err == nil && json.Unmarshal(body, v) == nil
 }
 
-// sysAgentRows calls each with the id and body of the newest limit rows,
-// newest first.
-func (s *Store) sysAgentRows(table string, limit int, each func(id int64, body []byte)) {
-	rows, err := s.db.Query(`SELECT id, body FROM `+table+` ORDER BY id DESC LIMIT ?`, normalizeLimit(limit))
+func (s *Store) sysAgentRows(table string, limit int, each func(int64, []byte)) {
+	s.agentCryptoMu.RLock()
+	defer s.agentCryptoMu.RUnlock()
+	if s.agentLocked {
+		return
+	}
+	rows, err := s.db.Query("SELECT id,body,meta FROM "+table+" ORDER BY id DESC LIMIT ?", normalizeLimit(limit))
 	if err != nil {
-		log.Printf("store: query %s: %v", table, err)
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var id int64
-		var body string
-		if rows.Scan(&id, &body) == nil {
-			each(id, []byte(body))
+		var raw, meta string
+		if rows.Scan(&id, &raw, &meta) == nil {
+			body, err := s.openAgentRow(table, id, meta, raw)
+			if err == nil {
+				each(id, body)
+			} else {
+				log.Printf("store: encrypted agent record unavailable: %s/%d", table, id)
+			}
 		}
-	}
-	if err := rows.Err(); err != nil {
-		log.Printf("store: %s cursor error (result may be truncated): %v", table, err)
 	}
 }
 
-// PutSysAgentMessage inserts a chat message (ID 0) or rewrites it, and
-// returns its id.
 func (s *Store) PutSysAgentMessage(m model.SysAgentMessage) int64 {
 	return s.putSysAgentRow("sysagent_messages", m.ID, m.TS, m, maxSysAgentMessages)
 }
-
-// ClaimSysAgentAction atomically consumes one assistant command proposal.
-// -1 is a durable fail-closed marker until its run id is stored; a crash or
-// storage failure cannot make the same command executable again.
-func (s *Store) ClaimSysAgentAction(id int64) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	res, err := s.db.Exec(`UPDATE sysagent_messages SET body = json_set(body, '$.local_run_id', -1)
-		WHERE id = ? AND json_extract(body, '$.role') = 'assistant'
-		AND json_type(body, '$.local_command') = 'object'
-		AND COALESCE(json_extract(body, '$.local_run_id'), 0) = 0
-		AND (COALESCE(json_extract(body, '$.origin'), '') != 'analysis'
-		OR COALESCE(json_extract(body, '$.review_state'), 'pending') = 'pending')`, id)
-	if err != nil {
-		log.Printf("store: claim sysagent action %d: %v", id, err)
-		return false
-	}
-	n, _ := res.RowsAffected()
-	return n == 1
-}
-
-// GetSysAgentMessage returns one chat message.
 func (s *Store) GetSysAgentMessage(id int64) (model.SysAgentMessage, bool) {
 	var m model.SysAgentMessage
 	ok := s.getSysAgentRow("sysagent_messages", id, &m)
 	m.ID = id
 	return m, ok
 }
-
-// SysAgentMessages returns the newest limit messages, oldest first (chat
-// order).
 func (s *Store) SysAgentMessages(limit int) []model.SysAgentMessage {
 	out := []model.SysAgentMessage{}
-	s.sysAgentRows("sysagent_messages", limit, func(id int64, body []byte) {
+	s.sysAgentRows("sysagent_messages", limit, func(id int64, b []byte) {
 		var m model.SysAgentMessage
-		if json.Unmarshal(body, &m) == nil {
+		if json.Unmarshal(b, &m) == nil {
 			m.ID = id
 			out = append(out, m)
 		}
@@ -165,125 +194,223 @@ func (s *Store) SysAgentMessages(limit int) []model.SysAgentMessage {
 	return out
 }
 
-// ClearSysAgentMessages deletes the chat; plans and runs stay.
+// mutateAgentMessage uses one immediate SQLite transaction across decrypt,
+// validation and replacement. Independent store handles cannot claim twice.
+func (s *Store) mutateAgentMessage(id int64, change func(*model.SysAgentMessage) bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agentCryptoMu.RLock()
+	defer s.agentCryptoMu.RUnlock()
+	if s.agentLocked {
+		return false
+	}
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return false
+	}
+	defer tx.Rollback()
+	var raw, meta string
+	if tx.QueryRow("SELECT body,meta FROM sysagent_messages WHERE id=?", id).Scan(&raw, &meta) != nil {
+		return false
+	}
+	body, err := s.openAgentRow("sysagent_messages", id, meta, raw)
+	if err != nil {
+		return false
+	}
+	var m model.SysAgentMessage
+	if json.Unmarshal(body, &m) != nil || !change(&m) {
+		return false
+	}
+	body, err = json.Marshal(m)
+	if err != nil {
+		return false
+	}
+	meta = s.agentMetadata("sysagent_messages", body)
+	raw, err = s.sealAgentRow("sysagent_messages", id, meta, body)
+	if err != nil {
+		return false
+	}
+	if _, err = tx.Exec("UPDATE sysagent_messages SET body=?,meta=? WHERE id=?", raw, meta, id); err != nil {
+		return false
+	}
+	return tx.Commit() == nil
+}
+func (s *Store) ClaimSysAgentAction(id int64) bool {
+	return s.mutateAgentMessage(id, func(m *model.SysAgentMessage) bool {
+		if m.Role != "assistant" || m.LocalCommand == nil || m.LocalRunID != 0 || (m.Origin == "analysis" && m.ReviewState != "" && m.ReviewState != "pending") {
+			return false
+		}
+		m.LocalRunID = -1
+		return true
+	})
+}
 func (s *Store) ClearSysAgentMessages() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.db.Exec(`DELETE FROM sysagent_messages WHERE COALESCE(json_extract(body, '$.origin'), '') != 'analysis'
-		OR COALESCE(json_extract(body, '$.role'), '') != 'assistant'`); err != nil {
-		log.Printf("store: clear sysagent_messages: %v", err)
+	_, err := s.db.Exec(`DELETE FROM sysagent_messages WHERE COALESCE(json_extract(meta,'$.origin'),'')!='analysis' OR COALESCE(json_extract(meta,'$.role'),'')!='assistant'`)
+	if err != nil {
+		log.Printf("store: clear agent chat failed")
 	}
 }
-
-// SysAgentRecommendations is the durable review queue backed by analysis
-// replies. The command stays on its assistant message for one-time claiming.
 func (s *Store) SysAgentRecommendations(limit int) []model.SysAgentMessage {
-	out := []model.SysAgentMessage{}
-	rows, err := s.db.Query(`SELECT id, body FROM sysagent_messages
-		WHERE json_extract(body, '$.origin') = 'analysis' AND json_extract(body, '$.role') = 'assistant'
-		ORDER BY CASE WHEN COALESCE(json_extract(body, '$.review_state'), 'pending') = 'pending' THEN 0 ELSE 1 END, id DESC LIMIT ?`, normalizeLimit(limit))
-	if err != nil {
-		log.Printf("store: recommendations: %v", err)
-		return out
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		var body string
-		if rows.Scan(&id, &body) == nil {
-			var m model.SysAgentMessage
-			if json.Unmarshal([]byte(body), &m) == nil {
-				m.ID = id
-				out = append(out, m)
+	pending := []model.SysAgentMessage{}
+	other := []model.SysAgentMessage{}
+	// Table retention plus the bounded pending queue limits this scan.
+	for _, m := range s.SysAgentMessages(maxSysAgentMessages + 100) {
+		if m.Origin == "analysis" && m.Role == "assistant" {
+			if m.ReviewState == "" || m.ReviewState == "pending" {
+				pending = append([]model.SysAgentMessage{m}, pending...)
+			} else {
+				other = append([]model.SysAgentMessage{m}, other...)
 			}
 		}
 	}
-	return out
+	out := append(pending, other...)
+	return out[:min(len(out), normalizeLimit(limit))]
 }
-
 func (s *Store) PendingSysAgentRecommendations() int {
 	var n int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sysagent_messages WHERE json_extract(body, '$.origin') = 'analysis'
-		AND json_extract(body, '$.role') = 'assistant'
-		AND COALESCE(json_extract(body, '$.review_state'), 'pending') = 'pending'`).Scan(&n)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sysagent_messages WHERE json_extract(meta,'$.origin')='analysis' AND json_extract(meta,'$.role')='assistant' AND COALESCE(NULLIF(json_extract(meta,'$.review_state'),''),'pending')='pending'`).Scan(&n)
 	return n
 }
-
-// SetSysAgentRecommendationState accepts only queue transitions, never
-// arbitrary message edits from the browser.
 func (s *Store) SetSysAgentRecommendationState(id int64, state string) bool {
 	if state != "saved" && state != "dismissed" && state != "approved" {
 		return false
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	res, err := s.db.Exec(`UPDATE sysagent_messages SET body = json_set(body, '$.review_state', ?)
-		WHERE id = ? AND json_extract(body, '$.origin') = 'analysis'
-		AND json_extract(body, '$.role') = 'assistant'
-		AND COALESCE(json_extract(body, '$.review_state'), 'pending') = 'pending'`, state, id)
-	if err != nil {
-		log.Printf("store: recommendation %d: %v", id, err)
-		return false
-	}
-	n, _ := res.RowsAffected()
-	return n == 1
+	return s.mutateAgentMessage(id, func(m *model.SysAgentMessage) bool {
+		if m.Origin != "analysis" || m.Role != "assistant" || (m.ReviewState != "" && m.ReviewState != "pending") {
+			return false
+		}
+		m.ReviewState = state
+		return true
+	})
 }
-
-// PutSysAgentPlan inserts a plan (ID 0) or rewrites it, and returns its id.
-// Ready and Reason are computed on read and never stored.
 func (s *Store) PutSysAgentPlan(p model.SysAgentPlan) int64 {
-	p.Ready, p.Reason = false, ""
+	p.Ready = false
+	p.Reason = ""
 	return s.putSysAgentRow("sysagent_plans", p.ID, p.CreatedAt, p, maxSysAgentPlans)
 }
-
-// GetSysAgentPlan returns one plan.
 func (s *Store) GetSysAgentPlan(id int64) (model.SysAgentPlan, bool) {
 	var p model.SysAgentPlan
 	ok := s.getSysAgentRow("sysagent_plans", id, &p)
 	p.ID = id
 	return p, ok
 }
-
-// SysAgentPlans returns plans newest first.
 func (s *Store) SysAgentPlans(limit int) []model.SysAgentPlan {
 	out := []model.SysAgentPlan{}
-	s.sysAgentRows("sysagent_plans", limit, func(id int64, body []byte) {
+	s.sysAgentRows("sysagent_plans", limit, func(id int64, b []byte) {
 		var p model.SysAgentPlan
-		if json.Unmarshal(body, &p) == nil {
+		if json.Unmarshal(b, &p) == nil {
 			p.ID = id
 			out = append(out, p)
 		}
 	})
 	return out
 }
-
-// DeleteSysAgentPlan deletes a plan; false when there was none.
 func (s *Store) DeleteSysAgentPlan(id int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	res, err := s.db.Exec(`DELETE FROM sysagent_plans WHERE id = ?`, id)
+	res, err := s.db.Exec("DELETE FROM sysagent_plans WHERE id=?", id)
 	if err != nil {
-		log.Printf("store: delete sysagent plan %d: %v", id, err)
 		return false
 	}
 	n, _ := res.RowsAffected()
 	return n > 0
 }
-
-// PutSysAgentRun inserts a run (ID 0) or rewrites it, and returns its id.
 func (s *Store) PutSysAgentRun(r model.SysAgentRun) int64 {
 	return s.putSysAgentRow("sysagent_runs", r.ID, r.TS, r, maxSysAgentRuns)
 }
-
-// SysAgentRuns returns runs newest first.
 func (s *Store) SysAgentRuns(limit int) []model.SysAgentRun {
 	out := []model.SysAgentRun{}
-	s.sysAgentRows("sysagent_runs", limit, func(id int64, body []byte) {
+	s.sysAgentRows("sysagent_runs", limit, func(id int64, b []byte) {
 		var r model.SysAgentRun
-		if json.Unmarshal(body, &r) == nil {
+		if json.Unmarshal(b, &r) == nil {
 			r.ID = id
 			out = append(out, r)
 		}
 	})
 	return out
+}
+
+func (s *Store) PutSysAgentSession(v model.SysAgentSession) int64 {
+	return s.putSysAgentRow("sysagent_sessions", v.ID, v.OpenedAt, v, 100)
+}
+func (s *Store) SysAgentSessions() []model.SysAgentSession {
+	out := []model.SysAgentSession{}
+	s.sysAgentRows("sysagent_sessions", 100, func(id int64, b []byte) {
+		var v model.SysAgentSession
+		if json.Unmarshal(b, &v) == nil {
+			v.ID = id
+			out = append(out, v)
+		}
+	})
+	return out
+}
+func (s *Store) PutSysAgentMemory(v model.SysAgentMemory) int64 {
+	id := s.putSysAgentRow("sysagent_memory", v.ID, v.At, v, 500)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, _ = s.db.Exec("DELETE FROM sysagent_memory WHERE "+instantBeforeSQL("ts"), instantBound(time.Now().Add(-90*24*time.Hour))...)
+	return id
+}
+
+// FindSysAgentMemory uses a keyed scope index; paths and summaries are never
+// copied into a plaintext full-text index.
+func (s *Store) FindSysAgentMemory(scope string) []model.SysAgentMemory {
+	s.agentCryptoMu.RLock()
+	defer s.agentCryptoMu.RUnlock()
+	out := []model.SysAgentMemory{}
+	if s.agentLocked {
+		return out
+	}
+	h := hmac.New(sha256.New, s.agentIndexKey[:])
+	h.Write([]byte(scope))
+	rows, err := s.db.Query("SELECT id,body,meta FROM sysagent_memory WHERE json_extract(meta,'$.scope')=? ORDER BY id DESC LIMIT 500", hex.EncodeToString(h.Sum(nil)))
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var raw, meta string
+		if rows.Scan(&id, &raw, &meta) != nil {
+			continue
+		}
+		b, err := s.openAgentRow("sysagent_memory", id, meta, raw)
+		if err != nil {
+			continue
+		}
+		var v model.SysAgentMemory
+		if json.Unmarshal(b, &v) == nil && time.Since(v.At) < 90*24*time.Hour {
+			v.ID = id
+			out = append(out, v)
+		}
+	}
+	return out
+}
+func (s *Store) SysAgentMemory() []model.SysAgentMemory {
+	out := []model.SysAgentMemory{}
+	s.sysAgentRows("sysagent_memory", 500, func(id int64, b []byte) {
+		var v model.SysAgentMemory
+		if json.Unmarshal(b, &v) == nil {
+			v.ID = id
+			if time.Since(v.At) < 90*24*time.Hour {
+				out = append(out, v)
+			}
+		}
+	})
+	return out
+}
+func (s *Store) ForgetSysAgentMemory() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("DELETE FROM sysagent_memory"); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

@@ -37,6 +37,7 @@ index idx_rollup_hourly_bucket: CREATE INDEX idx_rollup_hourly_bucket ON rollup_
 index idx_sessions_activity: CREATE INDEX idx_sessions_activity ON sessions(status, (strftime('%Y-%m-%dT%H:%M:%S',substr(last_seen_at,1,19)||substr(last_seen_at,-(CASE WHEN substr(last_seen_at,-1)='Z' THEN 1 ELSE 6 END)))||'.'||substr((CASE WHEN instr(last_seen_at,'.')>0 THEN substr(last_seen_at,instr(last_seen_at,'.')+1,length(last_seen_at)-instr(last_seen_at,'.')-(CASE WHEN substr(last_seen_at,-1)='Z' THEN 1 ELSE 6 END)) ELSE '' END)||'000000000',1,9)||'Z') DESC, id DESC)
 index idx_sessions_root_identity: CREATE INDEX idx_sessions_root_identity ON sessions(root_pid, root_started_at)
 index idx_sessions_status: CREATE INDEX idx_sessions_status ON sessions(status, last_seen_at)
+index idx_sysagent_memory_scope: CREATE INDEX idx_sysagent_memory_scope ON sysagent_memory(json_extract(meta,'$.scope'),id)
 table advisor_plans: created_at TEXT notnull=0 default=; plan_json TEXT notnull=0 default=; subject_id TEXT notnull=0 default=
 table advisor_verdicts: assessment TEXT notnull=0 default=; confidence REAL notnull=0 default=; created_at TEXT notnull=0 default=; kind TEXT notnull=0 default=; model TEXT notnull=0 default=; rationale TEXT notnull=0 default=; subject_id TEXT notnull=0 default=; suggested_action TEXT notnull=0 default=
 table agent_asks: cost_usd REAL notnull=0 default=; detail TEXT notnull=0 default=; finished_at TEXT notnull=0 default=; harness TEXT notnull=1 default=; id INTEGER notnull=0 default=; output TEXT notnull=0 default=; path TEXT notnull=1 default=; repo TEXT notnull=0 default=; session_id TEXT notnull=1 default=; status TEXT notnull=1 default=; ts TEXT notnull=1 default=; verdict TEXT notnull=0 default=
@@ -63,7 +64,9 @@ table rollup_hourly: bucket TEXT notnull=1 default=; count INT notnull=1 default
 table scan_cache: body BLOB notnull=1 default=; name TEXT notnull=0 default=; saved_at TEXT notnull=1 default=
 table sessions: branch TEXT notnull=0 default=; confidence TEXT notnull=0 default=; ended_at TEXT notnull=0 default=; harness TEXT notnull=0 default=; id TEXT notnull=0 default=; last_seen_at TEXT notnull=0 default=; origin TEXT notnull=0 default=; parent_id TEXT notnull=0 default=; repo TEXT notnull=0 default=; root_pid INTEGER notnull=0 default=; root_started_at TEXT notnull=0 default=; started_at TEXT notnull=0 default=; status TEXT notnull=0 default=; workspace TEXT notnull=0 default=
 table shell_reviews: at TEXT notnull=1 default=; id INTEGER notnull=0 default=; result_json TEXT notnull=1 default=
-table sysagent_messages: body TEXT notnull=1 default=; id INTEGER notnull=0 default=; ts TEXT notnull=1 default=
-table sysagent_plans: body TEXT notnull=1 default=; id INTEGER notnull=0 default=; ts TEXT notnull=1 default=
-table sysagent_runs: body TEXT notnull=1 default=; id INTEGER notnull=0 default=; ts TEXT notnull=1 default=
+table sysagent_memory: body TEXT notnull=1 default=; id INTEGER notnull=0 default=; meta TEXT notnull=1 default='{}'; ts TEXT notnull=1 default=
+table sysagent_messages: body TEXT notnull=1 default=; id INTEGER notnull=0 default=; meta TEXT notnull=1 default='{}'; ts TEXT notnull=1 default=
+table sysagent_plans: body TEXT notnull=1 default=; id INTEGER notnull=0 default=; meta TEXT notnull=1 default='{}'; ts TEXT notnull=1 default=
+table sysagent_runs: body TEXT notnull=1 default=; id INTEGER notnull=0 default=; meta TEXT notnull=1 default='{}'; ts TEXT notnull=1 default=
+table sysagent_sessions: body TEXT notnull=1 default=; id INTEGER notnull=0 default=; meta TEXT notnull=1 default='{}'; ts TEXT notnull=1 default=
 table worktree_repos: first_seen TEXT notnull=1 default=; hidden INTEGER notnull=1 default=0; last_scan TEXT notnull=0 default=; path TEXT notnull=0 default=; source TEXT notnull=1 default=

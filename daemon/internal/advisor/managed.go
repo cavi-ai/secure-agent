@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/cavi-ai/secure-agent/daemon/internal/toolpath"
+	"io"
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"sort"
 	"time"
@@ -54,9 +55,10 @@ func LaunchManaged(spec ManagedSpec) (*exec.Cmd, string, error) {
 
 	// --chat-template-args is off: the advisor's chat request already carries
 	// enable_thinking=false per call.
-	cmd := exec.Command(bin, "--model", spec.Model, "--host", "127.0.0.1", "--port", fmt.Sprint(port))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd := toolpath.Command(context.Background(), bin, nil, "--model", spec.Model, "--host", "127.0.0.1", "--port", fmt.Sprint(port))
+	// Provider output can contain prompts; health exposes bounded errors.
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
 	if err := cmd.Start(); err != nil {
 		return nil, "", fmt.Errorf("start managed model server: %w", err)
 	}

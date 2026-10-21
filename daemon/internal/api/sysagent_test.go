@@ -20,7 +20,7 @@ import (
 )
 
 func TestAgentRoutesAreNoAgentAndConsoleAdmitted(t *testing.T) {
-	for _, p := range []string{"/agent/status", "/agent/skills", "/agent/chat", "/agent/analyze", "/agent/recommendations", "/agent/actions", "/agent/worktree", "/agent/plans", "/agent/dispatch", "/agent/runs"} {
+	for _, p := range []string{"/agent/status", "/agent/memory", "/agent/control", "/agent/skills", "/agent/chat", "/agent/analyze", "/agent/recommendations", "/agent/actions", "/agent/worktree", "/agent/plans", "/agent/dispatch", "/agent/runs"} {
 		if !apiroutes.IsNoAgent(p) || !apiroutes.ConsoleAllowed("GET", p) {
 			t.Errorf("%s: NoAgent=%v console=%v", p, apiroutes.IsNoAgent(p), apiroutes.ConsoleAllowed("GET", p))
 		}
@@ -125,7 +125,7 @@ func TestAgentChatPlansDispatch(t *testing.T) {
 	if w := do(http.MethodDelete, fmt.Sprintf("/agent/plans?id=%d", saved.Plan.ID), ""); w.Code != http.StatusOK {
 		t.Fatalf("delete: %d", w.Code)
 	}
-	if w := do(http.MethodDelete, "/agent/chat", ""); w.Code != http.StatusOK || len(st.SysAgentMessages(10)) != 0 {
+	if w := do(http.MethodDelete, "/agent/chat", ""); w.Code != http.StatusOK || len(agent.Messages(10)) != 0 || len(agent.Sessions()) != 1 || agent.Sessions()[0].ClosedAt == nil {
 		t.Fatalf("clear: %d", w.Code)
 	}
 	var runs []model.SysAgentRun
