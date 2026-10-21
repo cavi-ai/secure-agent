@@ -1459,7 +1459,8 @@
         receipt.actions = JSON.stringify(actions.map(button => button.dataset.action)) === JSON.stringify([
           'worktree-reveal', 'worktree-review-trash', 'worktree-ask', 'worktree-advise', 'worktree-discuss',
         ]) && actions.every(button => button.dataset.path === actionRow.dataset.path);
-        receipt.failure = root.querySelector('.wt-repo-error').textContent.includes('repository not found') && root.querySelectorAll('.wt-repo-actions')[0].querySelectorAll('button').length === 0;
+        const failed = root.querySelector('.wt-repo-error');
+        receipt.failure = failed.textContent.includes('repository not found') && failed.closest('.wt-repo-head').querySelectorAll('button').length === 0;
         receipt.touch = width > 720 || controls.every(node => (node.matches('input[type="checkbox"]') ? node.closest('label') : node).getBoundingClientRect().height >= 44);
         receipt.search = width > 720 || document.getElementById('worktree-search').getBoundingClientRect().width >= root.clientWidth - 40;
         receipt.dimensions = {width, search: document.getElementById('worktree-search').getBoundingClientRect().width, branch: root.querySelector('.wt-branch').getBoundingClientRect().width};
@@ -2478,11 +2479,11 @@
     }, 100);
   };
   // removeremovabledemo: three removable rows in one repository and one in
-  // another; the Removable now tile's Remove all removes all four.
+  // another; the safe lane's Remove all removes all four.
   if (scenarios.has('removeremovabledemo')) {
     setTimeout(() => {
-      stamp('removable-tile', (document.querySelector('.rc-removable') || {}).textContent || '');
-      const btn = document.querySelector('#worktrees-reclaim [data-action="worktrees-remove-removable"]');
+      const btn = document.querySelector('#worktrees-container .wt-lane-safe [data-action="worktrees-remove-removable"]');
+      stamp('removable-tile', ((document.querySelector('.rc-removable') || {}).textContent || '') + ' | ' + (btn ? btn.textContent : ''));
       if (btn) btn.click();
       confirmNext();
     }, 3000);

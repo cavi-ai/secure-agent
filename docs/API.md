@@ -1067,9 +1067,9 @@ The scan runs `git` read-only: `GIT_OPTIONAL_LOCKS=0` (no index refresh), `core.
 |---|---|
 | `main` | the repository's main worktree |
 | `prune` | the directory is gone; git still lists it |
-| `keep` | locked, conflicts, uncommitted changes, untracked files, detached-HEAD commits no ref keeps, or an agent session under the path that is live or was seen in the last 15 minutes (`in_use`, with its harness in `active_agent`); a branch that is neither merged nor idle past `stale_days`; anything otherwise removable that was active in the last 24 hours |
-| `review` | nothing git-tracked is lost, but something only lives here: precious ignored files (`.env*`, `*.pem`, `*.key`, `.tmp/`, `.claude/`, `.remember/`, with file count and size), commits on no remote and not in the default branch, stashes on the branch, an orphan directory, or an inspection error |
-| `remove` | none of the above, no activity in the last 24 hours, and contained in the default branch (ancestor, squash, or no net change) or every commit on a remote and idle past `stale_days` |
+| `keep` | locked, conflicts, uncommitted changes, untracked files, detached-HEAD commits no ref keeps, or an agent session under the path that is live or was seen in the last 15 minutes (`in_use`, with its harness in `active_agent`); a branch that is neither merged nor idle past `stale_days`; a branch merged by ancestry or with no net change that was active in the last 24 hours |
+| `review` | nothing git-tracked is lost, but something only lives here: precious ignored files (`.env*`, `*.pem`, `*.key`, `.claude/`, `.remember/`, with file count and size), scratch (`.tmp/`, in `scratch_ignored`) while the branch is not merged, commits on no remote and not in the default branch, stashes on the branch, an orphan directory, or an inspection error |
+| `remove` | none of the above, and squash-merged into the default branch, merged by ancestry or with no net change and inactive for 24 hours, or every commit on a remote and idle past `stale_days`; scratch in a merged worktree goes with it (an `info` reason names it) |
 
 `reason_kinds` gives each entry of `reasons`, in order, one kind: `keep` (removal would lose work or cut into a git operation), `agent` (an agent is working there), `review` (something only lives there), `safe` (the work is kept elsewhere) or `info`.
 
@@ -1086,11 +1086,11 @@ Merge detection is local. The default branch is `origin/HEAD`'s target, else the
     {"path": "/Users/me/code/app", "source": "session", "default_branch": "origin/main", "worktrees": [
       {"path": "/Users/me/code/app", "branch": "main", "state": "main", "reasons": ["main worktree of the repository"], "reason_kinds": ["info"], "idle_days": 0},
       {"path": "/Users/me/code/app/.worktrees/ui", "branch": "feat/ui", "head": "518e4bb2c1d0",
-       "state": "review", "reasons": ["ignored files that only live here: .tmp/ (660 files, 207.3 MB)", "merged into origin/main (squash)"],
-       "reason_kinds": ["review", "safe"],
+       "state": "review", "reasons": ["ignored files that only live here: .env (17 B)", "merged into origin/main (squash)", "scratch files go with the folder: .tmp/ (660 files, 207.3 MB)"],
+       "reason_kinds": ["review", "safe", "info"],
        "stale": true, "last_activity": "2026-09-23T06:30:41Z", "idle_days": 0,
        "upstream": "origin/feat/ui", "merged": "squash", "other_ignored": 3,
-       "precious_ignored": [".tmp/ (660 files, 207.3 MB)"]}
+       "precious_ignored": [".env (17 B)"], "scratch_ignored": [".tmp/ (660 files, 207.3 MB)"]}
     ]}
   ],
   "errors": []

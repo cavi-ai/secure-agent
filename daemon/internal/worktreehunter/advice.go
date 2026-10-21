@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -37,7 +38,7 @@ func (h *Hunter) AdviceRequest(ctx context.Context, path string) (model.Worktree
 	}
 	req := model.WorktreeAdviceRequest{
 		Path: row.Path, Head: row.Head, Branch: orDetached(row.Branch), State: row.State,
-		IdleDays: row.IdleDays, Reasons: row.Reasons, Paths: row.Paths, Precious: row.PreciousIgnored,
+		IdleDays: row.IdleDays, Reasons: row.Reasons, Paths: row.Paths, Precious: slices.Concat(row.PreciousIgnored, row.ScratchIgnored),
 		Merged: row.Merged,
 	}
 	if rs.def != "" {

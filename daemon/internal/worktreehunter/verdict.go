@@ -101,14 +101,18 @@ type Worktree struct {
 
 	Stashes         int      `json:"stashes,omitempty"`
 	PreciousIgnored []string `json:"precious_ignored,omitempty"`
-	OtherIgnored    int      `json:"other_ignored,omitempty"`
+	// ScratchIgnored lists ignored scratch directories (.tmp): they block an
+	// unmerged branch and go with a merged one.
+	ScratchIgnored []string `json:"scratch_ignored,omitempty"`
+	OtherIgnored   int      `json:"other_ignored,omitempty"`
 
 	Error string `json:"error,omitempty"`
 }
 
-// activeGrace keeps a worktree touched in the last day off the remove list:
-// a fresh worktree an agent is about to use has no commits of its own and
-// reads as merged, and its session may be recorded at the repo root.
+// activeGrace keeps a worktree touched in the last day off the remove list
+// when its merge is ancestry or an empty diff: a fresh worktree an agent is
+// about to use has no commits of its own and reads that way, and its session
+// may be recorded at the repo root. A squash merge is landed work.
 const activeGrace = 24 * time.Hour
 
 // facts carries the inputs classify reads beyond the row itself.
@@ -127,9 +131,10 @@ type facts struct {
 // Removal is judged by what `git worktree remove` destroys: the working
 // directory. Branches, stashes and every commit a ref reaches survive it.
 // keep  = uncommitted or unreachable work, a lock, or a live agent session.
-// review = nothing git-tracked is lost, but something only lives here.
-// remove = merged, or pushed and idle past staleAfter; either way untouched
-// for activeGrace.
+// review = nothing git-tracked is lost, but something only lives here
+// (scratch counts only while the branch is unmerged).
+// remove = squash-merged; merged by ancestry or an empty diff and untouched
+// for activeGrace; or pushed and idle past staleAfter.
 func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	last := latest(f.HeadTime, f.IndexTime, f.LastSession)
 	if !last.IsZero() {
@@ -195,6 +200,9 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	if len(w.PreciousIgnored) > 0 {
 		review = append(review, entry{ReasonReview, "ignored files that only live here: " + strings.Join(w.PreciousIgnored, ", ")})
 	}
+	if len(w.ScratchIgnored) > 0 && !merged {
+		review = append(review, entry{ReasonReview, "scratch files that only live here: " + strings.Join(w.ScratchIgnored, ", ")})
+	}
 	def := orDefault(f.DefaultBranch)
 	longer := ""
 	if w.ContentExtended > 0 {
@@ -209,8 +217,13 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 		differs = fmt.Sprintf("%d lines or files it removes or changes still differ on %s", w.ContentOther, def)
 	}
 	if w.Unique > 0 && !merged {
-		reason := fmt.Sprintf("%s on no remote and not in %s (the branch keeps them after removal)",
-			plural(w.Unique, "commit", "commits"), def)
+		// A detached HEAD has no branch to keep them; Loose says what is lost.
+		kept, keeps := " (the branch keeps them after removal)", "; the branch keeps its commits after removal"
+		if w.Detached {
+			kept, keeps = "", ""
+		}
+		reason := fmt.Sprintf("%s on no remote and not in %s%s",
+			plural(w.Unique, "commit", "commits"), def, kept)
 		var measure []string
 		if w.ContentLines > 0 {
 			added := "they add"
@@ -224,7 +237,7 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 		}
 		switch {
 		case w.Unrelated && len(measure) > 0:
-			reason = "shares no history with " + def + " (rewritten); " + strings.Join(measure, "; ") + "; the branch keeps its commits after removal"
+			reason = "shares no history with " + def + " (rewritten); " + strings.Join(measure, "; ") + keeps
 		case w.Unrelated:
 			reason += "; it shares no history with " + def + " (rewritten)"
 		case len(measure) > 0:
@@ -249,7 +262,7 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 		if merged {
 			w.reason(ReasonSafe, mr)
 		}
-	case merged && recent:
+	case merged && recent && w.Merged != mergedSquash:
 		w.State = StateKeep
 		w.reason(ReasonInfo, mr+"; active in the last 24 hours")
 	case merged:
@@ -268,6 +281,9 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	}
 	if w.State == StateRemove && w.Submodules > 0 {
 		w.reason(ReasonSafe, plural(w.Submodules, "submodule", "submodules")+" with every commit on a remote")
+	}
+	if merged && len(w.ScratchIgnored) > 0 {
+		w.reason(ReasonInfo, "scratch files go with the folder: "+strings.Join(w.ScratchIgnored, ", "))
 	}
 }
 
@@ -310,8 +326,8 @@ func mergedReason(how, def string) string {
 		return "changes nothing against " + orDefault(def)
 	default:
 		// Ancestry covers a merged branch and a fresh one with no commits
-		// of its own alike.
-		return "contained in " + orDefault(def)
+		// of its own alike: name the fact, not a merge.
+		return "no commits outside " + orDefault(def)
 	}
 }
 

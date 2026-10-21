@@ -1713,6 +1713,7 @@ export interface Worktree {
   submodule_local?: string[];
   stashes?: number;
   precious_ignored?: string[];
+  scratch_ignored?: string[];
   other_ignored?: number;
   error?: string;
 }

@@ -154,7 +154,7 @@ def orphan_worktrees(now_ms=None):
             }],
         }]},
         {"route": "/worktrees", "path": ["errors"], "value": [
-            "/Users/dev/gone-app: repository not found (moved or deleted); 1 folder still points to it (listed first below)",
+            "/Users/dev/gone-app: repository not found (moved or deleted); 1 folder still points to it",
         ]},
     ]}
 

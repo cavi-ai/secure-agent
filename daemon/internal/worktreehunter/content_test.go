@@ -25,7 +25,7 @@ func TestClassifyKeepsMergeFactBesideOtherReasons(t *testing.T) {
 
 	w = Worktree{Merged: mergedAncestor, PreciousIgnored: []string{".env (17 B)"}}
 	classify(&w, idle, now, 14*24*time.Hour)
-	if got := strings.Join(w.Reasons, " | "); w.State != StateReview || got != "ignored files that only live here: .env (17 B) | contained in origin/main" {
+	if got := strings.Join(w.Reasons, " | "); w.State != StateReview || got != "ignored files that only live here: .env (17 B) | no commits outside origin/main" {
 		t.Errorf("merged with a precious file: state %s reasons %q", w.State, got)
 	}
 

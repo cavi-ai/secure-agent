@@ -19,6 +19,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: polls every 30 s while the event stream is live, whichever connected first.
 - Config: YAML is parsed with the maintained `go.yaml.in/yaml/v3`.
 - File telemetry: a process's repeated opens of a file within a minute are stored once.
+- Worktrees: squash-merged worktrees are removable at once and `.tmp/` scratch no longer holds back a merged one; the page sorts rows into Safe to remove, Has local work, Check first, Not merged yet and In use.
 
 ### Fixed
 - Agent detection: identify Node-based OpenClaw by its running program so unrelated MCP helpers using the same Node binary keep their parent harness attribution.

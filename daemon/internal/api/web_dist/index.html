@@ -605,12 +605,11 @@
         <div class="system-subview" id="system-worktrees" data-system-view="worktrees" role="tabpanel" aria-labelledby="system-tab-worktrees">
         <section class="panel wt-workspace">
           <div class="panel-head">
-            <div class="wt-page-heading"><h2>Clean up worktrees</h2><p>Review the exceptions. Remove only what you choose.</p></div>
+            <div class="wt-page-heading"><h2>Clean up worktrees</h2><p class="wt-summary" id="worktrees-summary"></p></div>
             <div class="wt-head-actions">
               <input type="search" id="worktree-search" class="input harness-filter-text wt-search" placeholder="Filter by branch, folder or repo…" aria-label="Filter worktrees by branch, folder or repository" autocomplete="off" spellcheck="false">
               <button type="button" class="btn btn-sm" data-action="worktrees-history"><svg class="icon"><use href="#i-history"/></svg>History</button>
               <button type="button" class="btn btn-sm" data-action="worktrees-rescan"><svg class="icon"><use href="#i-refresh"/></svg>Rescan</button>
-            <details class="wt-tool"><summary>Filters</summary><div class="harness-pills" id="worktree-pills"></div></details>
             <details class="wt-tool"><summary>Add repository</summary>
             <form class="wt-add" id="worktree-add-form">
               <input type="text" id="worktree-add-input" class="input harness-filter-text" placeholder="Add a repository: /path/to/repo" aria-label="Repository path to add" autocomplete="off" spellcheck="false">
@@ -619,12 +618,12 @@
             </details>
             </div>
           </div>
+          <div class="harness-pills wt-lane-pills" id="worktree-pills" role="group" aria-label="Show worktrees by lane"></div>
           <ul class="wt-errors" id="worktrees-errors" hidden></ul>
           <div class="panel-body" id="worktrees-container">
             <div class="loading">Scanning worktrees…</div>
           </div>
           <details class="wt-metrics"><summary>Disk usage and cleanup activity</summary>
-            <p class="wt-summary" id="worktrees-summary"></p>
             <div class="wt-disk" id="worktrees-disk"></div>
             <div class="rc-wrap"><div class="rc" id="worktrees-reclaim"></div><div class="rc-tip" id="reclaim-tip" role="tooltip" hidden></div></div>
           </details>

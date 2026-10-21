@@ -61,7 +61,7 @@ func TestOrphansOfMovedAndDeletedRepositories(t *testing.T) {
 	}
 	want := map[string]bool{}
 	for _, main := range []string{moved.main, deleted.main} {
-		want[canonical(filepath.Dir(main))+"/"+filepath.Base(main)+": "+ErrRepoMissing+"; 1 folder still points to it (listed first below)"] = true
+		want[canonical(filepath.Dir(main))+"/"+filepath.Base(main)+": "+ErrRepoMissing+"; 1 folder still points to it"] = true
 	}
 	if len(lines) != 2 || !want[lines[0]] || !want[lines[1]] {
 		t.Fatalf("error lines = %q, want %v", lines, want)

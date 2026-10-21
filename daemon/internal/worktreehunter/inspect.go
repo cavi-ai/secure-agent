@@ -181,11 +181,13 @@ func partlyStaged(xy string) int {
 }
 
 // preciousDirs and preciousFiles mark ignored entries that are usually the
-// only copy of something: local secrets, agent state, scratch evidence.
-// Build outputs and dependency trees are regenerable and never block.
+// only copy of something: local secrets, agent state. scratchDirs hold
+// working files: evidence while the branch is open, leftovers once it is
+// merged. Build outputs and dependency trees are regenerable and never block.
 var (
-	preciousDirs  = map[string]bool{".tmp": true, ".claude": true, ".remember": true}
+	preciousDirs  = map[string]bool{".claude": true, ".remember": true}
 	preciousFiles = []string{".env", ".env.*", "*.pem", "*.key"}
+	scratchDirs   = map[string]bool{".tmp": true}
 )
 
 // junkFiles never count as content: a directory holding only these is empty.
@@ -197,29 +199,36 @@ const maxIgnored = 5000
 // maxWalk caps the files counted under one precious directory.
 const maxWalk = 20000
 
-// ignoredFacts lists precious ignored entries and counts the rest.
+// ignoredFacts lists precious and scratch ignored entries and counts the rest.
 type ignoredFacts struct {
 	Precious []string
+	Scratch  []string
 	Other    int
 }
 
 // readIgnored lists ignored entries (untracked directories collapsed, empty
-// ones skipped) and describes each precious one with its size, dropping a
-// precious directory that holds nothing but junk.
+// ones skipped) and describes each precious or scratch one with its size,
+// dropping a directory that holds nothing but junk.
 func readIgnored(ctx context.Context, dir string) (ignoredFacts, error) {
 	out, err := git(ctx, dir, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "--no-empty-directory", "-z")
 	if err != nil {
 		return ignoredFacts{}, err
 	}
 	f := classifyIgnored(strings.Split(out, "\x00"))
-	described := f.Precious[:0]
-	for _, e := range f.Precious {
+	f.Precious = describeEntries(dir, f.Precious)
+	f.Scratch = describeEntries(dir, f.Scratch)
+	return f, nil
+}
+
+// describeEntries describes each entry, dropping those that hold nothing.
+func describeEntries(dir string, entries []string) []string {
+	described := entries[:0]
+	for _, e := range entries {
 		if d, ok := describeEntry(dir, e); ok {
 			described = append(described, d)
 		}
 	}
-	f.Precious = described
-	return f, nil
+	return described
 }
 
 // describeEntry renders a precious entry with what it holds: "<dir>/ (N
@@ -281,30 +290,48 @@ func classifyIgnored(entries []string) ignoredFacts {
 		if e == "" {
 			continue
 		}
-		if isPrecious(e) {
+		switch {
+		case isPrecious(e):
 			if len(f.Precious) < maxPaths {
 				f.Precious = append(f.Precious, e)
 			}
-			continue
+		case inDirs(e, scratchDirs):
+			if len(f.Scratch) < maxPaths {
+				f.Scratch = append(f.Scratch, e)
+			}
+		default:
+			f.Other++
 		}
-		f.Other++
 	}
 	return f
 }
 
 func isPrecious(entry string) bool {
+	if inDirs(entry, preciousDirs) {
+		return true
+	}
+	trimmed := strings.TrimSuffix(entry, "/")
+	base := filepath.Base(trimmed)
+	if junkFiles[base] {
+		return false
+	}
+	for _, pat := range preciousFiles {
+		if ok, _ := filepath.Match(pat, base); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// inDirs reports whether entry is, or lies under, a directory named in dirs.
+// Junk files never count.
+func inDirs(entry string, dirs map[string]bool) bool {
 	trimmed := strings.TrimSuffix(entry, "/")
 	if junkFiles[filepath.Base(trimmed)] {
 		return false
 	}
 	for _, part := range strings.Split(trimmed, "/") {
-		if preciousDirs[part] {
-			return true
-		}
-	}
-	base := filepath.Base(trimmed)
-	for _, pat := range preciousFiles {
-		if ok, _ := filepath.Match(pat, base); ok {
+		if dirs[part] {
 			return true
 		}
 	}
