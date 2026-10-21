@@ -46,6 +46,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: on the proxy listener, every change (guard answers, rules, mutes, acknowledgements, kills) refuses agent processes, as reads of protected routes already did.
 - Updates: the in-app updater installs only a bundle that satisfies the running app's signing requirement, not any valid signature.
 - Console: the event stream authenticates with a stream-only HttpOnly cookie instead of the console token in its URL, and the proxy listener refuses console requests whose Host or Origin is not the loopback console.
+- Build: Go 1.26.10 standard-library security fixes (GO-2026-6809, `crypto/x509`).
 
 ## [1.3.0] - 2026-10-12
 
