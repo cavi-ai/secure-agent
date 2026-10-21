@@ -15,6 +15,21 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
+// Every pooled connection caps the WAL file a checkpoint leaves behind.
+func TestStoreCapsTheWALFile(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "events.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	for range 3 {
+		var limit int64
+		if err := s.db.QueryRow(`PRAGMA journal_size_limit`).Scan(&limit); err != nil || limit != 64<<20 {
+			t.Fatalf("journal_size_limit = %d, %v; want 64 MiB", limit, err)
+		}
+	}
+}
+
 func TestPutAndReadFlagRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))

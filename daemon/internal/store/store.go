@@ -284,7 +284,10 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 
 	dsn := dbPath
 	if dsn != "" {
-		dsn = dsn + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(3000)&_pragma=analysis_limit(1000)"
+		// journal_size_limit: once a checkpoint resets a WAL that a long
+		// reader let grow, the file is cut back to 64 MiB instead of keeping
+		// its high-water size on disk.
+		dsn = dsn + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(3000)&_pragma=analysis_limit(1000)&_pragma=journal_size_limit(67108864)"
 	} else {
 		dsn = ":memory:?_pragma=journal_mode(WAL)"
 	}
