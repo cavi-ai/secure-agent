@@ -28,8 +28,6 @@ func (s *Store) PutScanCache(name string, body []byte, at time.Time) {
 
 // ScanCache returns the named entry and when it was saved.
 func (s *Store) ScanCache(name string) ([]byte, time.Time, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var at string
 	var body []byte
 	err := s.db.QueryRow(`SELECT saved_at, body FROM scan_cache WHERE name = ?`, name).Scan(&at, &body)

@@ -84,8 +84,6 @@ func (s *Store) putHookRunLocked(e event.Event) (WriteResult, error) {
 // most runs first.
 func (s *Store) SessionHooks(sessionID string) (out []HookSummary, readErr error) {
 	defer func() { s.noteRead("hook runs", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	rows, err := s.db.Query(`SELECT
 			CASE WHEN instr(hook, ':') > 0 THEN substr(hook, 1, instr(hook, ':') - 1) ELSE hook END AS ev,
 			script, COUNT(*),

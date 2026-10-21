@@ -63,10 +63,6 @@ func (s *Store) noteIncidentDetailRead(err error) {
 
 // Advice is optional enrichment. Its batch read has separate health so an
 // unavailable advisor table cannot erase readable incident evidence.
-func (s *Store) attachIncidentDetailAdviceLocked(list []IncidentDetail) {
-	s.attachIncidentDetailAdviceQuery(s.db, list)
-}
-
 func (s *Store) attachIncidentDetailAdviceQuery(q rowQuerier, list []IncidentDetail) {
 	if len(list) == 0 {
 		return
@@ -123,8 +119,6 @@ func validateIncidentWorkflow(wf IncidentWorkflow) error {
 // workflow and remediation together. Healthy absence remains sql.ErrNoRows.
 func (s *Store) GetIncidentDetail(id string) (detail *IncidentDetail, readErr error) {
 	defer func() { s.noteIncidentDetailRead(readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	row := s.db.QueryRow(`SELECT `+incidentDetailColumns+` FROM incidents WHERE id=COALESCE(
 		(SELECT id FROM incidents WHERE id=?),
 		(SELECT id FROM incidents WHERE flag_id=? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value=?)
@@ -134,26 +128,18 @@ func (s *Store) GetIncidentDetail(id string) (detail *IncidentDetail, readErr er
 		return nil, err
 	}
 	list := []IncidentDetail{got}
-	s.attachIncidentDetailAdviceLocked(list)
+	s.attachIncidentDetailAdviceQuery(s.db, list)
 	return &list[0], nil
 }
 
 func (s *Store) RecentIncidentDetails(limit int) (out []IncidentDetail, readErr error) {
 	defer func() { s.noteIncidentDetailRead(readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.incidentDetailsLocked(`SELECT `+incidentDetailColumns+` FROM incidents WHERE (status IS NULL OR status!='resolved') ORDER BY `+timestampOrderExpr("created_at")+` DESC,id DESC LIMIT ?`, "", normalizeLimit(limit))
+	return s.incidentDetailsQuery(s.db, `SELECT `+incidentDetailColumns+` FROM incidents WHERE (status IS NULL OR status!='resolved') ORDER BY `+timestampOrderExpr("created_at")+` DESC,id DESC LIMIT ?`, "", normalizeLimit(limit))
 }
 
 func (s *Store) SessionIncidentDetails(sessionID string) (out []IncidentDetail, readErr error) {
 	defer func() { s.noteRead("incident remediation", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.incidentDetailsLocked(`SELECT `+incidentDetailColumns+` FROM incidents WHERE session_id=? ORDER BY `+timestampOrderExpr("created_at")+` DESC,id DESC LIMIT 100`, sessionID, sessionID)
-}
-
-func (s *Store) incidentDetailsLocked(query, sessionID string, args ...any) ([]IncidentDetail, error) {
-	return s.incidentDetailsQuery(s.db, query, sessionID, args...)
+	return s.incidentDetailsQuery(s.db, `SELECT `+incidentDetailColumns+` FROM incidents WHERE session_id=? ORDER BY `+timestampOrderExpr("created_at")+` DESC,id DESC LIMIT 100`, sessionID, sessionID)
 }
 
 func (s *Store) incidentDetailsQuery(q rowQuerier, query, sessionID string, args ...any) ([]IncidentDetail, error) {

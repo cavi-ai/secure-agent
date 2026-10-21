@@ -86,10 +86,6 @@ func projectIncidentRemediation(inc *model.IncidentReport, raw string) (remediat
 	return state, nil
 }
 
-func (s *Store) attachIncidentRemediationLocked(inc *model.IncidentReport) error {
-	return attachIncidentRemediation(s.db, inc)
-}
-
 func attachIncidentRemediation(q incidentRowQueryer, inc *model.IncidentReport) error {
 	var raw string
 	if err := q.QueryRow(`SELECT COALESCE(remediation_json,'') FROM incidents WHERE id=?`, inc.ID).Scan(&raw); err != nil {

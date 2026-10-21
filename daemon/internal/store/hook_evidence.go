@@ -61,8 +61,6 @@ func (s *Store) SessionHookEvidence(session string, f HookEvidenceFilter, now ti
 	}
 	defer func() { s.noteRead("hook evidence", readErr) }()
 	out = HookEvidencePage{SessionID: session, Filter: f, Since: now.Add(-hookhealth.Window), Until: now, Rows: []HookEvidenceRun{}}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	eventColumn := "(CASE WHEN instr(hook,':')>0 THEN substr(hook,1,instr(hook,':')-1) ELSE hook END)"
 	if f.EventScope == "exact" {
 		eventColumn = "hook"
@@ -113,7 +111,7 @@ func (s *Store) SessionHookEvidence(session string, f HookEvidenceFilter, now ti
 		out.Rows = out.Rows[:hookEvidenceLimit]
 	}
 	if f.VerifyAfter != nil {
-		runs, truncated, err := s.hookHealthRunsLocked("session_id=? AND harness=? AND hook=? AND COALESCE(json_extract(evidence_json,'$.handler_id'),'')=?", []any{session, f.Harness, f.Event, f.HandlerID}, now)
+		runs, truncated, err := s.hookHealthRuns("session_id=? AND harness=? AND hook=? AND COALESCE(json_extract(evidence_json,'$.handler_id'),'')=?", []any{session, f.Harness, f.Event, f.HandlerID}, now)
 		if err != nil {
 			return out, err
 		}

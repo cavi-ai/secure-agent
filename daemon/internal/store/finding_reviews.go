@@ -297,21 +297,21 @@ func observeReviewTx(tx *sql.Tx, f model.Flag, a model.FindingAssessment) (r mod
 }
 
 func (s *Store) GetFindingReview(id string) (r model.ReviewRecord, ok bool, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer func() { s.noteRead("finding reviews", err) }()
-	r, err = reviewFromRow(s.db.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE id=?`, id))
+	// The review and its links come from one snapshot.
+	tx, err := s.readTx()
+	if err != nil {
+		return r, false, err
+	}
+	defer tx.Rollback()
+	r, err = reviewFromRow(tx.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, false, nil
 	}
 	if err == nil {
-		err = s.reviewLinksLocked(&r)
+		err = s.reviewLinksQuery(tx, &r, true)
 	}
 	return r, err == nil, err
-}
-
-func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
-	return s.reviewLinksQuery(s.db, r, true)
 }
 
 func (s *Store) reviewLinksQuery(q rowQuerier, r *model.ReviewRecord, includeScopes bool) error {
@@ -416,10 +416,15 @@ func (s *Store) ListSessionFindingReviews(sessionID string) (ReviewPage, error) 
 	return s.listFindingReviews("", 100, "", sessionID)
 }
 
-func (s *Store) listFindingReviews(after string, limit int, state, sessionID string) (page ReviewPage, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.listFindingReviewsQuery(s.db, after, limit, state, sessionID, true)
+func (s *Store) listFindingReviews(after string, limit int, state, sessionID string) (ReviewPage, error) {
+	// The page and its links come from one snapshot.
+	tx, err := s.readTx()
+	if err != nil {
+		s.noteRead("finding reviews", err)
+		return ReviewPage{Reviews: []model.ReviewRecord{}, Degraded: true}, err
+	}
+	defer tx.Rollback()
+	return s.listFindingReviewsQuery(tx, after, limit, state, sessionID, true)
 }
 
 func (s *Store) listFindingReviewsQuery(q rowQuerier, after string, limit int, state, sessionID string, includeScopes bool) (page ReviewPage, err error) {
@@ -474,10 +479,14 @@ func (s *Store) listFindingReviewsQuery(q rowQuerier, after string, limit int, s
 
 // FindingReviewID resolves coverage without returning bounded history links.
 func (s *Store) FindingReviewID(flagID string) (id string, readErr error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	defer func() { s.noteRead("finding reviews", readErr) }()
-	return s.findingReviewIDLocked(flagID)
+	// The membership, flag and review come from one snapshot.
+	tx, err := s.readTx()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	return s.findingReviewID(tx, flagID)
 }
 
 // AttachFindingReviewIDs preserves core flags and valid sibling links while
@@ -489,7 +498,7 @@ func (s *Store) AttachFindingReviewIDs(flags []model.Flag) error {
 	}
 	var readErr error
 	for i := range flags {
-		id, err := s.findingReviewIDLocked(flags[i].ID)
+		id, err := s.findingReviewID(s.db, flags[i].ID)
 		flags[i].ReviewID = id
 		if readErr == nil {
 			readErr = err
@@ -499,16 +508,16 @@ func (s *Store) AttachFindingReviewIDs(flags []model.Flag) error {
 	return readErr
 }
 
-func (s *Store) findingReviewIDLocked(flagID string) (string, error) {
+func (s *Store) findingReviewID(q rowQuerier, flagID string) (string, error) {
 	var id, key string
-	err := s.db.QueryRow(`SELECT review_id,source_key FROM finding_review_members WHERE flag_id=?`, flagID).Scan(&id, &key)
+	err := q.QueryRow(`SELECT review_id,source_key FROM finding_review_members WHERE flag_id=?`, flagID).Scan(&id, &key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	f, found, err := s.getFlagResultLocked(flagID)
+	f, found, err := s.flagResultQuery(q, flagID)
 	if err != nil {
 		return "", err
 	}
@@ -517,7 +526,7 @@ func (s *Store) findingReviewIDLocked(flagID string) (string, error) {
 	}
 	// Membership alone is not a usable link: the canonical target must still
 	// exist and satisfy the same identity/state checks as review detail reads.
-	r, err := reviewFromRow(s.db.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE id=?`, id))
+	r, err := reviewFromRow(q.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", errors.New("finding review link target missing")
 	}

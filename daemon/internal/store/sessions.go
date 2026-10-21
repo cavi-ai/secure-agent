@@ -364,8 +364,6 @@ func (s *Store) MarkSessionsIdle(cutoff time.Time) (_ []string, writeErr error) 
 // RootStartedAt set, so the resolver can end every session whose root
 // process is gone or reused.
 func (s *Store) SessionRoots() map[int32][]model.Session {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	rows, err := s.db.Query(`SELECT root_pid, id, COALESCE(root_started_at, '') FROM sessions WHERE status != ? AND root_pid != 0`, model.SessionEnded)
 	if err != nil {
 		return nil
@@ -386,8 +384,6 @@ func (s *Store) SessionRoots() map[int32][]model.Session {
 // identity with this (harness, workspace, repo, branch) so a tree row reads
 // "claude · secure-agent@main" rather than a bare process cwd ("/").
 func (s *Store) SessionsByRootPID() map[int32]model.Session {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	rows, err := s.db.Query(`SELECT id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence, COALESCE(origin, '')
 		FROM sessions WHERE status != ? AND root_pid != 0`, model.SessionEnded)
 	if err != nil {
@@ -494,8 +490,13 @@ func scanSessions(rows *sql.Rows) []model.Session {
 // query. HTTP consumers must not replace last-known data on a read failure.
 func (s *Store) ListSessions(f SessionFilter) (out []model.Session, readErr error) {
 	defer func() { s.noteRead("sessions", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// The live list and the ended tail come from one snapshot, so a session
+	// ending in between is listed once.
+	tx, err := s.readTx()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 100
@@ -503,7 +504,7 @@ func (s *Store) ListSessions(f SessionFilter) (out []model.Session, readErr erro
 	extra, extraArgs := f.where()
 	query := func(statusClause string, statusArgs []any, n int) (*sql.Rows, error) {
 		args := append(append(statusArgs, extraArgs...), n)
-		return s.db.Query(sessionSelect+` WHERE `+statusClause+extra+` ORDER BY `+timestampOrderExpr("last_seen_at")+` DESC, id DESC LIMIT ?`, args...)
+		return tx.Query(sessionSelect+` WHERE `+statusClause+extra+` ORDER BY `+timestampOrderExpr("last_seen_at")+` DESC, id DESC LIMIT ?`, args...)
 	}
 	switch f.Status {
 	case "":
@@ -541,8 +542,6 @@ func (s *Store) ListSessions(f SessionFilter) (out []model.Session, readErr erro
 // write. Missing is false, nil; a failed read is an error and a read-health fault.
 func (s *Store) GetSession(id string) (_ model.Session, _ bool, readErr error) {
 	defer func() { s.noteRead("session lookup", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	rows, err := s.db.Query(sessionSelect+` WHERE id = ?`, id)
 	if err != nil {
 		return model.Session{}, false, err

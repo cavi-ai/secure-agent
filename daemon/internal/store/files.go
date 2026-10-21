@@ -28,8 +28,6 @@ func jsonLike(path string) string {
 // row cannot be read. A successful empty result is non-nil.
 func (s *Store) PathFindings(path string, limit int) (findings []model.FileFinding, readErr error) {
 	defer func() { s.noteRead("path findings", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	out := []model.FileFinding{}
 	like := jsonLike(path)
 
@@ -105,8 +103,6 @@ func (s *Store) PathFindings(path string, limit int) (findings []model.FileFindi
 // history and discards partial results on failure.
 func (s *Store) PathAccesses(path string, limit int) (accesses []model.FileAccess, readErr error) {
 	defer func() { s.noteRead("path accesses", readErr) }()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	out := []model.FileAccess{}
 	rows, err := s.db.Query(`SELECT kind, ts, pid, COALESCE(exe_path, ''), session_id FROM events
 		WHERE path = ? AND kind IN (?, ?, ?) AND COALESCE(session_id, '') != '' ORDER BY id DESC LIMIT ?`,

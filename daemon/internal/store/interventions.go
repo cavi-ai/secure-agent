@@ -25,7 +25,7 @@ func (s *Store) ReserveIntervention(r model.InterventionReceipt) (_ bool, writeE
 	defer cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r.SessionID = s.sessionIDForRootLocked(r.RootPID, r.RootStartedAt)
+	r.SessionID = s.sessionIDForRoot(r.RootPID, r.RootStartedAt)
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return false, err
@@ -45,7 +45,7 @@ func (s *Store) SaveIntervention(r model.InterventionReceipt) (writeErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Exact root identity, under the same lock as session rekeying.
-	r.SessionID = s.sessionIDForRootLocked(r.RootPID, r.RootStartedAt)
+	r.SessionID = s.sessionIDForRoot(r.RootPID, r.RootStartedAt)
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return err

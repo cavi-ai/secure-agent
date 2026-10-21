@@ -120,18 +120,25 @@ func (s *Store) CostReport(since, until time.Time, by string, opts CostOptions) 
 	case "day":
 		keyExpr = costDayExpr(opts.TZMinutes)
 	case "provider":
-		// ProviderFor is caller code: it runs with s.mu released.
-		keyExpr, keyArgs = costProviderExpr(opts.ProviderFor, s.costProviderModels(opts.ProviderFor, window))
+		// ProviderFor is caller code that may read the store: it runs before
+		// the report's transaction holds a connection.
+		keyExpr, keyArgs = costProviderExpr(opts.ProviderFor, costProviderModels(s.db, opts.ProviderFor, window))
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Every statement below reads one snapshot, so the total, rows, unpriced
+	// groups and dominant values agree.
+	tx, err := s.readTx()
+	if err != nil {
+		log.Printf("store: cost report error: %v", err)
+		return rep
+	}
+	defer tx.Rollback()
 	windowArgs := func(extra ...any) []any {
 		return append(append(slices.Clone(keyArgs), window...), extra...)
 	}
 
 	t := &rep.Total
-	if err := s.db.QueryRow(`SELECT `+aggregates+costFrom, window...).
+	if err := tx.QueryRow(`SELECT `+aggregates+costFrom, window...).
 		Scan(&t.Calls, &t.Sessions, &t.TokensIn, &t.TokensOut, &t.CostUSD, &t.Unpriced); err != nil {
 		log.Printf("store: cost total error: %v", err)
 		return rep
@@ -141,7 +148,7 @@ func (s *Store) CostReport(since, until time.Time, by string, opts CostOptions) 
 	if by == "day" {
 		order = `k DESC` // the newest days under the limit, reversed below
 	}
-	rows, err := s.db.Query(`SELECT `+keyExpr+` AS k, `+aggregates+costFrom+`
+	rows, err := tx.Query(`SELECT `+keyExpr+` AS k, `+aggregates+costFrom+`
 		GROUP BY k ORDER BY `+order+` LIMIT ?`, windowArgs(costRowLimit)...)
 	if err != nil {
 		log.Printf("store: cost report error: %v", err)
@@ -158,7 +165,7 @@ func (s *Store) CostReport(since, until time.Time, by string, opts CostOptions) 
 		slices.Reverse(rep.Rows)
 	}
 
-	grows, err := s.db.Query(`SELECT `+keyExpr+` AS k, COALESCE(e.model,'') AS m, COALESCE(e.provider,'') AS p,
+	grows, err := tx.Query(`SELECT `+keyExpr+` AS k, COALESCE(e.model,'') AS m, COALESCE(e.provider,'') AS p,
 		COUNT(*), COALESCE(SUM(e.tokens_in),0), COALESCE(SUM(e.tokens_out),0)`+costFrom+`
 		AND (e.cost_usd IS NULL OR e.cost_usd = 0)
 		GROUP BY k, m, p ORDER BY 4 DESC, k, m, p`, windowArgs()...)
@@ -181,13 +188,13 @@ func (s *Store) CostReport(since, until time.Time, by string, opts CostOptions) 
 		return rep
 	}
 	if by != "harness" {
-		harness := s.dominantLocked(keyExpr, "s.harness", windowArgs())
+		harness := dominantValues(tx, keyExpr, "s.harness", windowArgs())
 		for i := range rep.Rows {
 			rep.Rows[i].Harness = harness[rep.Rows[i].Key]
 		}
 	}
 	if by == "model" {
-		provider := s.dominantLocked(keyExpr, "e.provider", windowArgs())
+		provider := dominantValues(tx, keyExpr, "e.provider", windowArgs())
 		for i := range rep.Rows {
 			rep.Rows[i].Provider = provider[rep.Rows[i].Key]
 		}
@@ -205,14 +212,12 @@ func costDayExpr(tzMinutes int) string {
 }
 
 // costProviderModels lists the distinct model ids in the window with no
-// recorded provider, or nil when providerFor is nil. It takes s.mu.
-func (s *Store) costProviderModels(providerFor func(string) string, window []any) []string {
+// recorded provider, or nil when providerFor is nil.
+func costProviderModels(q rowQuerier, providerFor func(string) string, window []any) []string {
 	if providerFor == nil {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT DISTINCT COALESCE(e.model,'') AS m`+costFrom+`
+	rows, err := q.Query(`SELECT DISTINCT COALESCE(e.model,'') AS m`+costFrom+`
 		AND COALESCE(e.provider,'') = '' ORDER BY m`, window...)
 	if err != nil {
 		log.Printf("store: cost provider models error: %v", err)
@@ -266,12 +271,12 @@ func costProviderExpr(providerFor func(string) string, models []string) (string,
 	return b.String(), args
 }
 
-// dominantLocked maps each group key to the non-empty value of col with the
+// dominantValues maps each group key to the non-empty value of col with the
 // most calls in the window; ties break alphabetically. args binds keyExpr's
-// parameters, then the window. Caller holds s.mu.
-func (s *Store) dominantLocked(keyExpr, col string, args []any) map[string]string {
+// parameters, then the window.
+func dominantValues(q rowQuerier, keyExpr, col string, args []any) map[string]string {
 	dominant := map[string]string{}
-	rows, err := s.db.Query(`SELECT `+keyExpr+` AS k, `+col+` AS v, COUNT(*) AS n`+costFrom+`
+	rows, err := q.Query(`SELECT `+keyExpr+` AS k, `+col+` AS v, COUNT(*) AS n`+costFrom+`
 		AND `+col+` IS NOT NULL AND `+col+` != ''
 		GROUP BY k, v ORDER BY k, n DESC, v ASC`, args...)
 	if err != nil {
