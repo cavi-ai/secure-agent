@@ -443,6 +443,30 @@ func TestReviewPromotionCollisionKeepsSeparateReceipts(t *testing.T) {
 	}
 }
 
+// The startup backfill reads each page of 100 flags in two statements and
+// observes it in one transaction, not one read and one transaction per flag.
+func TestReviewBackfillObservesEachPageInOneTransaction(t *testing.T) {
+	s := reviewStore(t)
+	for i := range 250 {
+		insertReviewFlag(t, s, reviewFlag(fmt.Sprintf("source-%03d", i)))
+	}
+	var txs int
+	s.reviewTxBegun = func() { txs++ }
+	if err := s.backfillFindingReviews(); err != nil {
+		t.Fatal(err)
+	}
+	if txs != 3 {
+		t.Fatalf("backfill used %d review transactions for 250 flags, want 3", txs)
+	}
+	var members int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM finding_review_members`).Scan(&members); err != nil || members != 250 {
+		t.Fatalf("observed members = %d, %v; want all 250 flags", members, err)
+	}
+	if r := onlyReview(t, s); r.Count != 250 || r.FirstSeen.IsZero() {
+		t.Fatalf("review = %+v, want one review counting every flag", r)
+	}
+}
+
 func TestReviewBackfillPreservesReportedLegacyClosure(t *testing.T) {
 	s := reviewStore(t)
 	f := reviewFlag("source")

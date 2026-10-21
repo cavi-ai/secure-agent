@@ -129,6 +129,8 @@ type Store struct {
 	resourceEpisodeAfterLookup func()
 	// Test seam between a retention scan and its delete; nil in production.
 	pruneScanned func()
+	// Test seam at the start of each finding-review transaction; nil in production.
+	reviewTxBegun func()
 	// openID is the newest event id when the store opened: rows above it
 	// were written since this daemon started, whatever their own timestamp.
 	openID int64
