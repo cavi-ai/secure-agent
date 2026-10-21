@@ -126,7 +126,7 @@ test('selection spans repositories and filters; select shown respects both searc
   controller.setWorktreeSearch('other');
   controller.selectVisibleWorktrees('feat/other');
   controller.setWorktreeSearch('');
-  controller.setWorktreeFilter('review');
+  controller.setWorktreeFilter('check');
   controller.selectVisibleWorktrees('untracked');
   assert.deepEqual([...controller.worktreesState.selected.keys()], ['/code/lib/other', `${REPO}/review`]);
   controller.toggleWorktreeSelection(WT);

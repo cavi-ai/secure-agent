@@ -86,7 +86,7 @@ func newFixture(t *testing.T) fixture {
 	run(t, root, "init", "-q", "--bare", "-b", "main", f.origin)
 	run(t, root, "clone", "-q", f.origin, f.main)
 	run(t, f.main, "checkout", "-q", "-b", "main")
-	commit(t, f.main, ".gitignore", ".env\nnode_modules/\n", "ignore")
+	commit(t, f.main, ".gitignore", ".env\nnode_modules/\n.tmp/\n", "ignore")
 	commit(t, f.main, "base.txt", "l1\nl2\nl3\nl4\nl5\nl6\nl7\n", "base")
 	run(t, f.main, "push", "-q", "-u", "origin", "main")
 	run(t, f.main, "remote", "set-head", "origin", "main")
@@ -238,6 +238,8 @@ func TestScanClassifiesEveryRule(t *testing.T) {
 	run(t, f.main, "commit", "-q", "-m", "squash b")
 	commit(t, f.main, "later.txt", "later\n", "main moves on")
 	run(t, f.main, "push", "-q", "origin", "main")
+	// Scratch left in a squash-merged worktree goes with it.
+	write(t, filepath.Join(squash, ".tmp", "trace.log"), "trace\n")
 
 	dirty := f.worktree(t, "dirty")
 	write(t, filepath.Join(dirty, "base.txt"), "edited\n")
@@ -311,8 +313,9 @@ func TestScanClassifiesEveryRule(t *testing.T) {
 	}
 
 	wantState(t, findRow(t, rep, f.main), StateMain, "")
-	wantState(t, findRow(t, rep, merged), StateRemove, "contained in origin/main")
+	wantState(t, findRow(t, rep, merged), StateRemove, "no commits outside origin/main")
 	wantState(t, findRow(t, rep, squash), StateRemove, "(squash)")
+	wantState(t, findRow(t, rep, squash), StateRemove, "scratch files go with the folder: .tmp/ (1 file, 6 B)")
 	wantState(t, findRow(t, rep, dirty), StateKeep, "1 uncommitted change")
 	wantState(t, findRow(t, rep, untracked), StateKeep, "1 untracked file")
 	wantState(t, findRow(t, rep, unpushed), StateReview, "1 commit on no remote and not in origin/main")
@@ -328,7 +331,7 @@ func TestScanClassifiesEveryRule(t *testing.T) {
 	wantState(t, findRow(t, rep, stashed), StateReview, "1 stash on this branch")
 
 	g := findRow(t, rep, gone)
-	wantState(t, g, StateRemove, "contained in origin/main")
+	wantState(t, g, StateRemove, "no commits outside origin/main")
 	if !g.UpstreamGone || !g.Stale {
 		t.Errorf("gone-upstream: upstream_gone=%v stale=%v, want both", g.UpstreamGone, g.Stale)
 	}
@@ -492,27 +495,71 @@ func TestReportCaches(t *testing.T) {
 	}
 }
 
-// A worktree touched in the last day is never remove, merged or not: a
-// fresh one an agent is about to use has no commits and reads as merged.
+// A worktree merged by ancestry or an empty diff and touched in the last day
+// is never remove: a fresh one an agent is about to use has no commits and
+// reads that way. A squash merge is landed work and is removable at once.
 func TestClassifyActiveGrace(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	for _, c := range []struct {
-		ago   time.Duration
-		state string
-		stale bool
+		merged string
+		ago    time.Duration
+		state  string
+		stale  bool
 	}{
-		{time.Hour, StateKeep, false},
-		{23 * time.Hour, StateKeep, false},
-		{25 * time.Hour, StateRemove, true},
+		{mergedAncestor, time.Hour, StateKeep, false},
+		{mergedAncestor, 23 * time.Hour, StateKeep, false},
+		{mergedAncestor, 25 * time.Hour, StateRemove, true},
+		{mergedEmpty, time.Hour, StateKeep, false},
+		{mergedSquash, time.Hour, StateRemove, false},
+		{mergedSquash, 25 * time.Hour, StateRemove, true},
 	} {
-		w := Worktree{Merged: mergedAncestor}
+		w := Worktree{Merged: c.merged}
 		classify(&w, facts{DefaultBranch: "origin/main", IndexTime: now.Add(-c.ago)}, now, 14*24*time.Hour)
 		if w.State != c.state || w.Stale != c.stale {
-			t.Errorf("merged, touched %v ago: state %s stale %v, want %s %v (%q)", c.ago, w.State, w.Stale, c.state, c.stale, w.Reasons)
+			t.Errorf("%s merge, touched %v ago: state %s stale %v, want %s %v (%q)", c.merged, c.ago, w.State, w.Stale, c.state, c.stale, w.Reasons)
 		}
 		if c.state == StateKeep && !strings.Contains(strings.Join(w.Reasons, " "), "active in the last 24 hours") {
 			t.Errorf("grace reason missing: %q", w.Reasons)
 		}
+	}
+}
+
+// Scratch (.tmp) blocks an unmerged branch and goes with a merged one; other
+// precious ignored files block either way.
+func TestClassifyScratchFollowsMerge(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	idle := facts{DefaultBranch: "origin/main", IndexTime: now.Add(-30 * 24 * time.Hour)}
+	tmp := []string{".tmp/ (10 files, 11.7 MB)"}
+	for _, c := range []struct {
+		name    string
+		w       Worktree
+		state   string
+		reasons string
+	}{
+		{"squash with scratch", Worktree{Merged: mergedSquash, ScratchIgnored: tmp}, StateRemove,
+			"merged into origin/main (squash) | scratch files go with the folder: .tmp/ (10 files, 11.7 MB)"},
+		{"pushed idle with scratch", Worktree{Merged: mergedNo, ScratchIgnored: tmp}, StateReview,
+			"scratch files that only live here: .tmp/ (10 files, 11.7 MB)"},
+		{"squash with .env", Worktree{Merged: mergedSquash, PreciousIgnored: []string{".env (17 B)"}, ScratchIgnored: tmp}, StateReview,
+			"ignored files that only live here: .env (17 B) | merged into origin/main (squash) | scratch files go with the folder: .tmp/ (10 files, 11.7 MB)"},
+	} {
+		w := c.w
+		classify(&w, idle, now, 14*24*time.Hour)
+		if got := strings.Join(w.Reasons, " | "); w.State != c.state || got != c.reasons {
+			t.Errorf("%s: %s %q, want %s %q", c.name, w.State, got, c.state, c.reasons)
+		}
+	}
+}
+
+// A detached HEAD has no branch to keep its commits: the reason says only
+// what is not on a remote, beside the loose-commit reason.
+func TestClassifyDetachedUniqueNamesNoBranch(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	w := Worktree{Detached: true, Loose: 1, Unique: 1, Merged: mergedNo}
+	classify(&w, facts{DefaultBranch: "origin/main", IndexTime: now.Add(-time.Hour)}, now, 14*24*time.Hour)
+	want := "detached HEAD with 1 commit on no branch (removal loses them) | 1 commit on no remote and not in origin/main"
+	if got := strings.Join(w.Reasons, " | "); w.State != StateKeep || got != want {
+		t.Errorf("detached: %s %q, want keep %q", w.State, got, want)
 	}
 }
 
@@ -534,7 +581,7 @@ func TestReasonKindsFollowReasons(t *testing.T) {
 		{"keep", Worktree{Changed: 2, Untracked: 1, InUse: true, ActiveAgent: "codex", Stashes: 1, Merged: mergedAncestor,
 			SubmoduleLocal: []string{"submodule vendor/x has 3 commits on no remote (removal loses them)"}}, idle,
 			[]string{ReasonKeep, ReasonKeep, ReasonAgent, ReasonKeep, ReasonReview, ReasonSafe}},
-		{"review", Worktree{PreciousIgnored: []string{".tmp/ (1 file)"}, Unique: 2, Merged: "no"}, idle, []string{ReasonReview, ReasonReview}},
+		{"review", Worktree{ScratchIgnored: []string{".tmp/ (1 file)"}, Unique: 2, Merged: "no"}, idle, []string{ReasonReview, ReasonReview}},
 		{"merged and idle", Worktree{Merged: mergedAncestor, Submodules: 1}, idle, []string{ReasonSafe, ReasonSafe}},
 		{"pushed and idle", Worktree{Merged: "no"}, idle, []string{ReasonSafe}},
 		{"merged and recent", Worktree{Merged: mergedAncestor}, recent, []string{ReasonInfo}},

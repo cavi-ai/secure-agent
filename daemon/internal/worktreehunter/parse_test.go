@@ -59,11 +59,12 @@ func TestParseWorktreeList(t *testing.T) {
 func TestClassifyIgnored(t *testing.T) {
 	got := classifyIgnored([]string{
 		".env", ".env.local", ".claude/", ".tmp/evidence.log", "certs/server.pem", "id.key",
-		"node_modules/", "dist/", ".DS_Store", ".claude/.DS_Store", "pkg/.remember/", "",
+		"node_modules/", "dist/", ".DS_Store", ".claude/.DS_Store", "pkg/.remember/", "web/.tmp/", ".tmp/.DS_Store", "",
 	})
-	wantPrecious := []string{".env", ".env.local", ".claude/", ".tmp/evidence.log", "certs/server.pem", "id.key", "pkg/.remember/"}
-	if !reflect.DeepEqual(got.Precious, wantPrecious) || got.Other != 4 {
-		t.Fatalf("classifyIgnored = %+v, want precious %v and 4 other", got, wantPrecious)
+	wantPrecious := []string{".env", ".env.local", ".claude/", "certs/server.pem", "id.key", "pkg/.remember/"}
+	wantScratch := []string{".tmp/evidence.log", "web/.tmp/"}
+	if !reflect.DeepEqual(got.Precious, wantPrecious) || !reflect.DeepEqual(got.Scratch, wantScratch) || got.Other != 5 {
+		t.Fatalf("classifyIgnored = %+v, want precious %v, scratch %v and 5 other", got, wantPrecious, wantScratch)
 	}
 }
 

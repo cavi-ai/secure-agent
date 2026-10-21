@@ -554,7 +554,7 @@ func (h *Hunter) scan(ctx context.Context, opts Options) ScanReport {
 		}
 		line := r.Path + ": " + r.Error
 		if r.Error == ErrRepoMissing && len(r.Worktrees) > 0 {
-			line += "; " + plural(len(r.Worktrees), "folder still points", "folders still point") + " to it (listed first below)"
+			line += "; " + plural(len(r.Worktrees), "folder still points", "folders still point") + " to it"
 		}
 		rep.Errors = append(rep.Errors, line)
 	}
@@ -642,7 +642,7 @@ func (h *Hunter) inspectOne(ctx context.Context, rs *repoScan, isMain bool, l li
 		w.Error = err.Error()
 		return w, f
 	}
-	w.PreciousIgnored, w.OtherIgnored = ign.Precious, ign.Other
+	w.PreciousIgnored, w.ScratchIgnored, w.OtherIgnored = ign.Precious, ign.Scratch, ign.Other
 
 	subs, err := readSubmodules(ctx, l.Path)
 	if err != nil {

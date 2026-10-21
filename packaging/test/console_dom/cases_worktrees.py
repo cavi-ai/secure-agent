@@ -63,10 +63,13 @@ def run_worktrees(page):
         ),
     )
     check(
-        'worktrees: state pills carry counts and the summary line reads the scan',
+        'worktrees: lane pills carry counts and the summary line reads the scan',
         (
             'data-state="" aria-pressed="true">All <b>4</b></button>' in dom_wt
-            and 'data-state="remove" aria-pressed="false">Remove <b>1</b></button>' in dom_wt
+            and 'data-state="safe" aria-pressed="false">Safe to remove <b>2</b></button>' in dom_wt
+            and 'data-state="check" aria-pressed="false">Check first <b>1</b></button>' in dom_wt
+            and 'data-state="active" aria-pressed="false">In use <b>1</b></button>' in dom_wt
+            and '<details class="wt-tool"><summary>Filters</summary>' not in dom_wt
             and (
                 '1 repo · 4 worktrees · stale after 14 idle days · scanned in 4.2s' in dom_query(dom_wt).text
                 or dom_query(dom_wt).has(None, {'title': lambda value: '1 repo · 4 worktrees · stale after 14 idle days · scanned in 4.2s' in (value or '')})
@@ -111,9 +114,10 @@ def run_worktrees(page):
         ),
     )
     check(
-        'worktrees: the queue separates checked removals, decisions, and active sessions',
+        'worktrees: the page sorts rows into lanes: safe to remove, check first, in use',
         (
-            wt.index('Ready for removal') < wt.index('Needs a decision') < wt.index('In use')
+            wt.index('class="wt-lane wt-lane-safe"') < wt.index('class="wt-lane wt-lane-check"') < wt.index('class="wt-lane wt-lane-active"')
+            and 'Needs a decision' not in wt
             and dom_query(wt).has('details', {'class': 'wt-row wt-remove'})
             and dom_query(wt).has('details', {'class': 'wt-row wt-review'})
             and dom_query(wt).has(None, {'data-action': 'worktree-remove'})
@@ -122,8 +126,12 @@ def run_worktrees(page):
         ),
     )
     check(
-        'worktrees: primary guidance uses section headings rather than a button-color legend',
-        'id="worktrees-legend"' not in dom_wt and 'Review the exceptions. Remove only what you choose.' in dom_wt,
+        'worktrees: primary guidance uses lane headings rather than a button-color legend; the scan line sits under the title',
+        (
+            'id="worktrees-legend"' not in dom_wt
+            and '<h3 id="wt-lane-safe">Safe to remove <span class="wt-lane-count">2</span></h3>' in wt
+            and dom_wt.index('id="worktrees-summary"') < dom_wt.index('id="worktree-pills"') < dom_wt.index('id="worktrees-container"')
+        ),
     )
     check(
         'worktrees: the repository group offers Ask advisor about all and Discuss all beside Hide repo, counted over every row',
@@ -373,15 +381,15 @@ def run_worktrees_2(page):
     )
     wto = wt_block(dom_wtorphan)
     check(
-        "worktrees: a missing repository's folders are listed first with the reason and Open folder / Move to Trash",
+        "worktrees: a missing repository's folders lead the Check first lane with the reason and Open folder / Move to Trash",
         (
-            wto.index('/Users/dev/gone-app') < wto.index('/Users/dev/workspace/api-service')
+            wto.index('class="wt-lane wt-lane-check"') < wto.index('/Users/dev/gone-app') < wto.index('data-path="/Users/dev/workspace/api-service/.worktrees/evidence"')
             and 'repository not found (moved or deleted) — the folders below still point to it' in wto
             and 'data-action="worktree-reveal" data-path="/Users/dev/.cursor/worktrees/gone-app/ctnj">Open folder</button>' in wto
             and dom_query(wto).has(None, {'data-action': 'worktree-trash-orphan'})
             and (
-                '1 folder still points to it (listed first below)' in dom_query(dom_wtorphan).text
-                or dom_query(dom_wtorphan).has(None, {'title': lambda value: '1 folder still points to it (listed first below)' in (value or '')})
+                '1 folder still points to it' in dom_query(dom_wtorphan).text
+                or dom_query(dom_wtorphan).has(None, {'title': lambda value: '1 folder still points to it' in (value or '')})
             )
         ),
     )
@@ -457,7 +465,7 @@ def run_worktrees_2(page):
         (
             '6.0 GB' in pre(dom_wtremovable, 'removable-tile')
             and '4 worktrees' in pre(dom_wtremovable, 'removable-tile')
-            and 'Remove all 4' in pre(dom_wtremovable, 'removable-tile')
+            and 'Remove all 4 · 6.0 GB' in pre(dom_wtremovable, 'removable-tile')
             and rm_posts == 4
             and 'web-app/.worktrees/landed' not in wt_block(dom_wtremovable)
         ),

@@ -13,16 +13,15 @@
     const rows = () => document.querySelectorAll('#worktrees-container .wt-row').length;
     try {
       const total = rows();
-      wt('prune').closest('details').open = true;
-      wt('prune').focus(); wt('prune').click(); await settle();
-      receipt.state = rows() === 1 && wt('prune').getAttribute('aria-pressed') === 'true';
-      receipt.focus = document.activeElement === wt('prune');
-      wt('prune').click(); await settle();
+      wt('check').focus(); wt('check').click(); await settle();
+      receipt.state = rows() === 1 && wt('check').getAttribute('aria-pressed') === 'true';
+      receipt.focus = document.activeElement === wt('check');
+      wt('check').click(); await settle();
       receipt.deselect = rows() === total && wt('').getAttribute('aria-pressed') === 'true';
       stale().click(); await settle();
       receipt.stale = wt('').getAttribute('aria-pressed') === 'false' && rows() === 2;
-      wt('prune').click(); await settle();
-      receipt.intersection = rows() === 0 && stale().textContent.trim() === 'Stale 0' && wt('prune').textContent.trim() === 'Prune 0';
+      wt('active').click(); await settle();
+      receipt.intersection = rows() === 0 && stale().textContent.trim() === 'Stale 0' && wt('active').textContent.trim() === 'In use 0';
       wt('').click(); await settle();
       receipt.all = rows() === total && stale().getAttribute('aria-pressed') === 'false';
       const search = document.getElementById('worktree-search');

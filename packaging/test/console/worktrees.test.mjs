@@ -20,7 +20,7 @@ test('worktreeGroupAskText: how many rows, one at a time, and how many were left
   assert.equal(worktreeGroupAskText({ rows: 1 }), 'Asking the advisor about 1 worktree, one at a time — notes appear under each row as it answers');
   assert.equal(worktreeGroupAskText({ rows: 40, skipped: 3 }), 'Asking the advisor about 40 worktrees, one at a time — notes appear under each row as it answers (3 more not asked: 40 at a time)');
 });
-const { worktreeStateCounts, worktreeGroups, worktreeRowHTML, worktreeGroupHTML, worktreePathLabel, worktreeFilterHTML, worktreesSummaryText, worktreeDiskHTML, worktreeSizeLabel, fmtDisk,
+const { worktreeLaneCounts, worktreeLane, worktreeLanesHTML, worktreeGroups, worktreeRowHTML, worktreeGroupHTML, worktreePathLabel, worktreeFilterHTML, worktreesSummaryText, worktreeDiskHTML, worktreeSizeLabel, fmtDisk,
   clutterGroups, clutterItemHTML, clutterGroupHTML, clutterPillsHTML, clutterSummaryText,
   worktreeMatches, niceBytesCeil, removableEverywhere, reclaimTilesHTML, reclaimChartHTML, cleanupHistoryHTML, cleanupKind, cleanupEntryTitle,
   localDayKey, fmtDayKey, fmtElapsed, removalToastModel, removalToastHTML, reclaimDayText } = ctx;
@@ -82,7 +82,7 @@ test('worktree hierarchy keeps escaped complete identities and exact action targ
   const row = { path: repo.path + '/.worktrees/long-identity', branch: 'feat/<complete>"identity"', head: 'abc', state: 'review', reasons: ['1 uncommitted change'] };
   repo.worktrees = [row];
   const html = worktreeGroupHTML({ repo, rows: [row] }, null, null, null, { [row.path]: 'codex' });
-  assert.match(html, /<h3 class="wt-repo-name">&lt;service&gt;<\/h3>/);
+  assert.match(html, /<h4 class="wt-repo-name">&lt;service&gt;<\/h4>/);
   assert.ok(html.includes('<span class="wt-branch">feat/&lt;complete&gt;&quot;identity&quot;</span>'));
   const renderedRow = html.slice(html.indexOf('class="wt-row'));
   assert.deepEqual([...renderedRow.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['worktree-select', 'copy-path', 'worktree-reveal', 'worktree-review-trash', 'worktree-ask', 'worktree-advise', 'worktree-discuss']);
@@ -96,7 +96,7 @@ test('duplicate repository basenames retain distinct full paths', () => {
     const repo = {path: repoPath, worktrees: []};
     return worktreeGroupHTML({repo, rows: []});
   });
-  assert.ok(groups.every(html => html.includes('<h3 class="wt-repo-name">service</h3>')));
+  assert.ok(groups.every(html => html.includes('<h4 class="wt-repo-name">service</h4>')));
   assert.ok(groups[0].includes('/workspace/team-one/service') && groups[1].includes('/workspace/team-two/service'));
 });
 test('unfinished Git operation disables reviewed Trash even without conflicts', () => {
@@ -121,18 +121,46 @@ const report = () => ({
   ],
 });
 
-test('worktreeStateCounts: main rows are not counted; stale counted across states', () => {
-  const c = worktreeStateCounts(report());
-  assert.deepEqual({ ...c }, { all: 4, remove: 1, review: 1, keep: 1, prune: 1, stale: 2 });
+test('worktreeLane: a live session wins, remove and prune are safe, review is check, keep splits on a keep reason', () => {
+  assert.equal(worktreeLane({ state: 'keep', in_use: true, reason_kinds: ['keep', 'agent'] }), 'active');
+  assert.equal(worktreeLane({ state: 'remove', in_use: true }), 'active');
+  assert.equal(worktreeLane({ state: 'remove', reason_kinds: ['safe', 'info'] }), 'safe');
+  assert.equal(worktreeLane({ state: 'prune', reason_kinds: ['info'] }), 'safe');
+  assert.equal(worktreeLane({ state: 'review', reason_kinds: ['review', 'safe'] }), 'check');
+  assert.equal(worktreeLane({ state: 'keep', reason_kinds: ['keep', 'review', 'safe'] }), 'work');
+  assert.equal(worktreeLane({ state: 'keep', reason_kinds: ['info'] }), 'open');
+  assert.equal(worktreeLane({ state: 'keep' }), 'open');
 });
 
-test('worktreeGroups: filters by state and stale, drops repos left empty', () => {
+test('worktreeLaneCounts: main rows are not counted; stale counted across lanes', () => {
+  const c = worktreeLaneCounts(report());
+  assert.deepEqual({ ...c }, { all: 4, safe: 2, work: 0, check: 1, open: 1, active: 0, stale: 2 });
+});
+
+test('worktreeGroups: filters by lane and stale, drops repos left empty', () => {
   assert.equal(worktreeGroups(report(), {}).length, 2);
-  const removable = worktreeGroups(report(), { state: 'remove' });
-  assert.equal(removable.length, 1);
-  assert.deepEqual([...removable[0].rows.map(r => r.state)], ['remove']);
+  const safe = worktreeGroups(report(), { state: 'safe' });
+  assert.equal(safe.length, 1);
+  assert.deepEqual([...safe[0].rows.map(r => r.state)], ['remove', 'prune']);
   const stale = worktreeGroups(report(), { stale: true });
   assert.deepEqual([...stale.flatMap(g => g.rows.map(r => r.state))], ['remove', 'review']);
+});
+
+test('worktreeLanesHTML: lanes in order, empty lanes left out, rows grouped by repository, Remove all on the safe lane', () => {
+  const rep = report();
+  const gb = 1024 ** 3;
+  rep.repos[1].worktrees.push({ path: '/Users/x/code/lib/.worktrees/old', branch: 'feat/old', head: 'abc', state: 'remove', reasons: ['merged into origin/main (squash)'], reason_kinds: ['safe'], size_bytes: gb });
+  rep.repos[0].worktrees[1].size_bytes = gb;
+  const html = worktreeLanesHTML(worktreeGroups(rep, {}), rep, {});
+  const lanes = [...html.matchAll(/<section class="wt-lane wt-lane-([a-z]+)"/g)].map(m => m[1]);
+  assert.deepEqual(lanes, ['safe', 'check', 'open']);
+  assert.match(html, /<h3 id="wt-lane-safe">Safe to remove <span class="wt-lane-count">3<\/span><\/h3>/);
+  assert.match(html, /data-action="worktrees-remove-removable">Remove all 2 · 2\.0 GB<\/button>/);
+  const safe = html.slice(0, html.indexOf('wt-lane-check'));
+  assert.equal((safe.match(/<section class="wt-repo">/g) || []).length, 2, 'one repository block per repository in the lane');
+  assert.ok(!html.slice(html.indexOf('wt-lane-check')).includes('worktrees-remove-removable'));
+  const busy = worktreeLanesHTML(worktreeGroups(rep, {}), rep, { selectionBusy: true });
+  assert.match(busy, /data-action="worktrees-remove-removable" disabled>/);
 });
 
 test('worktreeRowHTML: Remove on remove, review and keep rows, Prune only on prune, Ask advisor on review and keep, everything escaped', () => {
@@ -258,8 +286,8 @@ test('worktreeGroups: the header search keeps rows matching branch, path, reposi
   assert.deepEqual(rows('no such text'), []);
   assert.equal(worktreeGroups(report(), {}, 'feat/done').length, 1, 'a repository left empty is dropped');
   // The panel's own filter and the header search both apply.
-  assert.deepEqual(rows('feat', { state: 'review' }), ['review:feat/"q"']);
-  assert.deepEqual(rows('feat/done', { state: 'review' }), []);
+  assert.deepEqual(rows('feat', { state: 'check' }), ['review:feat/"q"']);
+  assert.deepEqual(rows('feat/done', { state: 'check' }), []);
   assert.deepEqual(rows('ignored', { stale: true }), ['review:feat/"q"']);
 });
 
@@ -271,7 +299,7 @@ test('summary: "N shown" appears when the panel filter or the header search hide
   assert.equal(worktreesSummaryText(rep, undefined, 0), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s · 0 shown');
   assert.equal(worktreesSummaryText({ ...rep, refreshing: true }, undefined, 2), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s · 2 shown · refreshing…');
   // The pill counts stay the report's, whatever the search leaves.
-  assert.equal(worktreeStateCounts(rep).all, 4);
+  assert.equal(worktreeLaneCounts(rep).all, 4);
 });
 
 test('clutterGroups: the header search keeps items whose path, project or kind contains it; empty matches all', () => {
@@ -356,9 +384,10 @@ test('worktreePathLabel: relative inside the repo, absolute outside', () => {
 });
 
 test('worktreeFilterHTML and summary line', () => {
-  const html = worktreeFilterHTML(worktreeStateCounts(report()), { state: 'review', stale: true });
+  const html = worktreeFilterHTML(worktreeLaneCounts(report()), { state: 'check', stale: true });
   assert.match(html, /class="wt-pill" data-action="worktree-filter" data-state="" aria-pressed="false">All <b>4<\/b>/);
-  assert.match(html, /class="wt-pill on" data-action="worktree-filter" data-state="review" aria-pressed="true">Review <b>1<\/b>/);
+  assert.match(html, /class="wt-pill on" data-action="worktree-filter" data-state="check" aria-pressed="true">Check first <b>1<\/b>/);
+  assert.deepEqual([...html.matchAll(/data-state="([a-z]*)"/g)].map(m => m[1]), ['', 'safe', 'work', 'check', 'open', 'active']);
   assert.match(html, /class="wt-pill on" data-action="worktree-stale" aria-pressed="true">Stale <b>2<\/b>/);
   assert.equal(worktreesSummaryText(report()), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s');
   assert.equal(worktreesSummaryText({ ...report(), cached: true }), '2 repos · 4 worktrees · stale after 14 idle days · cached scan');
@@ -560,7 +589,7 @@ test('search: rows whose branch, path or repository contains the text, any case'
   assert.ok(worktreeMatches({}, {}, '  '));
   const groups = worktreeGroups(rep, { q: 'ev' });
   assert.equal(JSON.stringify(groups.map(g => g.rows.map(w => w.path))), JSON.stringify([['/Users/x/code/lib/.worktrees/ev']]));
-  assert.equal(JSON.stringify(worktreeGroups(rep, { q: 'feat/', state: 'remove' }).map(g => g.rows.length)), '[1]');
+  assert.equal(JSON.stringify(worktreeGroups(rep, { q: 'feat/', state: 'check' }).map(g => g.rows.length)), '[1]');
 });
 
 test('niceBytesCeil: 1, 2 or 5 × a power of ten in the printed unit', () => {
@@ -591,14 +620,15 @@ test('tiles: charted and recorded freed totals, removable now, recorded Trash mo
   assert.match(tile('rc-alltime'), /Freed · recorded[\s\S]*7\.0 GB[\s\S]*9 cleanups/);
   // Orphans and unreadable repositories never count as removable.
   assert.match(tile('rc-removable'), /Removable now[\s\S]*2\.0 GB[\s\S]*2 worktrees/);
-  assert.ok(tile('rc-removable').includes('data-action="worktrees-remove-removable">Remove all 2</button>'));
+  assert.ok(!html.includes('worktrees-remove-removable'), 'Remove all lives on the safe lane');
   assert.match(tile('rc-trash'), /Moved to the Trash[\s\S]*512 MB[\s\S]*2 recorded cleanups/);
   assert.ok(!html.includes('In the Trash') && !html.includes('frees when the Trash is emptied'));
   assert.equal(removableEverywhere(rep).rows.length, 2);
   // A running removal leaves the count; one removable row offers no Remove all.
   rep.removals = { [REPO + '/.worktrees/old']: { state: 'running' } };
   const one = reclaimTilesHTML(rep, ledger);
-  assert.ok(!one.includes('worktrees-remove-removable') && one.includes('1 worktree<'));
+  assert.ok(one.includes('1 worktree<'));
+  assert.ok(!worktreeLanesHTML(worktreeGroups(rep, {}), rep, {}).includes('worktrees-remove-removable'));
   // Before the ledger loads, the report's totals stand in.
   const early = reclaimTilesHTML({ ...report(), reclaimed: { bytes: GB, count: 1, bytes_30d: GB, count_30d: 1, trashed_bytes: 0 } }, null);
   assert.match(early, /Freed · last 30 days[\s\S]*1\.0 GB[\s\S]*1 cleanup</);
@@ -800,18 +830,18 @@ test('progress toast: phases add up to one bar, running rows first with size and
 });
 
 
-test('worktree state toggles off and All clears stale while preserving search', () => {
-  const f = {state: 'prune', stale: true, q: 'app'};
-  assert.deepEqual({...ctx.nextWorktreeFilter(f, 'prune')}, {state: '', stale: true, q: 'app'});
+test('worktree lane toggles off and All clears stale while preserving search', () => {
+  const f = {state: 'safe', stale: true, q: 'app'};
+  assert.deepEqual({...ctx.nextWorktreeFilter(f, 'safe')}, {state: '', stale: true, q: 'app'});
   assert.deepEqual({...ctx.nextWorktreeFilter(f, '')}, {state: '', stale: false, q: 'app'});
-  assert.deepEqual({...ctx.nextWorktreeFilter(f, 'review')}, {state: 'review', stale: true, q: 'app'});
-  assert.equal(f.state, 'prune');
-  assert.doesNotMatch(worktreeFilterHTML(worktreeStateCounts(report()), {stale: true}), /wt-pill on[^>]*data-state=""/);
+  assert.deepEqual({...ctx.nextWorktreeFilter(f, 'check')}, {state: 'check', stale: true, q: 'app'});
+  assert.equal(f.state, 'safe');
+  assert.doesNotMatch(worktreeFilterHTML(worktreeLaneCounts(report()), {stale: true}), /wt-pill on[^>]*data-state=""/);
 });
 
 test('worktree counts predict each filter under stale and both searches', () => {
-  const counts = worktreeStateCounts(report(), {state:'prune', stale:true});
-  assert.deepEqual({...counts}, {all:4, remove:1, review:1, keep:0, prune:0, stale:0});
-  const searched = worktreeStateCounts(report(), {state:'review', q:'lib'}, 'ev');
-  assert.deepEqual({...searched}, {all:1, remove:0, review:1, keep:0, prune:0, stale:1});
+  const counts = worktreeLaneCounts(report(), {state:'open', stale:true});
+  assert.deepEqual({...counts}, {all:4, safe:1, work:0, check:1, open:0, active:0, stale:0});
+  const searched = worktreeLaneCounts(report(), {state:'check', q:'lib'}, 'ev');
+  assert.deepEqual({...searched}, {all:1, safe:0, work:0, check:1, open:0, active:0, stale:1});
 });

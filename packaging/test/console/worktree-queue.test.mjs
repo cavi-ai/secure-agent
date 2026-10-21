@@ -9,13 +9,26 @@ for (const file of ['lib.js', 'tab-worktrees.js']) vm.runInContext(readFileSync(
 const repo = { path: '/code/app' };
 const row = (name, extra = {}) => ({ path: `/code/app/${name}`, branch: name, state: 'keep', head: 'abc', reasons: ['1 untracked file'], ...extra });
 
-test('the cleanup queue groups checked removals, decisions, and active work', () => {
-  const rows = [row('active', { in_use: true }), row('review'), row('ready', { state: 'remove' })];
-  const html = context.worktreeGroupHTML({ repo: { ...repo, worktrees: rows }, rows });
-  assert.ok(html.indexOf('Ready for removal') < html.indexOf('Needs a decision'));
-  assert.ok(html.indexOf('Needs a decision') < html.indexOf('In use'));
+test('the cleanup queue sorts rows into lanes: safe, local work, check, not merged, in use', () => {
+  const rows = [
+    row('active', { in_use: true, reason_kinds: ['keep', 'agent'] }),
+    row('open', { reasons: ['not merged; active 2 days ago'], reason_kinds: ['info'] }),
+    row('check', { state: 'review', reasons: ['1 stash on this branch'], reason_kinds: ['review'] }),
+    row('work', { reason_kinds: ['keep'] }),
+    row('ready', { state: 'remove', reasons: ['merged into origin/main (squash)'], reason_kinds: ['safe'] }),
+  ];
+  const rep = { repos: [{ ...repo, worktrees: rows }] };
+  const html = context.worktreeLanesHTML(context.worktreeGroups(rep, {}), rep, {});
+  const at = s => html.indexOf(s);
+  assert.ok(at('Safe to remove') < at('Has local work') && at('Has local work') < at('Check first')
+    && at('Check first') < at('Not merged yet') && at('Not merged yet') < at('In use'));
+  for (const name of ['ready', 'work', 'check', 'open', 'active']) {
+    const lane = { ready: 'safe', work: 'work', check: 'check', open: 'open', active: 'active' }[name];
+    const section = html.slice(at(`wt-lane-${lane}"`)).split('<section class="wt-lane ')[0];
+    assert.ok(section.includes(`data-path="/code/app/${name}"`), `${name} in ${lane}`);
+  }
   assert.match(html, /<details class="wt-row wt-remove"/);
-  const active = html.slice(html.indexOf('data-path="/code/app/active"'));
+  const active = html.slice(at('data-path="/code/app/active"'));
   assert.ok(!active.includes('data-action="worktree-select"'));
 });
 

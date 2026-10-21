@@ -1,23 +1,47 @@
-// Worktrees tab: every git worktree the daemon found, grouped by repository,
-// with its remove/review/keep/prune verdict and reasons. The report comes
+// Worktrees tab: every git worktree the daemon found, sorted into lanes by
+// what removing it would cost, then grouped by repository. The report comes
 // from GET /worktrees on tab open (the daemon caches a scan for 10 minutes);
 // Rescan asks for a fresh one. Remove and Prune post /worktrees/remove, which
 // inspects the worktree again and refuses anything but a fresh remove.
 
-const WORKTREE_STATES = ['remove', 'review', 'keep', 'prune'];
+// Lanes, in page order. The daemon's verdict decides the lane: remove and
+// prune are safe, review is check, keep splits on whether a reason keeps the
+// folder (local work) or only informs (not merged yet); a live agent session
+// wins over all of them.
+const WORKTREE_LANES = [
+  { key: 'safe', title: 'Safe to remove', icon: 'shield',
+    description: 'Merged, or every commit on a remote and idle. Each folder is checked again before it is deleted.' },
+  { key: 'work', title: 'Has local work', icon: 'alert',
+    description: 'Removing these loses uncommitted, untracked or unreachable work.' },
+  { key: 'check', title: 'Check first', icon: 'alert',
+    description: 'Git keeps the commits, but something in the folder needs a look. Removing moves it to the Trash.' },
+  { key: 'open', title: 'Not merged yet', icon: 'branch',
+    description: 'Git loses nothing, but the branch is still open or was active in the last day.' },
+  { key: 'active', title: 'In use', icon: 'activity',
+    description: 'An agent is working in these folders.' },
+];
 
-// State counts preserve the searches and stale filter; the stale count
-// preserves the selected state. All counts both filters cleared.
-function worktreeStateCounts(rep, filter, term) {
+function worktreeLane(w) {
+  if (w.in_use) return 'active';
+  if (w.state === 'remove' || w.state === 'prune') return 'safe';
+  if (w.state === 'review') return 'check';
+  return (w.reason_kinds || []).includes('keep') ? 'work' : 'open';
+}
+
+// Lane counts preserve the searches and stale filter; the stale count
+// preserves the selected lane. All counts both filters cleared.
+function worktreeLaneCounts(rep, filter, term) {
   const f = filter || {};
-  const out = { all: 0, remove: 0, review: 0, keep: 0, prune: 0, stale: 0 };
+  const out = { all: 0, stale: 0 };
+  for (const lane of WORKTREE_LANES) out[lane.key] = 0;
   for (const repo of (rep && rep.repos) || []) {
     for (const w of repo.worktrees || []) {
       if (w.state === 'main' || !worktreeMatches(w, repo, f.q)
         || !matchesSearch(term, w.branch, w.path, repo.path, w.state, w.reasons)) continue;
+      const lane = worktreeLane(w);
       out.all++;
-      if ((!f.stale || w.stale) && WORKTREE_STATES.includes(w.state)) out[w.state]++;
-      if (w.stale && (!f.state || w.state === f.state)) out.stale++;
+      if (!f.stale || w.stale) out[lane]++;
+      if (w.stale && (!f.state || lane === f.state)) out.stale++;
     }
   }
   return out;
@@ -38,7 +62,7 @@ function worktreeMatches(w, repo, q) {
 
 // worktreeGroups: repositories with the rows the filter keeps, biggest
 // first (the list is where disk comes back). filter.state is '' (all) or a
-// state; filter.stale keeps stale rows only; filter.q is the search text.
+// lane key; filter.stale keeps stale rows only; filter.q is the search text.
 // term is the header search box's text (lowercased): a row stays only if its
 // branch, path, repository, state or reasons contain it.
 function worktreeGroups(rep, filter, term) {
@@ -46,7 +70,7 @@ function worktreeGroups(rep, filter, term) {
   const groups = [];
   for (const repo of (rep && rep.repos) || []) {
     const rows = (repo.worktrees || []).filter(w => w.state !== 'main'
-      && (!f.state || w.state === f.state) && (!f.stale || w.stale) && worktreeMatches(w, repo, f.q)
+      && (!f.state || worktreeLane(w) === f.state) && (!f.stale || w.stale) && worktreeMatches(w, repo, f.q)
       && matchesSearch(term, w.branch, w.path, repo.path, w.state, w.reasons));
     if (rows.length) groups.push({ repo, rows });
   }
@@ -142,11 +166,10 @@ function removableEverywhere(rep) {
 }
 
 // reclaimTilesHTML: what the charted days freed, what recorded cleanups
-// freed, what Remove can free now (Remove all across repositories when two
-// or more rows are removable), and recorded moves to the Trash. Before the
-// ledger loads the report's totals stand in; with neither, the recorded
-// tiles read unavailable rather than zero.
-function reclaimTilesHTML(rep, ledger, selectionBusy = false) {
+// freed, what Remove can free now, and recorded moves to the Trash. Before
+// the ledger loads the report's totals stand in; with neither, the recorded
+// tiles read unavailable rather than zero. Remove all lives on the safe lane.
+function reclaimTilesHTML(rep, ledger) {
   const totals = (ledger && ledger.totals) || (rep && rep.reclaimed) || null;
   const t = totals || {};
   const daily = (ledger && ledger.daily) || null;
@@ -156,17 +179,14 @@ function reclaimTilesHTML(rep, ledger, selectionBusy = false) {
   const unavailable = 'cleanup history unavailable';
   const rm = removableEverywhere(rep);
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-  const tile = (cls, label, value, hint, extra) => `<div class="rc-tile ${cls}">
+  const tile = (cls, label, value, hint) => `<div class="rc-tile ${cls}">
       <span class="rc-tile-label">${label}</span>
       <span class="rc-tile-value">${escapeHTML(value)}</span>
-      <span class="rc-tile-hint">${hint}</span>${extra || ''}
+      <span class="rc-tile-hint">${hint}</span>
     </div>`;
-  const removeAll = rm.rows.length >= 2
-    ? `<button type="button" class="btn btn-danger btn-sm rc-remove-all" data-action="worktrees-remove-removable"${selectionBusy ? ' disabled' : ''}>Remove all ${rm.rows.length}</button>`
-    : '';
   return tile('rc-freed', `Freed · last ${daily ? daily.length : RECLAIM_DAYS} days`, known ? fmtDisk(freed) : '—', known ? escapeHTML(plural(freedCount, 'cleanup', 'cleanups')) : unavailable)
     + tile('rc-alltime', 'Freed · recorded', totals ? fmtDisk(t.bytes) : '—', totals ? escapeHTML(plural(Number(t.count) || 0, 'cleanup', 'cleanups')) : unavailable)
-    + tile('rc-removable', 'Removable now', fmtDisk(rm.bytes), escapeHTML(plural(rm.rows.length, 'worktree', 'worktrees')) + (rep && rep.sizing ? ' · measuring…' : ''), removeAll)
+    + tile('rc-removable', 'Removable now', fmtDisk(rm.bytes), escapeHTML(plural(rm.rows.length, 'worktree', 'worktrees')) + (rep && rep.sizing ? ' · measuring…' : ''))
     + tile('rc-trash', 'Moved to the Trash', totals ? fmtDisk(t.trashed_bytes) : '—', (totals ? escapeHTML(plural(Number(t.trashed_count) || 0, 'recorded cleanup', 'recorded cleanups')) : unavailable) + ' · current Trash size is not measured');
 }
 
@@ -551,7 +571,7 @@ function worktreeSelectionReviewHTML(rows) {
 }
 
 // Checker reasons that name files living only in the folder.
-const WORKTREE_LOCAL_REASON = /uncommitted change|untracked file|ignored files|unresolved conflict/;
+const WORKTREE_LOCAL_REASON = /uncommitted change|untracked file|ignored files|scratch files|unresolved conflict/;
 
 // worktreeTrashConfirm: the dialog before a keep or review row's folder goes
 // to the Trash, built from the row alone.
@@ -702,45 +722,63 @@ function worktreeGroupAskText(res) {
 }
 
 // worktreeGroupHTML: one repository block with its rows, the group asks and a
-// Hide button. Two or more removable rows add Remove all with their count and
-// size. advice, asks and removals map a worktree path to its advisor note,
-// latest ask and latest removal.
-function worktreeGroupHTML(g, advice, asks, removals, askable, selectionState) {
+// Hide button (withOptions false leaves them to the repository's first block
+// on the page). advice, asks and removals map a worktree path to its advisor
+// note, latest ask and latest removal.
+function worktreeGroupHTML(g, advice, asks, removals, askable, selectionState, withOptions = true) {
   const meta = [g.repo.default_branch, g.repo.source].filter(Boolean).join(' · ');
   const name = String(g.repo.path || '').replace(/\/$/, '').split('/').pop() || g.repo.path;
-  const sections = [
-    { key: 'ready', title: 'Ready for removal', description: 'No unique work found by the inspection. Contents are checked again before removal.', icon: 'shield' },
-    { key: 'review', title: 'Needs a decision', description: 'Review the contents and resolve any protected work before removing.', icon: 'alert' },
-    { key: 'active', title: 'In use', description: 'Keep these worktrees while their sessions are active.', icon: 'activity' },
-  ];
-  const category = w => w.in_use ? 'active' : w.state === 'remove' && !worktreeSelectionBlock(w, g.repo, (removals || {})[w.path], (asks || {})[w.path]) ? 'ready' : 'review';
   return `<section class="wt-repo">
     <div class="wt-repo-head">
       <div class="wt-repo-identity">
-        <h3 class="wt-repo-name">${escapeHTML(name)}</h3>
+        <h4 class="wt-repo-name">${escapeHTML(name)}</h4>
         <span class="wt-repo-path" title="${escapeHTML(g.repo.path)}">${escapeHTML(g.repo.path)}</span>
       </div>
       <div class="wt-repo-facts">
         ${meta ? `<span class="wt-repo-meta">${escapeHTML(meta)}</span>` : ''}
         ${g.repo.size_bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.repo.size_bytes))}</span>` : ''}
       </div>
-      <details class="wt-repo-options"><summary>Repository options</summary><div class="wt-repo-actions">${g.repo.error
+      ${g.repo.error
         ? `<span class="wt-repo-error">${escapeHTML(g.repo.error)} — the folders below still point to it</span>`
-        : worktreeGroupAsksHTML(g)
-          + `<button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>`}</div></details>
+        : withOptions ? `<details class="wt-repo-options"><summary>Repository options</summary><div class="wt-repo-actions">${worktreeGroupAsksHTML(g)
+          + `<button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>`}</div></details>` : ''}
     </div>
-    ${sections.map(section => {
-      const rows = g.rows.filter(w => category(w) === section.key);
-      if (!rows.length) return '';
-      return `<section class="wt-queue-section wt-queue-${section.key}" aria-label="${section.title}">
-        <div class="wt-queue-heading"><svg class="icon" aria-hidden="true"><use href="#i-${section.icon}"/></svg><div><h4>${section.title}</h4><p>${section.description}</p></div><span>${rows.length} worktree${rows.length === 1 ? '' : 's'}</span></div>
-        ${rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path], (removals || {})[w.path], (askable || {})[w.path], selectionState)).join('')}
-      </section>`;
-    }).join('')}
+    ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path], (removals || {})[w.path], (askable || {})[w.path], selectionState)).join('')}
   </section>`;
 }
 
-// worktreeFilterHTML: one pill per state with its count, then stale.
+// worktreeLanesHTML: one section per lane that has rows, in lane order, each
+// holding its rows grouped by repository; a repository's options sit on its
+// first block. The safe lane carries Remove all when two or more rows across
+// repositories are removable.
+function worktreeLanesHTML(groups, rep, selectionState = {}) {
+  const shown = new Set();
+  return WORKTREE_LANES.map(lane => {
+    const laneGroups = groups.map(g => ({ repo: g.repo, rows: g.rows.filter(w => worktreeLane(w) === lane.key) }))
+      .filter(g => g.rows.length);
+    if (!laneGroups.length) return '';
+    const n = laneGroups.reduce((sum, g) => sum + g.rows.length, 0);
+    let removeAll = '';
+    if (lane.key === 'safe') {
+      const rm = removableEverywhere(rep);
+      if (rm.rows.length >= 2) {
+        const size = rm.bytes ? ` · ${fmtDisk(rm.bytes)}` : '';
+        removeAll = `<button type="button" class="btn btn-danger btn-sm rc-remove-all" data-action="worktrees-remove-removable"${selectionState.selectionBusy ? ' disabled' : ''}>Remove all ${rm.rows.length}${escapeHTML(size)}</button>`;
+      }
+    }
+    return `<section class="wt-lane wt-lane-${lane.key}" aria-labelledby="wt-lane-${lane.key}">
+      <div class="wt-lane-heading"><svg class="icon" aria-hidden="true"><use href="#i-${lane.icon}"/></svg>
+        <div><h3 id="wt-lane-${lane.key}">${lane.title} <span class="wt-lane-count">${n}</span></h3><p>${lane.description}</p></div>${removeAll}</div>
+      ${laneGroups.map(g => {
+        const first = !shown.has(g.repo.path);
+        shown.add(g.repo.path);
+        return worktreeGroupHTML(g, rep.advice, rep.asks, rep.removals, rep.askable, selectionState, first);
+      }).join('')}
+    </section>`;
+  }).join('');
+}
+
+// worktreeFilterHTML: one pill per lane with its count, then stale.
 function worktreeFilterHTML(counts, filter) {
   const f = filter || {};
   const pill = (state, label, n) => {
@@ -748,7 +786,7 @@ function worktreeFilterHTML(counts, filter) {
     return `<button type="button" class="wt-pill${on ? ' on' : ''}" data-action="worktree-filter" data-state="${state}" aria-pressed="${!!on}">${label} <b>${n}</b></button>`;
   };
   return pill('', 'All', counts.all)
-    + WORKTREE_STATES.map(s => pill(s, s[0].toUpperCase() + s.slice(1), counts[s])).join('')
+    + WORKTREE_LANES.map(l => pill(l.key, l.title, counts[l.key])).join('')
     + `<button type="button" class="wt-pill${f.stale ? ' on' : ''}" data-action="worktree-stale" aria-pressed="${!!f.stale}">Stale <b>${counts.stale}</b></button>`;
 }
 
@@ -762,7 +800,7 @@ function worktreesSummaryText(rep, nowMs, shown) {
   const age = rep.cached && fmtAge(rep.generated_at, nowMs);
   const when = rep.cached ? (age ? `scanned ${age} ago` : 'cached scan') : `scanned in ${(Number(rep.duration_ms || 0) / 1000).toFixed(1)}s`;
   const n = (v, one, many) => `${v || 0} ${v === 1 ? one : many}`;
-  const hidden = shown != null && shown < worktreeStateCounts(rep).all ? ` · ${shown} shown` : '';
+  const hidden = shown != null && shown < worktreeLaneCounts(rep).all ? ` · ${shown} shown` : '';
   return `${n(s.repos, 'repo', 'repos')} · ${n(s.worktrees, 'worktree', 'worktrees')} · stale after ${rep.stale_days || 0} idle days · ${when}${hidden}`
     + (rep.refreshing ? ' · refreshing…' : '');
 }
@@ -781,7 +819,7 @@ function renderWorktrees() {
   if (reclaim) {
     const ledger = state.ledger;
     reclaim.innerHTML = rep || ledger
-      ? `<div class="rc-tiles">${reclaimTilesHTML(rep, ledger, state.selectionBusy)}</div>${ledger ? reclaimChartHTML(ledger.daily, localDayKey(new Date())) : ''}`
+      ? `<div class="rc-tiles">${reclaimTilesHTML(rep, ledger)}</div>${ledger ? reclaimChartHTML(ledger.daily, localDayKey(new Date())) : ''}`
       : '';
     reclaim.classList.toggle('rc-reloading', !!state.ledgerLoading && !!ledger);
     applyInlineMetrics(reclaim);
@@ -798,7 +836,7 @@ function renderWorktrees() {
     return;
   }
   const term = SA.globalSearchTerm ? SA.globalSearchTerm() : '';
-  const counts = worktreeStateCounts(rep, state.filter, term);
+  const counts = worktreeLaneCounts(rep, state.filter, term);
   const groups = worktreeGroups(rep, state.filter, term);
   const shown = groups.reduce((n, g) => n + g.rows.length, 0);
   if (pills) renderFilterPills(pills, worktreeFilterHTML(counts, state.filter));
@@ -813,8 +851,8 @@ function renderWorktrees() {
     errors.innerHTML = list.map(e => `<li>${escapeHTML(e)}</li>`).join('');
   }
   container.innerHTML = (groups.length
-    ? groups.map(g => worktreeGroupHTML(g, rep.advice, rep.asks, rep.removals, rep.askable, state)).join('')
-    : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${worktreeStateCounts(rep).all ? 'No worktree matches this filter.' : 'No linked worktrees found. Add a repository above if one is missing.'}</span></div>`)
+    ? worktreeLanesHTML(groups, rep, state)
+    : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${worktreeLaneCounts(rep).all ? 'No worktree matches this filter.' : 'No linked worktrees found. Add a repository above if one is missing.'}</span></div>`)
     + worktreeSelectionHTML(rep, state, groups);
 }
 
