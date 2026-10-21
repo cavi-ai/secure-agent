@@ -28,7 +28,7 @@ func TestClassifierUsesTypedRoutingAndMasksState(t *testing.T) {
 		if strings.Contains(req.State, "secret-fixture") || !strings.Contains(req.State, "[REDACTED]") || req.Model != "local-kev" || req.Questions["context"].Type != "choice" || len(req.Questions["context"].Criteria) != 4 {
 			t.Errorf("invalid classifier request: %+v", req)
 		}
-		w.Write([]byte(`{"answers":{"context":{"type":"choice","choice":"session","confidence":0.8,"probabilities":{"session":0.8,"operator_history":0.1,"sufficient":0.05,"unknown":0.05}}}}`))
+		w.Write([]byte(`{"answers":{"context":{"type":"choice","choice":"session","confidence":0.73,"probabilities":{"session":0.8,"operator_history":0.1,"sufficient":0.05,"unknown":0.05}}}}`))
 	}))
 	defer srv.Close()
 	s := New(Config{Enabled: true, Endpoint: srv.URL, ClassifierEndpoint: srv.URL, ClassifierModel: "local-kev", Mask: func(v string) (string, bool) { return strings.ReplaceAll(v, "secret-fixture", "[REDACTED]"), true }}, &memSink{})
@@ -57,5 +57,21 @@ func TestClassifierUnavailableAndInvalidOutputsCannotBecomeAdvice(t *testing.T) 
 	}
 	if New(Config{Enabled: true, Endpoint: "http://127.0.0.1:1", ClassifierEndpoint: "https://example.com"}, &memSink{}) != nil {
 		t.Fatal("remote classifier accepted")
+	}
+}
+
+func TestClassifierRejectsIncompleteAndInconsistentAnswers(t *testing.T) {
+	for _, body := range []string{
+		`{"answers":{"context":{"type":"choice","choice":"session","probabilities":{"session":0.8,"operator_history":0.1,"sufficient":0.05,"unknown":0.05}}}}`,
+		`{"truncated":true,"answers":{"context":{"type":"choice","choice":"session","confidence":0.73,"probabilities":{"session":0.8,"operator_history":0.1,"sufficient":0.05,"unknown":0.05}}}}`,
+		`{"answers":{"context":{"type":"choice","choice":"unknown","confidence":0.73,"probabilities":{"session":0.8,"operator_history":0.1,"sufficient":0.05,"unknown":0.05}}}}`,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) }))
+		s := New(Config{Enabled: true, Endpoint: srv.URL, ClassifierEndpoint: srv.URL}, &memSink{})
+		result, err := s.classifyEvidence(context.Background(), "finding")
+		srv.Close()
+		if err != nil || !strings.Contains(result, `"available":false`) {
+			t.Fatalf("invalid classifier envelope accepted: %s", result)
+		}
 	}
 }

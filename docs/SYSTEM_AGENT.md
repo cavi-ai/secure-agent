@@ -78,7 +78,7 @@ the command and never dispatches a harness. The operator may:
 - **Dismiss:** remove a pending recommendation from the queue. A saved or
   dismissed recommendation cannot later be run as a local command.
 
-Clearing the conversation leaves analysis recommendations and saved plans in
+Closing the session leaves analysis recommendations and saved plans in
 place. Pending recommendations survive the rolling chat history, with at most
 100 pending items; saved plans have their own storage. The analysis uses
 existing evidence, event, and audit records, so no new background collection
@@ -130,12 +130,13 @@ inspect up to eight recent findings; selected-finding analysis is restricted to
 its selected IDs (at most 30). Worktree questions retain their daemon-built
 worktree snapshot and do not acquire unrelated finding access.
 
-The model can request four read-only tools:
+The model can request five read-only tools:
 
 Models explicitly listed without tool capability retain ordinary chat from the
 supplied context and are told not to claim tool inspection. Older servers that
 omit capability metadata use the compatible tool protocol.
 
+- `search_memory`: search recorded facts from this conversation's project; at most five results. Historical checks are not current permission.
 - `inspect_skill`: an exact built-in procedure ID; no filesystem paths.
 - `inspect_snapshot`: the findings index captured for this reply.
 - `inspect_finding`: evidence for an ID in that index.
@@ -159,11 +160,53 @@ reply (at most six bounded results); no tool transcripts or result cache are
 persisted. Oversized or unfinished exchanges stop without creating a command
 proposal from an incomplete answer.
 
-**New chat** asks for confirmation before clearing the ordinary conversation.
-Plans, runs and analysis recommendations remain. The next message starts with
-fresh skills and a new snapshot. This resets daemon chat context; it does not
-flush or cap the separate model server's KV/prefix cache, which must be managed
-in that server's configuration.
+**New chat** closes the current session. Sessions also rotate after eight user
+turns, 8 KiB of recorded conversation, thirty minutes idle, or a project change.
+The next message receives fresh instructions, procedures, findings and relevant
+retained facts. Context remains bounded if a single answer exceeds the rotation
+threshold. Closed-session command proposals require a fresh review.
+
+**History → Retained facts and sessions** shows concise recorded worktree checks,
+detector findings and local command outcomes with source references. Ordinary conversation and
+model-generated assertions are not promoted into facts. Session summaries
+contain up to eight recorded outcomes, rather than a model's reconstruction.
+The model can search facts only within its captured project scope. Removal
+assessments must be checked again before removal.
+
+Retained facts are capped at 500, expire from retrieval after ninety days, and
+are pruned on subsequent writes. Session history is capped at 100 records.
+Chat, plans and runs retain their existing row limits. **Forget retained facts
+and summaries** removes that continuity data; conversation records, plans and
+runs remain under their separate retention limits.
+
+## Model resources
+
+Chat and advisor inference share one daemon request slot and a queue of at most
+sixteen waiting requests. Foreground requests take priority. Automatic background
+review receives at most two minutes of inference per fifteen-minute window;
+reviews that exceed this budget remain without an advisor result. Findings and
+deterministic protection continue independently. **Stop current work** cancels
+the current reply, model request and any daemon-owned headless command.
+**Pause background review** lasts until resumed or the daemon restarts.
+
+Ollama requests use the native chat API with a 32K context request and a
+two-minute idle expiry. Input is admitted with a conservative byte budget and
+reserved output space. The Agent page distinguishes provider-reported loaded
+memory from unavailable measurements. MLX/Safetensors runners may report their
+maximum dynamic context window rather than a preallocated buffer; this value
+is not a measurement of allocated KV cache.
+
+The daemon's managed MLX server starts on the first inference request and is
+reaped after two idle minutes. Other applications and Terminal handoffs can use
+an external server independently; these controls do not impose a machine-wide
+memory ceiling or terminate another application's model.
+
+**Tools → Model resources and classifier** shows the background budget,
+classifier availability and routing activity. A connected model list establishes
+availability only. Classifier probabilities are not evaluated accuracy, and
+routing hints cannot clear a finding or override deterministic protection.
+Shell-command classifier review remains a separate explicit opt-in.
+
 
 The existing pending chat indicator shows snapshot preparation, the inspected
 tool, elapsed time and read-call count. Completed replies distinguish executed
@@ -203,8 +246,15 @@ Cleanup preserves generated SSH keys, requested outputs in the working
 folder, saved plans, and redacted chat/run history. Files a command or harness
 writes outside its task workspace are outside this cleanup. This is ordinary
 filesystem deletion, not encryption or guaranteed forensic erasure; a forced
-kill can leave temporary data until the next startup. Stored chat and run
-history are redacted, but are not encrypted by this feature.
+kill can leave temporary data until the next startup. Agent message, plan, run,
+session and retained-fact content is redacted before
+storage and encrypted with AES-256-GCM. The key lives in macOS Keychain or the
+Linux Secret Service (`secret-tool`); it is never placed in command arguments
+or a plaintext key file. Project lookup uses a keyed index. A locked or missing
+keystore blocks agent history access and writes instead of falling back to
+plaintext. Existing history is migrated when chat is enabled; old backups and
+filesystem snapshots are not securely erased. Keep the original keystore key
+with any history backup: losing it makes encrypted content unreadable.
 
 ## Optional harness handoff
 

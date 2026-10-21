@@ -32,6 +32,12 @@ func (a *Agent) RunLocal(messageID int64) (model.SysAgentRun, error) {
 	if m.LocalRunID != 0 {
 		return model.SysAgentRun{}, fmt.Errorf("%w: this command has already been started", ErrBusy)
 	}
+	if m.SessionID != 0 {
+		s := a.Session()
+		if s.ID != m.SessionID || s.ClosedAt != nil {
+			return model.SysAgentRun{}, fmt.Errorf("%w: the proposal belongs to a closed session; request a fresh review", ErrInvalid)
+		}
+	}
 	if m.Origin == "analysis" && m.ReviewState != "pending" {
 		return model.SysAgentRun{}, fmt.Errorf("%w: this recommendation is no longer pending", ErrInvalid)
 	}
@@ -46,7 +52,7 @@ func (a *Agent) RunLocal(messageID int64) (model.SysAgentRun, error) {
 		return model.SysAgentRun{}, err
 	}
 	run := model.SysAgentRun{TS: a.now(), Title: "Local command", Harness: "local", Mode: action.Mode,
-		Workdir: action.Workdir, Command: action.Command, Model: cfg.Model}
+		Workdir: action.Workdir, Command: action.Command, Model: cfg.Model, SessionID: m.SessionID}
 	var script string
 	taskDir, err := a.newTaskDir()
 	if err != nil {

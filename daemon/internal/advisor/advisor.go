@@ -19,6 +19,7 @@ package advisor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/localmodel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/loopback"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -35,6 +37,8 @@ import (
 
 // Config controls the advisor. Disabled unless explicitly opted in.
 type Config struct {
+	Transport          http.RoundTripper
+	Ollama             bool
 	Enabled            bool
 	Endpoint           string                      // e.g. http://127.0.0.1:8080 — loopback enforced
 	Model              string                      // served model name, sent in the chat request
@@ -221,11 +225,13 @@ type task struct {
 
 // Subscriber consumes flags/incidents and produces advisor verdicts.
 type Subscriber struct {
-	cfg       Config
-	sink      Sink
-	client    *http.Client
-	onRequest *http.Client
-	queue     chan task
+	classifier      ClassifierHealth
+	classifierProbe time.Time
+	cfg             Config
+	sink            Sink
+	client          *http.Client
+	onRequest       *http.Client
+	queue           chan task
 
 	mu             sync.Mutex
 	failures       int
@@ -263,21 +269,23 @@ const (
 // silent circuit-open state made "re-run the advisor" look like a dead
 // button.
 type HealthSnapshot struct {
-	Enabled        bool      `json:"enabled"`
-	CircuitOpen    bool      `json:"circuit_open,omitempty"`
-	LastError      string    `json:"last_error,omitempty"`
-	QueueDepth     int       `json:"queue_depth"`
-	Model          string    `json:"model,omitempty"`
-	State          string    `json:"state"`
-	ActiveKind     string    `json:"active_kind,omitempty"`
-	ActiveSubject  string    `json:"active_subject,omitempty"`
-	ActiveTool     string    `json:"active_tool,omitempty"`
-	ElapsedMS      int64     `json:"elapsed_ms,omitempty"`
-	TimeoutMS      int64     `json:"timeout_ms,omitempty"`
-	LastDurationMS int64     `json:"last_duration_ms,omitempty"`
-	InputBytes     int       `json:"input_bytes,omitempty"`
-	ToolCalls      int       `json:"tool_calls,omitempty"`
-	RetryAt        time.Time `json:"retry_at,omitzero"`
+	Classifier     ClassifierHealth  `json:"classifier"`
+	Resources      localmodel.Status `json:"resources"`
+	Enabled        bool              `json:"enabled"`
+	CircuitOpen    bool              `json:"circuit_open,omitempty"`
+	LastError      string            `json:"last_error,omitempty"`
+	QueueDepth     int               `json:"queue_depth"`
+	Model          string            `json:"model,omitempty"`
+	State          string            `json:"state"`
+	ActiveKind     string            `json:"active_kind,omitempty"`
+	ActiveSubject  string            `json:"active_subject,omitempty"`
+	ActiveTool     string            `json:"active_tool,omitempty"`
+	ElapsedMS      int64             `json:"elapsed_ms,omitempty"`
+	TimeoutMS      int64             `json:"timeout_ms,omitempty"`
+	LastDurationMS int64             `json:"last_duration_ms,omitempty"`
+	InputBytes     int               `json:"input_bytes,omitempty"`
+	ToolCalls      int               `json:"tool_calls,omitempty"`
+	RetryAt        time.Time         `json:"retry_at,omitzero"`
 }
 
 // Health reports the current snapshot. Nil-receiver safe: a disabled (or
@@ -289,6 +297,7 @@ func (s *Subscriber) Health() HealthSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h := HealthSnapshot{
+		Classifier: s.classifier, Resources: localmodel.Default.Snapshot(),
 		Enabled:     true,
 		CircuitOpen: s.circuitOpenLocked(),
 		LastError:   s.lastErr,
@@ -296,6 +305,14 @@ func (s *Subscriber) Health() HealthSnapshot {
 		Model:       s.cfg.Model,
 		State:       "idle", ActiveKind: s.activeKind, ActiveSubject: s.activeSubject,
 		ActiveTool: s.activeTool, LastDurationMS: s.lastDurationMS, InputBytes: s.inputBytes, ToolCalls: s.toolCalls,
+	}
+	h.Classifier.Configured = s.cfg.ClassifierEndpoint != ""
+	if h.Classifier.State == "" {
+		if h.Classifier.Configured {
+			h.Classifier.State = "not used"
+		} else {
+			h.Classifier.State = "off"
+		}
 	}
 	if h.CircuitOpen {
 		h.State = "paused"
@@ -334,10 +351,7 @@ func New(cfg Config, sink Sink) *Subscriber {
 	if cfg.QueueSize <= 0 {
 		cfg.QueueSize = 64
 	}
-	if cfg.QueueSize <= 0 {
-		cfg.QueueSize = 64
-	}
-	return &Subscriber{
+	s := &Subscriber{
 		cfg:            cfg,
 		sink:           sink,
 		queue:          make(chan task, cfg.QueueSize),
@@ -347,6 +361,16 @@ func New(cfg Config, sink Sink) *Subscriber {
 		planInflight:   map[string]time.Time{},
 		egressInflight: map[string]struct{}{},
 	}
+	s.client.Transport = localmodel.Default.Transport(s.client.Transport, false)
+	s.onRequest.Transport = localmodel.Default.Transport(s.onRequest.Transport, true)
+	if cfg.Transport != nil {
+		s.client.Transport = localmodel.Default.Transport(cfg.Transport, false)
+		s.onRequest.Transport = localmodel.Default.Transport(cfg.Transport, true)
+	} else if cfg.Ollama {
+		s.client.Transport = localmodel.Default.OllamaTransport(loopback.Client(cfg.Timeout).Transport, false)
+		s.onRequest.Transport = localmodel.Default.OllamaTransport(loopback.Client(s.onRequest.Timeout).Transport, true)
+	}
+	return s
 }
 
 // EnqueueFlag offers a flag for triage. Drop-oldest under pressure: a stale
@@ -581,6 +605,11 @@ func (s *Subscriber) circuitOpenLocked() bool {
 
 func (s *Subscriber) recordFailure(err error) {
 	s.mu.Lock()
+	if errors.Is(err, localmodel.ErrBudget) || errors.Is(err, localmodel.ErrPaused) || errors.Is(err, context.Canceled) {
+		s.lastErr = err.Error()
+		s.mu.Unlock()
+		return
+	}
 	s.failures++
 	open := s.failures == breakerThreshold
 	if open {

@@ -766,6 +766,13 @@
               <button type="button" class="btn btn-ghost btn-sm" data-action="agent-panel" data-panel="tools" aria-controls="agent-side" aria-expanded="false">Tools</button>
             </nav>
           </header>
+          <div class="agent-runtime" id="agent-runtime" hidden>
+            <span id="agent-resource-state" role="status"></span>
+            <div class="agent-runtime-actions">
+              <button type="button" class="btn btn-ghost btn-sm" id="agent-stop" data-action="agent-control" data-control="stop">Stop current work</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="agent-pause" data-action="agent-control" data-control="pause">Pause background review</button>
+            </div>
+          </div>
           <div class="agent-layout">
             <section class="agent-chat" id="agent-chat" aria-label="Local agent chat">
               <div class="agent-thread" id="agent-thread" role="log" aria-live="polite" aria-label="Conversation with Secure Agent"></div>
@@ -791,7 +798,8 @@
                   </div>
                 </form>
                 <p id="agent-feedback" class="agent-feedback" role="alert" hidden></p>
-                <div class="agent-composer-note"><span>Commands wait for your confirmation. <span class="agent-key-hint">Enter to send · Shift+Enter for a new line.</span></span><button type="button" class="link-btn" data-action="agent-clear" title="Clear this conversation and start fresh with skills and a new snapshot (plans and runs stay)">New chat</button></div>
+                <p class="agent-session-state" id="agent-session-state"></p>
+                <div class="agent-composer-note"><span>Commands wait for your confirmation. <span class="agent-key-hint">Enter to send · Shift+Enter for a new line.</span></span><button type="button" class="link-btn" data-action="agent-clear" title="Close this session and start fresh with instructions and relevant retained facts">New chat</button></div>
               </div>
             </section>
             <aside class="agent-inspector" id="agent-side" aria-label="Agent tools" hidden>
@@ -805,6 +813,13 @@
                   <div id="agent-recommendations"><div class="loading">Loading…</div></div>
                 </section>
                 <section data-agent-pane="history" hidden>
+                  <details class="agent-tool-section">
+                    <summary>Retained facts and sessions</summary>
+                    <label for="agent-memory-query">Search this project's retained facts</label>
+                    <input id="agent-memory-query" class="input" type="search" maxlength="128" autocomplete="off">
+                    <div id="agent-memory"></div>
+                    <button type="button" class="btn btn-ghost btn-sm" data-action="agent-forget-memory">Forget retained facts and summaries</button>
+                  </details>
                   <div id="agent-runs-panel">
                     <div class="agent-section-head"><h4>Recent runs</h4><button type="button" class="btn btn-ghost btn-sm" data-action="agent-refresh" title="Reload the agent's state">Refresh</button></div>
                     <div id="agent-runs"><div class="loading">Loading…</div></div>
@@ -815,6 +830,11 @@
                   </details>
                 </section>
                 <section data-agent-pane="tools" hidden>
+                  <details class="agent-tool-section" open>
+                    <summary>Model resources and classifier</summary>
+                    <p id="agent-resource-policy"></p><p id="agent-classifier-state"></p>
+                    <p>Background review has two minutes of inference per fifteen-minute window. Pause lasts until resumed or restarted. Deterministic protection continues.</p>
+                  </details>
                   <details class="agent-tool-section" id="agent-handoff-panel">
                     <summary>Harness handoff</summary>
                     <div class="agent-handoff">

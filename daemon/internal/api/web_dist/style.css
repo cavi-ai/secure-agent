@@ -2851,3 +2851,13 @@ button.rc-col:hover .rc-seg-freed { background: var(--brand-2); }
   .tabs { flex-direction: row; flex-wrap: wrap; }
   .tab-btn { min-height: 44px; padding: 10px 16px; }
 }
+
+/* Local AI status stays compact; controls wrap without shrinking targets. */
+.agent-runtime {display:flex;align-items:center;justify-content:space-between;gap:8px 16px;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid var(--line);font-size:12px;flex-shrink:0;}
+.agent-runtime-actions {display:flex;gap:8px;flex-wrap:wrap;}
+.agent-runtime[hidden] {display:none;}
+.agent-session-state {font-size:12px;margin:4px 0;overflow-wrap:anywhere;}
+.agent-memory-item {padding:12px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere;}
+.agent-memory-item p {margin:4px 0;}
+.agent-memory-item small {display:block;}
+@media (max-width:600px) {.agent-runtime {padding:8px 12px;}.agent-runtime-actions .btn {min-height:36px;}}

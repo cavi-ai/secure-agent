@@ -5,21 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/decision"
 	"github.com/cavi-ai/secure-agent/daemon/internal/loopback"
 )
 
-type answer struct {
-	Type          string              `json:"type"`
-	Choice        string              `json:"choice"`
-	Confidence    *float64            `json:"confidence"`
-	Probabilities map[string]*float64 `json:"probabilities"`
-}
+type answer = decision.Answer
 
 func (s *Service) classify(parent context.Context, command, cwd string) (answer, string) {
 	// Hook-reported permissions and agent rationalizations cannot establish
@@ -88,36 +83,9 @@ func (s *Service) classify(parent context.Context, command, cwd string) (answer,
 }
 
 func validAnswer(a answer) bool {
-	if a.Type != "choice" || len(a.Probabilities) != len(criteria) {
-		return false
-	}
-	if _, ok := criteria[a.Choice]; !ok {
-		return false
-	}
-	if a.Confidence == nil || math.IsNaN(*a.Confidence) || *a.Confidence < 0 || *a.Confidence > 1 {
-		return false
-	}
-	selected := a.Probabilities[a.Choice]
-	if selected == nil {
-		return false
-	}
-	sum := 0.0
+	choices := make([]string, 0, len(criteria))
 	for key := range criteria {
-		p, ok := a.Probabilities[key]
-		if !ok || p == nil || math.IsNaN(*p) || *p < 0 || *p > 1 || *p > *selected+0.000001 {
-			return false
-		}
-		sum += *p
+		choices = append(choices, key)
 	}
-	// System One choice confidence is normalized relative to a uniform
-	// distribution, not the selected probability or a measured accuracy.
-	uniform := 1 / float64(len(criteria))
-	expectedConfidence := math.Max(0, (*selected-uniform)/(1-uniform))
-	// Kev rounds each probability and confidence independently to two decimal
-	// places. Account for that documented representation error, while still
-	// rejecting invalid distributions and inconsistent confidence values.
-	const roundingError = 0.005
-	probabilityTolerance := float64(len(criteria))*roundingError + 0.000001
-	confidenceTolerance := roundingError + roundingError/(1-uniform) + 0.000001
-	return math.Abs(sum-1) <= probabilityTolerance && math.Abs(*a.Confidence-expectedConfidence) <= confidenceTolerance
+	return decision.Valid(a, choices)
 }

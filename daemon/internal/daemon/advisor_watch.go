@@ -95,37 +95,9 @@ func (h *advisorStackHolder) startLocked() {
 		}
 		if s.Managed != nil {
 			workers.Add(1)
-			go func() {
-				defer workers.Done()
-				exited := make(chan error, 1)
-				go func() { exited <- s.Managed.Wait() }()
-				waited := false
-				defer func() {
-					// Supervisor may see cancellation before entering the worker.
-					if !waited {
-						_ = s.Managed.Process.Kill()
-						<-exited
-					}
-				}()
-				sup.Run(ctx, "advisor-model", func(c context.Context) error {
-					select {
-					case <-c.Done():
-						_ = s.Managed.Process.Kill()
-						<-exited
-						waited = true
-						return nil
-					case err := <-exited:
-						waited = true
-						if err == nil {
-							err = fmt.Errorf("managed model exited")
-						}
-						// An exec.Cmd can only be waited once. A config reload
-						// launches a fresh command; retrying this one cannot recover.
-						return supervise.Permanent(err)
-					}
-				})
-			}()
+			go func() { defer workers.Done(); <-ctx.Done(); s.Managed.Close() }()
 		}
+
 		workers.Wait()
 		close(done)
 	}()
@@ -133,8 +105,7 @@ func (h *advisorStackHolder) startLocked() {
 
 func disposeAdvisor(s advisorStack) {
 	if s.Managed != nil {
-		_ = s.Managed.Process.Kill()
-		_ = s.Managed.Wait()
+		s.Managed.Close()
 	}
 }
 
@@ -368,7 +339,7 @@ func resourceConfigKey(c config.ResourceControlConfig) string {
 // advisorConfigKey fingerprints the advisor-relevant config so a reload
 // only swaps when something meaningful changed (not on every file touch).
 func advisorConfigKey(a config.AdvisorConfig) string {
-	return a.Endpoint + "|" + a.Model + "|" + a.ManagedModel + "|" +
+	return a.Protocol + "|" + a.Endpoint + "|" + a.Model + "|" + a.ManagedModel + "|" +
 		boolStr(a.Enabled) + "|" + boolStr(a.Managed) + "|" + a.Timeout.String() + "|" + a.ClassifierEndpoint + "|" + a.ClassifierModel + "|" + boolStr(a.Debug)
 }
 

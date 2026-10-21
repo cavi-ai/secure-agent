@@ -640,3 +640,23 @@ does not clear the proxy from an existing process. `/status` counts
 - `guard-cwd-overrides.json` — derived per-project policies written at daemon start
 - `proxy-token`, `console-token` — separate private routing and console credentials
 - `node-id` — stable per-install fleet identity
+
+### Local model resource controls
+
+The system agent uses Ollama's native API with a 32K context request and a
+two-minute idle expiry. Advisor endpoints on port 11434 use the same controls.
+For Ollama on another port, set `advisor.protocol: ollama`; use
+`advisor.protocol: openai` for other compatible servers. External servers
+manage their own context allocation. MLX/Safetensors context metadata can
+describe a dynamic maximum rather than allocated cache.
+
+Daemon chat and advisor requests share a bounded queue and one inference slot.
+Background review has a two-minute budget per fifteen-minute window.
+Managed MLX models start on demand and stop after two idle minutes.
+The Agent page provides current-work cancellation, a background pause and
+provider-reported memory status.
+
+Agent history requires macOS Keychain or Linux Secret Service
+(`secret-tool`). When the keystore cannot be unlocked, history remains locked
+and new agent messages are refused. Monitoring and deterministic protection
+continue.

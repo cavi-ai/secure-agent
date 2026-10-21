@@ -17,10 +17,11 @@ type SysAgentWork struct {
 // tab). Content is stored masked: a secret never reaches the table or the
 // model.
 type SysAgentMessage struct {
-	ID      int64     `json:"id"`
-	TS      time.Time `json:"ts"`
-	Role    string    `json:"role"` // user | assistant | note
-	Content string    `json:"content"`
+	SessionID int64     `json:"session_id,omitempty"`
+	ID        int64     `json:"id"`
+	TS        time.Time `json:"ts"`
+	Role      string    `json:"role"` // user | assistant | note
+	Content   string    `json:"content"`
 	// Analysis replies are review-queue items. They remain available after
 	// clearing chat; approval still uses the exact stored command by ID.
 	Origin      string   `json:"origin,omitempty"` // analysis | worktree | ordinary chat
@@ -43,6 +44,29 @@ type SysAgentMessage struct {
 	LocalRunID   int64                 `json:"local_run_id,omitempty"`
 	// PlanID is the plan saved from Proposal, 0 until one is.
 	PlanID int64 `json:"plan_id,omitempty"`
+}
+
+// SysAgentSession is a finite conversation. Summaries contain recorded facts,
+// never model-generated commands or a standing authorization.
+type SysAgentSession struct {
+	ID        int64      `json:"id"`
+	OpenedAt  time.Time  `json:"opened_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+	Scope     string     `json:"scope"`
+	Messages  int        `json:"messages"`
+	Bytes     int        `json:"bytes"`
+	Summary   []string   `json:"summary"`
+}
+
+type SysAgentMemory struct {
+	ID         int64     `json:"id"`
+	At         time.Time `json:"at"`
+	SessionID  int64     `json:"session_id"`
+	Scope      string    `json:"scope"`
+	Kind       string    `json:"kind"`
+	Summary    string    `json:"summary"`
+	References []string  `json:"references"`
 }
 
 type SysAgentUsage struct {
@@ -108,6 +132,7 @@ type SysAgentPlan struct {
 
 // SysAgentRun is one dispatch of a plan to a harness.
 type SysAgentRun struct {
+	SessionID  int64      `json:"session_id,omitempty"`
 	ID         int64      `json:"id"`
 	PlanID     int64      `json:"plan_id"`
 	TS         time.Time  `json:"ts"`

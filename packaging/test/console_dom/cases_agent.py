@@ -272,7 +272,16 @@ def run_agent_latest(page):
             page.check(f'agent latest ({viewport}): {name}', state.get(name) is True, str(state))
 
 
+def run_agent_resources(page):
+ for fixture in ('dom_agent_resources','dom_agent_resources_narrow'):
+  dom=page.fixture(fixture)
+  receipt=re.search(r'data-agent-resources="([^"]+)"',dom)
+  state=json.loads(html.unescape(receipt.group(1))) if receipt else {}
+  for name in ('loaded','session','paused','resumed','classifier','memory','search','bounds'):
+   page.check(f'agent resources {fixture}: {name}',state.get(name) is True,str(state))
+
 CASES = (
+ Case('agent_resources',run_agent_resources,('dom_agent_resources','dom_agent_resources_narrow')),
     Case('agent_latest', run_agent_latest, ('dom_agent_latest', 'dom_agent_latest_narrow')),
     Case('agents_tab_renders_one_group_per_harness_newest_first', run_agents_tab_renders_one_group_per_harness_newest_first, ('dom',)),
     Case('agent_group_head', run_agent_group_head, ('dom',)),
