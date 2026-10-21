@@ -5,6 +5,15 @@ import (
 	"testing"
 )
 
+// objectEvidence decodes the object form only: the cost EvidenceItem's
+// decoder must match for an object.
+type objectEvidence EvidenceItem
+
+func (o *objectEvidence) UnmarshalJSON(data []byte) error {
+	type alias EvidenceItem
+	return json.Unmarshal(data, (*alias)(o))
+}
+
 // An object evidence item decodes without a failed string attempt first, and
 // the legacy bare-string form still decodes as text.
 func TestEvidenceItemDecodesEachFormDirectly(t *testing.T) {
@@ -21,16 +30,15 @@ func TestEvidenceItemDecodesEachFormDirectly(t *testing.T) {
 		t.Fatal("a number decoded as evidence")
 	}
 
-	type plain EvidenceItem
-	direct := testing.AllocsPerRun(200, func() {
-		var p plain
-		_ = json.Unmarshal(obj, &p)
+	reference := testing.AllocsPerRun(200, func() {
+		var o objectEvidence
+		_ = json.Unmarshal(obj, &o)
 	})
 	viaMethod := testing.AllocsPerRun(200, func() {
 		var e EvidenceItem
 		_ = json.Unmarshal(obj, &e)
 	})
-	if viaMethod > direct {
-		t.Fatalf("EvidenceItem decode allocates %.0f times, a plain decode %.0f", viaMethod, direct)
+	if viaMethod > reference {
+		t.Fatalf("EvidenceItem decode allocates %.0f times, an object-only decode %.0f", viaMethod, reference)
 	}
 }
