@@ -63,13 +63,26 @@ func TestVolumesOneRowPerVolume(t *testing.T) {
 	}
 }
 
-func TestMergeSharedVolumes(t *testing.T) {
-	got := mergeShared([]Volume{
-		{Mount: "/Volumes/Work", TotalBytes: 8000, FreeBytes: 500},
-		{Mount: "/Volumes/USB", TotalBytes: 1000, FreeBytes: 900},
-		{Mount: "/System/Volumes/Data", TotalBytes: 8000, FreeBytes: 500},
+func TestVolumesDistinguishFilesystemsWithMatchingSpace(t *testing.T) {
+	root := t.TempDir()
+	a, b := filepath.Join(root, "volume-a"), filepath.Join(root, "volume-b")
+	paths := []string{a, b, a, filepath.Join(root, "unavailable")}
+	got := volumes(paths, func(path string, st *unix.Statfs_t) error {
+		switch path {
+		case a:
+			st.Fsid.Val = [2]int32{1, 0}
+		case b:
+			st.Fsid.Val = [2]int32{2, 0}
+		default:
+			return os.ErrNotExist
+		}
+		st.Bsize, st.Blocks, st.Bavail = 1, 8000, 500
+		return nil
 	})
-	if len(got) != 2 || got[0].Mount != "/Volumes/Work + /System/Volumes/Data" || got[1].Mount != "/Volumes/USB" {
-		t.Fatalf("merged = %+v", got)
+	if len(got) != 2 {
+		t.Fatalf("distinct filesystem identities were merged: %+v", got)
+	}
+	if got[0].Mount != a || got[1].Mount != b || got[0].TotalBytes != 8000 || got[1].FreeBytes != 500 {
+		t.Fatalf("volume measurements changed: %+v", got)
 	}
 }
