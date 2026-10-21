@@ -24,6 +24,10 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
+// drainHangBound only catches a drain loop that never finishes: a loaded CI
+// runner under the race detector takes seconds for what runs in well under one.
+const drainHangBound = 30 * time.Second
+
 func TestDrainLoopIncidentPublicationRequiresPersistence(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "events.db")
 	st, err := store.Open(dbPath, "")
@@ -68,7 +72,7 @@ func TestDrainLoopIncidentPublicationRequiresPersistence(t *testing.T) {
 		b.Close()
 		select {
 		case <-done:
-		case <-time.After(3 * time.Second):
+		case <-time.After(drainHangBound):
 			t.Fatal("drain loop did not finish")
 		}
 		pub.Wait()
@@ -152,7 +156,7 @@ func TestDrainLoopIncidentLookupFailureDoesNotCreateDuplicate(t *testing.T) {
 		b.Close()
 		select {
 		case <-done:
-		case <-time.After(3 * time.Second):
+		case <-time.After(drainHangBound):
 			t.Fatal("drain loop did not finish")
 		}
 		hub.Close()
@@ -244,7 +248,7 @@ func TestDrainLoopIncidentAbsorbFailureRetainsOriginal(t *testing.T) {
 		b.Close()
 		select {
 		case <-done:
-		case <-time.After(3 * time.Second):
+		case <-time.After(drainHangBound):
 			t.Fatal("drain loop did not finish")
 		}
 		hub.Close()
