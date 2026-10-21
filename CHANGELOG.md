@@ -14,7 +14,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Doctor: Fix all is offered whenever a check is not passing; it restarts the daemon, unregisters other copies of the app, marks spool loss, bus drops and recovered storage failures seen (`POST /doctor/seen`) and opens Traffic for egress.
 
 ### Changed
-- Performance: posture, snapshots and finding lists read advisor verdicts in batches and reuse 24-hour flag reads until a flag changes; posture is recomputed off the event ingest path, event retention runs beside persistence in short batches and no longer pauses it to scan the event table, and store reads (flags, events, sessions, incidents, finding reviews, spend, hooks, guard rules, worktrees, Doctor) no longer wait for writes or pause event persistence.
+- Performance: posture, snapshots and finding lists read advisor verdicts in batches and reuse 24-hour flag reads until a flag changes; posture is recomputed off the event ingest path, event retention runs beside persistence in short batches and no longer pauses it to scan the event table, and store reads (flags, events, sessions, incidents, finding reviews, spend, hooks, guard rules, worktrees, Doctor) no longer wait for writes or pause event persistence; the session sweep reads the store without holding up event attribution, the startup finding-review pass reads and writes a page of flags at a time, flag evidence decodes without a failed string pass, and a checkpoint cuts the WAL file back to 64 MiB.
 - Console: assets revalidate by content hash, and the brand icon is 128 px.
 - Menu bar: polls every 30 s while the event stream is live, whichever connected first, and the stream carries only flag, posture and guard deltas (`/events/stream?types=`), so event floods no longer reach it.
 - Config: YAML is parsed with the maintained `go.yaml.in/yaml/v3`.
@@ -27,6 +27,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Traces: OpenCode, Hermes and OpenClaw retry database events when the event bus is full without advancing past undelivered events.
 - Hermes: a daemon started by the menu bar app or launchd reads `HERMES_STATE_DIR` and `HERMES_HOME` from the login shell, so a shell-profile export finds Hermes without `hermes_home`.
 - Event bus: sources that retry fill at most three quarters of it, so a spool or trace backlog no longer drops connection, proxy and hook events.
+- Sessions: a pid another process now holds no longer resolves to the exited process's session, and exited pids and old git lookups leave the resolver's caches instead of accumulating for a session's lifetime.
+- Correlation: read and connection marks recorded for a process and its agent process no longer overwrite each other.
 - Menu bar: the native guard alert closes when its request is answered elsewhere, and polling continues while it is open.
 - Menu bar: removing the old file-telemetry helper and the launch migration no longer freeze the menu bar.
 - Menu bar: the popover opens in front of fullscreen apps on every Space.
