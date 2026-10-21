@@ -1157,6 +1157,7 @@ func newHermesCollector(cfg config.Config, b *bus.Bus, supReg *supervise.Registr
 	h := collect.NewHermesCollector(b, 0)
 	h.Configured = cfg.HermesHome
 	h.ProcessExes = func() []string { return harnessExes(tagger, "hermes") }
+	h.LoginEnv = collect.LoginShellEnv("HERMES_STATE_DIR", "HERMES_HOME")
 	h.StatePath = filepath.Join(filepath.Dir(cfg.DBPath), "hermes-watermark.json")
 	h.OnProduce = func() { supReg.MarkProduced("hermes") }
 	h.OnPoll = func(src string, wm int64) { supReg.MarkPolled("hermes", src, wm) }

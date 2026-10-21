@@ -24,6 +24,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Agent detection: identify Node-based OpenClaw by its running program so unrelated MCP helpers using the same Node binary keep their parent harness attribution.
 - Daemon: wait for collectors to finish final events and checkpoints before closing the event bus during shutdown.
 - Traces: OpenCode, Hermes and OpenClaw retry database events when the event bus is full without advancing past undelivered events.
+- Hermes: a daemon started by the menu bar app or launchd reads `HERMES_STATE_DIR` and `HERMES_HOME` from the login shell, so a shell-profile export finds Hermes without `hermes_home`.
 - Event bus: sources that retry fill at most three quarters of it, so a spool or trace backlog no longer drops connection, proxy and hook events.
 - Menu bar: the native guard alert closes when its request is answered elsewhere, and polling continues while it is open.
 - Menu bar: removing the old file-telemetry helper and the launch migration no longer freeze the menu bar.

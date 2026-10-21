@@ -610,6 +610,31 @@ func TestHermesHonoursStateDirectoryEnv(t *testing.T) {
 	}
 }
 
+func TestHermesUsesLoginShellHomeWhenEnvironmentHasNone(t *testing.T) {
+	root, _, _ := hermesFixture(t)
+	t.Setenv("HERMES_STATE_DIR", "")
+	t.Setenv("HERMES_HOME", "")
+	t.Setenv("HOME", t.TempDir())
+	c, sub, _, _ := newTestHermes(t, "")
+	c.LoginEnv = LoginShellEnv("HERMES_STATE_DIR", "HERMES_HOME")
+	t.Setenv("SHELL", fakeLoginShell(t, root))
+	if n := c.pollOnce(); n != 9 {
+		t.Fatalf("pollOnce via the login shell published %d, want 9", n)
+	} else {
+		drainOpenclaw(sub, n)
+	}
+	if st := c.Status(); st.Root != root || len(st.DBs) != 2 {
+		t.Fatalf("status = %+v, want the login shell's root with 2 databases", st)
+	}
+	// The daemon's own environment still wins over the login shell.
+	other := t.TempDir()
+	t.Setenv("HERMES_HOME", other)
+	c.pollOnce()
+	if st := c.Status(); st.Root != other {
+		t.Fatalf("root = %q, want the daemon environment's %q", st.Root, other)
+	}
+}
+
 func TestHermesProcessStateDiscovery(t *testing.T) {
 	root, _, _ := hermesFixture(t)
 	emptyEnv := func(string) string { return "" }
