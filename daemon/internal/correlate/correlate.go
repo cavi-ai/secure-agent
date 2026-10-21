@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -836,7 +837,9 @@ func (c *Correlator) recentReadsLocked(pid int32, directPID int32, now time.Time
 	}
 	c.marks[pid] = valid
 	if directPID != 0 && directPID != pid {
-		c.marks[directPID] = valid
+		// Its own copy: a shared backing array would let an append or a
+		// consumed mark under one pid rewrite the other's list.
+		c.marks[directPID] = slices.Clone(valid)
 	}
 	return recent
 }
@@ -865,7 +868,7 @@ func (c *Correlator) recentConnsLocked(pid int32, directPID int32, now time.Time
 	}
 	c.conns[pid] = valid
 	if directPID != 0 && directPID != pid {
-		c.conns[directPID] = valid
+		c.conns[directPID] = slices.Clone(valid) // see recentReadsLocked
 	}
 	return recent
 }

@@ -160,23 +160,49 @@ func saveReview(tx *sql.Tx, r model.ReviewRecord) error {
 }
 
 func (s *Store) observeFindingReviewLocked(f model.Flag, a model.FindingAssessment) (model.ReviewRecord, error) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return model.ReviewRecord{}, err
-	}
-	defer tx.Rollback()
-	r, err := observeReviewTx(tx, f, a)
-	if err == nil {
-		err = tx.Commit()
-	}
-	if err == nil {
-		s.flagsChanged() // observeReviewTx may acknowledge the flag
-		s.reviewWrites++
-		if s.reviewWrites%100 == 0 {
-			_, err = s.db.Exec(`DELETE FROM finding_review_members WHERE flag_id NOT IN (SELECT id FROM flags)`)
-		}
+	records, err := s.observeFindingReviewsLocked([]reviewObservation{{f, a}})
+	var r model.ReviewRecord
+	if len(records) > 0 {
+		r = records[0]
 	}
 	return r, err
+}
+
+// reviewObservation is one flag and its assessment to observe.
+type reviewObservation struct {
+	flag       model.Flag
+	assessment model.FindingAssessment
+}
+
+// observeFindingReviewsLocked observes each flag, in order, in one
+// transaction and returns their review records. Caller holds mu.
+func (s *Store) observeFindingReviewsLocked(obs []reviewObservation) ([]model.ReviewRecord, error) {
+	if s.reviewTxBegun != nil {
+		s.reviewTxBegun()
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	records := make([]model.ReviewRecord, 0, len(obs))
+	for _, o := range obs {
+		r, err := observeReviewTx(tx, o.flag, o.assessment)
+		records = append(records, r)
+		if err != nil {
+			return records, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return records, err
+	}
+	s.flagsChanged() // observeReviewTx may acknowledge the flag
+	before := s.reviewWrites
+	s.reviewWrites += uint64(len(obs))
+	if before/100 != s.reviewWrites/100 {
+		_, err = s.db.Exec(`DELETE FROM finding_review_members WHERE flag_id NOT IN (SELECT id FROM flags)`)
+	}
+	return records, err
 }
 
 func observeReviewTx(tx *sql.Tx, f model.Flag, a model.FindingAssessment) (r model.ReviewRecord, err error) {
@@ -664,7 +690,9 @@ func (s *Store) DecideFindingReview(req model.ReviewDecisionRequest) (receipt mo
 }
 
 // backfillFindingReviews is restart-safe and bounded by the existing flag cap.
-// Reads close before starting writes (the store owns one SQLite connection).
+// Each page of flags is read in two statements and observed, in rowid order,
+// in one transaction. Reads close before starting writes (the store owns one
+// SQLite connection).
 func (s *Store) backfillFindingReviews() error {
 	var cursor int64
 	var allIDs []string
@@ -695,17 +723,34 @@ func (s *Store) backfillFindingReviews() error {
 			return nil
 		}
 		allIDs = append(allIDs, ids...)
+		list, err := json.Marshal(ids)
+		if err != nil {
+			return err
+		}
+		rows, err = s.db.Query(flagSelect+` WHERE id IN (SELECT value FROM json_each(?))`, string(list))
+		if err != nil {
+			return err
+		}
+		page, err := scanFlagsResult(rows)
+		if err != nil {
+			return err
+		}
+		byID := make(map[string]model.Flag, len(page))
+		for _, f := range page {
+			byID[f.ID] = f
+		}
+		obs := make([]reviewObservation, 0, len(page))
 		for _, id := range ids {
-			f, ok, err := s.GetFlag(id)
-			if err != nil {
-				return err
+			if f, ok := byID[id]; ok {
+				obs = append(obs, reviewObservation{f, model.AssessFinding(f)})
 			}
-			if !ok {
-				continue
-			}
-			if _, err = s.ObserveFindingReview(f, model.AssessFinding(f)); err != nil {
-				return err
-			}
+		}
+		s.mu.Lock()
+		_, err = s.observeFindingReviewsLocked(obs)
+		s.noteWrite("finding reviews", err)
+		s.mu.Unlock()
+		if err != nil {
+			return err
 		}
 	}
 }

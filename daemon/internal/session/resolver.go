@@ -7,6 +7,7 @@ package session
 import (
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,6 +124,17 @@ func resolveGitInfo(workspace string) (repo, branch string) {
 
 var gitCache map[string]gitInfo
 
+// pruneGitCacheLocked drops lookups past gitCacheTTL, so the cache holds the
+// workspaces seen within it rather than every path ever seen. Caller holds
+// the resolver mutex.
+func pruneGitCacheLocked() {
+	for ws, v := range gitCache {
+		if time.Since(v.at) >= gitCacheTTL {
+			delete(gitCache, ws)
+		}
+	}
+}
+
 // Handshake is the hook's session announcement: harness identity, workspace,
 // and the harness's own pid (the hook's parent), which joins the hook
 // session id to the process tree exactly.
@@ -147,8 +159,8 @@ type Resolver struct {
 	OnSessionChange func(model.Session)
 
 	mu     sync.Mutex
-	byPID  map[int32]string // pid → session id (process-tree cache)
-	byRoot map[int32]string // root pid → session id
+	byPID  map[int32]pidEntry // pid → session (process-tree cache); Sweep drops reused and long-gone pids
+	byRoot map[int32]string   // root pid → session id
 	// byScope maps "harness\x00workspace" → the scope's newest session id,
 	// so a transcript sighting joins the running conversation without a
 	// store scan. Filled when a process-tree session is created, cleared when
@@ -174,6 +186,19 @@ type sighting struct {
 	at      time.Time
 }
 
+// pidEntry is a cached pid's session and the start time of the process that
+// held the pid when it was cached. goneAt is set by the first Sweep that finds
+// the pid gone: its late spool events still resolve through the entry until
+// pidGoneGrace has passed.
+type pidEntry struct {
+	id      string
+	started time.Time
+	goneAt  time.Time
+}
+
+// pidGoneGrace keeps an exited pid's entry for its late spool events.
+const pidGoneGrace = 10 * time.Minute
+
 // maxSightings bounds the sighting map; past it, sightings older than a day
 // are dropped.
 const maxSightings = 10000
@@ -197,7 +222,7 @@ func NewResolver(st resolverStore, tg *agents.Tagger) *Resolver {
 	return &Resolver{
 		st:       st,
 		tagger:   tg,
-		byPID:    map[int32]string{},
+		byPID:    map[int32]pidEntry{},
 		byRoot:   map[int32]string{},
 		byScope:  map[string]string{},
 		touch:    map[string]time.Time{},
@@ -241,10 +266,10 @@ func (r *Resolver) Resolve(e *event.Event) string {
 	if e.PID <= 0 {
 		return ""
 	}
-	if id, ok := r.byPID[e.PID]; ok {
-		r.touchLocked(id, e.TS)
-		e.SessionID = id
-		return id
+	if ent, ok := r.byPID[e.PID]; ok {
+		r.touchLocked(ent.id, e.TS)
+		e.SessionID = ent.id
+		return ent.id
 	}
 	pid := e.PID
 	info, ok := r.tagger.Tag(pid)
@@ -258,10 +283,10 @@ func (r *Resolver) Resolve(e *event.Event) string {
 			return ""
 		}
 		pid = e.PPID
-		if id, ok := r.byPID[pid]; ok {
-			r.touchLocked(id, e.TS)
-			e.SessionID = id
-			return id
+		if ent, ok := r.byPID[pid]; ok {
+			r.touchLocked(ent.id, e.TS)
+			e.SessionID = ent.id
+			return ent.id
 		}
 		if info, ok = r.tagger.Tag(pid); !ok {
 			return ""
@@ -334,10 +359,20 @@ func (r *Resolver) Resolve(e *event.Event) string {
 			r.byScope[scopeKey(sess.Harness, sess.Workspace)] = id
 		}
 	}
-	r.byPID[pid] = id
+	r.setPIDLocked(pid, id)
 	r.touchLocked(id, e.TS)
 	e.SessionID = id
 	return id
+}
+
+// setPIDLocked caches pid's session with the start time of the process now
+// holding pid. Caller holds mu.
+func (r *Resolver) setPIDLocked(pid int32, id string) {
+	var started time.Time
+	if r.tagger != nil {
+		started, _ = r.tagger.Started(pid)
+	}
+	r.byPID[pid] = pidEntry{id: id, started: started}
 }
 
 // adoptsByScopeLocked reports whether family root may adopt the scope's
@@ -451,7 +486,7 @@ func (r *Resolver) HandleHandshake(h Handshake) {
 			}
 		}
 		r.byRoot[h.PID] = h.SessionID
-		r.byPID[h.PID] = h.SessionID
+		r.setPIDLocked(h.PID, h.SessionID)
 	}
 
 	if !r.upsertAndEmitLocked(model.Session{
@@ -581,9 +616,10 @@ func (r *Resolver) rekeyLocked(old, id string) bool {
 	}
 	delete(r.deferred, old)
 	delete(r.touch, old)
-	for pid, sid := range r.byPID {
-		if sid == old {
-			r.byPID[pid] = id
+	for pid, ent := range r.byPID {
+		if ent.id == old {
+			ent.id = id
+			r.byPID[pid] = ent
 		}
 	}
 	for root, sid := range r.byRoot {
@@ -745,7 +781,7 @@ func (r *Resolver) holdRootLocked(sess model.Session) {
 		}
 	}
 	r.byRoot[root] = sess.ID
-	r.byPID[root] = sess.ID
+	r.setPIDLocked(root, sess.ID)
 }
 
 // joinTreeLocked ties a stamped session to the process tree its event came
@@ -774,7 +810,7 @@ func (r *Resolver) joinTreeLocked(sess *model.Session, pid int32, info agents.Ag
 	}
 	old, held := r.byRoot[root]
 	if held && old == sess.ID {
-		r.byPID[pid] = sess.ID
+		r.setPIDLocked(pid, sess.ID)
 		return true
 	}
 	var confidence string
@@ -796,7 +832,7 @@ func (r *Resolver) joinTreeLocked(sess *model.Session, pid int32, info agents.Ag
 		sess.ParentID = r.orchestratorForLocked(root, info.Name)
 	}
 	r.byRoot[root] = sess.ID
-	r.byPID[pid] = sess.ID
+	r.setPIDLocked(pid, sess.ID)
 	return true
 }
 
@@ -829,7 +865,7 @@ func (r *Resolver) JoinTranscriptPID(id string, pid int32) {
 	}
 	old, held := r.byRoot[root]
 	if held && old == id && sess.RootPID == root {
-		r.byPID[pid] = id
+		r.setPIDLocked(pid, id)
 		return
 	}
 	if held && old != id {
@@ -1026,64 +1062,155 @@ func (r *Resolver) PermissionIdentity(pid int32, claimed string) (model.Decision
 // hook sessions, or an hour of silence on a root that now belongs to an
 // infra family other than the session's harness). Call on the tagger
 // refresh cadence.
+//
+// Resolve takes mu for every event, so the store reads and process lookups
+// run outside it: mu is held to copy the maps and to end what they condemned,
+// rechecking that a tracked root still maps to the session it was read for.
 func (r *Resolver) Sweep() {
 	now := r.now()
 	idled, err := r.st.MarkSessionsIdle(now.Add(-idleAfter))
 	if err != nil {
 		log.Printf("session: persist idle transitions: %v", err)
 	}
+	r.prunePIDs(now)
 
+	type rootedID struct {
+		root int32
+		id   string
+	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	var tracked []rootedID
+	deferred := map[string]model.Session{}
 	for root, id := range r.byRoot {
-		// A root missing from one process-table sample is ended only when the
-		// process source confirms it is gone or reused.
-		sess, ok, err := r.lookupLocked(id)
-		if err != nil {
-			continue
+		tracked = append(tracked, rootedID{root, id})
+		if sess, ok := r.deferred[id]; ok {
+			deferred[id] = sess
+		}
+	}
+	r.mu.Unlock()
+
+	// A root missing from one process-table sample is ended only when the
+	// process source confirms it is gone or reused.
+	var goneTracked []rootedID
+	for _, t := range tracked {
+		sess, ok := deferred[t.id]
+		if !ok {
+			var err error
+			if sess, ok, err = r.st.GetSession(t.id); err != nil {
+				continue
+			}
 		}
 		var recorded time.Time
-		if ok && sess.RootPID == root {
+		if ok && sess.RootPID == t.root {
 			recorded = rootStarted(sess)
 		}
-		if r.rootGone(root, recorded) {
-			r.endLocked(id, now)
+		if r.rootGone(t.root, recorded) {
+			goneTracked = append(goneTracked, t)
 		}
 	}
 	// Sessions known to the store but not to the in-memory maps (daemon
 	// restarted mid-session, or other conversations on a tracked root): end
-	// those whose root is gone or reused, and end pid-less hook sessions
-	// after a day of silence.
+	// those whose root is gone or reused.
+	var goneStored []rootedID
 	for root, sessions := range r.st.SessionRoots() {
 		for _, sess := range sessions {
-			if r.byRoot[root] != sess.ID && r.rootGone(root, rootStarted(sess)) {
-				r.endLocked(sess.ID, now)
+			if r.rootGone(root, rootStarted(sess)) {
+				goneStored = append(goneStored, rootedID{root, sess.ID})
 			}
 		}
 	}
-	sessions, err := r.st.ListSessions(store.SessionFilter{Status: model.SessionIdle, Limit: 500})
-	if err != nil {
-		return
-	}
+	// End pid-less hook sessions after a day of silence. A root taken before
+	// the agents config named that process infra (a Claude desktop
+	// conversation rooted at the app) outlives the conversation; a stamped
+	// event re-roots a live one (joinTreeLocked), so only a silent one is
+	// still on it.
+	sessions, listErr := r.st.ListSessions(store.SessionFilter{Status: model.SessionIdle, Limit: 500})
+	var silent []string
 	for _, sess := range sessions {
 		if sess.RootPID == 0 && now.Sub(sess.LastSeenAt) > endSilentAfter {
-			r.endLocked(sess.ID, now)
-		}
-		// A root taken before the agents config named that process infra (a
-		// Claude desktop conversation rooted at the app) outlives the
-		// conversation; a stamped event re-roots a live one (joinTreeLocked),
-		// so only a silent one is still on it.
-		if sess.RootPID != 0 && now.Sub(sess.LastSeenAt) > endInfraRootAfter {
+			silent = append(silent, sess.ID)
+		} else if sess.RootPID != 0 && now.Sub(sess.LastSeenAt) > endInfraRootAfter {
 			if info, ok := r.tagger.Tag(sess.RootPID); ok && info.Kind == config.AgentKindInfra && info.Name != sess.Harness {
-				r.endLocked(sess.ID, now)
+				silent = append(silent, sess.ID)
 			}
 		}
+	}
+	var idledSessions []model.Session
+	if listErr == nil {
+		for _, id := range idled {
+			if sess, ok, err := r.st.GetSession(id); err == nil && ok {
+				idledSessions = append(idledSessions, sess)
+			}
+		}
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pruneGitCacheLocked()
+	ended := map[string]bool{}
+	end := func(id string) {
+		if !ended[id] {
+			ended[id] = true
+			r.endLocked(id, now)
+		}
+	}
+	for _, t := range goneTracked {
+		if r.byRoot[t.root] == t.id {
+			end(t.id)
+		}
+	}
+	for _, s := range goneStored {
+		if r.byRoot[s.root] != s.id {
+			end(s.id)
+		}
+	}
+	if listErr != nil {
+		return
+	}
+	for _, id := range silent {
+		end(id)
 	}
 	// Idle transitions ride the delta stream too (the console's status chip
 	// must move without a poll).
-	for _, id := range idled {
-		if sess, ok, err := r.st.GetSession(id); err == nil && ok {
-			r.emitLocked(sess)
+	for _, sess := range idledSessions {
+		r.emitLocked(sess)
+	}
+}
+
+// prunePIDs drops cached pids another process now holds, and pids gone for
+// longer than pidGoneGrace. The process lookups run outside mu; an entry
+// re-cached since the copy is left for the next Sweep.
+func (r *Resolver) prunePIDs(now time.Time) {
+	r.mu.Lock()
+	cached := maps.Clone(r.byPID)
+	r.mu.Unlock()
+	type verdict struct{ live, reused bool }
+	verdicts := make(map[int32]verdict, len(cached))
+	for pid, ent := range cached {
+		started, live := r.tagger.Started(pid)
+		reused := live && !ent.started.IsZero() && !started.IsZero() && !started.Equal(ent.started)
+		verdicts[pid] = verdict{live: live, reused: reused}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for pid, v := range verdicts {
+		ent, ok := r.byPID[pid]
+		if !ok || ent != cached[pid] {
+			continue
+		}
+		switch {
+		case v.reused:
+			delete(r.byPID, pid)
+		case v.live:
+			if !ent.goneAt.IsZero() {
+				ent.goneAt = time.Time{}
+				r.byPID[pid] = ent
+			}
+		case ent.goneAt.IsZero():
+			ent.goneAt = now
+			r.byPID[pid] = ent
+		case now.Sub(ent.goneAt) > pidGoneGrace:
+			delete(r.byPID, pid)
 		}
 	}
 }
@@ -1105,8 +1232,8 @@ func (r *Resolver) endLocked(id string, now time.Time) {
 			delete(r.byRoot, root)
 		}
 	}
-	for pid, sid := range r.byPID {
-		if sid == id {
+	for pid, ent := range r.byPID {
+		if ent.id == id {
 			delete(r.byPID, pid)
 		}
 	}
