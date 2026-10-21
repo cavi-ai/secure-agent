@@ -35,19 +35,43 @@ func (m Mover) Move(path string) (string, error) {
 	if _, err := os.Lstat(dest); err == nil {
 		dest = filepath.Join(dir, filepath.Base(path)+" "+m.Now().Format("15.04.05.000"))
 	}
-	if err := os.Rename(path, dest); err != nil {
-		return "", fmt.Errorf("move to Trash: %w", err)
-	}
+	var info string
 	if m.GOOS != "darwin" {
-		// freedesktop Trash: a .trashinfo beside files/ lets the desktop
-		// show the item's origin and restore it.
-		info := filepath.Join(filepath.Dir(dir), "info", filepath.Base(dest)+".trashinfo")
-		body := "[Trash Info]\nPath=" + (&url.URL{Path: path}).EscapedPath() + "\nDeletionDate=" + m.Now().Format("2006-01-02T15:04:05") + "\n"
-		if err := os.MkdirAll(filepath.Dir(info), 0o700); err == nil {
-			_ = os.WriteFile(info, []byte(body), 0o600)
+		info, err = m.prepareInfo(path, dest)
+		if err != nil {
+			return "", fmt.Errorf("prepare Trash restore metadata: %w", err)
 		}
 	}
+	if err := os.Rename(path, dest); err != nil {
+		if info != "" {
+			err = errors.Join(err, os.Remove(info))
+		}
+		return "", fmt.Errorf("move to Trash: %w", err)
+	}
 	return dest, nil
+}
+
+// prepareInfo persists the origin before moving the directory. An existing
+// record belongs to another item and must never be overwritten.
+func (m Mover) prepareInfo(path, dest string) (string, error) {
+	info := filepath.Join(filepath.Dir(filepath.Dir(dest)), "info", filepath.Base(dest)+".trashinfo")
+	if err := os.MkdirAll(filepath.Dir(info), 0o700); err != nil {
+		return "", err
+	}
+	body := "[Trash Info]\nPath=" + (&url.URL{Path: path}).EscapedPath() + "\nDeletionDate=" + m.Now().Format("2006-01-02T15:04:05") + "\n"
+	f, err := os.OpenFile(info, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", err
+	}
+	_, err = f.WriteString(body)
+	if err == nil {
+		err = f.Sync()
+	}
+	err = errors.Join(err, f.Close())
+	if err != nil {
+		return "", errors.Join(err, os.Remove(info))
+	}
+	return info, nil
 }
 
 func (m Mover) dir(path string) (string, error) {

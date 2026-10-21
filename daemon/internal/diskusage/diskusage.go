@@ -81,14 +81,17 @@ type Volume struct {
 }
 
 // Volumes reads capacity and free space once per filesystem holding paths.
-// Volumes reporting the same capacity and free space (APFS volumes in one
-// container) are one row with their mounts joined.
+// Equal space measurements do not establish a shared storage pool.
 func Volumes(paths []string) []Volume {
+	return volumes(paths, unix.Statfs)
+}
+
+func volumes(paths []string, statfs func(string, *unix.Statfs_t) error) []Volume {
 	seen := map[[2]int32]bool{}
 	var out []Volume
 	for _, p := range paths {
 		var st unix.Statfs_t
-		if unix.Statfs(p, &st) != nil {
+		if statfs(p, &st) != nil {
 			continue
 		}
 		key := [2]int32{int32(st.Fsid.Val[0]), int32(st.Fsid.Val[1])}
@@ -105,24 +108,6 @@ func Volumes(paths []string) []Volume {
 			TotalBytes: uint64(st.Blocks) * uint64(st.Bsize),
 			FreeBytes:  uint64(st.Bavail) * uint64(st.Bsize),
 		})
-	}
-	return mergeShared(out)
-}
-
-func mergeShared(vs []Volume) []Volume {
-	var out []Volume
-	for _, v := range vs {
-		merged := false
-		for i := range out {
-			if out[i].TotalBytes == v.TotalBytes && out[i].FreeBytes == v.FreeBytes {
-				out[i].Mount += " + " + v.Mount
-				merged = true
-				break
-			}
-		}
-		if !merged {
-			out = append(out, v)
-		}
 	}
 	return out
 }

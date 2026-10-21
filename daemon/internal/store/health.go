@@ -48,6 +48,11 @@ type writeHealth struct {
 }
 
 func (s *Store) noteRead(operation string, err error) {
+	// A caller abandoning a read says nothing about storage availability.
+	// Preserve any earlier fault until a read actually succeeds.
+	if errors.Is(err, context.Canceled) {
+		return
+	}
 	h := &s.writeHealth
 	h.mu.Lock()
 	defer h.mu.Unlock()

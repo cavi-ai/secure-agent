@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -81,6 +82,34 @@ func TestSessionOutcomeHonorsRequestCancellation(t *testing.T) {
 	_, found, err := s.SessionOutcomeContext(ctx, "owned")
 	if found || !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled identity read: found=%v error=%v", found, err)
+	}
+}
+
+func TestSessionOutcomeCancellationLeavesStorageHealthUnchanged(t *testing.T) {
+	for name, priorFailure := range map[string]bool{"healthy": false, "existing fault": true} {
+		t.Run(name, func(t *testing.T) {
+			s, err := Open("", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if priorFailure {
+				s.noteRead("session lookup", errors.New("storage unavailable"))
+			}
+			before := s.WriteHealth()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if _, _, err := s.SessionOutcomeContext(ctx, "missing"); !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancelled request = %v", err)
+			}
+			if err := s.db.Ping(); err != nil {
+				t.Fatalf("healthy database: %v", err)
+			}
+			after := s.WriteHealth()
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("caller cancellation changed storage health: before=%+v after=%+v", before, after)
+			}
+		})
 	}
 }
 
