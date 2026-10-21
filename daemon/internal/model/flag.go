@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"encoding/json"
 	"time"
 )
@@ -29,10 +30,14 @@ type EvidenceItem struct {
 	Payload *PayloadEvidence `json:"payload,omitempty"`
 }
 
-// UnmarshalJSON accepts the legacy bare-string form too.
+// UnmarshalJSON accepts the legacy bare-string form too. The first byte picks
+// the form, so an object never pays for a failed string decode.
 func (e *EvidenceItem) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); err == nil {
+	if t := bytes.TrimLeft(data, " \t\r\n"); len(t) > 0 && (t[0] == '"' || t[0] == 'n') {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
 		e.Kind = "text"
 		e.Label = s
 		e.Text = s
