@@ -424,7 +424,15 @@ function worktreeIdleLabel(w) {
 function worktreeNoteHTML(note, path) {
   if (!note) return '';
   const discuss = path ? ` ${worktreeDiscussHTML(path)}` : '';
-  return `<p class="wt-advice"><b>Advisor: ${escapeHTML(note.assessment || '')}</b> · ${escapeHTML(note.rationale || '')}${discuss}</p>`;
+  return `<p class="wt-advice"><b>Saved opinion: ${escapeHTML(note.assessment || '')}</b> · ${escapeHTML(note.rationale || '')}${discuss}</p>`;
+}
+
+// Advice never grants or blocks removal. Compare structured verdicts only;
+// saved prose can describe a different scan and cannot detect a live session.
+function worktreeAdviceConflict(w, repo, note) {
+  if (!note || !['keep', 'review', 'remove'].includes(note.assessment)) return false;
+  const safe = w.state === 'remove' && !repo.error && !worktreeTrashBlock(w);
+  return note.assessment === 'remove' ? !safe : safe;
 }
 
 // worktreeDiscussHTML: the link that asks the Agent tab about one worktree.
@@ -443,10 +451,16 @@ const WORKTREE_REASON_KINDS = new Set(['keep', 'agent', 'review', 'safe', 'info'
 
 // worktreeReasonsHTML: the row's reasons as tags toned by the daemon's
 // reason_kinds; the agent chip in the header stands for the agent reason.
-function worktreeReasonsHTML(w) {
+function worktreeReasonsHTML(w, headline = '') {
   const kinds = w.reason_kinds || [];
+  const seen = new Set([headline]);
   const items = (w.reasons || []).map((text, i) => ({ text, kind: WORKTREE_REASON_KINDS.has(kinds[i]) ? kinds[i] : '' }))
-    .filter(it => !(it.kind === 'agent' && w.in_use));
+    .filter(it => {
+      if (seen.has(it.text) || (it.kind === 'agent' && w.in_use)) return false;
+      seen.add(it.text);
+      // The explicit submodule check below already carries this aggregate.
+      return !(Number(w.submodules) > 0 && /^\d+ submodules? with every commit on a remote$/.test(it.text));
+    });
   if (!items.length) return '';
   return `<ul class="wt-reasons wt-reason-tags" role="list">${items.map(it =>
     `<li class="wt-reason${it.kind ? ' wt-reason-' + it.kind : ''}">${escapeHTML(it.text)}</li>`).join('')}</ul>`;
@@ -631,21 +645,19 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable, selectionState) {
         ? `<button type="button" class="btn btn-sm" disabled title="${escapeHTML('Cannot move to Trash: ' + worktreeTrashBlock({ in_use: true, active_agent: w.active_agent }))}">Move to Trash</button>`
         : `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-trash-orphan" data-path="${escapeHTML(w.path)}">Move to Trash</button>`);
   } else if (w.state === 'remove') {
-    const safe = 'Safe to remove' + ((w.reasons || [])[0] ? ': ' + w.reasons[0] : '');
     action = removal && removal.state === 'running'
       ? '<button type="button" class="btn btn-danger btn-sm" disabled>Removing…</button>'
-      : block ? '' : `<button type="button" class="btn btn-danger-solid btn-sm" data-action="worktree-remove" data-path="${escapeHTML(w.path)}" data-branch="${escapeHTML(branch)}" title="${escapeHTML(safe)}">${removal && removal.state === 'failed' ? 'Try again' : 'Remove'}</button>`;
+      : block ? '' : `<button type="button" class="btn btn-danger-solid btn-sm" data-action="worktree-remove" data-path="${escapeHTML(w.path)}" data-branch="${escapeHTML(branch)}" title="Permanently delete this folder after a fresh check">${removal && removal.state === 'failed' ? 'Try again' : 'Delete permanently'}</button>`;
   } else if (w.state === 'prune') {
     action = `<button type="button" class="btn btn-sm" data-action="worktree-prune" data-repo="${escapeHTML(repo.path)}">Prune</button>`;
   } else if (w.state === 'review' || w.state === 'keep') {
     const busy = ask && ask.status === 'running' ? ' disabled' : '';
     const unsure = 'Not confirmed safe' + ((w.reasons || []).length ? ': ' + w.reasons.join('; ') : '') + '. Moves the folder to the Trash; the branch stays in git';
-    action = (block
-      ? `<span class="wt-selection-block">${escapeHTML(block)}</span>`
-      : `<button type="button" class="btn btn-warn-outline btn-sm" data-action="worktree-review-trash" data-path="${escapeHTML(w.path)}" title="${escapeHTML(unsure)}">Remove…</button>`)
-      + (askable ? `<button type="button" class="btn btn-primary btn-sm" data-action="worktree-ask" data-path="${escapeHTML(w.path)}" title="Ask active ${escapeHTML(askable)} agent"${busy}>Ask ${escapeHTML(askable)}</button>` : '')
-      + `<button type="button" class="btn btn-sm" data-action="worktree-advise" data-path="${escapeHTML(w.path)}" title="Get a local advisory note; no agent is resumed">Ask advisor</button>`;
+    action = (block ? ''
+      : `<button type="button" class="btn btn-warn-outline btn-sm" data-action="worktree-review-trash" data-path="${escapeHTML(w.path)}" title="${escapeHTML(unsure)}">Review Trash move…</button>`)
+      + (askable ? `<button type="button" class="btn btn-primary btn-sm" data-action="worktree-ask" data-path="${escapeHTML(w.path)}" title="Ask active ${escapeHTML(askable)} agent"${busy}>Ask ${escapeHTML(askable)}</button>` : '');
   }
+  if (worktreeAdvisable(w)) action += `<button type="button" class="btn btn-sm" data-action="worktree-advise" data-path="${escapeHTML(w.path)}" title="Refresh the saved second opinion; no agent is resumed">Ask advisor</button>`;
   const discuss = w.orphan || w.state === 'prune' || w.state === 'main' ? '' : worktreeDiscussHTML(w.path);
   // Every folder still on disk opens in Finder; orphans carry Open folder
   // in their actions already.
@@ -653,31 +665,36 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable, selectionState) {
     : `<button type="button" class="btn btn-ghost btn-sm wt-open" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}" title="Show in Finder" aria-label="Show ${escapeHTML(branch || w.path)} in Finder"><svg class="icon"><use href="#i-folder"/></svg></button>`;
   const selection = worktreeSelectHTML(w, repo, removal, ask, selectionState);
   const reason = w.in_use ? `${w.active_agent || 'Agent'} session active`
-    : block || (w.reasons || []).find(r => !r.startsWith('submodule ')) || 'Open to inspect contents';
+    : (['remove', 'keep', 'review'].includes(w.state) ? block : '')
+      || (w.reasons || []).find(r => !r.startsWith('submodule ')) || 'Open to inspect contents';
   const expanded = !!(selectionState && selectionState.expanded && selectionState.expanded.has(w.path));
   const submodules = Number(w.submodules) || 0;
+  const conflict = worktreeAdviceConflict(w, repo, note);
   return `<details class="wt-row wt-${escapeHTML(w.state)}" data-path="${escapeHTML(w.path)}"${expanded ? ' open' : ''}>
     <summary class="wt-main">
       <span class="wt-select-slot">${selection}</span>
       <div class="wt-identity">
         <div class="wt-title"><span class="wt-branch">${escapeHTML(label)}</span></div>
-        <span class="wt-subtitle">${escapeHTML(reason)}</span>
+        <span class="wt-subtitle">Scan: ${escapeHTML(reason)}</span>
+        ${conflict ? '<span class="wt-advice-conflict">Saved advice differs</span>' : ''}
       </div>
       <div class="wt-facts">
         <span class="wt-size">${escapeHTML(worktreeSizeLabel(w) || 'Measuring…')}</span>
+        <span class="wt-inspect-label">Inspect <svg class="icon wt-disclosure" aria-hidden="true"><use href="#i-arrow"/></svg></span>
       </div>
-      <svg class="icon wt-disclosure" aria-hidden="true"><use href="#i-arrow"/></svg>
     </summary>
     <div class="wt-inspection">
       <div class="wt-inspection-header"><button type="button" class="wt-path" data-action="copy-path" data-path="${escapeHTML(w.path)}" title="${escapeHTML(w.path)} — click to copy">${escapeHTML(worktreePathLabel(w.path, repo.path))}</button>
       <div class="wt-inspection-meta">${w.last_activity ? `<span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>` : ''}${worktreeAgentChipHTML(w)}${w.stale ? '<span class="wt-stale">stale</span>' : ''}</div></div>
-      <h5 class="sr-only">Inspection</h5>
+      <section class="wt-scan-checks"><h5>Scan checks</h5>
+      ${!w.in_use && w.state !== 'prune' ? '<p class="wt-session-fact">No active session detected by this scan.</p>' : ''}
       ${submodules ? `<p class="wt-submodules"><svg class="icon" aria-hidden="true"><use href="#i-branch"/></svg><strong>Submodules</strong><span>${submodules} populated · ${w.error ? 'inspection incomplete' : 'checked recursively'}${!w.error && !(w.submodule_local || []).length ? ' · no local-only commits or stashes found' : ''}</span></p>` : ''}
-    ${worktreeReasonsHTML(w)}
+      ${worktreeReasonsHTML(w, reason)}
       ${w.state === 'keep' || w.state === 'review' ? '<p class="wt-review-hint">Review the files before proceeding. Reviewed folders move to Trash; space is freed only when Trash is emptied.</p>' : ''}
-      ${block && !w.orphan && w.state !== 'prune' ? `<p class="wt-resolve">${escapeHTML(block)}${w.state !== 'main' ? ` <button type="button" class="link-btn" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}">Open folder to resolve</button>` : ''}</p>` : ''}
+      ${block && !w.orphan && w.state !== 'prune' ? `<p class="wt-resolve">${block === reason ? '' : escapeHTML(block)}${w.state !== 'main' ? ` <button type="button" class="link-btn" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}">Open folder to resolve</button>` : ''}</p>` : ''}
+      </section>
       <div class="wt-actions">${open}${action}${discuss}</div>
-      ${note || ask ? `<details class="wt-advisor-details"><summary>Advice and agent responses</summary>${worktreeNoteHTML(note, '')}${worktreeAskHTML(ask)}</details>` : ''}
+      ${note || ask ? `<section class="wt-saved-advice"><h5>Saved advice</h5><p class="wt-advice-context">${conflict ? 'This opinion differs from the scan above. ' : ''}A saved second opinion does not detect live sessions or authorize removal. Ask advisor to refresh it.</p>${worktreeNoteHTML(note, '')}${worktreeAskHTML(ask)}</section>` : ''}
     </div>
     ${worktreeRemovalHTML(removal)}
   </details>`;
@@ -763,7 +780,7 @@ function worktreeLanesHTML(groups, rep, selectionState = {}) {
       const rm = removableEverywhere(rep);
       if (rm.rows.length >= 2) {
         const size = rm.bytes ? ` · ${fmtDisk(rm.bytes)}` : '';
-        removeAll = `<button type="button" class="btn btn-danger btn-sm rc-remove-all" data-action="worktrees-remove-removable"${selectionState.selectionBusy ? ' disabled' : ''}>Remove all ${rm.rows.length}${escapeHTML(size)}</button>`;
+        removeAll = `<button type="button" class="btn btn-sm rc-remove-all" data-action="worktrees-remove-removable"${selectionState.selectionBusy ? ' disabled' : ''}>Review ${rm.rows.length} deletions${escapeHTML(size)}</button>`;
       }
     }
     return `<section class="wt-lane wt-lane-${lane.key}" aria-labelledby="wt-lane-${lane.key}">

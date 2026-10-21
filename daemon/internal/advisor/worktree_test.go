@@ -10,6 +10,18 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
+func TestWorktreePromptDoesNotTreatRecentActivityAsALiveSession(t *testing.T) {
+	prompt := worktreePrompt(model.WorktreeAdviceRequest{State: "remove", IdleDays: 0})
+	facts, _, _ := strings.Cut(prompt, "<evidence>")
+	if !strings.Contains(facts, "live agent session detected: false") {
+		t.Fatalf("recent activity lacks an explicit live-session fact: %q", facts)
+	}
+	active := worktreePrompt(model.WorktreeAdviceRequest{State: "keep", IdleDays: 0, InUse: true})
+	if !strings.Contains(active, "live agent session detected: true") {
+		t.Fatalf("detected live session was omitted: %q", active)
+	}
+}
+
 func TestWorktreeNoteStored(t *testing.T) {
 	stub := &chatStub{content: `{"recommendation":"review","confidence":0.7,"rationale":"feat/x has two commits nobody pushed"}`}
 	srv := newStubServer(t, stub)

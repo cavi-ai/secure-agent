@@ -15,6 +15,26 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
+func TestAdviceRequestSeparatesRecentActivityFromLiveSessions(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	wt := f.worktree(t, "recent")
+	st := newMemStore()
+	h := New(st, home, Options{})
+	req, err := h.AdviceRequest(context.Background(), wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.InUse || req.IdleDays != 0 {
+		t.Fatalf("recent folder activity became a live session: %+v", req)
+	}
+	st.activity = []model.WorkspaceActivity{{Workspace: wt, LastSeen: time.Now(), Live: true}}
+	req, err = h.AdviceRequest(context.Background(), wt)
+	if err != nil || !req.InUse {
+		t.Fatalf("live-session fact missing: request=%+v err=%v", req, err)
+	}
+}
+
 // isolateGit points git at an empty config and home so fixtures never pick
 // up the developer's signing, hooks or global excludes.
 func isolateGit(t *testing.T) string {

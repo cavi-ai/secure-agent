@@ -55,6 +55,7 @@ type WorktreeAdviceRequest struct {
 	Branch   string   `json:"branch,omitempty"`
 	State    string   `json:"state"`
 	IdleDays int      `json:"idle_days"`
+	InUse    bool     `json:"in_use"`
 	Reasons  []string `json:"reasons,omitempty"`
 	Paths    []string `json:"paths,omitempty"`
 	Precious []string `json:"precious,omitempty"`
