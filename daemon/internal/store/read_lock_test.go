@@ -276,19 +276,33 @@ func TestSessionReadsDoNotWaitForTheStoreLock(t *testing.T) {
 			}
 			return want(found, "session not found")
 		},
-		"session prefix": func() error { _, err := s.FindSessionsByPrefix("sess"); return err },
-		"session roots":  func() error { return want(len(s.SessionRoots()[7]) == 1, "no session root") },
-		"root sessions":  func() error { return want(s.SessionsByRootPID()[7].ID == "session", "no root session") },
-		"root identity": func() error {
-			return want(s.SessionIDForRoot(7, root) == "session", "root identity not found")
-		},
+		"session prefix":     func() error { _, err := s.FindSessionsByPrefix("sess"); return err },
+		"session roots":      func() error { return want(len(s.SessionRoots()[7]) == 1, "no session root") },
+		"root sessions":      func() error { return want(s.SessionsByRootPID()[7].ID == "session", "no root session") },
 		"workspace sessions": func() error { return want(len(s.SessionsInWorkspace("/work")) == 1, "no workspace session") },
 		"workspace activity": func() error { return want(len(s.WorkspaceActivity()) == 1, "no workspace activity") },
 	})
 }
 
-// Operator labels, advisor records, interventions, scan results and resource
-// episodes never wait for the store lock.
+// The root identity lookup has its own 100 ms budget, so it runs alone while
+// the test holds the store lock.
+func TestRootIdentityDoesNotWaitForTheStoreLock(t *testing.T) {
+	s := lockTestStore(t)
+	root := time.Now().UTC().Add(-time.Hour)
+	if err := s.UpsertSession(model.Session{ID: "session", Harness: "claude", RootPID: 7, RootStartedAt: root.Format(time.RFC3339Nano),
+		Confidence: model.ConfHook, StartedAt: root, LastSeenAt: root}); err != nil {
+		t.Fatal(err)
+	}
+	readsSkipStoreLock(t, s, map[string]func() error{
+		"root identity": func() error {
+			return want(s.SessionIDForRoot(7, root) == "session", "root identity not found")
+		},
+	})
+}
+
+// Operator labels, advisor records, scan results and resource episodes never
+// wait for the store lock. Intervention history has its own 100 ms budget and
+// test (TestInterventionHistoryDoesNotWaitForCollectorMutex).
 func TestRecordReadsDoNotWaitForTheStoreLock(t *testing.T) {
 	s := lockTestStore(t)
 	now := time.Now().UTC()
@@ -326,7 +340,6 @@ func TestRecordReadsDoNotWaitForTheStoreLock(t *testing.T) {
 			}
 			return want(len(flags) == 1, "advisor backfill: %+v", flags)
 		},
-		"interventions": func() error { _, err := s.RecentInterventions("", 10); return err },
 		"scan cache": func() error {
 			_, _, ok := s.ScanCache("worktrees")
 			return want(ok, "scan cache missing")
