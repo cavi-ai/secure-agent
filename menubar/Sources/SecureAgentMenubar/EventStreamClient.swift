@@ -95,6 +95,14 @@ public extension DaemonClient {
     /// socket hasn't noticed.
     static let streamIdleTimeoutSeconds: Int = 45
 
+    /// The delta types the menu bar acts on (AppState.streamRefresh). The
+    /// daemon streams only these, opening with a "ready" frame.
+    static let streamTypes = ["flag", "posture", "guard-prompt", "guard-resolved"]
+
+    static var streamRequest: String {
+        "GET /events/stream?types=\(streamTypes.joined(separator: ",")) HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n"
+    }
+
     /// Consume `/events/stream` until the stream ends, errors, or the task is
     /// cancelled. Each parsed frame is delivered to `onEvent` (called on the
     /// detached task's context; hop to MainActor in the handler as needed).
@@ -137,8 +145,7 @@ public extension DaemonClient {
                     throw DaemonClientError.transport("connect failed: \(String(cString: strerror(errno)))")
                 }
 
-                let requestString = "GET /events/stream HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n"
-                var reqData = Data(requestString.utf8)
+                var reqData = Data(DaemonClient.streamRequest.utf8)
                 try reqData.withUnsafeBytes { ptr in
                     var written = 0
                     while written < reqData.count {

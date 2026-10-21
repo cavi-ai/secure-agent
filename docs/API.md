@@ -1342,6 +1342,8 @@ Invariant: every item in `items` appears in exactly one of `groups`, and the gro
 
 Live feed of every stored event as `event: <kind>` / `data: <json>`, with a 15s heartbeat comment. Replaces polling for UIs that can hold a connection — **the menu bar app and the web console both consume this stream** (guard prompts surface at push latency), falling back to polling when the endpoint is unavailable. One bus subscription per connection, released on disconnect.
 
+`?types=flag,posture,guard-prompt,guard-resolved` limits the stream to those delta types (comma-separated or repeated); other types never enter the connection's buffer, so an event flood cannot overflow it. A filtered stream opens with `event: ready` / `data: {}`. The menu bar requests exactly those four types; the web console takes the full stream.
+
 ### Console access on the proxy port
 
 The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/posture/flags/events/incidents/audit/fleet/firewall sources + guard pending/rules/resolve/path-allow + kill + rollup + mute + allowlist(+suggestions) + `/egress/uninspected` + `/notify/rules` + advisor retriage + `/sessions/{id}/timeline` and `/sessions/{id}/report` + `/flags/{id}/explain` + this SSE stream) behind the **console token**. The whitelist is kept in lockstep with the console's fetches by `TestConsoleAPIPathsCoverWebApp` — a path the console fetches but the listener doesn't whitelist 407s and the panel dies silently, which is exactly the drift that test exists to catch:

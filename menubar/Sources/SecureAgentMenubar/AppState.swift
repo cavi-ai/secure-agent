@@ -228,10 +228,10 @@ public final class AppState: ObservableObject {
         static let guardPending = StreamRefresh(rawValue: 4)
     }
 
-    /// Frame names the daemon writes on /events/stream (`event: <type>`):
-    ///   event          — every stored bus event (≈76/s live): no refetch
-    ///   session        — session spine upsert: no refetch
-    ///   incident       — incident report written: no refetch (slow poll)
+    /// Frame names the daemon writes on the menu bar's filtered stream
+    /// (`event: <type>`, DaemonClient.streamTypes); every other delta type
+    /// stays on the daemon:
+    ///   ready          — opens the stream: marks it live, no refetch
     ///   flag           — a new flag: flags + posture
     ///   posture        — posture state or count changed: flags + posture
     ///   guard-prompt   — a guard decision is waiting: flags + guard pending

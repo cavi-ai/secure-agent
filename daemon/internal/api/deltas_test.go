@@ -46,6 +46,37 @@ func TestDeltaOverflowDisconnectsOnlySlowSubscriber(t *testing.T) {
 	h.Unsubscribe(reconnected)
 }
 
+// A subscriber filtered to flags stays attached through an event flood that
+// overflows an unfiltered one, and receives only its own type.
+func TestFilteredSubscriberSkipsOtherTypes(t *testing.T) {
+	h := NewDeltaHub()
+	h.buf = 2
+	flags, all := h.Subscribe("flag", "posture"), h.Subscribe()
+	for range 10 {
+		h.Publish(Delta{Type: "event"})
+	}
+	h.Publish(Delta{Type: "flag"})
+	h.Publish(Delta{Type: "posture"})
+	if got := <-flags; got.Type != "flag" {
+		t.Fatalf("filtered subscriber received %+v first", got)
+	}
+	if got := <-flags; got.Type != "posture" {
+		t.Fatalf("filtered subscriber received %+v second", got)
+	}
+	<-all
+	<-all
+	if _, ok := <-all; ok {
+		t.Fatal("unfiltered subscriber survived the flood")
+	}
+	if h.Dropped() != 1 {
+		t.Fatalf("drops = %d, want only the unfiltered overflow", h.Dropped())
+	}
+	h.Unsubscribe(flags)
+	if _, ok := <-flags; ok {
+		t.Fatal("unsubscribed filtered channel still open")
+	}
+}
+
 type stalledGreeting struct {
 	*httptest.ResponseRecorder
 	entered chan struct{}

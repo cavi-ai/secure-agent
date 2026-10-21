@@ -15,7 +15,8 @@ import (
 // "posture" (state or count changed), and the guard lifecycle pair
 // "guard-prompt" / "guard-resolved" (kept as their own names: the menubar's
 // instant path keys on them). Guard lifecycle notifications are live control
-// signals and remain available when event persistence fails.
+// signals and remain available when event persistence fails. A stream
+// filtered by type opens with a "ready" frame, which no delta uses.
 type Delta struct {
 	Type string `json:"type"`
 	Data any    `json:"data"`
@@ -29,14 +30,23 @@ type Delta struct {
 type DeltaHub struct {
 	mu      sync.RWMutex
 	buf     int
-	subs    []chan Delta
+	subs    []deltaSub
 	done    bool
 	dropped atomic.Uint64
 }
 
+// deltaSub is one subscription; types, when non-nil, holds the only delta
+// types it receives.
+type deltaSub struct {
+	ch    chan Delta
+	types map[string]bool
+}
+
 func NewDeltaHub() *DeltaHub { return &DeltaHub{buf: 256} }
 
-func (h *DeltaHub) Subscribe() <-chan Delta {
+// Subscribe receives every delta, or only the named types when any are
+// given: other types never enter its buffer.
+func (h *DeltaHub) Subscribe(types ...string) <-chan Delta {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	ch := make(chan Delta, h.buf)
@@ -44,7 +54,14 @@ func (h *DeltaHub) Subscribe() <-chan Delta {
 		close(ch)
 		return ch
 	}
-	h.subs = append(h.subs, ch)
+	sub := deltaSub{ch: ch}
+	if len(types) > 0 {
+		sub.types = make(map[string]bool, len(types))
+		for _, t := range types {
+			sub.types[t] = true
+		}
+	}
+	h.subs = append(h.subs, sub)
 	return ch
 }
 
@@ -52,10 +69,10 @@ func (h *DeltaHub) Unsubscribe(ch <-chan Delta) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for i, sub := range h.subs {
-		if sub == ch {
+		if sub.ch == ch {
 			h.subs = slices.Delete(h.subs, i, i+1)
 			if !h.done {
-				close(sub)
+				close(sub.ch)
 			}
 			return
 		}
@@ -70,13 +87,17 @@ func (h *DeltaHub) Publish(d Delta) {
 		return
 	}
 	for i := 0; i < len(h.subs); {
-		ch := h.subs[i]
+		sub := h.subs[i]
+		if sub.types != nil && !sub.types[d.Type] {
+			i++
+			continue
+		}
 		select {
-		case ch <- d:
+		case sub.ch <- d:
 			i++
 		default:
 			h.dropped.Add(1)
-			close(ch)
+			close(sub.ch)
 			h.subs = slices.Delete(h.subs, i, i+1)
 		}
 	}
@@ -92,8 +113,8 @@ func (h *DeltaHub) Close() {
 		return
 	}
 	h.done = true
-	for _, ch := range h.subs {
-		close(ch)
+	for _, sub := range h.subs {
+		close(sub.ch)
 	}
 	h.subs = nil
 }

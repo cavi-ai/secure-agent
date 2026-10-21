@@ -16,9 +16,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 ### Changed
 - Performance: posture, snapshots and finding lists read advisor verdicts in batches and reuse 24-hour flag reads until a flag changes; posture is recomputed off the event ingest path, event retention runs beside persistence in short batches and no longer pauses it to scan the event table, and store reads (flags, events, sessions, incidents, finding reviews, spend, hooks, guard rules, worktrees, Doctor) no longer wait for writes or pause event persistence.
 - Console: assets revalidate by content hash, and the brand icon is 128 px.
-- Menu bar: polls every 30 s while the event stream is live, whichever connected first.
+- Menu bar: polls every 30 s while the event stream is live, whichever connected first, and the stream carries only flag, posture and guard deltas (`/events/stream?types=`), so event floods no longer reach it.
 - Config: YAML is parsed with the maintained `go.yaml.in/yaml/v3`.
-- File telemetry: a process's repeated opens of a file within a minute are stored once.
+- File telemetry: a process's repeated opens of a file within a minute are stored once, and the helper drops opens under the per-user temporary and cache roots (`/private/var/folders/`) unless the path is sensitive.
 - Worktrees: squash-merged worktrees are removable at once and `.tmp/` scratch no longer holds back a merged one; the page sorts rows into Safe to remove, Has local work, Check first, Not merged yet and In use.
 
 ### Fixed
