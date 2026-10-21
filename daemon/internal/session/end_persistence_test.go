@@ -48,7 +48,7 @@ func TestResolverEndingFailureRetainsTrackingAndAllowsRecovery(t *testing.T) {
 			r.now = func() time.Time { return now }
 			r.touch[sess.ID] = now
 			if path == "tracked root" {
-				r.byRoot[100], r.byPID[101], r.byScope["scope"] = sess.ID, sess.ID, sess.ID
+				r.byRoot[100], r.byPID[101], r.byScope["scope"] = sess.ID, pidEntry{id: sess.ID}, sess.ID
 			}
 			if path == "transcript" {
 				r.byScope["scope"] = sess.ID
@@ -72,7 +72,7 @@ func TestResolverEndingFailureRetainsTrackingAndAllowsRecovery(t *testing.T) {
 			if saved, ok := testutil.Lookup[model.Session](t)(st.GetSession(sess.ID)); !ok || saved.Status != sess.Status || saved.EndedAt != nil {
 				t.Fatalf("failed ending changed saved session: %+v, %v", saved, ok)
 			}
-			if path == "tracked root" && (r.byRoot[100] != sess.ID || r.byPID[101] != sess.ID || r.byScope["scope"] != sess.ID) {
+			if path == "tracked root" && (r.byRoot[100] != sess.ID || r.byPID[101].id != sess.ID || r.byScope["scope"] != sess.ID) {
 				t.Fatal("failed ending dropped process tracking")
 			}
 			if path == "transcript" && r.byScope["scope"] != sess.ID {
