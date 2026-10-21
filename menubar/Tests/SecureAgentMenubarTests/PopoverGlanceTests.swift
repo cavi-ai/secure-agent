@@ -86,6 +86,26 @@ final class PopoverGlanceTests: XCTestCase {
         XCTAssertEqual(AppState.streamRefresh(for: "posture"), [.flags, .posture])
         XCTAssertEqual(AppState.streamRefresh(for: "guard-prompt"), [.flags, .guardPending])
         XCTAssertEqual(AppState.streamRefresh(for: "guard-resolved"), [.flags, .guardPending])
+        XCTAssertEqual(AppState.streamRefresh(for: "ready"), [])
+    }
+
+    func testStreamRequestsOnlyTheTypesItActsOn() {
+        XCTAssertTrue(DaemonClient.streamRequest.hasPrefix(
+            "GET /events/stream?types=flag,posture,guard-prompt,guard-resolved HTTP/1.1\r\n"))
+        for type in DaemonClient.streamTypes {
+            XCTAssertFalse(AppState.streamRefresh(for: type).isEmpty, "\(type) is requested but refreshes nothing")
+        }
+        for type in ["event", "session", "incident"] {
+            XCTAssertFalse(DaemonClient.streamTypes.contains(type), "\(type) is not acted on")
+        }
+    }
+
+    func testReadyFrameMarksTheStreamLiveWithoutRefetch() async {
+        let stub = StubDaemonClient()
+        let state = connectedState(stub)
+        state.handleStreamEvent(SSEFrame(event: "ready", data: "{}"))
+        await settle()
+        XCTAssertEqual(stub.fetchFlagsCalls, 0)
     }
 
     func testAllClearPushClearsMenuBarAttention() async {

@@ -4,14 +4,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
+// streamTypes reads the comma-separated ?types= values, dropping empties.
+func streamTypes(values []string) []string {
+	var out []string
+	for _, v := range values {
+		for _, t := range strings.Split(v, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
+}
+
 // handleEventStream is the SSE live feed: one persistent connection per
 // console, every bus event pushed as it happens — replaces the 2 s poll.
 // Events arrive on the shared bus; this handler only fans them out.
+// ?types=flag,posture limits the stream to those delta types.
 //
 // The API listens on a 0600 unix socket, so the feed inherits that boundary:
 // anything that can read it can already read every other endpoint.
@@ -37,7 +52,8 @@ func (a *API) handleEventStream(w http.ResponseWriter, r *http.Request) {
 	// race window where events published between greeting and subscription
 	// were silently dropped (seen as an e2e flake: guard lifecycle events
 	// fired into a not-yet-subscribed stream).
-	sub := a.deltaHub.Subscribe()
+	types := streamTypes(r.URL.Query()["types"])
+	sub := a.deltaHub.Subscribe(types...)
 	defer func() {
 		a.deltaHub.Unsubscribe(sub)
 	}()
@@ -48,6 +64,11 @@ func (a *API) handleEventStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, ": secure-agent event stream\n\n")
+	if len(types) > 0 {
+		// A filtered stream can stay quiet for hours; this frame tells the
+		// client it is live, as the first delta does on an unfiltered one.
+		fmt.Fprint(w, "event: ready\ndata: {}\n\n")
+	}
 	fl.Flush()
 
 	// Heartbeat keeps proxies/middleboxes from idling the connection out and

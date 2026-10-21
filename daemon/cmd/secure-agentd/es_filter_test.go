@@ -49,6 +49,8 @@ func TestKeepESLine(t *testing.T) {
 		{"dtrace helper open", esOpenTestLine("/dev/dtracehelper"), false},
 		{"spool self-read open", esOpenTestLine("/private/var/db/secure-agent/es-spool.jsonl"), false},
 		{"user cache open", esOpenTestLine("/Users/dev/Library/Caches/com.example.tool/cache.db"), false},
+		{"user temp open", esOpenTestLine("/private/var/folders/n0/x1y2/T/tmpab12/module.py"), false},
+		{"user temp cache open", esOpenTestLine("/private/var/folders/n0/x1y2/C/com.example.tool/index.db"), false},
 		{"root dir open", esOpenTestLine("/"), false},
 		{"escaped system path open", strings.Replace(esOpenTestLine("/usr/lib/libz.1.dylib"), `"/usr/lib/libz.1.dylib"`, `"\/usr\/lib\/libz.1.dylib"`, 1), false},
 		{"spaced layout system open", `{"process": {"pid": 7}, "event": {"open": {"file": {"path": "/usr/lib/libz.1.dylib"}}}}`, false},
@@ -60,6 +62,8 @@ func TestKeepESLine(t *testing.T) {
 		{"system trust store open", esOpenTestLine("/System/Library/Keychains/SystemRootCertificates.keychain"), true},
 		{"env file in app bundle", esOpenTestLine("/Applications/Tool.app/Contents/Resources/.env"), true},
 		{"env file in user cache", esOpenTestLine("/Users/dev/Library/Caches/tool/.env.local"), true},
+		{"env file in user temp", esOpenTestLine("/private/var/folders/n0/x1y2/T/build/.env"), true},
+		{"temp path outside the per-user roots", esOpenTestLine("/private/var/foldersX/file"), true},
 		{"data volume user file", esOpenTestLine("/System/Volumes/Data/Users/dev/work/app/main.go"), true},
 		{"workspace file open", esOpenTestLine("/Users/dev/work/app/main.go"), true},
 		{"user account db open", esOpenTestLine("/private/var/db/dslocal/nodes/Default/users/dev.plist"), true},
@@ -169,7 +173,7 @@ func TestESFilterStatsReportsOncePerMinute(t *testing.T) {
 		t.Fatal("reported before a minute passed")
 	}
 	msg, ok := s.report(t0.Add(time.Minute))
-	if !ok || msg != "es-collector: dropped 70 of 100 lines (system-path opens) in the last 1m0s" {
+	if !ok || msg != "es-collector: dropped 70 of 100 lines (system and temp-path opens) in the last 1m0s" {
 		t.Fatalf("report = %q, %v", msg, ok)
 	}
 	if s.kept != 0 || s.dropped != 0 || !s.since.Equal(t0.Add(time.Minute)) {

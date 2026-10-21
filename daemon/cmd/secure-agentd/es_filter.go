@@ -14,10 +14,11 @@ import (
 )
 
 // The helper drops open events on system paths before they reach the spool:
-// opens of OS libraries, frameworks, dyld caches, app-bundle resources and
-// package-manager libraries carry much of eslogger's volume and none of the
-// daemon's signal. Every other event type is kept, and an open is never
-// dropped when the daemon's sensitive-path classifier matches its path.
+// opens of OS libraries, frameworks, dyld caches, app-bundle resources,
+// package-manager libraries and the per-user temporary and cache roots carry
+// much of eslogger's volume and none of the daemon's signal. Every other
+// event type is kept, and an open is never dropped when the daemon's
+// sensitive-path classifier matches its path.
 
 // esNoisePrefixes are the open-path prefixes whose opens are dropped.
 var esNoisePrefixes = []string{
@@ -29,6 +30,7 @@ var esNoisePrefixes = []string{
 	"/dev/fd/", "/dev/ttys",
 	"/private/var/db/timezone/", "/private/var/db/KernelExtensionManagement/",
 	"/private" + esSpoolDir + "/", // the daemon's own spool reads (ES reports the /private path)
+	"/private/var/folders/",       // per-user $TMPDIR and cache roots
 }
 
 // esDataVolumePrefix is the firmlinked data volume: user files reached
@@ -186,7 +188,7 @@ func (s *esFilterStats) report(now time.Time) (string, bool) {
 	if elapsed < time.Minute {
 		return "", false
 	}
-	msg := fmt.Sprintf("es-collector: dropped %d of %d lines (system-path opens) in the last %s",
+	msg := fmt.Sprintf("es-collector: dropped %d of %d lines (system and temp-path opens) in the last %s",
 		s.dropped, s.kept+s.dropped, elapsed.Round(time.Second))
 	*s = esFilterStats{since: now}
 	return msg, true
