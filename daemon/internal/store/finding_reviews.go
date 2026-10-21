@@ -311,7 +311,11 @@ func (s *Store) GetFindingReview(id string) (r model.ReviewRecord, ok bool, err 
 }
 
 func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
-	rows, err := s.db.Query(`SELECT m.flag_id FROM finding_review_members m JOIN flags f ON f.id=m.flag_id WHERE m.review_id=? ORDER BY `+timestampOrderExpr("m.last_seen")+` DESC,m.flag_id LIMIT 100`, r.ID)
+	return s.reviewLinksQuery(s.db, r, true)
+}
+
+func (s *Store) reviewLinksQuery(q rowQuerier, r *model.ReviewRecord, includeScopes bool) error {
+	rows, err := q.Query(`SELECT m.flag_id FROM finding_review_members m JOIN flags f ON f.id=m.flag_id WHERE m.review_id=? ORDER BY `+timestampOrderExpr("m.last_seen")+` DESC,m.flag_id LIMIT 100`, r.ID)
 	if err != nil {
 		return err
 	}
@@ -332,7 +336,7 @@ func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
 	}
 	sourceFlags := make([]model.Flag, 0, len(r.SourceIDs))
 	for _, id := range r.SourceIDs {
-		f, found, err := s.getFlagResultLocked(id)
+		f, found, err := s.flagResultQuery(q, id)
 		if err != nil {
 			return err
 		}
@@ -343,12 +347,12 @@ func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
 	}
 	r.EvidenceAvailable = len(r.SourceIDs) > 0
 	var available int
-	if err = s.db.QueryRow(`SELECT COUNT(*) FROM flags WHERE id=?`, r.EvidenceFlagID).Scan(&available); err != nil {
+	if err = q.QueryRow(`SELECT COUNT(*) FROM flags WHERE id=?`, r.EvidenceFlagID).Scan(&available); err != nil {
 		return err
 	}
 	r.EvidenceFlagAvailable = available == 1
 	r.AvailableScopes = nil
-	if r.EvidenceAvailable && r.ReviewState != "closed_reported" && (r.Decision == nil || r.Decision.Action != "expect" || r.Decision.Revision != r.Revision) {
+	if includeScopes && r.EvidenceAvailable && r.ReviewState != "closed_reported" && (r.Decision == nil || r.Decision.Action != "expect" || r.Decision.Revision != r.Revision) {
 		r.AvailableScopes = []model.ScopeChoice{{Kind: "once"}}
 		complete := true
 		for _, f := range sourceFlags {
@@ -359,7 +363,7 @@ func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
 			}
 			for _, g := range coordinates {
 				model.ScopeChoice{Kind: "session"}.Apply(&g, time.Now().UTC())
-				if g.Validate() != nil || !scopeSession(s.db, g) {
+				if g.Validate() != nil || !scopeSession(q, g) {
 					complete = false
 					break
 				}
@@ -372,7 +376,7 @@ func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
 			r.AvailableScopes = append(r.AvailableScopes, model.ScopeChoice{Kind: "session"}, model.ScopeChoice{Kind: "exact", Expiry: "24h"}, model.ScopeChoice{Kind: "exact", Expiry: "7d"})
 		}
 	}
-	rows, err = s.db.Query(`SELECT id FROM incidents WHERE flag_id IN (SELECT flag_id FROM finding_review_members WHERE review_id=?)
+	rows, err = q.Query(`SELECT id FROM incidents WHERE flag_id IN (SELECT flag_id FROM finding_review_members WHERE review_id=?)
  UNION SELECT id FROM incidents WHERE COALESCE(rule,'')=? AND COALESCE(session_id,'')=? AND EXISTS(SELECT 1 FROM json_each(flag_ids) WHERE value IN (SELECT flag_id FROM finding_review_members WHERE review_id=?)) ORDER BY id LIMIT 100`, r.ID, r.Context.Rule, r.Context.SessionID, r.ID)
 	if err != nil {
 		return err
@@ -415,6 +419,10 @@ func (s *Store) ListSessionFindingReviews(sessionID string) (ReviewPage, error) 
 func (s *Store) listFindingReviews(after string, limit int, state, sessionID string) (page ReviewPage, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.listFindingReviewsQuery(s.db, after, limit, state, sessionID, true)
+}
+
+func (s *Store) listFindingReviewsQuery(q rowQuerier, after string, limit int, state, sessionID string, includeScopes bool) (page ReviewPage, err error) {
 	defer func() {
 		s.noteRead("finding reviews", err)
 		if err != nil {
@@ -429,7 +437,7 @@ func (s *Store) listFindingReviews(after string, limit int, state, sessionID str
 		query = `SELECT id,state,record_json FROM finding_reviews WHERE session_id=? ORDER BY ` + timestampOrderExpr("last_seen") + ` DESC,id DESC LIMIT ?`
 		args = []any{sessionID, limit + 1}
 	}
-	rows, err := s.db.Query(query, args...)
+	rows, err := q.Query(query, args...)
 	if err != nil {
 		page.Degraded = true
 		return
@@ -454,7 +462,7 @@ func (s *Store) listFindingReviews(after string, limit int, state, sessionID str
 		page.Next = page.Reviews[limit-1].ID
 	}
 	for i := range page.Reviews {
-		if err = s.reviewLinksLocked(&page.Reviews[i]); err != nil {
+		if err = s.reviewLinksQuery(q, &page.Reviews[i], includeScopes); err != nil {
 			page.Degraded = true
 			return
 		}

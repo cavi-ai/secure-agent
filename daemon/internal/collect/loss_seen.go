@@ -9,6 +9,16 @@ import (
 // seen: a counter that has not grown since then no longer counts as growing.
 type LossSeen struct{ at atomic.Int64 }
 
+// SeenAt is the reviewed cutoff, independent of current delivery health.
+func (l *LossSeen) SeenAt() time.Time {
+	if l != nil {
+		if at := l.at.Load(); at != 0 {
+			return time.Unix(0, at).UTC()
+		}
+	}
+	return time.Time{}
+}
+
 // Mark records that every loss up to at has been seen.
 func (l *LossSeen) Mark(at time.Time) {
 	for {

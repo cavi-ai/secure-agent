@@ -64,6 +64,10 @@ func (s *Store) noteIncidentDetailRead(err error) {
 // Advice is optional enrichment. Its batch read has separate health so an
 // unavailable advisor table cannot erase readable incident evidence.
 func (s *Store) attachIncidentDetailAdviceLocked(list []IncidentDetail) {
+	s.attachIncidentDetailAdviceQuery(s.db, list)
+}
+
+func (s *Store) attachIncidentDetailAdviceQuery(q rowQuerier, list []IncidentDetail) {
 	if len(list) == 0 {
 		return
 	}
@@ -73,7 +77,7 @@ func (s *Store) attachIncidentDetailAdviceLocked(list []IncidentDetail) {
 		args[i] = list[i].ID
 		indices[list[i].ID] = i
 	}
-	rows, err := s.db.Query(`SELECT subject_id,confidence,rationale,created_at FROM advisor_verdicts WHERE kind='incident' AND subject_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")+`)`, args...)
+	rows, err := q.Query(`SELECT subject_id,confidence,rationale,created_at FROM advisor_verdicts WHERE kind='incident' AND subject_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")+`)`, args...)
 	if err != nil {
 		s.noteRead(advisorReadKind("incident"), err)
 		return
@@ -149,7 +153,11 @@ func (s *Store) SessionIncidentDetails(sessionID string) (out []IncidentDetail, 
 }
 
 func (s *Store) incidentDetailsLocked(query, sessionID string, args ...any) ([]IncidentDetail, error) {
-	rows, err := s.db.Query(query, args...)
+	return s.incidentDetailsQuery(s.db, query, sessionID, args...)
+}
+
+func (s *Store) incidentDetailsQuery(q rowQuerier, query, sessionID string, args ...any) ([]IncidentDetail, error) {
+	rows, err := q.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -171,6 +179,6 @@ func (s *Store) incidentDetailsLocked(query, sessionID string, args ...any) ([]I
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	s.attachIncidentDetailAdviceLocked(out)
+	s.attachIncidentDetailAdviceQuery(q, out)
 	return out, nil
 }

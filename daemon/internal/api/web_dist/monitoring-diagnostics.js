@@ -12,13 +12,15 @@ function createMonitoringDiagnostics({ request, drawer, generation, ended, refre
   function paint(state) {
     const status = state.status || {}, es = status.es_service || {};
     const lost = status.bus_drops > 0 || es.bytes_lost > 0;
-    const canAcknowledge = state.report && lost && (status.bus_dropping || es.losing);
+    const review = state.report?.loss_review;
+    const canAcknowledge = state.report && lost && (review ? review.pending === true : status.bus_dropping || es.losing);
     const fact = (name, value) => `<div><dt>${escapeHTML(name)}</dt><dd>${escapeHTML(String(value))}</dd></div>`;
     const checks = state.report?.checks || [];
     const body = state.report ? `<p>${lost ? 'Monitoring history remains incomplete. Acknowledgement records that you reviewed the gap; it does not recover missing evidence.' : 'No delivery or file-event loss has been recorded in this daemon run.'}</p>
+      ${review?.seen_at ? `<p role="status">Reviewed through ${escapeHTML(date(review.seen_at))}. Current delivery health is reported separately below.</p>` : ''}
       <section><h3>Event delivery</h3><dl class="monitoring-diagnostic-facts">
       ${fact('Missed deliveries', Number(status.bus_drops || 0).toLocaleString())}${fact('Last loss', date(status.bus_drop_at))}
-      ${fact('Recent loss', status.bus_dropping ? 'Reported' : 'No unacknowledged recent loss')}
+      ${fact('Delivery pressure', status.bus_dropping ? 'Active' : 'No current pressure reported')}
       ${status.bus_drops ? fact('Loss source', 'Ingestion queue was full') : ''}</dl></section>
       <section><h3>File monitoring</h3><dl class="monitoring-diagnostic-facts">
       ${fact('Unread data lost', bytes(es.bytes_lost))}${fact('Last loss', date(es.lost_at))}
