@@ -29,7 +29,7 @@ def run_worktrees(page):
             and not dom_query(dom_wt).has(None, {'data-subtab': 'worktrees'})
             and [b.attrs.get('data-tab') for b in dom_query(dom_wt).find_all(None, {'class': 'tab-btn'})] == ['home', 'sessions', 'monitoring', 'protection', 'system', 'agent']
             and wt_rows == 4
-            and all((f'class="wt-row wt-{s}"' in wt for s in ('remove', 'review', 'keep', 'prune')))
+            and all((f'class="wt-row wt-{s} wt-in-' in wt for s in ('remove', 'review', 'keep', 'prune')))
             and 'main worktree of the repository' not in wt
         ),
         f'rows={wt_rows}',
@@ -55,9 +55,10 @@ def run_worktrees(page):
         'worktrees: inspection retains semantic facts and active-session context',
         (
             '<li class="wt-reason wt-reason-keep">2 uncommitted changes</li>' in wt
-            and '<span class="wt-subtitle">Scan: ignored files that only live here: .tmp/ (3 files, 1.2 MB)</span>' in wt
-            and '<span class="wt-subtitle">Scan: merged into origin/main (squash)</span>' in wt
-            and '<span class="wt-subtitle">Scan: directory is gone; git still lists it</span>' in wt
+            and '">Scan: ignored files that only live here: .tmp/ (3 files, 1.2 MB)' in wt
+            and '">Scan: merged into origin/main (squash)' in wt
+            and '">Scan: directory is gone; git still lists it' in wt
+            and wt.count('<span class="wt-subtitle wt-tone-') == wt_rows
             and 'an agent session is live here</li>' not in wt
             and 'class="wt-inspection-meta"' in wt
         ),

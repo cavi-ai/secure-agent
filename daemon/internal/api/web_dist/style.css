@@ -2275,6 +2275,17 @@ button.spend-day:focus-visible { outline: 2px solid var(--brand); outline-offset
 .wt-checkbox { display: flex; align-items: center; justify-content: center; width: 44px; min-height: 44px; cursor: pointer; }
 #system-worktrees input.wt-select { width: 18px; height: 18px; min-height: 18px; margin: 0; accent-color: var(--action); cursor: pointer; flex-shrink: 0; }
 #system-worktrees .wt-subtitle { font-size: 14px; line-height: 1.5; color: var(--tx-2); overflow-wrap: anywhere; }
+/* The collapsed row's reason carries the daemon's reason kind: what keeps
+   the folder or needs a look warns, work kept elsewhere is green. */
+#system-worktrees .wt-subtitle.wt-tone-keep, #system-worktrees .wt-subtitle.wt-tone-review { color: var(--warn); }
+#system-worktrees .wt-subtitle.wt-tone-safe { color: var(--ok); }
+#system-worktrees .wt-subtitle.wt-tone-agent { color: var(--brand-2); }
+#system-worktrees .wt-more { margin-left: 4px; color: var(--tx-2); font-size: 13px; }
+#system-worktrees .wt-main .wt-idle { color: var(--tx-2); font-size: 13px; }
+/* A lane's rows share its accent at the left edge. */
+#system-worktrees .wt-row.wt-in-work, #system-worktrees .wt-row.wt-in-check { box-shadow: inset 3px 0 0 var(--warn); }
+#system-worktrees .wt-row.wt-in-safe { box-shadow: inset 3px 0 0 var(--ok); }
+#system-worktrees .wt-row.wt-in-active { box-shadow: inset 3px 0 0 var(--brand); }
 #system-worktrees .wt-size { font: 500 15px/1.5 var(--font); color: var(--tx-1); text-align: right; }
 .wt-disclosure { width: 16px; height: 16px; flex-shrink: 0; color: var(--tx-2); transform: rotate(90deg); }
 .wt-row[open] > .wt-main .wt-disclosure { transform: rotate(-90deg); }

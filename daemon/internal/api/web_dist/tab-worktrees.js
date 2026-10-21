@@ -449,6 +449,24 @@ function worktreeAgentChipHTML(w) {
 
 const WORKTREE_REASON_KINDS = new Set(['keep', 'agent', 'review', 'safe', 'info']);
 
+// worktreeHeadline: the collapsed row's one line — a live session, else the
+// selection block, else the first reason that is not a submodule aggregate —
+// with its tone (the daemon's reason kind: keep and review warn, safe is
+// green, info is plain) and how many other keep or review reasons the fold
+// holds.
+function worktreeHeadline(w, block) {
+  const reasons = w.reasons || [];
+  const kinds = w.reason_kinds || [];
+  const concerns = reasons.filter((r, i) => kinds[i] === 'keep' || kinds[i] === 'review').length;
+  if (w.in_use) return { text: `${w.active_agent || 'Agent'} session active`, tone: 'agent', more: concerns };
+  if (block) return { text: block, tone: 'keep', more: Math.max(0, concerns - (reasons.includes(block) ? 1 : 0)) };
+  const i = reasons.findIndex(r => !r.startsWith('submodule '));
+  if (i < 0) return { text: 'Open to inspect contents', tone: 'info', more: concerns };
+  const tone = WORKTREE_REASON_KINDS.has(kinds[i]) ? kinds[i] : 'info';
+  const concern = tone === 'keep' || tone === 'review';
+  return { text: reasons[i], tone, more: Math.max(0, concerns - (concern ? 1 : 0)) };
+}
+
 // worktreeReasonsHTML: the row's reasons as tags toned by the daemon's
 // reason_kinds; the agent chip in the header stands for the agent reason.
 function worktreeReasonsHTML(w, headline = '') {
@@ -664,28 +682,28 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable, selectionState) {
   const open = w.orphan || w.state === 'prune' ? ''
     : `<button type="button" class="btn btn-ghost btn-sm wt-open" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}" title="Show in Finder" aria-label="Show ${escapeHTML(branch || w.path)} in Finder"><svg class="icon"><use href="#i-folder"/></svg></button>`;
   const selection = worktreeSelectHTML(w, repo, removal, ask, selectionState);
-  const reason = w.in_use ? `${w.active_agent || 'Agent'} session active`
-    : (['remove', 'keep', 'review'].includes(w.state) ? block : '')
-      || (w.reasons || []).find(r => !r.startsWith('submodule ')) || 'Open to inspect contents';
+  const headline = worktreeHeadline(w, ['remove', 'keep', 'review'].includes(w.state) ? block : '');
+  const reason = headline.text;
   const expanded = !!(selectionState && selectionState.expanded && selectionState.expanded.has(w.path));
   const submodules = Number(w.submodules) || 0;
   const conflict = worktreeAdviceConflict(w, repo, note);
-  return `<details class="wt-row wt-${escapeHTML(w.state)}" data-path="${escapeHTML(w.path)}"${expanded ? ' open' : ''}>
+  const idle = w.last_activity ? `<span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>` : '';
+  return `<details class="wt-row wt-${escapeHTML(w.state)} wt-in-${worktreeLane(w)}" data-path="${escapeHTML(w.path)}"${expanded ? ' open' : ''}>
     <summary class="wt-main">
       <span class="wt-select-slot">${selection}</span>
       <div class="wt-identity">
         <div class="wt-title"><span class="wt-branch">${escapeHTML(label)}</span></div>
-        <span class="wt-subtitle">Scan: ${escapeHTML(reason)}</span>
+        <span class="wt-subtitle wt-tone-${headline.tone}">Scan: ${escapeHTML(reason)}${headline.more ? ` <span class="wt-more">+${headline.more} more</span>` : ''}</span>
         ${conflict ? '<span class="wt-advice-conflict">Saved advice differs</span>' : ''}
       </div>
       <div class="wt-facts">
-        <span class="wt-size">${escapeHTML(worktreeSizeLabel(w) || 'Measuring…')}</span>
+        <span class="wt-size">${escapeHTML(worktreeSizeLabel(w) || 'Measuring…')}</span>${idle}
         <span class="wt-inspect-label">Inspect <svg class="icon wt-disclosure" aria-hidden="true"><use href="#i-arrow"/></svg></span>
       </div>
     </summary>
     <div class="wt-inspection">
       <div class="wt-inspection-header"><button type="button" class="wt-path" data-action="copy-path" data-path="${escapeHTML(w.path)}" title="${escapeHTML(w.path)} — click to copy">${escapeHTML(worktreePathLabel(w.path, repo.path))}</button>
-      <div class="wt-inspection-meta">${w.last_activity ? `<span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>` : ''}${worktreeAgentChipHTML(w)}${w.stale ? '<span class="wt-stale">stale</span>' : ''}</div></div>
+      <div class="wt-inspection-meta">${worktreeAgentChipHTML(w)}${w.stale ? '<span class="wt-stale">stale</span>' : ''}</div></div>
       <section class="wt-scan-checks"><h5>Scan checks</h5>
       ${!w.in_use && w.state !== 'prune' ? '<p class="wt-session-fact">No active session detected by this scan.</p>' : ''}
       ${submodules ? `<p class="wt-submodules"><svg class="icon" aria-hidden="true"><use href="#i-branch"/></svg><strong>Submodules</strong><span>${submodules} populated · ${w.error ? 'inspection incomplete' : 'checked recursively'}${!w.error && !(w.submodule_local || []).length ? ' · no local-only commits or stashes found' : ''}</span></p>` : ''}
