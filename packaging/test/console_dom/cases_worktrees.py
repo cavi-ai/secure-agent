@@ -55,9 +55,9 @@ def run_worktrees(page):
         'worktrees: inspection retains semantic facts and active-session context',
         (
             '<li class="wt-reason wt-reason-keep">2 uncommitted changes</li>' in wt
-            and '<li class="wt-reason wt-reason-review">ignored files that only live here: .tmp/ (3 files, 1.2 MB)</li>' in wt
-            and '<li class="wt-reason wt-reason-safe">merged into origin/main (squash)</li>' in wt
-            and '<li class="wt-reason wt-reason-info">directory is gone; git still lists it</li>' in wt
+            and '<span class="wt-subtitle">Scan: ignored files that only live here: .tmp/ (3 files, 1.2 MB)</span>' in wt
+            and '<span class="wt-subtitle">Scan: merged into origin/main (squash)</span>' in wt
+            and '<span class="wt-subtitle">Scan: directory is gone; git still lists it</span>' in wt
             and 'an agent session is live here</li>' not in wt
             and 'class="wt-inspection-meta"' in wt
         ),
@@ -79,10 +79,13 @@ def run_worktrees(page):
     check(
         'worktrees: advice is escaped, secondary, and omits confidence scores',
         (
-            '<p class="wt-advice"><b>Advisor: review</b> · &lt;i&gt;look&lt;/i&gt; at .tmp before removing</p>' in wt
+            '<p class="wt-advice"><b>Saved opinion: review</b> · &lt;i&gt;look&lt;/i&gt; at .tmp before removing</p>' in wt
             and '60%' not in wt
-            and 'Advice and agent responses' in wt
-            and len(dom_query(wt).find_all(None, {'data-action': 'worktree-advise'})) == 2
+            and '<section class="wt-saved-advice"><h5>Saved advice</h5>' in wt
+            and 'Advice and agent responses' not in wt
+            and len(dom_query(wt).find_all(None, {'data-action': 'worktree-advise'})) == 3
+            and 'No active session detected by this scan.' in wt
+            and 'does not detect live sessions or authorize removal' in wt
         ),
     )
     check(
@@ -465,7 +468,7 @@ def run_worktrees_2(page):
         (
             '6.0 GB' in pre(dom_wtremovable, 'removable-tile')
             and '4 worktrees' in pre(dom_wtremovable, 'removable-tile')
-            and 'Remove all 4 · 6.0 GB' in pre(dom_wtremovable, 'removable-tile')
+            and 'Review 4 deletions · 6.0 GB' in pre(dom_wtremovable, 'removable-tile')
             and rm_posts == 4
             and 'web-app/.worktrees/landed' not in wt_block(dom_wtremovable)
         ),

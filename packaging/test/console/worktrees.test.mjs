@@ -146,7 +146,7 @@ test('worktreeGroups: filters by lane and stale, drops repos left empty', () => 
   assert.deepEqual([...stale.flatMap(g => g.rows.map(r => r.state))], ['remove', 'review']);
 });
 
-test('worktreeLanesHTML: lanes in order, empty lanes left out, rows grouped by repository, Remove all on the safe lane', () => {
+test('worktreeLanesHTML: lanes in order, empty lanes left out, rows grouped by repository, review deletions on the safe lane', () => {
   const rep = report();
   const gb = 1024 ** 3;
   rep.repos[1].worktrees.push({ path: '/Users/x/code/lib/.worktrees/old', branch: 'feat/old', head: 'abc', state: 'remove', reasons: ['merged into origin/main (squash)'], reason_kinds: ['safe'], size_bytes: gb });
@@ -155,7 +155,7 @@ test('worktreeLanesHTML: lanes in order, empty lanes left out, rows grouped by r
   const lanes = [...html.matchAll(/<section class="wt-lane wt-lane-([a-z]+)"/g)].map(m => m[1]);
   assert.deepEqual(lanes, ['safe', 'check', 'open']);
   assert.match(html, /<h3 id="wt-lane-safe">Safe to remove <span class="wt-lane-count">3<\/span><\/h3>/);
-  assert.match(html, /data-action="worktrees-remove-removable">Remove all 2 · 2\.0 GB<\/button>/);
+  assert.match(html, /data-action="worktrees-remove-removable">Review 2 deletions · 2\.0 GB<\/button>/);
   const safe = html.slice(0, html.indexOf('wt-lane-check'));
   assert.equal((safe.match(/<section class="wt-repo">/g) || []).length, 2, 'one repository block per repository in the lane');
   assert.ok(!html.slice(html.indexOf('wt-lane-check')).includes('worktrees-remove-removable'));
@@ -163,7 +163,7 @@ test('worktreeLanesHTML: lanes in order, empty lanes left out, rows grouped by r
   assert.match(busy, /data-action="worktrees-remove-removable" disabled>/);
 });
 
-test('worktreeRowHTML: Remove on remove, review and keep rows, Prune only on prune, Ask advisor on review and keep, everything escaped', () => {
+test('worktreeRowHTML: Remove on remove, review and keep rows, Prune only on prune, Ask advisor on every advisable row, everything escaped', () => {
   const rep = report();
   const [done, gone] = rep.repos[0].worktrees.slice(1);
   const [keep, review] = rep.repos[1].worktrees;
@@ -189,7 +189,7 @@ test('worktreeRowHTML: Remove on remove, review and keep rows, Prune only on pru
   // disk (a prune row's folder is gone).
   assert.match(doneHTML, /<button type="button" class="wt-path" data-action="copy-path" data-path="\/Users\/x\/code\/app\/\.worktrees\/done" title="\/Users\/x\/code\/app\/\.worktrees\/done — click to copy">\.worktrees\/done<\/button>/);
   assert.ok(doneHTML.includes('data-action="worktree-reveal"') && !goneHTML.includes('worktree-reveal'));
-  assert.ok(!doneHTML.includes('worktree-advise') && !goneHTML.includes('worktree-advise'));
+  assert.ok(doneHTML.includes('worktree-advise') && !goneHTML.includes('worktree-advise'));
   assert.ok(!doneHTML.includes('worktree-ask') && !goneHTML.includes('worktree-ask'));
   assert.ok(reviewHTML.includes('feat/&quot;q&quot;'));
 });
@@ -401,11 +401,11 @@ test('advisor notes remain secondary, escaped, and never change removal eligibil
   const keep = rep.repos[1].worktrees[0];
   const note = { assessment: 'remove', confidence: 0.8, rationale: '<script>alert(1)</script> looks disposable' };
   const html = worktreeRowHTML(keep, rep.repos[1], note);
-  assert.match(html, /<details class="wt-advisor-details"><summary>Advice and agent responses<\/summary>/);
+  assert.match(html, /<section class="wt-saved-advice"><h5>Saved advice<\/h5>/);
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt; looks disposable/);
   assert.ok(!html.includes('80%') && !html.includes('worktree-remove"'));
   assert.equal((html.match(/data-action="worktree-select"/g) || []).length, 1);
-  assert.equal(ctx.worktreeNoteHTML(note, ''), '<p class="wt-advice"><b>Advisor: remove</b> · &lt;script&gt;alert(1)&lt;/script&gt; looks disposable</p>');
+  assert.equal(ctx.worktreeNoteHTML(note, ''), '<p class="wt-advice"><b>Saved opinion: remove</b> · &lt;script&gt;alert(1)&lt;/script&gt; looks disposable</p>');
   for (const w of [rep.repos[0].worktrees[1], keep, rep.repos[1].worktrees[1]]) assert.equal((worktreeRowHTML(w, rep.repos[0]).match(/data-action="worktree-discuss"/g) || []).length, 1);
 });
 

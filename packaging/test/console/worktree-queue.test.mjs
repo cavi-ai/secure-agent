@@ -42,6 +42,49 @@ test('collapsed queue rows show one selection control and keep actions in their 
   assert.ok(!html.includes('90%'));
 });
 
+test('closed rows expose structured advice conflicts without changing scanner policy', () => {
+  const safe = row('done', { state: 'remove', reasons: ['merged into origin/main'] });
+  const note = { assessment: 'keep', rationale: '<b>Agent is working here</b>' };
+  const html = context.worktreeRowHTML(safe, repo, note);
+  const summary = html.split('</summary>')[0];
+  assert.match(summary, /Saved advice differs/);
+  assert.match(summary, /Scan: merged into origin\/main/);
+  assert.match(summary, /Inspect/);
+  assert.match(html, /data-action="worktree-remove"/);
+  assert.match(html, /data-action="worktree-advise"/);
+  assert.equal(context.worktreeLane(safe), 'safe');
+  assert.match(html, /Saved opinion: keep/);
+  assert.match(html, /&lt;b&gt;Agent is working here&lt;\/b&gt;/);
+  assert.match(html, /second opinion/);
+  assert.match(html, /No active session detected by this scan/);
+  assert.match(html, /does not detect live sessions or authorize removal/);
+  for (const assessment of ['keep', 'review']) {
+    assert.match(context.worktreeRowHTML(safe, repo, { assessment }).split('</summary>')[0], /Saved advice differs/);
+  }
+  for (const extra of [{ state: 'keep' }, { in_use: true }, { locked: true }, { error: 'unreadable' }]) {
+    const blocked = context.worktreeRowHTML({ ...safe, ...extra }, repo, { assessment: 'remove' });
+    assert.match(blocked.split('</summary>')[0], /Saved advice differs/);
+    if (extra.in_use || extra.locked || extra.error) assert.ok(!blocked.includes('data-action="worktree-remove"'));
+  }
+  assert.doesNotMatch(context.worktreeRowHTML(safe, repo, { assessment: 'remove', rationale: 'keep active agent' }).split('</summary>')[0], /Saved advice differs/);
+});
+
+test('inspection has one disclosure and separates scan facts from saved advice without duplicate reasons', () => {
+  const w = row('done', { state: 'remove', submodules: 1,
+    reasons: ['merged into origin/main', '1 submodule with every commit on a remote', 'extra fact', 'extra fact'] });
+  const html = context.worktreeRowHTML(w, repo, { assessment: 'keep', rationale: 'Check its files.' });
+  assert.equal((html.match(/<details\b/g) || []).length, 1);
+  assert.match(html, /<h5[^>]*>Scan checks<\/h5>/);
+  assert.match(html, /<h5[^>]*>Saved advice<\/h5>/);
+  const inspection = html.split('<div class="wt-inspection">')[1];
+  assert.ok(!inspection.includes('merged into origin/main'));
+  assert.ok(!inspection.includes('1 submodule with every commit on a remote'));
+  assert.equal((inspection.match(/extra fact/g) || []).length, 1);
+  assert.match(inspection, /1 populated/);
+  assert.match(inspection, />Delete permanently<\/button>/);
+  assert.match(context.worktreeRowHTML(row('review'), repo), />Review Trash move…<\/button>/);
+});
+
 test('populated submodules can be reviewed while local-only submodule state stays protected', () => {
   assert.equal(context.worktreeTrashBlock(row('clean', { submodules: 2 })), '');
   const why = 'submodule lib has a stash (removal loses it)';
