@@ -23,7 +23,8 @@ import (
 //
 // Hermes keeps its sessions in SQLite: <root>/state.db, plus one state.db
 // per named profile at <root>/profiles/<name>/state.db, where the root is
-// hermes_home, $HERMES_STATE_DIR, $HERMES_HOME, or discovered at runtime.
+// hermes_home, $HERMES_STATE_DIR or $HERMES_HOME (from the daemon's
+// environment, else the user's login shell), or discovered at runtime.
 // sessions records the model,
 // billing provider, cwd, git repo root and branch, parent session, start and
 // end (REAL epoch seconds) and running token totals; messages records role,
@@ -115,6 +116,9 @@ type HermesCollector struct {
 	// ProcessExes supplies tagged Hermes executable paths when the daemon
 	// does not inherit Hermes's environment.
 	ProcessExes func() []string
+	// LoginEnv, when set, reads Hermes's variables as the user's login shell
+	// exports them; consulted only when the daemon's environment has neither.
+	LoginEnv func(string) string
 	// StatePath, when set, persists the per-database watermarks across
 	// daemon restarts.
 	StatePath string
@@ -240,6 +244,15 @@ func HermesHome(configured string, getenv func(string) string, home string, exeP
 	return fallback
 }
 
+// getenv reads Hermes's variables from the daemon's environment, or from the
+// login shell when the daemon's environment has neither.
+func (c *HermesCollector) getenv(key string) string {
+	if c.LoginEnv != nil && strings.TrimSpace(os.Getenv("HERMES_STATE_DIR")+os.Getenv("HERMES_HOME")) == "" {
+		return c.LoginEnv(key)
+	}
+	return os.Getenv(key)
+}
+
 // hermesDBPaths lists the databases under root: state.db first, then each
 // profile's state.db in name order.
 func hermesDBPaths(root string) []string {
@@ -310,7 +323,7 @@ func (c *HermesCollector) pollOnce() int {
 	if c.ProcessExes != nil {
 		exes = c.ProcessExes()
 	}
-	root := HermesHome(c.Configured, os.Getenv, home, exes...)
+	root := HermesHome(c.Configured, c.getenv, home, exes...)
 	paths := hermesDBPaths(root)
 	if len(paths) == 0 && !c.idle {
 		c.idle = true

@@ -399,7 +399,7 @@ func checkHermes(f doctorFacts) (string, string) {
 	case h.LastError != "":
 		return doctorFail, h.LastError
 	case len(h.DBs) == 0:
-		return doctorSkip, fmt.Sprintf("state.db not found under %s; set hermes_home or provide HERMES_STATE_DIR/HERMES_HOME to the daemon", h.Root)
+		return doctorSkip, fmt.Sprintf("state.db not found under %s; set hermes_home or export HERMES_STATE_DIR/HERMES_HOME in the daemon's environment or login shell", h.Root)
 	}
 	dbs := make([]string, len(h.DBs))
 	for i, d := range h.DBs {

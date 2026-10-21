@@ -63,6 +63,7 @@ func testHermesCollectorWiring(t *testing.T, source string) {
 		t.Setenv("HERMES_STATE_DIR", "")
 		t.Setenv("HERMES_HOME", "")
 		t.Setenv("HOME", t.TempDir())
+		t.Setenv("SHELL", "") // no login shell exports a Hermes root
 		cfg.HermesHome = ""
 		cfg.Agents = []config.AgentDef{{Name: "hermes", Match: []string{"hermes-agent"}}}
 		tagger = agents.New(cfg, mapProcSource{900: {PID: 900, PPID: 1, Exe: filepath.Join(root, "hermes-agent", "venv", "bin", "python3")}})

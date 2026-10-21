@@ -214,14 +214,17 @@ hermes_home: "~/.hermes"      # Hermes Agent root holding state.db and profiles/
 holds `lcm.db`. Set, it is the only path read.
 
 `hermes_home` is unset by default. An explicit setting is authoritative;
-otherwise the daemon uses `$HERMES_STATE_DIR`, then `$HERMES_HOME`. With
-neither set, it looks for `state.db` under `~/.hermes`, then under the
+otherwise the daemon uses `$HERMES_STATE_DIR`, then `$HERMES_HOME`, from its
+own environment or, when that has neither, as the user's login shell
+(`$SHELL -l`) exports them, read once per daemon run. With neither set, it
+looks for `state.db` under `~/.hermes`, then under the
 `.hermes` directory or parent of `hermes-agent` in a tagged Hermes process's
 executable path. It also reads each `profiles/<name>/state.db`. Discovery
 retries each poll, so Hermes can start after the daemon. A missing database
 leaves the collector idle; `/doctor` reports the searched root and settings.
-GUI-launched daemons may not inherit shell variables: set `hermes_home` in
-the daemon configuration when no running process reveals the state directory.
+A daemon started by the menu bar app or launchd inherits no shell variables,
+so an export in a shell profile is enough; set `hermes_home` when no login
+shell exports them and no running process reveals the state directory.
 A Hermes installed outside `~/.hermes` without a `hermes-agent` path needs an `agents:` override to be tagged.
 
 Tilde (`~`) prefixes are automatically expanded to the user's home directory. Environment variables (e.g. `$HOME`) are also resolved automatically.
