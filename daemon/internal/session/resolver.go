@@ -124,6 +124,17 @@ func resolveGitInfo(workspace string) (repo, branch string) {
 
 var gitCache map[string]gitInfo
 
+// pruneGitCacheLocked drops lookups past gitCacheTTL, so the cache holds the
+// workspaces seen within it rather than every path ever seen. Caller holds
+// the resolver mutex.
+func pruneGitCacheLocked() {
+	for ws, v := range gitCache {
+		if time.Since(v.at) >= gitCacheTTL {
+			delete(gitCache, ws)
+		}
+	}
+}
+
 // Handshake is the hook's session announcement: harness identity, workspace,
 // and the harness's own pid (the hook's parent), which joins the hook
 // session id to the process tree exactly.
@@ -1135,6 +1146,7 @@ func (r *Resolver) Sweep() {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	pruneGitCacheLocked()
 	ended := map[string]bool{}
 	end := func(id string) {
 		if !ended[id] {

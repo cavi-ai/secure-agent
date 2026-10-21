@@ -426,6 +426,24 @@ func TestGitInfoCacheExpires(t *testing.T) {
 	}
 }
 
+// Sweep drops expired git lookups: the cache holds recent workspaces, not
+// every path the daemon has seen.
+func TestSweepDropsExpiredGitLookups(t *testing.T) {
+	r, _ := testResolver(t, fakeProcs{})
+	gitCache = map[string]gitInfo{
+		"/old":    {repo: "old", at: time.Now().Add(-gitCacheTTL - time.Minute)},
+		"/recent": {repo: "recent", at: time.Now()},
+	}
+	t.Cleanup(func() { gitCache = map[string]gitInfo{} })
+	r.Sweep()
+	if _, ok := gitCache["/old"]; ok {
+		t.Fatal("expired git lookup kept")
+	}
+	if _, ok := gitCache["/recent"]; !ok {
+		t.Fatal("recent git lookup dropped")
+	}
+}
+
 // A session created before the resolver started (root started long ago) is
 // persisted immediately; a root that is still young is deferred — attributed
 // in memory but not persisted until it outlives the floor.
