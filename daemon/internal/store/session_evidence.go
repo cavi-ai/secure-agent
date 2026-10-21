@@ -77,5 +77,6 @@ func (s *Store) SessionOutcomeContext(parent context.Context, id string) (Sessio
 	if err != nil || !found {
 		return SessionOutcomeHistory{}, found, err
 	}
-	return s.SessionOutcomes(id), true, nil
+	history, err := s.sessionOutcomesContext(ctx, id)
+	return history, true, err
 }

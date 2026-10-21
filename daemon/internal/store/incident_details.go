@@ -63,7 +63,7 @@ func (s *Store) noteIncidentDetailRead(err error) {
 
 // Advice is optional enrichment. Its batch read has separate health so an
 // unavailable advisor table cannot erase readable incident evidence.
-func (s *Store) attachIncidentDetailAdvice(list []IncidentDetail) {
+func (s *Store) attachIncidentDetailAdviceQuery(q rowQuerier, list []IncidentDetail) {
 	if len(list) == 0 {
 		return
 	}
@@ -73,7 +73,7 @@ func (s *Store) attachIncidentDetailAdvice(list []IncidentDetail) {
 		args[i] = list[i].ID
 		indices[list[i].ID] = i
 	}
-	rows, err := s.db.Query(`SELECT subject_id,confidence,rationale,created_at FROM advisor_verdicts WHERE kind='incident' AND subject_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")+`)`, args...)
+	rows, err := q.Query(`SELECT subject_id,confidence,rationale,created_at FROM advisor_verdicts WHERE kind='incident' AND subject_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")+`)`, args...)
 	if err != nil {
 		s.noteRead(advisorReadKind("incident"), err)
 		return
@@ -128,22 +128,22 @@ func (s *Store) GetIncidentDetail(id string) (detail *IncidentDetail, readErr er
 		return nil, err
 	}
 	list := []IncidentDetail{got}
-	s.attachIncidentDetailAdvice(list)
+	s.attachIncidentDetailAdviceQuery(s.db, list)
 	return &list[0], nil
 }
 
 func (s *Store) RecentIncidentDetails(limit int) (out []IncidentDetail, readErr error) {
 	defer func() { s.noteIncidentDetailRead(readErr) }()
-	return s.incidentDetails(`SELECT `+incidentDetailColumns+` FROM incidents WHERE (status IS NULL OR status!='resolved') ORDER BY `+timestampOrderExpr("created_at")+` DESC,id DESC LIMIT ?`, "", normalizeLimit(limit))
+	return s.incidentDetailsQuery(s.db, `SELECT `+incidentDetailColumns+` FROM incidents WHERE (status IS NULL OR status!='resolved') ORDER BY `+timestampOrderExpr("created_at")+` DESC,id DESC LIMIT ?`, "", normalizeLimit(limit))
 }
 
 func (s *Store) SessionIncidentDetails(sessionID string) (out []IncidentDetail, readErr error) {
 	defer func() { s.noteRead("incident remediation", readErr) }()
-	return s.incidentDetails(`SELECT `+incidentDetailColumns+` FROM incidents WHERE session_id=? ORDER BY `+timestampOrderExpr("created_at")+` DESC,id DESC LIMIT 100`, sessionID, sessionID)
+	return s.incidentDetailsQuery(s.db, `SELECT `+incidentDetailColumns+` FROM incidents WHERE session_id=? ORDER BY `+timestampOrderExpr("created_at")+` DESC,id DESC LIMIT 100`, sessionID, sessionID)
 }
 
-func (s *Store) incidentDetails(query, sessionID string, args ...any) ([]IncidentDetail, error) {
-	rows, err := s.db.Query(query, args...)
+func (s *Store) incidentDetailsQuery(q rowQuerier, query, sessionID string, args ...any) ([]IncidentDetail, error) {
+	rows, err := q.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +165,6 @@ func (s *Store) incidentDetails(query, sessionID string, args ...any) ([]Inciden
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	s.attachIncidentDetailAdvice(out)
+	s.attachIncidentDetailAdviceQuery(q, out)
 	return out, nil
 }

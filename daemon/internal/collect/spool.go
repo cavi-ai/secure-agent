@@ -659,7 +659,9 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 		return skipTo, st
 	}
 	t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick}, false)
-	if parsedThisTick > 0 && resume >= st.Size() {
+	// A clean empty EOF is caught up too; scanner faults or unparsed-only
+	// input do not establish recovery.
+	if scanner.Err() == nil && resume >= st.Size() && (parsedThisTick > 0 || linesThisTick == 0) {
 		t.recordCaughtUp()
 	}
 	return resume, st

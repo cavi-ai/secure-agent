@@ -62,7 +62,7 @@ func want(ok bool, format string, args ...any) error {
 // snapshot while a write commits beside it.
 func TestReadTxKeepsOneSnapshotWithoutBlockingWrites(t *testing.T) {
 	s := lockTestStore(t)
-	count := func(q querier) (n int) {
+	count := func(q rowQuerier) (n int) {
 		t.Helper()
 		if err := q.QueryRow(`SELECT COUNT(*) FROM incidents`).Scan(&n); err != nil {
 			t.Fatal(err)

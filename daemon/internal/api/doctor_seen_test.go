@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,68 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
+
+func TestDoctorLossReviewIsIndependentOfDeliveryPressure(t *testing.T) {
+	st, err := store.Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	now := time.Now().UTC()
+	dropAt := now.Add(-time.Second)
+	fileAt := dropAt
+	a := newTestAPI(Deps{Store: st, Status: func() Status {
+		return Status{Running: true, ESService: &collect.ESServiceSnapshot{BytesLost: 100, LostAt: &fileAt, Losing: true}}
+	}, Telemetry: TelemetryDeps{BusDrops: func() uint64 { return 4 }, BusDropAt: func() time.Time { return dropAt }, BusDropping: func() bool { return true }, LossSeen: new(collect.LossSeen)}})
+	review := func() (bool, string) {
+		t.Helper()
+		report := a.doctorReport(now)
+		generated, err := time.Parse(time.RFC3339Nano, report.GeneratedAt)
+		if err != nil || !generated.Equal(now) {
+			t.Fatalf("displayed cutoff lost precision: %s", report.GeneratedAt)
+		}
+		data, err := json.Marshal(report)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire struct {
+			LossReview *struct {
+				Pending bool   `json:"pending"`
+				SeenAt  string `json:"seen_at"`
+			} `json:"loss_review"`
+		}
+		if err := json.Unmarshal(data, &wire); err != nil {
+			t.Fatal(err)
+		}
+		if wire.LossReview == nil {
+			t.Fatal("loss review state missing from Doctor")
+		}
+		return wire.LossReview.Pending, wire.LossReview.SeenAt
+	}
+	if pending, _ := review(); !pending {
+		t.Fatal("unreviewed loss was hidden")
+	}
+	w := httptest.NewRecorder()
+	a.handleDoctorSeen(w, httptest.NewRequest(http.MethodPost, "/doctor/seen", strings.NewReader(`{"seen_at":"`+now.Format(time.RFC3339Nano)+`"}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("acknowledgement: %d %s", w.Code, w.Body.String())
+	}
+	if pending, seenAt := review(); pending || seenAt != now.Format(time.RFC3339Nano) {
+		t.Fatalf("review was not retained: pending=%v seen_at=%q", pending, seenAt)
+	}
+	if !a.evidenceStatus(Status{}).BusDropping {
+		t.Fatal("acknowledgement hid active delivery pressure")
+	}
+	fileAt = now.Add(time.Nanosecond)
+	if pending, _ := review(); !pending {
+		t.Fatal("newer file loss was hidden")
+	}
+	fileAt = now.Add(-time.Second)
+	dropAt = now.Add(time.Nanosecond)
+	if pending, _ := review(); !pending {
+		t.Fatal("newer loss was hidden")
+	}
+}
 
 // POST /doctor/seen clears the bus-drop failure until drops grow again; the
 // count stays in status.

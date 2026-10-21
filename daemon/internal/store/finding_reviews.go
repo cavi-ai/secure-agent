@@ -309,12 +309,12 @@ func (s *Store) GetFindingReview(id string) (r model.ReviewRecord, ok bool, err 
 		return r, false, nil
 	}
 	if err == nil {
-		err = s.reviewLinks(tx, &r)
+		err = s.reviewLinksQuery(tx, &r, true)
 	}
 	return r, err == nil, err
 }
 
-func (s *Store) reviewLinks(q querier, r *model.ReviewRecord) error {
+func (s *Store) reviewLinksQuery(q rowQuerier, r *model.ReviewRecord, includeScopes bool) error {
 	rows, err := q.Query(`SELECT m.flag_id FROM finding_review_members m JOIN flags f ON f.id=m.flag_id WHERE m.review_id=? ORDER BY `+timestampOrderExpr("m.last_seen")+` DESC,m.flag_id LIMIT 100`, r.ID)
 	if err != nil {
 		return err
@@ -336,7 +336,7 @@ func (s *Store) reviewLinks(q querier, r *model.ReviewRecord) error {
 	}
 	sourceFlags := make([]model.Flag, 0, len(r.SourceIDs))
 	for _, id := range r.SourceIDs {
-		f, found, err := s.getFlagResult(q, id)
+		f, found, err := s.flagResultQuery(q, id)
 		if err != nil {
 			return err
 		}
@@ -352,7 +352,7 @@ func (s *Store) reviewLinks(q querier, r *model.ReviewRecord) error {
 	}
 	r.EvidenceFlagAvailable = available == 1
 	r.AvailableScopes = nil
-	if r.EvidenceAvailable && r.ReviewState != "closed_reported" && (r.Decision == nil || r.Decision.Action != "expect" || r.Decision.Revision != r.Revision) {
+	if includeScopes && r.EvidenceAvailable && r.ReviewState != "closed_reported" && (r.Decision == nil || r.Decision.Action != "expect" || r.Decision.Revision != r.Revision) {
 		r.AvailableScopes = []model.ScopeChoice{{Kind: "once"}}
 		complete := true
 		for _, f := range sourceFlags {
@@ -416,19 +416,24 @@ func (s *Store) ListSessionFindingReviews(sessionID string) (ReviewPage, error) 
 	return s.listFindingReviews("", 100, "", sessionID)
 }
 
-func (s *Store) listFindingReviews(after string, limit int, state, sessionID string) (page ReviewPage, err error) {
+func (s *Store) listFindingReviews(after string, limit int, state, sessionID string) (ReviewPage, error) {
+	// The page and its links come from one snapshot.
+	tx, err := s.readTx()
+	if err != nil {
+		s.noteRead("finding reviews", err)
+		return ReviewPage{Reviews: []model.ReviewRecord{}, Degraded: true}, err
+	}
+	defer tx.Rollback()
+	return s.listFindingReviewsQuery(tx, after, limit, state, sessionID, true)
+}
+
+func (s *Store) listFindingReviewsQuery(q rowQuerier, after string, limit int, state, sessionID string, includeScopes bool) (page ReviewPage, err error) {
 	defer func() {
 		s.noteRead("finding reviews", err)
 		if err != nil {
 			page = ReviewPage{Reviews: []model.ReviewRecord{}, Degraded: true}
 		}
 	}()
-	// The page and its links come from one snapshot.
-	tx, err := s.readTx()
-	if err != nil {
-		return
-	}
-	defer tx.Rollback()
 	limit = min(max(limit, 1), 100)
 	page.Reviews = []model.ReviewRecord{}
 	query := `SELECT id,state,record_json FROM finding_reviews WHERE id>? AND (?='' OR state=?) ORDER BY id LIMIT ?`
@@ -437,7 +442,7 @@ func (s *Store) listFindingReviews(after string, limit int, state, sessionID str
 		query = `SELECT id,state,record_json FROM finding_reviews WHERE session_id=? ORDER BY ` + timestampOrderExpr("last_seen") + ` DESC,id DESC LIMIT ?`
 		args = []any{sessionID, limit + 1}
 	}
-	rows, err := tx.Query(query, args...)
+	rows, err := q.Query(query, args...)
 	if err != nil {
 		page.Degraded = true
 		return
@@ -462,7 +467,7 @@ func (s *Store) listFindingReviews(after string, limit int, state, sessionID str
 		page.Next = page.Reviews[limit-1].ID
 	}
 	for i := range page.Reviews {
-		if err = s.reviewLinks(tx, &page.Reviews[i]); err != nil {
+		if err = s.reviewLinksQuery(q, &page.Reviews[i], includeScopes); err != nil {
 			page.Degraded = true
 			return
 		}
@@ -503,7 +508,7 @@ func (s *Store) AttachFindingReviewIDs(flags []model.Flag) error {
 	return readErr
 }
 
-func (s *Store) findingReviewID(q querier, flagID string) (string, error) {
+func (s *Store) findingReviewID(q rowQuerier, flagID string) (string, error) {
 	var id, key string
 	err := q.QueryRow(`SELECT review_id,source_key FROM finding_review_members WHERE flag_id=?`, flagID).Scan(&id, &key)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -512,7 +517,7 @@ func (s *Store) findingReviewID(q querier, flagID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	f, found, err := s.getFlagResult(q, flagID)
+	f, found, err := s.flagResultQuery(q, flagID)
 	if err != nil {
 		return "", err
 	}

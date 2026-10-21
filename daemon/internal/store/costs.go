@@ -213,7 +213,7 @@ func costDayExpr(tzMinutes int) string {
 
 // costProviderModels lists the distinct model ids in the window with no
 // recorded provider, or nil when providerFor is nil.
-func costProviderModels(q querier, providerFor func(string) string, window []any) []string {
+func costProviderModels(q rowQuerier, providerFor func(string) string, window []any) []string {
 	if providerFor == nil {
 		return nil
 	}
@@ -274,7 +274,7 @@ func costProviderExpr(providerFor func(string) string, models []string) (string,
 // dominantValues maps each group key to the non-empty value of col with the
 // most calls in the window; ties break alphabetically. args binds keyExpr's
 // parameters, then the window.
-func dominantValues(q querier, keyExpr, col string, args []any) map[string]string {
+func dominantValues(q rowQuerier, keyExpr, col string, args []any) map[string]string {
 	dominant := map[string]string{}
 	rows, err := q.Query(`SELECT `+keyExpr+` AS k, `+col+` AS v, COUNT(*) AS n`+costFrom+`
 		AND `+col+` IS NOT NULL AND `+col+` != ''

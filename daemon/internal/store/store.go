@@ -177,12 +177,6 @@ func (s *Store) FlagGeneration() uint64 { return s.flagGen.Load() }
 // flagsChanged records a write to flags or advisor verdicts (caller holds mu).
 func (s *Store) flagsChanged() { s.flagGen.Add(1) }
 
-// querier is the read surface *sql.DB and *sql.Tx share.
-type querier interface {
-	Query(query string, args ...any) (*sql.Rows, error)
-	QueryRow(query string, args ...any) *sql.Row
-}
-
 // readTx begins a read-only transaction: its statements share one snapshot
 // and never reserve the writer, so a read whose statements must agree needs
 // no mu. Nothing else may use s.db until it ends: a :memory: store has one
@@ -1092,17 +1086,17 @@ func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
 // detail, using the same checked decoder as flag history.
 // GetFlag is one read statement, so it does not take mu.
 func (s *Store) GetFlag(id string) (model.Flag, bool, error) {
-	return s.getFlagResult(s.db, id)
+	return s.flagResultQuery(s.db, id)
 }
 
 func (s *Store) getFlagLocked(id string) (model.Flag, bool) {
-	fl, found, _ := s.getFlagResult(s.db, id)
+	fl, found, _ := s.flagResultQuery(s.db, id)
 	return fl, found
 }
 
 const flagSelect = `SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process, repeats, last_seen FROM flags`
 
-func (s *Store) getFlagResult(q querier, id string) (flag model.Flag, found bool, readErr error) {
+func (s *Store) flagResultQuery(q rowQuerier, id string) (flag model.Flag, found bool, readErr error) {
 	defer func() { s.noteRead("flag detail", readErr) }()
 	rows, err := q.Query(flagSelect+" WHERE id = ?", id)
 	if err != nil {

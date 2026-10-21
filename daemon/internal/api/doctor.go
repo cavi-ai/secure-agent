@@ -35,12 +35,19 @@ type DoctorSummary struct {
 // sessions and events are attributed, paired, priced and retained. Grace is
 // true inside the boot window, where steady-state checks skip.
 type DoctorReport struct {
-	GeneratedAt string        `json:"generated_at"`
-	Version     string        `json:"version"`
-	Uptime      string        `json:"uptime"`
-	Grace       bool          `json:"grace"`
-	Summary     DoctorSummary `json:"summary"`
-	Checks      []DoctorCheck `json:"checks"` // fixed order; never nil
+	GeneratedAt string           `json:"generated_at"`
+	LossReview  DoctorLossReview `json:"loss_review"`
+	Version     string           `json:"version"`
+	Uptime      string           `json:"uptime"`
+	Grace       bool             `json:"grace"`
+	Summary     DoctorSummary    `json:"summary"`
+	Checks      []DoctorCheck    `json:"checks"` // fixed order; never nil
+}
+
+// DoctorLossReview records review of history without clearing live faults.
+type DoctorLossReview struct {
+	SeenAt  string `json:"seen_at,omitempty"`
+	Pending bool   `json:"pending"`
 }
 
 const (
@@ -172,11 +179,22 @@ func (a *API) handleDoctorSeen(w http.ResponseWriter, r *http.Request) {
 func (a *API) doctorReport(now time.Time) DoctorReport {
 	f := a.doctorFacts(now)
 	rep := DoctorReport{
-		GeneratedAt: now.UTC().Format(time.RFC3339),
+		GeneratedAt: now.UTC().Format(time.RFC3339Nano),
 		Version:     f.st.Version,
 		Uptime:      f.st.Uptime,
 		Grace:       f.grace,
 		Checks:      make([]DoctorCheck, 0, len(doctorProbes)),
+	}
+	seen := f.lossSeen.SeenAt()
+	if !seen.IsZero() {
+		rep.LossReview.SeenAt = seen.Format(time.RFC3339Nano)
+	}
+	unreviewed := func(count uint64, at *time.Time) bool {
+		return count > 0 && (at == nil || seen.Before(*at))
+	}
+	rep.LossReview.Pending = unreviewed(f.st.BusDrops, f.st.BusDropAt)
+	if es := f.st.ESService; es != nil {
+		rep.LossReview.Pending = rep.LossReview.Pending || unreviewed(es.BytesLost, es.LostAt)
 	}
 	for _, p := range doctorProbes {
 		state, detail := p.run(f)

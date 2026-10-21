@@ -1,7 +1,9 @@
 package store
 
 import (
+	"context"
 	"slices"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
@@ -34,14 +36,22 @@ type sessionOutcomeReader interface {
 }
 
 func (s *Store) SessionOutcomes(id string) SessionOutcomeHistory {
-	return readSessionOutcomeHistory(s, id)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	history, _ := s.sessionOutcomesContext(ctx, id)
+	return history
+}
+
+func emptySessionOutcomes() SessionOutcomeHistory {
+	return SessionOutcomeHistory{Guards: []GuardDecision{}, Reviews: []model.ReviewRecord{}, Incidents: []model.IncidentReport{}, Interventions: []model.InterventionReceipt{}, Evidence: SessionOutcomeEvidence{
+		Guards: ReportSourceEvidence{Limit: 200}, Reviews: ReportSourceEvidence{Limit: 100}, Incidents: ReportSourceEvidence{Limit: 100}, Interventions: ReportSourceEvidence{Limit: 200},
+	}}
 }
 
 // readSessionOutcomeHistory retains readable receipt sources independently.
 // The returned review rows do not carry authority to create a new scope.
 func readSessionOutcomeHistory(reader sessionOutcomeReader, id string) SessionOutcomeHistory {
-	out := SessionOutcomeHistory{Reviews: []model.ReviewRecord{}, Incidents: []model.IncidentReport{}, Interventions: []model.InterventionReceipt{}}
-	out.Guards = []GuardDecision{}
+	out := emptySessionOutcomes()
 	guards, guardErr := reader.GuardDecisionHistory(id, 200)
 	if guardErr == nil {
 		out.Guards = guards
