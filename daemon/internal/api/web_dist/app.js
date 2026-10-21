@@ -1342,9 +1342,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const AGENT_POLL_MS = 1500;
   const AGENT_POLL_LIMIT = 1200;
   const AGENT_TIMEOUT_MS = 15000;
-  const agentState = { status: null, chat: null, plans: null, runs: null, recommendations: null, skills: null, error: '', sendError: '', sending: false, actionRequests: new Set(), readVersion: {}, polls: 0, lastCount: 0, seenMessageKeys: null, unreadMessageKeys: new Set(), reading: null, restoreReading: false };
+  const agentState = { status: null, chat: null, memory: null, plans: null, runs: null, recommendations: null, skills: null, error: '', sendError: '', sending: false, actionRequests: new Set(), readVersion: {}, polls: 0, lastCount: 0, seenMessageKeys: null, unreadMessageKeys: new Set(), reading: null, restoreReading: false };
   // Literal paths: the proxy's console allow-list test reads them from here.
-  const AGENT_PATHS = { status: '/agent/status', chat: '/agent/chat', plans: '/agent/plans', runs: '/agent/runs', recommendations: '/agent/recommendations' };
+  const AGENT_PATHS = { memory:'/agent/memory', status: '/agent/status', chat: '/agent/chat', plans: '/agent/plans', runs: '/agent/runs', recommendations: '/agent/recommendations' };
   let agentPollTimer = null;
   const agentReducedMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
   agentReducedMotion?.addEventListener('change', event => {
@@ -1471,6 +1471,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const agentHandoffWorkdir = document.getElementById('agent-handoff-workdir');
   let agentActivePane = '';
   function setAgentPanel(pane, toggle = false) {
+    if (pane === 'history') loadAgent(['memory']);
     if (pane && !['queue', 'history', 'tools'].includes(pane)) return;
     // The queue, history and tools live in the Agent tab: show it.
     if (pane && agentDockOpen) switchTab('agent');
@@ -1555,9 +1556,37 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!hs.some(h => h.id === pick)) pick = (hs.find(h => h.ready) || hs[0] || {}).id || '';
     agentHarnessSelect.innerHTML = agentHarnessOptionsHTML(agentState.status, pick);
   }
+  document.getElementById('agent-memory-query')?.addEventListener('input', () => {
+    const el = document.getElementById('agent-memory');
+    if (el) el.innerHTML = agentMemoryHTML(agentState.memory, document.getElementById('agent-memory-query').value);
+  });
   function renderAgent() {
     const st = agentState.status;
     const enabled = !!(st && st.enabled);
+    const runtime = document.getElementById('agent-runtime');
+    if (runtime) runtime.hidden = !st?.resources;
+    const resource = document.getElementById('agent-resource-state');
+    if (resource) resource.textContent = agentResourceText(st);
+    const sessionLabel = document.getElementById('agent-session-state');
+    if (sessionLabel) sessionLabel.textContent = st?.session?.id && !st.session.closed_at
+      ? `Session ${Number(st.session.id)} · ${Number(st.session.messages) || 0} of 8 turns · rotates after 30 minutes idle`
+      : 'Fresh session · instructions and relevant retained facts load with your message';
+    const stop = document.getElementById('agent-stop');
+    if (stop) stop.disabled = !agentBusy() && !st?.resources?.active;
+    const pause = document.getElementById('agent-pause');
+    if (pause) {
+      pause.dataset.control = st?.resources?.background_paused ? 'resume' : 'pause';
+      pause.textContent = st?.resources?.background_paused ? 'Resume background review' : 'Pause background review';
+    }
+    const classifier = document.getElementById('agent-classifier-state');
+    if (classifier) classifier.textContent = agentClassifierText(st?.classifier);
+    const policy = document.getElementById('agent-resource-policy');
+    if (policy) policy.textContent = st?.resources
+      ? `Ollama requests: ${Number(st.resources.context_tokens)} context tokens; idle expiry ${Number(st.resources.idle_seconds)} seconds. Background inference remaining: ${Math.ceil((Number(st.resources.background_remaining_ms) || 0) / 1000)} seconds. MLX reports a dynamic maximum context. Other apps can independently use a shared server.`
+      : 'Resource controls unavailable.';
+    const memoryEl = document.getElementById('agent-memory');
+    if (memoryEl) memoryEl.innerHTML = agentMemoryHTML(agentState.memory, document.getElementById('agent-memory-query')?.value || '');
+
     const stateEl = document.getElementById('agent-state');
     if (stateEl) stateEl.textContent = agentState.error || agentStateText(st);
     const dockStateEl = document.getElementById('agent-dock-state');
@@ -1733,11 +1762,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
   window.clearAgentChat = async function() {
-    const ok = await window.saConfirm('Delete the conversation? Plans and runs stay.', { title: 'Clear conversation', okLabel: 'Clear' });
+    const ok = await window.saConfirm('Close this session? Recorded outcomes are summarized for future sessions. Plans and runs stay.', { title: 'Start a new session', okLabel: 'New session' });
     if (!ok) return;
     try {
       await agentFetch('/agent/chat', { method: 'DELETE' });
-      loadAgent(['chat']);
+      loadAgent(['chat','status','memory']);
     } catch (err) {
       showToast('Not cleared: ' + (err.message || err), 'danger');
     }
@@ -4301,6 +4330,30 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'agent-dismiss-recommendation':
         e.preventDefault();
         window.dismissAgentRecommendation(Number(d.message));
+        break;
+      case 'agent-control':
+        e.preventDefault();
+        (async () => {
+          try {
+            await agentFetch('/agent/control', { method: 'POST', body: { action: d.control } });
+            await loadAgent(['status', 'chat']);
+          } catch (err) {
+            showToast('Control unavailable: ' + (err.message || err), 'danger');
+          }
+        })();
+        break;
+      case 'agent-forget-memory':
+        e.preventDefault();
+        (async () => {
+          if (!await window.saConfirm('Forget all retained facts and session summaries? Conversation records, plans and runs stay.',
+            { title: 'Forget retained facts', okLabel: 'Forget', danger: true })) return;
+          try {
+            await agentFetch('/agent/memory', { method: 'DELETE' });
+            await loadAgent(['memory', 'status']);
+          } catch (err) {
+            showToast('Memory not cleared: ' + (err.message || err), 'danger');
+          }
+        })();
         break;
       case 'agent-clear':
         e.preventDefault();

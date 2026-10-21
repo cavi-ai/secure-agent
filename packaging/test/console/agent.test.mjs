@@ -19,6 +19,19 @@ const { agentStateText, agentOffHTML, agentMessageHTML, agentThreadItems, agentP
 
 const XSS = '<img src=x onerror=alert(1)>';
 
+test('model resource status distinguishes unavailable memory from unloaded state', () => {
+  assert.match(ctx.agentResourceText({residency:{available:false}}), /unavailable/i);
+  assert.match(ctx.agentResourceText({residency:{available:true,loaded:false}}), /unloaded/i);
+  assert.match(ctx.agentResourceText({resources:{active:true,queued:2},residency:{available:true,loaded:true,bytes:2147483648}}), /2.*GB.*2 queued/);
+  assert.match(ctx.agentClassifierText({configured:true,state:'unavailable'}), /unavailable.*continues/i);
+});
+
+test('retained facts are escaped and never become executable proposals', () => {
+  const html=ctx.agentMemoryHTML({facts:[{id:1,summary:XSS,references:['run:4'],at:'2026-10-21T12:00:00Z'}],sessions:[]},'');
+  assert.ok(!html.includes(XSS)); assert.match(html,/&lt;img/);
+  assert.doesNotMatch(html,/agent-run-local|local-command/);
+});
+
 test('retriage tracks a fresh identical verdict and waits while its actual task is active', () => {
   const prior = {assessment:'benign',rationale:'routine',created_at:'2026-10-09T20:00:00Z'};
   assert.notEqual(ctx.advisorVerdictSignature(prior), ctx.advisorVerdictSignature({...prior,created_at:'2026-10-09T20:02:00Z'}));
