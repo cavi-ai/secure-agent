@@ -67,9 +67,13 @@ func (s *Store) SaveIntervention(r model.InterventionReceipt) (writeErr error) {
 }
 
 func (s *Store) RecentInterventions(sessionID string, limit int) (_ []model.InterventionReceipt, readErr error) {
-	defer func() { s.noteRead("intervention receipts", readErr) }()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
+	return s.recentInterventionsQuery(contextRows{ctx, s.db}, sessionID, limit)
+}
+
+func (s *Store) recentInterventionsQuery(q rowQuerier, sessionID string, limit int) (_ []model.InterventionReceipt, readErr error) {
+	defer func() { s.noteRead("intervention receipts", readErr) }()
 	// This read uses only the database snapshot, not mutable collector state.
 	query := `SELECT id,session_id,session_key,requested_at,revision,receipt_json FROM interventions`
 	args := []any{}
@@ -79,7 +83,7 @@ func (s *Store) RecentInterventions(sessionID string, limit int) (_ []model.Inte
 	}
 	query += ` ORDER BY ` + timestampOrderExpr("requested_at") + ` DESC,id DESC LIMIT ?`
 	args = append(args, min(normalizeLimit(limit), 200))
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := q.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

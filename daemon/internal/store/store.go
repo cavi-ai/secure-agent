@@ -1089,8 +1089,12 @@ func (s *Store) getFlagLocked(id string) (model.Flag, bool) {
 const flagSelect = `SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process, repeats, last_seen FROM flags`
 
 func (s *Store) getFlagResultLocked(id string) (flag model.Flag, found bool, readErr error) {
+	return s.flagResultQuery(s.db, id)
+}
+
+func (s *Store) flagResultQuery(q rowQuerier, id string) (flag model.Flag, found bool, readErr error) {
 	defer func() { s.noteRead("flag detail", readErr) }()
-	rows, err := s.db.Query(flagSelect+" WHERE id = ?", id)
+	rows, err := q.Query(flagSelect+" WHERE id = ?", id)
 	if err != nil {
 		return model.Flag{}, false, err
 	}

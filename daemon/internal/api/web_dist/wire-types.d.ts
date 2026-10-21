@@ -1330,6 +1330,11 @@ export interface CostReport {
   refreshing?: boolean;
 }
 
+export interface DoctorLossReview {
+  seen_at?: string;
+  pending: boolean;
+}
+
 export interface DoctorSummary {
   pass: number;
   fail: number;
@@ -1346,6 +1351,7 @@ export interface DoctorCheck {
 
 export interface DoctorReport {
   generated_at: string;
+  loss_review: DoctorLossReview;
   version: string;
   uptime: string;
   grace: boolean;

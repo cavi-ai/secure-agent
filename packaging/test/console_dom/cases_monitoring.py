@@ -17,7 +17,7 @@ def run_monitoring_loss(page):
         dom = page.dom('', served=True, window_size=size, fixture={'script': 'cases_monitoring_loss.js'})
         receipt = re.search(r'data-monitoring-loss-probe="([^"]+)"', dom)
         state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
-        for name in ('open', 'loss', 'fits', 'cutoff', 'retained', 'neutral'):
+        for name in ('open', 'loss', 'fits', 'cutoff', 'retained', 'reviewed', 'active', 'neutral', 'newLoss'):
             page.check(f'Monitoring loss ({label}): {name}', state.get(name) is True, str(state))
 
 

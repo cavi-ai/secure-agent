@@ -10,19 +10,36 @@ function setup(respond) {
   const drawer = { seq: () => state.seq, setMode() {}, open(options) { state.seq++; state.view = options; } };
   const status = { bus_drops: 22, bus_drop_at: displayed, bus_dropping: true,
     es_service: { bytes_lost: 30937721, lost_at: displayed, losing: true, state: 'running', lag_seconds: 12 }, storage_health: { failures: 0 } };
-  const doctor = { generated_at: displayed, checks: [{id:'bus', title:'Event bus', state:'fail', detail:'Queue full', fix:'Review ingestion'}] };
+  const doctor = { generated_at: displayed, loss_review:{pending:true}, checks: [{id:'bus', title:'Event bus', state:'fail', detail:'Queue full', fix:'Review ingestion'}] };
   const ctx = vm.createContext({ Date, window: {} });
   for (const file of ['lib.js', 'monitoring-diagnostics.js']) vm.runInContext(readFileSync(new URL(file, web), 'utf8'), ctx);
   const api = ctx.createMonitoringDiagnostics({
     request: async (url, options) => {
       requests.push([url, options]);
       if (respond) return respond(url, options, {status, doctor});
+      if (options?.method === 'POST') doctor.loss_review = {pending:false,seen_at:displayed};
       return { ok:true, json:async () => url === '/doctor' ? doctor : url === '/status' ? status : {seen_at:displayed} };
     }, drawer, generation: () => state.generation, ended: () => state.ended,
     refresh: async () => { state.refreshed++; },
   });
-  return { api, state, requests, status };
+  return { api, state, requests, status, doctor };
 }
+
+test('review confirmation remains separate from active delivery pressure and newer losses', async () => {
+  const {api,state,status,doctor} = setup();
+  await api.open();
+  await api.acknowledge();
+  assert.equal(status.bus_dropping,true);
+  assert.equal(status.es_service.losing,true);
+  assert.match(state.view.body,/Reviewed through/);
+  assert.match(state.view.body,/Queue full/);
+  assert.doesNotMatch(state.view.foot,/monitoring-loss-seen/);
+  await api.open();
+  assert.doesNotMatch(state.view.foot,/monitoring-loss-seen/);
+  doctor.loss_review.pending = true;
+  await api.open();
+  assert.match(state.view.foot,/monitoring-loss-seen/);
+});
 
 test('diagnostics shows retained loss, last loss time, delivery lag, and real checks', async () => {
   const { api, state } = setup();
@@ -33,6 +50,16 @@ test('diagnostics shows retained loss, last loss time, delivery lag, and real ch
   assert.match(state.view.body, /12 s/);
   assert.match(state.view.body, /Queue full/);
   assert.match(state.view.foot, /data-action="monitoring-loss-seen"/);
+});
+
+test('historical losses can be reviewed after current delivery has recovered', async () => {
+  const {api,state,status} = setup();
+  status.bus_dropping = false; status.es_service.losing = false;
+  await api.open();
+  assert.match(state.view.foot,/monitoring-loss-seen/);
+  await api.acknowledge();
+  assert.match(state.view.body,/Reviewed through/);
+  assert.doesNotMatch(state.view.foot,/monitoring-loss-seen/);
 });
 
 test('acknowledgement sends displayed cutoff and retains history after refreshing', async () => {

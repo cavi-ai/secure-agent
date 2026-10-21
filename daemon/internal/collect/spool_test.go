@@ -714,6 +714,35 @@ func TestSpoolLossSurvivesHealthyPollAfterOverwrittenRotation(t *testing.T) {
 	}
 }
 
+func TestSpoolLossRecoversAtEmptyEOF(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	appendSpool(t, path, esOpenLine(101)+"\n"+esOpenLine(102)+"\n")
+	b := bus.New(1)
+	defer b.Close()
+	sub := b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+	cursor := tailer.poll(spoolCursor{})
+	if cursor.offset >= cursor.size {
+		t.Fatal("fixture did not retain unread events")
+	}
+	<-sub
+	if err := os.Truncate(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	cursor = tailer.poll(cursor)
+	stats := tailer.Stats()
+	if cursor.offset != cursor.size || stats.Losing {
+		t.Fatalf("clean EOF still reports active loss: cursor=%+v stats=%+v", cursor, stats)
+	}
+	if stats.BytesLost == 0 || stats.LostAt.IsZero() || stats.LossCause != "truncation" {
+		t.Fatalf("recovery erased loss history: %+v", stats)
+	}
+	tailer.poll(cursor)
+	if got := tailer.Stats(); got.Losing || got.BytesLost != stats.BytesLost || !got.LostAt.Equal(stats.LostAt) {
+		t.Fatalf("idle poll changed recovered history: %+v", got)
+	}
+}
+
 func TestLossGrowingWithinTheWindow(t *testing.T) {
 	now := time.Date(2026, 10, 8, 15, 0, 0, 0, time.UTC)
 	for _, c := range []struct {

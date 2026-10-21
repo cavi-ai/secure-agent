@@ -113,13 +113,17 @@ func (s *Store) pruneGuardDecisions(ctx context.Context, retention time.Duration
 // GuardDecisionHistory selects only rows explicitly attributed to sessionID,
 // and distinguishes unavailable storage from empty history.
 func (s *Store) GuardDecisionHistory(sessionID string, limit int) ([]GuardDecision, error) {
+	return guardDecisionHistoryQuery(s.db, sessionID, limit)
+}
+
+func guardDecisionHistoryQuery(q rowQuerier, sessionID string, limit int) ([]GuardDecision, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
 	if limit > 500 {
 		limit = 500
 	}
-	rows, err := s.db.Query(`SELECT id, session_id, rule_id, verdict, scope, at, receipt_json FROM guard_decisions WHERE session_id = ? ORDER BY at DESC, id DESC LIMIT ?`, sessionID, limit)
+	rows, err := q.Query(`SELECT id, session_id, rule_id, verdict, scope, at, receipt_json FROM guard_decisions WHERE session_id = ? ORDER BY at DESC, id DESC LIMIT ?`, sessionID, limit)
 	if err != nil {
 		return nil, err
 	}
