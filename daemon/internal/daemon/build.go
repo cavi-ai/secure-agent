@@ -61,6 +61,7 @@ type Options struct {
 // Shutdown. Build is the composition root; main() is CLI parsing plus process
 // lifecycle, not component construction.
 type Components struct {
+	sysAgent     *sysagent.Agent
 	shellReviews *shellreview.Service
 	cfg          config.Config
 	store        *store.Store
@@ -316,7 +317,8 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	hunter := worktreehunter.New(st, "", worktreeOptions(cfg.Worktrees))
 	cleanup := clutter.New(st, "", clutterPlaces(hunter))
 	asker := agentask.New(st, "")
-	sysAgent := sysagent.New(st, filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "sysagent"), sysAgentMask(fw.Engine))
+	sysAgent := sysagent.NewPersistent(st, filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "sysagent"), sysAgentMask(fw.Engine))
+	c.sysAgent = sysAgent
 	sysAgent.SetConfig(cfg.SystemAgent)
 	sysAgent.Recover()
 	apiServer := api.New(api.Deps{
@@ -392,10 +394,11 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			Routing:   claudeRouting(proxyServer, cfg.ProxyCACertPath),
 		},
 		Workspace: api.WorkspaceDeps{
-			Worktrees: hunter,
-			Clutter:   cleanup,
-			Asker:     asker,
-			SysAgent:  sysAgent,
+			ClassifierStatus: func(ctx context.Context) advisor.ClassifierHealth { return advisorStk.Load().Sub.ClassifierStatus(ctx) },
+			Worktrees:        hunter,
+			Clutter:          cleanup,
+			Asker:            asker,
+			SysAgent:         sysAgent,
 		},
 	})
 
@@ -485,6 +488,9 @@ func (c *Components) Shutdown() {
 		}
 		if c.advisor != nil {
 			c.advisor.Close()
+		}
+		if c.sysAgent != nil {
+			c.sysAgent.Close()
 		}
 		c.shellReviews.Close()
 		if c.apiListener != nil {

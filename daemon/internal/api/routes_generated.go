@@ -97,6 +97,8 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/advisor/plan":                 a.handleAdvisorPlan,
 		"/labels":                       a.handleLabels,
 		"/agent/status":                 a.handleAgentStatus,
+		"/agent/control":                a.handleAgentControl,
+		"/agent/memory":                 a.handleAgentMemory,
 		"/agent/skills":                 a.handleAgentSkills,
 		"/agent/chat":                   a.handleAgentChat,
 		"/agent/analyze":                a.handleAgentAnalyze,

@@ -199,12 +199,19 @@ func (a *Agent) runHeadless(planID int64, run model.SysAgentRun, bin string, l l
 	defer func() {
 		a.mu.Lock()
 		a.releaseRun()
+		a.runCancel = nil
 		a.mu.Unlock()
 		a.wg.Done()
 	}()
 	defer removeFiles(l)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	a.mu.Lock()
+	a.runCancel = cancel
+	if a.stoppedRun == run.ID {
+		cancel()
+	}
+	a.mu.Unlock()
 	cmd := toolpath.Command(ctx, bin, a.binDirs, l.Args...)
 	cmd.Dir = run.Workdir
 	cmd.Env = mergeEnv(cmd.Env, l.Env, l.Unset)
@@ -232,6 +239,8 @@ func (a *Agent) runHeadless(planID int64, run model.SysAgentRun, bin string, l l
 	run.FinishedAt = &fin
 	var exitErr *exec.ExitError
 	switch {
+	case ctx.Err() == context.Canceled:
+		run.Status, run.Detail = "failed", "stopped by the operator or daemon shutdown"
 	case ctx.Err() == context.DeadlineExceeded:
 		run.Status, run.Detail = "timeout", fmt.Sprintf("stopped after %v", timeout)
 	case runErr != nil:
@@ -261,6 +270,10 @@ func (a *Agent) runHeadless(planID int64, run model.SysAgentRun, bin string, l l
 		a.st.PutSysAgentPlan(p)
 	}
 	a.audit(run)
+	if run.Harness == "local" {
+		// Retain the outcome reference, never output or command text.
+		_ = a.remember(run.SessionID, run.Workdir, "local-outcome", "Recorded local command outcome: "+run.Status+".", []string{fmt.Sprintf("run:%d", run.ID)})
+	}
 }
 
 // answerText is the harness's final answer: Claude Code's JSON result, the

@@ -348,3 +348,24 @@ function agentDispatchMessage(plan, mode, status) {
   }
   return `Run ${label} headless in ${plan.workdir}, on ${model} from your local Ollama? It works with its own sandbox and approvals on and your secure-agent hooks active; it can edit files in that folder. The answer shows under Runs.`;
 }
+
+function agentResourceText(status) {
+  const r = status?.resources || {}, m = status?.residency || {};
+  const memory = !m.available ? 'Model memory unavailable' : !m.loaded ? 'Model unloaded'
+    : `${(Number(m.bytes || 0) / 1024**3).toFixed(1)} GB reported`;
+  return `${r.active ? 'Working' : 'Idle'} · ${memory} · ${Math.max(0, Number(r.queued) || 0)} queued`;
+}
+function agentClassifierText(c) {
+  if (!c?.configured) return 'Classifier off';
+  if (c.state === 'unavailable') return 'Classifier unavailable · advisor continues without its hint';
+  if (c.state === 'connected') return `Classifier connected · ${Number(c.attempts) || 0} routing requests · quality not evaluated`;
+  return 'Classifier configured · availability not yet checked';
+}
+function agentMemoryHTML(memory, query = '') {
+  if (!memory) return '<p class="agent-history-empty">Open History to load retained facts.</p>';
+  const term = query.toLowerCase().trim();
+  const facts = (memory.facts || []).filter(f => !term || [f.summary, ...(f.references || [])].join(' ').toLowerCase().includes(term));
+  const cards = facts.slice(0, 20).map(f => `<article class="agent-memory-item"><p>${escapeHTML(f.summary)}</p><small>${escapeHTML(f.at || '')} · ${(f.references || []).map(escapeHTML).join(' · ')}</small></article>`).join('');
+  const sessions = (memory.sessions || []).filter(s => s.closed_at).slice(0, 10).map(s => `<article class="agent-memory-item"><strong>Session ${Number(s.id)}</strong><small>${escapeHTML(s.scope || '')} · ${escapeHTML(s.closed_at)}</small><p>${(s.summary || []).map(escapeHTML).join('<br>') || 'No recorded outcomes retained.'}</p></article>`).join('');
+  return `<p class="agent-history-empty">Recorded facts for this project. Historical checks must be repeated before removal. Showing ${Math.min(20, facts.length)} of ${facts.length} matching facts.</p>${cards || '<p class="agent-history-empty">No retained facts match.</p>'}<h4>Recent closed sessions</h4>${sessions || '<p class="agent-history-empty">No closed sessions.</p>'}`;
+}

@@ -29,7 +29,35 @@ export interface AgentTree {
   last_seen_at?: string;
 }
 
+export interface ClassifierHealth {
+  configured: boolean;
+  state: string;
+  model?: string;
+  attempts: number;
+  unavailable: number;
+  last_used: string;
+  last_success: string;
+  last_choice?: string;
+  duration_ms: number;
+  purpose: string;
+}
+
+export interface LocalmodelStatus {
+  background_remaining_ms: number;
+  background_retry_at: string;
+  active: boolean;
+  foreground: boolean;
+  queued: number;
+  background_paused: boolean;
+  elapsed_ms: number;
+  context_tokens: number;
+  idle_seconds: number;
+  scope: string;
+}
+
 export interface HealthSnapshot {
+  classifier: ClassifierHealth;
+  resources: LocalmodelStatus;
   enabled: boolean;
   circuit_open?: boolean;
   last_error?: string;
@@ -229,7 +257,7 @@ export interface ESServiceSnapshot {
   lag_seconds: number;
 }
 
-export interface Status {
+export interface ApiStatus {
   running: boolean;
   version: string;
   uptime: string;
@@ -1267,7 +1295,7 @@ export interface MutePair {
 }
 
 export interface ApiSnapshot {
-  status: Status;
+  status: ApiStatus;
   flags: Flag[] | null;
   reviews: ReviewPage;
   patterns: Pattern[] | null;
@@ -1887,6 +1915,7 @@ export interface SysAgentLocalCommand {
 }
 
 export interface SysAgentMessage {
+  session_id?: number;
   id: number;
   ts: string;
   role: string;
@@ -1941,6 +1970,7 @@ export interface SysAgentPlan {
 }
 
 export interface SysAgentRun {
+  session_id?: number;
   id: number;
   plan_id: number;
   ts: string;
@@ -1955,6 +1985,26 @@ export interface SysAgentRun {
   command: string;
   output?: string;
   detail?: string;
+}
+
+export interface Residency {
+  format?: string;
+  available: boolean;
+  loaded: boolean;
+  bytes: number;
+  context: number;
+  expires_at?: string;
+}
+
+export interface SysAgentSession {
+  id: number;
+  opened_at: string;
+  updated_at: string;
+  closed_at?: string;
+  scope: string;
+  messages: number;
+  bytes: number;
+  summary: string[] | null;
 }
 
 export interface HarnessStatus {
@@ -1975,6 +2025,10 @@ export interface SkillInfo {
 }
 
 export interface AgentStatus {
+  resources: LocalmodelStatus;
+  residency: Residency;
+  session: SysAgentSession;
+  storage_error?: string;
   enabled: boolean;
   endpoint: string;
   reachable: boolean;
@@ -1989,6 +2043,28 @@ export interface AgentStatus {
   running_run?: number;
   terminal: boolean;
   home: string;
+}
+
+export interface AgentStatusResponse {
+  resources: LocalmodelStatus;
+  residency: Residency;
+  session: SysAgentSession;
+  storage_error?: string;
+  enabled: boolean;
+  endpoint: string;
+  reachable: boolean;
+  ollama_version?: string;
+  reason?: string;
+  model?: string;
+  harness_model?: string;
+  models: string[] | null;
+  harnesses: HarnessStatus[] | null;
+  skills: SkillInfo[] | null;
+  chatting: boolean;
+  running_run?: number;
+  terminal: boolean;
+  home: string;
+  classifier: ClassifierHealth;
 }
 
 export interface Skill {

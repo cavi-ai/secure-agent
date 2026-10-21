@@ -100,6 +100,8 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 | `/advisor/plan` | GET, HEAD, POST | POST | no agents | `api.PlanResponse` |
 | `/labels` | GET, HEAD, POST | POST | no agents | — |
 | `/agent/status` | GET, HEAD | — | no agents | — |
+| `/agent/control` | GET, HEAD, POST | POST | no agents | — |
+| `/agent/memory` | DELETE, GET, HEAD | — | no agents | — |
 | `/agent/skills` | GET, HEAD | — | no agents | — |
 | `/agent/chat` | DELETE, GET, HEAD, POST | POST | no agents | — |
 | `/agent/analyze` | GET, HEAD, POST | POST | no agents | — |

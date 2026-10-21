@@ -179,6 +179,8 @@ type Status struct {
 type StatusFunc func() Status
 
 type API struct {
+	classifierStatus func(context.Context) advisor.ClassifierHealth
+
 	shellReviews    *shellreview.Service
 	socketPath      string
 	configPath      string
@@ -431,8 +433,9 @@ type DoctorDeps struct {
 // WorkspaceDeps serve /worktrees, /cleanup and /agent/* (optional; unwired
 // answers 503).
 type WorkspaceDeps struct {
-	Worktrees *worktreehunter.Hunter
-	Clutter   *clutter.Clutter
+	ClassifierStatus func(context.Context) advisor.ClassifierHealth
+	Worktrees        *worktreehunter.Hunter
+	Clutter          *clutter.Clutter
 	// Asker resumes a worktree's owning agent for /worktrees/ask.
 	Asker    *agentask.Asker
 	SysAgent *sysagent.Agent
@@ -441,20 +444,22 @@ type WorkspaceDeps struct {
 // New builds the API from its resolved dependencies.
 func New(d Deps) *API {
 	a := &API{
-		socketPath:      d.SocketPath,
-		configPath:      d.ConfigPath,
-		store:           d.Store,
-		killer:          d.Killer,
-		statusFn:        d.Status,
-		hermes:          d.Doctor.Hermes,
-		sightings:       d.Doctor.Sightings,
-		routing:         d.Doctor.Routing,
-		worktrees:       d.Workspace.Worktrees,
-		worktreeAdvisor: d.Advisors.Worktree,
-		egressAdvisor:   d.Advisors.Egress,
-		clutter:         d.Workspace.Clutter,
-		asker:           d.Workspace.Asker,
-		sysAgent:        d.Workspace.SysAgent,
+		socketPath:       d.SocketPath,
+		configPath:       d.ConfigPath,
+		store:            d.Store,
+		killer:           d.Killer,
+		statusFn:         d.Status,
+		hermes:           d.Doctor.Hermes,
+		sightings:        d.Doctor.Sightings,
+		routing:          d.Doctor.Routing,
+		worktrees:        d.Workspace.Worktrees,
+		worktreeAdvisor:  d.Advisors.Worktree,
+		egressAdvisor:    d.Advisors.Egress,
+		clutter:          d.Workspace.Clutter,
+		asker:            d.Workspace.Asker,
+		sysAgent:         d.Workspace.SysAgent,
+		classifierStatus: d.Workspace.ClassifierStatus,
+
 		autoReview:      newAutoReviewer(),
 		projectAdvisor:  d.Advisors.Project,
 		resources:       d.Resources.Snapshot,

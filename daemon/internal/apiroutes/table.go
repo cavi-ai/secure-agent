@@ -169,6 +169,8 @@ var Table = []Route{
 	// The system agent (console Agent tab): chat, plans and dispatch. NoAgent
 	// throughout — a harness dispatch must never be reachable by an agent.
 	{Path: "/agent/status", Handler: "API.handleAgentStatus", Console: true, NoAgent: true},
+	{Path: "/agent/control", Handler: "API.handleAgentControl", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/agent/memory", Handler: "API.handleAgentMemory", Console: true, NoAgent: true, ConsoleMethods: []string{"DELETE"}},
 	{Path: "/agent/skills", Handler: "API.handleAgentSkills", Console: true, NoAgent: true},
 	{Path: "/agent/chat", Handler: "API.handleAgentChat", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
 	{Path: "/agent/analyze", Handler: "API.handleAgentAnalyze", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},

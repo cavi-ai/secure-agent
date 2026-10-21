@@ -27,6 +27,9 @@ def scenario_payload(scenarios, now_ms=None):
     return spec
 
 FIXTURES = {
+ 'dom_agent_resources': Fixture(query='?tab=agent',scenarios=('tab','tab=agent'),window_size=(1280,900),script='cases_agent_resources.js',served=True),
+ 'dom_agent_resources_narrow': Fixture(query='?tab=agent',scenarios=('tab','tab=agent'),window_size=(500,1000),script='cases_agent_resources.js',served=True),
+
     'dom_csp': Fixture(
         query='?cspdemo&raildemo',
         scenarios=('cspdemo', 'raildemo'),

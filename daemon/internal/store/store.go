@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/cipher"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -115,6 +116,10 @@ var (
 var pruneMinInterval = 30 * time.Second
 
 type Store struct {
+	agentIndexKey          [32]byte
+	agentCryptoMu          sync.RWMutex
+	agentCipher            cipher.AEAD
+	agentLocked            bool
 	hookIngestion          hookIngestionHealth
 	egressProjectionHealth egressProjectionHealth
 	writeHealth            writeHealth
@@ -304,6 +309,10 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 	if err := initializeSchema(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialize database schema: %w", err)
+	}
+	if err := prepareAgentSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("initialize agent history: %w", err)
 	}
 
 	var mirror *flagMirror

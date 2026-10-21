@@ -12,11 +12,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
+	"github.com/cavi-ai/secure-agent/daemon/internal/localmodel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
+
+// AgentStatusResponse is the console's complete agent status payload.
+type AgentStatusResponse struct {
+	sysagent.AgentStatus
+	Classifier advisor.ClassifierHealth `json:"classifier"`
+}
 
 // handleAgentAnalyze builds the context on the daemon. The browser cannot
 // inject findings, alter history, or provide a command for this route.
@@ -117,6 +125,7 @@ func (a *API) handleAgentWorktree(w http.ResponseWriter, r *http.Request) {
 		writeSysAgentError(w, err)
 		return
 	}
+	_ = a.sysAgent.Remember(req.Path, "worktree-check", shortObservation("Recorded worktree check: "+req.State+"; branch "+req.Branch+". Recheck before removal.", 300), []string{"worktree:" + req.Path})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]any{"message": m})
@@ -445,7 +454,63 @@ func (a *API) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 	if !a.sysAgentReady(w) {
 		return
 	}
-	writeJSON(w, a.sysAgent.Status(r.Context()))
+	st := AgentStatusResponse{AgentStatus: a.sysAgent.Status(r.Context())}
+	if a.classifierStatus != nil {
+		st.Classifier = a.classifierStatus(r.Context())
+	}
+	writeJSON(w, st)
+}
+
+// Agent controls are operator-only and never execute a model proposal.
+func (a *API) handleAgentControl(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !a.sysAgentReady(w) {
+		return
+	}
+	limitBody(w, r)
+	var in struct {
+		Action string `json:"action"`
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if dec.Decode(&in) != nil || dec.Decode(new(any)) != io.EOF {
+		http.Error(w, "invalid control request", http.StatusBadRequest)
+		return
+	}
+	switch in.Action {
+	case "stop":
+		a.sysAgent.Stop()
+	case "pause":
+		localmodel.Default.PauseBackground(true)
+	case "resume":
+		localmodel.Default.PauseBackground(false)
+	default:
+		http.Error(w, "unknown control action", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, localmodel.Default.Snapshot())
+}
+
+func (a *API) handleAgentMemory(w http.ResponseWriter, r *http.Request) {
+	if !a.sysAgentReady(w) {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		s := a.sysAgent.Session()
+		writeJSON(w, map[string]any{"session": s, "sessions": a.sysAgent.Sessions(), "facts": a.sysAgent.Memory(s.Scope)})
+	case http.MethodDelete:
+		if err := a.sysAgent.ForgetMemory(); err != nil {
+			writeSysAgentError(w, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"forgotten": true})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func (a *API) handleAgentSkills(w http.ResponseWriter, r *http.Request) {

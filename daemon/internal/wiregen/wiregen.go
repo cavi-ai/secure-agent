@@ -96,6 +96,7 @@ func WireTypes() []any {
 		model.SysAgentPlan{},
 		model.SysAgentRun{},
 		sysagent.AgentStatus{},
+		api.AgentStatusResponse{},
 		sysagent.HarnessStatus{},
 		sysagent.SkillInfo{},
 		sysagent.Skill{},
