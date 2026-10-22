@@ -597,7 +597,7 @@ def run_worktree_hierarchy(page):
 
 
 def run_filter_regressions(page):
-    dom = page.dom('?raildemo', served=True, fixture={'script': 'cases_filter_regressions.js'})
+    dom = page.dom('', served=True, fixture={'script': 'cases_filter_regressions.js'})
     state = json.loads(html.unescape(pre(dom, 'filter-regression-probe')) or '{}')
     for key in ('state', 'focus', 'deselect', 'stale', 'intersection', 'all', 'searchEmpty', 'harnessVisible', 'harnessOff', 'harnessFocus', 'harnessOn', 'harnessAll', 'shared'):
         page.check(f'filter regressions: {key}', state.get(key) is True, str(state))
