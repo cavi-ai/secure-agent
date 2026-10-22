@@ -127,6 +127,11 @@ public final class SetupManager: ObservableObject {
     /// and when the last one started.
     private(set) var esRepairProbe: Task<Void, Never>?
     private var esRepairProbeStarted: Date?
+    /// Seconds between launchd probes; tests shorten it.
+    var esRepairProbeInterval: TimeInterval = 30
+    /// Re-registers this launch for an enabled service launchd held no job
+    /// for (bounded by `ESAutopilot.maxMissingJobRepairs`).
+    private var esMissingJobRepairs = 0
     /// The 1 s poll while a System Settings switch is pending.
     private var esPollTask: Task<Void, Never>?
     /// Telemetry Doctor results, in check order.
@@ -723,13 +728,16 @@ public final class SetupManager: ObservableObject {
         }
     }
 
-    /// Re-registers once per launch when the service is enabled but launchd
-    /// will not start its job. The launchd probe runs off the main actor, one
-    /// at a time, at most every 30 s.
+    /// Re-registers when the service is enabled but launchd will not start its
+    /// job: once per launch for a refused or stale job, and up to
+    /// `ESAutopilot.maxMissingJobRepairs` times while launchd holds no job,
+    /// since this launch's own registration can leave it that way. The
+    /// launchd probe runs off the main actor, one at a time, at most every
+    /// `esRepairProbeInterval`.
     private func repairStuckESJob() {
-        guard esLocationAllowed, esRepairProbe == nil, !esRegisterAttemptedThisLaunch, !esUserDisabled,
-              esServiceStatus == .enabled,
-              esRepairProbeStarted.map({ Date().timeIntervalSince($0) >= 30 }) ?? true else { return }
+        guard esLocationAllowed, esRepairProbe == nil, !esUserDisabled, esServiceStatus == .enabled,
+              !esRegisterAttemptedThisLaunch || esMissingJobRepairs < ESAutopilot.maxMissingJobRepairs,
+              esRepairProbeStarted.map({ Date().timeIntervalSince($0) >= esRepairProbeInterval }) ?? true else { return }
         esRepairProbeStarted = Date()
         let probe = esLaunchdProbe
         let staleProbe = esHelperStaleProbe
@@ -739,13 +747,17 @@ public final class SetupManager: ObservableObject {
                 return (job, staleProbe(job))
             }.value
             guard let self else { return }
-            self.esRepairProbe = nil
             if ESAutopilot.needsReregister(serviceStatus: self.esService.status,
                                            userDisabled: self.esUserDisabled,
                                            attemptedThisLaunch: self.esRegisterAttemptedThisLaunch,
-                                           launchd: job, helperStale: stale) {
+                                           launchd: job, helperStale: stale,
+                                           missingJobRepairs: self.esMissingJobRepairs) {
+                if job == .notFound { self.esMissingJobRepairs += 1 }
                 await self.reregisterESService()
             }
+            // Cleared after the re-register: the refresh it runs must not
+            // start a second probe while this one is still repairing.
+            self.esRepairProbe = nil
         }
     }
 

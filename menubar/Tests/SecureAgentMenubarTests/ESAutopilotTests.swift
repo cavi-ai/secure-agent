@@ -162,7 +162,7 @@ final class ESAutopilotTests: XCTestCase {
             (.enabled, false, false, .loaded(state: "waiting", pid: nil, lastExitCode: "(never exited)"), false, false, "never exited"),
             (.requiresApproval, false, false, refused, false, false, "not enabled"),
             (.enabled, false, false, .notFound, false, true, "enabled with no job: the app bundle was replaced in place"),
-            (.enabled, false, true, .notFound, false, false, "no job, already attempted this launch"),
+            (.enabled, false, true, .notFound, false, true, "no job after this launch's own attempt: retried"),
             (.enabled, true, false, .notFound, false, false, "no job, removed by the user"),
             (.requiresApproval, false, false, .notFound, false, false, "no job, not enabled"),
             (.enabled, false, false, .unreadable, false, false, "unreadable job"),
@@ -176,6 +176,44 @@ final class ESAutopilotTests: XCTestCase {
                                                        attemptedThisLaunch: attempted, launchd: job,
                                                        helperStale: stale), want, why)
         }
+        XCTAssertFalse(ESAutopilot.needsReregister(serviceStatus: .enabled, userDisabled: false, attemptedThisLaunch: true,
+                                                   launchd: .notFound, helperStale: false,
+                                                   missingJobRepairs: ESAutopilot.maxMissingJobRepairs),
+                       "a missing job is re-registered a bounded number of times a launch")
+    }
+
+    /// An app replaced in place leaves the service enabled with no launchd
+    /// job, and the launch's own re-register of the old helper can leave it
+    /// that way: the repair keeps re-registering while the job stays missing,
+    /// up to its bound, and leaves a loaded job alone.
+    @MainActor func testRefreshReregistersAMissingJobUntilLaunchdHoldsIt() async throws {
+        try XCTSkipIf(FileManager.default.fileExists(atPath: SetupManager.legacyESPlistPath),
+                      "an old helper on this Mac makes the stage legacyInstalled")
+        let service = FakeESService()
+        service.status = .enabled
+        service.registerStatus = .enabled
+        let job = JobBox(.notFound)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
+        let setup = SetupManager(esService: service, defaults: defaults, configurationHome: temporaryHome(), plistPresent: { true }, openPane: { _ in },
+                                 launchdProbe: { job.value }, helperStaleProbe: { _ in false },
+                                 appURL: installedCopy)
+        setup.esRepairProbeInterval = 0
+        let probeOnce = { () async in
+            setup.refreshESState()
+            if let probe = setup.esRepairProbe { await probe.value }
+        }
+
+        await probeOnce()
+        await probeOnce()
+        XCTAssertEqual(service.registerCount, 2, "re-registered on each probe that finds no job")
+
+        job.value = .loaded(state: "running", pid: 600, lastExitCode: nil)
+        await probeOnce()
+        XCTAssertEqual(service.registerCount, 2, "a loaded job is left alone")
+
+        job.value = .notFound
+        for _ in 0..<5 { await probeOnce() }
+        XCTAssertEqual(service.registerCount, ESAutopilot.maxMissingJobRepairs, "bounded per launch")
     }
 
     func testOnlyTheExactRepairURLTriggers() throws {
@@ -299,12 +337,25 @@ final class ESAutopilotTests: XCTestCase {
 
 private let installedCopy = URL(fileURLWithPath: AppIdentity.installedAppPath)
 
+/// The launchd job a test's probe reports; the probe reads it off the main actor.
+final class JobBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var job: LaunchdProbe
+    init(_ job: LaunchdProbe) { self.job = job }
+    var value: LaunchdProbe {
+        get { lock.lock(); defer { lock.unlock() }; return job }
+        set { lock.lock(); job = newValue; lock.unlock() }
+    }
+}
+
 /// Stands in for SMAppService: register moves to requiresApproval, as a
 /// first registration does on macOS.
 final class FakeESService: ESServiceControl {
     var registerCount = 0
     var unregisterCount = 0
     var registerError: Error?
+    /// The status a register leaves: an approved service stays `.enabled`.
+    var registerStatus: SMAppService.Status = .requiresApproval
     /// Reads of `status` that still answer `.enabled` after an unregister, as
     /// macOS applies it late; a register before they run out fails.
     var unregisterLag = 0
@@ -326,7 +377,7 @@ final class FakeESService: ESServiceControl {
         registerCount += 1
         if lagLeft > 0 { throw NSError(domain: "SMAppServiceErrorDomain", code: 1) }
         if let registerError { throw registerError }
-        stored = .requiresApproval
+        stored = registerStatus
     }
 
     func unregister() throws {
