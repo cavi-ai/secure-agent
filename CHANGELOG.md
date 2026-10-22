@@ -6,6 +6,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-22
+
 ### Added
 - Console: a Monitoring section with a searchable session list, observation details, monitoring issues, and separate unlinked process detections.
 - Sessions: a Hooks view with each Claude Code hook's runs, failures, blocks, returned characters and time, read from the transcript (`/sessions/{id}/hooks`).
@@ -1709,7 +1711,8 @@ scanning of the repository itself.
 Development history lives in the git log; this changelog starts at the first
 tagged release.
 
-[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/cavi-ai/secure-agent/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/cavi-ai/secure-agent/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/cavi-ai/secure-agent/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/cavi-ai/secure-agent/compare/v1.0.0...v1.1.0
