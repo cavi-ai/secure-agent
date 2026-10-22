@@ -494,7 +494,100 @@ function renderAttentionSummary(SA) {
   }
 }
 
+// Opt-in layout continuity for this queue. Removed actions leave the DOM
+// immediately; only surviving surfaces move. Effects have no completion
+// callbacks, so a rollback or a new item cannot be hidden by stale cleanup.
+function beginAttentionContinuity() {
+  const root = document.getElementById('tab-home');
+  const list = document.getElementById('attention-list');
+  if (!root || !list || root.hidden || !root.getClientRects().length || root._attentionRendering) return () => {};
+  root._attentionRendering = true;
+  const rows = () => Array.from(list.children);
+  const signature = () => JSON.stringify([
+    Array.from(root.children, el => [el.hidden, el.offsetTop, el.offsetHeight]),
+    rows().map(el => [el.dataset.needKey, el.offsetTop, el.offsetHeight]),
+  ]);
+  const beforeLayout = signature();
+  const sections = new Map(Array.from(root.children, el => [el, el.getBoundingClientRect()]));
+  const previousRows = new Map(rows().map(el => [el.dataset.needKey, el.getBoundingClientRect()]));
+  const focused = document.activeElement;
+  const focusedRow = focused?.closest?.('#attention-list > li');
+  const focusedKey = focusedRow?.dataset.needKey;
+  const focusedIndex = focusedRow ? rows().indexOf(focusedRow) : -1;
+  const identity = el => JSON.stringify(Object.entries(el.dataset).sort(([a], [b]) => a.localeCompare(b)));
+  const choice = focusedRow && focused.dataset.action ? identity(focused) : null;
+  const oldHeight = root.getBoundingClientRect().height;
+  const oldScroll = window.scrollY;
+  const cancel = () => { (root._attentionMotion || []).forEach(a => a.cancel()); root._attentionMotion = []; };
+  if (!root._attentionMedia) {
+    root._attentionMedia = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    root._attentionMedia?.addEventListener('change', event => { if (event.matches) cancel(); });
+  }
+  return () => {
+    root._attentionRendering = false;
+    if (focusedRow && !focused.isConnected) {
+      const remaining = rows();
+      const sameRow = remaining.find(el => el.dataset.needKey === focusedKey);
+      const replacement = sameRow && choice && Array.from(sameRow.querySelectorAll('[data-action]'))
+        .find(el => identity(el) === choice && !el.disabled);
+      if (replacement) {
+        for (let part = replacement.closest('details'); part; part = part.parentElement?.closest('details')) part.open = true;
+      }
+      const next = replacement || sameRow?.querySelector('.need-head')
+        || remaining[Math.min(focusedIndex, remaining.length - 1)]?.querySelector('.need-head')
+        || ['attention-summary-title', 'session-daily-title'].map(id => document.getElementById(id)).find(el => el?.getClientRects().length);
+      next?.focus({ preventScroll: true });
+    }
+    // Selection and unchanged telemetry must not restart an in-flight effect.
+    const changed = beforeLayout !== signature();
+    const motion = !root._attentionMedia?.matches && !!root.animate && !!root._attentionPainted;
+    root._attentionPainted = true;
+    if (!changed) { if (!motion) cancel(); return; }
+    cancel();
+    const newHeight = root.getBoundingClientRect().height;
+    const style = getComputedStyle(root);
+    const options = { duration: parseFloat(style.getPropertyValue('--motion-continuity')) || 160, easing: style.getPropertyValue('--ease').trim() || 'ease-out' };
+    const animate = (el, frames) => {
+      if (!motion) return;
+      const effect = el.animate(frames, options);
+      effect.id = 'attention-continuity';
+      root._attentionMotion.push(effect);
+    };
+    if (Math.abs(oldHeight - newHeight) > 1) animate(root, [{height:oldHeight + 'px'}, {height:newHeight + 'px'}]);
+    // Retain the visible reading row when content changes above it. The
+    // temporary height also avoids a premature scroll clamp at the page end.
+    if (oldScroll > 0) {
+      const anchor = rows().find(el => {
+        const box = previousRows.get(el.dataset.needKey);
+        return box && box.bottom > 0 && box.top < window.innerHeight;
+      });
+      const oldBox = anchor && previousRows.get(anchor.dataset.needKey);
+      if (oldBox) window.scrollTo(0, window.scrollY + anchor.getBoundingClientRect().top - oldBox.top);
+    }
+    if (!motion) return;
+    for (const el of root.children) {
+      if (!el.getClientRects().length) continue;
+      const previous = sections.get(el);
+      const delta = previous?.height ? previous.top - el.getBoundingClientRect().top : 0;
+      if (Math.abs(delta) > 1) animate(el, [{transform:`translateY(${delta}px)`}, {transform:'translateY(0)'}]);
+      if (el.id !== 'attention-center') continue;
+      for (const row of rows()) {
+        const before = previousRows.get(row.dataset.needKey);
+        if (!before) continue;
+        // getBoundingClientRect includes the section effect just started.
+        const distance = before.top - row.getBoundingClientRect().top;
+        if (Math.abs(distance) > 1) animate(row, [{transform:`translateY(${distance}px)`}, {transform:'translateY(0)'}]);
+      }
+    }
+  };
+}
+
 function renderAttention() {
+  const finish = beginAttentionContinuity();
+  try { renderAttentionContent(); } finally { finish(); }
+}
+
+function renderAttentionContent() {
   const SA = window.SA;
   const result = document.getElementById('review-result');
   if (result) {
@@ -519,7 +612,15 @@ function renderAttention() {
   if (panel) panel.hidden = count === 0;
   const ctx = homeContext(SA);
   const views = needsItems(SA.t.posture).map(it => ({ ...needView(it, ctx), selected: SA.attentionKey === `${it.kind}:${it.id}` }));
-  patchList(list, views, { key: v => v.key, html: v => needRowHTML(v, SA.expanded.has('need:' + v.key), ctx.now) });
+  // Selection is presentation state, not new queue content. Patch it in
+  // place so opening the inspector retains the actual opener node.
+  patchList(list, views, { key: v => v.key, html: v => needRowHTML({ ...v, selected:false }, SA.expanded.has('need:' + v.key), ctx.now) });
+  const selected = views.find(v => v.selected)?.key;
+  for (const row of list.children) {
+    const active = row.dataset.needKey === selected;
+    row.classList.toggle('is-selected', active);
+    row.querySelector('.need-head')?.setAttribute('aria-pressed', String(active));
+  }
 }
 
 // ---------- findings history ----------

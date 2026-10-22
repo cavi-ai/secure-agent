@@ -13,6 +13,7 @@ from cases_protection_context import CASES as protection_context
 from cases_worktree_selection import CASES as worktree_selection
 from cases_monitoring import CASES as monitoring
 from cases_flag_recovery import CASES as flag_recovery
+from cases_attention_stability import CASES as attention_stability
 
 CASES = (*reports, *sessions, *spend, *agent, *policy, *worktrees, *review_results, *expected_removal, *policy_health,
-         *protection_context, *worktree_selection, *monitoring, *flag_recovery)
+         *protection_context, *worktree_selection, *monitoring, *flag_recovery, *attention_stability)

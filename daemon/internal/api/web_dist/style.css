@@ -40,6 +40,7 @@
   --sh-1: none;
   --sh-2: 0 8px 24px -8px hsl(0 0% 0% / 0.5);
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-continuity: 160ms;
   /* Set inline per harness element by harnessChipHTML(); default here so the
      stylesheet custom-property lint (and a missing inline value) still resolve. */
   --harness-color: var(--tx-2);
@@ -81,7 +82,7 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; scrollbar-gutter: stable; }
 
 body {
   background: var(--bg-0);
@@ -1014,8 +1015,10 @@ html.recent-work-navigation { overflow-anchor: none; }
 .finding-labels { margin: 2px 0 0; font-size: 0.76rem; color: var(--tx-3); }
 /* Dock only when at least 580px of working content and gutters remain. */
 @media (min-width: 1180px) {
+  .app { transition: padding-right var(--motion-continuity) var(--ease); }
   .app.drawer-open:not(.drawer-wide) { padding-right: calc(560px + clamp(16px, 2.4vw, 48px)); }
 }
+@media (prefers-reduced-motion: reduce) { .app { transition: none; } }
 @media (min-width: 1340px) {
   .app.drawer-open.drawer-wide { padding-right: calc(720px + clamp(16px, 2.4vw, 48px)); }
 }
@@ -1265,6 +1268,7 @@ body.is-ended .masthead-right { display: none !important; }
 /* ---------- Home: needs-you list, coverage gap, findings log ---------- */
 #tab-home {
   container-type: inline-size;
+  overflow-anchor: none;
   --log-cols: 64px 132px minmax(0, 1fr) 52px 64px 112px 16px;
 }
 main { min-width: 0; }

@@ -34,6 +34,31 @@ test('a drawer opened from inside the open one keeps the original opener', () =>
   assert.equal(inside.focused, undefined);
 });
 
+test('closing restores the opener without scrolling the reading viewport', () => {
+  const h = loadDrawer();
+  let options;
+  h.dom.document.activeElement = { isConnected: true, focus(value) { options = value; } };
+  h.api.open({ title: 'Attention' });
+  h.api.close();
+  assert.equal(options?.preventScroll, true);
+});
+
+test('close restores the same Attention choice after its row was refreshed', () => {
+  const h = loadDrawer();
+  const dataset = {action:'explain-act', actionId:'dismiss-all', patternKey:'middle-row'};
+  const old = {isConnected:true, dataset, closest:() => ({dataset:{needKey:'pattern:middle-row'}})};
+  h.dom.document.activeElement = old;
+  h.api.open({title:'Attention'});
+  old.isConnected = false;
+  const wrong = {dataset:{...dataset,actionId:'expect'}, focus(){throw new Error('wrong choice');}};
+  const exact = {dataset:{...dataset}, focus(options){this.focusOptions=options;}};
+  const row = {dataset:{needKey:'pattern:middle-row'}, querySelectorAll:() => [wrong,exact], querySelector:() => null};
+  h.dom.document.querySelectorAll = selector => selector.includes('data-need-key') ? [row] : [];
+  h.api.close();
+  assert.equal(exact.focusOptions?.preventScroll, true);
+  assert.equal(h.dom.attentionHead.focused, 0);
+});
+
 test('close restores focus to the opener, else the attention list; runs onClose once and clears state', () => {
   const h = loadDrawer();
   let closed = 0;
