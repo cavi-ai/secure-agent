@@ -840,6 +840,21 @@ function worktreesSummaryText(rep, nowMs, shown) {
     + (rep.refreshing ? ' · refreshing…' : '');
 }
 
+// Selection changes retain the list, disclosure state, and focused checkbox.
+function renderWorktreeSelection() {
+  const state = window.SA.worktrees;
+  const container = document.getElementById('worktrees-container');
+  if (!container || !state.report) return;
+  for (const checkbox of container.querySelectorAll('input.wt-select')) {
+    checkbox.checked = state.selected.has(checkbox.dataset.path);
+  }
+  const groups = worktreeGroups(state.report, state.filter, window.SA.globalSearchTerm?.() || '');
+  const html = worktreeSelectionHTML(state.report, state, groups);
+  const bar = container.querySelector('.wt-selection');
+  if (bar) bar.outerHTML = html;
+  else container.insertAdjacentHTML('beforeend', html);
+}
+
 function renderWorktrees() {
   const SA = window.SA;
   const container = document.getElementById('worktrees-container');

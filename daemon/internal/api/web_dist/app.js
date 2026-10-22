@@ -1098,6 +1098,7 @@ document.addEventListener('DOMContentLoaded', () => {
     toast: showToast,
     confirm: (...args) => window.saConfirm(...args),
     render: renderNow,
+    renderSelection: renderWorktreeSelection,
     markDirty,
     visible: view => activeTab === 'system' && activeSystemSub === view,
     now: Date.now,
@@ -3705,8 +3706,8 @@ document.addEventListener('DOMContentLoaded', () => {
         window.removeWorktree(d.path, d.branch);
         break;
       case 'worktree-select':
-        e.preventDefault();
         worktreeController.toggleWorktreeSelection(d.path);
+        if (el.checked !== worktreeController.worktreesState.selected.has(d.path)) e.preventDefault();
         Array.from(document.querySelectorAll('[data-action="worktree-select"]')).find(button => button.dataset.path === d.path)?.focus({ preventScroll: true });
         break;
       case 'worktrees-select-visible':
