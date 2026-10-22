@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,8 +31,46 @@ func TestBackgroundBudgetLeavesForegroundAvailable(t *testing.T) {
 	p.release(w)
 }
 
+// countingTransport counts the round trips in flight beneath the pool: one
+// is in flight from RoundTrip until it fails, or its body ends or closes.
+type countingTransport struct {
+	base         http.RoundTripper
+	active, peak atomic.Int32
+}
+
+func (c *countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	n := c.active.Add(1)
+	for p := c.peak.Load(); n > p && !c.peak.CompareAndSwap(p, n); p = c.peak.Load() {
+	}
+	resp, err := c.base.RoundTrip(r)
+	if err != nil {
+		c.active.Add(-1)
+		return nil, err
+	}
+	resp.Body = &countedBody{ReadCloser: resp.Body, done: func() { c.active.Add(-1) }}
+	return resp, nil
+}
+
+type countedBody struct {
+	io.ReadCloser
+	once sync.Once
+	done func()
+}
+
+func (b *countedBody) Read(v []byte) (int, error) {
+	n, err := b.ReadCloser.Read(v)
+	if err != nil {
+		b.once.Do(b.done)
+	}
+	return n, err
+}
+
+func (b *countedBody) Close() error { err := b.ReadCloser.Close(); b.once.Do(b.done); return err }
+
+// Overlap is counted where the pool serializes: the requests it lets through.
+// A server only sees a cancelled request end when it notices the closed
+// connection, which can be after the pool has started the next one.
 func TestSharedPoolSerializesAndCancelsInference(t *testing.T) {
-	var active, peak atomic.Int32
 	entered := make(chan struct{}, 2)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
@@ -39,18 +78,14 @@ func TestSharedPoolSerializesAndCancelsInference(t *testing.T) {
 			return
 		}
 		io.Copy(io.Discard, r.Body)
-		n := active.Add(1)
-		defer active.Add(-1)
-		if n > peak.Load() {
-			peak.Store(n)
-		}
 		entered <- struct{}{}
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
 	p := New()
-	fg := &http.Client{Transport: p.Transport(srv.Client().Transport, true)}
-	bg := &http.Client{Transport: p.Transport(srv.Client().Transport, false)}
+	counted := &countingTransport{base: srv.Client().Transport}
+	fg := &http.Client{Transport: p.Transport(counted, true)}
+	bg := &http.Client{Transport: p.Transport(counted, false)}
 	done := make(chan struct{}, 2)
 	call := func(c *http.Client, ctx context.Context) {
 		req, _ := http.NewRequestWithContext(ctx, "POST", srv.URL+"/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[]}`))
@@ -74,8 +109,8 @@ func TestSharedPoolSerializesAndCancelsInference(t *testing.T) {
 	cancel()
 	<-done
 	<-done
-	if peak.Load() != 1 {
-		t.Fatalf("overlapping requests: %d", peak.Load())
+	if peak := counted.peak.Load(); peak != 1 {
+		t.Fatalf("overlapping requests: %d", peak)
 	}
 	if p.Snapshot().Active {
 		t.Fatal("cancelled request retained its lease")

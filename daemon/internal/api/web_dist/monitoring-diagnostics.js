@@ -24,7 +24,7 @@ function createMonitoringDiagnostics({ request, drawer, generation, ended, refre
       ${status.bus_drops ? fact('Loss source', 'Ingestion queue was full') : ''}</dl></section>
       <section><h3>File monitoring</h3><dl class="monitoring-diagnostic-facts">
       ${fact('Unread data lost', bytes(es.bytes_lost))}${fact('Last loss', date(es.lost_at))}
-      ${es.loss_cause ? fact('Last loss cause', ({rotation:'Unread spool overwritten during rotation',truncation:'Unread spool truncated',invalid_record:'Unreadable spool record skipped',malformed_flood:'Malformed spool flood skipped'})[es.loss_cause] || 'Not recognized') : ''}
+      ${es.loss_cause ? fact('Last loss cause', ({rotation:'Unread spool overwritten during rotation',truncation:'Unread spool truncated',restart:'Spool rotated past the saved position while stopped',invalid_record:'Unreadable spool record skipped',malformed_flood:'Malformed spool flood skipped'})[es.loss_cause] || 'Not recognized') : ''}
       ${fact('Collector', es.collector?.state || es.state || 'Not reported')}
       ${fact('Delivery lag', `${Number(es.lag_seconds || 0)} s`)}</dl></section>
       <section><h3>Diagnostic checks</h3>${checks.filter(check => check.state !== 'pass' || ['bus','file-telemetry','storage'].includes(check.id)).map(check => `<article class="monitoring-diagnostic-check"><strong>${escapeHTML(check.title)} · ${escapeHTML(check.state)}</strong><p>${escapeHTML(check.detail || '')}</p>${check.fix ? `<p>${escapeHTML(check.fix)}</p>` : ''}</article>`).join('')}</section>`

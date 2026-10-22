@@ -37,15 +37,24 @@ enum ESAutopilot {
 
     /// Whether to unregister and register the service again: it is enabled
     /// and not removed by the user, and either its running process predates
-    /// the helper binary on disk, or launchd holds its job with no pid and
-    /// last refused to spawn it (EX_CONFIG, e.g. a registration bound to a
-    /// bundle path that no longer exists). Once per launch.
+    /// the helper binary on disk, launchd holds no job for it (an app bundle
+    /// replaced in place: launchd drops the job when the bundle it was
+    /// registered from moves away, while the registration still reads
+    /// enabled), or launchd holds its job with no pid and last refused to
+    /// spawn it (EX_CONFIG, e.g. a registration bound to a bundle path that no
+    /// longer exists). Once per launch.
     static func needsReregister(serviceStatus: SMAppService.Status, userDisabled: Bool,
                                 attemptedThisLaunch: Bool, launchd: LaunchdProbe, helperStale: Bool) -> Bool {
         guard !userDisabled, !attemptedThisLaunch, serviceStatus == .enabled else { return false }
         if helperStale { return true }
-        guard case let .loaded(_, pid, lastExit) = launchd, pid == nil else { return false }
-        return TelemetryDoctor.exitCode(lastExit) == TelemetryDoctor.exConfig
+        switch launchd {
+        case .notFound:
+            return true
+        case let .loaded(_, pid, lastExit):
+            return pid == nil && TelemetryDoctor.exitCode(lastExit) == TelemetryDoctor.exConfig
+        case .unreadable:
+            return false
+        }
     }
 
     /// Opened by `secure-agent telemetry repair`: re-register the service now,
