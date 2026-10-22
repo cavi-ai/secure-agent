@@ -66,13 +66,18 @@ func lineEnd(path string, size int64) int64 {
 // startCursor resumes the saved read position in the spool or its rotated
 // predecessor. Without one that matches, the run starts at the spool's last
 // complete line: it reads what is written from its start on, instead of a
-// backlog it cannot catch up on before rotation overwrites it.
+// backlog it cannot catch up on before rotation overwrites it. When a saved
+// position no longer matches either file, its file rotated away while the
+// daemon was down: both files on disk were written after it and are counted
+// lost. A first run, with no saved position, has nothing to lose.
 func (t *SpoolTailer) startCursor() spoolCursor {
 	if t.StatePath == "" {
 		return spoolCursor{}
 	}
 	var pos spoolPosition
+	saved := false
 	if data, err := os.ReadFile(t.StatePath); err == nil && json.Unmarshal(data, &pos) == nil && pos.HeadLen > 0 {
+		saved = true
 		for _, p := range []string{t.path, t.path + ".1"} {
 			if fi, err := os.Stat(p); err == nil && pos.Offset <= fi.Size() && fileHead(p, pos.HeadLen) == pos.Head {
 				return spoolCursor{offset: pos.Offset, file: fi}
@@ -84,8 +89,19 @@ func (t *SpoolTailer) startCursor() spoolCursor {
 		return spoolCursor{}
 	}
 	end := lineEnd(t.path, fi.Size())
-	if end > 0 {
-		log.Printf("collect: no saved position in the spool; reading from its end, %d earlier bytes not read", end)
+	if !saved {
+		if end > 0 {
+			log.Printf("collect: no saved position in the spool; reading from its end, %d earlier bytes not read", end)
+		}
+		return spoolCursor{offset: end, size: fi.Size(), mod: fi.ModTime(), file: fi}
+	}
+	lost := end
+	if old, err := os.Stat(t.path + ".1"); err == nil {
+		lost += old.Size()
+	}
+	if lost > 0 {
+		log.Printf("collect: saved spool position rotated away while stopped; reading from the spool's end, %d unread bytes lost", lost)
+		t.recordLost(uint64(lost), "restart")
 	}
 	return spoolCursor{offset: end, size: fi.Size(), mod: fi.ModTime(), file: fi}
 }
