@@ -42,6 +42,8 @@
       receipt.harnessVisible = filters.open && pill().checkVisibility();
       pill().focus(); pill().click(); await settle();
       receipt.harnessOff = pill().getAttribute('aria-pressed') === 'false' && !document.querySelector('#session-rail [data-harness="codex"]');
+      // Focus stays on the toggled pill through the renders that follow.
+      await new Promise(resolve => setTimeout(resolve, 2000));
       receipt.harnessFocus = document.activeElement === pill();
       pill().click(); await settle();
       receipt.harnessOn = pill().getAttribute('aria-pressed') === 'true' && !!document.querySelector('#session-rail [data-harness="codex"]');
