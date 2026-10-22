@@ -13,6 +13,8 @@
 .claude/
 GEMINI.md
 CLAUDE.md
+/AGENTS.md
+/CONTEXT.md
 QODER.md
 CODEBUDDY.md
 .codebuddy/
