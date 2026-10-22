@@ -721,8 +721,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - `PostToolUse` is one `secret_guard.py` spawn (injection scan + activity log); `injection_scan.py` is no longer a second process.
 - **Collector storage sits behind a seam.** Persistence is now a small
   `envelopeLog` interface (append/replay/query) with the JSONL backend as the
-  reference implementation — the swap point for a production-grade SQLite
-  store (retention, TLS, alerting on the roadmap).
+  reference implementation.
 - **`keychain-access` demoted to severity 1 (informational).** Legitimate
   tooling opens keychain DBs for TLS trust evaluation and credential helpers
   — it never justifies a page. The `security(1)` CLI exec rule

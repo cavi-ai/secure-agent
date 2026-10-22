@@ -502,7 +502,7 @@ func TestSessionFloorDropsYoungDeaths(t *testing.T) {
 // workspace lives. Regression guard for the removed /openclaw/ path marker:
 // it stopped persistence for established conversations under that path.
 func TestAgedWorkspacePersistsRegardlessOfPath(t *testing.T) {
-	ws := "/Volumes/workspace/FORKS-PR-ONLY/openclaw/probe-42/workspace"
+	ws := "/Users/dev/code/openclaw/probe-42/workspace"
 	r, st := testResolver(t, fakeProcs{
 		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/codex", CWD: ws, StartTime: time.Now().Add(-time.Hour)},
 	})
