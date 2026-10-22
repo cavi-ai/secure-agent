@@ -808,7 +808,9 @@ var kindBudgets = map[int]int{
 	int(event.KindConnOpen):      30000,
 	int(event.KindConnClose):     30000,
 	int(event.KindTranscriptHit): 2000,
-	int(event.KindPluginAction):  10000,
+	// One row per hook-reported tool use, the unit of KindToolCall: 452/h
+	// measured across concurrent sessions filled 10,000 rows in 21 h.
+	int(event.KindPluginAction):  50000,
 	int(event.KindProxyHit):      2000,
 	int(event.KindGuardPrompt):   2000,
 	int(event.KindGuardResolved): 2000,
