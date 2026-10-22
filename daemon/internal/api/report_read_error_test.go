@@ -111,8 +111,16 @@ func TestSessionReportReadFailuresRejectReportsAndPlans(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			w := httptest.NewRecorder()
-			a.serveSessionReport(w, httptest.NewRequest(http.MethodGet, "/sessions/s1/report", nil), "s1")
+			// The first read after a schema change can exceed the bounded
+			// identity read; that answer is 503 retry, and a retry recovers.
+			var w *httptest.ResponseRecorder
+			for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+				w = httptest.NewRecorder()
+				a.serveSessionReport(w, httptest.NewRequest(http.MethodGet, "/sessions/s1/report", nil), "s1")
+				if w.Code != http.StatusServiceUnavailable || time.Now().After(deadline) {
+					break
+				}
+			}
 			if w.Code != http.StatusOK {
 				t.Fatalf("recovered report: %d %s", w.Code, w.Body.String())
 			}
