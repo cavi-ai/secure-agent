@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 python3 "$SCRIPT_DIR/packaging/test/test_e2e_sse.py"
 python3 "$SCRIPT_DIR/packaging/test/test_e2e_fixture.py"
+python3 "$SCRIPT_DIR/packaging/test/test_e2e_network.py"
 tmp="$(mktemp -d)"
 COLLECTOR_PID=""
 ADVISOR_STUB_PID=""
@@ -70,7 +71,7 @@ fi
 # Create a test overlay config with fast sampling interval for smoke test
 cat > "$tmp/test_config.yaml" <<EOF
 agents:
-  - { name: cursor, match: ["fake-cursor"] }
+  - { name: cursor, match: ["sa-e2e-agent"] }
 net_sample_interval_ms: 200
 socket_path: "$SOCKET_PATH"
 db_path: "$tmp/events.db"
@@ -137,7 +138,8 @@ if [ "$TRANSCRIPT_READY" != true ]; then
   exit 1
 fi
 
-# Create fake-cursor Go test agent binary to guarantee process name matching in sysctl proc list
+# Use a fixture-specific executable name, distinct from installed harnesses,
+# while retaining process name matching in the native process list.
 cat > "$tmp/fake_cursor_main.go" <<EOF
 package main
 
@@ -225,7 +227,6 @@ func main() {
 		}
 		probe.Close()
 		l = cand
-		fmt.Fprintf(os.Stderr, "network fixture listening on %s\n", l.Addr())
 		break
 	}
 	if l == nil {
@@ -245,6 +246,7 @@ func main() {
 	if err != nil {
 		panic(fmt.Errorf("establish network fixture: %w", err))
 	}
+	fmt.Fprintf(os.Stderr, "network fixture connected to %s\n", l.Addr())
 	time.Sleep(30 * time.Second)
 	close(done)
 	clientConn.Close()
@@ -252,10 +254,10 @@ func main() {
 }
 EOF
 
-go build -o "$tmp/fake-cursor" "$tmp/fake_cursor_main.go"
+go build -o "$tmp/sa-e2e-agent" "$tmp/fake_cursor_main.go"
 
 # Execute fake agent
-"$tmp/fake-cursor" "$tmp" > "$tmp/fake-agent.log" 2>&1 &
+"$tmp/sa-e2e-agent" "$tmp" > "$tmp/fake-agent.log" 2>&1 &
 AGENT_PID=$!
 FIXTURE_AGENT_PID=$AGENT_PID
 
