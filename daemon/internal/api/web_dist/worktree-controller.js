@@ -1,7 +1,7 @@
 // Worktree Hunter and clutter: the two reports, their loaders and size
 // polling, the removal progress toast and the actions on both tabs.
 const WORKTREE_STALE_MS = 60000;
-function createWorktreeController({ request, toast, confirm, render, markDirty, visible, now, history, discuss, toastHost }) {
+function createWorktreeController({ request, toast, confirm, render, renderSelection = () => render(['worktrees']), markDirty, visible, now, history, discuss, toastHost }) {
   // Worktrees are not telemetry: the tab fetches its report when opened
   // (the daemon caches a scan for 10 minutes) and on Rescan, never on the
   // refresh cycle.
@@ -303,7 +303,7 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
       if (!current || !current.approval) return;
       worktreesState.selected.set(path, current.approval);
     }
-    render(['worktrees']);
+    renderSelection();
   }
 
   function selectVisibleWorktrees(globalSearchTerm) {
@@ -315,14 +315,14 @@ function createWorktreeController({ request, toast, confirm, render, markDirty, 
         if (approval) worktreesState.selected.set(w.path, approval);
       }
     }
-    render(['worktrees']);
+    renderSelection();
   }
 
   function clearWorktreeSelection() {
     if (worktreesState.selectionBusy) return;
     worktreesState.selected.clear();
     worktreesState.pendingRemovalSelections.clear();
-    render(['worktrees']);
+    renderSelection();
   }
 
   async function removeSelectedWorktrees() {
