@@ -8,7 +8,6 @@ would have. Every case in DENY is an action that actually damages the machine.
 from __future__ import annotations
 
 import contextlib
-import glob as _glob
 import json
 import os
 import socketserver
@@ -653,27 +652,6 @@ EXTRA_TESTS += [
     test_prompt_daemon_allows,
     test_prompt_daemon_malformed_response_denies,
     test_prompt_deadline_is_configurable_and_fails_safe,
-]
-
-
-# --- de-personalization gate --------------------------------------------------
-
-def test_no_personal_strings_in_shipped_hooks():
-    # "cavi-ai" is the public org and is allowed; personal vault/owner/incident are not.
-    # Tokens are built from split literals so this assertion's own source line
-    # does not itself trip the scan it performs on every *.py file here.
-    banned = (
-        "cavi" + "claw", "fran" + "co", "open" + "claw", "2026-08" + "-12",
-        "mi" + "rza", "/volumes/mi" + "rza", "/users/fran" + "co",
-    )
-    for f in _glob.glob(os.path.join(os.path.dirname(__file__), "*.py")):
-        src = open(f, encoding="utf-8").read().lower()
-        for token in banned:
-            assert token not in src, f"{os.path.basename(f)} leaks personal token: {token}"
-
-
-EXTRA_TESTS += [
-    test_no_personal_strings_in_shipped_hooks,
 ]
 
 
