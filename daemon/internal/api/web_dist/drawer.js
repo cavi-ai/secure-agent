@@ -18,6 +18,8 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
   const titleEl = document.getElementById('drawer-title');
 
   let opener = null;
+  let openerNeedKey = null;
+  let openerAction = null;
   let onClose = null;
   let backTarget = null;
   // Bumped on every open: an async opener writes its body only while its
@@ -75,7 +77,11 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
     closeAgentDock();
     // A drawer opened from inside the open one keeps the original opener, so
     // closing still returns focus to the page.
-    if (drawer.hidden) opener = document.activeElement;
+    if (drawer.hidden) {
+      opener = document.activeElement;
+      openerNeedKey = opener?.closest?.('[data-need-key]')?.dataset.needKey;
+      openerAction = opener?.dataset?.action ? JSON.stringify(Object.entries(opener.dataset).sort(([a], [b]) => a.localeCompare(b))) : null;
+    }
     selection = attentionOrigin || back?.attentionOrigin || null;
     onClose = closeHook || null;
     backTarget = back || null;
@@ -102,6 +108,7 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
 
   function close() {
     if (!drawer || drawer.hidden) return;
+    const inspectedKey = selection?.key;
     drawer.hidden = true;
     seq++;
     selection = null;
@@ -116,9 +123,32 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
     if (app) app.classList.remove('drawer-open', 'drawer-wide');
     const fn = onClose;
     onClose = null;
-    if (opener?.isConnected && typeof opener.focus === 'function') opener.focus();
-    else document.querySelector('#attention-list .need-head')?.focus({ preventScroll: true });
+    const rows = openerNeedKey || inspectedKey ? Array.from(document.querySelectorAll('#attention-list [data-need-key]')) : [];
+    const replacement = openerNeedKey && rows.find(row => row.dataset.needKey === openerNeedKey);
+    const inspected = inspectedKey && rows.find(row => row.dataset.needKey === inspectedKey);
+    const equivalent = replacement && Array.from(replacement.querySelectorAll('[data-action]'))
+      .find(el => JSON.stringify(Object.entries(el.dataset).sort(([a], [b]) => a.localeCompare(b))) === openerAction && !el.disabled);
+    const candidates = [opener?.isConnected ? opener : null, equivalent, replacement?.querySelector('.need-head'),
+      inspected?.querySelector('.need-head'), document.querySelector('#attention-list .need-head'),
+      document.getElementById('attention-summary-title'), document.getElementById('session-daily-title')];
+    const restored = candidates.find(control => {
+      if (!control || typeof control.focus !== 'function' || control.disabled || control.matches?.(':disabled')
+        || control.closest?.('[hidden], [inert], [aria-hidden="true"]')) return false;
+      // The close click/Escape also closes More menus. Return to the same
+      // row's header instead of focusing an action that will become hidden.
+      if (openerNeedKey && control.closest?.('details.act-more')) return false;
+      for (let part = control; part; part = part.parentElement) {
+        const style = typeof getComputedStyle === 'function' ? getComputedStyle(part) : null;
+        if (style && (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse')) return false;
+      }
+      // A refreshed action menu starts closed. Reveal the same choice before
+      // restoring focus; focusing a descendant of closed <details> is ignored.
+      for (let part = control.closest?.('details'); part; part = part.parentElement?.closest('details')) part.open = true;
+      return (!control.checkVisibility || control.checkVisibility()) && (!control.getClientRects || control.getClientRects().length > 0);
+    });
+    restored?.focus({ preventScroll: true });
     opener = null;
+    openerNeedKey = openerAction = null;
     if (fn) fn();
   }
 

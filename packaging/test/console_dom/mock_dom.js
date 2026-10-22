@@ -3528,6 +3528,11 @@
       const panel = root.querySelector('.drawer-panel');
       const main = document.querySelector('.app > main');
       if (root.hidden || !main || !panel) return;
+      // This probe asserts the dock's layout endpoint. Virtual-time timers
+      // can advance while a compositor transition is still at frame zero.
+      // Finish only that transition; continuity has its own interaction probe.
+      document.querySelector('.app').getAnimations().filter(animation => animation.transitionProperty === 'padding-right')
+        .forEach(animation => animation.finish());
       const rect = node => {
         const b = node.getBoundingClientRect();
         return {left:b.left,top:b.top,right:b.right,bottom:b.bottom,width:b.width,height:b.height};
