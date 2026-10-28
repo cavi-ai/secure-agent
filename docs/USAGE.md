@@ -211,6 +211,7 @@ Install the CLI from Setup's Optional capabilities. A source build places it at 
 | Inspect worktrees or cleanup history | `secure-agent worktrees`, `secure-agent cleanup log` |
 | Inspect remembered guard decisions | `secure-agent guard list` |
 | Inspect fingerprint sources | `secure-agent firewall sources` |
+| Plant decoy credentials | `secure-agent canary plant <file>` |
 | Show this node's fleet identity | `secure-agent fleet` |
 | Inspect the macOS headless service | `secure-agent service status` |
 
