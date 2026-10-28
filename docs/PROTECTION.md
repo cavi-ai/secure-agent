@@ -109,7 +109,7 @@ Instructions hidden in content an agent reads (a web page, an image, a response 
 Untrusted input:
 
 - `WebFetch` and `WebSearch`
-- any MCP tool except `code-review-graph`
+- any MCP tool except `code-review-graph` and the Claude app's own `ccd_*` tools; `ccd_session_mgmt`, which reads other sessions' transcripts, counts
 - `Read` of an image file (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`, `.tiff`, `.heic`)
 - `curl`, `wget`, `http`, `xh` output from a non-loopback host, and `gh` reads (`view`, `diff`, `list`, `checks`, `status`, `api`, `search`)
 
@@ -120,7 +120,7 @@ Egress sinks:
 - `gh pr` and `gh issue` create, comment and edit, `gh pr review`, `gh gist` create and edit, `gh release` create, upload and edit, `gh repo create`, and `gh api` with a body or a non-GET method
 - interpreters running inline network code, such as `python3 -c "requests.post(…)"`
 - `WebFetch` and MCP `url` arguments with a query, fragment, credentials, an IP host, or a long or token-shaped path segment
-- MCP tools whose name starts with a send or write verb (`send_`, `post_`, `reply_`, `forward_`, `create_`, `upload_`, `share_`, `comment_`, `update_`, `fill_`, `type_`, `execute_`, …)
+- MCP tools whose name starts with a send or write verb (`send_`, `post_`, `reply_`, `forward_`, `create_`, `upload_`, `share_`, `comment_`, `update_`, `fill_`, `type_`, `execute_`, …), except `code-review-graph` and the Claude app's own `ccd_*` tools
 
 | Mode | Behavior |
 |---|---|
@@ -137,7 +137,7 @@ Each input records where it came from:
 | Image | the file path | the last commit that touched it (author, email, repository, commit, date, subject), `untracked in <repo>`, or `changed locally since`; the download URL and the app that saved it, when macOS recorded them |
 | Web page, download | the URL | the host |
 | Web search | the query | web search results |
-| MCP tool | the tool name and its URL argument | the MCP server |
+| MCP tool | the server and its URL argument; one input per server and URL | the server and its first tool call |
 | GitHub read | the `gh` command | GitHub |
 
 Git history is read with plumbing commands only, with `core.fsmonitor` and signature checks off, so a repository's own configuration runs nothing.
