@@ -455,12 +455,13 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 
 // untrustedInputPhrases: an input kind as the object of "read".
 var untrustedInputPhrases = map[string]string{
-	"image":  "an image",
-	"web":    "a web page",
-	"search": "web search results",
-	"mcp":    "MCP tool output",
-	"fetch":  "downloaded content",
-	"gh":     "GitHub content",
+	"image":     "an image",
+	"web":       "a web page",
+	"search":    "web search results",
+	"mcp":       "MCP tool output",
+	"fetch":     "downloaded content",
+	"gh":        "GitHub content",
+	"injection": "an injection in tool output",
 }
 
 // untrustedEgressWhat: "<agent> read an image (x.png), then sent data out

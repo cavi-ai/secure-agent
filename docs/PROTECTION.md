@@ -130,6 +130,14 @@ Egress sinks:
 
 Set the mode in `~/.config/secure-agent/guard-modes.json`, for example `{"untrusted-egress": "prompt"}`, or per project through `directory_guard.cwd_overrides`. The taint record sits beside the daemon socket under `taint/`, which agent tools cannot write, and expires after 7 days.
 
+When a tool result matches the injection detector (phrases such as "ignore all previous instructions"), three things happen:
+
+- The model is told, alongside the result, that the text is written as instructions to it and is data from the tool, with the matched words quoted.
+- The session is marked even if the tool was not an untrusted input, and its sends use the stricter of `untrusted-egress` and `untrusted-egress-injected`. Set `{"untrusted-egress-injected": "deny"}` to block every send after a detected injection while plain untrusted input stays in `monitor`.
+- The finding leads with **Injection in tool output** and the matched words. It is critical (severity 3, pages) when the send ran, and a warning when you allowed it.
+
+`untrusted-egress-injected` ships as `monitor`. The detector matches keyword phrases; a reworded injection passes it, and the plain `untrusted-egress` rule still applies.
+
 Each input records where it came from:
 
 | Input | Location | Origin |

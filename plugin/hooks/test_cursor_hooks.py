@@ -28,5 +28,8 @@ with tempfile.TemporaryDirectory() as home:
     rows = [json.loads(line) for line in Path(home + "/activity.jsonl").read_text().splitlines()]
     handshakes = [row for row in rows if row.get("type") == "session_start"]
     assert len(handshakes) == 1 and handshakes[0]["harness"] == "cursor", handshakes
-    assert rows[-1]["tool"] == "Shell" and rows[-1]["session_id"] == "cursor-conversation", rows[-1]
+    shell = [row for row in rows if row.get("tool") == "Shell"]
+    assert shell and shell[-1]["session_id"] == "cursor-conversation", rows[-3:]
+    # The detected injection marks the same session.
+    assert rows[-1]["file_path"] == "untrusted-input:injection" and rows[-1]["session_id"] == "cursor-conversation", rows[-1]
 print("Cursor hook protocol and attribution passed")

@@ -12,6 +12,18 @@ type UntrustedEgress struct {
 	Sinks    string           `json:"sinks"`
 	Harness  string           `json:"harness,omitempty"`
 	Sources  []UntrustedInput `json:"sources"`
+	// Injection is the first tool result in the session the injection
+	// detector matched, when one did.
+	Injection *UntrustedInjection `json:"injection,omitempty"`
+}
+
+// UntrustedInjection is a tool result whose text the injection detector
+// matched: where it came from and the matched words.
+type UntrustedInjection struct {
+	TS       string `json:"ts,omitempty"`
+	Tool     string `json:"tool,omitempty"`
+	Location string `json:"location"`
+	Match    string `json:"match"`
 }
 
 // UntrustedInput is one untrusted input the session read.
@@ -43,12 +55,13 @@ var untrustedDecisions = map[string]string{
 func UntrustedDecisionLabel(decision string) string { return untrustedDecisions[decision] }
 
 var untrustedKinds = map[string]string{
-	"image":  "Image",
-	"web":    "Web page",
-	"search": "Web search",
-	"mcp":    "MCP tool output",
-	"fetch":  "Downloaded content",
-	"gh":     "GitHub content",
+	"image":     "Image",
+	"web":       "Web page",
+	"search":    "Web search",
+	"mcp":       "MCP tool output",
+	"fetch":     "Downloaded content",
+	"gh":        "GitHub content",
+	"injection": "Injection in tool output",
 }
 
 // UntrustedKindLabel is the display name of an input kind.
@@ -86,7 +99,15 @@ func (u UntrustedEgress) Clean() (UntrustedEgress, bool) {
 		}
 		out.Sources = append(out.Sources, in)
 	}
-	if len(out.Sources) == 0 {
+	if inj := u.Injection; inj != nil && clip(inj.Match, untrustedFieldMax) != "" {
+		out.Injection = &UntrustedInjection{
+			TS:       clip(inj.TS, untrustedShortMax),
+			Tool:     clip(inj.Tool, untrustedShortMax),
+			Location: clip(inj.Location, untrustedFieldMax),
+			Match:    clip(inj.Match, untrustedFieldMax),
+		}
+	}
+	if len(out.Sources) == 0 && out.Injection == nil {
 		return UntrustedEgress{}, false
 	}
 	return out, true
@@ -95,12 +116,13 @@ func (u UntrustedEgress) Clean() (UntrustedEgress, bool) {
 // assessUntrustedEgress: a send after untrusted input is a lead for review. It
 // does not establish that the content steered the send or what data left.
 func assessUntrustedEgress(f Flag, a FindingAssessment) FindingAssessment {
-	inputs := 0
+	inputs, injected := 0, false
 	var send *EvidenceItem
 	for i := range f.Evidence {
 		switch f.Evidence[i].Kind {
 		case "untrusted-input":
 			inputs++
+			injected = injected || f.Evidence[i].Rule == "injection"
 		case "send":
 			send = &f.Evidence[i]
 		}
@@ -117,6 +139,10 @@ func assessUntrustedEgress(f Flag, a FindingAssessment) FindingAssessment {
 		a.Control = "allowed"
 	}
 	a.Reason = "This session read content from outside your instructions, then sent data out. Text in images, web pages and tool output can carry instructions an agent follows."
+	if injected {
+		a.Risk = "high"
+		a.Reason = "A tool result in this session matched the injection detector, then the session sent data out. Review what the matched text asked for against what was sent."
+	}
 	a.Limits = []string{
 		"The guard matches sends by command name and shape; it does not establish that the untrusted content caused the send or what data left.",
 		"Origins are what git and macOS recorded for the input; they can be missing or rewritten.",
