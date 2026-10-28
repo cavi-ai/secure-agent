@@ -861,7 +861,11 @@ CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 GIT_SAFE = ["git", "-c", "core.fsmonitor=false", "-c", "log.showSignature=false"]
 GIT_ORIGIN_BUDGET_S = 2.0
 
-TRUSTED_MCP_PREFIXES = ("mcp__code-review-graph__",)
+# MCP servers that are the user's own tooling, neither untrusted input nor a send:
+# the code graph and the Claude app's own ccd_* tools, except the one that reads
+# other sessions' transcripts.
+TRUSTED_MCP_PREFIXES = ("mcp__code-review-graph__", "mcp__ccd_")
+UNTRUSTED_MCP_PREFIXES = ("mcp__ccd_session_mgmt__",)
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic")
 FETCH_CLIENTS = {"curl", "wget", "http", "https", "httpie", "xh"}
 SOCKET_CLIENTS = {"nc", "ncat", "netcat", "socat", "telnet", "ssh", "scp", "sftp", "ftp",
@@ -908,6 +912,16 @@ def _gh_sub(argv: list):
     return (words[0] if words else ""), (words[1] if len(words) > 1 else "")
 
 
+def trusted_mcp(tool: str) -> bool:
+    return tool.startswith(TRUSTED_MCP_PREFIXES) and not tool.startswith(UNTRUSTED_MCP_PREFIXES)
+
+
+def _mcp_server(tool: str) -> str:
+    """mcp__<server>__<tool> -> <server>."""
+    parts = tool.split("__", 2)
+    return parts[1] if len(parts) == 3 else tool
+
+
 def _clip(value, limit: int = TAINT_FIELD_MAX) -> str:
     """One redacted line: control characters dropped, whitespace collapsed."""
     text = CONTROL_RE.sub(" ", str(value or ""))
@@ -921,9 +935,10 @@ def untrusted_input(tool: str, tool_input: dict, command: str, cwd: str = "") ->
         return {"kind": "web", "tool": tool, "location": str(tool_input.get("url") or "")}
     if tool == "WebSearch":
         return {"kind": "search", "tool": tool, "location": str(tool_input.get("query") or "")}
-    if tool.startswith("mcp__") and not tool.startswith(TRUSTED_MCP_PREFIXES):
+    if tool.startswith("mcp__") and not trusted_mcp(tool):
+        # One input per server (and URL): every tool of a server reads the same outside world.
         urls = [tool_input[k] for k in URL_KEYS if isinstance(tool_input.get(k), str) and tool_input[k]]
-        return {"kind": "mcp", "tool": tool, "location": " ".join([tool] + urls[:1])}
+        return {"kind": "mcp", "tool": tool, "location": " ".join([_mcp_server(tool)] + urls[:1])}
     if tool == "Read":
         path = str(tool_input.get("file_path") or "")
         if path.lower().endswith(IMAGE_EXTS):
@@ -1049,8 +1064,8 @@ def _origin(inp: dict) -> str:
     if kind == "search":
         return "web search results"
     if kind == "mcp":
-        server = str(inp.get("tool") or "").split("__")
-        return f"MCP server {server[1]}" if len(server) > 2 else ""
+        tool = str(inp.get("tool") or "")
+        return f"MCP server {_mcp_server(tool)}, first call {tool.split('__', 2)[-1]}"
     if kind == "gh":
         return "GitHub"
     return ""
@@ -1249,6 +1264,8 @@ def egress_target(tool: str, tool_input: dict, command: str) -> str:
     """Where this tool call would send data, or "" when it is not an egress sink."""
     if command and tool in ("Bash", "Shell", ""):
         return shell_egress_target(command)
+    if trusted_mcp(tool):
+        return ""
     for key in URL_KEYS:
         url = tool_input.get(key)
         if isinstance(url, str) and url_carries_data(url):

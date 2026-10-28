@@ -1247,5 +1247,41 @@ EXTRA_TESTS += [
 ]
 
 
+def test_untrusted_egress_claude_app_tools_are_neither_input_nor_send():
+    env = _egress_env("deny")
+    for tool in ("mcp__ccd_pr__get_status", "mcp__ccd_turn__update_plan", "mcp__ccd_turn__wrap_up"):
+        run(_session("ue-app", "PostToolUse", tool, {}), env=env)
+    clean = run(_session("ue-app", "PreToolUse", "Bash", {"command": EXFIL}), env=env)
+    assert clean.get("permission") == "allow", clean
+    run(_session("ue-app", "PostToolUse", "WebFetch", {"url": "https://example.com/page"}), env=env)
+    plan = run(_session("ue-app", "PreToolUse", "mcp__ccd_turn__update_plan", {"plan": "x"}), env=env)
+    assert plan.get("permission") == "allow", plan
+    transcripts = _egress_env("deny")
+    run(_session("ue-mgmt", "PostToolUse", "mcp__ccd_session_mgmt__list_events", {"session_id": "s"}), env=transcripts)
+    out = run(_session("ue-mgmt", "PreToolUse", "Bash", {"command": EXFIL}), env=transcripts)
+    assert out.get("permission") == "deny", out
+
+
+def test_untrusted_egress_counts_each_mcp_server_once():
+    img = _image_committed_by("Mallory", "mallory@attacker.example")
+    env = _egress_env(None)
+    for tool in ("request_access", "app_list_windows", "app_screenshot", "app_batch",
+                 "request_full_control", "app_release", "open_application", "computer_batch"):
+        run(_session("ue-srv", "PostToolUse", f"mcp__computer-use__{tool}", {}), env=env)
+    run(_session("ue-srv", "PostToolUse", "mcp__claude-in-chrome__navigate", {"url": "https://a.example/"}), env=env)
+    run(_session("ue-srv", "PostToolUse", "Read", {"file_path": img}), env=env)
+    run(_session("ue-srv", "PreToolUse", "Bash", {"command": EXFIL}), env=env)
+    sources = _last_activity()["untrusted"]["sources"]
+    assert [(s["kind"], s["location"]) for s in sources] == [
+        ("mcp", "computer-use"), ("mcp", "claude-in-chrome https://a.example/"), ("image", img)], sources
+    assert sources[0]["origin"] == "MCP server computer-use, first call request_access", sources[0]
+
+
+EXTRA_TESTS += [
+    test_untrusted_egress_claude_app_tools_are_neither_input_nor_send,
+    test_untrusted_egress_counts_each_mcp_server_once,
+]
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

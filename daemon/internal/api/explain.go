@@ -453,6 +453,16 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 	}
 }
 
+// untrustedInputPhrases: an input kind as the object of "read".
+var untrustedInputPhrases = map[string]string{
+	"image":  "an image",
+	"web":    "a web page",
+	"search": "web search results",
+	"mcp":    "MCP tool output",
+	"fetch":  "downloaded content",
+	"gh":     "GitHub content",
+}
+
 // untrustedEgressWhat: "<agent> read an image (x.png), then sent data out
 // through curl host. It ran; monitor mode records it."
 func untrustedEgressWhat(f model.Flag, agent string) string {
@@ -461,12 +471,15 @@ func untrustedEgressWhat(f model.Flag, agent string) string {
 	for _, ev := range f.Evidence {
 		switch ev.Kind {
 		case "untrusted-input":
-			label := strings.ToLower(model.UntrustedKindLabel(ev.Rule))
 			where := strings.TrimPrefix(ev.Label, model.UntrustedKindLabel(ev.Rule)+": ")
 			if ev.Rule == "image" {
 				where = filepath.Base(where)
 			}
-			inputs = append(inputs, article(label)+" ("+middleTruncate(where, 64)+")")
+			phrase, ok := untrustedInputPhrases[ev.Rule]
+			if !ok {
+				phrase = "untrusted content"
+			}
+			inputs = append(inputs, phrase+" ("+middleTruncate(where, 64)+")")
 		case "send":
 			sink, decision = ev.Label, ev.Sub
 		}
