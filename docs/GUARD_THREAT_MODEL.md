@@ -103,6 +103,15 @@ Enforcement points, honestly labeled:
    read with plumbing commands only, with `core.fsmonitor` and signature
    checks off, so the repository's configuration runs nothing; the hook
    spends at most 2 s on git, once per new image.
+8. **Instruction-file ownership is a name and email comparison.** A file
+   counts as someone else's when its last commit's author email and name both
+   differ from the repository's `user.email` and `user.name`. An attacker who
+   sets your name or email on their commit, or an edit you made from an
+   account with a different identity, defeats or trips the check. Files the
+   harness loads from places other than the working directory and repository
+   root (a parent directory, your home) are checked only when read with a tool.
+   The harness still loads the file; the guard marks the session, it does not
+   remove the instructions.
 
 ## Failure posture
 

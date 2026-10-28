@@ -455,12 +455,13 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 
 // untrustedInputPhrases: an input kind as the object of "read".
 var untrustedInputPhrases = map[string]string{
-	"image":  "an image",
-	"web":    "a web page",
-	"search": "web search results",
-	"mcp":    "MCP tool output",
-	"fetch":  "downloaded content",
-	"gh":     "GitHub content",
+	"image":        "an image",
+	"web":          "a web page",
+	"search":       "web search results",
+	"mcp":          "MCP tool output",
+	"fetch":        "downloaded content",
+	"gh":           "GitHub content",
+	"instructions": "an instruction file",
 }
 
 // untrustedEgressWhat: "<agent> read an image (x.png), then sent data out
@@ -472,7 +473,7 @@ func untrustedEgressWhat(f model.Flag, agent string) string {
 		switch ev.Kind {
 		case "untrusted-input":
 			where := strings.TrimPrefix(ev.Label, model.UntrustedKindLabel(ev.Rule)+": ")
-			if ev.Rule == "image" {
+			if ev.Rule == "image" || ev.Rule == "instructions" {
 				where = filepath.Base(where)
 			}
 			phrase, ok := untrustedInputPhrases[ev.Rule]
