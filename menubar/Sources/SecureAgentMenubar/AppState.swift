@@ -943,7 +943,10 @@ public final class AppState: ObservableObject {
 
     /// Plain-language headline: what is this file, and who wants it.
     static func guardPromptHeadline(_ p: GuardPending) -> String {
-        "\(p.agent.capitalized) requests \(p.tool) access"
+        if p.ruleID == "untrusted-egress" {
+            return "\(p.agent.capitalized) wants to send data out after reading untrusted content"
+        }
+        return "\(p.agent.capitalized) requests \(p.tool) access"
     }
 
     /// Detail line: the concrete file, why it matters, what is being asked.

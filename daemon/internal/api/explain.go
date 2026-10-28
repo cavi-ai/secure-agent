@@ -446,9 +446,50 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 			what += " (" + ex.Subject.Basename + ")"
 		}
 		return what + "."
+	case "untrusted-egress":
+		return untrustedEgressWhat(f, agent)
 	default:
 		return humanFlagTitle(f.Rule)
 	}
+}
+
+// untrustedEgressWhat: "<agent> read an image (x.png), then sent data out
+// through curl host. It ran; monitor mode records it."
+func untrustedEgressWhat(f model.Flag, agent string) string {
+	var inputs []string
+	sink, decision := "", ""
+	for _, ev := range f.Evidence {
+		switch ev.Kind {
+		case "untrusted-input":
+			label := strings.ToLower(model.UntrustedKindLabel(ev.Rule))
+			where := strings.TrimPrefix(ev.Label, model.UntrustedKindLabel(ev.Rule)+": ")
+			if ev.Rule == "image" {
+				where = filepath.Base(where)
+			}
+			inputs = append(inputs, article(label)+" ("+middleTruncate(where, 64)+")")
+		case "send":
+			sink, decision = ev.Label, ev.Sub
+		}
+	}
+	read := "untrusted content"
+	switch len(inputs) {
+	case 0:
+	case 1:
+		read = inputs[0]
+	case 2:
+		read = inputs[0] + " and 1 more untrusted input"
+	default:
+		read = fmt.Sprintf("%s and %d more untrusted inputs", inputs[0], len(inputs)-1)
+	}
+	what := agent + " read " + read + ", then sent data out"
+	if sink != "" {
+		what += " through " + sink
+	}
+	what += "."
+	if decision != "" {
+		what += " Guard: " + decision + "."
+	}
+	return what
 }
 
 func subjectPhrase(s *model.ExplainSubject) string {

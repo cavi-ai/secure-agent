@@ -92,6 +92,9 @@ type Event struct {
 	// Payload rides on the bus into durable flag evidence. The event table
 	// keeps its existing schema; the flag owns the persisted request outcome.
 	Payload *model.PayloadEvidence `json:"payload,omitempty"`
+	// Untrusted rides on a guard hook record of a send after untrusted input
+	// into the untrusted-egress flag's evidence, the same way.
+	Untrusted *model.UntrustedEgress `json:"untrusted,omitempty"`
 	// Offset is the byte offset of the transcript line a transcript hit was
 	// found on.
 	Offset int64 `json:"offset,omitempty"`

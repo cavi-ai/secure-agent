@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -75,7 +76,7 @@ func memoryRuleTitle(rule string) string {
 		return "Security finding"
 	}
 	switch rule {
-	case "proxy-secret-leak", "sensitive-read-then-connect", "keychain-access", "keychain-security-cli", "tcc-tamper", "proxy-prompt-injection", "secret-in-transcript":
+	case "proxy-secret-leak", "sensitive-read-then-connect", "keychain-access", "keychain-security-cli", "tcc-tamper", "proxy-prompt-injection", "secret-in-transcript", "untrusted-egress":
 		return humanFlagTitle(rule)
 	default:
 		return "Security finding"
@@ -236,6 +237,15 @@ func presentMemoryFact(f store.MemoryFact) memoryRow {
 		r.Title = "Secret guard activity"
 		if f.Verdict == "allow" || f.Verdict == "deny" || f.Verdict == "ask" {
 			r.Detail = "Decision: " + f.Verdict
+		}
+		if kind, ok := strings.CutPrefix(f.RuleID, "untrusted-input:"); ok {
+			r.Title = "Untrusted input: " + model.UntrustedKindLabel(kind)
+			r.Detail = "Later sends from this session are checked"
+		} else if strings.HasSuffix(f.RuleID, ":untrusted-egress") {
+			r.Title = "Send after untrusted input"
+			if strings.HasPrefix(f.RuleID, "guard-monitor:") {
+				r.Detail += " (monitor mode)"
+			}
 		}
 	case "flag":
 		r.Title = memoryRuleTitle(f.RuleID)

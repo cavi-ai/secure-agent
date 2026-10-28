@@ -34,6 +34,21 @@ type guardDecisionRequest struct {
 	// Workspace is the hook's cwd, passed to the advisor so it can judge the
 	// access in context. Optional (older hooks omit it).
 	Workspace string `json:"workspace,omitempty"`
+	// Detail is the reason line the prompt shows. Optional.
+	Detail string `json:"detail,omitempty"`
+}
+
+// promptDetailMax bounds the hook-supplied reason line.
+const promptDetailMax = 600
+
+// promptDetail is the reason line with control characters dropped, cut to
+// promptDetailMax runes.
+func promptDetail(s string) string {
+	s = strings.Join(strings.FieldsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f || r == ' ' }), " ")
+	if r := []rune(s); len(r) > promptDetailMax {
+		s = string(r[:promptDetailMax])
+	}
+	return s
 }
 
 // handleGuardDecision answers a hook's prompt-mode query: a cached (agent,rule)
@@ -120,12 +135,17 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	if probe.Validate() == nil {
 		scopes = append(scopes, model.ScopeChoice{Kind: "session"}, model.ScopeChoice{Kind: "exact", Expiry: "24h"}, model.ScopeChoice{Kind: "exact", Expiry: "7d"})
 	}
+	// Disclose the blast radius of "allow always": the cached rule covers
+	// every path this rule matches for this agent, not just this file.
+	scopeText := a.store.ExplainDecisionScope(identity) + " Once answers this request. Future permissions cover only this file, tool, workspace and observed executable path. Session permission ends with this session; timed permission expires after 24 hours or 7 days. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions."
+	if req.RuleID == "untrusted-egress" {
+		scopeText = "Once answers this request. Future permissions cover only the sends named here, from this tool, workspace and observed executable path. Session permission ends with this session; timed permission expires after 24 hours or 7 days. Executable signatures are not verified. Revoke under Protection → Rules & permissions."
+	}
 	d := a.guardBroker.Request(r.Context(), guard.Pending{
 		ID: id, SessionID: req.SessionID, Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
+		Detail:    promptDetail(req.Detail),
 		Workspace: identity.Workspace, ReaderExe: identity.ReaderExe, IdentityBasis: identity.IdentityBasis, PeerPID: peerPID, AvailableScopes: scopes,
-		// Disclose the blast radius of "allow always": the cached rule covers
-		// every path this rule matches for this agent, not just this file.
-		ScopeText: a.store.ExplainDecisionScope(identity) + " Once answers this request. Future permissions cover only this file, tool, workspace and observed executable path. Session permission ends with this session; timed permission expires after 24 hours or 7 days. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions.",
+		ScopeText: scopeText,
 	})
 	if r.Context().Err() != nil {
 		// The hook stopped waiting (its own deadline, or the harness killed

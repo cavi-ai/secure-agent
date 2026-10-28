@@ -435,6 +435,11 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 	if e.Kind == event.KindTranscriptHit {
 		return c.secretInTranscriptLocked(e)
 	}
+	// The guard hook's pid is the harness's; the record names the harness when
+	// the tagger does not know it.
+	if e.Kind == event.KindPluginAction && e.Untrusted != nil {
+		return c.untrustedEgressLocked(e)
+	}
 
 	info, isAgent := c.tagger.Tag(e.PID)
 	if !isAgent {
