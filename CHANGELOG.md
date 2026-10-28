@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Proxy: response headers are scanned for prompt injection; a matching header is reported and removed before the agent reads the response.
 - Guard: the `untrusted-egress` rule applies its mode (monitor by default) to network commands, `git push`, `gh` writes, data-carrying URLs and MCP send tools once a session has read web, MCP (other than the Claude app's own tools), image or fetched content; a "Data sent after reading untrusted content" finding, session memory and the prompt name each input, its origin (git committer, download URL) and the send.
 
 ## [1.4.0] - 2026-10-22

@@ -573,6 +573,7 @@ func (ps *ProxyServer) inspectAndForwardHTTP(w http.ResponseWriter, r *http.Requ
 	}
 	defer resp.Body.Close()
 
+	ps.scrubResponseHeaders(resp.Header, host)
 	for k, vv := range resp.Header {
 		for _, v := range vv {
 			w.Header().Add(k, v)
@@ -670,6 +671,7 @@ func (ps *ProxyServer) inspectRequest(r *http.Request, host string) (blocked boo
 // bounded prefix, then scans that prefix for prompt injection over normalized
 // views so an encoded payload can't slip past.
 func (ps *ProxyServer) streamAndScanResponse(dst io.Writer, resp *http.Response, host string) error {
+	ps.scrubResponseHeaders(resp.Header, host)
 	pc := &prefixCapture{cap: scanCap}
 	resp.Body = &replayBody{Reader: io.TeeReader(resp.Body, pc), Closer: resp.Body}
 	err := resp.Write(dst)
