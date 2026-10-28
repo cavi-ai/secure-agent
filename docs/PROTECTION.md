@@ -130,6 +130,8 @@ Egress sinks:
 
 Set the mode in `~/.config/secure-agent/guard-modes.json`, for example `{"untrusted-egress": "prompt"}`, or per project through `directory_guard.cwd_overrides`. The taint record sits beside the daemon socket under `taint/`, which agent tools cannot write, and expires after 7 days.
 
+For an agent routed through the proxy, `deny` also covers connections the hook cannot name, such as a script the agent wrote and then ran. The proxy finds the process holding the client end of each new connection (once per connection), maps it to its live session, and refuses the CONNECT or plain request with `403` when that session has a taint record and the rule resolves to `deny` for its workspace. The refusal is a `proxy-untrusted-egress` finding carrying the client process and session. The model API hosts the proxy decrypts (`proxy_inspect_hosts`) and loopback are never refused. The proxy does nothing in `monitor` or `prompt`, and looks up no process while no session is tainted or no workspace resolves the rule to `deny`.
+
 Each input records where it came from:
 
 | Input | Location | Origin |

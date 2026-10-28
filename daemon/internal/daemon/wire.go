@@ -21,6 +21,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/connpeer"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
@@ -28,8 +29,10 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
+	"github.com/cavi-ai/secure-agent/daemon/internal/session"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
+	"github.com/cavi-ai/secure-agent/daemon/internal/taint"
 )
 
 // wire.go — the daemon's component wiring, extracted from main() into
@@ -187,6 +190,32 @@ func setupProxy(cfg config.Config, b *bus.Bus, eng *firewall.Engine) *proxy.Prox
 		log.Printf("agent routing snippet: %s (source it to route agents through the proxy)", snippetPath)
 	}
 	return proxyServer
+}
+
+// egressGate applies the hook's untrusted-egress rule to routed connections,
+// from the taint records and mode files the hook reads. The model API hosts
+// the proxy decrypts and loopback are exempt: refusing them would cut the
+// harness off from its own model.
+func egressGate(cfg config.Config, resolver *session.Resolver) *taint.Gate {
+	exempt := map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
+	for _, h := range cfg.ProxyInspectHosts {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			exempt[h] = true
+		}
+	}
+	return &taint.Gate{
+		Dir:              filepath.Join(filepath.Dir(cfg.SocketPath), "taint"),
+		ModesPath:        config.DefaultGuardModesPath(),
+		CwdOverridesPath: config.CwdOverridesPath(cfg),
+		Exempt:           exempt,
+		ClientPID: func(ctx context.Context, remoteAddr string) (int32, error) {
+			return connpeer.PID(ctx, remoteAddr, api.TCPClientPID)
+		},
+		Session: func(pid int32) (string, string, bool) {
+			scope, ok := resolver.PermissionIdentity(pid, "")
+			return scope.SessionID, scope.Workspace, ok
+		},
+	}
 }
 
 // claudeRouting answers GET /routing/claude from the live proxy: Claude

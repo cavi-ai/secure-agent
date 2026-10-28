@@ -7,7 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- Guard: the `untrusted-egress` rule applies its mode (monitor by default) to network commands, `git push`, `gh` writes, data-carrying URLs and MCP send tools once a session has read web, MCP (other than the Claude app's own tools), image or fetched content; a "Data sent after reading untrusted content" finding, session memory and the prompt name each input, its origin (git committer, download URL) and the send.
+- Guard: the `untrusted-egress` rule applies its mode (monitor by default) to network commands, `git push`, `gh` writes, data-carrying URLs and MCP send tools once a session has read web, MCP (other than the Claude app's own tools), image or fetched content; a "Data sent after reading untrusted content" finding, session memory and the prompt name each input, its origin (git committer, download URL) and the send; in `deny`, the proxy also refuses a routed agent's new connections from a tainted session (a "Connection refused after reading untrusted content" finding), except model API hosts and loopback.
 
 ## [1.4.0] - 2026-10-22
 

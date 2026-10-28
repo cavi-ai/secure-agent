@@ -42,6 +42,13 @@ func DefaultCwdOverridesPath() string {
 	return filepath.Join(home, ".config", "secure-agent", "guard-cwd-overrides.json")
 }
 
+// DefaultGuardModesPath returns the user's guard-rule mode override file the
+// hook reads.
+func DefaultGuardModesPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "secure-agent", "guard-modes.json")
+}
+
 // CwdOverridesPath returns where this daemon writes the hook policy file:
 // beside its own control socket, so a second daemon (another -config, a test
 // run) never rewrites the primary's file. The default socket lives in

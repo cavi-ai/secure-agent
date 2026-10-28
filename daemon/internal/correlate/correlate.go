@@ -380,7 +380,10 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 	if e.Kind == event.KindProxyHit {
 		ruleName := "proxy-payload-inspection"
 		severity := 3
-		if strings.HasPrefix(e.Detail, "proxy-secret-leak") {
+		sub := "payload inspection"
+		if strings.HasPrefix(e.Detail, "proxy-untrusted-egress:") {
+			ruleName, sub = "proxy-untrusted-egress", "untrusted-egress"
+		} else if strings.HasPrefix(e.Detail, "proxy-secret-leak") {
 			ruleName = "proxy-secret-leak"
 		} else if strings.HasPrefix(e.Detail, "proxy-prompt-injection") {
 			ruleName = "proxy-prompt-injection"
@@ -419,7 +422,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 				Evidence: []model.EvidenceItem{{
 					Kind:    "violation",
 					Label:   e.Detail,
-					Sub:     "payload inspection",
+					Sub:     sub,
 					Text:    fmt.Sprintf("Local proxy detected security violation '%s' while connecting to %s:%d", e.Detail, e.RemoteHost, e.RemotePort),
 					Payload: e.Payload,
 				}, {
