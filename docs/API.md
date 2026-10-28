@@ -586,7 +586,7 @@ Host: unix
 
 | Field | Meaning |
 |---|---|
-| `kind` | Event kind: `0` open, `1` write, `2` delete, `3` exec, `5`/`6` connect open/close, `7` TCC modify, `8` plugin tool-use, `9` proxy hit, `10`/`11` guard prompt/resolved, `12` tool call, `13` turn, `14` model call, `16`/`17` background item added/removed, `18` XProtect detection, `19` configuration profile added, `20` Gatekeeper override. |
+| `kind` | Event kind: `0` open, `1` write, `2` delete, `3` exec, `4` TCC modify, `5`/`6` connect open/close, `7` transcript hit, `8` plugin tool-use, `9` proxy hit, `10`/`11` guard prompt/resolved, `12` tool call, `13` turn, `14` model call, `16`/`17` background item added/removed, `18` XProtect detection, `19` configuration profile added, `20` Gatekeeper override. |
 | `ts`, `pid`, `session_id` | When it happened, the process, and the agent session (trace rows carry pid `0` and `session_id`). |
 | `path`, `exe_path` | File or executable path, for file and exec kinds. |
 | `remote_host`, `remote_port` | Destination, for connect kinds. |
