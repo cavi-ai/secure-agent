@@ -12,13 +12,15 @@ public struct GuardPending: Codable, Identifiable, Sendable {
 	public let readerExe: String?
 	public let workspace: String?
 	public let sessionID: String?
-	public init(id: String, agent: String, tool: String, path: String, ruleID: String, ts: String, scopeText: String?, advisor: GuardAdvice?, availableScopes: [GuardScopeChoice]? = nil, readerExe: String? = nil, workspace: String? = nil, sessionID: String? = nil) {
-		self.id=id; self.agent=agent; self.tool=tool; self.path=path; self.ruleID=ruleID; self.ts=ts; self.scopeText=scopeText; self.advisor=advisor; self.availableScopes=availableScopes; self.readerExe=readerExe; self.workspace=workspace; self.sessionID=sessionID
+	/// The hook's reason line, e.g. what an untrusted-egress session read.
+	public let detail: String?
+	public init(id: String, agent: String, tool: String, path: String, ruleID: String, ts: String, scopeText: String?, advisor: GuardAdvice?, availableScopes: [GuardScopeChoice]? = nil, readerExe: String? = nil, workspace: String? = nil, sessionID: String? = nil, detail: String? = nil) {
+		self.id=id; self.agent=agent; self.tool=tool; self.path=path; self.ruleID=ruleID; self.ts=ts; self.scopeText=scopeText; self.advisor=advisor; self.availableScopes=availableScopes; self.readerExe=readerExe; self.workspace=workspace; self.sessionID=sessionID; self.detail=detail
 	}
     /// The local advisor's recommendation, when one has landed. Advisory only:
     /// the human still decides; this is shown inline to inform the choice.
     public let advisor: GuardAdvice?
-    enum CodingKeys: String, CodingKey { case id, agent, tool, path, ts, advisor, workspace; case ruleID = "rule_id"; case scopeText = "scope_text"; case availableScopes = "available_scopes"; case readerExe = "reader_exe"; case sessionID = "session_id" }
+    enum CodingKeys: String, CodingKey { case id, agent, tool, path, ts, advisor, workspace, detail; case ruleID = "rule_id"; case scopeText = "scope_text"; case availableScopes = "available_scopes"; case readerExe = "reader_exe"; case sessionID = "session_id" }
 }
 
 public struct GuardScopeChoice: Codable, Sendable, Identifiable {
@@ -33,18 +35,22 @@ public struct GuardScopeChoice: Codable, Sendable, Identifiable {
 
 extension GuardPending {
     var requestFacts: String {
-        "Operation: \(tool)\nResource: \(path)\nWorkspace: \(workspace ?? "Unknown")\nMatched rule: \(ruleID)\nExecutable path: \(readerExe ?? "Unknown; once only")\nSession: \(sessionID ?? "Unknown")"
+        let why = (detail?.isEmpty == false) ? "Why: \(detail!)\n" : ""
+        return "\(why)Operation: \(tool)\nResource: \(path)\nWorkspace: \(workspace ?? "Unknown")\nMatched rule: \(ruleID)\nExecutable path: \(readerExe ?? "Unknown; once only")\nSession: \(sessionID ?? "Unknown")"
     }
 
     func confirmation(scope: String, expiry: String?) -> String? {
         guard availableScopes?.contains(where: { $0.kind == scope && $0.expiry == expiry }) == true else { return nil }
+        let sends = ruleID == "untrusted-egress"
+        let subject = sends ? "these sends from this tool" : "this file and tool"
         let effect: String
         switch scope {
-        case "session": effect = "Allow this file and tool until this session ends."
-        case "exact" where expiry == "24h" || expiry == "7d": effect = "Allow this file and tool for \(expiry == "7d" ? "7 days" : "24 hours")."
+        case "session": effect = "Allow \(subject) until this session ends."
+        case "exact" where expiry == "24h" || expiry == "7d": effect = "Allow \(subject) for \(expiry == "7d" ? "7 days" : "24 hours")."
         default: return nil
         }
-        return "\(effect)\n\nAgent: \(agent)\n\(requestFacts)\n\nExecutable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions."
+        let limit = sends ? "Other sends still ask." : "File approval does not authorize network access."
+        return "\(effect)\n\nAgent: \(agent)\n\(requestFacts)\n\nExecutable signatures are not verified. \(limit) Revoke under Protection → Rules & permissions."
     }
 }
 

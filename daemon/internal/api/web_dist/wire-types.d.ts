@@ -320,6 +320,21 @@ export interface PayloadEvidence {
   request_action: string;
 }
 
+export interface UntrustedInput {
+  ts?: string;
+  kind: string;
+  tool?: string;
+  location: string;
+  origin?: string;
+}
+
+export interface UntrustedEgress {
+  decision: string;
+  sinks: string;
+  harness?: string;
+  sources: UntrustedInput[] | null;
+}
+
 export interface Event {
   kind: number;
   ts: string;
@@ -331,6 +346,7 @@ export interface Event {
   remote_port?: number;
   detail?: string;
   payload?: PayloadEvidence;
+  untrusted?: UntrustedEgress;
   offset?: number;
   test_signals?: string;
   tool?: string;
@@ -1426,6 +1442,7 @@ export interface Pending {
   identity_basis?: string;
   available_scopes?: ScopeChoice[];
   ts: string;
+  detail?: string;
   scope_text?: string;
   advisor?: AdvisorVerdict;
 }

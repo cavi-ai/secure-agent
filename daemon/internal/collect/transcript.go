@@ -19,6 +19,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
 	"github.com/cavi-ai/secure-agent/daemon/internal/testvalue"
 )
@@ -185,6 +186,8 @@ type pluginLogLine struct {
 	SessionID string `json:"session_id"`
 	Command   string `json:"command"`
 	FilePath  string `json:"file_path"`
+	// Untrusted is set by the guard hook on a send after untrusted input.
+	Untrusted *model.UntrustedEgress `json:"untrusted"`
 }
 
 // scanLine scans one tailed line for secrets. A line carrying a secret yields
@@ -320,7 +323,7 @@ func parsePluginLine(line string) (event.Event, bool) {
 	if path == "" {
 		path = pl.Command
 	}
-	return event.Event{
+	e := event.Event{
 		Kind:       event.KindPluginAction,
 		TS:         ts,
 		ObservedTS: observed,
@@ -328,7 +331,13 @@ func parsePluginLine(line string) (event.Event, bool) {
 		SessionID:  pl.SessionID,
 		Path:       path,
 		Detail:     pl.Tool,
-	}, true
+	}
+	if pl.Untrusted != nil && strings.HasPrefix(pl.Tool, "secret-guard") {
+		if u, ok := pl.Untrusted.Clean(); ok {
+			e.Untrusted = &u
+		}
+	}
+	return e, true
 }
 
 func (ts *TranscriptScanner) Run(ctx context.Context) error {

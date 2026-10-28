@@ -102,6 +102,48 @@ The `harness-config` rule covers the harnesses' own settings and hook scripts. I
 
 Writes to `~/.claude/settings.json` and the hook scripts are now denied outright, so the obvious self-removal path is closed — but a determined agent can still probe paths outside the covered harness directories, and the harness's decision to invoke the hook at all can't be enforced from inside the hook. This layer raises the bar; it is not a complete seal.
 
+### Egress after untrusted input
+
+Instructions hidden in content an agent reads (a web page, an image, a response header, an MCP result) can steer it to send data out. The `untrusted-egress` rule does not try to recognize those instructions. It records each session's untrusted inputs (up to 8) and then applies its mode to every later call in that session that can send data out.
+
+Untrusted input:
+
+- `WebFetch` and `WebSearch`
+- any MCP tool except `code-review-graph`
+- `Read` of an image file (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`, `.tiff`, `.heic`)
+- `curl`, `wget`, `http`, `xh` output from a non-loopback host, and `gh` reads (`view`, `diff`, `list`, `checks`, `status`, `api`, `search`)
+
+Egress sinks:
+
+- network clients to a non-loopback host: `curl`, `wget`, `http`, `xh`, `nc`, `socat`, `telnet`, `ssh`, `scp`, `sftp`, `ftp`, `mail`, `sendmail`, `rsync` to a remote
+- `git push` and `git send-email`
+- `gh pr` and `gh issue` create, comment and edit, `gh pr review`, `gh gist` create and edit, `gh release` create, upload and edit, `gh repo create`, and `gh api` with a body or a non-GET method
+- interpreters running inline network code, such as `python3 -c "requests.post(…)"`
+- `WebFetch` and MCP `url` arguments with a query, fragment, credentials, an IP host, or a long or token-shaped path segment
+- MCP tools whose name starts with a send or write verb (`send_`, `post_`, `reply_`, `forward_`, `create_`, `upload_`, `share_`, `comment_`, `update_`, `fill_`, `type_`, `execute_`, …)
+
+| Mode | Behavior |
+|---|---|
+| `monitor` (default) | The call runs and the audit trail records `guard-monitor:untrusted-egress`. |
+| `prompt` | The Secure Agent prompt names every sink in the call and the inputs the session read, with their origin. With the daemon down, Claude Code asks instead. |
+| `deny` | Blocked outright. |
+
+Set the mode in `~/.config/secure-agent/guard-modes.json`, for example `{"untrusted-egress": "prompt"}`, or per project through `directory_guard.cwd_overrides`. The taint record sits beside the daemon socket under `taint/`, which agent tools cannot write, and expires after 7 days.
+
+Each input records where it came from:
+
+| Input | Location | Origin |
+|---|---|---|
+| Image | the file path | the last commit that touched it (author, email, repository, commit, date, subject), `untracked in <repo>`, or `changed locally since`; the download URL and the app that saved it, when macOS recorded them |
+| Web page, download | the URL | the host |
+| Web search | the query | web search results |
+| MCP tool | the tool name and its URL argument | the MCP server |
+| GitHub read | the `gh` command | GitHub |
+
+Git history is read with plumbing commands only, with `core.fsmonitor` and signature checks off, so a repository's own configuration runs nothing.
+
+A send in a tainted session raises one **Data sent after reading untrusted content** finding per session. Its evidence lists every recorded input with its location and origin, then the send and the guard's decision. Later sends fold into it as repeats. The finding is a warning when the send ran (`monitor`, or a Claude Code ask) and informational when it was blocked or you allowed it, so it does not page by default. The session's memory shows **Untrusted input: Image** (or the input's kind) and **Send after untrusted input** rows; locations stay in the finding's evidence.
+
 See [GUARD_THREAT_MODEL.md](GUARD_THREAT_MODEL.md) for the full list of closed bypass classes, the known limits (symlinks, TOCTOU, static inline-code analysis), and exactly which failures fail closed vs. open.
 
 To inspect or revoke a remembered guard decision:

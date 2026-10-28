@@ -133,6 +133,8 @@ func humanFlagTitle(rule string) string {
 		return "Proxy request inspection was incomplete"
 	case "secret-in-transcript":
 		return "Secret appeared in an agent transcript"
+	case "untrusted-egress":
+		return "Data sent after reading untrusted content"
 	default:
 		return rule
 	}

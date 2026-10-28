@@ -225,7 +225,8 @@ func validMemoryIdentifier(s string) bool {
 func validGuardAudit(detail, path string) bool {
 	switch detail {
 	case "secret-guard:allow":
-		return strings.HasPrefix(path, "guard-allow:") && validMemoryIdentifier(strings.TrimPrefix(path, "guard-allow:")) || strings.HasPrefix(path, "guard-monitor:") && validMemoryIdentifier(strings.TrimPrefix(path, "guard-monitor:"))
+		return strings.HasPrefix(path, "guard-allow:") && validMemoryIdentifier(strings.TrimPrefix(path, "guard-allow:")) || strings.HasPrefix(path, "guard-monitor:") && validMemoryIdentifier(strings.TrimPrefix(path, "guard-monitor:")) ||
+			strings.HasPrefix(path, "untrusted-input:") && validMemoryIdentifier(strings.TrimPrefix(path, "untrusted-input:"))
 	case "secret-guard:deny":
 		return strings.HasPrefix(path, "guard-deny:") && validMemoryIdentifier(strings.TrimPrefix(path, "guard-deny:")) || path == "guard-config-corrupt"
 	case "secret-guard:ask":

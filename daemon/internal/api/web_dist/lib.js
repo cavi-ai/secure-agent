@@ -1072,6 +1072,8 @@ const EVIDENCE_ICONS = {
   exec:      { icon: 'i-power',  cls: 'cn-read' },
   tcc:       { icon: 'i-alert',  cls: 'cn-read' },
   violation: { icon: 'i-shield', cls: 'cn-read' },
+  'untrusted-input': { icon: 'i-alert', cls: 'cn-read' },
+  send:      { icon: 'i-globe',  cls: 'cn-egress' },
   text:      { icon: 'i-alert',  cls: '' },
 };
 
@@ -1389,6 +1391,7 @@ var RULE_TITLES = {
   'tcc-tamper': 'Privacy permissions (TCC) tamper',
   'proxy-prompt-injection': 'Prompt injection in a response',
   'secret-in-transcript': 'Secret appeared in an agent transcript',
+  'untrusted-egress': 'Data sent after reading untrusted content',
 };
 
 function ruleTitle(rule) {

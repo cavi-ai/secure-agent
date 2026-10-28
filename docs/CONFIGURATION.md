@@ -634,7 +634,7 @@ does not clear the proxy from an existing process. `/status` counts
 ### Runtime overrides (not in this file)
 
 - `firewall-modes.json` — firewall rules promoted to block, persisted
-- `guard-modes.json` — directory-guard mode overrides (onboarding writes this)
+- `guard-modes.json` — directory-guard mode overrides (onboarding writes this), including `untrusted-egress` ([Egress after untrusted input](PROTECTION.md#egress-after-untrusted-input))
 - `firewall-sources.json` — user-added fingerprint ingest sources
 - `guard-rules.json` — user-edited guard paths
 - `guard-cwd-overrides.json` — derived per-project policies written at daemon start

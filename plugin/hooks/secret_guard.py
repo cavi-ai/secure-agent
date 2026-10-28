@@ -35,15 +35,18 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 import re
 import shlex
 import socket as _socket
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from typing import NamedTuple
+from urllib.parse import urlsplit
 
 _HOOK_DIR = os.path.dirname(os.path.abspath(__file__))
 if _HOOK_DIR not in sys.path:
@@ -228,9 +231,11 @@ def _secure_append(path: str, line: str) -> None:
         pass
 
 
-def audit(verdict: str, rule: str, command: str, event: str, broker: bool = False) -> None:
+def audit(verdict: str, rule: str, command: str, event: str, broker: bool = False,
+          untrusted: dict | None = None) -> None:
     """Never allowed to fail the hook. Denied commands can carry the secret
-    they were denied for; the audit trail stores them redacted."""
+    they were denied for; the audit trail stores them redacted. ``untrusted``
+    (already redacted) rides on an untrusted-egress record to the daemon."""
     safe_command = redact_str(command)
     rec = {
         "ts": now(),
@@ -240,6 +245,8 @@ def audit(verdict: str, rule: str, command: str, event: str, broker: bool = Fals
         "command": safe_command[:2000],
         "runtime": os.environ.get("CLAUDE_CODE_ENTRYPOINT") or os.environ.get("CURSOR_TRACE_ID") or "unknown",
     }
+    if untrusted:
+        rec["untrusted"] = untrusted
     try:
         _secure_append(AUDIT_LOG, json.dumps(rec) + "\n")
     except Exception:
@@ -248,29 +255,34 @@ def audit(verdict: str, rule: str, command: str, event: str, broker: bool = Fals
     # TranscriptScanner.ScanLine parses (tool/pid/ts/command/file_path): the
     # guard verdict travels in `tool`, the guard rule in `file_path`.
     try:
-        _secure_append(ACTIVITY_LOG, json.dumps({
+        mirror = {
             "ts": rec["ts"],
             "tool": f"secret-guard-broker:{verdict}" if broker else f"secret-guard:{verdict}",
             "pid": os.getppid() or os.getpid(),
             "session_id": session_id(),
             "file_path": rule,
             "command": safe_command[:500],
-        }) + "\n")
+        }
+        if untrusted:
+            mirror["untrusted"] = untrusted
+        _secure_append(ACTIVITY_LOG, json.dumps(mirror) + "\n")
     except Exception:
         pass
 
 
-def allow(rule: str = "", command: str = "", event: str = "", broker: bool = False) -> None:
+def allow(rule: str = "", command: str = "", event: str = "", broker: bool = False,
+          untrusted: dict | None = None) -> None:
     enforce_shell(command, event)
     if rule:
-        audit("allow", rule, command, event, broker)
+        audit("allow", rule, command, event, broker, untrusted)
     observe_shell("allow", command, event)
     emit({"permission": "allow"})
     sys.exit(0)
 
 
-def deny(rule: str, user_msg: str, agent_msg: str, command: str, event: str, broker: bool = False) -> None:
-    audit("deny", rule, command, event, broker)
+def deny(rule: str, user_msg: str, agent_msg: str, command: str, event: str, broker: bool = False,
+         untrusted: dict | None = None) -> None:
+    audit("deny", rule, command, event, broker, untrusted)
     observe_shell("deny", command, event)
     emit({
         "permission": "deny",
@@ -741,13 +753,16 @@ except ValueError:
     PROMPT_DEADLINE_S = 45.0
 
 
-def _guard_query(agent, tool, path, rule_id, deadline_s, workspace="", probe_id=""):
+def _guard_query(agent, tool, path, rule_id, deadline_s, workspace="", probe_id="", detail=""):
     """POST /guard/decision over the unix socket; return the decision dict or
     None if the daemon is unreachable. Own deadline < harness timeout. The
     workspace rides along so the advisor can judge whether the access is
-    routine for this project rather than in the abstract."""
+    routine for this project rather than in the abstract; ``detail`` is the
+    reason line the prompt shows."""
     payload = {"agent": agent, "tool": tool, "path": path, "rule_id": rule_id,
                "workspace": workspace}
+    if detail:
+        payload["detail"] = detail
     if probe_id:
         payload["probe_id"] = probe_id
     else:
@@ -815,14 +830,498 @@ def resolve_prompt(agent, tool, path, rule_id, command, event):
     deny("guard-deny:" + rule_id, f"Blocked: access to {path} was denied.", deny_msg, command, event, broker=True)
 
 
-def emit_ask(reason, command, event):
-    audit("ask", "guard-ask", command, event)
+def emit_ask(reason, command, event, untrusted=None):
+    audit("ask", "guard-ask", command, event, untrusted=untrusted)
     emit({
         "hookSpecificOutput": {"hookEventName": "PreToolUse",
                                "permissionDecision": "ask",
                                "permissionDecisionReason": reason},
     })
     sys.exit(0)
+
+
+# --- untrusted-egress gate ----------------------------------------------------
+#
+# Prompt injection needs three things in one session: private data, untrusted
+# content, and a way to send data out. Detection of the injected text is
+# evadable, so this gate does not look for it: once a session has ingested
+# untrusted content, every later egress sink in that session goes through the
+# untrusted-egress mode (monitor unless guard-modes.json promotes it). The
+# taint record lives in the guard's control directory, which agent tools
+# cannot write.
+
+EGRESS_RULE = "untrusted-egress"
+EGRESS_SHIPPED_MODE = "monitor"
+TAINT_DIR = os.path.join(os.path.dirname(SOCK_PATH), "taint")
+TAINT_MAX_AGE_S = 7 * 86400
+TAINT_MAX_SOURCES = 8
+TAINT_FIELD_MAX = 300
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+# Read-only git plumbing with every repository-configured program off.
+GIT_SAFE = ["git", "-c", "core.fsmonitor=false", "-c", "log.showSignature=false"]
+GIT_ORIGIN_BUDGET_S = 2.0
+
+TRUSTED_MCP_PREFIXES = ("mcp__code-review-graph__",)
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic")
+FETCH_CLIENTS = {"curl", "wget", "http", "https", "httpie", "xh"}
+SOCKET_CLIENTS = {"nc", "ncat", "netcat", "socat", "telnet", "ssh", "scp", "sftp", "ftp",
+                  "mail", "mailx", "sendmail", "mutt"}
+GH_READ_ACTIONS = {"view", "diff", "list", "checks", "status"}
+GH_WRITE = {
+    "pr": {"create", "comment", "edit", "review"},
+    "issue": {"create", "comment", "edit"},
+    "gist": {"create", "edit"},
+    "release": {"create", "upload", "edit"},
+    "repo": {"create"},
+}
+NET_CODE_RE = re.compile(
+    r"requests\.|urllib|http\.client|httpx|aiohttp|socket\.|\bfetch\s*\(|axios|XMLHttpRequest"
+    r"|net\.connect|https?\.request|Net::HTTP|open\s+location|\bcurl\b|\bwget\b")
+# First word of an MCP tool name that sends, posts or writes to a third party.
+MCP_SEND_VERBS = {"send", "post", "reply", "forward", "publish", "share", "upload", "create",
+                  "comment", "submit", "invite", "respond", "update", "edit", "fill", "form",
+                  "type", "execute", "exec", "javascript"}
+URL_KEYS = ("url", "uri", "href", "link")
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"}
+TOKEN_SEGMENT_RE = re.compile(r"[A-Za-z0-9+/=_]{20,}")
+
+
+def _stable_session_id(payload: dict) -> str:
+    """The harness-supplied session id, or "" when only the per-invocation
+    fallback exists: a random id cannot carry taint between tool calls."""
+    v = payload.get("conversation_id") or payload.get("session_id") or payload.get("sessionId")
+    if v:
+        return str(v)[:64]
+    for var in ("CLAUDE_SESSION_ID", "SECURE_AGENT_SESSION_ID"):
+        if os.environ.get(var):
+            return os.environ[var][:64]
+    return ""
+
+
+def _taint_path(sid: str) -> str:
+    return os.path.join(TAINT_DIR, hashlib.sha256(sid.encode("utf-8")).hexdigest()[:32] + ".json")
+
+
+def _gh_sub(argv: list):
+    """(subcommand, action) of a gh invocation, skipping leading flags."""
+    words = [t for t in argv[1:] if not t.startswith("-")]
+    return (words[0] if words else ""), (words[1] if len(words) > 1 else "")
+
+
+def _clip(value, limit: int = TAINT_FIELD_MAX) -> str:
+    """One redacted line: control characters dropped, whitespace collapsed."""
+    text = CONTROL_RE.sub(" ", str(value or ""))
+    return redact_str(" ".join(text.split()))[:limit]
+
+
+def untrusted_input(tool: str, tool_input: dict, command: str, cwd: str = "") -> dict | None:
+    """What this completed tool call brought in from outside the user's own
+    instructions ({kind, tool, location}), or None."""
+    if tool == "WebFetch":
+        return {"kind": "web", "tool": tool, "location": str(tool_input.get("url") or "")}
+    if tool == "WebSearch":
+        return {"kind": "search", "tool": tool, "location": str(tool_input.get("query") or "")}
+    if tool.startswith("mcp__") and not tool.startswith(TRUSTED_MCP_PREFIXES):
+        urls = [tool_input[k] for k in URL_KEYS if isinstance(tool_input.get(k), str) and tool_input[k]]
+        return {"kind": "mcp", "tool": tool, "location": " ".join([tool] + urls[:1])}
+    if tool == "Read":
+        path = str(tool_input.get("file_path") or "")
+        if path.lower().endswith(IMAGE_EXTS):
+            if cwd and not os.path.isabs(path):
+                path = os.path.join(cwd, path)
+            return {"kind": "image", "tool": tool, "location": os.path.normpath(path)}
+    if command and tool in ("Bash", "Shell", ""):
+        for argv, raw in segments(command):
+            name = cmd_name(argv)
+            if name in FETCH_CLIENTS:
+                urls = [t for t in argv[1:] if "://" in t]
+                hosts = [h for h in (_url_host(t) for t in urls) if h]
+                if hosts and all(_is_loopback(h) for h in hosts):
+                    continue
+                return {"kind": "fetch", "tool": name, "location": urls[0] if urls else raw}
+            if name == "gh":
+                sub, action = _gh_sub(argv)
+                if sub in ("api", "search") or action in GH_READ_ACTIONS:
+                    return {"kind": "gh", "tool": "gh", "location": raw}
+    return None
+
+
+def _short_source(inp: dict) -> str:
+    """kind:name for one-line messages: an image's file name, a URL's host."""
+    loc = str(inp.get("location") or "")
+    if inp.get("kind") == "image":
+        loc = os.path.basename(loc)
+    elif inp.get("kind") in ("web", "fetch"):
+        loc = _url_host(loc) or loc
+    return f"{inp.get('kind') or 'unknown'}:{loc}"[:200]
+
+
+def _quiet(argv: list, deadline: float):
+    """(returncode, stdout) of a short local command run before ``deadline``
+    (time.monotonic()); (-1, "") when it cannot run or the time is spent."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        return -1, ""
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=left,
+                           env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"})
+        return r.returncode, r.stdout.strip()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return -1, ""
+
+
+def _git_origin(path: str) -> str:
+    """Who put the file there per git: the last commit's author, or untracked.
+    Only plumbing that runs no repository-configured program (no fsmonitor,
+    signature check, filter or textconv): the repository may be the attacker's.
+    All git calls share GIT_ORIGIN_BUDGET_S."""
+    deadline = time.monotonic() + GIT_ORIGIN_BUDGET_S
+    rc, top = _quiet(GIT_SAFE + ["-C", os.path.dirname(path) or ".", "rev-parse", "--show-toplevel"], deadline)
+    if rc != 0 or not top:
+        return ""
+    rel = os.path.relpath(os.path.realpath(path), os.path.realpath(top))
+    repo = os.path.basename(top)
+    rc, _ = _quiet(GIT_SAFE + ["-C", top, "ls-files", "--error-unmatch", "--", rel], deadline)
+    if rc != 0:
+        return f"untracked in {repo}"
+    rc, log = _quiet(GIT_SAFE + ["-C", top, "log", "-1", "--format=%an <%ae>%x1f%h%x1f%cs%x1f%s", "--", rel], deadline)
+    if rc != 0 or not log:
+        return f"tracked in {repo}, no commit yet"
+    author, sha, date, subject = (log.split("\x1f") + ["", "", "", ""])[:4]
+    out = f"committed by {author} in {repo}@{sha} on {date} ({subject[:80]})"
+    _, blob = _quiet(GIT_SAFE + ["-C", top, "hash-object", "--no-filters", "--", rel], deadline)
+    _, head = _quiet(GIT_SAFE + ["-C", top, "rev-parse", "HEAD:" + rel], deadline)
+    if blob and head and blob != head:
+        out += ", changed locally since"
+    return out
+
+
+def _xattr(path: str, name: str) -> bytes:
+    """One extended attribute's bytes, or b"" (absent, unsupported, > 64 KiB)."""
+    try:
+        if hasattr(os, "getxattr"):
+            return os.getxattr(path, name)[:65536]
+        import ctypes
+        import ctypes.util
+        get = ctypes.CDLL(ctypes.util.find_library("c")).getxattr
+        get.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t,
+                        ctypes.c_uint32, ctypes.c_int]
+        get.restype = ctypes.c_ssize_t
+        p, n = path.encode(), name.encode()
+        size = get(p, n, None, 0, 0, 0)
+        if size <= 0 or size > 65536:
+            return b""
+        buf = ctypes.create_string_buffer(size)
+        size = get(p, n, buf, size, 0, 0)
+        return buf.raw[:size] if size > 0 else b""
+    except Exception:
+        return b""
+
+
+def _download_origin(path: str) -> str:
+    """Where macOS recorded the file came from: the download URL and the
+    application that saved it."""
+    out = ""
+    raw = _xattr(path, "com.apple.metadata:kMDItemWhereFroms")
+    if raw:
+        try:
+            import plistlib
+            urls = [u for u in plistlib.loads(raw) if isinstance(u, str) and u]
+        except Exception:
+            urls = []
+        if urls:
+            out = "downloaded from " + urls[0]
+    agent = _xattr(path, "com.apple.quarantine").decode("utf-8", "replace").split(";")
+    if len(agent) >= 3 and agent[2]:
+        out = f"{out} by {agent[2]}" if out else f"downloaded by {agent[2]}"
+    return out
+
+
+def _origin(inp: dict) -> str:
+    """Who sent this input, as far as the machine records it."""
+    kind, loc = inp.get("kind"), str(inp.get("location") or "")
+    if kind == "image":
+        parts = [p for p in (_git_origin(loc), _download_origin(loc)) if p]
+        return "; ".join(parts) or "no git history or download record"
+    if kind in ("web", "fetch"):
+        host = _url_host(loc)
+        return f"fetched from {host}" if host else ""
+    if kind == "search":
+        return "web search results"
+    if kind == "mcp":
+        server = str(inp.get("tool") or "").split("__")
+        return f"MCP server {server[1]}" if len(server) > 2 else ""
+    if kind == "gh":
+        return "GitHub"
+    return ""
+
+
+def _prune_taint() -> None:
+    cutoff = time.time() - TAINT_MAX_AGE_S
+    try:
+        for name in os.listdir(TAINT_DIR):
+            p = os.path.join(TAINT_DIR, name)
+            if name.endswith((".json", ".tmp")) and os.path.getmtime(p) < cutoff:
+                os.unlink(p)
+    except OSError:
+        pass
+
+
+def record_taint(payload: dict, event: str) -> None:
+    """Record an untrusted input on the session's taint record: the first one
+    creates it (exclusive create), later distinct ones are appended up to
+    TAINT_MAX_SOURCES. Never fails the hook."""
+    try:
+        sid = _stable_session_id(payload)
+        tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+        command = str(payload.get("command") or tool_input.get("command") or "")
+        inp = untrusted_input(str(payload.get("tool_name") or ""), tool_input, command,
+                              str(payload.get("cwd") or ""))
+        if not sid or not inp:
+            return
+        inp = {"kind": inp["kind"], "tool": _clip(inp["tool"], 120), "location": _clip(inp["location"])}
+        path = _taint_path(sid)
+        rec = taint_of(payload)
+        if rec is not None and not _can_add_source(rec, inp):
+            return
+        inp = {"ts": now(), **inp, "origin": _clip(_origin(inp))}
+        os.makedirs(TAINT_DIR, exist_ok=True)
+        os.chmod(TAINT_DIR, 0o700)
+        if rec is None:
+            _prune_taint()
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump({"ts": inp["ts"], "source": _short_source(inp), "sources": [inp]}, fh)
+            except FileExistsError:
+                rec = taint_of(payload)
+                if rec is None or not _can_add_source(rec, inp):
+                    return
+        if rec is not None:
+            rec["sources"] = _sources_of(rec) + [inp]
+            tmp = f"{path}.{os.getpid()}.tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(rec, fh)
+            os.replace(tmp, path)
+        audit("allow", "untrusted-input:" + inp["kind"], inp["location"], event)
+    except Exception:
+        pass
+
+
+def _sources_of(rec: dict) -> list:
+    sources = rec.get("sources")
+    return [s for s in sources if isinstance(s, dict)] if isinstance(sources, list) else []
+
+
+def _can_add_source(rec: dict, inp: dict) -> bool:
+    sources = _sources_of(rec)
+    if "source" in rec and rec.get("source") == "unreadable":
+        return False
+    return len(sources) < TAINT_MAX_SOURCES and not any(
+        s.get("kind") == inp["kind"] and s.get("location") == inp["location"] for s in sources)
+
+
+def taint_of(payload: dict):
+    """The session's taint record, or None. An unreadable record counts as taint."""
+    sid = _stable_session_id(payload)
+    if not sid:
+        return None
+    path = _taint_path(sid)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+        return rec if isinstance(rec, dict) else {"source": "unreadable"}
+    except Exception:
+        return {"source": "unreadable"}
+
+
+def _is_loopback(host: str) -> bool:
+    h = (host or "").lower().strip("[]")
+    return h in LOOPBACK_HOSTS or h.startswith("127.") or h == "::1"
+
+
+def _url_host(token: str) -> str:
+    try:
+        return urlsplit(token).hostname or ""
+    except ValueError:
+        return ""
+
+
+def url_carries_data(url: str) -> bool:
+    """A URL that can smuggle data out: query, fragment, credentials, an IP
+    literal host, or a long or token-shaped path segment."""
+    try:
+        u = urlsplit(url)
+        host = u.hostname or ""
+    except ValueError:
+        return True
+    if not host or _is_loopback(host):
+        return False
+    if u.query or u.fragment or u.username or u.password:
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        pass
+    for seg in u.path.split("/"):
+        if len(seg) >= 64:
+            return True
+        if (TOKEN_SEGMENT_RE.fullmatch(seg) and re.search(r"\d", seg)
+                and re.search(r"[A-Za-z]", seg)):
+            return True
+    return False
+
+
+def _git_subcommand(argv: list) -> list:
+    """git argv after global options (-C <path>, -c <k=v>, --flags)."""
+    rest = argv[1:]
+    i = 0
+    while i < len(rest):
+        t = rest[i]
+        if t in ("-C", "-c", "--git-dir", "--work-tree", "--namespace"):
+            i += 2
+        elif t.startswith("-"):
+            i += 1
+        else:
+            break
+    return rest[i:]
+
+
+def _segment_egress(argv: list, raw: str) -> str:
+    """The egress sink one shell segment runs, or ""."""
+    name = cmd_name(argv)
+    if name in FETCH_CLIENTS:
+        hosts = [h for h in (_url_host(t) for t in argv[1:] if "://" in t) if h]
+        if hosts and all(_is_loopback(h) for h in hosts):
+            return ""
+        return f"{name} {hosts[0]}" if hosts else name
+    if name in SOCKET_CLIENTS:
+        targets = [t for t in argv[1:] if not t.startswith("-")]
+        if targets and _is_loopback(targets[0].split("@")[-1].split(":")[0]):
+            return ""
+        return name
+    if name == "rsync" and any(re.match(r"^(rsync://|[^/\s]+:)", t) for t in argv[1:]):
+        return "rsync"
+    if name == "git":
+        sub = _git_subcommand(argv)
+        if sub and sub[0] in ("push", "send-email"):
+            return " ".join(["git"] + sub[:2])
+    if name == "gh":
+        sub, action = _gh_sub(argv)
+        if action in GH_WRITE.get(sub, ()):
+            return f"gh {sub} {action}"
+        if sub == "api":
+            method = ""
+            for i, t in enumerate(argv):
+                if t in ("-X", "--method") and i + 1 < len(argv):
+                    method = argv[i + 1].upper()
+                elif t.startswith("--method="):
+                    method = t.split("=", 1)[1].upper()
+            if (method and method != "GET") or any(
+                    t in ("-f", "-F", "--field", "--raw-field", "--input") or
+                    t.startswith(("--field=", "--raw-field=", "--input=")) for t in argv):
+                return "gh api"
+    if name in INTERPRETERS and NET_CODE_RE.search(raw):
+        return f"{name} inline network"
+    if name == "open":
+        urls = [t for t in argv[1:] if t.startswith(("http://", "https://")) and url_carries_data(t)]
+        if urls:
+            return "open " + _url_host(urls[0])
+    return ""
+
+
+def shell_egress_target(command: str) -> str:
+    """Every egress sink in a shell command line, joined, or "". One approval
+    covers exactly this set, never a sink the user was not shown."""
+    found = []
+    for argv, raw in segments(command):
+        sink = _segment_egress(argv, raw)
+        if sink and sink not in found:
+            found.append(sink)
+    return ", ".join(found)[:500]
+
+
+def egress_target(tool: str, tool_input: dict, command: str) -> str:
+    """Where this tool call would send data, or "" when it is not an egress sink."""
+    if command and tool in ("Bash", "Shell", ""):
+        return shell_egress_target(command)
+    for key in URL_KEYS:
+        url = tool_input.get(key)
+        if isinstance(url, str) and url_carries_data(url):
+            return f"{tool} {_url_host(url) or 'url'}"
+    if tool.startswith("mcp__"):
+        verb = tool.split("__", 2)[-1].lower().replace("-", "_").split("_", 1)[0]
+        if verb in MCP_SEND_VERBS:
+            return tool
+    return ""
+
+
+def gate_untrusted_egress(tool: str, tool_input: dict, command: str, event: str) -> None:
+    """Apply the untrusted-egress mode to a sink in a tainted session. Returns
+    when the call may proceed; exits through allow()/deny()/emit_ask() otherwise."""
+    target = egress_target(tool, tool_input, command)
+    if not target:
+        return
+    taint = taint_of(_PAYLOAD)
+    if taint is None:
+        return
+    source = str(taint.get("source") or "unknown")[:200]
+    sources = taint_sources(taint)
+    mode = _resolve_mode(EGRESS_RULE, EGRESS_SHIPPED_MODE, _cwd_mode_map(), _mode_overrides())
+    subject = command or target
+
+    def record(decision: str) -> dict:
+        return {"decision": decision, "sinks": _clip(target, 500), "harness": runtime(), "sources": sources}
+
+    if mode == "monitor":
+        audit("allow", "guard-monitor:" + EGRESS_RULE, subject, event, untrusted=record("monitored"))
+        return
+    agent_msg = (f"DENIED by Secure Agent ({EGRESS_RULE}): this session read untrusted content "
+                 f"({source}), so sending data out ({target}) needs the user's approval. Tell the "
+                 "user what you want to send and where; they approve it in the Secure Agent prompt.")
+    user_msg = f"Blocked: {target} after untrusted content ({source})."
+    if mode != "prompt":
+        deny("guard-deny:" + EGRESS_RULE, user_msg, agent_msg, subject, event, untrusted=record("denied"))
+    read = "; ".join(source_phrase(s) for s in sources[:3])
+    detail = f"This session read untrusted content: {read}. It now sends data out: {target}."[:600]
+    d = _guard_query(runtime(), tool or "Bash", target, EGRESS_RULE, PROMPT_DEADLINE_S,
+                     _cwd_for_request(), detail=detail)
+    if d is None:
+        if runtime() == "claude":
+            emit_ask(f"Secure Agent: this session read untrusted content ({read}). Allow {target}?",
+                     subject, event, untrusted=record("asked"))
+        deny("guard-deny:" + EGRESS_RULE, user_msg + " Approval needs the monitor.", agent_msg, subject, event,
+             untrusted=record("denied"))
+    if isinstance(d, dict) and d.get("verdict") == "allow":
+        allow("guard-allow:" + EGRESS_RULE, subject, event, broker=True, untrusted=record("allowed"))
+    deny("guard-deny:" + EGRESS_RULE, user_msg, agent_msg, subject, event, broker=True,
+         untrusted=record("denied"))
+
+
+SOURCE_LABELS = {"image": "image", "web": "web page", "search": "web search", "mcp": "MCP tool output",
+                 "fetch": "downloaded content", "gh": "GitHub content"}
+
+
+def taint_sources(taint: dict) -> list:
+    """The record's untrusted inputs, bounded and redacted; a record without a
+    source list yields its first source."""
+    out = _sources_of(taint)[:TAINT_MAX_SOURCES]
+    if not out:
+        kind, _, loc = str(taint.get("source") or "unknown").partition(":")
+        out = [{"ts": taint.get("ts"), "kind": kind, "location": loc}]
+    keys = ("ts", "kind", "tool", "location", "origin")
+    return [{k: _clip(s.get(k), 120 if k in ("ts", "kind", "tool") else TAINT_FIELD_MAX) for k in keys}
+            for s in out]
+
+
+def source_phrase(s: dict) -> str:
+    """'image /repo/x.png, committed by …' for prompts."""
+    text = f"{SOURCE_LABELS.get(s.get('kind'), s.get('kind') or 'input')} {s.get('location') or ''}".strip()
+    return f"{text}, {s['origin']}" if s.get("origin") else text
 
 
 # --- command parsing --------------------------------------------------------
@@ -1274,6 +1773,7 @@ def main() -> int:
             log_payload(data)
         except Exception:
             pass
+        record_taint(data, event)
         result = data.get("tool_output") or data.get("tool_result") or data.get("content") or data
         hits = scan_text(result)
         if hits:
@@ -1345,6 +1845,8 @@ def main() -> int:
         if write_verdict.kind == "deny":
             verdict = write_verdict
 
+    if verdict.kind == "allow":
+        gate_untrusted_egress(tool, tool_input if isinstance(tool_input, dict) else {}, command, event)
     apply_verdict(verdict, command or file_path, event)
     return 0
 

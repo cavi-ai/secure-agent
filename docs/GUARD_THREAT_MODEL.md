@@ -24,6 +24,12 @@ An AI agent process (or a prompt-injected tool call within one) attempting to:
   protected file inside, so the governing rule's mode gates the scan itself.
 - Exfiltrate protected directories wholesale (`tar`/`zip`/`ditto`, recursive
   `find -exec`, `xargs` fed from a pipe).
+- Send data out after reading untrusted content (`untrusted-egress`). Once a
+  session has read a web page, a search result, an MCP result, an image, or
+  fetched output, later network commands, `git push`, `gh` writes,
+  data-carrying URLs and MCP send tools in that session follow the rule's
+  mode. The rule does not look for injected instructions, so a payload hidden
+  in an image, a response header or a page does not need to be recognized.
 
 Enforcement points, honestly labeled:
 
@@ -33,6 +39,7 @@ Enforcement points, honestly labeled:
 | Claude `Grep`/`Glob` | Mode-enforced via the governing rule when the search root is a protected directory (`~/.ssh`, `~/.aws`, `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.gnupg`, `~/Library/Keychains`) or matches a file rule directly. |
 | Claude `Bash` | `deny`-mode rules enforced (including protected-directory targets); key material always denied — via `cat` **or any reader alias** (`grep`/`rg` included); `prompt` fails safe to `deny` (no interactive prompt mid-Bash). |
 | Cursor | `Bash` commands only (Cursor's payload lacks `tool_name`). |
+| Untrusted-input egress | Claude Code: every tool the `PreToolUse` hook sees, mode-enforced (`monitor` / `prompt` / `deny`). Cursor: shell commands, tainted only by events that carry a tool name. |
 
 ## Bypass classes that are CLOSED (with regression tests)
 
@@ -83,6 +90,19 @@ Enforcement points, honestly labeled:
    gated — gating broad roots would make normal project searches unusable.
    The governing rule's file-level matches inside the results are still
    enforced per call, and eslogger observes what the scan reads.
+6. **Untrusted-egress sinks are recognized by name and shape.** Command
+   words, `git`/`gh` subcommands, URL shape and MCP tool verbs decide what is
+   a sink. A program the agent writes and then runs, a repository script, or
+   a short secret in a plain URL path is not recognized. Sessions without a
+   harness session id carry no taint. A person committing and pushing what
+   the agent wrote is outside the hook. An `always` answer covers every
+   untrusted-egress sink for that agent.
+7. **Input origins are what the machine recorded.** An image's origin is its
+   last commit (author name and email are whatever the committer set) and the
+   macOS download attributes, which a copy or an archive can drop. Git is
+   read with plumbing commands only, with `core.fsmonitor` and signature
+   checks off, so the repository's configuration runs nothing; the hook
+   spends at most 2 s on git, once per new image.
 
 ## Failure posture
 

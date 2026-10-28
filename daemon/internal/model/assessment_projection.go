@@ -47,6 +47,9 @@ func AssessFinding(f Flag) FindingAssessment {
 			return a
 		}
 	}
+	if f.Rule == "untrusted-egress" {
+		return assessUntrustedEgress(f, a)
+	}
 	var reads, conns []EvidenceItem
 	for _, e := range f.Evidence {
 		switch {
