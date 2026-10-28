@@ -70,7 +70,7 @@ flowchart TD
     end
 
     subgraph OS_Telemetry ["macOS Subsystems"]
-        ES["eslogger\n(open, exec, rename, unlink, tcc_modify)"]
+        ES["eslogger\n(file, exec, TCC, background items,\nprofiles, Gatekeeper, XProtect)"]
         LP["lsof\n(Socket Sampler)"]
     end
 
@@ -109,7 +109,7 @@ The app bundle has one identity, `com.cavi-ai.secure-agent`, for Launch Services
 ### Collectors
 
 1. **File Watch Collector (`daemon/internal/collect/eslogger.go`)**:
-   - Subprocesses macOS Endpoint Security (`eslogger`) streaming events for `open`, `exec`, `rename`, `unlink`, and `tcc_modify`.
+   - Subprocesses macOS Endpoint Security (`eslogger`) streaming events for `open`, `exec`, `rename`, `unlink`, `tcc_modify`, `btm_launch_item_add`, `btm_launch_item_remove`, `profile_add`, `gatekeeper_user_override` and `xp_malware_detected`. Background item and profile events are attributed to their instigating process.
    - Parses the JSON stream in real-time and filters target paths against sensitive path rules (`sensitive_globs`, `sensitive_paths`, `keychain_markers`).
 
    On macOS `eslogger` requires root, so it runs in a collector daemon that ships inside the app bundle: the daemon binary again as `Contents/MacOS/secure-agent-esd` (that name selects collector mode) with its LaunchDaemon plist at `Contents/Library/LaunchDaemons/com.cavi-ai.secure-agent-esd.plist`. The app registers it with `SMAppService.daemon`; the user approves Secure Agent once in Login Items and once in Full Disk Access, with no admin password. The collector refuses to start when its own code signature does not verify, then appends eslogger's JSON to `/var/db/secure-agent/es-spool.jsonl`, which the unprivileged daemon tails (`daemon/internal/collect/spool.go`).
@@ -286,6 +286,9 @@ The correlator evaluates incoming event streams against a sliding time window (d
 
 - **Rule: `sensitive-read-then-connect`**: A secret read and connection in the same process tree, or a model-visible agent tool read followed by a family connection, raises a severity-3 flag. A file read and later connection in unrelated sibling processes of the same agent family remains a severity-2 finding: useful for review, but weaker evidence of transfer. The owner-use and operator-expected-pattern checks still apply before a flag is raised.
 - **Rule: `keychain-access`**: Detects direct access attempts targeting macOS Keychain files or `security` CLI invocations.
+- **Rule: `launch-item-change`**: An agent process tree that adds or removes a background item (launch agent, launch daemon, login item) raises a severity-3 flag naming the item and its executable.
+- **Rule: `trust-change`**: An agent process tree that installs a configuration profile or overrides Gatekeeper raises a severity-3 flag.
+- **Rule: `xprotect-detection`**: Every XProtect malware detection raises a severity-3 flag naming the malware and the detected path, whichever process the file came from.
 
 ---
 
