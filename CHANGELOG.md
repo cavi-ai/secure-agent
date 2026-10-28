@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Guard: before the agent reads an image, the app's `secure-agent-image-text` helper reads its text with macOS Vision at full size, at model downscale sizes and with faint text stretched; a prompt-injection match follows the `image-injection` rule (monitor by default).
 - Guard: the `untrusted-egress` rule applies its mode (monitor by default) to network commands, `git push`, `gh` writes, data-carrying URLs and MCP send tools once a session has read web, MCP (other than the Claude app's own tools), image or fetched content; a "Data sent after reading untrusted content" finding, session memory and the prompt name each input, its origin (git committer, download URL) and the send.
 
 ## [1.4.0] - 2026-10-22

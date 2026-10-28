@@ -103,6 +103,13 @@ Enforcement points, honestly labeled:
    read with plumbing commands only, with `core.fsmonitor` and signature
    checks off, so the repository's configuration runs nothing; the hook
    spends at most 2 s on git, once per new image.
+8. **Image text is what Vision reads in a few fixed views.** Full size, 1568,
+   768 and 512 pixel long edges (Lanczos), and two level stretches. A model
+   resizing with another filter or to another size, text split across
+   regions, handwriting, or an instruction phrased past the keyword detector
+   can pass. The check runs only on `Read` of an image file, in the app's
+   helper (5 s limit, 25 MB cap); images an MCP tool or a page returns are not
+   checked.
 
 ## Failure posture
 
