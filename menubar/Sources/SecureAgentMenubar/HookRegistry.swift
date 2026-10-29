@@ -4,7 +4,13 @@ import Foundation
 /// Harness hook installation and per-harness settings registration.
 enum HookRegistry {
     static func hookDirectory(harness: String, home: String) -> String {
-        harness == "openclaw" ? "\(home)/.openclaw/extensions/secure-agent" : "\(home)/.\(harness)/hooks"
+        switch harness {
+        case "openclaw": return "\(home)/.openclaw/extensions/secure-agent"
+        case "hermes": return "\(home)/.hermes/plugins/secure-agent"
+        case "opencode": return "\(home)/.config/opencode/plugins/secure-agent"
+        case "antigravity": return "\(home)/.gemini/secure-agent/hooks"
+        default: return "\(home)/.\(harness)/hooks"
+        }
     }
 
     /// Hook scripts shipped in a bundled hooks directory (tests excluded), and
@@ -21,6 +27,10 @@ enum HookRegistry {
             throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "This harness has no supported guard hook."])
         }
         let fm = FileManager.default
+        if ["antigravity", "hermes", "opencode"].contains(harness) {
+            try installAdditionalHooks(harness: harness, bundledDir: bundledDir, home: home)
+            return
+        }
         if harness == "openclaw" {
             let target = hookDirectory(harness: harness, home: home)
             if fm.fileExists(atPath: target) {
@@ -83,9 +93,10 @@ enum HookRegistry {
     }
 
     static func selectedHookCommand(harness: String, home: String) -> String {
-        let script = harness == "codex" ? "harness_guard.py" : "secret_guard.py"
+        let adapter = !["claude", "cursor"].contains(harness)
+        let script = adapter ? "harness_guard.py" : "secret_guard.py"
         let command = "python3 '" + "\(hookDirectory(harness: harness, home: home))/\(script)".replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
-        return command + (harness == "codex" ? " codex" : "")
+        return command + (adapter ? " " + harness : "")
     }
 
     static func selectedHooksInstalled(harness: String, home: String) -> Bool {
@@ -93,6 +104,14 @@ enum HookRegistry {
         let fm = FileManager.default
         let dir = hookDirectory(harness: harness, home: home)
         guard ["secret_guard.py", "activity_log.py", "injection_scan.py", "guard-rules.json"].allSatisfy({ fm.fileExists(atPath: "\(dir)/\($0)") }) else { return false }
+        if ["antigravity", "hermes", "opencode"].contains(harness) {
+            guard fm.fileExists(atPath: dir + "/harness_guard.py") else { return false }
+            switch harness {
+            case "antigravity": return Antigravity.registered(at: home + "/.gemini/config/hooks.json", command: selectedHookCommand(harness: harness, home: home))
+            case "hermes": return fm.fileExists(atPath: dir + "/__init__.py") && Hermes.registered(at: home + "/.hermes/config.yaml")
+            default: return fm.fileExists(atPath: dir + "/index.js") && fm.fileExists(atPath: dir + "/package.json") && OpenCode.registered(home: home)
+            }
+        }
         if harness == "openclaw" {
             return ["harness_guard.py", "package.json", "openclaw.plugin.json", "index.mjs"].allSatisfy { fm.fileExists(atPath: "\(dir)/\($0)") }
         }

@@ -1,0 +1,6 @@
+{
+  "name": "@cavi-ai/secure-agent-opencode",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": { ".": "./index.js" }
+}

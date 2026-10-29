@@ -15,7 +15,7 @@ class HarnessGuardTests(unittest.TestCase):
             modes = Path(home, "modes.json")
             modes.write_text(json.dumps({"ssh-keys": "deny"}))
             env["SECURE_AGENT_GUARD_MODES"] = str(modes)
-            for harness in ("codex", "openclaw"):
+            for harness in ("codex", "openclaw", "hermes", "opencode", "antigravity"):
                 for tool, args in [
                     ("Bash", {"command": "cat ~/.ssh/id_rsa"}),
                     ("read", {"path": home + "/.ssh/id_rsa"}),
@@ -23,10 +23,25 @@ class HarnessGuardTests(unittest.TestCase):
                 ]:
                     payload = {"hook_event_name": "PreToolUse", "tool_name": tool,
                                "tool_input": args, "cwd": home, "session_id": harness + "-session"}
-                    result = subprocess.run([sys.executable, str(Path(__file__).with_name("harness_guard.py")), harness],
+                    if harness == "antigravity":
+                        names = {"Bash": "run_command", "read": "view_file", "apply_patch": "write_to_file"}
+                        native_args = {"CommandLine": args["command"]} if tool == "Bash" else {
+                            "AbsolutePath" if tool == "read" else "TargetFile": home + ("/.ssh/id_rsa" if tool == "read" else "/.zshrc")}
+                        payload = {"toolCall": {"name": names[tool], "args": native_args},
+                                   "conversationId": harness + "-session", "workspacePaths": [home]}
+                    result = subprocess.run([sys.executable, str(Path(__file__).with_name("harness_guard.py")), harness, "PreToolUse"],
                                             input=json.dumps(payload), text=True, capture_output=True, env=env, timeout=10)
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
+                    response = json.loads(result.stdout)
+                    self.assertEqual(response.get("decision") if harness == "antigravity" else response["hookSpecificOutput"]["permissionDecision"], "deny")
+                allowed = ({"toolCall": {"name": "run_command", "args": {"CommandLine": "echo hello", "Cwd": home}},
+                            "conversationId": harness + "-session", "workspacePaths": [home]} if harness == "antigravity" else
+                           {"hook_event_name": "PreToolUse", "tool_name": "terminal" if harness == "hermes" else "bash",
+                            "tool_input": {"command": "echo hello"}, "cwd": home, "session_id": harness + "-session"})
+                result = subprocess.run([sys.executable, str(Path(__file__).with_name("harness_guard.py")), harness, "PreToolUse"],
+                                        input=json.dumps(allowed), text=True, capture_output=True, env=env, timeout=10)
+                response = json.loads(result.stdout)
+                self.assertEqual(response.get("decision") if harness == "antigravity" else response.get("permission"), "allow")
             rows = [json.loads(line) for line in Path(home, "activity.jsonl").read_text().splitlines()]
             self.assertTrue(any(row.get("session_id") == "codex-session" for row in rows))
             self.assertTrue(any(row.get("session_id") == "openclaw-session" for row in rows))
