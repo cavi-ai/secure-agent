@@ -16,9 +16,10 @@ import (
 // The helper drops open events on system paths before they reach the spool:
 // opens of OS libraries, frameworks, dyld caches, app-bundle resources,
 // package-manager libraries and the per-user temporary and cache roots carry
-// much of eslogger's volume and none of the daemon's signal. Every other
-// event type is kept, and an open is never dropped when the daemon's
-// sensitive-path classifier matches its path.
+// much of eslogger's volume and none of the daemon's signal. An open is never
+// dropped when the daemon's sensitive-path classifier matches its path. A
+// create is kept only when it names a launchd agent or daemon directory, the
+// one place the daemon reads new files from. Every other event type is kept.
 
 // esNoisePrefixes are the open-path prefixes whose opens are dropped.
 var esNoisePrefixes = []string{
@@ -54,8 +55,24 @@ var esNoiseExact = map[string]bool{
 var (
 	esEventMarker = []byte(`"event":{"`)
 	esOpenKey     = []byte(`open":{`)
+	esCreateKey   = []byte(`create":{`)
 	esPathMarker  = []byte(`"path":"`)
 )
+
+// esLaunchItemDirs are the launchd agent and daemon directories, system-wide
+// and under each home.
+var esLaunchItemDirs = [][]byte{[]byte("/Library/LaunchAgents"), []byte("/Library/LaunchDaemons")}
+
+// namesLaunchItemDir reports whether an eslogger line mentions a launchd
+// agent or daemon directory anywhere.
+func namesLaunchItemDir(line []byte) bool {
+	for _, d := range esLaunchItemDirs {
+		if bytes.Contains(line, d) {
+			return true
+		}
+	}
+	return false
+}
 
 // esSensitive is the daemon's sensitive-path classifier over the compiled-in
 // config (os.DevNull as the overlay: the root helper reads no user file).
@@ -70,16 +87,20 @@ var esSensitive = sync.OnceValue(func() sensitive.Classifier {
 })
 
 // keepESLine reports whether one eslogger JSON line goes to the spool. It
-// drops only open events whose path is system noise; a line it cannot read
-// (malformed, unexpected shape) is kept. Byte scans first: the line is
-// JSON-decoded only when eslogger's compact layout is absent, and the path
-// string only when it holds escapes.
+// drops open events whose path is system noise and creates outside the
+// launch-item directories; a line it cannot read (malformed, unexpected
+// shape) is kept. Byte scans first: the line is JSON-decoded only when
+// eslogger's compact layout is absent, and the path string only when it
+// holds escapes.
 func keepESLine(line []byte) bool {
 	i := bytes.Index(line, esEventMarker)
 	if i < 0 {
 		return keepESLineParsed(line)
 	}
 	rest := line[i+len(esEventMarker):]
+	if bytes.HasPrefix(rest, esCreateKey) {
+		return namesLaunchItemDir(rest)
+	}
 	if !bytes.HasPrefix(rest, esOpenKey) {
 		return true // every event other than open
 	}
@@ -113,9 +134,16 @@ func keepESLineParsed(line []byte) bool {
 					Path string `json:"path"`
 				} `json:"file"`
 			} `json:"open"`
+			Create json.RawMessage `json:"create"`
 		} `json:"event"`
 	}
-	if err := json.Unmarshal(line, &env); err != nil || env.Event.Open == nil {
+	if err := json.Unmarshal(line, &env); err != nil {
+		return true
+	}
+	if env.Event.Create != nil {
+		return namesLaunchItemDir(env.Event.Create)
+	}
+	if env.Event.Open == nil {
 		return true
 	}
 	return !dropESOpenPath([]byte(env.Event.Open.File.Path))

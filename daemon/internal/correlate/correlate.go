@@ -92,6 +92,9 @@ type Correlator struct {
 	// Rejection undo records belong only to flags from the latest Observe.
 	// They are discarded on persistence resolution or the next observation.
 	persistenceUndo map[string][]func()
+	// launchWriters[path] is the last agent that created, changed or deleted
+	// a file in a launchd agent or daemon directory.
+	launchWriters map[string]launchWriter
 	// allowlistOverrides supplies user-approved hosts (console suggestions) on
 	// top of the config allowlist. Nil unless supplied in Hooks.
 	allowlistOverrides func(agent string) []string
@@ -453,6 +456,12 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 
 	info, isAgent := c.tagger.Tag(e.PID)
 	if !isAgent {
+		// BTM names smd, not the writer, for a plist dropped into a launchd
+		// directory: the agent that wrote that file is the actor.
+		if w, ok := c.launchWriterLocked(e); ok {
+			e.PID, e.PPID, e.ExePath, e.SessionID = w.pid, 0, w.exe, w.sessionID
+			return c.systemChangeLocked(e, w.agent)
+		}
 		return c.untaggedKeychainLocked(e)
 	}
 
@@ -462,6 +471,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 	}
 
 	var flags []model.Flag
+	c.rememberLaunchWriterLocked(e, info.Name)
 
 	switch e.Kind {
 	case event.KindFileOpen, event.KindFileWrite, event.KindPluginAction:
@@ -728,6 +738,62 @@ func (c *Correlator) systemChangeLocked(e event.Event, agent string) []model.Fla
 	}}
 }
 
+// launchWriter is the agent process that last wrote one launch-item file.
+type launchWriter struct {
+	pid       int32
+	agent     string
+	exe       string
+	sessionID string
+	at        time.Time
+}
+
+// maxLaunchWriters bounds launchWriters between evictions.
+const maxLaunchWriters = 256
+
+// isLaunchItemPath reports whether path is a file directly in a launchd agent
+// or daemon directory, system-wide or under a home.
+func isLaunchItemPath(path string) bool {
+	dir := filepath.Dir(path)
+	return strings.HasSuffix(dir, "/Library/LaunchAgents") || strings.HasSuffix(dir, "/Library/LaunchDaemons")
+}
+
+// rememberLaunchWriterLocked records an agent's create, rename, write-open or
+// delete of a launch-item file. Callers hold c.mu.
+func (c *Correlator) rememberLaunchWriterLocked(e event.Event, agent string) {
+	switch e.Kind {
+	case event.KindFileWrite, event.KindFileDelete:
+	case event.KindFileOpen:
+		if !e.OpensForWrite() {
+			return
+		}
+	default:
+		return
+	}
+	if !isLaunchItemPath(e.Path) {
+		return
+	}
+	if c.launchWriters == nil {
+		c.launchWriters = make(map[string]launchWriter)
+	}
+	if _, ok := c.launchWriters[e.Path]; !ok && len(c.launchWriters) >= maxLaunchWriters {
+		return
+	}
+	c.launchWriters[e.Path] = launchWriter{pid: e.PID, agent: agent, exe: e.ExePath, sessionID: e.SessionID, at: e.TS}
+}
+
+// launchWriterLocked returns the agent that wrote a background item's file
+// within window before the BTM event. Callers hold c.mu.
+func (c *Correlator) launchWriterLocked(e event.Event) (launchWriter, bool) {
+	if e.Kind != event.KindLaunchItemAdd && e.Kind != event.KindLaunchItemRemove {
+		return launchWriter{}, false
+	}
+	w, ok := c.launchWriters[e.Path]
+	if !ok || e.TS.Sub(w.at) > window || w.at.Sub(e.TS) > time.Second {
+		return launchWriter{}, false
+	}
+	return w, true
+}
+
 // malwareDetectedLocked applies xprotect-detection to one XProtect detection.
 // The detection is machine-wide: XProtect, not an agent, reports it. Callers
 // hold c.mu.
@@ -990,6 +1056,11 @@ func (c *Correlator) evictStaleLocked(now time.Time) {
 	}
 	c.lastEviction = now
 	c.evictOwnedLocked(now)
+	for path, w := range c.launchWriters {
+		if now.Sub(w.at) > window {
+			delete(c.launchWriters, path)
+		}
+	}
 	// Repeat suppression outlives every rule window, but expired subjects
 	// should not wait for another flag or trigger a full scan per insertion.
 	for key, at := range c.lastFire {

@@ -33,6 +33,11 @@ func esOpenTestLine(path string) string {
 	return esTestLine("open", map[string]any{"file": map[string]any{"path": path, "path_truncated": false}, "fflag": 1})
 }
 
+func esCreateTestLine(dir, name string) string {
+	return esTestLine("create", map[string]any{"destination_type": 1,
+		"destination": map[string]any{"new_path": map[string]any{"dir": map[string]any{"path": dir, "path_truncated": false}, "filename": name}}})
+}
+
 func TestKeepESLine(t *testing.T) {
 	cases := []struct {
 		name string
@@ -54,6 +59,11 @@ func TestKeepESLine(t *testing.T) {
 		{"root dir open", esOpenTestLine("/"), false},
 		{"escaped system path open", strings.Replace(esOpenTestLine("/usr/lib/libz.1.dylib"), `"/usr/lib/libz.1.dylib"`, `"\/usr\/lib\/libz.1.dylib"`, 1), false},
 		{"spaced layout system open", `{"process": {"pid": 7}, "event": {"open": {"file": {"path": "/usr/lib/libz.1.dylib"}}}}`, false},
+		{"project file create", esCreateTestLine("/Users/dev/project", "main.go"), false},
+		{"spaced layout project create", `{"process": {"pid": 7}, "event": {"create": {"destination": {"new_path": {"dir": {"path": "/Users/dev/project"}, "filename": "a.go"}}}}}`, false},
+		{"user launch agent create", esCreateTestLine("/Users/dev/Library/LaunchAgents", "com.example.helper.plist"), true},
+		{"launch daemon create", esCreateTestLine("/Library/LaunchDaemons", "com.example.helper.plist"), true},
+		{"spaced layout launch agent create", `{"process": {"pid": 7}, "event": {"create": {"destination": {"new_path": {"dir": {"path": "/Library/LaunchAgents"}, "filename": "a.plist"}}}}}`, true},
 
 		{"aws credentials open", esOpenTestLine("/Users/dev/.aws/credentials"), true},
 		{"ssh key open", esOpenTestLine("/Users/dev/.ssh/id_ed25519"), true},
