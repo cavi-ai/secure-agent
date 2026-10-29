@@ -27,3 +27,15 @@ c3f7b187b80ad0b51b4c3702b4679c6ee5ce4e34:daemon/internal/agents/snapshot_test.go
 b9a835de8cd1c633b96c3f87f35bfae74b67096c:daemon/internal/firewall/encoded_test.go:aws-access-token:70
 b9a835de8cd1c633b96c3f87f35bfae74b67096c:daemon/internal/firewall/encoded_test.go:generic-api-key:71
 b9a835de8cd1c633b96c3f87f35bfae74b67096c:daemon/internal/firewall/encoded_test.go:github-pat:72
+# The same fake fixtures in commits from before the Sept 25 message rewrite,
+# still reachable from old pull request refs.
+27c3f39ce52819ceb2e746b6249eb9b7a90262e7:CHANGELOG.md:generic-api-key:10
+40a92193b4fe5ec6c01949ad7dc9dddbf847c31a:plugin/hooks/test_activity_log.py:generic-api-key:55
+5c26016be297c78c38de47c336303c8c3303f7db:daemon/internal/firewall/testdata/leak_requests.json:gitlab-pat:6
+5c26016be297c78c38de47c336303c8c3303f7db:daemon/internal/firewall/detect_test.go:gitlab-pat:28
+70f6dca90714673158faf29c7e10537c95d58e54:daemon/internal/firewall/testdata/leak_requests.json:gitlab-pat:6
+70f6dca90714673158faf29c7e10537c95d58e54:daemon/internal/firewall/detect_test.go:gitlab-pat:28
+33a6fdd6325bb282919754ede33700201d2cf2a3:daemon/internal/api/api_test.go:generic-api-key:81
+33a6fdd6325bb282919754ede33700201d2cf2a3:daemon/internal/intel/rotator_test.go:generic-api-key:16
+4a87db7fb8f4137c590f887ea5047bc5abedf6d8:daemon/internal/api/api_test.go:generic-api-key:81
+4a87db7fb8f4137c590f887ea5047bc5abedf6d8:daemon/internal/intel/rotator_test.go:generic-api-key:16
