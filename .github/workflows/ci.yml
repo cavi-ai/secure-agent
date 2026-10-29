@@ -59,6 +59,8 @@ jobs:
         run: make test-go
       - name: Live hook and daemon workflow
         run: make test-guard-workflow-live
+      - name: Attack replay
+        run: make test-attack-replay
 
   hooks:
     name: Python hook tests (${{ matrix.python }})
