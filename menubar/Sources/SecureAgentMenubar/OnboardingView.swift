@@ -9,9 +9,7 @@ struct OnboardingView: View {
     var onDone: () -> Void
     var refreshAutomatically = true
     @StateObject private var flow: FirstUseSetupFlow
-    @State private var selectionInitialized = false
     @State private var optionsExpanded = false
-    @State private var installing = false
     @State private var sampleCopyStatus: String?
 
     init(setup: SetupManager = .shared, appState: AppState, flow: FirstUseSetupFlow? = nil,
@@ -31,6 +29,7 @@ struct OnboardingView: View {
     private var supported: Bool { FirstUseSetupState.supportsHook(selectedHarness) }
     private var installed: Bool { state.installedHarnesses.contains(selectedHarness) }
     private var harnessTitle: String { Self.title(selectedHarness) }
+    private var installing: Bool { flow.installing }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -72,10 +71,7 @@ struct OnboardingView: View {
         .task {
             guard refreshAutomatically else { return }
             await setup.refreshState()
-            if !selectionInitialized {
-                flow.selectedHarness = state.suggestedHarness
-                selectionInitialized = true
-            }
+            flow.applySuggestedHarness(state.suggestedHarness)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             guard refreshAutomatically else { return }
@@ -96,7 +92,7 @@ struct OnboardingView: View {
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             GroupBox("Agent") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Picker("Agent to set up", selection: $flow.selectedHarness) {
+                    Picker("Agent to set up", selection: Binding(get: { selectedHarness }, set: { flow.selectHarness($0) })) {
                         ForEach(FirstUseSetupState.hookHarnesses, id: \.self) { harness in
                             Text(Self.title(harness)).tag(harness)
                         }
@@ -105,7 +101,6 @@ struct OnboardingView: View {
                         }
                     }
                     .accessibilityIdentifier("setup.harness")
-                    .onChange(of: selectedHarness) { _, _ in selectionInitialized = true }
                     Text(state.activeHarnesses.contains(selectedHarness) ? "Running process detected" :
                          state.configuredHarnesses.contains(selectedHarness) ? "Existing harness configuration found" :
                          "No running process or existing configuration detected for this agent.")
@@ -130,7 +125,7 @@ struct OnboardingView: View {
             Text("\(harnessTitle) hooks").font(.headline)
             Text(FirstUseSetupState.installationDetail(selectedHarness))
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Label(installed ? (selectedHarness == "openclaw" ? "Plugin files installed" : "Selected hooks installed and registered") : "Selected hooks not installed",
+            Label(state.installationStatus(for: selectedHarness),
                   systemImage: installed ? "checkmark.circle" : "circle.dotted")
             Text(FirstUseSetupState.supportsProbe(selectedHarness)
                  ? "The check sends an inert request through the installed hook and verifies the monitor's deny response. It changes no policy and does not launch an agent or establish that a running agent invokes the hook."
@@ -301,21 +296,38 @@ struct OnboardingView: View {
     }
 
     private var footer: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                secondaryActions.fixedSize()
+                Spacer(minLength: 12)
+                primaryAction.fixedSize()
+            }
+            VStack(alignment: .trailing, spacing: 10) {
+                HStack { secondaryActions; Spacer() }
+                primaryAction.fixedSize()
+            }
+        }
+    }
+
+    private var secondaryActions: some View {
         HStack {
             if stage != .choose {
-                Button("Change Agent") { flow.stage = .choose }.disabled(setup.hookSelfTestRunning || installing)
+                Button("Change Agent") { flow.stage = .choose }.disabled(setup.hookSelfTestRunning || setup.hookSetupRunning)
             }
             if stage != .result {
                 Button("Finish Later", action: onDone).keyboardShortcut(.cancelAction)
+                    .disabled(setup.hookSetupRunning)
             }
-            Spacer()
-            Button(primaryTitle, action: advance)
-                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                .accessibilityIdentifier("setup.continue")
-                .disabled(setup.hookSelfTestRunning || installing || (stage == .enable &&
-                    ((!installed || selectedHarness == "openclaw") ? !setup.isBundled :
-                        FirstUseSetupState.supportsProbe(selectedHarness) && !state.daemonAvailable)))
         }
+    }
+
+    private var primaryAction: some View {
+        Button(primaryTitle, action: advance)
+            .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+            .accessibilityIdentifier("setup.continue")
+            .disabled(setup.hookSelfTestRunning || setup.hookSetupRunning || installing || (stage == .enable &&
+                ((!installed || selectedHarness == "openclaw") ? !setup.isBundled :
+                    FirstUseSetupState.supportsProbe(selectedHarness) && !state.daemonAvailable)))
     }
 
     private var primaryTitle: String {
@@ -332,24 +344,16 @@ struct OnboardingView: View {
 
     private func advance() {
         switch stage {
-        case .choose: flow.stage = supported ? .enable : .result
+        case .choose:
+            flow.selectHarness(selectedHarness)
+            flow.stage = supported ? .enable : .result
         case .enable:
             if installed && selectedHarness != "openclaw" {
                 if FirstUseSetupState.supportsProbe(selectedHarness) { runCheck() }
                 else { flow.stage = .result }
             }
             else {
-                installing = true
-                let harness = selectedHarness
-                Task {
-                    defer { installing = false }
-                    do {
-                        try setup.installHooks(for: harness)
-                        if harness == "openclaw" { try await setup.registerOpenClawHooks() }
-                        await setup.refreshState()
-                        if !FirstUseSetupState.supportsProbe(harness) { flow.stage = .result }
-                    } catch { setup.report(error); await setup.refreshState() }
-                }
+                Task { await flow.install(using: setup) }
             }
         case .result: onDone()
         }

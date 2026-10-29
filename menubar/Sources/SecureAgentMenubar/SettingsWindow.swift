@@ -135,7 +135,7 @@ enum SettingsTab: Hashable, CaseIterable {
         case .firewall: "Secrets in outbound agent requests: report or block"
         case .notifications: "Which flags send you a notification"
         case .exceptions: "Muted flags and allowed files, each revocable"
-        case .providers: "Which harnesses are monitored"
+        case .providers: "Harness monitoring and hook setup"
         case .telemetry: "File coverage and collector health"
         case .chat: "Chat with a local model on this Mac"
         case .analysis: "The local model that reviews flags"
@@ -547,6 +547,9 @@ struct SettingsView: View {
     /// entirely (no tree rows, no flags, no kill buttons).
     private var providersTab: some View {
         Form {
+            HarnessHookSetupSection(setup: setup) { harness in
+                OnboardingWindowController.shared.show(harness: harness)
+            }
             Section {
                 ForEach(SetupManager.knownAgents, id: \.name) { agent in
                     Toggle(isOn: Binding(
