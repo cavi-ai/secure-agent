@@ -63,6 +63,8 @@ func main() {
 		}
 	case "fingerprint":
 		handleFingerprint(client)
+	case "canary":
+		handleCanary(client, os.Args[2:])
 	case "events":
 		handleEvents(client)
 	case "audit":
@@ -133,6 +135,7 @@ func printUsage() {
 	fmt.Println("  secure-agent firewall mode <rule> <mode> Set a firewall rule mode (monitor|block)")
 	fmt.Println("  secure-agent firewall sources            List fingerprint ingest sources")
 	fmt.Println("  secure-agent fingerprint                 Scan configured sources and register secret fingerprints (HMAC only)")
+	fmt.Println("  secure-agent canary plant <file>         Write decoy credentials to a new file and register them as fingerprints")
 	fmt.Println("  secure-agent service install [daemon]    Install a headless launchd service (no menu bar app required)")
 	fmt.Println("  secure-agent service uninstall           Remove the headless service")
 	fmt.Println("  secure-agent service status              Show the headless service state")

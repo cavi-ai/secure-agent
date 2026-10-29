@@ -41,6 +41,7 @@ Usage:
   secure-agent firewall mode <rule> <mode> Set a firewall rule mode (monitor|block)
   secure-agent firewall sources            List fingerprint ingest sources
   secure-agent fingerprint                 Scan configured sources and register secret fingerprints (HMAC only)
+  secure-agent canary plant <file>         Write decoy credentials to a new file and register them as fingerprints
   secure-agent service install [daemon]    Install a headless launchd service (no menu bar app required)
   secure-agent service uninstall           Remove the headless service
   secure-agent service status              Show the headless service state
