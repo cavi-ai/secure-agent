@@ -750,6 +750,11 @@ type launchWriter struct {
 // maxLaunchWriters bounds launchWriters between evictions.
 const maxLaunchWriters = 256
 
+// launchWriterWindow is how long after an agent's file change a BTM event for
+// that item is still the agent's: BTM reports a deleted legacy plist a minute
+// or more after the file is gone.
+const launchWriterWindow = 10 * time.Minute
+
 // isLaunchItemPath reports whether path is a file directly in a launchd agent
 // or daemon directory, system-wide or under a home.
 func isLaunchItemPath(path string) bool {
@@ -782,13 +787,13 @@ func (c *Correlator) rememberLaunchWriterLocked(e event.Event, agent string) {
 }
 
 // launchWriterLocked returns the agent that wrote a background item's file
-// within window before the BTM event. Callers hold c.mu.
+// within launchWriterWindow before the BTM event. Callers hold c.mu.
 func (c *Correlator) launchWriterLocked(e event.Event) (launchWriter, bool) {
 	if e.Kind != event.KindLaunchItemAdd && e.Kind != event.KindLaunchItemRemove {
 		return launchWriter{}, false
 	}
 	w, ok := c.launchWriters[e.Path]
-	if !ok || e.TS.Sub(w.at) > window || w.at.Sub(e.TS) > time.Second {
+	if !ok || e.TS.Sub(w.at) > launchWriterWindow || w.at.Sub(e.TS) > time.Second {
 		return launchWriter{}, false
 	}
 	return w, true
@@ -1057,7 +1062,7 @@ func (c *Correlator) evictStaleLocked(now time.Time) {
 	c.lastEviction = now
 	c.evictOwnedLocked(now)
 	for path, w := range c.launchWriters {
-		if now.Sub(w.at) > window {
+		if now.Sub(w.at) > launchWriterWindow {
 			delete(c.launchWriters, path)
 		}
 	}
