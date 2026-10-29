@@ -97,7 +97,7 @@ func (s *Store) MatchDecisionScopes(requests []model.DecisionScope) bool {
 	// old session lifecycle. Use wall time, never a caller's event timestamp.
 	first := requests[0]
 	for _, q := range requests {
-		if q.Agent != first.Agent || q.SessionID != first.SessionID || q.Workspace != first.Workspace || q.Operation != first.Operation || q.RuleID != first.RuleID || !model.ExactPath(q.ReaderExe) || !model.ExactPath(q.ResourcePath) {
+		if q.Agent != first.Agent || q.SessionID != first.SessionID || q.Workspace != first.Workspace || q.Operation != first.Operation || q.RuleID != first.RuleID || !model.ExactPath(q.ReaderExe) || !model.ExactResource(q.RuleID, q.ResourcePath) {
 			return false
 		}
 	}

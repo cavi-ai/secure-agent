@@ -127,7 +127,7 @@ Egress sinks:
 | Mode | Behavior |
 |---|---|
 | `monitor` (default) | The call runs and the audit trail records `guard-monitor:untrusted-egress`. |
-| `prompt` | The Secure Agent prompt names every sink in the call and the inputs the session read, with their origin. With the daemon down, Claude Code asks instead. |
+| `prompt` | The Secure Agent prompt names every sink in the call and the inputs the session read, with their origin. When the session and executable path are recorded, **Allow for** also offers this session, 24 hours or 7 days: later sends to the same sinks from the same tool, workspace and executable path run without a prompt, and other sinks still ask. `git push` names only its remote (`git push origin`), so one permission covers every push to that remote. Revoke under Protection → Rules & permissions. With the daemon down, Claude Code asks instead. |
 | `deny` | Blocked outright. |
 
 Set the mode in `~/.config/secure-agent/guard-modes.json`, for example `{"untrusted-egress": "prompt"}`, or per project through `directory_guard.cwd_overrides`. The taint record sits beside the daemon socket under `taint/`, which agent tools cannot write, and expires after 7 days.

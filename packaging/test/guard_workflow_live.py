@@ -77,7 +77,7 @@ def run(daemon_binary, harness_binary):
         other_resource.write_text(fixture)
         other_resource.chmod(0o600)
         modes = root / "guard-modes.json"
-        modes.write_text(json.dumps({"cloud-creds": "prompt"}))
+        modes.write_text(json.dumps({"cloud-creds": "prompt", "untrusted-egress": "prompt"}))
         sock = root / "daemon.sock"
         config = root / "config.json"
         config.write_text(json.dumps({
@@ -145,6 +145,25 @@ def run(daemon_binary, harness_binary):
             require(record["permission"] == permission, "Unexpected hook verdict: " + record["permission"])
             require(record["bytes_read"] == (len(fixture) if permission == "allow" else 0), "Tool execution did not follow the hook verdict")
 
+        def shell(command, permission, prompted_sink=None, answer=None):
+            # The fixture asks the hook about the command and never runs it.
+            harness.stdin.write("bash " + command + "\n")
+            harness.stdin.flush()
+            receipt = None
+            if prompted_sink:
+                pending = wait_for("egress request", lambda: api("/guard/pending"))
+                require(len(pending) == 1 and pending[0]["rule_id"] == "untrusted-egress" and pending[0]["path"] == prompted_sink,
+                        "Unexpected egress request: " + json.dumps(pending))
+                require({s["kind"] for s in pending[0]["available_scopes"]} >= {"once", "session", "exact"}, "Egress request lacks scoped choices")
+                receipt = answer(pending[0])
+            readable, _, _ = select.select([harness.stdout], [], [], 12)
+            require(readable, "Tool caller did not return a result")
+            record = json.loads(harness.stdout.readline())
+            require(record["permission"] == permission, command + ": unexpected hook verdict " + record["permission"])
+            if not prompted_sink:
+                require(api("/guard/pending") == [], command + ": prompted although a permission covers it")
+            return receipt
+
         def resolve(pending, verdict="allow", scope="once", expiry=None):
             body = {"id": pending["id"], "verdict": verdict, "scope": scope}
             if expiry:
@@ -206,6 +225,25 @@ def run(daemon_binary, harness_binary):
                     result("deny")
                     print("PASS: " + label + " exact-file reuse, different-file denial and revocation", flush=True)
 
+                harness.stdin.write("taint\n"); harness.stdin.flush()
+                readable, _, _ = select.select([harness.stdout], [], [], 12)
+                require(readable and json.loads(harness.stdout.readline())["permission"] == "allow", "Web fetch did not complete")
+                shell("gh pr create --fill", "deny", "gh pr create", lambda p: resolve(p, "deny"))
+                receipt = shell("git push -u origin feat/x", "allow", "git push origin", lambda p: resolve(p, scope="session"))
+                ids = receipt.get("scope_ids", [])
+                require(len(ids) == 1, "Session send permission lacks its ID")
+                saved = next(r for r in api("/decision-scopes") if r["id"] == ids[0])
+                require(saved["resource_path"] == "git push origin" and saved["rule_id"] == "untrusted-egress"
+                        and saved["applicability"]["label"] == "Session permission", "Saved send permission does not match approval")
+                shell("git push origin main", "allow")
+                shell("git push --force-with-lease origin HEAD", "allow")
+                shell("gh pr create --fill", "deny", "gh pr create", lambda p: resolve(p, "deny"))
+                revoked = api("/decision-scopes?id=" + quote(ids[0]), method="DELETE")
+                require(revoked["revoked"], "Send permission revocation was not confirmed")
+                revoked_ids.append(ids[0])
+                shell("git push origin main", "deny", "git push origin", lambda p: resolve(p, "deny"))
+                print("PASS: session send permission covers later pushes to the remote, other sinks ask, revocation restores the prompt", flush=True)
+
                 pending = request()
                 result("deny")
                 require(not api("/guard/resolve", {"id": pending["id"], "verdict": "allow", "scope": "once"})["resolved"], "Expired request accepted a late answer")
@@ -250,7 +288,7 @@ def run(daemon_binary, harness_binary):
                                for key, value in expected.items() if actual.get(key) != value}
                     require(not changes, "Session identity changed across daemon restart: " + json.dumps(changes))
                 rows = api("/decision-scopes")
-                require(len(rows) == 2 and {r["id"] for r in rows} == set(revoked_ids)
+                require(len(rows) == len(revoked_ids) and {r["id"] for r in rows} == set(revoked_ids)
                         and all(r.get("revoked_at") for r in rows), "Revocations were not retained after restart")
                 history = api("/sessions/" + quote(session_id) + "/outcomes")
                 saved_timeout = next((g for g in history["history"]["guards"] if g["id"] == pending["id"]), None)

@@ -58,6 +58,20 @@ func ExactPath(p string) bool {
 	return filepath.IsAbs(p) && filepath.Clean(p) == p && len(p) <= 4096 && !strings.ContainsRune(p, 0)
 }
 
+// EgressRule names the guard rule whose resource is a send sink ("git push
+// origin", "WebFetch example.com") rather than a file.
+const EgressRule = "untrusted-egress"
+
+// ExactResource is ExactPath for file rules; for EgressRule it is the sink
+// the hook named, matched verbatim: non-empty, bounded, printable.
+func ExactResource(ruleID, resource string) bool {
+	if ruleID != EgressRule {
+		return ExactPath(resource)
+	}
+	return resource != "" && len(resource) <= 500 && strings.TrimSpace(resource) == resource &&
+		!strings.ContainsFunc(resource, func(r rune) bool { return r < 0x20 || r == 0x7f })
+}
+
 // Endpoint retains the port; organization, suffix and host-only matches are
 // deliberately insufficient for new permissions. Legacy policies stay separate.
 func Endpoint(label string) string {
@@ -83,7 +97,7 @@ func (s DecisionScope) Validate() error {
 	if s.Kind != "session" && s.Kind != "exact" {
 		return fmt.Errorf("invalid scope kind")
 	}
-	if s.Agent == "" || s.SessionID == "" || !ExactPath(s.Workspace) || !ExactPath(s.ReaderExe) || !ExactPath(s.ResourcePath) || s.RuleID == "" || s.CreatedAt.IsZero() ||
+	if s.Agent == "" || s.SessionID == "" || !ExactPath(s.Workspace) || !ExactPath(s.ReaderExe) || !ExactResource(s.RuleID, s.ResourcePath) || s.RuleID == "" || s.CreatedAt.IsZero() ||
 		(s.IdentityBasis != "peer-process-tree" && s.IdentityBasis != "observed-session") {
 		return fmt.Errorf("incomplete permission identity; choose once")
 	}
