@@ -12,9 +12,32 @@ import (
 )
 
 type coverageTestPath struct {
-	State    string
-	LastSeen string `json:"last_seen"`
+	Supported bool
+	State     string
+	LastSeen  string `json:"last_seen"`
 }
+
+func TestNativeHookCoverageRequiresObservedGuardEvidence(t *testing.T) {
+	for _, harness := range []string{"codex", "openclaw"} {
+		t.Run(harness, func(t *testing.T) {
+			st := testStore(t)
+			now := time.Now().UTC()
+			start := now.Add(-time.Hour)
+			if err := st.UpsertSession(model.Session{ID: "native-session", Harness: harness, RootPID: 42,
+				RootStartedAt: start.Format(time.RFC3339Nano), StartedAt: start, LastSeenAt: now, Status: model.SessionActive}); err != nil {
+				t.Fatal(err)
+			}
+			a := newTestAPI(Deps{Store: st, Status: func() Status {
+				return Status{Running: true, Agents: []AgentSummary{{PID: 42, RootPID: 42, Name: harness, StartedAt: start.Format(time.RFC3339Nano)}}}
+			}})
+			rows := coverageTestRows(t, a)
+			if len(rows) != 1 || !rows[0].Guard.Supported || rows[0].Guard.State != "not-observed" || rows[0].Guard.LastSeen != "" {
+				t.Fatalf("hook support must not imply invocation: %+v", rows)
+			}
+		})
+	}
+}
+
 type coverageTestSession struct {
 	SessionID             string `json:"session_id"`
 	RootPID               int32  `json:"root_pid"`

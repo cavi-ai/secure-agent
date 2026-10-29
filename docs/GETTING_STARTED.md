@@ -32,6 +32,13 @@ Saved Secure Agent preferences and monitoring data remain in their existing loca
 
 ## Check what is working
 
+Setup supports hook registration for Claude Code, Cursor, Codex and OpenClaw. Existing user hooks are retained.
+
+- **Codex:** Setup merges tool hooks into `~/.codex/hooks.json`. Open `/hooks` in Codex and review and trust the new hooks before starting a session. Codex configuration and managed policy can disable hooks.
+- **OpenClaw:** Setup installs a native plugin in `~/.openclaw/extensions/secure-agent` and uses `openclaw plugins enable secure-agent` for the default profile. The OpenClaw CLI must be installed. Restart the Gateway after registration. If enablement is rejected, review the CLI's requirements; Setup does not bypass plugin policy. Guard approval requests expire after five seconds to finish within OpenClaw's default hook timeout.
+
+Codex and OpenClaw registration results show activation guidance. Their installation alone does not prove runtime invocation. Claude and Cursor also offer the manual installed-hook check.
+
 In Setup’s **Your first observed session** section, copy the sample task into a selected-harness session, then choose **Refresh session observations**. Match its workspace and session ID and select **Open session evidence**. Guarding, recorded activity and payload inspection have separate results. An absent observation remains unknown; it does not mean that every action was protected or that nothing happened.
 
 Use **Run Doctor…** from the menu bar for diagnostics. If you install the CLI under Optional capabilities, these commands provide the same starting checks:

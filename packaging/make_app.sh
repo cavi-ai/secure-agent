@@ -98,6 +98,10 @@ for hook in plugin/hooks/*.py; do
 done
 # secret_guard.py loads its rules from guard-rules.json beside it.
 cp plugin/hooks/guard-rules.json "${APP_DIR}/Contents/Resources/hooks/"
+mkdir -p "${APP_DIR}/Contents/Resources/hooks/openclaw"
+for asset in package.json openclaw.plugin.json index.mjs; do
+  cp "plugin/hooks/openclaw/${asset}" "${APP_DIR}/Contents/Resources/hooks/openclaw/"
+done
 cp plugin/hooks/hooks.json "${APP_DIR}/Contents/Resources/hooks/" 2>/dev/null || true
 
 if [[ -f "${REPO_ROOT}/packaging/AppIcon.icns" ]]; then

@@ -97,8 +97,9 @@ struct OnboardingView: View {
             GroupBox("Agent") {
                 VStack(alignment: .leading, spacing: 10) {
                     Picker("Agent to set up", selection: $flow.selectedHarness) {
-                        Text("Claude Code").tag("claude")
-                        Text("Cursor").tag("cursor")
+                        ForEach(FirstUseSetupState.hookHarnesses, id: \.self) { harness in
+                            Text(Self.title(harness)).tag(harness)
+                        }
                         ForEach(SetupManager.knownAgents.filter { !FirstUseSetupState.supportsHook($0.name) }, id: \.name) { agent in
                             Text("\(Self.title(agent.name)) · observation").tag(agent.name)
                         }
@@ -127,18 +128,22 @@ struct OnboardingView: View {
     private var enablePath: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("\(harnessTitle) hooks").font(.headline)
-            Text("Install scripts in ~/.\(selectedHarness)/hooks and register them in \(selectedHarness == "claude" ? "~/.claude/settings.json" : "~/.cursor/hooks.json"). Existing user hooks are retained. Only this harness is changed.")
+            Text(selectedHarness == "openclaw"
+                 ? "Install the Secure Agent plugin in ~/.openclaw/extensions/secure-agent and enable it through the OpenClaw CLI. This configures the default OpenClaw profile. Existing plugins and settings are retained."
+                 : "Install scripts in ~/.\(selectedHarness)/hooks and register them in \(selectedHarness == "claude" ? "~/.claude/settings.json" : "~/.\(selectedHarness)/hooks.json"). Existing user hooks are retained. Only this harness is changed.")
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Label(installed ? "Selected hooks installed and registered" : "Selected hooks not installed",
+            Label(installed ? (selectedHarness == "openclaw" ? "Plugin files installed" : "Selected hooks installed and registered") : "Selected hooks not installed",
                   systemImage: installed ? "checkmark.circle" : "circle.dotted")
-            Text("The check sends an inert request through the installed hook and verifies the monitor's deny response. It changes no policy and does not launch an agent or establish that a running agent invokes the hook.")
+            Text(FirstUseSetupState.supportsProbe(selectedHarness)
+                 ? "The check sends an inert request through the installed hook and verifies the monitor's deny response. It changes no policy and does not launch an agent or establish that a running agent invokes the hook."
+                 : FirstUseSetupState.activationGuidance(selectedHarness))
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             monitorStatus
             if !setup.isBundled {
                 Text("Use the packaged Secure Agent app to install hooks.")
                     .font(.callout).foregroundStyle(.orange)
             }
-            Button("View result without running a check") { flow.stage = .result }
+            Button(FirstUseSetupState.supportsProbe(selectedHarness) ? "View result without running a check" : "View activation steps") { flow.stage = .result }
                 .accessibilityIdentifier("setup.skip-check")
         }
     }
@@ -168,7 +173,7 @@ struct OnboardingView: View {
                 }
             }
             monitorStatus
-            if supported && installed {
+            if FirstUseSetupState.supportsProbe(selectedHarness) && installed {
                 Button("Check Selected Hook Again") { runCheck() }
                     .disabled(setup.hookSelfTestRunning || !state.daemonAvailable)
             }
@@ -309,14 +314,20 @@ struct OnboardingView: View {
             Button(primaryTitle, action: advance)
                 .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("setup.continue")
-                .disabled(setup.hookSelfTestRunning || installing || (stage == .enable && (installed ? !state.daemonAvailable : !setup.isBundled)))
+                .disabled(setup.hookSelfTestRunning || installing || (stage == .enable &&
+                    ((!installed || selectedHarness == "openclaw") ? !setup.isBundled :
+                        FirstUseSetupState.supportsProbe(selectedHarness) && !state.daemonAvailable)))
         }
     }
 
     private var primaryTitle: String {
         switch stage {
         case .choose: return supported ? "Continue" : "View Observation Result"
-        case .enable: return installing ? "Installing…" : installed ? "Run Hook Check" : "Install \(harnessTitle) Hooks"
+        case .enable:
+            if installing { return "Installing…" }
+            if selectedHarness == "openclaw" { return "Register OpenClaw Hooks" }
+            if installed { return FirstUseSetupState.supportsProbe(selectedHarness) ? "Run Hook Check" : "Review Activation" }
+            return "Install \(harnessTitle) Hooks"
         case .result: return "Close setup"
         }
     }
@@ -325,11 +336,22 @@ struct OnboardingView: View {
         switch stage {
         case .choose: flow.stage = supported ? .enable : .result
         case .enable:
-            if installed { runCheck() }
+            if installed && selectedHarness != "openclaw" {
+                if FirstUseSetupState.supportsProbe(selectedHarness) { runCheck() }
+                else { flow.stage = .result }
+            }
             else {
                 installing = true
-                do { try setup.installHooks(for: selectedHarness) } catch { setup.report(error) }
-                Task { await setup.refreshState(); installing = false }
+                let harness = selectedHarness
+                Task {
+                    defer { installing = false }
+                    do {
+                        try setup.installHooks(for: harness)
+                        if harness == "openclaw" { try await setup.registerOpenClawHooks() }
+                        await setup.refreshState()
+                        if !FirstUseSetupState.supportsProbe(harness) { flow.stage = .result }
+                    } catch { setup.report(error); await setup.refreshState() }
+                }
             }
         case .result: onDone()
         }
@@ -345,6 +367,7 @@ struct OnboardingView: View {
         case "claude": return "Claude Code"
         case "cursor": return "Cursor"
         case "codex": return "Codex"
+        case "openclaw": return "OpenClaw"
         default: return harness
         }
     }

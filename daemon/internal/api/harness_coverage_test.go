@@ -80,10 +80,17 @@ func TestCodexDoesNotRequireClaudeGuardRegistration(t *testing.T) {
 		return Status{Running: true, ActiveAgents: 1, Agents: []AgentSummary{{PID: 20, Name: "codex"}}}
 	}})
 	p := a.computePosture()
+	missingCodexEvidence := false
 	for _, item := range p.CoverageItems {
-		if item.Kind == "guard_hook_unregistered" || item.Kind == "harness_uncovered" {
-			t.Fatalf("Codex incorrectly requires a supported Claude/Cursor hook: %+v", item)
+		if item.Kind == "guard_hook_unregistered" {
+			t.Fatalf("Codex incorrectly requires Claude hook registration: %+v", item)
 		}
+		if item.Kind == "harness_uncovered" && item.ID == "harness-hooks:codex" {
+			missingCodexEvidence = true
+		}
+	}
+	if !missingCodexEvidence {
+		t.Fatal("Codex requires its own attributed guard evidence")
 	}
 	rep := a.doctorReport(time.Now())
 	for _, id := range []string{"hook-registered", "hook-active"} {
@@ -127,7 +134,7 @@ func TestStatusSeparatesHarnessTraceAndGuardCapabilities(t *testing.T) {
 	if claude.Name != "claude" || !claude.GuardSupported || !claude.TraceSupported || claude.HookLastSeen != "" {
 		t.Fatalf("Claude guard capability confused with activity: %+v", claude)
 	}
-	if codex.Name != "codex" || codex.GuardSupported || !codex.TraceSupported || codex.TraceLastSeen == "" {
+	if codex.Name != "codex" || !codex.GuardSupported || !codex.TraceSupported || codex.TraceLastSeen == "" || codex.HookLastSeen != "" {
 		t.Fatalf("Codex tracing confused with guarding: %+v", codex)
 	}
 }
