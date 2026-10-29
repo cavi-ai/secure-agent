@@ -46,6 +46,14 @@ func supportsTrace(name string) bool {
 	return false
 }
 
+func supportsGuard(name string) bool {
+	switch name {
+	case "claude", "cursor", "codex", "openclaw":
+		return true
+	}
+	return false
+}
+
 func coveragePath(supported bool, seen, detail string, now time.Time) CoveragePath {
 	p := CoveragePath{Supported: supported, State: "not-observed", Detail: detail}
 	if !supported {
@@ -127,7 +135,7 @@ func (a *API) stampSessionCoverage(st Status, cov *CoverageStatus) {
 		if decisionErr == nil && (hookErr != nil || decisionAt.After(hookAt)) {
 			guardSeen = fact.DecisionLastSeen
 		}
-		row.Guard = coveragePath(root.Name == "claude" || root.Name == "cursor", guardSeen, "Only this session's reported hook outcomes or recorded guard decisions count. This does not prove every tool call is guarded.", now)
+		row.Guard = coveragePath(supportsGuard(root.Name), guardSeen, "Only this session's reported hook outcomes or recorded guard decisions count. This does not prove every tool call is guarded.", now)
 		row.Trace = coveragePath(supportsTrace(root.Name), fact.TraceLastSeen, "Attributed tool, turn or model activity in this session; a quiet session can be legitimate.", now)
 		row.Payload = coveragePath(true, fact.PayloadLastSeen, "Session-level inspection is unverified without an attributed match. The proxy hit stream normally lacks session identity; review Egress for machine-level evidence. Other traffic may be uninspected.", now)
 		if !st.ProxyEnabled {

@@ -66,7 +66,7 @@ func harnessCoverage(status Status, activity func() map[string]store.HarnessActi
 	}
 	rows := make([]HarnessCoverage, 0, len(names))
 	for name := range names {
-		row := HarnessCoverage{Name: name, GuardSupported: name == "claude" || name == "cursor"}
+		row := HarnessCoverage{Name: name, GuardSupported: supportsGuard(name)}
 		switch name {
 		case "claude", "cursor", "codex", "antigravity", "opencode", "openclaw", "hermes":
 			row.TraceSupported = true

@@ -3,6 +3,10 @@ import Foundation
 
 /// Harness hook installation and per-harness settings registration.
 enum HookRegistry {
+    static func hookDirectory(harness: String, home: String) -> String {
+        harness == "openclaw" ? "\(home)/.openclaw/extensions/secure-agent" : "\(home)/.\(harness)/hooks"
+    }
+
     /// Hook scripts shipped in a bundled hooks directory (tests excluded), and
     /// guard-rules.json, which secret_guard.py loads from its own directory.
     static func hookFileNames(in dir: String) throws -> [String] {
@@ -17,9 +21,33 @@ enum HookRegistry {
             throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "This harness has no supported guard hook."])
         }
         let fm = FileManager.default
+        if harness == "openclaw" {
+            let target = hookDirectory(harness: harness, home: home)
+            if fm.fileExists(atPath: target) {
+                guard let data = fm.contents(atPath: target + "/package.json"),
+                      let package = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      package["name"] as? String == "@cavi-ai/secure-agent-openclaw" else {
+                    throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "The OpenClaw plugin directory belongs to another installation; it was left unchanged."])
+                }
+            }
+            // Read every source before creating or replacing the plugin.
+            var files: [String: Data] = [:]
+            for file in try hookFileNames(in: bundledDir) {
+                files[file] = try Data(contentsOf: URL(fileURLWithPath: bundledDir + "/" + file))
+            }
+            for file in ["package.json", "openclaw.plugin.json", "index.mjs"] {
+                files[file] = try Data(contentsOf: URL(fileURLWithPath: bundledDir + "/openclaw/" + file))
+            }
+            try fm.createDirectory(atPath: target, withIntermediateDirectories: true)
+            for (name, data) in files where fm.contents(atPath: target + "/" + name) != data {
+                try data.write(to: URL(fileURLWithPath: target + "/" + name), options: .atomic)
+            }
+            return
+        }
         let settings = "\(home)/.\(harness)/" + (harness == "claude" ? "settings.json" : "hooks.json")
         var original: Data?
-        if harness == "cursor" { (_, original) = try Cursor.config(at: settings) }
+        if harness == "codex" { (_, original) = try Codex.config(at: settings) }
+        else if harness == "cursor" { (_, original) = try Cursor.config(at: settings) }
         else if let data = fm.contents(atPath: settings), !data.isEmpty {
             guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 throw NSError(domain: "SetupManager", code: 3, userInfo: [NSLocalizedDescriptionKey: "Claude settings.json is not valid JSON; installed hooks were left unchanged."])
@@ -49,20 +77,29 @@ enum HookRegistry {
                 .write(to: URL(fileURLWithPath: "\(target)/\(hook)"), options: .atomic)
         }
         let command = selectedHookCommand(harness: harness, home: home)
-        if harness == "claude" { try Claude.register(at: settings, command: command) }
+        if harness == "codex" { try Codex.register(at: settings, command: command) }
+        else if harness == "claude" { try Claude.register(at: settings, command: command) }
         else { try Cursor.register(at: settings, command: command) }
     }
 
     static func selectedHookCommand(harness: String, home: String) -> String {
-        "python3 '" + "\(home)/.\(harness)/hooks/secret_guard.py".replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+        let script = harness == "codex" ? "harness_guard.py" : "secret_guard.py"
+        let command = "python3 '" + "\(hookDirectory(harness: harness, home: home))/\(script)".replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+        return command + (harness == "codex" ? " codex" : "")
     }
 
     static func selectedHooksInstalled(harness: String, home: String) -> Bool {
         guard FirstUseSetupState.supportsHook(harness) else { return false }
         let fm = FileManager.default
-        let dir = "\(home)/.\(harness)/hooks"
+        let dir = hookDirectory(harness: harness, home: home)
         guard ["secret_guard.py", "activity_log.py", "injection_scan.py", "guard-rules.json"].allSatisfy({ fm.fileExists(atPath: "\(dir)/\($0)") }) else { return false }
+        if harness == "openclaw" {
+            return ["harness_guard.py", "package.json", "openclaw.plugin.json", "index.mjs"].allSatisfy { fm.fileExists(atPath: "\(dir)/\($0)") }
+        }
         let command = selectedHookCommand(harness: harness, home: home)
+        if harness == "codex" {
+            return fm.fileExists(atPath: dir + "/harness_guard.py") && Codex.registered(at: "\(home)/.codex/hooks.json", command: command)
+        }
         if harness == "cursor" { return Cursor.registered(at: "\(home)/.cursor/hooks.json", command: command) }
         let path = "\(home)/.claude/settings.json"
         guard let data = fm.contents(atPath: path),
@@ -75,6 +112,83 @@ enum HookRegistry {
         let commands = legacySafe ? [command, "python3 \(dir)/secret_guard.py"] : [command]
         return ["PreToolUse", "PostToolUse"].allSatisfy { event in
             commands.contains { Claude.groupsContainGuard(hooks[event] as? [[String: Any]] ?? [], command: $0) }
+        }
+    }
+
+    /// Codex user hooks use matcher groups; trust remains owned by Codex.
+    enum Codex {
+        static func config(at path: String) throws -> ([String: Any], Data?) {
+            guard FileManager.default.fileExists(atPath: path) else { return ([:], nil) }
+            let data = try Data(contentsOf: URL(fileURLWithPath: path))
+            guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  root["hooks"] == nil || root["hooks"] is [String: Any] else { throw invalidConfig() }
+            let hooks = root["hooks"] as? [String: Any] ?? [:]
+            for event in ["PreToolUse", "PostToolUse"] {
+                if let groups = hooks[event] {
+                    guard let groups = groups as? [[String: Any]],
+                          groups.allSatisfy({ $0["hooks"] is [[String: Any]] }) else { throw invalidConfig() }
+                }
+            }
+            return (root, data)
+        }
+
+        private static func invalidConfig() -> NSError {
+            NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "Codex hooks.json has an invalid or unsupported structure; it was left unchanged."])
+        }
+
+        private static func contains(_ groups: [[String: Any]], command: String) -> Bool {
+            groups.contains { group in
+                group["matcher"] == nil && (group["hooks"] as? [[String: Any]] ?? []).contains {
+                    $0["command"] as? String == command && $0["type"] as? String == "command" &&
+                    ($0["async"] == nil || $0["async"] as? Bool == false)
+                }
+            }
+        }
+
+        static func register(at path: String, command: String) throws {
+            var (root, original) = try config(at: path)
+            var hooks = root["hooks"] as? [String: Any] ?? [:]
+            var changed = false
+            for event in ["PreToolUse", "PostToolUse"] {
+                var groups = hooks[event] as? [[String: Any]] ?? []
+                if !contains(groups, command: command) {
+                    groups.append(["hooks": [["type": "command", "command": command, "timeout": 60]]])
+                    hooks[event] = groups
+                    changed = true
+                }
+            }
+            guard changed else { return }
+            let fm = FileManager.default
+            try fm.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            if let original, !fm.fileExists(atPath: path + ".bak-secure-agent") {
+                try original.write(to: URL(fileURLWithPath: path + ".bak-secure-agent"), options: .atomic)
+            }
+            root["hooks"] = hooks
+            try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+                .write(to: URL(fileURLWithPath: path), options: .atomic)
+        }
+
+        static func registered(at path: String, command: String) -> Bool {
+            guard let (root, _) = try? config(at: path), let hooks = root["hooks"] as? [String: Any] else { return false }
+            return ["PreToolUse", "PostToolUse"].allSatisfy { contains(hooks[$0] as? [[String: Any]] ?? [], command: command) }
+        }
+
+        static func unregister(at path: String, command: String) throws {
+            guard FileManager.default.fileExists(atPath: path) else { return }
+            var (root, _) = try config(at: path)
+            var hooks = root["hooks"] as? [String: Any] ?? [:]
+            for event in ["PreToolUse", "PostToolUse"] {
+                hooks[event] = (hooks[event] as? [[String: Any]] ?? []).compactMap { group -> [String: Any]? in
+                    let kept = (group["hooks"] as? [[String: Any]] ?? []).filter { $0["command"] as? String != command }
+                    guard !kept.isEmpty else { return nil }
+                    var group = group
+                    group["hooks"] = kept
+                    return group
+                }
+            }
+            root["hooks"] = hooks
+            try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+                .write(to: URL(fileURLWithPath: path), options: .atomic)
         }
     }
 

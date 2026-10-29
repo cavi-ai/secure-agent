@@ -22,12 +22,21 @@ struct FirstUseSetupState {
         return .session(id)
     }
 
-    static func supportsHook(_ harness: String) -> Bool { harness == "claude" || harness == "cursor" }
+    static let hookHarnesses = ["claude", "cursor", "codex", "openclaw"]
+    static func supportsHook(_ harness: String) -> Bool { hookHarnesses.contains(harness) }
+    static func supportsProbe(_ harness: String) -> Bool { harness == "claude" || harness == "cursor" }
+
+    static func activationGuidance(_ harness: String) -> String {
+        switch harness {
+        case "codex": return "Open /hooks in Codex, review and trust the Secure Agent hooks, then start a new session. Codex can disable hooks in its configuration. Registration does not prove invocation."
+        case "openclaw": return "Restart the OpenClaw Gateway after registration. The Secure Agent plugin must remain enabled by OpenClaw policy. Guard approvals expire after five seconds so the check finishes within OpenClaw's hook timeout. Registration does not prove invocation."
+        default: return "Run the manual hook check, then start a new agent session."
+        }
+    }
 
     var suggestedHarness: String {
         for candidates in [activeHarnesses, configuredHarnesses] {
-            if candidates.contains("claude") { return "claude" }
-            if candidates.contains("cursor") { return "cursor" }
+            if let harness = Self.hookHarnesses.first(where: { candidates.contains($0) }) { return harness }
         }
         return "claude"
     }
@@ -49,6 +58,9 @@ struct FirstUseSetupState {
         }
         guard installedHarnesses.contains(harness) else {
             return Result(title: "Hooks not installed", detail: "The selected harness needs its hook scripts and registration. Other harnesses do not need to be configured.")
+        }
+        if !Self.supportsProbe(harness) {
+            return Result(title: "Hook activation required", detail: Self.activationGuidance(harness))
         }
         guard let receipt = receipt(for: harness) else {
             return Result(title: "Hook check not run", detail: "Installation alone does not establish that the hook reaches the monitor. Run the manual check when ready.")

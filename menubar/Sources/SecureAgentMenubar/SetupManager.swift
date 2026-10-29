@@ -223,10 +223,10 @@ public final class SetupManager: ObservableObject {
         }
         isDaemonRunning = DaemonSupervisor.shared.isRunning || (status?.running ?? false)
         var installed: Set<String> = []
-        for harness in ["claude", "cursor"] where HookRegistry.selectedHooksInstalled(harness: harness, home: home) { installed.insert(harness) }
+        for harness in FirstUseSetupState.hookHarnesses where HookRegistry.selectedHooksInstalled(harness: harness, home: home) { installed.insert(harness) }
         firstUseState = FirstUseSetupState(
             daemonAvailable: status?.running == true, installedHarnesses: installed,
-            configuredHarnesses: Set(["claude", "cursor"].filter { fm.fileExists(atPath: "\(home)/.\($0)") }),
+            configuredHarnesses: Set(Self.knownAgents.map(\.name).filter { fm.fileExists(atPath: "\(home)/.\($0)") }),
             activeHarnesses: Set((status?.agents ?? []).filter { $0.kind != "infra" }.map(\.name)),
             probes: status?.coverage?.probes ?? [], sessions: status?.coverage?.sessions ?? [],
             sessionsUnavailable: status?.coverage == nil || status?.coverage?.sessionsStale == true,
@@ -242,6 +242,7 @@ public final class SetupManager: ObservableObject {
             fm.fileExists(atPath: "\(target)/secret_guard.py")
         } && claudeHooksRegistered()
           && HookRegistry.Cursor.registered(at: Self.cursorHooksPath, command: Self.cursorHookCommand)
+          && HookRegistry.selectedHooksInstalled(harness: "codex", home: home)
         let config = configDocument
         advisorEnabled = config.flag("enabled", in: "advisor")
         systemAgentEnabled = config.flag("enabled", in: "system_agent")
@@ -457,32 +458,60 @@ public final class SetupManager: ObservableObject {
     public static let hookTargets: [String] = [
         NSHomeDirectory() + "/.claude/hooks",
         NSHomeDirectory() + "/.cursor/hooks",
+        NSHomeDirectory() + "/.codex/hooks",
+        NSHomeDirectory() + "/.openclaw/extensions/secure-agent",
         NSHomeDirectory() + "/.config/opencode/hooks",
     ]
 
     public func installHooks() throws {
         guard let srcDir = bundledHooksDir else { throw SetupError.notBundled }
         lastError = nil
-        let hooks = try HookRegistry.hookFileNames(in: srcDir)
-        for target in Self.hookTargets {
-            try fm.createDirectory(atPath: target, withIntermediateDirectories: true)
-            for hook in hooks {
-                let dst = "\(target)/\(hook)"
-                if fm.fileExists(atPath: dst) { try fm.removeItem(atPath: dst) }
-                try fm.copyItem(atPath: "\(srcDir)/\(hook)", toPath: dst)
-            }
+        for harness in FirstUseSetupState.hookHarnesses {
+            try HookRegistry.installSelectedHooks(harness: harness, bundledDir: srcDir, home: home)
         }
-        // Copying the script is not enough: Claude Code runs hooks only when
-        // settings.json registers them. The audited gap was exactly this —
-        // files copied, nothing registered, guard never ran.
-        try registerClaudeHooks()
-        try HookRegistry.Cursor.register(at: Self.cursorHooksPath, command: Self.cursorHookCommand)
+        // Retain the existing optional opencode script copies.
+        let target = home + "/.config/opencode/hooks"
+        try fm.createDirectory(atPath: target, withIntermediateDirectories: true)
+        for hook in try HookRegistry.hookFileNames(in: srcDir) {
+            try Data(contentsOf: URL(fileURLWithPath: srcDir + "/" + hook))
+                .write(to: URL(fileURLWithPath: target + "/" + hook), options: .atomic)
+        }
     }
 
     public func installHooks(for harness: String) throws {
         guard let source = bundledHooksDir else { throw SetupError.notBundled }
         lastError = nil
         try HookRegistry.installSelectedHooks(harness: harness, bundledDir: source, home: home)
+    }
+
+    /// Let OpenClaw preserve its JSON5 config, includes, leases and plugin policy.
+    /// Do not accept capabilities or bypass a policy rejection on the user's behalf.
+    func registerOpenClawHooks() async throws {
+        let inspection = await runProcess("/usr/bin/env", openClawArguments(["plugins", "info", "secure-agent", "--json"]))
+        let expected = URL(fileURLWithPath: HookRegistry.hookDirectory(harness: "openclaw", home: home) + "/index.mjs").resolvingSymlinksInPath()
+        guard inspection.status == 0,
+              let data = inspection.stdout.data(using: .utf8),
+              let report = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let plugin = report["plugin"] as? [String: Any],
+              plugin["id"] as? String == "secure-agent",
+              let source = plugin["source"] as? String,
+              URL(fileURLWithPath: source).resolvingSymlinksInPath() == expected else {
+            throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey:
+                "OpenClaw could not identify the installed Secure Agent plugin. Check openclaw plugins info secure-agent; a different plugin with the same ID will not be enabled."])
+        }
+        let result = await runProcess("/usr/bin/env", openClawArguments(["plugins", "enable", "secure-agent"]))
+        guard result.status == 0 else {
+            throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey:
+                "OpenClaw could not enable Secure Agent. Run openclaw plugins enable secure-agent in your terminal to review its requirements, then restart the Gateway."])
+        }
+    }
+
+    private func openClawArguments(_ args: [String]) -> [String] {
+        let paths = [home + "/.local/bin", home + "/.openclaw/npm/bin", home + "/.npm-global/bin",
+                     "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] +
+            (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init).filter { $0.hasPrefix("/") }
+        return ["PATH=" + paths.joined(separator: ":"), "OPENCLAW_STATE_DIR=" + home + "/.openclaw",
+                "OPENCLAW_CONFIG_PATH=" + home + "/.openclaw/openclaw.json", "openclaw"] + args
     }
 
     /// Brings already-installed hook copies up to the bundled versions so an
@@ -492,6 +521,10 @@ public final class SetupManager: ObservableObject {
         guard let srcDir = bundledHooksDir else { return }
         for target in Self.hookTargets where fm.fileExists(atPath: "\(target)/secret_guard.py") {
             do {
+                if target.contains("/.openclaw/") {
+                    try HookRegistry.installSelectedHooks(harness: "openclaw", bundledDir: srcDir, home: home)
+                    continue
+                }
                 let refreshed = try HookRegistry.refreshInstalledHooks(bundledDir: srcDir, installedDir: target)
                 if !refreshed.isEmpty {
                     NSLog("[secure-agent] refreshed hooks in \(target): \(refreshed.joined(separator: ", "))")
@@ -1282,8 +1315,18 @@ public final class SetupManager: ObservableObject {
             try? SMAppService.mainApp.unregister()
         }
         try HookRegistry.Cursor.unregister(at: Self.cursorHooksPath, command: Self.cursorHookCommand)
+        try HookRegistry.Codex.unregister(at: home + "/.codex/hooks.json", command: HookRegistry.selectedHookCommand(harness: "codex", home: home))
+        let openClawDir = HookRegistry.hookDirectory(harness: "openclaw", home: home)
+        if HookRegistry.selectedHooksInstalled(harness: "openclaw", home: home) {
+            guard Self.run(["/usr/bin/env"] + openClawArguments(["plugins", "disable", "secure-agent"])) == 0 else {
+                throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "Disable the Secure Agent plugin in OpenClaw before uninstalling its files."])
+            }
+            // Keep the disabled plugin files: OpenClaw retains its entry in config.
+            // Its plugin manager owns full removal and any install provenance.
+        }
         for target in Self.hookTargets {
-            for hook in ["secret_guard.py", "injection_scan.py", "activity_log.py"] {
+            if target == openClawDir { continue }
+            for hook in ["secret_guard.py", "injection_scan.py", "activity_log.py", "harness_guard.py"] {
                 try? fm.removeItem(atPath: "\(target)/\(hook)")
             }
         }

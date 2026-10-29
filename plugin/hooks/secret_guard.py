@@ -343,6 +343,8 @@ def is_guard_control_path(token: str) -> bool:
 HARNESS_CONFIG_PATHS = (
     "~/.claude/settings.json", "~/.claude/settings.local.json",
     "~/.claude/hooks", "~/.cursor/hooks", "~/.cursor/hooks.json",
+    "~/.codex/hooks", "~/.codex/hooks.json", "~/.codex/config.toml",
+    "~/.openclaw/extensions/secure-agent", "~/.openclaw/openclaw.json",
     "~/.config/opencode/hooks",
 )
 

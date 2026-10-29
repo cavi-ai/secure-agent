@@ -35,7 +35,7 @@ final class FirstUseSetupTests: XCTestCase {
         XCTAssertFalse(HookRegistry.selectedHooksInstalled(harness: "claude", home: home.path))
         try HookRegistry.installSelectedHooks(harness: "cursor", bundledDir: source.path, home: home.path)
         XCTAssertTrue(HookRegistry.selectedHooksInstalled(harness: "cursor", home: home.path))
-        XCTAssertThrowsError(try HookRegistry.installSelectedHooks(harness: "codex", bundledDir: source.path, home: home.path))
+        XCTAssertThrowsError(try HookRegistry.installSelectedHooks(harness: "hermes", bundledDir: source.path, home: home.path))
     }
 
     func testUnrelatedOrDisabledHookRegistrationCannotCountAsSelectedInstallation() throws {
@@ -88,7 +88,7 @@ final class FirstUseSetupTests: XCTestCase {
         state.daemonAvailable = true
         state.installedHarnesses = []
         XCTAssertEqual(state.result(for: "claude").title, "Hooks not installed")
-        XCTAssertEqual(state.result(for: "codex").title, "Observation path selected")
+        XCTAssertEqual(state.result(for: "hermes").title, "Observation path selected")
     }
 
     func testChangedAndExpiredReceiptsRequireAnotherCheck() {

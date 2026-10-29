@@ -102,6 +102,8 @@ test-hooks:
 	python3 plugin/hooks/test_injection_scan.py
 	python3 plugin/hooks/test_activity_log.py
 	python3 plugin/hooks/test_cursor_hooks.py
+	python3 plugin/hooks/test_harness_guard.py
+	node --test plugin/hooks/openclaw/test_plugin.mjs
 	python3 packaging/test/test_menu_bar_tracking.py
 	python3 packaging/test/test_e2e_fixture.py
 	python3 packaging/test/test_release_packaging.py
