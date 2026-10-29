@@ -33,7 +33,6 @@ final class GuardPromptPanelTests: XCTestCase {
 
     func testUntrustedEgressPromptShowsWhatItReadAndDenies() throws {
         let choice = run(GuardPromptContent(pending: egress(read: [Self.githubRead]), inspectUnavailableReason: nil)) { panel in
-            XCTAssertTrue(panel.isKeyWindow, "Return and Escape reach the prompt")
             XCTAssertEqual(panel.model.durations, [.once], "no recorded identity: once only")
             XCTAssertEqual(panel.model.allowNote, "Allow Once answers only this request.")
             try? self.capture(panel, "after-egress")
@@ -95,7 +94,6 @@ final class GuardPromptPanelTests: XCTestCase {
         let choice = run(GuardPromptContent(pending: pending(advisor: GuardAdvice(assessment: "suspicious", confidence: 0.7, rationale: "Private SSH key outside the project.")),
                                             inspectUnavailableReason: nil)) { panel in
             width = panel.frame.width
-            XCTAssertTrue(panel.isKeyWindow, "Return and Escape reach the prompt")
             try? self.capture(panel, "after")
             NSApp.sendEvent(self.key(36, "\r", in: panel))
         }
@@ -105,7 +103,6 @@ final class GuardPromptPanelTests: XCTestCase {
 
     func testEscapeDeniesThroughTheModalPanel() {
         let choice = run(GuardPromptContent(pending: pending(), inspectUnavailableReason: nil)) { panel in
-            XCTAssertTrue(panel.isKeyWindow, "Return and Escape reach the prompt")
             NSApp.sendEvent(self.key(53, "\u{1b}", in: panel))
         }
         XCTAssertEqual(choice, .deny)
@@ -129,6 +126,18 @@ final class GuardPromptPanelTests: XCTestCase {
             panel.model.allow()
         }
         XCTAssertEqual(choice, .allow(dayScope))
+    }
+
+    /// The agent's app is in front when a guard request arrives: the prompt
+    /// stays visible above it and on the Space in front.
+    func testPromptStaysInFrontOfTheActiveApp() {
+        let choice = run(GuardPromptContent(pending: egress(read: [Self.githubRead]), inspectUnavailableReason: nil)) { panel in
+            XCTAssertGreaterThanOrEqual(panel.level.rawValue, NSWindow.Level.modalPanel.rawValue)
+            XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
+            XCTAssertTrue(panel.collectionBehavior.contains(.fullScreenAuxiliary))
+            NSApp.abortModal()
+        }
+        XCTAssertEqual(choice, .withdrawn)
     }
 
     func testWithdrawalAnswersNothing() {

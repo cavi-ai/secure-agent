@@ -16,7 +16,7 @@ final class HarnessHookSetupTests: XCTestCase {
         let prior = Set(NSApp.windows.map(ObjectIdentifier.init))
         defer { controller.close() }
         var openedWindow: NSWindow?
-        for harness in ["codex", "openclaw"] {
+        for harness in ["codex", "openclaw", "hermes", "opencode", "antigravity"] {
             controller.show(harness: harness)
             let window = try XCTUnwrap(NSApp.windows.first { !prior.contains(ObjectIdentifier($0)) })
             await settle(try XCTUnwrap(window.contentView))
@@ -27,6 +27,76 @@ final class HarnessHookSetupTests: XCTestCase {
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.home + "/.codex"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.home + "/.openclaw"))
+    }
+
+    func testConfiguredHarnessesUseTheirNativeDirectories() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        for directory in [".hermes", ".config/opencode", ".gemini"] {
+            try FileManager.default.createDirectory(atPath: fixture.home + "/" + directory, withIntermediateDirectories: true)
+        }
+        await fixture.setup.refreshState()
+        XCTAssertTrue(fixture.setup.firstUseState.configuredHarnesses.isSuperset(of: ["hermes", "opencode", "antigravity"]))
+    }
+
+    func testAdditionalWizardsPreserveConfigurationAndRecoverFromErrors() async throws {
+        let policy = activateApplication()
+        defer { NSApp.setActivationPolicy(policy) }
+        let cases = [
+            ("hermes", ".hermes/config.yaml", "plugins: {enabled: [user-plugin]}\n",
+             "# keep-setting\nmodel: keep-model\nplugins:\n  enabled: [user-plugin]\n  disabled: [secure-agent, other-plugin]\n"),
+            ("opencode", ".config/opencode/opencode.jsonc", #"{"plugins":"unsupported"}"#,
+             "// keep-setting\n{\"plugins\":[\"user-plugin\",{\"package\":\"other-plugin\"},],\"shell\":\"/bin/sh\",}"),
+            ("antigravity", ".gemini/config/hooks.json", #"{"secure-agent":{"enabled":false}}"#,
+             #"{"keep-setting":{"PreToolUse":[{"hooks":[{"command":"user-hook"}]}]}}"#)
+        ]
+        for (harness, relativePath, invalid, original) in cases {
+            let fixture = try Fixture()
+            defer { fixture.remove() }
+            fixture.setup.runProcess = { _, _ in
+                XCTFail("This registration must not launch a process")
+                return (-1, "", "")
+            }
+            let config = URL(fileURLWithPath: fixture.home + "/" + relativePath)
+            try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(invalid.utf8).write(to: config)
+            let flow = FirstUseSetupFlow(stage: .enable, selectedHarness: harness)
+            let controller = NSHostingController(rootView: OnboardingView(setup: fixture.setup,
+                appState: AppState(client: StubDaemonClient()), flow: flow, refreshAutomatically: false, onDone: {}))
+            let window = makeWindow(controller)
+            defer { window.close() }
+            await settle(controller.view)
+            try pressReturn(window)
+            await settle(controller.view)
+            XCTAssertEqual(flow.stage, .enable, harness)
+            XCTAssertNotNil(fixture.setup.lastError, harness)
+            XCTAssertEqual(try Data(contentsOf: config), Data(invalid.utf8), harness)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: HookRegistry.hookDirectory(harness: harness, home: fixture.home)), harness)
+
+            try Data(original.utf8).write(to: config)
+            try pressReturn(window)
+            await settle(controller.view)
+            XCTAssertEqual(flow.stage, .result, harness)
+            XCTAssertNil(fixture.setup.lastError, harness)
+            XCTAssertEqual(fixture.setup.firstUseState.installedHarnesses, [harness])
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: config.path + ".bak-secure-agent")), Data(original.utf8), harness)
+            XCTAssertTrue(try String(contentsOf: config, encoding: .utf8).contains(harness == "opencode" ? "user-plugin" : "keep-setting"), harness)
+            let result = fixture.setup.firstUseState.result(for: harness)
+            XCTAssertEqual(result.title, "Hook activation required", harness)
+            XCTAssertEqual(result.detail, FirstUseSetupState.activationGuidance(harness))
+            XCTAssertFalse(result.passed, harness)
+            for other in FirstUseSetupState.hookHarnesses where other != harness {
+                XCTAssertFalse(FileManager.default.fileExists(atPath: HookRegistry.hookDirectory(harness: other, home: fixture.home)), "\(harness) must not install \(other)")
+            }
+
+            let registered = try Data(contentsOf: config)
+            flow.beginSetup(for: harness)
+            await settle(controller.view)
+            try pressReturn(window)
+            await settle(controller.view)
+            XCTAssertEqual(flow.stage, .result, harness)
+            XCTAssertEqual(try Data(contentsOf: config), registered, "Reviewing activation must not rewrite configuration")
+        }
     }
 
     func testCodexWizardWritesRegistrationAndPreservesUserHooks() async throws {

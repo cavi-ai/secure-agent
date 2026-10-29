@@ -3,6 +3,14 @@ import Foundation
 
 /// Harness hook installation and per-harness settings registration.
 enum HookRegistry {
+    static func configurationDirectory(harness: String, home: String) -> String {
+        switch harness {
+        case "antigravity": return "\(home)/.gemini"
+        case "opencode": return "\(home)/.config/opencode"
+        default: return "\(home)/.\(harness)"
+        }
+    }
+
     static func hookDirectory(harness: String, home: String) -> String {
         switch harness {
         case "openclaw": return "\(home)/.openclaw/extensions/secure-agent"

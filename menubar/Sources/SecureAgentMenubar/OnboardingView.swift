@@ -295,15 +295,17 @@ struct OnboardingView: View {
         }.fixedSize(horizontal: false, vertical: true)
     }
 
+    @ViewBuilder
     private var footer: some View {
-        ViewThatFits(in: .horizontal) {
+        if stage == .enable {
+            VStack(alignment: .trailing, spacing: 10) {
+                HStack { secondaryActions; Spacer() }
+                primaryAction.fixedSize()
+            }
+        } else {
             HStack {
                 secondaryActions.fixedSize()
                 Spacer(minLength: 12)
-                primaryAction.fixedSize()
-            }
-            VStack(alignment: .trailing, spacing: 10) {
-                HStack { secondaryActions; Spacer() }
                 primaryAction.fixedSize()
             }
         }

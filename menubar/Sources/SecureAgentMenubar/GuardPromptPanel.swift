@@ -102,7 +102,10 @@ final class GuardPromptPanel: NSPanel {
         isMovableByWindowBackground = true
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
-        level = .floating
+        // macOS may refuse to activate this app while the agent's app is in
+        // front; the prompt sits above other apps' windows on the front Space.
+        level = .modalPanel
+        collectionBehavior.formUnion(AppDelegate.popoverSpaces)
         animationBehavior = .alertPanel
         appearance = NSAppearance(named: .darkAqua)
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {

@@ -7,15 +7,19 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Menu bar: guard prompts open in a panel that names the agent, the target and the untrusted inputs, with a duration picker and a Details disclosure; Return and Escape deny.
+- Guard: `untrusted-egress` prompts offer session, 24-hour and 7-day permissions for the same sink, tool, workspace and executable path; `git push` sinks name only the remote.
 - Guard: the `untrusted-egress` rule applies its mode (monitor by default) to network commands, `git push`, `gh` writes, data-carrying URLs and MCP send tools once a session has read web, MCP (other than the Claude app's own tools), image or fetched content, or loaded an instruction file someone else committed; a "Data sent after reading untrusted content" finding, session memory and the prompt name each input, its origin (git committer, download URL) and the send; in `deny`, the proxy also refuses a routed agent's new connections from a tainted session (a "Connection refused after reading untrusted content" finding), except model API hosts and loopback.
 - Guard: a tool result that matches the injection detector is flagged to the model as data, marks the session, and its sends follow the stricter of `untrusted-egress` and `untrusted-egress-injected` (monitor by default); the finding is critical when the send ran.
 - Guard: before the agent reads an image, the app's `secure-agent-image-text` helper reads its text with macOS Vision at full size, at model downscale sizes and with faint text stretched; a prompt-injection match follows the `image-injection` rule (monitor by default).
+- Tests: `make test-attack-replay` replays Ghostcommit, faint image text, cloaking, EchoLeak and response-header injection against an isolated daemon, proxy and hook in each guard mode and prints a scorecard.
 - Proxy: response headers are scanned for prompt injection; a matching header is reported and removed before the agent reads the response.
 - Firewall: registered secrets match through hex, decimal or `0x` byte lists and URL-safe or unpadded base64; `secure-agent canary plant <file>` writes decoy credentials registered as fingerprints.
 - Guard: the `untrusted-egress` rule applies its mode (monitor by default) to network commands, `git push`, `gh` writes, data-carrying URLs and MCP send tools once a session has read web, MCP (other than the Claude app's own tools), image or fetched content; a "Data sent after reading untrusted content" finding, session memory and the prompt name each input, its origin (git committer, download URL) and the send.
 - File telemetry: Endpoint Security background item, configuration profile, Gatekeeper override and XProtect events; an agent that adds or removes a background item, or creates, moves or deletes the launch agent or daemon plist macOS registers or removes, raises `launch-item-change`, one that installs a profile or overrides Gatekeeper raises `trust-change`, and every XProtect detection raises `xprotect-detection`.
 
 ### Fixed
+- Menu bar: guard prompts open above the app in front and on its Space instead of behind the agent's window.
 - File telemetry: a file renamed to a new name is recorded at its destination path.
 - File telemetry: Endpoint Security background item, configuration profile, Gatekeeper override and XProtect events; an agent that adds or removes a background item raises `launch-item-change`, one that installs a profile or overrides Gatekeeper raises `trust-change`, and every XProtect detection raises `xprotect-detection`.
 
