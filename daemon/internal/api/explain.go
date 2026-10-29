@@ -486,6 +486,7 @@ var untrustedInputPhrases = map[string]string{
 	"fetch":        "downloaded content",
 	"gh":           "GitHub content",
 	"instructions": "an instruction file",
+	"injection":    "an injection in tool output",
 }
 
 // untrustedEgressWhat: "<agent> read an image (x.png), then sent data out

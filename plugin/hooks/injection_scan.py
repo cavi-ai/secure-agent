@@ -74,6 +74,26 @@ def scan_text(obj: any, _depth: int = 0) -> list[str]:
             hits.extend(scan_text(item, _depth + 1))
     return hits
 
+def first_match(obj: any, _depth: int = 0) -> str:
+    """The first matched injection phrase with up to 40 characters either
+    side, whitespace collapsed; "" when nothing matches."""
+    if _depth > MAX_DEPTH:
+        return ""
+    if isinstance(obj, str):
+        text = _normalize(obj[:MAX_STRING_CHARS])
+        for pattern in INJECTION_PATTERNS:
+            m = pattern.search(text)
+            if m:
+                return " ".join(text[max(0, m.start() - 40):m.end() + 40].split())
+        return ""
+    values = obj.values() if isinstance(obj, dict) else obj if isinstance(obj, list) else ()
+    for item in values:
+        found = first_match(item, _depth + 1)
+        if found:
+            return found
+    return ""
+
+
 def main():
     try:
         raw = sys.stdin.read()
