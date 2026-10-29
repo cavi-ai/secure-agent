@@ -39,7 +39,7 @@ Enforcement points, honestly labeled:
 | Claude `Grep`/`Glob` | Mode-enforced via the governing rule when the search root is a protected directory (`~/.ssh`, `~/.aws`, `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.gnupg`, `~/Library/Keychains`) or matches a file rule directly. |
 | Claude `Bash` | `deny`-mode rules enforced (including protected-directory targets); key material always denied — via `cat` **or any reader alias** (`grep`/`rg` included); `prompt` fails safe to `deny` (no interactive prompt mid-Bash). |
 | Cursor | `Bash` commands only (Cursor's payload lacks `tool_name`). |
-| Untrusted-input egress | Claude Code: every tool the `PreToolUse` hook sees, mode-enforced (`monitor` / `prompt` / `deny`). Cursor: shell commands, tainted only by events that carry a tool name. |
+| Untrusted-input egress | Claude Code: every tool the `PreToolUse` hook sees, mode-enforced (`monitor` / `prompt` / `deny`). Cursor: shell commands, tainted only by events that carry a tool name. Routed agents in `deny`: every new proxy connection from a tainted session, except the model API hosts the proxy decrypts and loopback. |
 
 ## Bypass classes that are CLOSED (with regression tests)
 
@@ -93,7 +93,10 @@ Enforcement points, honestly labeled:
 6. **Untrusted-egress sinks are recognized by name and shape.** Command
    words, `git`/`gh` subcommands, URL shape and MCP tool verbs decide what is
    a sink. A program the agent writes and then runs, a repository script, or
-   a short secret in a plain URL path is not recognized. Sessions without a
+   a short secret in a plain URL path is not recognized; for a routed agent
+   in `deny`, the proxy refuses their connections, but a connection opened
+   before the taint keeps running, a client the proxy cannot tie to one live
+   session passes, and `prompt` leaves the proxy idle. Sessions without a
    harness session id carry no taint. A person committing and pushing what
    the agent wrote is outside the hook. An `always` answer covers every
    untrusted-egress sink for that agent.
@@ -103,6 +106,15 @@ Enforcement points, honestly labeled:
    read with plumbing commands only, with `core.fsmonitor` and signature
    checks off, so the repository's configuration runs nothing; the hook
    spends at most 2 s on git, once per new image.
+8. **Instruction-file ownership is a name and email comparison.** A file
+   counts as someone else's when its last commit's author email and name both
+   differ from the repository's `user.email` and `user.name`. An attacker who
+   sets your name or email on their commit, or an edit you made from an
+   account with a different identity, defeats or trips the check. Files the
+   harness loads from places other than the working directory and repository
+   root (a parent directory, your home) are checked only when read with a tool.
+   The harness still loads the file; the guard marks the session, it does not
+   remove the instructions.
 
 ## Failure posture
 

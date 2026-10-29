@@ -867,6 +867,12 @@ GIT_ORIGIN_BUDGET_S = 2.0
 TRUSTED_MCP_PREFIXES = ("mcp__code-review-graph__", "mcp__ccd_")
 UNTRUSTED_MCP_PREFIXES = ("mcp__ccd_session_mgmt__",)
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic")
+# Files harnesses load as standing instructions.
+INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", ".windsurfrules",
+                     os.path.join(".github", "copilot-instructions.md"))
+INSTRUCTION_LINK_RE = re.compile(
+    r"https?://[^\s)\"'<>]+|[\w./-]+\.(?:png|jpe?g|gif|webp|bmp|svg|tiff?|heic)\b", re.IGNORECASE)
+INSTRUCTION_READ_MAX = 256 * 1024
 FETCH_CLIENTS = {"curl", "wget", "http", "https", "httpie", "xh"}
 SOCKET_CLIENTS = {"nc", "ncat", "netcat", "socat", "telnet", "ssh", "scp", "sftp", "ftp",
                   "mail", "mailx", "sendmail", "mutt"}
@@ -941,10 +947,14 @@ def untrusted_input(tool: str, tool_input: dict, command: str, cwd: str = "") ->
         return {"kind": "mcp", "tool": tool, "location": " ".join([_mcp_server(tool)] + urls[:1])}
     if tool == "Read":
         path = str(tool_input.get("file_path") or "")
+        if cwd and path and not os.path.isabs(path):
+            path = os.path.join(cwd, path)
         if path.lower().endswith(IMAGE_EXTS):
-            if cwd and not os.path.isabs(path):
-                path = os.path.join(cwd, path)
             return {"kind": "image", "tool": tool, "location": os.path.normpath(path)}
+        if path and _instruction_file(path):
+            origin = foreign_instructions(path)
+            if origin:
+                return {"kind": "instructions", "tool": tool, "location": os.path.normpath(path), "origin": origin}
     if command and tool in ("Bash", "Shell", ""):
         for argv, raw in segments(command):
             name = cmd_name(argv)
@@ -964,7 +974,7 @@ def untrusted_input(tool: str, tool_input: dict, command: str, cwd: str = "") ->
 def _short_source(inp: dict) -> str:
     """kind:name for one-line messages: an image's file name, a URL's host."""
     loc = str(inp.get("location") or "")
-    if inp.get("kind") == "image":
+    if inp.get("kind") in ("image", "instructions"):
         loc = os.path.basename(loc)
     elif inp.get("kind") in ("web", "fetch"):
         loc = _url_host(loc) or loc
@@ -985,30 +995,108 @@ def _quiet(argv: list, deadline: float):
         return -1, ""
 
 
-def _git_origin(path: str) -> str:
-    """Who put the file there per git: the last commit's author, or untracked.
-    Only plumbing that runs no repository-configured program (no fsmonitor,
-    signature check, filter or textconv): the repository may be the attacker's.
-    All git calls share GIT_ORIGIN_BUDGET_S."""
-    deadline = time.monotonic() + GIT_ORIGIN_BUDGET_S
+def _git_last_commit(path: str, deadline: float) -> dict | None:
+    """The file's repository and, when tracked, its last commit; None outside
+    git. Only plumbing that runs no repository-configured program (no
+    fsmonitor, signature check, filter or textconv): the repository may be the
+    attacker's."""
     rc, top = _quiet(GIT_SAFE + ["-C", os.path.dirname(path) or ".", "rev-parse", "--show-toplevel"], deadline)
     if rc != 0 or not top:
-        return ""
+        return None
     rel = os.path.relpath(os.path.realpath(path), os.path.realpath(top))
-    repo = os.path.basename(top)
+    info = {"top": top, "repo": os.path.basename(top), "rel": rel, "tracked": False}
     rc, _ = _quiet(GIT_SAFE + ["-C", top, "ls-files", "--error-unmatch", "--", rel], deadline)
     if rc != 0:
-        return f"untracked in {repo}"
-    rc, log = _quiet(GIT_SAFE + ["-C", top, "log", "-1", "--format=%an <%ae>%x1f%h%x1f%cs%x1f%s", "--", rel], deadline)
+        return info
+    info["tracked"] = True
+    rc, log = _quiet(GIT_SAFE + ["-C", top, "log", "-1", "--format=%an%x1f%ae%x1f%h%x1f%cs%x1f%s", "--", rel], deadline)
     if rc != 0 or not log:
-        return f"tracked in {repo}, no commit yet"
-    author, sha, date, subject = (log.split("\x1f") + ["", "", "", ""])[:4]
-    out = f"committed by {author} in {repo}@{sha} on {date} ({subject[:80]})"
+        return info
+    info["name"], info["email"], info["sha"], info["date"], info["subject"] = (log.split("\x1f") + [""] * 5)[:5]
     _, blob = _quiet(GIT_SAFE + ["-C", top, "hash-object", "--no-filters", "--", rel], deadline)
     _, head = _quiet(GIT_SAFE + ["-C", top, "rev-parse", "HEAD:" + rel], deadline)
-    if blob and head and blob != head:
-        out += ", changed locally since"
-    return out
+    info["changed"] = bool(blob and head and blob != head)
+    return info
+
+
+def _commit_origin(c: dict) -> str:
+    if not c["tracked"]:
+        return f"untracked in {c['repo']}"
+    if not c.get("sha"):
+        return f"tracked in {c['repo']}, no commit yet"
+    out = (f"committed by {c['name']} <{c['email']}> in {c['repo']}@{c['sha']} on {c['date']} "
+           f"({c['subject'][:80]})")
+    return out + ", changed locally since" if c.get("changed") else out
+
+
+def _git_origin(path: str) -> str:
+    """Who put the file there per git: the last commit's author, or untracked.
+    All git calls share GIT_ORIGIN_BUDGET_S."""
+    c = _git_last_commit(path, time.monotonic() + GIT_ORIGIN_BUDGET_S)
+    return _commit_origin(c) if c else ""
+
+
+def foreign_instructions(path: str) -> str:
+    """The origin of an instruction file whose last commit is not by its
+    repository's user (by email or name), with the images and URLs it links;
+    "" for the user's own, an untracked file, a repository with no user
+    configured, or a file outside git."""
+    deadline = time.monotonic() + GIT_ORIGIN_BUDGET_S
+    c = _git_last_commit(path, deadline)
+    if not c or not c.get("sha"):
+        return ""
+    _, my_email = _quiet(GIT_SAFE + ["-C", c["top"], "config", "user.email"], deadline)
+    _, my_name = _quiet(GIT_SAFE + ["-C", c["top"], "config", "user.name"], deadline)
+    if not my_email and not my_name:
+        return ""
+    if (my_email and c["email"].lower() == my_email.lower()) or (my_name and c["name"] == my_name):
+        return ""
+    links = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for m in INSTRUCTION_LINK_RE.findall(fh.read(INSTRUCTION_READ_MAX)):
+                if m not in links:
+                    links.append(m)
+    except OSError:
+        pass
+    out = _commit_origin(c)
+    return f"{out}; links {', '.join(links[:3])}" if links else out
+
+
+def _instruction_file(path: str) -> bool:
+    norm = os.path.normpath(path)
+    return any(norm == n or norm.endswith(os.sep + n) for n in INSTRUCTION_FILES)
+
+
+def note_instruction_files(payload: dict, event: str) -> None:
+    """Once per session: an instruction file in the working directory or its
+    repository root that someone else committed is untrusted input the harness
+    loaded without a tool call. Never fails the hook."""
+    try:
+        sid = _stable_session_id(payload)
+        cwd = str(payload.get("cwd") or "")
+        if not sid or not cwd or not os.path.isdir(cwd):
+            return
+        os.makedirs(TAINT_DIR, exist_ok=True)
+        os.chmod(TAINT_DIR, 0o700)
+        try:
+            os.close(os.open(_taint_path(sid)[:-len(".json")] + ".instr", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        except FileExistsError:
+            return
+        dirs = [cwd]
+        rc, top = _quiet(GIT_SAFE + ["-C", cwd, "rev-parse", "--show-toplevel"], time.monotonic() + 1.0)
+        if rc == 0 and top and os.path.realpath(top) != os.path.realpath(cwd):
+            dirs.append(top)
+        for d in dirs:
+            for name in INSTRUCTION_FILES:
+                p = os.path.join(d, name)
+                if os.path.isfile(p):
+                    origin = foreign_instructions(p)
+                    if origin:
+                        _add_source(payload, {"kind": "instructions", "tool": "harness", "location": p,
+                                              "origin": origin}, event)
+    except Exception:
+        pass
 
 
 def _xattr(path: str, name: str) -> bytes:
@@ -1076,7 +1164,7 @@ def _prune_taint() -> None:
     try:
         for name in os.listdir(TAINT_DIR):
             p = os.path.join(TAINT_DIR, name)
-            if name.endswith((".json", ".tmp")) and os.path.getmtime(p) < cutoff:
+            if name.endswith((".json", ".tmp", ".instr")) and os.path.getmtime(p) < cutoff:
                 os.unlink(p)
     except OSError:
         pass
@@ -1092,14 +1180,26 @@ def record_taint(payload: dict, event: str) -> None:
         command = str(payload.get("command") or tool_input.get("command") or "")
         inp = untrusted_input(str(payload.get("tool_name") or ""), tool_input, command,
                               str(payload.get("cwd") or ""))
-        if not sid or not inp:
+        if sid and inp:
+            _add_source(payload, inp, event)
+    except Exception:
+        pass
+
+
+def _add_source(payload: dict, inp: dict, event: str) -> None:
+    """Append one input ({kind, tool, location[, origin]}) to the session's
+    taint record."""
+    try:
+        sid = _stable_session_id(payload)
+        if not sid:
             return
+        origin = inp.get("origin")
         inp = {"kind": inp["kind"], "tool": _clip(inp["tool"], 120), "location": _clip(inp["location"])}
         path = _taint_path(sid)
         rec = taint_of(payload)
         if rec is not None and not _can_add_source(rec, inp):
             return
-        inp = {"ts": now(), **inp, "origin": _clip(_origin(inp))}
+        inp = {"ts": now(), **inp, "origin": _clip(origin if origin is not None else _origin(inp))}
         os.makedirs(TAINT_DIR, exist_ok=True)
         os.chmod(TAINT_DIR, 0o700)
         if rec is None:
@@ -1329,7 +1429,7 @@ def gate_untrusted_egress(tool: str, tool_input: dict, command: str, event: str)
 
 
 SOURCE_LABELS = {"image": "image", "web": "web page", "search": "web search", "mcp": "MCP tool output",
-                 "fetch": "downloaded content", "gh": "GitHub content"}
+                 "fetch": "downloaded content", "gh": "GitHub content", "instructions": "instruction file"}
 
 # A session whose tool results matched the injection detector: its sends use the
 # stricter of untrusted-egress and this rule.
@@ -1847,6 +1947,7 @@ def main() -> int:
         return 0
 
     event = str(data.get("hook_event_name") or data.get("event") or "")
+    note_instruction_files(data, event)
     if event in {"PostToolUse", "postToolUse"}:
         try:
             log_payload(data)

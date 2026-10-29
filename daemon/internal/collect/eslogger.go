@@ -3,7 +3,9 @@ package collect
 import (
 	"bytes"
 	"encoding/json"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -17,19 +19,43 @@ import (
 // reaches it for fragments.
 var unmarshalES = json.Unmarshal
 
+type esProcess struct {
+	AuditToken struct {
+		PID int32 `json:"pid"`
+	} `json:"audit_token"`
+	PID        int32 `json:"pid"`
+	PPID       int32 `json:"ppid"`
+	Executable struct {
+		Path string `json:"path"`
+	} `json:"executable"`
+}
+
+func (p esProcess) pid() int32 {
+	if p.AuditToken.PID != 0 {
+		return p.AuditToken.PID
+	}
+	return p.PID
+}
+
+// esInstigated is the instigating-process part of the BTM and profile
+// events: the process itself, or only its audit token on message version 8+
+// when the process was not captured.
+type esInstigated struct {
+	Instigator      *esProcess `json:"instigator"`
+	InstigatorToken *struct {
+		PID int32 `json:"pid"`
+	} `json:"instigator_token"`
+}
+
+type esBTMItem struct {
+	ItemURL string `json:"item_url"`
+	AppURL  string `json:"app_url"`
+}
+
 type esEnvelope struct {
-	EventType int `json:"event_type"`
-	Process   struct {
-		AuditToken struct {
-			PID int32 `json:"pid"`
-		} `json:"audit_token"`
-		PID        int32 `json:"pid"`
-		PPID       int32 `json:"ppid"`
-		Executable struct {
-			Path string `json:"path"`
-		} `json:"executable"`
-	} `json:"process"`
-	Event struct {
+	EventType int       `json:"event_type"`
+	Process   esProcess `json:"process"`
+	Event     struct {
 		Open *struct {
 			FFlag int32 `json:"fflag"`
 			File  struct {
@@ -67,6 +93,30 @@ type esEnvelope struct {
 		TCCModify *struct {
 			Service string `json:"service"`
 		} `json:"tcc_modify"`
+		BTMAdd *struct {
+			esInstigated
+			Item           esBTMItem `json:"item"`
+			ExecutablePath string    `json:"executable_path"`
+		} `json:"btm_launch_item_add"`
+		BTMRemove *struct {
+			esInstigated
+			Item esBTMItem `json:"item"`
+		} `json:"btm_launch_item_remove"`
+		XPMalware *struct {
+			MalwareIdentifier  string `json:"malware_identifier"`
+			DetectedPath       string `json:"detected_path"`
+			DetectedExecutable string `json:"detected_executable"`
+		} `json:"xp_malware_detected"`
+		ProfileAdd *struct {
+			esInstigated
+			Profile struct {
+				Identifier  string `json:"identifier"`
+				DisplayName string `json:"display_name"`
+			} `json:"profile"`
+		} `json:"profile_add"`
+		GatekeeperOverride *struct {
+			File json.RawMessage `json:"file"`
+		} `json:"gatekeeper_user_override"`
 	} `json:"event"`
 	Time      string `json:"time"`
 	Timestamp string `json:"timestamp"`
@@ -107,15 +157,12 @@ func parseESLine(line []byte) (event.Event, esLineVerdict) {
 		return event.Event{}, esGarbage
 	}
 
-	pid := env.Process.AuditToken.PID
-	if pid == 0 {
-		pid = env.Process.PID
-	}
+	pid := env.Process.pid()
 	// The daemon's own reads (transcript tailing) are not agent activity.
 	if pid == int32(os.Getpid()) {
 		return event.Event{}, esOwn
 	}
-	exe := env.Process.Executable.Path
+	ppid, exe := env.Process.PPID, env.Process.Executable.Path
 
 	ts := time.Now()
 	tsStr := env.Time
@@ -159,11 +206,89 @@ func parseESLine(line []byte) (event.Event, esLineVerdict) {
 	} else if env.Event.TCCModify != nil {
 		kind = event.KindTCCModify
 		detail = env.Event.TCCModify.Service
+	} else if a := env.Event.BTMAdd; a != nil {
+		kind = event.KindLaunchItemAdd
+		filePath, detail = fileURLPath(a.Item.ItemURL), a.ExecutablePath
+		if detail == "" {
+			detail = fileURLPath(a.Item.AppURL)
+		}
+		pid, ppid, exe = a.instigatedBy(pid, ppid, exe)
+	} else if r := env.Event.BTMRemove; r != nil {
+		kind = event.KindLaunchItemRemove
+		filePath = fileURLPath(r.Item.ItemURL)
+		pid, ppid, exe = r.instigatedBy(pid, ppid, exe)
+	} else if m := env.Event.XPMalware; m != nil {
+		kind = event.KindMalwareDetected
+		filePath, detail = m.DetectedPath, m.MalwareIdentifier
+		if filePath == "" {
+			filePath = m.DetectedExecutable
+		}
+	} else if p := env.Event.ProfileAdd; p != nil {
+		kind = event.KindProfileAdd
+		detail = p.Profile.Identifier
+		if detail == "" {
+			detail = p.Profile.DisplayName
+		}
+		pid, ppid, exe = p.instigatedBy(pid, ppid, exe)
+	} else if g := env.Event.GatekeeperOverride; g != nil {
+		kind = event.KindGatekeeperOverride
+		filePath = gatekeeperFilePath(g.File)
 	} else {
 		return event.Event{}, esGarbage
 	}
 
-	open.Kind, open.TS, open.PID, open.PPID = kind, ts, pid, env.Process.PPID
+	open.Kind, open.TS, open.PID, open.PPID = kind, ts, pid, ppid
 	open.ExePath, open.Path, open.Detail = exe, filePath, detail
 	return open, esEvent
+}
+
+// instigatedBy attributes a BTM or profile event to the process that asked
+// for it; the message's own process (backgroundtaskmanagementd, mdmclient)
+// stands in only when ES captured no instigator.
+func (i esInstigated) instigatedBy(pid, ppid int32, exe string) (int32, int32, string) {
+	if p := i.Instigator; p != nil && p.pid() != 0 {
+		return p.pid(), p.PPID, p.Executable.Path
+	}
+	if t := i.InstigatorToken; t != nil && t.PID != 0 {
+		return t.PID, 0, ""
+	}
+	return pid, ppid, exe
+}
+
+// fileURLPath turns a BTM item or app URL into a path; a URL of another
+// scheme is kept as it is.
+func fileURLPath(s string) string {
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme != "file" {
+		return s
+	}
+	return strings.TrimSuffix(u.Path, "/")
+}
+
+// gatekeeperFilePath reads the overridden file from the Gatekeeper event's
+// file union: a path string, or a file object carrying its path.
+func gatekeeperFilePath(raw json.RawMessage) string {
+	var path string
+	if json.Unmarshal(raw, &path) == nil {
+		return path
+	}
+	var f struct {
+		Path     string `json:"path"`
+		FilePath string `json:"file_path"`
+		File     *struct {
+			Path string `json:"path"`
+		} `json:"file"`
+	}
+	if json.Unmarshal(raw, &f) != nil {
+		return ""
+	}
+	switch {
+	case f.Path != "":
+		return f.Path
+	case f.FilePath != "":
+		return f.FilePath
+	case f.File != nil:
+		return f.File.Path
+	}
+	return ""
 }

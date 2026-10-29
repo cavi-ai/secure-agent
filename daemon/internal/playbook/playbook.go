@@ -145,6 +145,49 @@ var playbooks = []Playbook{
 		},
 		Actions: []string{"kill", "open-incident", "dismiss"},
 	},
+	{
+		Rule:  "launch-item-change",
+		Title: "Background item changed",
+		Why:   "An agent added or removed a background item: a launch agent, launch daemon or login item. An added item runs again after the agent exits and after a restart; a removed one may be a monitor or updater the agent turned off.",
+		Now: []string{
+			"Open System Settings → General → Login Items & Extensions and turn off every item you did not add yourself.",
+			"Read the item's property list and the program it runs; remove both if you did not ask for them.",
+			"Kill the agent if it is still running.",
+		},
+		Prevent: []Step{
+			{"guard-rule", "Deny launch item writes to agents", "Guard rules that refuse writes under ~/Library/LaunchAgents, /Library/LaunchAgents and /Library/LaunchDaemons, and launchctl bootstrap or load."},
+			{"workflow", "Set up background services yourself", "Run installers and launchctl by hand; never ask an agent to install a service."},
+		},
+		Actions: []string{"kill", "open-incident", "dismiss"},
+	},
+	{
+		Rule:  "trust-change",
+		Title: "macOS trust changed",
+		Why:   "An agent installed a configuration profile or overrode Gatekeeper. A profile can add root certificates, proxies, VPNs and restrictions; a Gatekeeper override lets a program macOS blocked run.",
+		Now: []string{
+			"Open System Settings → General → Device Management and remove every profile you did not install yourself.",
+			"If the finding names a Gatekeeper override, delete the file unless you meant to run it.",
+			"Kill the agent if it is still running.",
+		},
+		Prevent: []Step{
+			{"guard-rule", "Deny profile installs to agents", "Guard rules that refuse the profiles tool and opening .mobileconfig files."},
+			{"workflow", "Approve trust changes yourself", "Install profiles and open blocked apps by hand; never ask an agent to."},
+		},
+		Actions: []string{"kill", "open-incident", "dismiss"},
+	},
+	{
+		Rule:  "xprotect-detection",
+		Title: "XProtect detected malware",
+		Why:   "XProtect, the malware scanner built into macOS, matched a file on this Mac against a known malware signature. The detection is machine-wide: the file may have come from an agent, a download or another app.",
+		Now: []string{
+			"Do not open the detected file; move it to the Trash if it is still on disk.",
+			"Search the session timelines for the detected path to find what wrote or ran it.",
+		},
+		Prevent: []Step{
+			{"workflow", "Review what agents download", "Route agents through the inspection proxy and check downloaded programs before running them."},
+		},
+		Actions: []string{"open-incident", "dismiss"},
+	},
 }
 
 var generic = Playbook{

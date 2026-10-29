@@ -81,7 +81,7 @@ func keepESLine(line []byte) bool {
 	}
 	rest := line[i+len(esEventMarker):]
 	if !bytes.HasPrefix(rest, esOpenKey) {
-		return true // exec, unlink, rename, tcc_modify
+		return true // every event other than open
 	}
 	rest = rest[len(esOpenKey):]
 	j := bytes.Index(rest, esPathMarker)
