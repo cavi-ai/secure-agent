@@ -39,7 +39,7 @@ Enforcement points, honestly labeled:
 | Claude `Grep`/`Glob` | Mode-enforced via the governing rule when the search root is a protected directory (`~/.ssh`, `~/.aws`, `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.gnupg`, `~/Library/Keychains`) or matches a file rule directly. |
 | Claude `Bash` | `deny`-mode rules enforced (including protected-directory targets); key material always denied — via `cat` **or any reader alias** (`grep`/`rg` included); `prompt` fails safe to `deny` (no interactive prompt mid-Bash). |
 | Cursor | `Bash` commands only (Cursor's payload lacks `tool_name`). |
-| Untrusted-input egress | Claude Code: every tool the `PreToolUse` hook sees, mode-enforced (`monitor` / `prompt` / `deny`). Cursor: shell commands, tainted only by events that carry a tool name. |
+| Untrusted-input egress | Claude Code: every tool the `PreToolUse` hook sees, mode-enforced (`monitor` / `prompt` / `deny`). Cursor: shell commands, tainted only by events that carry a tool name. Routed agents in `deny`: every new proxy connection from a tainted session, except the model API hosts the proxy decrypts and loopback. |
 
 ## Bypass classes that are CLOSED (with regression tests)
 
@@ -93,7 +93,10 @@ Enforcement points, honestly labeled:
 6. **Untrusted-egress sinks are recognized by name and shape.** Command
    words, `git`/`gh` subcommands, URL shape and MCP tool verbs decide what is
    a sink. A program the agent writes and then runs, a repository script, or
-   a short secret in a plain URL path is not recognized. Sessions without a
+   a short secret in a plain URL path is not recognized; for a routed agent
+   in `deny`, the proxy refuses their connections, but a connection opened
+   before the taint keeps running, a client the proxy cannot tie to one live
+   session passes, and `prompt` leaves the proxy idle. Sessions without a
    harness session id carry no taint. A person committing and pushing what
    the agent wrote is outside the hook. An `always` answer covers every
    untrusted-egress sink for that agent.

@@ -23,6 +23,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/injection"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/taint"
 )
 
 const (
@@ -56,6 +57,9 @@ type ProxyServer struct {
 	// inspectHosts are the hosts an inspect-mode CONNECT is decrypted for;
 	// every other CONNECT is tunneled. Set once before Serve.
 	inspectHosts map[string]bool
+	// egressGate decides each routed request before it is tunneled,
+	// decrypted or forwarded. Set once before Serve; nil admits all.
+	egressGate func(ctx context.Context, remoteAddr, target string) taint.Verdict
 	// tunneled and decrypted count CONNECTs by how they were served.
 	tunneled    atomic.Uint64
 	decrypted   atomic.Uint64
@@ -318,6 +322,12 @@ func (ps *ProxyServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	mode, ok := authorize(r)
 	if !ok {
 		rejectToken(w)
+		return
+	}
+	if detail, refused := ps.egressRefused(r); refused {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"error":"Security Violation","detail":%q}`, detail)))
 		return
 	}
 	if r.Method == http.MethodConnect {
@@ -747,15 +757,7 @@ func (ps *ProxyServer) publishHit(host, detail string) {
 }
 
 func (ps *ProxyServer) publishProxyHit(host, detail string, payload *model.PayloadEvidence) {
-	hostOnly := host
-	port := 443
-	if h, pStr, err := net.SplitHostPort(host); err == nil {
-		hostOnly = h
-		if p, err := strconv.Atoi(pStr); err == nil {
-			port = p
-		}
-	}
-
+	hostOnly, port := splitTarget(host)
 	ps.bus.Publish(event.Event{
 		Kind:       event.KindProxyHit,
 		TS:         time.Now(),
@@ -764,4 +766,16 @@ func (ps *ProxyServer) publishProxyHit(host, detail string, payload *model.Paylo
 		Detail:     detail,
 		Payload:    payload,
 	})
+}
+
+// splitTarget splits host[:port], defaulting the port to 443.
+func splitTarget(host string) (string, int) {
+	port := 443
+	if h, pStr, err := net.SplitHostPort(host); err == nil {
+		host = h
+		if p, err := strconv.Atoi(pStr); err == nil {
+			port = p
+		}
+	}
+	return host, port
 }

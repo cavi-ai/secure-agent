@@ -470,6 +470,8 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 		return what + "."
 	case "untrusted-egress":
 		return untrustedEgressWhat(f, agent)
+	case "proxy-untrusted-egress":
+		return "The proxy refused a connection from " + agent + " to " + dest + ": its session read untrusted content, and untrusted-egress is set to deny."
 	default:
 		return humanFlagTitle(f.Rule)
 	}

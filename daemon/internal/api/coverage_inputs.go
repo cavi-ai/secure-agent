@@ -141,6 +141,8 @@ func humanFlagTitle(rule string) string {
 		return "Secret appeared in an agent transcript"
 	case "untrusted-egress":
 		return "Data sent after reading untrusted content"
+	case "proxy-untrusted-egress":
+		return "Connection refused after reading untrusted content"
 	default:
 		return rule
 	}
