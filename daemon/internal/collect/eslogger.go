@@ -47,6 +47,30 @@ type esInstigated struct {
 	} `json:"instigator_token"`
 }
 
+// esDestination is the rename and create destination: an existing file, or
+// the directory and name of a new one.
+type esDestination struct {
+	ExistingFile *struct {
+		Path string `json:"path"`
+	} `json:"existing_file"`
+	NewPath *struct {
+		Dir struct {
+			Path string `json:"path"`
+		} `json:"dir"`
+		Filename string `json:"filename"`
+	} `json:"new_path"`
+}
+
+func (d esDestination) path() string {
+	switch {
+	case d.ExistingFile != nil:
+		return d.ExistingFile.Path
+	case d.NewPath != nil:
+		return d.NewPath.Dir.Path + "/" + d.NewPath.Filename
+	}
+	return ""
+}
+
 type esBTMItem struct {
 	ItemURL string `json:"item_url"`
 	AppURL  string `json:"app_url"`
@@ -80,16 +104,11 @@ type esEnvelope struct {
 			} `json:"target"`
 		} `json:"unlink"`
 		Rename *struct {
-			Destination struct {
-				ExistingFile *struct {
-					Path string `json:"path"`
-				} `json:"existing_file"`
-				NewPath *struct {
-					DirPath  string `json:"dir_path"`
-					Filename string `json:"filename"`
-				} `json:"new_path"`
-			} `json:"destination"`
+			Destination esDestination `json:"destination"`
 		} `json:"rename"`
+		Create *struct {
+			Destination esDestination `json:"destination"`
+		} `json:"create"`
 		TCCModify *struct {
 			Service string `json:"service"`
 		} `json:"tcc_modify"`
@@ -198,11 +217,10 @@ func parseESLine(line []byte) (event.Event, esLineVerdict) {
 		filePath = env.Event.Unlink.Target.Path
 	} else if env.Event.Rename != nil {
 		kind = event.KindFileWrite
-		if env.Event.Rename.Destination.ExistingFile != nil {
-			filePath = env.Event.Rename.Destination.ExistingFile.Path
-		} else if env.Event.Rename.Destination.NewPath != nil {
-			filePath = env.Event.Rename.Destination.NewPath.DirPath + "/" + env.Event.Rename.Destination.NewPath.Filename
-		}
+		filePath = env.Event.Rename.Destination.path()
+	} else if env.Event.Create != nil {
+		kind = event.KindFileWrite
+		filePath = env.Event.Create.Destination.path()
 	} else if env.Event.TCCModify != nil {
 		kind = event.KindTCCModify
 		detail = env.Event.TCCModify.Service

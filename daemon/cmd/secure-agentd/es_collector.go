@@ -222,7 +222,7 @@ func superviseESLogger(ctx context.Context, runOnce func() error, replaced func(
 // needs macOS 15.4, which already offers every system-change event here
 // (BTM and XProtect 13.0, profile_add 14.0, gatekeeper_user_override 15.0).
 var esLoggerEvents = []string{
-	"open", "exec", "unlink", "rename", "tcc_modify",
+	"open", "exec", "unlink", "rename", "create", "tcc_modify",
 	"btm_launch_item_add", "btm_launch_item_remove", "xp_malware_detected",
 	"profile_add", "gatekeeper_user_override",
 }

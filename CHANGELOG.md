@@ -12,7 +12,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Guard: the `untrusted-egress` rule applies its mode (monitor by default) to network commands, `git push`, `gh` writes, data-carrying URLs and MCP send tools once a session has read web, MCP (other than the Claude app's own tools), image or fetched content, or loaded an instruction file someone else committed; a "Data sent after reading untrusted content" finding, session memory and the prompt name each input, its origin (git committer, download URL) and the send.
 - Firewall: registered secrets match through hex, decimal or `0x` byte lists and URL-safe or unpadded base64; `secure-agent canary plant <file>` writes decoy credentials registered as fingerprints.
 - Guard: the `untrusted-egress` rule applies its mode (monitor by default) to network commands, `git push`, `gh` writes, data-carrying URLs and MCP send tools once a session has read web, MCP (other than the Claude app's own tools), image or fetched content; a "Data sent after reading untrusted content" finding, session memory and the prompt name each input, its origin (git committer, download URL) and the send.
-- File telemetry: Endpoint Security background item, configuration profile, Gatekeeper override and XProtect events; an agent that adds or removes a background item raises `launch-item-change`, one that installs a profile or overrides Gatekeeper raises `trust-change`, and every XProtect detection raises `xprotect-detection`.
+- File telemetry: Endpoint Security background item, configuration profile, Gatekeeper override and XProtect events; an agent that adds or removes a background item, or creates, moves or deletes the launch agent or daemon plist macOS registers or removes, raises `launch-item-change`, one that installs a profile or overrides Gatekeeper raises `trust-change`, and every XProtect detection raises `xprotect-detection`.
+
+### Fixed
+- File telemetry: a file renamed to a new name is recorded at its destination path.
 
 ## [1.4.0] - 2026-10-22
 

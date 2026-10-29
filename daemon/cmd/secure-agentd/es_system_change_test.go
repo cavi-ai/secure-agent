@@ -53,6 +53,70 @@ func TestSpoolSystemChangeEventsRaiseFlags(t *testing.T) {
 			`{"signature_version":"5321","malware_identifier":"MACOS.ADLOAD.A","incident_identifier":"8C1F","detected_path":"/Users/x/Downloads/installer.app","detected_executable":"/Users/x/Downloads/installer.app/Contents/MacOS/installer"}`),
 	}
 
+	got := spoolFlags(t, lines, 5)
+	wantFlags := []string{
+		"launch-item-change|pid=500|agent=cursor|/Applications/Secure Agent.app/Contents/Library/LaunchDaemons/com.cavi-ai.secure-agent-esd.plist",
+		"launch-item-change|pid=500|agent=cursor|/Users/x/Library/LaunchAgents/com.example.helper.plist",
+		"trust-change|pid=500|agent=cursor|/Users/x/Downloads/tool",
+		"trust-change|pid=500|agent=cursor|com.example.proxy",
+		"xprotect-detection|pid=0|agent=xprotect|/Users/x/Downloads/installer.app",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(wantFlags) {
+		t.Fatalf("stored flags:\n got  %q\n want %q", got, wantFlags)
+	}
+}
+
+// Background Task Management names smd as the instigator of a plist dropped
+// into a LaunchAgents directory. The item is the agent's when the agent
+// created, moved or deleted that file: the helper keeps those file events and
+// the BTM event flags the agent. An item no agent wrote does not flag.
+func TestSpoolLaunchItemFileWriterRaisesFlag(t *testing.T) {
+	btmd := esProcessJSON(583, 1, "/System/Library/PrivateFrameworks/BackgroundTaskManagement.framework/Versions/A/Resources/backgroundtaskmanagementd")
+	smd := esProcessJSON(379, 1, "/usr/libexec/smd")
+	agent := esProcessJSON(500, 1, "/usr/local/bin/cursor-agent")
+	btmAdd := func(plist string) string {
+		return esSystemLine("btm_launch_item_add", btmd,
+			`{"instigator":`+smd+`,"app":null,"item":{"uid":501,"item_url":"file:///Users/x/Library/LaunchAgents/`+plist+`","app_url":null,"item_type":3,"legacy":true,"managed":false},"executable_path":"/usr/bin/true","instigator_token":{"pid":379},"app_token":null}`)
+	}
+	lines := []string{
+		esSystemLine("create", agent,
+			`{"destination_type":1,"destination":{"new_path":{"dir":{"path":"/Users/x/Library/LaunchAgents","path_truncated":false},"filename":"com.example.probe.plist"}},"acl":null}`),
+		btmAdd("com.example.probe.plist"),
+		esSystemLine("rename", agent,
+			`{"source":{"path":"/Users/x/project/moved.plist","path_truncated":false},"destination_type":1,"destination":{"new_path":{"dir":{"path":"/Users/x/Library/LaunchAgents","path_truncated":false},"filename":"com.example.moved.plist"}}}`),
+		btmAdd("com.example.moved.plist"),
+		esSystemLine("unlink", agent,
+			`{"target":{"path":"/Users/x/Library/LaunchAgents/com.example.probe.plist","path_truncated":false},"parent_dir":{"path":"/Users/x/Library/LaunchAgents"}}`),
+		esSystemLine("btm_launch_item_remove", btmd,
+			`{"instigator":`+smd+`,"app":null,"item":{"uid":501,"item_url":"file:///Users/x/Library/LaunchAgents/com.example.probe.plist","app_url":null,"item_type":3,"legacy":true,"managed":false},"instigator_token":{"pid":379},"app_token":null}`),
+		btmAdd("com.vendor.updater.plist"),
+	}
+	var kept []string
+	for _, l := range lines {
+		if keepESLine([]byte(l)) {
+			kept = append(kept, l)
+		}
+	}
+	if len(kept) != len(lines) {
+		t.Fatalf("helper kept %d of %d lines", len(kept), len(lines))
+	}
+
+	got := spoolFlags(t, kept, 3)
+	wantFlags := []string{
+		"launch-item-change|pid=500|agent=cursor|/Users/x/Library/LaunchAgents/com.example.moved.plist",
+		"launch-item-change|pid=500|agent=cursor|/Users/x/Library/LaunchAgents/com.example.probe.plist",
+		"launch-item-change|pid=500|agent=cursor|/Users/x/Library/LaunchAgents/com.example.probe.plist",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(wantFlags) {
+		t.Fatalf("stored flags:\n got  %q\n want %q", got, wantFlags)
+	}
+}
+
+// spoolFlags writes lines to a spool, runs the spool tailer, bus, correlator
+// and store over it, and returns the stored flags as sorted
+// "rule|pid=N|agent=A|label" strings once want of them exist or 5 s pass.
+func spoolFlags(t *testing.T, lines []string, want int) []string {
+	t.Helper()
 	dir := t.TempDir()
 	spool := filepath.Join(dir, "es-spool.jsonl")
 	body := ""
@@ -94,7 +158,6 @@ func TestSpoolSystemChangeEventsRaiseFlags(t *testing.T) {
 		<-done
 	})
 
-	const want = 5
 	var flags []model.Flag
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -113,14 +176,5 @@ func TestSpoolSystemChangeEventsRaiseFlags(t *testing.T) {
 		got = append(got, fmt.Sprintf("%s|pid=%d|agent=%s|%s", fl.Rule, fl.PID, fl.Agent, label))
 	}
 	sort.Strings(got)
-	wantFlags := []string{
-		"launch-item-change|pid=500|agent=cursor|/Applications/Secure Agent.app/Contents/Library/LaunchDaemons/com.cavi-ai.secure-agent-esd.plist",
-		"launch-item-change|pid=500|agent=cursor|/Users/x/Library/LaunchAgents/com.example.helper.plist",
-		"trust-change|pid=500|agent=cursor|/Users/x/Downloads/tool",
-		"trust-change|pid=500|agent=cursor|com.example.proxy",
-		"xprotect-detection|pid=0|agent=xprotect|/Users/x/Downloads/installer.app",
-	}
-	if fmt.Sprint(got) != fmt.Sprint(wantFlags) {
-		t.Fatalf("stored flags:\n got  %q\n want %q", got, wantFlags)
-	}
+	return got
 }
