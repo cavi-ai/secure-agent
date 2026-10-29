@@ -430,6 +430,28 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 			return agent + " changed macOS privacy permissions (" + label + ")."
 		}
 		return agent + " changed macOS privacy permissions."
+	case "launch-item-change":
+		ev := evidenceOfKind(f, "launch-item")
+		switch {
+		case ev == nil || ev.Label == "":
+			return agent + " changed the background items that run after the agent exits."
+		case ev.Sub == "background item removed":
+			return agent + " removed a background item (" + filepath.Base(ev.Label) + ")."
+		}
+		return agent + " added a background item (" + filepath.Base(ev.Label) + ") that runs after the agent exits."
+	case "trust-change":
+		if label := evidenceLabel(f.Evidence, "profile"); label != "" {
+			return agent + " installed a configuration profile (" + label + ")."
+		}
+		if label := evidenceLabel(f.Evidence, "gatekeeper"); label != "" {
+			return agent + " overrode Gatekeeper for " + filepath.Base(label) + "."
+		}
+		return agent + " changed what macOS trusts."
+	case "xprotect-detection":
+		if ev := evidenceOfKind(f, "malware"); ev != nil && ev.Label != "" {
+			return "XProtect detected " + ev.Sub + " in " + filepath.Base(ev.Label) + "."
+		}
+		return "XProtect detected malware on this Mac."
 	case "proxy-secret-leak":
 		return agent + " sent " + secretPhrase(violationType(f.Evidence, "proxy-secret-leak")) + " to " + dest + "."
 	case "proxy-prompt-injection":
@@ -448,6 +470,8 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 		return what + "."
 	case "untrusted-egress":
 		return untrustedEgressWhat(f, agent)
+	case "proxy-untrusted-egress":
+		return "The proxy refused a connection from " + agent + " to " + dest + ": its session read untrusted content, and untrusted-egress is set to deny."
 	default:
 		return humanFlagTitle(f.Rule)
 	}
@@ -455,12 +479,13 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 
 // untrustedInputPhrases: an input kind as the object of "read".
 var untrustedInputPhrases = map[string]string{
-	"image":  "an image",
-	"web":    "a web page",
-	"search": "web search results",
-	"mcp":    "MCP tool output",
-	"fetch":  "downloaded content",
-	"gh":     "GitHub content",
+	"image":        "an image",
+	"web":          "a web page",
+	"search":       "web search results",
+	"mcp":          "MCP tool output",
+	"fetch":        "downloaded content",
+	"gh":           "GitHub content",
+	"instructions": "an instruction file",
 }
 
 // untrustedEgressWhat: "<agent> read an image (x.png), then sent data out
@@ -472,7 +497,7 @@ func untrustedEgressWhat(f model.Flag, agent string) string {
 		switch ev.Kind {
 		case "untrusted-input":
 			where := strings.TrimPrefix(ev.Label, model.UntrustedKindLabel(ev.Rule)+": ")
-			if ev.Rule == "image" {
+			if ev.Rule == "image" || ev.Rule == "instructions" {
 				where = filepath.Base(where)
 			}
 			phrase, ok := untrustedInputPhrases[ev.Rule]

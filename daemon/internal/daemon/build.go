@@ -243,6 +243,9 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	var proxyServer *proxy.ProxyServer
 	if cfg.ProxyEnabled {
 		proxyServer = setupProxy(cfg, b, fw.Engine)
+		if proxyServer != nil {
+			proxyServer.SetEgressGate(egressGate(cfg, resolver).Check)
+		}
 	}
 
 	// fleetOn is the one fleet_configured fact /status and /fleet serve; the

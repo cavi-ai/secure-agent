@@ -301,6 +301,9 @@ var repeatWindows = map[string]time.Duration{
 	"keychain-access":             15 * time.Minute,
 	"keychain-security-cli":       15 * time.Minute,
 	"tcc-tamper":                  60 * time.Minute,
+	"launch-item-change":          60 * time.Minute,
+	"trust-change":                60 * time.Minute,
+	"xprotect-detection":          60 * time.Minute,
 	"proxy-secret-leak":           5 * time.Minute,
 	"proxy-inspection-incomplete": 5 * time.Minute,
 	"proxy-prompt-injection":      15 * time.Minute,
@@ -380,7 +383,10 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 	if e.Kind == event.KindProxyHit {
 		ruleName := "proxy-payload-inspection"
 		severity := 3
-		if strings.HasPrefix(e.Detail, "proxy-secret-leak") {
+		sub := "payload inspection"
+		if strings.HasPrefix(e.Detail, "proxy-untrusted-egress:") {
+			ruleName, sub = "proxy-untrusted-egress", "untrusted-egress"
+		} else if strings.HasPrefix(e.Detail, "proxy-secret-leak") {
 			ruleName = "proxy-secret-leak"
 		} else if strings.HasPrefix(e.Detail, "proxy-prompt-injection") {
 			ruleName = "proxy-prompt-injection"
@@ -419,7 +425,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 				Evidence: []model.EvidenceItem{{
 					Kind:    "violation",
 					Label:   e.Detail,
-					Sub:     "payload inspection",
+					Sub:     sub,
 					Text:    fmt.Sprintf("Local proxy detected security violation '%s' while connecting to %s:%d", e.Detail, e.RemoteHost, e.RemotePort),
 					Payload: e.Payload,
 				}, {
@@ -439,6 +445,10 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 	// the tagger does not know it.
 	if e.Kind == event.KindPluginAction && e.Untrusted != nil {
 		return c.untrustedEgressLocked(e)
+	}
+	// XProtect reports its own detections: no agent process is the actor.
+	if e.Kind == event.KindMalwareDetected {
+		return c.malwareDetectedLocked(e)
 	}
 
 	info, isAgent := c.tagger.Tag(e.PID)
@@ -538,6 +548,14 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 				Text:  fmt.Sprintf("%s (pid %d) modified TCC service '%s' at %s", info.Name, e.PID, e.Detail, e.TS.Format(time.RFC3339)),
 			}},
 		})
+
+	case event.KindLaunchItemAdd, event.KindLaunchItemRemove, event.KindProfileAdd, event.KindGatekeeperOverride:
+		// Rules 5 and 6: an agent registering or removing a background item
+		// (launch agent, daemon, login item) changes what runs after it exits;
+		// installing a configuration profile or overriding Gatekeeper changes
+		// what macOS trusts. Background Task Management and profile events
+		// carry the instigating process, so the agent is the actor.
+		flags = append(flags, c.systemChangeLocked(e, info.Name)...)
 
 	case event.KindConnOpen:
 		if c.isVendorHost(info.Name, e.RemoteHost) {
@@ -653,6 +671,92 @@ func testValueEvidence(signals []string, ts time.Time) model.EvidenceItem {
 	}
 	ev.Text = ev.Label + ": " + ev.Sub
 	return ev
+}
+
+// systemChangeLocked applies launch-item-change (a background item added or
+// removed) and trust-change (a configuration profile installed, a Gatekeeper
+// override) to one event an agent instigated. Severity 3: each outlives the
+// agent's session. Callers hold c.mu.
+func (c *Correlator) systemChangeLocked(e event.Event, agent string) []model.Flag {
+	rule, kind, sub := "trust-change", "", ""
+	var text string
+	at := e.TS.Format(time.RFC3339)
+	label := e.Path
+	switch e.Kind {
+	case event.KindLaunchItemAdd:
+		rule, kind, sub = "launch-item-change", "launch-item", "background item added"
+		text = fmt.Sprintf("%s (pid %d) added background item %s at %s", agent, e.PID, e.Path, at)
+		if e.Detail != "" {
+			text = fmt.Sprintf("%s (pid %d) added background item %s running %s at %s", agent, e.PID, e.Path, e.Detail, at)
+		}
+	case event.KindLaunchItemRemove:
+		rule, kind, sub = "launch-item-change", "launch-item", "background item removed"
+		text = fmt.Sprintf("%s (pid %d) removed background item %s at %s", agent, e.PID, e.Path, at)
+	case event.KindProfileAdd:
+		kind, sub, label = "profile", "configuration profile installed", e.Detail
+		text = fmt.Sprintf("%s (pid %d) installed configuration profile '%s' at %s", agent, e.PID, e.Detail, at)
+	case event.KindGatekeeperOverride:
+		kind, sub = "gatekeeper", "Gatekeeper override"
+		text = fmt.Sprintf("%s (pid %d) overrode Gatekeeper for %s at %s", agent, e.PID, e.Path, at)
+	default:
+		return nil
+	}
+	if c.isMuted != nil && c.isMuted(rule, "*", agent) {
+		c.mutedCount++
+		return nil
+	}
+	subject := e.Kind.String() + "|" + label
+	flagID := hashFlagID(rule+"|"+subject, e.PID, e.TS)
+	if !c.shouldFlag(flagID, rule, e.PID, subject, e.TS, repeatWindows[rule]) {
+		return nil
+	}
+	return []model.Flag{{
+		ID:        flagID,
+		Rule:      rule,
+		Severity:  3,
+		TS:        e.TS,
+		PID:       e.PID,
+		Agent:     agent,
+		SessionID: e.SessionID,
+		Evidence: []model.EvidenceItem{{
+			Kind:  kind,
+			Label: label,
+			Sub:   sub,
+			TS:    at,
+			Text:  text,
+		}},
+	}}
+}
+
+// malwareDetectedLocked applies xprotect-detection to one XProtect detection.
+// The detection is machine-wide: XProtect, not an agent, reports it. Callers
+// hold c.mu.
+func (c *Correlator) malwareDetectedLocked(e event.Event) []model.Flag {
+	const rule, agent = "xprotect-detection", "xprotect"
+	if c.isMuted != nil && c.isMuted(rule, "*", agent) {
+		c.mutedCount++
+		return nil
+	}
+	subject := e.Detail + "|" + e.Path
+	flagID := hashFlagID(rule+"|"+subject, 0, e.TS)
+	if !c.shouldFlag(flagID, rule, 0, subject, e.TS, repeatWindows[rule]) {
+		return nil
+	}
+	at := e.TS.Format(time.RFC3339)
+	return []model.Flag{{
+		ID:       flagID,
+		Rule:     rule,
+		Severity: 3,
+		TS:       e.TS,
+		Agent:    agent,
+		Evidence: []model.EvidenceItem{{
+			Kind:  "malware",
+			Label: e.Path,
+			Sub:   e.Detail,
+			TS:    at,
+			Text:  fmt.Sprintf("XProtect detected %s in %s at %s", e.Detail, e.Path, at),
+		}},
+	}}
 }
 
 // keychainAccessLocked applies the keychain-access rule to one login-keychain

@@ -29,6 +29,15 @@ const (
 	// KindHookRun is one completed harness hook execution. It is
 	// stored in hook_runs, never in events, and never published as a delta.
 	KindHookRun
+	// Endpoint Security system-change events. A BTM or profile event's PID
+	// is its instigating process; Path is the launch item, the detected or
+	// overridden file; Detail is the item's executable, the malware
+	// identifier or the profile identifier.
+	KindLaunchItemAdd
+	KindLaunchItemRemove
+	KindMalwareDetected
+	KindProfileAdd
+	KindGatekeeperOverride
 )
 
 func (k Kind) String() string {
@@ -65,6 +74,16 @@ func (k Kind) String() string {
 		return "model-call"
 	case KindHookRun:
 		return "hook-run"
+	case KindLaunchItemAdd:
+		return "launch-item-add"
+	case KindLaunchItemRemove:
+		return "launch-item-remove"
+	case KindMalwareDetected:
+		return "malware-detected"
+	case KindProfileAdd:
+		return "profile-add"
+	case KindGatekeeperOverride:
+		return "gatekeeper-override"
 	default:
 		return "unknown"
 	}
