@@ -7,7 +7,7 @@ import XCTest
 final class FirstUseSetupTests: XCTestCase {
     @MainActor
     func testExplicitHarnessSurvivesAutomaticSuggestionAndReopening() {
-        for harness in ["codex", "openclaw", "hermes", "opencode", "antigravity"] {
+        for harness in ["codex", "cursor", "openclaw", "hermes", "opencode", "antigravity"] {
             let flow = FirstUseSetupFlow(selectedHarness: harness)
             flow.applySuggestedHarness("claude")
             XCTAssertEqual(flow.selectedHarness, harness)
