@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,7 +29,18 @@ func esProcessJSON(pid, ppid int, exe string) string {
 // esSystemLine is one eslogger line whose message process is proc and whose
 // event body is body under name.
 func esSystemLine(name, proc, body string) string {
-	return fmt.Sprintf(`{"version":8,"time":"2026-10-28T21:00:00.000000000Z","event_type":0,"process":%s,"event":{%q:%s}}`, proc, name, body)
+	return esSystemLineAt("2026-10-28T21:00:00.000000000Z", name, proc, body)
+}
+
+// esSystemLineAt is esSystemLine at time at.
+func esSystemLineAt(at, name, proc, body string) string {
+	return fmt.Sprintf(`{"version":8,"time":%q,"event_type":0,"process":%s,"event":{%q:%s}}`, at, proc, name, body)
+}
+
+// esEscapeSlashes writes a line the way eslogger does: every "/" in its JSON
+// strings as "\/".
+func esEscapeSlashes(line string) string {
+	return strings.ReplaceAll(line, "/", `\/`)
 }
 
 // System-change events in the privileged spool reach the store as flags: the
@@ -67,9 +79,10 @@ func TestSpoolSystemChangeEventsRaiseFlags(t *testing.T) {
 }
 
 // Background Task Management names smd as the instigator of a plist dropped
-// into a LaunchAgents directory. The item is the agent's when the agent
-// created, moved or deleted that file: the helper keeps those file events and
-// the BTM event flags the agent. An item no agent wrote does not flag.
+// into a LaunchAgents directory, and reports its removal a minute or more
+// after the file is gone. The item is the agent's when the agent created,
+// moved or deleted that file: the helper keeps those file events and the BTM
+// event flags the agent. An item no agent wrote does not flag.
 func TestSpoolLaunchItemFileWriterRaisesFlag(t *testing.T) {
 	btmd := esProcessJSON(583, 1, "/System/Library/PrivateFrameworks/BackgroundTaskManagement.framework/Versions/A/Resources/backgroundtaskmanagementd")
 	smd := esProcessJSON(379, 1, "/usr/libexec/smd")
@@ -87,13 +100,13 @@ func TestSpoolLaunchItemFileWriterRaisesFlag(t *testing.T) {
 		btmAdd("com.example.moved.plist"),
 		esSystemLine("unlink", agent,
 			`{"target":{"path":"/Users/x/Library/LaunchAgents/com.example.probe.plist","path_truncated":false},"parent_dir":{"path":"/Users/x/Library/LaunchAgents"}}`),
-		esSystemLine("btm_launch_item_remove", btmd,
+		esSystemLineAt("2026-10-28T21:01:10.000000000Z", "btm_launch_item_remove", btmd,
 			`{"instigator":`+smd+`,"app":null,"item":{"uid":501,"item_url":"file:///Users/x/Library/LaunchAgents/com.example.probe.plist","app_url":null,"item_type":3,"legacy":true,"managed":false},"instigator_token":{"pid":379},"app_token":null}`),
 		btmAdd("com.vendor.updater.plist"),
 	}
 	var kept []string
 	for _, l := range lines {
-		if keepESLine([]byte(l)) {
+		if l = esEscapeSlashes(l); keepESLine([]byte(l)) {
 			kept = append(kept, l)
 		}
 	}

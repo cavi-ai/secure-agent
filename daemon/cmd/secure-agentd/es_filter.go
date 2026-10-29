@@ -60,8 +60,12 @@ var (
 )
 
 // esLaunchItemDirs are the launchd agent and daemon directories, system-wide
-// and under each home.
-var esLaunchItemDirs = [][]byte{[]byte("/Library/LaunchAgents"), []byte("/Library/LaunchDaemons")}
+// and under each home, as plain and as JSON-escaped ("\/") text: eslogger
+// escapes every slash.
+var esLaunchItemDirs = [][]byte{
+	[]byte("/Library/LaunchAgents"), []byte("/Library/LaunchDaemons"),
+	[]byte(`\/Library\/LaunchAgents`), []byte(`\/Library\/LaunchDaemons`),
+}
 
 // namesLaunchItemDir reports whether an eslogger line mentions a launchd
 // agent or daemon directory anywhere.

@@ -62,6 +62,8 @@ func TestKeepESLine(t *testing.T) {
 		{"project file create", esCreateTestLine("/Users/dev/project", "main.go"), false},
 		{"spaced layout project create", `{"process": {"pid": 7}, "event": {"create": {"destination": {"new_path": {"dir": {"path": "/Users/dev/project"}, "filename": "a.go"}}}}}`, false},
 		{"user launch agent create", esCreateTestLine("/Users/dev/Library/LaunchAgents", "com.example.helper.plist"), true},
+		{"escaped launch agent create", strings.ReplaceAll(esCreateTestLine("/Users/dev/Library/LaunchAgents", "com.example.helper.plist"), "/", `\/`), true},
+		{"escaped project file create", strings.ReplaceAll(esCreateTestLine("/Users/dev/project", "main.go"), "/", `\/`), false},
 		{"launch daemon create", esCreateTestLine("/Library/LaunchDaemons", "com.example.helper.plist"), true},
 		{"spaced layout launch agent create", `{"process": {"pid": 7}, "event": {"create": {"destination": {"new_path": {"dir": {"path": "/Library/LaunchAgents"}, "filename": "a.plist"}}}}}`, true},
 
