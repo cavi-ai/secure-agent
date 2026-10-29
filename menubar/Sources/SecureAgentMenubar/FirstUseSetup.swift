@@ -41,7 +41,7 @@ struct FirstUseSetupState {
         switch harness {
         case "openclaw": return "Install the Secure Agent plugin in ~/.openclaw/extensions/secure-agent and enable it through the OpenClaw CLI. This configures the default OpenClaw profile. Existing plugins and settings are retained."
         case "hermes": return "Install the Secure Agent plugin in ~/.hermes/plugins/secure-agent and enable it in ~/.hermes/config.yaml for the default profile. Existing plugins and settings are retained. Unsupported YAML is left unchanged."
-        case "opencode": return "Install an OpenCode v2 plugin in ~/.config/opencode/plugins/secure-agent and add its path to the global opencode.json(c) plugins list. Existing settings and plugin entries are retained, with a backup before the first change."
+        case "opencode": return "Install an OpenCode v2 plugin in ~/.config/opencode/plugins/secure-agent and add its path to the global opencode.json(c) plugins list. Existing settings and plugin entries are retained, with a backup before the first change. JSONC is rewritten as JSON; comments remain in the backup."
         case "antigravity": return "Install scripts in ~/.gemini/secure-agent/hooks and add a named Secure Agent hook to ~/.gemini/config/hooks.json. Existing named hooks are retained."
         default: return "Install scripts in ~/.\(harness)/hooks and register them in \(harness == "claude" ? "~/.claude/settings.json" : "~/.\(harness)/hooks.json"). Existing user hooks are retained. Only this harness is changed."
         }
