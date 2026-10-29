@@ -32,6 +32,7 @@ public final class SetupManager: ObservableObject {
     /// Nil failure alone is not a pass: no check has run until results exist.
     @Published public private(set) var hookSelfTestFailure: String?
     @Published public private(set) var hookSelfTestRunning = false
+    @Published private(set) var hookSetupRunning = false
     @Published private(set) var hookSelfTestHarness: String?
     @Published public private(set) var hookProbeResults: [CoverageProbeReceiptModel] = []
     @Published private(set) var firstUseState = FirstUseSetupState()
@@ -148,7 +149,7 @@ public final class SetupManager: ObservableObject {
     public nonisolated static let advisorEndpoint = "http://127.0.0.1:8080"
 
     private let fm = FileManager.default
-    private let home = NSHomeDirectory()
+    private let home: String
 
     private var launchAgentsDir: String { "\(home)/Library/LaunchAgents" }
     /// Path of the legacy daemon LaunchAgent. Older versions installed a
@@ -159,19 +160,19 @@ public final class SetupManager: ObservableObject {
     /// Path to the daemon inside the app bundle. Nil when running unbundled
     /// (e.g. `swift run` during development).
     public var bundledDaemonPath: String? {
-        let path = Bundle.main.bundleURL
+        let path = appURL
             .appendingPathComponent("Contents/Helpers/secure-agentd").path
         return fm.fileExists(atPath: path) ? path : nil
     }
 
     public var bundledCLIPath: String? {
-        let path = Bundle.main.bundleURL
+        let path = appURL
             .appendingPathComponent("Contents/Helpers/secure-agent").path
         return fm.fileExists(atPath: path) ? path : nil
     }
 
     private var bundledHooksDir: String? {
-        let path = Bundle.main.bundleURL
+        let path = appURL
             .appendingPathComponent("Contents/Resources/hooks").path
         return fm.fileExists(atPath: path) ? path : nil
     }
@@ -190,6 +191,7 @@ public final class SetupManager: ObservableObject {
          appURL: URL = Bundle.main.bundleURL,
          deferAutomaticTelemetry: Bool = false) {
         self.esService = esService
+        home = configurationHome ?? NSHomeDirectory()
         configStore = ConfigStore(home: configurationHome ?? NSHomeDirectory())
         self.appURL = appURL
         esLocationAllowed = AppIdentity.isInstalledCopy(appURL)
@@ -487,9 +489,44 @@ public final class SetupManager: ObservableObject {
         try HookRegistry.installSelectedHooks(harness: harness, bundledDir: source, home: home)
     }
 
+    /// Shared by setup entry points; files alone never enable OpenClaw.
+    func configureHooks(for harness: String) async throws {
+        guard !hookSetupRunning else {
+            throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "Hook setup is already running."])
+        }
+        hookSetupRunning = true
+        defer { hookSetupRunning = false; refreshHookInstallationState() }
+        try installHooks(for: harness)
+        if harness == "openclaw" { try await registerOpenClawHooks() }
+        guard HookRegistry.selectedHooksInstalled(harness: harness, home: home) else {
+            throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey:
+                "Hook installation is incomplete. Retry setup using the packaged Secure Agent app."])
+        }
+    }
+
+    func refreshHookInstallationState() {
+        firstUseState.installedHarnesses = Set(FirstUseSetupState.hookHarnesses.filter {
+            HookRegistry.selectedHooksInstalled(harness: $0, home: home)
+        })
+    }
+
     /// Let OpenClaw preserve its JSON5 config, includes, leases and plugin policy.
     /// Do not accept capabilities or bypass a policy rejection on the user's behalf.
     func registerOpenClawHooks() async throws {
+        _ = try await inspectOpenClawHooks()
+        let result = await runProcess("/usr/bin/env", openClawArguments(["plugins", "enable", "secure-agent"]))
+        guard result.status == 0 else {
+            throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey:
+                "OpenClaw could not enable Secure Agent. Run openclaw plugins enable secure-agent in your terminal to review its requirements, then restart the Gateway."])
+        }
+        let plugin = try await inspectOpenClawHooks()
+        guard plugin["enabled"] as? Bool == true else {
+            throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey:
+                "OpenClaw still reports Secure Agent as disabled. Review OpenClaw's plugin policy, then retry registration."])
+        }
+    }
+
+    private func inspectOpenClawHooks() async throws -> [String: Any] {
         let inspection = await runProcess("/usr/bin/env", openClawArguments(["plugins", "info", "secure-agent", "--json"]))
         let expected = URL(fileURLWithPath: HookRegistry.hookDirectory(harness: "openclaw", home: home) + "/index.mjs").resolvingSymlinksInPath()
         guard inspection.status == 0,
@@ -502,11 +539,7 @@ public final class SetupManager: ObservableObject {
             throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey:
                 "OpenClaw could not identify the installed Secure Agent plugin. Check openclaw plugins info secure-agent; a different plugin with the same ID will not be enabled."])
         }
-        let result = await runProcess("/usr/bin/env", openClawArguments(["plugins", "enable", "secure-agent"]))
-        guard result.status == 0 else {
-            throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey:
-                "OpenClaw could not enable Secure Agent. Run openclaw plugins enable secure-agent in your terminal to review its requirements, then restart the Gateway."])
-        }
+        return plugin
     }
 
     private func openClawArguments(_ args: [String]) -> [String] {

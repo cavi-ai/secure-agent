@@ -56,6 +56,12 @@ struct FirstUseSetupState {
 
     func receipt(for harness: String) -> CoverageProbeReceiptModel? { probes.first { $0.harness == harness } }
 
+    func installationStatus(for harness: String) -> String {
+        guard installedHarnesses.contains(harness) else { return "Hooks not installed" }
+        if harness == "openclaw" { return "Plugin files installed" }
+        return Self.supportsProbe(harness) ? "Hooks installed and registered" : "Hooks registered; activation required"
+    }
+
     struct Result {
         let title: String
         let detail: String
@@ -94,9 +100,43 @@ enum FirstUseSetupStage { case choose, enable, result }
 final class FirstUseSetupFlow: ObservableObject {
     @Published var stage: FirstUseSetupStage
     @Published var selectedHarness: String
-    init(stage: FirstUseSetupStage = .choose, selectedHarness: String = "claude") {
+    @Published private(set) var installing = false
+    private var suggestsHarness: Bool
+
+    init(stage: FirstUseSetupStage = .choose, selectedHarness: String? = nil) {
         self.stage = stage
-        self.selectedHarness = selectedHarness
+        self.selectedHarness = selectedHarness ?? "claude"
+        suggestsHarness = selectedHarness == nil
+    }
+
+    func applySuggestedHarness(_ harness: String) {
+        guard suggestsHarness else { return }
+        selectedHarness = harness
+        suggestsHarness = false
+    }
+
+    func selectHarness(_ harness: String) {
+        guard !installing else { return }
+        selectedHarness = harness
+        suggestsHarness = false
+    }
+
+    func beginSetup(for harness: String) {
+        guard !installing else { return }
+        selectHarness(harness)
+        stage = .enable
+    }
+
+    func install(using setup: SetupManager) async {
+        guard !installing else { return }
+        installing = true
+        let harness = selectedHarness
+        defer { installing = false }
+        do {
+            try await setup.configureHooks(for: harness)
+            if FirstUseSetupState.supportsProbe(harness) { await setup.refreshState() }
+            else { stage = .result }
+        } catch { setup.report(error) }
     }
 }
 

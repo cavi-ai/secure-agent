@@ -5,6 +5,23 @@ import XCTest
 @testable import SecureAgentMenubar
 
 final class FirstUseSetupTests: XCTestCase {
+    @MainActor
+    func testExplicitHarnessSurvivesAutomaticSuggestionAndReopening() {
+        for harness in ["codex", "openclaw"] {
+            let flow = FirstUseSetupFlow(selectedHarness: harness)
+            flow.applySuggestedHarness("claude")
+            XCTAssertEqual(flow.selectedHarness, harness)
+            flow.beginSetup(for: harness)
+            XCTAssertEqual(flow.stage, .enable)
+            XCTAssertEqual(flow.selectedHarness, harness)
+        }
+        let automatic = FirstUseSetupFlow()
+        automatic.applySuggestedHarness("openclaw")
+        XCTAssertEqual(automatic.selectedHarness, "openclaw")
+        automatic.selectHarness("codex")
+        automatic.applySuggestedHarness("claude")
+        XCTAssertEqual(automatic.selectedHarness, "codex")
+    }
     func testSelectedInstallationLeavesOtherHarnessesAndUserHooksUntouched() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

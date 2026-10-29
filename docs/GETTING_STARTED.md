@@ -34,6 +34,8 @@ Saved Secure Agent preferences and monitoring data remain in their existing loca
 
 Setup supports hook registration for Claude Code, Cursor, Codex, OpenClaw, Antigravity, Hermes and OpenCode v2. Existing user hooks are retained.
 
+For Codex and OpenClaw, open **Settings → Providers → Hook setup** and choose **Set Up…** beside the agent. Setup opens on that agent's enable step. Monitoring switches control process monitoring separately from hook registration.
+
 - **Codex:** Setup merges tool hooks into `~/.codex/hooks.json`. Open `/hooks` in Codex and review and trust the new hooks before starting a session. Codex configuration and managed policy can disable hooks.
 - **OpenClaw:** Setup installs a native plugin in `~/.openclaw/extensions/secure-agent` and uses `openclaw plugins enable secure-agent` for the default profile. The OpenClaw CLI must be installed. Restart the Gateway after registration. If enablement is rejected, review the CLI's requirements; Setup does not bypass plugin policy. Guard approval requests expire after five seconds to finish within OpenClaw's default hook timeout.
 - **Antigravity:** Setup merges a named `secure-agent` hook into `~/.gemini/config/hooks.json`, shared by the App, CLI and IDE. Start a new session and review it under **Customizations → Hooks**. An existing disabled hook or a different hook with the same name is left unchanged.

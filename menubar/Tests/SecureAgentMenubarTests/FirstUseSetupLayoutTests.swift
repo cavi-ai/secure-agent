@@ -72,18 +72,20 @@ final class FirstUseSetupLayoutTests: XCTestCase {
                                  openPane: { _ in XCTFail("No permission pane should open") },
                                  appURL: URL(fileURLWithPath: "/fixture/Secure Agent.app"), deferAutomaticTelemetry: true)
         setup.seedFirstUseForTesting(FirstUseSetupState(daemonAvailable: true))
-        for harness in ["claude", "codex"] {
-            let controller = NSHostingController(rootView: OnboardingView(setup: setup, appState: AppState(),
-                flow: FirstUseSetupFlow(stage: .result, selectedHarness: harness), refreshAutomatically: false, onDone: {}))
-            let window = NSWindow(contentViewController: controller)
-            window.isReleasedWhenClosed = false
-            window.setContentSize(NSSize(width: 520, height: 580))
-            let view = try XCTUnwrap(window.contentView)
-            window.makeKeyAndOrderFront(nil)
-            await settle(view)
-            assertFits(view, window: window)
-            try snapshot(view, name: "minimum-\(harness)")
-            window.orderOut(nil); window.close()
+        for harness in ["claude", "codex", "openclaw"] {
+            for stage in [FirstUseSetupStage.enable, .result] {
+                let controller = NSHostingController(rootView: OnboardingView(setup: setup, appState: AppState(),
+                    flow: FirstUseSetupFlow(stage: stage, selectedHarness: harness), refreshAutomatically: false, onDone: {}))
+                let window = NSWindow(contentViewController: controller)
+                window.isReleasedWhenClosed = false
+                window.setContentSize(NSSize(width: 520, height: 580))
+                let view = try XCTUnwrap(window.contentView)
+                window.makeKeyAndOrderFront(nil)
+                await settle(view)
+                assertFits(view, window: window)
+                try snapshot(view, name: "minimum-\(stage)-\(harness)")
+                window.orderOut(nil); window.close()
+            }
         }
     }
 
