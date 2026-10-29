@@ -72,7 +72,7 @@ final class FirstUseSetupLayoutTests: XCTestCase {
                                  openPane: { _ in XCTFail("No permission pane should open") },
                                  appURL: URL(fileURLWithPath: "/fixture/Secure Agent.app"), deferAutomaticTelemetry: true)
         setup.seedFirstUseForTesting(FirstUseSetupState(daemonAvailable: true))
-        for harness in ["claude", "codex", "openclaw", "hermes", "opencode", "antigravity"] {
+        for harness in ["claude", "cursor", "codex", "openclaw", "hermes", "opencode", "antigravity"] {
             for stage in [FirstUseSetupStage.enable, .result] {
                 let controller = NSHostingController(rootView: OnboardingView(setup: setup, appState: AppState(),
                     flow: FirstUseSetupFlow(stage: stage, selectedHarness: harness), refreshAutomatically: false, onDone: {}))

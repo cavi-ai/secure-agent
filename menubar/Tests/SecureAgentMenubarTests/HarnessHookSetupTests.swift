@@ -16,7 +16,7 @@ final class HarnessHookSetupTests: XCTestCase {
         let prior = Set(NSApp.windows.map(ObjectIdentifier.init))
         defer { controller.close() }
         var openedWindow: NSWindow?
-        for harness in ["codex", "openclaw", "hermes", "opencode", "antigravity"] {
+        for harness in ["codex", "cursor", "openclaw", "hermes", "opencode", "antigravity"] {
             controller.show(harness: harness)
             let window = try XCTUnwrap(NSApp.windows.first { !prior.contains(ObjectIdentifier($0)) })
             await settle(try XCTUnwrap(window.contentView))
@@ -39,10 +39,12 @@ final class HarnessHookSetupTests: XCTestCase {
         XCTAssertTrue(fixture.setup.firstUseState.configuredHarnesses.isSuperset(of: ["hermes", "opencode", "antigravity"]))
     }
 
-    func testAdditionalWizardsPreserveConfigurationAndRecoverFromErrors() async throws {
+    func testWizardsPreserveConfigurationAndRecoverFromErrors() async throws {
         let policy = activateApplication()
         defer { NSApp.setActivationPolicy(policy) }
         let cases = [
+            ("cursor", ".cursor/hooks.json", #"{"version":2,"hooks":{}}"#,
+             #"{"version":1,"extra":"keep-setting","hooks":{"preToolUse":[{"command":"user-hook"}],"sessionStart":[{"command":"user-start"}]}}"#),
             ("hermes", ".hermes/config.yaml", "plugins: {enabled: [user-plugin]}\n",
              "# keep-setting\nmodel: keep-model\nplugins:\n  enabled: [user-plugin]\n  disabled: [secure-agent, other-plugin]\n"),
             ("opencode", ".config/opencode/opencode.jsonc", #"{"plugins":"unsupported"}"#,
@@ -76,18 +78,31 @@ final class HarnessHookSetupTests: XCTestCase {
             try Data(original.utf8).write(to: config)
             try pressReturn(window)
             await settle(controller.view)
-            XCTAssertEqual(flow.stage, .result, harness)
+            XCTAssertEqual(flow.stage, FirstUseSetupState.supportsProbe(harness) ? .enable : .result, harness)
             XCTAssertNil(fixture.setup.lastError, harness)
             XCTAssertEqual(fixture.setup.firstUseState.installedHarnesses, [harness])
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: config.path + ".bak-secure-agent")), Data(original.utf8), harness)
             XCTAssertTrue(try String(contentsOf: config, encoding: .utf8).contains(harness == "opencode" ? "user-plugin" : "keep-setting"), harness)
+            for other in FirstUseSetupState.hookHarnesses where other != harness {
+                XCTAssertFalse(FileManager.default.fileExists(atPath: HookRegistry.hookDirectory(harness: other, home: fixture.home)), "\(harness) must not install \(other)")
+            }
+
+            if FirstUseSetupState.supportsProbe(harness) {
+                fixture.setup.seedFirstUseForTesting(FirstUseSetupState(daemonAvailable: true, installedHarnesses: [harness]))
+                XCTAssertEqual(fixture.setup.firstUseState.result(for: harness).title, "Hook check not run")
+                XCTAssertFalse(fixture.setup.firstUseState.result(for: harness).passed)
+                fixture.setup.seedFirstUseForTesting(FirstUseSetupState(daemonAvailable: false, installedHarnesses: [harness]))
+                await settle(controller.view)
+                try pressReturn(window, requireHandled: false)
+                await settle(controller.view)
+                XCTAssertEqual(flow.stage, .enable, "The manual check must wait for an answering monitor")
+                XCTAssertFalse(fixture.setup.hookSelfTestRunning)
+                continue
+            }
             let result = fixture.setup.firstUseState.result(for: harness)
             XCTAssertEqual(result.title, "Hook activation required", harness)
             XCTAssertEqual(result.detail, FirstUseSetupState.activationGuidance(harness))
             XCTAssertFalse(result.passed, harness)
-            for other in FirstUseSetupState.hookHarnesses where other != harness {
-                XCTAssertFalse(FileManager.default.fileExists(atPath: HookRegistry.hookDirectory(harness: other, home: fixture.home)), "\(harness) must not install \(other)")
-            }
 
             let registered = try Data(contentsOf: config)
             flow.beginSetup(for: harness)
@@ -253,11 +268,12 @@ final class HarnessHookSetupTests: XCTestCase {
         return policy
     }
 
-    private func pressReturn(_ window: NSWindow) throws {
+    private func pressReturn(_ window: NSWindow, requireHandled: Bool = true) throws {
         let enter = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
             timestamp: 0, windowNumber: window.windowNumber, context: nil,
             characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
-        XCTAssertTrue(window.performKeyEquivalent(with: enter))
+        let handled = window.performKeyEquivalent(with: enter)
+        if requireHandled { XCTAssertTrue(handled) }
     }
 
     private func settle(_ view: NSView) async {

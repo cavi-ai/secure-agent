@@ -8,7 +8,7 @@ struct HarnessHookSetupSection: View {
 
     var body: some View {
         Section {
-            ForEach(["codex", "openclaw", "hermes", "opencode", "antigravity"], id: \.self) { harness in
+            ForEach(["codex", "cursor", "openclaw", "hermes", "opencode", "antigravity"], id: \.self) { harness in
                 HStack(spacing: 12) {
                     AgentIdentity.tile(harness, size: 22)
                     VStack(alignment: .leading, spacing: 3) {
