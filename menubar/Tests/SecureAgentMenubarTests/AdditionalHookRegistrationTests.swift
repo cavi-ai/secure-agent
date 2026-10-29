@@ -52,6 +52,36 @@ final class AdditionalHookRegistrationTests: XCTestCase {
         XCTAssertEqual(invalid, try Data(contentsOf: path))
     }
 
+    func testAntigravityMovesOwnedCommandsAndReenablesThemWithoutDroppingUserHooks() throws {
+        let path = home.appendingPathComponent(".gemini/config/hooks.json")
+        try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let legacy = HookRegistry.legacyAntigravityCommand(home: home.path)
+        let current = HookRegistry.selectedHookCommand(harness: "antigravity", home: home.path)
+        let original = try JSONSerialization.data(withJSONObject: ["user-hook": ["Stop": []], "secure-agent": [
+            "enabled": false,
+            "PreToolUse": [["hooks": [["command": legacy + " PreToolUse"], ["command": current + " PreToolUse"], ["command": "keep-user-command"]]]],
+            "PostToolUse": [["hooks": [["command": legacy + " PostToolUse"]]]]
+        ]])
+        try original.write(to: path)
+        try HookRegistry.installSelectedHooks(harness: "antigravity", bundledDir: source.path, home: home.path)
+        XCTAssertTrue(HookRegistry.selectedHooksInstalled(harness: "antigravity", home: home.path))
+        XCTAssertEqual(HookRegistry.hookDirectory(harness: "antigravity", home: home.path), home.path + "/.config/secure-agent/hooks/antigravity")
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path.path + ".bak-secure-agent")), original)
+        let root = try JSONSerialization.jsonObject(with: Data(contentsOf: path)) as! [String: Any]
+        let own = root["secure-agent"] as! [String: Any]
+        XCTAssertEqual(own["enabled"] as? Bool, true)
+        for event in ["PreToolUse", "PostToolUse"] {
+            let entries = (own[event] as! [[String: Any]]).flatMap { $0["hooks"] as! [[String: Any]] }
+            XCTAssertEqual(entries.filter { $0["command"] as? String == current + " " + event }.count, 1)
+            XCTAssertFalse(entries.contains { $0["command"] as? String == legacy + " " + event })
+        }
+        XCTAssertTrue(try String(contentsOf: path, encoding: .utf8).contains("keep-user-command"))
+        XCTAssertNotNil(root["user-hook"])
+        let first = try Data(contentsOf: path)
+        try HookRegistry.installSelectedHooks(harness: "antigravity", bundledDir: source.path, home: home.path)
+        XCTAssertEqual(try Data(contentsOf: path), first)
+    }
+
     func testHermesPreservesPluginListsAndRejectsUnsupportedYAML() throws {
         let path = home.appendingPathComponent(".hermes/config.yaml")
         try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)

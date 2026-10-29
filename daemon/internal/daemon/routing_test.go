@@ -34,4 +34,7 @@ func TestClaudeRouting(t *testing.T) {
 	if info.Env["HTTPS_PROXY"] != agentenv.ProxyURL(8443, tok, agentenv.InspectUser) || info.Env["NODE_EXTRA_CA_CERTS"] != ca {
 		t.Fatalf("env = %v, want the inspect-mode proxy URL and the CA", info.Env)
 	}
+	if info.TunnelEnv["HTTPS_PROXY"] != agentenv.ProxyURL(8443, tok, agentenv.TunnelUser) || info.TunnelEnv["NODE_EXTRA_CA_CERTS"] != "" {
+		t.Fatal("agent launch routing must use tunnel mode without installing CA trust")
+	}
 }

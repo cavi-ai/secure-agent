@@ -6,9 +6,11 @@ public struct RoutingInfo: Codable, Equatable, Sendable {
     public let reason: String?
     public let env: [String: String]?
     public let bashEnvPath: String?
+    public var tunnelEnv: [String: String]? = nil
 
     enum CodingKeys: String, CodingKey {
         case ready, reason, env
+        case tunnelEnv = "tunnel_env"
         case bashEnvPath = "bash_env_path"
     }
 }

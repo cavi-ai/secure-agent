@@ -16,7 +16,7 @@ final class HarnessHookSetupTests: XCTestCase {
         let prior = Set(NSApp.windows.map(ObjectIdentifier.init))
         defer { controller.close() }
         var openedWindow: NSWindow?
-        for harness in ["codex", "cursor", "openclaw", "hermes", "opencode", "antigravity"] {
+        for harness in ["claude", "codex", "cursor", "openclaw", "hermes", "opencode", "antigravity"] {
             controller.show(harness: harness)
             let window = try XCTUnwrap(NSApp.windows.first { !prior.contains(ObjectIdentifier($0)) })
             await settle(try XCTUnwrap(window.contentView))
@@ -32,11 +32,21 @@ final class HarnessHookSetupTests: XCTestCase {
     func testConfiguredHarnessesUseTheirNativeDirectories() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        for directory in [".hermes", ".config/opencode", ".gemini"] {
+        for directory in [".hermes", ".config/opencode", ".gemini/config"] {
             try FileManager.default.createDirectory(atPath: fixture.home + "/" + directory, withIntermediateDirectories: true)
         }
         await fixture.setup.refreshState()
         XCTAssertTrue(fixture.setup.firstUseState.configuredHarnesses.isSuperset(of: ["hermes", "opencode", "antigravity"]))
+    }
+
+    func testGeminiConfigurationAloneDoesNotIdentifyAntigravity() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let settings = URL(fileURLWithPath: fixture.home + "/.gemini/settings.json")
+        try FileManager.default.createDirectory(at: settings.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: settings)
+        await fixture.setup.refreshState()
+        XCTAssertFalse(fixture.setup.firstUseState.configuredHarnesses.contains("antigravity"))
     }
 
     func testWizardsPreserveConfigurationAndRecoverFromErrors() async throws {
@@ -62,7 +72,7 @@ final class HarnessHookSetupTests: XCTestCase {
             let config = URL(fileURLWithPath: fixture.home + "/" + relativePath)
             try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(invalid.utf8).write(to: config)
-            let flow = FirstUseSetupFlow(stage: .enable, selectedHarness: harness)
+            let flow = FirstUseSetupFlow(stage: .choose, selectedHarness: harness)
             let controller = NSHostingController(rootView: OnboardingView(setup: fixture.setup,
                 appState: AppState(client: StubDaemonClient()), flow: flow, refreshAutomatically: false, onDone: {}))
             let window = makeWindow(controller)
@@ -78,7 +88,7 @@ final class HarnessHookSetupTests: XCTestCase {
             try Data(original.utf8).write(to: config)
             try pressReturn(window)
             await settle(controller.view)
-            XCTAssertEqual(flow.stage, FirstUseSetupState.supportsProbe(harness) ? .enable : .result, harness)
+            XCTAssertEqual(flow.stage, .result, harness)
             XCTAssertNil(fixture.setup.lastError, harness)
             XCTAssertEqual(fixture.setup.firstUseState.installedHarnesses, [harness])
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: config.path + ".bak-secure-agent")), Data(original.utf8), harness)
@@ -89,13 +99,14 @@ final class HarnessHookSetupTests: XCTestCase {
 
             if FirstUseSetupState.supportsProbe(harness) {
                 fixture.setup.seedFirstUseForTesting(FirstUseSetupState(daemonAvailable: true, installedHarnesses: [harness]))
-                XCTAssertEqual(fixture.setup.firstUseState.result(for: harness).title, "Hook check not run")
+                XCTAssertEqual(fixture.setup.firstUseState.result(for: harness).title, "Hooks configured")
                 XCTAssertFalse(fixture.setup.firstUseState.result(for: harness).passed)
                 fixture.setup.seedFirstUseForTesting(FirstUseSetupState(daemonAvailable: false, installedHarnesses: [harness]))
+                flow.beginSetup(for: harness)
                 await settle(controller.view)
                 try pressReturn(window, requireHandled: false)
                 await settle(controller.view)
-                XCTAssertEqual(flow.stage, .enable, "The manual check must wait for an answering monitor")
+                XCTAssertEqual(flow.stage, .result, "Setup must not require a manual connection check")
                 XCTAssertFalse(fixture.setup.hookSelfTestRunning)
                 continue
             }

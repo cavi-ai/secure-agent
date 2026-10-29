@@ -51,7 +51,7 @@ final class SetupSessionLiveTests: XCTestCase {
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 1100, height: 800), configuration: webConfig)
         var opened: [ConsoleDestination?] = []
         let flow = FirstUseSetupFlow(stage: .result, selectedHarness: "codex")
-        let view = OnboardingView(setup: setup, appState: app, flow: flow, refreshAutomatically: false,
+        let view = OnboardingView(setup: setup, appState: app, flow: flow, refreshAutomatically: false, diagnosticsExpanded: true,
             onOpenConsole: { destination in
                 opened.append(destination)
                 // Use the production URL builder and real console credential;

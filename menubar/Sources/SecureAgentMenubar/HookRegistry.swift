@@ -5,7 +5,7 @@ import Foundation
 enum HookRegistry {
     static func configurationDirectory(harness: String, home: String) -> String {
         switch harness {
-        case "antigravity": return "\(home)/.gemini"
+        case "antigravity": return "\(home)/.gemini/config"
         case "opencode": return "\(home)/.config/opencode"
         default: return "\(home)/.\(harness)"
         }
@@ -16,7 +16,7 @@ enum HookRegistry {
         case "openclaw": return "\(home)/.openclaw/extensions/secure-agent"
         case "hermes": return "\(home)/.hermes/plugins/secure-agent"
         case "opencode": return "\(home)/.config/opencode/plugins/secure-agent"
-        case "antigravity": return "\(home)/.gemini/secure-agent/hooks"
+        case "antigravity": return "\(home)/.config/secure-agent/hooks/antigravity"
         default: return "\(home)/.\(harness)/hooks"
         }
     }
@@ -105,6 +105,10 @@ enum HookRegistry {
         let script = adapter ? "harness_guard.py" : "secret_guard.py"
         let command = "python3 '" + "\(hookDirectory(harness: harness, home: home))/\(script)".replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
         return command + (adapter ? " " + harness : "")
+    }
+
+    static func legacyAntigravityCommand(home: String) -> String {
+        "python3 '" + (home + "/.gemini/secure-agent/hooks/harness_guard.py").replacingOccurrences(of: "'", with: "'\"'\"'") + "' antigravity"
     }
 
     static func selectedHooksInstalled(harness: String, home: String) -> Bool {

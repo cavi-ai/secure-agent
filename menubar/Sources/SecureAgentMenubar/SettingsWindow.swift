@@ -139,7 +139,7 @@ enum SettingsTab: Hashable, CaseIterable {
         case .telemetry: "File coverage and collector health"
         case .chat: "Chat with a local model on this Mac"
         case .analysis: "The local model that reviews flags"
-        case .traffic: "Route agent traffic through Secure Agent"
+        case .traffic: "Hook setup and traffic routing for each agent"
         case .app: "Startup, setup, and removal"
         case .updates: "Build version and update channel"
         }
@@ -160,6 +160,7 @@ struct SettingsView: View {
     @ObservedObject private var setup = SetupManager.shared
     @ObservedObject private var nav = SettingsNavigation.shared
     @State private var recommendationsExpanded = false
+    @State private var trafficHarness = "claude"
     @State private var advisorSelectionInitialized = false
     @State private var advisorOptionsExpanded = false
     @State private var ruleEdit: ProtectionRuleEdit?
@@ -548,7 +549,10 @@ struct SettingsView: View {
     private var providersTab: some View {
         Form {
             HarnessHookSetupSection(setup: setup) { harness in
-                OnboardingWindowController.shared.show(harness: harness)
+                Task {
+                    do { try await setup.configureHooks(for: harness) }
+                    catch { setup.report(error) }
+                }
             }
             Section {
                 ForEach(SetupManager.knownAgents, id: \.name) { agent in
@@ -622,7 +626,12 @@ struct SettingsView: View {
 
     private var trafficPane: some View {
         Form {
-            trafficSection
+            HarnessTrafficSetupSection(setup: setup, harness: $trafficHarness) { harness in
+                Task {
+                    do { try await setup.configureHooks(for: harness) }
+                    catch { setup.report(error) }
+                }
+            }
             setupError
         }
         .formStyle(.grouped)
@@ -707,27 +716,6 @@ struct SettingsView: View {
 
             Button("Open Agent review queue") { state.openDashboard(tab: "agent") }
                 .disabled(state.dashboardUnavailableReason != nil)
-        }
-    }
-
-    private var trafficSection: some View {
-        Section("Agent traffic inspection") {
-            Toggle("Route Claude Code through Secure Agent", isOn: Binding(
-                get: { setup.claudeRoutingApplied },
-                set: { on in Task { await setup.setClaudeRouting(on) } }
-            ))
-            .disabled(setup.claudeRoutingChanging)
-            Text("Quit Claude Desktop and exit Claude Code before changing routing, then reopen them so the proxy and certificate settings load together.")
-                .font(.caption)
-            Text("Routed Claude Code sessions send their traffic through Secure Agent's proxy: API requests to Anthropic are decrypted and scanned; every other connection, including Bash commands, passes through unopened. Close routed sessions before quitting Secure Agent. If Secure Agent stops unexpectedly, reopen it, then restart Claude.")
-                .font(.caption).foregroundStyle(.secondary)
-            Text("Other agents: source the snippet in the shell where you launch them; their connections pass through unopened.")
-                .font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Button("Copy Command") { setup.copyAgentRoutingCommand() }
-                Button("Show File") { setup.revealAgentRoutingSnippet() }
-                    .disabled(!setup.isAgentRoutingConfigured)
-            }
         }
     }
 

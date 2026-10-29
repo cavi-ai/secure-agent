@@ -33,6 +33,8 @@ public final class SetupManager: ObservableObject {
     @Published public private(set) var hookSelfTestFailure: String?
     @Published public private(set) var hookSelfTestRunning = false
     @Published private(set) var hookSetupRunning = false
+    @Published private(set) var agentSetupRunning: String?
+    @Published private(set) var agentSetupStatus: [String: String] = [:]
     @Published private(set) var hookSelfTestHarness: String?
     @Published public private(set) var hookProbeResults: [CoverageProbeReceiptModel] = []
     @Published private(set) var firstUseState = FirstUseSetupState()
@@ -464,7 +466,7 @@ public final class SetupManager: ObservableObject {
         NSHomeDirectory() + "/.cursor/hooks",
         NSHomeDirectory() + "/.codex/hooks",
         NSHomeDirectory() + "/.openclaw/extensions/secure-agent",
-        NSHomeDirectory() + "/.gemini/secure-agent/hooks",
+        NSHomeDirectory() + "/.config/secure-agent/hooks/antigravity",
         NSHomeDirectory() + "/.hermes/plugins/secure-agent",
         NSHomeDirectory() + "/.config/opencode/plugins/secure-agent",
         NSHomeDirectory() + "/.config/opencode/hooks",
@@ -512,6 +514,24 @@ public final class SetupManager: ObservableObject {
         })
     }
 
+    func setUpAndOpen(_ harness: String) async {
+        guard agentSetupRunning == nil else { return }
+        agentSetupRunning = harness
+        agentSetupStatus[harness] = nil
+        lastError = nil
+        defer { agentSetupRunning = nil }
+        do {
+            let target = try AgentLauncher.target(for: harness, home: home)
+            if FirstUseSetupState.supportsHook(harness) { try await configureHooks(for: harness) }
+            let routing = try await DaemonClient().fetchRouting()
+            guard routing.ready, let environment = routing.tunnelEnv else {
+                throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "Start the monitor to finish routing setup."])
+            }
+            try await AgentLauncher.launch(target, harness: harness, home: home, environment: environment, runProcess: runProcess)
+            agentSetupStatus[harness] = "Launch requested with routing"
+        } catch { report(error) }
+    }
+
     /// Let OpenClaw preserve its JSON5 config, includes, leases and plugin policy.
     /// Do not accept capabilities or bypass a policy rejection on the user's behalf.
     func registerOpenClawHooks() async throws {
@@ -519,7 +539,7 @@ public final class SetupManager: ObservableObject {
         let result = await runProcess("/usr/bin/env", openClawArguments(["plugins", "enable", "secure-agent"]))
         guard result.status == 0 else {
             throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey:
-                "OpenClaw could not enable Secure Agent. Run openclaw plugins enable secure-agent in your terminal to review its requirements, then restart the Gateway."])
+                "OpenClaw rejected plugin enablement. Review its plugin policy, then retry."])
         }
         let plugin = try await inspectOpenClawHooks()
         guard plugin["enabled"] as? Bool == true else {
@@ -539,7 +559,7 @@ public final class SetupManager: ObservableObject {
               let source = plugin["source"] as? String,
               URL(fileURLWithPath: source).resolvingSymlinksInPath() == expected else {
             throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey:
-                "OpenClaw could not identify the installed Secure Agent plugin. Check openclaw plugins info secure-agent; a different plugin with the same ID will not be enabled."])
+                "OpenClaw could not identify the installed Secure Agent plugin. Review its plugin configuration, then retry."])
         }
         return plugin
     }
@@ -1357,8 +1377,11 @@ public final class SetupManager: ObservableObject {
             try? SMAppService.mainApp.unregister()
         }
         try HookRegistry.Cursor.unregister(at: Self.cursorHooksPath, command: Self.cursorHookCommand)
+        try AgentLauncher.removeManagedFiles(home: home)
         try HookRegistry.Codex.unregister(at: home + "/.codex/hooks.json", command: HookRegistry.selectedHookCommand(harness: "codex", home: home))
-        try HookRegistry.Antigravity.unregister(at: home + "/.gemini/config/hooks.json", command: HookRegistry.selectedHookCommand(harness: "antigravity", home: home))
+        try HookRegistry.Antigravity.unregister(at: home + "/.gemini/config/hooks.json",
+            command: HookRegistry.selectedHookCommand(harness: "antigravity", home: home),
+            legacyCommand: HookRegistry.legacyAntigravityCommand(home: home))
         for harness in ["hermes", "opencode"] { try HookRegistry.uninstallAdditionalPlugin(harness: harness, home: home) }
         let openClawDir = HookRegistry.hookDirectory(harness: "openclaw", home: home)
         if HookRegistry.selectedHooksInstalled(harness: "openclaw", home: home) {

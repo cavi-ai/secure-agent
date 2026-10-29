@@ -238,6 +238,7 @@ func claudeRouting(ps *proxy.ProxyServer, caCertPath string) func() api.RoutingI
 		return api.RoutingInfo{
 			Ready:       true,
 			Env:         agentenv.InspectVars(ps.Port(), caCertPath, token),
+			TunnelEnv:   agentenv.Vars(ps.Port(), token),
 			BashEnvPath: snippet,
 		}
 	}

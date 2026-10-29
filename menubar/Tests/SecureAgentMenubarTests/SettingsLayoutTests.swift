@@ -3,10 +3,84 @@ import SwiftUI
 import XCTest
 @testable import SecureAgentMenubar
 
+@MainActor
+private final class TrafficChoice: ObservableObject {
+    @Published var harness = "claude"
+}
+
+@MainActor
+private struct TrafficSettingsHost: View {
+    @ObservedObject var choice: TrafficChoice
+    let setup: SetupManager
+    var onSetup: (String) -> Void
+
+    var body: some View {
+        Form {
+            HarnessTrafficSetupSection(setup: setup, harness: $choice.harness, onSetup: onSetup)
+        }.formStyle(.grouped)
+    }
+}
+
 /// Exercises the production SwiftUI hierarchy in a test-owned native window.
 /// Only navigation is changed; fixture rule data never leaves the test.
 @MainActor
 final class SettingsLayoutTests: XCTestCase {
+    func testTrafficSelectionCoversProvidersWithoutChangingTheirConfiguration() async throws {
+        _ = NSApplication.shared
+        let policy = NSApp.activationPolicy()
+        NSApp.setActivationPolicy(.regular)
+        NSApp.finishLaunching()
+        defer { NSApp.setActivationPolicy(policy) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "TrafficSettingsTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let setup = SetupManager(esService: FakeESService(), defaults: defaults, configurationHome: root.path,
+            plistPresent: { false }, openPane: { _ in XCTFail("No permissions should change") },
+            appURL: URL(fileURLWithPath: "/fixture/Secure Agent.app"), deferAutomaticTelemetry: true)
+        setup.runProcess = { _, _ in XCTFail("Choosing an agent must not launch a process"); return (-1, "", "") }
+        let choice = TrafficChoice()
+        var opened: [String] = []
+        let controller = NSHostingController(rootView: TrafficSettingsHost(choice: choice, setup: setup,
+            onSetup: { opened.append($0) }))
+        let window = NSWindow(contentViewController: controller)
+        window.isReleasedWhenClosed = false
+        defer { window.orderOut(nil); window.close() }
+        window.setContentSize(NSSize(width: 564, height: 420))
+        window.makeKeyAndOrderFront(nil)
+        choice.harness = "codex"
+        await settle(controller.view)
+        XCTAssertFalse(setup.isAgentRoutingConfigured)
+        try snapshot(controller.view, name: "traffic-codex-unavailable")
+
+        let snippet = URL(fileURLWithPath: setup.agentRoutingSnippetPath)
+        try FileManager.default.createDirectory(at: snippet.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("# inert routing fixture\n".utf8).write(to: snippet)
+        XCTAssertTrue(setup.isAgentRoutingConfigured)
+        XCTAssertTrue(Set(SetupManager.knownAgents.map(\.name)).isSuperset(of: FirstUseSetupState.hookHarnesses))
+        for agent in SetupManager.knownAgents {
+            choice.harness = agent.name
+            await settle(controller.view)
+            XCTAssertEqual(choice.harness, agent.name)
+            XCTAssertTrue(opened.isEmpty, "Choosing an agent must not install hooks")
+            XCTAssertFalse(setup.claudeRoutingApplied, "Choosing an agent must not apply routing")
+            if FirstUseSetupState.supportsHook(agent.name) || agent.name == "aider" {
+                for size in [NSSize(width: 564, height: 420), NSSize(width: 664, height: 540)] {
+                    window.setContentSize(size)
+                    await settle(controller.view)
+                    assertHorizontalFit(controller.view, window: window)
+                    try snapshot(controller.view, name: "traffic-\(agent.name)-\(Int(size.width))")
+                }
+            }
+        }
+        for harness in FirstUseSetupState.hookHarnesses {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: HookRegistry.hookDirectory(harness: harness, home: root.path)))
+        }
+        XCTAssertEqual(try Data(contentsOf: snippet), Data("# inert routing fixture\n".utf8))
+    }
+
     func testNativeSettingsAtMinimumAndDefaultSizes() async throws {
         _ = NSApplication.shared
         let priorPolicy = NSApp.activationPolicy()
