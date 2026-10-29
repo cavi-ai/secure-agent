@@ -22,7 +22,7 @@ struct FirstUseSetupState {
         return .session(id)
     }
 
-    static let hookHarnesses = ["claude", "cursor", "codex", "openclaw"]
+    static let hookHarnesses = ["claude", "cursor", "codex", "openclaw", "antigravity", "hermes", "opencode"]
     static func supportsHook(_ harness: String) -> Bool { hookHarnesses.contains(harness) }
     static func supportsProbe(_ harness: String) -> Bool { harness == "claude" || harness == "cursor" }
 
@@ -30,7 +30,20 @@ struct FirstUseSetupState {
         switch harness {
         case "codex": return "Open /hooks in Codex, review and trust the Secure Agent hooks, then start a new session. Codex can disable hooks in its configuration. Registration does not prove invocation."
         case "openclaw": return "Restart the OpenClaw Gateway after registration. The Secure Agent plugin must remain enabled by OpenClaw policy. Guard approvals expire after five seconds so the check finishes within OpenClaw's hook timeout. Registration does not prove invocation."
+        case "antigravity": return "Start a new Antigravity session and review Secure Agent under Customizations → Hooks. The global hooks apply to Antigravity App, CLI and IDE. Registration does not prove invocation."
+        case "hermes": return "Restart Hermes after registration. Setup enables the Secure Agent plugin for the default profile; safe mode or a different profile can prevent loading. Guard approvals expire after five seconds. Registration does not prove invocation."
+        case "opencode": return "Restart the OpenCode server after registration. This plugin uses the OpenCode v2 API and is registered in the default global configuration. Guard approvals expire after five seconds. Registration does not prove invocation."
         default: return "Run the manual hook check, then start a new agent session."
+        }
+    }
+
+    static func installationDetail(_ harness: String) -> String {
+        switch harness {
+        case "openclaw": return "Install the Secure Agent plugin in ~/.openclaw/extensions/secure-agent and enable it through the OpenClaw CLI. This configures the default OpenClaw profile. Existing plugins and settings are retained."
+        case "hermes": return "Install the Secure Agent plugin in ~/.hermes/plugins/secure-agent and enable it in ~/.hermes/config.yaml for the default profile. Existing plugins and settings are retained. Unsupported YAML is left unchanged."
+        case "opencode": return "Install an OpenCode v2 plugin in ~/.config/opencode/plugins/secure-agent and add its path to the global opencode.json(c) plugins list. Existing settings and plugin entries are retained, with a backup before the first change."
+        case "antigravity": return "Install scripts in ~/.gemini/secure-agent/hooks and add a named Secure Agent hook to ~/.gemini/config/hooks.json. Existing named hooks are retained."
+        default: return "Install scripts in ~/.\(harness)/hooks and register them in \(harness == "claude" ? "~/.claude/settings.json" : "~/.\(harness)/hooks.json"). Existing user hooks are retained. Only this harness is changed."
         }
     }
 

@@ -12,7 +12,7 @@ struct OnboardingOptionsView: View {
             }
             GroupBox("Additional Harness Hooks") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Install hook files for Claude, Cursor, Codex, OpenClaw and opencode. Codex requires hook trust review; enable OpenClaw through its selected setup path. Manual guard checks support Claude and Cursor. Installation does not establish runtime coverage.")
+                    Text("Install hook files for Claude, Cursor, Codex, OpenClaw, Antigravity, Hermes and OpenCode v2. Follow each harness's activation guidance; enable OpenClaw through its selected setup path. Manual guard checks support Claude and Cursor. Installation does not establish runtime coverage.")
                         .font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Button("Install All Harness Hook Scripts") { run { try setup.installHooks() } }

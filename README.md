@@ -49,7 +49,7 @@ Screenshots use synthetic demonstration data.
 
 1. Download `SecureAgent-<version>.dmg` from the [latest release](https://github.com/cavi-ai/secure-agent/releases/latest).
 2. Drag **Secure Agent.app** to **Applications** and launch it. Requires **macOS 14+**.
-3. Choose your harness in Setup. Register Claude Code, Cursor, Codex or OpenClaw hooks, or continue with the selected harness's observation path.
+3. Choose your harness in Setup. Register Claude Code, Cursor, Codex, OpenClaw, Antigravity, Hermes or OpenCode v2 hooks, or continue with the selected harness's observation path.
 4. Start an agent session and check its observed coverage. Enable file telemetry, guard prompts, traffic routing and local analysis separately as needed.
 
 Follow [Getting started](docs/GETTING_STARTED.md), then [Your first observed session](docs/FIRST_SESSION.md) to see evidence and export a report. For problems, use [Troubleshooting](docs/TROUBLESHOOTING.md). To build from source, use [Development](docs/DEVELOPMENT.md).

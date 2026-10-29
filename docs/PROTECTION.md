@@ -78,7 +78,7 @@ If an expectation cannot be saved, check the episode's observed agent, destinati
 
 ## Directory Guard
 
-The Directory Guard checks sensitive file access before a supported harness tool executes. Register Claude Code, Cursor, Codex or OpenClaw hooks through [Setup](GETTING_STARTED.md#set-up-your-first-agent), then follow the harness's activation steps. Native Codex and OpenClaw adapters check shell commands, file tools and patch targets; hooks do not cover every execution path or replace the harness's own security controls.
+The Directory Guard checks sensitive file access before a supported harness tool executes. Register Claude Code, Cursor, Codex, OpenClaw, Antigravity, Hermes or OpenCode v2 hooks through [Setup](GETTING_STARTED.md#set-up-your-first-agent), then follow the harness's activation steps. Native adapters check shell commands, file tools and patch targets; hooks do not cover every execution path or replace the harness's own security controls.
 
 When an agent tool call touches a guarded path (SSH keys, cloud credentials, the keychain, `.env` files, shell rc files), the hook checks the rule's mode:
 
