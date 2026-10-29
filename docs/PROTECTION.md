@@ -134,6 +134,14 @@ Set the mode in `~/.config/secure-agent/guard-modes.json`, for example `{"untrus
 
 For an agent routed through the proxy, `deny` also covers connections the hook cannot name, such as a script the agent wrote and then ran. The proxy finds the process holding the client end of each new connection (once per connection), maps it to its live session, and refuses the CONNECT or plain request with `403` when that session has a taint record and the rule resolves to `deny` for its workspace. The refusal is a `proxy-untrusted-egress` finding carrying the client process and session. The model API hosts the proxy decrypts (`proxy_inspect_hosts`) and loopback are never refused. The proxy does nothing in `monitor` or `prompt`, and looks up no process while no session is tainted or no workspace resolves the rule to `deny`.
 
+When a tool result matches the injection detector (phrases such as "ignore all previous instructions"), three things happen:
+
+- The model is told, alongside the result, that the text is written as instructions to it and is data from the tool, with the matched words quoted.
+- The session is marked even if the tool was not an untrusted input, and its sends use the stricter of `untrusted-egress` and `untrusted-egress-injected`. Set `{"untrusted-egress-injected": "deny"}` to block every send after a detected injection while plain untrusted input stays in `monitor`.
+- The finding leads with **Injection in tool output** and the matched words. It is critical (severity 3, pages) when the send ran, and a warning when you allowed it.
+
+`untrusted-egress-injected` ships as `monitor`. The detector matches keyword phrases; a reworded injection passes it, and the plain `untrusted-egress` rule still applies.
+
 Each input records where it came from:
 
 | Input | Location | Origin |

@@ -37,6 +37,17 @@ func (c *Correlator) untrustedEgressLocked(e event.Event) []model.Flag {
 	if u.Decision == "monitored" || u.Decision == "asked" {
 		severity = 2
 	}
+	// A send after a tool result the injection detector matched is the
+	// pattern this rule exists for: it pages when it ran, and stays a warning
+	// when you allowed it.
+	if u.Injection != nil {
+		switch u.Decision {
+		case "monitored", "asked":
+			severity = 3
+		case "allowed":
+			severity = 2
+		}
+	}
 	key := untrustedEgressRule + "|" + e.SessionID
 	if prev, ok := c.folded[key]; ok && severity <= prev.severity {
 		active := e.TS.Sub(prev.at) >= 0 && e.TS.Sub(prev.at) < untrustedRepeatWindow
@@ -48,7 +59,18 @@ func (c *Correlator) untrustedEgressLocked(e event.Event) []model.Flag {
 			return nil
 		}
 	}
-	evidence := make([]model.EvidenceItem, 0, len(u.Sources)+1)
+	evidence := make([]model.EvidenceItem, 0, len(u.Sources)+2)
+	if inj := u.Injection; inj != nil {
+		label := model.UntrustedKindLabel("injection") + ": " + inj.Location
+		evidence = append(evidence, model.EvidenceItem{
+			Kind:  "untrusted-input",
+			Label: label,
+			Sub:   "matched: " + inj.Match,
+			Rule:  "injection",
+			TS:    rfc3339(inj.TS),
+			Text:  fmt.Sprintf("%s read %s (matched: %s)", agent, label, inj.Match),
+		})
+	}
 	for _, s := range u.Sources {
 		label := model.UntrustedKindLabel(s.Kind) + ": " + s.Location
 		origin := s.Origin
