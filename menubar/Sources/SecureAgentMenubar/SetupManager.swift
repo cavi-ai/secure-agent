@@ -228,7 +228,9 @@ public final class SetupManager: ObservableObject {
         for harness in FirstUseSetupState.hookHarnesses where HookRegistry.selectedHooksInstalled(harness: harness, home: home) { installed.insert(harness) }
         firstUseState = FirstUseSetupState(
             daemonAvailable: status?.running == true, installedHarnesses: installed,
-            configuredHarnesses: Set(Self.knownAgents.map(\.name).filter { fm.fileExists(atPath: "\(home)/.\($0)") }),
+            configuredHarnesses: Set(Self.knownAgents.map(\.name).filter {
+                fm.fileExists(atPath: HookRegistry.configurationDirectory(harness: $0, home: home))
+            }),
             activeHarnesses: Set((status?.agents ?? []).filter { $0.kind != "infra" }.map(\.name)),
             probes: status?.coverage?.probes ?? [], sessions: status?.coverage?.sessions ?? [],
             sessionsUnavailable: status?.coverage == nil || status?.coverage?.sessionsStale == true,
