@@ -846,6 +846,7 @@ public final class AppState: ObservableObject {
         // modal appears — an accidental Return must deny, never approve.
         allowOnceButton.keyEquivalent = ""
         denyButton.keyEquivalent = "\r"
+        Self.keepInFront(alert)
         NSApp?.activate(ignoringOtherApps: true)
         nativePromptID = p.id
         let r = runGuardAlert(alert)
@@ -893,7 +894,16 @@ public final class AppState: ObservableObject {
         alert.informativeText = text
         alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
         alert.addButton(withTitle: "Allow future access").keyEquivalent = ""
+        keepInFront(alert)
         return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    /// macOS may refuse to activate this app while the agent's app is in
+    /// front, leaving a normal-level alert behind that app's windows; guard
+    /// alerts sit above other apps' windows, on the Space in front.
+    static func keepInFront(_ alert: NSAlert) {
+        alert.window.level = .modalPanel
+        alert.window.collectionBehavior.formUnion(AppDelegate.popoverSpaces)
     }
 
     public func resolvePendingGuard(id: String? = nil, verdict: String, scope: String, expiry: String? = nil, confirm: ((String) -> Bool)? = nil) async {
