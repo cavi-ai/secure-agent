@@ -18,7 +18,8 @@ Concretely, the firewall inspects agent HTTPS traffic that transits its local
 proxy and flags (monitor mode) or blocks (a promoted rule) when it sees:
 
 - a **registered secret** (matched by salted-HMAC fingerprint, even through
-  base64 / url / gzip / JSON encodings) leaving to any non-vendor destination;
+  base64 in any alphabet or padding, url, gzip, JSON, hex and decimal or `0x`
+  byte-list encodings) leaving to any non-vendor destination;
 - a **typed credential** (Anthropic, OpenAI, GitHub, AWS, Google, Stripe, Slack,
   JWT, bearer token, private key) going to a non-vendor host, or appearing in a
   request body / query / non-auth header rather than the expected auth header.
@@ -66,7 +67,7 @@ dense with ids and encoded blobs.
   metric so the blind spot is visible, not silent.
 - **Bounded request inspection.** Before forwarding, the proxy captures up to
   64 MiB of request data and scans 1 MiB windows with up to 64 KiB of overlap
-  at token boundaries. URL, JSON and base64 views expose encoded fingerprints
+  at token boundaries. URL, JSON, base64, hex and byte-list views expose encoded fingerprints
   and typed patterns. Gzip request bodies are scanned after decompression,
   with a separate 64 MiB expansion budget. Larger requests retain their full
   original bytes for forwarding, with a `proxy-inspection-incomplete:body-limit`
@@ -78,12 +79,21 @@ dense with ids and encoded blobs.
   `body-buffer` and `body-decode` warnings under the same prefix. Unsupported
   content encodings also raise `body-decode`. These warnings do not assert a
   leak or block by themselves; uncovered secrets may pass under the fail-open
-  policy. Response injection inspection remains limited to the first 1 MiB.
+  policy. Response injection inspection remains limited to the first 1 MiB of
+  the body. Every response header value is scanned too; a header the
+  detector matches is reported and removed before the response reaches the
+  agent. A header addressed to agents (`X-AI`, `X-LLM`) whose text the keyword
+  detector does not recognize passes through.
 - **Filesystem / directory access.** Guarding what an agent reads or writes on
   disk is handled separately by the harness hooks, not by this firewall.
 - **Secrets the user never registered and that match no pattern.** Fingerprints
   cover registered secrets; typed patterns cover known shapes; entropy is a
   low-confidence backstop. A novel, unregistered, pattern-less secret can slip.
+  Canary files (`secure-agent canary plant`) are registered secrets nothing
+  legitimate uses, so any match is a leak.
+- **Encodings beyond one level.** Decoding is one level deep: base64 of hex, a
+  byte list split across requests, or an encryption the agent applies is not
+  undone.
 
 ## Trust assumptions
 
