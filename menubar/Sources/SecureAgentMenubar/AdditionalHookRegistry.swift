@@ -20,7 +20,10 @@ extension HookRegistry {
         let target = hookDirectory(harness: harness, home: home)
         let config = harness == "hermes" ? home + "/.hermes/config.yaml" : home + "/.gemini/config/hooks.json"
         let command = selectedHookCommand(harness: harness, home: home)
-        if register && harness == "antigravity" { _ = try Antigravity.config(at: config, command: command) }
+        if register && harness == "antigravity" {
+            _ = try Antigravity.config(at: config, command: command, requireEnabled: false,
+                                       legacyCommand: legacyAntigravityCommand(home: home))
+        }
         if register && harness == "hermes" { _ = try Hermes.registration(at: config, enable: true) }
         if register && harness == "opencode" { _ = try OpenCode.config(at: OpenCode.configPath(home: home)) }
         let assets: [String]
@@ -49,7 +52,9 @@ extension HookRegistry {
             try data.write(to: URL(fileURLWithPath: target + "/" + name), options: .atomic)
         }
         if register && harness == "hermes" { try Hermes.register(at: config) }
-        if register && harness == "antigravity" { try Antigravity.register(at: config, command: command) }
+        if register && harness == "antigravity" {
+            try Antigravity.register(at: config, command: command, legacyCommand: legacyAntigravityCommand(home: home))
+        }
         if register && harness == "opencode" { try OpenCode.register(home: home) }
     }
 
@@ -165,7 +170,8 @@ extension HookRegistry {
     }
 
     enum Antigravity {
-        static func config(at path: String, command: String, requireEnabled: Bool = true) throws -> ([String: Any], Data?) {
+        static func config(at path: String, command: String, requireEnabled: Bool = true,
+                           legacyCommand: String? = nil) throws -> ([String: Any], Data?) {
             guard FileManager.default.fileExists(atPath: path) else { return ([:], nil) }
             let data = try Data(contentsOf: URL(fileURLWithPath: path))
             guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -180,7 +186,10 @@ extension HookRegistry {
                       }),
                       ["PreToolUse", "PostToolUse"].contains(where: { event in
                           (hook[event] as? [[String: Any]] ?? []).contains { group in
-                              (group["hooks"] as? [[String: Any]] ?? []).contains { $0["command"] as? String == command + " " + event }
+                              (group["hooks"] as? [[String: Any]] ?? []).contains {
+                                  let actual = $0["command"] as? String
+                                  return actual == command + " " + event || legacyCommand.map { actual == $0 + " " + event } == true
+                              }
                           }
                       }) else {
                     throw registrationError("The Antigravity secure-agent hook is disabled or belongs to another hook. Review it in Antigravity; it was left unchanged.")
@@ -189,11 +198,21 @@ extension HookRegistry {
             return (root, data)
         }
 
-        static func register(at path: String, command: String) throws {
-            var (root, original) = try config(at: path, command: command)
+        static func register(at path: String, command: String, legacyCommand: String? = nil) throws {
+            var (root, original) = try config(at: path, command: command, requireEnabled: false, legacyCommand: legacyCommand)
             var hook = root["secure-agent"] as? [String: Any] ?? [:]
+            hook["enabled"] = true
             for event in ["PreToolUse", "PostToolUse"] {
                 var groups = hook[event] as? [[String: Any]] ?? []
+                if let legacyCommand {
+                    groups = groups.compactMap { group in
+                        var group = group
+                        let entries = (group["hooks"] as? [[String: Any]] ?? []).filter { $0["command"] as? String != legacyCommand + " " + event }
+                        guard !entries.isEmpty else { return nil }
+                        group["hooks"] = entries
+                        return group
+                    }
+                }
                 if !groups.contains(where: { ($0["matcher"] == nil || $0["matcher"] as? String == "*") &&
                     ($0["hooks"] as? [[String: Any]] ?? []).contains { $0["command"] as? String == command + " " + event } }) {
                     groups.append(["matcher": "*", "hooks": [["type": "command", "command": command + " " + event, "timeout": 60]]])
@@ -215,13 +234,16 @@ extension HookRegistry {
             }
         }
 
-        static func unregister(at path: String, command: String) throws {
+        static func unregister(at path: String, command: String, legacyCommand: String? = nil) throws {
             guard FileManager.default.fileExists(atPath: path) else { return }
-            var (root, original) = try config(at: path, command: command, requireEnabled: false)
+            var (root, original) = try config(at: path, command: command, requireEnabled: false, legacyCommand: legacyCommand)
             guard var hook = root["secure-agent"] as? [String: Any] else { return }
             for event in ["PreToolUse", "PostToolUse"] {
                 hook[event] = (hook[event] as? [[String: Any]] ?? []).compactMap { group -> [String: Any]? in
-                    let kept = (group["hooks"] as? [[String: Any]] ?? []).filter { $0["command"] as? String != command + " " + event }
+                    let kept = (group["hooks"] as? [[String: Any]] ?? []).filter {
+                        let actual = $0["command"] as? String
+                        return actual != command + " " + event && legacyCommand.map { actual == $0 + " " + event } != true
+                    }
                     guard !kept.isEmpty else { return nil }
                     var group = group; group["hooks"] = kept; return group
                 }

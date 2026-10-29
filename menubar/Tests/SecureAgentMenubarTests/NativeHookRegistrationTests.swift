@@ -79,7 +79,7 @@ final class NativeHookRegistrationTests: XCTestCase {
             try await setup.registerOpenClawHooks()
             XCTFail("A rejected registration cannot succeed")
         } catch {
-            XCTAssertTrue(error.localizedDescription.contains("could not enable"))
+            XCTAssertTrue(error.localizedDescription.contains("rejected plugin enablement"))
         }
     }
 
@@ -95,7 +95,7 @@ final class NativeHookRegistrationTests: XCTestCase {
             try await setup.registerOpenClawHooks()
             XCTFail("An unrelated plugin must not be enabled")
         } catch {
-            XCTAssertTrue(error.localizedDescription.contains("different plugin"))
+            XCTAssertTrue(error.localizedDescription.contains("could not identify"))
         }
     }
 }

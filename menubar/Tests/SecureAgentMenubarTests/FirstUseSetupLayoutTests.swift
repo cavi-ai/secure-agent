@@ -40,7 +40,7 @@ final class FirstUseSetupLayoutTests: XCTestCase {
             characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
         XCTAssertTrue(window.performKeyEquivalent(with: enter), "Return must activate Continue in the native window")
         await settle(view)
-        XCTAssertEqual(flow.stage, .enable)
+        XCTAssertEqual(flow.stage, .result)
         try snapshot(view, name: "enable-default")
         flow.stage = .result
         await settle(view)
@@ -121,7 +121,7 @@ final class FirstUseSetupLayoutTests: XCTestCase {
         appState.seedForTesting(status: ready)
         var opened: [ConsoleDestination?] = []
         let controller = NSHostingController(rootView: OnboardingView(setup: setup, appState: appState,
-            flow: FirstUseSetupFlow(stage: .result), refreshAutomatically: false,
+            flow: FirstUseSetupFlow(stage: .result), refreshAutomatically: false, diagnosticsExpanded: true,
             onOpenConsole: { opened.append($0) }, onDone: {}))
         let window = NSWindow(contentViewController: controller)
         window.isReleasedWhenClosed = false

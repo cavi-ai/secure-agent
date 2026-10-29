@@ -18,9 +18,10 @@ To build the current checkout instead, follow [Development](DEVELOPMENT.md#build
 
 ## Set up your first agent
 
-1. **Choose** — select a harness and see guarding, recorded activity, and payload inspection as separate capabilities. The bundled daemon starts and stops with the app.
-2. **Enable** — explicitly install hooks for Claude Code or Cursor alone, preserving existing user hooks. Other harnesses can continue with their observation path. Hook scripts require Python 3.10 or newer; installing hooks does not install Python.
-3. **Result** — run an inert installed-hook check or view the result without a check. The check verifies the hook's daemon round trip; it does not establish that a running agent invokes the hook or that its traffic is inspected. Configuration changes and unavailable status require another check or refresh.
+1. Select your agent and click **Set Up**. Secure Agent installs and registers its hooks, preserving existing user settings.
+2. Start a new agent session. Setup shows any native activation requirement, such as Codex hook approval.
+
+Supported hook integrations are Claude Code, Cursor, Codex, OpenClaw, Antigravity, Hermes and OpenCode v2. Other agents support process monitoring. Python hooks require Python 3.10 or newer; setup does not install Python. The bundled daemon starts and stops with the app.
 
 File telemetry, additional hook scripts, traffic routing, secret registration, guard rules, the local advisor, Open at Login, and CLI installation remain under **Optional capabilities** after the result and in Settings. New first-use setup leaves file-telemetry registration and permission panes deferred until you explicitly enable that capability.
 
@@ -34,18 +35,20 @@ Saved Secure Agent preferences and monitoring data remain in their existing loca
 
 Setup supports hook registration for Claude Code, Cursor, Codex, OpenClaw, Antigravity, Hermes and OpenCode v2. Existing user hooks are retained.
 
-For Codex, Cursor, OpenClaw, Hermes, OpenCode v2 or Antigravity, open **Settings → Providers → Hook setup** and choose **Set Up…** beside the agent. Setup opens on that agent's enable step. Monitoring switches control process monitoring separately from hook registration.
+Open **Settings → Secure Agent → Traffic** and choose an agent. For Claude Code, **Set Up** installs hooks and the routing switch enables payload inspection. For other agents, **Set Up & Open** registers supported hooks and launches the installed app or CLI with tunnel routing. Running apps close gracefully and reopen; finish any native save dialog before retrying. No routing command needs to be copied or pasted.
+
+Traffic lists the same agents as Providers. Only proxy-aware connections use tunnel routing; their payloads are not inspected. Launch through Traffic whenever routing is needed. **Settings → Providers → Hook setup → Set Up** installs hooks without launching an agent or changing routing. Monitoring switches control process monitoring separately from hook registration.
 
 - **Codex:** Setup merges tool hooks into `~/.codex/hooks.json`. Open `/hooks` in Codex and review and trust the new hooks before starting a session. Codex configuration and managed policy can disable hooks.
-- **Cursor:** Setup merges `preToolUse` and `postToolUse` entries into `~/.cursor/hooks.json`, preserving existing hooks and a backup before the first change. Unsupported schema versions are left unchanged. Run the manual installed-hook check while the monitor is answering, then inspect a Cursor session's evidence.
+- **Cursor:** Setup merges `preToolUse` and `postToolUse` entries into `~/.cursor/hooks.json`, preserving existing hooks and a backup before the first change. Unsupported schema versions are left unchanged.
 - **OpenClaw:** Setup installs a native plugin in `~/.openclaw/extensions/secure-agent` and uses `openclaw plugins enable secure-agent` for the default profile. The OpenClaw CLI must be installed. Restart the Gateway after registration. If enablement is rejected, review the CLI's requirements; Setup does not bypass plugin policy. Guard approval requests expire after five seconds to finish within OpenClaw's default hook timeout.
-- **Antigravity:** Setup merges a named `secure-agent` hook into `~/.gemini/config/hooks.json`, shared by the App, CLI and IDE. Start a new session and review it under **Customizations → Hooks**. An existing disabled hook or a different hook with the same name is left unchanged.
+- **Antigravity:** Setup stores its scripts in `~/.config/secure-agent/hooks/antigravity` and registers a named `secure-agent` hook in `~/.gemini/config/hooks.json`, the [global hook location documented by Antigravity](https://antigravity.google/docs/hooks) for the App, CLI and IDE. Setup migrates its earlier script commands, re-enables its own disabled hook and preserves other hooks. A different hook with the same name is left unchanged. New sessions load the hooks.
 - **Hermes:** Setup installs `~/.hermes/plugins/secure-agent` and adds it to `plugins.enabled` in the default profile's `~/.hermes/config.yaml`. Existing plugin lists and unrelated settings are retained, with a backup before the first change. Unsupported YAML is left unchanged; use Hermes' own plugin CLI for configurations Setup cannot safely edit. Restart Hermes. Safe mode and profile settings still control loading.
 - **OpenCode v2:** Setup installs a native v2 plugin in `~/.config/opencode/plugins/secure-agent` and merges its path into the global `opencode.json(c)` plugins list. Existing settings and plugin entries are retained. The first change saves an exact backup; JSONC is rewritten as JSON, so comments remain in that backup. Restart the server to load it. The plugin uses v2's `setup` and tool hook APIs; it does not support OpenCode v1.
 
 Hermes and OpenCode guard approval requests expire after five seconds so the adapter can return a decision within native callback limits. Native registration results show activation guidance; installation alone does not prove runtime invocation. Claude and Cursor also offer the manual installed-hook check.
 
-In Setup’s **Your first observed session** section, copy the sample task into a selected-harness session, then choose **Refresh session observations**. Match its workspace and session ID and select **Open session evidence**. Guarding, recorded activity and payload inspection have separate results. An absent observation remains unknown; it does not mean that every action was protected or that nothing happened.
+Optional connection checks and session evidence are under Setup’s collapsed **Diagnostics** section. A connection check tests the installed hook’s daemon round trip; it does not prove that a running agent invokes the hook or that traffic is inspected. Guarding, recorded activity and payload inspection have separate results.
 
 Use **Run Doctor…** from the menu bar for diagnostics. If you install the CLI under Optional capabilities, these commands provide the same starting checks:
 

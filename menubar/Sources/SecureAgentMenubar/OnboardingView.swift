@@ -10,15 +10,18 @@ struct OnboardingView: View {
     var refreshAutomatically = true
     @StateObject private var flow: FirstUseSetupFlow
     @State private var optionsExpanded = false
+    @State private var diagnosticsExpanded = false
     @State private var sampleCopyStatus: String?
 
     init(setup: SetupManager = .shared, appState: AppState, flow: FirstUseSetupFlow? = nil,
-         refreshAutomatically: Bool = true, onOpenConsole: ((ConsoleDestination?) -> Void)? = nil, onDone: @escaping () -> Void) {
+         refreshAutomatically: Bool = true, diagnosticsExpanded: Bool = false,
+         onOpenConsole: ((ConsoleDestination?) -> Void)? = nil, onDone: @escaping () -> Void) {
         self.setup = setup
         self.appState = appState
         self.onOpenConsole = onOpenConsole
         self.onDone = onDone
         self.refreshAutomatically = refreshAutomatically
+        _diagnosticsExpanded = State(initialValue: diagnosticsExpanded)
         _flow = StateObject(wrappedValue: flow ?? FirstUseSetupFlow())
     }
 
@@ -36,7 +39,7 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
                     AppBrandMark(size: 44)
-                    Text("Set up one agent path").font(.title2.weight(.semibold))
+                    Text("Set Up Agent").font(.title2.weight(.semibold))
                 }
                 HStack(spacing: 18) {
                     step("Choose", active: stage == .choose)
@@ -88,8 +91,6 @@ struct OnboardingView: View {
 
     private var choosePath: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Choose the agent you use. You can add other capabilities after seeing this path's result.")
-                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             GroupBox("Agent") {
                 VStack(alignment: .leading, spacing: 10) {
                     Picker("Agent to set up", selection: Binding(get: { selectedHarness }, set: { flow.selectHarness($0) })) {
@@ -101,22 +102,10 @@ struct OnboardingView: View {
                         }
                     }
                     .accessibilityIdentifier("setup.harness")
-                    Text(state.activeHarnesses.contains(selectedHarness) ? "Running process detected" :
-                         state.configuredHarnesses.contains(selectedHarness) ? "Existing harness configuration found" :
-                         "No running process or existing configuration detected for this agent.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(4)
             }
-            GroupBox("Available paths") {
-                VStack(alignment: .leading, spacing: 12) {
-                    capability("Guarding tool requests", detail: supported
-                        ? "Install this harness's hooks to use the existing file-access policies and approval prompts."
-                        : "This harness has no supported interactive guard hook. Observation remains available.")
-                    capability("Session activity", detail: "Recorded tool and system activity can show what was observed. Missing activity remains unknown.")
-                    capability("Payload inspection", detail: "Requires separate traffic routing. Hook installation does not establish outbound payload inspection.")
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(4)
-            }
+            Text(supported ? "Adds file-access guards. Existing settings are preserved." : "Process monitoring is available; hook setup is not.")
+                .font(.callout).foregroundStyle(.secondary)
         }
     }
 
@@ -128,7 +117,7 @@ struct OnboardingView: View {
             Label(state.installationStatus(for: selectedHarness),
                   systemImage: installed ? "checkmark.circle" : "circle.dotted")
             Text(FirstUseSetupState.supportsProbe(selectedHarness)
-                 ? "The check sends an inert request through the installed hook and verifies the monitor's deny response. It changes no policy and does not launch an agent or establish that a running agent invokes the hook."
+                 ? "Connection checks are available under Diagnostics."
                  : FirstUseSetupState.activationGuidance(selectedHarness))
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             monitorStatus
@@ -136,7 +125,7 @@ struct OnboardingView: View {
                 Text("Use the packaged Secure Agent app to install hooks.")
                     .font(.callout).foregroundStyle(.orange)
             }
-            Button(FirstUseSetupState.supportsProbe(selectedHarness) ? "View result without running a check" : "View activation steps") { flow.stage = .result }
+            Button("View Status") { flow.stage = .result }
                 .accessibilityIdentifier("setup.skip-check")
         }
     }
@@ -166,11 +155,13 @@ struct OnboardingView: View {
                 }
             }
             monitorStatus
-            if FirstUseSetupState.supportsProbe(selectedHarness) && installed {
-                Button("Check Selected Hook Again") { runCheck() }
-                    .disabled(setup.hookSelfTestRunning || !state.daemonAvailable)
+            DisclosureGroup("Diagnostics", isExpanded: $diagnosticsExpanded) {
+                if FirstUseSetupState.supportsProbe(selectedHarness) && installed {
+                    Button("Check Connection") { runCheck() }
+                        .disabled(setup.hookSelfTestRunning || !state.daemonAvailable)
+                }
+                sessionCoverage
             }
-            sessionCoverage
             DisclosureGroup("Optional capabilities", isExpanded: $optionsExpanded) {
                 OnboardingOptionsView(setup: setup).padding(.top, 12)
             }
@@ -327,19 +318,18 @@ struct OnboardingView: View {
         Button(primaryTitle, action: advance)
             .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
             .accessibilityIdentifier("setup.continue")
-            .disabled(setup.hookSelfTestRunning || setup.hookSetupRunning || installing || (stage == .enable &&
-                ((!installed || selectedHarness == "openclaw") ? !setup.isBundled :
-                    FirstUseSetupState.supportsProbe(selectedHarness) && !state.daemonAvailable)))
+            .disabled(setup.hookSelfTestRunning || setup.hookSetupRunning || setup.agentSetupRunning != nil || installing ||
+                (stage != .result && supported && (!installed || selectedHarness == "openclaw") && !setup.isBundled))
     }
 
     private var primaryTitle: String {
         switch stage {
-        case .choose: return supported ? "Continue" : "View Observation Result"
+        case .choose: return supported && (!installed || selectedHarness == "openclaw") ? "Set Up" : "View Status"
         case .enable:
             if installing { return "Installing…" }
             if selectedHarness == "openclaw" { return "Register OpenClaw Hooks" }
-            if installed { return FirstUseSetupState.supportsProbe(selectedHarness) ? "Run Hook Check" : "Review Activation" }
-            return "Install \(harnessTitle) Hooks"
+            if installed { return "View Status" }
+            return "Set Up"
         case .result: return "Close setup"
         }
     }
@@ -348,11 +338,14 @@ struct OnboardingView: View {
         switch stage {
         case .choose:
             flow.selectHarness(selectedHarness)
-            flow.stage = supported ? .enable : .result
+            if !supported || (installed && selectedHarness != "openclaw") { flow.stage = .result }
+            else {
+                flow.stage = .enable
+                Task { await flow.install(using: setup) }
+            }
         case .enable:
             if installed && selectedHarness != "openclaw" {
-                if FirstUseSetupState.supportsProbe(selectedHarness) { runCheck() }
-                else { flow.stage = .result }
+                flow.stage = .result
             }
             else {
                 Task { await flow.install(using: setup) }

@@ -97,7 +97,7 @@ final class FirstUseSetupTests: XCTestCase {
     func testResultCannotUseAnotherHarnessOrUnavailableStatusAsProof() {
         let receipt = CoverageProbeReceiptModel(harness: "cursor", hookPath: "/fixture/cursor", checkedAt: "fixture", state: "passed", detail: "fixture receipt")
         var state = FirstUseSetupState(daemonAvailable: true, installedHarnesses: ["claude"], probes: [receipt])
-        XCTAssertEqual(state.result(for: "claude").title, "Hook check not run")
+        XCTAssertEqual(state.result(for: "claude").title, "Hooks configured")
         state.probes = [CoverageProbeReceiptModel(harness: "claude", hookPath: "/fixture/claude", checkedAt: "fixture", state: "passed", detail: "Manual check only")]
         XCTAssertEqual(state.result(for: "claude").title, "Installed hook check passed")
         state.daemonAvailable = false

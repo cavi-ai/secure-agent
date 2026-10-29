@@ -30,25 +30,7 @@ struct OnboardingOptionsView: View {
 
             GroupBox("Agent Routing") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Route your agents through the local inspection proxy to scan their outbound traffic for secret leaks. Opt-in and scoped to your shell — it changes no system or keychain settings.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(setup.agentRoutingSourceCommand)
-                        .font(.system(.callout, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding(6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.12)))
-                    HStack {
-                        Button("Copy Command") { setup.copyAgentRoutingCommand() }
-                        Button("Show File") { setup.revealAgentRoutingSnippet() }
-                            .disabled(!setup.isAgentRoutingConfigured)
-                    }
-                    Text("Run it in each shell where you launch agents, or add it to your shell profile (e.g. ~/.zshrc) to make it permanent.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Set Up Traffic") { SettingsWindowController.shared.show(tab: .traffic) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)

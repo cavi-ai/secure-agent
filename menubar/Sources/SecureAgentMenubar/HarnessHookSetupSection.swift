@@ -4,11 +4,12 @@ import SwiftUI
 @MainActor
 struct HarnessHookSetupSection: View {
     @ObservedObject var setup: SetupManager
+    var harnesses: [String] = FirstUseSetupState.hookHarnesses
     var onSetup: (String) -> Void
 
     var body: some View {
         Section {
-            ForEach(["codex", "cursor", "openclaw", "hermes", "opencode", "antigravity"], id: \.self) { harness in
+            ForEach(harnesses, id: \.self) { harness in
                 HStack(spacing: 12) {
                     AgentIdentity.tile(harness, size: 22)
                     VStack(alignment: .leading, spacing: 3) {
@@ -17,8 +18,8 @@ struct HarnessHookSetupSection: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Set Up…") { onSetup(harness) }
-                        .disabled(setup.hookSetupRunning)
+                    Button(setup.hookSetupRunning ? "Setting Up…" : "Set Up") { onSetup(harness) }
+                        .disabled(setup.hookSetupRunning || setup.agentSetupRunning != nil)
                         .accessibilityLabel("Set up \(OnboardingView.title(harness)) hooks")
                         .accessibilityIdentifier("settings.hooks.\(harness)")
                 }
@@ -26,7 +27,7 @@ struct HarnessHookSetupSection: View {
         } header: {
             Text("Hook setup")
         } footer: {
-            Text("Register hooks, review activation steps, and inspect session evidence in Setup. Monitoring switches do not install or enable hooks.")
+            Text("Hooks and traffic routing are configured separately.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

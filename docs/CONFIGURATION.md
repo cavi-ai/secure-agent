@@ -618,7 +618,7 @@ The user name in the proxy URL selects the mode for each connection:
 
 The daemon writes the tunnel-mode snippet to `agent-env.sh` next to the CA
 (`HTTP(S)_PROXY` in both cases, `NO_PROXY=localhost,127.0.0.1,::1`).
-**Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent**
+With Claude Code selected, **Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent**
 writes the inspect-mode environment and the CA into the `env` block of
 `~/.claude/settings.json`, and a SessionStart hook that appends the
 tunnel-mode snippet to each session's Bash environment (`CLAUDE_ENV_FILE`). It
@@ -630,6 +630,12 @@ Routing changes, including reapplication at app launch, are refused while Claude
 is running. Close routed sessions before quitting Secure Agent; removing settings
 does not clear the proxy from an existing process. `/status` counts
 `proxy_tunneled` and `proxy_decrypted` connections since start.
+
+For other agents, select **Set Up & Open** in Traffic to install supported hooks
+and launch the agent with a process-scoped tunnel environment. GUI apps reopen
+gracefully; CLIs open in Terminal. This does not change shell profiles or system
+proxy settings. Only proxy-aware connections use the tunnel, and payloads are
+not inspected. Start routed sessions through Traffic and keep Secure Agent running.
 
 ### Runtime overrides (not in this file)
 

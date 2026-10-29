@@ -1419,6 +1419,7 @@ export interface RoutingInfo {
   ready: boolean;
   reason?: string;
   env?: Record<string, string>;
+  tunnel_env?: Record<string, string>;
   bash_env_path?: string;
 }
 
