@@ -18,7 +18,7 @@ type coverageTestPath struct {
 }
 
 func TestNativeHookCoverageRequiresObservedGuardEvidence(t *testing.T) {
-	for _, harness := range []string{"codex", "openclaw"} {
+	for _, harness := range []string{"codex", "openclaw", "antigravity", "hermes", "opencode"} {
 		t.Run(harness, func(t *testing.T) {
 			st := testStore(t)
 			now := time.Now().UTC()

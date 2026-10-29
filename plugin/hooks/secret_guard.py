@@ -345,6 +345,9 @@ HARNESS_CONFIG_PATHS = (
     "~/.claude/hooks", "~/.cursor/hooks", "~/.cursor/hooks.json",
     "~/.codex/hooks", "~/.codex/hooks.json", "~/.codex/config.toml",
     "~/.openclaw/extensions/secure-agent", "~/.openclaw/openclaw.json",
+    "~/.gemini/config/hooks.json", "~/.gemini/secure-agent/hooks",
+    "~/.hermes/config.yaml", "~/.hermes/plugins/secure-agent",
+    "~/.config/opencode/plugins/secure-agent", "~/.config/opencode/opencode.json", "~/.config/opencode/opencode.jsonc",
     "~/.config/opencode/hooks",
 )
 

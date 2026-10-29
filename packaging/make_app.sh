@@ -102,6 +102,11 @@ mkdir -p "${APP_DIR}/Contents/Resources/hooks/openclaw"
 for asset in package.json openclaw.plugin.json index.mjs; do
   cp "plugin/hooks/openclaw/${asset}" "${APP_DIR}/Contents/Resources/hooks/openclaw/"
 done
+for harness in hermes opencode; do
+  mkdir -p "${APP_DIR}/Contents/Resources/hooks/${harness}"
+done
+cp plugin/hooks/hermes/plugin.yaml plugin/hooks/hermes/__init__.py "${APP_DIR}/Contents/Resources/hooks/hermes/"
+cp plugin/hooks/opencode/package.json plugin/hooks/opencode/index.js "${APP_DIR}/Contents/Resources/hooks/opencode/"
 cp plugin/hooks/hooks.json "${APP_DIR}/Contents/Resources/hooks/" 2>/dev/null || true
 
 if [[ -f "${REPO_ROOT}/packaging/AppIcon.icns" ]]; then

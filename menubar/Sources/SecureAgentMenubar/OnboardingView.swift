@@ -128,9 +128,7 @@ struct OnboardingView: View {
     private var enablePath: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("\(harnessTitle) hooks").font(.headline)
-            Text(selectedHarness == "openclaw"
-                 ? "Install the Secure Agent plugin in ~/.openclaw/extensions/secure-agent and enable it through the OpenClaw CLI. This configures the default OpenClaw profile. Existing plugins and settings are retained."
-                 : "Install scripts in ~/.\(selectedHarness)/hooks and register them in \(selectedHarness == "claude" ? "~/.claude/settings.json" : "~/.\(selectedHarness)/hooks.json"). Existing user hooks are retained. Only this harness is changed.")
+            Text(FirstUseSetupState.installationDetail(selectedHarness))
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Label(installed ? (selectedHarness == "openclaw" ? "Plugin files installed" : "Selected hooks installed and registered") : "Selected hooks not installed",
                   systemImage: installed ? "checkmark.circle" : "circle.dotted")
@@ -368,6 +366,9 @@ struct OnboardingView: View {
         case "cursor": return "Cursor"
         case "codex": return "Codex"
         case "openclaw": return "OpenClaw"
+        case "antigravity": return "Antigravity"
+        case "hermes": return "Hermes"
+        case "opencode": return "OpenCode"
         default: return harness
         }
     }

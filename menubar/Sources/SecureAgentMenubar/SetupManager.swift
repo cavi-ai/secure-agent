@@ -460,6 +460,9 @@ public final class SetupManager: ObservableObject {
         NSHomeDirectory() + "/.cursor/hooks",
         NSHomeDirectory() + "/.codex/hooks",
         NSHomeDirectory() + "/.openclaw/extensions/secure-agent",
+        NSHomeDirectory() + "/.gemini/secure-agent/hooks",
+        NSHomeDirectory() + "/.hermes/plugins/secure-agent",
+        NSHomeDirectory() + "/.config/opencode/plugins/secure-agent",
         NSHomeDirectory() + "/.config/opencode/hooks",
     ]
 
@@ -521,6 +524,10 @@ public final class SetupManager: ObservableObject {
         guard let srcDir = bundledHooksDir else { return }
         for target in Self.hookTargets where fm.fileExists(atPath: "\(target)/secret_guard.py") {
             do {
+                if let harness = ["hermes", "opencode"].first(where: { HookRegistry.hookDirectory(harness: $0, home: home) == target }) {
+                    try HookRegistry.installAdditionalHooks(harness: harness, bundledDir: srcDir, home: home, register: false)
+                    continue
+                }
                 if target.contains("/.openclaw/") {
                     try HookRegistry.installSelectedHooks(harness: "openclaw", bundledDir: srcDir, home: home)
                     continue
@@ -1316,6 +1323,8 @@ public final class SetupManager: ObservableObject {
         }
         try HookRegistry.Cursor.unregister(at: Self.cursorHooksPath, command: Self.cursorHookCommand)
         try HookRegistry.Codex.unregister(at: home + "/.codex/hooks.json", command: HookRegistry.selectedHookCommand(harness: "codex", home: home))
+        try HookRegistry.Antigravity.unregister(at: home + "/.gemini/config/hooks.json", command: HookRegistry.selectedHookCommand(harness: "antigravity", home: home))
+        for harness in ["hermes", "opencode"] { try HookRegistry.uninstallAdditionalPlugin(harness: harness, home: home) }
         let openClawDir = HookRegistry.hookDirectory(harness: "openclaw", home: home)
         if HookRegistry.selectedHooksInstalled(harness: "openclaw", home: home) {
             guard Self.run(["/usr/bin/env"] + openClawArguments(["plugins", "disable", "secure-agent"])) == 0 else {
@@ -1325,7 +1334,7 @@ public final class SetupManager: ObservableObject {
             // Its plugin manager owns full removal and any install provenance.
         }
         for target in Self.hookTargets {
-            if target == openClawDir { continue }
+            if target == openClawDir || ["hermes", "opencode"].contains(where: { HookRegistry.hookDirectory(harness: $0, home: home) == target }) { continue }
             for hook in ["secret_guard.py", "injection_scan.py", "activity_log.py", "harness_guard.py"] {
                 try? fm.removeItem(atPath: "\(target)/\(hook)")
             }

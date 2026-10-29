@@ -48,7 +48,7 @@ func supportsTrace(name string) bool {
 
 func supportsGuard(name string) bool {
 	switch name {
-	case "claude", "cursor", "codex", "openclaw":
+	case "claude", "cursor", "codex", "openclaw", "antigravity", "hermes", "opencode":
 		return true
 	}
 	return false

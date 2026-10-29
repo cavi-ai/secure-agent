@@ -32,12 +32,15 @@ Saved Secure Agent preferences and monitoring data remain in their existing loca
 
 ## Check what is working
 
-Setup supports hook registration for Claude Code, Cursor, Codex and OpenClaw. Existing user hooks are retained.
+Setup supports hook registration for Claude Code, Cursor, Codex, OpenClaw, Antigravity, Hermes and OpenCode v2. Existing user hooks are retained.
 
 - **Codex:** Setup merges tool hooks into `~/.codex/hooks.json`. Open `/hooks` in Codex and review and trust the new hooks before starting a session. Codex configuration and managed policy can disable hooks.
 - **OpenClaw:** Setup installs a native plugin in `~/.openclaw/extensions/secure-agent` and uses `openclaw plugins enable secure-agent` for the default profile. The OpenClaw CLI must be installed. Restart the Gateway after registration. If enablement is rejected, review the CLI's requirements; Setup does not bypass plugin policy. Guard approval requests expire after five seconds to finish within OpenClaw's default hook timeout.
+- **Antigravity:** Setup merges a named `secure-agent` hook into `~/.gemini/config/hooks.json`, shared by the App, CLI and IDE. Start a new session and review it under **Customizations → Hooks**. An existing disabled hook or a different hook with the same name is left unchanged.
+- **Hermes:** Setup installs `~/.hermes/plugins/secure-agent` and adds it to `plugins.enabled` in the default profile's `~/.hermes/config.yaml`. Existing plugin lists and unrelated settings are retained, with a backup before the first change. Unsupported YAML is left unchanged; use Hermes' own plugin CLI for configurations Setup cannot safely edit. Restart Hermes. Safe mode and profile settings still control loading.
+- **OpenCode v2:** Setup installs a native v2 plugin in `~/.config/opencode/plugins/secure-agent` and merges its path into the global `opencode.json(c)` plugins list. Existing settings and plugin entries are retained. The first change saves an exact backup; JSONC is rewritten as JSON, so comments remain in that backup. Restart the server to load it. The plugin uses v2's `setup` and tool hook APIs; it does not support OpenCode v1.
 
-Codex and OpenClaw registration results show activation guidance. Their installation alone does not prove runtime invocation. Claude and Cursor also offer the manual installed-hook check.
+Hermes and OpenCode guard approval requests expire after five seconds so the adapter can return a decision within native callback limits. Native registration results show activation guidance; installation alone does not prove runtime invocation. Claude and Cursor also offer the manual installed-hook check.
 
 In Setup’s **Your first observed session** section, copy the sample task into a selected-harness session, then choose **Refresh session observations**. Match its workspace and session ID and select **Open session evidence**. Guarding, recorded activity and payload inspection have separate results. An absent observation remains unknown; it does not mean that every action was protected or that nothing happened.
 

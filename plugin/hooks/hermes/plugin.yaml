@@ -1,0 +1,4 @@
+# secure-agent-managed-plugin: hermes
+name: secure-agent
+version: "1.0.0"
+description: Check tool requests with Secure Agent and record tool activity.
