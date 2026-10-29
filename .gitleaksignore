@@ -22,3 +22,8 @@ c3f7b187b80ad0b51b4c3702b4679c6ee5ce4e34:daemon/internal/agents/snapshot_test.go
 # fix/discern-findings branch, replaced there by a fragment-built value.
 983710b4395e127cea1d3a2b4145335d5aa698fe:daemon/internal/agents/snapshot_test.go:aws-access-token:71
 36f76c5f499350da55ff0c3ff11711ff9a5dc400:daemon/internal/agents/snapshot_test.go:aws-access-token:71
+# Fake canary-test values, built from fragments in the follow-up commit on
+# this branch.
+b9a835de8cd1c633b96c3f87f35bfae74b67096c:daemon/internal/firewall/encoded_test.go:aws-access-token:70
+b9a835de8cd1c633b96c3f87f35bfae74b67096c:daemon/internal/firewall/encoded_test.go:generic-api-key:71
+b9a835de8cd1c633b96c3f87f35bfae74b67096c:daemon/internal/firewall/encoded_test.go:github-pat:72
