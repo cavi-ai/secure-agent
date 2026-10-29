@@ -59,7 +59,28 @@ final class AgentLauncherTests: XCTestCase {
         try FileManager.default.createDirectory(at: binaries, withIntermediateDirectories: true)
         let output = root.appendingPathComponent("routing.txt")
         let source = root.appendingPathComponent("main.m")
-        try "#import <Cocoa/Cocoa.h>\nint main(){@autoreleasepool{[NSApplication sharedApplication]; NSString*v=NSProcessInfo.processInfo.environment[@\"HTTPS_PROXY\"]?:@\"missing\";[v writeToFile:@\"\(output.path)\" atomically:YES encoding:NSUTF8StringEncoding error:nil];[NSApp run];}return 0;}\n"
+        try """
+        #import <Cocoa/Cocoa.h>
+        #include <unistd.h>
+        @interface RoutingProbeDelegate : NSObject <NSApplicationDelegate>
+        @end
+        @implementation RoutingProbeDelegate
+        - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+            NSString *proxy = NSProcessInfo.processInfo.environment[@"HTTPS_PROXY"] ?: @"missing";
+            NSString *ready = [NSString stringWithFormat:@"%d\\n%@", getpid(), proxy];
+            [ready writeToFile:@"\(output.path)" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
+        @end
+        int main() {
+            @autoreleasepool {
+                [NSApplication sharedApplication];
+                RoutingProbeDelegate *delegate = [RoutingProbeDelegate new];
+                NSApp.delegate = delegate;
+                [NSApp run];
+            }
+            return 0;
+        }
+        """
             .write(to: source, atomically: true, encoding: .utf8)
         let compile = await ProcessRunner.run("/usr/bin/clang", [source.path, "-framework", "Cocoa", "-o", binaries.appendingPathComponent("RoutingProbe").path])
         XCTAssertEqual(compile.status, 0)
@@ -71,8 +92,7 @@ final class AgentLauncherTests: XCTestCase {
         let application = try await AgentLauncher.openApplication(at: app, environment: ["HTTPS_PROXY": "before-setup"])
         let identifier = try XCTUnwrap(plist["CFBundleIdentifier"] as? String)
         defer { for instance in NSRunningApplication.runningApplications(withBundleIdentifier: identifier) { instance.forceTerminate() } }
-        let launched = keyValueObservingExpectation(for: application, keyPath: "finishedLaunching", expectedValue: true)
-        await fulfillment(of: [launched], timeout: 5)
+        try await assertProbeReady(output, pid: application.processIdentifier, proxy: "before-setup")
         do {
             try await AgentLauncher.launch(.application(app), harness: "antigravity", home: root.path, environment: environment)
         } catch {
@@ -82,8 +102,16 @@ final class AgentLauncherTests: XCTestCase {
         XCTAssertTrue(application.isTerminated)
         let reopened = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: identifier).first)
         XCTAssertNotEqual(reopened.processIdentifier, application.processIdentifier)
-        let relaunched = keyValueObservingExpectation(for: reopened, keyPath: "finishedLaunching", expectedValue: true)
-        await fulfillment(of: [relaunched], timeout: 5)
-        XCTAssertEqual(try String(contentsOf: output, encoding: .utf8), environment["HTTPS_PROXY"])
+        try await assertProbeReady(output, pid: reopened.processIdentifier, proxy: try XCTUnwrap(environment["HTTPS_PROXY"]))
+    }
+
+    /// The probe publishes its PID and environment after Cocoa finishes launching.
+    private func assertProbeReady(_ output: URL, pid: pid_t, proxy: String) async throws {
+        let expected = "\(pid)\n\(proxy)"
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? String(contentsOf: output, encoding: .utf8)) == expected
+        }, object: nil)
+        await fulfillment(of: [ready], timeout: 20)
+        XCTAssertEqual(try String(contentsOf: output, encoding: .utf8), expected)
     }
 }
