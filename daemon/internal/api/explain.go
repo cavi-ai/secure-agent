@@ -430,6 +430,28 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 			return agent + " changed macOS privacy permissions (" + label + ")."
 		}
 		return agent + " changed macOS privacy permissions."
+	case "launch-item-change":
+		ev := evidenceOfKind(f, "launch-item")
+		switch {
+		case ev == nil || ev.Label == "":
+			return agent + " changed the background items that run after the agent exits."
+		case ev.Sub == "background item removed":
+			return agent + " removed a background item (" + filepath.Base(ev.Label) + ")."
+		}
+		return agent + " added a background item (" + filepath.Base(ev.Label) + ") that runs after the agent exits."
+	case "trust-change":
+		if label := evidenceLabel(f.Evidence, "profile"); label != "" {
+			return agent + " installed a configuration profile (" + label + ")."
+		}
+		if label := evidenceLabel(f.Evidence, "gatekeeper"); label != "" {
+			return agent + " overrode Gatekeeper for " + filepath.Base(label) + "."
+		}
+		return agent + " changed what macOS trusts."
+	case "xprotect-detection":
+		if ev := evidenceOfKind(f, "malware"); ev != nil && ev.Label != "" {
+			return "XProtect detected " + ev.Sub + " in " + filepath.Base(ev.Label) + "."
+		}
+		return "XProtect detected malware on this Mac."
 	case "proxy-secret-leak":
 		return agent + " sent " + secretPhrase(violationType(f.Evidence, "proxy-secret-leak")) + " to " + dest + "."
 	case "proxy-prompt-injection":

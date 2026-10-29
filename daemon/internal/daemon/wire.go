@@ -329,7 +329,8 @@ func isUnattributedFileEvent(e event.Event) bool {
 // file events around its capture are in the store, not merely published.
 func noteFileFeed(st *store.Store, e event.Event) {
 	switch e.Kind {
-	case event.KindFileOpen, event.KindFileWrite, event.KindFileDelete, event.KindExec, event.KindTCCModify:
+	case event.KindFileOpen, event.KindFileWrite, event.KindFileDelete, event.KindExec, event.KindTCCModify,
+		event.KindLaunchItemAdd, event.KindLaunchItemRemove, event.KindMalwareDetected, event.KindProfileAdd, event.KindGatekeeperOverride:
 		st.NoteFileFeed(e.TS)
 	}
 }

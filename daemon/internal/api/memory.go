@@ -76,7 +76,9 @@ func memoryRuleTitle(rule string) string {
 		return "Security finding"
 	}
 	switch rule {
-	case "proxy-secret-leak", "sensitive-read-then-connect", "keychain-access", "keychain-security-cli", "tcc-tamper", "proxy-prompt-injection", "secret-in-transcript", "untrusted-egress":
+	case "proxy-secret-leak", "sensitive-read-then-connect", "keychain-access", "keychain-security-cli", "tcc-tamper",
+		"launch-item-change", "trust-change", "xprotect-detection",
+		"proxy-prompt-injection", "secret-in-transcript", "untrusted-egress":
 		return humanFlagTitle(rule)
 	default:
 		return "Security finding"
