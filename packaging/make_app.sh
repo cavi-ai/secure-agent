@@ -56,12 +56,15 @@ echo "==> Building universal menubar app (macOS 27.0 SDK)..."
 # Xcode/SwiftPM layout changes) — the build then "succeeds" while shipping a
 # days-old binary. --show-bin-path always tells the truth.
 MENUBAR_BIN="$(bash packaging/swift_macos.sh build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)/secure-agent-menubar"
+# The guard hook's image text reader, built from the same package.
+IMAGE_TEXT_BIN="$(dirname "${MENUBAR_BIN}")/secure-agent-image-text"
 # A source edit that compiles to identical objects (comments, whitespace)
 # skips the relink and leaves the product older than the source. Deleting it
 # makes this build write it again from its current objects.
-rm -f "${MENUBAR_BIN}"
+rm -f "${MENUBAR_BIN}" "${IMAGE_TEXT_BIN}"
 bash packaging/swift_macos.sh build "${SWIFT_BUILD_ARGS[@]}"
 [[ -x "${MENUBAR_BIN}" ]] || { echo "error: menubar binary not found at ${MENUBAR_BIN}" >&2; exit 1; }
+[[ -x "${IMAGE_TEXT_BIN}" ]] || { echo "error: image text helper not found at ${IMAGE_TEXT_BIN}" >&2; exit 1; }
 # Check both linked architectures before signing or assembling the bundle.
 if ! xcrun vtool -show-build "${MENUBAR_BIN}" | awk '
   $1 == "sdk" { count++; if ($2 != "27.0") mismatch = 1 }
@@ -83,6 +86,7 @@ mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Helpers" "${APP_DIR}/C
 
 cp "${MENUBAR_BIN}" "${APP_DIR}/Contents/MacOS/SecureAgent"
 cp bin/secure-agentd bin/secure-agent "${APP_DIR}/Contents/Helpers/"
+cp "${IMAGE_TEXT_BIN}" "${APP_DIR}/Contents/Helpers/secure-agent-image-text"
 # The Endpoint Security collector: the same daemon binary under the name that
 # selects collector mode, registered with SMAppService.daemon from the plist
 # below so macOS attributes it (and its privacy grant) to the app.
@@ -158,6 +162,9 @@ codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
 codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
   --identifier "${CLI_ID}" \
   "${APP_DIR}/Contents/Helpers/secure-agent"
+codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
+  --identifier "${BUNDLE_ID}.image-text" \
+  "${APP_DIR}/Contents/Helpers/secure-agent-image-text"
 codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
   --identifier "${ESD_LABEL}" \
   "${APP_DIR}/Contents/MacOS/secure-agent-esd"

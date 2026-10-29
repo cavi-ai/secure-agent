@@ -157,6 +157,18 @@ Git history is read with plumbing commands only, with `core.fsmonitor` and signa
 
 A send in a tainted session raises one **Data sent after reading untrusted content** finding per session. Its evidence lists every recorded input with its location and origin, then the send and the guard's decision. Later sends fold into it as repeats. The finding is a warning when the send ran (`monitor`, or a Claude Code ask) and informational when it was blocked or you allowed it, so it does not page by default. The session's memory shows **Untrusted input: Image** (or the input's kind) and **Send after untrusted input** rows; locations stay in the finding's evidence.
 
+### Text in images
+
+Before the agent reads an image file, the guard asks the app's `secure-agent-image-text` helper what text macOS Vision reads in it: at full size, at the long edges models downscale to (1568, 768 and 512 pixels, where text drawn to show only after a resize appears), and with the range near white or black stretched for faint text. Each reading goes through the injection detector. A match follows the `image-injection` rule:
+
+| Mode | Behavior |
+|---|---|
+| `monitor` (default) | The read runs and the audit trail records `guard-monitor:image-injection` with the path, the view and the text. |
+| `prompt` | Claude Code asks you before the agent reads the image, quoting the text. Other harnesses deny. |
+| `deny` | The read is blocked and the agent is told what the image says. |
+
+Without the helper (outside the app bundle, or a file over 25 MB) the read proceeds unchecked. Set `SECURE_AGENT_IMAGE_TEXT` to point the hook at another build of the helper.
+
 See [GUARD_THREAT_MODEL.md](GUARD_THREAT_MODEL.md) for the full list of closed bypass classes, the known limits (symlinks, TOCTOU, static inline-code analysis), and exactly which failures fail closed vs. open.
 
 To inspect or revoke a remembered guard decision:
