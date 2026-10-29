@@ -113,6 +113,7 @@ Untrusted input:
 - any MCP tool except `code-review-graph` and the Claude app's own `ccd_*` tools; `ccd_session_mgmt`, which reads other sessions' transcripts, counts
 - `Read` of an image file (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`, `.tiff`, `.heic`)
 - `curl`, `wget`, `http`, `xh` output from a non-loopback host, and `gh` reads (`view`, `diff`, `list`, `checks`, `status`, `api`, `search`)
+- an instruction file (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`) whose last commit is by someone other than the repository's configured user (by email or name). The files in the session's working directory and repository root are checked once per session, since harnesses load them without a tool call; a `Read` of one elsewhere is checked when it happens. Untracked files, your own commits, and repositories with no user configured do not count.
 
 Egress sinks:
 
@@ -140,6 +141,7 @@ Each input records where it came from:
 | Web search | the query | web search results |
 | MCP tool | the server and its URL argument; one input per server and URL | the server and its first tool call |
 | GitHub read | the `gh` command | GitHub |
+| Instruction file | the file path | its last commit, and up to three images or URLs it links |
 
 Git history is read with plumbing commands only, with `core.fsmonitor` and signature checks off, so a repository's own configuration runs nothing.
 

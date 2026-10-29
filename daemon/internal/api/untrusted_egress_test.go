@@ -100,6 +100,7 @@ func TestUntrustedEgressFindingNamesEachInputKind(t *testing.T) {
 		{"search", "Web search: release notes", "web search results (release notes)"},
 		{"fetch", "Downloaded content: https://example.com/x.sh", "downloaded content (https://example.com/x.sh)"},
 		{"gh", "GitHub content: gh pr view 12", "GitHub content (gh pr view 12)"},
+		{"instructions", "Instruction file: /work/cloned/AGENTS.md", "an instruction file (AGENTS.md)"},
 		{"unknown", "Untrusted input: x", "untrusted content (x)"},
 	} {
 		f := model.Flag{Rule: "untrusted-egress", Agent: "claude", Evidence: []model.EvidenceItem{
