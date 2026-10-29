@@ -42,7 +42,7 @@ Incident reports list suggested remediation steps and recorded control outcomes.
 
 ### Notifications and exceptions
 
-Only **severity-3 criticals page you** by default (confirmed secret leaks, direct read-then-connect activity, TCC tampering, keychain CLI execs); warnings queue silently in the popover and console.
+Only **severity-3 criticals page you** by default (confirmed secret leaks, direct read-then-connect activity, TCC tampering, keychain CLI execs, agent background item and trust changes, XProtect detections); warnings queue silently in the popover and console.
 
 A secret file read and later connection by unrelated sibling processes in one agent family remains a severity-2 finding for review, because timing alone does not show that the reader sent the bytes. Model-visible tool reads remain critical. Routine keychain-DB file opens are informational (severity 1) — legitimate tooling touches them constantly, so they never page unless you opt in.
 

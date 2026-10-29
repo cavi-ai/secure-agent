@@ -8,6 +8,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Added
 - Guard: the `untrusted-egress` rule applies its mode (monitor by default) to network commands, `git push`, `gh` writes, data-carrying URLs and MCP send tools once a session has read web, MCP (other than the Claude app's own tools), image or fetched content; a "Data sent after reading untrusted content" finding, session memory and the prompt name each input, its origin (git committer, download URL) and the send; in `deny`, the proxy also refuses a routed agent's new connections from a tainted session (a "Connection refused after reading untrusted content" finding), except model API hosts and loopback.
+- File telemetry: Endpoint Security background item, configuration profile, Gatekeeper override and XProtect events; an agent that adds or removes a background item raises `launch-item-change`, one that installs a profile or overrides Gatekeeper raises `trust-change`, and every XProtect detection raises `xprotect-detection`.
 
 ## [1.4.0] - 2026-10-22
 

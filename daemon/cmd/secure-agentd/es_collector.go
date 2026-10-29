@@ -218,10 +218,19 @@ func superviseESLogger(ctx context.Context, runOnce func() error, replaced func(
 	}
 }
 
+// esLoggerEvents are the ES events the helper subscribes to. tcc_modify
+// needs macOS 15.4, which already offers every system-change event here
+// (BTM and XProtect 13.0, profile_add 14.0, gatekeeper_user_override 15.0).
+var esLoggerEvents = []string{
+	"open", "exec", "unlink", "rename", "tcc_modify",
+	"btm_launch_item_add", "btm_launch_item_remove", "xp_malware_detected",
+	"profile_add", "gatekeeper_user_override",
+}
+
 // runESLoggerOnce runs eslogger to completion (or ctx cancellation) and
 // pumps its JSON to the spool.
 func runESLoggerOnce(ctx context.Context, health *esCollectorHealth) error {
-	cmd := exec.CommandContext(ctx, "eslogger", "open", "exec", "unlink", "rename", "tcc_modify", "--format", "json")
+	cmd := exec.CommandContext(ctx, "eslogger", append(esLoggerEvents, "--format", "json")...)
 	return runESLoggerCommand(ctx, cmd, health, collect.ESPoolPath)
 }
 
