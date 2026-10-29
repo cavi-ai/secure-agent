@@ -1311,6 +1311,38 @@ def _git_subcommand(argv: list) -> list:
     return rest[i:]
 
 
+GIT_PUSH_VALUE_OPTS = ("--receive-pack", "--exec", "-o", "--push-option")
+
+
+def _git_push_remote(args: list) -> str:
+    """The remote a `git push` names, "" for the configured default. Flags and
+    refspecs are left out so one approval covers every push to that remote; a
+    URL remote is reduced to its host so credentials in it are never shown."""
+    remote = ""
+    i = 0
+    while i < len(args):
+        t = args[i]
+        if t == "--repo" and i + 1 < len(args):
+            remote = args[i + 1]
+            break
+        if t.startswith("--repo="):
+            remote = t.split("=", 1)[1]
+            break
+        if t == "--":
+            remote = args[i + 1] if i + 1 < len(args) else ""
+            break
+        if t in GIT_PUSH_VALUE_OPTS:
+            i += 2
+        elif t.startswith("-"):
+            i += 1
+        else:
+            remote = t
+            break
+    if "://" in remote:
+        return _url_host(remote) or "url"
+    return remote[:200]
+
+
 def _segment_egress(argv: list, raw: str) -> str:
     """The egress sink one shell segment runs, or ""."""
     name = cmd_name(argv)
@@ -1328,8 +1360,11 @@ def _segment_egress(argv: list, raw: str) -> str:
         return "rsync"
     if name == "git":
         sub = _git_subcommand(argv)
-        if sub and sub[0] in ("push", "send-email"):
-            return " ".join(["git"] + sub[:2])
+        if sub and sub[0] == "push":
+            remote = _git_push_remote(sub[1:])
+            return f"git push {remote}" if remote else "git push"
+        if sub and sub[0] == "send-email":
+            return "git send-email"
     if name == "gh":
         sub, action = _gh_sub(argv)
         if action in GH_WRITE.get(sub, ()):

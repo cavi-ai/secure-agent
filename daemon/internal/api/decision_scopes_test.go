@@ -37,8 +37,12 @@ func scopedGuardAPI(t *testing.T) (*API, model.DecisionScope) {
 
 func enqueueScopeGuard(t *testing.T, a *API, session string) (guard.Pending, <-chan *httptest.ResponseRecorder) {
 	t.Helper()
+	return enqueueGuardBody(t, a, `{"agent":"codex","session_id":"`+session+`","tool":"Read","path":"/work/.env","rule_id":"env"}`)
+}
+
+func enqueueGuardBody(t *testing.T, a *API, body string) (guard.Pending, <-chan *httptest.ResponseRecorder) {
+	t.Helper()
 	done := make(chan *httptest.ResponseRecorder, 1)
-	body := `{"agent":"codex","session_id":"` + session + `","tool":"Read","path":"/work/.env","rule_id":"env"}`
 	go func() {
 		w := httptest.NewRecorder()
 		a.handleGuardDecision(w, httptest.NewRequest("POST", "/guard/decision", strings.NewReader(body)))
@@ -107,6 +111,38 @@ func TestGuardScopedResolveAndRevocation(t *testing.T) {
 	}
 	p, done = enqueueScopeGuard(t, a, "session")
 	resolveScopeGuard(a, p, "once")
+	<-done
+}
+
+// A send after untrusted input can be allowed for the session: the next send
+// to the same sink is answered from the saved permission without a prompt,
+// and a different sink still asks.
+func TestGuardUntrustedEgressSessionPermission(t *testing.T) {
+	a, _ := scopedGuardAPI(t)
+	egress := func(sink string) string {
+		return `{"agent":"codex","tool":"Bash","path":"` + sink + `","rule_id":"untrusted-egress","detail":"This session read untrusted content: web page https://example.com. It now sends data out: ` + sink + `."}`
+	}
+	p, done := enqueueGuardBody(t, a, egress("git push origin"))
+	if len(p.AvailableScopes) != 4 {
+		t.Fatalf("egress prompt offers only %+v", p.AvailableScopes)
+	}
+	if w := resolveScopeGuard(a, p, "session"); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if hook := <-done; !strings.Contains(hook.Body.String(), `"verdict":"allow"`) {
+		t.Fatal(hook.Body.String())
+	}
+	again := httptest.NewRecorder()
+	a.handleGuardDecision(again, httptest.NewRequest("POST", "/guard/decision", strings.NewReader(egress("git push origin"))))
+	var d guard.Decision
+	if err := json.Unmarshal(again.Body.Bytes(), &d); err != nil || d.Verdict != "allow" || d.Reason != "saved-permission" {
+		t.Fatalf("second send to the same sink: %s", again.Body.String())
+	}
+	other, done := enqueueGuardBody(t, a, egress("gh pr create"))
+	if other.Path != "gh pr create" {
+		t.Fatalf("other sink: %+v", other)
+	}
+	resolveScopeGuard(a, other, "once")
 	<-done
 }
 

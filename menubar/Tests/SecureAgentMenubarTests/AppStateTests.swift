@@ -656,29 +656,6 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
         XCTAssertNil(state.promptingIDForTesting)
     }
 
-    /// The agent's app is in front when a guard request arrives: the alert
-    /// stays visible above it and on the Space in front.
-    func testGuardAlertStaysInFrontOfTheActiveApp() async {
-        let stub = StubDaemonClient()
-        stub.pending = [GuardPending(id: "g1", agent: "claude", tool: "Bash",
-                                     path: "git push origin", ruleID: "untrusted-egress",
-                                     ts: "", scopeText: nil, advisor: nil)]
-        let (state, _) = makeState(stub)
-        var shown: NSWindow?
-        state.runGuardAlert = { alert in
-            shown = alert.window
-            return .abort
-        }
-        state.fetch()
-        for _ in 0..<100 where shown == nil {
-            try? await Task.sleep(nanoseconds: 20_000_000)
-        }
-        let window = try? XCTUnwrap(shown)
-        XCTAssertGreaterThanOrEqual(window?.level.rawValue ?? 0, NSWindow.Level.modalPanel.rawValue)
-        XCTAssertTrue(window?.collectionBehavior.contains(.canJoinAllSpaces) == true)
-        XCTAssertTrue(window?.collectionBehavior.contains(.fullScreenAuxiliary) == true)
-    }
-
     /// The alert runs after the fetch that found the request has returned, so
     /// the next poll is not frozen behind it; a withdrawn alert answers nothing.
     func testGuardAlertDoesNotHoldTheFetchLoop() async {
@@ -688,9 +665,9 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
                                      ts: "", scopeText: nil, advisor: nil)]
         let (state, _) = makeState(stub)
         var fetchingWhileShown: Bool?
-        state.runGuardAlert = { _ in
+        state.runGuardPrompt = { _ in
             fetchingWhileShown = state.isFetchingForTesting
-            return .abort
+            return .withdrawn
         }
         state.fetch()
         for _ in 0..<100 where fetchingWhileShown == nil {

@@ -1041,6 +1041,25 @@ def test_untrusted_egress_prompt_asks_when_daemon_down():
     assert _last_activity()["untrusted"]["decision"] == "asked"
 
 
+def test_untrusted_egress_names_the_push_remote():
+    # Flags and refspecs are not part of the sink, so one approval covers every
+    # push to that remote; URL credentials never reach the prompt.
+    env = _egress_env("prompt")
+    run(_session("ue-push", "PostToolUse", "WebFetch", {"url": "https://example.com/page"}), env=env)
+    cases = {
+        "git push -u origin feat/x": "Allow git push origin?",
+        "git push --force-with-lease origin HEAD": "Allow git push origin?",
+        "git -C /work/repo push -o ci.skip upstream main": "Allow git push upstream?",
+        "git push": "Allow git push?",
+        "git push https://ci-bot@github.com/org/repo.git main": "Allow git push github.com?",
+    }
+    for command, ask in cases.items():
+        out = run(_session("ue-push", "PreToolUse", "Bash", {"command": command}), env=env)
+        reason = out.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+        assert reason.endswith(ask), (command, out)
+        assert "ci-bot" not in reason, reason
+
+
 def test_untrusted_egress_monitor_by_default_audits():
     env = _egress_env(None)
     run(_session("ue-mon", "PostToolUse", "WebSearch", {"query": "x"}), env=env)
@@ -1235,6 +1254,7 @@ def test_untrusted_egress_image_download_origin():
 EXTRA_TESTS += [
     test_untrusted_egress_every_source_gates_exfil,
     test_untrusted_egress_prompt_asks_when_daemon_down,
+    test_untrusted_egress_names_the_push_remote,
     test_untrusted_egress_monitor_by_default_audits,
     test_untrusted_egress_mcp_and_url_sinks,
     test_untrusted_egress_is_scoped_to_the_tainted_session,

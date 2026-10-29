@@ -100,8 +100,8 @@ public final class AppState: ObservableObject {
     private var promptingID: String?
     /// The request shown in the native alert right now, if any.
     private var nativePromptID: String?
-    /// Runs the native guard alert; tests replace the modal.
-    var runGuardAlert: (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }
+    /// Runs the native guard prompt; tests replace the modal.
+    var runGuardPrompt: @MainActor (GuardPromptContent) -> GuardPromptChoice = { GuardPromptPanel.run($0) }
     /// Ends the native guard alert's modal loop with .abort.
     var withdrawGuardAlert: () -> Void = { if NSApp?.modalWindow != nil { NSApp.abortModal() } }
     private var deferredGuardID: String?
@@ -830,46 +830,25 @@ public final class AppState: ObservableObject {
 
     private func showGuardAlert(_ p: GuardPending) {
         guard promptingID == p.id else { return } // withdrawn before it was shown
-        let alert = NSAlert()
-        alert.messageText = Self.guardPromptHeadline(p)
-        alert.informativeText = p.requestFacts + "\n\nOnce answers only this request. Inspection leaves it unanswered; its timeout continues. Future access requires a separate confirmation."
-        let allowOnceButton = alert.addButton(withTitle: "Allow Once")
-        let denyButton = alert.addButton(withTitle: "Deny")
-		let choices = (p.availableScopes ?? []).filter { $0.kind != "once" }
-		for choice in choices { let button = alert.addButton(withTitle: choice.label); button.keyEquivalent = "" }
-        let inspect = alert.addButton(withTitle: "Inspect session")
-        inspect.keyEquivalent = ""
-        inspect.isEnabled = p.sessionID?.isEmpty == false && dashboardUnavailableReason == nil
-        inspect.toolTip = p.sessionID?.isEmpty == false ? dashboardUnavailableReason : "Session identity unavailable"
-        // Safe default: NSAlert binds Return to the first button unless told
-        // otherwise, and NSApp.activate below can steal focus right as this
-        // modal appears — an accidental Return must deny, never approve.
-        allowOnceButton.keyEquivalent = ""
-        denyButton.keyEquivalent = "\r"
-        Self.keepInFront(alert)
+        let inspectUnavailable = p.sessionID?.isEmpty == false ? dashboardUnavailableReason : "Session identity unavailable"
+        // NSApp.activate can steal focus right as the prompt appears; the
+        // prompt binds Return and Escape to Deny, never to an approval.
         NSApp?.activate(ignoringOtherApps: true)
         nativePromptID = p.id
-        let r = runGuardAlert(alert)
+        let choice = runGuardPrompt(GuardPromptContent(pending: p, inspectUnavailableReason: inspectUnavailable))
         if nativePromptID == p.id { nativePromptID = nil }
         // Withdrawn while shown: nothing to answer or remember.
-        if r == .abort { return }
+        if choice == .withdrawn { return }
         deferredGuardID = p.id
         promptingID = nil
-        let inspectIndex = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 2 + choices.count
-        if r.rawValue == inspectIndex {
+        let decision: GuardResolveRequest
+        switch choice {
+        case .inspect:
             inspectPendingGuard(id: p.id)
             return
-        }
-        let decision: GuardResolveRequest
-        switch r {
-        case .alertFirstButtonReturn:  decision = .init(id: p.id, verdict: "allow", scope: "once")
-		case .alertSecondButtonReturn: decision = .init(id: p.id, verdict: "deny", scope: "once")
-		default:
-			let index = r.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue - 2
-			if choices.indices.contains(index) {
-				let choice = choices[index]
-				decision = .init(id: p.id, verdict: "allow", scope: choice.kind, expiry: choice.expiry)
-			} else { decision = .init(id: p.id, verdict: "deny", scope: "once") }
+        case .allowOnce: decision = .init(id: p.id, verdict: "allow", scope: "once")
+        case .allow(let scope): decision = .init(id: p.id, verdict: "allow", scope: scope.kind, expiry: scope.expiry)
+        case .deny, .withdrawn: decision = .init(id: p.id, verdict: "deny", scope: "once")
         }
         Task {
             await resolvePendingGuard(id: p.id, verdict: decision.verdict, scope: decision.scope, expiry: decision.expiry)
