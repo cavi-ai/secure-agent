@@ -665,9 +665,9 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
                                      ts: "", scopeText: nil, advisor: nil)]
         let (state, _) = makeState(stub)
         var fetchingWhileShown: Bool?
-        state.runGuardAlert = { _ in
+        state.runGuardPrompt = { _ in
             fetchingWhileShown = state.isFetchingForTesting
-            return .abort
+            return .withdrawn
         }
         state.fetch()
         for _ in 0..<100 where fetchingWhileShown == nil {

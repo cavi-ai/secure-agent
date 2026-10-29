@@ -23,7 +23,7 @@ public struct GuardPending: Codable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey { case id, agent, tool, path, ts, advisor, workspace, detail; case ruleID = "rule_id"; case scopeText = "scope_text"; case availableScopes = "available_scopes"; case readerExe = "reader_exe"; case sessionID = "session_id" }
 }
 
-public struct GuardScopeChoice: Codable, Sendable, Identifiable {
+public struct GuardScopeChoice: Codable, Sendable, Identifiable, Hashable {
 	public let kind: String
 	public let expiry: String?
 	public var id: String { "\(kind)/\(expiry ?? "")" }
@@ -34,9 +34,26 @@ public struct GuardScopeChoice: Codable, Sendable, Identifiable {
 }
 
 extension GuardPending {
+    var requestFactRows: [(label: String, value: String)] {
+        [("Operation", tool), ("Resource", path), ("Workspace", workspace ?? "Unknown"), ("Matched rule", ruleID),
+         ("Executable path", readerExe ?? "Unknown; once only"), ("Session", sessionID ?? "Unknown")]
+    }
+
+    /// The untrusted inputs an untrusted-egress request names, one per entry,
+    /// read from the hook's reason line ("This session read untrusted
+    /// content: a; b. It now sends data out: <path>."). nil for any other shape.
+    var untrustedSources: [String]? {
+        let lead = "This session read untrusted content: "
+        guard ruleID == "untrusted-egress", let detail, detail.hasPrefix(lead) else { return nil }
+        var read = String(detail.dropFirst(lead.count))
+        if let tail = read.range(of: ". It now sends data out: ", options: .backwards) { read = String(read[..<tail.lowerBound]) }
+        let sources = read.components(separatedBy: "; ").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return sources.isEmpty ? nil : sources
+    }
+
     var requestFacts: String {
         let why = (detail?.isEmpty == false) ? "Why: \(detail!)\n" : ""
-        return "\(why)Operation: \(tool)\nResource: \(path)\nWorkspace: \(workspace ?? "Unknown")\nMatched rule: \(ruleID)\nExecutable path: \(readerExe ?? "Unknown; once only")\nSession: \(sessionID ?? "Unknown")"
+        return why + requestFactRows.map { "\($0.label): \($0.value)" }.joined(separator: "\n")
     }
 
     func confirmation(scope: String, expiry: String?) -> String? {
