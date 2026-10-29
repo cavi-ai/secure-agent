@@ -12,7 +12,7 @@
 
 ## Egress secret-leak firewall
 
-The firewall inspects routed outbound requests for secret exposure. Its opt-in HTTP/HTTPS proxy listens on `127.0.0.1:8443` by default. For inspected HTTPS hosts it generates certificates with Secure Agent's local CA, scans request streams for credentials, and scans response streams for prompt injection. Enable routing and client CA trust explicitly; tunneled connections remain unopened.
+The firewall inspects routed outbound requests for secret exposure. Its opt-in HTTP/HTTPS proxy listens on `127.0.0.1:8443` by default. For inspected HTTPS hosts it generates certificates with Secure Agent's local CA, scans request streams for credentials, and scans response streams for prompt injection. Response headers are scanned as well: a header carrying an injection (the `X-AI` / `X-LLM` pattern) raises a **Prompt injection in a response** finding that names the header, and the header is removed before the agent reads the response. Enable routing and client CA trust explicitly; tunneled connections remain unopened.
 
 <p align="center">
   <img src="../assets/screenshots/protection-dark.jpg" alt="Protection settings with per-rule monitoring and blocking controls" width="1120">

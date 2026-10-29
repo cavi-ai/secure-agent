@@ -79,7 +79,11 @@ dense with ids and encoded blobs.
   `body-buffer` and `body-decode` warnings under the same prefix. Unsupported
   content encodings also raise `body-decode`. These warnings do not assert a
   leak or block by themselves; uncovered secrets may pass under the fail-open
-  policy. Response injection inspection remains limited to the first 1 MiB.
+  policy. Response injection inspection remains limited to the first 1 MiB of
+  the body. Every response header value is scanned too; a header the
+  detector matches is reported and removed before the response reaches the
+  agent. A header addressed to agents (`X-AI`, `X-LLM`) whose text the keyword
+  detector does not recognize passes through.
 - **Filesystem / directory access.** Guarding what an agent reads or writes on
   disk is handled separately by the harness hooks, not by this firewall.
 - **Secrets the user never registered and that match no pattern.** Fingerprints
