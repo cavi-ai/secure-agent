@@ -328,11 +328,19 @@ export interface UntrustedInput {
   origin?: string;
 }
 
+export interface UntrustedInjection {
+  ts?: string;
+  tool?: string;
+  location: string;
+  match: string;
+}
+
 export interface UntrustedEgress {
   decision: string;
   sinks: string;
   harness?: string;
   sources: UntrustedInput[] | null;
+  injection?: UntrustedInjection;
 }
 
 export interface Event {
