@@ -169,6 +169,20 @@ Before the agent reads an image file, the guard asks the app's `secure-agent-ima
 
 Without the helper (outside the app bundle, or a file over 25 MB) the read proceeds unchecked. Set `SECURE_AGENT_IMAGE_TEXT` to point the hook at another build of the helper.
 
+### Attack replay
+
+`make test-attack-replay` replays published prompt-injection attacks against a daemon, proxy, hook and image-text helper built from the checkout, isolated from your own state, with the attacker's web server on this machine's outbound address. It runs each attack in `monitor`, `prompt` and `deny`, answers prompts Deny, and finally sets `untrusted-egress-injected` to `deny` with `untrusted-egress` in `monitor`:
+
+| Attack | What the attacker does | Layers checked |
+|---|---|---|
+| Ghostcommit | An instruction file someone else committed points at an image telling the agent to send the env file as a number list | `image-injection` on the read, `untrusted-egress` on the send and on `git push`, the firewall's match of a planted canary inside the number list |
+| Faint image text | The same instruction drawn at 1.5% opacity | `image-injection` |
+| Cloaking | A page serves instructions only to clients that are not browsers | the injection detector on the fetched text, `untrusted-egress-injected` on the next send |
+| EchoLeak | The client loads a markdown image whose URL carries data, with no tool call | the proxy's refusal in `deny` |
+| Response header injection | An `X-AI-Instructions` header carries the instruction | the proxy's header scrub |
+
+It prints a scorecard (attack, step, layer, mode, expected, observed) and exits 1 when any row differs from the documented behavior. Image rows are skipped where Vision text recognition is unavailable, and EchoLeak rows off macOS, where the proxy cannot name a connection's client process. `--json <file>` also writes the rows.
+
 See [GUARD_THREAT_MODEL.md](GUARD_THREAT_MODEL.md) for the full list of closed bypass classes, the known limits (symlinks, TOCTOU, static inline-code analysis), and exactly which failures fail closed vs. open.
 
 To inspect or revoke a remembered guard decision:
