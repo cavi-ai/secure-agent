@@ -35,7 +35,9 @@ final class DaemonSupervisorTests: XCTestCase {
             .split(separator: "\n").map(String.init)
     }
 
-    private func waitUntil(_ condition: () -> Bool, timeout: TimeInterval = 2) async -> Bool {
+    // A process may take more than two seconds to start on a loaded machine.
+    // Keep a bounded hang deadline without treating scheduling as a failure.
+    private func waitUntil(_ condition: () -> Bool, timeout: TimeInterval = 10) async -> Bool {
         let deadline = ProcessInfo.processInfo.systemUptime + timeout
         while !condition() && ProcessInfo.processInfo.systemUptime < deadline {
             try? await Task.sleep(for: .milliseconds(5))

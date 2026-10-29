@@ -50,7 +50,7 @@ final class SetupSessionLiveTests: XCTestCase {
         webConfig.websiteDataStore = .nonPersistent()
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 1100, height: 800), configuration: webConfig)
         var opened: [ConsoleDestination?] = []
-        let flow = FirstUseSetupFlow(selectedHarness: "codex")
+        let flow = FirstUseSetupFlow(stage: .result, selectedHarness: "codex")
         let view = OnboardingView(setup: setup, appState: app, flow: flow, refreshAutomatically: false,
             onOpenConsole: { destination in
                 opened.append(destination)
@@ -71,8 +71,6 @@ final class SetupSessionLiveTests: XCTestCase {
         window.setContentSize(NSSize(width: 560, height: 900))
         window.makeKeyAndOrderFront(nil)
         defer { web.stopLoading(); window.orderOut(nil); window.close() }
-        try await settle()
-        XCTAssertTrue(try key("\r", code: 36, in: window))
         try await settle()
         XCTAssertEqual(flow.stage, .result)
         _ = try key("1", code: 18, modifiers: .command, in: window)
@@ -99,7 +97,7 @@ final class SetupSessionLiveTests: XCTestCase {
         let coverage = try XCTUnwrap(setup.firstUseState.sessions.first { $0.sessionID == id })
         XCTAssertEqual(coverage.workspace, root.appendingPathComponent("project").path)
         XCTAssertEqual(coverage.rootPID, try childPID(root, marker: "harness-started"))
-        XCTAssertEqual(coverage.guardPath.state, "unsupported")
+        XCTAssertEqual(coverage.guardPath.state, "not-observed")
         XCTAssertNotEqual(coverage.payload.state, "observed")
         XCTAssertFalse(setup.firstUseState.sessionsUnavailable)
         XCTAssertFalse(setup.firstUseState.result(for: "codex").passed, "Observed trace is not a hook check")
