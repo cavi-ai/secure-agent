@@ -342,6 +342,12 @@ func patternVerb(rule string, subject model.EvidenceItem) string {
 		return "ran the macOS keychain tool"
 	case "tcc-tamper":
 		return "changed macOS privacy permissions"
+	case "launch-item-change":
+		return "changed a background item"
+	case "trust-change":
+		return "changed what macOS trusts"
+	case "xprotect-detection":
+		return "detected malware"
 	case "sensitive-read-then-connect":
 		if subject.Label != "" && host == "" {
 			return "read " + subject.Label + " and connected out"

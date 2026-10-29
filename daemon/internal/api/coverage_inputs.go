@@ -127,6 +127,12 @@ func humanFlagTitle(rule string) string {
 		return "Agent ran the macOS keychain tool"
 	case "tcc-tamper":
 		return "Agent modified macOS privacy permissions (TCC)"
+	case "launch-item-change":
+		return "Agent changed a background item"
+	case "trust-change":
+		return "Agent changed what macOS trusts"
+	case "xprotect-detection":
+		return "XProtect detected malware"
 	case "proxy-prompt-injection":
 		return "Prompt injection in a response"
 	case "proxy-inspection-incomplete":

@@ -6,8 +6,9 @@ import (
 )
 
 var correlatorRules = []string{
-	"keychain-access", "keychain-security-cli", "proxy-payload-inspection", "proxy-prompt-injection",
-	"proxy-secret-leak", "secret-in-transcript", "sensitive-read-then-connect", "tcc-tamper",
+	"keychain-access", "keychain-security-cli", "launch-item-change", "proxy-payload-inspection", "proxy-prompt-injection",
+	"proxy-secret-leak", "secret-in-transcript", "sensitive-read-then-connect", "tcc-tamper", "trust-change",
+	"xprotect-detection",
 }
 
 var servedActions = []string{"allow-host", "allow-path", "mute-rule-host", "mute-class", "open-incident", "dismiss", "kill"}

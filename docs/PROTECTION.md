@@ -22,7 +22,8 @@ Screenshot uses synthetic demonstration data.
 
 **Detection layers** (`daemon/internal/firewall/`):
 
-- **Known-secret fingerprints** — your real secrets, stored only as a salted HMAC (never plaintext), matched even through base64 / url / gzip / JSON encodings.
+- **Known-secret fingerprints** — your real secrets, stored only as a salted HMAC (never plaintext), matched even through base64 (any alphabet or padding), url, gzip, JSON, hex and decimal or `0x` byte-list encodings, such as a `.env` file written into source code as a list of numbers.
+- **Canary credentials** — `secure-agent canary plant <file>` writes decoy AWS, GitHub, OpenAI, Anthropic and Stripe credentials to a new `0600` file and registers it as a fingerprint source. Nothing legitimate uses them, so a copy in inspected traffic or a transcript is a registered-secret finding. Place the file where an agent might look (a project's `.env.local`, for example); the command never overwrites a file.
 - **Typed patterns** — Anthropic, OpenAI (incl. project keys), GitHub (classic + fine-grained), GitLab, AWS, Google, Stripe (secret/restricted/webhook), Slack, Twilio, SendGrid, npm, PyPI, DigitalOcean, Doppler, JWT, bearer tokens, private keys, and database connection strings with embedded credentials.
 - **Entropy** — a high-entropy backstop (monitor-only).
 - **Transcript scanning** — the fingerprint and pattern layers also run over tailed harness transcripts; a hit raises `secret-in-transcript` (severity 3 for a registered secret, 2 for a typed pattern) carrying the rule id, path, and session — never the matched text.
@@ -112,6 +113,7 @@ Untrusted input:
 - any MCP tool except `code-review-graph` and the Claude app's own `ccd_*` tools; `ccd_session_mgmt`, which reads other sessions' transcripts, counts
 - `Read` of an image file (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`, `.tiff`, `.heic`)
 - `curl`, `wget`, `http`, `xh` output from a non-loopback host, and `gh` reads (`view`, `diff`, `list`, `checks`, `status`, `api`, `search`)
+- an instruction file (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`) whose last commit is by someone other than the repository's configured user (by email or name). The files in the session's working directory and repository root are checked once per session, since harnesses load them without a tool call; a `Read` of one elsewhere is checked when it happens. Untracked files, your own commits, and repositories with no user configured do not count.
 
 Egress sinks:
 
@@ -139,6 +141,7 @@ Each input records where it came from:
 | Web search | the query | web search results |
 | MCP tool | the server and its URL argument; one input per server and URL | the server and its first tool call |
 | GitHub read | the `gh` command | GitHub |
+| Instruction file | the file path | its last commit, and up to three images or URLs it links |
 
 Git history is read with plumbing commands only, with `core.fsmonitor` and signature checks off, so a repository's own configuration runs nothing.
 

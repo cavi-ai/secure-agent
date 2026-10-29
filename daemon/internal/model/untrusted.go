@@ -43,12 +43,13 @@ var untrustedDecisions = map[string]string{
 func UntrustedDecisionLabel(decision string) string { return untrustedDecisions[decision] }
 
 var untrustedKinds = map[string]string{
-	"image":  "Image",
-	"web":    "Web page",
-	"search": "Web search",
-	"mcp":    "MCP tool output",
-	"fetch":  "Downloaded content",
-	"gh":     "GitHub content",
+	"image":        "Image",
+	"web":          "Web page",
+	"search":       "Web search",
+	"mcp":          "MCP tool output",
+	"fetch":        "Downloaded content",
+	"gh":           "GitHub content",
+	"instructions": "Instruction file",
 }
 
 // UntrustedKindLabel is the display name of an input kind.
