@@ -148,6 +148,28 @@ func TestBrokerDedupKeyIncludesSession(t *testing.T) {
 	<-done
 }
 
+// A request naming other send kinds is its own prompt: an answer covers the
+// kinds its prompt showed.
+func TestBrokerDedupKeyIncludesSendKinds(t *testing.T) {
+	b := NewBroker(time.Second)
+	done := make(chan Decision, 2)
+	for i, kinds := range [][]string{{"git-push"}, {"git-push", "network-send"}} {
+		p := Pending{ID: []string{"one", "two"}[i], SessionID: "s", Agent: "codex", Tool: "Bash", Path: "git push origin", RuleID: "untrusted-egress", Categories: kinds}
+		go func() { done <- b.Request(context.Background(), p) }()
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(b.Pending()) != 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := len(b.Pending()); got != 2 {
+		t.Fatalf("pending = %d, want 2", got)
+	}
+	b.Resolve("one", Decision{Verdict: "deny", Scope: "once"})
+	b.Resolve("two", Decision{Verdict: "deny", Scope: "once"})
+	<-done
+	<-done
+}
+
 // Once the queue is full, further requests get an immediate explicit deny
 // instead of piling up.
 func TestRequestOverCapIsDeniedImmediately(t *testing.T) {
