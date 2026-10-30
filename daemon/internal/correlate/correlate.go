@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
@@ -832,7 +833,15 @@ func (c *Correlator) rememberLaunchWriterLocked(e event.Event, agent string) {
 		c.launchWriters = make(map[string]launchWriter)
 	}
 	if _, ok := c.launchWriters[e.Path]; !ok && len(c.launchWriters) >= maxLaunchWriters {
-		return
+		// The oldest gives way: dropping new paths would let an agent hide
+		// a write behind a burst of others.
+		oldest := ""
+		for p, w := range c.launchWriters {
+			if oldest == "" || w.at.Before(c.launchWriters[oldest].at) {
+				oldest = p
+			}
+		}
+		delete(c.launchWriters, oldest)
 	}
 	c.launchWriters[e.Path] = launchWriter{pid: e.PID, agent: agent, exe: e.ExePath, sessionID: e.SessionID, at: e.TS}
 }
@@ -868,6 +877,10 @@ const trustWriterWindow = 24 * time.Hour
 
 // maxProfileFileRead bounds the bytes read from one profile file.
 const maxProfileFileRead = 1 << 20
+
+// maxProfileReadsPerInstall bounds the unread profile files one profile
+// install reads.
+const maxProfileReadsPerInstall = 8
 
 // trustSubject returns what a write to path stages for a later trust change:
 // the outermost app bundle the path is in or names, an installer package or a
@@ -953,22 +966,34 @@ func (c *Correlator) trustWriterLocked(e event.Event) (launchWriter, string, boo
 			return w.launchWriter, subject, true
 		}
 	case event.KindProfileAdd:
+		var candidates []string
+		for s, w := range c.trustWriters {
+			if strings.HasSuffix(s, ".mobileconfig") && inWindow(w) {
+				candidates = append(candidates, s)
+			}
+		}
+		// Newest first, and a bounded number of unread files per event.
+		slices.SortFunc(candidates, func(a, b string) int { return c.trustWriters[b].at.Compare(c.trustWriters[a].at) })
 		var best trustWriter
 		subject := ""
-		for s, w := range c.trustWriters {
-			if !strings.HasSuffix(s, ".mobileconfig") || !inWindow(w) || (subject != "" && !w.at.After(best.at)) {
-				continue
-			}
-			names := w.names
+		reads := 0
+		for _, s := range candidates {
+			w := c.trustWriters[s]
 			if !w.read {
+				if reads >= maxProfileReadsPerInstall {
+					continue
+				}
+				reads++
 				b, err := readProfileFile(s)
 				if err != nil {
 					continue
 				}
-				names = profileNames(b)
+				w.names, w.read = profileNames(b), true
+				c.trustWriters[s] = w
 			}
-			if slices.Contains(names, e.Detail) {
+			if slices.Contains(w.names, e.Detail) {
 				best, subject = w, s
+				break
 			}
 		}
 		if subject != "" {
@@ -978,13 +1003,18 @@ func (c *Correlator) trustWriterLocked(e event.Event) (launchWriter, string, boo
 	return launchWriter{}, "", false
 }
 
-// readProfileFile reads up to maxProfileFileRead bytes of a profile file.
+// readProfileFile reads up to maxProfileFileRead bytes of a regular profile
+// file. It runs under c.mu on a path an agent wrote, so it never follows a
+// link or waits on a FIFO or device.
 func readProfileFile(path string) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("profile file %s is not a regular file", path)
+	}
 	return io.ReadAll(io.LimitReader(f, maxProfileFileRead))
 }
 

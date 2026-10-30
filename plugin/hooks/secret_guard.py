@@ -48,7 +48,8 @@ from datetime import datetime, timezone
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
-_HOOK_DIR = os.path.dirname(os.path.abspath(__file__))
+# A symlinked hook (plugin/install.sh) loads its data files from the checkout.
+_HOOK_DIR = os.path.dirname(os.path.realpath(__file__))
 if _HOOK_DIR not in sys.path:
     sys.path.insert(0, _HOOK_DIR)
 from activity_log import log_payload, redact_str
@@ -424,7 +425,7 @@ def command_references_protected(command: str) -> bool:
 # Shipped default guard rules. Shared JSON the correlator also loads
 # (daemon/internal/config/guard-rules.json — copies must match).
 def _load_guard_rules():
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guard-rules.json")
+    path = os.path.join(_HOOK_DIR, "guard-rules.json")
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
@@ -756,6 +757,17 @@ try:
     PROMPT_DEADLINE_S = float(os.environ.get("SECURE_AGENT_PROMPT_DEADLINE_S", "45"))
 except ValueError:
     PROMPT_DEADLINE_S = 45.0
+# All prompts of one hook run finish inside this, below the harness's own
+# hook timeout (60 s for Claude Code and Codex), which would let the call run.
+try:
+    HOOK_BUDGET_S = float(os.environ.get("SECURE_AGENT_HOOK_BUDGET_S", "55"))
+except ValueError:
+    HOOK_BUDGET_S = 55.0
+_HOOK_START = time.monotonic()
+
+
+def _budget_left() -> float:
+    return HOOK_BUDGET_S - (time.monotonic() - _HOOK_START)
 
 
 def _guard_query(agent, tool, path, rule_id, deadline_s, workspace="", probe_id="", detail="",
@@ -779,6 +791,9 @@ def _guard_query(agent, tool, path, rule_id, deadline_s, workspace="", probe_id=
         payload["probe_id"] = probe_id
     else:
         payload["session_id"] = session_id()
+    deadline_s = min(deadline_s, _budget_left())
+    if deadline_s <= 0:
+        return {"verdict": "deny", "scope": "once", "reason": "timeout"}
     body = json.dumps(payload)
     req = ("POST /guard/decision HTTP/1.1\r\nHost: localhost\r\n"
            "Content-Type: application/json\r\nConnection: close\r\n"
@@ -2047,7 +2062,38 @@ def main() -> int:
         return 0
 
     _PAYLOAD = data if isinstance(data, dict) else {}
+    if not isinstance(data, dict) or not isinstance(data.get("tool_input") or {}, dict):
+        # Same as unparseable JSON: not evidence of wrongdoing.
+        allow()
+        return 0
+    try:
+        return _check(data)
+    except Exception as exc:
+        return _hook_error(data, exc)
 
+
+def _hook_error(data: dict, exc: Exception) -> int:
+    """A crash on a well-formed payload: the check did not run, so the call is
+    asked on Claude and denied elsewhere instead of passing unchecked."""
+    event = str(data.get("hook_event_name") or data.get("event") or "")
+    reason = f"hook-error:{type(exc).__name__}"
+    if event in {"PostToolUse", "postToolUse"}:
+        try:
+            audit("allow", reason, "", event)
+        except Exception:
+            pass
+        print("{}")
+        return 0
+    command = str(data.get("command") or (data.get("tool_input") or {}).get("command") or "")
+    if runtime() == "claude":
+        emit_ask("Secure Agent could not check this call. Allow it?", command, event)
+    deny(reason, "Blocked: Secure Agent could not check this call.",
+         "DENIED by Secure Agent: the guard hook failed while checking this call. Tell the user; "
+         "they can check the hook setup in Secure Agent.", command, event)
+    return 0
+
+
+def _check(data: dict) -> int:
     if "secure_agent_probe" in _PAYLOAD:
         # A UI-armed, inert communication check. It can only deny, never
         # authorize a real operation. It emits no audit/activity/session rows

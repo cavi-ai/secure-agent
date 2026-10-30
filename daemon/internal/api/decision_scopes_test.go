@@ -334,6 +334,21 @@ func TestGuardUnofferedPermissionSavesNothing(t *testing.T) {
 	}
 }
 
+// An egress prompt never offers a rule-wide allow, so Allow Always saves no
+// guard rule for the agent.
+func TestGuardEgressRejectsAllowAlways(t *testing.T) {
+	a, _ := scopedGuardAPI(t)
+	p, done := enqueueGuardBody(t, a, egressBody("git push origin", "git-push"))
+	if w := resolveScopeGuard(a, p, "always"); w.Code != 400 {
+		t.Fatalf("allow always accepted: %d %s", w.Code, w.Body.String())
+	}
+	resolveScopeGuard(a, p, "once")
+	<-done
+	if _, ok := a.store.LookupGuardRule("codex", "untrusted-egress"); ok {
+		t.Fatal("allow always saved an egress rule")
+	}
+}
+
 func TestGuardExistingSessionIsNotPermissionIdentity(t *testing.T) {
 	deps, _ := scopedGuardDeps(t)
 	deps.Guard.Identity = nil

@@ -2,6 +2,7 @@ package guard
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,8 +75,11 @@ type pendingCaller struct {
 // key identifies an in-flight prompt by its semantic coordinates, so a second
 // identical request shares the first one's waiter instead of stacking a
 // duplicate dialog.
+// Send kinds and the detail are part of it: the answer covers what the
+// prompt showed.
 func dedupKey(p Pending) string {
-	return p.SessionID + "\x00" + p.Agent + "\x00" + p.RuleID + "\x00" + p.Path + "\x00" + p.Tool + "\x00" + p.Workspace + "\x00" + p.ReaderExe + "\x00" + p.IdentityBasis
+	return p.SessionID + "\x00" + p.Agent + "\x00" + p.RuleID + "\x00" + p.Path + "\x00" + p.Tool + "\x00" + p.Workspace + "\x00" + p.ReaderExe + "\x00" + p.IdentityBasis +
+		"\x00" + strings.Join(p.Categories, "\x01") + "\x00" + p.Detail
 }
 
 // Broker bridges a blocked hook request to an async user decision made in the

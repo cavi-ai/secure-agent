@@ -45,11 +45,13 @@ func TestLockInstanceWaitsForTheHolderToExit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Closed before the release: the waiter can take the lock the moment it
+	// is released.
 	released := make(chan struct{})
 	go func() {
 		time.Sleep(2 * instanceLockPoll)
-		first.Release()
 		close(released)
+		first.Release()
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

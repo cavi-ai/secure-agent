@@ -245,7 +245,7 @@ directory_guard:
 
 Each entry pins a directory subtree to specific rule modes; rules not listed fall back to the global override file, then shipped defaults.
 
-The hook waits for a prompt decision for its own deadline, `SECURE_AGENT_PROMPT_DEADLINE_S` (default 45 s), and does not read this file. When the hook stops waiting first, the prompt is withdrawn: an answer given after that saves no rule.
+The hook waits for a prompt decision for its own deadline, `SECURE_AGENT_PROMPT_DEADLINE_S` (default 45 s), and every prompt of one hook run ends within `SECURE_AGENT_HOOK_BUDGET_S` (default 55 s, below the harness's 60 s hook timeout); it does not read this file. When the hook stops waiting first, the prompt is withdrawn: an answer given after that saves no rule.
 
 The daemon writes these entries at every start to `guard-cwd-overrides.json` in the directory of `socket_path` (default `~/.config/secure-agent/guard-cwd-overrides.json`, the path the hook reads). A daemon run with a socket elsewhere writes its own copy beside that socket and leaves the default file untouched.
 
