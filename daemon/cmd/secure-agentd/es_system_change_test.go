@@ -239,6 +239,56 @@ func TestTrustChangeProfileFileDeletedAfterInstallRead(t *testing.T) {
 	}
 }
 
+// An agent stages files through short-lived children (mkdir, cp, a redirecting
+// shell) that have exited before their create event is correlated. ES records
+// the parent at event time: the write is the parent agent's. A write by an
+// exited process whose parent is no agent does not flag.
+func TestSpoolSystemChangeExitedWriterChild(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "child.mobileconfig"), []byte(esProfileXML("com.example.child", "Child")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	created := func(pid, ppid int, exe, path string) string {
+		return esSystemLine("create", esProcessJSON(pid, ppid, exe),
+			`{"destination_type":0,"destination":{"existing_file":{"path":"`+path+`","path_truncated":false,"stat":{"st_mode":16877}}},"acl":null}`)
+	}
+	syspolicyd := esProcessJSON(567, 1, "/usr/libexec/syspolicyd")
+	smd := esProcessJSON(379, 1, "/usr/libexec/smd")
+	lines := []string{
+		created(501, 500, "/bin/mkdir", "/Users/x/Downloads/Child.app"),
+		created(502, 500, "/bin/zsh", dir+"/child.mobileconfig"),
+		created(503, 500, "/bin/cp", "/Users/x/Library/LaunchAgents/com.example.child.plist"),
+		created(504, 1, "/bin/mkdir", "/Users/x/Downloads/Other.app"),
+		esSystemLine("btm_launch_item_add", esProcessJSON(583, 1, "/System/Library/PrivateFrameworks/BackgroundTaskManagement.framework/Versions/A/Resources/backgroundtaskmanagementd"),
+			`{"instigator":`+smd+`,"app":null,"item":{"uid":501,"item_url":"file:///Users/x/Library/LaunchAgents/com.example.child.plist","app_url":null,"item_type":3,"legacy":true,"managed":false},"executable_path":"/usr/bin/true","instigator_token":{"pid":379},"app_token":null}`),
+		esSystemLineAt("2026-10-28T21:05:00.000000000Z", "gatekeeper_user_override", syspolicyd,
+			`{"file":{"path":"/Users/x/Downloads/Other.app","path_truncated":false,"stat":{"st_mode":16877}},"signing_info":null,"sha256":"NULL","file_type":1}`),
+		esSystemLineAt("2026-10-28T21:05:01.000000000Z", "gatekeeper_user_override", syspolicyd,
+			`{"file":{"path":"/Users/x/Downloads/Child.app","path_truncated":false,"stat":{"st_mode":16877}},"signing_info":null,"sha256":"NULL","file_type":1}`),
+		esSystemLineAt("2026-10-28T21:05:02.000000000Z", "profile_add", esProcessJSON(302, 1, "/usr/libexec/mdmclient"),
+			`{"instigator":`+esProcessJSON(610, 1, "/System/Applications/System Settings.app/Contents/MacOS/System Settings")+`,"is_update":false,"profile":{"identifier":"com.example.child","uuid":"5D4C1E2A-0000-4000-8000-000000000004","install_source":1,"organization":"","display_name":"Child","scope":"User"},"instigator_token":{"pid":610}}`),
+	}
+	var kept []string
+	for _, l := range lines {
+		if l = esEscapeSlashes(l); keepESLine([]byte(l)) {
+			kept = append(kept, l)
+		}
+	}
+	if len(kept) != len(lines) {
+		t.Fatalf("helper kept %d of %d lines", len(kept), len(lines))
+	}
+
+	got := spoolFlags(t, kept, 3)
+	wantFlags := []string{
+		"launch-item-change|pid=503|agent=cursor|/Users/x/Library/LaunchAgents/com.example.child.plist",
+		"trust-change|pid=501|agent=cursor|/Users/x/Downloads/Child.app",
+		"trust-change|pid=502|agent=cursor|com.example.child",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(wantFlags) {
+		t.Fatalf("stored flags:\n got  %q\n want %q", got, wantFlags)
+	}
+}
+
 // spoolFlags writes lines to a spool, runs the spool tailer, bus, correlator
 // and store over it, and returns the stored flags as sorted
 // "rule|pid=N|agent=A|label" strings once want of them exist or 5 s pass.

@@ -480,6 +480,15 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 			e.PID, e.PPID, e.ExePath, e.SessionID = w.pid, 0, w.exe, w.sessionID
 			return c.systemChangeLocked(e, w.agent, w.at)
 		}
+		// A short-lived writer (mkdir, cp, a redirecting shell) has often
+		// exited before its event is correlated. ES recorded its parent at
+		// event time: the staged file is the parent agent's.
+		if stagesSystemChange(e) && e.PPID > 1 && e.PPID != e.PID {
+			if parent, ok := c.tagger.Tag(e.PPID); ok {
+				c.rememberLaunchWriterLocked(e, parent.Name)
+				c.rememberTrustWriterLocked(e, parent.Name)
+			}
+		}
 		return c.untaggedKeychainLocked(e)
 	}
 
@@ -786,6 +795,22 @@ const launchWriterWindow = 10 * time.Minute
 func isLaunchItemPath(path string) bool {
 	dir := filepath.Dir(path)
 	return strings.HasSuffix(dir, "/Library/LaunchAgents") || strings.HasSuffix(dir, "/Library/LaunchDaemons")
+}
+
+// stagesSystemChange reports whether e creates, moves, deletes or opens for
+// write a launch-item file or a trust subject.
+func stagesSystemChange(e event.Event) bool {
+	switch e.Kind {
+	case event.KindFileWrite, event.KindFileDelete:
+	case event.KindFileOpen:
+		if !e.OpensForWrite() {
+			return false
+		}
+	default:
+		return false
+	}
+	_, trust := trustSubject(e.Path)
+	return trust || isLaunchItemPath(e.Path)
 }
 
 // rememberLaunchWriterLocked records an agent's create, rename, write-open or
