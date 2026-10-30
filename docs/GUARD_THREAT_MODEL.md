@@ -30,6 +30,9 @@ An AI agent process (or a prompt-injected tool call within one) attempting to:
   data-carrying URLs and MCP send tools in that session follow the rule's
   mode. The rule does not look for injected instructions, so a payload hidden
   in an image, a response header or a page does not need to be recognized.
+  A session whose tool result matched the injection detector also takes
+  `untrusted-egress-injected` when it is stricter.
+- Read an image whose text matches the injection detector (`image-injection`).
 
 Enforcement points, honestly labeled:
 
@@ -39,6 +42,7 @@ Enforcement points, honestly labeled:
 | Claude `Grep`/`Glob` | Mode-enforced via the governing rule when the search root is a protected directory (`~/.ssh`, `~/.aws`, `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.gnupg`, `~/Library/Keychains`) or matches a file rule directly. |
 | Claude `Bash` | `deny`-mode rules enforced (including protected-directory targets); key material always denied — via `cat` **or any reader alias** (`grep`/`rg` included); `prompt` fails safe to `deny` (no interactive prompt mid-Bash). |
 | Cursor | `Bash` commands only (Cursor's payload lacks `tool_name`). |
+| Codex, OpenClaw, Antigravity, Hermes, OpenCode v2 | Shell commands, file tools and patch targets, through `harness_guard.py`; `prompt` approvals expire after five seconds on OpenClaw, Hermes and OpenCode. |
 | Untrusted-input egress | Claude Code: every tool the `PreToolUse` hook sees, mode-enforced (`monitor` / `prompt` / `deny`). Cursor: shell commands, tainted only by events that carry a tool name. Routed agents in `deny`: every new proxy connection from a tainted session, except the model API hosts the proxy decrypts and loopback. |
 
 ## Bypass classes that are CLOSED (with regression tests)

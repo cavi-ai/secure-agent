@@ -640,7 +640,7 @@ not inspected. Start routed sessions through Traffic and keep Secure Agent runni
 ### Runtime overrides (not in this file)
 
 - `firewall-modes.json` — firewall rules promoted to block, persisted
-- `guard-modes.json` — directory-guard mode overrides (onboarding writes this), including `untrusted-egress` and `untrusted-egress-injected` ([Egress after untrusted input](PROTECTION.md#egress-after-untrusted-input))
+- `guard-modes.json` — directory-guard mode overrides (onboarding writes this), including `untrusted-egress` and `untrusted-egress-injected` ([Egress after untrusted input](PROTECTION.md#egress-after-untrusted-input)) and `image-injection` ([Text in images](PROTECTION.md#text-in-images))
 - `guard-categories.json` — per-kind modes for sends after untrusted input (Settings → File Guard writes this; [Egress after untrusted input](PROTECTION.md#egress-after-untrusted-input))
 - `firewall-sources.json` — user-added fingerprint ingest sources
 - `guard-rules.json` — user-edited guard paths
