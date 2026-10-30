@@ -11,11 +11,12 @@ enum GuardPromptChoice: Equatable {
     case withdrawn
 }
 
-/// What the prompt shows: the request, and why inspection cannot open (nil
-/// when it can).
+/// What the prompt shows: the request, why inspection cannot open (nil when
+/// it can), and the duration selected when it opens.
 struct GuardPromptContent {
     let pending: GuardPending
     let inspectUnavailableReason: String?
+    var selected: GuardScopeChoice? = nil
 }
 
 enum GuardPromptDuration: Hashable {
@@ -41,7 +42,10 @@ final class GuardPromptModel: ObservableObject {
     var onChoose: (GuardPromptChoice) -> Void = { _ in }
     var onContentHeight: (CGFloat) -> Void = { _ in }
 
-    init(content: GuardPromptContent) { self.content = content }
+    init(content: GuardPromptContent) {
+        self.content = content
+        if let selected = content.selected, durations.contains(.scope(selected)) { duration = .scope(selected) }
+    }
 
     var durations: [GuardPromptDuration] {
         [.once] + (content.pending.availableScopes ?? []).filter { $0.kind != "once" }.map { .scope($0) }
@@ -52,9 +56,9 @@ final class GuardPromptModel: ObservableObject {
         return "Allow Once"
     }
 
-    /// What Allow does with the chosen duration.
+    /// What Allow does with the chosen duration; nothing asks again after it.
     var allowNote: String {
-        if case .scope = duration { return "Future access requires a separate confirmation." }
+        if case .scope(let c) = duration { return content.pending.grantTerms(scope: c.kind, expiry: c.expiry) ?? c.label }
         return "Allow Once answers only this request."
     }
 

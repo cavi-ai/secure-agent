@@ -56,18 +56,20 @@ extension GuardPending {
         return why + requestFactRows.map { "\($0.label): \($0.value)" }.joined(separator: "\n")
     }
 
-    func confirmation(scope: String, expiry: String?) -> String? {
+    /// What a session or timed allow grants, shown under the prompt's Allow
+    /// button; nil for a scope the request does not offer.
+    func grantTerms(scope: String, expiry: String?) -> String? {
         guard availableScopes?.contains(where: { $0.kind == scope && $0.expiry == expiry }) == true else { return nil }
         let sends = ruleID == "untrusted-egress"
         let subject = sends ? "these sends from this tool" : "this file and tool"
         let effect: String
         switch scope {
-        case "session": effect = "Allow \(subject) until this session ends."
-        case "exact" where expiry == "24h" || expiry == "7d": effect = "Allow \(subject) for \(expiry == "7d" ? "7 days" : "24 hours")."
+        case "session": effect = "Allows \(subject) until this session ends."
+        case "exact" where expiry == "24h" || expiry == "7d": effect = "Allows \(subject) for \(expiry == "7d" ? "7 days" : "24 hours")."
         default: return nil
         }
         let limit = sends ? "Other sends still ask." : "File approval does not authorize network access."
-        return "\(effect)\n\nAgent: \(agent)\n\(requestFacts)\n\nExecutable signatures are not verified. \(limit) Revoke under Protection → Rules & permissions."
+        return "\(effect) Executable signatures are not verified. \(limit) Revoke under Protection → Rules & permissions."
     }
 }
 

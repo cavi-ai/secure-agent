@@ -7,7 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- Menu bar: guard prompts open in a panel that names the agent, the target and the untrusted inputs, with a duration picker and a Details disclosure; Return and Escape deny.
+- Menu bar: guard prompts open in a panel that names the agent, the target and the untrusted inputs, with a duration picker and a Details disclosure; Return and Escape deny; Allow grants the chosen duration without a second confirmation, and the popover's Future access menu opens the panel with that duration selected.
 - Guard: `untrusted-egress` prompts offer session, 24-hour and 7-day permissions for the same sink, tool, workspace and executable path; `git push` sinks name only the remote.
 - Guard: the `untrusted-egress` rule applies its mode (monitor by default) to network commands, `git push`, `gh` writes, data-carrying URLs and MCP send tools once a session has read web, MCP (other than the Claude app's own tools), image or fetched content, or loaded an instruction file someone else committed; a "Data sent after reading untrusted content" finding, session memory and the prompt name each input, its origin (git committer, download URL) and the send; in `deny`, the proxy also refuses a routed agent's new connections from a tainted session (a "Connection refused after reading untrusted content" finding), except model API hosts and loopback.
 - Guard: a tool result that matches the injection detector is flagged to the model as data, marks the session, and its sends follow the stricter of `untrusted-egress` and `untrusted-egress-injected` (monitor by default); the finding is critical when the send ran.
