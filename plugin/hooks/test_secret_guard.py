@@ -645,7 +645,18 @@ def test_prompt_deadline_is_configurable_and_fails_safe():
     assert elapsed < 5, f"deadline not honored, took {elapsed:.2f}s"
 
 
+def test_hook_budget_caps_the_prompt_deadline():
+    with hanging_guard_stub() as sock:
+        env = {**_prompt_env(sock), "SECURE_AGENT_PROMPT_DEADLINE_S": "30", "SECURE_AGENT_HOOK_BUDGET_S": "0.5"}
+        t0 = time.time()
+        out = run(read(os.path.join(HOME, ".aws/credentials")), env=env)
+        elapsed = time.time() - t0
+    assert out.get("permission") == "deny", out
+    assert elapsed < 5, f"budget not honored, took {elapsed:.2f}s"
+
+
 EXTRA_TESTS += [
+    test_hook_budget_caps_the_prompt_deadline,
     test_guard_query_carries_session_id,
     test_prompt_daemon_down_claude_asks,
     test_prompt_daemon_down_cursor_denies,

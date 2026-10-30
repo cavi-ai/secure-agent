@@ -757,6 +757,17 @@ try:
     PROMPT_DEADLINE_S = float(os.environ.get("SECURE_AGENT_PROMPT_DEADLINE_S", "45"))
 except ValueError:
     PROMPT_DEADLINE_S = 45.0
+# All prompts of one hook run finish inside this, below the harness's own
+# hook timeout (60 s for Claude Code and Codex), which would let the call run.
+try:
+    HOOK_BUDGET_S = float(os.environ.get("SECURE_AGENT_HOOK_BUDGET_S", "55"))
+except ValueError:
+    HOOK_BUDGET_S = 55.0
+_HOOK_START = time.monotonic()
+
+
+def _budget_left() -> float:
+    return HOOK_BUDGET_S - (time.monotonic() - _HOOK_START)
 
 
 def _guard_query(agent, tool, path, rule_id, deadline_s, workspace="", probe_id="", detail="",
@@ -780,6 +791,9 @@ def _guard_query(agent, tool, path, rule_id, deadline_s, workspace="", probe_id=
         payload["probe_id"] = probe_id
     else:
         payload["session_id"] = session_id()
+    deadline_s = min(deadline_s, _budget_left())
+    if deadline_s <= 0:
+        return {"verdict": "deny", "scope": "once", "reason": "timeout"}
     body = json.dumps(payload)
     req = ("POST /guard/decision HTTP/1.1\r\nHost: localhost\r\n"
            "Content-Type: application/json\r\nConnection: close\r\n"
