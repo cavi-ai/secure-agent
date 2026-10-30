@@ -20,6 +20,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Fixed
 - Menu bar: guard prompts open above the app in front and on its Space instead of behind the agent's window.
+- Evidence storage: finding reviews keep their attribution after the session row is pruned or gains a start time, so the startup review backfill no longer fails with "review evidence changed".
 - File telemetry: a file renamed to a new name is recorded at its destination path.
 - File telemetry: Endpoint Security background item, configuration profile, Gatekeeper override and XProtect events; an agent that adds or removes a background item raises `launch-item-change`, one that installs a profile or overrides Gatekeeper raises `trust-change`, and every XProtect detection raises `xprotect-detection`.
 
