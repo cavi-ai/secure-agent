@@ -7,6 +7,10 @@ on:
     paths:
       - "menubar/**"
       - "packaging/**"
+      # Bundled into the app, or decoded by the menu bar's wire tests.
+      - "plugin/**"
+      - "daemon/internal/api/**"
+      - "daemon/internal/wiregen/**"
       - "**/*_darwin.go"
       - "**/*_darwin_test.go"
       - ".github/workflows/macos.yml"

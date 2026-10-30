@@ -69,9 +69,37 @@ jobs:
       - name: live acceptance unit tests
         run: python3 packaging/test/test_live_acceptance.py
 
+  dmg:
+    name: Released app signature, notarization and version
+    if: github.event_name == 'release'
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: verify the attached DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          dir="$(mktemp -d)"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$dir" --pattern "SecureAgent-${TAG}.dmg" --pattern checksums.txt
+          cd "$dir"
+          want="$(awk -v f="dist/SecureAgent-${TAG}.dmg" '$2 == f {print $1}' checksums.txt)"
+          got="$(shasum -a 256 "SecureAgent-${TAG}.dmg" | awk '{print $1}')"
+          [ -n "$want" ] && [ "$want" = "$got" ] || { echo "checksum ${got}, checksums.txt ${want:-none}" >&2; exit 1; }
+          mount="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "SecureAgent-${TAG}.dmg"
+          trap 'hdiutil detach "$mount" -quiet' EXIT
+          app="$mount/Secure Agent.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          spctl -a -t exec -vv "$app"
+          version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")"
+          [ "$version" = "${TAG#v}" ] || { echo "app version ${version}, tag ${TAG}" >&2; exit 1; }
+
   promote:
     name: Promote the validated pre-release
-    needs: [macos-go, menubar, e2e]
+    needs: [macos-go, menubar, e2e, dmg]
     if: github.event_name == 'release' && github.event.release.prerelease
     runs-on: ubuntu-24.04
     timeout-minutes: 5
