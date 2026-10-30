@@ -722,18 +722,20 @@ Lists (GET) or edits (POST, `{"source":"<path>","op":"add|remove"}`) the fingerp
 
 ### 12. `POST /guard/decision`
 
-A hook's prompt-mode query. A cached (agent, rule) decision returns instantly (`reason:"cached"`); otherwise a pending prompt is enqueued and the request blocks until the menubar resolves it or the broker deadline elapses (fail-safe deny). Payload: `{"agent","tool","path","rule_id"}`; `agent`/`rule_id` must match `^[A-Za-z0-9_.-]+$`. An optional `detail` is the reason line the prompt shows (`untrusted-egress`: what the session read and where it came from); control characters are dropped and it is cut to 600 characters.
+A hook's prompt-mode query. A cached (agent, rule) decision returns instantly (`reason:"cached"`); otherwise a pending prompt is enqueued and the request blocks until the menubar resolves it or the broker deadline elapses (fail-safe deny). Payload: `{"agent","tool","path","rule_id"}`; `agent`/`rule_id` must match `^[A-Za-z0-9_.-]+$`. An optional `detail` is the reason line the prompt shows (`untrusted-egress`: what the session read and where it came from); control characters are dropped and it is cut to 600 characters. An `untrusted-egress` query may name its kinds of send in `categories` (up to 8 distinct values of `git-push`, `gh-write`, `network-send`, `mcp:<server>`) and set `category_mode:"session"`; other rules name none, and anything else returns 400. A saved permission for every named kind answers the query like one for its exact sinks (`reason:"saved-permission"`).
 
 ### 13. `GET /guard/pending`
 
-Returns the queued guard prompts oldest-first. Each item carries a `scope_text` disclosing what "Allow Always" would approve, and `detail` when the hook sent one.
+Returns the queued guard prompts oldest-first. Each item carries a `scope_text` disclosing what "Allow Always" would approve, and `detail` when the hook sent one. An attested `untrusted-egress` prompt lists `available_scopes` for its exact sinks and, when it names `categories`, the same durations with `category:true`; `standing` (no expiry) is offered for `untrusted-egress` only. `repeats` counts this session's earlier prompts for the same kinds since the daemon started, and `default_scope` (`{"kind":"session","category":true}`) is set once a kind repeats or when `category_mode` is `session`.
 
 ### 14. `POST /guard/resolve`
 
 Resolves a pending prompt: `{"id","verdict":"allow|deny","scope":"once|always"}`.
 
-Attested requests also support `scope:"session"` or `scope:"exact"` with
-`expiry:"24h"` or `"7d"` for exact scope. A successful submission returns
+Attested requests also support `scope:"session"`, `scope:"exact"` with
+`expiry:"24h"` or `"7d"`, and `scope:"standing"`, each only as the prompt
+offers it; `category:true` saves one permission per kind the prompt names
+instead of one for its exact sinks. A successful submission returns
 `resolved:true` and a `receipt` containing `id`, `session_id` when known,
 `rule_id`, `verdict`, `scope`, `at`, and committed `scope_ids` for reusable
 permissions. This confirms broker submission, not tool delivery, completed
@@ -1534,7 +1536,7 @@ These routes share the [peer and console authorization rules](#peer-authenticati
 | Endpoint | Method | Contract |
 |---|---|---|
 | `/resources/episodes` | `GET` | Returns the 20 most recent stored resource episodes when storage is attached; otherwise returns the current resource snapshot's episodes. |
-| `/decision-scopes` | `GET` | Lists persisted decision scopes. Returns 503 when permissions cannot be read; agent peers are refused. |
+| `/decision-scopes` | `GET` | Lists persisted decision scopes. A kind permission carries `category` and an empty `resource_path`; a `standing` one has no `expires_at`. Returns 503 when permissions cannot be read; agent peers are refused. |
 | `/decision-scopes?id=<id>` | `DELETE` | Revokes one persisted scope. Returns `{"revoked":true,"id":"<id>"}` only after saving; invalid IDs return 400, absent IDs 404, and failed persistence 503. Agent peers are refused. Revocation does not undo prior access or revoke other policies. |
 | `/allowlist/suggestions` | `GET` | Returns current allowlist suggestions without saving an exception. |
 | `/advisor/retriage` | `POST` | `{"flag_id":"<id>"}` queues a fresh advisory verdict. Returns `{"status":"ok","queued":true|false}`; cooldown may make it a no-op. An absent flag returns 404; an unavailable advisor returns 503. |

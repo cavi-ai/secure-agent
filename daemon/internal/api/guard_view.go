@@ -15,11 +15,12 @@ type guardPermissionStore interface {
 }
 
 // standingGuardDecision answers from saved permissions, narrowest first: a
-// scoped permission for the observed identity, a per-path exception, then the
-// agent's rule-wide answer. A rule-wide answer, even a cached deny, never
-// overrides a path allow.
-func standingGuardDecision(st guardPermissionStore, identity model.DecisionScope, agent, ruleID, path string) (guard.Decision, bool) {
-	if identity.IdentityBasis != "" && st.MatchDecisionScopes([]model.DecisionScope{identity}) {
+// scoped permission for the observed identity (its exact sinks, or every send
+// kind it names), a per-path exception, then the agent's rule-wide answer. A
+// rule-wide answer, even a cached deny, never overrides a path allow.
+func standingGuardDecision(st guardPermissionStore, identity model.DecisionScope, categories []string, agent, ruleID, path string) (guard.Decision, bool) {
+	if identity.IdentityBasis != "" && (st.MatchDecisionScopes([]model.DecisionScope{identity}) ||
+		(len(categories) > 0 && st.MatchDecisionScopes(categoryScopes(identity, categories)))) {
 		return guard.Decision{Verdict: "allow", Scope: "scoped", Reason: "saved-permission"}, true
 	}
 	if st.GuardPathAllowed(agent, ruleID, path) {

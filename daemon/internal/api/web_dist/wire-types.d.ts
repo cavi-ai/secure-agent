@@ -428,6 +428,7 @@ export interface ReviewDecisionReceipt {
 export interface ScopeChoice {
   kind: string;
   expiry?: string;
+  category?: boolean;
 }
 
 export interface ReviewRecord {
@@ -1450,6 +1451,9 @@ export interface Pending {
   reader_exe?: string;
   identity_basis?: string;
   available_scopes?: ScopeChoice[];
+  categories?: string[];
+  default_scope?: ScopeChoice;
+  repeats?: number;
   ts: string;
   detail?: string;
   scope_text?: string;

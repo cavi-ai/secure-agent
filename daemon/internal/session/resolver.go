@@ -1037,24 +1037,33 @@ func (r *Resolver) WorkspaceFor(sessionID string) string {
 	return ""
 }
 
-// PermissionIdentity binds the kernel-authenticated peer to the resolver's
-// current session, not merely an existing client-supplied session ID.
+// PermissionIdentity binds the kernel-authenticated peer to a live session of
+// its own root process, not merely an existing client-supplied session ID.
+// Unclaimed, it is the root's current session in the root's working
+// directory. A claimed session must record the peer's verified root (pid and
+// start time) and supplies the workspace: an app server such as Codex's runs
+// one session per thread under one root whose working directory is not any
+// thread's workspace.
 func (r *Resolver) PermissionIdentity(pid int32, claimed string) (model.DecisionScope, bool) {
 	info, ok := r.tagger.LiveFamily(pid)
 	if !ok {
 		return model.DecisionScope{}, false
 	}
-	r.mu.Lock()
-	id := r.byRoot[info.PID]
-	r.mu.Unlock()
-	if id == "" || (claimed != "" && claimed != id) {
+	id := claimed
+	if id == "" {
+		r.mu.Lock()
+		id = r.byRoot[info.PID]
+		r.mu.Unlock()
+	}
+	if id == "" {
 		return model.DecisionScope{}, false
 	}
 	sess, ok, err := r.st.GetSession(id)
-	if err != nil || !ok || (sess.Status != model.SessionActive && sess.Status != model.SessionIdle) || sess.RootPID != info.PID || !rootStarted(sess).Equal(info.StartedAt) || sess.Harness != info.Name || sess.Workspace != info.CWD {
+	if err != nil || !ok || (sess.Status != model.SessionActive && sess.Status != model.SessionIdle) || sess.RootPID != info.PID || !rootStarted(sess).Equal(info.StartedAt) || sess.Harness != info.Name ||
+		!model.ExactPath(sess.Workspace) || (claimed == "" && sess.Workspace != info.CWD) {
 		return model.DecisionScope{}, false
 	}
-	return model.DecisionScope{Agent: info.Name, SessionID: id, Workspace: info.CWD, ReaderExe: info.ExePath, IdentityBasis: "peer-process-tree"}, true
+	return model.DecisionScope{Agent: info.Name, SessionID: id, Workspace: sess.Workspace, ReaderExe: info.ExePath, IdentityBasis: "peer-process-tree"}, true
 }
 
 // Sweep advances the lifecycle: active → idle after silence, idle → ended

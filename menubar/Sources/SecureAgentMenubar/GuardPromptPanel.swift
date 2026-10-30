@@ -27,6 +27,7 @@ enum GuardPromptDuration: Hashable {
         switch self {
         case .once: return "Once"
         case .scope(let c) where c.kind == "session": return "This session"
+        case .scope(let c) where c.kind == "standing": return "Always"
         case .scope(let c): return c.expiry == "7d" ? "7 days" : "24 hours"
         }
     }
@@ -37,6 +38,8 @@ enum GuardPromptDuration: Hashable {
 final class GuardPromptModel: ObservableObject {
     let content: GuardPromptContent
     @Published var duration: GuardPromptDuration = .once
+    /// The permission covers every send of the request's kinds, not its sinks.
+    @Published var coversKind = false
     @Published var showsDetails = false
     private(set) var choice: GuardPromptChoice?
     var onChoose: (GuardPromptChoice) -> Void = { _ in }
@@ -44,26 +47,48 @@ final class GuardPromptModel: ObservableObject {
 
     init(content: GuardPromptContent) {
         self.content = content
-        if let selected = content.selected, durations.contains(.scope(selected)) { duration = .scope(selected) }
+        if let selected = content.selected ?? content.pending.defaultScope,
+           let exact = scopes.first(where: { $0.kind == selected.kind && $0.expiry == selected.expiry && !$0.coversKind }),
+           selected.coversKind ? kindLabel != nil : true {
+            duration = .scope(exact)
+            coversKind = selected.coversKind
+        }
     }
+
+    private var scopes: [GuardScopeChoice] { content.pending.availableScopes ?? [] }
 
     var durations: [GuardPromptDuration] {
-        [.once] + (content.pending.availableScopes ?? []).filter { $0.kind != "once" }.map { .scope($0) }
+        [.once] + scopes.filter { $0.kind != "once" && !$0.coversKind }.map { .scope($0) }
     }
 
-    var allowTitle: String {
-        if case .scope(let c) = duration { return c.label }
-        return "Allow Once"
+    /// "git pushes" when the request offers permissions for its kinds of send.
+    var kindLabel: String? {
+        scopes.contains(where: \.coversKind) ? GuardSendKind.label(content.pending.categories) : nil
     }
+
+    /// The permission Allow grants; nil for Once.
+    var chosenScope: GuardScopeChoice? {
+        guard case .scope(let c) = duration else { return nil }
+        if coversKind, let kind = scopes.first(where: { $0.kind == c.kind && $0.expiry == c.expiry && $0.coversKind }) { return kind }
+        return c
+    }
+
+    var allowTitle: String { chosenScope?.label ?? "Allow Once" }
 
     /// What Allow does with the chosen duration; nothing asks again after it.
     var allowNote: String {
-        if case .scope(let c) = duration { return content.pending.grantTerms(scope: c.kind, expiry: c.expiry) ?? c.label }
+        if let c = chosenScope { return content.pending.grantTerms(scope: c.kind, expiry: c.expiry, category: c.coversKind) ?? c.label }
         return "Allow Once answers only this request."
     }
 
+    /// "Asked 3 times this session about git pushes." once a kind repeats.
+    var repeatNote: String? {
+        guard let repeats = content.pending.repeats, repeats > 0, let kinds = GuardSendKind.label(content.pending.categories) else { return nil }
+        return "Asked \(repeats + 1) times this session about \(kinds)."
+    }
+
     func allow() {
-        if case .scope(let c) = duration { choose(.allow(c)) } else { choose(.allowOnce) }
+        if let c = chosenScope { choose(.allow(c)) } else { choose(.allowOnce) }
     }
 
     func deny() { choose(.deny) }
@@ -283,13 +308,30 @@ struct GuardPromptView: View {
     }
 
     private var durationRow: some View {
-        HStack(spacing: 14) {
-            sectionLabel("Allow for").foregroundStyle(.secondary)
-            Picker("Allow for", selection: $model.duration) {
-                ForEach(model.durations, id: \.self) { Text($0.label).tag($0) }
+        VStack(alignment: .leading, spacing: 10) {
+            if let note = model.repeatNote {
+                Label(note, systemImage: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 12, weight: .medium)).foregroundStyle(Color.warn)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            HStack(spacing: 14) {
+                sectionLabel("Allow for").foregroundStyle(.secondary)
+                Picker("Allow for", selection: $model.duration) {
+                    ForEach(model.durations, id: \.self) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            if let kinds = model.kindLabel, model.duration != .once {
+                HStack(spacing: 14) {
+                    sectionLabel("Covers").foregroundStyle(.secondary)
+                    Picker("Covers", selection: $model.coversKind) {
+                        Text("This send").tag(false)
+                        Text("All \(kinds)").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+            }
         }
     }
 

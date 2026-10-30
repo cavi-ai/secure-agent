@@ -99,7 +99,12 @@ Enforcement points, honestly labeled:
    session passes, and `prompt` leaves the proxy idle. Sessions without a
    harness session id carry no taint. A person committing and pushing what
    the agent wrote is outside the hook. An `always` answer covers every
-   untrusted-egress sink for that agent.
+   untrusted-egress sink for that agent. A permission for a kind of send
+   (`network-send`, `git-push`, `gh-write`, one MCP server) covers every
+   destination of that kind from the same agent, tool, workspace and
+   executable path, for its duration; a standing one lasts until revoked, and
+   a kind set to `monitor` in `guard-categories.json` never asks. The
+   executable path is observed, not signature-verified.
 7. **Input origins are what the machine recorded.** An image's origin is its
    last commit (author name and email are whatever the committer set) and the
    macOS download attributes, which a copy or an archive can drop. Git is

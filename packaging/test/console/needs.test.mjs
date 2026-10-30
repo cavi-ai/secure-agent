@@ -73,6 +73,18 @@ test('a guard prompt offers only daemon-supported bounded future choices', () =>
   assert.doesNotMatch(html,/data-scope="always"/);
 });
 
+test('a send prompt offers Always and permissions for its kind of send, marked for the daemon', () => {
+  const item = {...guardItem, rule_id:'untrusted-egress', path:'git push origin', categories:['git-push'],
+    available_scopes:[{kind:'once'},{kind:'session'},{kind:'standing'},{kind:'session',category:true},{kind:'standing',category:true}]};
+  const {ctx,sa} = load({needs_you:1,groups:[group([item])]});
+  const html = needRow(ctx,sa,{...item,group:group([item])});
+  const {more}=bars(html);
+  assert.deepEqual(more,['Allow for this session','Allow always','Allow all git pushes for this session','Allow all git pushes always']);
+  assert.match(html,/data-scope="session" data-category="kind"/);
+  assert.match(html,/data-scope="standing" data-category="kind"/);
+  assert.equal((html.match(/data-category="kind"/g) || []).length, 2);
+});
+
 test('the queue lists higher priority first and keeps served order within a priority', () => {
   const resource = { kind: 'resource', priority: 4, id: 'r1', action: 'terminate', title: 'Resource pressure', detail: 'big' };
   const flagA = { kind: 'flag', priority: 2, id: 'fa', title: 'Critical finding', detail: 'a' };

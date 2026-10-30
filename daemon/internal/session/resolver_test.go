@@ -99,6 +99,49 @@ func TestPermissionIdentityRequiresLiveResolvedFamily(t *testing.T) {
 	}
 }
 
+// An app server (Codex) runs one session per thread under one root whose cwd
+// is "/". Each thread's hook peer is bound to the thread it claims, in that
+// thread's workspace; a session of another root is never claimed.
+func TestPermissionIdentityBindsClaimedThreadOnSharedRoot(t *testing.T) {
+	started := time.Now().Add(-time.Hour)
+	procs := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex", CWD: "/", StartTime: started},
+		200: {PID: 200, PPID: 100, Exe: "/usr/bin/python3", CWD: "/work/a", StartTime: started.Add(time.Second)},
+		300: {PID: 300, PPID: 1, Exe: "/opt/homebrew/bin/codex", CWD: "/", StartTime: started},
+	}
+	r, st := testResolver(t, procs)
+	// The rows a Codex app server leaves: one hook session per thread, all
+	// rooted on the app server's pid and start time.
+	for _, s := range []struct {
+		id, workspace string
+		root          int32
+	}{{"thread-a", "/work/a", 100}, {"thread-b", "/work/b", 100}, {"other-root", "/work/a", 300}} {
+		if err := st.UpsertSession(model.Session{ID: s.id, Harness: "codex", Workspace: s.workspace, RootPID: s.root,
+			RootStartedAt: started.UTC().Format(time.RFC3339Nano), StartedAt: started, LastSeenAt: time.Now(),
+			Status: model.SessionActive, Confidence: model.ConfHook}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, thread := range []struct{ id, workspace string }{{"thread-a", "/work/a"}, {"thread-b", "/work/b"}} {
+		g, ok := r.PermissionIdentity(200, thread.id)
+		if !ok || g.SessionID != thread.id || g.Workspace != thread.workspace || g.ReaderExe != "/opt/homebrew/bin/codex" || g.Agent != "codex" {
+			t.Fatalf("%s: identity %+v %v", thread.id, g, ok)
+		}
+	}
+	if g, ok := r.PermissionIdentity(200, "other-root"); ok {
+		t.Fatalf("claimed a session of another root: %+v", g)
+	}
+	if g, ok := r.PermissionIdentity(200, ""); ok {
+		t.Fatalf("unclaimed peer took a thread outside the root's cwd: %+v", g)
+	}
+	if err := st.EndSession("thread-a", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.PermissionIdentity(200, "thread-a"); ok {
+		t.Fatal("ended thread retained permission identity")
+	}
+}
+
 // A tagged child process (a shell the harness spawned, in another cwd) joins
 // its harness's session: one row, keyed, rooted and scoped on the harness.
 func TestChildProcessJoinsHarnessSession(t *testing.T) {

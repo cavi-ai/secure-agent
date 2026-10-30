@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ type DecisionScope struct {
 	ReaderExe     string    `json:"reader_exe,omitempty"`
 	RuleID        string    `json:"rule_id"`
 	ResourcePath  string    `json:"resource_path"`
+	Category      string    `json:"category,omitempty"` // replaces ResourcePath: every untrusted-egress send of one kind
 	Operation     string    `json:"operation"`
 	Destination   string    `json:"destination,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -31,9 +33,17 @@ type DecisionScope struct {
 type ScopeChoice struct {
 	Kind   string `json:"kind"`
 	Expiry string `json:"expiry,omitempty"` // exact: 24h or 7d, chosen explicitly
+	// Category: the permission covers the request's send categories instead
+	// of its exact sinks. Guard prompts offer it; review decisions do not.
+	Category bool `json:"category,omitempty"`
 }
 
+// Validate checks a review decision's choice. A guard answer is checked
+// against the choices its prompt offered instead.
 func (c ScopeChoice) Validate() error {
+	if c.Category {
+		return fmt.Errorf("choose once, session, or exact with expiry 24h or 7d")
+	}
 	if (c.Kind == "once" || c.Kind == "session") && c.Expiry == "" {
 		return nil
 	}
@@ -72,6 +82,23 @@ func ExactResource(ruleID, resource string) bool {
 		!strings.ContainsFunc(resource, func(r rune) bool { return r < 0x20 || r == 0x7f })
 }
 
+var egressCategoryRE = regexp.MustCompile(`^(git-push|gh-write|network-send|mcp:[A-Za-z0-9_.-]{1,64})$`)
+
+// EgressCategory reports whether c names a kind of untrusted-egress send:
+// git-push, gh-write, network-send, or mcp:<server> (one MCP server's sends).
+func EgressCategory(c string) bool {
+	return egressCategoryRE.MatchString(c)
+}
+
+// ValidResource reports whether the permission names exactly one resource:
+// an untrusted-egress category, or the exact resource for its rule.
+func (s DecisionScope) ValidResource() bool {
+	if s.Category != "" {
+		return s.RuleID == EgressRule && s.ResourcePath == "" && EgressCategory(s.Category)
+	}
+	return ExactResource(s.RuleID, s.ResourcePath)
+}
+
 // Endpoint retains the port; organization, suffix and host-only matches are
 // deliberately insufficient for new permissions. Legacy policies stay separate.
 func Endpoint(label string) string {
@@ -94,10 +121,10 @@ func (s DecisionScope) Validate() error {
 	if s.Kind == "once" {
 		return nil
 	}
-	if s.Kind != "session" && s.Kind != "exact" {
+	if s.Kind != "session" && s.Kind != "exact" && s.Kind != "standing" {
 		return fmt.Errorf("invalid scope kind")
 	}
-	if s.Agent == "" || s.SessionID == "" || !ExactPath(s.Workspace) || !ExactPath(s.ReaderExe) || !ExactResource(s.RuleID, s.ResourcePath) || s.RuleID == "" || s.CreatedAt.IsZero() ||
+	if s.Agent == "" || s.SessionID == "" || !ExactPath(s.Workspace) || !ExactPath(s.ReaderExe) || !s.ValidResource() || s.RuleID == "" || s.CreatedAt.IsZero() ||
 		(s.IdentityBasis != "peer-process-tree" && s.IdentityBasis != "observed-session") {
 		return fmt.Errorf("incomplete permission identity; choose once")
 	}
@@ -111,6 +138,9 @@ func (s DecisionScope) Validate() error {
 	if s.Kind == "exact" && (!s.ExpiresAt.After(s.CreatedAt) || s.ExpiresAt.Sub(s.CreatedAt) > 7*24*time.Hour) {
 		return fmt.Errorf("exact permission requires bounded expiry")
 	}
+	if s.Kind == "standing" && (!s.ExpiresAt.IsZero() || s.RuleID != EgressRule) {
+		return fmt.Errorf("standing permission is an untrusted-egress permission without expiry")
+	}
 	return nil
 }
 
@@ -118,7 +148,7 @@ func (s DecisionScope) Matches(q DecisionScope, now time.Time) bool {
 	if s.Validate() != nil || s.Kind == "once" || !s.RevokedAt.IsZero() || (!s.ExpiresAt.IsZero() && !now.Before(s.ExpiresAt)) || now.Before(s.CreatedAt) {
 		return false
 	}
-	return (s.Kind != "session" || s.SessionID == q.SessionID) && s.Agent == q.Agent && s.Workspace == q.Workspace && s.ReaderExe == q.ReaderExe && s.RuleID == q.RuleID && s.ResourcePath == q.ResourcePath && s.Operation == q.Operation && s.Destination == q.Destination
+	return (s.Kind != "session" || s.SessionID == q.SessionID) && s.Agent == q.Agent && s.Workspace == q.Workspace && s.ReaderExe == q.ReaderExe && s.RuleID == q.RuleID && s.ResourcePath == q.ResourcePath && s.Category == q.Category && s.Operation == q.Operation && s.Destination == q.Destination
 }
 
 // ScopeApplicability is the label and revoke offer for a saved permission.
@@ -159,6 +189,9 @@ func (s DecisionScope) Applicability(now time.Time) ScopeApplicability {
 	}
 	if s.Kind == "session" {
 		return ScopeApplicability{Label: "Session permission", Revoke: true}
+	}
+	if s.Kind == "standing" && s.ExpiresAt.IsZero() {
+		return ScopeApplicability{Label: "Standing permission", Revoke: true}
 	}
 	return ScopeApplicability{Label: "Permission kind unavailable; applicability unknown"}
 }
