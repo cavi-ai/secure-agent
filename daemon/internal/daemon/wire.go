@@ -207,13 +207,17 @@ func egressGate(cfg config.Config, resolver *session.Resolver) *taint.Gate {
 		Dir:              filepath.Join(filepath.Dir(cfg.SocketPath), "taint"),
 		ModesPath:        config.DefaultGuardModesPath(),
 		CwdOverridesPath: config.CwdOverridesPath(cfg),
+		CategoriesPath:   config.DefaultGuardCategoriesPath(),
 		Exempt:           exempt,
 		ClientPID: func(ctx context.Context, remoteAddr string) (int32, error) {
 			return connpeer.PID(ctx, remoteAddr, api.TCPClientPID)
 		},
-		Session: func(pid int32) (string, string, bool) {
-			scope, ok := resolver.PermissionIdentity(pid, "")
-			return scope.SessionID, scope.Workspace, ok
+		Sessions: func(pid int32) []taint.Session {
+			var out []taint.Session
+			for _, s := range resolver.RootSessions(pid) {
+				out = append(out, taint.Session{ID: s.SessionID, Workspace: s.Workspace})
+			}
+			return out
 		},
 	}
 }

@@ -58,9 +58,9 @@ func TestTaintedSessionEgressRefusedInDenyMode(t *testing.T) {
 		ClientPID: func(ctx context.Context, addr string) (int32, error) {
 			return connpeer.PID(ctx, addr, api.TCPClientPID)
 		},
-		Session: func(pid int32) (string, string, bool) {
+		Sessions: func(pid int32) []taint.Session {
 			attributed.Store(pid)
-			return "sess-1", "/work/app", true
+			return []taint.Session{{ID: "sess-1", Workspace: "/work/app"}}
 		},
 	}
 
@@ -78,6 +78,8 @@ func TestTaintedSessionEgressRefusedInDenyMode(t *testing.T) {
 		}
 		cmd := exec.Command(curl, "-sk", "-o", "/dev/null", "-w", format, "--max-time", "10",
 			"--proxy", fmt.Sprintf("http://tunnel:%s@127.0.0.1:%d", tok, ps.Port()), target)
+		// A no_proxy entry for loopback would send curl around the proxy.
+		cmd.Env = append(os.Environ(), "NO_PROXY=", "no_proxy=")
 		var out strings.Builder
 		cmd.Stdout = &out
 		if err := cmd.Start(); err != nil {
