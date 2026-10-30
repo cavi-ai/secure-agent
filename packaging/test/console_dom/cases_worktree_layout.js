@@ -39,6 +39,9 @@
       openTab('worktrees');
       await wait(() => document.querySelector('.wt-repo-options'));
       await idle();
+      // The tab's entrance animation offsets the panel 4px until it ends, and
+      // headless Chrome advances it at no fixed time: end it before measuring.
+      document.getAnimations().forEach(a => { if (a.effect?.getComputedTiming().endTime !== Infinity) a.finish(); });
       const container = document.getElementById('worktrees-container');
       const options = container.querySelector('.wt-repo-options');
       const summary = options.querySelector('summary');
