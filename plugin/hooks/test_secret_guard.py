@@ -655,6 +655,19 @@ EXTRA_TESTS += [
 ]
 
 
+def test_guard_rules_load_through_a_symlinked_hook():
+    linked = tempfile.mkdtemp(prefix="secret-guard-link-")
+    for name in ("secret_guard.py", "activity_log.py", "injection_scan.py"):
+        os.symlink(os.path.join(os.path.dirname(HOOK), name), os.path.join(linked, name))
+    env = {**os.environ, "HOME": HOME, "SECURE_AGENT_ACTIVITY_LOG": os.path.join(HOME, "activity.jsonl")}
+    p = subprocess.run([sys.executable, os.path.join(linked, "secret_guard.py")], input=json.dumps(bash("ls")),
+                       capture_output=True, text=True, timeout=10, env=env)
+    assert p.returncode == 0 and json.loads(p.stdout).get("permission") == "allow", (p.returncode, p.stderr[-300:])
+
+
+EXTRA_TESTS += [test_guard_rules_load_through_a_symlinked_hook]
+
+
 def main() -> int:
     failures = []
 

@@ -48,7 +48,8 @@ from datetime import datetime, timezone
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
-_HOOK_DIR = os.path.dirname(os.path.abspath(__file__))
+# A symlinked hook (plugin/install.sh) loads its data files from the checkout.
+_HOOK_DIR = os.path.dirname(os.path.realpath(__file__))
 if _HOOK_DIR not in sys.path:
     sys.path.insert(0, _HOOK_DIR)
 from activity_log import log_payload, redact_str
@@ -424,7 +425,7 @@ def command_references_protected(command: str) -> bool:
 # Shipped default guard rules. Shared JSON the correlator also loads
 # (daemon/internal/config/guard-rules.json — copies must match).
 def _load_guard_rules():
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guard-rules.json")
+    path = os.path.join(_HOOK_DIR, "guard-rules.json")
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
