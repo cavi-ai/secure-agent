@@ -20,7 +20,10 @@ APP_DIR="${REPO_ROOT}/dist/${APP_NAME}.app"
 # crafted tag name can't break or inject the plist.
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo 0.1.0)}"
 VERSION="$(printf '%s' "$VERSION" | tr -d '<>&"'"'"'')"
-BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-parse --short HEAD 2>/dev/null || echo 1)}"
+# CFBundleShortVersionString carries no tag prefix; CFBundleVersion is the
+# commit count, so it only grows.
+SHORT_VERSION="${VERSION#v}"
+BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 BUILD_NUMBER="$(printf '%s' "$BUILD_NUMBER" | tr -cd 'a-zA-Z0-9.-')"
 # The app's one identity: Background Task Management records the file-telemetry
 # helper under it, and packaging/test/check_bundle_layout.sh pins it. The daemon,
@@ -124,7 +127,7 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
     <key>CFBundleExecutable</key><string>SecureAgent</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
-    <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+    <key>CFBundleShortVersionString</key><string>${SHORT_VERSION}</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <!-- Keep a Dock control if macOS hides the menu bar status item. -->
