@@ -58,6 +58,10 @@ Traffic that bypasses the proxy (pinned or unrouted) is counted as `uninspected_
 
 See [FIREWALL_THREAT_MODEL.md](FIREWALL_THREAT_MODEL.md) for exactly what the firewall defends against, what it does not, and how it handles secret material.
 
+## System changes
+
+With file telemetry enabled, three rules flag changes that outlast a session. They observe and do not block. `launch-item-change`: an agent adds or removes a background item, or writes the launch agent or daemon plist macOS registers. `trust-change`: an agent installs a configuration profile or overrides Gatekeeper, or you do so within 24 hours for an app, package or profile file an agent wrote. `xprotect-detection`: every XProtect malware detection. See the [correlation rules](ARCHITECTURE.md#correlation-engine-daemoninternalcorrelatecorrelatego).
+
 ## Review recurring connections
 
 The console's **Protection → Traffic** view groups observed outbound connections by agent activity and destination. A recurring connection from a known agent appears for review when no saved expectation covers it. These observations contain connection metadata; they do not establish what a request contained or whether a destination is safe. Any advisor explanation is labeled as an inference.

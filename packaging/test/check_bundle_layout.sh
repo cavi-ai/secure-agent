@@ -54,5 +54,15 @@ check_signing_identity "$app" "$app_id"
 check_signing_identity "${app}/${program}" "$label"
 check_signing_identity "${app}/Contents/Helpers/secure-agentd" "com.cavi-ai.secure-agent.daemon"
 check_signing_identity "${app}/Contents/Helpers/secure-agent" "com.cavi-ai.secure-agent.cli"
+# The guard hook runs this helper by its installed path before an image read.
+[ -x "${app}/Contents/Helpers/secure-agent-image-text" ] || fail "no executable Contents/Helpers/secure-agent-image-text"
+check_signing_identity "${app}/Contents/Helpers/secure-agent-image-text" "${app_id}.image-text"
+for hook in secret_guard.py harness_guard.py activity_log.py injection_scan.py guard-rules.json; do
+    [ -f "${app}/Contents/Resources/hooks/${hook}" ] || fail "missing Contents/Resources/hooks/${hook}"
+done
+short_version="$(plutil -extract CFBundleShortVersionString raw -o - "${app}/Contents/Info.plist")" || fail "no CFBundleShortVersionString"
+case "$short_version" in v*) fail "CFBundleShortVersionString '${short_version}' carries a tag prefix" ;; esac
+build_number="$(plutil -extract CFBundleVersion raw -o - "${app}/Contents/Info.plist")" || fail "no CFBundleVersion"
+case "$build_number" in ''|*[!0-9]*) fail "CFBundleVersion '${build_number}' is not a build number" ;; esac
 
 echo "bundle layout: ${label} plist valid, BundleProgram ${program} executable"

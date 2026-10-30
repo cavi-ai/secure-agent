@@ -9,6 +9,7 @@
 .build/
 # Added by code-review-graph
 .code-review-graph/
+.code-review-graphignore
 .cursorrules
 .claude/
 GEMINI.md
@@ -36,3 +37,5 @@ opencode.jsonc
 
 # macOS
 .DS_Store
+# Local planning notes; the docs build would publish them outside a git checkout.
+docs/superpowers/
