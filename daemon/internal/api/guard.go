@@ -342,6 +342,10 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	if req.Scope == "always" && req.Verdict == "allow" && pend != nil && pend.RuleID == model.EgressRule {
+		http.Error(w, "Invalid payload: this request does not offer that permission", http.StatusBadRequest)
+		return
+	}
 	choice := model.ScopeChoice{Kind: req.Scope, Expiry: req.Expiry, Category: req.Category}
 	// One permission per send kind for a category answer, else one for the
 	// exact sinks. IDs derive from the request so the receipt names them.
@@ -388,6 +392,16 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 				grants[i].ID = grantID(i)
 			}
 			return a.store.PrepareDecisionScopes(ctx, grants)
+		}
+	}
+	if req.Scope == "always" && req.Verdict == "allow" {
+		// An egress prompt never offers a rule-wide allow: it would cover
+		// every sink, workspace and executable for the agent.
+		prepare = func(_ context.Context, p guard.Pending) (func() error, func(), error) {
+			if p.RuleID == model.EgressRule {
+				return nil, nil, fmt.Errorf("this request does not offer that permission")
+			}
+			return nil, nil, nil
 		}
 	}
 	ok, err := a.guardBroker.ResolveWith(req.ID, decision, prepare)

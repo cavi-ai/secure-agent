@@ -62,8 +62,16 @@ func Normalize(data []byte) []string {
 		}
 	}
 	for _, run := range hexRun.FindAllString(raw, -1) {
-		if dec, err := hex.DecodeString(run[:len(run)&^1]); err == nil {
-			views = append(views, capView(string(dec)))
+		// An odd run may carry one stray hex character on either end.
+		offsets := []int{0}
+		if len(run)%2 == 1 {
+			offsets = append(offsets, 1)
+		}
+		for _, off := range offsets {
+			r := run[off:]
+			if dec, err := hex.DecodeString(r[:len(r)&^1]); err == nil {
+				views = append(views, capView(string(dec)))
+			}
 		}
 	}
 	return views

@@ -1066,6 +1066,26 @@ func (r *Resolver) PermissionIdentity(pid int32, claimed string) (model.Decision
 	return model.DecisionScope{Agent: info.Name, SessionID: id, Workspace: sess.Workspace, ReaderExe: info.ExePath, IdentityBasis: "peer-process-tree"}, true
 }
 
+// RootSessions returns every live session on the verified root of pid, with
+// its recorded workspace: the proxy cannot tell which thread of an app
+// server opened a connection.
+func (r *Resolver) RootSessions(pid int32) []model.DecisionScope {
+	info, ok := r.tagger.LiveFamily(pid)
+	if !ok {
+		return nil
+	}
+	var out []model.DecisionScope
+	for _, stub := range r.st.SessionRoots()[info.PID] {
+		sess, ok, err := r.st.GetSession(stub.ID)
+		if err != nil || !ok || (sess.Status != model.SessionActive && sess.Status != model.SessionIdle) || sess.RootPID != info.PID ||
+			!rootStarted(sess).Equal(info.StartedAt) || sess.Harness != info.Name {
+			continue
+		}
+		out = append(out, model.DecisionScope{Agent: info.Name, SessionID: sess.ID, Workspace: sess.Workspace, ReaderExe: info.ExePath, IdentityBasis: "peer-process-tree"})
+	}
+	return out
+}
+
 // Sweep advances the lifecycle: active → idle after silence, idle → ended
 // when the root process is gone (or after a day of silence for pid-less
 // hook sessions, or an hour of silence on a root that now belongs to an

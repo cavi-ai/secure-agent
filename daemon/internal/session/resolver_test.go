@@ -142,6 +142,38 @@ func TestPermissionIdentityBindsClaimedThreadOnSharedRoot(t *testing.T) {
 	}
 }
 
+// The proxy cannot tell an app server's threads apart: every live thread on
+// the verified root is a candidate, and no session of another root is.
+func TestRootSessionsListsEveryThreadOnTheRoot(t *testing.T) {
+	started := time.Now().Add(-time.Hour)
+	procs := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex", CWD: "/", StartTime: started},
+		200: {PID: 200, PPID: 100, Exe: "/usr/bin/curl", CWD: "/work/a", StartTime: started.Add(time.Second)},
+		300: {PID: 300, PPID: 1, Exe: "/opt/homebrew/bin/codex", CWD: "/", StartTime: started},
+	}
+	r, st := testResolver(t, procs)
+	for _, s := range []struct {
+		id, workspace string
+		root          int32
+	}{{"thread-a", "/work/a", 100}, {"thread-b", "/work/b", 100}, {"other-root", "/work/c", 300}} {
+		if err := st.UpsertSession(model.Session{ID: s.id, Harness: "codex", Workspace: s.workspace, RootPID: s.root,
+			RootStartedAt: started.UTC().Format(time.RFC3339Nano), StartedAt: started, LastSeenAt: time.Now(),
+			Status: model.SessionActive, Confidence: model.ConfHook}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.EndSession("thread-b", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got := r.RootSessions(200)
+	if len(got) != 1 || got[0].SessionID != "thread-a" || got[0].Workspace != "/work/a" {
+		t.Fatalf("root sessions = %+v, want thread-a only", got)
+	}
+	if got := r.RootSessions(999); got != nil {
+		t.Fatalf("unknown pid: %+v", got)
+	}
+}
+
 // A tagged child process (a shell the harness spawned, in another cwd) joins
 // its harness's session: one row, keyed, rooted and scoped on the harness.
 func TestChildProcessJoinsHarnessSession(t *testing.T) {
