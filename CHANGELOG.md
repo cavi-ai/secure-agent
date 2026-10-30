@@ -23,6 +23,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: guard prompts open above the app in front and on its Space instead of behind the agent's window.
 - Evidence storage: finding reviews keep their attribution after the session row is pruned or gains a start time, so the startup review backfill no longer fails with "review evidence changed".
 - File telemetry: a file renamed to a new name is recorded at its destination path.
+- Proxy: the `untrusted-egress` refusal applies `untrusted-egress-injected` and the `network-send` kind's mode as the hook does, and refuses a connection from an app server when any of its live sessions would be refused.
+- Guard: an `untrusted-egress` prompt no longer accepts a rule-wide Allow Always, and a request naming other send kinds gets its own prompt.
+- File telemetry: a profile file is read only when it is a regular file, a profile install reads at most 8 unread profile files, and a burst of launch-item writes no longer hides the agent's latest one.
+- Firewall: a hex-encoded secret after one stray hex character is matched.
 
 ## [1.4.0] - 2026-10-22
 
