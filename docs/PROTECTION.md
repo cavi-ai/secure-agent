@@ -101,6 +101,8 @@ When an agent tool call touches a guarded path (SSH keys, cloud credentials, the
 
 The `harness-config` rule covers the harnesses' own settings and hook scripts. It ships `monitor` (reads logged); **Guard My Secrets** promotes it to `prompt` alongside SSH keys, cloud credentials, and the keychain. Writes are always denied regardless of mode — editing the hook or `settings.json` is how an agent removes the guard watching it.
 
+**When the hook cannot decide.** A payload that is not a JSON object passes, as malformed input is not evidence of an attack. If the hook fails while checking a well-formed call, Claude Code asks you and other harnesses deny it. If the daemon is unreachable for a `prompt` rule, Claude Code asks and other harnesses deny.
+
 Writes to `~/.claude/settings.json` and the hook scripts are now denied outright, so the obvious self-removal path is closed — but a determined agent can still probe paths outside the covered harness directories, and the harness's decision to invoke the hook at all can't be enforced from inside the hook. This layer raises the bar; it is not a complete seal.
 
 ### Egress after untrusted input

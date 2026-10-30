@@ -2048,7 +2048,38 @@ def main() -> int:
         return 0
 
     _PAYLOAD = data if isinstance(data, dict) else {}
+    if not isinstance(data, dict) or not isinstance(data.get("tool_input") or {}, dict):
+        # Same as unparseable JSON: not evidence of wrongdoing.
+        allow()
+        return 0
+    try:
+        return _check(data)
+    except Exception as exc:
+        return _hook_error(data, exc)
 
+
+def _hook_error(data: dict, exc: Exception) -> int:
+    """A crash on a well-formed payload: the check did not run, so the call is
+    asked on Claude and denied elsewhere instead of passing unchecked."""
+    event = str(data.get("hook_event_name") or data.get("event") or "")
+    reason = f"hook-error:{type(exc).__name__}"
+    if event in {"PostToolUse", "postToolUse"}:
+        try:
+            audit("allow", reason, "", event)
+        except Exception:
+            pass
+        print("{}")
+        return 0
+    command = str(data.get("command") or (data.get("tool_input") or {}).get("command") or "")
+    if runtime() == "claude":
+        emit_ask("Secure Agent could not check this call. Allow it?", command, event)
+    deny(reason, "Blocked: Secure Agent could not check this call.",
+         "DENIED by Secure Agent: the guard hook failed while checking this call. Tell the user; "
+         "they can check the hook setup in Secure Agent.", command, event)
+    return 0
+
+
+def _check(data: dict) -> int:
     if "secure_agent_probe" in _PAYLOAD:
         # A UI-armed, inert communication check. It can only deny, never
         # authorize a real operation. It emits no audit/activity/session rows

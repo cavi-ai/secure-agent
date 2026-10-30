@@ -655,6 +655,52 @@ EXTRA_TESTS += [
 ]
 
 
+def _crash_in_process(payload: dict, env: dict) -> dict:
+    """Runs main() with the checks forced to raise; returns the emitted JSON."""
+    import io
+    saved = (sys.stdin, sys.stdout, secret_guard.note_instruction_files, dict(os.environ))
+    out = io.StringIO()
+    os.environ.pop("CLAUDE_CODE_ENTRYPOINT", None)
+    os.environ.pop("CURSOR_TRACE_ID", None)
+    os.environ.update(env)
+
+    def boom(*_a, **_k):
+        raise KeyError("boom")
+    secret_guard.note_instruction_files = boom
+    sys.stdin, sys.stdout = io.StringIO(json.dumps(payload)), out
+    try:
+        try:
+            secret_guard.main()
+        except SystemExit:
+            pass
+    finally:
+        sys.stdin, sys.stdout, secret_guard.note_instruction_files = saved[:3]
+        os.environ.clear()
+        os.environ.update(saved[3])
+    return json.loads(out.getvalue() or "{}")
+
+
+def test_hook_crash_asks_on_claude():
+    out = _crash_in_process(bash("ls"), {"CLAUDE_CODE_ENTRYPOINT": "cli"})
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") == "ask", out
+
+
+def test_hook_crash_denies_elsewhere():
+    out = _crash_in_process(cursor("ls"), {"CURSOR_TRACE_ID": "t"})
+    assert out.get("permission") == "deny", out
+
+
+def test_hook_crash_after_tool_use_is_silent():
+    out = _crash_in_process({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"}},
+                            {"CLAUDE_CODE_ENTRYPOINT": "cli"})
+    assert out == {}, out
+
+
+def test_non_dict_tool_input_is_malformed():
+    out = run({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": ["ls"]})
+    assert out.get("permission") == "allow", out
+
+
 def test_guard_rules_load_through_a_symlinked_hook():
     linked = tempfile.mkdtemp(prefix="secret-guard-link-")
     for name in ("secret_guard.py", "activity_log.py", "injection_scan.py"):
@@ -665,7 +711,13 @@ def test_guard_rules_load_through_a_symlinked_hook():
     assert p.returncode == 0 and json.loads(p.stdout).get("permission") == "allow", (p.returncode, p.stderr[-300:])
 
 
-EXTRA_TESTS += [test_guard_rules_load_through_a_symlinked_hook]
+EXTRA_TESTS += [
+    test_hook_crash_asks_on_claude,
+    test_hook_crash_denies_elsewhere,
+    test_hook_crash_after_tool_use_is_silent,
+    test_non_dict_tool_input_is_malformed,
+    test_guard_rules_load_through_a_symlinked_hook,
+]
 
 
 def main() -> int:
