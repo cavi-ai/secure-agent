@@ -33,7 +33,9 @@ final class GuardReceiptTests: XCTestCase {
             let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".build/guard-qa")
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: dir.appendingPathComponent(name + ".png"))
-            if CGPreflightScreenCaptureAccess() {
+            // Window capture needs the window's display awake; the bitmap above checks layout either way.
+            let display = window.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? CGMainDisplayID()
+            if CGPreflightScreenCaptureAccess(), CGDisplayIsAsleep(display) == 0 {
                 let capture = Process()
                 capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
                 capture.arguments = ["-x", "-o", "-l", String(window.windowNumber), dir.appendingPathComponent(name + "-window.png").path]
