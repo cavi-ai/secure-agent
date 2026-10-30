@@ -302,6 +302,8 @@ type GuardResolveReceipt struct {
 	RuleID    string   `json:"rule_id"`
 	Verdict   string   `json:"verdict"`
 	Scope     string   `json:"scope"`
+	Expiry    string   `json:"expiry,omitempty"`
+	Category  bool     `json:"category,omitempty"`
 	At        string   `json:"at"`
 	ScopeIDs  []string `json:"scope_ids,omitempty"`
 }
@@ -408,7 +410,7 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	response := GuardResolveResponse{Status: "ok", Resolved: ok}
 	if ok && pend != nil {
-		response.Receipt = &GuardResolveReceipt{ID: req.ID, SessionID: pend.SessionID, RuleID: pend.RuleID, Verdict: req.Verdict, Scope: req.Scope, At: time.Now().UTC().Format(time.RFC3339Nano), ScopeIDs: decision.ScopeIDs}
+		response.Receipt = &GuardResolveReceipt{ID: req.ID, SessionID: pend.SessionID, RuleID: pend.RuleID, Verdict: req.Verdict, Scope: req.Scope, Expiry: req.Expiry, Category: req.Category, At: time.Now().UTC().Format(time.RFC3339Nano), ScopeIDs: decision.ScopeIDs}
 	}
 	writeJSON(w, response)
 }

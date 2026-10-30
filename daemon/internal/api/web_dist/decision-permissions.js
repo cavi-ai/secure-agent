@@ -19,6 +19,7 @@ function reviewResultPermissionReceipt(result) {
 
 function validGuardReceipt(r, request) {
   return !!r && r.id === request.id && r.verdict === request.verdict && r.scope === request.scope &&
+    (r.expiry || '') === (request.expiry || '') && (r.category === true) === (request.category === true) &&
     typeof r.id === 'string' && !!r.id && ['allow','deny'].includes(r.verdict) &&
     ['once','always','session','exact','standing'].includes(r.scope) && typeof r.rule_id === 'string' && !!r.rule_id &&
     typeof r.at === 'string' && Number.isFinite(Date.parse(r.at)) &&

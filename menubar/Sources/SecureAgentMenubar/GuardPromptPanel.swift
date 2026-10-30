@@ -66,14 +66,27 @@ final class GuardPromptModel: ObservableObject {
         scopes.contains(where: \.coversKind) ? GuardSendKind.label(content.pending.categories) : nil
     }
 
+    /// The kind permission for the selected duration, when the request offers one.
+    private var kindScope: GuardScopeChoice? {
+        guard case .scope(let c) = duration else { return nil }
+        return scopes.first(where: { $0.kind == c.kind && $0.expiry == c.expiry && $0.coversKind })
+    }
+
+    /// The Covers picker shows only for a duration that offers a kind permission.
+    var offersKind: Bool { kindLabel != nil && kindScope != nil }
+
     /// The permission Allow grants; nil for Once.
     var chosenScope: GuardScopeChoice? {
         guard case .scope(let c) = duration else { return nil }
-        if coversKind, let kind = scopes.first(where: { $0.kind == c.kind && $0.expiry == c.expiry && $0.coversKind }) { return kind }
+        if coversKind, let kind = kindScope { return kind }
         return c
     }
 
-    var allowTitle: String { chosenScope?.label ?? "Allow Once" }
+    var allowTitle: String {
+        guard let c = chosenScope else { return "Allow Once" }
+        guard c.coversKind, let kinds = GuardSendKind.label(content.pending.categories) else { return c.label }
+        return c.label.replacingOccurrences(of: "Allow ", with: "Allow all \(kinds) ")
+    }
 
     /// What Allow does with the chosen duration; nothing asks again after it.
     var allowNote: String {
@@ -336,7 +349,7 @@ struct GuardPromptView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
             }
-            if let kinds = model.kindLabel, model.duration != .once {
+            if let kinds = model.kindLabel, model.offersKind {
                 HStack(spacing: 14) {
                     sectionLabel("Covers").foregroundStyle(.secondary)
                     Picker("Covers", selection: $model.coversKind) {

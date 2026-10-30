@@ -155,14 +155,17 @@ public struct GuardResolveReceipt: Codable, Sendable {
     public let ruleID: String
     public let verdict: String
     public let scope: String
+    public let expiry: String?
+    public let category: Bool?
     public let at: String
     public let scopeIDs: [String]?
     enum CodingKeys: String, CodingKey {
-        case id, verdict, scope, at
+        case id, verdict, scope, expiry, category, at
         case sessionID = "session_id", ruleID = "rule_id", scopeIDs = "scope_ids"
     }
     public func matches(_ request: GuardResolveRequest) -> Bool {
         id == request.id && !id.isEmpty && verdict == request.verdict && scope == request.scope &&
+        (expiry ?? "") == (request.expiry ?? "") && (category == true) == (request.category == true) &&
         ["allow", "deny"].contains(verdict) && ["once", "always", "session", "exact", "standing"].contains(scope) &&
         !ruleID.isEmpty && EventTime.parse(at) != nil && (scopeIDs?.count ?? 0) <= 128 &&
         !(scopeIDs?.contains(where: { $0.isEmpty }) ?? false) &&

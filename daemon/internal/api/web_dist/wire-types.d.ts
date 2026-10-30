@@ -1466,6 +1466,8 @@ export interface GuardResolveReceipt {
   rule_id: string;
   verdict: string;
   scope: string;
+  expiry?: string;
+  category?: boolean;
   at: string;
   scope_ids?: string[];
 }
