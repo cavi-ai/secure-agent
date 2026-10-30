@@ -51,6 +51,12 @@ final class GuardReceiptTests: XCTestCase {
         XCTAssertTrue(receipt.matches(.init(id: "prompt", verdict: "allow", scope: "session")))
         XCTAssertFalse(receipt.matches(.init(id: "other", verdict: "allow", scope: "session")))
         XCTAssertFalse(receipt.matches(.init(id: "prompt", verdict: "deny", scope: "once")))
+        XCTAssertFalse(receipt.matches(.init(id: "prompt", verdict: "allow", scope: "session", category: true)), "a kind permission was not recorded")
+        let timed = #"{"id":"p","rule_id":"untrusted-egress","verdict":"allow","scope":"exact","expiry":"7d","category":true,"at":"2026-10-15T12:00:00Z"}"#
+        let kind = try JSONDecoder().decode(GuardResolveReceipt.self, from: Data(timed.utf8))
+        XCTAssertTrue(kind.matches(.init(id: "p", verdict: "allow", scope: "exact", expiry: "7d", category: true)))
+        XCTAssertFalse(kind.matches(.init(id: "p", verdict: "allow", scope: "exact", expiry: "24h", category: true)), "a longer grant than asked")
+        XCTAssertFalse(kind.matches(.init(id: "p", verdict: "allow", scope: "exact", expiry: "7d")), "a wider grant than asked")
     }
 
     @MainActor

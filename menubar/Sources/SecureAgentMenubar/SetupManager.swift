@@ -475,8 +475,13 @@ public final class SetupManager: ObservableObject {
     public func installHooks() throws {
         guard let srcDir = bundledHooksDir else { throw SetupError.notBundled }
         lastError = nil
-        for harness in FirstUseSetupState.hookHarnesses {
-            try HookRegistry.installSelectedHooks(harness: harness, bundledDir: srcDir, home: home)
+        // Only harnesses with a configuration directory on this Mac; one
+        // failure does not stop the others.
+        var failures: [String] = []
+        for harness in FirstUseSetupState.hookHarnesses
+        where fm.fileExists(atPath: HookRegistry.configurationDirectory(harness: harness, home: home)) {
+            do { try HookRegistry.installSelectedHooks(harness: harness, bundledDir: srcDir, home: home) }
+            catch { failures.append("\(harness): \(error.localizedDescription)") }
         }
         // Retain the existing optional opencode script copies.
         let target = home + "/.config/opencode/hooks"
@@ -484,6 +489,10 @@ public final class SetupManager: ObservableObject {
         for hook in try HookRegistry.hookFileNames(in: srcDir) {
             try Data(contentsOf: URL(fileURLWithPath: srcDir + "/" + hook))
                 .write(to: URL(fileURLWithPath: target + "/" + hook), options: .atomic)
+        }
+        if !failures.isEmpty {
+            throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey:
+                "Hooks installed, except: " + failures.joined(separator: "; ")])
         }
     }
 
@@ -620,8 +629,8 @@ public final class SetupManager: ObservableObject {
     }
 
     /// Remove our registrations (uninstall), leaving other hooks untouched.
-    public func unregisterClaudeHooks() {
-        HookRegistry.Claude.unregister(at: Self.claudeSettingsPath)
+    public func unregisterClaudeHooks() throws {
+        try HookRegistry.Claude.unregister(at: Self.claudeSettingsPath)
     }
 
     // MARK: - Cursor native tool hooks
@@ -1397,8 +1406,54 @@ public final class SetupManager: ObservableObject {
         return true
     }
 
+    /// Unregisters every harness's hooks before removing their scripts, then
+    /// stops the daemon. One failing step does not stop the others; a
+    /// harness whose registration could not be removed keeps its scripts,
+    /// since a registered hook whose script is gone blocks the harness.
     public func uninstallAll() throws {
         lastError = nil
+        var failures: [String] = []
+        func step(_ name: String, _ body: () throws -> Void) -> Bool {
+            do { try body(); return true } catch {
+                failures.append("\(name): \(error.localizedDescription)")
+                return false
+            }
+        }
+        // The legacy OpenCode hook directory has no registration left.
+        var cleared: Set<String> = [home + "/.config/opencode/hooks"]
+        func unregister(_ harness: String, _ body: () throws -> Void) {
+            if step(harness, body) { cleared.insert(HookRegistry.hookDirectory(harness: harness, home: home)) }
+        }
+        unregister("claude") { try unregisterClaudeHooks() }
+        unregister("cursor") { try HookRegistry.Cursor.unregister(at: Self.cursorHooksPath, command: Self.cursorHookCommand) }
+        unregister("codex") { try HookRegistry.Codex.unregister(at: home + "/.codex/hooks.json", command: HookRegistry.selectedHookCommand(harness: "codex", home: home)) }
+        unregister("antigravity") {
+            try HookRegistry.Antigravity.unregister(at: home + "/.gemini/config/hooks.json",
+                command: HookRegistry.selectedHookCommand(harness: "antigravity", home: home),
+                legacyCommand: HookRegistry.legacyAntigravityCommand(home: home))
+        }
+        for harness in ["hermes", "opencode"] {
+            _ = step(harness) { try HookRegistry.uninstallAdditionalPlugin(harness: harness, home: home) }
+        }
+        if HookRegistry.selectedHooksInstalled(harness: "openclaw", home: home) {
+            // OpenClaw keeps its entry in its own config, so the disabled
+            // plugin's files stay; its plugin manager owns full removal.
+            _ = step("openclaw") {
+                guard Self.run(["/usr/bin/env"] + openClawArguments(["plugins", "disable", "secure-agent"]), timeout: 10) == 0 else {
+                    throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "Disable the Secure Agent plugin in OpenClaw, then uninstall again."])
+                }
+            }
+        }
+        for target in Self.hookTargets where cleared.contains(target) {
+            for hook in ["secret_guard.py", "injection_scan.py", "activity_log.py", "harness_guard.py", "guard-rules.json"] {
+                try? fm.removeItem(atPath: "\(target)/\(hook)")
+            }
+        }
+        _ = step("agent launchers") { try AgentLauncher.removeManagedFiles(home: home) }
+        withdrawClaudeRouting()
+        prefs.removeObject(forKey: Self.routeClaudeCodeKey)
+        try? fm.removeItem(atPath: "\(home)/.local/bin/secure-agent")
+
         // Stop the child daemon this app is running.
         DaemonSupervisor.shared.stop()
         // Unregister the in-bundle ES collector daemon (best-effort: a
@@ -1407,37 +1462,16 @@ public final class SetupManager: ObservableObject {
         // Tear down any legacy LaunchAgent from an older install.
         let uid = getuid()
         Self.run(["/bin/launchctl", "bootout", "gui/\(uid)/\(Self.daemonLabel)"])
-        if fm.fileExists(atPath: daemonPlistPath) {
-            try fm.removeItem(atPath: daemonPlistPath)
+        _ = step("legacy launch agent") {
+            if fm.fileExists(atPath: daemonPlistPath) { try fm.removeItem(atPath: daemonPlistPath) }
         }
         if SMAppService.mainApp.status == .enabled {
             try? SMAppService.mainApp.unregister()
         }
-        try HookRegistry.Cursor.unregister(at: Self.cursorHooksPath, command: Self.cursorHookCommand)
-        try AgentLauncher.removeManagedFiles(home: home)
-        try HookRegistry.Codex.unregister(at: home + "/.codex/hooks.json", command: HookRegistry.selectedHookCommand(harness: "codex", home: home))
-        try HookRegistry.Antigravity.unregister(at: home + "/.gemini/config/hooks.json",
-            command: HookRegistry.selectedHookCommand(harness: "antigravity", home: home),
-            legacyCommand: HookRegistry.legacyAntigravityCommand(home: home))
-        for harness in ["hermes", "opencode"] { try HookRegistry.uninstallAdditionalPlugin(harness: harness, home: home) }
-        let openClawDir = HookRegistry.hookDirectory(harness: "openclaw", home: home)
-        if HookRegistry.selectedHooksInstalled(harness: "openclaw", home: home) {
-            guard Self.run(["/usr/bin/env"] + openClawArguments(["plugins", "disable", "secure-agent"])) == 0 else {
-                throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "Disable the Secure Agent plugin in OpenClaw before uninstalling its files."])
-            }
-            // Keep the disabled plugin files: OpenClaw retains its entry in config.
-            // Its plugin manager owns full removal and any install provenance.
+        if !failures.isEmpty {
+            throw NSError(domain: "SetupManager", code: 6, userInfo: [NSLocalizedDescriptionKey:
+                "Uninstall finished, except: " + failures.joined(separator: "; ")])
         }
-        for target in Self.hookTargets {
-            if target == openClawDir || ["hermes", "opencode"].contains(where: { HookRegistry.hookDirectory(harness: $0, home: home) == target }) { continue }
-            for hook in ["secret_guard.py", "injection_scan.py", "activity_log.py", "harness_guard.py"] {
-                try? fm.removeItem(atPath: "\(target)/\(hook)")
-            }
-        }
-        unregisterClaudeHooks()
-        withdrawClaudeRouting()
-        prefs.removeObject(forKey: Self.routeClaudeCodeKey)
-        try? fm.removeItem(atPath: "\(home)/.local/bin/secure-agent")
     }
 
     // MARK: - Claude Code routing
@@ -1503,8 +1537,10 @@ public final class SetupManager: ObservableObject {
 
     // MARK: - Helpers
 
+    /// Runs a command to completion, or terminates it after `timeout`
+    /// seconds and returns -1.
     @discardableResult
-    private static func run(_ args: [String]) -> Int32 {
+    private static func run(_ args: [String], timeout: TimeInterval? = nil) -> Int32 {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: args[0])
         p.arguments = Array(args.dropFirst())
@@ -1512,11 +1548,20 @@ public final class SetupManager: ObservableObject {
         p.standardError = FileHandle.nullDevice
         do {
             try p.run()
-            p.waitUntilExit()
-            return p.terminationStatus
         } catch {
             return -1
         }
+        if let timeout {
+            let deadline = Date().addingTimeInterval(timeout)
+            while p.isRunning && Date() < deadline { usleep(50_000) }
+            if p.isRunning {
+                p.terminate()
+                p.waitUntilExit()
+                return -1
+            }
+        }
+        p.waitUntilExit()
+        return p.terminationStatus
     }
 
     public func report(_ error: Error) {

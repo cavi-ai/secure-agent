@@ -23,7 +23,7 @@ public final class AppState: ObservableObject {
     @Published public var isPaused = false
     @Published public private(set) var guardRules: [GuardRuleModel] = []
     /// The oldest pending guard decision, surfaced so the popover can show it
-    /// inline (the native NSAlert remains the always-on consent path; this is
+    /// inline (the native guard prompt remains the always-on consent path; this is
     /// the glance-and-act affordance when the popover is open).
     @Published public private(set) var pendingGuard: GuardPending?
     @Published public private(set) var guardResult: GuardDecisionResult?
@@ -95,15 +95,15 @@ public final class AppState: ObservableObject {
     /// Serializes fetch() so a slow daemon can't stack overlapping poll tasks
     /// that complete out of order and regress state.
     private var isFetching = false
-    /// The pending-prompt id currently shown in an NSAlert, so the 1Hz poll
+    /// The pending-prompt id currently shown in the guard prompt, so the 1Hz poll
     /// doesn't stack a second dialog on top while one is already up.
     private var promptingID: String?
     /// The request shown in the native alert right now, if any.
     private var nativePromptID: String?
-    /// Runs the native guard prompt; tests replace the modal.
-    var runGuardPrompt: @MainActor (GuardPromptContent) -> GuardPromptChoice = { GuardPromptPanel.run($0) }
-    /// Ends the native guard alert's modal loop with .abort.
-    var withdrawGuardAlert: () -> Void = { if NSApp?.modalWindow != nil { NSApp.abortModal() } }
+    /// Shows the native guard prompt and awaits its answer; tests replace it.
+    var runGuardPrompt: @MainActor (GuardPromptContent) async -> GuardPromptChoice = { await GuardPromptPanel.present($0) }
+    /// Closes the native guard prompt without an answer.
+    var withdrawGuardAlert: () -> Void = { GuardPromptPanel.withdrawShown() }
     private var deferredGuardID: String?
     private var resolvingGuardIDs: Set<String> = []
     /// SSE push channel. When live, events drive refreshes and the poll timer
@@ -322,7 +322,7 @@ public final class AppState: ObservableObject {
     private func scheduleTimer(_ interval: TimeInterval) {
         pollInterval = interval
         timer?.invalidate()
-        // Common modes: polling continues while a guard alert's modal loop runs.
+        // Common modes: polling continues while a menu or sheet tracks events.
         let next = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.fetch() }
         }
@@ -819,12 +819,13 @@ public final class AppState: ObservableObject {
         guardRequestNotice = nil
         promptingID = p.id
         #if DEBUG
-        // Test hook: NSAlert.runModal() cannot run in a test host; tests
-        // assert on the dedupe id to prove the prompt path went live.
+        // Test hook: tests assert on the dedupe id to prove the prompt path
+        // went live without showing a window.
         if testHookSkipPromptDialog { nativePromptID = p.id; return }
         #endif
-        // The alert runs in its own task: the fetch that found the request
-        // returns, so polling and the stream keep refreshing while it is up.
+        // The prompt is awaited in its own task: the fetch that found the
+        // request returns, and polling and the stream keep running while it
+        // is up, so a request answered elsewhere withdraws it.
         Task { @MainActor [weak self] in await self?.showGuardAlert(p) }
     }
 
@@ -835,7 +836,7 @@ public final class AppState: ObservableObject {
         // prompt binds Return and Escape to Deny, never to an approval.
         NSApp?.activate(ignoringOtherApps: true)
         nativePromptID = p.id
-        let choice = runGuardPrompt(GuardPromptContent(pending: p, inspectUnavailableReason: inspectUnavailable, selected: selected))
+        let choice = await runGuardPrompt(GuardPromptContent(pending: p, inspectUnavailableReason: inspectUnavailable, selected: selected))
         if nativePromptID == p.id { nativePromptID = nil }
         // Withdrawn while shown: nothing to answer or remember.
         if choice == .withdrawn { return }
@@ -854,7 +855,7 @@ public final class AppState: ObservableObject {
         await submitGuardAnswer(decision)
     }
 
-    /// True when the app is showing a guard NSAlert — one at a time.
+    /// True when the app is showing a guard prompt — one at a time.
     public var promptingIDForTesting: String? { promptingID }
     var isFetchingForTesting: Bool { isFetching }
 
@@ -914,8 +915,8 @@ public final class AppState: ObservableObject {
         }
     }
 
-    /// Test hook: skip the modal NSAlert (untestable) while still proving the
-    /// prompt path claimed the pending id.
+    /// Test hook: skip the guard prompt window while still proving the prompt
+    /// path claimed the pending id.
     var testHookSkipPromptDialog = false
 
     // MARK: - Guard prompt language

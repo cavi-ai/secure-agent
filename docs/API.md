@@ -737,7 +737,7 @@ Attested requests also support `scope:"session"`, `scope:"exact"` with
 offers it; `category:true` saves one permission per kind the prompt names
 instead of one for its exact sinks. A successful submission returns
 `resolved:true` and a `receipt` containing `id`, `session_id` when known,
-`rule_id`, `verdict`, `scope`, `at`, and committed `scope_ids` for reusable
+`rule_id`, `verdict`, `scope`, `expiry` and `category` when set, `at`, and committed `scope_ids` for reusable
 permissions. This confirms broker submission, not tool delivery, completed
 access, or a durable request-history write. An unavailable or already answered
 request returns `resolved:false` without a receipt. `/sessions/{id}/outcomes`

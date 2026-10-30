@@ -12,7 +12,7 @@ const receipt = {...request,rule_id:'credentials',session_id:'owned',at,scope_id
 
 test('guard receipts bind the exact answer and reject malformed or unrelated responses', () => {
  assert.equal(c.validGuardReceipt(receipt,request),true);
- for(const change of [{id:'other'},{scope:'once'},{verdict:'deny'},{at:'invalid'},{scope_ids:['']},{scope_ids:'permission'}])
+ for(const change of [{id:'other'},{scope:'once'},{verdict:'deny'},{at:'invalid'},{scope_ids:['']},{scope_ids:'permission'},{expiry:'7d'},{category:true}])
   assert.equal(c.validGuardReceipt({...receipt,...change},request),false,JSON.stringify(change));
 });
 
@@ -49,7 +49,7 @@ test('duplicate clicks submit once and permissions use the confirmed receipt onl
  assert.equal(h.views.at(-1).unconfirmed,undefined);h.t.permissions();assert.equal(h.permissions.length,0);
  h.t.history();assert.deepEqual(h.sessions,['owned']);
  const grant=h.t.resolve('prompt','allow','exact','24h');await new Promise(r=>setImmediate(r));
- h.answer({resolved:true,receipt});await grant;h.t.permissions();
+ h.answer({resolved:true,receipt:{...receipt,expiry:'24h'}});await grant;h.t.permissions();
  assert.deepEqual(Array.from(h.permissions[0].ids),['permission']);
 });
 

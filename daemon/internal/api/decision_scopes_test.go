@@ -186,6 +186,9 @@ func TestGuardCategoryPermissionCoversVariants(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
+	if !strings.Contains(w.Body.String(), `"category":true`) {
+		t.Fatalf("receipt does not name the kind permission: %s", w.Body.String())
+	}
 	if hook := <-done; !strings.Contains(hook.Body.String(), `"verdict":"allow"`) {
 		t.Fatal(hook.Body.String())
 	}
@@ -328,6 +331,21 @@ func TestGuardUnofferedPermissionSavesNothing(t *testing.T) {
 	<-done
 	if rows, err := a.store.ListDecisionScopes(); err != nil || len(rows) != 0 {
 		t.Fatalf("unoffered answer saved %+v %v", rows, err)
+	}
+}
+
+// An egress prompt never offers a rule-wide allow, so Allow Always saves no
+// guard rule for the agent.
+func TestGuardEgressRejectsAllowAlways(t *testing.T) {
+	a, _ := scopedGuardAPI(t)
+	p, done := enqueueGuardBody(t, a, egressBody("git push origin", "git-push"))
+	if w := resolveScopeGuard(a, p, "always"); w.Code != 400 {
+		t.Fatalf("allow always accepted: %d %s", w.Code, w.Body.String())
+	}
+	resolveScopeGuard(a, p, "once")
+	<-done
+	if _, ok := a.store.LookupGuardRule("codex", "untrusted-egress"); ok {
+		t.Fatal("allow always saved an egress rule")
 	}
 }
 

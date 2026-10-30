@@ -38,6 +38,8 @@ def main():
         if harness in ("openclaw", "hermes", "opencode"):
             # Finish before OpenClaw's default 15-second modifying-hook limit.
             os.environ["SECURE_AGENT_PROMPT_DEADLINE_S"] = "5"
+            # The plugins wait 10 seconds for this process.
+            os.environ["SECURE_AGENT_HOOK_BUDGET_S"] = "8"
         import secret_guard
         tool = payload.get("tool_name", "")
         aliases = {"exec": "Bash", "exec_command": "Bash", "read": "Read",

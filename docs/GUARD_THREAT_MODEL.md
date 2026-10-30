@@ -178,7 +178,8 @@ must not be interpreted as safe actions or complete coverage. See
 |---|---|
 | Malformed hook payload (can't parse stdin) | **Fail closed** when shell block mode is selected; otherwise **fail open**, retaining the observation-only hook's behavior. |
 | Daemon unreachable in `prompt` mode | Claude: harness `ask`. Cursor: **fail closed** (deny). |
-| Daemon hangs in `prompt` mode | **Fail closed** after `SECURE_AGENT_PROMPT_DEADLINE_S` (default 45s). |
+| Daemon hangs in `prompt` mode | **Fail closed** after `SECURE_AGENT_PROMPT_DEADLINE_S` (default 45s), or sooner once the hook run's `SECURE_AGENT_HOOK_BUDGET_S` (default 55s) is spent. |
+| Hook fails while checking a call | Claude Code asks; other harnesses deny. |
 | Corrupt `guard-modes.json` / cwd overrides | **Fail closed** (deny) + loud audit record. Never silently reverts to `monitor`. |
 | Malformed daemon decision response | **Fail closed** (deny). |
 | Guard prompt queue full (32 waiters) | Explicit `deny("queue-full")` — never an unbounded pile of dialogs. |

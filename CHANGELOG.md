@@ -27,6 +27,15 @@ All notable changes to `secure-agent` are documented here. The format follows
 - File telemetry: a file renamed to a new name is recorded at its destination path.
 - File telemetry: launch-item paths that `eslogger` writes with escaped slashes match, and a background item removal reported after the plist is gone is still attributed.
 - File telemetry: a Gatekeeper override or profile install the user approves is attributed to the agent that staged the file.
+- Menu bar: the guard prompt no longer runs a modal loop that stopped polling and the event stream, so a request answered in the console or expired closes the prompt instead of leaving it up.
+- Menu bar: the guard prompt shows the Covers choice only for durations that offer it, Allow names a grant for a whole kind of send, and a receipt for a longer or wider grant than chosen is not reported as submitted.
+- Menu bar: Uninstall unregisters every harness before removing its scripts, keeps going past a failing step and reports it, and no longer waits on OpenClaw without a limit; installing all hooks covers only agents found on this Mac.
+- Hooks: a guard hook symlinked by `plugin/install.sh` loads `guard-rules.json`; a hook that fails mid-check asks on Claude Code and denies elsewhere instead of letting the call through; all prompts of one hook run end before the harness's hook timeout.
+- Uninstall: `packaging/uninstall.sh` removes Secure Agent's hook entries from Claude Code, Cursor, Codex, Antigravity and OpenCode configs before their scripts, and removes every harness's hook scripts.
+- Proxy: the `untrusted-egress` refusal applies `untrusted-egress-injected` and the `network-send` kind's mode as the hook does, and refuses a connection from an app server when any of its live sessions would be refused.
+- Guard: an `untrusted-egress` prompt no longer accepts a rule-wide Allow Always, and a request naming other send kinds gets its own prompt.
+- File telemetry: a profile file is read only when it is a regular file, a profile install reads at most 8 unread profile files, and a burst of launch-item writes no longer hides the agent's latest one.
+- Firewall: a hex-encoded secret after one stray hex character is matched.
 
 ## [1.4.0] - 2026-10-22
 
