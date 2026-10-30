@@ -105,14 +105,20 @@ final class GuardPromptModel: ObservableObject {
     }
 }
 
-/// The native guard prompt: a floating panel near the top of the screen that
-/// runs modally until answered or withdrawn. Return and Escape deny.
+/// The native guard prompt: a floating panel near the top of the screen,
+/// awaited until answered or withdrawn. Return and Escape deny. It is not
+/// modal: a modal loop started from the main actor would stop the polling
+/// and event stream that withdraw it.
 @MainActor
 final class GuardPromptPanel: NSPanel {
     static let width: CGFloat = 480
 
+    /// The prompt on screen, if any.
+    private(set) static weak var shown: GuardPromptPanel?
+
     let model: GuardPromptModel
     private let host: NSHostingView<GuardPromptView>
+    private var answer: CheckedContinuation<GuardPromptChoice, Never>?
 
     init(content: GuardPromptContent) {
         model = GuardPromptModel(content: content)
@@ -140,7 +146,7 @@ final class GuardPromptPanel: NSPanel {
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             standardWindowButton(button)?.isHidden = true
         }
-        model.onChoose = { [weak self] _ in self?.finish() }
+        model.onChoose = { [weak self] in self?.finish($0) }
         model.onContentHeight = { [weak self] in self?.fit(height: $0) }
         contentView = host
         host.layoutSubtreeIfNeeded()
@@ -160,9 +166,19 @@ final class GuardPromptPanel: NSPanel {
     override var canBecomeMain: Bool { true }
     override func cancelOperation(_ sender: Any?) { model.deny() }
 
-    private func finish() {
-        if NSApp?.modalWindow === self { NSApp.stopModal() }
+    /// The first answer or withdrawal wins.
+    private func finish(_ choice: GuardPromptChoice) {
+        guard let answer else { return }
+        self.answer = nil
+        orderOut(nil)
+        if Self.shown === self { Self.shown = nil }
+        answer.resume(returning: choice)
     }
+
+    /// Closes the prompt without an answer.
+    func withdraw() { finish(.withdrawn) }
+
+    static func withdrawShown() { shown?.withdraw() }
 
     /// Centered horizontally on the screen with the pointer, under the menu bar.
     func placeOnScreen() {
@@ -172,16 +188,15 @@ final class GuardPromptPanel: NSPanel {
         setFrameOrigin(NSPoint(x: area.midX - frame.width / 2, y: area.maxY - frame.height - area.height * 0.12))
     }
 
-    /// Shows the prompt and blocks until it is answered. `NSApp.abortModal()`
-    /// (a withdrawal) returns `.withdrawn`.
-    static func run(_ content: GuardPromptContent) -> GuardPromptChoice {
+    /// Shows the prompt and returns its answer, or `.withdrawn`.
+    static func present(_ content: GuardPromptContent) async -> GuardPromptChoice {
         let panel = GuardPromptPanel(content: content)
         panel.placeOnScreen()
-        panel.makeKeyAndOrderFront(nil)
-        let response = NSApp.runModal(for: panel)
-        panel.orderOut(nil)
-        if response == .abort { return .withdrawn }
-        return panel.model.choice ?? .deny
+        return await withCheckedContinuation { answer in
+            panel.answer = answer
+            shown = panel
+            panel.makeKeyAndOrderFront(nil)
+        }
     }
 }
 

@@ -31,8 +31,8 @@ final class GuardPromptPanelTests: XCTestCase {
         XCTAssertNil(pending(ruleID: "untrusted-egress", detail: "Some other reason.").untrustedSources)
     }
 
-    func testUntrustedEgressPromptShowsWhatItReadAndDenies() throws {
-        let choice = run(GuardPromptContent(pending: egress(read: [Self.githubRead]), inspectUnavailableReason: nil)) { panel in
+    func testUntrustedEgressPromptShowsWhatItReadAndDenies() async throws {
+        let choice = await run(GuardPromptContent(pending: egress(read: [Self.githubRead]), inspectUnavailableReason: nil)) { panel in
             XCTAssertEqual(panel.model.durations, [.once], "no recorded identity: once only")
             XCTAssertEqual(panel.model.allowNote, "Allow Once answers only this request.")
             try? self.capture(panel, "after-egress")
@@ -65,15 +65,14 @@ final class GuardPromptPanelTests: XCTestCase {
                          charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code)!
     }
 
-    /// Runs the real modal prompt and acts on it from inside its modal loop.
-    private func run(_ content: GuardPromptContent, after: @escaping (GuardPromptPanel) -> Void) -> GuardPromptChoice {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            guard let panel = NSApp.modalWindow as? GuardPromptPanel else {
-                XCTFail("the modal window is not the guard prompt panel"); NSApp.abortModal(); return
-            }
+    /// Shows the real prompt and acts on it once it is on screen.
+    private func run(_ content: GuardPromptContent, after: @escaping (GuardPromptPanel) -> Void) async -> GuardPromptChoice {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard let panel = GuardPromptPanel.shown else { XCTFail("the guard prompt panel is not shown"); return }
             after(panel)
         }
-        return GuardPromptPanel.run(content)
+        return await GuardPromptPanel.present(content)
     }
 
     /// Saves a review screenshot to .build/guard-qa when screen capture is
@@ -125,9 +124,9 @@ final class GuardPromptPanelTests: XCTestCase {
         XCTAssertEqual(client.guardResolveCalls.map { "\($0.verdict) \($0.scope) \($0.expiry ?? "")" }, ["allow exact 24h"])
     }
 
-    func testReturnDeniesThroughTheModalPanel() throws {
+    func testReturnDeniesThroughThePanel() async throws {
         var width: CGFloat = 0
-        let choice = run(GuardPromptContent(pending: pending(advisor: GuardAdvice(assessment: "suspicious", confidence: 0.7, rationale: "Private SSH key outside the project.")),
+        let choice = await run(GuardPromptContent(pending: pending(advisor: GuardAdvice(assessment: "suspicious", confidence: 0.7, rationale: "Private SSH key outside the project.")),
                                             inspectUnavailableReason: nil)) { panel in
             width = panel.frame.width
             try? self.capture(panel, "after")
@@ -137,15 +136,15 @@ final class GuardPromptPanelTests: XCTestCase {
         XCTAssertEqual(width, GuardPromptPanel.width)
     }
 
-    func testEscapeDeniesThroughTheModalPanel() {
-        let choice = run(GuardPromptContent(pending: pending(), inspectUnavailableReason: nil)) { panel in
+    func testEscapeDeniesThroughThePanel() async {
+        let choice = await run(GuardPromptContent(pending: pending(), inspectUnavailableReason: nil)) { panel in
             NSApp.sendEvent(self.key(53, "\u{1b}", in: panel))
         }
         XCTAssertEqual(choice, .deny)
     }
 
-    func testChosenDurationIsTheAllowScope() throws {
-        let choice = run(GuardPromptContent(pending: egress(read: [Self.githubRead, "web page https://example.com/page.html"], scopes: pending().availableScopes),
+    func testChosenDurationIsTheAllowScope() async throws {
+        let choice = await run(GuardPromptContent(pending: egress(read: [Self.githubRead, "web page https://example.com/page.html"], scopes: pending().availableScopes),
                                             inspectUnavailableReason: "Session identity unavailable")) { panel in
             XCTAssertEqual(panel.model.durations.map(\.label), ["Once", "This session", "24 hours", "7 days"])
             XCTAssertEqual(panel.model.allowTitle, "Allow Once")
@@ -166,26 +165,41 @@ final class GuardPromptPanelTests: XCTestCase {
 
     /// The agent's app is in front when a guard request arrives: the prompt
     /// stays visible above it and on the Space in front.
-    func testPromptStaysInFrontOfTheActiveApp() {
-        let choice = run(GuardPromptContent(pending: egress(read: [Self.githubRead]), inspectUnavailableReason: nil)) { panel in
+    func testPromptStaysInFrontOfTheActiveApp() async {
+        let choice = await run(GuardPromptContent(pending: egress(read: [Self.githubRead]), inspectUnavailableReason: nil)) { panel in
             XCTAssertGreaterThanOrEqual(panel.level.rawValue, NSWindow.Level.modalPanel.rawValue)
             XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
             XCTAssertTrue(panel.collectionBehavior.contains(.fullScreenAuxiliary))
-            NSApp.abortModal()
+            panel.withdraw()
         }
         XCTAssertEqual(choice, .withdrawn)
     }
 
-    func testWithdrawalAnswersNothing() {
-        let choice = run(GuardPromptContent(pending: pending(), inspectUnavailableReason: nil)) { _ in NSApp.abortModal() }
+    /// While the real prompt is up, polling continues: a request answered
+    /// elsewhere closes it and nothing is submitted.
+    func testPromptClosesWhenTheRequestIsAnsweredElsewhere() async {
+        let client = StubDaemonClient()
+        client.pending = [pending()]
+        let state = AppState(client: client)
+        state.fetch()
+        for _ in 0..<100 where GuardPromptPanel.shown == nil { try? await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertNotNil(GuardPromptPanel.shown)
+        client.pending = []
+        await state.performFetch()
+        for _ in 0..<100 where GuardPromptPanel.shown != nil { try? await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertNil(GuardPromptPanel.shown, "the prompt stayed up after the request left")
+        XCTAssertNil(state.promptingIDForTesting)
+        XCTAssertEqual(client.guardResolveCalls.count, 0)
+    }
+
+    func testWithdrawalAnswersNothing() async {
+        let choice = await run(GuardPromptContent(pending: pending(), inspectUnavailableReason: nil)) { $0.withdraw() }
         XCTAssertEqual(choice, .withdrawn)
     }
 }
 
-/// Hands the guard prompt panel to `answer` every 20 ms while it is the modal
-/// window; any other modal window is aborted and recorded. A prompt run from a
-/// main-actor task blocks the main queue, but run loop timers still fire
-/// inside its modal loop.
+/// Hands the shown guard prompt panel to `answer` every 20 ms; any modal
+/// window is aborted and recorded.
 @MainActor
 private final class ModalAnswerer: NSObject {
     private let answer: (GuardPromptPanel) -> Void
@@ -202,13 +216,15 @@ private final class ModalAnswerer: NSObject {
     }
 
     @objc private func tick() {
-        guard let window = NSApp.modalWindow else { return }
-        if let panel = window as? GuardPromptPanel, Date() < deadline { answer(panel); return }
-        others.append(String(describing: type(of: window)))
-        NSApp.abortModal()
+        if let window = NSApp.modalWindow {
+            others.append(String(describing: type(of: window)))
+            NSApp.abortModal()
+            return
+        }
+        if let panel = GuardPromptPanel.shown, Date() < deadline { answer(panel) }
     }
 
-    /// Waits for `done` or the deadline, then stops; returns the other modal windows.
+    /// Waits for `done` or the deadline, then stops; returns the modal windows seen.
     func wait(until done: () -> Bool) async -> [String] {
         while !done(), Date() < deadline { try? await Task.sleep(nanoseconds: 20_000_000) }
         timer?.invalidate()
