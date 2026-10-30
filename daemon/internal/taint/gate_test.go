@@ -26,16 +26,17 @@ func newFixture(t *testing.T) *fixture {
 		Dir:              filepath.Join(dir, "taint"),
 		ModesPath:        filepath.Join(dir, "guard-modes.json"),
 		CwdOverridesPath: filepath.Join(dir, "guard-cwd-overrides.json"),
+		CategoriesPath:   filepath.Join(dir, "guard-categories.json"),
 		Exempt:           map[string]bool{"api.anthropic.com": true},
 		ClientPID: func(context.Context, string) (int32, error) {
 			f.lookups++
 			return 4242, nil
 		},
-		Session: func(pid int32) (string, string, bool) {
+		Sessions: func(pid int32) []Session {
 			if pid != 4242 {
-				return "", "", false
+				return nil
 			}
-			return "sess-1", "/work/app", true
+			return []Session{{ID: "sess-1", Workspace: "/work/app"}}
 		},
 	}
 	if err := os.MkdirAll(f.gate.Dir, 0o700); err != nil {
@@ -80,6 +81,7 @@ func TestOnlyDenyRefuses(t *testing.T) {
 	}{
 		{"shipped monitor", "", "", false},
 		{"prompt", `{"untrusted-egress":"prompt"}`, "", false},
+		{"session", `{"untrusted-egress":"session"}`, "", false},
 		{"unknown mode denies", `{"untrusted-egress":"block"}`, "", true},
 		{"workspace overlay monitors", `{"untrusted-egress":"deny"}`, `[{"cwd_prefix":"/work","rules":{"untrusted-egress":"monitor"}}]`, false},
 		{"workspace overlay denies", "", `[{"cwd_prefix":"/work/app","rules":{"untrusted-egress":"deny"}}]`, true},
@@ -147,5 +149,73 @@ func TestClientLookupOnlyWhenARefusalIsPossible(t *testing.T) {
 	f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net")
 	if f.lookups != 0 {
 		t.Fatalf("lookups with the rule in monitor = %d", f.lookups)
+	}
+}
+
+func TestInjectedRuleRaisesTheMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, record string
+		blocked      bool
+	}{
+		{"plain taint", `{"source":"web: https://evil.example"}`, false},
+		{"injection match", `{"source":"web: https://evil.example","injection":{"match":"ignore previous"}}`, true},
+		{"null injection", `{"source":"web: https://evil.example","injection":null}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.taint(t, "sess-1", tc.record)
+			write(t, f.gate.ModesPath, `{"untrusted-egress":"monitor","untrusted-egress-injected":"deny"}`)
+			if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); v.Blocked != tc.blocked {
+				t.Fatalf("blocked = %v, want %v (%+v)", v.Blocked, tc.blocked, v)
+			}
+		})
+	}
+}
+
+func TestNetworkSendKindMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, modes, categories string
+		blocked                 bool
+	}{
+		{"kind denies", `{"untrusted-egress":"monitor"}`, `{"untrusted-egress":{"network-send":"deny"}}`, true},
+		{"kind monitors under a deny rule", `{"untrusted-egress":"deny"}`, `{"untrusted-egress":{"network-send":"monitor"}}`, false},
+		{"other kind ignored", `{"untrusted-egress":"monitor"}`, `{"untrusted-egress":{"git-push":"deny"}}`, false},
+		{"unknown kind mode denies", "", `{"untrusted-egress":{"network-send":"block"}}`, true},
+		{"corrupt file denies", "", `{not json`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.taint(t, "sess-1", `{"source":"web: https://evil.example"}`)
+			if tc.modes != "" {
+				write(t, f.gate.ModesPath, tc.modes)
+			}
+			write(t, f.gate.CategoriesPath, tc.categories)
+			if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); v.Blocked != tc.blocked {
+				t.Fatalf("blocked = %v, want %v (%+v)", v.Blocked, tc.blocked, v)
+			}
+		})
+	}
+}
+
+func TestAnyTaintedSessionOnTheRootRefuses(t *testing.T) {
+	f := newFixture(t)
+	f.gate.Sessions = func(int32) []Session {
+		return []Session{{ID: "thread-a", Workspace: "/work/a"}, {ID: "thread-b", Workspace: "/work/b"}}
+	}
+	f.taint(t, "thread-b", `{"source":"web: https://evil.example"}`)
+	write(t, f.gate.CwdOverridesPath, `[{"cwd_prefix":"/work/b","rules":{"untrusted-egress":"deny"}}]`)
+	if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); !v.Blocked || v.SessionID != "thread-b" {
+		t.Fatalf("verdict = %+v, want blocked for thread-b", v)
+	}
+}
+
+func TestSessionIDClipsByCharacter(t *testing.T) {
+	f := newFixture(t)
+	long := strings.Repeat("é", 70)
+	f.gate.Sessions = func(int32) []Session { return []Session{{ID: long, Workspace: "/work/app"}} }
+	f.taint(t, strings.Repeat("é", 64), `{"source":"web: https://evil.example"}`)
+	write(t, f.gate.ModesPath, `{"untrusted-egress":"deny"}`)
+	if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); !v.Blocked {
+		t.Fatalf("record under the hook's 64-character id missed: %+v", v)
 	}
 }

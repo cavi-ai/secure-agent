@@ -49,6 +49,13 @@ func DefaultGuardModesPath() string {
 	return filepath.Join(home, ".config", "secure-agent", "guard-modes.json")
 }
 
+// DefaultGuardCategoriesPath returns the per-kind untrusted-egress mode file
+// the hook reads.
+func DefaultGuardCategoriesPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "secure-agent", "guard-categories.json")
+}
+
 // CwdOverridesPath returns where this daemon writes the hook policy file:
 // beside its own control socket, so a second daemon (another -config, a test
 // run) never rewrites the primary's file. The default socket lives in
