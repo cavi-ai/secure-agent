@@ -25,7 +25,8 @@ final class GuardSendKindTests: XCTestCase {
         XCTAssertEqual(m.durations.map(\.label), ["Once", "This session", "24 hours", "7 days", "Always"])
         XCTAssertEqual(m.kindLabel, "git pushes")
         XCTAssertTrue(m.coversKind)
-        XCTAssertEqual(m.allowTitle, "Allow for this session")
+        XCTAssertTrue(m.offersKind)
+        XCTAssertEqual(m.allowTitle, "Allow all git pushes for this session")
         XCTAssertEqual(m.repeatNote, "Asked 3 times this session about git pushes.")
         XCTAssertTrue(m.allowNote.hasPrefix("Allows all git pushes from this tool in this workspace until this session ends."), m.allowNote)
         XCTAssertTrue(m.allowNote.contains("Other kinds of send still ask."), m.allowNote)
@@ -52,6 +53,21 @@ final class GuardSendKindTests: XCTestCase {
         XCTAssertEqual(scope.kind, "standing")
         XCTAssertNil(try wire(false)["category"], "an exact answer must not claim the kind")
         XCTAssertEqual(try wire(true)["category"] as? Bool, true)
+    }
+
+    /// A duration without a kind permission hides the Covers picker, and
+    /// Allow names the narrower grant it sends.
+    func testDurationWithoutAKindPermissionGrantsThisSend() throws {
+        let m = try model("""
+        {"id":"p3","agent":"codex","tool":"Bash","path":"git push origin","rule_id":"untrusted-egress","ts":"2026-10-30T20:00:00Z",
+         "session_id":"s1","workspace":"/work","reader_exe":"/opt/homebrew/bin/codex","categories":["git-push"],
+         "available_scopes":[{"kind":"once"},{"kind":"session"},{"kind":"exact","expiry":"24h"},{"kind":"session","category":true}]}
+        """)
+        m.coversKind = true
+        m.duration = .scope(GuardScopeChoice(kind: "exact", expiry: "24h"))
+        XCTAssertFalse(m.offersKind)
+        XCTAssertEqual(m.allowTitle, "Allow for 24 hours")
+        XCTAssertEqual(m.chosenScope, GuardScopeChoice(kind: "exact", expiry: "24h"))
     }
 
     func testUnattestedPromptOffersOnlyOnce() throws {

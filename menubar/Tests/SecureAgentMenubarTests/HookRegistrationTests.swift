@@ -74,11 +74,20 @@ final class HookRegistrationTests: XCTestCase {
         XCTAssertEqual(contents, "not json {")
     }
 
+    /// An unparsable settings file is reported, so uninstall keeps the
+    /// scripts it still registers.
+    func testClaudeUnregisterThrowsOnInvalidSettings() throws {
+        try FileManager.default.createDirectory(atPath: (settingsPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try Data("{not json".utf8).write(to: URL(fileURLWithPath: settingsPath))
+        XCTAssertThrowsError(try HookRegistry.Claude.unregister(at: settingsPath))
+        XCTAssertEqual(String(decoding: FileManager.default.contents(atPath: settingsPath) ?? Data(), as: UTF8.self), "{not json")
+    }
+
     func testUnregisterRemovesOnlyOurs() throws {
         try HookRegistry.Claude.register(at: settingsPath, command: command)
         XCTAssertTrue(HookRegistry.Claude.registered(at: settingsPath))
 
-        HookRegistry.Claude.unregister(at: settingsPath)
+        try HookRegistry.Claude.unregister(at: settingsPath)
         XCTAssertFalse(HookRegistry.Claude.registered(at: settingsPath))
 
         let root = try readSettings()
@@ -246,7 +255,7 @@ final class CursorHookRegistrationTests: XCTestCase {
         let claudeCommand = "python3 /tmp/x/.claude/hooks/secret_guard.py"
         try HookRegistry.Claude.register(at: claude, command: claudeCommand)
         XCTAssertTrue(HookRegistry.Claude.registered(at: claude))
-        HookRegistry.Claude.unregister(at: claude)
+        try HookRegistry.Claude.unregister(at: claude)
         XCTAssertFalse(HookRegistry.Claude.registered(at: claude))
 
         let cursor = dir + "/hooks.json"

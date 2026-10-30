@@ -290,10 +290,15 @@ enum HookRegistry {
             }
         }
 
-        static func unregister(at path: String) {
-            guard let data = FileManager.default.contents(atPath: path),
-                  var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  var hooks = root["hooks"] as? [String: Any] else { return }
+        /// Throws when the file exists but cannot be read, parsed or written:
+        /// its hook scripts must then stay in place.
+        static func unregister(at path: String) throws {
+            guard let data = FileManager.default.contents(atPath: path) else {
+                if FileManager.default.fileExists(atPath: path) { throw unreadable() }
+                return
+            }
+            guard var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw unreadable() }
+            guard var hooks = root["hooks"] as? [String: Any] else { return }
             for eventName in ["PreToolUse", "PostToolUse"] {
                 let groups = (hooks[eventName] as? [[String: Any]] ?? []).compactMap { group -> [String: Any]? in
                     let kept = (group["hooks"] as? [[String: Any]] ?? []).filter { h in
@@ -308,9 +313,12 @@ enum HookRegistry {
                 hooks[eventName] = groups
             }
             root["hooks"] = hooks
-            if let out = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) {
-                try? out.write(to: URL(fileURLWithPath: path), options: .atomic)
-            }
+            try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+                .write(to: URL(fileURLWithPath: path), options: .atomic)
+        }
+
+        private static func unreadable() -> NSError {
+            NSError(domain: "SetupManager", code: 3, userInfo: [NSLocalizedDescriptionKey: "Claude settings.json is not valid JSON; its Secure Agent hooks were left registered."])
         }
 
         fileprivate static func groupsContainGuard(_ groups: [[String: Any]], command: String? = nil) -> Bool {

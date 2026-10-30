@@ -186,6 +186,9 @@ func TestGuardCategoryPermissionCoversVariants(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
+	if !strings.Contains(w.Body.String(), `"category":true`) {
+		t.Fatalf("receipt does not name the kind permission: %s", w.Body.String())
+	}
 	if hook := <-done; !strings.Contains(hook.Body.String(), `"verdict":"allow"`) {
 		t.Fatal(hook.Body.String())
 	}

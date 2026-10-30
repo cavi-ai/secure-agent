@@ -23,6 +23,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: guard prompts open above the app in front and on its Space instead of behind the agent's window.
 - Evidence storage: finding reviews keep their attribution after the session row is pruned or gains a start time, so the startup review backfill no longer fails with "review evidence changed".
 - File telemetry: a file renamed to a new name is recorded at its destination path.
+- Menu bar: the guard prompt no longer runs a modal loop that stopped polling and the event stream, so a request answered in the console or expired closes the prompt instead of leaving it up.
+- Menu bar: the guard prompt shows the Covers choice only for durations that offer it, Allow names a grant for a whole kind of send, and a receipt for a longer or wider grant than chosen is not reported as submitted.
+- Menu bar: Uninstall unregisters every harness before removing its scripts, keeps going past a failing step and reports it, and no longer waits on OpenClaw without a limit; installing all hooks covers only agents found on this Mac.
 - Hooks: a guard hook symlinked by `plugin/install.sh` loads `guard-rules.json`; a hook that fails mid-check asks on Claude Code and denies elsewhere instead of letting the call through; all prompts of one hook run end before the harness's hook timeout.
 - Uninstall: `packaging/uninstall.sh` removes Secure Agent's hook entries from Claude Code, Cursor, Codex, Antigravity and OpenCode configs before their scripts, and removes every harness's hook scripts.
 - Proxy: the `untrusted-egress` refusal applies `untrusted-egress-injected` and the `network-send` kind's mode as the hook does, and refuses a connection from an app server when any of its live sessions would be refused.
