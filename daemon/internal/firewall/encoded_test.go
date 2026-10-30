@@ -37,13 +37,14 @@ func TestMatchFindsEncodedRegisteredSecret(t *testing.T) {
 		esc = append(esc, fmt.Sprintf(`\x%02x`, b))
 	}
 	for name, body := range map[string]string{
-		"decimal list":    "const buildSpec = [" + strings.Join(dec, ", ") + "];",
-		"decimal compact": strings.Join(dec, ","),
-		"0x list":         "uint8_t spec[] = {" + strings.Join(oxs, ", ") + "};",
-		"hex":             "checksum: " + hex.EncodeToString(env),
-		"hex escapes":     `payload = b"` + strings.Join(esc, "") + `"`,
-		"url-safe base64": "d=" + base64.URLEncoding.EncodeToString(env),
-		"unpadded base64": "d=" + base64.RawStdEncoding.EncodeToString(env),
+		"decimal list":                "const buildSpec = [" + strings.Join(dec, ", ") + "];",
+		"decimal compact":             strings.Join(dec, ","),
+		"0x list":                     "uint8_t spec[] = {" + strings.Join(oxs, ", ") + "};",
+		"hex":                         "checksum: " + hex.EncodeToString(env),
+		"hex after a stray hex digit": "checksum: a" + hex.EncodeToString(env),
+		"hex escapes":                 `payload = b"` + strings.Join(esc, "") + `"`,
+		"url-safe base64":             "d=" + base64.URLEncoding.EncodeToString(env),
+		"unpadded base64":             "d=" + base64.RawStdEncoding.EncodeToString(env),
 	} {
 		hits := reg.Match([]byte(body))
 		if len(hits) != 1 || hits[0].RuleID != "aws-secret" || hits[0].Layer != LayerFingerprint {

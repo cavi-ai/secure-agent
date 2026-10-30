@@ -51,8 +51,9 @@ func handleCanary(client *http.Client, args []string) {
 }
 
 // canaryPlant creates path (never overwriting) with decoy credentials, adds it
-// as a fingerprint ingest source and registers its fingerprints. A file whose
-// registration fails is removed, so no decoy is left unwatched.
+// as a fingerprint ingest source and registers its fingerprints. A file the
+// daemon does not take as a source is removed; one whose fingerprints fail to
+// register stays a source for `secure-agent fingerprint` to retry.
 func canaryPlant(w io.Writer, path string, random io.Reader, client *http.Client) int {
 	var lines []string
 	for _, c := range canaryTemplate {
