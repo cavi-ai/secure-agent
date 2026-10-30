@@ -1,8 +1,12 @@
 package correlate
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"html"
+	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -95,6 +99,9 @@ type Correlator struct {
 	// launchWriters[path] is the last agent that created, changed or deleted
 	// a file in a launchd agent or daemon directory.
 	launchWriters map[string]launchWriter
+	// trustWriters[subject] is the last agent that wrote an app bundle,
+	// installer package or configuration profile file.
+	trustWriters map[string]trustWriter
 	// allowlistOverrides supplies user-approved hosts (console suggestions) on
 	// top of the config allowlist. Nil unless supplied in Hooks.
 	allowlistOverrides func(agent string) []string
@@ -454,13 +461,24 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 		return c.malwareDetectedLocked(e)
 	}
 
+	c.readTrustProfileLocked(e)
 	info, isAgent := c.tagger.Tag(e.PID)
 	if !isAgent {
 		// BTM names smd, not the writer, for a plist dropped into a launchd
 		// directory: the agent that wrote that file is the actor.
 		if w, ok := c.launchWriterLocked(e); ok {
 			e.PID, e.PPID, e.ExePath, e.SessionID = w.pid, 0, w.exe, w.sessionID
-			return c.systemChangeLocked(e, w.agent)
+			return c.systemChangeLocked(e, w.agent, time.Time{})
+		}
+		// syspolicyd reports the user's Gatekeeper override and System
+		// Settings the user's profile install: the agent that wrote the app,
+		// package or profile file staged the change.
+		if w, subject, ok := c.trustWriterLocked(e); ok {
+			if e.Kind == event.KindProfileAdd {
+				e.Path = subject
+			}
+			e.PID, e.PPID, e.ExePath, e.SessionID = w.pid, 0, w.exe, w.sessionID
+			return c.systemChangeLocked(e, w.agent, w.at)
 		}
 		return c.untaggedKeychainLocked(e)
 	}
@@ -472,6 +490,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 
 	var flags []model.Flag
 	c.rememberLaunchWriterLocked(e, info.Name)
+	c.rememberTrustWriterLocked(e, info.Name)
 
 	switch e.Kind {
 	case event.KindFileOpen, event.KindFileWrite, event.KindPluginAction:
@@ -565,7 +584,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 		// installing a configuration profile or overriding Gatekeeper changes
 		// what macOS trusts. Background Task Management and profile events
 		// carry the instigating process, so the agent is the actor.
-		flags = append(flags, c.systemChangeLocked(e, info.Name)...)
+		flags = append(flags, c.systemChangeLocked(e, info.Name, time.Time{})...)
 
 	case event.KindConnOpen:
 		if c.isVendorHost(info.Name, e.RemoteHost) {
@@ -685,9 +704,10 @@ func testValueEvidence(signals []string, ts time.Time) model.EvidenceItem {
 
 // systemChangeLocked applies launch-item-change (a background item added or
 // removed) and trust-change (a configuration profile installed, a Gatekeeper
-// override) to one event an agent instigated. Severity 3: each outlives the
-// agent's session. Callers hold c.mu.
-func (c *Correlator) systemChangeLocked(e event.Event, agent string) []model.Flag {
+// override) to one event an agent instigated, or, when wrote is set, one the
+// user approved for the file (Path) the agent wrote then. Severity 3: each
+// outlives the agent's session. Callers hold c.mu.
+func (c *Correlator) systemChangeLocked(e event.Event, agent string, wrote time.Time) []model.Flag {
 	rule, kind, sub := "trust-change", "", ""
 	var text string
 	at := e.TS.Format(time.RFC3339)
@@ -705,9 +725,15 @@ func (c *Correlator) systemChangeLocked(e event.Event, agent string) []model.Fla
 	case event.KindProfileAdd:
 		kind, sub, label = "profile", "configuration profile installed", e.Detail
 		text = fmt.Sprintf("%s (pid %d) installed configuration profile '%s' at %s", agent, e.PID, e.Detail, at)
+		if !wrote.IsZero() {
+			text = fmt.Sprintf("configuration profile '%s' installed at %s from %s, which %s (pid %d) wrote at %s", e.Detail, at, e.Path, agent, e.PID, wrote.Format(time.RFC3339))
+		}
 	case event.KindGatekeeperOverride:
 		kind, sub = "gatekeeper", "Gatekeeper override"
 		text = fmt.Sprintf("%s (pid %d) overrode Gatekeeper for %s at %s", agent, e.PID, e.Path, at)
+		if !wrote.IsZero() {
+			text = fmt.Sprintf("Gatekeeper overridden for %s at %s, which %s (pid %d) wrote at %s", e.Path, at, agent, e.PID, wrote.Format(time.RFC3339))
+		}
 	default:
 		return nil
 	}
@@ -797,6 +823,168 @@ func (c *Correlator) launchWriterLocked(e event.Event) (launchWriter, bool) {
 		return launchWriter{}, false
 	}
 	return w, true
+}
+
+// trustWriter is the agent process that last wrote one trust subject and, for
+// a profile file, the profile names read from it after that write.
+type trustWriter struct {
+	launchWriter
+	names []string
+	read  bool
+}
+
+// maxTrustWriters bounds trustWriters; the oldest entry gives way.
+const maxTrustWriters = 512
+
+// trustWriterWindow is how long after an agent writes an app bundle, package
+// or profile file a Gatekeeper override or profile install of it is still the
+// agent's: the user's approval can come hours later.
+const trustWriterWindow = 24 * time.Hour
+
+// maxProfileFileRead bounds the bytes read from one profile file.
+const maxProfileFileRead = 1 << 20
+
+// trustSubject returns what a write to path stages for a later trust change:
+// the outermost app bundle the path is in or names, an installer package or a
+// configuration profile file.
+func trustSubject(path string) (string, bool) {
+	if i := strings.Index(path, ".app/"); i >= 0 {
+		return path[:i+len(".app")], true
+	}
+	for _, ext := range []string{".app", ".pkg", ".mpkg", ".mobileconfig"} {
+		if strings.HasSuffix(path, ext) {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+// rememberTrustWriterLocked records an agent's create, rename or write-open of
+// a trust subject. Callers hold c.mu.
+func (c *Correlator) rememberTrustWriterLocked(e event.Event, agent string) {
+	switch e.Kind {
+	case event.KindFileWrite:
+	case event.KindFileOpen:
+		if !e.OpensForWrite() {
+			return
+		}
+	default:
+		return
+	}
+	subject, ok := trustSubject(e.Path)
+	if !ok {
+		return
+	}
+	if c.trustWriters == nil {
+		c.trustWriters = make(map[string]trustWriter)
+	}
+	if _, ok := c.trustWriters[subject]; !ok && len(c.trustWriters) >= maxTrustWriters {
+		oldest := ""
+		for s, w := range c.trustWriters {
+			if oldest == "" || w.at.Before(c.trustWriters[oldest].at) {
+				oldest = s
+			}
+		}
+		delete(c.trustWriters, oldest)
+	}
+	c.trustWriters[subject] = trustWriter{launchWriter: launchWriter{pid: e.PID, agent: agent, exe: e.ExePath, sessionID: e.SessionID, at: e.TS}}
+}
+
+// readTrustProfileLocked reads the profile names from an agent-written profile
+// file the first time any process opens it to read after the write (mdmclient
+// when the file is opened for install), so the install still matches once the
+// file is gone. Callers hold c.mu.
+func (c *Correlator) readTrustProfileLocked(e event.Event) {
+	if e.Kind != event.KindFileOpen || e.OpensForWrite() || !strings.HasSuffix(e.Path, ".mobileconfig") {
+		return
+	}
+	w, ok := c.trustWriters[e.Path]
+	if !ok || w.read {
+		return
+	}
+	b, err := readProfileFile(e.Path)
+	if err != nil {
+		return
+	}
+	w.names, w.read = profileNames(b), true
+	c.trustWriters[e.Path] = w
+}
+
+// trustWriterLocked returns the agent that, within trustWriterWindow before a
+// Gatekeeper override or profile install, wrote the overridden app bundle or
+// package or a profile file naming the installed profile, and that file.
+// Callers hold c.mu.
+func (c *Correlator) trustWriterLocked(e event.Event) (launchWriter, string, bool) {
+	inWindow := func(w trustWriter) bool {
+		return e.TS.Sub(w.at) <= trustWriterWindow && w.at.Sub(e.TS) <= time.Second
+	}
+	switch e.Kind {
+	case event.KindGatekeeperOverride:
+		subject, ok := trustSubject(e.Path)
+		if !ok {
+			return launchWriter{}, "", false
+		}
+		if w, ok := c.trustWriters[subject]; ok && inWindow(w) {
+			return w.launchWriter, subject, true
+		}
+	case event.KindProfileAdd:
+		var best trustWriter
+		subject := ""
+		for s, w := range c.trustWriters {
+			if !strings.HasSuffix(s, ".mobileconfig") || !inWindow(w) || (subject != "" && !w.at.After(best.at)) {
+				continue
+			}
+			names := w.names
+			if !w.read {
+				b, err := readProfileFile(s)
+				if err != nil {
+					continue
+				}
+				names = profileNames(b)
+			}
+			if slices.Contains(names, e.Detail) {
+				best, subject = w, s
+			}
+		}
+		if subject != "" {
+			return best.launchWriter, subject, true
+		}
+	}
+	return launchWriter{}, "", false
+}
+
+// readProfileFile reads up to maxProfileFileRead bytes of a profile file.
+func readProfileFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, maxProfileFileRead))
+}
+
+// profileNames returns the PayloadIdentifier and PayloadDisplayName strings
+// of a profile file's XML property list, signed or not.
+func profileNames(b []byte) []string {
+	var names []string
+	for _, key := range []string{"PayloadIdentifier", "PayloadDisplayName"} {
+		marker := []byte("<key>" + key + "</key>")
+		for rest := b; ; {
+			i := bytes.Index(rest, marker)
+			if i < 0 {
+				break
+			}
+			rest = bytes.TrimLeft(rest[i+len(marker):], " \t\r\n")
+			v, ok := bytes.CutPrefix(rest, []byte("<string>"))
+			if !ok {
+				continue
+			}
+			if j := bytes.Index(v, []byte("</string>")); j >= 0 {
+				names = append(names, html.UnescapeString(string(v[:j])))
+			}
+		}
+	}
+	return names
 }
 
 // malwareDetectedLocked applies xprotect-detection to one XProtect detection.
@@ -1064,6 +1252,11 @@ func (c *Correlator) evictStaleLocked(now time.Time) {
 	for path, w := range c.launchWriters {
 		if now.Sub(w.at) > launchWriterWindow {
 			delete(c.launchWriters, path)
+		}
+	}
+	for subject, w := range c.trustWriters {
+		if now.Sub(w.at) > trustWriterWindow {
+			delete(c.trustWriters, subject)
 		}
 	}
 	// Repeat suppression outlives every rule window, but expired subjects

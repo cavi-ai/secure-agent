@@ -66,6 +66,12 @@ func TestKeepESLine(t *testing.T) {
 		{"escaped project file create", strings.ReplaceAll(esCreateTestLine("/Users/dev/project", "main.go"), "/", `\/`), false},
 		{"launch daemon create", esCreateTestLine("/Library/LaunchDaemons", "com.example.helper.plist"), true},
 		{"spaced layout launch agent create", `{"process": {"pid": 7}, "event": {"create": {"destination": {"new_path": {"dir": {"path": "/Library/LaunchAgents"}, "filename": "a.plist"}}}}}`, true},
+		{"app bundle create", esCreateTestLine("/Users/dev/Downloads", "Tool.app"), true},
+		{"escaped app bundle create", strings.ReplaceAll(esCreateTestLine("/Users/dev/Downloads", "Tool.app"), "/", `\/`), true},
+		{"installer package create", esCreateTestLine("/Users/dev/Downloads", "tool.pkg"), true},
+		{"profile file create in user temp", esCreateTestLine("/private/var/folders/n0/x1y2/T", "proxy.mobileconfig"), true},
+		{"file inside app bundle create", esCreateTestLine("/Users/dev/Downloads/Tool.app/Contents", "Info.plist"), false},
+		{"profile file open in user temp", esOpenTestLine("/private/var/folders/n0/x1y2/T/proxy.mobileconfig"), true},
 
 		{"aws credentials open", esOpenTestLine("/Users/dev/.aws/credentials"), true},
 		{"ssh key open", esOpenTestLine("/Users/dev/.ssh/id_ed25519"), true},
