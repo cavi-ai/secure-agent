@@ -225,6 +225,19 @@ func observeReviewTx(tx *sql.Tx, f model.Flag, a model.FindingAssessment) (r mod
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return r, err
 	}
+	// A flag keeps the attribution it was first reviewed under: its session
+	// row may later be pruned or gain a start time.
+	if priorID != "" {
+		kept := model.ContextForReview(f, !reliable)
+		var keptID string
+		e := tx.QueryRow(`SELECT id FROM finding_reviews WHERE context_key=?`, kept.Key()).Scan(&keptID)
+		if e != nil && !errors.Is(e, sql.ErrNoRows) {
+			return r, e
+		}
+		if keptID == priorID {
+			c, id = kept, kept.Key()
+		}
+	}
 	// An existing source must never be silently moved into a different
 	// decision context by an update. Identity promotion has its own transaction.
 	r, err = reviewFromRow(tx.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE context_key=?`, id))

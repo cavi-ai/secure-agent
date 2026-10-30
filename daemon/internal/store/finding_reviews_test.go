@@ -384,6 +384,65 @@ func TestReviewSessionPromotionPreservesIdentityAndReopensRevision(t *testing.T)
 	}
 }
 
+// A flag keeps its review across restarts when its session row later changes
+// reliability, either way.
+func TestReviewKeepsAttributionWhenSessionChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name, attribution string
+		session           model.Session
+		change            func(t *testing.T, s *Store)
+	}{
+		{"retention pruned the session", "stored-session",
+			model.Session{ID: "session", Harness: "codex", Confidence: model.ConfHook, StartedAt: time.Now(), LastSeenAt: time.Now()},
+			func(t *testing.T, s *Store) {
+				if err := s.EndSession("session", time.Now().Add(-31*24*time.Hour)); err != nil {
+					t.Fatal(err)
+				}
+				s.retain()
+				if _, ok, err := s.GetSession("session"); ok || err != nil {
+					t.Fatalf("retention kept the ended session: ok=%v err=%v", ok, err)
+				}
+			}},
+		{"session gained its root start time", "source-only",
+			model.Session{ID: "session", Harness: "codex", Confidence: model.ConfProcessTree, RootPID: 42, StartedAt: time.Now(), LastSeenAt: time.Now()},
+			func(t *testing.T, s *Store) {
+				if err := s.UpsertSession(model.Session{ID: "session", Harness: "codex", Confidence: model.ConfProcessTree, RootPID: 42, RootStartedAt: "1700000000", StartedAt: time.Now(), LastSeenAt: time.Now()}); err != nil {
+					t.Fatal(err)
+				}
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "reviews.db")
+			s, err := Open(path, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = s.UpsertSession(tc.session); err != nil {
+				t.Fatal(err)
+			}
+			s.PutFlag(reviewFlag("source"))
+			old := onlyReview(t, s)
+			if _, err = s.DecideFindingReview(model.ReviewDecisionRequest{ID: old.ID, Revision: old.Revision, Action: "acknowledge"}); err != nil {
+				t.Fatal(err)
+			}
+			tc.change(t, s)
+			s.Close()
+			reopened, err := Open(path, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			if h := reopened.WriteHealth(); len(h.Active) != 0 || h.Failures != 0 {
+				t.Fatalf("review backfill failed: %+v", h)
+			}
+			r := onlyReview(t, reopened)
+			if r.ID != old.ID || r.Context.Attribution != tc.attribution || r.ReviewState != "reviewed" || r.Count != 1 {
+				t.Fatalf("review changed: %+v", r)
+			}
+		})
+	}
+}
+
 func TestReviewSourceWriteWithoutProjectionRejectsOldRevision(t *testing.T) {
 	s := reviewStore(t)
 	f := reviewFlag("source")
