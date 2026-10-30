@@ -23,6 +23,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: guard prompts open above the app in front and on its Space instead of behind the agent's window.
 - Evidence storage: finding reviews keep their attribution after the session row is pruned or gains a start time, so the startup review backfill no longer fails with "review evidence changed".
 - File telemetry: a file renamed to a new name is recorded at its destination path.
+- Menu bar: the guard prompt no longer runs a modal loop that stopped polling and the event stream, so a request answered in the console or expired closes the prompt instead of leaving it up.
+- Menu bar: the guard prompt shows the Covers choice only for durations that offer it, Allow names a grant for a whole kind of send, and a receipt for a longer or wider grant than chosen is not reported as submitted.
+- Menu bar: Uninstall unregisters every harness before removing its scripts, keeps going past a failing step and reports it, and no longer waits on OpenClaw without a limit; installing all hooks covers only agents found on this Mac.
 
 ## [1.4.0] - 2026-10-22
 
