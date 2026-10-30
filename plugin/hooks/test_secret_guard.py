@@ -645,13 +645,89 @@ def test_prompt_deadline_is_configurable_and_fails_safe():
     assert elapsed < 5, f"deadline not honored, took {elapsed:.2f}s"
 
 
+def test_hook_budget_caps_the_prompt_deadline():
+    with hanging_guard_stub() as sock:
+        env = {**_prompt_env(sock), "SECURE_AGENT_PROMPT_DEADLINE_S": "30", "SECURE_AGENT_HOOK_BUDGET_S": "0.5"}
+        t0 = time.time()
+        out = run(read(os.path.join(HOME, ".aws/credentials")), env=env)
+        elapsed = time.time() - t0
+    assert out.get("permission") == "deny", out
+    assert elapsed < 5, f"budget not honored, took {elapsed:.2f}s"
+
+
 EXTRA_TESTS += [
+    test_hook_budget_caps_the_prompt_deadline,
     test_guard_query_carries_session_id,
     test_prompt_daemon_down_claude_asks,
     test_prompt_daemon_down_cursor_denies,
     test_prompt_daemon_allows,
     test_prompt_daemon_malformed_response_denies,
     test_prompt_deadline_is_configurable_and_fails_safe,
+]
+
+
+def _crash_in_process(payload: dict, env: dict) -> dict:
+    """Runs main() with the checks forced to raise; returns the emitted JSON."""
+    import io
+    saved = (sys.stdin, sys.stdout, secret_guard.note_instruction_files, dict(os.environ))
+    out = io.StringIO()
+    os.environ.pop("CLAUDE_CODE_ENTRYPOINT", None)
+    os.environ.pop("CURSOR_TRACE_ID", None)
+    os.environ.update(env)
+
+    def boom(*_a, **_k):
+        raise KeyError("boom")
+    secret_guard.note_instruction_files = boom
+    sys.stdin, sys.stdout = io.StringIO(json.dumps(payload)), out
+    try:
+        try:
+            secret_guard.main()
+        except SystemExit:
+            pass
+    finally:
+        sys.stdin, sys.stdout, secret_guard.note_instruction_files = saved[:3]
+        os.environ.clear()
+        os.environ.update(saved[3])
+    return json.loads(out.getvalue() or "{}")
+
+
+def test_hook_crash_asks_on_claude():
+    out = _crash_in_process(bash("ls"), {"CLAUDE_CODE_ENTRYPOINT": "cli"})
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") == "ask", out
+
+
+def test_hook_crash_denies_elsewhere():
+    out = _crash_in_process(cursor("ls"), {"CURSOR_TRACE_ID": "t"})
+    assert out.get("permission") == "deny", out
+
+
+def test_hook_crash_after_tool_use_is_silent():
+    out = _crash_in_process({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"}},
+                            {"CLAUDE_CODE_ENTRYPOINT": "cli"})
+    assert out == {}, out
+
+
+def test_non_dict_tool_input_is_malformed():
+    out = run({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": ["ls"]})
+    assert out.get("permission") == "allow", out
+
+
+def test_guard_rules_load_through_a_symlinked_hook():
+    linked = tempfile.mkdtemp(prefix="secret-guard-link-")
+    for name in ("secret_guard.py", "activity_log.py", "injection_scan.py"):
+        os.symlink(os.path.join(os.path.dirname(HOOK), name), os.path.join(linked, name))
+    env = {**os.environ, "HOME": HOME, "SECURE_AGENT_ACTIVITY_LOG": os.path.join(HOME, "activity.jsonl")}
+    p = subprocess.run([sys.executable, os.path.join(linked, "secret_guard.py")], input=json.dumps(bash("ls")),
+                       capture_output=True, text=True, timeout=10, env=env)
+    assert p.returncode == 0 and json.loads(p.stdout).get("permission") == "allow", (p.returncode, p.stderr[-300:])
+
+
+EXTRA_TESTS += [
+    test_hook_crash_asks_on_claude,
+    test_hook_crash_denies_elsewhere,
+    test_hook_crash_after_tool_use_is_silent,
+    test_non_dict_tool_input_is_malformed,
+    test_guard_rules_load_through_a_symlinked_hook,
 ]
 
 
