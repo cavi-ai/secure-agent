@@ -758,16 +758,23 @@ except ValueError:
     PROMPT_DEADLINE_S = 45.0
 
 
-def _guard_query(agent, tool, path, rule_id, deadline_s, workspace="", probe_id="", detail=""):
+def _guard_query(agent, tool, path, rule_id, deadline_s, workspace="", probe_id="", detail="",
+                 categories=None, category_mode=""):
     """POST /guard/decision over the unix socket; return the decision dict or
     None if the daemon is unreachable. Own deadline < harness timeout. The
     workspace rides along so the advisor can judge whether the access is
     routine for this project rather than in the abstract; ``detail`` is the
-    reason line the prompt shows."""
+    reason line the prompt shows; ``categories`` are the kinds of send a
+    category permission must cover, and ``category_mode`` "session" asks once
+    per session for them."""
     payload = {"agent": agent, "tool": tool, "path": path, "rule_id": rule_id,
                "workspace": workspace}
     if detail:
         payload["detail"] = detail
+    if categories:
+        payload["categories"] = list(categories)
+    if category_mode:
+        payload["category_mode"] = category_mode
     if probe_id:
         payload["probe_id"] = probe_id
     else:
@@ -1389,15 +1396,20 @@ def _segment_egress(argv: list, raw: str) -> str:
     return ""
 
 
-def shell_egress_target(command: str) -> str:
-    """Every egress sink in a shell command line, joined, or "". One approval
-    covers exactly this set, never a sink the user was not shown."""
+def _shell_sinks(command: str) -> list:
+    """The distinct egress sinks in a shell command line, in order."""
     found = []
     for argv, raw in segments(command):
         sink = _segment_egress(argv, raw)
         if sink and sink not in found:
             found.append(sink)
-    return ", ".join(found)[:500]
+    return found
+
+
+def shell_egress_target(command: str) -> str:
+    """Every egress sink in a shell command line, joined, or "". One approval
+    covers exactly this set, never a sink the user was not shown."""
+    return ", ".join(_shell_sinks(command))[:500]
 
 
 def egress_target(tool: str, tool_input: dict, command: str) -> str:
@@ -1417,6 +1429,66 @@ def egress_target(tool: str, tool_input: dict, command: str) -> str:
     return ""
 
 
+# Kinds of send a category permission or mode covers. "mcp:<server>" is one
+# MCP server's sends; "mcp-send" sets the mode of every server without its own.
+EGRESS_CATEGORIES = ("git-push", "gh-write", "network-send", "mcp-send")
+CATEGORY_MODES = ("monitor", "session", "prompt", "deny")
+MCP_SERVER_RE = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def _sink_category(sink: str) -> str:
+    if sink == "git push" or sink.startswith("git push "):
+        return "git-push"
+    if sink.startswith("gh "):
+        return "gh-write"
+    return "network-send"
+
+
+def egress_categories(tool: str, tool_input: dict, command: str) -> list:
+    """The kinds of send this tool call makes, one per kind of sink it names."""
+    if command and tool in ("Bash", "Shell", ""):
+        out = []
+        for sink in _shell_sinks(command):
+            category = _sink_category(sink)
+            if category not in out:
+                out.append(category)
+        return out
+    if not egress_target(tool, tool_input, command):
+        return []
+    if tool.startswith("mcp__"):
+        return ["mcp:" + (MCP_SERVER_RE.sub("_", _mcp_server(tool))[:64] or "unknown")]
+    return ["network-send"]
+
+
+def _category_modes() -> dict:
+    """Per-kind modes for untrusted-egress sends, from guard-categories.json:
+    {"untrusted-egress": {"git-push": "session", "mcp-send": "prompt"}}. A
+    kind without an entry follows the rule's mode; a corrupt file fails closed."""
+    path = os.environ.get("SECURE_AGENT_GUARD_CATEGORIES") or os.path.join(
+        HOME, ".config", "secure-agent", "guard-categories.json")
+    data = _load_json_file(path, None)
+    if data is None and not os.path.exists(path):
+        return {}
+    rule = data.get(EGRESS_RULE, {}) if isinstance(data, dict) else None
+    if not isinstance(rule, dict) or any(not isinstance(k, str) or v not in CATEGORY_MODES for k, v in rule.items()):
+        try:
+            audit("deny", "guard-config-corrupt", path, "config")
+        except Exception:
+            pass
+        return {"*": "deny"}
+    return dict(rule)
+
+
+def _category_mode(category: str, category_modes: dict, rule_mode: str) -> str:
+    if "*" in category_modes:
+        return category_modes["*"]
+    if category in category_modes:
+        return category_modes[category]
+    if category.startswith("mcp:") and "mcp-send" in category_modes:
+        return category_modes["mcp-send"]
+    return rule_mode
+
+
 def gate_untrusted_egress(tool: str, tool_input: dict, command: str, event: str) -> None:
     """Apply the untrusted-egress mode to a sink in a tainted session. Returns
     when the call may proceed; exits through allow()/deny()/emit_ask() otherwise."""
@@ -1429,14 +1501,20 @@ def gate_untrusted_egress(tool: str, tool_input: dict, command: str, event: str)
     source = str(taint.get("source") or "unknown")[:200]
     sources = taint_sources(taint)
     injection = taint_injection(taint)
+    categories = egress_categories(tool, tool_input, command)
     modes = (_cwd_mode_map(), _mode_overrides())
     mode = _resolve_mode(EGRESS_RULE, EGRESS_SHIPPED_MODE, *modes)
+    if categories:
+        category_modes = _category_modes()
+        mode = max((_category_mode(c, category_modes, mode) for c in categories), key=_strictness)
     if injection:
-        mode = max(mode, _resolve_mode(INJECTED_RULE, INJECTED_SHIPPED_MODE, *modes), key=MODE_STRICTNESS.get)
+        mode = max(mode, _resolve_mode(INJECTED_RULE, INJECTED_SHIPPED_MODE, *modes), key=_strictness)
     subject = command or target
 
     def record(decision: str) -> dict:
         rec = {"decision": decision, "sinks": _clip(target, 500), "harness": runtime(), "sources": sources}
+        if categories:
+            rec["categories"] = categories
         if injection:
             rec["injection"] = injection
         return rec
@@ -1449,13 +1527,14 @@ def gate_untrusted_egress(tool: str, tool_input: dict, command: str, event: str)
                  f"({target}) needs the user's approval. Tell the user what you want to send and where; "
                  "they approve it in the Secure Agent prompt.")
     user_msg = f"Blocked: {target} after {why}."
-    if mode != "prompt":
+    if mode not in ("prompt", "session"):
         deny("guard-deny:" + EGRESS_RULE, user_msg, agent_msg, subject, event, untrusted=record("denied"))
     read = "; ".join(([f"an injection in {injection['location']} ({injection['match']})"] if injection else [])
                      + [source_phrase(s) for s in sources[:3]])
     detail = f"This session read untrusted content: {read}. It now sends data out: {target}."[:600]
     d = _guard_query(runtime(), tool or "Bash", target, EGRESS_RULE, PROMPT_DEADLINE_S,
-                     _cwd_for_request(), detail=detail)
+                     _cwd_for_request(), detail=detail, categories=categories,
+                     category_mode="session" if mode == "session" else "")
     if d is None:
         if runtime() == "claude":
             emit_ask(f"Secure Agent: this session read untrusted content ({read}). Allow {target}?",
@@ -1475,7 +1554,12 @@ SOURCE_LABELS = {"image": "image", "web": "web page", "search": "web search", "m
 # stricter of untrusted-egress and this rule.
 INJECTED_RULE = "untrusted-egress-injected"
 INJECTED_SHIPPED_MODE = "monitor"
-MODE_STRICTNESS = {"monitor": 0, "prompt": 1, "deny": 2}
+MODE_STRICTNESS = {"monitor": 0, "session": 1, "prompt": 2, "deny": 3}
+
+
+def _strictness(mode: str) -> int:
+    """Rank for combining modes; an unknown mode ranks as deny."""
+    return MODE_STRICTNESS.get(mode, MODE_STRICTNESS["deny"])
 
 
 def _tool_location(tool: str, tool_input: dict) -> str:

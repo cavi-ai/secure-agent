@@ -19,8 +19,8 @@ type Decision struct {
 	Scope   string `json:"scope"`
 	Reason  string `json:"reason,omitempty"`
 	// Operator receipt metadata stays local; hook responses retain their contract.
-	ResolutionID string `json:"-"`
-	ScopeID      string `json:"-"`
+	ResolutionID string   `json:"-"`
+	ScopeIDs     []string `json:"-"`
 }
 
 type Pending struct {
@@ -34,8 +34,17 @@ type Pending struct {
 	ReaderExe       string              `json:"reader_exe,omitempty"`
 	IdentityBasis   string              `json:"identity_basis,omitempty"`
 	AvailableScopes []model.ScopeChoice `json:"available_scopes,omitempty"`
-	PeerPID         int32               `json:"-"`
-	TS              string              `json:"ts"`
+	// Categories are the request's untrusted-egress send kinds
+	// (model.EgressCategory), one per kind of sink it names.
+	Categories []string `json:"categories,omitempty"`
+	// DefaultScope is the choice the prompt preselects: a category session
+	// permission once the session has asked about the same kind of send, or
+	// when that kind is set to ask once per session.
+	DefaultScope *model.ScopeChoice `json:"default_scope,omitempty"`
+	// Repeats counts this session's earlier prompts for the same kinds of send.
+	Repeats int    `json:"repeats,omitempty"`
+	PeerPID int32  `json:"-"`
+	TS      string `json:"ts"`
 	// Detail is the hook's reason line (untrusted-egress: what the session
 	// read and where it came from). Display only.
 	Detail string `json:"detail,omitempty"`

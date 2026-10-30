@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -54,8 +55,8 @@ func TestStandingGuardDecisionNarrowestFirst(t *testing.T) {
 		{"no standing answer", memoryGuardPermissions{}, observed, guard.Decision{}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, found := standingGuardDecision(&tc.st, tc.identity, agent, rule, path)
-			if got != tc.want || found != tc.found {
+			got, found := standingGuardDecision(&tc.st, tc.identity, nil, agent, rule, path)
+			if !reflect.DeepEqual(got, tc.want) || found != tc.found {
 				t.Fatalf("decision = %+v %v, want %+v %v", got, found, tc.want, tc.found)
 			}
 			if tc.identity.IdentityBasis == "" && len(tc.st.matched) != 0 {

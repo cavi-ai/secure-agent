@@ -127,10 +127,22 @@ Egress sinks:
 | Mode | Behavior |
 |---|---|
 | `monitor` (default) | The call runs and the audit trail records `guard-monitor:untrusted-egress`. |
-| `prompt` | The Secure Agent prompt names every sink in the call and the inputs the session read, with their origin. When the session and executable path are recorded, **Allow for** also offers this session, 24 hours or 7 days: later sends to the same sinks from the same tool, workspace and executable path run without a prompt, and other sinks still ask. `git push` names only its remote (`git push origin`), so one permission covers every push to that remote. Revoke under Protection → Rules & permissions. With the daemon down, Claude Code asks instead. |
+| `prompt` | The Secure Agent prompt names every sink in the call and the inputs the session read, with their origin. When the session and executable path are recorded, **Allow for** also offers this session, 24 hours, 7 days or Always (until revoked), and **Covers** chooses this send or every send of its kind: later sends to the same sinks, or of the same kinds, from the same tool, workspace and executable path run without a prompt, and other sinks or kinds still ask. `git push` names only its remote (`git push origin`), so one permission covers every push to that remote. The second prompt of a kind in a session says how many times it asked and opens with that kind for the session selected. Revoke under Protection → Rules & permissions. With the daemon down, Claude Code asks instead. |
 | `deny` | Blocked outright. |
 
-Set the mode in `~/.config/secure-agent/guard-modes.json`, for example `{"untrusted-egress": "prompt"}`, or per project through `directory_guard.cwd_overrides`. The taint record sits beside the daemon socket under `taint/`, which agent tools cannot write, and expires after 7 days.
+Set the mode in `~/.config/secure-agent/guard-modes.json`, for example `{"untrusted-egress": "prompt"}`, or per project through `directory_guard.cwd_overrides`.
+
+Each sink has a kind: `git-push`, `gh-write` (the `gh` writes above), `network-send` (network clients, `rsync`, `git send-email`, inline network code, data-carrying URLs) and `mcp:<server>` (one MCP server's send tools). Settings → File Guard → **Sends after untrusted content** sets a mode per kind in `~/.config/secure-agent/guard-categories.json`, for example `{"untrusted-egress": {"git-push": "session", "mcp-send": "prompt", "mcp:codex_app": "monitor"}}`:
+
+| Kind mode | Behavior |
+|---|---|
+| Follow rule (no entry) | The `untrusted-egress` mode. |
+| `prompt` (Ask every time) | As `prompt` above. |
+| `session` (Ask once per session) | The first send of the kind in a session asks, with that kind for the session selected. |
+| `monitor` (Always allow) | Runs and is audited. |
+| `deny` (Block) | Blocked outright. |
+
+`mcp-send` sets every MCP server without its own `mcp:<server>` entry. A call with several kinds takes the strictest of their modes, a session that matched the injection detector still takes `untrusted-egress-injected` when it is stricter, and a corrupt file blocks every send after untrusted content. Kind modes are not read per project, and the proxy acts on the rule's mode only. The taint record sits beside the daemon socket under `taint/`, which agent tools cannot write, and expires after 7 days.
 
 For an agent routed through the proxy, `deny` also covers connections the hook cannot name, such as a script the agent wrote and then ran. The proxy finds the process holding the client end of each new connection (once per connection), maps it to its live session, and refuses the CONNECT or plain request with `403` when that session has a taint record and the rule resolves to `deny` for its workspace. The refusal is a `proxy-untrusted-egress` finding carrying the client process and session. The model API hosts the proxy decrypts (`proxy_inspect_hosts`) and loopback are never refused. The proxy does nothing in `monitor` or `prompt`, and looks up no process while no session is tainted or no workspace resolves the rule to `deny`.
 

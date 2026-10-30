@@ -501,7 +501,9 @@ struct ConsoleView: View {
 				if let scopes = p.availableScopes, scopes.contains(where: { $0.kind != "once" }) {
 					Menu("Future access") {
 						ForEach(scopes.filter { $0.kind != "once" }) { choice in
-							Button(choice.label) { Task { await state.resolvePendingGuard(id: p.id, verdict: "allow", scope: choice.kind, expiry: choice.expiry) } }
+							Button(choice.coversKind ? "\(choice.label): all \(GuardSendKind.label(p.categories) ?? "sends of this kind")" : choice.label) {
+								Task { await state.resolvePendingGuard(id: p.id, verdict: "allow", scope: choice.kind, expiry: choice.expiry, category: choice.coversKind) }
+							}
 						}
 					}.controlSize(.small)
 				}

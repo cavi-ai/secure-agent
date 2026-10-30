@@ -847,7 +847,7 @@ public final class AppState: ObservableObject {
             inspectPendingGuard(id: p.id)
             return
         case .allowOnce: decision = .init(id: p.id, verdict: "allow", scope: "once")
-        case .allow(let scope): decision = .init(id: p.id, verdict: "allow", scope: scope.kind, expiry: scope.expiry)
+        case .allow(let scope): decision = .init(id: p.id, verdict: "allow", scope: scope.kind, expiry: scope.expiry, category: scope.coversKind)
         case .deny, .withdrawn: decision = .init(id: p.id, verdict: "deny", scope: "once")
         }
         // The duration chosen in the prompt is the consent; nothing asks again.
@@ -869,12 +869,12 @@ public final class AppState: ObservableObject {
     /// Answers the pending request. Session and timed access are granted from
     /// the guard prompt: a scope chosen elsewhere opens it with that duration
     /// selected, and the prompt's answer is submitted.
-    public func resolvePendingGuard(id: String? = nil, verdict: String, scope: String, expiry: String? = nil) async {
+    public func resolvePendingGuard(id: String? = nil, verdict: String, scope: String, expiry: String? = nil, category: Bool = false) async {
         guard let p = pendingGuard, id == nil || p.id == id, !resolvingGuardIDs.contains(p.id) else { return }
         guard ["allow", "deny"].contains(verdict), scope == "once" || verdict == "allow" else { return }
         if scope != "once" {
-            guard promptingID == nil, p.grantTerms(scope: scope, expiry: expiry) != nil,
-                  let selected = p.availableScopes?.first(where: { $0.kind == scope && $0.expiry == expiry }) else { return }
+            guard promptingID == nil, p.grantTerms(scope: scope, expiry: expiry, category: category) != nil,
+                  let selected = p.availableScopes?.first(where: { $0.kind == scope && $0.expiry == expiry && $0.coversKind == category }) else { return }
             promptingID = p.id
             await showGuardAlert(p, selecting: selected)
             return

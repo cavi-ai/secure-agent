@@ -2305,6 +2305,19 @@ function policyListHTML(kind, rows, st) {
 function permissionChoiceLabel(choice, prefix = 'Expected') {
   return `${prefix} ${choice.kind === 'once' ? 'once' : choice.kind === 'session' ? 'for this session' : choice.expiry === '7d' ? 'for 7 days' : 'for 24 hours'}`;
 }
+const SEND_KIND_LABELS = {'git-push': 'git pushes', 'gh-write': 'GitHub writes (gh)', 'network-send': 'network sends', 'mcp-send': 'MCP sends'};
+// "git pushes", "codex_app MCP sends": what an untrusted-egress kind covers.
+function sendKindLabel(kind) {
+  if (SEND_KIND_LABELS[kind]) return SEND_KIND_LABELS[kind];
+  return String(kind).startsWith('mcp:') ? `${String(kind).slice(4)} MCP sends` : String(kind);
+}
+// A guard prompt's future choice: "Allow always", or for a kind choice
+// "Allow all git pushes for this session".
+function guardChoiceLabel(choice, categories) {
+  const when = choice.kind === 'session' ? 'for this session' : choice.kind === 'standing' ? 'always' : choice.expiry === '7d' ? 'for 7 days' : 'for 24 hours';
+  if (choice.category === true) return `Allow all ${(categories || []).map(sendKindLabel).join(' and ') || 'sends of this kind'} ${when}`;
+  return `Allow ${when}`;
+}
 function validReviewRevision(revision) {
   return Number.isSafeInteger(revision) && revision > 0;
 }

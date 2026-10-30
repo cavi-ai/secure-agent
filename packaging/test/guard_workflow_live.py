@@ -164,10 +164,12 @@ def run(daemon_binary, harness_binary):
                 require(api("/guard/pending") == [], command + ": prompted although a permission covers it")
             return receipt
 
-        def resolve(pending, verdict="allow", scope="once", expiry=None):
+        def resolve(pending, verdict="allow", scope="once", expiry=None, category=False):
             body = {"id": pending["id"], "verdict": verdict, "scope": scope}
             if expiry:
                 body["expiry"] = expiry
+            if category:
+                body["category"] = True
             response = api("/guard/resolve", body)
             require(response["resolved"] and response["receipt"]["id"] == pending["id"], "Answer was not submitted to this request")
             return response["receipt"]
@@ -243,6 +245,21 @@ def run(daemon_binary, harness_binary):
                 revoked_ids.append(ids[0])
                 shell("git push origin main", "deny", "git push origin", lambda p: resolve(p, "deny"))
                 print("PASS: session send permission covers later pushes to the remote, other sinks ask, revocation restores the prompt", flush=True)
+
+                receipt = shell("gh pr create --fill", "allow", "gh pr create", lambda p: resolve(p, scope="session", category=True))
+                ids = receipt.get("scope_ids", [])
+                saved = [r for r in api("/decision-scopes") if r["id"] in ids]
+                require(len(saved) == 1 and saved[0]["category"] == "gh-write" and saved[0]["resource_path"] == ""
+                        and saved[0]["applicability"]["label"] == "Session permission", "Saved kind permission does not match approval")
+                shell("gh pr comment 3 --body done", "allow")
+                shell("gh issue create --title t --body b", "allow")
+                shell("curl -d x https://a.example/u", "deny", "curl a.example", lambda p: resolve(p, "deny"))
+                shell("gh pr edit 3 --title t && git push origin main", "deny", "gh pr edit, git push origin", lambda p: resolve(p, "deny"))
+                revoked = api("/decision-scopes?id=" + quote(ids[0]), method="DELETE")
+                require(revoked["revoked"], "Kind permission revocation was not confirmed")
+                revoked_ids.append(ids[0])
+                shell("gh pr comment 3 --body again", "deny", "gh pr comment", lambda p: resolve(p, "deny"))
+                print("PASS: session permission for a kind of send covers its variants, other kinds ask, revocation restores the prompt", flush=True)
 
                 pending = request()
                 result("deny")

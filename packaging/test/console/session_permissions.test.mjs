@@ -48,6 +48,22 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 const savedResult = () => ({ receipt: { id: 'review-a', revision: 1, action: 'expect', at, scope_ids: receipt.ids },
   review: { context: { session_id: 'session-a', resources: ['/work/a/.env'] } } });
 
+test('a permission for a kind of send is listed by what it covers beside exact permissions', () => {
+  const c = context();
+  const guardScope = (id, extra) => scope(id, { rule_id: 'untrusted-egress', operation: 'guard:Bash', destination: undefined, expires_at: undefined,
+    identity_basis: 'peer-process-tree', ...extra });
+  const kind = guardScope('scope-kind', { kind: 'session', resource_path: '', category: 'git-push', applicability: { label: 'Session permission', revoke: true } });
+  const sink = guardScope('scope-sink', { kind: 'standing', resource_path: 'gh pr create', applicability: { label: 'Standing permission', revoke: true } });
+  const guardReceipt = { kind: 'guard', sessionID: 'session-a', reviewID: 'guard-a', at, ids: ['scope-kind', 'scope-sink'] };
+  const html = c.sessionPermissionsHTML(guardReceipt, { rows: c.decisionPermissionRows(guardReceipt, [kind, sink, scope()]) });
+  assert.match(html, /Covers <b>all git pushes<\/b>/);
+  assert.match(html, /Allows all git pushes from this tool, workspace and executable path/);
+  assert.match(html, /Resource <code>gh pr create<\/code>/);
+  assert.match(html, /Standing permission/);
+  assert.throws(() => c.decisionPermissionRows(guardReceipt, [{ ...kind, resource_path: 'git push origin' }]), /Invalid permission records/);
+  assert.throws(() => c.decisionPermissionRows(guardReceipt, [{ ...kind, category: undefined }]), /Invalid permission records/);
+});
+
 test('result permissions use the original receipt without requiring session history or the selected session', async () => {
   const t = controller(), original = savedResult();
   t.c.window.openReviewResult(original);

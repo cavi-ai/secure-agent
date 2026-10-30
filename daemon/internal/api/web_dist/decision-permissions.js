@@ -20,11 +20,11 @@ function reviewResultPermissionReceipt(result) {
 function validGuardReceipt(r, request) {
   return !!r && r.id === request.id && r.verdict === request.verdict && r.scope === request.scope &&
     typeof r.id === 'string' && !!r.id && ['allow','deny'].includes(r.verdict) &&
-    ['once','always','session','exact'].includes(r.scope) && typeof r.rule_id === 'string' && !!r.rule_id &&
+    ['once','always','session','exact','standing'].includes(r.scope) && typeof r.rule_id === 'string' && !!r.rule_id &&
     typeof r.at === 'string' && Number.isFinite(Date.parse(r.at)) &&
     (r.session_id == null || typeof r.session_id === 'string') &&
     (r.scope_ids == null || (Array.isArray(r.scope_ids) && r.scope_ids.length <= 128 && r.scope_ids.every(id => typeof id === 'string' && !!id))) &&
-    (!r.scope_ids?.length || (r.verdict === 'allow' && ['session','exact'].includes(r.scope)));
+    (!r.scope_ids?.length || (r.verdict === 'allow' && ['session','exact','standing'].includes(r.scope)));
 }
 
 function guardPermissionReceipt(decision, sessionID) {
@@ -45,29 +45,36 @@ function guardResultHTML(result) {
     ${(r?.session_id || result.sessionID) ? '<button type="button" class="btn btn-ghost btn-sm" data-action="guard-result-history">Check session results</button>' : '<p>Session identity unavailable; inspect Rules &amp; permissions for current policy.</p>'}</div>`;
 }
 
+function guardDurationText(scope, expiry) {
+  return scope === 'session' ? 'until this session ends' : scope === 'standing' ? 'until revoked' : `for ${expiry === '7d' ? '7 days' : '24 hours'}`;
+}
+
 // No optimistic permission or receipt: only a matching daemon answer confirms
 // submission. Failed responses are ambiguous and never replay automatically.
-function guardScopeConfirmation(p, verdict, scope, expiry) {
+function guardScopeConfirmation(p, verdict, scope, expiry, category) {
+  const sends = (p.rule_id || p.rule) === 'untrusted-egress';
+  const subject = category ? `all ${(p.categories || []).map(sendKindLabel).join(' and ')} from this tool in this workspace` : sends ? 'these sends from this tool' : 'this file and tool';
   const effect = scope === 'always' ? `${verdict} every future path matched by rule ${p.rule_id || p.rule || 'unavailable'}`
-    : `allow this file and tool ${scope === 'session' ? 'until this session ends' : `for ${expiry === '7d' ? '7 days' : '24 hours'}`}`;
-  return `${effect}.\n\nAgent: ${p.agent || p.group?.agent || 'Unknown'}\nOperation: ${p.tool || 'Unknown'}\nResource: ${p.path || 'Unknown'}\nWorkspace: ${p.workspace || p.group?.workspace || 'Unknown'}\nExecutable path: ${p.reader_exe || 'Unknown'}\nSession: ${p.session_id || 'Unknown'}\n\nExecutable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions.`;
+    : `allow ${subject} ${guardDurationText(scope, expiry)}`;
+  const limit = sends ? (category ? 'Other kinds of send still ask.' : 'Other sends still ask.') : 'File approval does not authorize network access.';
+  return `${effect}.\n\nAgent: ${p.agent || p.group?.agent || 'Unknown'}\nOperation: ${p.tool || 'Unknown'}\nResource: ${p.path || 'Unknown'}\nWorkspace: ${p.workspace || p.group?.workspace || 'Unknown'}\nExecutable path: ${p.reader_exe || 'Unknown'}\nSession: ${p.session_id || 'Unknown'}\n\nExecutable signatures are not verified. ${limit} Revoke under Protection → Rules & permissions.`;
 }
 
 function createGuardDecisionController({request,confirm,context,generation,ended,paint,announce,refetch,openPermissions,openResults,openInspection}) {
   let result = null, sequence = 0, resultGeneration = null;
   const pending = new Set();
   function clear() { sequence++; result=null; resultGeneration=null; paint(null); }
-  async function resolve(id,verdict,scope,expiry) {
-    if (ended() || pending.has(id) || !['allow','deny'].includes(verdict) || !['once','always','session','exact'].includes(scope)) return;
+  async function resolve(id,verdict,scope,expiry,category=false) {
+    if (ended() || pending.has(id) || !['allow','deny'].includes(verdict) || !['once','always','session','exact','standing'].includes(scope)) return;
     pending.add(id);
     const auth = generation(), seq = ++sequence;
     const current = () => !ended() && generation() === auth;
     const p = context(id);
     const sessionID = p?.session_id || '';
-    const body = {id,verdict,scope,...(expiry ? {expiry} : {})};
+    const body = {id,verdict,scope,...(expiry ? {expiry} : {}),...(category ? {category:true} : {})};
     try {
-      if (!p || p.id !== id || (scope !== 'once' && !(p.available_scopes || []).some(s => s.kind === scope && (s.expiry || '') === (expiry || '')))) return;
-      if(scope !== 'once' && !await confirm(guardScopeConfirmation(p,verdict,scope,expiry),{title:'Confirm future access',okLabel:'Allow future access',focusCancel:true})) return;
+      if (!p || p.id !== id || (scope !== 'once' && !(p.available_scopes || []).some(s => s.kind === scope && (s.expiry || '') === (expiry || '') && (s.category === true) === category))) return;
+      if(scope !== 'once' && !await confirm(guardScopeConfirmation(p,verdict,scope,expiry,category),{title:'Confirm future access',okLabel:'Allow future access',focusCancel:true})) return;
       if(!current() || context(id)?.id !== id) return;
       const response = await request('/guard/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       const data = await response.json();
@@ -92,9 +99,12 @@ function createGuardDecisionController({request,confirm,context,generation,ended
   };
 }
 
+// A record names one resource: its exact path or sink, or (untrusted-egress)
+// the kind of send it covers.
 function validDecisionScopeRecords(records) {
   return Array.isArray(records) && records.length <= 10000 &&
-    records.every(r => r && ['id', 'kind', 'agent', 'rule_id', 'operation', 'resource_path', 'created_at'].every(key => typeof r[key] === 'string' && r[key]) &&
+    records.every(r => r && ['id', 'kind', 'agent', 'rule_id', 'operation', 'created_at'].every(key => typeof r[key] === 'string' && r[key]) &&
+      typeof r.resource_path === 'string' && (r.category == null || typeof r.category === 'string') && !!r.resource_path !== !!r.category &&
       ['session_id', 'workspace', 'reader_exe', 'destination', 'expires_at', 'revoked_at'].every(key => r[key] == null || typeof r[key] === 'string')) &&
     new Set(records.map(r => r.id)).size === records.length;
 }
@@ -125,7 +135,9 @@ function decisionPermissionRows(receipt, records) {
       label: applicability.label,
       revoke: applicability.revoke,
       operation: readConnect ? 'Expected read/connect activity' : guarded ? 'Guarded ' + record.operation.slice(6) + ' access' : 'Operation unavailable',
-      effect: readConnect ? 'Marks this matching read/connect pattern expected. It does not grant network access.' : guarded ? 'Allows matching guarded tool access when the daemon validates the recorded identity and scope.' : 'Permission effect unknown.',
+      effect: readConnect ? 'Marks this matching read/connect pattern expected. It does not grant network access.'
+        : guarded && record.category ? `Allows all ${sendKindLabel(record.category)} from this tool, workspace and executable path when the daemon validates the recorded identity and scope. Other kinds of send still ask.`
+        : guarded ? 'Allows matching guarded tool access when the daemon validates the recorded identity and scope.' : 'Permission effect unknown.',
       consequence: readConnect ? 'Future matching activity is evaluated under remaining expectations and policies.' : 'Future guard requests are evaluated under remaining permissions and policies.',
     };
   });
@@ -154,7 +166,7 @@ function sessionPermissionsHTML(receipt, state) {
     return `<section class="policy-row" data-session-part="permission:${escapeHTML(id)}"><div class="policy-row-main">
       <h5>${escapeHTML(row.label)}</h5><p>${escapeHTML(record.agent || 'Agent unavailable')} · ${escapeHTML(row.operation)}</p>
       <p>${escapeHTML(row.effect)}</p>
-      <p>Resource <code>${escapeHTML(record.resource_path || 'unavailable')}</code>${record.destination ? ` → ${escapeHTML(record.destination)}` : ''}</p>
+      <p>${record.category ? `Covers <b>all ${escapeHTML(sendKindLabel(record.category))}</b>` : `Resource <code>${escapeHTML(record.resource_path || 'unavailable')}</code>`}${record.destination ? ` → ${escapeHTML(record.destination)}` : ''}</p>
       <p>Workspace ${escapeHTML(record.workspace || 'unavailable')}<br>Executable path ${escapeHTML(record.reader_exe || 'unavailable')} (observed, not signature verified)</p>
       <p>Created ${escapeHTML(record.created_at || 'unavailable')}${record.expires_at ? `<br>Expires ${escapeHTML(record.expires_at)}` : ''}${record.revoked_at ? `<br>Revoked ${escapeHTML(record.revoked_at)}` : ''}</p>${saved}
       <details data-session-details><summary>Permission identifiers</summary><p>${escapeHTML(id)}<br>Rule ${escapeHTML(record.rule_id || 'unavailable')}<br>Originating session ${escapeHTML(record.session_id || 'unavailable')}</p></details>

@@ -1130,6 +1130,43 @@ public final class SetupManager: ObservableObject {
         try JSONEncoder().encode(modes).write(to: URL(fileURLWithPath: guardModesPath), options: .atomic)
     }
 
+    private var guardCategoriesPath: String { "\(guardModesDir)/guard-categories.json" }
+    static let guardCategoryModes = ["monitor", "session", "prompt", "deny"]
+
+    /// Per-kind modes for untrusted-egress sends (`_category_modes` in
+    /// secret_guard.py): {"untrusted-egress": {"git-push": "session"}}. A kind
+    /// without an entry follows the rule's mode; a corrupt file fails closed.
+    public func currentGuardCategoryModes() -> (modes: [String: String], corrupt: Bool) {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: guardCategoriesPath)) else {
+            return ([:], fm.fileExists(atPath: guardCategoriesPath))
+        }
+        guard let decoded = try? JSONDecoder().decode([String: [String: String]].self, from: data) else {
+            return ([:], true)
+        }
+        let modes = decoded["untrusted-egress"] ?? [:]
+        guard modes.values.allSatisfy({ Self.guardCategoryModes.contains($0) }) else { return ([:], true) }
+        return (modes, false)
+    }
+
+    /// Sets one kind's mode, or removes it (nil) so the kind follows the rule.
+    public func setGuardCategoryMode(kind: String, mode: String?) throws {
+        guard kind.range(of: "^(git-push|gh-write|network-send|mcp-send|mcp:[A-Za-z0-9_.-]{1,64})$", options: .regularExpression) != nil else {
+            throw NSError(domain: "SetupManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "unknown send kind \(kind)"])
+        }
+        if let mode, !Self.guardCategoryModes.contains(mode) {
+            throw NSError(domain: "SetupManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "unknown mode \(mode)"])
+        }
+        try fm.createDirectory(atPath: guardModesDir, withIntermediateDirectories: true)
+        let current = currentGuardCategoryModes()
+        guard !current.corrupt else {
+            throw NSError(domain: "SetupManager", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "guard-categories.json is unreadable; repair it before editing"])
+        }
+        var modes = current.modes
+        modes[kind] = mode
+        try JSONEncoder().encode(["untrusted-egress": modes]).write(to: URL(fileURLWithPath: guardCategoriesPath), options: .atomic)
+    }
+
     /// Writes the three classics as `prompt` into `guard-modes.json` — the
     /// same mode-override file the hook reads (`_mode_overrides` in
     /// secret_guard.py). Merges over any existing entries so the user's own

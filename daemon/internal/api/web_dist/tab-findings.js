@@ -384,7 +384,7 @@ function needView(item, ctx) {
     }
     case 'guard': {
       const workspace = String(item.workspace || '').split('/').filter(Boolean).pop() || '';
-      const a = (verdict, scope, expiry) => `data-action="guard-resolve" data-id="${id}" data-verdict="${verdict}" data-scope="${scope}"${expiry ? ` data-expiry="${escapeHTML(expiry)}"` : ''}`;
+      const a = (verdict, scope, expiry, kind) => `data-action="guard-resolve" data-id="${id}" data-verdict="${verdict}" data-scope="${scope}"${expiry ? ` data-expiry="${escapeHTML(expiry)}"` : ''}${kind ? ' data-category="kind"' : ''}`;
       const facts = `<dl class="finding-facts guard-request-facts"><dt>Operation</dt><dd>${escapeHTML(item.tool || 'Unknown')}</dd><dt>Resource</dt><dd>${escapeHTML(item.path || 'Unknown')}</dd><dt>Workspace</dt><dd>${escapeHTML(item.workspace || 'Unknown')}</dd><dt>Matched rule</dt><dd>${escapeHTML(item.rule || item.rule_id || 'Unknown')}</dd><dt>Executable path</dt><dd>${escapeHTML(item.reader_exe || 'Unknown; once only')}</dd></dl>`;
       return { ...v, sev: 'sev-warn', word: 'access request', facts,
         why: [`${v.agent || 'The agent'} is paused until you answer`, (item.available_scopes || []).some(s => s.kind !== 'once') ? 'Future access requires a chosen limit' : 'Identity incomplete; once only', workspace].filter(Boolean).join(' · '),
@@ -392,7 +392,7 @@ function needView(item, ctx) {
           { label: 'Allow once', attrs: a('allow', 'once'), bar: true },
           { label: 'Deny', attrs: a('deny', 'once'), kind: 'danger', bar: true },
           ...(item.session_id ? [{ label:'Inspect session',attrs:`data-action="guard-inspect" data-id="${id}"`,bar:true }] : []),
-          ...(item.available_scopes || []).filter(s => s.kind !== 'once').map(s => ({label:permissionChoiceLabel(s,'Allow'),attrs:a('allow',s.kind,s.expiry)})),
+          ...(item.available_scopes || []).filter(s => s.kind !== 'once').map(s => ({label:guardChoiceLabel(s,item.categories),attrs:a('allow',s.kind,s.expiry,s.category === true)})),
         ],
         body: () => facts + `<p>Once answers only this request. Future access requires a separate confirmation.</p><p>${escapeHTML(item.scopeText || item.scope_text || '')}</p>${item.advisor ? '<p>Advisor interpretation; not proof of intent or safety.</p>' + advisorAdviceHTML(item.advisor) : ''}` };
     }

@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,6 +39,77 @@ type guardDecisionRequest struct {
 	Workspace string `json:"workspace,omitempty"`
 	// Detail is the reason line the prompt shows. Optional.
 	Detail string `json:"detail,omitempty"`
+	// Categories are an untrusted-egress request's send kinds, one per kind
+	// of sink in Path; CategoryMode "session" asks once per session for them.
+	Categories   []string `json:"categories,omitempty"`
+	CategoryMode string   `json:"category_mode,omitempty"`
+}
+
+// maxGuardCategories bounds the send kinds one request names.
+const maxGuardCategories = 8
+
+// validCategories reports whether an untrusted-egress request names distinct,
+// known send kinds; any other rule names none.
+func validCategories(req guardDecisionRequest) bool {
+	if req.CategoryMode != "" && req.CategoryMode != "session" {
+		return false
+	}
+	if req.RuleID != model.EgressRule {
+		return len(req.Categories) == 0 && req.CategoryMode == ""
+	}
+	if len(req.Categories) > maxGuardCategories || (req.CategoryMode != "" && len(req.Categories) == 0) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, c := range req.Categories {
+		if !model.EgressCategory(c) || seen[c] {
+			return false
+		}
+		seen[c] = true
+	}
+	return true
+}
+
+// guardRepeats counts prompts per session and send kind, so a prompt can say
+// this session already asked about the same kind of send. In memory only.
+type guardRepeats struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+const guardRepeatsMax = 4096
+
+// note records one prompt and returns how many earlier prompts in the session
+// named any of the same send kinds.
+func (g *guardRepeats) note(sessionID string, categories []string) int {
+	if sessionID == "" || len(categories) == 0 {
+		return 0
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.counts == nil || len(g.counts) > guardRepeatsMax {
+		g.counts = map[string]int{}
+	}
+	seen := 0
+	for _, c := range categories {
+		key := sessionID + "\x00" + c
+		seen = max(seen, g.counts[key])
+		g.counts[key]++
+	}
+	return seen
+}
+
+// categoryScopes are the requests a category permission must cover: one per
+// send kind, all of which must match.
+func categoryScopes(identity model.DecisionScope, categories []string) []model.DecisionScope {
+	out := make([]model.DecisionScope, 0, len(categories))
+	for _, c := range categories {
+		q := identity
+		q.ResourcePath = ""
+		q.Category = c
+		out = append(out, q)
+	}
+	return out
 }
 
 // promptDetailMax bounds the hook-supplied reason line.
@@ -65,6 +139,10 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Agent == "" || req.RuleID == "" ||
 		!guardTokenRE.MatchString(req.Agent) || !guardTokenRE.MatchString(req.RuleID) {
 		http.Error(w, `Invalid payload: {"agent","tool","path","rule_id"} (agent/rule_id must match ^[A-Za-z0-9_.-]+$)`, http.StatusBadRequest)
+		return
+	}
+	if !validCategories(req) {
+		http.Error(w, `Invalid payload: "categories" are distinct untrusted-egress send kinds (git-push, gh-write, network-send, mcp:<server>); "category_mode" is "session" or absent`, http.StatusBadRequest)
 		return
 	}
 	if req.ProbeID != "" {
@@ -100,20 +178,16 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	record := func(d guard.Decision) {
-		var scopeIDs []string
-		if d.ScopeID != "" {
-			scopeIDs = []string{d.ScopeID}
-		}
 		a.store.PutGuardDecision(store.GuardDecision{
 			ID: id, SessionID: req.SessionID, RuleID: req.RuleID,
 			Verdict: d.Verdict, Scope: d.Scope, At: time.Now().UTC().Format(time.RFC3339Nano),
-			ResolutionID: d.ResolutionID, ScopeIDs: scopeIDs, Reason: d.Reason,
+			ResolutionID: d.ResolutionID, ScopeIDs: d.ScopeIDs, Reason: d.Reason,
 		})
 	}
 	identity.RuleID = req.RuleID
 	identity.ResourcePath = req.Path
 	identity.Operation = "guard:" + req.Tool
-	if d, ok := standingGuardDecision(a.store, identity, req.Agent, req.RuleID, req.Path); ok {
+	if d, ok := standingGuardDecision(a.store, identity, req.Categories, req.Agent, req.RuleID, req.Path); ok {
 		record(d)
 		writeJSON(w, d)
 		return
@@ -132,19 +206,35 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	scopes := []model.ScopeChoice{{Kind: "once"}}
 	probe := identity
 	model.ScopeChoice{Kind: "session"}.Apply(&probe, time.Now().UTC())
+	durations := []model.ScopeChoice{{Kind: "session"}, {Kind: "exact", Expiry: "24h"}, {Kind: "exact", Expiry: "7d"}}
+	if req.RuleID == model.EgressRule {
+		durations = append(durations, model.ScopeChoice{Kind: "standing"})
+	}
 	if probe.Validate() == nil {
-		scopes = append(scopes, model.ScopeChoice{Kind: "session"}, model.ScopeChoice{Kind: "exact", Expiry: "24h"}, model.ScopeChoice{Kind: "exact", Expiry: "7d"})
+		scopes = append(scopes, durations...)
+		if len(req.Categories) > 0 {
+			for _, c := range durations {
+				c.Category = true
+				scopes = append(scopes, c)
+			}
+		}
+	}
+	repeats := a.guardRepeats.note(req.SessionID, req.Categories)
+	var preselect *model.ScopeChoice
+	if len(scopes) > 1 && len(req.Categories) > 0 && (req.CategoryMode == "session" || repeats > 0) {
+		preselect = &model.ScopeChoice{Kind: "session", Category: true}
 	}
 	// Disclose the blast radius of "allow always": the cached rule covers
 	// every path this rule matches for this agent, not just this file.
 	scopeText := a.store.ExplainDecisionScope(identity) + " Once answers this request. Future permissions cover only this file, tool, workspace and observed executable path. Session permission ends with this session; timed permission expires after 24 hours or 7 days. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions."
-	if req.RuleID == "untrusted-egress" {
-		scopeText = "Once answers this request. Future permissions cover only the sends named here, from this tool, workspace and observed executable path. Session permission ends with this session; timed permission expires after 24 hours or 7 days. Executable signatures are not verified. Revoke under Protection → Rules & permissions."
+	if req.RuleID == model.EgressRule {
+		scopeText = "Once answers this request. Future permissions cover only the sends named here, or, when you choose their kind, every send of that kind, from this tool, workspace and observed executable path; other kinds still ask. Session permission ends with this session; timed permission expires after 24 hours or 7 days; Always lasts until revoked. Executable signatures are not verified. Revoke under Protection → Rules & permissions."
 	}
 	d := a.guardBroker.Request(r.Context(), guard.Pending{
 		ID: id, SessionID: req.SessionID, Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
 		Detail:    promptDetail(req.Detail),
 		Workspace: identity.Workspace, ReaderExe: identity.ReaderExe, IdentityBasis: identity.IdentityBasis, PeerPID: peerPID, AvailableScopes: scopes,
+		Categories: req.Categories, DefaultScope: preselect, Repeats: repeats,
 		ScopeText: scopeText,
 	})
 	if r.Context().Err() != nil {
@@ -198,8 +288,10 @@ func (a *API) handleGuardPending(w http.ResponseWriter, r *http.Request) {
 type guardResolveRequest struct {
 	ID      string `json:"id"`
 	Verdict string `json:"verdict"` // allow | deny
-	Scope   string `json:"scope"`   // once | always
+	Scope   string `json:"scope"`   // once | always | session | exact | standing
 	Expiry  string `json:"expiry,omitempty"`
+	// Category: the permission covers the request's send kinds, not its sinks.
+	Category bool `json:"category,omitempty"`
 }
 
 // GuardResolveReceipt confirms broker submission, not tool execution or a
@@ -233,10 +325,14 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 	var req guardResolveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" ||
 		(req.Verdict != "allow" && req.Verdict != "deny") ||
-		(req.Scope != "once" && req.Scope != "always" && req.Scope != "session" && req.Scope != "exact") ||
-		(req.Scope == "exact" && (req.Expiry != "24h" && req.Expiry != "7d")) || (req.Scope != "exact" && req.Expiry != "") ||
-		((req.Scope == "session" || req.Scope == "exact") && req.Verdict != "allow") {
-		http.Error(w, `Invalid payload: {"id","verdict":"allow|deny","scope":"once|always"}`, http.StatusBadRequest)
+		(req.Scope != "once" && req.Scope != "always" && req.Scope != "session" && req.Scope != "exact" && req.Scope != "standing") ||
+		(req.Scope == "exact" && (req.Expiry != "24h" && req.Expiry != "7d")) || (req.Scope != "exact" && req.Expiry != "") {
+		http.Error(w, `Invalid payload: {"id","verdict":"allow|deny","scope":"once|always|session|exact|standing"}`, http.StatusBadRequest)
+		return
+	}
+	scoped := req.Scope == "session" || req.Scope == "exact" || req.Scope == "standing"
+	if (scoped && req.Verdict != "allow") || (req.Category && !scoped) {
+		http.Error(w, `Invalid payload: session, exact and standing answers allow; "category" needs one of them`, http.StatusBadRequest)
 		return
 	}
 	var pend *guard.Pending
@@ -246,27 +342,53 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	choice := model.ScopeChoice{Kind: req.Scope, Expiry: req.Expiry, Category: req.Category}
+	// One permission per send kind for a category answer, else one for the
+	// exact sinks. IDs derive from the request so the receipt names them.
+	grantID := func(i int) string {
+		if !req.Category {
+			return req.ID
+		}
+		return req.ID + "-" + strconv.Itoa(i+1)
+	}
+	decision := guard.Decision{Verdict: req.Verdict, Scope: req.Scope, ResolutionID: req.ID}
 	var prepare func(context.Context, guard.Pending) (func() error, func(), error)
-	if req.Scope == "session" || req.Scope == "exact" {
+	if scoped && !req.Category {
+		decision.ScopeIDs = []string{grantID(0)}
+	}
+	if scoped && req.Category && pend != nil {
+		for i := range pend.Categories {
+			decision.ScopeIDs = append(decision.ScopeIDs, grantID(i))
+		}
+	}
+	if scoped {
 		prepare = func(ctx context.Context, p guard.Pending) (func() error, func(), error) {
 			if a.guardIdentity == nil || p.PeerPID <= 0 {
 				return nil, nil, fmt.Errorf("identity unavailable; choose once")
+			}
+			if !slices.Contains(p.AvailableScopes, choice) {
+				return nil, nil, fmt.Errorf("this request does not offer that permission")
 			}
 			g, valid := a.guardIdentity(p.PeerPID, p.SessionID)
 			if !valid || g.Agent != p.Agent || g.Workspace != p.Workspace || g.ReaderExe != p.ReaderExe {
 				return nil, nil, fmt.Errorf("identity changed; choose once")
 			}
-			g.ID = p.ID
 			g.RuleID = p.RuleID
 			g.ResourcePath = p.Path
 			g.Operation = "guard:" + p.Tool
-			model.ScopeChoice{Kind: req.Scope, Expiry: req.Expiry}.Apply(&g, time.Now().UTC())
-			return a.store.PrepareDecisionScope(ctx, g)
+			choice.Apply(&g, time.Now().UTC())
+			grants := []model.DecisionScope{g}
+			if req.Category {
+				if len(p.Categories) == 0 || len(p.Categories) != len(decision.ScopeIDs) {
+					return nil, nil, fmt.Errorf("this request names no send kind; choose this send")
+				}
+				grants = categoryScopes(g, p.Categories)
+			}
+			for i := range grants {
+				grants[i].ID = grantID(i)
+			}
+			return a.store.PrepareDecisionScopes(ctx, grants)
 		}
-	}
-	decision := guard.Decision{Verdict: req.Verdict, Scope: req.Scope, ResolutionID: req.ID}
-	if req.Scope == "session" || req.Scope == "exact" {
-		decision.ScopeID = req.ID
 	}
 	ok, err := a.guardBroker.ResolveWith(req.ID, decision, prepare)
 	if err != nil {
@@ -286,11 +408,7 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	response := GuardResolveResponse{Status: "ok", Resolved: ok}
 	if ok && pend != nil {
-		var scopeIDs []string
-		if decision.ScopeID != "" {
-			scopeIDs = []string{decision.ScopeID}
-		}
-		response.Receipt = &GuardResolveReceipt{ID: req.ID, SessionID: pend.SessionID, RuleID: pend.RuleID, Verdict: req.Verdict, Scope: req.Scope, At: time.Now().UTC().Format(time.RFC3339Nano), ScopeIDs: scopeIDs}
+		response.Receipt = &GuardResolveReceipt{ID: req.ID, SessionID: pend.SessionID, RuleID: pend.RuleID, Verdict: req.Verdict, Scope: req.Scope, At: time.Now().UTC().Format(time.RFC3339Nano), ScopeIDs: decision.ScopeIDs}
 	}
 	writeJSON(w, response)
 }

@@ -225,6 +225,7 @@ type API struct {
 
 	guardBroker   *guard.Broker
 	guardIdentity func(int32, string) (model.DecisionScope, bool)
+	guardRepeats  guardRepeats
 
 	correlator   *correlate.Correlator
 	allowlist    *correlate.AllowlistStore

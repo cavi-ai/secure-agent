@@ -168,6 +168,7 @@ struct SettingsView: View {
     @State private var confirmRemoval = false
     @State private var policyError: String?
     @State private var guardModeOverrides: [String: String]?
+    @State private var sendKindOverrides: [String: String]?
 
     init(state: AppState, protection: ProtectionSettings? = nil, advisorOptionsExpanded: Bool = false) {
         self.state = state
@@ -312,10 +313,80 @@ struct SettingsView: View {
                 Text("Saved path edits apply to the next hooked tool call. Restart Secure Agent to update background file correlation.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            sendKindsSection(ruleMode: current.corrupt ? "deny" : overrides["untrusted-egress"] ?? "monitor")
             setupError
         }
         .formStyle(.grouped)
         .disabled(protection.saving)
+    }
+
+    /// Per-kind modes for sends after untrusted content (guard-categories.json).
+    private func sendKindsSection(ruleMode: String) -> some View {
+        let current = setup.currentGuardCategoryModes()
+        let modes = sendKindOverrides ?? current.modes
+        return Section {
+            if current.corrupt {
+                Label("guard-categories.json is unreadable. The guard fails closed and blocks every send after untrusted content until the file is fixed.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout).foregroundStyle(Color.bad)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(GuardSendKind.tunable, id: \.self) { kind in
+                sendKindRow(kind, mode: modes[kind], ruleMode: ruleMode)
+            }
+        } header: {
+            Text("Sends after untrusted content")
+        } footer: {
+            Text("Applies once a session has read web, MCP, image or downloaded content. A kind set to Follow rule uses the untrusted-egress mode (\(Self.sendKindModeLabel(ruleMode)) now). Ask once per session asks the first time and offers that kind for the rest of the session. A session that matched the injection detector still uses the stricter untrusted-egress-injected mode.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func sendKindRow(_ kind: String, mode: String?, ruleMode: String) -> some View {
+        let effective = mode ?? ruleMode
+        return Picker(selection: Binding(
+            get: { mode ?? "" },
+            set: { newMode in
+                do {
+                    try setup.setGuardCategoryMode(kind: kind, mode: newMode.isEmpty ? nil : newMode)
+                    sendKindOverrides = setup.currentGuardCategoryModes().modes
+                } catch {
+                    setup.report(error)
+                }
+            }
+        )) {
+            Text("Follow rule").tag("")
+            ForEach(["prompt", "session", "monitor", "deny"], id: \.self) { Text(Self.sendKindModeLabel($0)).tag($0) }
+        } label: {
+            HStack(spacing: 10) {
+                SettingsRowIcon(symbol: "arrow.up.forward.circle",
+                                tint: effective == "deny" ? .bad : effective == "monitor" ? .secondary : .warn)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(GuardSendKind.label(kind).prefix(1).uppercased() + GuardSendKind.label(kind).dropFirst())
+                    Text(Self.sendKindModeEffect(effective)).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .pickerStyle(.menu)
+    }
+
+    static func sendKindModeLabel(_ mode: String) -> String {
+        switch mode {
+        case "prompt": "Ask every time"
+        case "session": "Ask once per session"
+        case "monitor": "Always allow"
+        case "deny": "Block"
+        default: mode
+        }
+    }
+
+    static func sendKindModeEffect(_ mode: String) -> String {
+        switch mode {
+        case "prompt": "Asks before each send; the prompt can allow the kind for a session, 24 hours, 7 days or always"
+        case "session": "Asks once; Allow covers this kind for the rest of the session"
+        case "deny": "Blocked outright"
+        default: "Logged, never interrupted"
+        }
     }
 
     private func guardStatus(_ modes: [String]) -> some View {

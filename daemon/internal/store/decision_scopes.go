@@ -73,6 +73,15 @@ func pruneDecisionScopes(tx *sql.Tx) error {
 // Only the returned commit activates a grant; rollback is safe after commit.
 // This lets the broker atomically check its deadline and publish the result.
 func (s *Store) PrepareDecisionScope(ctx context.Context, g model.DecisionScope) (func() error, func(), error) {
+	return s.PrepareDecisionScopes(ctx, []model.DecisionScope{g})
+}
+
+// PrepareDecisionScopes is PrepareDecisionScope for the grants of one answer:
+// all of them commit together or none does.
+func (s *Store) PrepareDecisionScopes(ctx context.Context, grants []model.DecisionScope) (func() error, func(), error) {
+	if len(grants) == 0 || len(grants) > 128 {
+		return nil, nil, fmt.Errorf("permission decision exceeds scope limit")
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, nil, err
@@ -82,9 +91,11 @@ func (s *Store) PrepareDecisionScope(ctx context.Context, g model.DecisionScope)
 		rollback()
 		return nil, nil, err
 	}
-	if err = insertDecisionScope(tx, g); err != nil {
-		rollback()
-		return nil, nil, err
+	for _, g := range grants {
+		if err = insertDecisionScope(tx, g); err != nil {
+			rollback()
+			return nil, nil, err
+		}
 	}
 	return tx.Commit, rollback, nil
 }
@@ -97,7 +108,7 @@ func (s *Store) MatchDecisionScopes(requests []model.DecisionScope) bool {
 	// old session lifecycle. Use wall time, never a caller's event timestamp.
 	first := requests[0]
 	for _, q := range requests {
-		if q.Agent != first.Agent || q.SessionID != first.SessionID || q.Workspace != first.Workspace || q.Operation != first.Operation || q.RuleID != first.RuleID || !model.ExactPath(q.ReaderExe) || !model.ExactResource(q.RuleID, q.ResourcePath) {
+		if q.Agent != first.Agent || q.SessionID != first.SessionID || q.Workspace != first.Workspace || q.Operation != first.Operation || q.RuleID != first.RuleID || !model.ExactPath(q.ReaderExe) || !q.ValidResource() {
 			return false
 		}
 	}

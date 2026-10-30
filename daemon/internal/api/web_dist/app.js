@@ -3980,7 +3980,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'guard-resolve':
         e.preventDefault();
-        window.resolveGuardPrompt(d.id, d.verdict, d.scope, d.expiry);
+        window.resolveGuardPrompt(d.id, d.verdict, d.scope, d.expiry, d.category === 'kind');
         break;
       case 'guard-inspect':
         e.preventDefault();
