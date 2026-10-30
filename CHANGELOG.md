@@ -23,6 +23,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: guard prompts open above the app in front and on its Space instead of behind the agent's window.
 - Evidence storage: finding reviews keep their attribution after the session row is pruned or gains a start time, so the startup review backfill no longer fails with "review evidence changed".
 - File telemetry: a file renamed to a new name is recorded at its destination path.
+- Hooks: a guard hook symlinked by `plugin/install.sh` loads `guard-rules.json`; a hook that fails mid-check asks on Claude Code and denies elsewhere instead of letting the call through; all prompts of one hook run end before the harness's hook timeout.
+- Uninstall: `packaging/uninstall.sh` removes Secure Agent's hook entries from Claude Code, Cursor, Codex, Antigravity and OpenCode configs before their scripts, and removes every harness's hook scripts.
 
 ## [1.4.0] - 2026-10-22
 
