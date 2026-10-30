@@ -85,7 +85,7 @@ When an agent tool call touches a guarded path (SSH keys, cloud credentials, the
 | Mode | Behavior |
 |---|---|
 | `monitor` (default) | The named path rule logs access without a prompt. Independent hard-deny checks still apply. |
-| `prompt` | The hook holds the tool call for **Allow Once** or **Deny**. When recorded identity permits it, session and timed access choices require a separate confirmation of the file, tool, workspace, executable path and lifetime. **Inspect session** leaves the request unanswered while its timeout continues. |
+| `prompt` | The hook holds the tool call for **Allow Once** or **Deny**. When recorded identity permits it, the menu bar prompt's duration picker offers session and timed access and Allow grants the chosen lifetime; the console asks for a separate confirmation of the file, tool, workspace, executable path and lifetime. **Inspect session** leaves the request unanswered while its timeout continues. |
 | `deny` | Blocked outright, no prompt. |
 
 **Quiet by default.** Every named path rule ships `monitor`. Independent hard-deny checks still block credential-printing and mutations to the guard or harness enforcement plane, even in monitor mode. The **Guard My Secrets** button under Optional capabilities is the explicit opt-in that promotes SSH keys, cloud credentials, the keychain, and harness configuration to `prompt`, written to `~/.config/secure-agent/guard-modes.json`.

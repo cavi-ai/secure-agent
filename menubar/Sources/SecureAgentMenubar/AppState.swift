@@ -825,17 +825,17 @@ public final class AppState: ObservableObject {
         #endif
         // The alert runs in its own task: the fetch that found the request
         // returns, so polling and the stream keep refreshing while it is up.
-        Task { @MainActor [weak self] in self?.showGuardAlert(p) }
+        Task { @MainActor [weak self] in await self?.showGuardAlert(p) }
     }
 
-    private func showGuardAlert(_ p: GuardPending) {
+    private func showGuardAlert(_ p: GuardPending, selecting selected: GuardScopeChoice? = nil) async {
         guard promptingID == p.id else { return } // withdrawn before it was shown
         let inspectUnavailable = p.sessionID?.isEmpty == false ? dashboardUnavailableReason : "Session identity unavailable"
         // NSApp.activate can steal focus right as the prompt appears; the
         // prompt binds Return and Escape to Deny, never to an approval.
         NSApp?.activate(ignoringOtherApps: true)
         nativePromptID = p.id
-        let choice = runGuardPrompt(GuardPromptContent(pending: p, inspectUnavailableReason: inspectUnavailable))
+        let choice = runGuardPrompt(GuardPromptContent(pending: p, inspectUnavailableReason: inspectUnavailable, selected: selected))
         if nativePromptID == p.id { nativePromptID = nil }
         // Withdrawn while shown: nothing to answer or remember.
         if choice == .withdrawn { return }
@@ -850,9 +850,8 @@ public final class AppState: ObservableObject {
         case .allow(let scope): decision = .init(id: p.id, verdict: "allow", scope: scope.kind, expiry: scope.expiry)
         case .deny, .withdrawn: decision = .init(id: p.id, verdict: "deny", scope: "once")
         }
-        Task {
-            await resolvePendingGuard(id: p.id, verdict: decision.verdict, scope: decision.scope, expiry: decision.expiry)
-        }
+        // The duration chosen in the prompt is the consent; nothing asks again.
+        await submitGuardAnswer(decision)
     }
 
     /// True when the app is showing a guard NSAlert — one at a time.
@@ -867,39 +866,30 @@ public final class AppState: ObservableObject {
         else { openDashboard(destination: .session(session)) }
     }
 
-    private static func confirmFutureGuardAccess(_ text: String) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = "Confirm future access"
-        alert.informativeText = text
-        alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
-        alert.addButton(withTitle: "Allow future access").keyEquivalent = ""
-        keepInFront(alert)
-        return alert.runModal() == .alertSecondButtonReturn
-    }
-
-    /// macOS may refuse to activate this app while the agent's app is in
-    /// front, leaving a normal-level alert behind that app's windows; guard
-    /// alerts sit above other apps' windows, on the Space in front.
-    static func keepInFront(_ alert: NSAlert) {
-        alert.window.level = .modalPanel
-        alert.window.collectionBehavior.formUnion(AppDelegate.popoverSpaces)
-    }
-
-    public func resolvePendingGuard(id: String? = nil, verdict: String, scope: String, expiry: String? = nil, confirm: ((String) -> Bool)? = nil) async {
+    /// Answers the pending request. Session and timed access are granted from
+    /// the guard prompt: a scope chosen elsewhere opens it with that duration
+    /// selected, and the prompt's answer is submitted.
+    public func resolvePendingGuard(id: String? = nil, verdict: String, scope: String, expiry: String? = nil) async {
         guard let p = pendingGuard, id == nil || p.id == id, !resolvingGuardIDs.contains(p.id) else { return }
         guard ["allow", "deny"].contains(verdict), scope == "once" || verdict == "allow" else { return }
         if scope != "once" {
-            guard let text = p.confirmation(scope: scope, expiry: expiry) else { return }
-            deferredGuardID = p.id
-            guard (confirm ?? Self.confirmFutureGuardAccess)(text) else { return }
+            guard promptingID == nil, p.grantTerms(scope: scope, expiry: expiry) != nil,
+                  let selected = p.availableScopes?.first(where: { $0.kind == scope && $0.expiry == expiry }) else { return }
+            promptingID = p.id
+            await showGuardAlert(p, selecting: selected)
+            return
         }
+        await submitGuardAnswer(GuardResolveRequest(id: p.id, verdict: verdict, scope: scope))
+    }
+
+    private func submitGuardAnswer(_ decision: GuardResolveRequest) async {
+        guard let p = pendingGuard, p.id == decision.id, !resolvingGuardIDs.contains(p.id) else { return }
         guardRequestNotice = nil
         guardResult = nil
         resolvingGuardIDs.insert(p.id)
         promptingID = p.id
         deferredGuardID = p.id
         defer { resolvingGuardIDs.remove(p.id); promptingID = nil; fetch() }
-        let decision = GuardResolveRequest(id: p.id, verdict: verdict, scope: scope, expiry: expiry)
         let current: [GuardPending]
         do {
             current = try await uiClient.fetchGuardPending()

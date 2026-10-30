@@ -90,6 +90,41 @@ final class GuardPromptPanelTests: XCTestCase {
         try shot.run(); shot.waitUntilExit()
     }
 
+    /// Allow with a duration chosen in the prompt answers the request with
+    /// that scope; no second confirmation opens over the prompt.
+    func testChosenDurationAnswersWithoutASecondConfirmation() async {
+        let session = GuardScopeChoice(kind: "session", expiry: nil)
+        let client = StubDaemonClient()
+        client.pending = [egress(read: [Self.githubRead], scopes: [session])]
+        let state = AppState(client: client)
+        let answerer = ModalAnswerer { panel in
+            if panel.model.duration == .scope(session) { panel.model.allow() } else { panel.model.duration = .scope(session) }
+        }
+        state.fetch()
+        let others = await answerer.wait(until: { !client.guardResolveCalls.isEmpty })
+        XCTAssertEqual(others, [], "a second confirmation opened")
+        XCTAssertEqual(client.guardResolveCalls.map { "\($0.verdict) \($0.scope)" }, ["allow session"])
+    }
+
+    /// Future access picked in the popover opens the same prompt with that
+    /// duration selected; its Allow is the answer.
+    func testPopoverFutureAccessOpensThePromptWithItsDuration() async {
+        let client = StubDaemonClient()
+        client.pending = [pending()]
+        let state = AppState(client: client)
+        state.seedPostureForTesting(nil, pendingGuard: pending())
+        var allowTitle: String?
+        let answerer = ModalAnswerer { panel in
+            allowTitle = panel.model.allowTitle
+            panel.model.allow()
+        }
+        Task { await state.resolvePendingGuard(id: "g1", verdict: "allow", scope: "exact", expiry: "24h") }
+        let others = await answerer.wait(until: { !client.guardResolveCalls.isEmpty })
+        XCTAssertEqual(others, [], "the popover opened a confirmation other than the guard prompt")
+        XCTAssertEqual(allowTitle, "Allow for 24 hours")
+        XCTAssertEqual(client.guardResolveCalls.map { "\($0.verdict) \($0.scope) \($0.expiry ?? "")" }, ["allow exact 24h"])
+    }
+
     func testReturnDeniesThroughTheModalPanel() throws {
         var width: CGFloat = 0
         let choice = run(GuardPromptContent(pending: pending(advisor: GuardAdvice(assessment: "suspicious", confidence: 0.7, rationale: "Private SSH key outside the project.")),
@@ -121,7 +156,7 @@ final class GuardPromptPanelTests: XCTestCase {
             XCTAssertGreaterThan(panel.frame.height, collapsed.height, "details grow the panel")
             XCTAssertEqual(panel.frame.maxY, collapsed.maxY, accuracy: 0.5, "the top edge stays put")
             XCTAssertEqual(panel.model.allowTitle, "Allow for 24 hours")
-            XCTAssertEqual(panel.model.allowNote, "Future access requires a separate confirmation.")
+            XCTAssertEqual(panel.model.allowNote, "Allows these sends from this tool for 24 hours. Executable signatures are not verified. Other sends still ask. Revoke under Protection → Rules & permissions.")
             try? self.capture(panel, "after-egress-details")
             panel.model.inspect() // unavailable: no answer
             panel.model.allow()
@@ -144,5 +179,39 @@ final class GuardPromptPanelTests: XCTestCase {
     func testWithdrawalAnswersNothing() {
         let choice = run(GuardPromptContent(pending: pending(), inspectUnavailableReason: nil)) { _ in NSApp.abortModal() }
         XCTAssertEqual(choice, .withdrawn)
+    }
+}
+
+/// Hands the guard prompt panel to `answer` every 20 ms while it is the modal
+/// window; any other modal window is aborted and recorded. A prompt run from a
+/// main-actor task blocks the main queue, but run loop timers still fire
+/// inside its modal loop.
+@MainActor
+private final class ModalAnswerer: NSObject {
+    private let answer: (GuardPromptPanel) -> Void
+    private let deadline = Date().addingTimeInterval(5)
+    private var others: [String] = []
+    private var timer: Timer?
+
+    init(_ answer: @escaping (GuardPromptPanel) -> Void) {
+        self.answer = answer
+        super.init()
+        let timer = Timer(timeInterval: 0.02, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    @objc private func tick() {
+        guard let window = NSApp.modalWindow else { return }
+        if let panel = window as? GuardPromptPanel, Date() < deadline { answer(panel); return }
+        others.append(String(describing: type(of: window)))
+        NSApp.abortModal()
+    }
+
+    /// Waits for `done` or the deadline, then stops; returns the other modal windows.
+    func wait(until done: () -> Bool) async -> [String] {
+        while !done(), Date() < deadline { try? await Task.sleep(nanoseconds: 20_000_000) }
+        timer?.invalidate()
+        return others
     }
 }

