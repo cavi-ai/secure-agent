@@ -16,13 +16,12 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Proxy: response headers are scanned for prompt injection; a matching header is reported and removed before the agent reads the response.
 - Firewall: registered secrets match through hex, decimal or `0x` byte lists and URL-safe or unpadded base64; `secure-agent canary plant <file>` writes decoy credentials registered as fingerprints.
 - Guard: the `untrusted-egress` rule applies its mode (monitor by default) to network commands, `git push`, `gh` writes, data-carrying URLs and MCP send tools once a session has read web, MCP (other than the Claude app's own tools), image or fetched content; a "Data sent after reading untrusted content" finding, session memory and the prompt name each input, its origin (git committer, download URL) and the send.
-- File telemetry: Endpoint Security background item, configuration profile, Gatekeeper override and XProtect events; an agent that adds or removes a background item, or creates, moves or deletes the launch agent or daemon plist macOS registers or removes, raises `launch-item-change`, one that installs a profile or overrides Gatekeeper raises `trust-change`, and every XProtect detection raises `xprotect-detection`.
+- File telemetry: Endpoint Security background item, configuration profile, Gatekeeper override and XProtect events; an agent that adds or removes a background item, or creates, moves or deletes the launch agent or daemon plist macOS registers or removes, raises `launch-item-change`, one that installs a profile or overrides Gatekeeper, or wrote the app bundle, installer package or profile file the user installs or opens past Gatekeeper within 24 hours, raises `trust-change`, and every XProtect detection raises `xprotect-detection`.
 
 ### Fixed
 - Menu bar: guard prompts open above the app in front and on its Space instead of behind the agent's window.
 - Evidence storage: finding reviews keep their attribution after the session row is pruned or gains a start time, so the startup review backfill no longer fails with "review evidence changed".
 - File telemetry: a file renamed to a new name is recorded at its destination path.
-- File telemetry: Endpoint Security background item, configuration profile, Gatekeeper override and XProtect events; an agent that adds or removes a background item raises `launch-item-change`, one that installs a profile or overrides Gatekeeper raises `trust-change`, and every XProtect detection raises `xprotect-detection`.
 
 ## [1.4.0] - 2026-10-22
 

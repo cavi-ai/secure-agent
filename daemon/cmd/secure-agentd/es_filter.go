@@ -17,9 +17,11 @@ import (
 // opens of OS libraries, frameworks, dyld caches, app-bundle resources,
 // package-manager libraries and the per-user temporary and cache roots carry
 // much of eslogger's volume and none of the daemon's signal. An open is never
-// dropped when the daemon's sensitive-path classifier matches its path. A
-// create is kept only when it names a launchd agent or daemon directory, the
-// one place the daemon reads new files from. Every other event type is kept.
+// dropped when the daemon's sensitive-path classifier matches its path or the
+// path is a configuration profile file. A create is kept only when it names a
+// launchd agent or daemon directory, or an app bundle, installer package or
+// configuration profile file that a later Gatekeeper override or profile
+// install is traced back to. Every other event type is kept.
 
 // esNoisePrefixes are the open-path prefixes whose opens are dropped.
 var esNoisePrefixes = []string{
@@ -78,6 +80,23 @@ func namesLaunchItemDir(line []byte) bool {
 	return false
 }
 
+// esTrustSubjectEnds are the JSON string endings of an app bundle, installer
+// package or configuration profile path or file name.
+var esTrustSubjectEnds = [][]byte{
+	[]byte(`.app"`), []byte(`.pkg"`), []byte(`.mpkg"`), []byte(`.mobileconfig"`),
+}
+
+// namesTrustSubject reports whether an eslogger line holds a string ending in
+// an app bundle, installer package or configuration profile name.
+func namesTrustSubject(line []byte) bool {
+	for _, s := range esTrustSubjectEnds {
+		if bytes.Contains(line, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // esSensitive is the daemon's sensitive-path classifier over the compiled-in
 // config (os.DevNull as the overlay: the root helper reads no user file).
 // nil when the config does not load; then no open is dropped.
@@ -91,9 +110,9 @@ var esSensitive = sync.OnceValue(func() sensitive.Classifier {
 })
 
 // keepESLine reports whether one eslogger JSON line goes to the spool. It
-// drops open events whose path is system noise and creates outside the
-// launch-item directories; a line it cannot read (malformed, unexpected
-// shape) is kept. Byte scans first: the line is JSON-decoded only when
+// drops open events whose path is system noise and creates that name neither
+// a launch-item directory nor a trust subject; a line it cannot read
+// (malformed, unexpected shape) is kept. Byte scans first: the line is JSON-decoded only when
 // eslogger's compact layout is absent, and the path string only when it
 // holds escapes.
 func keepESLine(line []byte) bool {
@@ -103,7 +122,7 @@ func keepESLine(line []byte) bool {
 	}
 	rest := line[i+len(esEventMarker):]
 	if bytes.HasPrefix(rest, esCreateKey) {
-		return namesLaunchItemDir(rest)
+		return namesLaunchItemDir(rest) || namesTrustSubject(rest)
 	}
 	if !bytes.HasPrefix(rest, esOpenKey) {
 		return true // every event other than open
@@ -145,7 +164,7 @@ func keepESLineParsed(line []byte) bool {
 		return true
 	}
 	if env.Event.Create != nil {
-		return namesLaunchItemDir(env.Event.Create)
+		return namesLaunchItemDir(env.Event.Create) || namesTrustSubject(env.Event.Create)
 	}
 	if env.Event.Open == nil {
 		return true
@@ -169,10 +188,11 @@ func jsonStringBody(b []byte) (body []byte, escaped, ok bool) {
 	return nil, escaped, false
 }
 
-// dropESOpenPath reports whether an open of path is system noise that the
-// sensitive-path classifier does not match.
+// dropESOpenPath reports whether an open of path is system noise that is not
+// a configuration profile file and that the sensitive-path classifier does
+// not match.
 func dropESOpenPath(path []byte) bool {
-	if !isESNoisePath(path) {
+	if !isESNoisePath(path) || bytes.HasSuffix(path, []byte(".mobileconfig")) {
 		return false
 	}
 	c := esSensitive()
