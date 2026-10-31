@@ -319,6 +319,9 @@ var repeatWindows = map[string]time.Duration{
 	"proxy-inspection-incomplete": 5 * time.Minute,
 	"proxy-prompt-injection":      15 * time.Minute,
 	"secret-in-transcript":        15 * time.Minute,
+	// One per client process and host: a monitored session's connections
+	// would otherwise flag each request.
+	"proxy-untrusted-egress-monitored": 60 * time.Minute,
 }
 
 // shouldFlag reports whether this (rule, pid, subject) fire is new within
@@ -397,6 +400,8 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 		sub := "payload inspection"
 		if strings.HasPrefix(e.Detail, "proxy-untrusted-egress:") {
 			ruleName, sub = "proxy-untrusted-egress", "untrusted-egress"
+		} else if strings.HasPrefix(e.Detail, "proxy-untrusted-egress-monitored:") {
+			ruleName, sub, severity = "proxy-untrusted-egress-monitored", "untrusted-egress", 2
 		} else if strings.HasPrefix(e.Detail, "proxy-secret-leak") {
 			ruleName = "proxy-secret-leak"
 		} else if strings.HasPrefix(e.Detail, "proxy-prompt-injection") {

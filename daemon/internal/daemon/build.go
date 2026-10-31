@@ -42,6 +42,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
+	"github.com/cavi-ai/secure-agent/daemon/internal/taint"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
@@ -241,10 +242,14 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	go runResourceLoop(ctx, tagger, resolver, resourceTracker, resourceControl, resourceEpisodes, st, cfg.DBPath, supReg, plans)
 
 	var proxyServer *proxy.ProxyServer
+	// The egress prompt goes through the API, built below and before Serve.
+	var askEgress func(context.Context, taint.Verdict) bool
 	if cfg.ProxyEnabled {
 		proxyServer = setupProxy(cfg, b, fw.Engine)
 		if proxyServer != nil {
-			proxyServer.SetEgressGate(egressGate(cfg, resolver).Check)
+			proxyServer.SetEgressGate(egressGate(cfg, resolver).Check, func(ctx context.Context, v taint.Verdict) bool {
+				return askEgress != nil && askEgress(ctx, v)
+			})
 		}
 	}
 
@@ -404,6 +409,9 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			SysAgent:         sysAgent,
 		},
 	})
+	askEgress = func(ctx context.Context, v taint.Verdict) bool {
+		return apiServer.ProxyEgressDecision(ctx, v.PID, v.SessionID, v.Host, v.Detail, v.Mode).Verdict == "allow"
+	}
 
 	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, procSource, st))
 

@@ -43,7 +43,7 @@ Enforcement points, honestly labeled:
 | Claude `Bash` | `deny`-mode rules enforced (including protected-directory targets); key material always denied — via `cat` **or any reader alias** (`grep`/`rg` included); `prompt` fails safe to `deny` (no interactive prompt mid-Bash). |
 | Cursor | `Bash` commands only (Cursor's payload lacks `tool_name`). |
 | Codex, OpenClaw, Antigravity, Hermes, OpenCode v2 | Shell commands, file tools and patch targets, through `harness_guard.py`; `prompt` approvals expire after five seconds on OpenClaw, Hermes and OpenCode. |
-| Untrusted-input egress | Claude Code: every tool the `PreToolUse` hook sees, mode-enforced (`monitor` / `prompt` / `deny`). Cursor: shell commands, tainted only by events that carry a tool name. Routed agents in `deny`: every new proxy connection from a tainted session, except the model API hosts the proxy decrypts and loopback. |
+| Untrusted-input egress | Claude Code: every tool the `PreToolUse` hook sees, mode-enforced (`monitor` / `prompt` / `deny`). Cursor: shell commands, tainted only by events that carry a tool name. Routed agents: every new proxy connection from a tainted session, or from a client the proxy cannot identify while a session is tainted, follows the mode (`monitor` records, `prompt` asks, `deny` refuses), except the model API hosts the proxy decrypts and loopback. |
 
 ## Bypass classes that are CLOSED (with regression tests)
 

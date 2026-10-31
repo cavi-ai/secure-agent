@@ -65,7 +65,12 @@ func TestTaintedSessionEgressRefusedInDenyMode(t *testing.T) {
 	}
 
 	ps, tok, _ := startRouteProxy(t)
-	ps.SetEgressGate(gate.Check)
+	var askAnswer atomic.Bool
+	var asked atomic.Int32
+	ps.SetEgressGate(gate.Check, func(_ context.Context, v taint.Verdict) bool {
+		asked.Add(1)
+		return askAnswer.Load()
+	})
 	sub := ps.bus.Subscribe()
 
 	// run fetches target through the proxy and returns curl's pid and the
@@ -122,8 +127,28 @@ func TestTaintedSessionEgressRefusedInDenyMode(t *testing.T) {
 		if _, status := run(target); status != "200" {
 			t.Fatalf("%s in monitor mode: status %q, want 200", target, status)
 		}
+		select {
+		case ev := <-sub:
+			if !strings.HasPrefix(ev.Detail, "proxy-untrusted-egress-monitored: 127.0.0.1 after untrusted content") {
+				t.Fatalf("%s: monitored event %+v", target, ev)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: monitor mode recorded nothing", target)
+		}
 	}
-	if n := upstream.Load(); n != 2 {
-		t.Fatalf("upstream saw %d requests in monitor mode, want 2", n)
+	if n := upstream.Load(); n != 2 || asked.Load() != 0 {
+		t.Fatalf("monitor mode: upstream saw %d requests, want 2; %d prompts", n, asked.Load())
+	}
+
+	// Prompt mode asks; a denied prompt refuses, an allowed one passes.
+	if err := os.WriteFile(modes, []byte(`{"untrusted-egress":"prompt"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, status := run(plainBackend.URL); status != "403" || asked.Load() != 1 {
+		t.Fatalf("denied prompt: status %q after %d prompts", status, asked.Load())
+	}
+	askAnswer.Store(true)
+	if _, status := run(plainBackend.URL); status != "200" || asked.Load() != 2 {
+		t.Fatalf("allowed prompt: status %q after %d prompts", status, asked.Load())
 	}
 }

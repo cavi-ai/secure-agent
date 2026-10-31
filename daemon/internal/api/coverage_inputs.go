@@ -143,6 +143,8 @@ func humanFlagTitle(rule string) string {
 		return "Data sent after reading untrusted content"
 	case "proxy-untrusted-egress":
 		return "Connection refused after reading untrusted content"
+	case "proxy-untrusted-egress-monitored":
+		return "Connection after reading untrusted content"
 	default:
 		return rule
 	}

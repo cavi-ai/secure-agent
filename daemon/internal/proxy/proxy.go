@@ -60,6 +60,9 @@ type ProxyServer struct {
 	// egressGate decides each routed request before it is tunneled,
 	// decrypted or forwarded. Set once before Serve; nil admits all.
 	egressGate func(ctx context.Context, remoteAddr, target string) taint.Verdict
+	// egressAsk prompts the user for a connection in prompt or session mode
+	// and reports whether it was allowed.
+	egressAsk func(ctx context.Context, v taint.Verdict) bool
 	// tunneled and decrypted count CONNECTs by how they were served.
 	tunneled    atomic.Uint64
 	decrypted   atomic.Uint64
