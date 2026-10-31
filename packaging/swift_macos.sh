@@ -9,7 +9,8 @@ case "${command}" in
   *) echo "error: expected build or test" >&2; exit 2 ;;
 esac
 
-sdk_path="$(xcrun --sdk macosx27.0 --show-sdk-path)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/macos_sdk.sh"
+sdk_path="$(macos_sdk_path)"
 # The Swift driver forwards --sysroot to Clang. Darwin SDK version detection
 # requires -isysroot as well; otherwise the executable can record the minimum
 # OS version as its SDK version. Let Clang read the actual SDK metadata.

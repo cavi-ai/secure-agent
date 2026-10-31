@@ -6,7 +6,7 @@ This guide is for building and testing the repository. To run the packaged app, 
 
 ## Build and install
 
-Prerequisites: macOS 14+, Go 1.26.10 or newer (as declared in `go.mod`), Python 3.10+, Node.js for console tests, and Xcode with the macOS 27.0 SDK and a Swift 6 toolchain. App packaging and local Swift builds/tests use `packaging/swift_macos.sh` to select `macosx27.0` for both compilation and linking; an unavailable SDK fails the build. Packaging also checks that both executable architectures record SDK 27.0 and minimum macOS 14.0.
+Prerequisites: macOS 14+, Go 1.26.10 or newer (as declared in `go.mod`), Python 3.10+, Node.js for console tests, and Xcode with a macOS 27 SDK and a Swift 6 toolchain. App packaging and local Swift builds/tests compile and link against the selected Xcode's macOS SDK through `packaging/swift_macos.sh`; an SDK other than macOS 27 fails the build. Packaging also checks that both executable architectures record a macOS 27 SDK and minimum macOS 14.0.
 
 ```bash
 git clone https://github.com/cavi-ai/secure-agent.git
