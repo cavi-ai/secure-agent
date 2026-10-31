@@ -33,6 +33,27 @@ For local use, `make install` builds, installs and launches the `/Applications` 
 
 ### Signing and notarization
 
+For CI distribution, create a draft release for an existing `vX.Y.Z` tag on
+`main`. Configure these repository Actions secrets once:
+
+| Secret | Value |
+| --- | --- |
+| `MACOS_CERTIFICATE_P12_BASE64` | Base64-encoded Developer ID Application certificate and private key (`.p12`) |
+| `MACOS_CERTIFICATE_PASSWORD` | Password protecting the `.p12` file |
+| `MACOS_CODESIGN_IDENTITY` | Full `Developer ID Application: …` identity |
+| `MACOS_NOTARY_KEY_P8_BASE64` | Base64-encoded App Store Connect team API private key (`.p8`) |
+| `MACOS_NOTARY_KEY_ID` | API key ID |
+| `MACOS_NOTARY_ISSUER_ID` | API issuer ID |
+
+Run **Release validation** from `main` with the draft's tag. CI checks the
+credentials, builds the exact tagged commit, signs and notarizes the app and
+DMG in a disposable keychain, and uploads the DMG and checksums to the draft.
+The release is published as stable only after source and artifact checks pass.
+Missing credentials or a failed gate leave it unpublished. Existing assets are
+never overwritten. Leaving the tag input blank runs source checks only.
+See [GitHub's certificate setup](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications)
+and [Apple's notarization authentication](https://developer.apple.com/documentation/technotes/tn3147-migrating-to-the-latest-notarization-tool).
+
 `make install`, `make app`, and `make dmg` all resolve `CODESIGN_IDENTITY` the same way (`packaging/lib/sign_identity.sh`): the first "Apple Development" identity in your keychain, else the first "Developer ID Application" identity, else ad-hoc (`-`) as the fallback. Signing with a real identity — Apple Development or Developer ID — is what lets the ES helper's Full Disk Access and Login Items grants survive rebuilds; the first build under a new identity still needs one Login Items approval and one Full Disk Access grant. An ad-hoc build loses both grants on every rebuild.
 
 Override the identity explicitly, e.g. for proper Gatekeeper distribution:

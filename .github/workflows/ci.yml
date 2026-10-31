@@ -57,6 +57,8 @@ jobs:
       # are CGO_ENABLED=0, see the linux job).
       - name: make test-go
         run: make test-go
+      - name: Validate GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck=''
       - name: Live hook and daemon workflow
         run: make test-guard-workflow-live
       - name: Attack replay
