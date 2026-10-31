@@ -22,6 +22,9 @@ concurrency:
 jobs:
   prepare:
     name: Check release source and credentials
+    # Draft releases are visible only with push access.
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -166,6 +169,8 @@ jobs:
 
   dmg:
     name: Released app signature, notarization and version
+    permissions:
+      contents: write
     needs: [prepare, build]
     if: >-
       !cancelled() && needs.prepare.result == 'success' &&
