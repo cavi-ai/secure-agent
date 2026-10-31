@@ -24,6 +24,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - File telemetry: Endpoint Security background item, configuration profile, Gatekeeper override and XProtect events; an agent that adds or removes a background item, or creates, moves or deletes the launch agent or daemon plist macOS registers or removes, raises `launch-item-change`, one that installs a profile or overrides Gatekeeper, or wrote the app bundle, installer package or profile file the user installs or opens past Gatekeeper within 24 hours, raises `trust-change`, and every XProtect detection raises `xprotect-detection`; a file written by an agent's short-lived child process (`mkdir`, `cp`, a shell redirect) counts as the agent's.
 
 ### Fixed
+- Antigravity: CLI file reads using `Path` are checked against file guard rules.
 - Antigravity: Secure Agent scripts live in `~/.config/secure-agent/hooks/antigravity`; setup migrates owned commands in Antigravity's global `~/.gemini/config/hooks.json`, preserving other hooks.
 - Menu bar: guard prompts open above the app in front and on its Space instead of behind the agent's window.
 - Evidence storage: finding reviews keep their attribution after the session row is pruned or gains a start time, so the startup review backfill no longer fails with "review evidence changed".
