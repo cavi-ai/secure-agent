@@ -228,10 +228,12 @@ jobs:
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
 
   # A release edited with the workflow token starts no other workflow, so the
-  # documentation for the promoted release is published from here.
+  # documentation for the promoted release is published from here; its own
+  # condition keeps it running when the build job is skipped.
   docs:
     name: Publish documentation for the promoted release
     needs: [prepare, promote]
+    if: ${{ !cancelled() && needs.promote.result == 'success' }}
     permissions:
       contents: write
     uses: ./.github/workflows/publish-docs.yml
