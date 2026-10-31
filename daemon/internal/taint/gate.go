@@ -1,7 +1,7 @@
 // Package taint applies the guard hook's untrusted-egress rule to proxied
 // connections. The hook keeps one record per session that read untrusted
-// content; a routed client in such a session is refused when the rule
-// resolves to deny for the session's workspace.
+// content; a routed client in such a session follows the rule's mode for the
+// session's workspace.
 package taint
 
 import (
@@ -48,16 +48,25 @@ func stricter(a, b string) string {
 	return a
 }
 
-// Verdict is the gate's answer for one proxied connection.
+// Verdict is the gate's answer for one proxied connection: Mode is "" when
+// the connection is not after untrusted content, else the mode it resolves to
+// (monitor, session, prompt or deny). PID is 0 for a client it could not name.
 type Verdict struct {
-	Blocked   bool
+	Mode      string
+	Host      string
 	Detail    string
 	PID       int32
 	SessionID string
 }
 
-// Gate refuses proxied connections from sessions the hook recorded as having
-// read untrusted content, when the rule's mode for the session is deny.
+// Blocked reports whether the mode refuses without asking.
+func (v Verdict) Blocked() bool { return v.Mode != "" && denies(v.Mode) }
+
+// Asks reports whether the mode prompts the user.
+func (v Verdict) Asks() bool { return v.Mode == "prompt" || v.Mode == "session" }
+
+// Gate applies the hook's untrusted-egress mode to proxied connections from
+// sessions the hook recorded as having read untrusted content.
 type Gate struct {
 	// Dir holds the hook's taint records, one per session.
 	Dir string
@@ -80,10 +89,10 @@ type Session struct {
 	ID, Workspace string
 }
 
-// Check decides one connection to target (host or host:port). It looks up
-// the client process only when a taint record exists and some workspace
-// resolves the rule to deny. A client it cannot attribute is not refused;
-// a root hosting several sessions is refused when any of them would be.
+// Check decides one connection to target (host or host:port) while any
+// session has a taint record. A client process it cannot identify takes the
+// workspace-free mode; one in no tainted session passes; a root hosting
+// several sessions takes the strictest mode among its tainted ones.
 func (g *Gate) Check(ctx context.Context, remoteAddr, target string) Verdict {
 	host := target
 	if h, _, err := net.SplitHostPort(target); err == nil {
@@ -98,29 +107,61 @@ func (g *Gate) Check(ctx context.Context, remoteAddr, target string) Verdict {
 		entries:    loadCwdOverrides(g.CwdOverridesPath),
 		categories: loadCategories(g.CategoriesPath),
 	}
-	if !p.mayDeny() {
-		return Verdict{}
-	}
 	pid, err := g.ClientPID(ctx, remoteAddr)
 	if err != nil {
-		return Verdict{}
+		pid = 0
 	}
-	for _, sess := range g.Sessions(pid) {
+	var sessions []Session
+	if pid > 0 {
+		sessions = g.Sessions(pid)
+	}
+	var out Verdict
+	for _, sess := range sessions {
 		if sess.ID == "" {
 			continue
 		}
 		rec, tainted := g.record(sess.ID)
-		if !tainted || !denies(p.mode(sess.Workspace, rec.injected)) {
+		if !tainted {
 			continue
 		}
-		return Verdict{
-			Blocked:   true,
-			PID:       pid,
-			SessionID: sess.ID,
-			Detail:    fmt.Sprintf("proxy-untrusted-egress: %s after untrusted content (%s)", host, rec.source),
+		mode := p.mode(sess.Workspace, rec.injected)
+		if out.Mode == "" || rank(mode) > rank(out.Mode) {
+			out = Verdict{Mode: mode, SessionID: sess.ID, Detail: fmt.Sprintf("%s after untrusted content (%s)", host, rec.source)}
 		}
 	}
-	return Verdict{}
+	if pid == 0 {
+		source, injected := g.anyTaint()
+		out = Verdict{Mode: p.modeFor(nil, injected), Detail: fmt.Sprintf("%s from a client the proxy could not identify while a session holds untrusted content (%s)", host, source)}
+	}
+	if out.Mode == "" {
+		return Verdict{}
+	}
+	out.PID, out.Host = pid, host
+	return out
+}
+
+// anyTaint returns the first source among the taint records and whether any
+// of them holds an injection match.
+func (g *Gate) anyTaint() (source string, injected bool) {
+	entries, err := os.ReadDir(g.Dir)
+	if err != nil {
+		return "unreadable", true
+	}
+	for _, e := range entries {
+		name, ok := strings.CutSuffix(e.Name(), ".json")
+		if !ok {
+			continue
+		}
+		rec := g.readRecord(filepath.Join(g.Dir, name+".json"))
+		if source == "" {
+			source = rec.source
+		}
+		injected = injected || rec.injected
+	}
+	if source == "" {
+		source = "unknown"
+	}
+	return source, injected
 }
 
 func (g *Gate) anyRecord() bool {
@@ -150,16 +191,22 @@ func (g *Gate) record(id string) (taintRecord, bool) {
 		id = string(r[:64])
 	}
 	sum := sha256.Sum256([]byte(id))
-	data, err := os.ReadFile(filepath.Join(g.Dir, hex.EncodeToString(sum[:])[:32]+".json"))
-	if errors.Is(err, fs.ErrNotExist) {
+	path := filepath.Join(g.Dir, hex.EncodeToString(sum[:])[:32]+".json")
+	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
 		return taintRecord{}, false
 	}
+	return g.readRecord(path), true
+}
+
+// readRecord reads one taint record; an unreadable one counts as injected.
+func (g *Gate) readRecord(path string) taintRecord {
+	data, err := os.ReadFile(path)
 	var rec struct {
 		Source    string          `json:"source"`
 		Injection json.RawMessage `json:"injection"`
 	}
 	if err != nil || json.Unmarshal(data, &rec) != nil {
-		return taintRecord{source: "unreadable", injected: true}, true
+		return taintRecord{source: "unreadable", injected: true}
 	}
 	out := taintRecord{source: rec.Source, injected: len(rec.Injection) > 0 && string(rec.Injection) != "null"}
 	if out.source == "" {
@@ -168,11 +215,10 @@ func (g *Gate) record(id string) (taintRecord, bool) {
 	if len(out.source) > 200 {
 		out.source = out.source[:200]
 	}
-	return out, true
+	return out
 }
 
-// denies mirrors the hook: the proxy cannot prompt, so only deny or a mode
-// the hook does not know refuses.
+// denies mirrors the hook: deny, or a mode the hook does not know, refuses.
 func denies(mode string) bool {
 	return rank(mode) >= strictness["deny"]
 }
@@ -219,20 +265,6 @@ func (p policy) modeFor(cwd map[string]string, injected bool) string {
 		m = stricter(m, resolveMode(InjectedRule, cwd, p.overrides))
 	}
 	return m
-}
-
-// mayDeny reports whether any workspace can resolve to deny, so the client
-// lookup is skipped while every mode is monitor, session or prompt.
-func (p policy) mayDeny() bool {
-	if denies(p.modeFor(nil, true)) {
-		return true
-	}
-	for _, e := range p.entries {
-		if denies(p.modeFor(e.rules, true)) {
-			return true
-		}
-	}
-	return false
 }
 
 type cwdOverride struct {

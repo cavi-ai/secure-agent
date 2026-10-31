@@ -66,10 +66,10 @@ func TestDenyModeRefusesTaintedSession(t *testing.T) {
 	write(t, f.gate.ModesPath, `{"untrusted-egress":"deny"}`)
 
 	v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net:443")
-	if !v.Blocked || v.PID != 4242 || v.SessionID != "sess-1" {
+	if !v.Blocked() || v.PID != 4242 || v.SessionID != "sess-1" {
 		t.Fatalf("verdict = %+v, want blocked for pid 4242 in sess-1", v)
 	}
-	if !strings.HasPrefix(v.Detail, "proxy-untrusted-egress: paste.example.net after untrusted content (web: https://evil.example/page)") {
+	if v.Detail != "paste.example.net after untrusted content (web: https://evil.example/page)" || v.Host != "paste.example.net" {
 		t.Fatalf("detail = %q", v.Detail)
 	}
 }
@@ -98,25 +98,50 @@ func TestOnlyDenyRefuses(t *testing.T) {
 			if tc.cwd != "" {
 				write(t, f.gate.CwdOverridesPath, tc.cwd)
 			}
-			if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); v.Blocked != tc.blocked {
-				t.Fatalf("blocked = %v, want %v (%+v)", v.Blocked, tc.blocked, v)
+			if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); v.Blocked() != tc.blocked {
+				t.Fatalf("blocked = %v, want %v (%+v)", v.Blocked(), tc.blocked, v)
 			}
 		})
 	}
 }
 
-func TestUntaintedOrUnattributedClientPasses(t *testing.T) {
+func TestUntaintedSessionPasses(t *testing.T) {
 	f := newFixture(t)
 	f.taint(t, "sess-other", `{"source":"web: https://evil.example"}`)
 	write(t, f.gate.ModesPath, `{"untrusted-egress":"deny"}`)
-	if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); v.Blocked {
-		t.Fatalf("session without a record refused: %+v", v)
+	if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); v.Mode != "" {
+		t.Fatalf("session without a record: %+v", v)
 	}
+}
 
-	f.taint(t, "sess-1", `{"source":"web: https://evil.example"}`)
-	f.gate.ClientPID = func(context.Context, string) (int32, error) { return 0, errors.New("2 candidate processes") }
-	if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); v.Blocked {
-		t.Fatalf("unattributed client refused: %+v", v)
+// A client the gate cannot identify follows the workspace-free mode while any
+// session is tainted; an identified one in no tainted session passes.
+func TestUnattributedClientFollowsTheMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, modes, want string
+		pid               bool
+	}{
+		{"deny, no client", `{"untrusted-egress":"deny"}`, "deny", false},
+		{"prompt, no client", `{"untrusted-egress":"prompt"}`, "prompt", false},
+		{"monitor, no client", "", "monitor", false},
+		{"deny, client in no session", `{"untrusted-egress":"deny"}`, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.taint(t, "sess-other", `{"source":"web: https://evil.example"}`)
+			if tc.modes != "" {
+				write(t, f.gate.ModesPath, tc.modes)
+			}
+			if tc.pid {
+				f.gate.Sessions = func(int32) []Session { return nil }
+			} else {
+				f.gate.ClientPID = func(context.Context, string) (int32, error) { return 0, errors.New("2 candidate processes") }
+			}
+			v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net")
+			if v.Mode != tc.want || v.SessionID != "" || (v.Mode != "" && v.PID != 0) {
+				t.Fatalf("verdict = %+v, want mode %s", v, tc.want)
+			}
+		})
 	}
 }
 
@@ -125,30 +150,26 @@ func TestUnreadableRecordCountsAsTaint(t *testing.T) {
 	f.taint(t, "sess-1", `{truncated`)
 	write(t, f.gate.ModesPath, `{"untrusted-egress":"deny"}`)
 	v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net")
-	if !v.Blocked || !strings.Contains(v.Detail, "(unreadable)") {
+	if !v.Blocked() || !strings.Contains(v.Detail, "(unreadable)") {
 		t.Fatalf("verdict = %+v, want blocked as unreadable", v)
 	}
 }
 
-// The client lookup runs netstat: it is skipped for exempt hosts, while no
-// session is tainted, and while no workspace resolves the rule to deny.
-func TestClientLookupOnlyWhenARefusalIsPossible(t *testing.T) {
+// The client lookup runs netstat: it is skipped for exempt hosts and while
+// no session is tainted.
+func TestClientLookupOnlyAfterUntrustedContent(t *testing.T) {
 	f := newFixture(t)
 	write(t, f.gate.ModesPath, `{"untrusted-egress":"deny"}`)
-	f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net")
-	if f.lookups != 0 {
-		t.Fatalf("lookups without any taint record = %d", f.lookups)
+	if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); v.Mode != "" || f.lookups != 0 {
+		t.Fatalf("without any taint record: %+v after %d lookups", v, f.lookups)
 	}
-
 	f.taint(t, "sess-1", `{"source":"web: https://evil.example"}`)
-	if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "api.anthropic.com:443"); v.Blocked || f.lookups != 0 {
+	if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "api.anthropic.com:443"); v.Mode != "" || f.lookups != 0 {
 		t.Fatalf("exempt host: verdict %+v after %d lookups", v, f.lookups)
 	}
-
 	write(t, f.gate.ModesPath, `{"untrusted-egress":"monitor"}`)
-	f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net")
-	if f.lookups != 0 {
-		t.Fatalf("lookups with the rule in monitor = %d", f.lookups)
+	if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); v.Mode != "monitor" || v.PID != 4242 || f.lookups != 1 {
+		t.Fatalf("monitor: verdict %+v after %d lookups", v, f.lookups)
 	}
 }
 
@@ -165,8 +186,8 @@ func TestInjectedRuleRaisesTheMode(t *testing.T) {
 			f := newFixture(t)
 			f.taint(t, "sess-1", tc.record)
 			write(t, f.gate.ModesPath, `{"untrusted-egress":"monitor","untrusted-egress-injected":"deny"}`)
-			if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); v.Blocked != tc.blocked {
-				t.Fatalf("blocked = %v, want %v (%+v)", v.Blocked, tc.blocked, v)
+			if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); v.Blocked() != tc.blocked {
+				t.Fatalf("blocked = %v, want %v (%+v)", v.Blocked(), tc.blocked, v)
 			}
 		})
 	}
@@ -190,8 +211,8 @@ func TestNetworkSendKindMode(t *testing.T) {
 				write(t, f.gate.ModesPath, tc.modes)
 			}
 			write(t, f.gate.CategoriesPath, tc.categories)
-			if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); v.Blocked != tc.blocked {
-				t.Fatalf("blocked = %v, want %v (%+v)", v.Blocked, tc.blocked, v)
+			if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); v.Blocked() != tc.blocked {
+				t.Fatalf("blocked = %v, want %v (%+v)", v.Blocked(), tc.blocked, v)
 			}
 		})
 	}
@@ -204,7 +225,7 @@ func TestAnyTaintedSessionOnTheRootRefuses(t *testing.T) {
 	}
 	f.taint(t, "thread-b", `{"source":"web: https://evil.example"}`)
 	write(t, f.gate.CwdOverridesPath, `[{"cwd_prefix":"/work/b","rules":{"untrusted-egress":"deny"}}]`)
-	if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); !v.Blocked || v.SessionID != "thread-b" {
+	if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); !v.Blocked() || v.SessionID != "thread-b" {
 		t.Fatalf("verdict = %+v, want blocked for thread-b", v)
 	}
 }
@@ -215,7 +236,7 @@ func TestSessionIDClipsByCharacter(t *testing.T) {
 	f.gate.Sessions = func(int32) []Session { return []Session{{ID: long, Workspace: "/work/app"}} }
 	f.taint(t, strings.Repeat("é", 64), `{"source":"web: https://evil.example"}`)
 	write(t, f.gate.ModesPath, `{"untrusted-egress":"deny"}`)
-	if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); !v.Blocked {
+	if v := f.gate.Check(context.Background(), "127.0.0.1:50000", "paste.example.net"); !v.Blocked() {
 		t.Fatalf("record under the hook's 64-character id missed: %+v", v)
 	}
 }

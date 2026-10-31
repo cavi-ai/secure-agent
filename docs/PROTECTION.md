@@ -150,7 +150,15 @@ Each sink has a kind: `git-push`, `gh-write` (the `gh` writes above), `network-s
 
 `mcp-send` sets every MCP server without its own `mcp:<server>` entry. A call with several kinds takes the strictest of their modes, a session that matched the injection detector still takes `untrusted-egress-injected` when it is stricter, and a corrupt file blocks every send after untrusted content. Kind modes are not read per project; the proxy applies the `network-send` mode. The taint record sits beside the daemon socket under `taint/`, which agent tools cannot write, and expires after 7 days.
 
-For an agent routed through the proxy, `deny` also covers connections the hook cannot name, such as a script the agent wrote and then ran. The proxy finds the process holding the client end of each new connection (once per connection), maps it to its live session, and refuses the CONNECT or plain request with `403` when that session has a taint record and its mode resolves to `deny` for its workspace: the rule, the `network-send` kind, and `untrusted-egress-injected` once the session matched the injection detector. An app server such as Codex runs several sessions on one process; a connection from it is refused when any of them would be. The refusal is a `proxy-untrusted-egress` finding carrying the client process and session. The model API hosts the proxy decrypts (`proxy_inspect_hosts`) and loopback are never refused. The proxy does nothing in `monitor`, `session` or `prompt`, and looks up no process while no session is tainted or no workspace resolves the rule to `deny`.
+For an agent routed through the proxy, the mode also covers connections the hook cannot name, such as a script the agent wrote and then ran. The proxy finds the process holding the client end of each new connection (once per connection) and maps it to its live session. When that session has a taint record, its mode for its workspace applies: the rule, the `network-send` kind, and `untrusted-egress-injected` once the session matched the injection detector. An app server such as Codex runs several sessions on one process; a connection from it takes the strictest mode among them. A client process the proxy cannot identify, while any session is tainted, takes the mode without a workspace overlay; an identified process in no tainted session passes.
+
+| Mode | Proxy connection |
+|---|---|
+| `monitor` | Passes; a `proxy-untrusted-egress-monitored` finding names the client, session and host, once an hour per process and host. |
+| `prompt`, `session` | Held until you answer the guard prompt, which names the connection's host as a `network-send` from the `proxy` tool; Deny or a timeout refuses it with `403`. A session or timed permission for the proxy's network sends answers later connections. |
+| `deny` | Refused with `403`. |
+
+A refusal is a `proxy-untrusted-egress` finding carrying the client process and session. The model API hosts the proxy decrypts (`proxy_inspect_hosts`) and loopback are never checked. The proxy looks up no process while no session is tainted. The proxy identifies client processes on macOS (`netstat`) and Linux (`/proc`); elsewhere every connection while a session is tainted takes the mode without a workspace overlay.
 
 When a tool result matches the injection detector (phrases such as "ignore all previous instructions"), three things happen:
 
@@ -199,7 +207,7 @@ Without the helper (outside the app bundle, or a file over 25 MB) the read proce
 | EchoLeak | The client loads a markdown image whose URL carries data, with no tool call | the proxy's refusal in `deny` |
 | Response header injection | An `X-AI-Instructions` header carries the instruction | the proxy's header scrub |
 
-It prints a scorecard (attack, step, layer, mode, expected, observed) and exits 1 when any row differs from the documented behavior. Image rows are skipped where Vision text recognition is unavailable, and EchoLeak rows off macOS, where the proxy cannot name a connection's client process. `--json <file>` also writes the rows.
+It prints a scorecard (attack, step, layer, mode, expected, observed) and exits 1 when any row differs from the documented behavior. Image rows are skipped where Vision text recognition is unavailable, and EchoLeak rows off macOS and Linux, where the proxy cannot name a connection's client process. `--json <file>` also writes the rows.
 
 See [GUARD_THREAT_MODEL.md](GUARD_THREAT_MODEL.md) for the full list of closed bypass classes, the known limits (symlinks, TOCTOU, static inline-code analysis), and exactly which failures fail closed vs. open.
 
