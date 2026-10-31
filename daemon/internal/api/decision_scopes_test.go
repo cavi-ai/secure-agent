@@ -436,3 +436,54 @@ func TestLegacyApprovalUnchanged(t *testing.T) {
 		t.Fatalf("legacy approval changed: %+v", d)
 	}
 }
+
+// A proxied connection in prompt mode raises the same untrusted-egress prompt
+// as a hook send, as the proxy's network-send for the connection's session;
+// a session permission answers the next one without a prompt.
+func TestProxyEgressDecisionPrompts(t *testing.T) {
+	a, _ := scopedGuardAPI(t)
+	out := make(chan guard.Decision, 1)
+	go func() {
+		out <- a.ProxyEgressDecision(t.Context(), 42, "session", "paste.example.net", "paste.example.net after untrusted content (web)", "session")
+	}()
+	var p guard.Pending
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if pending := a.guardBroker.Pending(); len(pending) == 1 {
+			p = pending[0]
+			break
+		}
+	}
+	if p.Agent != "codex" || p.Tool != "proxy" || p.Path != "paste.example.net" || p.RuleID != model.EgressRule ||
+		!reflect.DeepEqual(p.Categories, []string{"network-send"}) || p.DefaultScope == nil || p.DefaultScope.Kind != "session" || !p.DefaultScope.Category {
+		t.Fatalf("prompt: %+v", p)
+	}
+	if w := resolveGuardBody(a, `{"id":"`+p.ID+`","verdict":"allow","scope":"session","category":true}`); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if d := <-out; d.Verdict != "allow" {
+		t.Fatalf("decision: %+v", d)
+	}
+	if d := a.ProxyEgressDecision(t.Context(), 42, "session", "other.example.net", "x", "prompt"); d.Verdict != "allow" || d.Reason != "saved-permission" {
+		t.Fatalf("second connection: %+v", d)
+	}
+}
+
+// An unattributed connection prompts once only and times out to deny.
+func TestProxyEgressDecisionUnattributed(t *testing.T) {
+	a, _ := scopedGuardAPI(t)
+	out := make(chan guard.Decision, 1)
+	go func() { out <- a.ProxyEgressDecision(t.Context(), 0, "", "paste.example.net", "x", "prompt") }()
+	var p guard.Pending
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if pending := a.guardBroker.Pending(); len(pending) == 1 {
+			p = pending[0]
+			break
+		}
+	}
+	if p.Agent != "proxy" || len(p.AvailableScopes) != 1 || p.AvailableScopes[0].Kind != "once" {
+		t.Fatalf("prompt: %+v", p)
+	}
+	if d := <-out; d.Verdict != "deny" {
+		t.Fatalf("decision: %+v", d)
+	}
+}

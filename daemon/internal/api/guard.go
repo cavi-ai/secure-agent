@@ -153,16 +153,65 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "guard not enabled", http.StatusServiceUnavailable)
 		return
 	}
+	peerPID := int32(-1)
+	if a.peerChk != nil {
+		if cred, err := a.peerChk.PeerCred(connOf(r)); err == nil {
+			peerPID = cred.PID
+		}
+	}
+	d, err := a.decideGuard(r.Context(), req, peerPID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, d)
+}
+
+// ProxyEgressDecision asks the guard about one proxied connection to host from
+// pid (0 when unattributed) in sessionID, as the hook asks about a network
+// send; "session" mode asks once per session for the kind.
+func (a *API) ProxyEgressDecision(ctx context.Context, pid int32, sessionID, host, detail, mode string) guard.Decision {
+	refused := guard.Decision{Verdict: "deny", Scope: "once", Reason: "unavailable"}
+	if a.guardBroker == nil {
+		return refused
+	}
+	agent := "proxy"
+	if pid > 0 && a.guardIdentity != nil {
+		if g, ok := a.guardIdentity(pid, sessionID); ok && guardTokenRE.MatchString(g.Agent) {
+			agent = g.Agent
+		}
+	}
+	req := guardDecisionRequest{Agent: agent, SessionID: sessionID, Tool: "proxy", Path: host, RuleID: model.EgressRule,
+		Detail: "Proxy connection: " + detail, Categories: []string{"network-send"}}
+	if mode == "session" {
+		req.CategoryMode = "session"
+	}
+	if pid <= 0 {
+		pid = -1
+	}
+	d, err := a.decideGuard(ctx, req, pid)
+	if err != nil {
+		return refused
+	}
+	return d
+}
+
+// errSessionUnavailable: the request's session could not be read.
+var errSessionUnavailable = fmt.Errorf("session data unavailable")
+
+// decideGuard answers one guard query from peerPID (-1 when unknown): a saved
+// permission or rule answers at once, otherwise the request is prompted and
+// blocks until answered, timed out (deny) or withdrawn with ctx (deny).
+func (a *API) decideGuard(ctx context.Context, req guardDecisionRequest, peerPID int32) (guard.Decision, error) {
 	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddUint64(&a.guardSeq, 1))
 	var identity model.DecisionScope
-	var peerPID int32
-	if a.peerChk != nil && a.guardIdentity != nil {
-		if cred, err := a.peerChk.PeerCred(connOf(r)); err == nil {
-			if got, ok := a.guardIdentity(cred.PID, req.SessionID); ok && got.Agent == req.Agent {
-				identity = got
-				peerPID = cred.PID
-				req.SessionID = identity.SessionID
-			}
+	pid := peerPID
+	peerPID = 0
+	if pid > 0 && a.guardIdentity != nil {
+		if got, ok := a.guardIdentity(pid, req.SessionID); ok && got.Agent == req.Agent {
+			identity = got
+			peerPID = pid
+			req.SessionID = identity.SessionID
 		}
 	}
 	// A supplied identity is only attributable if the durable session exists.
@@ -170,8 +219,7 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	if req.SessionID != "" {
 		_, ok, err := a.store.GetSessionBounded(req.SessionID)
 		if err != nil {
-			http.Error(w, "session data unavailable", http.StatusServiceUnavailable)
-			return
+			return guard.Decision{}, errSessionUnavailable
 		}
 		if !ok {
 			req.SessionID = ""
@@ -189,8 +237,7 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	identity.Operation = "guard:" + req.Tool
 	if d, ok := standingGuardDecision(a.store, identity, req.Categories, req.Agent, req.RuleID, req.Path); ok {
 		record(d)
-		writeJSON(w, d)
-		return
+		return d, nil
 	}
 	// Offer the prompt to the advisor for a recommendation the operator sees
 	// while deciding. Advisory only — the broker still blocks for the human.
@@ -230,14 +277,14 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	if req.RuleID == model.EgressRule {
 		scopeText = "Once answers this request. Future permissions cover only the sends named here, or, when you choose their kind, every send of that kind, from this tool, workspace and observed executable path; other kinds still ask. Session permission ends with this session; timed permission expires after 24 hours or 7 days; Always lasts until revoked. Executable signatures are not verified. Revoke under Protection → Rules & permissions."
 	}
-	d := a.guardBroker.Request(r.Context(), guard.Pending{
+	d := a.guardBroker.Request(ctx, guard.Pending{
 		ID: id, SessionID: req.SessionID, Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
 		Detail:    promptDetail(req.Detail),
 		Workspace: identity.Workspace, ReaderExe: identity.ReaderExe, IdentityBasis: identity.IdentityBasis, PeerPID: peerPID, AvailableScopes: scopes,
 		Categories: req.Categories, DefaultScope: preselect, Repeats: repeats,
 		ScopeText: scopeText,
 	})
-	if r.Context().Err() != nil {
+	if ctx.Err() != nil {
 		// The hook stopped waiting (its own deadline, or the harness killed
 		// it) and denied the call itself: an answer that lands now never
 		// reached the agent, so it saves no rule and is recorded as a deny.
@@ -263,7 +310,7 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 			"reason": d.Reason, "ts": time.Now().UTC().Format(time.RFC3339Nano),
 		})
 	}
-	writeJSON(w, d)
+	return d, nil
 }
 
 func (a *API) handleGuardPending(w http.ResponseWriter, r *http.Request) {
