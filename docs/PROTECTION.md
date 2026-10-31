@@ -158,7 +158,7 @@ For an agent routed through the proxy, the mode also covers connections the hook
 | `prompt`, `session` | Held until you answer the guard prompt, which names the connection's host as a `network-send` from the `proxy` tool; Deny or a timeout refuses it with `403`. A session or timed permission for the proxy's network sends answers later connections. |
 | `deny` | Refused with `403`. |
 
-A refusal is a `proxy-untrusted-egress` finding carrying the client process and session. The model API hosts the proxy decrypts (`proxy_inspect_hosts`) and loopback are never checked. The proxy looks up no process while no session is tainted. Off macOS the proxy cannot identify client processes, so every connection while a session is tainted takes the mode without a workspace overlay.
+A refusal is a `proxy-untrusted-egress` finding carrying the client process and session. The model API hosts the proxy decrypts (`proxy_inspect_hosts`) and loopback are never checked. The proxy looks up no process while no session is tainted. The proxy identifies client processes on macOS (`netstat`) and Linux (`/proc`); elsewhere every connection while a session is tainted takes the mode without a workspace overlay.
 
 When a tool result matches the injection detector (phrases such as "ignore all previous instructions"), three things happen:
 
@@ -207,7 +207,7 @@ Without the helper (outside the app bundle, or a file over 25 MB) the read proce
 | EchoLeak | The client loads a markdown image whose URL carries data, with no tool call | the proxy's refusal in `deny` |
 | Response header injection | An `X-AI-Instructions` header carries the instruction | the proxy's header scrub |
 
-It prints a scorecard (attack, step, layer, mode, expected, observed) and exits 1 when any row differs from the documented behavior. Image rows are skipped where Vision text recognition is unavailable, and EchoLeak rows off macOS, where the proxy cannot name a connection's client process. `--json <file>` also writes the rows.
+It prints a scorecard (attack, step, layer, mode, expected, observed) and exits 1 when any row differs from the documented behavior. Image rows are skipped where Vision text recognition is unavailable, and EchoLeak rows off macOS and Linux, where the proxy cannot name a connection's client process. `--json <file>` also writes the rows.
 
 See [GUARD_THREAT_MODEL.md](GUARD_THREAT_MODEL.md) for the full list of closed bypass classes, the known limits (symlinks, TOCTOU, static inline-code analysis), and exactly which failures fail closed vs. open.
 

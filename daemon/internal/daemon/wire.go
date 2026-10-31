@@ -210,7 +210,11 @@ func egressGate(cfg config.Config, resolver *session.Resolver) *taint.Gate {
 		CategoriesPath:   config.DefaultGuardCategoriesPath(),
 		Exempt:           exempt,
 		ClientPID: func(ctx context.Context, remoteAddr string) (int32, error) {
-			return connpeer.PID(ctx, remoteAddr, api.TCPClientPID)
+			lookup := api.TCPClientPID
+			if runtime.GOOS == "linux" {
+				lookup = connpeer.ClientPID
+			}
+			return connpeer.PID(ctx, remoteAddr, lookup)
 		},
 		Sessions: func(pid int32) []taint.Session {
 			var out []taint.Session
