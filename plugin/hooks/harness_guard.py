@@ -29,7 +29,7 @@ def main():
                        "session_id": payload.get("conversationId"), "transcript_path": payload.get("transcriptPath"),
                        "cwd": args.get("Cwd") or (workspaces[0] if len(workspaces) == 1 else None)}
             args["command"] = args.get("CommandLine", "")
-            path = args.get("Path") if call["name"] == "read_file" else None
+            path = args.get("Path") if call["name"] in ("read_file", "write_file") else None
             path = path or args.get("AbsolutePath") or args.get("TargetFile") or args.get("SearchPath") or args.get("SearchDirectory") or args.get("DirectoryPath")
             if path:
                 args["file_path"] = path

@@ -19,7 +19,10 @@ class HarnessGuardTests(unittest.TestCase):
                 ("read_file", {"Path": home + "/.ssh/id_rsa"}),
                 ("read_file", {"Path": ".ssh/id_rsa"}),
                 ("read_file", {"Path": home + "/.ssh/id_rsa", "AbsolutePath": home + "/README.md"}),
+                ("write_file", {"Path": home + "/.ssh/id_rsa"}),
+                ("write_file", {"Path": home + "/.ssh/id_rsa", "AbsolutePath": home + "/README.md"}),
                 ("view_file", {"AbsolutePath": home + "/.ssh/id_rsa", "Path": home + "/README.md"}),
+                ("write_to_file", {"TargetFile": home + "/.ssh/id_rsa", "Path": home + "/README.md"}),
             ]:
                 with self.subTest(tool=tool, args=args):
                     payload = {"toolCall": {"name": tool, "args": args},
