@@ -9,6 +9,30 @@ import unittest
 
 
 class HarnessGuardTests(unittest.TestCase):
+    def test_antigravity_cli_path_cannot_bypass_file_guard(self):
+        with tempfile.TemporaryDirectory() as home:
+            modes = Path(home, "modes.json")
+            modes.write_text(json.dumps({"ssh-keys": "deny"}))
+            env = {**os.environ, "HOME": home, "SECURE_AGENT_GUARD_MODES": str(modes),
+                   "SECURE_AGENT_ACTIVITY_LOG": home + "/activity.jsonl"}
+            for tool, args in [
+                ("read_file", {"Path": home + "/.ssh/id_rsa"}),
+                ("read_file", {"Path": ".ssh/id_rsa"}),
+                ("read_file", {"Path": home + "/.ssh/id_rsa", "AbsolutePath": home + "/README.md"}),
+                ("write_file", {"Path": home + "/.ssh/id_rsa"}),
+                ("write_file", {"Path": home + "/.ssh/id_rsa", "AbsolutePath": home + "/README.md"}),
+                ("view_file", {"AbsolutePath": home + "/.ssh/id_rsa", "Path": home + "/README.md"}),
+                ("write_to_file", {"TargetFile": home + "/.ssh/id_rsa", "Path": home + "/README.md"}),
+            ]:
+                with self.subTest(tool=tool, args=args):
+                    payload = {"toolCall": {"name": tool, "args": args},
+                               "conversationId": "antigravity-cli-session", "workspacePaths": [home]}
+                    result = subprocess.run([sys.executable, str(Path(__file__).with_name("harness_guard.py")),
+                                             "antigravity", "PreToolUse"], input=json.dumps(payload),
+                                            text=True, capture_output=True, env=env, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout).get("decision"), "deny")
+
     def test_native_calls_deny_secrets_and_preserve_session(self):
         with tempfile.TemporaryDirectory() as home:
             env = {**os.environ, "HOME": home, "SECURE_AGENT_ACTIVITY_LOG": home + "/activity.jsonl"}

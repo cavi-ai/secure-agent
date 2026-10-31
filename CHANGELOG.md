@@ -6,6 +6,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-30
+
 ### Added
 - Menu bar: guard prompts open in a panel that names the agent, the target and the untrusted inputs, with a duration picker and a Details disclosure; Return and Escape deny; Allow grants the chosen duration without a second confirmation, and the popover's Future access menu opens the panel with that duration selected.
 - Guard: the `untrusted-egress` rule applies its mode (monitor by default) to network commands, `git push`, `gh` writes, data-carrying URLs and MCP send tools once a session has read web, MCP (other than the Claude app's own tools), image or fetched content, or loaded an instruction file someone else committed; a "Data sent after reading untrusted content" finding, session memory and the prompt name each input, its origin (git committer, download URL) and the send; in `deny`, the proxy also refuses a routed agent's new connections from a tainted session (a "Connection refused after reading untrusted content" finding), except model API hosts and loopback.
@@ -15,13 +17,15 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Guard: before the agent reads an image, the app's `secure-agent-image-text` helper reads its text with macOS Vision at full size, at model downscale sizes and with faint text stretched; a prompt-injection match follows the `image-injection` rule (monitor by default).
 - Hooks: guard hooks for Codex and OpenClaw, and for Antigravity, Hermes and OpenCode v2, through native adapters that check shell commands, file tools and patch targets.
 - Setup: Codex, OpenClaw, Antigravity, Hermes, OpenCode v2 and Cursor register their hooks from Setup, merging into each harness's own configuration with a backup before the first change.
-- Traffic: **Set Up & Open** installs an agent's hooks and launches it with process-scoped tunnel routing.
+- Traffic: **Set Up & Open** installs supported hooks and launches the selected agent with process-scoped tunnel routing; tunneled payloads are not inspected.
 - Tests: `make test-attack-replay` replays Ghostcommit, faint image text, cloaking, EchoLeak and response-header injection against an isolated daemon, proxy and hook in each guard mode and prints a scorecard.
 - Proxy: response headers are scanned for prompt injection; a matching header is reported and removed before the agent reads the response.
 - Firewall: registered secrets match through hex, decimal or `0x` byte lists and URL-safe or unpadded base64; `secure-agent canary plant <file>` writes decoy credentials registered as fingerprints.
 - File telemetry: Endpoint Security background item, configuration profile, Gatekeeper override and XProtect events; an agent that adds or removes a background item, or creates, moves or deletes the launch agent or daemon plist macOS registers or removes, raises `launch-item-change`, one that installs a profile or overrides Gatekeeper, or wrote the app bundle, installer package or profile file the user installs or opens past Gatekeeper within 24 hours, raises `trust-change`, and every XProtect detection raises `xprotect-detection`; a file written by an agent's short-lived child process (`mkdir`, `cp`, a shell redirect) counts as the agent's.
 
 ### Fixed
+- Antigravity: CLI file reads and writes using `Path` are checked against file guard rules.
+- Antigravity: Secure Agent scripts live in `~/.config/secure-agent/hooks/antigravity`; setup migrates owned commands in Antigravity's global `~/.gemini/config/hooks.json`, preserving other hooks.
 - Menu bar: guard prompts open above the app in front and on its Space instead of behind the agent's window.
 - Evidence storage: finding reviews keep their attribution after the session row is pruned or gains a start time, so the startup review backfill no longer fails with "review evidence changed".
 - File telemetry: a file renamed to a new name is recorded at its destination path.
@@ -1741,7 +1745,8 @@ scanning of the repository itself.
 Development history lives in the git log; this changelog starts at the first
 tagged release.
 
-[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/cavi-ai/secure-agent/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/cavi-ai/secure-agent/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/cavi-ai/secure-agent/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/cavi-ai/secure-agent/compare/v1.1.0...v1.2.0
