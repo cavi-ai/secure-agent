@@ -1,27 +1,118 @@
 name: Release validation
 
-# Publish a release as a pre-release: the updater and the latest-release link
-# ignore it until every job below passes and promote marks it the latest.
+# A tagged manual run builds into a draft and publishes only after validation.
+# Published pre-releases can also be validated and promoted.
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Build, validate and publish an existing draft tag (vX.Y.Z); leave blank for source checks
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-validation-${{ github.ref }}
+  group: release-validation-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
+  prepare:
+    name: Check release source and credentials
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      tag: ${{ steps.source.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve the release source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$EVENT_TAG}"
+          sha="$GITHUB_SHA"
+          if [[ -n "$tag" ]]; then
+            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release tag' >&2; exit 1; }
+            sha="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
+          fi
+          if [[ -n "$INPUT_TAG" ]]; then
+            [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'Run tagged releases from main' >&2; exit 1; }
+            git merge-base --is-ancestor "$sha" origin/main
+            draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+            [[ "$draft" == true ]] || { echo 'The release must be a draft' >&2; exit 1; }
+          fi
+          printf 'sha=%s\ntag=%s\n' "$sha" "$tag" >> "$GITHUB_OUTPUT"
+      - name: Check signing secrets before building
+        if: inputs.tag != ''
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: bash packaging/ci_release.sh check
+
+  build:
+    name: Build signed and notarized DMG
+    needs: prepare
+    if: inputs.tag != ''
+    runs-on: xcode-27
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: release-tools
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: source/go.mod
+      - name: Install the vulnerability scanner
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+      - name: Sign, notarize and package the tagged source
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: bash release-tools/packaging/ci_release.sh build "$GITHUB_WORKSPACE/source" "$TAG"
+      - name: Upload validated distribution artifacts to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" "source/dist/SecureAgent-${TAG}.dmg" source/dist/checksums.txt
+
   macos-go:
     name: macOS Go vet + test + fmt
+    needs: prepare
     runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -32,11 +123,13 @@ jobs:
 
   menubar:
     name: Swift package tests (macOS 27 SDK)
+    needs: prepare
     runs-on: xcode-27
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
       - name: swift test
         run: bash packaging/swift_macos.sh test --package-path menubar
@@ -45,11 +138,13 @@ jobs:
 
   e2e:
     name: E2E smoke
+    needs: prepare
     runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -71,14 +166,18 @@ jobs:
 
   dmg:
     name: Released app signature, notarization and version
-    if: github.event_name == 'release'
+    needs: [prepare, build]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      (github.event_name == 'release' || needs.build.result == 'success')
     runs-on: macos-15
     timeout-minutes: 15
     steps:
       - name: verify the attached DMG
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          REQUIRE_SIGNED_DMG: ${{ inputs.tag != '' }}
         run: |
           set -euo pipefail
           dir="$(mktemp -d)"
@@ -91,6 +190,11 @@ jobs:
           hdiutil attach -nobrowse -readonly -mountpoint "$mount" "SecureAgent-${TAG}.dmg"
           trap 'hdiutil detach "$mount" -quiet' EXIT
           app="$mount/Secure Agent.app"
+          if [[ "$REQUIRE_SIGNED_DMG" == true ]]; then
+            codesign --verify --strict "SecureAgent-${TAG}.dmg"
+            xcrun stapler validate "SecureAgent-${TAG}.dmg"
+            spctl -a -t open --context context:primary-signature -vv "SecureAgent-${TAG}.dmg"
+          fi
           codesign --verify --deep --strict --verbose=2 "$app"
           xcrun stapler validate "$app"
           spctl -a -t exec -vv "$app"
@@ -99,8 +203,12 @@ jobs:
 
   promote:
     name: Promote the validated pre-release
-    needs: [macos-go, menubar, e2e, dmg]
-    if: github.event_name == 'release' && github.event.release.prerelease
+    needs: [prepare, macos-go, menubar, e2e, dmg]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      needs.macos-go.result == 'success' && needs.menubar.result == 'success' &&
+      needs.e2e.result == 'success' && needs.dmg.result == 'success' &&
+      (inputs.tag != '' || (github.event_name == 'release' && github.event.release.prerelease))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -109,18 +217,18 @@ jobs:
       - name: mark as the latest release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
-        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
 
   # A release edited with the workflow token starts no other workflow, so the
   # documentation for the promoted release is published from here.
   docs:
     name: Publish documentation for the promoted release
-    needs: promote
+    needs: [prepare, promote]
     permissions:
       contents: write
     uses: ./.github/workflows/publish-docs.yml
     with:
-      tag: ${{ github.event.release.tag_name }}
+      tag: ${{ needs.prepare.outputs.tag }}
       publish: true
     secrets: inherit
