@@ -162,6 +162,9 @@ func runESCollector() error {
 	if err := verifyOwnIntegrity(); err != nil {
 		return permanent(err)
 	}
+	// The bundle runs this collector from Contents/MacOS and the user daemon
+	// from Contents/Helpers.
+	setESDaemonExe(filepath.Join(filepath.Dir(filepath.Dir(exe)), "Helpers", "secure-agentd"))
 	if _, err := exec.LookPath("eslogger"); err != nil {
 		return permanent(fmt.Errorf("eslogger not found: %w", err))
 	}

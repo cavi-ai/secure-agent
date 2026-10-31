@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,9 +17,10 @@ import (
 // The helper drops open events on system paths before they reach the spool:
 // opens of OS libraries, frameworks, dyld caches, app-bundle resources,
 // package-manager libraries and the per-user temporary and cache roots carry
-// much of eslogger's volume and none of the daemon's signal. An open is never
-// dropped when the daemon's sensitive-path classifier matches its path or the
-// path is a configuration profile file. A create is kept only when it names a
+// much of eslogger's volume and none of the daemon's signal. Opens by the
+// user daemon itself (its disk-usage walks, transcript reads) are dropped on
+// any path. An open is never dropped when the daemon's sensitive-path
+// classifier matches its path or the path is a configuration profile file. A create is kept only when it names a
 // launchd agent or daemon directory, or an app bundle, installer package or
 // configuration profile file that a later Gatekeeper override or profile
 // install is traced back to. Every other event type is kept.
@@ -55,11 +57,42 @@ var esNoiseExact = map[string]bool{
 }
 
 var (
-	esEventMarker = []byte(`"event":{"`)
-	esOpenKey     = []byte(`open":{`)
-	esCreateKey   = []byte(`create":{`)
-	esPathMarker  = []byte(`"path":"`)
+	esEventMarker      = []byte(`"event":{"`)
+	esOpenKey          = []byte(`open":{`)
+	esCreateKey        = []byte(`create":{`)
+	esPathMarker       = []byte(`"path":"`)
+	esExecutableMarker = []byte(`"executable":{`)
 )
+
+// esDaemonExe is the user daemon's executable in the collector's app bundle,
+// plain and as eslogger writes it (every slash escaped); both are empty when
+// the collector does not know it.
+var esDaemonExe, esDaemonExeEscaped []byte
+
+// setESDaemonExe records the user daemon's executable path.
+func setESDaemonExe(path string) {
+	esDaemonExe = []byte(path)
+	esDaemonExeEscaped = []byte(strings.ReplaceAll(path, "/", `\/`))
+}
+
+// openedByDaemon reports whether head, an eslogger line up to its event
+// object, names the user daemon as the process.
+func openedByDaemon(head []byte) bool {
+	if len(esDaemonExe) == 0 {
+		return false
+	}
+	k := bytes.Index(head, esExecutableMarker)
+	if k < 0 {
+		return false
+	}
+	rest := head[k+len(esExecutableMarker):]
+	j := bytes.Index(rest, esPathMarker)
+	if j < 0 {
+		return false
+	}
+	body, _, ok := jsonStringBody(rest[j+len(esPathMarker):])
+	return ok && (bytes.Equal(body, esDaemonExe) || bytes.Equal(body, esDaemonExeEscaped))
+}
 
 // esLaunchItemDirs are the launchd agent and daemon directories, system-wide
 // and under each home, as plain and as JSON-escaped ("\/") text: eslogger
@@ -110,8 +143,9 @@ var esSensitive = sync.OnceValue(func() sensitive.Classifier {
 })
 
 // keepESLine reports whether one eslogger JSON line goes to the spool. It
-// drops open events whose path is system noise and creates that name neither
-// a launch-item directory nor a trust subject; a line it cannot read
+// drops open events whose path is system noise or whose process is the user
+// daemon, and creates that name neither a launch-item directory nor a trust
+// subject; a line it cannot read
 // (malformed, unexpected shape) is kept. Byte scans first: the line is JSON-decoded only when
 // eslogger's compact layout is absent, and the path string only when it
 // holds escapes.
@@ -127,6 +161,7 @@ func keepESLine(line []byte) bool {
 	if !bytes.HasPrefix(rest, esOpenKey) {
 		return true // every event other than open
 	}
+	byDaemon := openedByDaemon(line[:i])
 	rest = rest[len(esOpenKey):]
 	j := bytes.Index(rest, esPathMarker)
 	if j < 0 {
@@ -138,19 +173,24 @@ func keepESLine(line []byte) bool {
 		return true // truncated line
 	}
 	if !escaped {
-		return !dropESOpenPath(body)
+		return !dropESOpenPath(body, byDaemon)
 	}
 	var path string
 	if err := json.Unmarshal(quoted[:len(body)+2], &path); err != nil {
 		return true
 	}
-	return !dropESOpenPath([]byte(path))
+	return !dropESOpenPath([]byte(path), byDaemon)
 }
 
 // keepESLineParsed is keepESLine's fallback for lines without eslogger's
 // compact layout.
 func keepESLineParsed(line []byte) bool {
 	var env struct {
+		Process struct {
+			Executable struct {
+				Path string `json:"path"`
+			} `json:"executable"`
+		} `json:"process"`
 		Event struct {
 			Open *struct {
 				File struct {
@@ -169,7 +209,8 @@ func keepESLineParsed(line []byte) bool {
 	if env.Event.Open == nil {
 		return true
 	}
-	return !dropESOpenPath([]byte(env.Event.Open.File.Path))
+	byDaemon := len(esDaemonExe) > 0 && env.Process.Executable.Path == string(esDaemonExe)
+	return !dropESOpenPath([]byte(env.Event.Open.File.Path), byDaemon)
 }
 
 // jsonStringBody returns a JSON string's body up to its closing quote (b
@@ -188,11 +229,11 @@ func jsonStringBody(b []byte) (body []byte, escaped, ok bool) {
 	return nil, escaped, false
 }
 
-// dropESOpenPath reports whether an open of path is system noise that is not
-// a configuration profile file and that the sensitive-path classifier does
-// not match.
-func dropESOpenPath(path []byte) bool {
-	if !isESNoisePath(path) || bytes.HasSuffix(path, []byte(".mobileconfig")) {
+// dropESOpenPath reports whether an open of path, by the user daemon or of a
+// system noise path, is not of a configuration profile file and does not
+// match the sensitive-path classifier.
+func dropESOpenPath(path []byte, byDaemon bool) bool {
+	if !(byDaemon || isESNoisePath(path)) || bytes.HasSuffix(path, []byte(".mobileconfig")) {
 		return false
 	}
 	c := esSensitive()
