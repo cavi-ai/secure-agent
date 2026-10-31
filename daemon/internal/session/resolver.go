@@ -1068,7 +1068,8 @@ func (r *Resolver) PermissionIdentity(pid int32, claimed string) (model.Decision
 
 // RootSessions returns every live session on the verified root of pid, with
 // its recorded workspace: the proxy cannot tell which thread of an app
-// server opened a connection.
+// server opened a connection. A session whose root start is not recorded yet
+// (its event raced the tagger) is matched on the root pid alone.
 func (r *Resolver) RootSessions(pid int32) []model.DecisionScope {
 	info, ok := r.tagger.LiveFamily(pid)
 	if !ok {
@@ -1077,8 +1078,9 @@ func (r *Resolver) RootSessions(pid int32) []model.DecisionScope {
 	var out []model.DecisionScope
 	for _, stub := range r.st.SessionRoots()[info.PID] {
 		sess, ok, err := r.st.GetSession(stub.ID)
+		recorded := rootStarted(sess)
 		if err != nil || !ok || (sess.Status != model.SessionActive && sess.Status != model.SessionIdle) || sess.RootPID != info.PID ||
-			!rootStarted(sess).Equal(info.StartedAt) || sess.Harness != info.Name {
+			(!recorded.IsZero() && !recorded.Equal(info.StartedAt)) || sess.Harness != info.Name {
 			continue
 		}
 		out = append(out, model.DecisionScope{Agent: info.Name, SessionID: sess.ID, Workspace: sess.Workspace, ReaderExe: info.ExePath, IdentityBasis: "peer-process-tree"})
