@@ -174,6 +174,28 @@ func TestRootSessionsListsEveryThreadOnTheRoot(t *testing.T) {
 	}
 }
 
+// A session that joined its root before the tagger knew the root's start time
+// is still on that root; a recorded start of another process is not.
+func TestRootSessionsMatchesRootWithoutRecordedStart(t *testing.T) {
+	started := time.Now().Add(-time.Minute)
+	procs := fakeProcs{100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: "/work", StartTime: started}}
+	r, st := testResolver(t, procs)
+	for _, s := range []struct{ id, rootStarted string }{
+		{"no-start", ""},
+		{"reused-pid", started.Add(-time.Hour).UTC().Format(time.RFC3339Nano)},
+	} {
+		if err := st.UpsertSession(model.Session{ID: s.id, Harness: "claude", Workspace: "/work", RootPID: 100,
+			RootStartedAt: s.rootStarted, StartedAt: started, LastSeenAt: time.Now(),
+			Status: model.SessionActive, Confidence: model.ConfHook}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := r.RootSessions(100)
+	if len(got) != 1 || got[0].SessionID != "no-start" {
+		t.Fatalf("root sessions = %+v, want no-start only", got)
+	}
+}
+
 // A tagged child process (a shell the harness spawned, in another cwd) joins
 // its harness's session: one row, keyed, rooted and scoped on the harness.
 func TestChildProcessJoinsHarnessSession(t *testing.T) {

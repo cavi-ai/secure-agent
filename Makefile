@@ -131,6 +131,7 @@ test-macos:
 	./packaging/test/check_bundle_layout.sh
 	bash packaging/test/test_devid_export.sh
 	bash packaging/test/test_sign_identity.sh
+	bash packaging/test/test_swift_macos.sh
 	bash packaging/test/test_vcs_stamp.sh
 	bash packaging/test/test_install_status.sh
 	bash packaging/test/test_replaced_bundle.sh

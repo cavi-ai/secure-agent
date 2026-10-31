@@ -6,7 +6,8 @@ scratch="$(mktemp -d)"
 trap 'rm -rf "${scratch}"' EXIT
 bundle="${scratch}/StatusRendering.app"
 mkdir -p "${bundle}/Contents/MacOS"
-sdk="${STATUS_ITEM_TEST_SDK:-$(xcrun --sdk macosx27.0 --show-sdk-path)}"
+source "${root}/packaging/lib/macos_sdk.sh"
+sdk="${STATUS_ITEM_TEST_SDK:-$(macos_sdk_path)}"
 xcrun swiftc -parse-as-library -target "$(uname -m)-apple-macosx14.0" -sdk "${sdk}" \
   -Xclang-linker -isysroot -Xclang-linker "${sdk}" \
   "${root}/menubar/Sources/SecureAgentMenubar/StatusItemController.swift" \

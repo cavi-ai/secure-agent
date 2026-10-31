@@ -53,7 +53,7 @@ source "${REPO_ROOT}/packaging/lib/vcs_stamp.sh"
 check_vcs_stamp bin/secure-agentd "${REPO_ROOT}"
 check_vcs_stamp bin/secure-agent "${REPO_ROOT}"
 
-echo "==> Building universal menubar app (macOS 27.0 SDK)..."
+echo "==> Building universal menubar app (macOS 27 SDK)..."
 # Locate the product via SwiftPM itself: hardcoded .build/apple/... paths go
 # silently stale when the scratch dir differs (custom SWIFTPM build dir,
 # Xcode/SwiftPM layout changes) — the build then "succeeds" while shipping a
@@ -70,11 +70,11 @@ bash packaging/swift_macos.sh build "${SWIFT_BUILD_ARGS[@]}"
 [[ -x "${IMAGE_TEXT_BIN}" ]] || { echo "error: image text helper not found at ${IMAGE_TEXT_BIN}" >&2; exit 1; }
 # Check both linked architectures before signing or assembling the bundle.
 if ! xcrun vtool -show-build "${MENUBAR_BIN}" | awk '
-  $1 == "sdk" { count++; if ($2 != "27.0") mismatch = 1 }
+  $1 == "sdk" { count++; if ($2 !~ /^27(\.|$)/) mismatch = 1 }
   $1 == "minos" { minimum++; if ($2 != "14.0") mismatch = 1 }
   END { exit(count != 2 || minimum != 2 || mismatch) }
 '; then
-  echo "error: menubar must link both architectures with SDK 27.0 and minimum macOS 14.0" >&2
+  echo "error: menubar must link both architectures with a macOS 27 SDK and minimum macOS 14.0" >&2
   exit 1
 fi
 # Freshness assertion: a source newer than the product just written was
