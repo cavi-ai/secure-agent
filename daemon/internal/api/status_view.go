@@ -42,7 +42,7 @@ func joinStatusEvidence(st statusEvidenceStore, s Status, now time.Time) Status 
 			if pid == 0 {
 				pid = root.PID
 			}
-			if sess, ok := byRoot[pid]; ok {
+			if sess, ok := byRoot[pid]; ok && sameRootStart(sess.RootStartedAt, root.StartedAt) {
 				if root.SessionID == "" {
 					root.SessionID = sess.ID
 				}
@@ -73,4 +73,16 @@ func joinStatusEvidence(st statusEvidenceStore, s Status, now time.Time) Status 
 		s.UnactedFlags24h = &n
 	}
 	return s
+}
+
+// sameRootStart reports whether a session's recorded root start is the live
+// root's: a pid the session's root held before is reused by another process.
+// Either side unknown cannot tell them apart and matches.
+func sameRootStart(session, live string) bool {
+	if session == "" || live == "" {
+		return true
+	}
+	a, errA := time.Parse(time.RFC3339Nano, session)
+	b, errB := time.Parse(time.RFC3339Nano, live)
+	return errA != nil || errB != nil || a.Equal(b)
 }

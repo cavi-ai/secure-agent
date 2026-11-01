@@ -10,6 +10,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the guard prompt's Allow button is green and names only the duration ("Allow for session"), on one line; the Allow for and Covers pickers and the note under the buttons say what it covers.
 
 ### Fixed
+- Status: an agent tree is labelled with the most recently seen live session of its root process, and not with a session of an earlier process that held the same pid.
 - Network: a new connection no longer records a close and a second open once its address resolves to a host name; each connection opens and closes once, named by its host when the address resolves within one sample.
 - Traces: OpenCode model calls carry the model of their own message, so a session that switches model no longer labels and prices later steps with the first one; each poll scans OpenCode's parts table once instead of twice.
 - File telemetry: a spool flood that carries the odd valid line among its garbage is now skipped and reported as a flood instead of being scanned 4 MiB at a time.

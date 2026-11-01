@@ -87,3 +87,28 @@ func TestStatusEvidenceFailedFlagReadLeavesCountUnknown(t *testing.T) {
 		t.Fatalf("no agents: asked %v, trees %+v", st.asked, got.Trees)
 	}
 }
+
+// A session whose recorded root started at another time belongs to an
+// earlier process that held the pid: the live tree is not labelled with it.
+func TestStatusEvidenceSkipsASessionOfAReusedPID(t *testing.T) {
+	st := &memoryStatusEvidence{byRoot: map[int32]model.Session{
+		10: {ID: "old", Repo: "old-repo", RootStartedAt: "2026-10-12T08:00:00Z"},
+		20: {ID: "same", Repo: "repo", RootStartedAt: "2026-10-12T09:00:00.000000000Z"},
+	}}
+	got := joinStatusEvidence(st, Status{Agents: []AgentSummary{
+		{PID: 10, RootPID: 10, StartedAt: "2026-10-12T11:00:00Z"},
+		{PID: 20, RootPID: 20, StartedAt: "2026-10-12T09:00:00Z"},
+	}}, time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC))
+	for _, tree := range got.Trees {
+		switch tree.Root.PID {
+		case 10:
+			if tree.Root.SessionID != "" || tree.Root.Repo != "" {
+				t.Fatalf("reused pid labelled with the earlier process's session: %+v", tree.Root)
+			}
+		case 20:
+			if tree.Root.SessionID != "same" {
+				t.Fatalf("matching root start not joined: %+v", tree.Root)
+			}
+		}
+	}
+}
