@@ -32,6 +32,11 @@ const spoolDrainBudget = 4 << 20 // 4 MiB
 // line; a longer line is skipped over several ticks.
 const spoolSkipScan = 8 << 20 // 8 MiB
 
+// spoolValidShare: an over-budget tick is valid backlog, kept for later
+// ticks, when at least one in spoolValidShare of its lines parsed; a tick
+// below that is a flood, and the rest of its tail is skipped.
+const spoolValidShare = 10
+
 // spoolPollInterval paces an idle or drained spool. Retained events are
 // retried after spoolRetainedRetry, so ingest frees bus capacity and is fed
 // again within milliseconds instead of idling for a full poll interval; a
@@ -661,7 +666,9 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 
 	resume := offset + lastGood
 	if budgetHit {
-		if parsedThisTick > 0 {
+		// Valid backlog is mostly parseable; a flood that carries the odd
+		// valid line among its garbage is still a flood.
+		if parsedThisTick > 0 && parsedThisTick*spoolValidShare >= linesThisTick {
 			t.retained = resume < st.Size()
 			if !t.retained {
 				t.recordCaughtUp()
