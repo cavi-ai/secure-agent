@@ -45,7 +45,7 @@ func (t *Tagger) Snapshot(pid int32) (model.FlagProcess, bool) {
 	var harness string
 	from := p.PPID
 	if info, ok := t.cache[pid]; ok && t.tagged[pid] && info.RootPID > 0 {
-		if root, ok := t.procLocked(info.RootPID); ok && root.Exe != "" {
+		if root, ok := t.identLocked(info.RootPID); ok && root.Exe != "" {
 			harness = HarnessLabel(root.Exe)
 			from = root.PPID
 		}
@@ -54,7 +54,7 @@ func (t *Tagger) Snapshot(pid int32) (model.FlagProcess, bool) {
 	seen := map[int32]bool{}
 	for hops := 0; hops < 32 && from > 1 && !seen[from]; hops++ {
 		seen[from] = true
-		q, ok := t.procLocked(from)
+		q, ok := t.identLocked(from)
 		if !ok {
 			break
 		}

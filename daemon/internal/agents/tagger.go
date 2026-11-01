@@ -52,6 +52,9 @@ type Tagger struct {
 	table  map[int32]ProcInfo
 	cache  map[int32]AgentInfo
 	tagged map[int32]bool
+	// idents names listed processes across refreshes: the process list
+	// carries no executable, and an ancestor walk needs one for each parent.
+	idents map[int32]procIdent
 	now    func() time.Time
 	// onTagged is told, after Refresh releases mu, about each pid that
 	// Refresh tagged which was not tagged before the call.
@@ -65,8 +68,50 @@ func New(cfg config.Config, ps ProcSource) *Tagger {
 		table:  make(map[int32]ProcInfo),
 		cache:  make(map[int32]AgentInfo),
 		tagged: make(map[int32]bool),
+		idents: make(map[int32]procIdent),
 		now:    time.Now,
 	}
+}
+
+// procIdent is what the process source said names a process: its executable
+// and runtime program. It stands for the pid while the process table lists
+// the same start time and name there; exec changes the name.
+type procIdent struct {
+	start   time.Time
+	comm    string
+	exe     string
+	program string
+}
+
+// of reports whether the identity is still p's: p holds the pid with the
+// same start time and name.
+func (id procIdent) of(p ProcInfo) bool {
+	return id.start.Equal(p.StartTime) && id.comm == p.Comm
+}
+
+// noteIdentLocked records what a process source read said names pid. A
+// process without a start time has nothing that tells it from a later
+// holder of its pid.
+func (t *Tagger) noteIdentLocked(pid int32, p ProcInfo) {
+	if p.StartTime.IsZero() {
+		return
+	}
+	t.idents[pid] = procIdent{start: p.StartTime, comm: p.Comm, exe: p.Exe, program: p.RuntimeProgram}
+}
+
+// namedLocked fills a listed process's executable and runtime program from
+// the identity recorded for its pid; false when none is recorded for this
+// process.
+func (t *Tagger) namedLocked(p ProcInfo) (ProcInfo, bool) {
+	if p.Exe != "" {
+		return p, true
+	}
+	id, ok := t.idents[p.PID]
+	if !ok || !id.of(p) {
+		return p, false
+	}
+	p.Exe, p.RuntimeProgram = id.exe, id.program
+	return p, true
 }
 
 func (t *Tagger) isCandidateLocked(pid int32) bool {
@@ -81,6 +126,7 @@ func (t *Tagger) isCandidateLocked(pid int32) bool {
 		if !ok {
 			break
 		}
+		pInfo, _ = t.namedLocked(pInfo)
 		if _, matched := t.matchLocked(pInfo); matched {
 			return true
 		}
@@ -97,6 +143,7 @@ func (t *Tagger) isCandidateLocked(pid int32) bool {
 // SetOnTagged hook hears only about processes whose agent changed or that
 // were untagged before.
 func (t *Tagger) SetAgents(defs []config.AgentDef) {
+	s := t.sample(false)
 	t.mu.Lock()
 	before := make(map[int32]AgentInfo, len(t.tagged))
 	for pid, tagged := range t.tagged {
@@ -107,7 +154,7 @@ func (t *Tagger) SetAgents(defs []config.AgentDef) {
 	t.cfg.Agents = defs
 	clear(t.cache)
 	clear(t.tagged)
-	newly := t.refreshLocked()
+	newly := t.applyLocked(s)
 	var changed []AgentInfo
 	for _, info := range newly {
 		old, ok := before[info.PID]
@@ -137,8 +184,9 @@ func (t *Tagger) SetOnTagged(fn func(pid int32, info AgentInfo)) {
 }
 
 func (t *Tagger) Refresh() {
+	s := t.sample(true)
 	t.mu.Lock()
-	newly := t.refreshLocked()
+	newly := t.applyLocked(s)
 	fn := t.onTagged
 	t.mu.Unlock()
 	if fn == nil {
@@ -149,23 +197,59 @@ func (t *Tagger) Refresh() {
 	}
 }
 
-// refreshLocked rebuilds the process table and tags candidates, returning the
-// pids it tagged that were not tagged when it started. Callers hold t.mu.
-func (t *Tagger) refreshLocked() []AgentInfo {
-	sampledAt := t.now()
+// procSample is one read of the process source, taken without t.mu.
+type procSample struct {
+	table map[int32]ProcInfo
+	// fresh holds the details read for listed processes that were tagged
+	// when the read began, and at when they were read.
+	fresh map[int32]ProcInfo
+	at    time.Time
+}
 
+// sample lists the processes and, with counters, reads fresh details of each
+// listed process tagged now. Tag calls proceed meanwhile.
+func (t *Tagger) sample(counters bool) procSample {
 	procs := t.ps.List()
-	newTable := make(map[int32]ProcInfo, len(procs))
+	s := procSample{table: make(map[int32]ProcInfo, len(procs))}
 	for _, p := range procs {
-		newTable[p.PID] = p
+		s.table[p.PID] = p
 	}
-	t.table = newTable
+	var pids []int32
+	if counters {
+		t.mu.RLock()
+		for pid, tagged := range t.tagged {
+			if _, alive := s.table[pid]; tagged && alive {
+				pids = append(pids, pid)
+			}
+		}
+		t.mu.RUnlock()
+	}
+	s.at = t.now()
+	s.fresh = make(map[int32]ProcInfo, len(pids))
+	for _, pid := range pids {
+		if p, ok := t.ps.Info(pid); ok {
+			s.fresh[pid] = p
+		}
+	}
+	return s
+}
+
+// applyLocked installs a sample as the process table and tags candidates,
+// returning the pids it tagged that were not tagged when it started. Callers
+// hold t.mu.
+func (t *Tagger) applyLocked(s procSample) []AgentInfo {
+	t.table = s.table
+	for pid, id := range t.idents {
+		if p, ok := t.table[pid]; !ok || !id.of(p) {
+			delete(t.idents, pid)
+		}
+	}
 
 	// Prune cache entries for dead pids. Beyond bounding growth on a
 	// long-running daemon with heavy process churn, this is a correctness fix:
 	// a recycled pid must never inherit the previous process's agent tag.
 	for pid := range t.cache {
-		if _, alive := newTable[pid]; !alive {
+		if _, alive := t.table[pid]; !alive {
 			delete(t.cache, pid)
 			delete(t.tagged, pid)
 		}
@@ -178,11 +262,12 @@ func (t *Tagger) refreshLocked() []AgentInfo {
 		if !t.tagged[pid] {
 			continue
 		}
-		fresh, ok := t.ps.Info(pid)
-		if !ok {
+		fresh, ok := s.fresh[pid]
+		// A tag made after the sample began read newer details than it holds.
+		if !ok || previous.sampledAt.After(s.at) {
 			continue
 		}
-		fresh = mergeProcInfo(newTable[pid], fresh)
+		fresh = mergeProcInfo(t.table[pid], fresh)
 		if !previous.StartedAt.IsZero() && !fresh.StartTime.IsZero() && !previous.StartedAt.Equal(fresh.StartTime) {
 			delete(t.cache, pid)
 			delete(t.tagged, pid)
@@ -205,12 +290,13 @@ func (t *Tagger) refreshLocked() []AgentInfo {
 			previous.RSSBytes = fresh.RSSBytes
 		}
 		if fresh.CPUTime != 0 || previous.CPUTime == 0 {
-			previous.CPUPercent = cpuPercent(previous.CPUTime, previous.sampledAt, fresh.CPUTime, sampledAt)
+			previous.CPUPercent = cpuPercent(previous.CPUTime, previous.sampledAt, fresh.CPUTime, s.at)
 			previous.CPUTime = fresh.CPUTime
-			previous.sampledAt = sampledAt
+			previous.sampledAt = s.at
 		}
 		t.cache[pid] = previous
 		t.table[pid] = fresh
+		t.noteIdentLocked(pid, fresh)
 	}
 
 	// Pre-populate tagging for candidate process trees without discarding existing positively tagged agent cache
@@ -339,7 +425,13 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 		visited[curr] = true
 		chain = append(chain, curr)
 
-		pInfo, ok := t.procLocked(curr)
+		// The tag carries the process's own live details; an ancestor
+		// needs only what names it.
+		read := t.identLocked
+		if hops == 0 {
+			read = t.procLocked
+		}
+		pInfo, ok := read(curr)
 		if !ok {
 			break
 		}
@@ -377,7 +469,7 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 	// No match, and the walk cannot go any further — pid resolved to nothing
 	// (never in the table, ps.Info failed), an ancestor's ps.Info
 	// failed, or we ran out of hops/parents to match against. Cache the miss
-	// unconditionally: refreshLocked prunes cache entries for pids missing
+	// unconditionally: applyLocked prunes cache entries for pids missing
 	// from its table on every refresh, so a pid that is genuinely dead costs
 	// at most one lookup per refresh interval instead of one per event.
 	t.tagged[pid] = false
@@ -392,14 +484,31 @@ func (t *Tagger) procLocked(pid int32) (ProcInfo, bool) {
 	if ok && pInfo.Exe != "" {
 		return pInfo, true
 	}
-	if dynamicInfo, found := t.ps.Info(pid); found && dynamicInfo.Exe != "" {
-		if ok {
-			dynamicInfo = mergeProcInfo(pInfo, dynamicInfo)
-		}
-		t.table[pid] = dynamicInfo
-		return dynamicInfo, true
+	dynamicInfo, found := t.ps.Info(pid)
+	if !found {
+		return pInfo, ok
 	}
-	return pInfo, ok
+	if ok {
+		dynamicInfo = mergeProcInfo(pInfo, dynamicInfo)
+	}
+	t.noteIdentLocked(pid, dynamicInfo)
+	if dynamicInfo.Exe == "" {
+		return pInfo, ok
+	}
+	t.table[pid] = dynamicInfo
+	return dynamicInfo, true
+}
+
+// identLocked reads what an ancestor walk needs of pid: its parent, start
+// time and what names it. The process source is read only for a process
+// not named before.
+func (t *Tagger) identLocked(pid int32) (ProcInfo, bool) {
+	if p, ok := t.table[pid]; ok {
+		if named, known := t.namedLocked(p); known {
+			return named, true
+		}
+	}
+	return t.procLocked(pid)
 }
 
 // MatchExe names the agent whose match strings hit exe: the test Tag applies
@@ -458,7 +567,7 @@ func (t *Tagger) familyRootLocked(matched int32, p ProcInfo, name string, visite
 			break
 		}
 		visited[ppid] = true
-		parent, ok := t.procLocked(ppid)
+		parent, ok := t.identLocked(ppid)
 		if !ok {
 			break
 		}
