@@ -31,6 +31,17 @@ enum GuardPromptDuration: Hashable {
         case .scope(let c): return c.expiry == "7d" ? "7 days" : "24 hours"
         }
     }
+
+    /// Allow's title: the duration only, on one line. The pickers and the
+    /// note under the buttons say what the permission covers.
+    var allowTitle: String {
+        switch self {
+        case .once: return "Allow Once"
+        case .scope(let c) where c.kind == "session": return "Allow for session"
+        case .scope(let c) where c.kind == "standing": return "Allow always"
+        case .scope: return "Allow for \(label)"
+        }
+    }
 }
 
 /// The prompt's state. The first answer wins; later ones are ignored.
@@ -82,11 +93,7 @@ final class GuardPromptModel: ObservableObject {
         return c
     }
 
-    var allowTitle: String {
-        guard let c = chosenScope else { return "Allow Once" }
-        guard c.coversKind, let kinds = GuardSendKind.label(content.pending.categories) else { return c.label }
-        return c.label.replacingOccurrences(of: "Allow ", with: "Allow all \(kinds) ")
-    }
+    var allowTitle: String { duration.allowTitle }
 
     /// What Allow does with the chosen duration; nothing asks again after it.
     var allowNote: String {
@@ -393,7 +400,8 @@ struct GuardPromptView: View {
                     .buttonStyle(PromptButtonStyle(fill: .bad, text: .white))
                     .keyboardShortcut(.defaultAction)
                 Button(model.allowTitle) { model.allow() }
-                    .buttonStyle(PromptButtonStyle(fill: .white.opacity(0.12), text: .primary))
+                    .buttonStyle(PromptButtonStyle(fill: .ok, text: .appSurface))
+                    .accessibilityHint(model.allowNote)
             }
             Text(model.allowNote)
                 .font(.system(size: 11)).foregroundStyle(.secondary)

@@ -6,6 +6,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Menu bar: the guard prompt's Allow button is green and names only the duration ("Allow for session"), on one line; the Allow for and Covers pickers and the note under the buttons say what it covers.
+
 ### Fixed
 - File telemetry: the daemon's own file opens, such as its worktree disk-usage walks, no longer reach the Endpoint Security spool, so a walk over a large tree no longer rotates the spool every few seconds.
 

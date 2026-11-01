@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import SwiftUI
 @testable import SecureAgentMenubar
 
 @MainActor
@@ -195,6 +196,57 @@ final class GuardPromptPanelTests: XCTestCase {
     func testWithdrawalAnswersNothing() async {
         let choice = await run(GuardPromptContent(pending: pending(), inspectUnavailableReason: nil)) { $0.withdraw() }
         XCTAssertEqual(choice, .withdrawn)
+    }
+
+    /// Allow is green, names only the duration and keeps one line at the
+    /// panel's width for every duration and coverage of a two-kind request:
+    /// its rendered fill is exactly as tall as Deny's.
+    func testAllowIsGreenAndOneLineForEveryDuration() async {
+        let exact = [GuardScopeChoice(kind: "session", expiry: nil), dayScope, GuardScopeChoice(kind: "exact", expiry: "7d"), GuardScopeChoice(kind: "standing", expiry: nil)]
+        let kinds = exact.map { GuardScopeChoice(kind: $0.kind, expiry: $0.expiry, category: true) }
+        let request = GuardPending(id: "e2", agent: "claude", tool: "Bash", path: "git push 2>, gh pr edit", ruleID: "untrusted-egress", ts: "", scopeText: nil,
+                                   advisor: nil, availableScopes: [GuardScopeChoice(kind: "once", expiry: nil)] + exact + kinds,
+                                   readerExe: "/Applications/Claude.app/Contents/MacOS/claude", workspace: "/Users/x/code/cavi-dotgithub",
+                                   sessionID: "7734d6db-8a85-4628-9ff7-e5e370748540",
+                                   detail: "This session read untrusted content: \(Self.githubRead). It now sends data out: git push 2>, gh pr edit.",
+                                   categories: ["git-push", "gh-write"], defaultScope: GuardScopeChoice(kind: "session", expiry: nil, category: true), repeats: 1)
+        var titles: [String: String] = [:]
+        let choice = await run(GuardPromptContent(pending: request, inspectUnavailableReason: nil)) { panel in
+            let model = panel.model
+            try? self.capture(panel, "allow-session-kinds")
+            for duration in model.durations {
+                model.duration = duration
+                for covers in model.offersKind ? [false, true] : [false] {
+                    model.coversKind = covers
+                    let renderer = ImageRenderer(content: GuardPromptView(model: model))
+                    renderer.scale = 1
+                    guard let image = renderer.cgImage else { XCTFail("no render"); continue }
+                    let deny = self.rows(of: .bad, in: image)
+                    XCTAssertGreaterThanOrEqual(deny, 28, "Deny not found")
+                    XCTAssertEqual(self.rows(of: .ok, in: image), deny,
+                                   "\(model.allowTitle) is not one green line for \(duration.label), covers \(covers)")
+                    titles[duration.label] = model.allowTitle
+                }
+            }
+            panel.withdraw()
+        }
+        XCTAssertEqual(choice, .withdrawn)
+        XCTAssertEqual(titles, ["Once": "Allow Once", "This session": "Allow for session", "24 hours": "Allow for 24 hours",
+                                "7 days": "Allow for 7 days", "Always": "Allow always"])
+    }
+
+    /// Rows of `image` holding a button-wide run of `color`.
+    private func rows(of color: Color, in image: CGImage) -> Int {
+        guard let c = NSColor(color).usingColorSpace(.sRGB) else { return 0 }
+        let target = [c.redComponent, c.greenComponent, c.blueComponent].map { Int($0 * 255) }
+        let (w, h) = (image.width, image.height)
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0 }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return (0..<h).filter { y in
+            (0..<w).filter { x in (0..<3).allSatisfy { abs(Int(px[(y * w + x) * 4 + $0]) - target[$0]) <= 12 } }.count >= 40
+        }.count
     }
 }
 
