@@ -167,11 +167,13 @@ type Hunter struct {
 	pathIndexes map[string]pathCache
 
 	// sizes caches measured worktree sizes by path; sizing is true while
-	// the background sizer runs (one at a time); sizeWG lets tests wait.
-	sizeMu sync.Mutex
-	sizes  map[string]sizeEntry
-	sizing bool
-	sizeWG sync.WaitGroup
+	// the background sizer runs (one at a time); sizesSaved is when the
+	// sizer last saved them; sizeWG lets tests wait.
+	sizeMu     sync.Mutex
+	sizes      map[string]sizeEntry
+	sizing     bool
+	sizesSaved time.Time
+	sizeWG     sync.WaitGroup
 }
 
 type fingerprintCache struct {
@@ -227,7 +229,7 @@ func (h *Hunter) invalidate() {
 // come from the size cache; worktrees not measured yet are queued for the
 // background sizer and the report says Sizing.
 func (h *Hunter) Report(ctx context.Context, refresh bool) ScanReport {
-	rep := h.withSizes(h.report(ctx, refresh))
+	rep := h.withSizes(h.report(ctx, refresh), refresh)
 	if rm := h.Removals(); len(rm) > 0 {
 		rep.Removals = rm
 	}

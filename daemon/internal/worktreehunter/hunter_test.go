@@ -141,6 +141,7 @@ type memStore struct {
 	audit    []store.AuditEntry
 	cleanup  []model.CleanupEntry
 	scan     map[string]scanEntry
+	puts     map[string]int // PutScanCache calls by name
 }
 
 func newMemStore() *memStore { return &memStore{repos: map[string]model.WorktreeRepo{}} }
@@ -201,6 +202,10 @@ func (m *memStore) PutScanCache(name string, body []byte, at time.Time) {
 		m.scan = map[string]scanEntry{}
 	}
 	m.scan[name] = scanEntry{body: append([]byte(nil), body...), at: at}
+	if m.puts == nil {
+		m.puts = map[string]int{}
+	}
+	m.puts[name]++
 }
 
 func (m *memStore) PutCleanup(e model.CleanupEntry) {

@@ -114,10 +114,15 @@ const (
 	// one still answers while a background rebuild replaces it.
 	cacheTTL = 10 * time.Minute
 	// sizeTTL is how long a measured size answers without a new walk; an
-	// older size still answers while the sizer measures it again.
-	sizeTTL = time.Hour
-	// sizerWorkers bounds concurrent walks.
-	sizerWorkers = 2
+	// older size still answers while the sizer measures it again. An asked
+	// refresh measures again sizes older than diskusage.ReuseWindow.
+	sizeTTL = 24 * time.Hour
+	// sizeSaveEvery spaces the saves of measured sizes during a sizing
+	// pass, so a daemon restarted mid-pass resumes from what it measured.
+	sizeSaveEvery = 15 * time.Second
+	// sizerWorkers is how many items the sizer hands out at once; the walks
+	// share diskusage.MeasureWorkers with every other sizer in the process.
+	sizerWorkers = diskusage.MeasureWorkers
 	// searchDepth bounds the search for .tmp/.quarantine/build output
 	// inside a place: packages/<name>/node_modules sits three levels down.
 	searchDepth = 3
@@ -146,10 +151,11 @@ type Clutter struct {
 	loaded bool
 	bgWG   sync.WaitGroup
 
-	sizeMu sync.Mutex
-	sizes  map[string]sizeEntry
-	sizing bool
-	sizeWG sync.WaitGroup
+	sizeMu     sync.Mutex
+	sizes      map[string]sizeEntry
+	sizing     bool
+	sizesSaved time.Time
+	sizeWG     sync.WaitGroup
 }
 
 type sizeEntry struct {
@@ -163,6 +169,9 @@ func New(st Store, home string, places func(context.Context) []Place) *Clutter {
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
+	// A worktree walk passing through build output records it, so sizing
+	// the item does not walk it again.
+	diskusage.Track(trackedNames()...)
 	return &Clutter{st: st, home: home, places: places, now: time.Now, goos: runtimeGOOS,
 		binDirs: toolpath.Dirs(home), sizes: map[string]sizeEntry{}}
 }
@@ -170,7 +179,7 @@ func New(st Store, home string, places func(context.Context) []Place) *Clutter {
 // Report returns the inventory with sizes laid over it; items not measured
 // yet are queued for the background sizer and the report says Sizing.
 func (c *Clutter) Report(ctx context.Context, refresh bool) ClutterReport {
-	return c.withSizes(c.inventory(ctx, refresh))
+	return c.withSizes(c.inventory(ctx, refresh), refresh)
 }
 
 // inventory answers from the cached inventory unless refresh is asked: one
@@ -437,6 +446,15 @@ func claimsParent(claimed map[string]bool, p string) bool {
 
 type found struct{ kind, path string }
 
+// trackedNames are the directory names search reports inside a place.
+func trackedNames() []string {
+	names := []string{".tmp", ".quarantine"}
+	for n := range repoCaches {
+		names = append(names, n)
+	}
+	return names
+}
+
 // repoCaches are regenerable build output and dependency trees.
 var repoCaches = map[string]bool{
 	"node_modules": true, ".next": true, ".nuxt": true, ".turbo": true, ".parcel-cache": true,
@@ -490,9 +508,14 @@ func isDir(p string) bool {
 }
 
 // withSizes copies rep and lays cached sizes, idle days and totals over it;
-// items never measured, or measured more than sizeTTL ago, go to the
-// background sizer. An old size answers until the new one lands.
-func (c *Clutter) withSizes(rep ClutterReport) ClutterReport {
+// items never measured, or measured more than sizeTTL ago (ReuseWindow on
+// an asked refresh), go to the background sizer. An old size answers until
+// the new one lands.
+func (c *Clutter) withSizes(rep ClutterReport, refresh bool) ClutterReport {
+	maxAge := sizeTTL
+	if refresh {
+		maxAge = diskusage.ReuseWindow
+	}
 	items := append([]ClutterItem(nil), rep.Items...)
 	now := c.now()
 	var pending []string
@@ -502,7 +525,7 @@ func (c *Clutter) withSizes(rep ClutterReport) ClutterReport {
 	var vols []string
 	for i := range items {
 		it := &items[i]
-		e, old, ok := c.cachedSize(it.Path)
+		e, old, ok := c.cachedSize(it.Path, maxAge)
 		if !ok || old {
 			pending = append(pending, it.Path)
 		}
@@ -576,12 +599,12 @@ func uniqueRoots(paths []string) []string {
 }
 
 // cachedSize returns the last measurement of p and whether it is older
-// than sizeTTL.
-func (c *Clutter) cachedSize(p string) (sizeEntry, bool, bool) {
+// than maxAge.
+func (c *Clutter) cachedSize(p string, maxAge time.Duration) (sizeEntry, bool, bool) {
 	c.sizeMu.Lock()
 	defer c.sizeMu.Unlock()
 	e, ok := c.sizes[p]
-	return e, ok && c.now().Sub(e.at) > sizeTTL, ok
+	return e, ok && c.now().Sub(e.at) > maxAge, ok
 }
 
 func (c *Clutter) putSize(p string, u diskusage.Usage) {
@@ -592,8 +615,9 @@ func (c *Clutter) putSize(p string, u diskusage.Usage) {
 
 func (c *Clutter) forgetSize(p string) {
 	c.sizeMu.Lock()
-	defer c.sizeMu.Unlock()
 	delete(c.sizes, p)
+	c.sizeMu.Unlock()
+	diskusage.Forget(p)
 }
 
 // startSizing measures paths in the background unless a pass is running.
@@ -620,7 +644,17 @@ func (c *Clutter) startSizing(paths []string) {
 			go func() {
 				defer wg.Done()
 				for p := range ch {
-					c.putSize(p, diskusage.Dir(context.Background(), p, nil))
+					c.putSize(p, diskusage.Measure(context.Background(), p, nil))
+					c.sizeMu.Lock()
+					now := c.now()
+					save := now.Sub(c.sizesSaved) >= sizeSaveEvery
+					if save {
+						c.sizesSaved = now
+					}
+					c.sizeMu.Unlock()
+					if save {
+						c.saveSizes()
+					}
 				}
 			}()
 		}

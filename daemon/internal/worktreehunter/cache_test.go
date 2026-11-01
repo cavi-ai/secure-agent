@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
@@ -126,5 +129,64 @@ func TestOldSizeAnswersWhileRemeasured(t *testing.T) {
 	rep = h.Report(context.Background(), false)
 	if got := findRow(t, rep, done).SizeBytes; got < before+80000 || rep.Refreshing {
 		t.Fatalf("after re-measuring: size %d (was %d), refreshing=%v", got, before, rep.Refreshing)
+	}
+}
+
+// A pass saves its sizes as it measures them, at most every sizeSaveEvery,
+// so a daemon restarted mid-pass keeps what it measured.
+func TestSizerSavesSizesDuringThePass(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	f.worktree(t, "one")
+	f.worktree(t, "two")
+	st := newMemStore()
+	st.activity = []model.WorkspaceActivity{{Workspace: f.main}}
+	var calls atomic.Int64
+	base := time.Now()
+	h := New(st, home, Options{})
+	h.now = func() time.Time { return base.Add(time.Duration(calls.Add(1)) * sizeSaveEvery) }
+
+	h.Report(context.Background(), true)
+	h.sizeWG.Wait()
+	st.mu.Lock()
+	saves := st.puts[cacheSizesKey]
+	st.mu.Unlock()
+	if saves != 3 {
+		t.Fatalf("size saves = %d, want one per measured worktree and one at the end of the pass", saves)
+	}
+}
+
+// Sizes answer for sizeTTL; an asked refresh measures again the ones older
+// than diskusage.ReuseWindow.
+func TestAskedRefreshRemeasuresRecentSizes(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	done := f.worktree(t, "done")
+	write(t, filepath.Join(done, "big.bin"), string(make([]byte, 40000)))
+	st := newMemStore()
+	st.activity = []model.WorkspaceActivity{{Workspace: f.main}}
+	now := time.Now()
+	var mu sync.Mutex
+	h := New(st, home, Options{})
+	h.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+
+	h.Report(context.Background(), true)
+	h.sizeWG.Wait()
+	before := findRow(t, h.Report(context.Background(), false), done).SizeBytes
+	write(t, filepath.Join(done, "more.bin"), string(make([]byte, 80000)))
+	mu.Lock()
+	now = now.Add(diskusage.ReuseWindow + time.Second)
+	mu.Unlock()
+
+	h.Report(context.Background(), false)
+	h.sizeWG.Wait()
+	h.bgWG.Wait()
+	if got := findRow(t, h.Report(context.Background(), false), done).SizeBytes; got != before {
+		t.Fatalf("an unasked report re-measured a size within sizeTTL: %d, was %d", got, before)
+	}
+	h.Report(context.Background(), true)
+	h.sizeWG.Wait()
+	if got := findRow(t, h.Report(context.Background(), false), done).SizeBytes; got < before+80000 {
+		t.Fatalf("after an asked refresh: size %d, want the added file counted (was %d)", got, before)
 	}
 }
