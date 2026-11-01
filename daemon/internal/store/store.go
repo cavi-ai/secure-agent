@@ -101,7 +101,10 @@ var (
 		WHERE kind IN (` + sessionActivityKinds + `)`
 	// A session report reads one session's events in instant order
 	// (sessionEventsSQL); this index serves that order without a sort.
-	sessionTimeIndexSQL = `CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_id, ` + timestampOrderExpr("ts") + `, id)`
+	// sessionTimeIndexSQL orders a session's events by their instant in
+	// nanoseconds, then insertion: the session report, a flag's nearest calls,
+	// resource activity and the memory cursor all read through it.
+	sessionTimeIndexSQL = `CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_id, ` + memoryTimestampExpr("ts") + `, id)`
 	// Prefix each candidate with a fixed-width UTC sort key. Strip that key
 	// after MAX so callers receive the original RFC3339 timestamp.
 	harnessActivitySQL = fmt.Sprintf(`SELECT s.harness,
@@ -1593,22 +1596,24 @@ func eventRecordQuery(f EventFilter, withID bool, beforeID int64) (string, []any
 	// serving the time bounds: newest-first paging by id stops at LIMIT on the
 	// session and kind indexes, where a time-range seek sorts the whole window.
 	// TimeSeek wants that seek.
-	ts := "+ts"
-	if f.TimeSeek && f.SessionID != "" {
-		ts = "ts"
+	at := timestampOrderExpr("+ts")
+	bound := timestampOrderExpr
+	seek := f.TimeSeek && f.SessionID != ""
+	if seek {
+		at, bound = memoryTimestampExpr("ts"), memoryTimestampExpr
 	}
 	if f.Since != "" {
-		q += " AND " + timestampOrderExpr(ts) + " >= " + timestampOrderExpr(":event_since")
+		q += " AND " + at + " >= " + bound(":event_since")
 		args = append(args, sql.Named("event_since", f.Since))
 	}
 	if f.Until != "" {
-		q += " AND " + timestampOrderExpr(ts) + " <= " + timestampOrderExpr(":event_until")
+		q += " AND " + at + " <= " + bound(":event_until")
 		args = append(args, sql.Named("event_until", f.Until))
 	}
-	if ts == "ts" && f.Latest {
-		q += " ORDER BY " + timestampOrderExpr("ts") + " DESC, id DESC LIMIT ?"
-	} else if ts == "ts" {
-		q += " ORDER BY " + timestampOrderExpr("ts") + ", id LIMIT ?"
+	if seek && f.Latest {
+		q += " ORDER BY " + at + " DESC, id DESC LIMIT ?"
+	} else if seek {
+		q += " ORDER BY " + at + ", id LIMIT ?"
 	} else {
 		q += " ORDER BY id DESC LIMIT ?"
 	}

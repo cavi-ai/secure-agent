@@ -198,7 +198,7 @@ func TestSessionMemoryUsesTimeIndex(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(plan, "idx_memory_events") {
+	if !strings.Contains(plan, "idx_events_session_time") {
 		t.Fatalf("memory query does not use timestamp index: %s", plan)
 	}
 }
