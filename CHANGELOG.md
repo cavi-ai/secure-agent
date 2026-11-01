@@ -16,6 +16,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - File telemetry: the collector writes each Endpoint Security record to the spool with only the fields the daemon reads, about a tenth of `eslogger`'s bytes, instead of the full record with every process's audit tokens, code-signing fields and file stats; its once-a-minute log line reports the bytes written.
 - File telemetry: the sensitive-path check lowercases and cleans its configured markers, paths and globs once instead of on every file event; it runs on each system-path open before the collector drops it, about a third faster.
 - File telemetry: opens by the system tools the daemon runs (git, lsof, ps, netstat) no longer reach the spool; agents the daemon starts, and anything those tools start, keep every event.
+- File telemetry: while the event bus stays full, the daemon retries the spool at up to 200 ms instead of every 5 ms, and reuses its read buffer.
 - File telemetry: the collector writes the spool once per read of `eslogger`'s output instead of once per line, and no longer writes the tail of a line over 4 MB as a line of its own; about 40% less collector CPU per event.
 - Transcripts: a transcript created while the daemon was down is read from its first line instead of from its end.
 - Traces: Cursor and Antigravity tool-call ids no longer skip numbers when the daemon starts reading a transcript, which after a restart could reuse an id and overwrite an earlier call.

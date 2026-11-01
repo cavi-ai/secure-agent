@@ -34,11 +34,23 @@ const spoolSkipScan = 8 << 20 // 8 MiB
 
 // spoolPollInterval paces an idle or drained spool. Retained events are
 // retried after spoolRetainedRetry, so ingest frees bus capacity and is fed
-// again within milliseconds instead of idling for a full poll interval.
+// again within milliseconds instead of idling for a full poll interval; a
+// retry that delivered nothing doubles the wait, up to spoolPollInterval,
+// so a bus that stays full is not polled 200 times a second.
 const (
 	spoolPollInterval  = 200 * time.Millisecond
 	spoolRetainedRetry = 5 * time.Millisecond
 )
+
+// retainedWait is the wait before a retry after stalled retries made no
+// progress.
+func retainedWait(stalled int) time.Duration {
+	wait := spoolRetainedRetry
+	for i := 0; i < stalled && wait < spoolPollInterval; i++ {
+		wait *= 2
+	}
+	return min(wait, spoolPollInterval)
+}
 
 // skipLine returns how many bytes from start, at most limit, end the current
 // line: through its newline when one is found, else all of limit.
@@ -330,6 +342,8 @@ type SpoolTailer struct {
 	// retained belongs to the single poll loop; it distinguishes valid
 	// backlog from a partial line in a file the writer has rotated.
 	retained bool
+	// scanBuf is drainOnce's line buffer, owned by the poll loop.
+	scanBuf []byte
 
 	// OnProduce, when set, is called after any spool event is published —
 	// the supervisor's coverage heartbeat: a tailer whose spool stopped
@@ -472,15 +486,24 @@ func (t *SpoolTailer) Run(ctx context.Context) error {
 
 func (t *SpoolTailer) follow(ctx context.Context) error {
 	c := t.startCursor()
+	stalled := 0
 	for {
 		enabled := t.Enabled == nil || t.Enabled()
+		before := c
 		if enabled {
 			c = t.poll(c)
 		}
 		t.savePosition(c, false)
 		wait := spoolPollInterval
 		if enabled && t.retained {
-			wait = spoolRetainedRetry
+			if c.offset == before.offset && os.SameFile(c.file, before.file) {
+				stalled++
+			} else {
+				stalled = 0
+			}
+			wait = retainedWait(stalled)
+		} else {
+			stalled = 0
 		}
 		select {
 		case <-ctx.Done():
@@ -572,8 +595,11 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 	unread := st.Size() - offset
 	overBudget := unread > spoolDrainBudget
 
+	if t.scanBuf == nil {
+		t.scanBuf = make([]byte, 64*1024)
+	}
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Buffer(t.scanBuf, 1024*1024)
 	scanner.Split(scanCompleteLines)
 	var lastGood int64
 	var linesThisTick, parsedThisTick uint64
