@@ -4,8 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 )
 
 // A restarted daemon answers from the saved inventory and sizes at once,
@@ -64,5 +67,35 @@ func TestOldClutterSizeAnswersWhileRemeasured(t *testing.T) {
 	rep = c.Report(context.Background(), false)
 	if got := byPath(t, rep, tmp).SizeBytes; got < before+90000 || rep.Refreshing {
 		t.Fatalf("after re-measuring: size %d (was %d), refreshing=%v", got, before, rep.Refreshing)
+	}
+}
+
+// Sizes answer for sizeTTL; an asked refresh measures again the ones older
+// than diskusage.ReuseWindow.
+func TestAskedRefreshRemeasuresRecentClutterSizes(t *testing.T) {
+	m := newMachine(t)
+	now := time.Now()
+	var mu sync.Mutex
+	c := m.clutter(&memStore{})
+	c.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	tmp := filepath.Join(m.repo, ".tmp")
+	c.Report(context.Background(), true)
+	c.sizeWG.Wait()
+	before := byPath(t, c.Report(context.Background(), false), tmp).SizeBytes
+	mk(t, filepath.Join(tmp, "more.log"), 90000)
+	mu.Lock()
+	now = now.Add(diskusage.ReuseWindow + time.Second)
+	mu.Unlock()
+
+	c.Report(context.Background(), false)
+	c.sizeWG.Wait()
+	c.bgWG.Wait()
+	if got := byPath(t, c.Report(context.Background(), false), tmp).SizeBytes; got != before {
+		t.Fatalf("an unasked report re-measured a size within sizeTTL: %d, was %d", got, before)
+	}
+	c.Report(context.Background(), true)
+	c.sizeWG.Wait()
+	if got := byPath(t, c.Report(context.Background(), false), tmp).SizeBytes; got < before+90000 {
+		t.Fatalf("after an asked refresh: size %d, want the added file counted (was %d)", got, before)
 	}
 }

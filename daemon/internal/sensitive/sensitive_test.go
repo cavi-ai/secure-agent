@@ -1,6 +1,7 @@
 package sensitive
 
 import (
+	"os"
 	"testing"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -147,5 +148,19 @@ func TestNotSecretEnvFixture(t *testing.T) {
 		if got != want {
 			t.Errorf("Match(%q) sensitive=%v, want %v", path, got, want)
 		}
+	}
+}
+
+// BenchmarkMatchSystemPath is the collector's hot path: the classifier runs
+// on every open of a system path before the open is dropped.
+func BenchmarkMatchSystemPath(b *testing.B) {
+	cfg, err := config.Load(os.DevNull)
+	if err != nil {
+		b.Fatal(err)
+	}
+	c := New(cfg)
+	b.ReportAllocs()
+	for b.Loop() {
+		c.Match("/usr/lib/system/libsystem_kernel.dylib")
 	}
 }

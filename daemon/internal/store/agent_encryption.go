@@ -122,9 +122,6 @@ func (s *Store) EnableAgentEncryption(key []byte) error {
 	if err != nil {
 		return err
 	}
-	if _, err = s.db.Exec("PRAGMA secure_delete=ON"); err != nil {
-		return err
-	}
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return err

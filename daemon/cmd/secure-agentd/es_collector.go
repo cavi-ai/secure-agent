@@ -408,8 +408,9 @@ func pumpToSpool(stdout interface{ Read([]byte) (int, error) }) error {
 }
 
 // pumpToSpoolAt copies newline-delimited records from stdout to the spool
-// at path, skipping empty lines and the lines keepESLine drops; the drop
-// count goes to the log once a minute. It returns errESBehind once records
+// at path, skipping empty lines and the lines keepESLine drops and writing
+// each kept line reduced to the fields the daemon reads (CompactESLine); the
+// counts go to the log once a minute. It returns errESBehind once records
 // have trailed the clock by more than esMaxLag for esLagConfirm.
 func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) error {
 	return pumpToSpoolObserved(stdout, path, nil)
@@ -427,6 +428,7 @@ func pumpToSpoolObserved(stdout interface{ Read([]byte) (int, error) }, path str
 	defer w.close()
 	buf := make([]byte, 0, 256*1024)
 	tmp := make([]byte, 64*1024)
+	var compact []byte
 	var stats esFilterStats
 	var lag esLagWatch
 	for {
@@ -449,10 +451,18 @@ func pumpToSpoolObserved(stdout interface{ Read([]byte) (int, error) }, path str
 						return err
 					}
 					if keepESLine(line) {
-						if err := w.writeLine(line); err != nil {
+						// Only the fields the daemon reads reach the spool; a
+						// line that is not one JSON object goes as it is.
+						out := line
+						if c, ok := collect.CompactESLine(compact[:0], line); ok {
+							compact, out = c, c
+						}
+						if err := w.writeLine(out); err != nil {
 							return fmt.Errorf("spool write: %w", err)
 						}
 						stats.kept++
+						stats.keptBytes += uint64(len(line))
+						stats.wroteBytes += uint64(len(out))
 						wrote = true
 					} else {
 						stats.dropped++

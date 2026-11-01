@@ -87,3 +87,41 @@ func BenchmarkIngestAgentFileOpens(b *testing.B) {
 	b.StopTimer()
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "events/s")
 }
+
+// BenchmarkIngestAgentFileOpensAmidOtherProcesses is the agent load above
+// with three opens by a process outside every agent family between agent
+// opens, as on a live machine: those opens are skipped and must not split the
+// agent's file batches.
+func BenchmarkIngestAgentFileOpensAmidOtherProcesses(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "events.db")
+	st, err := store.Open(path, "")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { st.Close() })
+	seedEventRows(b, path)
+	cfg, err := config.Load("/nonexistent")
+	if err != nil {
+		b.Fatal(err)
+	}
+	tagger := agents.New(cfg, fakeProcSource{})
+	tagger.Refresh()
+	cr := correlate.New(tagger, sensitive.New(cfg), cfg, correlate.Hooks{})
+	input := make(chan event.Event, 2048)
+	ingest := runEventIngest(input, ingestDeps{Store: st, Correlator: cr, Resolver: session.NewResolver(st, tagger), Tagger: tagger})
+	base := time.Now()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		at := base.Add(time.Duration(4*i) * time.Microsecond)
+		input <- event.Event{Kind: event.KindFileOpen, TS: at, PID: 500,
+			ExePath: "/usr/local/bin/cursor-agent", Path: fmt.Sprintf("/w/repo/src/f%d.go", i*7/12)}
+		for n := 1; n <= 3; n++ {
+			input <- event.Event{Kind: event.KindFileOpen, TS: at.Add(time.Duration(n) * time.Microsecond), PID: 900,
+				ExePath: "/usr/libexec/mdworker", Path: fmt.Sprintf("/Users/u/Documents/d%d-%d", i, n)}
+		}
+	}
+	close(input)
+	<-ingest.Done()
+	b.StopTimer()
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "agent-events/s")
+}

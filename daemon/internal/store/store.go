@@ -296,6 +296,10 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 	} else {
 		dsn = ":memory:?_pragma=journal_mode(WAL)"
 	}
+	// secure_delete is a per-connection setting, so the DSN sets it for every
+	// pooled connection: deleted rows, and agent history replaced by its
+	// encrypted form, are overwritten with zeros in the database file.
+	dsn += "&_pragma=secure_delete(ON)"
 	// Read-modify-write transactions reserve the writer before taking their
 	// snapshot. A deferred read-to-write upgrade can fail with SQLITE_BUSY
 	// immediately, bypassing busy_timeout when another connection writes.

@@ -10,8 +10,13 @@ import (
 )
 
 // sizeTTL is how long a measured size answers without a new walk; an older
-// size still answers while the sizer measures it again.
-const sizeTTL = time.Hour
+// size still answers while the sizer measures it again. An asked refresh
+// measures again sizes older than diskusage.ReuseWindow.
+const sizeTTL = 24 * time.Hour
+
+// sizeSaveEvery spaces the saves of measured sizes during a sizing pass, so
+// a daemon restarted mid-pass resumes from what it measured.
+const sizeSaveEvery = 15 * time.Second
 
 // sizeEntry is one cached measurement.
 type sizeEntry struct {
@@ -27,17 +32,18 @@ type sizeJob struct {
 	skip map[string]bool
 }
 
-// sizerWorkers bounds concurrent directory walks: sizing is disk-bound and
-// must not starve the daemon.
-const sizerWorkers = 2
+// sizerWorkers is how many jobs the sizer hands out at once; the walks
+// themselves share diskusage.MeasureWorkers with every other sizer in the
+// process.
+const sizerWorkers = diskusage.MeasureWorkers
 
 // cachedSize returns the last measurement of path and whether it is older
-// than sizeTTL.
-func (h *Hunter) cachedSize(path string) (sizeEntry, bool, bool) {
+// than maxAge.
+func (h *Hunter) cachedSize(path string, maxAge time.Duration) (sizeEntry, bool, bool) {
 	h.sizeMu.Lock()
 	defer h.sizeMu.Unlock()
 	e, ok := h.sizes[path]
-	return e, ok && h.now().Sub(e.at) > sizeTTL, ok
+	return e, ok && h.now().Sub(e.at) > maxAge, ok
 }
 
 // saveSizes stores the measured sizes.
@@ -55,8 +61,9 @@ func (h *Hunter) saveSizes() {
 
 func (h *Hunter) forgetSize(path string) {
 	h.sizeMu.Lock()
-	defer h.sizeMu.Unlock()
 	delete(h.sizes, path)
+	h.sizeMu.Unlock()
+	diskusage.Forget(path)
 }
 
 // startSizing measures jobs in the background unless a pass is running.
@@ -84,10 +91,18 @@ func (h *Hunter) startSizing(jobs []sizeJob) {
 			go func() {
 				defer wg.Done()
 				for j := range ch {
-					u := diskusage.Dir(context.Background(), j.path, j.skip)
+					u := diskusage.Measure(context.Background(), j.path, j.skip)
 					h.sizeMu.Lock()
-					h.sizes[j.path] = sizeEntry{bytes: u.Bytes, partial: u.Partial, at: h.now()}
+					now := h.now()
+					h.sizes[j.path] = sizeEntry{bytes: u.Bytes, partial: u.Partial, at: now}
+					save := now.Sub(h.sizesSaved) >= sizeSaveEvery
+					if save {
+						h.sizesSaved = now
+					}
 					h.sizeMu.Unlock()
+					if save {
+						h.saveSizes()
+					}
 				}
 			}()
 		}
@@ -102,9 +117,14 @@ func (h *Hunter) startSizing(jobs []sizeJob) {
 
 // withSizes deep-copies rep (the cached scan stays untouched) and fills
 // each measurable row's size, the repository and summary totals and the
-// volumes; rows never measured, or measured more than sizeTTL ago, are
-// queued for the sizer. An old size answers until the new one lands.
-func (h *Hunter) withSizes(rep ScanReport) ScanReport {
+// volumes; rows never measured, or measured more than sizeTTL ago
+// (ReuseWindow on an asked refresh), are queued for the sizer. An old size
+// answers until the new one lands.
+func (h *Hunter) withSizes(rep ScanReport, refresh bool) ScanReport {
+	maxAge := sizeTTL
+	if refresh {
+		maxAge = diskusage.ReuseWindow
+	}
 	repos := make([]RepoReport, len(rep.Repos))
 	var jobs []sizeJob
 	missing := 0
@@ -122,7 +142,7 @@ func (h *Hunter) withSizes(rep ScanReport) ScanReport {
 			if w.State == StateMain || w.State == StatePrune {
 				continue
 			}
-			e, old, ok := h.cachedSize(w.Path)
+			e, old, ok := h.cachedSize(w.Path, maxAge)
 			if ok {
 				w.SizeBytes, w.SizePartial = e.bytes, e.partial
 				r.SizeBytes += e.bytes

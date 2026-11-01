@@ -103,6 +103,8 @@ func (c *Clutter) Clean(ctx context.Context, name string) (ClutterResult, error)
 	c.st.PutCleanup(model.CleanupEntry{
 		TS: c.now(), Action: "clean:" + it.Name, Path: it.Path, Bytes: freed, Detail: it.Command,
 	})
+	// The cache changed: no walk may reuse what was measured before.
+	diskusage.Forget(it.Path)
 	c.putSize(it.Path, after)
 	c.invalidate()
 	return res, nil
