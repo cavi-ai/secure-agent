@@ -10,6 +10,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the guard prompt's Allow button is green and names only the duration ("Allow for session"), on one line; the Allow for and Covers pickers and the note under the buttons say what it covers.
 
 ### Fixed
+- Traces: OpenCode model calls carry the model of their own message, so a session that switches model no longer labels and prices later steps with the first one; each poll scans OpenCode's parts table once instead of twice.
 - File telemetry: a spool flood that carries the odd valid line among its garbage is now skipped and reported as a flood instead of being scanned 4 MiB at a time.
 - File telemetry: the daemon's own file opens, such as its worktree disk-usage walks, no longer reach the Endpoint Security spool, so a walk over a large tree no longer rotates the spool every few seconds.
 - File telemetry: the collector restarts `eslogger` once it holds more than 256 MB of events it has not written out, instead of letting that backlog grow until it trails the clock by a minute.
