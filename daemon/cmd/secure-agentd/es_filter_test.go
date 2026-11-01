@@ -102,6 +102,41 @@ func TestKeepESLine(t *testing.T) {
 	}
 }
 
+// esOpenByTestLine is esOpenTestLine opened by exe, in eslogger's layout:
+// the executable's stat before its path, every slash escaped.
+func esOpenByTestLine(exe, path string) string {
+	return strings.Replace(strings.ReplaceAll(esOpenTestLine(path), "/", `\/`),
+		`"executable":{"path":"\/usr\/bin\/python3"}`,
+		`"executable":{"path_truncated":false,"stat":{"st_size":1},"path":"`+strings.ReplaceAll(exe, "/", `\/`)+`"}`, 1)
+}
+
+// The user daemon's own opens (disk-usage walks, transcript reads) are not
+// agent activity: dropped on any path but a sensitive one or a profile file.
+func TestKeepESLineDropsTheDaemonsOwnOpens(t *testing.T) {
+	const daemon = "/Applications/Secure Agent.app/Contents/Helpers/secure-agentd"
+	setESDaemonExe(daemon)
+	t.Cleanup(func() { setESDaemonExe("") })
+	walk := "/Users/dev/work/app/.claude/worktrees/x/vendor/.run/artifacts/53"
+	cases := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{"daemon walks a worktree", esOpenByTestLine(daemon, walk), false},
+		{"daemon reads a transcript", esOpenByTestLine(daemon, "/Users/dev/.claude/projects/p/s.jsonl"), false},
+		{"daemon reads a credentials file", esOpenByTestLine(daemon, "/Users/dev/.aws/credentials"), true},
+		{"daemon reads a profile file", esOpenByTestLine(daemon, "/Users/dev/Downloads/p.mobileconfig"), true},
+		{"agent walks the same worktree", esOpenByTestLine("/usr/local/bin/claude", walk), true},
+		{"daemon of another bundle", esOpenByTestLine("/Applications/Other.app/Contents/Helpers/secure-agentd", walk), true},
+		{"spaced layout daemon open", `{"process": {"executable": {"path": "` + daemon + `"}}, "event": {"open": {"file": {"path": "` + walk + `"}}}}`, false},
+	}
+	for _, c := range cases {
+		if got := keepESLine([]byte(c.line)); got != c.want {
+			t.Errorf("%s: keepESLine = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // TestKeepESLineNeverDropsConfiguredSensitivePaths places every compiled-in
 // sensitive glob and path (home-anchored ones under a neutral home) under
 // every dropped prefix and requires the open to be kept.

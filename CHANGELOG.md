@@ -6,6 +6,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- File telemetry: the daemon's own file opens, such as its worktree disk-usage walks, no longer reach the Endpoint Security spool, so a walk over a large tree no longer rotates the spool every few seconds.
+
 ## [1.5.0] - 2026-10-30
 
 ### Added
