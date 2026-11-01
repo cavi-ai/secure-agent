@@ -15,8 +15,9 @@ import (
 // verdict), optionally scoped to one agent. Same file discipline as the
 // other override stores — JSON, 0600, atomic, corrupt-file-loud.
 type MuteStore struct {
-	path string
-	mu   sync.Mutex
+	path  string
+	mu    sync.Mutex
+	cache policyCache[map[string][]Mute]
 }
 
 // Mute is one muted host of a rule. An empty Agent mutes the pair for every
@@ -59,8 +60,9 @@ func NewMuteStore(path string) *MuteStore {
 	return &MuteStore{path: path}
 }
 
-// Load returns rule -> muted hosts, treating unreadable policy as no mutes
-// for event matching. Operator-facing reads should use LoadResult.
+// Load returns rule -> muted hosts, shared and read-only, treating unreadable
+// policy as no mutes for event matching. Operator-facing reads should use
+// LoadResult.
 func (s *MuteStore) Load() map[string][]Mute {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -85,10 +87,14 @@ func (s *MuteStore) Muted(rule, host, agent string) bool {
 	return false
 }
 
+// loadLocked serves event matching from the cached policy; the result is
+// shared and read-only.
 func (s *MuteStore) loadLocked() map[string][]Mute {
-	out, err := s.readLocked()
+	out, fresh, err := s.cache.get(s.path, s.readLocked)
 	if err != nil {
-		log.Printf("correlate: WARNING: cannot load mutes (%v); dispositions are NOT applied until it is fixed", err)
+		if fresh {
+			log.Printf("correlate: WARNING: cannot load mutes (%v); dispositions are NOT applied until it is fixed", err)
+		}
 		return map[string][]Mute{}
 	}
 	return out

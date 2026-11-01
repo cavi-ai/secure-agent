@@ -16,26 +16,32 @@ import (
 // a daemon restart without editing the config overlay. Same philosophy as the
 // firewall ModeStore.
 type AllowlistStore struct {
-	path string
-	mu   sync.Mutex
+	path  string
+	mu    sync.Mutex
+	cache policyCache[map[string][]string]
 }
 
 func NewAllowlistStore(path string) *AllowlistStore {
 	return &AllowlistStore{path: path}
 }
 
-// Load returns agent -> approved hosts. A missing file is empty; a corrupt one
-// is a loud empty (approved hosts must never silently revert to uninspected).
+// Load returns agent -> approved hosts, shared and read-only. A missing file
+// is empty; a corrupt one is a loud empty (approved hosts must never silently
+// revert to uninspected).
 func (s *AllowlistStore) Load() map[string][]string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.loadLocked()
 }
 
+// loadLocked serves matching from the cached policy; the result is shared
+// and read-only.
 func (s *AllowlistStore) loadLocked() map[string][]string {
-	out, err := s.readLocked()
+	out, fresh, err := s.cache.get(s.path, s.readLocked)
 	if err != nil {
-		log.Printf("correlate: WARNING: cannot load allowlist overrides (%v); user-approved hosts are NOT applied until it is fixed", err)
+		if fresh {
+			log.Printf("correlate: WARNING: cannot load allowlist overrides (%v); user-approved hosts are NOT applied until it is fixed", err)
+		}
 		return map[string][]string{}
 	}
 	return out
