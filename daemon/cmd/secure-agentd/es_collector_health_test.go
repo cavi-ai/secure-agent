@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -114,6 +115,41 @@ func TestCollectorCommandReportsPermissionFailure(t *testing.T) {
 	if status.LastDeliveryAt != nil {
 		t.Fatalf("failed command claimed delivery: %+v", status)
 	}
+}
+
+// An eslogger holding more memory than the cap is restarted, as one that
+// trails the clock is: the events it holds would otherwise keep piling up.
+func TestCollectorCommandRestartsESLoggerOverMemoryCap(t *testing.T) {
+	if os.Getenv("SECURE_AGENT_TEST_ES_HOLDS") == "1" {
+		held := make([]byte, 64<<20)
+		for i := range held {
+			held[i] = 1
+		}
+		os.Stdout.WriteString(esRecord(time.Now().UTC()) + "\n")
+		time.Sleep(30 * time.Second)
+		runtime.KeepAlive(held)
+		os.Exit(0)
+	}
+	limit, interval := esMaxRSS, esRSSCheckInterval
+	esMaxRSS, esRSSCheckInterval = 32<<20, 50*time.Millisecond
+	t.Cleanup(func() { esMaxRSS, esRSSCheckInterval = limit, interval })
+	root := t.TempDir()
+	path := filepath.Join(root, "status.json")
+	h := newESCollectorHealth(path, os.Getpid(), time.Second)
+	defer h.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCollectorCommandRestartsESLoggerOverMemoryCap$")
+	cmd.Env = append(os.Environ(), "SECURE_AGENT_TEST_ES_HOLDS=1")
+	start := time.Now()
+	err := runESLoggerCommand(ctx, cmd, h, filepath.Join(root, "spool.jsonl"))
+	if !errors.Is(err, errESBehind) {
+		t.Fatalf("eslogger over the memory cap returned %v, want a restart", err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("eslogger over the memory cap ran for %s", elapsed)
+	}
+	readCollectorHealth(t, path, "restarting")
 }
 
 func TestCollectorCommandReportsPersistedDelivery(t *testing.T) {

@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 )
 
@@ -51,6 +52,14 @@ const (
 	// esLagCheckInterval spaces the lag checks: one timestamp read per
 	// interval, not per line.
 	esLagCheckInterval = time.Second
+)
+
+// esMaxRSS caps eslogger's resident memory. Events it cannot write out as fast
+// as they arrive wait there; past the cap the collector restarts it, as it
+// does one that trails the clock. Its working set otherwise stays near 50 MB.
+var (
+	esMaxRSS           uint64 = 256 << 20
+	esRSSCheckInterval        = 2 * time.Second
 )
 
 // errESBehind marks an eslogger the collector stopped for falling behind.
@@ -262,9 +271,13 @@ func runESLoggerCommand(ctx context.Context, cmd *exec.Cmd, health *esCollectorH
 	}
 	log.Printf("es-collector: eslogger started (pid %d), spool %s", cmd.Process.Pid, spoolPath)
 
+	stopWatch := watchESLoggerMemory(cmd.Process)
 	writeErr := pumpToSpoolObserved(stdout, spoolPath, health.delivered)
 	_ = cmd.Process.Kill()
 	waitErr := cmd.Wait()
+	if overErr := stopWatch(); overErr != nil {
+		return overErr
+	}
 	if errors.Is(writeErr, errESBehind) {
 		return writeErr
 	}
@@ -275,6 +288,36 @@ func runESLoggerCommand(ctx context.Context, cmd *exec.Cmd, health *esCollectorH
 		return fmt.Errorf("eslogger exited: %w (stderr: %s)", waitErr, oneLine(stderr.String()))
 	}
 	return nil
+}
+
+// watchESLoggerMemory kills p once its resident memory passes esMaxRSS. stop
+// ends the watch and returns the overrun as errESBehind, or nil.
+func watchESLoggerMemory(p *os.Process) (stop func() error) {
+	quit := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		tick := time.NewTicker(esRSSCheckInterval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-quit:
+				result <- nil
+				return
+			case <-tick.C:
+				info, ok := agents.NewProcSource().Info(int32(p.Pid))
+				if ok && info.RSSBytes > esMaxRSS {
+					_ = p.Kill()
+					result <- fmt.Errorf("%w: it holds %d MB of events it has not written, over the %d MB cap",
+						errESBehind, info.RSSBytes>>20, esMaxRSS>>20)
+					return
+				}
+			}
+		}
+	}()
+	return func() error {
+		close(quit)
+		return <-result
+	}
 }
 
 // isESPermissionFailure reports whether an eslogger failure is the expected
