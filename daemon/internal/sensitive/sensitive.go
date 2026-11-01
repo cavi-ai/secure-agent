@@ -68,12 +68,46 @@ type Classifier interface {
 	Match(path string) (Match, bool)
 }
 
+// classifierImpl holds the configured rules as Match compares them:
+// lowercased markers, cleaned paths and globs. Match runs on every file
+// event (the privileged collector's open filter included), so nothing is
+// derived from the configuration per call.
 type classifierImpl struct {
-	cfg config.Config
+	markers   []keychainMarker
+	notSecret []string // cleaned
+	paths     []configuredRule
+	globs     []globRule
+}
+
+type keychainMarker struct{ name, lower string }
+
+// configuredRule is a configured entry and its cleaned form.
+type configuredRule struct{ name, clean string }
+
+// globRule is a sensitive glob: a bare-name glob (".env", "*.keychain-db")
+// or one anchored with "**/" matches the file name anywhere; a glob with a
+// directory component matches the whole path only.
+type globRule struct {
+	name, pattern string
+	base          bool
 }
 
 func New(cfg config.Config) Classifier {
-	return &classifierImpl{cfg: cfg}
+	c := &classifierImpl{}
+	for _, m := range cfg.KeychainMarkers {
+		c.markers = append(c.markers, keychainMarker{m, strings.ToLower(m)})
+	}
+	for _, np := range cfg.NotSecretPaths {
+		c.notSecret = append(c.notSecret, filepath.Clean(np))
+	}
+	for _, sp := range cfg.SensitivePaths {
+		c.paths = append(c.paths, configuredRule{sp, filepath.Clean(sp)})
+	}
+	for _, g := range cfg.SensitiveGlobs {
+		pattern, _ := strings.CutPrefix(filepath.Clean(g), "**/")
+		c.globs = append(c.globs, globRule{name: g, pattern: pattern, base: !strings.Contains(pattern, "/")})
+	}
+	return c
 }
 
 // sshPrivateKeyRe is the one SSH private key rule: id_* or *_rsa|_dsa|_ecdsa|
@@ -121,14 +155,14 @@ func (c *classifierImpl) Match(path string) (Match, bool) {
 	}
 
 	// 1b. Keychain markers (user keychains — the actual secrets).
-	for _, marker := range c.cfg.KeychainMarkers {
-		if strings.Contains(lower, strings.ToLower(marker)) {
-			return Match{CatKeychain, "keychain:" + marker}, true
+	for _, m := range c.markers {
+		if strings.Contains(lower, m.lower) {
+			return Match{CatKeychain, "keychain:" + m.name}, true
 		}
 	}
 
 	// 2. SSH private keys (public keys and ~/.ssh/config are not secrets)
-	if SSHPrivateKey(clean) {
+	if sshPrivateKeyRe.MatchString(clean) {
 		return Match{CatSSHKey, "ssh-key"}, true
 	}
 
@@ -138,9 +172,8 @@ func (c *classifierImpl) Match(path string) (Match, bool) {
 	}
 
 	// 5. Configured non-secret directories, then sensitive paths (prefix)
-	for _, np := range c.cfg.NotSecretPaths {
-		npClean := filepath.Clean(np)
-		if clean == npClean || strings.HasPrefix(clean, npClean+"/") {
+	for _, np := range c.notSecret {
+		if clean == np || (strings.HasPrefix(clean, np) && len(clean) > len(np) && clean[len(np)] == '/') {
 			return Match{Category: CatOther}, false
 		}
 	}
@@ -155,17 +188,20 @@ func (c *classifierImpl) Match(path string) (Match, bool) {
 		return Match{CatEnvFile, "env-file"}, true
 	}
 
-	for _, sp := range c.cfg.SensitivePaths {
-		spClean := filepath.Clean(sp)
-		if strings.HasPrefix(clean, spClean) {
-			return Match{CatOther, "path:" + sp}, true
+	for _, sp := range c.paths {
+		if strings.HasPrefix(clean, sp.clean) {
+			return Match{CatOther, "path:" + sp.name}, true
 		}
 	}
 
 	// 6. Check configured globs
-	for _, glob := range c.cfg.SensitiveGlobs {
-		if globMatches(filepath.Clean(glob), clean) {
-			return Match{CatOther, "glob:" + glob}, true
+	for _, g := range c.globs {
+		target := clean
+		if g.base {
+			target = base
+		}
+		if ok, _ := filepath.Match(g.pattern, target); ok {
+			return Match{CatOther, "glob:" + g.name}, true
 		}
 	}
 
@@ -173,18 +209,3 @@ func (c *classifierImpl) Match(path string) (Match, bool) {
 }
 
 var envTemplates = map[string]bool{".env.example": true, ".env.sample": true, ".env.template": true, ".env.dist": true}
-
-// globMatches: a bare-name glob (".env", "*.keychain-db") or one anchored
-// with "**/" matches the file name anywhere; a glob with a directory
-// component matches the whole path only.
-func globMatches(glob, path string) bool {
-	if rest, ok := strings.CutPrefix(glob, "**/"); ok {
-		glob = rest
-	}
-	if !strings.Contains(glob, "/") {
-		ok, _ := filepath.Match(glob, filepath.Base(path))
-		return ok
-	}
-	ok, _ := filepath.Match(glob, path)
-	return ok
-}
