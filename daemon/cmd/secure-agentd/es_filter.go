@@ -18,8 +18,8 @@ import (
 // opens of OS libraries, frameworks, dyld caches, app-bundle resources,
 // package-manager libraries and the per-user temporary and cache roots carry
 // much of eslogger's volume and none of the daemon's signal. Opens by the
-// user daemon itself (its disk-usage walks, transcript reads) are dropped on
-// any path. An open is never dropped when the daemon's sensitive-path
+// user daemon itself (its disk-usage walks, transcript reads) and by the
+// system tools it runs (es_tools.go) are dropped on any path. An open is never dropped when the daemon's sensitive-path
 // classifier matches its path or the path is a configuration profile file. A create is kept only when it names a
 // launchd agent or daemon directory, or an app bundle, installer package or
 // configuration profile file that a later Gatekeeper override or profile
@@ -60,6 +60,7 @@ var (
 	esEventMarker      = []byte(`"event":{"`)
 	esOpenKey          = []byte(`open":{`)
 	esCreateKey        = []byte(`create":{`)
+	esExecKey          = []byte(`exec":{`)
 	esPathMarker       = []byte(`"path":"`)
 	esExecutableMarker = []byte(`"executable":{`)
 )
@@ -158,10 +159,14 @@ func keepESLine(line []byte) bool {
 	if bytes.HasPrefix(rest, esCreateKey) {
 		return namesLaunchItemDir(rest) || namesTrustSubject(rest)
 	}
+	if bytes.HasPrefix(rest, esExecKey) {
+		esTools.noteExec(line, line[:i])
+		return true
+	}
 	if !bytes.HasPrefix(rest, esOpenKey) {
 		return true // every event other than open
 	}
-	byDaemon := openedByDaemon(line[:i])
+	byDaemon := openedByDaemon(line[:i]) || esTools.ran(line[:i])
 	rest = rest[len(esOpenKey):]
 	j := bytes.Index(rest, esPathMarker)
 	if j < 0 {
