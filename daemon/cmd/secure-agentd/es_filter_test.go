@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -205,7 +206,26 @@ func TestPumpToSpoolDropsSystemOpensOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read spool: %v", err)
 	}
-	if want := strings.Join(kept, "\n") + "\n"; string(got) != want {
+	// Each kept record reaches the spool reduced to the fields the daemon
+	// reads, decoding to the same event; a line that is not JSON goes as is.
+	var want []string
+	for _, k := range kept {
+		c, ok := collect.CompactESLine(nil, []byte(k))
+		if !ok {
+			want = append(want, k)
+			continue
+		}
+		if len(c) >= len(k) {
+			t.Fatalf("kept record not compacted: %s", c)
+		}
+		orig, origOK := collect.ParseESLine([]byte(k))
+		parsed, parsedOK := collect.ParseESLine(c)
+		if origOK != parsedOK || !reflect.DeepEqual(orig, parsed) {
+			t.Fatalf("compact record parses to %+v, original to %+v", parsed, orig)
+		}
+		want = append(want, string(c))
+	}
+	if want := strings.Join(want, "\n") + "\n"; string(got) != want {
 		t.Fatalf("spool =\n%s\nwant\n%s", got, want)
 	}
 	for _, d := range dropped {
@@ -221,15 +241,15 @@ func TestESFilterStatsReportsOncePerMinute(t *testing.T) {
 	if _, ok := s.report(t0); ok {
 		t.Fatal("reported at the start of the interval")
 	}
-	s.kept, s.dropped = 30, 70
+	s.kept, s.dropped, s.keptBytes, s.wroteBytes = 30, 70, 300<<10, 60<<10
 	if _, ok := s.report(t0.Add(59 * time.Second)); ok {
 		t.Fatal("reported before a minute passed")
 	}
 	msg, ok := s.report(t0.Add(time.Minute))
-	if !ok || msg != "es-collector: dropped 70 of 100 lines (system and temp-path opens) in the last 1m0s" {
+	if !ok || msg != "es-collector: dropped 70 of 100 lines (system and temp-path opens) in the last 1m0s; wrote 60 KB for 300 KB kept" {
 		t.Fatalf("report = %q, %v", msg, ok)
 	}
-	if s.kept != 0 || s.dropped != 0 || !s.since.Equal(t0.Add(time.Minute)) {
+	if s.kept != 0 || s.dropped != 0 || s.keptBytes != 0 || s.wroteBytes != 0 || !s.since.Equal(t0.Add(time.Minute)) {
 		t.Fatalf("counters not reset: %+v", s)
 	}
 }

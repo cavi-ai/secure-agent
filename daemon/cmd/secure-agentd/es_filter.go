@@ -264,11 +264,13 @@ func isESNoisePath(path []byte) bool {
 	return false
 }
 
-// esFilterStats counts kept and dropped spool lines for the helper's
+// esFilterStats counts kept and dropped spool lines, and the kept lines'
+// bytes as eslogger wrote them and as written to the spool, for the helper's
 // once-a-minute log line.
 type esFilterStats struct {
-	since         time.Time
-	kept, dropped uint64
+	since                 time.Time
+	kept, dropped         uint64
+	keptBytes, wroteBytes uint64
 }
 
 // report returns the log line for the interval ending at now and resets the
@@ -281,8 +283,8 @@ func (s *esFilterStats) report(now time.Time) (string, bool) {
 	if elapsed < time.Minute {
 		return "", false
 	}
-	msg := fmt.Sprintf("es-collector: dropped %d of %d lines (system and temp-path opens) in the last %s",
-		s.dropped, s.kept+s.dropped, elapsed.Round(time.Second))
+	msg := fmt.Sprintf("es-collector: dropped %d of %d lines (system and temp-path opens) in the last %s; wrote %d KB for %d KB kept",
+		s.dropped, s.kept+s.dropped, elapsed.Round(time.Second), s.wroteBytes>>10, s.keptBytes>>10)
 	*s = esFilterStats{since: now}
 	return msg, true
 }

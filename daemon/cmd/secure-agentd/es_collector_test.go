@@ -30,7 +30,8 @@ func (r *chunkReader) Read(p []byte) (int, error) {
 
 func TestPumpToSpoolWritesEachRecordIntact(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "spool.jsonl")
-	r := &chunkReader{chunks: []string{`{"a":1}` + "\n" + `{"b":2}` + "\n" + `{"c":`, "3}\n"}}
+	// Records of fields the daemon reads, so compaction keeps them whole.
+	r := &chunkReader{chunks: []string{`{"event_type":1}` + "\n" + `{"event_type":2}` + "\n" + `{"event_type":`, "3}\n"}}
 
 	if err := pumpToSpoolAt(r, path); err != nil {
 		t.Fatalf("pumpToSpoolAt: %v", err)
@@ -40,7 +41,7 @@ func TestPumpToSpoolWritesEachRecordIntact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read spool: %v", err)
 	}
-	want := `{"a":1}` + "\n" + `{"b":2}` + "\n" + `{"c":3}` + "\n"
+	want := `{"event_type":1}` + "\n" + `{"event_type":2}` + "\n" + `{"event_type":3}` + "\n"
 	if string(got) != want {
 		t.Fatalf("spool = %q, want %q", got, want)
 	}
