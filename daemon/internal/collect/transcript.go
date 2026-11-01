@@ -827,7 +827,7 @@ func (ts *TranscriptScanner) eventsForLine(p, line string, lineStart, offset int
 		}
 		return []event.Event{e}
 	}
-	r := ts.trace.Parse(p, line, offset, source)
+	r := ts.trace.Parse(p, line, lineStart, source)
 	if r.Parsed {
 		s := r.Session
 		if s.ID != "" {

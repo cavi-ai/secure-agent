@@ -40,7 +40,7 @@ const agyRunningLine = `{"step_index":4,"source":"MODEL","type":"PLANNER_RESPONS
 const agyUserLine = `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-09-11T09:38:10Z","content":"do the thing"}`
 
 func TestAGYTraceToolsStatusAndTurn(t *testing.T) {
-	tr := NewAGYTracer("/Users/x/.gemini/antigravity-cli/brain/b285eea1-3969/.system_generated/logs/transcript_full.jsonl")
+	tr := NewAGYTracer("/Users/x/.gemini/antigravity-cli/brain/b285eea1-3969/.system_generated/logs/transcript_full.jsonl", nil)
 	id, _ := tr.Session()
 	if id != "b285eea1-3969" {
 		t.Fatalf("session id = %q, want the brain uuid", id)
@@ -102,7 +102,7 @@ func intPtr(n int) *int { return &n }
 // (session + per-file sequence) so rows are keyed and idempotent under
 // transcript re-reads instead of one unpairable insert per replay.
 func TestAGYToolCallsCarrySyntheticCallID(t *testing.T) {
-	tr := NewAGYTracer("/Users/x/.gemini/antigravity-cli/brain/uuid-one/.system_generated/logs/transcript_full.jsonl")
+	tr := NewAGYTracer("/Users/x/.gemini/antigravity-cli/brain/uuid-one/.system_generated/logs/transcript_full.jsonl", nil)
 	evs, _ := tr.ParseLine(agyToolLine)
 	if len(evs) != 2 || evs[0].CallID == "" || evs[1].CallID == "" {
 		t.Fatalf("call ids = %q,%q, want synthetic non-empty", evs[0].CallID, evs[1].CallID)
@@ -112,7 +112,7 @@ func TestAGYToolCallsCarrySyntheticCallID(t *testing.T) {
 	}
 	// Deterministic across tracer rebuilds of the same file position: same
 	// session + sequence → same id.
-	tr2 := NewAGYTracer("/Users/x/.gemini/antigravity-cli/brain/uuid-one/.system_generated/logs/transcript_full.jsonl")
+	tr2 := NewAGYTracer("/Users/x/.gemini/antigravity-cli/brain/uuid-one/.system_generated/logs/transcript_full.jsonl", nil)
 	evs2, _ := tr2.ParseLine(agyToolLine)
 	if evs2[0].CallID != evs[0].CallID {
 		t.Fatalf("rebuild id %q != original %q", evs2[0].CallID, evs[0].CallID)
@@ -136,7 +136,12 @@ func TestAGYToolCallSequenceSurvivesRestart(t *testing.T) {
 	if err := os.WriteFile(path, []byte(pre), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tr := NewAGYTracer(path)
+	prior, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prior.Close()
+	tr := NewAGYTracer(path, prior)
 	evs, ok := tr.ParseLine(agyToolLine)
 	if !ok || len(evs) != 2 {
 		t.Fatalf("evs = %+v, want 2 tool calls", evs)

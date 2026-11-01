@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,10 +60,11 @@ type AGYTracer struct {
 
 // NewAGYTracer builds a tracer for one brain transcript, taking the session id
 // from the brain directory UUID and the workspace best-effort from agy's
-// conversation cache. The tool-call sequence is seeded from the calls already
-// in the file so ids resume past them after a daemon restart.
-func NewAGYTracer(path string) *AGYTracer {
-	t := &AGYTracer{toolSeq: countAGYToolCalls(path)}
+// conversation cache. The tool-call sequence is seeded from the calls in
+// prior, the file's bytes before the first line this tracer parses, so ids
+// resume past them after a daemon restart; prior may be nil.
+func NewAGYTracer(path string, prior io.Reader) *AGYTracer {
+	t := &AGYTracer{toolSeq: countAGYToolCalls(prior)}
 	// .../brain/<uuid>/.system_generated/logs/transcript_full.jsonl → uuid.
 	if parts := strings.Split(filepath.ToSlash(path), "/brain/"); len(parts) == 2 {
 		t.sessionID = strings.SplitN(parts[1], "/", 2)[0]
@@ -73,16 +75,14 @@ func NewAGYTracer(path string) *AGYTracer {
 	return t
 }
 
-// countAGYToolCalls counts the tool calls already in the file, matching
-// ParseLine's emission rule exactly (records with named tool_calls entries).
-func countAGYToolCalls(path string) int {
-	f, err := os.Open(path)
-	if err != nil {
+// countAGYToolCalls counts the tool calls in r, matching ParseLine's emission
+// rule exactly (records with named tool_calls entries).
+func countAGYToolCalls(r io.Reader) int {
+	if r == nil {
 		return 0
 	}
-	defer f.Close()
 	n := 0
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())

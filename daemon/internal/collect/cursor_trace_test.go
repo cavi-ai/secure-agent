@@ -13,7 +13,7 @@ const cursorUserLine = `{"role":"user","message":{"content":[{"type":"text","tex
 const cursorAssistantLine = `{"role":"assistant","message":{"content":[{"type":"text","text":"Checking remotes."},{"type":"tool_use","name":"Shell","input":{"command":"git remote -v"}},{"type":"tool_use","name":"Glob","input":{"glob_pattern":"**/.gitignore"}}]}}`
 
 func TestCursorTraceToolsAndTurns(t *testing.T) {
-	tr := NewCursorTracer("/Users/x/.cursor/projects/Volumes-Work-hermes/agent-transcripts/abc/abcdef12-3456.jsonl")
+	tr := NewCursorTracer("/Users/x/.cursor/projects/Volumes-Work-hermes/agent-transcripts/abc/abcdef12-3456.jsonl", nil)
 	id, ws := tr.Session()
 	if id != "abcdef12-3456" {
 		t.Fatalf("session id = %q, want the filename uuid", id)
@@ -51,7 +51,7 @@ func TestCursorTraceToolsAndTurns(t *testing.T) {
 }
 
 func TestCursorRejectsForeign(t *testing.T) {
-	tr := NewCursorTracer("/tmp/x.jsonl")
+	tr := NewCursorTracer("/tmp/x.jsonl", nil)
 	if _, ok := tr.ParseLine(`{"tool":"Read","pid":1}`); ok {
 		t.Fatal("plugin activity line must not parse as a Cursor transcript")
 	}
@@ -82,13 +82,13 @@ func TestWorkspaceFromCursorSlugOnlyTrustedRoots(t *testing.T) {
 // Cursor records carry no tool-call id; synthetic ids (session + sequence)
 // key the rows so re-reads upsert instead of inserting unpairable dupes.
 func TestCursorToolCallsCarrySyntheticCallID(t *testing.T) {
-	tr := NewCursorTracer("/Users/x/.cursor/projects/slug-x/agent-transcripts/abc/abc.jsonl")
+	tr := NewCursorTracer("/Users/x/.cursor/projects/slug-x/agent-transcripts/abc/abc.jsonl", nil)
 	line := `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}`
 	evs, _ := tr.ParseLine(line)
 	if len(evs) != 1 || evs[0].CallID == "" {
 		t.Fatalf("call id = %+v, want synthetic non-empty", evs)
 	}
-	tr2 := NewCursorTracer("/Users/x/.cursor/projects/slug-x/agent-transcripts/abc/abc.jsonl")
+	tr2 := NewCursorTracer("/Users/x/.cursor/projects/slug-x/agent-transcripts/abc/abc.jsonl", nil)
 	evs2, _ := tr2.ParseLine(line)
 	if evs2[0].CallID != evs[0].CallID {
 		t.Fatalf("rebuild id %q != original %q", evs2[0].CallID, evs[0].CallID)
@@ -108,7 +108,12 @@ func TestCursorToolCallSequenceSurvivesRestart(t *testing.T) {
 	if err := os.WriteFile(path, []byte(pre), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tr := NewCursorTracer(path)
+	prior, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prior.Close()
+	tr := NewCursorTracer(path, prior)
 	line := `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}`
 	evs, ok := tr.ParseLine(line)
 	if !ok || len(evs) != 1 {
@@ -116,5 +121,31 @@ func TestCursorToolCallSequenceSurvivesRestart(t *testing.T) {
 	}
 	if want := "session-uuid-cur-3"; evs[0].CallID != want {
 		t.Fatalf("call id = %q, want %q (resumes past the 2 pre-restart calls)", evs[0].CallID, want)
+	}
+}
+
+// The scanner builds a file's tracer when it parses the file's first unread
+// line, which is already on disk: ids resume past the calls before that line,
+// not past the ones it is about to parse.
+func TestLazyTracerIDsResumePastEarlierCallsOnly(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".cursor", "projects", "slug", "agent-transcripts", "s1")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "s1.jsonl")
+	pre := `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read"},{"type":"tool_use","name":"Edit"}]}}` + "\n"
+	line := `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"},{"type":"tool_use","name":"Grep"}]}}`
+	if err := os.WriteFile(path, []byte(pre+line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var tracers jsonlTracers
+	r := tracers.Parse(path, line, int64(len(pre)), f)
+	if len(r.Events) != 2 || r.Events[0].CallID != "s1-cur-3" || r.Events[1].CallID != "s1-cur-4" {
+		t.Fatalf("call ids = %+v, want s1-cur-3 and s1-cur-4", r.Events)
 	}
 }
