@@ -617,14 +617,6 @@ func (a *Agent) DeletePlan(id int64) error {
 	return nil
 }
 
-// knownHarness returns id when it names a harness, else "".
-func knownHarness(id string) string {
-	if _, ok := harnessByID(id); ok {
-		return id
-	}
-	return ""
-}
-
 // planRunning reports whether p's headless run is in flight in this
 // process (a "running" status left by a stopped daemon is not).
 func (a *Agent) planRunning(p model.SysAgentPlan) bool {

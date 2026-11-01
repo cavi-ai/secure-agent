@@ -51,9 +51,6 @@ type Pool struct {
 }
 type priorityKey struct{}
 
-func Foreground(ctx context.Context) context.Context {
-	return context.WithValue(ctx, priorityKey{}, true)
-}
 func Background(ctx context.Context) context.Context {
 	return context.WithValue(ctx, priorityKey{}, false)
 }

@@ -434,10 +434,6 @@ func (w *spoolWriter) rotateLocked() error {
 	return nil
 }
 
-func pumpToSpool(stdout interface{ Read([]byte) (int, error) }) error {
-	return pumpToSpoolAt(stdout, collect.ESPoolPath)
-}
-
 // pumpToSpoolAt copies newline-delimited records from stdout to the spool
 // at path, skipping empty lines and the lines keepESLine drops and writing
 // each kept line reduced to the fields the daemon reads (CompactESLine); the

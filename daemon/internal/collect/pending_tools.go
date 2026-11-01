@@ -22,10 +22,6 @@ type pendingToolEntry struct {
 	tool    pendingTool
 }
 
-func (p *pendingTools) put(id string, tool pendingTool) {
-	p.add(id, "", tool)
-}
-
 func (p *pendingTools) completion(id, session, status string, at time.Time) (event.Event, bool) {
 	if id == "" || session == "" {
 		return event.Event{}, false

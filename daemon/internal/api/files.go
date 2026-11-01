@@ -75,16 +75,6 @@ func (a *API) fileEvidence(path string, limit int) ([]model.FileFinding, []model
 	return findings, accesses, fileEvidenceKnown, nil
 }
 
-// isEvidencePath reports whether a stored flag, incident or agent-session
-// file event names p. A read error means the answer is unavailable.
-func (a *API) isEvidencePath(p string) (bool, error) {
-	_, _, gate, err := a.fileEvidence(p, 1)
-	if err != nil {
-		return false, err
-	}
-	return gate == fileEvidenceKnown, nil
-}
-
 // handleFileDetail serves GET /files/detail?path=: what the daemon knows
 // about one evidence file, with a masked excerpt around each transcript hit.
 func (a *API) handleFileDetail(w http.ResponseWriter, r *http.Request) {

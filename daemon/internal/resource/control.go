@@ -213,10 +213,6 @@ func normalizedPolicy(p Policy) Policy {
 	return p
 }
 
-func (c *Controller) SetPolicy(p Policy) {
-	c.SetPolicySet(PolicySet{Default: p})
-}
-
 // SetPolicySet applies a changed document and reports whether live state was
 // reset. Callers use the result to avoid duplicate audit entries when the file
 // watcher observes a policy already applied through the API.
@@ -291,10 +287,6 @@ func workspacePathMatches(workspace, prefix string) bool {
 		return true
 	}
 	return workspace == prefix || (len(workspace) > len(prefix) && workspace[:len(prefix)] == prefix && workspace[len(prefix)] == filepath.Separator)
-}
-
-func (c *Controller) SetTerminator(fn func(ControlAction) error) {
-	c.SetExecutor(fn)
 }
 
 func (c *Controller) SetExecutor(fn func(ControlAction) error) {

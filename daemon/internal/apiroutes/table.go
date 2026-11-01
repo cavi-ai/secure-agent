@@ -285,12 +285,3 @@ func IsDecide(method, path string) bool {
 	}
 	return false
 }
-
-// Paths returns the table's paths in order (used by the mux and tests).
-func Paths() []string {
-	out := make([]string, 0, len(Table))
-	for _, r := range Table {
-		out = append(out, r.Path)
-	}
-	return out
-}

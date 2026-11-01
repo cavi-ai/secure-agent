@@ -1057,26 +1057,6 @@ func (s *Store) ReattributeFlags(pid int32, agent string, since time.Time) int {
 	return int(n)
 }
 
-// decodeFlagProcess reads the stored process snapshot; nil when absent or
-// unreadable.
-func decodeFlagProcess(raw string) *model.FlagProcess {
-	if raw == "" {
-		return nil
-	}
-	var p model.FlagProcess
-	if json.Unmarshal([]byte(raw), &p) != nil || p.Name == "" {
-		return nil
-	}
-	return &p
-}
-
-func setFlagRepeats(fl *model.Flag, repeats sql.NullInt64, lastSeen sql.NullString) {
-	fl.Repeats = int(repeats.Int64)
-	if t, err := time.Parse(time.RFC3339Nano, lastSeen.String); err == nil {
-		fl.LastSeen = &t
-	}
-}
-
 // BumpFlagRepeat folds one more occurrence into flag id: repeats + 1 and
 // last_seen = at when at is newer. False when no such flag is stored.
 func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {

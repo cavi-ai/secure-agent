@@ -45,18 +45,6 @@ func ruleWhy(f model.Flag) string {
 	return humanFlagTitle(f.Rule)
 }
 
-// dispositionSeverity is the posture severity a disposition carries.
-func dispositionSeverity(d model.Disposition) int {
-	switch d.State {
-	case model.DispositionCritical:
-		return 3
-	case model.DispositionWarning:
-		return 2
-	default:
-		return 1
-	}
-}
-
 // firstSentence is text up to and including the first ". " boundary (or the
 // whole text when it has none).
 func firstSentence(text string) string {
