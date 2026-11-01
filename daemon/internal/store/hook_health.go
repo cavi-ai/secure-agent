@@ -25,20 +25,25 @@ type SessionHookFinding struct {
 	Finding   hookhealth.Finding
 }
 
-// ActiveHookFindings is a single bounded read across durable live sessions.
-// Ended and unattributed sessions cannot acquire live attention items.
+// ActiveHookFindings assesses each durable live session on its own bounded
+// read, so one busy session cannot push another's failures out of the
+// window. Ended and unattributed sessions cannot acquire live attention items.
 func (s *Store) ActiveHookFindings(now time.Time) (out []SessionHookFinding, truncated bool, readErr error) {
 	defer func() { s.noteRead("hook health", readErr) }()
-	runs, truncated, err := s.hookHealthRuns("session_id IN (SELECT id FROM sessions WHERE status IN ('active','idle'))", nil, now)
+	ids, err := s.liveSessionIDs()
 	if err != nil {
 		return nil, false, err
 	}
-	bySession := map[string][]hookrun.Record{}
-	for _, r := range runs {
-		bySession[r.SessionID] = append(bySession[r.SessionID], r)
-	}
-	for id, rs := range bySession {
-		for _, f := range hookhealth.Assess(rs, now, truncated).Findings {
+	for _, id := range ids {
+		runs, sessionTruncated, err := s.hookHealthRuns("session_id=?", []any{id}, now)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(runs) == 0 {
+			continue
+		}
+		truncated = truncated || sessionTruncated
+		for _, f := range hookhealth.Assess(runs, now, sessionTruncated).Findings {
 			if f.NeedsAction {
 				out = append(out, SessionHookFinding{SessionID: id, Finding: f})
 			}
@@ -50,6 +55,24 @@ func (s *Store) ActiveHookFindings(now time.Time) (out []SessionHookFinding, tru
 		truncated = true
 	}
 	return out, truncated, nil
+}
+
+// liveSessionIDs are the sessions that can carry live attention items.
+func (s *Store) liveSessionIDs() ([]string, error) {
+	rows, err := s.db.Query(`SELECT id FROM sessions WHERE status IN ('active','idle')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (s *Store) hookHealthRuns(filter string, args []any, now time.Time) ([]hookrun.Record, bool, error) {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/hookrun"
 	"github.com/cavi-ai/secure-agent/daemon/internal/hookhealth"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
 func TestHookHealthRoundTripAttributionAndRecovery(t *testing.T) {
@@ -121,4 +122,44 @@ func TestHookMetadataMigrationPreservesLegacyUnknowns(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// A session that logs more runs than one read holds does not hide another
+// live session's failing hook.
+func TestActiveHookFindingsPerSession(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now().UTC()
+	for _, id := range []string{"busy", "quiet"} {
+		if err := s.UpsertSession(model.Session{ID: id, StartedAt: now.Add(-time.Hour), LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfHook}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put := func(session, id, status string, at time.Time) {
+		e := hookRun(session, id, "PreToolUse", "guard.py", status, 0, 0, at)
+		e.HookHarness = "claude"
+		e.HookEvidence = &hookrun.Evidence{HandlerID: "guard", ConfigID: "c"}
+		if _, err := s.PutEvent(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		put("quiet", fmt.Sprint("q", i), "error", now.Add(-10*time.Minute+time.Duration(i)*time.Second))
+	}
+	for i := 0; i <= hookhealth.RunLimit; i++ {
+		put("busy", fmt.Sprint("b", i), "ok", now.Add(-5*time.Minute+time.Duration(i)*100*time.Millisecond))
+	}
+	findings, _, err := s.ActiveHookFindings(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range findings {
+		if f.SessionID == "quiet" {
+			return
+		}
+	}
+	t.Fatalf("quiet session's failing hook hidden: %+v", findings)
 }
