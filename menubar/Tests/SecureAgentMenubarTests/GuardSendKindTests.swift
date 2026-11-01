@@ -26,7 +26,7 @@ final class GuardSendKindTests: XCTestCase {
         XCTAssertEqual(m.kindLabel, "git pushes")
         XCTAssertTrue(m.coversKind)
         XCTAssertTrue(m.offersKind)
-        XCTAssertEqual(m.allowTitle, "Allow all git pushes for this session")
+        XCTAssertEqual(m.allowTitle, "Allow for session")
         XCTAssertEqual(m.repeatNote, "Asked 3 times this session about git pushes.")
         XCTAssertTrue(m.allowNote.hasPrefix("Allows all git pushes from this tool in this workspace until this session ends."), m.allowNote)
         XCTAssertTrue(m.allowNote.contains("Other kinds of send still ask."), m.allowNote)
@@ -56,7 +56,7 @@ final class GuardSendKindTests: XCTestCase {
     }
 
     /// A duration without a kind permission hides the Covers picker, and
-    /// Allow names the narrower grant it sends.
+    /// Allow sends the narrower grant.
     func testDurationWithoutAKindPermissionGrantsThisSend() throws {
         let m = try model("""
         {"id":"p3","agent":"codex","tool":"Bash","path":"git push origin","rule_id":"untrusted-egress","ts":"2026-10-30T20:00:00Z",
