@@ -1,6 +1,7 @@
 package correlate
 
 import (
+	"context"
 	"maps"
 	"slices"
 	"testing"
@@ -9,15 +10,23 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 )
 
 // The correlator names endpoints with hostid.IdentifyCached, which never
-// resolves, so identity here comes from the CIDR tables alone.
+// resolves, but classifies infra with hostid.InfraOrg, which reverse-resolves
+// a bare IP outside the infra CIDRs. noPTR makes that lookup answer nothing
+// for the rest of t, so identity and infra here come from the CIDR tables
+// alone, whatever the machine's resolver says.
+func noPTR(t *testing.T) {
+	t.Cleanup(hostid.SetLookupAddrForTest(func(context.Context, string) ([]string, error) { return nil, nil }))
+}
 
 // Uninspected rows name the vendor the daemon already knows (Anthropic's API
 // frontends) while Infra keeps meaning "CDN/cloud carrier" only.
 func TestUninspectedSummaryIdentity(t *testing.T) {
+	noPTR(t)
 	c := newTestCorrelator(t)
 	now := time.Now()
 	for _, h := range []string{"160.79.104.10", "2607:6bc0::10", "104.16.1.1", "203.0.113.5"} {
@@ -43,6 +52,7 @@ func TestUninspectedSummaryIdentity(t *testing.T) {
 // The count-3 advisor pre-assessment skips only the agents' own vendors;
 // cloud hosts (which can front anyone) and unknowns are still assessed.
 func TestObserveSkipsAdvisorForKnownVendor(t *testing.T) {
+	noPTR(t)
 	var fired []string
 	c := newTestCorrelatorWith(t, Hooks{OnUninspected: func(_, host string) { fired = append(fired, host) }})
 	now := time.Now()
@@ -80,6 +90,7 @@ func (infraAppSource) Info(pid int32) (agents.ProcInfo, bool) {
 // AgentKind infra and counted in the infrastructure figure, never in the
 // agent headline.
 func TestInfraAppEgressLeavesTheHeadline(t *testing.T) {
+	noPTR(t)
 	cfg, err := config.Load("/nonexistent")
 	if err != nil {
 		t.Fatal(err)
