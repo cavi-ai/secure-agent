@@ -59,6 +59,9 @@ type TranscriptScanner struct {
 	pending map[string]*pendingTranscriptLine
 	// sources binds checkpoints and parsers to a file generation, not a path.
 	sources map[string]transcriptSource
+	// checkpointAt is when the loaded checkpoint was saved; zero without
+	// one. A file created after it appeared while the daemon was down.
+	checkpointAt time.Time
 
 	// OffsetStatePath, when set, persists tail offsets across daemon
 	// restarts. Without it a restart re-seeds every transcript at EOF and
@@ -378,7 +381,9 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 	// touch a file already in the offsets map: resetting a live offset to EOF
 	// discards whatever was appended since the last tail tick — on the resolve
 	// cadence that skipped exactly the line that made an idle file active
-	// again (the prompt).
+	// again (the prompt). A file created after the loaded checkpoint was
+	// written while the daemon was down: it is left unseeded, so tailFile
+	// reads it from byte 0.
 	seedFile := func(f found) {
 		if _, ok := offsets[f.path]; ok {
 			return
@@ -390,6 +395,9 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 		defer source.Close()
 		fi, err := source.Stat()
 		if err != nil || fi.IsDir() {
+			return
+		}
+		if !ts.checkpointAt.IsZero() && fileBirth(f.path, fi).After(ts.checkpointAt) {
 			return
 		}
 		stamp, err := transcriptStamp(source, fi, min(fi.Size(), transcriptPrefixBytes))
@@ -550,6 +558,9 @@ func (ts *TranscriptScanner) loadOffsets() map[string]int64 {
 		ts.sources = checkpoint.Sources
 	} else if json.Unmarshal(data, &saved) != nil {
 		return offsets
+	}
+	if fi, err := os.Stat(ts.OffsetStatePath); err == nil {
+		ts.checkpointAt = fi.ModTime()
 	}
 	for p, off := range saved {
 		fi, err := os.Stat(p)
