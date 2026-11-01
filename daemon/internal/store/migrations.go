@@ -367,6 +367,9 @@ func createIndexes(tx *sql.Tx, tableIndexes []string) error {
 	if _, err := tx.Exec(incidentRetentionIndexSQL); err != nil {
 		log.Printf("store: incident time index skipped, retention and lists scan instead: %v", err)
 	}
+	if err := createIncidentLinks(tx); err != nil {
+		return err
+	}
 	if err := createMemoryIndexes(tx); err != nil {
 		return err
 	}

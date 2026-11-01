@@ -10,6 +10,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the guard prompt's Allow button is green and names only the duration ("Allow for session"), on one line; the Allow for and Covers pickers and the note under the buttons say what it covers.
 
 ### Fixed
+- Incidents: a finding's incident is found through an index of every finding it absorbed instead of a scan of every incident's list (about 3 ms instead of 330 ms for 20 findings at 5,000 incidents), and an incident's stored finding list keeps the latest 256 while its count stays exact.
 - Status: an agent tree is labelled with the most recently seen live session of its root process, and not with a session of an earlier process that held the same pid.
 - Network: a new connection no longer records a close and a second open once its address resolves to a host name; each connection opens and closes once, named by its host when the address resolves within one sample.
 - Traces: OpenCode model calls carry the model of their own message, so a session that switches model no longer labels and prices later steps with the first one; each poll scans OpenCode's parts table once instead of twice.
