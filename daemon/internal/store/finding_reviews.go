@@ -416,7 +416,7 @@ func (s *Store) reviewLinksQuery(q rowQuerier, r *model.ReviewRecord, includeSco
 		}
 	}
 	rows, err = q.Query(`SELECT id FROM incidents WHERE flag_id IN (SELECT flag_id FROM finding_review_members WHERE review_id=?)
- UNION SELECT id FROM incidents WHERE COALESCE(rule,'')=? AND COALESCE(session_id,'')=? AND EXISTS(SELECT 1 FROM json_each(flag_ids) WHERE value IN (SELECT flag_id FROM finding_review_members WHERE review_id=?)) ORDER BY id LIMIT 100`, r.ID, r.Context.Rule, r.Context.SessionID, r.ID)
+ UNION SELECT id FROM incidents WHERE COALESCE(rule,'')=? AND COALESCE(session_id,'')=? AND id IN (SELECT incident_id FROM incident_flags WHERE flag_id IN (SELECT flag_id FROM finding_review_members WHERE review_id=?)) ORDER BY id LIMIT 100`, r.ID, r.Context.Rule, r.Context.SessionID, r.ID)
 	if err != nil {
 		return err
 	}
@@ -814,7 +814,7 @@ func (s *Store) syncLegacyReviewsLocked(ids []string) {
 				break
 			}
 			var resolved sql.NullString
-			legacyErr := s.db.QueryRow(`SELECT resolved_at FROM incidents WHERE status='resolved' AND (flag_id=? OR (COALESCE(rule,'')=? AND COALESCE(session_id,'')=? AND EXISTS(SELECT 1 FROM json_each(flag_ids) WHERE value=?))) ORDER BY `+timestampOrderExpr("created_at")+` DESC LIMIT 1`, v.id, r.Context.Rule, r.Context.SessionID, v.id).Scan(&resolved)
+			legacyErr := s.db.QueryRow(`SELECT resolved_at FROM incidents WHERE status='resolved' AND (flag_id=? OR (COALESCE(rule,'')=? AND COALESCE(session_id,'')=? AND id IN (`+incidentsForFlagSQL+`))) ORDER BY `+timestampOrderExpr("created_at")+` DESC LIMIT 1`, v.id, r.Context.Rule, r.Context.SessionID, v.id).Scan(&resolved)
 			if legacyErr == nil {
 				closed = true
 				resolvedAt, parseErr := time.Parse(time.RFC3339Nano, resolved.String)

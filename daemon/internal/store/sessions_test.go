@@ -632,3 +632,26 @@ func TestOpenMigratesSessionsOrigin(t *testing.T) {
 		t.Fatalf("origin after migration = %q", got.Origin)
 	}
 }
+
+// The root pid join keeps the most recently seen live session and leaves
+// ended ones out.
+func TestSessionsByRootPIDKeepsTheLatestLiveSession(t *testing.T) {
+	st, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	base := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+	for _, s := range []model.Session{
+		{ID: "newer", RootPID: 7, StartedAt: base, LastSeenAt: base.Add(2 * time.Hour), Status: model.SessionIdle, Confidence: model.ConfHook},
+		{ID: "older", RootPID: 7, StartedAt: base, LastSeenAt: base.Add(time.Hour), Status: model.SessionActive, Confidence: model.ConfHook},
+		{ID: "ended", RootPID: 7, StartedAt: base, LastSeenAt: base.Add(3 * time.Hour), Status: model.SessionEnded, Confidence: model.ConfHook},
+	} {
+		if err := st.UpsertSession(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := st.SessionsByRootPID()[7].ID; got != "newer" {
+		t.Fatalf("root pid 7 joined %q, want the most recently seen live session", got)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -80,9 +81,12 @@ type OpencodeCollector struct {
 	seenOrder         []string
 	seenNext          int
 
-	// modelCache: session id → last-seen assistant model and provider, so
-	// the per-part lookup is one bounded query per session, not per event.
+	// modelCache: message id → that assistant message's model and provider,
+	// so a session that switches model labels each step with its own.
 	modelCache map[string]opencodeModel
+	// probed and partMessageID: whether part has the message_id column
+	// (opencode 1.2+), checked once per schema.
+	probed, partMessageID bool
 
 	// change skips a poll while the database is unchanged: part has no
 	// index on time_updated, so every query is a full table scan.
@@ -174,27 +178,42 @@ func (c *OpencodeCollector) pollOnce() int {
 		c.initialFloor = c.watermark + 1
 		c.initialized = true
 	}
-	if c.scan == nil {
-		var ceiling int64
-		if err := db.QueryRow(`SELECT COALESCE(MAX(time_updated),0) FROM part`).Scan(&ceiling); err != nil {
-			log.Printf("opencode: inspect parts: %v", err)
-			return 0
-		}
+	if !c.probed {
+		c.partMessageID, c.probed = partHasColumn(db, "message_id"), true
+	}
+	// A new scan's ceiling is the newest part as the first page reads it
+	// (MAX over the same query, one table scan instead of a second one);
+	// later pages keep it, so a scan drains one snapshot. Until the first
+	// page sets it the scan is not kept.
+	newScan := c.scan == nil
+	if newScan {
 		// Two seconds of timestamp overlap catches late commits and updates
 		// behind the tuple cursor. Older backdated writes are outside this
 		// policy. Source call IDs make cache eviction/replay idempotent.
 		floor := max(c.initialFloor, c.watermark-dbSettle.Milliseconds())
-		c.scan = &opencodeScan{Floor: floor, Ceiling: ceiling, Time: floor}
+		c.scan = &opencodeScan{Floor: floor, Ceiling: math.MaxInt64, Time: floor}
 	}
+	defer func() {
+		if c.scan != nil && c.scan.Ceiling == math.MaxInt64 {
+			c.scan = nil
+		}
+	}()
 	position := *c.scan
-	rows, err := db.Query(`SELECT p.id,p.time_updated,p.session_id,p.data,COALESCE(s.directory,'')
+	messageCol, ceilingCol := "''", "0"
+	if c.partMessageID {
+		messageCol = "COALESCE(p.message_id,'')"
+	}
+	if newScan {
+		ceilingCol = "MAX(p.time_updated) OVER ()"
+	}
+	rows, err := db.Query(`SELECT p.id,p.time_updated,p.session_id,p.data,COALESCE(s.directory,''),`+messageCol+`,`+ceilingCol+`
 		FROM part p LEFT JOIN session s ON s.id=p.session_id
 		WHERE p.time_updated>=? AND p.time_updated<=?
 		AND (p.time_updated>? OR (p.time_updated=? AND p.id>?))
 		ORDER BY p.time_updated,p.id LIMIT ?`, position.Floor, position.Ceiling, position.Time, position.Time, position.ID, maxOpencodeRows)
 	if err != nil {
 		log.Printf("opencode: query failed (schema drift?): %v", err)
-		c.scan = nil
+		c.scan, c.probed = nil, false
 		return 0
 	}
 	defer rows.Close()
@@ -202,11 +221,14 @@ func (c *OpencodeCollector) pollOnce() int {
 	read := 0
 	backpressured := false
 	for rows.Next() {
-		var updated int64
-		var partID, sessionID, data, workspace string
-		if err := rows.Scan(&partID, &updated, &sessionID, &data, &workspace); err != nil {
+		var updated, ceiling int64
+		var partID, sessionID, data, workspace, messageID string
+		if err := rows.Scan(&partID, &updated, &sessionID, &data, &workspace, &messageID, &ceiling); err != nil {
 			log.Printf("opencode: scan part: %v", err)
 			return published
+		}
+		if newScan && read == 0 {
+			c.scan.Ceiling, position.Ceiling = ceiling, ceiling
 		}
 		read++
 		if !c.partChanged(partID, data) {
@@ -223,7 +245,7 @@ func (c *OpencodeCollector) pollOnce() int {
 			// neither and land unexplained. Best-effort; empty is honest
 			// when the message row has none.
 			if e.Kind == event.KindModelCall && e.Model == "" {
-				e.Model, e.Provider = c.modelFor(db, sessionID)
+				e.Model, e.Provider = c.modelFor(db, sessionID, messageID)
 				if e.Model != "" && e.CostUSD == 0 {
 					e.CostUSD = ModelCostUSD(e.Model, e.TokensIn, e.TokensOut)
 				}
@@ -247,6 +269,11 @@ func (c *OpencodeCollector) pollOnce() int {
 	if err := rows.Err(); err != nil {
 		log.Printf("opencode: cursor error (partial poll): %v", err)
 		return published
+	}
+	if newScan && read == 0 {
+		// Nothing at or past the floor: the newest part is older, so the
+		// drained scan leaves the watermark where it is.
+		position.Ceiling = position.Floor - 1
 	}
 	*c.scan = position
 	if read < maxOpencodeRows && !backpressured {
@@ -272,18 +299,25 @@ func (c *OpencodeCollector) partChanged(id, data string) bool {
 // opencodeModel is a session's model id and provider id.
 type opencodeModel struct{ id, provider string }
 
-// modelFor reads the model and provider ids off a session's most recent
-// assistant message (message.data JSON carries modelID and providerID).
-// Bounded to one small row; a schema drift degrades to "" quietly.
-func (c *OpencodeCollector) modelFor(db *sql.DB, sessionID string) (model, provider string) {
-	if v, ok := c.modelCache[sessionID]; ok {
+// modelFor reads the model and provider ids off the part's own assistant
+// message (message.data JSON carries modelID and providerID), cached by
+// message; without a message id (a schema before part.message_id) it reads
+// the session's most recent assistant message, uncached. Bounded to one
+// small row; a schema drift degrades to "" quietly.
+func (c *OpencodeCollector) modelFor(db *sql.DB, sessionID, messageID string) (model, provider string) {
+	if v, ok := c.modelCache[messageID]; ok && messageID != "" {
 		return v.id, v.provider
 	}
 	var data string
-	err := db.QueryRow(`
+	var err error
+	if messageID != "" {
+		err = db.QueryRow(`SELECT data FROM message WHERE id = ?`, messageID).Scan(&data)
+	} else {
+		err = db.QueryRow(`
 		SELECT data FROM message
 		WHERE session_id = ? AND json_extract(data, '$.role') = 'assistant'
 		ORDER BY time_updated DESC LIMIT 1`, sessionID).Scan(&data)
+	}
 	if err != nil {
 		return "", ""
 	}
@@ -311,11 +345,23 @@ func (c *OpencodeCollector) modelFor(db *sql.DB, sessionID string) (model, provi
 	if v.id == "" {
 		return "", ""
 	}
-	if c.modelCache == nil {
+	if messageID == "" {
+		return v.id, v.provider
+	}
+	if c.modelCache == nil || len(c.modelCache) >= maxOpencodeModelCache {
 		c.modelCache = map[string]opencodeModel{}
 	}
-	c.modelCache[sessionID] = v
+	c.modelCache[messageID] = v
 	return v.id, v.provider
+}
+
+// maxOpencodeModelCache bounds the per-message model cache.
+const maxOpencodeModelCache = 4096
+
+// partHasColumn reports whether opencode's part table has the column.
+func partHasColumn(db *sql.DB, column string) bool {
+	var n int
+	return db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('part') WHERE name = ?`, column).Scan(&n) == nil && n > 0
 }
 
 // OpencodePartEvents maps one opencode `part` row to trace events. Pure and

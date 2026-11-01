@@ -57,8 +57,12 @@ const (
 // createMemoryIndexes runs after legacy session columns have been migrated.
 // The query expressions below match these indexes exactly.
 func createMemoryIndexes(db *sql.Tx) error {
+	// Events read through idx_events_session_time (same instant, then the
+	// integer id): a second index on the same order cost every insert.
+	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_memory_events`); err != nil {
+		return fmt.Errorf("drop idx_memory_events: %w", err)
+	}
 	for _, spec := range []struct{ name, table, key, at, id string }{
-		{"idx_memory_events", "events", "session_id", "ts", "id"},
 		{"idx_memory_flags", "flags", "session_id", "ts", "id"},
 		{"idx_memory_incidents", "incidents", "session_id", "created_at", "id"},
 		{"idx_memory_guards", "guard_decisions", "session_id", "at", "id"},

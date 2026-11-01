@@ -215,6 +215,14 @@ func (s *Store) aggregateIncidentLocked(tx *sql.Tx, id, flagID string, ts time.T
 	}
 	replay := slices.Contains(flagIDs, flagID)
 	if !replay {
+		// flag_ids holds only the latest flags; the link table holds all.
+		var linked int
+		if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM incident_flags WHERE flag_id = ? AND incident_id = ?)`, flagID, id).Scan(&linked); err != nil {
+			return fail(err)
+		}
+		replay = linked == 1
+	}
+	if !replay {
 		if inc.Rule == "proxy-secret-leak" {
 			if inc.PayloadOutcomes == nil {
 				// Historic reports do not establish their control outcomes.
@@ -240,6 +248,9 @@ func (s *Store) aggregateIncidentLocked(tx *sql.Tx, id, flagID string, ts time.T
 			inc.PayloadOutcomes.Unknown += outcome.Unknown
 		}
 		flagIDs = append(flagIDs, flagID)
+		if len(flagIDs) > maxIncidentFlagIDs {
+			flagIDs = flagIDs[len(flagIDs)-maxIncidentFlagIDs:]
+		}
 		count++
 		inc.AggregateCount = count
 		t := ts.UTC()
@@ -411,7 +422,7 @@ func resolveIncidentID(q incidentRowQueryer, id string) (string, error) {
 	err := q.QueryRow(`SELECT id FROM incidents WHERE id = ?`, id).Scan(&storedID)
 	if err == sql.ErrNoRows {
 		err = q.QueryRow(`SELECT id FROM incidents
-			WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
+			WHERE flag_id = ? OR id IN (`+incidentsForFlagSQL+`)
 			ORDER BY `+timestampOrderExpr("created_at")+` DESC, id DESC LIMIT 1`, id, id).Scan(&storedID)
 	}
 	return storedID, err

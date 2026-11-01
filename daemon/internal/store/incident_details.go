@@ -121,7 +121,7 @@ func (s *Store) GetIncidentDetail(id string) (detail *IncidentDetail, readErr er
 	defer func() { s.noteIncidentDetailRead(readErr) }()
 	row := s.db.QueryRow(`SELECT `+incidentDetailColumns+` FROM incidents WHERE id=COALESCE(
 		(SELECT id FROM incidents WHERE id=?),
-		(SELECT id FROM incidents WHERE flag_id=? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value=?)
+		(SELECT id FROM incidents WHERE flag_id=? OR id IN (`+incidentsForFlagSQL+`)
 		 ORDER BY `+timestampOrderExpr("created_at")+` DESC,id DESC LIMIT 1))`, id, id, id)
 	got, err := scanIncidentDetail(row)
 	if err != nil {

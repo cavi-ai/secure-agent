@@ -351,7 +351,6 @@ func createIndexes(tx *sql.Tx, tableIndexes []string) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_turn_dedupe ON events(kind,session_id,ts) WHERE kind=13 AND session_id!=''`,
 		traceActivityIndexSQL,
 		sessionActivityIndexSQL,
-		sessionTimeIndexSQL,
 		// Incident indexes follow the column migration: findOpenIncidentSQL's
 		// expressions and lookups by flag id.
 		`CREATE INDEX IF NOT EXISTS idx_incidents_open_key ON incidents(COALESCE(rule,''), COALESCE(session_id,''), COALESCE(subject,''));`,
@@ -361,11 +360,25 @@ func createIndexes(tx *sql.Tx, tableIndexes []string) error {
 			return fmt.Errorf("create schema index: %w", err)
 		}
 	}
+	// idx_events_session_time was keyed by the RFC 3339 instant; it is keyed
+	// by the nanosecond instant now, which the memory cursor shares.
+	var sessionTimeSQL string
+	if err := tx.QueryRow(`SELECT COALESCE(sql,'') FROM sqlite_master WHERE type='index' AND name='idx_events_session_time'`).Scan(&sessionTimeSQL); err == nil && strings.Contains(sessionTimeSQL, "%Y-%m-%dT") {
+		if _, err := tx.Exec(`DROP INDEX idx_events_session_time`); err != nil {
+			return fmt.Errorf("replace session time index: %w", err)
+		}
+	}
+	if _, err := tx.Exec(sessionTimeIndexSQL); err != nil {
+		return fmt.Errorf("create schema index: %w", err)
+	}
 	if _, err := tx.Exec(flagTimeIndexSQL); err != nil {
 		log.Printf("store: flag time index skipped, retention and lists scan instead: %v", err)
 	}
 	if _, err := tx.Exec(incidentRetentionIndexSQL); err != nil {
 		log.Printf("store: incident time index skipped, retention and lists scan instead: %v", err)
+	}
+	if err := createIncidentLinks(tx); err != nil {
+		return err
 	}
 	if err := createMemoryIndexes(tx); err != nil {
 		return err

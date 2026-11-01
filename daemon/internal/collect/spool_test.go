@@ -333,6 +333,22 @@ func TestSpoolTailerSkipsFloodPastBudget(t *testing.T) {
 	}
 }
 
+// A flood that carries the odd valid line among its garbage is still a
+// flood: skipped past the budget and reported.
+func TestSpoolTailerSkipsAFloodWithSparseValidLines(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	chunk := append(bytes.Repeat([]byte("ab\n"), 200), []byte(esOpenLine(12)+"\n")...)
+	body := bytes.Repeat(chunk, (10<<20)/len(chunk))
+	if err := os.WriteFile(path, body, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	tailer := NewSpoolTailerAt(bus.New(1<<16), path)
+	c := tailer.poll(spoolCursor{})
+	if s := tailer.Stats(); c.offset != int64(len(body)) || s.BytesSkipped == 0 || s.FloodSince.IsZero() {
+		t.Fatalf("sparse-valid flood not skipped: offset=%d of %d stats=%+v", c.offset, len(body), s)
+	}
+}
+
 // One corrupt oversized line costs only itself: the valid backlog after it,
 // however large, is read on later ticks, and the skipped bytes are reported
 // as lost evidence.

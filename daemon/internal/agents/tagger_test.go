@@ -573,6 +573,124 @@ func TestOnTaggedRunsOutsideTheLock(t *testing.T) {
 	}
 }
 
+// gatedProcs holds Info for one pid until released, after reporting it began.
+type gatedProcs struct {
+	fakeProcs
+	pid     int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedProcs) Info(pid int32) (ProcInfo, bool) {
+	if pid == g.pid && g.entered != nil {
+		close(g.entered)
+		g.entered = nil
+		<-g.release
+	}
+	return g.fakeProcs.Info(pid)
+}
+
+// Refresh reads a tagged process's details without the tagger lock, so
+// attribution answers while a slow read is outstanding.
+func TestRefreshReadsTaggedDetailsOutsideTheLock(t *testing.T) {
+	src := &gatedProcs{fakeProcs: fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"},
+	}}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, src)
+	tg.Refresh()
+
+	src.pid, src.entered, src.release = 100, make(chan struct{}), make(chan struct{})
+	entered := src.entered
+	refreshed := make(chan struct{})
+	go func() {
+		tg.Refresh()
+		close(refreshed)
+	}()
+	<-entered
+	tagged := make(chan bool)
+	go func() {
+		_, cached := tg.Tag(100)
+		_, missed := tg.Tag(999)
+		tagged <- cached && !missed
+	}()
+	select {
+	case ok := <-tagged:
+		if !ok {
+			t.Fatal("Tag during Refresh: want 100 tagged and 999 not")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Tag blocked while Refresh read a tagged process's details")
+	}
+	close(src.release)
+	<-refreshed
+}
+
+// listedProcs lists processes without executables, as kern.proc.all does,
+// and counts the Info reads that name them.
+type listedProcs struct {
+	procs map[int32]ProcInfo
+	reads map[int32]int
+}
+
+func (l *listedProcs) List() []ProcInfo {
+	res := make([]ProcInfo, 0, len(l.procs))
+	for _, p := range l.procs {
+		res = append(res, ProcInfo{PID: p.PID, PPID: p.PPID, Comm: p.Comm, StartTime: p.StartTime})
+	}
+	return res
+}
+
+func (l *listedProcs) Info(pid int32) (ProcInfo, bool) {
+	l.reads[pid]++
+	p, ok := l.procs[pid]
+	return p, ok
+}
+
+// An agent's new child is tagged without reading the agent's ancestors
+// again: what names each listed process is kept while it holds its pid.
+func TestRefreshNamesEachAncestorOnce(t *testing.T) {
+	start := time.Date(2026, 9, 15, 11, 0, 0, 0, time.UTC)
+	proc := func(pid, ppid int32, comm, exe string) ProcInfo {
+		return ProcInfo{PID: pid, PPID: ppid, Comm: comm, Exe: exe, StartTime: start}
+	}
+	src := &listedProcs{reads: map[int32]int{}, procs: map[int32]ProcInfo{
+		1:   proc(1, 0, "launchd", "/sbin/launchd"),
+		50:  proc(50, 1, "login", "/usr/bin/login"),
+		60:  proc(60, 50, "zsh", "/bin/zsh"),
+		100: proc(100, 60, "claude", "/usr/local/bin/claude"),
+	}}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, src)
+	tg.Refresh()
+	if src.reads[60] != 1 {
+		t.Fatalf("first refresh read the shell %d times, want 1", src.reads[60])
+	}
+
+	clear(src.reads)
+	src.procs[300] = proc(300, 100, "git", "/usr/bin/git")
+	tg.Refresh()
+	if info, ok := tg.Tag(300); !ok || info.Name != "claude" || info.RootPID != 100 {
+		t.Fatalf("Tag(300) = %+v, %v; want claude rooted at 100", info, ok)
+	}
+	for _, pid := range []int32{1, 50, 60} {
+		if src.reads[pid] != 0 {
+			t.Fatalf("tagging a new child read ancestor %d %d times, want 0", pid, src.reads[pid])
+		}
+	}
+
+	// A new process at the shell's pid is read again.
+	clear(src.reads)
+	reused := proc(60, 50, "zsh", "/bin/zsh")
+	reused.StartTime = start.Add(time.Hour)
+	src.procs[60] = reused
+	src.procs[400] = proc(400, 100, "git", "/usr/bin/git")
+	tg.Refresh()
+	if src.reads[60] != 1 {
+		t.Fatalf("the process reusing pid 60 was read %d times, want 1", src.reads[60])
+	}
+}
+
 // A dead pid (never in the table, ps.Info always fails for it) tagged
 // repeatedly costs one Info call, not one per Tag call: the miss is cached
 // negative until the next Refresh prunes it (the pid is still absent then).

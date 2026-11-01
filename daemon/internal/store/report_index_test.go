@@ -170,3 +170,38 @@ func TestReportEventDecoderDiscardsRowsBeforeInvalidCost(t *testing.T) {
 		t.Fatalf("invalid later row returned partial evidence: %v, %v", events, err)
 	}
 }
+
+// A database from before keeps one session-time index on events: the old
+// RFC 3339 one is rebuilt on the nanosecond instant and the duplicate
+// memory index is dropped.
+func TestSessionTimeIndexUpgradeLeavesOneIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.db")
+	s, err := Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`DROP INDEX idx_events_session_time`,
+		`CREATE INDEX idx_events_session_time ON events(session_id, ` + timestampOrderExpr("ts") + `, id)`,
+		`CREATE INDEX idx_memory_events ON events(session_id, ` + memoryTimestampExpr("ts") + `, CAST(id AS TEXT))`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	s, err = Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var def string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE name='idx_events_session_time'`).Scan(&def); err != nil || strings.Contains(def, "%Y-%m-%dT") {
+		t.Fatalf("session time index = %q (%v), want the nanosecond instant", def, err)
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name='idx_memory_events'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("idx_memory_events kept (%d, %v)", n, err)
+	}
+	assertReportEventIndex(t, s)
+}

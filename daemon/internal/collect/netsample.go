@@ -47,6 +47,12 @@ type NetSampler struct {
 
 	mu       sync.Mutex
 	dnsCache map[string]string
+	// inflight holds the addresses whose reverse lookup has not finished.
+	inflight map[string]bool
+	// lookupAddr is the reverse resolver; tests replace it.
+	lookupAddr func(context.Context, string) ([]string, error)
+	// conns are the sampled connections, owned by Run's loop.
+	conns map[connKey]liveConn
 	// dnsSem bounds concurrent reverse lookups; lookups run off the sampling
 	// hot path (see resolveHost) so a slow/absent resolver never stalls event
 	// delivery.
@@ -58,27 +64,16 @@ func NewNetSampler(b *bus.Bus, tagger *agents.Tagger, interval time.Duration, li
 		lister = NewSocketLister()
 	}
 	return &NetSampler{
-		bus:      b,
-		tagger:   tagger,
-		lister:   lister,
-		interval: interval,
-		dnsCache: make(map[string]string),
-		dnsSem:   make(chan struct{}, 4),
+		bus:        b,
+		tagger:     tagger,
+		lister:     lister,
+		interval:   interval,
+		dnsCache:   make(map[string]string),
+		inflight:   make(map[string]bool),
+		lookupAddr: net.DefaultResolver.LookupAddr,
+		conns:      make(map[connKey]liveConn),
+		dnsSem:     make(chan struct{}, 4),
 	}
-}
-
-func DiffConnections(prev, cur map[connKey]struct{}) (opened, closed []connKey) {
-	for k := range cur {
-		if _, ok := prev[k]; !ok {
-			opened = append(opened, k)
-		}
-	}
-	for k := range prev {
-		if _, ok := cur[k]; !ok {
-			closed = append(closed, k)
-		}
-	}
-	return opened, closed
 }
 
 // isLoopbackHost reports whether a socket's remote endpoint is loopback
@@ -99,76 +94,80 @@ func isLoopbackHost(host string) bool {
 func (ns *NetSampler) Run(ctx context.Context) error {
 	ticker := time.NewTicker(ns.interval)
 	defer ticker.Stop()
-
-	prevSnapshot := make(map[connKey]struct{})
-
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			if !ns.tagger.Any() {
-				if len(prevSnapshot) > 0 {
-					now := time.Now()
-					for k := range prevSnapshot {
-						ns.bus.Publish(event.Event{
-							Kind:       event.KindConnClose,
-							TS:         now,
-							PID:        k.PID,
-							RemoteHost: k.Host,
-							RemotePort: k.Port,
-						})
-					}
-					if ns.OnProduce != nil {
-						ns.OnProduce()
-					}
-					prevSnapshot = make(map[connKey]struct{})
-				}
-				continue
-			}
-
-			curSnapshot := make(map[connKey]struct{})
-			// Sample active sockets and filter against tagged agent process trees
-			allSocks := ns.lister.SocketsFor(-1)
-			for _, s := range allSocks {
-				if isLoopbackHost(s.Host) {
-					continue // loopback is not egress; see isLoopbackHost
-				}
-				if _, isAgent := ns.tagger.Tag(s.PID); isAgent {
-					resolvedHost := ns.resolveHost(s.Host)
-					k := connKey{PID: s.PID, Host: resolvedHost, Port: s.Port}
-					curSnapshot[k] = struct{}{}
-				}
-			}
-
-			opened, closed := DiffConnections(prevSnapshot, curSnapshot)
-
-			now := time.Now()
-			for _, k := range opened {
-				ns.bus.Publish(event.Event{
-					Kind:       event.KindConnOpen,
-					TS:         now,
-					PID:        k.PID,
-					RemoteHost: k.Host,
-					RemotePort: k.Port,
-				})
-			}
-			for _, k := range closed {
-				ns.bus.Publish(event.Event{
-					Kind:       event.KindConnClose,
-					TS:         now,
-					PID:        k.PID,
-					RemoteHost: k.Host,
-					RemotePort: k.Port,
-				})
-			}
-			if len(opened)+len(closed) > 0 && ns.OnProduce != nil {
+		case now := <-ticker.C:
+			if ns.step(now) > 0 && ns.OnProduce != nil {
 				ns.OnProduce()
 			}
-
-			prevSnapshot = curSnapshot
 		}
 	}
+}
+
+// liveConn is one sampled connection, keyed by its address: the host its
+// open event named (the resolved name, else the address), when it was first
+// sampled, and whether its open event went out.
+type liveConn struct {
+	host   string
+	since  time.Time
+	opened bool
+}
+
+// step samples the agents' sockets once and publishes an open for each new
+// connection and a close for each one gone; it returns how many events it
+// published. A connection is keyed by its address, so a name that resolves
+// later does not read as the connection closing and reopening. The first
+// connection to an address the resolver has not answered for waits one
+// sample, so its open can name the host; it is stamped when first sampled
+// and published even if it closed meanwhile.
+func (ns *NetSampler) step(now time.Time) int {
+	cur := map[connKey]bool{}
+	if ns.tagger.Any() {
+		for _, s := range ns.lister.SocketsFor(-1) {
+			if isLoopbackHost(s.Host) {
+				continue // loopback is not egress; see isLoopbackHost
+			}
+			if _, isAgent := ns.tagger.Tag(s.PID); isAgent {
+				cur[s] = true
+			}
+		}
+	}
+	published := 0
+	publish := func(kind event.Kind, k connKey, host string, at time.Time) {
+		ns.bus.Publish(event.Event{Kind: kind, TS: at, PID: k.PID, RemoteHost: host, RemotePort: k.Port})
+		published++
+	}
+	for k := range cur {
+		c, seen := ns.conns[k]
+		switch {
+		case !seen:
+			host, answered := ns.resolveHost(k.Host)
+			c = liveConn{host: host, since: now, opened: answered}
+			if answered {
+				publish(event.KindConnOpen, k, host, now)
+			}
+			ns.conns[k] = c
+		case !c.opened:
+			c.host, _ = ns.resolveHost(k.Host)
+			c.opened = true
+			publish(event.KindConnOpen, k, c.host, c.since)
+			ns.conns[k] = c
+		}
+	}
+	for k, c := range ns.conns {
+		if cur[k] {
+			continue
+		}
+		if !c.opened {
+			c.host, _ = ns.resolveHost(k.Host)
+			publish(event.KindConnOpen, k, c.host, c.since)
+		}
+		publish(event.KindConnClose, k, c.host, now)
+		delete(ns.conns, k)
+	}
+	return published
 }
 
 // (removed) getTaggedPIDs had no callers — tagged-agent filtering happens
@@ -176,21 +175,23 @@ func (ns *NetSampler) Run(ctx context.Context) error {
 
 // resolveHost returns the cached name for an IP, or the IP itself immediately
 // while an async lookup (deadline-bounded, concurrency-capped) fills the cache
-// for the next sample. The previous design called net.LookupAddr inline with no
-// timeout: a slow or absent PTR resolver stalled the entire sampler loop (and
-// with it, all conn open/close events) for seconds at a time.
-func (ns *NetSampler) resolveHost(ipOrHost string) string {
+// for the next sample; answered is false while that lookup has not finished.
+// The previous design called net.LookupAddr inline with no timeout: a slow or
+// absent PTR resolver stalled the entire sampler loop (and with it, all conn
+// open/close events) for seconds at a time.
+func (ns *NetSampler) resolveHost(ipOrHost string) (host string, answered bool) {
 	if ipOrHost == "" {
-		return ""
+		return "", true
 	}
 	if ip := net.ParseIP(ipOrHost); ip == nil {
-		return ipOrHost // already a hostname
+		return ipOrHost, true // already a hostname
 	}
 
 	ns.mu.Lock()
 	if name, ok := ns.dnsCache[ipOrHost]; ok {
+		answered := !ns.inflight[ipOrHost]
 		ns.mu.Unlock()
-		return name
+		return name, answered
 	}
 	// Optimistic negative entry so a slow resolver doesn't spawn a lookup per
 	// sample for the same IP; the async lookup overwrites it with the name (or
@@ -206,20 +207,24 @@ func (ns *NetSampler) resolveHost(ipOrHost string) string {
 	select {
 	case ns.dnsSem <- struct{}{}:
 	default:
-		return ipOrHost // lookups saturated; the negative entry still bounds retries
+		return ipOrHost, true // lookups saturated; the negative entry still bounds retries
 	}
+	ns.mu.Lock()
+	ns.inflight[ipOrHost] = true
+	ns.mu.Unlock()
 	go func() {
 		defer func() { <-ns.dnsSem }()
 		ctx, cancel := context.WithTimeout(context.Background(), dnsLookupTimeout)
 		defer cancel()
 		res := ipOrHost
-		if names, err := net.DefaultResolver.LookupAddr(ctx, ipOrHost); err == nil && len(names) > 0 {
+		if names, err := ns.lookupAddr(ctx, ipOrHost); err == nil && len(names) > 0 {
 			res = strings.TrimSuffix(names[0], ".")
 		}
 		ns.mu.Lock()
 		ns.dnsCache[ipOrHost] = res
+		delete(ns.inflight, ipOrHost)
 		ns.mu.Unlock()
 	}()
 
-	return ipOrHost
+	return ipOrHost, false
 }

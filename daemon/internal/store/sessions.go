@@ -379,13 +379,15 @@ func (s *Store) SessionRoots() map[int32][]model.Session {
 	return out
 }
 
-// SessionsByRootPID returns the non-ended session for each live root pid,
-// keyed by pid. The console/menubar join process trees to durable session
-// identity with this (harness, workspace, repo, branch) so a tree row reads
-// "claude · secure-agent@main" rather than a bare process cwd ("/").
+// SessionsByRootPID returns the most recently seen live session for each
+// root pid, keyed by pid. The console/menubar join process trees to durable
+// session identity with this (harness, workspace, repo, branch) so a tree
+// row reads "claude · secure-agent@main" rather than a bare process cwd
+// ("/"); the caller matches RootStartedAt, since a pid is reused.
 func (s *Store) SessionsByRootPID() map[int32]model.Session {
 	rows, err := s.db.Query(`SELECT id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence, COALESCE(origin, '')
-		FROM sessions WHERE status != ? AND root_pid != 0`, model.SessionEnded)
+		FROM sessions WHERE status IN (?, ?) AND root_pid != 0
+		ORDER BY `+timestampOrderExpr("last_seen_at")+`, id`, model.SessionActive, model.SessionIdle)
 	if err != nil {
 		return nil
 	}
