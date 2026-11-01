@@ -11,6 +11,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Fixed
 - File telemetry: the daemon's own file opens, such as its worktree disk-usage walks, no longer reach the Endpoint Security spool, so a walk over a large tree no longer rotates the spool every few seconds.
+- File telemetry: the collector restarts `eslogger` once it holds more than 256 MB of events it has not written out, instead of letting that backlog grow until it trails the clock by a minute.
 
 ## [1.5.0] - 2026-10-30
 
