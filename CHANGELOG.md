@@ -13,6 +13,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - File telemetry: the daemon's own file opens, such as its worktree disk-usage walks, no longer reach the Endpoint Security spool, so a walk over a large tree no longer rotates the spool every few seconds.
 - File telemetry: the collector restarts `eslogger` once it holds more than 256 MB of events it has not written out, instead of letting that backlog grow until it trails the clock by a minute.
 - File telemetry: opens by processes outside every agent family, and an agent's repeated opens of a file, no longer split the agent's file activity into one database commit per event; with three such opens between agent events the daemon writes about 2.7 KB per stored event instead of 44 KB.
+- Store: every database connection overwrites deleted rows with zeros; `secure_delete` was set on one pooled connection only, so the agent-history encryption migration and later deletes could run without it.
 
 ## [1.5.0] - 2026-10-30
 

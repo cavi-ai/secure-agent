@@ -2,6 +2,9 @@ package store
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -81,5 +84,39 @@ func TestRefreshedAgentMemoryRenewsRetention(t *testing.T) {
 	fact.At = time.Now()
 	if s.PutSysAgentMemory(fact) == 0 || len(s.FindSysAgentMemory("/fixture")) != 1 {
 		t.Fatal("a fresh observation was purged using its original timestamp")
+	}
+}
+
+// secure_delete is per connection: every pooled connection, not only the one
+// that happened to run a PRAGMA, overwrites deleted rows.
+func TestEveryStoreConnectionSecureDeletes(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "events.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.EnableAgentEncryption(bytes.Repeat([]byte{7}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	var conns []*sql.Conn
+	defer func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
+	for i := 0; i < 4; i++ {
+		c, err := s.db.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conns = append(conns, c)
+		var on int
+		if err := c.QueryRowContext(ctx, "PRAGMA secure_delete").Scan(&on); err != nil {
+			t.Fatal(err)
+		}
+		if on != 1 {
+			t.Fatalf("connection %d: secure_delete=%d, want 1", i, on)
+		}
 	}
 }
