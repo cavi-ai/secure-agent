@@ -1545,3 +1545,36 @@ func TestResolveExitedChildByESParent(t *testing.T) {
 		}
 	}
 }
+
+// A session's trace events write and broadcast its row once per identity
+// change, and at least every ensureRefresh, not once per event; activity
+// still advances last_seen and wakes an idle session.
+func TestStampedEventsEnsureTheSessionOncePerChange(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{})
+	var changes int
+	r.OnSessionChange = func(model.Session) { changes++ }
+	base := time.Now().Add(-time.Hour).UTC()
+	for i := 0; i < 50; i++ {
+		r.Resolve(&event.Event{Kind: event.KindToolCall, SessionID: "s1", TS: base.Add(time.Duration(i) * 100 * time.Millisecond)})
+	}
+	if changes != 1 {
+		t.Fatalf("50 events in 5 s broadcast the session %d times, want 1", changes)
+	}
+	r.Resolve(&event.Event{Kind: event.KindToolCall, SessionID: "s1", TS: base.Add(ensureRefresh + time.Second)})
+	if changes != 2 {
+		t.Fatalf("after ensureRefresh: %d broadcasts, want 2", changes)
+	}
+	// The sweep idles it two seconds after its last write; an event right
+	// after wakes it.
+	r.now = func() time.Time { return base.Add(ensureRefresh + idleAfter + 2*time.Second) }
+	r.Sweep()
+	if sess, _, _ := st.GetSession("s1"); sess.Status != model.SessionIdle {
+		t.Fatalf("session not idled by the sweep: %+v", sess)
+	}
+	at := base.Add(ensureRefresh + 3*time.Second)
+	r.Resolve(&event.Event{Kind: event.KindToolCall, SessionID: "s1", TS: at})
+	sess, ok, err := st.GetSession("s1")
+	if err != nil || !ok || sess.Status != model.SessionActive || !sess.LastSeenAt.Equal(at) {
+		t.Fatalf("session after a later event: %+v %v %v, want active, last seen %v", sess, ok, err, at)
+	}
+}

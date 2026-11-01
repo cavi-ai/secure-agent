@@ -169,6 +169,10 @@ type Resolver struct {
 	// working directory never share a session.
 	byScope map[string]string
 	touch   map[string]time.Time // session id → last TouchSession (throttle)
+	// ensured holds, per session id, the identity ensureHookSession last
+	// wrote and when: an event that carries nothing new skips the upsert and
+	// its broadcast (activity still reaches the row through touchLocked).
+	ensured map[string]ensuredSession
 	// deferred holds process-tree sessions awaiting the lifetime floor or a
 	// successful write: attributed in memory, not yet persisted. touchLocked
 	// saves eligible sessions and retains them on failure; Sweep drops dead
@@ -226,6 +230,7 @@ func NewResolver(st resolverStore, tg *agents.Tagger) *Resolver {
 		byRoot:   map[int32]string{},
 		byScope:  map[string]string{},
 		touch:    map[string]time.Time{},
+		ensured:  map[string]ensuredSession{},
 		deferred: map[string]model.Session{},
 		sighted:  map[string]sighting{},
 		now:      time.Now,
@@ -718,7 +723,37 @@ func (r *Resolver) ensureHookSession(e *event.Event) bool {
 	if sess.Repo == "" {
 		sess.Repo, sess.Branch = GitInfoFor(sess.Workspace)
 	}
-	return r.upsertAndEmitLocked(sess)
+	key := ensuredKey(sess)
+	if last, ok := r.ensured[sess.ID]; ok && last.key == key && ts.Sub(last.at) >= 0 && ts.Sub(last.at) < ensureRefresh {
+		return true
+	}
+	if !r.upsertAndEmitLocked(sess) {
+		delete(r.ensured, sess.ID)
+		return false
+	}
+	if len(r.ensured) >= maxEnsuredSessions {
+		clear(r.ensured)
+	}
+	r.ensured[sess.ID] = ensuredSession{key: key, at: ts}
+	return true
+}
+
+// ensureRefresh bounds how long an unchanged identity skips the upsert: the
+// row is written again (and recreated if it was pruned) at least this often.
+const ensureRefresh = 30 * time.Second
+
+// maxEnsuredSessions bounds the ensured identities; past it they are
+// forgotten, which costs one upsert each.
+const maxEnsuredSessions = 4096
+
+type ensuredSession struct {
+	key string
+	at  time.Time
+}
+
+// ensuredKey is the identity an ensure writes, apart from activity time.
+func ensuredKey(s model.Session) string {
+	return strings.Join([]string{s.Harness, s.Workspace, s.Repo, s.Branch, fmt.Sprint(s.RootPID), s.RootStartedAt, s.ParentID, s.Confidence, s.Origin}, "\x00")
 }
 
 // resumeLocked reopens an ended session on the harness's own record of work
@@ -1102,6 +1137,15 @@ func (r *Resolver) Sweep() {
 	idled, err := r.st.MarkSessionsIdle(now.Add(-idleAfter))
 	if err != nil {
 		log.Printf("session: persist idle transitions: %v", err)
+	}
+	if len(idled) > 0 {
+		// The next event of an idled session writes its row again, which
+		// marks it active at once.
+		r.mu.Lock()
+		for _, id := range idled {
+			delete(r.ensured, id)
+		}
+		r.mu.Unlock()
 	}
 	r.prunePIDs(now)
 
