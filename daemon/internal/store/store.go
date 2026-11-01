@@ -875,6 +875,12 @@ type EventFilter struct {
 	Since      string // ts >= this; empty = any
 	Until      string // ts <= this; empty = any
 	Limit      int    // 0 = 50
+	// TimeSeek reads the Since..Until window through the session's time
+	// index (SessionID required), oldest first or, with Latest, newest
+	// first, instead of paging newest first by id: for a short window that
+	// may lie far behind the session's newest rows.
+	TimeSeek bool
+	Latest   bool
 }
 
 // GetFlag fetches one flag by ID (for the re-triage endpoint). Absent ID →
@@ -1581,15 +1587,26 @@ func eventRecordQuery(f EventFilter, withID bool, beforeID int64) (string, []any
 	// The unary + (a no-op on the value) keeps idx_events_session_time from
 	// serving the time bounds: newest-first paging by id stops at LIMIT on the
 	// session and kind indexes, where a time-range seek sorts the whole window.
+	// TimeSeek wants that seek.
+	ts := "+ts"
+	if f.TimeSeek && f.SessionID != "" {
+		ts = "ts"
+	}
 	if f.Since != "" {
-		q += " AND " + timestampOrderExpr("+ts") + " >= " + timestampOrderExpr(":event_since")
+		q += " AND " + timestampOrderExpr(ts) + " >= " + timestampOrderExpr(":event_since")
 		args = append(args, sql.Named("event_since", f.Since))
 	}
 	if f.Until != "" {
-		q += " AND " + timestampOrderExpr("+ts") + " <= " + timestampOrderExpr(":event_until")
+		q += " AND " + timestampOrderExpr(ts) + " <= " + timestampOrderExpr(":event_until")
 		args = append(args, sql.Named("event_until", f.Until))
 	}
-	q += " ORDER BY id DESC LIMIT ?"
+	if ts == "ts" && f.Latest {
+		q += " ORDER BY " + timestampOrderExpr("ts") + " DESC, id DESC LIMIT ?"
+	} else if ts == "ts" {
+		q += " ORDER BY " + timestampOrderExpr("ts") + ", id LIMIT ?"
+	} else {
+		q += " ORDER BY id DESC LIMIT ?"
+	}
 	args = append(args, normalizeLimit(f.Limit))
 	return q, args
 }

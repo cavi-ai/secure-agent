@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -277,6 +278,24 @@ func TestExplainContext(t *testing.T) {
 	ex = b.explainFlag(f, false)
 	if ex.Context == nil || ex.Context.Tool != "" || ex.Context.ToolAt != nil || ex.Context.Model != "" {
 		t.Fatalf("context = %+v, want no tool and no model", ex.Context)
+	}
+}
+
+// The nearest call is found in a busy session too: more calls in the window
+// than one read returns, most of them after the anchor.
+func TestExplainContextNearestInADenseWindow(t *testing.T) {
+	pinExplainHome(t, "/Users/tester")
+	a := explainTestAPI(t)
+	a.store.UpsertSession(model.Session{ID: "s1", Harness: "claude", StartedAt: time.Now(), LastSeenAt: time.Now(), Status: model.SessionActive, Confidence: model.ConfHook})
+	read := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	putToolCall(a, "s1", "Read", "ok", "c-near", read.Add(-time.Second))
+	for i := 0; i < 300; i++ {
+		putToolCall(a, "s1", "Bash", "ok", fmt.Sprintf("c-%d", i), read.Add(5*time.Second+time.Duration(i)*100*time.Millisecond))
+	}
+	f := readFlag("/Users/tester/work/api/.env", "env-file", "s1")
+	f.Evidence[0].TS = read.Format(time.RFC3339)
+	if c := a.explainFlag(f, false).Context; c == nil || c.Tool != "Read" || c.ToolAt == nil || !c.ToolAt.Equal(read.Add(-time.Second)) {
+		t.Fatalf("context = %+v, want the Read one second before the anchor", c)
 	}
 }
 
