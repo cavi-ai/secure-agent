@@ -10,6 +10,7 @@ import (
 )
 
 func TestInfraOrg(t *testing.T) {
+	t.Cleanup(SetLookupAddrForTest(func(context.Context, string) ([]string, error) { return nil, errors.New("no ptr") }))
 	cases := map[string]string{
 		"2606:4700:4408::ac40:9bd1":                 "Cloudflare",
 		"104.18.18.125":                             "Cloudflare",

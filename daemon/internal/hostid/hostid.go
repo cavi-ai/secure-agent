@@ -43,6 +43,21 @@ var lookupAddr = func(ctx context.Context, ip string) ([]string, error) {
 	return net.DefaultResolver.LookupAddr(ctx, ip)
 }
 
+// SetLookupAddrForTest replaces the reverse-DNS resolver with fn and empties
+// the PTR cache; the returned func restores the resolver and empties the cache
+// again. Test-only: tests in other packages reach InfraOrg through their
+// callers and must not depend on what the machine's resolver answers. Not safe
+// alongside parallel tests.
+func SetLookupAddrForTest(fn func(ctx context.Context, ip string) ([]string, error)) (restore func()) {
+	orig := lookupAddr
+	lookupAddr = fn
+	ptrCache.Clear()
+	return func() {
+		lookupAddr = orig
+		ptrCache.Clear()
+	}
+}
+
 // ptrOrg reverse-resolves a bare IP and classifies the PTR name. Results and
 // misses are cached — classification happens per summary/count call.
 func ptrOrg(ip string) string {
