@@ -19,6 +19,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - File telemetry: the collector writes the spool once per read of `eslogger`'s output instead of once per line, and no longer writes the tail of a line over 4 MB as a line of its own; about 40% less collector CPU per event.
 - Transcripts: a transcript created while the daemon was down is read from its first line instead of from its end.
 - Traces: Cursor and Antigravity tool-call ids no longer skip numbers when the daemon starts reading a transcript, which after a restart could reuse an id and overwrite an earlier call.
+- Findings: writing a stored finding again (an event read again after a restart) no longer clears its acknowledgement and repeat count or publishes it as new.
 - Worktrees and Cleanup: disk sizes are measured again after 24 hours instead of every hour, or after 15 minutes when a refresh is asked; they are saved while a sizing pass runs, so a restart mid-pass no longer measures everything again; worktree and cleanup sizing share two walks at a time instead of two each, and a walk reuses a directory another walk measured in the last 15 minutes, so a worktree's `node_modules` is no longer walked twice.
 - Store: every database connection overwrites deleted rows with zeros; `secure_delete` was set on one pooled connection only, so the agent-history encryption migration and later deletes could run without it.
 

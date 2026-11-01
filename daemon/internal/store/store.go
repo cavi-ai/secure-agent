@@ -378,6 +378,9 @@ func refreshPlannerStats(db *sql.DB) {
 
 // PutFlag reports the SQLite outcome. A mirror failure remains independently
 // visible in write health and does not invalidate a successfully saved row.
+// A flag already stored under the id keeps its acknowledgement and repeats:
+// a changed rewrite updates only the finding's own columns, and an identical
+// one (an event read again after a restart) is reported unchanged.
 func (s *Store) PutFlag(fl model.Flag) (result WriteResult, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -399,13 +402,22 @@ func (s *Store) PutFlag(fl model.Flag) (result WriteResult, err error) {
 	}
 
 	res, err := s.db.Exec(
-		`INSERT OR REPLACE INTO flags (id, rule, severity, ts, pid, agent, session_id, workspace, evidence, process) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO flags (id, rule, severity, ts, pid, agent, session_id, workspace, evidence, process) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET rule=excluded.rule, severity=excluded.severity, ts=excluded.ts, pid=excluded.pid, agent=excluded.agent,
+		   session_id=excluded.session_id, workspace=excluded.workspace, evidence=excluded.evidence, process=excluded.process
+		 WHERE (flags.rule, flags.severity, flags.ts, flags.pid, flags.agent, flags.session_id, flags.workspace, flags.evidence, flags.process)
+		   IS NOT (excluded.rule, excluded.severity, excluded.ts, excluded.pid, excluded.agent, excluded.session_id, excluded.workspace, excluded.evidence, excluded.process)`,
 		fl.ID, fl.Rule, fl.Severity, tsStr, fl.PID, fl.Agent, fl.SessionID, fl.Workspace, string(evJSON), procJSON,
 	)
+	var n int64
 	if err == nil {
-		var n int64
 		n, err = res.RowsAffected()
-		if err == nil && n == 0 {
+	}
+	if err == nil && n == 0 {
+		// Unchanged only when the identical flag is stored; otherwise the
+		// write was dropped.
+		var one int
+		if s.db.QueryRow(`SELECT 1 FROM flags WHERE id=?`, fl.ID).Scan(&one) != nil {
 			err = fmt.Errorf("flag write affected no rows")
 		}
 	}
@@ -413,6 +425,9 @@ func (s *Store) PutFlag(fl model.Flag) (result WriteResult, err error) {
 	if err != nil {
 		log.Printf("store: failed to insert flag %s: %v", fl.ID, err)
 		return result, err
+	}
+	if n == 0 {
+		return result, nil
 	}
 	result.Changed = true
 	s.flagsChanged()
