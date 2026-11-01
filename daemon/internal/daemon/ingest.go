@@ -35,6 +35,9 @@ type ingestDeps struct {
 	// Defaults to the bounded production writer. Persistence fixtures can use
 	// the store's deadline-free writer without changing production behavior.
 	RecordEgressObservation func(store.EgressObservation) error
+	// PutFileEvents commits one batch of ordinary file activity; defaults to
+	// the store's batch writer.
+	PutFileEvents func([]event.Event) (store.WriteResult, error)
 }
 
 // eventIngest owns persistence ordering and the bounded, best-effort egress
@@ -58,6 +61,9 @@ func newEventIngest(d ingestDeps) *eventIngest {
 	}
 	if d.RecordEgressObservation == nil {
 		d.RecordEgressObservation = d.Store.RecordEgressObservation
+	}
+	if d.PutFileEvents == nil {
+		d.PutFileEvents = d.Store.PutFileEvents
 	}
 	i := &eventIngest{deps: d, analyzer: intel.NewAnalyzer(), projection: make(chan store.EgressObservation, 128), projectionDone: make(chan struct{}), done: make(chan struct{}),
 		repeats: repeatOpens{window: repeatOpenWindow}}
@@ -86,6 +92,11 @@ func (i *eventIngest) Stop() {
 	})
 }
 
+// ingestGather bounds the queued events one feedBatch takes. Most are skipped
+// opens outside every agent family, so it is a multiple of the stored
+// batch: feedBatch still commits at most store.MaxFileBatch rows at a time.
+const ingestGather = 8 * store.MaxFileBatch
+
 func runEventIngest(source <-chan event.Event, d ingestDeps) *eventIngest {
 	i := newEventIngest(d)
 	go func() {
@@ -93,7 +104,7 @@ func runEventIngest(source <-chan event.Event, d ingestDeps) *eventIngest {
 		for e := range source {
 			batch := []event.Event{e}
 		gather:
-			for len(batch) < store.MaxFileBatch {
+			for len(batch) < ingestGather {
 				select {
 				case next, ok := <-source:
 					if !ok {
