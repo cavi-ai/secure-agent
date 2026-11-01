@@ -1383,3 +1383,28 @@ func TestOpenPreservesLegacyClaudeModelCalls(t *testing.T) {
 		s.Close()
 	}
 }
+
+// /status reads per-pid activity while a retention delete holds the store's
+// writer lock.
+func TestLastEventTimesDoesNotWaitForTheWriterLock(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.PutEvent(event.Event{Kind: event.KindExec, TS: time.Now(), PID: 7}); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	done := make(chan map[int32]string, 1)
+	go func() { done <- s.LastEventTimes([]int32{7}) }()
+	select {
+	case got := <-done:
+		if got[7] == "" {
+			t.Fatalf("last event time missing: %v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("LastEventTimes waited for the writer lock")
+	}
+}

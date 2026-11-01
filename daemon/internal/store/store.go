@@ -159,6 +159,9 @@ type Store struct {
 	// instead of a MAX(ts) GROUP BY scan over the events table (measured
 	// 2–4s at ~400 live pids — past the UI's 3s socket timeout).
 	lastSeen map[int32]time.Time
+	// lastSeenMu guards lastSeen apart from mu: /status reads it every poll
+	// and must not wait out a retention delete holding mu.
+	lastSeenMu sync.Mutex
 	// sessionAliases maps a rekeyed session id to the id its rows moved to,
 	// oldest first in sessionAliasOrder; an event resolved before the rekey
 	// is written where its session went.
@@ -549,12 +552,14 @@ func (s *Store) recordEventActivityLocked(e event.Event) {
 	// measured 2–4s with ~400 live pids — past the client's 3s socket
 	// timeout, which flipped the whole UI to "Disconnected" every poll.
 	// One map assignment here replaces the scan entirely.
+	s.lastSeenMu.Lock()
 	if s.lastSeen == nil {
 		s.lastSeen = map[int32]time.Time{}
 	}
 	if cur, ok := s.lastSeen[e.PID]; !ok || e.TS.After(cur) {
 		s.lastSeen[e.PID] = e.TS
 	}
+	s.lastSeenMu.Unlock()
 
 	s.insertCount++
 	if s.insertCount%1000 == 0 && time.Since(s.lastPrune) >= pruneMinInterval && !s.closed && s.retaining.CompareAndSwap(false, true) {
@@ -1763,8 +1768,8 @@ func (s *Store) LastEventTimes(pids []int32) map[int32]string {
 	if len(pids) == 0 {
 		return out
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.lastSeenMu.Lock()
+	defer s.lastSeenMu.Unlock()
 	for _, p := range pids {
 		if ts, ok := s.lastSeen[p]; ok {
 			out[p] = ts.UTC().Format(time.RFC3339Nano)
