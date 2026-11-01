@@ -62,6 +62,9 @@ type TranscriptScanner struct {
 	// checkpointAt is when the loaded checkpoint was saved; zero without
 	// one. A file created after it appeared while the daemon was down.
 	checkpointAt time.Time
+	// tailReader is tailFile's line reader, reset onto each file it reads;
+	// lines are copied out before the next file.
+	tailReader *bufio.Reader
 
 	// OffsetStatePath, when set, persists tail offsets across daemon
 	// restarts. Without it a restart re-seeds every transcript at EOF and
@@ -708,20 +711,25 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 	id := sourceIdentity(fi)
 	old, known := ts.sources[p]
 	changed := fi.Size() < offset || (known && old.Identity != "" && old.Identity != id) || (known && fi.Size() < old.Bytes)
+	prefixBytes := min(fi.Size(), transcriptPrefixBytes)
+	var stamp transcriptSource
+	stamped := false
 	if known && !changed {
-		stamp, err := transcriptStamp(f, fi, old.Bytes)
+		s, err := transcriptStamp(f, fi, old.Bytes)
 		if err != nil {
 			return
 		}
-		changed = old.Prefix != "" && old.Prefix != stamp.Prefix
+		changed = old.Prefix != "" && old.Prefix != s.Prefix
+		stamp, stamped = s, old.Bytes == prefixBytes
 	}
 	if changed {
 		offset = 0
 		ts.resetSource(p)
 	}
-	stamp, err := transcriptStamp(f, fi, min(fi.Size(), transcriptPrefixBytes))
-	if err != nil {
-		return
+	if !stamped {
+		if stamp, err = transcriptStamp(f, fi, prefixBytes); err != nil {
+			return
+		}
 	}
 	if old != stamp {
 		ts.noteSource(p, stamp)
@@ -739,7 +747,13 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 	// Persist byte zero for a new file even when its first event is rejected.
 	// Without this entry, restart discovery would seed past it at EOF.
 	setTranscriptOffset(p, offsets, offset, dirty)
-	r := bufio.NewReaderSize(f, 1024*1024)
+	if ts.tailReader == nil {
+		ts.tailReader = bufio.NewReaderSize(f, 1024*1024)
+	} else {
+		ts.tailReader.Reset(f)
+	}
+	r := ts.tailReader
+	defer r.Reset(nil)
 	nextOffset := offset
 	for {
 		// Assemble fragments up to the line cap. Skip only complete oversized
