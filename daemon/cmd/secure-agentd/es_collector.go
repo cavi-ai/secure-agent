@@ -8,10 +8,12 @@ package main
 // TCC attributes the ES grant to the app bundle that ships this binary, so
 // the operator's one Full Disk Access grant for the app covers the chain.
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -34,6 +36,9 @@ const (
 	// 32MB handoff buffer: the user daemon drains continuously; rotation
 	// prevents unbounded root-written growth on pathological activity.
 	maxSpoolBytes = 32 << 20
+	// esMaxLine bounds one eslogger line held in memory; a longer one is
+	// discarded through its newline.
+	esMaxLine = 4 << 20
 	// esRetryInterval backs off between eslogger respawns inside this
 	// process when the failure is the expected pre-grant one (no ES
 	// permission yet). Internal retry keeps the service state "running"
@@ -330,12 +335,15 @@ func isESPermissionFailure(err error) bool {
 	return strings.Contains(message, "es_new_client_result_err_not_permitted") || strings.Contains(message, "responsible process needs tcc full disk access authorization")
 }
 
-// spoolWriter serializes appends with size-capped rotation.
+// spoolWriter serializes appends with size-capped rotation. Lines are
+// buffered and reach the file on flush, once per read of eslogger's output,
+// not one write per line.
 type spoolWriter struct {
 	mu   sync.Mutex
 	path string
 	f    *os.File
-	size int64
+	bw   *bufio.Writer
+	size int64 // bytes in the file and the buffer
 }
 
 // open attaches to the existing spool, resuming after whatever bytes are
@@ -355,9 +363,13 @@ func (w *spoolWriter) open() error {
 		return fmt.Errorf("stat spool: %w", err)
 	}
 	w.f = f
+	w.bw = bufio.NewWriterSize(f, spoolBufferBytes)
 	w.size = info.Size()
 	return nil
 }
+
+// spoolBufferBytes holds one read of eslogger's output, compacted.
+const spoolBufferBytes = 64 << 10
 
 func (w *spoolWriter) writeLine(line []byte) error {
 	w.mu.Lock()
@@ -367,7 +379,11 @@ func (w *spoolWriter) writeLine(line []byte) error {
 			return err
 		}
 	}
-	n, err := w.f.Write(append(line, '\n'))
+	n, err := w.bw.Write(line)
+	if err == nil {
+		err = w.bw.WriteByte('\n')
+		n++
+	}
 	if err != nil {
 		return err
 	}
@@ -375,17 +391,31 @@ func (w *spoolWriter) writeLine(line []byte) error {
 	return nil
 }
 
+// flush writes the buffered lines to the spool.
+func (w *spoolWriter) flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.bw == nil {
+		return nil
+	}
+	return w.bw.Flush()
+}
+
 func (w *spoolWriter) close() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.f != nil {
+		_ = w.bw.Flush()
 		_ = w.f.Close()
-		w.f = nil
+		w.f, w.bw = nil, nil
 	}
 }
 
 func (w *spoolWriter) rotateLocked() error {
 	if w.f != nil {
+		if err := w.bw.Flush(); err != nil {
+			return err
+		}
 		_ = w.f.Close()
 	}
 	_ = os.Remove(w.path + ".1")
@@ -399,6 +429,7 @@ func (w *spoolWriter) rotateLocked() error {
 		return err
 	}
 	w.f = f
+	w.bw.Reset(f)
 	w.size = 0
 	return nil
 }
@@ -431,21 +462,29 @@ func pumpToSpoolObserved(stdout interface{ Read([]byte) (int, error) }, path str
 	var compact []byte
 	var stats esFilterStats
 	var lag esLagWatch
+	// overlong is set while the rest of a line past esMaxLine is discarded.
+	overlong := false
 	for {
 		n, err := stdout.Read(tmp)
 		wrote := false
 		if n > 0 {
 			buf = append(buf, tmp[:n]...)
+			start := 0
 			for {
-				nl := indexOfByte(buf, '\n')
+				nl := bytes.IndexByte(buf[start:], '\n')
 				if nl < 0 {
-					if len(buf) > 4<<20 {
-						buf = buf[:0]
+					if len(buf)-start > esMaxLine {
+						start, overlong = len(buf), true
 					}
 					break
 				}
 				// line aliases buf, so it is written before buf is compacted.
-				line := buf[:nl]
+				line := buf[start : start+nl]
+				start += nl + 1
+				if overlong {
+					overlong = false // the tail of a discarded line
+					continue
+				}
 				if len(bytes.TrimSpace(line)) > 0 { // empty lines are skipped
 					if err := lag.check(line); err != nil {
 						return err
@@ -471,14 +510,19 @@ func pumpToSpoolObserved(stdout interface{ Read([]byte) (int, error) }, path str
 						log.Print(msg)
 					}
 				}
-				buf = append(buf[:0], buf[nl+1:]...)
+			}
+			buf = append(buf[:0], buf[start:]...)
+		}
+		if wrote {
+			if err := w.flush(); err != nil {
+				return fmt.Errorf("spool write: %w", err)
+			}
+			if delivered != nil {
+				delivered()
 			}
 		}
-		if wrote && delivered != nil {
-			delivered()
-		}
 		if err != nil {
-			if err.Error() == "EOF" {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return fmt.Errorf("eslogger read: %w", err)
@@ -536,15 +580,6 @@ func esLineTime(line []byte) (time.Time, bool) {
 	}
 	at, err := time.Parse(time.RFC3339Nano, string(rest[:j]))
 	return at, err == nil
-}
-
-func indexOfByte(b []byte, c byte) int {
-	for i := range b {
-		if b[i] == c {
-			return i
-		}
-	}
-	return -1
 }
 
 func oneLine(s string) string {
