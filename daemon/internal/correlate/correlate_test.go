@@ -95,6 +95,21 @@ func TestSensitiveReadThenForeignConnectFlags(t *testing.T) {
 	}
 }
 
+// A sensitive read by a child that exited before its event was correlated
+// (cat ~/.aws/credentials) is the parent agent's read: the agent's later
+// foreign connection flags.
+func TestExitedChildReadThenParentConnectFlags(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Unix(1_700_000_000, 0)
+	if f := c.Observe(event.Event{Kind: event.KindFileOpen, PID: 4242, PPID: 200, TS: base, Path: "/Users/x/.aws/credentials"}); len(f) != 0 {
+		t.Fatalf("read alone should not flag, got %v", f)
+	}
+	f := c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: base.Add(3 * time.Second), RemoteHost: "evil.example.com", RemotePort: 443})
+	if len(f) != 1 || f[0].Rule != "sensitive-read-then-connect" {
+		t.Fatalf("expected the exited child's read to flag the agent's connect, got %+v", f)
+	}
+}
+
 func TestConnectToVendorHostDoesNotFlag(t *testing.T) {
 	c := newTestCorrelator(t)
 	base := time.Unix(1_700_000_000, 0)
