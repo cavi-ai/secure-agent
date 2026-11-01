@@ -1035,7 +1035,7 @@ func TestReplayedCursorLineKeepsSessionEnded(t *testing.T) {
 	week := time.Now().Add(-7 * 24 * time.Hour)
 	st.UpsertSession(model.Session{ID: id, Harness: "cursor", StartedAt: week, LastSeenAt: week, Status: model.SessionActive, Confidence: model.ConfTranscript})
 	r.EndTranscriptSession(id, week.Add(25*time.Hour))
-	tr := collect.NewCursorTracer(filepath.Join(t.TempDir(), ".cursor", "projects", "Users-x-repo", "agent-transcripts", id, id+".jsonl"))
+	tr := collect.NewCursorTracer(filepath.Join(t.TempDir(), ".cursor", "projects", "Users-x-repo", "agent-transcripts", id, id+".jsonl"), nil)
 	evs, ok := tr.ParseLine(`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}`)
 	if !ok || len(evs) == 0 {
 		t.Fatalf("ParseLine = %v, %v; want events", evs, ok)
