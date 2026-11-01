@@ -28,29 +28,12 @@ func (b *Bus) Subscribe() <-chan event.Event {
 	ch := make(chan event.Event, b.buf)
 	if b.done {
 		// Already closed: hand back a closed channel so the subscriber drains
-		// and exits instead of leaking a channel nothing will ever write to
-		// (and Unsubscribe would refuse to close it).
+		// and exits instead of leaking a channel nothing will ever write to.
 		close(ch)
 		return ch
 	}
 	b.subs = append(b.subs, ch)
 	return ch
-}
-
-// Unsubscribe removes a subscriber and closes its channel. Safe to call more
-// than once for the same channel (second call is a no-op).
-func (b *Bus) Unsubscribe(ch <-chan event.Event) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for i, sub := range b.subs {
-		if sub == ch {
-			b.subs = append(b.subs[:i], b.subs[i+1:]...)
-			if !b.done {
-				close(sub)
-			}
-			return
-		}
-	}
 }
 
 func (b *Bus) Publish(e event.Event) {

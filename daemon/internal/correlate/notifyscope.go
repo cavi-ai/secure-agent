@@ -48,13 +48,6 @@ func splitScopeKey(k string) (workspace, rule string, ok bool) {
 	return k[:i], k[i+1:], true
 }
 
-// Load returns the raw scope map (key = "workspace\x00rule").
-func (s *NotifyScopeStore) Load() map[string]bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.loadLocked()
-}
-
 func (s *NotifyScopeStore) loadLocked() map[string]bool {
 	raw, err := readNotifyOverrides(s.path)
 	if err != nil {

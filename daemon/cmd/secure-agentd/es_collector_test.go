@@ -360,3 +360,58 @@ func TestESLagWatchSamplesAndConfirms(t *testing.T) {
 		t.Fatalf("stale for esLagConfirm: err = %v, want errESBehind", err)
 	}
 }
+
+// A line longer than esMaxLine is discarded through its newline; its tail
+// never reaches the spool as a line of its own.
+func TestPumpToSpoolDiscardsAnOverlongLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "spool.jsonl")
+	long := `{"event_type":` + strings.Repeat("9", esMaxLine+1)
+	r := io.MultiReader(strings.NewReader(long), strings.NewReader(`,"tail":1}`+"\n"+`{"event_type":2}`+"\n"))
+	if err := pumpToSpoolAt(r, path); err != nil {
+		t.Fatalf("pumpToSpoolAt: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"event_type":2}` + "\n"; string(got) != want {
+		t.Fatalf("spool = %.200q, want %q", got, want)
+	}
+}
+
+// Kept lines are in the spool once the read that carried them is handled,
+// before eslogger writes more.
+func TestPumpToSpoolWritesEachReadThrough(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "spool.jsonl")
+	var seen string
+	r := &hookReader{chunks: []string{`{"event_type":1}` + "\n", `{"event_type":2}` + "\n"}, before: func(i int) {
+		if i == 1 {
+			b, _ := os.ReadFile(path)
+			seen = string(b)
+		}
+	}}
+	if err := pumpToSpoolAt(r, path); err != nil {
+		t.Fatalf("pumpToSpoolAt: %v", err)
+	}
+	if want := `{"event_type":1}` + "\n"; seen != want {
+		t.Fatalf("spool before the second read = %q, want %q", seen, want)
+	}
+}
+
+// hookReader is chunkReader that calls before(i) ahead of the i-th Read.
+type hookReader struct {
+	chunks []string
+	before func(int)
+	reads  int
+}
+
+func (r *hookReader) Read(p []byte) (int, error) {
+	r.before(r.reads)
+	r.reads++
+	if len(r.chunks) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.chunks[0])
+	r.chunks = r.chunks[1:]
+	return n, nil
+}

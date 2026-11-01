@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -56,11 +56,12 @@ type CursorTracer struct {
 
 // NewCursorTracer builds a tracer for one transcript file, taking the session
 // id from the filename (<uuid>.jsonl) and the workspace from the project slug.
-// The tool-call sequence is seeded from the calls already in the file so ids
-// resume past them after a daemon restart (the tailer resumes at EOF).
-func NewCursorTracer(path string) *CursorTracer {
+// The tool-call sequence is seeded from the calls in prior, the file's bytes
+// before the first line this tracer parses, so ids resume past them after a
+// daemon restart; prior may be nil.
+func NewCursorTracer(path string, prior io.Reader) *CursorTracer {
 	base := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	t := &CursorTracer{sessionID: base, toolSeq: countCursorToolCalls(path)}
+	t := &CursorTracer{sessionID: base, toolSeq: countCursorToolCalls(prior)}
 	// .../projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl → slug.
 	if parts := strings.Split(filepath.ToSlash(path), "/projects/"); len(parts) == 2 {
 		slug := strings.SplitN(parts[1], "/", 2)[0]
@@ -69,16 +70,14 @@ func NewCursorTracer(path string) *CursorTracer {
 	return t
 }
 
-// countCursorToolCalls counts the tool calls already in the file, matching
-// ParseLine's emission rule exactly (assistant records, tool_use with a name).
-func countCursorToolCalls(path string) int {
-	f, err := os.Open(path)
-	if err != nil {
+// countCursorToolCalls counts the tool calls in r, matching ParseLine's
+// emission rule exactly (assistant records, tool_use with a name).
+func countCursorToolCalls(r io.Reader) int {
+	if r == nil {
 		return 0
 	}
-	defer f.Close()
 	n := 0
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())

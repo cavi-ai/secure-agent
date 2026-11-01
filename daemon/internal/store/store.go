@@ -159,6 +159,9 @@ type Store struct {
 	// instead of a MAX(ts) GROUP BY scan over the events table (measured
 	// 2–4s at ~400 live pids — past the UI's 3s socket timeout).
 	lastSeen map[int32]time.Time
+	// lastSeenMu guards lastSeen apart from mu: /status reads it every poll
+	// and must not wait out a retention delete holding mu.
+	lastSeenMu sync.Mutex
 	// sessionAliases maps a rekeyed session id to the id its rows moved to,
 	// oldest first in sessionAliasOrder; an event resolved before the rekey
 	// is written where its session went.
@@ -378,6 +381,9 @@ func refreshPlannerStats(db *sql.DB) {
 
 // PutFlag reports the SQLite outcome. A mirror failure remains independently
 // visible in write health and does not invalidate a successfully saved row.
+// A flag already stored under the id keeps its acknowledgement and repeats:
+// a changed rewrite updates only the finding's own columns, and an identical
+// one (an event read again after a restart) is reported unchanged.
 func (s *Store) PutFlag(fl model.Flag) (result WriteResult, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -399,13 +405,22 @@ func (s *Store) PutFlag(fl model.Flag) (result WriteResult, err error) {
 	}
 
 	res, err := s.db.Exec(
-		`INSERT OR REPLACE INTO flags (id, rule, severity, ts, pid, agent, session_id, workspace, evidence, process) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO flags (id, rule, severity, ts, pid, agent, session_id, workspace, evidence, process) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET rule=excluded.rule, severity=excluded.severity, ts=excluded.ts, pid=excluded.pid, agent=excluded.agent,
+		   session_id=excluded.session_id, workspace=excluded.workspace, evidence=excluded.evidence, process=excluded.process
+		 WHERE (flags.rule, flags.severity, flags.ts, flags.pid, flags.agent, flags.session_id, flags.workspace, flags.evidence, flags.process)
+		   IS NOT (excluded.rule, excluded.severity, excluded.ts, excluded.pid, excluded.agent, excluded.session_id, excluded.workspace, excluded.evidence, excluded.process)`,
 		fl.ID, fl.Rule, fl.Severity, tsStr, fl.PID, fl.Agent, fl.SessionID, fl.Workspace, string(evJSON), procJSON,
 	)
+	var n int64
 	if err == nil {
-		var n int64
 		n, err = res.RowsAffected()
-		if err == nil && n == 0 {
+	}
+	if err == nil && n == 0 {
+		// Unchanged only when the identical flag is stored; otherwise the
+		// write was dropped.
+		var one int
+		if s.db.QueryRow(`SELECT 1 FROM flags WHERE id=?`, fl.ID).Scan(&one) != nil {
 			err = fmt.Errorf("flag write affected no rows")
 		}
 	}
@@ -413,6 +428,9 @@ func (s *Store) PutFlag(fl model.Flag) (result WriteResult, err error) {
 	if err != nil {
 		log.Printf("store: failed to insert flag %s: %v", fl.ID, err)
 		return result, err
+	}
+	if n == 0 {
+		return result, nil
 	}
 	result.Changed = true
 	s.flagsChanged()
@@ -534,12 +552,14 @@ func (s *Store) recordEventActivityLocked(e event.Event) {
 	// measured 2–4s with ~400 live pids — past the client's 3s socket
 	// timeout, which flipped the whole UI to "Disconnected" every poll.
 	// One map assignment here replaces the scan entirely.
+	s.lastSeenMu.Lock()
 	if s.lastSeen == nil {
 		s.lastSeen = map[int32]time.Time{}
 	}
 	if cur, ok := s.lastSeen[e.PID]; !ok || e.TS.After(cur) {
 		s.lastSeen[e.PID] = e.TS
 	}
+	s.lastSeenMu.Unlock()
 
 	s.insertCount++
 	if s.insertCount%1000 == 0 && time.Since(s.lastPrune) >= pruneMinInterval && !s.closed && s.retaining.CompareAndSwap(false, true) {
@@ -860,6 +880,12 @@ type EventFilter struct {
 	Since      string // ts >= this; empty = any
 	Until      string // ts <= this; empty = any
 	Limit      int    // 0 = 50
+	// TimeSeek reads the Since..Until window through the session's time
+	// index (SessionID required), oldest first or, with Latest, newest
+	// first, instead of paging newest first by id: for a short window that
+	// may lie far behind the session's newest rows.
+	TimeSeek bool
+	Latest   bool
 }
 
 // GetFlag fetches one flag by ID (for the re-triage endpoint). Absent ID →
@@ -1055,26 +1081,6 @@ func (s *Store) ReattributeFlags(pid int32, agent string, since time.Time) int {
 		s.flagsChanged()
 	}
 	return int(n)
-}
-
-// decodeFlagProcess reads the stored process snapshot; nil when absent or
-// unreadable.
-func decodeFlagProcess(raw string) *model.FlagProcess {
-	if raw == "" {
-		return nil
-	}
-	var p model.FlagProcess
-	if json.Unmarshal([]byte(raw), &p) != nil || p.Name == "" {
-		return nil
-	}
-	return &p
-}
-
-func setFlagRepeats(fl *model.Flag, repeats sql.NullInt64, lastSeen sql.NullString) {
-	fl.Repeats = int(repeats.Int64)
-	if t, err := time.Parse(time.RFC3339Nano, lastSeen.String); err == nil {
-		fl.LastSeen = &t
-	}
 }
 
 // BumpFlagRepeat folds one more occurrence into flag id: repeats + 1 and
@@ -1586,15 +1592,26 @@ func eventRecordQuery(f EventFilter, withID bool, beforeID int64) (string, []any
 	// The unary + (a no-op on the value) keeps idx_events_session_time from
 	// serving the time bounds: newest-first paging by id stops at LIMIT on the
 	// session and kind indexes, where a time-range seek sorts the whole window.
+	// TimeSeek wants that seek.
+	ts := "+ts"
+	if f.TimeSeek && f.SessionID != "" {
+		ts = "ts"
+	}
 	if f.Since != "" {
-		q += " AND " + timestampOrderExpr("+ts") + " >= " + timestampOrderExpr(":event_since")
+		q += " AND " + timestampOrderExpr(ts) + " >= " + timestampOrderExpr(":event_since")
 		args = append(args, sql.Named("event_since", f.Since))
 	}
 	if f.Until != "" {
-		q += " AND " + timestampOrderExpr("+ts") + " <= " + timestampOrderExpr(":event_until")
+		q += " AND " + timestampOrderExpr(ts) + " <= " + timestampOrderExpr(":event_until")
 		args = append(args, sql.Named("event_until", f.Until))
 	}
-	q += " ORDER BY id DESC LIMIT ?"
+	if ts == "ts" && f.Latest {
+		q += " ORDER BY " + timestampOrderExpr("ts") + " DESC, id DESC LIMIT ?"
+	} else if ts == "ts" {
+		q += " ORDER BY " + timestampOrderExpr("ts") + ", id LIMIT ?"
+	} else {
+		q += " ORDER BY id DESC LIMIT ?"
+	}
 	args = append(args, normalizeLimit(f.Limit))
 	return q, args
 }
@@ -1751,8 +1768,8 @@ func (s *Store) LastEventTimes(pids []int32) map[int32]string {
 	if len(pids) == 0 {
 		return out
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.lastSeenMu.Lock()
+	defer s.lastSeenMu.Unlock()
 	for _, p := range pids {
 		if ts, ok := s.lastSeen[p]; ok {
 			out[p] = ts.UTC().Format(time.RFC3339Nano)

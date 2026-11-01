@@ -18,10 +18,6 @@ type fleetHeadline struct {
 	critical, attention, stale, allClear, legacy int
 }
 
-func (h fleetHeadline) total() int {
-	return h.critical + h.attention + h.stale + h.allClear + h.legacy
-}
-
 func summarizeFleet(nodes []*NodeState, now time.Time) fleetHeadline {
 	var h fleetHeadline
 	for _, st := range nodes {

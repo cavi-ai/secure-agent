@@ -27,14 +27,3 @@ func Lookup[T any](t testing.TB) func(T, bool, error) (T, bool) {
 		return value, found
 	}
 }
-
-func Counts(t testing.TB) func(int, int, error) (int, int) {
-	t.Helper()
-	return func(first, second int, err error) (int, int) {
-		t.Helper()
-		if err != nil {
-			t.Fatalf("counts failed: %v", err)
-		}
-		return first, second
-	}
-}

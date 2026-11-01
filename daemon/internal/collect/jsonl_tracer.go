@@ -35,7 +35,9 @@ type jsonlFile struct {
 type jsonlAdapter struct {
 	harness string
 	matches func(string) bool
-	open    func(string, int64, io.ReaderAt) *jsonlFile
+	// open builds a file's parser at the first line it parses, from the
+	// path, that line's offset and the file's bytes.
+	open func(string, int64, io.ReaderAt) *jsonlFile
 }
 
 // Adding a JSONL harness requires one adapter here. Path recognition, parser
@@ -67,8 +69,8 @@ var jsonlAdapters = []jsonlAdapter{
 			return r
 		}}
 	}},
-	{"cursor", IsCursorTranscriptPath, func(path string, _ int64, _ io.ReaderAt) *jsonlFile {
-		t := NewCursorTracer(path)
+	{"cursor", IsCursorTranscriptPath, func(path string, offset int64, source io.ReaderAt) *jsonlFile {
+		t := NewCursorTracer(path, io.NewSectionReader(source, 0, offset))
 		return &jsonlFile{session: func() string { id, _ := t.Session(); return id }, parse: func(line string) traceLineResult {
 			evs, ok := t.ParseLine(line)
 			r := traceLineResult{Events: evs, Parsed: ok}
@@ -79,8 +81,8 @@ var jsonlAdapters = []jsonlAdapter{
 			return r
 		}}
 	}},
-	{"antigravity", IsAGYTranscriptPath, func(path string, _ int64, _ io.ReaderAt) *jsonlFile {
-		t := NewAGYTracer(path)
+	{"antigravity", IsAGYTranscriptPath, func(path string, offset int64, source io.ReaderAt) *jsonlFile {
+		t := NewAGYTracer(path, io.NewSectionReader(source, 0, offset))
 		return &jsonlFile{session: func() string { id, _ := t.Session(); return id }, parse: func(line string) traceLineResult {
 			evs, ok := t.ParseLine(line)
 			r := traceLineResult{Events: evs, Parsed: ok}

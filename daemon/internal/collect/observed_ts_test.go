@@ -45,7 +45,7 @@ func TestClockStampedEventsAreMarkedObserved(t *testing.T) {
 			return evs
 		}, true},
 		{"cursor", func() []event.Event {
-			evs, _ := NewCursorTracer("/Users/x/.cursor/projects/Users-x-repo/agent-transcripts/c-1/c-1.jsonl").
+			evs, _ := NewCursorTracer("/Users/x/.cursor/projects/Users-x-repo/agent-transcripts/c-1/c-1.jsonl", nil).
 				ParseLine(`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}`)
 			return evs
 		}, true},
@@ -72,7 +72,7 @@ func TestClockStampedEventsAreMarkedObserved(t *testing.T) {
 }
 
 func agyTestTracer() *AGYTracer {
-	return NewAGYTracer("/Users/x/.gemini/antigravity-cli/brain/b285eea1-3969/.system_generated/logs/transcript_full.jsonl")
+	return NewAGYTracer("/Users/x/.gemini/antigravity-cli/brain/b285eea1-3969/.system_generated/logs/transcript_full.jsonl", nil)
 }
 
 // lcm.db rows with an unreadable created_at are marked observed.

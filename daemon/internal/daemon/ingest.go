@@ -219,7 +219,9 @@ func (i *eventIngest) feedResolvedLocked(e event.Event, flags []model.Flag) bool
 		log.Printf("FLAG TRIGGERED [%d]: %s (pid %d agent %s)", fl.Severity, fl.Rule, fl.PID, fl.Agent)
 		flagWrite, flagErr := st.PutFlag(fl)
 		healthChanged = healthChanged || flagWrite.HealthChanged
-		cr.ResolvePersistence(fl.ID, flagErr == nil && flagWrite.Changed)
+		// An already stored flag (unchanged) is persisted too: undoing its
+		// evidence consumption would raise it again under a new id.
+		cr.ResolvePersistence(fl.ID, flagErr == nil)
 		if flagErr != nil || !flagWrite.Changed {
 			continue
 		}

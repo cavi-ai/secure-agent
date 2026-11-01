@@ -26,6 +26,11 @@ func TestFlagDetailRejectsMalformedReadsAndRecovers(t *testing.T) {
 			if h.ReadFailures != 1 || len(h.ReadActive) != 1 || h.ReadActive[0] != "flag detail" {
 				t.Errorf("detail read failure hidden: %+v", h)
 			}
+			// Rewriting the flag repairs the finding's own columns; repeat
+			// state (last_seen) is kept across rewrites by design.
+			if damage == "last_seen='invalid'" {
+				return
+			}
 			if _, err := s.PutFlag(f); err != nil {
 				t.Fatal(err)
 			}
@@ -53,5 +58,30 @@ func TestFlagDetailPreservesNullableLegacyFields(t *testing.T) {
 	}
 	if h := s.WriteHealth(); h.ReadFailures != 0 {
 		t.Errorf("legacy fields counted as corruption: %+v", h)
+	}
+}
+
+// Writing a stored flag again keeps its acknowledgement and repeats: an
+// identical write (an event read again after a restart) changes nothing, and
+// a changed one updates only the finding's columns.
+func TestPutFlagKeepsAcknowledgementAndRepeats(t *testing.T) {
+	s := reviewStore(t)
+	f := model.Flag{ID: "kept", Rule: "keychain-access", Severity: 3, PID: 42, TS: time.Now().UTC(), Evidence: model.EvidenceFromStrings("a")}
+	if r, err := s.PutFlag(f); err != nil || !r.Changed {
+		t.Fatalf("first write: %+v %v", r, err)
+	}
+	if !s.AcknowledgeFlag(f.ID) || !s.BumpFlagRepeat(f.ID, time.Now()) {
+		t.Fatal("acknowledge or repeat failed")
+	}
+	if r, err := s.PutFlag(f); err != nil || r.Changed {
+		t.Fatalf("identical rewrite: %+v %v, want unchanged", r, err)
+	}
+	f.Evidence = model.EvidenceFromStrings("b")
+	if r, err := s.PutFlag(f); err != nil || !r.Changed {
+		t.Fatalf("changed rewrite: %+v %v, want changed", r, err)
+	}
+	got := testutil.Lookup[model.Flag](t)
+	if fl, found := got(s.GetFlag(f.ID)); !found || !fl.Acknowledged || fl.Repeats != 1 || fl.LastSeen == nil || len(fl.Evidence) != 1 || fl.Evidence[0].Text != "b" {
+		t.Fatalf("after rewrites: found=%v %+v", found, fl)
 	}
 }

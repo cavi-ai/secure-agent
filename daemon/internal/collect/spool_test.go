@@ -818,3 +818,16 @@ func TestSpoolTruncationRetainsNewContentAndReportsUnreadLoss(t *testing.T) {
 		t.Fatalf("lost=%d want=%d", got, want)
 	}
 }
+
+// Retries of retained events back off while they deliver nothing: 5 ms after
+// progress, doubling to the 200 ms poll interval while the bus stays full.
+func TestRetainedRetryBacksOffWhileStalled(t *testing.T) {
+	for stalled, want := range []time.Duration{5, 10, 20, 40, 80, 160, 200, 200, 200} {
+		if got := retainedWait(stalled); got != want*time.Millisecond {
+			t.Errorf("retainedWait(%d) = %v, want %v", stalled, got, want*time.Millisecond)
+		}
+	}
+	if got := retainedWait(1 << 20); got != spoolPollInterval {
+		t.Errorf("retainedWait(large) = %v", got)
+	}
+}

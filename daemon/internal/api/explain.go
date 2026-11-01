@@ -363,19 +363,22 @@ func (a *API) explainContext(f model.Flag, sess *model.Session, workspace string
 }
 
 // nearestEvent is the session's event of kind closest in time to anchor,
-// within explainContextWindow either side.
+// within explainContextWindow either side: the events nearest the anchor on
+// each side, read through the session's time index.
 func (a *API) nearestEvent(sessionID string, kind event.Kind, anchor time.Time) (event.Event, bool) {
 	k := int(kind)
-	evs, err := a.store.QueryEvents(store.EventFilter{
-		Kind:      &k,
-		SessionID: sessionID,
-		Since:     anchor.Add(-explainContextWindow).UTC().Format(time.RFC3339),
-		Until:     anchor.Add(explainContextWindow).UTC().Format(time.RFC3339),
-		Limit:     200,
-	})
+	at := anchor.UTC().Format(time.RFC3339)
+	before, err := a.store.QueryEvents(store.EventFilter{Kind: &k, SessionID: sessionID, TimeSeek: true, Latest: true, Limit: 50,
+		Since: anchor.Add(-explainContextWindow).UTC().Format(time.RFC3339), Until: at})
 	if err != nil {
 		return event.Event{}, false
 	}
+	after, err := a.store.QueryEvents(store.EventFilter{Kind: &k, SessionID: sessionID, TimeSeek: true, Limit: 50,
+		Since: at, Until: anchor.Add(explainContextWindow).UTC().Format(time.RFC3339)})
+	if err != nil {
+		return event.Event{}, false
+	}
+	evs := append(before, after...)
 	var best event.Event
 	bestGap := explainContextWindow + 1
 	for _, e := range evs {

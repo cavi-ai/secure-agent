@@ -141,14 +141,6 @@ func humanPath(p string) string {
 	return p
 }
 
-// firstEvidence is the first evidence line, rendered for text display.
-func firstEvidence(ev []model.EvidenceItem) string {
-	if len(ev) == 0 {
-		return ""
-	}
-	return ev[0].String()
-}
-
 // criticalSummary picks the highest-severity item as the one-line headline.
 func criticalSummary(items []PostureItem) string {
 	for _, it := range items {

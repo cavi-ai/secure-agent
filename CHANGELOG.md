@@ -16,6 +16,15 @@ All notable changes to `secure-agent` are documented here. The format follows
 - File telemetry: the collector writes each Endpoint Security record to the spool with only the fields the daemon reads, about a tenth of `eslogger`'s bytes, instead of the full record with every process's audit tokens, code-signing fields and file stats; its once-a-minute log line reports the bytes written.
 - File telemetry: the sensitive-path check lowercases and cleans its configured markers, paths and globs once instead of on every file event; it runs on each system-path open before the collector drops it, about a third faster.
 - File telemetry: opens by the system tools the daemon runs (git, lsof, ps, netstat) no longer reach the spool; agents the daemon starts, and anything those tools start, keep every event.
+- File telemetry: while the event bus stays full, the daemon retries the spool at up to 200 ms instead of every 5 ms, and reuses its read buffer.
+- File telemetry: the collector writes the spool once per read of `eslogger`'s output instead of once per line, and no longer writes the tail of a line over 4 MB as a line of its own; about 40% less collector CPU per event.
+- Transcripts: a transcript created while the daemon was down is read from its first line instead of from its end.
+- Traces: Cursor and Antigravity tool-call ids no longer skip numbers when the daemon starts reading a transcript, which after a restart could reuse an id and overwrite an earlier call.
+- Findings: writing a stored finding again (an event read again after a restart) no longer clears its acknowledgement and repeat count or publishes it as new.
+- Findings: a finding's tool and model context reads the session's time index around the finding (about 1 ms instead of 100 ms per lookup in a 40,000-event session) and finds the nearest call when more than 200 fall in the window.
+- Findings: a sensitive read by an agent's short-lived child that exited before the event was processed (`cat ~/.aws/credentials`) now counts as the agent's read, so a following connection raises "sensitive read then connect".
+- Findings: mute and allowlist policy files are read only after they change, not on every connection and proxy hit, and a corrupt file is reported once per change.
+- Hooks: each live session's hook health is read on its own, so a session logging more than 1,000 hook runs in 30 minutes no longer hides another session's repeatedly failing hook.
 - Worktrees and Cleanup: disk sizes are measured again after 24 hours instead of every hour, or after 15 minutes when a refresh is asked; they are saved while a sizing pass runs, so a restart mid-pass no longer measures everything again; worktree and cleanup sizing share two walks at a time instead of two each, and a walk reuses a directory another walk measured in the last 15 minutes, so a worktree's `node_modules` is no longer walked twice.
 - Store: every database connection overwrites deleted rows with zeros; `secure_delete` was set on one pooled connection only, so the agent-history encryption migration and later deletes could run without it.
 
