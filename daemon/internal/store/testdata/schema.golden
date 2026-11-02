@@ -1,6 +1,6 @@
 index idx_decision_scope_match: CREATE INDEX idx_decision_scope_match ON decision_scopes(agent,rule_id,operation)
 index idx_egress_episodes_last: CREATE INDEX idx_egress_episodes_last ON egress_episodes(last_seen_ns DESC, id)
-index idx_events_call: CREATE UNIQUE INDEX idx_events_call ON events(session_id, call_id)
+index idx_events_call: CREATE UNIQUE INDEX idx_events_call ON events(session_id, call_id) WHERE call_id IS NOT NULL
 index idx_events_host: CREATE INDEX idx_events_host ON events(remote_host, id, ts) WHERE remote_host != ''
 index idx_events_kind_id: CREATE INDEX idx_events_kind_id ON events(kind, id)
 index idx_events_pid_ts: CREATE INDEX idx_events_pid_ts ON events(pid, ts)
