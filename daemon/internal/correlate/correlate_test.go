@@ -2,6 +2,7 @@ package correlate
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -251,6 +252,39 @@ func TestUninspectedEgressCounted(t *testing.T) {
 	if got := c.UninspectedEgressCount(); got != 1 {
 		t.Fatalf("dedup failed, count = %d", got)
 	}
+}
+
+// A connection to one of this machine's own interface addresses (LAN, VPN)
+// stays on the host, so it is not uninspected egress.
+func TestOwnInterfaceAddressIsNotUninspectedEgress(t *testing.T) {
+	own := ownInterfaceAddr(t)
+	c := newTestCorrelator(t)
+	base := time.Now().Add(-time.Minute)
+
+	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: base, RemoteHost: own, RemotePort: 63295})
+	if got := c.UninspectedEgressCount(); got != 0 {
+		t.Fatalf("connect to own address %s counted as uninspected egress: %d", own, got)
+	}
+
+	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: base.Add(time.Second), RemoteHost: "203.0.113.7", RemotePort: 443})
+	if got := c.UninspectedEgressCount(); got != 1 {
+		t.Fatalf("foreign address must still count, got %d", got)
+	}
+}
+
+func ownInterfaceAddr(t *testing.T) string {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() && !n.IP.IsLinkLocalUnicast() {
+			return n.IP.String()
+		}
+	}
+	t.Skip("no non-loopback interface address")
+	return ""
 }
 
 func TestForeignConnectThenSensitiveReadFlags(t *testing.T) {

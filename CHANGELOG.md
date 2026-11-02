@@ -16,6 +16,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Incidents: a finding's incident is found through an index of every finding it absorbed instead of a scan of every incident's list (about 3 ms instead of 330 ms for 20 findings at 5,000 incidents), and an incident's stored finding list keeps the latest 256 while its count stays exact.
 - Status: an agent tree is labelled with the most recently seen live session of its root process, and not with a session of an earlier process that held the same pid.
 - Network: a new connection no longer records a close and a second open once its address resolves to a host name; each connection opens and closes once, named by its host when the address resolves within one sample.
+- Network: a connection to one of this Mac's own LAN or VPN addresses counts as local: it is no longer listed as uninspected egress, and a `localhost` mute covers it.
 - Traces: OpenCode model calls carry the model of their own message, so a session that switches model no longer labels and prices later steps with the first one; each poll scans OpenCode's parts table once instead of twice.
 - File telemetry: a spool flood that carries the odd valid line among its garbage is now skipped and reported as a flood instead of being scanned 4 MiB at a time.
 - File telemetry: the daemon's own file opens, such as its worktree disk-usage walks, no longer reach the Endpoint Security spool, so a walk over a large tree no longer rotates the spool every few seconds.

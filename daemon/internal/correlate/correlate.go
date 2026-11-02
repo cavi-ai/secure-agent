@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -298,7 +300,42 @@ func isLocalhost(host string) bool {
 	case "127.0.0.1", "::1", "localhost", "":
 		return true
 	}
-	return strings.HasPrefix(host, "127.")
+	return strings.HasPrefix(host, "127.") || isOwnAddress(host)
+}
+
+// ownAddrTTL bounds how stale the interface address set may be: Wi-Fi and VPN
+// addresses change while the daemon runs.
+const ownAddrTTL = 30 * time.Second
+
+var ownAddrs struct {
+	sync.Mutex
+	at  time.Time
+	set map[netip.Addr]bool
+}
+
+// isOwnAddress reports whether host is one of this machine's interface
+// addresses (LAN, VPN): a connection to it never leaves the host.
+func isOwnAddress(host string) bool {
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	ownAddrs.Lock()
+	defer ownAddrs.Unlock()
+	if ownAddrs.set == nil || time.Since(ownAddrs.at) > ownAddrTTL {
+		set := map[netip.Addr]bool{}
+		if addrs, err := net.InterfaceAddrs(); err == nil {
+			for _, a := range addrs {
+				if n, ok := a.(*net.IPNet); ok {
+					if addr, ok := netip.AddrFromSlice(n.IP); ok {
+						set[addr.Unmap()] = true
+					}
+				}
+			}
+		}
+		ownAddrs.set, ownAddrs.at = set, time.Now()
+	}
+	return ownAddrs.set[ip.WithZone("").Unmap()]
 }
 
 // keychainRepeatWindow: repeats of the same (pid, keychain path) access
