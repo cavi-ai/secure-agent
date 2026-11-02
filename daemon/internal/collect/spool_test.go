@@ -16,6 +16,53 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
+// While it reads the spool, the tailer keeps the reader lease beside it fresh;
+// it withdraws the lease when file telemetry is turned off and when it stops.
+func TestSpoolTailerHoldsTheReaderLeaseWhileReading(t *testing.T) {
+	dir := t.TempDir()
+	spool := dir + "/es-spool.jsonl"
+	lease := dir + "/reader.lease"
+	if err := os.WriteFile(spool, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	held := func() bool {
+		st, err := os.Lstat(lease)
+		return err == nil && st.Mode().IsRegular() && time.Since(st.ModTime()) < time.Minute
+	}
+	gone := func() bool {
+		_, err := os.Lstat(lease)
+		return os.IsNotExist(err)
+	}
+	waitUntil := func(what string, cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatal(what)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	var on atomic.Bool
+	on.Store(true)
+	tailer := NewSpoolTailerAt(bus.New(16), spool)
+	tailer.Enabled = on.Load
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- tailer.Run(ctx) }()
+
+	waitUntil("no reader lease while the tailer reads", held)
+	on.Store(false)
+	waitUntil("reader lease kept with file telemetry off", gone)
+	on.Store(true)
+	waitUntil("no reader lease once file telemetry is back on", held)
+	cancel()
+	<-done
+	if !gone() {
+		t.Fatal("reader lease left after the tailer stopped")
+	}
+}
+
 // drainSpool runs a tailer against a test spool until want events arrive or
 // the timeout fires; returns what it collected.
 func drainSpool(t *testing.T, lines []string, want int, timeout time.Duration) []event.Event {

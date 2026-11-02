@@ -18,6 +18,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
+	"golang.org/x/sys/unix"
 )
 
 // spoolDrainBudget bounds how many bytes drainOnce will scan and attempt to
@@ -124,6 +125,30 @@ func LossGrowing(at, now time.Time) bool {
 
 // The privileged ES collector's spool (the collector daemon writes it as root).
 const ESPoolPath = "/var/db/secure-agent/es-spool.jsonl"
+
+// The tailer renews its reader lease beside the spool every ReaderLeaseRenew
+// while it reads; the collector runs eslogger only while the lease is younger
+// than ReaderLeaseTTL, so nothing is collected or written without a reader.
+const (
+	ReaderLeaseRenew = 15 * time.Second
+	ReaderLeaseTTL   = 60 * time.Second
+)
+
+// ReaderLeasePath is the reader lease of the spool at spool.
+func ReaderLeasePath(spool string) string {
+	return filepath.Join(filepath.Dir(spool), "reader.lease")
+}
+
+// ReaderLeaseFresh reports whether the lease at path is a regular file renewed
+// within ReaderLeaseTTL of now.
+func ReaderLeaseFresh(path string, now time.Time) bool {
+	st, err := os.Lstat(path)
+	if err != nil || !st.Mode().IsRegular() {
+		return false
+	}
+	age := now.Sub(st.ModTime())
+	return age >= -5*time.Second && age <= ReaderLeaseTTL
+}
 
 // ESServiceLabel is the root LaunchDaemon label running the privileged
 // collector. The user daemon probes its real launchd state so posture can
@@ -364,6 +389,8 @@ type SpoolTailer struct {
 	savedAt     time.Time
 	savedOffset int64
 	savedFile   os.FileInfo
+	// When the reader lease was last renewed; owned by the poll loop.
+	leaseAt time.Time
 
 	statsMu       sync.Mutex
 	stats         SpoolStats
@@ -473,20 +500,59 @@ func (t *SpoolTailer) Run(ctx context.Context) error {
 	// a permanent, actionable failure — retrying cannot conjure the file.
 	deadline := time.Now().Add(15 * time.Second)
 	for {
+		if t.Enabled == nil || t.Enabled() {
+			t.renewLease()
+		}
 		if _, err := os.Stat(t.path); err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
+			t.dropLease()
 			return supervise.Permanent(fmt.Errorf(
 				"privileged ES collector spool not present at %s — enable file telemetry in Settings", t.path))
 		}
 		select {
 		case <-ctx.Done():
+			t.dropLease()
 			return ctx.Err()
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
 	return t.follow(ctx)
+}
+
+// renewLease marks the spool read, at most once per ReaderLeaseRenew. A lease
+// that cannot be written lapses at ReaderLeaseTTL and the collector stops.
+func (t *SpoolTailer) renewLease() {
+	now := t.clock()
+	if !t.leaseAt.IsZero() && now.Sub(t.leaseAt) < ReaderLeaseRenew {
+		return
+	}
+	path := ReaderLeasePath(t.path)
+	stamp := []byte(now.UTC().Format(time.RFC3339Nano) + "\n")
+	for range 2 {
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|unix.O_NOFOLLOW, 0o600)
+		if err != nil {
+			// A symlink or directory in its place is replaced once.
+			_ = os.Remove(path)
+			continue
+		}
+		_, werr := f.Write(stamp)
+		if cerr := f.Close(); werr == nil && cerr == nil {
+			t.leaseAt = now
+		}
+		return
+	}
+}
+
+// dropLease withdraws a lease this tailer holds, so the collector stops
+// without waiting for it to lapse.
+func (t *SpoolTailer) dropLease() {
+	if t.leaseAt.IsZero() {
+		return
+	}
+	_ = os.Remove(ReaderLeasePath(t.path))
+	t.leaseAt = time.Time{}
 }
 
 func (t *SpoolTailer) follow(ctx context.Context) error {
@@ -496,7 +562,10 @@ func (t *SpoolTailer) follow(ctx context.Context) error {
 		enabled := t.Enabled == nil || t.Enabled()
 		before := c
 		if enabled {
+			t.renewLease()
 			c = t.poll(c)
+		} else {
+			t.dropLease()
 		}
 		t.savePosition(c, false)
 		wait := spoolPollInterval
@@ -513,6 +582,7 @@ func (t *SpoolTailer) follow(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			t.savePosition(c, true)
+			t.dropLease()
 			return ctx.Err()
 		case <-time.After(wait):
 		}
