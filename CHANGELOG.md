@@ -6,6 +6,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-02
+
 ### Changed
 - Menu bar: the guard prompt's Allow button is green and names only the duration ("Allow for session"), on one line; the Allow for and Covers pickers and the note under the buttons say what it covers.
 
@@ -1778,7 +1780,8 @@ scanning of the repository itself.
 Development history lives in the git log; this changelog starts at the first
 tagged release.
 
-[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/cavi-ai/secure-agent/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/cavi-ai/secure-agent/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/cavi-ai/secure-agent/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/cavi-ai/secure-agent/compare/v1.2.0...v1.3.0
