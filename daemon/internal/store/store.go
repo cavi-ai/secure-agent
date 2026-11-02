@@ -39,6 +39,8 @@ const (
 	// episodeSettleMax ends settling for a file feed that is still behind
 	// the capture this long after it.
 	episodeSettleMax = 10 * time.Minute
+	// callIndexPredicate limits idx_events_call to rows with a call id.
+	callIndexPredicate = "call_id IS NOT NULL"
 )
 
 // Flag statements on hot paths, each served by an index (see Open).
@@ -105,6 +107,9 @@ var (
 	// nanoseconds, then insertion: the session report, a flag's nearest calls,
 	// resource activity and the memory cursor all read through it.
 	sessionTimeIndexSQL = `CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_id, ` + memoryTimestampExpr("ts") + `, id)`
+	// callIndexSQL keys harness calls by (session_id, call_id) over the rows
+	// that carry a call id; the call upserts name callIndexPredicate.
+	callIndexSQL = `CREATE UNIQUE INDEX IF NOT EXISTS idx_events_call ON events(session_id, call_id) WHERE ` + callIndexPredicate
 	// Prefix each candidate with a fixed-width UTC sort key. Strip that key
 	// after MAX so callers receive the original RFC3339 timestamp.
 	harnessActivitySQL = fmt.Sprintf(`SELECT s.harness,
@@ -481,7 +486,7 @@ func (s *Store) PutEvent(e event.Event) (result WriteResult, err error) {
 		res, err = s.db.Exec(
 			`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, provider, call_id, record)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT(session_id, call_id) DO UPDATE SET
+			 ON CONFLICT(session_id, call_id) WHERE call_id IS NOT NULL DO UPDATE SET
 			   tokens_in  = MAX(COALESCE(events.tokens_in, 0),  COALESCE(excluded.tokens_in, 0)),
 			   tokens_out = MAX(COALESCE(events.tokens_out, 0), COALESCE(excluded.tokens_out, 0)),
 			   cost_usd   = MAX(COALESCE(events.cost_usd, 0),   COALESCE(excluded.cost_usd, 0))
@@ -501,7 +506,7 @@ func (s *Store) PutEvent(e event.Event) (result WriteResult, err error) {
 		res, err = s.db.Exec(
 			`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id, record)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT(session_id, call_id) DO UPDATE SET
+			 ON CONFLICT(session_id, call_id) WHERE call_id IS NOT NULL DO UPDATE SET
 			   tool_status = CASE WHEN excluded.tool_status != '' AND excluded.tool_status != 'running' AND (excluded.tool_status != 'incomplete' OR COALESCE(events.tool_status,'') IN ('','running','incomplete')) THEN excluded.tool_status ELSE events.tool_status END,
 			   duration_ms = CASE WHEN excluded.duration_ms > 0 THEN excluded.duration_ms ELSE events.duration_ms END,
 			   detail      = CASE

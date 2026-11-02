@@ -322,29 +322,28 @@ func createIndexes(tx *sql.Tx, tableIndexes []string) error {
 		// that walk off the bulk rows.
 		`CREATE INDEX IF NOT EXISTS idx_events_record ON events(kind, id) WHERE record = 1;`,
 		// One row per harness tool call: a completion (same session+call_id)
-		// upserts the start row instead of appending a second. A plain UNIQUE
-		// index (not partial) so ON CONFLICT(session_id, call_id) resolves;
-		// SQLite treats NULL call_ids as distinct, so non-tool events (NULL)
-		// never collide.
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_call ON events(session_id, call_id);`,
+		// upserts the start row instead of appending a second. Only rows with
+		// a call id are indexed, so file, network and process events add no
+		// entry; the upserts name the same predicate in their conflict target.
+		callIndexSQL,
 	} {
 		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("create schema index: %w", err)
 		}
 	}
-	// A partial idx_events_call from an earlier build does not satisfy
-	// ON CONFLICT(session_id, call_id). Detect the stale, same-name partial
-	// index and replace it (indexes aren't IF-NOT-EXISTS-replaceable).
+	// An idx_events_call from an earlier build indexes every row, or a
+	// different predicate the upserts do not name; replace it (indexes
+	// aren't IF-NOT-EXISTS-replaceable).
 	var idxSQL string
 	if err := tx.QueryRow(`SELECT COALESCE(sql,'') FROM sqlite_master WHERE type='index' AND name='idx_events_call'`).Scan(&idxSQL); err == nil {
-		if strings.Contains(strings.ToUpper(idxSQL), "WHERE") {
+		if !strings.Contains(idxSQL, callIndexPredicate) {
 			if _, err := tx.Exec(`DROP INDEX IF EXISTS idx_events_call`); err != nil {
 				return fmt.Errorf("failed to drop stale call index: %w", err)
 			}
-			if _, err := tx.Exec(`CREATE UNIQUE INDEX idx_events_call ON events(session_id, call_id);`); err != nil {
+			if _, err := tx.Exec(callIndexSQL); err != nil {
 				return fmt.Errorf("failed to recreate events call index: %w", err)
 			}
-			log.Printf("store: replaced partial idx_events_call with a full unique index")
+			log.Printf("store: rebuilt idx_events_call over rows with a call id")
 		}
 	}
 	for _, q := range []string{

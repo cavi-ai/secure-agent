@@ -14,6 +14,79 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 )
 
+// holdReaderLease renews the reader lease of a spool in dir, as a tailing
+// daemon does.
+func holdReaderLease(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "reader.lease"), []byte("reading\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func spoolBytes(path string) int64 {
+	st, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return st.Size()
+}
+
+// eslogger runs only while a daemon renews the reader lease: none, and the
+// spool gets nothing; once the lease is gone, eslogger is stopped and the
+// spool stops growing.
+func TestCollectorRunsESLoggerOnlyWhileTheSpoolIsRead(t *testing.T) {
+	if os.Getenv("SECURE_AGENT_TEST_ES_STREAM") == "1" {
+		for {
+			os.Stdout.WriteString(esRecord(time.Now().UTC()) + "\n")
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	root := t.TempDir()
+	status := filepath.Join(root, "status.json")
+	spool := filepath.Join(root, "spool.jsonl")
+	h := newESCollectorHealth(status, os.Getpid(), time.Second)
+	defer h.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCollectorRunsESLoggerOnlyWhileTheSpoolIsRead$")
+	cmd.Env = append(os.Environ(), "SECURE_AGENT_TEST_ES_STREAM=1")
+	done := make(chan error, 1)
+	go func() { done <- runESLoggerCommand(ctx, cmd, h, spool) }()
+
+	time.Sleep(time.Second)
+	if n := spoolBytes(spool); n != 0 {
+		t.Fatalf("spool got %d bytes with no daemon reading it", n)
+	}
+	readCollectorHealth(t, status, "idle")
+
+	holdReaderLease(t, root)
+	deadline := time.Now().Add(10 * time.Second)
+	for spoolBytes(spool) == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if spoolBytes(spool) == 0 {
+		t.Fatal("eslogger did not start once the daemon read the spool")
+	}
+
+	if err := os.Remove(filepath.Join(root, "reader.lease")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("eslogger stopped for a lapsed reader reported a clean exit")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("eslogger kept running after the daemon stopped reading")
+	}
+	stopped := spoolBytes(spool)
+	time.Sleep(200 * time.Millisecond)
+	if n := spoolBytes(spool); n != stopped {
+		t.Fatalf("spool grew from %d to %d bytes after eslogger stopped", stopped, n)
+	}
+	readCollectorHealth(t, status, "idle")
+}
+
 func TestESPermissionFailureRequiresClientAuthorizationDenial(t *testing.T) {
 	for _, tc := range []struct {
 		message string
@@ -101,6 +174,7 @@ func TestCollectorCommandReportsPermissionFailure(t *testing.T) {
 		os.Exit(1)
 	}
 	root := t.TempDir()
+	holdReaderLease(t, root)
 	h := newESCollectorHealth(filepath.Join(root, "status.json"), os.Getpid(), time.Second)
 	defer h.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -134,6 +208,7 @@ func TestCollectorCommandRestartsESLoggerOverMemoryCap(t *testing.T) {
 	esMaxRSS, esRSSCheckInterval = 32<<20, 50*time.Millisecond
 	t.Cleanup(func() { esMaxRSS, esRSSCheckInterval = limit, interval })
 	root := t.TempDir()
+	holdReaderLease(t, root)
 	path := filepath.Join(root, "status.json")
 	h := newESCollectorHealth(path, os.Getpid(), time.Second)
 	defer h.Close()
@@ -158,6 +233,7 @@ func TestCollectorCommandReportsPersistedDelivery(t *testing.T) {
 		os.Exit(0)
 	}
 	root := t.TempDir()
+	holdReaderLease(t, root)
 	path := filepath.Join(root, "status.json")
 	h := newESCollectorHealth(path, os.Getpid(), time.Second)
 	defer h.Close()

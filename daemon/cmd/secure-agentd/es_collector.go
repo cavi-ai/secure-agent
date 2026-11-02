@@ -70,6 +70,13 @@ var (
 // errESBehind marks an eslogger the collector stopped for falling behind.
 var errESBehind = errors.New("eslogger fell behind")
 
+// errESNoReader marks an eslogger the collector stopped because the daemon's
+// reader lease lapsed.
+var errESNoReader = errors.New("no daemon is reading the spool")
+
+// esReaderCheck spaces the collector's reads of the daemon's reader lease.
+var esReaderCheck = 2 * time.Second
+
 // errESReplaced marks a collector whose executable was replaced on disk after
 // it started. TCC refuses new ES clients to the stale process, so it exits
 // nonzero and launchd starts the job again from the new binary.
@@ -192,6 +199,11 @@ func runESCollector() error {
 	if err := chownSpoolToConsoleUser(); err != nil {
 		log.Printf("es-collector: chown spool (daemon may not read it): %v", err)
 	}
+	// The daemon tails the spool once it exists, and only a tailing daemon
+	// renews the reader lease eslogger waits for.
+	if err := ensureSpool(collect.ESPoolPath); err != nil {
+		log.Printf("es-collector: %v", err)
+	}
 	health := newESCollectorHealth(collect.ESCollectorStatusPath, os.Getpid(), 30*time.Second)
 	defer health.Close()
 
@@ -214,6 +226,9 @@ func superviseESLogger(ctx context.Context, runOnce func() error, replaced func(
 		}
 		if replaced() {
 			return fmt.Errorf("%w: %v", errESReplaced, err)
+		}
+		if errors.Is(err, errESNoReader) {
+			continue
 		}
 		if errors.Is(err, errESBehind) {
 			log.Printf("es-collector: %v — restarting eslogger and dropping the events it still held", err)
@@ -252,10 +267,17 @@ func runESLoggerOnce(ctx context.Context, health *esCollectorHealth) error {
 }
 
 func runESLoggerCommand(ctx context.Context, cmd *exec.Cmd, health *esCollectorHealth, spoolPath string) (result error) {
+	lease := collect.ReaderLeasePath(spoolPath)
+	if !waitForReader(ctx, lease, health) {
+		health.setState("stopped")
+		return nil
+	}
 	health.setState("starting")
 	defer func() {
 		state := "failed"
 		switch {
+		case errors.Is(result, errESNoReader) && ctx.Err() == nil:
+			state = "idle"
 		case ctx.Err() != nil || result == nil:
 			state = "stopped"
 		case isESPermissionFailure(result):
@@ -277,11 +299,17 @@ func runESLoggerCommand(ctx context.Context, cmd *exec.Cmd, health *esCollectorH
 	log.Printf("es-collector: eslogger started (pid %d), spool %s", cmd.Process.Pid, spoolPath)
 
 	stopWatch := watchESLoggerMemory(cmd.Process)
+	stopReader := watchReader(lease, cmd.Process)
 	writeErr := pumpToSpoolObserved(stdout, spoolPath, health.delivered)
 	_ = cmd.Process.Kill()
 	waitErr := cmd.Wait()
+	lapsed := stopReader()
 	if overErr := stopWatch(); overErr != nil {
 		return overErr
+	}
+	if lapsed && ctx.Err() == nil {
+		log.Printf("es-collector: %v — eslogger stopped until the daemon reads again", errESNoReader)
+		return errESNoReader
 	}
 	if errors.Is(writeErr, errESBehind) {
 		return writeErr
@@ -323,6 +351,64 @@ func watchESLoggerMemory(p *os.Process) (stop func() error) {
 		close(quit)
 		return <-result
 	}
+}
+
+// waitForReader holds eslogger back until the daemon's reader lease is fresh,
+// with the collector reported idle; false once ctx ends.
+func waitForReader(ctx context.Context, lease string, health *esCollectorHealth) bool {
+	if collect.ReaderLeaseFresh(lease, time.Now()) {
+		return true
+	}
+	log.Printf("es-collector: waiting for the daemon to read the spool")
+	health.setState("idle")
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(esReaderCheck):
+		}
+		if collect.ReaderLeaseFresh(lease, time.Now()) {
+			return true
+		}
+	}
+}
+
+// watchReader kills p once the daemon's reader lease lapses. stop ends the
+// watch and reports whether it did.
+func watchReader(lease string, p *os.Process) (stop func() bool) {
+	quit := make(chan struct{})
+	result := make(chan bool, 1)
+	go func() {
+		tick := time.NewTicker(esReaderCheck)
+		defer tick.Stop()
+		for {
+			select {
+			case <-quit:
+				result <- false
+				return
+			case <-tick.C:
+				if !collect.ReaderLeaseFresh(lease, time.Now()) {
+					_ = p.Kill()
+					result <- true
+					return
+				}
+			}
+		}
+	}()
+	return func() bool {
+		close(quit)
+		return <-result
+	}
+}
+
+// ensureSpool creates the spool, empty, when it is missing.
+func ensureSpool(path string) error {
+	w := &spoolWriter{path: path}
+	if err := w.open(); err != nil {
+		return err
+	}
+	w.close()
+	return nil
 }
 
 // isESPermissionFailure reports whether an eslogger failure is the expected

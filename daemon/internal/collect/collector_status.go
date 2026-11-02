@@ -46,7 +46,7 @@ func readESCollectorStatus(path string, pid int, now time.Time) *ESCollectorStat
 		return nil
 	}
 	switch status.State {
-	case "starting", "collecting", "permission_denied", "restarting", "failed", "stopped":
+	case "starting", "collecting", "idle", "permission_denied", "restarting", "failed", "stopped":
 	default:
 		return nil
 	}

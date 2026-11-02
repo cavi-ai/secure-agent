@@ -741,6 +741,71 @@ func setKindBudget(t *testing.T, kind, budget int) {
 	})
 }
 
+// Only harness calls have an entry in idx_events_call: file events add none,
+// and a call's completion still folds into its start row.
+func TestCallIndexHoldsOnlyRowsWithACallID(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+	for i := 0; i < 200; i++ {
+		if _, err := s.PutEvent(event.Event{Kind: event.KindFileOpen, PID: 1, SessionID: "s1", TS: now, Path: fmt.Sprintf("/w/f%d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, status := range []string{"running", "ok"} {
+		if _, err := s.PutEvent(event.Event{Kind: event.KindToolCall, SessionID: "s1", CallID: "call-1", ToolName: "Bash", ToolStatus: status, TS: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var calls int
+	var status string
+	if err := s.db.QueryRow(`SELECT COUNT(*), MAX(tool_status) FROM events WHERE call_id = 'call-1'`).Scan(&calls, &status); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || status != "ok" {
+		t.Fatalf("call stored as %d rows with status %q, want 1 row with ok", calls, status)
+	}
+	if _, err := s.db.Exec("ANALYZE"); err != nil {
+		t.Fatal(err)
+	}
+	var stat string
+	if err := s.db.QueryRow(`SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_events_call'`).Scan(&stat); err != nil {
+		t.Fatal(err)
+	}
+	if entries := strings.Fields(stat)[0]; entries != "1" {
+		t.Fatalf("idx_events_call holds %s entries for 1 call among 201 events", entries)
+	}
+}
+
+// A store opened over an earlier build's idx_events_call on every row
+// rebuilds it over the rows with a call id.
+func TestOpenRebuildsAFullCallIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "e.db")
+	s, err := Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`DROP INDEX idx_events_call; CREATE UNIQUE INDEX idx_events_call ON events(session_id, call_id)`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s, err = Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var def string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_events_call'`).Scan(&def); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(def, "WHERE call_id IS NOT NULL") {
+		t.Fatalf("idx_events_call after reopen: %s", def)
+	}
+}
+
 func countKind(t *testing.T, s *Store, kind int) int {
 	t.Helper()
 	var n int
