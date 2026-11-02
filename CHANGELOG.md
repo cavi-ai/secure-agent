@@ -13,6 +13,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Process attribution: the tagger keeps what names each listed process while it holds its pid, so tagging an agent's new child no longer re-reads every ancestor up to `launchd`; its periodic refresh reads tagged processes' details without holding the lock that event attribution waits on.
 - Sessions: a session's tool calls, turns and model calls write and broadcast its row once per identity change, and at least every 30 seconds, instead of on every event.
 - Store: events keep one session-time index instead of two on the same order (about 10% faster file-event ingest); the existing index is rebuilt once on upgrade.
+- Store: the tool and model call index holds only rows with a call id, so file, network and process events no longer write an entry to it; the existing index is rebuilt once on upgrade.
 - Incidents: a finding's incident is found through an index of every finding it absorbed instead of a scan of every incident's list (about 3 ms instead of 330 ms for 20 findings at 5,000 incidents), and an incident's stored finding list keeps the latest 256 while its count stays exact.
 - Status: an agent tree is labelled with the most recently seen live session of its root process, and not with a session of an earlier process that held the same pid.
 - Network: a new connection no longer records a close and a second open once its address resolves to a host name; each connection opens and closes once, named by its host when the address resolves within one sample.
