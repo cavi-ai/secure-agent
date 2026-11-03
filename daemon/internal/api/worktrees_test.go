@@ -19,8 +19,18 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/agentask"
 	"github.com/cavi-ai/secure-agent/daemon/internal/apiroutes"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
+
+// testHunter is a worktree hunter whose background removals, rescans and
+// sizing finish before the test's store and directories are cleaned up.
+func testHunter(t *testing.T, st *store.Store, home string) *worktreehunter.Hunter {
+	t.Helper()
+	h := worktreehunter.New(st, home, worktreehunter.Options{})
+	t.Cleanup(h.Wait)
+	return h
+}
 
 func TestWorktreesEndpoints(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
@@ -37,7 +47,7 @@ func TestWorktreesEndpoints(t *testing.T) {
 
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	a := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}})
+	a := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: testHunter(t, st, home)}})
 	mux := a.buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -166,7 +176,7 @@ func TestWorktreeRemoveAsync(t *testing.T) {
 	home, _, _, clean, dirty, _ := worktreeFixture(t)
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}}).buildMux()
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: testHunter(t, st, home)}}).buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
@@ -211,7 +221,7 @@ func TestWorktreeRemoveEndpoint(t *testing.T) {
 
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}}).buildMux()
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: testHunter(t, st, home)}}).buildMux()
 	post := func(body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/remove", strings.NewReader(body)))
@@ -317,7 +327,7 @@ func TestWorktreeAdviseAndNotes(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
 	var queued []model.WorktreeAdviceRequest
-	hunter := worktreehunter.New(st, home, worktreehunter.Options{})
+	hunter := testHunter(t, st, home)
 	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: hunter},
 		Advisors: AdvisorDeps{Worktree: func(r model.WorktreeAdviceRequest) bool { queued = append(queued, r); return true }}}).buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
@@ -400,7 +410,7 @@ func TestWorktreeAskEndpoint(t *testing.T) {
 	}
 	t.Setenv("PATH", "/usr/bin:/bin")
 	asker := agentask.New(st, home).WithBinDirs([]string{bin})
-	hunter := worktreehunter.New(st, home, worktreehunter.Options{})
+	hunter := testHunter(t, st, home)
 	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: hunter, Asker: asker}}).buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -468,7 +478,7 @@ func TestWorktreeReviewTrashEndpoint(t *testing.T) {
 	}
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	hunter := worktreehunter.New(st, home, worktreehunter.Options{})
+	hunter := testHunter(t, st, home)
 	row, _, err := hunter.Inspect(t.Context(), clean)
 	if err != nil || row.State != worktreehunter.StateReview {
 		t.Fatalf("review row: %+v, %v", row, err)
@@ -527,7 +537,7 @@ func TestWorktreeOrphanEndpoints(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	st.UpsertSession(model.Session{ID: "s-lost", Harness: "claude", Workspace: orphan, Status: model.SessionEnded,
 		StartedAt: time.Now().Add(-72 * time.Hour), LastSeenAt: time.Now().Add(-72 * time.Hour)})
-	deps := Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}}
+	deps := Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: testHunter(t, st, home)}}
 	var opened []string
 	deps.System.OpenPath = func(args ...string) error { opened = append(opened, strings.Join(args, " ")); return nil }
 	a := newTestAPI(deps)
@@ -600,7 +610,7 @@ func TestWorktreeAdviseWholeRepository(t *testing.T) {
 	var mu sync.Mutex
 	var queued []model.WorktreeAdviceRequest
 	answer, panicOn := true, 0
-	hunter := worktreehunter.New(st, home, worktreehunter.Options{})
+	hunter := testHunter(t, st, home)
 	a := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: hunter},
 		Advisors: AdvisorDeps{Worktree: func(r model.WorktreeAdviceRequest) bool {
 			mu.Lock()
@@ -742,7 +752,7 @@ func TestWorktreeAdviseWholeRepository(t *testing.T) {
 	// they are now.
 	st2 := testStore(t)
 	t.Cleanup(func() { st2.Close() })
-	fresh := New(Deps{Store: st2, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: worktreehunter.New(st2, home, worktreehunter.Options{})},
+	fresh := New(Deps{Store: st2, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: testHunter(t, st2, home)},
 		Advisors: AdvisorDeps{Worktree: func(model.WorktreeAdviceRequest) bool { return true }}}).buildMux()
 	rec = httptest.NewRecorder()
 	fresh.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/repos", strings.NewReader(`{"path":"`+repo+`"}`)))

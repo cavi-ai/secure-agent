@@ -182,6 +182,13 @@ func (c *Clutter) Report(ctx context.Context, refresh bool) ClutterReport {
 	return c.withSizes(c.inventory(ctx, refresh), refresh)
 }
 
+// Wait returns once the background rebuilds and sizing passes started so far
+// have finished.
+func (c *Clutter) Wait() {
+	c.bgWG.Wait()
+	c.sizeWG.Wait()
+}
+
 // inventory answers from the cached inventory unless refresh is asked: one
 // older than cacheTTL answers at once while a background rebuild replaces
 // it. Without one, or on refresh, it rebuilds.
