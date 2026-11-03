@@ -236,6 +236,14 @@ func (h *Hunter) Report(ctx context.Context, refresh bool) ScanReport {
 	return rep
 }
 
+// Wait returns once the removals, background rescans and sizing passes
+// started so far have finished.
+func (h *Hunter) Wait() {
+	h.remWG.Wait()
+	h.bgWG.Wait()
+	h.sizeWG.Wait()
+}
+
 // report answers from the cached scan unless refresh is asked: one older
 // than cacheTTL answers at once while a background rescan replaces it.
 // Without a cached scan, or on refresh, it scans under its own deadline,

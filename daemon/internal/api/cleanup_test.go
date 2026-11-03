@@ -15,7 +15,6 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/apiroutes"
 	"github.com/cavi-ai/secure-agent/daemon/internal/clutter"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
-	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
 func TestCleanupEndpoints(t *testing.T) {
@@ -49,6 +48,7 @@ func TestCleanupEndpoints(t *testing.T) {
 	c := clutter.New(st, home, func(context.Context) []clutter.Place {
 		return []clutter.Place{{Path: repo, Project: repo}}
 	})
+	t.Cleanup(c.Wait)
 	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Clutter: c}}).buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -145,8 +145,9 @@ func TestCleanupAdviseEndpoint(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
 	c := clutter.New(st, home, func(context.Context) []clutter.Place { return []clutter.Place{{Path: repo, Project: repo}} })
+	t.Cleanup(c.Wait)
 	var queued []model.ProjectCleanupRequest
-	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Clutter: c, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})},
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Clutter: c, Worktrees: testHunter(t, st, home)},
 		Advisors: AdvisorDeps{Project: func(r model.ProjectCleanupRequest) bool { queued = append(queued, r); return true }}}).buildMux()
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()

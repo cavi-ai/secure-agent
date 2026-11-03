@@ -79,7 +79,9 @@ func TestInventoryAdvisorReadBatchFailureAndRecovery(t *testing.T) {
 						places[i] = clutter.Place{Path: key, Project: key}
 						subjectIDs[i] = advisor.ProjectSubjectID(key)
 					}
-					deps.Workspace.Clutter = clutter.New(st, filepath.Join(root, "home"), func(context.Context) []clutter.Place { return places })
+					c := clutter.New(st, filepath.Join(root, "home"), func(context.Context) []clutter.Place { return places })
+					t.Cleanup(c.Wait)
+					deps.Workspace.Clutter = c
 					a = newTestAPI(deps)
 					mux := a.buildMux()
 					type coreItem struct{ Project, Kind, Action string }
