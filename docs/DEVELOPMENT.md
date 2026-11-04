@@ -31,6 +31,8 @@ make dmg        # build the app and package dist/SecureAgent-<version>.dmg
 
 For local use, `make install` builds, installs and launches the `/Applications` copy. Building a DMG is a development task; end users can download one without the build toolchain.
 
+Pass `VERSION=vX.Y.Z` to `make app`, `make dmg` or `make install` to set the app and daemon version explicitly. Without it, local builds use the Git description.
+
 ### Signing and notarization
 
 For CI distribution, create a draft release for an existing `vX.Y.Z` tag on

@@ -14,6 +14,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Claude hooks: desktop hooks pause when Secure Agent quits, including pending approval requests; headless hooks require a reachable daemon. Auto mode leaves prompt-only decisions to Claude's permission review while explicit deny rules remain enforced.
 
 ### Fixed
+- Packaging: `make app`, `make dmg` and `make install` pass the selected version to the app and daemon build instead of falling back to the Git description.
 - Cleanup: canceled scans retain the previous inventory instead of caching incomplete Git checks as ineligible folders; failed Git checks report their cause.
 - Findings: ordinary sends after external tool content no longer become high-risk incidents solely because the content was read first. Routine retained reports stay in history without filling **Needs you**; detected injection and credential risks remain actionable.
 - Updates: signing mismatches explain how to replace an incompatible development copy with the official release while retaining signature verification.

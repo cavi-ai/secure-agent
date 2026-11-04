@@ -16,10 +16,10 @@ docs-archive:
 	python3 packaging/docs/build.py archive
 
 app:
-	./packaging/make_app.sh
+	VERSION="$(VERSION)" ./packaging/make_app.sh
 
 dmg:
-	./packaging/make_dmg.sh
+	VERSION="$(VERSION)" ./packaging/make_dmg.sh
 
 # Signed release build: Developer ID Application cert + notarization.
 # Usage: make release [VERSION=x.y.z]
@@ -145,7 +145,7 @@ smoke:
 
 install:
 	@echo "==> Installing secure-agent..."
-	./packaging/install.sh
+	VERSION="$(VERSION)" ./packaging/install.sh
 
 uninstall:
 	@echo "==> Uninstalling secure-agent..."
