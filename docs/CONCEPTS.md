@@ -31,6 +31,8 @@ An installed-hook check verifies setup and a daemon round trip. An observed invo
 
 A finding records a detected condition and its evidence. Monitoring records findings without turning every one into a blocking decision. Guard prompts, firewall blocking and resource interventions have their own policies and enablement steps.
 
+Reading MCP output or other external content before a send is a review lead, not proof of an attack. These records remain in finding and incident history without entering **Needs you** on that sequence alone. Matched injection instructions or credential evidence can still raise the incident's priority. Pending guard decisions remain in **Needs you** until answered.
+
 A decision or exception has a scope. Review that scope before allowing a path, marking traffic expected or muting a finding. Cached guard decisions can be revoked; see [Protection](PROTECTION.md). Local advisor recommendations do not authorize commands. Local chat actions require the confirmation described in [Local chat and commands](SYSTEM_AGENT.md).
 
 ## Local data and optional connections

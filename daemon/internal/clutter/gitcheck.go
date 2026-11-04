@@ -3,6 +3,7 @@ package clutter
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,11 +18,11 @@ const gitTimeout = 20 * time.Second
 // or worktree at place, whether it may be cleared: git ignores it and no
 // tracked file lives under it. A name like build/ or dist/ can be source in
 // some repositories; only what git itself ignores is offered. A git failure
-// answers false for every candidate (listed, never cleared).
-func disposable(ctx context.Context, place string, candidates []string) map[string]bool {
+// returns an error and never authorizes clearing any candidate.
+func disposable(ctx context.Context, place string, candidates []string) (map[string]bool, error) {
 	out := map[string]bool{}
 	if len(candidates) == 0 {
-		return out
+		return out, nil
 	}
 	rel := make([]string, 0, len(candidates))
 	for _, c := range candidates {
@@ -31,9 +32,12 @@ func disposable(ctx context.Context, place string, candidates []string) map[stri
 		}
 		rel = append(rel, r)
 	}
+	if len(rel) == 0 {
+		return out, nil
+	}
 	ignoredOut, err := runGit(ctx, place, strings.Join(rel, "\x00")+"\x00", "check-ignore", "--stdin", "-z")
 	if err != nil {
-		return out
+		return out, err
 	}
 	ignored := map[string]bool{}
 	for _, r := range strings.Split(ignoredOut, "\x00") {
@@ -43,7 +47,7 @@ func disposable(ctx context.Context, place string, candidates []string) map[stri
 	}
 	tracked, err := runGit(ctx, place, "", append([]string{"ls-files", "-z", "--"}, rel...)...)
 	if err != nil {
-		return out
+		return out, err
 	}
 	hasTracked := map[string]bool{}
 	for _, f := range strings.Split(tracked, "\x00") {
@@ -56,7 +60,7 @@ func disposable(ctx context.Context, place string, candidates []string) map[stri
 	for _, r := range rel {
 		out[filepath.Join(place, r)] = ignored[r] && !hasTracked[r]
 	}
-	return out
+	return out, nil
 }
 
 // runGit runs one read-only git command in dir; exit status 1 from
@@ -69,11 +73,22 @@ func runGit(ctx context.Context, dir, stdin string, args ...string) (string, err
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
-	var out bytes.Buffer
+	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
+	cmd.Stderr = &stderr
 	err := cmd.Run()
+	if err == nil {
+		return out.String(), nil
+	}
+	if ctx.Err() != nil {
+		return out.String(), fmt.Errorf("git %s: %w", args[0], ctx.Err())
+	}
 	if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 && args[0] == "check-ignore" {
 		return out.String(), nil
 	}
-	return out.String(), err
+	message, _, _ := strings.Cut(strings.TrimSpace(stderr.String()), "\n")
+	if message == "" {
+		message = err.Error()
+	}
+	return out.String(), fmt.Errorf("git %s: %s", args[0], message)
 }
