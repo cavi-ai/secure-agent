@@ -84,6 +84,7 @@ def run(daemon_binary, harness_binary):
             "agents": [{"name": "claude", "match": [str(harness_binary)]}],
             "socket_path": str(sock), "db_path": str(root / "events.db"),
             "jsonl_path": str(root / "events.jsonl"), "net_sample_interval_ms": 200,
+            "file_telemetry_enabled": False,
             "directory_guard": {"prompt_deadline_ms": 3000},
         }))
         environment = {key: os.environ[key] for key in ("PATH", "USER", "LOGNAME", "SHELL") if key in os.environ}
@@ -294,8 +295,8 @@ def run(daemon_binary, harness_binary):
 
                 stop(daemon)
                 harness.stdin.write("read\n"); harness.stdin.flush()
-                result("ask")
-                print("PASS: unavailable daemon requests Claude consent without reading", flush=True)
+                result("")
+                print("PASS: stopped headless daemon leaves Claude permissions unchanged without reading", flush=True)
                 daemon = start_daemon()
                 wait_for("restarted daemon", ready)
                 restored = wait_for("restored active session", lambda: next((s for s in api("/sessions") if s.get("id") == session_id and s.get("status") != "ended"), None))
