@@ -1865,6 +1865,7 @@ export interface ClutterItem {
   last_touched?: string;
   idle_days: number;
   action: string;
+  can_remove?: boolean;
   command?: string;
   note?: string;
 }

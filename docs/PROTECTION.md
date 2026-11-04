@@ -119,7 +119,7 @@ In Claude Auto mode, prompt-only checks leave the decision to Claude's normal au
 
 Instructions hidden in content an agent reads (a web page, an image, a response header, an MCP result) can steer it to send data out. The `untrusted-egress` rule does not try to recognize those instructions. It records each session's untrusted inputs (up to 8) and then applies its mode to every later call in that session that can send data out.
 
-Ordinary Git pushes to configured destinations that have stayed unchanged since the session's first external input proceed without another prompt or an untrusted-send finding. Changed destinations, Git configuration overrides, additional sends in the command, matched injection, explicit blocking modes and explicit `git-push` policies retain their approval requirements. Existing session records without a destination snapshot also retain their configured policy. Snapshot records contain a configuration digest rather than remote URLs.
+Ordinary Git pushes to configured destinations that have stayed unchanged since the session's first external input proceed without another prompt or an untrusted-send finding. Changed destinations, Git configuration overrides, additional sends in the command, matched injection, explicit blocking modes and explicit `git-push` policies retain their configured policy. Existing session records without a destination snapshot also retain their configured policy. Snapshot records contain a configuration digest rather than remote URLs.
 
 Untrusted input:
 
