@@ -13,6 +13,7 @@
       openTab('home');await idle();
       const box=()=>document.querySelector('#attention-summary');
       const refresh=async()=>{document.querySelector('#btn-refresh').click();await idle();};
+      document.querySelector('#attention-summary-title').click();await idle();
       probe.categories=['Waiting for your decision','Security review','Monitoring problems'].every(t=>box().textContent.includes(t));
       probe.counts=box().textContent.includes('1 queued item') && box().textContent.includes('2 current problems') && document.querySelector('#badge-attention-count').textContent==='2';
       box().querySelector('[data-need-id="decision-1"]').click();await idle();
@@ -31,7 +32,7 @@
       probe.legacy=box().textContent.includes('unavailable') && document.querySelector('#badge-attention-count').textContent==='2';
       data['/posture']=structuredClone(initial);await refresh();
       const focus=box().querySelector('[data-need-id="decision-1"]');focus.focus();
-      await refresh();probe.focus=document.activeElement===focus;
+      await refresh();probe.focus=focus.checkVisibility() && document.activeElement===focus;
       probe.fits=box().scrollWidth<=box().clientWidth && document.documentElement.scrollWidth<=innerWidth;
     } catch(error) {probe.error=error.message;}
     document.body.dataset.attentionSummaryProbe=JSON.stringify(probe);
