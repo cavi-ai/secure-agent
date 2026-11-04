@@ -12,6 +12,18 @@ Launch `/Applications/Secure Agent.app` and retry `secure-agent status`. The nor
 
 Open Secure Agent from the Dock to reach Settings. Allow it under **System Settings → Menu Bar**. On macOS Tahoe, Control Center can associate the status item with its launcher; the launcher's Menu Bar permission may also need enabling. The detailed [setup troubleshooting](GETTING_STARTED.md#troubleshooting) explains this behavior. Reinstalling is not a substitute for the permission.
 
+## Switch from a development build to stable
+
+An update error saying the download is "not signed like this app" or has a "different signing identity" means the release does not satisfy the installed app's signing requirement. A local build signed with Apple Development or ad hoc can reject a Developer ID release, even for the same team. The updater leaves the installed app unchanged.
+
+To switch to stable:
+
+1. Download the DMG from the [latest release](https://github.com/cavi-ai/secure-agent/releases/latest).
+2. Quit Secure Agent, open the DMG, and replace `/Applications/Secure Agent.app` with its copy.
+3. Launch the installed app. Run Doctor under **Settings → Telemetry** and follow any Login Items & Extensions or Full Disk Access guidance; changing signing identities can require new approval.
+
+Preferences and monitoring data are stored separately from the app bundle. Future stable updates still require a matching signing identity. If a stable installation reports this error, report its version and the target release rather than bypassing signature checks. An invalid signature or checksum is a separate failure: do not install that download.
+
 ## File Telemetry is not green
 
 Run Doctor from **Settings → Telemetry**. Follow its named fixes for registration, **Login Items & Extensions** and **Full Disk Access**, then refresh. Use the installed `/Applications` copy, because helper registration belongs to that copy. `secure-agent telemetry repair` requests re-registration through the running menu bar app and fails unless the helper runs within 60 seconds. See [Enable file telemetry](GETTING_STARTED.md#enable-file-telemetry).

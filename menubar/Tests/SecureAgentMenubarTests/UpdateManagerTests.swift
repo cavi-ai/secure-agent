@@ -98,7 +98,17 @@ final class UpdateManagerTests: XCTestCase {
                 requirement: "identifier \"com.example.update-fixture\" and anchor apple generic")
             XCTFail("an ad hoc bundle passed a Developer ID requirement")
         } catch {
-            XCTAssertTrue(error.localizedDescription.contains("not signed like this app"), "\(error)")
+            XCTAssertTrue(error.localizedDescription.contains("different signing identity"), "\(error)")
+            XCTAssertTrue(error.localizedDescription.contains("replace /Applications/Secure Agent.app"), "\(error)")
+        }
+        // Corrupt code must not be presented as a certificate migration.
+        try Data("corrupt executable".utf8).write(to: macOS.appendingPathComponent("Fixture"))
+        do {
+            try await UpdateManager.verifyStagedBundle(bundle, requirement: "identifier \"com.example.update-fixture\"")
+            XCTFail("a damaged bundle passed signature verification")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("code signature is invalid"), "\(error)")
+            XCTAssertFalse(error.localizedDescription.contains("replace /Applications"), "\(error)")
         }
         XCTAssertFalse(try UpdateManager.runningDesignatedRequirement().isEmpty)
     }

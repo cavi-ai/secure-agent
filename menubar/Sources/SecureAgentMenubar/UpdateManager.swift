@@ -312,7 +312,11 @@ public final class UpdateManager: ObservableObject {
         let verify = await run("/usr/bin/codesign",
                                ["--verify", "--deep", "--strict", "--test-requirement", "=" + requirement, staged.path])
         guard verify.status == 0 else {
-            throw UpdateError.shell("downloaded bundle is not signed like this app; not installing: \(verify.stderr)")
+            let signature = await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", staged.path])
+            guard signature.status == 0 else {
+                throw UpdateError.shell("downloaded app's code signature is invalid; not installing: \(signature.stderr)")
+            }
+            throw UpdateError.shell("downloaded app has a different signing identity; not installing. Local development builds can use a different certificate from stable releases. To switch to stable, download the DMG from the project's GitHub releases, quit Secure Agent, and replace /Applications/Secure Agent.app. Your current app has not been changed.")
         }
     }
 
