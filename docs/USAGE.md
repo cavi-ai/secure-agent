@@ -164,6 +164,8 @@ secure-agent cleanup log
 
 `secure-agent cleanup trash <path>` moves one inventoried item to Trash; `cleanup clean <tool>` uses the tool's own cache-clean command. `cleanup advise <repository|machine>` requests a local advisory plan before action. See [worktree configuration](CONFIGURATION.md#worktrees-map) and the [API contracts](API.md).
 
+Repository clutter is removable only when Git confirms the folder is ignored and contains no tracked files, and no agent session is active there. A failed Git check reports its cause and keeps removal unavailable until a successful rescan. Canceled refreshes retain the previous inventory. Each removal rechecks eligibility before moving the folder to Trash.
+
 ## Use local analysis
 
 ### Local chat and confirmed commands

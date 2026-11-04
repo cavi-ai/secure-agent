@@ -51,6 +51,9 @@ func (c *Clutter) Trash(ctx context.Context, path string) (ClutterResult, error)
 		return ClutterResult{}, ErrChanged
 	}
 	u := diskusage.Dir(ctx, it.Path, nil)
+	if err := ctx.Err(); err != nil {
+		return ClutterResult{}, err
+	}
 	dest, err := trash.Mover{Home: c.home, GOOS: c.goos, Now: c.now}.Move(it.Path)
 	if err != nil {
 		return ClutterResult{}, err
@@ -114,7 +117,13 @@ func (c *Clutter) Clean(ctx context.Context, name string) (ClutterResult, error)
 // returns key's item when it offers action: a session that went live, or a
 // directory that went away, since the last report is seen here.
 func (c *Clutter) findLocked(ctx context.Context, key, action string) (ClutterItem, error) {
+	if err := ctx.Err(); err != nil {
+		return ClutterItem{}, err
+	}
 	items := c.collect(ctx)
+	if err := ctx.Err(); err != nil {
+		return ClutterItem{}, err
+	}
 	rep := ClutterReport{GeneratedAt: c.now().UTC(), Items: items}
 	c.mu.Lock()
 	c.cached, c.cachedAt = &rep, c.now()

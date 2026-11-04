@@ -215,6 +215,11 @@ func (c *Clutter) inventory(ctx context.Context, refresh bool) ClutterReport {
 // scanMu.
 func (c *Clutter) rebuildLocked(ctx context.Context) ClutterReport {
 	rep := ClutterReport{GeneratedAt: c.now().UTC(), Items: c.collect(ctx)}
+	// Interrupted checks are not new Git facts. Retain the last inventory
+	// in memory and on disk so a canceled request cannot disable cleanup.
+	if ctx.Err() != nil {
+		return rep
+	}
 	at := c.now()
 	c.mu.Lock()
 	c.cached, c.cachedAt = &rep, at
@@ -328,13 +333,15 @@ func (c *Clutter) collect(ctx context.Context) []ClutterItem {
 		for i, h := range hits {
 			paths[i] = h.path
 		}
-		ok := disposable(ctx, p.Path, paths)
+		ok, err := disposable(ctx, p.Path, paths)
 		for _, found := range hits {
 			it := ClutterItem{Kind: found.kind, Name: filepath.Base(found.path), Path: found.path,
 				Project: p.Project, Worktree: p.Worktree, Action: ActionTrash}
 			switch {
 			case live[p.Path]:
 				it.Action, it.Note = ActionNone, "an agent session is live here"
+			case err != nil:
+				it.Action, it.Note = ActionNone, "Git safety check failed: "+err.Error()+"; rescan to retry"
 			case !ok[found.path]:
 				it.Action, it.Note = ActionNone, "not ignored by git, or holds tracked files: not a cache"
 			}
