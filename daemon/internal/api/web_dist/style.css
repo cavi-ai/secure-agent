@@ -45,8 +45,8 @@
      stylesheet custom-property lint (and a missing inline value) still resolve. */
   --harness-color: var(--tx-2);
   /* Harness mark tile: list rows, and the larger size in group heads. */
-  --harness-tile: 20px;
-  --harness-tile-lg: 26px;
+  --harness-tile: 16px;
+  --harness-tile-lg: 22px;
   --harness-logo: 64%;
 }
 
@@ -139,6 +139,14 @@ body {
 .sidebar-summary .statstrip { flex-direction: column; align-items: flex-start; gap: 10px; padding: 12px 0; border: 0; }
 .sidebar-summary .ss-spacer { display: none; }
 .sidebar-summary .ss-meta { flex-wrap: wrap; }
+.sidebar-controls { position: fixed; top: 12px; left: calc(var(--sidebar-width) - 18px); z-index: 70; display: flex; flex-direction: column; gap: 4px; }
+.sidebar-controls .btn { width: 36px; min-width: 36px; height: 36px; padding: 0; background: var(--bg-1); border-color: var(--line); }
+.sidebar-controls .btn:hover { background: var(--bg-3); }
+.sidebar-controls [hidden] { display: none; }
+.sidebar-controls .icon { width: 16px; height: 16px; }
+body.sidebar-collapsed .sidebar { display: none; }
+body.sidebar-collapsed .app { margin-left: 44px; }
+body.sidebar-collapsed .sidebar-controls { left: 4px; }
 .masthead { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
 .page-heading { min-width: 0; }
 .page-heading h1 { font-size: clamp(30px, 3vw, 42px); font-weight: 650; line-height: 1.15; letter-spacing: -0.045em; }
@@ -395,7 +403,7 @@ html.recent-work-navigation { overflow-anchor: none; }
   align-items: center; gap: 18px; min-width: 0;
 }
 .session-daily-labels { padding: 10px 16px; margin-inline-end: var(--recent-results-width); color: var(--tx-3); font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
-.session-daily-card { padding: 20px 16px; text-align: left; border: 0; border-top: 1px solid var(--line); border-radius: 0; color: var(--tx-1); background: transparent; cursor: pointer; font: inherit; transition: background .16s var(--ease); }
+.session-daily-card { padding: 12px 16px; text-align: left; border: 0; border-top: 1px solid var(--line); border-radius: 0; color: var(--tx-1); background: transparent; cursor: pointer; font: inherit; transition: background .16s var(--ease); }
 .session-daily-card:hover { background: var(--brand-bg); border-radius: var(--r-sm); }
 .session-daily-card:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; background: var(--brand-bg); }
 .session-daily-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -1740,7 +1748,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
   border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--tx-1);
 }
 .session-card .sc-main {
-  flex: 1; min-width: 0; min-height: 64px; display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 12px 16px; text-align: left;
+  flex: 1; min-width: 0; min-height: 52px; display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 16px; text-align: left;
   background: none; border: 0; font: inherit; color: inherit; cursor: pointer;
 }
 .session-card .sc-main:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
@@ -2856,6 +2864,13 @@ button.rc-col:hover .rc-seg-freed { background: var(--brand-2); }
   .sidebar-tools { margin-left: auto; }
   .tabs { flex-direction: row; flex-wrap: wrap; }
   .tab-btn { min-height: 44px; padding: 10px 16px; }
+}
+
+@media (max-width: 1099px) {
+  .app > .sidebar { padding-top: 56px; }
+  .sidebar-controls { left: auto; right: 12px; flex-direction: row; }
+  .sidebar-controls .btn { width: 44px; min-width: 44px; height: 44px; }
+  body.sidebar-collapsed .sidebar-controls { left: 0; right: auto; flex-direction: column; }
 }
 
 /* Local AI status stays compact; controls wrap without shrinking targets. */

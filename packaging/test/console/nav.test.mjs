@@ -193,7 +193,8 @@ test('Protection subviews retain selected ARIA and visibility without receiving 
   const runtime = {document, window:{history}, history, location:{pathname:'/console',search:''},
     sessionStorage:{setItem(key, value){saved.set(key,value);}},
     activeTab:'home', activeSub:'board', activeProtection:'traffic', activeSystemSub:'worktrees', detailDrawer:{selection:()=>null}, protectionContext:null, clearProtectionContext(){},
-    PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){}};
+    PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){},
+    requestAnimationFrame(fn){fn();}, syncSidebarControls(){}};
   vm.createContext(runtime);
   vm.runInContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), runtime);
   attachWorktreeController(runtime, url => { loads.push(reportRead(url)); return new Promise(() => {}); });
@@ -304,6 +305,7 @@ test('returning to a pending System report resumes bounded followup after its hi
     activeTab:'home', activeSub:'board', activeProtection:'traffic', activeSystemSub:'worktrees',
     detailDrawer:{selection:()=>null}, protectionContext:null,
     PANELS:[], dirtyPanels:new Set(), renderDirty(){}, loadPolicy(){}, loadAgent(){},
+    requestAnimationFrame(fn){fn();}, syncSidebarControls(){},
     setTimeout(fn,delay){const id=++timerID; timers.set(id,{fn,delay}); return id;}, clearTimeout(id){timers.delete(id);},
   };
   vm.createContext(runtime);
