@@ -39,6 +39,7 @@ type clItem struct {
 	LastTouched string `json:"last_touched"`
 	IdleDays    int    `json:"idle_days"`
 	Action      string `json:"action"`
+	CanRemove   bool   `json:"can_remove"`
 	Command     string `json:"command"`
 	Note        string `json:"note"`
 }
@@ -71,7 +72,7 @@ func handleCleanup(client *http.Client) {
 
 // runCleanup dispatches `cleanup [log|trash|clean]` and the inventory view.
 func runCleanup(w io.Writer, client *http.Client, args []string) error {
-	if len(args) > 0 && (args[0] == "trash" || args[0] == "clean") {
+	if len(args) > 0 && (args[0] == "trash" || args[0] == "clean" || args[0] == "remove") {
 		return runCleanupAction(w, client, args)
 	}
 	if len(args) > 0 && args[0] == "advise" {
@@ -164,6 +165,9 @@ func formatCleanup(rep clReport, kind, project, home string) string {
 		switch it.Action {
 		case "trash":
 			how = "clear: secure-agent cleanup trash " + tildePath(it.Path, home)
+			if it.CanRemove {
+				how = "delete cache: secure-agent cleanup remove " + tildePath(it.Path, home)
+			}
 		case "clean":
 			how = "clear: secure-agent cleanup clean " + quoteIfSpaced(it.Name) + "  (runs `" + it.Command + "`)"
 		}
@@ -248,10 +252,10 @@ func quoteIfSpaced(s string) string {
 // runCleanupAction: `cleanup trash <path>` or `cleanup clean <tool>`.
 func runCleanupAction(w io.Writer, client *http.Client, args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: secure-agent cleanup trash <path> | cleanup clean <tool>")
+		return fmt.Errorf("usage: secure-agent cleanup trash <path> | cleanup remove <path> | cleanup clean <tool>")
 	}
 	field, key := "name", strings.Join(args[1:], " ")
-	if args[0] == "trash" {
+	if args[0] == "trash" || args[0] == "remove" {
 		abs, err := filepath.Abs(args[1])
 		if err != nil {
 			return err
@@ -270,11 +274,18 @@ func runCleanupAction(w io.Writer, client *http.Client, args []string) error {
 		Result struct {
 			Bytes   int64  `json:"bytes"`
 			TrashAt string `json:"trash_path"`
+			Partial bool   `json:"bytes_partial"`
 		} `json:"result"`
 	}
 	_ = json.Unmarshal([]byte(resp), &out)
 	if args[0] == "trash" {
 		fmt.Fprintf(w, "moved %s to the Trash (%s; frees when the Trash is emptied)\n", key, humanBytes(out.Result.Bytes))
+	} else if args[0] == "remove" {
+		size := humanBytes(out.Result.Bytes)
+		if out.Result.Partial {
+			size = "at least " + size
+		}
+		fmt.Fprintf(w, "deleted cache %s: %s cleared\n", key, size)
 	} else {
 		fmt.Fprintf(w, "cleaned %s: %s reclaimed\n", key, humanBytes(out.Result.Bytes))
 	}

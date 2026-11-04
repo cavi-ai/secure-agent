@@ -59,6 +59,13 @@ final class AppInstanceGuard {
         let locked = lease.acquire(at: lockPath)
         if existing.isEmpty {
             if locked { return true }
+            // Hook liveness checks briefly probe the same lease. Allow that
+            // transient reader to finish before reporting another app owner.
+            for _ in 0..<5 {
+                try? await Task.sleep(for: .milliseconds(10))
+                guard !Task.isCancelled else { return false }
+                if lease.acquire(at: lockPath) { return true }
+            }
             explain("Secure Agent could not claim its local instance lock. Another copy may be starting, or the lock file may be inaccessible.")
             return false
         }

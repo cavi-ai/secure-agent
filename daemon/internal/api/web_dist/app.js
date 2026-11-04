@@ -1108,7 +1108,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   for (const name of ['removeWorktree', 'removeAllWorktrees', 'removeAllRemovable', 'revealWorktree', 'reconnectWorktree',
     'trashOrphanWorktree', 'trashReviewedWorktree', 'discussWorktree', 'discussWorktreeGroup', 'adviseWorktree', 'adviseWorktreeGroup',
-    'trashClutter', 'adviseClutterProject', 'cleanClutter', 'askWorktreeAgent', 'pruneWorktrees', 'hideWorktreeRepo']) {
+    'trashClutter', 'removeClutter', 'adviseClutterProject', 'cleanClutter', 'askWorktreeAgent', 'pruneWorktrees', 'hideWorktreeRepo']) {
     window[name] = (...args) => worktreeController[name](...args);
   }
 
@@ -1892,6 +1892,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (activeTab === 'system') worktreeController.activate(activeSystemSub);
     if (activeTab === 'protection' && activeProtection === 'rules') loadPolicy();
     if (activeTab === 'agent' && from !== 'agent') loadAgent();
+    requestAnimationFrame(syncSidebarControls);
     const focus = r.focus === 'attention' ? document.getElementById('attention-center') : group;
     if (focus && focus.scrollIntoView) focus.scrollIntoView({ behavior: 'auto', block: 'start' });
   }
@@ -2652,17 +2653,57 @@ document.addEventListener('DOMContentLoaded', () => {
       if (activeTab === 'sessions' && activeSub === 'board') {
         history.replaceState(null, '', location.pathname + location.search + consoleContextHash({ route: 'sessions', session: id }));
       }
+      requestAnimationFrame(syncSidebarControls);
     },
   });
   window.selectSession = sessionWorkbench.selectSession;
   window.setSessionView = sessionWorkbench.setView;
-  window.showSessionList = sessionWorkbench.showList;
+  window.showSessionList = () => { sessionWorkbench.showList(); syncSidebarControls(); };
   window.jumpToLatestSession = sessionWorkbench.jumpToLatest;
   window.showCurrentSessionStatus = sessionWorkbench.showCurrentStatus;
   window.loadEarlierSessionMemory = sessionWorkbench.loadEarlier;
   window.retrySessionTrace = sessionWorkbench.retryTrace;
   window.SA.refreshSessionOverview = sessionWorkbench.refreshCurrent;
   window.SA.renderSessionBoard = sessionWorkbench.render;
+
+  function syncSidebarControls() {
+    const button = document.getElementById('btn-session-sidebar-toggle');
+    if (!button) return;
+    button.hidden = activeTab !== 'sessions' || activeSub !== 'board' || !sessionWorkbench.selectedSessionId;
+    const expanded = window.matchMedia('(max-width: 900px)').matches
+      ? document.getElementById('session-board-panel')?.dataset.pane === 'list'
+      : !sessionWorkbench.sessionListCollapsed;
+    button.setAttribute('aria-expanded', String(expanded));
+    button.setAttribute('aria-label', expanded ? 'Hide session list' : 'Show session list');
+    button.title = button.getAttribute('aria-label');
+  }
+  const navigationToggle = document.getElementById('btn-sidebar-toggle');
+  function setNavigationCollapsed(collapsed) {
+    document.body.classList.toggle('sidebar-collapsed', collapsed);
+    document.getElementById('console-sidebar').hidden = collapsed;
+    navigationToggle.setAttribute('aria-expanded', String(!collapsed));
+    navigationToggle.setAttribute('aria-label', collapsed ? 'Show navigation' : 'Hide navigation');
+    navigationToggle.title = navigationToggle.getAttribute('aria-label');
+    try { localStorage.setItem('sa.sidebar-collapsed', String(collapsed)); } catch { /* memory only */ }
+  }
+  if (navigationToggle) {
+    let collapsed = false;
+    try { collapsed = localStorage.getItem('sa.sidebar-collapsed') === 'true'; } catch { /* memory only */ }
+    setNavigationCollapsed(collapsed);
+    navigationToggle.addEventListener('click', () => setNavigationCollapsed(!document.body.classList.contains('sidebar-collapsed')));
+  }
+  document.getElementById('btn-session-sidebar-toggle')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    if (window.matchMedia('(max-width: 900px)').matches) {
+      if (document.getElementById('session-board-panel')?.dataset.pane === 'list') await sessionWorkbench.selectSession(sessionWorkbench.selectedSessionId);
+      else sessionWorkbench.showList();
+    } else {
+      sessionWorkbench.toggleList();
+    }
+    syncSidebarControls();
+    button.focus({preventScroll: true});
+  });
+  window.addEventListener('resize', syncSidebarControls);
 
   Object.defineProperties(window.SA, {
     postureHealth: { get() { return postureFreshness(telemetryStore.lastSnapshotAt, reportHealth.failures(['snapshot'])[0]?.error || ''); } },
@@ -3835,6 +3876,10 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         window.trashClutter(d.path);
         break;
+      case 'clutter-remove':
+        e.preventDefault();
+        window.removeClutter(d.path);
+        break;
       case 'clutter-clean':
         e.preventDefault();
         window.cleanClutter(d.name);
@@ -4043,6 +4088,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'session-toggle-list':
         sessionWorkbench.toggleList();
+        syncSidebarControls();
         break;
       case 'show-ended-sessions':
         showEndedSessions(el);

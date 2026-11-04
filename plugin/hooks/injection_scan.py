@@ -15,7 +15,7 @@ import re
 import sys
 import unicodedata
 
-from activity_log import log_payload
+from activity_log import app_running, detect_harness, log_payload
 
 INJECTION_PATTERNS = [
     re.compile(r"ignore\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|former)\s+(?:instructions?|directives?|prompts?|context|rules?)", re.IGNORECASE),
@@ -100,6 +100,9 @@ def main():
         if not raw.strip():
             return
         payload = json.loads(raw)
+        if detect_harness(payload) == "claude" and not app_running():
+            print("{}")
+            return
         try:
             log_payload(payload)
         except Exception:

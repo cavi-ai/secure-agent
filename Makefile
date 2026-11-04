@@ -16,10 +16,10 @@ docs-archive:
 	python3 packaging/docs/build.py archive
 
 app:
-	./packaging/make_app.sh
+	VERSION="$(VERSION)" ./packaging/make_app.sh
 
 dmg:
-	./packaging/make_dmg.sh
+	VERSION="$(VERSION)" ./packaging/make_dmg.sh
 
 # Signed release build: Developer ID Application cert + notarization.
 # Usage: make release [VERSION=x.y.z]
@@ -100,6 +100,7 @@ test-linux:
 test-hooks:
 	@echo "==> Python hook and packaging tests..."
 	python3 plugin/hooks/test_secret_guard.py
+	python3 -m unittest discover -s plugin/hooks -p 'test_hook_lifecycle.py'
 	python3 plugin/hooks/test_shell_review.py
 	python3 -m unittest discover -s packaging/classifier -p 'test_*.py'
 	python3 plugin/hooks/test_injection_scan.py
@@ -144,7 +145,7 @@ smoke:
 
 install:
 	@echo "==> Installing secure-agent..."
-	./packaging/install.sh
+	VERSION="$(VERSION)" ./packaging/install.sh
 
 uninstall:
 	@echo "==> Uninstalling secure-agent..."

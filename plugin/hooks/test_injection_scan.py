@@ -7,6 +7,8 @@ import subprocess
 import sys
 import tempfile
 
+from test_hook_lifecycle import running_app
+
 sys.setrecursionlimit(20000)  # the deep-nesting case must survive json.dumps here
 
 HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "injection_scan.py")
@@ -15,6 +17,9 @@ HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "injection_scan.
 # daemon tails, so each spawn gets a temp HOME, activity log and socket.
 HOME = tempfile.mkdtemp(prefix="injection-scan-test-home-")
 atexit.register(shutil.rmtree, HOME, True)
+_APP_LEASE = running_app(HOME)
+_APP_LEASE.__enter__()
+atexit.register(_APP_LEASE.__exit__, None, None, None)
 ACTIVITY_LOG = os.path.join(HOME, "activity.jsonl")
 
 

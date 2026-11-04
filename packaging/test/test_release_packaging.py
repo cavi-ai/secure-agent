@@ -74,6 +74,24 @@ fi
         return subprocess.run(["bash", "packaging/make_dmg.sh"], cwd=self.root,
                               env={**self.env, **settings}, capture_output=True, text=True, timeout=15)
 
+    def test_make_forwards_version_to_app_dmg_and_install(self):
+        shutil.copyfile(REPO / "Makefile", self.root / "Makefile")
+        for script in ("make_app.sh", "make_dmg.sh", "install.sh"):
+            self.write_script(self.root / "packaging" / script,
+                              '#!/bin/bash\nprintf "%s\\n" "${VERSION:-missing}"\n')
+        for target in ("app", "dmg", "install"):
+            for source in ("argument", "environment"):
+                with self.subTest(target=target, source=source):
+                    arguments = ["make", "-s", target]
+                    env = {**self.env, "VERSION": "v1.5.2"}
+                    if source == "argument":
+                        env.pop("VERSION")
+                        arguments.append("VERSION=v1.5.2")
+                    result = subprocess.run(arguments, cwd=self.root, env=env,
+                                            capture_output=True, text=True, timeout=15)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip().splitlines()[-1], "v1.5.2")
+
     def test_rebuild_replaces_checksum_and_preserves_other_assets(self):
         dist = self.root / "dist"
         dist.mkdir()

@@ -90,6 +90,12 @@ func (a *API) handleCleanupTrash(w http.ResponseWriter, r *http.Request) {
 	a.cleanupAction(w, r, "path", a.clutterTrash)
 }
 
+func (a *API) handleCleanupRemove(w http.ResponseWriter, r *http.Request) {
+	a.cleanupAction(w, r, "path", func(r *http.Request, path string) (clutter.ClutterResult, error) {
+		return a.clutter.Remove(r.Context(), path)
+	})
+}
+
 // handleCleanupClean runs one tool cache's own clean command ({"name"}).
 func (a *API) handleCleanupClean(w http.ResponseWriter, r *http.Request) {
 	a.cleanupAction(w, r, "name", a.clutterClean)

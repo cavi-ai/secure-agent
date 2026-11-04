@@ -111,7 +111,15 @@ Writes to `~/.claude/settings.json` and the hook scripts are now denied outright
 
 ### Egress after untrusted input
 
+Claude hooks are active only while the Secure Agent desktop app is running. Quitting the app stops their scanning, logging and approval checks, including requests already waiting for approval. Hooks remain registered so they can resume when the app opens; while it is closed, their callbacks return without a permission decision.
+
+Headless installations without a desktop instance lease activate Claude hooks only while their local daemon is reachable.
+
+In Claude Auto mode, prompt-only checks leave the decision to Claude's normal automatic permission review. Secure Agent does not open another approval prompt or force an allow decision. Explicit deny rules still block while the app is running.
+
 Instructions hidden in content an agent reads (a web page, an image, a response header, an MCP result) can steer it to send data out. The `untrusted-egress` rule does not try to recognize those instructions. It records each session's untrusted inputs (up to 8) and then applies its mode to every later call in that session that can send data out.
+
+Ordinary Git pushes to configured destinations that have stayed unchanged since the session's first external input proceed without another prompt or an untrusted-send finding. Changed destinations, Git configuration overrides, additional sends in the command, matched injection, explicit blocking modes and explicit `git-push` policies retain their configured policy. Existing session records without a destination snapshot also retain their configured policy. Snapshot records contain a configuration digest rather than remote URLs.
 
 Untrusted input:
 
@@ -133,7 +141,7 @@ Egress sinks:
 | Mode | Behavior |
 |---|---|
 | `monitor` (default) | The call runs and the audit trail records `guard-monitor:untrusted-egress`. |
-| `prompt` | The Secure Agent prompt names every sink in the call and the inputs the session read, with their origin. When the session and executable path are recorded, **Allow for** also offers this session, 24 hours, 7 days or Always (until revoked), and **Covers** chooses this send or every send of its kind: later sends to the same sinks, or of the same kinds, from the same tool, workspace and executable path run without a prompt, and other sinks or kinds still ask. `git push` names only its remote (`git push origin`), so one permission covers every push to that remote. The second prompt of a kind in a session says how many times it asked and opens with that kind for the session selected. Revoke under Protection → Rules & permissions. With the daemon down, Claude Code asks instead. |
+| `prompt` | The Secure Agent prompt names every sink in the call and the inputs the session read, with their origin. When the session and executable path are recorded, **Allow for** also offers this session, 24 hours, 7 days or Always (until revoked), and **Covers** chooses this send or every send of its kind: later sends to the same sinks, or of the same kinds, from the same tool, workspace and executable path run without a prompt, and other sinks or kinds still ask. `git push` names only its remote (`git push origin`), so one permission covers every push to that remote. The second prompt of a kind in a session says how many times it asked and opens with that kind for the session selected. Revoke under Protection → Rules & permissions. With the app open but its daemon unavailable, Claude manual mode can ask instead; Auto mode retains Claude's own review. |
 | `deny` | Blocked outright. |
 
 Set the mode in `~/.config/secure-agent/guard-modes.json`, for example `{"untrusted-egress": "prompt"}`, or per project through `directory_guard.cwd_overrides`.

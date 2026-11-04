@@ -6,8 +6,9 @@
 // tool's own clean command, and the cleanup ledger books the bytes.
 //
 // Invariants:
-//   - Nothing is deleted outright: items go to the Trash on their own
-//     volume, or the owning tool clears its cache.
+//   - Scratch directories and app caches go to the Trash on their own
+//     volume. Tools clear their own caches; regenerable repository caches
+//     also offer explicit permanent removal after fresh safety checks.
 //   - An action applies only to a path in the current inventory, re-checked
 //     at request time (exists, not a symlink, still that kind).
 //   - A place with a live agent session is never cleared.
@@ -58,7 +59,8 @@ type ClutterItem struct {
 	LastTouched *time.Time `json:"last_touched,omitempty"`
 	IdleDays    int        `json:"idle_days"`
 	Action      string     `json:"action"`
-	Command     string     `json:"command,omitempty"` // the clean command, for display
+	CanRemove   bool       `json:"can_remove,omitempty"` // permanent removal of a regenerable repository cache
+	Command     string     `json:"command,omitempty"`    // the clean command, for display
 	Note        string     `json:"note,omitempty"`
 }
 
@@ -344,7 +346,10 @@ func (c *Clutter) collect(ctx context.Context) []ClutterItem {
 				it.Action, it.Note = ActionNone, "Git safety check failed: "+err.Error()+"; rescan to retry"
 			case !ok[found.path]:
 				it.Action, it.Note = ActionNone, "not ignored by git, or holds tracked files: not a cache"
+			case unityCacheBusy(found.path):
+				it.Action, it.Note = ActionNone, "Unity is using this cache; close the editor first"
 			}
+			it.CanRemove = it.Kind == KindRepoCache && it.Action == ActionTrash
 			add(it)
 		}
 	}
@@ -462,7 +467,7 @@ type found struct{ kind, path string }
 
 // trackedNames are the directory names search reports inside a place.
 func trackedNames() []string {
-	names := []string{".tmp", ".quarantine"}
+	names := []string{".tmp", ".quarantine", "Library"}
 	for n := range repoCaches {
 		names = append(names, n)
 	}
@@ -504,6 +509,9 @@ func search(root string, places map[string]bool) []found {
 				out = append(out, found{KindQuarantine, p})
 				continue
 			case repoCaches[name]:
+				out = append(out, found{KindRepoCache, p})
+				continue
+			case name == "Library" && isDir(filepath.Join(dir, "Assets")) && regularFile(filepath.Join(dir, "ProjectSettings", "ProjectVersion.txt")):
 				out = append(out, found{KindRepoCache, p})
 				continue
 			}

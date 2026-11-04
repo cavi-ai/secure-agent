@@ -177,6 +177,10 @@ final class HarnessHookSetupTests: XCTestCase {
             await settle(controller.view)
             try pressReturn(window)
             await settle(controller.view)
+            let completionDeadline = Date().addingTimeInterval(5)
+            while flow.installing && Date() < completionDeadline {
+                await settle(controller.view)
+            }
             XCTAssertEqual(flow.stage, enabled ? .result : .enable)
             XCTAssertEqual(fixture.setup.lastError == nil, enabled)
             XCTAssertFalse(flow.installing)

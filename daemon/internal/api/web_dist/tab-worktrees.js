@@ -948,6 +948,10 @@ function clutterItemHTML(it, project) {
   let action = '';
   if (it.action === 'trash') {
     action = `<button type="button" class="btn btn-danger btn-sm" data-action="clutter-trash" data-path="${escapeHTML(it.path)}">Move to Trash</button>`;
+    if (it.can_remove) {
+      const busy = window.SA && window.SA.clutter.removing && window.SA.clutter.removing.has(it.path);
+      action = `<button type="button" class="btn btn-danger btn-sm" data-action="clutter-remove" data-path="${escapeHTML(it.path)}"${busy ? ' disabled' : ''}>${busy ? 'Deleting…' : 'Delete cache'}</button>` + (busy ? '' : action);
+    }
   } else if (it.action === 'clean') {
     action = `<button type="button" class="btn btn-sm" data-action="clutter-clean" data-name="${escapeHTML(it.name)}" title="${escapeHTML(it.command || '')}">Run ${escapeHTML(it.command || 'clean')}</button>`;
   }
