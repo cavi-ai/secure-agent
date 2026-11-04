@@ -117,6 +117,8 @@ Finding and incident titles in the session's **Evidence** view open their retain
 
 The sidebar controls stay at the edge of the window while you scroll. **Hide navigation** collapses the main navigation; **Show navigation** restores it, and the console remembers that choice. With a session selected, **Hide session list** gives it more reading space and **Show session list** restores the list without clearing the selection or filters. On narrow screens, the session control switches between the list and the selected session.
 
+Home keeps Recent work separate from the scrollable Needs you queue. Work rows lead with the workspace and branch; status and activity times update without reordering the list. Use the refresh control beside Recent work to apply the latest activity order. Its dot indicates that the displayed order can be updated.
+
 **Inspect recorded session activity.** View session events reads matching retained events for that session in pages of up to 200 records, including ended sessions without a live process family. Use the paging controls to inspect earlier records and return to a newer page. Event and time filters query retained records directly; changing filters starts a new page history. A failed page request retains the current page so you can retry the same control. The end of retained records does not establish complete coverage; older activity may have expired. Back restores the originating session view and event filters. See the [paged event API](API.md#paged-session-events).
 
 ## Manage session resources

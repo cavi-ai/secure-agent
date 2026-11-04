@@ -26,16 +26,19 @@
       set(items); await settle(); scrollTo(0,0);
       const kept = row('stable-5');
       kept.querySelector('.need-head').focus({preventScroll:true});
+      const pane = document.querySelector('.home-review-body');
+      pane.scrollTop += kept.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+      await frame();
       const before = kept.getBoundingClientRect().top;
       set(items.filter(i => i.id !== 'stable-3'));
       const during = kept.getBoundingClientRect().top;
       probe.geometry.middle = {before,during,animations:own().length};
-      probe.middle = !row('stable-3') && row('stable-5') === kept && (reduced ? !own().length : Math.abs(before-during)<2 && own().length>0);
+      probe.middle = !row('stable-3') && row('stable-5') === kept && Math.abs(before-during)<2 && !own().length;
       await settle();
       probe.focus = document.activeElement === kept.querySelector('.need-head');
       const supportBefore = support.getBoundingClientRect().top;
       set([make('inserted'), ...items]);
-      probe.insertion = !!row('inserted') && (reduced ? !own().length : Math.abs(supportBefore-support.getBoundingClientRect().top)<2);
+      probe.insertion = !!row('inserted') && !own().length && Math.abs(supportBefore-support.getBoundingClientRect().top)<2;
       const running = own();
       set(items);
       probe.unchanged = row('stable-5') === kept && running.length === own().length && running.every(a => own().includes(a));
@@ -50,7 +53,7 @@
       row('final').querySelector('.need-head').focus({preventScroll:true});
       set([]);
       probe.last = document.getElementById('attention-center').hidden && !list.children.length && document.activeElement.id === 'session-daily-title'
-        && (reduced ? !own().length : Math.abs(finalTop-support.getBoundingClientRect().top)<2);
+        && !own().length && Math.abs(finalTop-support.getBoundingClientRect().top)<2;
       set([make('restored')]);
       set([make('restored'),make('newest')]); await settle();
       probe.interrupted = !!row('restored') && !!row('newest') && !document.getElementById('attention-center').hidden && !own().length;

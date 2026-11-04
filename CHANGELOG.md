@@ -6,6 +6,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Home: show a workspace-first work list beside a scrollable review queue. Activity updates keep row order and keyboard focus; the list's refresh control applies the latest order. Dismissing review items no longer animates the page height or stacks confirmation notifications.
+
 ## [1.5.2] - 2026-11-04
 
 ### Changed

@@ -259,35 +259,38 @@
           <section class="monitoring-detail" id="monitoring-detail" aria-label="Selected session observations" tabindex="-1"></section>
         </div>
       </div>
-      <!-- Home: decisions and coverage first; detail opens on demand. -->
+      <!-- Home: stable work list beside a bounded review queue. -->
       <div class="tabpanel" id="tab-home" role="tabpanel">
-        <section class="panel attention-overview" aria-labelledby="attention-summary-title">
-          <div class="panel-head"><h2 id="attention-summary-title" tabindex="-1">Attention overview</h2></div>
-          <div class="panel-body" id="attention-summary"></div>
-        </section>
-        <section class="needs" id="attention-center" aria-labelledby="needs-title" hidden>
-          <p class="section-eyebrow">Needs you</p>
-          <h2 class="needs-title" id="needs-title"><span id="needs-title-label">Items to review</span><span class="needs-count sr-only" id="badge-attention-count">0</span></h2>
-          <p class="report-health" data-reports="snapshot|guard decisions" role="status" hidden></p>
-          <ol class="needs-list" id="attention-list"></ol>
-        </section>
-
-        <section class="panel coverage-panel" id="coverage-center" hidden>
-          <div class="panel-head">
-            <h2 id="coverage-title" tabindex="-1">Monitoring</h2>
-            <span class="badge" id="badge-coverage-count">0</span>
-          </div>
-          <p class="report-health" data-reports="snapshot" role="status" hidden></p>
-          <div class="panel-body" id="coverage-list"></div>
-        </section>
-        <section class="panel review-result" id="review-result" aria-labelledby="review-result-title" hidden></section>
-        <section class="panel review-result" id="guard-result" aria-labelledby="guard-result-title" hidden></section>
         <div class="home-support">
+          <div class="home-workbench">
           <section class="panel session-daily-panel" aria-labelledby="session-daily-title">
-            <div class="panel-head"><h2 id="session-daily-title" tabindex="-1">Recent work</h2><button type="button" class="btn btn-ghost btn-sm" data-action="recent-work-all">View all sessions</button></div>
+            <div class="panel-head"><h2 id="session-daily-title" tabindex="-1">Recent work</h2><div class="recent-work-tools"><button type="button" class="btn btn-ghost btn-icon" data-action="recent-work-refresh" aria-label="Reorder by latest activity" title="Reorder by latest activity"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg></button><button type="button" class="btn btn-ghost btn-sm" data-action="recent-work-all">View all sessions</button></div></div>
             <p class="report-health" data-reports="sessions" role="status" hidden></p>
             <div class="panel-body" id="session-daily"><p>Loading sessions…</p></div>
           </section>
+          <aside class="panel home-review" aria-labelledby="home-review-title">
+            <div class="panel-head"><h2 id="home-review-title">Needs you</h2><span class="badge" id="badge-attention-count">0</span></div>
+            <div class="home-review-body" role="region" aria-label="Review queue" tabindex="0">
+              <section class="needs" id="attention-center" aria-labelledby="needs-title" hidden>
+                <h3 class="sr-only" id="needs-title"><span id="needs-title-label">Items to review</span></h3>
+                <p class="report-health" data-reports="snapshot|guard decisions" role="status" hidden></p>
+                <ol class="needs-list" id="attention-list"></ol>
+              </section>
+              <div class="attention-empty" id="attention-empty" hidden></div>
+              <section class="panel review-result" id="review-result" aria-labelledby="review-result-title" hidden></section>
+              <section class="panel review-result" id="guard-result" aria-labelledby="guard-result-title" hidden></section>
+              <section class="panel coverage-panel" id="coverage-center" hidden>
+                <div class="panel-head"><h3 id="coverage-title" tabindex="-1">Monitoring</h3><span class="badge" id="badge-coverage-count">0</span></div>
+                <p class="report-health" data-reports="snapshot" role="status" hidden></p>
+                <div class="panel-body" id="coverage-list"></div>
+              </section>
+              <details class="attention-overview" aria-labelledby="attention-summary-title">
+                <summary id="attention-summary-title" tabindex="-1">Attention breakdown</summary>
+                <div class="panel-body" id="attention-summary"></div>
+              </details>
+            </div>
+          </aside>
+          </div>
           <details class="home-group" id="home-spend" data-group="spend" open>
             <summary><svg class="icon"><use href="#i-activity"/></svg>Usage</summary>
             <section class="panel chart-panel">

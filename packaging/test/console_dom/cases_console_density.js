@@ -1,6 +1,6 @@
 (() => {
   setTimeout(async () => {
-    const state = {};
+    const state = {viewport:innerWidth};
     const { openTab, realFetch } = window.DomTest;
     const frame = () => realFetch('/__console_frame_checkpoint', {cache: 'no-store'});
     const visible = el => {
