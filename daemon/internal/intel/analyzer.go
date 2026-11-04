@@ -200,6 +200,21 @@ func (a *Analyzer) Analyze(flag model.Flag, events []event.Event) model.Incident
 	} else if flag.Severity == 1 {
 		maxRisk = model.RiskHigh
 	}
+	// Reading external content before a send is a review lead, not proof
+	// of an attack. Use the structured assessment rather than promoting an
+	// allowed or monitor-only operation into a high-risk incident.
+	if flag.Rule == "untrusted-egress" {
+		assessment := model.AssessFinding(flag)
+		switch assessment.Risk {
+		case "review":
+			maxRisk = model.RiskMedium
+			if assessment.Control == "allowed" || assessment.Control == "blocked" {
+				maxRisk = model.RiskLow
+			}
+		case "high":
+			maxRisk = model.RiskHigh
+		}
+	}
 
 	for _, rot := range report.RotateList {
 		if rot.Risk == model.RiskCritical {

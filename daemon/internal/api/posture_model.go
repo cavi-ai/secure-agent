@@ -29,6 +29,7 @@ type postureInputs struct {
 	FlagReviews         map[string]model.ReviewRecord
 	Incidents           []model.IncidentReport
 	IncidentStates      map[string]string
+	IncidentAssessments map[string]model.FindingAssessment
 	FailedReads         []string
 	HookFindings        []store.SessionHookFinding
 	HookHealthTruncated bool

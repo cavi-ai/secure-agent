@@ -18,6 +18,7 @@ type postureEvidenceStore interface {
 	findingReviewStore
 	advisorReadHealthStore
 	QueryFlags(store.FlagFilter) ([]model.Flag, error)
+	GetFlag(string) (model.Flag, bool, error)
 	RecentIncidentDetails(int) ([]store.IncidentDetail, error)
 }
 
@@ -35,6 +36,7 @@ func loadPostureEvidence(st postureEvidenceStore, in postureInputs) postureInput
 	in.FailedReads = slices.Clone(in.FailedReads)
 	in.FlagReviews = map[string]model.ReviewRecord{}
 	in.IncidentStates = map[string]string{}
+	in.IncidentAssessments = map[string]model.FindingAssessment{}
 	reviews := newFindingReviewView(st)
 	page, reviewErr := reviews.Unreviewed()
 	if reviewErr != nil {
@@ -79,6 +81,14 @@ func loadPostureEvidence(st postureEvidenceStore, in postureInputs) postureInput
 	}
 	for _, inc := range incidents {
 		in.Incidents = append(in.Incidents, inc.IncidentReport)
+		if inc.Rule == "untrusted-egress" {
+			f, found, err := st.GetFlag(inc.FlagID)
+			if err != nil {
+				in.FailedReads = append(in.FailedReads, "incident flag evidence")
+			} else if found && f.Rule == inc.Rule {
+				in.IncidentAssessments[inc.FlagID] = model.AssessFinding(f)
+			}
+		}
 		lookup(inc.FlagID)
 		if r, ok := in.FlagReviews[inc.FlagID]; ok && r.Context.Attribution == "stored-session" {
 			continue

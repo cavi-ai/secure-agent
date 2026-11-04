@@ -541,6 +541,12 @@ func (b *attentionBuilder) addIncidents() {
 		if r, ok := b.in.FlagReviews[inc.FlagID]; ok && r.Context.Attribution == "stored-session" {
 			continue
 		}
+		// Older reports promoted routine tool-output/send records to high
+		// risk. Additional, missing, credential or injection evidence still pages.
+		if inc.Rule == "untrusted-egress" && inc.AggregateCount <= 1 &&
+			b.in.IncidentAssessments[inc.FlagID].Risk == "review" && len(inc.RotateList) == 0 {
+			continue
+		}
 		status, found := b.in.IncidentStates[inc.ID]
 		if !found {
 			continue

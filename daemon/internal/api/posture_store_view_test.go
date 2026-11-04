@@ -35,6 +35,15 @@ func (s *memoryPostureStore) QueryFlags(filter store.FlagFilter) ([]model.Flag, 
 	return s.flags, s.flagErr
 }
 
+func (s *memoryPostureStore) GetFlag(id string) (model.Flag, bool, error) {
+	for _, f := range s.flags {
+		if f.ID == id {
+			return f, true, s.flagErr
+		}
+	}
+	return model.Flag{}, false, s.flagErr
+}
+
 func (s *memoryPostureStore) ListFindingReviewsState(string, int, string) (store.ReviewPage, error) {
 	return store.ReviewPage{}, s.reviewErr
 }
