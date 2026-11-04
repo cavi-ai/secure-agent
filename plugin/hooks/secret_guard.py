@@ -52,7 +52,7 @@ from urllib.parse import urlsplit
 _HOOK_DIR = os.path.dirname(os.path.realpath(__file__))
 if _HOOK_DIR not in sys.path:
     sys.path.insert(0, _HOOK_DIR)
-from activity_log import log_payload, redact_str
+from activity_log import app_running, log_payload, redact_str
 from injection_scan import first_match, scan_text
 
 HOME = os.path.expanduser("~")
@@ -807,8 +807,18 @@ def _guard_query(agent, tool, path, rule_id, deadline_s, workspace="", probe_id=
     try:
         s.sendall(req.encode())
         chunks = []
+        deadline = time.monotonic() + deadline_s
         while True:
-            b = s.recv(4096)
+            if claude_hook_inactive():
+                return None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"verdict": "deny", "scope": "once", "reason": "timeout"}
+            s.settimeout(min(remaining, 0.2) if runtime() == "claude" else remaining)
+            try:
+                b = s.recv(4096)
+            except _socket.timeout:
+                continue
             if not b:
                 break
             chunks.append(b)
@@ -838,12 +848,32 @@ def runtime() -> str:
     return "unknown"
 
 
+def claude_auto_mode() -> bool:
+    return runtime() == "claude" and _PAYLOAD.get("permission_mode") == "auto"
+
+
+def claude_hook_inactive() -> bool:
+    return runtime() == "claude" and not app_running()
+
+
+def quiet_exit() -> None:
+    # No permissionDecision: Claude retains its own permission checks.
+    emit({})
+    sys.exit(0)
+
+
 def resolve_prompt(agent, tool, path, rule_id, command, event):
-    """Prompt-mode resolution. Daemon decides (cached or via the native prompt).
-    Daemon-down degrades to the harness's own ask on Claude; on Cursor (whose ask
-    support is unverified) it fails safe to deny. Timeout/deny always block."""
+    """Manual-mode approval while the app is open. Claude Auto retains its
+    own permission review; closing the app ends a pending approval."""
+    if claude_hook_inactive():
+        quiet_exit()
+    if claude_auto_mode():
+        audit("allow", "guard-native-auto:" + rule_id, command, event)
+        return
     path = norm(path)
     d = _guard_query(agent, tool, path, rule_id, PROMPT_DEADLINE_S, _cwd_for_request())
+    if claude_hook_inactive():
+        quiet_exit()
     deny_msg = (f"DENIED by Directory Guard ({rule_id}). Approve it in the Secure Agent prompt, "
                 "or add an allow-always rule, then retry.")
     if d is None:  # daemon unreachable
@@ -858,6 +888,11 @@ def resolve_prompt(agent, tool, path, rule_id, command, event):
 
 
 def emit_ask(reason, command, event, untrusted=None):
+    if claude_hook_inactive():
+        quiet_exit()
+    if claude_auto_mode():
+        audit("allow", "guard-native-auto", command, event, untrusted=untrusted)
+        quiet_exit()
     audit("ask", "guard-ask", command, event, untrusted=untrusted)
     emit({
         "hookSpecificOutput": {"hookEventName": "PreToolUse",
@@ -1231,10 +1266,14 @@ def _add_source(payload: dict, inp: dict, event: str) -> None:
         os.chmod(TAINT_DIR, 0o700)
         if rec is None:
             _prune_taint()
+            push_context = _git_push_context(str(payload.get("cwd") or ""))
             try:
                 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                    json.dump({"ts": inp["ts"], "source": _short_source(inp), "sources": [inp]}, fh)
+                    initial = {"ts": inp["ts"], "source": _short_source(inp), "sources": [inp]}
+                    if push_context:
+                        initial["git_push_context"] = push_context
+                    json.dump(initial, fh)
             except FileExistsError:
                 rec = taint_of(payload)
                 if rec is None or not _can_add_source(rec, inp):
@@ -1336,7 +1375,7 @@ def _git_subcommand(argv: list) -> list:
 GIT_PUSH_VALUE_OPTS = ("--receive-pack", "--exec", "-o", "--push-option")
 
 
-def _git_push_remote(args: list) -> str:
+def _git_push_remote(args: list, display: bool = True) -> str:
     """The remote a `git push` names, "" for the configured default. Flags and
     refspecs are left out so one approval covers every push to that remote; a
     URL remote is reduced to its host so credentials in it are never shown."""
@@ -1360,9 +1399,82 @@ def _git_push_remote(args: list) -> str:
         else:
             remote = t
             break
-    if "://" in remote:
+    if display and "://" in remote:
         return _url_host(remote) or "url"
     return remote[:200]
+
+
+def _git_push_context(cwd: str) -> dict | None:
+    """Snapshot configured destinations when external content is first recorded.
+    Store a digest, never remote URLs (which may contain credentials)."""
+    if not cwd or not os.path.isdir(cwd):
+        return None
+    try:
+        root = subprocess.run(GIT_SAFE + ["-C", cwd, "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True, timeout=GIT_ORIGIN_BUDGET_S)
+        if root.returncode:
+            return None
+        repo = os.path.realpath(root.stdout.strip())
+        config = subprocess.run(GIT_SAFE + ["-C", repo, "config", "--null", "--get-regexp",
+            r"^(remote\..*|url\..*|core\.(sshcommand|gitproxy)|ssh\.variant|protocol\..*|branch\..*\.(remote|pushremote)|push\.default)$"],
+            capture_output=True, timeout=GIT_ORIGIN_BUDGET_S)
+        if config.returncode:
+            return None
+        names, destinations, settings = set(), [], {}
+        for entry in config.stdout.decode("utf-8", errors="replace").split("\x00"):
+            key, _, value = entry.partition("\n")
+            settings[key] = value
+            if key.startswith(("remote.", "url.", "core.", "ssh.", "protocol.")):
+                destinations.append(entry)
+            match = re.fullmatch(r"remote\.(.+)\.(url|pushurl)", key)
+            if match:
+                names.add(match.group(1))
+        if not names:
+            return None
+        branch = subprocess.run(GIT_SAFE + ["-C", repo, "symbolic-ref", "--quiet", "--short", "HEAD"],
+                                capture_output=True, text=True, timeout=GIT_ORIGIN_BUDGET_S).stdout.strip()
+        default = (settings.get(f"branch.{branch}.pushremote") or settings.get("remote.pushdefault")
+                   or settings.get(f"branch.{branch}.remote") or (next(iter(names)) if len(names) == 1 else "origin"))
+        digest = hashlib.sha256("\x00".join(destinations).encode("utf-8")).hexdigest()
+        return {"repo": repo, "config_hash": digest, "remotes": sorted(names), "default_remote": default}
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _expected_git_push(command: str, taint: dict, cwd: str) -> bool:
+    """Only plain pushes to the unchanged configured destinations qualify.
+    Other sends, injected Git options, changed remotes and old records without
+    a baseline retain their configured approval policy."""
+    baseline = taint.get("git_push_context")
+    if not isinstance(baseline, dict) or not command:
+        return False
+    pushes = 0
+    for argv, _ in segments(command):
+        if not argv or os.path.basename(argv[0]) != "git":
+            return False
+        repo, i = cwd, 1
+        while i < len(argv) and argv[i].startswith("-"):
+            if argv[i] == "-C" and i + 1 < len(argv):
+                repo = os.path.abspath(os.path.join(repo, argv[i + 1]))
+                i += 2
+            elif argv[i].startswith("-C") and len(argv[i]) > 2:
+                repo = os.path.abspath(os.path.join(repo, argv[i][2:]))
+                i += 1
+            else:
+                return False
+        if i >= len(argv) or argv[i] != "push":
+            return False
+        args = argv[i + 1:]
+        if any(t in ("--exec", "--receive-pack") or t.startswith(("--exec=", "--receive-pack=")) for t in args):
+            return False
+        current = _git_push_context(repo)
+        if not current or any(current.get(k) != baseline.get(k) for k in ("repo", "config_hash", "remotes")):
+            return False
+        remote = _git_push_remote(args, display=False) or current["default_remote"]
+        if ":" in remote or remote not in baseline.get("remotes", []):
+            return False
+        pushes += 1
+    return pushes > 0
 
 
 def _segment_egress(argv: list, raw: str) -> str:
@@ -1519,12 +1631,20 @@ def gate_untrusted_egress(tool: str, tool_input: dict, command: str, event: str)
     categories = egress_categories(tool, tool_input, command)
     modes = (_cwd_mode_map(), _mode_overrides())
     mode = _resolve_mode(EGRESS_RULE, EGRESS_SHIPPED_MODE, *modes)
+    category_modes = _category_modes()
     if categories:
-        category_modes = _category_modes()
         mode = max((_category_mode(c, category_modes, mode) for c in categories), key=_strictness)
     if injection:
         mode = max(mode, _resolve_mode(INJECTED_RULE, INJECTED_SHIPPED_MODE, *modes), key=_strictness)
     subject = command or target
+
+    # Reading documentation or tool output does not make an ordinary push an
+    # attack. Explicit per-kind policy and matched injection still take priority.
+    if (not injection and mode in ("monitor", "prompt", "session")
+            and "git-push" not in category_modes and "*" not in category_modes
+            and _expected_git_push(command, taint, _cwd_for_request())):
+        audit("allow", "guard-expected-git-push", subject, event)
+        return
 
     def record(decision: str) -> dict:
         rec = {"decision": decision, "sinks": _clip(target, 500), "harness": runtime(), "sources": sources}
@@ -1536,6 +1656,9 @@ def gate_untrusted_egress(tool: str, tool_input: dict, command: str, event: str)
 
     if mode == "monitor":
         audit("allow", "guard-monitor:" + EGRESS_RULE, subject, event, untrusted=record("monitored"))
+        return
+    if mode in ("prompt", "session") and claude_auto_mode():
+        audit("allow", "guard-native-auto:" + EGRESS_RULE, subject, event, untrusted=record("monitored"))
         return
     why = f"text the injection detector matched ({injection['match']})" if injection else f"untrusted content ({source})"
     agent_msg = (f"DENIED by Secure Agent ({EGRESS_RULE}): this session read {why}, so sending data out "
@@ -1550,6 +1673,8 @@ def gate_untrusted_egress(tool: str, tool_input: dict, command: str, event: str)
     d = _guard_query(runtime(), tool or "Bash", target, EGRESS_RULE, PROMPT_DEADLINE_S,
                      _cwd_for_request(), detail=detail, categories=categories,
                      category_mode="session" if mode == "session" else "")
+    if claude_hook_inactive():
+        quiet_exit()
     if d is None:
         if runtime() == "claude":
             emit_ask(f"Secure Agent: this session read untrusted content ({read}). Allow {target}?",
@@ -2062,6 +2187,9 @@ def main() -> int:
         return 0
 
     _PAYLOAD = data if isinstance(data, dict) else {}
+    if claude_hook_inactive():
+        emit({})
+        return 0
     if not isinstance(data, dict) or not isinstance(data.get("tool_input") or {}, dict):
         # Same as unparseable JSON: not evidence of wrongdoing.
         allow()
@@ -2085,6 +2213,12 @@ def _hook_error(data: dict, exc: Exception) -> int:
         print("{}")
         return 0
     command = str(data.get("command") or (data.get("tool_input") or {}).get("command") or "")
+    if claude_hook_inactive():
+        quiet_exit()
+    if claude_auto_mode():
+        audit("allow", reason, command, event)
+        emit({})
+        return 0
     if runtime() == "claude":
         emit_ask("Secure Agent could not check this call. Allow it?", command, event)
     deny(reason, "Blocked: Secure Agent could not check this call.",

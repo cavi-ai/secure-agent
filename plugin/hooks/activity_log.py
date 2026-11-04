@@ -10,6 +10,47 @@ import os
 import re
 import sys
 
+
+def app_running() -> bool:
+    """The desktop app holds an exclusive lease for its entire lifetime.
+    A leftover lock file never enables hooks. Headless installations without
+    a desktop lease follow their local daemon's lifetime instead."""
+    try:
+        import fcntl
+    except ImportError:
+        return False
+    import stat
+    path = os.path.join(os.path.expanduser("~"), ".config", "secure-agent", "menubar.lock")
+    descriptor = -1
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            return False
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return False
+    except FileNotFoundError:
+        # A headless daemon has no desktop instance lease. Connecting to its
+        # existing local socket does not start it or request any approval.
+        import socket
+        sock = os.environ.get("SECURE_AGENT_SOCK") or os.path.join(os.path.dirname(path), "daemon.sock")
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                connection.settimeout(0.1)
+                connection.connect(sock)
+            return True
+        except OSError:
+            return False
+    except OSError:
+        return False
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
 # The one redaction rule set for every hook log; daemon/internal/redact holds
 # the daemon's copy and daemon/internal/redact/testdata/cases.json is the
 # contract both satisfy. Patterns are ASCII-only, as in Go. Order: private-key
@@ -219,6 +260,8 @@ def main():
     except Exception:
         return
 
+    if detect_harness(payload) == "claude" and not app_running():
+        return
     log_payload(payload)
 
 if __name__ == "__main__":

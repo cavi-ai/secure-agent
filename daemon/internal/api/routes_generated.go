@@ -77,6 +77,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/worktrees/asks":               a.handleWorktreeAsks,
 		"/cleanup":                      a.handleCleanup,
 		"/cleanup/trash":                a.handleCleanupTrash,
+		"/cleanup/remove":               a.handleCleanupRemove,
 		"/cleanup/clean":                a.handleCleanupClean,
 		"/cleanup/advise":               a.handleCleanupAdvise,
 		"/advisor/discover":             a.handleAdvisorDiscover,

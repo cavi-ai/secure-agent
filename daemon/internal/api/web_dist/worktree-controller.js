@@ -183,7 +183,7 @@ function createWorktreeController({ request, toast, confirm, render, renderSelec
   }
 
   // Clutter: loaded with the tab like worktrees; re-read while sizes land.
-  const clutterState = { report: null, loading: false, error: '', loadedAt: 0, filter: { kind: '' }, expanded: new Set() };
+  const clutterState = { report: null, loading: false, error: '', loadedAt: 0, filter: { kind: '' }, expanded: new Set(), removing: new Set() };
   let clutterSizingTimer = null;
   let clutterSizingPolls = 0;
   function followClutterSizing() {
@@ -387,10 +387,10 @@ function createWorktreeController({ request, toast, confirm, render, renderSelec
 
   // Worktree actions. The daemon re-inspects before removing and answers 409
   // with the fresh verdict when the worktree is no longer removable.
-  async function postWorktree(path, body) {
+  async function postWorktree(path, body, timeoutMs = WORKTREE_TIMEOUT_MS) {
     const r = await request(path, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body), timeoutMs: WORKTREE_TIMEOUT_MS
+      body: JSON.stringify(body), timeoutMs
     });
     const text = await r.text();
     let json = null;
@@ -591,7 +591,32 @@ function createWorktreeController({ request, toast, confirm, render, renderSelec
     }
   }
 
+  async function removeClutter(path) {
+    const it = ((clutterState.report && clutterState.report.items) || []).find(x => x.path === path);
+    if (!it || !it.can_remove || clutterState.removing.has(path)) return;
+    const ok = await confirm(`Permanently delete ${path}? This frees disk space immediately. The cache will be rebuilt when needed. This cannot be undone.`,
+      { title: 'Delete build cache', okLabel: 'Delete cache' });
+    if (!ok || clutterState.removing.has(path)) return;
+    clutterState.removing.add(path);
+    render(['clutter']);
+    try {
+      const { r, text, json } = await postWorktree('/cleanup/remove', { path }, WORKTREE_TIMEOUT_MS + 10 * 60 * 1000);
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      const bytes = Number(json && json.result && json.result.bytes) || 0;
+      clutterState.report.items = clutterState.report.items.filter(x => x.path !== path);
+      toast(`Deleted ${path} — ${json && json.result && json.result.bytes_partial ? 'at least ' : ''}${fmtDisk(bytes)} cleared`, 'success');
+      loadLedger();
+    } catch (err) {
+      toast('Cache deletion failed: ' + (err.message || err), 'danger');
+    } finally {
+      clutterState.removing.delete(path);
+      render(['clutter']);
+      loadClutter(false);
+    }
+  }
+
   async function trashClutter(path) {
+    if (clutterState.removing.has(path)) return;
     const ok = await confirm(`Move ${path} to the Trash? You can put it back from the Trash until you empty it.`,
       { title: 'Move to Trash', okLabel: 'Move to Trash' });
     if (!ok) return;
@@ -760,6 +785,7 @@ function createWorktreeController({ request, toast, confirm, render, renderSelec
     adviseWorktree,
     adviseWorktreeGroup,
     trashClutter,
+    removeClutter,
     adviseClutterProject,
     cleanClutter,
     askWorktreeAgent,

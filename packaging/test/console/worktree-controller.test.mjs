@@ -432,6 +432,42 @@ test('removeAllRemovable: one dialog counts rows per repository, then one remova
   assert.equal(log.requests.filter(r => r.url === '/worktrees/remove').length, 2);
 });
 
+test('removeClutter: confirms permanent deletion and blocks duplicate requests while pending', async () => {
+  let complete;
+  let timeout;
+  let started;
+  const requestStarted = new Promise(resolve => { started = resolve; });
+  const clutter = { items: [{ path: '/c/cache', can_remove: true }] };
+  const { controller, log } = build({ respond: (url, req) => {
+    if (url === '/cleanup') return reply(clutter);
+    timeout = req.timeoutMs;
+    return new Promise(resolve => { complete = () => resolve(reply({ result: { bytes: 2048 } })); started(); });
+  } });
+  await controller.loadClutter(false);
+  const deletion = controller.removeClutter('/c/cache');
+  await requestStarted;
+  assert.equal(controller.clutterState.removing.has('/c/cache'), true);
+  await controller.removeClutter('/c/cache');
+  await controller.trashClutter('/c/cache');
+  assert.equal(log.requests.filter(r => r.method === 'POST').length, 1);
+  assert.match(log.confirms[0].message, /Permanently delete.*cannot be undone/);
+  assert.ok(timeout >= 600000);
+  complete();
+  await deletion;
+  assert.equal(controller.clutterState.removing.has('/c/cache'), false);
+  assert.deepEqual(plain(controller.clutterState.report.items), []);
+  assert.equal(log.ledger, 1);
+  assert.match(log.toasts[0].message, /2 KB cleared/);
+});
+
+test('removeClutter: scratch items never offer permanent deletion', async () => {
+  const { controller, log } = build({ respond: () => reply({ items: [{ path: '/c/.tmp', action: 'trash' }] }) });
+  await controller.loadClutter(false);
+  await controller.removeClutter('/c/.tmp');
+  assert.equal(log.confirms.length, 0);
+  assert.equal(log.requests.filter(r => r.method === 'POST').length, 0);
+});
+
 test('trashClutter: moves the item out of the report, adds to the trashed totals and reloads the ledger', async () => {
   const clutter = { items: [{ path: '/c/a', name: 'a' }, { path: '/c/b', name: 'b' }], reclaimed: { trashed_bytes: 10, trashed_count: 1 } };
   const { controller, log } = build({ respond: (url, req) => (url === '/cleanup' ? reply(clutter) : reply({ result: { bytes: 2048 } })) });

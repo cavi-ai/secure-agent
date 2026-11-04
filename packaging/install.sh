@@ -15,6 +15,10 @@
 # For distribution, build the single DMG instead:  make dmg
 set -euo pipefail
 
+# Install a signed update without restarting monitoring when requested.
+OPEN_APP="${OPEN_APP:-1}"
+case "${OPEN_APP}" in 0|1) ;; *) echo "OPEN_APP must be 0 or 1" >&2; exit 2 ;; esac
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Secure Agent"
 BUILD_DIR="${REPO_ROOT}/dist/${APP_NAME}.app"
@@ -70,19 +74,29 @@ codesign --verify --deep --strict "${INSTALL_DIR}"
 "${LSREGISTER}" -u "${BUILD_DIR}" >/dev/null 2>&1 || true
 "${LSREGISTER}" -f "${INSTALL_DIR}"
 
+# The new copy has passed signature verification. The replaced bundle is
+# disposable build output, not a retained installation archive.
+if [[ -n "${TRASHED:-}" && -d "${TRASHED}" && ! -L "${TRASHED}" ]]; then
+  rm -rf -- "${TRASHED}"
+fi
+
 echo "============================================================"
 echo "Built ${BUILD_DIR}"
 echo "Installed ${INSTALL_DIR}"
 echo ""
-echo "Launching ${INSTALL_DIR}. Use the menu bar icon to open"
-echo "Setup and install the harness hooks, and to Quit (which stops"
-echo "the background monitor completely). The build in dist/ is"
-echo "never opened: only the /Applications copy manages file telemetry."
+if [[ "${OPEN_APP}" == "1" ]]; then
+  echo "Launching ${INSTALL_DIR}. Use the menu bar icon to open Setup."
+else
+  echo "Installed without launching. Monitoring remains stopped."
+fi
+echo "The build in dist/ is never opened."
 echo ""
 echo "This is the real install. To build a DMG for distribution:  make dmg"
 echo "============================================================"
 
-open "${INSTALL_DIR}"
+if [[ "${OPEN_APP}" == "1" ]]; then
+  open "${INSTALL_DIR}"
+fi
 
 # Report whether file telemetry is actually running post-install. Best
 # effort only — never fails the install.
@@ -106,4 +120,6 @@ report_file_telemetry() {
 
   telemetry_status_line "${state}" "${ad_hoc}"
 }
-report_file_telemetry || true
+if [[ "${OPEN_APP}" == "1" ]]; then
+  report_file_telemetry || true
+fi

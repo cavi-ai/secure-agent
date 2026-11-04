@@ -80,6 +80,7 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 | `/worktrees/asks` | GET, HEAD | — | no agents | — |
 | `/cleanup` | GET, HEAD | — | no agents | — |
 | `/cleanup/trash` | GET, HEAD, POST | POST | no agents | — |
+| `/cleanup/remove` | GET, HEAD, POST | POST | no agents | — |
 | `/cleanup/clean` | GET, HEAD, POST | POST | no agents | — |
 | `/cleanup/advise` | GET, HEAD, POST | POST | no agents | — |
 | `/advisor/discover` | — | — | — | — |

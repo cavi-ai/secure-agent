@@ -147,6 +147,7 @@ var Table = []Route{
 	{Path: "/worktrees/asks", Handler: "API.handleWorktreeAsks", Console: true, NoAgent: true},
 	{Path: "/cleanup", Handler: "API.handleCleanup", Console: true, NoAgent: true},
 	{Path: "/cleanup/trash", Handler: "API.handleCleanupTrash", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/cleanup/remove", Handler: "API.handleCleanupRemove", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/cleanup/clean", Handler: "API.handleCleanupClean", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/cleanup/advise", Handler: "API.handleCleanupAdvise", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/advisor/discover", Handler: "API.handleAdvisorDiscover"},

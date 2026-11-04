@@ -100,6 +100,7 @@ test-linux:
 test-hooks:
 	@echo "==> Python hook and packaging tests..."
 	python3 plugin/hooks/test_secret_guard.py
+	python3 -m unittest discover -s plugin/hooks -p 'test_hook_lifecycle.py'
 	python3 plugin/hooks/test_shell_review.py
 	python3 -m unittest discover -s packaging/classifier -p 'test_*.py'
 	python3 plugin/hooks/test_injection_scan.py

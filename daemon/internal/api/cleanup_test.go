@@ -21,9 +21,10 @@ func TestCleanupEndpoints(t *testing.T) {
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	home, repo := filepath.Join(root, "home"), filepath.Join(root, "ws", "app")
 	for p, n := range map[string]int{
-		filepath.Join(repo, ".tmp", "a.log"):        4000,
-		filepath.Join(repo, ".quarantine", "b.bin"): 2000,
-		filepath.Join(home, "placeholder"):          1,
+		filepath.Join(repo, "node_modules", "cache"): 1000,
+		filepath.Join(repo, ".tmp", "a.log"):         4000,
+		filepath.Join(repo, ".quarantine", "b.bin"):  2000,
+		filepath.Join(home, "placeholder"):           1,
 	} {
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
@@ -35,7 +36,7 @@ func TestCleanupEndpoints(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".tmp/\n.quarantine/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".tmp/\n.quarantine/\nnode_modules/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("git", "-C", repo, "init", "-q", "-b", "main")
@@ -76,6 +77,8 @@ func TestCleanupEndpoints(t *testing.T) {
 		{"/cleanup/trash", `{}`, http.StatusBadRequest},
 		{"/cleanup/trash", `{"path":"` + filepath.Join(repo, "src") + `"}`, http.StatusNotFound},
 		{"/cleanup/clean", `{"name":"npm"}`, http.StatusNotFound},
+		{"/cleanup/remove", `{}`, http.StatusBadRequest},
+		{"/cleanup/remove", `{"path":"` + filepath.Join(repo, ".quarantine") + `"}`, http.StatusNotFound},
 		{"/cleanup", ``, http.StatusMethodNotAllowed},
 	} {
 		if rec := do(http.MethodPost, c.path, c.body); rec.Code != c.want {
@@ -101,7 +104,16 @@ func TestCleanupEndpoints(t *testing.T) {
 		t.Fatalf("ledger = %+v", ledger)
 	}
 
-	for _, p := range []string{"/cleanup", "/cleanup/trash", "/cleanup/clean"} {
+	out.Result = clutter.ClutterResult{}
+	rec = do(http.MethodPost, "/cleanup/remove", `{"path":"`+filepath.Join(repo, "node_modules")+`"}`)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil || out.Result.Bytes < 1000 || out.Result.TrashAt != "" {
+		t.Fatalf("remove: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(repo, "node_modules")); !os.IsNotExist(err) {
+		t.Fatalf("removed cache still exists: %v", err)
+	}
+
+	for _, p := range []string{"/cleanup", "/cleanup/trash", "/cleanup/clean", "/cleanup/remove"} {
 		found := false
 		for _, r := range apiroutes.Table {
 			if r.Path == p {

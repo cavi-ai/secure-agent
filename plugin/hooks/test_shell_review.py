@@ -10,6 +10,8 @@ import tempfile
 import threading
 import unittest
 
+from test_hook_lifecycle import running_app
+
 HOOK = Path(__file__).with_name("secret_guard.py")
 
 
@@ -24,8 +26,9 @@ class ShellReviewTests(unittest.TestCase):
                    "cwd": home, "tool_input": {"command": command}}
         if tool == "Read":
             payload["tool_input"] = {"file_path": command}
-        p = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
-                           text=True, capture_output=True, timeout=8, env=env)
+        with running_app(home):
+            p = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                               text=True, capture_output=True, timeout=8, env=env)
         self.assertEqual(p.returncode, 0, p.stderr)
         return json.loads(p.stdout)
 

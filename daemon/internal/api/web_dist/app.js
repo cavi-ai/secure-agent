@@ -1108,7 +1108,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   for (const name of ['removeWorktree', 'removeAllWorktrees', 'removeAllRemovable', 'revealWorktree', 'reconnectWorktree',
     'trashOrphanWorktree', 'trashReviewedWorktree', 'discussWorktree', 'discussWorktreeGroup', 'adviseWorktree', 'adviseWorktreeGroup',
-    'trashClutter', 'adviseClutterProject', 'cleanClutter', 'askWorktreeAgent', 'pruneWorktrees', 'hideWorktreeRepo']) {
+    'trashClutter', 'removeClutter', 'adviseClutterProject', 'cleanClutter', 'askWorktreeAgent', 'pruneWorktrees', 'hideWorktreeRepo']) {
     window[name] = (...args) => worktreeController[name](...args);
   }
 
@@ -3834,6 +3834,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'clutter-trash':
         e.preventDefault();
         window.trashClutter(d.path);
+        break;
+      case 'clutter-remove':
+        e.preventDefault();
+        window.removeClutter(d.path);
         break;
       case 'clutter-clean':
         e.preventDefault();

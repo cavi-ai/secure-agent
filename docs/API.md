@@ -32,6 +32,7 @@ The [generated route registry](reference/ROUTES.md) lists the current canonical 
 | `/cleanup/ledger` | `GET` | What cleanups removed and the bytes each gave back, with all-time and 30-day totals. |
 | `/cleanup` | `GET` | `.tmp` and `.quarantine` folders, build output, tool and app caches: size, last touched, project, how to clear. |
 | `/cleanup/trash`, `/cleanup/clean` | `POST` | Move one item to the Trash, or run a tool cache's own clean command. |
+| `/cleanup/remove` | `POST` | Permanently delete a regenerable repository cache after fresh safety checks. |
 | `/cleanup/advise` | `POST` | Ask the local advisor for a cleanup plan for one project (`{"project": "<repo path or machine>"}`); advisory only. |
 | `/worktrees/ask` | `POST` | Ask a currently active, identified agent in a keep/review worktree to open a PR for its work or say the worktree can go (`GET /worktrees/asks` lists answers). |
 | `/agent/status`, `/agent/skills`, `/agent/runs` | `GET` | The system agent's model and harness readiness, its skills, and its dispatches. |
@@ -1163,6 +1164,10 @@ Everything besides worktrees that can be cleared, each with its size, last touch
 | `app-cache` | one directory per app under `~/Library/Caches` and `~/.cache` | | Trash (quit the app first) |
 
 Each item: `id`, `kind`, `name`, `path`, `project` (the repository, for items inside one), `worktree`, `size_bytes`, `files`, `size_partial`, `last_touched` (newest modification time under it), `idle_days`, `action` (`trash`, `clean`, `none`), `command` and `note`. Items are biggest first; `kinds` and `projects` sum them. Sizes come from the same bounded background walk as worktree sizes (`sizing` while pending); a worktree walk that passed through an item in the last 15 minutes answers for it. An item inside a repository or worktree is offered only when git ignores it and no tracked file lives under it (a `build/` or `dist/` that is source reads `action: none`, note `not ignored by git, or holds tracked files: not a cache`); one where an agent session is live reads `action: none` too. `reclaimed` is the ledger totals, absent when the ledger cannot be read. `advice` maps a project (its repository path, or `machine` for items outside any repository) to the local advisor's stored plan: `rationale` holds the summary, `suggested_action` the steps, one per line. A GET answers from the last inventory; one older than 10 minutes still answers while a background rebuild replaces it (`refreshing: true`), and a size older than 24 hours, or than 15 minutes on `?refresh=1`, still answers while it is measured again. The last inventory and sizes are saved in the store as they are measured and answer after a restart. `?refresh=1` rebuilds and waits. Read-level, NoAgent. CLI: `secure-agent cleanup [--kind K] [--project P] [--refresh] [--json]`.
+
+#### `POST /cleanup/remove`
+
+`{"path":"<cache path>"}` permanently deletes an inventoried repository build cache with `can_remove: true`. Git must still ignore the directory and track none of its files. Active agent workspaces, running Unity editors, symlinks, nested worktrees, scratch directories, quarantine and app caches are refused. Unity `Library` discovery requires sibling `Assets` and `ProjectSettings/ProjectVersion.txt`. Success returns `200 {"status":"ok","result":{"item", "bytes", "bytes_partial"}}` and books `clean:build-cache`; partial byte measurements are lower bounds. This action does not move files to Trash. Errors use the same status codes as `/cleanup/trash`. Mutation, NoAgent, console-admitted. CLI: `secure-agent cleanup remove <path>`.
 
 #### `POST /cleanup/trash` and `POST /cleanup/clean`
 

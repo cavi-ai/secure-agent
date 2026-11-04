@@ -5,10 +5,12 @@ import subprocess
 import sys
 import tempfile
 
+from test_hook_lifecycle import running_app
+
 HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "activity_log.py")
 
 def main():
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir, running_app(tmpdir):
         logfile = os.path.join(tmpdir, "activity.jsonl")
         env = os.environ.copy()
         env["SECURE_AGENT_ACTIVITY_LOG"] = logfile
@@ -105,7 +107,7 @@ def main():
     # (`session_id`), not the hook's environment. Reading only env produced a
     # fresh uuid per tool call (11 handshakes for one session) and an empty
     # harness — the "session names don't parse" bug. Assert the payload wins.
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir, running_app(tmpdir):
         logfile = os.path.join(tmpdir, "activity.jsonl")
         env = os.environ.copy()
         env["SECURE_AGENT_ACTIVITY_LOG"] = logfile
