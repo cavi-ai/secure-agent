@@ -88,14 +88,11 @@ Endpoint Security telemetry via `eslogger` runs in a collector daemon that ships
 
 The menu bar's **Settings… → Updates** tab offers two channels:
 
-- **Stable** — the latest GitHub release. The app downloads the DMG, verifies
-  it against the release's SHA-256 `checksums.txt` **before mounting** (a
-  mismatch or a missing checksum is a loud refusal, never a silent install),
-  requires the new bundle to satisfy the running app's code-signing
-  requirement (same identifier and signer; a local development build
-  therefore does not take release updates), replaces the app bundle in
-  place, and relaunches (the daemon, a child of
-  the app, comes down and back up with it).
+- **Stable** — downloads the latest GitHub release, verifies its SHA-256
+  checksum before mounting, then checks the app's signature against the
+  running copy's signing requirement. It replaces the app in place and
+  relaunches the app and its child daemon. If a development build uses a
+  different certificate, follow [Switch from a development build to stable](TROUBLESHOOTING.md#switch-from-a-development-build-to-stable).
 - **Nightly** — builds from the current `origin/main` of a local checkout via
   `packaging/update_nightly.sh` (fetch → ff-only merge → `make install`).
   Developer-grade: it needs a git checkout and the repo toolchain; stable

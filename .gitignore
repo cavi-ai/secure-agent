@@ -29,7 +29,6 @@ CODEBUDDY.md
 # machine-specific agent/MCP configs (private paths)
 .mcp.json
 opencode.jsonc
-.cursorrules
 .github/code-review-graph.instruction.md
 
 # local scratch dirs (not this product's data)
@@ -37,5 +36,9 @@ opencode.jsonc
 
 # macOS
 .DS_Store
-# Local planning notes; the docs build would publish them outside a git checkout.
+# Local worktrees and working files
+.worktrees/
+.superpowers/
+.tmp/
+.quarantine/
 docs/superpowers/
