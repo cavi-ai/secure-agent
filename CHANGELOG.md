@@ -6,6 +6,18 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-11-04
+
+### Changed
+- Console: smaller agent icons and more compact Recent work and session rows; navigation and session-list controls remain available while scrolling, including on narrow screens.
+- Clutter: **Delete cache** permanently removes regenerable repository caches only after fresh Git and activity checks; active agent workspaces, registered worktrees and running Unity editors remain protected.
+- Claude hooks: desktop hooks pause when Secure Agent quits, including pending approval requests; headless hooks require a reachable daemon. Auto mode leaves prompt-only decisions to Claude's permission review while explicit deny rules remain enforced.
+
+### Fixed
+- Cleanup: canceled scans retain the previous inventory instead of caching incomplete Git checks as ineligible folders; failed Git checks report their cause.
+- Findings: ordinary sends after external tool content no longer become high-risk incidents solely because the content was read first. Routine retained reports stay in history without filling **Needs you**; detected injection and credential risks remain actionable.
+- Updates: signing mismatches explain how to replace an incompatible development copy with the official release while retaining signature verification.
+
 ## [1.5.1] - 2026-11-02
 
 ### Changed
@@ -1780,7 +1792,8 @@ scanning of the repository itself.
 Development history lives in the git log; this changelog starts at the first
 tagged release.
 
-[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/cavi-ai/secure-agent/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/cavi-ai/secure-agent/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/cavi-ai/secure-agent/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/cavi-ai/secure-agent/compare/v1.3.0...v1.4.0
