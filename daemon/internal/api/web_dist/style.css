@@ -23,6 +23,10 @@
   --action: #6558dd;
   --action-hover: #7567ed;
   --sidebar-width: 256px;
+  --navigation-offset: var(--sidebar-width);
+  --page-gutter: clamp(24px, 3.2vw, 56px);
+  --page-top: 40px;
+  --sidebar-control-size: 36px;
   --brand-bg: rgb(150 148 255 / 0.13);
   --ok: hsl(152 62% 50%);
   --ok-bg: hsl(152 62% 50% / 0.13);
@@ -112,8 +116,8 @@ body {
 .app {
   max-width: 2200px;
   min-width: 0;
-  margin-left: var(--sidebar-width);
-  padding: 40px clamp(24px, 3.2vw, 56px) 64px;
+  margin-left: var(--navigation-offset);
+  padding: var(--page-top) var(--page-gutter) 64px;
   display: flex;
   flex-direction: column;
   gap: 24px;
@@ -139,15 +143,17 @@ body {
 .sidebar-summary .statstrip { flex-direction: column; align-items: flex-start; gap: 10px; padding: 12px 0; border: 0; }
 .sidebar-summary .ss-spacer { display: none; }
 .sidebar-summary .ss-meta { flex-wrap: wrap; }
-.sidebar-controls { position: fixed; top: 12px; left: calc(var(--sidebar-width) - 18px); z-index: 70; display: flex; flex-direction: column; gap: 4px; }
-.sidebar-controls .btn { width: 36px; min-width: 36px; height: 36px; padding: 0; background: var(--bg-1); border-color: var(--line); }
+.sidebar-control-slot { flex: 0 0 var(--sidebar-control-size); min-height: var(--sidebar-control-size); }
+.sidebar-control-slot:has(#btn-session-sidebar-toggle:not([hidden])) { min-height: calc(2 * var(--sidebar-control-size) + 4px); }
+.sidebar-controls { position: fixed; top: var(--page-top); left: calc(var(--navigation-offset) + var(--page-gutter)); z-index: 70; display: flex; flex-direction: column; gap: 4px; }
+.sidebar-controls .btn { width: var(--sidebar-control-size); min-width: var(--sidebar-control-size); height: var(--sidebar-control-size); padding: 0; background: var(--bg-1); border-color: var(--line); }
 .sidebar-controls .btn:hover { background: var(--bg-3); }
 .sidebar-controls [hidden] { display: none; }
 .sidebar-controls .icon { width: 16px; height: 16px; }
+body.sidebar-collapsed { --navigation-offset: 0px; }
 body.sidebar-collapsed .sidebar { display: none; }
-body.sidebar-collapsed .app { margin-left: 44px; }
-body.sidebar-collapsed .sidebar-controls { left: 4px; }
 .masthead { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+.masthead-leading { display: flex; align-items: flex-start; gap: 12px; min-width: 0; flex: 1 1 360px; }
 .page-heading { min-width: 0; }
 .page-heading h1 { font-size: clamp(30px, 3vw, 42px); font-weight: 650; line-height: 1.15; letter-spacing: -0.045em; }
 .page-heading p { margin-top: 8px; color: var(--tx-2); font-size: 15px; max-width: 65ch; }
@@ -2829,7 +2835,8 @@ button.rc-col:hover .rc-seg-freed { background: var(--brand-2); }
 
 /* Phone working mode: compact chrome, reachable controls, full-screen evidence. */
 @media (max-width: 719px) {
-  .app { margin-left: 0; padding: 18px 16px 32px; gap: 20px; }
+  :root { --navigation-offset: 0px; --page-top: 18px; --page-gutter: 16px; --sidebar-control-size: 44px; }
+  .app { padding: var(--page-top) var(--page-gutter) 32px; gap: 20px; }
   .sidebar { position: sticky; top: 0; width: auto; padding: 0 0 16px; border-right: 0; border-bottom: 1px solid var(--line); background: var(--bg-0); gap: 20px; overflow: visible; }
   .sidebar-footer { margin: 0; padding: 0; border: 0; display: block; }
   .sidebar-footer > summary { display: list-item; padding: 10px 0; color: var(--tx-2); font-size: 13px; cursor: pointer; }
@@ -2896,7 +2903,8 @@ button.rc-col:hover .rc-seg-freed { background: var(--brand-2); }
 
 
 @media (min-width: 720px) and (max-width: 1099px) {
-  .app { margin-left: 0; padding: 28px; }
+  :root { --navigation-offset: 0px; --page-top: 28px; --page-gutter: 28px; --sidebar-control-size: 44px; }
+  .app { padding: var(--page-top) var(--page-gutter); }
   .sidebar { position: sticky; top: 0; width: auto; padding: 0 0 20px; border-right: 0; border-bottom: 1px solid var(--line); background: var(--bg-0); gap: 20px; }
   .sidebar-footer { margin: 0; padding: 0; border: 0; display: block; }
   .sidebar-footer > summary { display: list-item; padding: 10px 0; color: var(--tx-2); font-size: 13px; cursor: pointer; }
@@ -2904,13 +2912,6 @@ button.rc-col:hover .rc-seg-freed { background: var(--brand-2); }
   .sidebar-tools { margin-left: auto; }
   .tabs { flex-direction: row; flex-wrap: wrap; }
   .tab-btn { min-height: 44px; padding: 10px 16px; }
-}
-
-@media (max-width: 1099px) {
-  .app > .sidebar { padding-top: 56px; }
-  .sidebar-controls { left: auto; right: 12px; flex-direction: row; }
-  .sidebar-controls .btn { width: 44px; min-width: 44px; height: 44px; }
-  body.sidebar-collapsed .sidebar-controls { left: 0; right: auto; flex-direction: column; }
 }
 
 /* Local AI status stays compact; controls wrap without shrinking targets. */
