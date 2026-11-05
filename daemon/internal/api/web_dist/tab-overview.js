@@ -960,6 +960,7 @@ function renderPosture() {
   banner.dataset.announcedState = nextState;
   stateEl.textContent = view.title;
   summaryEl.textContent = view.summary;
+  summaryEl.title = view.summary;
   if (healthEl) {
     healthEl.textContent = view.health;
     healthEl.hidden = !view.health;

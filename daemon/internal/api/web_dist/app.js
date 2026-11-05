@@ -1847,6 +1847,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (description) description.textContent = heading[1];
 
     document.body.classList.toggle('agent-page', activeTab === 'agent');
+    document.body.classList.toggle('home-page', activeTab === 'home');
     document.body.classList.toggle('session-page', activeTab === 'sessions' && r.sub === 'board');
     document.body.classList.toggle('monitoring-page', activeTab === 'monitoring');
     if (r.tab === 'sessions') activeSub = r.sub;
@@ -2309,7 +2310,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const actions = drawerBody.querySelector('.incident-workflow-actions');
           if (actions) actions.innerHTML = incidentWorkflowHTML(id, result.workflow);
         }
-        showToast(status === 'resolved' ? 'Incident closure recorded as reported' : 'Incident dismissed from Needs you', 'success');
+        if (status !== 'dismissed') showToast(status === 'resolved' ? 'Incident closure recorded as reported' : 'Incident status set to open', 'success');
         cardNote(`#incidents-container [data-action="open-incident"][data-id="${cssq(id)}"]`, '.log-row', 'incidents-container', status);
         fetchTelemetry();
       },
@@ -2536,7 +2537,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }, {
       ok: () => {
         revert.commit?.();
-        showToast('Flag dismissed — the rule keeps watching', 'info');
         if (revert.isCurrent?.() !== false && !detailDrawer.selection() && detailDrawer.isFlagOpen(id)) detailDrawer.close();
         cardNote('', '', 'flags-list', 'dismissed');
         fetchTelemetry();
@@ -3947,6 +3947,9 @@ document.addEventListener('DOMContentLoaded', () => {
         window.openRecentSessionResults(d.session,el); break;
       case 'recent-work-home':
         window.returnToRecentWork(); break;
+      case 'recent-work-refresh':
+        document.getElementById('session-daily')._recentOrder = null;
+        renderSessionDaily(); break;
       case 'recent-work-all':
         window.SA.clearRecentWorkReturn();
         Object.assign(harnessFilter,{text:'',harnesses:{},liveOnly:false});

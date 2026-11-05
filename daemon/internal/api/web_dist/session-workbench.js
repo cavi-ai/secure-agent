@@ -647,41 +647,85 @@ function sessionHooksHTML(rows, state, health, healthState, ingestion, sessionId
 
 // Durable IDs are the entry point; live process counts and setup checks do
 // not substitute for a session's own record.
-function sessionDailyHTML(sessions, coverage, search) {
+function recentWorkActivity(s) {
+  for (const [at, label] of [[s.ended_at, 'Ended'], [s.last_seen_at, 'Last observed'], [s.started_at, 'Started']]) {
+    if (at && Number.isFinite(Date.parse(at))) return {at, label, ms:Date.parse(at)};
+  }
+  return {ms:0};
+}
+
+function recentWorkSessions(sessions, search, order = []) {
+  const rank = new Map(order.map((id, i) => [id, i]));
+  return sessions.filter(s => ['active', 'idle', 'ended'].includes(s.status) && sessionMatchesText(s, search))
+    .sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity)
+      || recentWorkActivity(b).ms - recentWorkActivity(a).ms || a.id.localeCompare(b.id));
+}
+
+function recentWorkRowHTML(s) {
+  const seen = recentWorkActivity(s);
+  const name = s.repo || sessionTitle(s);
+  return `<div class="session-daily-row"><button type="button" class="session-daily-card" data-action="session-current" data-session="${escapeHTML(s.id)}" title="Session ${escapeHTML(s.id)}">
+    <span class="session-daily-workspace"><strong>${escapeHTML(name)}</strong><small title="${escapeHTML(s.branch || '')}">${escapeHTML(s.branch || 'Branch not recorded')}</small></span>
+    <span class="session-daily-identity">${harnessChipHTML(s.harness)}<span>${escapeHTML(harnessMeta(s.harness).label)}</span></span>
+    <span class="session-daily-status" data-status="${escapeHTML(s.status)}">${escapeHTML(s.status)}</span>
+    <time datetime="${escapeHTML(seen.at || '')}" title="${escapeHTML(seen.at ? seen.label + ': ' + new Date(seen.at).toLocaleString() : 'Activity time unavailable')}">${seen.at ? escapeHTML(eventTime(new Date(seen.at))) : '—'}</time>
+  </button><button type="button" class="btn btn-ghost btn-sm session-daily-results" data-action="recent-session-results" data-session="${escapeHTML(s.id)}" aria-label="Review results for ${escapeHTML(name)} · ${escapeHTML(s.id)}">Results<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div>`;
+}
+
+function recentWorkFrameHTML(rows, total) {
+  return `<div class="session-daily-grid"><div class="session-daily-labels" aria-hidden="true"><span>Workspace</span><span>Agent</span><span>Status</span><span>Last activity</span></div><div class="session-daily-rows">${rows}</div></div><p class="recent-work-count">Showing ${Math.min(6,total)} of ${total} loaded sessions</p>`;
+}
+
+function sessionDailyHTML(sessions, coverage, search, order = []) {
   if (!Array.isArray(sessions)) return '<p role="status">Session data unavailable.</p>';
-  const activity = s => {
-    for (const [at, label] of [[s.ended_at, 'Ended'], [s.last_seen_at, 'Last observed'], [s.started_at, 'Started']]) {
-      if (at && Number.isFinite(Date.parse(at))) return { at, label, ms: Date.parse(at) };
-    }
-    return { ms: 0 };
-  };
-  const recent = sessions.filter(s => ['active', 'idle', 'ended'].includes(s.status) && sessionMatchesText(s, search))
-    .sort((a, b) => activity(b).ms - activity(a).ms || a.id.localeCompare(b.id));
+  const recent = recentWorkSessions(sessions, search, order);
   if (!recent.length && String(search || '').trim()) return '<p role="status">No sessions match your search. <button type="button" class="link-btn" data-action="clear-global-search">Clear search</button></p>';
   if (!recent.length) return '<p>No sessions recorded in the loaded history.</p>';
-  const rows = recent.slice(0, 6).map(s => {
-    const seen = activity(s);
-    return `<div class="session-daily-row"><button type="button" class="session-daily-card" data-action="session-current" data-session="${escapeHTML(s.id)}">
-      <span class="session-daily-identity">${harnessChipHTML(s.harness)}<span><strong>${escapeHTML(harnessMeta(s.harness).label)}</strong><small>${escapeHTML(s.status)} · ${escapeHTML(sessionShort(s.id))}</small></span></span>
-      <span class="session-daily-cell"><strong>${escapeHTML(s.repo || sessionTitle(s))}</strong><small>${escapeHTML(s.branch || 'Branch not recorded')}</small></span>
-      <span class="session-daily-cell">${seen.at ? `<time datetime="${escapeHTML(seen.at)}">${escapeHTML(new Date(seen.at).toLocaleString())}</time><small>${seen.label}</small>` : '<small>Activity time unavailable</small>'}</span>
-      <svg class="session-daily-chevron" aria-hidden="true"><use href="#i-arrow"/></svg>
-    </button><button type="button" class="btn btn-ghost btn-sm session-daily-results" data-action="recent-session-results" data-session="${escapeHTML(s.id)}" aria-label="Review results for ${escapeHTML(s.repo || sessionTitle(s))} · ${escapeHTML(s.id)}">Review results</button></div>`;
-  }).join('');
-  return `<div class="session-daily-grid"><div class="session-daily-labels" aria-hidden="true"><span>Agent</span><span>Workspace</span><span>Activity time</span><span></span></div>${rows}</div>${recent.length > 6 ? `<p>Showing 6 of ${recent.length} loaded sessions. Use View all sessions for more history.</p>` : ''}`;
+  return recentWorkFrameHTML(recent.slice(0,6).map(recentWorkRowHTML).join(''), recent.length);
 }
 
 function renderSessionDaily() {
   const el = document.getElementById('session-daily');
   if (!el) return;
   const SA = window.SA;
-  const html = sessionDailyHTML(SA.t.sessions, SA.t.status && SA.t.status.coverage, window.globalSearchTerm?.());
-  if (el._saHTML !== html) {
-    const focused = el.contains(document.activeElement) ? document.activeElement : null;
-    const target = focused?.dataset;
-    el.innerHTML = html; el._saHTML = html;
-    if (target?.action && target.session) Array.from(el.querySelectorAll('[data-action]')).find(node => node.dataset.action === target.action && node.dataset.session === target.session)?.focus({preventScroll:true});
+  const search = window.globalSearchTerm?.() || '';
+  if (el._recentSearch !== search) el._recentOrder = null;
+  el._recentSearch = search;
+  const latest = Array.isArray(SA.t.sessions) ? recentWorkSessions(SA.t.sessions, search) : [];
+  const ordered = Array.isArray(SA.t.sessions) ? recentWorkSessions(SA.t.sessions, search, el._recentOrder || []) : [];
+  const shown = ordered.slice(0,6);
+  el._recentOrder = shown.map(s=>s.id);
+  const refresh = document.querySelector('[data-action="recent-work-refresh"]');
+  if (refresh) {
+    const changed = latest.slice(0,6).some((s,i)=>s.id !== shown[i]?.id);
+    refresh.classList.toggle('has-updates', changed);
+    refresh.title = changed ? 'New activity available — update list order' : 'Reorder by latest activity';
+    refresh.setAttribute('aria-label', refresh.title);
   }
+  if (!shown.length) {
+    const html = sessionDailyHTML(SA.t.sessions, null, search);
+    if (el._saHTML !== html) el.innerHTML = html;
+    el._saHTML = html;
+    return;
+  }
+  const focused = el.contains(document.activeElement) ? document.activeElement : null;
+  const target = focused?.dataset;
+  if (!el.querySelector('.session-daily-rows')) el.innerHTML = recentWorkFrameHTML('',ordered.length);
+  el._saHTML = null;
+  patchList(el.querySelector('.session-daily-rows'), shown, {key:s=>s.id, html:recentWorkRowHTML,
+    hash:s=>JSON.stringify([s.id,s.repo,s.branch,s.harness])});
+  for (const [i,row] of Array.from(el.querySelector('.session-daily-rows').children).entries()) {
+    const s = shown[i], seen = recentWorkActivity(s);
+    const status = row.querySelector('.session-daily-status');
+    status.textContent = s.status; status.dataset.status = s.status;
+    const time = row.querySelector('time');
+    time.dateTime = seen.at || '';
+    time.textContent = seen.at ? eventTime(new Date(seen.at)) : '—';
+    time.title = seen.at ? seen.label + ': ' + new Date(seen.at).toLocaleString() : 'Activity time unavailable';
+  }
+  el.querySelector('.recent-work-count').textContent = `Showing ${shown.length} of ${ordered.length} loaded sessions`;
+  if (focused && !focused.isConnected && target?.action && target.session) Array.from(el.querySelectorAll('[data-action]'))
+    .find(node=>node.dataset.action===target.action && node.dataset.session===target.session)?.focus({preventScroll:true});
 }
 
 // Validate the fields consumed by the current-status view before replacing
