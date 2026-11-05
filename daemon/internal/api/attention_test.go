@@ -414,6 +414,9 @@ func TestAttentionIncidentSeverityPreservesRisk(t *testing.T) {
 				for _, it := range g.Items {
 					if it.Kind == "incident" && it.ID == "inc-1" {
 						title = it.Title
+						if it.Rule != "sensitive-read-then-connect" {
+							t.Fatalf("incident rule = %q", it.Rule)
+						}
 					}
 				}
 			}

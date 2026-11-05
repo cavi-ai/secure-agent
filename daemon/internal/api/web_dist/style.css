@@ -1314,10 +1314,10 @@ main { min-width: 0; }
 .home-review .needs-list { border-radius: 0; background: transparent; }
 .home-review .need { grid-template-columns: minmax(0,1fr); padding: 14px; gap: 10px; }
 .home-review .need-head { grid-template-columns: 16px minmax(0,1fr); }
-.home-review .need-what { white-space: normal; }
+.home-review .need-what { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
 .home-review .need-meta { grid-column: 2; grid-row: 3; margin-top: 5px; }
 .home-review .need-why { grid-column: 2; }
-.home-review .need-actions { flex-wrap: wrap; gap: 6px; }
+.home-review .need-actions { flex-wrap: wrap; gap: 6px; padding-left: 26px; }
 .home-review .need-assessment, .home-review .need-consequence { padding-left: 0; }
 .home-review .attention-overview { padding: 8px 16px; border: 0; border-top: 1px solid var(--line); }
 .attention-overview > summary { font-size: 12px; color: var(--tx-2); min-height: 36px; align-content: center; cursor: pointer; }
@@ -1354,7 +1354,7 @@ main { min-width: 0; }
   padding: 4px; margin: -4px; border: 0; border-radius: var(--r-sm); background: none; color: inherit; font: inherit; text-align: left;
 }
 button.need-head { cursor: pointer; }
-button.need-head:hover .need-what { text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+button.need-head:hover { background: var(--bg-3); }
 .need-head:focus-visible, .log-head:focus-visible, .log-check:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .need-head .harness-chip { grid-column: 1; grid-row: 1 / span 2; align-self: start; margin-top: 2px; }
 .need-what { grid-column: 2; font: 600 0.875rem/1.35 var(--font); color: var(--tx-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }

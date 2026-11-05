@@ -566,7 +566,7 @@ func (b *attentionBuilder) addIncidents() {
 		}
 		item := AttentionItem{
 			Kind: "incident", Priority: 3, ID: inc.ID,
-			Title: "Open incident", Detail: detail, Status: status,
+			Title: "Open incident", Detail: detail, Status: status, Rule: inc.Rule,
 		}
 		if critical {
 			headline.Severity = 3
