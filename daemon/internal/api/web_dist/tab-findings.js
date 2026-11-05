@@ -406,7 +406,14 @@ function needView(item, ctx) {
         ] };
     case 'incident': {
       const inc = ctx.incidents.get(item.id);
-      return { ...v, word: 'incident', why: [item.title, item.status].filter(Boolean).join(' · '), at: inc ? inc.timestamp : '',
+      const rule = inc?.rule || item.rule;
+      const status = inc?.workflow?.status || item.status || 'open';
+      const risk = String(inc?.risk || '').toLowerCase();
+      return { ...v,
+        what: rule ? ruleTitle(rule) : 'Security incident needs review',
+        why: [harnessMeta(inc?.agent || v.agent).label, capFirst(status)].filter(Boolean).join(' · '),
+        word: risk ? `${capFirst(risk)} risk` : item.title || 'Incident',
+        sev: risk === 'high' ? 'sev-warn' : v.sev, at: inc ? inc.timestamp : '',
         items: incidentActionItems(inc || {id: item.id, workflow: {status: item.status || 'open'}}) };
     }
     case 'flag': {

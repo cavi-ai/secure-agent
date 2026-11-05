@@ -37,6 +37,23 @@ test('incident dismissal is available even when detail is outside the telemetry 
   assert.match(html, /data-id="older" data-status="acknowledged"/);
 });
 
+test('incident cards use the rule title and retain risk without displaying raw report evidence', () => {
+  const summary = "Security rule 'secret-in-transcript' triggered by agent 'codex' (PID 0). Evidence: "
+    + '/workspace/transcripts/2026/11/session.jsonl matched pattern rule db-conn-string. '.repeat(12);
+  const item = {kind: 'incident', id: 'transcript', status: 'open', title: 'Critical incident', detail: summary, rule: 'secret-in-transcript'};
+  const inc = {id: item.id, rule: item.rule, agent: 'codex', risk: 'CRITICAL', summary, timestamp: '2026-11-05T15:45:00Z'};
+  const {ctx, sa} = load({}, {incidents: [inc]});
+  const html = needRow(ctx, sa, {...item, group: group([item])});
+  assert.match(html, /Secret appeared in an agent transcript/);
+  assert.match(html, /Codex · Open/);
+  assert.match(html, /Critical risk/);
+  assert.doesNotMatch(html, /PID 0|session.jsonl|Evidence:|db-conn-string/);
+  assert.deepEqual(bars(html).bar, ['View report', 'Dismiss']);
+  assert.equal(inc.summary, summary);
+  sa.t.incidents = [];
+  assert.match(needRow(ctx, sa, item), /Secret appeared in an agent transcript/);
+});
+
 test('an empty queue hides the needs panel and the Home badge', () => {
   const { ctx, nodes, badges, patched } = load({ state: 'all-clear', needs_you: 0, items: [], groups: [], coverage_items: [] });
   ctx.renderAttention();
