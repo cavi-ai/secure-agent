@@ -34,6 +34,10 @@ func esOpenTestLine(path string) string {
 	return esTestLine("open", map[string]any{"file": map[string]any{"path": path, "path_truncated": false}, "fflag": 1})
 }
 
+func esUnlinkTestLine(path string) string {
+	return esTestLine("unlink", map[string]any{"target": map[string]any{"path": path, "path_truncated": false}})
+}
+
 func esCreateTestLine(dir, name string) string {
 	return esTestLine("create", map[string]any{"destination_type": 1,
 		"destination": map[string]any{"new_path": map[string]any{"dir": map[string]any{"path": dir, "path_truncated": false}, "filename": name}}})
@@ -90,6 +94,17 @@ func TestKeepESLine(t *testing.T) {
 		{"usr local open", esOpenTestLine("/usr/local/etc/tool.conf"), true},
 		{"exec of system binary", esTestLine("exec", map[string]any{"target": map[string]any{"executable": map[string]any{"path": "/usr/bin/git"}}}), true},
 		{"unlink under system prefix", esTestLine("unlink", map[string]any{"target": map[string]any{"path": "/usr/lib/libz.1.dylib"}}), true},
+		{"user temp delete", esUnlinkTestLine("/private/var/folders/n0/x1y2/T/tmpab12/out.o"), false},
+		{"user temp cache delete", esUnlinkTestLine("/private/var/folders/n0/x1y2/C/com.example.tool/index.db"), false},
+		{"escaped user temp delete", strings.ReplaceAll(esUnlinkTestLine("/private/var/folders/n0/x1y2/T/tmpab12/out.o"), "/", `\/`), false},
+		{"user temp delete with parent first", esTestLine("unlink", map[string]any{"parent_dir": map[string]any{"path": "/Users/dev/work"}, "target": map[string]any{"path": "/private/var/folders/n0/x1y2/T/a.o"}}), false},
+		{"workspace delete with temp parent first", esTestLine("unlink", map[string]any{"parent_dir": map[string]any{"path": "/private/var/folders/n0/x1y2/T"}, "target": map[string]any{"path": "/Users/dev/work/a.go"}}), true},
+		{"spaced layout user temp delete", `{"process": {"pid": 7}, "event": {"unlink": {"target": {"path": "/private/var/folders/n0/x1y2/T/a.o"}}}}`, false},
+		{"workspace delete", esUnlinkTestLine("/Users/dev/work/app/main.go"), true},
+		{"env file delete in user temp", esUnlinkTestLine("/private/var/folders/n0/x1y2/T/build/.env"), true},
+		{"profile file delete in user temp", esUnlinkTestLine("/private/var/folders/n0/x1y2/T/proxy.mobileconfig"), true},
+		{"temp delete outside the per-user roots", esUnlinkTestLine("/private/var/foldersX/file"), true},
+		{"truncated temp delete line", `{"process":{"pid":7},"event":{"unlink":{"target":{"path":"/private/var/folders/n0/x1`, true},
 		{"rename", esTestLine("rename", map[string]any{"destination": map[string]any{"existing_file": map[string]any{"path": "/opt/homebrew/Cellar/x"}}}), true},
 		{"tcc modify", esTestLine("tcc_modify", map[string]any{"service": "kTCCServiceSystemPolicyAllFiles"}), true},
 		{"truncated open line", `{"process":{"pid":7},"event":{"open":{"fflag":1,"file":{"path":"/usr/lib/libSyst`, true},
@@ -179,6 +194,9 @@ func TestKeepESLineNeverDropsConfiguredSensitivePaths(t *testing.T) {
 		if !keepESLine([]byte(esOpenTestLine(s))) {
 			t.Errorf("open of configured sensitive path %q was dropped", s)
 		}
+		if !keepESLine([]byte(esUnlinkTestLine(s))) {
+			t.Errorf("delete of configured sensitive path %q was dropped", s)
+		}
 	}
 }
 
@@ -246,7 +264,7 @@ func TestESFilterStatsReportsOncePerMinute(t *testing.T) {
 		t.Fatal("reported before a minute passed")
 	}
 	msg, ok := s.report(t0.Add(time.Minute))
-	if !ok || msg != "es-collector: dropped 70 of 100 lines (system and temp-path opens) in the last 1m0s; wrote 60 KB for 300 KB kept" {
+	if !ok || msg != "es-collector: dropped 70 of 100 lines (system and temp-path opens, temp-path deletes) in the last 1m0s; wrote 60 KB for 300 KB kept" {
 		t.Fatalf("report = %q, %v", msg, ok)
 	}
 	if s.kept != 0 || s.dropped != 0 || s.keptBytes != 0 || s.wroteBytes != 0 || !s.since.Equal(t0.Add(time.Minute)) {

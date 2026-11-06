@@ -9,6 +9,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 ### Changed
 - Home: show a workspace-first work list beside a scrollable review queue. Activity updates keep row order and keyboard focus; the list's refresh control applies the latest order. Dismissing review items no longer animates the page height or stacks confirmation notifications.
 
+### Fixed
+- File telemetry: a session's repeated opens of a file and repeated execs of a tool are stored once a minute instead of once per process, and ordinary execs commit with file activity instead of one commit each; a build that forks 200 shells over 40 files writes about 70 KB to the database instead of 24 MB.
+- File telemetry: the collector drops deletes in the per-user temporary and cache roots, as it drops opens there; deletes of sensitive paths and configuration profile files are kept.
+
 ## [1.5.2] - 2026-11-04
 
 ### Changed
