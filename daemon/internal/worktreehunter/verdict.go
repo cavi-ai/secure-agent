@@ -41,6 +41,9 @@ type Worktree struct {
 
 	State   string   `json:"state"`
 	Reasons []string `json:"reasons"`
+	// CanRemoveReviewed permits an explicit, pinned review to discard ignored
+	// scratch files. It never changes the automatic removal verdict.
+	CanRemoveReviewed bool `json:"can_remove_reviewed,omitempty"`
 	// ReasonKinds holds the kind of each entry of Reasons, in order
 	// (ReasonKeep, ReasonAgent, ReasonReview, ReasonSafe, ReasonInfo).
 	ReasonKinds []string `json:"reason_kinds"`
@@ -136,6 +139,7 @@ type facts struct {
 // remove = squash-merged; merged by ancestry or an empty diff and untouched
 // for activeGrace; or pushed and idle past staleAfter.
 func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
+	defer func() { w.CanRemoveReviewed = reviewedRemoveBlocker(*w) == "" }()
 	last := latest(f.HeadTime, f.IndexTime, f.LastSession)
 	if !last.IsZero() {
 		w.LastActivity = &last

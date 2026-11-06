@@ -38,7 +38,7 @@ func TestRemovalOutlastsTheReadTimeout(t *testing.T) {
 			gitTimeout = time.Nanosecond
 		}
 	}}
-	if _, err := h.remove(context.Background(), wt, rec); err != nil || exists(wt) {
+	if _, err := h.remove(context.Background(), wt, rec, nil); err != nil || exists(wt) {
 		t.Fatalf("remove with expired read deadline = %v, still on disk %v", err, exists(wt))
 	}
 	if gitTimeout != time.Nanosecond {
@@ -281,7 +281,7 @@ func TestRemovePassesPhasesInOrderAndMeasuresBeforeDeleting(t *testing.T) {
 		write(t, filepath.Join(wt, "node_modules", fmt.Sprintf("f%d.js", i)), "x\n")
 	}
 	rec := &phaseRecorder{}
-	if _, err := h.remove(context.Background(), wt, rec); err != nil || exists(wt) {
+	if _, err := h.remove(context.Background(), wt, rec, nil); err != nil || exists(wt) {
 		t.Fatalf("remove = %v, still on disk %v", err, exists(wt))
 	}
 	if got := strings.Join(rec.seen, ","); got != "checking,measuring,deleting(measured)" {

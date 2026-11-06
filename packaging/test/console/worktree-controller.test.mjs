@@ -119,6 +119,34 @@ const selectionReport = () => ({
   ]
 });
 
+test('reviewed scratch deletion uses pinned permanent removal and retains the confirmation facts', async () => {
+  const rep = selectionReport();
+  const row = rep.repos[0].worktrees[1];
+  row.can_remove_reviewed = true;
+  row.reasons = ['scratch files that only live here: .tmp/ (47 files, 700.4 KB)', '1 commit retained on the branch'];
+  const {controller, log} = build({respond:(url, req) => url === '/worktrees'
+    ? reply(rep) : reply({removal:{path:JSON.parse(req.body).path,state:'running'}})});
+  await controller.loadWorktrees(false);
+  controller.toggleWorktreeSelection(row.path);
+  await controller.removeSelectedWorktrees();
+  assert.deepEqual(plain(log.requests.filter(r => r.method === 'POST')), [{url:'/worktrees/remove',method:'POST',
+    body:{path:row.path,async:true,review:{head:row.head,reasons:row.reasons}}}]);
+  assert.match(log.confirms[0].opts.messageHTML, /ignored .tmp scratch files/);
+  assert.match(log.confirms[0].opts.messageHTML, /Branches and committed work stay in git/);
+  assert.match(log.confirms[0].message, /47 files, 700.4 KB/);
+});
+
+test('a single reviewed removal refuses a changed snapshot after confirmation', async () => {
+  const rep = selectionReport();
+  const row = rep.repos[0].worktrees[1];
+  row.can_remove_reviewed = true;
+  const {controller, log} = build({respond:() => reply(rep), confirmed:() => {row.can_remove_reviewed = false; return true;}});
+  await controller.loadWorktrees(false);
+  await controller.removeWorktree(row.path, row.branch);
+  assert.equal(log.requests.some(r => r.method === 'POST'), false);
+  assert.match(log.toasts.at(-1).message, /Inspection facts changed/);
+});
+
 test('selection spans repositories and filters; select shown respects both searches and excludes unsafe rows', async () => {
   const rep = selectionReport();
   const { controller } = build({ respond: () => reply(rep) });

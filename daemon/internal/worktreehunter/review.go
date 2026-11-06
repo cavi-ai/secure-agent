@@ -17,6 +17,42 @@ import (
 
 var ErrReviewChanged = errors.New("worktree changed since review; refresh and inspect it again")
 
+// RemovalReview binds an explicit permanent-deletion request to the facts
+// shown in its confirmation. Branches and committed source remain in git.
+type RemovalReview struct {
+	Head    string   `json:"head"`
+	Reasons []string `json:"reasons"`
+}
+
+func reviewedRemoveBlocker(row Worktree) string {
+	if why := trashBlocker(row); why != "" {
+		return why
+	}
+	switch {
+	case row.State != StateReview:
+		return "only an inspected review worktree qualifies"
+	case row.Head == "" || len(row.Reasons) == 0:
+		return "inspection details are missing"
+	case row.Detached || row.Branch == "":
+		return "a branch must retain the commits"
+	case row.Changed > 0 || row.Untracked > 0:
+		return "uncommitted or untracked source must be preserved first"
+	case len(row.PreciousIgnored) > 0:
+		return "local secrets or agent state must be preserved first"
+	}
+	return ""
+}
+
+func validateRemovalReview(row Worktree, review *RemovalReview) error {
+	if row.Head != review.Head || !slices.Equal(row.Reasons, review.Reasons) {
+		return ErrReviewChanged
+	}
+	if reviewedRemoveBlocker(row) != "" {
+		return &NotRemovableError{Row: row}
+	}
+	return nil
+}
+
 type NotReviewableError struct {
 	Row Worktree
 	// Why names the single reason this row cannot go to the Trash.

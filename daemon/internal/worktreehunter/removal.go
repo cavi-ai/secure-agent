@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
@@ -119,8 +120,20 @@ func (j removalJob) finish(row Worktree, err error) {
 // StartRemove removes path in the background and returns the running
 // removal; Removals reports its steps and outcome.
 func (h *Hunter) StartRemove(path string) (Removal, error) {
+	return h.startRemove(path, nil)
+}
+
+func (h *Hunter) StartRemoveReviewed(path string, review RemovalReview) (Removal, error) {
+	review.Reasons = slices.Clone(review.Reasons)
+	return h.startRemove(path, &review)
+}
+
+func (h *Hunter) startRemove(path string, review *RemovalReview) (Removal, error) {
 	if !filepath.IsAbs(path) {
 		return Removal{}, errors.New("path must be absolute")
+	}
+	if review != nil && (review.Head == "" || len(review.Reasons) == 0) {
+		return Removal{}, errors.New("reviewed head and reasons are required")
 	}
 	job, err := h.beginRemoval(path)
 	if err != nil {
@@ -129,7 +142,7 @@ func (h *Hunter) StartRemove(path string) (Removal, error) {
 	h.remWG.Add(1)
 	go func() {
 		defer h.remWG.Done()
-		row, err := h.remove(context.Background(), path, job)
+		row, err := h.remove(context.Background(), path, job, review)
 		job.finish(row, err)
 	}()
 	return h.removal(job.path), nil

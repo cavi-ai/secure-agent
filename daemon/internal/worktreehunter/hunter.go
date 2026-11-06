@@ -620,7 +620,7 @@ func (h *Hunter) repoFingerprints(ctx context.Context, rs *repoScan) (map[string
 // inspectOne gathers one worktree's facts. The main worktree and missing
 // directories are listed without inspection.
 func (h *Hunter) inspectOne(ctx context.Context, rs *repoScan, isMain bool, l listed, activity []model.WorkspaceActivity) (Worktree, facts) {
-	w := Worktree{Path: l.Path, Branch: l.Branch, Head: shortSHA(l.Head), Detached: l.Detached, Locked: l.Locked, LockReason: l.LockReason}
+	w := Worktree{Path: l.Path, Branch: l.Branch, Head: l.Head, Detached: l.Detached, Locked: l.Locked, LockReason: l.LockReason}
 	f := facts{Main: isMain || l.Bare, DefaultBranch: rs.out.DefaultBranch}
 	if f.Main {
 		return w, f

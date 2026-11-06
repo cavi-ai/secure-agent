@@ -118,6 +118,18 @@ test('batch review separates reclaimable space from files moved to Trash', () =>
   assert.match(html, /does not free disk space/);
 });
 
+test('a clean scratch review offers permanent removal and includes it in reclaimed-space estimates', () => {
+  const w = row('scratch', {state:'review',can_remove_reviewed:true,size_bytes:1048576,
+    reasons:['scratch files that only live here: .tmp/ (47 files, 700.4 KB)']});
+  const rendered = context.worktreeRowHTML(w, repo);
+  assert.match(rendered, /Review permanent deletion/);
+  assert.doesNotMatch(rendered, /Review Trash move/);
+  const rep = {repos:[{...repo,worktrees:[w]}]};
+  const summary = context.worktreeSelectionHTML(rep,{selected:new Map([[w.path,{}]])},[{repo,rows:[w]}]);
+  assert.match(summary, /Reclaim estimate: 1.0 MB/);
+  assert.doesNotMatch(summary, /1 to Trash/);
+});
+
 test('removal review separates routes and escapes every worktree-provided value', () => {
   const approval = { ...row('<script>alert(1)</script>'), repo: '/code/<app>', submodules: 2, reasons: ['ignored .tmp/ <img src=x>'] };
   const html = context.worktreeSelectionReviewHTML([{ approval, size: { size_bytes: 1024 } }]);

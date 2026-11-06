@@ -43,19 +43,32 @@ const removeTimeout = 10 * time.Minute
 // finishes even when ctx is canceled: a half-deleted worktree is worse than
 // a late answer. Its progress shows in Removals.
 func (h *Hunter) Remove(ctx context.Context, path string) (Worktree, error) {
+	return h.removeRequested(ctx, path, nil)
+}
+
+// RemoveReviewed permanently deletes an explicitly reviewed, clean worktree
+// and its ignored scratch files while retaining its branch and commits.
+func (h *Hunter) RemoveReviewed(ctx context.Context, path string, review RemovalReview) (Worktree, error) {
+	return h.removeRequested(ctx, path, &review)
+}
+
+func (h *Hunter) removeRequested(ctx context.Context, path string, review *RemovalReview) (Worktree, error) {
 	if !filepath.IsAbs(path) {
 		return Worktree{}, errors.New("path must be absolute")
+	}
+	if review != nil && (review.Head == "" || len(review.Reasons) == 0) {
+		return Worktree{}, errors.New("reviewed head and reasons are required")
 	}
 	job, err := h.beginRemoval(path)
 	if err != nil {
 		return Worktree{}, err
 	}
-	row, err := h.remove(context.WithoutCancel(ctx), path, job)
+	row, err := h.remove(context.WithoutCancel(ctx), path, job, review)
 	job.finish(row, err)
 	return row, err
 }
 
-func (h *Hunter) remove(ctx context.Context, path string, p removalProgress) (Worktree, error) {
+func (h *Hunter) remove(ctx context.Context, path string, p removalProgress, review *RemovalReview) (Worktree, error) {
 	defer h.lockForAction(func() { p.phase(PhaseWaiting) })()
 
 	p.phase(PhaseChecking)
@@ -64,8 +77,17 @@ func (h *Hunter) remove(ctx context.Context, path string, p removalProgress) (Wo
 		return Worktree{}, err
 	}
 	row := h.judge(ctx, rs, l)
-	if row.State != StateRemove {
+	if review != nil {
+		if err := validateRemovalReview(row, review); err != nil {
+			return row, err
+		}
+	} else if row.State != StateRemove {
 		return row, &NotRemovableError{Row: row}
+	}
+	for _, other := range rs.list {
+		if other.Path != l.Path && strings.HasPrefix(other.Path, l.Path+string(filepath.Separator)) {
+			return row, fmt.Errorf("%w: another registered worktree is inside this folder", ErrReviewChanged)
+		}
 	}
 	// Measured now, not from the cache: this is the space the ledger books.
 	p.phase(PhaseMeasuring)
@@ -78,6 +100,20 @@ func (h *Hunter) remove(ctx context.Context, path string, p removalProgress) (Wo
 	u := diskusage.Dir(ctx, l.Path, skip)
 	row.SizeBytes, row.SizePartial = u.Bytes, u.Partial
 	p.measured(u.Bytes, u.Files)
+	if review != nil {
+		freshRepo, freshListed, err := h.locate(ctx, path)
+		if err != nil {
+			return row, err
+		}
+		if err := validateRemovalReview(h.judge(ctx, freshRepo, freshListed), review); err != nil {
+			return row, err
+		}
+		for _, other := range freshRepo.list {
+			if other.Path != freshListed.Path && strings.HasPrefix(other.Path, freshListed.Path+string(filepath.Separator)) {
+				return row, fmt.Errorf("%w: another registered worktree is inside this folder", ErrReviewChanged)
+			}
+		}
+	}
 	p.phase(PhaseDeleting)
 	// git refuses a worktree with submodules unless forced. The fresh
 	// verdict above already found the worktree and each submodule clean and

@@ -1743,6 +1743,7 @@ export interface Worktree {
   reconnect?: string;
   state: string;
   reasons: string[] | null;
+  can_remove_reviewed?: boolean;
   reason_kinds: string[] | null;
   stale?: boolean;
   last_activity?: string;
