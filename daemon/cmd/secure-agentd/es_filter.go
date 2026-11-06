@@ -19,11 +19,17 @@ import (
 // package-manager libraries and the per-user temporary and cache roots carry
 // much of eslogger's volume and none of the daemon's signal. Opens by the
 // user daemon itself (its disk-usage walks, transcript reads) and by the
-// system tools it runs (es_tools.go) are dropped on any path. An open is never dropped when the daemon's sensitive-path
-// classifier matches its path or the path is a configuration profile file. A create is kept only when it names a
+// system tools it runs (es_tools.go) are dropped on any path. Deletes in the
+// per-user temporary and cache roots are dropped too: builds remove their
+// temporary files by the hundred a second. An open or delete is never dropped
+// when the daemon's sensitive-path classifier matches its path or the path is
+// a configuration profile file. A create is kept only when it names a
 // launchd agent or daemon directory, or an app bundle, installer package or
 // configuration profile file that a later Gatekeeper override or profile
 // install is traced back to. Every other event type is kept.
+
+// esTempRoot holds the per-user $TMPDIR and cache roots.
+const esTempRoot = "/private/var/folders/"
 
 // esNoisePrefixes are the open-path prefixes whose opens are dropped.
 var esNoisePrefixes = []string{
@@ -35,7 +41,7 @@ var esNoisePrefixes = []string{
 	"/dev/fd/", "/dev/ttys",
 	"/private/var/db/timezone/", "/private/var/db/KernelExtensionManagement/",
 	"/private" + esSpoolDir + "/", // the daemon's own spool reads (ES reports the /private path)
-	"/private/var/folders/",       // per-user $TMPDIR and cache roots
+	esTempRoot,
 }
 
 // esDataVolumePrefix is the firmlinked data volume: user files reached
@@ -61,6 +67,8 @@ var (
 	esOpenKey          = []byte(`open":{`)
 	esCreateKey        = []byte(`create":{`)
 	esExecKey          = []byte(`exec":{`)
+	esUnlinkKey        = []byte(`unlink":{`)
+	esTargetKey        = []byte(`"target":{`)
 	esPathMarker       = []byte(`"path":"`)
 	esExecutableMarker = []byte(`"executable":{`)
 )
@@ -145,8 +153,8 @@ var esSensitive = sync.OnceValue(func() sensitive.Classifier {
 
 // keepESLine reports whether one eslogger JSON line goes to the spool. It
 // drops open events whose path is system noise or whose process is the user
-// daemon, and creates that name neither a launch-item directory nor a trust
-// subject; a line it cannot read
+// daemon, deletes in the temporary roots, and creates that name neither a
+// launch-item directory nor a trust subject; a line it cannot read
 // (malformed, unexpected shape) is kept. Byte scans first: the line is JSON-decoded only when
 // eslogger's compact layout is absent, and the path string only when it
 // holds escapes.
@@ -163,28 +171,49 @@ func keepESLine(line []byte) bool {
 		esTools.noteExec(line, line[:i])
 		return true
 	}
+	if unlink, ok := bytes.CutPrefix(rest, esUnlinkKey); ok {
+		target, ok := bytes.CutPrefix(unlink, esTargetKey)
+		if !ok {
+			return keepESLineParsed(line)
+		}
+		path, ok, parse := esPathAfter(target)
+		if parse {
+			return keepESLineParsed(line)
+		}
+		return !ok || !dropESTempDelete(path)
+	}
 	if !bytes.HasPrefix(rest, esOpenKey) {
-		return true // every event other than open
+		return true // every other event
 	}
 	byDaemon := openedByDaemon(line[:i]) || esTools.ran(line[:i])
-	rest = rest[len(esOpenKey):]
-	j := bytes.Index(rest, esPathMarker)
-	if j < 0 {
+	path, ok, parse := esPathAfter(rest[len(esOpenKey):])
+	if parse {
 		return keepESLineParsed(line)
 	}
+	return !ok || !dropESOpenPath(path, byDaemon)
+}
+
+// esPathAfter decodes the first JSON "path" string in rest. ok is false for
+// a truncated or undecodable string; parse is true when rest holds none and
+// the line needs a full decode.
+func esPathAfter(rest []byte) (path []byte, ok, parse bool) {
+	j := bytes.Index(rest, esPathMarker)
+	if j < 0 {
+		return nil, false, true
+	}
 	quoted := rest[j+len(esPathMarker)-1:] // from the opening quote
-	body, escaped, ok := jsonStringBody(quoted[1:])
-	if !ok {
-		return true // truncated line
+	body, escaped, found := jsonStringBody(quoted[1:])
+	if !found {
+		return nil, false, false
 	}
 	if !escaped {
-		return !dropESOpenPath(body, byDaemon)
+		return body, true, false
 	}
-	var path string
-	if err := json.Unmarshal(quoted[:len(body)+2], &path); err != nil {
-		return true
+	var s string
+	if err := json.Unmarshal(quoted[:len(body)+2], &s); err != nil {
+		return nil, false, false
 	}
-	return !dropESOpenPath([]byte(path), byDaemon)
+	return []byte(s), true, false
 }
 
 // keepESLineParsed is keepESLine's fallback for lines without eslogger's
@@ -202,6 +231,11 @@ func keepESLineParsed(line []byte) bool {
 					Path string `json:"path"`
 				} `json:"file"`
 			} `json:"open"`
+			Unlink *struct {
+				Target struct {
+					Path string `json:"path"`
+				} `json:"target"`
+			} `json:"unlink"`
 			Create json.RawMessage `json:"create"`
 		} `json:"event"`
 	}
@@ -210,6 +244,9 @@ func keepESLineParsed(line []byte) bool {
 	}
 	if env.Event.Create != nil {
 		return namesLaunchItemDir(env.Event.Create) || namesTrustSubject(env.Event.Create)
+	}
+	if env.Event.Unlink != nil {
+		return !dropESTempDelete([]byte(env.Event.Unlink.Target.Path))
 	}
 	if env.Event.Open == nil {
 		return true
@@ -238,15 +275,27 @@ func jsonStringBody(b []byte) (body []byte, escaped, ok bool) {
 // system noise path, is not of a configuration profile file and does not
 // match the sensitive-path classifier.
 func dropESOpenPath(path []byte, byDaemon bool) bool {
-	if !(byDaemon || isESNoisePath(path)) || bytes.HasSuffix(path, []byte(".mobileconfig")) {
-		return false
+	return (byDaemon || isESNoisePath(path)) && !esKeepsPath(path)
+}
+
+// dropESTempDelete reports whether a delete of path is in the temporary roots
+// and is not of a configuration profile file or a sensitive path.
+func dropESTempDelete(path []byte) bool {
+	return bytes.HasPrefix(path, []byte(esTempRoot)) && !esKeepsPath(path)
+}
+
+// esKeepsPath reports whether path is a configuration profile file or matches
+// the sensitive-path classifier; with no classifier every path is kept.
+func esKeepsPath(path []byte) bool {
+	if bytes.HasSuffix(path, []byte(".mobileconfig")) {
+		return true
 	}
 	c := esSensitive()
 	if c == nil {
-		return false
+		return true
 	}
 	_, sensitiveMatch := c.Match(string(path))
-	return !sensitiveMatch
+	return sensitiveMatch
 }
 
 func isESNoisePath(path []byte) bool {
@@ -288,7 +337,7 @@ func (s *esFilterStats) report(now time.Time) (string, bool) {
 	if elapsed < time.Minute {
 		return "", false
 	}
-	msg := fmt.Sprintf("es-collector: dropped %d of %d lines (system and temp-path opens) in the last %s; wrote %d KB for %d KB kept",
+	msg := fmt.Sprintf("es-collector: dropped %d of %d lines (system and temp-path opens, temp-path deletes) in the last %s; wrote %d KB for %d KB kept",
 		s.dropped, s.kept+s.dropped, elapsed.Round(time.Second), s.wroteBytes>>10, s.keptBytes>>10)
 	*s = esFilterStats{since: now}
 	return msg, true

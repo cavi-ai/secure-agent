@@ -18,9 +18,10 @@ func eventInsertArgs(e event.Event) []any {
 		nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), nullStr(e.Provider), e.Record}
 }
 
-// PutFileEvents commits ordinary file activity and its rollups together.
-// Security records and semantic traces retain their individual write path.
-// A rejected batch has no partial effects; callers may retry rows individually.
+// PutFileEvents commits ordinary file and exec activity and its rollups
+// together. Security records and semantic traces retain their individual
+// write path. A rejected batch has no partial effects; callers may retry rows
+// individually.
 func (s *Store) PutFileEvents(events []event.Event) (result WriteResult, err error) {
 	if len(events) == 0 {
 		return result, nil
@@ -29,7 +30,7 @@ func (s *Store) PutFileEvents(events []event.Event) (result WriteResult, err err
 		return result, fmt.Errorf("file batch exceeds %d events", MaxFileBatch)
 	}
 	for _, e := range events {
-		if (e.Kind != event.KindFileOpen && e.Kind != event.KindFileWrite && e.Kind != event.KindFileDelete) || e.Record || e.CallID != "" {
+		if (e.Kind != event.KindFileOpen && e.Kind != event.KindFileWrite && e.Kind != event.KindFileDelete && e.Kind != event.KindExec) || e.Record || e.CallID != "" {
 			return result, fmt.Errorf("file batch contains a non-ordinary event")
 		}
 	}

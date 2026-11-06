@@ -7,20 +7,30 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
-// heldFile is an ordinary file event that waits for the pending batch: a
-// skipped event's feed clock must not pass rows not stored yet, and a repeat
-// of a pending open folds only once that open is stored.
+// heldFile is an ordinary file or exec event that waits for the pending
+// batch: a skipped event's feed clock must not pass rows not stored yet, and
+// a repeat of pending activity folds only once that activity is stored.
 type heldFile struct {
 	e      event.Event
 	repeat bool
 }
 
+// batchedKind reports whether ordinary events of kind share a batch commit:
+// file activity and execs, which a build produces by the thousand.
+func batchedKind(kind event.Kind) bool {
+	switch kind {
+	case event.KindFileOpen, event.KindFileWrite, event.KindFileDelete, event.KindExec:
+		return true
+	}
+	return false
+}
+
 // feedBatch uses only events already queued, adding no collection delay.
-// A finding, sensitive read, or non-file event flushes preceding ordinary
-// activity before its own persistence and publication. Skipped and repeated
-// file events wait for the batch instead of splitting it: they outnumber
-// agent file activity, and a commit per agent event multiplies the bytes
-// written per stored row.
+// A finding, sensitive read, or event of another kind flushes preceding
+// ordinary activity before its own persistence and publication. Skipped and
+// repeated events wait for the batch instead of splitting it: they outnumber
+// agent activity, and a commit per agent event multiplies the bytes written
+// per stored row.
 func (i *eventIngest) feedBatch(events []event.Event) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -29,7 +39,7 @@ func (i *eventIngest) feedBatch(events []event.Event) {
 	}
 	var pending []event.Event
 	var held []heldFile
-	opens := map[openKey]bool{}
+	pendingKeys := map[activityKey]bool{}
 	flush := func() {
 		if len(pending) > 0 {
 			result, err := i.deps.PutFileEvents(pending)
@@ -53,7 +63,7 @@ func (i *eventIngest) feedBatch(events []event.Event) {
 				}
 			}
 			pending = nil
-			clear(opens)
+			clear(pendingKeys)
 		}
 		for _, h := range held {
 			if h.repeat {
@@ -74,13 +84,13 @@ func (i *eventIngest) feedBatch(events []event.Event) {
 		held = append(held, heldFile{e: e})
 	}
 	for _, e := range events {
-		file := e.Kind == event.KindFileOpen || e.Kind == event.KindFileWrite || e.Kind == event.KindFileDelete
-		if !file || i.deps.Correlator.SensitiveFile(e) || e.CallID != "" {
+		batched := batchedKind(e.Kind)
+		if !batched || i.deps.Correlator.SensitiveFile(e) || e.CallID != "" {
 			flush()
 		}
 		i.deps.Resolver.Resolve(&e)
 		flags := i.deps.Correlator.Observe(e)
-		if !file || len(flags) > 0 || i.deps.Correlator.SensitiveFile(e) || e.CallID != "" {
+		if !batched || len(flags) > 0 || i.deps.Correlator.SensitiveFile(e) || e.CallID != "" {
 			flush()
 			i.feedResolvedLocked(e, flags)
 			continue
@@ -89,7 +99,8 @@ func (i *eventIngest) feedBatch(events []event.Event) {
 			skip(e)
 			continue
 		}
-		if e.Kind == event.KindFileOpen && opens[openKey{e.PID, e.Path}] {
+		key, folds := activityKeyOf(e)
+		if folds && pendingKeys[key] {
 			held = append(held, heldFile{e: e, repeat: true})
 			continue
 		}
@@ -98,8 +109,8 @@ func (i *eventIngest) feedBatch(events []event.Event) {
 			continue
 		}
 		pending = append(pending, e)
-		if e.Kind == event.KindFileOpen {
-			opens[openKey{e.PID, e.Path}] = true
+		if folds {
+			pendingKeys[key] = true
 		}
 		if len(pending) == store.MaxFileBatch {
 			flush()
