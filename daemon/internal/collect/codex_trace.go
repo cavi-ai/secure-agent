@@ -13,9 +13,10 @@ import (
 )
 
 // Codex rollout trace parsing (~/.codex/sessions/**/rollout-*.jsonl).
-// Line 1 is session_meta (session id + cwd); event_msg/token_count carries
-// per-call token deltas; response_item function_call / function_call_output
-// pair by call_id for durations. Content (arguments, output) is NEVER
+// Line 1 is session_meta (session id + cwd); event_msg/task_started opens each
+// user turn; event_msg/token_count carries per-call token deltas;
+// response_item function_call / function_call_output pair by call_id for
+// durations. Content (arguments, output) is NEVER
 // carried into events — names, durations and token counts only.
 // The model comes from event_msg/thread_settings_applied when the rollout has
 // one (it wins), else from the latest turn_context (one per turn; current
@@ -231,6 +232,13 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 				t.settingsProvider = msg.ThreadSettings.ModelProviderID
 			}
 			return nil, false
+		}
+		// task_started opens each user turn and carries no content.
+		if msg.Type == "task_started" {
+			if t.sessionID == "" {
+				return nil, true
+			}
+			return []event.Event{{Kind: event.KindTurn, TS: ts, SessionID: t.sessionID}}, true
 		}
 		if msg.Type != "token_count" {
 			return nil, false

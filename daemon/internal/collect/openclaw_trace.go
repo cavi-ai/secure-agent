@@ -50,7 +50,8 @@ import (
 //     completes the same call ok or error, with the duration between the two
 //     messages' created_at (whole seconds, as lcm.db stores them).
 //   - part with step tokens → model_call (kind 14) with step_cost and the
-//     model the part metadata names.
+//     model the part metadata names, until an agent transcript database
+//     answers (newer releases record usage there; see openclaw_usage.go).
 
 const (
 	openclawPollInterval = 5 * time.Second
@@ -103,6 +104,13 @@ type OpenclawCollector struct {
 	scanPart   int
 	scanPartID string
 	pending    *openclawPendingRow
+
+	// usageWM is each agent transcript database's rowid watermark; usageErr
+	// the last failure logged per database; usageActive is set once any agent
+	// database answered, and then lcm.db's step tokens are not model calls.
+	usageWM     map[string]int64
+	usageErr    map[string]string
+	usageActive bool
 }
 
 type openclawPendingRow struct {
@@ -122,6 +130,7 @@ func NewOpenclawCollector(b *bus.Bus, dbPath string, interval time.Duration) *Op
 	return &OpenclawCollector{
 		bus: b, dbPath: dbPath, interval: interval, now: time.Now,
 		noted: map[string]bool{}, ended: map[string]bool{}, callStart: map[string]time.Time{},
+		usageWM: map[string]int64{}, usageErr: map[string]string{},
 	}
 }
 
@@ -274,6 +283,8 @@ func (c *OpenclawCollector) pollOnce() int {
 	if !c.resolve() {
 		return prefixPublished
 	}
+	// Agent transcript databases change apart from lcm.db.
+	prefixPublished += c.pollUsage()
 	fp, run := c.change.begin(c.dbPath)
 	if !run {
 		return prefixPublished
@@ -456,7 +467,7 @@ func (c *OpenclawCollector) rowEvents(r openclawRow, ts time.Time, first bool) [
 			CallID: r.resultCallID, ToolName: r.resultTool, ToolStatus: status, DurationMs: durMs,
 		})
 	}
-	if r.tokIn > 0 || r.tokOut > 0 {
+	if (r.tokIn > 0 || r.tokOut > 0) && !c.usageActive {
 		cost := r.stepCost
 		if cost == 0 && r.modelID != "" {
 			cost = ModelCostUSD(r.modelID, r.tokIn, r.tokOut)
@@ -540,10 +551,12 @@ func parseOpenclawTime(s string) (t time.Time, observed bool) {
 	return time.Now(), true
 }
 
-// openclawState is the persisted watermark, tied to the database it counts.
+// openclawState is the persisted watermark, tied to the database it counts,
+// with each agent transcript database's usage watermark.
 type openclawState struct {
-	DB        string `json:"db"`
-	MessageID int64  `json:"message_id"`
+	DB        string           `json:"db"`
+	MessageID int64            `json:"message_id"`
+	Usage     map[string]int64 `json:"usage,omitempty"`
 }
 
 func (c *OpenclawCollector) loadState() {
@@ -559,6 +572,9 @@ func (c *OpenclawCollector) loadState() {
 	// empty before is not a first sight on the next poll.
 	if json.Unmarshal(data, &st) == nil && st.DB == c.dbPath {
 		c.watermark, c.resumed = st.MessageID, true
+		for p, wm := range st.Usage {
+			c.usageWM[p] = wm
+		}
 	}
 }
 
@@ -566,7 +582,7 @@ func (c *OpenclawCollector) saveState() {
 	if c.StatePath == "" {
 		return
 	}
-	data, err := json.Marshal(openclawState{DB: c.dbPath, MessageID: c.watermark})
+	data, err := json.Marshal(openclawState{DB: c.dbPath, MessageID: c.watermark, Usage: c.usageWM})
 	if err != nil {
 		return
 	}
