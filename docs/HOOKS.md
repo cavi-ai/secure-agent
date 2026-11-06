@@ -402,6 +402,26 @@ to one session; otherwise reports cover the host's reporting instance. Custom
 `Sender` implementations must honor context cancellation and acknowledge actual
 destination acceptance, rather than merely accepting a write to a pipe.
 
+## Record Codex hooks with the wrapper
+
+Without a host forwarding app-server notifications, prefix each command in
+`~/.codex/hooks.json` with the wrapper:
+
+```json
+{"type": "command", "command": "secure-agent hooks wrap --harness codex --script check.py -- /usr/bin/python3 /path/to/check.py"}
+```
+
+The wrapper runs the command with the hook input on stdin and returns its
+stdout, stderr and exit status unchanged. It then appends one record with the
+input's `session_id` and `hook_event_name`, the `--script` label, the duration
+and the outcome: exit 2 or a JSON `decision: block` is `block`,
+`permissionDecision: deny` is `deny`, another nonzero exit is `error`, and
+context added by a `UserPromptSubmit` or `SessionStart` hook (plain stdout or
+`additionalContext`) is `inject`, counted in characters. Input, arguments and
+output are never recorded, and a recording failure never changes the hook's
+result. Input without a session or event runs the hook and records nothing.
+Codex asks to trust a hook again after its command changes.
+
 ## Forward Codex completions
 
 Run the recorder as a separate consumer of the host's event stream:

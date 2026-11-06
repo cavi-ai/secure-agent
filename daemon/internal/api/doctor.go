@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
+	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -89,6 +91,9 @@ type doctorFacts struct {
 	claudePriced, claudeUnpriced, allUnpriced, allCalls int
 
 	retention []store.KindRetention
+
+	// egress is the blind-spot rows behind st.UninspectedEgress (same window).
+	egress []UninspectedEndpoint
 
 	hermes *collect.HermesStatus // nil when the collector is not wired
 
@@ -241,6 +246,9 @@ func (a *API) doctorFacts(now time.Time) doctorFacts {
 		}
 	}
 	gatherDoctorStoreFacts(&f, a.store)
+	if st.UninspectedEgress > 0 {
+		f.egress = a.uninspectedRows(now.Add(-correlate.UninspectedWindow), 200)
+	}
 	if a.sightings != nil {
 		f.seenByHarness = a.sightings(f.boot)
 	}
@@ -553,12 +561,52 @@ func checkEgressRouting(f doctorFacts) (string, string) {
 	case !f.st.ProxyEnabled:
 		return doctorPass, "proxy off — egress not inspected"
 	case f.st.UninspectedEgress > 0:
-		return doctorFail, fmt.Sprintf("%d endpoints reached outside the proxy", f.st.UninspectedEgress)
+		detail := fmt.Sprintf("%d endpoints reached outside the proxy", f.st.UninspectedEgress)
+		if by := egressByAgent(f.egress); by != "" {
+			detail += ": " + by
+		}
+		return doctorFail, detail
 	case f.st.ProxyTunneled+f.st.ProxyDecrypted > 0:
 		return doctorPass, fmt.Sprintf("all agent egress routed through the proxy · %d connections since start (%d decrypted)",
 			f.st.ProxyTunneled+f.st.ProxyDecrypted, f.st.ProxyDecrypted)
 	}
 	return doctorPass, "all agent egress routed through the proxy"
+}
+
+// egressByAgent names the agents behind the headline count — the rows that
+// join it (no infra family, no known CDN or cloud host) — most endpoints
+// first, with up to two hosts each: "codex 4 (api.openai.com, chatgpt.com),
+// cursor 1 (api2.cursor.sh)". "" when no row joins the headline.
+func egressByAgent(rows []UninspectedEndpoint) string {
+	type agentRows struct {
+		name  string
+		hosts []string
+	}
+	var order []*agentRows
+	byName := map[string]*agentRows{}
+	for _, r := range rows {
+		if r.AgentKind == config.AgentKindInfra || r.Infra != "" || r.Agent == "" {
+			continue
+		}
+		a := byName[r.Agent]
+		if a == nil {
+			a = &agentRows{name: r.Agent}
+			byName[r.Agent] = a
+			order = append(order, a)
+		}
+		a.hosts = append(a.hosts, r.Host)
+	}
+	sort.SliceStable(order, func(i, j int) bool { return len(order[i].hosts) > len(order[j].hosts) })
+	parts := make([]string, 0, len(order))
+	for _, a := range order {
+		hosts := a.hosts
+		more := ""
+		if len(hosts) > 2 {
+			hosts, more = hosts[:2], ", …"
+		}
+		parts = append(parts, fmt.Sprintf("%s %d (%s%s)", a.name, len(a.hosts), strings.Join(hosts, ", "), more))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func checkBus(f doctorFacts) (string, string) {

@@ -6,8 +6,16 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Codex: `secure-agent hooks wrap` runs a configured hook unchanged and records its completion.
+- Traces: OpenClaw model calls and tokens from each agent's transcript database, and Codex turns from `task_started`.
+
 ### Changed
 - Home: show a workspace-first work list beside a scrollable review queue. Activity updates keep row order and keyboard focus; the list's refresh control applies the latest order. Dismissing review items no longer animates the page height or stacks confirmation notifications.
+- Doctor: the egress check names the agents and hosts reached outside the proxy.
+
+### Fixed
+- Sessions: a session whose process is found gone after a silence or a daemon restart ends at its last activity instead of reading as just seen.
 
 ## [1.5.2] - 2026-11-04
 

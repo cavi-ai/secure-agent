@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/internal/durablefs"
 	"golang.org/x/sys/unix"
@@ -21,6 +22,9 @@ import (
 )
 
 func handleHooks() {
+	if len(os.Args) > 2 && os.Args[2] == "wrap" {
+		os.Exit(runHookWrap(os.Stdin, os.Stdout, os.Stderr, os.Args[3:], time.Now))
+	}
 	if err := runHooks(os.Stdin, os.Args[2:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

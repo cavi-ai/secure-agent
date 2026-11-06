@@ -360,11 +360,11 @@ func (s *Store) MarkSessionsIdle(cutoff time.Time) (_ []string, writeErr error) 
 }
 
 // SessionRoots returns the non-ended sessions on each root pid (an app can
-// host several conversations on one root), with ID, RootPID and
-// RootStartedAt set, so the resolver can end every session whose root
-// process is gone or reused.
+// host several conversations on one root), with ID, RootPID, RootStartedAt,
+// Status and LastSeenAt set, so the resolver can end every session whose
+// root process is gone or reused at the right time.
 func (s *Store) SessionRoots() map[int32][]model.Session {
-	rows, err := s.db.Query(`SELECT root_pid, id, COALESCE(root_started_at, '') FROM sessions WHERE status != ? AND root_pid != 0`, model.SessionEnded)
+	rows, err := s.db.Query(`SELECT root_pid, id, COALESCE(root_started_at, ''), status, COALESCE(last_seen_at, '') FROM sessions WHERE status != ? AND root_pid != 0`, model.SessionEnded)
 	if err != nil {
 		return nil
 	}
@@ -372,7 +372,9 @@ func (s *Store) SessionRoots() map[int32][]model.Session {
 	out := map[int32][]model.Session{}
 	for rows.Next() {
 		var sess model.Session
-		if rows.Scan(&sess.RootPID, &sess.ID, &sess.RootStartedAt) == nil {
+		var lastSeen string
+		if rows.Scan(&sess.RootPID, &sess.ID, &sess.RootStartedAt, &sess.Status, &lastSeen) == nil {
+			sess.LastSeenAt, _ = time.Parse(time.RFC3339Nano, lastSeen)
 			out[sess.RootPID] = append(out[sess.RootPID], sess)
 		}
 	}

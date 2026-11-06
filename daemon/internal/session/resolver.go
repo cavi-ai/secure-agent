@@ -1152,12 +1152,17 @@ func (r *Resolver) Sweep() {
 	type rootedID struct {
 		root int32
 		id   string
+		end  time.Time
+	}
+	type endingID struct {
+		id  string
+		end time.Time
 	}
 	r.mu.Lock()
 	var tracked []rootedID
 	deferred := map[string]model.Session{}
 	for root, id := range r.byRoot {
-		tracked = append(tracked, rootedID{root, id})
+		tracked = append(tracked, rootedID{root: root, id: id})
 		if sess, ok := r.deferred[id]; ok {
 			deferred[id] = sess
 		}
@@ -1180,6 +1185,10 @@ func (r *Resolver) Sweep() {
 			recorded = rootStarted(sess)
 		}
 		if r.rootGone(t.root, recorded) {
+			t.end = now
+			if ok {
+				t.end = endedAt(sess, now)
+			}
 			goneTracked = append(goneTracked, t)
 		}
 	}
@@ -1190,7 +1199,7 @@ func (r *Resolver) Sweep() {
 	for root, sessions := range r.st.SessionRoots() {
 		for _, sess := range sessions {
 			if r.rootGone(root, rootStarted(sess)) {
-				goneStored = append(goneStored, rootedID{root, sess.ID})
+				goneStored = append(goneStored, rootedID{root, sess.ID, endedAt(sess, now)})
 			}
 		}
 	}
@@ -1200,13 +1209,13 @@ func (r *Resolver) Sweep() {
 	// event re-roots a live one (joinTreeLocked), so only a silent one is
 	// still on it.
 	sessions, listErr := r.st.ListSessions(store.SessionFilter{Status: model.SessionIdle, Limit: 500})
-	var silent []string
+	var silent []endingID
 	for _, sess := range sessions {
 		if sess.RootPID == 0 && now.Sub(sess.LastSeenAt) > endSilentAfter {
-			silent = append(silent, sess.ID)
+			silent = append(silent, endingID{sess.ID, endedAt(sess, now)})
 		} else if sess.RootPID != 0 && now.Sub(sess.LastSeenAt) > endInfraRootAfter {
 			if info, ok := r.tagger.Tag(sess.RootPID); ok && info.Kind == config.AgentKindInfra && info.Name != sess.Harness {
-				silent = append(silent, sess.ID)
+				silent = append(silent, endingID{sess.ID, endedAt(sess, now)})
 			}
 		}
 	}
@@ -1223,27 +1232,27 @@ func (r *Resolver) Sweep() {
 	defer r.mu.Unlock()
 	pruneGitCacheLocked()
 	ended := map[string]bool{}
-	end := func(id string) {
+	end := func(id string, at time.Time) {
 		if !ended[id] {
 			ended[id] = true
-			r.endLocked(id, now)
+			r.endLocked(id, at)
 		}
 	}
 	for _, t := range goneTracked {
 		if r.byRoot[t.root] == t.id {
-			end(t.id)
+			end(t.id, t.end)
 		}
 	}
 	for _, s := range goneStored {
 		if r.byRoot[s.root] != s.id {
-			end(s.id)
+			end(s.id, s.end)
 		}
 	}
 	if listErr != nil {
 		return
 	}
-	for _, id := range silent {
-		end(id)
+	for _, s := range silent {
+		end(s.id, s.end)
 	}
 	// Idle transitions ride the delta stream too (the console's status chip
 	// must move without a poll).
@@ -1288,6 +1297,17 @@ func (r *Resolver) prunePIDs(now time.Time) {
 			delete(r.byPID, pid)
 		}
 	}
+}
+
+// endedAt is when a sweep ends sess: now while it is active, else its last
+// activity. A root found gone after a silence (or after a daemon restart)
+// vanished at an unknown time with nothing observed since; ending it now
+// would advance last_seen_at and list days-old sessions as just seen.
+func endedAt(sess model.Session, now time.Time) time.Time {
+	if sess.Status == model.SessionActive || sess.LastSeenAt.IsZero() || sess.LastSeenAt.After(now) {
+		return now
+	}
+	return sess.LastSeenAt
 }
 
 // endLocked ends session id and drops it from the in-memory maps. Caller

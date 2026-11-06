@@ -115,6 +115,7 @@ func printUsage() {
 	fmt.Println("  secure-agent sessions [--harness H] [--repo R] [--branch B] [--since D] [--status S] [--limit N]  List sessions (--json for the raw body)")
 	fmt.Println("  secure-agent session <id-or-prefix> [--follow-up [--inspect-permissions]] [--json]  Print report, follow-up, or linked saved permissions")
 	fmt.Println("  secure-agent hooks record --format codex|openclaw|hermes|opencode|record [--output path] [--durable]  Record forwarded hook completions from stdin as metadata")
+	fmt.Println("  secure-agent hooks wrap --harness codex [--script NAME] [--output path] -- COMMAND [ARGS...]  Run a configured hook unchanged and record its completion")
 	fmt.Println("  secure-agent doctor [--json]             Self-check: hooks, file telemetry, collectors, traces, sessions, pairing, pricing, retention, egress; exit 1 on any failure")
 	fmt.Println("  secure-agent worktrees [--state S] [--repo R] [--stale] [--refresh] [--json]  Find every git worktree and say whether it can be removed (remove|review|keep|prune) and why")
 	fmt.Println("  secure-agent worktrees add|hide <path>   Put a repository on the worktree hunter's saved list, or hide it from reports")
