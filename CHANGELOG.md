@@ -6,6 +6,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-11-06
+
 ### Added
 - Codex: `secure-agent hooks wrap` runs a configured hook unchanged and records its completion.
 - Traces: OpenClaw model calls and tokens from each agent's transcript database, and Codex turns from `task_started`.
@@ -16,8 +18,6 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Fixed
 - Sessions: a session whose process is found gone after a silence or a daemon restart ends at its last activity instead of reading as just seen.
-
-### Fixed
 - File telemetry: a session's repeated opens of a file and repeated execs of a tool are stored once a minute instead of once per process, and ordinary execs commit with file activity instead of one commit each; a build that forks 200 shells over 40 files writes about 70 KB to the database instead of 24 MB.
 - File telemetry: the collector drops deletes in the per-user temporary and cache roots, as it drops opens there; deletes of sensitive paths and configuration profile files are kept.
 
@@ -1808,7 +1808,8 @@ scanning of the repository itself.
 Development history lives in the git log; this changelog starts at the first
 tagged release.
 
-[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.5.3...HEAD
+[1.5.3]: https://github.com/cavi-ai/secure-agent/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/cavi-ai/secure-agent/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/cavi-ai/secure-agent/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/cavi-ai/secure-agent/compare/v1.4.0...v1.5.0
