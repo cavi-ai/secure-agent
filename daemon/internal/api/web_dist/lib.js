@@ -373,7 +373,8 @@ function labelsLineHTML(summary) {
 // markButtonsHTML: Mark as routine / Mark as not ok for a subject.
 function markButtonsHTML(subject) {
   const s = escapeHTML(subject);
-  return `<button class="btn btn-ghost btn-sm" data-action="mark-label" data-subject="${s}" data-label="ok">Mark as routine</button>`
+  const routineLabel = String(subject).startsWith('incident:') ? 'Send routine feedback' : 'Mark as routine';
+  return `<button class="btn btn-ghost btn-sm" data-action="mark-label" data-subject="${s}" data-label="ok">${routineLabel}</button>`
     + `<button class="btn btn-ghost btn-sm" data-action="mark-label" data-subject="${s}" data-label="not_ok">Mark as not ok</button>`;
 }
 
@@ -415,6 +416,7 @@ function incidentReportHTML(id, workflow, markdown, remediation) {
     + `<section class="endpoint-section incident-workflow-actions">${incidentWorkflowHTML(id, workflow)}</section>`
     + incidentRemediationHTML(id, remediation)
     + `<div class="endpoint-actions">${markButtonsHTML('incident:' + id)}</div>`
+    + '<p class="body-note">Routine feedback helps the advisor. It does not add an exception or change this incident’s status.</p>'
     + planSlotHTML('incident:' + id)
     + linkEvidencePaths(parseMarkdownToHTML(evidence));
 }

@@ -252,29 +252,56 @@ func (ts *TranscriptScanner) secretHits(line string) []secretHit {
 		case firewall.LayerFingerprint:
 			out = append(out, secretHit{layer: "fingerprint", rule: h.RuleID})
 		case firewall.LayerPattern:
-			out = append(out, secretHit{layer: "pattern", rule: h.RuleID, signals: testSignals(line, h.Spans)})
+			signals, fixture := testSignals(line, h.Spans)
+			if fixture {
+				continue
+			}
+			out = append(out, secretHit{layer: "pattern", rule: h.RuleID, signals: signals})
 		}
 	}
 	return out
 }
 
 // testSignals unions the test-value signals of a hit's matches, or returns
-// nil when any match has none: one live-looking value outweighs fixtures
-// beside it.
-func testSignals(line string, spans [][2]int) []string {
+// nil when any match has none. Value-specific reasons survive only when
+// every match has them: one live-looking value outweighs fixtures beside it.
+func testSignals(line string, spans [][2]int) ([]string, bool) {
 	var out []string
+	allStrong := len(spans) > 0
+	allFixtures := len(spans) > 0
 	for _, sp := range spans {
 		reasons := testvalue.Signals(line, sp[0], sp[1])
 		if len(reasons) == 0 {
-			return nil
+			return nil, false
 		}
+		allStrong = allStrong && testvalue.Strong(reasons)
+		allFixtures = allFixtures && fixtureSignals(reasons)
 		for _, r := range reasons {
 			if !slices.Contains(out, r) {
 				out = append(out, r)
 			}
 		}
 	}
-	return out
+	if !allStrong {
+		out = slices.DeleteFunc(out, func(reason string) bool { return testvalue.Strong([]string{reason}) })
+	}
+	return out, allFixtures
+}
+
+// A fixture needs placeholder markers and explicit test context. A sandbox
+// key or low-entropy credential can still authenticate and must not be quieted.
+// This applies only to typed patterns; registered secrets always emit a hit.
+func fixtureSignals(signals []string) bool {
+	placeholder, context := false, false
+	for _, signal := range signals {
+		if strings.HasPrefix(signal, testvalue.TestFile) || signal == testvalue.TestCode {
+			context = true
+		}
+		if strings.HasPrefix(signal, testvalue.PlaceholderWord) || signal == testvalue.PlaceholderPair || signal == testvalue.PublishedSample || signal == testvalue.DecodesDummy || signal == testvalue.SampleJWT {
+			placeholder = true
+		}
+	}
+	return placeholder && context
 }
 
 // firstHit reports whether (path, rule) was not emitted within

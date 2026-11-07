@@ -200,6 +200,10 @@ func (a *Analyzer) Analyze(flag model.Flag, events []event.Event) model.Incident
 	} else if flag.Severity == 1 {
 		maxRisk = model.RiskHigh
 	}
+	// A typed transcript pattern is a review finding, not a registered secret.
+	if flag.Rule == "secret-in-transcript" && flag.Severity == 2 {
+		maxRisk = model.RiskHigh
+	}
 	// Reading external content before a send is a review lead, not proof
 	// of an attack. Use the structured assessment rather than promoting an
 	// allowed or monitor-only operation into a high-risk incident.
