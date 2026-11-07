@@ -4576,7 +4576,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <select class="select select-sm" id="notify-scope-rule" aria-label="Rule for the workspace scope">
           ${NOTIFY_RULES.map(([rule, label]) => `<option value="${escapeHTML(rule)}">${escapeHTML(label)}</option>`).join('')}
         </select>
-        <input class="input input-sm" id="notify-scope-path" placeholder="repo path, e.g. ~/work/prod" autocomplete="off" spellcheck="false">
+        <input class="input input-sm" id="notify-scope-path" aria-label="Workspace path for notification scope" placeholder="repo path, e.g. ~/work/prod" autocomplete="off" spellcheck="false">
         <select class="select select-sm" id="notify-scope-mode" aria-label="Scope action">
           <option value="always">Page</option>
           <option value="never">Quiet</option>

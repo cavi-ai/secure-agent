@@ -74,6 +74,8 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
 
   function open({ title: heading, icon, body: html, foot: footHTML, variant, onClose: closeHook, back, attentionOrigin }) {
     if (!drawer) return false;
+    rawMarkdown = '';
+    setCopyVisible(false);
     closeAgentDock();
     // A drawer opened from inside the open one keeps the original opener, so
     // closing still returns focus to the page.
@@ -110,6 +112,8 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
     if (!drawer || drawer.hidden) return;
     const inspectedKey = selection?.key;
     drawer.hidden = true;
+    rawMarkdown = '';
+    setCopyVisible(false);
     seq++;
     selection = null;
     attention.bumpGeneration();
@@ -168,11 +172,14 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
   }
   if (copyButton) {
     copyButton.addEventListener('click', async () => {
-      if (!rawMarkdown) return;
+      if (!rawMarkdown || mode !== 'incident' || auth.ended()) return;
+      const mine = seq;
       try {
         await navigator.clipboard.writeText(rawMarkdown);
+        if (mine !== seq || auth.ended()) return;
         toast('Incident report copied to clipboard!', 'success');
       } catch (err) {
+        if (mine !== seq || auth.ended()) return;
         toast('Failed to copy report: ' + err, 'danger');
       }
     });
@@ -196,7 +203,6 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
     if (!drawer) return;
     mode = 'incident';
     incidentId = id;
-    setCopyVisible(true);
     open({
       title: `Incident report — ${id}`,
       icon: 'doc',
@@ -214,6 +220,7 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
         const [text, report] = await Promise.all([res.text(), detail.json()]);
         if (mine !== seq) return;
         rawMarkdown = text;
+        setCopyVisible(!!text);
         id = report.incident && report.incident.id || id;
         incidentId = id;
         body.innerHTML = incidentReportHTML(id, report.workflow, text, report.incident && report.incident.remediation);

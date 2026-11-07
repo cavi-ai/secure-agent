@@ -1,5 +1,6 @@
 // Own the agent controller workflow through explicit state and callbacks.
 function createAgentController({ state, actions }) {
+  const readErrors = new Map();
   function agentBusy() {
     return !!(state.agentState.sending || state.agentState.actionRequests.size || (state.agentState.chat && state.agentState.chat.chatting) || (state.agentState.runs || []).some(r => r.status === 'running'));
   }
@@ -7,14 +8,21 @@ function createAgentController({ state, actions }) {
     const want = parts || ['status', 'chat', 'plans', 'runs', 'recommendations'];
     const wasBusy = agentBusy();
     const versions = want.map(p => state.agentState.readVersion[p] = (state.agentState.readVersion[p] || 0) + 1);
-    try {
-      const got = await Promise.all(want.map(p => actions.agentFetch(state.AGENT_PATHS[p])));
-      want.forEach((p, i) => { if (state.agentState.readVersion[p] === versions[i]) state.agentState[p] = got[i]; });
-      state.agentState.error = '';
-      if (want.includes('status')) actions.fillAgentHarnesses();
-    } catch (err) {
-      state.agentState.error = "Couldn't load the system agent: " + (err.message || err);
-    }
+    const ownsPart = (part, version) => state.agentState.readVersion[part] === version;
+    const got = await Promise.all(want.map(async part => {
+      try { return {ok:true,value:await actions.agentFetch(state.AGENT_PATHS[part])}; }
+      catch (error) { return {ok:false,error}; }
+    }));
+    want.forEach((part, i) => {
+      if (!ownsPart(part, versions[i])) return;
+      if (got[i].ok) {
+        state.agentState[part] = got[i].value;
+        readErrors.delete(part);
+      } else readErrors.set(part, "Couldn't load the system agent: " + (got[i].error?.message || got[i].error));
+    });
+    const statusIndex = want.indexOf('status');
+    if (statusIndex >= 0 && got[statusIndex].ok && ownsPart('status', versions[statusIndex])) actions.fillAgentHarnesses();
+    state.agentState.error = [...readErrors.values()][0] || '';
     actions.markDirty('agent');
     actions.followAgent(wasBusy);
   }
