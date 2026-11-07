@@ -499,6 +499,41 @@ func TestTagHermesAsAgent(t *testing.T) {
 	}
 }
 
+// Buzz runs its native agent from the app bundle under its ACP bridge; the
+// agent is its own family root and its tools inherit it. Harnesses without
+// collector or hook support are not tagged.
+func TestTagBuzzAgentAndDropsUnsupported(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/Applications/Buzz.app/Contents/MacOS/buzz-desktop"},
+		101: {PID: 101, PPID: 100, Exe: "/Applications/Buzz.app/Contents/MacOS/buzz-acp"},
+		102: {PID: 102, PPID: 101, Exe: "/Applications/Buzz.app/Contents/MacOS/buzz-agent"},
+		103: {PID: 103, PPID: 102, Exe: "/bin/zsh"},
+		200: {PID: 200, PPID: 1, Exe: "/Applications/Windsurf.app/Contents/MacOS/Windsurf"},
+		201: {PID: 201, PPID: 1, Exe: "/Users/x/.codeium/windsurf/bin/language_server_macos_arm"},
+		202: {PID: 202, PPID: 1, Exe: "/opt/homebrew/bin/aider"},
+		203: {PID: 203, PPID: 1, Exe: "/Applications/GitHub Copilot.app/Contents/MacOS/GitHub Copilot"},
+		204: {PID: 204, PPID: 1, Exe: "/opt/homebrew/bin/qwen"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	tg.Refresh()
+	for _, pid := range []int32{100, 101} {
+		if info, ok := tg.Tag(pid); ok {
+			t.Fatalf("Tag(%d) = %+v; the Buzz app and bridge are not agents", pid, info)
+		}
+	}
+	for _, pid := range []int32{102, 103} {
+		if info, ok := tg.Tag(pid); !ok || info.Name != "buzz" || info.Kind != "agent" || info.RootPID != 102 {
+			t.Fatalf("Tag(%d) = %+v, %v; want buzz/agent rooted at 102", pid, info, ok)
+		}
+	}
+	for _, pid := range []int32{200, 201, 202, 203, 204} {
+		if info, ok := tg.Tag(pid); ok {
+			t.Fatalf("Tag(%d) = %+v; want untagged", pid, info)
+		}
+	}
+}
+
 // MatchExe applies the agent match strings to a bare exe path, so a pid the
 // tagger has not cached is still named by its binary.
 func TestMatchExeNamesAgentBeforeTag(t *testing.T) {

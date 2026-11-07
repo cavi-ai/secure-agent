@@ -1866,11 +1866,8 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .hk-codex { --harness-color: #10A37F; }
 .hk-opencode { --harness-color: #000000; }
 .hk-openclaw { --harness-color: hsl(342 62% 62%); }
-.hk-agy, .hk-gemini { --harness-color: #8E75B2; }
-.hk-windsurf { --harness-color: #0B100F; }
-.hk-aider { --harness-color: hsl(20 90% 58%); }
-.hk-codeium { --harness-color: hsl(201 88% 46%); }
-.hk-copilot { --harness-color: hsl(220 12% 60%); }
+.hk-agy { --harness-color: #8E75B2; }
+.hk-buzz { --harness-color: #D7D72E; }
 .hk-ollama { --harness-color: #000000; }
 .hk-lm-studio { --harness-color: #000000; }
 .harness-glyph {

@@ -119,7 +119,7 @@ The app bundle has one identity, `com.cavi-ai.secure-agent`, for Launch Services
    - Diffs consecutive socket states to detect newly opened outbound socket connections.
 
 3. **Agent Process Tagger (`daemon/internal/agents/tagger.go`)**:
-   - Monitors the system process table to identify known AI agent executables (`claude`, `cursor`, `codex`, `copilot`) and child interpreter subprocesses (`node`, `python`, `bash`).
+   - Monitors the system process table to identify known AI agent executables (the `agents` list in [`defaults.yaml`](reference/DEFAULTS.md): Claude Code, Cursor, Codex, opencode, Antigravity, Pi, Buzz, OpenClaw, Hermes Agent) and child interpreter subprocesses (`node`, `python`, `bash`).
    - Tags events with agent identity, working directory (`cwd`), session ID, and parent PID chain.
 
 4. **Transcript & Trace Scanner (`daemon/internal/collect/transcript.go`, `*_trace.go`)**:
@@ -144,7 +144,7 @@ The app bundle has one identity, `com.cavi-ai.secure-agent`, for Launch Services
 
    A codex process holds its rollout open for append. Every 30 s the daemon lists the rollouts open in live codex processes (`lsof -p … -Fn` on macOS, `/proc/<pid>/fd` on Linux; `openfiles.go`) and joins each rollout's session to the process tree holding it: that tree's process-tree session is merged into it and the tree's later events resolve to it.
 
-   Uncovered-by-trace harnesses (any other agent CLI) still get process, network and resource visibility, and every tailed log is redaction-scanned for secrets.
+   Harnesses without a trace source (Pi, Buzz's native `buzz-agent`) still get process, network and resource visibility, and every tailed log is redaction-scanned for secrets. Buzz agents on the Claude Code, Codex, opencode or OpenClaw runtime are tagged and traced as that harness.
 
 ### Event Bus & Storage
 

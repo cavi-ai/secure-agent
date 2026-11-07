@@ -30,7 +30,7 @@ func TestLoadDefaultsWhenNoOverlay(t *testing.T) {
 	for _, a := range c.Agents {
 		names[a.Name] = true
 	}
-	if !names["antigravity"] || !names["pi"] || !names["qwen-code"] || names["gemini"] {
+	if !names["antigravity"] || !names["pi"] || !names["buzz"] || names["gemini"] {
 		t.Fatalf("unexpected default harnesses: %+v", names)
 	}
 }
