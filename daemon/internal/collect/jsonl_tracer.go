@@ -64,7 +64,7 @@ var jsonlAdapters = []jsonlAdapter{
 			r := traceLineResult{Events: evs, Parsed: ok || len(evs) > 0}
 			if r.Parsed {
 				id, cwd := t.Session()
-				r.Session = TraceSession{ID: id, Harness: "codex", Workspace: cwd, Origin: CodexOrigin(path), At: time.Now()}
+				r.Session = TraceSession{ID: id, Harness: "codex", Workspace: cwd, Origin: CodexOrigin(path), At: t.recordAt}
 			}
 			return r
 		}}

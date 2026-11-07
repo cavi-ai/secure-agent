@@ -19,6 +19,7 @@ from cases_console_density import CASES as console_density
 from cases_overview_layout import CASES as overview_layout
 from cases_incident_cards import CASES as incident_cards
 from cases_frontend_bounds import CASES as frontend_bounds
+from cases_egress_expectation import CASES as egress_expectation
 
 CASES = (*reports, *sessions, *spend, *agent, *policy, *worktrees, *review_results, *expected_removal, *policy_health,
-         *protection_context, *worktree_selection, *monitoring, *flag_recovery, *attention_stability, *worktree_layout, *console_density, *overview_layout, *incident_cards, *frontend_bounds)
+         *protection_context, *worktree_selection, *monitoring, *flag_recovery, *attention_stability, *worktree_layout, *console_density, *overview_layout, *incident_cards, *frontend_bounds, *egress_expectation)

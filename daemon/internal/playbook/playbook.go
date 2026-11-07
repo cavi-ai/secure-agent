@@ -101,10 +101,10 @@ var playbooks = []Playbook{
 	{
 		Rule:  "secret-in-transcript",
 		Title: "Secret in an agent transcript",
-		Why:   "A secret appeared in text the agent saw or wrote: a tool result printed it (an env dump, a config file, a log line) or it was pasted into the chat. The harness keeps that text in its transcript on disk and sends it to the model provider.",
+		Why:   "A registered secret or credential-shaped value was found in saved transcript text. A pattern match can be a test fixture; the saved text alone does not prove that a real credential reached a model provider.",
 		Now: []string{
-			"Rotate the secret; it has left this machine in the model request.",
-			"Delete or redact the transcript file so the stored copy is gone.",
+			"Review the matched value and its test-value evidence. A test filename alone does not make a live credential safe.",
+			"If it is a real credential, review where it appeared and rotate or revoke it as needed. Redact the retained copy after reviewing its evidence.",
 			"Find the tool call that printed it in the session timeline.",
 		},
 		Prevent: []Step{

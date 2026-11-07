@@ -2876,7 +2876,12 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify({ subject, label, source: source || 'mark' })
       });
       if (!res.ok) throw new Error((await res.text()).trim());
-      if (!quiet) showToast(label === 'ok' ? 'Marked as routine. The advisor will use it.' : 'Marked as not ok. The advisor will use it.', 'success');
+      if (!quiet) {
+        const message = label === 'ok'
+          ? (String(subject).startsWith('incident:') ? 'Routine feedback saved. No exception was added.' : 'Marked as routine. The advisor will use it.')
+          : 'Marked as not ok. The advisor will use it.';
+        showToast(message, 'success');
+      }
       fetchTelemetry();
       if (planSlots(subject).length) loadPlanSlot(subject);
     } catch (err) {
@@ -3511,7 +3516,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!row) { showToast('This activity is no longer available for review.', 'warn'); return; }
     const o = row.observed || {};
     const s = o.scope || {};
-    if (kind === 'scope' && !o.scope_complete) return;
+    if (kind === 'scope' && !o.scope_complete) {
+      showToast('This activity’s workspace or executable identity is incomplete. Refresh its details before saving an expectation.', 'warn');
+      return;
+    }
     const description = kind === 'scope'
       ? `Future destinations for ${s.agent || 'this agent'} running ${s.exe_path || 'unknown executable'} under ${s.harness || 'unknown harness'} in ${s.workspace || 'unknown workspace'} will be quieted as expected egress.`
       : `Connections to ${o.host || 'this destination'}:${o.port || '?'} (${o.protocol || 'unknown protocol'}) from ${s.agent || 'this agent'} will be quieted as expected egress.`;

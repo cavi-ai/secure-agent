@@ -43,6 +43,7 @@ type codexMeta struct {
 // codexTurnContext is the turn_context payload subset the tracer reads.
 type codexTurnContext struct {
 	Model string `json:"model"`
+	CWD   string `json:"cwd"`
 }
 
 // codexEventMsg is the event_msg payload subset the tracer reads.
@@ -98,6 +99,7 @@ type CodexTracer struct {
 	home             string // CODEX_HOME the rollout lives under ("" when unknown)
 	homeLabel        string // CodexHomeLabel of the rollout
 	sessionID        string
+	recordAt         time.Time // source timestamp, not the time a replay was read
 	cwd              string
 	settingsModel    string       // model id from the latest thread_settings_applied
 	settingsProvider string       // model_provider_id from the same line
@@ -179,8 +181,8 @@ func (t *CodexTracer) Model() (id, provider string) {
 
 // ParseLine consumes one rollout line and returns zero or more trace events.
 // ok=false means the line is not a Codex trace record; the caller still runs
-// its redaction scan on it. A thread_settings_applied or turn_context line
-// updates the tracer's model and returns ok=false, so it keeps that scan.
+// its redaction scan on it. Model-only settings return ok=false; a changed
+// turn workspace returns ok=true so the session sighting receives it.
 func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 	trimmed := strings.TrimSpace(line)
 	if !strings.HasPrefix(trimmed, "{") || !strings.Contains(trimmed, `"payload"`) {
@@ -196,6 +198,7 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 			ts, observed = parsed, false
 		}
 	}
+	t.recordAt = ts
 	if observed {
 		defer func() { markObserved(events) }()
 	}
@@ -217,8 +220,14 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 		return nil, true
 	case "turn_context":
 		var tc codexTurnContext
-		if err := json.Unmarshal(rec.Payload, &tc); err == nil && tc.Model != "" {
-			t.contextModel = tc.Model
+		if err := json.Unmarshal(rec.Payload, &tc); err == nil {
+			if tc.Model != "" {
+				t.contextModel = tc.Model
+			}
+			if tc.CWD != "" && tc.CWD != t.cwd {
+				t.cwd = tc.CWD
+				return nil, true
+			}
 		}
 		return nil, false
 	case "event_msg":

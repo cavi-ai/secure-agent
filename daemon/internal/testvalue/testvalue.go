@@ -10,6 +10,7 @@ package testvalue
 
 import (
 	"encoding/base64"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -19,6 +20,7 @@ import (
 const (
 	PublishedSample = "a published sample value"
 	PlaceholderWord = "a placeholder word in the value"
+	PlaceholderPair = "placeholder database user and password"
 	TestModePrefix  = "a test-mode key prefix"
 	LowEntropy      = "a low-entropy value (repeated or sequential characters)"
 	DecodesDummy    = "decodes to a placeholder credential"
@@ -97,7 +99,12 @@ func Signals(text string, start, end int) []string {
 		out = append(out, r)
 	}
 
+	markerValue, dummyPair := databaseCredential(v)
+	v = markerValue
 	lower := strings.ToLower(v)
+	if dummyPair {
+		add(PlaceholderPair)
+	}
 	if publishedSamples[v] {
 		add(PublishedSample)
 	}
@@ -112,7 +119,7 @@ func Signals(text string, start, end int) []string {
 			break
 		}
 	}
-	if lowEntropy(v) {
+	if v != "" && lowEntropy(v) {
 		add(LowEntropy)
 	}
 	if decodesToDummy(v) {
@@ -135,6 +142,36 @@ func Signals(text string, start, end int) []string {
 		add(DummyWording)
 	}
 	return out
+}
+
+// Database path names and adjacent serialized fields do not describe the
+// credential. A greedy detector span may contain several URIs; leave those
+// ambiguous matches actionable rather than trusting its first placeholder.
+func databaseCredential(v string) (string, bool) {
+	scheme, rest, ok := strings.Cut(v, "://")
+	if !ok {
+		return v, false
+	}
+	switch strings.ToLower(scheme) {
+	case "postgres", "postgresql", "mysql", "mongodb", "mongodb+srv", "redis", "amqp", "amqps":
+	default:
+		return v, false
+	}
+	if strings.Contains(rest, "://") {
+		return "", false
+	}
+	if end := strings.IndexAny(rest, "/?#\\\"'"); end >= 0 {
+		rest = rest[:end]
+	}
+	u, err := url.Parse(scheme + "://" + rest)
+	if err != nil || u.User == nil {
+		return "", false
+	}
+	password, ok := u.User.Password()
+	if !ok {
+		return "", false
+	}
+	return password, dummyCredentials[strings.ToLower(u.User.Username())] && dummyCredentials[strings.ToLower(password)]
 }
 
 // Strong reports whether any reason describes the value itself rather than
