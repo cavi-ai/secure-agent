@@ -38,9 +38,8 @@ func (e *EvidenceItem) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(data, &s); err != nil {
 			return err
 		}
-		e.Kind = "text"
-		e.Label = s
-		e.Text = s
+		// Text cannot inherit producer-owned metadata from a reused item.
+		*e = EvidenceItem{Kind: "text", Label: s, Text: s}
 		return nil
 	}
 	type alias EvidenceItem

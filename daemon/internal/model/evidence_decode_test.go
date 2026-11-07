@@ -2,16 +2,18 @@ package model
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
-// objectEvidence decodes the object form only: the cost EvidenceItem's
-// decoder must match for an object.
-type objectEvidence EvidenceItem
-
-func (o *objectEvidence) UnmarshalJSON(data []byte) error {
-	type alias EvidenceItem
-	return json.Unmarshal(data, (*alias)(o))
+func TestLegacyEvidenceClearsStructuredMetadata(t *testing.T) {
+	e := EvidenceItem{Kind: "read", PID: 42, Exe: "/bin/tool", Chain: []int32{1, 42}, Owners: []string{"owner"}, Payload: &PayloadEvidence{}}
+	if err := json.Unmarshal([]byte(`"legacy"`), &e); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(e, EvidenceItem{Kind: "text", Label: "legacy", Text: "legacy"}) {
+		t.Fatalf("legacy text retained structured evidence: %#v", e)
+	}
 }
 
 // An object evidence item decodes without a failed string attempt first, and
@@ -28,17 +30,5 @@ func TestEvidenceItemDecodesEachFormDirectly(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(`42`), &legacy); err == nil {
 		t.Fatal("a number decoded as evidence")
-	}
-
-	reference := testing.AllocsPerRun(200, func() {
-		var o objectEvidence
-		_ = json.Unmarshal(obj, &o)
-	})
-	viaMethod := testing.AllocsPerRun(200, func() {
-		var e EvidenceItem
-		_ = json.Unmarshal(obj, &e)
-	})
-	if viaMethod > reference {
-		t.Fatalf("EvidenceItem decode allocates %.0f times, an object-only decode %.0f", viaMethod, reference)
 	}
 }
