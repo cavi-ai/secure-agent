@@ -13,6 +13,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Agents: the Windsurf, Codeium, Aider, GitHub Copilot and Qwen Code definitions, which had no trace or hook support, and the `.windsurfrules` and `.github/copilot-instructions.md` instruction-file checks.
 
 ### Fixed
+- Permissions: wait through brief database contention before asking again, and report read failures.
 - Network: bound the DNS cache to the 1,024 most recently used addresses.
 - Performance: expire old correlation patterns during periodic cleanup instead of scanning the cache on every insertion.
 - Automatic review: release processed queue entries from memory.

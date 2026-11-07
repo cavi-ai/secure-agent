@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
+	"slices"
 	"testing"
 	"time"
 )
@@ -103,6 +104,40 @@ func saveScope(t *testing.T, s *Store, g model.DecisionScope) {
 	defer rollback()
 	if err = commit(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPermissionLookupSurvivesBriefConnectionContention(t *testing.T) {
+	s, g := scopeFixture(t)
+	saveScope(t, s, g)
+	s.db.SetMaxOpenConns(1)
+	connection, err := s.db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(75 * time.Millisecond)
+		connection.Close()
+		close(released)
+	}()
+	matched := s.MatchDecisionScopes([]model.DecisionScope{g})
+	<-released
+	if !matched {
+		t.Fatal("saved permission became a miss during a brief connection handoff")
+	}
+}
+
+func TestPermissionReadFailureRemainsClosedAndVisible(t *testing.T) {
+	s, g := scopeFixture(t)
+	saveScope(t, s, g)
+	s.Close()
+	if s.MatchDecisionScopes([]model.DecisionScope{g}) {
+		t.Fatal("unavailable storage authorized a permission")
+	}
+	if !slices.Contains(s.WriteHealth().ReadActive, "decision-scopes-match") {
+		t.Fatal("permission read failure was hidden from storage health")
 	}
 }
 
