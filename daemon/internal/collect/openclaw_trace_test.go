@@ -86,8 +86,8 @@ func newTestOpenclaw(t *testing.T, dir string) (*OpenclawCollector, <-chan event
 	c.now = func() time.Time { return time.Date(2026, 9, 23, 8, 0, 0, 0, time.UTC) }
 	var seen []openclawSighting
 	var ended []string
-	c.OnSessionSeen = func(id, harness, ws string, _ time.Time) {
-		seen = append(seen, openclawSighting{id, harness, ws})
+	c.OnSessionSeen = func(s TraceSession) {
+		seen = append(seen, openclawSighting{s.ID, s.Harness, s.Workspace})
 	}
 	c.OnSessionEnded = func(id string, _ time.Time) { ended = append(ended, id) }
 	return c, sub, &seen, &ended
