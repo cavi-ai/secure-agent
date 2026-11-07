@@ -6,6 +6,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-11-07
+
 ### Added
 - Agents: Buzz's native agent (`buzz-agent`) is tagged as the `buzz` harness; Buzz agents on Claude Code, Codex, opencode or OpenClaw stay tagged as that harness.
 
@@ -13,16 +15,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Agents: the Windsurf, Codeium, Aider, GitHub Copilot and Qwen Code definitions, which had no trace or hook support, and the `.windsurfrules` and `.github/copilot-instructions.md` instruction-file checks.
 
 ### Fixed
-- Findings: clear structured metadata when decoding a legacy text-only evidence item.
-- Permissions: wait through brief database contention before asking again, and report read failures.
-- Network: bound the DNS cache to the 1,024 most recently used addresses.
-- Performance: expire old correlation patterns during periodic cleanup instead of scanning the cache on every insertion.
-- Automatic review: release processed queue entries from memory.
-- Menu bar: cancelling an event stream stops its socket worker even when cancellation precedes socket registration or connection.
-- Worktrees: reviewed scratch worktrees can be removed while preserving their branches and commits.
 - Console: long text stays within navigation, finding and report panels; report actions refresh their displayed state.
 - Findings: example database credentials are classified as test values; routine feedback is labelled separately from saved exceptions.
+- Findings: a legacy text-only evidence item no longer carries another item's process details.
+- Performance: daemon and menu bar memory no longer grows over long runs, and event correlation does less work per event.
+- Permissions: wait through brief database contention before asking again, and report read failures.
 - Sessions: Codex and OpenClaw retain the recorded workspace, originating agent and activity time.
+- Worktrees: reviewed scratch worktrees can be removed while preserving their branches and commits.
 
 ## [1.5.3] - 2026-11-06
 
@@ -1826,7 +1825,8 @@ scanning of the repository itself.
 Development history lives in the git log; this changelog starts at the first
 tagged release.
 
-[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.5.3...HEAD
+[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.5.4...HEAD
+[1.5.4]: https://github.com/cavi-ai/secure-agent/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/cavi-ai/secure-agent/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/cavi-ai/secure-agent/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/cavi-ai/secure-agent/compare/v1.5.0...v1.5.1
