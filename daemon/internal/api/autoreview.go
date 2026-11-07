@@ -86,7 +86,11 @@ func (a *API) flushAutoReview() {
 	r.mu.Lock()
 	r.armed = false
 	ids := append([]string(nil), r.pending[:min(len(r.pending), autoReviewBatch)]...)
+	clear(r.pending[:len(ids)])
 	r.pending = r.pending[len(ids):]
+	if len(r.pending) == 0 {
+		r.pending = nil
+	}
 	r.mu.Unlock()
 
 	var flags []model.Flag

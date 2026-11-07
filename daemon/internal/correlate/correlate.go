@@ -1329,6 +1329,26 @@ func (c *Correlator) evictStaleLocked(now time.Time) {
 	}
 	c.lastEviction = now
 	c.evictOwnedLocked(now)
+	if len(c.folded) > 1024 {
+		// Many patterns share a finding. Read its disposition once per sweep,
+		// retaining unresolved findings beyond the ordinary repeat window.
+		open := map[string]bool{}
+		for key, f := range c.folded {
+			if now.Sub(f.at) >= readRepeatWindow {
+				if c.isOpenFlag != nil {
+					unresolved, checked := open[f.id]
+					if !checked {
+						unresolved = c.isOpenFlag(f.id)
+						open[f.id] = unresolved
+					}
+					if unresolved {
+						continue
+					}
+				}
+				delete(c.folded, key)
+			}
+		}
+	}
 	for path, w := range c.launchWriters {
 		if now.Sub(w.at) > launchWriterWindow {
 			delete(c.launchWriters, path)

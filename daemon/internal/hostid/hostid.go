@@ -17,7 +17,6 @@ import (
 	"net"
 	"net/netip"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -36,7 +35,7 @@ type ptrEntry struct {
 	at   time.Time
 }
 
-var ptrCache sync.Map // ip -> ptrEntry
+var ptrCache ptrLRU
 
 // lookupAddr is injectable for tests (no real DNS in unit tests).
 var lookupAddr = func(ctx context.Context, ip string) ([]string, error) {
@@ -73,8 +72,7 @@ type ptrResult struct {
 }
 
 func ptrOrgName(ip string) ptrResult {
-	if v, ok := ptrCache.Load(ip); ok {
-		e := v.(ptrEntry)
+	if e, ok := ptrCache.Load(ip); ok {
 		if e.org != "" || time.Since(e.at) < ptrMissTTL {
 			return ptrResult{Org: e.org, Name: e.name}
 		}
@@ -379,8 +377,7 @@ func IdentifyCached(host string) EndpointIdentity {
 
 // ptrCached returns the cached PTR result for ip, or empty when none is held.
 func ptrCached(ip string) ptrResult {
-	if v, ok := ptrCache.Load(ip); ok {
-		e := v.(ptrEntry)
+	if e, ok := ptrCache.Load(ip); ok {
 		return ptrResult{Org: e.org, Name: e.name}
 	}
 	return ptrResult{}

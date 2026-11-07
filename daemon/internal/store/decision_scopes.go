@@ -20,6 +20,10 @@ const decisionScopesSchema = `CREATE TABLE IF NOT EXISTS decision_scopes (
  review_id TEXT NOT NULL, revision INTEGER NOT NULL, choice_json TEXT NOT NULL, ids_json TEXT NOT NULL,
  PRIMARY KEY(review_id,revision));`
 
+// Bound permission reads while allowing connection handoff under load.
+// Read failures still never authorize a request.
+const decisionScopeReadTimeout = 500 * time.Millisecond
+
 // scopeSession checks the authoritative lifecycle at both creation and use.
 // Rekeyed or removed sessions cannot silently transfer session permissions.
 func scopeSession(q interface{ QueryRow(string, ...any) *sql.Row }, g model.DecisionScope) bool {
@@ -114,10 +118,12 @@ func (s *Store) MatchDecisionScopes(requests []model.DecisionScope) bool {
 	}
 	// One read statement joins lifecycle and permissions in a WAL snapshot.
 	// Do not use the store's immediate writer transactions on this hot path.
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	var readErr error
+	defer func() { s.noteRead("decision-scopes-match", readErr) }()
+	ctx, cancel := context.WithTimeout(context.Background(), decisionScopeReadTimeout)
 	defer cancel()
-	rows, err := s.db.QueryContext(ctx, `SELECT d.record_json,s.harness,s.workspace,s.status,s.root_pid,s.root_started_at FROM decision_scopes d JOIN sessions s ON s.id=? WHERE d.agent=? AND d.rule_id=? AND d.operation=?`, first.SessionID, first.Agent, first.RuleID, first.Operation)
-	if err != nil {
+	rows, readErr := s.db.QueryContext(ctx, `SELECT d.record_json,s.harness,s.workspace,s.status,s.root_pid,s.root_started_at FROM decision_scopes d JOIN sessions s ON s.id=? WHERE d.agent=? AND d.rule_id=? AND d.operation=?`, first.SessionID, first.Agent, first.RuleID, first.Operation)
+	if readErr != nil {
 		return false
 	}
 	defer rows.Close()
@@ -127,14 +133,14 @@ func (s *Store) MatchDecisionScopes(requests []model.DecisionScope) bool {
 		var raw, harness, workspace, status, started string
 		var root int32
 		var g model.DecisionScope
-		if rows.Scan(&raw, &harness, &workspace, &status, &root, &started) != nil {
+		if readErr = rows.Scan(&raw, &harness, &workspace, &status, &root, &started); readErr != nil {
 			return false
 		}
 		at, e := time.Parse(time.RFC3339Nano, started)
 		if e != nil || at.IsZero() || root <= 0 || harness != first.Agent || (first.Workspace != "" && workspace != first.Workspace) || (status != model.SessionActive && status != model.SessionIdle) {
 			return false
 		}
-		if json.Unmarshal([]byte(raw), &g) != nil {
+		if readErr = json.Unmarshal([]byte(raw), &g); readErr != nil {
 			return false
 		}
 		for i, q := range requests {
@@ -144,7 +150,7 @@ func (s *Store) MatchDecisionScopes(requests []model.DecisionScope) bool {
 			matched[i] = matched[i] || g.Matches(q, now)
 		}
 	}
-	if rows.Err() != nil {
+	if readErr = rows.Err(); readErr != nil {
 		return false
 	}
 	for _, ok := range matched {
@@ -225,15 +231,20 @@ func (s *Store) ExplainDecisionScope(q model.DecisionScope) string {
 	if q.IdentityBasis == "" {
 		return "Live session or executable identity is incomplete; choose once."
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), decisionScopeReadTimeout)
 	defer cancel()
 	var raw string
 	var previous model.DecisionScope
 	err := s.db.QueryRowContext(ctx, `SELECT record_json FROM decision_scopes WHERE agent=? AND rule_id=? AND json_extract(record_json,'$.resource_path')=? ORDER BY rowid DESC LIMIT 1`, q.Agent, q.RuleID, q.ResourcePath).Scan(&raw)
 	if err == sql.ErrNoRows {
+		s.noteRead("decision-scopes-explain", nil)
 		return "No saved permission covers this request."
 	}
-	if err != nil || json.Unmarshal([]byte(raw), &previous) != nil {
+	if err == nil {
+		err = json.Unmarshal([]byte(raw), &previous)
+	}
+	s.noteRead("decision-scopes-explain", err)
+	if err != nil {
 		return "Saved permission status is unavailable; choose once or retry."
 	}
 	return previous.MismatchReason(q, time.Now().UTC())

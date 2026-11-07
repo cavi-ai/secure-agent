@@ -65,22 +65,44 @@ private extension String {
     }
 }
 
-/// Box holding the stream socket fd so task cancellation can close it and
-/// unblock a parked read().
+/// The worker owns closing its socket. Cancellation shuts it down to unblock
+/// reads without allowing the descriptor to be reused while the worker runs.
 final class FDBox: @unchecked Sendable {
     private var lock = NSLock()
     private var fd: Int32 = -1
+    private var cancelled = false
 
-    func set(_ newFD: Int32) {
+    @discardableResult
+    func set(_ newFD: Int32) -> Bool {
         lock.lock()
+        guard !cancelled, fd < 0 else {
+            lock.unlock()
+            Darwin.close(newFD)
+            return false
+        }
         fd = newFD
+        lock.unlock()
+        return true
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        if fd >= 0 { Darwin.shutdown(fd, SHUT_RDWR) }
         lock.unlock()
     }
 
-    /// Close exactly once; safe from any thread. After close, read() on the
-    /// old fd fails with EBADF and the read loop exits.
+    func checkCancellation() throws {
+        lock.lock()
+        let stopped = cancelled
+        lock.unlock()
+        if stopped { throw CancellationError() }
+    }
+
+    /// Called by the worker after its last socket operation.
     func close() {
         lock.lock()
+        cancelled = true
         let old = fd
         fd = -1
         lock.unlock()
@@ -108,8 +130,8 @@ public extension DaemonClient {
     /// detached task's context; hop to MainActor in the handler as needed).
     ///
     /// Throws DaemonClientError on transport failure or non-2xx status — the
-    /// caller owns reconnect/backoff policy. Cancellation closes the socket,
-    /// which breaks the blocking read loop.
+    /// caller owns reconnect/backoff policy. Cancellation shuts down the socket,
+    /// which breaks the blocking read loop; the worker then closes it.
     func streamEvents(onEvent: @escaping @Sendable (SSEFrame) -> Void) async throws {
         let socketPath = self.socketPath
         let fdBox = FDBox()
@@ -117,8 +139,11 @@ public extension DaemonClient {
             try await Task.detached {
                 let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
                 guard fd >= 0 else { throw DaemonClientError.transport("failed to create socket") }
-                fdBox.set(fd)
+                guard fdBox.set(fd) else { throw CancellationError() }
                 defer { fdBox.close() }
+
+                var noSignal: Int32 = 1
+                setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
 
                 // Recv timeout implements the idle watchdog: heartbeats reset it.
                 var tv = timeval(tv_sec: DaemonClient.streamIdleTimeoutSeconds, tv_usec: 0)
@@ -136,11 +161,13 @@ public extension DaemonClient {
                     }
                 }
                 let addrLen = socklen_t(MemoryLayout<sa_family_t>.size + pathBytes.count)
+                try fdBox.checkCancellation()
                 let connRes = withUnsafePointer(to: &addr) {
                     $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                         Darwin.connect(fd, $0, addrLen)
                     }
                 }
+                try fdBox.checkCancellation()
                 guard connRes == 0 else {
                     throw DaemonClientError.transport("connect failed: \(String(cString: strerror(errno)))")
                 }
@@ -150,6 +177,7 @@ public extension DaemonClient {
                     var written = 0
                     while written < reqData.count {
                         let res = Darwin.write(fd, ptr.baseAddress! + written, reqData.count - written)
+                        try fdBox.checkCancellation()
                         guard res > 0 else {
                             throw DaemonClientError.transport("write error: \(String(cString: strerror(errno)))")
                         }
@@ -167,6 +195,7 @@ public extension DaemonClient {
                 var buffer = [UInt8](repeating: 0, count: 4096)
                 while true {
                     let n = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+                    try fdBox.checkCancellation()
                     if n == 0 {
                         throw DaemonClientError.transport("stream closed by daemon")
                     }
@@ -217,7 +246,7 @@ public extension DaemonClient {
                 }
             }.value
         } onCancel: {
-            fdBox.close()
+            fdBox.cancel()
         }
     }
 }

@@ -15,7 +15,7 @@ import urllib.request
 
 
 class FixtureLivenessTests(unittest.TestCase):
-    def check_fixture(self, command, exited=True):
+    def check_fixture(self, command, exited=True, connected=False):
         source = pathlib.Path(__file__).with_name("e2e_smoke.sh").read_text()
         function = "check_fixture_alive() {" + source.split(
             "check_fixture_alive() {", 1
@@ -25,7 +25,7 @@ class FixtureLivenessTests(unittest.TestCase):
                       + command + ' > "$tmp/fake-agent.log" 2>&1 &\n'
                       + 'AGENT_PID=$!\ntrap \'kill "$AGENT_PID" 2>/dev/null || true\' EXIT\n'
                       + ('wait "$AGENT_PID" || true\n' if exited else '')
-                      + function + '\ncheck_fixture_alive\n')
+                      + function + ('\nwait_fixture_connected\n' if connected else '\ncheck_fixture_alive\n'))
             return subprocess.run(
                 ["bash", "-c", script, "fixture-test", directory],
                 capture_output=True, text=True, timeout=5,
@@ -34,6 +34,22 @@ class FixtureLivenessTests(unittest.TestCase):
     def test_running_fixture_continues(self):
         result = self.check_fixture("sleep 3", exited=False)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_connection_waits_for_fixture_readiness(self):
+        result = self.check_fixture(
+            "bash -c 'sleep 0.2; echo network fixture connected to 192.0.2.1:1234; sleep 3'",
+            exited=False, connected=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_connection_wait_preserves_fixture_failure(self):
+        result = self.check_fixture(
+            "bash -c 'sleep 0.2; echo probe-failed >&2; exit 7'",
+            exited=False, connected=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exit 7", result.stderr)
+        self.assertIn("probe-failed", result.stderr)
 
     def test_failed_fixture_preserves_error_and_status(self):
         result = self.check_fixture("bash -c 'echo probe-failed >&2; exit 7'")

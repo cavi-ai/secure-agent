@@ -12,6 +12,18 @@ All notable changes to `secure-agent` are documented here. The format follows
 ### Removed
 - Agents: the Windsurf, Codeium, Aider, GitHub Copilot and Qwen Code definitions, which had no trace or hook support, and the `.windsurfrules` and `.github/copilot-instructions.md` instruction-file checks.
 
+### Fixed
+- Findings: clear structured metadata when decoding a legacy text-only evidence item.
+- Permissions: wait through brief database contention before asking again, and report read failures.
+- Network: bound the DNS cache to the 1,024 most recently used addresses.
+- Performance: expire old correlation patterns during periodic cleanup instead of scanning the cache on every insertion.
+- Automatic review: release processed queue entries from memory.
+- Menu bar: cancelling an event stream stops its socket worker even when cancellation precedes socket registration or connection.
+- Worktrees: reviewed scratch worktrees can be removed while preserving their branches and commits.
+- Console: long text stays within navigation, finding and report panels; report actions refresh their displayed state.
+- Findings: example database credentials are classified as test values; routine feedback is labelled separately from saved exceptions.
+- Sessions: Codex and OpenClaw retain the recorded workspace, originating agent and activity time.
+
 ## [1.5.3] - 2026-11-06
 
 ### Added

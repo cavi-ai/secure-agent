@@ -5,7 +5,6 @@ import (
 	"errors"
 	"go/build"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -45,7 +44,7 @@ func TestInfraOrg(t *testing.T) {
 func TestInfraOrgPTR(t *testing.T) {
 	orig := lookupAddr
 	t.Cleanup(func() { lookupAddr = orig })
-	ptrCache = sync.Map{}
+	ptrCache.Clear()
 	lookupAddr = func(_ context.Context, ip string) ([]string, error) {
 		switch ip {
 		case "98.90.104.193":
@@ -81,7 +80,7 @@ func TestInfraOrgPTR(t *testing.T) {
 func TestIdentify(t *testing.T) {
 	orig := lookupAddr
 	t.Cleanup(func() { lookupAddr = orig })
-	ptrCache = sync.Map{}
+	ptrCache.Clear()
 	lookupAddr = func(_ context.Context, ip string) ([]string, error) { return nil, errors.New("no ptr") }
 
 	// The exact IPv6 that read as unidentifiable: Google Cloud's 2600:1901::/32.
@@ -109,7 +108,7 @@ func TestIdentify(t *testing.T) {
 func TestIdentifyNamesEveryInfraPrefix(t *testing.T) {
 	orig := lookupAddr
 	t.Cleanup(func() { lookupAddr = orig })
-	ptrCache = sync.Map{}
+	ptrCache.Clear()
 	lookupAddr = func(context.Context, string) ([]string, error) { return nil, errors.New("no ptr") }
 	for _, r := range infraCIDRs {
 		host := r.prefix.Addr().Next().String()
@@ -127,7 +126,7 @@ func TestIdentifyNamesEveryInfraPrefix(t *testing.T) {
 func TestIdentifyPTRBroadensBeyondInfraOrg(t *testing.T) {
 	orig := lookupAddr
 	t.Cleanup(func() { lookupAddr = orig })
-	ptrCache = sync.Map{}
+	ptrCache.Clear()
 	lookupAddr = func(_ context.Context, ip string) ([]string, error) {
 		return []string{"17.46.190.35.bc.googleusercontent.com."}, nil
 	}
@@ -145,7 +144,7 @@ func TestIdentifyPTRBroadensBeyondInfraOrg(t *testing.T) {
 func TestIdentifyCachedNeverResolves(t *testing.T) {
 	orig := lookupAddr
 	t.Cleanup(func() { lookupAddr = orig })
-	ptrCache = sync.Map{}
+	ptrCache.Clear()
 	calls := 0
 	lookupAddr = func(_ context.Context, ip string) ([]string, error) {
 		calls++

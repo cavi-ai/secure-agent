@@ -322,20 +322,13 @@ func (c *Correlator) allMutedLocked(agent string, conns []connMark) bool {
 	return true
 }
 
-// foldLocked records the flag a pattern raised; entries past the window are
-// pruned once the map passes 1,024 keys.
+// foldLocked records the flag a pattern raised. Periodic housekeeping prunes
+// expired entries, so a burst does not scan the whole map per insertion.
 func (c *Correlator) foldLocked(key, id string, at time.Time, severity int) {
 	if c.folded == nil {
 		c.folded = map[string]foldedFlag{}
 	}
 	c.folded[key] = foldedFlag{id: id, at: at, severity: severity}
-	if len(c.folded) > 1024 {
-		for k, f := range c.folded {
-			if at.Sub(f.at) >= readRepeatWindow {
-				delete(c.folded, k)
-			}
-		}
-	}
 }
 
 // StoredReadConnectSeverity re-evaluates causal strength from recorded

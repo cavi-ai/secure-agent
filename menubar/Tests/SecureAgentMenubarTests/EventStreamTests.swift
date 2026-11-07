@@ -4,6 +4,38 @@ import Darwin
 
 final class EventStreamTests: XCTestCase {
 
+    func testClosedStreamRejectsLateSocketRegistration() {
+        let box = FDBox()
+        box.close()
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        box.set(fd)
+        let state = Darwin.fcntl(fd, F_GETFD)
+        box.close()
+        XCTAssertEqual(state, -1, "a late socket must be closed after cancellation")
+    }
+
+    func testCancellationUnblocksSocketWithoutReusingDescriptor() async throws {
+        var pair: [Int32] = [-1, -1]
+        XCTAssertEqual(Darwin.socketpair(AF_UNIX, SOCK_STREAM, 0, &pair), 0)
+        let box = FDBox()
+        let fd = pair[0]
+        defer { box.close(); Darwin.close(pair[1]) }
+        XCTAssertTrue(box.set(fd))
+        let finished = expectation(description: "cancelled socket read returned")
+        Thread.detachNewThread {
+            var byte: UInt8 = 0
+            XCTAssertEqual(Darwin.read(fd, &byte, 1), 0)
+            finished.fulfill()
+        }
+        box.cancel()
+        XCTAssertThrowsError(try box.checkCancellation())
+        await fulfillment(of: [finished], timeout: 1)
+        XCTAssertNotEqual(Darwin.fcntl(fd, F_GETFD), -1, "worker still owns the descriptor")
+        box.close()
+        XCTAssertEqual(Darwin.fcntl(fd, F_GETFD), -1)
+    }
+
     // MARK: - frame parser
 
     func testParserSplitsFramesOnBlankLines() {
@@ -45,6 +77,52 @@ final class EventStreamTests: XCTestCase {
     }
 
     // MARK: - live stream over a real unix socket
+
+    func testCancelledLiveStreamReturnsCancellation() async throws {
+        let path = "/tmp/sa-sse-cancel-\(UUID().uuidString).sock"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let listener = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(listener, 0)
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let bytes = path.utf8CString
+        bytes.withUnsafeBufferPointer { source in
+            withUnsafeMutableBytes(of: &addr.sun_path) { $0.copyBytes(from: UnsafeRawBufferPointer(source)) }
+        }
+        let bound = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(listener, $0, socklen_t(MemoryLayout<sa_family_t>.size + bytes.count))
+            }
+        }
+        XCTAssertEqual(bound, 0)
+        XCTAssertEqual(Darwin.listen(listener, 1), 0)
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        Thread.detachNewThread {
+            defer { Darwin.close(listener) }
+            let connection = Darwin.accept(listener, nil, nil)
+            guard connection >= 0 else { return }
+            defer { Darwin.close(connection) }
+            let response = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\nevent: ready\ndata: {}\n\n"
+            _ = response.withCString { Darwin.write(connection, $0, strlen($0)) }
+            _ = release.wait(timeout: .now() + 2)
+        }
+        let ready = expectation(description: "stream connected")
+        let client = DaemonClient(socketPath: path)
+        let task = Task {
+            try await client.streamEvents { _ in ready.fulfill() }
+        }
+        await fulfillment(of: [ready], timeout: 1)
+        task.cancel()
+        do {
+            try await task.value
+            XCTFail("cancelled stream returned normally")
+        } catch is CancellationError {
+            // Cancellation must not enter AppState's reconnect path.
+        } catch {
+            XCTFail("cancellation became a transport failure: \(error)")
+        }
+    }
 
     /// Spin up a minimal SSE server on a temp unix socket and verify the
     /// client parses status line, headers, frames across chunk splits, and

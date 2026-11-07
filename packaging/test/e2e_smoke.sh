@@ -276,7 +276,23 @@ check_fixture_alive() {
   return 1
 }
 
+wait_fixture_connected() {
+  for _ in $(seq 1 300); do
+    check_fixture_alive || return 1
+    if grep -q '^network fixture connected to ' "$tmp/fake-agent.log"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Network fixture did not signal a connection within 30 seconds." >&2
+  cat "$tmp/fake-agent.log" >&2
+  return 1
+}
+
 echo "Waiting for flag & incident report via API..."
+# Interface probes can outlast the correlation window. Start that window
+# only after the fixture has established the connection being observed.
+wait_fixture_connected
 PASSED=false
 INCIDENT_PASSED=false
 INCIDENT_RESP=""

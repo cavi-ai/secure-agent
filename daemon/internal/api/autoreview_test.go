@@ -23,6 +23,28 @@ type scheduledFlush struct {
 	f func()
 }
 
+func TestAutoReviewReleasesConsumedQueueEntries(t *testing.T) {
+	r := newAutoReviewRig(t, false, false, nil)
+	r.a.autoReview.pending = make([]string, autoReviewBatch+1)
+	for i := range r.a.autoReview.pending {
+		r.a.autoReview.pending[i] = fmt.Sprintf("missing-%d", i)
+	}
+	backing := r.a.autoReview.pending
+	r.a.flushAutoReview()
+	for _, id := range backing[:autoReviewBatch] {
+		if id != "" {
+			t.Fatal("consumed queue slot still retains its finding id")
+		}
+	}
+	if got := r.a.autoReview.pending; len(got) != 1 || got[0] != fmt.Sprintf("missing-%d", autoReviewBatch) {
+		t.Fatalf("remaining queue = %v", got)
+	}
+	r.a.flushAutoReview()
+	if r.a.autoReview.pending != nil {
+		t.Fatal("drained queue still retains its backing array")
+	}
+}
+
 // autoReviewRig is an API with a local agent on a stub Ollama and a captured
 // flush scheduler. release, when non-nil, holds every model answer until
 // closed.
