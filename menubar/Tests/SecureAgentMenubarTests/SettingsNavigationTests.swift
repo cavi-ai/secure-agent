@@ -55,7 +55,7 @@ final class SettingsNavigationTests: XCTestCase {
         }
         let hosts: Set<String> = ["claude-desktop", "cursor-ide"]
         let expected = shipped.filter { !hosts.contains($0.name) }
-        XCTAssertGreaterThanOrEqual(expected.count, 15, "defaults.yaml agents list not found")
+        XCTAssertGreaterThanOrEqual(expected.count, 11, "defaults.yaml agents list not found")
         XCTAssertEqual(SetupManager.knownAgents.map(\.name).sorted(), expected.map(\.name).sorted())
         for known in SetupManager.knownAgents {
             let daemon = try XCTUnwrap(expected.first { $0.name == known.name })
@@ -68,12 +68,13 @@ final class SettingsNavigationTests: XCTestCase {
     func testEveryProviderTileDrawsAMarkOrMonogram() {
         XCTAssertEqual(AgentIdentity.glyph(for: "claude"), .claude)
         XCTAssertEqual(AgentIdentity.glyph(for: "lm-studio"), .lmStudio)
-        for name in ["pi", "qwen-code", "windsurf", "aider", "codeium", "copilot", "openclaw", "hermes", "unlisted"] {
+        for name in ["pi", "buzz", "openclaw", "hermes", "unlisted"] {
             XCTAssertEqual(AgentIdentity.glyph(for: name), .monogram, name)
             XCTAssertFalse(AgentIdentity.forAgent(name).monogram.isEmpty, name)
         }
         XCTAssertTrue(AgentIdentity.forAgent("openclaw").known)
         XCTAssertTrue(AgentIdentity.forAgent("hermes").known)
+        XCTAssertTrue(AgentIdentity.forAgent("buzz").known)
     }
 
     /// Every pattern shipped in defaults.yaml has a display title, so a new

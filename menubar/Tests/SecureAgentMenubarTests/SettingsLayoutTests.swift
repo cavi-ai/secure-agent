@@ -66,7 +66,7 @@ final class SettingsLayoutTests: XCTestCase {
             XCTAssertEqual(choice.harness, agent.name)
             XCTAssertTrue(opened.isEmpty, "Choosing an agent must not install hooks")
             XCTAssertFalse(setup.claudeRoutingApplied, "Choosing an agent must not apply routing")
-            if FirstUseSetupState.supportsHook(agent.name) || agent.name == "aider" {
+            if FirstUseSetupState.supportsHook(agent.name) || agent.name == "buzz" {
                 for size in [NSSize(width: 564, height: 420), NSSize(width: 664, height: 540)] {
                     window.setContentSize(size)
                     await settle(controller.view)

@@ -674,12 +674,12 @@ function contrast(a, b) {
 
 const LIVE_HARNESSES = {
   claude: 'Claude Code', 'claude-desktop': 'Claude', codex: 'Codex', cursor: 'Cursor', 'cursor-ide': 'Cursor',
-  opencode: 'opencode', agy: 'Antigravity', openclaw: 'OpenClaw', ollama: 'Ollama', 'lm-studio': 'LM Studio',
+  opencode: 'opencode', agy: 'Antigravity', openclaw: 'OpenClaw', buzz: 'Buzz', ollama: 'Ollama', 'lm-studio': 'LM Studio',
 };
-const KNOWN_HARNESSES = [...Object.keys(LIVE_HARNESSES), 'gemini', 'windsurf', 'aider', 'codeium', 'copilot'];
+const KNOWN_HARNESSES = Object.keys(LIVE_HARNESSES);
 // No mark for these in the sprite's sources (simple-icons, the menubar glyphs,
 // or the source license is not CC0); they render a text glyph on the tint.
-const UNMARKED = new Set(['openclaw', 'aider', 'codeium', 'copilot']);
+const UNMARKED = new Set(['openclaw', 'buzz']);
 
 test('harnessMeta resolves every live harness key to its display name and a sprite mark', () => {
   for (const [key, label] of Object.entries(LIVE_HARNESSES)) {
@@ -699,11 +699,9 @@ test('harnessMeta resolves every live harness key to its display name and a spri
 
 test('harnessMeta maps variants onto one harness and flags infra', () => {
   assert.equal(harnessMeta('pi').label, 'Pi');
-  assert.equal(harnessMeta('qwen-code').label, 'Qwen Code');
-  assert.equal(harnessMeta('copilot').key, 'copilot');
   assert.equal(harnessMeta('antigravity').key, 'agy');
   assert.equal(harnessMeta('agy').logo, 'logo-gemini');
-  assert.equal(harnessMeta('gemini').logo, 'logo-gemini');
+  for (const k of ['windsurf', 'codeium', 'aider', 'copilot', 'qwen-code', 'gemini']) assert.equal(harnessMeta(k).known, false, k);
   assert.equal(harnessMeta('Claude-Code').key, 'claude');
   assert.equal(harnessMeta('lmstudio').key, 'lm-studio');
   // cursor-ide is Cursor's IDE: same mark and name, but infra.

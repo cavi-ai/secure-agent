@@ -125,7 +125,7 @@ agents:
 
 ```yaml
 disabled_agents:
-  - windsurf
+  - pi
 ```
 
 ---

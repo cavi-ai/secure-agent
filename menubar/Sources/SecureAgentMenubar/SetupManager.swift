@@ -74,11 +74,7 @@ public final class SetupManager: ObservableObject {
         ("opencode", ["opencode", "OpenCode Helper"]),
         ("antigravity", ["antigravity", "Antigravity Helper"]),
         ("pi", ["/bin/pi", "/pi-coding-agent/"]),
-        ("qwen-code", ["/bin/qwen", "/qwen-code/"]),
-        ("windsurf", ["windsurf"]),
-        ("aider", ["aider"]),
-        ("codeium", ["codeium"]),
-        ("copilot", ["copilot"]),
+        ("buzz", ["/buzz-agent"]),
         ("ollama", ["ollama", "llama-server", "llama.cpp"]),
         ("lm-studio", ["lm studio", "lmstudio"]),
     ]

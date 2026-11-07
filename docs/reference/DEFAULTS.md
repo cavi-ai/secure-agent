@@ -43,11 +43,9 @@ agents:
   - { name: opencode,    match: ["opencode", "OpenCode Helper"] }
   - { name: antigravity, match: ["antigravity", "Antigravity Helper"] }
   - { name: pi,          match: ["/bin/pi", "/pi-coding-agent/"] }
-  - { name: qwen-code,   match: ["/bin/qwen", "/qwen-code/"] }
-  - { name: windsurf,    match: ["windsurf"] }
-  - { name: aider,       match: ["aider"] }
-  - { name: codeium,     match: ["codeium"] }
-  - { name: copilot,     match: ["copilot"] }
+  # Buzz's native agent; its Claude Code, Codex, opencode and OpenClaw
+  # runtimes are tagged by their own entries.
+  - { name: buzz,        match: ["/buzz-agent"] }
   # Node's install directory may be shared by unrelated MCP/plugin hosts.
   # For Node, match the running program or process title instead.
   - { name: openclaw,    match: ["openclaw"] }
@@ -64,10 +62,6 @@ vendor_allowlist:
   codex:       ["openai.com", "api.openai.com"]
   opencode:    ["opencode.ai"]
   antigravity: ["anthropic.com"]
-  windsurf:    ["codeium.com"]
-  aider:       ["aider.chat"]
-  codeium:     ["codeium.com"]
-  copilot:     ["githubcopilot.com", "copilot-proxy.githubusercontent.com"]
   ollama:      ["ollama.com", "ollama.ai"]
   lm-studio:   ["lmstudio.ai"]
 # The orgs each credential is meant for (correlate.Identify names). A

@@ -6,6 +6,12 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Agents: Buzz's native agent (`buzz-agent`) is tagged as the `buzz` harness; Buzz agents on Claude Code, Codex, opencode or OpenClaw stay tagged as that harness.
+
+### Removed
+- Agents: the Windsurf, Codeium, Aider, GitHub Copilot and Qwen Code definitions, which had no trace or hook support, and the `.windsurfrules` and `.github/copilot-instructions.md` instruction-file checks.
+
 ## [1.5.3] - 2026-11-06
 
 ### Added

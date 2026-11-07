@@ -930,8 +930,7 @@ TRUSTED_MCP_PREFIXES = ("mcp__code-review-graph__", "mcp__ccd_")
 UNTRUSTED_MCP_PREFIXES = ("mcp__ccd_session_mgmt__",)
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic")
 # Files harnesses load as standing instructions.
-INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", ".windsurfrules",
-                     os.path.join(".github", "copilot-instructions.md"))
+INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules")
 INSTRUCTION_LINK_RE = re.compile(
     r"https?://[^\s)\"'<>]+|[\w./-]+\.(?:png|jpe?g|gif|webp|bmp|svg|tiff?|heic)\b", re.IGNORECASE)
 INSTRUCTION_READ_MAX = 256 * 1024

@@ -21,12 +21,7 @@ enum AgentIdentity {
         "opencode": (0x7C5CFF, "〈"),
         "antigravity": (0x5B6CFF, "▲"),
         "pi": (0x6B6BB4, "π"),
-        "qwen-code": (0x5B68D6, "Q"),
-        "windsurf": (0x0EA5A0, "≋"),
-        "aider": (0xFF6B35, "◉"),
-        "gemini": (0x4E8DF5, "✦"),
-        "codeium": (0x0E8CD6, "◈"),
-        "copilot": (0x24292F, "◍"), // GitHub dark
+        "buzz": (0xD7D72E, "B"),
         "openclaw": (0xE5484D, "🦞"),
         "hermes": (0xB8860B, "☤"),
         "ollama": (0x0F0F0F, "🦙"),
