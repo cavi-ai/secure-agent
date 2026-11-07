@@ -430,10 +430,11 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	limitBody(w, r)
 	var req struct {
-		Path  string `json:"path"`
-		Repo  string `json:"repo"`
-		Prune bool   `json:"prune"`
-		Async bool   `json:"async"`
+		Path   string                        `json:"path"`
+		Repo   string                        `json:"repo"`
+		Prune  bool                          `json:"prune"`
+		Async  bool                          `json:"async"`
+		Review *worktreehunter.RemovalReview `json:"review,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Prune && req.Repo == "") || (!req.Prune && req.Path == "") {
 		http.Error(w, `Invalid payload: {"path"} or {"repo", "prune": true}`, http.StatusBadRequest)
@@ -445,6 +446,10 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	if !filepath.IsAbs(target) {
 		http.Error(w, "path must be absolute", http.StatusBadRequest)
+		return
+	}
+	if req.Review != nil && (req.Prune || req.Review.Head == "" || len(req.Review.Reasons) == 0) {
+		http.Error(w, "reviewed head and reasons are required for permanent removal", http.StatusBadRequest)
 		return
 	}
 	if req.Prune {
@@ -462,7 +467,13 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Async {
-		rm, err := a.worktrees.StartRemove(req.Path)
+		var rm worktreehunter.Removal
+		var err error
+		if req.Review != nil {
+			rm, err = a.worktrees.StartRemoveReviewed(req.Path, *req.Review)
+		} else {
+			rm, err = a.worktrees.StartRemove(req.Path)
+		}
 		if errors.Is(err, worktreehunter.ErrRemoving) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -476,10 +487,18 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"status": "accepted", "removal": rm})
 		return
 	}
-	row, err := a.worktrees.Remove(r.Context(), req.Path)
+	var row worktreehunter.Worktree
+	var err error
+	if req.Review != nil {
+		row, err = a.worktrees.RemoveReviewed(r.Context(), req.Path, *req.Review)
+	} else {
+		row, err = a.worktrees.Remove(r.Context(), req.Path)
+	}
 	var refused *worktreehunter.NotRemovableError
 	switch {
 	case errors.Is(err, worktreehunter.ErrRemoving):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, worktreehunter.ErrReviewChanged):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.As(err, &refused):
 		w.Header().Set("Content-Type", "application/json")

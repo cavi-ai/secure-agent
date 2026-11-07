@@ -516,6 +516,7 @@ function worktreeSelectionApproval(w, repo, rep) {
   // Sizes and advisor notes may arrive later without changing approval.
   // Keep the property order stable for exact comparisons after a refresh.
   return Object.freeze({ path: w.path, repo: repo.path, head: w.head || '', state: w.state,
+    can_remove_reviewed: w.can_remove_reviewed === true,
     branch: w.branch || '', detached: !!w.detached, reasons: Object.freeze([...(w.reasons || [])]),
     error: w.error || '', git_operation: w.git_operation || '', submodules: Number(w.submodules) || 0,
     submodule_local: Object.freeze([...(w.submodule_local || [])]),
@@ -524,6 +525,10 @@ function worktreeSelectionApproval(w, repo, rep) {
     partly_staged: Number(w.partly_staged) || 0, changed: Number(w.changed) || 0,
     untracked: Number(w.untracked) || 0, ignored: Number(w.ignored) || 0,
     last_activity: w.last_activity || '', idle_days: w.idle_days == null ? null : w.idle_days });
+}
+
+function worktreeDeletesPermanently(w) {
+  return w.state === 'remove' || w.can_remove_reviewed === true;
 }
 
 function worktreeSelectHTML(w, repo, removal, ask, state = {}) {
@@ -551,8 +556,8 @@ function worktreeSelectionHTML(rep, state, groups) {
   const eligible = visible.filter(({ w, repo }) => !worktreeSelectionBlock(w, repo, (rep.removals || {})[w.path], (rep.asks || {})[w.path]));
   if (!selected.size && !eligible.length && !pending) return '';
   const rows = (rep.repos || []).flatMap(repo => (repo.worktrees || []).filter(w => selected.has(w.path)));
-  const deletes = rows.filter(w => w.state === 'remove');
-  const trashes = rows.filter(w => w.state !== 'remove');
+  const deletes = rows.filter(worktreeDeletesPermanently);
+  const trashes = rows.filter(w => !worktreeDeletesPermanently(w));
   const hidden = selected.size - visible.filter(({ w }) => selected.has(w.path)).length;
   const disabled = state.selectionBusy ? ' disabled' : '';
   return `<div class="wt-selection" role="group" aria-label="Worktree removal selection">
@@ -571,7 +576,7 @@ function worktreeSelectionHTML(rep, state, groups) {
 function worktreeSelectionConfirm(rows) {
   const lines = [`Remove ${rows.length} selected worktree${rows.length === 1 ? '' : 's'}? ${worktreeSelectionSize(rows.map(r => r.size))}.`];
   for (const [state, title] of [['remove', 'Checked deletion'], ['trash', 'Move to Trash']]) {
-    const group = rows.filter(r => (r.approval.state === 'remove' ? 'remove' : 'trash') === state);
+    const group = rows.filter(r => (worktreeDeletesPermanently(r.approval) ? 'remove' : 'trash') === state);
     if (!group.length) continue;
     lines.push('', `${title} (${group.length}):`);
     for (const { approval: w, size } of group) {
@@ -587,8 +592,8 @@ function worktreeSelectionConfirm(rows) {
 }
 
 function worktreeSelectionReviewHTML(rows) {
-  const deletes = rows.filter(r => r.approval.state === 'remove');
-  const trashes = rows.filter(r => r.approval.state !== 'remove');
+  const deletes = rows.filter(r => worktreeDeletesPermanently(r.approval));
+  const trashes = rows.filter(r => !worktreeDeletesPermanently(r.approval));
   const group = (items, title, explanation) => !items.length ? '' : `<section class="wt-confirm-group">
     <h4>${title}<span>${items.length}</span></h4><p>${explanation}</p>
     <ul>${items.map(({ approval: w, size }) => `<li><div><strong>${escapeHTML(w.branch || '(detached)')}</strong><span>${escapeHTML(worktreeSelectionSize([size]))}</span></div>
@@ -596,7 +601,7 @@ function worktreeSelectionReviewHTML(rows) {
       ${Number(w.submodules) > 0 ? `<p>Includes ${Number(w.submodules)} inspected submodules. No local-only commits or stashes were found.</p>` : ''}</li>`).join('')}</ul>
     </section>`;
   return `<div class="wt-confirm"><p class="wt-confirm-total"><strong>${rows.length} worktree${rows.length === 1 ? '' : 's'} selected</strong>${deletes.length ? `<span>Reclaim estimate: ${escapeHTML(worktreeSelectionSize(deletes.map(r => r.size)).replace(/^estimated /, ''))}</span>` : ''}</p>
-    ${group(deletes, 'Checked deletion', 'Permanently deletes these folders, including their ignored files. Each is checked again before deletion.')}
+    ${group(deletes, 'Checked deletion', 'Permanently deletes these folders, including ignored .tmp scratch files and build output. Branches and committed work stay in git. Each folder is checked again before deletion.')}
     ${group(trashes, 'Move to Trash', 'Moves these folders with their uncommitted, untracked and ignored files. This does not free disk space until Trash is emptied.')}
     <p class="wt-confirm-note">Branches and commits stay in git. Files in Trash remain until it is emptied; putting them back does not register the worktree again.</p>
   </div>`;
@@ -672,6 +677,8 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable, selectionState) {
     const busy = ask && ask.status === 'running' ? ' disabled' : '';
     const unsure = 'Not confirmed safe' + ((w.reasons || []).length ? ': ' + w.reasons.join('; ') : '') + '. Moves the folder to the Trash; the branch stays in git';
     action = (block ? ''
+      : w.can_remove_reviewed === true
+      ? `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-remove" data-path="${escapeHTML(w.path)}" data-branch="${escapeHTML(w.branch || '')}">Review permanent deletion…</button>`
       : `<button type="button" class="btn btn-warn-outline btn-sm" data-action="worktree-review-trash" data-path="${escapeHTML(w.path)}" title="${escapeHTML(unsure)}">Review Trash move…</button>`)
       + (askable ? `<button type="button" class="btn btn-primary btn-sm" data-action="worktree-ask" data-path="${escapeHTML(w.path)}" title="Ask active ${escapeHTML(askable)} agent"${busy}>Ask ${escapeHTML(askable)}</button>` : '');
   }
@@ -708,7 +715,7 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable, selectionState) {
       ${!w.in_use && w.state !== 'prune' ? '<p class="wt-session-fact">No active session detected by this scan.</p>' : ''}
       ${submodules ? `<p class="wt-submodules"><svg class="icon" aria-hidden="true"><use href="#i-branch"/></svg><strong>Submodules</strong><span>${submodules} populated · ${w.error ? 'inspection incomplete' : 'checked recursively'}${!w.error && !(w.submodule_local || []).length ? ' · no local-only commits or stashes found' : ''}</span></p>` : ''}
       ${worktreeReasonsHTML(w, reason)}
-      ${w.state === 'keep' || w.state === 'review' ? '<p class="wt-review-hint">Review the files before proceeding. Reviewed folders move to Trash; space is freed only when Trash is emptied.</p>' : ''}
+      ${w.can_remove_reviewed === true ? '<p class="wt-review-hint">Review the ignored scratch files before deleting this folder. Its branch and committed source stay in git.</p>' : w.state === 'keep' || w.state === 'review' ? '<p class="wt-review-hint">Review the files before proceeding. Reviewed folders move to Trash; space is freed only when Trash is emptied.</p>' : ''}
       ${block && !w.orphan && w.state !== 'prune' ? `<p class="wt-resolve">${block === reason ? '' : escapeHTML(block)}${w.state !== 'main' ? ` <button type="button" class="link-btn" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}">Open folder to resolve</button>` : ''}</p>` : ''}
       </section>
       <div class="wt-actions">${open}${action}${discuss}</div>

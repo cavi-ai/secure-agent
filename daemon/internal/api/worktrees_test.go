@@ -464,6 +464,68 @@ func TestWorktreeAskEndpoint(t *testing.T) {
 	}
 }
 
+func TestWorktreeReviewedPermanentRemovalEndpoint(t *testing.T) {
+	home, root, repo, wt, _, _ := worktreeFixture(t)
+	excludes := filepath.Join(root, "excludes")
+	if err := os.WriteFile(excludes, []byte(".tmp/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", wt}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("config", "core.excludesfile", excludes)
+	if err := os.WriteFile(filepath.Join(wt, "source.txt"), []byte("retained source\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "source.txt")
+	git("commit", "-q", "-m", "source")
+	head := git("rev-parse", "HEAD")
+	if err := os.Mkdir(filepath.Join(wt, ".tmp"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, ".tmp", "test.log"), []byte("scratch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := testStore(t)
+	hunter := testHunter(t, st, home)
+	row, _, err := hunter.Inspect(t.Context(), wt)
+	if err != nil || !row.CanRemoveReviewed || row.Head != head {
+		t.Fatalf("review row: %+v %v", row, err)
+	}
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: hunter}}).buildMux()
+	post := func(review any, async bool) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]any{"path": wt, "review": review, "async": async})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/remove", strings.NewReader(string(body))))
+		return rec
+	}
+	if rec := post(nil, false); rec.Code != http.StatusConflict {
+		t.Fatalf("unreviewed removal: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post(map[string]any{}, true); rec.Code != http.StatusBadRequest {
+		t.Fatalf("incomplete review: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post(worktreehunter.RemovalReview{Head: "stale", Reasons: row.Reasons}, false); rec.Code != http.StatusConflict {
+		t.Fatalf("stale review: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post(worktreehunter.RemovalReview{Head: head, Reasons: row.Reasons}, true); rec.Code != http.StatusAccepted {
+		t.Fatalf("reviewed removal: %d %s", rec.Code, rec.Body.String())
+	}
+	hunter.Wait()
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Fatalf("worktree still exists: %v", err)
+	}
+	out, err := exec.Command("git", "-C", repo, "show", "refs/heads/feat/clean:source.txt").CombinedOutput()
+	if err != nil || string(out) != "retained source\n" {
+		t.Fatalf("committed source was not retained: %q %v", out, err)
+	}
+}
+
 func TestWorktreeReviewTrashEndpoint(t *testing.T) {
 	home, root, repo, clean, dirty, _ := worktreeFixture(t)
 	excludes := filepath.Join(root, "excludes")

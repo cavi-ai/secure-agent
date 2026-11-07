@@ -215,6 +215,20 @@ func readIgnored(ctx context.Context, dir string) (ignoredFacts, error) {
 		return ignoredFacts{}, err
 	}
 	f := classifyIgnored(strings.Split(out, "\x00"))
+	// The directory-form listing collapses .tmp/. Inspect its ignored file
+	// names too: an ignored .tmp/.env or agent state is not disposable scratch.
+	if len(f.Scratch) > 0 {
+		args := append([]string{"ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--"}, f.Scratch...)
+		nested, err := git(ctx, dir, args...)
+		if err != nil {
+			return ignoredFacts{}, err
+		}
+		for _, name := range strings.Split(nested, "\x00") {
+			if name != "" && isPrecious(name) {
+				f.Precious = append(f.Precious, name)
+			}
+		}
+	}
 	f.Precious = describeEntries(dir, f.Precious)
 	f.Scratch = describeEntries(dir, f.Scratch)
 	return f, nil

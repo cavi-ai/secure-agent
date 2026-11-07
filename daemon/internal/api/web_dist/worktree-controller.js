@@ -353,8 +353,9 @@ function createWorktreeController({ request, toast, confirm, render, renderSelec
         }
         attempted = true;
         try {
-          if (approval.state === 'remove') {
-            const { r, text, json } = await postWorktree('/worktrees/remove', { path, async: true });
+          if (worktreeDeletesPermanently(approval)) {
+            const { r, text, json } = await postWorktree('/worktrees/remove', { path, async: true,
+              ...(approval.can_remove_reviewed ? {review:{head:approval.head,reasons:approval.reasons}} : {}) });
             if (!r.ok || !json || !json.removal) throw new Error(text.trim() || String(r.status));
             const rep = worktreesState.report;
             if (rep) (rep.removals || (rep.removals = {}))[path] = json.removal;
@@ -399,11 +400,18 @@ function createWorktreeController({ request, toast, confirm, render, renderSelec
   }
 
   async function removeWorktree(path, branch) {
+    const current = selectedWorktree(path);
+    const reviewed = current?.approval?.can_remove_reviewed ? current.approval : null;
+    const rows = reviewed ? [{approval:reviewed,size:current.w}] : null;
     const ok = await confirm(
-      `git deletes ${path} and its ignored files. ${branch ? `Branch ${branch} and its commits stay.` : 'Its commits stay reachable from other refs.'}`,
-      { title: 'Remove worktree', okLabel: 'Remove' });
+      reviewed ? worktreeSelectionConfirm(rows) : `git deletes ${path} and its ignored files. ${branch ? `Branch ${branch} and its commits stay.` : 'Its commits stay reachable from other refs.'}`,
+      { title: 'Remove worktree', okLabel: 'Remove', ...(reviewed ? {messageHTML:worktreeSelectionReviewHTML(rows),focusCancel:true} : {}) });
     if (!ok) return;
-    await startRemovals([{ path, branch }]);
+    if (reviewed && !sameApproval(reviewed, selectedWorktree(path)?.approval)) {
+      toast('Inspection facts changed. Review the worktree again before deletion.', 'info');
+      return;
+    }
+    await startRemovals([reviewed || { path, branch }]);
   }
 
   // startRemovals: one background removal per row; the daemon checks each
@@ -414,7 +422,8 @@ function createWorktreeController({ request, toast, confirm, render, renderSelec
     const labels = {};
     for (const w of rows) {
       try {
-        const { r, text, json } = await postWorktree('/worktrees/remove', { path: w.path, async: true });
+        const { r, text, json } = await postWorktree('/worktrees/remove', { path: w.path, async: true,
+          ...(w.can_remove_reviewed ? {review:{head:w.head,reasons:w.reasons}} : {}) });
         if (!r.ok || !json || !json.removal) throw new Error(text.trim() || String(r.status));
         if (rep) (rep.removals || (rep.removals = {}))[w.path] = json.removal;
         started.push(w.path);
