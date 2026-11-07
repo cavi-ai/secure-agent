@@ -1126,7 +1126,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	ocl.ProcessExes = func() []string { return harnessExes(tagger, "openclaw") }
 	ocl.OnProduce = func() { supReg.MarkProduced("openclaw") }
 	ocl.OnPoll = func(src string, wm int64) { supReg.MarkPolled("openclaw", src, wm) }
-	ocl.OnSessionSeen = resolver.NoteTranscriptSession
+	ocl.OnSessionSeen = transcriptSighting(resolver)
 	ocl.OnSessionEnded = resolver.EndTranscriptSession
 	run("openclaw", func(c context.Context) error {
 		return ocl.Run(c)

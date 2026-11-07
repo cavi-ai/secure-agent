@@ -134,12 +134,7 @@ func (c *OpenclawCollector) pollUsageDB(path, agent string) (published int, ok b
 		read++
 		ts := time.UnixMilli(created).UTC()
 		if sid != "" && (in > 0 || out > 0 || cacheWrite > 0) {
-			if !c.noted[sid] {
-				c.noted[sid] = true
-				if c.OnSessionSeen != nil {
-					c.OnSessionSeen(sid, "openclaw", "openclaw:"+agent, ts)
-				}
-			}
+			c.noteSession(sid, agent, ts, db)
 			tokensIn := in + cacheWrite
 			if cost <= 0 && model != "" {
 				cost = ModelCostUSD(model, tokensIn, out)

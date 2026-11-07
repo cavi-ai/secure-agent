@@ -41,8 +41,8 @@ import (
 //     degrades to "not covered", never an error loop.
 //
 // Trace mapping:
-//   - conversation session_id → session, harness "openclaw", workspace label
-//     "openclaw:<agent>" from the session_key (lcm.db records no cwd); ended
+//   - conversation session_id → session, harness "openclaw", workspace from
+//     the agent database's session header, or "openclaw:<agent>" when absent; ended
 //     when every conversation of that session is inactive or archived.
 //   - user message → turn (kind 13).
 //   - tool part of an assistant message → tool_call (kind 12, running); its
@@ -83,27 +83,28 @@ type OpenclawCollector struct {
 	// OnPoll, when set, receives the database and watermark after each poll
 	// that found the database.
 	OnPoll func(source string, watermark int64)
-	// OnSessionSeen reports a conversation (id, harness, workspace, time)
+	// OnSessionSeen reports a conversation's recorded workspace and agent
 	// before any of its events are published.
-	OnSessionSeen func(sessionID, harness, workspace string, at time.Time)
+	OnSessionSeen func(TraceSession)
 	// OnSessionEnded reports a conversation openclaw marked inactive or
 	// archived.
 	OnSessionEnded func(sessionID string, at time.Time)
 
-	dbPath     string // resolved lcm.db; "" until found
-	watermark  int64  // highest messages.message_id read
-	now        func() time.Time
-	resumed    bool   // watermark came from StatePath
-	started    bool   // the starting watermark is known
-	startErr   string // the first-sight failure last logged
-	noted      map[string]bool
-	ended      map[string]bool
-	callStart  map[string]time.Time // session\x00call id → call message time
-	change     dbChange             // skips a poll while lcm.db is unchanged
-	scanMsg    int64                // accepted message-part prefix since watermark
-	scanPart   int
-	scanPartID string
-	pending    *openclawPendingRow
+	dbPath        string // resolved lcm.db; "" until found
+	watermark     int64  // highest messages.message_id read
+	now           func() time.Time
+	resumed       bool   // watermark came from StatePath
+	started       bool   // the starting watermark is known
+	startErr      string // the first-sight failure last logged
+	noted         map[string]bool
+	identityRetry map[string]time.Time
+	ended         map[string]bool
+	callStart     map[string]time.Time // session\x00call id → call message time
+	change        dbChange             // skips a poll while lcm.db is unchanged
+	scanMsg       int64                // accepted message-part prefix since watermark
+	scanPart      int
+	scanPartID    string
+	pending       *openclawPendingRow
 
 	// usageWM is each agent transcript database's rowid watermark; usageErr
 	// the last failure logged per database; usageActive is set once any agent
@@ -379,12 +380,7 @@ func (c *OpenclawCollector) readMessages(db *sql.DB) (published int, ok, clean b
 			continue
 		}
 		ts, observed := parseOpenclawTime(r.created)
-		if !c.noted[r.sessionID] {
-			c.noted[r.sessionID] = true
-			if c.OnSessionSeen != nil {
-				c.OnSessionSeen(r.sessionID, "openclaw", OpenclawWorkspaceLabel(r.key), ts)
-			}
-		}
+		c.noteSession(r.sessionID, openclawAgentID(r.key), ts, nil)
 		first := r.msgID != lastMsg && r.msgID != c.scanMsg
 		lastMsg = r.msgID
 		events := c.rowEvents(r, ts, first)
