@@ -13,7 +13,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Agents: the Windsurf, Codeium, Aider, GitHub Copilot and Qwen Code definitions, which had no trace or hook support, and the `.windsurfrules` and `.github/copilot-instructions.md` instruction-file checks.
 
 ### Fixed
-- Performance: endpoint DNS names use a bounded cache instead of retaining every address for the daemon's lifetime; expired correlation patterns are pruned during periodic housekeeping instead of scanning the whole map on each insertion; automatic review releases consumed queue entries.
+- Network: bound the DNS cache to the 1,024 most recently used addresses.
+- Performance: expire old correlation patterns during periodic cleanup instead of scanning the cache on every insertion.
+- Automatic review: release processed queue entries from memory.
 - Menu bar: cancelling an event stream stops its socket worker even when cancellation precedes socket registration or connection.
 - Worktrees: reviewed scratch worktrees can be removed while preserving their branches and commits.
 - Console: long text stays within navigation, finding and report panels; report actions refresh their displayed state.
