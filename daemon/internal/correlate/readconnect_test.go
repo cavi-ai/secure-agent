@@ -1,6 +1,7 @@
 package correlate
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -10,6 +11,22 @@ import (
 
 // A reader that is not an owner program of the GitHub credential.
 const ghExe = "/opt/homebrew/bin/gh-reader"
+
+func TestFoldHistoryExpiresDuringHousekeeping(t *testing.T) {
+	c := newTestCorrelator(t)
+	at := time.Unix(1700000000, 0)
+	for i := range 1100 {
+		c.foldLocked(strconv.Itoa(i), "old", at, 3)
+	}
+	c.foldLocked("recent", "new", at.Add(readRepeatWindow-time.Second), 3)
+	c.evictStaleLocked(at.Add(readRepeatWindow))
+	if _, ok := c.folded["0"]; ok {
+		t.Fatal("expired patterns retained until another finding is raised")
+	}
+	if got := c.folded["recent"]; got.id != "new" {
+		t.Fatal("housekeeping discarded a current pattern")
+	}
+}
 
 func TestModelReadCannotHideBehindNativeCredentialUse(t *testing.T) {
 	c := newFamilyCorrelator(t)
@@ -257,6 +274,9 @@ func TestReadConnectOpenFindingDoesNotRealertHourly(t *testing.T) {
 				t.Fatal(flags)
 			}
 			first = flags[0].ID
+			for i := range 1100 {
+				c.foldLocked("padding/"+strconv.Itoa(i), "closed", base, 2)
+			}
 		} else if len(flags) != 0 {
 			t.Fatalf("unresolved finding re-alerted at %d minutes", minutes)
 		}

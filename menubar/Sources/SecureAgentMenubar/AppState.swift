@@ -190,6 +190,7 @@ public final class AppState: ObservableObject {
                     self.streamUnavailable = true
                     return // old daemon: polling carries the session
                 } catch {
+                    guard !Task.isCancelled else { return }
                     self.streamDidFail()
                     try? await Task.sleep(nanoseconds: backoff)
                     // ±20% jitter so reconnects don't phase-lock.
