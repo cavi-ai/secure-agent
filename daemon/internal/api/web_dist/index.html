@@ -341,14 +341,14 @@
                         session <b id="flags-session-filter-id"></b>
                         <button class="session-clear" id="flags-session-clear" title="Show all sessions"><svg class="icon"><use href="#i-close"/></svg></button>
                       </span>
-                      <select id="flags-agent" class="select select-sm"><option value="all">All agents</option></select>
-                      <select id="flags-rule" class="select select-sm"><option value="all">All rules</option></select>
-                      <select id="flags-severity" class="select select-sm">
+                      <select id="flags-agent" aria-label="Filter findings by agent" class="select select-sm"><option value="all">All agents</option></select>
+                      <select id="flags-rule" aria-label="Filter findings by rule" class="select select-sm"><option value="all">All rules</option></select>
+                      <select id="flags-severity" aria-label="Filter findings by severity" class="select select-sm">
                         <option value="all">Any severity</option>
                         <option value="2">Warning &amp; up</option>
                         <option value="3">Critical only</option>
                       </select>
-                      <select id="flags-window" class="select select-sm">
+                      <select id="flags-window" aria-label="Findings time range" class="select select-sm">
                         <option value="all">All time</option>
                         <option value="1h">Last hour</option>
                         <option value="24h">Last 24h</option>
@@ -387,7 +387,7 @@
           <section class="panel chart-panel">
             <div class="panel-head">
               <h2><svg class="icon"><use href="#i-activity"/></svg>Activity over time</h2>
-              <select id="activity-window" class="select">
+              <select id="activity-window" aria-label="Activity chart time range" class="select">
                 <option value="24">Last 24h</option>
                 <option value="168">Last 7 days</option>
               </select>
@@ -492,7 +492,7 @@
                  session <b id="session-filter-id"></b>
                  <button class="session-clear" id="session-clear" title="Show all sessions"><svg class="icon"><use href="#i-close"/></svg></button>
                </span>
-               <select id="event-filter" class="select">
+               <select id="event-filter" aria-label="Filter events by type" class="select">
                 <option value="all">All events</option>
                 <option value="8">Tool use</option>
                 <option value="9">Proxy hits</option>
@@ -502,7 +502,7 @@
                 <option value="13">Turns</option>
                 <option value="14">Model calls</option>
               </select>
-              <select id="event-window" class="select">
+              <select id="event-window" aria-label="Events time range" class="select">
                 <option value="all">All time</option>
                 <option value="1h">Last hour</option>
                 <option value="24h">Last 24h</option>
@@ -564,7 +564,7 @@
             </div>
             <div class="panel-body" id="sources-container">
               <div class="source-add">
-                <input type="text" id="source-input" class="input" placeholder="~/.aws/credentials, ~/.config/gh/hosts.yml…" autocomplete="off" spellcheck="false">
+                <input type="text" id="source-input" aria-label="Protected source path to add" class="input" placeholder="~/.aws/credentials, ~/.config/gh/hosts.yml…" autocomplete="off" spellcheck="false">
                 <button class="btn btn-primary" id="btn-add-source"><svg class="icon"><use href="#i-arrow"/></svg><span>Add</span></button>
               </div>
               <p class="report-health" data-reports="firewall sources" role="status" hidden></p>

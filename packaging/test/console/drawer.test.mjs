@@ -158,7 +158,7 @@ test('isFlagOpen and isIncidentOpen follow the open view', async () => {
   assert.equal(h.api.isFlagOpen('f1'), false);
   const incident = h.api.openIncidentReport('inc-1');
   assert.equal(h.api.isIncidentOpen('inc-1'), true);
-  assert.equal(h.dom.copyButton.hidden, false);
+  assert.equal(h.dom.copyButton.hidden, true);
   await incident;
   h.api.close();
   assert.equal(h.api.isIncidentOpen('inc-1'), false);

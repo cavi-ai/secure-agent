@@ -952,10 +952,11 @@ html.recent-work-navigation { overflow-anchor: none; }
   padding: 15px 20px; border-bottom: 1px solid var(--line); flex: none;
 }
 .drawer-head h3 { display: flex; align-items: center; gap: 9px; font-size: 0.95rem; font-weight: 650; flex: 1 1 auto; min-width: 0; }
+#drawer-title-text { min-width: 0; overflow-wrap: anywhere; }
 .drawer-head .drawer-back { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .drawer-actions { display: flex; gap: 8px; }
 .drawer-actions .btn[hidden] { display: none; }
-.drawer-body { padding: 20px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+.drawer-body { padding: 20px; overflow-y: auto; flex: 1 1 auto; min-height: 0; overflow-wrap: anywhere; }
 /* This pane restores its own reading position across loading/status changes. */
 .drawer-body:has([data-session-part="permissions-head"]) { overflow-anchor: none; }
 .drawer-body:has([data-session-part="permissions-head"]) .policy-row-main { display: grid; gap: 10px; font-size: .85rem; line-height: 1.55; }
@@ -1067,7 +1068,7 @@ html.recent-work-navigation { overflow-anchor: none; }
   background: var(--bg-1); color: var(--tx-1);
   border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--sh-2);
 }
-.confirm-card h3 { flex-shrink: 0; font-size: 0.95rem; font-weight: 650; margin-bottom: 6px; }
+.confirm-card h3 { overflow-wrap: anywhere; flex-shrink: 0; font-size: 0.95rem; font-weight: 650; margin-bottom: 6px; }
 .confirm-card:has(.wt-confirm) { width: min(720px, 92vw); padding: 28px; }
 .confirm-card:has(.wt-confirm) h3 { font-size: 23px; letter-spacing: -0.025em; }
 .wt-confirm { white-space: normal; font-size: 14px; line-height: 1.6; }
@@ -1106,7 +1107,7 @@ html.recent-work-navigation { overflow-anchor: none; }
   margin: 0; inset: auto 22px 22px auto;
   display: flex; flex-direction: column; gap: 10px; z-index: 100;
   border: 0; background: transparent; padding: 0; overflow: hidden;
-  width: auto; height: auto;
+  width: auto; height: auto; max-width: calc(100vw - 44px);
   max-height: min(60vh, 420px);
   pointer-events: none;
 }
@@ -1125,7 +1126,8 @@ html.recent-work-navigation { overflow-anchor: none; }
   .toasts:not(:popover-open) { display: none; }
 }
 .toast {
-  min-width: 240px; max-width: 360px;
+  min-width: min(240px, calc(100vw - 44px)); max-width: min(360px, calc(100vw - 44px));
+  overflow-wrap: anywhere;
   padding: 12px 15px; border-radius: var(--r-sm);
   background: var(--bg-2); border: 1px solid var(--line-2); color: var(--tx-1);
   font-size: 0.83rem; box-shadow: var(--sh-2);
@@ -2775,7 +2777,7 @@ button.rc-col:hover .rc-seg-freed { background: var(--brand-2); }
 .rc-tip-line { color: var(--tx-2); }
 .rc-tip-meta { color: var(--tx-3); }
 
-.removal-toast { min-width: 300px; max-width: 380px; }
+.removal-toast { min-width: min(300px, calc(100vw - 44px)); max-width: min(380px, calc(100vw - 44px)); }
 .rt-head { display: flex; align-items: flex-start; gap: 8px; }
 .rt-title { flex: 1; min-width: 0; margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 .rt-close { margin: -6px -8px 0 0; padding: 4px; }
