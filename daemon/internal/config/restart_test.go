@@ -115,3 +115,16 @@ func TestRestartSettingsNamesChangedStartOnlyKeys(t *testing.T) {
 		t.Fatalf("start-only changes: %v, want [proxy_port firewall]", got)
 	}
 }
+
+func TestShellReviewConnectionReloadDoesNotRequireRestart(t *testing.T) {
+	var before, after Config
+	after.DirectoryGuard.ShellReview.Endpoint = "http://127.0.0.1:19001"
+	after.DirectoryGuard.ShellReview.APIKeyFile = "/private/model.key"
+	if got := RestartSettings(before, after); len(got) != 0 {
+		t.Fatalf("live connection settings require restart: %v", got)
+	}
+	after.DirectoryGuard.ShellReview.Mode = "block"
+	if got := RestartSettings(before, after); !slices.Equal(got, []string{"directory_guard"}) {
+		t.Fatalf("guard policy changes must still require restart: %v", got)
+	}
+}

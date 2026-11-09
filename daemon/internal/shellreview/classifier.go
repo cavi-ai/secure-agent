@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 type answer = decision.Answer
 
 func (s *Service) classify(parent context.Context, command, cwd string) (answer, string) {
+	connection := s.currentConnection()
 	// Hook-reported permissions and agent rationalizations cannot establish
 	// safety. Only the action and its working directory enter this model.
 	state := "Working directory: " + cwd + "\nShell command:\n" + command
@@ -33,33 +33,15 @@ func (s *Service) classify(parent context.Context, command, cwd string) (answer,
 	}
 	ctx, cancel := context.WithTimeout(parent, time.Duration(s.cfg.TimeoutMS)*time.Millisecond)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(s.cfg.Endpoint, "/")+"/v1/systemone", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(connection.endpoint, "/")+"/v1/systemone", bytes.NewReader(body))
 	if err != nil {
 		return answer{}, "model_unavailable"
 	}
-	if err := localservice.Authorize(req, s.cfg.APIKeyFile); err != nil {
+	if err := localservice.Authorize(req, connection.keyFile); err != nil {
 		return answer{}, "model_unavailable"
 	}
 	req.Header.Set("Content-Type", "application/json")
 	client := loopback.Client(time.Duration(s.cfg.TimeoutMS) * time.Millisecond)
-	// Never inherit HTTP_PROXY. Pin localhost instead of trusting DNS, and
-	// refuse redirects through loopback.Client.
-	transport := &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(address)
-		if err != nil {
-			return nil, err
-		}
-		if strings.EqualFold(host, "localhost") {
-			host = "127.0.0.1"
-		}
-		ip := net.ParseIP(host)
-		if ip == nil || !ip.IsLoopback() {
-			return nil, &net.AddrError{Err: "non-loopback model", Addr: "[REDACTED]"}
-		}
-		return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(host, port))
-	}}
-	defer transport.CloseIdleConnections()
-	client.Transport = transport
 	resp, err := client.Do(req)
 	if err != nil {
 		return answer{}, "model_unavailable"

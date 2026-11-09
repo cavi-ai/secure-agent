@@ -108,8 +108,11 @@ secure-agent local-services receipt --label com.example.model
 ```
 
 A preview expires after five minutes. Apply refuses a changed definition,
-process, client configuration, key or runtime. Matching advisor and classifier
-key-file fields are updated while unrelated configuration is preserved.
+process, client configuration, key or runtime. Matching model-client endpoints
+and, where authentication is supported, key-file fields are updated while unrelated configuration is
+preserved. Matching IPv6 or loopback-alias endpoints move to the hardened
+`127.0.0.1` listener. HTTPS clients and affected YAML anchors or aliases require manual review. Shell-review
+connection settings reload together within one config poll.
 Incompatible local-chat consumers prevent application instead of being silently
 reconfigured.
 

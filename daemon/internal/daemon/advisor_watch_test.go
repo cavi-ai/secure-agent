@@ -19,10 +19,68 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
+	"github.com/cavi-ai/secure-agent/daemon/internal/shellreview"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
+
+func TestWatchConfigReloadsShellReviewConnection(t *testing.T) {
+	root := t.TempDir()
+	keyPath := filepath.Join(root, "model.key")
+	key := "a" + "bcdefghijklmnopqrstuvwxyz0123456789"
+	if err := os.WriteFile(keyPath, []byte(key), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var newRequests atomic.Int32
+	reply := `{"answers":{"risk":{"type":"choice","choice":"routine","confidence":1,"probabilities":{"routine":1,"review":0,"unknown":0}}}}`
+	original := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, reply) }))
+	defer original.Close()
+	next := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+key {
+			w.WriteHeader(401)
+			return
+		}
+		newRequests.Add(1)
+		fmt.Fprint(w, reply)
+	}))
+	defer next.Close()
+	path := filepath.Join(root, "config.yaml")
+	write := func(endpoint, keyFile string) {
+		t.Helper()
+		body := fmt.Sprintf("directory_guard:\n  shell_review:\n    enabled: true\n    mode: block\n    endpoint: %q\n    api_key_file: %q\n", endpoint, keyFile)
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(original.URL, "")
+	initial, err := config.LoadStrict(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service, err := shellreview.New(ctx, initial.DirectoryGuard.ShellReview, func(s string) (string, bool) { return s, true }, func(shellreview.Result) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	request := shellreview.Request{Command: "echo fixture", Cwd: "/workspace", GuardVerdict: "allow"}
+	if result, err := service.Check(ctx, request); err != nil || result.Verdict != "allow" {
+		t.Fatalf("initial classifier unavailable: %+v %v", result, err)
+	}
+	write(next.URL, keyPath)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		watchConfig(ctx, path, configWatchDeps{initialConfig: &initial, shellReviews: service})
+	}()
+	defer func() { cancel(); <-done }()
+	waitFor(t, 4*time.Second, func() bool {
+		result, err := service.Check(ctx, request)
+		return err == nil && result.Verdict == "allow" && newRequests.Load() > 0
+	})
+}
 
 // Explicit choices and discovery mode update collection and posture live.
 func TestWatchConfigAppliesFileTelemetry(t *testing.T) {

@@ -6,14 +6,18 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
-### Fixed
-- Findings: low-entropy transcript matches in explicit test context stay in history at review priority; later stronger matches still alert.
+## [1.6.0] - 2026-11-09
 
 ### Added
 - [Local model service protection](docs/LOCAL_MODELS.md): assess visible listeners and metadata exposure from Monitoring or the CLI, then review hardening for selected current-user macOS launchd jobs. MLX and llama.cpp receive authenticated inference; Ollama receives browser hardening only.
 - Managed analysis: install and use a pinned mlx-agent runtime with locally prepared weights over a private Unix socket. The worker starts on demand, unloads after two idle minutes and opens no model TCP listener; global tools and model caches remain in place.
 - Existing model servers: authenticate advisor and classifier requests with owner-only key files; create keys without printing them or replacing existing files.
 - Service recovery: bind hardening previews to the reviewed service and client identities, verify authorization and backend listeners after restart, and restore original settings with the service stopped after failure or explicit rollback. Later configuration drift is refused.
+
+### Fixed
+- Findings: low-entropy transcript matches in explicit test context stay in history at review priority; later stronger matches still alert.
+- Model clients: migrate matching endpoints to the hardened listener, including IPv6 and loopback aliases; refuse automatic migration of HTTPS clients or shared YAML fields.
+- Shell review: reload endpoint and key-file changes together, reuse model connections and reach IPv6-only localhost servers.
 
 ## [1.5.4] - 2026-11-07
 
