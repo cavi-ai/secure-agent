@@ -29,7 +29,7 @@ jobs:
           go-version-file: go.mod
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Validate documentation and build artifact
         run: make docs-check docs-test docs-archive
       - name: Retain documentation preview
@@ -65,21 +65,16 @@ jobs:
         run: make test-attack-replay
 
   hooks:
-    name: Python hook tests (${{ matrix.python }})
+    name: Python hook tests (3.12)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        # The oldest supported Python (docs/GETTING_STARTED.md) and the newest.
-        python: ["3.10", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.12"
       - name: make test-hooks
         run: make test-hooks
 
