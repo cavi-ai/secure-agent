@@ -41,7 +41,7 @@ function createServiceRemediation({request,drawer,generation,ended,confirm}) {
     const state=active;if(!state||!current(state)||state.busy)return;
     state.busy=true;state.error='';paint(state);
     try {
-      const response=label?await request('/local-services/receipt?'+new URLSearchParams({label})):await request('/local-services/remediation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});
+      const response=label?await request('/local-services/receipt?'+new URLSearchParams({label})):await request('/local-services/remediation',{timeoutMs:130000,method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});
       const raw=await response.text();let value;try{value=JSON.parse(raw);}catch{}
       if(!current(state))return;
       if(!response.ok){if(validReceipt(value?.receipt)){state.receipt=value.receipt;state.preview=null;}throw new Error(value?.error||raw.slice(0,512)||'Service operation failed. Read the last result before retrying.');}

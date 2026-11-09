@@ -5,10 +5,10 @@ import {readFileSync} from 'node:fs';
 const web=new URL('../../../daemon/internal/api/web_dist/',import.meta.url);
 const preview={id:'review',preview_hash:'hash',label:'com.example.model',source:'/private/model.plist',endpoint:'http://127.0.0.1:19001',change:{runtime:'mlx',scope:'authenticated_inference',port:19001},client_fields:['advisor.api_key_file'],warnings:['Service restarts','Failure leaves original stopped']};
 function setup(fixture=preview){
- const s={seq:0,generation:1,ended:false,posts:[],confirm:true};
+ const s={seq:0,generation:1,ended:false,posts:[],timeouts:[],confirm:true};
  const ctx=vm.createContext({Date,URL,URLSearchParams,window:{}});
  for(const file of ['lib.js','service-remediation.js'])vm.runInContext(readFileSync(new URL(file,web),'utf8'),ctx);
- const api=ctx.createServiceRemediation({request:async(url,opts)=>{const input=opts?JSON.parse(opts.body):{};s.posts.push([url,input]);const value=input.action==='preview'?fixture:{...fixture,state:input.action==='rollback'?'restored_stopped':'verified',verified_at:'2026-11-09T18:00:00Z',checks:['authorized_one_token_inference']};return{ok:true,text:async()=>JSON.stringify(value)};},
+ const api=ctx.createServiceRemediation({request:async(url,opts)=>{const input=opts?JSON.parse(opts.body):{};s.posts.push([url,input]);s.timeouts.push(opts?.timeoutMs);const value=input.action==='preview'?fixture:{...fixture,state:input.action==='rollback'?'restored_stopped':'verified',verified_at:'2026-11-09T18:00:00Z',checks:['authorized_one_token_inference']};return{ok:true,text:async()=>JSON.stringify(value)};},
  drawer:{seq:()=>s.seq,setMode(){},open(view){s.seq++;s.view=view;}},generation:()=>s.generation,ended:()=>s.ended,confirm:async()=>s.confirm});
  return{api,s};
 }
@@ -19,6 +19,7 @@ test('apply uses the displayed identity only after review and rollback remains s
  s.confirm=true;await api.apply();assert.deepEqual(s.posts[1][1],{action:'apply',id:'review',preview_hash:'hash'});
  assert.match(s.view.body,/Last verified/);
  await api.rollback();assert.equal(s.posts[2][1].action,'rollback');assert.match(s.view.body,/restored_stopped/);
+ assert.ok(s.timeouts.every(ms=>ms>120000&&ms<=150000),'console timeout must cover the server operation deadline');
 });
 test('an old preview cannot mutate after drawer ownership changes',async()=>{
  const{api,s}=setup();api.open();await api.preview('/private/model.plist');s.seq++;await api.apply();assert.equal(s.posts.length,1);
