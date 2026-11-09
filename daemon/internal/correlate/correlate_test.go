@@ -601,3 +601,26 @@ func TestSecretInTranscriptTestValueEvidence(t *testing.T) {
 		}
 	}
 }
+
+func TestTranscriptReviewDoesNotSuppressStrongerFlags(t *testing.T) {
+	c := newTestCorrelator(t)
+	e := event.Event{Kind: event.KindTranscriptHit, TS: time.Now(), Path: "/sessions/s.jsonl", SessionID: "s", Detail: "codex:pattern:db",
+		TestSignals: "a low-entropy value (repeated or sequential characters); test code around it"}
+	if got := c.Observe(e); len(got) != 1 {
+		t.Fatalf("review candidate: got %d flags", len(got))
+	}
+	e.TS = e.TS.Add(time.Second)
+	e.TestSignals = "test code around it"
+	stronger := c.Observe(e)
+	if len(stronger) != 1 || stronger[0].Severity != 2 {
+		t.Fatalf("later high match suppressed: %+v", stronger)
+	}
+	e.Detail = "codex:fingerprint:db"
+	if got := c.Observe(e); len(got) != 1 || got[0].Severity != 3 || got[0].ID == stronger[0].ID {
+		t.Fatalf("later registered match suppressed: %+v", got)
+	}
+	e.TS = e.TS.Add(time.Second)
+	if got := c.Observe(e); len(got) != 0 {
+		t.Fatalf("identical registered repeat: got %d flags", len(got))
+	}
+}

@@ -6,6 +6,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Findings: low-entropy transcript matches in explicit test context stay in history at review priority; later stronger matches still alert.
+
 ### Added
 - Local services: review bounded listener inventory, model metadata exposure and server-specific hardening profiles from the CLI and Monitoring console without loading models or changing servers.
 - Managed analysis: use mlx-agent over a private Unix socket with locally prepared weights, protocol checks and no model TCP listener.

@@ -200,9 +200,8 @@ func (a *Analyzer) Analyze(flag model.Flag, events []event.Event) model.Incident
 	} else if flag.Severity == 1 {
 		maxRisk = model.RiskHigh
 	}
-	// A typed transcript pattern is a review finding, not a registered secret.
-	if flag.Rule == "secret-in-transcript" && flag.Severity == 2 {
-		maxRisk = model.RiskHigh
+	if flag.Rule == "secret-in-transcript" {
+		maxRisk = model.TranscriptFindingRisk(flag)
 	}
 	// Reading external content before a send is a review lead, not proof
 	// of an attack. Use the structured assessment rather than promoting an
@@ -343,9 +342,19 @@ func (a *Analyzer) GenerateMarkdown(report model.IncidentReport) string {
 	sb.WriteString(fmt.Sprintf("- **Incident ID**: `%s`\n", report.ID))
 	sb.WriteString(fmt.Sprintf("- **Timestamp**: %s\n", report.Timestamp.Format(time.RFC3339)))
 	sb.WriteString(fmt.Sprintf("- **Severity Risk**: **%s**\n", report.Risk))
+	if report.Assessment != nil {
+		sb.WriteString(fmt.Sprintf("- **Current assessment**: %s\n", report.Assessment.Reason))
+		for _, limit := range report.Assessment.Limits {
+			sb.WriteString(fmt.Sprintf("- **Assessment limit**: %s\n", limit))
+		}
+	}
 	sb.WriteString(fmt.Sprintf("- **Agent**: `%s` (PID: %d)\n", report.Agent, report.PID))
 	sb.WriteString(fmt.Sprintf("- **Trigger Rule**: `%s`\n", report.Rule))
-	sb.WriteString(fmt.Sprintf("- **Summary**: %s\n\n", report.Summary))
+	summaryLabel := "Summary"
+	if report.Assessment != nil {
+		summaryLabel = "Recorded summary"
+	}
+	sb.WriteString(fmt.Sprintf("- **%s**: %s\n\n", summaryLabel, report.Summary))
 	outcomes := report.PayloadOutcomes
 	if outcomes == nil && report.Rule == "proxy-secret-leak" {
 		outcomes = &model.PayloadOutcomeSummary{Unknown: max(1, report.AggregateCount)}

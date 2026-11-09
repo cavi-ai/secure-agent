@@ -1,5 +1,5 @@
-// Package testvalue tells test, dummy and sentinel credentials from live
-// ones by value-free signals: markers in the value, its shape, published
+// Package testvalue identifies possible test, dummy and sentinel credentials
+// by value-free signals: markers in the value, its shape, published
 // sample values, and the text around it. Reasons come from a fixed
 // vocabulary and never carry the value; a reason names at most a vocabulary
 // word or a file name. The local advisor and the local agent weigh them.
@@ -33,6 +33,9 @@ const (
 // contextWindow is how many bytes on each side of the value count as its
 // surroundings.
 const contextWindow = 240
+
+// ReviewGuidance keeps advisory interpretations aligned across local reviewers.
+const ReviewGuidance = `For secret findings, weigh the structured assessment and test-value evidence when considering test, dummy and sentinel values. Published samples (AWS ...EXAMPLE keys, jwt.io's token), explicit placeholder words (example, dummy, changeme, your_key_here, xxxx), and decoded placeholder credentials (Kubernetes Secret data, Docker config auth, docker-compose and .env.example defaults) can support a fixture interpretation when tied to the matched value. Low entropy, a test-mode key prefix, a test filename, test code, or dummy/redaction wording alone does not establish a dummy value: weak passwords and sandbox keys can still authenticate. A low-entropy match with explicit test context has review priority, not a benign verdict. Keep it available for inspection; do not recommend muting the rule or dismissing it from those signals alone. A live-looking credential in a test remains high risk. A fingerprint match is a registered real secret: never benign. State what evidence would confirm a fixture without printing the value.`
 
 // publishedSamples are credentials vendors publish in their documentation.
 // Written in fragments so secret scanners reading this source stay quiet.
@@ -183,6 +186,26 @@ func Strong(reasons []string) bool {
 		}
 	}
 	return false
+}
+
+// LowEntropyTestContext identifies an uncertain review candidate, never a
+// confirmed fixture. Unknown or additional value signals retain high priority.
+func LowEntropyTestContext(reasons []string) bool {
+	low, context := false, false
+	for _, reason := range reasons {
+		switch {
+		case reason == LowEntropy:
+			low = true
+		case reason == TestCode:
+			context = true
+		case strings.HasPrefix(reason, TestFile+" (") && strings.HasSuffix(reason, ")") && len(reason) > len(TestFile)+3:
+			context = true
+		case reason == DummyWording:
+		default:
+			return false
+		}
+	}
+	return low && context
 }
 
 func hasTestModePrefix(lower string) bool {

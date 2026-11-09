@@ -114,7 +114,7 @@ type TranscriptScanner struct {
 	// secrets. Nil falls back to the redact package's patterns.
 	TextScanner TextScanner
 
-	// hitSeen records when each (path, rule id) secret hit was last emitted,
+	// hitSeen records when each (path, layer, rule id, priority) was last emitted,
 	// for hitDedupeWindow. The tail loop is single-goroutine, so no lock.
 	hitSeen map[string]time.Time
 
@@ -197,7 +197,7 @@ type pluginLogLine struct {
 }
 
 // scanLine scans one tailed line for secrets. A line carrying a secret yields
-// one transcript-hit event per (path, rule id) not already emitted within
+// one transcript-hit event per (path, layer, rule id, priority) not emitted within
 // hitDedupeWindow — the path, session and rule id only, never the text — and
 // is not parsed further. Any other line may be a hook activity record.
 // lineStart is the byte offset of line in path.
@@ -209,7 +209,11 @@ func (ts *TranscriptScanner) scanLine(line, path, harness, sessionID string, lin
 		now := time.Now()
 		var evs []event.Event
 		for _, h := range hits {
-			if !ts.firstHit(path, h.rule, now) {
+			hitKey := h.layer + ":" + h.rule
+			if h.layer == "pattern" && testvalue.LowEntropyTestContext(h.signals) {
+				hitKey += "|review"
+			}
+			if !ts.firstHit(path, hitKey, now) {
 				continue
 			}
 			evs = append(evs, event.Event{
@@ -304,7 +308,7 @@ func fixtureSignals(signals []string) bool {
 	return placeholder && context
 }
 
-// firstHit reports whether (path, rule) was not emitted within
+// firstHit reports whether (path, hit identity) was not emitted within
 // hitDedupeWindow, recording it when new. Expired entries are pruned on insert.
 func (ts *TranscriptScanner) firstHit(path, rule string, now time.Time) bool {
 	key := path + "\x00" + rule

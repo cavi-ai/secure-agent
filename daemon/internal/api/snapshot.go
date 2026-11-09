@@ -56,7 +56,17 @@ func (a *API) currentSnapshot() (Snapshot, error) {
 }
 
 func (a *API) incidentListResult(limit int) ([]store.IncidentDetail, error) {
-	return readIncidentList(a.store, limit)
+	incidents, err := readIncidentList(a.store, limit)
+	if err != nil {
+		return nil, err
+	}
+	for i := range incidents {
+		incidents[i].IncidentReport, err = currentIncidentReport(a.store, incidents[i].IncidentReport)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return incidents, nil
 }
 
 func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Event) (Snapshot, error) {

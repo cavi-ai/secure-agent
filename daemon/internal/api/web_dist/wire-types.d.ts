@@ -498,6 +498,7 @@ export interface IncidentReport {
   last_flag_at?: string;
   summary: string;
   risk: string;
+  assessment?: FindingAssessment;
   touched_files: string[] | null;
   connections: string[] | null;
   rotate_list: RotateItem[] | null;
@@ -1228,6 +1229,7 @@ export interface IncidentDetail {
   last_flag_at?: string;
   summary: string;
   risk: string;
+  assessment?: FindingAssessment;
   touched_files: string[] | null;
   connections: string[] | null;
   rotate_list: RotateItem[] | null;
