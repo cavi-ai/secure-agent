@@ -64,6 +64,7 @@ These docs describe the current `main` checkout. The published release may have 
 | Gate sensitive file access, register secrets, inspect routed payloads | [File and egress protection](docs/PROTECTION.md) |
 | Inspect session memory/CPU and configure resource budgets | [Resources](docs/USAGE.md#manage-session-resources) |
 | Find worktrees, review cleanup and track reclaimed disk space | [Worktrees and cleanup](docs/USAGE.md#manage-worktrees-and-disk-space) |
+| Run private MLX analysis or harden existing local model servers | [Local model protection](docs/LOCAL_MODELS.md) |
 | Chat with local Ollama and confirm proposed commands | [Local chat and commands](docs/SYSTEM_AGENT.md) |
 | Collect signed events and posture from several nodes | [Fleet](docs/FLEET.md) |
 

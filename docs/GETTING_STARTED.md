@@ -70,6 +70,7 @@ Doctor exits with status 1 when a check fails. Read the named check and its sugg
 | Detect your own secret values | **Scan & Register My Secrets** | Stores salted HMAC fingerprints rather than plaintext values |
 | Set session resource budgets | Console resource controls | `observe`, with memory and CPU limits disabled |
 | Use local chat or advisory analysis | Settings → Secure Agent or Analysis | Both disabled; recommendations do not authorize commands |
+| Use private MLX analysis or review existing model servers | [Local model protection](LOCAL_MODELS.md) | Explicit runtime installation and managed-model selection; existing services change only after reviewed confirmation |
 
 See [Protection](PROTECTION.md), [Resources](USAGE.md#manage-session-resources), and [Local chat](SYSTEM_AGENT.md) for the detailed behavior.
 

@@ -58,6 +58,14 @@ Traffic that bypasses the proxy (pinned or unrouted) is counted as `uninspected_
 
 See [FIREWALL_THREAT_MODEL.md](FIREWALL_THREAT_MODEL.md) for exactly what the firewall defends against, what it does not, and how it handles secret material.
 
+## Local model services
+
+Use [Local model protection](LOCAL_MODELS.md) to run private MLX analysis or
+review existing model servers. The guide covers listener assessment,
+authenticated MLX/llama.cpp hardening, Ollama's browser-only scope, and recovery
+that leaves restored services stopped. Existing services change only after a
+reviewed confirmation; traffic routing does not transparently protect them.
+
 ## System changes
 
 With file telemetry enabled, three rules flag changes that outlast a session. They observe and do not block. `launch-item-change`: an agent adds or removes a background item, or writes the launch agent or daemon plist macOS registers. `trust-change`: an agent installs a configuration profile or overrides Gatekeeper, or you do so within 24 hours for an app, package or profile file an agent wrote. `xprotect-detection`: every XProtect malware detection. See the [correlation rules](ARCHITECTURE.md#correlation-engine-daemoninternalcorrelatecorrelatego).

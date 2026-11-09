@@ -14,6 +14,7 @@ New to Secure Agent? Start with [Getting started](GETTING_STARTED.md), then foll
 | [Console and CLI](USAGE.md) | Review findings, export sessions, inspect resource use, manage worktrees and cleanup |
 | [Hook history](HOOKS.md) | Inspect hook completions and forward host events through the shared metadata contract |
 | [File and egress protection](PROTECTION.md) | Configure guard modes, register fingerprints, route traffic and review enforcement limits |
+| [Local model protection](LOCAL_MODELS.md) | Set up private MLX analysis, assess existing servers, apply reviewed hardening and recover stopped services |
 | [Local chat and commands](SYSTEM_AGENT.md) | Set up Ollama chat, review recommendations and confirm commands or harness handoffs |
 | [Fleet](FLEET.md) | Enroll nodes, provision a collector and read fleet status |
 
