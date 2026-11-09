@@ -154,6 +154,31 @@ The runner uses the existing `CLAUDE_CONFIG_DIR` or `~/.claude` for authenticati
 
 `python3 packaging/test/test_setup_session_live.py` checks runner authentication, failure and cleanup handling without launching a model. These regression tests also run in `make test` and CI.
 
+### Native local-model browser acceptance
+
+On Apple Silicon macOS, the opt-in test below uses cached MLX weights, an
+existing `mlx_lm.server` executable, a compatible mlx-agent and headless Chrome.
+It creates a disposable launchd service and browser profile, applies production
+hardening, and checks Chrome's network records for server refusals separately
+from a rejected CORS preflight. It then verifies authorized native inference
+and rollback with the original service stopped.
+
+```sh
+SECURE_AGENT_TEST_MODEL_BROWSER=1 \
+SECURE_AGENT_TEST_MANAGED_MODEL=/absolute/path/to/local/model \
+SECURE_AGENT_TEST_MLX_SERVER=/absolute/path/to/bin/mlx_lm.server \
+SECURE_AGENT_TEST_MLX_AGENT_BIN=/absolute/path/to/bin/mlx-agent \
+go test ./daemon/internal/modelservice -run '^TestNativeMLXBrowserRemediation$' -count=1 -v -timeout 4m
+```
+
+Chrome defaults to `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`;
+set `SECURE_AGENT_TEST_CHROME` for another executable. The test uses a fresh
+headless profile with browser security checks enabled. API keys stay in the
+native client, and model loading uses offline settings. Normal tests skip this
+acceptance unless explicitly enabled; its network-log decoder regression runs
+in the macOS suite. See [Local model protection](LOCAL_MODELS.md) for setup,
+service scope and recovery behavior.
+
 ## Repository layout
 
 ```text

@@ -48,6 +48,10 @@ func TestNativeOllamaRemediation(t *testing.T) {
 }
 
 func testNativeRemediation(t *testing.T, args []string, env map[string]any, engine, scope string, cancelAfterWrite bool) {
+	testNativeRemediationProbe(t, args, env, engine, scope, cancelAfterWrite, nil)
+}
+
+func testNativeRemediationProbe(t *testing.T, args []string, env map[string]any, engine, scope string, cancelAfterWrite bool, probe func(*testing.T, string, *Manager, string)) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -194,6 +198,9 @@ func testNativeRemediation(t *testing.T, args []string, env map[string]any, engi
 	}
 	if _, err := m.Apply(ctx, preview.ID, preview.Hash); err == nil {
 		t.Fatal("consumed preview replay accepted")
+	}
+	if probe != nil {
+		probe(t, endpoint, m, label)
 	}
 	result, err = m.Rollback(ctx, label)
 	if err != nil || result.State != "restored_stopped" {
