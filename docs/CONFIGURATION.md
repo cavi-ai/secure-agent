@@ -534,6 +534,8 @@ preserves the timeout, classifier and debug settings.
 ```yaml
 advisor:
   enabled: false
+  managed: false                  # use the private MLX analysis worker when true
+  managed_model: ""               # locally prepared model ID or absolute directory
   endpoint: "http://127.0.0.1:8080" # existing local server
   api_key_file: ""                 # optional absolute private bearer-key file
   model: ""                       # the server's served chat model
@@ -550,6 +552,10 @@ not accuracy. Debug entries appear in `~/Library/Logs/secure-agent/daemon-err.lo
 which **Open daemon log** opens. Evidence, prompts and replies are excluded.
 See [advisor boundaries](ADVISOR_THREAT_MODEL.md) for managed-model setup and
 context/tool budgets.
+
+Managed mode requires `managed_model`, an empty `endpoint` and an empty
+`api_key_file`. Follow [private managed analysis](LOCAL_MODELS.md#set-up-private-managed-analysis)
+to install the pinned runtime and select locally prepared weights.
 
 ### Model API key files
 
@@ -572,7 +578,8 @@ Managed analysis uses private Unix transport and rejects `advisor.api_key_file`.
 These settings do not add authentication to a server: enable its native
 authentication separately. Ollama local chat and dispatched harnesses retain
 their own client configuration; Ollama's local API has no native key enforcement.
-See [local service review](USAGE.md#use-the-cli) for server-owner profiles.
+See [local model protection](LOCAL_MODELS.md) for server-owner profiles,
+reviewed application and stopped recovery.
 
 ### `system_agent` (Map)
 

@@ -15,6 +15,7 @@
         {"title": "Console and CLI", "path": "docs/USAGE.md"},
         {"title": "Hook history", "path": "docs/HOOKS.md"},
         {"title": "File and egress protection", "path": "docs/PROTECTION.md"},
+        {"title": "Local model protection", "path": "docs/LOCAL_MODELS.md"},
         {"title": "Local chat and commands", "path": "docs/SYSTEM_AGENT.md"},
         {"title": "Fleet", "path": "docs/FLEET.md"},
         {"title": "Troubleshooting", "path": "docs/TROUBLESHOOTING.md"}
