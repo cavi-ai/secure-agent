@@ -1043,6 +1043,93 @@ The environment that routes Claude Code through the proxy, for the menu bar app 
 
 `ready` is false, with a `reason`, while the proxy is off, not yet bound, or without its token or snippet. `/status` carries `proxy_tunneled` and `proxy_decrypted`: routed CONNECTs since start, tunneled unopened and decrypted. See CONFIGURATION.md, Routing modes.
 
+### `POST /local-services/remediation`
+
+Owner/UI-only, NoAgent and mutation-gated service hardening for current-user
+macOS launchd jobs. Requests are strict JSON, limited to 8 KiB:
+
+- Preview: `{"action":"preview","source":"/absolute/path/model.plist"}`.
+- Apply: `{"action":"apply","id":"<id>","preview_hash":"<preview_hash>"}`.
+- Rollback: `{"action":"rollback","label":"com.example.model"}`.
+
+Preview reads the running job and definition without modifying them. It returns
+an expiring identity, source, label, endpoint, runtime and protection scope,
+settings, affected client fields and restart warnings. Apply consumes that
+identity and refuses changed inputs. Direct MLX-LM and llama.cpp jobs receive
+authenticated inference; Ollama receives browser hardening only.
+
+Successful apply returns a `verified` receipt with `verified_at` and named
+checks. Verification uses existing local weights for one authorized output
+token where authentication is supported. It checks visible listener ownership
+and direct TCP backends. Missing listener evidence prevents verification.
+Failures return HTTP 409 with `error` and a receipt when available. Original
+files are restored with the service stopped, or `rollback_required` retains
+private originals if safe restoration is unavailable. Rollback refuses drift,
+restores original file contents and modes, and leaves the service stopped.
+Neither action automatically starts the unprotected original.
+
+### `GET /local-services/receipt`
+
+Requires exactly one `?label=<service-label>` and the owner/UI NoAgent gate.
+Returns the last saved remediation receipt; HTTP 404 means it is unavailable.
+Receipts contain hashes and check names, never key contents or raw arguments.
+A saved verification timestamp describes that operation, not current service
+health or continuous protection. See [service hardening](USAGE.md#review-local-model-servers).
+
+### `GET /local-services`
+
+On-demand assessment of local model metadata routes and visible TCP listeners.
+Available to the owner/UI on the Unix socket and the authenticated console;
+the NoAgent gate refuses agent processes on both surfaces.
+Repeat `?endpoint=<loopback-base-url>` to select explicit services. Without
+explicit endpoints, selection prioritizes enabled configured advisor/classifier/
+chat/shell-review HTTP endpoints, named model listeners, known model ports
+(11434, 8080, 8799, 8081, 1234, 8084), then other visible local listeners.
+An explicit selection does not expand to other endpoints. Managed analysis
+has no HTTP endpoint to probe.
+
+The response contains `generated_at`, `scope`, `enforcement: "not_assessed"`
+and `services`. `omitted_endpoints` counts additional distinct candidates beyond
+the 16-endpoint limit; use explicit endpoints to assess them. Each service contains `endpoint`, `metadata`, `cross_origin`,
+`foreign_host`, `findings` and `enforcement: "not_assessed"`. Each probe records
+`state`, an HTTP status when available, and CORS `sharing` for an answered
+cross-origin metadata probe. Credential-required and unavailable candidates
+remain in the report; neither establishes service identity or protection.
+
+An optional `managed` object separately reports the supervised advisor's
+`state`, `transport`, `enforcement` and `scope`. Its private Unix transport
+applies only to that worker. Reading its state does not start a model; an
+unavailable compatible runtime is reported as unavailable.
+
+For automatic discovery, `inventory` contains `state` (`available`, `partial`
+or `unavailable`), `scope`, `truncated` and up to 128 visible TCP `listeners`.
+Each listener records PID, process name, address, binding (`loopback`, `wildcard`
+or `non_loopback`), an unverified `runtime_hint`, and a loopback candidate URL
+when applicable. Non-loopback addresses are listed but never dialed. Inventory
+reads no command arguments, environment, model paths or credentials. It invokes
+native `lsof` with a two-second deadline and 64 KiB output limit. Permissions,
+containers and limits can hide listeners; missing tools and partial scans are
+reported explicitly. Inventory availability is not proof of exhaustive coverage.
+
+`hardening` contains server-owner profiles for Ollama, llama.cpp, owned MLX
+serving and unidentified OpenAI-compatible servers. Each includes settings,
+application steps, verification, limitations and runtime documentation. Profiles
+are instructions, not applied configuration or evidence of protection.
+
+Probes send only `GET /v1/models` (or `/models` for a base ending in `/v1`).
+For an identified metadata response, two further GETs vary Origin and Host
+separately using a synthetic `.invalid` name. This name is never resolved.
+Requests carry no credentials or cookies, ignore proxy environment variables,
+never follow redirects, dial only literal loopback addresses, and retain no
+metadata body. Limits: 16 supplied endpoints, four concurrent assessments,
+500 ms per request, 64 KiB per response body, and a four-second overall deadline.
+
+Observations cover only these metadata routes. They do not demonstrate an
+inference authorization bypass, browser exploit, DNS rebinding exploit,
+or protection of the service. Servers are not reconfigured,
+started, stopped or asked to generate. Invalid target/query input returns 400;
+unreadable configured targets return 503 rather than falling back silently.
+
 ### `GET /advisor/discover`
 
 What the menubar's advisor setup renders from; loopback only, nothing is downloaded.

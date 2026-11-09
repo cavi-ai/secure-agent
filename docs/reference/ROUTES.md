@@ -84,6 +84,9 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 | `/cleanup/clean` | GET, HEAD, POST | POST | no agents | — |
 | `/cleanup/advise` | GET, HEAD, POST | POST | no agents | — |
 | `/advisor/discover` | — | — | — | — |
+| `/local-services` | GET, HEAD | — | no agents | — |
+| `/local-services/remediation` | GET, HEAD, POST | POST | no agents | — |
+| `/local-services/receipt` | GET, HEAD | — | no agents | — |
 | `/fleet` | GET, HEAD | — | — | `api.FleetNodeStatus` |
 | `/kill` | GET, HEAD, POST | POST | — | — |
 | `/firewall/mode` | GET, HEAD, POST | POST | — | — |

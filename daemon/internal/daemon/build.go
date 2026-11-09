@@ -44,6 +44,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 	"github.com/cavi-ai/secure-agent/daemon/internal/taint"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
+	"github.com/cavi-ai/secure-agent/internal/localservice"
 )
 
 // Options are the composition inputs that are not part of config.Config.
@@ -363,6 +364,12 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			NotifyScopes: notifyScopeStore,
 		},
 		Advisors: api.AdvisorDeps{
+			ManagedModel: func() *localservice.ManagedRuntime {
+				if status := advisorStk.Load().ManagedModel; status != nil {
+					return status()
+				}
+				return nil
+			},
 			Retriage:   retriageFuncs,
 			Plan:       planFuncs,
 			HostAssess: hostAssessFuncs,

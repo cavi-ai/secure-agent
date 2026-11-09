@@ -37,17 +37,19 @@ import (
 
 // Config controls the advisor. Disabled unless explicitly opted in.
 type Config struct {
-	Transport          http.RoundTripper
-	Ollama             bool
-	Enabled            bool
-	Endpoint           string                      // e.g. http://127.0.0.1:8080 — loopback enforced
-	Model              string                      // served model name, sent in the chat request
-	Timeout            time.Duration               // total triage task deadline, including tools
-	QueueSize          int                         // bounded backlog; drop-oldest beyond it
-	Mask               func(string) (string, bool) // firewall masking before any model/tool boundary
-	ClassifierEndpoint string                      // optional loopback /v1/systemone service
-	ClassifierModel    string
-	Debug              bool // metadata-only diagnostics, never prompts or replies
+	Transport            http.RoundTripper
+	Ollama               bool
+	Enabled              bool
+	Endpoint             string // e.g. http://127.0.0.1:8080 — loopback enforced
+	APIKeyFile           string
+	Model                string                      // served model name, sent in the chat request
+	Timeout              time.Duration               // total triage task deadline, including tools
+	QueueSize            int                         // bounded backlog; drop-oldest beyond it
+	Mask                 func(string) (string, bool) // firewall masking before any model/tool boundary
+	ClassifierEndpoint   string                      // optional loopback /v1/systemone service
+	ClassifierAPIKeyFile string
+	ClassifierModel      string
+	Debug                bool // metadata-only diagnostics, never prompts or replies
 }
 
 // Sink persists verdicts and answers trend lookups. *store.Store satisfies it.

@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/internal/modelruntime"
+
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
@@ -339,8 +341,12 @@ func resourceConfigKey(c config.ResourceControlConfig) string {
 // advisorConfigKey fingerprints the advisor-relevant config so a reload
 // only swaps when something meaningful changed (not on every file touch).
 func advisorConfigKey(a config.AdvisorConfig) string {
-	return a.Protocol + "|" + a.Endpoint + "|" + a.Model + "|" + a.ManagedModel + "|" +
-		boolStr(a.Enabled) + "|" + boolStr(a.Managed) + "|" + a.Timeout.String() + "|" + a.ClassifierEndpoint + "|" + a.ClassifierModel + "|" + boolStr(a.Debug)
+	key := a.Protocol + "|" + a.Endpoint + "|" + a.Model + "|" + a.ManagedModel + "|" +
+		boolStr(a.Enabled) + "|" + boolStr(a.Managed) + "|" + a.Timeout.String() + "|" + a.ClassifierEndpoint + "|" + a.ClassifierModel + "|" + boolStr(a.Debug) + "|" + a.APIKeyFile + "|" + a.ClassifierAPIKeyFile
+	if a.Managed {
+		key += "|" + modelruntime.OwnedBinary()
+	}
+	return key
 }
 
 // fleetConfigKey fingerprints the fleet-relevant config (webhooks, identity,

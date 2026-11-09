@@ -239,16 +239,18 @@ type ResourceControlOverride struct {
 
 // AdvisorYAML is the on-disk shape of the local advisor config.
 type AdvisorYAML struct {
-	Protocol           string `yaml:"protocol"`
-	Enabled            bool   `yaml:"enabled"`
-	Endpoint           string `yaml:"endpoint"`
-	Model              string `yaml:"model"`
-	TimeoutMS          int    `yaml:"timeout_ms"`
-	Managed            bool   `yaml:"managed"`
-	ManagedModel       string `yaml:"managed_model"`
-	ClassifierEndpoint string `yaml:"classifier_endpoint"`
-	ClassifierModel    string `yaml:"classifier_model"`
-	Debug              bool   `yaml:"debug"`
+	Protocol             string `yaml:"protocol"`
+	Enabled              bool   `yaml:"enabled"`
+	Endpoint             string `yaml:"endpoint"`
+	APIKeyFile           string `yaml:"api_key_file"`
+	Model                string `yaml:"model"`
+	TimeoutMS            int    `yaml:"timeout_ms"`
+	Managed              bool   `yaml:"managed"`
+	ManagedModel         string `yaml:"managed_model"`
+	ClassifierEndpoint   string `yaml:"classifier_endpoint"`
+	ClassifierAPIKeyFile string `yaml:"classifier_api_key_file"`
+	ClassifierModel      string `yaml:"classifier_model"`
+	Debug                bool   `yaml:"debug"`
 }
 
 // AdvisorConfig configures the local triage advisor. Disabled unless
@@ -257,16 +259,18 @@ type AdvisorYAML struct {
 // Managed mode: the daemon spawns/supervises the model server itself and
 // computes the endpoint — Endpoint is ignored (and must not be set).
 type AdvisorConfig struct {
-	Protocol           string
-	Enabled            bool
-	Endpoint           string
-	Model              string
-	Timeout            time.Duration
-	Managed            bool
-	ManagedModel       string
-	ClassifierEndpoint string
-	ClassifierModel    string
-	Debug              bool
+	Protocol             string
+	Enabled              bool
+	Endpoint             string
+	APIKeyFile           string
+	Model                string
+	Timeout              time.Duration
+	Managed              bool
+	ManagedModel         string
+	ClassifierEndpoint   string
+	ClassifierAPIKeyFile string
+	ClassifierModel      string
+	Debug                bool
 }
 
 // SystemAgentConfig configures the system agent behind the console's Agent
@@ -568,16 +572,18 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 		},
 		SystemAgent: raw.SystemAgent,
 		Advisor: AdvisorConfig{
-			Protocol:           raw.Advisor.Protocol,
-			Enabled:            raw.Advisor.Enabled,
-			Endpoint:           raw.Advisor.Endpoint,
-			Model:              raw.Advisor.Model,
-			Timeout:            time.Duration(raw.Advisor.TimeoutMS) * time.Millisecond,
-			Managed:            raw.Advisor.Managed,
-			ManagedModel:       raw.Advisor.ManagedModel,
-			ClassifierEndpoint: raw.Advisor.ClassifierEndpoint,
-			ClassifierModel:    raw.Advisor.ClassifierModel,
-			Debug:              raw.Advisor.Debug,
+			Protocol:             raw.Advisor.Protocol,
+			Enabled:              raw.Advisor.Enabled,
+			Endpoint:             raw.Advisor.Endpoint,
+			APIKeyFile:           raw.Advisor.APIKeyFile,
+			Model:                raw.Advisor.Model,
+			Timeout:              time.Duration(raw.Advisor.TimeoutMS) * time.Millisecond,
+			Managed:              raw.Advisor.Managed,
+			ManagedModel:         raw.Advisor.ManagedModel,
+			ClassifierEndpoint:   raw.Advisor.ClassifierEndpoint,
+			ClassifierAPIKeyFile: raw.Advisor.ClassifierAPIKeyFile,
+			ClassifierModel:      raw.Advisor.ClassifierModel,
+			Debug:                raw.Advisor.Debug,
 		},
 	}
 	cfg.Pricing, cfg.PricingSkipped = parsePricing(raw.Pricing)
@@ -645,6 +651,17 @@ func validPrice(v float64) bool { return v > 0 && !math.IsInf(v, 0) }
 // runtime. A non-positive sample interval reaches time.NewTicker, which panics
 // — the supervisor then recovers a permanently crash-looping collector.
 func (c Config) Validate() error {
+	for name, path := range map[string]string{"advisor.api_key_file": c.Advisor.APIKeyFile, "advisor.classifier_api_key_file": c.Advisor.ClassifierAPIKeyFile} {
+		if path != "" && (!filepath.IsAbs(path) || len(path) > 4096) {
+			return fmt.Errorf("%s must be an absolute key-file path", name)
+		}
+	}
+	if c.Advisor.Managed && c.Advisor.APIKeyFile != "" {
+		return fmt.Errorf("advisor.api_key_file must not be set for the private managed transport")
+	}
+	if c.Advisor.ClassifierAPIKeyFile != "" && c.Advisor.ClassifierEndpoint == "" {
+		return fmt.Errorf("advisor.classifier_api_key_file requires advisor.classifier_endpoint")
+	}
 	if c.Advisor.Protocol != "" && c.Advisor.Protocol != "ollama" && c.Advisor.Protocol != "openai" {
 		return fmt.Errorf("advisor.protocol must be ollama or openai")
 	}

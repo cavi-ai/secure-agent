@@ -1109,6 +1109,13 @@ struct SettingsView: View {
 
             if advisorMode == .managed {
                 Section("Managed model") {
+                    Button(setup.modelRuntimeInstalling ? "Installing runtime…" : "Install private model runtime") {
+                        Task { await setup.installModelRuntime() }
+                    }
+                    .disabled(setup.modelRuntimeInstalling)
+                    if !setup.modelRuntimeInstallStatus.isEmpty {
+                        Text(setup.modelRuntimeInstallStatus).font(.caption).foregroundStyle(.secondary)
+                    }
                     if discovery.managedModels.isEmpty {
                         Text("Daemon discovery unavailable — restart the app to refresh.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -1116,7 +1123,7 @@ struct SettingsView: View {
                         Picker("Model", selection: $selectedManagedModel) {
                             ForEach(discovery.managedModels, id: \.self) { Text($0).tag($0) }
                         }
-                        Text("The daemon downloads, starts, and supervises the server itself. First start downloads ~2.3 GB; verdicts begin when ready.")
+                        Text("Managed analysis uses mlx-agent over a private connection. Prepare the selected model locally before enabling analysis; this path does not download weights.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }

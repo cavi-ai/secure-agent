@@ -12,6 +12,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/decision"
 	"github.com/cavi-ai/secure-agent/daemon/internal/loopback"
+	"github.com/cavi-ai/secure-agent/internal/localservice"
 )
 
 type answer = decision.Answer
@@ -34,6 +35,9 @@ func (s *Service) classify(parent context.Context, command, cwd string) (answer,
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(s.cfg.Endpoint, "/")+"/v1/systemone", bytes.NewReader(body))
 	if err != nil {
+		return answer{}, "model_unavailable"
+	}
+	if err := localservice.Authorize(req, s.cfg.APIKeyFile); err != nil {
 		return answer{}, "model_unavailable"
 	}
 	req.Header.Set("Content-Type", "application/json")

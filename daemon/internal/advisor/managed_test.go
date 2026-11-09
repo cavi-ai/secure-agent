@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -73,7 +75,7 @@ func fakeModelServer(t *testing.T) string {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "mlx_lm.server")
+	bin := filepath.Join(dir, "mlx-agent")
 	script := "#!/bin/sh\nexport SECURE_AGENT_TEST_MODEL_SERVER=1\nexec '" +
 		strings.ReplaceAll(executable, "'", "'\"'\"'") +
 		"' -test.run='^TestManagedModelServerHelper$' -- \"$@\"\n"
@@ -90,24 +92,38 @@ func TestManagedModelServerHelper(t *testing.T) {
 	if len(os.Args) < 4 || os.Args[2] != "--" {
 		t.Fatal("missing managed server arguments")
 	}
+	if len(os.Args) < 6 || os.Args[3] != "serve" || os.Args[4] != "private-worker" {
+		t.Fatal("private MLX agent command required")
+	}
 	args := flag.NewFlagSet("model-server", flag.ContinueOnError)
 	model := args.String("model", "", "model ID")
-	host := args.String("host", "", "listen address")
-	port := args.Int("port", 0, "listen port")
-	if err := args.Parse(os.Args[3:]); err != nil {
+	descriptor := args.Int("socket-fd", 0, "inherited Unix listener")
+	describe := args.Bool("describe", false, "protocol")
+	if err := args.Parse(os.Args[5:]); err != nil {
 		t.Fatal(err)
 	}
-	if *model != "fake-4b" || *host != "127.0.0.1" || *port < 1 || *port > 65535 || args.NArg() != 0 {
+	if *describe {
+		fmt.Print(`{"protocol":"inherited-unix-v1"}`)
+		os.Exit(0)
+	}
+	if *model != "fake-4b" || *descriptor != 3 || args.NArg() != 0 {
 		t.Fatalf("invalid managed server arguments: %v", os.Args[3:])
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"data": []map[string]string{{"id": *model}},
-		})
+	mux.HandleFunc("GET /_mlx/private", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"protocol":"inherited-unix-v1"}`) })
+	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"fixture"}}]}`)
 	})
-	if err := http.ListenAndServe(fmt.Sprintf("%s:%d", *host, *port), mux); err != nil {
+	file := os.NewFile(uintptr(*descriptor), "private-listener")
+	listener, err := net.FileListener(file)
+	file.Close()
+	if err != nil || listener.Addr().Network() != "unix" {
+		t.Fatal("model received a non-private listener")
+	}
+	if err := http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-MLX-Agent-Transport", "inherited-unix-v1")
+		mux.ServeHTTP(w, r)
+	})); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -116,29 +132,30 @@ func TestLaunchManagedSpawnsAndServes(t *testing.T) {
 	bin := fakeModelServer(t)
 	// Launch the helper even when no external runtime is available on PATH.
 	t.Setenv("PATH", "")
-	cmd, endpoint, err := LaunchManaged(ManagedSpec{Model: "fake-4b", Bin: bin})
+	process, err := LaunchManaged(ManagedSpec{Model: "fake-4b", Bin: bin})
 	if err != nil {
 		t.Fatalf("LaunchManaged: %v", err)
 	}
 	defer func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		_ = process.cmd.Process.Kill()
+		_ = process.cmd.Wait()
+		process.cleanup()
 	}()
 
-	if !strings.HasPrefix(endpoint, "http://127.0.0.1:") {
-		t.Fatalf("endpoint must be loopback, got %q", endpoint)
+	if mode, err := os.Stat(process.directory); err != nil || mode.Mode().Perm() != 0700 {
+		t.Fatalf("private directory permissions: %v, %v", mode, err)
 	}
 	// The full race suite runs every package concurrently; process startup can
 	// exceed five seconds on a loaded CI host even though the helper is healthy.
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if !WaitReady(ctx, endpoint, 15*time.Second) {
+	if !process.waitReady(ctx, 15*time.Second) {
 		t.Fatal("managed server never became ready")
 	}
 }
 
 func TestLaunchManagedMissingBinary(t *testing.T) {
-	_, _, err := LaunchManaged(ManagedSpec{Model: "x", Bin: "/nonexistent/mlx_lm.server"})
+	_, err := LaunchManaged(ManagedSpec{Model: "x", Bin: "/nonexistent/mlx-agent"})
 	if err == nil {
 		t.Fatal("missing binary must error loudly")
 	}

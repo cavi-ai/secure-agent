@@ -12,6 +12,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
+	"github.com/cavi-ai/secure-agent/internal/localservice"
 )
 
 // These budgets apply to the entire fresh task, including tool exchanges.
@@ -206,6 +207,9 @@ func (s *Subscriber) completeWithTools(ctx context.Context, client *http.Client,
 		s.debugf("request bytes=%d round=%d tool_calls=%d", len(body), round+1, calls)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(s.cfg.Endpoint, "/")+"/v1/chat/completions", bytes.NewReader(body))
 		if err != nil {
+			return "", err
+		}
+		if err := localservice.Authorize(req, s.cfg.APIKeyFile); err != nil {
 			return "", err
 		}
 		req.Header.Set("Content-Type", "application/json")

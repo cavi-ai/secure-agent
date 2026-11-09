@@ -266,6 +266,8 @@ func TestAdvisorConfigKeyDistinguishesFields(t *testing.T) {
 		t.Fatal("key must differ when enabled changes")
 	}
 	for _, change := range []func(*config.AdvisorConfig){
+		func(v *config.AdvisorConfig) { v.APIKeyFile = "/private/model.key" },
+		func(v *config.AdvisorConfig) { v.ClassifierAPIKeyFile = "/private/classifier.key" },
 		func(v *config.AdvisorConfig) { v.ClassifierEndpoint = "http://127.0.0.1:8009" },
 		func(v *config.AdvisorConfig) { v.ClassifierModel = "local-decision" },
 		func(v *config.AdvisorConfig) { v.Debug = true },

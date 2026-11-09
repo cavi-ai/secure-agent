@@ -6,6 +6,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Local services: review bounded listener inventory, model metadata exposure and server-specific hardening profiles from the CLI and Monitoring console without loading models or changing servers.
+- Managed analysis: use mlx-agent over a private Unix socket with locally prepared weights, protocol checks and no model TCP listener.
+- Existing model servers: authenticate advisor and classifier requests with owner-only key files; create keys without printing them or replacing existing files.
+- Model services: preview, apply and verify hardening for selected macOS launchd jobs; restore original settings with the service stopped. MLX and llama.cpp use key-file authentication; Ollama receives browser hardening only.
+- Local models: install the pinned MLX engine privately from Settings or `secure-agent model-runtime install`, preserving existing tools and model caches.
+
 ## [1.5.4] - 2026-11-07
 
 ### Added

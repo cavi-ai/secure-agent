@@ -43,6 +43,8 @@ public final class SetupManager: ObservableObject {
     /// Local advisor: whether a model server answers on the loopback endpoint
     /// and whether the daemon config has the advisor enabled.
     @Published public private(set) var advisorEnabled = false
+    @Published private(set) var modelRuntimeInstalling = false
+    @Published private(set) var modelRuntimeInstallStatus = ""
     @Published private(set) var advisorPreferences = AdvisorPreferences()
     @Published private(set) var advisorPreferencesError: String?
     @Published public private(set) var systemAgentEnabled = false
@@ -167,6 +169,21 @@ public final class SetupManager: ObservableObject {
         let path = appURL
             .appendingPathComponent("Contents/Helpers/secure-agent").path
         return fm.fileExists(atPath: path) ? path : nil
+    }
+
+    func installModelRuntime() async {
+        guard !modelRuntimeInstalling else { return }
+        guard let cli = bundledCLIPath else {
+            modelRuntimeInstallStatus = "Run secure-agent model-runtime install from your checkout."
+            return
+        }
+        modelRuntimeInstalling = true
+        modelRuntimeInstallStatus = "Installing the private runtime. Model weights are not downloaded."
+        defer { modelRuntimeInstalling = false }
+        let result = await runProcess(cli, ["model-runtime", "install"])
+        modelRuntimeInstallStatus = result.status == 0
+            ? "Private runtime installed. Select a locally prepared model to enable analysis."
+            : "Runtime installation failed. Run secure-agent model-runtime install for details; uv is required."
     }
 
     private var bundledHooksDir: String? {

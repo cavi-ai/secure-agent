@@ -32,12 +32,14 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/modelservice"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/shellreview"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
+	"github.com/cavi-ai/secure-agent/internal/localservice"
 	"golang.org/x/sys/unix"
 )
 
@@ -179,7 +181,9 @@ type Status struct {
 type StatusFunc func() Status
 
 type API struct {
-	classifierStatus func(context.Context) advisor.ClassifierHealth
+	classifierStatus   func(context.Context) advisor.ClassifierHealth
+	managedModelStatus func() *localservice.ManagedRuntime
+	modelServices      *modelservice.Manager
 
 	shellReviews    *shellreview.Service
 	socketPath      string
@@ -378,9 +382,11 @@ type PolicyDeps struct {
 
 // AdvisorDeps are the local advisor's hooks (optional).
 type AdvisorDeps struct {
-	Retriage   *RetriageFuncs
-	HostAssess *HostAssessFuncs
-	Plan       *PlanFuncs
+	// ManagedModel describes the current private worker without starting it.
+	ManagedModel func() *localservice.ManagedRuntime
+	Retriage     *RetriageFuncs
+	HostAssess   *HostAssessFuncs
+	Plan         *PlanFuncs
 	// Project queues a project for a cleanup plan and reports whether it was
 	// queued.
 	Project func(model.ProjectCleanupRequest) bool
@@ -445,21 +451,23 @@ type WorkspaceDeps struct {
 // New builds the API from its resolved dependencies.
 func New(d Deps) *API {
 	a := &API{
-		socketPath:       d.SocketPath,
-		configPath:       d.ConfigPath,
-		store:            d.Store,
-		killer:           d.Killer,
-		statusFn:         d.Status,
-		hermes:           d.Doctor.Hermes,
-		sightings:        d.Doctor.Sightings,
-		routing:          d.Doctor.Routing,
-		worktrees:        d.Workspace.Worktrees,
-		worktreeAdvisor:  d.Advisors.Worktree,
-		egressAdvisor:    d.Advisors.Egress,
-		clutter:          d.Workspace.Clutter,
-		asker:            d.Workspace.Asker,
-		sysAgent:         d.Workspace.SysAgent,
-		classifierStatus: d.Workspace.ClassifierStatus,
+		socketPath:         d.SocketPath,
+		configPath:         d.ConfigPath,
+		store:              d.Store,
+		killer:             d.Killer,
+		statusFn:           d.Status,
+		hermes:             d.Doctor.Hermes,
+		sightings:          d.Doctor.Sightings,
+		routing:            d.Doctor.Routing,
+		worktrees:          d.Workspace.Worktrees,
+		worktreeAdvisor:    d.Advisors.Worktree,
+		egressAdvisor:      d.Advisors.Egress,
+		clutter:            d.Workspace.Clutter,
+		asker:              d.Workspace.Asker,
+		sysAgent:           d.Workspace.SysAgent,
+		classifierStatus:   d.Workspace.ClassifierStatus,
+		managedModelStatus: d.Advisors.ManagedModel,
+		modelServices:      newServiceManager(d.ConfigPath),
 
 		autoReview:      newAutoReviewer(),
 		projectAdvisor:  d.Advisors.Project,
