@@ -22,6 +22,9 @@ func handleLocalServices(client *http.Client, args []string) {
 }
 
 func runLocalServices(client *http.Client, args []string, out io.Writer) error {
+	if len(args) > 0 && (args[0] == "remediate" || args[0] == "rollback" || args[0] == "receipt") {
+		return runServiceRemediation(client, args, out)
+	}
 	if len(args) != 0 && args[0] == "create-key" {
 		if len(args) != 2 {
 			return errors.New("usage: secure-agent local-services create-key <absolute-path>")

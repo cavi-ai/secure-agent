@@ -32,6 +32,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/modelservice"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/shellreview"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -182,6 +183,7 @@ type StatusFunc func() Status
 type API struct {
 	classifierStatus   func(context.Context) advisor.ClassifierHealth
 	managedModelStatus func() *localservice.ManagedRuntime
+	modelServices      *modelservice.Manager
 
 	shellReviews    *shellreview.Service
 	socketPath      string
@@ -465,6 +467,7 @@ func New(d Deps) *API {
 		sysAgent:           d.Workspace.SysAgent,
 		classifierStatus:   d.Workspace.ClassifierStatus,
 		managedModelStatus: d.Advisors.ManagedModel,
+		modelServices:      newServiceManager(d.ConfigPath),
 
 		autoReview:      newAutoReviewer(),
 		projectAdvisor:  d.Advisors.Project,

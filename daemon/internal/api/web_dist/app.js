@@ -1085,6 +1085,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const localServices = createLocalServices({request:apiFetch,drawer:detailDrawer,
     generation:() => handoffGeneration,ended:() => sessionEnded,
     copy:text => navigator.clipboard.writeText(text),toast:showToast});
+  const serviceRemediation = createServiceRemediation({request:apiFetch,drawer:detailDrawer,
+    generation:() => handoffGeneration,ended:() => sessionEnded,confirm:(...args) => window.saConfirm(...args)});
   const monitoringController = createMonitoringController({
     root: document.getElementById('tab-monitoring'),
     data: () => telemetryData,
@@ -3689,6 +3691,22 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         localServices.open({back:back()});
         break;
+      case 'service-remediation-open':
+        e.preventDefault();
+        serviceRemediation.open({back:{label:'Local model servers',reopen:() => localServices.open()}});
+        break;
+      case 'service-remediation-preview':
+        e.preventDefault();
+        serviceRemediation.preview(document.getElementById('service-remediation-source')?.value || '');
+        break;
+      case 'service-remediation-lookup':
+        e.preventDefault();
+        serviceRemediation.lookup(document.getElementById('service-remediation-label')?.value || '');
+        break;
+      case 'service-remediation-apply':
+        e.preventDefault();serviceRemediation.apply();break;
+      case 'service-remediation-rollback':
+        e.preventDefault();serviceRemediation.rollback();break;
       case 'local-services-refresh':
         e.preventDefault();
         localServices.refresh();

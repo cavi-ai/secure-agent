@@ -1109,6 +1109,13 @@ struct SettingsView: View {
 
             if advisorMode == .managed {
                 Section("Managed model") {
+                    Button(setup.modelRuntimeInstalling ? "Installing runtime…" : "Install private model runtime") {
+                        Task { await setup.installModelRuntime() }
+                    }
+                    .disabled(setup.modelRuntimeInstalling)
+                    if !setup.modelRuntimeInstallStatus.isEmpty {
+                        Text(setup.modelRuntimeInstallStatus).font(.caption).foregroundStyle(.secondary)
+                    }
                     if discovery.managedModels.isEmpty {
                         Text("Daemon discovery unavailable — restart the app to refresh.")
                             .font(.caption).foregroundStyle(.secondary)

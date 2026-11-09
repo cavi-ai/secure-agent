@@ -228,6 +228,8 @@ Install the CLI from Setup's Optional capabilities. A source build places it at 
 
 For automation, see the [Unix socket API](API.md). Its peer roles and mutation restrictions also apply to CLI requests.
 
+### Review local model servers
+
 `secure-agent local-services` inventories visible TCP listeners and checks up to
 16 loopback metadata endpoints, prioritizing configured servers. It reports
 managed analysis's private transport separately. Partial inventory and omitted
@@ -247,6 +249,45 @@ whether inference or administrative routes are protected; enforcement remains
 In the console, open **Monitoring → Check local model servers** to review the
 same evidence, server-specific hardening profiles and their limits. **Recheck
 servers** obtains a fresh report; copying settings does not apply them.
+
+**Review a running service** previews and applies hardening to a selected,
+current-user macOS launchd job. Supported definitions directly run
+`mlx_lm.server`, `llama-server` or `ollama serve`; wrappers and other service
+managers require manual configuration. Review the displayed endpoint, settings,
+key-file path and affected client fields before selecting **Apply and verify**.
+The selected service restarts. Matching advisor and classifier key-file fields
+are updated without changing unrelated configuration.
+
+The CLI provides the same review and confirmation:
+
+```sh
+secure-agent local-services remediate --service-file /absolute/path/model.plist
+secure-agent local-services remediate --confirm --preview-id <id> --preview-hash <preview_hash>
+secure-agent local-services receipt --label com.example.model
+secure-agent local-services rollback --label com.example.model
+```
+
+Previews expire after five minutes and are rejected if the definition, process,
+client configuration, key or runtime changes. Verification checks listener
+ownership, foreign browser requests, and, for MLX and llama.cpp, missing/bad
+credentials on inference and administrative routes followed by one authorized
+output token using existing local weights. A result records when these checks
+passed; it is not continuous monitoring. Ollama receives browser hardening only
+and retains unauthenticated local API access. Failed verification restores the
+original files and leaves the service stopped. Rollback also leaves it stopped;
+configuration drift is refused and private originals are retained for review.
+
+On Apple Silicon macOS, select **Install private model runtime** in Settings'
+managed analysis model section, or run:
+
+```sh
+secure-agent model-runtime install
+```
+
+This requires `uv` and installs a pinned engine in Secure Agent's private model
+runtime directory. It keeps existing global tools and model caches in place and
+does not download model weights. Enabled managed analysis picks up the runtime
+after installation; select locally prepared weights in its settings.
 
 To review a profile from the CLI:
 

@@ -15,6 +15,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/internal/modelruntime"
 )
 
 // ManagedSpec selects the model served by the owned mlx-agent worker.
@@ -37,7 +39,7 @@ type managedProcess struct {
 
 func managedBinary(spec ManagedSpec) (ManagedSpec, error) {
 	if spec.Bin == "" {
-		bin, err := exec.LookPath("mlx-agent")
+		bin, err := modelruntime.Find()
 		if err != nil {
 			return spec, fmt.Errorf("mlx-agent is not installed")
 		}

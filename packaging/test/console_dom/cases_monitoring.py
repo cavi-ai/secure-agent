@@ -26,7 +26,7 @@ def run_local_services(page):
         dom = page.dom('', served=True, window_size=size, fixture={'script': 'cases_local_services.js'})
         receipt = re.search(r'data-local-services-probe="([^"]+)"', dom)
         state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
-        for name in ('onDemand', 'open', 'scope', 'gaps', 'profile', 'fits', 'failed', 'retry'):
+        for name in ('onDemand', 'open', 'scope', 'gaps', 'profile', 'fits', 'failed', 'retry', 'review', 'reviewFits', 'confirm', 'applied', 'rollback'):
             page.check(f'Local services ({label}): {name}', state.get(name) is True, str(state))
 
 

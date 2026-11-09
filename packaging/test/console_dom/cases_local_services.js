@@ -9,6 +9,15 @@
     services:[{endpoint:'http://127.0.0.1:23456',metadata:{state:'model_metadata',http_status:200},cross_origin:{state:'model_metadata',sharing:'advertised'},foreign_host:{state:'model_metadata'},findings:['Unrelated Host accepted'],enforcement:'not_assessed'}],
     hardening:[{runtime:'ollama',title:'Ollama',support:'browser_hardening_only',settings:'OLLAMA_HOST=127.0.0.1:11434\nOLLAMA_ORIGINS=',steps:['Review the existing service before restart'],verification:['Recheck every direct backend listener'],limitations:['Built-in origins remain allowed; no native local API-key enforcement'],documentation:'https://docs.ollama.com/faq'}]};
   route('/local-services',()=>{calls++;return new Response(fail?'unavailable':JSON.stringify(report),{status:fail?503:200,headers:{'Content-Type':'application/json'}});});
+  const preview={id:'reviewed-service',preview_hash:'bound-service',source:'/private/model.plist',label:'com.example.model',endpoint:'http://127.0.0.1:19001',change:{runtime:'mlx',scope:'authenticated_inference',port:19001},settings:['Use the protected gateway and Unix worker'],client_fields:['advisor.api_key_file'],warnings:['Restart interrupts active requests']};
+  let applied=false,rolledBack=false;
+  route('/local-services/remediation',async(options)=>{
+    const input=JSON.parse(options.body);
+    if(input.action==='apply')applied=input.id===preview.id&&input.preview_hash===preview.preview_hash&&Object.keys(input).length===3;
+    if(input.action==='rollback')rolledBack=input.label===preview.label;
+    const value=input.action==='preview'?preview:{...preview,state:input.action==='rollback'?'restored_stopped':'verified',verified_at:'2026-11-09T18:00:00Z',checks:['owned_loopback_listener','authorized_one_token_inference']};
+    return new Response(JSON.stringify(value),{status:200,headers:{'Content-Type':'application/json'}});
+  });
   ready().then(async()=>{
     const probe={};
     try {
@@ -32,6 +41,23 @@
       document.querySelector('[data-action="local-services-refresh"]').click();
       await wait(()=>body().textContent.includes('Unrelated Host accepted'));
       probe.retry=calls===3 && !body().querySelector('[role="alert"]');
+      document.querySelector('[data-action="service-remediation-open"]').click();
+      document.getElementById('service-remediation-source').value=preview.source;
+      document.querySelector('[data-action="service-remediation-preview"]').click();
+      await wait(()=>!!document.querySelector('[data-action="service-remediation-apply"]'));
+      probe.review=body().textContent.includes('advisor.api_key_file')&&body().textContent.includes('Unix worker')&&!applied;
+      probe.reviewFits=document.documentElement.scrollWidth<=innerWidth&&body().scrollWidth<=body().clientWidth;
+      document.querySelector('[data-action="service-remediation-apply"]').click();
+      await wait(()=>!document.getElementById('confirm-layer').hidden);
+      probe.confirm=!applied;
+      document.getElementById('confirm-ok').click();
+      await wait(()=>body().textContent.includes('Last verified'));
+      probe.applied=applied&&body().textContent.includes('authorized_one_token_inference');
+      document.querySelector('[data-action="service-remediation-rollback"]').click();
+      await wait(()=>!document.getElementById('confirm-layer').hidden);
+      document.getElementById('confirm-ok').click();
+      await wait(()=>body().textContent.includes('restored_stopped'));
+      probe.rollback=rolledBack&&body().textContent.includes('service is stopped');
     } catch(error) {probe.error=error.message;}
     document.body.dataset.localServicesProbe=JSON.stringify(probe);
   });

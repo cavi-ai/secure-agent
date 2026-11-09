@@ -51,7 +51,7 @@ function createLocalServices({ request, drawer, generation, ended, copy, toast }
           <h4>Apply through the server owner</h4>${list(profile.steps)}<h4>Verify after restart</h4>${list(profile.verification)}<h4>Limits</h4>${list(profile.limitations)}
           ${profile.documentation.startsWith('https://') ? `<p><a href="${text(profile.documentation)}" target="_blank" rel="noopener noreferrer">Runtime documentation</a></p>` : ''}</details>`;
       }
-      body += '</section>';
+      body += '</section><p><button type="button" class="btn btn-primary" data-action="service-remediation-open">Review a running service</button></p>';
     } else if (state.busy) body += '<p role="status">Checking visible listeners and local metadata…</p>';
     if (state.error) body += `<p role="alert">${text(state.error)}</p>`;
     drawer.setMode('local-services');

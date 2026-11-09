@@ -25,6 +25,11 @@ Usage:
   secure-agent doctor [--json]             Self-check: hooks, file telemetry, collectors, traces, sessions, pairing, pricing, retention, egress; exit 1 on any failure
   secure-agent local-services [--endpoint <loopback-url>] [--runtime <runtime>] [--json]  Review local model listeners and hardening profiles
   secure-agent local-services create-key <absolute-path>  Create an owner-only model API key without overwriting files
+  secure-agent model-runtime install  Install the pinned private model runtime without changing global tools
+  secure-agent local-services remediate --service-file <path>  Preview hardening of an owned launchd model service
+  secure-agent local-services remediate --confirm --preview-id <id> --preview-hash <hash>  Apply and verify the reviewed change
+  secure-agent local-services rollback --label <label>  Restore original settings and leave the service stopped
+  secure-agent local-services receipt --label <label>  Read the last remediation result
   secure-agent worktrees [--state S] [--repo R] [--stale] [--refresh] [--json]  Find every git worktree and say whether it can be removed (remove|review|keep|prune) and why
   secure-agent worktrees add|hide <path>   Put a repository on the worktree hunter's saved list, or hide it from reports
   secure-agent worktrees remove <path>     Remove a worktree whose fresh verdict is remove (git worktree remove, never --force; the branch stays)

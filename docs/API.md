@@ -1043,6 +1043,39 @@ The environment that routes Claude Code through the proxy, for the menu bar app 
 
 `ready` is false, with a `reason`, while the proxy is off, not yet bound, or without its token or snippet. `/status` carries `proxy_tunneled` and `proxy_decrypted`: routed CONNECTs since start, tunneled unopened and decrypted. See CONFIGURATION.md, Routing modes.
 
+### `POST /local-services/remediation`
+
+Owner/UI-only, NoAgent and mutation-gated service hardening for current-user
+macOS launchd jobs. Requests are strict JSON, limited to 8 KiB:
+
+- Preview: `{"action":"preview","source":"/absolute/path/model.plist"}`.
+- Apply: `{"action":"apply","id":"<id>","preview_hash":"<preview_hash>"}`.
+- Rollback: `{"action":"rollback","label":"com.example.model"}`.
+
+Preview reads the running job and definition without modifying them. It returns
+an expiring identity, source, label, endpoint, runtime and protection scope,
+settings, affected client fields and restart warnings. Apply consumes that
+identity and refuses changed inputs. Direct MLX-LM and llama.cpp jobs receive
+authenticated inference; Ollama receives browser hardening only.
+
+Successful apply returns a `verified` receipt with `verified_at` and named
+checks. Verification uses existing local weights for one authorized output
+token where authentication is supported. It checks visible listener ownership
+and direct TCP backends. Missing listener evidence prevents verification.
+Failures return HTTP 409 with `error` and a receipt when available. Original
+files are restored with the service stopped, or `rollback_required` retains
+private originals if safe restoration is unavailable. Rollback refuses drift,
+restores original file contents and modes, and leaves the service stopped.
+Neither action automatically starts the unprotected original.
+
+### `GET /local-services/receipt`
+
+Requires exactly one `?label=<service-label>` and the owner/UI NoAgent gate.
+Returns the last saved remediation receipt; HTTP 404 means it is unavailable.
+Receipts contain hashes and check names, never key contents or raw arguments.
+A saved verification timestamp describes that operation, not current service
+health or continuous protection. See [service hardening](USAGE.md#review-local-model-servers).
+
 ### `GET /local-services`
 
 On-demand assessment of local model metadata routes and visible TCP listeners.

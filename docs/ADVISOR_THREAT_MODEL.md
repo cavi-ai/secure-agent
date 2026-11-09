@@ -29,9 +29,12 @@ connections to existing model servers require loopback HTTP endpoints.
 
 ## Managed runtime setup
 
-Install `mlx-agent` with its MLX-LM runtime, for example
-`uv tool install mlx-agent --with mlx-lm`, and prepare the chosen model in the
-local Hugging Face cache or set `advisor.managed_model` to an existing local model directory. The
+Use `secure-agent model-runtime install` or Settings' managed model installation
+button on Apple Silicon macOS. The installer requires `uv`, pins the engine
+source and MLX dependencies, and checks both private-serving capabilities before
+marking its private environment ready. Existing global tools and model caches
+remain in place. Prepare the chosen model in the local Hugging Face cache or
+set `advisor.managed_model` to an existing local model directory. The
 worker uses offline runtime settings and does not download weights. It starts
 on the first analysis request and exits after two idle minutes. It serves only
 text chat for its configured model; request-selected models, adapters, remote
@@ -42,6 +45,17 @@ other processes already running as that user.
 `secure-agent local-services` reports the managed worker's state and private
 transport separately from HTTP metadata observations of other local services.
 Protection of an existing server remains specific to that server's configuration.
+
+Owner-requested remediation is separate from metadata assessment. It accepts
+only identified, direct current-user launchd definitions and binds confirmation
+to the file, live process, client configuration, key and runtime identities.
+MLX uses a protected loopback gateway with a Unix worker; llama.cpp uses native
+key-file authentication. Ollama remains unauthenticated locally and is verified
+only for browser hardening. A verification receipt records bounded checks at
+that time, not continuous enforcement or isolation from the same Unix user.
+Rollback refuses configuration drift, preserves private originals when recovery
+is blocked, and leaves restored services stopped. Other launchers and runtimes
+require their owners to configure and verify protection.
 
 ## What the model sees
 
