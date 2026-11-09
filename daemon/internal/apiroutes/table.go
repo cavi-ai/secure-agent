@@ -151,7 +151,7 @@ var Table = []Route{
 	{Path: "/cleanup/clean", Handler: "API.handleCleanupClean", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/cleanup/advise", Handler: "API.handleCleanupAdvise", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/advisor/discover", Handler: "API.handleAdvisorDiscover"},
-	{Path: "/local-services", Handler: "API.handleLocalServices", OwnerOnly: true, NoAgent: true},
+	{Path: "/local-services", Handler: "API.handleLocalServices", Console: true, NoAgent: true},
 	{Path: "/fleet", Handler: "API.handleFleet", Response: "api.FleetNodeStatus", Console: true},
 	{Path: "/kill", Handler: "API.handleKill", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/firewall/mode", Handler: "API.handleFirewallMode", Console: true, MutatingMethods: []string{"POST"}},

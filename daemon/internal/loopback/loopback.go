@@ -2,12 +2,42 @@
 package loopback
 
 import (
+	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 )
+
+var modelTransport = func() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, errors.New("invalid local model address")
+		}
+		hosts := []string{host}
+		if strings.EqualFold(host, "localhost") {
+			hosts = []string{"127.0.0.1", "::1"}
+		}
+		for _, literal := range hosts {
+			ip := net.ParseIP(literal)
+			if ip == nil || !ip.IsLoopback() {
+				return nil, errors.New("non-loopback model connection refused")
+			}
+			var conn net.Conn
+			conn, err = (&net.Dialer{Timeout: 300 * time.Millisecond}).DialContext(ctx, network, net.JoinHostPort(literal, port))
+			if err == nil {
+				return conn, nil
+			}
+		}
+		return nil, err
+	}
+	return transport
+}()
 
 // ValidEndpoint accepts only HTTP model endpoints on a literal loopback
 // address or localhost. Credentials, queries and fragments do not belong in
@@ -30,7 +60,8 @@ func ValidEndpoint(endpoint string) bool {
 // chat POST and its private prompt to a different host.
 func Client(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: modelTransport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

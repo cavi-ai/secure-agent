@@ -480,16 +480,18 @@ func setupAdvisor(cfg config.Config, st *store.Store, deltaHub *api.DeltaHub, po
 		sink = &verdictPublishingSink{Store: st, deltaHub: deltaHub, postureChanged: postureChanged}
 	}
 	sub := advisor.New(advisor.Config{
-		Enabled:            cfg.Advisor.Enabled,
-		Transport:          transport,
-		Ollama:             !cfg.Advisor.Managed && (cfg.Advisor.Protocol == "ollama" || (cfg.Advisor.Protocol == "" && strings.HasSuffix(strings.TrimRight(endpoint, "/"), ":11434"))),
-		Endpoint:           endpoint,
-		Model:              model,
-		Timeout:            cfg.Advisor.Timeout,
-		Mask:               mask,
-		ClassifierEndpoint: cfg.Advisor.ClassifierEndpoint,
-		ClassifierModel:    cfg.Advisor.ClassifierModel,
-		Debug:              cfg.Advisor.Debug,
+		Enabled:              cfg.Advisor.Enabled,
+		Transport:            transport,
+		Ollama:               !cfg.Advisor.Managed && (cfg.Advisor.Protocol == "ollama" || (cfg.Advisor.Protocol == "" && strings.HasSuffix(strings.TrimRight(endpoint, "/"), ":11434"))),
+		Endpoint:             endpoint,
+		APIKeyFile:           cfg.Advisor.APIKeyFile,
+		Model:                model,
+		Timeout:              cfg.Advisor.Timeout,
+		Mask:                 mask,
+		ClassifierEndpoint:   cfg.Advisor.ClassifierEndpoint,
+		ClassifierAPIKeyFile: cfg.Advisor.ClassifierAPIKeyFile,
+		ClassifierModel:      cfg.Advisor.ClassifierModel,
+		Debug:                cfg.Advisor.Debug,
 	}, sink)
 	if sub != nil {
 		log.Printf("advisor: local triage enabled via %s (model %q)", endpoint, model)

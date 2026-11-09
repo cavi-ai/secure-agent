@@ -130,6 +130,7 @@ directory_guard:
     enabled: false
     mode: observe
     endpoint: ""
+    api_key_file: "" # optional absolute owner-only bearer key file
     model: "kev-latest"
     timeout_ms: 1000
 
@@ -149,9 +150,11 @@ resource_control:
 advisor:
   enabled: false                    # opt in after serving a local model
   endpoint: "http://127.0.0.1:8080" # must be loopback — anything else is rejected
+  api_key_file: ""                  # optional absolute owner-only bearer key file for an existing server
   model: ""                         # model name the server expects
   timeout_ms: 60000                 # includes cold model load and the bounded tool loop
   classifier_endpoint: ""          # optional loopback Kev /v1/systemone service
+  classifier_api_key_file: ""      # optional private bearer key file for that classifier
   classifier_model: "kev-latest"
   debug: false                     # task/tool sizes and timings; excludes all prompt/reply text
   # Managed mode: the daemon spawns + supervises the model server itself

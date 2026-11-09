@@ -228,8 +228,10 @@ Install the CLI from Setup's Optional capabilities. A source build places it at 
 
 For automation, see the [Unix socket API](API.md). Its peer roles and mutation restrictions also apply to CLI requests.
 
-`secure-agent local-services` checks known model ports and enabled configured model
-HTTP endpoints, and reports managed analysis's private transport separately. To select other existing
+`secure-agent local-services` inventories visible TCP listeners and checks up to
+16 loopback metadata endpoints, prioritizing configured servers. It reports
+managed analysis's private transport separately. Partial inventory and omitted
+endpoint counts stay visible. To select other existing
 servers, repeat `--endpoint`, for example:
 
 ```sh
@@ -241,5 +243,36 @@ the service. It reports anonymous metadata responses, advertised cross-origin
 sharing, and responses to an unrelated Host header. Authentication failures and
 unavailable candidates remain visible. These observations do not establish
 whether inference or administrative routes are protected; enforcement remains
-**not assessed**. This command is owner-only and unavailable to agent processes.
-See the [assessment contract and limits](API.md#get-local-services).
+**not assessed**. Assessments require the owner/UI and refuse agent processes.
+In the console, open **Monitoring → Check local model servers** to review the
+same evidence, server-specific hardening profiles and their limits. **Recheck
+servers** obtains a fresh report; copying settings does not apply them.
+
+To review a profile from the CLI:
+
+```sh
+secure-agent local-services --runtime llama.cpp
+secure-agent local-services --runtime mlx
+secure-agent local-services --runtime ollama
+secure-agent local-services --runtime openai-compatible
+```
+
+Create an owner-only random API key without printing it or overwriting a file:
+
+```sh
+secure-agent local-services create-key /absolute/private/directory/model-api.key
+```
+
+The parent directory must already exist. Apply the selected profile through the
+server's existing owner/service manager and update its clients. Native key-file
+authentication is supported by llama.cpp and the protected MLX gateway; an
+existing Secure Agent advisor can use `advisor.api_key_file`. Classifier clients
+have separate key-file settings. See [model authentication](CONFIGURATION.md#model-api-key-files).
+
+Ollama's profile is browser hardening only: its origin list is additive and its
+local API does not enforce API keys. A gateway does not secure a reachable raw
+backend. Unidentified runtimes require manual review and remain unassessed.
+After a restart, recheck every direct IPv4/IPv6 listener and verify missing/bad
+credentials fail before inference and administrative actions while an authorized
+client still works. This metadata-only assessment does not perform those
+inference checks. See the [assessment contract and limits](API.md#get-local-services).

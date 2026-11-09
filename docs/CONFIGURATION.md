@@ -535,9 +535,11 @@ preserves the timeout, classifier and debug settings.
 advisor:
   enabled: false
   endpoint: "http://127.0.0.1:8080" # existing local server
+  api_key_file: ""                 # optional absolute private bearer-key file
   model: ""                       # the server's served chat model
   timeout_ms: 60000                # whole triage task, including tools and loading
   classifier_endpoint: ""         # optional running Kev service, e.g. http://127.0.0.1:8009
+  classifier_api_key_file: ""     # separate optional private bearer-key file
   classifier_model: "kev-latest"
   debug: false                    # request sizes, tool names and timings only
 ```
@@ -548,6 +550,29 @@ not accuracy. Debug entries appear in `~/Library/Logs/secure-agent/daemon-err.lo
 which **Open daemon log** opens. Evidence, prompts and replies are excluded.
 See [advisor boundaries](ADVISOR_THREAT_MODEL.md) for managed-model setup and
 context/tool budgets.
+
+### Model API key files
+
+Existing bearer-authenticated model servers can use `advisor.api_key_file`,
+`advisor.classifier_api_key_file`, and `directory_guard.shell_review.api_key_file`.
+Each is an optional absolute file path. Files must be owned by the daemon's
+user, regular, singly linked, not symlinks, and inaccessible to group/other
+users. One 32–256 character URL-safe key is accepted; use `secure-agent
+local-services create-key <absolute-path>` to create a mode-0600 random key
+without printing it or replacing a file.
+
+Clients reopen and validate the file before each request. An unavailable or
+unsafe key prevents the request; there is no anonymous fallback. Requests ignore
+proxy environment variables, pin localhost to numeric loopback while retaining
+the HTTP/TLS hostname, and refuse redirects. Key contents are excluded from
+configuration, status, assessment requests and browser storage. A key for the
+advisor does not configure the classifier or other clients.
+
+Managed analysis uses private Unix transport and rejects `advisor.api_key_file`.
+These settings do not add authentication to a server: enable its native
+authentication separately. Ollama local chat and dispatched harnesses retain
+their own client configuration; Ollama's local API has no native key enforcement.
+See [local service review](USAGE.md#use-the-cli) for server-owner profiles.
 
 ### `system_agent` (Map)
 

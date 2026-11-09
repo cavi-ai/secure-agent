@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/internal/localservice"
 )
@@ -47,12 +51,33 @@ func TestLocalServicesCommandPreservesExplicitTargetsAndUncertainty(t *testing.T
 	}
 }
 
+func TestLocalServicesCreatesPrivateKeyWithoutDaemonOrDisclosure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "model.key")
+	var out bytes.Buffer
+	if err := runLocalServices(nil, []string{"create-key", path}, &out); err != nil {
+		t.Fatal(err)
+	}
+	key, err := os.ReadFile(path)
+	if err != nil || len(strings.TrimSpace(string(key))) < 32 || strings.Contains(out.String(), strings.TrimSpace(string(key))) {
+		t.Fatal("CLI did not create a private, undisclosed key")
+	}
+	if err := runLocalServices(nil, []string{"create-key", path}, &out); err == nil {
+		t.Fatal("CLI overwrote an existing key")
+	}
+	if err := runLocalServices(nil, []string{"--runtime", "unknown"}, &out); err == nil {
+		t.Fatal("unknown hardening runtime accepted")
+	}
+}
+
 type localServiceTestTransport struct {
 	base string
 	next http.RoundTripper
 }
 
 func (tr localServiceTestTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if deadline, ok := r.Context().Deadline(); !ok || time.Until(deadline) < 7*time.Second {
+		return nil, fmt.Errorf("assessment timeout cannot cover inventory and metadata deadlines")
+	}
 	clone := r.Clone(r.Context())
 	u := *r.URL
 	u.Scheme = "http"

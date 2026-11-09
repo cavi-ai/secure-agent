@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/internal/localservice"
 )
@@ -21,8 +22,19 @@ func handleLocalServices(client *http.Client, args []string) {
 }
 
 func runLocalServices(client *http.Client, args []string, out io.Writer) error {
+	if len(args) != 0 && args[0] == "create-key" {
+		if len(args) != 2 {
+			return errors.New("usage: secure-agent local-services create-key <absolute-path>")
+		}
+		if err := localservice.CreateKeyFile(args[1]); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintln(out, "Created an owner-only model API key file. Key contents were not printed.")
+		return err
+	}
 	query := url.Values{}
 	asJSON := false
+	runtime := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--json":
@@ -33,11 +45,26 @@ func runLocalServices(client *http.Client, args []string, out io.Writer) error {
 				return errors.New("--endpoint requires a loopback HTTP base URL")
 			}
 			query.Add("endpoint", args[i])
+		case "--runtime":
+			i++
+			if i >= len(args) {
+				return errors.New("--runtime requires ollama, llama.cpp, mlx or openai-compatible")
+			}
+			for _, profile := range localservice.HardeningProfiles() {
+				if profile.Runtime == args[i] {
+					runtime = args[i]
+				}
+			}
+			if runtime != args[i] {
+				return errors.New("unsupported hardening runtime; use ollama, llama.cpp, mlx or openai-compatible")
+			}
 		default:
-			return errors.New("usage: secure-agent local-services [--endpoint <loopback-url>] [--json]")
+			return errors.New("usage: secure-agent local-services [--endpoint <loopback-url>] [--runtime <runtime>] [--json]")
 		}
 	}
-	code, body := request(client, http.MethodGet, "http://unix/local-services?"+query.Encode(), "")
+	assessmentClient := *client
+	assessmentClient.Timeout = 8 * time.Second // native inventory (2s) + metadata (4s) + response
+	code, body := request(&assessmentClient, http.MethodGet, "http://unix/local-services?"+query.Encode(), "")
 	if code != http.StatusOK {
 		return fmt.Errorf("local service assessment failed (%d): %s", code, terminalSafe(strings.TrimSpace(body)))
 	}
@@ -53,6 +80,16 @@ func runLocalServices(client *http.Client, args []string, out io.Writer) error {
 	fmt.Fprintf(&b, "Scope: %s\nEnforcement: not assessed\n", terminalSafe(report.Scope))
 	if report.Managed != nil {
 		fmt.Fprintf(&b, "Managed advisor: %s; %s; %s\n", terminalSafe(report.Managed.State), terminalSafe(report.Managed.Transport), terminalSafe(report.Managed.Enforcement))
+	}
+	if report.Inventory != nil {
+		fmt.Fprintf(&b, "Listener inventory: %s; %d visible listeners; truncated: %t\n", terminalSafe(report.Inventory.State), len(report.Inventory.Listeners), report.Inventory.Truncated)
+		fmt.Fprintf(&b, "Inventory scope: %s\n", terminalSafe(report.Inventory.Scope))
+		for _, listener := range report.Inventory.Listeners {
+			fmt.Fprintf(&b, "  PID %d %s %s (%s; runtime hint: %s)\n", listener.PID, terminalSafe(listener.Command), terminalSafe(listener.Address), terminalSafe(listener.Binding), terminalSafe(listener.Runtime))
+		}
+	}
+	if report.Omitted > 0 {
+		fmt.Fprintf(&b, "Not probed: %d additional endpoint candidates; select them with --endpoint.\n", report.Omitted)
 	}
 	for _, service := range report.Services {
 		fmt.Fprintf(&b, "\n%s\n", terminalSafe(service.Endpoint))
@@ -71,6 +108,17 @@ func runLocalServices(client *http.Client, args []string, out io.Writer) error {
 		}
 		for _, finding := range service.Findings {
 			fmt.Fprintf(&b, "  Review: %s\n", terminalSafe(finding))
+		}
+	}
+	if runtime != "" {
+		for _, profile := range localservice.HardeningProfiles() {
+			if profile.Runtime != runtime {
+				continue
+			}
+			fmt.Fprintf(&b, "\nHardening profile: %s (%s); not applied\n%s\n", profile.Title, profile.Support, profile.Settings)
+			for _, step := range append(append(append([]string{}, profile.Steps...), profile.Verification...), profile.Limitations...) {
+				fmt.Fprintf(&b, "  %s\n", step)
+			}
 		}
 	}
 	_, err := io.WriteString(out, b.String())

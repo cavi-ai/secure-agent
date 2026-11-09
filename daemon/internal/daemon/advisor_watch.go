@@ -340,7 +340,7 @@ func resourceConfigKey(c config.ResourceControlConfig) string {
 // only swaps when something meaningful changed (not on every file touch).
 func advisorConfigKey(a config.AdvisorConfig) string {
 	return a.Protocol + "|" + a.Endpoint + "|" + a.Model + "|" + a.ManagedModel + "|" +
-		boolStr(a.Enabled) + "|" + boolStr(a.Managed) + "|" + a.Timeout.String() + "|" + a.ClassifierEndpoint + "|" + a.ClassifierModel + "|" + boolStr(a.Debug)
+		boolStr(a.Enabled) + "|" + boolStr(a.Managed) + "|" + a.Timeout.String() + "|" + a.ClassifierEndpoint + "|" + a.ClassifierModel + "|" + boolStr(a.Debug) + "|" + a.APIKeyFile + "|" + a.ClassifierAPIKeyFile
 }
 
 // fleetConfigKey fingerprints the fleet-relevant config (webhooks, identity,

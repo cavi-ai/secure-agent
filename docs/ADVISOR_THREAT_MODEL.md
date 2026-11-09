@@ -147,3 +147,27 @@ reading convenience — the underlying evidence is always one click deeper.
    bound to that port could serve crafted verdicts — but that process
    already runs as the user, which is a strictly stronger position than
    crafting verdicts.
+
+### Existing model server hardening
+
+The CLI and Monitoring console can inspect bounded metadata observations and
+visible TCP listeners without loading models or changing running services.
+Server-owner profiles describe native key-file authentication for llama.cpp,
+protected MLX serving, and browser hardening limits for Ollama. Existing advisor
+and classifier clients can read separate owner-only bearer-key files. Metadata
+refusals do not prove authentication on inference or administrative routes.
+
+The inspection proxy handles explicitly routed HTTP traffic. It does not
+intercept unrelated browser connections to local servers, and a gateway cannot
+secure an independently reachable raw backend. Binding to loopback or removing
+CORS sharing alone does not establish authentication. Ollama's origin setting
+adds to built-in allowed origins; its local API does not enforce API keys.
+Unsupported services remain unassessed until the server owner verifies the
+actual native controls and every direct listener.
+
+Transparent per-flow filtering is not part of this protection surface. On
+macOS, [Network Extension content filters](https://developer.apple.com/documentation/networkextension/content-filter-providers)
+use a separate provider architecture and require the
+[Network Extensions entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.networking.networkextension).
+Such a component needs its own distribution and supported-OS validation,
+including direct loopback and IPv6 bypass checks, before it can claim coverage.

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -24,14 +25,18 @@ var ErrQueueFull = errors.New("shell review queue full")
 var ErrDisabled = errors.New("shell review disabled")
 
 type Config struct {
-	Enabled   bool   `yaml:"enabled"`
-	Mode      string `yaml:"mode"`
-	Endpoint  string `yaml:"endpoint"`
-	Model     string `yaml:"model"`
-	TimeoutMS int    `yaml:"timeout_ms"`
+	Enabled    bool   `yaml:"enabled"`
+	Mode       string `yaml:"mode"`
+	Endpoint   string `yaml:"endpoint"`
+	APIKeyFile string `yaml:"api_key_file"`
+	Model      string `yaml:"model"`
+	TimeoutMS  int    `yaml:"timeout_ms"`
 }
 
 func (c Config) Validate() error {
+	if c.APIKeyFile != "" && (!filepath.IsAbs(c.APIKeyFile) || len(c.APIKeyFile) > 4096) {
+		return errors.New("directory_guard.shell_review.api_key_file must be an absolute key-file path")
+	}
 	if c.Mode != "" && c.Mode != "observe" && c.Mode != "block" {
 		return errors.New("directory_guard.shell_review.mode must be observe or block")
 	}

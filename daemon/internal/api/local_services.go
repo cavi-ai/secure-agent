@@ -16,7 +16,7 @@ func (a *API) localServiceTargets(explicit []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	targets := localservice.DefaultEndpoints()
+	targets := []string{}
 	if cfg.Advisor.Enabled {
 		if !cfg.Advisor.Managed {
 			targets = append(targets, cfg.Advisor.Endpoint)
@@ -55,7 +55,12 @@ func (a *API) handleLocalServices(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "configured model endpoints unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	report, err := localservice.Assess(r.Context(), targets)
+	var report localservice.Report
+	if len(query["endpoint"]) != 0 {
+		report, err = localservice.Assess(r.Context(), targets)
+	} else {
+		report, err = localservice.AssessDiscovered(r.Context(), targets)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

@@ -1,5 +1,5 @@
-// Package localservice assesses HTTP metadata on explicitly selected local
-// model endpoints. It does not authenticate, generate, configure or enforce.
+// Package localservice reviews local model exposure and provides private
+// credential-file support. Assessment never generates or changes servers.
 package localservice
 
 import (
@@ -30,6 +30,9 @@ type Report struct {
 	Enforcement string          `json:"enforcement"`
 	Services    []Assessment    `json:"services"`
 	Managed     *ManagedRuntime `json:"managed,omitempty"`
+	Inventory   *Inventory      `json:"inventory,omitempty"`
+	Omitted     int             `json:"omitted_endpoints"`
+	Hardening   []Hardening     `json:"hardening"`
 }
 
 // ManagedRuntime reports the supervised advisor transport separately from
@@ -66,7 +69,7 @@ func DefaultEndpoints() []string {
 // Assess checks at most 16 endpoints with four concurrent workers and a
 // four-second overall deadline. All targets are validated before any request.
 func Assess(ctx context.Context, endpoints []string) (Report, error) {
-	report := Report{GeneratedAt: time.Now().UTC(), Scope: "selected loopback model metadata routes only; listener inventory, inference and administrative routes are not assessed", Enforcement: "not_assessed", Services: []Assessment{}}
+	report := Report{GeneratedAt: time.Now().UTC(), Scope: "selected loopback model metadata routes only; inference and administrative routes are not assessed", Enforcement: "not_assessed", Services: []Assessment{}, Hardening: HardeningProfiles()}
 	if len(endpoints) == 0 || len(endpoints) > MaxEndpoints {
 		return report, errors.New("select between 1 and 16 loopback endpoints")
 	}

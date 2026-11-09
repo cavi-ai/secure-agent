@@ -92,3 +92,11 @@
 .monitoring-diagnostic-check { padding: 12px 0; border-top: 1px solid var(--line); }
 .monitoring-diagnostic-check p { color: var(--tx-2); margin: 6px 0 0; }
 .monitoring-diagnostic-error { color: var(--bad); }
+/* Local server review stays on demand and uses the shared detail drawer. */
+.local-service-entry { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.local-service-entry p { margin: 0; color: var(--tx-2); }
+.local-service-profile, .local-service-inventory { margin-block: 12px; }
+.local-service-profile summary, .local-service-inventory summary { cursor: pointer; padding-block: 8px; }
+.local-service-profile pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.local-service-profile li { margin-block: 8px; }
+.local-service-inventory p { overflow-wrap: anywhere; }

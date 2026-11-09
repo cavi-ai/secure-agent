@@ -1045,15 +1045,19 @@ The environment that routes Claude Code through the proxy, for the menu bar app 
 
 ### `GET /local-services`
 
-On-demand assessment of selected local model metadata routes. Owner-only on
-the Unix socket; agent processes and the browser console cannot call it.
+On-demand assessment of local model metadata routes and visible TCP listeners.
+Available to the owner/UI on the Unix socket and the authenticated console;
+the NoAgent gate refuses agent processes on both surfaces.
 Repeat `?endpoint=<loopback-base-url>` to select explicit services. Without
-explicit endpoints, candidates are loopback ports 11434, 8080, 8799, 8081,
-1234 and 8084 and enabled configured advisor/classifier/chat/shell-review
-HTTP endpoints. Managed analysis has no HTTP endpoint to probe.
+explicit endpoints, selection prioritizes enabled configured advisor/classifier/
+chat/shell-review HTTP endpoints, named model listeners, known model ports
+(11434, 8080, 8799, 8081, 1234, 8084), then other visible local listeners.
+An explicit selection does not expand to other endpoints. Managed analysis
+has no HTTP endpoint to probe.
 
 The response contains `generated_at`, `scope`, `enforcement: "not_assessed"`
-and `services`. Each service contains `endpoint`, `metadata`, `cross_origin`,
+and `services`. `omitted_endpoints` counts additional distinct candidates beyond
+the 16-endpoint limit; use explicit endpoints to assess them. Each service contains `endpoint`, `metadata`, `cross_origin`,
 `foreign_host`, `findings` and `enforcement: "not_assessed"`. Each probe records
 `state`, an HTTP status when available, and CORS `sharing` for an answered
 cross-origin metadata probe. Credential-required and unavailable candidates
@@ -1063,6 +1067,21 @@ An optional `managed` object separately reports the supervised advisor's
 `state`, `transport`, `enforcement` and `scope`. Its private Unix transport
 applies only to that worker. Reading its state does not start a model; an
 unavailable compatible runtime is reported as unavailable.
+
+For automatic discovery, `inventory` contains `state` (`available`, `partial`
+or `unavailable`), `scope`, `truncated` and up to 128 visible TCP `listeners`.
+Each listener records PID, process name, address, binding (`loopback`, `wildcard`
+or `non_loopback`), an unverified `runtime_hint`, and a loopback candidate URL
+when applicable. Non-loopback addresses are listed but never dialed. Inventory
+reads no command arguments, environment, model paths or credentials. It invokes
+native `lsof` with a two-second deadline and 64 KiB output limit. Permissions,
+containers and limits can hide listeners; missing tools and partial scans are
+reported explicitly. Inventory availability is not proof of exhaustive coverage.
+
+`hardening` contains server-owner profiles for Ollama, llama.cpp, owned MLX
+serving and unidentified OpenAI-compatible servers. Each includes settings,
+application steps, verification, limitations and runtime documentation. Profiles
+are instructions, not applied configuration or evidence of protection.
 
 Probes send only `GET /v1/models` (or `/models` for a base ending in `/v1`).
 For an identified metadata response, two further GETs vary Origin and Host
@@ -1074,7 +1093,7 @@ metadata body. Limits: 16 supplied endpoints, four concurrent assessments,
 
 Observations cover only these metadata routes. They do not demonstrate an
 inference authorization bypass, browser exploit, DNS rebinding exploit,
-listener inventory, or protection of the service. Servers are not reconfigured,
+or protection of the service. Servers are not reconfigured,
 started, stopped or asked to generate. Invalid target/query input returns 400;
 unreadable configured targets return 503 rather than falling back silently.
 

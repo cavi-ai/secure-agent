@@ -51,3 +51,21 @@ func TestClientDoesNotReplayPromptOnRedirect(t *testing.T) {
 		t.Fatalf("redirect status %d, forwarded %d times", resp.StatusCode, forwarded.Load())
 	}
 }
+
+func TestClientPinsLocalhostAndRefusesRemoteDials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Host, "localhost:") {
+			t.Error("HTTP Host changed while pinning the connection")
+		}
+		w.WriteHeader(204)
+	}))
+	defer server.Close()
+	response, err := Client(time.Second).Get(strings.Replace(server.URL, "127.0.0.1", "localhost", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if _, err := Client(time.Second).Get("http://example.invalid"); err == nil {
+		t.Fatal("remote model connection accepted")
+	}
+}

@@ -24,8 +24,8 @@ func TestLocalServicesUsesExplicitEndpointsWithoutChangingConfiguration(t *testi
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &report) != nil || len(report.Services) != 1 || report.Services[0].Metadata.State != "access_refused" {
 		t.Fatalf("endpoint disappeared: %d %s", w.Code, w.Body.String())
 	}
-	if !apiroutes.IsOwnerOnly("/local-services") || !apiroutes.IsNoAgent("/local-services") || apiroutes.ConsoleAllowed("GET", "/local-services") {
-		t.Fatal("assessment must remain owner-only on the Unix socket")
+	if !apiroutes.IsNoAgent("/local-services") || !apiroutes.ConsoleAllowed("GET", "/local-services") {
+		t.Fatal("console assessment must require the existing NoAgent peer gate")
 	}
 	for _, target := range []string{"/local-services?endpoint=http://example.com", "/local-services?unexpected=true"} {
 		w = httptest.NewRecorder()

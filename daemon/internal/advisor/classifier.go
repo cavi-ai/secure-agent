@@ -11,6 +11,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/decision"
 	"github.com/cavi-ai/secure-agent/daemon/internal/loopback"
+	"github.com/cavi-ai/secure-agent/internal/localservice"
 )
 
 // Classification can choose what to inspect, never decide whether a finding
@@ -61,6 +62,9 @@ func (s *Subscriber) classifyEvidence(ctx context.Context, evidence string) (res
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(s.cfg.ClassifierEndpoint, "/")+"/v1/systemone", bytes.NewReader(body))
 	if err != nil {
+		return unavailable, nil
+	}
+	if err := localservice.Authorize(req, s.cfg.ClassifierAPIKeyFile); err != nil {
 		return unavailable, nil
 	}
 	req.Header.Set("Content-Type", "application/json")

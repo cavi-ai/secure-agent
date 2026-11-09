@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/loopback"
+	"github.com/cavi-ai/secure-agent/internal/localservice"
 )
 
 type ClassifierHealth struct {
@@ -49,7 +50,11 @@ func (s *Subscriber) ClassifierStatus(ctx context.Context) ClassifierHealth {
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(s.cfg.ClassifierEndpoint, "/")+"/v1/models", nil)
-	resp, err := loopback.Client(time.Second).Do(req)
+	var resp *http.Response
+	err := localservice.Authorize(req, s.cfg.ClassifierAPIKeyFile)
+	if err == nil {
+		resp, err = loopback.Client(time.Second).Do(req)
+	}
 	state := "unavailable"
 	if err == nil {
 		defer resp.Body.Close()

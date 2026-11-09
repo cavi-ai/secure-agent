@@ -7,8 +7,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- Local services: assess selected model metadata endpoints from the CLI, including configured servers and the running managed advisor, without loading models or changing services.
+- Local services: review bounded listener inventory, model metadata exposure and server-specific hardening profiles from the CLI and Monitoring console without loading models or changing servers.
 - Managed analysis: use mlx-agent over a private Unix socket with locally prepared weights, protocol checks and no model TCP listener.
+- Existing model servers: authenticate advisor and classifier requests with owner-only key files; create keys without printing them or replacing existing files.
 
 ## [1.5.4] - 2026-11-07
 
