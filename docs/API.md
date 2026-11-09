@@ -1043,6 +1043,37 @@ The environment that routes Claude Code through the proxy, for the menu bar app 
 
 `ready` is false, with a `reason`, while the proxy is off, not yet bound, or without its token or snippet. `/status` carries `proxy_tunneled` and `proxy_decrypted`: routed CONNECTs since start, tunneled unopened and decrypted. See CONFIGURATION.md, Routing modes.
 
+### `GET /local-services`
+
+On-demand assessment of selected local model metadata routes. Owner-only on
+the Unix socket; agent processes and the browser console cannot call it.
+Repeat `?endpoint=<loopback-base-url>` to select explicit services. Without
+explicit endpoints, candidates are loopback ports 11434, 8080, 8799, 8081,
+1234 and 8084, enabled configured advisor/classifier/chat/shell-review
+endpoints, and the currently running managed advisor endpoint. Reading the
+managed endpoint does not start its model.
+
+The response contains `generated_at`, `scope`, `enforcement: "not_assessed"`
+and `services`. Each service contains `endpoint`, `metadata`, `cross_origin`,
+`foreign_host`, `findings` and `enforcement: "not_assessed"`. Each probe records
+`state`, an HTTP status when available, and CORS `sharing` for an answered
+cross-origin metadata probe. Credential-required and unavailable candidates
+remain in the report; neither establishes service identity or protection.
+
+Probes send only `GET /v1/models` (or `/models` for a base ending in `/v1`).
+For an identified metadata response, two further GETs vary Origin and Host
+separately using a synthetic `.invalid` name. This name is never resolved.
+Requests carry no credentials or cookies, ignore proxy environment variables,
+never follow redirects, dial only literal loopback addresses, and retain no
+metadata body. Limits: 16 supplied endpoints, four concurrent assessments,
+500 ms per request, 64 KiB per response body, and a four-second overall deadline.
+
+Observations cover only these metadata routes. They do not demonstrate an
+inference authorization bypass, browser exploit, DNS rebinding exploit,
+listener inventory, or protection of the service. Servers are not reconfigured,
+started, stopped or asked to generate. Invalid target/query input returns 400;
+unreadable configured targets return 503 rather than falling back silently.
+
 ### `GET /advisor/discover`
 
 What the menubar's advisor setup renders from; loopback only, nothing is downloaded.

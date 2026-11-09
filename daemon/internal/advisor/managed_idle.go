@@ -36,6 +36,18 @@ func NewManagedTransport(spec ManagedSpec) (*ManagedTransport, error) {
 	return &ManagedTransport{spec: spec, base: http.DefaultTransport, idle: 2 * time.Minute}, nil
 }
 func (m *ManagedTransport) loaded() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.cmd != nil }
+
+// RunningEndpoint names the current managed listener without starting a
+// model. It is empty while unloaded, stopping or closed.
+func (m *ManagedTransport) RunningEndpoint() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cmd == nil || m.stopping || m.closed {
+		return ""
+	}
+	return m.endpoint
+}
+
 func (m *ManagedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Method != "POST" || req.URL.Path != "/v1/chat/completions" {
 		return nil, fmt.Errorf("managed model accepts inference only")

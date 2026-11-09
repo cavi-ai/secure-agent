@@ -6,6 +6,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Local services: assess selected model metadata endpoints from the CLI, including configured servers and the running managed advisor, without loading models or changing services.
+
 ## [1.5.4] - 2026-11-07
 
 ### Added

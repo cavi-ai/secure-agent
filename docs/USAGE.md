@@ -210,6 +210,7 @@ Install the CLI from Setup's Optional capabilities. A source build places it at 
 |---|---|
 | See command help | `secure-agent help` |
 | Check daemon and coverage | `secure-agent status`, `secure-agent doctor` |
+| Assess local model metadata exposure | `secure-agent local-services [--json]` |
 | Review findings and incidents | `secure-agent flags`, `secure-agent incidents` |
 | Read raw events or policy audit | `secure-agent events --limit 20`, `secure-agent audit --limit 20` |
 | List sessions | `secure-agent sessions` |
@@ -226,3 +227,19 @@ Install the CLI from Setup's Optional capabilities. A source build places it at 
 `secure-agent kill <PID>` terminates an agent process tree and can lose unsaved work. Inspect the family first. The [protection guide](PROTECTION.md) covers `fingerprint`, firewall modes and guard revocation; [Fleet](FLEET.md) covers enrollment; [Getting started](GETTING_STARTED.md) covers telemetry repair and service installation.
 
 For automation, see the [Unix socket API](API.md). Its peer roles and mutation restrictions also apply to CLI requests.
+
+`secure-agent local-services` checks known model ports, enabled configured model
+endpoints and the running managed advisor endpoint. To select other existing
+servers, repeat `--endpoint`, for example:
+
+```sh
+secure-agent local-services --endpoint http://127.0.0.1:9000 --endpoint 'http://[::1]:9001' --json
+```
+
+The assessment sends bounded metadata GETs without loading a model or changing
+the service. It reports anonymous metadata responses, advertised cross-origin
+sharing, and responses to an unrelated Host header. Authentication failures and
+unavailable candidates remain visible. These observations do not establish
+whether inference or administrative routes are protected; enforcement remains
+**not assessed**. This command is owner-only and unavailable to agent processes.
+See the [assessment contract and limits](API.md#get-local-services).

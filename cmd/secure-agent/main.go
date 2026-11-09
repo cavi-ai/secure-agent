@@ -79,6 +79,8 @@ func main() {
 		handleHooks()
 	case "doctor":
 		handleDoctor(client)
+	case "local-services":
+		handleLocalServices(client, os.Args[2:])
 	case "worktrees":
 		handleWorktrees(client)
 	case "cleanup":
@@ -117,6 +119,7 @@ func printUsage() {
 	fmt.Println("  secure-agent hooks record --format codex|openclaw|hermes|opencode|record [--output path] [--durable]  Record forwarded hook completions from stdin as metadata")
 	fmt.Println("  secure-agent hooks wrap --harness codex [--script NAME] [--output path] -- COMMAND [ARGS...]  Run a configured hook unchanged and record its completion")
 	fmt.Println("  secure-agent doctor [--json]             Self-check: hooks, file telemetry, collectors, traces, sessions, pairing, pricing, retention, egress; exit 1 on any failure")
+	fmt.Println("  secure-agent local-services [--endpoint <loopback-url>] [--json]  Assess local model metadata exposure without changing servers")
 	fmt.Println("  secure-agent worktrees [--state S] [--repo R] [--stale] [--refresh] [--json]  Find every git worktree and say whether it can be removed (remove|review|keep|prune) and why")
 	fmt.Println("  secure-agent worktrees add|hide <path>   Put a repository on the worktree hunter's saved list, or hide it from reports")
 	fmt.Println("  secure-agent worktrees remove <path>     Remove a worktree whose fresh verdict is remove (git worktree remove, never --force; the branch stays)")

@@ -44,6 +44,9 @@ func TestManagedModelStartsOnDemandAndReapsOnIdle(t *testing.T) {
 	if m.loaded() {
 		t.Fatal("managed model started without a request")
 	}
+	if m.RunningEndpoint() != "" {
+		t.Fatal("idle model reported a running endpoint")
+	}
 	call := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -51,6 +54,9 @@ func TestManagedModelStartsOnDemandAndReapsOnIdle(t *testing.T) {
 		resp, err := m.RoundTrip(req)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if !strings.HasPrefix(m.RunningEndpoint(), "http://127.0.0.1:") {
+			t.Fatal("running model endpoint is unavailable for assessment")
 		}
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
@@ -62,6 +68,9 @@ func TestManagedModelStartsOnDemandAndReapsOnIdle(t *testing.T) {
 	}
 	if m.loaded() {
 		t.Fatal("idle model process survived its expiry")
+	}
+	if m.RunningEndpoint() != "" {
+		t.Fatal("expired model retained an assessment endpoint")
 	}
 	call()
 	if !m.loaded() {

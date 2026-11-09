@@ -363,6 +363,12 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			NotifyScopes: notifyScopeStore,
 		},
 		Advisors: api.AdvisorDeps{
+			ModelEndpoint: func() string {
+				if endpoint := advisorStk.Load().ModelEndpoint; endpoint != nil {
+					return endpoint()
+				}
+				return ""
+			},
 			Retriage:   retriageFuncs,
 			Plan:       planFuncs,
 			HostAssess: hostAssessFuncs,

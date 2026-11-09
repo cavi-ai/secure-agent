@@ -179,7 +179,8 @@ type Status struct {
 type StatusFunc func() Status
 
 type API struct {
-	classifierStatus func(context.Context) advisor.ClassifierHealth
+	classifierStatus   func(context.Context) advisor.ClassifierHealth
+	localModelEndpoint func() string
 
 	shellReviews    *shellreview.Service
 	socketPath      string
@@ -378,9 +379,11 @@ type PolicyDeps struct {
 
 // AdvisorDeps are the local advisor's hooks (optional).
 type AdvisorDeps struct {
-	Retriage   *RetriageFuncs
-	HostAssess *HostAssessFuncs
-	Plan       *PlanFuncs
+	// ModelEndpoint returns the current managed endpoint without starting it.
+	ModelEndpoint func() string
+	Retriage      *RetriageFuncs
+	HostAssess    *HostAssessFuncs
+	Plan          *PlanFuncs
 	// Project queues a project for a cleanup plan and reports whether it was
 	// queued.
 	Project func(model.ProjectCleanupRequest) bool
@@ -445,21 +448,22 @@ type WorkspaceDeps struct {
 // New builds the API from its resolved dependencies.
 func New(d Deps) *API {
 	a := &API{
-		socketPath:       d.SocketPath,
-		configPath:       d.ConfigPath,
-		store:            d.Store,
-		killer:           d.Killer,
-		statusFn:         d.Status,
-		hermes:           d.Doctor.Hermes,
-		sightings:        d.Doctor.Sightings,
-		routing:          d.Doctor.Routing,
-		worktrees:        d.Workspace.Worktrees,
-		worktreeAdvisor:  d.Advisors.Worktree,
-		egressAdvisor:    d.Advisors.Egress,
-		clutter:          d.Workspace.Clutter,
-		asker:            d.Workspace.Asker,
-		sysAgent:         d.Workspace.SysAgent,
-		classifierStatus: d.Workspace.ClassifierStatus,
+		socketPath:         d.SocketPath,
+		configPath:         d.ConfigPath,
+		store:              d.Store,
+		killer:             d.Killer,
+		statusFn:           d.Status,
+		hermes:             d.Doctor.Hermes,
+		sightings:          d.Doctor.Sightings,
+		routing:            d.Doctor.Routing,
+		worktrees:          d.Workspace.Worktrees,
+		worktreeAdvisor:    d.Advisors.Worktree,
+		egressAdvisor:      d.Advisors.Egress,
+		clutter:            d.Workspace.Clutter,
+		asker:              d.Workspace.Asker,
+		sysAgent:           d.Workspace.SysAgent,
+		classifierStatus:   d.Workspace.ClassifierStatus,
+		localModelEndpoint: d.Advisors.ModelEndpoint,
 
 		autoReview:      newAutoReviewer(),
 		projectAdvisor:  d.Advisors.Project,
