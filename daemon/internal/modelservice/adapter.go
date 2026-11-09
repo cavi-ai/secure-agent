@@ -180,5 +180,5 @@ func setArgs(job map[string]any, args []string) {
 
 func sameEndpoint(endpoint string, port int) bool {
 	u, err := url.Parse(endpoint)
-	return err == nil && u.Port() == strconv.Itoa(port) && (u.Hostname() == "localhost" || net.ParseIP(u.Hostname()) != nil && net.ParseIP(u.Hostname()).IsLoopback())
+	return err == nil && u.Port() == strconv.Itoa(port) && (strings.EqualFold(u.Hostname(), "localhost") || net.ParseIP(u.Hostname()) != nil && net.ParseIP(u.Hostname()).IsLoopback())
 }

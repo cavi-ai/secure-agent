@@ -28,7 +28,11 @@ var startOnly = []struct {
 	{"proxy_ca_key_path", func(c Config) any { return c.ProxyCAKeyPath }},
 	{"proxy_inspect_hosts", func(c Config) any { return c.ProxyInspectHosts }},
 	{"firewall", func(c Config) any { return c.Firewall }},
-	{"directory_guard", func(c Config) any { return c.DirectoryGuard }},
+	{"directory_guard", func(c Config) any {
+		guard := c.DirectoryGuard
+		guard.ShellReview.Endpoint, guard.ShellReview.APIKeyFile = "", ""
+		return guard
+	}},
 	{"retention", func(c Config) any { return c.Retention }},
 	{"otlp", func(c Config) any { return c.OTLP }},
 }

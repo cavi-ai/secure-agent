@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -114,16 +115,41 @@ type Health struct {
 }
 
 type Service struct {
-	cfg    Config
-	mask   func(string) (string, bool)
-	save   func(Result) error
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
-	queue  chan reviewJob
-	mu     sync.Mutex
-	closed bool
-	health Health
+	cfg        Config
+	connection atomic.Pointer[modelConnection]
+	mask       func(string) (string, bool)
+	save       func(Result) error
+	ctx        context.Context
+	cancel     context.CancelFunc
+	done       chan struct{}
+	queue      chan reviewJob
+	mu         sync.Mutex
+	closed     bool
+	health     Health
+}
+
+type modelConnection struct {
+	endpoint, keyFile string
+}
+
+func (s *Service) currentConnection() modelConnection {
+	if value := s.connection.Load(); value != nil {
+		return *value
+	}
+	return modelConnection{s.cfg.Endpoint, s.cfg.APIKeyFile}
+}
+
+// ReloadConnection applies endpoint and key-file changes as one snapshot.
+// Enforcement mode, model and request budgets remain start-only settings.
+func (s *Service) ReloadConnection(cfg Config) bool {
+	if s == nil || cfg.Validate() != nil || !loopback.ValidEndpoint(cfg.Endpoint) {
+		return false
+	}
+	next := modelConnection{cfg.Endpoint, cfg.APIKeyFile}
+	if s.currentConnection() != next {
+		s.connection.Store(&next)
+	}
+	return true
 }
 
 func New(ctx context.Context, cfg Config, mask func(string) (string, bool), save func(Result) error) (*Service, error) {

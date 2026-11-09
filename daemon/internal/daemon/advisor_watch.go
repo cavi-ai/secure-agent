@@ -28,6 +28,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
+	"github.com/cavi-ai/secure-agent/daemon/internal/shellreview"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
@@ -148,6 +149,7 @@ type configWatchDeps struct {
 	sysAgent            *sysagent.Agent
 	tagger              *agents.Tagger // follows agents minus disabled_agents
 	initialConfig       *config.Config
+	shellReviews        *shellreview.Service
 	// deltaHub/postureChanged follow the advisor stack into setupAdvisor so
 	// a verdict landing after a config-driven advisor swap still gets the
 	// immediate flag delta (see verdictPublishingSink in wire.go).
@@ -196,6 +198,7 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 		if deps.apiServer != nil && deps.initialConfig != nil {
 			deps.apiServer.SetConfigRestartNeeded(config.RestartSettings(*deps.initialConfig, data))
 		}
+		deps.shellReviews.ReloadConnection(data.DirectoryGuard.ShellReview)
 		telemetryChanged := false
 		if deps.fileTelemetryChoice != nil {
 			previous := deps.fileTelemetryChoice.Swap(data.FileTelemetryEnabled)

@@ -439,6 +439,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,
 			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer, resourceControl: resourceControl,
 			initialConfig: &cfg, worktrees: hunter, sysAgent: sysAgent, tagger: tagger, fleetOn: fleetOn,
+			shellReviews:        c.shellReviews,
 			fileTelemetryOn:     fileTelemetryOn,
 			fileTelemetryChoice: fileTelemetryChoice,
 			deltaHub:            deltaHub, postureChanged: postureHook.run, advisorMask: sysAgentMask(fw.Engine),

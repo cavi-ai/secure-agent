@@ -33,7 +33,7 @@ In **Settings → File Guard** and **Settings → Egress Firewall**, use **Add**
 
 ## Reloading
 
-The daemon re-reads the overlay every 2 seconds and applies `agents`, `disabled_agents`, `advisor`, `fleet`, `pricing`, `resource_control`, `system_agent` and `worktrees` live. Every other setting loads only at start; while the file holds a start-only setting the running daemon does not, Doctor's `config` check names its key until Secure Agent restarts.
+The daemon re-reads the overlay every 2 seconds and applies `agents`, `disabled_agents`, `advisor`, `fleet`, `pricing`, `resource_control`, `system_agent`, `worktrees`, and shell-review connection settings live. The shell-review endpoint and key-file path change together; its enforcement mode, model and request budget still require a restart. Other settings load only at start; while the file holds a start-only setting the running daemon does not, Doctor's `config` check names its key until Secure Agent restarts.
 
 ---
 
@@ -265,7 +265,8 @@ directory_guard:
     timeout_ms: 1000
 ```
 
-Restart the daemon after changing these settings. Install the updated guard
+Restart the daemon after changing enabled state, enforcement mode, model or
+request budget. Endpoint and API-key-file changes apply live together. Install the updated guard
 hook, then set `SECURE_AGENT_SHELL_REVIEW=1` in the environment of the Claude
 Code or Cursor process invoking it. Both opt-ins are required. Unsetting the
 environment variable stops submissions; setting `enabled: false` and
@@ -573,6 +574,9 @@ proxy environment variables, pin localhost to numeric loopback while retaining
 the HTTP/TLS hostname, and refuse redirects. Key contents are excluded from
 configuration, status, assessment requests and browser storage. A key for the
 advisor does not configure the classifier or other clients.
+
+Shell-review endpoint and key-file changes apply together within one config poll,
+including connection settings changed by service hardening or rollback.
 
 Managed analysis uses private Unix transport and rejects `advisor.api_key_file`.
 These settings do not add authentication to a server: enable its native
