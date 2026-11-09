@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/session"
 	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testvalue"
 )
 
 func newIncidentIngest(t *testing.T) (*eventIngest, persistenceFixture) {
@@ -24,6 +26,48 @@ func newIncidentIngest(t *testing.T) (*eventIngest, persistenceFixture) {
 	})
 	t.Cleanup(i.Stop)
 	return i, f
+}
+
+func TestTranscriptIncidentRetainsStrongestRisk(t *testing.T) {
+	i, fixture := newIncidentIngest(t)
+	at := time.Now().UTC()
+	var incidentID string
+	for n, tc := range []struct {
+		layer, signals string
+		severity       int
+		want           model.RiskLevel
+	}{
+		{"pattern", testvalue.LowEntropy + "; " + testvalue.TestCode, 2, model.RiskMedium},
+		{"pattern", testvalue.TestCode, 2, model.RiskHigh},
+		{"fingerprint", "", 3, model.RiskCritical},
+		{"pattern", testvalue.LowEntropy + "; " + testvalue.TestCode, 2, model.RiskCritical},
+	} {
+		fl := model.Flag{ID: fmt.Sprintf("transcript-%d", n), Rule: "secret-in-transcript", Severity: tc.severity,
+			TS: at.Add(time.Duration(n) * time.Second), Agent: "codex", SessionID: "s",
+			Evidence: []model.EvidenceItem{{Kind: "transcript", Label: "/sessions/s.jsonl", Sub: tc.layer + " match", Rule: "db"},
+				{Kind: "test-value", Sub: tc.signals}}}
+		if _, err := fixture.store.PutFlag(fl); err != nil {
+			t.Fatal(err)
+		}
+		report, created, err := i.incidentFor(fl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			incidentID = report.ID
+		}
+		if report.ID != incidentID || created != (n == 0) || report.AggregateCount != n+1 || report.Risk != tc.want {
+			t.Fatalf("match %d: risk=%s count=%d created=%v same incident=%v; want risk=%s", n, report.Risk, report.AggregateCount, created, report.ID == incidentID, tc.want)
+		}
+		saved, err := fixture.store.GetIncident(incidentID)
+		if err != nil || saved.Risk != tc.want {
+			t.Fatalf("persisted aggregate risk=%v err=%v", saved, err)
+		}
+		var indexedRisk model.RiskLevel
+		if err := fixture.db.QueryRow(`SELECT risk FROM incidents WHERE id=?`, incidentID).Scan(&indexedRisk); err != nil || indexedRisk != tc.want {
+			t.Fatalf("session-memory risk=%s, want %s; err=%v", indexedRisk, tc.want, err)
+		}
+	}
 }
 
 func storedFlag(t *testing.T, f persistenceFixture, id string, ts time.Time) model.Flag {

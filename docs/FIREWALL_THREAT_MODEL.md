@@ -36,8 +36,9 @@ dense with ids and encoded blobs.
 
 - A hit yields a `transcript-hit` event and a `secret-in-transcript` flag that
   carry the rule or fingerprint id, the transcript path, and the session id —
-  never the matched text. Repeats of the same (path, rule) collapse: one event
-  per 10 minutes, one flag per 15 minutes.
+  never the matched text. Repeats of the same path, layer, rule and priority
+  collapse: one event per 10 minutes, one flag per 15 minutes. A later stronger
+  match remains actionable.
 - Severity: a registered secret (fingerprint layer) is 3; a typed pattern is 2.
 - A typed-pattern flag carries a `test-value` evidence item: the value-free
   reasons its value looks like a test, dummy or sentinel value (a published
@@ -45,8 +46,13 @@ dense with ids and encoded blobs.
   that decodes to a placeholder credential, a sample JWT; or only context: a
   test or example file in the same record, test code or dummy wording within
   240 bytes). A line where any match has no reason yields none. The local
-  advisor and the local agent's review weigh it; value reasons mark a test
-  value, context alone does not.
+  advisor and the local agent's review weigh it. Low entropy or a test-mode
+  prefix does not confirm a dummy value. A typed match with low entropy and
+  explicit test context stays in history at review/MEDIUM priority; low
+  entropy alone, context alone and incomplete evidence retain High priority.
+  Registered secrets remain Critical. A current assessment can lower an older
+  single High report's displayed priority without rewriting its saved report;
+  aggregate, Critical and rotation evidence retain their priority.
 - Limit: only files the daemon tails are scanned. Lines appended to a tracked
   transcript while the daemon is stopped are scanned on the next start (tail
   offsets persist); a transcript first created while it is stopped is picked

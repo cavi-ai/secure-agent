@@ -26,6 +26,7 @@ func (s *Store) PutIncident(inc model.IncidentReport) (writeErr error) {
 	defer s.mu.Unlock()
 
 	inc.Remediation = nil
+	inc.Assessment = nil
 	if inc.AggregateCount == 0 {
 		inc.AggregateCount = 1
 	}
@@ -223,6 +224,23 @@ func (s *Store) aggregateIncidentLocked(tx *sql.Tx, id, flagID string, ts time.T
 		replay = linked == 1
 	}
 	if !replay {
+		if inc.Rule == "secret-in-transcript" {
+			var source model.Flag
+			var evidence string
+			err := tx.QueryRow(`SELECT rule, severity, evidence FROM flags WHERE id = ?`, flagID).Scan(&source.Rule, &source.Severity, &evidence)
+			if err != nil && err != sql.ErrNoRows {
+				return fail(err)
+			}
+			if err == nil {
+				if err := json.Unmarshal([]byte(evidence), &source.Evidence); err != nil {
+					return fail(err)
+				}
+			}
+			risk := model.TranscriptFindingRisk(source)
+			if risk == model.RiskCritical || risk == model.RiskHigh && inc.Risk != model.RiskCritical {
+				inc.Risk = risk
+			}
+		}
 		if inc.Rule == "proxy-secret-leak" {
 			if inc.PayloadOutcomes == nil {
 				// Historic reports do not establish their control outcomes.
@@ -271,8 +289,8 @@ func (s *Store) aggregateIncidentLocked(tx *sql.Tx, id, flagID string, ts time.T
 		}
 		tsStr := t.Format(time.RFC3339Nano)
 		reportJSON = string(data)
-		result, err := tx.Exec(`UPDATE incidents SET aggregate_count = ?, last_flag_at = ?, flag_ids = ?, report_json = ? WHERE id = ?`,
-			count, tsStr, string(idsJSON), reportJSON, id)
+		result, err := tx.Exec(`UPDATE incidents SET aggregate_count = ?, last_flag_at = ?, flag_ids = ?, report_json = ?, risk = ? WHERE id = ?`,
+			count, tsStr, string(idsJSON), reportJSON, string(inc.Risk), id)
 		if err != nil {
 			return fail(err)
 		}
@@ -285,13 +303,13 @@ func (s *Store) aggregateIncidentLocked(tx *sql.Tx, id, flagID string, ts time.T
 		}
 		// Triggers can change or remove the row after UPDATE. Verify every
 		// written field before committing or returning a successful delta.
-		var savedReport, savedIDs, savedTime string
+		var savedReport, savedIDs, savedTime, savedRisk string
 		var savedCount int
-		if err := tx.QueryRow(`SELECT report_json, flag_ids, aggregate_count, last_flag_at FROM incidents WHERE id=?`, id).
-			Scan(&savedReport, &savedIDs, &savedCount, &savedTime); err != nil {
+		if err := tx.QueryRow(`SELECT report_json, flag_ids, aggregate_count, last_flag_at, risk FROM incidents WHERE id=?`, id).
+			Scan(&savedReport, &savedIDs, &savedCount, &savedTime, &savedRisk); err != nil {
 			return fail(err)
 		}
-		if savedReport != reportJSON || savedIDs != string(idsJSON) || savedCount != count || savedTime != tsStr {
+		if savedReport != reportJSON || savedIDs != string(idsJSON) || savedCount != count || savedTime != tsStr || savedRisk != string(inc.Risk) {
 			return fail(fmt.Errorf("incident aggregation result changed during write"))
 		}
 	}

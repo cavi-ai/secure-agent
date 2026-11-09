@@ -64,3 +64,33 @@ func TestRegisteredSecretInFixtureStillFlags(t *testing.T) {
 		t.Fatalf("registered secret lost: %+v", hits)
 	}
 }
+
+func TestTranscriptReviewDoesNotSuppressStrongerMatches(t *testing.T) {
+	weak := "postgres" + "://service:aaaaaa@db.internal/app"
+	live := "postgres" + "://service:R7qL4vZ9mK2pT5wX@db.internal/app"
+	registered := "K8rM2vL9qZ4pT7wX3nB5cH6dJ1fG0sA"
+	salt := []byte("transcript-escalation-test")
+	engine, err := firewall.NewEngine(config.FirewallConfig{Patterns: []config.PatternConfig{{ID: "db", Re: `postgres://\S+:\S+@\S+`}}}, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.SetFingerprints([]config.Fingerprint{{ID: "db", HMAC: firewall.Fingerprint(salt, registered), Len: len(registered)}})
+	ts := NewTranscriptScanner(bus.New(8), nil)
+	ts.TextScanner = engine
+	if got := ts.scanLine("live_test.py assert(\""+weak+"\")", "/sessions/s.jsonl", "codex", "s", 0); len(got) != 1 {
+		t.Fatalf("review candidate: got %d hits, want 1", len(got))
+	}
+	stronger := "live_test.py assert(\"" + live + "\", \"" + registered + "\")"
+	hits := ts.scanLine(stronger, "/sessions/s.jsonl", "codex", "s", 100)
+	pattern, fingerprint := false, false
+	for _, hit := range hits {
+		pattern = pattern || hit.Detail == "codex:pattern:db"
+		fingerprint = fingerprint || hit.Detail == "codex:fingerprint:db"
+	}
+	if !pattern || !fingerprint {
+		t.Fatalf("later stronger matches suppressed: pattern=%v fingerprint=%v", pattern, fingerprint)
+	}
+	if got := ts.scanLine(stronger, "/sessions/s.jsonl", "codex", "s", 200); len(got) != 0 {
+		t.Fatalf("identical stronger repeat: got %d hits, want 0", len(got))
+	}
+}

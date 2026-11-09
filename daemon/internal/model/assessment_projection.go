@@ -50,6 +50,9 @@ func AssessFinding(f Flag) FindingAssessment {
 	if f.Rule == "untrusted-egress" {
 		return assessUntrustedEgress(f, a)
 	}
+	if f.Rule == "secret-in-transcript" {
+		return assessTranscript(f, a)
+	}
 	var reads, conns []EvidenceItem
 	for _, e := range f.Evidence {
 		switch {

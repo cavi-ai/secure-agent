@@ -1278,6 +1278,7 @@ public struct IncidentReportModel: Codable, Identifiable, Sendable {
     public let rule: String
     public let summary: String
     public let risk: String
+    public let assessment: FindingAssessmentModel?
     public let touchedFiles: [String]
     public let connections: [String]
     public let rotateList: [RotateItemModel]
@@ -1305,6 +1306,7 @@ public struct IncidentReportModel: Codable, Identifiable, Sendable {
         case rule
         case summary
         case risk
+        case assessment
         case touchedFiles = "touched_files"
         case connections
         case rotateList = "rotate_list"
@@ -1317,7 +1319,7 @@ public struct IncidentReportModel: Codable, Identifiable, Sendable {
         case remediation
     }
 
-    public init(id: String, flagId: String, pid: Int32, agent: String, timestamp: String, rule: String, summary: String, risk: String, touchedFiles: [String], connections: [String], rotateList: [RotateItemModel], workflow: IncidentWorkflowModel? = nil, sessionId: String? = nil, subject: String? = nil, aggregateCount: Int? = nil, lastFlagAt: String? = nil, advisorNarrative: String? = nil, remediation: IncidentRemediationModel? = nil) {
+    public init(id: String, flagId: String, pid: Int32, agent: String, timestamp: String, rule: String, summary: String, risk: String, touchedFiles: [String], connections: [String], rotateList: [RotateItemModel], workflow: IncidentWorkflowModel? = nil, sessionId: String? = nil, subject: String? = nil, aggregateCount: Int? = nil, lastFlagAt: String? = nil, advisorNarrative: String? = nil, remediation: IncidentRemediationModel? = nil, assessment: FindingAssessmentModel? = nil) {
         self.id = id
         self.flagId = flagId
         self.pid = pid
@@ -1336,5 +1338,6 @@ public struct IncidentReportModel: Codable, Identifiable, Sendable {
         self.lastFlagAt = lastFlagAt
         self.advisorNarrative = advisorNarrative
         self.remediation = remediation
+        self.assessment = assessment
     }
 }

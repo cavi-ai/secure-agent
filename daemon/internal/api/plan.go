@@ -98,6 +98,10 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 		if inc == nil {
 			return planTarget{}, false, nil
 		}
+		inc.IncidentReport, err = currentIncidentReport(a.store, inc.IncidentReport)
+		if err != nil {
+			return planTarget{}, false, err
+		}
 		t.incident = &inc.IncidentReport
 		if inc.FlagID != "" {
 			f, ok, err := a.store.GetFlag(inc.FlagID)
@@ -154,6 +158,10 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 					return planTarget{}, false, err
 				}
 				if inc != nil {
+					inc.IncidentReport, err = currentIncidentReport(a.store, inc.IncidentReport)
+					if err != nil {
+						return planTarget{}, false, err
+					}
 					t.incident = &inc.IncidentReport
 				}
 			}

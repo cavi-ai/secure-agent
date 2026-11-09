@@ -33,6 +33,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/loopback"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testvalue"
 )
 
 // Config controls the advisor. Disabled unless explicitly opted in.
@@ -666,7 +667,7 @@ Rules:
 
 // testValueGuidance teaches triage to tell test, dummy and sentinel secrets
 // from live ones by the flag's test-value evidence.
-const testValueGuidance = `- Secret findings: weigh the "test-value" evidence line. A value marked by its own content is a test, dummy or sentinel value: a vendor-published sample (AWS ...EXAMPLE keys, jwt.io's token), a placeholder word (example, dummy, changeme, your_key_here, xxxx), a test-mode key (sk_test_), a low-entropy value, or a value that decodes to a placeholder credential (Kubernetes Secret data, Docker config auth, docker-compose and .env.example defaults such as admin, password, changeme). Call those benign with mute-rule. Test context alone (a test file, test code, redaction wording) with a live-looking value is suspicious, not benign: a real key pasted into a test still leaked; say what would confirm it is a fixture. A fingerprint match is a registered real secret: never benign.`
+const testValueGuidance = testvalue.ReviewGuidance
 
 var evidenceHostRE = regexp.MustCompile(`connected to ([^:\s]+):\d+`)
 

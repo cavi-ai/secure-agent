@@ -697,10 +697,6 @@ func (c *Correlator) secretInTranscriptLocked(e event.Event) []model.Flag {
 		c.mutedCount++
 		return nil
 	}
-	flagID := hashFlagID(rule+"|"+e.Path+"|"+ruleID, 0, e.TS)
-	if !c.shouldFlag(flagID, rule, 0, e.Path+"|"+ruleID, e.TS, repeatWindows[rule]) {
-		return nil
-	}
 	severity := 2
 	if layer == "fingerprint" {
 		severity = 3
@@ -721,15 +717,22 @@ func (c *Correlator) secretInTranscriptLocked(e event.Event) []model.Flag {
 		}
 		evidence = append(evidence, testValueEvidence(signals, e.TS))
 	}
-	return []model.Flag{{
-		ID:        flagID,
+	flag := model.Flag{
 		Rule:      rule,
 		Severity:  severity,
 		TS:        e.TS,
 		Agent:     harness,
 		SessionID: e.SessionID,
 		Evidence:  evidence,
-	}}
+	}
+	// Review candidates must not consume a later live-looking or registered
+	// match's cooldown, including when the detector IDs are identical.
+	subject := e.Path + "|" + layer + "|" + ruleID + "|" + string(model.TranscriptFindingRisk(flag))
+	flag.ID = hashFlagID(rule+"|"+subject, 0, e.TS)
+	if !c.shouldFlag(flag.ID, rule, 0, subject, e.TS, repeatWindows[rule]) {
+		return nil
+	}
+	return []model.Flag{flag}
 }
 
 // testValueEvidence states whether a pattern hit's value looks like a test,
@@ -742,6 +745,9 @@ func testValueEvidence(signals []string, ts time.Time) model.EvidenceItem {
 	case len(signals) == 0:
 		ev.Label = "No test-value signals"
 		ev.Sub = "nothing marks the value as a test, dummy or sample"
+	case slices.Contains(signals, testvalue.LowEntropy) || slices.Contains(signals, testvalue.TestModePrefix):
+		ev.Label = "Possible test value; not confirmed"
+		ev.Sub = strings.Join(signals, "; ")
 	case testvalue.Strong(signals):
 		ev.Label = "Looks like a test value"
 		ev.Sub = strings.Join(signals, "; ")

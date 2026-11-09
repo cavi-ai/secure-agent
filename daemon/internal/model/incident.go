@@ -49,12 +49,14 @@ type IncidentReport struct {
 	// AggregateCount is how many flags this incident aggregates (1 = single).
 	AggregateCount int `json:"aggregate_count,omitempty"`
 	// LastFlagAt is the most recent aggregated flag's time.
-	LastFlagAt   *time.Time   `json:"last_flag_at,omitempty"`
-	Summary      string       `json:"summary"`
-	Risk         RiskLevel    `json:"risk"`
-	TouchedFiles []string     `json:"touched_files"`
-	Connections  []string     `json:"connections"`
-	RotateList   []RotateItem `json:"rotate_list"`
+	LastFlagAt *time.Time `json:"last_flag_at,omitempty"`
+	Summary    string     `json:"summary"`
+	Risk       RiskLevel  `json:"risk"`
+	// Assessment is a current read projection, separate from the saved report.
+	Assessment   *FindingAssessment `json:"assessment,omitempty"`
+	TouchedFiles []string           `json:"touched_files"`
+	Connections  []string           `json:"connections"`
+	RotateList   []RotateItem       `json:"rotate_list"`
 	// AdvisorNarrative is the local advisor's plain-English account of the
 	// incident (what happened, why it matters, what to do first). Advisory
 	// display text only — untrusted content, always rendered escaped.

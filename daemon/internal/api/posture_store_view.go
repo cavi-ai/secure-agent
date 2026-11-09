@@ -80,6 +80,12 @@ func loadPostureEvidence(st postureEvidenceStore, in postureInputs) postureInput
 		in.FailedReads = append(in.FailedReads, "incidents")
 	}
 	for _, inc := range incidents {
+		current, err := currentIncidentReport(st, inc.IncidentReport)
+		if err != nil {
+			in.FailedReads = append(in.FailedReads, "incident flag evidence")
+		} else {
+			inc.IncidentReport = current
+		}
 		in.Incidents = append(in.Incidents, inc.IncidentReport)
 		if inc.Rule == "untrusted-egress" {
 			f, found, err := st.GetFlag(inc.FlagID)

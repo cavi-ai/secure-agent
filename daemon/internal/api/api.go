@@ -1133,6 +1133,11 @@ func (a *API) handleIncidents(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+		inc.IncidentReport, err = currentIncidentReport(a.store, inc.IncidentReport)
+		if err != nil {
+			http.Error(w, "incident flag evidence unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		format := r.URL.Query().Get("format")
 		if format == "markdown" || format == "md" {
 			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
