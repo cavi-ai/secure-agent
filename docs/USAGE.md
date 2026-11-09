@@ -228,8 +228,8 @@ Install the CLI from Setup's Optional capabilities. A source build places it at 
 
 For automation, see the [Unix socket API](API.md). Its peer roles and mutation restrictions also apply to CLI requests.
 
-`secure-agent local-services` checks known model ports, enabled configured model
-endpoints and the running managed advisor endpoint. To select other existing
+`secure-agent local-services` checks known model ports and enabled configured model
+HTTP endpoints, and reports managed analysis's private transport separately. To select other existing
 servers, repeat `--endpoint`, for example:
 
 ```sh

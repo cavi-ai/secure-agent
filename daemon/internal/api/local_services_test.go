@@ -49,20 +49,23 @@ func TestLocalServicesIncludesConfiguredAndRunningManagedEndpoints(t *testing.T)
 	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 		t.Fatal(err)
 	}
-	a := newTestAPI(Deps{Store: testStore(t), ConfigPath: path, Advisors: AdvisorDeps{ModelEndpoint: func() string { return srv.URL }}})
+	a := newTestAPI(Deps{Store: testStore(t), ConfigPath: path, Advisors: AdvisorDeps{ManagedModel: func() *localservice.ManagedRuntime {
+		return &localservice.ManagedRuntime{State: "unloaded", Transport: "inherited-unix-v1", Enforcement: "private_transport"}
+	}}})
 	targets, err := a.localServiceTargets(nil)
-	if err != nil || strings.Count(strings.Join(targets, ","), srv.URL) != 3 {
+	if err != nil || strings.Count(strings.Join(targets, ","), srv.URL) != 2 {
 		t.Fatalf("configured endpoint selection: %v, %v", targets, err)
 	}
-	a.localModelEndpoint = func() string { return "http://[::1]:1" }
-	targets, err = a.localServiceTargets(nil)
-	if err != nil || !strings.Contains(strings.Join(targets, ","), "http://[::1]:1") {
-		t.Fatalf("managed endpoint was not read live: %v, %v", targets, err)
+	w := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/local-services?endpoint="+url.QueryEscape(srv.URL), nil))
+	var report localservice.Report
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &report) != nil || report.Managed == nil || report.Managed.Transport != "inherited-unix-v1" || report.Managed.State != "unloaded" {
+		t.Fatalf("private managed transport missing: %d %s", w.Code, w.Body.String())
 	}
 	if err := os.WriteFile(path, []byte("advisor: ["), 0600); err != nil {
 		t.Fatal(err)
 	}
-	w := httptest.NewRecorder()
+	w = httptest.NewRecorder()
 	a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/local-services", nil))
 	if w.Code != 503 {
 		t.Fatalf("configuration failure hidden behind default targets: %d %s", w.Code, w.Body.String())

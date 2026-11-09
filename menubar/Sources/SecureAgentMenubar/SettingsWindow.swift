@@ -1116,7 +1116,7 @@ struct SettingsView: View {
                         Picker("Model", selection: $selectedManagedModel) {
                             ForEach(discovery.managedModels, id: \.self) { Text($0).tag($0) }
                         }
-                        Text("The daemon downloads, starts, and supervises the server itself. First start downloads ~2.3 GB; verdicts begin when ready.")
+                        Text("Managed analysis uses mlx-agent over a private connection. Prepare the selected model locally before enabling analysis; this path does not download weights.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }

@@ -51,6 +51,9 @@ func runLocalServices(client *http.Client, args []string, out io.Writer) error {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Scope: %s\nEnforcement: not assessed\n", terminalSafe(report.Scope))
+	if report.Managed != nil {
+		fmt.Fprintf(&b, "Managed advisor: %s; %s; %s\n", terminalSafe(report.Managed.State), terminalSafe(report.Managed.Transport), terminalSafe(report.Managed.Enforcement))
+	}
 	for _, service := range report.Services {
 		fmt.Fprintf(&b, "\n%s\n", terminalSafe(service.Endpoint))
 		for _, entry := range []struct {

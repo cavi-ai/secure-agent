@@ -16,7 +16,7 @@ func TestLocalServicesCommandPreservesExplicitTargetsAndUncertainty(t *testing.T
 		if r.Method != "GET" || r.URL.Path != "/local-services" || strings.Join(r.URL.Query()["endpoint"], ",") != "http://127.0.0.1:9000,http://[::1]:9001" {
 			t.Errorf("incorrect assessment request: %s %s", r.Method, r.URL)
 		}
-		json.NewEncoder(w).Encode(localservice.Report{Scope: "selected endpoints only", Enforcement: "not_assessed", Services: []localservice.Assessment{{Endpoint: "http://127.0.0.1:9000", Metadata: localservice.Probe{State: "access_refused", Status: 401}, Enforcement: "not_assessed"}}})
+		json.NewEncoder(w).Encode(localservice.Report{Scope: "selected endpoints only", Enforcement: "not_assessed", Managed: &localservice.ManagedRuntime{State: "unloaded", Transport: "inherited-unix-v1", Enforcement: "private_transport"}, Services: []localservice.Assessment{{Endpoint: "http://127.0.0.1:9000", Metadata: localservice.Probe{State: "access_refused", Status: 401}, Enforcement: "not_assessed"}}})
 	}))
 	defer srv.Close()
 	client := srv.Client()
@@ -35,7 +35,7 @@ func TestLocalServicesCommandPreservesExplicitTargetsAndUncertainty(t *testing.T
 			if json.Unmarshal(out.Bytes(), &report) != nil || report.Enforcement != "not_assessed" {
 				t.Fatalf("invalid JSON output: %s", out.String())
 			}
-		} else if !strings.Contains(out.String(), "access_refused (HTTP 401)") || !strings.Contains(out.String(), "Enforcement: not assessed") {
+		} else if !strings.Contains(out.String(), "access_refused (HTTP 401)") || !strings.Contains(out.String(), "Enforcement: not assessed") || !strings.Contains(out.String(), "Managed advisor: unloaded; inherited-unix-v1; private_transport") {
 			t.Fatalf("uncertainty missing: %s", out.String())
 		}
 	}

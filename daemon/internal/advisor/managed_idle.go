@@ -2,9 +2,9 @@ package advisor
 
 import (
 	"fmt"
+	"github.com/cavi-ai/secure-agent/internal/localservice"
 	"io"
 	"net/http"
-	"net/url"
 	"os/exec"
 	"sync"
 	"time"
@@ -15,9 +15,9 @@ import (
 type ManagedTransport struct {
 	mu               sync.Mutex
 	spec             ManagedSpec
-	base             http.RoundTripper
+	process          *managedProcess
+	ready            bool
 	cmd              *exec.Cmd
-	endpoint         string
 	done             chan struct{}
 	timer            *time.Timer
 	active           int
@@ -26,26 +26,29 @@ type ManagedTransport struct {
 }
 
 func NewManagedTransport(spec ManagedSpec) (*ManagedTransport, error) {
-	if spec.Bin == "" {
-		bin, err := exec.LookPath("mlx_lm.server")
-		if err != nil {
-			return nil, fmt.Errorf("mlx_lm.server is not installed")
-		}
-		spec.Bin = bin
+	resolved, err := managedBinary(spec)
+	if err != nil {
+		return nil, err
 	}
-	return &ManagedTransport{spec: spec, base: http.DefaultTransport, idle: 2 * time.Minute}, nil
+	return &ManagedTransport{spec: resolved, idle: 2 * time.Minute}, nil
 }
 func (m *ManagedTransport) loaded() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.cmd != nil }
 
-// RunningEndpoint names the current managed listener without starting a
-// model. It is empty while unloaded, stopping or closed.
-func (m *ManagedTransport) RunningEndpoint() string {
+func (m *ManagedTransport) ProtectionStatus() localservice.ManagedRuntime {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.cmd == nil || m.stopping || m.closed {
-		return ""
+	state := "unloaded"
+	if m.closed {
+		state = "closed"
+	} else if m.stopping {
+		state = "stopping"
+	} else if m.cmd != nil {
+		state = "starting"
+		if m.ready {
+			state = "running"
+		}
 	}
-	return m.endpoint
+	return localservice.ManagedRuntime{State: state, Transport: privateProtocol, Enforcement: "private_transport", Scope: "managed advisor worker only; no TCP listener; other local services are unchanged"}
 }
 
 func (m *ManagedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -72,19 +75,22 @@ func (m *ManagedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 			m.timer.Stop()
 		}
 		if m.cmd == nil {
-			cmd, ep, err := LaunchManaged(m.spec)
+			process, err := LaunchManaged(m.spec)
 			if err != nil {
 				m.mu.Unlock()
 				return nil, err
 			}
-			m.cmd, m.endpoint, m.done = cmd, ep, make(chan struct{})
+			cmd := process.cmd
+			m.cmd, m.process, m.done, m.ready = cmd, process, make(chan struct{}), false
 			done := m.done
 			go func() {
 				_ = cmd.Wait()
+				process.cleanup()
 				m.mu.Lock()
 				if m.cmd == cmd {
 					m.cmd = nil
-					m.endpoint = ""
+					m.process = nil
+					m.ready = false
 					m.stopping = false
 				}
 				close(done)
@@ -92,7 +98,7 @@ func (m *ManagedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 			}()
 		}
 		m.active++
-		ep := m.endpoint
+		process := m.process
 		m.mu.Unlock()
 		finish := func() {
 			m.mu.Lock()
@@ -102,20 +108,30 @@ func (m *ManagedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 				m.timer = time.AfterFunc(m.idle, m.expire)
 			}
 		}
-		if !WaitReady(req.Context(), ep, 5*time.Minute) {
+		if !process.waitReady(req.Context(), 5*time.Minute) {
 			finish()
 			return nil, fmt.Errorf("managed model did not become ready before the request deadline")
 		}
-		target, _ := url.Parse(ep)
+		m.mu.Lock()
+		if m.process == process {
+			m.ready = true
+		}
+		m.mu.Unlock()
 		r := req.Clone(req.Context())
 		u := *req.URL
-		u.Scheme, u.Host = target.Scheme, target.Host
-		r.URL = &u
-		r.Host = target.Host
-		resp, err := m.base.RoundTrip(r)
+		u.Scheme, u.Host = "http", "127.0.0.1"
+		r.URL, r.Host = &u, u.Host
+		r.Header = req.Header.Clone()
+		r.Header.Set("Content-Type", "application/json")
+		resp, err := process.transport.RoundTrip(r)
 		if err != nil {
 			finish()
 			return nil, err
+		}
+		if resp.Header.Get("X-MLX-Agent-Transport") != privateProtocol {
+			resp.Body.Close()
+			finish()
+			return nil, fmt.Errorf("private model worker protocol missing")
 		}
 		resp.Body = &managedBody{ReadCloser: resp.Body, finish: finish}
 		return resp, nil

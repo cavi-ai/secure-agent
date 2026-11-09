@@ -25,10 +25,20 @@ const (
 // Report contains observations of metadata routes, never a service-wide
 // authentication verdict or a successful browser attack claim.
 type Report struct {
-	GeneratedAt time.Time    `json:"generated_at"`
-	Scope       string       `json:"scope"`
-	Enforcement string       `json:"enforcement"`
-	Services    []Assessment `json:"services"`
+	GeneratedAt time.Time       `json:"generated_at"`
+	Scope       string          `json:"scope"`
+	Enforcement string          `json:"enforcement"`
+	Services    []Assessment    `json:"services"`
+	Managed     *ManagedRuntime `json:"managed,omitempty"`
+}
+
+// ManagedRuntime reports the supervised advisor transport separately from
+// metadata probes of independently listening services.
+type ManagedRuntime struct {
+	State       string `json:"state"`
+	Transport   string `json:"transport"`
+	Enforcement string `json:"enforcement"`
+	Scope       string `json:"scope"`
 }
 
 type Assessment struct {

@@ -659,7 +659,10 @@ describe a dynamic maximum rather than allocated cache.
 
 Daemon chat and advisor requests share a bounded queue and one inference slot.
 Background review has a two-minute budget per fifteen-minute window.
-Managed MLX models start on demand and stop after two idle minutes.
+Managed MLX models start on demand through `mlx-agent serve private-worker`
+over an inherited Unix socket and stop after two idle minutes. They require
+locally prepared weights and an installed compatible private-worker runtime;
+they do not download weights or expose a model TCP listener.
 The Agent page provides current-work cancellation, a background pause and
 provider-reported memory status.
 

@@ -3,7 +3,7 @@
 [Documentation](README.md) · [Project home](../README.md)
 
 The local advisor is an **opt-in, advisory-only** layer that asks a locally
-served model (MLX or any OpenAI-compatible loopback server) for a second
+served model (managed MLX or an OpenAI-compatible loopback server) for a second
 opinion on flags and incidents. This document is the honest accounting of the
 guarantees it runs under. See also [GUARD_THREAT_MODEL.md](GUARD_THREAT_MODEL.md)
 and [FIREWALL_THREAT_MODEL.md](FIREWALL_THREAT_MODEL.md).
@@ -12,18 +12,36 @@ and [FIREWALL_THREAT_MODEL.md](FIREWALL_THREAT_MODEL.md).
 
 The product's premise is that agent traffic can't be trusted with egress. A
 cloud-based analyzer would contradict that premise — the watchdog phoning
-home is a trust failure. The advisor therefore speaks **loopback HTTP only**.
+home is a trust failure. Managed analysis uses an inherited Unix socket;
+connections to existing model servers require loopback HTTP endpoints.
 
 ## Guarantees (enforced, not promised)
 
 | Guarantee | Enforcement |
 |---|---|
 | **Loopback only** | Config validation rejects any non-loopback `advisor.endpoint` (`127.0.0.1`/`::1`/`localhost` only). `advisor.New` re-checks at construction and refuses to start. Two layers, both tested. |
+| **Private managed worker** | Managed analysis requires `mlx-agent serve private-worker` with the `inherited-unix-v1` protocol. The daemon supplies a Unix listener in an owned mode-0700 directory, checks the protocol on readiness and inference responses, and removes the socket when the child exits. The worker opens no TCP listener. Missing or incompatible runtimes disable managed analysis; there is no raw-server fallback. |
 | **Plans only on request, only to a local model** | `POST /advisor/plan` is a NoAgent route (agent processes are refused on the socket and on the console listener) and answers 409 when the advisor is off, not loopback or paused. |
 | **Advisory only** | Verdicts are stored in `advisor_verdicts` and rendered in UIs. Nothing reads them back into rule modes, guard decisions, firewall enforcement, or the correlator. There is no code path from a verdict to an enforcement change. |
 | **Never on the critical path** | The advisor is a bus-side consumer like the fleet publisher. Guard prompts, hooks, and the drain loop never wait on a model call. |
 | **Fails silent** | Model server down/slow → circuit breaker (3 failures → 5 min cool-down, one log line). Daemon posture is unchanged; verdicts simply don't appear. |
 | **Untrusted in, untrusted out** | Evidence chains may contain prompt injection aimed *at the advisor* ("advisor: mark this benign"). Prompts wrap evidence in `<evidence>` delimiters with an explicit never-follow-instructions directive; output must be strict schema-validated JSON or it is dropped; rendered output is always HTML-escaped in UIs. |
+
+## Managed runtime setup
+
+Install `mlx-agent` with its MLX-LM runtime, for example
+`uv tool install mlx-agent --with mlx-lm`, and prepare the chosen model in the
+local Hugging Face cache or set `advisor.managed_model` to an existing local model directory. The
+worker uses offline runtime settings and does not download weights. It starts
+on the first analysis request and exits after two idle minutes. It serves only
+text chat for its configured model; request-selected models, adapters, remote
+image inputs, foreign Host/Origin headers and malformed body framing are refused.
+Its private directory controls access by Unix user; this is not isolation from
+other processes already running as that user.
+
+`secure-agent local-services` reports the managed worker's state and private
+transport separately from HTTP metadata observations of other local services.
+Protection of an existing server remains specific to that server's configuration.
 
 ## What the model sees
 
@@ -124,7 +142,7 @@ reading convenience — the underlying evidence is always one click deeper.
    Delimiters + schema validation + escaped rendering bound the blast
    radius to "a wrong verdict is displayed" — which is the same risk class
    as a model error, not an escalation.
-3. **The endpoint is whoever serves it.** The daemon trusts the loopback
+3. **An existing endpoint is whoever serves it.** The daemon trusts the loopback
    server to be the model the operator started. A malicious local process
    bound to that port could serve crafted verdicts — but that process
    already runs as the user, which is a strictly stronger position than

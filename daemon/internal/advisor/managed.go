@@ -9,86 +9,139 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 )
 
-// managed.go — the two ways the advisor gets a model server without the user
-// hand-wiring one:
-//
-//   - ManagedServer: the daemon spawns and supervises `mlx_lm.server` itself
-//     (Path A). Zero user configuration; the download happens inside
-//     mlx_lm on first start.
-//   - DiscoverServers: probe known loopback ports for OpenAI-compatible
-//     servers the user already runs (Path B — Ollama/MLX/llama.cpp).
-//
-// Both stay loopback-only by construction: managed binds 127.0.0.1, discovery
-// only ever dials 127.0.0.1.
-
-// ManagedSpec describes the model server the daemon should run itself.
+// ManagedSpec selects the model served by the owned mlx-agent worker.
+// A managed worker never opens a TCP listener or downloads model weights.
 type ManagedSpec struct {
-	Model string // HF id, e.g. "mlx-community/Qwen3-4B-4bit"
-	// Bin overrides the mlx_lm.server binary path (tests; defaults to PATH lookup).
+	Model string
+	// Bin overrides the mlx-agent executable (primarily for isolated tests).
 	Bin string
 }
 
-// LaunchManaged starts `mlx_lm.server` for the spec on a free loopback port
-// and returns the command (caller supervises it) plus the endpoint to point
-// the advisor at. The server downloads the model on first start — readiness
-// is the advisor circuit breaker's problem, not a boot blocker.
-func LaunchManaged(spec ManagedSpec) (*exec.Cmd, string, error) {
-	bin := spec.Bin
-	if bin == "" {
-		var err error
-		bin, err = exec.LookPath("mlx_lm.server")
-		if err != nil {
-			return nil, "", fmt.Errorf("mlx_lm.server not found on PATH (install with: pip install mlx-lm): %w", err)
-		}
-	}
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, "", fmt.Errorf("allocate advisor port: %w", err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
+const privateProtocol = "inherited-unix-v1"
 
-	// --chat-template-args is off: the advisor's chat request already carries
-	// enable_thinking=false per call.
-	cmd := toolpath.Command(context.Background(), bin, nil, "--model", spec.Model, "--host", "127.0.0.1", "--port", fmt.Sprint(port))
-	// Provider output can contain prompts; health exposes bounded errors.
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	if err := cmd.Start(); err != nil {
-		return nil, "", fmt.Errorf("start managed model server: %w", err)
-	}
-	log.Printf("advisor: managed model server starting (model %s, port %d) — first start downloads the model, verdicts begin when ready", spec.Model, port)
-	return cmd, fmt.Sprintf("http://127.0.0.1:%d", port), nil
+type managedProcess struct {
+	cmd       *exec.Cmd
+	transport *http.Transport
+	directory string
+	once      sync.Once
+	exited    chan struct{}
 }
 
-// WaitReady polls the managed server's /v1/models until it answers or the
-// deadline passes. Used so status/reporting can distinguish "downloading"
-// from "serving".
-func WaitReady(ctx context.Context, endpoint string, deadline time.Duration) bool {
-	deadlineAt := time.Now().Add(deadline)
-	for time.Now().Before(deadlineAt) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/v1/models", nil)
+func managedBinary(spec ManagedSpec) (ManagedSpec, error) {
+	if spec.Bin == "" {
+		bin, err := exec.LookPath("mlx-agent")
+		if err != nil {
+			return spec, fmt.Errorf("mlx-agent is not installed")
+		}
+		spec.Bin = bin
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := toolpath.Command(ctx, spec.Bin, nil, "serve", "private-worker", "--describe")
+	output, err := cmd.Output()
+	var capability struct {
+		Protocol string `json:"protocol"`
+	}
+	if err != nil || len(output) > 4096 || json.Unmarshal(output, &capability) != nil || capability.Protocol != privateProtocol {
+		return spec, fmt.Errorf("managed analysis requires mlx-agent with the %s private-worker protocol", privateProtocol)
+	}
+	return spec, nil
+}
+
+// LaunchManaged gives mlx-agent an inherited listener inside an owned mode-0700
+// directory. Only Unix IPC is allocated; there is no HTTP or raw model TCP port.
+func LaunchManaged(spec ManagedSpec) (*managedProcess, error) {
+	if spec.Bin == "" {
+		var err error
+		spec, err = managedBinary(spec)
+		if err != nil {
+			return nil, err
+		}
+	}
+	directory, err := os.MkdirTemp("/tmp", "sa-model-")
+	if err != nil {
+		return nil, fmt.Errorf("allocate private model directory: %w", err)
+	}
+	socketPath := filepath.Join(directory, "model.sock")
+	process := &managedProcess{directory: directory, exited: make(chan struct{})}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
+	if err != nil {
+		process.cleanup()
+		return nil, fmt.Errorf("allocate private model listener: %w", err)
+	}
+	listener.SetUnlinkOnClose(false)
+	if err = os.Chmod(socketPath, 0600); err != nil {
+		listener.Close()
+		process.cleanup()
+		return nil, err
+	}
+	file, err := listener.File()
+	listener.Close()
+	if err != nil {
+		process.cleanup()
+		return nil, err
+	}
+	defer file.Close()
+	process.transport = &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+	}, MaxConnsPerHost: 8, IdleConnTimeout: 30 * time.Second}
+	cmd := toolpath.Command(context.Background(), spec.Bin, nil, "serve", "private-worker", "--model", spec.Model, "--socket-fd", "3")
+	cmd.ExtraFiles = []*os.File{file}
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	if err := cmd.Start(); err != nil {
+		process.cleanup()
+		return nil, fmt.Errorf("start private model worker: %w", err)
+	}
+	process.cmd = cmd
+	log.Printf("advisor: private model worker starting; weights must already be prepared locally")
+	return process, nil
+}
+
+func (p *managedProcess) cleanup() {
+	p.once.Do(func() {
+		close(p.exited)
+		if p.transport != nil {
+			p.transport.CloseIdleConnections()
+		}
+		_ = os.RemoveAll(p.directory)
+	})
+}
+
+func (p *managedProcess) waitReady(ctx context.Context, deadline time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+	client := &http.Client{Transport: p.transport, Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for {
+		select {
+		case <-p.exited:
+			return false
+		default:
+		}
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/_mlx/private", nil)
+		resp, err := client.Do(req)
 		if err == nil {
-			resp, err := http.DefaultClient.Do(req)
-			if err == nil {
-				resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					return true
-				}
+			ready := resp.StatusCode == http.StatusOK && resp.Header.Get("X-MLX-Agent-Transport") == privateProtocol
+			resp.Body.Close()
+			if ready {
+				return true
 			}
 		}
 		select {
 		case <-ctx.Done():
 			return false
-		case <-time.After(500 * time.Millisecond):
+		case <-p.exited:
+			return false
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return false
 }
 
 // DiscoveredServer is one loopback OpenAI-compatible endpoint the user could

@@ -31,11 +31,6 @@ func (a *API) localServiceTargets(explicit []string) ([]string, error) {
 	if cfg.DirectoryGuard.ShellReview.Enabled {
 		targets = append(targets, cfg.DirectoryGuard.ShellReview.Endpoint)
 	}
-	if a.localModelEndpoint != nil {
-		if endpoint := a.localModelEndpoint(); endpoint != "" {
-			targets = append(targets, endpoint)
-		}
-	}
 	return targets, nil
 }
 
@@ -64,6 +59,9 @@ func (a *API) handleLocalServices(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if a.managedModelStatus != nil {
+		report.Managed = a.managedModelStatus()
 	}
 	writeJSON(w, report)
 }

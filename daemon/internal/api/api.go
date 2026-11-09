@@ -38,6 +38,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
+	"github.com/cavi-ai/secure-agent/internal/localservice"
 	"golang.org/x/sys/unix"
 )
 
@@ -180,7 +181,7 @@ type StatusFunc func() Status
 
 type API struct {
 	classifierStatus   func(context.Context) advisor.ClassifierHealth
-	localModelEndpoint func() string
+	managedModelStatus func() *localservice.ManagedRuntime
 
 	shellReviews    *shellreview.Service
 	socketPath      string
@@ -379,11 +380,11 @@ type PolicyDeps struct {
 
 // AdvisorDeps are the local advisor's hooks (optional).
 type AdvisorDeps struct {
-	// ModelEndpoint returns the current managed endpoint without starting it.
-	ModelEndpoint func() string
-	Retriage      *RetriageFuncs
-	HostAssess    *HostAssessFuncs
-	Plan          *PlanFuncs
+	// ManagedModel describes the current private worker without starting it.
+	ManagedModel func() *localservice.ManagedRuntime
+	Retriage     *RetriageFuncs
+	HostAssess   *HostAssessFuncs
+	Plan         *PlanFuncs
 	// Project queues a project for a cleanup plan and reports whether it was
 	// queued.
 	Project func(model.ProjectCleanupRequest) bool
@@ -463,7 +464,7 @@ func New(d Deps) *API {
 		asker:              d.Workspace.Asker,
 		sysAgent:           d.Workspace.SysAgent,
 		classifierStatus:   d.Workspace.ClassifierStatus,
-		localModelEndpoint: d.Advisors.ModelEndpoint,
+		managedModelStatus: d.Advisors.ManagedModel,
 
 		autoReview:      newAutoReviewer(),
 		projectAdvisor:  d.Advisors.Project,

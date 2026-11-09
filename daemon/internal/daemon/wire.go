@@ -33,6 +33,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"github.com/cavi-ai/secure-agent/daemon/internal/taint"
+	"github.com/cavi-ai/secure-agent/internal/localservice"
 )
 
 // wire.go — the daemon's component wiring, extracted from main() into
@@ -401,9 +402,9 @@ func enqueueEgressProjection(queue chan<- store.EgressObservation, observation s
 // advisorStack bundles the advisor subscriber and, in managed mode, the model
 // server process the daemon supervises.
 type advisorStack struct {
-	Sub           *advisor.Subscriber
-	Managed       interface{ Close() } // owned lazy server; nil for external providers
-	ModelEndpoint func() string
+	Sub          *advisor.Subscriber
+	Managed      interface{ Close() } // owned lazy server; nil for external providers
+	ManagedModel func() *localservice.ManagedRuntime
 }
 
 // verdictPublishingSink lets an async advisor verdict update the popover
@@ -458,15 +459,17 @@ func setupAdvisor(cfg config.Config, st *store.Store, deltaHub *api.DeltaHub, po
 	model := cfg.Advisor.Model
 	var managed interface{ Close() }
 	var transport http.RoundTripper
-	var modelEndpoint func() string
+	var managedModel func() *localservice.ManagedRuntime
 	if cfg.Advisor.Enabled && cfg.Advisor.Managed {
 		server, err := advisor.NewManagedTransport(advisor.ManagedSpec{Model: cfg.Advisor.ManagedModel})
 		if err != nil {
 			log.Printf("advisor: managed model unavailable; advisor disabled")
-			return advisorStack{}
+			return advisorStack{ManagedModel: func() *localservice.ManagedRuntime {
+				return &localservice.ManagedRuntime{State: "unavailable", Transport: "inherited-unix-v1", Enforcement: "unavailable", Scope: "managed advisor worker could not establish a private transport"}
+			}}
 		}
 		managed, transport, endpoint, model = server, server, "http://127.0.0.1", cfg.Advisor.ManagedModel
-		modelEndpoint = server.RunningEndpoint
+		managedModel = func() *localservice.ManagedRuntime { status := server.ProtectionStatus(); return &status }
 	}
 	var sink advisor.Sink = st
 	mask := sysAgentMask(nil)
@@ -496,7 +499,7 @@ func setupAdvisor(cfg config.Config, st *store.Store, deltaHub *api.DeltaHub, po
 		managed.Close()
 		managed = nil
 	}
-	return advisorStack{Sub: sub, Managed: managed, ModelEndpoint: modelEndpoint}
+	return advisorStack{Sub: sub, Managed: managed, ManagedModel: managedModel}
 }
 
 // fleetConfigured is true when at least one HMAC fleet webhook can actually

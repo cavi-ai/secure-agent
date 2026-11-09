@@ -1049,9 +1049,8 @@ On-demand assessment of selected local model metadata routes. Owner-only on
 the Unix socket; agent processes and the browser console cannot call it.
 Repeat `?endpoint=<loopback-base-url>` to select explicit services. Without
 explicit endpoints, candidates are loopback ports 11434, 8080, 8799, 8081,
-1234 and 8084, enabled configured advisor/classifier/chat/shell-review
-endpoints, and the currently running managed advisor endpoint. Reading the
-managed endpoint does not start its model.
+1234 and 8084 and enabled configured advisor/classifier/chat/shell-review
+HTTP endpoints. Managed analysis has no HTTP endpoint to probe.
 
 The response contains `generated_at`, `scope`, `enforcement: "not_assessed"`
 and `services`. Each service contains `endpoint`, `metadata`, `cross_origin`,
@@ -1059,6 +1058,11 @@ and `services`. Each service contains `endpoint`, `metadata`, `cross_origin`,
 `state`, an HTTP status when available, and CORS `sharing` for an answered
 cross-origin metadata probe. Credential-required and unavailable candidates
 remain in the report; neither establishes service identity or protection.
+
+An optional `managed` object separately reports the supervised advisor's
+`state`, `transport`, `enforcement` and `scope`. Its private Unix transport
+applies only to that worker. Reading its state does not start a model; an
+unavailable compatible runtime is reported as unavailable.
 
 Probes send only `GET /v1/models` (or `/models` for a base ending in `/v1`).
 For an identified metadata response, two further GETs vary Origin and Host
