@@ -677,10 +677,6 @@ func (h *flagHookHolder) run(fl model.Flag) {
 	}
 }
 
-// owningUIPID returns the pid of the owning menubar app, or 0. Pinned as the
-// only mutating client — but only when the parent really is an .app binary. A
-// direct launch from a shell must keep owner-uid mutation (headless/ssh
-// management). ps(1) is spawned once at startup, not per request.
 // coverageFilePath is where the coverage heartbeats persist, next to the
 // event store: <db dir>/coverage.json.
 func coverageFilePath(dbPath string) string {
@@ -720,6 +716,8 @@ func persistLastProduced(dbPath string, reg *supervise.Registry) {
 	_ = safefile.ReplaceFile(path, data, 0o600)
 }
 
+// owningUIPID pins the bundled SecureAgent parent as the mutating client.
+// Other launchers retain headless owner-uid management. ps runs once at startup.
 func owningUIPID() int32 {
 	ppid := os.Getppid()
 	if ppid <= 1 {
@@ -730,7 +728,7 @@ func owningUIPID() int32 {
 		return 0
 	}
 	parentExe := strings.TrimSpace(string(out))
-	if strings.Contains(parentExe, ".app/Contents/MacOS/") || strings.Contains(parentExe, ".app/Contents/Frameworks/") {
+	if strings.HasSuffix(parentExe, ".app/Contents/MacOS/SecureAgent") {
 		return int32(ppid)
 	}
 	return 0
