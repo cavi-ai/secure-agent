@@ -112,6 +112,25 @@ create, push and delete are refused. Model metadata routes remain authenticated.
 Browser Origin headers are refused; browser applications should use their own
 authorized server-side client.
 
+Before forwarding, the gateway applies the current secret-firewall registry,
+patterns and rule modes to request headers and the complete bounded upload.
+Monitor-mode matches are recorded and forwarded; block-mode matches are refused.
+Gateway credentials are removed before inspection and forwarding. Larger uploads
+use an encrypted, unlinked temporary buffer; their original bytes are replayed
+only after inspection. Uploads over 16 MiB, unreadable bodies, replay-storage
+failures, unsupported content encodings and invalid gzip are refused. Gzip
+expansion is limited to 64 MiB. The shared scanner uses 1 MiB windows and 64 KiB
+overlap; patterns or tokens longer than those bounds can be missed, as described
+in the [firewall threat model](FIREWALL_THREAT_MODEL.md).
+
+Inference requests also follow the session's existing `untrusted-egress`,
+`untrusted-egress-injected` and `network-send` policies. Monitor records and
+forwards; prompt and session modes use the existing permission broker; deny
+refuses. Missing approval refuses access. The routing proxy's loopback and
+model-host exemptions do not apply here: a local model endpoint can forward to
+cloud services. Authenticated metadata requests do not prompt for inference
+permission. The gateway requires both policy checks to be available at startup.
+
 The daemon manages only the gateway listener; the existing Ollama server stays
 under its current owner. Configurations containing up to four gateways and 32
 explicit metadata endpoints are supported. Gateway configuration changes require

@@ -58,6 +58,19 @@ dense with ids and encoded blobs.
   offsets persist); a transcript first created while it is stopped is picked
   up from its end, so its existing content is not scanned.
 
+### Local inference gateways
+
+Configured inference gateways reuse the firewall's current registry, patterns,
+rule modes and encrypted request buffer before forwarding any request bytes.
+Monitor-mode matches still forward; block-mode matches refuse. Gateway
+credentials are stripped before inspection. The gateway limits wire uploads to
+16 MiB and refuses capture, replay-storage and decoding failures, unsupported
+content encodings, and gzip expansion beyond 64 MiB. This differs from the
+routing proxy's fail-open behavior below. Both share the scanner's window,
+overlap and decoding limits. No prompts or responses enter the activity records.
+Direct access to the raw backend remains outside this protection. See
+[local model gateways](LOCAL_MODELS.md#track-requests-through-an-ollama-gateway).
+
 ## What it does NOT defend against (out of scope)
 
 - **A determined malicious agent.** An agent that actively wants to exfiltrate

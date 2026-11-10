@@ -52,24 +52,37 @@ type Gateway struct {
 	monitor  *Monitor
 	client   *http.Client
 	stopping atomic.Bool
+	policy   RequestPolicy
 	// Identify authenticates a socket's process; client-supplied identity
 	// headers are never used for attribution.
 	Identify func(context.Context, string) (int32, string)
 }
 
-func NewGateway(config GatewayConfig, monitor *Monitor) (*Gateway, error) {
+// RequestPolicy checks a backend request before forwarding. Inspect must read
+// the bounded body in full and replace it with an unchanged replayable body.
+// CheckEgress runs after upload completion, only for inference routes, so a
+// human approval does not consume the client's upload deadline.
+type RequestPolicy struct {
+	Inspect     func(*http.Request) error
+	CheckEgress func(*http.Request) error
+}
+
+func NewGateway(config GatewayConfig, monitor *Monitor, policy RequestPolicy) (*Gateway, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
 	if monitor == nil {
 		return nil, errors.New("inference gateway requires an activity monitor")
 	}
+	if policy.Inspect == nil || policy.CheckEgress == nil {
+		return nil, errors.New("inference gateway requires request inspection and egress policy")
+	}
 	upstream, _ := endpoint(config.Upstream)
 	request, _ := http.NewRequest(http.MethodGet, upstream.String(), nil)
 	if err := localservice.Authorize(request, config.APIKeyFile); err != nil {
 		return nil, err
 	}
-	return &Gateway{config: config, upstream: upstream, monitor: monitor, client: loopback.Client(0)}, nil
+	return &Gateway{config: config, upstream: upstream, monitor: monitor, client: loopback.Client(0), policy: policy}, nil
 }
 func (g *Gateway) Serve(ctx context.Context) error {
 	g.monitor.GatewayStatus(g.config, "starting")
@@ -167,7 +180,36 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	body := http.MaxBytesReader(w, r.Body, maxRequestBody)
 	defer body.Close()
-	prefix, err := io.ReadAll(io.LimitReader(body, metadataLimit))
+	target := *g.upstream
+	target.Path = r.URL.Path
+	checked := r.Clone(ctx)
+	checked.URL, checked.Host, checked.RequestURI = &target, target.Host, ""
+	checked.Body = body
+	if r.Body == nil || r.Body == http.NoBody {
+		checked.Body = http.NoBody
+	}
+	stripHopHeaders(checked.Header)
+	for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Cookie", "Origin", "Referer", "Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "Accept-Encoding"} {
+		checked.Header.Del(name)
+	}
+	defer func() { _ = checked.Body.Close() }()
+	if err := g.policy.Inspect(checked); err != nil {
+		var maxBytes *http.MaxBytesError
+		if errors.As(err, &maxBytes) {
+			gatewayError(w, "model request exceeds 16 MiB", 413)
+		} else {
+			gatewayError(w, "model request refused by security policy", 403)
+		}
+		return
+	}
+	_ = controller.SetReadDeadline(time.Time{})
+	if tracked {
+		if err := g.policy.CheckEgress(checked); err != nil {
+			gatewayError(w, "model request refused by security policy", 403)
+			return
+		}
+	}
+	prefix, err := io.ReadAll(io.LimitReader(checked.Body, metadataLimit))
 	if err != nil {
 		gatewayError(w, "model request body unavailable", 400)
 		return
@@ -198,19 +240,13 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			g.monitor.finish(id, state, status, observation)
 		}
 	}()
-	target := *g.upstream
-	target.Path = r.URL.Path
-	outgoing, err := http.NewRequestWithContext(ctx, r.Method, target.String(), &prefixBody{Reader: io.MultiReader(bytes.NewReader(prefix), body), Closer: body})
+	outgoing, err := http.NewRequestWithContext(ctx, r.Method, target.String(), &prefixBody{Reader: io.MultiReader(bytes.NewReader(prefix), checked.Body), Closer: checked.Body})
 	if err != nil {
 		gatewayError(w, "invalid model request", 400)
 		return
 	}
 	outgoing.ContentLength = r.ContentLength
-	outgoing.Header = r.Header.Clone()
-	stripHopHeaders(outgoing.Header)
-	for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Cookie", "Origin", "Referer", "Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "Accept-Encoding"} {
-		outgoing.Header.Del(name)
-	}
+	outgoing.Header = checked.Header.Clone()
 	response, err := g.client.Do(outgoing)
 	if err != nil {
 		var maxBytes *http.MaxBytesError

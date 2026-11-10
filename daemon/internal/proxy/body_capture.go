@@ -7,7 +7,7 @@ import (
 	"net/http"
 )
 
-func (ps *ProxyServer) captureRequestBody(original io.ReadCloser, host string) *inspectionBody {
+func (ps *RequestInspector) captureRequestBody(original io.ReadCloser, host string) *inspectionBody {
 	s := &bodySpool{}
 	buf := make([]byte, 32<<10)
 	var tail io.Reader = original

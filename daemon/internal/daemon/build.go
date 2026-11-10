@@ -483,7 +483,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		}
 	}()
 
-	c.collectorsDone = startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spool, fileTelemetryOn, localInference)
+	c.collectorsDone = startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spool, fileTelemetryOn, localInference, askEgress)
 
 	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
 	return c, nil
@@ -1040,7 +1040,7 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, procSource 
 // spool tail of the root ES collector (the LaunchDaemon, or a developer's
 // `secure-agentd -es-collector` run as root); without a spool it is degraded,
 // not crash-looped, and starts when the spool appears.
-func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer], fileTelemetryOn *atomic.Bool, localInference *inference.Monitor) <-chan struct{} {
+func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer], fileTelemetryOn *atomic.Bool, localInference *inference.Monitor, askEgress func(context.Context, taint.Verdict) bool) <-chan struct{} {
 	var workers sync.WaitGroup
 	run := func(name string, fn func(context.Context) error) {
 		workers.Go(func() { sup.Run(ctx, name, fn) })
@@ -1094,12 +1094,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 		for i, gatewayConfig := range cfg.LocalInference.Gateways {
 			localInference.GatewayStatus(gatewayConfig, "configured")
 			run(fmt.Sprintf("inference-gateway-%d", i+1), func(c context.Context) error {
-				gateway, err := inference.NewGateway(gatewayConfig, localInference)
-				if err != nil {
-					localInference.GatewayStatus(gatewayConfig, "unavailable")
-					return err
-				}
-				gateway.Identify = func(ctx context.Context, remote string) (int32, string) {
+				identify := func(ctx context.Context, remote string) (int32, string) {
 					pid, err := connpeer.PID(ctx, remote, inferenceClientPID)
 					if err != nil {
 						return 0, ""
@@ -1109,6 +1104,18 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 					}
 					return pid, ""
 				}
+				gate := egressGate(cfg, resolver)
+				policy, err := inferenceRequestPolicy(fwEngine, gate, askEgress, b.Publish, identify)
+				if err != nil {
+					localInference.GatewayStatus(gatewayConfig, "unavailable")
+					return err
+				}
+				gateway, err := inference.NewGateway(gatewayConfig, localInference, policy)
+				if err != nil {
+					localInference.GatewayStatus(gatewayConfig, "unavailable")
+					return err
+				}
+				gateway.Identify = identify
 				return gateway.Serve(c)
 			})
 		}

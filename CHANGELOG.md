@@ -9,6 +9,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ### Added
 - Local inference: continuously discover visible localhost model servers and connected apps, with separate loaded-model and request activity in Monitoring and `secure-agent local-inference`.
 - Ollama: optional authenticated gateways track native, OpenAI-compatible and Anthropic-compatible requests, streaming, cancellation and reported token usage. Direct backend traffic remains outside gateway tracking and protection.
+- Inference gateways: apply secret-firewall rules and session-taint permissions before forwarding, with encrypted upload buffering and refusal of payloads that cannot be inspected.
 
 ### Fixed
 - Fleet collector: refuse non-loopback startup without a read token; reject bare tokens and duplicate Authorization headers on read endpoints.

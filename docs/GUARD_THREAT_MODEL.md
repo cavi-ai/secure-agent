@@ -45,6 +45,15 @@ Enforcement points, honestly labeled:
 | Codex, OpenClaw, Antigravity, Hermes, OpenCode v2 | Shell commands, file tools and patch targets, through `harness_guard.py`; `prompt` approvals expire after five seconds on OpenClaw, Hermes and OpenCode. |
 | Untrusted-input egress | Claude Code: every tool the `PreToolUse` hook sees, mode-enforced (`monitor` / `prompt` / `deny`). Cursor: shell commands, tainted only by events that carry a tool name. Routed agents: every new proxy connection from a tainted session, or from a client the proxy cannot identify while a session is tainted, follows the mode (`monitor` records, `prompt` asks, `deny` refuses), except the model API hosts the proxy decrypts and loopback. |
 
+Configured local inference gateways check each inference request against the
+same taint records, workspace overrides and send-category modes before forwarding.
+The routing proxy's model-host and loopback exemptions do not apply to these
+requests, since a loopback model server can forward to cloud services. Monitor
+records, prompt and session modes use the permission broker, and deny refuses.
+Unavailable approval refuses access. Authenticated metadata routes are excluded
+from this inference permission check; secret-firewall inspection still applies.
+Direct backend connections and same-user tampering remain outside this boundary.
+
 ## Bypass classes that are CLOSED (with regression tests)
 
 - `sh -c "…"` / `bash -c` / `zsh -c` payloads — recursively analyzed
