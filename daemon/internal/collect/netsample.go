@@ -22,9 +22,11 @@ const (
 )
 
 type connKey struct {
-	PID  int32
-	Host string
-	Port int
+	PID       int32
+	Host      string
+	Port      int
+	LocalHost string
+	LocalPort int
 }
 
 // SocketConnection is a process's remote TCP endpoint. It allows callers to
@@ -35,6 +37,14 @@ type SocketLister interface {
 	SocketsFor(pid int32) []SocketConnection
 }
 
+// SocketSnapshot includes collection health; an empty failed scan is not proof
+// that there are no connections.
+type SocketSnapshot struct {
+	Connections []SocketConnection
+	State       string
+}
+type snapshotLister interface{ Snapshot() SocketSnapshot }
+
 type NetSampler struct {
 	bus      *bus.Bus
 	tagger   *agents.Tagger
@@ -44,6 +54,9 @@ type NetSampler struct {
 	// OnProduce, when set, is called after any conn event is published — the
 	// supervisor's coverage heartbeat ("running" ≠ "seeing anything").
 	OnProduce func()
+	// OnSnapshot receives the same system-wide sample before agent/egress
+	// filtering. It must not block on network I/O.
+	OnSnapshot func(SocketSnapshot)
 
 	mu       sync.Mutex
 	dnsCache map[string]string
@@ -124,12 +137,28 @@ type liveConn struct {
 // and published even if it closed meanwhile.
 func (ns *NetSampler) step(now time.Time) int {
 	cur := map[connKey]bool{}
-	if ns.tagger.Any() {
-		for _, s := range ns.lister.SocketsFor(-1) {
+	if ns.tagger.Any() || ns.OnSnapshot != nil {
+		var sockets []SocketConnection
+		if ns.OnSnapshot != nil {
+			snapshot := SocketSnapshot{State: "partial"}
+			if lister, ok := ns.lister.(snapshotLister); ok {
+				snapshot = lister.Snapshot()
+			} else {
+				snapshot.Connections = ns.lister.SocketsFor(-1)
+			}
+			sockets = snapshot.Connections
+			ns.OnSnapshot(snapshot)
+		} else {
+			sockets = ns.lister.SocketsFor(-1)
+		}
+		for _, s := range sockets {
 			if isLoopbackHost(s.Host) {
 				continue // loopback is not egress; see isLoopbackHost
 			}
 			if _, isAgent := ns.tagger.Tag(s.PID); isAgent {
+				// Egress keeps its original per-peer identity; the inference
+				// view independently retains each local socket.
+				s.LocalHost, s.LocalPort = "", 0
 				cur[s] = true
 			}
 		}

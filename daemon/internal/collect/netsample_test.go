@@ -30,6 +30,29 @@ type funcSockLister func() []connKey
 
 func (f funcSockLister) SocketsFor(int32) []connKey { return f() }
 
+func TestLocalInferenceReceivesUntaggedLoopbackWithoutEgressEvents(t *testing.T) {
+	socks := []connKey{{PID: 777, Host: "::1", Port: 11434, LocalHost: "::1", LocalPort: 50123}}
+	ns, sub := sampler(t, &socks, func(context.Context, string) ([]string, error) {
+		t.Fatal("local inference triggered DNS")
+		return nil, nil
+	})
+	ns.tagger = agents.New(config.Config{}, stubProcSource{})
+	called := false
+	ns.OnSnapshot = func(s SocketSnapshot) {
+		called = true
+		if len(s.Connections) != 1 || s.Connections[0].PID != 777 || s.Connections[0].LocalPort != 50123 {
+			t.Fatalf("snapshot: %+v", s)
+		}
+	}
+	ns.step(time.Now())
+	if !called {
+		t.Fatal("no local snapshot without tagged agents")
+	}
+	if got := drain(sub); len(got) != 0 {
+		t.Fatalf("loopback leaked into egress: %+v", got)
+	}
+}
+
 func drain(sub <-chan event.Event) []event.Event {
 	var out []event.Event
 	for {
