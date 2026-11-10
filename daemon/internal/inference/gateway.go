@@ -232,9 +232,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	state, status := "interrupted", 0
 	defer func() {
 		if tracked {
-			if g.stopping.Load() {
-				state = "interrupted"
-			} else if r.Context().Err() != nil {
+			// A disconnect after a final response must not replace its outcome.
+			if state == "interrupted" && !g.stopping.Load() && r.Context().Err() != nil {
 				state = "cancelled"
 			}
 			g.monitor.finish(id, state, status, observation)

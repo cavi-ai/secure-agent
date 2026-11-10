@@ -16,6 +16,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - macOS control API: verify caller UID and the owning app's audit-token process version before granting UI authority.
 
 ### Fixed
+- Inference activity: preserve completed and failed outcomes when clients disconnect after receiving a response.
 - Fleet collector: refuse non-loopback startup without a read token; reject bare tokens and duplicate Authorization headers on read endpoints.
 - Ollama gateways: return refusals and close connections immediately when a client leaves its upload unfinished.
 
