@@ -77,6 +77,7 @@
       await settle(); set(initial); await settle(); scrollTo(0,0);
       const app = document.querySelector('.app');
       const closedPadding = parseFloat(getComputedStyle(app).paddingRight);
+      const closedScrollLimit = Math.max(0, document.documentElement.scrollHeight-innerHeight);
       const opener = row('stable-4').querySelector('.need-head');
       opener.focus({preventScroll:true}); opener.click(); await idle(); await frame();
       app.getAnimations().forEach(a => a.finish()); await frame();
@@ -84,13 +85,14 @@
       const basePadding = parseFloat(getComputedStyle(app).paddingRight);
       const targetPadding = closedPadding;
       const isModal = document.getElementById('drawer').getAttribute('aria-modal') === 'true';
-      scrollTo(0, Math.min(350, document.documentElement.scrollHeight-innerHeight));
+      // Use a reading position available in both drawer layouts.
+      scrollTo(0, Math.min(350, closedScrollLimit, document.documentElement.scrollHeight-innerHeight));
       await frame(); const readingTop = scrollY;
       document.getElementById('btn-drawer-close').click();
       const immediatePadding = parseFloat(getComputedStyle(app).paddingRight);
       probe.geometry.drawer = {viewport:innerWidth,docked,basePadding,targetPadding,immediatePadding,readingTop,after:scrollY};
       probe.drawer = docked ? (reduced ? Math.abs(immediatePadding-targetPadding)<2 : immediatePadding>targetPadding+100) : isModal && !document.querySelector('.app > main').inert;
-      probe.reading = Math.abs(readingTop-scrollY)<2 && document.activeElement===opener;
+      probe.reading = readingTop>0 && Math.abs(readingTop-scrollY)<2 && document.activeElement===opener;
       probe.gutter = getComputedStyle(document.documentElement).scrollbarGutter.includes('stable');
       await idle(); await frame();
       probe.fits = document.documentElement.scrollWidth<=innerWidth;
