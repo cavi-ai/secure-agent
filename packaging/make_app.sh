@@ -211,10 +211,9 @@ EOF
     cp "$MODEL_FILTER_APP_PROFILE" "${APP_DIR}/Contents/embedded.provisionprofile"
     cp "$MODEL_FILTER_EXTENSION_PROFILE" "${FILTER_DIR}/Contents/embedded.provisionprofile"
   fi
-  PROVIDER_ENTITLEMENTS=()
-  if [[ "$CODESIGN_IDENTITY" != "-" ]]; then PROVIDER_ENTITLEMENTS=(--entitlements "$FILTER_ENTITLEMENTS_DIR/provider.entitlements"); fi
-  codesign --force --options runtime --sign "$CODESIGN_IDENTITY" --identifier "$FILTER_ID" \
-    "${PROVIDER_ENTITLEMENTS[@]}" "$FILTER_DIR"
+  PROVIDER_SIGN_ARGS=(--force --options runtime --sign "$CODESIGN_IDENTITY" --identifier "$FILTER_ID")
+  if [[ "$CODESIGN_IDENTITY" != "-" ]]; then PROVIDER_SIGN_ARGS+=(--entitlements "$FILTER_ENTITLEMENTS_DIR/provider.entitlements"); fi
+  codesign "${PROVIDER_SIGN_ARGS[@]}" "$FILTER_DIR"
 fi
 # Every codesign call gets an explicit --identifier: left to itself, codesign
 # derives one from the file name + content, so the ES helper's identity (and
@@ -232,11 +231,9 @@ codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
 codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
   --identifier "${ESD_LABEL}" \
   "${APP_DIR}/Contents/MacOS/secure-agent-esd"
-HOST_ENTITLEMENTS=()
-if [[ "$MODEL_FILTER_BUILD" == 1 && "$CODESIGN_IDENTITY" != "-" ]]; then HOST_ENTITLEMENTS=(--entitlements "$FILTER_ENTITLEMENTS_DIR/host.entitlements"); fi
-codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" "${HOST_ENTITLEMENTS[@]}" \
-  --identifier "${BUNDLE_ID}" \
-  "${APP_DIR}"
+HOST_SIGN_ARGS=(--force --options runtime --sign "$CODESIGN_IDENTITY" --identifier "$BUNDLE_ID")
+if [[ "$MODEL_FILTER_BUILD" == 1 && "$CODESIGN_IDENTITY" != "-" ]]; then HOST_SIGN_ARGS+=(--entitlements "$FILTER_ENTITLEMENTS_DIR/host.entitlements"); fi
+codesign "${HOST_SIGN_ARGS[@]}" "$APP_DIR"
 
 ESD_REQ="$(codesign -d -r- "${APP_DIR}/Contents/MacOS/secure-agent-esd" 2>&1 | sed -n 's/^#* *designated => //p')"
 echo "==> ${ESD_LABEL} designated requirement: ${ESD_REQ}"
