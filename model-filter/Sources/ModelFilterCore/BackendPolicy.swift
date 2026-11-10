@@ -38,7 +38,7 @@ public struct ProcessIdentity: Codable, Equatable, Sendable {
   }
 }
 
-public struct BackendPolicy: Codable, Sendable {
+public struct BackendPolicy: Codable, Equatable, Sendable {
   public let version: Int
   public let ports: [UInt16]
   public let daemon: ProcessIdentity

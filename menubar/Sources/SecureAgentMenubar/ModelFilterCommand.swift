@@ -46,7 +46,9 @@ final class ModelFilterCommand: NSObject, OSSystemExtensionRequestDelegate {
           try await command.activate()
           let manager = NEFilterManager.shared()
           try await manager.loadFromPreferences()
-          try await configure(manager, policy: policy)
+          try await BackendPolicyUpdate.afterOwnerApproval(
+            approved: policy, current: currentPolicy,
+            save: { try await configure(manager, policy: $0) })
           print(
             "Model filter configured. Verify direct IPv4/IPv6 refusal and gateway access before relying on coverage."
           )
@@ -88,13 +90,16 @@ final class ModelFilterCommand: NSObject, OSSystemExtensionRequestDelegate {
       let previous = try JSONDecoder().decode(BackendPolicy.self, from: data)
       for attempt in 0..<15 {
         do {
-          let policy = try await currentPolicy()
-          guard policy.daemon.pid == expectedPID else { return }
-          guard policy.ports == previous.ports else {
-            throw FilterError.unavailable(
-              "Protected backend ports changed; owner setup is required again.")
-          }
-          try await configure(manager, policy: policy)
+          try await BackendPolicyUpdate.refresh(
+            previous: previous, expectedPID: expectedPID, current: currentPolicy,
+            reloadEnabled: {
+              try await manager.loadFromPreferences()
+              guard manager.isEnabled,
+                manager.providerConfiguration?.filterDataProviderBundleIdentifier == identifier,
+                let data = manager.providerConfiguration?.vendorConfiguration?["policy"] as? Data
+              else { return nil }
+              return try JSONDecoder().decode(BackendPolicy.self, from: data)
+            }, save: { try await configure(manager, policy: $0) })
           return
         } catch {
           if attempt == 14 { throw error }

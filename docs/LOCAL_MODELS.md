@@ -207,14 +207,18 @@ path. Configure and start the inference gateways, then run:
 
 The command requires local owner authentication and macOS extension approval.
 It verifies the daemon's kernel identity and same-team code signature before
-configuring the protected ports. `--model-filter status` reports configuration;
+configuring the protected ports. After approval, it checks the current daemon
+again and refuses changes to the approved ports or Unix owner.
+`--model-filter status` reports configuration;
 it does not prove that macOS is enforcing the rules. `--model-filter disable`
 requires owner authentication and restores direct backend access.
 
 Daemon restarts refresh the allowed process identity only while the filter is
 already enabled and the protected ports are unchanged. Port changes require
-owner setup again. Failure to refresh leaves the previous instance pinned; the
-new daemon cannot use those protected backends. Review the daemon/app logs if
+owner setup again. After waiting for daemon startup, refresh reloads preferences.
+A disabled filter or changed backend policy cancels the update. Failure to
+refresh leaves the previous instance pinned; the new daemon cannot use those
+protected backends. Review the daemon/app logs if
 backend access stops after a restart.
 
 Before relying on protection, verify on the provisioned installation:
