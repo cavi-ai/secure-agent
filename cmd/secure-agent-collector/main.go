@@ -64,7 +64,7 @@ func loadConfig() Config {
 	var secretsRaw string
 	flag.StringVar(&secretsRaw, "secrets", "", "node_id=secret pairs, comma-separated (e.g. n1=s3cret,n2=s3cret2)")
 	flag.StringVar(&cfg.ReadToken, "read-token", os.Getenv("SECURE_AGENT_COLLECTOR_READ_TOKEN"),
-		"bearer token required on read endpoints (/fleet, /nodes/*, /) — set this when binding beyond loopback")
+		"bearer token for read endpoints (/fleet, /nodes/*, /); required for non-loopback binds")
 	flag.Parse()
 
 	// Node secrets come from a flat file of "node_id=secret" lines, the
@@ -121,6 +121,9 @@ type Collector struct {
 
 func main() {
 	cfg := loadConfig()
+	if err := cfg.validateReadAccess(); err != nil {
+		log.Fatalf("collector: %v", err)
+	}
 	if err := os.MkdirAll(cfg.StoreDir, 0o700); err != nil {
 		log.Fatalf("store dir: %v", err)
 	}
@@ -129,11 +132,6 @@ func main() {
 	}
 
 	c := &Collector{cfg: cfg, store: NewStore(cfg.StoreDir)}
-
-	if cfg.ReadToken == "" && !isLoopbackAddr(cfg.Addr) {
-		log.Printf("collector: WARNING: read endpoints are UNAUTHENTICATED on a non-loopback address (%s) — "+
-			"the full multi-node security telemetry is exposed to the network. Set -read-token.", cfg.Addr)
-	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /hooks/secure-agent", c.handleHook)
@@ -150,6 +148,13 @@ func main() {
 	log.Printf("secure-agent-collector listening on http://%s (nodes: %d)", cfg.Addr, len(cfg.Secrets))
 	srv := &http.Server{Addr: cfg.Addr, Handler: mux}
 	log.Fatal(srv.ListenAndServe())
+}
+
+func (c Config) validateReadAccess() error {
+	if strings.TrimSpace(c.ReadToken) == "" && !isLoopbackAddr(c.Addr) {
+		return errors.New("-read-token is required for a non-loopback listen address")
+	}
+	return nil
 }
 
 // isLoopbackAddr reports whether addr binds only to loopback.
@@ -169,13 +174,22 @@ func isLoopbackAddr(addr string) bool {
 }
 
 // requireReadAuth gates read endpoints on the configured bearer token. With no
-// token configured the endpoints stay open (the default bind is loopback, and
-// main warns loudly otherwise) — but a configured token is always enforced.
+// token configured only a loopback bind permits unauthenticated reads. A
+// configured token is always enforced, including on loopback.
 func (c *Collector) requireReadAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if c.cfg.validateReadAccess() != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		if c.cfg.ReadToken != "" {
-			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if subtle.ConstantTimeCompare([]byte(got), []byte(c.cfg.ReadToken)) != 1 {
+			values := r.Header.Values("Authorization")
+			if len(values) != 1 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			got, bearer := strings.CutPrefix(values[0], "Bearer ")
+			if !bearer || subtle.ConstantTimeCompare([]byte(got), []byte(c.cfg.ReadToken)) != 1 {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}

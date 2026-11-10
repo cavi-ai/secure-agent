@@ -179,9 +179,13 @@ adds to built-in allowed origins; its local API does not enforce API keys.
 Unsupported services remain unassessed until the server owner verifies the
 actual native controls and every direct listener.
 
-Transparent per-flow filtering is not part of this protection surface. On
-macOS, [Network Extension content filters](https://developer.apple.com/documentation/networkextension/content-filter-providers)
-use a separate provider architecture and require the
+An optional macOS model-backend filter uses
+[Network Extension content filters](https://developer.apple.com/documentation/networkextension/content-filter-providers)
+and requires the
 [Network Extensions entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.networking.networkextension).
-Such a component needs its own distribution and supported-OS validation,
-including direct loopback and IPv6 bypass checks, before it can claim coverage.
+It is built only when requested, requires owner provisioning and installation,
+and remains unverified until direct loopback and IPv6 refusal checks pass on
+the installed extension. It allows only the pinned daemon process instance on
+configured backend ports. It does not isolate unselected listeners, revoke
+existing connections or establish a separate credential authority. See
+[macOS backend filtering](LOCAL_MODELS.md#restrict-direct-backend-connections-on-macos).

@@ -52,24 +52,37 @@ type Gateway struct {
 	monitor  *Monitor
 	client   *http.Client
 	stopping atomic.Bool
+	policy   RequestPolicy
 	// Identify authenticates a socket's process; client-supplied identity
 	// headers are never used for attribution.
 	Identify func(context.Context, string) (int32, string)
 }
 
-func NewGateway(config GatewayConfig, monitor *Monitor) (*Gateway, error) {
+// RequestPolicy checks a backend request before forwarding. Inspect must read
+// the bounded body in full and replace it with an unchanged replayable body.
+// CheckEgress runs after upload completion, only for inference routes, so a
+// human approval does not consume the client's upload deadline.
+type RequestPolicy struct {
+	Inspect     func(*http.Request) error
+	CheckEgress func(*http.Request) error
+}
+
+func NewGateway(config GatewayConfig, monitor *Monitor, policy RequestPolicy) (*Gateway, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
 	if monitor == nil {
 		return nil, errors.New("inference gateway requires an activity monitor")
 	}
+	if policy.Inspect == nil || policy.CheckEgress == nil {
+		return nil, errors.New("inference gateway requires request inspection and egress policy")
+	}
 	upstream, _ := endpoint(config.Upstream)
 	request, _ := http.NewRequest(http.MethodGet, upstream.String(), nil)
 	if err := localservice.Authorize(request, config.APIKeyFile); err != nil {
 		return nil, err
 	}
-	return &Gateway{config: config, upstream: upstream, monitor: monitor, client: loopback.Client(0)}, nil
+	return &Gateway{config: config, upstream: upstream, monitor: monitor, client: loopback.Client(0), policy: policy}, nil
 }
 func (g *Gateway) Serve(ctx context.Context) error {
 	g.monitor.GatewayStatus(g.config, "starting")
@@ -137,39 +150,68 @@ func metadataRoute(method, path string) bool {
 	return method == http.MethodPost && path == "/api/show"
 }
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(15 * time.Second))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
 	if !g.hostAllowed(r.Host) || len(r.Header.Values("Origin")) > 0 || r.URL.IsAbs() || r.URL.RawQuery != "" || r.URL.RawPath != "" {
-		http.Error(w, "gateway Host and Origin policy refused this request", 403)
+		gatewayError(w, "gateway Host and Origin policy refused this request", 403)
 		return
 	}
 	if !g.authorized(r) {
-		http.Error(w, "model gateway credential required", 401)
+		gatewayError(w, "model gateway credential required", 401)
 		return
 	}
 	tracked := r.Method == http.MethodPost && inferenceRoute(r.URL.Path)
 	if !tracked && !metadataRoute(r.Method, r.URL.Path) {
-		http.Error(w, "model administration is unavailable through this gateway", 403)
+		gatewayError(w, "model administration is unavailable through this gateway", 403)
 		return
 	}
 	if !g.monitor.reserve() {
-		http.Error(w, "model gateway is at capacity", 503)
+		gatewayError(w, "model gateway is at capacity", 503)
 		return
 	}
 	defer g.monitor.release()
 	if r.ContentLength > maxRequestBody {
-		http.Error(w, "model request exceeds 16 MiB", 413)
+		gatewayError(w, "model request exceeds 16 MiB", 413)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
-	controller := http.NewResponseController(w)
-	_ = controller.SetReadDeadline(time.Now().Add(15 * time.Second))
 	body := http.MaxBytesReader(w, r.Body, maxRequestBody)
 	defer body.Close()
-	prefix, err := io.ReadAll(io.LimitReader(body, metadataLimit))
+	target := *g.upstream
+	target.Path = r.URL.Path
+	checked := r.Clone(ctx)
+	checked.URL, checked.Host, checked.RequestURI = &target, target.Host, ""
+	checked.Body = body
+	if r.Body == nil || r.Body == http.NoBody {
+		checked.Body = http.NoBody
+	}
+	stripHopHeaders(checked.Header)
+	for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Cookie", "Origin", "Referer", "Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "Accept-Encoding"} {
+		checked.Header.Del(name)
+	}
+	defer func() { _ = checked.Body.Close() }()
+	if err := g.policy.Inspect(checked); err != nil {
+		var maxBytes *http.MaxBytesError
+		if errors.As(err, &maxBytes) {
+			gatewayError(w, "model request exceeds 16 MiB", 413)
+		} else {
+			gatewayError(w, "model request refused by security policy", 403)
+		}
+		return
+	}
+	_ = controller.SetReadDeadline(time.Time{})
+	if tracked {
+		if err := g.policy.CheckEgress(checked); err != nil {
+			gatewayError(w, "model request refused by security policy", 403)
+			return
+		}
+	}
+	prefix, err := io.ReadAll(io.LimitReader(checked.Body, metadataLimit))
 	if err != nil {
-		http.Error(w, "model request body unavailable", 400)
+		gatewayError(w, "model request body unavailable", 400)
 		return
 	}
 	model := requestModel(prefix)
@@ -182,7 +224,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		id, err = g.monitor.begin(g.upstream.String(), r.URL.Path, model, pid, sessionID)
 		if err != nil {
-			http.Error(w, "model request tracking is at capacity", 503)
+			gatewayError(w, "model request tracking is at capacity", 503)
 			return
 		}
 	}
@@ -190,34 +232,27 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	state, status := "interrupted", 0
 	defer func() {
 		if tracked {
-			if g.stopping.Load() {
-				state = "interrupted"
-			} else if r.Context().Err() != nil {
+			// A disconnect after a final response must not replace its outcome.
+			if state == "interrupted" && !g.stopping.Load() && r.Context().Err() != nil {
 				state = "cancelled"
 			}
 			g.monitor.finish(id, state, status, observation)
 		}
 	}()
-	target := *g.upstream
-	target.Path = r.URL.Path
-	outgoing, err := http.NewRequestWithContext(ctx, r.Method, target.String(), &prefixBody{Reader: io.MultiReader(bytes.NewReader(prefix), body), Closer: body})
+	outgoing, err := http.NewRequestWithContext(ctx, r.Method, target.String(), &prefixBody{Reader: io.MultiReader(bytes.NewReader(prefix), checked.Body), Closer: checked.Body})
 	if err != nil {
-		http.Error(w, "invalid model request", 400)
+		gatewayError(w, "invalid model request", 400)
 		return
 	}
 	outgoing.ContentLength = r.ContentLength
-	outgoing.Header = r.Header.Clone()
-	stripHopHeaders(outgoing.Header)
-	for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Cookie", "Origin", "Referer", "Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "Accept-Encoding"} {
-		outgoing.Header.Del(name)
-	}
+	outgoing.Header = checked.Header.Clone()
 	response, err := g.client.Do(outgoing)
 	if err != nil {
 		var maxBytes *http.MaxBytesError
 		if errors.As(err, &maxBytes) {
-			http.Error(w, "model request exceeds 16 MiB", 413)
+			gatewayError(w, "model request exceeds 16 MiB", 413)
 		} else {
-			http.Error(w, "model backend unavailable", 502)
+			gatewayError(w, "model backend unavailable", 502)
 		}
 		return
 	}
@@ -225,7 +260,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	status = response.StatusCode
 	if status >= 300 && status < 400 {
 		state = "failed"
-		http.Error(w, "model backend redirect refused", 502)
+		gatewayError(w, "model backend redirect refused", 502)
 		return
 	}
 	stripHopHeaders(response.Header)
@@ -253,6 +288,17 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		state = "completed"
 	}
+}
+
+// Refusals must not drain an untrusted upload to preserve HTTP keep-alive.
+// Expire reads as well as closing the connection: net/http also closes the
+// request body after flushing a response, which can otherwise block on input.
+func gatewayError(w http.ResponseWriter, message string, status int) {
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now())
+	_ = controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	w.Header().Set("Connection", "close")
+	http.Error(w, message, status)
 }
 
 type gatewayWriter struct {

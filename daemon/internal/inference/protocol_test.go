@@ -83,8 +83,8 @@ func TestGatewayCompatibleProtocolsAndConnectionReuse(t *testing.T) {
 	}
 }
 func TestGatewayRefusesBackendRedirectAndKeyPermissionDrift(t *testing.T) {
-	reached := false
-	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true }))
+	var reached atomic.Bool
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached.Store(true) }))
 	defer destination.Close()
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, destination.URL, http.StatusTemporaryRedirect)
@@ -97,8 +97,9 @@ func TestGatewayRefusesBackendRedirectAndKeyPermissionDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	response.Body.Close()
-	if reached || response.StatusCode != 502 || waitRequest(t, m).State != "failed" {
-		t.Fatal("redirect escaped gateway")
+	got := waitRequest(t, m)
+	if reached.Load() || response.StatusCode != 502 || got.State != "failed" {
+		t.Fatalf("redirect reached=%t status=%d state=%s", reached.Load(), response.StatusCode, got.State)
 	}
 	request = gatewayRequest(t, server.URL, key, `{"model":"test"}`)
 	if err := os.Chmod(key, 0644); err != nil {
@@ -111,6 +112,34 @@ func TestGatewayRefusesBackendRedirectAndKeyPermissionDrift(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != 401 {
 		t.Fatal("unsafe key file remained usable")
+	}
+}
+
+type cancelOnHeaderWriter struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
+
+func (w cancelOnHeaderWriter) WriteHeader(status int) {
+	w.ResponseRecorder.WriteHeader(status)
+	w.cancel()
+}
+
+func TestGatewayKeepsRedirectFailureAfterClientDisconnect(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://127.0.0.1:1", http.StatusTemporaryRedirect)
+	}))
+	defer backend.Close()
+	m, server, key := testGateway(t, backend.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request := gatewayRequest(t, server.URL, key, `{"model":"test"}`).WithContext(ctx)
+	request.URL.Scheme, request.URL.Host = "", ""
+	writer := cancelOnHeaderWriter{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	server.Config.Handler.ServeHTTP(writer, request)
+	got := waitRequest(t, m)
+	if writer.Code != http.StatusBadGateway || got.State != "failed" {
+		t.Fatalf("redirect status=%d state=%s", writer.Code, got.State)
 	}
 }
 func TestRequestCapacityAndHistoryStayBounded(t *testing.T) {

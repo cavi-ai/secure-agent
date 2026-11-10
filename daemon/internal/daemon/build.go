@@ -51,6 +51,8 @@ import (
 
 // Options are the composition inputs that are not part of config.Config.
 type Options struct {
+	// OwnerPIDVersion is the owning app's kernel audit-token process version.
+	OwnerPIDVersion uint32
 	// ConfigPath is where the live config was loaded from. Empty disables the
 	// hot-reload watcher and the resource-policy writer (both need a path to
 	// persist to).
@@ -99,6 +101,10 @@ func writeCwdOverrides(cfg config.Config) {
 // and servers. Returns a Components the caller shuts down. On failure it tears
 // down whatever it had already built before returning the error.
 func Build(parent context.Context, cfg config.Config, opts Options) (*Components, error) {
+	uiPID := owningUIPID()
+	if uiPID > 0 && opts.OwnerPIDVersion == 0 {
+		return nil, errors.New("owning app process instance is required")
+	}
 	ctx, cancel := context.WithCancel(parent)
 	c := &Components{cfg: cfg, cancel: cancel, apiErrors: make(chan error, 1)}
 
@@ -319,7 +325,6 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// as the only mutating client; direct launches (ppid = shell) keep
 	// owner-uid mutation so headless/ssh management still works.
 	agentPIDSet := taggedPIDSet(tagger)
-	uiPID := owningUIPID()
 
 	retriageFuncs, hostAssessFuncs, guardAdvisor, worktreeAdvisor := buildAdvisorHooks(st, advisorStk)
 	projectAdvisor := func(req model.ProjectCleanupRequest) bool {
@@ -396,9 +401,10 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			},
 		},
 		Peers: api.PeerDeps{
-			Checker:   api.NewPeerChecker(),
-			AgentPIDs: agentPIDSet,
-			UIPID:     uiPID,
+			Checker:      api.NewPeerChecker(),
+			AgentPIDs:    agentPIDSet,
+			UIPID:        uiPID,
+			UIPIDVersion: opts.OwnerPIDVersion,
 			IsAgentPID: func(pid int32) bool {
 				_, isAgent := tagger.Tag(pid)
 				return isAgent
@@ -483,7 +489,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		}
 	}()
 
-	c.collectorsDone = startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spool, fileTelemetryOn, localInference)
+	c.collectorsDone = startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spool, fileTelemetryOn, localInference, askEgress)
 
 	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
 	return c, nil
@@ -671,10 +677,6 @@ func (h *flagHookHolder) run(fl model.Flag) {
 	}
 }
 
-// owningUIPID returns the pid of the owning menubar app, or 0. Pinned as the
-// only mutating client — but only when the parent really is an .app binary. A
-// direct launch from a shell must keep owner-uid mutation (headless/ssh
-// management). ps(1) is spawned once at startup, not per request.
 // coverageFilePath is where the coverage heartbeats persist, next to the
 // event store: <db dir>/coverage.json.
 func coverageFilePath(dbPath string) string {
@@ -714,6 +716,8 @@ func persistLastProduced(dbPath string, reg *supervise.Registry) {
 	_ = safefile.ReplaceFile(path, data, 0o600)
 }
 
+// owningUIPID pins the bundled SecureAgent parent as the mutating client.
+// Other launchers retain headless owner-uid management. ps runs once at startup.
 func owningUIPID() int32 {
 	ppid := os.Getppid()
 	if ppid <= 1 {
@@ -724,7 +728,7 @@ func owningUIPID() int32 {
 		return 0
 	}
 	parentExe := strings.TrimSpace(string(out))
-	if strings.Contains(parentExe, ".app/Contents/MacOS/") || strings.Contains(parentExe, ".app/Contents/Frameworks/") {
+	if strings.HasSuffix(parentExe, ".app/Contents/MacOS/SecureAgent") {
 		return int32(ppid)
 	}
 	return 0
@@ -1040,7 +1044,7 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, procSource 
 // spool tail of the root ES collector (the LaunchDaemon, or a developer's
 // `secure-agentd -es-collector` run as root); without a spool it is degraded,
 // not crash-looped, and starts when the spool appears.
-func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer], fileTelemetryOn *atomic.Bool, localInference *inference.Monitor) <-chan struct{} {
+func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer], fileTelemetryOn *atomic.Bool, localInference *inference.Monitor, askEgress func(context.Context, taint.Verdict) bool) <-chan struct{} {
 	var workers sync.WaitGroup
 	run := func(name string, fn func(context.Context) error) {
 		workers.Go(func() { sup.Run(ctx, name, fn) })
@@ -1094,12 +1098,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 		for i, gatewayConfig := range cfg.LocalInference.Gateways {
 			localInference.GatewayStatus(gatewayConfig, "configured")
 			run(fmt.Sprintf("inference-gateway-%d", i+1), func(c context.Context) error {
-				gateway, err := inference.NewGateway(gatewayConfig, localInference)
-				if err != nil {
-					localInference.GatewayStatus(gatewayConfig, "unavailable")
-					return err
-				}
-				gateway.Identify = func(ctx context.Context, remote string) (int32, string) {
+				identify := func(ctx context.Context, remote string) (int32, string) {
 					pid, err := connpeer.PID(ctx, remote, inferenceClientPID)
 					if err != nil {
 						return 0, ""
@@ -1109,6 +1108,18 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 					}
 					return pid, ""
 				}
+				gate := egressGate(cfg, resolver)
+				policy, err := inferenceRequestPolicy(fwEngine, gate, askEgress, b.Publish, identify)
+				if err != nil {
+					localInference.GatewayStatus(gatewayConfig, "unavailable")
+					return err
+				}
+				gateway, err := inference.NewGateway(gatewayConfig, localInference, policy)
+				if err != nil {
+					localInference.GatewayStatus(gatewayConfig, "unavailable")
+					return err
+				}
+				gateway.Identify = identify
 				return gateway.Serve(c)
 			})
 		}

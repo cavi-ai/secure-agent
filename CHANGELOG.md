@@ -9,6 +9,18 @@ All notable changes to `secure-agent` are documented here. The format follows
 ### Added
 - Local inference: continuously discover visible localhost model servers and connected apps, with separate loaded-model and request activity in Monitoring and `secure-agent local-inference`.
 - Ollama: optional authenticated gateways track native, OpenAI-compatible and Anthropic-compatible requests, streaming, cancellation and reported token usage. Direct backend traffic remains outside gateway tracking and protection.
+- Inference gateways: apply secret-firewall rules and session-taint permissions before forwarding, with encrypted upload buffering and refusal of payloads that cannot be inspected.
+- macOS model filtering: optional system extension restricts new connections to selected loopback backend ports to the daemon's kernel process identity. Owner provisioning, installation and live verification are required.
+
+### Changed
+- macOS control API: verify caller UID and the owning app's audit-token process version before granting UI authority.
+
+### Fixed
+- Daemon startup: distinguish Secure Agent from other app bundles when selecting the owning UI process.
+- macOS model filtering: revalidate the daemon and approved ports after setup approval; respect filter changes made during daemon restart recovery.
+- Inference activity: preserve completed and failed outcomes when clients disconnect after receiving a response.
+- Fleet collector: refuse non-loopback startup without a read token; reject bare tokens and duplicate Authorization headers on read endpoints.
+- Ollama gateways: return refusals and close connections immediately when a client leaves its upload unfinished.
 
 ## [1.6.0] - 2026-11-09
 

@@ -81,6 +81,10 @@ func TestUsableMatchesNewSink(t *testing.T) {
 func TestSinkRetriesOn500ThenSucceeds(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		if calls.Add(1) < 3 {
 			w.WriteHeader(500)
 			return
@@ -90,7 +94,6 @@ func TestSinkRetriesOn500ThenSucceeds(t *testing.T) {
 	defer srv.Close()
 
 	s := NewSink(WebhookConfig{URL: srv.URL, Secret: "s"}, "n", "v", "")
-	// Shrink backoff so the test is fast.
 	done := make(chan struct{})
 	go func() { s.Deliver(EventIncident, map[string]any{"id": "x"}, 0, ""); close(done) }()
 	select {
@@ -98,8 +101,17 @@ func TestSinkRetriesOn500ThenSucceeds(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("delivery did not finish (retries stuck?)")
 	}
+	// Metadata probes are not webhook delivery attempts.
+	probe, err := srv.Client().Get(srv.URL + "/api/tags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe.Body.Close()
 	if calls.Load() != 3 {
 		t.Fatalf("calls = %d, want 3 (2 retries)", calls.Load())
+	}
+	if probe.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("metadata probe status = %d", probe.StatusCode)
 	}
 }
 

@@ -402,9 +402,10 @@ type AdvisorDeps struct {
 // PeerDeps identify callers (optional). An empty Checker leaves the API
 // ungated.
 type PeerDeps struct {
-	Checker   PeerChecker
-	AgentPIDs func() map[int32]struct{}
-	UIPID     int32
+	Checker      PeerChecker
+	AgentPIDs    func() map[int32]struct{}
+	UIPID        int32
+	UIPIDVersion uint32
 	// IsAgentPID reports whether pid belongs to an agent family, walking its
 	// ancestry live. NoAgent routes refuse such peers; unwired, the console
 	// listener refuses every NoAgent request.
@@ -520,7 +521,7 @@ func New(d Deps) *API {
 	}
 	a.peerChk = d.Peers.Checker
 	if d.Peers.Checker != nil {
-		a.peerRole = &peers{OwnerUID: os.Getuid(), UIPID: d.Peers.UIPID, AgentPIDs: d.Peers.AgentPIDs}
+		a.peerRole = &peers{OwnerUID: os.Getuid(), UIPID: d.Peers.UIPID, UIPIDVersion: d.Peers.UIPIDVersion, AgentPIDs: d.Peers.AgentPIDs}
 	}
 	if d.Store != nil {
 		a.costs.st, a.costs.saveAs = d.Store, costsCacheName

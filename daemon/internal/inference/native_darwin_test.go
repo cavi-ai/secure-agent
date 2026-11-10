@@ -142,7 +142,17 @@ func TestNativeOllamaGatewayAndPassiveClients(t *testing.T) {
 		t.Fatal(err)
 	}
 	gatewayAddress := freeAddress(t)
-	gateway, err := inference.NewGateway(inference.GatewayConfig{Listen: gatewayAddress, Upstream: target, APIKeyFile: key}, monitor)
+	gateway, err := inference.NewGateway(inference.GatewayConfig{Listen: gatewayAddress, Upstream: target, APIKeyFile: key}, monitor, inference.RequestPolicy{
+		Inspect: func(r *http.Request) error {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				return err
+			}
+			r.Body = io.NopCloser(strings.NewReader(string(body)))
+			return nil
+		},
+		CheckEgress: func(*http.Request) error { return nil },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

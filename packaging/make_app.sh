@@ -36,6 +36,20 @@ SWIFT_BUILD_ARGS=(-c release --arch arm64 --arch x86_64 --package-path menubar)
 
 source "${REPO_ROOT}/packaging/lib/sign_identity.sh"
 CODESIGN_IDENTITY="$(resolve_sign_identity)"
+MODEL_FILTER_BUILD="${MODEL_FILTER_BUILD:-0}"
+[[ "$MODEL_FILTER_BUILD" == 0 || "$MODEL_FILTER_BUILD" == 1 ]] || { echo "error: MODEL_FILTER_BUILD must be 0 or 1" >&2; exit 1; }
+if [[ -n "${MODEL_FILTER_TEAM_ID:-}" && ! "${MODEL_FILTER_TEAM_ID}" =~ ^[A-Z0-9]{10}$ ]]; then
+  echo "error: invalid MODEL_FILTER_TEAM_ID" >&2; exit 1
+fi
+if [[ "$MODEL_FILTER_BUILD" == 1 && "$CODESIGN_IDENTITY" != "-" ]]; then
+  [[ "${MODEL_FILTER_TEAM_ID:-}" =~ ^[A-Z0-9]{10}$ && -f "${MODEL_FILTER_APP_PROFILE:-}" && -f "${MODEL_FILTER_EXTENSION_PROFILE:-}" ]] || {
+    echo "error: model filtering requires MODEL_FILTER_TEAM_ID and owner-provided MODEL_FILTER_APP_PROFILE / MODEL_FILTER_EXTENSION_PROFILE" >&2; exit 1;
+  }
+  FILTER_ENTITLEMENTS_DIR="$(mktemp -d)"
+  trap 'rm -rf "$FILTER_ENTITLEMENTS_DIR"' EXIT
+  python3 packaging/lib/model_filter_entitlements.py "$MODEL_FILTER_TEAM_ID" \
+    "$MODEL_FILTER_APP_PROFILE" "$MODEL_FILTER_EXTENSION_PROFILE" "$FILTER_ENTITLEMENTS_DIR"
+fi
 
 echo "==> Building universal Go binaries (version ${VERSION})..."
 mkdir -p bin
@@ -66,6 +80,12 @@ IMAGE_TEXT_BIN="$(dirname "${MENUBAR_BIN}")/secure-agent-image-text"
 # makes this build write it again from its current objects.
 rm -f "${MENUBAR_BIN}" "${IMAGE_TEXT_BIN}"
 bash packaging/swift_macos.sh build "${SWIFT_BUILD_ARGS[@]}"
+if [[ "$MODEL_FILTER_BUILD" == 1 ]]; then
+  FILTER_BUILD_ARGS=(-c release --arch arm64 --arch x86_64 --package-path model-filter --product secure-agent-model-filter)
+  FILTER_BIN="$(bash packaging/swift_macos.sh build "${FILTER_BUILD_ARGS[@]}" --show-bin-path)/secure-agent-model-filter"
+  bash packaging/swift_macos.sh build "${FILTER_BUILD_ARGS[@]}"
+  [[ -x "$FILTER_BIN" ]] || { echo "error: model filter binary is unavailable" >&2; exit 1; }
+fi
 [[ -x "${MENUBAR_BIN}" ]] || { echo "error: menubar binary not found at ${MENUBAR_BIN}" >&2; exit 1; }
 [[ -x "${IMAGE_TEXT_BIN}" ]] || { echo "error: image text helper not found at ${IMAGE_TEXT_BIN}" >&2; exit 1; }
 # Check both linked architectures before signing or assembling the bundle.
@@ -132,6 +152,8 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <!-- Keep a Dock control if macOS hides the menu bar status item. -->
     <key>LSUIElement</key><false/>
+    <key>ModelFilterIncluded</key>$(if [[ "$MODEL_FILTER_BUILD" == 1 ]]; then echo '<true/>'; else echo '<false/>'; fi)
+    <key>NSSystemExtensionUsageDescription</key><string>Restrict access to the local model backends you select.</string>
     <key>NSUserNotificationAlertUsageDescription</key><string>Secure Agent sends alerts when AI agents trigger security flags.</string>
     <!-- secure-agent://telemetry/repair: the CLI's telemetry repair asks the app to re-register its file-telemetry helper. -->
     <key>CFBundleURLTypes</key>
@@ -164,6 +186,35 @@ cat > "${APP_DIR}/Contents/Library/LaunchDaemons/${ESD_LABEL}.plist" <<EOF
 EOF
 
 echo "==> Signing (${CODESIGN_IDENTITY})..."
+if [[ "$MODEL_FILTER_BUILD" == 1 ]]; then
+  FILTER_ID="${BUNDLE_ID}.model-filter"
+  FILTER_DIR="${APP_DIR}/Contents/Library/SystemExtensions/${FILTER_ID}.systemextension"
+  mkdir -p "${FILTER_DIR}/Contents/MacOS"
+  cp "$FILTER_BIN" "${FILTER_DIR}/Contents/MacOS/secure-agent-model-filter"
+  cat > "${FILTER_DIR}/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>${FILTER_ID}</string>
+<key>CFBundleName</key><string>Secure Agent Model Filter</string>
+<key>CFBundleExecutable</key><string>secure-agent-model-filter</string>
+<key>CFBundlePackageType</key><string>SYSX</string>
+<key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
+<key>CFBundleShortVersionString</key><string>${SHORT_VERSION}</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>NetworkExtension</key><dict>
+<key>NEMachServiceName</key><string>${MODEL_FILTER_TEAM_ID:-adhoc}.${FILTER_ID}</string>
+<key>NEProviderClasses</key><dict><key>com.apple.networkextension.filter-data</key><string>ModelFilterProvider.FilterDataProvider</string></dict>
+</dict></dict></plist>
+EOF
+  if [[ "$CODESIGN_IDENTITY" != "-" ]]; then
+    cp "$MODEL_FILTER_APP_PROFILE" "${APP_DIR}/Contents/embedded.provisionprofile"
+    cp "$MODEL_FILTER_EXTENSION_PROFILE" "${FILTER_DIR}/Contents/embedded.provisionprofile"
+  fi
+  PROVIDER_SIGN_ARGS=(--force --options runtime --sign "$CODESIGN_IDENTITY" --identifier "$FILTER_ID")
+  if [[ "$CODESIGN_IDENTITY" != "-" ]]; then PROVIDER_SIGN_ARGS+=(--entitlements "$FILTER_ENTITLEMENTS_DIR/provider.entitlements"); fi
+  codesign "${PROVIDER_SIGN_ARGS[@]}" "$FILTER_DIR"
+fi
 # Every codesign call gets an explicit --identifier: left to itself, codesign
 # derives one from the file name + content, so the ES helper's identity (and
 # with it, its Full Disk Access / Background Task Management grant) changes
@@ -180,9 +231,9 @@ codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
 codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
   --identifier "${ESD_LABEL}" \
   "${APP_DIR}/Contents/MacOS/secure-agent-esd"
-codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
-  --identifier "${BUNDLE_ID}" \
-  "${APP_DIR}"
+HOST_SIGN_ARGS=(--force --options runtime --sign "$CODESIGN_IDENTITY" --identifier "$BUNDLE_ID")
+if [[ "$MODEL_FILTER_BUILD" == 1 && "$CODESIGN_IDENTITY" != "-" ]]; then HOST_SIGN_ARGS+=(--entitlements "$FILTER_ENTITLEMENTS_DIR/host.entitlements"); fi
+codesign "${HOST_SIGN_ARGS[@]}" "$APP_DIR"
 
 ESD_REQ="$(codesign -d -r- "${APP_DIR}/Contents/MacOS/secure-agent-esd" 2>&1 | sed -n 's/^#* *designated => //p')"
 echo "==> ${ESD_LABEL} designated requirement: ${ESD_REQ}"

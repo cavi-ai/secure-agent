@@ -16,6 +16,7 @@ changes guard or firewall enforcement.
 | Existing llama.cpp server | Native key-file authentication | Reviewed, direct current-user macOS launchd job |
 | Existing Ollama server | Browser Origin and Host hardening | The local API remains unauthenticated |
 | Optional Ollama gateway | Authenticated request tracking | Configured gateway traffic; direct backend access remains possible |
+| Optional macOS backend filter | Kernel process checks for new loopback backend connections | Owner-provisioned system extension; selected ports only; requires live verification |
 | Other servers or service managers | Manual server-owner configuration | Metadata observations alone leave protection unassessed |
 
 ## Set up private managed analysis
@@ -112,6 +113,25 @@ create, push and delete are refused. Model metadata routes remain authenticated.
 Browser Origin headers are refused; browser applications should use their own
 authorized server-side client.
 
+Before forwarding, the gateway applies the current secret-firewall registry,
+patterns and rule modes to request headers and the complete bounded upload.
+Monitor-mode matches are recorded and forwarded; block-mode matches are refused.
+Gateway credentials are removed before inspection and forwarding. Larger uploads
+use an encrypted, unlinked temporary buffer; their original bytes are replayed
+only after inspection. Uploads over 16 MiB, unreadable bodies, replay-storage
+failures, unsupported content encodings and invalid gzip are refused. Gzip
+expansion is limited to 64 MiB. The shared scanner uses 1 MiB windows and 64 KiB
+overlap; patterns or tokens longer than those bounds can be missed, as described
+in the [firewall threat model](FIREWALL_THREAT_MODEL.md).
+
+Inference requests also follow the session's existing `untrusted-egress`,
+`untrusted-egress-injected` and `network-send` policies. Monitor records and
+forwards; prompt and session modes use the existing permission broker; deny
+refuses. Missing approval refuses access. The routing proxy's loopback and
+model-host exemptions do not apply here: a local model endpoint can forward to
+cloud services. Authenticated metadata requests do not prompt for inference
+permission. The gateway requires both policy checks to be available at startup.
+
 The daemon manages only the gateway listener; the existing Ollama server stays
 under its current owner. Configurations containing up to four gateways and 32
 explicit metadata endpoints are supported. Gateway configuration changes require
@@ -126,7 +146,8 @@ backend; it does not identify Ollama's internal queue or GPU execution state.
 Only 64 concurrent requests and the latest 128 completed records are retained
 in memory. They reset when the daemon restarts. Prompts and responses are not
 stored in the activity records. Requests are limited to 16 MiB and ten minutes;
-body upload, response writes and headers also have bounded deadlines. The
+body upload, response writes and headers also have bounded deadlines. Refused
+requests close their connection without waiting for the remaining upload. The
 gateway refuses new inference requests when tracking capacity is full.
 
 **The gateway does not isolate the raw Ollama backend.** Other local clients
@@ -140,6 +161,81 @@ unknown unless separately established.
 The managed mlx-agent analysis worker continues to use its private Unix
 transport. Ollama monitoring does not replace that runtime or install another
 model engine.
+
+## Restrict direct backend connections on macOS
+
+The optional model filter is a Network Extension system extension for macOS 14
+and later. It filters new outbound TCP connections to the loopback ports behind
+configured inference gateways, covering IPv4, IPv6 and mapped IPv6. Only the
+running daemon's kernel audit identity (UID, PID and process version) is allowed
+to reach those backends. Other apps use the authenticated gateway. The filter
+does not read HTTP content, run a second model server or change model caches.
+Existing MLX analysis keeps its private Unix transport.
+
+This is an opt-in build and installation. An ordinary build does not install or
+activate filtering. Prepare a review bundle without Apple services:
+
+```sh
+CODESIGN_IDENTITY=- MODEL_FILTER_BUILD=1 make app
+```
+
+The ad-hoc bundle includes the extension executable but omits restricted
+entitlements and cannot activate filtering. For an installable build, the owner
+must supply a signing identity, Team ID, and provisioning profiles authorizing
+the Network Extension entitlement for both bundle IDs:
+
+- App: `com.cavi-ai.secure-agent`
+- Extension: `com.cavi-ai.secure-agent.model-filter`
+
+The entitlement templates are in `model-filter/Resources/`. With existing local
+profiles, build using:
+
+```sh
+MODEL_FILTER_BUILD=1 \
+MODEL_FILTER_TEAM_ID=YOURTEAMID \
+MODEL_FILTER_APP_PROFILE=/absolute/path/app.provisionprofile \
+MODEL_FILTER_EXTENSION_PROFILE=/absolute/path/filter.provisionprofile \
+CODESIGN_IDENTITY='Developer ID Application: your signing identity' make app
+```
+
+Install the provisioned app through the normal owner-controlled distribution
+path. Configure and start the inference gateways, then run:
+
+```sh
+'/Applications/Secure Agent.app/Contents/MacOS/SecureAgent' --model-filter enable
+```
+
+The command requires local owner authentication and macOS extension approval.
+It verifies the daemon's kernel identity and same-team code signature before
+configuring the protected ports. After approval, it checks the current daemon
+again and refuses changes to the approved ports or Unix owner.
+`--model-filter status` reports configuration;
+it does not prove that macOS is enforcing the rules. `--model-filter disable`
+requires owner authentication and restores direct backend access.
+
+Daemon restarts refresh the allowed process identity only while the filter is
+already enabled and the protected ports are unchanged. Port changes require
+owner setup again. After waiting for daemon startup, refresh reloads preferences.
+A disabled filter or changed backend policy cancels the update. Failure to
+refresh leaves the previous instance pinned; the new daemon cannot use those
+protected backends. Review the daemon/app logs if
+backend access stops after a restart.
+
+Before relying on protection, verify on the provisioned installation:
+
+1. Establish successful direct metadata access before enabling the filter.
+2. After enabling, verify new direct connections are refused from another
+   process on each served IPv4, IPv6, mapped IPv6 and unspecified-address alias.
+   A backend that was already unavailable is not evidence of blocking.
+3. Verify authenticated gateway metadata and inference still work, including
+   streaming, then verify daemon restart recovery and owner-controlled disable.
+
+Until these checks pass, OS enforcement is **unverified**. Existing connections
+may outlive activation or a policy change. The scope is selected loopback
+ports, not every local server: new ports, non-loopback listeners, an inactive
+extension and privileged OS changes remain outside that boundary. Process
+audit identity does not protect a trusted process after compromise or revoke
+descriptors it already holds.
 
 ## Check existing servers
 

@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - "menubar/**"
+      - "model-filter/**"
       - "packaging/**"
       # Bundled into the app, or decoded by the menu bar's wire tests.
       - "plugin/**"
@@ -53,7 +54,9 @@ jobs:
           go-version-file: go.mod
       - name: swift test
         run: bash packaging/swift_macos.sh test --package-path menubar
+      - name: model filter policy tests
+        run: bash packaging/swift_macos.sh test --package-path model-filter
       - name: build the app (ad hoc)
-        run: CODESIGN_IDENTITY=- ./packaging/make_app.sh
+        run: CODESIGN_IDENTITY=- MODEL_FILTER_BUILD=1 ./packaging/make_app.sh
       - name: bundle identity and layout
         run: ./packaging/test/check_bundle_layout.sh

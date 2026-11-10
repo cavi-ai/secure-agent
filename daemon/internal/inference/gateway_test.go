@@ -22,7 +22,17 @@ func testGateway(t *testing.T, upstream string) (*Monitor, *httptest.Server, str
 	}
 	m := New()
 	server := httptest.NewUnstartedServer(nil)
-	g, err := NewGateway(GatewayConfig{Listen: server.Listener.Addr().String(), Upstream: upstream, APIKeyFile: key}, m)
+	g, err := NewGateway(GatewayConfig{Listen: server.Listener.Addr().String(), Upstream: upstream, APIKeyFile: key}, m, RequestPolicy{
+		Inspect: func(r *http.Request) error {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				return err
+			}
+			r.Body = io.NopCloser(strings.NewReader(string(body)))
+			return nil
+		},
+		CheckEgress: func(*http.Request) error { return nil },
+	})
 	if err != nil {
 		server.Close()
 		t.Fatal(err)
@@ -118,10 +128,10 @@ func TestGatewayRefusesBrowserAdminAndUnsafeKeys(t *testing.T) {
 	if reached != 0 || len(m.Snapshot().Requests) != 0 {
 		t.Fatal("refused request reached backend or became inference activity")
 	}
-	if _, err := NewGateway(GatewayConfig{Listen: "0.0.0.0:12345", Upstream: upstream.URL, APIKeyFile: key}, m); err == nil {
+	if _, err := NewGateway(GatewayConfig{Listen: "0.0.0.0:12345", Upstream: upstream.URL, APIKeyFile: key}, m, RequestPolicy{}); err == nil {
 		t.Fatal("wildcard listener accepted")
 	}
-	if _, err := NewGateway(GatewayConfig{Listen: "127.0.0.1:12345", Upstream: "http://example.invalid", APIKeyFile: key}, m); err == nil {
+	if _, err := NewGateway(GatewayConfig{Listen: "127.0.0.1:12345", Upstream: "http://example.invalid", APIKeyFile: key}, m, RequestPolicy{}); err == nil {
 		t.Fatal("non-local backend accepted")
 	}
 }

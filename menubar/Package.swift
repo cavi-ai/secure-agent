@@ -8,9 +8,11 @@ let package = Package(
         .executable(name: "secure-agent-menubar", targets: ["SecureAgentMenubar"]),
         .executable(name: "secure-agent-image-text", targets: ["ImageText"])
     ],
+    dependencies: [.package(path: "../model-filter")],
     targets: [
         .executableTarget(
             name: "SecureAgentMenubar",
+            dependencies: [.product(name: "ModelFilterCore", package: "model-filter")],
             path: "Sources/SecureAgentMenubar"
         ),
         .target(

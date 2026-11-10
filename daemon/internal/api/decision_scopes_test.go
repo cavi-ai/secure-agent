@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -15,7 +16,9 @@ import (
 
 type scopePeerChecker struct{}
 
-func (scopePeerChecker) PeerCred(net.Conn) (PeerCred, error) { return PeerCred{PID: 42}, nil }
+func (scopePeerChecker) PeerCred(net.Conn) (PeerCred, error) {
+	return PeerCred{PID: 42, UID: os.Getuid()}, nil
+}
 
 func scopedGuardDeps(t *testing.T) (Deps, model.DecisionScope) {
 	t.Helper()

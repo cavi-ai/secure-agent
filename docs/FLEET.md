@@ -4,7 +4,7 @@
 
 Use this guide to connect a running node to a collector. For a macOS node without the menu bar, [install the per-user service](GETTING_STARTED.md#linux-and-headless-nodes). Linux nodes run the Go daemon directly or under your own service manager.
 
-The reference collector is an HTTP listener, bound to loopback by default. For remote nodes, put it behind a TLS endpoint and configure read authentication before exposing telemetry. Set `SECURE_AGENT_COLLECTOR_READ_TOKEN` in the collector environment or use `-read-token`; a non-loopback bind without a read token leaves read endpoints unauthenticated. Webhook HMAC authentication and read authentication are separate.
+The reference collector is an HTTP listener, bound to loopback by default. For remote nodes, put it behind a TLS endpoint and configure read authentication before exposing telemetry. Set `SECURE_AGENT_COLLECTOR_READ_TOKEN` in the collector environment or use `-read-token`; the collector refuses to start on a non-loopback address without a nonblank read token. Unauthenticated reads are allowed only with a loopback bind and no token configured. A configured token is required on read endpoints even on loopback. Webhook HMAC authentication and read authentication are separate.
 
 The fleet contract is two sides: each node pushes signed webhooks, and a collector rolls them up.
 

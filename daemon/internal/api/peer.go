@@ -6,11 +6,12 @@ import (
 )
 
 // PeerCred identifies the local process on the other end of a unix-socket
-// connection, attested by the kernel (LOCAL_PEEREPID/LOCAL_PEERCRED on macOS,
+// connection, attested by the kernel (LOCAL_PEERTOKEN on macOS,
 // SO_PEERCRED on Linux), so it cannot be forged by the client.
 type PeerCred struct {
-	PID int32
-	UID int
+	PID        int32
+	UID        int
+	PIDVersion uint32 // macOS audit-token generation; zero on other platforms
 }
 
 // PeerChecker resolves the kernel-attested identity of a connection's remote
