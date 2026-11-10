@@ -670,7 +670,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("local_inference supports at most 32 configured endpoints and four gateways")
 	}
 	for _, target := range c.LocalInference.Endpoints {
-		if !loopback.ValidEndpoint(target) {
+		if !inference.ValidEndpoint(target) {
 			return fmt.Errorf("local_inference.endpoints must be loopback HTTP base URLs")
 		}
 	}
@@ -690,7 +690,8 @@ func (c Config) Validate() error {
 	}
 	for _, gateway := range c.LocalInference.Gateways {
 		u, _ := url.Parse(gateway.Upstream)
-		if ports[u.Port()] {
+		n, _ := strconv.Atoi(u.Port())
+		if ports[strconv.Itoa(n)] {
 			return fmt.Errorf("inference gateways cannot target another configured gateway")
 		}
 	}

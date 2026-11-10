@@ -41,6 +41,20 @@ The daemon re-reads the overlay every 2 seconds and applies `agents`, `disabled_
 
 See the [generated default configuration](reference/DEFAULTS.md) for the complete embedded YAML in this checkout. The sections below explain its fields and behavior.
 
+### `local_inference` (Map)
+
+`enabled` defaults to `true` for continuous localhost model metadata and client
+connection observations. `endpoints` adds up to 32 loopback HTTP base URLs.
+`gateways` defaults to empty; each optional entry has a literal loopback
+`listen` address, a loopback `upstream` on a different port and an absolute
+owner-only `api_key_file` path. At most four gateways can be configured. Gateway
+ports must be distinct and cannot target another configured gateway or use the
+routing proxy's port. Changes require a daemon restart. Disable `enabled` to
+stop both monitoring and gateway listeners.
+
+See [local inference monitoring](LOCAL_MODELS.md#monitor-local-inference) for
+setup, request limits, privacy and the direct-backend coverage boundary.
+
 ### `sensitive_globs` (List of Strings)
 Glob patterns matching file paths considered sensitive. If an agent process accesses a file matching any of these patterns, a sensitive read event is recorded.
 

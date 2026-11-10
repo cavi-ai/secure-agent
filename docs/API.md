@@ -16,6 +16,7 @@ The [generated route registry](reference/ROUTES.md) lists the current canonical 
 | Endpoint | Method | Description |
 |---|---|---|
 | `/status` | `GET` | Returns daemon running state, uptime, active agent count, and proxy status. |
+| `/local-inference` | `GET` | Visible local model servers, client connections, gateway request activity and coverage gaps. |
 | `/resources` | `GET` | Returns attributed session-family RSS, CPU, process topology, history, diagnoses, and reclaim estimates. |
 | `/resources/control` | `POST` | Applies or dismisses a pending resource action, or resumes a paused session family. |
 | `/flags` | `GET` | Returns recent security correlation flags (accepts optional `?limit=N`). |
@@ -1075,6 +1076,37 @@ Returns the last saved remediation receipt; HTTP 404 means it is unavailable.
 Receipts contain hashes and check names, never key contents or raw arguments.
 A saved verification timestamp describes that operation, not current service
 health or continuous protection. See [service hardening](USAGE.md#review-local-model-servers).
+
+### `GET /local-inference`
+
+Owner/console read-only route, unavailable to agent processes. It accepts no
+query parameters. A disabled or unwired monitor returns 503. The response has
+`generated_at`, `coverage`, `servers`, `connections`, `requests` and `gateways`.
+
+`coverage` reports discovery and connection health separately, their observation
+times, scan truncation, endpoint candidates deferred to another batch and
+`unclassified_listeners` not selected for automatic metadata probes.
+Request coverage is always `routed_only`. Each server reports its endpoint,
+runtime identification, listener identity when available, metadata state/time
+and Ollama loaded models. OpenAI-compatible metadata does not establish
+residency. Connections preserve both socket endpoints, process identity when
+available and first observation; an open connection is not an inference request.
+
+Gateway requests have a generated `id`, backend `endpoint`, API `path`, optional
+`model`, kernel-attributed `pid`, optional existing `session_id`, `started_at`,
+optional `ended_at`, `state`, HTTP status and optional provider-reported
+`input_tokens`/`output_tokens`. States are `request_in_progress`, `streaming`,
+`completed`, `failed`, `cancelled` or `interrupted`. The internal backend queue
+and compute state are not inferred. `usage_parsing` indicates incomplete usage
+framing; absent usage is not zero. `execution` is `cloud` for explicitly
+identified cloud routes/models and otherwise `unknown`.
+
+The snapshot retains at most 128 servers, 2,048 sampled client connections,
+64 active plus 128 completed requests and four gateways. Request history is
+in-memory for this daemon run; payloads and credentials are excluded. Gateway
+`protection` is `gateway_authenticated_backend_not_isolated`; it never asserts
+coverage or enforcement of direct backend traffic. See
+[local model monitoring](LOCAL_MODELS.md#monitor-local-inference).
 
 ### `GET /local-services`
 

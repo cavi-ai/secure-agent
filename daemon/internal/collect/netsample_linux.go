@@ -43,8 +43,18 @@ func (l *ProcSocketLister) Snapshot() SocketSnapshot {
 	for inode, rc := range parseProcNetTCP("/proc/net/tcp6") {
 		conns[inode] = rc
 	}
-	if _, err := os.Stat("/proc/net/tcp"); err != nil {
+	if len(conns) >= 4096 {
 		result.State = "partial"
+	}
+	for _, path := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		file, err := os.Open(path)
+		if err != nil {
+			if path == "/proc/net/tcp" || !os.IsNotExist(err) {
+				result.State = "partial"
+			}
+		} else {
+			file.Close()
+		}
 	}
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -72,6 +82,10 @@ func (l *ProcSocketLister) Snapshot() SocketSnapshot {
 			continue // process exited or owned by another uid
 		}
 		for _, fd := range fds {
+			if time.Now().After(deadline) {
+				result.State = "partial"
+				return result
+			}
 			link, err := os.Readlink(filepath.Join(fdDir, fd.Name()))
 			if err != nil || !strings.HasPrefix(link, "socket:[") {
 				continue
@@ -108,6 +122,9 @@ func parseProcNetTCP(path string) map[string]remoteConn {
 	sc := bufio.NewScanner(f)
 	first := true
 	for sc.Scan() {
+		if len(out) >= 4096 {
+			break
+		}
 		if first {
 			first = false // header row
 			continue

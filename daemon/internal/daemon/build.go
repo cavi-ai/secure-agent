@@ -122,7 +122,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	c.bus = b
 
 	procSource := agents.NewProcSource()
-	localInference := inference.New()
+	localInference := inference.New(cfg.NetSampleInterval)
 	localInference.Identify = func(pid int32) (string, time.Time) {
 		if info, ok := procSource.Info(pid); ok {
 			return info.Comm, info.StartTime
@@ -1100,7 +1100,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 					return err
 				}
 				gateway.Identify = func(ctx context.Context, remote string) (int32, string) {
-					pid, err := connpeer.PID(ctx, remote, api.TCPClientPID)
+					pid, err := connpeer.PID(ctx, remote, inferenceClientPID)
 					if err != nil {
 						return 0, ""
 					}

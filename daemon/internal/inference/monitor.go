@@ -72,13 +72,14 @@ type GatewayInfo struct {
 	Protection string `json:"protection"`
 }
 type Coverage struct {
-	Discovery           string    `json:"discovery"`
-	Connections         string    `json:"connections"`
-	Requests            string    `json:"requests"`
-	Truncated           bool      `json:"truncated"`
-	PendingEndpoints    int       `json:"pending_endpoints"`
-	SocketObservedAt    time.Time `json:"socket_observed_at"`
-	DiscoveryObservedAt time.Time `json:"discovery_observed_at"`
+	Discovery             string    `json:"discovery"`
+	Connections           string    `json:"connections"`
+	Requests              string    `json:"requests"`
+	Truncated             bool      `json:"truncated"`
+	PendingEndpoints      int       `json:"pending_endpoints"`
+	SocketObservedAt      time.Time `json:"socket_observed_at"`
+	DiscoveryObservedAt   time.Time `json:"discovery_observed_at"`
+	UnclassifiedListeners int       `json:"unclassified_listeners"`
 }
 type Snapshot struct {
 	GeneratedAt time.Time     `json:"generated_at"`
@@ -89,15 +90,17 @@ type Snapshot struct {
 	Gateways    []GatewayInfo `json:"gateways"`
 }
 type Monitor struct {
-	mu          sync.Mutex
-	refreshMu   sync.Mutex
-	servers     map[string]Server
-	connections []Connection
-	requests    []Request
-	gateways    []GatewayInfo
-	coverage    Coverage
-	cursor      int
-	client      *http.Client
+	mu               sync.Mutex
+	refreshMu        sync.Mutex
+	servers          map[string]Server
+	connections      []Connection
+	requests         []Request
+	gateways         []GatewayInfo
+	coverage         Coverage
+	cursor           int
+	client           *http.Client
+	admission        chan struct{}
+	socketStaleAfter time.Duration
 	// Identify supplies process names and birth times without reading arguments.
 	Identify func(int32) (string, time.Time)
 }
@@ -117,9 +120,32 @@ func (m *Monitor) Run(ctx context.Context, configured func() []string) error {
 	}
 }
 
-func New() *Monitor {
-	return &Monitor{servers: map[string]Server{}, coverage: Coverage{Discovery: "starting", Connections: "starting", Requests: "routed_only"}, client: loopback.Client(600 * time.Millisecond)}
+func New(sampleInterval ...time.Duration) *Monitor {
+	client := loopback.Client(600 * time.Millisecond)
+	transport := client.Transport.(*http.Transport).Clone()
+	// Discovery must not pool connections to unverified protocols. Inference
+	// forwarding independently retains its shared keep-alive transport.
+	transport.DisableKeepAlives = true
+	client.Transport = transport
+	staleAfter := 10 * time.Second
+	if len(sampleInterval) > 0 {
+		staleAfter = max(staleAfter, 3*sampleInterval[0])
+	}
+	return &Monitor{servers: map[string]Server{}, coverage: Coverage{Discovery: "starting", Connections: "starting", Requests: "routed_only"}, client: client, admission: make(chan struct{}, maxActiveRequests), socketStaleAfter: staleAfter}
 }
+
+func (m *Monitor) reserve() bool {
+	select {
+	case m.admission <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+func (m *Monitor) release() { <-m.admission }
+
+// ValidEndpoint applies the same bounds used by discovery before startup.
+func ValidEndpoint(raw string) bool { _, ok := endpoint(raw); return ok }
 
 func endpoint(raw string) (*url.URL, bool) {
 	if len(raw) > 2048 || !loopback.ValidEndpoint(raw) {
@@ -167,14 +193,25 @@ func (m *Monitor) Refresh(parent context.Context, configured []string, inventory
 			add(l.Endpoint)
 		}
 	}
-	if len(configured) == 0 {
-		add("http://127.0.0.1:11434")
+	knownPorts := map[string]bool{}
+	for _, raw := range localservice.DefaultEndpoints() {
+		u, _ := endpoint(raw)
+		knownPorts[u.Port()] = true
+		if len(configured) == 0 {
+			add(raw)
+		}
 	}
+	unclassified := 0
 	for _, l := range inventory.Listeners {
 		if l.Endpoint != "" {
-			add(l.Endpoint)
 			if u, ok := endpoint(l.Endpoint); ok {
 				hints[u.String()] = l
+				if knownPorts[u.Port()] {
+					add(l.Endpoint)
+				}
+				if l.Runtime == "unknown" && !seen[u.String()] {
+					unclassified++
+				}
 			}
 		}
 	}
@@ -202,6 +239,7 @@ func (m *Monitor) Refresh(parent context.Context, configured []string, inventory
 	defer m.mu.Unlock()
 	m.coverage.Discovery = inventory.State
 	m.coverage.DiscoveryObservedAt = time.Now().UTC()
+	m.coverage.UnclassifiedListeners = unclassified
 	if m.coverage.Discovery == "" {
 		m.coverage.Discovery = "unavailable"
 	}
@@ -209,6 +247,10 @@ func (m *Monitor) Refresh(parent context.Context, configured []string, inventory
 	m.coverage.PendingEndpoints = len(candidates) - count
 	for _, s := range results {
 		old, known := m.servers[s.Endpoint]
+		if known && old.PID != 0 && s.PID != 0 && old.PID != s.PID {
+			delete(m.servers, s.Endpoint)
+			known = false
+		}
 		if s.Runtime == "unknown" {
 			if known {
 				old.Metadata = s.Metadata
@@ -299,7 +341,11 @@ func (m *Monitor) probe(ctx context.Context, target string, hint localservice.Li
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if _, ok = m.metadata(ctx, target, "/v1/models", &models); ok && models.Data != nil {
+	modelsPath := "/v1/models"
+	if strings.HasSuffix(u.Path, "/v1") {
+		modelsPath = "/models"
+	}
+	if _, ok = m.metadata(ctx, target, modelsPath, &models); ok && models.Data != nil {
 		s.Runtime = "openai-compatible"
 		s.Metadata = "available"
 		s.ObservedAt = time.Now().UTC()
@@ -329,6 +375,15 @@ func (m *Monitor) ObserveConnections(observed []Connection, state string) {
 		start time.Time
 	}
 	identities := map[int32]processIdentity{}
+	owners := map[string]int32{}
+	for _, c := range observed {
+		key := c.LocalAddress + "/" + c.RemoteAddress
+		if owner, seen := owners[key]; seen && owner != c.PID {
+			owners[key] = 0
+		} else {
+			owners[key] = c.PID
+		}
+	}
 	m.coverage.Connections = state
 	m.coverage.SocketObservedAt = time.Now().UTC()
 	for _, c := range observed {
@@ -348,7 +403,10 @@ func (m *Monitor) ObserveConnections(observed []Connection, state string) {
 				continue
 			}
 			u, _ := endpoint(s.Endpoint)
-			if u.Hostname() != "localhost" && !net.ParseIP(u.Hostname()).Equal(ip) {
+			if u.Hostname() != "localhost" && !net.ParseIP(u.Hostname()).Equal(ip) && s.Binding != "wildcard" {
+				continue
+			}
+			if owner := owners[c.RemoteAddress+"/"+c.LocalAddress]; owner > 0 && s.PID > 0 && owner != int32(s.PID) {
 				continue
 			}
 			if m.Identify != nil {
@@ -364,7 +422,7 @@ func (m *Monitor) ObserveConnections(observed []Connection, state string) {
 				break
 			}
 			seen[connectionKey(c)] = true
-			c.Endpoint = s.Endpoint
+			c.Endpoint = u.Scheme + "://" + c.RemoteAddress
 			c.FirstSeen = old[connectionKey(c)]
 			if c.FirstSeen.IsZero() {
 				c.FirstSeen = time.Now().UTC()
@@ -393,7 +451,7 @@ func (m *Monitor) Snapshot() Snapshot {
 		s.Servers = append(s.Servers, server)
 	}
 	slices.SortFunc(s.Servers, func(a, b Server) int { return strings.Compare(a.Endpoint, b.Endpoint) })
-	if s.GeneratedAt.Sub(s.Coverage.SocketObservedAt) > 10*time.Second && s.Coverage.Connections == "available" {
+	if s.GeneratedAt.Sub(s.Coverage.SocketObservedAt) > m.socketStaleAfter && s.Coverage.Connections == "available" {
 		s.Coverage.Connections = "stale"
 	}
 	if s.GeneratedAt.Sub(s.Coverage.DiscoveryObservedAt) > 30*time.Second && s.Coverage.Discovery != "starting" {

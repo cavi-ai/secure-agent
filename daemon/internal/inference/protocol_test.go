@@ -1,6 +1,7 @@
 package inference
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -146,5 +147,31 @@ func TestResponseFramingSurvivesOversizedChunksWithoutKeepingPayloads(t *testing
 	observation.end()
 	if !observation.partial || !observation.done || observation.output == nil || *observation.output != 2 || len(observation.line) != 0 {
 		t.Fatalf("observation: %+v", observation)
+	}
+}
+
+func TestGatewayCapacityIsReservedBeforeProcessLookup(t *testing.T) {
+	upstream := httptest.NewServer(http.NotFoundHandler())
+	defer upstream.Close()
+	m, server, key := testGateway(t, upstream.URL)
+	lookups := 0
+	server.Config.Handler.(*Gateway).Identify = func(context.Context, string) (int32, string) { lookups++; return 1, "" }
+	for i := 0; i < maxActiveRequests; i++ {
+		if !m.reserve() {
+			t.Fatal("capacity unavailable")
+		}
+	}
+	defer func() {
+		for i := 0; i < maxActiveRequests; i++ {
+			m.release()
+		}
+	}()
+	response, err := server.Client().Do(gatewayRequest(t, server.URL, key, `{"model":"test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 503 || lookups != 0 {
+		t.Fatalf("capacity %d, lookups %d", response.StatusCode, lookups)
 	}
 }

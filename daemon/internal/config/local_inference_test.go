@@ -7,7 +7,7 @@ import (
 )
 
 func TestLocalInferenceDefaultsAndValidation(t *testing.T) {
-	cfg, err := LoadStrict(filepath.Join(t.TempDir(),"missing.yaml"))
+	cfg, err := LoadStrict(filepath.Join(t.TempDir(), "missing.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}

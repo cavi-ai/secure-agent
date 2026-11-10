@@ -24,6 +24,7 @@ Usage:
   secure-agent hooks wrap --harness codex [--script NAME] [--output path] -- COMMAND [ARGS...]  Run a configured hook unchanged and record its completion
   secure-agent doctor [--json]             Self-check: hooks, file telemetry, collectors, traces, sessions, pairing, pricing, retention, egress; exit 1 on any failure
   secure-agent local-services [--endpoint <loopback-url>] [--runtime <runtime>] [--json]  Review local model listeners and hardening profiles
+  secure-agent local-inference [--json]  Show local model servers, clients and observed requests
   secure-agent local-services create-key <absolute-path>  Create an owner-only model API key without overwriting files
   secure-agent model-runtime install  Install the pinned private model runtime without changing global tools
   secure-agent local-services remediate --service-file <path>  Preview hardening of an owned launchd model service

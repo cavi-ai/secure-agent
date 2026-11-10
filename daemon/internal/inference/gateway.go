@@ -33,7 +33,7 @@ type GatewayConfig struct {
 func (c GatewayConfig) Validate() error {
 	host, port, err := net.SplitHostPort(c.Listen)
 	n, portErr := strconv.Atoi(port)
-	if err != nil || portErr != nil || n < 1 || n > 65535 || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
+	if err != nil || portErr != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
 		return errors.New("inference gateway listen must be a literal loopback IP and port")
 	}
 	u, ok := endpoint(c.Upstream)
@@ -152,6 +152,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "model administration is unavailable through this gateway", 403)
 		return
 	}
+	if !g.monitor.reserve() {
+		http.Error(w, "model gateway is at capacity", 503)
+		return
+	}
+	defer g.monitor.release()
 	if r.ContentLength > maxRequestBody {
 		http.Error(w, "model request exceeds 16 MiB", 413)
 		return
@@ -203,7 +208,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	outgoing.ContentLength = r.ContentLength
 	outgoing.Header = r.Header.Clone()
 	stripHopHeaders(outgoing.Header)
-	for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Cookie", "Origin", "Referer", "Forwarded", "X-Forwarded-For", "X-Forwarded-Host"} {
+	for _, name := range []string{"Authorization", "X-Api-Key", "Proxy-Authorization", "Cookie", "Origin", "Referer", "Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "Accept-Encoding"} {
 		outgoing.Header.Del(name)
 	}
 	response, err := g.client.Do(outgoing)

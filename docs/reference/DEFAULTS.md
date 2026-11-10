@@ -77,6 +77,12 @@ credential_owners:
   - { path: "~/.config/gcloud",       orgs: ["Google", "Google Cloud"], programs: ["gcloud"] }
   - { path: "~/.docker",              orgs: ["Docker Hub", "Docker", "GitHub Container Registry"], programs: ["docker", "docker-credential-*", "com.docker.*"] }
 net_sample_interval_ms: 2000
+
+# Passive localhost model monitoring. Authenticated gateways are opt-in.
+local_inference:
+  enabled: true
+  endpoints: []
+  gateways: []
 # Time-based event retention, per kind. Socket churn (conn open/close) ages
 # out fast so it cannot evict the security record; everything else keeps a
 # week. A row-count cap remains as a backstop.
