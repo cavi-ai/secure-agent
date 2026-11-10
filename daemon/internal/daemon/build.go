@@ -26,6 +26,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/clutter"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/connpeer"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
@@ -127,6 +128,9 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			return info.Comm, info.StartTime
 		}
 		return "", time.Time{}
+	}
+	if !cfg.LocalInference.Enabled {
+		localInference = nil
 	}
 	tagger := agents.New(cfg, procSource)
 	tagger.Refresh()
@@ -1087,9 +1091,35 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 		return ns.Run(c)
 	})
 	if localInference != nil {
+		for i, gatewayConfig := range cfg.LocalInference.Gateways {
+			localInference.GatewayStatus(gatewayConfig, "configured")
+			run(fmt.Sprintf("inference-gateway-%d", i+1), func(c context.Context) error {
+				gateway, err := inference.NewGateway(gatewayConfig, localInference)
+				if err != nil {
+					localInference.GatewayStatus(gatewayConfig, "unavailable")
+					return err
+				}
+				gateway.Identify = func(ctx context.Context, remote string) (int32, string) {
+					pid, err := connpeer.PID(ctx, remote, api.TCPClientPID)
+					if err != nil {
+						return 0, ""
+					}
+					if identity, ok := resolver.PermissionIdentity(pid, ""); ok {
+						return pid, identity.SessionID
+					}
+					return pid, ""
+				}
+				return gateway.Serve(c)
+			})
+		}
 		run("local-inference", func(c context.Context) error {
 			return localInference.Run(c, func() []string {
-				return []string{cfg.Advisor.Endpoint, cfg.Advisor.ClassifierEndpoint, cfg.SystemAgent.Endpoint, cfg.DirectoryGuard.ShellReview.Endpoint, "http://127.0.0.1:11434"}
+				targets := append([]string{}, cfg.LocalInference.Endpoints...)
+				targets = append(targets, cfg.Advisor.Endpoint, cfg.Advisor.ClassifierEndpoint, cfg.SystemAgent.Endpoint, cfg.DirectoryGuard.ShellReview.Endpoint, "http://127.0.0.1:11434")
+				for _, gateway := range cfg.LocalInference.Gateways {
+					targets = append(targets, gateway.Upstream, "http://"+gateway.Listen)
+				}
+				return targets
 			})
 		})
 	}

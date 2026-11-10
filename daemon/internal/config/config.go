@@ -6,12 +6,16 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/inference"
 	"github.com/cavi-ai/secure-agent/daemon/internal/loopback"
 	"github.com/cavi-ai/secure-agent/daemon/internal/shellreview"
 	"go.yaml.in/yaml/v3"
@@ -338,7 +342,16 @@ type priceYAML struct {
 	Output *float64 `yaml:"output"`
 }
 
+// LocalInferenceConfig controls passive observation and optional authenticated
+// frontends. Gateways never start or replace their model backend.
+type LocalInferenceConfig struct {
+	Enabled   bool                      `yaml:"enabled"`
+	Endpoints []string                  `yaml:"endpoints"`
+	Gateways  []inference.GatewayConfig `yaml:"gateways"`
+}
+
 type rawConfig struct {
+	LocalInference       LocalInferenceConfig  `yaml:"local_inference"`
 	DisabledAgents       []string              `yaml:"disabled_agents"`
 	SensitiveGlobs       []string              `yaml:"sensitive_globs"`
 	SensitivePaths       []string              `yaml:"sensitive_paths"`
@@ -374,6 +387,7 @@ type rawConfig struct {
 }
 
 type Config struct {
+	LocalInference       LocalInferenceConfig
 	SensitiveGlobs       []string
 	SensitivePaths       []string
 	NotSecretPaths       []string
@@ -537,6 +551,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 	}
 
 	cfg := Config{
+		LocalInference:       raw.LocalInference,
 		SensitiveGlobs:       expandPaths(raw.SensitiveGlobs),
 		SensitivePaths:       expandPaths(raw.SensitivePaths),
 		NotSecretPaths:       expandPaths(raw.NotSecretPaths),
@@ -651,6 +666,34 @@ func validPrice(v float64) bool { return v > 0 && !math.IsInf(v, 0) }
 // runtime. A non-positive sample interval reaches time.NewTicker, which panics
 // — the supervisor then recovers a permanently crash-looping collector.
 func (c Config) Validate() error {
+	if len(c.LocalInference.Endpoints) > 32 || len(c.LocalInference.Gateways) > 4 {
+		return fmt.Errorf("local_inference supports at most 32 configured endpoints and four gateways")
+	}
+	for _, target := range c.LocalInference.Endpoints {
+		if !loopback.ValidEndpoint(target) {
+			return fmt.Errorf("local_inference.endpoints must be loopback HTTP base URLs")
+		}
+	}
+	ports := map[string]bool{}
+	for _, gateway := range c.LocalInference.Gateways {
+		if err := gateway.Validate(); err != nil {
+			return err
+		}
+		_, port, _ := net.SplitHostPort(gateway.Listen)
+		if ports[port] {
+			return fmt.Errorf("inference gateways must use distinct ports")
+		}
+		ports[port] = true
+		if c.ProxyEnabled && port == strconv.Itoa(c.ProxyPort) {
+			return fmt.Errorf("inference gateway cannot use the routing proxy port")
+		}
+	}
+	for _, gateway := range c.LocalInference.Gateways {
+		u, _ := url.Parse(gateway.Upstream)
+		if ports[u.Port()] {
+			return fmt.Errorf("inference gateways cannot target another configured gateway")
+		}
+	}
 	for name, path := range map[string]string{"advisor.api_key_file": c.Advisor.APIKeyFile, "advisor.classifier_api_key_file": c.Advisor.ClassifierAPIKeyFile} {
 		if path != "" && (!filepath.IsAbs(path) || len(path) > 4096) {
 			return fmt.Errorf("%s must be an absolute key-file path", name)

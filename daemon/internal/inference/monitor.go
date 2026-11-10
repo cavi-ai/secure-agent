@@ -63,6 +63,7 @@ type Request struct {
 	InputTokens  *int64     `json:"input_tokens,omitempty"`
 	OutputTokens *int64     `json:"output_tokens,omitempty"`
 	Execution    string     `json:"execution"`
+	Parsing      string     `json:"usage_parsing"`
 }
 type GatewayInfo struct {
 	Listen     string `json:"listen"`
@@ -71,12 +72,13 @@ type GatewayInfo struct {
 	Protection string `json:"protection"`
 }
 type Coverage struct {
-	Discovery        string    `json:"discovery"`
-	Connections      string    `json:"connections"`
-	Requests         string    `json:"requests"`
-	Truncated        bool      `json:"truncated"`
-	PendingEndpoints int       `json:"pending_endpoints"`
-	SocketObservedAt time.Time `json:"socket_observed_at"`
+	Discovery           string    `json:"discovery"`
+	Connections         string    `json:"connections"`
+	Requests            string    `json:"requests"`
+	Truncated           bool      `json:"truncated"`
+	PendingEndpoints    int       `json:"pending_endpoints"`
+	SocketObservedAt    time.Time `json:"socket_observed_at"`
+	DiscoveryObservedAt time.Time `json:"discovery_observed_at"`
 }
 type Snapshot struct {
 	GeneratedAt time.Time     `json:"generated_at"`
@@ -135,6 +137,11 @@ func endpoint(raw string) (*url.URL, bool) {
 			u.Host = net.JoinHostPort(u.Hostname(), "80")
 		}
 	}
+	n, err := strconv.Atoi(u.Port())
+	if err != nil || n < 1 || n > 65535 {
+		return nil, false
+	}
+	u.Host = net.JoinHostPort(strings.ToLower(u.Hostname()), strconv.Itoa(n))
 	return u, true
 }
 
@@ -194,6 +201,7 @@ func (m *Monitor) Refresh(parent context.Context, configured []string, inventory
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.coverage.Discovery = inventory.State
+	m.coverage.DiscoveryObservedAt = time.Now().UTC()
 	if m.coverage.Discovery == "" {
 		m.coverage.Discovery = "unavailable"
 	}
@@ -213,7 +221,7 @@ func (m *Monitor) Refresh(parent context.Context, configured []string, inventory
 			m.servers[s.Endpoint] = old
 			continue
 		}
-		m.servers[s.Endpoint] = s
+		m.putServer(s)
 	}
 	for key := range m.servers {
 		if !seen[key] && inventory.State == "available" {
@@ -316,6 +324,11 @@ func (m *Monitor) ObserveConnections(observed []Connection, state string) {
 	}
 	m.connections = []Connection{}
 	seen := map[string]bool{}
+	type processIdentity struct {
+		name  string
+		start time.Time
+	}
+	identities := map[int32]processIdentity{}
 	m.coverage.Connections = state
 	m.coverage.SocketObservedAt = time.Now().UTC()
 	for _, c := range observed {
@@ -339,7 +352,12 @@ func (m *Monitor) ObserveConnections(observed []Connection, state string) {
 				continue
 			}
 			if m.Identify != nil {
-				c.Process, c.ProcessStartedAt = m.Identify(c.PID)
+				identity, known := identities[c.PID]
+				if !known {
+					identity.name, identity.start = m.Identify(c.PID)
+					identities[c.PID] = identity
+				}
+				c.Process, c.ProcessStartedAt = identity.name, identity.start
 				c.Process = bounded(c.Process, 256)
 			}
 			if seen[connectionKey(c)] {
@@ -369,11 +387,42 @@ func (m *Monitor) Snapshot() Snapshot {
 	s := Snapshot{GeneratedAt: time.Now().UTC(), Coverage: m.coverage, Servers: []Server{}, Connections: append([]Connection{}, m.connections...), Requests: append([]Request{}, m.requests...), Gateways: append([]GatewayInfo{}, m.gateways...)}
 	for _, server := range m.servers {
 		server.Models = append([]Model{}, server.Models...)
+		if server.Metadata == "available" && s.GeneratedAt.Sub(server.ObservedAt) > 30*time.Second {
+			server.Metadata = "stale"
+		}
 		s.Servers = append(s.Servers, server)
 	}
 	slices.SortFunc(s.Servers, func(a, b Server) int { return strings.Compare(a.Endpoint, b.Endpoint) })
 	if s.GeneratedAt.Sub(s.Coverage.SocketObservedAt) > 10*time.Second && s.Coverage.Connections == "available" {
 		s.Coverage.Connections = "stale"
 	}
+	if s.GeneratedAt.Sub(s.Coverage.DiscoveryObservedAt) > 30*time.Second && s.Coverage.Discovery != "starting" {
+		s.Coverage.Discovery = "stale"
+	}
 	return s
+}
+
+// putServer is called with mu held and keeps old observations from increasing
+// the snapshot beyond its advertised bound as listeners change.
+func (m *Monitor) putServer(server Server) {
+	if _, known := m.servers[server.Endpoint]; !known && len(m.servers) >= maxServers {
+		oldest := ""
+		var at time.Time
+		for key, value := range m.servers {
+			if value.Runtime == "ollama-gateway" {
+				continue
+			}
+			if oldest == "" || value.ObservedAt.Before(at) {
+				oldest, at = key, value.ObservedAt
+			}
+		}
+		if oldest != "" {
+			delete(m.servers, oldest)
+		} else {
+			m.coverage.Truncated = true
+			return
+		}
+		m.coverage.Truncated = true
+	}
+	m.servers[server.Endpoint] = server
 }
