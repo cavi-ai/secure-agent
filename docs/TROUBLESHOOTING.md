@@ -30,7 +30,7 @@ Run Doctor from **Settings → Telemetry**. Follow its named fixes for registrat
 
 ## A hook check passes but the session has no coverage
 
-Start the selected harness and run the small task in [Your first observed session](FIRST_SESSION.md). Refresh the live session's observed coverage. Confirm the harness supports the capability in the [collector table](ARCHITECTURE.md#collectors). For a failed installed-hook check, verify Python 3.10+ is available, reinstall the selected hooks through Setup and rerun the check. Development symlinks alone do not register hooks.
+Start the selected harness and run the small task in [Your first observed session](FIRST_SESSION.md). Refresh the live session's observed coverage. Confirm the harness supports the capability in the [collector table](ARCHITECTURE.md#collectors). For a failed installed-hook check, verify Python 3.12+ is available, reinstall the selected hooks through Setup and rerun the check. Development symlinks alone do not register hooks.
 
 ## The console cannot read telemetry
 

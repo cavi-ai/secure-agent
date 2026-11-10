@@ -6,7 +6,7 @@ The Markdown in this repository is the documentation source. `docs/navigation.js
 
 ## Build and check
 
-Use Python 3.10+ and the Go version declared in `go.mod`:
+Use Python 3.12+ and the Go version declared in `go.mod`:
 
 ```bash
 make docs-reference  # regenerate CLI help, default YAML and API route policy

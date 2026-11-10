@@ -8,7 +8,7 @@ This documentation follows the current `main` checkout. A downloaded release can
 
 ## Install on macOS
 
-You need **macOS 14 or newer**. The packaged app includes the daemon, CLI and hook scripts; you do not need Go or Xcode to run it. Python 3.10 or newer is needed for the Python harness hooks.
+You need **macOS 14 or newer**. The packaged app includes the daemon, CLI and hook scripts; you do not need Go or Xcode to run it. Python 3.12 or newer is needed for the Python harness hooks.
 
 1. Open the [latest release](https://github.com/cavi-ai/secure-agent/releases/latest) and download `SecureAgent-<version>.dmg`.
 2. Open the DMG and drag **Secure Agent.app** to **Applications**.
@@ -21,7 +21,7 @@ To build the current checkout instead, follow [Development](DEVELOPMENT.md#build
 1. Select your agent and click **Set Up**. Secure Agent installs and registers its hooks, preserving existing user settings.
 2. Start a new agent session. Setup shows any native activation requirement, such as Codex hook approval.
 
-Supported hook integrations are Claude Code, Cursor, Codex, OpenClaw, Antigravity, Hermes and OpenCode v2. Other agents support process monitoring. Python hooks require Python 3.10 or newer; setup does not install Python. The bundled daemon starts and stops with the app.
+Supported hook integrations are Claude Code, Cursor, Codex, OpenClaw, Antigravity, Hermes and OpenCode v2. Other agents support process monitoring. Python hooks require Python 3.12 or newer; setup does not install Python. The bundled daemon starts and stops with the app.
 
 File telemetry, additional hook scripts, traffic routing, secret registration, guard rules, the local advisor, Open at Login, and CLI installation remain under **Optional capabilities** after the result and in Settings. New first-use setup leaves file-telemetry registration and permission panes deferred until you explicitly enable that capability.
 
