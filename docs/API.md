@@ -1694,7 +1694,7 @@ printf '%s\n' '<node-id>=<secret>' > secrets.txt
 
 Secrets come from a flat file (`node_id=secret` lines) or `-secrets n1=a,n2=b`. Store: append-only JSONL per node, `0600` in a `0700` directory, replayed into the rollup at startup behind a small `envelopeLog` interface — a SQLite backend can replace it without touching rollup semantics (the production-grade trajectory: retention, TLS, alerting).
 
-Read endpoints (`/fleet`, `/fleet/rules`, `/fleet/sessions`, `/nodes/*` and `/`) require `Authorization: Bearer <token>` when `-read-token` or `SECURE_AGENT_COLLECTOR_READ_TOKEN` is configured. Without that setting they are unauthenticated; keep the default loopback bind unless read access is protected. `/healthz` remains unauthenticated. The collector serves HTTP, so remote deployments need a TLS frontend. Secrets are loaded at startup; restart after provisioning a node. See [Fleet setup](FLEET.md).
+Read endpoints (`/fleet`, `/fleet/rules`, `/fleet/sessions`, `/nodes/*` and `/`) require one `Authorization: Bearer <token>` header when `-read-token` or `SECURE_AGENT_COLLECTOR_READ_TOKEN` is configured, including on loopback. Bare tokens and duplicate Authorization headers are refused. Without a token, reads are permitted only on a loopback bind; a non-loopback address requires a nonblank token or startup fails. `/healthz` remains unauthenticated. The collector serves HTTP, so remote deployments need a TLS frontend. Secrets are loaded at startup; restart after provisioning a node. See [Fleet setup](FLEET.md).
 
 The e2e smoke test provisions a collector, configures a node webhook, triggers a real flag, and asserts verified flag **and status-heartbeat** envelopes land in the store — the fleet contract cannot regress silently.
 

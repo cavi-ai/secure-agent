@@ -137,39 +137,39 @@ func metadataRoute(method, path string) bool {
 	return method == http.MethodPost && path == "/api/show"
 }
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(15 * time.Second))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
 	if !g.hostAllowed(r.Host) || len(r.Header.Values("Origin")) > 0 || r.URL.IsAbs() || r.URL.RawQuery != "" || r.URL.RawPath != "" {
-		http.Error(w, "gateway Host and Origin policy refused this request", 403)
+		gatewayError(w, "gateway Host and Origin policy refused this request", 403)
 		return
 	}
 	if !g.authorized(r) {
-		http.Error(w, "model gateway credential required", 401)
+		gatewayError(w, "model gateway credential required", 401)
 		return
 	}
 	tracked := r.Method == http.MethodPost && inferenceRoute(r.URL.Path)
 	if !tracked && !metadataRoute(r.Method, r.URL.Path) {
-		http.Error(w, "model administration is unavailable through this gateway", 403)
+		gatewayError(w, "model administration is unavailable through this gateway", 403)
 		return
 	}
 	if !g.monitor.reserve() {
-		http.Error(w, "model gateway is at capacity", 503)
+		gatewayError(w, "model gateway is at capacity", 503)
 		return
 	}
 	defer g.monitor.release()
 	if r.ContentLength > maxRequestBody {
-		http.Error(w, "model request exceeds 16 MiB", 413)
+		gatewayError(w, "model request exceeds 16 MiB", 413)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
-	controller := http.NewResponseController(w)
-	_ = controller.SetReadDeadline(time.Now().Add(15 * time.Second))
 	body := http.MaxBytesReader(w, r.Body, maxRequestBody)
 	defer body.Close()
 	prefix, err := io.ReadAll(io.LimitReader(body, metadataLimit))
 	if err != nil {
-		http.Error(w, "model request body unavailable", 400)
+		gatewayError(w, "model request body unavailable", 400)
 		return
 	}
 	model := requestModel(prefix)
@@ -182,7 +182,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		id, err = g.monitor.begin(g.upstream.String(), r.URL.Path, model, pid, sessionID)
 		if err != nil {
-			http.Error(w, "model request tracking is at capacity", 503)
+			gatewayError(w, "model request tracking is at capacity", 503)
 			return
 		}
 	}
@@ -202,7 +202,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target.Path = r.URL.Path
 	outgoing, err := http.NewRequestWithContext(ctx, r.Method, target.String(), &prefixBody{Reader: io.MultiReader(bytes.NewReader(prefix), body), Closer: body})
 	if err != nil {
-		http.Error(w, "invalid model request", 400)
+		gatewayError(w, "invalid model request", 400)
 		return
 	}
 	outgoing.ContentLength = r.ContentLength
@@ -215,9 +215,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var maxBytes *http.MaxBytesError
 		if errors.As(err, &maxBytes) {
-			http.Error(w, "model request exceeds 16 MiB", 413)
+			gatewayError(w, "model request exceeds 16 MiB", 413)
 		} else {
-			http.Error(w, "model backend unavailable", 502)
+			gatewayError(w, "model backend unavailable", 502)
 		}
 		return
 	}
@@ -225,7 +225,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	status = response.StatusCode
 	if status >= 300 && status < 400 {
 		state = "failed"
-		http.Error(w, "model backend redirect refused", 502)
+		gatewayError(w, "model backend redirect refused", 502)
 		return
 	}
 	stripHopHeaders(response.Header)
@@ -253,6 +253,17 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		state = "completed"
 	}
+}
+
+// Refusals must not drain an untrusted upload to preserve HTTP keep-alive.
+// Expire reads as well as closing the connection: net/http also closes the
+// request body after flushing a response, which can otherwise block on input.
+func gatewayError(w http.ResponseWriter, message string, status int) {
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now())
+	_ = controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	w.Header().Set("Connection", "close")
+	http.Error(w, message, status)
 }
 
 type gatewayWriter struct {

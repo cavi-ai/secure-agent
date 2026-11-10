@@ -126,7 +126,8 @@ backend; it does not identify Ollama's internal queue or GPU execution state.
 Only 64 concurrent requests and the latest 128 completed records are retained
 in memory. They reset when the daemon restarts. Prompts and responses are not
 stored in the activity records. Requests are limited to 16 MiB and ten minutes;
-body upload, response writes and headers also have bounded deadlines. The
+body upload, response writes and headers also have bounded deadlines. Refused
+requests close their connection without waiting for the remaining upload. The
 gateway refuses new inference requests when tracking capacity is full.
 
 **The gateway does not isolate the raw Ollama backend.** Other local clients
