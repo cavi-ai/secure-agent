@@ -36,18 +36,27 @@ func (r role) String() string {
 	}
 }
 
-// peers holds the process identities the API trusts. All fields are optional:
-// when OwnerUID is nil every same-uid caller is trusted for reads; when
-// UIPID/AgentPIDs are empty those roles simply never match.
+// peers holds the process identities the API trusts. UID is checked before
+// role selection. A pinned macOS UI also supplies its audit-token generation.
 type peers struct {
-	OwnerUID  int
-	UIPID     int32
-	AgentPIDs func() map[int32]struct{} // live tagged-agent pid set, may be nil
+	OwnerUID     int
+	UIPID        int32
+	UIPIDVersion uint32
+	AgentPIDs    func() map[int32]struct{} // live tagged-agent pid set, may be nil
 }
 
 // classify maps a kernel-attested peer to a role.
 func (p *peers) classify(cred PeerCred) role {
+	if cred.UID != p.OwnerUID {
+		return roleForeign
+	}
+	if cred.PID <= 0 {
+		return roleNone
+	}
 	if cred.PID > 0 && cred.PID == p.UIPID {
+		if p.UIPIDVersion != 0 && cred.PIDVersion != p.UIPIDVersion {
+			return roleForeign
+		}
 		return roleUI
 	}
 	if p.AgentPIDs != nil {
@@ -61,14 +70,6 @@ func (p *peers) classify(cred PeerCred) role {
 	}
 	if cred.UID == p.OwnerUID {
 		return roleOwner
-	}
-	if cred.PID == 0 && cred.UID == 0 {
-		// Peer already closed; kernel reports zeros. Fail safe: owner-level
-		// read access only if the default uid also matches, else foreign.
-		if p.OwnerUID == 0 {
-			return roleOwner
-		}
-		return roleForeign
 	}
 	return roleForeign
 }

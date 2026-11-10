@@ -15,9 +15,13 @@ import (
 
 func main() {
 	configPath := flag.String("config", "", "path to config.yaml overlay")
+	ownerPIDVersion := flag.Uint("owner-pid-version", 0, "owning app audit-token process version")
 	esCollector := flag.Bool("es-collector", false,
 		"run ONLY the ES collector: spawn eslogger and write its output to the spool (/var/db/secure-agent/es-spool.jsonl). Also selected when the binary runs as "+esCollectorName+".")
 	flag.Parse()
+	if *ownerPIDVersion > 1<<32-1 {
+		log.Fatal("invalid owning app process version")
+	}
 
 	// The privileged ES-collector mode reuses THIS binary: the app bundle
 	// ships it a second time as secure-agent-esd and registers that copy as
@@ -65,7 +69,7 @@ func main() {
 	// Build is the composition root: it resolves every component from cfg and
 	// starts the collectors and servers. main() is CLI parsing plus process
 	// lifecycle only.
-	comps, err := daemon.Build(ctx, cfg, daemon.Options{ConfigPath: configPathUsed, ConfigOverlayErr: overlayErr})
+	comps, err := daemon.Build(ctx, cfg, daemon.Options{ConfigPath: configPathUsed, ConfigOverlayErr: overlayErr, OwnerPIDVersion: uint32(*ownerPIDVersion)})
 	if err != nil {
 		log.Fatalf("failed to start daemon: %v", err)
 	}

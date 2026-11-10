@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import ModelFilterCore
 
 /// Owns the lifetime of the bundled `secure-agentd` as a child process of the
 /// menu bar app. The daemon runs only while the app runs:
@@ -124,10 +125,15 @@ public final class DaemonSupervisor: ObservableObject {
         }
 
         do {
+            let owner = try KernelIdentity.current()
+            p.arguments = ["--owner-pid-version", String(owner.pidVersion)]
             try p.run()
             process = p
             startedAt = uptime()
             NSLog("[secure-agent] daemon started (pid \(p.processIdentifier))")
+            Task { @MainActor in
+                await ModelFilterCommand.refreshIfEnabled(expectedPID: p.processIdentifier)
+            }
         } catch {
             process = nil
             NSLog("[secure-agent] failed to start daemon: \(error.localizedDescription)")

@@ -57,6 +57,17 @@ check_signing_identity "${app}/Contents/Helpers/secure-agent" "com.cavi-ai.secur
 # The guard hook runs this helper by its installed path before an image read.
 [ -x "${app}/Contents/Helpers/secure-agent-image-text" ] || fail "no executable Contents/Helpers/secure-agent-image-text"
 check_signing_identity "${app}/Contents/Helpers/secure-agent-image-text" "${app_id}.image-text"
+if [[ "$(plutil -extract ModelFilterIncluded raw -o - "${app}/Contents/Info.plist" 2>/dev/null || true)" == true ]]; then
+    filter_id="${app_id}.model-filter"
+    filter="${app}/Contents/Library/SystemExtensions/${filter_id}.systemextension"
+    filter_plist="${filter}/Contents/Info.plist"
+    [[ -x "${filter}/Contents/MacOS/secure-agent-model-filter" ]] || fail "model filter executable is missing"
+    plutil -lint "$filter_plist" >/dev/null || fail "model filter Info.plist is invalid"
+    [[ "$(plutil -extract CFBundleIdentifier raw -o - "$filter_plist")" == "$filter_id" ]] || fail "model filter bundle identity mismatch"
+    provider_class="$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb"))["NetworkExtension"]["NEProviderClasses"]["com.apple.networkextension.filter-data"])' "$filter_plist")" || fail "model filter provider class is missing"
+    [[ "$provider_class" == "ModelFilterProvider.FilterDataProvider" ]] || fail "model filter provider class mismatch"
+    check_signing_identity "$filter" "$filter_id"
+fi
 for hook in secret_guard.py harness_guard.py activity_log.py injection_scan.py guard-rules.json; do
     [ -f "${app}/Contents/Resources/hooks/${hook}" ] || fail "missing Contents/Resources/hooks/${hook}"
 done

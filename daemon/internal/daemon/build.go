@@ -51,6 +51,8 @@ import (
 
 // Options are the composition inputs that are not part of config.Config.
 type Options struct {
+	// OwnerPIDVersion is the owning app's kernel audit-token process version.
+	OwnerPIDVersion uint32
 	// ConfigPath is where the live config was loaded from. Empty disables the
 	// hot-reload watcher and the resource-policy writer (both need a path to
 	// persist to).
@@ -99,6 +101,10 @@ func writeCwdOverrides(cfg config.Config) {
 // and servers. Returns a Components the caller shuts down. On failure it tears
 // down whatever it had already built before returning the error.
 func Build(parent context.Context, cfg config.Config, opts Options) (*Components, error) {
+	uiPID := owningUIPID()
+	if uiPID > 0 && opts.OwnerPIDVersion == 0 {
+		return nil, errors.New("owning app process instance is required")
+	}
 	ctx, cancel := context.WithCancel(parent)
 	c := &Components{cfg: cfg, cancel: cancel, apiErrors: make(chan error, 1)}
 
@@ -319,7 +325,6 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// as the only mutating client; direct launches (ppid = shell) keep
 	// owner-uid mutation so headless/ssh management still works.
 	agentPIDSet := taggedPIDSet(tagger)
-	uiPID := owningUIPID()
 
 	retriageFuncs, hostAssessFuncs, guardAdvisor, worktreeAdvisor := buildAdvisorHooks(st, advisorStk)
 	projectAdvisor := func(req model.ProjectCleanupRequest) bool {
@@ -396,9 +401,10 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			},
 		},
 		Peers: api.PeerDeps{
-			Checker:   api.NewPeerChecker(),
-			AgentPIDs: agentPIDSet,
-			UIPID:     uiPID,
+			Checker:      api.NewPeerChecker(),
+			AgentPIDs:    agentPIDSet,
+			UIPID:        uiPID,
+			UIPIDVersion: opts.OwnerPIDVersion,
 			IsAgentPID: func(pid int32) bool {
 				_, isAgent := tagger.Tag(pid)
 				return isAgent

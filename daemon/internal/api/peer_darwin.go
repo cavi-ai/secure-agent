@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -27,21 +28,14 @@ func (DarwinPeerChecker) PeerCred(c net.Conn) (PeerCred, error) {
 		cerr error
 	)
 	if err := raw.Control(func(fd uintptr) {
-		// LOCAL_PEEREPID: pid of the connected peer (0 if the peer closed).
-		v, e := unix.GetsockoptInt(int(fd), 0 /* SOL_LOCAL */, unix.LOCAL_PEEREPID)
-		if e != nil {
-			cerr = fmt.Errorf("peer: LOCAL_PEEREPID: %w", e)
+		var token [8]uint32
+		size := uint32(unsafe.Sizeof(token))
+		_, _, errno := unix.Syscall6(unix.SYS_GETSOCKOPT, fd, 0 /* SOL_LOCAL */, unix.LOCAL_PEERTOKEN, uintptr(unsafe.Pointer(&token[0])), uintptr(unsafe.Pointer(&size)), 0)
+		if errno != 0 || size != 32 || token[5] == 0 || token[7] == 0 {
+			cerr = fmt.Errorf("peer: audit token unavailable: %v", errno)
 			return
 		}
-		cred.PID = int32(v)
-
-		// LOCAL_PEERCRED: struct xucred with the peer's effective uid.
-		x, e := unix.GetsockoptXucred(int(fd), 0 /* SOL_LOCAL */, unix.LOCAL_PEERCRED)
-		if e != nil {
-			cerr = fmt.Errorf("peer: LOCAL_PEERCRED: %w", e)
-			return
-		}
-		cred.UID = int(x.Uid)
+		cred = PeerCred{PID: int32(token[5]), UID: int(token[1]), PIDVersion: token[7]}
 	}); err != nil {
 		return PeerCred{}, fmt.Errorf("peer: control: %w", err)
 	}
