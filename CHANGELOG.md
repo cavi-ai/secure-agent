@@ -6,32 +6,24 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-10
+
 ### Added
+- Existing model servers: authenticate advisor and classifier requests with owner-only key files; create keys without printing them or replacing existing files.
 - Local inference: continuously discover visible localhost model servers and connected apps, with separate loaded-model and request activity in Monitoring and `secure-agent local-inference`.
-- Ollama: optional authenticated gateways track native, OpenAI-compatible and Anthropic-compatible requests, streaming, cancellation and reported token usage. Direct backend traffic remains outside gateway tracking and protection.
-- Inference gateways: apply secret-firewall rules and session-taint permissions before forwarding, with encrypted upload buffering and refusal of payloads that cannot be inspected.
+- [Local model service protection](docs/LOCAL_MODELS.md): assess visible listeners and metadata exposure from Monitoring or the CLI, then review hardening for selected current-user macOS launchd jobs. MLX and llama.cpp receive authenticated inference; Ollama receives browser hardening only.
 - macOS model filtering: optional system extension restricts new connections to selected loopback backend ports to the daemon's kernel process identity. Owner provisioning, installation and live verification are required.
+- Managed analysis: install and use a pinned mlx-agent runtime with locally prepared weights over a private Unix socket. The worker starts on demand, unloads after two idle minutes and opens no model TCP listener; global tools and model caches remain in place.
+- Ollama gateways: optional authenticated gateways track native, OpenAI-compatible and Anthropic-compatible requests, streaming and reported token usage, and apply secret-firewall rules and session-taint permissions before forwarding; uploads that cannot be inspected or are left unfinished are refused. Direct backend traffic remains outside gateway tracking and protection.
+- Service recovery: bind hardening previews to the reviewed service and client identities, verify authorization and backend listeners after restart, and restore original settings with the service stopped after failure or explicit rollback. Later configuration drift is refused.
 
 ### Changed
-- macOS control API: verify caller UID and the owning app's audit-token process version before granting UI authority.
-
-### Fixed
-- Daemon startup: distinguish Secure Agent from other app bundles when selecting the owning UI process.
-- macOS model filtering: revalidate the daemon and approved ports after setup approval; respect filter changes made during daemon restart recovery.
-- Inference activity: preserve completed and failed outcomes when clients disconnect after receiving a response.
-- Fleet collector: refuse non-loopback startup without a read token; reject bare tokens and duplicate Authorization headers on read endpoints.
-- Ollama gateways: return refusals and close connections immediately when a client leaves its upload unfinished.
-
-## [1.6.0] - 2026-11-09
-
-### Added
-- [Local model service protection](docs/LOCAL_MODELS.md): assess visible listeners and metadata exposure from Monitoring or the CLI, then review hardening for selected current-user macOS launchd jobs. MLX and llama.cpp receive authenticated inference; Ollama receives browser hardening only.
-- Managed analysis: install and use a pinned mlx-agent runtime with locally prepared weights over a private Unix socket. The worker starts on demand, unloads after two idle minutes and opens no model TCP listener; global tools and model caches remain in place.
-- Existing model servers: authenticate advisor and classifier requests with owner-only key files; create keys without printing them or replacing existing files.
-- Service recovery: bind hardening previews to the reviewed service and client identities, verify authorization and backend listeners after restart, and restore original settings with the service stopped after failure or explicit rollback. Later configuration drift is refused.
+- Hooks: Python hooks support Python 3.12 or newer.
+- macOS control API: verify the caller UID first, and grant UI authority only to the bundled Secure Agent app at its audit-token process version; other launchers keep owner-UID management.
 
 ### Fixed
 - Findings: low-entropy transcript matches in explicit test context stay in history at review priority; later stronger matches still alert.
+- Fleet collector: refuse non-loopback startup without a read token; reject bare tokens and duplicate Authorization headers on read endpoints.
 - Model clients: migrate matching endpoints to the hardened listener, including IPv6 and loopback aliases; refuse automatic migration of HTTPS clients or shared YAML fields.
 - Shell review: reload endpoint and key-file changes together, reuse model connections and reach IPv6-only localhost servers.
 
@@ -1854,7 +1846,8 @@ scanning of the repository itself.
 Development history lives in the git log; this changelog starts at the first
 tagged release.
 
-[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.5.4...HEAD
+[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/cavi-ai/secure-agent/compare/v1.5.4...v1.6.0
 [1.5.4]: https://github.com/cavi-ai/secure-agent/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/cavi-ai/secure-agent/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/cavi-ai/secure-agent/compare/v1.5.1...v1.5.2
