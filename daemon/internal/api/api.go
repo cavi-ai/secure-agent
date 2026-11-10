@@ -30,6 +30,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
+	"github.com/cavi-ai/secure-agent/daemon/internal/inference"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/modelservice"
@@ -184,6 +185,7 @@ type API struct {
 	classifierStatus   func(context.Context) advisor.ClassifierHealth
 	managedModelStatus func() *localservice.ManagedRuntime
 	modelServices      *modelservice.Manager
+	localInference     *inference.Monitor
 
 	shellReviews    *shellreview.Service
 	socketPath      string
@@ -325,6 +327,7 @@ type HostAssessFuncs struct {
 // Optional fields may be left zero — the handlers degrade to their documented
 // "not enabled" response.
 type Deps struct {
+	Inference  *inference.Monitor
 	SocketPath string
 	ConfigPath string
 	Store      *store.Store
@@ -468,6 +471,7 @@ func New(d Deps) *API {
 		classifierStatus:   d.Workspace.ClassifierStatus,
 		managedModelStatus: d.Advisors.ManagedModel,
 		modelServices:      newServiceManager(d.ConfigPath),
+		localInference:     d.Inference,
 
 		autoReview:      newAutoReviewer(),
 		projectAdvisor:  d.Advisors.Project,

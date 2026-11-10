@@ -1085,6 +1085,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const localServices = createLocalServices({request:apiFetch,drawer:detailDrawer,
     generation:() => handoffGeneration,ended:() => sessionEnded,
     copy:text => navigator.clipboard.writeText(text),toast:showToast});
+  const localInference = createLocalInference({request:apiFetch,drawer:detailDrawer,
+    generation:() => handoffGeneration,ended:() => sessionEnded});
   const serviceRemediation = createServiceRemediation({request:apiFetch,drawer:detailDrawer,
     generation:() => handoffGeneration,ended:() => sessionEnded,confirm:(...args) => window.saConfirm(...args)});
   const monitoringController = createMonitoringController({
@@ -3691,6 +3693,10 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         localServices.open({back:back()});
         break;
+      case 'local-inference-open':
+        e.preventDefault();localInference.open({back:back()});break;
+      case 'local-inference-refresh':
+        e.preventDefault();localInference.refresh();break;
       case 'service-remediation-open':
         e.preventDefault();
         serviceRemediation.open({back:{label:'Local model servers',reopen:() => localServices.open()}});

@@ -82,6 +82,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/cleanup/advise":               a.handleCleanupAdvise,
 		"/advisor/discover":             a.handleAdvisorDiscover,
 		"/local-services":               a.handleLocalServices,
+		"/local-inference":              a.handleLocalInference,
 		"/local-services/remediation":   a.handleLocalServiceRemediation,
 		"/local-services/receipt":       a.handleLocalServiceReceipt,
 		"/fleet":                        a.handleFleet,

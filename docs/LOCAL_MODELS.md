@@ -15,6 +15,7 @@ changes guard or firewall enforcement.
 | Existing MLX-LM server | Authenticated loopback gateway with a private Unix worker | Reviewed, direct current-user macOS launchd job |
 | Existing llama.cpp server | Native key-file authentication | Reviewed, direct current-user macOS launchd job |
 | Existing Ollama server | Browser Origin and Host hardening | The local API remains unauthenticated |
+| Optional Ollama gateway | Authenticated request tracking | Configured gateway traffic; direct backend access remains possible |
 | Other servers or service managers | Manual server-owner configuration | Metadata observations alone leave protection unassessed |
 
 ## Set up private managed analysis
@@ -55,6 +56,90 @@ does not download missing weights. An unavailable or incompatible runtime leaves
 managed analysis unavailable; monitoring and deterministic protection continue.
 The private directory restricts access by Unix user, without isolating the
 worker from other processes already running as that user.
+
+## Monitor local inference
+
+Open **Monitoring → Local inference activity**, or run:
+
+```sh
+secure-agent local-inference --json
+```
+
+Monitoring runs continuously by default. It separates visible model servers,
+Ollama models loaded in memory, connected client processes and requests observed
+through configured gateways. Clients can be desktop apps, browsers, scripts or
+agents. A loaded model or an open socket does not establish active inference.
+OpenAI-compatible model listings do not establish model residency.
+
+Discovery refreshes every 15 seconds using bounded metadata GETs for identified
+model processes, known model ports and configured endpoints. Other listeners
+remain unclassified and receive no automatic probes. It rotates through up to
+128 selected candidates in batches of 16, without prompts, downloads or
+model-loading requests. IPv4, IPv6 and custom ports can be observed. Add
+unidentified host-published container endpoints to `local_inference.endpoints`.
+Connections reuse the network sampler's
+existing scan. Permissions, container boundaries, short connections and scan
+limits can leave gaps; partial, unavailable, stale and deferred observations
+remain explicit. Unknown services cannot always be identified as model servers.
+
+### Track requests through an Ollama gateway
+
+Create a private key in an existing private directory:
+
+```sh
+secure-agent local-services create-key /absolute/private/directory/ollama-gateway.key
+```
+
+Add an optional gateway to the private daemon configuration:
+
+```yaml
+local_inference:
+  enabled: true
+  endpoints: []
+  gateways:
+    - listen: "127.0.0.1:11435"
+      upstream: "http://127.0.0.1:11434"
+      api_key_file: "/absolute/private/directory/ollama-gateway.key"
+```
+
+Restart Secure Agent, then point selected clients at port 11435 and configure
+the key through their credential settings. Native Ollama clients use the base
+URL; OpenAI-compatible clients append `/v1`; Anthropic-compatible clients use
+the base URL with `/v1/messages`. The gateway accepts a bearer token or an
+`x-api-key` header and removes that credential before forwarding. It preserves
+streaming and supports embeddings. Ollama management routes such as pull,
+create, push and delete are refused. Model metadata routes remain authenticated.
+Browser Origin headers are refused; browser applications should use their own
+authorized server-side client.
+
+The daemon manages only the gateway listener; the existing Ollama server stays
+under its current owner. Configurations containing up to four gateways and 32
+explicit metadata endpoints are supported. Gateway configuration changes require
+a daemon restart; key files are revalidated for every request. A missing or
+unsafe key refuses access. Disable monitoring with `local_inference.enabled:
+false` and restart; this also disables the configured gateway listeners.
+
+Request records include process/session attribution when available, model,
+start/end, streaming state, HTTP status and provider-reported usage. Unknown
+usage stays unknown. `request_in_progress` includes time waiting for the
+backend; it does not identify Ollama's internal queue or GPU execution state.
+Only 64 concurrent requests and the latest 128 completed records are retained
+in memory. They reset when the daemon restarts. Prompts and responses are not
+stored in the activity records. Requests are limited to 16 MiB and ten minutes;
+body upload, response writes and headers also have bounded deadlines. The
+gateway refuses new inference requests when tracking capacity is full.
+
+**The gateway does not isolate the raw Ollama backend.** Other local clients
+can still contact port 11434 directly. Complete request coverage requires every
+client to use an observed request path; full access control also requires an
+independently isolated backend. Gateway authentication, loopback binding and
+CORS settings do not establish machine-wide enforcement. A localhost Ollama
+endpoint can forward cloud-model requests, so local computation remains
+unknown unless separately established.
+
+The managed mlx-agent analysis worker continues to use its private Unix
+transport. Ollama monitoring does not replace that runtime or install another
+model engine.
 
 ## Check existing servers
 

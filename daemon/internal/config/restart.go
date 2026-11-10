@@ -17,6 +17,7 @@ var startOnly = []struct {
 	{"vendor_allowlist", func(c Config) any { return c.VendorAllowlist }},
 	{"credential_owners", func(c Config) any { return c.CredentialOwners }},
 	{"net_sample_interval_ms", func(c Config) any { return c.NetSampleInterval }},
+	{"local_inference", func(c Config) any { return c.LocalInference }},
 	{"socket_path", func(c Config) any { return c.SocketPath }},
 	{"db_path", func(c Config) any { return c.DBPath }},
 	{"jsonl_path", func(c Config) any { return c.JSONLPath }},

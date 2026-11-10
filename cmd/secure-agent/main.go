@@ -81,6 +81,8 @@ func main() {
 		handleDoctor(client)
 	case "local-services":
 		handleLocalServices(client, os.Args[2:])
+	case "local-inference":
+		handleLocalInference(client, os.Args[2:])
 	case "model-runtime":
 		handleModelRuntime(os.Args[2:])
 	case "worktrees":
@@ -122,6 +124,7 @@ func printUsage() {
 	fmt.Println("  secure-agent hooks wrap --harness codex [--script NAME] [--output path] -- COMMAND [ARGS...]  Run a configured hook unchanged and record its completion")
 	fmt.Println("  secure-agent doctor [--json]             Self-check: hooks, file telemetry, collectors, traces, sessions, pairing, pricing, retention, egress; exit 1 on any failure")
 	fmt.Println("  secure-agent local-services [--endpoint <loopback-url>] [--runtime <runtime>] [--json]  Review local model listeners and hardening profiles")
+	fmt.Println("  secure-agent local-inference [--json]  Show local model servers, clients and observed requests")
 	fmt.Println("  secure-agent local-services create-key <absolute-path>  Create an owner-only model API key without overwriting files")
 	fmt.Println("  secure-agent model-runtime install  Install the pinned private model runtime without changing global tools")
 	fmt.Println("  secure-agent local-services remediate --service-file <path>  Preview hardening of an owned launchd model service")

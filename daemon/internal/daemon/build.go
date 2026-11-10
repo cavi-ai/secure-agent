@@ -26,10 +26,12 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/clutter"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/connpeer"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
+	"github.com/cavi-ai/secure-agent/daemon/internal/inference"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/otlp"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
@@ -120,6 +122,16 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	c.bus = b
 
 	procSource := agents.NewProcSource()
+	localInference := inference.New(cfg.NetSampleInterval)
+	localInference.Identify = func(pid int32) (string, time.Time) {
+		if info, ok := procSource.Info(pid); ok {
+			return info.Comm, info.StartTime
+		}
+		return "", time.Time{}
+	}
+	if !cfg.LocalInference.Enabled {
+		localInference = nil
+	}
 	tagger := agents.New(cfg, procSource)
 	tagger.Refresh()
 	resourceTracker, resourceEpisodes, resourceControl := buildResourceStack(cfg, st, tagger)
@@ -333,6 +345,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	apiServer := api.New(api.Deps{
 		SocketPath: cfg.SocketPath,
 		ConfigPath: opts.ConfigPath,
+		Inference:  localInference,
 		Store:      st,
 		Killer:     &realKiller{},
 		Status:     statusFn,
@@ -470,7 +483,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		}
 	}()
 
-	c.collectorsDone = startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spool, fileTelemetryOn)
+	c.collectorsDone = startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spool, fileTelemetryOn, localInference)
 
 	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
 	return c, nil
@@ -1027,7 +1040,7 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, procSource 
 // spool tail of the root ES collector (the LaunchDaemon, or a developer's
 // `secure-agentd -es-collector` run as root); without a spool it is degraded,
 // not crash-looped, and starts when the spool appears.
-func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer], fileTelemetryOn *atomic.Bool) <-chan struct{} {
+func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer], fileTelemetryOn *atomic.Bool, localInference *inference.Monitor) <-chan struct{} {
 	var workers sync.WaitGroup
 	run := func(name string, fn func(context.Context) error) {
 		workers.Go(func() { sup.Run(ctx, name, fn) })
@@ -1065,9 +1078,51 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 
 	run("netsampler", func(c context.Context) error {
 		ns := collect.NewNetSampler(b, tagger, cfg.NetSampleInterval, nil)
+		if localInference != nil {
+			ns.OnSnapshot = func(snapshot collect.SocketSnapshot) {
+				connections := make([]inference.Connection, 0, len(snapshot.Connections))
+				for _, s := range snapshot.Connections {
+					connections = append(connections, inference.Connection{PID: s.PID, LocalAddress: net.JoinHostPort(s.LocalHost, strconv.Itoa(s.LocalPort)), RemoteAddress: net.JoinHostPort(s.Host, strconv.Itoa(s.Port))})
+				}
+				localInference.ObserveConnections(connections, snapshot.State)
+			}
+		}
 		ns.OnProduce = func() { supReg.MarkProduced("netsampler") }
 		return ns.Run(c)
 	})
+	if localInference != nil {
+		for i, gatewayConfig := range cfg.LocalInference.Gateways {
+			localInference.GatewayStatus(gatewayConfig, "configured")
+			run(fmt.Sprintf("inference-gateway-%d", i+1), func(c context.Context) error {
+				gateway, err := inference.NewGateway(gatewayConfig, localInference)
+				if err != nil {
+					localInference.GatewayStatus(gatewayConfig, "unavailable")
+					return err
+				}
+				gateway.Identify = func(ctx context.Context, remote string) (int32, string) {
+					pid, err := connpeer.PID(ctx, remote, inferenceClientPID)
+					if err != nil {
+						return 0, ""
+					}
+					if identity, ok := resolver.PermissionIdentity(pid, ""); ok {
+						return pid, identity.SessionID
+					}
+					return pid, ""
+				}
+				return gateway.Serve(c)
+			})
+		}
+		run("local-inference", func(c context.Context) error {
+			return localInference.Run(c, func() []string {
+				targets := append([]string{}, cfg.LocalInference.Endpoints...)
+				targets = append(targets, cfg.Advisor.Endpoint, cfg.Advisor.ClassifierEndpoint, cfg.SystemAgent.Endpoint, cfg.DirectoryGuard.ShellReview.Endpoint, "http://127.0.0.1:11434")
+				for _, gateway := range cfg.LocalInference.Gateways {
+					targets = append(targets, gateway.Upstream, "http://"+gateway.Listen)
+				}
+				return targets
+			})
+		})
+	}
 
 	home, _ := os.UserHomeDir()
 	st.TrackHookIngestion()
