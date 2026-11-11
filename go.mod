@@ -5,7 +5,8 @@ go 1.27.4
 require (
 	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/sys v0.50.0
-	modernc.org/sqlite v1.62.0)
+	modernc.org/sqlite v1.62.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.1.0 // indirect
