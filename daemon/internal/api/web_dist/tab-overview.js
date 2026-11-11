@@ -179,7 +179,7 @@ function resourceControlHTML(f) {
       <button type="button" class="btn btn-ghost btn-sm" data-action="resource-control" data-id="${escapeHTML(c.pending_id)}" data-decision="dismiss">Keep running</button>
     </span>` : '';
   const resume = c.paused ? `<button type="button" class="btn btn-primary btn-sm" data-action="resource-control" data-session="${escapeHTML(f.key)}" data-decision="resume">Resume session</button>` : '';
-  const error = c.last_error ? `<span class="resource-control-error">Intervention failed: ${escapeHTML(c.last_error)}</span>` : '';
+  const error = c.last_error ? `<details class="resource-control-error"><summary>The last action did not complete${c.paused ? '; the session is still paused' : ''}.</summary><p>${escapeHTML(c.last_error)}</p></details>` : '';
   return approval + resume + error + (c.result ? resourceOutcomeHTML(c.result) : '');
 }
 
@@ -903,48 +903,18 @@ function renderSessionStrip() {
   el.innerHTML = sessionStripHTML(top, all.length, Date.now(), SA.t.flags);
 }
 
-// One posture item: severity dot, title, and the link to where it is acted on.
-function postureItemHTML(it) {
-  const sev = it.severity >= 3 ? 's3' : it.severity === 2 ? 's2' : 's1';
-  let link = '';
-  if (it.kind === 'flag') link = `<a href="#" data-action="open-flag" data-id="${escapeHTML(it.id)}">view evidence</a>`;
-  if (['review', 'pattern', 'routine'].includes(it.kind)) link = `<a href="#" data-action="goto-tab" data-tab="home">review decision</a>`;
-  if (it.kind === 'incident') link = `<a href="#" data-action="open-incident" data-id="${escapeHTML(it.id)}">view report</a>`;
-  if (it.kind === 'guard_pending') link = `<span>resolve it in the menu bar app</span>`;
-  if (it.kind === 'collector_down') link = `<span>— ${escapeHTML(it.detail || 'collector stopped')} <a href="#" data-action="open-fda">open Full Disk Access settings</a></span>`;
-  if (it.kind === 'uninspected_egress') link = `<a href="#" data-action="open-uninspected">see endpoints</a>`;
-  return `<li class="posture-item"><span class="sev ${sev}">●</span><span>${escapeHTML(it.title)} ${link}</span></li>`;
-}
-
-// The banner summarises, the queue lists. On Home the attention queue below
-// is the list, so the banner lists nothing (''); on any other tab it lists
-// the first POSTURE_ITEM_CAP items and links the rest to Home. extra holds
-// summary lines (the advisor's triage) that follow the list. Pure.
-const POSTURE_ITEM_CAP = 3;
-function postureItemsHTML(items, tab, extra) {
-  if (tab === 'home') return '';
-  const list = items || [];
-  const extraList = extra || [];
-  // extra (the advisor's triage summary) counts toward the cap too: content
-  // rows (items + extra) never exceed POSTURE_ITEM_CAP, and the "more" link
-  // — not a content row itself — counts only the items it hides.
-  const itemSlots = Math.max(0, POSTURE_ITEM_CAP - extraList.length);
-  const shown = list.slice(0, itemSlots);
-  const out = shown.map(postureItemHTML);
-  const more = list.length - shown.length;
-  if (more > 0) out.push(`<li class="posture-more"><a href="#" data-action="goto-tab" data-tab="home">and ${more} more</a></li>`);
-  return out.concat(extraList).join('');
-}
-
+// The banner summarises and links to the review queue on Home, which lists
+// every item with its action; the banner itself lists none.
 function renderPosture() {
   const SA = window.SA;
 
   const banner = document.getElementById('posture-banner');
   const stateEl = document.getElementById('posture-state');
   const summaryEl = document.getElementById('posture-summary');
-  const itemsEl = document.getElementById('posture-items');
+  const advisorEl = document.getElementById('posture-advisor');
   const healthEl = document.getElementById('posture-health');
   const retryEl = document.getElementById('posture-retry');
+  const reviewEl = document.getElementById('posture-review');
   const p = SA.t.posture;
   if (!banner) return;
   const view = consolePosturePresentation(p, SA.postureHealth);
@@ -966,6 +936,10 @@ function renderPosture() {
     healthEl.hidden = !view.health;
   }
   if (retryEl) retryEl.hidden = !view.retry;
+  if (reviewEl) {
+    reviewEl.textContent = view.review;
+    reviewEl.hidden = !view.review;
+  }
 
   // The fatigue reducer: when the local advisor has triaged the critical
   // flags and some read benign, say so at the one-glance level.
@@ -974,12 +948,13 @@ function renderPosture() {
     ? (SA.t.flags || []).filter(f => f.severity >= 3 && f.advisor && f.advisor.assessment)
     : [];
   const benignCount = criticals.filter(f => f.advisor.assessment === 'benign').length;
-  const extra = criticals.length > 0
-    ? [`<li class="posture-advisor"><span class="sev s1">●</span><span>Advisor opinion: ${benignCount} of ${criticals.length} triaged critical flags may be benign. Evidence and risk are unchanged.</span></li>`]
-    : [];
-  const html = postureItemsHTML(p?.items, SA.activeTab, extra);
-  itemsEl.innerHTML = html;
-  itemsEl.hidden = !html;
+  if (advisorEl) {
+    advisorEl.textContent = criticals.length > 0
+      ? `Advisor opinion: ${benignCount} of ${criticals.length} triaged critical flags may be benign. Evidence and risk are unchanged.`
+      : '';
+    advisorEl.title = advisorEl.textContent;
+    advisorEl.hidden = !criticals.length;
+  }
 }
 
 function renderEvents() {

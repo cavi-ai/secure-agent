@@ -57,7 +57,7 @@
   if (scenarios.has('expectdemo')) {
     setTimeout(() => {
       openTab('egress');
-      const listed = document.getElementById('posture-items').textContent.includes('updates.example.com');
+      const listed = document.getElementById('posture-banner').textContent.includes('updates.example.com');
       const choices = !!document.querySelector('#recurring-egress-container [data-action="expect-egress"][data-episode-id="episode-routine"]');
       stamp('expect-before', `choices=${choices} listed=${listed} needs=${window.SA.t.posture.needs_you}`);
       document.querySelector('[data-action="expect-egress"][data-episode-id="episode-routine"][data-kind="destination"]').click();
@@ -707,7 +707,7 @@
       }
       if (scenarios.has('expectdemo') && p === '/expected-egress') {
         const choices = !!document.querySelector('#recurring-egress-container [data-action="expect-egress"][data-episode-id="episode-routine"]');
-        const listed = (document.getElementById('posture-items') || {}).textContent.includes('updates.example.com');
+        const listed = document.getElementById('posture-banner').textContent.includes('updates.example.com');
         stamp('expect-probe', `choices=${choices} listed=${listed} needs=${window.SA.t.posture.needs_you}`);
       }
       // postfail: POST /allowlist answers 500 (the act-in-place revert path).
@@ -1563,7 +1563,7 @@
         const narrow = matchMedia('(max-width:900px)').matches;
         receipt.toolbar = (getComputedStyle(panel.querySelector('.session-toolbar')).display === 'none') === narrow;
         receipt.actions = !narrow || Array.from(chrome.querySelectorAll('.sd-back, .sd-export, .sd-view, [data-action="session-status"]')).every(button => button.getBoundingClientRect().height >= 44);
-        const toggle = () => document.querySelector('[data-action="session-toggle-list"]');
+        const toggle = () => document.getElementById('btn-session-sidebar-toggle');
         receipt.railToggle = narrow;
         if (!narrow) {
           const selected = window.SA.selectedSessionId, top = body.scrollTop;
@@ -1578,7 +1578,7 @@
         }
         receipt.alertsReachable = !!document.querySelector('#posture-state').getClientRects().length
           && !!document.querySelector('#posture-summary').getClientRects().length
-          && !!document.querySelector('#posture-banner .agent-posture-link').getClientRects().length;
+          && !!document.getElementById('posture-review').getClientRects().length;
         for (const mode of ['results','trace']) {
           await window.setSessionView(mode); await settle(); receipt[mode + 'Budget'] = measure();
         }
@@ -2762,20 +2762,25 @@
     };
     setTimeout(next, 5000);
   }
-  // Posture banner off Home: 3 items and "and N more"; the link lands on Home,
-  // where the banner lists nothing.
+  // Posture banner off Home: one row with a single review action and no item
+  // list; the action lands on the Home attention queue.
   if (scenarios.has('posturemoredemo')) {
     const banner = () => {
-      const ul = document.getElementById('posture-items');
-      const more = ul.querySelector('.posture-more a');
-      return `items=${ul.querySelectorAll('.posture-item').length} more=${more ? more.textContent : 'none'} hidden=${ul.hidden ? 1 : 0}`;
+      const review = document.getElementById('posture-review');
+      const visible = !!review.getClientRects().length;
+      const action = review.getBoundingClientRect(), main = document.querySelector('#posture-banner .posture-main').getBoundingClientRect();
+      const row = action.top < main.bottom && action.bottom > main.top ? 'one' : 'stacked';
+      return `list=${document.querySelectorAll('#posture-banner ul, #posture-banner li').length} review=${visible ? review.textContent : 'none'} row=${row}`;
     };
     setTimeout(() => openTab('egress'), 1500);
     setTimeout(() => {
       stamp('posture-egress', banner());
-      document.querySelector('#posture-items .posture-more a').click();
+      document.getElementById('posture-review').click();
     }, 4000);
-    setTimeout(() => stamp('posture-home', `tab=${document.querySelector('.tab-btn.active').dataset.tab} ${banner()}`), 6000);
+    setTimeout(() => {
+      const queue = document.getElementById('attention-center').getBoundingClientRect();
+      stamp('posture-home', `tab=${document.querySelector('.tab-btn.active').dataset.tab} queue=${queue.top > -2 && queue.top < innerHeight && scrollY > 0 ? 'in view' : 'out of view'}`);
+    }, 6000);
   }
   // Egress fold: 2 rules with hits stay listed, 20 quiet rules fold into one
   // row; the open fold survives an SSE-driven refetch that changes its count.
@@ -2837,6 +2842,14 @@
         const bar = document.querySelector('.tabs-bar') || document.querySelector('nav.tabs');
         if (params.has('shot') && bar) {
           for (let el = bar.previousElementSibling; el; el = el.previousElementSibling) el.style.display = 'none';
+        }
+        // A capture shows the settled tab, never a frame of its transition.
+        if (params.has('shot')) {
+          const settle = () => document.getAnimations().forEach(animation => {
+            if (animation.effect?.getComputedTiming().iterations !== Infinity) animation.finish();
+          });
+          requestAnimationFrame(settle);
+          setTimeout(settle, 1000);
         }
       }, 1500);
     }
@@ -3447,7 +3460,7 @@
         foot.scrollTop = 0;
         checks.advisorVisible = document.getElementById('advisor-state').getBoundingClientRect().height > 0;
         checks.homeHidden = getComputedStyle(document.getElementById('tab-home')).display === 'none';
-        document.querySelector('[data-action="goto-tab"][data-tab="home"].agent-posture-link').click();
+        document.getElementById('posture-review').click();
         checks.alertsReachable = document.querySelector('.tab-btn[data-tab="home"]').getAttribute('aria-selected') === 'true'
           && getComputedStyle(document.querySelector('.statstrip')).display !== 'none';
         document.body.dataset.agentWorkspace = JSON.stringify(checks);
@@ -3521,7 +3534,7 @@
     const dialog = document.getElementById('drawer');
     const label = document.getElementById(dialog.getAttribute('aria-labelledby'));
     checks.named = !!label && dialog.contains(label) && !!label.textContent.trim();
-    checks.modal = matchMedia('(min-width: 1180px)').matches || (document.getElementById('drawer').getAttribute('aria-modal') === 'true' && document.querySelector('.app > main')?.inert);
+    checks.modal = matchMedia('(min-width: 1700px)').matches || (document.getElementById('drawer').getAttribute('aria-modal') === 'true' && document.querySelector('.app > main')?.inert);
     if (scenarios.has('layoutwide')) window.openResourcePolicyEditor();
     const layoutProbe = () => {
       const root = document.getElementById('drawer');
@@ -3540,15 +3553,15 @@
       const panelRect = rect(panel), mainRect = rect(main);
       const modal = root.getAttribute('aria-modal') === 'true';
       const title = document.getElementById(root.getAttribute('aria-labelledby'));
-      stamp('remodel-layout-probe', JSON.stringify({width:document.documentElement.clientWidth,innerWidth,media1180:matchMedia('(min-width: 1180px)').matches,media1340:matchMedia('(min-width: 1340px)').matches,wide:root.classList.contains('resource-policy'),
+      stamp('remodel-layout-probe', JSON.stringify({width:document.documentElement.clientWidth,innerWidth,media1700:matchMedia('(min-width: 1700px)').matches,media1860:matchMedia('(min-width: 1860px)').matches,wide:root.classList.contains('resource-policy'),
         modal,inert:main.inert,drawer:panelRect,main:mainRect,overflow:document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
         named:!!title && root.contains(title) && !!title.textContent.trim(),
         contentFit:modal ? !!main.inert : mainRect.right <= panelRect.left + 1}));
     };
     const recordLayout = () => requestAnimationFrame(layoutProbe);
     window.addEventListener('resize', recordLayout);
-    matchMedia('(min-width: 1180px)').addEventListener('change', recordLayout);
-    matchMedia('(min-width: 1340px)').addEventListener('change', recordLayout);
+    matchMedia('(min-width: 1700px)').addEventListener('change', recordLayout);
+    matchMedia('(min-width: 1860px)').addEventListener('change', recordLayout);
     layoutProbe();
     if (!scenarios.has('layoutwide')) document.querySelector('#drawer-foot [data-action="dismiss-flag"]')?.click();
     setTimeout(() => {

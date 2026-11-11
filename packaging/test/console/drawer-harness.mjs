@@ -34,8 +34,9 @@ export function loadDrawer({ width = 1900, media = null, ended = false, deps = {
   const attentionHead = node();
   const inertSiblings = [node({ inert: false, id: 'main', contains: () => false })];
   const documentListeners = new Map();
+  const bodyClasses = new Set();
   const document = {
-    activeElement: null, documentElement: { clientWidth: width },
+    activeElement: null, documentElement: { clientWidth: width }, body: { classList: { contains: name => bodyClasses.has(name) } },
     getElementById: id => ({ drawer, 'drawer-body': body, 'drawer-foot': foot, 'drawer-title-text': title, 'btn-drawer-close': closeButton,
       'btn-drawer-copy': copyButton, 'drawer-title': titleEl }[id] || null),
     querySelector: selector => ({ '#drawer-title use': titleIcon, '.app': app, '#attention-list .need-head': attentionHead }[selector] || null),
@@ -75,5 +76,5 @@ export function loadDrawer({ width = 1900, media = null, ended = false, deps = {
   };
   const api = ctx.createDrawer(collaborators);
   return { api, ctx, state, calls, toasts, requests, collaborators,
-    dom: { drawer, body, foot, title, titleIcon, titleEl, closeButton, copyButton, head, app, classes, attentionHead, inertSiblings, document, window, documentListeners, windowListeners } };
+    dom: { drawer, body, foot, title, titleIcon, titleEl, closeButton, copyButton, head, app, classes, bodyClasses, attentionHead, inertSiblings, document, window, documentListeners, windowListeners } };
 }

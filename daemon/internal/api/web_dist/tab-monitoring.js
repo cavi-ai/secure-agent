@@ -58,8 +58,8 @@ function monitoringRowHTML(row, selected, stale) {
 }
 
 function monitoringDetailHTML(row, model) {
-  if (!row) return `<div class="monitoring-empty"><h2>${model.rows.length ? 'Choose a session or process' : model.available ? 'No sessions detected' : 'Session observations unavailable'}</h2>
-    <p>${model.available ? 'Select an item to review its own observations and identity.' : 'Refresh to check whether the daemon can provide session observations.'}</p></div>`;
+  if (!row) return `<div class="monitoring-empty"><h2>${model.rows.length ? 'Choose a session or process' : model.available ? 'No sessions detected' : 'No session to show'}</h2>
+    <p>${model.available ? 'Select an item to review its own observations and identity.' : 'Sessions appear here once the daemon reports their observations.'}</p></div>`;
   const paths = [['guard', 'File guard', 'shield'], ['trace', 'Recorded activity', 'activity'], ['payload', 'Traffic inspection', 'globe']];
   const identity = row.id ? 'Session linked' : 'Session not linked';
   return `<header class="monitoring-detail-heading">${harnessChipHTML(row.harness)}<div><h2>${escapeHTML(row.title)}</h2><p>${escapeHTML(harnessMeta(row.harness).label)}<span class="monitoring-identity-state">${escapeHTML(identity)}</span></p></div></header>
@@ -103,7 +103,11 @@ function createMonitoringController({ root, data, health, openSession, retry, op
     const warning = current.stale || !current.available || current.issues.length > 0;
     const title = current.stale ? 'Observations are stale' : !current.available ? 'Session observations unavailable'
       : current.issues.length ? 'Monitoring needs attention' : 'Session observations';
-    html('monitoring-notice', `<div class="monitoring-notice${warning ? ' warning' : ''}" role="status"><svg class="icon" aria-hidden="true"><use href="#i-${warning ? 'alert' : 'activity'}"/></svg><div><strong>${title}</strong><p>${current.stale ? 'Showing last-known data. Refresh before relying on current coverage.' : current.issues.length ? escapeHTML(current.issues.slice(0, 2).map(item => item.title).join(' · ')) : current.available ? 'Observations describe recorded activity, not a guarantee of protection.' : 'The daemon has not provided a current per-session report.'}</p></div><button type="button" class="link-btn" data-monitoring-action="${current.stale || !current.available ? 'retry' : !current.issues.length && current.historyIncomplete ? 'diagnostics' : 'issues'}"${!warning && !current.historyIncomplete ? ' hidden' : ''}>${current.stale || !current.available ? 'Retry' : !current.issues.length && current.historyIncomplete ? 'Inspect monitoring' : 'Review issues'}</button></div>`);
+    // A reported issue explains the gap and carries its own remedy; a retry
+    // only helps when nothing explains it.
+    const action = current.stale ? 'retry' : current.issues.length ? 'issues' : !current.available ? 'retry' : current.historyIncomplete ? 'diagnostics' : '';
+    const actionLabel = { retry: 'Retry', issues: 'Review issues', diagnostics: 'Inspect monitoring' }[action] || '';
+    html('monitoring-notice', `<div class="monitoring-notice${warning ? ' warning' : ''}" role="status"><svg class="icon" aria-hidden="true"><use href="#i-${warning ? 'alert' : 'activity'}"/></svg><div><strong>${title}</strong><p>${current.stale ? 'Showing last-known data. Refresh before relying on current coverage.' : current.issues.length ? escapeHTML(current.issues.slice(0, 2).map(item => item.title).join(' · ')) : current.available ? 'Observations describe recorded activity, not a guarantee of protection.' : 'The daemon has not provided a current per-session report.'}</p></div><button type="button" class="link-btn" data-monitoring-action="${action || 'issues'}"${action ? '' : ' hidden'}>${actionLabel || 'Review issues'}</button></div>`);
     element('monitoring-issues').hidden = !current.issues.length || !issuesOpen;
     html('monitoring-issue-list', current.issues.map(item => `<li><strong>${escapeHTML(item.title)}</strong><p>${escapeHTML(item.detail || '')}</p>${item.kind === 'uninspected_egress' ? '<button type="button" class="link-btn" data-monitoring-action="traffic">Review machine-wide traffic</button>' : '<button type="button" class="link-btn" data-monitoring-action="diagnostics">Inspect monitoring</button>'}</li>`).join(''));
     const notes = element('monitoring-notes');

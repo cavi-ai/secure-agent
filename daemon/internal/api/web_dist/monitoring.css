@@ -1,8 +1,6 @@
 /* Monitoring uses the console's shared palette, type and harness artwork. */
-.monitoring-page .posture, .monitoring-page .scope-bar,
-.monitoring-page .masthead-right > :not(#btn-refresh) { display: none; }
+.monitoring-page .scope-bar { display: none; }
 #tab-monitoring { gap: 0; }
-.monitoring-page .page-heading h1 { font-size: 32px; }
 .monitoring-notice {
   display: flex; align-items: center; gap: 12px; padding: 14px 18px;
   margin-bottom: 20px; border: 1px solid var(--line); border-radius: var(--r-md);
@@ -60,6 +58,7 @@
 .monitoring-empty h2 { font-size: 22px; margin-bottom: 12px; }
 .monitoring-empty p { color: var(--tx-2); line-height: 1.6; max-width: 48ch; }
 .monitoring-issues { margin-bottom: 20px; padding: 18px; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.monitoring-workbench ~ .monitoring-issues { margin: 20px 0 0; }
 .monitoring-issues > summary { cursor: pointer; font-size: 14px; }
 .monitoring-issues ul { list-style: none; }
 .monitoring-issues li { margin-top: 18px; font-size: 14px; }
@@ -93,8 +92,10 @@
 .monitoring-diagnostic-check p { color: var(--tx-2); margin: 6px 0 0; }
 .monitoring-diagnostic-error { color: var(--bad); }
 /* Local server review stays on demand and uses the shared detail drawer. */
-.local-service-entry { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
-.local-service-entry p { margin: 0; color: var(--tx-2); }
+.local-service-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--line); }
+.local-service-entry h2 { flex-basis: 100%; font-size: 16px; font-weight: 600; }
+.local-service-entry p { flex: 1 1 320px; margin: 0; color: var(--tx-2); font-size: 14px; line-height: 1.5; }
+.local-service-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .local-service-profile, .local-service-inventory { margin-block: 12px; }
 .local-service-profile summary, .local-service-inventory summary { cursor: pointer; padding-block: 8px; }
 .local-service-profile pre { white-space: pre-wrap; overflow-wrap: anywhere; }

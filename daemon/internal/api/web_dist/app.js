@@ -1840,7 +1840,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const from = activeTab;
     activeTab = r.tab;
     const headings = {
-      home: ['Overview', 'Monitor local AI activity and respond to security findings.'],
+      home: ['Home', 'Monitor local AI activity and respond to security findings.'],
       sessions: ['Sessions', 'Follow your agents, inspect activity, and review session evidence.'],
       monitoring: ['Monitoring', 'Understand the evidence for each running session.'],
       protection: ['Protection', 'Review observed traffic and manage file and egress rules.'],
@@ -2692,6 +2692,8 @@ document.addEventListener('DOMContentLoaded', () => {
     navigationToggle.setAttribute('aria-label', collapsed ? 'Show navigation' : 'Hide navigation');
     navigationToggle.title = navigationToggle.getAttribute('aria-label');
     try { localStorage.setItem('sa.sidebar-collapsed', String(collapsed)); } catch { /* memory only */ }
+    // The dock width depends on the sidebar: an open drawer re-checks it.
+    detailDrawer.syncMode();
   }
   if (navigationToggle) {
     let collapsed = false;
@@ -4135,10 +4137,6 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'session-list':
         window.showSessionList();
-        break;
-      case 'session-toggle-list':
-        sessionWorkbench.toggleList();
-        syncSidebarControls();
         break;
       case 'show-ended-sessions':
         showEndedSessions(el);

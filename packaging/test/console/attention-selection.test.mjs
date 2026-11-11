@@ -151,7 +151,7 @@ test('Home restoration respects saved closed/open booleans and preserves default
 
 test('drawer mode follows CSS media changes even when innerWidth remains stale', () => {
   const listeners = new Map();
-  const media = new Map(['(min-width: 1180px)', '(min-width: 1340px)'].map(query => [query, {
+  const media = new Map(['(min-width: 1700px)', '(min-width: 1860px)'].map(query => [query, {
     matches: false, addEventListener: (event, fn) => listeners.set(query, fn)
   }]));
   const { api, dom } = loadDrawer({ width: 1179, media });
@@ -161,16 +161,16 @@ test('drawer mode follows CSS media changes even when innerWidth remains stale',
   const attributes = dom.drawer.attributes;
   assert.equal(attributes.get('role'), 'dialog');
   assert.equal(main.inert, true);
-  media.get('(min-width: 1180px)').matches = true;
-  listeners.get('(min-width: 1180px)')();
+  media.get('(min-width: 1700px)').matches = true;
+  listeners.get('(min-width: 1700px)')();
   assert.equal(attributes.get('role'), 'complementary');
   assert.equal(main.inert, false);
   dom.drawer.className = 'drawer resource-policy';
   api.syncMode();
   assert.equal(attributes.get('role'), 'dialog');
   assert.equal(main.inert, true);
-  media.get('(min-width: 1340px)').matches = true;
-  listeners.get('(min-width: 1340px)')();
+  media.get('(min-width: 1860px)').matches = true;
+  listeners.get('(min-width: 1860px)')();
   assert.equal(attributes.get('role'), 'complementary');
   assert.equal(main.inert, false);
   assert.equal(dom.window.innerWidth, 1900);

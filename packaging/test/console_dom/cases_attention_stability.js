@@ -46,7 +46,7 @@
       kept.querySelector('.need-head').focus({preventScroll:true});
       kept.querySelector('.need-head').click();
       probe.focus = probe.focus && row('stable-5') === kept && row('stable-5').classList.contains('is-selected')
-        && document.activeElement === (innerWidth>=1180 ? kept.querySelector('.need-head') : document.getElementById('btn-drawer-close'));
+        && document.activeElement === (innerWidth>=1700 ? kept.querySelector('.need-head') : document.getElementById('btn-drawer-close'));
       document.getElementById('btn-drawer-close').click(); await idle();
       set([make('final')]); await settle();
       const finalTop = support.getBoundingClientRect().top;
@@ -81,7 +81,7 @@
       const opener = row('stable-4').querySelector('.need-head');
       opener.focus({preventScroll:true}); opener.click(); await idle(); await frame();
       app.getAnimations().forEach(a => a.finish()); await frame();
-      const docked = innerWidth>=1180;
+      const docked = innerWidth>=1700;
       const basePadding = parseFloat(getComputedStyle(app).paddingRight);
       const targetPadding = closedPadding;
       const isModal = document.getElementById('drawer').getAttribute('aria-modal') === 'true';

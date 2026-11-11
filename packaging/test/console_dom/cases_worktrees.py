@@ -199,6 +199,7 @@ def run_worktrees(page):
             and {k: cycle.get('closed', {}).get(k) for k in ('dock', 'drawer', 'chat', 'tab', 'focus')} == {'dock': False, 'drawer': False, 'chat': 'agent-layout', 'tab': 'system', 'focus': 'worktree-discuss'}
             and 'class="agent-docked"' not in dom_wtdockcycle
         ),
+        str(cycle),
     )
     check(
         "worktrees: Discuss with the agent off toasts the server's text and stays on System",

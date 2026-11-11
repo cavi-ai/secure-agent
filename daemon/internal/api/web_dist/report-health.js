@@ -69,5 +69,7 @@ function consolePosturePresentation(posture, { lastSnapshotAt = 0, error = '' } 
     : 'No complete telemetry snapshot has loaded. Current status and coverage are unavailable.')
     : !lastSnapshotAt ? 'Waiting for a complete telemetry snapshot; known observations remain visible.'
     : !p.state ? 'Current telemetry did not include a posture report.' : '';
-  return { state, title, pill, health, retry: !!error, summary: state === 'unknown' ? '' : p.summary || '' };
+  // One action on every tab: the review queue on Home.
+  const review = critical || attention ? (needs ? `Review ${needs} alert${needs === 1 ? '' : 's'}` : 'Review alerts') : '';
+  return { state, title, pill, health, retry: !!error, review, summary: state === 'unknown' ? '' : p.summary || '' };
 }

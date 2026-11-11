@@ -442,7 +442,9 @@ INTERRUPTED_ATTENTION_FIELDS = ['initial', 'evidenceOpen', 'named', 'modal', 'pe
 USAGE_FIELDS = ['selected', 'matches', 'focus', 'detail', 'reset']
 # The wide variant opens the resource policy editor instead of writing.
 WIDE_ATTENTION_FIELDS = ['initial', 'evidenceOpen', 'named', 'final']
-WIDE_LAYOUT = {'wide': True, 'modal': False, 'inert': False, 'overflow': False, 'contentFit': True, 'named': True}
+# At 1440px with the navigation shown, docking the wide drawer would leave the
+# main column under 720px, so it overlays.
+WIDE_LAYOUT = {'wide': True, 'modal': True, 'inert': True, 'overflow': False, 'contentFit': True, 'named': True}
 
 
 def run_console(page):
@@ -1100,7 +1102,7 @@ def run_home(page):
     check(
         'Home: the posture banner lists no items; the attention queue lists them',
         (
-            re.search('<ul class="posture-items" id="posture-items" hidden(="")?></ul>', dom) is not None
+            'id="posture-items"' not in dom
             and not dom_query(dom).has(None, {'class': 'posture-item'})
             and dom_query(dom).has(None, {'data-action': 'select-attention', 'data-need-kind': 'guard', 'data-need-id': 'guard-1'})
         ),
@@ -1109,20 +1111,21 @@ def run_home(page):
 def run_egress(page):
     check = page.check
     dom_posturemore = page.fixture('dom_posturemore')
+    needs_you = json.loads(html.unescape(pre(page.fixture('dom'), 'fixture-posture')))['needs_you']
     posture_egress = (re.search('<pre id="posture-egress"[^>]*>([^<]*)<', dom_posturemore) or [None, ''])[1]
     check(
-        'Egress: the posture banner lists 3 content rows (2 items + the advisor line) and "and 4 more"',
-        posture_egress == 'items=2 more=and 4 more hidden=0',
+        'Egress: the posture banner is one row with a single review action and no item list',
+        posture_egress == f'list=0 review=Review {needs_you} alerts row=one',
         posture_egress,
     )
 
-def run_and_n_more_lands_on_home_where_the_banner_lists_nothing(page):
+def run_review_action_lands_on_the_home_attention_queue(page):
     check = page.check
     dom_posturemore = page.fixture('dom_posturemore')
     posture_home = (re.search('<pre id="posture-home"[^>]*>([^<]*)<', dom_posturemore) or [None, ''])[1]
     check(
-        '"and N more" lands on Home, where the banner lists nothing',
-        posture_home == 'tab=home items=0 more=none hidden=1',
+        'the banner review action lands on the Home attention queue',
+        posture_home == 'tab=home queue=in view',
         posture_home,
     )
 
@@ -2754,8 +2757,9 @@ def run_resource_intervention_failure_is_visible(page):
     dom = page.fixture('dom')
     resource_view = dom.split('id="resource-mission-control"', 1)[1].split('id="history-panel"', 1)[0]
     check(
-        'resource intervention failure is visible',
-        'Intervention failed: rollback failed: permission denied' in resource_view,
+        'resource intervention failure is visible in plain words with the raw error under Details',
+        re.search(r'<details class="resource-control-error"><summary>The last action did not complete[^<]*</summary>'
+                  r'<p>rollback failed: permission denied</p></details>', resource_view) is not None,
     )
 
 def run_home_has_no_session_board(page):
@@ -3028,16 +3032,21 @@ def run_an_expected_connection_leaves_egress_before_the_daemon_answers_the_banne
         f'before={expect_before!r} probe={expect_probe!r}',
     )
 
-def run_posture_flag_item_targets_its_recorded_evidence(page):
+def run_posture_review_action_targets_the_alert_queue(page):
     check = page.check
     dom_tab = page.fixture('dom_tab')
-    posture_list = dom_query(dom_tab).find(None, {'id': 'posture-items'})
+    needs_you = json.loads(html.unescape(pre(page.fixture('dom'), 'fixture-posture')))['needs_you']
+    review = dom_query(dom_tab).find('a', {'id': 'posture-review'})
     check(
-        'posture flag item targets its recorded evidence',
+        'posture review action targets the alert queue off Home',
         (
-            posture_list is not None
-            and dom_query(posture_list.html).has('a', {'data-action': 'open-flag', 'data-id': 'flag-1'})
+            review is not None
+            and review.attrs.get('data-action') == 'goto-tab'
+            and review.attrs.get('data-tab') == 'findings'
+            and 'hidden' not in review.attrs
+            and review.text.strip() == f'Review {needs_you} alerts'
         ),
+        review.html if review is not None else 'no #posture-review',
     )
 
 def run_tab_switch_reveals_the_target_panel(page):
@@ -4089,8 +4098,8 @@ CASES = (
     Case('keychain_flag_carries_class_dismiss_action', run_keychain_flag_carries_class_dismiss_action, ('dom',)),
     Case('uninspected_warning_is_a_clickable_drill_down', run_uninspected_warning_is_a_clickable_drill_down, ('dom',)),
     Case('home', run_home, ('dom',)),
-    Case('egress', run_egress, ('dom_posturemore',)),
-    Case('and_n_more_lands_on_home_where_the_banner_lists_nothing', run_and_n_more_lands_on_home_where_the_banner_lists_nothing, ('dom_posturemore',)),
+    Case('egress', run_egress, ('dom_posturemore', 'dom')),
+    Case('review_action_lands_on_the_home_attention_queue', run_review_action_lands_on_the_home_attention_queue, ('dom_posturemore', 'dom')),
     Case('egress_2', run_egress_2, ('dom_fold',)),
     Case('processes_panel_fills_the_content_width_at_1440_px', run_processes_panel_fills_the_content_width_at_1440_px, ('dom_procwidth',)),
     Case('drill_down_drawer_title', run_drill_down_drawer_title, ('dom_uninsp',)),
@@ -4215,7 +4224,7 @@ CASES = (
     Case('resolved_guard_request_leaves_the_attention_queue', run_resolved_guard_request_leaves_the_attention_queue, ('dom', 'dom_guard')),
     Case('resolved_incident_leaves_the_attention_count_before_reconciliation', run_resolved_incident_leaves_the_attention_count_before_reconciliation, ('dom', 'dom_resolve')),
     Case('an_expected_connection_leaves_egress_before_the_daemon_answers_the_banner_and_needs_you_count_never_held_it', run_an_expected_connection_leaves_egress_before_the_daemon_answers_the_banner_and_needs_you_count_never_held_it, ('dom', 'dom_expect')),
-    Case('posture_flag_item_targets_its_recorded_evidence', run_posture_flag_item_targets_its_recorded_evidence, ('dom_tab',)),
+    Case('posture_review_action_targets_the_alert_queue', run_posture_review_action_targets_the_alert_queue, ('dom_tab', 'dom')),
     Case('tab_switch_reveals_the_target_panel', run_tab_switch_reveals_the_target_panel, ('dom_tab',)),
     Case('egress_explains_scheduled_calls_as_observed_facts_and_labeled_advisor_inference', run_egress_explains_scheduled_calls_as_observed_facts_and_labeled_advisor_inference, ('dom_tab',)),
     Case('egress_offers_broad_scope_only_with_complete_attribution', run_egress_offers_broad_scope_only_with_complete_attribution, ('dom_tab',)),

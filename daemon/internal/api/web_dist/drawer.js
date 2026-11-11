@@ -28,9 +28,12 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
   let selection = null;
   let modal = false;
   const inertBefore = new Map();
-  // Match the CSS dock breakpoints, including browser viewport emulation.
-  const dockMedia = window.matchMedia?.('(min-width: 1180px)');
-  const wideDockMedia = window.matchMedia?.('(min-width: 1340px)');
+  // Match the CSS dock breakpoints, including browser viewport emulation:
+  // the main column keeps 720px beside the drawer, with the navigation
+  // sidebar shown or collapsed.
+  const DOCK_WIDTHS = { narrow: [1700, 1410], wide: [1860, 1580] };
+  const dockMedia = DOCK_WIDTHS.narrow.map(w => window.matchMedia?.(`(min-width: ${w}px)`));
+  const wideDockMedia = DOCK_WIDTHS.wide.map(w => window.matchMedia?.(`(min-width: ${w}px)`));
 
   // The drawer is shared by several views: the incident report (markdown,
   // with a Copy button) and the uninspected-egress drill-down (row actions,
@@ -49,8 +52,9 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
   function syncMode() {
     if (!drawer || auth.ended()) return;
     const wide = drawer.classList.contains('resource-policy');
-    const media = wide ? wideDockMedia : dockMedia;
-    const docked = media ? media.matches : (document.documentElement?.clientWidth || window.innerWidth) >= (wide ? 1340 : 1180);
+    const collapsed = document.body?.classList.contains('sidebar-collapsed') ? 1 : 0;
+    const media = (wide ? wideDockMedia : dockMedia)[collapsed];
+    const docked = media ? media.matches : (document.documentElement?.clientWidth || window.innerWidth) >= DOCK_WIDTHS[wide ? 'wide' : 'narrow'][collapsed];
     const isModal = !drawer.hidden && !docked;
     modal = isModal;
     drawer.setAttribute('role', isModal ? 'dialog' : 'complementary');
@@ -69,8 +73,7 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
     }
   }
   window.addEventListener('resize', syncMode);
-  dockMedia?.addEventListener('change', syncMode);
-  wideDockMedia?.addEventListener('change', syncMode);
+  for (const media of [...dockMedia, ...wideDockMedia]) media?.addEventListener('change', syncMode);
 
   function open({ title: heading, icon, body: html, foot: footHTML, variant, onClose: closeHook, back, attentionOrigin }) {
     if (!drawer) return false;

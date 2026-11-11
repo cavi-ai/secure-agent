@@ -7,7 +7,7 @@ import vm from 'node:vm';
 const assets = new URL('../../../daemon/internal/api/web_dist/', import.meta.url);
 const app = readFileSync(new URL('app.js', assets), 'utf8');
 function fixture(posture, health = { lastSnapshotAt: 1234, error: '' }) {
-  const ids = ['posture-banner', 'posture-state', 'posture-summary', 'posture-items', 'posture-health', 'posture-retry', 'tabs-posture', 'tabs-posture-text'];
+  const ids = ['posture-banner', 'posture-state', 'posture-summary', 'posture-advisor', 'posture-review', 'posture-health', 'posture-retry', 'tabs-posture', 'tabs-posture-text'];
   const nodes = new Map(ids.map(id => [id, { dataset: {}, textContent: '', innerHTML: '', hidden: false }]));
   const ctx = { window: { SA: { t: { posture, flags: [] }, postureHealth: health, activeTab: 'sessions' } },
     document: { getElementById: id => nodes.get(id) } };
@@ -53,7 +53,7 @@ test('first read failure shows unavailable and Retry without inventing a safe st
   assert.equal(f.nodes.get('posture-retry').hidden, false);
 });
 
-test('failed refresh retains critical severity, decisions and evidence with a visible freshness warning', () => {
+test('failed refresh retains critical severity, the review action and a visible freshness warning', () => {
   const f = fixture({ state: 'critical', needs_you: 2, summary: 'Two decisions need review',
     items: [{ kind: 'guard', id: 'retained', title: 'Synthetic retained decision', severity: 3 }] },
   { lastSnapshotAt: 1234, error: 'HTTP 503' });
@@ -62,7 +62,8 @@ test('failed refresh retains critical severity, decisions and evidence with a vi
   assert.equal(f.nodes.get('tabs-posture').dataset.state, 'critical');
   assert.equal(f.nodes.get('posture-state').textContent, 'Urgent review');
   assert.equal(f.nodes.get('posture-summary').textContent, 'Two decisions need review');
-  assert.match(f.nodes.get('posture-items').innerHTML, /Synthetic retained decision/);
+  assert.equal(f.nodes.get('posture-review').textContent, 'Review 2 alerts');
+  assert.equal(f.nodes.get('posture-review').hidden, false);
   assert.match(f.nodes.get('posture-health').textContent, /Status stale.*last complete telemetry/);
   assert.equal(f.nodes.get('tabs-posture-text').textContent, '2 need you · refresh failed');
 });
@@ -96,6 +97,7 @@ test('stale quiet data cannot claim no pending decisions; recovery restores the 
   assert.equal(f.nodes.get('tabs-posture-text').textContent, 'No pending decisions');
   assert.equal(f.nodes.get('posture-health').hidden, true);
   assert.equal(f.nodes.get('posture-retry').hidden, true);
+  assert.equal(f.nodes.get('posture-review').hidden, true);
 });
 
 test('critical SSE observations remain visible before a complete snapshot has loaded', () => {

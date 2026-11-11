@@ -25,6 +25,11 @@
       const opener = panel.querySelector('[data-action="recent-session-results"]');
       opener.focus({preventScroll:true});
       const before = panel.getBoundingClientRect().top;
+      // The advisor line keeps one line, so a narrower review label cannot reflow the banner.
+      const advisor = document.getElementById('posture-advisor');
+      probe.advisorOneLine = !advisor.hidden && !!advisor.getClientRects().length
+        && advisor.getBoundingClientRect().height <= parseFloat(getComputedStyle(advisor).lineHeight) + 1
+        && advisor.title === advisor.textContent;
       route('/flags/acknowledge', ({body}) => {
         items = items.filter(item=>item.id !== JSON.parse(body).flag_id); paint();
         return {ok:true,status:200,json:async()=>({acknowledged:true})};

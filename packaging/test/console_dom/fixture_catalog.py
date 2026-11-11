@@ -719,7 +719,8 @@ FIXTURES = {
     'dom_wtdockcycle': Fixture(
         query='?tab=worktrees&dockcycle',
         scenarios=('tab', 'tab=worktrees', 'dockcycle'),
-        window_size=(1280, 900),
+        # The drawer docks beside the page from 1700px with the navigation shown.
+        window_size=(1720, 900),
         served=False,
     ),
     'dom_wtdiscussoff': Fixture(
