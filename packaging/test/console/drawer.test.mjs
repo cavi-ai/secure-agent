@@ -284,7 +284,7 @@ test('the role container keeps its title relationship across overlay and docked 
 
 test('the mode follows CSS media changes even when innerWidth stays stale', () => {
   const listeners = new Map();
-  const media = new Map(['(min-width: 1180px)', '(min-width: 1340px)'].map(query => [query, {
+  const media = new Map(['(min-width: 1700px)', '(min-width: 1860px)'].map(query => [query, {
     matches: false, addEventListener: (event, fn) => listeners.set(query, fn)
   }]));
   const h = loadDrawer({ width: 1179, media });
@@ -294,17 +294,33 @@ test('the mode follows CSS media changes even when innerWidth stays stale', () =
   h.api.open({ title: 'A' });
   assert.equal(drawer.attributes.get('role'), 'dialog');
   assert.equal(main.inert, true);
-  media.get('(min-width: 1180px)').matches = true;
-  listeners.get('(min-width: 1180px)')();
+  media.get('(min-width: 1700px)').matches = true;
+  listeners.get('(min-width: 1700px)')();
   assert.equal(drawer.attributes.get('role'), 'complementary');
   assert.equal(main.inert, false);
   drawer.className = 'drawer resource-policy';
   h.api.syncMode();
   assert.equal(drawer.attributes.get('role'), 'dialog');
   assert.equal(main.inert, true);
-  media.get('(min-width: 1340px)').matches = true;
-  listeners.get('(min-width: 1340px)')();
+  media.get('(min-width: 1860px)').matches = true;
+  listeners.get('(min-width: 1860px)')();
   assert.equal(drawer.attributes.get('role'), 'complementary');
   assert.equal(main.inert, false);
   assert.equal(h.dom.window.innerWidth, 1900);
+});
+
+test('the drawer overlays until the main column keeps 720px beside it', () => {
+  const h = loadDrawer({ width: 1280 });
+  const { drawer } = h.dom;
+  const main = h.dom.inertSiblings[0];
+  h.api.open({ title: 'A' });
+  assert.equal(drawer.attributes.get('role'), 'dialog');
+  assert.equal(main.inert, true);
+  h.dom.document.documentElement.clientWidth = 1440;
+  h.api.syncMode();
+  assert.equal(drawer.attributes.get('role'), 'dialog');
+  h.dom.bodyClasses.add('sidebar-collapsed');
+  h.api.syncMode();
+  assert.equal(drawer.attributes.get('role'), 'complementary');
+  assert.equal(main.inert, false);
 });

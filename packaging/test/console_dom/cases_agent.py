@@ -26,6 +26,14 @@ def run_agent_group_head(page):
             and '14.5% CPU' in agents_view
         ),
     )
+    heads = [' '.join(head.text.split()) for head in dom_query(agents_view).find_all(None, {'class': 'agent-meta-item'})
+             if 'instance' in head.text]
+    check(
+        'agent group head: one separator between every fact',
+        bool(heads) and all(re.fullmatch(r'\d+ instances? · \d+ process(es)?( · [^·]+)*', head) for head in heads)
+        and any(re.fullmatch(r'1 instance · 2 processes · [\d.]+ [KMG]B · 14\.5% CPU · seen .+ ago', head) for head in heads),
+        str(heads),
+    )
 
 def run_agents_infra_section_sits_last_and_is_not_counted(page):
     check = page.check

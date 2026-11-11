@@ -64,9 +64,13 @@ test('retained flag actions preserve unknown risk and control outcomes', () => {
   assert.doesNotMatch(html, /data-action="(?:mute-flag|kill)"/);
 });
 
-test('headline evidence link targets its exact flag and review links to Home', () => {
-  assert.match(ctx.postureItemHTML({ kind: 'flag', id: '<finding>', title: 'Unknown finding', severity: 3 }), /data-action="open-flag" data-id="&lt;finding&gt;"/);
-  assert.match(ctx.postureItemHTML({ kind: 'review', id: 'review', title: 'Recorded review', severity: 3 }), /data-action="goto-tab" data-tab="home"/);
+test('the banner offers one review action sized to the decisions waiting', () => {
+  const at = { lastSnapshotAt: 1 };
+  assert.equal(ctx.consolePosturePresentation({ state: 'critical', needs_you: 6 }, at).review, 'Review 6 alerts');
+  assert.equal(ctx.consolePosturePresentation({ state: 'attention', needs_you: 1 }, at).review, 'Review 1 alert');
+  assert.equal(ctx.consolePosturePresentation({ state: 'attention', needs_you: 0, coverage_count: 1 }, at).review, 'Review alerts');
+  assert.equal(ctx.consolePosturePresentation({ state: 'all-clear', needs_you: 0 }, at).review, '');
+  assert.equal(ctx.consolePosturePresentation(null, { lastSnapshotAt: 0, error: 'HTTP 503' }).review, '');
 });
 
 test('review receipt retains the observation, residual risk and control result', () => {

@@ -54,6 +54,14 @@ function agentGroupHTML(g, now, open, treeOpen, expanded, roots) {
   const rss = fmtRSS(t.rss);
   const cpu = fmtCPU(t.cpu);
   const seen = t.lastSeen ? fmtAge(t.lastSeen, now) : '';
+  // One separator between every fact in the family header.
+  const facts = [
+    `${t.instances} ${t.instances === 1 ? 'instance' : 'instances'}`,
+    `${t.processes} ${t.processes === 1 ? 'process' : 'processes'}`,
+    rss ? escapeHTML(rss) : '',
+    cpu ? `${escapeHTML(cpu)} CPU` : '',
+    seen ? `<span class="agent-lastseen" title="${escapeHTML(t.lastSeen)}">seen ${escapeHTML(seen)} ago</span>` : '',
+  ].filter(Boolean).join(' · ');
   const orphanBtn = t.orphans
     ? `<button type="button" class="btn btn-danger btn-sm" data-action="kill-orphans" data-family="${escapeHTML(g.key)}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate orphans (${t.orphans})</span></button>`
     : '';
@@ -62,10 +70,7 @@ function agentGroupHTML(g, now, open, treeOpen, expanded, roots) {
       <summary class="agent-group-head">
         <span class="agent-group-title">${harnessChipHTML(g.key, { label: true })}</span>
         <span class="agent-group-meta">
-          <span class="agent-meta-item">${t.instances} ${t.instances === 1 ? 'instance' : 'instances'} · ${t.processes} ${t.processes === 1 ? 'process' : 'processes'}</span>
-          ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
-          ${cpu ? `<span class="agent-meta-item">${escapeHTML(cpu)} CPU</span>` : ''}
-          ${seen ? `<span class="agent-meta-item agent-lastseen" title="${escapeHTML(t.lastSeen)}">seen ${escapeHTML(seen)} ago</span>` : ''}
+          <span class="agent-meta-item">${facts}</span>
           ${t.orphans ? `<span class="agent-orphan-count">${t.orphans} leftover</span>` : ''}
           ${orphanBtn}
         </span>

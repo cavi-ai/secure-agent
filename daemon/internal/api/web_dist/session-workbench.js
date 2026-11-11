@@ -1042,7 +1042,7 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
     <div class="session-detail-actions">
       ${window.SA.recentWorkReturn ? '<button type="button" class="btn btn-sm btn-ghost" data-action="recent-work-home">Back to Home</button>' : ''}
       <button type="button" class="btn btn-sm btn-ghost sd-back" data-action="session-list">Back to sessions</button>
-      <button type="button" class="btn btn-sm btn-ghost sd-list-toggle" data-action="session-toggle-list" aria-controls="session-rail" aria-expanded="${!state.sessionListCollapsed}">${state.sessionListCollapsed ? 'Show' : 'Hide'} session list</button>
+      <button type="button" class="btn btn-sm btn-ghost sd-status" data-action="session-status">Current status</button>
       <button type="button" class="btn btn-sm btn-ghost sd-export" data-action="copy-report" data-id="${escapeHTML(sess.id)}" title="Copy this session's report as markdown"><svg class="icon"><use href="#i-copy"/></svg>Copy report</button>
       ${sess.workspace ? `<button type="button" class="btn btn-sm btn-ghost" data-action="workspace-permissions" data-session="${escapeHTML(sess.id)}">Workspace permissions</button>` : ''}
     </div>
@@ -1058,7 +1058,6 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
         <button type="button" class="sd-view${state.sessionView === 'hooks' ? ' active' : ''}" data-action="session-view" data-view="hooks" aria-pressed="${state.sessionView === 'hooks'}">Hooks</button>
       </div>
       <button type="button" class="btn btn-sm btn-ghost sd-latest" data-action="session-latest" hidden>Jump to latest</button>
-      <button type="button" class="btn btn-sm btn-ghost" data-action="session-status">Current status</button>
     </div>
     </div>
     <div class="session-detail-body" tabindex="-1">${state.sessionView === 'hooks' ? contextHTML + sessionHooksHTML(state.sessionHooks, state.sessionHooksState, state.sessionOverview && state.sessionOverview.hook_health, state.sessionOverviewState, state.sessionOverview && state.sessionOverview.hook_ingestion, state.selectedSessionId, state.sessionHookHistory) : state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;

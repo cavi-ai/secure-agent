@@ -6,6 +6,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Console: the alert banner is one row with a single Review action on every tab, the inspector overlays until the page keeps 720px beside it, and headers, icons, labels and intervention errors are consistent and plain.
+
 ## [1.6.0] - 2026-11-10
 
 ### Added

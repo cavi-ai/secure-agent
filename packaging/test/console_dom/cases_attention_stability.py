@@ -4,7 +4,7 @@ from case_types import Case
 
 
 def run_attention_stability(page):
-    for label, size, reduced in [('desktop', (1440, 1000), False), ('narrow', (600, 900), False), ('reduced', (1440, 1000), True)]:
+    for label, size, reduced in [('desktop', (1720, 1000), False), ('narrow', (600, 900), False), ('reduced', (1720, 1000), True)]:
         dom = page.dom('?attentionstability', served=True, window_size=size, reduced_motion=reduced,
                        fixture={'script': 'cases_attention_stability.js'})
         receipt = re.search(r'data-attention-stability-probe="([^"]+)"', dom)

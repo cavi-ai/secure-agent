@@ -7,7 +7,7 @@ const assets = new URL('../../../daemon/internal/api/web_dist/', import.meta.url
 import { controller } from './controllers.mjs';
 const app = readFileSync(new URL('app.js', assets), 'utf8');
 function fixture() {
-  const ids = ['posture-banner', 'posture-state', 'posture-summary', 'posture-items', 'posture-health', 'posture-retry', 'tabs-posture', 'tabs-posture-text'];
+  const ids = ['posture-banner', 'posture-state', 'posture-summary', 'posture-advisor', 'posture-review', 'posture-health', 'posture-retry', 'tabs-posture', 'tabs-posture-text'];
   const nodes = new Map(ids.map(id => [id, { hidden: false, dataset: {}, textContent: '', innerHTML: '' }]));
   const panels = ['snapshot', 'snapshot|guard decisions', 'snapshot|flags', 'resources'].map(reports =>
     ({ dataset: { reports }, textContent: '', hidden: true }));
