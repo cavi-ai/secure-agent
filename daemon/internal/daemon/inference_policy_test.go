@@ -26,12 +26,17 @@ import (
 	"github.com/cavi-ai/secure-agent/internal/localservice"
 )
 
-func inferencePolicyFixture(t *testing.T, engine *firewall.Engine, gate *taint.Gate, ask func(context.Context, taint.Verdict) bool) (*httptest.Server, string, *inference.Monitor, <-chan event.Event, *atomic.Int32) {
+func inferencePolicyFixture(t *testing.T, engine *firewall.Engine, gate *taint.Gate, ask func(context.Context, taint.Verdict) bool) (*httptest.Server, string, *inference.Monitor, <-chan event.Event, *atomic.Int32, string) {
 	t.Helper()
 	reached := new(atomic.Int32)
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "" || r.Header.Get("X-Api-Key") != "" {
 			t.Error("gateway credential reached backend")
+		}
+		// Count only forwarded inference requests; discovery probes are GETs.
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
 		}
 		hash := sha256.New()
 		if _, err := io.Copy(hash, r.Body); err != nil {
@@ -62,7 +67,7 @@ func inferencePolicyFixture(t *testing.T, engine *firewall.Engine, gate *taint.G
 	}
 	server.Config.Handler = g
 	server.Start()
-	return server, key, m, events, reached
+	return server, key, m, events, reached, backend.URL
 }
 
 func inferenceEngine(t *testing.T, mode string) *firewall.Engine {
@@ -132,7 +137,7 @@ func TestInferenceFirewallBeforeForwarding(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			engine := inferenceEngine(t, tc.mode)
-			server, key, monitor, events, reached := inferencePolicyFixture(t, engine, &taint.Gate{}, nil)
+			server, key, monitor, events, reached, _ := inferencePolicyFixture(t, engine, &taint.Gate{}, nil)
 			data := []byte(tc.body)
 			if tc.name == "gzip body" {
 				var zipped bytes.Buffer
@@ -184,9 +189,14 @@ func TestInferenceTaintModesAndMetadata(t *testing.T) {
 	var answer atomic.Bool
 	var asks atomic.Int32
 	var delayed atomic.Bool
-	server, key, _, _, reached := inferencePolicyFixture(t, inferenceEngine(t, "block"), gate, func(ctx context.Context, _ taint.Verdict) bool {
+	var backendURL atomic.Value
+	server, key, _, _, reached, backend := inferencePolicyFixture(t, inferenceEngine(t, "block"), gate, func(ctx context.Context, _ taint.Verdict) bool {
 		asks.Add(1)
 		if delayed.Load() {
+			// Local listener discovery probes any loopback port while a prompt waits.
+			if response, err := http.Get(backendURL.Load().(string) + "/api/version"); err == nil {
+				response.Body.Close()
+			}
 			select {
 			case <-time.After(16 * time.Second):
 			case <-ctx.Done():
@@ -195,6 +205,7 @@ func TestInferenceTaintModesAndMetadata(t *testing.T) {
 		}
 		return answer.Load()
 	})
+	backendURL.Store(backend)
 	for _, tc := range []struct {
 		mode          string
 		allow         bool
@@ -240,7 +251,7 @@ func TestInferencePolicyRequiresFirewallAndGate(t *testing.T) {
 
 func TestInferenceLiveFirewallPolicyAndSizeLimit(t *testing.T) {
 	engine := inferenceEngine(t, "monitor")
-	server, key, _, _, reached := inferencePolicyFixture(t, engine, &taint.Gate{}, nil)
+	server, key, _, _, reached, _ := inferencePolicyFixture(t, engine, &taint.Gate{}, nil)
 	request := func(body string, want int) {
 		t.Helper()
 		if got := inferencePolicyRequest(t, server, key, "/api/chat", strings.NewReader(body), ""); got != want {

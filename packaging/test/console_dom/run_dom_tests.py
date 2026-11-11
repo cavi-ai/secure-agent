@@ -7,10 +7,9 @@ Covers the layer lib.test.mjs cannot: fetch orchestration, panel renderers,
 the delegation dispatch, liveness classes, and the structural guarantee that
 no inline handlers exist in the rendered page.
 
-Usage: python3 packaging/test/console_dom/run_dom_tests.py [--screenshot DIR]
-       --screenshot DIR also writes the mock-rendered Sessions and Agents
-       tabs at 1280x800 in both themes: DIR/{sessions,agents}-{dark,light}.png,
-       and the Overview tab as DIR/overview-dark.png. Screenshots load under
+Usage: python3 packaging/test/console_dom/run_dom_tests.py [--screenshot DIR [--shot-size WxH]]
+       --screenshot DIR also writes each mock-rendered view in SHOTS as
+       DIR/<name>-<theme>.png, at 1280x800 or --shot-size. Screenshots load under
        the daemon's Content-Security-Policy header, as the console is served.
 Env:   CHROME_BIN overrides Chrome detection.
 """
@@ -208,19 +207,32 @@ SHOT_SIZE = (1280, 800)
 SHOTS = (
     ("sessions", "?tab=sessions&shot&raildemo", ("dark", "light")),
     ("agents", "?tab=agents&shot", ("dark", "light")),
-    ("overview", "?tab=overview&shot", ("dark",)),
+    ("overview", "?tab=overview&shot", ("dark", "light")),
     ("agent", "?tab=agent&shot", ("dark", "light")),
+    ("monitoring", "?tab=monitoring&shot", ("dark", "light")),
+    ("protection-traffic", "?tab=protection/traffic&shot", ("dark", "light")),
+    ("protection-rules", "?tab=protection/rules&shot", ("dark", "light")),
+    ("system-resources", "?tab=system/resources&shot", ("dark", "light")),
+    ("system-clutter", "?tab=system/clutter&shot", ("dark", "light")),
     ("worktrees-removing", "?tab=worktrees&shot&worktreedemo&removerunning", ("dark", "light")),
     ("worktrees-history", "?tab=worktrees&shot&historydemo", ("dark", "light")),
 )
 
 
-def screenshot(chrome, origin, query, path, tmp, fixture=None):
+def shot_size(text):
+    try:
+        width, height = (int(n) for n in text.lower().split("x"))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected WxH, got {text!r}") from None
+    return width, height
+
+
+def screenshot(chrome, origin, query, path, tmp, fixture=None, size=SHOT_SIZE):
     write_fixture(tmp, query, fixture)
     with tempfile.TemporaryDirectory(prefix="chrome-profile-", dir=tmp) as profile:
         out = subprocess.run(
             [chrome, f"--user-data-dir={profile}", "--no-first-run", "--disable-background-networking", "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
-             f"--window-size={SHOT_SIZE[0]},{SHOT_SIZE[1]}",
+             f"--window-size={size[0]},{size[1]}",
              "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), f"--screenshot={path}",
              f"{origin}/harness.html{query}"],
             capture_output=True, text=True, timeout=120,
@@ -262,7 +274,9 @@ def select_cases(cases, args):
 def main():
     ap = argparse.ArgumentParser(description="DOM-level console tests")
     ap.add_argument("--screenshot", metavar="DIR",
-                    help="also write {sessions,agents,agent}-{dark,light}.png and overview-dark.png of the mock-rendered tabs to DIR")
+                    help="also write <name>-<theme>.png of each mock-rendered view in SHOTS to DIR")
+    ap.add_argument("--shot-size", metavar="WxH", type=shot_size, default=SHOT_SIZE,
+                    help="window size for --screenshot (default 1280x800)")
     ap.add_argument('--session-workbench-only', action='store_true', help='run bounded Sessions workbench interaction probes only')
     ap.add_argument('--auth-recovery-only', action='store_true', help='run console access recovery probes only')
     ap.add_argument('--spend-only', action='store_true', help='run bounded spend cache and refresh probes only')
@@ -300,13 +314,13 @@ def main():
             shot_dir = os.path.abspath(args.screenshot)
             os.makedirs(shot_dir, exist_ok=True)
             if args.review_results_only:
-                screenshot(chrome, origin, '?reviewresult&resultcard', os.path.join(shot_dir, 'review-result-card.png'), tmp, payload_cases.review_result())
-                screenshot(chrome, origin, '?reviewresult', os.path.join(shot_dir, 'review-result-detail.png'), tmp, payload_cases.review_result())
-                screenshot(chrome, origin, '?reviewresult=expect&resultpermissions', os.path.join(shot_dir, 'review-result-permissions.png'), tmp, payload_cases.review_result())
+                screenshot(chrome, origin, '?reviewresult&resultcard', os.path.join(shot_dir, 'review-result-card.png'), tmp, payload_cases.review_result(), size=args.shot_size)
+                screenshot(chrome, origin, '?reviewresult', os.path.join(shot_dir, 'review-result-detail.png'), tmp, payload_cases.review_result(), size=args.shot_size)
+                screenshot(chrome, origin, '?reviewresult=expect&resultpermissions', os.path.join(shot_dir, 'review-result-permissions.png'), tmp, payload_cases.review_result(), size=args.shot_size)
             for name, query, themes in (() if args.review_results_only else SHOTS):
                 for theme in themes:
                     path = os.path.join(shot_dir, f"{name}-{theme}.png")
-                    screenshot(chrome, origin, f"{query}&theme={theme}", path, tmp)
+                    screenshot(chrome, origin, f"{query}&theme={theme}", path, tmp, size=args.shot_size)
                     print(f"  shot  {path}")
     finally:
         if srv:
