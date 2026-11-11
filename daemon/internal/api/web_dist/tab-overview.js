@@ -952,6 +952,7 @@ function renderPosture() {
     advisorEl.textContent = criticals.length > 0
       ? `Advisor opinion: ${benignCount} of ${criticals.length} triaged critical flags may be benign. Evidence and risk are unchanged.`
       : '';
+    advisorEl.title = advisorEl.textContent;
     advisorEl.hidden = !criticals.length;
   }
 }
