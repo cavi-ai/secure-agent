@@ -56,7 +56,8 @@ The first report is Markdown; `--json` returns the structured report. See [Sessi
 Once you can find and inspect your session, enable one capability at a time and recheck its result:
 
 - [File telemetry](GETTING_STARTED.md#enable-file-telemetry) adds system file observations on macOS.
-- [File and egress protection](PROTECTION.md) explains guard prompts, secret fingerprints and traffic inspection, including their limits.
+- [File and egress protection](PROTECTION.md) explains how to configure supported file-access and outbound-action guards, register secrets and inspect routed requests. Named guard and firewall rules default to monitoring; enable the relevant prompt, deny or block mode before relying on enforcement.
+- [Local model protection](LOCAL_MODELS.md) checks visible servers and explains reviewed hardening for supported services. A metadata check alone does not prove inference is protected. Preview the proposed changes and confirm before applying them; application restarts the service and can interrupt clients.
 - [Resource controls](USAGE.md#manage-session-resources) explains observation and opt-in interventions.
 - [Local chat](SYSTEM_AGENT.md) adds local analysis and explicitly confirmed actions.
 

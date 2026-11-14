@@ -1,14 +1,41 @@
 # secure-agent
 
+## Protect your credentials. Keep your local model yours.
+
 <img src="daemon/internal/api/web_dist/brand-icon.png" alt="Secure Agent app icon" width="72">
 
 [![CI](https://github.com/cavi-ai/secure-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/cavi-ai/secure-agent/actions/workflows/ci.yml)
 [![macOS](https://img.shields.io/badge/macOS-14.0+-000000?style=flat&logo=apple)](https://apple.com/macos)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**See what your local AI agents do, review security findings, and control sensitive file access and outbound secret exposure.**
+Secure Agent helps you control what coding agents can read and send, and who can use your local models. Configure file-access guards, outbound-action checks and secret inspection for supported workflows, then review their activity in one place.
 
-Secure Agent combines a native macOS menu bar app, a local web console, a Go daemon and harness hooks. It tracks agent sessions, process families, model-call costs, file activity and network destinations. Optional guards can stop supported tool calls; an opt-in proxy inspects routed payloads for secret leaks.
+<p align="center">
+  <img src="assets/marketing/local-model-access.png" alt="A browser character with an empty plate stopped at a rope near a personal computer" width="1120">
+</p>
+
+**Your GPU isn’t an all-you-can-eat buffet.** A website should not get free inference from your machine.
+
+## Get started
+
+1. Download `SecureAgent-<version>.dmg` from the [latest release](https://github.com/cavi-ai/secure-agent/releases/latest).
+2. Drag **Secure Agent.app** to **Applications** and launch it. Requires **macOS 14+**.
+3. Choose your harness in Setup. Register Claude Code, Cursor, Codex, OpenClaw, Antigravity, Hermes or OpenCode v2 hooks, or continue with the selected harness's observation path.
+4. Start an agent session and check its observed coverage. Enable file telemetry, guard prompts, traffic routing and local analysis separately as needed.
+
+Follow [Getting started](docs/GETTING_STARTED.md), then [Your first observed session](docs/FIRST_SESSION.md) to see evidence and export a report. For problems, use [Troubleshooting](docs/TROUBLESHOOTING.md). To build from source, use [Development](docs/DEVELOPMENT.md).
+
+These docs describe the current `main` checkout. The published release may have an earlier setup flow or fewer features; consult its [release notes](https://github.com/cavi-ai/secure-agent/releases).
+
+## Protect what matters
+
+- **Protect credential files.** Set supported file-guard rules to ask or deny when an agent reaches protected paths. [File protection](docs/PROTECTION.md)
+- **Control outbound actions.** Review recognized sends after untrusted content. Inspect routed requests for registered secrets and known credential patterns, and choose which matching requests to block. [File and egress protection](docs/PROTECTION.md) · [Firewall limits](docs/FIREWALL_THREAT_MODEL.md)
+- **Keep control of local inference.** Use private MLX analysis or review hardening for supported MLX-LM, llama.cpp and Ollama services. [Local model protection](docs/LOCAL_MODELS.md)
+
+Named guard and firewall rules start in monitoring mode. Choose prompt or deny modes for guard checks, and blocking for selected firewall rules.
+
+Secure Agent also offers session monitoring, resource controls, cleanup and fleet views. Its native macOS menu bar app, local web console, Go daemon and harness hooks work together to show activity and decisions.
 
 <p align="center">
   <img src="assets/screenshots/overview-dark.jpg" alt="Secure Agent overview with an access request, monitoring coverage and active sessions" width="1120">
@@ -44,17 +71,6 @@ Screenshots use synthetic demonstration data.
 <img src="assets/screenshots/menubar-dark.png" alt="Menu bar popover with an observed finding, session and console actions" width="340">
 
 </details>
-
-## Get started
-
-1. Download `SecureAgent-<version>.dmg` from the [latest release](https://github.com/cavi-ai/secure-agent/releases/latest).
-2. Drag **Secure Agent.app** to **Applications** and launch it. Requires **macOS 14+**.
-3. Choose your harness in Setup. Register Claude Code, Cursor, Codex, OpenClaw, Antigravity, Hermes or OpenCode v2 hooks, or continue with the selected harness's observation path.
-4. Start an agent session and check its observed coverage. Enable file telemetry, guard prompts, traffic routing and local analysis separately as needed.
-
-Follow [Getting started](docs/GETTING_STARTED.md), then [Your first observed session](docs/FIRST_SESSION.md) to see evidence and export a report. For problems, use [Troubleshooting](docs/TROUBLESHOOTING.md). To build from source, use [Development](docs/DEVELOPMENT.md).
-
-These docs describe the current `main` checkout. The published release may have an earlier setup flow or fewer features; consult its [release notes](https://github.com/cavi-ai/secure-agent/releases).
 
 ## What you can do
 
