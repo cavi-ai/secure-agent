@@ -6,13 +6,14 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from test_hook_lifecycle import running_app
 from unittest.mock import patch
 
 
 class HermesPluginTests(unittest.TestCase):
     def test_callbacks_block_preserve_identity_and_handle_missing_guard(self):
         source = Path(__file__).parent
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, running_app(directory):
             root = Path(directory)
             for name in ("harness_guard.py", "secret_guard.py", "activity_log.py", "injection_scan.py", "guard-rules.json"):
                 shutil.copy2(source / name, root / name)

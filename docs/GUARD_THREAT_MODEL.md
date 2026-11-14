@@ -183,6 +183,8 @@ must not be interpreted as safe actions or complete coverage. See
 
 ### Guard failures
 
+These behaviors apply while hooks are active. Hooks stop when the desktop app quits; headless installations without a desktop lock file follow the local daemon lifetime.
+
 | Failure | Behavior |
 |---|---|
 | Malformed hook payload (can't parse stdin) | **Fail closed** when shell block mode is selected; otherwise **fail open**, retaining the observation-only hook's behavior. |

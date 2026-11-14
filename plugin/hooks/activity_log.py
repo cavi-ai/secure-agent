@@ -252,6 +252,8 @@ def log_payload(payload: dict) -> None:
 
 
 def main():
+    if not app_running():
+        return
     try:
         raw = sys.stdin.read()
         if not raw.strip():
@@ -260,7 +262,7 @@ def main():
     except Exception:
         return
 
-    if detect_harness(payload) == "claude" and not app_running():
+    if not app_running():
         return
     log_payload(payload)
 

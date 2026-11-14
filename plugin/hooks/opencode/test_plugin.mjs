@@ -1,15 +1,18 @@
 import test from 'node:test';
+import { holdLease } from '../test_lease.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, copyFile, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-test('OpenCode v2 callbacks check native tool input and block guard failures', async () => {
+test('OpenCode v2 callback contract checks tool input and guard failures', async () => {
   const root = await mkdtemp(join(tmpdir(), 'secure-agent-opencode-'));
   const prior = { HOME: process.env.HOME, SECURE_AGENT_ACTIVITY_LOG: process.env.SECURE_AGENT_ACTIVITY_LOG,
     SECURE_AGENT_GUARD_MODES: process.env.SECURE_AGENT_GUARD_MODES };
+  let release;
   try {
+    release = await holdLease(root);
     process.env.HOME = root;
     process.env.SECURE_AGENT_ACTIVITY_LOG = join(root, 'activity.jsonl');
     process.env.SECURE_AGENT_GUARD_MODES = join(root, 'modes.json');
@@ -20,10 +23,12 @@ test('OpenCode v2 callbacks check native tool input and block guard failures', a
     for (const name of ['index.js', 'package.json']) await copyFile(new URL('./' + name, import.meta.url), join(root, name));
     const { default: plugin } = await import(pathToFileURL(join(root, 'index.js')));
     const hooks = new Map();
+    let contextError = false;
     await plugin.setup({
       tool: { hook: async (name, handler) => hooks.set(name, handler) },
       session: { get: async ({ sessionID }) => {
         assert.equal(sessionID, 'opencode-native-session');
+        if (contextError) throw new Error('session unavailable');
         return { location: { directory: root } };
       } },
     });
@@ -34,9 +39,16 @@ test('OpenCode v2 callbacks check native tool input and block guard failures', a
     const rows = (await readFile(join(root, 'activity.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
     assert.ok(rows.some(row => row.session_id === base.sessionID));
     assert.ok(rows.filter(row => row.pid).every(row => row.pid === process.pid));
+    contextError = true;
+    await assert.rejects(hooks.get('execute.before')({ ...base, tool: 'bash', input: { command: 'echo hello' } }));
+    await release(); release = null;
+    await hooks.get('execute.before')({ ...base, tool: 'bash', input: { command: 'echo hello' } });
+    release = await holdLease(root);
+    contextError = false;
     await rm(join(root, 'harness_guard.py'));
     await assert.rejects(hooks.get('execute.before')({ ...base, tool: 'bash', input: { command: 'echo hello' } }));
   } finally {
+    if (release) await release();
     for (const [key, value] of Object.entries(prior)) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }

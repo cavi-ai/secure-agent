@@ -172,7 +172,16 @@ final class HookRefreshTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("plugin/hooks").path
         try HookRegistry.refreshInstalledHooks(bundledDir: repoHooks, installedDir: installed)
-        var env = ProcessInfo.processInfo.environment
+        let config = root + "/.config/secure-agent"
+        try fm.createDirectory(atPath: config, withIntermediateDirectories: true)
+        let lease = InstanceLease()
+        XCTAssertTrue(lease.acquire(at: config + "/menubar.lock"))
+        defer { lease.release() }
+        var env = ProcessInfo.processInfo.environment.filter {
+            !$0.key.hasPrefix("SECURE_AGENT_") && !$0.key.hasPrefix("CLAUDE_") && !$0.key.hasPrefix("CURSOR_")
+        }
+        env["HOME"] = root
+        env["SECURE_AGENT_HARNESS"] = "claude"
         env["SECURE_AGENT_ACTIVITY_LOG"] = root + "/activity.jsonl"
         let failure = await HookRegistry.selfTestHook(at: installed + "/secret_guard.py", environment: env)
         XCTAssertNil(failure)

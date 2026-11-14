@@ -39,6 +39,7 @@ import ipaddress
 import json
 import os
 import re
+import select
 import shlex
 import socket as _socket
 import subprocess
@@ -273,7 +274,11 @@ def audit(verdict: str, rule: str, command: str, event: str, broker: bool = Fals
 
 def allow(rule: str = "", command: str = "", event: str = "", broker: bool = False,
           untrusted: dict | None = None) -> None:
+    if hook_inactive():
+        quiet_exit()
     enforce_shell(command, event)
+    if hook_inactive():
+        quiet_exit()
     if rule:
         audit("allow", rule, command, event, broker, untrusted)
     observe_shell("allow", command, event)
@@ -283,6 +288,8 @@ def allow(rule: str = "", command: str = "", event: str = "", broker: bool = Fal
 
 def deny(rule: str, user_msg: str, agent_msg: str, command: str, event: str, broker: bool = False,
          untrusted: dict | None = None) -> None:
+    if hook_inactive():
+        quiet_exit()
     audit("deny", rule, command, event, broker, untrusted)
     observe_shell("deny", command, event)
     emit({
@@ -639,8 +646,15 @@ def _shell_check_query(payload: dict):
             return super().sendall(*args, **kwargs)
 
         def recv_into(self, *args, **kwargs):
-            self.budget()
-            return super().recv_into(*args, **kwargs)
+            while True:
+                if hook_inactive():
+                    raise InterruptedError("hook owner stopped")
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise TimeoutError("shell check deadline")
+                if select.select([self], [], [], min(left, 0.2))[0]:
+                    self.budget()
+                    return super().recv_into(*args, **kwargs)
 
     with DeadlineSocket(_socket.AF_UNIX, _socket.SOCK_STREAM) as sock:
         sock.budget()
@@ -809,12 +823,12 @@ def _guard_query(agent, tool, path, rule_id, deadline_s, workspace="", probe_id=
         chunks = []
         deadline = time.monotonic() + deadline_s
         while True:
-            if claude_hook_inactive():
+            if hook_inactive():
                 return None
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return {"verdict": "deny", "scope": "once", "reason": "timeout"}
-            s.settimeout(min(remaining, 0.2) if runtime() == "claude" else remaining)
+            s.settimeout(min(remaining, 0.2))
             try:
                 b = s.recv(4096)
             except _socket.timeout:
@@ -852,27 +866,27 @@ def claude_auto_mode() -> bool:
     return runtime() == "claude" and _PAYLOAD.get("permission_mode") == "auto"
 
 
-def claude_hook_inactive() -> bool:
-    return runtime() == "claude" and not app_running()
+def hook_inactive() -> bool:
+    return not app_running()
 
 
 def quiet_exit() -> None:
-    # No permissionDecision: Claude retains its own permission checks.
-    emit({})
+    # Claude and Cursor retain native permission checks; adapters need an allow.
+    emit({"permission": "allow"} if runtime() in ("codex", "openclaw", "hermes", "opencode", "antigravity") else {})
     sys.exit(0)
 
 
 def resolve_prompt(agent, tool, path, rule_id, command, event):
     """Manual-mode approval while the app is open. Claude Auto retains its
     own permission review; closing the app ends a pending approval."""
-    if claude_hook_inactive():
+    if hook_inactive():
         quiet_exit()
     if claude_auto_mode():
         audit("allow", "guard-native-auto:" + rule_id, command, event)
         return
     path = norm(path)
     d = _guard_query(agent, tool, path, rule_id, PROMPT_DEADLINE_S, _cwd_for_request())
-    if claude_hook_inactive():
+    if hook_inactive():
         quiet_exit()
     deny_msg = (f"DENIED by Directory Guard ({rule_id}). Approve it in the Secure Agent prompt, "
                 "or add an allow-always rule, then retry.")
@@ -888,7 +902,7 @@ def resolve_prompt(agent, tool, path, rule_id, command, event):
 
 
 def emit_ask(reason, command, event, untrusted=None):
-    if claude_hook_inactive():
+    if hook_inactive():
         quiet_exit()
     if claude_auto_mode():
         audit("allow", "guard-native-auto", command, event, untrusted=untrusted)
@@ -1672,7 +1686,7 @@ def gate_untrusted_egress(tool: str, tool_input: dict, command: str, event: str)
     d = _guard_query(runtime(), tool or "Bash", target, EGRESS_RULE, PROMPT_DEADLINE_S,
                      _cwd_for_request(), detail=detail, categories=categories,
                      category_mode="session" if mode == "session" else "")
-    if claude_hook_inactive():
+    if hook_inactive():
         quiet_exit()
     if d is None:
         if runtime() == "claude":
@@ -2168,6 +2182,8 @@ def evaluate_file_write(path: str) -> Verdict:
 
 def main() -> int:
     global _PAYLOAD
+    if hook_inactive():
+        quiet_exit()
     try:
         raw = sys.stdin.read()
         data = json.loads(raw) if raw.strip() else {}
@@ -2186,9 +2202,8 @@ def main() -> int:
         return 0
 
     _PAYLOAD = data if isinstance(data, dict) else {}
-    if claude_hook_inactive():
-        emit({})
-        return 0
+    if hook_inactive():
+        quiet_exit()
     if not isinstance(data, dict) or not isinstance(data.get("tool_input") or {}, dict):
         # Same as unparseable JSON: not evidence of wrongdoing.
         allow()
@@ -2202,6 +2217,8 @@ def main() -> int:
 def _hook_error(data: dict, exc: Exception) -> int:
     """A crash on a well-formed payload: the check did not run, so the call is
     asked on Claude and denied elsewhere instead of passing unchecked."""
+    if hook_inactive():
+        quiet_exit()
     event = str(data.get("hook_event_name") or data.get("event") or "")
     reason = f"hook-error:{type(exc).__name__}"
     if event in {"PostToolUse", "postToolUse"}:
@@ -2212,7 +2229,7 @@ def _hook_error(data: dict, exc: Exception) -> int:
         print("{}")
         return 0
     command = str(data.get("command") or (data.get("tool_input") or {}).get("command") or "")
-    if claude_hook_inactive():
+    if hook_inactive():
         quiet_exit()
     if claude_auto_mode():
         audit("allow", reason, command, event)

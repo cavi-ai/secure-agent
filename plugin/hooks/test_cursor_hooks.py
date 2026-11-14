@@ -5,8 +5,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from test_hook_lifecycle import running_app
 
-with tempfile.TemporaryDirectory() as home:
+with tempfile.TemporaryDirectory() as home, running_app(home):
     env = {**os.environ, "HOME": home, "SECURE_AGENT_ACTIVITY_LOG": home + "/activity.jsonl"}
     for name in ("CLAUDE_CODE_ENTRYPOINT", "CLAUDE_SESSION_ID", "CURSOR_TRACE_ID", "SECURE_AGENT_HARNESS", "SECURE_AGENT_SESSION_ID"):
         env.pop(name, None)

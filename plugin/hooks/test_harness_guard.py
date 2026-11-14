@@ -6,11 +6,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from test_hook_lifecycle import running_app
 
 
 class HarnessGuardTests(unittest.TestCase):
     def test_antigravity_cli_path_cannot_bypass_file_guard(self):
-        with tempfile.TemporaryDirectory() as home:
+        with tempfile.TemporaryDirectory() as home, running_app(home):
             modes = Path(home, "modes.json")
             modes.write_text(json.dumps({"ssh-keys": "deny"}))
             env = {**os.environ, "HOME": home, "SECURE_AGENT_GUARD_MODES": str(modes),
@@ -34,7 +35,7 @@ class HarnessGuardTests(unittest.TestCase):
                     self.assertEqual(json.loads(result.stdout).get("decision"), "deny")
 
     def test_native_calls_deny_secrets_and_preserve_session(self):
-        with tempfile.TemporaryDirectory() as home:
+        with tempfile.TemporaryDirectory() as home, running_app(home):
             env = {**os.environ, "HOME": home, "SECURE_AGENT_ACTIVITY_LOG": home + "/activity.jsonl"}
             modes = Path(home, "modes.json")
             modes.write_text(json.dumps({"ssh-keys": "deny"}))
