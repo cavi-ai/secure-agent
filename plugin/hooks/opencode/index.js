@@ -19,11 +19,14 @@ export default {
   id: 'secure-agent',
   async setup(ctx) {
     const payload = async (event, hook) => {
-      const session = await ctx.session.get({ sessionID: event.sessionID });
-      const cwd = session.location?.directory;
-      if (typeof cwd !== 'string' || !cwd.startsWith('/')) throw new Error('Session workspace is unavailable');
+      let cwd, context_error = false;
+      try {
+        const session = await ctx.session.get({ sessionID: event.sessionID });
+        cwd = session.location?.directory;
+        if (typeof cwd !== 'string' || !cwd.startsWith('/')) throw new Error('Session workspace is unavailable');
+      } catch { context_error = true; }
       return { hook_event_name: hook, tool_name: event.tool, tool_input: event.input,
-        tool_response: event.result, session_id: event.sessionID, cwd };
+        tool_response: event.result, session_id: event.sessionID, cwd, context_error };
     };
     await ctx.tool.hook('execute.before', async event => {
       let result;

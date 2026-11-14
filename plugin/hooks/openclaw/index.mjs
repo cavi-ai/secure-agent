@@ -29,7 +29,7 @@ export function checkTool(event, ctx, hookEvent) {
     child.stdin.end(JSON.stringify({
       hook_event_name: hookEvent, tool_name: event.toolName, tool_input: event.params,
       tool_response: event.result, session_id: ctx.sessionId || ctx.sessionKey,
-      cwd: ctx.workspaceDir,
+      cwd: ctx.workspaceDir, context_error: ctx.contextError,
     }));
   });
 }
@@ -37,10 +37,13 @@ export function checkTool(event, ctx, hookEvent) {
 export default {
   id: 'secure-agent',
   register(api) {
+    const context = ctx => {
+      try { return { ...ctx, workspaceDir: api.runtime.agent.resolveAgentWorkspaceDir(api.config, ctx.agentId) }; }
+      catch { return { ...ctx, workspaceDir: undefined, contextError: true }; }
+    };
     api.on('before_tool_call', async (event, ctx) => {
       try {
-        const workspaceDir = api.runtime.agent.resolveAgentWorkspaceDir(api.config, ctx.agentId);
-        const result = await checkTool(event, { ...ctx, workspaceDir }, 'PreToolUse');
+        const result = await checkTool(event, context(ctx), 'PreToolUse');
         if (result.permission === 'allow') return;
         return { block: true, blockReason: result.hookSpecificOutput?.permissionDecisionReason || 'Secure Agent denied the tool request.' };
       } catch {
@@ -49,8 +52,7 @@ export default {
     });
     api.on('after_tool_call', async (event, ctx) => {
       try {
-        const workspaceDir = api.runtime.agent.resolveAgentWorkspaceDir(api.config, ctx.agentId);
-        await checkTool(event, { ...ctx, workspaceDir }, 'PostToolUse');
+        await checkTool(event, context(ctx), 'PostToolUse');
       }
       catch { api.logger.warn('Secure Agent could not record the completed tool call.'); }
     });

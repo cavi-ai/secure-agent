@@ -91,7 +91,7 @@ class ShellReviewTests(unittest.TestCase):
                     server.accept()
 
     def test_block_mode_rejects_malformed_payload(self):
-        with tempfile.TemporaryDirectory(prefix="sr-") as home:
+        with tempfile.TemporaryDirectory(prefix="sr-") as home, running_app(home):
             env = {k: v for k, v in os.environ.items() if not k.startswith("SECURE_AGENT_")}
             env.update(HOME=home, SECURE_AGENT_SHELL_REVIEW="block", SECURE_AGENT_ACTIVITY_LOG=home + "/activity.jsonl")
             p = subprocess.run([sys.executable, str(HOOK)], input="{broken", text=True,

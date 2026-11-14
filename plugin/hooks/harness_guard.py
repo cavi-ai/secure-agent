@@ -20,7 +20,13 @@ def main():
     try:
         if harness not in ("codex", "openclaw", "antigravity", "hermes", "opencode"):
             raise ValueError("unsupported harness")
+        from activity_log import app_running
+        if not app_running():
+            print(json.dumps({"decision": "allow"} if harness == "antigravity" else {"permission": "allow"}))
+            return 0
         payload = json.load(sys.stdin)
+        if isinstance(payload, dict) and payload.get("context_error"):
+            raise ValueError("harness context unavailable")
         if harness == "antigravity":
             call = payload["toolCall"]
             args = call["args"]
@@ -86,6 +92,11 @@ def main():
                         if payload["hook_event_name"] == "PreToolUse" else {})
         print(json.dumps(response))
     except Exception:
+        if harness in ("codex", "openclaw", "antigravity", "hermes", "opencode"):
+            from activity_log import app_running
+            if not app_running():
+                print(json.dumps({"decision": "allow"} if harness == "antigravity" else {"permission": "allow"}))
+                return 0
         reason = "Secure Agent could not check this tool request. Recheck the hook installation."
         print(json.dumps({"decision": "deny", "reason": reason} if harness == "antigravity" else denied(reason)))
     return 0

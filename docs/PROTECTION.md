@@ -119,9 +119,9 @@ Writes to `~/.claude/settings.json` and the hook scripts are now denied outright
 
 ### Egress after untrusted input
 
-Claude hooks are active only while the Secure Agent desktop app is running. Quitting the app stops their scanning, logging and approval checks, including requests already waiting for approval. Hooks remain registered so they can resume when the app opens; while it is closed, their callbacks return without a permission decision.
+Hooks for Claude Code, Cursor, Codex, OpenClaw, Antigravity, Hermes and OpenCode are active only while the Secure Agent desktop app is running. Quitting the app stops their scanning, logging and approval checks, including requests already waiting for approval. Hooks remain registered and resume when the app opens.
 
-Headless installations without a desktop instance lease activate Claude hooks only while their local daemon is reachable.
+Headless installations without a desktop lock file activate hooks only while their local daemon is reachable.
 
 In Claude Auto mode, prompt-only checks leave the decision to Claude's normal automatic permission review. Secure Agent does not open another approval prompt or force an allow decision. Explicit deny rules still block while the app is running.
 
