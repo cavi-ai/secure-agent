@@ -100,8 +100,15 @@ final class AgentLauncherTests: XCTestCase {
             throw error
         }
         XCTAssertTrue(application.isTerminated)
-        let reopened = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: identifier).first)
-        XCTAssertNotEqual(reopened.processIdentifier, application.processIdentifier)
+        let originalPID = application.processIdentifier
+        let replacement = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+                .contains { $0.processIdentifier != originalPID }
+        }, object: nil)
+        await fulfillment(of: [replacement], timeout: 20)
+        let reopened = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+            .first { $0.processIdentifier != originalPID })
+        XCTAssertNotEqual(reopened.processIdentifier, originalPID)
         try await assertProbeReady(output, pid: reopened.processIdentifier, proxy: try XCTUnwrap(environment["HTTPS_PROXY"]))
     }
 
