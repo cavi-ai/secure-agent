@@ -155,7 +155,7 @@ class DocumentationTests(unittest.TestCase):
         (self.root / "assets/image.png").write_bytes(b"fixture image")
         (self.root / "source.go").write_text("package fixture\n")
         (self.root / "LICENSE").write_text("Fixture license\n")
-        (self.root / "README.md").write_text('# Start\n\n[Next](docs/FIRST_SESSION.md#result)\n![Image](assets/image.png)\n[Source](source.go)\n\n```text\n[Literal](docs/FIRST_SESSION.md)\n```\n')
+        (self.root / "README.md").write_text('# Start\n\n[Next\nsession](docs/FIRST_SESSION.md#result)\n![Image](assets/image.png)\n[Source](source.go)\n\n```text\n[Literal](docs/FIRST_SESSION.md)\n```\n')
         (self.root / "docs/FIRST_SESSION.md").write_text("# Result\n\n[Back](../README.md)\n")
         nav = {"sections": [{"title": "Start", "pages": [{"title": "Overview", "path": "README.md"}, {"title": "First session", "path": "docs/FIRST_SESSION.md"}]}]}
         output = self.root / "export"
@@ -164,7 +164,7 @@ class DocumentationTests(unittest.TestCase):
             build.populate(output, self.manifest, nav)
         build.verify(output)
         text = (output / "readme.md").read_text()
-        self.assertIn("[Next](docs/first-session.md#result)", text)
+        self.assertIn("[Next\nsession](docs/first-session.md#result)", text)
         self.assertIn("[Literal](docs/FIRST_SESSION.md)", text)
         self.assertIn(f"https://github.com/cavi-ai/secure-agent/blob/{'a' * 40}/source.go", text)
         self.assertEqual((output / "assets/image.png").read_bytes(), b"fixture image")

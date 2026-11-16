@@ -20,7 +20,7 @@ from urllib.parse import quote, unquote, urlsplit
 ROOT = Path(__file__).resolve().parents[2]
 REFERENCE = ROOT / "docs/reference"
 FENCES = re.compile(r"^```([^\n]*)\n(.*?)^```\s*$", re.M | re.S)
-LINKS = re.compile(r"(!?\[[^\]\n]*\]\()([^\n)]+)(\))|(<img\b[^>]*\bsrc=\")([^\"]+)(\")")
+LINKS = re.compile(r"(!?\[[^\]\n]*(?:\n(?!\n)[^\]\n]*)*\]\()([^\n)]+)(\))|(<img\b[^>]*\bsrc=\")([^\"]+)(\")")
 SEMVER = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?")
 
 
