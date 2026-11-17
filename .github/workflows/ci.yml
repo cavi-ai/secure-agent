@@ -16,8 +16,28 @@ permissions:
   contents: read
 
 jobs:
+  merged-pr:
+    # A main push from a merged pull request skips the suites that pull request already passed.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      tested: ${{ steps.pr.outputs.tested }}
+    steps:
+      - id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          merged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[] | select(.merged_at != null)] | length' || echo 0)
+          if [ "$merged" -gt 0 ]; then echo "tested=true" >> "$GITHUB_OUTPUT"; fi
+
   docs:
     name: Documentation sync and artifacts
+    needs: [merged-pr]
+    if: ${{ !failure() && !cancelled() && needs.merged-pr.outputs.tested != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -44,6 +64,8 @@ jobs:
 
   go:
     name: Go vet + test + fmt
+    needs: [merged-pr]
+    if: ${{ !failure() && !cancelled() && needs.merged-pr.outputs.tested != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -66,6 +88,8 @@ jobs:
 
   hooks:
     name: Python hook tests (3.12)
+    needs: [merged-pr]
+    if: ${{ !failure() && !cancelled() && needs.merged-pr.outputs.tested != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -80,6 +104,8 @@ jobs:
 
   linux:
     name: Linux CGO=0 build + vet + test
+    needs: [merged-pr]
+    if: ${{ !failure() && !cancelled() && needs.merged-pr.outputs.tested != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -115,6 +141,8 @@ jobs:
 
   console:
     name: Console asset lint
+    needs: [merged-pr]
+    if: ${{ !failure() && !cancelled() && needs.merged-pr.outputs.tested != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
