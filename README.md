@@ -11,7 +11,7 @@
 Secure Agent helps you control what coding agents can read and send, and who can use your local models. Configure file-access guards, outbound-action checks and secret inspection for supported workflows, then review their activity in one place.
 
 <p align="center">
-  <img src="assets/marketing/local-model-access.png" alt="A browser character with an empty plate stopped at a rope near a personal computer" width="1120">
+  <img src="assets/marketing/local-model-access.png" alt="A capybara guards a local computer while an uninvited raccoon arrives with a stack of empty plates" width="1120">
 </p>
 
 **Your GPU isn’t an all-you-can-eat buffet.** A website should not get free inference from your machine.
