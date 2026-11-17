@@ -1,9 +1,12 @@
 {
   "name": "secure-agent",
-  "description": "Blocks agent mutation of keychain and shell config, scans tool results for prompt injection, and logs agent activity for the secure-agent monitor.",
+  "description": "Connect Claude Code activity and configured guard hooks to Secure Agent.",
   "version": "0.1.0",
-  "author": { "name": "Sasan Sotoodehfar", "url": "https://cavi-ai.xyz", "organization": "cavi-ai" },
+  "author": {
+    "name": "Sasan Sotoodehfar",
+    "url": "https://cavi-ai.xyz",
+    "organization": "cavi-ai"
+  },
   "license": "MIT",
-  "hooks": { "paths": ["./hooks/hooks.json"] },
   "icon": "https://cavi-ai.xyz/favicon.ico"
 }
