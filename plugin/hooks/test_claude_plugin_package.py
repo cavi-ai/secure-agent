@@ -9,6 +9,7 @@ class ClaudePluginPackageTest(unittest.TestCase):
     def test_default_hooks_use_packaged_guard(self):
         manifest = json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text())
         self.assertNotIn("hooks", manifest)  # hooks/hooks.json loads by convention
+        self.assertTrue((PLUGIN / "README.md").is_file())
         config = json.loads((PLUGIN / "hooks/hooks.json").read_text())
         self.assertEqual(set(config), {"hooks"})
         events = config["hooks"]
