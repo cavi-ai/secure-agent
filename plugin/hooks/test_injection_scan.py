@@ -131,7 +131,7 @@ def main():
             raise AssertionError(f"activity record mismatch: {rec}")
 
     hooks_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hooks.json")
-    hooks = json.loads(open(hooks_path).read())
+    hooks = json.loads(open(hooks_path).read())["hooks"]
     post_cmds = [h["command"] for entry in hooks.get("PostToolUse", []) for h in entry.get("hooks", [])]
     if len(post_cmds) != 1 or "secret_guard.py" not in post_cmds[0]:
         raise AssertionError(f"PostToolUse must be a single secret_guard spawn, got {post_cmds}")

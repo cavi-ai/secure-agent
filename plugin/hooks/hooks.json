@@ -1,39 +1,35 @@
 {
-  "PreToolUse": [
-    {
-      "matcher": {
-        "tool_name": "Bash"
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/secret_guard.py\""
+          }
+        ]
       },
-      "hooks": [
-        {
-          "type": "command",
-          "command": "python3 ${plugin_dir}/hooks/secret_guard.py"
-        }
-      ]
-    },
-    {
-      "matcher": {
-        "tool_name": "Read|Grep|Glob|Write|Edit|MultiEdit|NotebookEdit"
-      },
-      "hooks": [
-        {
-          "type": "command",
-          "command": "python3 ${plugin_dir}/hooks/secret_guard.py"
-        }
-      ]
-    }
-  ],
-  "PostToolUse": [
-    {
-      "matcher": {
-        "tool_name": ".*"
-      },
-      "hooks": [
-        {
-          "type": "command",
-          "command": "python3 ${plugin_dir}/hooks/secret_guard.py"
-        }
-      ]
-    }
-  ]
+      {
+        "matcher": "Read|Grep|Glob|Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/secret_guard.py\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/secret_guard.py\""
+          }
+        ]
+      }
+    ]
+  }
 }
