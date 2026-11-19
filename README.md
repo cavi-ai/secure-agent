@@ -2,19 +2,19 @@
 
 ## Protect your credentials. Keep your local model yours.
 
-<img src="daemon/internal/api/web_dist/brand-icon.png" alt="Secure Agent app icon" width="72">
-
-[![CI](https://github.com/cavi-ai/secure-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/cavi-ai/secure-agent/actions/workflows/ci.yml)
-[![macOS](https://img.shields.io/badge/macOS-14.0+-000000?style=flat&logo=apple)](https://apple.com/macos)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-
-Secure Agent helps you control what coding agents can read and send, and who can use your local models. Configure file-access guards, outbound-action checks and secret inspection for supported workflows, then review their activity in one place.
-
 <p align="center">
   <img src="assets/marketing/local-model-access.png" alt="A capybara guards a local computer while an uninvited raccoon arrives with a stack of empty plates" width="1120">
 </p>
 
 **Your GPU isn’t an all-you-can-eat buffet.** A website should not get free inference from your machine.
+
+[![CI](https://github.com/cavi-ai/secure-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/cavi-ai/secure-agent/actions/workflows/ci.yml)
+[![macOS](https://img.shields.io/badge/macOS-14.0+-000000?style=flat&logo=apple)](https://apple.com/macos)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+<img src="daemon/internal/api/web_dist/brand-icon.png" alt="Secure Agent app icon" width="72">
+
+Secure Agent helps you control what coding agents can read and send, and who can use your local models. Configure file-access guards, outbound-action checks and secret inspection for supported workflows, then review their activity in one place.
 
 ## Get started
 
