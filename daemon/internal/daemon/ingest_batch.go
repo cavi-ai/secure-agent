@@ -95,7 +95,7 @@ func (i *eventIngest) feedBatch(events []event.Event) {
 			i.feedResolvedLocked(e, flags)
 			continue
 		}
-		if isUnattributedFileEvent(e) {
+		if i.dropUnattributed(e, flags) {
 			skip(e)
 			continue
 		}
@@ -104,7 +104,7 @@ func (i *eventIngest) feedBatch(events []event.Event) {
 			held = append(held, heldFile{e: e, repeat: true})
 			continue
 		}
-		if i.repeats.seen(e) {
+		if i.foldable(e, flags) && i.repeats.seen(e) {
 			skip(e)
 			continue
 		}

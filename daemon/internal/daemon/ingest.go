@@ -134,6 +134,23 @@ func (i *eventIngest) Feed(e event.Event) bool {
 	return i.feedResolvedLocked(e, flags)
 }
 
+// dropUnattributed reports file activity outside every agent family that
+// raised no flag. System-wide opens (indexers, builds, the daemon itself)
+// outnumber agent file activity by orders of magnitude and would push it
+// out of the per-kind row budget; the event is kept only as evidence of a
+// flag it raised.
+func (i *eventIngest) dropUnattributed(e event.Event, flags []model.Flag) bool {
+	return len(flags) == 0 && isUnattributedFileEvent(e)
+}
+
+// foldable reports activity a repeat adds nothing to: no flag, and not a
+// security record. A session reopening a file or starting the same
+// executable again leaves its stored row to stand for the repeats, and
+// every stored row is one retention must delete.
+func (i *eventIngest) foldable(e event.Event, flags []model.Flag) bool {
+	return len(flags) == 0 && !e.Record
+}
+
 func (i *eventIngest) feedResolvedLocked(e event.Event, flags []model.Flag) bool {
 	d := i.deps
 	st, cr, res, tagger := d.Store, d.Correlator, d.Resolver, d.Tagger
@@ -142,27 +159,18 @@ func (i *eventIngest) feedResolvedLocked(e event.Event, flags []model.Flag) bool
 	projection := i.projection
 	// Attribute before anything else: the stored event, the flags it
 	// triggers, and the incident all carry the session id.
-	// File activity outside every agent family is kept only as the
-	// evidence of a flag it raised: system-wide opens (indexers,
-	// builds, the daemon itself) outnumber agent file activity by
-	// orders of magnitude and would push it out of the per-kind
-	// row budget.
-	if len(flags) == 0 && isUnattributedFileEvent(e) {
+	if i.dropUnattributed(e, flags) {
 		noteFileFeed(st, e)
 		return true
 	}
 	e.Record = len(flags) > 0 || cr.SensitiveFile(e)
-	// A session reopening a file or starting the same executable again adds
-	// no evidence: its stored row stands for the repeats, and every stored
-	// row is one retention must delete.
-	foldable := len(flags) == 0 && !e.Record
-	if foldable && i.repeats.seen(e) {
+	if i.foldable(e, flags) && i.repeats.seen(e) {
 		noteFileFeed(st, e)
 		return true
 	}
 	eventWrite, eventErr := st.PutEvent(e)
 	eventSaved := eventErr == nil && eventWrite.Changed
-	if foldable && eventSaved {
+	if i.foldable(e, flags) && eventSaved {
 		i.repeats.remember(e)
 	}
 	healthChanged := eventWrite.HealthChanged
