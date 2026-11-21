@@ -210,3 +210,43 @@ func TestQueuedFileBatchPublishesEveryStoredFile(t *testing.T) {
 		t.Fatalf("published file evidence differs from storage: %d rows", len(rows))
 	}
 }
+
+// An unattributed file event that raised no flag is not recorded. The batch
+// path skips it before the file commit; Feed drops it in the single-event path.
+func TestUnattributedFileEventWithNoFlagsIsDropped(t *testing.T) {
+	f := newPersistenceFixture(t)
+	at := time.Now()
+	noise := event.Event{Kind: event.KindFileOpen, TS: at, PID: 777, ExePath: "/usr/libexec/mdworker", Path: "/Users/x/Documents/notes.txt"}
+	kept := event.Event{Kind: event.KindFileOpen, TS: at, PID: 500, ExePath: "/usr/local/bin/cursor-agent", Path: "/work/kept"}
+	deltas, flags, _ := f.drain(t, noise, kept)
+	if len(flags) != 0 {
+		t.Fatalf("ordinary file activity raised %d flags", len(flags))
+	}
+	for _, d := range deltas {
+		if e, ok := d.Data.(event.Event); ok && e.Path == noise.Path {
+			t.Fatal("batch path published an unattributed file event")
+		}
+	}
+	rows := testutil.Read[[]event.Event](t)(f.store.QueryEvents(store.EventFilter{Limit: 10}))
+	if len(rows) != 1 || rows[0].Path != kept.Path || rows[0].PID != kept.PID {
+		t.Fatalf("batch path stored %+v, want only the attributed open", rows)
+	}
+
+	single := newEventIngest(ingestDeps{Store: f.store, Correlator: correlate.New(f.tagger, sensitive.New(f.cfg), f.cfg, correlate.Hooks{}), Resolver: session.NewResolver(f.store, f.tagger), Tagger: f.tagger, RecordEgressObservation: f.store.RecordEgressObservationForTest})
+	t.Cleanup(single.Stop)
+	again := noise
+	again.TS = at.Add(time.Second)
+	again.Path = "/Users/x/Documents/other.txt"
+	agent := event.Event{Kind: event.KindFileOpen, TS: at.Add(2 * time.Second), PID: 500, ExePath: "/usr/local/bin/cursor-agent", Path: "/work/single"}
+	if !single.Feed(again) || !single.Feed(agent) {
+		t.Fatal("single path rejected an event")
+	}
+	rows = testutil.Read[[]event.Event](t)(f.store.QueryEvents(store.EventFilter{Limit: 10}))
+	got := map[string]int32{}
+	for _, r := range rows {
+		got[r.Path] = r.PID
+	}
+	if got[again.Path] != 0 || got[kept.Path] != kept.PID || got[agent.Path] != agent.PID || len(rows) != 2 {
+		t.Fatalf("single path stored %+v, want the unattributed open dropped and the attributed open kept", rows)
+	}
+}
