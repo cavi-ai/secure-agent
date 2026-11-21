@@ -104,9 +104,21 @@ extension GuardPending {
     /// What a session, timed or standing allow grants, shown under the
     /// prompt's Allow button; nil for a scope the request does not offer.
     func grantTerms(scope: String, expiry: String?, category: Bool = false) -> String? {
-        guard let terms = availableScopes?.first(where: { $0.kind == scope && $0.expiry == expiry && $0.coversKind == category })?.terms,
-              !terms.isEmpty else { return nil }
-        return terms
+        guard let choice = availableScopes?.first(where: { $0.kind == scope && $0.expiry == expiry && $0.coversKind == category }) else { return nil }
+        if let terms = choice.terms, !terms.isEmpty { return terms }
+        let sends = ruleID == "untrusted-egress"
+        let kinds = category ? GuardSendKind.label(categories) : nil
+        if category && kinds == nil { return nil }
+        let subject = kinds.map { "all \($0) from this tool in this workspace" } ?? (sends ? "these sends from this tool" : "this file and tool")
+        let effect: String
+        switch scope {
+        case "session": effect = "Allows \(subject) until this session ends."
+        case "exact" where expiry == "24h" || expiry == "7d": effect = "Allows \(subject) for \(expiry == "7d" ? "7 days" : "24 hours")."
+        case "standing": effect = "Allows \(subject) until you revoke it."
+        default: return nil
+        }
+        let limit = sends ? (category ? "Other kinds of send still ask." : "Other sends still ask.") : "File approval does not authorize network access."
+        return "\(effect) Executable signatures are not verified. \(limit) Revoke under Protection → Rules & permissions."
     }
 }
 

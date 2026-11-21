@@ -47,6 +47,10 @@ func Confirm(facts ConfirmFacts, verdict string, choice model.ScopeChoice) strin
 // Terms stays empty when ButtonTerms is empty.
 func Disclose(ruleID string, categories []string, choice model.ScopeChoice) model.ScopeChoice {
 	choice.Terms = ButtonTerms(ruleID, categories, choice)
+	if choice.Kind == "once" {
+		choice.Effect, choice.Tail = "", ""
+		return choice
+	}
 	choice.Effect = confirmEffect(ruleID, categories, choice)
 	choice.Tail = confirmTail(ruleID, choice.Category)
 	return choice

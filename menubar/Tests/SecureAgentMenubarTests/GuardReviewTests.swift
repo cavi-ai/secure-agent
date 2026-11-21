@@ -13,6 +13,15 @@ final class GuardReviewTests: XCTestCase {
         XCTAssertFalse(pending.requestFacts.contains("Why:"))
     }
 
+    func testLegacyGrantTermsAndDaemonPrecedence() throws {
+        let json = #"{"id":"request","agent":"claude","tool":"Read","path":"/workspace/.env","rule_id":"env-files","ts":"","available_scopes":[{"kind":"exact","expiry":"24h"},{"kind":"standing","terms":"Daemon-provided terms."},{"kind":"session","terms":""}]}"#
+        let request = try JSONDecoder().decode(GuardPending.self, from: Data(json.utf8))
+        XCTAssertEqual(request.grantTerms(scope: "exact", expiry: "24h"), "Allows this file and tool for 24 hours. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions.")
+        XCTAssertEqual(request.grantTerms(scope: "session", expiry: nil), "Allows this file and tool until this session ends. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions.")
+        XCTAssertEqual(request.grantTerms(scope: "standing", expiry: nil), "Daemon-provided terms.")
+        XCTAssertNil(request.grantTerms(scope: "exact", expiry: "7d"))
+    }
+
     @MainActor
     func testSendAfterUntrustedInputNamesWhatTheSessionRead() throws {
         XCTAssertTrue(sendAfterImage.requestFacts.hasPrefix("Why: This session read untrusted content: image /workspace/app/docs/build-spec.png, committed by Mallory <mallory@attacker.example>"))

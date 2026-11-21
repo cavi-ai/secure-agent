@@ -98,6 +98,12 @@ func TestDisclosureSentences(t *testing.T) {
 				t.Fatalf("Confirm\n got %q\nwant %q", got, tc.confirm)
 			}
 			disclosed := Disclose(tc.facts.RuleID, tc.facts.Categories, tc.choice)
+			if tc.choice.Kind == "once" {
+				if disclosed.Terms != "" || disclosed.Effect != "" || disclosed.Tail != "" {
+					t.Fatalf("Disclose %+v", disclosed)
+				}
+				return
+			}
 			if disclosed.Terms != tc.terms || disclosed.Tail == "" {
 				t.Fatalf("Disclose %+v", disclosed)
 			}
@@ -119,15 +125,17 @@ func TestDisclosureSentences(t *testing.T) {
 
 func TestDiscloseOmitsEmptyButtonTerms(t *testing.T) {
 	once := Disclose("env-files", nil, model.ScopeChoice{Kind: "once"})
-	if once.Terms != "" || once.Effect == "" || once.Tail == "" {
+	if once.Terms != "" || once.Effect != "" || once.Tail != "" {
 		t.Fatalf("%+v", once)
 	}
 	raw, err := json.Marshal(once)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), `"terms"`) {
-		t.Fatalf("empty terms were encoded: %s", raw)
+	for _, field := range []string{`"terms"`, `"effect"`, `"tail"`} {
+		if strings.Contains(string(raw), field) {
+			t.Fatalf("once encoded %s: %s", field, raw)
+		}
 	}
 	session := Disclose("env-files", nil, model.ScopeChoice{Kind: "session"})
 	if session.Terms == "" || session.Effect == "" || session.Tail == "" {
