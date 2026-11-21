@@ -16,8 +16,10 @@ func markObserved(events []event.Event) {
 }
 
 // TraceSession normalizes the harness-specific identity and sighting rules.
+// Repo, Branch and ParentID stay empty unless the harness records them.
 type TraceSession struct {
 	ID, Harness, Workspace, Origin string
+	Repo, Branch, ParentID         string
 	At                             time.Time
 }
 

@@ -511,22 +511,6 @@ func (r *Resolver) HandleHandshake(h Handshake) {
 	r.touchLocked(h.SessionID, ts)
 }
 
-// NoteTranscriptSession records a harness transcript sighting. The id comes
-// from the harness's own transcript (e.g. Claude's sessionId), stronger than a
-// process-tree guess. `harness` names the source ("claude", "codex", …) and
-// `workspace` is the transcript's cwd; both fill the session record so a
-// trace session is never nameless.
-//
-// When a process-tree session already exists for the same harness+workspace
-// (the harness process is the one running this conversation), the transcript
-// session MERGES INTO it rather than creating a second row — that is the join
-// that makes "claude · repo@branch · timeline" possible. The process-tree id
-// is provisional; the harness's own id is authoritative, so the merge rekeys
-// the process row's events onto the transcript id.
-func (r *Resolver) NoteTranscriptSession(id, harness, workspace string, ts time.Time) {
-	r.NoteTranscriptSighting(TranscriptSighting{ID: id, Harness: harness, Workspace: workspace, TS: ts})
-}
-
 // TranscriptSighting is a harness's own record of a conversation. Repo and
 // Branch, when the harness records them (Hermes's git_repo_root and
 // git_branch), win over the workspace probe; ParentID nests a continuation or
@@ -539,8 +523,19 @@ type TranscriptSighting struct {
 	TS     time.Time
 }
 
-// NoteTranscriptSighting is NoteTranscriptSession with the harness's own
-// repo, branch, parent and origin.
+// NoteTranscriptSighting records a harness transcript sighting. The id comes
+// from the harness's own transcript (e.g. Claude's sessionId), stronger than a
+// process-tree guess. Harness names the source ("claude", "codex", …) and
+// Workspace is the transcript's cwd; both fill the session record so a
+// trace session is never nameless. Repo, Branch, ParentID and Origin fill the
+// same row when the sighting carries them.
+//
+// When a process-tree session already exists for the same harness+workspace
+// (the harness process is the one running this conversation), the transcript
+// session MERGES INTO it rather than creating a second row — that is the join
+// that makes "claude · repo@branch · timeline" possible. The process-tree id
+// is provisional; the harness's own id is authoritative, so the merge rekeys
+// the process row's events onto the transcript id.
 func (r *Resolver) NoteTranscriptSighting(s TranscriptSighting) {
 	id, harness, workspace, ts := s.ID, s.Harness, s.Workspace, s.TS
 	if id == "" {

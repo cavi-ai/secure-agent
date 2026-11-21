@@ -105,7 +105,7 @@ func TestProcessTreeCreationPublishesStoredIdentity(t *testing.T) {
 func TestProcessTreeCreationJoinsRecentlyTouchedTranscript(t *testing.T) {
 	now := time.Now().UTC()
 	r, st := testResolver(t, fakeProcs{100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: "/repo", StartTime: now.Add(-time.Hour)}})
-	r.NoteTranscriptSession("conversation", "claude", "/repo", now)
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "conversation", Harness: "claude", Workspace: "/repo", TS: now})
 	var emitted []model.Session
 	r.OnSessionChange = func(s model.Session) { emitted = append(emitted, s) }
 	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: now.Add(time.Second)}

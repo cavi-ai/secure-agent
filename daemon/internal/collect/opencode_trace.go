@@ -66,8 +66,8 @@ type OpencodeCollector struct {
 	OnProduce func()
 	// OnPoll, when set, receives the database and watermark after each poll.
 	OnPoll func(source string, watermark int64)
-	// OnSessionSeen reports an opencode session (id, workspace, time).
-	OnSessionSeen func(sessionID, harness, workspace string, at time.Time)
+	// OnSessionSeen reports an opencode session (id, harness, workspace, time).
+	OnSessionSeen func(TraceSession)
 
 	// watermark advances only after a bounded scan has drained. The tuple
 	// cursor and bounded replay cache are checkpointed beside the event DB.
@@ -257,7 +257,7 @@ func (c *OpencodeCollector) pollOnce() int {
 			}
 			published++
 			if c.OnSessionSeen != nil && workspace != "" {
-				c.OnSessionSeen(sessionID, "opencode", workspace, e.TS)
+				c.OnSessionSeen(TraceSession{ID: sessionID, Harness: "opencode", Workspace: workspace, At: e.TS})
 			}
 		}
 		if !partComplete {
