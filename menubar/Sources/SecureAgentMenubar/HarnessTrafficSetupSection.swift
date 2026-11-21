@@ -39,7 +39,15 @@ struct HarnessTrafficSetupSection: View {
     private var directSetup: some View {
         Section(OnboardingView.title(harness)) {
             if FirstUseSetupState.supportsHook(harness) {
-                Label(setup.firstUseState.installationStatus(for: harness), systemImage: "shield")
+                let standing = setup.firstUseState.hookSetupStatus(for: harness)
+                Label(standing.headline, systemImage: standing.symbol)
+                    .foregroundStyle(standing == .ready ? Color.ok : standing == .notInstalled ? Color.secondary : Color.warn)
+                    .font(.subheadline.weight(.medium))
+                if let guidance = standing.guidance(for: harness) {
+                    Text(guidance)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Button(setup.agentSetupRunning == harness ? "Setting Up…" : "Set Up & Open") {
                 Task { await setup.setUpAndOpen(harness) }

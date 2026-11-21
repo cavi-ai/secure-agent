@@ -22,7 +22,10 @@ struct OnboardingOptionsView: View {
                 HStack {
                     Button("Open at Login") { run { try setup.enableLoginItem() } }
                         .disabled(setup.isLoginItemEnabled)
-                    Button("Install CLI Tool") { run { try setup.installCLI() } }
+                    Button(setup.cliInstalling ? "Installing…" : "Install CLI Tool") {
+                        Task { await setup.installCLI() }
+                    }
+                    .disabled(setup.cliInstalling)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)

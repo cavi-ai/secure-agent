@@ -33,6 +33,13 @@ public final class SetupManager: ObservableObject {
     @Published public private(set) var hookSelfTestFailure: String?
     @Published public private(set) var hookSelfTestRunning = false
     @Published private(set) var hookSetupRunning = false
+    /// Harness whose hook setup is in progress, and the step it is on.
+    @Published private(set) var hookSetupHarness: String?
+    @Published private(set) var hookSetupPhase: HookSetupPhase?
+    /// True while the command-line symlink is being written.
+    @Published private(set) var cliInstalling = false
+    /// Set when the last install attempt failed. Cleared at the start of the next one.
+    @Published private(set) var cliFailure: String?
     @Published private(set) var agentSetupRunning: String?
     @Published private(set) var agentSetupStatus: [String: String] = [:]
     @Published private(set) var hookSelfTestHarness: String?
@@ -140,6 +147,12 @@ public final class SetupManager: ObservableObject {
     @Published private(set) var doctorRunning = false
     /// Id of the check whose fix is running.
     @Published private(set) var doctorFixing: String?
+    /// What the Doctor is doing. Rows read this so a run is a phase per
+    /// check, not one spinner for the whole section.
+    @Published private(set) var doctorActivity: DoctorActivity = .idle
+    /// True while Fix all owns the activity, so a finished check does not
+    /// clear the phase before the next check starts.
+    private var doctorFixBatch = false
     /// Loopback model servers + the curated managed list, from the daemon's
     /// /advisor/discover. Drives the Advisor settings dropdowns.
     @Published public private(set) var advisorDiscovery = AdvisorDiscovery(servers: [], managedModels: [])
@@ -521,9 +534,21 @@ public final class SetupManager: ObservableObject {
             throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "Hook setup is already running."])
         }
         hookSetupRunning = true
-        defer { hookSetupRunning = false; refreshHookInstallationState() }
+        hookSetupHarness = harness
+        hookSetupPhase = .installing
+        defer {
+            hookSetupRunning = false
+            hookSetupHarness = nil
+            hookSetupPhase = nil
+            refreshHookInstallationState()
+        }
+        await Task.yield()
         try installHooks(for: harness)
-        if harness == "openclaw" { try await registerOpenClawHooks() }
+        if harness == "openclaw" {
+            hookSetupPhase = .registering
+            try await registerOpenClawHooks()
+        }
+        hookSetupPhase = .checking
         guard HookRegistry.selectedHooksInstalled(harness: harness, home: home) else {
             throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey:
                 "Hook installation is incomplete. Retry setup using the packaged Secure Agent app."])
@@ -1033,13 +1058,48 @@ public final class SetupManager: ObservableObject {
 
     // MARK: - CLI symlink
 
-    public func installCLI() throws {
-        guard let cliPath = bundledCLIPath else { throw SetupError.notBundled }
+    /// Where `secure-agent` is linked for the user's shell.
+    public var cliLinkPath: String { "\(home)/.local/bin/secure-agent" }
+
+    /// What is at `~/.local/bin/secure-agent` right now.
+    public func cliLinkState() -> CLILinkState {
+        Self.cliLinkState(bundledCLI: bundledCLIPath, linkPath: cliLinkPath)
+    }
+
+    static func cliLinkState(bundledCLI: String?, linkPath: String, fileManager: FileManager = .default) -> CLILinkState {
+        guard let bundledCLI else { return .unavailable }
+        let wanted = URL(fileURLWithPath: bundledCLI).standardizedFileURL.path
+        if let dest = try? fileManager.destinationOfSymbolicLink(atPath: linkPath) {
+            let base = URL(fileURLWithPath: linkPath).deletingLastPathComponent()
+            let resolved = URL(fileURLWithPath: dest, relativeTo: base).standardizedFileURL.path
+            return resolved == wanted ? .installed : .otherFile
+        }
+        return fileManager.fileExists(atPath: linkPath) ? .otherFile : .missing
+    }
+
+    /// Links this app's `secure-agent` into `~/.local/bin` and publishes the result.
+    public func installCLI() async {
+        guard !cliInstalling else { return }
+        cliInstalling = true
+        cliFailure = nil
         lastError = nil
+        defer { cliInstalling = false }
+        await Task.yield()
+        do {
+            try installCLILink()
+        } catch {
+            cliFailure = error.localizedDescription
+        }
+    }
+
+    private func installCLILink() throws {
+        guard let cliPath = bundledCLIPath else { throw SetupError.notBundled }
         let binDir = "\(home)/.local/bin"
         try fm.createDirectory(atPath: binDir, withIntermediateDirectories: true)
-        let link = "\(binDir)/secure-agent"
-        if fm.fileExists(atPath: link) { try fm.removeItem(atPath: link) }
+        let link = cliLinkPath
+        if (try? fm.destinationOfSymbolicLink(atPath: link)) != nil || fm.fileExists(atPath: link) {
+            try fm.removeItem(atPath: link)
+        }
         try fm.createSymbolicLink(atPath: link, withDestinationPath: cliPath)
     }
 
@@ -1217,40 +1277,73 @@ public final class SetupManager: ObservableObject {
 
     /// Collects the Doctor's facts: signatures, the launchd job, the helper's
     /// log tail and the spool on disk (off the main actor), then the daemon's
-    /// `/status` and `/doctor`.
-    func collectTelemetryFacts() async -> TelemetryFacts {
+    /// `/status` and `/doctor`. Publishes each step as it starts. `focus` is
+    /// the check a fix is rechecking; nil is a full run.
+    func collectTelemetryFacts(focus: String? = nil) async -> TelemetryFacts {
+        func step(_ next: DoctorCollectStep) {
+            if let focus {
+                doctorActivity = .rechecking(checkID: focus, step: next)
+            } else {
+                doctorActivity = .collecting(next)
+            }
+        }
         let appPath = appURL.path
         let helperPath = appURL.appendingPathComponent(Self.esCollectorExecutable).path
         let thisCopy = appURL.resolvingSymlinksInPath().path
         let otherCopies = NSWorkspace.shared.urlsForApplications(withBundleIdentifier: AppIdentity.bundleIdentifier)
             .map { $0.resolvingSymlinksInPath().path }
             .filter { $0 != thisCopy }
-        let staleProbe = esHelperStaleProbe
-        let probe = await Task.detached { () -> (CodeSignature?, CodeSignature?, LaunchdProbe, String?, Date?, Bool) in
+        step(.signatures)
+        let signatures = await Task.detached { () -> (CodeSignature?, CodeSignature?) in
             let app = CodeSignature.parse(Self.capture(["/usr/bin/codesign", "-dv", appPath]))
             let helper = CodeSignature.parse(Self.capture(["/usr/bin/codesign", "-dv", helperPath]))
+            return (app, helper)
+        }.value
+        step(.launchd)
+        let staleProbe = esHelperStaleProbe
+        let job = await Task.detached { () -> (LaunchdProbe, Bool) in
             let job = Self.esLaunchdJob()
+            return (job, staleProbe(job))
+        }.value
+        step(.spool)
+        let spool = await Task.detached { () -> (String?, Date?) in
             let logLine = TelemetryDoctor.lastLine(ofFileAt: Self.esHelperLogPath)
             let mtime = (try? FileManager.default.attributesOfItem(atPath: Self.esSpoolPath))?[.modificationDate] as? Date
-            return (app, helper, job, logLine, mtime, staleProbe(job))
+            return (logLine, mtime)
         }.value
+        step(.daemon)
         let client = DaemonClient()
         let status = try? await client.fetchStatus()
         let doctor = try? await client.fetchDoctor()
         return TelemetryFacts(
-            now: Date(), appSignature: probe.0, helperSignature: probe.1,
-            plistPresent: esPlistPresent, serviceStatus: esService.status, launchd: probe.2,
-            helperLogLastLine: probe.3, spoolMtime: probe.4, esService: status?.esService,
+            now: Date(), appSignature: signatures.0, helperSignature: signatures.1,
+            plistPresent: esPlistPresent, serviceStatus: esService.status, launchd: job.0,
+            helperLogLastLine: spool.0, spoolMtime: spool.1, esService: status?.esService,
             legacyInstalled: fm.fileExists(atPath: Self.legacyESPlistPath), daemonChecks: doctor?.checks,
-            locationAllowed: esLocationAllowed, otherCopies: otherCopies, helperStale: probe.5)
+            locationAllowed: esLocationAllowed, otherCopies: otherCopies, helperStale: job.1)
     }
 
     /// Runs the Doctor once and publishes its checks.
     public func runDoctor() async {
+        await runDoctor(focus: nil, resetWhenDone: true)
+    }
+
+    /// `focus` keeps a fix's phase pointed at that check while facts are
+    /// collected again. `resetWhenDone` returns the section to idle; Fix all
+    /// leaves it up until the batch ends.
+    private func runDoctor(focus: String?, resetWhenDone: Bool) async {
         doctorRunning = true
-        defer { doctorRunning = false }
+        defer {
+            doctorRunning = false
+            if resetWhenDone { doctorActivity = .idle }
+        }
+        if focus == nil {
+            doctorActivity = .collecting(.local)
+            await Task.yield()
+        }
         refreshESState()
-        doctorChecks = TelemetryDoctor.evaluate(await collectTelemetryFacts())
+        let next = TelemetryDoctor.evaluate(await collectTelemetryFacts(focus: focus))
+        doctorChecks = TelemetryDoctor.preservingDaemonRows(previous: doctorChecks, next: next)
     }
 
     /// Applies one check's fix and re-runs the Doctor. With `waitForUser`, a
@@ -1259,22 +1352,35 @@ public final class SetupManager: ObservableObject {
     func fixDoctorCheck(_ check: DoctorCheck, waitForUser: Bool) async {
         guard let fix = check.fix else { return }
         doctorFixing = check.id
-        defer { doctorFixing = nil }
+        doctorActivity = .fixing(checkID: check.id, fix: fix)
+        defer {
+            if !doctorFixBatch {
+                doctorFixing = nil
+                doctorActivity = .idle
+            }
+        }
         await applyDoctorFix(fix)
-        await runDoctor()
+        await runDoctor(focus: check.id, resetWhenDone: false)
         guard waitForUser, fix.needsUser else { return }
         let deadline = Date().addingTimeInterval(300)
         while !Task.isCancelled, Date() < deadline,
               doctorChecks.first(where: { $0.id == check.id })?.state != .pass {
+            doctorActivity = .waiting(checkID: check.id, fix: fix)
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            await runDoctor()
+            await runDoctor(focus: check.id, resetWhenDone: false)
         }
     }
 
     /// Runs every offered fix in check order, each check at most once; later
     /// checks are re-evaluated after each fix.
     public func fixAllDoctorChecks() async {
-        await runDoctor()
+        doctorFixBatch = true
+        defer {
+            doctorFixBatch = false
+            doctorFixing = nil
+            doctorActivity = .idle
+        }
+        await runDoctor(focus: nil, resetWhenDone: false)
         var tried: Set<String> = []
         while let next = doctorChecks.first(where: { $0.state != .pass && $0.fix != nil && !tried.contains($0.id) }) {
             tried.insert(next.id)
@@ -1297,10 +1403,7 @@ public final class SetupManager: ObservableObject {
             do { _ = try TelemetryDoctor.setAsideSpool(spoolPath: Self.esSpoolPath, now: Date()) }
             catch { report(error) }
         case .removeLegacy:
-            Task {
-                await removeLegacyESHelper()
-                refreshESState()
-            }
+            await removeLegacyESHelper()
         case .openHarnessSetup:
             OnboardingWindowController.shared.show()
         case .restartDaemon:
@@ -1592,6 +1695,40 @@ public final class SetupManager: ObservableObject {
             case .notInstalledCopy:
                 return AppIdentity.wrongLocationMessage
             }
+        }
+    }
+}
+
+/// What `~/.local/bin/secure-agent` points at, relative to this app's command.
+public enum CLILinkState: Equatable {
+    case unavailable
+    case missing
+    case installed
+    case otherFile
+
+    var headline: String {
+        switch self {
+        case .unavailable: return "Not in this copy"
+        case .missing: return "Not installed"
+        case .installed: return "Installed"
+        case .otherFile: return "A different file is there"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .unavailable: return "Use the Secure Agent app in Applications."
+        case .missing: return "~/.local/bin/secure-agent"
+        case .installed: return "~/.local/bin/secure-agent"
+        case .otherFile: return "Install replaces ~/.local/bin/secure-agent with this app's command."
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .unavailable, .otherFile: return "exclamationmark.triangle.fill"
+        case .missing: return "circle"
+        case .installed: return "checkmark.circle.fill"
         }
     }
 }

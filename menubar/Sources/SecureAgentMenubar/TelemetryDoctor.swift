@@ -145,6 +145,133 @@ enum DoctorFix: String, CaseIterable, Sendable {
 
     /// Fixes that finish only when the user flips a switch in System Settings.
     var needsUser: Bool { self == .openLoginItems || self == .openFullDiskAccess }
+
+    /// Shown on the check row while Fix all is waiting on that switch.
+    var waitingTitle: String {
+        switch self {
+        case .openLoginItems:
+            return "Waiting for you to allow Secure Agent in Login Items"
+        case .openFullDiskAccess:
+            return "Waiting for you to turn on Full Disk Access"
+        case .register, .reregister, .setAsideSpool, .removeLegacy, .openHarnessSetup,
+             .restartDaemon, .unregisterOtherCopies, .markLossSeen, .openTraffic:
+            return "Waiting for you"
+        }
+    }
+}
+
+/// One slice of a Doctor run. Rows whose ids the step covers animate while
+/// it is the current slice; the others keep their last result.
+enum DoctorCollectStep: Equatable, CaseIterable {
+    case local, signatures, launchd, spool, daemon
+
+    var title: String {
+        switch self {
+        case .local: return "Checking install and registration"
+        case .signatures: return "Checking code signature"
+        case .launchd: return "Checking the launchd job"
+        case .spool: return "Checking Full Disk Access and the spool"
+        case .daemon: return "Asking the daemon"
+        }
+    }
+
+    func covers(_ checkID: String) -> Bool {
+        switch self {
+        case .local:
+            return checkID == "location" || checkID == "plist" || checkID == "registration"
+                || checkID == "login-items" || checkID == "legacy"
+        case .signatures:
+            return checkID == "signature"
+        case .launchd:
+            return checkID == "launchd"
+        case .spool:
+            return checkID == "full-disk-access" || checkID == "spool"
+        case .daemon:
+            return checkID == "daemon" || checkID.hasPrefix("daemon.")
+        }
+    }
+
+    /// Whether this step comes after the step that owns `checkID`.
+    func hasPassed(_ checkID: String) -> Bool {
+        let order = Self.allCases
+        guard let current = order.firstIndex(of: self),
+              let owner = order.first(where: { $0.covers(checkID) }),
+              let ownerIndex = order.firstIndex(of: owner) else { return false }
+        return ownerIndex < current
+    }
+}
+
+/// What the Doctor section is doing. Idle is the settled list.
+enum DoctorActivity: Equatable {
+    case idle
+    case collecting(DoctorCollectStep)
+    case fixing(checkID: String, fix: DoctorFix)
+    case rechecking(checkID: String, step: DoctorCollectStep)
+    case waiting(checkID: String, fix: DoctorFix)
+
+    /// Header line. Nil when nothing is running.
+    func headline(checkTitle: (String) -> String?) -> String? {
+        switch self {
+        case .idle:
+            return nil
+        case .collecting(let step):
+            return step.title
+        case .fixing(let id, let fix):
+            return "\(fix.title) · \(checkTitle(id) ?? "this check")"
+        case .rechecking(let id, _):
+            return "Rechecking \(checkTitle(id) ?? "this check")"
+        case .waiting(_, let fix):
+            return fix.waitingTitle
+        }
+    }
+
+    func phase(for checkID: String, hasResult: Bool) -> DoctorRowPhase {
+        switch self {
+        case .idle:
+            return hasResult ? .settled : .pending
+        case .collecting(let step):
+            if step.covers(checkID) { return .checking }
+            if !hasResult, step.hasPassed(checkID) { return .checked }
+            return hasResult ? .settled : .pending
+        case .fixing(let id, _):
+            return id == checkID ? .fixing : (hasResult ? .settled : .pending)
+        case .rechecking(let id, let step):
+            if id == checkID { return .checking }
+            if !hasResult, step.hasPassed(checkID) { return .checked }
+            return hasResult ? .settled : .pending
+        case .waiting(let id, _):
+            return id == checkID ? .waiting : (hasResult ? .settled : .pending)
+        }
+    }
+
+    func rowDetail(for checkID: String, cause: String, hasResult: Bool) -> String {
+        switch phase(for: checkID, hasResult: hasResult) {
+        case .pending:
+            return "Waiting"
+        case .checking:
+            switch self {
+            case .collecting(let step), .rechecking(_, let step):
+                return step.title
+            case .idle, .fixing(_, _), .waiting(_, _):
+                return "Checking"
+            }
+        case .checked:
+            return "Waiting for the result"
+        case .fixing:
+            if case .fixing(_, let fix) = self { return fix.title }
+            return "Fixing"
+        case .waiting:
+            if case .waiting(_, let fix) = self { return fix.waitingTitle }
+            return "Waiting for you"
+        case .settled:
+            return cause.isEmpty ? "Not checked yet" : cause
+        }
+    }
+}
+
+/// How one Doctor row draws while a run is in progress.
+enum DoctorRowPhase: Equatable {
+    case pending, checking, checked, fixing, waiting, settled
 }
 
 struct DoctorCheck: Identifiable, Equatable, Sendable {
@@ -242,6 +369,37 @@ struct TelemetryFacts: Sendable {
 // MARK: - Doctor
 
 enum TelemetryDoctor {
+    /// Rows shown before the first report arrives, in check order, so the
+    /// section is a list of phases instead of an empty spinner.
+    static let placeholderSections: [(id: String, title: String)] = [
+        ("location", "Install location"),
+        ("signature", "Code signature"),
+        ("plist", "Service in the app"),
+        ("registration", "Registration"),
+        ("login-items", "Login Items approval"),
+        ("launchd", "launchd job"),
+        ("full-disk-access", "Full Disk Access"),
+        ("spool", "Spool health"),
+        ("legacy", "Old helper"),
+        ("daemon", "Daemon"),
+    ]
+
+    static func displayRows(_ checks: [DoctorCheck]) -> [DoctorCheck] {
+        guard checks.isEmpty else { return checks }
+        return placeholderSections.map {
+            DoctorCheck(id: $0.id, title: $0.title, state: .pass, cause: "", fix: nil)
+        }
+    }
+
+    /// A daemon restart makes `/doctor` fail for a moment. Keep the rows from
+    /// the last answered report instead of swapping them for one "did not
+    /// answer" row until the daemon answers again.
+    static func preservingDaemonRows(previous: [DoctorCheck], next: [DoctorCheck]) -> [DoctorCheck] {
+        let previousDaemon = previous.filter { $0.id.hasPrefix("daemon.") }
+        guard next.contains(where: { $0.id == "daemon" }), !previousDaemon.isEmpty else { return next }
+        return next.filter { $0.id != "daemon" } + previousDaemon
+    }
+
     /// Running job, silent spool: longer than this means no Full Disk Access.
     static let grantStaleAfter: TimeInterval = 90
     /// Mostly unparsed spool that has not been written for this long is set aside.

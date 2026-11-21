@@ -236,11 +236,15 @@ struct SettingsView: View {
             loadMutes()
         }
         .onChange(of: selectedServerID) { _, _ in
-            let server = setup.advisorDiscovery.servers.first { $0.id == selectedServerID }
+            let server = setup.advisorDiscovery.servers.first {
+                AdvisorPreferences.normalizedLoopback($0.endpoint) == selectedServerID
+            }
             // Hydration and recommendations set both fields together. Keep
             // that model when it belongs to the newly selected server.
-            if let server, !server.models.contains(selectedModel) {
-                selectedModel = server.models.first ?? ""
+            // A typed address that is not a discovered server leaves the
+            // model text alone.
+            if let server {
+                selectedModel = AdvisorModelList.preferred(in: server.models, keeping: selectedModel)
             }
         }
         .onChange(of: setup.advisorDiscovery.servers.count) { _, _ in
@@ -655,11 +659,7 @@ struct SettingsView: View {
                     get: { setup.isLoginItemEnabled },
                     set: { on in run { if on { try setup.enableLoginItem() } else { try setup.disableLoginItem() } } }
                 ))
-                HStack {
-                    Text("Command-line tool")
-                    Spacer()
-                    Button("Install secure-agent CLI") { run { try setup.installCLI() } }
-                }
+                cliRow
             }
             Section {
                 HStack {
@@ -673,6 +673,51 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var cliRow: some View {
+        let status = setup.cliLinkState()
+        let installing = setup.cliInstalling
+        return HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Command-line tool").fontWeight(.medium)
+                if installing {
+                    Label("Installing…", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Color.brand)
+                        .symbolEffect(.pulse, options: .repeating)
+                } else if let failure = setup.cliFailure {
+                    Text("Install failed")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Color.bad)
+                    Text(failure)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Label(status.headline, systemImage: status.symbol)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(cliTint(status))
+                    Text(status.detail)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            Button(installing ? "Installing…" : (status == .installed ? "Reinstall" : "Install")) {
+                Task { await setup.installCLI() }
+            }
+            .disabled(installing || status == .unavailable)
+            .accessibilityIdentifier("settings.cli.install")
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func cliTint(_ status: CLILinkState) -> Color {
+        switch status {
+        case .installed: return .ok
+        case .missing: return .secondary
+        case .unavailable, .otherFile: return .warn
+        }
     }
 
     // MARK: Secure Agent — local chat, analysis model, traffic routing
@@ -802,7 +847,10 @@ struct SettingsView: View {
         if let mode = persisted.mode {
             advisorMode = mode == "managed" ? .managed : .existing
         }
-        if let endpoint = persisted.endpoint { selectedServerID = endpoint }
+        if let endpoint = persisted.endpoint {
+            selectedServerID = AdvisorPreferences.normalizedLoopback(endpoint) ?? endpoint
+            if serverAddressDraft.isEmpty { serverAddressDraft = AdvisorPreferences.displayAddress(endpoint) }
+        }
         if let model = persisted.model, !model.isEmpty {
             if persisted.mode == "managed" {
                 selectedManagedModel = model
@@ -816,7 +864,8 @@ struct SettingsView: View {
             if choice.mode == .managed {
                 selectedManagedModel = choice.model
             } else {
-                selectedServerID = choice.endpoint ?? ""
+                selectedServerID = AdvisorPreferences.normalizedLoopback(choice.endpoint ?? "") ?? (choice.endpoint ?? "")
+                if let endpoint = choice.endpoint { serverAddressDraft = AdvisorPreferences.displayAddress(endpoint) }
                 selectedModel = choice.model
             }
         }
@@ -826,10 +875,15 @@ struct SettingsView: View {
     private func fillEmptyAdvisorSelections() {
         let discovery = setup.advisorDiscovery
         if selectedManagedModel.isEmpty { selectedManagedModel = discovery.managedModels.first ?? "" }
-        if selectedServerID.isEmpty { selectedServerID = discovery.servers.first?.id ?? "" }
+        if serverAddressDraft.isEmpty, let first = discovery.servers.first {
+            serverAddressDraft = AdvisorPreferences.displayAddress(first.endpoint)
+            selectedServerID = AdvisorPreferences.normalizedLoopback(first.endpoint) ?? first.endpoint
+        }
         if selectedModel.isEmpty {
-            let server = discovery.servers.first { $0.id == selectedServerID } ?? discovery.servers.first
-            selectedModel = server?.models.first ?? ""
+            let server = discovery.servers.first {
+                AdvisorPreferences.normalizedLoopback($0.endpoint) == AdvisorPreferences.normalizedLoopback(serverAddressDraft)
+            }
+            selectedModel = AdvisorModelList.preferred(in: server?.models ?? [], keeping: "")
         }
     }
 
@@ -1078,6 +1132,7 @@ struct SettingsView: View {
     @State private var advisorMode: SetupManager.AdvisorMode = .managed
     @State private var selectedManagedModel = ""
     @State private var selectedServerID = ""
+    @State private var serverAddressDraft = ""
     @State private var selectedModel = ""
 
     /// Point the pickers at a recommendation and write the config.
@@ -1088,14 +1143,112 @@ struct SettingsView: View {
             selectedManagedModel = c.model
         } else {
             selectedServerID = c.endpoint ?? selectedServerID
+            if let endpoint = c.endpoint { serverAddressDraft = AdvisorPreferences.displayAddress(endpoint) }
             selectedModel = c.model
         }
         setup.applyRecommendation(r)
     }
 
+    private var analysisUnapplied: Bool {
+        guard setup.advisorEnabled else { return false }
+        let saved = setup.advisorPersisted
+        let savedMode: SetupManager.AdvisorMode? = switch saved.mode {
+        case "managed": .managed
+        case "existing": .existing
+        case nil: nil
+        default: nil
+        }
+        if savedMode != advisorMode { return true }
+        let savedModel = saved.model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch advisorMode {
+        case .managed:
+            return selectedManagedModel.trimmingCharacters(in: .whitespacesAndNewlines) != savedModel
+        case .existing:
+            let savedEndpoint = AdvisorPreferences.normalizedLoopback(saved.endpoint ?? "")
+            let draft = AdvisorPreferences.normalizedLoopback(serverAddressDraft)
+            return draft != savedEndpoint || selectedModel.trimmingCharacters(in: .whitespacesAndNewlines) != savedModel
+        }
+    }
+
+    private var analysisStatus: AnalysisStanding {
+        let health = state.advisorHealth.map {
+            AnalysisStanding.Health(
+                enabled: $0.enabled, circuitOpen: $0.circuitOpen == true,
+                lastError: $0.lastError ?? "", queueDepth: $0.queueDepth ?? 0,
+                model: $0.model ?? "", state: $0.state ?? "")
+        }
+        let saved = setup.advisorPersisted
+        return AnalysisStanding.report(
+            configured: setup.advisorEnabled, mode: saved.mode, endpoint: saved.endpoint, model: saved.model,
+            health: health, reported: state.status != nil, unapplied: analysisUnapplied)
+    }
+
+    private func analysisTint(_ kind: AnalysisStanding.Kind) -> Color {
+        switch kind {
+        case .off: return .secondary
+        case .on: return .ok
+        case .working: return .brand
+        case .paused: return .bad
+        case .notRunning, .unreported: return .warn
+        }
+    }
+
+    private func serverChoice(_ srv: DiscoveredServerModel, selected: Bool) -> some View {
+        let name = srv.kind == "ollama" ? "Ollama" : "Local server"
+        let address = AdvisorPreferences.displayAddress(srv.endpoint)
+        let count = srv.models.count
+        return Button {
+            serverAddressDraft = address
+            selectedServerID = AdvisorPreferences.normalizedLoopback(srv.endpoint) ?? srv.endpoint
+            selectedModel = AdvisorModelList.preferred(in: srv.models, keeping: selectedModel)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(selected ? Color.brand : Color.secondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(address).font(.body.monospaced())
+                    Text("\(name) · \(count) model\(count == 1 ? "" : "s")")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(name), \(address), \(count) models")
+        .accessibilityAddTraits(selected ? .isSelected : AccessibilityTraits())
+        .accessibilityIdentifier("settings.analysis.server.\(address)")
+    }
+
+    @ViewBuilder
+    private func analysisModelPicker(_ server: DiscoveredServerModel?) -> some View {
+        if let server, !server.models.isEmpty {
+            let groups = AdvisorModelList.ordered(server.models)
+            Picker("Model", selection: $selectedModel) {
+                ForEach(groups.chat, id: \.self) { Text($0).tag($0) }
+                if !groups.chat.isEmpty, !groups.other.isEmpty {
+                    Divider()
+                }
+                ForEach(groups.other, id: \.self) { Text($0).tag($0) }
+            }
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("settings.analysis.model")
+            if !selectedModel.isEmpty, !AdvisorModelList.isChat(selectedModel) {
+                Text("This model does not write. Analysis needs a chat model, not an embedding or speech model.")
+                    .font(.caption).foregroundStyle(Color.warn)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            TextField("Model", text: $selectedModel, prompt: Text("model name"))
+                .accessibilityIdentifier("settings.analysis.model")
+        }
+    }
+
     private var analysisSections: some View {
         let discovery = setup.advisorDiscovery
-        let selectedServer = discovery.servers.first { $0.id == selectedServerID } ?? discovery.servers.first
+        let endpoint = AdvisorPreferences.normalizedLoopback(serverAddressDraft)
+        let selectedServer = discovery.servers.first { AdvisorPreferences.normalizedLoopback($0.endpoint) == endpoint }
         return Group {
             Section("Analysis model") {
                 Text("Secure Agent uses a local model to analyze flags and write incident reports. Choose its model separately from chat. Analysis never changes enforcement.")
@@ -1123,6 +1276,7 @@ struct SettingsView: View {
                         Picker("Model", selection: $selectedManagedModel) {
                             ForEach(discovery.managedModels, id: \.self) { Text($0).tag($0) }
                         }
+                        .pickerStyle(.menu)
                         Text("Managed analysis uses mlx-agent over a private connection. Prepare the selected model locally before enabling analysis; this path does not download weights.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1131,43 +1285,50 @@ struct SettingsView: View {
             } else {
                 Section("Existing server") {
                     if discovery.servers.isEmpty {
-                        Text("No OpenAI-compatible servers found on this machine (probed Ollama, MLX, LM Studio ports). Start one, then Recheck.")
+                        Text("No server answered on the usual Ollama, MLX, or LM Studio ports. Enter an address on this Mac, or start one and recheck.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
-                        Picker("Server", selection: Binding(
-                            get: { selectedServerID },
-                            set: { newID in
-                                selectedServerID = newID
-                                selectedModel = discovery.servers.first { $0.id == newID }?.models.first ?? ""
-                            }
-                        )) {
-                            ForEach(discovery.servers) { srv in
-                                Text("\(srv.kind == "ollama" ? "Ollama" : "OpenAI-compatible") · \(srv.endpoint.replacingOccurrences(of: "http://", with: "")) · \(srv.models.count) model\(srv.models.count == 1 ? "" : "s")")
-                                    .tag(srv.id)
-                            }
-                        }
-                        if let srv = selectedServer {
-                            Picker("Model", selection: $selectedModel) {
-                                ForEach(srv.models, id: \.self) { Text($0).tag($0) }
-                            }
+                        Text(discovery.servers.count == 1
+                             ? "This server was found on this Mac. Choose it, or edit the address to use a different one."
+                             : "Choose a server found on this Mac, or edit the address.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ForEach(discovery.servers) { srv in
+                            serverChoice(srv, selected: AdvisorPreferences.normalizedLoopback(srv.endpoint) == endpoint)
                         }
                     }
+                    TextField("Address", text: $serverAddressDraft, prompt: Text("127.0.0.1:11434"))
+                        .onChange(of: serverAddressDraft) { _, value in
+                            selectedServerID = AdvisorPreferences.normalizedLoopback(value) ?? ""
+                        }
+                        .accessibilityIdentifier("settings.analysis.address")
+                    if !serverAddressDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, endpoint == nil {
+                        Text("Use a loopback address on this Mac, such as 127.0.0.1:11434.")
+                            .font(.caption).foregroundStyle(Color.warn)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    analysisModelPicker(selectedServer)
+                    Button("Recheck servers") { Task { await setup.refreshState() } }
                 }
             }
 
             Section("Automatic analysis") {
+                let standing = analysisStatus
+                SettingsStatusCard(symbol: standing.symbol, tint: analysisTint(standing.kind),
+                                   headline: standing.headline, detail: standing.detail)
+                let modelName = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
                 let canEnable = advisorMode == .managed
                     ? !discovery.managedModels.isEmpty
-                    : selectedServer != nil && !selectedModel.isEmpty
+                    : endpoint != nil && !modelName.isEmpty
                 Button(setup.advisorEnabled ? "Apply configuration" : "Enable automatic analysis") {
                     switch advisorMode {
                     case .managed:
                         setup.setAdvisorConfig(mode: .managed, endpoint: nil,
                                                model: selectedManagedModel.isEmpty ? (discovery.managedModels.first ?? "") : selectedManagedModel)
                     case .existing:
-                        if let srv = selectedServer {
-                            setup.setAdvisorConfig(mode: .existing, endpoint: srv.endpoint, model: selectedModel)
+                        if let endpoint {
+                            setup.setAdvisorConfig(mode: .existing, endpoint: endpoint, model: modelName)
                         }
                     }
                 }
@@ -1177,9 +1338,6 @@ struct SettingsView: View {
                 }
                 if let note = setup.advisorNote {
                     Text(note).font(.caption).foregroundStyle(.secondary)
-                }
-                HStack {
-                    Button("Recheck servers") { Task { await setup.refreshState() } }
                 }
             }
 
@@ -1385,55 +1543,140 @@ struct ESFileTelemetryCard: View {
 
 /// The Telemetry Doctor: one row per check with its state, cause and fix,
 /// plus "Fix all" (fixes in check order, waiting on System Settings switches).
+/// A run names the current phase on the header and on the row it is touching.
 @MainActor
 struct TelemetryDoctorSection: View {
     @ObservedObject var setup: SetupManager
 
-    private var busy: Bool { setup.doctorRunning || setup.doctorFixing != nil }
+    private var busy: Bool { setup.doctorActivity != .idle }
     private var hasFixes: Bool { DoctorFix.canFixAll(setup.doctorChecks) }
+    private var rows: [DoctorCheck] { TelemetryDoctor.displayRows(setup.doctorChecks) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(summary).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                if busy { ProgressView().controlSize(.small) }
+            HStack(alignment: .firstTextBaseline) {
+                phaseHeader
+                Spacer(minLength: 8)
                 Button("Run Doctor") { Task { await setup.runDoctor() } }
                     .controlSize(.small).disabled(busy)
                 Button("Fix all") { Task { await setup.fixAllDoctorChecks() } }
                     .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
                     .disabled(busy || !hasFixes)
             }
-            ForEach(setup.doctorChecks) { check in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: check.state.icon)
-                        .foregroundStyle(tint(check.state))
-                        .frame(width: 16)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(check.title).font(.system(.body, weight: .medium))
-                        Text(check.cause)
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
-                    if let fix = check.fix, check.state != .pass {
-                        Button(fix.title) { Task { await setup.fixDoctorCheck(check, waitForUser: false) } }
-                            .controlSize(.small).disabled(busy)
-                    }
-                }
+            ForEach(rows) { check in
+                doctorRow(check)
             }
         }
         .task { if setup.doctorChecks.isEmpty { await setup.runDoctor() } }
     }
 
+    @ViewBuilder
+    private var phaseHeader: some View {
+        if let line = setup.doctorActivity.headline(checkTitle: checkTitle) {
+            HStack(spacing: 6) {
+                Image(systemName: headerSymbol)
+                    .symbolEffect(.pulse, options: .repeating)
+                Text(line)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(headerTint)
+            .accessibilityAddTraits(.updatesFrequently)
+        } else {
+            Text(summary)
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var headerSymbol: String {
+        if case .waiting = setup.doctorActivity { return "hourglass" }
+        return "arrow.triangle.2.circlepath"
+    }
+
+    private var headerTint: Color {
+        if case .waiting = setup.doctorActivity { return .warn }
+        return .brand
+    }
+
+    private func doctorRow(_ check: DoctorCheck) -> some View {
+        let hasResult = setup.doctorChecks.contains { $0.id == check.id }
+        let phase = setup.doctorActivity.phase(for: check.id, hasResult: hasResult)
+        return HStack(alignment: .top, spacing: 8) {
+            rowIcon(phase, check)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(check.title).font(.system(.body, weight: .medium))
+                Text(setup.doctorActivity.rowDetail(for: check.id, cause: check.cause, hasResult: hasResult))
+                    .font(.caption)
+                    .foregroundStyle(phase == .settled ? Color.secondary : phaseTint(phase))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentTransition(.opacity)
+            }
+            Spacer(minLength: 8)
+            if phase == .settled, let fix = check.fix, check.state != .pass {
+                Button(fix.title) { Task { await setup.fixDoctorCheck(check, waitForUser: false) } }
+                    .controlSize(.small).disabled(busy)
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(phaseFill(phase))
+        )
+        .animation(.easeInOut(duration: 0.25), value: phase)
+    }
+
+    @ViewBuilder
+    private func rowIcon(_ phase: DoctorRowPhase, _ check: DoctorCheck) -> some View {
+        switch phase {
+        case .pending:
+            Image(systemName: "circle")
+                .foregroundStyle(.tertiary)
+        case .checked:
+            Image(systemName: "smallcircle.filled.circle")
+                .foregroundStyle(.secondary)
+        case .checking, .fixing:
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .foregroundStyle(Color.brand)
+                .symbolEffect(.pulse, options: .repeating)
+        case .waiting:
+            Image(systemName: "hourglass")
+                .foregroundStyle(Color.warn)
+                .symbolEffect(.pulse, options: .repeating)
+        case .settled:
+            Image(systemName: check.state.icon)
+                .foregroundStyle(stateTint(check.state))
+        }
+    }
+
+    private func phaseFill(_ phase: DoctorRowPhase) -> Color {
+        switch phase {
+        case .pending, .checked, .settled: return .clear
+        case .checking, .fixing: return Color.brand.opacity(0.1)
+        case .waiting: return Color.warn.opacity(0.12)
+        }
+    }
+
+    private func phaseTint(_ phase: DoctorRowPhase) -> Color {
+        switch phase {
+        case .pending, .checked, .settled: return .secondary
+        case .checking, .fixing: return .brand
+        case .waiting: return .warn
+        }
+    }
+
+    private func checkTitle(_ id: String) -> String? {
+        rows.first { $0.id == id }?.title
+    }
+
     private var summary: String {
-        if setup.doctorChecks.isEmpty { return setup.doctorRunning ? "Checking…" : "Not run yet" }
+        if setup.doctorChecks.isEmpty { return "Not run yet" }
         let fail = setup.doctorChecks.filter { $0.state == .fail }.count
         let warn = setup.doctorChecks.filter { $0.state == .warn }.count
         return "\(fail) failing, \(warn) warning, \(setup.doctorChecks.count - fail - warn) passing"
     }
 
-    private func tint(_ state: DoctorState) -> Color {
+    private func stateTint(_ state: DoctorState) -> Color {
         switch state {
         case .pass: return .ok
         case .warn: return .warn

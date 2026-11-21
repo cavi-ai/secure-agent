@@ -76,6 +76,58 @@ final class ConfigDocumentTests: XCTestCase {
         XCTAssertEqual(out, "# cfg\nadvisor:\n  enabled: true\n# proxy\n# second line\nproxy_enabled: false\n")
     }
 
+    func testAnalysisAddressAndModelChoiceAreNotStuckOnTheFirstServer() {
+        XCTAssertEqual(AdvisorPreferences.normalizedLoopback("127.0.0.1:11434"), "http://127.0.0.1:11434")
+        XCTAssertEqual(AdvisorPreferences.normalizedLoopback("http://127.0.0.1:8080/"), "http://127.0.0.1:8080")
+        XCTAssertEqual(AdvisorPreferences.normalizedLoopback("http://localhost:1234"), "http://localhost:1234")
+        XCTAssertEqual(AdvisorPreferences.displayAddress("http://127.0.0.1:11434"), "127.0.0.1:11434")
+        XCTAssertNil(AdvisorPreferences.normalizedLoopback("http://example.com:11434"))
+        XCTAssertNil(AdvisorPreferences.normalizedLoopback("http://127.0.0.1:11434/v1"))
+        XCTAssertNil(AdvisorPreferences.normalizedLoopback("http://user:pass@127.0.0.1:11434"))
+
+        let models = ["embeddinggemma:latest", "qwen3:8b", "nomic-embed-text"]
+        XCTAssertFalse(AdvisorModelList.isChat("embeddinggemma:latest"))
+        XCTAssertEqual(AdvisorModelList.preferred(in: models, keeping: ""), "qwen3:8b")
+        XCTAssertEqual(AdvisorModelList.preferred(in: models, keeping: "embeddinggemma:latest"), "embeddinggemma:latest")
+        XCTAssertEqual(AdvisorModelList.ordered(models).chat, ["qwen3:8b"])
+        XCTAssertEqual(AdvisorModelList.ordered(models).other, ["embeddinggemma:latest", "nomic-embed-text"])
+    }
+
+    func testAutomaticAnalysisStatusNamesWhatItIsDoing() {
+        let off = AnalysisStanding.report(configured: false, mode: nil, endpoint: nil, model: nil, health: nil, reported: false, unapplied: false)
+        XCTAssertEqual(off.kind, .off)
+        XCTAssertEqual(off.headline, "Off")
+
+        let on = AnalysisStanding.report(
+            configured: true, mode: "existing", endpoint: "http://127.0.0.1:11434", model: "qwen3:8b",
+            health: .init(enabled: true, queueDepth: 2, model: "qwen3:8b", state: "idle"),
+            reported: true, unapplied: false)
+        XCTAssertEqual(on.headline, "On")
+        XCTAssertEqual(on.detail, "qwen3:8b · 2 waiting")
+
+        let paused = AnalysisStanding.report(
+            configured: true, mode: "existing", endpoint: "http://127.0.0.1:11434", model: "qwen3:8b",
+            health: .init(enabled: true, circuitOpen: true, lastError: "context deadline exceeded", state: "paused"),
+            reported: true, unapplied: false)
+        XCTAssertEqual(paused.kind, .paused)
+        XCTAssertEqual(paused.headline, "Paused")
+        XCTAssertEqual(paused.detail, "context deadline exceeded")
+
+        let writing = AnalysisStanding.report(
+            configured: true, mode: "managed", endpoint: nil, model: "Qwen3",
+            health: .init(enabled: true, model: "Qwen3", state: "answering"),
+            reported: true, unapplied: true)
+        XCTAssertEqual(writing.headline, "Writing an analysis")
+        XCTAssertTrue(writing.detail.hasSuffix("The choices above are not applied yet."))
+
+        let silent = AnalysisStanding.report(
+            configured: true, mode: "existing", endpoint: "http://127.0.0.1:11434", model: "qwen3:8b",
+            health: nil, reported: false, unapplied: false)
+        XCTAssertEqual(silent.kind, .unreported)
+        XCTAssertFalse(silent.headline.localizedCaseInsensitiveContains("unknown"))
+        XCTAssertTrue(silent.detail.contains("127.0.0.1:11434"))
+    }
+
     func testAdvisorModelFieldsSwapManagedForExisting() throws {
         let yaml = "advisor:\n  enabled: true\n  managed: true\n  managed_model: \"m\" # old\n  timeout_ms: 5000\nfirewall:\n  mode: monitor\n"
         let out = try ConfigDocument(yaml)
