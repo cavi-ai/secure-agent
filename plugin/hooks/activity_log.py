@@ -11,45 +11,58 @@ import re
 import sys
 
 
-def app_running() -> bool:
-    """The desktop app holds an exclusive lease for its entire lifetime.
-    A leftover lock file never enables hooks. Headless installations without
-    a desktop lease follow their local daemon's lifetime instead."""
+def app_running(socket_connected: bool = False) -> bool:
+    """Check desktop and standalone leases, then legacy socket compatibility."""
     try:
         import fcntl
+        import stat
     except ImportError:
         return False
-    import stat
-    path = os.path.join(os.path.expanduser("~"), ".config", "secure-agent", "menubar.lock")
-    descriptor = -1
-    try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
-            return False
+
+    def lease(path, owner_only=False):
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return True
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        return False
-    except FileNotFoundError:
-        # A headless daemon has no desktop instance lease. Connecting to its
-        # existing local socket does not start it or request any approval.
-        import socket
-        sock = os.environ.get("SECURE_AGENT_SOCK") or os.path.join(os.path.dirname(path), "daemon.sock")
-        try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-                connection.settimeout(0.1)
-                connection.connect(sock)
-            return True
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            return "missing"
         except OSError:
-            return False
+            return "invalid"
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or (owner_only and info.st_mode & 0o077):
+                return "invalid"
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return "held"
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            return "free"
+        except OSError:
+            return "invalid"
+        finally:
+            os.close(descriptor)
+
+    directory = os.path.join(os.path.expanduser("~"), ".config", "secure-agent")
+    desktop = lease(os.path.join(directory, "menubar.lock"))
+    if desktop == "held":
+        return True
+    if desktop == "invalid":
+        return False
+    sock = os.environ.get("SECURE_AGENT_SOCK") or os.path.join(directory, "daemon.sock")
+    headless = lease(sock + ".headless.lock", owner_only=True)
+    if headless == "held":
+        return True
+    if desktop != "missing" or headless != "missing":
+        return False
+    if socket_connected:
+        return True
+    import socket
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(0.1)
+            connection.connect(sock)
+        return True
     except OSError:
         return False
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
 
 # The one redaction rule set for every hook log; daemon/internal/redact holds
 # the daemon's copy and daemon/internal/redact/testdata/cases.json is the

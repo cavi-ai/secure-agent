@@ -647,7 +647,7 @@ def _shell_check_query(payload: dict):
 
         def recv_into(self, *args, **kwargs):
             while True:
-                if hook_inactive():
+                if hook_inactive(socket_connected=True):
                     raise InterruptedError("hook owner stopped")
                 left = deadline - time.monotonic()
                 if left <= 0:
@@ -823,7 +823,7 @@ def _guard_query(agent, tool, path, rule_id, deadline_s, workspace="", probe_id=
         chunks = []
         deadline = time.monotonic() + deadline_s
         while True:
-            if hook_inactive():
+            if hook_inactive(socket_connected=True):
                 return None
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -866,13 +866,14 @@ def claude_auto_mode() -> bool:
     return runtime() == "claude" and _PAYLOAD.get("permission_mode") == "auto"
 
 
-def hook_inactive() -> bool:
-    return not app_running()
+def hook_inactive(socket_connected: bool = False) -> bool:
+    return not app_running(socket_connected=socket_connected)
 
 
 def quiet_exit() -> None:
-    # Claude and Cursor retain native permission checks; adapters need an allow.
-    emit({"permission": "allow"} if runtime() in ("codex", "openclaw", "hermes", "opencode", "antigravity") else {})
+    event = str(_PAYLOAD.get("hook_event_name") or _PAYLOAD.get("event") or "")
+    native_cursor_pre = runtime() == "cursor" and event not in ("PostToolUse", "postToolUse")
+    emit({"permission": "allow"} if native_cursor_pre or runtime() in ("codex", "openclaw", "hermes", "opencode", "antigravity") else {})
     sys.exit(0)
 
 
@@ -2182,8 +2183,6 @@ def evaluate_file_write(path: str) -> Verdict:
 
 def main() -> int:
     global _PAYLOAD
-    if hook_inactive():
-        quiet_exit()
     try:
         raw = sys.stdin.read()
         data = json.loads(raw) if raw.strip() else {}
@@ -2192,6 +2191,8 @@ def main() -> int:
                 (data.get("tool_input") is not None and not isinstance(data.get("tool_input"), dict))):
             raise ValueError("invalid shell hook payload")
     except Exception:
+        if hook_inactive():
+            quiet_exit()
         if os.environ.get("SECURE_AGENT_SHELL_REVIEW") == "block":
             deny("shell-review:invalid_input", "Blocked: the shell check received invalid input.",
                  "Secure Agent could not validate the hook payload. Ask the operator to check the harness hook setup.", "", "")

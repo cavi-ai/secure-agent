@@ -11,6 +11,10 @@ on:
         description: Build, validate and publish an existing draft tag (vX.Y.Z); leave blank for source checks
         required: false
         type: string
+      expected_sha:
+        description: Full commit SHA expected for the draft tag
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -33,6 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Resolve the release source
@@ -41,14 +46,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INPUT_TAG: ${{ inputs.tag }}
           EVENT_TAG: ${{ github.event.release.tag_name }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
           set -euo pipefail
           tag="${INPUT_TAG:-$EVENT_TAG}"
-          sha="$GITHUB_SHA"
-          if [[ -n "$tag" ]]; then
-            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release tag' >&2; exit 1; }
-            sha="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
-          fi
+          sha="$(bash packaging/lib/release_source.sh)"
           if [[ -n "$INPUT_TAG" ]]; then
             [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'Run tagged releases from main' >&2; exit 1; }
             git merge-base --is-ancestor "$sha" origin/main
@@ -78,6 +80,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
           path: release-tools
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,6 +104,11 @@ jobs:
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
         run: bash release-tools/packaging/ci_release.sh build "$GITHUB_WORKSPACE/source" "$TAG"
+      - name: Check built app source and version
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          EXPECTED_SHA: ${{ needs.prepare.outputs.sha }}
+        run: python3 release-tools/packaging/lib/release_bundle.py "source/dist/Secure Agent.app/Contents/Info.plist" "$TAG" "$EXPECTED_SHA"
       - name: Upload validated distribution artifacts to the draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -166,6 +174,8 @@ jobs:
         run: bash packaging/test/test_install_status.sh
       - name: replaced bundle unit tests
         run: bash packaging/test/test_replaced_bundle.sh
+      - name: release provenance tests
+        run: python3 -m unittest packaging/test/test_release_provenance.py
       - name: live acceptance unit tests
         run: python3 packaging/test/test_live_acceptance.py
 
@@ -180,11 +190,16 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
       - name: verify the attached DMG
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
           REQUIRE_SIGNED_DMG: ${{ inputs.tag != '' }}
+          EXPECTED_SHA: ${{ needs.prepare.outputs.sha }}
         run: |
           set -euo pipefail
           dir="$(mktemp -d)"
@@ -205,8 +220,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           xcrun stapler validate "$app"
           spctl -a -t exec -vv "$app"
-          version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")"
-          [ "$version" = "${TAG#v}" ] || { echo "app version ${version}, tag ${TAG}" >&2; exit 1; }
+          python3 "$GITHUB_WORKSPACE/packaging/lib/release_bundle.py" "$app/Contents/Info.plist" "$TAG" "$EXPECTED_SHA"
 
   promote:
     name: Promote the validated pre-release
@@ -221,11 +235,20 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
       - name: mark as the latest release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.prepare.outputs.tag }}
-        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+          INPUT_TAG: ${{ needs.prepare.outputs.tag }}
+          EXPECTED_SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          set -euo pipefail
+          bash packaging/lib/release_source.sh > /dev/null
+          gh release edit "$INPUT_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
 
   # A release edited with the workflow token starts no other workflow, so the
   # documentation for the promoted release is published from here; its own

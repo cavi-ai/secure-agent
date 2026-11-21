@@ -1,7 +1,7 @@
 {
   "name": "secure-agent",
   "description": "Connect Claude Code activity and configured guard hooks to Secure Agent.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "Sasan Sotoodehfar",
     "url": "https://cavi-ai.xyz",

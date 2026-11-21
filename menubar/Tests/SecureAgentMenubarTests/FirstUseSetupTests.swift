@@ -6,6 +6,58 @@ import XCTest
 
 final class FirstUseSetupTests: XCTestCase {
     @MainActor
+    func testClaudeMarketplaceUserPluginAvoidsDuplicateRegistration() throws {
+        let fm = FileManager.default
+        let home = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: home) }
+        let claude = home.appendingPathComponent(".claude")
+        let cache = claude.appendingPathComponent("plugins/cache/cavi-ai/secure-agent/1.0")
+        func write(_ object: Any, _ path: URL) throws {
+            try fm.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: object, options: [.fragmentsAllowed]).write(to: path)
+        }
+        let settings = claude.appendingPathComponent("settings.json")
+        try write(["enabledPlugins": ["secure-agent@cavi-ai": true]], settings)
+        let original = try Data(contentsOf: settings)
+        try write(["version": 2, "plugins": ["secure-agent@cavi-ai": [["scope": "user", "installPath": cache.path]]]], claude.appendingPathComponent("plugins/installed_plugins.json"))
+        try write(["name": "secure-agent"], cache.appendingPathComponent(".claude-plugin/plugin.json"))
+        let group: [String: Any] = ["matcher": "*", "hooks": [["type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/secret_guard.py\""]]]
+        try write(["hooks": ["PreToolUse": [group], "PostToolUse": [group]]], cache.appendingPathComponent("hooks/hooks.json"))
+        for name in ["secret_guard.py", "activity_log.py", "injection_scan.py", "guard-rules.json"] { try write("asset", cache.appendingPathComponent("hooks/" + name)) }
+        XCTAssertTrue(HookRegistry.selectedHooksInstalled(harness: "claude", home: home.path))
+        func match(_ matcher: String) -> [String: Any] { ["matcher": matcher, "hooks": group["hooks"]!] }
+        try write(["hooks": ["PreToolUse": [match("Bash"), match("Read|Grep|Glob|Write|Edit|MultiEdit|NotebookEdit")], "PostToolUse": [match(".*")]]], cache.appendingPathComponent("hooks/hooks.json"))
+        XCTAssertTrue(HookRegistry.selectedHooksInstalled(harness: "claude", home: home.path))
+        try write(["hooks": ["PreToolUse": [group], "PostToolUse": [group]]], cache.appendingPathComponent("hooks/hooks.json"))
+        try HookRegistry.installSelectedHooks(harness: "claude", bundledDir: "/unused", home: home.path)
+        XCTAssertEqual(try Data(contentsOf: settings), original)
+        XCTAssertFalse(fm.fileExists(atPath: claude.appendingPathComponent("hooks").path))
+        for events in [["PreToolUse"], ["PostToolUse"], ["PreToolUse", "PostToolUse"]] {
+            var native: [String: Any] = [:]
+            for event in events { native[event] = [["hooks": [["command": HookRegistry.selectedHookCommand(harness: "claude", home: home.path)]]]] }
+            try write(["enabledPlugins": ["secure-agent@cavi-ai": true], "hooks": native], settings)
+            XCTAssertTrue(HookRegistry.Claude.nativeRoutePresent(home: home.path))
+            XCTAssertThrowsError(try HookRegistry.installSelectedHooks(harness: "claude", bundledDir: "/unused", home: home.path))
+        }
+        try original.write(to: settings)
+        let registry = claude.appendingPathComponent("plugins/installed_plugins.json")
+        try write(["version": 2, "plugins": ["secure-agent@cavi-ai": [["scope": "user", "installPath": home.path]]]], registry)
+        XCTAssertFalse(HookRegistry.selectedHooksInstalled(harness: "claude", home: home.path))
+        try write(["version": 1], registry)
+        XCTAssertFalse(HookRegistry.selectedHooksInstalled(harness: "claude", home: home.path))
+        try write(["version": 2, "plugins": ["secure-agent@cavi-ai": [["scope": "user", "installPath": cache.path]]]], registry)
+        try write(["enabledPlugins": ["secure-agent@cavi-ai": false]], settings)
+        XCTAssertFalse(HookRegistry.selectedHooksInstalled(harness: "claude", home: home.path))
+        try write(["enabledPlugins": ["secure-agent@cavi-ai": true], "disableAllHooks": true], settings)
+        XCTAssertFalse(HookRegistry.selectedHooksInstalled(harness: "claude", home: home.path))
+        try original.write(to: settings)
+        try fm.removeItem(at: cache.appendingPathComponent("hooks/secret_guard.py"))
+        XCTAssertFalse(HookRegistry.selectedHooksInstalled(harness: "claude", home: home.path))
+        XCTAssertThrowsError(try HookRegistry.installSelectedHooks(harness: "claude", bundledDir: "/unused", home: home.path))
+        XCTAssertEqual(try Data(contentsOf: settings), original)
+    }
+
+    @MainActor
     func testExplicitHarnessSurvivesAutomaticSuggestionAndReopening() {
         for harness in ["codex", "cursor", "openclaw", "hermes", "opencode", "antigravity"] {
             let flow = FirstUseSetupFlow(selectedHarness: harness)

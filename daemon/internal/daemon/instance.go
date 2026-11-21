@@ -97,3 +97,41 @@ func (l *InstanceLock) Release() {
 		l.f = nil
 	}
 }
+
+// LockHeadless advertises a standalone daemon only while it owns the lease.
+func LockHeadless(socketPath string) (*InstanceLock, error) {
+	if socketPath == "" {
+		return nil, errors.New("socket path cannot be empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		return nil, fmt.Errorf("headless lease dir: %w", err)
+	}
+	path := socketPath + ".headless.lock"
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("headless lease: %w", err)
+	}
+	f := os.NewFile(uintptr(fd), path)
+	var info unix.Stat_t
+	if err = unix.Fstat(fd, &info); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("headless lease stat: %w", err)
+	}
+	if info.Mode&unix.S_IFMT != unix.S_IFREG || info.Uid != uint32(os.Getuid()) || info.Mode&0o077 != 0 {
+		f.Close()
+		return nil, fmt.Errorf("headless lease must be an owner-only regular file")
+	}
+	deadline := time.Now().Add(50 * time.Millisecond)
+	for {
+		err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) || !time.Now().Before(deadline) {
+			f.Close()
+			return nil, fmt.Errorf("headless lease: %w", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return &InstanceLock{f: f}, nil
+}

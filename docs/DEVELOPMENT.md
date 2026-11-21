@@ -47,12 +47,17 @@ For CI distribution, create a draft release for an existing `vX.Y.Z` tag on
 | `MACOS_NOTARY_KEY_ID` | API key ID |
 | `MACOS_NOTARY_ISSUER_ID` | API issuer ID |
 
-Run **Release validation** from `main` with the draft's tag. CI checks the
+Run **Release validation** from `main` with the draft's tag and its expected
+full commit SHA (`git rev-parse HEAD` for the intended release commit). CI
+rejects the run if the tag resolves to a different commit. CI checks the
 credentials, builds the exact tagged commit, signs and notarizes the app and
 DMG in a disposable keychain, and uploads the DMG and checksums to the draft.
 The release is published as stable only after source and artifact checks pass.
 Missing credentials or a failed gate leave it unpublished. Existing assets are
-never overwritten. Leaving the tag input blank runs source checks only.
+never overwritten. Leave both inputs blank to run source checks only. The app
+bundle must carry the matching source revision and version, including when
+validating an attached pre-release DMG. Builds from a dirty tree or an archive
+without Git metadata have an empty source revision and cannot pass this gate.
 See [GitHub's certificate setup](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications)
 and [Apple's notarization authentication](https://developer.apple.com/documentation/technotes/tn3147-migrating-to-the-latest-notarization-tool).
 

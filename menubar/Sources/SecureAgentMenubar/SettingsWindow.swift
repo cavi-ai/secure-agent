@@ -716,7 +716,7 @@ struct SettingsView: View {
         switch status {
         case .installed: return .ok
         case .missing: return .secondary
-        case .unavailable, .otherFile: return .warn
+        case .unavailable, .otherFile, .otherLink: return .warn
         }
     }
 
