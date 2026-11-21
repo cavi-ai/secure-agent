@@ -717,7 +717,7 @@ func TestTranscriptSessionJoinsProcessTreeSession(t *testing.T) {
 	}
 
 	// Then the transcript names the conversation for the same workspace.
-	r.NoteTranscriptSession("conv-abc", "claude", "/repo", time.Now())
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "conv-abc", Harness: "claude", Workspace: "/repo", TS: time.Now()})
 
 	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 1 {
@@ -741,7 +741,7 @@ func TestProcessTreeAdoptsPriorTranscriptSession(t *testing.T) {
 	r, st := testResolver(t, fakeProcs{
 		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: "/repo", StartTime: time.Now()},
 	})
-	r.NoteTranscriptSession("conv-xyz", "claude", "/repo", time.Now())
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "conv-xyz", Harness: "claude", Workspace: "/repo", TS: time.Now()})
 	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now()}
 	id := r.Resolve(&e)
 	if id != "conv-xyz" {
@@ -760,8 +760,8 @@ func TestSecondTranscriptIdIsSiblingNotRekey(t *testing.T) {
 		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: "/repo", StartTime: time.Now()},
 	})
 	now := time.Now()
-	r.NoteTranscriptSession("conv-1", "claude", "/repo", now)
-	r.NoteTranscriptSession("conv-2", "claude", "/repo", now.Add(time.Minute))
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "conv-1", Harness: "claude", Workspace: "/repo", TS: now})
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "conv-2", Harness: "claude", Workspace: "/repo", TS: now.Add(time.Minute)})
 
 	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 2 {
@@ -785,8 +785,8 @@ func TestTranscriptJoinThenSiblingStaysPut(t *testing.T) {
 	if procID == "" {
 		t.Fatal("process-tree session not created")
 	}
-	r.NoteTranscriptSession("conv-1", "claude", "/repo", time.Now())
-	r.NoteTranscriptSession("conv-2", "claude", "/repo", time.Now().Add(time.Minute))
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "conv-1", Harness: "claude", Workspace: "/repo", TS: time.Now()})
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "conv-2", Harness: "claude", Workspace: "/repo", TS: time.Now().Add(time.Minute)})
 
 	sessions := testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))
 	if len(sessions) != 2 {
@@ -952,7 +952,7 @@ func TestTraceEventCreatesTranscriptSession(t *testing.T) {
 	if s, ok := testutil.Lookup[model.Session](t)(st.GetSession("conv-1")); !ok || s.Confidence != model.ConfTranscript {
 		t.Fatalf("session = %+v, want confidence transcript", s)
 	}
-	r.NoteTranscriptSession("conv-2", "openclaw", "openclaw:ember", time.Now())
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "conv-2", Harness: "openclaw", Workspace: "openclaw:ember", TS: time.Now()})
 	e2 := event.Event{Kind: event.KindTurn, SessionID: "conv-2", TS: time.Now()}
 	r.Resolve(&e2)
 	if s, _ := testutil.Lookup[model.Session](t)(st.GetSession("conv-2")); s.Confidence != model.ConfTranscript || s.Harness != "openclaw" {
@@ -970,7 +970,7 @@ func TestTraceEventCreatesTranscriptSession(t *testing.T) {
 // The harness's own state ending a conversation ends its session.
 func TestEndTranscriptSession(t *testing.T) {
 	r, st := testResolver(t, fakeProcs{})
-	r.NoteTranscriptSession("conv-1", "openclaw", "openclaw:ember", time.Now().Add(-time.Minute))
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "conv-1", Harness: "openclaw", Workspace: "openclaw:ember", TS: time.Now().Add(-time.Minute)})
 	r.EndTranscriptSession("conv-1", time.Now())
 	if s, _ := testutil.Lookup[model.Session](t)(st.GetSession("conv-1")); s.Status != model.SessionEnded {
 		t.Fatalf("status = %q, want ended", s.Status)
@@ -1164,7 +1164,7 @@ func TestJoinTranscriptPIDRekeysProcessTreeSession(t *testing.T) {
 	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now(), Path: "/teams/x/a"}
 	procID := r.Resolve(&e)
 	st.PutEvent(e)
-	r.NoteTranscriptSession("rollout-a", "codex", "/teams/x", time.Now())
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "rollout-a", Harness: "codex", Workspace: "/teams/x", TS: time.Now()})
 	if n := len(testutil.Read[[]model.Session](t)(st.ListSessions(store.SessionFilter{}))); n != 2 {
 		t.Fatalf("sessions before join = %d, want 2 (workspaces differ)", n)
 	}
@@ -1192,7 +1192,7 @@ func TestJoinTranscriptPIDRekeysProcessTreeSession(t *testing.T) {
 // A repeat join for the same session and pid changes nothing and emits nothing.
 func TestJoinTranscriptPIDRepeatIsNoop(t *testing.T) {
 	r, st := testResolver(t, codexRolloutTree())
-	r.NoteTranscriptSession("rollout-a", "codex", "/teams/x", time.Now())
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "rollout-a", Harness: "codex", Workspace: "/teams/x", TS: time.Now()})
 	r.JoinTranscriptPID("rollout-a", 100)
 	before, _ := testutil.Lookup[model.Session](t)(st.GetSession("rollout-a"))
 	emitted := 0
@@ -1217,10 +1217,10 @@ func TestJoinTranscriptPIDNewerRolloutTakesRoot(t *testing.T) {
 	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now(), Path: "/teams/x/a"}
 	r.Resolve(&e)
 	st.PutEvent(e)
-	r.NoteTranscriptSession("rollout-a", "codex", "/teams/x", time.Now().Add(-10*time.Minute))
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "rollout-a", Harness: "codex", Workspace: "/teams/x", TS: time.Now().Add(-10 * time.Minute)})
 	r.JoinTranscriptPID("rollout-a", 100)
 
-	r.NoteTranscriptSession("rollout-b", "codex", "/teams/x", time.Now())
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "rollout-b", Harness: "codex", Workspace: "/teams/x", TS: time.Now()})
 	r.JoinTranscriptPID("rollout-b", 100)
 	r.JoinTranscriptPID("rollout-a", 100)
 
@@ -1251,7 +1251,7 @@ func TestJoinTranscriptPIDIgnoresUntaggedPID(t *testing.T) {
 	r, st := testResolver(t, fakeProcs{
 		300: {PID: 300, PPID: 1, Exe: "/usr/bin/vim", CWD: "/teams/x", StartTime: time.Now().Add(-time.Hour)},
 	})
-	r.NoteTranscriptSession("rollout-a", "codex", "/teams/x", time.Now())
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "rollout-a", Harness: "codex", Workspace: "/teams/x", TS: time.Now()})
 	r.JoinTranscriptPID("rollout-a", 300)
 	r.JoinTranscriptPID("rollout-a", 999)
 	if s, _ := testutil.Lookup[model.Session](t)(st.GetSession("rollout-a")); s.RootPID != 0 {
@@ -1427,7 +1427,7 @@ func TestSameCwdTranscriptJoinsTheRootHoldingIt(t *testing.T) {
 		t.Fatalf("a=%q b=%q, want one session per root", a, b)
 	}
 
-	r.NoteTranscriptSession("rollout-a", "codex", home, time.Now())
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "rollout-a", Harness: "codex", Workspace: home, TS: time.Now()})
 	for _, id := range []string{a, b} {
 		if _, ok := testutil.Lookup[model.Session](t)(st.GetSession(id)); !ok {
 			t.Fatalf("process-tree row %q merged by scope alone", id)
@@ -1435,14 +1435,14 @@ func TestSameCwdTranscriptJoinsTheRootHoldingIt(t *testing.T) {
 	}
 
 	r.JoinTranscriptPID("rollout-a", 300)
-	r.NoteTranscriptSession("rollout-a", "codex", home, time.Now())
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "rollout-a", Harness: "codex", Workspace: home, TS: time.Now()})
 	wantRoot(t, st, "rollout-a", 300, orch)
 	wantRoot(t, st, b, 400, orch)
 	if _, ok := testutil.Lookup[model.Session](t)(st.GetSession(a)); ok {
 		t.Fatalf("row %q not merged into rollout-a", a)
 	}
 
-	r.NoteTranscriptSession("rollout-b", "codex", home, time.Now())
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "rollout-b", Harness: "codex", Workspace: home, TS: time.Now()})
 	r.JoinTranscriptPID("rollout-b", 400)
 	wantRoot(t, st, "rollout-a", 300, orch)
 	wantRoot(t, st, "rollout-b", 400, orch)
@@ -1475,7 +1475,7 @@ func TestSameCwdTranscriptJoinsTheRootHoldingIt(t *testing.T) {
 func TestNoteTranscriptSightingCarriesOrigin(t *testing.T) {
 	r, st := testResolver(t, fakeProcs{})
 	r.NoteTranscriptSighting(TranscriptSighting{ID: "c1", Harness: "codex", Workspace: "/nonexistent/w", Origin: "x (openclaw)", TS: time.Now()})
-	r.NoteTranscriptSession("c1", "codex", "/nonexistent/w", time.Now())
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "c1", Harness: "codex", Workspace: "/nonexistent/w", TS: time.Now()})
 	if s, ok := testutil.Lookup[model.Session](t)(st.GetSession("c1")); !ok || s.Origin != "x (openclaw)" {
 		t.Fatalf("session = %+v (ok=%v)", s, ok)
 	}

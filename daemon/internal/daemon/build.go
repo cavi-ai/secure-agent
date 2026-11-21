@@ -1183,7 +1183,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	oc.OnCheckpointWrite = st.NoteOpencodeCheckpointWrite
 	oc.OnProduce = func() { supReg.MarkProduced("opencode") }
 	oc.OnPoll = func(src string, wm int64) { supReg.MarkPolled("opencode", src, wm) }
-	oc.OnSessionSeen = resolver.NoteTranscriptSession
+	oc.OnSessionSeen = transcriptSighting(resolver)
 	run("opencode", func(c context.Context) error {
 		return oc.Run(c)
 	})
@@ -1252,22 +1252,24 @@ func newHermesCollector(cfg config.Config, b *bus.Bus, supReg *supervise.Registr
 	h.StatePath = filepath.Join(filepath.Dir(cfg.DBPath), "hermes-watermark.json")
 	h.OnProduce = func() { supReg.MarkProduced("hermes") }
 	h.OnPoll = func(src string, wm int64) { supReg.MarkPolled("hermes", src, wm) }
+	see := transcriptSighting(resolver)
 	h.OnSessionSeen = func(s collect.HermesSighting) {
-		resolver.NoteTranscriptSighting(session.TranscriptSighting{
+		see(collect.TraceSession{
 			ID: s.ID, Harness: "hermes", Workspace: s.Workspace,
-			Repo: s.Repo, Branch: s.Branch, ParentID: s.ParentID, TS: s.At,
+			Repo: s.Repo, Branch: s.Branch, ParentID: s.ParentID, At: s.At,
 		})
 	}
 	h.OnSessionEnded = resolver.EndTranscriptSession
 	return h
 }
 
-// transcriptSighting hands each transcript sighting, with its harness and
-// origin, to the session resolver.
+// transcriptSighting hands each transcript sighting, with its harness,
+// origin, repo, branch and parent, to the session resolver.
 func transcriptSighting(resolver *session.Resolver) func(collect.TraceSession) {
 	return func(s collect.TraceSession) {
 		resolver.NoteTranscriptSighting(session.TranscriptSighting{
-			ID: s.ID, Harness: s.Harness, Workspace: s.Workspace, Origin: s.Origin, TS: s.At,
+			ID: s.ID, Harness: s.Harness, Workspace: s.Workspace,
+			Repo: s.Repo, Branch: s.Branch, ParentID: s.ParentID, Origin: s.Origin, TS: s.At,
 		})
 	}
 }
