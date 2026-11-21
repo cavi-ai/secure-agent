@@ -592,22 +592,12 @@ final class TelemetryDoctorTests: XCTestCase {
         XCTAssertEqual(waiting.headline { _ in nil }, DoctorFix.openFullDiskAccess.waitingTitle)
     }
 
-    func testUnreachableDaemonKeepsThePreviousDaemonRows() {
-        let previous = [
-            DoctorCheck(id: "launchd", title: "launchd job", state: .pass, cause: "running", fix: nil),
-            DoctorCheck(id: "daemon.bus", title: "Event bus", state: .fail, cause: "dropped", fix: .markLossSeen),
-        ]
-        let unanswered = [
-            DoctorCheck(id: "launchd", title: "launchd job", state: .pass, cause: "running", fix: nil),
-            DoctorCheck(id: "daemon", title: "Daemon", state: .fail, cause: "the daemon did not answer /doctor", fix: .restartDaemon),
-        ]
-        let kept = TelemetryDoctor.preservingDaemonRows(previous: previous, next: unanswered)
-        XCTAssertNil(kept.first { $0.id == "daemon" })
-        XCTAssertEqual(kept.first { $0.id == "daemon.bus" }?.cause, "dropped")
-
-        let answered = [DoctorCheck(id: "daemon.bus", title: "Event bus", state: .pass, cause: "quiet", fix: nil)]
-        XCTAssertEqual(TelemetryDoctor.preservingDaemonRows(previous: previous, next: answered).map(\.id), ["daemon.bus"])
+    func testUnreachableDaemonReportsRestart() {
+        let previous = TelemetryDoctor.evaluate(facts { $0.daemonChecks = [DaemonDoctorCheckModel(id: "bus", title: "Event bus", state: "fail")] })
+        XCTAssertNotNil(previous.first { $0.id == "daemon.bus" })
+        let next = TelemetryDoctor.evaluate(facts { $0.daemonChecks = nil })
+        assertCheck(next, "daemon", .fail, .restartDaemon)
+        XCTAssertNil(next.first { $0.id == "daemon.bus" })
         XCTAssertEqual(TelemetryDoctor.displayRows([]).map(\.id), TelemetryDoctor.placeholderSections.map(\.id))
-        XCTAssertEqual(TelemetryDoctor.displayRows(previous).map(\.id), ["launchd", "daemon.bus"])
     }
 }

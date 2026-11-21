@@ -75,26 +75,26 @@ struct HarnessHookSetupSection: View {
     private func trailing(_ harness: String, title: String, standing: HookSetupStanding, active: Bool) -> some View {
         if active {
             EmptyView()
-        } else if standing == .ready {
+        } else if standing != .notInstalled {
             Button("Update") { onSetup(harness) }
                 .controlSize(.small)
                 .disabled(setup.hookSetupRunning || setup.agentSetupRunning != nil)
                 .accessibilityLabel("Update \(title) hooks")
                 .accessibilityIdentifier("settings.hooks.\(harness)")
         } else {
-            Button(standing == .notInstalled ? "Set Up" : "Finish setup") { onSetup(harness) }
+            Button("Set Up") { onSetup(harness) }
                 .buttonStyle(.borderedProminent)
-                .tint(standing == .notInstalled ? Color.brand : Color.warn)
+                .tint(Color.brand)
                 .controlSize(.small)
                 .disabled(setup.hookSetupRunning || setup.agentSetupRunning != nil)
-                .accessibilityLabel(standing == .notInstalled ? "Set up \(title) hooks" : "Finish \(title) setup")
+                .accessibilityLabel("Set up \(title) hooks")
                 .accessibilityIdentifier("settings.hooks.\(harness)")
         }
     }
 
     private func tint(_ standing: HookSetupStanding) -> Color {
         switch standing {
-        case .notInstalled: return .secondary
+        case .notInstalled, .configured: return .secondary
         case .ready: return .ok
         case .needsActivation, .pluginInstalled: return .warn
         }

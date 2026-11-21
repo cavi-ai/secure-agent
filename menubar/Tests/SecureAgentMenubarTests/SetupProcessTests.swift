@@ -26,6 +26,19 @@ final class SetupProcessTests: XCTestCase {
         }
     }
 
+    func testAdvisorSavedChoiceUpdatesImmediately() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        let setup = SetupManager(esService: FakeESService(), defaults: defaults, configurationHome: root.path,
+                                 plistPresent: { false }, openPane: { _ in }, deferAutomaticTelemetry: true)
+        setup.setAdvisorConfig(mode: .existing, endpoint: "https://localhost:444/prefix", model: "chosen")
+        XCTAssertEqual(setup.advisorPersisted.mode, "existing")
+        XCTAssertEqual(setup.advisorPersisted.endpoint, "https://localhost:444/prefix")
+        XCTAssertEqual(setup.advisorPersisted.model, "chosen")
+    }
+
     func testCLIInstallReportsTheLinkInsteadOfStayingSilent() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

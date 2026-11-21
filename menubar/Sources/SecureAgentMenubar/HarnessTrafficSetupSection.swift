@@ -41,7 +41,7 @@ struct HarnessTrafficSetupSection: View {
             if FirstUseSetupState.supportsHook(harness) {
                 let standing = setup.firstUseState.hookSetupStatus(for: harness)
                 Label(standing.headline, systemImage: standing.symbol)
-                    .foregroundStyle(standing == .ready ? Color.ok : standing == .notInstalled ? Color.secondary : Color.warn)
+                    .foregroundStyle(standing == .ready ? Color.ok : (standing == .notInstalled || standing == .configured) ? Color.secondary : Color.warn)
                     .font(.subheadline.weight(.medium))
                 if let guidance = standing.guidance(for: harness) {
                     Text(guidance)

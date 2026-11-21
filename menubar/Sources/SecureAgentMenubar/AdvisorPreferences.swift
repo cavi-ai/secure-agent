@@ -27,27 +27,27 @@ struct AdvisorPreferences: Equatable, Sendable {
         return true
     }
 
-    /// A base URL on this Mac. Accepts `127.0.0.1:11434` as well as a full
-    /// http(s) URL. Nil when it is not a loopback address or it carries a path.
+    /// A loopback base URL, including any server path prefix.
     static func normalizedLoopback(_ raw: String) -> String? {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { return nil }
         if !text.contains("://") { text = "http://" + text }
-        guard isLoopbackEndpoint(text), let url = URLComponents(string: text),
+        guard isLoopbackEndpoint(text), var url = URLComponents(string: text),
               let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else { return nil }
-        if url.path != "" && url.path != "/" { return nil }
-        let shown = host.contains(":") ? "[\(host)]" : host
-        var result = "\(scheme)://\(shown)"
-        if let port = url.port { result += ":\(port)" }
-        return result
+        if let port = url.port, !(1...65535).contains(port) { return nil }
+        url.scheme = scheme
+        url.host = host
+        if url.percentEncodedPath == "/" { url.percentEncodedPath = "" }
+        return url.string
     }
 
-    /// `127.0.0.1:11434` for a saved endpoint, so the address field is editable.
+    /// Keep simple HTTP endpoints compact without losing other URL components.
     static func displayAddress(_ endpoint: String) -> String {
-        guard let url = URLComponents(string: endpoint), let host = url.host else {
-            return endpoint.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "")
-        }
-        let shown = host.contains(":") ? "[\(host)]" : host
+        guard let url = URLComponents(string: endpoint), url.scheme?.lowercased() == "http",
+              url.percentEncodedPath.isEmpty || url.percentEncodedPath == "/",
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
+              let host = url.host else { return endpoint }
+        let shown = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
         if let port = url.port { return "\(shown):\(port)" }
         return shown
     }

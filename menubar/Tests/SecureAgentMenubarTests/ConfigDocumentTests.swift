@@ -82,7 +82,13 @@ final class ConfigDocumentTests: XCTestCase {
         XCTAssertEqual(AdvisorPreferences.normalizedLoopback("http://localhost:1234"), "http://localhost:1234")
         XCTAssertEqual(AdvisorPreferences.displayAddress("http://127.0.0.1:11434"), "127.0.0.1:11434")
         XCTAssertNil(AdvisorPreferences.normalizedLoopback("http://example.com:11434"))
-        XCTAssertNil(AdvisorPreferences.normalizedLoopback("http://127.0.0.1:11434/v1"))
+        XCTAssertEqual(AdvisorPreferences.normalizedLoopback("http://127.0.0.1:11434/v1%20test"), "http://127.0.0.1:11434/v1%20test")
+        for url in ["https://localhost:444/prefix", "http://[::1]:1234/path"] {
+            XCTAssertEqual(AdvisorPreferences.normalizedLoopback(AdvisorPreferences.displayAddress(url)), url)
+        }
+        for url in ["http://localhost:0", "http://localhost:65536", "http://localhost:1234?q=x", "http://localhost:1234#x"] {
+            XCTAssertNil(AdvisorPreferences.normalizedLoopback(url))
+        }
         XCTAssertNil(AdvisorPreferences.normalizedLoopback("http://user:pass@127.0.0.1:11434"))
 
         let models = ["embeddinggemma:latest", "qwen3:8b", "nomic-embed-text"]

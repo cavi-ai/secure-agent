@@ -391,15 +391,6 @@ enum TelemetryDoctor {
         }
     }
 
-    /// A daemon restart makes `/doctor` fail for a moment. Keep the rows from
-    /// the last answered report instead of swapping them for one "did not
-    /// answer" row until the daemon answers again.
-    static func preservingDaemonRows(previous: [DoctorCheck], next: [DoctorCheck]) -> [DoctorCheck] {
-        let previousDaemon = previous.filter { $0.id.hasPrefix("daemon.") }
-        guard next.contains(where: { $0.id == "daemon" }), !previousDaemon.isEmpty else { return next }
-        return next.filter { $0.id != "daemon" } + previousDaemon
-    }
-
     /// Running job, silent spool: longer than this means no Full Disk Access.
     static let grantStaleAfter: TimeInterval = 90
     /// Mostly unparsed spool that has not been written for this long is set aside.

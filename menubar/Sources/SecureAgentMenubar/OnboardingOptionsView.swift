@@ -19,16 +19,22 @@ struct OnboardingOptionsView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             GroupBox("Extras") {
-                HStack {
-                    Button("Open at Login") { run { try setup.enableLoginItem() } }
-                        .disabled(setup.isLoginItemEnabled)
-                    Button(setup.cliInstalling ? "Installing…" : "Install CLI Tool") {
-                        Task { await setup.installCLI() }
+                VStack(alignment: .leading) {
+                    HStack {
+                        Button("Open at Login") { run { try setup.enableLoginItem() } }
+                            .disabled(setup.isLoginItemEnabled)
+                        Button(setup.cliInstalling ? "Installing…" : "Install CLI Tool") {
+                            Task { await setup.installCLI() }
+                        }
+                        .disabled(setup.cliInstalling)
                     }
-                    .disabled(setup.cliInstalling)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+                    if let failure = setup.cliFailure {
+                        Text(failure).font(.caption).foregroundStyle(Color.warn)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 4)
             }
 
             GroupBox("Agent Routing") {

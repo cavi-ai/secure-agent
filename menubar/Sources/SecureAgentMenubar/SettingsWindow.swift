@@ -1226,6 +1226,9 @@ struct SettingsView: View {
         if let server, !server.models.isEmpty {
             let groups = AdvisorModelList.ordered(server.models)
             Picker("Model", selection: $selectedModel) {
+                if !selectedModel.isEmpty && !server.models.contains(selectedModel) {
+                    Text(selectedModel).tag(selectedModel)
+                }
                 ForEach(groups.chat, id: \.self) { Text($0).tag($0) }
                 if !groups.chat.isEmpty, !groups.other.isEmpty {
                     Divider()
@@ -1234,6 +1237,10 @@ struct SettingsView: View {
             }
             .pickerStyle(.menu)
             .accessibilityIdentifier("settings.analysis.model")
+            if !selectedModel.isEmpty && !server.models.contains(selectedModel) {
+                Text("This model is no longer available. Choose another model.")
+                    .font(.caption).foregroundStyle(Color.warn)
+            }
             if !selectedModel.isEmpty, !AdvisorModelList.isChat(selectedModel) {
                 Text("This model does not write. Analysis needs a chat model, not an embedding or speech model.")
                     .font(.caption).foregroundStyle(Color.warn)
@@ -1320,7 +1327,7 @@ struct SettingsView: View {
                 let modelName = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
                 let canEnable = advisorMode == .managed
                     ? !discovery.managedModels.isEmpty
-                    : endpoint != nil && !modelName.isEmpty
+                    : endpoint != nil && !modelName.isEmpty && (selectedServer?.models.isEmpty != false || selectedServer?.models.contains(modelName) == true)
                 Button(setup.advisorEnabled ? "Apply configuration" : "Enable automatic analysis") {
                     switch advisorMode {
                     case .managed:
@@ -1484,7 +1491,7 @@ struct ESFileTelemetryCard: View {
                 if stage != .active {
                     Button("Run Doctor") { Task { await setup.runDoctor() } }
                         .controlSize(.small)
-                        .disabled(setup.doctorRunning)
+                        .disabled(setup.doctorActivity != .idle)
                 }
             }
             if stage == .needsGrant || stage == .needsRegrant {

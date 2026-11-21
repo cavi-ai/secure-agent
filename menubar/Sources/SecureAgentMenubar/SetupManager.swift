@@ -417,6 +417,7 @@ public final class SetupManager: ObservableObject {
             try configStore.update {
                 try AdvisorPreferences.settingModel($0, managed: mode == .managed, endpoint: endpoint, model: model)
             }
+            advisorPersisted = AdvisorPreferences.persistedChoice(configDocument.text)
             advisorEnabled = true
             advisorNote = "Analysis model configured (\(mode.rawValue)) — applied live (daemon hot-reloads config)."
         } catch {
@@ -1325,6 +1326,7 @@ public final class SetupManager: ObservableObject {
 
     /// Runs the Doctor once and publishes its checks.
     public func runDoctor() async {
+        guard doctorActivity == .idle else { return }
         await runDoctor(focus: nil, resetWhenDone: true)
     }
 
@@ -1342,14 +1344,18 @@ public final class SetupManager: ObservableObject {
             await Task.yield()
         }
         refreshESState()
-        let next = TelemetryDoctor.evaluate(await collectTelemetryFacts(focus: focus))
-        doctorChecks = TelemetryDoctor.preservingDaemonRows(previous: doctorChecks, next: next)
+        doctorChecks = TelemetryDoctor.evaluate(await collectTelemetryFacts(focus: focus))
     }
 
     /// Applies one check's fix and re-runs the Doctor. With `waitForUser`, a
     /// fix that needs a System Settings switch polls every 2 s until the check
     /// passes or 5 minutes pass.
     func fixDoctorCheck(_ check: DoctorCheck, waitForUser: Bool) async {
+        guard doctorActivity == .idle else { return }
+        await performDoctorFix(check, waitForUser: waitForUser)
+    }
+
+    private func performDoctorFix(_ check: DoctorCheck, waitForUser: Bool) async {
         guard let fix = check.fix else { return }
         doctorFixing = check.id
         doctorActivity = .fixing(checkID: check.id, fix: fix)
@@ -1374,6 +1380,7 @@ public final class SetupManager: ObservableObject {
     /// Runs every offered fix in check order, each check at most once; later
     /// checks are re-evaluated after each fix.
     public func fixAllDoctorChecks() async {
+        guard doctorActivity == .idle else { return }
         doctorFixBatch = true
         defer {
             doctorFixBatch = false
@@ -1384,7 +1391,7 @@ public final class SetupManager: ObservableObject {
         var tried: Set<String> = []
         while let next = doctorChecks.first(where: { $0.state != .pass && $0.fix != nil && !tried.contains($0.id) }) {
             tried.insert(next.id)
-            await fixDoctorCheck(next, waitForUser: true)
+            await performDoctorFix(next, waitForUser: true)
         }
     }
 

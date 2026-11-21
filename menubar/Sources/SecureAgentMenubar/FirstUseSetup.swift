@@ -61,7 +61,7 @@ struct FirstUseSetupState {
     func hookSetupStatus(for harness: String) -> HookSetupStanding {
         guard installedHarnesses.contains(harness) else { return .notInstalled }
         if harness == "openclaw" { return .pluginInstalled }
-        return Self.supportsProbe(harness) ? .ready : .needsActivation
+        return Self.supportsProbe(harness) ? (result(for: harness).passed ? .ready : .configured) : .needsActivation
     }
 
     struct Result {
@@ -101,6 +101,7 @@ struct FirstUseSetupState {
 enum HookSetupStanding: Equatable {
     case notInstalled
     case ready
+    case configured
     case needsActivation
     case pluginInstalled
 
@@ -108,6 +109,7 @@ enum HookSetupStanding: Equatable {
         switch self {
         case .notInstalled: return "Not set up"
         case .ready: return "Ready"
+        case .configured: return "Hooks configured"
         case .needsActivation: return "Needs activation"
         case .pluginInstalled: return "Plugin installed"
         }
@@ -117,6 +119,7 @@ enum HookSetupStanding: Equatable {
         switch self {
         case .notInstalled: return "circle"
         case .ready: return "checkmark.circle.fill"
+        case .configured: return "circle.dashed"
         case .needsActivation: return "exclamationmark.triangle.fill"
         case .pluginInstalled: return "checkmark.circle"
         }
@@ -128,6 +131,8 @@ enum HookSetupStanding: Equatable {
         switch self {
         case .notInstalled, .ready:
             return nil
+        case .configured:
+            return "Connection checks are available under Diagnostics."
         case .needsActivation, .pluginInstalled:
             return FirstUseSetupState.activationGuidance(harness)
         }
