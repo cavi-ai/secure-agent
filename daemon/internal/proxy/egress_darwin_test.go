@@ -1,4 +1,4 @@
-package proxy
+package proxy_test
 
 import (
 	"context"
@@ -18,6 +18,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/connpeer"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/taint"
 )
 
@@ -64,14 +65,14 @@ func TestTaintedSessionEgressRefusedInDenyMode(t *testing.T) {
 		},
 	}
 
-	ps, tok, _ := startRouteProxy(t)
+	ps, tok, _ := proxy.StartRouteProxyForTest(t)
 	var askAnswer atomic.Bool
 	var asked atomic.Int32
 	ps.SetEgressGate(gate.Check, func(_ context.Context, v taint.Verdict) bool {
 		asked.Add(1)
 		return askAnswer.Load()
 	})
-	sub := ps.bus.Subscribe()
+	sub := ps.Events()
 
 	// run fetches target through the proxy and returns curl's pid and the
 	// status of the CONNECT (https) or the request (http).

@@ -28,6 +28,36 @@ func NewRequestInspector(engine *firewall.Engine, publish func(event.Event)) *Re
 	return &RequestInspector{engine: engine, publish: publish}
 }
 
+// CoveragePosture decides whether an inspection error refuses the request.
+type CoveragePosture int
+
+const (
+	// CoverageRecordAndForward refuses only a blocked finding.
+	CoverageRecordAndForward CoveragePosture = iota
+	// CoverageRefuse refuses a blocked finding or an inspection error.
+	CoverageRefuse
+)
+
+// InspectionResult is one RequestInspector.Inspect outcome.
+type InspectionResult struct {
+	Blocked bool
+	Detail  string
+	Err     error
+}
+
+// Refuses reports whether the request stops under p.
+func (r InspectionResult) Refuses(p CoveragePosture) bool {
+	switch p {
+	case CoverageRecordAndForward:
+		return r.Blocked
+	case CoverageRefuse:
+		return r.Err != nil || r.Blocked
+	default:
+		var unknown CoveragePosture = p
+		panic(fmt.Sprintf("unknown coverage posture %d", unknown))
+	}
+}
+
 func (ps *RequestInspector) Inspect(r *http.Request, host string) (blocked bool, detail string, inspectionErr error) {
 	if ps.engine == nil {
 		return false, "", errors.New("firewall unavailable")
@@ -128,4 +158,26 @@ func publishInspectionHit(publish func(event.Event), host, detail string, payloa
 	}
 	hostOnly, port := splitTarget(host)
 	publish(event.Event{Kind: event.KindProxyHit, TS: time.Now(), RemoteHost: hostOnly, RemotePort: port, Detail: detail, Payload: payload})
+}
+
+// ClassifyProxyHit maps a KindProxyHit detail to the finding rule, evidence
+// sub, and severity. Prefixes are the ones this package publishes.
+func ClassifyProxyHit(detail string) (rule, sub string, severity int) {
+	rule = "proxy-payload-inspection"
+	sub = "payload inspection"
+	severity = 3
+	switch {
+	case strings.HasPrefix(detail, "proxy-untrusted-egress:"):
+		rule, sub = "proxy-untrusted-egress", "untrusted-egress"
+	case strings.HasPrefix(detail, "proxy-untrusted-egress-monitored:"):
+		rule, sub, severity = "proxy-untrusted-egress-monitored", "untrusted-egress", 2
+	case strings.HasPrefix(detail, "proxy-secret-leak"):
+		rule = "proxy-secret-leak"
+	case strings.HasPrefix(detail, "proxy-prompt-injection"):
+		rule = "proxy-prompt-injection"
+	case strings.HasPrefix(detail, "proxy-inspection-incomplete:"):
+		rule = "proxy-inspection-incomplete"
+		severity = 2
+	}
+	return rule, sub, severity
 }
