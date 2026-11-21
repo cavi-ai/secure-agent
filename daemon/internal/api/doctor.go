@@ -75,6 +75,7 @@ type doctorFacts struct {
 
 	settingsKnown        bool
 	hookRegistered       bool
+	hookDuplicate        bool
 	hookHarnesses        []string
 	missingHookHarnesses []string
 
@@ -234,6 +235,7 @@ func (a *API) doctorFacts(now time.Time) doctorFacts {
 	if path, err := claudeSettingsPath(); err == nil {
 		f.settingsKnown = true
 		f.hookRegistered = claudeHookRegistered(path)
+		f.hookDuplicate = claudeMarketplacePath(path) != "" && nativeClaudeHookAny(path)
 	}
 	if st.Coverage != nil {
 		for _, row := range st.Coverage.Harnesses {
@@ -268,6 +270,8 @@ func checkHookRegistered(f doctorFacts) (string, string) {
 		return doctorSkip, "Claude Code is not running; registration check does not apply to other harnesses"
 	case !f.settingsKnown:
 		return doctorSkip, "home directory unknown"
+	case f.hookDuplicate:
+		return doctorFail, "marketplace and manual Claude hooks both configured; remove one route"
 	case !f.hookRegistered:
 		return doctorSkip, "optional guard hooks are not configured"
 	}

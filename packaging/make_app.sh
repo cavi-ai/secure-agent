@@ -23,6 +23,9 @@ VERSION="$(printf '%s' "$VERSION" | tr -d '<>&"'"'"'')"
 # CFBundleShortVersionString carries no tag prefix; CFBundleVersion is the
 # commit count, so it only grows.
 SHORT_VERSION="${VERSION#v}"
+# Dirty trees and archives can still produce development bundles without a stamp.
+source "${REPO_ROOT}/packaging/lib/release.sh"
+SOURCE_REVISION="$(release_source_revision)"
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 BUILD_NUMBER="$(printf '%s' "$BUILD_NUMBER" | tr -cd 'a-zA-Z0-9.-')"
 # The app's one identity: Background Task Management records the file-telemetry
@@ -148,6 +151,7 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
     <key>CFBundleShortVersionString</key><string>${SHORT_VERSION}</string>
+    <key>SecureAgentSourceRevision</key><string>${SOURCE_REVISION}</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <!-- Keep a Dock control if macOS hides the menu bar status item. -->

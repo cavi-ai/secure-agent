@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import ServiceManagement
 
@@ -270,9 +271,10 @@ public final class SetupManager: ObservableObject {
         // other two unprotected while the wizard claimed otherwise. Claude Code
         // must also have the hooks REGISTERED in settings.json — files on disk
         // alone never run.
+        let marketplaceInstalled = HookRegistry.Claude.marketplacePath(home: home) != nil
         areHooksInstalled = Self.hookTargets.allSatisfy { target in
-            fm.fileExists(atPath: "\(target)/secret_guard.py")
-        } && claudeHooksRegistered()
+            (target == NSHomeDirectory() + "/.claude/hooks" && marketplaceInstalled) || fm.fileExists(atPath: "\(target)/secret_guard.py")
+        } && (claudeHooksRegistered() || marketplaceInstalled)
           && HookRegistry.Cursor.registered(at: Self.cursorHooksPath, command: Self.cursorHookCommand)
           && HookRegistry.selectedHooksInstalled(harness: "codex", home: home)
         let config = configDocument
@@ -698,10 +700,19 @@ public final class SetupManager: ObservableObject {
     public func selfTestHooks(harness: String? = nil) async -> String? {
         let client = DaemonClient()
         let home = fm.homeDirectoryForCurrentUser.path
-        let candidates: [String] = ["claude", "cursor"]
-        let harnesses = candidates.filter { (harness == nil || $0 == harness) && fm.fileExists(atPath: "\(home)/.\($0)/hooks/secret_guard.py") }
-        guard !harnesses.isEmpty else { return "Install Claude or Cursor hooks to check the guard path. Other agents retain their supported observational coverage." }
+        let marketplaceEnabled = HookRegistry.Claude.marketplaceEnabled(home: home)
         var failures: [String] = []
+        if (harness == nil || harness == "claude") && marketplaceEnabled {
+            if HookRegistry.Claude.nativeRoutePresent(home: home) {
+                failures.append("claude: Both marketplace and manual hooks are configured. Remove one route, then start a new Claude session and check its recorded session coverage.")
+            } else {
+                failures.append("claude: Start a new Claude session and check its recorded session coverage.")
+            }
+        }
+        let harnesses = ["claude", "cursor"].filter {
+            (harness == nil || $0 == harness) && !($0 == "claude" && marketplaceEnabled) && fm.fileExists(atPath: "\(home)/.\($0)/hooks/secret_guard.py")
+        }
+        if harnesses.isEmpty && failures.isEmpty { return "Install Claude or Cursor hooks to check the guard path. Other agents retain their supported observational coverage." }
         for harness in harnesses {
             do {
                 let challenge = try await client.startCoverageProbe(harness: harness)
@@ -1073,7 +1084,7 @@ public final class SetupManager: ObservableObject {
         if let dest = try? fileManager.destinationOfSymbolicLink(atPath: linkPath) {
             let base = URL(fileURLWithPath: linkPath).deletingLastPathComponent()
             let resolved = URL(fileURLWithPath: dest, relativeTo: base).standardizedFileURL.path
-            return resolved == wanted ? .installed : .otherFile
+            return resolved == wanted ? .installed : .otherLink
         }
         return fileManager.fileExists(atPath: linkPath) ? .otherFile : .missing
     }
@@ -1098,10 +1109,40 @@ public final class SetupManager: ObservableObject {
         let binDir = "\(home)/.local/bin"
         try fm.createDirectory(atPath: binDir, withIntermediateDirectories: true)
         let link = cliLinkPath
-        if (try? fm.destinationOfSymbolicLink(atPath: link)) != nil || fm.fileExists(atPath: link) {
-            try fm.removeItem(atPath: link)
+        if (try? fm.destinationOfSymbolicLink(atPath: link)) != nil {
+            if cliLinkState() == .installed { return }
+            try Self.replaceCLISymlink(at: link, target: cliPath)
+        } else if fm.fileExists(atPath: link) {
+            throw NSError(domain: "SetupManager", code: 6, userInfo: [NSLocalizedDescriptionKey: "A file or directory already exists at \(link). Move it before installing the CLI."])
+        } else {
+            // Creation fails if another item appears at the destination.
+            try fm.createSymbolicLink(atPath: link, withDestinationPath: cliPath)
         }
-        try fm.createSymbolicLink(atPath: link, withDestinationPath: cliPath)
+    }
+
+    static func replaceCLISymlink(at link: String, target: String,
+                                  swap: (String, String) -> Int32 = { renamex_np($0, $1, UInt32(RENAME_SWAP)) }) throws {
+        let fm = FileManager.default
+        let temporary = (link as NSString).deletingLastPathComponent + "/.secure-agent-" + UUID().uuidString
+        try fm.createSymbolicLink(atPath: temporary, withDestinationPath: target)
+        guard swap(temporary, link) == 0 else {
+            let failure = errno
+            if (try? fm.destinationOfSymbolicLink(atPath: temporary)) == target { _ = unlink(temporary) }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(failure), userInfo: [NSLocalizedDescriptionKey: "Could not replace the existing CLI link at \(link): \(String(cString: strerror(failure)))"])
+        }
+        guard (try? fm.destinationOfSymbolicLink(atPath: temporary)) != nil else {
+            guard (try? fm.destinationOfSymbolicLink(atPath: link)) == target,
+                  swap(temporary, link) == 0 else {
+                throw NSError(domain: "SetupManager", code: 6, userInfo: [NSLocalizedDescriptionKey: "The existing item was preserved at \(temporary). Restore it to \(link) before retrying."])
+            }
+            guard (try? fm.destinationOfSymbolicLink(atPath: temporary)) == target else {
+                throw NSError(domain: "SetupManager", code: 6, userInfo: [NSLocalizedDescriptionKey: "Another item was preserved at \(temporary). Restore it before retrying."])
+            }
+            _ = unlink(temporary)
+            throw NSError(domain: "SetupManager", code: 6, userInfo: [NSLocalizedDescriptionKey: "A file or directory appeared at \(link). Move it before installing the CLI."])
+        }
+        // Only unlink the displaced symlink; never recursively remove an item.
+        _ = unlink(temporary)
     }
 
     // MARK: - Agent routing (opt-in proxy)
@@ -1712,13 +1753,15 @@ public enum CLILinkState: Equatable {
     case missing
     case installed
     case otherFile
+    case otherLink
 
     var headline: String {
         switch self {
         case .unavailable: return "Not in this copy"
         case .missing: return "Not installed"
         case .installed: return "Installed"
-        case .otherFile: return "A different file is there"
+        case .otherFile: return "A file or directory is there"
+        case .otherLink: return "A different link is there"
         }
     }
 
@@ -1727,13 +1770,14 @@ public enum CLILinkState: Equatable {
         case .unavailable: return "Use the Secure Agent app in Applications."
         case .missing: return "~/.local/bin/secure-agent"
         case .installed: return "~/.local/bin/secure-agent"
-        case .otherFile: return "Install replaces ~/.local/bin/secure-agent with this app's command."
+        case .otherFile: return "Move the existing file or directory before installing."
+        case .otherLink: return "Install replaces the existing link with this app's command."
         }
     }
 
     var symbol: String {
         switch self {
-        case .unavailable, .otherFile: return "exclamationmark.triangle.fill"
+        case .unavailable, .otherFile, .otherLink: return "exclamationmark.triangle.fill"
         case .missing: return "circle"
         case .installed: return "checkmark.circle.fill"
         }

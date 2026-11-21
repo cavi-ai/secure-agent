@@ -35,6 +35,15 @@ enum HookRegistry {
             throw NSError(domain: "SetupManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "This harness has no supported guard hook."])
         }
         let fm = FileManager.default
+        if harness == "claude", Claude.marketplaceEnabled(home: home) {
+            if Claude.nativeRoutePresent(home: home) {
+                throw NSError(domain: "SetupManager", code: 3, userInfo: [NSLocalizedDescriptionKey: "Both marketplace and manual Claude hooks are configured. Remove one route to avoid duplicate hooks."])
+            }
+            guard Claude.marketplacePath(home: home) != nil else {
+                throw NSError(domain: "SetupManager", code: 3, userInfo: [NSLocalizedDescriptionKey: "The enabled Secure Agent Claude plugin is missing or invalid. Reinstall it or disable it in Claude settings before installing manual hooks."])
+            }
+            return
+        }
         if ["antigravity", "hermes", "opencode"].contains(harness) {
             try installAdditionalHooks(harness: harness, bundledDir: bundledDir, home: home)
             return
@@ -114,6 +123,7 @@ enum HookRegistry {
     static func selectedHooksInstalled(harness: String, home: String) -> Bool {
         guard FirstUseSetupState.supportsHook(harness) else { return false }
         let fm = FileManager.default
+        if harness == "claude", Claude.marketplaceEnabled(home: home) { return Claude.marketplacePath(home: home) != nil }
         let dir = hookDirectory(harness: harness, home: home)
         guard ["secret_guard.py", "activity_log.py", "injection_scan.py", "guard-rules.json"].allSatisfy({ fm.fileExists(atPath: "\(dir)/\($0)") }) else { return false }
         if ["antigravity", "hermes", "opencode"].contains(harness) {
@@ -248,6 +258,77 @@ enum HookRegistry {
 
     /// Claude Code settings.json registration.
     enum Claude {
+        static func marketplaceEnabled(home: String) -> Bool {
+            guard let data = FileManager.default.contents(atPath: home + "/.claude/settings.json"),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let plugins = root["enabledPlugins"] as? [String: Any] else { return false }
+            return plugins["secure-agent@cavi-ai"] as? Bool == true
+        }
+
+        static func nativeRoutePresent(home: String) -> Bool {
+            guard let data = FileManager.default.contents(atPath: home + "/.claude/settings.json"),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let hooks = root["hooks"] as? [String: Any] else { return false }
+            let command = selectedHookCommand(harness: "claude", home: home)
+            let safe = home.rangeOfCharacter(from: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/_-.").inverted) == nil
+            let commands = safe ? [command, "python3 \(home)/.claude/hooks/secret_guard.py"] : [command]
+            return ["PreToolUse", "PostToolUse"].contains { event in
+                (hooks[event] as? [[String: Any]] ?? []).contains { group in
+                    (group["hooks"] as? [[String: Any]] ?? []).contains { hook in
+                        guard let value = hook["command"] as? String else { return false }
+                        return commands.contains(value)
+                    }
+                }
+            }
+        }
+
+        static func marketplacePath(home: String) -> String? {
+            let fm = FileManager.default
+            let claude = home + "/.claude"
+            func object(_ path: String) -> [String: Any]? {
+                guard let attrs = try? fm.attributesOfItem(atPath: path), attrs[.type] as? FileAttributeType == .typeRegular,
+                      let size = attrs[.size] as? NSNumber, size.intValue <= 1 << 20,
+                      let data = fm.contents(atPath: path) else { return nil }
+                return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            }
+            guard let settings = object(claude + "/settings.json"),
+                  settings["disableAllHooks"] == nil || settings["disableAllHooks"] as? Bool == false,
+                  let enabled = settings["enabledPlugins"] as? [String: Any], enabled["secure-agent@cavi-ai"] as? Bool == true,
+                  let registry = object(claude + "/plugins/installed_plugins.json"), registry["version"] as? Int == 2,
+                  let plugins = registry["plugins"] as? [String: Any],
+                  let entries = plugins["secure-agent@cavi-ai"] as? [[String: Any]] else { return nil }
+            let homeReal = URL(fileURLWithPath: home).resolvingSymlinksInPath().standardizedFileURL.path
+            let base = homeReal + "/.claude/plugins/cache/cavi-ai/secure-agent"
+            guard URL(fileURLWithPath: base).resolvingSymlinksInPath().standardizedFileURL.path == base else { return nil }
+            for entry in entries {
+                guard entry["scope"] as? String == "user", let path = entry["installPath"] as? String,
+                      path.hasPrefix("/"), URL(fileURLWithPath: path).standardizedFileURL.path == path else { continue }
+                let real = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+                let manifestPath = real + "/.claude-plugin/plugin.json"
+                let configPath = real + "/hooks/hooks.json"
+                guard real.hasPrefix(base + "/"),
+                      [manifestPath, configPath].allSatisfy({ URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path == $0 }),
+                      object(manifestPath)?["name"] as? String == "secure-agent",
+                      let config = object(configPath), let hooks = config["hooks"] as? [String: Any] else { continue }
+                func matches(_ event: String, _ expected: [String]) -> Bool {
+                    guard let groups = hooks[event] as? [[String: Any]], groups.count == expected.count else { return false }
+                    return zip(groups, expected).allSatisfy { group, matcher in
+                        guard group["matcher"] as? String == matcher, let commands = group["hooks"] as? [[String: Any]], commands.count == 1 else { return false }
+                        return commands[0]["type"] as? String == "command" && commands[0]["command"] as? String == "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/secret_guard.py\""
+                    }
+                }
+                let valid = (matches("PreToolUse", ["*"]) && matches("PostToolUse", ["*"])) ||
+                    (matches("PreToolUse", ["Bash", "Read|Grep|Glob|Write|Edit|MultiEdit|NotebookEdit"]) && matches("PostToolUse", [".*"]))
+                guard valid, ["secret_guard.py", "activity_log.py", "injection_scan.py", "guard-rules.json"].allSatisfy({ name in
+                    let file = real + "/hooks/" + name
+                    guard URL(fileURLWithPath: file).resolvingSymlinksInPath().standardizedFileURL.path == file,
+                          let attrs = try? fm.attributesOfItem(atPath: file) else { return false }
+                    return attrs[.type] as? FileAttributeType == .typeRegular
+                }) else { continue }
+                return real
+            }
+            return nil
+        }
         /// Path-parameterized core of registerClaudeHooks (tests use temp files).
         static func register(at path: String, command: String) throws {
             let fm = FileManager.default

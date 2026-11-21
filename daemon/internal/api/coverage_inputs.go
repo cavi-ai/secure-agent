@@ -17,6 +17,9 @@ func guardHookUnregisteredItem(status Status) *PostureItem {
 	if err != nil {
 		return nil
 	}
+	if claudeMarketplacePath(settings) != "" && nativeClaudeHookAny(settings) {
+		return &PostureItem{Kind: "guard_hook_duplicate", ID: "claude-hook-duplicate", Title: "Claude Code has duplicate guard routes", Severity: 2, Detail: "Both marketplace and manual hooks are configured. Remove one route to avoid duplicate hooks."}
+	}
 	if !claudeHookRegistered(settings) {
 		return &PostureItem{
 			Kind: "guard_hook_unregistered", ID: "claude-hook",
@@ -47,6 +50,32 @@ func claudeHookRegistered(path string) bool {
 		return false
 	}
 	var root struct {
+		DisableAllHooks bool            `json:"disableAllHooks"`
+		EnabledPlugins  map[string]bool `json:"enabledPlugins"`
+		Hooks           map[string][]struct {
+			Hooks []struct {
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if json.Unmarshal(data, &root) != nil {
+		return false
+	}
+	if root.DisableAllHooks {
+		return false
+	}
+	if root.EnabledPlugins["secure-agent@cavi-ai"] {
+		return claudeMarketplacePath(path) != ""
+	}
+	return nativeClaudeHookRegistered(path)
+}
+
+func nativeClaudeHookRegistered(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var root struct {
 		Hooks map[string][]struct {
 			Hooks []struct {
 				Command string `json:"command"`
@@ -67,6 +96,142 @@ func claudeHookRegistered(path string) bool {
 		return false
 	}
 	return guard("PreToolUse") && guard("PostToolUse")
+}
+
+func nativeClaudeHookAny(path string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var root struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if json.Unmarshal(b, &root) != nil {
+		return false
+	}
+	home := filepath.Dir(filepath.Dir(path))
+	script := filepath.Join(home, ".claude/hooks/secret_guard.py")
+	quoted := "python3 '" + strings.ReplaceAll(script, "'", "'\"'\"'") + "'"
+	plain := "python3 " + script
+	for _, event := range []string{"PreToolUse", "PostToolUse"} {
+		for _, group := range root.Hooks[event] {
+			for _, hook := range group.Hooks {
+				if hook.Command == quoted || hook.Command == plain {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// claudeMarketplacePath accepts only a user installation rooted in Claude's cache.
+func claudeMarketplacePath(settings string) string {
+	readJSON := func(path string, v any) bool {
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+			return false
+		}
+		b, err := os.ReadFile(path)
+		return err == nil && json.Unmarshal(b, v) == nil
+	}
+	var settingsRoot struct {
+		DisableAllHooks bool            `json:"disableAllHooks"`
+		EnabledPlugins  map[string]bool `json:"enabledPlugins"`
+	}
+	if !readJSON(settings, &settingsRoot) || settingsRoot.DisableAllHooks || !settingsRoot.EnabledPlugins["secure-agent@cavi-ai"] {
+		return ""
+	}
+	claude := filepath.Dir(settings)
+	var data struct {
+		Version int `json:"version"`
+		Plugins map[string][]struct {
+			Scope       string `json:"scope"`
+			InstallPath string `json:"installPath"`
+		} `json:"plugins"`
+	}
+	if !readJSON(filepath.Join(claude, "plugins", "installed_plugins.json"), &data) || data.Version != 2 {
+		return ""
+	}
+	home, err := filepath.EvalSymlinks(filepath.Dir(claude))
+	if err != nil {
+		return ""
+	}
+	base := filepath.Join(home, ".claude/plugins/cache/cavi-ai/secure-agent")
+	realBase, err := filepath.EvalSymlinks(base)
+	if err != nil || realBase != base {
+		return ""
+	}
+	for _, entry := range data.Plugins["secure-agent@cavi-ai"] {
+		if entry.Scope != "user" || !filepath.IsAbs(entry.InstallPath) || filepath.Clean(entry.InstallPath) != entry.InstallPath {
+			continue
+		}
+		resolved, err := filepath.EvalSymlinks(entry.InstallPath)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(base, resolved)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+			continue
+		}
+		read := func(name string, v any) bool {
+			path := filepath.Join(resolved, name)
+			real, err := filepath.EvalSymlinks(path)
+			return err == nil && real == path && readJSON(path, v)
+		}
+		var manifest struct {
+			Name string `json:"name"`
+		}
+		if !read(".claude-plugin/plugin.json", &manifest) || manifest.Name != "secure-agent" {
+			continue
+		}
+		var cfg struct {
+			Hooks map[string][]struct {
+				Matcher string `json:"matcher"`
+				Hooks   []struct {
+					Type    string `json:"type"`
+					Command string `json:"command"`
+				} `json:"hooks"`
+			} `json:"hooks"`
+		}
+		if !read("hooks/hooks.json", &cfg) {
+			continue
+		}
+		valid := true
+		matches := func(event string, expected []string) bool {
+			groups := cfg.Hooks[event]
+			if len(groups) != len(expected) {
+				return false
+			}
+			for i, group := range groups {
+				if group.Matcher != expected[i] || len(group.Hooks) != 1 || group.Hooks[0].Type != "command" || group.Hooks[0].Command != `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/secret_guard.py"` {
+					return false
+				}
+			}
+			return true
+		}
+		valid = (matches("PreToolUse", []string{"*"}) && matches("PostToolUse", []string{"*"})) || (matches("PreToolUse", []string{"Bash", "Read|Grep|Glob|Write|Edit|MultiEdit|NotebookEdit"}) && matches("PostToolUse", []string{".*"}))
+		for _, name := range []string{"secret_guard.py", "activity_log.py", "injection_scan.py", "guard-rules.json"} {
+			path := filepath.Join(resolved, "hooks", name)
+			real, err := filepath.EvalSymlinks(path)
+			if err != nil || real != path {
+				valid = false
+				continue
+			}
+			info, err := os.Stat(path)
+			if err != nil || !info.Mode().IsRegular() {
+				valid = false
+			}
+		}
+		if valid {
+			return resolved
+		}
+	}
+	return ""
 }
 
 // humanCollectorTitle maps collector process names to operator language —

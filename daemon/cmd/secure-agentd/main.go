@@ -66,9 +66,16 @@ func main() {
 	}
 	defer lock.Release()
 
-	// Build is the composition root: it resolves every component from cfg and
-	// starts the collectors and servers. main() is CLI parsing plus process
-	// lifecycle only.
+	var headless *daemon.InstanceLock
+	if *ownerPIDVersion == 0 {
+		headless, err = daemon.LockHeadless(cfg.SocketPath)
+		if err != nil {
+			log.Fatalf("failed to start daemon: failed to bind control API: %v", err)
+		}
+		defer headless.Release()
+	}
+
+	// Build starts collectors and servers only after socket ownership is held.
 	comps, err := daemon.Build(ctx, cfg, daemon.Options{ConfigPath: configPathUsed, ConfigOverlayErr: overlayErr, OwnerPIDVersion: uint32(*ownerPIDVersion)})
 	if err != nil {
 		log.Fatalf("failed to start daemon: %v", err)

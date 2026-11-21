@@ -108,6 +108,7 @@ test-hooks:
 	python3 plugin/hooks/test_cursor_hooks.py
 	python3 plugin/hooks/test_harness_guard.py
 	python3 plugin/hooks/test_hermes_plugin.py
+	python3 plugin/hooks/test_claude_plugin_package.py
 	node --test plugin/hooks/openclaw/test_plugin.mjs
 	node --test plugin/hooks/opencode/test_plugin.mjs
 	python3 packaging/test/test_menu_bar_tracking.py
@@ -116,6 +117,7 @@ test-hooks:
 	python3 packaging/test/test_model_filter_packaging.py
 	python3 packaging/test/test_ci_release.py
 	python3 packaging/test/test_release_workflow.py
+	python3 packaging/test/test_release_provenance.py
 	python3 packaging/test/test_uninstall_hooks.py
 	python3 packaging/test/test_setup_session_live.py
 

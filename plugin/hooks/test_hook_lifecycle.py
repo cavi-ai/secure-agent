@@ -38,6 +38,72 @@ class HookLifecycleTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         return json.loads(result.stdout or "{}")
 
+    def test_headless_lease_overrides_stale_desktop_only_while_held(self):
+        with tempfile.TemporaryDirectory() as home:
+            config = Path(home, ".config/secure-agent")
+            config.mkdir(parents=True)
+            (config / "menubar.lock").touch()
+            lease_path = config / "daemon.sock.headless.lock"
+            with lease_path.open("w+") as lease:
+                os.chmod(lease_path, 0o600)
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.assertEqual(self.invoke(home, command="security dump-keychain").get("permission"), "deny")
+                fcntl.flock(lease, fcntl.LOCK_UN)
+            self.assertEqual(self.invoke(home, command="security dump-keychain"), {})
+
+    def test_lease_backed_prompt_does_not_open_poll_connections(self):
+        with tempfile.TemporaryDirectory() as home, socket.socket(socket.AF_UNIX) as server:
+            config = Path(home, ".config/secure-agent")
+            config.mkdir(parents=True)
+            (config / "guard-modes.json").write_text(json.dumps({"ssh-keys": "prompt"}))
+            server.bind(str(config / "daemon.sock")); server.listen(5); server.settimeout(3)
+            lease_path = config / "daemon.sock.headless.lock"
+            env = {k: v for k, v in os.environ.items() if not k.startswith(("SECURE_AGENT_", "CLAUDE_", "CURSOR_"))}
+            env.update(HOME=home, PYTHONDONTWRITEBYTECODE="1")
+            payload = {"cursor_version": "2", "conversation_id": "session", "hook_event_name": "preToolUse", "tool_name": "Read", "tool_input": {"file_path": home + "/.ssh/id_ed25519"}}
+            with lease_path.open("w+") as lease:
+                os.chmod(lease_path, 0o600)
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                process = subprocess.Popen([sys.executable, str(Path(__file__).with_name("secret_guard.py"))], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True)
+                try:
+                    process.stdin.write(json.dumps(payload)); process.stdin.close(); process.stdin = None
+                    conn, _ = server.accept()
+                    with conn:
+                        conn.recv(4096)
+                        server.settimeout(0.7)
+                        with self.assertRaises(socket.timeout):
+                            server.accept()
+                        response = b'{"verdict":"allow","scope":"once"}'
+                        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: " + str(len(response)).encode() + b"\r\n\r\n" + response)
+                        conn.shutdown(socket.SHUT_WR)
+                        output, error = process.communicate(timeout=3)
+                        self.assertEqual(process.returncode, 0, error)
+                        self.assertEqual(json.loads(output).get("permission"), "allow")
+                finally:
+                    if process.poll() is None:
+                        process.kill(); process.communicate()
+
+    def test_invalid_headless_lease_fails_closed(self):
+        with tempfile.TemporaryDirectory() as home, socket.socket(socket.AF_UNIX) as server:
+            config = Path(home, ".config/secure-agent")
+            config.mkdir(parents=True)
+            server.bind(str(config / "daemon.sock")); server.listen(2)
+            lease = config / "daemon.sock.headless.lock"
+            lease.symlink_to(config / "daemon.sock")
+            self.assertEqual(self.invoke(home, command="security dump-keychain"), {})
+
+    def test_inactive_cursor_pretool_emits_native_allow(self):
+        with tempfile.TemporaryDirectory() as home:
+            env = {k: v for k, v in os.environ.items() if not k.startswith(("SECURE_AGENT_", "CLAUDE_", "CURSOR_"))}
+            env.update(HOME=home, PYTHONDONTWRITEBYTECODE="1")
+            payload = {"cursor_version": "2", "conversation_id": "session", "hook_event_name": "preToolUse", "tool_name": "Read", "tool_input": {"file_path": "/tmp/file"}}
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("secret_guard.py"))], input=json.dumps(payload), env=env, text=True, capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), {"permission": "allow"})
+            payload["hook_event_name"] = "postToolUse"
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("secret_guard.py"))], input=json.dumps(payload), env=env, text=True, capture_output=True, timeout=5)
+            self.assertEqual(json.loads(result.stdout), {})
+
     def test_closed_app_and_stale_lock_do_not_scan_log_or_block(self):
         with tempfile.TemporaryDirectory() as home:
             path = Path(home, ".config", "secure-agent", "menubar.lock")
@@ -115,13 +181,13 @@ class HookLifecycleTests(unittest.TestCase):
                     result = subprocess.run(command, input=raw, text=True, capture_output=True, env=env, timeout=4)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     return json.loads(result.stdout or "{}")
-                expected = {"decision": "allow"} if harness == "antigravity" else ({"permission": "allow"} if adapter else {})
+                expected = {"decision": "allow"} if harness == "antigravity" else ({"permission": "allow"} if adapter or harness == "cursor" else {})
                 for stale in (False, True):
                     if stale:
                         lock = Path(home, ".config/secure-agent/menubar.lock")
                         lock.parent.mkdir(parents=True, exist_ok=True)
                         lock.touch()
-                    self.assertEqual(invoke("{broken"), expected)
+                    self.assertEqual(invoke("{broken"), {} if harness == "cursor" else expected)
                     self.assertEqual(invoke(json.dumps(payload)), expected)
                 self.assertFalse(Path(home, "activity.jsonl").exists())
                 self.assertFalse(Path(home, ".agents").exists())
@@ -169,7 +235,7 @@ class HookLifecycleTests(unittest.TestCase):
                         output, error = process.communicate(timeout=3)
                         self.assertEqual(process.returncode, 0, error)
                         result = json.loads(output)
-                        expected = {"decision": "allow", "reason": ""} if harness == "antigravity" else ({"permission": "allow"} if adapter else {})
+                        expected = {"decision": "allow", "reason": ""} if harness == "antigravity" else ({"permission": "allow"} if adapter or harness == "cursor" else {})
                         self.assertEqual(result, expected)
                     after = Path(home, "activity.jsonl").read_bytes() if Path(home, "activity.jsonl").exists() else None
                     self.assertEqual(before, after)

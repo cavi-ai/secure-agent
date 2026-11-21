@@ -14,10 +14,8 @@ class ClaudePluginPackageTest(unittest.TestCase):
         self.assertEqual(set(config), {"hooks"})
         events = config["hooks"]
         self.assertEqual(set(events), {"PreToolUse", "PostToolUse"})
-        self.assertEqual([entry["matcher"] for entry in events["PreToolUse"]], [
-            "Bash", "Read|Grep|Glob|Write|Edit|MultiEdit|NotebookEdit",
-        ])
-        self.assertEqual([entry["matcher"] for entry in events["PostToolUse"]], [".*"])
+        for entries in events.values():
+            self.assertEqual([entry["matcher"] for entry in entries], ["*"])
         for entries in events.values():
             for entry in entries:
                 self.assertEqual(entry["hooks"], [{

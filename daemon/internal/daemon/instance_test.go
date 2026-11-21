@@ -75,3 +75,32 @@ func TestLockInstanceInMemoryStoreNeedsNoLock(t *testing.T) {
 	}
 	l.Release()
 }
+
+func TestHeadlessLeaseExcludesAndRejectsUnsafeFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.sock")
+	first, err := LockHeadless(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other, err := LockHeadless(path); err == nil {
+		other.Release()
+		t.Fatal("second headless lease acquired")
+	}
+	first.Release()
+	if _, err := os.Stat(path + ".headless.lock"); err != nil {
+		t.Fatal(err)
+	}
+	next, err := LockHeadless(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next.Release()
+	unsafe := filepath.Join(t.TempDir(), "daemon.sock")
+	if err := os.Symlink(path+".headless.lock", unsafe+".headless.lock"); err != nil {
+		t.Fatal(err)
+	}
+	if lock, err := LockHeadless(unsafe); err == nil {
+		lock.Release()
+		t.Fatal("symlink accepted")
+	}
+}

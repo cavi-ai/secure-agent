@@ -8,6 +8,7 @@ An optional --daemon checks a separately built or packaged daemon binary.
 
 import argparse
 from datetime import datetime
+import fcntl
 import http.client
 import json
 import os
@@ -79,6 +80,23 @@ def run(daemon_binary, harness_binary):
         modes = root / "guard-modes.json"
         modes.write_text(json.dumps({"cloud-creds": "prompt", "untrusted-egress": "prompt"}))
         sock = root / "daemon.sock"
+        desktop_lease = home / ".config/secure-agent/menubar.lock"
+        desktop_lease.parent.mkdir(parents=True, mode=0o700)
+        desktop_lease.touch(mode=0o600)
+        headless_lease = Path(str(sock) + ".headless.lock")
+
+        def lease_held():
+            try:
+                with headless_lease.open("rb") as lease:
+                    try:
+                        fcntl.flock(lease, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        return True
+                    fcntl.flock(lease, fcntl.LOCK_UN)
+                    return False
+            except FileNotFoundError:
+                return False
+
         config = root / "config.json"
         config.write_text(json.dumps({
             "agents": [{"name": "claude", "match": [str(harness_binary)]}],
@@ -182,6 +200,17 @@ def run(daemon_binary, harness_binary):
                                             stdout=daemon_log, stderr=daemon_log, start_new_session=True)
                 daemon = start_daemon()
                 wait_for("daemon", ready)
+                wait_for("headless lease", lease_held)
+                competing_config = json.loads(config.read_text())
+                competing_config.update(db_path=str(root / "other.db"), jsonl_path=str(root / "other.jsonl"))
+                competing_path = root / "competing.json"
+                competing_path.write_text(json.dumps(competing_config))
+                competing = subprocess.run([str(daemon_binary), "-config", str(competing_path)], env=environment,
+                                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=10)
+                require(competing.returncode != 0 and "headless lease:" in competing.stdout,
+                        "Competing daemon did not fail on the headless lease: " + competing.stdout)
+                require(lease_held() and ready(), "Competing daemon disrupted the original socket")
+                print("PASS: competing daemon cannot replace the live headless socket", flush=True)
                 harness = subprocess.Popen([str(harness_binary), sys.executable, str(REPO / "plugin/hooks/secret_guard.py"), str(resource), str(other_resource)],
                                            cwd=workspace, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                            stderr=harness_log, text=True, start_new_session=True)
@@ -294,11 +323,14 @@ def run(daemon_binary, harness_binary):
                 print("PASS: second isolated caller is recorded as an ended session", flush=True)
 
                 stop(daemon)
+                require(headless_lease.is_file() and not lease_held(), "Headless lease did not remain unlocked after shutdown")
                 harness.stdin.write("read\n"); harness.stdin.flush()
                 result("")
                 print("PASS: stopped headless daemon leaves Claude permissions unchanged without reading", flush=True)
                 daemon = start_daemon()
                 wait_for("restarted daemon", ready)
+                wait_for("restarted headless lease", lease_held)
+                print("PASS: stale desktop lease permits headless guard; daemon lease releases and reacquires on restart", flush=True)
                 restored = wait_for("restored active session", lambda: next((s for s in api("/sessions") if s.get("id") == session_id and s.get("status") != "ended"), None))
                 ended_restored = wait_for("restored ended session", lambda: next((s for s in api("/sessions") if s.get("id") == ended_id and s.get("status") == "ended"), None))
                 for expected, actual in ((active_identity, restored), (ended_identity, ended_restored)):

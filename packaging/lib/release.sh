@@ -40,3 +40,16 @@ require_release_settings() {
   # Scan with the selected compiler before producing distribution artifacts.
   govulncheck ./...
 }
+
+# Emit a revision only when this directory is the clean Git worktree root.
+release_source_revision() {
+  local root head untracked
+  root="$(git rev-parse --show-toplevel 2>/dev/null)" || return 0
+  [[ "$(cd "$root" && pwd -P)" == "$(pwd -P)" ]] || return 0
+  head="$(git rev-parse --verify HEAD 2>/dev/null)" || return 0
+  [[ "$head" =~ ^[0-9a-f]{40}$ ]] || return 0
+  git diff --quiet && git diff --cached --quiet || return 0
+  untracked="$(git ls-files --others --exclude-standard)" || return 0
+  [[ -z "$untracked" ]] || return 0
+  printf '%s\n' "$head"
+}

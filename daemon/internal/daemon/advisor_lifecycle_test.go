@@ -22,16 +22,20 @@ func TestAdvisorReloadStartsAndReplacesWorker(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	hits := make(chan string, 8)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			Model string `json:"model"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Error(err)
+			t.Errorf("decode advisor request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
 		}
 		hits <- request.Model
-		w.WriteHeader(503)
-	}))
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	path := filepath.Join(home, "config.yaml")
 	write := func(model string) {
