@@ -37,8 +37,10 @@ public struct GuardScopeChoice: Codable, Sendable, Identifiable, Hashable {
 	public let expiry: String?
 	/// The permission covers every send of the request's kinds, not its sinks.
 	public let category: Bool?
-	public init(kind: String, expiry: String?, category: Bool? = nil) {
-		self.kind = kind; self.expiry = expiry; self.category = category
+	/// The Allow-button sentence from the daemon. Empty when this choice has none.
+	public let terms: String?
+	public init(kind: String, expiry: String?, category: Bool? = nil, terms: String? = nil) {
+		self.kind = kind; self.expiry = expiry; self.category = category; self.terms = terms
 	}
 	public var coversKind: Bool { category == true }
 	public var id: String { "\(kind)/\(expiry ?? "")\(coversKind ? "/kind" : "")" }
@@ -102,7 +104,8 @@ extension GuardPending {
     /// What a session, timed or standing allow grants, shown under the
     /// prompt's Allow button; nil for a scope the request does not offer.
     func grantTerms(scope: String, expiry: String?, category: Bool = false) -> String? {
-        guard availableScopes?.contains(where: { $0.kind == scope && $0.expiry == expiry && $0.coversKind == category }) == true else { return nil }
+        guard let choice = availableScopes?.first(where: { $0.kind == scope && $0.expiry == expiry && $0.coversKind == category }) else { return nil }
+        if let terms = choice.terms, !terms.isEmpty { return terms }
         let sends = ruleID == "untrusted-egress"
         let kinds = category ? GuardSendKind.label(categories) : nil
         if category && kinds == nil { return nil }

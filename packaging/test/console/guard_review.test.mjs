@@ -29,6 +29,15 @@ test('inspection uses only the pending request session and never submits an answ
  h.setContext(undefined);h.t.inspect('request');assert.equal(h.inspections.length,1);
  h.setContext({...p,session_id:''});h.t.inspect('request');assert.equal(h.inspections.length,1);
 });
+test('future consent uses the daemon effect and tail when the scope carries them',async()=>{
+ const effect='allow this file and tool for 24 hours';
+ const tail='Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions.';
+ const item={...p,available_scopes:[{kind:'once',effect:'allow this file and tool for 24 hours',tail},{kind:'exact',expiry:'24h',effect,tail,terms:'Allows this file and tool for 24 hours. '+tail}]};
+ const h=harness();h.setContext(item);await h.t.resolve('request','allow','exact','24h');
+ assert.equal(h.confirmations[0],`${effect}.\n\nAgent: ${p.agent}\nOperation: ${p.tool}\nResource: ${p.path}\nWorkspace: ${p.workspace}\nExecutable path: ${p.reader_exe}\nSession: ${p.session_id}\n\n${tail}`);
+ const always={...p,available_scopes:[{kind:'always',effect:'every future path matched by rule env-files',tail}]};
+ assert.equal(c.guardScopeConfirmation(always,'deny','always').startsWith('deny every future path matched by rule env-files.\n\n'),true);
+});
 test('future consent names the resource, operation, workspace, executable and lifetime',async()=>{
  const h=harness();await h.t.resolve('request','allow','exact','24h');
  for(const fact of [p.path,p.tool,p.workspace,p.reader_exe,'24 hours']) assert.ok(h.confirmations[0].includes(fact),fact);

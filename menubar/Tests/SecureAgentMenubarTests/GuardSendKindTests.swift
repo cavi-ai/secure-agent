@@ -11,8 +11,8 @@ final class GuardSendKindTests: XCTestCase {
     {"id":"p1","agent":"codex","tool":"Bash","path":"git push upstream","rule_id":"untrusted-egress","ts":"2026-10-30T20:00:00Z",
      "session_id":"s1","workspace":"/work","reader_exe":"/opt/homebrew/bin/codex","categories":["git-push"],"repeats":2,
      "default_scope":{"kind":"session","category":true},
-     "available_scopes":[{"kind":"once"},{"kind":"session"},{"kind":"exact","expiry":"24h"},{"kind":"exact","expiry":"7d"},{"kind":"standing"},
-       {"kind":"session","category":true},{"kind":"exact","expiry":"24h","category":true},{"kind":"exact","expiry":"7d","category":true},{"kind":"standing","category":true}]}
+     "available_scopes":[{"kind":"once"},{"kind":"session"},{"kind":"exact","expiry":"24h"},{"kind":"exact","expiry":"7d"},{"kind":"standing","terms":"Allows these sends from this tool until you revoke it. Executable signatures are not verified. Other sends still ask. Revoke under Protection → Rules & permissions."},
+       {"kind":"session","category":true,"terms":"Allows all git pushes from this tool in this workspace until this session ends. Executable signatures are not verified. Other kinds of send still ask. Revoke under Protection → Rules & permissions."},{"kind":"exact","expiry":"24h","category":true},{"kind":"exact","expiry":"7d","category":true},{"kind":"standing","category":true}]}
     """
 
     private func model(_ json: String) throws -> GuardPromptModel {
@@ -33,7 +33,7 @@ final class GuardSendKindTests: XCTestCase {
         var chosen: GuardPromptChoice?
         m.onChoose = { chosen = $0 }
         m.allow()
-        XCTAssertEqual(chosen, .allow(GuardScopeChoice(kind: "session", expiry: nil, category: true)))
+        XCTAssertEqual(chosen, .allow(GuardScopeChoice(kind: "session", expiry: nil, category: true, terms: "Allows all git pushes from this tool in this workspace until this session ends. Executable signatures are not verified. Other kinds of send still ask. Revoke under Protection → Rules & permissions.")))
     }
 
     func testAlwaysForThisSendOnlyAndTheAnswerOnTheWire() throws {

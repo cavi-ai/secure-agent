@@ -266,6 +266,9 @@ func (a *API) decideGuard(ctx context.Context, req guardDecisionRequest, peerPID
 			}
 		}
 	}
+	for i := range scopes {
+		scopes[i] = guard.Disclose(req.RuleID, req.Categories, scopes[i])
+	}
 	repeats := a.guardRepeats.note(req.SessionID, req.Categories)
 	var preselect *model.ScopeChoice
 	if len(scopes) > 1 && len(req.Categories) > 0 && (req.CategoryMode == "session" || repeats > 0) {
@@ -311,6 +314,14 @@ func (a *API) decideGuard(ctx context.Context, req guardDecisionRequest, peerPID
 		})
 	}
 	return d, nil
+}
+
+// offeredScope reports whether the prompt listed this permission. The
+// sentences on a choice are not part of that identity.
+func offeredScope(scopes []model.ScopeChoice, choice model.ScopeChoice) bool {
+	return slices.ContainsFunc(scopes, func(s model.ScopeChoice) bool {
+		return s.Kind == choice.Kind && s.Expiry == choice.Expiry && s.Category == choice.Category
+	})
 }
 
 func (a *API) handleGuardPending(w http.ResponseWriter, r *http.Request) {
@@ -419,7 +430,8 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 			if a.guardIdentity == nil || p.PeerPID <= 0 {
 				return nil, nil, fmt.Errorf("identity unavailable; choose once")
 			}
-			if !slices.Contains(p.AvailableScopes, choice) {
+			// Disclosure text is not part of which permission was offered.
+			if !offeredScope(p.AvailableScopes, choice) {
 				return nil, nil, fmt.Errorf("this request does not offer that permission")
 			}
 			g, valid := a.guardIdentity(p.PeerPID, p.SessionID)

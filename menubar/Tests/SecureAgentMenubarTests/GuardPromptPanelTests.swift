@@ -12,7 +12,11 @@ final class GuardPromptPanelTests: XCTestCase {
     private func pending(ruleID: String = "ssh-keys", detail: String? = nil, advisor: GuardAdvice? = nil) -> GuardPending {
         GuardPending(id: "g1", agent: "claude", tool: "Read", path: "/Users/x/.ssh/id_ed25519", ruleID: ruleID, ts: "", scopeText: nil,
                      advisor: advisor,
-                     availableScopes: [GuardScopeChoice(kind: "session", expiry: nil), dayScope, GuardScopeChoice(kind: "exact", expiry: "7d")],
+                     availableScopes: [
+                        GuardScopeChoice(kind: "session", expiry: nil, terms: "Allows this file and tool until this session ends. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions."),
+                        GuardScopeChoice(kind: "exact", expiry: "24h", terms: "Allows this file and tool for 24 hours. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions."),
+                        GuardScopeChoice(kind: "exact", expiry: "7d", terms: "Allows this file and tool for 7 days. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions."),
+                     ],
                      readerExe: "/bin/cat", workspace: "/Users/x/code/app", sessionID: "5f2c9a1e-7b4d-4c1a-9e2f-0d8b6a3c4e11", detail: detail)
     }
 
@@ -145,7 +149,12 @@ final class GuardPromptPanelTests: XCTestCase {
     }
 
     func testChosenDurationIsTheAllowScope() async throws {
-        let choice = await run(GuardPromptContent(pending: egress(read: [Self.githubRead, "web page https://example.com/page.html"], scopes: pending().availableScopes),
+        let egressScopes = [
+            GuardScopeChoice(kind: "session", expiry: nil),
+            GuardScopeChoice(kind: "exact", expiry: "24h", terms: "Allows these sends from this tool for 24 hours. Executable signatures are not verified. Other sends still ask. Revoke under Protection → Rules & permissions."),
+            GuardScopeChoice(kind: "exact", expiry: "7d"),
+        ]
+        let choice = await run(GuardPromptContent(pending: egress(read: [Self.githubRead, "web page https://example.com/page.html"], scopes: egressScopes),
                                             inspectUnavailableReason: "Session identity unavailable")) { panel in
             XCTAssertEqual(panel.model.durations.map(\.label), ["Once", "This session", "24 hours", "7 days"])
             XCTAssertEqual(panel.model.allowTitle, "Allow Once")
