@@ -34,10 +34,11 @@ func inferenceRequestPolicy(engine *firewall.Engine, gate *taint.Gate, ask func(
 				}
 			})
 			blocked, _, err := inspector.Inspect(r, r.URL.Host)
-			if err != nil {
-				return err
-			}
-			if blocked {
+			result := proxy.InspectionResult{Blocked: blocked, Err: err}
+			if result.Refuses(proxy.CoverageRefuse) {
+				if err != nil {
+					return err
+				}
 				return errors.New("inference request contains a blocked secret")
 			}
 			return nil

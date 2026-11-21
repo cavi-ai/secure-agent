@@ -22,6 +22,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/testvalue"
 )
@@ -432,21 +433,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 	c.evictStaleLocked(e.TS)
 
 	if e.Kind == event.KindProxyHit {
-		ruleName := "proxy-payload-inspection"
-		severity := 3
-		sub := "payload inspection"
-		if strings.HasPrefix(e.Detail, "proxy-untrusted-egress:") {
-			ruleName, sub = "proxy-untrusted-egress", "untrusted-egress"
-		} else if strings.HasPrefix(e.Detail, "proxy-untrusted-egress-monitored:") {
-			ruleName, sub, severity = "proxy-untrusted-egress-monitored", "untrusted-egress", 2
-		} else if strings.HasPrefix(e.Detail, "proxy-secret-leak") {
-			ruleName = "proxy-secret-leak"
-		} else if strings.HasPrefix(e.Detail, "proxy-prompt-injection") {
-			ruleName = "proxy-prompt-injection"
-		} else if strings.HasPrefix(e.Detail, "proxy-inspection-incomplete:") {
-			ruleName = "proxy-inspection-incomplete"
-			severity = 2
-		}
+		ruleName, sub, severity := proxy.ClassifyProxyHit(e.Detail)
 		subject := e.RemoteHost
 		if ruleName == "proxy-secret-leak" && e.Payload != nil && e.Payload.IsLeak() {
 			p := e.Payload

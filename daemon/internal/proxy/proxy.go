@@ -597,8 +597,9 @@ func (ps *ProxyServer) inspectAndForwardHTTP(w http.ResponseWriter, r *http.Requ
 }
 
 func (ps *ProxyServer) inspectRequest(r *http.Request, host string) (bool, string) {
-	blocked, detail, _ := NewRequestInspector(ps.engine, ps.bus.Publish).Inspect(r, host)
-	return blocked, detail
+	blocked, detail, err := NewRequestInspector(ps.engine, ps.bus.Publish).Inspect(r, host)
+	result := InspectionResult{Blocked: blocked, Detail: detail, Err: err}
+	return result.Refuses(CoverageRecordAndForward), result.Detail
 }
 
 // streamAndScanResponse writes resp to dst (streaming the body) while capturing a
