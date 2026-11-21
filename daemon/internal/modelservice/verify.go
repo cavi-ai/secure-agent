@@ -87,7 +87,7 @@ func (m *Manager) verify(parent context.Context, p *plan) ([]string, error) {
 		return response.StatusCode, nil
 	}
 	refused := func(status int, err error) bool { return err == nil && (status == 401 || status == 403) }
-	if p.preview.Change.Scope == "authenticated_inference" {
+	if p.preview.Change.Scope == localservice.ScopeAuthenticatedInference {
 		admin := "/props"
 		if p.preview.Change.Runtime == "mlx" {
 			admin = "/_mlx/unload"
@@ -108,7 +108,7 @@ func (m *Manager) verify(parent context.Context, p *plan) ([]string, error) {
 		}
 	}
 	checks = append(checks, "foreign_origin_and_host_refused")
-	if p.preview.Change.Scope == "authenticated_inference" {
+	if p.preview.Change.Scope == localservice.ScopeAuthenticatedInference {
 		status, err := request("/v1/chat/completions", "valid", "", "")
 		if err != nil || status != http.StatusOK {
 			return nil, errors.New("authorized one-token inference did not succeed")
