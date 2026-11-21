@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/cavi-ai/secure-agent/internal/localservice"
 )
 
 type Change struct {
@@ -84,21 +86,18 @@ func adapt(job map[string]any, keyPath, engine string) (Change, error) {
 		}
 	}
 	if filepath.Base(args[0]) == "ollama" && len(args) == 2 && args[1] == "serve" {
-		host := "127.0.0.1:11434"
+		existing := ""
 		if value, ok := env["OLLAMA_HOST"].(string); ok && value != "" {
-			host = strings.TrimPrefix(strings.TrimPrefix(value, "http://"), "https://")
+			existing = value
 		}
-		_, port, err := net.SplitHostPort(host)
+		host, port, err := localservice.OllamaLoopback(existing)
 		if err != nil {
-			return change, errors.New("Ollama requires an explicit TCP host and port")
+			return change, err
 		}
-		change.Port, err = strconv.Atoi(port)
-		if err != nil || change.Port < 1 || change.Port > 65535 {
-			return change, errors.New("invalid service port")
-		}
-		env["OLLAMA_HOST"], env["OLLAMA_ORIGINS"] = "127.0.0.1:"+port, ""
+		env["OLLAMA_HOST"], env["OLLAMA_ORIGINS"] = host, ""
 		job["EnvironmentVariables"] = env
-		change.Runtime, change.Scope = "ollama", "browser_hardening"
+		change.Port = port
+		change.Runtime, change.Scope = "ollama", localservice.ScopeBrowserHardening
 		return change, nil
 	}
 	values, err := options(args)
@@ -135,7 +134,7 @@ func adapt(job map[string]any, keyPath, engine string) (Change, error) {
 		for _, key := range []string{"LLAMA_API_KEY", "LLAMA_ARG_API_KEY_FILE", "LLAMA_ARG_HOST", "LLAMA_ARG_CORS_ORIGINS", "LLAMA_ARG_CORS_CREDENTIALS"} {
 			delete(env, key)
 		}
-		change.Runtime, change.Scope = "llama.cpp", "authenticated_inference"
+		change.Runtime, change.Scope = "llama.cpp", localservice.ScopeAuthenticatedInference
 	case "mlx_lm.server":
 		if engine == "" {
 			return change, errors.New("install the compatible Secure Agent model runtime before MLX remediation")
@@ -162,7 +161,7 @@ func adapt(job map[string]any, keyPath, engine string) (Change, error) {
 		if job["Program"] != nil {
 			job["Program"] = engine
 		}
-		change.Runtime, change.Scope = "mlx", "authenticated_inference"
+		change.Runtime, change.Scope = "mlx", localservice.ScopeAuthenticatedInference
 	default:
 		return change, errors.New("unsupported launcher; select a direct Ollama, llama-server or plain MLX-LM launchd job")
 	}
