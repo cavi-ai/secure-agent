@@ -156,4 +156,27 @@ final class FirstUseSetupTests: XCTestCase {
         XCTAssertEqual(service.registerCount, 1)
         XCTAssertFalse(defaults.bool(forKey: SetupManager.firstUseTelemetryConsentKey))
     }
+
+    func testHookSetupStandingIsObviousForInstalledHarnesses() {
+        var state = FirstUseSetupState()
+        XCTAssertEqual(state.hookSetupStatus(for: "claude"), .notInstalled)
+        XCTAssertEqual(state.hookSetupStatus(for: "claude").headline, "Not set up")
+        XCTAssertNil(state.hookSetupStatus(for: "claude").guidance(for: "claude"))
+
+        state.installedHarnesses = ["claude", "codex", "openclaw"]
+        XCTAssertEqual(state.hookSetupStatus(for: "claude").headline, "Hooks configured")
+        state.daemonAvailable = true
+        state.probes = [CoverageProbeReceiptModel(harness: "claude", hookPath: "/fixture", checkedAt: "fixture", state: "failed", detail: "failed")]
+        XCTAssertEqual(state.hookSetupStatus(for: "claude").headline, "Hooks configured")
+        state.probes = [CoverageProbeReceiptModel(harness: "claude", hookPath: "/fixture", checkedAt: "fixture", state: "passed", detail: "passed")]
+        XCTAssertEqual(state.hookSetupStatus(for: "claude"), .ready)
+        XCTAssertEqual(state.hookSetupStatus(for: "cursor"), .notInstalled)
+        XCTAssertEqual(state.hookSetupStatus(for: "codex"), .needsActivation)
+        XCTAssertEqual(state.hookSetupStatus(for: "codex").guidance(for: "codex"),
+                       FirstUseSetupState.activationGuidance("codex"))
+        XCTAssertEqual(state.hookSetupStatus(for: "openclaw"), .pluginInstalled)
+        XCTAssertEqual(state.hookSetupStatus(for: "openclaw").guidance(for: "openclaw"),
+                       FirstUseSetupState.activationGuidance("openclaw"))
+        XCTAssertNil(HookSetupStanding.ready.guidance(for: "claude"))
+    }
 }

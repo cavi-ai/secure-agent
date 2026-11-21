@@ -56,6 +56,14 @@ struct FirstUseSetupState {
         return Self.supportsProbe(harness) ? "Hooks installed and registered" : "Hooks registered; activation required"
     }
 
+    /// What the settings row should show. Installed harnesses must not look
+    /// like the ones that still need setup.
+    func hookSetupStatus(for harness: String) -> HookSetupStanding {
+        guard installedHarnesses.contains(harness) else { return .notInstalled }
+        if harness == "openclaw" { return .pluginInstalled }
+        return Self.supportsProbe(harness) ? (result(for: harness).passed ? .ready : .configured) : .needsActivation
+    }
+
     struct Result {
         let title: String
         let detail: String
@@ -84,6 +92,65 @@ struct FirstUseSetupState {
         case "expired": return Result(title: "Hook check expired", detail: receipt.detail)
         case "failed": return Result(title: "Hook check failed", detail: receipt.detail)
         default: return Result(title: "Hook result unavailable", detail: "The monitor returned an unrecognized check state. Refresh or update Secure Agent before relying on it.")
+        }
+    }
+}
+
+/// Visible standing of one harness's hooks. Distinct from the longer
+/// `installationStatus` sentence, which is too easy to miss under the title.
+enum HookSetupStanding: Equatable {
+    case notInstalled
+    case ready
+    case configured
+    case needsActivation
+    case pluginInstalled
+
+    var headline: String {
+        switch self {
+        case .notInstalled: return "Not set up"
+        case .ready: return "Ready"
+        case .configured: return "Hooks configured"
+        case .needsActivation: return "Needs activation"
+        case .pluginInstalled: return "Plugin installed"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .notInstalled: return "circle"
+        case .ready: return "checkmark.circle.fill"
+        case .configured: return "circle.dashed"
+        case .needsActivation: return "exclamationmark.triangle.fill"
+        case .pluginInstalled: return "checkmark.circle"
+        }
+    }
+
+    /// What the person still has to do. Ready and missing rows have nothing
+    /// further to explain.
+    func guidance(for harness: String) -> String? {
+        switch self {
+        case .notInstalled, .ready:
+            return nil
+        case .configured:
+            return "Connection checks are available under Diagnostics."
+        case .needsActivation, .pluginInstalled:
+            return FirstUseSetupState.activationGuidance(harness)
+        }
+    }
+}
+
+/// The step `configureHooks` is on, so one harness row can say what is
+/// happening instead of every button switching to "Setting Up…".
+enum HookSetupPhase: Equatable {
+    case installing
+    case registering
+    case checking
+
+    var title: String {
+        switch self {
+        case .installing: return "Installing hooks"
+        case .registering: return "Registering the plugin"
+        case .checking: return "Checking the installation"
         }
     }
 }

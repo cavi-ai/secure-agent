@@ -564,4 +564,40 @@ final class TelemetryDoctorTests: XCTestCase {
         XCTAssertTrue(TelemetryDoctor.logWaitsForGrant(last))
         XCTAssertNil(TelemetryDoctor.lastLine(ofFileAt: dir + "/missing.log"))
     }
+
+    func testDoctorRunAdvancesSectionBySectionWithoutClearingEarlierRows() {
+        let first = DoctorActivity.collecting(.signatures)
+        XCTAssertEqual(first.phase(for: "signature", hasResult: false), .checking)
+        XCTAssertEqual(first.phase(for: "location", hasResult: false), .checked)
+        XCTAssertEqual(first.phase(for: "launchd", hasResult: false), .pending)
+        XCTAssertEqual(first.rowDetail(for: "signature", cause: "", hasResult: false), DoctorCollectStep.signatures.title)
+        XCTAssertEqual(first.headline { _ in nil }, DoctorCollectStep.signatures.title)
+
+        let again = DoctorActivity.collecting(.launchd)
+        XCTAssertEqual(again.phase(for: "signature", hasResult: true), .settled)
+        XCTAssertEqual(again.phase(for: "launchd", hasResult: true), .checking)
+        XCTAssertEqual(again.phase(for: "spool", hasResult: true), .settled)
+        XCTAssertEqual(again.rowDetail(for: "signature", cause: "signed", hasResult: true), "signed")
+
+        let fixing = DoctorActivity.fixing(checkID: "login-items", fix: .openLoginItems)
+        XCTAssertEqual(fixing.phase(for: "login-items", hasResult: true), .fixing)
+        XCTAssertEqual(fixing.phase(for: "launchd", hasResult: true), .settled)
+        XCTAssertEqual(fixing.headline { $0 == "login-items" ? "Login Items approval" : nil },
+                       "Open Login Items · Login Items approval")
+
+        let waiting = DoctorActivity.waiting(checkID: "full-disk-access", fix: .openFullDiskAccess)
+        XCTAssertEqual(waiting.phase(for: "full-disk-access", hasResult: true), .waiting)
+        XCTAssertEqual(waiting.rowDetail(for: "full-disk-access", cause: "old", hasResult: true),
+                       DoctorFix.openFullDiskAccess.waitingTitle)
+        XCTAssertEqual(waiting.headline { _ in nil }, DoctorFix.openFullDiskAccess.waitingTitle)
+    }
+
+    func testUnreachableDaemonReportsRestart() {
+        let previous = TelemetryDoctor.evaluate(facts { $0.daemonChecks = [DaemonDoctorCheckModel(id: "bus", title: "Event bus", state: "fail")] })
+        XCTAssertNotNil(previous.first { $0.id == "daemon.bus" })
+        let next = TelemetryDoctor.evaluate(facts { $0.daemonChecks = nil })
+        assertCheck(next, "daemon", .fail, .restartDaemon)
+        XCTAssertNil(next.first { $0.id == "daemon.bus" })
+        XCTAssertEqual(TelemetryDoctor.displayRows([]).map(\.id), TelemetryDoctor.placeholderSections.map(\.id))
+    }
 }
