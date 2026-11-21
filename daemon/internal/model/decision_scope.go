@@ -36,6 +36,14 @@ type ScopeChoice struct {
 	// Category: the permission covers the request's send categories instead
 	// of its exact sinks. Guard prompts offer it; review decisions do not.
 	Category bool `json:"category,omitempty"`
+	// Terms is the Allow-button sentence. Empty for once, always, an unknown
+	// duration, and a kind permission that names no kinds.
+	Terms string `json:"terms,omitempty"`
+	// Effect is the confirmation effect with no trailing period. An always
+	// choice omits the verdict; the console prefixes it.
+	Effect string `json:"effect,omitempty"`
+	// Tail is the confirmation's signature, limit, and revocation line.
+	Tail string `json:"tail,omitempty"`
 }
 
 // Validate checks a review decision's choice. A guard answer is checked

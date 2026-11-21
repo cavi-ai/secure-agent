@@ -52,13 +52,22 @@ function guardDurationText(scope, expiry) {
 
 // No optimistic permission or receipt: only a matching daemon answer confirms
 // submission. Failed responses are ambiguous and never replay automatically.
+function guardFactLines(p) {
+  return `Agent: ${p.agent || p.group?.agent || 'Unknown'}\nOperation: ${p.tool || 'Unknown'}\nResource: ${p.path || 'Unknown'}\nWorkspace: ${p.workspace || p.group?.workspace || 'Unknown'}\nExecutable path: ${p.reader_exe || 'Unknown'}\nSession: ${p.session_id || 'Unknown'}`;
+}
+
 function guardScopeConfirmation(p, verdict, scope, expiry, category) {
+  const choice = (p.available_scopes || []).find(s => s.kind === scope && (s.expiry || '') === (expiry || '') && (s.category === true) === (category === true));
+  if (choice && choice.effect && choice.tail) {
+    const effect = choice.kind === 'always' ? `${verdict} ${choice.effect}` : choice.effect;
+    return `${effect}.\n\n${guardFactLines(p)}\n\n${choice.tail}`;
+  }
   const sends = (p.rule_id || p.rule) === 'untrusted-egress';
   const subject = category ? `all ${(p.categories || []).map(sendKindLabel).join(' and ')} from this tool in this workspace` : sends ? 'these sends from this tool' : 'this file and tool';
   const effect = scope === 'always' ? `${verdict} every future path matched by rule ${p.rule_id || p.rule || 'unavailable'}`
     : `allow ${subject} ${guardDurationText(scope, expiry)}`;
   const limit = sends ? (category ? 'Other kinds of send still ask.' : 'Other sends still ask.') : 'File approval does not authorize network access.';
-  return `${effect}.\n\nAgent: ${p.agent || p.group?.agent || 'Unknown'}\nOperation: ${p.tool || 'Unknown'}\nResource: ${p.path || 'Unknown'}\nWorkspace: ${p.workspace || p.group?.workspace || 'Unknown'}\nExecutable path: ${p.reader_exe || 'Unknown'}\nSession: ${p.session_id || 'Unknown'}\n\nExecutable signatures are not verified. ${limit} Revoke under Protection → Rules & permissions.`;
+  return `${effect}.\n\n${guardFactLines(p)}\n\nExecutable signatures are not verified. ${limit} Revoke under Protection → Rules & permissions.`;
 }
 
 function createGuardDecisionController({request,confirm,context,generation,ended,paint,announce,refetch,openPermissions,openResults,openInspection}) {

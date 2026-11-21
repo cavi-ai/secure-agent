@@ -182,7 +182,19 @@ func resolveGuardBody(a *API, body string) *httptest.ResponseRecorder {
 func TestGuardCategoryPermissionCoversVariants(t *testing.T) {
 	a, identity := scopedGuardAPI(t)
 	p, done := enqueueGuardBody(t, a, egressBody("git push origin", "git-push"))
-	if offered, _ := json.Marshal(servedPending(t, a)["available_scopes"]); !strings.Contains(string(offered), `{"category":true,"kind":"session"}`) {
+	offered, _ := json.Marshal(servedPending(t, a)["available_scopes"])
+	var scopes []model.ScopeChoice
+	if err := json.Unmarshal(offered, &scopes); err != nil {
+		t.Fatal(err)
+	}
+	var kindSession *model.ScopeChoice
+	for i := range scopes {
+		if scopes[i].Kind == "session" && scopes[i].Category {
+			kindSession = &scopes[i]
+			break
+		}
+	}
+	if kindSession == nil || kindSession.Terms == "" || kindSession.Effect == "" || kindSession.Tail == "" {
 		t.Fatalf("no session permission for the kind of send: %s", offered)
 	}
 	w := resolveGuardBody(a, `{"id":"`+p.ID+`","verdict":"allow","scope":"session","category":true}`)

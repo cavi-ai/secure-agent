@@ -429,6 +429,9 @@ export interface ScopeChoice {
   kind: string;
   expiry?: string;
   category?: boolean;
+  terms?: string;
+  effect?: string;
+  tail?: string;
 }
 
 export interface ReviewRecord {
