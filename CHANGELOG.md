@@ -6,9 +6,22 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-21
+
+### Added
+- Hooks: marketplace packages for Claude Code, Codex, Cursor, Antigravity, OpenClaw, Hermes and OpenCode v2, with installation and activation steps for each host; OpenClaw loads the hooks at startup.
+
+### Changed
+- Settings: Doctor names the active check and phase, hook rows read ready, needs activation or not set up, analysis servers can be chosen or edited, automatic analysis reports its health, and CLI install shows progress and whether `~/.local/bin/secure-agent` is linked.
+- Releases: the app records its source revision, and publication is refused when it differs from the release tag.
+
 ### Fixed
-- Hooks: stop guard checks across supported harnesses when Secure Agent quits.
+- Hooks: stop guard checks across supported harnesses when Secure Agent quits; Guard stays active for headless installs after desktop use, and Cursor receives its expected response after shutdown.
+- Claude plugin: hooks resolve guard scripts from the installed plugin and check every tool call; setup recognizes marketplace installs and flags duplicate registrations.
+- CLI install: existing files at the install path are preserved.
 - Console: the alert banner is one row with a single Review action on every tab, the inspector overlays until the page keeps 720px beside it, and headers, icons, labels and intervention errors are consistent and plain.
+- Console: an empty process-scoped Findings view shows the process label as text instead of markup.
+- Documentation: links with labels wrapped across lines resolve on the published site.
 
 ## [1.6.0] - 2026-11-10
 
@@ -1850,7 +1863,8 @@ scanning of the repository itself.
 Development history lives in the git log; this changelog starts at the first
 tagged release.
 
-[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/cavi-ai/secure-agent/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/cavi-ai/secure-agent/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/cavi-ai/secure-agent/compare/v1.5.4...v1.6.0
 [1.5.4]: https://github.com/cavi-ai/secure-agent/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/cavi-ai/secure-agent/compare/v1.5.2...v1.5.3
