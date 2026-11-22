@@ -9,7 +9,7 @@
 **Your GPU isn’t an all-you-can-eat buffet.** A website should not get free inference from your machine.
 
 [![CI](https://github.com/cavi-ai/secure-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/cavi-ai/secure-agent/actions/workflows/ci.yml)
-[![macOS](https://img.shields.io/badge/macOS-14.0+-000000?style=flat&logo=apple)](https://apple.com/macos)
+[![macOS minimum](https://img.shields.io/badge/macOS%20minimum-14.0%2B-000000?style=flat&logo=apple)](https://apple.com/macos)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 <img src="daemon/internal/api/web_dist/brand-icon.png" alt="Secure Agent app icon" width="72">
@@ -19,11 +19,11 @@ Secure Agent helps you control what coding agents can read and send, and who can
 ## Get started
 
 1. Download `SecureAgent-<version>.dmg` from the [latest release](https://github.com/cavi-ai/secure-agent/releases/latest).
-2. Drag **Secure Agent.app** to **Applications** and launch it. Requires **macOS 14+**.
+2. Drag **Secure Agent.app** to **Applications** and launch it. Running the app requires **macOS 14 or later**.
 3. Choose your harness in Setup. Register Claude Code, Cursor, Codex, OpenClaw, Antigravity, Hermes or OpenCode v2 hooks, or continue with the selected harness's observation path.
 4. Start an agent session and check its observed coverage. Enable file telemetry, guard prompts, traffic routing and local analysis separately as needed.
 
-Follow [Getting started](docs/GETTING_STARTED.md), then [Your first observed session](docs/FIRST_SESSION.md) to see evidence and export a report. For problems, use [Troubleshooting](docs/TROUBLESHOOTING.md). To build from source, use [Development](docs/DEVELOPMENT.md).
+Follow [Getting started](docs/GETTING_STARTED.md), then [Your first observed session](docs/FIRST_SESSION.md) to see evidence and export a report. For problems, use [Troubleshooting](docs/TROUBLESHOOTING.md). Building from source requires the macOS 27 SDK. See [Development](docs/DEVELOPMENT.md).
 
 These docs describe the current `main` checkout. The published release may have an earlier setup flow or fewer features; consult its [release notes](https://github.com/cavi-ai/secure-agent/releases).
 
