@@ -109,6 +109,7 @@ test-hooks:
 	python3 plugin/hooks/test_harness_guard.py
 	python3 plugin/hooks/test_hermes_plugin.py
 	python3 plugin/hooks/test_claude_plugin_package.py
+	python3 plugin/hooks/test_marketplace_packages.py
 	node --test plugin/hooks/openclaw/test_plugin.mjs
 	node --test plugin/hooks/opencode/test_plugin.mjs
 	python3 packaging/test/test_menu_bar_tracking.py
