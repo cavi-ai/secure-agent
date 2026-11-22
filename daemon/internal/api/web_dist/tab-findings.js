@@ -790,7 +790,7 @@ function renderFlags() {
     historyOpenRows = new Map();
     paintHistoryBulk(SA);
     const msg = SA.sessionScopeOn()
-      ? `No flags for ${SA.sessionScopeTag()} in the loaded window`
+      ? `No flags for ${escapeHTML(SA.sessionScopeTag())} in the loaded window`
       : SA.isFlagsFiltered() ? 'No flags match the current filter' : 'No findings in the loaded window';
     container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>${msg}</span></div>`;
     return;

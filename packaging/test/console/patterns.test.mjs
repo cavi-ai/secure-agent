@@ -236,6 +236,21 @@ test('a filtered findings view that has not loaded does not claim zero matches o
   assert.doesNotMatch(list.innerHTML, /No flags|row-body/);
 });
 
+test('an empty process-scoped history shows the process label as text', () => {
+  const list = { innerHTML: '' };
+  const badge = { textContent: '' };
+  ctx.document = { getElementById: id => id === 'flags-list' ? list : id === 'badge-flags-count' ? badge : { value: 'all' } };
+  ctx.window.SA = { t: { flags: [], flagsView: [], patterns: [], routine: [] },
+    timelineSession: null, timelinePids: [4242],
+    seenAgents: new Set(), seenRules: new Set(), syncSelect() {}, globalSearchTerm: () => '',
+    paintSessionChip() {}, isFlagsFiltered: () => true, sessionScopeOn: () => true,
+    sessionScopeTag: () => '<img src=x onerror=alert(1)>', historySelected: new Set() };
+  ctx.renderFlags();
+  assert.equal(badge.textContent, 0);
+  assert.match(list.innerHTML, /No flags for &lt;img src=x onerror=alert\(1\)&gt; in the loaded window/);
+  assert.doesNotMatch(list.innerHTML, /<img/);
+});
+
 test('an optimistic pattern dismissal preserves an unloaded filtered view', () => {
   const p = pattern({ flag_ids: ['k1'] });
   const updated = patternAfterOptimisticDismiss({ patterns: [p], flags: [flag('k1')], flagsView: null }, p.key, ['k1']);
