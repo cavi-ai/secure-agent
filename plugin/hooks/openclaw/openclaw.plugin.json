@@ -2,5 +2,6 @@
   "id": "secure-agent",
   "name": "Secure Agent",
   "description": "Check tool requests with Secure Agent and record tool activity.",
+  "activation": { "onStartup": true },
   "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
 }

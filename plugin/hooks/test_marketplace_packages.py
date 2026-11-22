@@ -44,6 +44,9 @@ class MarketplacePackagesTest(unittest.TestCase):
                     if host in ADAPTERS:
                         for name in ADAPTERS[host]:
                             self.assertEqual((out / name).read_bytes(), (HOOKS / host / name).read_bytes())
+                        if host == "openclaw":
+                            manifest = json.loads((out / "openclaw.plugin.json").read_text())
+                            self.assertIs(manifest.get("activation", {}).get("onStartup"), True)
                     elif host == "claude":
                         source = ROOT / "plugin/.claude-plugin/plugin.json"
                         self.assertEqual(
