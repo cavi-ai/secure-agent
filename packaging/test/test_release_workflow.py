@@ -1,10 +1,21 @@
 """Check the release validation job graph against GitHub's skip rule: a job
 whose needs include a skipped job is skipped too unless it has its own `if`."""
+import os
 from pathlib import Path
 import re
+import shlex
+import subprocess
+import tempfile
 import unittest
 
-WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release-validation.yml"
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOW = ROOT / ".github" / "workflows" / "release-validation.yml"
+
+
+def step_command(text, name):
+    """The single-line `run:` command of the step with this name."""
+    match = re.search(rf"^\s*- name: {re.escape(name)}\n\s*run: (.+)$", text, re.M)
+    return match.group(1) if match else None
 
 
 def jobs(text):
@@ -52,6 +63,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_no_job_is_skipped_with_a_skipped_ancestor(self):
         self.assertEqual(skipped_with_a_conditional_job(jobs(WORKFLOW.read_text())), [])
+
+    def test_provenance_step_runs_beside_an_installed_packaging_module(self):
+        # Hosted runners ship the PyPI `packaging` module, which takes the
+        # name from the repository's packaging/ directory.
+        command = step_command(WORKFLOW.read_text(), "release provenance tests")
+        self.assertIsNotNone(command)
+        with tempfile.TemporaryDirectory() as shadow:
+            (Path(shadow) / "packaging").mkdir()
+            (Path(shadow) / "packaging" / "__init__.py").touch()
+            result = subprocess.run(shlex.split(command), cwd=ROOT, capture_output=True, text=True,
+                                    env={**os.environ, "PYTHONPATH": shadow})
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
 
 
 if __name__ == "__main__":

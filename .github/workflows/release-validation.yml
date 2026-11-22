@@ -59,7 +59,7 @@ jobs:
           fi
           printf 'sha=%s\ntag=%s\n' "$sha" "$tag" >> "$GITHUB_OUTPUT"
       - name: release provenance tests
-        run: python3 -m unittest packaging/test/test_release_provenance.py
+        run: python3 packaging/test/test_release_provenance.py
       - name: Check signing secrets before building
         if: inputs.tag != ''
         env:
