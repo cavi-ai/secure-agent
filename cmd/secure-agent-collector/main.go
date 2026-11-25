@@ -133,7 +133,11 @@ func main() {
 		log.Fatal("collector: no node secrets configured — use -secrets n1=secret,n2=secret or a secrets file")
 	}
 
-	c := &Collector{cfg: cfg, store: NewStore(cfg.StoreDir)}
+	store, err := NewStore(cfg.StoreDir)
+	if err != nil {
+		log.Fatalf("collector: open store: %v", err)
+	}
+	c := &Collector{cfg: cfg, store: store}
 
 	log.Printf("secure-agent-collector listening on http://%s (nodes: %d)", cfg.Addr, len(cfg.Secrets))
 	srv := newServer(cfg.Addr, c, defaultServerTimeouts)
@@ -257,9 +261,11 @@ func verifySignature(header string, body []byte, secret string) error {
 	return nil
 }
 
+const maxEnvelopeBody = 2 << 20
+
 // handleHook receives, verifies, and stores one envelope.
 func (c *Collector) handleHook(w http.ResponseWriter, r *http.Request) {
-	body := http.MaxBytesReader(w, r.Body, 2<<20)
+	body := http.MaxBytesReader(w, r.Body, maxEnvelopeBody)
 	raw, err := io.ReadAll(body)
 	if err != nil {
 		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)

@@ -61,7 +61,7 @@ func TestCollectorReadAuthentication(t *testing.T) {
 		{"authenticated network", "192.0.2.1:9445", "test-read-key", []string{"Bearer test-read-key"}, 200},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := &Collector{cfg: Config{Addr: tc.addr, ReadToken: tc.token}, store: NewStore(t.TempDir())}
+			c := &Collector{cfg: Config{Addr: tc.addr, ReadToken: tc.token}, store: openTestStore(t, t.TempDir())}
 			r := httptest.NewRequest(http.MethodGet, "/fleet", nil)
 			for _, header := range tc.headers {
 				r.Header.Add("Authorization", header)

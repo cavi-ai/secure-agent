@@ -1,7 +1,7 @@
 package main
 
 // The collector store: an in-memory per-node rollup over a persistence seam.
-// The seam (envelopeLog) is deliberately tiny — append, replay, query — so a
+// The seam (envelopeLog) is deliberately tiny — append and query — so a
 // SQLite backend can replace the JSONL reference implementation without
 // touching rollup semantics. 0600 files in a 0700 directory — the collector
 // sees fleet security data and must not be the weak link.
@@ -11,10 +11,13 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -91,16 +94,16 @@ const (
 type deliveryKey [sha256.Size]byte
 
 type appliedDelivery struct {
-	key deliveryKey
-	at  time.Time
+	Key deliveryKey
+	At  time.Time
 }
 
 // windowEvent is one security event inside the rolling count window.
 type windowEvent struct {
-	ts       time.Time
-	kind     string // flag | incident
-	rule     string // flag rule id — the cross-node correlation key
-	severity int    // flag severity; incident risk mapped CRITICAL→3, HIGH→2, else 1
+	TS       time.Time
+	Kind     string // flag | incident
+	Rule     string // flag rule id — the cross-node correlation key
+	Severity int    // flag severity; incident risk mapped CRITICAL→3, HIGH→2, else 1
 }
 
 // nodeRuntime is the mutable per-node state: the rollup plus the window ring
@@ -128,8 +131,8 @@ type nodeRuntime struct {
 }
 
 type sequenceHole struct {
-	first, last uint64
-	opened      time.Time
+	First, Last uint64
+	Opened      time.Time
 }
 
 // statusPayload mirrors model.NodeStatus on the node side; only the fields
@@ -206,10 +209,9 @@ type envelopeFile struct {
 
 // envelopeLog is the persistence seam between the rollup and storage. The
 // JSONL implementation below is the reference; a SQLite backend slots in by
-// satisfying these three methods.
+// satisfying these methods.
 type envelopeLog interface {
 	Append(env Envelope, receivedAt string) error
-	Replay(fn func(env Envelope, receivedAt string))
 	Query(nodeID string, kinds map[string]bool, limit int) []envelopeFile
 }
 
@@ -220,16 +222,17 @@ type Store struct {
 	nodes map[string]*nodeRuntime
 }
 
-func NewStore(dir string) *Store {
+func NewStore(dir string) (*Store, error) {
 	return newStoreWithLog(newJSONLLog(dir, logMaxBytes, logKeepRotated))
 }
 
-func newStoreWithLog(l *jsonlLog) *Store {
+func newStoreWithLog(l *jsonlLog) (*Store, error) {
 	s := &Store{log: l, nodes: map[string]*nodeRuntime{}}
-	s.log.Replay(func(env Envelope, receivedAt string) {
-		s.applyOnce(env, receivedAt, false)
-	})
-	return s
+	if err := l.replay(s); err != nil {
+		return nil, err
+	}
+	l.saveCheckpoint = s.saveCheckpoint
+	return s, nil
 }
 
 // Append stores one verified envelope and folds it into the rollup. An
@@ -304,10 +307,10 @@ func (rt *nodeRuntime) isRedelivery(key deliveryKey, cutoff time.Time) bool {
 
 func (rt *nodeRuntime) rememberDelivery(key deliveryKey, ts, cutoff time.Time) {
 	drop := 0
-	for drop < len(rt.applied) && (rt.applied[drop].at.Before(cutoff) || len(rt.applied)-drop >= maxRecentDeliveries) {
+	for drop < len(rt.applied) && (rt.applied[drop].At.Before(cutoff) || len(rt.applied)-drop >= maxRecentDeliveries) {
 		entry := rt.applied[drop]
-		if rt.appliedAt[entry.key] == entry.at {
-			delete(rt.appliedAt, entry.key)
+		if rt.appliedAt[entry.Key] == entry.At {
+			delete(rt.appliedAt, entry.Key)
 		}
 		drop++
 	}
@@ -316,7 +319,7 @@ func (rt *nodeRuntime) rememberDelivery(key deliveryKey, ts, cutoff time.Time) {
 		rt.appliedAt = make(map[deliveryKey]time.Time)
 	}
 	rt.appliedAt[key] = ts
-	rt.applied = append(rt.applied, appliedDelivery{key: key, at: ts})
+	rt.applied = append(rt.applied, appliedDelivery{Key: key, At: ts})
 }
 
 // apply folds one envelope into the in-memory rollup. Caller must hold mu
@@ -340,15 +343,15 @@ func (s *Store) apply(env Envelope, receivedAt string) {
 		st.LatestFlag = summarize(env.Payload, "rule", 120)
 		st.LastEvent = ts
 		rt.recent = appendWindow(rt.recent, windowEvent{
-			ts: ts, kind: "flag",
-			rule:     summarize(env.Payload, "rule", 120),
-			severity: flagSeverity(env.Payload),
+			TS: ts, Kind: "flag",
+			Rule:     summarize(env.Payload, "rule", 120),
+			Severity: flagSeverity(env.Payload),
 		}, ts)
 	case "incident":
 		st.Incidents++
 		st.LatestIncident = summarize(env.Payload, "summary", 200)
 		st.LastEvent = ts
-		rt.recent = appendWindow(rt.recent, windowEvent{ts: ts, kind: "incident", severity: incidentSeverity(env.Payload)}, ts)
+		rt.recent = appendWindow(rt.recent, windowEvent{TS: ts, Kind: "incident", Severity: incidentSeverity(env.Payload)}, ts)
 	case "guard":
 		st.GuardDecisions++
 		st.LastEvent = ts
@@ -417,26 +420,26 @@ func (rt *nodeRuntime) trackSeq(boot string, seq uint64, ts time.Time) bool {
 	}
 	if seq > rt.maxSeq {
 		if seq-rt.maxSeq > 1 {
-			rt.holes = append(rt.holes, sequenceHole{first: rt.maxSeq + 1, last: seq - 1, opened: ts})
+			rt.holes = append(rt.holes, sequenceHole{First: rt.maxSeq + 1, Last: seq - 1, Opened: ts})
 			rt.boundHoles()
 		}
 		rt.maxSeq = seq
 		return true
 	}
 	for i, hole := range rt.holes {
-		if seq < hole.first || seq > hole.last {
+		if seq < hole.First || seq > hole.Last {
 			continue
 		}
 		switch {
-		case hole.first == hole.last:
+		case hole.First == hole.Last:
 			rt.holes = append(rt.holes[:i], rt.holes[i+1:]...)
-		case seq == hole.first:
-			rt.holes[i].first++
-		case seq == hole.last:
-			rt.holes[i].last--
+		case seq == hole.First:
+			rt.holes[i].First++
+		case seq == hole.Last:
+			rt.holes[i].Last--
 		default:
-			rt.holes[i].last = seq - 1
-			rt.holes = append(rt.holes, sequenceHole{first: seq + 1, last: hole.last, opened: hole.opened})
+			rt.holes[i].Last = seq - 1
+			rt.holes = append(rt.holes, sequenceHole{First: seq + 1, Last: hole.Last, Opened: hole.Opened})
 			rt.boundHoles()
 		}
 		break
@@ -452,12 +455,12 @@ func (rt *nodeRuntime) boundHoles() {
 	}
 	oldest := 0
 	for i, hole := range rt.holes {
-		if hole.opened.Before(rt.holes[oldest].opened) {
+		if hole.Opened.Before(rt.holes[oldest].Opened) {
 			oldest = i
 		}
 	}
 	hole := rt.holes[oldest]
-	rt.confirmedGaps = addGapCount(rt.confirmedGaps, hole.last-hole.first+1)
+	rt.confirmedGaps = addGapCount(rt.confirmedGaps, hole.Last-hole.First+1)
 	rt.holes = append(rt.holes[:oldest], rt.holes[oldest+1:]...)
 }
 
@@ -473,8 +476,8 @@ func addGapCount(n int, missing uint64) int {
 func (rt *nodeRuntime) gapCount(now time.Time) int {
 	n := rt.confirmedGaps
 	for _, hole := range rt.holes {
-		if now.Sub(hole.opened) > gapGrace {
-			n = addGapCount(n, hole.last-hole.first+1)
+		if now.Sub(hole.Opened) > gapGrace {
+			n = addGapCount(n, hole.Last-hole.First+1)
 		}
 	}
 	return n
@@ -487,7 +490,7 @@ func appendWindow(ring []windowEvent, ev windowEvent, now time.Time) []windowEve
 	cutoff := now.Add(-countWindow)
 	kept := ring[:0]
 	for _, e := range ring {
-		if e.ts.After(cutoff) {
+		if e.TS.After(cutoff) {
 			kept = append(kept, e)
 		}
 	}
@@ -499,13 +502,13 @@ func appendWindow(ring []windowEvent, ev windowEvent, now time.Time) []windowEve
 func windowCounts(ring []windowEvent, now time.Time) (flags, criticalFlags, incidents int) {
 	cutoff := now.Add(-countWindow)
 	for _, e := range ring {
-		if !e.ts.After(cutoff) {
+		if !e.TS.After(cutoff) {
 			continue
 		}
-		switch e.kind {
+		switch e.Kind {
 		case "flag":
 			flags++
-			if e.severity >= 3 {
+			if e.Severity >= 3 {
 				criticalFlags++
 			}
 		case "incident":
@@ -550,17 +553,17 @@ func (s *Store) RuleAggregates() FleetRules {
 	byRule := map[string]*agg{}
 	for nodeID, rt := range s.nodes {
 		for _, e := range rt.recent {
-			if e.kind != "flag" || e.rule == "" || !e.ts.After(cutoff) {
+			if e.Kind != "flag" || e.Rule == "" || !e.TS.After(cutoff) {
 				continue
 			}
-			a := byRule[e.rule]
+			a := byRule[e.Rule]
 			if a == nil {
 				a = &agg{nodes: map[string]bool{}}
-				byRule[e.rule] = a
+				byRule[e.Rule] = a
 			}
 			a.nodes[nodeID] = true
 			a.flags++
-			if e.severity >= 3 {
+			if e.Severity >= 3 {
 				a.critical++
 			}
 		}
@@ -753,8 +756,10 @@ const (
 	logMaxBytes = 16 << 20
 	// logKeepRotated: at most this many rotated files are kept per node.
 	logKeepRotated = 8
-	// maxLogLine: lines longer than this are skipped on read.
-	maxLogLine = 2 << 20
+	// Encoding may escape one input byte as six (for example, '<' in a
+	// payload). Allow the largest webhook plus the on-disk wrapper.
+	maxLogLine   = 6*maxEnvelopeBody + 128
+	logReadBlock = 64 << 10
 )
 
 // jsonlLog keeps one live file per node, <node>.jsonl, plus rotated files
@@ -764,7 +769,10 @@ type jsonlLog struct {
 	dir      string
 	maxBytes int64
 	keep     int
-	mu       sync.RWMutex // Append/rotation hold it exclusively; Query shares it.
+	mu       sync.RWMutex // Serializes rotation with opening query snapshots.
+
+	checkpointed   map[string]int
+	saveCheckpoint func(root *os.Root, node string, through int) error
 }
 
 func newJSONLLog(dir string, maxBytes int64, keep int) *jsonlLog {
@@ -780,10 +788,10 @@ func rotatedName(node string, seq int) string {
 }
 
 // rotatedSeqs lists the node's rotated sequence numbers, oldest first.
-func rotatedSeqs(root *os.Root, node string) []int {
+func rotatedSeqs(root *os.Root, node string) ([]int, error) {
 	entries, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var seqs []int
 	for _, e := range entries {
@@ -793,7 +801,7 @@ func rotatedSeqs(root *os.Root, node string) []int {
 		}
 	}
 	sort.Ints(seqs)
-	return seqs
+	return seqs, nil
 }
 
 // parseLogName splits a log file name into node id and rotation sequence.
@@ -840,6 +848,9 @@ func (l *jsonlLog) Append(env Envelope, receivedAt string) error {
 	if err != nil {
 		return err
 	}
+	if len(line) > maxLogLine {
+		return fmt.Errorf("envelope record exceeds %d bytes", maxLogLine)
+	}
 	line = append(line, '\n')
 	node := sanitize(env.NodeID)
 
@@ -863,52 +874,92 @@ func (l *jsonlLog) Append(env Envelope, receivedAt string) error {
 }
 
 // rotateIfNeeded renames a non-empty live file that cannot take the incoming
-// bytes within maxBytes, then drops rotated files beyond keep. A crash after the
-// rename leaves no live file; the next Append creates it.
+// bytes. With no live file it also resumes interrupted retention.
 func (l *jsonlLog) rotateIfNeeded(root *os.Root, node string, incoming int64) error {
 	if l.maxBytes <= 0 {
 		return nil
 	}
 	st, err := root.Lstat(liveName(node))
-	if err != nil || !st.Mode().IsRegular() || st.Size() == 0 || st.Size()+incoming <= l.maxBytes {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("stat live log: %w", err)
+	}
+	if st != nil && (!st.Mode().IsRegular() || st.Size() == 0 || st.Size()+incoming <= l.maxBytes) {
 		return nil
 	}
-	seqs := rotatedSeqs(root, node)
-	next := 1
-	if len(seqs) > 0 {
-		next = seqs[len(seqs)-1] + 1
+	seqs, err := rotatedSeqs(root, node)
+	if err != nil {
+		return fmt.Errorf("list rotated logs: %w", err)
 	}
-	if err := root.Rename(liveName(node), rotatedName(node, next)); err != nil {
-		return fmt.Errorf("rotate: %w", err)
+	if st != nil {
+		last := l.checkpointed[node]
+		if len(seqs) > 0 {
+			last = max(last, seqs[len(seqs)-1])
+		}
+		if last >= math.MaxInt-1 {
+			return fmt.Errorf("rotation sequence exhausted for %s", node)
+		}
+		next := last + 1
+		if err := root.Rename(liveName(node), rotatedName(node, next)); err != nil {
+			return fmt.Errorf("rotate: %w", err)
+		}
+		seqs = append(seqs, next)
 	}
-	seqs = append(seqs, next)
-	for len(seqs) > l.keep {
-		_ = root.Remove(rotatedName(node, seqs[0]))
-		seqs = seqs[1:]
+	return l.prune(root, node, seqs)
+}
+
+func (l *jsonlLog) prune(root *os.Root, node string, seqs []int) error {
+	if len(seqs) <= l.keep {
+		return nil
+	}
+	through := seqs[len(seqs)-1]
+	if l.checkpointed[node] < through {
+		// The live file has just been archived (or is absent on recovery).
+		// The in-memory rollup includes every record through this sequence.
+		if l.saveCheckpoint == nil {
+			return errors.New("rotation requires a rollup checkpoint")
+		}
+		if err := l.saveCheckpoint(root, node, through); err != nil {
+			return fmt.Errorf("save rollup checkpoint: %w", err)
+		}
+		l.checkpointed[node] = through
+	}
+	for _, seq := range seqs[:len(seqs)-l.keep] {
+		if err := root.Remove(rotatedName(node, seq)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("prune rotated log: %w", err)
+		}
 	}
 	return nil
 }
 
-// Replay feeds every kept envelope to fn, per node oldest first: rotated
-// files in sequence order, then the live file.
-func (l *jsonlLog) Replay(fn func(env Envelope, receivedAt string)) {
+// replay restores durable rollups and applies logs newer than their
+// checkpoints in order, with each node's live file last.
+func (l *jsonlLog) replay(s *Store) error {
 	root, err := os.OpenRoot(l.dir)
 	if err != nil {
-		return
+		return err
 	}
 	defer root.Close()
 	entries, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
-		return
+		return err
 	}
+	l.checkpointed = make(map[string]int)
 	type logFile struct {
 		name, node string
 		seq        int
 	}
 	var files []logFile
 	for _, e := range entries {
+		if node, ok := strings.CutSuffix(e.Name(), checkpointSuffix); ok {
+			through, err := s.restoreCheckpoint(root, e.Name())
+			if err != nil {
+				return fmt.Errorf("restore %s: %w", e.Name(), err)
+			}
+			l.checkpointed[node] = through
+			continue
+		}
 		node, seq, rotated, ok := parseLogName(e.Name())
-		if e.IsDir() || !ok {
+		if !e.Type().IsRegular() || !ok {
 			continue
 		}
 		if !rotated {
@@ -923,27 +974,72 @@ func (l *jsonlLog) Replay(fn func(env Envelope, receivedAt string)) {
 		return files[i].seq < files[j].seq
 	})
 	for _, lf := range files {
-		f, err := openEnvelopeLog(root, lf.name, os.O_RDONLY)
-		if err != nil {
+		if through, ok := l.checkpointed[lf.node]; ok && lf.seq <= through {
 			continue
 		}
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, 64*1024), maxLogLine)
-		for sc.Scan() {
+		f, err := openEnvelopeLog(root, lf.name, os.O_RDONLY)
+		if err != nil {
+			return fmt.Errorf("open replay log %s: %w", lf.name, err)
+		}
+		err = scanLinesForward(f, func(line []byte) {
 			var rec envelopeFile
-			if json.Unmarshal(sc.Bytes(), &rec) == nil {
-				fn(rec.Envelope, rec.ReceivedAt)
+			if json.Unmarshal(line, &rec) == nil {
+				s.applyOnce(rec.Envelope, rec.ReceivedAt, false)
+			}
+		})
+		f.Close()
+		if err != nil {
+			return fmt.Errorf("replay %s: %w", lf.name, err)
+		}
+	}
+	return nil
+}
+
+// scanLinesForward skips oversized lines without discarding the rest of the
+// segment. It retains at most one bounded record between reads.
+func scanLinesForward(r io.Reader, fn func([]byte)) error {
+	reader := bufio.NewReaderSize(r, logReadBlock)
+	var line []byte
+	skipping := false
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if err != nil && err != bufio.ErrBufferFull && err != io.EOF {
+			return err
+		}
+		if err == nil {
+			fragment = fragment[:len(fragment)-1]
+		}
+		if !skipping {
+			if len(line)+len(fragment) > maxLogLine {
+				skipping = true
+			} else if len(line) == 0 && err != bufio.ErrBufferFull {
+				fn(fragment)
+			} else {
+				line = append(line, fragment...)
+				if err != bufio.ErrBufferFull {
+					fn(line)
+				}
 			}
 		}
-		f.Close()
+		if err != bufio.ErrBufferFull {
+			line = line[:0]
+			skipping = false
+		}
+		if err == io.EOF {
+			return nil
+		}
 	}
 }
 
-// Query returns up to limit matching envelopes, newest first (limit <= 0
-// means all). It reads each file backwards, live file first, then rotated
-// files newest to oldest, and stops once limit records are found.
-func (l *jsonlLog) Query(nodeID string, kinds map[string]bool, limit int) []envelopeFile {
-	node := sanitize(nodeID)
+type querySegment struct {
+	file *os.File
+	size int64
+}
+
+// querySegments opens the files before releasing the rotation lock. Reads
+// through these descriptors survive renames and removals, and fixed end
+// offsets exclude subsequent appends to the live file.
+func (l *jsonlLog) querySegments(node string) []querySegment {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
@@ -953,17 +1049,40 @@ func (l *jsonlLog) Query(nodeID string, kinds map[string]bool, limit int) []enve
 	}
 	defer root.Close()
 	names := []string{liveName(node)}
-	seqs := rotatedSeqs(root, node)
+	seqs, _ := rotatedSeqs(root, node)
 	for i := len(seqs) - 1; i >= 0; i-- {
 		names = append(names, rotatedName(node, seqs[i]))
 	}
-	var out []envelopeFile
-	for _, p := range names {
-		f, err := openEnvelopeLog(root, p, os.O_RDONLY)
+
+	segments := make([]querySegment, 0, len(names))
+	for _, name := range names {
+		f, err := openEnvelopeLog(root, name, os.O_RDONLY)
 		if err != nil {
 			continue
 		}
-		done := scanLinesReverse(f, func(line []byte) bool {
+		st, err := f.Stat()
+		if err != nil {
+			f.Close()
+			continue
+		}
+		segments = append(segments, querySegment{file: f, size: st.Size()})
+	}
+	return segments
+}
+
+// Query returns up to limit matching envelopes, newest first (limit <= 0
+// means all). It reads the snapshot backwards and stops once it has enough.
+func (l *jsonlLog) Query(nodeID string, kinds map[string]bool, limit int) []envelopeFile {
+	segments := l.querySegments(sanitize(nodeID))
+	defer func() {
+		for _, segment := range segments {
+			segment.file.Close()
+		}
+	}()
+
+	var out []envelopeFile
+	for _, segment := range segments {
+		done := scanLinesReverse(segment.file, segment.size, func(line []byte) bool {
 			var rec envelopeFile
 			if json.Unmarshal(line, &rec) != nil {
 				return false
@@ -974,7 +1093,6 @@ func (l *jsonlLog) Query(nodeID string, kinds map[string]bool, limit int) []enve
 			out = append(out, rec)
 			return limit > 0 && len(out) >= limit
 		})
-		f.Close()
 		if done {
 			break
 		}
@@ -982,53 +1100,51 @@ func (l *jsonlLog) Query(nodeID string, kinds map[string]bool, limit int) []enve
 	return out
 }
 
-// scanLinesReverse calls fn for each non-empty line of f, last line first,
-// reading 64 KiB blocks from the end. It returns true when fn asked to stop.
-// Lines longer than maxLogLine are skipped.
-func scanLinesReverse(f *os.File, fn func(line []byte) (stop bool)) bool {
-	st, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	pos := st.Size()
-	buf := make([]byte, 64<<10)
-	var carry []byte // bytes after the last newline read so far (a line's head is still unread)
+// scanLinesReverse calls fn for each non-empty bounded line before end, last
+// line first. A line spanning blocks is accumulated in reverse byte order.
+func scanLinesReverse(f *os.File, end int64, fn func(line []byte) (stop bool)) bool {
+	buf := make([]byte, logReadBlock)
+	var carry []byte
 	skipping := false
-	for pos > 0 {
-		n := int64(len(buf))
-		if pos < n {
-			n = pos
-		}
+	for pos := end; pos > 0; {
+		n := min(pos, int64(len(buf)))
 		pos -= n
 		if _, err := f.ReadAt(buf[:n], pos); err != nil {
 			return false
 		}
 		data := buf[:n]
-		if skipping {
+		for {
 			i := bytes.LastIndexByte(data, '\n')
+			fragment := data[i+1:]
+			if !skipping {
+				switch {
+				case len(carry)+len(fragment) > maxLogLine:
+					carry, skipping = carry[:0], true
+				case i >= 0 && len(carry) == 0:
+					if len(fragment) > 0 && fn(fragment) {
+						return true
+					}
+				default:
+					offset := len(carry)
+					carry = append(carry, fragment...)
+					slices.Reverse(carry[offset:])
+					if i >= 0 {
+						slices.Reverse(carry)
+						if fn(carry) {
+							return true
+						}
+						carry = carry[:0]
+					}
+				}
+			}
 			if i < 0 {
-				continue
+				break
 			}
 			data = data[:i]
 			skipping = false
 		}
-		data = append(append(make([]byte, 0, len(data)+len(carry)), data...), carry...)
-		end := len(data)
-		for {
-			i := bytes.LastIndexByte(data[:end], '\n')
-			if i < 0 {
-				break
-			}
-			if line := data[i+1 : end]; len(line) > 0 && fn(line) {
-				return true
-			}
-			end = i
-		}
-		carry = data[:end]
-		if len(carry) > maxLogLine {
-			carry, skipping = nil, true
-		}
 	}
+	slices.Reverse(carry)
 	return !skipping && len(carry) > 0 && fn(carry)
 }
 

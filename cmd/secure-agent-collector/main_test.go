@@ -15,12 +15,30 @@ import (
 	"time"
 )
 
+func openTestStore(t *testing.T, dir string) *Store {
+	t.Helper()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func openTestStoreWithLog(t *testing.T, log *jsonlLog) *Store {
+	t.Helper()
+	store, err := newStoreWithLog(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
 func testCollector(t *testing.T, secrets map[string]string) (*Collector, *httptest.Server) {
 	t.Helper()
 	dir := t.TempDir()
 	c := &Collector{
 		cfg:   Config{Secrets: secrets, StoreDir: dir},
-		store: NewStore(dir),
+		store: openTestStore(t, dir),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /hooks/secure-agent", c.handleHook)
@@ -122,7 +140,7 @@ func TestHookRejectsNodeMismatch(t *testing.T) {
 
 func TestStorePersistsAndReplays(t *testing.T) {
 	dir := t.TempDir()
-	s1 := NewStore(dir)
+	s1 := openTestStore(t, dir)
 	if err := s1.Append(Envelope{NodeID: "n1", Kind: "flag", Version: "v1", Payload: json.RawMessage(`{"rule":"aws-key"}`)}); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +164,7 @@ func TestStorePersistsAndReplays(t *testing.T) {
 	}
 
 	// A fresh store replays the log into the same rollup.
-	s2 := NewStore(dir)
+	s2 := openTestStore(t, dir)
 	r2 := s2.Rollup()
 	if len(r2) != 1 || r2[0].Flags != 1 || r2[0].Incidents != 1 {
 		t.Fatalf("replayed rollup = %+v", r2)
@@ -158,7 +176,7 @@ func rollupLen(states []*NodeState) int { return len(states) }
 
 func TestQueryFiltersByKindNewestFirst(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := openTestStore(t, dir)
 	for _, k := range []string{"flag", "guard", "flag", "incident"} {
 		if err := s.Append(Envelope{NodeID: "n1", Kind: k, Version: "v1", Payload: json.RawMessage(`{}`)}); err != nil {
 			t.Fatal(err)

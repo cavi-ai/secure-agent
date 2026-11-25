@@ -51,7 +51,7 @@ func TestHookAcceptsStatusKind(t *testing.T) {
 
 func TestStatusEnvelopeUpdatesPostureAndIdentity(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := openTestStore(t, dir)
 	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "status", Version: "v1.2.3",
 		Payload: json.RawMessage(`{"hostname":"builder-01","agents":2,"posture_state":"critical","posture_summary":"Secret leaving","needs_you":2,"labels":{"env":"prod"}}`)})
 
@@ -75,21 +75,21 @@ func mustAppend(t *testing.T, s *Store, env Envelope) {
 // must not be frozen forever (the old sticky-version bug).
 func TestVersionTracksNewestReport(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := openTestStore(t, dir)
 	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "flag", Version: "v1.0.0", Payload: json.RawMessage(`{}`)})
 	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "status", Version: "v1.1.0", Payload: json.RawMessage(`{"hostname":"h"}`)})
 	if got := s.Rollup()[0].Version; got != "v1.1.0" {
 		t.Fatalf("version = %q, want v1.1.0", got)
 	}
 	// Replay is chronological, so a fresh store lands on the newest too.
-	if got := NewStore(dir).Rollup()[0].Version; got != "v1.1.0" {
+	if got := openTestStore(t, dir).Rollup()[0].Version; got != "v1.1.0" {
 		t.Fatalf("replayed version = %q, want v1.1.0", got)
 	}
 }
 
 func TestWindowedCountsAndSeverityHarvest(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := openTestStore(t, dir)
 	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "flag", Version: "v1", Payload: json.RawMessage(`{"rule":"aws-key","severity":3}`)})
 	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "flag", Version: "v1", Payload: json.RawMessage(`{"rule":"keychain-access","severity":1}`)})
 	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "incident", Version: "v1", Payload: json.RawMessage(`{"summary":"x","risk":"CRITICAL"}`)})
@@ -115,7 +115,7 @@ func TestWindowedCountsAndSeverityHarvest(t *testing.T) {
 
 func TestGuardVerdictBreakdown(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := openTestStore(t, dir)
 	for _, v := range []string{"allow", "allow", "deny"} {
 		mustAppend(t, s, Envelope{NodeID: "n1", Kind: "guard", Version: "v1",
 			Payload: json.RawMessage(`{"verdict":"` + v + `"}`)})
@@ -133,7 +133,7 @@ func TestGuardVerdictBreakdown(t *testing.T) {
 // then stale, then all-clear, then legacy event-only nodes.
 func TestRollupSortsByOperatorPriority(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := openTestStore(t, dir)
 	status := func(id, state string) Envelope {
 		return Envelope{NodeID: id, Kind: "status", Version: "v1",
 			Payload: json.RawMessage(`{"hostname":"` + id + `","posture_state":"` + state + `"}`)}
@@ -213,7 +213,7 @@ func get(t *testing.T, url string) string {
 // attaches hostname/labels; live sessions sort above ended ones.
 func TestFleetSessionsRollupAndEndpoint(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := openTestStore(t, dir)
 	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "status",
 		Payload: json.RawMessage(`{"hostname":"builder-01","labels":{"env":"prod"}}`)})
 	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "session",
@@ -248,7 +248,7 @@ func TestFleetSessionsRollupAndEndpoint(t *testing.T) {
 
 func TestFleetSessionsEndpoint(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := openTestStore(t, dir)
 	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "session",
 		Payload: json.RawMessage(`{"id":"s1","harness":"claude","status":"active"}`)})
 	c := &Collector{cfg: Config{StoreDir: dir, Secrets: map[string]string{"n1": "x"}}, store: s}
@@ -276,7 +276,7 @@ func TestFleetSessionsEndpoint(t *testing.T) {
 // can rank nodes by budget pressure without fetching each node's resources.
 func TestStatusCarriesBudget(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := openTestStore(t, dir)
 	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "status",
 		Payload: json.RawMessage(`{"hostname":"builder-01","budget":{"mode":"prompt","enforced":true,"over_budget":2,"approval":1,"contained":1}}`)})
 	st := s.Rollup()[0]
