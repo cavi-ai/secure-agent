@@ -8,11 +8,14 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
+	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
@@ -621,6 +624,65 @@ func TestSpoolStatsCountTheDaemonsOwnEventsAsParsed(t *testing.T) {
 	}
 	if s := tailer.Stats(); s.Lines != 4 || s.Parsed != 3 {
 		t.Fatalf("stats = %+v, want 4 lines, 3 parsed (only the non-JSON line is garbage)", s)
+	}
+}
+
+type spoolProcs map[int32]agents.ProcInfo
+
+func (p spoolProcs) List() []agents.ProcInfo {
+	res := make([]agents.ProcInfo, 0, len(p))
+	for _, proc := range p {
+		res = append(res, proc)
+	}
+	return res
+}
+
+func (p spoolProcs) Info(pid int32) (agents.ProcInfo, bool) {
+	proc, ok := p[pid]
+	return proc, ok
+}
+
+// Fork and exec records reach the tagger in spool order, each before the
+// event of its line is published: a job whose shell and subshell exited
+// before any refresh saw them is tagged with the agent that forked the shell.
+func TestSpoolTailerFeedsLineageToTheTagger(t *testing.T) {
+	start := time.Date(2026, 11, 1, 3, 0, 0, 0, time.UTC) // esFullProcess's start_time
+	tg := agents.New(config.Config{Agents: []config.AgentDef{{Name: "cursor", Kind: "agent", Match: []string{"cursor-agent"}}}}, spoolProcs{
+		1:    {PID: 1, Comm: "launchd", StartTime: start.Add(-time.Hour)},
+		500:  {PID: 500, PPID: 1, Exe: "/usr/local/bin/cursor-agent", StartTime: start},
+		4303: {PID: 4303, PPID: 1, Exe: "/bin/sleep", StartTime: start},
+	})
+	tg.Refresh()
+	fork := func(parent, parentPPID, child int) string {
+		return `{"event_type":11,"process":` + esFullProcess(parent, parentPPID, "/bin/zsh") +
+			`,"event":{"fork":{"child":` + esFullProcess(child, parent, "/bin/zsh") + `}},"time":"2026-11-01T03:31:59.123456789Z"}`
+	}
+	exec := `{"event_type":9,"process":` + strings.Replace(esFullProcess(4303, 1, "/bin/zsh"), `"original_ppid":1`, `"original_ppid":4302`, 1) +
+		`,"event":{"exec":{"target":` + esFullProcess(4303, 1, "/bin/sleep") + `}},"time":"2026-11-01T03:31:59.223456789Z"}`
+	path := t.TempDir() + "/spool.jsonl"
+	appendSpool(t, path, fork(500, 1, 4301)+"\n"+fork(4301, 500, 4302)+"\n"+fork(4302, 4301, 4303)+"\n"+exec+"\n")
+	b := bus.New(64)
+	sub := b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+	tailer.OnLineage = func(l agents.Lineage) {
+		if len(sub) != 0 {
+			t.Errorf("lineage of %d reached the tagger after an event was published", l.ChildPID)
+		}
+		tg.NoteLineage(l)
+	}
+	tailer.poll(spoolCursor{})
+
+	if got := drainedPIDs(sub); !slices.Equal(got, []int32{4303}) {
+		t.Fatalf("published pids = %v, want the exec of 4303 only", got)
+	}
+	if s := tailer.Stats(); s.Lines != 4 || s.Parsed != 4 {
+		t.Fatalf("stats = %+v, want 4 lines, 4 parsed", s)
+	}
+	if info, ok := tg.Tag(4303); !ok || info.Name != "cursor" || info.RootPID != 500 {
+		t.Fatalf("Tag(job) = %+v, %v; want cursor rooted at 500", info, ok)
+	}
+	if agent, known := tg.LiveAgentFamily(4303); !agent || !known {
+		t.Fatalf("LiveAgentFamily(job) = (%v, %v), want (true, true)", agent, known)
 	}
 }
 

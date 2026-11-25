@@ -55,7 +55,10 @@ type Tagger struct {
 	// idents names listed processes across refreshes: the process list
 	// carries no executable, and an ancestor walk needs one for each parent.
 	idents map[int32]procIdent
-	now    func() time.Time
+	// lineage holds the agent family each process joined by fork or exec,
+	// as Endpoint Security reported it; it outlives the parents that exited.
+	lineage map[int32]lineageRecord
+	now     func() time.Time
 	// onTagged is told, after Refresh releases mu, about each pid that
 	// Refresh tagged which was not tagged before the call.
 	onTagged func(pid int32, info AgentInfo)
@@ -63,13 +66,14 @@ type Tagger struct {
 
 func New(cfg config.Config, ps ProcSource) *Tagger {
 	return &Tagger{
-		cfg:    cfg,
-		ps:     ps,
-		table:  make(map[int32]ProcInfo),
-		cache:  make(map[int32]AgentInfo),
-		tagged: make(map[int32]bool),
-		idents: make(map[int32]procIdent),
-		now:    time.Now,
+		cfg:     cfg,
+		ps:      ps,
+		table:   make(map[int32]ProcInfo),
+		cache:   make(map[int32]AgentInfo),
+		tagged:  make(map[int32]bool),
+		idents:  make(map[int32]procIdent),
+		lineage: make(map[int32]lineageRecord),
+		now:     time.Now,
 	}
 }
 
@@ -152,6 +156,7 @@ func (t *Tagger) SetAgents(defs []config.AgentDef) {
 		}
 	}
 	t.cfg.Agents = defs
+	t.retainLineageLocked(defs)
 	clear(t.cache)
 	clear(t.tagged)
 	newly := t.applyLocked(s)
@@ -244,6 +249,7 @@ func (t *Tagger) applyLocked(s procSample) []AgentInfo {
 			delete(t.idents, pid)
 		}
 	}
+	t.pruneLineageLocked(s.at)
 
 	// Prune cache entries for dead pids. Beyond bounding growth on a
 	// long-running daemon with heavy process churn, this is a correctness fix:
@@ -347,6 +353,7 @@ func (t *Tagger) LiveAgentFamily(pid int32) (isAgent, known bool) {
 	}
 
 	seen := make(map[int32]bool)
+	first, firstStart := pid, time.Time{}
 	for hops := 0; hops < 32 && pid > 0 && !seen[pid]; hops++ {
 		seen[pid] = true
 		p, ok := t.ps.Info(pid)
@@ -361,7 +368,15 @@ func (t *Tagger) LiveAgentFamily(pid int32) (isAgent, known bool) {
 		if p.StartTime.IsZero() {
 			return false, false
 		}
+		if hops == 0 {
+			firstStart = p.StartTime
+		}
 		if p.PPID == 0 {
+			// A process whose own lineage record names a family is in it
+			// after its family ancestors exited.
+			if r, held := t.lineage[first]; held && r.of(firstStart) {
+				return true, true
+			}
 			return false, true
 		}
 		pid = p.PPID
@@ -450,6 +465,8 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 	chain := make([]int32, 0, 8)
 	curr := pid
 	visited := make(map[int32]bool)
+	var self ProcInfo
+	selfOK := false
 
 	for hops := 0; hops < 32 && curr > 0; hops++ {
 		if visited[curr] {
@@ -465,6 +482,9 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 			read = t.procLocked
 		}
 		pInfo, ok := read(curr)
+		if hops == 0 {
+			self, selfOK = pInfo, ok
+		}
 		if !ok {
 			break
 		}
@@ -497,6 +517,16 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 		}
 
 		curr = pInfo.PPID
+	}
+
+	// No live ancestor matched: the process's own lineage record names the
+	// family it joined before its family ancestors exited.
+	if selfOK {
+		if res, ok := t.lineageTagLocked(pid, self); ok {
+			t.cache[pid] = res
+			t.tagged[pid] = true
+			return res, true
+		}
 	}
 
 	// No match, and the walk cannot go any further — pid resolved to nothing

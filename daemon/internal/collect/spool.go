@@ -379,6 +379,10 @@ type SpoolTailer struct {
 	// the supervisor's coverage heartbeat: a tailer whose spool stopped
 	// growing must not read as healthy coverage.
 	OnProduce func()
+	// OnLineage, when set, gets each fork or exec record's parent and child,
+	// in spool order and before the event decoded from the same line is
+	// published.
+	OnLineage func(agents.Lineage)
 	// Enabled is a live collection choice; nil preserves collector discovery.
 	Enabled func() bool
 
@@ -684,7 +688,11 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		linesThisTick++
-		switch e, v := parseESLine(line); v {
+		e, l, v := parseESLine(line)
+		if l.ChildPID != 0 && t.OnLineage != nil {
+			t.OnLineage(l)
+		}
+		switch v {
 		case esEvent:
 			parsedThisTick++
 			if !t.bus.TryPublish(e) {
@@ -705,6 +713,8 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 			}
 		case esOwn:
 			parsedThisTick++ // the daemon's own file activity: valid, not an event
+		case esLineage:
+			parsedThisTick++ // a fork record: valid, feeds attribution only
 		}
 		lastGood += int64(len(line)) + 1
 		if overBudget && lastGood >= spoolDrainBudget {
