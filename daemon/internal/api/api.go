@@ -98,6 +98,9 @@ type API struct {
 	tcpClientPID func(remoteAddr string) (int32, error)
 	openPath     func(args ...string) error
 
+	// stopIntent backs POST /daemon/stop-intent (stopintent.go).
+	stopIntent func() (recordedAt, validUntil time.Time, err error)
+
 	fwEngine      *firewall.Engine
 	fwModes       *firewall.ModeStore
 	fwReload      func() error
@@ -209,6 +212,9 @@ type Deps struct {
 	Store      *store.Store
 	Killer     Killer
 	Status     StatusFunc
+	// StopIntent records the owner's intent to stop the daemon and returns
+	// when it was recorded and until when it counts (unwired answers 503).
+	StopIntent func() (recordedAt, validUntil time.Time, err error)
 
 	// Firewall (optional).
 	Firewall FirewallControl
@@ -388,6 +394,7 @@ func New(d Deps) *API {
 		plan:            d.Advisors.Plan,
 		tcpClientPID:    d.System.TCPClientPID,
 		openPath:        d.System.OpenPath,
+		stopIntent:      d.StopIntent,
 	}
 	if a.tcpClientPID == nil {
 		a.tcpClientPID = TCPClientPID
