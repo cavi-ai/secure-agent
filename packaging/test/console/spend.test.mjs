@@ -75,7 +75,7 @@ test('day selection uses native keyboard buttons, persistent aria state, and esc
   assert.match(html, /aria-label="2026-09-22 · unpriced · 1 call · 1 unpriced"/);
   assert.equal((html.match(/<\/button>/g) || []).length, 2);
   assert.match(joined(spendDayItems([{key:'"><script>',calls:1,cost_usd:1}])), /data-day="&quot;&gt;&lt;script&gt;"/);
-  assert.doesNotMatch(joined(spendDayItems([{key:'"><script>',calls:1,cost_usd:1}])), /<script>/);
+  assert.doesNotMatch(joined(spendDayItems([{key:'"><script>',calls:1,cost_usd:1}])), /<script(?=[\s/>])/i);
 });
 
 test('day interval clamps partial first/last buckets to the displayed report window', () => {

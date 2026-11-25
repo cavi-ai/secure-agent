@@ -60,3 +60,22 @@ func TestEventsEndpointHonorsNanosecondSince(t *testing.T) {
 		t.Fatalf("last page=%+v", last)
 	}
 }
+
+func TestEventsEndpointRejectsOutOfRangePID(t *testing.T) {
+	a := newTestAPI(Deps{Store: testStore(t)})
+	for _, tc := range []struct {
+		pid  string
+		code int
+	}{
+		{"2147483647", http.StatusOK},
+		{"2147483648", http.StatusBadRequest},
+		{"0", http.StatusOK},
+		{"-1", http.StatusOK},
+	} {
+		w := httptest.NewRecorder()
+		a.handleEvents(w, httptest.NewRequest(http.MethodGet, "/events?pid="+tc.pid, nil))
+		if w.Code != tc.code {
+			t.Errorf("pid=%s returned %d, want %d", tc.pid, w.Code, tc.code)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -50,5 +51,17 @@ func TestParseProcStatmRSS(t *testing.T) {
 	}
 	if parseProcStatm("10", 4096) != 0 {
 		t.Fatal("short statm should be 0")
+	}
+}
+
+func TestParseProcStatLongRunningProcess(t *testing.T) {
+	const hz = 100
+	const elapsed = 4 * 365 * 24 * time.Hour
+	boot := time.Unix(1_000_000, 0)
+	ticks := int64(elapsed/time.Second) * hz
+	stat := fmt.Sprintf("12 (code) S 7 12 12 0 0 0 0 0 0 0 %d 30 0 0 20 0 1 0 %d", ticks, ticks)
+	_, _, start, cpu := parseProcStat(stat, boot, hz)
+	if !start.Equal(boot.Add(elapsed)) || cpu != elapsed+300*time.Millisecond {
+		t.Fatalf("start=%v cpu=%v, want %v and %v", start, cpu, boot.Add(elapsed), elapsed+300*time.Millisecond)
 	}
 }

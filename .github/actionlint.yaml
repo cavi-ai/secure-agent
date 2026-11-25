@@ -1,3 +1,9 @@
 self-hosted-runner:
   labels:
     - xcode-27
+
+paths:
+  .github/workflows/release-validation.yml:
+    ignore:
+      # GitHub supports cache-mode; actionlint v1.7.12 does not recognize it.
+      - '^unexpected key "cache-mode" for "workflow" section\.'

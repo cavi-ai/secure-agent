@@ -10,6 +10,10 @@
 (() => {
   const fixture = window.ConsoleFixtures.create(window.CONSOLE_TEST);
   const { now, iso, data, scenarios } = fixture;
+  function hasEndpoint(text, endpoint) {
+    const literal = endpoint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(String.raw`(?<![\w.:-])${literal}(?![\w.-])`).test(text);
+  }
   const routes = new Map();
   const realFetch = window.fetch.bind(window);
   const readingFetch = scenarios.has('readingdemo') || scenarios.has('worktreehierarchy') || scenarios.has('sessiondiscovery') || scenarios.has('sessionemptynav') || scenarios.has('sessionlatestfocus') || scenarios.has('sessionstatusfocus') ? window.fetch.bind(window) : null;
@@ -57,7 +61,7 @@
   if (scenarios.has('expectdemo')) {
     setTimeout(() => {
       openTab('egress');
-      const listed = document.getElementById('posture-banner').textContent.includes('updates.example.com');
+      const listed = hasEndpoint(document.getElementById('posture-banner').textContent, 'updates.example.com');
       const choices = !!document.querySelector('#recurring-egress-container [data-action="expect-egress"][data-episode-id="episode-routine"]');
       stamp('expect-before', `choices=${choices} listed=${listed} needs=${window.SA.t.posture.needs_you}`);
       document.querySelector('[data-action="expect-egress"][data-episode-id="episode-routine"][data-kind="destination"]').click();
@@ -707,7 +711,7 @@
       }
       if (scenarios.has('expectdemo') && p === '/expected-egress') {
         const choices = !!document.querySelector('#recurring-egress-container [data-action="expect-egress"][data-episode-id="episode-routine"]');
-        const listed = document.getElementById('posture-banner').textContent.includes('updates.example.com');
+        const listed = hasEndpoint(document.getElementById('posture-banner').textContent, 'updates.example.com');
         stamp('expect-probe', `choices=${choices} listed=${listed} needs=${window.SA.t.posture.needs_you}`);
       }
       // postfail: POST /allowlist answers 500 (the act-in-place revert path).
@@ -1140,7 +1144,7 @@
         receipt.outsideSnapshot = !window.SA.t.events.some(row => row.path === '/synthetic/retained-file.go');
         opener.click(); await painted(() => events().includes('/synthetic/retained-file.go'));
         receipt.scopedRead = window.__activityQueries.some(path => new URLSearchParams(path.split('?')[1]).get('session_id') === 'sess-cursor-2');
-        receipt.recordedRows = events().includes('/synthetic/retained-file.go') && events().includes('recorded.example.invalid') && !events().includes('logs.example.com');
+        receipt.recordedRows = events().includes('/synthetic/retained-file.go') && hasEndpoint(events(), 'recorded.example.invalid') && !hasEndpoint(events(), 'logs.example.com');
         if (!receipt.recordedRows) receipt.eventsText = events();
         receipt.limitVisible = !document.getElementById('events-scope-note').hidden && document.getElementById('events-scope-note').textContent.includes('Up to 200');
         const page = () => window.SA.eventHistoryPage;
@@ -3230,7 +3234,9 @@
         fits:result.getBoundingClientRect().right<=innerWidth && document.documentElement.scrollWidth<=innerWidth};
       result.querySelector('[data-action="open-review-result"]')?.click();
       const body=document.getElementById('drawer-body');
-      probe.evidence=body.textContent.includes('Evidence before this decision') && body.textContent.includes('api.example.com:443') && body.textContent.includes('Recorded risk: high');
+      const showsDestination = [...body.querySelectorAll('p')].some(p =>
+        p.textContent.split(', ').some(destination => destination === 'api.example.com:443'));
+      probe.evidence=body.textContent.includes('Evidence before this decision') && showsDestination && body.textContent.includes('Recorded risk: high');
       probe.readOnly=!document.querySelector('#drawer [data-action="review-decision"]');
       const before=body.textContent;
       body.querySelector('[data-action="open-flag"]')?.click();
@@ -3245,7 +3251,7 @@
         permissions?.click();
         await new Promise(resolve=>setTimeout(resolve,100));
         probe.permissionDetail=body.textContent.includes('Timed permission') && body.textContent.includes('/work/.env')
-          && body.textContent.includes('api.example.com:443') && body.textContent.includes('decision for revision 3');
+          && hasEndpoint(body.textContent, 'api.example.com:443') && body.textContent.includes('decision for revision 3');
         probe.permissionScope=!!body.querySelector('[data-action="session-permission-revoke"][data-id="scope-browser"]')
           && !body.textContent.includes('unrelated-permission') && !body.textContent.includes('/unrelated/resource');
         probe.permissionFits=document.documentElement.scrollWidth<=innerWidth;

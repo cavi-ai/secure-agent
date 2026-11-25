@@ -132,7 +132,7 @@ func (h *Hunter) TrashReviewed(ctx context.Context, path, head string, reasons [
 	if err != nil {
 		return TrashedOrphan{}, err
 	}
-	if _, err := gitWithin(ctx, removeTimeout, rs.ref.Main, "worktree", "remove", "--force", l.Path); err != nil {
+	if _, err := gitWithin(ctx, removeTimeout, rs.ref.Main, "worktree", "remove", "--force", "--", l.Path); err != nil {
 		if rollbackErr := os.Rename(dest, l.Path); rollbackErr != nil {
 			h.st.PutAudit(store.AuditEntry{Action: "worktree-review-trash-rollback-failed", Detail: fmt.Sprintf("path=%s trash=%s git_error=%v rollback_error=%v", l.Path, dest, err, rollbackErr)})
 			return TrashedOrphan{}, fmt.Errorf("git unregister failed: %w; rollback failed: %v; files are at %s", err, rollbackErr, dest)

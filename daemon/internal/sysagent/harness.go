@@ -260,7 +260,7 @@ func commandLine(bin string, l launch, task string) string {
 		parts = append(parts, "-u", k)
 	}
 	parts = append(parts, l.Env...)
-	quoted := make([]string, 0, len(parts)+len(l.Args)+2)
+	var quoted []string
 	if len(parts) > 0 {
 		quoted = append(quoted, "env")
 		for _, p := range parts {

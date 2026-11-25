@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from html.parser import HTMLParser
+import re
 
 VOID = frozenset("area base br col embed hr img input link meta param source track wbr".split())
 
@@ -33,6 +34,20 @@ class Node:
         if self.tag in ("script", "style", *tags):
             return ""
         return "".join(part.text_without(*tags) if isinstance(part, Node) else part for part in self.parts)
+
+    def has_endpoint(self, endpoint):
+        """Match a complete endpoint in visible text or a title attribute."""
+        pattern = re.compile(r"(?<![\w.:-])" + re.escape(endpoint) + r"(?![\w.-])")
+
+        def matches(node):
+            if node.tag in ("script", "style"):
+                return False
+            return pattern.search(node.attrs.get("title") or "") is not None or any(
+                matches(part) if isinstance(part, Node) else pattern.search(part) is not None
+                for part in node.parts
+            )
+
+        return matches(self)
 
     def find_all(self, tag=None, attrs=None):
         result = []

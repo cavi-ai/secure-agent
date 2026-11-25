@@ -551,7 +551,7 @@ A model call carries `model`, `tokens_in`, `tokens_out`, `cost_usd` and `price_c
 #### Query Parameters
 - `limit` *(optional, integer)*: Maximum number of events to return (default: `50`).
 - `kind` *(optional, integer)*: Only events of this kind.
-- `pid` *(optional, integer)*: Only events for this pid; values `<= 0` are ignored.
+- `pid` *(optional, integer)*: Only events for this PID. Values `<= 0` are ignored. Positive values outside the signed 32-bit range return HTTP 400.
 - `since` *(optional, string)*: Only events with `ts` at or after this timestamp.
 - `session_id` *(optional, string)*: Only events attributed to this session. Without `page`, the response remains the event array below.
 

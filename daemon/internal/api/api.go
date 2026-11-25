@@ -973,7 +973,13 @@ func (a *API) handleEvents(w http.ResponseWriter, r *http.Request) {
 			f.Kind = &k
 		}
 	}
-	if pid := queryInt(q.Get("pid"), 0); pid > 0 {
+	// ParseInt returns the signed limit on overflow, so a positive out-of-range
+	// PID is rejected instead of becoming a different filter or an unfiltered read.
+	if pid, err := strconv.ParseInt(q.Get("pid"), 10, 32); pid > 0 {
+		if err != nil {
+			http.Error(w, "pid exceeds the 32-bit range", http.StatusBadRequest)
+			return
+		}
 		f.PID = int32(pid)
 	}
 	events, err := a.store.QueryEvents(f)

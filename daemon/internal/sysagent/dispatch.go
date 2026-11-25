@@ -373,7 +373,7 @@ func terminalScript(planID int64, run model.SysAgentRun, bin string, l launch) s
 		}
 	}
 	fmt.Fprintf(&b, "printf '%%s\\n' %s\n", shellQuote(fmt.Sprintf("secure-agent: %s on local Ollama (%s) in %s — plan %d", run.Harness, run.Model, run.Workdir, planID)))
-	args := make([]string, 0, len(l.Args)+1)
+	var args []string
 	if l.CleanEnv {
 		args = append(args, "env", "-i")
 		for _, kv := range l.Env {

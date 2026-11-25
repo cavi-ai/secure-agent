@@ -54,7 +54,7 @@ test('episode host and advisor text are escaped in the card', () => {
     id: 'e', host: '<img src=x onerror=1>', port: 443, protocol: 'tcp', count: 5,
     intervals: [1800000000000], scope_complete: false, scope: { agent: 'claude' }
   }, advisor_inference: { possible_purpose: '<script>alert(1)</script>' } });
-  assert.doesNotMatch(html, /<img|<script>/);
+  assert.doesNotMatch(html, /<(?:img|script)(?=[\s/>])/i);
   assert.match(html, /&lt;img/);
   assert.match(html, /&lt;script&gt;/);
 });
@@ -73,7 +73,7 @@ test('expected-egress rule names the entire scope and escapes it; revoke targets
   assert.match(html, /All destinations/);
   assert.match(html, /\/Applications\/Claude/);
   assert.match(html, /&lt;script&gt;work/);
-  assert.doesNotMatch(html, /<script>/);
+  assert.doesNotMatch(html, /<script(?=[\s/>])/i);
   assert.match(html, /data-action="revoke-expected-egress" data-id="rule-1"/);
 });
 

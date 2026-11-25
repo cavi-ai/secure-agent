@@ -580,10 +580,7 @@ def run_remove_drops_the_allowlist_row(page):
     dom_allowrm = page.fixture('dom_allowrm')
     check(
         'remove drops the allowlist row',
-        (
-            'artifacts.example.com' not in dom_query(dom_allowrm).text
-            and not dom_query(dom_allowrm).has(None, {'title': lambda value: 'artifacts.example.com' in (value or '')})
-        ),
+        not dom_query(dom_allowrm).has_endpoint('artifacts.example.com'),
     )
 
 def run_drill_down_keeps_unknown_endpoints_actionable(page):
@@ -591,10 +588,7 @@ def run_drill_down_keeps_unknown_endpoints_actionable(page):
     dom_uninsp = page.fixture('dom_uninsp')
     check(
         'drill-down keeps unknown endpoints actionable',
-        (
-            'registry.npmjs.org' in dom_query(dom_uninsp).text
-            or dom_query(dom_uninsp).has(None, {'title': lambda value: 'registry.npmjs.org' in (value or '')})
-        ),
+        dom_query(dom_uninsp).has_endpoint('registry.npmjs.org'),
     )
 
 def run_drill_down_collapses_cdn_cloud_carriers(page):
@@ -648,7 +642,7 @@ def run_unknown_section_does_not_list_vendor_endpoints(page):
         'unknown section does not list vendor endpoints',
         (
             '2607:6bc0::10' not in uninsp_unknown
-            and 'statsig.example.com' in uninsp_unknown
+            and dom_query(uninsp_unknown).has_endpoint('statsig.example.com')
         ),
     )
 
@@ -854,10 +848,7 @@ def run_chain_node(page):
     )
     check(
         'chain node: egress destination',
-        (
-            'logs.example.com:443' in dom_query(dom).text
-            or dom_query(dom).has(None, {'title': lambda value: 'logs.example.com:443' in (value or '')})
-        ),
+        dom_query(dom).has_endpoint('logs.example.com:443'),
     )
 
 def run_chain_verdict_node(page):
@@ -1016,8 +1007,7 @@ def run_egress_suggestion_rendered(page):
     check(
         'egress suggestion rendered',
         (
-            dom_query(dom).has(None, {'class': 'fw-suggestion'})
-            and 'registry.npmjs.org' in dom_query(dom).text
+            any(node.has_endpoint('registry.npmjs.org') for node in dom_query(dom).find_all(attrs={'class': 'fw-suggestion'}))
         ),
     )
 
@@ -1207,14 +1197,8 @@ def run_drill_down_lists_endpoint_host(page):
     check(
         'drill-down lists endpoint host',
         (
-            (
-                'registry.npmjs.org' in dom_query(dom_uninsp).text
-                or dom_query(dom_uninsp).has(None, {'title': lambda value: 'registry.npmjs.org' in (value or '')})
-            )
-            and (
-                'statsig.example.com' in dom_query(dom_uninsp).text
-                or dom_query(dom_uninsp).has(None, {'title': lambda value: 'statsig.example.com' in (value or '')})
-            )
+            dom_query(dom_uninsp).has_endpoint('registry.npmjs.org')
+            and dom_query(dom_uninsp).has_endpoint('statsig.example.com')
         ),
     )
 
@@ -3069,7 +3053,7 @@ def run_egress_explains_scheduled_calls_as_observed_facts_and_labeled_advisor_in
     check(
         'Egress explains scheduled calls as observed facts and labeled advisor inference',
         (
-            'updates.example.com:443' in recurring
+            dom_query(recurring).has_endpoint('updates.example.com:443')
             and 'about every 30–31 min' in recurring
             and 'Advisor inference' in recurring
             and 'Possibly an update check' in recurring

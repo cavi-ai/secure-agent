@@ -29,7 +29,7 @@ test('on-demand assessment retains gaps and separates managed IPC from external 
   assert.match(state.view.body,/partial/);
   assert.match(state.view.body,/Built-in origins remain allowed/);
   assert.match(state.view.body,/not applied/i);
-  assert.doesNotMatch(state.view.body,/<script>|<img src=x>/);
+  assert.doesNotMatch(state.view.body,/<(?:img|script)(?=[\s/>])/i);
   assert.match(state.view.body,/&lt;img/);
   await api.copySettings('ollama');
   assert.deepEqual(state.copies,['OLLAMA_HOST=127.0.0.1:11434']);

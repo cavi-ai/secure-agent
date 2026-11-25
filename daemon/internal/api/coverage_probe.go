@@ -47,20 +47,22 @@ type coverageProbeState struct {
 // Hashes include dependencies, registration and policy files. Contents never
 // leave this function; a missing optional config has its own stable marker.
 func coverageProbeFingerprint(harness string) (string, string, error) {
-	if harness != "claude" && harness != "cursor" {
+	var hookDir, settings string
+	switch harness {
+	case "claude":
+		hookDir, settings = ".claude", "settings.json"
+	case "cursor":
+		hookDir, settings = ".cursor", "hooks.json"
+	default:
 		return "", "", fmt.Errorf("unsupported hook path")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", "", err
 	}
-	dir := filepath.Join(home, "."+harness, "hooks")
+	dir := filepath.Join(home, hookDir, "hooks")
 	paths := []string{filepath.Join(dir, "secret_guard.py"), filepath.Join(dir, "activity_log.py"), filepath.Join(dir, "injection_scan.py"), filepath.Join(dir, "guard-rules.json")}
-	settings := "settings.json"
-	if harness == "cursor" {
-		settings = "hooks.json"
-	}
-	paths = append(paths, filepath.Join(home, "."+harness, settings), filepath.Join(home, ".config", "secure-agent", "guard-modes.json"), filepath.Join(home, ".config", "secure-agent", "guard-cwd-overrides.json"))
+	paths = append(paths, filepath.Join(home, hookDir, settings), filepath.Join(home, ".config", "secure-agent", "guard-modes.json"), filepath.Join(home, ".config", "secure-agent", "guard-cwd-overrides.json"))
 	h := sha256.New()
 	for i, path := range paths {
 		fmt.Fprintf(h, "%s\x00", path)

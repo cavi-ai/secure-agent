@@ -2,9 +2,12 @@ package worktreehunter
 
 import (
 	"context"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
@@ -65,7 +68,7 @@ func resolveRepo(dir string) (ref repoRef, orphan *orphanDir, ok bool) {
 			if st.IsDir() {
 				return repoRef{Common: canonical(dotGit), Main: canonical(dir)}, nil, true
 			}
-			return resolveGitFile(dir, dotGit)
+			return resolveGitFile(dir)
 		}
 		if isBareRepo(dir) {
 			c := canonical(dir)
@@ -80,8 +83,8 @@ func resolveRepo(dir string) (ref repoRef, orphan *orphanDir, ok bool) {
 }
 
 // resolveGitFile follows a worktree's (or submodule's) .git file.
-func resolveGitFile(dir, dotGit string) (repoRef, *orphanDir, bool) {
-	data, err := os.ReadFile(dotGit)
+func resolveGitFile(dir string) (repoRef, *orphanDir, bool) {
+	data, err := readGitPointer(dir, ".git")
 	if err != nil {
 		return repoRef{}, nil, false
 	}
@@ -97,7 +100,7 @@ func resolveGitFile(dir, dotGit string) (repoRef, *orphanDir, bool) {
 		return repoRef{}, &orphanDir{Path: canonical(dir), Main: mainFromAdminDir(gitdir), Name: filepath.Base(filepath.Clean(gitdir))}, false
 	}
 	common := gitdir
-	if c, err := os.ReadFile(filepath.Join(gitdir, "commondir")); err == nil {
+	if c, err := readGitPointer(gitdir, "commondir"); err == nil {
 		common = strings.TrimSpace(string(c))
 		if !filepath.IsAbs(common) {
 			common = filepath.Join(gitdir, common)
@@ -109,6 +112,34 @@ func resolveGitFile(dir, dotGit string) (repoRef, *orphanDir, bool) {
 	}
 	// A submodule (.git/modules/<name>) or a worktree of a bare repo.
 	return repoRef{Common: common, Main: common, Bare: true}, nil, true
+}
+
+// Git pointer files contain a single local path. Check the opened file
+// before reading it and bound the read independently of its reported size.
+func readGitPointer(dir, name string) ([]byte, error) {
+	const maxPointerBytes = 8192
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() || fi.Size() > maxPointerBytes {
+		return nil, fs.ErrInvalid
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxPointerBytes+1))
+	if len(data) > maxPointerBytes {
+		return nil, fs.ErrInvalid
+	}
+	return data, err
 }
 
 // mainFromAdminDir maps <main>/.git/worktrees/<name> to <main>.
@@ -125,7 +156,7 @@ func mainFromAdminDir(gitdir string) string {
 // and refs at its top level, named *.git). A checkout's own .git directory
 // is not one: the walk continues to the checkout above it.
 func isBareRepo(dir string) bool {
-	if filepath.Base(dir) == ".git" {
+	if filepath.Base(dir) == ".git" || filepath.Ext(dir) != ".git" {
 		return false
 	}
 	for _, name := range []string{"HEAD", "objects", "refs"} {
@@ -133,7 +164,7 @@ func isBareRepo(dir string) bool {
 			return false
 		}
 	}
-	return filepath.Ext(dir) == ".git"
+	return true
 }
 
 // canonical resolves symlinks so the same repo found through /var and

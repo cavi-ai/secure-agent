@@ -205,9 +205,7 @@ func (s *Store) CleanupDaily(now time.Time, days int) (_ []model.CleanupDay, rea
 	if days <= 0 {
 		return nil, nil
 	}
-	if days > maxCleanupDays {
-		days = maxCleanupDays
-	}
+	days = min(days, maxCleanupDays)
 	loc := now.Location()
 	y, m, d := now.Date()
 	out := make([]model.CleanupDay, days)

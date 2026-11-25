@@ -161,11 +161,22 @@ func (a *API) fileExcerpt(p string, hits []model.FileHit) (string, string) {
 	if a.fwEngine == nil {
 		return "", "masking is unavailable: the firewall engine is not running"
 	}
-	f, err := os.Open(p)
+	// The caller has matched the exact path against recorded evidence.
+	dir, name := filepath.Split(p)
+	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return "", "the file could not be read"
+		return "", "the file could not be read safely"
+	}
+	defer root.Close()
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return "", "the file could not be read safely"
 	}
 	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() || !ownedByUser(fi) {
+		return "", "the excerpt requires a regular file owned by the operator"
+	}
 
 	var parts []string
 	seen := map[int64]bool{}

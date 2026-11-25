@@ -1,6 +1,8 @@
 package agents
 
 import (
+	"math"
+	"math/bits"
 	"strconv"
 	"strings"
 	"time"
@@ -27,7 +29,9 @@ func parseProcStat(s string, boot time.Time, hz int64) (int32, string, time.Time
 	start := time.Time{}
 	if len(rest) >= 20 && !boot.IsZero() && hz > 0 {
 		if ticks, err := strconv.ParseUint(rest[19], 10, 64); err == nil {
-			start = boot.Add(time.Duration(ticks) * time.Second / time.Duration(hz))
+			if elapsed, ok := processTicksDuration(ticks, uint64(hz)); ok {
+				start = boot.Add(elapsed)
+			}
 		}
 	}
 	cpu := time.Duration(0)
@@ -35,10 +39,28 @@ func parseProcStat(s string, boot time.Time, hz int64) (int32, string, time.Time
 		userTicks, userErr := strconv.ParseUint(rest[11], 10, 64)
 		systemTicks, systemErr := strconv.ParseUint(rest[12], 10, 64)
 		if userErr == nil && systemErr == nil {
-			cpu = time.Duration(userTicks+systemTicks) * time.Second / time.Duration(hz)
+			if total, overflow := bits.Add64(userTicks, systemTicks, 0); overflow == 0 {
+				cpu, _ = processTicksDuration(total, uint64(hz))
+			}
 		}
 	}
 	return ppid, comm, start, cpu
+}
+
+// Split off the whole seconds before scaling ticks to nanoseconds.
+func processTicksDuration(ticks, hz uint64) (time.Duration, bool) {
+	seconds, remainder := ticks/hz, ticks%hz
+	const nanosPerSecond = uint64(time.Second)
+	if seconds > math.MaxInt64/nanosPerSecond {
+		return 0, false
+	}
+	hi, lo := bits.Mul64(remainder, nanosPerSecond)
+	fraction, _ := bits.Div64(hi, lo, hz)
+	total := seconds*nanosPerSecond + fraction
+	if total > math.MaxInt64 {
+		return 0, false
+	}
+	return time.Duration(total), true
 }
 
 func parseProcStatm(s string, pageSize uint64) uint64 {

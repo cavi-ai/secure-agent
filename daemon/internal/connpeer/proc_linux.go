@@ -91,8 +91,8 @@ func socketHolders(link string, self int) []int32 {
 	}
 	var out []int32
 	for _, e := range entries {
-		pid, err := strconv.Atoi(e.Name())
-		if err != nil || pid == self {
+		pid, err := strconv.ParseInt(e.Name(), 10, 32)
+		if err != nil || pid <= 0 || int(pid) == self {
 			continue
 		}
 		fds, err := os.ReadDir(filepath.Join("/proc", e.Name(), "fd"))
