@@ -71,21 +71,21 @@ function advisorStateText(health, now = Date.now()) {
 
 // agentOffHTML: what the tab shows while system_agent.enabled is false.
 function agentOffHTML() {
-  return `<div class="agent-off">
+  return html`<div class="agent-off">
     <h3>Secure Agent chat is off</h3>
     <p>Chat directly with your local Ollama agent. It can propose an exact local command for your review; nothing runs until you confirm it. Harness handoff is a separate, optional section.</p>
     <p>Open the Secure Agent menu bar app, then Settings → Secure Agent → Chat and turn on Enable chat. Return here to start a conversation.</p>
     <p>For a headless install, add this to <code>~/.config/secure-agent/config.yaml</code>; the daemon applies it within seconds:</p>
-    <pre class="agent-snippet">${escapeHTML(AGENT_CONFIG_SNIPPET)}</pre>
-    <div><button type="button" class="btn btn-ghost btn-sm" data-action="agent-copy" data-text="${escapeHTML(AGENT_CONFIG_SNIPPET)}"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button></div>
+    <pre class="agent-snippet">${AGENT_CONFIG_SNIPPET}</pre>
+    <div><button type="button" class="btn btn-ghost btn-sm" data-action="agent-copy" data-text="${AGENT_CONFIG_SNIPPET}"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button></div>
   </div>`;
 }
 
 // User input stays literal. Model replies use the same escaped Markdown
 // renderer as incident reports; it never treats model-supplied HTML as DOM.
 function agentTextHTML(text, markdown = false) {
-  return `<div class="agent-bubble${markdown ? ' agent-bubble-markdown' : ''}">${markdown
-    ? parseMarkdownToHTML(text || '') : escapeHTML(text || '')}</div>`;
+  return html`<div class="agent-bubble${markdown ? ' agent-bubble-markdown' : ''}">${markdown
+    ? raw(parseMarkdownToHTML(text || '')) : text || ''}</div>`;
 }
 
 // A model reply can propose one exact local command. The server accepts only
@@ -104,36 +104,36 @@ function agentLocalCommandHTML(m, run, activity = {}) {
   const label = run ? (labels[run.status] || 'Run recorded') : m.local_run_id ? 'Run recorded' : reviewing ? 'Confirming command' : 'Awaiting approval';
   const badge = run ? (AGENT_RUN_BADGE[run.status] || '') : '';
   const exit = run && ['done', 'failed', 'timeout'].includes(run.status) ? ` · exit ${Number(run.exit_code)}` : '';
-  return `<div class="agent-proposal agent-local-action"${m.local_run_id ? ` data-local-run="${Number(m.local_run_id)}"` : ''}>
-    <div class="agent-proposal-head"><svg class="icon"><use href="#i-terminal"/></svg><b>Shell command · ${mode}</b><span class="badge ${badge}">${running || reviewing ? agentSpinnerHTML() : ''}${escapeHTML(label)}${exit}</span></div>
-    <div class="agent-plan-meta">${escapeHTML(a.workdir)} · runs on this machine</div>
-    <pre class="agent-run-output">${escapeHTML(a.command)}</pre>
-    ${run?.detail ? `<div class="agent-run-detail">${escapeHTML(run.detail)}</div>` : ''}
-    ${run?.output ? `<details class="agent-task agent-inline-output" open><summary>Output</summary><pre class="agent-run-output">${escapeHTML(run.output)}</pre></details>` : ''}
+  return html`<div class="agent-proposal agent-local-action"${m.local_run_id ? raw(html` data-local-run="${Number(m.local_run_id)}"`) : ''}>
+    <div class="agent-proposal-head"><svg class="icon"><use href="#i-terminal"/></svg><b>Shell command · ${mode}</b><span class="badge ${badge}">${running || reviewing ? raw(agentSpinnerHTML()) : ''}${label}${exit}</span></div>
+    <div class="agent-plan-meta">${a.workdir} · runs on this machine</div>
+    <pre class="agent-run-output">${a.command}</pre>
+    ${run?.detail ? raw(html`<div class="agent-run-detail">${run.detail}</div>`) : ''}
+    ${run?.output ? raw(html`<details class="agent-task agent-inline-output" open><summary>Output</summary><pre class="agent-run-output">${run.output}</pre></details>`) : ''}
     <div class="agent-actions">${m.local_run_id
-      ? `<span class="agent-saved">Started as run #${Number(m.local_run_id)}</span>`
-      : `<button type="button" class="btn btn-primary btn-sm" data-action="agent-run-local" data-message="${Number(m.id)}"${reviewing ? ' disabled' : ''}>Review and run</button><span class="agent-approval-note">Nothing runs until you confirm.</span>`}</div>
+      ? raw(html`<span class="agent-saved">Started as run #${Number(m.local_run_id)}</span>`)
+      : raw(html`<button type="button" class="btn btn-primary btn-sm" data-action="agent-run-local" data-message="${Number(m.id)}"${reviewing ? ' disabled' : ''}>Review and run</button><span class="agent-approval-note">Nothing runs until you confirm.</span>`)}</div>
   </div>`;
 }
 
 function agentRecommendationHTML(m, status) {
   const state = m.review_state || 'pending';
   const command = m.local_command;
-  const flags = (m.flag_ids || []).slice(0, 8).map(id => `<button type="button" class="link-btn" data-action="open-flag" data-id="${escapeHTML(id)}">${escapeHTML(id.slice(0, 12))}</button>`).join(', ');
+  const flags = (m.flag_ids || []).slice(0, 8).map(id => html`<button type="button" class="link-btn" data-action="open-flag" data-id="${id}">${id.slice(0, 12)}</button>`).join(', ');
   const harnessOptions = agentHarnessOptionsHTML(status, '');
-  return `<article class="agent-recommendation" data-message="${Number(m.id)}">
-    <div class="agent-plan-head"><b>Activity analysis</b><span class="badge ${state === 'saved' ? 'badge-ok' : ''}">${escapeHTML(state)}</span></div>
-    <div class="agent-plan-meta">${escapeHTML(new Date(m.ts).toLocaleString())}${flags ? ` · Flags: ${flags}` : ''}</div>
-    ${agentTextHTML(m.content, true)}
-    ${command ? `<div class="agent-proposal agent-local-action"><b>Proposed local command · ${escapeHTML(command.mode)}</b><pre class="agent-run-output">${escapeHTML(command.command)}</pre><div class="agent-plan-meta">${escapeHTML(command.workdir)}</div></div>` : '<p class="agent-plan-reason">No executable command proposed. Review the suggested steps or save them for later delegation.</p>'}
+  return html`<article class="agent-recommendation" data-message="${Number(m.id)}">
+    <div class="agent-plan-head"><b>Activity analysis</b><span class="badge ${state === 'saved' ? 'badge-ok' : ''}">${state}</span></div>
+    <div class="agent-plan-meta">${new Date(m.ts).toLocaleString()}${flags ? raw(html` · Flags: ${raw(flags)}`) : ''}</div>
+    ${raw(agentTextHTML(m.content, true))}
+    ${command ? raw(html`<div class="agent-proposal agent-local-action"><b>Proposed local command · ${command.mode}</b><pre class="agent-run-output">${command.command}</pre><div class="agent-plan-meta">${command.workdir}</div></div>`) : raw('<p class="agent-plan-reason">No executable command proposed. Review the suggested steps or save them for later delegation.</p>')}
     <div class="agent-actions">
-      ${command && !m.local_run_id && state === 'pending' ? `<button type="button" class="btn btn-primary btn-sm" data-action="agent-run-local" data-message="${Number(m.id)}">Review and run locally</button>` : ''}
-      ${m.local_run_id ? `<span class="agent-saved">Started as run #${Number(m.local_run_id)}</span>` : ''}
-      ${m.plan_id ? `<span class="agent-saved">Saved as plan #${Number(m.plan_id)}</span>` : ''}
-      ${state === 'pending' ? `<label>Save for later delegation <select class="select select-sm agent-recommendation-harness">${harnessOptions}</select></label>
+      ${command && !m.local_run_id && state === 'pending' ? raw(html`<button type="button" class="btn btn-primary btn-sm" data-action="agent-run-local" data-message="${Number(m.id)}">Review and run locally</button>`) : ''}
+      ${m.local_run_id ? raw(html`<span class="agent-saved">Started as run #${Number(m.local_run_id)}</span>`) : ''}
+      ${m.plan_id ? raw(html`<span class="agent-saved">Saved as plan #${Number(m.plan_id)}</span>`) : ''}
+      ${state === 'pending' ? raw(html`<label>Save for later delegation <select class="select select-sm agent-recommendation-harness">${raw(harnessOptions)}</select></label>
         <input class="input agent-workdir agent-recommendation-workdir" type="text" aria-label="Folder for a future harness plan" placeholder="Folder (default: home)">
         <button type="button" class="btn btn-ghost btn-sm" data-action="agent-save-recommendation" data-message="${Number(m.id)}">Save plan</button>
-        <button type="button" class="btn btn-ghost btn-sm" data-action="agent-dismiss-recommendation" data-message="${Number(m.id)}">Dismiss</button>` : ''}
+        <button type="button" class="btn btn-ghost btn-sm" data-action="agent-dismiss-recommendation" data-message="${Number(m.id)}">Dismiss</button>`) : ''}
     </div>
   </article>`;
 }
@@ -154,26 +154,26 @@ function agentProposalHTML(m, status) {
   const p = m.proposal;
   if (!p) return '';
   const steps = (p.steps || []).length
-    ? `<ol class="agent-steps">${p.steps.map(s => `<li>${escapeHTML(s)}</li>`).join('')}</ol>` : '';
+    ? html`<ol class="agent-steps">${p.steps.map(s => raw(html`<li>${s}</li>`))}</ol>` : '';
   const mode = p.mode === 'headless' ? 'Headless' : 'Terminal';
   const verb = p.mode === 'headless' ? 'Run headless' : 'Open in terminal';
   const block = agentHarnessBlock(status, p.harness);
-  const dis = block ? ` disabled title="${escapeHTML(block)}"` : '';
+  const dis = block ? html` disabled title="${block}"` : '';
   let actions;
   if (m.plan_id) {
-    actions = `<span class="agent-saved">Saved as plan #${Number(m.plan_id)}</span>
-      <button type="button" class="btn btn-primary btn-sm" data-action="agent-dispatch" data-plan="${Number(m.plan_id)}" data-mode="${escapeHTML(p.mode)}"${dis}>${verb}</button>`;
+    actions = html`<span class="agent-saved">Saved as plan #${Number(m.plan_id)}</span>
+      <button type="button" class="btn btn-primary btn-sm" data-action="agent-dispatch" data-plan="${Number(m.plan_id)}" data-mode="${p.mode}"${raw(dis)}>${verb}</button>`;
   } else {
-    actions = `<button type="button" class="btn btn-ghost btn-sm" data-action="agent-save-proposal" data-message="${Number(m.id)}">Save plan</button>
-      <button type="button" class="btn btn-primary btn-sm" data-action="agent-dispatch-proposal" data-message="${Number(m.id)}" data-mode="${escapeHTML(p.mode)}"${dis}>${verb}</button>`;
+    actions = html`<button type="button" class="btn btn-ghost btn-sm" data-action="agent-save-proposal" data-message="${Number(m.id)}">Save plan</button>
+      <button type="button" class="btn btn-primary btn-sm" data-action="agent-dispatch-proposal" data-message="${Number(m.id)}" data-mode="${p.mode}"${raw(dis)}>${verb}</button>`;
   }
-  return `<div class="agent-proposal">
-    <div class="agent-proposal-head">${harnessChipHTML(p.harness, { label: false })}<b>${escapeHTML(p.title)}</b><span class="badge">${mode}</span></div>
-    <div class="agent-plan-meta">${escapeHTML(agentHarnessLabel(status, p.harness))} · <code>${escapeHTML(p.workdir)}</code></div>
-    ${block ? `<div class="agent-plan-reason">${escapeHTML(block)}</div>` : ''}
-    ${steps}
-    <details class="agent-task"><summary>Task the harness receives</summary><pre>${escapeHTML(p.task)}</pre></details>
-    <div class="agent-actions">${actions}</div>
+  return html`<div class="agent-proposal">
+    <div class="agent-proposal-head">${raw(harnessChipHTML(p.harness, { label: false }))}<b>${p.title}</b><span class="badge">${mode}</span></div>
+    <div class="agent-plan-meta">${agentHarnessLabel(status, p.harness)} · <code>${p.workdir}</code></div>
+    ${block ? raw(html`<div class="agent-plan-reason">${block}</div>`) : ''}
+    ${raw(steps)}
+    <details class="agent-task"><summary>Task the harness receives</summary><pre>${p.task}</pre></details>
+    <div class="agent-actions">${raw(actions)}</div>
   </div>`;
 }
 
@@ -184,28 +184,28 @@ function agentWorktreeCardHTML(m) {
   const content = String(m.content || '');
   const ask = (/^[^?\n]*\?/.exec(content) || [content.split('\n')[0]])[0];
   const branch = (/^branch: (.*)$/m.exec(content) || [])[1] || '';
-  return `<div class="agent-msg user"><div class="agent-proposal agent-worktree-card">
-    <div class="agent-proposal-head"><svg class="icon"><use href="#i-branch"/></svg><b>${escapeHTML(ask)}</b></div>
-    ${branch ? `<div class="agent-msg-meta">branch ${escapeHTML(branch)}</div>` : ''}
-    <details class="agent-task"><summary>Facts sent</summary><pre>${escapeHTML(content)}</pre></details>
+  return html`<div class="agent-msg user"><div class="agent-proposal agent-worktree-card">
+    <div class="agent-proposal-head"><svg class="icon"><use href="#i-branch"/></svg><b>${ask}</b></div>
+    ${branch ? raw(html`<div class="agent-msg-meta">branch ${branch}</div>`) : ''}
+    <details class="agent-task"><summary>Facts sent</summary><pre>${content}</pre></details>
   </div></div>`;
 }
 
 // agentMessageHTML: one chat turn. A chat turn is always local Ollama.
 function agentMessageHTML(m, status, runs, activity) {
   if (m.role === 'note') {
-    return `<div class="agent-msg note"><span>${escapeHTML(m.content)}</span></div>`;
+    return html`<div class="agent-msg note"><span>${m.content}</span></div>`;
   }
   if (m.role === 'user' && m.origin === 'worktree') return agentWorktreeCardHTML(m);
   if (m.role === 'user') {
     const route = [m.harness ? 'legacy harness selection (chat stayed on Ollama)' : '', m.workdir || ''].filter(Boolean).join(' · ');
-    return `<div class="agent-msg user">${agentTextHTML(m.content)}${route ? `<div class="agent-msg-meta">${escapeHTML(route)}</div>` : ''}</div>`;
+    return html`<div class="agent-msg user">${raw(agentTextHTML(m.content))}${route ? raw(html`<div class="agent-msg-meta">${route}</div>`) : ''}</div>`;
   }
   const skills = (m.skills || []).length
-    ? `<div class="agent-msg-meta">skills: ${m.skills.map(s => `<button type="button" class="link-btn" data-action="agent-skill" data-skill="${escapeHTML(s)}">${escapeHTML(s)}</button>`).join(', ')}</div>` : '';
+    ? html`<div class="agent-msg-meta">skills: ${raw(m.skills.map(s => html`<button type="button" class="link-btn" data-action="agent-skill" data-skill="${s}">${s}</button>`).join(', '))}</div>` : '';
   const u = m.usage;
   const stats = u ? [
-    escapeHTML(u.model || ''),
+    u.model || '',
     u.prompt_tokens ? `${Number(u.prompt_tokens)} input tokens` : '',
     u.completion_tokens ? `${Number(u.completion_tokens)} output tokens` : '',
     u.prompt_tokens_per_second ? `${Number(u.prompt_tokens_per_second).toFixed(1)} input tokens/s` : '',
@@ -214,7 +214,7 @@ function agentMessageHTML(m, status, runs, activity) {
     u.read_tool_calls ? `${Number(u.read_tool_calls)} read tool calls`
       : u.tool_calls ? `${Number(u.tool_calls)} tool requests (not executed)` : 'no model tool calls',
   ].filter(Boolean).join(' · ') : '';
-  return `<div class="agent-msg assistant">${agentTextHTML(m.content, true)}${stats ? `<div class="agent-msg-meta">${stats}</div>` : ''}${skills}${agentLocalCommandHTML(m, (runs || []).find(r => r.id === m.local_run_id), activity)}${agentProposalHTML(m, status)}</div>`;
+  return html`<div class="agent-msg assistant">${raw(agentTextHTML(m.content, true))}${stats ? raw(html`<div class="agent-msg-meta">${stats}</div>`) : ''}${raw(skills)}${raw(agentLocalCommandHTML(m, (runs || []).find(r => r.id === m.local_run_id), activity))}${raw(agentProposalHTML(m, status))}</div>`;
 }
 
 // agentThreadItems: the chat as patchList items, with a pending line while
@@ -230,7 +230,7 @@ function agentThreadItems(chat, status, runs, activity = {}) {
     const label = activity.sending ? 'Sending your message…' : progress;
     const timing = work && Number(work.elapsed_ms) > 0 ? ` · ${Math.floor(Number(work.elapsed_ms) / 1000)}s · ${Number(work.tool_calls) || 0} read calls` : '';
     // Keep the animated shell stable while renderAgent updates its text.
-    items.push({ key: 'pending', label: label + timing, html: `<div class="agent-msg agent-pending" role="status" aria-live="polite">${agentSpinnerHTML()}<span class="agent-pending-label"></span><span class="agent-working-dots" aria-hidden="true"><span class="agent-activity-dot"></span><span class="agent-activity-dot"></span><span class="agent-activity-dot"></span></span></div>` });
+    items.push({ key: 'pending', label: label + timing, html: html`<div class="agent-msg agent-pending" role="status" aria-live="polite">${raw(agentSpinnerHTML())}<span class="agent-pending-label"></span><span class="agent-working-dots" aria-hidden="true"><span class="agent-activity-dot"></span><span class="agent-activity-dot"></span><span class="agent-activity-dot"></span></span></div>` });
   }
   return items;
 }
@@ -253,10 +253,10 @@ function agentUnreadMessageKeys(items, arrived, unread, follow) {
 // agentEmptyThreadHTML: an enabled agent before the first message.
 function agentEmptyThreadHTML(status) {
   const ready = status && status.enabled && !status.reason;
-  return `<div class="agent-welcome"><svg class="icon"><use href="#i-chat"/></svg>
+  return html`<div class="agent-welcome"><svg class="icon"><use href="#i-chat"/></svg>
     <h3>${ready ? 'What would you like to take care of?' : 'Your local agent'}</h3>
     <p>${ready ? 'Ask about your machine, check your setup, or choose a quick command below.'
-      : escapeHTML((status && status.reason) || 'Connecting to local Ollama…')}</p>
+      : (status && status.reason) || 'Connecting to local Ollama…'}</p>
     <span>Private chat on this machine. Never paste a secret.</span></div>`;
 }
 
@@ -266,18 +266,18 @@ function agentPlanHTML(p, status) {
   const running = p.status === 'running';
   const blocked = !p.ready || running;
   const why = running ? 'This plan is running' : (p.reason || '');
-  const dis = blocked ? ` disabled title="${escapeHTML(why)}"` : '';
-  const reason = !p.ready && p.reason ? `<div class="agent-plan-reason">${escapeHTML(p.reason)}</div>` : '';
+  const dis = blocked ? html` disabled title="${why}"` : '';
+  const reason = !p.ready && p.reason ? html`<div class="agent-plan-reason">${p.reason}</div>` : '';
   const steps = (p.steps || []).length ? ` · ${p.steps.length} step${p.steps.length === 1 ? '' : 's'}` : '';
-  return `<div class="agent-plan" data-plan="${Number(p.id)}">
-    <div class="agent-plan-head">${harnessChipHTML(p.harness, { label: false })}<b>${escapeHTML(p.title)}</b>
-      <span class="badge ${AGENT_PLAN_BADGE[p.status] || ''}">${escapeHTML(p.status)}</span></div>
-    <div class="agent-plan-meta">#${Number(p.id)} · ${escapeHTML(agentHarnessLabel(status, p.harness))} · ${escapeHTML(p.mode)} · <code>${escapeHTML(p.workdir)}</code>${p.model ? ' · ' + escapeHTML(p.model) : ''}${steps} · ${escapeHTML(p.source)}</div>
-    ${reason}
-    <details class="agent-task"><summary>Task</summary><pre>${escapeHTML(p.task)}</pre></details>
+  return html`<div class="agent-plan" data-plan="${Number(p.id)}">
+    <div class="agent-plan-head">${raw(harnessChipHTML(p.harness, { label: false }))}<b>${p.title}</b>
+      <span class="badge ${AGENT_PLAN_BADGE[p.status] || ''}">${p.status}</span></div>
+    <div class="agent-plan-meta">#${Number(p.id)} · ${agentHarnessLabel(status, p.harness)} · ${p.mode} · <code>${p.workdir}</code>${p.model ? ' · ' + p.model : ''}${steps} · ${p.source}</div>
+    ${raw(reason)}
+    <details class="agent-task"><summary>Task</summary><pre>${p.task}</pre></details>
     <div class="agent-actions">
-      <button type="button" class="btn btn-ghost btn-sm" data-action="agent-dispatch" data-plan="${Number(p.id)}" data-mode="headless"${p.harness === 'pi' ? ' disabled title="Pi has no built-in sandbox; use Terminal"' : dis}>Run headless</button>
-      <button type="button" class="btn btn-ghost btn-sm" data-action="agent-dispatch" data-plan="${Number(p.id)}" data-mode="terminal"${dis}>Open in terminal</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-action="agent-dispatch" data-plan="${Number(p.id)}" data-mode="headless"${raw(p.harness === 'pi' ? ' disabled title="Pi has no built-in sandbox; use Terminal"' : dis)}>Run headless</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-action="agent-dispatch" data-plan="${Number(p.id)}" data-mode="terminal"${raw(dis)}>Open in terminal</button>
       <button type="button" class="btn btn-ghost btn-sm" data-action="agent-plan-delete" data-plan="${Number(p.id)}"${running ? ' disabled' : ''}>Delete</button>
     </div>
   </div>`;
@@ -296,31 +296,31 @@ function agentRunHTML(r, status, nowMs) {
   const age = fmtAge(r.ts, nowMs);
   const exit = r.status === 'failed' && r.exit_code ? ` · exit ${Number(r.exit_code)}` : '';
   const manual = agentRunCommand(r);
-  const detail = r.detail ? `<div class="agent-run-detail">${escapeHTML(r.detail)}${manual
-    ? ` <button type="button" class="btn btn-ghost btn-sm" data-action="agent-copy" data-text="${escapeHTML(manual)}"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button>` : ''}</div>` : '';
-  return `<div class="agent-run" data-run="${Number(r.id)}">
-    <div class="agent-plan-head">${harnessChipHTML(r.harness, { label: false })}<b>${escapeHTML(r.title)}</b>
-      <span class="badge ${AGENT_RUN_BADGE[r.status] || ''}">${escapeHTML(r.status)}</span>${age ? `<span class="agent-age">${escapeHTML(age)} ago</span>` : ''}</div>
-    <div class="agent-plan-meta">${r.harness === 'local' ? 'Direct Ollama action' : 'plan #' + Number(r.plan_id) + ' · ' + escapeHTML(agentHarnessLabel(status, r.harness))} · ${escapeHTML(r.mode)} · ${escapeHTML(r.model)} · <code>${escapeHTML(r.workdir)}</code>${exit}</div>
-    ${detail}
-    ${r.output ? `<details class="agent-task"><summary>Output</summary><pre class="agent-run-output">${escapeHTML(r.output)}</pre></details>` : ''}
-    <details class="agent-task"><summary>Command</summary><pre>${escapeHTML(r.command)}</pre>
-      <button type="button" class="btn btn-ghost btn-sm" data-action="agent-copy" data-text="${escapeHTML(r.command)}"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button></details>
+  const detail = r.detail ? html`<div class="agent-run-detail">${r.detail}${manual
+    ? raw(html` <button type="button" class="btn btn-ghost btn-sm" data-action="agent-copy" data-text="${manual}"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button>`) : ''}</div>` : '';
+  return html`<div class="agent-run" data-run="${Number(r.id)}">
+    <div class="agent-plan-head">${raw(harnessChipHTML(r.harness, { label: false }))}<b>${r.title}</b>
+      <span class="badge ${AGENT_RUN_BADGE[r.status] || ''}">${r.status}</span>${age ? raw(html`<span class="agent-age">${age} ago</span>`) : ''}</div>
+    <div class="agent-plan-meta">${r.harness === 'local' ? 'Direct Ollama action' : raw(html`plan #${Number(r.plan_id)} · ${agentHarnessLabel(status, r.harness)}`)} · ${r.mode} · ${r.model} · <code>${r.workdir}</code>${exit}</div>
+    ${raw(detail)}
+    ${r.output ? raw(html`<details class="agent-task"><summary>Output</summary><pre class="agent-run-output">${r.output}</pre></details>`) : ''}
+    <details class="agent-task"><summary>Command</summary><pre>${r.command}</pre>
+      <button type="button" class="btn btn-ghost btn-sm" data-action="agent-copy" data-text="${r.command}"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button></details>
   </div>`;
 }
 
 // agentHarnessesHTML: the models in use and each harness's readiness.
 function agentHarnessesHTML(status) {
   if (!status) return '<div class="loading">Loading…</div>';
-  const rows = (status.harnesses || []).map(h => `<div class="agent-harness">
-      ${harnessChipHTML(h.id, { label: true })}
-      ${h.ready ? '<span class="badge badge-ok">ready</span>' : `<span class="agent-harness-reason">${escapeHTML(h.reason || '')}</span>`}
+  const rows = (status.harnesses || []).map(h => html`<div class="agent-harness">
+      ${raw(harnessChipHTML(h.id, { label: true }))}
+      ${h.ready ? raw('<span class="badge badge-ok">ready</span>') : raw(html`<span class="agent-harness-reason">${h.reason || ''}</span>`)}
     </div>`).join('');
   const models = status.enabled
-    ? `<div class="agent-models">
-        <span><b>Chat</b> ${escapeHTML(status.model || '—')}</span>
-        <span><b>Harness</b> ${escapeHTML(status.harness_model || '—')}</span>
-        <span><b>Ollama</b> ${escapeHTML(status.reachable ? (status.ollama_version || 'up') : 'down')} · <code>${escapeHTML(status.endpoint)}</code></span>
+    ? html`<div class="agent-models">
+        <span><b>Chat</b> ${status.model || '—'}</span>
+        <span><b>Harness</b> ${status.harness_model || '—'}</span>
+        <span><b>Ollama</b> ${status.reachable ? (status.ollama_version || 'up') : 'down'} · <code>${status.endpoint}</code></span>
       </div>` : '';
   return models + rows;
 }
@@ -330,12 +330,12 @@ function agentHarnessesHTML(status) {
 function agentSkillsHTML(status) {
   const skills = (status && status.skills) || [];
   if (!skills.length) return '';
-  return `<div class="agent-skills">${skills.map(s => `<button type="button" class="agent-skill" data-action="agent-skill" data-skill="${escapeHTML(s.id)}" title="${escapeHTML(s.summary)}"><b>${escapeHTML(s.id)}</b><span>${escapeHTML(s.title)}</span></button>`).join('')}</div>`;
+  return html`<div class="agent-skills">${skills.map(s => raw(html`<button type="button" class="agent-skill" data-action="agent-skill" data-skill="${s.id}" title="${s.summary}"><b>${s.id}</b><span>${s.title}</span></button>`))}</div>`;
 }
 
 // agentHarnessOptionsHTML: the composer's route-to dropdown.
 function agentHarnessOptionsHTML(status, selected) {
-  return ((status && status.harnesses) || []).map(h => `<option value="${escapeHTML(h.id)}"${h.id === selected ? ' selected' : ''}>${escapeHTML(h.label)}${h.ready ? '' : ' (plan for later)'}</option>`).join('');
+  return ((status && status.harnesses) || []).map(h => html`<option value="${h.id}"${h.id === selected ? ' selected' : ''}>${h.label}${h.ready ? '' : ' (plan for later)'}</option>`).join('');
 }
 
 // agentDispatchMessage: the confirmation before a dispatch.
@@ -365,7 +365,10 @@ function agentMemoryHTML(memory, query = '') {
   if (!memory) return '<p class="agent-history-empty">Open History to load retained facts.</p>';
   const term = query.toLowerCase().trim();
   const facts = (memory.facts || []).filter(f => !term || [f.summary, ...(f.references || [])].join(' ').toLowerCase().includes(term));
-  const cards = facts.slice(0, 20).map(f => `<article class="agent-memory-item"><p>${escapeHTML(f.summary)}</p><small>${escapeHTML(f.at || '')} · ${(f.references || []).map(escapeHTML).join(' · ')}</small></article>`).join('');
-  const sessions = (memory.sessions || []).filter(s => s.closed_at).slice(0, 10).map(s => `<article class="agent-memory-item"><strong>Session ${Number(s.id)}</strong><small>${escapeHTML(s.scope || '')} · ${escapeHTML(s.closed_at)}</small><p>${(s.summary || []).map(escapeHTML).join('<br>') || 'No recorded outcomes retained.'}</p></article>`).join('');
-  return `<p class="agent-history-empty">Recorded facts for this project. Historical checks must be repeated before removal. Showing ${Math.min(20, facts.length)} of ${facts.length} matching facts.</p>${cards || '<p class="agent-history-empty">No retained facts match.</p>'}<h4>Recent closed sessions</h4>${sessions || '<p class="agent-history-empty">No closed sessions.</p>'}`;
+  const cards = facts.slice(0, 20).map(f => html`<article class="agent-memory-item"><p>${f.summary}</p><small>${f.at || ''} · ${(f.references || []).join(' · ')}</small></article>`).join('');
+  const sessions = (memory.sessions || []).filter(s => s.closed_at).slice(0, 10).map(s => {
+    const lines = (s.summary || []).map(line => html`${line}`).join('<br>');
+    return html`<article class="agent-memory-item"><strong>Session ${Number(s.id)}</strong><small>${s.scope || ''} · ${s.closed_at}</small><p>${lines ? raw(lines) : 'No recorded outcomes retained.'}</p></article>`;
+  }).join('');
+  return html`<p class="agent-history-empty">Recorded facts for this project. Historical checks must be repeated before removal. Showing ${Math.min(20, facts.length)} of ${facts.length} matching facts.</p>${raw(cards || '<p class="agent-history-empty">No retained facts match.</p>')}<h4>Recent closed sessions</h4>${raw(sessions || '<p class="agent-history-empty">No closed sessions.</p>')}`;
 }
