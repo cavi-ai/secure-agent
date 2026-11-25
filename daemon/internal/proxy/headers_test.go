@@ -104,3 +104,60 @@ func TestTunnelResponseDropsInjectedHeaders(t *testing.T) {
 		t.Fatalf("headers written = %v", got.Header)
 	}
 }
+
+// The upstream never receives the proxy's own credentials, hop-by-hop headers
+// or headers named by Connection; end-to-end headers pass unchanged.
+func TestProxyStripsProxyHeadersBeforeForwarding(t *testing.T) {
+	tok := loadTestToken(t)
+	got := make(chan http.Header, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r.Header.Clone()
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer backend.Close()
+
+	caMgr, err := NewCAManager(filepath.Join(t.TempDir(), "ca.crt"), filepath.Join(t.TempDir(), "ca.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := NewProxyServer(0, bus.New(100), caMgr, testProxyEngine(t, "monitor"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = ps.Serve(ctx) }()
+	time.Sleep(100 * time.Millisecond)
+
+	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", ps.Port()))
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	req, _ := http.NewRequest("GET", backend.URL, nil)
+	req.Header.Set("Proxy-Authorization", "Basic "+tok)
+	req.Header.Set("X-SecureAgent-Proxy-Token", tok)
+	req.Header.Set("Authorization", "Bearer upstream-token")
+	req.Header.Set("Cookie", "sid=abc")
+	req.Header.Set("X-Custom", "keep-me")
+	req.Header.Set("Connection", "X-Hop")
+	req.Header.Set("X-Hop", "1")
+	req.Header.Set("Keep-Alive", "timeout=5")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	var h http.Header
+	select {
+	case h = <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream saw no request")
+	}
+	for _, name := range []string{"Proxy-Authorization", "X-SecureAgent-Proxy-Token", "X-Hop", "Keep-Alive"} {
+		if v := h.Get(name); v != "" {
+			t.Errorf("upstream received %s: %q", name, v)
+		}
+	}
+	for name, want := range map[string]string{"Authorization": "Bearer upstream-token", "Cookie": "sid=abc", "X-Custom": "keep-me"} {
+		if v := h.Get(name); v != want {
+			t.Errorf("upstream %s = %q, want %q", name, v, want)
+		}
+	}
+}

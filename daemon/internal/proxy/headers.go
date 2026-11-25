@@ -3,6 +3,7 @@ package proxy
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/injection"
@@ -32,4 +33,25 @@ func detectInjection(text string) (rule, snippet string, found bool) {
 		}
 	}
 	return "", "", false
+}
+
+// stripProxyRequestHeaders removes the proxy's own credentials from a request
+// before it goes upstream. With hopByHop it also removes the hop-by-hop headers
+// and every header named in Connection; tunneled requests pass false so
+// Connection and Upgrade reach the upstream.
+func stripProxyRequestHeaders(h http.Header, hopByHop bool) {
+	if hopByHop {
+		for _, v := range h.Values("Connection") {
+			for _, name := range strings.Split(v, ",") {
+				if name = strings.TrimSpace(name); name != "" {
+					h.Del(name)
+				}
+			}
+		}
+		for _, name := range []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate", "Te", "Trailer", "Transfer-Encoding", "Upgrade"} {
+			h.Del(name)
+		}
+	}
+	h.Del("Proxy-Authorization")
+	h.Del("X-SecureAgent-Proxy-Token")
 }
