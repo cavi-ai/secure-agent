@@ -16,6 +16,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/api"
+	"golang.org/x/sys/unix"
 )
 
 // Run the actual CLI entry point in a child so fatal startup errors and
@@ -26,6 +29,9 @@ func TestDaemonProcessHelper(t *testing.T) {
 	}
 	flag.CommandLine = flag.NewFlagSet("secure-agentd", flag.ExitOnError)
 	os.Args = []string{"secure-agentd", "--config", os.Getenv("SECURE_AGENT_TEST_CONFIG")}
+	if os.Getenv("SECURE_AGENT_TEST_REPORT_SOCKET") == "1" {
+		os.Args = append(os.Args, "--owner-pid-version", "1", "--report-owner-socket")
+	}
 	main()
 	os.Exit(0)
 }
@@ -69,6 +75,78 @@ func daemonCommand(ctx context.Context, dir, configPath string) *exec.Cmd {
 	}
 	cmd.Env = append(os.Environ(), "HOME="+dir, "SECURE_AGENT_TEST_MAIN=1", "SECURE_AGENT_TEST_CONFIG="+configPath)
 	return cmd
+}
+
+func TestDaemonReportsConfiguredSocketToOwner(t *testing.T) {
+	dir, cfg := lifecycleFixture(t)
+	path := cfg["socket_path"].(string)
+	cfg["socket_path"] = "$SECURE_AGENT_TEST_SOCKET"
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := daemonCommand(ctx, dir, writeLifecycleConfig(t, dir, cfg))
+	cmd.Env = append(cmd.Env, "SECURE_AGENT_TEST_REPORT_SOCKET=1", "SECURE_AGENT_TEST_SOCKET="+path)
+	if os.Getenv("SECURE_AGENT_LIFECYCLE_BINARY") != "" {
+		cmd.Args = append(cmd.Args, "--owner-pid-version", "1", "--report-owner-socket")
+	}
+	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unix.CloseOnExec(pair[0])
+	unix.CloseOnExec(pair[1])
+	parent := os.NewFile(uintptr(pair[0]), "parent")
+	defer parent.Close()
+	child := os.NewFile(uintptr(pair[1]), "child")
+	defer child.Close()
+	conn, err := net.FileConn(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	deadline, _ := ctx.Deadline()
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdin = child
+	var logs bytes.Buffer
+	cmd.Stderr = &logs
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	child.Close()
+	defer func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+		if t.Failed() {
+			t.Logf("daemon log: %s", &logs)
+		}
+	}()
+	var datagram [2048]byte
+	n, err := conn.Read(datagram[:])
+	if err != nil {
+		t.Fatalf("read socket report: %v", err)
+	}
+	var report struct {
+		Path       string
+		PID        int32
+		UID        int
+		PIDVersion uint32
+	}
+	if err := json.Unmarshal(datagram[:n], &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Path != path || report.PID != int32(cmd.Process.Pid) {
+		t.Fatalf("report = %+v, want configured socket %q and child pid %d", report, path, cmd.Process.Pid)
+	}
+	control, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	peer, err := api.NewPeerChecker().PeerCred(control)
+	if err != nil || peer.PID != report.PID || peer.UID != report.UID || peer.PIDVersion != report.PIDVersion {
+		t.Fatalf("control peer = %+v, %v; report specifies %+v", peer, err, report)
+	}
 }
 
 func TestDaemonStartupFailuresExitNonzero(t *testing.T) {

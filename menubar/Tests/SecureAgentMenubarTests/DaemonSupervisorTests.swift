@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import ModelFilterCore
 import XCTest
 @testable import SecureAgentMenubar
 
@@ -16,8 +17,96 @@ private final class SteppingUptime: @unchecked Sendable {
     }
 }
 
+private func appendLine(_ line: String, to url: URL) {
+    let fd = Darwin.open(url.path, O_WRONLY | O_APPEND | O_CREAT, 0o600)
+    guard fd >= 0 else { return }
+    defer { Darwin.close(fd) }
+    let data = Data((line + "\n").utf8)
+    _ = data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+}
+
+/// A control socket served on its own thread. Each request line is appended to
+/// `log` before the reply; a silent endpoint accepts connections and never answers.
+private final class ControlEndpoint: @unchecked Sendable {
+    let path: String
+    private let fd: Int32
+    private let answers: Bool
+    private let lock = NSLock()
+    private var closed = false
+
+    init(log: URL, answers: Bool) throws {
+        self.answers = answers
+        path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sa-\(UUID().uuidString.prefix(8)).sock").path
+        fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw POSIXError(.EIO) }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let bytes = path.utf8CString
+        withUnsafeMutableBytes(of: &addr.sun_path) { ptr in
+            bytes.withUnsafeBufferPointer { ptr.copyBytes(from: UnsafeRawBufferPointer($0)) }
+        }
+        let length = socklen_t(MemoryLayout<sa_family_t>.size + bytes.count)
+        let bound = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, length) }
+        }
+        guard bound == 0, Darwin.listen(fd, 8) == 0 else {
+            Darwin.close(fd)
+            throw POSIXError(.EADDRINUSE)
+        }
+        guard answers else { return }
+        Thread.detachNewThread { [self] in serve(log: log) }
+    }
+
+    private var isClosed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return closed
+    }
+
+    private func serve(log: URL) {
+        defer { Darwin.close(fd) }
+        while !isClosed {
+            var ready = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            guard Darwin.poll(&ready, 1, 20) > 0 else { continue }
+            let conn = Darwin.accept(fd, nil, nil)
+            guard conn >= 0 else { continue }
+            var buf = [UInt8](repeating: 0, count: 4096)
+            var data = Data()
+            while data.range(of: Data("\r\n\r\n".utf8)) == nil {
+                let n = Darwin.read(conn, &buf, buf.count)
+                if n <= 0 { break }
+                data.append(contentsOf: buf[0..<n])
+            }
+            guard data.range(of: Data("\r\n\r\n".utf8)) != nil else {
+                Darwin.close(conn)
+                continue
+            }
+            appendLine(String(decoding: data, as: UTF8.self).components(separatedBy: "\r\n").first ?? "", to: log)
+            let body = #"{"recorded_at":"2026-01-01T00:00:00Z","valid_until":"2026-01-01T00:00:30Z"}"#
+            let reply = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+            _ = reply.utf8.withContiguousStorageIfAvailable { Darwin.write(conn, $0.baseAddress!, $0.count) }
+            Darwin.close(conn)
+        }
+    }
+
+    /// The serving thread closes its own descriptor; a silent endpoint closes here.
+    func close() {
+        lock.lock()
+        closed = true
+        lock.unlock()
+        if !answers { Darwin.close(fd) }
+        try? FileManager.default.removeItem(atPath: path)
+    }
+}
+
 @MainActor
 final class DaemonSupervisorTests: XCTestCase {
+    /// Logs SIGTERM to `events` beside the script, then exits; the loop keeps
+    /// the shell in front so the trap runs.
+    private static let trapTerm = #"log="$(dirname "$0")/events"; trap 'echo TERM >> "$log"; exit 0' TERM"#
+    private static let idleLoop = "while :; do /bin/sleep 0.05; done"
+
     private func fixture(_ body: String, prefix: String = "") throws -> (dir: URL, script: String, starts: URL) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -222,5 +311,118 @@ final class DaemonSupervisorTests: XCTestCase {
             (try? String(contentsOf: f.dir.appendingPathComponent("daemon-err.log"), encoding: .utf8)) == "diagnostic"
         })
         XCTAssertTrue(logged, "closing parent log handles must preserve the child's descriptors")
+    }
+
+    private func makeSupervisor(_ f: (dir: URL, script: String, starts: URL), socket: String,
+                                reportsSocket: Bool = true, retryDelay: TimeInterval = 1) throws -> DaemonSupervisor {
+        if reportsSocket {
+            let path = String(decoding: try JSONEncoder().encode(socket), as: UTF8.self)
+                .replacingOccurrences(of: "'", with: "'\"'\"'")
+            let ready = #"printf '{"path":%s,"pid":%s,"uid":%s,"pidVersion":1}' '\#(path)' "$$" \#(getuid()) >&0"#
+            let url = URL(fileURLWithPath: f.script)
+            let script = try String(contentsOf: url, encoding: .utf8)
+            try script.replacingOccurrences(of: "#!/bin/sh\n", with: "#!/bin/sh\n\(ready)\n")
+                .write(to: url, atomically: false, encoding: .utf8)
+        }
+        // The test process serves ControlEndpoint. The child supplies the
+        // path, while this fixture supplies the listener's real credentials.
+        let peer = try KernelIdentity.current()
+        return DaemonSupervisor(pathProvider: { f.script }, logDir: f.dir.path,
+                                retryDelay: retryDelay, maxRetryDelay: retryDelay,
+                                stopIntent: { report in
+            try await DaemonClient(resolvedSocketPath: report.path).postStopIntent(expectedPeer: peer)
+        })
+    }
+
+    func testStopIntentWritesOnlyToMatchingProcessInstance() async throws {
+        let f = try fixture("exit 0")
+        defer { try? FileManager.default.removeItem(at: f.dir) }
+        let events = f.dir.appendingPathComponent("events")
+        let endpoint = try ControlEndpoint(log: events, answers: true)
+        defer { endpoint.close() }
+        let client = DaemonClient(resolvedSocketPath: endpoint.path)
+        let peer = try KernelIdentity.current()
+        let oldInstance = ProcessIdentity(pid: peer.pid, uid: peer.uid, pidVersion: peer.pidVersion ^ 1)
+        do {
+            try await client.postStopIntent(expectedPeer: oldInstance)
+            XCTFail("stop intent was sent to the wrong process instance")
+        } catch DaemonClientError.transport {
+            XCTAssertEqual(starts(events), [])
+        }
+        try await client.postStopIntent(expectedPeer: peer)
+        XCTAssertEqual(starts(events), ["POST /daemon/stop-intent HTTP/1.1"])
+    }
+
+    func testQuitSignalsChildWithoutPostingWhenChildDoesNotReportSocket() async throws {
+        let f = try fixture(Self.idleLoop, prefix: Self.trapTerm)
+        let events = f.dir.appendingPathComponent("events")
+        let endpoint = try ControlEndpoint(log: events, answers: true)
+        defer { endpoint.close() }
+        let supervisor = try makeSupervisor(f, socket: endpoint.path, reportsSocket: false)
+        defer { supervisor.stop(); try? FileManager.default.removeItem(at: f.dir) }
+        supervisor.start()
+        let ready = await waitUntil({ self.starts(f.starts).count == 1 })
+        XCTAssertTrue(ready)
+        supervisor.stop()
+        let stopped = await waitUntil({ !supervisor.isRunning })
+        XCTAssertTrue(stopped)
+        XCTAssertEqual(starts(events), ["TERM"])
+    }
+
+    func testOwnerRestartAndQuitPostStopIntentBeforeSignal() async throws {
+        let f = try fixture(Self.idleLoop, prefix: Self.trapTerm)
+        let events = f.dir.appendingPathComponent("events")
+        let endpoint = try ControlEndpoint(log: events, answers: true)
+        defer { endpoint.close() }
+        let supervisor = try makeSupervisor(f, socket: endpoint.path)
+        defer { supervisor.stop(); try? FileManager.default.removeItem(at: f.dir) }
+        supervisor.start()
+        let started = await waitUntil({ self.starts(f.starts).count == 1 })
+        XCTAssertTrue(started)
+        supervisor.restart()
+        let restarted = await waitUntil({ self.starts(f.starts).count == 2 })
+        XCTAssertTrue(restarted)
+        supervisor.stop()
+        let stopped = await waitUntil({ !supervisor.isRunning })
+        XCTAssertTrue(stopped)
+        let intent = "POST /daemon/stop-intent HTTP/1.1"
+        XCTAssertEqual(starts(events), [intent, "TERM", intent, "TERM"],
+                       "each owner stop records the intent before the daemon receives SIGTERM")
+    }
+
+    func testQuitSignalsWithinBoundWhenIntentIsUnanswered() async throws {
+        let f = try fixture(Self.idleLoop, prefix: Self.trapTerm)
+        let events = f.dir.appendingPathComponent("events")
+        let endpoint = try ControlEndpoint(log: events, answers: false)
+        defer { endpoint.close() }
+        let supervisor = try makeSupervisor(f, socket: endpoint.path)
+        defer { supervisor.stop(); try? FileManager.default.removeItem(at: f.dir) }
+        supervisor.start()
+        let started = await waitUntil({ self.starts(f.starts).count == 1 })
+        XCTAssertTrue(started)
+        let before = ProcessInfo.processInfo.systemUptime
+        supervisor.stop()
+        let elapsed = ProcessInfo.processInfo.systemUptime - before
+        XCTAssertGreaterThanOrEqual(elapsed, DaemonSupervisor.stopIntentBound - 0.1)
+        XCTAssertLessThan(elapsed, DaemonSupervisor.stopIntentBound + 0.5)
+        let signalled = await waitUntil({ self.starts(events) == ["TERM"] }, timeout: 5)
+        XCTAssertTrue(signalled, "an unanswered stop intent must not hold back SIGTERM")
+    }
+
+    func testUnrequestedExitPostsNoStopIntent() async throws {
+        let f = try fixture(Self.idleLoop)
+        let events = f.dir.appendingPathComponent("events")
+        let endpoint = try ControlEndpoint(log: events, answers: true)
+        defer { endpoint.close() }
+        let supervisor = try makeSupervisor(f, socket: endpoint.path, retryDelay: 0.01)
+        defer { supervisor.stop(); try? FileManager.default.removeItem(at: f.dir) }
+        supervisor.start()
+        let started = await waitUntil({ self.starts(f.starts).count == 1 })
+        XCTAssertTrue(started)
+        let pid = try XCTUnwrap(starts(f.starts).first.flatMap { Int32($0) })
+        XCTAssertEqual(kill(pid, SIGKILL), 0)
+        let respawned = await waitUntil({ self.starts(f.starts).count == 2 })
+        XCTAssertTrue(respawned)
+        XCTAssertEqual(starts(events), [], "an exit the app did not request posts no stop intent")
     }
 }

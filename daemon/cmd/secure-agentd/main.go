@@ -2,13 +2,18 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/daemon"
 )
@@ -16,6 +21,7 @@ import (
 func main() {
 	configPath := flag.String("config", "", "path to config.yaml overlay")
 	ownerPIDVersion := flag.Uint("owner-pid-version", 0, "owning app audit-token process version")
+	reportOwnerSocket := flag.Bool("report-owner-socket", false, "report the bound control socket to the owning app via the inherited socket on fd 0")
 	esCollector := flag.Bool("es-collector", false,
 		"run ONLY the ES collector: spawn eslogger and write its output to the spool (/var/db/secure-agent/es-spool.jsonl). Also selected when the binary runs as "+esCollectorName+".")
 	flag.Parse()
@@ -39,6 +45,10 @@ func main() {
 			log.Fatalf("es-collector: %v", err)
 		}
 		return
+	}
+
+	if *reportOwnerSocket && *ownerPIDVersion == 0 {
+		log.Fatal("reporting the control socket requires an owning app")
 	}
 
 	log.Println("starting secure-agentd daemon...")
@@ -81,10 +91,41 @@ func main() {
 		log.Fatalf("failed to start daemon: %v", err)
 	}
 
+	if *reportOwnerSocket {
+		if err := reportControlSocket(cfg.SocketPath); err != nil {
+			log.Printf("secure-agentd: could not report control socket to owning app: %v", err)
+		}
+		os.Stdin.Close()
+	}
+
 	// Exit when the owning parent (the menubar app) goes away, or on a signal.
 	runErr := comps.WaitForShutdown(ctx)
 	comps.Shutdown()
 	if runErr != nil {
 		log.Fatalf("daemon stopped: %v", runErr)
 	}
+}
+
+// reportControlSocket sends one datagram on the app's per-launch socket pair.
+// Resolve the bound listener's kernel identity so the app can verify the exact
+// process instance on the connection that will carry the stop intent.
+func reportControlSocket(path string) error {
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	peer, err := api.NewPeerChecker().PeerCred(conn)
+	if err != nil {
+		return err
+	}
+	if int(peer.PID) != os.Getpid() {
+		return fmt.Errorf("control socket is served by pid %d", peer.PID)
+	}
+	return json.NewEncoder(os.Stdin).Encode(struct {
+		Path       string `json:"path"`
+		PID        int32  `json:"pid"`
+		UID        int    `json:"uid"`
+		PIDVersion uint32 `json:"pidVersion"`
+	}{path, peer.PID, peer.UID, peer.PIDVersion})
 }

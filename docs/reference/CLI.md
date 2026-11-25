@@ -54,5 +54,6 @@ Usage:
   secure-agent service install [daemon]    Install a headless launchd service (no menu bar app required)
   secure-agent service uninstall           Remove the headless service
   secure-agent service status              Show the headless service state
+  secure-agent stop [--run-record path]    Record an owner stop intent, then SIGTERM the run record's daemon once the socket's kernel peer is that pid (macOS; refused while the app runs it)
   secure-agent telemetry repair            Ask the menu bar app to re-register its file-telemetry helper; exit 1 unless it runs within 60 s
 ```

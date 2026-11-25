@@ -95,6 +95,8 @@ func main() {
 		handleFirewall(client, os.Args[2:])
 	case "service":
 		handleService(os.Args[2:])
+	case "stop":
+		handleStop(sockPath, os.Args[2:])
 	case "telemetry":
 		handleTelemetry(client, os.Args[2:])
 	case "help", "-h", "--help":
@@ -154,6 +156,7 @@ func printUsage() {
 	fmt.Println("  secure-agent service install [daemon]    Install a headless launchd service (no menu bar app required)")
 	fmt.Println("  secure-agent service uninstall           Remove the headless service")
 	fmt.Println("  secure-agent service status              Show the headless service state")
+	fmt.Println("  secure-agent stop [--run-record path]    Record an owner stop intent, then SIGTERM the run record's daemon once the socket's kernel peer is that pid (macOS; refused while the app runs it)")
 	fmt.Println("  secure-agent telemetry repair            Ask the menu bar app to re-register its file-telemetry helper; exit 1 unless it runs within 60 s")
 }
 
