@@ -535,7 +535,7 @@ func (ps *ProxyServer) forwardConnectRequest(clientConn net.Conn, req *http.Requ
 	defer ps.releaseConnection(targetConn)
 	targetIO := &idleConn{Conn: targetConn}
 
-	if err := req.Write(targetIO); err != nil {
+	if err := connectRequestForUpstream(req).Write(targetIO); err != nil {
 		return false
 	}
 
@@ -575,6 +575,7 @@ func (ps *ProxyServer) inspectAndForwardHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	outReq.Header = r.Header.Clone()
+	stripProxyRequestHeaders(outReq.Header, true)
 
 	resp, err := ps.plainHTTPClient.Do(outReq)
 	if err != nil {

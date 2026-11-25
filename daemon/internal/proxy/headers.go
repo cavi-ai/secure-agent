@@ -2,7 +2,10 @@ package proxy
 
 import (
 	"fmt"
+	"io"
+	"maps"
 	"net/http"
+	"strings"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/injection"
@@ -32,4 +35,58 @@ func detectInjection(text string) (rule, snippet string, found bool) {
 		}
 	}
 	return "", "", false
+}
+
+// stripProxyRequestHeaders removes the proxy's own credentials from a request
+// before it goes upstream. With hopByHop it also removes the hop-by-hop headers
+// and every header named in Connection; tunneled requests pass false so
+// Connection and Upgrade reach the upstream.
+func stripProxyRequestHeaders(h http.Header, hopByHop bool) {
+	if hopByHop {
+		for _, v := range h.Values("Connection") {
+			for _, name := range strings.Split(v, ",") {
+				if name = strings.TrimSpace(name); name != "" {
+					h.Del(name)
+				}
+			}
+		}
+		for _, name := range []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate", "Te", "Trailer", "Transfer-Encoding", "Upgrade"} {
+			h.Del(name)
+		}
+	}
+	h.Del("Proxy-Authorization")
+	h.Del("X-SecureAgent-Proxy-Token")
+}
+
+func connectRequestForUpstream(req *http.Request) *http.Request {
+	// Inspected CONNECT requests keep Connection/Upgrade.
+	stripProxyRequestHeaders(req.Header, false)
+	if req.Trailer == nil {
+		return req
+	}
+
+	// The inbound reader can populate trailers after Write sends the header.
+	// Give Write a separate map so it only sees filtered declarations and values.
+	out := *req
+	out.Trailer = req.Trailer.Clone()
+	stripProxyRequestHeaders(out.Trailer, false)
+	if req.Body != nil && req.Body != http.NoBody {
+		out.Body = &connectTrailerBody{ReadCloser: req.Body, inbound: req.Trailer, outbound: out.Trailer}
+	}
+	return &out
+}
+
+type connectTrailerBody struct {
+	io.ReadCloser
+	inbound  http.Header
+	outbound http.Header
+}
+
+func (b *connectTrailerBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		maps.Copy(b.outbound, b.inbound)
+		stripProxyRequestHeaders(b.outbound, false)
+	}
+	return n, err
 }
