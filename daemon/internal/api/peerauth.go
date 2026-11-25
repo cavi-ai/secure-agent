@@ -105,9 +105,9 @@ func (a *API) gate(checker PeerChecker, next http.Handler) http.Handler {
 			return
 		}
 		role := a.peerRole.classify(cred)
-		// The tagged set lags a freshly spawned agent child; a NoAgent route
-		// asks the tagger about the peer's family directly.
-		if role == roleOwner && apiroutes.IsNoAgent(r.URL.Path) && a.isAgentPID != nil && a.isAgentPID(cred.PID) {
+		// The tagged set lags a freshly spawned agent child; an owner-uid peer
+		// in an agent family is an agent on every route.
+		if role == roleOwner && a.isAgentPID != nil && a.isAgentPID(cred.PID) {
 			role = roleAgent
 		}
 		if !a.authorize(role, r.Method, r.URL.Path) {
