@@ -37,7 +37,11 @@ type AgentInfo struct {
 	CPUPercent float64
 	RootPID    int32
 	IsOrphan   bool
-	sampledAt  time.Time
+
+	sampledAt   time.Time
+	rootStart   time.Time
+	rootReused  bool
+	fromLineage bool
 }
 
 type ProcSource interface {
@@ -55,7 +59,10 @@ type Tagger struct {
 	// idents names listed processes across refreshes: the process list
 	// carries no executable, and an ancestor walk needs one for each parent.
 	idents map[int32]procIdent
-	now    func() time.Time
+	// lineage holds the agent family each process joined by fork or exec,
+	// as Endpoint Security reported it; it outlives the parents that exited.
+	lineage map[int32]lineageRecord
+	now     func() time.Time
 	// onTagged is told, after Refresh releases mu, about each pid that
 	// Refresh tagged which was not tagged before the call.
 	onTagged func(pid int32, info AgentInfo)
@@ -63,13 +70,14 @@ type Tagger struct {
 
 func New(cfg config.Config, ps ProcSource) *Tagger {
 	return &Tagger{
-		cfg:    cfg,
-		ps:     ps,
-		table:  make(map[int32]ProcInfo),
-		cache:  make(map[int32]AgentInfo),
-		tagged: make(map[int32]bool),
-		idents: make(map[int32]procIdent),
-		now:    time.Now,
+		cfg:     cfg,
+		ps:      ps,
+		table:   make(map[int32]ProcInfo),
+		cache:   make(map[int32]AgentInfo),
+		tagged:  make(map[int32]bool),
+		idents:  make(map[int32]procIdent),
+		lineage: make(map[int32]lineageRecord),
+		now:     time.Now,
 	}
 }
 
@@ -152,6 +160,7 @@ func (t *Tagger) SetAgents(defs []config.AgentDef) {
 		}
 	}
 	t.cfg.Agents = defs
+	t.retainLineageLocked(defs)
 	clear(t.cache)
 	clear(t.tagged)
 	newly := t.applyLocked(s)
@@ -162,8 +171,9 @@ func (t *Tagger) SetAgents(defs []config.AgentDef) {
 			changed = append(changed, info)
 			continue
 		}
-		info.CPUTime, info.CPUPercent, info.sampledAt = old.CPUTime, old.CPUPercent, old.sampledAt
-		t.cache[info.PID] = info
+		cached := t.cache[info.PID]
+		cached.CPUTime, cached.CPUPercent, cached.sampledAt = old.CPUTime, old.CPUPercent, old.sampledAt
+		t.cache[info.PID] = cached
 	}
 	fn := t.onTagged
 	t.mu.Unlock()
@@ -244,14 +254,21 @@ func (t *Tagger) applyLocked(s procSample) []AgentInfo {
 			delete(t.idents, pid)
 		}
 	}
+	t.pruneLineageLocked(s.at)
 
 	// Prune cache entries for dead pids. Beyond bounding growth on a
 	// long-running daemon with heavy process churn, this is a correctness fix:
 	// a recycled pid must never inherit the previous process's agent tag.
-	for pid := range t.cache {
-		if _, alive := t.table[pid]; !alive {
+	for pid, info := range t.cache {
+		p, alive := t.table[pid]
+		if !alive || (t.tagged[pid] && !info.StartedAt.IsZero() && !p.StartTime.IsZero() && !sameStart(info.StartedAt, p.StartTime)) {
 			delete(t.cache, pid)
 			delete(t.tagged, pid)
+			continue
+		}
+		if !info.rootReused && t.rootReusedLocked(info.RootPID, info.rootStart) {
+			info.rootReused = true
+			t.cache[pid] = info
 		}
 	}
 
@@ -311,7 +328,7 @@ func (t *Tagger) applyLocked(s procSample) []AgentInfo {
 				delete(t.tagged, pid)
 			}
 			if info, ok := t.tagLocked(pid); ok && !wasTagged {
-				newly = append(newly, info)
+				newly = append(newly, t.rootedInfoLocked(info))
 			}
 		}
 	}
@@ -322,6 +339,9 @@ func (t *Tagger) Tag(pid int32) (AgentInfo, bool) {
 	t.mu.RLock()
 	info, ok := t.cache[pid]
 	tagged := t.tagged[pid]
+	if tagged {
+		info = t.rootedInfoLocked(info)
+	}
 	t.mu.RUnlock()
 
 	if ok && tagged {
@@ -333,7 +353,8 @@ func (t *Tagger) Tag(pid int32) (AgentInfo, bool) {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.tagLocked(pid)
+	info, tagged = t.tagLocked(pid)
+	return t.rootedInfoLocked(info), tagged
 }
 
 // LiveAgentFamily checks whether pid should be treated as an agent for API
@@ -350,15 +371,19 @@ func (t *Tagger) LiveAgentFamily(pid int32) (isAgent, known bool) {
 	for hops := 0; hops < 32 && pid > 0 && !seen[pid]; hops++ {
 		seen[pid] = true
 		p, ok := t.ps.Info(pid)
-		if !ok || (p.Exe == "" && p.Comm == "") {
+		if !ok {
 			return false, false
 		}
 		if _, matched := t.matchLocked(p); matched {
 			return true, true
 		}
+		// A live ancestor's recorded family still applies after adoption.
+		if r, held := t.lineage[pid]; held && r.of(p.StartTime) {
+			return true, true
+		}
 		// An executable can be readable even when the process metadata
 		// containing its parent is unavailable.
-		if p.StartTime.IsZero() {
+		if p.StartTime.IsZero() || (p.Exe == "" && p.Comm == "") {
 			return false, false
 		}
 		if p.PPID == 0 {
@@ -390,11 +415,12 @@ func (t *Tagger) ParentPID(pid int32) (int32, bool) {
 // time must still agree, preventing PID reuse from inheriting permission.
 func (t *Tagger) LiveFamily(pid int32) (AgentInfo, bool) {
 	info, ok := t.Tag(pid)
-	if !ok || info.RootPID <= 0 {
+	if !ok || info.RootPID <= 0 || info.rootReused {
 		return AgentInfo{}, false
 	}
 	root, ok := t.Tag(info.RootPID)
-	if !ok || root.StartedAt.IsZero() {
+	if !ok || root.fromLineage || root.StartedAt.IsZero() ||
+		(!info.rootStart.IsZero() && !sameStart(root.StartedAt, info.rootStart)) {
 		return AgentInfo{}, false
 	}
 	seen := map[int32]bool{}
@@ -450,6 +476,8 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 	chain := make([]int32, 0, 8)
 	curr := pid
 	visited := make(map[int32]bool)
+	var self ProcInfo
+	selfOK := false
 
 	for hops := 0; hops < 32 && curr > 0; hops++ {
 		if visited[curr] {
@@ -465,12 +493,16 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 			read = t.procLocked
 		}
 		pInfo, ok := read(curr)
+		if hops == 0 {
+			self, selfOK = pInfo, ok
+		}
 		if !ok {
 			break
 		}
 
 		if agentDef, matched := t.matchLocked(pInfo); matched {
 			targetProc, _ := t.table[pid]
+			root := t.familyRootLocked(curr, pInfo, agentDef.Name, visited, 32-hops-1)
 			exePath := targetProc.Exe
 			if exePath == "" {
 				exePath = targetProc.Comm
@@ -488,7 +520,8 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 				StartedAt: targetProc.StartTime,
 				RSSBytes:  targetProc.RSSBytes,
 				CPUTime:   targetProc.CPUTime,
-				RootPID:   t.familyRootLocked(curr, pInfo, agentDef.Name, visited, 32-hops-1),
+				RootPID:   root,
+				rootStart: t.table[root].StartTime,
 				sampledAt: t.now(),
 			}
 			t.cache[pid] = res
@@ -497,6 +530,16 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 		}
 
 		curr = pInfo.PPID
+	}
+
+	// No live ancestor matched: the process's own lineage record names the
+	// family it joined before its family ancestors exited.
+	if selfOK {
+		if res, ok := t.lineageTagLocked(pid, self); ok {
+			t.cache[pid] = res
+			t.tagged[pid] = true
+			return res, true
+		}
 	}
 
 	// No match, and the walk cannot go any further — pid resolved to nothing
@@ -656,7 +699,11 @@ func (t *Tagger) TaggedPIDs() map[int32]AgentInfo {
 		if !t.tagged[pid] {
 			continue
 		}
-		info.RootPID = rootPIDLocked(t.cache, t.tagged, info)
+		info = t.rootedInfoLocked(info)
+		r, recorded := t.lineage[pid]
+		if !info.fromLineage && !info.rootReused && !(recorded && r.name == info.Name && r.of(info.StartedAt)) {
+			info.RootPID = rootPIDLocked(t.cache, t.tagged, info)
+		}
 		_, parentAlive := t.table[info.PPID]
 		info.IsOrphan = info.PPID > 1 && !parentAlive
 		res[pid] = info

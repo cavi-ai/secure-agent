@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
@@ -46,6 +49,67 @@ func TestParseESLineCarriesTheParentPid(t *testing.T) {
 	e, ok := ParseESLine(line)
 	if !ok || e.PID != 4242 || e.PPID != 100 {
 		t.Fatalf("ParseESLine = %+v, %v; want pid 4242 ppid 100", e, ok)
+	}
+}
+
+var (
+	esFullStart    = time.Date(2026, 11, 1, 3, 0, 0, 0, time.UTC)
+	esFullLineTime = time.Date(2026, 11, 1, 3, 31, 59, 123456789, time.UTC)
+)
+
+func sameLineage(a, b agents.Lineage) bool {
+	return a.ParentPID == b.ParentPID && a.ChildPID == b.ChildPID && a.ParentStart.Equal(b.ParentStart) &&
+		a.ChildStart.Equal(b.ChildStart) && a.At.Equal(b.At) && a.ParentExe == b.ParentExe &&
+		a.ExecPath == b.ExecPath && a.OriginalParent == b.OriginalParent
+}
+
+// A fork record names the forking process and its child, full or compacted,
+// and is never an event.
+func TestParseESLineForkIsLineageOnly(t *testing.T) {
+	line := []byte(esFullLines()["fork"])
+	compact, ok := CompactESLine(nil, line)
+	if !ok {
+		t.Fatalf("fork line not compacted: %s", line)
+	}
+	want := agents.Lineage{ParentPID: 4242, ParentStart: esFullStart, ParentExe: "/usr/local/bin/node",
+		ChildPID: 4243, ChildStart: esFullStart, At: esFullLineTime}
+	for name, l := range map[string][]byte{"full": line, "compact": compact} {
+		if e, ok := ParseESLine(l); ok {
+			t.Fatalf("%s fork line parsed to event %+v", name, e)
+		}
+		if _, got, v := parseESLine(l); v != esLineage || !sameLineage(got, want) {
+			t.Fatalf("%s fork line = %+v (%v), want %+v", name, got, v, want)
+		}
+	}
+}
+
+// An exec record is the same event as before and names the process's
+// forking parent: original_ppid when above 1, else ppid.
+func TestParseESLineExecCarriesLineage(t *testing.T) {
+	line := esFullLines()["exec"]
+	for _, c := range []struct {
+		name, from, to   string
+		ppid, wantParent int32
+		original         bool
+	}{
+		{"same parent", "", "", 100, 100, true},
+		{"adopted by launchd", `"ppid":100,"original_ppid":100`, `"ppid":1,"original_ppid":4100`, 1, 4100, true},
+		{"no original_ppid", `,"original_ppid":100`, ``, 100, 100, false},
+	} {
+		l := line
+		if c.from != "" {
+			l = strings.Replace(line, c.from, c.to, 1)
+		}
+		want := event.Event{Kind: event.KindExec, TS: esFullLineTime, PID: 4242, PPID: c.ppid, ExePath: "/usr/local/bin/node", Path: "/usr/bin/git"}
+		e, got, v := parseESLine([]byte(l))
+		if v != esEvent || !reflect.DeepEqual(e, want) {
+			t.Fatalf("%s: exec event = %+v (%v), want %+v", c.name, e, v, want)
+		}
+		wantL := agents.Lineage{ParentPID: c.wantParent, ChildPID: 4242, ChildStart: esFullStart,
+			At: esFullLineTime, ExecPath: "/usr/bin/git", OriginalParent: c.original}
+		if !sameLineage(got, wantL) {
+			t.Fatalf("%s: exec lineage = %+v, want %+v", c.name, got, wantL)
+		}
 	}
 }
 

@@ -1349,6 +1349,9 @@ func startCollectors(ctx context.Context, d collectorDeps) <-chan struct{} {
 		if fileTelemetryOn != nil {
 			t.Enabled = fileTelemetryOn.Load
 		}
+		if d.tagger != nil {
+			t.OnLineage = d.tagger.NoteLineage
+		}
 		st.TrackFileFeed()
 		run("eslogger", func(c context.Context) error {
 			t.OnProduce = func() { supReg.MarkProduced("eslogger") }

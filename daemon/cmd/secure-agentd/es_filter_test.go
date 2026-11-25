@@ -200,6 +200,51 @@ func TestKeepESLineNeverDropsConfiguredSensitivePaths(t *testing.T) {
 	}
 }
 
+// A fork record reaches the spool compacted, keeping both processes' pids,
+// start times and original parents.
+func TestPumpToSpoolKeepsForkRecords(t *testing.T) {
+	esNow = func() time.Time { return time.Date(2026, 10, 1, 0, 0, 2, 0, time.UTC) } // the record's own time
+	t.Cleanup(func() { esNow = time.Now })
+	shell := `{"start_time":"2026-10-01T00:00:00Z","audit_token":{"pid":7},"ppid":1,"original_ppid":1,"executable":{"path":"\/bin\/zsh"},"is_platform_binary":true}`
+	child := `{"start_time":"2026-10-01T00:00:01.250000Z","audit_token":{"pid":8},"ppid":7,"original_ppid":7,"executable":{"path":"\/bin\/zsh"},"is_platform_binary":true}`
+	line := `{"process":` + shell + `,"event":{"fork":{"child":` + child + `}},"time":"2026-10-01T00:00:01.250000Z","event_type":11}`
+	path := filepath.Join(t.TempDir(), "spool.jsonl")
+	if err := pumpToSpoolAt(&chunkReader{chunks: []string{line + "\n"}}, path); err != nil {
+		t.Fatalf("pumpToSpoolAt: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read spool: %v", err)
+	}
+	type proc struct {
+		AuditToken struct {
+			PID int32 `json:"pid"`
+		} `json:"audit_token"`
+		OriginalPPID int32  `json:"original_ppid"`
+		StartTime    string `json:"start_time"`
+		Platform     *bool  `json:"is_platform_binary"`
+	}
+	var rec struct {
+		Process proc `json:"process"`
+		Event   struct {
+			Fork *struct {
+				Child proc `json:"child"`
+			} `json:"fork"`
+		} `json:"event"`
+	}
+	if err := json.Unmarshal(bytes.TrimSuffix(got, []byte("\n")), &rec); err != nil || bytes.Count(got, []byte("\n")) != 1 {
+		t.Fatalf("spool = %q, want one fork record (%v)", got, err)
+	}
+	p, f := rec.Process, rec.Event.Fork
+	if f == nil || p.AuditToken.PID != 7 || p.OriginalPPID != 1 || p.StartTime != "2026-10-01T00:00:00Z" ||
+		f.Child.AuditToken.PID != 8 || f.Child.OriginalPPID != 7 || f.Child.StartTime != "2026-10-01T00:00:01.250000Z" {
+		t.Fatalf("spool fork record = %s", got)
+	}
+	if p.Platform != nil || f.Child.Platform != nil {
+		t.Fatalf("spool fork record not compacted: %s", got)
+	}
+}
+
 func TestPumpToSpoolDropsSystemOpensOnly(t *testing.T) {
 	esNow = func() time.Time { return time.Date(2026, 9, 25, 12, 0, 1, 0, time.UTC) } // the fixture records' own time
 	t.Cleanup(func() { esNow = time.Now })
