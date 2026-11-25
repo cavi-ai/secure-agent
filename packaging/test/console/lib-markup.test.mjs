@@ -117,9 +117,14 @@ const clearScope = '<button type="button" class="btn btn-ghost btn-sm" data-acti
 const returnBack = '<button type="button" class="btn btn-ghost btn-sm" data-action="session-investigation-return">Back to session</button>';
 const sessionBack = `<button type="button" class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${E}">Back to session</button>`;
 
+const timestampLabel = new Date('2026-07-12T12:00:00Z').toLocaleString(undefined, {
+  year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  timeZone: 'UTC', timeZoneName: 'short',
+});
+
 const cases = {
   'localTimestampHTML': [() => inUTC(() => ctx.localTimestampHTML(`Sun Jul 12 2026 12:00:00 GMT+0000 (${H})`)),
-    `<time datetime="Sun Jul 12 2026 12:00:00 GMT+0000 (${E})" title="Sun Jul 12 2026 12:00:00 GMT+0000 (${E})">Jul 12, 2026, 12:00 PM UTC</time>`],
+    `<time datetime="Sun Jul 12 2026 12:00:00 GMT+0000 (${E})" title="Sun Jul 12 2026 12:00:00 GMT+0000 (${E})">${timestampLabel}</time>`],
   'advisorAdviceHTML allow': [() => ctx.advisorAdviceHTML({ assessment: 'benign', confidence: 0.42, rationale: H }),
     `<span class="advisor-advice allow"><b>Advisor suggests allow</b> (42% conf) — ${E}</span>`],
   'advisorAdviceHTML look': [() => ctx.advisorAdviceHTML({ assessment: H, rationale: H }),
