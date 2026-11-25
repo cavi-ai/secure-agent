@@ -218,7 +218,7 @@ type API struct {
 	plan *PlanFuncs
 
 	// NoAgent enforcement and the file actions (files.go, tcppeer.go).
-	isAgentPID   func(pid int32) bool
+	isAgentPID   func(pid int32) (isAgent, known bool)
 	tcpClientPID func(remoteAddr string) (int32, error)
 	openPath     func(args ...string) error
 
@@ -406,10 +406,10 @@ type PeerDeps struct {
 	AgentPIDs    func() map[int32]struct{}
 	UIPID        int32
 	UIPIDVersion uint32
-	// IsAgentPID reports whether pid belongs to an agent family, walking its
-	// ancestry live. NoAgent routes refuse such peers; unwired, the console
-	// listener refuses every NoAgent request.
-	IsAgentPID func(pid int32) bool
+	// IsAgentPID checks whether pid belongs to an agent family. Unknown
+	// membership never grants owner access. An unwired console listener
+	// refuses requests that require a non-agent peer.
+	IsAgentPID func(pid int32) (isAgent, known bool)
 }
 
 // TelemetryDeps are fleet, OTLP and event-bus facts (optional).

@@ -303,12 +303,13 @@ func TestConsoleNoAgentChecksTheTCPPeer(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		peer  func(string) (int32, error)
-		agent func(int32) bool
+		agent func(int32) (bool, bool)
 		want  int
 	}{
-		{"agent", func(string) (int32, error) { return 777, nil }, func(pid int32) bool { return pid == 777 }, http.StatusForbidden},
-		{"browser", func(string) (int32, error) { return 777, nil }, func(int32) bool { return false }, http.StatusNotFound},
-		{"unidentified", func(string) (int32, error) { return 0, errors.New("no peer") }, func(int32) bool { return false }, http.StatusServiceUnavailable},
+		{"agent", func(string) (int32, error) { return 777, nil }, func(pid int32) (bool, bool) { return pid == 777, true }, http.StatusForbidden},
+		{"browser", func(string) (int32, error) { return 777, nil }, func(int32) (bool, bool) { return false, true }, http.StatusNotFound},
+		{"unknown family", func(string) (int32, error) { return 777, nil }, func(int32) (bool, bool) { return false, false }, http.StatusServiceUnavailable},
+		{"unidentified", func(string) (int32, error) { return 0, errors.New("no peer") }, func(int32) (bool, bool) { return false, true }, http.StatusServiceUnavailable},
 		{"unwired", func(string) (int32, error) { return 777, nil }, nil, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -338,7 +339,7 @@ func TestSocketNoAgentLiveFamilyCheck(t *testing.T) {
 	self := int32(os.Getpid())
 	var agentPeer atomic.Bool
 	agentPeer.Store(true)
-	deps.Peers.IsAgentPID = func(pid int32) bool { return agentPeer.Load() && pid == self }
+	deps.Peers.IsAgentPID = func(pid int32) (bool, bool) { return agentPeer.Load() && pid == self, true }
 	a := newTestAPI(deps)
 	ctx, cancel := contextWithCancel()
 	defer cancel()

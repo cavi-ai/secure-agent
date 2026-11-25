@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -436,6 +438,95 @@ func TestGateAgentRolePolicy(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("agent DELETE /guard/rules: status=%d, want 403", resp.StatusCode)
+	}
+}
+
+// An owner-uid peer outside the tagged set that the live family check calls an
+// agent gets the agent role on every route; a non-agent owner keeps its access.
+func TestGateLiveAgentFamilyIsAgentOnEveryRoute(t *testing.T) {
+	const gateRefusal = "requires a more privileged client"
+	self := int32(os.Getpid())
+	type call struct{ method, path, body string }
+	pinned := []call{
+		{http.MethodPost, "/notify/rules", `{"rule":"keychain-access","notify":false}`},
+		{http.MethodDelete, "/guard/rules?agent=x&rule_id=y", ""},
+	}
+	headless := append([]call{
+		{http.MethodPost, "/guard/resolve", `{"id":"x","verdict":"allow","scope":"once"}`},
+		{http.MethodPost, "/kill", `{"pid":42}`},
+		{http.MethodPost, "/firewall/mode", `{"mode":"observe"}`},
+	}, pinned...)
+	for _, tc := range []struct {
+		name  string
+		uiPID int32
+		calls []call
+	}{
+		{"pinned UI", self + 9999, pinned},
+		{"headless", 0, headless},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := fmt.Sprintf("/tmp/sa_family_%d.sock", time.Now().UnixNano())
+			defer os.Remove(sock)
+			fk := &fakeKiller{}
+			deps := Deps{SocketPath: sock, Store: testStore(t), Killer: fk, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: newTestBroker()}}
+			deps.Peers.Checker = loopbackChecker{NewPeerChecker()}
+			deps.Peers.AgentPIDs = func() map[int32]struct{} { return nil }
+			var agentFamily atomic.Bool
+			var familyKnown atomic.Bool
+			familyKnown.Store(true)
+			deps.Peers.IsAgentPID = func(pid int32) (bool, bool) { return agentFamily.Load() && pid == self, familyKnown.Load() }
+			a := newTestAPI(deps)
+			a.peerRole.UIPID = tc.uiPID
+			ctx, cancel := contextWithCancel()
+			defer cancel()
+			go a.Serve(ctx)
+			waitForSocket(t, sock)
+			cl := unixClient(sock)
+			do := func(c call) (int, string) {
+				req, _ := http.NewRequest(c.method, "http://unix"+c.path, strings.NewReader(c.body))
+				req.Header.Set("Content-Type", "application/json")
+				resp, err := cl.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer resp.Body.Close()
+				b, _ := io.ReadAll(resp.Body)
+				return resp.StatusCode, string(b)
+			}
+
+			agentFamily.Store(true)
+			for _, c := range tc.calls {
+				if code, body := do(c); code != http.StatusForbidden || !strings.Contains(body, gateRefusal) {
+					t.Errorf("agent-family %s %s: %d %q, want the gate's 403", c.method, c.path, code, strings.TrimSpace(body))
+				}
+			}
+			if fk.killed != 0 {
+				t.Fatal("killer fired for an agent-family peer")
+			}
+			if code, _ := do(call{http.MethodGet, "/status", ""}); code != http.StatusOK {
+				t.Errorf("agent-family GET /status: %d, want 200", code)
+			}
+			if code, _ := do(call{http.MethodPost, "/guard/decision", `{}`}); code != http.StatusBadRequest {
+				t.Errorf("agent-family POST /guard/decision: %d, want 400 from the handler", code)
+			}
+
+			agentFamily.Store(false)
+			for _, c := range tc.calls {
+				if code, body := do(c); code == http.StatusForbidden && strings.Contains(body, gateRefusal) {
+					t.Errorf("owner %s %s: refused by the gate, want the owner-level gate to pass", c.method, c.path)
+				}
+			}
+
+			familyKnown.Store(false)
+			for _, c := range tc.calls {
+				if code, body := do(c); code != http.StatusForbidden || !strings.Contains(body, gateRefusal) {
+					t.Errorf("unknown family %s %s: %d %q, want the gate's 403", c.method, c.path, code, strings.TrimSpace(body))
+				}
+			}
+			if code, _ := do(call{http.MethodGet, "/status", ""}); code != http.StatusOK {
+				t.Errorf("unknown family GET /status: %d, want 200", code)
+			}
+		})
 	}
 }
 
