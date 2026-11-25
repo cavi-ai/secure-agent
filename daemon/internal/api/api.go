@@ -26,6 +26,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
+	"github.com/cavi-ai/secure-agent/daemon/internal/costreport"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
@@ -158,7 +159,7 @@ type API struct {
 	// costs caches /costs reports, saved in the store; unpriced caches
 	// /costs/unpriced reports in memory (costcache.go).
 	costs    costCache[store.CostReport]
-	unpriced costCache[unpricedCostReport]
+	unpriced costCache[costreport.UnpricedReport]
 
 	harnessActivity harnessActivityCache
 	sessionCoverage sessionCoverageCache
@@ -797,7 +798,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		f.Limit = n
 	}
 	if v := q.Get("since"); v != "" {
-		t, err := parseSince(v, time.Now())
+		t, err := costreport.ParseSince(v, time.Now())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

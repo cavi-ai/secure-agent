@@ -1,4 +1,4 @@
-package api
+package hookconfig
 
 import (
 	"encoding/json"
@@ -31,12 +31,12 @@ func TestClaudeMarketplaceRegistration(t *testing.T) {
 	for _, name := range []string{"secret_guard.py", "activity_log.py", "injection_scan.py", "guard-rules.json"} {
 		write(filepath.Join(cache, "hooks", name), "asset")
 	}
-	if !claudeHookRegistered(settings) {
+	if !ClaudeHookRegistered(settings) {
 		t.Fatal("valid user plugin not recognized")
 	}
 	makeGroup := func(matcher string) map[string]any { return map[string]any{"matcher": matcher, "hooks": hook["hooks"]} }
 	write(filepath.Join(cache, "hooks/hooks.json"), map[string]any{"hooks": map[string]any{"PreToolUse": []any{makeGroup("Bash"), makeGroup("Read|Grep|Glob|Write|Edit|MultiEdit|NotebookEdit")}, "PostToolUse": []any{makeGroup(".*")}}})
-	if !claudeHookRegistered(settings) {
+	if !ClaudeHookRegistered(settings) {
 		t.Fatal("previous package shape not recognized")
 	}
 	write(filepath.Join(cache, "hooks/hooks.json"), map[string]any{"hooks": map[string]any{"PreToolUse": []any{hook}, "PostToolUse": []any{hook}}})
@@ -46,35 +46,54 @@ func TestClaudeMarketplaceRegistration(t *testing.T) {
 			hooks[event] = []any{map[string]any{"hooks": []any{map[string]any{"command": "python3 " + filepath.Join(home, ".claude/hooks/secret_guard.py")}}}}
 		}
 		write(settings, map[string]any{"enabledPlugins": map[string]bool{"secure-agent@cavi-ai": true}, "hooks": hooks})
-		if !nativeClaudeHookAny(settings) {
+		if !NativeClaudeHookAny(settings) {
 			t.Fatalf("missing duplicate detection for %v", events)
 		}
 	}
 	write(settings, map[string]any{"enabledPlugins": map[string]bool{"secure-agent@cavi-ai": true}})
 	write(registry, map[string]any{"version": 2, "plugins": map[string]any{"secure-agent@cavi-ai": []any{map[string]any{"scope": "project", "installPath": cache}}}})
-	if claudeHookRegistered(settings) {
+	if ClaudeHookRegistered(settings) {
 		t.Fatal("project scope accepted")
 	}
 	write(registry, map[string]any{"version": 2, "plugins": map[string]any{"secure-agent@cavi-ai": []any{map[string]any{"scope": "user", "installPath": home}}}})
-	if claudeHookRegistered(settings) {
+	if ClaudeHookRegistered(settings) {
 		t.Fatal("outside cache accepted")
 	}
 	write(registry, map[string]any{"version": 1})
-	if claudeHookRegistered(settings) {
+	if ClaudeHookRegistered(settings) {
 		t.Fatal("malformed registry accepted")
 	}
 	write(registry, map[string]any{"version": 2, "plugins": map[string]any{"secure-agent@cavi-ai": []any{map[string]any{"scope": "user", "installPath": cache}}}})
 	write(settings, map[string]any{"enabledPlugins": map[string]bool{"secure-agent@cavi-ai": false}})
-	if claudeHookRegistered(settings) {
+	if ClaudeHookRegistered(settings) {
 		t.Fatal("disabled plugin accepted")
 	}
 	write(settings, map[string]any{"enabledPlugins": map[string]bool{"secure-agent@cavi-ai": true}})
 	os.Remove(filepath.Join(cache, "hooks/secret_guard.py"))
-	if claudeHookRegistered(settings) {
+	if ClaudeHookRegistered(settings) {
 		t.Fatal("missing asset accepted")
 	}
 	write(settings, map[string]any{"enabledPlugins": map[string]bool{"secure-agent@cavi-ai": true}, "disableAllHooks": true})
-	if claudeHookRegistered(settings) {
+	if ClaudeHookRegistered(settings) {
 		t.Fatal("disabled hooks accepted")
+	}
+}
+
+func TestClaudeHookRegistered(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	// Missing file → not registered.
+	if ClaudeHookRegistered(path) {
+		t.Fatal("missing settings.json must read as unregistered")
+	}
+	// Only PreToolUse → not fully registered.
+	os.WriteFile(path, []byte(`{"hooks":{"PreToolUse":[{"hooks":[{"command":"python3 ~/.claude/hooks/secret_guard.py"}]}]}}`), 0o600)
+	if ClaudeHookRegistered(path) {
+		t.Fatal("PreToolUse alone must not count as registered")
+	}
+	// Both events → registered.
+	os.WriteFile(path, []byte(`{"hooks":{"PreToolUse":[{"hooks":[{"command":"python3 ~/.claude/hooks/secret_guard.py"}]}],"PostToolUse":[{"hooks":[{"command":"python3 ~/.claude/hooks/secret_guard.py"}]}]}}`), 0o600)
+	if !ClaudeHookRegistered(path) {
+		t.Fatal("both events registered must read as registered")
 	}
 }

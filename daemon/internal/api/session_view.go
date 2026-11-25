@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -46,10 +47,10 @@ func sessionMemory(st sessionMemoryStore, id string, before *store.MemoryCursor,
 	}
 	response := memoryResponse{Rows: make([]memoryRow, 0, len(facts)), HasEarlier: earlier}
 	for _, f := range facts {
-		response.Rows = append(response.Rows, presentMemoryFact(f))
+		response.Rows = append(response.Rows, memoryRow(report.PresentMemoryFact(f)))
 	}
 	if earlier && len(facts) > 0 {
-		response.NextCursor = encodeMemoryCursor(facts[0])
+		response.NextCursor = report.EncodeMemoryCursor(facts[0])
 	}
 	return response, nil
 }

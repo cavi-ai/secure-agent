@@ -1,26 +1,17 @@
 package api
 
 import (
-	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/pattern"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 )
 
 const readConnectRule = posture.ReadConnectRule
-
-// destinationOf is a connect item's org from the endpoint identity table,
-// its host when the org is unknown, and the host.
-func destinationOf(ev model.EvidenceItem) (dest, org, host string) {
-	host, _ = report.SplitHostPort(ev.Label)
-	org = hostid.IdentifyCached(host).Org
-	return report.FirstNonEmpty([]string{org, host}), org, host
-}
 
 // readConnectWhy is the reason a sensitive-read-then-connect flag needs a
 // look, from its evidence: whether the destination owns the file that was
@@ -31,7 +22,7 @@ func readConnectWhy(f model.Flag) string {
 	if read == nil || conn == nil || read.PID == 0 {
 		return ""
 	}
-	dest, org, host := destinationOf(*conn)
+	dest, org, host := pattern.DestinationOf(*conn)
 	file := report.DisplayPath(read.Label, strings.TrimRight(explainHome(), "/"))
 	switch {
 	case hostid.IdentifyCached(host).Class == "cloud":
@@ -45,75 +36,4 @@ func readConnectWhy(f model.Flag) string {
 	default:
 		return org + " owns " + file + ", but a different process made the observed connection. The recorded evidence does not establish credential use."
 	}
-}
-
-// patternDestinations counts the flags citing each destination (org, else
-// host), busiest PatternListCap first.
-func patternDestinations(flags []model.Flag) []model.PatternDestination {
-	byDest := map[string]*model.PatternDestination{}
-	for _, f := range flags {
-		seen := map[string]bool{}
-		for _, ev := range f.Evidence {
-			if ev.Kind != "connect" {
-				continue
-			}
-			dest, org, host := destinationOf(ev)
-			if host == "" || seen[dest] {
-				continue
-			}
-			seen[dest] = true
-			d := byDest[dest]
-			if d == nil {
-				d = &model.PatternDestination{Org: org, Host: host}
-				byDest[dest] = d
-			}
-			d.Count++
-		}
-	}
-	out := make([]model.PatternDestination, 0, len(byDest))
-	for _, d := range byDest {
-		out = append(out, *d)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Count != out[j].Count {
-			return out[i].Count > out[j].Count
-		}
-		return out[i].Host < out[j].Host
-	})
-	return capList(out, model.PatternListCap)
-}
-
-// patternReader is the reader report.ReaderName gives for most of the flags,
-// empty when none names one.
-func patternReader(flags []model.Flag) string {
-	n := map[string]int{}
-	for _, f := range flags {
-		if name := report.ReaderName(report.EvidenceOfKind(f, "read"), f.Agent); name != "" {
-			n[name]++
-		}
-	}
-	best := ""
-	for name, c := range n {
-		if c > n[best] || (c == n[best] && name < best) {
-			best = name
-		}
-	}
-	return best
-}
-
-// destinationPhrase: "GitHub (140.82.114.6)", "evil.example.com", plus
-// " and N more" for further destinations.
-func destinationPhrase(dests []model.PatternDestination) string {
-	if len(dests) == 0 {
-		return "an outside host"
-	}
-	d := dests[0]
-	s := d.Host
-	if d.Org != "" {
-		s = d.Org + " (" + d.Host + ")"
-	}
-	if more := len(dests) - 1; more > 0 {
-		s += fmt.Sprintf(" and %d more destination%s", more, plural(more))
-	}
-	return s
 }

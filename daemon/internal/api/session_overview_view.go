@@ -6,6 +6,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/hookhealth"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -27,7 +28,7 @@ func readSessionOverviewEvidence(st *store.Store, id string) (sessionOverviewEvi
 	}
 	out := sessionOverviewEvidence{Session: got.Session, Findings: []SessionFinding{}, Truncated: got.Truncated}
 	for _, f := range got.Findings {
-		out.Findings = append(out.Findings, SessionFinding{ID: f.ID, Title: memoryRuleTitle(f.Rule), At: f.At, Assessment: f.Assessment})
+		out.Findings = append(out.Findings, SessionFinding{ID: f.ID, Title: report.MemoryRuleTitle(f.Rule), At: f.At, Assessment: f.Assessment})
 	}
 	return out, nil
 }

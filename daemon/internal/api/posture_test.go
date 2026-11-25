@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -479,25 +478,6 @@ func TestGuardHookUnregisteredItem(t *testing.T) {
 	}
 	if item.Kind != "guard_hook_unregistered" || item.Severity != 2 {
 		t.Fatalf("item = %+v", item)
-	}
-}
-
-func TestClaudeHookRegistered(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "settings.json")
-	// Missing file → not registered.
-	if claudeHookRegistered(path) {
-		t.Fatal("missing settings.json must read as unregistered")
-	}
-	// Only PreToolUse → not fully registered.
-	os.WriteFile(path, []byte(`{"hooks":{"PreToolUse":[{"hooks":[{"command":"python3 ~/.claude/hooks/secret_guard.py"}]}]}}`), 0o600)
-	if claudeHookRegistered(path) {
-		t.Fatal("PreToolUse alone must not count as registered")
-	}
-	// Both events → registered.
-	os.WriteFile(path, []byte(`{"hooks":{"PreToolUse":[{"hooks":[{"command":"python3 ~/.claude/hooks/secret_guard.py"}]}],"PostToolUse":[{"hooks":[{"command":"python3 ~/.claude/hooks/secret_guard.py"}]}]}}`), 0o600)
-	if !claudeHookRegistered(path) {
-		t.Fatal("both events registered must read as registered")
 	}
 }
 

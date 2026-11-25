@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/costreport"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -54,7 +55,7 @@ func TestCostsServedFromCacheForSameParameters(t *testing.T) {
 	}
 	unpriced := func() int {
 		t.Helper()
-		var out unpricedCostReport
+		var out costreport.UnpricedReport
 		get("/costs/unpriced?"+window, &out)
 		n := 0
 		for _, r := range out.Rows {

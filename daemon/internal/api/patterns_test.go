@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/pattern"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 )
 
@@ -46,7 +47,7 @@ func onlyPattern(t *testing.T, ps []model.Pattern) model.Pattern {
 }
 
 func actionByID(acts []model.ExplainAction, id string) *model.ExplainAction {
-	if i := actionIndex(acts, id); i >= 0 {
+	if i := pattern.ActionIndex(acts, id); i >= 0 {
 		return &acts[i]
 	}
 	return nil

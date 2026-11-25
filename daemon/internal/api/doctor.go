@@ -8,6 +8,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/doctor"
+	"github.com/cavi-ai/secure-agent/daemon/internal/hookconfig"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 )
 
@@ -128,10 +129,10 @@ func (a *API) doctorFacts(now time.Time) doctor.Facts {
 		ClaudeActive: activeHarness(st, "claude"),
 		LossSeen:     a.lossSeen,
 	}
-	if path, err := claudeSettingsPath(); err == nil {
+	if path, err := hookconfig.ClaudeSettingsPath(); err == nil {
 		f.SettingsKnown = true
-		f.HookRegistered = claudeHookRegistered(path)
-		f.HookDuplicate = claudeMarketplacePath(path) != "" && nativeClaudeHookAny(path)
+		f.HookRegistered = hookconfig.ClaudeHookRegistered(path)
+		f.HookDuplicate = hookconfig.ClaudeMarketplacePath(path) != "" && hookconfig.NativeClaudeHookAny(path)
 	}
 	if st.Coverage != nil {
 		for _, row := range st.Coverage.Harnesses {
