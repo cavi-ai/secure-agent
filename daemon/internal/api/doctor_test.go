@@ -13,6 +13,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
@@ -528,7 +529,7 @@ func TestDoctorSpoolLossFailsOnlyWhileGrowing(t *testing.T) {
 	if state, detail := checkFileTelemetry(doctorFacts{st: Status{ESService: &quiet}, now: time.Now()}); state != doctorPass || !strings.Contains(detail, "123 unread spool bytes lost at") || !strings.Contains(detail, "none since") {
 		t.Fatalf("quiet loss: state=%s detail=%s, want pass naming the loss", state, detail)
 	}
-	if items := esServiceItems(time.Now(), quiet); len(items) != 0 {
+	if items := posture.ESServiceItems(time.Now(), quiet); len(items) != 0 {
 		t.Fatalf("quiet loss posture items = %+v, want none", items)
 	}
 
@@ -538,7 +539,7 @@ func TestDoctorSpoolLossFailsOnlyWhileGrowing(t *testing.T) {
 	if state != doctorFail || !strings.Contains(detail, "123 unread spool bytes") {
 		t.Fatalf("state=%s detail=%s", state, detail)
 	}
-	items := esServiceItems(time.Now(), es)
+	items := posture.ESServiceItems(time.Now(), es)
 	if len(items) != 1 || items[0].Severity != 2 || !strings.Contains(items[0].Detail, "123 unread spool bytes") {
 		t.Fatalf("items=%+v", items)
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -309,30 +310,30 @@ func checkFileTelemetry(f doctorFacts) (string, string) {
 		return doctorSkip, "not spool-based"
 	}
 	if es.Losing {
-		return doctorFail, esLossDetail(*es)
+		return doctorFail, posture.ESLossDetail(*es)
 	}
-	if title, detail := collectorFailure(f.now, *es); title != "" {
+	if title, detail := posture.CollectorFailure(f.now, *es); title != "" {
 		return doctorFail, detail
 	}
 	switch {
-	case esServiceFlooding(f.now, *es):
-		return doctorFail, esFloodingDetail(*es)
-	case esServiceLagging(f.now, *es):
-		return doctorFail, esLaggingDetail(*es)
-	case esServiceBehind(f.now, *es):
+	case posture.ESServiceFlooding(f.now, *es):
+		return doctorFail, posture.ESFloodingDetail(*es)
+	case posture.ESServiceLagging(f.now, *es):
+		return doctorFail, posture.ESLaggingDetail(*es)
+	case posture.ESServiceBehind(f.now, *es):
 		// No warning level exists (doctorPass/doctorFail/doctorSkip only):
 		// a sustained burst still fails the check, but with the behind
 		// detail, not the garbage one.
-		return doctorFail, esBehindDetail(*es)
+		return doctorFail, posture.ESBehindDetail(*es)
 	case es.State == "not-loaded":
 		return doctorFail, "root service not loaded"
-	case esServiceRefused(es.State):
-		return doctorFail, "root service state: " + es.State + " — " + esReregisterHint
-	case esServiceRunning(es.State) && es.Collector != nil && es.Collector.Fresh(f.now) && es.Collector.State == "collecting":
+	case posture.ESServiceRefused(es.State):
+		return doctorFail, "root service state: " + es.State + " — " + posture.ESReregisterHint
+	case posture.ESServiceRunning(es.State) && es.Collector != nil && es.Collector.Fresh(f.now) && es.Collector.State == "collecting":
 		return doctorPass, "file collector is ready"
-	case esServiceFailing(es.State):
+	case posture.ESServiceFailing(es.State):
 		return doctorFail, "root service state: " + es.State
-	case esServiceRunning(es.State) && f.st.ActiveAgents > 0 && !f.grace && f.now.Sub(es.SpoolMtime) > doctorSpoolStale:
+	case posture.ESServiceRunning(es.State) && f.st.ActiveAgents > 0 && !f.grace && f.now.Sub(es.SpoolMtime) > doctorSpoolStale:
 		if es.SpoolMtime.IsZero() {
 			return doctorFail, "service running but spool absent"
 		}
@@ -364,7 +365,7 @@ func checkCollectors(f doctorFacts) (string, string) {
 	}
 	// Readiness failures are actionable; an idle source alone is not.
 	// The spool service's own failures are the file-telemetry check's.
-	spoolFailing := f.st.ESService != nil && len(esServiceItems(f.now, *f.st.ESService)) > 0
+	spoolFailing := f.st.ESService != nil && len(posture.ESServiceItems(f.now, *f.st.ESService)) > 0
 	if f.st.ActiveAgents > 0 {
 		for _, it := range silentCollectorItems(f.now, f.st) {
 			if !isMonitoringGap(it) {
