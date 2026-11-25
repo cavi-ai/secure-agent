@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
+	"github.com/cavi-ai/secure-agent/daemon/internal/doctor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -23,8 +24,8 @@ func TestCollectorPermissionFailureOverridesFreshSpoolAndGrace(t *testing.T) {
 	if len(items) != 1 || !strings.Contains(items[0].Detail, "Full Disk Access") {
 		t.Fatalf("permission denial hidden behind parent liveness: %+v", items)
 	}
-	state, detail := checkFileTelemetry(doctorFacts{st: Status{ESService: &es}, now: now, grace: true})
-	if state != doctorFail || !strings.Contains(detail, "Full Disk Access") {
+	state, detail := doctor.CheckFileTelemetry(doctor.Facts{Status: posture.Status{ESService: &es}, Now: now, Grace: true})
+	if state != doctor.Fail || !strings.Contains(detail, "Full Disk Access") {
 		t.Fatalf("doctor hides permission denial: %s %s", state, detail)
 	}
 	es.Collector.UpdatedAt = now.Add(-2 * time.Minute)
@@ -37,7 +38,7 @@ func TestStorageReadDiagnosticsAppearInDoctorAndPosture(t *testing.T) {
 	now := time.Now().UTC()
 	health := &store.WriteHealth{ReadFailures: 1, ReadActive: []string{"session report events"}, ReadIssues: []store.ReadIssue{{Operation: "session report events", Category: "deadline", Failures: 1, FirstFailureAt: now, LastFailureAt: now}}}
 	status := Status{StorageHealth: health}
-	_, detail := checkStorage(doctorFacts{st: status})
+	_, detail := doctor.CheckStorage(doctor.Facts{Status: posture.Status(status)})
 	if !strings.Contains(detail, "deadline") || !strings.Contains(detail, now.Format(time.RFC3339)) {
 		t.Fatalf("doctor omitted diagnostic: %s", detail)
 	}

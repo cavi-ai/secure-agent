@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
@@ -14,32 +13,12 @@ import (
 
 const readConnectRule = posture.ReadConnectRule
 
-// evidenceOfKind is f's first evidence item of kind, nil when it has none.
-func evidenceOfKind(f model.Flag, kind string) *model.EvidenceItem {
-	for i := range f.Evidence {
-		if f.Evidence[i].Kind == kind {
-			return &f.Evidence[i]
-		}
-	}
-	return nil
-}
-
 // destinationOf is a connect item's org from the endpoint identity table,
 // its host when the org is unknown, and the host.
 func destinationOf(ev model.EvidenceItem) (dest, org, host string) {
 	host, _ = splitHostPort(ev.Label)
 	org = hostid.IdentifyCached(host).Org
 	return firstNonEmpty([]string{org, host}), org, host
-}
-
-// firstNonEmpty is the first non-empty string in strs, or "".
-func firstNonEmpty(strs []string) string {
-	for _, s := range strs {
-		if s != "" {
-			return s
-		}
-	}
-	return ""
 }
 
 // readConnectWhy is the reason a sensitive-read-then-connect flag needs a
@@ -101,20 +80,6 @@ func patternDestinations(flags []model.Flag) []model.PatternDestination {
 		return out[i].Host < out[j].Host
 	})
 	return capList(out, model.PatternListCap)
-}
-
-// readerName names the process that read the file ("gh", "claude-code
-// 2.1.281"); empty when the read item names no executable or the reader is
-// the agent itself.
-func readerName(r *model.EvidenceItem, agent string) string {
-	if r == nil || r.Exe == "" {
-		return ""
-	}
-	name := agents.HarnessLabel(r.Exe)
-	if agent != "" && strings.HasPrefix(strings.ToLower(name), strings.ToLower(agent)) {
-		return ""
-	}
-	return name
 }
 
 // patternReader is the reader readerName gives for most of the flags,

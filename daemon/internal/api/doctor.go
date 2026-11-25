@@ -2,18 +2,13 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
-	"sort"
-	"strings"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
-	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
+	"github.com/cavi-ai/secure-agent/daemon/internal/doctor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
-	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 // DoctorCheck is one self-check verdict. State is pass, fail or skip; Fix is
@@ -51,84 +46,6 @@ type DoctorReport struct {
 type DoctorLossReview struct {
 	SeenAt  string `json:"seen_at,omitempty"`
 	Pending bool   `json:"pending"`
-}
-
-const (
-	doctorPass = "pass"
-	doctorFail = "fail"
-	doctorSkip = "skip"
-
-	doctorGraceDetail = "inside the 10-minute boot window"
-	// doctorSpoolStale: a running root ES service whose spool is older than
-	// this while agents are active is not writing.
-	doctorSpoolStale = 10 * time.Minute
-	// doctorEvictWindow: a row cap whose oldest kept row is younger than this
-	// is evicting inside one day.
-	doctorEvictWindow = 24 * time.Hour
-)
-
-// doctorFacts is everything the checks read, gathered once per report so each
-// check is a pure function of it.
-type doctorFacts struct {
-	now, boot time.Time
-	grace     bool
-	st        Status
-
-	settingsKnown        bool
-	hookRegistered       bool
-	hookDuplicate        bool
-	hookHarnesses        []string
-	missingHookHarnesses []string
-
-	sessionsTotal, sessionsNamed               int
-	sessionsWithWorkspace, sessionsWRepo       int
-	sessionsWithGitWorkspace, sessionsGitWRepo int
-	repoQueryError                             bool
-	sessionsLastHour                           int
-	sessionsByHarness, traceByHarness          map[string]int
-	seenByHarness                              map[string]int // sessions with a transcript line read or a hook event since boot
-
-	dupePairs, idless int
-
-	claudePriced, claudeUnpriced, allUnpriced, allCalls int
-
-	retention []store.KindRetention
-
-	// egress is the blind-spot rows behind st.UninspectedEgress (same window).
-	egress []UninspectedEndpoint
-
-	hermes *collect.HermesStatus // nil when the collector is not wired
-
-	configBoot, configReload string
-	configRestart            []string
-
-	// lossSeen is the operator's mark that earlier losses were seen.
-	lossSeen *collect.LossSeen
-}
-
-type doctorProbe struct {
-	id, title, fix string
-	run            func(f doctorFacts) (state, detail string)
-}
-
-// doctorProbes run in this order; the report lists them in it.
-var doctorProbes = []doctorProbe{
-	{"config", "Configuration", "Fix ~/.config/secure-agent/config.yaml, then restart Secure Agent: firewall, guard and paths load only at start", checkConfig},
-	{"hook-registered", "Guard hook registered", "Run Setup → Harness hooks", checkHookRegistered},
-	{"hook-active", "Guard hook active", "Open Setup → Harness Hooks to check registration, then start a new harness session and run a guarded tool such as Bash. Installing hooks alone does not prove activity in existing sessions.", checkHookActive},
-	{"file-telemetry", "File telemetry", "System Settings → Privacy & Security → Full Disk Access → Secure Agent, or the Setup card — a flooding writer: Reinstall the file telemetry helper from the Setup card", checkFileTelemetry},
-	{"collectors", "Collectors", "Restart Secure Agent from the menu bar; file monitoring that keeps stopping needs Full Disk Access (Setup)", checkCollectors},
-	{"trace-coverage", "Trace coverage", "Restart Secure Agent; a harness that stays untraced has no transcript reader running", checkTraceCoverage},
-	{"hermes", "Hermes Agent trace", "Point hermes_home at the Hermes root; a state.db this version cannot read needs a Secure Agent update", checkHermes},
-	{"session-identity", "Session identity", "Check the Sessions tab for unnamed sessions; their processes were not recognized as a harness", checkSessionIdentity},
-	{"session-repo", "Session repo attribution", "Restart Secure Agent to re-resolve repo and branch; a workspace outside a git checkout has no repo", checkSessionRepo},
-	{"session-rate", "Session creation rate", "Check the Sessions tab for the harness creating stub sessions", checkSessionRate},
-	{"tool-pairing", "Tool-call pairing", "Update Secure Agent so every harness adapter sends a call id; rows already stored stay unpaired", checkToolPairing},
-	{"pricing", "Model-call pricing", "Update Secure Agent so its price table covers the Claude models in use", checkPricing},
-	{"retention", "Event retention", "Find the process flooding these kinds in the Events tab; their rows are evicted inside a day", checkRetention},
-	{"egress-routing", "Egress routing", "turn on Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent, source agent-env.sh where other agents launch, or Allow the endpoints in Protection → Traffic", checkEgressRouting},
-	{"bus", "Event bus", "Monitoring history for this run is incomplete. If the count keeps increasing, update Secure Agent and check for a collector flooding Events. Restarting cannot recover lost deliveries.", checkBus},
-	{"storage", "Evidence storage", "Check free disk space and state-directory permissions; earlier failed writes cannot be recovered by restarting", checkStorage},
 }
 
 // handleDoctor serves the daemon's self-check. Read-level.
@@ -184,459 +101,61 @@ func (a *API) handleDoctorSeen(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) doctorReport(now time.Time) DoctorReport {
-	f := a.doctorFacts(now)
-	rep := DoctorReport{
-		GeneratedAt: now.UTC().Format(time.RFC3339Nano),
-		Version:     f.st.Version,
-		Uptime:      f.st.Uptime,
-		Grace:       f.grace,
-		Checks:      make([]DoctorCheck, 0, len(doctorProbes)),
+	rep := doctor.Build(a.doctorFacts(now))
+	out := DoctorReport{
+		GeneratedAt: rep.GeneratedAt,
+		LossReview:  DoctorLossReview(rep.LossReview),
+		Version:     rep.Version,
+		Uptime:      rep.Uptime,
+		Grace:       rep.Grace,
+		Summary:     DoctorSummary(rep.Summary),
+		Checks:      make([]DoctorCheck, len(rep.Checks)),
 	}
-	seen := f.lossSeen.SeenAt()
-	if !seen.IsZero() {
-		rep.LossReview.SeenAt = seen.Format(time.RFC3339Nano)
+	for i, c := range rep.Checks {
+		out.Checks[i] = DoctorCheck(c)
 	}
-	unreviewed := func(count uint64, at *time.Time) bool {
-		return count > 0 && (at == nil || seen.Before(*at))
-	}
-	rep.LossReview.Pending = unreviewed(f.st.BusDrops, f.st.BusDropAt)
-	if es := f.st.ESService; es != nil {
-		rep.LossReview.Pending = rep.LossReview.Pending || unreviewed(es.BytesLost, es.LostAt)
-	}
-	for _, p := range doctorProbes {
-		state, detail := p.run(f)
-		c := DoctorCheck{ID: p.id, Title: p.title, State: state, Detail: detail}
-		switch state {
-		case doctorPass:
-			rep.Summary.Pass++
-		case doctorFail:
-			rep.Summary.Fail++
-			c.Fix = p.fix
-			if p.id == "file-telemetry" && f.st.ESService != nil && f.st.ESService.Losing {
-				c.Fix = "Reduce sustained event load and check delivery lag. The gap remains for this run; reinstalling the helper or restarting cannot recover overwritten evidence."
-			}
-		default:
-			rep.Summary.Skip++
-		}
-		rep.Checks = append(rep.Checks, c)
-	}
-	return rep
+	return out
 }
 
-func (a *API) doctorFacts(now time.Time) doctorFacts {
+func (a *API) doctorFacts(now time.Time) doctor.Facts {
 	st := a.evidenceStatus(a.statusFn())
 	uptime, _ := time.ParseDuration(st.Uptime)
-	f := doctorFacts{
-		now:      now,
-		boot:     now.Add(-uptime),
-		grace:    uptime < posture.CollectorBootGrace,
-		st:       st,
-		lossSeen: a.lossSeen,
+	f := doctor.Facts{
+		Now:          now,
+		Boot:         now.Add(-uptime),
+		Grace:        uptime < posture.CollectorBootGrace,
+		Status:       posture.Status(st),
+		ClaudeActive: activeHarness(st, "claude"),
+		LossSeen:     a.lossSeen,
 	}
 	if path, err := claudeSettingsPath(); err == nil {
-		f.settingsKnown = true
-		f.hookRegistered = claudeHookRegistered(path)
-		f.hookDuplicate = claudeMarketplacePath(path) != "" && nativeClaudeHookAny(path)
+		f.SettingsKnown = true
+		f.HookRegistered = claudeHookRegistered(path)
+		f.HookDuplicate = claudeMarketplacePath(path) != "" && nativeClaudeHookAny(path)
 	}
 	if st.Coverage != nil {
 		for _, row := range st.Coverage.Harnesses {
 			if row.GuardSupported {
-				f.hookHarnesses = append(f.hookHarnesses, row.Name)
+				f.HookHarnesses = append(f.HookHarnesses, row.Name)
 				if row.HookLastSeen == "" {
-					f.missingHookHarnesses = append(f.missingHookHarnesses, row.Name)
+					f.MissingHookHarnesses = append(f.MissingHookHarnesses, row.Name)
 				}
 			}
 		}
 	}
-	gatherDoctorStoreFacts(&f, a.store)
+	doctor.GatherStoreFacts(&f, a.store)
 	if st.UninspectedEgress > 0 {
-		f.egress = a.uninspectedRows(now.Add(-correlate.UninspectedWindow), 200)
+		for _, r := range a.uninspectedRows(now.Add(-correlate.UninspectedWindow), 200) {
+			f.Egress = append(f.Egress, doctor.EgressRow{Agent: r.Agent, Host: r.Host, Infra: r.Infra, AgentKind: r.AgentKind})
+		}
 	}
 	if a.sightings != nil {
-		f.seenByHarness = a.sightings(f.boot)
+		f.SeenByHarness = a.sightings(f.Boot)
 	}
 	if a.hermes != nil {
 		h := a.hermes()
-		f.hermes = &h
+		f.Hermes = &h
 	}
-	f.configBoot, f.configReload, f.configRestart = a.configProblems()
+	f.ConfigBoot, f.ConfigReload, f.ConfigRestart = a.configProblems()
 	return f
-}
-
-func pct(n, total int) int { return 100 * n / total }
-
-func checkHookRegistered(f doctorFacts) (string, string) {
-	switch {
-	case !activeHarness(f.st, "claude"):
-		return doctorSkip, "Claude Code is not running; registration check does not apply to other harnesses"
-	case !f.settingsKnown:
-		return doctorSkip, "home directory unknown"
-	case f.hookDuplicate:
-		return doctorFail, "marketplace and manual Claude hooks both configured; remove one route"
-	case !f.hookRegistered:
-		return doctorSkip, "optional guard hooks are not configured"
-	}
-	return doctorPass, "registered for PreToolUse and PostToolUse"
-}
-
-func checkHookActive(f doctorFacts) (string, string) {
-	if len(f.hookHarnesses) == 0 {
-		return doctorSkip, "no active harness with a supported guard hook"
-	}
-	if len(f.missingHookHarnesses) > 0 {
-		return doctorSkip, "no attributed hook activity in 24h: " + strings.Join(f.missingHookHarnesses, ", ")
-	}
-	return doctorPass, "recent attributed hook activity: " + strings.Join(f.hookHarnesses, ", ")
-}
-
-func checkFileTelemetry(f doctorFacts) (string, string) {
-	if posture.FileTelemetryDisabled(posture.Status(f.st)) {
-		return doctorSkip, "file telemetry is disabled in configuration"
-	}
-	if posture.FileTelemetryUnavailable(posture.Status(f.st)) {
-		return doctorFail, "file telemetry is enabled but no file collector is available"
-	}
-	if f.st.FileTelemetryEnabled == nil && f.st.ESService == nil {
-		configured := false
-		for _, c := range f.st.Collectors {
-			configured = configured || c.Name == "eslogger"
-		}
-		if !configured {
-			return doctorSkip, "optional file telemetry is not configured"
-		}
-	}
-	es := f.st.ESService
-	if es == nil {
-		return doctorSkip, "not spool-based"
-	}
-	if es.Losing {
-		return doctorFail, posture.ESLossDetail(*es)
-	}
-	if title, detail := posture.CollectorFailure(f.now, *es); title != "" {
-		return doctorFail, detail
-	}
-	switch {
-	case posture.ESServiceFlooding(f.now, *es):
-		return doctorFail, posture.ESFloodingDetail(*es)
-	case posture.ESServiceLagging(f.now, *es):
-		return doctorFail, posture.ESLaggingDetail(*es)
-	case posture.ESServiceBehind(f.now, *es):
-		// No warning level exists (doctorPass/doctorFail/doctorSkip only):
-		// a sustained burst still fails the check, but with the behind
-		// detail, not the garbage one.
-		return doctorFail, posture.ESBehindDetail(*es)
-	case es.State == "not-loaded":
-		return doctorFail, "root service not loaded"
-	case posture.ESServiceRefused(es.State):
-		return doctorFail, "root service state: " + es.State + " — " + posture.ESReregisterHint
-	case posture.ESServiceRunning(es.State) && es.Collector != nil && es.Collector.Fresh(f.now) && es.Collector.State == "collecting":
-		return doctorPass, "file collector is ready"
-	case posture.ESServiceFailing(es.State):
-		return doctorFail, "root service state: " + es.State
-	case posture.ESServiceRunning(es.State) && f.st.ActiveAgents > 0 && !f.grace && f.now.Sub(es.SpoolMtime) > doctorSpoolStale:
-		if es.SpoolMtime.IsZero() {
-			return doctorFail, "service running but spool absent"
-		}
-		return doctorFail, fmt.Sprintf("service running but spool not written for %d min", int(f.now.Sub(es.SpoolMtime).Minutes()))
-	}
-	if es.BytesLost > 0 && es.LostAt != nil {
-		return doctorPass, fmt.Sprintf("%s · %d unread spool bytes lost at %s, none since", es.State, es.BytesLost, es.LostAt.Local().Format("15:04"))
-	}
-	return doctorPass, es.State
-}
-
-func checkCollectors(f doctorFacts) (string, string) {
-	if f.grace {
-		return doctorSkip, doctorGraceDetail
-	}
-	var down, silent []string
-	var enabledCount int
-	for _, c := range f.st.Collectors {
-		if c.Name == "eslogger" && posture.FileTelemetryDisabled(posture.Status(f.st)) {
-			continue
-		}
-		enabledCount++
-		switch {
-		case c.Abandoned:
-			down = append(down, c.Name+" (abandoned)")
-		case !c.Running:
-			down = append(down, c.Name+" (stopped)")
-		}
-	}
-	// Readiness failures are actionable; an idle source alone is not.
-	// The spool service's own failures are the file-telemetry check's.
-	spoolFailing := f.st.ESService != nil && len(posture.ESServiceItems(f.now, *f.st.ESService)) > 0
-	if f.st.ActiveAgents > 0 {
-		for _, it := range posture.SilentCollectorItems(f.now, posture.Status(f.st)) {
-			if !posture.IsMonitoringGap(it) {
-				continue
-			}
-			if it.ID == "eslogger" && spoolFailing {
-				continue
-			}
-			silent = append(silent, it.ID)
-		}
-	}
-	var parts []string
-	if len(down) > 0 {
-		parts = append(parts, "down: "+strings.Join(down, ", "))
-	}
-	if len(silent) > 0 {
-		parts = append(parts, "silent: "+strings.Join(silent, ", "))
-	}
-	// Polling collectors name their database, watermark and last poll
-	// whatever the verdict.
-	var polls string
-	for _, c := range f.st.Collectors {
-		if c.Name == "eslogger" && posture.FileTelemetryDisabled(posture.Status(f.st)) {
-			continue
-		}
-		if c.Source != "" {
-			polls += fmt.Sprintf(" · %s %s @ %d polled %s", c.Name, c.Source, c.Watermark, c.LastPoll)
-		}
-	}
-	if len(parts) > 0 {
-		return doctorFail, strings.Join(parts, " · ") + polls
-	}
-	return doctorPass, fmt.Sprintf("%d collectors running", enabledCount) + polls
-}
-
-// checkHermes reports the Hermes Agent collector: state not found when no
-// state.db exists under its root, else each database's watermark and the
-// last poll, failing when a database could not be read.
-func checkHermes(f doctorFacts) (string, string) {
-	h := f.hermes
-	switch {
-	case h == nil:
-		return doctorSkip, "not wired"
-	case h.LastError != "":
-		return doctorFail, h.LastError
-	case len(h.DBs) == 0:
-		return doctorSkip, fmt.Sprintf("state.db not found under %s; set hermes_home or export HERMES_STATE_DIR/HERMES_HOME in the daemon's environment or login shell", h.Root)
-	}
-	dbs := make([]string, len(h.DBs))
-	for i, d := range h.DBs {
-		dbs[i] = fmt.Sprintf("%s @ message %d", d.Path, d.Watermark)
-	}
-	return doctorPass, strings.Join(dbs, ", ") + " · polled " + h.LastPoll.UTC().Format(time.RFC3339)
-}
-
-// checkTraceCoverage fails for a harness whose sessions had a transcript line
-// read or a hook event since boot (a conversation that started before boot
-// counts) while none of its trace rows were written since boot. A session
-// whose process only stayed alive is idle, not seen.
-func checkTraceCoverage(f doctorFacts) (string, string) {
-	if f.grace {
-		return doctorSkip, doctorGraceDetail
-	}
-	if len(f.seenByHarness) == 0 {
-		return doctorSkip, "no sessions since boot"
-	}
-	var blind, traced []string
-	for h, n := range f.seenByHarness {
-		if f.traceByHarness[h] == 0 {
-			blind = append(blind, h)
-		} else {
-			traced = append(traced, fmt.Sprintf("%s (%d sessions)", h, n))
-		}
-	}
-	if len(blind) > 0 {
-		sort.Strings(blind)
-		return doctorFail, "sessions since boot but no trace rows: " + strings.Join(blind, ", ")
-	}
-	sort.Strings(traced)
-	return doctorPass, fmt.Sprintf("%d harnesses traced: %s", len(traced), strings.Join(traced, ", "))
-}
-
-func checkSessionIdentity(f doctorFacts) (string, string) {
-	if f.grace {
-		return doctorSkip, doctorGraceDetail
-	}
-	if f.sessionsTotal == 0 {
-		return doctorSkip, "no sessions since boot"
-	}
-	detail := fmt.Sprintf("%d of %d sessions since boot carry a harness (%d%%)", f.sessionsNamed, f.sessionsTotal, pct(f.sessionsNamed, f.sessionsTotal))
-	if f.sessionsNamed*100 < f.sessionsTotal*80 {
-		return doctorFail, detail + ", want ≥ 80%"
-	}
-	return doctorPass, detail
-}
-
-func checkSessionRepo(f doctorFacts) (string, string) {
-	if f.grace {
-		return doctorSkip, doctorGraceDetail
-	}
-	if f.repoQueryError {
-		return doctorFail, "could not inspect workspace attribution"
-	}
-	if f.sessionsWithWorkspace == 0 {
-		named := 0
-		for _, n := range f.sessionsByHarness {
-			named += n
-		}
-		if named == 0 {
-			return doctorSkip, "no named sessions since boot"
-		}
-		return doctorFail, fmt.Sprintf("0 of %d named sessions since boot carry a workspace — attribution drop", named)
-	}
-	if f.sessionsWithGitWorkspace == 0 {
-		return doctorSkip, fmt.Sprintf("%d workspace sessions since boot, none inside Git checkouts", f.sessionsWithWorkspace)
-	}
-	detail := fmt.Sprintf("%d of %d sessions in Git workspaces since boot carry a repo (%d%%)",
-		f.sessionsGitWRepo, f.sessionsWithGitWorkspace, pct(f.sessionsGitWRepo, f.sessionsWithGitWorkspace))
-	if f.sessionsGitWRepo*100 < f.sessionsWithGitWorkspace*50 {
-		return doctorFail, detail + ", want ≥ 50%"
-	}
-	return doctorPass, detail
-}
-
-func checkSessionRate(f doctorFacts) (string, string) {
-	if f.grace {
-		return doctorSkip, doctorGraceDetail
-	}
-	if f.st.ActiveAgents == 0 {
-		return doctorSkip, "no agents running"
-	}
-	budget := 2*f.st.ActiveAgents + 10
-	if f.sessionsLastHour > budget {
-		return doctorFail, fmt.Sprintf("%d sessions created in the last hour, budget %d for %d agents", f.sessionsLastHour, budget, f.st.ActiveAgents)
-	}
-	return doctorPass, fmt.Sprintf("%d sessions created in the last hour (budget %d)", f.sessionsLastHour, budget)
-}
-
-func checkToolPairing(f doctorFacts) (string, string) {
-	if f.dupePairs > 0 || f.idless > 0 {
-		return doctorFail, fmt.Sprintf("%d duplicate (session, call_id) pairs · %d id-less tool-call rows since boot", f.dupePairs, f.idless)
-	}
-	return doctorPass, "no duplicate or id-less tool-call rows"
-}
-
-func checkPricing(f doctorFacts) (string, string) {
-	claude := f.claudePriced + f.claudeUnpriced
-	if claude == 0 {
-		return doctorSkip, "no Claude model calls"
-	}
-	detail := fmt.Sprintf("%d of %d Claude calls priced (%d%%) · all models: %d of %d calls unpriced",
-		f.claudePriced, claude, pct(f.claudePriced, claude), f.allUnpriced, f.allCalls)
-	if f.claudePriced*100 < claude*90 {
-		return doctorFail, detail
-	}
-	return doctorPass, detail
-}
-
-// checkRetention fails when a row cap evicts rows younger than a day: any
-// kind's record rows, or a kind outside the ring kinds. A ring kind's newest
-// rows covering minutes is its design, reported as detail.
-func checkRetention(f doctorFacts) (string, string) {
-	var evicting, ring []string
-	for _, k := range f.retention {
-		if age, ok := horizonAge(f.now, k.RecordHorizonTS); ok && age < doctorEvictWindow {
-			evicting = append(evicting, fmt.Sprintf("%s record %d/%d rows, oldest %s", k.Name, k.RecordRows, k.RecordBudget, age.Round(time.Minute)))
-		}
-		age, ok := horizonAge(f.now, k.HorizonTS)
-		switch {
-		case !ok || age >= doctorEvictWindow:
-		case k.Ring:
-			ring = append(ring, fmt.Sprintf("%s %s", k.Name, age.Round(time.Minute)))
-		default:
-			evicting = append(evicting, fmt.Sprintf("%s %d/%d rows, oldest %s", k.Name, k.Rows, k.Budget, age.Round(time.Minute)))
-		}
-	}
-	if len(evicting) > 0 {
-		return doctorFail, "at budget with under 24h kept: " + strings.Join(evicting, "; ")
-	}
-	detail := fmt.Sprintf("%d kinds within budget", len(f.retention))
-	if len(ring) > 0 {
-		detail += "; newest rows only (record rows keep days): " + strings.Join(ring, ", ")
-	}
-	return doctorPass, detail
-}
-
-// horizonAge is how long ago an RFC3339 horizon was; false when there is none.
-func horizonAge(now time.Time, ts string) (time.Duration, bool) {
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		return 0, false
-	}
-	return now.Sub(t), true
-}
-
-func checkEgressRouting(f doctorFacts) (string, string) {
-	switch {
-	case !f.st.ProxyEnabled:
-		return doctorPass, "proxy off — egress not inspected"
-	case f.st.UninspectedEgress > 0:
-		detail := fmt.Sprintf("%d endpoints reached outside the proxy", f.st.UninspectedEgress)
-		if by := egressByAgent(f.egress); by != "" {
-			detail += ": " + by
-		}
-		return doctorFail, detail
-	case f.st.ProxyTunneled+f.st.ProxyDecrypted > 0:
-		return doctorPass, fmt.Sprintf("all agent egress routed through the proxy · %d connections since start (%d decrypted)",
-			f.st.ProxyTunneled+f.st.ProxyDecrypted, f.st.ProxyDecrypted)
-	}
-	return doctorPass, "all agent egress routed through the proxy"
-}
-
-// egressByAgent names the agents behind the headline count — the rows that
-// join it (no infra family, no known CDN or cloud host) — most endpoints
-// first, with up to two hosts each: "codex 4 (api.openai.com, chatgpt.com),
-// cursor 1 (api2.cursor.sh)". "" when no row joins the headline.
-func egressByAgent(rows []UninspectedEndpoint) string {
-	type agentRows struct {
-		name  string
-		hosts []string
-	}
-	var order []*agentRows
-	byName := map[string]*agentRows{}
-	for _, r := range rows {
-		if r.AgentKind == config.AgentKindInfra || r.Infra != "" || r.Agent == "" {
-			continue
-		}
-		a := byName[r.Agent]
-		if a == nil {
-			a = &agentRows{name: r.Agent}
-			byName[r.Agent] = a
-			order = append(order, a)
-		}
-		a.hosts = append(a.hosts, r.Host)
-	}
-	sort.SliceStable(order, func(i, j int) bool { return len(order[i].hosts) > len(order[j].hosts) })
-	parts := make([]string, 0, len(order))
-	for _, a := range order {
-		hosts := a.hosts
-		more := ""
-		if len(hosts) > 2 {
-			hosts, more = hosts[:2], ", …"
-		}
-		parts = append(parts, fmt.Sprintf("%s %d (%s%s)", a.name, len(a.hosts), strings.Join(hosts, ", "), more))
-	}
-	return strings.Join(parts, ", ")
-}
-
-func checkBus(f doctorFacts) (string, string) {
-	if f.st.BusDropping {
-		return doctorFail, fmt.Sprintf("%d subscriber deliveries dropped since daemon start", f.st.BusDrops)
-	}
-	if f.st.BusDrops > 0 && f.st.BusDropAt != nil {
-		return doctorPass, fmt.Sprintf("%d subscriber deliveries dropped, the last at %s, none since", f.st.BusDrops, f.st.BusDropAt.Local().Format("15:04"))
-	}
-	return doctorPass, "no dropped events"
-}
-
-func checkStorage(f doctorFacts) (string, string) {
-	h := f.st.StorageHealth
-	if h == nil {
-		return doctorSkip, "storage health unavailable"
-	}
-	if len(h.ReadActive) > 0 {
-		return doctorFail, "evidence reads unavailable: " + strings.Join(h.ReadActive, ", ") + posture.ReadIssueDetail(*h)
-	}
-	if h.Failures == 0 {
-		return doctorPass, "no failed evidence writes"
-	}
-	if len(h.Active) > 0 {
-		return doctorFail, fmt.Sprintf("%d failed persistence attempts since start; still failing: %s", h.Failures, strings.Join(h.Active, ", "))
-	}
-	return doctorPass, fmt.Sprintf("new writes recovered; %d earlier failures may have left evidence gaps", h.Failures)
 }

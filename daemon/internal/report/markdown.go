@@ -1,4 +1,6 @@
-package api
+// Package report renders session reports and the plain-language wording and
+// actions of findings from model values.
+package report
 
 import (
 	"fmt"
@@ -15,10 +17,10 @@ const (
 	mdTimelineShown = 100
 )
 
-// renderSessionMarkdown renders a SessionReport as markdown for a PR body or
+// SessionMarkdown renders a SessionReport as markdown for a PR body or
 // a ticket: a title line, a summary, then one section per list. Empty
 // sections read "none". Times are daemon-local.
-func renderSessionMarkdown(rep store.SessionReport) string {
+func SessionMarkdown(rep store.SessionReport) string {
 	var b strings.Builder
 	eventsAvailable := rep.Evidence == nil || rep.Evidence.Events.Available
 	flagsAvailable := rep.Evidence == nil || rep.Evidence.Flags.Available

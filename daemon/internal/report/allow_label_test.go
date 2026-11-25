@@ -1,4 +1,4 @@
-package api
+package report
 
 import "testing"
 
@@ -26,8 +26,8 @@ func TestAllowHostLabelDropsIPv6Literal(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.subtest, func(t *testing.T) {
-			if got := allowHostLabel(c.displayName, c.host, c.org, c.agent); got != c.want {
-				t.Fatalf("allowHostLabel(%q,%q,%q,%q) = %q, want %q", c.displayName, c.host, c.org, c.agent, got, c.want)
+			if got := AllowHostLabel(c.displayName, c.host, c.org, c.agent); got != c.want {
+				t.Fatalf("AllowHostLabel(%q,%q,%q,%q) = %q, want %q", c.displayName, c.host, c.org, c.agent, got, c.want)
 			}
 		})
 	}

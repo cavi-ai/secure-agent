@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/doctor"
 )
 
 func configCheck(t *testing.T, a *API) DoctorCheck {
@@ -32,14 +33,14 @@ func TestDoctorReportsConfigProblems(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true, Uptime: "1h0m0s"} }})
 
-	if c := configCheck(t, a); c.State != doctorPass || c.Fix != "" {
+	if c := configCheck(t, a); c.State != doctor.Pass || c.Fix != "" {
 		t.Fatalf("no problem: %+v", c)
 	}
 
 	boot := errors.New("overlay is malformed YAML: yaml: line 2: mapping values are not allowed in this context")
 	a.SetConfigBootProblem(boot)
 	c := configCheck(t, a)
-	if c.State != doctorFail || c.Fix == "" || !strings.HasPrefix(c.Detail, "at start: ") || !strings.Contains(c.Detail, "until restart") {
+	if c.State != doctor.Fail || c.Fix == "" || !strings.HasPrefix(c.Detail, "at start: ") || !strings.Contains(c.Detail, "until restart") {
 		t.Fatalf("boot problem: %+v", c)
 	}
 
@@ -51,24 +52,24 @@ func TestDoctorReportsConfigProblems(t *testing.T) {
 	}
 
 	a.SetConfigReloadProblem(errors.New("advisor.managed_model is required when advisor.managed is true"))
-	if c := configCheck(t, a); c.State != doctorFail || !strings.Contains(c.Detail, "latest reload skipped: advisor.managed_model") || !strings.HasPrefix(c.Detail, "at start: ") {
+	if c := configCheck(t, a); c.State != doctor.Fail || !strings.Contains(c.Detail, "latest reload skipped: advisor.managed_model") || !strings.HasPrefix(c.Detail, "at start: ") {
 		t.Fatalf("boot and reload problems: %+v", c)
 	}
 
 	// A successful reload does not clear the boot problem: firewall, guard
 	// and paths still came from defaults.
 	a.SetConfigReloadProblem(nil)
-	if c := configCheck(t, a); c.State != doctorFail || strings.Contains(c.Detail, "latest reload") {
+	if c := configCheck(t, a); c.State != doctor.Fail || strings.Contains(c.Detail, "latest reload") {
 		t.Fatalf("boot problem after a good reload: %+v", c)
 	}
 
 	a.SetConfigBootProblem(nil)
 	a.SetConfigReloadProblem(errors.New("overlay is malformed YAML"))
-	if c := configCheck(t, a); c.State != doctorFail || !strings.Contains(c.Detail, "running settings are kept") {
+	if c := configCheck(t, a); c.State != doctor.Fail || !strings.Contains(c.Detail, "running settings are kept") {
 		t.Fatalf("reload problem: %+v", c)
 	}
 	a.SetConfigReloadProblem(nil)
-	if c := configCheck(t, a); c.State != doctorPass {
+	if c := configCheck(t, a); c.State != doctor.Pass {
 		t.Fatalf("recovered: %+v", c)
 	}
 }
@@ -82,7 +83,7 @@ func TestDoctorReportsRestartNeeded(t *testing.T) {
 	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true, Uptime: "1h0m0s"} }})
 
 	a.SetConfigRestartNeeded([]string{"proxy_port", "firewall"})
-	if c := configCheck(t, a); c.State != doctorFail || c.Detail != "changed since start, applied after restart: proxy_port, firewall" {
+	if c := configCheck(t, a); c.State != doctor.Fail || c.Detail != "changed since start, applied after restart: proxy_port, firewall" {
 		t.Fatalf("restart needed: %+v", c)
 	}
 	a.SetConfigReloadProblem(errors.New("overlay is malformed YAML"))
@@ -91,7 +92,7 @@ func TestDoctorReportsRestartNeeded(t *testing.T) {
 	}
 	a.SetConfigReloadProblem(nil)
 	a.SetConfigRestartNeeded(nil)
-	if c := configCheck(t, a); c.State != doctorPass {
+	if c := configCheck(t, a); c.State != doctor.Pass {
 		t.Fatalf("reverted: %+v", c)
 	}
 }
@@ -113,7 +114,7 @@ func TestDoctorConfigCheckHidesOverlayValues(t *testing.T) {
 		t.Fatal("LoadStrict accepted a non-loopback endpoint")
 	}
 	a.SetConfigReloadProblem(err)
-	if c := configCheck(t, a); c.State != doctorFail || strings.Contains(c.Detail, "hunter2") || !strings.Contains(c.Detail, "advisor.endpoint") {
+	if c := configCheck(t, a); c.State != doctor.Fail || strings.Contains(c.Detail, "hunter2") || !strings.Contains(c.Detail, "advisor.endpoint") {
 		t.Fatalf("validation error: %+v", c)
 	}
 }

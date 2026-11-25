@@ -3,7 +3,12 @@ package api
 import (
 	"io"
 	"net/http"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 )
+
+// renderSessionMarkdown is the session report's markdown renderer.
+var renderSessionMarkdown = report.SessionMarkdown
 
 // serveSessionReport serves what one session did — tools, models, spend,
 // files, hosts, guard decisions, findings, secret-rule hits and the opening

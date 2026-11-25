@@ -1,7 +1,6 @@
 package api
 
 import (
-	"strings"
 	"sync"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -46,27 +45,4 @@ func (a *API) configProblems() (boot, reload string, restart []string) {
 	a.config.mu.Lock()
 	defer a.config.mu.Unlock()
 	return a.config.boot, a.config.reload, a.config.restart
-}
-
-// checkConfig fails while a boot or reload problem stands, or while the file
-// holds start-only settings the running daemon does not. A reload that read
-// the same unchanged problem as boot is reported once, as the boot one.
-func checkConfig(f doctorFacts) (string, string) {
-	const bootTail = "; settings it could not set started on built-in defaults, and firewall, guard and paths keep them until restart"
-	var parts []string
-	switch {
-	case f.configBoot != "" && f.configReload != "" && f.configReload != f.configBoot:
-		parts = append(parts, "at start: "+f.configBoot+bootTail, "latest reload skipped: "+f.configReload)
-	case f.configBoot != "":
-		parts = append(parts, "at start: "+f.configBoot+bootTail)
-	case f.configReload != "":
-		parts = append(parts, "latest reload skipped, the running settings are kept: "+f.configReload)
-	}
-	if len(f.configRestart) > 0 {
-		parts = append(parts, "changed since start, applied after restart: "+strings.Join(f.configRestart, ", "))
-	}
-	if len(parts) == 0 {
-		return doctorPass, "config.yaml loaded"
-	}
-	return doctorFail, strings.Join(parts, "; ")
 }
