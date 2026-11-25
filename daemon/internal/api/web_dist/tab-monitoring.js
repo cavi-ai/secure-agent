@@ -47,42 +47,42 @@ function monitoringPath(path = {}, key, stale = false) {
 }
 
 function monitoringStateHTML(state) {
-  return `<span class="monitoring-state ${state.tone}"><span aria-hidden="true"></span>${escapeHTML(state.label)}</span>`;
+  return html`<span class="monitoring-state ${state.tone}"><span aria-hidden="true"></span>${state.label}</span>`;
 }
 
 function monitoringRowHTML(row, selected, stale) {
   const state = monitoringPath(row.trace, 'trace', stale);
-  return `<button type="button" class="monitoring-row" data-monitoring-key="${escapeHTML(row.key)}" aria-pressed="${row.key === selected}" aria-controls="monitoring-detail">
-    ${harnessChipHTML(row.harness)}<span class="monitoring-row-name"><strong title="${escapeHTML(row.title)}">${escapeHTML(row.title)}</strong><span>${escapeHTML(harnessMeta(row.harness).label)}${row.id ? '' : ` · Process ${row.root_pid}`}</span></span>
-    ${monitoringStateHTML(row.id ? state : { label: 'Not linked', tone: 'neutral' })}</button>`;
+  return html`<button type="button" class="monitoring-row" data-monitoring-key="${row.key}" aria-pressed="${row.key === selected}" aria-controls="monitoring-detail">
+    ${raw(harnessChipHTML(row.harness))}<span class="monitoring-row-name"><strong title="${row.title}">${row.title}</strong><span>${harnessMeta(row.harness).label}${row.id ? '' : ` · Process ${row.root_pid}`}</span></span>
+    ${raw(monitoringStateHTML(row.id ? state : { label: 'Not linked', tone: 'neutral' }))}</button>`;
 }
 
 function monitoringDetailHTML(row, model) {
-  if (!row) return `<div class="monitoring-empty"><h2>${model.rows.length ? 'Choose a session or process' : model.available ? 'No sessions detected' : 'No session to show'}</h2>
+  if (!row) return html`<div class="monitoring-empty"><h2>${model.rows.length ? 'Choose a session or process' : model.available ? 'No sessions detected' : 'No session to show'}</h2>
     <p>${model.available ? 'Select an item to review its own observations and identity.' : 'Sessions appear here once the daemon reports their observations.'}</p></div>`;
   const paths = [['guard', 'File guard', 'shield'], ['trace', 'Recorded activity', 'activity'], ['payload', 'Traffic inspection', 'globe']];
   const identity = row.id ? 'Session linked' : 'Session not linked';
-  return `<header class="monitoring-detail-heading">${harnessChipHTML(row.harness)}<div><h2>${escapeHTML(row.title)}</h2><p>${escapeHTML(harnessMeta(row.harness).label)}<span class="monitoring-identity-state">${escapeHTML(identity)}</span></p></div></header>
-    ${!row.id ? '<p class="monitoring-unlinked-note">This is a detected process, not an identified session. Its working directory may belong to a plugin or helper. Session-specific evidence cannot be credited until identity is resolved.</p>' : ''}
+  return html`<header class="monitoring-detail-heading">${raw(harnessChipHTML(row.harness))}<div><h2>${row.title}</h2><p>${harnessMeta(row.harness).label}<span class="monitoring-identity-state">${identity}</span></p></div></header>
+    ${!row.id ? raw('<p class="monitoring-unlinked-note">This is a detected process, not an identified session. Its working directory may belong to a plugin or helper. Session-specific evidence cannot be credited until identity is resolved.</p>') : ''}
     <div class="monitoring-paths">${paths.map(([key, title, icon]) => {
       const source = row[key] || {};
       const path = !row.id && source.supported !== false && source.state !== 'off'
         ? { ...source, state: 'unattributed', last_seen: '' } : source;
       const state = monitoringPath(path, key, model.stale);
-      return `<article class="monitoring-path" data-monitoring-path="${key}"><svg class="icon" aria-hidden="true"><use href="#i-${icon}"/></svg><h3>${title}</h3><div>${monitoringStateHTML(state)}<p>${escapeHTML(state.detail || '')}</p>${path.last_seen ? `<time datetime="${escapeHTML(path.last_seen)}">Last observed ${escapeHTML(new Date(path.last_seen).toLocaleString())}</time>` : ''}</div></article>`;
-    }).join('')}</div>
+      return raw(html`<article class="monitoring-path" data-monitoring-path="${key}"><svg class="icon" aria-hidden="true"><use href="#i-${icon}"/></svg><h3>${title}</h3><div>${raw(monitoringStateHTML(state))}<p>${state.detail || ''}</p>${path.last_seen ? raw(html`<time datetime="${path.last_seen}">Last observed ${new Date(path.last_seen).toLocaleString()}</time>`) : ''}</div></article>`);
+    })}</div>
     <p class="monitoring-caveat">An observation does not prove every tool call is guarded. Machine-wide traffic does not establish this session’s inspection.</p>
-    ${row.id ? `<button type="button" id="monitoring-open" class="btn btn-primary monitoring-open" data-monitoring-action="open"${model.stale ? ' disabled' : ''}>Open session evidence<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>${model.stale ? '<p class="monitoring-muted">Refresh observations before opening current session evidence.</p>' : ''}` : ''}
+    ${row.id ? raw(html`<button type="button" id="monitoring-open" class="btn btn-primary monitoring-open" data-monitoring-action="open"${model.stale ? ' disabled' : ''}>Open session evidence<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>${model.stale ? raw('<p class="monitoring-muted">Refresh observations before opening current session evidence.</p>') : ''}`) : ''}
     <details class="monitoring-identity" id="monitoring-identity"><summary id="monitoring-identity-summary">Identity and technical details</summary><dl>
-      ${[['Session', row.id || 'Not identified'], ['Harness', row.harness], ['Workspace', row.workspace && row.workspace !== '/' ? row.workspace : 'Not identified'], ['Root process', String(row.root_pid)], ['Attribution', row.identity_basis || 'unresolved'], ['Branch', row.session?.branch || 'Not recorded']].map(([name, value]) => `<div><dt>${name}</dt><dd>${escapeHTML(value)}</dd></div>`).join('')}
-      </dl><details id="monitoring-source"><summary id="monitoring-source-summary">Source observation details</summary>${paths.map(([key, title]) => `<p><strong>${title}</strong> ${escapeHTML(row[key]?.detail || 'No detail provided.')}</p>`).join('')}</details></details>`;
+      ${[['Session', row.id || 'Not identified'], ['Harness', row.harness], ['Workspace', row.workspace && row.workspace !== '/' ? row.workspace : 'Not identified'], ['Root process', String(row.root_pid)], ['Attribution', row.identity_basis || 'unresolved'], ['Branch', row.session?.branch || 'Not recorded']].map(([name, value]) => raw(html`<div><dt>${name}</dt><dd>${value}</dd></div>`))}
+      </dl><details id="monitoring-source"><summary id="monitoring-source-summary">Source observation details</summary>${paths.map(([key, title]) => raw(html`<p><strong>${title}</strong> ${row[key]?.detail || 'No detail provided.'}</p>`))}</details></details>`;
 }
 
 function createMonitoringController({ root, data, health, openSession, retry, openTraffic, openDiagnostics }) {
   let selected = null, query = '', current = null, issuesOpen = false;
   const rendered = new Map();
   const element = id => root?.querySelector('#' + id);
-  const html = (id, value) => {
+  const paint = (id, value) => {
     if (rendered.get(id) === value) return;
     const target = element(id);
     if (!target) return;
@@ -107,21 +107,21 @@ function createMonitoringController({ root, data, health, openSession, retry, op
     // only helps when nothing explains it.
     const action = current.stale ? 'retry' : current.issues.length ? 'issues' : !current.available ? 'retry' : current.historyIncomplete ? 'diagnostics' : '';
     const actionLabel = { retry: 'Retry', issues: 'Review issues', diagnostics: 'Inspect monitoring' }[action] || '';
-    html('monitoring-notice', `<div class="monitoring-notice${warning ? ' warning' : ''}" role="status"><svg class="icon" aria-hidden="true"><use href="#i-${warning ? 'alert' : 'activity'}"/></svg><div><strong>${title}</strong><p>${current.stale ? 'Showing last-known data. Refresh before relying on current coverage.' : current.issues.length ? escapeHTML(current.issues.slice(0, 2).map(item => item.title).join(' · ')) : current.available ? 'Observations describe recorded activity, not a guarantee of protection.' : 'The daemon has not provided a current per-session report.'}</p></div><button type="button" class="link-btn" data-monitoring-action="${action || 'issues'}"${action ? '' : ' hidden'}>${actionLabel || 'Review issues'}</button></div>`);
+    paint('monitoring-notice', html`<div class="monitoring-notice${warning ? ' warning' : ''}" role="status"><svg class="icon" aria-hidden="true"><use href="#i-${warning ? 'alert' : 'activity'}"/></svg><div><strong>${title}</strong><p>${current.stale ? 'Showing last-known data. Refresh before relying on current coverage.' : current.issues.length ? current.issues.slice(0, 2).map(item => item.title).join(' · ') : current.available ? 'Observations describe recorded activity, not a guarantee of protection.' : 'The daemon has not provided a current per-session report.'}</p></div><button type="button" class="link-btn" data-monitoring-action="${action || 'issues'}"${action ? '' : ' hidden'}>${actionLabel || 'Review issues'}</button></div>`);
     element('monitoring-issues').hidden = !current.issues.length || !issuesOpen;
-    html('monitoring-issue-list', current.issues.map(item => `<li><strong>${escapeHTML(item.title)}</strong><p>${escapeHTML(item.detail || '')}</p>${item.kind === 'uninspected_egress' ? '<button type="button" class="link-btn" data-monitoring-action="traffic">Review machine-wide traffic</button>' : '<button type="button" class="link-btn" data-monitoring-action="diagnostics">Inspect monitoring</button>'}</li>`).join(''));
+    paint('monitoring-issue-list', current.issues.map(item => html`<li><strong>${item.title}</strong><p>${item.detail || ''}</p>${raw(item.kind === 'uninspected_egress' ? '<button type="button" class="link-btn" data-monitoring-action="traffic">Review machine-wide traffic</button>' : '<button type="button" class="link-btn" data-monitoring-action="diagnostics">Inspect monitoring</button>')}</li>`).join(''));
     const notes = element('monitoring-notes');
     if (notes) {
       notes.hidden = current.notes.length === 0;
-      html('monitoring-note-list', current.notes.map(item => `<li><strong>${escapeHTML(item.title)}</strong><p>${escapeHTML(item.detail || '')}</p>${item.kind === 'uninspected_egress' ? '<button type="button" class="link-btn" data-action="open-uninspected">Review endpoints</button>' : '<button type="button" class="link-btn" data-monitoring-action="diagnostics">Inspect monitoring</button>'}</li>`).join(''));
+      paint('monitoring-note-list', current.notes.map(item => html`<li><strong>${item.title}</strong><p>${item.detail || ''}</p>${raw(item.kind === 'uninspected_egress' ? '<button type="button" class="link-btn" data-action="open-uninspected">Review endpoints</button>' : '<button type="button" class="link-btn" data-monitoring-action="diagnostics">Inspect monitoring</button>')}</li>`).join(''));
     }
     element('monitoring-count').textContent = `Linked sessions · ${current.linkedCount}${current.stale ? ' · last known' : ''}`;
-    html('monitoring-sessions', current.linked.map(item => monitoringRowHTML(item, selected, current.stale)).join('') || `<p class="monitoring-muted">${query ? 'No linked sessions match your search.' : 'No running session has been linked yet.'}</p>`);
+    paint('monitoring-sessions', current.linked.map(item => monitoringRowHTML(item, selected, current.stale)).join('') || html`<p class="monitoring-muted">${query ? 'No linked sessions match your search.' : 'No running session has been linked yet.'}</p>`);
     element('monitoring-other-count').textContent = `Other detections · ${current.unlinkedCount} not linked`;
-    html('monitoring-other-list', current.unlinked.map(item => monitoringRowHTML(item, selected, current.stale)).join('') || '<p class="monitoring-muted">No other detections match.</p>');
+    paint('monitoring-other-list',current.unlinked.map(item => monitoringRowHTML(item, selected, current.stale)).join('') || '<p class="monitoring-muted">No other detections match.</p>');
     element('monitoring-other').hidden = current.unlinkedCount === 0;
     element('monitoring-truncated').hidden = !current.truncated;
-    html('monitoring-detail', monitoringDetailHTML(row, current));
+    paint('monitoring-detail', monitoringDetailHTML(row, current));
   }
   root?.addEventListener('input', event => {
     if (event.target.id !== 'monitoring-search') return;
