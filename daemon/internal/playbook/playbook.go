@@ -190,11 +190,11 @@ var playbooks = []Playbook{
 	},
 	{
 		Rule:  "monitor-stopped",
-		Title: "Monitor stopped without an owner stop",
-		Why:   "The previous secure-agentd run in this boot ended without a stop from the menu bar app or secure-agent stop: a signal with no stop intent, its owning app exiting, a kill or crash that left no ending, a control API failure or a failed start. Nothing was monitored from that end until this start.",
+		Title: "Monitor stop needs review",
+		Why:   "Secure Agent found a previous monitor run without a recorded owner stop. The run record may contain an ending and timestamps that help investigate a possible interruption.",
 		Now: []string{
-			"Read the run's start and end times in the finding, then open the session timelines of agents that ran in that window.",
-			"Look in those sessions for commands that stopped or killed secure-agentd or the SecureAgent app.",
+			"Use the recorded end time to focus your review. If it is missing, start with the run start time or finding time and check system logs to narrow down when the daemon exited.",
+			"Review nearby agent sessions for commands that stopped secure-agentd or the SecureAgent app.",
 		},
 		Prevent: []Step{
 			{"guard-rule", "Deny stopping the monitor to agents", "Guard rules that refuse kill, pkill and killall commands that name secure-agentd or SecureAgent."},

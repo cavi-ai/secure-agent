@@ -126,7 +126,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		return nil, fmt.Errorf("failed to open store: %w", err)
 	}
 	c.store = st
-	raisePreviousRunFinding(st, c.run, bootTime, time.Now)
+	raisePreviousRunFindings(st, c.run, bootTime, time.Now)
 	st.SetEventRetention(cfg.Retention.ConnEvent, cfg.Retention.Event)
 	listener, err := api.ListenUnixSocket(cfg.SocketPath)
 	if err != nil {

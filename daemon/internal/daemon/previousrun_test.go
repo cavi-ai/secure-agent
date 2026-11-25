@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -93,7 +95,7 @@ func TestPreviousRunSignalSameBootRaisesFinding(t *testing.T) {
 	start, end := testBoot.Add(time.Hour), testBoot.Add(2*time.Hour)
 	endedRun(t, path, clock, 4242, start, end, RunEndingSignal)
 
-	raisePreviousRunFinding(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
+	raisePreviousRunFindings(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
 
 	requireOneFinding(t, st, "pid 4242", "signal with no stop intent", start.Format(time.RFC3339), end.Format(time.RFC3339))
 }
@@ -104,7 +106,7 @@ func TestPreviousRunParentExitSameBootRaisesFinding(t *testing.T) {
 	start, end := testBoot.Add(time.Hour), testBoot.Add(2*time.Hour)
 	endedRun(t, path, clock, 4242, start, end, RunEndingParentExit)
 
-	raisePreviousRunFinding(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
+	raisePreviousRunFindings(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
 
 	requireOneFinding(t, st, "pid 4242", "owning app process exited", start.Format(time.RFC3339), end.Format(time.RFC3339))
 }
@@ -116,7 +118,7 @@ func TestPreviousRunWithoutEndingRaisesFinding(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	raisePreviousRunFinding(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
+	raisePreviousRunFindings(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
 
 	requireOneFinding(t, st, "pid 4242", "no ending recorded", testBoot.Add(time.Hour).Format(time.RFC3339))
 }
@@ -136,7 +138,7 @@ func TestPreviousRunOwnerStopRaisesNothing(t *testing.T) {
 		t.Fatalf("Stop = %s, %v; want %s", ending, err, RunEndingOwnerStop)
 	}
 
-	raisePreviousRunFinding(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
+	raisePreviousRunFindings(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
 
 	if flags := monitorStoppedFlags(t, st); len(flags) != 0 {
 		t.Fatalf("owner stop stored findings: %+v", flags)
@@ -158,7 +160,7 @@ func TestPreviousRunBeforeBootRaisesNothing(t *testing.T) {
 				endedRun(t, path, clock, 4242, start, testBoot.Add(-time.Minute), cause)
 			}
 
-			raisePreviousRunFinding(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
+			raisePreviousRunFindings(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
 
 			if flags := monitorStoppedFlags(t, st); len(flags) != 0 {
 				t.Fatalf("run before boot stored findings: %+v", flags)
@@ -171,7 +173,7 @@ func TestPreviousRunNoRecordRaisesNothing(t *testing.T) {
 	st, path := openRunStore(t)
 	clock := &runClock{}
 
-	raisePreviousRunFinding(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
+	raisePreviousRunFindings(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
 
 	if flags := monitorStoppedFlags(t, st); len(flags) != 0 {
 		t.Fatalf("first run stored findings: %+v", flags)
@@ -185,39 +187,77 @@ func TestPreviousRunUnreadableBootTimeRaisesFinding(t *testing.T) {
 	endedRun(t, path, clock, 4242, start, end, RunEndingSignal)
 	noBoot := func() (time.Time, error) { return time.Time{}, errors.New("boot time unavailable") }
 
-	raisePreviousRunFinding(st, startNext(t, path, clock), noBoot, clock.now)
+	raisePreviousRunFindings(st, startNext(t, path, clock), noBoot, clock.now)
 
 	requireOneFinding(t, st, "pid 4242", "signal with no stop intent")
 }
 
-// The finding is stored once per previous run: raising it again for the same
-// run, then starting after an owner stop, leaves the first finding alone.
-func TestPreviousRunFindingIsNotRepeated(t *testing.T) {
+func TestPreviousRunFindingRetriesRejectedInsertAfterRestart(t *testing.T) {
 	st, path := openRunStore(t)
+	db, err := sql.Open("sqlite", strings.TrimSuffix(path, runRecordSuffix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TRIGGER reject_monitor_stop BEFORE INSERT ON flags
+		WHEN NEW.rule = 'monitor-stopped' BEGIN SELECT RAISE(ABORT, 'monitor stop write rejected'); END`); err != nil {
+		t.Fatal(err)
+	}
 	clock := &runClock{}
 	endedRun(t, path, clock, 4242, testBoot.Add(time.Hour), testBoot.Add(2*time.Hour), RunEndingSignal)
 	second := startNext(t, path, clock)
-
-	raisePreviousRunFinding(st, second, bootAt(testBoot), clock.now)
-	first := requireOneFinding(t, st)
-	if n := st.AcknowledgeFlagsReason([]string{first.ID}, "reviewed"); n != 1 {
-		t.Fatalf("acknowledged %d findings, want 1", n)
+	raisePreviousRunFindings(st, second, bootAt(testBoot), clock.now)
+	if flags := monitorStoppedFlags(t, st); len(flags) != 0 {
+		t.Fatalf("store accepted a rejected finding: %+v", flags)
 	}
-	clock.t = clock.t.Add(time.Minute)
-	raisePreviousRunFinding(st, second, bootAt(testBoot), clock.now)
 
+	if _, _, err := second.RecordStopIntent(); err != nil {
+		t.Fatal(err)
+	}
+	clock.t = clock.t.Add(time.Second)
+	if ending, err := second.Stop(RunEndingSignal); err != nil || ending != RunEndingOwnerStop {
+		t.Fatalf("Stop = %s, %v; want %s", ending, err, RunEndingOwnerStop)
+	}
+	if _, err := db.Exec(`DROP TRIGGER reject_monitor_stop`); err != nil {
+		t.Fatal(err)
+	}
+	clock.t = clock.t.Add(time.Second)
+	third, err := StartRun(path, 6262, clock.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raisePreviousRunFindings(st, third, bootAt(testBoot), clock.now)
+	requireOneFinding(t, st, "pid 4242", "signal with no stop intent")
+}
+
+func TestPreviousRunFindingIsNotRepeatedWhenCleanupFails(t *testing.T) {
+	st, path := openRunStore(t)
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clock := &runClock{}
+	second := startNext(t, path, clock)
 	if _, _, err := second.RecordStopIntent(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := second.Stop(RunEndingSignal); err != nil {
 		t.Fatal(err)
 	}
+
+	// Simulate a stored flag whose pending record could not be cleared.
+	restore := blockRunRecordWrite(t, path)
+	raisePreviousRunFindings(st, second, bootAt(testBoot), clock.now)
+	restore()
+	first := requireOneFinding(t, st, "record could not be read")
+	if n := st.AcknowledgeFlagsReason([]string{first.ID}, "reviewed"); n != 1 {
+		t.Fatalf("acknowledged %d findings, want 1", n)
+	}
 	clock.t = clock.t.Add(time.Minute)
 	third, err := StartRun(path, 6262, clock.now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	raisePreviousRunFinding(st, third, bootAt(testBoot), clock.now)
+	raisePreviousRunFindings(st, third, bootAt(testBoot), clock.now)
 
 	again := requireOneFinding(t, st)
 	if again.ID != first.ID || !again.TS.Equal(first.TS) || !again.Acknowledged {

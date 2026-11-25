@@ -10,51 +10,64 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
-// monitorStoppedRule is the finding for a previous run that ended without an
-// owner stop in the current boot.
+// monitorStoppedRule reports a previous run with no recorded owner stop.
 const monitorStoppedRule = "monitor-stopped"
 
 // monitorAgent names the daemon as the reporter of its own previous run.
 const monitorAgent = "secure-agentd"
 
-// raisePreviousRunFinding stores one monitor-stopped finding when the run
-// before run ended without an owner stop since the machine booted. A run that
-// started before the boot time raises nothing; an unreadable boot time does
-// not prevent the finding. Each previous run is stored at most once.
-func raisePreviousRunFinding(st *store.Store, run *RunTracker, bootTime func() (time.Time, error), now func() time.Time) {
+// raisePreviousRunFindings processes persisted records after the store opens.
+// Keep any failed inserts pending for the next start.
+func raisePreviousRunFindings(st *store.Store, run *RunTracker, bootTime func() (time.Time, error), now func() time.Time) {
 	if st == nil || run == nil {
 		return
 	}
-	prev, found := run.Previous()
-	if !found || prev.Ending == RunEndingOwnerStop {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	if len(run.pending) == 0 {
 		return
 	}
-	started := prev.Record.StartedAt
-	if !started.IsZero() {
-		boot, err := bootTime()
-		if err != nil {
-			log.Printf("secure-agentd: boot time unreadable: %v", err)
-		} else if started.Before(boot) {
-			return
+	boot, bootErr := bootTime()
+	if bootErr != nil {
+		log.Printf("secure-agentd: boot time unreadable: %v", bootErr)
+	}
+	var remaining []pendingRun
+	for _, pending := range run.pending {
+		started := pending.Record.StartedAt
+		if bootErr == nil && !started.IsZero() && started.Before(boot) {
+			continue
+		}
+		if err := storePreviousRunFinding(st, pending, now); err != nil {
+			log.Printf("secure-agentd: %s finding not stored: %v", monitorStoppedRule, err)
+			remaining = append(remaining, pending)
 		}
 	}
-	key := started
+	if len(remaining) == len(run.pending) {
+		return
+	}
+	run.pending = remaining
+	if err := run.write(run.rec); err != nil {
+		// A retry can recognize findings already in the store by their stable IDs.
+		log.Printf("secure-agentd: pending run records not updated: %v", err)
+	}
+}
+
+func storePreviousRunFinding(st *store.Store, pending pendingRun, now func() time.Time) error {
+	prev := pending.PreviousRun
+	key := prev.Record.StartedAt
 	if key.IsZero() {
-		// An unreadable record has no start time: the finding is keyed to this run.
-		run.mu.Lock()
-		key = run.rec.StartedAt
-		run.mu.Unlock()
+		key = pending.ObservedAt
 	}
 	id := correlate.FlagID(fmt.Sprintf("%s|%s|%d", monitorStoppedRule, prev.Ending, prev.Record.PID), 0, key)
-	if _, exists, err := st.GetFlag(id); err == nil && exists {
-		return
+	if _, exists, err := st.GetFlag(id); err != nil || exists {
+		return err
 	}
 	fl := previousRunFlag(id, prev, now().UTC())
 	if _, err := st.PutFlag(fl); err != nil {
-		log.Printf("secure-agentd: %s finding not stored: %v", monitorStoppedRule, err)
-		return
+		return err
 	}
 	log.Printf("FLAG TRIGGERED [%d]: %s (previous run ending %s)", fl.Severity, fl.Rule, prev.Ending)
+	return nil
 }
 
 // previousRunFlag is the severity-3 finding for prev, detected at at. Its text
@@ -81,7 +94,7 @@ func previousRunFlag(id string, prev PreviousRun, at time.Time) model.Flag {
 		TS:       at,
 		Agent:    monitorAgent,
 		Evidence: []model.EvidenceItem{{
-			Kind:  "monitor-run",
+			Kind:  model.EvidenceKindMonitorRun,
 			Label: string(prev.Ending),
 			Sub:   sub,
 			TS:    ts,

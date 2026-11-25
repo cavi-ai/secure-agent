@@ -95,20 +95,20 @@ func TestRunRecordStartFindsRecordWithoutEnding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prev, found := first.Previous(); found {
-		t.Fatalf("first start found a previous run: %+v", prev)
-	}
 	if _, _, err := first.RecordStopIntent(); err != nil {
 		t.Fatal(err)
 	}
 
-	second, err := StartRun(path, 200, func() time.Time { return t0.Add(time.Minute) })
-	if err != nil {
+	if _, err := StartRun(path, 200, func() time.Time { return t0.Add(time.Minute) }); err != nil {
 		t.Fatal(err)
 	}
-	prev, found := second.Previous()
-	if !found || prev.Ending != RunEndingNoRecord {
-		t.Fatalf("previous run found=%v ending %q, want %q", found, prev.Ending, RunEndingNoRecord)
+	state, found, err := readRunState(path)
+	if err != nil || !found || len(state.Pending) != 1 {
+		t.Fatalf("read back: pending=%+v found=%v err=%v, want one previous run", state.Pending, found, err)
+	}
+	prev := state.Pending[0]
+	if prev.Ending != RunEndingNoRecord {
+		t.Fatalf("previous run ending %q, want %q", prev.Ending, RunEndingNoRecord)
 	}
 	if prev.Record.PID != 100 || !prev.Record.StartedAt.Equal(t0) || !prev.Record.EndedAt.IsZero() {
 		t.Fatalf("previous record %+v, want pid 100 started %s with no end", prev.Record, t0)
@@ -222,12 +222,12 @@ func TestRunRecordIsolatedByInstance(t *testing.T) {
 			if _, err := StartRun(firstPath, 100, time.Now); err != nil {
 				t.Fatal(err)
 			}
-			tr, err := StartRun(secondPath, 200, time.Now)
-			if err != nil {
+			if _, err := StartRun(secondPath, 200, time.Now); err != nil {
 				t.Fatal(err)
 			}
-			if prev, found := tr.Previous(); found {
-				t.Errorf("second instance found first instance's record: %+v", prev)
+			state, found, err := readRunState(secondPath)
+			if err != nil || !found || len(state.Pending) != 0 {
+				t.Fatalf("second instance record: pending=%+v found=%v err=%v, want no previous run", state.Pending, found, err)
 			}
 			prev, found, err := ReadPreviousRun(firstPath)
 			if err != nil || !found || prev.Record.PID != 100 {

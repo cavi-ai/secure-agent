@@ -58,6 +58,34 @@ func TestPosturePreservesFindingAssessment(t *testing.T) {
 	}
 }
 
+func TestPostureShowsMonitorStopEvidence(t *testing.T) {
+	st := testStore(t)
+	const reason = "Monitor run pid 4242 started at 2026-11-25T09:00:00Z and stopped when its owning app process exited at 2026-11-25T10:00:00Z."
+	_, err := st.PutFlag(model.Flag{
+		ID: "monitor-stop", Rule: "monitor-stopped", Severity: 3, Agent: "secure-agentd", TS: time.Now(),
+		Evidence: []model.EvidenceItem{{Kind: "monitor-run", Label: "parent-exit", Sub: "owning app exited", TS: "2026-11-25T10:00:00Z", Text: reason}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := newTestAPI(Deps{Store: st, Status: func() Status { return Status{Running: true} }}).computePosture()
+	if p.NeedsYou != 1 || len(p.Items) != 1 || p.Items[0].Severity != 3 || p.Summary != reason {
+		t.Fatalf("monitor stop missing from Attention: %+v", p)
+	}
+	headline := p.Items[0]
+	if !strings.Contains(headline.Title, "Monitor") || !strings.Contains(headline.Detail, "owning app process exited") {
+		t.Fatalf("headline hides the monitor stop: %+v", headline)
+	}
+	a := headline.Assessment
+	if a == nil || a.Risk != "unknown" || a.Control != "unknown" || a.ResidualRisk != "unknown" {
+		t.Fatalf("run record claims exposure or a control outcome: %+v", a)
+	}
+	group := p.Groups[0].Items[0]
+	if group.Title != headline.Title || group.Detail != reason {
+		t.Fatalf("Attention group hides the monitor stop: %+v", group)
+	}
+}
+
 func TestPostureReviewKeepsEvidenceAndReviewBoundary(t *testing.T) {
 	f := assessmentReadConnect()
 	f.Evidence[0].Sub = "agent tool read"
