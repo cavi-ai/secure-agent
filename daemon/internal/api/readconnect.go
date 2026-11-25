@@ -6,40 +6,20 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 )
 
 const readConnectRule = posture.ReadConnectRule
 
-// evidenceOfKind is f's first evidence item of kind, nil when it has none.
-func evidenceOfKind(f model.Flag, kind string) *model.EvidenceItem {
-	for i := range f.Evidence {
-		if f.Evidence[i].Kind == kind {
-			return &f.Evidence[i]
-		}
-	}
-	return nil
-}
-
 // destinationOf is a connect item's org from the endpoint identity table,
 // its host when the org is unknown, and the host.
 func destinationOf(ev model.EvidenceItem) (dest, org, host string) {
-	host, _ = splitHostPort(ev.Label)
+	host, _ = report.SplitHostPort(ev.Label)
 	org = hostid.IdentifyCached(host).Org
-	return firstNonEmpty([]string{org, host}), org, host
-}
-
-// firstNonEmpty is the first non-empty string in strs, or "".
-func firstNonEmpty(strs []string) string {
-	for _, s := range strs {
-		if s != "" {
-			return s
-		}
-	}
-	return ""
+	return report.FirstNonEmpty([]string{org, host}), org, host
 }
 
 // readConnectWhy is the reason a sensitive-read-then-connect flag needs a
@@ -47,12 +27,12 @@ func firstNonEmpty(strs []string) string {
 // read and, when it does, why the connection still did not count as the
 // credential in use. Empty for evidence recorded before readers were.
 func readConnectWhy(f model.Flag) string {
-	read, conn := evidenceOfKind(f, "read"), evidenceOfKind(f, "connect")
+	read, conn := report.EvidenceOfKind(f, "read"), report.EvidenceOfKind(f, "connect")
 	if read == nil || conn == nil || read.PID == 0 {
 		return ""
 	}
 	dest, org, host := destinationOf(*conn)
-	file := displayPath(read.Label, strings.TrimRight(explainHome(), "/"))
+	file := report.DisplayPath(read.Label, strings.TrimRight(explainHome(), "/"))
 	switch {
 	case hostid.IdentifyCached(host).Class == "cloud":
 		return "A connection was observed to " + dest + " infrastructure near the read of " + file + ". The receiving service and whether secret bytes were sent are not established."
@@ -103,26 +83,12 @@ func patternDestinations(flags []model.Flag) []model.PatternDestination {
 	return capList(out, model.PatternListCap)
 }
 
-// readerName names the process that read the file ("gh", "claude-code
-// 2.1.281"); empty when the read item names no executable or the reader is
-// the agent itself.
-func readerName(r *model.EvidenceItem, agent string) string {
-	if r == nil || r.Exe == "" {
-		return ""
-	}
-	name := agents.HarnessLabel(r.Exe)
-	if agent != "" && strings.HasPrefix(strings.ToLower(name), strings.ToLower(agent)) {
-		return ""
-	}
-	return name
-}
-
-// patternReader is the reader readerName gives for most of the flags,
+// patternReader is the reader report.ReaderName gives for most of the flags,
 // empty when none names one.
 func patternReader(flags []model.Flag) string {
 	n := map[string]int{}
 	for _, f := range flags {
-		if name := readerName(evidenceOfKind(f, "read"), f.Agent); name != "" {
+		if name := report.ReaderName(report.EvidenceOfKind(f, "read"), f.Agent); name != "" {
 			n[name]++
 		}
 	}

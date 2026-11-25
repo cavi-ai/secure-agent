@@ -3,6 +3,8 @@ package api
 import (
 	"io"
 	"net/http"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 )
 
 // serveSessionReport serves what one session did — tools, models, spend,
@@ -30,7 +32,7 @@ func (a *API) serveSessionReport(w http.ResponseWriter, r *http.Request, id stri
 	}
 	if format == "md" {
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-		_, _ = io.WriteString(w, renderSessionMarkdown(rep))
+		_, _ = io.WriteString(w, report.SessionMarkdown(rep))
 		return
 	}
 	writeJSON(w, rep)

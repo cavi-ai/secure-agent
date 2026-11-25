@@ -1,8 +1,10 @@
 package api
 
 import (
+	"github.com/cavi-ai/secure-agent/daemon/internal/doctor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"testing"
 	"time"
@@ -26,7 +28,7 @@ func TestCoverageKeepsLastKnownActivityOnReadFailure(t *testing.T) {
 	if after != before {
 		t.Fatal("read failure erased last known evidence")
 	}
-	if state, _ := checkStorage(doctorFacts{st: a.evidenceStatus(Status{})}); state != doctorFail {
+	if state, _ := doctor.CheckStorage(doctor.Facts{Status: posture.Status(a.evidenceStatus(Status{}))}); state != doctor.Fail {
 		t.Fatal("failed activity read invisible in Doctor")
 	}
 }

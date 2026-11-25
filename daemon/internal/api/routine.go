@@ -10,6 +10,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -84,7 +85,7 @@ func (a *API) routineGroupsOf(flags []model.Flag) []model.RoutineGroup {
 	byKey := map[string]*group{}
 	var keys []string
 	for _, f := range flags {
-		read := evidenceOfKind(f, "read")
+		read := report.EvidenceOfKind(f, "read")
 		if read == nil || !filepath.IsAbs(read.Label) {
 			continue
 		}
@@ -125,7 +126,7 @@ func routineDestinations(dests []model.PatternDestination, total int) string {
 		if len(names) == 2 {
 			break
 		}
-		names = append(names, firstNonEmpty([]string{d.Org, d.Host}))
+		names = append(names, report.FirstNonEmpty([]string{d.Org, d.Host}))
 	}
 	switch {
 	case len(names) == 0:
@@ -139,10 +140,10 @@ func routineDestinations(dests []model.PatternDestination, total int) string {
 
 func routineGroup(key, reader, area string, flags []model.Flag, files map[string]bool, agentCounts map[string]int, home string) model.RoutineGroup {
 	rg := model.RoutineGroup{Key: key, Reader: reader, Files: len(files), Count: len(flags)}
-	rg.Area = displayPath(area, home)
+	rg.Area = report.DisplayPath(area, home)
 	if len(files) == 1 {
 		for f := range files {
-			rg.Area = displayPath(f, home)
+			rg.Area = report.DisplayPath(f, home)
 		}
 	}
 	for agent := range agentCounts {
@@ -182,7 +183,7 @@ func routineGroup(key, reader, area string, flags []model.Flag, files map[string
 	rg.Expectable = len(expectable)
 	rg.FlagIDs = ids
 
-	who := firstNonEmpty([]string{reader, "A process with no recorded name"})
+	who := report.FirstNonEmpty([]string{reader, "A process with no recorded name"})
 	what := "read " + rg.Area
 	if len(files) > 1 {
 		what = fmt.Sprintf("read %d files in %s", len(files), rg.Area)

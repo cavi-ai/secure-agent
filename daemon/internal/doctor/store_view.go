@@ -1,4 +1,4 @@
-package api
+package doctor
 
 import (
 	"time"
@@ -7,7 +7,8 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
-type doctorStore interface {
+// Store is the stored evidence the checks read.
+type Store interface {
 	SessionIdentityStats(time.Time) (int, int, int, int)
 	DoctorWorkspaceRepos(time.Time) ([][2]string, error)
 	SessionsCreatedSince(time.Time) int
@@ -18,12 +19,12 @@ type doctorStore interface {
 	RetentionReport() []store.KindRetention
 }
 
-// gatherDoctorStoreFacts concentrates the stored evidence used by all Doctor
+// GatherStoreFacts concentrates the stored evidence used by all Doctor
 // probes. A narrower reader can supply these facts without an API instance.
-func gatherDoctorStoreFacts(f *doctorFacts, st doctorStore) {
-	f.sessionsTotal, f.sessionsNamed, f.sessionsWithWorkspace, f.sessionsWRepo = st.SessionIdentityStats(f.boot)
+func GatherStoreFacts(f *Facts, st Store) {
+	f.sessionsTotal, f.sessionsNamed, f.sessionsWithWorkspace, f.sessionsWRepo = st.SessionIdentityStats(f.Boot)
 	gitWorkspaces := map[string]bool{}
-	workspaceRows, err := st.DoctorWorkspaceRepos(f.boot)
+	workspaceRows, err := st.DoctorWorkspaceRepos(f.Boot)
 	f.repoQueryError = err != nil
 	for _, row := range workspaceRows {
 		eligible, ok := gitWorkspaces[row[0]]
@@ -38,10 +39,10 @@ func gatherDoctorStoreFacts(f *doctorFacts, st doctorStore) {
 			}
 		}
 	}
-	f.sessionsLastHour = st.SessionsCreatedSince(f.now.Add(-time.Hour))
-	f.sessionsByHarness = st.SessionsByHarness(f.boot)
+	f.sessionsLastHour = st.SessionsCreatedSince(f.Now.Add(-time.Hour))
+	f.sessionsByHarness = st.SessionsByHarness(f.Boot)
 	f.traceByHarness = st.TraceRowsWrittenByHarness()
-	f.dupePairs, f.idless = st.ToolCallStats(f.boot)
+	f.dupePairs, f.idless = st.ToolCallStats(f.Boot)
 	f.claudePriced, f.claudeUnpriced, f.allUnpriced, f.allCalls = st.PricingStats()
 	f.retention = st.RetentionReport()
 }

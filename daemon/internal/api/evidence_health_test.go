@@ -13,6 +13,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
+	"github.com/cavi-ai/secure-agent/daemon/internal/doctor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 )
@@ -63,11 +64,11 @@ func TestTranscriptCheckpointFailureVisibleThroughRecovery(t *testing.T) {
 				if (!recovering && (len(active) != 1 || active[0] != "transcript checkpoints")) || (recovering && len(active) != 0) {
 					t.Fatalf("incorrect checkpoint recovery state: %+v", status.StorageHealth)
 				}
-				wantState, wantCount, wantDoctor := "attention", 1, doctorFail
+				wantState, wantCount, wantDoctor := "attention", 1, doctor.Fail
 				if recovering {
-					wantState, wantCount, wantDoctor = "all-clear", 0, doctorPass
+					wantState, wantCount, wantDoctor = "all-clear", 0, doctor.Pass
 				}
-				if state, _ := checkStorage(a.doctorFacts(time.Now())); state != wantDoctor {
+				if state, _ := doctor.CheckStorage(a.doctorFacts(time.Now())); state != wantDoctor {
 					t.Fatal("Doctor disagrees with current checkpoint health")
 				}
 				p := a.computePosture()
@@ -117,9 +118,9 @@ func TestResourceEpisodeFailureVisibleThroughRecovery(t *testing.T) {
 			t.Fatalf("status reports incorrect recovery state: %+v", status.StorageHealth)
 		}
 		p := a.computePosture()
-		wantState, wantCount, wantDoctor := "attention", 1, doctorFail
+		wantState, wantCount, wantDoctor := "attention", 1, doctor.Fail
 		if recovering {
-			wantState, wantCount, wantDoctor = "all-clear", 0, doctorPass
+			wantState, wantCount, wantDoctor = "all-clear", 0, doctor.Pass
 		}
 		if p.State != wantState || p.CoverageCount != wantCount || p.CoverageItems[0].Kind != "storage_loss" {
 			t.Fatalf("posture hides resource evidence loss: %+v", p)
@@ -127,7 +128,7 @@ func TestResourceEpisodeFailureVisibleThroughRecovery(t *testing.T) {
 		if !recovering && !strings.Contains(p.CoverageItems[0].Detail, "resource episodes") {
 			t.Fatalf("posture omits the failed operation: %+v", p.CoverageItems)
 		}
-		if state, _ := checkStorage(a.doctorFacts(time.Now())); state != wantDoctor {
+		if state, _ := doctor.CheckStorage(a.doctorFacts(time.Now())); state != wantDoctor {
 			t.Fatal("Doctor disagrees with current resource evidence health")
 		}
 	}
@@ -147,7 +148,7 @@ func TestPostureSurfacesBusLoss(t *testing.T) {
 	if p.CoverageItems[0].Kind != "event_loss" || !strings.Contains(p.CoverageItems[0].Detail, "7") {
 		t.Fatalf("missing event-loss evidence: %+v", p.CoverageItems)
 	}
-	if state, _ := checkBus(a.doctorFacts(time.Now())); state != doctorFail {
+	if state, _ := doctor.CheckBus(a.doctorFacts(time.Now())); state != doctor.Fail {
 		t.Fatal("Doctor and posture disagree about bus loss")
 	}
 }
@@ -184,7 +185,7 @@ func TestStorageFailureVisibleInStatusPostureAndDoctor(t *testing.T) {
 	}
 	report := a.doctorReport(time.Now())
 	for _, c := range report.Checks {
-		if c.ID == "storage" && c.State == doctorFail {
+		if c.ID == "storage" && c.State == doctor.Fail {
 			return
 		}
 	}

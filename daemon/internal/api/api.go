@@ -35,6 +35,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/modelservice"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/shellreview"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -1189,11 +1190,11 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `Invalid payload: {"rule":"<id>","host":"<host>","agent":"<optional agent>"}`, http.StatusBadRequest)
 			return
 		}
-		if !validMuteHost(req.Host) {
+		if !report.ValidMuteHost(req.Host) {
 			http.Error(w, "host must be a bare hostname", http.StatusBadRequest)
 			return
 		}
-		if !validMuteAgent(req.Agent) {
+		if !report.ValidMuteAgent(req.Agent) {
 			http.Error(w, "invalid agent", http.StatusBadRequest)
 			return
 		}
@@ -1209,7 +1210,7 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 		a.recordLabel(model.OperatorLabel{Kind: "host", Rule: req.Rule, Agent: req.Agent, Pattern: req.Host, Label: "ok", Source: "mute"})
 		a.store.PutAudit(store.AuditEntry{
 			Action: "mute-add", Rule: req.Rule,
-			Detail: fmt.Sprintf("muted %s for %s%s (%d existing flags acknowledged)", req.Host, req.Rule, muteAgentSuffix(req.Agent), acked),
+			Detail: fmt.Sprintf("muted %s for %s%s (%d existing flags acknowledged)", req.Host, req.Rule, report.MuteAgentSuffix(req.Agent), acked),
 		})
 		w.Header().Set("Content-Type", "application/json")
 		resp := map[string]string{"status": "ok", "rule": req.Rule, "host": req.Host}
@@ -1226,7 +1227,7 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 		// Same host validation as POST: a bare hostname only (a mute value
 		// with URL structure or absurd length could poison the store and
 		// the ledger UI). Rule must match the id charset.
-		if !guardTokenRE.MatchString(rule) || !validMuteHost(host) || !validMuteAgent(agent) {
+		if !guardTokenRE.MatchString(rule) || !report.ValidMuteHost(host) || !report.ValidMuteAgent(agent) {
 			http.Error(w, "invalid rule/host/agent", http.StatusBadRequest)
 			return
 		}
@@ -1236,7 +1237,7 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 		}
 		a.store.PutAudit(store.AuditEntry{
 			Action: "mute-remove", Rule: rule,
-			Detail: fmt.Sprintf("unmuted %s for %s%s", host, rule, muteAgentSuffix(agent)),
+			Detail: fmt.Sprintf("unmuted %s for %s%s", host, rule, report.MuteAgentSuffix(agent)),
 		})
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

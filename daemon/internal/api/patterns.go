@@ -12,6 +12,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -110,15 +111,15 @@ func (a *API) patternsOf(flags []model.Flag, since, now time.Time, minCount int)
 // file the explanation names (display path; the absolute path keys it), else
 // the first destination host, else nothing.
 func patternSubject(f model.Flag, home string) (model.EvidenceItem, string) {
-	if ev := subjectEvidence(f.Evidence); ev != nil {
-		s := explainSubject(*ev, f.Workspace, "", home)
+	if ev := report.SubjectEvidence(f.Evidence); ev != nil {
+		s := report.ExplainSubject(*ev, f.Workspace, "", home)
 		return model.EvidenceItem{Kind: ev.Kind, Label: s.Display, Sub: s.CategoryLabel}, s.Path
 	}
 	for _, ev := range f.Evidence {
 		if ev.Kind != "connect" || ev.Label == "" {
 			continue
 		}
-		if host, _ := splitHostPort(ev.Label); host != "" {
+		if host, _ := report.SplitHostPort(ev.Label); host != "" {
 			return model.EvidenceItem{Kind: "connect", Label: host, Sub: hostid.IdentifyCached(host).Org}, host
 		}
 	}
@@ -209,7 +210,7 @@ func (a *API) fillPattern(p model.Pattern, flags []model.Flag, since, now time.T
 				if a.sysAgent != nil {
 					p.Actions = append(p.Actions, model.ExplainAction{ID: "review-local", Label: "Send to local agent review", Consequence: "Review the selected finding through local Ollama; no command or harness starts.", Method: http.MethodPost, Path: "/agent/analyze", Body: map[string]any{"flag_ids": []string{f.ID}}})
 				}
-				if read := evidenceOfKind(f, "read"); read != nil {
+				if read := report.EvidenceOfKind(f, "read"); read != nil {
 					p.Actions = append(p.Actions, model.ExplainAction{ID: "inspect-file", Label: "Inspect file details", Consequence: "Shows file metadata and supported .env variable names without values; changes nothing.", Method: http.MethodGet, Path: "/files/detail", Body: map[string]any{"path": read.Label}})
 				}
 				if act, ok := a.nonSecretFileAction(f); ok {
@@ -355,9 +356,9 @@ func patternVerb(rule string, subject model.EvidenceItem) string {
 		}
 		return "read a secret and connected out"
 	case "proxy-secret-leak":
-		return "sent a secret to " + firstNonEmpty([]string{host, "an outside host"})
+		return "sent a secret to " + report.FirstNonEmpty([]string{host, "an outside host"})
 	case "proxy-prompt-injection":
-		return "received a prompt injection from " + firstNonEmpty([]string{host, "an outside host"})
+		return "received a prompt injection from " + report.FirstNonEmpty([]string{host, "an outside host"})
 	case "secret-in-transcript":
 		return "wrote a secret into its transcript"
 	default:
@@ -404,14 +405,14 @@ func patternSummary(p model.Pattern, now time.Time, reader string) string {
 	if p.SessionCount > 0 {
 		ident = append(ident, fmt.Sprintf("%d session%s", p.SessionCount, plural(p.SessionCount)))
 	}
-	who := firstNonEmpty([]string{p.Agent, "An agent"})
+	who := report.FirstNonEmpty([]string{p.Agent, "An agent"})
 	verb := patternVerb(p.Rule, p.Subject)
 	if p.Rule == readConnectRule {
 		// "gh (claude) read ~/.config/gh/hosts.yml, then reached GitHub (…)"
 		if reader != "" {
 			who = reader + " (" + who + ")"
 		}
-		verb = "read " + firstNonEmpty([]string{p.Subject.Label, "a secret"}) + " near connections to " + destinationPhrase(p.Destinations)
+		verb = "read " + report.FirstNonEmpty([]string{p.Subject.Label, "a secret"}) + " near connections to " + destinationPhrase(p.Destinations)
 	}
 	s := fmt.Sprintf("%s %s %d times %s", who, verb, p.Count, patternWindow(p.First, p.Last, now))
 	if len(ident) > 0 {
@@ -439,11 +440,11 @@ func (a *API) patternActions(p model.Pattern, openIDs []string, env *explainEnv)
 		})
 	}
 	if a.mutes != nil {
-		if host != "" && validMuteHost(host) {
-			if act, ok := muteRuleHostAction(p.Rule, p.Title, host, p.Agent); ok {
+		if host != "" && report.ValidMuteHost(host) {
+			if act, ok := report.MuteRuleHostAction(p.Rule, p.Title, host, p.Agent); ok {
 				acts = append(acts, act)
 			}
-		} else if act, ok := muteClassAction(p.Rule, p.Title, p.Agent); ok {
+		} else if act, ok := report.MuteClassAction(p.Rule, p.Title, p.Agent); ok {
 			acts = append(acts, act)
 		}
 	}
@@ -469,7 +470,7 @@ func (a *API) patternActions(p model.Pattern, openIDs []string, env *explainEnv)
 			body["started_at"] = ag.StartedAt
 		}
 		acts = append(acts, model.ExplainAction{
-			ID: "kill", Label: fmt.Sprintf("Kill %s (pid %d)", firstNonEmpty([]string{p.Agent, ag.Name, "agent"}), pid),
+			ID: "kill", Label: fmt.Sprintf("Kill %s (pid %d)", report.FirstNonEmpty([]string{p.Agent, ag.Name, "agent"}), pid),
 			Consequence: "The agent process tree is terminated now; unsaved work in it is lost.",
 			Method:      http.MethodPost, Path: "/kill",
 			Body: body,

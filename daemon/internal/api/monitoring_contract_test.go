@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
+	"github.com/cavi-ai/secure-agent/daemon/internal/doctor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 )
@@ -28,7 +29,7 @@ func TestMonitoringBusRecoveryKeepsLossHistory(t *testing.T) {
 	if p.State != "all-clear" || p.CoverageCount != 0 || len(p.CoverageItems) != 1 || p.CoverageItems[0].MonitoringState != posture.MonitoringHistorical || b.Dropped() != 1 {
 		t.Fatalf("recovery erased history or kept the warning: %+v", p)
 	}
-	if state, _ := checkBus(a.doctorFacts(time.Now())); state != doctorPass {
+	if state, _ := doctor.CheckBus(a.doctorFacts(time.Now())); state != doctor.Pass {
 		t.Fatal("Doctor disagrees with recovered delivery")
 	}
 }
@@ -40,7 +41,7 @@ func TestRequestedFileTelemetryRequiresACollector(t *testing.T) {
 	if p.State != "attention" || p.CoverageCount != 1 || p.CoverageItems[0].Kind != "collector_down" {
 		t.Fatalf("an enabled but unavailable collector was hidden: %+v", p)
 	}
-	if state, _ := checkFileTelemetry(doctorFacts{st: st}); state != doctorFail {
+	if state, _ := doctor.CheckFileTelemetry(doctor.Facts{Status: posture.Status(st)}); state != doctor.Fail {
 		t.Fatal("Doctor disagrees with the unavailable collector")
 	}
 }

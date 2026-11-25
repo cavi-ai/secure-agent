@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -79,14 +80,14 @@ func TestSessionReportMarkdownPreservesDecisionAndResidualRisk(t *testing.T) {
 	rep := store.SessionReport{Reviews: []model.ReviewRecord{{ID: "review", Revision: 2, ReviewState: "unreviewed", EvidenceAvailable: false,
 		Assessment: model.FindingAssessment{Risk: "high", Control: "observed-only", ResidualRisk: "possible-exposure"},
 		Decision:   &model.ReviewDecisionReceipt{ID: "review", Revision: 1, Action: "acknowledge", At: at}}}}
-	md := renderSessionMarkdown(rep)
+	md := report.SessionMarkdown(rep)
 	for _, want := range []string{"## Review decisions", "possible-exposure", "acknowledge", "revision 1", "earlier revision", "Source evidence unavailable", "does not establish task completion"} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("missing %q from report: %s", want, md)
 		}
 	}
 	rep.Reviews[0].EvidenceAvailable = true
-	if md := renderSessionMarkdown(rep); !strings.Contains(md, "Assessment source evidence unavailable") || !strings.Contains(md, "possible-exposure") {
+	if md := report.SessionMarkdown(rep); !strings.Contains(md, "Assessment source evidence unavailable") || !strings.Contains(md, "possible-exposure") {
 		t.Fatalf("remaining weaker sources hid the unavailable assessment source: %s", md)
 	}
 }
