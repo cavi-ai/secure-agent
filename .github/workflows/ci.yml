@@ -91,6 +91,8 @@ jobs:
         run: make test-guard-workflow-live
       - name: Attack replay
         run: make test-attack-replay
+      - name: Agent scenario gate
+        run: make test-agent-scenarios
 
   hooks:
     name: Python hook tests (3.12)
