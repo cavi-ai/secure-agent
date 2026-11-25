@@ -8,35 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/pattern"
 	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 // routineMin is the fewest open flags a routine group holds.
 const routineMin = 3
-
-// routineArea keys a read path: the home dot-directory it sits under
-// (~/.docker), else the file itself.
-func routineArea(path, home string) string {
-	if home != "" && strings.HasPrefix(path, home+"/.") {
-		if dir, _, found := strings.Cut(path[len(home)+1:], "/"); found {
-			return home + "/" + dir
-		}
-	}
-	return path
-}
-
-// readerOf is the reader label an expectation keys a read by; empty when
-// the read recorded no process.
-func readerOf(read model.EvidenceItem) string {
-	tool := read.Sub == "agent tool read"
-	if read.Exe == "" && !tool {
-		return ""
-	}
-	return correlate.ReaderLabel(read.Exe, tool)
-}
 
 // routineExpectable reports whether every read f cites is reader on area,
 // so marking its pairs expected resolves it and expects nothing the group
@@ -52,7 +31,7 @@ func routineExpectable(f model.Flag, reader, area, home string) bool {
 			continue
 		}
 		reads++
-		if readerOf(ev) != reader || routineArea(ev.Label, home) != area {
+		if pattern.ReaderOf(ev) != reader || pattern.RoutineArea(ev.Label, home) != area {
 			return false
 		}
 	}
@@ -89,7 +68,7 @@ func (a *API) routineGroupsOf(flags []model.Flag) []model.RoutineGroup {
 		if read == nil || !filepath.IsAbs(read.Label) {
 			continue
 		}
-		reader, area := readerOf(*read), routineArea(read.Label, home)
+		reader, area := pattern.ReaderOf(*read), pattern.RoutineArea(read.Label, home)
 		key := "routine|" + reader + "|" + area
 		g := byKey[key]
 		if g == nil {
@@ -118,26 +97,6 @@ func (a *API) routineGroupsOf(flags []model.Flag) []model.RoutineGroup {
 	return out
 }
 
-// routineDestinations names the busiest two destinations (org, else host):
-// "GitHub", "Google and Cloudflare", "GitHub, Google and 4 more".
-func routineDestinations(dests []model.PatternDestination, total int) string {
-	var names []string
-	for _, d := range dests {
-		if len(names) == 2 {
-			break
-		}
-		names = append(names, report.FirstNonEmpty([]string{d.Org, d.Host}))
-	}
-	switch {
-	case len(names) == 0:
-		return "an outside host"
-	case total > len(names):
-		return fmt.Sprintf("%s and %d more", strings.Join(names, ", "), total-len(names))
-	default:
-		return strings.Join(names, " and ")
-	}
-}
-
 func routineGroup(key, reader, area string, flags []model.Flag, files map[string]bool, agentCounts map[string]int, home string) model.RoutineGroup {
 	rg := model.RoutineGroup{Key: key, Reader: reader, Files: len(files), Count: len(flags)}
 	rg.Area = report.DisplayPath(area, home)
@@ -161,12 +120,12 @@ func routineGroup(key, reader, area string, flags []model.Flag, files map[string
 	for _, f := range flags {
 		for _, ev := range f.Evidence {
 			if ev.Kind == "connect" {
-				if dest, _, host := destinationOf(ev); host != "" {
+				if dest, _, host := pattern.DestinationOf(ev); host != "" {
 					dests[dest] = true
 				}
 			}
 		}
-		if d := dispositionFor(f); worst.State == "" || dispositionRank(d.State) > dispositionRank(worst.State) {
+		if d := dispositionFor(f); worst.State == "" || pattern.DispositionRank(d.State) > pattern.DispositionRank(worst.State) {
 			worst = d
 		}
 		if len(ids) < model.PatternFlagIDCap {
@@ -176,7 +135,7 @@ func routineGroup(key, reader, area string, flags []model.Flag, files map[string
 			expectable = append(expectable, f.ID)
 		}
 	}
-	rg.Destinations = patternDestinations(flags)
+	rg.Destinations = pattern.Destinations(flags)
 	rg.DestinationCount = len(dests)
 	rg.Disposition = worst
 	rg.Assessment = model.StrongestFindingAssessment(flags)
@@ -189,7 +148,7 @@ func routineGroup(key, reader, area string, flags []model.Flag, files map[string
 		what = fmt.Sprintf("read %d files in %s", len(files), rg.Area)
 	}
 	rg.Summary = fmt.Sprintf("%s %s, then connected to %s — %d time%s across %d agent%s.",
-		who, what, routineDestinations(rg.Destinations, rg.DestinationCount), rg.Count, plural(rg.Count), len(rg.Agents), plural(len(rg.Agents)))
+		who, what, pattern.RoutineDestinations(rg.Destinations, rg.DestinationCount), rg.Count, pattern.Plural(rg.Count), len(rg.Agents), pattern.Plural(len(rg.Agents)))
 
 	if len(expectable) > 0 {
 		consequence := fmt.Sprintf("Each exact reader, file and destination these %d flags cite is marked expected for its agent, and the flags are marked reviewed. A new reader, file or destination still flags. Forget them under Policy.", len(expectable))
