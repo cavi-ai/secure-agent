@@ -92,6 +92,9 @@ func (s *Store) restoreCheckpoint(root *os.Root, name string) (int, error) {
 			maxSeq: node.MaxSeq, holes: node.Holes, retiredBoots: node.RetiredBoots,
 			confirmedGaps: node.ConfirmedGaps, applied: node.Applied,
 		}
+		// A checkpoint over the session bound is trimmed by the apply rule.
+		rt.boundSessions("")
+		rt.boundTraces()
 		if len(rt.applied) > 0 {
 			rt.appliedAt = make(map[deliveryKey]time.Time, len(rt.applied))
 			for _, entry := range rt.applied {

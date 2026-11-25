@@ -9,6 +9,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -91,6 +92,10 @@ const (
 	maxRecentDeliveries = 1024
 )
 
+// maxNodeSessions is the most session records one node keeps, in memory and
+// in its checkpoint. The node's last-trace map holds at most as many entries.
+const maxNodeSessions = 512
+
 type deliveryKey [sha256.Size]byte
 
 type appliedDelivery struct {
@@ -112,11 +117,11 @@ type nodeRuntime struct {
 	state  *NodeState
 	recent []windowEvent
 	// sessions is the latest record per session id seen from this node — the
-	// cross-node view's per-node slice. Bounded by the node's session count
-	// (small; a busy machine has tens, not thousands).
+	// cross-node view's per-node slice. At most maxNodeSessions records.
 	sessions map[string]sessionPayload
 	// lastTrace keeps the most recent trace per session so the cross-node
-	// timeline can show "what is it doing now" without unbounded history.
+	// timeline can show "what is it doing now". At most maxNodeSessions
+	// entries; an evicted session's trace goes with it.
 	lastTrace map[string]tracePayload
 	// Sequence tracking (per boot): maxSeq is the highest seq seen this boot;
 	// holes are skipped sequence ranges and when each range opened, pending
@@ -380,6 +385,7 @@ func (s *Store) apply(env Envelope, receivedAt string) {
 				rt.sessions = map[string]sessionPayload{}
 			}
 			rt.sessions[p.ID] = p
+			rt.boundSessions(p.ID)
 		}
 	case "trace":
 		var p tracePayload
@@ -390,7 +396,80 @@ func (s *Store) apply(env Envelope, receivedAt string) {
 			// Last write wins; envelopes arrive near-chronologically and the
 			// view only wants the latest state, so no timestamp comparison.
 			rt.lastTrace[p.SessionID] = p
+			rt.boundTraces()
 		}
+	}
+}
+
+// boundSessions evicts records past maxNodeSessions, ended before live and
+// oldest LastSeenAt first, with their traces. keep is never evicted.
+func (rt *nodeRuntime) boundSessions(keep string) {
+	over := len(rt.sessions) - maxNodeSessions
+	if over <= 0 {
+		return
+	}
+	evictFirst(rt.sessions, over, func(id string) bool { return id != keep }, compareSessionEviction, func(id string) {
+		delete(rt.sessions, id)
+		delete(rt.lastTrace, id)
+	})
+}
+
+// boundTraces evicts traces without a session record, oldest TS first, while
+// the trace map holds more than maxNodeSessions entries.
+func (rt *nodeRuntime) boundTraces() {
+	over := len(rt.lastTrace) - maxNodeSessions
+	if over <= 0 {
+		return
+	}
+	orphan := func(id string) bool {
+		_, ok := rt.sessions[id]
+		return !ok
+	}
+	evictFirst(rt.lastTrace, over, orphan, compareTraceEviction, func(id string) { delete(rt.lastTrace, id) })
+}
+
+// compareSessionEviction orders ended before live, then older LastSeenAt
+// first: the reverse of the Sessions() order.
+func compareSessionEviction(a, b sessionPayload) int {
+	if aEnded, bEnded := a.Status == "ended", b.Status == "ended"; aEnded != bEnded {
+		if aEnded {
+			return -1
+		}
+		return 1
+	}
+	return strings.Compare(a.LastSeenAt, b.LastSeenAt)
+}
+
+func compareTraceEviction(a, b tracePayload) int {
+	return strings.Compare(a.TS, b.TS)
+}
+
+// evictFirst calls evict for the n candidate ids of m that order first, ties
+// broken by id. One eviction costs a single scan; more cost one sort.
+func evictFirst[V any](m map[string]V, n int, candidate func(string) bool, order func(a, b V) int, evict func(string)) {
+	if n == 1 {
+		var victim string
+		var victimValue V
+		found := false
+		for id, v := range m {
+			if candidate(id) && (!found || cmp.Or(order(v, victimValue), strings.Compare(id, victim)) < 0) {
+				victim, victimValue, found = id, v, true
+			}
+		}
+		if found {
+			evict(victim)
+		}
+		return
+	}
+	ids := make([]string, 0, len(m))
+	for id := range m {
+		if candidate(id) {
+			ids = append(ids, id)
+		}
+	}
+	slices.SortFunc(ids, func(a, b string) int { return cmp.Or(order(m[a], m[b]), strings.Compare(a, b)) })
+	for _, id := range ids[:min(n, len(ids))] {
+		evict(id)
 	}
 }
 
@@ -693,7 +772,7 @@ func (s *Store) Rollup() []*NodeState {
 // Sessions returns every node's sessions as one cross-node list, newest
 // activity first, with each node's hostname and labels attached so the view
 // can group by env/role without a second lookup. Ended sessions are included
-// (the history survives), but they sort below live ones.
+// within each node's maxNodeSessions bound, but they sort below live ones.
 func (s *Store) Sessions() []FleetSession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
