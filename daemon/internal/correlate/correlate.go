@@ -1411,6 +1411,12 @@ func (c *Correlator) isVendorHost(agentName, host string) bool {
 	return false
 }
 
+// FlagID is the correlator's flag id for subject (rule and its subject),
+// pid and ts: the same inputs always give the same id.
+func FlagID(subject string, pid int32, ts time.Time) string {
+	return hashFlagID(subject, pid, ts)
+}
+
 func hashFlagID(rule string, pid int32, ts time.Time) string {
 	raw := fmt.Sprintf("%s:%d:%d", rule, pid, ts.UnixNano())
 	sum := sha256.Sum256([]byte(raw))

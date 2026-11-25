@@ -597,6 +597,8 @@ func HumanFlagTitle(rule string) string {
 		return "Agent changed what macOS trusts"
 	case "xprotect-detection":
 		return "XProtect detected malware"
+	case "monitor-stopped":
+		return "Monitor stopped without an owner stop"
 	case "proxy-prompt-injection":
 		return "Prompt injection in a response"
 	case "proxy-inspection-incomplete":
