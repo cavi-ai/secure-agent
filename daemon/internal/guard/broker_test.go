@@ -210,9 +210,15 @@ func TestRequestOverCapIsDeniedImmediately(t *testing.T) {
 func TestResolveConcurrentWithDuplicateRequests(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := NewBroker(400 * time.Millisecond)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer func() {
+			// Release blocked requests before the bubble exits on failure.
+			cancel()
+			synctest.Wait()
+		}()
 		p := Pending{ID: "r1", Agent: "claude", Tool: "Read", Path: "/Users/x/.aws/credentials", RuleID: "cloud-creds"}
 		done := make(chan Decision, 1)
-		go func() { done <- b.Request(context.Background(), p) }()
+		go func() { done <- b.Request(ctx, p) }()
 		waitPending(t, b, 1)
 
 		const dups = 64
@@ -225,7 +231,7 @@ func TestResolveConcurrentWithDuplicateRequests(t *testing.T) {
 				defer wg.Done()
 				dup := p
 				dup.ID = fmt.Sprintf("r1-dup%d", i)
-				results <- b.Request(context.Background(), dup)
+				results <- b.Request(ctx, dup)
 			}()
 		}
 		for i := 0; i < joined; i++ {
@@ -262,21 +268,25 @@ func TestResolveConcurrentWithDuplicateRequests(t *testing.T) {
 		// One final fan-out in case the waiter survived the window.
 		b.Resolve("r1", Decision{Verdict: "allow", Scope: "once"})
 
-		// Drain: late duplicates that created their own waiters get resolved too.
-		for {
-			synctest.Wait()
-			b.mu.Lock()
-			ids := make([]string, 0, len(b.waiters))
-			for id := range b.waiters {
-				ids = append(ids, id)
+		// All late duplicates have registered or completed after Wait.
+		synctest.Wait()
+		b.mu.Lock()
+		ids := make([]string, 0, len(b.waiters))
+		for id := range b.waiters {
+			ids = append(ids, id)
+		}
+		b.mu.Unlock()
+		for _, id := range ids {
+			if !b.Resolve(id, Decision{Verdict: "allow", Scope: "once"}) {
+				t.Fatalf("could not resolve waiter %q during drain", id)
 			}
-			b.mu.Unlock()
-			if len(ids) == 0 {
-				break
-			}
-			for _, id := range ids {
-				b.Resolve(id, Decision{Verdict: "allow", Scope: "once"})
-			}
+		}
+		synctest.Wait()
+		b.mu.Lock()
+		remaining := len(b.waiters)
+		b.mu.Unlock()
+		if remaining != 0 {
+			t.Fatalf("%d waiters remain after drain, want 0", remaining)
 		}
 
 		wg.Wait()
