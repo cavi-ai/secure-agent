@@ -148,5 +148,5 @@ test('delayed confirmations and revocation responses cannot cross authentication
 test('permission values and applicability labels stay escaped in global rows', async () => {
   const t = controller(); await t.load([scope({ resource_path: '<img>', applicability: { label: '<script>', revoke: true } })]);
   assert.match(t.html(), /&lt;img&gt;/); assert.match(t.html(), /&lt;script&gt;/);
-  assert.doesNotMatch(t.html(), /<img>|<script>/);
+  assert.doesNotMatch(t.html(), /<(?:img|script)(?=[\s/>])/i);
 });

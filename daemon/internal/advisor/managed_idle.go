@@ -2,12 +2,14 @@ package advisor
 
 import (
 	"fmt"
-	"github.com/cavi-ai/secure-agent/internal/localservice"
 	"io"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/internal/localservice"
 )
 
 // ManagedTransport owns exactly one lazily started model process. Its idle
@@ -118,9 +120,8 @@ func (m *ManagedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		}
 		m.mu.Unlock()
 		r := req.Clone(req.Context())
-		u := *req.URL
-		u.Scheme, u.Host = "http", "127.0.0.1"
-		r.URL, r.Host = &u, u.Host
+		r.URL = &url.URL{Scheme: "http", Host: "127.0.0.1", Path: "/v1/chat/completions"}
+		r.Host = r.URL.Host
 		r.Header = req.Header.Clone()
 		r.Header.Set("Content-Type", "application/json")
 		resp, err := process.transport.RoundTrip(r)

@@ -173,7 +173,7 @@ test('exception identities and retained removal feedback are escaped', () => {
   const malicious = record({ key: '"><img src=x>', agent: '<script>x</script>', path: '/synthetic/<img src=x>' });
   const f = fixture({ records: [malicious] });
   f.state.expectedRemoval = malicious;
-  assert.doesNotMatch(f.html(), /<script>|<img/);
+  assert.doesNotMatch(f.html(), /<(?:img|script)(?=[\s/>])/i);
   assert.match(f.html(), /&lt;img/);
   assert.match(f.html(), /&quot;&gt;&lt;img/);
 });

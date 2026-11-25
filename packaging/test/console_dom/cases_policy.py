@@ -12,10 +12,7 @@ def run_allowlist_entries_render_with_remove(page):
                 'Allowed endpoints' in dom_query(dom).text
                 or dom_query(dom).has(None, {'title': lambda value: 'Allowed endpoints' in (value or '')})
             )
-            and (
-                'artifacts.example.com' in dom_query(dom).text
-                or dom_query(dom).has(None, {'title': lambda value: 'artifacts.example.com' in (value or '')})
-            )
+            and dom_query(dom).has_endpoint('artifacts.example.com')
         ),
     )
 
@@ -123,10 +120,7 @@ def run_scoped_permission_shows_the_exact_endpoint_and_executable_with_revocatio
     check(
         'scoped permission shows the exact endpoint and executable with revocation',
         (
-            (
-                'api.example.com:443' in dom_query(dom_scoped).text
-                or dom_query(dom_scoped).has(None, {'title': lambda value: 'api.example.com:443' in (value or '')})
-            )
+            dom_query(dom_scoped).has_endpoint('api.example.com:443')
             and (
                 '/usr/bin/cat' in dom_query(dom_scoped).text
                 or dom_query(dom_scoped).has(None, {'title': lambda value: '/usr/bin/cat' in (value or '')})
@@ -198,10 +192,7 @@ def run_policy_lists_reversible_expected_connections(page):
     check(
         'Policy lists reversible expected connections',
         (
-            (
-                'old.example.com:443' in dom_query(dom_policylists).text
-                or dom_query(dom_policylists).has(None, {'title': lambda value: 'old.example.com:443' in (value or '')})
-            )
+            dom_query(dom_policylists).has_endpoint('old.example.com:443')
             and dom_query(dom_policylists).has(None, {'data-action': 'revoke-expected-egress', 'data-id': 'expected-older'})
         ),
     )

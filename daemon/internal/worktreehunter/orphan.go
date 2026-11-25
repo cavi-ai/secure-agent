@@ -85,7 +85,7 @@ func (h *Hunter) Reconnect(ctx context.Context, path string) (string, error) {
 	if repo == "" {
 		return "", ErrNoReconnect
 	}
-	if _, err := git(context.WithoutCancel(ctx), repo, "worktree", "repair", o.Path); err != nil {
+	if _, err := git(context.WithoutCancel(ctx), repo, "worktree", "repair", "--", o.Path); err != nil {
 		return "", err
 	}
 	if _, _, linked := resolveRepo(o.Path); !linked {

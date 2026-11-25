@@ -16,6 +16,9 @@ on:
         required: false
         type: string
 
+# Release jobs must not restore or publish shared build caches.
+cache-mode: none
+
 permissions:
   contents: read
 
@@ -94,6 +97,7 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: source/go.mod
+          cache: false
       - name: Install the vulnerability scanner
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
       - name: Sign, notarize and package the tagged source
@@ -130,6 +134,7 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache: false
       # gofmt, go vet, go test -race, as in ordinary CI.
       - name: make test-go
         run: make test-go
@@ -162,6 +167,7 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache: false
       - name: smoke
         run: ./packaging/test/e2e_smoke.sh
       - name: sign identity unit tests

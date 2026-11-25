@@ -29,14 +29,12 @@ var gitEnv = []string{
 	"LC_ALL=C",
 }
 
-// gitArgs prefixes every call: -C runs in dir; fsmonitor off so a scan never
-// starts a watcher daemon in someone's repository.
-func gitArgs(dir string, args ...string) []string {
-	return append([]string{"-C", dir, "-c", "core.fsmonitor=false"}, args...)
-}
-
 func gitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "git", gitArgs(dir, args...)...)
+	// A discovered folder selects only the working directory. Do not run
+	// repository-configured hooks or filesystem watchers during discovery.
+	args = append([]string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull}, args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), gitEnv...)
 	return cmd
 }

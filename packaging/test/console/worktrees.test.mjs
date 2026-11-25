@@ -25,6 +25,11 @@ const { worktreeLaneCounts, worktreeLane, worktreeLanesHTML, worktreeGroups, wor
   worktreeMatches, niceBytesCeil, removableEverywhere, reclaimTilesHTML, reclaimChartHTML, cleanupHistoryHTML, cleanupKind, cleanupEntryTitle,
   localDayKey, fmtDayKey, fmtElapsed, removalToastModel, removalToastHTML, reclaimDayText } = ctx;
 
+function cssRule(css, selector) {
+  const literal = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return css.match(new RegExp(String.raw`^\s*${literal}\s*\{([^}]*)\}`, 'm'))?.[1] ?? '';
+}
+
 const REPO = '/Users/x/code/app';
 test('row selection is accessible, reflects marks, and explains blocked rows', () => {
   const repo = { path: REPO };
@@ -67,7 +72,7 @@ test('selection summary preserves hidden marks and labels partial and unknown si
 
 test('long removal confirmations scroll their message while keeping title and action buttons visible', () => {
   const css = readFileSync(path.join(webDist, 'style.css'), 'utf8');
-  const rule = selector => (css.match(new RegExp('(?:^|\\n)' + selector.replace(/[.[\]():]/g, '\\$&') + '\\s*\\{([^}]*)\\}')) || [])[1] || '';
+  const rule = selector => cssRule(css, selector);
   assert.match(rule('.confirm-card'), /display: flex/);
   assert.match(rule('.confirm-card'), /flex-direction: column/);
   assert.match(rule('.confirm-card'), /max-height: calc\(100vh - 32px\)/);
@@ -262,7 +267,7 @@ test('inspection offers checked deletion, reviewed Trash, or a concrete resoluti
 
 test('styles: the Remove looks use existing color tokens; every .btn greys out when disabled; the legend is muted', () => {
   const css = readFileSync(path.join(webDist, 'style.css'), 'utf8');
-  const rule = sel => (css.match(new RegExp('(?:^|\\n)' + sel.replace(/[.[\]():]/g, '\\$&') + '\\s*\\{([^}]*)\\}')) || [])[1] || '';
+  const rule = selector => cssRule(css, selector);
   const solid = rule('.btn-danger-solid');
   assert.ok(solid.includes('background: var(--bad)') && solid.includes('border-color: var(--bad)') && /color: var\(--bg-0\)/.test(solid), solid);
   const outline = rule('.btn-warn-outline');
@@ -521,7 +526,7 @@ test('removals: step while running with Remove disabled; refusal and failure sta
 
 test('state styles: each state has its own stripe and chip color; keep is not red', () => {
   const css = readFileSync(path.join(webDist, 'style.css'), 'utf8');
-  const rule = sel => (css.match(new RegExp(sel.replace(/\./g, '\\.') + '\\s*\\{([^}]*)\\}')) || [])[1] || '';
+  const rule = selector => cssRule(css, selector);
   const stripes = ['remove', 'review', 'keep', 'prune'].map(st => rule(`.wt-row.wt-${st}`).match(/var\(--[a-z0-9-]+\)/)?.[0]);
   assert.equal(new Set(stripes).size, 4, `stripes ${stripes}`);
   const chips = ['remove', 'review', 'keep'].map(st => rule(`.wt-${st} .wt-state`).match(/color: (var\(--[a-z0-9-]+\))/)?.[1]);

@@ -548,7 +548,7 @@ const squashTimeout = 90 * time.Second
 // the default branch.
 func defaultPatchIDs(ctx context.Context, dir, def string) (map[string]bool, error) {
 	ids, err := patchIDs(ctx, dir, squashTimeout,
-		"log", "-p", "-U0", "--no-color", "--no-ext-diff", "--no-merges", "-n", strconv.Itoa(squashDepth), def)
+		"log", "-p", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-merges", "-n", strconv.Itoa(squashDepth), def)
 	if err != nil {
 		return nil, err
 	}
@@ -563,7 +563,7 @@ func defaultPatchIDs(ctx context.Context, dir, def string) (map[string]bool, err
 // merge-base with the default branch: the shape of a squash-merge commit.
 // Empty when the branch changes nothing.
 func branchPatchID(ctx context.Context, dir, mergeBase string) (string, error) {
-	ids, err := patchIDs(ctx, dir, gitTimeout, "diff", "-U0", "--no-color", "--no-ext-diff", mergeBase, "HEAD")
+	ids, err := patchIDs(ctx, dir, gitTimeout, "diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", mergeBase, "HEAD")
 	if err != nil || len(ids) == 0 {
 		return "", err
 	}

@@ -123,7 +123,7 @@ func (h *Hunter) remove(ctx context.Context, path string, p removalProgress, rev
 	if row.Submodules > 0 {
 		args = append(args, "--force")
 	}
-	if _, err := gitWithin(ctx, removeTimeout, rs.ref.Main, append(args, l.Path)...); err != nil {
+	if _, err := gitWithin(ctx, removeTimeout, rs.ref.Main, append(args, "--", l.Path)...); err != nil {
 		if _, statErr := os.Stat(l.Path); statErr == nil {
 			return row, fmt.Errorf("%w (the worktree is still on disk and registered with git)", err)
 		}

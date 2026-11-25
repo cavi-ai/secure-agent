@@ -11,11 +11,12 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -744,10 +745,34 @@ type jsonlLog struct {
 	dir string
 }
 
+// openEnvelopeLog confines file access to the configured storage root and
+// admits only regular logs. Nonblocking open keeps a replaced file from
+// stalling the collector before its type can be checked.
+func openEnvelopeLog(root *os.Root, name string, flags int) (*os.File, error) {
+	f, err := root.OpenFile(name, flags|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("envelope log must be a regular file")
+	}
+	return f, nil
+}
+
 // Append writes the envelope as one JSON line to the node's file.
 func (l *jsonlLog) Append(env Envelope, receivedAt string) error {
-	path := filepath.Join(l.dir, sanitize(env.NodeID)+".jsonl")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	root, err := os.OpenRoot(l.dir)
+	if err != nil {
+		return fmt.Errorf("open log directory: %w", err)
+	}
+	defer root.Close()
+	f, err := openEnvelopeLog(root, sanitize(env.NodeID)+".jsonl", os.O_CREATE|os.O_WRONLY|os.O_APPEND)
 	if err != nil {
 		return fmt.Errorf("open append: %w", err)
 	}
@@ -762,7 +787,12 @@ func (l *jsonlLog) Append(env Envelope, receivedAt string) error {
 
 // Replay feeds every stored envelope to fn in chronological order.
 func (l *jsonlLog) Replay(fn func(env Envelope, receivedAt string)) {
-	entries, err := os.ReadDir(l.dir)
+	root, err := os.OpenRoot(l.dir)
+	if err != nil {
+		return
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
 		return
 	}
@@ -770,7 +800,7 @@ func (l *jsonlLog) Replay(fn func(env Envelope, receivedAt string)) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
 		}
-		f, err := os.Open(filepath.Join(l.dir, e.Name()))
+		f, err := openEnvelopeLog(root, e.Name(), os.O_RDONLY)
 		if err != nil {
 			continue
 		}
@@ -788,8 +818,12 @@ func (l *jsonlLog) Replay(fn func(env Envelope, receivedAt string)) {
 
 // Query replays one node's envelopes from disk, newest first.
 func (l *jsonlLog) Query(nodeID string, kinds map[string]bool, limit int) []envelopeFile {
-	path := filepath.Join(l.dir, sanitize(nodeID)+".jsonl")
-	f, err := os.Open(path)
+	root, err := os.OpenRoot(l.dir)
+	if err != nil {
+		return nil
+	}
+	defer root.Close()
+	f, err := openEnvelopeLog(root, sanitize(nodeID)+".jsonl", os.O_RDONLY)
 	if err != nil {
 		return nil
 	}
