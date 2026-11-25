@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"cmp"
 	"slices"
 	"time"
 
@@ -26,7 +27,7 @@ type Lineage struct {
 const lineageRetention = 2 * time.Minute
 
 // lineageCap bounds the lineage records; at the cap, exited records are
-// dropped oldest first, then live ones.
+// dropped first, then ones the process table does not list, then listed ones.
 const lineageCap = 8192
 
 // lineageRecord is the agent family a process joined when its family member
@@ -175,38 +176,38 @@ func (t *Tagger) familyOfLocked(pid int32, start, at time.Time) lineageRecord {
 	return lineageRecord{}
 }
 
-// makeRoomLocked keeps the records under lineageCap: expired records go
-// first, then exited ones oldest first, then live ones oldest first.
+// makeRoomLocked keeps the records under lineageCap. It drops expired records,
+// then exited ones, then ones the table does not list as that process, then
+// listed ones; within each, oldest record first, then lowest pid.
 func (t *Tagger) makeRoomLocked() {
 	if len(t.lineage) < lineageCap {
 		return
 	}
-	type aged struct {
-		pid int32
-		at  time.Time
+	type ranked struct {
+		class int
+		at    time.Time
+		pid   int32
 	}
-	var exited, live []aged
+	var order []ranked
 	for pid, r := range t.lineage {
 		switch {
 		case t.expiredLocked(r):
 			delete(t.lineage, pid)
 		case !r.gone.IsZero():
-			exited = append(exited, aged{pid, r.at})
+			order = append(order, ranked{0, r.at, pid})
+		case !r.of(t.table[pid].StartTime):
+			order = append(order, ranked{1, r.at, pid})
 		default:
-			live = append(live, aged{pid, r.at})
+			order = append(order, ranked{2, r.at, pid})
 		}
 	}
+	slices.SortFunc(order, func(a, b ranked) int {
+		return cmp.Or(cmp.Compare(a.class, b.class), a.at.Compare(b.at), cmp.Compare(a.pid, b.pid))
+	})
 	// Dropping an eighth at once keeps the scan to one per lineageCap/8 records.
 	excess := len(t.lineage) - lineageCap*7/8
-	byAge := func(a, b aged) int { return a.at.Compare(b.at) }
-	slices.SortFunc(exited, byAge)
-	slices.SortFunc(live, byAge)
-	for _, a := range append(exited, live...) {
-		if excess <= 0 {
-			return
-		}
-		delete(t.lineage, a.pid)
-		excess--
+	for _, r := range order[:min(max(excess, 0), len(order))] {
+		delete(t.lineage, r.pid)
 	}
 }
 

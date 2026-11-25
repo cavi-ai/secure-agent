@@ -139,26 +139,81 @@ func TestLineageOfAnExitedParentExpires(t *testing.T) {
 	}
 }
 
-// At the cap, exited records go first: the oldest record, a live job's,
-// outlasts thousands of newer records of exited processes.
-func TestLineageStaysWithinItsCap(t *testing.T) {
+// capProcs is lineageProcs with two more listed processes, 950 and 960,
+// whose fork records are read after the cap was reached.
+func capProcs() fakeProcs {
+	procs := lineageProcs()
+	procs[950] = ProcInfo{PID: 950, PPID: 1, Exe: "/bin/sleep", StartTime: lineageAt(20)}
+	procs[960] = ProcInfo{PID: 960, PPID: 1, Exe: "/bin/sleep", StartTime: lineageAt(20)}
+	return procs
+}
+
+// noteJob notes the agent's fork record of the listed job, the oldest record.
+func noteJob(tg *Tagger) {
+	tg.NoteLineage(Lineage{ParentPID: 500, ParentStart: lineageStart, ChildPID: 900, ChildStart: jobStart, At: lineageAt(4)})
+}
+
+// noteFromAgent notes the agent's fork record of child, started at at, and
+// checks the record count stays within the cap.
+func noteFromAgent(t *testing.T, tg *Tagger, child int32, at time.Time) {
+	t.Helper()
+	tg.NoteLineage(Lineage{ParentPID: 500, ParentStart: lineageStart, ChildPID: child, ChildStart: at, At: at})
+	if n := len(tg.lineage); n > lineageCap {
+		t.Fatalf("%d lineage records after noting %d, cap %d", n, child, lineageCap)
+	}
+}
+
+// assertParentCarries notes parent's fork record of the listed child and
+// checks whether the child joined the agent's family through it.
+func assertParentCarries(t *testing.T, tg *Tagger, parent int32, parentStart time.Time, child int32, want bool) {
+	t.Helper()
+	tg.NoteLineage(Lineage{ParentPID: parent, ParentStart: parentStart, ChildPID: child, ChildStart: lineageAt(20), At: lineageAt(21)})
+	if info, ok := tg.Tag(child); ok != want || (ok && info.Name != "claude") {
+		t.Fatalf("Tag(%d) through parent %d = %+v, %v; want tagged %v as claude", child, parent, info, ok, want)
+	}
+	if agent, known := tg.LiveAgentFamily(child); agent != want || !known {
+		t.Fatalf("LiveAgentFamily(%d) through parent %d = (%v, %v), want (%v, true)", child, parent, agent, known, want)
+	}
+}
+
+// At the cap, records the process table does not list go before the record
+// of a listed process, however old it is.
+func TestLineageCapDropsUnlistedBeforeListed(t *testing.T) {
 	tg := New(lineageConfig(), lineageProcs())
 	tg.Refresh()
-	note := func(child int32) {
-		tg.NoteLineage(Lineage{ParentPID: 500, ParentStart: lineageStart, ChildPID: child, ChildStart: jobStart, At: lineageAt(4)})
-		if n := len(tg.lineage); n > lineageCap {
-			t.Fatalf("%d lineage records, cap %d", n, lineageCap)
-		}
-	}
-	note(900)
-	for pid := int32(10000); pid < 10000+lineageCap; pid++ {
-		note(pid)
-	}
-	tg.Refresh()
-	for pid := int32(30000); pid < 30200; pid++ {
-		note(pid)
+	noteJob(tg)
+	for pid := int32(10000); pid < 10000+lineageCap+200; pid++ {
+		noteFromAgent(t, tg, pid, lineageAt(5))
 	}
 	assertJobIsClaude(t, tg)
+}
+
+// At the cap, records a refresh marked exited go before unlisted ones.
+func TestLineageCapDropsExitedBeforeUnlisted(t *testing.T) {
+	tg := New(lineageConfig(), capProcs())
+	tg.Refresh()
+	noteJob(tg)
+	for i := range int32(4000) {
+		noteFromAgent(t, tg, 10000+i, lineageAt(5).Add(time.Duration(i)))
+	}
+	tg.Refresh() // the first batch is not listed: its records are marked exited
+	for i := range int32(5000) {
+		noteFromAgent(t, tg, 20000+i, lineageAt(6).Add(time.Duration(i)))
+	}
+	assertJobIsClaude(t, tg)
+	assertParentCarries(t, tg, 24999, lineageAt(6).Add(4999), 950, true)
+	assertParentCarries(t, tg, 10000, lineageAt(5), 960, false)
+}
+
+// Among unlisted records, the oldest go first.
+func TestLineageCapDropsOldestFirst(t *testing.T) {
+	tg := New(lineageConfig(), capProcs())
+	tg.Refresh()
+	for i := range int32(lineageCap + 1) {
+		noteFromAgent(t, tg, 10000+i, lineageAt(5).Add(time.Duration(i)*time.Microsecond))
+	}
+	assertParentCarries(t, tg, 10000+lineageCap, lineageAt(5).Add(lineageCap*time.Microsecond), 950, true)
+	assertParentCarries(t, tg, 10000, lineageAt(5), 960, false)
 }
 
 // A tag from a record is rooted at the process itself once another process
