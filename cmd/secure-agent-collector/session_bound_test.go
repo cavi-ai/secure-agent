@@ -140,6 +140,39 @@ func TestSessionBoundEvictsOldestLiveSessions(t *testing.T) {
 	assertNodeSessions(t, s, "n1", append(idRange(0, 1), idRange(extra+2, sessionBound+extra+1)...))
 }
 
+func TestSessionBoundEvictsByInstant(t *testing.T) {
+	const oldest = "2026-01-01T00:00:00Z"
+	const newer = "2026-01-01T00:00:00.1Z"
+	t.Run("sessions", func(t *testing.T) {
+		rt := nodeRuntime{sessions: make(map[string]sessionPayload, sessionBound+1)}
+		rt.sessions["oldest"] = sessionPayload{LastSeenAt: oldest}
+		rt.sessions["newer"] = sessionPayload{LastSeenAt: newer}
+		for i := 1; i < sessionBound; i++ {
+			rt.sessions[sessionID(i)] = sessionPayload{LastSeenAt: sessionStamp(i)}
+		}
+		rt.boundSessions(sessionID(sessionBound - 1))
+		_, keptOldest := rt.sessions["oldest"]
+		_, keptNewer := rt.sessions["newer"]
+		if keptOldest || !keptNewer {
+			t.Fatalf("retained oldest=%t, newer=%t; want oldest evicted and newer retained", keptOldest, keptNewer)
+		}
+	})
+	t.Run("traces", func(t *testing.T) {
+		rt := nodeRuntime{lastTrace: make(map[string]tracePayload, sessionBound+1)}
+		rt.lastTrace["oldest"] = tracePayload{TS: oldest}
+		rt.lastTrace["newer"] = tracePayload{TS: newer}
+		for i := 1; i < sessionBound; i++ {
+			rt.lastTrace[sessionID(i)] = tracePayload{TS: sessionStamp(i)}
+		}
+		rt.boundTraces()
+		_, keptOldest := rt.lastTrace["oldest"]
+		_, keptNewer := rt.lastTrace["newer"]
+		if keptOldest || !keptNewer {
+			t.Fatalf("retained oldest=%t, newer=%t; want oldest evicted and newer retained", keptOldest, keptNewer)
+		}
+	})
+}
+
 func TestSessionBoundCheckpointHoldsOnlyKeptSessionsAndTraces(t *testing.T) {
 	s := openTestStore(t, t.TempDir())
 	const extra = 20

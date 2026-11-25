@@ -428,8 +428,7 @@ func (rt *nodeRuntime) boundTraces() {
 	evictFirst(rt.lastTrace, over, orphan, compareTraceEviction, func(id string) { delete(rt.lastTrace, id) })
 }
 
-// compareSessionEviction orders ended before live, then older LastSeenAt
-// first: the reverse of the Sessions() order.
+// compareSessionEviction orders ended before live, then older LastSeenAt first.
 func compareSessionEviction(a, b sessionPayload) int {
 	if aEnded, bEnded := a.Status == "ended", b.Status == "ended"; aEnded != bEnded {
 		if aEnded {
@@ -437,11 +436,19 @@ func compareSessionEviction(a, b sessionPayload) int {
 		}
 		return 1
 	}
-	return strings.Compare(a.LastSeenAt, b.LastSeenAt)
+	return compareEvictionTimestamps(a.LastSeenAt, b.LastSeenAt)
 }
 
 func compareTraceEviction(a, b tracePayload) int {
-	return strings.Compare(a.TS, b.TS)
+	return compareEvictionTimestamps(a.TS, b.TS)
+}
+
+func compareEvictionTimestamps(a, b string) int {
+	// Missing or malformed timestamps rank as the zero time. The caller
+	// breaks ties by ID.
+	at, _ := time.Parse(time.RFC3339Nano, a)
+	bt, _ := time.Parse(time.RFC3339Nano, b)
+	return at.Compare(bt)
 }
 
 // evictFirst calls evict for the n candidate ids of m that order first, ties
