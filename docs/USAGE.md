@@ -223,6 +223,7 @@ Install the CLI from Setup's Optional capabilities. A source build places it at 
 | Plant decoy credentials | `secure-agent canary plant <file>` |
 | Show this node's fleet identity | `secure-agent fleet` |
 | Inspect the macOS headless service | `secure-agent service status` |
+| Stop a daemon the app does not run (service or foreground) | `secure-agent stop` |
 
 `secure-agent kill <PID>` terminates an agent process tree and can lose unsaved work. Inspect the family first. The [protection guide](PROTECTION.md) covers `fingerprint`, firewall modes and guard revocation; [Fleet](FLEET.md) covers enrollment; [Getting started](GETTING_STARTED.md) covers telemetry repair and service installation.
 

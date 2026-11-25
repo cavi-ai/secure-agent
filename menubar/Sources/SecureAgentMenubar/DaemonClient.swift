@@ -352,6 +352,12 @@ public final class DaemonClient: Sendable {
         _ = try await request(method: "POST", path: path, body: body)
     }
 
+    /// Records that the owner is about to stop the daemon: a SIGTERM inside
+    /// the daemon's intent window ends the run as an owner stop.
+    public func postStopIntent() async throws {
+        _ = try await request(method: "POST", path: "/daemon/stop-intent")
+    }
+
     public func deleteGuardRule(agent: String, ruleID: String) async throws {
         _ = try await request(method: "DELETE",
                               path: "/guard/rules?agent=\(Self.urlQueryEscape(agent))&rule_id=\(Self.urlQueryEscape(ruleID))")

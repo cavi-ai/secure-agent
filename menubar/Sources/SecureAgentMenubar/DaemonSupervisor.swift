@@ -5,7 +5,8 @@ import ModelFilterCore
 /// Owns the lifetime of the bundled `secure-agentd` as a child process of the
 /// menu bar app. The daemon runs only while the app runs:
 ///
-///   - Quitting the app calls `stop()`, which terminates the child.
+///   - Quitting the app calls `stop()`, which records the owner's stop intent
+///     with the daemon and then terminates the child.
 ///   - If the app is killed abruptly (SIGKILL, crash), the daemon is reparented
 ///     to launchd and notices it has been orphaned, then exits on its own.
 ///
@@ -14,7 +15,11 @@ import ModelFilterCore
 /// available even if macOS hides its menu bar status item.
 @MainActor
 public final class DaemonSupervisor: ObservableObject {
-    public static let shared = DaemonSupervisor()
+    public static let shared = DaemonSupervisor(stopIntent: { try await DaemonClient().postStopIntent() })
+
+    /// Longest an owner stop waits for the stop intent before signalling; a
+    /// failed or unanswered post never holds SIGTERM back past this bound.
+    static let stopIntentBound: TimeInterval = 1.5
 
     private var process: Process?
     private var stopping = false
@@ -35,13 +40,16 @@ public final class DaemonSupervisor: ObservableObject {
     private let maxRetryDelay: TimeInterval
     private let terminationTimeout: TimeInterval
     private let uptime: @Sendable () -> TimeInterval
+    private let stopIntent: (@Sendable () async throws -> Void)?
 
     init(pathProvider: @escaping () -> String? = { bundledDaemonPath(in: Bundle.main.bundleURL) },
          logDir: String = NSHomeDirectory() + "/Library/Logs/secure-agent",
          maxRestarts: Int = 5, stableRunDuration: TimeInterval = 60,
          retryDelay: TimeInterval = 1, maxRetryDelay: TimeInterval = 16,
          terminationTimeout: TimeInterval = 10,
-         uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+         uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+         stopIntent: (@Sendable () async throws -> Void)? = nil) {
+        self.stopIntent = stopIntent
         self.pathProvider = pathProvider
         self.logDir = logDir
         self.maxRestarts = maxRestarts
@@ -75,6 +83,7 @@ public final class DaemonSupervisor: ObservableObject {
         stopping = false
         if let p = process {
             restartRequested = true
+            postStopIntent(before: p)
             terminate(p)
         } else if let path = daemonPath {
             spawn(path)
@@ -182,16 +191,34 @@ public final class DaemonSupervisor: ObservableObject {
     }
 
     /// Terminate the daemon. Safe to call from `applicationWillTerminate`.
-    /// SIGTERM first, with a bounded asynchronous force-stop while the app is
-    /// alive. Parent-exit detection in the daemon backs up the app quit path.
+    /// The stop intent first (at most `stopIntentBound`), then SIGTERM, with a
+    /// bounded asynchronous force-stop while the app is alive. Parent-exit
+    /// detection in the daemon backs up the app quit path.
     public func stop() {
         stopping = true
         restartRequested = false
         retryTask?.cancel()
         retryTask = nil
         guard let p = process else { return }
+        postStopIntent(before: p)
         terminate(p)
         NSLog("[secure-agent] daemon stop requested")
+    }
+
+    /// Blocks the caller until the daemon answers the stop intent or the bound
+    /// expires, so the SIGTERM that follows is recorded as an owner stop.
+    private func postStopIntent(before p: Process) {
+        guard let stopIntent, p.isRunning else { return }
+        let answered = DispatchSemaphore(value: 0)
+        Task.detached {
+            do { try await stopIntent() } catch {
+                NSLog("[secure-agent] stop intent not recorded: %@", error.localizedDescription)
+            }
+            answered.signal()
+        }
+        if answered.wait(timeout: .now() + Self.stopIntentBound) == .timedOut {
+            NSLog("[secure-agent] stop intent unanswered after %.1f s; stopping the daemon", Self.stopIntentBound)
+        }
     }
 
     /// Wait for this exact child to exit before replacing it. A child that
