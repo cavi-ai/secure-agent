@@ -186,6 +186,9 @@ type Store struct {
 	// bump it after the write commits, so a reader that loads it before
 	// querying never pairs a newer value with older rows.
 	flagGen atomic.Uint64
+	// counters belong to the database connections: the write generation
+	// covers every table, flagGen only flags and advisor verdicts.
+	counters *dbCounters
 }
 
 // FlagGeneration changes after every write to flags or advisor verdicts, so
@@ -316,7 +319,8 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 	// immediately, bypassing busy_timeout when another connection writes.
 	dsn += "&_txlock=immediate"
 
-	db, err := sql.Open("sqlite", dsn)
+	counters := &dbCounters{}
+	db, err := openCounted(dsn, counters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite: %w", err)
 	}
@@ -364,6 +368,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 
 	s := &Store{
 		db:         db,
+		counters:   counters,
 		flagMirror: mirror,
 		openID:     openID,
 	}
