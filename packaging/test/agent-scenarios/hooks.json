@@ -74,7 +74,7 @@
       "rule": "env-files",
       "entry": ["secret_guard.py"],
       "modes": {"env-files": "deny"},
-      "payload": {"tool_name": "Bash", "tool_input": {"command": "cat {project}/.env.local"}},
+      "payload": {"tool_name": "Bash", "tool_input": {"command": "cat \"$HOME/project/.env.local\""}},
       "cause": [".env.local"]
     },
     {
@@ -90,7 +90,7 @@
       "rule": "shell-rc",
       "entry": ["secret_guard.py"],
       "modes": {"shell-rc": "deny"},
-      "payload": {"tool_name": "Bash", "tool_input": {"command": "cat {home}/.zshrc"}},
+      "payload": {"tool_name": "Bash", "tool_input": {"command": "cat \"$HOME/.zshrc\""}},
       "cause": [".zshrc"]
     },
     {

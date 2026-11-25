@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
-	"sort"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
@@ -28,10 +29,10 @@ type toolScore struct {
 	Lost   []string `json:"lost"`
 }
 
-// Scores every tool replyScope.tools exposes: declared properties match the
-// documented arguments, Agent.readTool accepts them and rejects an invalid
-// identifying argument. A tool without a scenario, or a scenario without a
-// tool, fails the test. SECURE_AGENT_TOOL_SCORES receives the scores as JSON.
+// Scores every tool replyScope.tools exposes. Its advertised schema must match
+// the documented contract and accept the valid example. Agent.readTool is
+// scored separately on valid and invalid examples. Tools and scenarios must
+// match one to one. SECURE_AGENT_TOOL_SCORES receives the scores as JSON.
 func TestAgentToolScenarios(t *testing.T) {
 	path := os.Getenv("SECURE_AGENT_TOOL_SCENARIOS")
 	if path == "" {
@@ -66,6 +67,11 @@ func TestAgentToolScenarios(t *testing.T) {
 	for _, s := range doc.Tools {
 		scenarios[s.Name] = s
 	}
+	idsByTool := map[string][]string{
+		"inspect_skill":            skillOrder,
+		"inspect_finding":          {doc.Finding.ID},
+		"inspect_session_activity": {doc.Finding.SessionID},
+	}
 	var scores []toolScore
 	exposed := map[string]bool{}
 	for _, tool := range scope.tools() {
@@ -77,17 +83,11 @@ func TestAgentToolScenarios(t *testing.T) {
 			continue
 		}
 		score := toolScore{Name: name, Max: 3}
-		props, _ := tool.Function.Parameters["properties"].(map[string]any)
-		declared := make([]string, 0, len(props))
-		for key := range props {
-			declared = append(declared, key)
-		}
-		sort.Strings(declared)
-		documented := slices.Sorted(slices.Values(s.Arguments))
-		if slices.Equal(declared, documented) {
+		if err := checkToolScenarioSchema(s, tool.Function.Parameters, idsByTool[name]); err == nil {
 			score.Points++
 		} else {
-			score.Lost = append(score.Lost, fmt.Sprintf("schema declares %v, documented %v", declared, documented))
+			score.Lost = append(score.Lost, err.Error())
+			t.Errorf("tool %s: %v", name, err)
 		}
 		if _, err := a.readTool(context.Background(), scope, name, string(s.Valid)); err == nil {
 			score.Points++
@@ -116,4 +116,43 @@ func TestAgentToolScenarios(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func checkToolScenarioSchema(s toolScenario, parameters map[string]any, ids []string) error {
+	var valid map[string]*string
+	if err := json.Unmarshal(s.Valid, &valid); err != nil || valid == nil {
+		return fmt.Errorf("valid arguments must be an object of strings: %s", s.Valid)
+	}
+	properties := map[string]any{}
+	want := map[string]any{"type": "object", "properties": properties, "additionalProperties": false}
+	for _, name := range s.Arguments {
+		value, present := valid[name]
+		if present && value == nil {
+			return fmt.Errorf("valid argument %q must be a string", name)
+		}
+		switch name {
+		case "id":
+			properties[name] = map[string]any{"type": "string", "enum": ids}
+			want["required"] = []string{name}
+			if !present || !slices.Contains(ids, *value) {
+				return fmt.Errorf("valid arguments must contain an id from %v: %s", ids, s.Valid)
+			}
+		case "query":
+			const maxLength = 128
+			properties[name] = map[string]any{"type": "string", "maxLength": maxLength}
+			if present && utf8.RuneCountInString(*value) > maxLength {
+				return fmt.Errorf("valid query exceeds %d characters", maxLength)
+			}
+		default:
+			return fmt.Errorf("undocumented schema constraints for argument %q", name)
+		}
+		delete(valid, name)
+	}
+	if len(valid) != 0 {
+		return fmt.Errorf("valid arguments contain extra properties: %s", s.Valid)
+	}
+	if !reflect.DeepEqual(parameters, want) {
+		return fmt.Errorf("advertised schema is %v, want %v", parameters, want)
+	}
+	return nil
 }

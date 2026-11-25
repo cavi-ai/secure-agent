@@ -58,10 +58,20 @@ def expand(value, places: dict):
     return value
 
 
-def agent_text(reply: dict) -> str:
-    """The reply text a harness hands the agent."""
-    return str((reply.get("hookSpecificOutput") or {}).get("permissionDecisionReason")
-               or reply.get("agent_message") or reply.get("reason") or "")
+def hook_reply(harness: str, reply: dict) -> tuple:
+    """Read the decision and reason from the selected harness's reply fields."""
+    if harness == "cursor":
+        return reply.get("permission"), reply.get("agent_message")
+    if harness == "antigravity":
+        return reply.get("decision"), reply.get("reason")
+    native = reply.get("hookSpecificOutput")
+    if not isinstance(native, dict):
+        native = {}
+    if harness in ("claude", "codex"):
+        return native.get("permissionDecision"), native.get("permissionDecisionReason")
+    if harness in ("openclaw", "hermes", "opencode"):
+        return reply.get("permission"), native.get("permissionDecisionReason")
+    return None, None
 
 
 def run_hook(scenario: dict, envelope: dict) -> tuple[dict, str, str]:
@@ -107,14 +117,18 @@ def score_hooks(path: Path, rule_ids: list) -> tuple[list, list]:
         if rule not in rule_ids:
             failures.append(f"scenario {name} names unknown rule {rule}")
             continue
+        entry, *args = scenario["entry"]
+        harness = args[0] if entry == "harness_guard.py" and args else scenario.get("harness", "claude")
         reply, audited, stderr = run_hook(scenario, doc["envelope"])
-        decision = (reply.get("hookSpecificOutput") or {}).get("permissionDecision") or reply.get("permission")
+        decision, text = hook_reply(harness, reply)
         if decision != "deny" or audited != "guard-deny:" + rule:
             failures.append(f"scenario {name} did not trigger {rule}: decision={decision!r} "
                             f"audit={audited!r} stderr={stderr.strip()[:200]!r}")
             continue
         covered.add(rule)
-        text = agent_text(reply)
+        if not isinstance(text, str) or not text.strip():
+            failures.append(f"scenario {name} has a missing native reason for {harness}")
+            continue
         low = text.lower()
         lost = []
         if rule.lower() not in low:
@@ -145,17 +159,8 @@ def score_tools(path: Path) -> tuple[list, list]:
         return [{**s, "lost": s.get("lost") or []} for s in json.loads(out.read_text()) or []], []
 
 
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Score hook replies and local agent tool schemas.")
-    parser.add_argument("--hooks", type=Path, default=SCENARIO_DIR / "hooks.json")
-    parser.add_argument("--tools", type=Path, default=SCENARIO_DIR / "tools.json")
-    parser.add_argument("--bar", type=int, default=SCORE_BAR)
-    args = parser.parse_args(argv)
-
-    rule_ids = [r["id"] for r in json.loads((HOOKS_DIR / "guard-rules.json").read_text())["rules"]]
-    hooks, hook_failures = score_hooks(args.hooks, rule_ids)
-    tools, tool_failures = score_tools(args.tools)
-
+def report_scores(hooks: list, tools: list, failures: list, bar: int) -> int:
+    """Print the score report and return the gate's exit code."""
     total = maximum = 0
     for title, results in (("hook replies", hooks), ("local agent tools", tools)):
         points, possible = sum(r["points"] for r in results), sum(r["max"] for r in results)
@@ -166,15 +171,27 @@ def main(argv=None) -> int:
             print(f"  {r['points']}/{r['max']} {label}" + (f" lost: {', '.join(r['lost'])}" if r["lost"] else ""))
             if r["lost"] and "reply" in r:
                 print(f"      reply: {r['reply']}")
-    print(f"total: {total}/{maximum} (bar {args.bar})")
+    print(f"total: {total}/{maximum} (bar {bar})")
 
-    failures = hook_failures + tool_failures
-    if total < args.bar:
-        failures.append(f"total {total} is below the bar {args.bar}")
+    if total < bar:
+        failures = [*failures, f"total {total} is below the bar {bar}"]
     for failure in failures:
         print(f"FAIL: {failure}")
     print("FAIL" if failures else "PASS")
     return 1 if failures else 0
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Score hook replies and local agent tool schemas.")
+    parser.add_argument("--hooks", type=Path, default=SCENARIO_DIR / "hooks.json")
+    parser.add_argument("--tools", type=Path, default=SCENARIO_DIR / "tools.json")
+    parser.add_argument("--bar", type=int, default=SCORE_BAR)
+    args = parser.parse_args(argv)
+
+    rule_ids = [r["id"] for r in json.loads((HOOKS_DIR / "guard-rules.json").read_text())["rules"]]
+    hooks, hook_failures = score_hooks(args.hooks, rule_ids)
+    tools, tool_failures = score_tools(args.tools)
+    return report_scores(hooks, tools, hook_failures + tool_failures, args.bar)
 
 
 if __name__ == "__main__":
