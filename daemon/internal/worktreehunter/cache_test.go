@@ -58,6 +58,115 @@ func TestSavedScanAndSizesAnswerAfterRestart(t *testing.T) {
 	}
 }
 
+func TestHideBeforeFirstReportUpdatesSavedScan(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	st := newMemStore()
+	st.activity = []model.WorkspaceActivity{{Workspace: f.main}}
+	first := New(st, home, Options{})
+	before := first.Report(t.Context(), false)
+	first.Wait()
+	if len(before.Repos) != 1 {
+		t.Fatalf("initial report has %d repositories, want 1", len(before.Repos))
+	}
+
+	h := New(st, home, Options{})
+	if !h.HideRepo(f.main) {
+		t.Fatal("hide did not find the saved repository")
+	}
+	after := New(st, home, Options{}).Report(t.Context(), false)
+	if !after.Cached || !after.GeneratedAt.Equal(before.GeneratedAt) || len(after.Repos) != 0 {
+		t.Fatalf("saved report after hide: cached=%v, generated=%v, repos=%+v", after.Cached, after.GeneratedAt, after.Repos)
+	}
+}
+
+func TestAddRepoInvalidatesSavedScanAcrossRestart(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	st := newMemStore()
+	h := New(st, home, Options{})
+	if before := h.Report(t.Context(), false); len(before.Repos) != 0 {
+		t.Fatalf("initial report has %d repositories, want 0", len(before.Repos))
+	}
+	h = New(st, home, Options{})
+	if _, err := h.AddRepo(f.main); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, hunter := range []*Hunter{New(st, home, Options{}), h} {
+		after := hunter.Report(t.Context(), false)
+		if len(after.Repos) != 1 || after.Repos[0].Path != f.main {
+			t.Fatalf("report after add: %+v", after.Repos)
+		}
+	}
+}
+
+type pausedScanStore struct {
+	*memStore
+	snapshot chan struct{}
+	resume   chan struct{}
+}
+
+func (s *pausedScanStore) WorktreeRepos() []model.WorktreeRepo {
+	repos := s.memStore.WorktreeRepos()
+	select {
+	case <-s.snapshot:
+	default:
+		close(s.snapshot)
+		<-s.resume
+	}
+	return repos
+}
+
+func TestCacheInvalidationWhileScanPublishes(t *testing.T) {
+	for _, action := range []string{"AddRepo", "SetOptions"} {
+		t.Run(action, func(t *testing.T) {
+			home := isolateGit(t)
+			f := newFixture(t)
+			st := &pausedScanStore{memStore: newMemStore(), snapshot: make(chan struct{}), resume: make(chan struct{})}
+			h := New(st, home, Options{})
+			scanned := make(chan struct{})
+			go func() {
+				defer close(scanned)
+				h.Report(t.Context(), false)
+			}()
+			<-st.snapshot
+
+			changed := make(chan error, 1)
+			go func() {
+				if action == "AddRepo" {
+					_, err := h.AddRepo(f.main)
+					changed <- err
+					return
+				}
+				h.SetOptions(Options{StaleDays: 30})
+				changed <- nil
+			}()
+			var err error
+			select {
+			case err = <-changed:
+				close(st.resume)
+			case <-time.After(5 * time.Second):
+				close(st.resume)
+				<-changed
+				<-scanned
+				t.Fatal("cache invalidation waited for the scan")
+			}
+			<-scanned
+			if err != nil {
+				t.Fatal(err)
+			}
+			after := h.Report(t.Context(), false)
+			if action == "AddRepo" && (len(after.Repos) != 1 || after.Repos[0].Path != f.main) {
+				t.Fatalf("report after add: %+v", after.Repos)
+			}
+			if action == "SetOptions" && after.StaleDays != 30 {
+				t.Fatalf("report stale days = %d, want 30", after.StaleDays)
+			}
+		})
+	}
+}
+
 // A saved scan whose rows lack a kind per reason is not served; the restarted
 // daemon scans again.
 func TestSavedScanWithoutReasonKindsIsRescanned(t *testing.T) {

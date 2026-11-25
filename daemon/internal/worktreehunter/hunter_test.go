@@ -208,6 +208,12 @@ func (m *memStore) PutScanCache(name string, body []byte, at time.Time) {
 	m.puts[name]++
 }
 
+func (m *memStore) DeleteScanCache(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.scan, name)
+}
+
 func (m *memStore) PutCleanup(e model.CleanupEntry) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

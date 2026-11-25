@@ -343,14 +343,15 @@ function removalToastModel(paths, removals, labels) {
       error: r.error || '', rowState: r.row_state || '', reasons: r.reasons || [],
     };
   });
-  let removed = 0, failed = 0, bytes = 0, progress = 0;
+  let removed = 0, failed = 0, unknown = 0, bytes = 0, progress = 0;
   for (const it of items) {
     if (it.state === 'removed') { removed++; bytes += it.bytes; progress += 1; }
     else if (it.state === 'failed') { failed++; progress += 1; }
+    else if (it.state === 'unknown') { unknown++; progress += 1; }
     else progress += REMOVAL_PHASE_DONE[it.phase] || 0;
   }
   const total = items.length;
-  return { items, total, removed, failed, running: total - removed - failed, bytes,
+  return { items, total, removed, failed, unknown, running: total - removed - failed - unknown, bytes,
     percent: total ? Math.round(progress / total * 100) : 0 };
 }
 
@@ -368,16 +369,22 @@ function removalToastHTML(m) {
   let title;
   if (!done) title = m.total === 1 ? `Removing ${first.label}` : `Removing ${m.total} worktrees`;
   else if (m.total === 1 && m.removed) title = `Removed ${first.label}`;
+  else if (m.total === 1 && m.unknown) title = `Removal outcome unknown for ${first.label}`;
   else if (m.total === 1) title = `Not removed: ${first.label}`;
   else title = `Removed ${m.removed} of ${m.total} worktrees`;
   // A single running removal's phase and size are its item line.
   const sub = done
-    ? [m.bytes ? `${fmtDisk(m.bytes)} reclaimed` : '', m.failed && m.total > 1 ? `${m.failed} not removed` : ''].filter(Boolean).join(' · ')
-    : [m.total === 1 ? '' : `${m.removed + m.failed} of ${m.total} done`, m.total > 1 && m.bytes ? `${fmtDisk(m.bytes)} reclaimed so far` : '',
+    ? [m.bytes ? `${fmtDisk(m.bytes)} reclaimed` : '', m.failed && m.total > 1 ? `${m.failed} not removed` : '',
+      m.unknown && m.total > 1 ? `${m.unknown} unknown` : ''].filter(Boolean).join(' · ')
+    : [m.total === 1 ? '' : `${m.removed + m.failed} of ${m.total} done`, m.unknown ? `${m.unknown} unknown` : '',
+      m.total > 1 && m.bytes ? `${fmtDisk(m.bytes)} reclaimed so far` : '',
       m.external ? 'as of the last read; Reload shows the outcome' : ''].filter(Boolean).join(' · ');
   const shown = m.items.filter(it => it.state !== 'removed').sort((a, b) => (a.state === 'running' ? 0 : 1) - (b.state === 'running' ? 0 : 1));
   const cap = 4;
   const itemHTML = it => {
+    if (it.state === 'unknown') {
+      return html`<li class="rt-item"><span class="rt-label">${it.label}</span><span class="rt-step">Reload to check the outcome.</span></li>`;
+    }
     if (it.state === 'failed') {
       const why = it.rowState ? `now ${it.rowState}${it.reasons.length ? ' — ' + it.reasons.join('; ') : ''}` : it.error;
       return html`<li class="rt-item rt-failed"><span class="rt-label">${it.label}</span><span class="rt-step">${why || 'failed'}</span></li>`;
@@ -390,7 +397,7 @@ function removalToastHTML(m) {
       </li>`;
   };
   const more = shown.length > cap ? html`<li class="rt-more">and ${shown.length - cap} more</li>` : '';
-  const state = done ? (m.failed ? (m.removed ? 'partial' : 'failed') : 'done') : 'running';
+  const state = done ? (m.unknown ? 'partial' : m.failed ? (m.removed ? 'partial' : 'failed') : 'done') : 'running';
   return html`<div class="rt-head">
       <p class="rt-title" role="status">${title}</p>
       <button type="button" class="btn btn-icon rt-close" data-action="removal-toast-close" title="${done ? 'Close' : 'Hide — the rows keep the progress'}" aria-label="Close"><svg class="icon"><use href="#i-close"/></svg></button>
@@ -505,6 +512,8 @@ function worktreeSelectionBlock(w, repo, removal, ask) {
   if (repo.error) return `could not inspect repository: ${repo.error}`;
   if (w.orphan || !['remove', 'review', 'keep'].includes(w.state)) return 'this row cannot be marked for removal';
   if (removal && removal.state === 'running') return 'removal is already running';
+  if (removal?.state === 'unknown' && !removal.superseded) return 'Reload to check the removal outcome';
+  if (w.verdict_needs_rescan) return 'Rescan to refresh the worktree inspection';
   if (ask && ask.status === 'running') return 'waiting for the owning agent to finish';
   const block = worktreeTrashBlock(w);
   if (block) return block;
@@ -640,7 +649,10 @@ function worktreeAskHTML(ask) {
 // deleted once measured and a mark per phase passed), or why it did not
 // remove the worktree.
 function worktreeRemovalHTML(rm) {
-  if (!rm || rm.state === 'removed') return '';
+  if (!rm || rm.superseded || rm.state === 'removed') return '';
+  if (rm.state === 'unknown') {
+    return '<p class="wt-removal" role="status"><b>Removal outcome unknown.</b> Reload to check the outcome.</p>';
+  }
   if (rm.state === 'running') {
     const at = Object.keys(REMOVAL_PHASE_DONE).indexOf(rm.phase);
     const marks = Object.keys(REMOVAL_PHASE_DONE).map((p, i) => raw(html`<i class="${i <= at ? 'on' : ''}"></i>`));
@@ -671,7 +683,7 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable, selectionState) {
   } else if (w.state === 'remove') {
     action = removal && removal.state === 'running'
       ? '<button type="button" class="btn btn-danger btn-sm" disabled>Removing…</button>'
-      : block ? '' : html`<button type="button" class="btn btn-danger-solid btn-sm" data-action="worktree-remove" data-path="${w.path}" data-branch="${branch}" title="Permanently delete this folder after a fresh check">${removal && removal.state === 'failed' ? 'Try again' : 'Delete permanently'}</button>`;
+      : block ? '' : html`<button type="button" class="btn btn-danger-solid btn-sm" data-action="worktree-remove" data-path="${w.path}" data-branch="${branch}" title="Permanently delete this folder after a fresh check">${removal?.state === 'failed' && !removal.superseded ? 'Try again' : 'Delete permanently'}</button>`;
   } else if (w.state === 'prune') {
     action = html`<button type="button" class="btn btn-sm" data-action="worktree-prune" data-repo="${repo.path}">Prune</button>`;
   } else if (w.state === 'review' || w.state === 'keep') {
@@ -726,11 +738,13 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable, selectionState) {
   </details>`;
 }
 
-// removableRows: a repository's rows in state remove with no removal
-// running.
+// removableRows: the rows eligible for automatic removal.
 function removableRows(repo, removals) {
-  return ((repo && repo.worktrees) || []).filter(w => w.state === 'remove' && !w.orphan
-    && !((removals || {})[w.path] && removals[w.path].state === 'running'));
+  return ((repo && repo.worktrees) || []).filter(w => {
+    const removal = removals?.[w.path];
+    return w.state === 'remove' && !w.orphan && !w.verdict_needs_rescan
+      && removal?.state !== 'running' && !(removal?.state === 'unknown' && !removal.superseded);
+  });
 }
 
 // worktreeAdvisable: a row the local advisor can write a note for (git still

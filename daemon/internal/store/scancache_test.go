@@ -29,4 +29,12 @@ func TestScanCacheRoundTripsAndSurvivesReopen(t *testing.T) {
 	if !ok || string(body) != `{"a":2}` || !got.Equal(at.Add(time.Minute)) {
 		t.Fatalf("ScanCache = %q, %v, %v", body, got, ok)
 	}
+	st.PutScanCache("worktrees.sizes", []byte(`{}`), at)
+	st.DeleteScanCache("worktrees.report")
+	if _, _, ok := st.ScanCache("worktrees.report"); ok {
+		t.Fatal("invalidated report still answers")
+	}
+	if _, _, ok := st.ScanCache("worktrees.sizes"); !ok {
+		t.Fatal("invalidating the report removed saved sizes")
+	}
 }

@@ -91,7 +91,9 @@ func (h *Hunter) Reconnect(ctx context.Context, path string) (string, error) {
 		return "", fmt.Errorf("git worktree repair ran in %s but %s is still not linked", repo, o.Path)
 	}
 	h.st.PutAudit(store.AuditEntry{Action: "worktree-reconnect", Detail: fmt.Sprintf("path=%s repo=%s", o.Path, repo)})
-	h.invalidate()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.invalidateLocked()
 	return repo, nil
 }
 

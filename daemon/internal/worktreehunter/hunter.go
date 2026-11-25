@@ -42,6 +42,7 @@ type Store interface {
 	PutCleanup(model.CleanupEntry)
 	ScanCache(name string) ([]byte, time.Time, bool)
 	PutScanCache(name string, body []byte, at time.Time)
+	DeleteScanCache(name string)
 }
 
 // Options are the operator's knobs (config `worktrees:`).
@@ -135,12 +136,15 @@ type Hunter struct {
 	opts     Options
 	cached   *ScanReport
 	cachedAt time.Time
+	// An invalidation can finish during a scan. Only scans that started
+	// after the last invalidation can publish a report.
+	cacheGeneration uint64
 
 	// scanMu serializes scans and row actions; a request that waited on it
 	// reuses the scan that finished meanwhile.
 	scanMu sync.Mutex
-	// loaded is set once the saved report and sizes were read from the
-	// store.
+	// loaded is guarded by scanMu and is set once the saved report and
+	// sizes have been read from the store.
 	loaded bool
 
 	// removals tracks each removal's steps and outcome by path; remWG lets
@@ -202,7 +206,7 @@ func (h *Hunter) SetOptions(o Options) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.opts = normalize(o)
-	h.cached = nil
+	h.invalidateLocked()
 }
 
 // Options returns the options in effect.
@@ -212,11 +216,11 @@ func (h *Hunter) Options() Options {
 	return h.opts
 }
 
-// invalidate drops the cached scan, so the next report scans once.
-func (h *Hunter) invalidate() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+// invalidateLocked drops both copies of the cached scan. Caller holds mu.
+func (h *Hunter) invalidateLocked() {
+	h.cacheGeneration++
 	h.cached = nil
+	h.st.DeleteScanCache(cacheReportKey)
 }
 
 // Report returns the scan with sizes and volume usage laid over it. Sizes
@@ -242,13 +246,13 @@ func (h *Hunter) Wait() {
 // detached from ctx's cancellation, so a client that gives up still leaves
 // a finished report for the next request.
 func (h *Hunter) report(ctx context.Context, refresh bool) ScanReport {
-	h.load()
 	asked := h.now()
 	if r, ok := h.fresh(refresh, time.Time{}); ok {
 		return r
 	}
 	h.scanMu.Lock()
 	defer h.scanMu.Unlock()
+	h.loadLocked()
 	if r, ok := h.fresh(refresh, asked); ok {
 		return r
 	}
@@ -260,26 +264,27 @@ func (h *Hunter) report(ctx context.Context, refresh bool) ScanReport {
 // scanLocked scans, caches and saves the report. Caller holds scanMu.
 func (h *Hunter) scanLocked(ctx context.Context) ScanReport {
 	h.mu.Lock()
-	opts := h.opts
+	opts, generation := h.opts, h.cacheGeneration
 	h.mu.Unlock()
 	rep := h.scan(ctx, opts)
-	h.keep(rep, opts)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cacheGeneration == generation {
+		h.saveReportLocked(rep, h.now())
+	}
 	return rep
 }
 
-// keep caches and saves a finished scan.
-func (h *Hunter) keep(rep ScanReport, opts Options) {
-	at := h.now()
-	h.mu.Lock()
+// saveReportLocked updates the in-memory and saved reports. Caller holds mu.
+func (h *Hunter) saveReportLocked(rep ScanReport, at time.Time) {
 	h.cached, h.cachedAt = &rep, at
-	h.mu.Unlock()
-	if body, err := json.Marshal(savedReport{Options: opts, Report: rep}); err == nil {
+	if body, err := json.Marshal(savedReport{Options: h.opts, Report: rep}); err == nil {
 		h.st.PutScanCache(cacheReportKey, body, at)
 	}
 }
 
-// lockForAction takes the scan lock for a row action (remove, prune, Trash,
-// reconnect, hide) and returns its unlock, so no scan interleaves with it.
+// lockForAction takes the scan lock and loads the saved report before a row
+// action, so no scan interleaves with the action. It returns the unlock.
 // waiting runs when the lock is not free at once.
 func (h *Hunter) lockForAction(waiting func()) func() {
 	if !h.scanMu.TryLock() {
@@ -288,6 +293,7 @@ func (h *Hunter) lockForAction(waiting func()) func() {
 		}
 		h.scanMu.Lock()
 	}
+	h.loadLocked()
 	return h.scanMu.Unlock
 }
 
@@ -297,8 +303,8 @@ func (h *Hunter) lockForAction(waiting func()) func() {
 // Callers hold the scan lock.
 func (h *Hunter) dropFromCache(rows, repos map[string]bool) {
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	if h.cached == nil {
-		h.mu.Unlock()
 		return
 	}
 	rep := *h.cached
@@ -329,12 +335,7 @@ func (h *Hunter) dropFromCache(rows, repos map[string]bool) {
 		}
 	}
 	rep.Summary = summarize(rep.Repos)
-	h.cached = &rep
-	at, opts := h.cachedAt, h.opts
-	h.mu.Unlock()
-	if body, err := json.Marshal(savedReport{Options: opts, Report: rep}); err == nil {
-		h.st.PutScanCache(cacheReportKey, body, at)
-	}
+	h.saveReportLocked(rep, h.cachedAt)
 }
 
 const (
@@ -369,27 +370,12 @@ type savedSize struct {
 	At      time.Time `json:"at"`
 }
 
-// load reads the saved report and sizes once, so a restarted daemon
-// answers from them until a rescan is asked.
-func (h *Hunter) load() {
-	h.mu.Lock()
+// loadLocked reads saved sizes and the report once. Caller holds scanMu.
+func (h *Hunter) loadLocked() {
 	if h.loaded {
-		h.mu.Unlock()
 		return
 	}
 	h.loaded = true
-	opts := h.opts
-	h.mu.Unlock()
-	if body, at, ok := h.st.ScanCache(cacheReportKey); ok {
-		var saved savedReport
-		if json.Unmarshal(body, &saved) == nil && reflect.DeepEqual(normalize(saved.Options), opts) && kindsAligned(saved.Report) {
-			h.mu.Lock()
-			if h.cached == nil {
-				h.cached, h.cachedAt = &saved.Report, at
-			}
-			h.mu.Unlock()
-		}
-	}
 	if body, _, ok := h.st.ScanCache(cacheSizesKey); ok {
 		var saved map[string]savedSize
 		if json.Unmarshal(body, &saved) == nil {
@@ -400,6 +386,14 @@ func (h *Hunter) load() {
 				}
 			}
 			h.sizeMu.Unlock()
+		}
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if body, at, ok := h.st.ScanCache(cacheReportKey); ok {
+		var saved savedReport
+		if json.Unmarshal(body, &saved) == nil && reflect.DeepEqual(normalize(saved.Options), h.opts) && kindsAligned(saved.Report) {
+			h.cached, h.cachedAt = &saved.Report, at
 		}
 	}
 }
@@ -435,8 +429,10 @@ func (h *Hunter) AddRepo(path string) (string, error) {
 	if !ok {
 		return "", ErrNotRepo
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.invalidateLocked()
 	h.st.UpsertWorktreeRepo(ref.Main, model.RepoSourceManual, h.now())
-	h.invalidate()
 	return ref.Main, nil
 }
 

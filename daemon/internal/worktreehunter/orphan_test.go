@@ -139,6 +139,10 @@ func TestOrphansOfMovedAndDeletedRepositories(t *testing.T) {
 	if _, err := h.Reconnect(context.Background(), newMain); !errors.Is(err, ErrNotOrphan) {
 		t.Fatalf("Reconnect(main) = %v, want ErrNotOrphan", err)
 	}
+	h.Wait()
+	now := h.now
+	h = New(st, home, Options{})
+	h.now, h.goos = now, "darwin"
 	repo, err := h.Reconnect(context.Background(), wt)
 	if err != nil || repo != newMain {
 		t.Fatalf("Reconnect(wt) = %q, %v", repo, err)
@@ -146,6 +150,12 @@ func TestOrphansOfMovedAndDeletedRepositories(t *testing.T) {
 	if ref, _, ok := resolveRepo(wt); !ok || ref.Main != canonical(newMain) {
 		t.Fatalf("after reconnect %s resolves to %+v, %v", wt, ref, ok)
 	}
+	restarted := New(st, home, Options{})
+	restarted.now = now
+	if row := findRow(t, restarted.Report(t.Context(), false), wt); row.Orphan {
+		t.Fatalf("saved scan still shows the reconnected worktree as orphaned: %+v", row)
+	}
+	restarted.Wait()
 
 	if _, err := h.TrashOrphan(context.Background(), newMain); !errors.Is(err, ErrNotOrphan) {
 		t.Fatalf("TrashOrphan(main) = %v, want ErrNotOrphan", err)

@@ -34,6 +34,7 @@ function createWorktreeController({ request, toast, confirm, render, renderSelec
     request, toast, confirm, render, renderSelection, markDirty, visible, now, history, discuss, toastHost,
     worktreesState: { report: null, loading: false, loadingRefresh: false, error: '', loadedAt: 0, filter: { state: '', stale: false, q: '' },
       ledger: null, ledgerLoading: false, ledgerAt: 0, selected: new Map(), expanded: new Set(), selectionBusy: false, pendingRemovalSelections: new Map() },
+    worktreeReloadQueued: false,
     removalGroup: { paths: [], labels: {}, hidden: false, finished: false },
     removalTicker: null,
     removalLinger: null,
@@ -99,21 +100,54 @@ function worktreeCtlRemovalGroupRunning(s) {
 function worktreeCtlSetRemoval(s, path, removal) {
   s.removals.set(path, removal);
   const rep = s.worktreesState.report;
-  if (rep) (rep.removals || (rep.removals = {}))[path] = removal;
+  if (rep) {
+    (rep.removals || (rep.removals = {}))[path] = removal;
+    worktreeCtlApplyRefusal(rep, path, removal);
+  }
 }
 
-// overlayRemovals lays this page's removals over a report read: one still
-// waiting for its reply stays running, and a row removed after the report's
-// scan stays gone. A finished one older than the report's scan is dropped.
+// A refusal has a fresh verdict but only part of the inspection. Show its
+// reasons and wait for a new scan before using the row for another cleanup.
+function worktreeCtlApplyRefusal(rep, path, removal) {
+  if (!removal.row_state) return;
+  for (const repo of rep.repos || []) {
+    const row = (repo.worktrees || []).find(w => w.path === path);
+    if (!row) continue;
+    Object.assign(row, { state: removal.row_state, reasons: removal.reasons || [], reason_kinds: [],
+      can_remove_reviewed: false, verdict_needs_rescan: true });
+    return;
+  }
+}
+
+// Keep outcomes newer than the scan. When a POST lost its reply, reconcile
+// it with the daemon job started at or after that request.
 function worktreeCtlOverlayRemovals(s, rep) {
   const scanned = Date.parse(rep.generated_at);
+  const previous = s.worktreesState.report?.removals || {};
   for (const [path, removal] of s.removals) {
-    if (removal.state !== 'running' && isFinite(scanned) && scanned > Date.parse(removal.finished_at)) {
+    if (removal.state === 'unknown') {
+      const server = rep.removals?.[path];
+      if (server && Date.parse(server.started_at) >= Date.parse(removal.started_at)) {
+        if (server.state !== 'running') {
+          s.removals.set(path, server);
+          if (server.state === 'removed' && !s.removalGroup.paths.includes(path)) worktreeCtlLoadLedger(s);
+        }
+        if (previous[path]?.state === 'unknown') s.removalGroup.finished = false;
+        continue;
+      }
+    } else if (scanned > Date.parse(removal.finished_at)) {
       s.removals.delete(path);
       continue;
     }
     (rep.removals || (rep.removals = {}))[path] = removal;
+  }
+  for (const [path, removal] of Object.entries(rep.removals || {})) {
+    if (scanned > Date.parse(removal.finished_at)) {
+      if (removal.row_state || removal.state === 'unknown') rep.removals[path] = { ...removal, superseded: true };
+      continue;
+    }
     if (removal.state === 'removed') worktreeCtlDropRows(rep, [path]);
+    else worktreeCtlApplyRefusal(rep, path, removal);
   }
 }
 
@@ -164,12 +198,12 @@ function worktreeCtlPaintRemovalToast(s) {
   let el = document.getElementById('removal-toast');
   const running = worktreeCtlRemovalGroupRunning(s);
   const m = removalToastModel(removalGroup.paths, worktreesState.report && worktreesState.report.removals, removalGroup.labels);
-  // The group's end: the ledger has new rows; a clean finish closes the
-  // toast after a moment, a failure keeps it until closed.
+  // A clean finish closes the toast after a moment. Keep refusals and
+  // unknown outcomes visible until closed.
   if (removalGroup.paths.length && !running && !removalGroup.finished) {
     removalGroup.finished = true;
-    worktreeCtlLoadLedger(s);
-    if (!m.failed) s.removalLinger = setTimeout(() => worktreeCtlCloseRemovalToast(s), WORKTREE_REMOVAL_TOAST_LINGER_MS);
+    if (m.unknown < m.total) worktreeCtlLoadLedger(s);
+    if (!m.failed && !m.unknown) s.removalLinger = setTimeout(() => worktreeCtlCloseRemovalToast(s), WORKTREE_REMOVAL_TOAST_LINGER_MS);
   }
   if (!running) {
     clearInterval(s.removalTicker);
@@ -189,8 +223,8 @@ function worktreeCtlPaintRemovalToast(s) {
     toastHost.show(host);
   }
   // A running removal this page did not send is shown as of the last read.
-  m.external = m.items.some(it => it.state === 'running' && !s.removals.has(it.path));
-  el.className = 'toast toast-sticky removal-toast ' + (running ? 'info' : m.failed ? (m.removed ? 'info' : 'danger') : 'success');
+  m.external = m.items.some(it => it.state === 'running' && s.removals.get(it.path)?.state !== 'running');
+  el.className = 'toast toast-sticky removal-toast ' + (running || m.unknown ? 'info' : m.failed ? (m.removed ? 'info' : 'danger') : 'success');
   const html = removalToastHTML(m);
   if (el._html !== html) {
     el.innerHTML = html;
@@ -203,9 +237,12 @@ function worktreeCtlPaintRemovalToast(s) {
 
 // loadWorktrees reads the report: the daemon's saved scan, or a new scan
 // when refresh is asked (Rescan). One read at a time.
-async function worktreeCtlLoadWorktrees(s, refresh) {
+async function worktreeCtlLoadWorktrees(s, refresh, afterMutation = false) {
   const { worktreesState, removalGroup, request, toast, markDirty, now } = s;
-  if (worktreesState.loading) return;
+  if (worktreesState.loading) {
+    if (afterMutation) s.worktreeReloadQueued = true;
+    return;
+  }
   worktreesState.loading = true;
   worktreesState.loadingRefresh = !!refresh;
   worktreesState.error = '';
@@ -214,6 +251,7 @@ async function worktreeCtlLoadWorktrees(s, refresh) {
     const r = await request('/worktrees' + (refresh ? '?refresh=1' : ''), { timeoutMs: WORKTREE_TIMEOUT_MS });
     if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
     const rep = await r.json();
+    if (s.worktreeReloadQueued) return;
     worktreeCtlOverlayRemovals(s, rep);
     worktreesState.report = rep;
     worktreeCtlReconcileWorktreeSelection(s);
@@ -221,12 +259,18 @@ async function worktreeCtlLoadWorktrees(s, refresh) {
     worktreeCtlAdoptRemovals(s, rep);
     if (removalGroup.paths.length) worktreeCtlPaintRemovalToast(s);
   } catch (err) {
-    worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
-    if (worktreesState.report) toast(worktreesState.error, 'danger');
+    if (!s.worktreeReloadQueued) {
+      worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
+      if (worktreesState.report) toast(worktreesState.error, 'danger');
+    }
   } finally {
     worktreesState.loading = false;
     worktreesState.loadingRefresh = false;
     markDirty('worktrees');
+    if (s.worktreeReloadQueued) {
+      s.worktreeReloadQueued = false;
+      await worktreeCtlLoadWorktrees(s, false);
+    }
   }
 }
 
@@ -522,12 +566,11 @@ async function worktreeCtlRemoveOne(s, w) {
     removal = { path, state: 'removed', branch: json.branch || w.branch || '', bytes: Number(json.bytes) || 0, finished_at };
     worktreeCtlDropWorktreeRows(s, [path]);
   } else if (r && r.status === 409 && json && json.state) {
-    const reasons = json.reasons || [];
-    removal = { path, state: 'failed', error: `not removed: it is now ${json.state}`, row_state: json.state, reasons, finished_at };
-    const row = worktreeCtlSelectedWorktree(s, path);
-    if (row) Object.assign(row.w, { state: json.state, reasons, reason_kinds: [] });
+    removal = { path, state: 'failed', error: `not removed: it is now ${json.state}`, row_state: json.state, reasons: json.reasons || [], finished_at };
+  } else if (!reply) {
+    removal = { path, state: 'unknown', error: failure, started_at: at, finished_at };
   } else {
-    removal = { path, state: 'failed', error: failure || (text || '').trim() || String(r ? r.status : 'no reply'), finished_at };
+    removal = { path, state: 'failed', error: text.trim() || String(r.status), finished_at };
   }
   worktreeCtlSetRemoval(s, path, removal);
   worktreeCtlRestoreMark(s, path, removal);
@@ -602,7 +645,7 @@ async function worktreeCtlReconnectWorktree(s, path, repo) {
     const { r, text } = await worktreeCtlPostWorktree(s, '/worktrees/reconnect', { path });
     if (!r.ok) throw new Error(text.trim() || String(r.status));
     toast(`Reconnected ${path} to ${repo}`, 'success');
-    worktreeCtlLoadWorktrees(s, false);
+    worktreeCtlLoadWorktrees(s, false, true);
   } catch (err) {
     toast('Could not reconnect: ' + (err.message || err), 'danger');
   }
@@ -846,7 +889,7 @@ async function worktreeCtlAddRepo(s, path) {
     const { r, text, json } = await worktreeCtlPostWorktree(s, '/worktrees/repos', { path });
     if (!r.ok) throw new Error(text.trim() || String(r.status));
     toast(`Added ${(json && json.path) || path}`, 'success');
-    worktreeCtlLoadWorktrees(s, false);
+    worktreeCtlLoadWorktrees(s, false, true);
     return true;
   } catch (err) {
     toast('Failed to add the repository: ' + (err.message || err), 'danger');

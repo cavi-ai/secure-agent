@@ -650,6 +650,30 @@ test('addRepo reports whether the repository was added and reloads the list on s
   assert.equal(bad.log.requests.length, 1);
 });
 
+for (const [endpoint, mutate] of [
+  ['/worktrees/repos', controller => controller.addRepo('/code/new')],
+  ['/worktrees/reconnect', controller => controller.reconnectWorktree(WT, '/code/new')]
+]) {
+  test(`${endpoint} follows an in-flight report with a post-mutation read`, async () => {
+    let finish;
+    const fresh = worktreeReport();
+    fresh.repos.push({ path: '/code/new', worktrees: [] });
+    const { controller, log } = build({ respond: url => {
+      if (url === endpoint) return reply({ path: '/code/new' });
+      if (!finish) return new Promise(resolve => { finish = resolve; });
+      return reply(fresh);
+    } });
+
+    const reading = controller.loadWorktrees(false);
+    await mutate(controller);
+    finish(reply(worktreeReport()));
+    await reading;
+    await settle();
+    assert.deepEqual(log.requests.map(r => r.url), ['/worktrees', endpoint, '/worktrees']);
+    assert.equal(controller.worktreesState.report.repos.at(-1).path, '/code/new');
+  });
+}
+
 test('a report with pending work schedules no timer that reads /worktrees', async () => {
   const pending = [{ sizing: true }, { refreshing: true }, { asks: { [WT]: { status: 'running', harness: 'codex' } } },
     { removals: { [WT]: { path: WT, state: 'running', phase: 'deleting', step: 'deleting' } } }];
@@ -704,6 +728,69 @@ test('Remove sends one request without async; the row is removing until the repl
   assert.match(refused.ctx.worktreeRemovalHTML(refused.controller.worktreesState.report.removals[WT]), /Not removed/);
   assert.match(refused.document.getElementById('removal-toast').innerHTML, /2 uncommitted changes/);
   assert.equal(refused.log.requests.filter(r => r.method === 'GET').length, 1);
+});
+
+test('Reload preserves a refusal and blocks stale cleanup actions until a new scan', async () => {
+  const { controller, ctx, clock } = build({ respond: url => {
+    if (url === '/worktrees/remove') return replyWith({ state: 'keep', reasons: ['2 uncommitted changes'] }, 409);
+    const report = selectionReport();
+    const rescanned = url.includes('refresh=1');
+    report.repos[0].worktrees[0].can_remove_reviewed = true;
+    report.generated_at = new Date(rescanned ? clock.at : clock.at - 1000).toISOString();
+    if (rescanned) report.removals = { [WT]: { state: 'failed', row_state: 'keep', reasons: ['2 uncommitted changes'],
+      finished_at: new Date(1_000_000).toISOString() } };
+    return reply(report);
+  } });
+  await controller.loadWorktrees(false);
+  await controller.removeWorktree(WT, 'feat/a');
+  await controller.loadWorktrees(false);
+  let report = controller.worktreesState.report;
+  let row = report.repos[0].worktrees[0];
+  assert.equal(row.state, 'keep');
+  assert.deepEqual(plain(row.reasons), ['2 uncommitted changes']);
+  assert.equal(ctx.worktreeSelectionApproval(row, report.repos[0], report), null);
+
+  clock.at += 2000;
+  await controller.loadWorktrees(true);
+  report = controller.worktreesState.report;
+  row = report.repos[0].worktrees[0];
+  assert.equal(row.state, 'remove');
+  assert.ok(ctx.worktreeSelectionApproval(row, report.repos[0], report));
+  assert.equal(ctx.worktreeRemovalHTML(report.removals[WT]), '');
+});
+
+test('Reload reconciles a lost removal reply with the matching daemon job', async () => {
+  let outcome;
+  const { controller, document, clock, ctx, log } = build({ respond: url => {
+    if (url === '/worktrees/remove') throw new Error('network disconnected');
+    const report = worktreeReport();
+    if (outcome) report.removals = { [WT]: outcome };
+    if (outcome?.state === 'removed') report.repos[0].worktrees.shift();
+    return reply(report);
+  } });
+  const at = offset => new Date(clock.at + offset).toISOString();
+  const toast = () => document.getElementById('removal-toast').innerHTML;
+  await controller.loadWorktrees(false);
+  await controller.removeWorktree(WT, 'feat/a');
+  assert.equal(controller.worktreesState.report.removals[WT].state, 'unknown');
+  assert.match(toast(), /Removal outcome unknown/);
+  assert.equal(ctx.worktreeSelectionApproval(controller.worktreesState.report.repos[0].worktrees[0],
+    controller.worktreesState.report.repos[0], controller.worktreesState.report), null);
+
+  outcome = { state: 'failed', started_at: at(-3000), finished_at: at(-2000) };
+  await controller.loadWorktrees(false);
+  assert.equal(controller.worktreesState.report.removals[WT].state, 'unknown');
+
+  outcome = { state: 'running', started_at: at(0), phase: 'deleting', step: 'deleting' };
+  await controller.loadWorktrees(false);
+  assert.equal(controller.worktreesState.report.removals[WT].state, 'running');
+  assert.match(toast(), /Removing feat\/a/);
+
+  outcome = { state: 'removed', started_at: at(0), finished_at: at(2000), bytes: 1000 };
+  await controller.loadWorktrees(false);
+  assert.equal(controller.worktreesState.report.removals[WT].state, 'removed');
+  assert.match(toast(), /Removed feat\/a/);
+  assert.equal(log.ledger, 1);
 });
 
 test('Remove is sent while a report read is pending, and reports landing during or after it keep the removal', async () => {
