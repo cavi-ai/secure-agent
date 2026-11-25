@@ -8,6 +8,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -76,20 +77,17 @@ const gapGrace = 90 * time.Second
 // confirmed loss (a hole that old is never coming back).
 const maxTrackedHoles = 2048
 
-// A node's applied (boot, seq) pairs are remembered for redeliveryWindow and
-// at most maxRecentSeqs entries, covering the publisher's retry backoff.
+// Keep a bounded history of applied deliveries. One minute covers the
+// publisher's four 10-second HTTP attempts and 7.5 seconds of retry backoff.
 const (
-	redeliveryWindow = 30 * time.Second
-	maxRecentSeqs    = 1024
+	redeliveryWindow    = time.Minute
+	maxRecentDeliveries = 1024
 )
 
-type seqKey struct {
-	boot string
-	seq  uint64
-}
+type deliveryKey [sha256.Size]byte
 
-type appliedSeq struct {
-	key seqKey
+type appliedDelivery struct {
+	key deliveryKey
 	at  time.Time
 }
 
@@ -120,10 +118,9 @@ type nodeRuntime struct {
 	holes         []sequenceHole
 	retiredBoots  []string
 	confirmedGaps int
-	// applied is the FIFO of recently applied (boot, seq) pairs; appliedSet
-	// indexes it for duplicate lookup.
-	applied    []appliedSeq
-	appliedSet map[seqKey]bool
+	// The FIFO bounds history, and the index gives each delivery's receipt time.
+	applied   []appliedDelivery
+	appliedAt map[deliveryKey]time.Time
 }
 
 type sequenceHole struct {
@@ -222,40 +219,40 @@ type Store struct {
 func NewStore(dir string) *Store {
 	s := &Store{log: &jsonlLog{dir: dir}, nodes: map[string]*nodeRuntime{}}
 	s.log.Replay(func(env Envelope, receivedAt string) {
-		s.applyOnce(env, receivedAt)
+		s.applyOnce(env, receivedAt, false)
 	})
 	return s
 }
 
 // Append stores one verified envelope and folds it into the rollup. An
-// envelope whose (boot, seq) was just applied is acknowledged without being
-// stored or counted again.
+// identical sequenced envelope received recently is acknowledged without
+// being stored or counted again.
 func (s *Store) Append(env Envelope) error {
-	receivedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.isRedelivery(env, receivedAt) {
-		return nil
-	}
-	if err := s.log.Append(env, receivedAt); err != nil {
-		// Not stored: the publisher's retry must be accepted.
-		if rt := s.nodes[env.NodeID]; rt != nil && env.Boot != "" && env.Seq != 0 {
-			delete(rt.appliedSet, seqKey{env.Boot, env.Seq})
-			rt.applied = rt.applied[:len(rt.applied)-1]
-		}
-		return err
-	}
-	s.apply(env, receivedAt)
-	return nil
+	return s.applyOnce(env, time.Now().UTC().Format(time.RFC3339Nano), true)
 }
 
-// applyOnce is the replay path: it applies env unless it repeats a recently
-// applied (boot, seq). Caller must hold mu or be single-threaded.
-func (s *Store) applyOnce(env Envelope, receivedAt string) {
-	if s.isRedelivery(env, receivedAt) {
-		return
+// applyOnce shares the duplicate check across live delivery and replay.
+// Caller must hold mu or be single-threaded. Replay supplies records that are
+// already on disk, so only live delivery writes to the log.
+func (s *Store) applyOnce(env Envelope, receivedAt string, persist bool) error {
+	key, tracked := envelopeDeliveryKey(env)
+	ts := receiptTime(receivedAt)
+	cutoff := ts.Add(-redeliveryWindow)
+	if tracked && s.nodes[env.NodeID].isRedelivery(key, cutoff) {
+		return nil
+	}
+	if persist {
+		if err := s.log.Append(env, receivedAt); err != nil {
+			return err
+		}
 	}
 	s.apply(env, receivedAt)
+	if tracked {
+		s.nodes[env.NodeID].rememberDelivery(key, ts, cutoff)
+	}
+	return nil
 }
 
 func receiptTime(receivedAt string) time.Time {
@@ -275,32 +272,43 @@ func (s *Store) runtime(nodeID string) *nodeRuntime {
 	return rt
 }
 
-// isRedelivery reports whether env repeats a (boot, seq) applied within
-// redeliveryWindow; otherwise it records the pair. Envelopes without a boot
-// or sequence are never redeliveries. Caller must hold mu.
-func (s *Store) isRedelivery(env Envelope, receivedAt string) bool {
+// Separate publisher sinks can share a boot ID and use independent sequence
+// counters. Hash the full envelope using the log's JSON encoding so the same
+// delivery has the same key after replay. Legacy envelopes are untracked.
+func envelopeDeliveryKey(env Envelope) (deliveryKey, bool) {
 	if env.Boot == "" || env.Seq == 0 {
+		return deliveryKey{}, false
+	}
+	body, err := json.Marshal(env)
+	if err != nil {
+		return deliveryKey{}, false // Persistence handles invalid envelopes.
+	}
+	return sha256.Sum256(body), true
+}
+
+func (rt *nodeRuntime) isRedelivery(key deliveryKey, cutoff time.Time) bool {
+	if rt == nil {
 		return false
 	}
-	rt := s.runtime(env.NodeID)
-	ts := receiptTime(receivedAt)
-	cutoff := ts.Add(-redeliveryWindow)
+	at, ok := rt.appliedAt[key]
+	return ok && !at.Before(cutoff)
+}
+
+func (rt *nodeRuntime) rememberDelivery(key deliveryKey, ts, cutoff time.Time) {
 	drop := 0
-	for drop < len(rt.applied) && (rt.applied[drop].at.Before(cutoff) || len(rt.applied)-drop > maxRecentSeqs) {
-		delete(rt.appliedSet, rt.applied[drop].key)
+	for drop < len(rt.applied) && (rt.applied[drop].at.Before(cutoff) || len(rt.applied)-drop >= maxRecentDeliveries) {
+		entry := rt.applied[drop]
+		if rt.appliedAt[entry.key] == entry.at {
+			delete(rt.appliedAt, entry.key)
+		}
 		drop++
 	}
 	rt.applied = rt.applied[drop:]
-	key := seqKey{env.Boot, env.Seq}
-	if rt.appliedSet[key] {
-		return true
+	if rt.appliedAt == nil {
+		rt.appliedAt = make(map[deliveryKey]time.Time)
 	}
-	if rt.appliedSet == nil {
-		rt.appliedSet = map[seqKey]bool{}
-	}
-	rt.appliedSet[key] = true
-	rt.applied = append(rt.applied, appliedSeq{key: key, at: ts})
-	return false
+	rt.appliedAt[key] = ts
+	rt.applied = append(rt.applied, appliedDelivery{key: key, at: ts})
 }
 
 // apply folds one envelope into the in-memory rollup. Caller must hold mu
