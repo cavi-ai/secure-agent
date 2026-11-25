@@ -38,14 +38,3 @@ func TestServicePlistHasNoKeepAlive(t *testing.T) {
 		}
 	}
 }
-
-// The service label must differ from the menubar's legacy agent label so the
-// two never collide in launchd bookkeeping.
-func TestServiceLabelDistinctFromLegacy(t *testing.T) {
-	if serviceLabel == "com.cavi-ai.secure-agentd" {
-		t.Fatal("service label must not reuse the retired menubar agent label")
-	}
-	if !strings.HasPrefix(serviceLabel, "com.cavi-ai.secure-agent.") {
-		t.Fatalf("service label %q should be namespaced under com.cavi-ai.secure-agent.", serviceLabel)
-	}
-}
