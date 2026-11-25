@@ -68,7 +68,7 @@ func resolveRepo(dir string) (ref repoRef, orphan *orphanDir, ok bool) {
 			if st.IsDir() {
 				return repoRef{Common: canonical(dotGit), Main: canonical(dir)}, nil, true
 			}
-			return resolveGitFile(dir, dotGit)
+			return resolveGitFile(dir)
 		}
 		if isBareRepo(dir) {
 			c := canonical(dir)
@@ -83,8 +83,8 @@ func resolveRepo(dir string) (ref repoRef, orphan *orphanDir, ok bool) {
 }
 
 // resolveGitFile follows a worktree's (or submodule's) .git file.
-func resolveGitFile(dir, dotGit string) (repoRef, *orphanDir, bool) {
-	data, err := readGitPointer(dotGit)
+func resolveGitFile(dir string) (repoRef, *orphanDir, bool) {
+	data, err := readGitPointer(dir, ".git")
 	if err != nil {
 		return repoRef{}, nil, false
 	}
@@ -100,7 +100,7 @@ func resolveGitFile(dir, dotGit string) (repoRef, *orphanDir, bool) {
 		return repoRef{}, &orphanDir{Path: canonical(dir), Main: mainFromAdminDir(gitdir), Name: filepath.Base(filepath.Clean(gitdir))}, false
 	}
 	common := gitdir
-	if c, err := readGitPointer(filepath.Join(gitdir, "commondir")); err == nil {
+	if c, err := readGitPointer(gitdir, "commondir"); err == nil {
 		common = strings.TrimSpace(string(c))
 		if !filepath.IsAbs(common) {
 			common = filepath.Join(gitdir, common)
@@ -116,9 +116,14 @@ func resolveGitFile(dir, dotGit string) (repoRef, *orphanDir, bool) {
 
 // Git pointer files contain a single local path. Check the opened file
 // before reading it and bound the read independently of its reported size.
-func readGitPointer(path string) ([]byte, error) {
+func readGitPointer(dir, name string) ([]byte, error) {
 	const maxPointerBytes = 8192
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
