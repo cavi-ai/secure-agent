@@ -104,13 +104,112 @@ func writeCwdOverrides(cfg config.Config) {
 // and servers. Returns a Components the caller shuts down. On failure it tears
 // down whatever it had already built before returning the error.
 func Build(parent context.Context, cfg config.Config, opts Options) (*Components, error) {
+	s, err := newBuildState(parent, cfg, opts)
+	if err != nil {
+		return nil, err
+	}
+	s.recordRun()
+	if err := s.openStore(); err != nil {
+		return nil, err
+	}
+	if err := s.bindControlSocket(); err != nil {
+		return nil, err
+	}
+	s.newBus()
+	s.buildAgents()
+	s.buildSessions()
+	s.buildCorrelator()
+	s.newPostureHooks()
+	s.buildFleet()
+	if err := s.buildFirewall(); err != nil {
+		return nil, err
+	}
+	s.buildAdvisor()
+	s.restoreCosts()
+	s.buildSupervisor()
+	s.startIngest()
+	s.startResourceLoop()
+	s.buildProxy()
+	s.buildStatus()
+	s.buildAPI()
+	s.startWatchers()
+	s.serveAPI()
+	s.launchCollectors()
+
+	log.Printf("secure-agentd running on unix socket %s", s.cfg.SocketPath)
+	return s.c, nil
+}
+
+// buildState carries the values Build's stages share: each stage reads what
+// earlier stages stored and stores what later stages read.
+type buildState struct {
+	cfg   config.Config
+	opts  Options
+	uiPID int32
+	ctx   context.Context
+	c     *Components
+
+	st       *store.Store
+	listener net.Listener
+	b        *bus.Bus
+
+	procSource       agents.ProcSource
+	localInference   *inference.Monitor
+	tagger           *agents.Tagger
+	resourceTracker  *resource.Tracker
+	resourceEpisodes *resourceEpisodeWriter
+	resourceControl  *resource.Controller
+	classifier       sensitive.Classifier
+	resolver         *session.Resolver
+
+	deltaHub       *api.DeltaHub
+	advisorStk     *advisorStackHolder
+	allowlistStore *correlate.AllowlistStore
+	muteStore      *correlate.MuteStore
+	expectStore    *correlate.ExpectStore
+	correlator     *correlate.Correlator
+	postureHook    *postureHook
+	newFlagHook    *flagHookHolder
+	fleetPub       *fleet.Publisher
+	fleetCfgLive   *fleetConfigHolder
+	otlpExp        *otlp.Exporter
+	fw             *firewallStack
+	plans          *planSaver
+	supReg         *supervise.Registry
+	sup            *supervise.Supervisor
+
+	// askEgress is set by buildAPI; the proxy's egress gate reads it per request.
+	askEgress func(context.Context, taint.Verdict) bool
+
+	proxyServer         *proxy.ProxyServer
+	fleetOn             *atomic.Bool
+	spool               *atomic.Pointer[collect.SpoolTailer]
+	fileTelemetryOn     *atomic.Bool
+	fileTelemetryChoice *atomic.Pointer[bool]
+	lossSeen            *collect.LossSeen
+	statusFn            func() api.Status
+
+	hermes    *collect.HermesCollector
+	hunter    *worktreehunter.Hunter
+	sysAgent  *sysagent.Agent
+	apiServer *api.API
+}
+
+// newBuildState refuses a bundled parent without its process version, then
+// creates the cancelable context and the Components that Shutdown releases.
+func newBuildState(parent context.Context, cfg config.Config, opts Options) (*buildState, error) {
 	uiPID := owningUIPID()
 	if uiPID > 0 && opts.OwnerPIDVersion == 0 {
 		return nil, errors.New("owning app process instance is required")
 	}
 	ctx, cancel := context.WithCancel(parent)
 	c := &Components{cfg: cfg, cancel: cancel, apiErrors: make(chan error, 1)}
+	return &buildState{cfg: cfg, opts: opts, uiPID: uiPID, ctx: ctx, c: c}, nil
+}
 
+// recordRun writes this run's record and the guard's per-project overrides.
+func (s *buildState) recordRun() {
+	cfg, c := s.cfg, s.c
 	if path := RunRecordPath(cfg); path != "" {
 		run, err := StartRun(path, os.Getpid(), time.Now)
 		if err != nil {
@@ -119,25 +218,48 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		c.run = run
 	}
 	writeCwdOverrides(cfg)
+}
 
+// openStore opens the event store and raises findings about the previous run.
+func (s *buildState) openStore() error {
+	cfg, c := s.cfg, s.c
 	st, err := store.Open(cfg.DBPath, cfg.JSONLPath)
 	if err != nil {
 		c.Shutdown()
-		return nil, fmt.Errorf("failed to open store: %w", err)
+		return fmt.Errorf("failed to open store: %w", err)
 	}
 	c.store = st
 	raisePreviousRunFindings(st, c.run, bootTime, time.Now)
 	st.SetEventRetention(cfg.Retention.ConnEvent, cfg.Retention.Event)
+	s.st = st
+	return nil
+}
+
+// bindControlSocket binds the control API's unix socket; serveAPI serves it.
+func (s *buildState) bindControlSocket() error {
+	cfg, c := s.cfg, s.c
 	listener, err := api.ListenUnixSocket(cfg.SocketPath)
 	if err != nil {
 		c.Shutdown()
-		return nil, fmt.Errorf("failed to bind control API: %w", err)
+		return fmt.Errorf("failed to bind control API: %w", err)
 	}
 	c.apiListener = listener
+	s.listener = listener
+	return nil
+}
 
+// newBus creates the event bus the collectors publish to.
+func (s *buildState) newBus() {
+	c := s.c
 	b := bus.New(2048)
 	c.bus = b
+	s.b = b
+}
 
+// buildAgents creates the process source, the local inference monitor, the
+// agent tagger and the resource tracker, episode writer and controller.
+func (s *buildState) buildAgents() {
+	cfg, c, st := s.cfg, s.c, s.st
 	procSource := agents.NewProcSource()
 	localInference := inference.New(cfg.NetSampleInterval)
 	localInference.Identify = func(pid int32) (string, time.Time) {
@@ -153,7 +275,14 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	tagger.Refresh()
 	resourceTracker, resourceEpisodes, resourceControl := buildResourceStack(cfg, st, tagger)
 	c.resourceEpisodes = resourceEpisodes
+	s.procSource, s.localInference, s.tagger = procSource, localInference, tagger
+	s.resourceTracker, s.resourceEpisodes, s.resourceControl = resourceTracker, resourceEpisodes, resourceControl
+}
 
+// buildSessions creates the sensitive-file classifier and the session
+// resolver, then repairs and reclassifies stored rows.
+func (s *buildState) buildSessions() {
+	cfg, st, tagger := s.cfg, s.st, s.tagger
 	classifier := sensitive.New(cfg)
 
 	// Session resolver: attributes every event to a durable session at
@@ -162,6 +291,13 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	repairStoredRows(st)
 	reclassifyReadFlags(st, classifier, cfg.CredentialOwners)
+	s.classifier, s.resolver = classifier, resolver
+}
+
+// buildCorrelator creates the delta hub, the advisor holder, the egress
+// override stores and the correlator with every hook it calls.
+func (s *buildState) buildCorrelator() {
+	cfg, c, st, tagger, classifier, resolver := s.cfg, s.c, s.st, s.tagger, s.classifier, s.resolver
 	// Construct every correlator hook before event ingestion starts. The advisor
 	// holder resolves the current subscriber after startup and on hot reload.
 	deltaHub := api.NewDeltaHub()
@@ -207,12 +343,23 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	if n := st.RejudgeRecords(correlator.SensitiveFile); n > 0 {
 		log.Printf("store: cleared the record mark on %d file rows that are not secret reads", n)
 	}
+	s.deltaHub, s.advisorStk, s.correlator = deltaHub, advisorStk, correlator
+	s.allowlistStore, s.muteStore, s.expectStore = allowlistStore, muteStore, expectStore
+}
 
+// newPostureHooks creates the posture and new-flag hooks the API arms later.
+func (s *buildState) newPostureHooks() {
 	// postureHook starts once the API server exists (it owns posture).
 	postureHook := newPostureHook(postureRecomputeDelay)
 	// newFlagHook is armed with the API's automatic review once it exists.
 	newFlagHook := &flagHookHolder{}
+	s.postureHook, s.newFlagHook = postureHook, newFlagHook
+}
 
+// buildFleet loads the node identity, builds the fleet publisher and OTLP
+// exporter, and sends session changes to them.
+func (s *buildState) buildFleet() {
+	cfg, c, resolver, deltaHub := s.cfg, s.c, s.resolver, s.deltaHub
 	// Stable per-install fleet identity (used by /fleet and webhook payloads).
 	// Must run before the sinks are built: they capture api.NodeID.
 	api.LoadNodeID(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "node-id"))
@@ -228,26 +375,49 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		fleetPub.Publish(fleet.EventSession, sess)
 		otlpExp.SessionSpan(sess)
 	}
+	s.fleetPub, s.fleetCfgLive, s.otlpExp = fleetPub, fleetCfgLive, otlpExp
+}
 
+// buildFirewall builds the firewall stack and the shell review service that
+// masks with it.
+func (s *buildState) buildFirewall() error {
+	ctx, cfg, c, st := s.ctx, s.cfg, s.c, s.st
+	var err error
 	// Build the firewall before either agent receives its masking policy.
 	fw := setupFirewall(cfg)
 	c.shellReviews, err = shellreview.New(ctx, cfg.DirectoryGuard.ShellReview, sysAgentMask(fw.Engine), st.PutShellReview)
 	if err != nil {
 		c.Shutdown()
-		return nil, err
+		return err
 	}
+	s.fw = fw
+	return nil
+}
 
+// buildAdvisor stores the configured advisor stack in the holder.
+func (s *buildState) buildAdvisor() {
+	cfg, st, deltaHub, postureHook, fw, advisorStk := s.cfg, s.st, s.deltaHub, s.postureHook, s.fw, s.advisorStk
 	// Local triage advisor (opt-in): flags/incidents are offered to it from
 	// the drain loop; it never touches the enforcement path.
 	advisorStk.Store(setupAdvisor(cfg, st, deltaHub, postureHook.run, sysAgentMask(fw.Engine)))
+}
 
+// restoreCosts applies the price table and restores saved plan headroom.
+func (s *buildState) restoreCosts() {
+	cfg, st := s.cfg, s.st
 	// Operator price table from config.yaml, applied before any collector
 	// emits a model call; the config watcher re-applies it on change.
 	applyPricing(cfg, st)
 	// Plan headroom saved by the previous run answers /costs/plans until the
 	// next token_count line; the resource loop saves each change.
 	plans := restorePlans(st, time.Now())
+	s.plans = plans
+}
 
+// buildSupervisor creates the collector supervisor and its health registry,
+// seeded with the previous run's coverage heartbeats.
+func (s *buildState) buildSupervisor() {
+	cfg := s.cfg
 	// Supervisor with a shared health registry so /status reports each
 	// collector's real state (running / restarting / abandoned). Coverage
 	// heartbeats (last_produced) are carried across restarts from the state
@@ -257,7 +427,13 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	supReg.LoadLastProduced(loadLastProduced(cfg.DBPath))
 	sup := supervise.New(supReg)
 	persistLastProduced(cfg.DBPath, supReg) // seed the file so it always exists
+	s.supReg, s.sup = supReg, sup
+}
 
+// startIngest starts the bus drain that correlates and persists events.
+func (s *buildState) startIngest() {
+	c, b, st, correlator, fleetPub, resolver := s.c, s.b, s.st, s.correlator, s.fleetPub, s.resolver
+	tagger, deltaHub, otlpExp, postureHook, advisorStk, newFlagHook := s.tagger, s.deltaHub, s.otlpExp, s.postureHook, s.advisorStk, s.newFlagHook
 	// Drain bus and correlate/persist (drainDone closes once every delivered
 	// event has had its persistence attempted — shutdown waits for it).
 	c.drainDone = runEventIngest(b.Subscribe(), ingestDeps{
@@ -267,22 +443,38 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		Advisor:        func() *advisor.Subscriber { return advisorStk.Load().Sub },
 		NewFlag:        newFlagHook.run,
 	}).Done()
+}
 
+// startResourceLoop starts the tagger refresh and resource observation loop.
+func (s *buildState) startResourceLoop() {
 	// Periodic process tagger refresh: 5s while idle, 1s while agents live.
-	go runResourceLoop(ctx, tagger, resolver, resourceTracker, resourceControl, resourceEpisodes, st, cfg.DBPath, supReg, plans)
+	go runResourceLoop(s.ctx, resourceLoopDeps{
+		tagger: s.tagger, resolver: s.resolver, tracker: s.resourceTracker, control: s.resourceControl,
+		episodes: s.resourceEpisodes, st: s.st, dbPath: s.cfg.DBPath, supReg: s.supReg, plans: s.plans,
+	})
+}
 
+// buildProxy builds the egress proxy when it is enabled and gates its egress
+// on the API's prompt.
+func (s *buildState) buildProxy() {
+	cfg, b, fw, resolver := s.cfg, s.b, s.fw, s.resolver
 	var proxyServer *proxy.ProxyServer
-	// The egress prompt goes through the API, built below and before Serve.
-	var askEgress func(context.Context, taint.Verdict) bool
+	// The egress prompt goes through the API; buildAPI sets s.askEgress before Serve.
 	if cfg.ProxyEnabled {
 		proxyServer = setupProxy(cfg, b, fw.Engine)
 		if proxyServer != nil {
 			proxyServer.SetEgressGate(egressGate(cfg, resolver).Check, func(ctx context.Context, v taint.Verdict) bool {
-				return askEgress != nil && askEgress(ctx, v)
+				return s.askEgress != nil && s.askEgress(ctx, v)
 			})
 		}
 	}
+	s.proxyServer = proxyServer
+}
 
+// buildStatus resolves the file telemetry feed and builds the /status function.
+func (s *buildState) buildStatus() {
+	cfg, b, proxyServer, tagger, correlator, fw := s.cfg, s.b, s.proxyServer, s.tagger, s.correlator, s.fw
+	supReg, st, advisorStk := s.supReg, s.st, s.advisorStk
 	// fleetOn is the one fleet_configured fact /status and /fleet serve; the
 	// config watcher updates it.
 	fleetOn := new(atomic.Bool)
@@ -321,7 +513,18 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		status.FileTelemetryEnabled = fileTelemetryChoice.Load()
 		return status
 	}
+	s.fleetOn, s.spool, s.fileTelemetryOn, s.fileTelemetryChoice = fleetOn, spool, fileTelemetryOn, fileTelemetryChoice
+	s.lossSeen, s.statusFn = lossSeen, statusFn
+}
 
+// buildAPI builds the control API's dependencies, the API server and the
+// resource executor that acts through it.
+func (s *buildState) buildAPI() {
+	cfg, opts, uiPID, c, st, b := s.cfg, s.opts, s.uiPID, s.c, s.st, s.b
+	tagger, resolver, procSource, localInference, advisorStk := s.tagger, s.resolver, s.procSource, s.localInference, s.advisorStk
+	supReg, resourceControl, fw, statusFn, correlator := s.supReg, s.resourceControl, s.fw, s.statusFn, s.correlator
+	allowlistStore, muteStore, expectStore := s.allowlistStore, s.muteStore, s.expectStore
+	fleetPub, fleetOn, lossSeen, otlpExp, deltaHub, proxyServer := s.fleetPub, s.fleetOn, s.lossSeen, s.otlpExp, s.deltaHub, s.proxyServer
 	// Start Control API. Every dependency is resolved here, once: the API no
 	// longer exposes twenty optional setters that must be called in the right
 	// order after New.
@@ -444,12 +647,21 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			SysAgent:         sysAgent,
 		},
 	})
-	askEgress = func(ctx context.Context, v taint.Verdict) bool {
+	s.askEgress = func(ctx context.Context, v taint.Verdict) bool {
 		return apiServer.ProxyEgressDecision(ctx, v.PID, v.SessionID, v.Host, v.Detail, v.Mode).Verdict == "allow"
 	}
 
 	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, procSource, st))
+	s.hermes, s.hunter, s.sysAgent, s.apiServer = hermes, hunter, sysAgent, apiServer
+}
 
+// startWatchers starts the fleet heartbeat, the config watcher and the
+// posture worker, and arms the new-flag hook.
+func (s *buildState) startWatchers() {
+	ctx, cfg, opts, c, apiServer, statusFn := s.ctx, s.cfg, s.opts, s.c, s.apiServer, s.statusFn
+	st, tagger, fleetPub, fleetCfgLive, fleetOn, advisorStk := s.st, s.tagger, s.fleetPub, s.fleetCfgLive, s.fleetOn, s.advisorStk
+	resourceControl, hunter, sysAgent, deltaHub, fw := s.resourceControl, s.hunter, s.sysAgent, s.deltaHub, s.fw
+	fileTelemetryOn, fileTelemetryChoice, postureHook, newFlagHook := s.fileTelemetryOn, s.fileTelemetryChoice, s.postureHook, s.newFlagHook
 	// Fleet heartbeat: posture + liveness pushed to every sink at boot, on a
 	// ticker, and on posture-state transitions. Always armed — enrolling a
 	// collector via config hot-reload activates it without a restart.
@@ -475,7 +687,12 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	}
 	postureHook.start(ctx, apiServer.PublishPostureIfChanged)
 	newFlagHook.fn = apiServer.NoteNewFlag
+}
 
+// serveAPI mounts the console API on the proxy port and serves the control
+// API on the bound socket; an unexpected stop reaches WaitForShutdown.
+func (s *buildState) serveAPI() {
+	ctx, cfg, c, proxyServer, apiServer, listener := s.ctx, s.cfg, s.c, s.proxyServer, s.apiServer, s.listener
 	// The browser console's telemetry fetches are same-origin with the
 	// dashboard, i.e. they land on the proxy's loopback HTTP port. Serve the
 	// API there behind the console token (a credential agents never receive —
@@ -497,11 +714,16 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			c.apiErrors <- err
 		}
 	}()
+}
 
-	c.collectorsDone = startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spool, fileTelemetryOn, localInference, askEgress)
-
-	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
-	return c, nil
+// launchCollectors starts the supervised collectors; Shutdown waits on the
+// channel it stores.
+func (s *buildState) launchCollectors() {
+	s.c.collectorsDone = startCollectors(s.ctx, collectorDeps{
+		sup: s.sup, supReg: s.supReg, cfg: s.cfg, b: s.b, st: s.st, tagger: s.tagger, resolver: s.resolver,
+		advisorStk: s.advisorStk, proxyServer: s.proxyServer, fwEngine: s.fw.Engine, hermes: s.hermes,
+		spool: s.spool, fileTelemetryOn: s.fileTelemetryOn, localInference: s.localInference, askEgress: s.askEgress,
+	})
 }
 
 // WaitForShutdown blocks until ctx is cancelled, the owning parent exits,
@@ -889,9 +1111,24 @@ func buildFleetAndOTLP(cfg config.Config) (*fleet.Publisher, *fleetConfigHolder,
 	return pub, cfgLive, exp
 }
 
+// resourceLoopDeps are the values runResourceLoop reads on each tick.
+type resourceLoopDeps struct {
+	tagger   *agents.Tagger
+	resolver *session.Resolver
+	tracker  *resource.Tracker
+	control  *resource.Controller
+	episodes *resourceEpisodeWriter
+	st       *store.Store
+	dbPath   string
+	supReg   *supervise.Registry
+	plans    *planSaver
+}
+
 // runResourceLoop: tagger refresh (5s idle, 1s under agents), session sweep,
 // resource observe, heartbeat and plan headroom persist.
-func runResourceLoop(ctx context.Context, tagger *agents.Tagger, resolver *session.Resolver, tracker *resource.Tracker, control *resource.Controller, episodes *resourceEpisodeWriter, st *store.Store, dbPath string, supReg *supervise.Registry, plans *planSaver) {
+func runResourceLoop(ctx context.Context, d resourceLoopDeps) {
+	tagger, resolver, tracker, control, episodes := d.tagger, d.resolver, d.tracker, d.control, d.episodes
+	st, dbPath, supReg, plans := d.st, d.dbPath, d.supReg, d.plans
 	timer := time.NewTimer(agents.RefreshInterval(tagger.Any()))
 	defer timer.Stop()
 	for {
@@ -1072,11 +1309,32 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, procSource 
 	}
 }
 
+// collectorDeps are the values the supervised collectors read.
+type collectorDeps struct {
+	sup             *supervise.Supervisor
+	supReg          *supervise.Registry
+	cfg             config.Config
+	b               *bus.Bus
+	st              *store.Store
+	tagger          *agents.Tagger
+	resolver        *session.Resolver
+	advisorStk      *advisorStackHolder
+	proxyServer     *proxy.ProxyServer
+	fwEngine        *firewall.Engine
+	hermes          *collect.HermesCollector
+	spool           *atomic.Pointer[collect.SpoolTailer]
+	fileTelemetryOn *atomic.Bool
+	localInference  *inference.Monitor
+	askEgress       func(context.Context, taint.Verdict) bool
+}
+
 // startCollectors launches the supervised collectors. File telemetry is the
 // spool tail of the root ES collector (the LaunchDaemon, or a developer's
 // `secure-agentd -es-collector` run as root); without a spool it is degraded,
 // not crash-looped, and starts when the spool appears.
-func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spool *atomic.Pointer[collect.SpoolTailer], fileTelemetryOn *atomic.Bool, localInference *inference.Monitor, askEgress func(context.Context, taint.Verdict) bool) <-chan struct{} {
+func startCollectors(ctx context.Context, d collectorDeps) <-chan struct{} {
+	sup, supReg, cfg, b, st := d.sup, d.supReg, d.cfg, d.b, d.st
+	proxyServer, spool, fileTelemetryOn, advisorStk := d.proxyServer, d.spool, d.fileTelemetryOn, d.advisorStk
 	var workers sync.WaitGroup
 	run := func(name string, fn func(context.Context) error) {
 		workers.Go(func() { sup.Run(ctx, name, fn) })
@@ -1112,6 +1370,20 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 		})
 	}
 
+	startNetworkCollectors(d, run)
+	startTranscriptCollectors(d, run)
+
+	workers.Go(func() { advisorStk.Run(ctx, sup) })
+	done := make(chan struct{})
+	go func() { workers.Wait(); close(done) }()
+	return done
+}
+
+// startNetworkCollectors runs the socket sampler and, with local inference
+// enabled, its gateways and endpoint monitor.
+func startNetworkCollectors(d collectorDeps, run func(string, func(context.Context) error)) {
+	cfg, b, tagger, resolver, supReg := d.cfg, d.b, d.tagger, d.resolver, d.supReg
+	localInference, fwEngine, askEgress := d.localInference, d.fwEngine, d.askEgress
 	run("netsampler", func(c context.Context) error {
 		ns := collect.NewNetSampler(b, tagger, cfg.NetSampleInterval, nil)
 		if localInference != nil {
@@ -1166,7 +1438,13 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 			})
 		})
 	}
+}
 
+// startTranscriptCollectors runs the transcript scanner and the opencode,
+// openclaw and Hermes pollers.
+func startTranscriptCollectors(d collectorDeps, run func(string, func(context.Context) error)) {
+	cfg, b, st, tagger, resolver, supReg := d.cfg, d.b, d.st, d.tagger, d.resolver, d.supReg
+	fwEngine, hermes := d.fwEngine, d.hermes
 	home, _ := os.UserHomeDir()
 	st.TrackHookIngestion()
 	run("transcript", func(c context.Context) error {
@@ -1241,11 +1519,6 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	run("hermes", func(c context.Context) error {
 		return hermes.Run(c)
 	})
-
-	workers.Go(func() { advisorStk.Run(ctx, sup) })
-	done := make(chan struct{})
-	go func() { workers.Wait(); close(done) }()
-	return done
 }
 
 // spoolWatchInterval is how often a daemon without file telemetry checks for
