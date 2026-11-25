@@ -171,7 +171,7 @@ func TestOrphansOfMovedAndDeletedRepositories(t *testing.T) {
 			t.Fatalf("its error line stayed: %q", e)
 		}
 	}
-	if !h.Listed(wt) || h.Listed(lost) || h.Listed("/nowhere") {
+	if h.ListedPath(wt) != wt || h.ListedPath(lost) != "" || h.ListedPath("/nowhere") != "" {
 		t.Fatal("Listed does not follow the report")
 	}
 	h.bgWG.Wait()

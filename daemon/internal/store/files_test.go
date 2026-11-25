@@ -43,6 +43,9 @@ func TestPathFindingsMatchExactly(t *testing.T) {
 	}
 	kinds := map[string]string{}
 	for _, f := range got {
+		if f.RecordedPath != odd {
+			t.Fatalf("%s recorded path = %q, want %q", f.Kind, f.RecordedPath, odd)
+		}
 		kinds[f.Kind] = f.ID
 	}
 	if kinds["flag"] != "f-odd" || kinds["incident"] != "inc-odd" {
@@ -72,6 +75,11 @@ func TestPathAccessesAreSessionFileEvents(t *testing.T) {
 	got := testutil.Read[[]model.FileAccess](t)(s.PathAccesses(p, 20))
 	if len(got) != 2 || got[0].PID != 11 || got[0].Kind != "file-write" || got[1].PID != 10 || got[1].ExePath != "/bin/cat" {
 		t.Fatalf("accesses = %+v, want pid 11 write then pid 10 open", got)
+	}
+	for _, access := range got {
+		if access.RecordedPath != p {
+			t.Fatalf("recorded path = %q, want %q", access.RecordedPath, p)
+		}
 	}
 	if got := testutil.Read[[]model.FileAccess](t)(s.PathAccesses("/w/none", 20)); got == nil || len(got) != 0 {
 		t.Fatalf("no accesses: got %#v, want empty non-nil", got)

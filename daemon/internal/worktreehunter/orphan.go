@@ -127,21 +127,21 @@ func (h *Hunter) TrashOrphan(ctx context.Context, path string) (TrashedOrphan, e
 	return TrashedOrphan{Path: o.Path, Bytes: u.Bytes, TrashPath: dest}, nil
 }
 
-// Listed reports whether path is a row of the cached scan.
-func (h *Hunter) Listed(path string) bool {
+// ListedPath returns the path from the matching cached row, or an empty string.
+func (h *Hunter) ListedPath(path string) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.cached == nil {
-		return false
+		return ""
 	}
 	for _, r := range h.cached.Repos {
 		for _, w := range r.Worktrees {
 			if w.Path == path {
-				return true
+				return w.Path
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 // markStale keeps the cached scan answering while the next report

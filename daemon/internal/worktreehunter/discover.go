@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 )
@@ -109,15 +111,16 @@ func resolveGitFile(dir string) (repoRef, *orphanDir, bool) {
 	if !filepath.IsAbs(gitdir) {
 		gitdir = filepath.Join(dir, gitdir)
 	}
-	st, err := os.Stat(gitdir)
+	admin, err := safefile.OpenLookupDir(gitdir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return repoRef{}, &orphanDir{Path: canonical(dir), Main: mainFromAdminDir(gitdir), Name: filepath.Base(filepath.Clean(gitdir))}, false
 	}
-	if err != nil || !st.IsDir() {
+	if err != nil {
 		return repoRef{}, nil, false
 	}
+	defer unix.Close(admin)
 	common := gitdir
-	if c, err := readGitPointer(gitdir, "commondir"); err == nil {
+	if c, err := readGitPointerAt(admin, "commondir"); err == nil {
 		common = strings.TrimSpace(string(c))
 		if common == "" {
 			return repoRef{}, nil, false
@@ -125,10 +128,10 @@ func resolveGitFile(dir string) (repoRef, *orphanDir, bool) {
 		if !filepath.IsAbs(common) {
 			common = filepath.Join(gitdir, common)
 		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return repoRef{}, nil, false
-	}
-	if !isGitDirectory(common) {
+		if !isGitDirectory(common) {
+			return repoRef{}, nil, false
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) || !hasGitMetadata(admin) {
 		return repoRef{}, nil, false
 	}
 	common = canonical(common)
@@ -139,11 +142,20 @@ func resolveGitFile(dir string) (repoRef, *orphanDir, bool) {
 	return repoRef{Common: common, Main: common, Bare: true}, nil, true
 }
 
-// Git pointer files contain a single local path. Check the opened file
-// before reading it and bound the read independently of its reported size.
 func readGitPointer(dir, name string) ([]byte, error) {
+	parent, err := safefile.OpenLookupDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(parent)
+	return readGitPointerAt(parent, name)
+}
+
+// Git pointer files contain a single local path. Bound the read independently
+// of the reported size of the already opened, regular file.
+func readGitPointerAt(parent int, name string) ([]byte, error) {
 	const maxPointerBytes = 8192
-	f, err := safefile.OpenRegularNoFollow(filepath.Join(dir, name))
+	f, err := safefile.OpenRegularNoFollowAt(parent, name)
 	if err != nil {
 		return nil, err
 	}
@@ -185,26 +197,38 @@ func isBareRepo(dir string) bool {
 // isGitDirectory checks the common repository metadata before discovery
 // accepts it. Repository selectors may point to bare repos and submodules.
 func isGitDirectory(dir string) bool {
-	root, err := os.OpenRoot(dir)
+	parent, err := safefile.OpenLookupDir(dir)
 	if err != nil {
 		return false
 	}
-	defer root.Close()
-	head, err := root.Lstat("HEAD")
-	if err != nil {
+	defer unix.Close(parent)
+	return hasGitMetadata(parent)
+}
+
+func hasGitMetadata(parent int) bool {
+	var head unix.Stat_t
+	if err := unix.Fstatat(parent, "HEAD", &head, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return false
 	}
-	if head.Mode()&os.ModeSymlink != 0 {
-		ref, err := root.Readlink("HEAD")
-		if err != nil || !strings.HasPrefix(ref, "refs/") || !filepath.IsLocal(ref) {
+	switch head.Mode & unix.S_IFMT {
+	case unix.S_IFREG:
+	case unix.S_IFLNK:
+		var target [8192]byte
+		n, err := unix.Readlinkat(parent, "HEAD", target[:])
+		if err != nil || n == len(target) {
 			return false
 		}
-	} else if !head.Mode().IsRegular() {
+		ref := string(target[:n])
+		if !strings.HasPrefix(ref, "refs/") || !filepath.IsLocal(ref) {
+			return false
+		}
+	default:
 		return false
 	}
-	// Git permits these storage directories to link outside the metadata directory.
+	// Validate fixed entries of the same directory. Git permits external storage links.
 	for _, name := range []string{"objects", "refs"} {
-		if info, err := os.Stat(filepath.Join(dir, name)); err != nil || !info.IsDir() {
+		var storage unix.Stat_t
+		if err := unix.Fstatat(parent, name, &storage, 0); err != nil || storage.Mode&unix.S_IFMT != unix.S_IFDIR {
 			return false
 		}
 	}
