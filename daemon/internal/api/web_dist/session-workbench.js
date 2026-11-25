@@ -263,7 +263,7 @@ function validHookForwarder(row) {
 }
 
 function hookDeliveryIssuesHTML(a, stale) {
-  return (a.issues || []).map(v => `<p>${stale ? 'Last reported ' : ''}${escapeHTML(v.stage)} error: ${escapeHTML(v.code)}. ${escapeHTML(v.next_action)}</p>`).join('');
+  return (a.issues || []).map(v => html`<p>${stale ? 'Last reported ' : ''}${v.stage} error: ${v.code}. ${v.next_action}</p>`).join('');
 }
 
 function hookForwarderHealthHTML(r, freshness, assessment) {
@@ -271,7 +271,7 @@ function hookForwarderHealthHTML(r, freshness, assessment) {
   if (!h) return '<p>Detailed source, delivery and persistence diagnostics are unavailable from this host.</p>' + (assessment ? hookDeliveryIssuesHTML(assessment, freshness !== 'recent') : '');
   const stale = freshness !== 'recent';
   const source = stale ? '<p>Last reported diagnostics follow; their current state is unknown.</p>'
-    : `<p>${({ connected: 'Source connected', disconnected: 'Source disconnected', error: 'Source error' })[h.source_state]} (host reported).${h.source_state === 'connected' ? '' : ' Check the host subscription and restore the source connection.'}</p>`;
+    : html`<p>${({ connected: 'Source connected', disconnected: 'Source disconnected', error: 'Source error' })[h.source_state]} (host reported).${h.source_state === 'connected' ? '' : ' Check the host subscription and restore the source connection.'}</p>`;
   const actions = {
     'invalid-input': 'Validate the completion metadata against the shared contract, then submit the corrected completion.',
     'unsupported-protocol': 'Use the supported native hook protocol and required snapshots, then submit the corrected completion.',
@@ -284,9 +284,9 @@ function hookForwarderHealthHTML(r, freshness, assessment) {
     'outbox-failed': 'Check outbox storage availability and permissions. Keep the existing outbox to preserve pending evidence.'
   };
   const errors = [['Capture', h.capture_error], ['Delivery', h.delivery_error], ['Persistence', h.outbox && h.outbox.error]]
-    .filter(([, code]) => code).map(([stage, code]) => `<p>${stale ? 'Last reported ' : ''}${stage} error: ${escapeHTML(code)}. ${escapeHTML(actions[code] || 'Check the reporting host diagnostics.')}</p>`).join('');
+    .filter(([, code]) => code).map(([stage, code]) => html`<p>${stale ? 'Last reported ' : ''}${stage} error: ${code}. ${actions[code] || 'Check the reporting host diagnostics.'}</p>`).join('');
   const persistence = h.outbox
-    ? `<p>${Number(h.outbox.persisted)} persisted of ${Number(r.pending)} queued · ${Number(h.outbox.recovered)} recovered after host restart. Persisted completions can survive host restart; recorder acceptance does not establish daemon storage.</p>`
+    ? html`<p>${Number(h.outbox.persisted)} persisted of ${Number(r.pending)} queued · ${Number(h.outbox.recovered)} recovered after host restart. Persisted completions can survive host restart; recorder acceptance does not establish daemon storage.</p>`
     : '<p>Host outbox persistence is disabled. Queued completions are held in memory and may be lost if the host exits.</p>';
   const reporting = h.report_error ? '<p>A previous health report failed to reach the recorder. This received report shows reporting has resumed.</p>' : '';
   return source + (assessment ? hookDeliveryIssuesHTML(assessment, stale) : errors) + persistence + reporting;
@@ -295,7 +295,7 @@ function hookForwarderHealthHTML(r, freshness, assessment) {
 function hookForwardersHTML(rows, truncated, readFailed) {
   if (!rows || !rows.length) return '<p>No host health reports received. Host connectivity is unknown.</p>';
   const limit = truncated ? '<p>Only the 128 most recently received forwarder instances are retained; other reports may be omitted.</p>' : '';
-  return `<h5>Host reports</h5>${limit}${rows.map(row => {
+  return html`<h5>Host reports</h5>${raw(limit)}${rows.map(row => {
     const r = row.report;
     const freshness = readFailed ? 'unverified' : row.freshness;
     const state = freshness === 'stale' ? 'Report stale; current connection state unknown'
@@ -305,8 +305,8 @@ function hookForwardersHTML(rows, truncated, readFailed) {
     if (freshness !== 'recent') action = '<p>Check the reporting host, recorder and clocks, then obtain a new report.</p>';
     else if (!r.health && (r.state !== 'connected' || r.pending > 0)) action = '<p>Check the source connection and recorder. Retry retained completions using their original delivery IDs.</p>';
     const gap = r.dropped > 0 ? '<p>The host reports dropped completions. Some evidence may be missing; inspect host diagnostics and retry retained deliveries. Dropped completions may not be recoverable.</p>' : '';
-    return `<article class="sd-finding"><h5>${escapeHTML(r.harness)} · ${escapeHTML(state)} (host reported)</h5><p>Forwarder: ${escapeHTML(r.forwarder_id)} · Report ${Number(r.sequence)}${r.session_id ? ' · Host-supplied session: ' + escapeHTML(r.session_id) : ' · Session ID not supplied'}</p><p>${Number(r.pending)} queued · ${Number(r.delivery_failures)} delivery failures · ${Number(r.dropped)} dropped. Failure and drop counts are cumulative for this forwarder instance.</p><p>Host report time: <time>${escapeHTML(r.ts)}</time> · Local receipt: <time>${escapeHTML(row.received_at)}</time></p>${hookForwarderHealthHTML(r, freshness, row.assessment)}${action}${gap}</article>`;
-  }).join('')}<p>Host reports do not establish complete delivery or protection coverage.</p>`;
+    return raw(html`<article class="sd-finding"><h5>${r.harness} · ${state} (host reported)</h5><p>Forwarder: ${r.forwarder_id} · Report ${Number(r.sequence)}${r.session_id ? ' · Host-supplied session: ' + r.session_id : ' · Session ID not supplied'}</p><p>${Number(r.pending)} queued · ${Number(r.delivery_failures)} delivery failures · ${Number(r.dropped)} dropped. Failure and drop counts are cumulative for this forwarder instance.</p><p>Host report time: <time>${r.ts}</time> · Local receipt: <time>${row.received_at}</time></p>${raw(hookForwarderHealthHTML(r, freshness, row.assessment))}${raw(action)}${raw(gap)}</article>`);
+  })}<p>Host reports do not establish complete delivery or protection coverage.</p>`;
 }
 
 function validHookIngestion(h) {
@@ -360,25 +360,25 @@ function hookMonitoringHTML(m) {
   const labels={claude:'Claude Code',codex:'Codex',openclaw:'OpenClaw',hermes:'Hermes',opencode:'OpenCode'};
   const rows=m.rows.map(row=>{
     const receipt=!m.available ? 'Completion receipt unavailable.' : row.receipt
-      ? `${m.stale?'Last known completion receipt':'Last completion receipt'}: <time>${escapeHTML(row.receipt.last_received_at)}</time> · ${Number(row.receipt.accepted)} accepted deliveries.`
+      ? html`${m.stale?'Last known completion receipt':'Last completion receipt'}: <time>${row.receipt.last_received_at}</time> · ${Number(row.receipt.accepted)} accepted deliveries.`
       : 'No completion received in this daemon run. Delivery is unknown.';
     const forwarding=!row.reports.length ? 'Forwarding state unknown; no host report received.'
       : [row.errors?plural(row.errors,'host with active errors','hosts with active errors'):'',row.unknown?plural(row.unknown,'host with unknown current state','hosts with unknown current state'):'',
         row.reports.length-row.errors-row.unknown?plural(row.reports.length-row.errors-row.unknown,'host reporting no active error','hosts reporting no active error'):''].filter(Boolean).join(' · ')+'.';
-    const hosts=row.reports.map(r=>`<button type="button" class="link-btn" data-action="hook-delivery-inspect" data-id="${escapeHTML(r.report.forwarder_id)}">Inspect delivery${row.reports.length>1?' · '+escapeHTML(r.report.forwarder_id):''}</button>`).join('');
-    const sessions=row.sessions.slice(0,5).map(s=>`<button type="button" class="link-btn" data-action="hook-session-open" data-session="${escapeHTML(s.id)}">Open session hooks · ${escapeHTML(sessionTitle(s))}${s.status?' · '+escapeHTML(s.status):''}</button>`).join('');
-    return `<article class="hook-monitoring-row" data-hook-runtime="${row.harness}"><h4>${labels[row.harness]}</h4><p>${receipt}</p><p>${forwarding}</p>${row.gaps?`<p>Evidence gap: ${plural(row.gaps,'host instance reported drops','host instances reported drops')}. Missing evidence may be unrecoverable.</p>`:''}<div class="hook-monitoring-actions">${row.reports.length>1?`<details data-hook-disclosure="hosts:${row.harness}"><summary>Inspect ${row.reports.length} forwarding hosts</summary>${hosts}</details>`:hosts}${row.sessions.length?`<details data-hook-disclosure="sessions:${row.harness}"><summary>${plural(row.sessions.length,'retained session','retained sessions')}</summary>${sessions}${row.sessions.length>5?'<button type="button" class="link-btn" data-action="goto-tab" data-tab="sessions">View all sessions</button>':''}</details>`:''}<button type="button" class="link-btn" data-action="hook-setup" data-harness="${row.harness}">Setup and verification</button></div></article>`;
+    const hosts=row.reports.map(r=>raw(html`<button type="button" class="link-btn" data-action="hook-delivery-inspect" data-id="${r.report.forwarder_id}">Inspect delivery${row.reports.length>1?' · '+r.report.forwarder_id:''}</button>`));
+    const sessions=row.sessions.slice(0,5).map(s=>raw(html`<button type="button" class="link-btn" data-action="hook-session-open" data-session="${s.id}">Open session hooks · ${sessionTitle(s)}${s.status?' · '+s.status:''}</button>`));
+    return html`<article class="hook-monitoring-row" data-hook-runtime="${row.harness}"><h4>${labels[row.harness]}</h4><p>${raw(receipt)}</p><p>${forwarding}</p>${row.gaps?raw(html`<p>Evidence gap: ${plural(row.gaps,'host instance reported drops','host instances reported drops')}. Missing evidence may be unrecoverable.</p>`):''}<div class="hook-monitoring-actions">${row.reports.length>1?raw(html`<details data-hook-disclosure="hosts:${row.harness}"><summary>Inspect ${row.reports.length} forwarding hosts</summary>${hosts}</details>`):hosts}${row.sessions.length?raw(html`<details data-hook-disclosure="sessions:${row.harness}"><summary>${plural(row.sessions.length,'retained session','retained sessions')}</summary>${sessions}${raw(row.sessions.length>5?'<button type="button" class="link-btn" data-action="goto-tab" data-tab="sessions">View all sessions</button>':'')}</details>`):''}<button type="button" class="link-btn" data-action="hook-setup" data-harness="${row.harness}">Setup and verification</button></div></article>`;
   }).join('');
-  return `<section class="hook-monitoring" aria-label="Hook monitoring"><h3>Hook monitoring</h3>${!m.available?'<p role="status">Ingestion diagnostics unavailable. Current receipt and forwarding states are unknown.</p><button type="button" class="link-btn" data-action="retry-posture">Refresh monitoring</button>':m.stale?'<p role="status">Last loaded observations; current receipt and forwarding states are unknown. Refresh telemetry to retry.</p><button type="button" class="link-btn" data-action="retry-posture">Refresh monitoring</button>':''}${m.available?`<p>Receipts across all sessions since <time>${escapeHTML(m.since)}</time> in this daemon run.</p>`:''}${rows || '<p>No supported runtimes observed in retained sessions or hook diagnostics.</p>'}${m.rejected?`<p>${Number(m.rejected)} rejected shared records; rejections cannot be attributed to a runtime or session. Review the reporting host diagnostics.</p>`:''}${m.truncated?'<p>Other forwarding instances may be omitted from the retained reports.</p>':''}<p>Receipt does not confirm durable storage or protection coverage. Retries can count again; silence does not establish a forwarding failure.</p></section>`;
+  return html`<section class="hook-monitoring" aria-label="Hook monitoring"><h3>Hook monitoring</h3>${raw(!m.available?'<p role="status">Ingestion diagnostics unavailable. Current receipt and forwarding states are unknown.</p><button type="button" class="link-btn" data-action="retry-posture">Refresh monitoring</button>':m.stale?'<p role="status">Last loaded observations; current receipt and forwarding states are unknown. Refresh telemetry to retry.</p><button type="button" class="link-btn" data-action="retry-posture">Refresh monitoring</button>':'')}${m.available?raw(html`<p>Receipts across all sessions since <time>${m.since}</time> in this daemon run.</p>`):''}${raw(rows || '<p>No supported runtimes observed in retained sessions or hook diagnostics.</p>')}${m.rejected?raw(html`<p>${Number(m.rejected)} rejected shared records; rejections cannot be attributed to a runtime or session. Review the reporting host diagnostics.</p>`):''}${raw(m.truncated?'<p>Other forwarding instances may be omitted from the retained reports.</p>':'')}<p>Receipt does not confirm durable storage or protection coverage. Retries can count again; silence does not establish a forwarding failure.</p></section>`;
 }
 
 function hookIngestionHTML(h, state) {
   const head = '<summary>Daemon hook ingestion · all sessions</summary>';
-  if (!h || !h.available) return `<details class="sd-findings-head" data-session-part="hook-ingestion">${head}<p>Ingestion diagnostics unavailable.</p></details>`;
+  if (!h || !h.available) return html`<details class="sd-findings-head" data-session-part="hook-ingestion">${raw(head)}<p>Ingestion diagnostics unavailable.</p></details>`;
   const stale = state && state.error ? '<p role="status">Showing the last loaded ingestion diagnostics; they may be out of date.</p>' : '';
-  const rows = h.harnesses.map(r => `<p>${escapeHTML(r.harness)}: ${Number(r.accepted)} accepted deliveries · Last local receipt: <time>${escapeHTML(r.last_received_at)}</time></p>`).join('');
-  const rejected = h.rejected ? `<p>${Number(h.rejected)} rejected shared hook records · Last rejection: <time>${escapeHTML(h.last_rejected_at)}</time></p><p>Check the forwarding host and recorder diagnostics, validate the shared record format, then retry retained completions with their original delivery IDs. Rejected records cannot be attributed to a session or harness.</p>` : '<p>No recognized shared hook records rejected.</p>';
-  return `<details class="sd-findings-head" data-session-part="hook-ingestion">${head}${stale}<p>Counts since <time>${escapeHTML(h.since)}</time> in this daemon run, across all sessions.</p>${rows || '<p>No hook deliveries observed in this daemon run.</p>'}${rejected}<p>Receipt confirms collection, not durable storage or a unique execution. Retries can count again. Silence does not establish a forwarding failure. Errors before the recorder writes a shared record are visible only when the host reports them.</p>${hookForwardersHTML(h.forwarders, h.forwarders_truncated, state && state.error)}</details>`;
+  const rows = h.harnesses.map(r => html`<p>${r.harness}: ${Number(r.accepted)} accepted deliveries · Last local receipt: <time>${r.last_received_at}</time></p>`).join('');
+  const rejected = h.rejected ? html`<p>${Number(h.rejected)} rejected shared hook records · Last rejection: <time>${h.last_rejected_at}</time></p><p>Check the forwarding host and recorder diagnostics, validate the shared record format, then retry retained completions with their original delivery IDs. Rejected records cannot be attributed to a session or harness.</p>` : '<p>No recognized shared hook records rejected.</p>';
+  return html`<details class="sd-findings-head" data-session-part="hook-ingestion">${raw(head)}${raw(stale)}<p>Counts since <time>${h.since}</time> in this daemon run, across all sessions.</p>${raw(rows || '<p>No hook deliveries observed in this daemon run.</p>')}${raw(rejected)}<p>Receipt confirms collection, not durable storage or a unique execution. Retries can count again. Silence does not establish a forwarding failure. Errors before the recorder writes a shared record are visible only when the host reports them.</p>${raw(hookForwardersHTML(h.forwarders, h.forwarders_truncated, state && state.error))}</details>`;
 }
 
 function validHookHealth(h) {
@@ -409,8 +409,8 @@ function hookSetupHTML(harness, ingestion) {
   return selected.map(name => {
     const [title, detail] = sources[name];
     const receipt = ingestion?.available && ingestion.harnesses?.find(r => r.harness === name);
-    const observed = receipt ? `Last daemon receipt: ${escapeHTML(receipt.last_received_at)} · ${Number(receipt.accepted)} accepted deliveries in this daemon run. Receipt does not confirm durable storage.` : 'No daemon receipt is available for this source. Connection and delivery remain unknown.';
-    return `<section class="sd-finding"><h4>${title}</h4><p>${detail}</p><ol><li>Confirm that this source is connected using the integration guide and check the installed recorder’s configuration.</li><li>Observe a real completion during normal use; do not infer execution from configured hooks.</li><li>Refresh this session’s Hooks view and inspect recorded runs, measurements, and delivery reports.</li></ol><p>${observed}</p><p>These observations do not establish protection coverage. A configured integration or connected source alone does not establish complete hook delivery.</p></section>`;
+    const observed = receipt ? `Last daemon receipt: ${receipt.last_received_at} · ${Number(receipt.accepted)} accepted deliveries in this daemon run. Receipt does not confirm durable storage.` : 'No daemon receipt is available for this source. Connection and delivery remain unknown.';
+    return html`<section class="sd-finding"><h4>${title}</h4><p>${detail}</p><ol><li>Confirm that this source is connected using the integration guide and check the installed recorder’s configuration.</li><li>Observe a real completion during normal use; do not infer execution from configured hooks.</li><li>Refresh this session’s Hooks view and inspect recorded runs, measurements, and delivery reports.</li></ol><p>${observed}</p><p>These observations do not establish protection coverage. A configured integration or connected source alone does not establish complete hook delivery.</p></section>`;
   }).join('') + '<p><a href="https://github.com/cavi-ai/secure-agent/blob/main/docs/HOOKS.md" target="_blank" rel="noopener noreferrer">Hook integration guide</a></p>';
 }
 
@@ -437,8 +437,8 @@ function validHookEvidence(page, scope) {
 }
 
 function hookEvidenceHTML(page) {
-  const rows = page.rows.map(r => `<article class="sd-finding"><h4>${escapeHTML(r.status)} · <time>${escapeHTML(r.ts)}</time></h4><p>Run: ${escapeHTML(r.id)}</p><p>Reason: ${escapeHTML(r.evidence?.reason_code || 'not reported')} · Duration: ${r.duration_ms === undefined ? 'unknown' : escapeHTML(fmtDurationMs(r.duration_ms))} · Returned characters: ${r.chars === undefined ? 'unknown' : Number(r.chars)}</p><p>Host-reported action outcome: ${escapeHTML(r.evidence?.action_outcome || 'unknown')} · Control role: ${escapeHTML(r.evidence?.control_role || 'unknown')}</p></article>`).join('');
-  return `<section class="sd-hook-evidence"><p>${escapeHTML(page.filter.harness)} · ${escapeHTML(page.filter.event)} · Handler: ${escapeHTML(page.filter.handler_id || 'unattributed')} · Configuration: ${escapeHTML(page.filter.config_id || 'not supplied')}</p><p>Retained completions from <time>${escapeHTML(page.since)}</time> to <time>${escapeHTML(page.until)}</time>. ${page.truncated ? 'Evidence is limited to the latest 100 matching runs.' : ''} Equal timestamps do not establish execution order.</p>${rows || '<p>No matching retained completions in this window. This does not establish recovery or prove that no hooks ran.</p>'}<p>Only normalized metadata is shown. These records do not establish protection coverage.</p></section>`;
+  const rows = page.rows.map(r => html`<article class="sd-finding"><h4>${r.status} · <time>${r.ts}</time></h4><p>Run: ${r.id}</p><p>Reason: ${r.evidence?.reason_code || 'not reported'} · Duration: ${r.duration_ms === undefined ? 'unknown' : fmtDurationMs(r.duration_ms)} · Returned characters: ${r.chars === undefined ? 'unknown' : Number(r.chars)}</p><p>Host-reported action outcome: ${r.evidence?.action_outcome || 'unknown'} · Control role: ${r.evidence?.control_role || 'unknown'}</p></article>`).join('');
+  return html`<section class="sd-hook-evidence"><p>${page.filter.harness} · ${page.filter.event} · Handler: ${page.filter.handler_id || 'unattributed'} · Configuration: ${page.filter.config_id || 'not supplied'}</p><p>Retained completions from <time>${page.since}</time> to <time>${page.until}</time>. ${page.truncated ? 'Evidence is limited to the latest 100 matching runs.' : ''} Equal timestamps do not establish execution order.</p>${raw(rows || '<p>No matching retained completions in this window. This does not establish recovery or prove that no hooks ran.</p>')}<p>Only normalized metadata is shown. These records do not establish protection coverage.</p></section>`;
 }
 
 // Build an allowlisted handoff from the same validated snapshot as the inspector.
@@ -514,12 +514,12 @@ function hookDiagnosticSummary(kind, scope, payload) {
 }
 
 function hookDiagnosticPreviewHTML(summary) {
-  return `<details class="hook-diagnostic-preview"><summary>Preview diagnostic summary</summary><label>Diagnostic summary<textarea readonly rows="10" spellcheck="false">${escapeHTML(summary)}</textarea></label><p>Only normalized metadata is included. Review this snapshot before sharing it.</p></details><p id="hook-diagnostic-status" role="status"></p>`;
+  return html`<details class="hook-diagnostic-preview"><summary>Preview diagnostic summary</summary><label>Diagnostic summary<textarea readonly rows="10" spellcheck="false">${summary}</textarea></label><p>Only normalized metadata is included. Review this snapshot before sharing it.</p></details><p id="hook-diagnostic-status" role="status"></p>`;
 }
 
 function hookEvidenceButtonHTML(f, sessionId, exact = false) {
   if (!sessionId || !HOOK_HARNESSES.includes(f.harness)) return '';
-  return `<button type="button" class="link-btn" data-action="hook-evidence" data-session="${escapeHTML(sessionId)}" data-harness="${escapeHTML(f.harness)}" data-event="${escapeHTML(f.event)}" data-event_scope="${exact ? 'exact' : 'group'}" data-script="${escapeHTML(f.script || '')}" data-handler="${escapeHTML(f.handler_id || '')}" data-config="${escapeHTML(f.config_id || '')}">Inspect recorded runs</button>`;
+  return html`<button type="button" class="link-btn" data-action="hook-evidence" data-session="${sessionId}" data-harness="${f.harness}" data-event="${f.event}" data-event_scope="${exact ? 'exact' : 'group'}" data-script="${f.script || ''}" data-handler="${f.handler_id || ''}" data-config="${f.config_id || ''}">Inspect recorded runs</button>`;
 }
 
 function hookRepairScope(f, session) {
@@ -554,28 +554,28 @@ function validHookRepair(page, scope) {
 }
 
 function hookRepairHTML(scope, page, message) {
-  const baseline=`<section class="sd-finding"><h4>Original failure: ${escapeHTML(scope.problem || 'Hook repeatedly failed')}</h4><p>${escapeHTML(scope.explanation || '')}</p><p>Last observed failure: <time>${escapeHTML(scope.after)}</time></p><details><summary>Original failure details</summary><p>Handler: ${escapeHTML(scope.handler)} · Configuration: ${escapeHTML(scope.config || 'not supplied')}</p><p>Original guidance: ${escapeHTML(scope.guidance || '')}</p></details></section>`;
+  const baseline=html`<section class="sd-finding"><h4>Original failure: ${scope.problem || 'Hook repeatedly failed'}</h4><p>${scope.explanation || ''}</p><p>Last observed failure: <time>${scope.after}</time></p><details><summary>Original failure details</summary><p>Handler: ${scope.handler} · Configuration: ${scope.config || 'not supplied'}</p><p>Original guidance: ${scope.guidance || ''}</p></details></section>`;
   const v=page?.verification;
-  if (!v) return `<section class="sd-hook-evidence">${baseline}<p role="status">${escapeHTML(message || 'Loading verification evidence…')}</p></section>`;
-  return `<section class="sd-hook-evidence">${baseline}<section aria-label="Repair check result" role="status"><h4>${escapeHTML(v.title)}</h4><p>${escapeHTML(v.detail)}</p>${v.observed_at ? `<p>Newest observed completion: <time>${escapeHTML(v.observed_at)}</time> · Configuration: ${v.config_id && v.config_id===scope.config ? 'Matches the original reported revision' : escapeHTML(v.config_id || 'not supplied')}</p><details><summary>Completion identifiers</summary><p>Run IDs: ${v.run_ids.map(escapeHTML).join(', ')}</p></details>` : ''}${v.reason_code ? `<p>Reported reason: ${escapeHTML(v.reason_code)}</p>` : ''}${v.limits.map(s=>`<p>${escapeHTML(s)}</p>`).join('')}</section><details><summary>Recorded runs for the original configuration</summary>${hookEvidenceHTML(page)}</details></section>`;
+  if (!v) return html`<section class="sd-hook-evidence">${raw(baseline)}<p role="status">${message || 'Loading verification evidence…'}</p></section>`;
+  return html`<section class="sd-hook-evidence">${raw(baseline)}<section aria-label="Repair check result" role="status"><h4>${v.title}</h4><p>${v.detail}</p>${v.observed_at ? raw(html`<p>Newest observed completion: <time>${v.observed_at}</time> · Configuration: ${v.config_id && v.config_id===scope.config ? 'Matches the original reported revision' : v.config_id || 'not supplied'}</p><details><summary>Completion identifiers</summary><p>Run IDs: ${v.run_ids.join(', ')}</p></details>`) : ''}${v.reason_code ? raw(html`<p>Reported reason: ${v.reason_code}</p>`) : ''}${v.limits.map(s=>raw(html`<p>${s}</p>`))}</section><details><summary>Recorded runs for the original configuration</summary>${raw(hookEvidenceHTML(page))}</details></section>`;
 }
 
 function hookFindingBodyHTML(f, sessionId) {
   const repair=hookRepairScope(f,sessionId);
-  const check=repair ? `<button type="button" class="link-btn" data-action="hook-repair-check" ${Object.entries(repair).map(([k,v])=>`data-${k}="${escapeHTML(v)}"`).join(' ')}>Check repair</button>` : '';
-  return `<p>${escapeHTML(f.detail)}</p><p><strong>Next action:</strong> ${escapeHTML(f.next_action)}</p>
-    <p>${escapeHTML(f.event)}${f.script ? ' · ' + escapeHTML(f.script) : ''} · Handler: ${escapeHTML(f.handler_id)}${f.config_id ? ' · Configuration: ' + escapeHTML(f.config_id) : ''}</p>
-    <p>${Number(f.count)} observed runs · <time>${escapeHTML(f.first_at)}</time> to <time>${escapeHTML(f.last_at)}</time></p>
-    ${(f.limits || []).map(limit => `<p class="sd-context-limit">${escapeHTML(limit)}</p>`).join('')}${check}${hookEvidenceButtonHTML(f, sessionId, true)}`;
+  const check=repair ? html`<button type="button" class="link-btn" data-action="hook-repair-check" ${raw(Object.entries(repair).map(([k,v])=>html`data-${k}="${v}"`).join(' '))}>Check repair</button>` : '';
+  return html`<p>${f.detail}</p><p><strong>Next action:</strong> ${f.next_action}</p>
+    <p>${f.event}${f.script ? ' · ' + f.script : ''} · Handler: ${f.handler_id}${f.config_id ? ' · Configuration: ' + f.config_id : ''}</p>
+    <p>${Number(f.count)} observed runs · <time>${f.first_at}</time> to <time>${f.last_at}</time></p>
+    ${(f.limits || []).map(limit => raw(html`<p class="sd-context-limit">${limit}</p>`))}${raw(check)}${raw(hookEvidenceButtonHTML(f, sessionId, true))}`;
 }
 
 function sessionHookHealthHTML(health, state, sessionId) {
   const head = '<h4>Hook findings</h4>';
-  if (!health || !health.available) return `<section data-session-part="hook-health" class="sd-findings-head">${head}<p role="status">Hook assessment unavailable. Refresh current session status to retry.</p></section>`;
+  if (!health || !health.available) return html`<section data-session-part="hook-health" class="sd-findings-head">${raw(head)}<p role="status">Hook assessment unavailable. Refresh current session status to retry.</p></section>`;
   const stale = state && state.error ? '<p role="status">Showing the last loaded hook assessment; it may be out of date.</p>' : '';
-  const limits = `${health.truncated ? '<p>Analysis is limited to recent samples and up to 20 findings.</p>' : ''}${health.unattributed_runs ? `<p>${Number(health.unattributed_runs)} recorded ${health.unattributed_runs === 1 ? 'run lacks' : 'runs lack'} handler identity and cannot support handler-specific findings.</p>` : ''}`;
-  const rows = health.findings.map(f => `<article class="sd-finding"><h5>${escapeHTML(f.title)} · ${f.needs_action ? 'Needs repair' : 'Advisory'}</h5>${hookFindingBodyHTML(f, sessionId)}</article>`).join('');
-  return `<section data-session-part="hook-health" class="sd-findings-head">${head}${stale}<p>${Number(health.observed_runs)} recorded completions assessed from ${escapeHTML(health.since)} to ${escapeHTML(health.until)}. This does not establish protection coverage.</p>${limits}${rows || '<p>No repair or advisory pattern was found in the assessed records.</p>'}</section>`;
+  const limits = html`${raw(health.truncated ? '<p>Analysis is limited to recent samples and up to 20 findings.</p>' : '')}${health.unattributed_runs ? raw(html`<p>${Number(health.unattributed_runs)} recorded ${health.unattributed_runs === 1 ? 'run lacks' : 'runs lack'} handler identity and cannot support handler-specific findings.</p>`) : ''}`;
+  const rows = health.findings.map(f => html`<article class="sd-finding"><h5>${f.title} · ${f.needs_action ? 'Needs repair' : 'Advisory'}</h5>${raw(hookFindingBodyHTML(f, sessionId))}</article>`).join('');
+  return html`<section data-session-part="hook-health" class="sd-findings-head">${raw(head)}${raw(stale)}<p>${Number(health.observed_runs)} recorded completions assessed from ${health.since} to ${health.until}. This does not establish protection coverage.</p>${raw(limits)}${raw(rows || '<p>No repair or advisory pattern was found in the assessed records.</p>')}</section>`;
 }
 
 // Identified handlers stay separate; legacy rows remain event/script totals.
@@ -616,30 +616,30 @@ function selectHookHistory(rows, controls = {}) {
 function sessionHooksHTML(rows, state, health, healthState, ingestion, sessionId, controls = {}) {
   state = state || {};
   const retry = '<button type="button" class="link-btn" data-action="session-hooks-retry">Retry hooks</button>';
-  const notice = state.error ? `Hook runs unavailable.${rows ? ' Showing the last loaded totals; they may be out of date.' : ''} ${retry}`
+  const notice = state.error ? html`Hook runs unavailable.${rows ? ' Showing the last loaded totals; they may be out of date.' : ''} ${raw(retry)}`
     : !rows ? 'Loading hook runs…' : '';
-  const head = sessionHookHealthHTML(health, healthState, sessionId) + hookIngestionHTML(ingestion, healthState) + `<header data-session-part="hooks-head"><h4>Hook history</h4><button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button><p>Recorded completions from session transcripts and connected hosts. Errors and cancellations are separate. Blocks can be expected protection or validation decisions. Cumulative runtime can include overlapping callbacks. Outcome counts are historical; current repair findings are assessed separately. Measurement sorts use reported totals; unknown values sort last.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
+  const head = sessionHookHealthHTML(health, healthState, sessionId) + hookIngestionHTML(ingestion, healthState) + html`<header data-session-part="hooks-head"><h4>Hook history</h4><button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button><p>Recorded completions from session transcripts and connected hosts. Errors and cancellations are separate. Blocks can be expected protection or validation decisions. Cumulative runtime can include overlapping callbacks. Outcome counts are historical; current repair findings are assessed separately. Measurement sorts use reported totals; unknown values sort last.</p>${notice ? raw(html`<p role="status">${raw(notice)}</p>`) : ''}</header>`;
   // Static markup keeps native inputs and their caret stable during refreshes.
-  const tools = `<div class="sd-hook-controls" data-session-part="hooks-controls" role="group" aria-label="Filter hook history">
+  const tools = html`<div class="sd-hook-controls" data-session-part="hooks-controls" role="group" aria-label="Filter hook history">
     <label>Search hook history<input type="search" maxlength="256" data-hook-history="query" placeholder="Event, script or handler ID"></label>
     <label>Outcome<select data-hook-history="outcome"><option value="all">All outcomes</option><option value="errors">Execution errors</option><option value="blocks">Blocks</option><option value="cancelled">Cancellations</option></select></label>
     <label>Sort by<select data-hook-history="sort"><option value="runs">Most runs</option><option value="total_ms">Cumulative runtime</option><option value="chars">Returned characters</option></select></label>
     <button type="button" class="link-btn" data-action="hook-history-clear">Clear filters</button></div>`;
   if (!rows) return head;
   const selected = selectHookHistory(rows, controls);
-  const count = `<p data-session-part="hooks-count" role="status">${selected.length} of ${rows.length} recorded hook groups.</p>`;
+  const count = html`<p data-session-part="hooks-count" role="status">${selected.length} of ${rows.length} recorded hook groups.</p>`;
   if (!rows.length) return head + tools + count + '<p data-session-part="hooks-empty">No hook runs recorded for this session.</p>';
   if (!selected.length) return head + tools + count + '<p data-session-part="hooks-empty">No hook groups match these filters. Clear filters to see retained history.</p>';
   const metric = (r, key, samples, format) => {
     if (!hookMeasurementKnown(r, key, samples)) return 'unknown';
-    return escapeHTML(format(r[key])) + (r[samples] !== undefined && r[samples] < r.runs ? ` (${r[samples]}/${r.runs} measured)` : '');
+    return html`${format(r[key])}${r[samples] !== undefined && r[samples] < r.runs ? ` (${r[samples]}/${r.runs} measured)` : ''}`;
   };
-  const cell = (label, value) => `<td role="cell" data-label="${label}">${value}</td>`;
-  const body = selected.map(r => `<tr${r.errors > 0 ? ' class="sd-hook-failed"' : ''} role="row" data-row-id="${escapeHTML(JSON.stringify([r.harness || '',r.event,r.script || '',r.handler_id || '',r.config_id || '']))}">
-      ${cell('Event',escapeHTML(r.event))}${cell('Handler',`${escapeHTML(r.script || 'not recorded')}<details><summary>Handler details</summary><p>Handler: ${escapeHTML(r.handler_id || 'identity unavailable')}<br>Configuration: ${escapeHTML(r.config_id || 'not supplied')}</p></details>${hookEvidenceButtonHTML(r, sessionId)}`)}
+  const cell = (label, value) => raw(html`<td role="cell" data-label="${label}">${value}</td>`);
+  const body = selected.map(r => raw(html`<tr${raw(r.errors > 0 ? ' class="sd-hook-failed"' : '')} role="row" data-row-id="${JSON.stringify([r.harness || '',r.event,r.script || '',r.handler_id || '',r.config_id || ''])}">
+      ${cell('Event',r.event)}${cell('Handler',raw(html`${r.script || 'not recorded'}<details><summary>Handler details</summary><p>Handler: ${r.handler_id || 'identity unavailable'}<br>Configuration: ${r.config_id || 'not supplied'}</p></details>${raw(hookEvidenceButtonHTML(r, sessionId))}`))}
       ${cell('Runs',r.runs)}${cell('Errors',r.errors)}${cell('Blocked',r.blocks)}${cell('Cancelled',r.cancelled || 0)}
-      ${cell('Chars returned',metric(r, 'chars', 'char_samples', fmtCompact))}${cell('Cumulative runtime',metric(r, 'total_ms', 'duration_samples', fmtDurationMs))}</tr>`).join('');
-  return head + tools + count + `<div class="sd-hooks-scroll" data-session-part="hooks-table" role="region" aria-label="Hook history" tabindex="0"><table class="sd-hooks" role="table"><thead role="rowgroup"><tr role="row">
+      ${cell('Chars returned',raw(metric(r, 'chars', 'char_samples', fmtCompact)))}${cell('Cumulative runtime',raw(metric(r, 'total_ms', 'duration_samples', fmtDurationMs)))}</tr>`));
+  return head + tools + count + html`<div class="sd-hooks-scroll" data-session-part="hooks-table" role="region" aria-label="Hook history" tabindex="0"><table class="sd-hooks" role="table"><thead role="rowgroup"><tr role="row">
       <th scope="col" role="columnheader">Event</th><th scope="col" role="columnheader">Handler</th><th scope="col" role="columnheader">Runs</th><th scope="col" role="columnheader">Errors</th>
       <th scope="col" role="columnheader">Blocked</th><th scope="col" role="columnheader">Cancelled</th><th scope="col" role="columnheader">Chars returned</th><th scope="col" role="columnheader">Cumulative runtime</th>
     </tr></thead><tbody role="rowgroup">${body}</tbody></table></div>`;
@@ -664,16 +664,16 @@ function recentWorkSessions(sessions, search, order = []) {
 function recentWorkRowHTML(s) {
   const seen = recentWorkActivity(s);
   const name = s.repo || sessionTitle(s);
-  return `<div class="session-daily-row"><button type="button" class="session-daily-card" data-action="session-current" data-session="${escapeHTML(s.id)}" title="Session ${escapeHTML(s.id)}">
-    <span class="session-daily-workspace"><strong>${escapeHTML(name)}</strong><small title="${escapeHTML(s.branch || '')}">${escapeHTML(s.branch || 'Branch not recorded')}</small></span>
-    <span class="session-daily-identity">${harnessChipHTML(s.harness)}<span>${escapeHTML(harnessMeta(s.harness).label)}</span></span>
-    <span class="session-daily-status" data-status="${escapeHTML(s.status)}">${escapeHTML(s.status)}</span>
-    <time datetime="${escapeHTML(seen.at || '')}" title="${escapeHTML(seen.at ? seen.label + ': ' + new Date(seen.at).toLocaleString() : 'Activity time unavailable')}">${seen.at ? escapeHTML(eventTime(new Date(seen.at))) : '—'}</time>
-  </button><button type="button" class="btn btn-ghost btn-sm session-daily-results" data-action="recent-session-results" data-session="${escapeHTML(s.id)}" aria-label="Review results for ${escapeHTML(name)} · ${escapeHTML(s.id)}">Results<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div>`;
+  return html`<div class="session-daily-row"><button type="button" class="session-daily-card" data-action="session-current" data-session="${s.id}" title="Session ${s.id}">
+    <span class="session-daily-workspace"><strong>${name}</strong><small title="${s.branch || ''}">${s.branch || 'Branch not recorded'}</small></span>
+    <span class="session-daily-identity">${raw(harnessChipHTML(s.harness))}<span>${harnessMeta(s.harness).label}</span></span>
+    <span class="session-daily-status" data-status="${s.status}">${s.status}</span>
+    <time datetime="${seen.at || ''}" title="${seen.at ? seen.label + ': ' + new Date(seen.at).toLocaleString() : 'Activity time unavailable'}">${seen.at ? eventTime(new Date(seen.at)) : '—'}</time>
+  </button><button type="button" class="btn btn-ghost btn-sm session-daily-results" data-action="recent-session-results" data-session="${s.id}" aria-label="Review results for ${name} · ${s.id}">Results<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div>`;
 }
 
 function recentWorkFrameHTML(rows, total) {
-  return `<div class="session-daily-grid"><div class="session-daily-labels" aria-hidden="true"><span>Workspace</span><span>Agent</span><span>Status</span><span>Last activity</span></div><div class="session-daily-rows">${rows}</div></div><p class="recent-work-count">Showing ${Math.min(6,total)} of ${total} loaded sessions</p>`;
+  return html`<div class="session-daily-grid"><div class="session-daily-labels" aria-hidden="true"><span>Workspace</span><span>Agent</span><span>Status</span><span>Last activity</span></div><div class="session-daily-rows">${raw(rows)}</div></div><p class="recent-work-count">Showing ${Math.min(6,total)} of ${total} loaded sessions</p>`;
 }
 
 function sessionDailyHTML(sessions, coverage, search, order = []) {
@@ -703,9 +703,9 @@ function renderSessionDaily() {
     refresh.setAttribute('aria-label', refresh.title);
   }
   if (!shown.length) {
-    const html = sessionDailyHTML(SA.t.sessions, null, search);
-    if (el._saHTML !== html) el.innerHTML = html;
-    el._saHTML = html;
+    const markup = sessionDailyHTML(SA.t.sessions, null, search);
+    if (el._saHTML !== markup) el.innerHTML = markup;
+    el._saHTML = markup;
     return;
   }
   const focused = el.contains(document.activeElement) ? document.activeElement : null;
@@ -763,17 +763,17 @@ function validSessionOverview(data, id) {
 
 // Coverage states describe observations, not a diagnosis that setup is broken.
 function sessionCoverageHTML(data, state = {}) {
-  const id = escapeHTML(data.session_id);
-  const refresh = `<button type="button" class="link-btn" data-action="session-overview-retry"${state.loading ? ' disabled' : ''}>${state.loading ? 'Refreshing observations…' : 'Refresh observations'}</button>`;
-  const head = `<header class="sd-coverage-head"><h5>Observed paths</h5>${refresh}</header>`;
-  const events = `<button type="button" class="link-btn" data-action="session-events" data-id="${id}">View recorded session events</button>`;
+  const id = data.session_id;
+  const refresh = html`<button type="button" class="link-btn" data-action="session-overview-retry"${raw(state.loading ? ' disabled' : '')}>${state.loading ? 'Refreshing observations…' : 'Refresh observations'}</button>`;
+  const head = html`<header class="sd-coverage-head"><h5>Observed paths</h5>${raw(refresh)}</header>`;
+  const events = html`<button type="button" class="link-btn" data-action="session-events" data-id="${id}">View recorded session events</button>`;
   if (!data.coverage) return head + '<p>No current coverage is attributed to this session. Retained events do not establish live protection.</p>' + (state.error ? '' : events);
   return head + (state.error ? '<p class="sd-coverage-notice" role="status">Last known observations. Refresh before relying on current coverage.</p>' : '')
     + [['guard','Guard'],['trace','Recorded activity'],['payload','Payload inspection']].map(([key,label]) => {
       const path = data.coverage[key] || {};
       const stale = !!state.error || path.state === 'stale';
-      const guide = `<button type="button" class="link-btn" data-action="session-coverage-guide" data-id="${id}" data-path="${key}">${path.state === 'unsupported' || path.supported === false ? 'Review available paths' : key === 'guard' ? 'Review guard setup' : 'Review activity sources'}</button>`;
-      const traffic = `<button type="button" class="link-btn" data-action="session-coverage-traffic" data-id="${id}">Review Traffic settings</button>`;
+      const guide = html`<button type="button" class="link-btn" data-action="session-coverage-guide" data-id="${id}" data-path="${key}">${path.state === 'unsupported' || path.supported === false ? 'Review available paths' : key === 'guard' ? 'Review guard setup' : 'Review activity sources'}</button>`;
+      const traffic = html`<button type="button" class="link-btn" data-action="session-coverage-traffic" data-id="${id}">Review Traffic settings</button>`;
       let next = '', action = '';
       if (stale) next = 'Refresh observations before relying on this result.';
       else if (path.state === 'unsupported' || path.supported === false) { next = 'This path is not supported by this source. Other observation paths may still be available.'; action = guide; }
@@ -784,15 +784,15 @@ function sessionCoverageHTML(data, state = {}) {
       else if (path.state === 'unattributed') { next = 'Session identity is unresolved. Compare the harness and workspace before relying on attribution.'; action = guide; }
       else if (path.state === 'off') { next = 'Review this capability’s configuration if you need it. Nothing is enabled automatically.'; action = guide; }
       else next = 'The current state is unknown. Refresh observations before choosing a setup change.';
-      return `<article data-coverage-path="${key}"><b>${label}: ${escapeHTML(coveragePathLabel(path))}</b><p>${escapeHTML(path.detail || '')}</p>${path.last_seen ? `<time datetime="${escapeHTML(path.last_seen)}">Last observed: ${escapeHTML(path.last_seen)}</time>` : ''}<p class="sd-coverage-next">${next}</p>${action ? action.replace('<button ', `<button data-coverage-origin="${key}" `) : ''}</article>`;
+      return html`<article data-coverage-path="${key}"><b>${label}: ${coveragePathLabel(path)}</b><p>${path.detail || ''}</p>${path.last_seen ? raw(html`<time datetime="${path.last_seen}">Last observed: ${path.last_seen}</time>`) : ''}<p class="sd-coverage-next">${next}</p>${action ? raw(action.replace('<button ', html`<button data-coverage-origin="${key}" `)) : ''}</article>`;
     }).join('');
 }
 
 function sessionCoverageGuideHTML(session, key, path) {
-  const name = escapeHTML(harnessMeta(session?.harness).label);
-  if (path.state === 'unsupported' || path.supported === false) return `<p>This source does not support this observation path. An unsupported path is not a failed setup check.</p><p>Review the other observed paths for ${name}; each has its own limits.</p><p><a href="https://github.com/cavi-ai/secure-agent/blob/main/docs/ARCHITECTURE.md#collectors" target="_blank" rel="noopener noreferrer">Harness observation sources</a></p>`;
-  if (key === 'guard') return `<p>Guard observations record invocations attributed to this session. No invocation observed does not by itself establish a broken installation.</p>${['claude','cursor'].includes(session?.harness) ? `<ol><li>Open Secure Agent’s Setup &amp; Permissions and select ${name}.</li><li>Review the selected harness’s installed guard hooks and run its installed-hook check if needed.</li><li>Run a small ordinary task in the same workspace, then return here and refresh observations.</li></ol>` : `<p>Review ${name} in Setup &amp; Permissions and check its supported guarding path before changing configuration.</p>`}<p>An installed-hook check establishes its manual monitor round trip. It does not prove that a running session invokes the guard or that traffic is inspected. Hook-completion reporting is a separate integration.</p>`;
-  return `<p>Recorded activity depends on the supported process, transcript, or tool sources for ${name}. Missing activity may reflect a quiet task, an unavailable source, or unresolved session identity.</p><ol><li>In the same harness and workspace, ask for a file listing and README summary without changing files or reading secrets.</li><li>Refresh observations and inspect recorded session events.</li><li>If activity is still missing, review this harness’s observation sources in Setup &amp; Permissions.</li></ol><p>Hook-completion reporting alone does not establish trace or guard coverage.</p><p><a href="https://github.com/cavi-ai/secure-agent/blob/main/docs/FIRST_SESSION.md" target="_blank" rel="noopener noreferrer">First observed session guide</a></p>`;
+  const name = harnessMeta(session?.harness).label;
+  if (path.state === 'unsupported' || path.supported === false) return html`<p>This source does not support this observation path. An unsupported path is not a failed setup check.</p><p>Review the other observed paths for ${name}; each has its own limits.</p><p><a href="https://github.com/cavi-ai/secure-agent/blob/main/docs/ARCHITECTURE.md#collectors" target="_blank" rel="noopener noreferrer">Harness observation sources</a></p>`;
+  if (key === 'guard') return html`<p>Guard observations record invocations attributed to this session. No invocation observed does not by itself establish a broken installation.</p>${['claude','cursor'].includes(session?.harness) ? raw(html`<ol><li>Open Secure Agent’s Setup &amp; Permissions and select ${name}.</li><li>Review the selected harness’s installed guard hooks and run its installed-hook check if needed.</li><li>Run a small ordinary task in the same workspace, then return here and refresh observations.</li></ol>`) : raw(html`<p>Review ${name} in Setup &amp; Permissions and check its supported guarding path before changing configuration.</p>`)}<p>An installed-hook check establishes its manual monitor round trip. It does not prove that a running session invokes the guard or that traffic is inspected. Hook-completion reporting is a separate integration.</p>`;
+  return html`<p>Recorded activity depends on the supported process, transcript, or tool sources for ${name}. Missing activity may reflect a quiet task, an unavailable source, or unresolved session identity.</p><ol><li>In the same harness and workspace, ask for a file listing and README summary without changing files or reading secrets.</li><li>Refresh observations and inspect recorded session events.</li><li>If activity is still missing, review this harness’s observation sources in Setup &amp; Permissions.</li></ol><p>Hook-completion reporting alone does not establish trace or guard coverage.</p><p><a href="https://github.com/cavi-ai/secure-agent/blob/main/docs/FIRST_SESSION.md" target="_blank" rel="noopener noreferrer">First observed session guide</a></p>`;
 }
 
 function sessionOverviewHTML(data, state, contextHTML = '') {
@@ -831,9 +831,9 @@ function sessionOverviewHTML(data, state, contextHTML = '') {
 
 // Reconcile each request/finding independently. A new finding must not replace
 // a focused approval button, an open disclosure, or the history view switch.
-function patchSessionDetail(el, sessionID, html) {
+function patchSessionDetail(el, sessionID, markup) {
   const template = document.createElement('template');
-  template.innerHTML = html;
+  template.innerHTML = markup;
   const body = template.content.querySelector('.session-detail-body');
   const content = body && body.innerHTML;
   if (body) body.innerHTML = '';
@@ -1432,17 +1432,17 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
         first: oldBody.querySelector('[data-row-id]')?.dataset.rowId,
         detailsOpen: !!detail.querySelector('details.session-metadata')?.open });
     }
-    const html = selected ? sessionDetailHTML(selected, sessionTimeline, trees, snapshot()) : sessionEmptyDetailHTML(emptyHTML);
-    if (detail._sessionMarkup !== html) {
+    const markup = selected ? sessionDetailHTML(selected, sessionTimeline, trees, snapshot()) : sessionEmptyDetailHTML(emptyHTML);
+    if (detail._sessionMarkup !== markup) {
       const disclosures = new Map(Array.from(detail.querySelectorAll('[data-row-id]')).map(row =>
         [row.dataset.rowId, Array.from(row.querySelectorAll('details'), d => d.open)]));
-      if (selected) patchSessionDetail(detail, selected.id, html);
-      else detail.innerHTML = html;
+      if (selected) patchSessionDetail(detail, selected.id, markup);
+      else detail.innerHTML = markup;
       if (oldSession === selectedSessionId) for (const row of detail.querySelectorAll('[data-row-id]')) {
         const saved = disclosures.get(row.dataset.rowId);
         if (saved) Array.from(row.querySelectorAll('details')).forEach((d, i) => { d.open = !!saved[i]; });
       }
-      detail._sessionMarkup = html;
+      detail._sessionMarkup = markup;
       applyInlineMetrics(detail);
     }
     for (const input of detail.querySelectorAll('[data-hook-history]')) {
