@@ -16,6 +16,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/playbook"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 )
 
@@ -329,7 +330,7 @@ func (a *API) planFlag(t planTarget) *model.Flag {
 		return nil
 	}
 	f := *t.flag
-	f.Title = humanFlagTitle(f.Rule)
+	f.Title = posture.HumanFlagTitle(f.Rule)
 	f.Explain = a.explainFlag(f, false)
 	return &f
 }

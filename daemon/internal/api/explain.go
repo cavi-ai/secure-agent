@@ -16,6 +16,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -136,7 +137,7 @@ func (a *API) handleFlagExplain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "flag not found", http.StatusNotFound)
 		return
 	}
-	f.Title = humanFlagTitle(f.Rule)
+	f.Title = posture.HumanFlagTitle(f.Rule)
 	f.Explain = a.explainFlag(f, true)
 	writeJSON(w, f)
 }
@@ -294,7 +295,7 @@ func repoName(sess *model.Session, workspace string) string {
 	if sess != nil && sess.Repo != "" {
 		return sess.Repo
 	}
-	return cwdBase(workspace)
+	return posture.WorkspaceName(workspace)
 }
 
 // splitHostPort splits a "host:port" evidence label (IPv6 hosts arrive
@@ -401,7 +402,7 @@ func (a *API) nearestEvent(sessionID string, kind event.Kind, anchor time.Time) 
 func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) string {
 	agent := "An agent"
 	if f.Agent != "" {
-		agent = familyTitle(f.Agent)
+		agent = posture.FamilyTitle(f.Agent)
 	}
 	dest := "an outside host"
 	if len(ex.Egress) > 0 {
@@ -466,7 +467,7 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 		if sess != nil && sess.Harness != "" {
 			harness = sess.Harness
 		}
-		what := capitalize(secretPhrase(evidenceRule(f.Evidence, "transcript"))) + " appeared in " + article(familyTitle(harness)) + " transcript"
+		what := capitalize(secretPhrase(evidenceRule(f.Evidence, "transcript"))) + " appeared in " + article(posture.FamilyTitle(harness)) + " transcript"
 		if ex.Subject != nil {
 			what += " (" + ex.Subject.Basename + ")"
 		}
@@ -478,7 +479,7 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 	case "proxy-untrusted-egress-monitored":
 		return "The proxy let a connection from " + agent + " to " + dest + " through after its session read untrusted content: untrusted-egress is set to monitor."
 	default:
-		return humanFlagTitle(f.Rule)
+		return posture.HumanFlagTitle(f.Rule)
 	}
 }
 
@@ -731,7 +732,7 @@ func (a *API) explainActions(f model.Flag, ex *model.FlagExplain, env *explainEn
 		acts = append(acts, model.ExplainAction{ID: "inspect-file", Label: "Inspect file details", Consequence: "Shows file metadata, recorded accesses, and supported .env variable names without values; changes nothing.", Method: http.MethodGet, Path: "/files/detail", Body: map[string]any{"path": read.Label}})
 	}
 	agent := f.Agent
-	title := humanFlagTitle(f.Rule)
+	title := posture.HumanFlagTitle(f.Rule)
 
 	var hosts []model.ExplainEgress
 	seenHost := map[string]bool{}

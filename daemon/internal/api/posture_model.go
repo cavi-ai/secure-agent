@@ -6,44 +6,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
-	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
-	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
-// postureInputs is a snapshot of the facts needed for one derivation. Storage
-// and live-service reads happen at the boundary; ranking has no handler access.
-type postureInputs struct {
-	Status              Status
-	Generated           time.Time
-	Patterns            []model.Pattern
-	Routine             []model.RoutineGroup
-	Resources           []resource.Session
-	HookGap             *PostureItem
-	Pending             []guard.Pending
-	Flags               []model.Flag
-	Reviews             []model.ReviewRecord
-	FlagReviews         map[string]model.ReviewRecord
-	Incidents           []model.IncidentReport
-	IncidentStates      map[string]string
-	IncidentAssessments map[string]model.FindingAssessment
-	FailedReads         []string
-	HookFindings        []store.SessionHookFinding
-	HookHealthTruncated bool
-}
-
-func derivePosture(in postureInputs) Posture {
-	st := in.Status
+func derivePosture(in posture.Inputs) Posture {
+	st := Status(in.Status)
 	failedReads := in.FailedReads
-	posture := Posture{
+	p := Posture{
 		Generated: in.Generated.UTC().Format(time.RFC3339Nano),
 		Connected: st.Running,
 	}
-	queue := deriveAttention(in)
-	posture.Items, posture.Groups = queue.Items, queue.Groups
-	posture.NeedsYou = len(posture.Items)
+	queue := posture.DeriveAttention(in, dispositionFor)
+	p.Items, p.Groups = queue.Items, queue.Groups
+	p.NeedsYou = len(p.Items)
 	// Capture current health after all reads, including same-pass recovery.
 	if len(failedReads) > 0 && st.StorageHealth != nil {
 		h := *st.StorageHealth
@@ -52,32 +28,125 @@ func derivePosture(in postureInputs) Posture {
 		h.ReadActive = slices.Compact(h.ReadActive)
 		st.StorageHealth = &h
 	}
-	posture.CoverageItems = coverageItems(in.Generated, st, in.HookGap)
+	p.CoverageItems = coverageItems(in.Generated, st, in.HookGap)
 	if in.HookHealthTruncated {
-		posture.CoverageItems = append(posture.CoverageItems, PostureItem{Kind: "hook_analysis_limit", ID: "hook-analysis", MonitoringState: monitoringInformational, Title: "Hook analysis is limited to recent samples", Detail: "The latest 1,000 live-session completions and up to 20 repair findings are assessed. Open a session for its own assessment."})
+		p.CoverageItems = append(p.CoverageItems, PostureItem{Kind: "hook_analysis_limit", ID: "hook-analysis", MonitoringState: posture.MonitoringInformational, Title: "Hook analysis is limited to recent samples", Detail: "The latest 1,000 live-session completions and up to 20 repair findings are assessed. Open a session for its own assessment."})
 	}
-	for _, item := range posture.CoverageItems {
-		if isMonitoringGap(item) {
-			posture.CoverageCount++
+	for _, item := range p.CoverageItems {
+		if posture.IsMonitoringGap(item) {
+			p.CoverageCount++
 		}
 	}
-	posture.AttentionSummary = deriveAttentionSummary(posture.Groups, posture.CoverageItems)
+	p.AttentionSummary = posture.DeriveAttentionSummary(p.Groups, p.CoverageItems)
 	switch {
-	case posture.NeedsYou == 0 && !hasMonitoringGap(posture.CoverageItems):
-		posture.State = "all-clear"
-		posture.Summary = "No pending decisions. See finding history and incidents for remaining risk."
-	case posture.NeedsYou == 0:
-		posture.State = "attention"
-		posture.Summary = "No decisions pending. Monitoring coverage needs attention."
-	case hasCritical(posture.Items):
-		posture.State = "critical"
-		posture.Summary = criticalSummary(posture.Items)
+	case p.NeedsYou == 0 && !hasMonitoringGap(p.CoverageItems):
+		p.State = "all-clear"
+		p.Summary = "No pending decisions. See finding history and incidents for remaining risk."
+	case p.NeedsYou == 0:
+		p.State = "attention"
+		p.Summary = "No decisions pending. Monitoring coverage needs attention."
+	case hasCritical(p.Items):
+		p.State = "critical"
+		p.Summary = criticalSummary(p.Items)
 	default:
-		posture.State = "attention"
-		posture.Summary = attentionSummary(posture.Items)
+		p.State = "attention"
+		p.Summary = attentionSummary(p.Items)
 	}
 
-	return posture
+	return p
+}
+
+// machineGroupKey is retained for the machine-level coverage section.
+const machineGroupKey = "machine"
+
+// machineAttentionItems are the signals no agent owns: dead collectors, and
+// while agents are active, silent collectors and missing hooks.
+func machineAttentionItems(now time.Time, st Status, hookGap *PostureItem) []PostureItem {
+	var items []PostureItem
+	if fileTelemetryDisabled(st) {
+		items = append(items, PostureItem{Kind: "collector_disabled", ID: "eslogger", Title: "File monitoring is off", Detail: "File telemetry is disabled in configuration."})
+	} else if fileTelemetryUnavailable(st) {
+		items = append(items, PostureItem{Kind: "collector_down", ID: "eslogger", Severity: 2, Title: "File monitoring is unavailable", Detail: "File telemetry is enabled but no file collector is available. Check Setup & Permissions in the menu bar."})
+	}
+	if h := st.EgressProjectionHealth; h != nil && (h.QueueDrops > 0 || h.WriteFailures > 0) {
+		detail := fmt.Sprintf("%d observations missed the summary queue; %d summary writes failed since daemon start. Recurring egress summaries may be incomplete. Connection evidence has separate storage health.", h.QueueDrops, h.WriteFailures)
+		if h.WriteFailing {
+			detail += " Summary writes are still failing."
+		} else if h.WriteFailures > 0 {
+			detail += " New summary writes have recovered."
+		}
+		items = append(items, PostureItem{Kind: "projection_loss", ID: "egress", Severity: 2, Title: "Recurring egress summary missed activity", Detail: detail})
+	}
+	if st.OTLPDropped > 0 {
+		items = append(items, PostureItem{Kind: "export_loss", ID: "otlp", Severity: 2, Title: "Trace export lost spans", Detail: fmt.Sprintf("%d spans could not be exported since daemon start. Local evidence is retained separately.", st.OTLPDropped)})
+	}
+	if st.BusDropping || st.BusDrops > 0 {
+		items = append(items, PostureItem{Kind: "event_loss", ID: "event-bus", Severity: 2,
+			Title:  "Telemetry was dropped",
+			Detail: fmt.Sprintf("%d subscriber deliveries dropped since daemon start. Monitoring history may be incomplete.", st.BusDrops)})
+	}
+	if s := st.ESService; s != nil && s.BytesLost > 0 && (!s.Losing || fileTelemetryDisabled(st)) {
+		items = append(items, PostureItem{Kind: "file_evidence_loss", ID: "es-history", Title: "Earlier file monitoring evidence was lost", Detail: posture.ESLossDetail(*s)})
+	}
+	if h := st.StorageHealth; h != nil && len(h.ReadActive) > 0 {
+		items = append(items, PostureItem{Kind: "storage_read_failure", ID: "storage-reads", Severity: 2, Title: "Evidence could not be read", Detail: "Last known activity may be stale. Reads failing: " + strings.Join(h.ReadActive, ", ") + "." + readIssueDetail(*h)})
+	}
+	if h := st.StorageHealth; h != nil && h.Failures > 0 {
+		detail := fmt.Sprintf("%d evidence persistence attempts failed since daemon start. Monitoring history may be incomplete.", h.Failures)
+		if len(h.Active) > 0 {
+			detail += " Writes still failing: " + strings.Join(h.Active, ", ") + "."
+		} else {
+			detail += " New writes have recovered; earlier evidence may remain incomplete."
+		}
+		items = append(items, PostureItem{Kind: "storage_loss", ID: "storage", Severity: 2,
+			Title: "Evidence could not be saved", Detail: detail})
+	}
+	// A monitor that stopped is a blind spot, not a detail.
+	for _, c := range st.Collectors {
+		if c.Name == "eslogger" && fileTelemetryDisabled(st) {
+			continue
+		}
+		if !c.Running || c.Abandoned {
+			items = append(items, PostureItem{
+				Kind: "collector_down", ID: c.Name,
+				Title:    humanCollectorTitle(c.Name, c.Abandoned),
+				Severity: 2,
+				Detail:   humanCollectorDetail(c.Name, c.LastError),
+			})
+		}
+	}
+	// Liveness is not coverage: the worst failure mode a monitor can have is
+	// reporting green while blind (both audited live: the eslogger spool
+	// untouched for days, zero hook events for 17h, all "healthy").
+	if st.ActiveAgents > 0 {
+		items = append(items, silentCollectorItems(now, st)...)
+		if st.Coverage != nil {
+			items = append(items, harnessUncoveredItems(st.Coverage.Harnesses)...)
+		}
+		if hookGap != nil {
+			items = append(items, *hookGap)
+		}
+	}
+	return items
+}
+
+// readIssueDetail adds the newest safe diagnostic for an active operation.
+// The complete per-operation history remains available in storage_health.
+func readIssueDetail(h store.WriteHealth) string {
+	var latest *store.ReadIssue
+	for i := range h.ReadIssues {
+		issue := &h.ReadIssues[i]
+		if issue.RecoveredAt != nil {
+			continue
+		}
+		if latest == nil || issue.LastFailureAt.After(latest.LastFailureAt) {
+			latest = issue
+		}
+	}
+	if latest == nil {
+		return ""
+	}
+	return " Last read failure: " + latest.Operation + " (" + latest.Category + ") at " + latest.LastFailureAt.UTC().Format(time.RFC3339) + "."
 }
 
 func coverageItems(now time.Time, st Status, hookGap *PostureItem) []PostureItem {
@@ -86,10 +155,10 @@ func coverageItems(now time.Time, st Status, hookGap *PostureItem) []PostureItem
 		for _, row := range h.Forwarders {
 			r := row.Report
 			if row.Assessment.EvidenceGap {
-				items = append(items, PostureItem{Kind: "hook_evidence_gap", ID: "hook-gap:" + r.ForwarderID, Title: familyTitle(r.Harness) + " hook evidence is incomplete", Detail: "The host reported dropped completions. Restored delivery cannot recover evidence that was discarded."})
+				items = append(items, PostureItem{Kind: "hook_evidence_gap", ID: "hook-gap:" + r.ForwarderID, Title: posture.FamilyTitle(r.Harness) + " hook evidence is incomplete", Detail: "The host reported dropped completions. Restored delivery cannot recover evidence that was discarded."})
 			}
 			if row.Assessment.State == "unknown" && r.State == "error" {
-				items = append(items, PostureItem{Kind: "hook_delivery_unknown", ID: "hook-unknown:" + r.ForwarderID, Title: familyTitle(r.Harness) + " hook delivery error needs fresh evidence", Detail: "The previous error report is stale or unverified. Obtain a new host report; recovery has not been confirmed."})
+				items = append(items, PostureItem{Kind: "hook_delivery_unknown", ID: "hook-unknown:" + r.ForwarderID, Title: posture.FamilyTitle(r.Harness) + " hook delivery error needs fresh evidence", Detail: "The previous error report is stale or unverified. Obtain a new host report; recovery has not been confirmed."})
 			}
 		}
 	}
@@ -108,7 +177,7 @@ func coverageItems(now time.Time, st Status, hookGap *PostureItem) []PostureItem
 // sources and historical losses remain inspectable without requiring attention.
 func hasMonitoringGap(items []PostureItem) bool {
 	for _, it := range items {
-		if isMonitoringGap(it) {
+		if posture.IsMonitoringGap(it) {
 			return true
 		}
 	}
@@ -131,14 +200,6 @@ func firstNonEmpty(strs []string) string {
 		}
 	}
 	return ""
-}
-
-// humanPath shortens an absolute path to its tail for a headline.
-func humanPath(p string) string {
-	if i := strings.LastIndex(p, "/"); i >= 0 && i+1 < len(p) {
-		return p[i+1:]
-	}
-	return p
 }
 
 // criticalSummary picks the highest-severity item as the one-line headline.

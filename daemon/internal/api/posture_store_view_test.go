@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -78,7 +79,7 @@ func TestPostureEvidenceUsesSnapshotCutoff(t *testing.T) {
 		{ID: "expired", TS: at.Add(-24*time.Hour - time.Nanosecond)},
 		{ID: "undated"},
 	}}
-	in := loadPostureEvidence(s, postureInputs{Generated: at})
+	in := loadPostureEvidence(s, posture.Inputs{Generated: at})
 	var ids []string
 	for _, f := range in.Flags {
 		ids = append(ids, f.ID)
@@ -89,7 +90,7 @@ func TestPostureEvidenceUsesSnapshotCutoff(t *testing.T) {
 	if s.filter.MinSeverity != 3 || s.filter.Limit != 25 || !s.filter.Unacted {
 		t.Fatalf("attention query policy changed: %+v", s.filter)
 	}
-	if got := loadPostureEvidence(s, postureInputs{Generated: at.Add(24*time.Hour + time.Nanosecond)}).Flags; len(got) != 0 {
+	if got := loadPostureEvidence(s, posture.Inputs{Generated: at.Add(24*time.Hour + time.Nanosecond)}).Flags; len(got) != 0 {
 		t.Fatalf("expired flags retained after advancing snapshot: %+v", got)
 	}
 }
@@ -117,7 +118,7 @@ func TestPostureEvidenceFailureAndRecovery(t *testing.T) {
 			case "missing workflow":
 				s.workflowErr, want = failed, "incidents"
 			}
-			input := postureInputs{Generated: at, Status: Status{Running: true, StorageHealth: &store.WriteHealth{}}}
+			input := posture.Inputs{Generated: at, Status: posture.Status{Running: true, StorageHealth: &store.WriteHealth{}}}
 			in := loadPostureEvidence(s, input)
 			if !slices.Contains(in.FailedReads, want) {
 				t.Fatalf("read failure hidden: %+v", in.FailedReads)
@@ -140,7 +141,7 @@ func TestPostureEvidenceRetainsEnrichmentFailuresBeforeRecovery(t *testing.T) {
 		flagHealth: []string{"flag advisor verdicts"}, incidentHealth: []string{"incident advisor verdicts"}}
 	initial := make([]string, 1, 4)
 	initial[0] = "flags"
-	in := loadPostureEvidence(s, postureInputs{FailedReads: initial})
+	in := loadPostureEvidence(s, posture.Inputs{FailedReads: initial})
 	want := []string{"flags", "flag advisor verdicts", "incident advisor verdicts"}
 	if !reflect.DeepEqual(in.FailedReads, want) {
 		t.Fatalf("same-pass enrichment failures lost: %v, current health: %+v", in.FailedReads, s.health)
@@ -155,7 +156,7 @@ func TestPostureEvidenceSharesReviewAcrossFlagsAndIncidents(t *testing.T) {
 	s := &memoryPostureStore{flags: []model.Flag{{ID: "flag", Rule: readConnectRule, TS: at}},
 		incidents: []model.IncidentReport{{ID: "first", FlagID: "flag"}, {ID: "second", FlagID: "flag"}},
 		review:    model.ReviewRecord{ID: "review", Context: model.ReviewContext{Attribution: "stored-session"}}}
-	in := loadPostureEvidence(s, postureInputs{Generated: at})
+	in := loadPostureEvidence(s, posture.Inputs{Generated: at})
 	if s.calls != 1 || s.reviewReads != 1 || s.workflowReads != 0 || len(in.FailedReads) != 0 || in.FlagReviews["flag"].ID != "review" {
 		t.Fatalf("review ownership not shared: links=%d reviews=%d workflows=%d input=%+v", s.calls, s.reviewReads, s.workflowReads, in)
 	}

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -32,7 +33,7 @@ func advisorReadFailuresFrom(st advisorReadHealthStore, kind string) []string {
 
 // loadPostureEvidence preserves same-pass failures before subsequent reads can
 // clear their health. The snapshot clock governs the flag freshness cutoff.
-func loadPostureEvidence(st postureEvidenceStore, in postureInputs) postureInputs {
+func loadPostureEvidence(st postureEvidenceStore, in posture.Inputs) posture.Inputs {
 	in.FailedReads = slices.Clone(in.FailedReads)
 	in.FlagReviews = map[string]model.ReviewRecord{}
 	in.IncidentStates = map[string]string{}

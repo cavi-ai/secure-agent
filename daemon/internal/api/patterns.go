@@ -11,6 +11,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -71,7 +72,7 @@ func (a *API) patternsOf(flags []model.Flag, since, now time.Time, minCount int)
 		key := f.Agent + "|" + f.Rule + "|" + subjectKey
 		g, ok := byKey[key]
 		if !ok {
-			g = &group{p: model.Pattern{Key: key, Agent: f.Agent, Rule: f.Rule, Title: humanFlagTitle(f.Rule), Subject: subject}}
+			g = &group{p: model.Pattern{Key: key, Agent: f.Agent, Rule: f.Rule, Title: posture.HumanFlagTitle(f.Rule), Subject: subject}}
 			byKey[key] = g
 			keys = append(keys, key)
 		}
@@ -360,7 +361,7 @@ func patternVerb(rule string, subject model.EvidenceItem) string {
 	case "secret-in-transcript":
 		return "wrote a secret into its transcript"
 	default:
-		return "raised \"" + humanFlagTitle(rule) + "\""
+		return "raised \"" + posture.HumanFlagTitle(rule) + "\""
 	}
 }
 
@@ -498,4 +499,11 @@ func actionIndex(acts []model.ExplainAction, id string) int {
 		}
 	}
 	return -1
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }

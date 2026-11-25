@@ -947,7 +947,7 @@ func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
 	// keeping their own copies of the rule→title table.
 	_ = stampFindingReviewIDs(a.store, flags)
 	for i := range flags {
-		flags[i].Title = humanFlagTitle(flags[i].Rule)
+		flags[i].Title = posture.HumanFlagTitle(flags[i].Rule)
 	}
 	a.stampExplains(flags)
 	writeJSON(w, flags)
