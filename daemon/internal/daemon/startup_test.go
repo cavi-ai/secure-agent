@@ -43,6 +43,42 @@ func TestBuildRecordsStoreInitializationFailure(t *testing.T) {
 	if err != nil || !found || prev.Ending != RunEndingStartFailure || prev.Record.PID != os.Getpid() {
 		t.Fatalf("read back: %+v found=%v err=%v, want this attempt's start-failure", prev, found, err)
 	}
+
+	if err := os.Remove(cfg.DBPath); err != nil {
+		t.Fatal(err)
+	}
+	// The store can now open. Stop the build at the socket bind, after
+	// processing findings and before starting collectors.
+	blocker := filepath.Join(dir, "socket-parent")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.SocketPath = filepath.Join(blocker, "daemon.sock")
+	c, err = Build(context.Background(), cfg, Options{})
+	if c != nil {
+		c.Shutdown()
+	}
+	if err == nil || !strings.Contains(err.Error(), "bind control API") || c != nil {
+		t.Fatalf("Build returned components=%t, error=%v, want a socket bind failure", c != nil, err)
+	}
+	st, err := store.Open(cfg.DBPath, cfg.JSONLPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	flags := monitorStoppedFlags(t, st)
+	if len(flags) != 2 {
+		t.Fatalf("findings = %+v, want the original signal and the failed start", flags)
+	}
+	reasons := map[string]string{}
+	for _, flag := range flags {
+		for _, evidence := range flag.Evidence {
+			reasons[evidence.Label] = evidence.Text
+		}
+	}
+	if !strings.Contains(reasons["signal"], "pid 100") || !strings.Contains(reasons["start-failure"], "failed during start") {
+		t.Fatalf("finding reasons = %+v, want the original signal and the failed start", reasons)
+	}
 }
 
 func TestBuildRefusesUnavailableControlSocket(t *testing.T) {

@@ -50,8 +50,21 @@ type RunRecord struct {
 
 // PreviousRun is a persisted run record and how that run ended.
 type PreviousRun struct {
-	Record RunRecord
-	Ending RunEnding
+	Record RunRecord `json:"record"`
+	Ending RunEnding `json:"ending"`
+}
+
+type pendingRun struct {
+	PreviousRun
+	// ObservedAt identifies a record with no readable start time across retries.
+	ObservedAt time.Time `json:"observed_at,omitzero"`
+}
+
+// runState keeps the current marker and unresolved evidence in one atomic write.
+// Older files have only the embedded RunRecord fields.
+type runState struct {
+	RunRecord
+	Pending []pendingRun `json:"pending,omitempty"`
 }
 
 // RunRecordPath scopes the run record to the same database as the instance
@@ -69,56 +82,68 @@ func RunRecordPath(cfg config.Config) string {
 // ReadPreviousRun reads the run record at path. found is false when no record
 // exists; a record without an ending reads as RunEndingNoRecord.
 func ReadPreviousRun(path string) (prev PreviousRun, found bool, err error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return PreviousRun{}, false, nil
-	}
-	if err != nil {
+	state, found, err := readRunState(path)
+	if !found {
 		return PreviousRun{}, false, err
 	}
-	var rec RunRecord
-	if err := json.Unmarshal(data, &rec); err != nil {
-		return PreviousRun{}, false, fmt.Errorf("run record %s: %w", path, err)
+	return previousRun(state.RunRecord), true, nil
+}
+
+func readRunState(path string) (runState, bool, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return runState{}, false, nil
 	}
+	if err != nil {
+		return runState{}, false, err
+	}
+	var state runState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return runState{}, false, fmt.Errorf("run record %s: %w", path, err)
+	}
+	return state, true, nil
+}
+
+func previousRun(rec RunRecord) PreviousRun {
 	ending := rec.Ending
 	if ending == "" {
 		ending = RunEndingNoRecord
 	}
-	return PreviousRun{Record: rec, Ending: ending}, true, nil
+	return PreviousRun{Record: rec, Ending: ending}
 }
 
 // RunTracker owns the current run's record: the running marker written at
 // start, the owner's stop intent, and the ending written once at stop.
 type RunTracker struct {
-	path     string
-	now      func() time.Time
-	previous PreviousRun
-	found    bool
+	path string
+	now  func() time.Time
 
 	mu              sync.Mutex
 	rec             RunRecord
+	pending         []pendingRun
 	endingPersisted bool
 }
 
-// StartRun reads the previous run's record at path, then durably replaces it
-// with this run's running marker. The tracker is usable even when the write
-// fails; the error reports the unwritten marker.
+// StartRun writes this run's running marker and carries forward any previous
+// run evidence that may still need a finding. The tracker is usable even
+// when the write fails; the error reports the unwritten marker.
 func StartRun(path string, pid int, now func() time.Time) (*RunTracker, error) {
 	t := &RunTracker{path: path, now: now, rec: RunRecord{PID: pid, StartedAt: now().UTC()}}
-	prev, found, err := ReadPreviousRun(path)
+	state, found, err := readRunState(path)
 	if err != nil {
 		// An unreadable record cannot show an ending.
 		log.Printf("secure-agentd: previous run record unreadable: %v", err)
-		prev, found = PreviousRun{Ending: RunEndingNoRecord}, true
+		found = true
 	}
-	t.previous, t.found = prev, found
+	t.pending = state.Pending
+	if found && state.Ending != RunEndingOwnerStop {
+		pending := pendingRun{PreviousRun: previousRun(state.RunRecord)}
+		if pending.Record.StartedAt.IsZero() {
+			pending.ObservedAt = t.rec.StartedAt
+		}
+		t.pending = append(t.pending, pending)
+	}
 	return t, t.write(t.rec)
-}
-
-// Previous reports how the run before this one ended, as read at StartRun;
-// false when no run was recorded.
-func (t *RunTracker) Previous() (PreviousRun, bool) {
-	return t.previous, t.found
 }
 
 // RecordStopIntent notes that the owner is about to stop the daemon and
@@ -164,7 +189,7 @@ func (t *RunTracker) Stop(cause RunEnding) (RunEnding, error) {
 
 // write persists the candidate record with fsync before rename.
 func (t *RunTracker) write(rec RunRecord) error {
-	data, err := json.Marshal(rec)
+	data, err := json.Marshal(runState{RunRecord: rec, Pending: t.pending})
 	if err != nil {
 		return err
 	}

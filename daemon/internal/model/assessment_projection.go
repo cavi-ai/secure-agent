@@ -17,6 +17,16 @@ func AssessFinding(f Flag) FindingAssessment {
 	if f.Acknowledged {
 		a.ReviewState = "reviewed"
 	}
+	if f.Rule == "monitor-stopped" {
+		for _, e := range f.Evidence {
+			if e.Kind == EvidenceKindMonitorRun && e.Text != "" {
+				a.EvidenceBasis = []string{EvidenceKindMonitorRun}
+				a.Reason = e.Text
+				a.Limits = []string{"The run record alone cannot establish the duration of a monitoring gap or whether any activity was missed."}
+				return a
+			}
+		}
+	}
 	if f.Rule == "proxy-secret-leak" {
 		for _, e := range f.Evidence {
 			if e.Kind != "violation" || e.Sub != "payload inspection" || e.Payload == nil || !e.Payload.IsLeak() {

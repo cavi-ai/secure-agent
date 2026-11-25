@@ -1,0 +1,123 @@
+package daemon
+
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
+)
+
+// monitorStoppedRule reports a previous run with no recorded owner stop.
+const monitorStoppedRule = "monitor-stopped"
+
+// monitorAgent names the daemon as the reporter of its own previous run.
+const monitorAgent = "secure-agentd"
+
+// raisePreviousRunFindings processes persisted records after the store opens.
+// Keep any failed inserts pending for the next start.
+func raisePreviousRunFindings(st *store.Store, run *RunTracker, bootTime func() (time.Time, error), now func() time.Time) {
+	if st == nil || run == nil {
+		return
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	if len(run.pending) == 0 {
+		return
+	}
+	boot, bootErr := bootTime()
+	if bootErr != nil {
+		log.Printf("secure-agentd: boot time unreadable: %v", bootErr)
+	}
+	var remaining []pendingRun
+	for _, pending := range run.pending {
+		started := pending.Record.StartedAt
+		if bootErr == nil && !started.IsZero() && started.Before(boot) {
+			continue
+		}
+		if err := storePreviousRunFinding(st, pending, now); err != nil {
+			log.Printf("secure-agentd: %s finding not stored: %v", monitorStoppedRule, err)
+			remaining = append(remaining, pending)
+		}
+	}
+	if len(remaining) == len(run.pending) {
+		return
+	}
+	run.pending = remaining
+	if err := run.write(run.rec); err != nil {
+		// A retry can recognize findings already in the store by their stable IDs.
+		log.Printf("secure-agentd: pending run records not updated: %v", err)
+	}
+}
+
+func storePreviousRunFinding(st *store.Store, pending pendingRun, now func() time.Time) error {
+	prev := pending.PreviousRun
+	key := prev.Record.StartedAt
+	if key.IsZero() {
+		key = pending.ObservedAt
+	}
+	id := correlate.FlagID(fmt.Sprintf("%s|%s|%d", monitorStoppedRule, prev.Ending, prev.Record.PID), 0, key)
+	if _, exists, err := st.GetFlag(id); err != nil || exists {
+		return err
+	}
+	fl := previousRunFlag(id, prev, now().UTC())
+	if _, err := st.PutFlag(fl); err != nil {
+		return err
+	}
+	log.Printf("FLAG TRIGGERED [%d]: %s (previous run ending %s)", fl.Severity, fl.Rule, prev.Ending)
+	return nil
+}
+
+// previousRunFlag is the severity-3 finding for prev, detected at at. Its text
+// names how the run ended and its start and end times from the record.
+func previousRunFlag(id string, prev PreviousRun, at time.Time) model.Flag {
+	rec := prev.Record
+	sub, how := runEndingPhrase(prev.Ending)
+	var ts, text string
+	switch {
+	case rec.StartedAt.IsZero():
+		ts = at.Format(time.RFC3339)
+		text = "The previous monitor run's record could not be read: its start, end and ending are unknown."
+	case rec.EndedAt.IsZero():
+		ts = rec.StartedAt.Format(time.RFC3339)
+		text = fmt.Sprintf("Monitor run pid %d started at %s and %s.", rec.PID, ts, how)
+	default:
+		ts = rec.EndedAt.Format(time.RFC3339)
+		text = fmt.Sprintf("Monitor run pid %d started at %s and %s at %s.", rec.PID, rec.StartedAt.Format(time.RFC3339), how, ts)
+	}
+	return model.Flag{
+		ID:       id,
+		Rule:     monitorStoppedRule,
+		Severity: 3,
+		TS:       at,
+		Agent:    monitorAgent,
+		Evidence: []model.EvidenceItem{{
+			Kind:  model.EvidenceKindMonitorRun,
+			Label: string(prev.Ending),
+			Sub:   sub,
+			TS:    ts,
+			Text:  text,
+		}},
+	}
+}
+
+// runEndingPhrase returns a label and a sentence fragment for an ending other
+// than an owner stop.
+func runEndingPhrase(ending RunEnding) (sub, how string) {
+	switch ending {
+	case RunEndingSignal:
+		return "signal with no stop intent", "was stopped by a signal with no stop intent"
+	case RunEndingParentExit:
+		return "owning app exited", "stopped when its owning app process exited"
+	case RunEndingAPIFailure:
+		return "control API failure", "stopped after its control API failed"
+	case RunEndingStartFailure:
+		return "start failure", "failed during start"
+	case RunEndingNoRecord:
+		return "no ending recorded", "ended with no ending recorded"
+	default:
+		return string(ending), "ended as " + string(ending)
+	}
+}

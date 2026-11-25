@@ -188,6 +188,20 @@ var playbooks = []Playbook{
 		},
 		Actions: []string{"open-incident", "dismiss"},
 	},
+	{
+		Rule:  "monitor-stopped",
+		Title: "Monitor stop needs review",
+		Why:   "Secure Agent found a previous monitor run without a recorded owner stop. The run record may contain an ending and timestamps that help investigate a possible interruption.",
+		Now: []string{
+			"Use the recorded end time to focus your review. If it is missing, start with the run start time or finding time and check system logs to narrow down when the daemon exited.",
+			"Review nearby agent sessions for commands that stopped secure-agentd or the SecureAgent app.",
+		},
+		Prevent: []Step{
+			{"guard-rule", "Deny stopping the monitor to agents", "Guard rules that refuse kill, pkill and killall commands that name secure-agentd or SecureAgent."},
+			{"workflow", "Stop the monitor yourself", "Quit from the menu bar app or run secure-agent stop; both record the stop as the owner's."},
+		},
+		Actions: []string{"dismiss"},
+	},
 }
 
 var generic = Playbook{

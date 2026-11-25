@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -218,7 +219,8 @@ func (b *attentionBuilder) factsFor(g *AttentionGroup) *agentGroupFacts {
 // add appends item to g and its headline to the queue.
 func (b *attentionBuilder) add(g *AttentionGroup, headline PostureItem, item AttentionItem) {
 	headline.Assessment = item.Assessment
-	if item.Assessment != nil && item.Assessment.Risk == "unknown" {
+	if item.Assessment != nil && item.Assessment.Risk == "unknown" &&
+		!slices.Contains(item.Assessment.EvidenceBasis, model.EvidenceKindMonitorRun) {
 		headline.Title = "Finding needs evidence review"
 	}
 	b.items = append(b.items, headline)
@@ -385,9 +387,14 @@ func (b *attentionBuilder) addFlag(f model.Flag) {
 	if len(f.Evidence) > 0 {
 		detail = f.Rule + " — " + f.Evidence[0].String()
 	}
+	title := HumanFlagTitle(f.Rule)
+	itemTitle := "Critical finding"
+	if slices.Contains(assessment.EvidenceBasis, model.EvidenceKindMonitorRun) {
+		itemTitle, detail = title, assessment.Reason
+	}
 	item := AttentionItem{
 		Kind: "flag", Priority: 2, ID: f.ID,
-		Title: "Critical finding", Detail: detail, Disposition: &d, Assessment: &assessment,
+		Title: itemTitle, Detail: detail, Disposition: &d, Assessment: &assessment,
 	}
 	g := b.groupFor(f.Agent, f.PID)
 	if gf := b.factsFor(g); gf != nil {
@@ -395,7 +402,7 @@ func (b *attentionBuilder) addFlag(f model.Flag) {
 	}
 	b.add(g, PostureItem{
 		Kind: "flag", ID: f.ID,
-		Title:     HumanFlagTitle(f.Rule),
+		Title:     title,
 		Severity:  severity,
 		Detail:    assessment.Reason,
 		Timestamp: f.TS.UTC().Format(time.RFC3339),
@@ -597,6 +604,8 @@ func HumanFlagTitle(rule string) string {
 		return "Agent changed what macOS trusts"
 	case "xprotect-detection":
 		return "XProtect detected malware"
+	case "monitor-stopped":
+		return "Monitor stop needs review"
 	case "proxy-prompt-injection":
 		return "Prompt injection in a response"
 	case "proxy-inspection-incomplete":

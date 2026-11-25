@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// EvidenceKindMonitorRun identifies the daemon's previous-run evidence.
+const EvidenceKindMonitorRun = "monitor-run"
+
 // EvidenceItem: structured flag evidence. Text carries legacy pre-structure
 // rows; Kind "text" marks those.
 type EvidenceItem struct {
