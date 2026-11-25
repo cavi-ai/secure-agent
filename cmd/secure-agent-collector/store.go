@@ -76,6 +76,23 @@ const gapGrace = 90 * time.Second
 // confirmed loss (a hole that old is never coming back).
 const maxTrackedHoles = 2048
 
+// A node's applied (boot, seq) pairs are remembered for redeliveryWindow and
+// at most maxRecentSeqs entries, covering the publisher's retry backoff.
+const (
+	redeliveryWindow = 30 * time.Second
+	maxRecentSeqs    = 1024
+)
+
+type seqKey struct {
+	boot string
+	seq  uint64
+}
+
+type appliedSeq struct {
+	key seqKey
+	at  time.Time
+}
+
 // windowEvent is one security event inside the rolling count window.
 type windowEvent struct {
 	ts       time.Time
@@ -103,6 +120,10 @@ type nodeRuntime struct {
 	holes         []sequenceHole
 	retiredBoots  []string
 	confirmedGaps int
+	// applied is the FIFO of recently applied (boot, seq) pairs; appliedSet
+	// indexes it for duplicate lookup.
+	applied    []appliedSeq
+	appliedSet map[seqKey]bool
 }
 
 type sequenceHole struct {
@@ -201,36 +222,93 @@ type Store struct {
 func NewStore(dir string) *Store {
 	s := &Store{log: &jsonlLog{dir: dir}, nodes: map[string]*nodeRuntime{}}
 	s.log.Replay(func(env Envelope, receivedAt string) {
-		s.apply(env, receivedAt)
+		s.applyOnce(env, receivedAt)
 	})
 	return s
 }
 
-// Append stores one verified envelope and folds it into the rollup.
+// Append stores one verified envelope and folds it into the rollup. An
+// envelope whose (boot, seq) was just applied is acknowledged without being
+// stored or counted again.
 func (s *Store) Append(env Envelope) error {
 	receivedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.log.Append(env, receivedAt); err != nil {
-		return err
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.isRedelivery(env, receivedAt) {
+		return nil
+	}
+	if err := s.log.Append(env, receivedAt); err != nil {
+		// Not stored: the publisher's retry must be accepted.
+		if rt := s.nodes[env.NodeID]; rt != nil && env.Boot != "" && env.Seq != 0 {
+			delete(rt.appliedSet, seqKey{env.Boot, env.Seq})
+			rt.applied = rt.applied[:len(rt.applied)-1]
+		}
+		return err
+	}
 	s.apply(env, receivedAt)
 	return nil
+}
+
+// applyOnce is the replay path: it applies env unless it repeats a recently
+// applied (boot, seq). Caller must hold mu or be single-threaded.
+func (s *Store) applyOnce(env Envelope, receivedAt string) {
+	if s.isRedelivery(env, receivedAt) {
+		return
+	}
+	s.apply(env, receivedAt)
+}
+
+func receiptTime(receivedAt string) time.Time {
+	ts, _ := time.Parse(time.RFC3339Nano, receivedAt)
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	return ts
+}
+
+func (s *Store) runtime(nodeID string) *nodeRuntime {
+	rt := s.nodes[nodeID]
+	if rt == nil {
+		rt = &nodeRuntime{state: &NodeState{NodeID: nodeID}}
+		s.nodes[nodeID] = rt
+	}
+	return rt
+}
+
+// isRedelivery reports whether env repeats a (boot, seq) applied within
+// redeliveryWindow; otherwise it records the pair. Envelopes without a boot
+// or sequence are never redeliveries. Caller must hold mu.
+func (s *Store) isRedelivery(env Envelope, receivedAt string) bool {
+	if env.Boot == "" || env.Seq == 0 {
+		return false
+	}
+	rt := s.runtime(env.NodeID)
+	ts := receiptTime(receivedAt)
+	cutoff := ts.Add(-redeliveryWindow)
+	drop := 0
+	for drop < len(rt.applied) && (rt.applied[drop].at.Before(cutoff) || len(rt.applied)-drop > maxRecentSeqs) {
+		delete(rt.appliedSet, rt.applied[drop].key)
+		drop++
+	}
+	rt.applied = rt.applied[drop:]
+	key := seqKey{env.Boot, env.Seq}
+	if rt.appliedSet[key] {
+		return true
+	}
+	if rt.appliedSet == nil {
+		rt.appliedSet = map[seqKey]bool{}
+	}
+	rt.appliedSet[key] = true
+	rt.applied = append(rt.applied, appliedSeq{key: key, at: ts})
+	return false
 }
 
 // apply folds one envelope into the in-memory rollup. Caller must hold mu
 // (the replay path is single-threaded).
 func (s *Store) apply(env Envelope, receivedAt string) {
-	rt := s.nodes[env.NodeID]
-	if rt == nil {
-		rt = &nodeRuntime{state: &NodeState{NodeID: env.NodeID}}
-		s.nodes[env.NodeID] = rt
-	}
+	rt := s.runtime(env.NodeID)
 	st := rt.state
-	ts, _ := time.Parse(time.RFC3339Nano, receivedAt)
-	if ts.IsZero() {
-		ts = time.Now()
-	}
+	ts := receiptTime(receivedAt)
 	currentBoot := env.Boot == "" || rt.trackSeq(env.Boot, env.Seq, ts)
 	// Delayed deliveries still carry useful evidence, but cannot reset the
 	// active stream's sequence health or roll back its reported version.
