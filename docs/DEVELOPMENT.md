@@ -113,6 +113,7 @@ python3 plugin/hooks/test_secret_guard.py
 python3 plugin/hooks/test_injection_scan.py
 python3 plugin/hooks/test_activity_log.py
 python3 plugin/hooks/test_cursor_hooks.py
+python3 packaging/test/agent_scenarios.py  # score guard replies and local agent tool schemas against the recorded bar (needs Go)
 
 # 3. Run Swift menu bar package tests
 bash packaging/swift_macos.sh test --package-path menubar

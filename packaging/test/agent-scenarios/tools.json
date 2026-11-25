@@ -1,0 +1,35 @@
+{
+  "finding": {"id": "scenario-finding", "session_id": "scenario-session"},
+  "tools": [
+    {
+      "name": "inspect_snapshot",
+      "arguments": [],
+      "valid": {},
+      "invalid": {"id": "scenario-finding"}
+    },
+    {
+      "name": "inspect_skill",
+      "arguments": ["id"],
+      "valid": {"id": "git"},
+      "invalid": {"id": "../skills/git"}
+    },
+    {
+      "name": "search_memory",
+      "arguments": ["query"],
+      "valid": {"query": "recorded"},
+      "invalid": {"query": 7}
+    },
+    {
+      "name": "inspect_finding",
+      "arguments": ["id"],
+      "valid": {"id": "scenario-finding"},
+      "invalid": {"id": "other-finding"}
+    },
+    {
+      "name": "inspect_session_activity",
+      "arguments": ["id"],
+      "valid": {"id": "scenario-session"},
+      "invalid": {"id": "other-session"}
+    }
+  ]
+}
