@@ -1037,7 +1037,8 @@ def _test_agent_process_patterns_are_bounded_and_fail_closed():
         with in_process():
             assert secret_guard.evaluate_command("pkill -f 'other-fixture'").kind == "allow"
         remaining, _ = signal.getitimer(signal.ITIMER_VIRTUAL)
-        assert 0 < remaining <= 30 and not fired, (remaining, fired)
+        # Linux reports an armed 30 s interval timer up to one clock tick above the requested value (30.001 s).
+        assert 0 < remaining < 31 and not fired, (remaining, fired)
         assert signal.getsignal(signal.SIGVTALRM) is handler
         signal.setitimer(signal.ITIMER_VIRTUAL, 0)
         with in_process():
