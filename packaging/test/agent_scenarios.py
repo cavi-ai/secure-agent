@@ -29,7 +29,7 @@ SCENARIO_DIR = Path(__file__).resolve().parent / "agent-scenarios"
 TOOL_TEST = "^TestAgentToolScenarios$"
 
 # Lowest total points (hook replies plus local agent tools) a run accepts.
-SCORE_BAR = 41
+SCORE_BAR = 51
 
 
 @contextlib.contextmanager

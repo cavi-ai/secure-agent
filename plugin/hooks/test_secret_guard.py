@@ -713,6 +713,73 @@ EXTRA_TESTS += [
 ]
 
 
+# --- Directory Guard deny replies name the matched target --------------------
+
+def _guard_reply(out: dict) -> str:
+    assert out.get("permission") == "deny", out
+    reason = out.get("hookSpecificOutput", {}).get("permissionDecisionReason")
+    assert reason == out.get("agent_message"), out
+    assert "\n" not in reason and "\r" not in reason, reason
+    return reason
+
+
+def test_guard_file_tool_deny_names_the_path():
+    path = "${HOME}/.aws/credentials"
+    out = run(read(path), env=with_modes(**{"cloud-creds": "deny"}))
+    assert _guard_reply(out) == (f"DENIED by Directory Guard (cloud-creds): {path}. Propose the change "
+                                 "to the user, or ask them to add an allow rule, then retry."), out
+    assert out.get("user_message") == (
+        f"Blocked: access to {HOME}/.aws/credentials is denied by Directory Guard (cloud-creds)."
+    ), out
+
+
+def test_guard_bash_deny_names_the_path():
+    out = run(bash('cat "$HOME/.claude/settings.json"'), env=with_modes(**{"harness-config": "deny"}))
+    reply = _guard_reply(out)
+    assert reply.startswith("DENIED by Directory Guard (harness-config): $HOME/.claude/settings.json. "
+                            "Propose the change"), reply
+    assert "cat " not in reply, reply
+
+
+def test_guard_prompt_deny_names_the_path():
+    path = "~/.aws/credentials"
+    expected = (f"DENIED by Directory Guard (cloud-creds): {path}. Approve it in the Secure Agent prompt, "
+                "or add an allow-always rule, then retry.")
+    with guard_stub({"verdict": "deny", "scope": "once"}) as sock:
+        assert _guard_reply(run(read(path), env=_prompt_env(sock))) == expected
+    offline = run(read(path), env={**_prompt_env("/tmp/nonexistent-guard.sock"), "CURSOR_TRACE_ID": "abc"})
+    assert _guard_reply(offline) == expected, offline
+
+
+def test_guard_scan_deny_names_one_bounded_line():
+    env = with_modes(**{"ssh-keys": "deny"})
+    out = run(grep("~/.ssh/a\nb"), env=env)
+    assert _guard_reply(out).startswith("DENIED by Directory Guard (ssh-keys): scanning ~/.ssh/a b reaches "), out
+    out = run(grep(), env={**env, "SECURE_AGENT_CWD": os.path.join(HOME, ".ssh")})
+    assert _guard_reply(out).startswith("DENIED by Directory Guard (ssh-keys): scanning the working directory reaches "), out
+
+
+def test_guard_deny_target_is_one_bounded_line():
+    env = with_modes(**{"ssh-keys": "deny"})
+    spaced = _guard_reply(run(read(os.path.join(HOME, ".ssh", "id_a  b\nc\u2028d")), env=env))
+    assert spaced.startswith(f"DENIED by Directory Guard (ssh-keys): {HOME}/.ssh/id_a  b c d. Propose"), spaced
+    long_path = os.path.join(HOME, ".ssh", "id_" + "a" * 300)
+    reply = _guard_reply(run(read(long_path), env=env))
+    prefix = "DENIED by Directory Guard (ssh-keys): "
+    named, sep, _ = reply.partition(". Propose the change")
+    assert sep and named.startswith(prefix), reply
+    assert named[len(prefix):] == long_path[:199] + "…", reply
+
+
+EXTRA_TESTS += [
+    test_guard_file_tool_deny_names_the_path,
+    test_guard_bash_deny_names_the_path,
+    test_guard_prompt_deny_names_the_path,
+    test_guard_scan_deny_names_one_bounded_line,
+    test_guard_deny_target_is_one_bounded_line,
+]
+
+
 def _crash_in_process(payload: dict, env: dict) -> dict:
     """Runs main() with the checks forced to raise; returns the emitted JSON."""
     import io

@@ -15,6 +15,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Fleet collector: the event log rotates per node at 16 MiB and keeps 8 rotated files; event queries read the newest entries first and cap `limit` at 1000.
 - Control API: `GET /snapshot` and posture reuse their store reads until the next store write, for at most 10 seconds.
 - Console: values served by the daemon are escaped by default in every tab, the drawer and the shared render helpers.
+- Directory Guard: deny replies to the agent name the path that matched the rule.
 
 ### Fixed
 - Control API: an owner-uid socket peer whose process family is an agent gets the agent role on every route.
