@@ -11,6 +11,7 @@ import contextlib
 import atexit
 import json
 import os
+import signal
 import socketserver
 import subprocess
 import sys
@@ -18,6 +19,7 @@ import tempfile
 import threading
 import time
 import shutil
+from unittest.mock import patch
 
 from test_hook_lifecycle import running_app
 
@@ -155,6 +157,19 @@ ALLOW = [
     "find ~/.ssh -name 'config'",
     # unbalanced quote must not brick the agent
     "echo \"unterminated",
+    # signalling other processes and inspecting the product's own stay allowed
+    "pkill node",
+    "pkill -f 'node.*server'",
+    "killall Dock",
+    "kill 1234",
+    "kill -9 $(lsof -t -i :3000)",
+    "ps aux | grep secure-agent",
+    "pgrep secure-agentd",
+    "launchctl list",
+    "launchctl print system/com.cavi-ai.secure-agent-esd",
+    "osascript -e 'tell application \"Secure Agent\" to activate'",
+    "tail -n 50 /var/log/secure-agent-esd.log",
+    "cat \"/Applications/Secure Agent.app/Contents/Info.plist\"",
 ]
 
 # Must be DENIED.
@@ -248,6 +263,30 @@ DENY = [
     ("echo '{}' > ~/.claude/hooks/evil.py", "harness-config-redirect"),
     ("tee ~/.cursor/hooks.json", "harness-config-mutation"),
     ("sed -i '' 's/a/b/' ~/.config/opencode/hooks/guard.py", "harness-config-mutation"),
+    # stopping the product's own processes turns every hook off
+    ("pkill secure-agentd", "guard-control-stop"),
+    ("sudo pkill -9 -f secure-agent-esd", "guard-control-stop"),
+    ("pkill -f '[s]ecure.agent'", "guard-control-stop"),
+    ("pkill -f 'Agent.app/Contents'", "guard-control-stop"),
+    ("killall \"Secure Agent\"", "guard-control-stop"),
+    ("nohup killall -9 SecureAgent", "guard-control-stop"),
+    ("killall -m 'secure-agent.*'", "guard-control-stop"),
+    ("env FOO=1 killall secure-agent-collector", "guard-control-stop"),
+    ("kill $(pgrep secure-agentd)", "guard-control-stop"),
+    ("kill -9 `pgrep -f \"Secure Agent\"`", "guard-control-stop"),
+    ("kill -TERM $(pgrep -f '[s]ecure-agentd')", "guard-control-stop"),
+    ("pgrep secure-agentd | xargs kill", "guard-control-stop"),
+    ("ls && pkill secure-agent-menubar", "guard-control-stop"),
+    ("bash -c \"pkill secure-agentd\"", "guard-control-stop"),
+    ("osascript -e 'quit app \"Secure Agent\"'", "guard-control-stop"),
+    ("osascript -e 'tell application id \"com.cavi-ai.secure-agent\" to quit'", "guard-control-stop"),
+    ("osascript -e 'do shell script \"pkill secure-agentd\"'", "guard-control-stop"),
+    ("launchctl bootout gui/501/com.cavi-ai.secure-agentd", "guard-control-stop"),
+    ("launchctl unload -w ~/Library/LaunchAgents/com.cavi-ai.secure-agentd.plist", "guard-control-stop"),
+    ("sudo launchctl kill SIGTERM system/com.cavi-ai.secure-agent-esd", "guard-control-stop"),
+    ("launchctl stop com.cavi-ai.secure-agentd", "guard-control-stop"),
+    ("launchctl remove com.cavi-ai.secure-agentd", "guard-control-stop"),
+    ("launchctl disable gui/$(id -u)/com.cavi-ai.secure-agentd", "guard-control-stop"),
 ]
 
 WRITE_DENY = [
@@ -978,6 +1017,84 @@ def _test_deny_reply_carries_the_verdict_texts():
         assert out.get("user_message") == verdict.user_msg, cmd
         assert out.get("agent_message") == verdict.agent_msg, cmd
         assert out.get("hookSpecificOutput", {}).get("permissionDecisionReason") == verdict.agent_msg, cmd
+
+
+def _test_agent_process_patterns_are_bounded_and_fail_closed():
+    """Invalid and oversized patterns fail closed, with the caller's timer intact."""
+    for flag in ("pkill -f", "killall -m"):
+        for pattern in ("[", "x" * (secret_guard.PATTERN_MAX_LEN + 1)):
+            cmd = f"{flag} '{pattern}'"
+            started = time.monotonic()
+            out = run(bash(cmd))
+            assert out.get("permission") == "deny" and last_audit_rule() == "guard-control-stop", cmd
+            assert time.monotonic() - started < 1.0, cmd
+    assert secret_guard.selects_product(["other-fixture"], deadline=time.monotonic() - 1)
+    fired = []
+    handler = lambda *_: fired.append(1)  # noqa: E731
+    prev = signal.signal(signal.SIGVTALRM, handler)
+    try:
+        signal.setitimer(signal.ITIMER_VIRTUAL, 30)
+        with in_process():
+            assert secret_guard.evaluate_command("pkill -f 'other-fixture'").kind == "allow"
+        remaining, _ = signal.getitimer(signal.ITIMER_VIRTUAL)
+        assert 0 < remaining <= 30 and not fired, (remaining, fired)
+        assert signal.getsignal(signal.SIGVTALRM) is handler
+        signal.setitimer(signal.ITIMER_VIRTUAL, 0)
+        with in_process():
+            _assert_denied(secret_guard.evaluate_command("killall -m '['"), "guard-control-stop")
+        assert signal.getitimer(signal.ITIMER_VIRTUAL) == (0.0, 0.0), signal.getitimer(signal.ITIMER_VIRTUAL)
+    finally:
+        signal.setitimer(signal.ITIMER_VIRTUAL, 0)
+        signal.signal(signal.SIGVTALRM, prev)
+
+
+EXTRA_TESTS.append(_test_agent_process_patterns_are_bounded_and_fail_closed)
+
+
+def _test_process_selectors_use_native_matching():
+    with patch.object(secret_guard, "PRODUCT_PROCESSES", ("/fixture/WorkerTest",)):
+        for command in (
+            "pkill '^Worker[[:upper:]]est$'",
+            "pkill -f '/fixture/Worker[[:upper:]]est$'",
+            "pgrep '^Worker[[:upper:]]est$' | xargs -n 1 kill",
+        ):
+            _assert_denied(secret_guard.evaluate_command(command), "guard-control-stop")
+        for command in ("pkill '^other-fixture$'", "pgrep '^Worker[[:upper:]]est$'"):
+            assert secret_guard.evaluate_command(command).kind == "allow", command
+
+
+def _test_process_selectors_deny_inversion():
+    with patch.object(secret_guard, "PRODUCT_PROCESSES", ("/fixture/WorkerTest",)):
+        for command in ("pkill -vi '^other-fixture$'", "pkill -TERM -Iiv '^other-fixture$'"):
+            _assert_denied(secret_guard.evaluate_command(command), "guard-control-stop")
+
+
+def _test_xargs_uses_utility_and_pipeline():
+    for command in (
+        "printf '%s' secure-agentd | xargs printf '%s' kill",
+        "printf '%s' secure-agentd | xargs -I kill printf '%s' kill",
+        "pgrep secure-agentd; pgrep node | xargs -n1 kill",
+        "pgrep secure-agentd || pgrep node | xargs -- kill",
+        "printf '%s' 'secure-agentd | example'; pgrep node | xargs kill",
+        "pgrep node | xargs kill # secure-agentd",
+    ):
+        assert secret_guard.evaluate_command(command).kind == "allow", command
+    for command in (
+        "pgrep secure-agentd | sort -u | xargs -n1 /bin/kill",
+        "pgrep secure-agentd |\n xargs -n 1 /bin/kill",
+        "pgrep secure-agentd | # sort the input\n xargs -n 1 /bin/kill",
+        "pgrep secure-agentd | \\\n xargs -n1 /bin/kill",
+        "{ printf '%s' fixture; } | xargs -n1 /bin/kill",
+        "sh -c 'pgrep secure-agentd | xargs --max-args=1 /bin/kill'",
+    ):
+        _assert_denied(secret_guard.evaluate_command(command), "guard-control-stop")
+
+
+EXTRA_TESTS += [
+    _test_process_selectors_use_native_matching,
+    _test_process_selectors_deny_inversion,
+    _test_xargs_uses_utility_and_pipeline,
+]
 
 
 def _test_group_1_security_cli_and_control_plane_executors():
