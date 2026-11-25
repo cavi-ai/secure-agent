@@ -15,6 +15,36 @@ function escapeHTML(str) {
     .replace(/'/g, '&#39;');
 }
 
+// Markup fragments made by raw(). The brand is a private field of a class
+// only this closure can construct, so no parsed or copied object carries it.
+const htmlFragments = (() => {
+  class Fragment {
+    #markup;
+    constructor(markup) { this.#markup = markup; }
+    static markup(value) { return typeof value === 'object' && value !== null && #markup in value ? value.#markup : undefined; }
+  }
+  return { wrap: markup => new Fragment(markup), markup: Fragment.markup };
+})();
+
+// raw(markup) marks already-built markup for html``. null/undefined → ''.
+function raw(markup) {
+  return htmlFragments.wrap(markup === null || markup === undefined ? '' : String(markup));
+}
+
+// html`…${value}…` returns a string. Each value renders as escapeHTML(value),
+// except raw() markup and arrays of only raw() markup, which join unescaped.
+function html(strings, ...values) {
+  let out = strings[0];
+  values.forEach((value, i) => {
+    const fragment = htmlFragments.markup(value);
+    if (fragment !== undefined) out += fragment;
+    else if (Array.isArray(value) && value.every(v => htmlFragments.markup(v) !== undefined)) out += value.map(v => htmlFragments.markup(v)).join('');
+    else out += escapeHTML(value);
+    out += strings[i + 1];
+  });
+  return out;
+}
+
 // applyInlineMetrics: the console CSP (style-src 'self') drops style
 // attributes parsed from markup, so renderers carry sizes in data attributes
 // (data-left / data-w / data-h in percent, data-harness-color) and callers apply them

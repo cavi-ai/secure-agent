@@ -155,6 +155,39 @@ test('escapeHTML tolerates null/undefined/numbers', () => {
   assert.equal(escapeHTML(0), '0');
 });
 
+// ---------- html / raw ----------
+
+test('html escapes interpolated text and attribute values', () => {
+  const hostile = `<script>alert("x")</script> & 'q'`;
+  const escaped = '&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#39;q&#39;';
+  const out = ctx.html`<p title="${hostile}">${hostile}</p>`;
+  assert.equal(typeof out, 'string');
+  assert.equal(out, `<p title="${escaped}">${escaped}</p>`);
+  assert.equal(ctx.html`<span data-n="${0}">${42}</span>`, '<span data-n="0">42</span>');
+});
+test('html passes raw() markup through and joins raw() arrays without separators', () => {
+  assert.equal(ctx.html`<ul>${ctx.raw('<li>a</li>')}</ul>`, '<ul><li>a</li></ul>');
+  assert.equal(ctx.html`<dl>${['<dt>a</dt>', '<dd>b</dd>'].map(m => ctx.raw(m))}</dl>`, '<dl><dt>a</dt><dd>b</dd></dl>');
+  assert.equal(ctx.html`<b>${ctx.raw(ctx.html`<i>${'<x>'}</i>`)}</b>`, '<b><i>&lt;x&gt;</i></b>');
+  assert.equal(ctx.html`<ul>${[]}</ul>`, '<ul></ul>');
+});
+test('html escapes values shaped like raw() markup', () => {
+  const real = ctx.raw('<b>');
+  const forged = [
+    JSON.parse('{"markup":"<img src=x onerror=1>"}'),
+    JSON.parse('{"__proto__":{"markup":"<img src=x onerror=1>"}}'),
+    { ...real },
+    Object.create(Object.getPrototypeOf(real)),
+  ];
+  for (const value of forged) assert.equal(ctx.html`<p>${value}</p>`, '<p>[object Object]</p>');
+  assert.equal(ctx.html`${JSON.parse('[{"markup":"<b>"}]')}`, '[object Object]');
+  assert.equal(ctx.html`${[real, '<i>']}`, '[object Object],&lt;i&gt;');
+});
+test('html renders null and undefined as empty', () => {
+  assert.equal(ctx.html`a${null}b${undefined}c`, 'abc');
+  assert.equal(ctx.html`a${ctx.raw(null)}b${ctx.raw(undefined)}c`, 'abc');
+});
+
 // ---------- fmtTime ----------
 
 test('fmtTime is zero-padded HH:MM:SS', () => {
