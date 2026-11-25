@@ -6,6 +6,22 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Daemon: a run record stores how each run started and ended; quitting the app and the new `secure-agent stop` command record an owner stop before the daemon exits.
+- Findings: `monitor-stopped` (severity 3) is raised at start when a previous run since the last boot ended without an owner stop; it names the pid, how the run ended and its times.
+- Directory Guard: agent commands that stop Secure Agent are denied: `kill`, `pkill`, `killall` and `xargs kill` on its processes, `osascript` quit, and `launchctl` stop, unload or removal of its services (rule `guard-control-stop`).
+
+### Changed
+- Fleet collector: the event log rotates per node at 16 MiB and keeps 8 rotated files; event queries read the newest entries first and cap `limit` at 1000.
+- Control API: `GET /snapshot` and posture reuse their store reads until the next store write, for at most 10 seconds.
+- Console: values served by the daemon are escaped by default in every tab, the drawer and the shared render helpers.
+
+### Fixed
+- Control API: an owner-uid socket peer whose process family is an agent gets the agent role on every route.
+- Control API: `POST /kill` maps errors to status codes by error type instead of message text.
+- Proxy: proxy credential headers and hop-by-hop headers are removed before a plain-HTTP request is forwarded; inspected CONNECT tunnels drop the proxy credential headers.
+- Fleet collector: HTTP connections have header, read, write and idle timeouts and a 64 KiB header limit; a redelivered envelope is acknowledged and not stored again.
+
 ## [1.7.0] - 2026-11-21
 
 ### Added

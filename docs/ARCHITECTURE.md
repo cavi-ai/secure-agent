@@ -292,6 +292,7 @@ The correlator evaluates incoming event streams against a sliding time window (d
 - **Rule: `launch-item-change`**: An agent process tree that adds or removes a background item (launch agent, launch daemon, login item), directly or by writing the plist macOS registers, raises a severity-3 flag naming the item and its executable.
 - **Rule: `trust-change`**: An agent process tree that installs a configuration profile or overrides Gatekeeper raises a severity-3 flag, as does the user installing a profile or overriding Gatekeeper for an app bundle, installer package or profile file an agent wrote in the 24 hours before.
 - **Rule: `xprotect-detection`**: Every XProtect malware detection raises a severity-3 flag naming the malware and the detected path, whichever process the file came from.
+- **Rule: `monitor-stopped`**: Raised by the daemon at start, outside the correlator. A previous run since the last boot that ended without an owner stop (a signal with no stop intent, the owning app's exit, a control API or start failure, or no ending recorded) raises a severity-3 flag naming the pid, how the run ended and its times. Quitting the app and `secure-agent stop` record an owner stop and raise none.
 
 ---
 
