@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/hookhealth"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
@@ -21,54 +20,9 @@ import (
 // once as a headline item (Items) and once as an item in exactly one group,
 // so needs_you, the console hero and the menubar count the same set.
 
-// AttentionItem priorities (higher first): guard 5, resource 4, incident 3,
-// critical flag, pattern and routine 2.
-type AttentionItem struct {
-	Kind            string                `json:"kind"` // resource | guard | incident | flag | pattern | routine
-	Priority        int                   `json:"priority"`
-	ID              string                `json:"id,omitempty"`
-	Action          string                `json:"action,omitempty"`
-	Title           string                `json:"title"`
-	Detail          string                `json:"detail,omitempty"`
-	Rule            string                `json:"rule,omitempty"`
-	Path            string                `json:"path,omitempty"`
-	Tool            string                `json:"tool,omitempty"`
-	Workspace       string                `json:"workspace,omitempty"`
-	ScopeText       string                `json:"scopeText,omitempty"`
-	AvailableScopes []model.ScopeChoice   `json:"available_scopes,omitempty"`
-	ReaderExe       string                `json:"reader_exe,omitempty"`
-	Status          string                `json:"status,omitempty"`
-	Count           int                   `json:"count,omitempty"`
-	Hosts           []string              `json:"hosts,omitempty"`
-	Advisor         *model.AdvisorVerdict `json:"advisor,omitempty"`
-	// Disposition is set on flag items (the same verdict /flags/{id}/explain
-	// serves) and pattern items (the worst open flag's).
-	Disposition  *model.Disposition           `json:"disposition,omitempty"`
-	Assessment   *model.FindingAssessment     `json:"assessment,omitempty"`
-	Review       *model.ReviewRecord          `json:"review,omitempty"`
-	SessionID    string                       `json:"session_id,omitempty"`
-	HookFinding  *hookhealth.Finding          `json:"hook_finding,omitempty"`
-	HookDelivery *store.HookForwarderSnapshot `json:"hook_delivery,omitempty"`
-}
+type AttentionItem = posture.AttentionItem
 
-// AttentionGroup is one agent session, an explicit unattributed bucket, or
-// the machine group (Key "machine") for signals no agent owns, with its
-// pending decisions, worst first.
-type AttentionGroup struct {
-	Key          string  `json:"key"`
-	Label        string  `json:"label"`
-	Agent        string  `json:"agent"`
-	Workspace    string  `json:"workspace,omitempty"`
-	RootPID      int32   `json:"rootPid,omitempty"`
-	PIDs         []int32 `json:"pids,omitempty"`
-	RSSBytes     uint64  `json:"rssBytes,omitempty"`
-	CPUPercent   float64 `json:"cpuPercent,omitempty"`
-	ProcessCount int     `json:"processCount,omitempty"`
-	// Summary, on an agent-level group (Key "agent:…"), names the processes
-	// and sessions behind its findings and whether they still run.
-	Summary string          `json:"summary,omitempty"`
-	Items   []AttentionItem `json:"items"`
-}
+type AttentionGroup = posture.AttentionGroup
 
 // machineGroupKey is retained for the machine-level coverage section.
 const machineGroupKey = "machine"

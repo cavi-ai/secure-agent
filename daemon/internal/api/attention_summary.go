@@ -1,27 +1,12 @@
 package api
 
-// AttentionSummary is an additive presentation of the existing queue. Queued
-// counts still sum to needs_you; coverage gaps are counted separately.
-type AttentionSummary struct {
-	Version int               `json:"version"`
-	Buckets []AttentionBucket `json:"buckets"`
-}
+import "github.com/cavi-ai/secure-agent/daemon/internal/posture"
 
-type AttentionBucket struct {
-	Kind          string              `json:"kind"`
-	Count         int                 `json:"count"`
-	CoverageCount int                 `json:"coverage_count"`
-	First         *AttentionReference `json:"first,omitempty"`
-}
+type AttentionSummary = posture.AttentionSummary
 
-// AttentionReference points to an existing group item, never a new authority
-// to approve access or a substitute for the item's current evidence.
-type AttentionReference struct {
-	Kind      string `json:"kind"`
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	SessionID string `json:"session_id,omitempty"`
-}
+type AttentionBucket = posture.AttentionBucket
+
+type AttentionReference = posture.AttentionReference
 
 // AttentionBuckets are the summary's buckets in served order; clients
 // validate against this order (lib.js ATTENTION_BUCKETS, Models.swift
