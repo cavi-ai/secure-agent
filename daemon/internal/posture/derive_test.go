@@ -1,26 +1,28 @@
-package api
+package posture
 
 import (
 	"testing"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
-	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
 
+// derive is Derive over inputs that queue no flags, so no disposition is read.
+func derive(in Inputs) Posture { return Derive(in, nil) }
+
 func TestDerivePostureRetainsDecisionsWhenReadsFail(t *testing.T) {
 	health := store.WriteHealth{}
-	in := posture.Inputs{
-		Status:      posture.Status{Running: true, StorageHealth: &health},
+	in := Inputs{
+		Status:      Status{Running: true, StorageHealth: &health},
 		Generated:   time.Now(),
 		FailedReads: []string{"flags", "flags", "finding reviews"},
-		Resources:   []resource.Session{mkResourceSession(42, "codex", "/work/repo")},
+		Resources:   []resource.Session{{Key: "key-codex", RootPID: 42, Name: "codex", Workspace: "/work/repo", LastSeenAt: time.Now().Format(time.RFC3339), Processes: []resource.Process{{PID: 42}}}},
 		Pending:     []guard.Pending{{ID: "prompt", Agent: "codex", Tool: "Read", Path: "/work/repo/.env"}},
 	}
-	p := derivePosture(in)
+	p := derive(in)
 	if p.State != "attention" || p.NeedsYou != 1 || len(p.Groups) != 1 || p.Groups[0].RootPID != 42 {
 		t.Fatalf("decision lost: %+v", p)
 	}
@@ -34,19 +36,19 @@ func TestDerivePostureRetainsDecisionsWhenReadsFail(t *testing.T) {
 
 func TestDerivePostureUsesSnapshotTimeForCollectorFreshness(t *testing.T) {
 	at := time.Date(2020, 1, 1, 12, 0, 0, 0, time.UTC)
-	in := posture.Inputs{
+	in := Inputs{
 		Generated: at,
-		Status: posture.Status{Running: true, ActiveAgents: 1, Uptime: "1h",
+		Status: Status{Running: true, ActiveAgents: 1, Uptime: "1h",
 			Collectors: []supervise.Health{{Name: "transcript", Running: true, LastProduced: at.Format(time.RFC3339)}},
 		},
 	}
-	for _, item := range derivePosture(in).CoverageItems {
+	for _, item := range derive(in).CoverageItems {
 		if item.Kind == "collector_idle" {
 			t.Fatalf("snapshot used wall clock: %+v", item)
 		}
 	}
 	in.Generated = at.Add(24 * time.Hour)
-	p := derivePosture(in)
+	p := derive(in)
 	if p.State != "all-clear" || p.CoverageCount != 0 {
 		t.Fatalf("an idle collector became a failure: %+v", p)
 	}

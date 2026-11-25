@@ -118,3 +118,6 @@ func (a *API) advisorReadFailures(kind string) []string {
 func (a *API) postureWithReadHealth(patterns []model.Pattern, routine []model.RoutineGroup, failedReads []string) Posture {
 	return derivePosture(a.loadPostureInputs(a.statusFn(), patterns, routine, failedReads))
 }
+
+// derivePosture is posture.Derive with dispositionFor supplying flag verdicts.
+func derivePosture(in posture.Inputs) Posture { return Posture(posture.Derive(in, dispositionFor)) }

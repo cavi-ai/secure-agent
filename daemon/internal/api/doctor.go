@@ -229,7 +229,7 @@ func (a *API) doctorFacts(now time.Time) doctorFacts {
 	f := doctorFacts{
 		now:      now,
 		boot:     now.Add(-uptime),
-		grace:    uptime < collectorBootGrace,
+		grace:    uptime < posture.CollectorBootGrace,
 		st:       st,
 		lossSeen: a.lossSeen,
 	}
@@ -290,10 +290,10 @@ func checkHookActive(f doctorFacts) (string, string) {
 }
 
 func checkFileTelemetry(f doctorFacts) (string, string) {
-	if fileTelemetryDisabled(f.st) {
+	if posture.FileTelemetryDisabled(posture.Status(f.st)) {
 		return doctorSkip, "file telemetry is disabled in configuration"
 	}
-	if fileTelemetryUnavailable(f.st) {
+	if posture.FileTelemetryUnavailable(posture.Status(f.st)) {
 		return doctorFail, "file telemetry is enabled but no file collector is available"
 	}
 	if f.st.FileTelemetryEnabled == nil && f.st.ESService == nil {
@@ -352,7 +352,7 @@ func checkCollectors(f doctorFacts) (string, string) {
 	var down, silent []string
 	var enabledCount int
 	for _, c := range f.st.Collectors {
-		if c.Name == "eslogger" && fileTelemetryDisabled(f.st) {
+		if c.Name == "eslogger" && posture.FileTelemetryDisabled(posture.Status(f.st)) {
 			continue
 		}
 		enabledCount++
@@ -367,7 +367,7 @@ func checkCollectors(f doctorFacts) (string, string) {
 	// The spool service's own failures are the file-telemetry check's.
 	spoolFailing := f.st.ESService != nil && len(posture.ESServiceItems(f.now, *f.st.ESService)) > 0
 	if f.st.ActiveAgents > 0 {
-		for _, it := range silentCollectorItems(f.now, f.st) {
+		for _, it := range posture.SilentCollectorItems(f.now, posture.Status(f.st)) {
 			if !posture.IsMonitoringGap(it) {
 				continue
 			}
@@ -388,7 +388,7 @@ func checkCollectors(f doctorFacts) (string, string) {
 	// whatever the verdict.
 	var polls string
 	for _, c := range f.st.Collectors {
-		if c.Name == "eslogger" && fileTelemetryDisabled(f.st) {
+		if c.Name == "eslogger" && posture.FileTelemetryDisabled(posture.Status(f.st)) {
 			continue
 		}
 		if c.Source != "" {
@@ -630,7 +630,7 @@ func checkStorage(f doctorFacts) (string, string) {
 		return doctorSkip, "storage health unavailable"
 	}
 	if len(h.ReadActive) > 0 {
-		return doctorFail, "evidence reads unavailable: " + strings.Join(h.ReadActive, ", ") + readIssueDetail(*h)
+		return doctorFail, "evidence reads unavailable: " + strings.Join(h.ReadActive, ", ") + posture.ReadIssueDetail(*h)
 	}
 	if h.Failures == 0 {
 		return doctorPass, "no failed evidence writes"
