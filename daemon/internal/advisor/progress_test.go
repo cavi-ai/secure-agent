@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -61,24 +62,29 @@ func TestTaskDeadlineIncludesEvidencePreparation(t *testing.T) {
 		w.Write([]byte(`{"choices":[{"message":{"content":"{}"}}]}`))
 	}))
 	defer srv.Close()
-	sink := &preparingSink{entered: make(chan struct{}), release: make(chan struct{})}
-	s := New(Config{Enabled: true, Endpoint: srv.URL, Timeout: 20 * time.Millisecond}, sink)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		s.process(context.Background(), task{kind: flagKind, flag: model.Flag{ID: "fixture"}})
-	}()
-	<-sink.entered
-	h := s.Health()
-	time.Sleep(40 * time.Millisecond)
-	close(sink.release)
-	<-done
-	if h.State != "preparing" {
-		t.Errorf("evidence preparation mislabeled: %+v", h)
-	}
-	select {
-	case <-requests:
-		t.Fatal("model contacted after whole-task deadline expired")
-	default:
-	}
+	// The server stays outside the bubble so its network goroutines do not hold the bubble's clock.
+	synctest.Test(t, func(t *testing.T) {
+		// Closing client connections lets the bubble's HTTP client goroutines exit if the model was contacted.
+		defer srv.CloseClientConnections()
+		sink := &preparingSink{entered: make(chan struct{}), release: make(chan struct{})}
+		s := New(Config{Enabled: true, Endpoint: srv.URL, Timeout: 20 * time.Millisecond}, sink)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			s.process(context.Background(), task{kind: flagKind, flag: model.Flag{ID: "fixture"}})
+		}()
+		<-sink.entered
+		h := s.Health()
+		time.Sleep(40 * time.Millisecond)
+		close(sink.release)
+		<-done
+		if h.State != "preparing" {
+			t.Errorf("evidence preparation mislabeled: %+v", h)
+		}
+		select {
+		case <-requests:
+			t.Fatal("model contacted after whole-task deadline expired")
+		default:
+		}
+	})
 }
