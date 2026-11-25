@@ -95,7 +95,7 @@ test('topCostRows sorts by cost desc, then calls, slices, and tolerates missing 
 });
 
 // ---------- unified attention center ----------
-// The grouping itself is computed daemon-side (daemon/internal/api/attention.go,
+// The grouping itself is computed daemon-side (daemon/internal/posture/attention.go,
 // covered by attention_test.go); the console renders posture.groups as served.
 
 // ---------- resource mission control ----------

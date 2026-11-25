@@ -295,18 +295,7 @@ func repoName(sess *model.Session, workspace string) string {
 	if sess != nil && sess.Repo != "" {
 		return sess.Repo
 	}
-	return cwdBase(workspace)
-}
-
-func cwdBase(cwd string) string {
-	s := strings.TrimRight(cwd, "/")
-	if s == "" {
-		return ""
-	}
-	if i := strings.LastIndexAny(s, "/\\"); i >= 0 {
-		return s[i+1:]
-	}
-	return s
+	return posture.WorkspaceName(workspace)
 }
 
 // splitHostPort splits a "host:port" evidence label (IPv6 hosts arrive

@@ -583,7 +583,7 @@ func TestFlagsListStampsExplainOnFirst25IncludingHistory(t *testing.T) {
 	}
 }
 
-// familyTitle title-cases only a plain harness name; an id carrying a
+// FamilyTitle title-cases only a plain harness name; an id carrying a
 // namespace ("untagged:node") is served verbatim, in the sentence too.
 func TestFamilyTitleKeepsIDs(t *testing.T) {
 	for in, want := range map[string]string{
@@ -596,7 +596,7 @@ func TestFamilyTitleKeepsIDs(t *testing.T) {
 		"Cursor":        "Cursor",
 	} {
 		if got := posture.FamilyTitle(in); got != want {
-			t.Errorf("familyTitle(%q) = %q, want %q", in, got, want)
+			t.Errorf("FamilyTitle(%q) = %q, want %q", in, got, want)
 		}
 	}
 	a := explainTestAPI(t)

@@ -1,6 +1,7 @@
 package posture
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
 	"sort"
@@ -126,10 +127,10 @@ func attentionSessions(in Inputs) []attentionSession {
 	var sessions []attentionSession
 	for _, s := range in.Resources {
 		sess := attentionSession{
-			key:          firstNonEmpty([]string{s.Key, fmt.Sprint(s.RootPID)}),
+			key:          cmp.Or(s.Key, fmt.Sprint(s.RootPID)),
 			agent:        s.Name,
 			workspace:    s.Workspace,
-			label:        firstNonEmpty([]string{cwdBase(s.Workspace), s.Name, "Unknown"}),
+			label:        cmp.Or(WorkspaceName(s.Workspace), s.Name, "Unknown"),
 			rootPID:      s.RootPID,
 			rssBytes:     s.RSSBytes,
 			cpuPercent:   s.CPUPercent,
@@ -153,7 +154,7 @@ func attentionSessions(in Inputs) []attentionSession {
 			key:          fmt.Sprint(firstPID(t.Root.RootPID, t.Root.PID)),
 			agent:        t.Root.Name,
 			workspace:    t.Root.CWD,
-			label:        firstNonEmpty([]string{cwdBase(t.Root.CWD), t.Root.Name, "Unknown"}),
+			label:        cmp.Or(WorkspaceName(t.Root.CWD), t.Root.Name, "Unknown"),
 			rootPID:      t.Root.PID,
 			rssBytes:     t.RSSBytes,
 			processCount: 1 + len(t.Children),
@@ -186,9 +187,9 @@ func (b *attentionBuilder) groupFor(agent string, pid int32) *AttentionGroup {
 		}
 	}
 	if sess == nil {
-		return b.keyed("agent:"+firstNonEmpty([]string{agent, "unattributed"}), AttentionGroup{
-			Label: firstNonEmpty([]string{agent, "Unattributed"}) + " activity",
-			Agent: firstNonEmpty([]string{agent, "unknown"}),
+		return b.keyed("agent:"+cmp.Or(agent, "unattributed"), AttentionGroup{
+			Label: cmp.Or(agent, "Unattributed") + " activity",
+			Agent: cmp.Or(agent, "unknown"),
 		})
 	}
 	return b.keyed("session:"+sess.key, AttentionGroup{
@@ -271,7 +272,7 @@ func (b *attentionBuilder) addReviews() map[string]bool {
 		if severity < 3 {
 			continue
 		}
-		g := b.keyed("session:"+r.Context.SessionID, AttentionGroup{Label: firstNonEmpty([]string{cwdBase(r.Context.Workspace), r.Agent, "Session"}), Agent: r.Agent, Workspace: r.Context.Workspace, Summary: "Recorded session " + r.Context.SessionID})
+		g := b.keyed("session:"+r.Context.SessionID, AttentionGroup{Label: cmp.Or(WorkspaceName(r.Context.Workspace), r.Agent, "Session"), Agent: r.Agent, Workspace: r.Context.Workspace, Summary: "Recorded session " + r.Context.SessionID})
 		b.add(g, PostureItem{Kind: "review", ID: r.ID, Title: HumanFlagTitle(r.Context.Rule), Severity: severity, Detail: r.Assessment.Reason, Timestamp: r.LastSeen.UTC().Format(time.RFC3339)}, AttentionItem{Kind: "review", ID: r.ID, Priority: 1 + severity/3, Title: HumanFlagTitle(r.Context.Rule), Detail: r.Assessment.Reason, Count: r.Count, Assessment: &r.Assessment, Review: &r})
 	}
 	return covered
@@ -404,8 +405,8 @@ func (b *attentionBuilder) addFlag(f model.Flag) {
 // addGuardPending adds the guard prompts waiting on the operator.
 func (b *attentionBuilder) addGuardPending() {
 	for _, p := range b.in.Pending {
-		tool := firstNonEmpty([]string{p.Tool, "Tool"})
-		path := firstNonEmpty([]string{p.Path, "a protected path"})
+		tool := cmp.Or(p.Tool, "Tool")
+		path := cmp.Or(p.Path, "a protected path")
 		b.add(b.groupFor(p.Agent, 0), PostureItem{
 			Kind: "guard_pending", ID: p.ID,
 			Title:     p.Agent + " wants " + humanPath(p.Path),
@@ -441,13 +442,13 @@ func (b *attentionBuilder) addIncidents() {
 		if !found {
 			continue
 		}
-		status = firstNonEmpty([]string{status, "open"})
+		status = cmp.Or(status, "open")
 		critical := inc.Risk == model.RiskCritical
 		high := inc.Risk == model.RiskHigh
 		if status != "open" || (!critical && !high) {
 			continue
 		}
-		detail := firstNonEmpty([]string{inc.Summary, inc.Rule, "A security incident needs review."})
+		detail := cmp.Or(inc.Summary, inc.Rule, "A security incident needs review.")
 		headline := PostureItem{
 			Kind: "incident", ID: inc.ID,
 			Title:    "Open incident: " + HumanFlagTitle(inc.Rule),
@@ -484,7 +485,7 @@ func (b *attentionBuilder) addResourcePressure() {
 			Detail:   detail,
 		}, AttentionItem{
 			Kind: "resource", Priority: 4, ID: s.control.PendingID,
-			Action: firstNonEmpty([]string{string(s.control.NextAction), "intervention"}),
+			Action: cmp.Or(string(s.control.NextAction), "intervention"),
 			Title:  "Resource pressure", Detail: detail,
 		})
 	}
@@ -532,7 +533,8 @@ func (b *attentionBuilder) result() AttentionQueue {
 	return AttentionQueue{Items: b.items, Groups: out}
 }
 
-func cwdBase(cwd string) string {
+// WorkspaceName is the last element of a workspace path; "" for an empty path.
+func WorkspaceName(cwd string) string {
 	s := strings.TrimRight(cwd, "/")
 	if s == "" {
 		return ""
@@ -565,15 +567,6 @@ func firstPID(values ...int32) int32 {
 		}
 	}
 	return 0
-}
-
-func firstNonEmpty(strs []string) string {
-	for _, s := range strs {
-		if s != "" {
-			return s
-		}
-	}
-	return ""
 }
 
 // humanPath shortens an absolute path to its tail for a headline.
