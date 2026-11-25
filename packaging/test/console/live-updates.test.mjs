@@ -35,27 +35,24 @@ function clock() {
   };
 }
 
-function fixture({ streaming = true, handlers = {}, prepareStream = null } = {}) {
+function fixture({ streaming = true, handlers = {}, refresh } = {}) {
   const timers = clock(), calls = [], streams = [];
   class Stream {
-    static CLOSED = 2;
-    readyState = 0;
+    closed = false;
     listeners = new Map();
     closes = 0;
     constructor(url) { this.url = url; streams.push(this); }
     addEventListener(kind, fn) { this.listeners.set(kind, fn); }
     emit(kind, message = {}) { this.listeners.get(kind)?.(message); }
-    open() { this.readyState = 1; this.onopen(); }
+    open() { this.onopen(); }
     error() { this.onerror(); }
-    close() { this.closes++; this.readyState = Stream.CLOSED; }
+    close() { this.closes++; this.closed = true; }
   }
   const context = vm.createContext({});
   vm.runInContext(source, context);
   const controller = context.createConsoleLiveUpdates({
-    refresh: options => calls.push(options?.slow === false ? 'fast' : 'full'),
-    streamURL: '/events/stream',
-    EventSourceImpl: streaming ? Stream : null,
-    prepareStream,
+    refresh: refresh ?? (options => calls.push(options?.slow === false ? 'fast' : 'full')),
+    connectStream: streaming ? () => new Stream('/events/stream') : null,
     handlers,
     timers
   });
@@ -80,35 +77,94 @@ test('streaming starts once, keeps the slow refresh, and stops cleanly', () => {
   assert.equal(f.streams.length, 1);
 });
 
-test('the stream opens only after its authorization settles, without a token in the URL', async () => {
-  let authorize;
-  const f = fixture({ prepareStream: () => new Promise(resolve => { authorize = resolve; }) });
-  f.controller.start();
-  await Promise.resolve();
-  assert.equal(f.streams.length, 0, 'no stream before authorization');
-  authorize();
+test('the authenticated request delivers split frames and aborts on stop', async () => {
+  const context = vm.createContext({ AbortController, TextDecoder });
+  vm.runInContext(source, context);
+  const timers = clock();
+  const requests = [], delivered = [];
+  let body;
+  const stream = context.connectConsoleStream((path, opts) => {
+    requests.push({ path, opts });
+    return new Response(new ReadableStream({
+      start(controller) {
+        body = controller;
+        opts.signal.addEventListener('abort', () => controller.error(opts.signal.reason));
+      }
+    }), { headers: { 'Content-Type': 'text/event-stream' } });
+  }, timers);
+  stream.onopen = () => delivered.push('open');
+  stream.onerror = () => assert.fail('stopping must not emit an error');
+  stream.addEventListener('flag', frame => delivered.push(JSON.parse(frame.data).value));
+  assert.equal(requests[0].path, '/events/stream');
+  assert.equal(requests[0].opts.credentials, 'omit');
+  assert.equal(requests[0].opts.headers.Accept, 'text/event-stream');
+  const bytes = new TextEncoder().encode(': ready\n\nevent: flag\ndata: {"value":"é"}\n\n');
+  const split = bytes.indexOf(0xc3) + 1;
+  body.enqueue(bytes.slice(0, split));
+  body.enqueue(bytes.slice(split));
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.streams.length, 1);
-  assert.equal(f.streams[0].url, '/events/stream');
+  assert.deepEqual(delivered, ['open', 'é']);
+  stream.close();
+  assert.equal(requests[0].opts.signal.aborted, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(timers.pending.size, 0);
 });
 
-test('a failed stream authorization falls back to polling', async () => {
-  const f = fixture({ prepareStream: () => Promise.reject(new Error('403')) });
-  f.controller.start();
+test('a non-stream response closes the transport and starts polling', async () => {
+  const context = vm.createContext({ AbortController, TextDecoder });
+  vm.runInContext(source, context);
+  const timers = clock(), calls = [];
+  const controller = context.createConsoleLiveUpdates({
+    refresh: options => calls.push(options?.slow === false ? 'fast' : 'full'),
+    connectStream: () => context.connectConsoleStream(() => new Response('unavailable', { status: 503 }), timers),
+    timers
+  });
+  controller.start();
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.streams.length, 0);
-  f.timers.tick(2000);
-  assert.deepEqual(f.calls, ['full', 'fast']);
+  timers.tick(2000);
+  assert.deepEqual(calls, ['full', 'fast']);
+  controller.stop();
 });
 
-test('stopping during stream authorization never opens a stream', async () => {
-  let authorize;
-  const f = fixture({ prepareStream: () => new Promise(resolve => { authorize = resolve; }) });
+test('an interrupted stream reconnects and reconciles on the next open', async () => {
+  const context = vm.createContext({ AbortController, TextDecoder });
+  vm.runInContext(source, context);
+  const timers = clock(), calls = [], bodies = [];
+  const controller = context.createConsoleLiveUpdates({
+    refresh: () => calls.push('refresh'),
+    connectStream: () => context.connectConsoleStream(() => new Response(new ReadableStream({
+      start(body) { bodies.push(body); }
+    }), { headers: { 'Content-Type': 'text/event-stream' } }), timers),
+    timers
+  });
+  controller.start();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(bodies.length, 1);
+  assert.equal(calls.length, 2);
+  bodies[0].close();
+  await new Promise(resolve => setImmediate(resolve));
+  timers.tick(3000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(bodies.length, 2);
+  assert.equal(calls.length, 3);
+  controller.stop();
+  bodies[1].close();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(timers.pending.size, 0);
+});
+
+test('a fast stream open queues reconciliation after the first refresh', async () => {
+  let refreshes = 0, finish;
+  const initial = new Promise(resolve => { finish = resolve; });
+  const f = fixture({ refresh: () => ++refreshes === 1 ? initial : undefined });
   f.controller.start();
+  f.streams[0].open();
+  f.streams[0].open();
+  assert.equal(refreshes, 1, 'the initial refresh must retain its result');
+  finish();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(refreshes, 2, 'one reconciliation covers the startup window');
   f.controller.stop();
-  authorize();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.streams.length, 0);
 });
 
 test('without a stream, polling refreshes the fast set every two seconds', async () => {
@@ -134,7 +190,7 @@ test('a polling cycle slower than the interval finishes before the next starts',
       calls.push(options?.slow === false ? 'fast' : 'full');
       if (options?.slow === false) return new Promise(resolve => { finish = resolve; });
     },
-    streamURL: '/events/stream', EventSourceImpl: null, timers
+    connectStream: null, timers
   });
   controller.start();
   timers.tick(2000);
@@ -171,7 +227,6 @@ test('each stream open reconciles missed deltas immediately', () => {
   const stream = f.streams[0];
   stream.open();
   assert.deepEqual(f.calls, ['full', 'full']);
-  stream.readyState = 0;
   stream.error();
   stream.open();
   assert.deepEqual(f.calls, ['full', 'full', 'full']);
@@ -183,7 +238,7 @@ test('each stream open reconciles missed deltas immediately', () => {
 test('a hard-closed stream immediately enables polling', () => {
   const f = fixture();
   f.controller.start();
-  f.streams[0].readyState = f.Stream.CLOSED;
+  f.streams[0].closed = true;
   f.streams[0].error();
   f.timers.tick(2000);
   assert.equal(f.calls.length, 2);
@@ -233,7 +288,7 @@ test('ending a session cancels all refreshes and ignores already queued callback
   const stream = f.streams[0];
   stream.emit('flag');
   stream.emit('guard-prompt');
-  stream.readyState = f.Stream.CLOSED;
+  stream.closed = true;
   stream.error();
   const queuedTimers = [...f.timers.pending.values()].map(timer => timer.fn);
   f.controller.stop();

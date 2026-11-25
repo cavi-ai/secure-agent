@@ -202,6 +202,35 @@ func TestIngestAllowsMissingOptionalSource(t *testing.T) {
 	}
 }
 
+func TestRegisteredSourceIsCheckedAgainAtIngest(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file.env")
+	path := filepath.Join(dir, "registered.env")
+	if err := os.WriteFile(file, []byte("FIXTURE=synthetic-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(file, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateRegisteredSource(path); err != nil {
+		t.Fatalf("registering the user-owned file: %v", err)
+	}
+	salt := []byte("fixture-salt")
+	if fps, err := IngestSources(nil, []string{path}, salt); err != nil || len(fps) != 1 {
+		t.Fatalf("ingesting the registered file: got %d fingerprints, %v", len(fps), err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc", path); err != nil {
+		t.Fatal(err)
+	}
+	if fps, err := IngestSources([]string{file}, []string{path}, salt); err == nil ||
+		!strings.Contains(err.Error(), "refusing to ingest a system path") || len(fps) != 0 {
+		t.Fatalf("ingesting a changed registered path: got %d fingerprints, %v", len(fps), err)
+	}
+}
+
 func TestIngestRejectsDeviceSources(t *testing.T) {
 	healthy := filepath.Join(t.TempDir(), "healthy.env")
 	if err := os.WriteFile(healthy, []byte("FIXTURE=fixture-value-for-ingestion\n"), 0o600); err != nil {

@@ -45,15 +45,16 @@ function createConsoleAuth({ token = '', fetchImpl = globalThis.fetch, onRejecte
       if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || /[\\\x00-\x20]/.test(path)) throw new Error('Invalid console endpoint');
       const epoch = generation;
       const current = () => epoch === generation && !!token;
-      const { timeoutMs = 5000, ...init } = opts;
+      const { timeoutMs = 5000, signal: externalSignal, ...init } = opts;
       const controller = new AbortController();
+      const signal = externalSignal ? AbortSignal.any([externalSignal, controller.signal]) : controller.signal;
       pending.add(controller);
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       const headers = new Headers(init.headers);
       headers.set('X-SecureAgent-Console-Token', token);
       try {
-        const response = await fetchImpl(path, { ...init, headers, signal: controller.signal, redirect: 'error' });
-        if (!current() || controller.signal.aborted) throw cancelled();
+        const response = await fetchImpl(path, { ...init, headers, signal, redirect: 'error' });
+        if (!current() || signal.aborted) throw cancelled();
         if (response.status === 403) {
           // A method/peer permission denial also uses 403. Only the listener's
           // credential challenge ends access; other denials reach their caller.

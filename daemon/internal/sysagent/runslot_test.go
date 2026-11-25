@@ -90,22 +90,31 @@ func TestLaunchFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	const narrower = "a headless run needs a folder narrower than /; pick one, or open it in a terminal"
+	rootLink := filepath.Join(dir, "root")
+	if err := os.Symlink("/", rootLink); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name, mode, workdir, want string
 	}{
 		{"missing", ModeHeadless, filepath.Join(dir, "gone"), "the folder " + filepath.Join(dir, "gone") + " does not exist"},
 		{"file", ModeTerminal, file, "the folder " + file + " does not exist"},
 		{"headless root", ModeHeadless, "/", narrower},
+		{"headless root alias", ModeHeadless, rootLink, narrower},
 	} {
-		err := launchFolder(tc.mode, tc.workdir)
+		_, err := launchFolder(tc.mode, tc.workdir)
 		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v", tc.name, err)
 		}
 	}
-	if err := launchFolder(ModeTerminal, "/"); err != nil {
+	if _, err := launchFolder(ModeTerminal, "/"); err != nil {
 		t.Errorf("terminal in /: %v", err)
 	}
-	if err := launchFolder(ModeHeadless, dir); err != nil {
-		t.Errorf("headless in a real folder: %v", err)
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := launchFolder(ModeHeadless, dir); err != nil || got != want {
+		t.Errorf("headless folder = %q, %v, want %q", got, err, want)
 	}
 }

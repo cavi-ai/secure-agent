@@ -62,9 +62,11 @@ func (a *Agent) Dispatch(ctx context.Context, in DispatchInput) (model.SysAgentR
 	if err := a.normalizePlan(&p); err != nil {
 		return model.SysAgentRun{}, err
 	}
-	if err := launchFolder(p.Mode, p.Workdir); err != nil {
+	workdir, err := launchFolder(p.Mode, p.Workdir)
+	if err != nil {
 		return model.SysAgentRun{}, err
 	}
+	p.Workdir = workdir
 	h, _ := harnessByID(p.Harness)
 	info := probe(ctx, a.client, cfg.Endpoint)
 	modelName := harnessModel(cfg, info, p.Model)

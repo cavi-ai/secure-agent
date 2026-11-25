@@ -289,14 +289,6 @@ func (ps *ProxyServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// proxy token challenge) and the console rendered a permanent offline
 	// banner. Gated by the console token — a credential agents do NOT hold,
 	// unlike the proxy token they carry for egress.
-	if r.URL.Path == consoleStreamAuthPath {
-		if !consoleOriginAllowed(r) {
-			refuseConsole(w, "console requests must come from the loopback console")
-			return
-		}
-		serveStreamAuth(w, r)
-		return
-	}
 	if isConsoleAPIPath(r.URL.Path) {
 		if !consoleOriginAllowed(r) {
 			refuseConsole(w, "console requests must come from the loopback console")

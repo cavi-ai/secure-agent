@@ -1,9 +1,7 @@
 package proxy
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"log"
@@ -64,53 +62,13 @@ func ConsoleToken() string {
 	return ""
 }
 
-const (
-	consoleTokenHeader = "X-SecureAgent-Console-Token"
-	// consoleStreamAuthPath sets the stream cookie: EventSource cannot send
-	// the console-token header, and a token in the URL would sit on the
-	// request line for the life of the connection.
-	consoleStreamAuthPath = "/console/stream-auth"
-	consoleStreamPath     = "/events/stream"
-	consoleStreamCookie   = "sa_console_stream"
-)
+const consoleTokenHeader = "X-SecureAgent-Console-Token"
 
-// streamCookieValue is derived from the console token and admits only GET
-// /events/stream: a leaked cookie authorizes no other request.
-func streamCookieValue(token string) string {
-	m := hmac.New(sha256.New, []byte(token))
-	m.Write([]byte("events-stream"))
-	return hex.EncodeToString(m.Sum(nil))
-}
-
-// consoleAuthorized checks the console token from the X-SecureAgent-Console-Token
-// header, or the stream cookie for GET /events/stream. Constant-time
-// compare, same discipline as the proxy token.
+// consoleAuthorized checks the same credential for every console endpoint,
+// including the event stream.
 func consoleAuthorized(r *http.Request) bool {
 	want := ConsoleToken()
-	if want == "" {
-		return false // console API disabled (token load failed): fail closed
-	}
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get(consoleTokenHeader)), []byte(want)) == 1 {
-		return true
-	}
-	if r.Method != http.MethodGet || r.URL.Path != consoleStreamPath {
-		return false
-	}
-	c, err := r.Cookie(consoleStreamCookie)
-	return err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(streamCookieValue(want))) == 1
-}
-
-// serveStreamAuth answers a header-authenticated POST with the stream cookie.
-func serveStreamAuth(w http.ResponseWriter, r *http.Request) {
-	want := ConsoleToken()
-	if r.Method != http.MethodPost || want == "" ||
-		subtle.ConstantTimeCompare([]byte(r.Header.Get(consoleTokenHeader)), []byte(want)) != 1 {
-		refuseConsole(w, "console token required")
-		return
-	}
-	http.SetCookie(w, &http.Cookie{Name: consoleStreamCookie, Value: streamCookieValue(want), Path: consoleStreamPath,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode})
-	w.WriteHeader(http.StatusNoContent)
+	return want != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get(consoleTokenHeader)), []byte(want)) == 1
 }
 
 // consoleOriginAllowed admits a console request only when its Host names

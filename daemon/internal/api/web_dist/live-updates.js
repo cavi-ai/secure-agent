@@ -1,14 +1,13 @@
 // Owns the console's stream and refresh timers. Delta handlers still own
 // telemetry and rendering; stopping this controller ends all future delivery.
-// prepareStream (optional) authorizes the stream before it opens; when it
-// fails the console keeps polling.
-function createConsoleLiveUpdates({ refresh, streamURL, prepareStream = null, handlers = {}, EventSourceImpl = globalThis.EventSource, timers = globalThis }) {
+function createConsoleLiveUpdates({ refresh, connectStream, handlers = {}, timers = globalThis }) {
   let started = false, stopped = false;
   let source = null, slowTimer = null, pollTimer = null;
   let guardTimer = null, flagTimer = null;
+  let initialRefresh = null, reconcilePending = false;
   let failures = 0;
 
-  const refreshFull = () => { if (!stopped) refresh(); };
+  const refreshFull = () => { if (!stopped) return refresh(); };
   // Polling fallback: the fast set every two seconds (the 30 s slow timer
   // keeps the rest), and never a new cycle over an unfinished one — a newer
   // cycle supersedes the older, so overlapping slow cycles never publish.
@@ -47,12 +46,15 @@ function createConsoleLiveUpdates({ refresh, streamURL, prepareStream = null, ha
     start() {
       if (started || stopped) return;
       started = true;
-      refreshFull();
+      const first = refreshFull();
+      if (first && typeof first.then === 'function') {
+        const settled = () => { initialRefresh = null; };
+        initialRefresh = Promise.resolve(first).then(settled, settled);
+      }
       if (stopped) return;
       slowTimer = timers.setInterval(refreshFull, 30000);
-      if (!EventSourceImpl) { startPolling(); return; }
-      if (!prepareStream) { openStream(); return; }
-      new Promise(resolve => resolve(prepareStream())).then(() => openStream(), () => { if (!stopped) startPolling(); });
+      if (!connectStream) { startPolling(); return; }
+      openStream();
     },
     stop() {
       if (stopped) return;
@@ -67,21 +69,27 @@ function createConsoleLiveUpdates({ refresh, streamURL, prepareStream = null, ha
 
   function openStream() {
     if (stopped) return;
-    source = new EventSourceImpl(streamURL);
+    source = connectStream();
     source.onopen = () => {
       if (stopped) return;
       failures = 0;
       stopPolling();
-      // Every connection may have missed deltas, including the initial
-      // snapshot-to-subscription window. Refresh once the stream is live.
-      refreshFull();
+      // Reconcile the snapshot-to-subscription window without superseding
+      // the initial refresh if stream headers arrived first.
+      if (!initialRefresh) { refreshFull(); return; }
+      if (reconcilePending) return;
+      reconcilePending = true;
+      initialRefresh.then(() => {
+        reconcilePending = false;
+        refreshFull();
+      });
     };
     source.onerror = () => {
       if (stopped) return;
       failures++;
       // CONNECTING streams reconnect themselves; fall back only when
       // hard-closed or after more than five consecutive failures.
-      if (source.readyState === EventSourceImpl.CLOSED || failures > 5) startPolling();
+      if (source.closed || failures > 5) startPolling();
     };
     for (const kind of ['event', 'flag', 'incident', 'session', 'posture', 'review']) {
       source.addEventListener(kind, message => {
@@ -92,4 +100,66 @@ function createConsoleLiveUpdates({ refresh, streamURL, prepareStream = null, ha
     }
     for (const kind of ['guard-prompt', 'guard-resolved']) source.addEventListener(kind, scheduleGuard);
   }
+}
+
+// The console stream uses the same token header as the other API requests.
+// Its server sends LF-delimited frames with JSON on one data line.
+function connectConsoleStream(fetchStream, timers = globalThis) {
+  const controller = new AbortController();
+  const listeners = new Map();
+  let retryTimer;
+  const source = {
+    closed: false,
+    addEventListener(kind, handler) { listeners.set(kind, handler); },
+    close() {
+      source.closed = true;
+      controller.abort();
+      timers.clearTimeout(retryTimer);
+    }
+  };
+
+  async function connect() {
+    try {
+      const response = await fetchStream('/events/stream', {
+        headers: { Accept: 'text/event-stream' },
+        credentials: 'omit',
+        signal: controller.signal
+      });
+      if (source.closed) return;
+      if (!response.ok || !response.body || !response.headers.get('content-type')?.startsWith('text/event-stream')) {
+        source.close();
+        source.onerror();
+        return;
+      }
+      source.onopen();
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        while (!source.closed) {
+          const { value, done } = await reader.read();
+          if (done || source.closed) break;
+          buffer += decoder.decode(value, { stream: true });
+          let end;
+          while (!source.closed && (end = buffer.indexOf('\n\n')) !== -1) {
+            const frame = buffer.slice(0, end);
+            buffer = buffer.slice(end + 2);
+            const fields = /^event: ([^\n]+)\ndata: ([^\n]*)$/.exec(frame);
+            if (fields) listeners.get(fields[1])?.({ data: fields[2] });
+          }
+        }
+      } finally {
+        void reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+    } catch {
+      // An interrupted stream is retried without replaying any mutations.
+    }
+    if (source.closed) return;
+    source.onerror();
+    retryTimer = timers.setTimeout(connect, 3000);
+  }
+
+  void connect();
+  return source;
 }

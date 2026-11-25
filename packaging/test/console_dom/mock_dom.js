@@ -1,4 +1,4 @@
-// DOM test stub: replaces fetch + EventSource with deterministic telemetry so
+// DOM test stub: replaces fetch with deterministic telemetry so
 // the REAL console (index.html + lib.js + app.js + style.css) can be asserted
 // end-to-end in headless Chrome. Loaded between lib.js and app.js.
 // A case family's data, routes and steps live in its cases_<family>.js, which
@@ -947,8 +947,7 @@
   };
   let inFlight = 0;
   window.fetch = async (path, opts) => {
-    // The proxy sets the stream cookie; the stub only acknowledges it.
-    if (path === '/console/stream-auth' && opts?.method === 'POST') return { ok: true, status: 204, json: async () => null, text: async () => '' };
+    if (path === '/events/stream') return streamResponse(opts);
     inFlight++;
     try { return await respond(path, opts); } finally { inFlight--; }
   };
@@ -956,31 +955,41 @@
   // SSE stub: drip live deltas so liveness paths (sparkline, fresh rows,
   // firewall flash) execute during the virtual-time window. The stream is
   // typed envelopes: one "event" delta per persisted event.
-  window.EventSource = class {
-    constructor() {
-      window.__sse = this;
-      this.readyState = 1;
+  function streamResponse({ signal, headers }) {
+    if (!headers.has('X-SecureAgent-Console-Token')) return new Response(null, { status: 403 });
+    const encoder = new TextEncoder();
+    let timer;
+    const stream = new ReadableStream({ start(controller) {
+      const state = {
+        readyState: 1,
+        emit(kind, obj) {
+          if (state.readyState === 1) controller.enqueue(encoder.encode(`event: ${kind}\ndata: ${JSON.stringify(obj)}\n\n`));
+        }
+      };
+      window.__sse = state;
       stamp('sse-state', 'open');
-      this._listeners = {};
-      setTimeout(() => this.onopen && this.onopen(), 0);
+      signal.addEventListener('abort', () => {
+        clearInterval(timer);
+        state.readyState = 2;
+        controller.close();
+        stamp('sse-state', 'closed');
+      }, { once: true });
       const drip = [
         { kind: 5, pid: 5821, remote_host: 'api.anthropic.com', remote_port: 443 },
         { kind: 9, pid: 5821, detail: 'proxy-scan: POST /v1/messages (clean)' },
         { kind: 8, pid: 6033, detail: 'Bash → git status' }
       ];
       let i = 0;
-      this._timer = setInterval(() => {
+      timer = setInterval(() => {
         const ev = drip[i % drip.length];
         i++;
         ev.ts = new Date().toISOString();
         data['/events'].unshift({ ...ev });
-        (this._listeners['event'] || []).forEach(fn => fn({ data: JSON.stringify(ev) }));
+        state.emit('event', ev);
       }, 900);
-    }
-    addEventListener(kind, fn) { (this._listeners[kind] = this._listeners[kind] || []).push(fn); }
-    emit(kind, obj) { (this._listeners[kind] || []).forEach(fn => fn({ data: JSON.stringify(obj) })); }
-    close() { clearInterval(this._timer); this.readyState = 2; stamp('sse-state', 'closed'); }
-  };
+    }, cancel() { clearInterval(timer); } });
+    return new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } });
+  }
 
   if (scenarios.has('filteredscope')) {
     const flags = scenarios.has('historyflags');
