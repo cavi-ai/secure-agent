@@ -7,28 +7,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
-type CoveragePath struct {
-	Supported bool   `json:"supported"`
-	State     string `json:"state"`
-	LastSeen  string `json:"last_seen,omitempty"`
-	Detail    string `json:"detail"`
-}
+type CoveragePath = posture.CoveragePath
 
-// A setup probe is intentionally absent here: manually exercising a hook
-// does not demonstrate that a running agent invokes it.
-type SessionCoverage struct {
-	SessionID     string       `json:"session_id,omitempty"`
-	Harness       string       `json:"harness"`
-	Workspace     string       `json:"workspace,omitempty"`
-	RootPID       int32        `json:"root_pid"`
-	IdentityBasis string       `json:"identity_basis"`
-	Guard         CoveragePath `json:"guard"`
-	Trace         CoveragePath `json:"trace"`
-	Payload       CoveragePath `json:"payload"`
-}
+type SessionCoverage = posture.SessionCoverage
 
 type sessionCoverageCache struct {
 	mu    sync.Mutex

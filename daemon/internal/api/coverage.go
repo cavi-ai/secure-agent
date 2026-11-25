@@ -5,19 +5,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
-// HarnessCoverage separates supported capabilities from recent, attributed
-// activity. A timestamp is evidence for a harness, not a guarantee that every
-// current session is guarded. Payload inspection is separate proxy routing.
-type HarnessCoverage struct {
-	Name           string `json:"name"`
-	GuardSupported bool   `json:"guard_supported"`
-	TraceSupported bool   `json:"trace_supported"`
-	HookLastSeen   string `json:"hook_last_seen,omitempty"`
-	TraceLastSeen  string `json:"trace_last_seen,omitempty"`
-}
+type HarnessCoverage = posture.HarnessCoverage
 
 // harnessActivityTTL is how long one read of the 24 h harness activity
 // serves status, posture and Doctor: the query scans a day of trace rows
