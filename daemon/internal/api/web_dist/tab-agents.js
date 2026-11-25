@@ -21,7 +21,7 @@ function renderAgents() {
   }
 
   if (agents.length === 0) {
-    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>`;
+    container.innerHTML = html`<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>`;
     return;
   }
 
@@ -38,10 +38,10 @@ function renderAgents() {
   const parts = visible.length
     ? visible.map(g => ({ key: 'group:' + g.key, html: agentGroupHTML(g, now, isOpen(g.key, true), SA.agentTreeOpen, SA.expanded, roots) }))
     : agentGroups.length
-      ? [{ key: 'empty:nomatch', html: `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents match — <button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button></span></div>` }]
-      : [{ key: 'empty:infra-only', html: `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running — only infrastructure below</span></div>` }];
+      ? [{ key: 'empty:nomatch', html: html`<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents match — <button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button></span></div>` }]
+      : [{ key: 'empty:infra-only', html: html`<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running — only infrastructure below</span></div>` }];
   if (infra.length) {
-    parts.push({ key: 'infra', html: `<section class="agent-infra" aria-label="Infrastructure"><h3 class="agent-infra-head">Infrastructure <span>IDEs and model servers — not counted as agents</span></h3>${infra.map(g => agentGroupHTML(g, now, isOpen(g.key, false), SA.agentTreeOpen, SA.expanded, roots)).join('')}</section>` });
+    parts.push({ key: 'infra', html: html`<section class="agent-infra" aria-label="Infrastructure"><h3 class="agent-infra-head">Infrastructure <span>IDEs and model servers — not counted as agents</span></h3>${infra.map(g => raw(agentGroupHTML(g, now, isOpen(g.key, false), SA.agentTreeOpen, SA.expanded, roots)))}</section>` });
   }
   patchList(container, parts, { key: p => p.key, html: p => p.html });
 }
@@ -56,27 +56,27 @@ function agentGroupHTML(g, now, open, treeOpen, expanded, roots) {
   const seen = t.lastSeen ? fmtAge(t.lastSeen, now) : '';
   // One separator between every fact in the family header.
   const facts = [
-    `${t.instances} ${t.instances === 1 ? 'instance' : 'instances'}`,
-    `${t.processes} ${t.processes === 1 ? 'process' : 'processes'}`,
-    rss ? escapeHTML(rss) : '',
-    cpu ? `${escapeHTML(cpu)} CPU` : '',
-    seen ? `<span class="agent-lastseen" title="${escapeHTML(t.lastSeen)}">seen ${escapeHTML(seen)} ago</span>` : '',
+    html`${t.instances} ${t.instances === 1 ? 'instance' : 'instances'}`,
+    html`${t.processes} ${t.processes === 1 ? 'process' : 'processes'}`,
+    rss ? html`${rss}` : '',
+    cpu ? html`${cpu} CPU` : '',
+    seen ? html`<span class="agent-lastseen" title="${t.lastSeen}">seen ${seen} ago</span>` : '',
   ].filter(Boolean).join(' · ');
   const orphanBtn = t.orphans
-    ? `<button type="button" class="btn btn-danger btn-sm" data-action="kill-orphans" data-family="${escapeHTML(g.key)}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate orphans (${t.orphans})</span></button>`
+    ? html`<button type="button" class="btn btn-danger btn-sm" data-action="kill-orphans" data-family="${g.key}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate orphans (${t.orphans})</span></button>`
     : '';
-  return `
-    <details class="agent-group${g.infra ? ' infra' : ''}" data-harness="${escapeHTML(g.key)}"${open ? ' open' : ''}>
+  return html`
+    <details class="agent-group${g.infra ? ' infra' : ''}" data-harness="${g.key}"${open ? ' open' : ''}>
       <summary class="agent-group-head">
-        <span class="agent-group-title">${harnessChipHTML(g.key, { label: true })}</span>
+        <span class="agent-group-title">${raw(harnessChipHTML(g.key, { label: true }))}</span>
         <span class="agent-group-meta">
-          <span class="agent-meta-item">${facts}</span>
-          ${t.orphans ? `<span class="agent-orphan-count">${t.orphans} leftover</span>` : ''}
-          ${orphanBtn}
+          <span class="agent-meta-item">${raw(facts)}</span>
+          ${t.orphans ? raw(html`<span class="agent-orphan-count">${t.orphans} leftover</span>`) : ''}
+          ${raw(orphanBtn)}
         </span>
       </summary>
       <div class="agent-instances">
-        ${cappedList(g.instances, 8, inst => agentInstanceHTML(inst, now, treeOpen, roots), 'agents:' + g.key, expanded).html}
+        ${raw(cappedList(g.instances, 8, inst => agentInstanceHTML(inst, now, treeOpen, roots), 'agents:' + g.key, expanded).html)}
       </div>
     </details>`;
 }
@@ -94,21 +94,21 @@ function agentInstanceHTML(inst, now, treeOpen, roots) {
   const rss = fmtRSS([a, ...inst.children].reduce((n, p) => n + Number(p.rss_bytes || 0), 0));
   const n = inst.children.length;
   const tree = n
-    ? `<details class="session-helpers agent-tree" data-pid="${escapeHTML(a.pid)}"${treeOpen[a.pid] ? ' open' : ''}><summary class="session-helpers-sum">${n} helper process${n === 1 ? '' : 'es'}</summary>${inst.children.map(c => renderProcessRow(c, now, true)).join('')}</details>`
+    ? html`<details class="session-helpers agent-tree" data-pid="${a.pid}"${treeOpen[a.pid] ? ' open' : ''}><summary class="session-helpers-sum">${n} helper process${n === 1 ? '' : 'es'}</summary>${inst.children.map(c => raw(renderProcessRow(c, now, true)))}</details>`
     : '';
-  return `
+  return html`
       <div class="agent-instance agent-row${n ? ' has-tree' : ''}${a.is_orphan ? ' orphan' : ''}${stale ? ' stale' : ''}">
-        <div class="agent-row-main" title="${escapeHTML(a.cwd || a.workspace || '')}">
-          <span class="agent-row-title">${escapeHTML(title)}</span>
+        <div class="agent-row-main" title="${a.cwd || a.workspace || ''}">
+          <span class="agent-row-title">${title}</span>
           <div class="agent-row-meta">
-          <span class="agent-pid">PID ${escapeHTML(a.pid)}</span>
-          ${a.is_orphan ? '<span class="agent-status orphan">leftover</span>' : ''}
-          ${seenAge ? `<span class="agent-meta-item agent-lastseen" title="last event ${escapeHTML(a.last_seen_at)}">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
-          ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
+          <span class="agent-pid">PID ${a.pid}</span>
+          ${a.is_orphan ? raw('<span class="agent-status orphan">leftover</span>') : ''}
+          ${raw(seenAge ? html`<span class="agent-meta-item agent-lastseen" title="last event ${a.last_seen_at}">active ${seenAge} ago</span>` : '<span class="agent-meta-item agent-lastseen">no activity</span>')}
+          ${rss ? raw(html`<span class="agent-meta-item">${rss}</span>`) : ''}
           </div>
         </div>
-        <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${escapeHTML(a.pid)}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
-        ${tree}
+        <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${a.started_at || ''}" data-family="${a.name || ''}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
+        ${raw(tree)}
       </div>`;
 }
 
@@ -116,10 +116,10 @@ function renderFleet() {
   const SA = window.SA;
 
   const vis = inspectionVisible(SA.t.status, SA.t.audit);
-  const raw = SA.t.fleet;
+  const served = SA.t.fleet;
   // /fleet.fleet_configured is the collector-configured bit; status.fleet_configured
   // is the same signal on /status. Hide if either says the node has no collector.
-  const fromFleet = raw && !Array.isArray(raw) && raw.fleet_configured === false;
+  const fromFleet = served && !Array.isArray(served) && served.fleet_configured === false;
   const show = vis.fleet && !fromFleet;
   const fleetCol = document.getElementById('fleet-col');
   const panel = document.getElementById('fleet-panel');
@@ -137,29 +137,29 @@ function renderFleet() {
   // array of remote nodes. Older console builds did fleet.map on it and
   // crashed renderAll — killing every panel below fleet on every poll.
   // Accept both shapes: object → one local node card; array → remote list.
-  const fleet = Array.isArray(raw)
-    ? raw
-    : (raw && (raw.hostname || raw.node_id) ? [{ ...raw, online: raw.running !== false }] : []);
+  const fleet = Array.isArray(served)
+    ? served
+    : (served && (served.hostname || served.node_id) ? [{ ...served, online: served.running !== false }] : []);
 
   badge.textContent = fleet.length;
 
   if (fleet.length === 0) {
-    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-server"/></svg><span>No remote fleet nodes registered</span></div>`;
+    container.innerHTML = html`<div class="empty"><svg class="icon"><use href="#i-server"/></svg><span>No remote fleet nodes registered</span></div>`;
     return;
   }
 
-  container.innerHTML = fleet.map(node => `
+  container.innerHTML = fleet.map(node => html`
     <div class="fleet-node-card">
       <div class="fleet-node-header">
-        <span class="fleet-node-name"><svg class="icon"><use href="#i-server"/></svg>${escapeHTML(node.hostname || node.id || 'Fleet node')}</span>
+        <span class="fleet-node-name"><svg class="icon"><use href="#i-server"/></svg>${node.hostname || node.id || 'Fleet node'}</span>
         <span class="status-badge ${node.online ? 'online' : 'offline'}">${node.online ? 'ONLINE' : 'OFFLINE'}</span>
       </div>
       <div class="fleet-node-meta">
-        ${node.os ? `<span>${escapeHTML(node.os)}${node.arch ? '/' + escapeHTML(node.arch) : ''}</span>` : ''}
-        ${node.ip ? `<span>IP ${escapeHTML(node.ip)}</span>` : ''}
-        <span>${escapeHTML(node.version || 'v1.0')}</span>
-        ${typeof node.active_agents === 'number' ? `<span>${node.active_agents} agents</span>` : ''}
-        ${typeof node.recent_flags === 'number' ? `<span>${node.recent_flags} flags</span>` : ''}
+        ${node.os ? raw(html`<span>${node.os}${node.arch ? '/' + node.arch : ''}</span>`) : ''}
+        ${node.ip ? raw(html`<span>IP ${node.ip}</span>`) : ''}
+        <span>${node.version || 'v1.0'}</span>
+        ${typeof node.active_agents === 'number' ? raw(html`<span>${node.active_agents} agents</span>`) : ''}
+        ${typeof node.recent_flags === 'number' ? raw(html`<span>${node.recent_flags} flags</span>`) : ''}
       </div>
     </div>
   `).join('');

@@ -15,13 +15,13 @@ function renderActivity() {
     const flH = (s.flags[i] / max) * (H - 14);
     const x = (i * bw).toFixed(1);
     if (s.events[i] > 0) {
-      bars += `<rect x="${x}" y="${(H - evH).toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${evH.toFixed(1)}" rx="1.5" class="act-ev"><title>${s.labels[i]} — ${s.events[i]} events${s.flags[i] ? `, ${s.flags[i]} flags` : ''}</title></rect>`;
+      bars += html`<rect x="${x}" y="${(H - evH).toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${evH.toFixed(1)}" rx="1.5" class="act-ev"><title>${s.labels[i]} — ${s.events[i]} events${s.flags[i] ? `, ${s.flags[i]} flags` : ''}</title></rect>`;
     }
     if (s.flags[i] > 0) {
-      bars += `<rect x="${x}" y="${(H - evH - flH).toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${flH.toFixed(1)}" rx="1.5" class="act-fl"/>`;
+      bars += html`<rect x="${x}" y="${(H - evH - flH).toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${flH.toFixed(1)}" rx="1.5" class="act-fl"/>`;
     }
     if (s.events[i] === 0 && s.flags[i] === 0) {
-      bars += `<rect x="${x}" y="${H - 2}" width="${(bw - 1).toFixed(1)}" height="2" class="act-zero"/>`;
+      bars += html`<rect x="${x}" y="${H - 2}" width="${(bw - 1).toFixed(1)}" height="2" class="act-zero"/>`;
     }
   }
   svg.innerHTML = bars;
@@ -39,7 +39,7 @@ function resourceActivityMarkers(activities, samples, width, height) {
     if (!Number.isFinite(at) || at < start || at > end) return '';
     const x = Math.max(2, Math.min(width - 2, ((at - start) / span) * width));
     const kind = String(activity.kind || 'activity').replace(/[^a-z0-9-]/gi, '');
-    return `<g class="resource-activity-marker kind-${escapeHTML(kind)}"><line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="2" y2="${height - 2}"/><circle cx="${x.toFixed(1)}" cy="5" r="2.4"/><title>${escapeHTML(activity.summary || 'Recorded activity')}</title></g>`;
+    return html`<g class="resource-activity-marker kind-${kind}"><line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="2" y2="${height - 2}"/><circle cx="${x.toFixed(1)}" cy="5" r="2.4"/><title>${activity.summary || 'Recorded activity'}</title></g>`;
   }).join('');
 }
 
@@ -86,31 +86,31 @@ function resourceHostContextHTML(host) {
     ? `${fmtRSS(host.swap_used_bytes) || '0 B'} / ${fmtRSS(host.swap_total_bytes)}`
     : 'Not configured';
   const memory = memoryKnown
-    ? `<div class="resource-host-bar" role="img" aria-label="Memory: ${agentPercent.toFixed(1)} percent agents, ${otherPercent.toFixed(1)} percent other, ${availablePercent.toFixed(1)} percent available">
+    ? html`<div class="resource-host-bar" role="img" aria-label="Memory: ${agentPercent.toFixed(1)} percent agents, ${otherPercent.toFixed(1)} percent other, ${availablePercent.toFixed(1)} percent available">
         <span class="resource-host-segment agent" data-w="${agentPercent.toFixed(1)}"></span>
         <span class="resource-host-segment other" data-w="${otherPercent.toFixed(1)}"></span>
         <span class="resource-host-segment available" data-w="${availablePercent.toFixed(1)}"></span>
       </div>
-      <div class="resource-host-legend"><span><i class="agent"></i>Agents ${agentPercent.toFixed(1)}%</span><span><i class="other"></i>Other ${otherPercent.toFixed(1)}%</span><span><i class="available"></i>${escapeHTML(fmtRSS(available) || '0 B')} available of ${escapeHTML(fmtRSS(total))}</span></div>`
+      <div class="resource-host-legend"><span><i class="agent"></i>Agents ${agentPercent.toFixed(1)}%</span><span><i class="other"></i>Other ${otherPercent.toFixed(1)}%</span><span><i class="available"></i>${fmtRSS(available) || '0 B'} available of ${fmtRSS(total)}</span></div>`
     : '<b>Unavailable</b>';
-  return `<section class="machine-strip capacity-${escapeHTML(capacity)}" aria-label="Whole-machine resource pressure">
+  return html`<section class="machine-strip capacity-${capacity}" aria-label="Whole-machine resource pressure">
     <div class="machine-tile machine-headroom">
-      <div class="machine-eyebrow-row"><span class="resource-eyebrow">Machine headroom</span><details class="headroom-hint"><summary aria-label="What machine headroom means">?</summary><p class="headroom-hint-box">${escapeHTML(headroomHintText(host))}</p></details></div>
-      <b>${Number(host.headroom_score || 0)} / 100</b><small>${escapeHTML(capacity)}</small>
+      <div class="machine-eyebrow-row"><span class="resource-eyebrow">Machine headroom</span><details class="headroom-hint"><summary aria-label="What machine headroom means">?</summary><p class="headroom-hint-box">${headroomHintText(host)}</p></details></div>
+      <b>${Number(host.headroom_score || 0)} / 100</b><small>${capacity}</small>
     </div>
-    <div class="machine-tile machine-memory"><span class="resource-eyebrow">Memory</span>${memory}</div>
-    <div class="machine-tile"><span class="resource-eyebrow">CPU</span><b>${escapeHTML(cpu)}</b>${cpuSplit ? `<small>${escapeHTML(cpuSplit)}</small>` : ''}</div>
-    <div class="machine-tile"><span class="resource-eyebrow">Swap</span><b>${escapeHTML(swap)}</b></div>
-    <div class="machine-chips"><span class="machine-chip">${escapeHTML(pressure)} pressure</span><span class="machine-chip">${escapeHTML(thermal)} thermal</span></div>
+    <div class="machine-tile machine-memory"><span class="resource-eyebrow">Memory</span>${raw(memory)}</div>
+    <div class="machine-tile"><span class="resource-eyebrow">CPU</span><b>${cpu}</b>${cpuSplit ? raw(html`<small>${cpuSplit}</small>`) : ''}</div>
+    <div class="machine-tile"><span class="resource-eyebrow">Swap</span><b>${swap}</b></div>
+    <div class="machine-chips"><span class="machine-chip">${pressure} pressure</span><span class="machine-chip">${thermal} thermal</span></div>
   </section>`;
 }
 
 function resourceFlightRecorderHTML(snapshot) {
   const episodes = snapshot.episodes || [];
-  return `<section class="resource-flight-recorder">
+  return html`<section class="resource-flight-recorder">
     <div class="resource-flight-head"><div><span class="resource-eyebrow">Local history</span><h3>Pressure flight recorder</h3></div><span>${episodes.length ? `${episodes.length} recent episode${episodes.length === 1 ? '' : 's'}` : 'No pressure captured yet'}</span></div>
     <p class="resource-flight-intro">When a session crosses a diagnostic threshold, secure-agent keeps a bounded ten-minute prelude and the highest-impact processes for post-mortem review.</p>
-    <div class="resource-episode-list">${episodes.map((episode, index) => {
+    <div class="resource-episode-list">${raw(episodes.map((episode, index) => {
       const session = episode.session || {};
       const label = cwdLabel(session.workspace) || familyTitle(session.name);
       const diagnoses = session.diagnoses || [];
@@ -122,38 +122,38 @@ function resourceFlightRecorderHTML(snapshot) {
       const correlations = episode.correlations || [];
       const correlation = correlations[0];
       const host = episode.host;
-      const hostAtCapture = host ? `<div class="resource-episode-host"><span class="resource-eyebrow">Host at capture</span><strong>${escapeHTML(fmtRSS(host.available_memory_bytes) || 'Unavailable')} available</strong><span>${escapeHTML(capFirst(host.memory_pressure || 'unknown'))} pressure · ${escapeHTML(capFirst(host.thermal_state || 'unknown'))} thermal · headroom ${Number(host.headroom_score || 0)} / 100</span></div>` : '';
+      const hostAtCapture = host ? html`<div class="resource-episode-host"><span class="resource-eyebrow">Host at capture</span><strong>${fmtRSS(host.available_memory_bytes) || 'Unavailable'} available</strong><span>${capFirst(host.memory_pressure || 'unknown')} pressure · ${capFirst(host.thermal_state || 'unknown')} thermal · headroom ${Number(host.headroom_score || 0)} / 100</span></div>` : '';
       const drivers = visibleProcesses.map(process => {
         const share = session.rss_bytes ? Math.round(Number(process.rss_bytes || 0) / Number(session.rss_bytes) * 100) : 0;
-        return `<div class="resource-episode-process"><span><b>${escapeHTML(process.name || 'process')}</b> · PID ${Number(process.pid || 0)}${process.is_orphan ? ' · leftover' : ''}</span><span>${escapeHTML(fmtRSS(process.rss_bytes) || '—')} · ${share}%</span></div>`;
+        return html`<div class="resource-episode-process"><span><b>${process.name || 'process'}</b> · PID ${Number(process.pid || 0)}${process.is_orphan ? ' · leftover' : ''}</span><span>${fmtRSS(process.rss_bytes) || '—'} · ${share}%</span></div>`;
       }).join('');
-      const evidence = diagnoses.flatMap(d => d.evidence || []).map(item => `<li>${escapeHTML(item)}</li>`).join('');
+      const evidence = diagnoses.flatMap(d => d.evidence || []).map(item => html`<li>${item}</li>`).join('');
       const memoryPoints = resourceSparkPoints(session.samples, 'rss_bytes', 220, 38);
       const cpuPoints = resourceSparkPoints(session.samples, 'cpu_percent', 220, 38);
       const activityMarkers = resourceActivityMarkers(activities, session.samples || [], 220, 38);
-      const activityRows = activities.slice(-8).map(activity => `
+      const activityRows = activities.slice(-8).map(activity => html`
         <div class="resource-activity-row">
-          <time>${escapeHTML(fmtTime(new Date(activity.at)))}</time>
-          <span class="resource-activity-kind kind-${escapeHTML(activity.kind || 'activity')}">${escapeHTML(resourceActivityLabel(activity.kind))}</span>
-          <span><b>${escapeHTML(activity.process || `PID ${Number(activity.pid || 0)}`)}</b> · ${escapeHTML(activity.summary || 'Recorded activity')}</span>
+          <time>${fmtTime(new Date(activity.at))}</time>
+          <span class="resource-activity-kind kind-${activity.kind || 'activity'}">${resourceActivityLabel(activity.kind)}</span>
+          <span><b>${activity.process || `PID ${Number(activity.pid || 0)}`}</b> · ${activity.summary || 'Recorded activity'}</span>
         </div>`).join('');
       const activityOmitted = Math.max(0, activities.length - 8);
       const age = episode.captured_at ? fmtAge(episode.captured_at, Date.now()) : '';
-      return `<details class="resource-episode severity-${escapeHTML(episode.severity || 'warning')}">
-        <summary><span><b>${escapeHTML(label)}</b><small>${escapeHTML(primary.summary || (episode.diagnosis_codes || []).join(', ') || 'Resource pressure')}</small></span><span class="resource-episode-metrics"><b>${escapeHTML(fmtRSS(session.rss_bytes) || '—')}</b><b>${escapeHTML(fmtCPU(session.cpu_percent) || '—')}</b><time>${age ? `${escapeHTML(age)} ago` : 'recorded'}</time></span></summary>
+      return html`<details class="resource-episode severity-${episode.severity || 'warning'}">
+        <summary><span><b>${label}</b><small>${primary.summary || (episode.diagnosis_codes || []).join(', ') || 'Resource pressure'}</small></span><span class="resource-episode-metrics"><b>${fmtRSS(session.rss_bytes) || '—'}</b><b>${fmtCPU(session.cpu_percent) || '—'}</b><time>${age ? `${age} ago` : 'recorded'}</time></span></summary>
         <div class="resource-episode-body">
-          ${hostAtCapture}
-          <div><span class="resource-eyebrow">What drove it</span><div class="resource-episode-processes">${drivers || '<span>No process breakdown recorded</span>'}${omittedCount ? `<small>${omittedCount} lower-impact process${omittedCount === 1 ? '' : 'es'} omitted</small>` : ''}</div></div>
-          <div><span class="resource-eyebrow">Evidence</span>${evidence ? `<ul>${evidence}</ul>` : '<p>No additional evidence recorded.</p>'}<svg class="resource-episode-spark" viewBox="0 0 220 38" preserveAspectRatio="none" role="img" aria-label="Resource trend and nearby activity before capture">${memoryPoints ? `<polyline class="resource-spark-memory" points="${memoryPoints}"/>` : ''}${cpuPoints ? `<polyline class="resource-spark-cpu" points="${cpuPoints}"/>` : ''}${activityMarkers}</svg></div>
+          ${raw(hostAtCapture)}
+          <div><span class="resource-eyebrow">What drove it</span><div class="resource-episode-processes">${raw(drivers || '<span>No process breakdown recorded</span>')}${omittedCount ? raw(html`<small>${omittedCount} lower-impact process${omittedCount === 1 ? '' : 'es'} omitted</small>`) : ''}</div></div>
+          <div><span class="resource-eyebrow">Evidence</span>${evidence ? raw(html`<ul>${raw(evidence)}</ul>`) : raw('<p>No additional evidence recorded.</p>')}<svg class="resource-episode-spark" viewBox="0 0 220 38" preserveAspectRatio="none" role="img" aria-label="Resource trend and nearby activity before capture">${memoryPoints ? raw(html`<polyline class="resource-spark-memory" points="${memoryPoints}"/>`) : ''}${cpuPoints ? raw(html`<polyline class="resource-spark-cpu" points="${cpuPoints}"/>`) : ''}${raw(activityMarkers)}</svg></div>
           <div class="resource-episode-context">
-            <div class="resource-context-head"><span class="resource-eyebrow">What happened nearby</span>${correlation ? '<span class="resource-correlation-badge">Observed correlation</span>' : ''}</div>
-            ${correlation ? `<strong>${escapeHTML(correlation.summary)}</strong><p>Timing evidence can narrow an investigation, but does not prove which action caused the resource change.</p>` : '<p>No matching activity was recorded during this pressure window.</p>'}
-            <div class="resource-activity-list">${activityRows || '<span>No bounded activity references were available.</span>'}</div>
-            <div class="resource-context-actions">${activityOmitted ? `<small>${activityOmitted} earlier activities omitted from this view</small>` : '<span></span>'}<small>${episode.activity_status === 'settling' ? 'Activity context is still settling' : 'Scoped to this captured process lifetime'}</small></div>
+            <div class="resource-context-head"><span class="resource-eyebrow">What happened nearby</span>${correlation ? raw('<span class="resource-correlation-badge">Observed correlation</span>') : ''}</div>
+            ${correlation ? raw(html`<strong>${correlation.summary}</strong><p>Timing evidence can narrow an investigation, but does not prove which action caused the resource change.</p>`) : raw('<p>No matching activity was recorded during this pressure window.</p>')}
+            <div class="resource-activity-list">${raw(activityRows || '<span>No bounded activity references were available.</span>')}</div>
+            <div class="resource-context-actions">${activityOmitted ? raw(html`<small>${activityOmitted} earlier activities omitted from this view</small>`) : raw('<span></span>')}<small>${episode.activity_status === 'settling' ? 'Activity context is still settling' : 'Scoped to this captured process lifetime'}</small></div>
           </div>
         </div>
       </details>`;
-    }).join('') || '<div class="resource-detail-empty">The recorder is armed. Episodes appear here when a session becomes heavy, grows rapidly, or leaves resource-holding processes behind.</div>'}</div>
+    }).join('') || '<div class="resource-detail-empty">The recorder is armed. Episodes appear here when a session becomes heavy, grows rapidly, or leaves resource-holding processes behind.</div>')}</div>
   </section>`;
 }
 
@@ -174,12 +174,12 @@ function resourceProcessCount(f) {
 // last intervention error. Shared by the attention card and the drawer foot.
 function resourceControlHTML(f) {
   const c = f.control || {};
-  const approval = c.pending_id ? `<span class="resource-approval">
-      <button type="button" class="btn btn-danger btn-sm" data-action="resource-control" data-id="${escapeHTML(c.pending_id)}" data-decision="apply" data-intervention="${escapeHTML(c.next_action || '')}">Apply ${escapeHTML(String(c.next_action || 'intervention').replaceAll('_', ' '))}</button>
-      <button type="button" class="btn btn-ghost btn-sm" data-action="resource-control" data-id="${escapeHTML(c.pending_id)}" data-decision="dismiss">Keep running</button>
+  const approval = c.pending_id ? html`<span class="resource-approval">
+      <button type="button" class="btn btn-danger btn-sm" data-action="resource-control" data-id="${c.pending_id}" data-decision="apply" data-intervention="${c.next_action || ''}">Apply ${String(c.next_action || 'intervention').replaceAll('_', ' ')}</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-action="resource-control" data-id="${c.pending_id}" data-decision="dismiss">Keep running</button>
     </span>` : '';
-  const resume = c.paused ? `<button type="button" class="btn btn-primary btn-sm" data-action="resource-control" data-session="${escapeHTML(f.key)}" data-decision="resume">Resume session</button>` : '';
-  const error = c.last_error ? `<details class="resource-control-error"><summary>The last action did not complete${c.paused ? '; the session is still paused' : ''}.</summary><p>${escapeHTML(c.last_error)}</p></details>` : '';
+  const resume = c.paused ? html`<button type="button" class="btn btn-primary btn-sm" data-action="resource-control" data-session="${f.key}" data-decision="resume">Resume session</button>` : '';
+  const error = c.last_error ? html`<details class="resource-control-error"><summary>The last action did not complete${c.paused ? '; the session is still paused' : ''}.</summary><p>${c.last_error}</p></details>` : '';
   return approval + resume + error + (c.result ? resourceOutcomeHTML(c.result) : '');
 }
 
@@ -190,13 +190,13 @@ function resourceOutcomeHTML(r) {
       : r.verification === 'pending' ? 'Observing up to 3 samples / 15 seconds' : 'Verification unknown';
   const samples = [r.before, ...(r.after || [])].filter(Boolean).map((s,i) => {
     const metrics = [s.rss_bytes != null ? `Memory ${fmtRSS(s.rss_bytes) || '0 B'}` : 'Family memory unavailable', s.cpu_percent != null ? `CPU ${fmtCPU(s.cpu_percent) || '0%'}` : '', s.host_capacity ? `Host ${s.host_capacity}` : '', s.host_available_bytes != null ? `Available ${fmtRSS(s.host_available_bytes) || '0 B'}` : '', s.host_cpu_percent != null ? `Host CPU ${s.host_cpu_percent}%` : ''].filter(Boolean).join(' · ');
-    return `<li>${i ? `After ${i}` : 'Before'} · ${escapeHTML(metrics)}</li>`;
+    return html`<li>${i ? `After ${i}` : 'Before'} · ${metrics}</li>`;
   }).join('');
-  return `<details class="resource-action-result"><summary>${escapeHTML(String(r.kind || 'intervention').replaceAll('_',' '))} · ${escapeHTML(application)} · ${escapeHTML(verification)}</summary>${r.error ? `<p>${escapeHTML(r.error)}</p>` : ''}<ul>${samples}${(r.limits || []).map(l=>`<li>${escapeHTML(l)}</li>`).join('')}</ul></details>`;
+  return html`<details class="resource-action-result"><summary>${String(r.kind || 'intervention').replaceAll('_',' ')} · ${application} · ${verification}</summary>${r.error ? raw(html`<p>${r.error}</p>`) : ''}<ul>${raw(samples)}${(r.limits || []).map(l => raw(html`<li>${l}</li>`))}</ul></details>`;
 }
 
 function resourceViewFamilyHTML(f) {
-  return `<button type="button" class="btn btn-ghost btn-sm" data-action="view-family" data-key="${escapeHTML(f.key)}">View family</button>`;
+  return html`<button type="button" class="btn btn-ghost btn-sm" data-action="view-family" data-key="${f.key}">View family</button>`;
 }
 
 // One needs-attention card: name, memory · CPU · processes, the diagnosis,
@@ -206,26 +206,26 @@ function resourceAttentionCardHTML(f, sessions) {
   const primary = diagnoses[0] || {};
   const reclaim = fmtRSS(f.estimated_reclaim_bytes);
   const c = f.control || {};
-  const state = c.state && c.state !== 'healthy' ? `<span class="resource-control-state">${escapeHTML(c.state)}</span>` : '';
+  const state = c.state && c.state !== 'healthy' ? html`<span class="resource-control-state">${c.state}</span>` : '';
   const policy = c.policy_source === 'workspace'
-    ? `<span class="resource-policy-source">workspace policy · ${escapeHTML(c.policy_scope || f.workspace || '')}</span>` : '';
-  return `<article class="resource-session-card needs-attention-card pressure-${escapeHTML(primary.severity || 'warning')}" data-key="${escapeHTML(f.key)}">
-    <div class="family-name">${harnessChipHTML(f.name)}<strong>${escapeHTML(familyLabel(f, sessions))}</strong></div>
-    <div class="family-metrics"><b>${escapeHTML(fmtRSS(f.rss_bytes) || '—')}</b> memory · <b>${escapeHTML(fmtCPU(f.cpu_percent) || '—')}</b> CPU · ${resourceProcessCount(f)}</div>
-    <p class="resource-diagnosis">${resourceDiagnosisText(primary)}${diagnoses.length > 1 ? ` <small>+${diagnoses.length - 1} more</small>` : ''}</p>
+    ? html`<span class="resource-policy-source">workspace policy · ${c.policy_scope || f.workspace || ''}</span>` : '';
+  return html`<article class="resource-session-card needs-attention-card pressure-${primary.severity || 'warning'}" data-key="${f.key}">
+    <div class="family-name">${raw(harnessChipHTML(f.name))}<strong>${familyLabel(f, sessions)}</strong></div>
+    <div class="family-metrics"><b>${fmtRSS(f.rss_bytes) || '—'}</b> memory · <b>${fmtCPU(f.cpu_percent) || '—'}</b> CPU · ${resourceProcessCount(f)}</div>
+    <p class="resource-diagnosis">${raw(resourceDiagnosisText(primary))}${diagnoses.length > 1 ? raw(html` <small>+${diagnoses.length - 1} more</small>`) : ''}</p>
     <div class="resource-session-foot">
-      ${reclaim ? `<span class="resource-reclaim">up to ${escapeHTML(reclaim)} reclaimable</span>` : ''}
-      ${state}${policy}${resourceControlHTML(f)}
-      ${resourceViewFamilyHTML(f)}
+      ${reclaim ? raw(html`<span class="resource-reclaim">up to ${reclaim} reclaimable</span>`) : ''}
+      ${raw(state)}${raw(policy)}${raw(resourceControlHTML(f))}
+      ${raw(resourceViewFamilyHTML(f))}
     </div>
   </article>`;
 }
 
 function resourceAttentionHTML(families, sessions) {
   const cards = families.map(f => resourceAttentionCardHTML(f, sessions)).join('');
-  return `<section class="needs-attention" aria-label="Families that need attention">
-    <h3 class="family-section-head">Needs attention${families.length ? `<span>${families.length}</span>` : ''}</h3>
-    ${cards ? `<div class="needs-attention-cards">${cards}</div>` : '<div class="needs-attention-empty">Every family is within its thresholds.</div>'}
+  return html`<section class="needs-attention" aria-label="Families that need attention">
+    <h3 class="family-section-head">Needs attention${families.length ? raw(html`<span>${families.length}</span>`) : ''}</h3>
+    ${cards ? raw(html`<div class="needs-attention-cards">${raw(cards)}</div>`) : raw('<div class="needs-attention-empty">Every family is within its thresholds.</div>')}
   </section>`;
 }
 
@@ -235,13 +235,13 @@ function resourceFamilyRowHTML(f, sessions, nested, now) {
   const points = resourceSparkPoints(resourceLastHour(f.samples, now), 'rss_bytes', 120, 24);
   const primary = (f.diagnoses || [])[0];
   const n = Number(f.process_count || 0);
-  return `<div class="family-row${nested ? ' nested' : ''}${primary ? ` pressure-${escapeHTML(primary.severity || 'warning')}` : ''}">
-    <span class="family-name" title="${escapeHTML(f.workspace || '')}"><strong>${escapeHTML(familyLabel(f, sessions))}</strong></span>
-    <span class="resource-metric"><b>${escapeHTML(fmtRSS(f.rss_bytes) || '—')}</b><small>memory</small></span>
-    <span class="resource-metric"><b>${escapeHTML(fmtCPU(f.cpu_percent) || '—')}</b><small>CPU</small></span>
+  return html`<div class="family-row${nested ? ' nested' : ''}${primary ? ` pressure-${primary.severity || 'warning'}` : ''}">
+    <span class="family-name" title="${f.workspace || ''}"><strong>${familyLabel(f, sessions)}</strong></span>
+    <span class="resource-metric"><b>${fmtRSS(f.rss_bytes) || '—'}</b><small>memory</small></span>
+    <span class="resource-metric"><b>${fmtCPU(f.cpu_percent) || '—'}</b><small>CPU</small></span>
     <span class="resource-metric"><b>${n}</b><small>process${n === 1 ? '' : 'es'}</small></span>
-    <svg class="resource-spark" viewBox="0 0 120 24" preserveAspectRatio="none" role="img" aria-label="Memory over the last hour">${points ? `<polyline class="resource-spark-memory" points="${points}"/>` : ''}</svg>
-    ${resourceViewFamilyHTML(f)}
+    <svg class="resource-spark" viewBox="0 0 120 24" preserveAspectRatio="none" role="img" aria-label="Memory over the last hour">${points ? raw(html`<polyline class="resource-spark-memory" points="${points}"/>`) : ''}</svg>
+    ${raw(resourceViewFamilyHTML(f))}
   </div>`;
 }
 
@@ -250,14 +250,14 @@ function resourceFamilyRowHTML(f, sessions, nested, now) {
 function resourceFamilyDupHTML(d, sessions, open, now) {
   const n = Number(d.process_count || 0);
   const kids = open
-    ? `<div class="family-children">${d.families.map(f => resourceFamilyRowHTML(f, sessions, true, now)).join('')}</div>` : '';
-  return `<div class="family-branch family-dup${open ? ' open' : ''}">
+    ? html`<div class="family-children">${d.families.map(f => raw(resourceFamilyRowHTML(f, sessions, true, now)))}</div>` : '';
+  return html`<div class="family-branch family-dup${open ? ' open' : ''}">
     <div class="family-row">
-      <span class="family-name"><button type="button" class="family-dup-toggle" data-action="toggle-family-dup" data-key="${escapeHTML(d.key)}" aria-expanded="${open}"><strong>${escapeHTML(d.label)}</strong><span class="family-dup-count">×${d.families.length}</span><svg class="icon"><use href="#i-arrow"/></svg></button></span>
-      <span class="resource-metric"><b>${escapeHTML(fmtRSS(d.rss_bytes) || '—')}</b><small>memory</small></span>
-      <span class="resource-metric"><b>${escapeHTML(fmtCPU(d.cpu_percent) || '—')}</b><small>CPU</small></span>
+      <span class="family-name"><button type="button" class="family-dup-toggle" data-action="toggle-family-dup" data-key="${d.key}" aria-expanded="${open}"><strong>${d.label}</strong><span class="family-dup-count">×${d.families.length}</span><svg class="icon"><use href="#i-arrow"/></svg></button></span>
+      <span class="resource-metric"><b>${fmtRSS(d.rss_bytes) || '—'}</b><small>memory</small></span>
+      <span class="resource-metric"><b>${fmtCPU(d.cpu_percent) || '—'}</b><small>CPU</small></span>
       <span class="resource-metric"><b>${n}</b><small>process${n === 1 ? '' : 'es'}</small></span>
-    </div>${kids}
+    </div>${raw(kids)}
   </div>`;
 }
 
@@ -275,8 +275,8 @@ function resourceFamilyGroupCounts(g) {
 function resourceFamilyGroupHTML(g, sessions, flagged) {
   const open = g.rows.some(r => [r.family, ...r.children].some(f => flagged.has(f.key)));
   const head = g.infra ? '<span class="family-group-title">Infrastructure</span>' : harnessChipHTML(g.key, { label: true });
-  return `<details class="family-group${g.infra ? ' infra' : ''}" data-harness="${escapeHTML(g.key)}"${open ? ' open' : ''}>
-    <summary class="family-group-head">${head}<span class="family-group-counts">${escapeHTML(resourceFamilyGroupCounts(g))}</span></summary>
+  return html`<details class="family-group${g.infra ? ' infra' : ''}" data-harness="${g.key}"${open ? raw(' open') : ''}>
+    <summary class="family-group-head">${raw(head)}<span class="family-group-counts">${resourceFamilyGroupCounts(g)}</span></summary>
     <div class="family-group-body"></div>
   </details>`;
 }
@@ -289,8 +289,8 @@ function resourceFamilyGroupHTML(g, sessions, flagged) {
 function resourceFamilyGroupRows(g, sessions, flagged, now, dupOpen) {
   const branch = r => {
     const kids = r.children.length
-      ? `<div class="family-children">${r.children.map(c => resourceFamilyRowHTML(c, sessions, true, now)).join('')}</div>` : '';
-    return `<div class="family-branch">${resourceFamilyRowHTML(r.family, sessions, false, now)}${kids}</div>`;
+      ? html`<div class="family-children">${r.children.map(c => raw(resourceFamilyRowHTML(c, sessions, true, now)))}</div>` : '';
+    return html`<div class="family-branch">${raw(resourceFamilyRowHTML(r.family, sessions, false, now))}${raw(kids)}</div>`;
   };
   const folded = g.infra
     ? g.rows.map(r => ({ dup: false, row: r }))
@@ -310,7 +310,7 @@ function resourcePolicyLineHTML(control) {
   const ladder = (control.interventions || []).map(step => String(step.action || '').replaceAll('_', ' ')).join(' → ');
   const overrides = (control.workspace_overrides || []).length;
   const pending = (control.pending || []).length;
-  return `<div class="resource-policy"><span><b>${escapeHTML(control.mode || 'observe')}</b> machine policy${limits ? ` · ${escapeHTML(limits)}` : ' · budgets disabled'}${control.sustain_seconds ? ` · ${Number(control.sustain_seconds)}s grace` : ''}${ladder ? ` · ${escapeHTML(ladder)}` : ''} · ${overrides} workspace override${overrides === 1 ? '' : 's'}</span><span><span>${pending} approval${pending === 1 ? '' : 's'} pending</span><button type="button" class="btn btn-ghost btn-sm" data-action="edit-resource-policy">Edit policy</button></span></div>`;
+  return html`<div class="resource-policy"><span><b>${control.mode || 'observe'}</b> machine policy${limits ? ` · ${limits}` : ' · budgets disabled'}${control.sustain_seconds ? ` · ${Number(control.sustain_seconds)}s grace` : ''}${ladder ? ` · ${ladder}` : ''} · ${overrides} workspace override${overrides === 1 ? '' : 's'}</span><span><span>${pending} approval${pending === 1 ? '' : 's'} pending</span><button type="button" class="btn btn-ghost btn-sm" data-action="edit-resource-policy">Edit policy</button></span></div>`;
 }
 
 // Resources tab, top to bottom: the machine strip, needs attention (at most
@@ -350,7 +350,7 @@ function renderResourceMissionControl() {
     const count = groups.reduce((n, g) => n + g.families, 0);
     const infra = groups.filter(g => g.infra).reduce((n, g) => n + g.rows.length, 0);
     parts.push({ key: 'attention', html: resourceAttentionHTML(attention, sessions) });
-    parts.push({ key: 'families-head', html: `<h3 class="family-section-head">Families by harness<span>${count} ${count === 1 ? 'family' : 'families'}${infra ? ` · ${infra} infrastructure` : ''}</span></h3>` });
+    parts.push({ key: 'families-head', html: html`<h3 class="family-section-head">Families by harness<span>${count} ${count === 1 ? 'family' : 'families'}${infra ? ` · ${infra} infrastructure` : ''}</span></h3>` });
     // A group's shell hashes by key alone: its counts change in place and
     // its body reconciles per row, so a metric update rebuilds only the rows
     // that changed.
@@ -359,7 +359,7 @@ function renderResourceMissionControl() {
   }
   parts.push({ key: 'policy', html: resourcePolicyLineHTML(snapshot.control || {}) });
   const results = (snapshot.interventions || []).slice(-5).reverse();
-  if (results.length) parts.push({key:'results',html:`<section aria-label="Recent intervention results"><h3 class="family-section-head">Recent intervention results</h3>${results.map(resourceOutcomeHTML).join('')}</section>`});
+  if (results.length) parts.push({key:'results',html:html`<section aria-label="Recent intervention results"><h3 class="family-section-head">Recent intervention results</h3>${results.map(r => raw(resourceOutcomeHTML(r)))}</section>`});
   patchList(container, parts, { key: p => p.key, html: p => p.html, hash: p => p.shell || p.html });
   const rowOpts = { key: r => r.key, html: r => r.html };
   for (const p of parts) {
@@ -385,7 +385,7 @@ function familyDrawerSections(f, ctx) {
   if (f.root_pid) pids.add(Number(f.root_pid));
   const nameOf = new Map(procs.map(p => [Number(p.pid), p.name]));
   const ws = f.workspace && f.workspace !== '/' ? f.workspace : '';
-  const head = `<div class="family-drawer-head">${harnessChipHTML(f.name, { label: true })}${ws ? `<button type="button" class="sd-path" data-action="copy-path" data-path="${escapeHTML(ws)}" title="${escapeHTML(ws)} — click to copy">${escapeHTML(middleTruncate(ws, 48))}</button>` : ''}</div>`;
+  const head = html`<div class="family-drawer-head">${raw(harnessChipHTML(f.name, { label: true }))}${ws ? raw(html`<button type="button" class="sd-path" data-action="copy-path" data-path="${ws}" title="${ws} — click to copy">${middleTruncate(ws, 48)}</button>`) : ''}</div>`;
 
   const samples = resourceLastHour(f.samples, now);
   const memPoints = resourceSparkPoints(samples, 'rss_bytes', 480, 56);
@@ -393,47 +393,47 @@ function familyDrawerSections(f, ctx) {
   const diagnoses = f.diagnoses || [];
   const evidence = diagnoses.flatMap(d => d.evidence || []);
   const reclaim = fmtRSS(f.estimated_reclaim_bytes);
-  const usage = `<section class="family-drawer-section">
+  const usage = html`<section class="family-drawer-section">
     <h4>Memory and CPU <small>last 60 min</small></h4>
-    <div class="family-drawer-now"><span><b>${escapeHTML(fmtRSS(f.rss_bytes) || '—')}</b> memory</span><span><b>${escapeHTML(fmtCPU(f.cpu_percent) || '—')}</b> CPU</span>${reclaim ? `<span><b>${escapeHTML(reclaim)}</b> reclaimable</span>` : ''}</div>
-    <svg class="family-drawer-spark" viewBox="0 0 480 56" preserveAspectRatio="none" role="img" aria-label="Memory and CPU over the last hour">${memPoints ? `<polyline class="resource-spark-memory" points="${memPoints}"/>` : ''}${cpuPoints ? `<polyline class="resource-spark-cpu" points="${cpuPoints}"/>` : ''}</svg>
-    ${diagnoses.length ? diagnoses.map(d => `<p class="resource-diagnosis">${resourceDiagnosisText(d)}</p>`).join('') : '<p class="resource-diagnosis quiet">Within current thresholds</p>'}
-    ${evidence.length ? `<ul class="family-drawer-evidence">${evidence.map(item => `<li>${escapeHTML(item)}</li>`).join('')}</ul>` : ''}
+    <div class="family-drawer-now"><span><b>${fmtRSS(f.rss_bytes) || '—'}</b> memory</span><span><b>${fmtCPU(f.cpu_percent) || '—'}</b> CPU</span>${reclaim ? raw(html`<span><b>${reclaim}</b> reclaimable</span>`) : ''}</div>
+    <svg class="family-drawer-spark" viewBox="0 0 480 56" preserveAspectRatio="none" role="img" aria-label="Memory and CPU over the last hour">${memPoints ? raw(html`<polyline class="resource-spark-memory" points="${memPoints}"/>`) : ''}${cpuPoints ? raw(html`<polyline class="resource-spark-cpu" points="${cpuPoints}"/>`) : ''}</svg>
+    ${diagnoses.length ? diagnoses.map(d => raw(html`<p class="resource-diagnosis">${raw(resourceDiagnosisText(d))}</p>`)) : raw('<p class="resource-diagnosis quiet">Within current thresholds</p>')}
+    ${evidence.length ? raw(html`<ul class="family-drawer-evidence">${evidence.map(item => raw(html`<li>${item}</li>`))}</ul>`) : ''}
   </section>`;
 
   const orphan = p => !!p.is_orphan || (Number(p.pid) !== Number(f.root_pid) && !pids.has(Number(p.ppid)));
-  const row = p => `<tr class="family-proc-row${orphan(p) ? ' orphan' : ''}">
-      <td>${escapeHTML(p.name || 'process')}${orphan(p) ? ' <span class="agent-status orphan">leftover</span>' : ''}</td>
-      <td>${Number(p.pid || 0)}</td><td>${escapeHTML(fmtRSS(p.rss_bytes) || '—')}</td><td>${escapeHTML(fmtCPU(p.cpu_percent) || '—')}</td><td>${escapeHTML(p.started_at ? fmtAge(p.started_at, now) : '—')}</td>
+  const row = p => html`<tr class="family-proc-row${orphan(p) ? ' orphan' : ''}">
+      <td>${p.name || 'process'}${orphan(p) ? raw(' <span class="agent-status orphan">leftover</span>') : ''}</td>
+      <td>${Number(p.pid || 0)}</td><td>${fmtRSS(p.rss_bytes) || '—'}</td><td>${fmtCPU(p.cpu_percent) || '—'}</td><td>${p.started_at ? fmtAge(p.started_at, now) : '—'}</td>
     </tr>`;
   const cap = cappedList(procs, 12, null, 'family-procs:' + f.key, c.expanded);
-  const table = `<section class="family-drawer-section">
+  const table = html`<section class="family-drawer-section">
     <h4>Processes <small>${procs.length}</small></h4>
-    <table class="family-drawer-procs"><thead><tr><th>Name</th><th>PID</th><th>Memory</th><th>CPU</th><th>Age</th></tr></thead><tbody>${cap.shown.map(row).join('')}</tbody></table>
-    ${cap.more}
+    <table class="family-drawer-procs"><thead><tr><th>Name</th><th>PID</th><th>Memory</th><th>CPU</th><th>Age</th></tr></thead><tbody>${cap.shown.map(p => raw(row(p)))}</tbody></table>
+    ${raw(cap.more)}
   </section>`;
 
   const kinds = { 8: 'TOOL USE', 9: 'PROXY HIT', 5: 'NET CONN' };
   const recent = filterEventsByPids(c.events, [...pids]).slice(0, 30);
   const eventRow = e => {
     const detail = e.detail || e.path || (e.remote_host ? `${e.remote_host}:${e.remote_port}` : '');
-    return `<div class="family-event"><time>${escapeHTML(fmtTime(new Date(e.ts)))}</time><span class="event-kind">${kinds[e.kind] || 'EVENT'}</span><span><b>${escapeHTML(nameOf.get(Number(e.pid)) || 'process')}</b> ${escapeHTML(detail)}</span></div>`;
+    return html`<div class="family-event"><time>${fmtTime(new Date(e.ts))}</time><span class="event-kind">${kinds[e.kind] || 'EVENT'}</span><span><b>${nameOf.get(Number(e.pid)) || 'process'}</b> ${detail}</span></div>`;
   };
-  const activity = `<section class="family-drawer-section">
+  const activity = html`<section class="family-drawer-section">
     <h4>Recent activity <small>${recent.length}</small></h4>
-    ${recent.length ? `<div class="family-drawer-events">${recent.map(eventRow).join('')}</div>` : '<p class="family-drawer-empty">No events from these processes in the loaded window.</p>'}
-    <button type="button" class="link-btn" data-action="family-events" data-key="${escapeHTML(f.key)}">Open in Events</button>
+    ${recent.length ? raw(html`<div class="family-drawer-events">${recent.map(e => raw(eventRow(e)))}</div>`) : raw('<p class="family-drawer-empty">No events from these processes in the loaded window.</p>')}
+    <button type="button" class="link-btn" data-action="family-events" data-key="${f.key}">Open in Events</button>
   </section>`;
 
   const found = (c.flags || []).filter(fl => fl && !fl.acknowledged && pids.has(Number(fl.pid)));
   const findingRow = fl => {
     const sev = fl.severity >= 3 ? 's3' : fl.severity === 2 ? 's2' : 's1';
     const age = fl.ts ? fmtAge(fl.ts, now) : '';
-    return `<div class="family-finding"><span class="sev ${sev}">●</span><span>${escapeHTML(fl.title || ruleTitle(fl.rule))}</span>${age ? `<time>${escapeHTML(age)} ago</time>` : ''}</div>`;
+    return html`<div class="family-finding"><span class="sev ${sev}">●</span><span>${fl.title || ruleTitle(fl.rule)}</span>${age ? raw(html`<time>${age} ago</time>`) : ''}</div>`;
   };
-  const findings = `<section class="family-drawer-section">
+  const findings = html`<section class="family-drawer-section">
     <h4>Findings <small>${found.length}</small></h4>
-    ${found.length ? found.map(findingRow).join('') + '<button type="button" class="link-btn" data-action="goto-tab" data-tab="home" data-group="findings">Open Findings</button>' : '<p class="family-drawer-empty">No open findings for these processes.</p>'}
+    ${raw(found.length ? found.map(findingRow).join('') + '<button type="button" class="link-btn" data-action="goto-tab" data-tab="home" data-group="findings">Open Findings</button>' : '<p class="family-drawer-empty">No open findings for these processes.</p>')}
   </section>`;
 
   return [
@@ -447,8 +447,8 @@ function familyDrawerSections(f, ctx) {
 function familyDrawerFootHTML(f, label) {
   const orphans = Number(f.orphan_count || 0);
   return resourceControlHTML(f)
-    + (orphans > 0 ? `<button type="button" class="btn btn-danger btn-sm" data-action="kill-family-orphans" data-key="${escapeHTML(f.key)}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate orphans (${orphans})</span></button>` : '')
-    + `<button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${Number(f.root_pid || 0)}" data-started="${escapeHTML(f.root_started_at || '')}" data-family="${escapeHTML(label || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate family</span></button>`;
+    + (orphans > 0 ? html`<button type="button" class="btn btn-danger btn-sm" data-action="kill-family-orphans" data-key="${f.key}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate orphans (${orphans})</span></button>` : '')
+    + html`<button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${Number(f.root_pid || 0)}" data-started="${f.root_started_at || ''}" data-family="${label || ''}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate family</span></button>`;
 }
 
 // History tab: the pressure flight recorder on its own page. It was stacked
@@ -480,7 +480,7 @@ function renderChartFlags() {
   const flags = SA.t.flagsView || [];
   if (total) total.textContent = flags.length;
   if (!flags.length) {
-    el.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No findings in the window</span></div>`;
+    el.innerHTML = html`<div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No findings in the window</span></div>`;
     return;
   }
   const byRule = {};
@@ -554,7 +554,7 @@ function renderChartMemory() {
   }
   if (total) total.textContent = families.filter(f => !f.infra).length;
   if (!families.length) {
-    el.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No attributed sessions yet</span></div>`;
+    el.innerHTML = html`<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No attributed sessions yet</span></div>`;
     return;
   }
   const top = families.sort((a, b) => b.rss - a.rss).slice(0, 8);
@@ -614,12 +614,12 @@ function renderSpend() {
 
   const card = SA.t.costsCard;
   if (!card || (card.refreshing && !card.generated_at && !Number(card.total && card.total.calls))) {
-    body.innerHTML = `<div class="empty"><span>Refreshing usage…</span></div>`;
+    body.innerHTML = html`<div class="empty"><span>Refreshing usage…</span></div>`;
     return;
   }
   const rows = Array.isArray(card.rows) ? card.rows : [];
   if (!rows.some(row => Number(row.calls) > 0 || Number(row.cost_usd) > 0)) {
-    body.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No model calls in this window.</span></div>`;
+    body.innerHTML = html`<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No model calls in this window.</span></div>`;
     return;
   }
   // Keyed through patchList so the slow refresh keeps unchanged rows and
@@ -628,7 +628,7 @@ function renderSpend() {
   const cls = day ? 'spend-bars' : 'spend-list';
   let wrap = body.firstElementChild;
   if (!wrap || body.childElementCount !== (day ? 2 : 1) || wrap.className !== cls) {
-    body.innerHTML = `<div class="${cls}"${day ? ' role="group" aria-label="Daily usage dates" aria-describedby="spend-day-guidance"' : ''}></div>${day ? '<div class="spend-day-inspector"></div>' : ''}`;
+    body.innerHTML = html`<div class="${cls}"${day ? raw(' role="group" aria-label="Daily usage dates" aria-describedby="spend-day-guidance"') : ''}></div>${day ? raw('<div class="spend-day-inspector"></div>') : ''}`;
     wrap = body.firstElementChild;
   }
   if (day) {
@@ -715,12 +715,12 @@ function spendDayDetailHTML(row, card, tz, report, state, expanded) {
     : state.loading || (matching && report.refreshing) ? (available ? spendCacheText([report]) || 'Refreshing day breakdown…' : 'Loading day breakdown…')
     : !available ? 'Day breakdown unavailable.' : '';
   const rows = available && Array.isArray(report.rows) ? report.rows : [];
-  const breakdown = available ? `<h4>By repository</h4><div class="spend-list">${spendListItems(rows, 8, { by: 'repo', expanded, dayDetail: true }).map(item => item.html).join('') || '<p>No model calls recorded for this day.</p>'}</div>` : '';
-  return `<section class="spend-day-detail" aria-label="Selected day usage">
-    <div class="spend-day-detail-head"><h3>${escapeHTML(row.key)}</h3><button type="button" class="btn btn-ghost btn-sm" data-action="reset-spend-day">Clear selection</button></div>
-    <p class="spend-day-range">${escapeHTML(spendDayRangeText(row.key, range))}</p>
-    <p class="spend-day-summary"><strong>${escapeHTML(spendRowCost(row))}</strong> · ${escapeHTML(spendHintText(row) || '0 calls')}${Number(row.local_calls) ? ` · ${Number(row.local_calls)} local` : ''}</p>
-    ${status ? `<p class="spend-day-status" role="status">${escapeHTML(status)}</p>` : ''}${breakdown}
+  const breakdown = available ? html`<h4>By repository</h4><div class="spend-list">${raw(spendListItems(rows, 8, { by: 'repo', expanded, dayDetail: true }).map(item => item.html).join('') || '<p>No model calls recorded for this day.</p>')}</div>` : '';
+  return html`<section class="spend-day-detail" aria-label="Selected day usage">
+    <div class="spend-day-detail-head"><h3>${row.key}</h3><button type="button" class="btn btn-ghost btn-sm" data-action="reset-spend-day">Clear selection</button></div>
+    <p class="spend-day-range">${spendDayRangeText(row.key, range)}</p>
+    <p class="spend-day-summary"><strong>${spendRowCost(row)}</strong> · ${spendHintText(row) || '0 calls'}${Number(row.local_calls) ? ` · ${Number(row.local_calls)} local` : ''}</p>
+    ${status ? raw(html`<p class="spend-day-status" role="status">${status}</p>`) : ''}${raw(breakdown)}
   </section>`;
 }
 
@@ -793,7 +793,7 @@ function planObservationHTML(value) {
   const calendar = new Date(value.slice(0, 19).toUpperCase() + 'Z');
   if (!isFinite(date.getTime()) || !isFinite(calendar.getTime()) || calendar.toISOString().slice(0, 19) !== value.slice(0, 19).toUpperCase()) return unavailable;
   const text = `${EVENT_MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()} ${fmtDayClock(date).slice(4)}`;
-  return `Observed <time datetime="${date.toISOString()}">${escapeHTML(text)}</time>`;
+  return html`Observed <time datetime="${date.toISOString()}">${text}</time>`;
 }
 
 // spendPlanItems: the Spend card's plan-headroom lines as patchList items
@@ -805,13 +805,13 @@ function spendPlanItems(plans) {
     const bars = (Array.isArray(p.windows) ? p.windows : []).map(w => {
       const pct = Math.min(100, Math.max(0, Number(w.used_percent) || 0));
       const cls = pct >= 90 ? ' crit' : pct >= 75 ? ' warn' : '';
-      return `<span class="hbar-track" title="${escapeHTML(planWindowLabel(w.window_minutes))}"><span class="hbar-fill${cls}" data-w="${pct.toFixed(1)}"></span></span>`;
+      return html`<span class="hbar-track" title="${planWindowLabel(w.window_minutes)}"><span class="hbar-fill${cls}" data-w="${pct.toFixed(1)}"></span></span>`;
     }).join('');
-    const html = `<div class="spend-plan${unverified(p) ? ' spend-plan-unverified' : ''}">
-      <span class="spend-plan-text">${escapeHTML(planLineText(p))} · ${planObservationHTML(p.seen_at)}</span>${bars}
+    const line = html`<div class="spend-plan${unverified(p) ? ' spend-plan-unverified' : ''}">
+      <span class="spend-plan-text">${planLineText(p)} · ${raw(planObservationHTML(p.seen_at))}</span>${raw(bars)}
     </div>`;
     return { key: `plan:${p.account_key ? p.account_key + ':' + (p.limit_id || '') : p.home_path || p.home}`,
-      html: unverified(p) ? `<details class="spend-plan-history"><summary>Unverified quota observation · ${escapeHTML(p.home || p.harness)}</summary>${html}</details>` : html };
+      html: unverified(p) ? html`<details class="spend-plan-history"><summary>Unverified quota observation · ${p.home || p.harness}</summary>${raw(line)}</details>` : line };
   });
 }
 
@@ -828,14 +828,14 @@ function spendListItems(rows, n, opts) {
     const calls = Number(r.calls) || 0;
     const unknown = opts.by === 'provider' && r.key === '(unknown)';
     const label = [r.key, spendRowCost(r), spendHintText(r), Number(r.local_calls) ? `${Number(r.local_calls)} local` : ''].filter(Boolean).join(' · ');
-    const focus = opts.dayDetail ? ` data-spend-repo="${escapeHTML(r.key)}" tabindex="-1" role="group" aria-label="${escapeHTML(label)}"` : '';
-    return `<div class="spend-row"${focus}>
-      <span class="spend-key" title="${escapeHTML(r.key)}">${escapeHTML(r.key)}</span>
-      ${unknown ? '<span class="spend-hint">provider not recorded</span>' : ''}
-      ${r.harness ? harnessChipHTML(r.harness) : ''}
+    const focus = opts.dayDetail ? html` data-spend-repo="${r.key}" tabindex="-1" role="group" aria-label="${label}"` : '';
+    return html`<div class="spend-row"${raw(focus)}>
+      <span class="spend-key" title="${r.key}">${r.key}</span>
+      ${unknown ? raw('<span class="spend-hint">provider not recorded</span>') : ''}
+      ${r.harness ? raw(harnessChipHTML(r.harness)) : ''}
       <span class="spend-calls">${calls} call${calls === 1 ? '' : 's'}</span>
-      <span class="spend-cost">${escapeHTML(spendRowCost(r))}</span>
-      ${Number(r.unpriced_calls) ? `<span class="spend-hint">${Number(r.unpriced_calls)} unpriced</span>` : ''}
+      <span class="spend-cost">${spendRowCost(r)}</span>
+      ${Number(r.unpriced_calls) ? raw(html`<span class="spend-hint">${Number(r.unpriced_calls)} unpriced</span>`) : ''}
     </div>`;
   };
   const cap = cappedList(topCostRows({ rows: list }, list.length), n, null, 'spend', opts.expanded);
@@ -859,10 +859,10 @@ function spendDayItems(rows, selectedDay) {
     const pct = max > 0 ? (cost / max) * 100 : 0;
     const label = spendDayLabel(r.key);
     const title = `${r.key} · ${spendRowCost(r)} · ${spendHintText(r) || '0 calls'}${Number(r.local_calls) ? ` · ${Number(r.local_calls)} local` : ''}`;
-    return { key: `day:${r.key}`, html: `<button type="button" class="spend-day" data-action="select-spend-day" data-day="${escapeHTML(r.key)}" aria-pressed="${r.key === selectedDay}" aria-label="${escapeHTML(title)}" title="${escapeHTML(title)}">
+    return { key: `day:${r.key}`, html: html`<button type="button" class="spend-day" data-action="select-spend-day" data-day="${r.key}" aria-pressed="${r.key === selectedDay}" aria-label="${title}" title="${title}">
       <span class="spend-day-track"><span class="spend-day-bar" data-h="${pct.toFixed(1)}"></span></span>
-      <span class="spend-day-cost">${escapeHTML(spendRowCost(r, true))}</span>
-      <span class="spend-day-label">${escapeHTML(label)}</span>
+      <span class="spend-day-cost">${spendRowCost(r, true)}</span>
+      <span class="spend-day-label">${label}</span>
     </button>` };
   });
 }
@@ -999,7 +999,7 @@ function renderEvents() {
       : (SA.timelinePids && SA.timelinePids.length)
         ? `No events for ${SA.timelinePidLabel || 'this session'} in the loaded window`
       : SA.isEventsFiltered() ? 'No events match the current filter' : 'No system events logged';
-    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>${msg}</span></div>`;
+    container.innerHTML = html`<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>${msg}</span></div>`;
     SA.eventFreshness.rendered([]);
     return;
   }
@@ -1015,12 +1015,12 @@ function renderEvents() {
     const who = eventWho(e, SA.t.sessions, Number(e.pid) ? SA.agentNameFor(e.pid) : '');
     const mark = who.harness ? harnessChipHTML(who.harness) : '';
 
-    return `
+    return html`
       <div class="timeline-item${freshCls}">
-        <span class="t">${escapeHTML(timeStr)}</span>
+        <span class="t">${timeStr}</span>
         <span class="event-kind ${cls}">${label}</span>
-        <span class="pid" title="${escapeHTML(who.title)}">${mark}${escapeHTML(who.text)}</span>
-        <span class="dtl">${escapeHTML(detail)}</span>
+        <span class="pid" title="${who.title}">${raw(mark)}${who.text}</span>
+        <span class="dtl">${detail}</span>
       </div>
     `;
   };
@@ -1033,7 +1033,7 @@ function renderEvents() {
   patchList(container, items, {
     key: e => (e.more !== undefined ? 'show-more' : eventKey(e)),
     hash: e => (e.more !== undefined ? e.more : row(e, '')),
-    html: e => (e.more !== undefined ? `<div class="list-more">${e.more}</div>`
+    html: e => (e.more !== undefined ? html`<div class="list-more">${raw(e.more)}</div>`
       : row(e, !SA.reducedMotion && SA.eventFreshness.isFresh(eventKey(e))
         ? (e.kind === 9 ? ' fresh-sev' : ' fresh') : '')),
   });
