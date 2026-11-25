@@ -208,6 +208,11 @@ func (t *Tagger) lineageTagLocked(pid int32, self ProcInfo) (AgentInfo, bool) {
 	if exe == "" {
 		exe = self.Comm
 	}
+	// Another process holding the root's pid roots the tag at the process itself.
+	root, chain := r.rootPID, []int32{pid, r.rootPID}
+	if p, listed := t.table[r.rootPID]; listed && !r.rootStart.IsZero() && !sameStart(p.StartTime, r.rootStart) {
+		root, chain = pid, []int32{pid}
+	}
 	return AgentInfo{
 		Name:      r.name,
 		Kind:      r.kind,
@@ -215,11 +220,11 @@ func (t *Tagger) lineageTagLocked(pid int32, self ProcInfo) (AgentInfo, bool) {
 		CWD:       self.CWD,
 		PID:       pid,
 		PPID:      self.PPID,
-		Chain:     []int32{pid, r.rootPID},
+		Chain:     chain,
 		StartedAt: self.StartTime,
 		RSSBytes:  self.RSSBytes,
 		CPUTime:   self.CPUTime,
-		RootPID:   r.rootPID,
+		RootPID:   root,
 		sampledAt: t.now(),
 	}, true
 }

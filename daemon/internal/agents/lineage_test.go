@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -158,6 +159,67 @@ func TestLineageStaysWithinItsCap(t *testing.T) {
 		note(pid)
 	}
 	assertJobIsClaude(t, tg)
+}
+
+// A tag from a record is rooted at the process itself once another process
+// holds the recorded root's pid.
+func TestLineageRootMustStillBeTheRecordedProcess(t *testing.T) {
+	procs := lineageProcs()
+	tg := New(lineageConfig(), procs)
+	tg.Refresh()
+	noteAll(tg, forkChain())
+	procs[500] = ProcInfo{PID: 500, PPID: 1, Exe: "/bin/cat", StartTime: lineageStart.Add(10 * time.Minute)}
+	tg.Refresh()
+	info, ok := tg.Tag(900)
+	if !ok || info.Name != "claude" || info.RootPID != 900 || !slices.Equal(info.Chain, []int32{900}) {
+		t.Fatalf("Tag(job) after its root's pid was reused = %+v, %v; want claude rooted at 900, chain [900]", info, ok)
+	}
+	if agent, known := tg.LiveAgentFamily(900); !agent || !known {
+		t.Fatalf("LiveAgentFamily(job) = (%v, %v), want (true, true)", agent, known)
+	}
+}
+
+// Exec records name the parent by pid alone; they carry the family when no
+// fork record was read.
+func TestLineageFromExecRecordsAlone(t *testing.T) {
+	tg := New(lineageConfig(), lineageProcs())
+	tg.Refresh()
+	noteAll(tg, []Lineage{
+		{ParentPID: 500, ChildPID: 600, ChildStart: lineageAt(1), At: lineageAt(1)},
+		{ParentPID: 600, ChildPID: 900, ChildStart: jobStart, At: lineageAt(4)},
+	})
+	assertJobIsClaude(t, tg)
+}
+
+// A parent named by pid alone carries its family only into records made
+// before a refresh found it gone.
+func TestLineageExecParentMustBeAliveAtTheRecord(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		at     time.Time
+		tagged bool
+	}{
+		{"exec before the shell was found gone", lineageAt(4), true},
+		{"exec after the shell was found gone", lineageAt(6), false},
+	} {
+		now := lineageAt(0)
+		tg := New(lineageConfig(), lineageProcs())
+		tg.now = func() time.Time { return now }
+		tg.Refresh()
+		tg.NoteLineage(Lineage{ParentPID: 500, ChildPID: 600, ChildStart: lineageAt(1), At: lineageAt(1)})
+		now = lineageAt(5)
+		tg.Refresh() // the shell is not listed: its record is marked exited at lineageAt(5)
+		tg.NoteLineage(Lineage{ParentPID: 600, ChildPID: 900, ChildStart: jobStart, At: c.at})
+		if info, ok := tg.Tag(900); ok != c.tagged || (ok && info.Name != "claude") {
+			t.Fatalf("%s: Tag(job) = %+v, %v; want tagged %v as claude", c.name, info, ok, c.tagged)
+		}
+		if c.tagged {
+			continue
+		}
+		if agent, known := tg.LiveAgentFamily(900); agent || !known {
+			t.Fatalf("%s: LiveAgentFamily(job) = (%v, %v), want (false, true)", c.name, agent, known)
+		}
+	}
 }
 
 // A family removed from the definitions no longer tags through its records.
