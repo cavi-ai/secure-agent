@@ -4,9 +4,10 @@ function createConsoleLiveUpdates({ refresh, connectStream, handlers = {}, timer
   let started = false, stopped = false;
   let source = null, slowTimer = null, pollTimer = null;
   let guardTimer = null, flagTimer = null;
+  let initialRefresh = null, reconcilePending = false;
   let failures = 0;
 
-  const refreshFull = () => { if (!stopped) refresh(); };
+  const refreshFull = () => { if (!stopped) return refresh(); };
   // Polling fallback: the fast set every two seconds (the 30 s slow timer
   // keeps the rest), and never a new cycle over an unfinished one — a newer
   // cycle supersedes the older, so overlapping slow cycles never publish.
@@ -45,7 +46,11 @@ function createConsoleLiveUpdates({ refresh, connectStream, handlers = {}, timer
     start() {
       if (started || stopped) return;
       started = true;
-      refreshFull();
+      const first = refreshFull();
+      if (first && typeof first.then === 'function') {
+        const settled = () => { initialRefresh = null; };
+        initialRefresh = Promise.resolve(first).then(settled, settled);
+      }
       if (stopped) return;
       slowTimer = timers.setInterval(refreshFull, 30000);
       if (!connectStream) { startPolling(); return; }
@@ -69,9 +74,15 @@ function createConsoleLiveUpdates({ refresh, connectStream, handlers = {}, timer
       if (stopped) return;
       failures = 0;
       stopPolling();
-      // Every connection may have missed deltas, including the initial
-      // snapshot-to-subscription window. Refresh once the stream is live.
-      refreshFull();
+      // Reconcile the snapshot-to-subscription window without superseding
+      // the initial refresh if stream headers arrived first.
+      if (!initialRefresh) { refreshFull(); return; }
+      if (reconcilePending) return;
+      reconcilePending = true;
+      initialRefresh.then(() => {
+        reconcilePending = false;
+        refreshFull();
+      });
     };
     source.onerror = () => {
       if (stopped) return;

@@ -35,7 +35,7 @@ function clock() {
   };
 }
 
-function fixture({ streaming = true, handlers = {} } = {}) {
+function fixture({ streaming = true, handlers = {}, refresh } = {}) {
   const timers = clock(), calls = [], streams = [];
   class Stream {
     closed = false;
@@ -51,7 +51,7 @@ function fixture({ streaming = true, handlers = {} } = {}) {
   const context = vm.createContext({});
   vm.runInContext(source, context);
   const controller = context.createConsoleLiveUpdates({
-    refresh: options => calls.push(options?.slow === false ? 'fast' : 'full'),
+    refresh: refresh ?? (options => calls.push(options?.slow === false ? 'fast' : 'full')),
     connectStream: streaming ? () => new Stream('/events/stream') : null,
     handlers,
     timers
@@ -151,6 +151,20 @@ test('an interrupted stream reconnects and reconciles on the next open', async (
   bodies[1].close();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(timers.pending.size, 0);
+});
+
+test('a fast stream open queues reconciliation after the first refresh', async () => {
+  let refreshes = 0, finish;
+  const initial = new Promise(resolve => { finish = resolve; });
+  const f = fixture({ refresh: () => ++refreshes === 1 ? initial : undefined });
+  f.controller.start();
+  f.streams[0].open();
+  f.streams[0].open();
+  assert.equal(refreshes, 1, 'the initial refresh must retain its result');
+  finish();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(refreshes, 2, 'one reconciliation covers the startup window');
+  f.controller.stop();
 });
 
 test('without a stream, polling refreshes the fast set every two seconds', async () => {
