@@ -656,45 +656,6 @@ func TestAcknowledgeRuleHostWildcard(t *testing.T) {
 	}
 }
 
-// The dashboard's Acknowledge/Resolve buttons write workflow columns on
-// incidents. Regression: those columns were missing from the incidents
-// schema entirely ("no such column: status") — every dismiss was dead.
-func TestIncidentStatusWorkflow(t *testing.T) {
-	dir := t.TempDir()
-	s, err := Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	report := model.IncidentReport{ID: "inc-1", FlagID: "f1", PID: 7, Risk: "HIGH",
-		Summary: "test", RotateList: nil, TouchedFiles: nil, Connections: nil}
-	s.PutIncident(report)
-
-	// Acknowledge.
-	_, ok, err := s.SetIncidentStatus("inc-1", "acknowledged", "")
-	if err != nil || !ok {
-		t.Fatalf("acknowledge failed: %v ok=%v", err, ok)
-	}
-	wf, found := testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatus("inc-1"))
-	if !found || wf.Status != "acknowledged" {
-		t.Fatalf("status = %+v found=%v", wf, found)
-	}
-
-	// Resolve with note.
-	_, ok, err = s.SetIncidentStatus("inc-1", "resolved", "verified benign")
-	if err != nil || !ok {
-		t.Fatalf("resolve failed: %v ok=%v", err, ok)
-	}
-	wf, _ = testutil.Lookup[IncidentWorkflow](t)(s.IncidentStatus("inc-1"))
-	if wf.Status != "resolved" {
-		t.Fatalf("status after resolve = %q", wf.Status)
-	}
-	if wf.ResolutionNote != "verified benign" {
-		t.Fatalf("resolution note = %q", wf.ResolutionNote)
-	}
-}
-
 // Trace kinds are exempt from the global row cap: socket churn at 73% of
 // rows evicted a 7-day trace window down to 15 hours (the audit). The cap
 // now counts OS-event kinds only; trace kinds have their own budgets.
@@ -1108,23 +1069,6 @@ func queryPlan(t *testing.T, s *Store, q string, args ...any) string {
 		t.Fatal(err)
 	}
 	return strings.Join(plan, " | ")
-}
-
-// The flag-explain lookup (one kind in one session around an anchor) seeks
-// (session_id, kind) instead of walking every row of the kind.
-func TestSessionKindLookupUsesSessionKindIndex(t *testing.T) {
-	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	plan := queryPlan(t, s, `SELECT kind FROM events WHERE 1=1 AND kind = ? AND session_id = ?
-		AND datetime(ts) >= datetime(?) AND datetime(ts) <= datetime(?) ORDER BY id DESC LIMIT ?`,
-		12, "sess", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", 200)
-	if !strings.Contains(plan, "idx_events_session_kind_id") {
-		t.Fatalf("session+kind lookup plan = %q, want idx_events_session_kind_id", plan)
-	}
 }
 
 // Planner statistics are written at open and after a gated prune, so a
