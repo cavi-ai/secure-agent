@@ -2,10 +2,20 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
+)
+
+// Sentinels for the kill path; handleKill maps them to HTTP statuses.
+var (
+	errKillInvalidPID    = errors.New("invalid pid")
+	errKillNotRecognized = errors.New("pid is not a recognized agent process tree")
+	errKillNoLongerAgent = errors.New("pid is no longer a recognized agent process")
+	errKillStartMismatch = errors.New("start time mismatch (process recycled?)")
+	errKillNoStartID     = errors.New("has no verified start identity")
+	errKillNotInSession  = errors.New("is no longer in the recognized session")
 )
 
 type killRequest struct {
@@ -28,10 +38,11 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 	killed, err := a.TerminateAgentTree(req.PID, req.StartedAt)
 	if err != nil {
 		status := http.StatusInternalServerError
-		if strings.Contains(err.Error(), "not a recognized") {
+		switch {
+		case errors.Is(err, errKillNotRecognized):
 			status = http.StatusForbidden
-		}
-		if strings.Contains(err.Error(), "no longer") || strings.Contains(err.Error(), "start") {
+		case errors.Is(err, errKillNoLongerAgent), errors.Is(err, errKillStartMismatch),
+			errors.Is(err, errKillNoStartID), errors.Is(err, errKillNotInSession):
 			status = http.StatusConflict
 		}
 		http.Error(w, err.Error(), status)
@@ -55,7 +66,7 @@ func (a *API) TerminateAgentTreeVerified(pid int32, startedAt string, expectedSt
 
 func (a *API) terminateAgentTree(pid int32, startedAt string, expectedStarts map[int32]time.Time) ([]int32, error) {
 	if pid <= 0 {
-		return nil, fmt.Errorf("invalid pid")
+		return nil, errKillInvalidPID
 	}
 	// A control socket that can kill any pid is a self-neutralization
 	// primitive (kill the daemon, kill an unrelated user process). Only
@@ -66,11 +77,11 @@ func (a *API) terminateAgentTree(pid int32, startedAt string, expectedStarts map
 	// process so a recycled pid with a different start time is refused.
 	if a.agentPIDs != nil {
 		if _, ok := a.agentPIDs()[pid]; !ok {
-			return nil, fmt.Errorf("pid is not a recognized agent process tree")
+			return nil, errKillNotRecognized
 		}
 		// Re-verify right before signaling to shrink the pid-reuse window.
 		if _, ok := a.agentPIDs()[pid]; !ok {
-			return nil, fmt.Errorf("pid is no longer a recognized agent process")
+			return nil, errKillNoLongerAgent
 		}
 	}
 
@@ -117,7 +128,7 @@ func (a *API) terminateAgentTree(pid int32, startedAt string, expectedStarts map
 func (a *API) checkExpectedProcessStart(pid int32, expected map[int32]time.Time) error {
 	want, ok := expected[pid]
 	if !ok || want.IsZero() {
-		return fmt.Errorf("pid %d has no verified start identity", pid)
+		return fmt.Errorf("pid %d %w", pid, errKillNoStartID)
 	}
 	for _, ag := range a.statusFn().Agents {
 		if ag.PID != pid {
@@ -125,11 +136,11 @@ func (a *API) checkExpectedProcessStart(pid int32, expected map[int32]time.Time)
 		}
 		got, err := time.Parse(time.RFC3339Nano, ag.StartedAt)
 		if err != nil || !got.Equal(want) {
-			return fmt.Errorf("pid %d start time mismatch (process recycled?)", pid)
+			return fmt.Errorf("pid %d %w", pid, errKillStartMismatch)
 		}
 		return nil
 	}
-	return fmt.Errorf("pid %d is no longer in the recognized session", pid)
+	return fmt.Errorf("pid %d %w", pid, errKillNotInSession)
 }
 
 func (a *API) killTreePIDs(pid int32) []int32 {
@@ -182,7 +193,7 @@ func (a *API) checkKillStart(pid int32, startedAt string) error {
 			continue
 		}
 		if ag.StartedAt != "" && ag.StartedAt != startedAt {
-			return fmt.Errorf("pid %d start time mismatch (process recycled?)", pid)
+			return fmt.Errorf("pid %d %w", pid, errKillStartMismatch)
 		}
 		return nil
 	}
