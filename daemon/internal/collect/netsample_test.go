@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
@@ -69,29 +70,33 @@ func drain(sub <-chan event.Event) []event.Event {
 // resolves to: the name arriving after the first sample does not read as the
 // connection closing and reopening.
 func TestNetSamplerKeysConnectionsByAddress(t *testing.T) {
-	socks := []connKey{{PID: 100, Host: "140.82.112.3", Port: 443}}
-	resolved := make(chan struct{})
-	ns, sub := sampler(t, &socks, func(context.Context, string) ([]string, error) {
-		defer close(resolved)
-		return []string{"lb-140-82-112-3-iad.github.com."}, nil
+	synctest.Test(t, func(t *testing.T) {
+		socks := []connKey{{PID: 100, Host: "140.82.112.3", Port: 443}}
+		resolved := make(chan struct{})
+		ns, sub := sampler(t, &socks, func(context.Context, string) ([]string, error) {
+			defer close(resolved)
+			return []string{"lb-140-82-112-3-iad.github.com."}, nil
+		})
+		t0 := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+		if n := ns.step(t0); n != 0 {
+			t.Fatalf("first sample published %d events before the address resolved", n)
+		}
+		<-resolved
+		// Wait returns once the resolve goroutine has stored the name and exited.
+		synctest.Wait()
+		for i := 1; i <= 3; i++ {
+			ns.step(t0.Add(time.Duration(i) * 2 * time.Second))
+		}
+		got := drain(sub)
+		if len(got) != 1 || got[0].Kind != event.KindConnOpen || got[0].RemoteHost != "lb-140-82-112-3-iad.github.com" || !got[0].TS.Equal(t0) {
+			t.Fatalf("events = %+v, want one open naming the host, stamped at the first sample", got)
+		}
+		socks = nil
+		ns.step(t0.Add(10 * time.Second))
+		if got := drain(sub); len(got) != 1 || got[0].Kind != event.KindConnClose || got[0].RemoteHost != "lb-140-82-112-3-iad.github.com" {
+			t.Fatalf("close = %+v, want one close under the opened name", got)
+		}
 	})
-	t0 := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
-	if n := ns.step(t0); n != 0 {
-		t.Fatalf("first sample published %d events before the address resolved", n)
-	}
-	<-resolved
-	for i := 1; i <= 3; i++ {
-		ns.step(t0.Add(time.Duration(i) * 2 * time.Second))
-	}
-	got := drain(sub)
-	if len(got) != 1 || got[0].Kind != event.KindConnOpen || got[0].RemoteHost != "lb-140-82-112-3-iad.github.com" || !got[0].TS.Equal(t0) {
-		t.Fatalf("events = %+v, want one open naming the host, stamped at the first sample", got)
-	}
-	socks = nil
-	ns.step(t0.Add(10 * time.Second))
-	if got := drain(sub); len(got) != 1 || got[0].Kind != event.KindConnClose || got[0].RemoteHost != "lb-140-82-112-3-iad.github.com" {
-		t.Fatalf("close = %+v, want one close under the opened name", got)
-	}
 }
 
 // A connection that closes before its address resolves still gets its open,
