@@ -127,7 +127,7 @@ function localTimestampHTML(value) {
   if (!Number.isFinite(date.getTime())) return 'Time unavailable';
   const recorded = typeof value === 'string' ? value : date.toISOString();
   const label = date.toLocaleString(undefined, {year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'});
-  return `<time datetime="${escapeHTML(recorded)}" title="${escapeHTML(recorded)}">${escapeHTML(label)}</time>`;
+  return html`<time datetime="${recorded}" title="${recorded}">${label}</time>`;
 }
 
 // fmtDayClock: deterministic local "Fri 3:10 PM", built by hand like
@@ -243,9 +243,9 @@ function advisorAdviceHTML(advice) {
   const verdict = advice.assessment === 'benign' ? 'allow'
     : advice.assessment === 'malicious' ? 'deny' : 'look';
   const pct = Math.round((Number(advice.confidence) || 0) * 100);
-  return `<span class="advisor-advice ${verdict}">`
-    + `<b>Advisor suggests ${verdict === 'look' ? 'you look first' : verdict}</b>`
-    + `${pct ? ` (${pct}% conf)` : ''} — ${escapeHTML(advice.rationale)}</span>`;
+  return html`<span class="advisor-advice ${verdict}">`
+    + html`<b>Advisor suggests ${verdict === 'look' ? 'you look first' : verdict}</b>`
+    + html`${pct ? ` (${pct}% conf)` : ''} — ${advice.rationale}</span>`;
 }
 
 // eventClock: RFC3339 → local HH:MM:SS, '' when unparseable. Shared by the
@@ -274,50 +274,50 @@ function endpointIdentityLine(identity) {
 // tests drive it headless.
 function endpointDetailHTML(detail, clickedAgent) {
   if (!detail || !detail.host) {
-    return '<div class="empty"><span>No endpoint data</span></div>';
+    return html`<div class="empty"><span>No endpoint data</span></div>`;
   }
   const id = detail.identity || {};
   const kindChip = id.kind === 'ipv6' ? 'IPv6' : id.kind === 'ipv4' ? 'IPv4' : 'hostname';
   const facts = [
-    detail.count ? `<b>${detail.count}×</b> in 7d` : '',
-    detail.last_seen ? `last ${fmtAge(detail.last_seen, Date.now())} ago` : '',
-    detail.first_seen ? `first seen ${fmtAge(detail.first_seen, Date.now())} ago` : '',
+    detail.count ? html`<b>${detail.count}×</b> in 7d` : '',
+    detail.last_seen ? html`last ${fmtAge(detail.last_seen, Date.now())} ago` : '',
+    detail.first_seen ? html`first seen ${fmtAge(detail.first_seen, Date.now())} ago` : '',
   ].filter(Boolean).join(' · ');
 
   const agents = (detail.agents || []).map(a => {
     const isClicked = clickedAgent && a === clickedAgent;
-    return `<button type="button" class="btn btn-ghost btn-sm${isClicked ? ' active' : ''}" data-action="allow-host" data-agent="${escapeHTML(a)}" data-host="${escapeHTML(detail.host)}">Allow for ${escapeHTML(a)}</button>`;
+    return html`<button type="button" class="btn btn-ghost btn-sm${isClicked ? ' active' : ''}" data-action="allow-host" data-agent="${a}" data-host="${detail.host}">Allow for ${a}</button>`;
   }).join('');
 
-  const sessions = (detail.sessions || []).map(s => `
+  const sessions = (detail.sessions || []).map(s => html`
     <div class="endpoint-session">
-      <strong>${escapeHTML(s.harness || 'agent')}</strong>
-      <span>${escapeHTML(s.repo ? `${s.repo}${s.branch ? '@' + s.branch : ''}` : (s.workspace || 'unknown workspace'))}</span>
-      <span class="endpoint-session-id">${escapeHTML(String(s.id || '').slice(0, 8))}</span>
-    </div>`).join('') || '<div class="resource-detail-empty">No session attribution on these connections.</div>';
+      <strong>${s.harness || 'agent'}</strong>
+      <span>${s.repo ? `${s.repo}${s.branch ? '@' + s.branch : ''}` : (s.workspace || 'unknown workspace')}</span>
+      <span class="endpoint-session-id">${String(s.id || '').slice(0, 8)}</span>
+    </div>`).join('') || html`<div class="resource-detail-empty">No session attribution on these connections.</div>`;
 
-  const events = (detail.events || []).slice(0, 20).map(e => `
+  const events = (detail.events || []).slice(0, 20).map(e => html`
     <div class="endpoint-event">
-      <span class="endpoint-event-time">${escapeHTML(eventClock(e.ts))}</span>
-      <span class="endpoint-event-port">:${escapeHTML(String(e.remote_port || ''))}</span>
-      <span class="endpoint-event-agent">${escapeHTML(e.session_id ? 'session ' + String(e.session_id).slice(0, 8) : (e.exe_path ? String(e.exe_path).split('/').pop() : 'agent'))}</span>
-    </div>`).join('') || '<div class="resource-detail-empty">No recorded connections.</div>';
+      <span class="endpoint-event-time">${eventClock(e.ts)}</span>
+      <span class="endpoint-event-port">:${e.remote_port || ''}</span>
+      <span class="endpoint-event-agent">${e.session_id ? 'session ' + String(e.session_id).slice(0, 8) : (e.exe_path ? String(e.exe_path).split('/').pop() : 'agent')}</span>
+    </div>`).join('') || html`<div class="resource-detail-empty">No recorded connections.</div>`;
 
   const allowed = (detail.allowed || []).length
-    ? `<div class="endpoint-allowed">Already trusted for ${(detail.allowed || []).map(a => escapeHTML(a.agent)).join(', ')} — this endpoint stops being flagged for them.</div>`
+    ? html`<div class="endpoint-allowed">Already trusted for ${(detail.allowed || []).map(a => a.agent).join(', ')} — this endpoint stops being flagged for them.</div>`
     : '';
 
-  return `
+  return html`
     <div class="endpoint-head">
-      <div class="endpoint-host">${escapeHTML(detail.host)}</div>
-      <span class="endpoint-kind">${escapeHTML(kindChip)}</span>
+      <div class="endpoint-host">${detail.host}</div>
+      <span class="endpoint-kind">${kindChip}</span>
     </div>
-    <p class="endpoint-identity">${escapeHTML(endpointIdentityLine(id))}</p>
-    ${facts ? `<p class="endpoint-facts">${facts}</p>` : ''}
-    ${allowed}
-    <div class="endpoint-actions">${agents || ''}</div>
-    <section class="endpoint-section"><h4>Reached by</h4>${sessions}</section>
-    <section class="endpoint-section"><h4>Recent connections</h4>${events}</section>`;
+    <p class="endpoint-identity">${endpointIdentityLine(id)}</p>
+    ${facts ? raw(html`<p class="endpoint-facts">${raw(facts)}</p>`) : ''}
+    ${raw(allowed)}
+    <div class="endpoint-actions">${raw(agents)}</div>
+    <section class="endpoint-section"><h4>Reached by</h4>${raw(sessions)}</section>
+    <section class="endpoint-section"><h4>Recent connections</h4>${raw(events)}</section>`;
 }
 
 // fileDetailHTML: the evidence file drawer — facts, the masked excerpt around
@@ -325,7 +325,7 @@ function endpointDetailHTML(detail, clickedAgent) {
 // and DOM tests drive it.
 function fileDetailHTML(d, nowMs) {
   if (!d || !d.path) {
-    return '<div class="empty"><span>No file data</span></div>';
+    return html`<div class="empty"><span>No file data</span></div>`;
   }
   const now = nowMs || Date.now();
   const s = d.subject || {};
@@ -334,45 +334,45 @@ function fileDetailHTML(d, nowMs) {
     d.exists && d.mod_time ? `modified ${fmtAge(d.mod_time, now)} ago` : '',
     d.exists && !d.owned_by_user ? 'owned by another user' : '',
   ].filter(Boolean).join(' · ');
-  const actions = d.exists ? `
-    <button type="button" class="btn btn-ghost btn-sm" data-action="file-reveal" data-path="${escapeHTML(d.path)}">Reveal in Finder</button>
-    <button type="button" class="btn btn-ghost btn-sm" data-action="file-open" data-path="${escapeHTML(d.path)}">Open in editor</button>` : '';
-  const sess = d.session ? `
+  const actions = d.exists ? html`
+    <button type="button" class="btn btn-ghost btn-sm" data-action="file-reveal" data-path="${d.path}">Reveal in Finder</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-action="file-open" data-path="${d.path}">Open in editor</button>` : '';
+  const sess = d.session ? html`
     <div class="endpoint-session">
-      <strong>${escapeHTML(familyTitle(d.session.harness || 'agent'))}</strong>
-      <span>${escapeHTML(d.session.repo ? d.session.repo + (d.session.branch ? '@' + d.session.branch : '') : (d.session.workspace || ''))}</span>
-      <span class="endpoint-session-id">${escapeHTML(sessionShort(d.session.id))}</span>
+      <strong>${familyTitle(d.session.harness || 'agent')}</strong>
+      <span>${d.session.repo ? d.session.repo + (d.session.branch ? '@' + d.session.branch : '') : (d.session.workspace || '')}</span>
+      <span class="endpoint-session-id">${sessionShort(d.session.id)}</span>
     </div>` : '';
   const excerpt = d.excerpt
-    ? `<pre class="file-excerpt">${escapeHTML(d.excerpt)}</pre>`
-    : d.excerpt_withheld ? `<p class="file-withheld">${escapeHTML(d.excerpt_withheld)}</p>` : '';
-  const findings = (d.findings || []).map(f => `
+    ? html`<pre class="file-excerpt">${d.excerpt}</pre>`
+    : d.excerpt_withheld ? html`<p class="file-withheld">${d.excerpt_withheld}</p>` : '';
+  const findings = (d.findings || []).map(f => html`
     <div class="endpoint-event">
-      <span class="endpoint-event-time">${escapeHTML(fmtAge(f.ts, now))} ago</span>
-      <span>${escapeHTML(f.kind === 'incident' ? 'Incident · ' + (f.risk || '') : ruleTitle(f.rule))}</span>
+      <span class="endpoint-event-time">${fmtAge(f.ts, now)} ago</span>
+      <span>${f.kind === 'incident' ? 'Incident · ' + (f.risk || '') : ruleTitle(f.rule)}</span>
       ${f.kind === 'incident'
-        ? `<button type="button" class="btn btn-ghost btn-sm endpoint-event-agent" data-action="open-incident" data-id="${escapeHTML(f.id)}">Open</button>`
-        : `<span class="endpoint-event-agent">${escapeHTML(f.acknowledged ? 'reviewed' : familyTitle(f.agent || ''))}</span>`}
+        ? raw(html`<button type="button" class="btn btn-ghost btn-sm endpoint-event-agent" data-action="open-incident" data-id="${f.id}">Open</button>`)
+        : raw(html`<span class="endpoint-event-agent">${f.acknowledged ? 'reviewed' : familyTitle(f.agent || '')}</span>`)}
     </div>`).join('');
-  const accesses = (d.accesses || []).map(a => `
+  const accesses = (d.accesses || []).map(a => html`
     <div class="endpoint-event">
-      <span class="endpoint-event-time">${escapeHTML(fmtAge(a.ts, now))} ago</span>
-      <span>${escapeHTML(String(a.kind || '').replace('file-', ''))}</span>
-      <span class="endpoint-event-agent">${escapeHTML((a.exe_path ? String(a.exe_path).split('/').pop() + ' · ' : '') + 'session ' + sessionShort(a.session_id))}</span>
+      <span class="endpoint-event-time">${fmtAge(a.ts, now)} ago</span>
+      <span>${String(a.kind || '').replace('file-', '')}</span>
+      <span class="endpoint-event-agent">${(a.exe_path ? String(a.exe_path).split('/').pop() + ' · ' : '') + 'session ' + sessionShort(a.session_id)}</span>
     </div>`).join('');
-  return `
+  return html`
     <div class="endpoint-head">
-      <div class="endpoint-host">${escapeHTML(d.display || d.path)}</div>
-      ${s.category_label ? `<span class="endpoint-kind">${escapeHTML(s.category_label)}</span>` : ''}
+      <div class="endpoint-host">${d.display || d.path}</div>
+      ${s.category_label ? raw(html`<span class="endpoint-kind">${s.category_label}</span>`) : ''}
     </div>
-    ${s.owner_label ? `<p class="endpoint-identity">${escapeHTML(s.owner_label)}</p>` : ''}
-    <p class="endpoint-facts">${escapeHTML(facts)}</p>
-    <div class="endpoint-actions">${actions}</div>
-    ${d.env_variables && d.env_variables.length ? `<section class="endpoint-section"><h4>Environment variable names</h4><p>Values are never shown.</p><ul>${d.env_variables.map(name => `<li><code>${escapeHTML(name)}</code></li>`).join('')}</ul></section>` : ''}${d.env_withheld ? `<p>${escapeHTML(d.env_withheld)}</p>` : ''}
-    ${sess ? `<section class="endpoint-section"><h4>Session</h4>${sess}</section>` : ''}
-    ${excerpt ? `<section class="endpoint-section"><h4>Around the secret</h4>${excerpt}</section>` : ''}
-    ${findings ? `<section class="endpoint-section"><h4>Findings</h4>${findings}</section>` : ''}
-    ${accesses ? `<section class="endpoint-section"><h4>Agent access</h4>${accesses}</section>` : ''}`;
+    ${s.owner_label ? raw(html`<p class="endpoint-identity">${s.owner_label}</p>`) : ''}
+    <p class="endpoint-facts">${facts}</p>
+    <div class="endpoint-actions">${raw(actions)}</div>
+    ${d.env_variables && d.env_variables.length ? raw(html`<section class="endpoint-section"><h4>Environment variable names</h4><p>Values are never shown.</p><ul>${d.env_variables.map(name => raw(html`<li><code>${name}</code></li>`))}</ul></section>`) : ''}${d.env_withheld ? raw(html`<p>${d.env_withheld}</p>`) : ''}
+    ${sess ? raw(html`<section class="endpoint-section"><h4>Session</h4>${raw(sess)}</section>`) : ''}
+    ${excerpt ? raw(html`<section class="endpoint-section"><h4>Around the secret</h4>${raw(excerpt)}</section>`) : ''}
+    ${findings ? raw(html`<section class="endpoint-section"><h4>Findings</h4>${raw(findings)}</section>`) : ''}
+    ${accesses ? raw(html`<section class="endpoint-section"><h4>Agent access</h4>${raw(accesses)}</section>`) : ''}`;
 }
 
 // ---------- playbook and advisor plan ----------
@@ -385,8 +385,8 @@ const PLAN_STEP_KINDS = {
 // planSlotHTML: where a surface shows the playbook and the advisor's plan
 // for subject ("flag:<id>", "incident:<id>", "file:<path>").
 function planSlotHTML(subject) {
-  return `<section class="endpoint-section"><h4>What to do</h4>`
-    + `<div class="plan-slot" data-plan-subject="${escapeHTML(subject)}"><div class="loading-spinner">Loading the playbook…</div></div></section>`;
+  return html`<section class="endpoint-section"><h4>What to do</h4>`
+    + html`<div class="plan-slot" data-plan-subject="${subject}"><div class="loading-spinner">Loading the playbook…</div></div></section>`;
 }
 
 // labelsLineHTML: the operator's earlier judgments on the same case, "" when
@@ -397,26 +397,25 @@ function labelsLineHTML(summary) {
   if (summary.ok) parts.push(`${summary.ok} as routine`);
   if (summary.not_ok) parts.push(`${summary.not_ok} as not ok`);
   if (!parts.length) return '';
-  return `<p class="finding-labels">You marked similar cases ${escapeHTML(parts.join(' and '))}.</p>`;
+  return html`<p class="finding-labels">You marked similar cases ${parts.join(' and ')}.</p>`;
 }
 
 // markButtonsHTML: Mark as routine / Mark as not ok for a subject.
 function markButtonsHTML(subject) {
-  const s = escapeHTML(subject);
   const routineLabel = String(subject).startsWith('incident:') ? 'Send routine feedback' : 'Mark as routine';
-  return `<button class="btn btn-ghost btn-sm" data-action="mark-label" data-subject="${s}" data-label="ok">${routineLabel}</button>`
-    + `<button class="btn btn-ghost btn-sm" data-action="mark-label" data-subject="${s}" data-label="not_ok">Mark as not ok</button>`;
+  return html`<button class="btn btn-ghost btn-sm" data-action="mark-label" data-subject="${subject}" data-label="ok">${routineLabel}</button>`
+    + html`<button class="btn btn-ghost btn-sm" data-action="mark-label" data-subject="${subject}" data-label="not_ok">Mark as not ok</button>`;
 }
 
 function incidentWorkflowHTML(id, workflow = {}) {
   const status = workflow.status || 'open';
-  const attrs = `data-action="incident-status" data-id="${escapeHTML(id)}"`;
-  return `<p class="plan-status">${escapeHTML(status === 'acknowledged' ? 'Dismissed from Needs you' : status === 'resolved' ? 'Reported resolved' : 'Open incident')}</p>`
-    + `<div class="endpoint-actions">`
-    + (status === 'open' ? `<button class="btn btn-ghost btn-sm" ${attrs} data-status="acknowledged" title="Remove from Needs you; keep the report and monitoring">Dismiss</button>` : '')
-    + (status !== 'resolved' ? `<button class="btn btn-ghost btn-sm" ${attrs} data-status="resolved">Report resolved</button>` : '')
-    + `</div>`
-    + (workflow.resolution_note ? `<p>${escapeHTML(workflow.resolution_note)}</p>` : '');
+  const attrs = raw(html`data-action="incident-status" data-id="${id}"`);
+  return html`<p class="plan-status">${status === 'acknowledged' ? 'Dismissed from Needs you' : status === 'resolved' ? 'Reported resolved' : 'Open incident'}</p>`
+    + html`<div class="endpoint-actions">`
+    + (status === 'open' ? html`<button class="btn btn-ghost btn-sm" ${attrs} data-status="acknowledged" title="Remove from Needs you; keep the report and monitoring">Dismiss</button>` : '')
+    + (status !== 'resolved' ? html`<button class="btn btn-ghost btn-sm" ${attrs} data-status="resolved">Report resolved</button>` : '')
+    + html`</div>`
+    + (workflow.resolution_note ? html`<p>${workflow.resolution_note}</p>` : '');
 }
 
 // The generated report starts with identity and summary, then level-two
@@ -427,14 +426,14 @@ function incidentRemediationHTML(id, remediation, actions = true) {
   const rows = remediation.steps.map(step => {
     const item = step.item || {};
     const reported = step.status === 'reported';
-    const attrs = `data-action="incident-remediation" data-id="${escapeHTML(id)}" data-step-id="${escapeHTML(step.id)}" data-revision="${escapeHTML(remediation.revision)}" data-evidence="${escapeHTML(remediation.evidence_revision)}"`;
-    return `<div class="endpoint-section"><strong>${escapeHTML(item.name)}</strong>`
-      + (item.path ? `<p class="body-note">${escapeHTML(item.path)}</p>` : '')
-      + `<p>${escapeHTML(item.action)}</p><p>${reported ? 'Reported completed' : 'Pending'} · Unverified${reported && step.reported_at ? ` · ${escapeHTML(step.reported_at)}` : ''}</p>`
-      + (step.newer_evidence ? '<p class="body-note">New evidence since this report; review the incident again.</p>' : '')
-      + (actions ? `<button class="btn btn-ghost btn-sm" ${attrs} data-status="${reported ? 'pending' : 'reported'}">${reported ? 'Mark pending' : 'Report step completed'}</button>` : '') + '</div>';
+    const attrs = raw(html`data-action="incident-remediation" data-id="${id}" data-step-id="${step.id}" data-revision="${remediation.revision}" data-evidence="${remediation.evidence_revision}"`);
+    return html`<div class="endpoint-section"><strong>${item.name}</strong>`
+      + (item.path ? html`<p class="body-note">${item.path}</p>` : '')
+      + html`<p>${item.action}</p><p>${reported ? 'Reported completed' : 'Pending'} · Unverified${reported && step.reported_at ? ` · ${step.reported_at}` : ''}</p>`
+      + (step.newer_evidence ? html`<p class="body-note">New evidence since this report; review the incident again.</p>` : '')
+      + (actions ? html`<button class="btn btn-ghost btn-sm" ${attrs} data-status="${reported ? 'pending' : 'reported'}">${reported ? 'Mark pending' : 'Report step completed'}</button>` : '') + html`</div>`;
   }).join('');
-  return `<section class="incident-remediation"><h4>Remediation steps</h4><p class="body-note">Reports record work you completed. External credential changes remain unverified; reporting a step does not resolve the incident.</p>${rows}</section>`;
+  return html`<section class="incident-remediation"><h4>Remediation steps</h4><p class="body-note">Reports record work you completed. External credential changes remain unverified; reporting a step does not resolve the incident.</p>${raw(rows)}</section>`;
 }
 
 function incidentReportHTML(id, workflow, markdown, remediation) {
@@ -442,13 +441,10 @@ function incidentReportHTML(id, workflow, markdown, remediation) {
   const split = text.search(/^## /m);
   const intro = split < 0 ? text : text.slice(0, split);
   const evidence = split < 0 ? '' : text.slice(split);
-  return linkEvidencePaths(parseMarkdownToHTML(intro))
-    + `<section class="endpoint-section incident-workflow-actions">${incidentWorkflowHTML(id, workflow)}</section>`
-    + incidentRemediationHTML(id, remediation)
-    + `<div class="endpoint-actions">${markButtonsHTML('incident:' + id)}</div>`
-    + '<p class="body-note">Routine feedback helps the advisor. It does not add an exception or change this incident’s status.</p>'
-    + planSlotHTML('incident:' + id)
-    + linkEvidencePaths(parseMarkdownToHTML(evidence));
+  return html`${raw(linkEvidencePaths(parseMarkdownToHTML(intro)))}<section class="endpoint-section incident-workflow-actions">${raw(incidentWorkflowHTML(id, workflow))}</section>`
+    + html`${raw(incidentRemediationHTML(id, remediation))}<div class="endpoint-actions">${raw(markButtonsHTML('incident:' + id))}</div>`
+    + html`<p class="body-note">Routine feedback helps the advisor. It does not add an exception or change this incident’s status.</p>`
+    + html`${raw(planSlotHTML('incident:' + id))}${raw(linkEvidencePaths(parseMarkdownToHTML(evidence)))}`;
 }
 
 // labelsHTML: the What to do drawer's history — summary, similar judgments,
@@ -459,24 +455,24 @@ function labelsHTML(resp, nowMs) {
   if (!l) return '';
   const now = nowMs || Date.now();
   const flag = resp.flag;
-  const similar = (l.similar || []).map(x => `<li>${escapeHTML(x.label === 'ok' ? 'Routine' : 'Not ok')} · ${escapeHTML(x.source)} · `
-    + `${escapeHTML(fmtAge(x.created_at, now))} ago${x.pattern ? ' · ' + escapeHTML(x.pattern) : ''}${x.reason ? ' · ' + escapeHTML(x.reason) : ''}</li>`).join('');
+  const similar = (l.similar || []).map(x => html`<li>${x.label === 'ok' ? 'Routine' : 'Not ok'} · ${x.source} · `
+    + html`${fmtAge(x.created_at, now)} ago${x.pattern ? ' · ' + x.pattern : ''}${x.reason ? ' · ' + x.reason : ''}</li>`).join('');
   let suggestion = '';
   if (l.suggestion) {
     const a = flag && flag.explain && (flag.explain.actions || []).find(x => x.id === l.suggestion.action_id);
     const btn = a && EXPLAIN_CONSOLE_ACTIONS.includes(a.id)
-      ? `<button class="btn btn-primary btn-sm" data-action="explain-act" data-flag-id="${escapeHTML(flag.id)}" data-action-id="${escapeHTML(a.id)}"`
-        + `${a.body && typeof a.body.host === 'string' ? ` data-host="${escapeHTML(a.body.host)}"` : ''} title="${escapeHTML(a.consequence)}">${escapeHTML(explainActionLabel(flag, a))}</button>`
+      ? html`<button class="btn btn-primary btn-sm" data-action="explain-act" data-flag-id="${flag.id}" data-action-id="${a.id}"`
+        + html`${a.body && typeof a.body.host === 'string' ? raw(html` data-host="${a.body.host}"`) : ''} title="${a.consequence}">${explainActionLabel(flag, a)}</button>`
       : '';
-    suggestion = `<div class="plan-suggestion"><p>${escapeHTML(l.suggestion.text)}</p>${btn}</div>`;
+    suggestion = html`<div class="plan-suggestion"><p>${l.suggestion.text}</p>${raw(btn)}</div>`;
   }
-  return `
+  return html`
     <div class="plan-labels">
       <h5>Your history</h5>
-      ${labelsLineHTML(l.summary) || '<p class="plan-status">No earlier judgments on cases like this.</p>'}
-      ${similar ? `<ul class="plan-list">${similar}</ul>` : ''}
-      ${suggestion}
-      ${String(resp.subject || '').startsWith('incident:') ? '' : `<div class="endpoint-actions">${markButtonsHTML(resp.subject)}</div>`}
+      ${raw(labelsLineHTML(l.summary) || html`<p class="plan-status">No earlier judgments on cases like this.</p>`)}
+      ${similar ? raw(html`<ul class="plan-list">${raw(similar)}</ul>`) : ''}
+      ${raw(suggestion)}
+      ${String(resp.subject || '').startsWith('incident:') ? '' : raw(html`<div class="endpoint-actions">${raw(markButtonsHTML(resp.subject))}</div>`)}
     </div>`;
 }
 
@@ -486,14 +482,14 @@ function labelsHTML(resp, nowMs) {
 // escaped.
 function agentInstructionHTML(subject, action, state = {}) {
   if (!action) return '';
-  if (!action.ready) return `<p class="plan-status">${escapeHTML(action.reason || 'Instruction update unavailable.')}</p>`;
+  if (!action.ready) return html`<p class="plan-status">${action.reason || 'Instruction update unavailable.'}</p>`;
   const file = String(action.path || '').split('/').pop();
   if (!['AGENTS.md', 'CLAUDE.md'].includes(file) || !action.instruction || !/^[a-f0-9]{64}$/.test(action.revision || '')) return '';
-  const button = action.applied ? '<p role="status">Already applied</p>'
-    : `<button type="button" class="btn btn-primary btn-sm" data-action="apply-agent-instruction" data-subject="${escapeHTML(subject)}" data-revision="${escapeHTML(action.revision)}"${state.busy ? ' disabled' : ''}>${state.busy ? 'Applying…' : 'Apply to ' + file}</button>`;
-  return `<div class="plan-instruction" aria-busy="${!!state.busy}"><p>Append this safety rule to <code>${escapeHTML(action.path)}</code>:</p>`
-    + `<blockquote>${escapeHTML(action.instruction)}</blockquote><div class="endpoint-actions">${button}</div>`
-    + (state.error ? `<p class="plan-status" role="alert">${escapeHTML(state.error)}</p>` : '') + '</div>';
+  const button = action.applied ? html`<p role="status">Already applied</p>`
+    : html`<button type="button" class="btn btn-primary btn-sm" data-action="apply-agent-instruction" data-subject="${subject}" data-revision="${action.revision}"${state.busy ? raw(' disabled') : ''}>${state.busy ? 'Applying…' : 'Apply to ' + file}</button>`;
+  return html`<div class="plan-instruction" aria-busy="${!!state.busy}"><p>Append this safety rule to <code>${action.path}</code>:</p>`
+    + html`<blockquote>${action.instruction}</blockquote><div class="endpoint-actions">${raw(button)}</div>`
+    + (state.error ? html`<p class="plan-status" role="alert">${state.error}</p>` : '') + html`</div>`;
 }
 
 function planHTML(resp, nowMs, instructionState) {
@@ -502,16 +498,16 @@ function planHTML(resp, nowMs, instructionState) {
   const p = resp.plan;
   const flag = resp.flag;
   const list = (items, tag) => (items && items.length)
-    ? `<${tag || 'ul'} class="plan-list">${items.map(x => `<li>${escapeHTML(x)}</li>`).join('')}</${tag || 'ul'}>` : '';
+    ? html`<${tag || 'ul'} class="plan-list">${items.map(x => raw(html`<li>${x}</li>`))}</${tag || 'ul'}>` : '';
   let instructionShown = false;
-  const steps = items => (items && items.length) ? `<ul class="plan-list">${items.map(s => {
+  const steps = items => (items && items.length) ? html`<ul class="plan-list">${items.map(s => {
     let action = '';
     if (s.kind === 'agent-instruction' && !instructionShown) {
       action = agentInstructionHTML(resp.subject, resp.instruction, instructionState);
       instructionShown = !!action;
     }
-    return `<li><span class="plan-kind">${escapeHTML(PLAN_STEP_KINDS[s.kind] || s.kind)}</span> <strong>${escapeHTML(s.step)}</strong>. ${escapeHTML(s.detail)}${action}</li>`;
-  }).join('')}</ul>` : '';
+    return raw(html`<li><span class="plan-kind">${PLAN_STEP_KINDS[s.kind] || s.kind}</span> <strong>${s.step}</strong>. ${s.detail}${raw(action)}</li>`);
+  })}</ul>` : '';
 
   const status = {
     pending: 'The advisor is writing a plan from this finding\'s local context…',
@@ -526,37 +522,37 @@ function planHTML(resp, nowMs, instructionState) {
       .filter(a => a && EXPLAIN_CONSOLE_ACTIONS.includes(a.id));
     const buttons = acts.map(a => {
       const host = a.body && typeof a.body.host === 'string' ? a.body.host : '';
-      return `<button class="btn ${a.id === 'kill' ? 'btn-danger' : 'btn-ghost'} btn-sm" data-action="explain-act" data-flag-id="${escapeHTML(flag.id)}"`
-        + ` data-action-id="${escapeHTML(a.id)}"${host ? ` data-host="${escapeHTML(host)}"` : ''} title="${escapeHTML(a.consequence)}">${escapeHTML(explainActionLabel(flag, a))}</button>`;
+      return html`<button class="btn ${a.id === 'kill' ? 'btn-danger' : 'btn-ghost'} btn-sm" data-action="explain-act" data-flag-id="${flag.id}"`
+        + html` data-action-id="${a.id}"${host ? raw(html` data-host="${host}"`) : ''} title="${a.consequence}">${explainActionLabel(flag, a)}</button>`;
     }).join('');
-    advisor = `
+    advisor = html`
       <div class="plan-advisor">
-        <p class="plan-summary"><span class="plan-risk plan-risk-${escapeHTML(p.risk)}">${escapeHTML(p.risk)} risk</span> ${escapeHTML(p.summary)}</p>
-        ${p.why && p.why.length ? `<h5>Why it happened</h5>${list(p.why)}` : ''}
-        ${p.remediate && p.remediate.length ? `<h5>Do now</h5>${list(p.remediate, 'ol')}` : ''}
-        ${p.prevent && p.prevent.length ? `<h5>Prevent it</h5>${steps(p.prevent)}` : ''}
-        ${p.behavior && p.behavior.length ? `<h5>Change how you work</h5>${list(p.behavior)}` : ''}
-        ${buttons ? `<div class="endpoint-actions">${buttons}</div>` : ''}
-        <p class="plan-meta">Local advisor${p.model ? ' · ' + escapeHTML(p.model) : ''}${p.created_at ? ' · ' + escapeHTML(fmtAge(p.created_at, nowMs || Date.now())) + ' ago' : ''}</p>
+        <p class="plan-summary"><span class="plan-risk plan-risk-${p.risk}">${p.risk} risk</span> ${p.summary}</p>
+        ${p.why && p.why.length ? raw(html`<h5>Why it happened</h5>${raw(list(p.why))}`) : ''}
+        ${p.remediate && p.remediate.length ? raw(html`<h5>Do now</h5>${raw(list(p.remediate, 'ol'))}`) : ''}
+        ${p.prevent && p.prevent.length ? raw(html`<h5>Prevent it</h5>${raw(steps(p.prevent))}`) : ''}
+        ${p.behavior && p.behavior.length ? raw(html`<h5>Change how you work</h5>${raw(list(p.behavior))}`) : ''}
+        ${buttons ? raw(html`<div class="endpoint-actions">${raw(buttons)}</div>`) : ''}
+        <p class="plan-meta">Local advisor${p.model ? ' · ' + p.model : ''}${p.created_at ? ' · ' + fmtAge(p.created_at, nowMs || Date.now()) + ' ago' : ''}</p>
       </div>`;
   }
 
-  const playbook = `
-    <p class="plan-why">${escapeHTML(pb.why)}</p>
-    ${pb.now && pb.now.length ? `<h5>Do now</h5>${list(pb.now, 'ol')}` : ''}
-    ${pb.prevent && pb.prevent.length ? `<h5>Prevent it</h5>${steps(pb.prevent)}` : ''}`;
+  const playbook = html`
+    <p class="plan-why">${pb.why}</p>
+    ${pb.now && pb.now.length ? raw(html`<h5>Do now</h5>${raw(list(pb.now, 'ol'))}`) : ''}
+    ${pb.prevent && pb.prevent.length ? raw(html`<h5>Prevent it</h5>${raw(steps(pb.prevent))}`) : ''}`;
 
   const canAsk = resp.advisor_ready && resp.status !== 'pending';
-  const ask = `<button class="btn btn-primary btn-sm" data-action="ask-plan" data-subject="${escapeHTML(resp.subject)}"${canAsk ? '' : ' disabled'}>`
-    + `${p ? 'Ask the advisor again' : 'Ask the advisor for a plan'}</button>`;
+  const ask = html`<button class="btn btn-primary btn-sm" data-action="ask-plan" data-subject="${resp.subject}"${canAsk ? '' : raw(' disabled')}>`
+    + html`${p ? 'Ask the advisor again' : 'Ask the advisor for a plan'}</button>`;
 
-  return `
+  return html`
     <div class="plan">
-      ${status ? `<p class="plan-status plan-status-${escapeHTML(resp.status)}">${escapeHTML(status)}</p>` : ''}
-      ${advisor}
-      ${p ? `<details class="plan-playbook"><summary>Playbook: ${escapeHTML(pb.title)}</summary>${playbook}</details>` : `<div class="plan-playbook">${playbook}</div>`}
-      <div class="plan-ask">${ask}</div>
-      ${labelsHTML(resp, nowMs)}
+      ${status ? raw(html`<p class="plan-status plan-status-${resp.status}">${status}</p>`) : ''}
+      ${raw(advisor)}
+      ${p ? raw(html`<details class="plan-playbook"><summary>Playbook: ${pb.title}</summary>${raw(playbook)}</details>`) : raw(html`<div class="plan-playbook">${raw(playbook)}</div>`)}
+      <div class="plan-ask">${raw(ask)}</div>
+      ${raw(labelsHTML(resp, nowMs))}
     </div>`;
 }
 
@@ -628,15 +624,15 @@ function harnessChipHTML(name, opts) {
   const m = harnessMeta(name);
   let mark;
   if (m.logo) {
-    mark = `<span class="harness-tile hk-${escapeHTML(m.key)}${m.tile === 'light' ? ' light' : ''}" aria-hidden="true">`
-      + `<svg class="harness-logo" aria-hidden="true"><use href="#${escapeHTML(m.logo)}"/></svg></span>`;
+    mark = html`<span class="harness-tile hk-${m.key}${m.tile === 'light' ? ' light' : ''}" aria-hidden="true">`
+      + html`<svg class="harness-logo" aria-hidden="true"><use href="#${m.logo}"/></svg></span>`;
   } else if (m.known) {
-    mark = `<span class="harness-glyph hk-${escapeHTML(m.key)}" aria-hidden="true">${escapeHTML(m.glyph)}</span>`;
+    mark = html`<span class="harness-glyph hk-${m.key}" aria-hidden="true">${m.glyph}</span>`;
   } else {
-    mark = `<span class="harness-glyph" data-harness-color="${escapeHTML(m.color)}" aria-hidden="true">${escapeHTML(m.glyph)}</span>`;
+    mark = html`<span class="harness-glyph" data-harness-color="${m.color}" aria-hidden="true">${m.glyph}</span>`;
   }
-  const label = opts && opts.label ? `<span class="harness-label">${escapeHTML(m.label)}</span>` : '';
-  return `<span class="harness-chip" title="${escapeHTML(m.known ? m.label : (name || 'agent'))}">${mark}${label}</span>`;
+  const label = opts && opts.label ? html`<span class="harness-label">${m.label}</span>` : '';
+  return html`<span class="harness-chip" title="${m.known ? m.label : (name || 'agent')}">${raw(mark)}${raw(label)}</span>`;
 }
 
 // filterEventsBySession: the timeline's session drill-down. Client-side over
@@ -665,17 +661,17 @@ function scopeBarHTML({ session, pids, pidLabel, events, flags, returnToSession,
   const n = Number(events) || 0;
   const m = Number(flags) || 0;
   const counts = ` · ${n} event${n === 1 ? '' : 's'} · ${m} flag${m === 1 ? '' : 's'}`;
-  const clear = '<button type="button" class="btn btn-ghost btn-sm" data-action="clear-scope">Clear</button>';
-  const back = returnToSession ? '<button type="button" class="btn btn-ghost btn-sm" data-action="session-investigation-return">Back to session</button>'
-    : session ? `<button type="button" class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${escapeHTML(session)}">Back to session</button>` : '';
-  if (workspacePermissions && returnToSession) return `<span>Saved permissions · includes other sessions</span><span class="scope-actions">${back}</span>`;
-  if (machineTraffic && returnToSession) return `<span>Machine-wide traffic · not attributed to this session</span><span class="scope-actions">${back}</span>`;
-  if (session) return `<span>Scoped to session <b>${escapeHTML(sessionShort(session))}</b>${counts}</span><span class="scope-actions">${back}${clear}</span>`;
+  const clear = raw(html`<button type="button" class="btn btn-ghost btn-sm" data-action="clear-scope">Clear</button>`);
+  const back = raw(returnToSession ? html`<button type="button" class="btn btn-ghost btn-sm" data-action="session-investigation-return">Back to session</button>`
+    : session ? html`<button type="button" class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${session}">Back to session</button>` : '');
+  if (workspacePermissions && returnToSession) return html`<span>Saved permissions · includes other sessions</span><span class="scope-actions">${back}</span>`;
+  if (machineTraffic && returnToSession) return html`<span>Machine-wide traffic · not attributed to this session</span><span class="scope-actions">${back}</span>`;
+  if (session) return html`<span>Scoped to session <b>${sessionShort(session)}</b>${counts}</span><span class="scope-actions">${back}${clear}</span>`;
   if (pids && pids.length) {
     const k = pids.length;
-    return `<span>Scoped to <b>${escapeHTML(pidLabel || 'PID ' + pids[0])}</b> (${k} process${k === 1 ? '' : 'es'})${counts}</span><span class="scope-actions">${back}${clear}</span>`;
+    return html`<span>Scoped to <b>${pidLabel || 'PID ' + pids[0]}</b> (${k} process${k === 1 ? '' : 'es'})${counts}</span><span class="scope-actions">${back}${clear}</span>`;
   }
-  return returnToSession ? `<span>Evidence filters cleared</span><span class="scope-actions">${back}</span>` : '';
+  return returnToSession ? html`<span>Evidence filters cleared</span><span class="scope-actions">${back}</span>` : '';
 }
 
 // The Attention badge counts what the hero counts: /posture needs_you, which
@@ -908,9 +904,9 @@ function harnessPillsHTML(keys, harnesses) {
   const off = harnesses || {};
   if (!keys || !keys.length) return '';
   const all = !Object.values(off).some(value => value === false);
-  return `<button type="button" class="harness-pill${all ? '' : ' off'}" data-action="all-harnesses" aria-pressed="${all}">All</button>` + keys.map(k => {
+  return html`<button type="button" class="harness-pill${all ? '' : ' off'}" data-action="all-harnesses" aria-pressed="${all}">All</button>` + keys.map(k => {
     const on = off[k] !== false;
-    return `<button type="button" class="harness-pill${on ? '' : ' off'}" data-action="toggle-harness" data-harness="${escapeHTML(k)}" aria-pressed="${on}" title="${on ? 'Hide' : 'Show'} ${escapeHTML(harnessMeta(k).label)}">${harnessChipHTML(k, { label: true })}</button>`;
+    return html`<button type="button" class="harness-pill${on ? '' : ' off'}" data-action="toggle-harness" data-harness="${k}" aria-pressed="${on}" title="${on ? 'Hide' : 'Show'} ${harnessMeta(k).label}">${raw(harnessChipHTML(k, { label: true }))}</button>`;
   }).join('');
 }
 
@@ -999,12 +995,12 @@ function parseMarkdownToHTML(md) {
   // before any tags are added. No raw HTML, image, or URL rendering.
   const inline = s => String(s).split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g).map(part => {
     if (part.startsWith('`') && part.endsWith('`') && part.length > 2)
-      return `<code class="md-inline-code">${escapeHTML(part.slice(1, -1))}</code>`;
+      return html`<code class="md-inline-code">${part.slice(1, -1)}</code>`;
     if (part.startsWith('**') && part.endsWith('**') && part.length > 4)
-      return `<strong>${escapeHTML(part.slice(2, -2))}</strong>`;
+      return html`<strong>${part.slice(2, -2)}</strong>`;
     if (part.startsWith('*') && part.endsWith('*') && part.length > 2)
-      return `<em>${escapeHTML(part.slice(1, -1))}</em>`;
-    return escapeHTML(part);
+      return html`<em>${part.slice(1, -1)}</em>`;
+    return html`${part}`;
   }).join('');
   const lines = String(md).replace(/\r\n?/g, '\n').split('\n');
   const out = [];
@@ -1012,17 +1008,17 @@ function parseMarkdownToHTML(md) {
   let list = null;
   let code = null;
   const flushParagraph = () => {
-    if (paragraph.length) out.push(`<p>${paragraph.map(inline).join('<br>')}</p>`);
+    if (paragraph.length) out.push(html`<p>${raw(paragraph.map(inline).join('<br>'))}</p>`);
     paragraph = [];
   };
   const flushList = () => {
-    if (list) out.push(`<${list.kind}>${list.items.map(item => `<li>${inline(item)}</li>`).join('')}</${list.kind}>`);
+    if (list) out.push(html`<${list.kind}>${list.items.map(item => raw(html`<li>${raw(inline(item))}</li>`))}</${list.kind}>`);
     list = null;
   };
   for (const line of lines) {
     if (code) {
       if (/^\s*```\s*$/.test(line)) {
-        out.push(`<pre class="md-codeblock"><code>${escapeHTML(code.join('\n'))}</code></pre>`);
+        out.push(html`<pre class="md-codeblock"><code>${code.join('\n')}</code></pre>`);
         code = null;
       } else code.push(line);
       continue;
@@ -1033,7 +1029,7 @@ function parseMarkdownToHTML(md) {
     if (heading) {
       flushParagraph(); flushList();
       const level = heading[1].length;
-      out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+      out.push(html`<h${level}>${raw(inline(heading[2]))}</h${level}>`);
       continue;
     }
     const bullet = /^\s{0,3}[-*]\s+(.+)$/.exec(line);
@@ -1053,9 +1049,9 @@ function parseMarkdownToHTML(md) {
     flushList();
     paragraph.push(line);
   }
-  if (code) out.push(`<pre class="md-codeblock"><code>${escapeHTML(code.join('\n'))}</code></pre>`);
+  if (code) out.push(html`<pre class="md-codeblock"><code>${code.join('\n')}</code></pre>`);
   flushParagraph(); flushList();
-  return `<div class="markdown-view">${out.join('')}</div>`;
+  return html`<div class="markdown-view">${raw(out.join(''))}</div>`;
 }
 
 // ---------- rollup chart ----------
@@ -1205,16 +1201,16 @@ function assessmentHTML(a) {
   const facts = [reviews[a.review_state] || 'Review state unknown', residual[a.residual_risk] || 'Exposure unknown', controls[a.control] || 'Control outcome unknown'];
   const limits = [...(a.evidence_basis || []).map(b => bases[b] || b), ...(a.limits || [])];
   const advice = a.advice;
-  return `<div class="finding-assessment"><p class="assessment-state">${facts.map(escapeHTML).join(' · ')}</p>`
-    + (limits.length ? `<details class="assessment-limits"><summary>Evidence and limits</summary><ul>${limits.map(l => `<li>${escapeHTML(l)}</li>`).join('')}</ul></details>` : '')
-    + (advice ? `<p class="assessment-advice">Advisor opinion: ${escapeHTML(advice.assessment || 'unrated')}${advice.confidence != null ? ` (${Math.round(Number(advice.confidence) * 100)}%)` : ''} · ${escapeHTML(advice.rationale || '')}</p>` : '') + '</div>';
+  return html`<div class="finding-assessment"><p class="assessment-state">${facts.join(' · ')}</p>`
+    + (limits.length ? html`<details class="assessment-limits"><summary>Evidence and limits</summary><ul>${limits.map(l => raw(html`<li>${l}</li>`))}</ul></details>` : '')
+    + (advice ? html`<p class="assessment-advice">Advisor opinion: ${advice.assessment || 'unrated'}${advice.confidence != null ? ` (${Math.round(Number(advice.confidence) * 100)}%)` : ''} · ${advice.rationale || ''}</p>` : '') + html`</div>`;
 }
 
 function payloadOutcomeHTML(outcomes) {
   if (!outcomes) return '';
   const count = n => Number.isSafeInteger(n) && n >= 0 ? n : 0;
-  return `<p class="body-note">Recorded payload findings: ${count(outcomes.blocked)} blocked before forwarding; ${count(outcomes.observed_only)} observed only; ${count(outcomes.unknown)} outcome unknown.</p>`
-    + '<details class="assessment-limits"><summary>Control result limits</summary><p>These counts cover recorded findings, not every request. Observation does not establish delivery. Earlier exposure and external credential revocation are not verified.</p></details>';
+  return html`<p class="body-note">Recorded payload findings: ${count(outcomes.blocked)} blocked before forwarding; ${count(outcomes.observed_only)} observed only; ${count(outcomes.unknown)} outcome unknown.</p>`
+    + html`<details class="assessment-limits"><summary>Control result limits</summary><p>These counts cover recorded findings, not every request. Observation does not establish delivery. Earlier exposure and external credential revocation are not verified.</p></details>`;
 }
 
 // A flag's destinations grouped by organization (or host), in served order.
@@ -1236,23 +1232,22 @@ function factChipsHTML(flag, who) {
   const ex = (flag && flag.explain) || {};
   const chips = [];
   if (who && who !== (flag.agent || 'agent')) {
-    chips.push(`<span class="fact fact-repo"><svg class="icon"><use href="#i-branch"/></svg>${escapeHTML(who)}</span>`);
+    chips.push(html`<span class="fact fact-repo"><svg class="icon"><use href="#i-branch"/></svg>${who}</span>`);
   }
   const s = ex.subject;
   if (s && s.display) {
     const icon = s.category === 'keychain' ? 'i-key' : 'i-doc';
-    const label = escapeHTML(s.display);
     chips.push(String(s.path || '').startsWith('/')
-      ? `<button type="button" class="fact fact-file" data-action="open-file" data-path="${escapeHTML(s.path)}" title="${escapeHTML(s.path)}"><svg class="icon"><use href="#${icon}"/></svg>${label}</button>`
-      : `<span class="fact fact-file"><svg class="icon"><use href="#${icon}"/></svg>${label}</span>`);
+      ? html`<button type="button" class="fact fact-file" data-action="open-file" data-path="${s.path}" title="${s.path}"><svg class="icon"><use href="#${icon}"/></svg>${s.display}</button>`
+      : html`<span class="fact fact-file"><svg class="icon"><use href="#${icon}"/></svg>${s.display}</span>`);
   }
   for (const [org, list] of egressByOrg(flag)) {
     const one = list.length === 1 ? list[0].host : '';
     const text = list.length > 1 ? `${org} · ${list.length} addresses`
       : one.includes(':') ? `${org === one ? 'IPv6' : org} address` : org === one ? one : `${org} · ${one}`;
-    chips.push(`<span class="fact fact-dest" title="${escapeHTML(list.map(e => e.host).join(', '))}"><svg class="icon"><use href="#i-globe"/></svg>${escapeHTML(text)}</span>`);
+    chips.push(html`<span class="fact fact-dest" title="${list.map(e => e.host).join(', ')}"><svg class="icon"><use href="#i-globe"/></svg>${text}</span>`);
   }
-  return chips.length ? `<div class="facts">${chips.join('')}</div>` : '';
+  return chips.length ? html`<div class="facts">${raw(chips.join(''))}</div>` : '';
 }
 
 // Served action ids the console performs; each posts the served
