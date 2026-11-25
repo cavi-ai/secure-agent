@@ -535,9 +535,7 @@ func (ps *ProxyServer) forwardConnectRequest(clientConn net.Conn, req *http.Requ
 	defer ps.releaseConnection(targetConn)
 	targetIO := &idleConn{Conn: targetConn}
 
-	// Tunneled requests keep Connection/Upgrade; only proxy credentials are removed.
-	stripProxyRequestHeaders(req.Header, false)
-	if err := req.Write(targetIO); err != nil {
+	if err := connectRequestForUpstream(req).Write(targetIO); err != nil {
 		return false
 	}
 

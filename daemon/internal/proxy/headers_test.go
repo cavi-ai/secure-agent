@@ -116,18 +116,18 @@ func TestProxyStripsProxyHeadersBeforeForwarding(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	caMgr, err := NewCAManager(filepath.Join(t.TempDir(), "ca.crt"), filepath.Join(t.TempDir(), "ca.key"))
+	ps := NewProxyServer(0, bus.New(100), nil, testProxyEngine(t, "monitor"))
+	proxyServer := httptest.NewServer(ps.server.Handler)
+	defer proxyServer.Close()
+	proxyURL, err := url.Parse(proxyServer.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ps := NewProxyServer(0, bus.New(100), caMgr, testProxyEngine(t, "monitor"))
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = ps.Serve(ctx) }()
-	time.Sleep(100 * time.Millisecond)
-
-	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", ps.Port()))
-	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	client := &http.Client{
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+		Timeout:   2 * time.Second,
+	}
+	defer client.CloseIdleConnections()
 	req, _ := http.NewRequest("GET", backend.URL, nil)
 	req.Header.Set("Proxy-Authorization", "Basic "+tok)
 	req.Header.Set("X-SecureAgent-Proxy-Token", tok)
@@ -159,5 +159,33 @@ func TestProxyStripsProxyHeadersBeforeForwarding(t *testing.T) {
 		if v := h.Get(name); v != want {
 			t.Errorf("upstream %s = %q, want %q", name, v, want)
 		}
+	}
+}
+
+func TestConnectRequestForUpstreamFiltersTrailers(t *testing.T) {
+	wire := "POST /upload HTTP/1.1\r\nHost: example.test\r\n" +
+		"Transfer-Encoding: chunked\r\nTrailer: X-Checksum\r\n\r\n" +
+		"4\r\nbody\r\n0\r\nX-Checksum: verified\r\n\r\n"
+	req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(wire)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer req.Body.Close()
+	req.Trailer.Set("Proxy-Authorization", "fixture")
+	req.Trailer.Set("X-SecureAgent-Proxy-Token", "fixture")
+	out := connectRequestForUpstream(req)
+	if _, ok := out.Trailer["X-Checksum"]; len(out.Trailer) != 1 || !ok {
+		t.Fatal("outbound trailer declarations should keep only the checksum")
+	}
+
+	// Inbound updates must not bypass filtering while the checksum arrives at EOF.
+	req.Trailer.Set("Proxy-Authorization", "late fixture")
+	req.Trailer.Set("X-SecureAgent-Proxy-Token", "late fixture")
+	body, err := io.ReadAll(out.Body)
+	if err != nil || string(body) != "body" {
+		t.Fatalf("forwarded body = %q, error = %v", body, err)
+	}
+	if len(out.Trailer) != 1 || out.Trailer.Get("X-Checksum") != "verified" {
+		t.Fatal("outbound trailers should keep only the completed checksum")
 	}
 }
