@@ -775,34 +775,6 @@ type jsonlLog struct {
 	saveCheckpoint func(root *os.Root, node string, through int) error
 }
 
-// openEnvelopeLog confines file access to the configured storage root and
-// admits only regular logs. Nonblocking open keeps a replaced file from
-// stalling the collector before its type can be checked.
-func openEnvelopeLog(root *os.Root, name string, flags int) (*os.File, error) {
-	f, err := root.OpenFile(name, flags|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	fi, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, err
-	}
-	if !fi.Mode().IsRegular() {
-		f.Close()
-		return nil, fmt.Errorf("envelope log must be a regular file")
-	}
-	return f, nil
-}
-
-// Append writes the envelope as one JSON line to the node's file.
-func (l *jsonlLog) Append(env Envelope, receivedAt string) error {
-	root, err := os.OpenRoot(l.dir)
-	if err != nil {
-		return fmt.Errorf("open log directory: %w", err)
-	}
-	defer root.Close()
-	f, err := openEnvelopeLog(root, sanitize(env.NodeID)+".jsonl", os.O_CREATE|os.O_WRONLY|os.O_APPEND)
 func newJSONLLog(dir string, maxBytes int64, keep int) *jsonlLog {
 	return &jsonlLog{dir: dir, maxBytes: maxBytes, keep: keep}
 }
@@ -901,14 +873,6 @@ func (l *jsonlLog) Append(env Envelope, receivedAt string) error {
 	return err
 }
 
-// Replay feeds every stored envelope to fn in chronological order.
-func (l *jsonlLog) Replay(fn func(env Envelope, receivedAt string)) {
-	root, err := os.OpenRoot(l.dir)
-	if err != nil {
-		return
-	}
-	defer root.Close()
-	entries, err := fs.ReadDir(root.FS(), ".")
 // rotateIfNeeded renames a non-empty live file that cannot take the incoming
 // bytes. With no live file it also resumes interrupted retention.
 func (l *jsonlLog) rotateIfNeeded(root *os.Root, node string, incoming int64) error {
@@ -994,8 +958,6 @@ func (l *jsonlLog) replay(s *Store) error {
 			l.checkpointed[node] = through
 			continue
 		}
-		f, err := openEnvelopeLog(root, e.Name(), os.O_RDONLY)
-		if err != nil {
 		node, seq, rotated, ok := parseLogName(e.Name())
 		if !e.Type().IsRegular() || !ok {
 			continue
@@ -1033,14 +995,6 @@ func (l *jsonlLog) replay(s *Store) error {
 	return nil
 }
 
-// Query replays one node's envelopes from disk, newest first.
-func (l *jsonlLog) Query(nodeID string, kinds map[string]bool, limit int) []envelopeFile {
-	root, err := os.OpenRoot(l.dir)
-	if err != nil {
-		return nil
-	}
-	defer root.Close()
-	f, err := openEnvelopeLog(root, sanitize(nodeID)+".jsonl", os.O_RDONLY)
 // scanLinesForward skips oversized lines without discarding the rest of the
 // segment. It retains at most one bounded record between reads.
 func scanLinesForward(r io.Reader, fn func([]byte)) error {
