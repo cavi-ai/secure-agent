@@ -70,6 +70,10 @@ reviewed confirmation; traffic routing does not transparently protect them.
 
 With file telemetry enabled, three rules flag changes that outlast a session. They observe and do not block. `launch-item-change`: an agent adds or removes a background item, or writes the launch agent or daemon plist macOS registers. `trust-change`: an agent installs a configuration profile or overrides Gatekeeper, or you do so within 24 hours for an app, package or profile file an agent wrote. `xprotect-detection`: every XProtect malware detection. See the [correlation rules](ARCHITECTURE.md#correlation-engine-daemoninternalcorrelatecorrelatego).
 
+## Monitor stops
+
+The daemon records how each run ended. Quitting the app and `secure-agent stop` record an owner stop. At the next start, a run since the last boot that ended any other way (a signal with no stop intent, the owning app's exit, a control API or start failure, or no ending recorded) raises the severity-3 finding `monitor-stopped`, which names the pid, how the run ended and its times. Directory Guard denies agent commands that stop Secure Agent's processes or services (rule `guard-control-stop`).
+
 ## Review recurring connections
 
 The console's **Protection → Traffic** view groups observed outbound connections by agent activity and destination. A recurring connection from a known agent appears for review when no saved expectation covers it. These observations contain connection metadata; they do not establish what a request contained or whether a destination is safe. Any advisor explanation is labeled as an inference.
