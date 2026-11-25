@@ -15,9 +15,9 @@ function sessionEmptyHTML(groups, filter) {
     .some(session => session.status === 'ended' && !visible.has(session.id));
   const message = filter.liveOnly ? (filtered ? 'No live sessions match these filters.' : 'No live sessions.')
     : filtered ? 'No sessions match these filters.' : 'All quiet. Nothing is running.';
-  return `<div class="empty session-empty"><svg class="icon"><use href="#i-agent"/></svg><div><span>${message}</span>
-    ${hiddenEnded ? '<p>Matching ended sessions are available.</p><button type="button" class="btn btn-sm" data-action="show-ended-sessions">Show ended sessions</button>' : ''}
-    ${filtered ? '<button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button>' : ''}</div></div>`;
+  return html`<div class="empty session-empty"><svg class="icon"><use href="#i-agent"/></svg><div><span>${message}</span>
+    ${raw(hiddenEnded ? '<p>Matching ended sessions are available.</p><button type="button" class="btn btn-sm" data-action="show-ended-sessions">Show ended sessions</button>' : '')}
+    ${raw(filtered ? '<button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button>' : '')}</div></div>`;
 }
 
 function sessionEmptyDetailHTML(emptyHTML) {
@@ -39,20 +39,20 @@ function liveTreeFor(s, trees) {
 function sessionRailCardHTML(s, trees, selectedId, nested, label, workspaceView = false) {
   const tree = liveTreeFor(s, trees);
   const status = s.status || 'active';
-  const pulse = `<span class="sc-pulse ${escapeHTML(status)}" aria-hidden="true"></span>`;
+  const pulse = html`<span class="sc-pulse ${status}" aria-hidden="true"></span>`;
   const seen = s.last_seen_at ? fmtAge(s.last_seen_at, Date.now()) + ' ago' : '';
   const selected = s.id === selectedId;
   const identity = sessionTitle(s, tree && tree.root.cwd);
   const title = label || (workspaceView ? s.branch || 'Branch not recorded' : s.repo || cwdLabel(s.workspace) || cwdLabel(tree && tree.root.cwd) || sessionShort(s.id));
   const secondary = workspaceView ? harnessMeta(s.harness).label : label ? originAgent(s) : [s.branch, originAgent(s)].filter(Boolean).join(' · ');
   const kill = selected && tree && status !== 'ended'
-    ? `<details class="sc-actions"><summary aria-label="Actions for ${escapeHTML(identity)}">Actions</summary><div><button type="button" class="btn btn-danger btn-sm sc-kill" data-action="kill" data-pid="${escapeHTML(tree.root.pid)}" data-started="${escapeHTML(tree.root.started_at || '')}" data-family="${escapeHTML(s.harness || '')}">Terminate session</button></div></details>`
+    ? html`<details class="sc-actions"><summary aria-label="Actions for ${identity}">Actions</summary><div><button type="button" class="btn btn-danger btn-sm sc-kill" data-action="kill" data-pid="${tree.root.pid}" data-started="${tree.root.started_at || ''}" data-family="${s.harness || ''}">Terminate session</button></div></details>`
     : '';
-  return `<div class="session-card ${escapeHTML(status)}${selected ? ' selected' : ''}${nested ? ' nested' : ''}">
-    <button type="button" class="sc-main" data-action="select-session" data-id="${escapeHTML(s.id)}" aria-pressed="${selected}" title="${escapeHTML(identity)}" aria-label="${escapeHTML(label ? identity + ', ' + title : identity)}">
-      ${pulse}<span class="sc-identity"><span class="sc-label">${escapeHTML(title)}</span>${secondary ? `<span class="sc-branch">${escapeHTML(secondary)}</span>` : ''}</span>
-      <span class="sc-meta"><span class="sr-only">${escapeHTML(status)}</span>${seen ? `<span>${escapeHTML(seen)}</span>` : ''}</span>
-    </button>${kill}
+  return html`<div class="session-card ${status}${selected ? ' selected' : ''}${nested ? ' nested' : ''}">
+    <button type="button" class="sc-main" data-action="select-session" data-id="${s.id}" aria-pressed="${selected}" title="${identity}" aria-label="${label ? identity + ', ' + title : identity}">
+      ${raw(pulse)}<span class="sc-identity"><span class="sc-label">${title}</span>${secondary ? raw(html`<span class="sc-branch">${secondary}</span>`) : ''}</span>
+      <span class="sc-meta"><span class="sr-only">${status}</span>${seen ? raw(html`<span>${seen}</span>`) : ''}</span>
+    </button>${raw(kill)}
   </div>`;
 }
 
@@ -81,14 +81,14 @@ function sessionNavigationCounts(g) {
 // syncSessionGroupShell keeps the counts current on a kept shell.
 function sessionGroupHTML(g, open, endedOpen) {
   const ended = g.ended.length
-    ? `<div class="session-ended${endedOpen ? ' open' : ''}">
-        <button type="button" class="session-ended-toggle" data-action="toggle-ended-sessions" data-harness="${escapeHTML(g.key)}" aria-expanded="${endedOpen}">Ended (${familySize(g.ended)}) <svg class="icon"><use href="#i-arrow"/></svg></button>
+    ? html`<div class="session-ended${endedOpen ? ' open' : ''}">
+        <button type="button" class="session-ended-toggle" data-action="toggle-ended-sessions" data-harness="${g.key}" aria-expanded="${endedOpen}">Ended (${familySize(g.ended)}) <svg class="icon"><use href="#i-arrow"/></svg></button>
         <div class="session-ended-body"></div>
       </div>`
     : '';
-  return `<details class="session-group" data-harness="${escapeHTML(g.key)}"${open ? ' open' : ''}>
-    <summary class="session-group-head">${g.workspaceView ? `<svg class="icon session-workspace-icon" aria-hidden="true"><use href="#i-folder"/></svg><span class="session-workspace-name" title="${escapeHTML(g.workspace || '')}">${escapeHTML(g.label)}</span>` : harnessChipHTML(g.key, { label: true })}<span class="session-group-counts">${escapeHTML(sessionNavigationCounts(g))}</span><svg class="icon session-group-disclosure" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
-    <div class="session-group-body"><div class="session-rows"></div>${ended}</div>
+  return html`<details class="session-group" data-harness="${g.key}"${raw(open ? ' open' : '')}>
+    <summary class="session-group-head">${raw(g.workspaceView ? html`<svg class="icon session-workspace-icon" aria-hidden="true"><use href="#i-folder"/></svg><span class="session-workspace-name" title="${g.workspace || ''}">${g.label}</span>` : harnessChipHTML(g.key, { label: true }))}<span class="session-group-counts">${sessionNavigationCounts(g)}</span><svg class="icon session-group-disclosure" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+    <div class="session-group-body"><div class="session-rows"></div>${raw(ended)}</div>
   </details>`;
 }
 
@@ -123,7 +123,7 @@ function sessionRailRows(fams, harness, trees, selectedId, dupOpen, bucket, work
       const f = r.family;
       const cards = sessionRailCardHTML(f.session, trees, selectedId, false)
         + f.children.map(c => sessionRailCardHTML(c, trees, selectedId, true)).join('');
-      return { key: r.key, html: f.children.length ? `<div class="session-family">${cards}</div>` : cards };
+      return { key: r.key, html: f.children.length ? html`<div class="session-family">${raw(cards)}</div>` : cards };
     }
     const state = bucket ? `${bucket}|${r.key}` : r.key;
     const set = dupOpen && Object.prototype.hasOwnProperty.call(dupOpen, state);
@@ -136,26 +136,26 @@ function sessionRailRows(fams, harness, trees, selectedId, dupOpen, bucket, work
 // lists each member by start time (HH:MM) and status, selectable as a card.
 function sessionDupRowHTML(r, trees, selectedId, open, bucket) {
   const status = r.status;
-  const pulse = `<span class="sc-pulse ${escapeHTML(status)}" aria-hidden="true"></span>`;
+  const pulse = html`<span class="sc-pulse ${status}" aria-hidden="true"></span>`;
   const first = r.sessions[0] || {};
   const title = first.repo || cwdLabel(first.workspace) || r.title;
   const secondary = [first.branch, originAgent(first)].filter(Boolean).join(' · ');
   const members = open
-    ? `<div class="session-dup-body">${r.sessions.map(s => sessionRailCardHTML(s, trees, selectedId, true, fmtHHMM(s.started_at) || sessionShort(s.id))).join('')}</div>`
+    ? html`<div class="session-dup-body">${r.sessions.map(s => raw(sessionRailCardHTML(s, trees, selectedId, true, fmtHHMM(s.started_at) || sessionShort(s.id))))}</div>`
     : '';
-  return `<div class="session-dup ${escapeHTML(status)}${open ? ' open' : ''}">
-    <button type="button" class="session-dup-toggle" data-action="toggle-session-dup" data-key="${escapeHTML(r.key)}" aria-expanded="${open}"${bucket ? ` data-bucket="${escapeHTML(bucket)}"` : ''}>
-      <span class="sc-head">${pulse}<span class="sc-label" title="${escapeHTML(r.title)}">${escapeHTML(title)}</span><span class="session-dup-count">×${r.sessions.length}</span><svg class="icon"><use href="#i-arrow"/></svg></span>
-      <span class="sc-meta"><span class="sc-branch">${escapeHTML(secondary || status)}</span></span>
-    </button>${members}
+  return html`<div class="session-dup ${status}${open ? ' open' : ''}">
+    <button type="button" class="session-dup-toggle" data-action="toggle-session-dup" data-key="${r.key}" aria-expanded="${open}"${bucket ? raw(html` data-bucket="${bucket}"`) : ''}>
+      <span class="sc-head">${raw(pulse)}<span class="sc-label" title="${r.title}">${title}</span><span class="session-dup-count">×${r.sessions.length}</span><svg class="icon"><use href="#i-arrow"/></svg></span>
+      <span class="sc-meta"><span class="sc-branch">${secondary || status}</span></span>
+    </button>${raw(members)}
   </div>`;
 }
 
 // The trailing infra group: IDEs and model servers, RSS totals only.
 function sessionInfraGroupHTML(g, open) {
-  const rows = g.items.map(it => `<div class="infra-row">${harnessChipHTML(it.key, { label: true })}<span class="agent-meta-item">${escapeHTML(fmtRSS(it.rss) || '—')}</span></div>`).join('');
-  return `<details class="session-group infra" data-harness="infra"${open ? ' open' : ''}>
-    <summary class="session-group-head"><span class="session-group-title">Infrastructure</span><span class="session-group-counts">${escapeHTML(fmtRSS(g.rss) || '—')}</span><svg class="icon session-group-disclosure" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+  const rows = g.items.map(it => raw(html`<div class="infra-row">${raw(harnessChipHTML(it.key, { label: true }))}<span class="agent-meta-item">${fmtRSS(it.rss) || '—'}</span></div>`));
+  return html`<details class="session-group infra" data-harness="infra"${raw(open ? ' open' : '')}>
+    <summary class="session-group-head"><span class="session-group-title">Infrastructure</span><span class="session-group-counts">${fmtRSS(g.rss) || '—'}</span><svg class="icon session-group-disclosure" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
     <div class="session-group-body">${rows}</div>
   </details>`;
 }
@@ -176,30 +176,30 @@ function sessionMemoryHTML(page, state) {
     const day = validTime ? `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` : 'Date unavailable';
     const time = validTime ? fmtTime(date) : 'Time unavailable';
     const fullTime = validTime ? `${day} ${time}` : time;
-    const dayHTML = day !== lastDay ? `<div class="sm-day">${escapeHTML(day)}</div>` : '';
+    const dayHTML = day !== lastDay ? html`<div class="sm-day">${day}</div>` : '';
     lastDay = day;
-    const severity = row.severity ? `<span class="sm-chip">${escapeHTML(row.severity)}</span>` : '';
-    const status = row.status ? `<span class="sm-chip">${escapeHTML(row.status)}</span>` : '';
+    const severity = row.severity ? html`<span class="sm-chip">${row.severity}</span>` : '';
+    const status = row.status ? html`<span class="sm-chip">${row.status}</span>` : '';
     const sourceID = typeof row.source_id === 'string' && /^[a-zA-Z0-9_.:-]{1,128}$/.test(row.source_id) ? row.source_id : '';
     const action = row.kind === 'flag' ? 'open-flag' : row.kind === 'incident' ? 'open-incident' : '';
     const label = row.kind === 'flag' ? 'View finding evidence' : 'View incident report';
     const title = sourceID && action
-      ? `<button type="button" class="link-btn sm-source-link" data-action="${action}" data-id="${escapeHTML(sourceID)}" aria-label="${label}: ${escapeHTML(row.title)}" title="${label}">${escapeHTML(row.title)}</button>`
-      : escapeHTML(row.title);
-    return `${dayHTML}<article class="sm-row" data-row-id="${escapeHTML(row.id || '')}">
-      <div class="sm-marker"><time datetime="${escapeHTML(row.at)}" title="${escapeHTML(fullTime)}" aria-label="${escapeHTML(fullTime)}">${escapeHTML(time)}</time><span class="sm-source">${source}</span></div>
-      <div class="sm-content"><strong>${title}</strong>${row.detail ? `<p>${escapeHTML(row.detail)}</p>` : ''}<div class="sm-chips">${severity}${status}</div></div>
-    </article>`;
-  }).join('');
+      ? html`<button type="button" class="link-btn sm-source-link" data-action="${action}" data-id="${sourceID}" aria-label="${label}: ${row.title}" title="${label}">${row.title}</button>`
+      : html`${row.title}`;
+    return raw(html`${raw(dayHTML)}<article class="sm-row" data-row-id="${row.id || ''}">
+      <div class="sm-marker"><time datetime="${row.at}" title="${fullTime}" aria-label="${fullTime}">${time}</time><span class="sm-source">${source}</span></div>
+      <div class="sm-content"><strong>${raw(title)}</strong>${row.detail ? raw(html`<p>${row.detail}</p>`) : ''}<div class="sm-chips">${raw(severity)}${raw(status)}</div></div>
+    </article>`);
+  });
   const earlier = page && page.has_earlier && page.next_cursor
-    ? `<button type="button" class="btn btn-sm btn-ghost sm-earlier" data-action="memory-earlier"${state && state.loadingEarlier ? ' disabled' : ''}>${state && state.loadingEarlier ? 'Loading earlier…' : 'Load earlier'}</button>` : '';
+    ? html`<button type="button" class="btn btn-sm btn-ghost sm-earlier" data-action="memory-earlier"${raw(state && state.loadingEarlier ? ' disabled' : '')}>${state && state.loadingEarlier ? 'Loading earlier…' : 'Load earlier'}</button>` : '';
   const message = error && !rows.length ? '<div class="sm-state" role="alert">Memory unavailable. <button type="button" class="link-btn" data-action="memory-retry">Retry</button></div>'
     : error && state.error === 'earlier' && page && page.has_earlier && page.next_cursor
       ? '<div class="sm-state" role="alert">Could not load earlier. Use Load earlier to retry.</div>'
-    : error ? `<div class="sm-state" role="alert">${state.error === 'earlier' ? 'Could not load earlier.' : 'Could not refresh memory.'} <button type="button" class="link-btn" data-action="memory-retry">Retry</button></div>`
+    : error ? html`<div class="sm-state" role="alert">${state.error === 'earlier' ? 'Could not load earlier.' : 'Could not refresh memory.'} <button type="button" class="link-btn" data-action="memory-retry">Retry</button></div>`
     : loading && !rows.length ? '<div class="sm-state" role="status">Loading memory…</div>'
     : !rows.length ? '<div class="sm-state">No retained memory for this session. Older activity may have expired.</div>' : '';
-  return `<div class="session-memory">${earlier}${message}<div class="sm-list">${rowHTML}</div></div>`;
+  return html`<div class="session-memory">${raw(earlier)}${raw(message)}<div class="sm-list">${rowHTML}</div></div>`;
 }
 
 // The selected session's head and detail: mark, repo@branch, harness name,
@@ -216,11 +216,11 @@ function validSessionTrace(rows, id) {
 
 function sessionTraceHTML(events, state) {
   const loaded = state?.loaded || events.length > 0;
-  const retry = `<button type="button" class="link-btn" data-action="trace-retry"${state?.loading ? ' disabled' : ''}>Retry trace</button>`;
-  const message = state?.error ? `Trace unavailable.${loaded ? ' Showing the last successfully loaded history; it may be out of date.' : ''} ${retry}`
+  const retry = html`<button type="button" class="link-btn" data-action="trace-retry"${raw(state?.loading ? ' disabled' : '')}>Retry trace</button>`;
+  const message = state?.error ? html`Trace unavailable.${loaded ? ' Showing the last successfully loaded history; it may be out of date.' : ''} ${raw(retry)}`
     : state?.loading && !loaded ? 'Loading trace…' : '';
   const text = message || (!loaded ? 'Loading trace…' : '');
-  const notice = `<div class="sm-state" data-session-part="trace-health" role="status"${text ? '' : ' hidden'}>${text}</div>`;
+  const notice = html`<div class="sm-state" data-session-part="trace-health" role="status"${raw(text ? '' : ' hidden')}>${raw(text)}</div>`;
   if (!loaded) return notice;
   const limit = events.length === 500 ? '<p class="sm-state" data-session-part="trace-limit">This view contains the latest 500 retained event records; earlier history may be omitted. Use View session events to browse retained records.</p>' : '';
   return notice + limit + sessionWaterfallHTML(events);
@@ -797,36 +797,36 @@ function sessionCoverageGuideHTML(session, key, path) {
 
 function sessionOverviewHTML(data, state, contextHTML = '') {
   state = state || {};
-  const retry = `<button type="button" class="link-btn" data-action="session-overview-retry"${state.loading ? ' disabled' : ''}>${state.loading ? 'Retrying current status…' : 'Retry current status'}</button>`;
-  const status = !data ? state.loading && !state.error ? 'Loading current session status…' : `Current session status unavailable. ${retry}`
-    : state.error ? `Last known session status. Refresh failed; requests and measurements may have changed. ${retry}` : '';
-  const head = `<div class="sd-current-head" data-session-part="current-head"><h4 tabindex="-1">Current session status</h4>${status ? `<p class="sd-current-status" role="status">${status}</p>` : ''}</div>` + contextHTML;
+  const retry = html`<button type="button" class="link-btn" data-action="session-overview-retry"${raw(state.loading ? ' disabled' : '')}>${state.loading ? 'Retrying current status…' : 'Retry current status'}</button>`;
+  const status = !data ? state.loading && !state.error ? 'Loading current session status…' : html`Current session status unavailable. ${raw(retry)}`
+    : state.error ? html`Last known session status. Refresh failed; requests and measurements may have changed. ${raw(retry)}` : '';
+  const head = html`<div class="sd-current-head" data-session-part="current-head"><h4 tabindex="-1">Current session status</h4>${status ? raw(html`<p class="sd-current-status" role="status">${raw(status)}</p>`) : ''}</div>` + contextHTML;
   if (!data) return head;
-  const disabled = state.error ? ' disabled' : '';
+  const disabled = raw(state.error ? ' disabled' : '');
   const requests = (data.requests || []).map(r => {
     const actions = needView({ ...r, kind: 'guard' }, { SA: window.SA }).items;
-    return `<fieldset class="sd-request" data-session-part="request:${escapeHTML(r.id)}"${disabled}>
-      <legend>Access request</legend><p>${escapeHTML(r.detail || r.title || 'Waiting for a decision')}</p>
-      <p class="sd-context-limit">${escapeHTML(r.scopeText || 'This request does not grant future access.')}</p>${actionBarHTML(actions)}
+    return html`<fieldset class="sd-request" data-session-part="request:${r.id}"${disabled}>
+      <legend>Access request</legend><p>${r.detail || r.title || 'Waiting for a decision'}</p>
+      <p class="sd-context-limit">${r.scopeText || 'This request does not grant future access.'}</p>${raw(actionBarHTML(actions))}
     </fieldset>`;
   }).join('');
   const paths = sessionCoverageHTML(data, state);
   const resources = data.resources;
   const control = resources && resources.control;
-  const impact = resources ? `<p>${escapeHTML(fmtRSS(resources.rss_bytes) || '—')} memory · ${escapeHTML(fmtCPU(resources.cpu_percent) || '—')} CPU · ${Number(resources.process_count) || 0} processes</p>
-    ${control ? `<p>Control: ${escapeHTML(control.state || 'unknown')}${control.last_error ? ` · ${escapeHTML(control.last_error)}` : ''}</p>` : ''}
-    ${(resources.diagnoses || []).map(d => `<p>${escapeHTML(d.summary || '')}</p>`).join('')}
-    <button type="button" class="link-btn" data-action="view-family" data-key="${escapeHTML(resources.key)}">Inspect session resources</button>`
+  const impact = resources ? html`<p>${fmtRSS(resources.rss_bytes) || '—'} memory · ${fmtCPU(resources.cpu_percent) || '—'} CPU · ${Number(resources.process_count) || 0} processes</p>
+    ${control ? raw(html`<p>Control: ${control.state || 'unknown'}${control.last_error ? ` · ${control.last_error}` : ''}</p>`) : ''}
+    ${(resources.diagnoses || []).map(d => raw(html`<p>${d.summary || ''}</p>`))}
+    <button type="button" class="link-btn" data-action="view-family" data-key="${resources.key}">Inspect session resources</button>`
     : '<p>No live resource family is attributed to this session.</p>';
-  const findings = (data.findings || []).map(f => `<article class="sd-finding" data-session-part="finding:${escapeHTML(f.id)}"><h5>${escapeHTML(f.title || 'Finding')}</h5><p>Risk: ${escapeHTML((f.assessment || {}).risk || 'unknown')} · ${escapeHTML((f.assessment || {}).reason || 'Evidence interpretation unavailable')}</p>${assessmentHTML(f.assessment)}
-    <button type="button" class="link-btn" data-action="open-flag" data-id="${escapeHTML(f.id)}">View evidence</button></article>`).join('');
+  const findings = (data.findings || []).map(f => html`<article class="sd-finding" data-session-part="finding:${f.id}"><h5>${f.title || 'Finding'}</h5><p>Risk: ${(f.assessment || {}).risk || 'unknown'} · ${(f.assessment || {}).reason || 'Evidence interpretation unavailable'}</p>${raw(assessmentHTML(f.assessment))}
+    <button type="button" class="link-btn" data-action="open-flag" data-id="${f.id}">View evidence</button></article>`).join('');
   return head + requests
     + sessionHookHealthHTML(data.hook_health, state, data.session_id)
     + hookIngestionHTML(data.hook_ingestion, state)
-    + `<section class="sd-coverage" data-session-part="coverage" aria-label="Observed session coverage">${paths}</section>`
-    + `<fieldset class="sd-impact" data-session-part="impact"${disabled}><legend>Machine impact</legend>${impact}</fieldset>`
-    + `<div class="sd-findings-head" data-session-part="findings-head"><h4>Retained findings</h4><p>${data.findings_truncated ? 'More findings exist than the 20 most recent shown here.' : (data.findings || []).length ? 'Review and remaining risk are shown separately.' : 'No retained findings are attributed to this session. This is not a safety verdict.'}
-      <button type="button" class="link-btn" data-action="session-findings" data-id="${escapeHTML(data.session_id)}">View session findings history</button></p></div>` + findings;
+    + html`<section class="sd-coverage" data-session-part="coverage" aria-label="Observed session coverage">${raw(paths)}</section>`
+    + html`<fieldset class="sd-impact" data-session-part="impact"${disabled}><legend>Machine impact</legend>${raw(impact)}</fieldset>`
+    + html`<div class="sd-findings-head" data-session-part="findings-head"><h4>Retained findings</h4><p>${data.findings_truncated ? 'More findings exist than the 20 most recent shown here.' : (data.findings || []).length ? 'Review and remaining risk are shown separately.' : 'No retained findings are attributed to this session. This is not a safety verdict.'}
+      <button type="button" class="link-btn" data-action="session-findings" data-id="${data.session_id}">View session findings history</button></p></div>` + findings;
 }
 
 // Reconcile each request/finding independently. A new finding must not replace
@@ -933,15 +933,15 @@ function sessionFollowUpHTML(data, state = {}) {
   const reportedIDs = canonicalIDs('reported_actions', 'incidents', row => JSON.stringify([row.incident_id, row.step_id]));
   const evidenceRows = h.reviews.filter(r => evidenceIDs ? evidenceIDs.has(r.id) : r.decision && Number.isInteger(r.revision) && r.revision > r.decision.revision).map(r => {
     const link = current('reviews') && r.evidence_available && r.evidence_flag_available && r.evidence_flag_id
-      ? `<button type="button" class="link-btn" data-action="open-flag" data-id="${escapeHTML(r.evidence_flag_id)}">Review newer evidence</button>` : `<p>${stale ? 'Refresh results before reviewing newer evidence.' : 'Source evidence unavailable. Refresh results before reviewing.'}</p>`;
-    return `<li data-row-id="follow-up:review:${escapeHTML(r.id)}"><strong>${escapeHTML(r.context?.rule || 'Finding review')}</strong><p>Decision for revision ${Number(r.decision.revision)} · now revision ${Number(r.revision)}. The saved decision does not cover this evidence.</p>${link}</li>`;
+      ? html`<button type="button" class="link-btn" data-action="open-flag" data-id="${r.evidence_flag_id}">Review newer evidence</button>` : html`<p>${stale ? 'Refresh results before reviewing newer evidence.' : 'Source evidence unavailable. Refresh results before reviewing.'}</p>`;
+    return html`<li data-row-id="follow-up:review:${r.id}"><strong>${r.context?.rule || 'Finding review'}</strong><p>Decision for revision ${Number(r.decision.revision)} · now revision ${Number(r.revision)}. The saved decision does not cover this evidence.</p>${raw(link)}</li>`;
   });
   const actionRows = h.interventions.filter(r => processIDs ? processIDs.has(r.id) : r.status !== 'cancelled' && !(r.status === 'applied' && (r.verification === 'observed' || (r.verification === 'verified' && r.verified_by === 'captured-family-absent')))).map(r =>
-    `<li data-row-id="follow-up:control:${escapeHTML(r.id)}" data-follow-up-id="${escapeHTML(r.id)}"><strong>Check process result</strong>${resourceOutcomeHTML(r)}<p>Inspect the recorded result before deciding whether another action is needed.</p></li>`);
+    html`<li data-row-id="follow-up:control:${r.id}" data-follow-up-id="${r.id}"><strong>Check process result</strong>${raw(resourceOutcomeHTML(r))}<p>Inspect the recorded result before deciding whether another action is needed.</p></li>`);
   for (const inc of h.incidents) {
     for (const step of inc.remediation?.steps || []) {
       if (reportedIDs ? !reportedIDs.has(JSON.stringify([inc.id, step.id])) : step.status !== 'reported') continue;
-      actionRows.push(`<li data-row-id="follow-up:incident:${escapeHTML(inc.id)}:${escapeHTML(step.id)}"><strong>${escapeHTML(step.item.name)} · ${escapeHTML(step.item.action)}</strong><p>Action reported, not technically verified.${step.newer_evidence ? ' Newer evidence exists; this report does not cover it.' : ''}</p>${current('incidents') ? `<button type="button" class="link-btn" data-action="open-incident" data-id="${escapeHTML(inc.id)}">Review incident report</button>` : ''}</li>`);
+      actionRows.push(html`<li data-row-id="follow-up:incident:${inc.id}:${step.id}"><strong>${step.item.name} · ${step.item.action}</strong><p>Action reported, not technically verified.${step.newer_evidence ? ' Newer evidence exists; this report does not cover it.' : ''}</p>${current('incidents') ? raw(html`<button type="button" class="link-btn" data-action="open-incident" data-id="${inc.id}">Review incident report</button>`) : ''}</li>`);
     }
   }
   const permissions = state.permissions;
@@ -949,55 +949,55 @@ function sessionFollowUpHTML(data, state = {}) {
   const permissionRows = sessionOutcomePermissionLinks(data).map(link => {
     const rows = link.ids.map(id => {
       const r = records?.get(id);
-      return r ? `<li><strong>${escapeHTML(decisionScopeApplicability(r).label)}</strong> · <code>${escapeHTML(r.resource_path)}</code>${r.expires_at ? `<p>Expires ${localTimestampHTML(r.expires_at)}</p>` : ''}${r.revoked_at ? `<p>Revoked ${localTimestampHTML(r.revoked_at)}</p>` : ''}</li>` : '<li>Current status unknown. The record is missing or unavailable; expiry or revocation cannot be established.</li>';
-    }).join('');
-    const action = !state.error ? `<button type="button" class="link-btn" data-action="${link.kind === 'guard' ? 'session-guard-permissions' : 'session-permissions'}" ${link.kind === 'guard' ? 'data-id' : 'data-review'}="${escapeHTML(link.id)}" data-session="${escapeHTML(data.session_id)}">Inspect permissions</button>` : '';
-    return `<li data-row-id="follow-up:permission:${link.kind}:${escapeHTML(link.id)}"><strong>${escapeHTML(link.title)}</strong><ul>${rows}</ul>${action}</li>`;
+      return raw(r ? html`<li><strong>${decisionScopeApplicability(r).label}</strong> · <code>${r.resource_path}</code>${r.expires_at ? raw(html`<p>Expires ${raw(localTimestampHTML(r.expires_at))}</p>`) : ''}${r.revoked_at ? raw(html`<p>Revoked ${raw(localTimestampHTML(r.revoked_at))}</p>`) : ''}</li>` : '<li>Current status unknown. The record is missing or unavailable; expiry or revocation cannot be established.</li>');
+    });
+    const action = !state.error ? html`<button type="button" class="link-btn" data-action="${link.kind === 'guard' ? 'session-guard-permissions' : 'session-permissions'}" ${raw(link.kind === 'guard' ? 'data-id' : 'data-review')}="${link.id}" data-session="${data.session_id}">Inspect permissions</button>` : '';
+    return html`<li data-row-id="follow-up:permission:${link.kind}:${link.id}"><strong>${link.title}</strong><ul>${rows}</ul>${raw(action)}</li>`;
   });
-  const group = (key, title, rows) => rows.length ? `<div data-row-id="follow-up:group:${key}"><details data-session-details data-follow-up-group="${key}"><summary>${title}<span>${rows.length}</span></summary><ul>${rows.join('')}</ul></details></div>` : '';
+  const group = (key, title, rows) => rows.length ? html`<div data-row-id="follow-up:group:${key}"><details data-session-details data-follow-up-group="${key}"><summary>${title}<span>${rows.length}</span></summary><ul>${raw(rows.join(''))}</ul></details></div>` : '';
   const partial = ['reviews', 'interventions', 'incidents', 'guards'].some(key => !h.evidence[key]?.available || h.evidence[key]?.at_limit);
   const count = evidenceRows.length + actionRows.length + permissionRows.length;
-  return `<section class="sd-follow-up" data-session-part="follow-up" aria-label="Session follow-up">
-    <div class="sd-follow-up-head"><h4>Needs follow-up</h4><button type="button" class="link-btn" data-action="session-outcomes-retry"${state.loading ? ' disabled' : ''}>${state.loading ? 'Refreshing…' : 'Refresh results'}</button></div>
-    ${stale ? `<p role="status">${state.loading ? 'Refreshing follow-up' : 'Last known follow-up'}. Refresh must succeed before relying on these records.</p>` : data.observed_at ? `<p>Results read at ${localTimestampHTML(data.observed_at)}</p>` : ''}
-    ${partial ? '<p>Follow-up uses missing or bounded history. Other work may be absent.</p>' : ''}
-    ${!count ? '<p>No follow-up identified in the loaded records. This is not a safety verdict.</p>' : ''}
-    ${group('evidence', 'New evidence', evidenceRows)}${group('actions', 'Actions to check', actionRows)}${group('permissions', 'Permissions from decisions', permissionRows)}
-    ${permissionRows.length ? `<p>${permissions?.loading ? 'Loading permission status…' : records ? `Permissions read at ${localTimestampHTML(permissions.readAt)}. Applicability can change; inspect before relying on access.` : 'Permission status unavailable. Inspect permissions to retry the current scope and expiry.'}</p>` : ''}
+  return html`<section class="sd-follow-up" data-session-part="follow-up" aria-label="Session follow-up">
+    <div class="sd-follow-up-head"><h4>Needs follow-up</h4><button type="button" class="link-btn" data-action="session-outcomes-retry"${raw(state.loading ? ' disabled' : '')}>${state.loading ? 'Refreshing…' : 'Refresh results'}</button></div>
+    ${raw(stale ? html`<p role="status">${state.loading ? 'Refreshing follow-up' : 'Last known follow-up'}. Refresh must succeed before relying on these records.</p>` : data.observed_at ? html`<p>Results read at ${raw(localTimestampHTML(data.observed_at))}</p>` : '')}
+    ${raw(partial ? '<p>Follow-up uses missing or bounded history. Other work may be absent.</p>' : '')}
+    ${raw(!count ? '<p>No follow-up identified in the loaded records. This is not a safety verdict.</p>' : '')}
+    ${raw(group('evidence', 'New evidence', evidenceRows))}${raw(group('actions', 'Actions to check', actionRows))}${raw(group('permissions', 'Permissions from decisions', permissionRows))}
+    ${permissionRows.length ? raw(html`<p>${permissions?.loading ? 'Loading permission status…' : records ? raw(html`Permissions read at ${raw(localTimestampHTML(permissions.readAt))}. Applicability can change; inspect before relying on access.`) : 'Permission status unavailable. Inspect permissions to retry the current scope and expiry.'}</p>`) : ''}
   </section>`;
 }
 
 function sessionOutcomesHTML(data, state) {
   state = state || {};
   const retry = '<button type="button" class="link-btn" data-action="session-outcomes-retry">Retry results</button>';
-  const notice = state.error ? `Last known results. Refresh failed; later decisions or observations may be missing. ${retry}`
-    : !data ? state.loading ? 'Loading decisions and results…' : `Results unavailable. ${retry}` : '';
-  const head = `<header data-session-part="outcomes-head"><h4>Decisions and results</h4><p>Saved decisions and action receipts. They do not prove task completion or tool access. Review payload outcomes in Evidence.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
+  const notice = state.error ? html`Last known results. Refresh failed; later decisions or observations may be missing. ${raw(retry)}`
+    : !data ? state.loading ? 'Loading decisions and results…' : html`Results unavailable. ${raw(retry)}` : '';
+  const head = html`<header data-session-part="outcomes-head"><h4>Decisions and results</h4><p>Saved decisions and action receipts. They do not prove task completion or tool access. Review payload outcomes in Evidence.</p>${notice ? raw(html`<p role="status">${raw(notice)}</p>`) : ''}</header>`;
   if (!data) return head;
   const h = data.history;
   const limits = [['reviews', 'Review decisions'], ['interventions', 'Process results'], ['incidents', 'Incident reports'], ['guards','Guard decisions']].map(([key, label]) => {
     const source = h.evidence[key];
     if(!source) return key === 'guards' ? '<p>Guard decision history unavailable from this daemon.</p>' : '';
-    return !source.available ? `<p role="status">${label} unavailable.${h[key].length ? ' Showing last known receipts; later changes may be missing.' : ''}</p>`
-      : source.at_limit ? `<p>${label}: bounded to ${Number(source.limit) || 0} retained records; earlier history may be omitted.</p>` : '';
+    return !source.available ? html`<p role="status">${label} unavailable.${h[key].length ? ' Showing last known receipts; later changes may be missing.' : ''}</p>`
+      : source.at_limit ? html`<p>${label}: bounded to ${Number(source.limit) || 0} retained records; earlier history may be omitted.</p>` : '';
   }).join('');
   const rows = [];
   for(const g of h.guards || []) {
     const linked = Array.isArray(g.scope_ids) && g.scope_ids.length && g.verdict === 'allow' && ['session','exact'].includes(g.scope);
-    const permission = linked ? `<button type="button" class="link-btn" data-action="session-guard-permissions" data-id="${escapeHTML(g.id)}" data-session="${escapeHTML(data.session_id || '')}">View permissions</button>`
+    const permission = linked ? html`<button type="button" class="link-btn" data-action="session-guard-permissions" data-id="${g.id}" data-session="${data.session_id || ''}">View permissions</button>`
       : ['always','scoped','session','exact'].includes(g.scope) ? '<p>Permission linkage unavailable. Inspect Rules &amp; permissions; this record does not establish current access.</p>' : '<p>No future permission IDs recorded with this outcome. Other permissions may still apply.</p>';
-    rows.push({key:'guard:'+g.id,at:g.at,title:g.verdict === 'allow' ? 'Guard allowed' : 'Guard denied',html:`<p>${escapeHTML(g.rule_id)} · ${escapeHTML(g.scope)}${g.reason ? ` · ${escapeHTML(g.reason)}` : ''}</p><p>Recorded request outcome; tool receipt and completed access are not verified.</p>${permission}`});
+    rows.push({key:'guard:'+g.id,at:g.at,title:g.verdict === 'allow' ? 'Guard allowed' : 'Guard denied',html:html`<p>${g.rule_id} · ${g.scope}${g.reason ? ` · ${g.reason}` : ''}</p><p>Recorded request outcome; tool receipt and completed access are not verified.</p>${raw(permission)}`});
   }
   for (const r of h.reviews) {
     if (!r.decision) continue;
     const d = r.decision;
     const scopes = Array.isArray(d.scope_ids) ? d.scope_ids : [];
     const label = { acknowledge: 'Reviewed', close_reported: 'Closure reported', expect: scopes.length ? 'Scoped permission recorded' : 'Expected once' }[d.action] || 'Saved decision';
-    const permission = scopes.length ? `<p>${scopes.length} permission scope${scopes.length === 1 ? '' : 's'} recorded. Inspect current expiry or revocation for this decision. <button type="button" class="link-btn" data-action="session-permissions" data-review="${escapeHTML(r.id)}" data-session="${escapeHTML(data.session_id || '')}">View permissions</button></p>` : '';
+    const permission = scopes.length ? html`<p>${scopes.length} permission scope${scopes.length === 1 ? '' : 's'} recorded. Inspect current expiry or revocation for this decision. <button type="button" class="link-btn" data-action="session-permissions" data-review="${r.id}" data-session="${data.session_id || ''}">View permissions</button></p>` : '';
     const changed = d.revision !== r.revision ? '<p>This decision does not cover newer evidence.</p>' : '';
     const source = !r.evidence_available ? '<p>Source evidence unavailable; the saved receipt remains.</p>' : !r.evidence_flag_available ? '<p>Assessment source evidence unavailable; other linked evidence may remain.</p>' : '';
-    const link = r.evidence_flag_available && r.evidence_flag_id ? `<button type="button" class="link-btn" data-action="open-flag" data-id="${escapeHTML(r.evidence_flag_id)}">View finding evidence</button>` : '';
-    rows.push({ key: 'decision:' + r.id, at: d.at, title: label, html: `<p>${escapeHTML((r.context || {}).rule || 'Finding')} · decision for revision ${escapeHTML(d.revision)}</p>${changed}${permission}<p>Remaining risk: ${escapeHTML((r.assessment || {}).residual_risk || 'unknown')}</p>${source}${link}` });
+    const link = r.evidence_flag_available && r.evidence_flag_id ? html`<button type="button" class="link-btn" data-action="open-flag" data-id="${r.evidence_flag_id}">View finding evidence</button>` : '';
+    rows.push({ key: 'decision:' + r.id, at: d.at, title: label, html: html`<p>${(r.context || {}).rule || 'Finding'} · decision for revision ${d.revision}</p>${raw(changed)}${raw(permission)}<p>Remaining risk: ${(r.assessment || {}).residual_risk || 'unknown'}</p>${raw(source)}${raw(link)}` });
   }
   for (const r of h.interventions) {
     rows.push({ key: 'intervention:' + r.id, at: r.requested_at, title: 'Process control', html: resourceOutcomeHTML(r) });
@@ -1005,19 +1005,19 @@ function sessionOutcomesHTML(data, state) {
   for (const inc of h.incidents) {
     for (const step of ((inc.remediation || {}).steps || [])) {
       if (step.status !== 'reported') continue;
-      rows.push({ key: 'incident:' + inc.id + ':' + step.id, at: step.reported_at, title: 'External action reported', html: `<p>${escapeHTML(step.item.name)} · ${escapeHTML(step.item.action)}</p><p>Credential verification: ${escapeHTML(step.verification || 'unverified')}</p>${step.newer_evidence ? '<p>Newer evidence exists; this report does not establish its remediation.</p>' : ''}<button type="button" class="link-btn" data-action="open-incident" data-id="${escapeHTML(inc.id)}">View incident report</button>` });
+      rows.push({ key: 'incident:' + inc.id + ':' + step.id, at: step.reported_at, title: 'External action reported', html: html`<p>${step.item.name} · ${step.item.action}</p><p>Credential verification: ${step.verification || 'unverified'}</p>${raw(step.newer_evidence ? '<p>Newer evidence exists; this report does not establish its remediation.</p>' : '')}<button type="button" class="link-btn" data-action="open-incident" data-id="${inc.id}">View incident report</button>` });
     }
   }
   rows.sort((a, b) => (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0) || a.key.localeCompare(b.key));
   const history = rows.map(row => {
-    return `<article class="sd-outcome" data-session-part="${escapeHTML(row.key)}" data-row-id="${escapeHTML(row.key)}"><h5>${escapeHTML(row.title)}</h5>${localTimestampHTML(row.at)}${row.html}</article>`;
+    return html`<article class="sd-outcome" data-session-part="${row.key}" data-row-id="${row.key}"><h5>${row.title}</h5>${raw(localTimestampHTML(row.at))}${raw(row.html)}</article>`;
   }).join('');
-  return sessionFollowUpHTML(data, state) + head + `<div data-session-part="outcomes-limits">${limits}${Object.values(h.evidence).some(source => !source.available) ? retry : ''}${!rows.length && !limits ? '<p>No saved decisions or results in the retained history. This is not a safety verdict.</p>' : ''}</div>` + history;
+  return sessionFollowUpHTML(data, state) + head + html`<div data-session-part="outcomes-limits">${raw(limits)}${raw(Object.values(h.evidence).some(source => !source.available) ? retry : '')}${raw(!rows.length && !limits ? '<p>No saved decisions or results in the retained history. This is not a safety verdict.</p>' : '')}</div>` + history;
 }
 
 function sessionDetailHTML(sess, events, trees, state = window.SA) {
   if (!sess) {
-    return `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>Select a session to inspect its evidence</span></div>`;
+    return html`<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>Select a session to inspect its evidence</span></div>`;
   }
   const tree = liveTreeFor(sess, trees);
   const title = sessionTitle(sess, tree && tree.root.cwd);
@@ -1025,30 +1025,30 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
   const meta = [
     sess.started_at ? 'started ' + fmtAge(sess.started_at, Date.now()) + ' ago' : '',
     sess.ended_at ? 'ended ' + fmtAge(sess.ended_at, Date.now()) + ' ago' : '',
-  ].filter(Boolean).map(escapeHTML).join(' · ');
-  const contextHTML = `<section class="session-context" data-session-part="session-context" aria-label="Session context">
-      <button type="button" class="btn btn-sm btn-ghost" data-action="session-events" data-id="${escapeHTML(sess.id)}" title="Inspect retained file, connection, and tool events attributed to this session">View session events</button>
+  ].filter(Boolean).join(' · ');
+  const contextHTML = html`<section class="session-context" data-session-part="session-context" aria-label="Session context">
+      <button type="button" class="btn btn-sm btn-ghost" data-action="session-events" data-id="${sess.id}" title="Inspect retained file, connection, and tool events attributed to this session">View session events</button>
       <details class="session-metadata" data-session-details>
         <summary>Details</summary>
         <div class="sd-metadata-body">
-          <span class="sd-harness">${escapeHTML(harnessMeta(sess.harness).label)}</span>
-          ${sess.confidence ? `<span class="ss-chip sd-conf" title="How this session was identified">${escapeHTML(sess.confidence)}</span>` : ''}
-          ${path ? `<button type="button" class="sd-path" data-action="copy-path" data-path="${escapeHTML(path)}" title="${escapeHTML(path)} — click to copy">${escapeHTML(path)}</button>` : ''}
-          ${meta ? `<span class="sd-meta">${meta}</span>` : ''}
+          <span class="sd-harness">${harnessMeta(sess.harness).label}</span>
+          ${sess.confidence ? raw(html`<span class="ss-chip sd-conf" title="How this session was identified">${sess.confidence}</span>`) : ''}
+          ${path ? raw(html`<button type="button" class="sd-path" data-action="copy-path" data-path="${path}" title="${path} — click to copy">${path}</button>`) : ''}
+          ${meta ? raw(html`<span class="sd-meta">${meta}</span>`) : ''}
         </div>
       </details>
     </section>`;
-  return `<div class="session-detail-chrome">
+  return html`<div class="session-detail-chrome">
     <div class="session-detail-actions">
-      ${window.SA.recentWorkReturn ? '<button type="button" class="btn btn-sm btn-ghost" data-action="recent-work-home">Back to Home</button>' : ''}
+      ${raw(window.SA.recentWorkReturn ? '<button type="button" class="btn btn-sm btn-ghost" data-action="recent-work-home">Back to Home</button>' : '')}
       <button type="button" class="btn btn-sm btn-ghost sd-back" data-action="session-list">Back to sessions</button>
       <button type="button" class="btn btn-sm btn-ghost sd-status" data-action="session-status">Current status</button>
-      <button type="button" class="btn btn-sm btn-ghost sd-export" data-action="copy-report" data-id="${escapeHTML(sess.id)}" title="Copy this session's report as markdown"><svg class="icon"><use href="#i-copy"/></svg>Copy report</button>
-      ${sess.workspace ? `<button type="button" class="btn btn-sm btn-ghost" data-action="workspace-permissions" data-session="${escapeHTML(sess.id)}">Workspace permissions</button>` : ''}
+      <button type="button" class="btn btn-sm btn-ghost sd-export" data-action="copy-report" data-id="${sess.id}" title="Copy this session's report as markdown"><svg class="icon"><use href="#i-copy"/></svg>Copy report</button>
+      ${sess.workspace ? raw(html`<button type="button" class="btn btn-sm btn-ghost" data-action="workspace-permissions" data-session="${sess.id}">Workspace permissions</button>`) : ''}
     </div>
     <div class="session-detail-head">
-      ${harnessChipHTML(sess.harness)}
-      <h3 tabindex="-1">${escapeHTML(title)}</h3>
+      ${raw(harnessChipHTML(sess.harness))}
+      <h3 tabindex="-1">${title}</h3>
     </div>
     <div class="sd-detail-controls">
       <div class="sd-view-switch" role="group" aria-label="Session detail view">
@@ -1060,7 +1060,7 @@ function sessionDetailHTML(sess, events, trees, state = window.SA) {
       <button type="button" class="btn btn-sm btn-ghost sd-latest" data-action="session-latest" hidden>Jump to latest</button>
     </div>
     </div>
-    <div class="session-detail-body" tabindex="-1">${state.sessionView === 'hooks' ? contextHTML + sessionHooksHTML(state.sessionHooks, state.sessionHooksState, state.sessionOverview && state.sessionOverview.hook_health, state.sessionOverviewState, state.sessionOverview && state.sessionOverview.hook_ingestion, state.selectedSessionId, state.sessionHookHistory) : state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState))}</div>`;
+    <div class="session-detail-body" tabindex="-1">${raw(state.sessionView === 'hooks' ? contextHTML + sessionHooksHTML(state.sessionHooks, state.sessionHooksState, state.sessionOverview && state.sessionOverview.hook_health, state.sessionOverviewState, state.sessionOverview && state.sessionOverview.hook_ingestion, state.selectedSessionId, state.sessionHookHistory) : state.sessionView === 'results' ? contextHTML + sessionOutcomesHTML(state.sessionOutcomes, state.sessionOutcomesState) : sessionOverviewHTML(state.sessionOverview, state.sessionOverviewState, contextHTML) + (state.sessionView === 'trace' ? sessionTraceHTML(events, state.sessionTimelineState) : sessionMemoryHTML(state.sessionMemoryPage, state.sessionMemoryState)))}</div>`;
 }
 
 // One workbench owns selection, retained reads, rendering and reading position.
@@ -1498,8 +1498,8 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
     const filter = {...SA.harnessFilter, search: window.globalSearchTerm?.() || ''};
     const q = filter.text || '';
     const filtered = !!String(q || filter.search).trim() || Object.values(filter.harnesses).some(v => v === false);
-    const noMatch = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No sessions match — <button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button></span></div>`;
-    const quiet = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>All quiet. Nothing is running.</span></div>`;
+    const noMatch = html`<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No sessions match — <button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button></span></div>`;
+    const quiet = html`<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>All quiet. Nothing is running.</span></div>`;
     // The durable session spine (/sessions) is the source of truth when the
     // daemon provides it; process-tree grouping is the fallback for older
     // daemons.
@@ -1589,8 +1589,8 @@ function createSessionWorkbench({ apiFetch, renderNow, onSelect = () => {} }) {
       if (railFocusId && !railFocus.isConnected) Array.from(rail.querySelectorAll('[data-action="select-session"]')).find(el => el.dataset.id === railFocusId)?.focus({ preventScroll: true });
       const selected = durable.find(s => s.id === selectedSessionId);
       const emptyDetail = selectedSessionId
-        ? `<div class="empty"><span>Session unavailable. It is no longer listed. <button type="button" class="link-btn" data-action="session-list">Back to sessions</button></span></div>`
-        : filter.liveOnly || filtered ? emptyHTML : `<div class="empty"><span>No sessions available. Start an agent session, then refresh.</span></div>`;
+        ? html`<div class="empty"><span>Session unavailable. It is no longer listed. <button type="button" class="link-btn" data-action="session-list">Back to sessions</button></span></div>`
+        : filter.liveOnly || filtered ? emptyHTML : html`<div class="empty"><span>No sessions available. Start an agent session, then refresh.</span></div>`;
       if (detail) renderSessionDetail(detail, selected, trees, emptyDetail);
       return;
     }
