@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"log"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -37,7 +36,7 @@ const (
 // this after the intent ends the run as RunEndingSignal.
 const StopIntentWindow = 30 * time.Second
 
-const runRecordName = "run-record.json"
+const runRecordSuffix = ".run-record.json"
 
 // RunRecord is one daemon run as persisted in the state directory. A record
 // with an empty Ending is the running marker of a run that has not ended.
@@ -55,9 +54,16 @@ type PreviousRun struct {
 	Ending RunEnding
 }
 
-// RunRecordPath is the run record beside the daemon's other state files.
+// RunRecordPath scopes the run record to the same database as the instance
+// lock, or to the socket when the store is in-memory.
 func RunRecordPath(cfg config.Config) string {
-	return filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), runRecordName)
+	if cfg.DBPath != "" {
+		return cfg.DBPath + runRecordSuffix
+	}
+	if cfg.SocketPath != "" {
+		return cfg.SocketPath + runRecordSuffix
+	}
+	return ""
 }
 
 // ReadPreviousRun reads the run record at path. found is false when no record
@@ -89,8 +95,9 @@ type RunTracker struct {
 	previous PreviousRun
 	found    bool
 
-	mu  sync.Mutex
-	rec RunRecord
+	mu              sync.Mutex
+	rec             RunRecord
+	endingPersisted bool
 }
 
 // StartRun reads the previous run's record at path, then durably replaces it
@@ -105,7 +112,7 @@ func StartRun(path string, pid int, now func() time.Time) (*RunTracker, error) {
 		prev, found = PreviousRun{Ending: RunEndingNoRecord}, true
 	}
 	t.previous, t.found = prev, found
-	return t, t.write()
+	return t, t.write(t.rec)
 }
 
 // Previous reports how the run before this one ended, as read at StartRun;
@@ -123,35 +130,42 @@ func (t *RunTracker) RecordStopIntent() (at, validUntil time.Time, err error) {
 	if t.rec.Ending != "" {
 		return at, at, fmt.Errorf("run already ended: %s", t.rec.Ending)
 	}
-	t.rec.StopIntentAt = at
-	return at, at.Add(StopIntentWindow), t.write()
+	rec := t.rec
+	rec.StopIntentAt = at
+	if err := t.write(rec); err != nil {
+		return at, at, err
+	}
+	t.rec = rec
+	return at, at.Add(StopIntentWindow), nil
 }
 
 // Stop durably writes this run's ending for the stop trigger cause and
-// returns it. Only the first call writes; later calls return that ending.
+// returns it. Later calls keep the first ending and retry any failed write.
 func (t *RunTracker) Stop(cause RunEnding) (RunEnding, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.rec.Ending != "" {
+	if t.endingPersisted {
 		return t.rec.Ending, nil
 	}
-	at := t.now().UTC()
-	ending := cause
-	if cause == RunEndingSignal && !t.rec.StopIntentAt.IsZero() && !at.Before(t.rec.StopIntentAt) && at.Sub(t.rec.StopIntentAt) <= StopIntentWindow {
-		ending = RunEndingOwnerStop
+	if t.rec.Ending == "" {
+		at := t.now().UTC()
+		ending := cause
+		if cause == RunEndingSignal && !t.rec.StopIntentAt.IsZero() && !at.Before(t.rec.StopIntentAt) && at.Sub(t.rec.StopIntentAt) <= StopIntentWindow {
+			ending = RunEndingOwnerStop
+		}
+		t.rec.EndedAt, t.rec.Ending = at, ending
 	}
-	t.rec.EndedAt, t.rec.Ending = at, ending
-	return ending, t.write()
+	if err := t.write(t.rec); err != nil {
+		return t.rec.Ending, err
+	}
+	t.endingPersisted = true
+	return t.rec.Ending, nil
 }
 
-// write persists the record with fsync before rename; callers hold mu or
-// have not shared t yet.
-func (t *RunTracker) write() error {
-	data, err := json.Marshal(t.rec)
+// write persists the candidate record with fsync before rename.
+func (t *RunTracker) write(rec RunRecord) error {
+	data, err := json.Marshal(rec)
 	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(t.path), 0o700); err != nil {
 		return err
 	}
 	return safefile.WriteFileAtomic(t.path, data, 0o600)

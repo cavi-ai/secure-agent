@@ -111,19 +111,21 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	ctx, cancel := context.WithCancel(parent)
 	c := &Components{cfg: cfg, cancel: cancel, apiErrors: make(chan error, 1)}
 
+	if path := RunRecordPath(cfg); path != "" {
+		run, err := StartRun(path, os.Getpid(), time.Now)
+		if err != nil {
+			log.Printf("secure-agentd: run record not written: %v", err)
+		}
+		c.run = run
+	}
 	writeCwdOverrides(cfg)
 
 	st, err := store.Open(cfg.DBPath, cfg.JSONLPath)
 	if err != nil {
-		cancel()
+		c.Shutdown()
 		return nil, fmt.Errorf("failed to open store: %w", err)
 	}
 	c.store = st
-	// Every Build failure after this point runs Shutdown, which ends the run.
-	c.run, err = StartRun(RunRecordPath(cfg), os.Getpid(), time.Now)
-	if err != nil {
-		log.Printf("secure-agentd: run record not written: %v", err)
-	}
 	st.SetEventRetention(cfg.Retention.ConnEvent, cfg.Retention.Event)
 	listener, err := api.ListenUnixSocket(cfg.SocketPath)
 	if err != nil {
@@ -528,7 +530,7 @@ func (c *Components) waitForStop(ctx context.Context, parentGone <-chan struct{}
 	return nil
 }
 
-// endRun writes the run's ending once; later calls keep the first ending.
+// endRun records the first ending, retrying any failed write.
 func (c *Components) endRun(cause RunEnding) {
 	if c.run == nil {
 		return
@@ -547,7 +549,7 @@ func (c *Components) endRun(cause RunEnding) {
 // exporter, then release the store and episodic state. Idempotent.
 func (c *Components) Shutdown() {
 	c.shutdownOnce.Do(func() {
-		// A stop trigger has already written the ending; otherwise Build failed.
+		// Keep the stop trigger's ending, or record a Build failure.
 		c.endRun(RunEndingStartFailure)
 		log.Println("secure-agentd shutting down...")
 		if c.cancel != nil {

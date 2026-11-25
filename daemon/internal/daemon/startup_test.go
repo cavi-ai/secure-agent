@@ -4,12 +4,46 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
+
+func TestBuildRecordsStoreInitializationFailure(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{
+		DBPath:     filepath.Join(dir, "events.db"),
+		SocketPath: filepath.Join(dir, "daemon.sock"),
+	}
+	cfg.Firewall.Registry.SaltRef = filepath.Join(dir, "salt")
+	if err := os.WriteFile(cfg.DBPath, []byte("invalid SQLite database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	path := RunRecordPath(cfg)
+	prior, err := StartRun(path, 100, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prior.Stop(RunEndingSignal); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Build(context.Background(), cfg, Options{})
+	if c != nil {
+		c.Shutdown()
+	}
+	if err == nil || !strings.Contains(err.Error(), "initialize database schema") || c != nil {
+		t.Fatalf("Build returned components=%t, error=%v, want a store initialization failure", c != nil, err)
+	}
+	prev, found, err := ReadPreviousRun(path)
+	if err != nil || !found || prev.Ending != RunEndingStartFailure || prev.Record.PID != os.Getpid() {
+		t.Fatalf("read back: %+v found=%v err=%v, want this attempt's start-failure", prev, found, err)
+	}
+}
 
 func TestBuildRefusesUnavailableControlSocket(t *testing.T) {
 	home := t.TempDir()

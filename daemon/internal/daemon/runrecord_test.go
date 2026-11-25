@@ -3,9 +3,12 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 )
 
 // Each stop path writes its ending to the run record; a signal counts as an
@@ -117,5 +120,125 @@ func TestRunRecordStartFindsRecordWithoutEnding(t *testing.T) {
 	}
 	if onDisk.Record.PID != 200 || onDisk.Record.Ending != "" || !onDisk.Record.StopIntentAt.IsZero() {
 		t.Fatalf("persisted record %+v, want the second run's running marker", onDisk.Record)
+	}
+}
+
+func TestRunRecordFailedIntentKeepsPreviousIntent(t *testing.T) {
+	for _, refresh := range []bool{false, true} {
+		name := "first intent"
+		if refresh {
+			name = "refresh"
+		}
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "run-record.json")
+			now := time.Now().UTC()
+			tr, err := StartRun(path, 100, func() time.Time { return now })
+			if err != nil {
+				t.Fatal(err)
+			}
+			var accepted time.Time
+			if refresh {
+				accepted, _, err = tr.RecordStopIntent()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			now = now.Add(StopIntentWindow)
+			restore := blockRunRecordWrite(t, path)
+			if _, _, err := tr.RecordStopIntent(); err == nil {
+				t.Fatal("stop intent succeeded with the record path blocked")
+			}
+			restore()
+			now = now.Add(time.Second)
+
+			if ending, err := tr.Stop(RunEndingSignal); err != nil || ending != RunEndingSignal {
+				t.Fatalf("Stop returned %q, %v, want signal after an unrecorded intent", ending, err)
+			}
+			prev, found, err := ReadPreviousRun(path)
+			if err != nil || !found || !prev.Record.StopIntentAt.Equal(accepted) {
+				t.Fatalf("read back: intent=%s found=%v err=%v, want intent %s", prev.Record.StopIntentAt, found, err, accepted)
+			}
+		})
+	}
+}
+
+func TestRunRecordShutdownRetriesFirstEnding(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "run-record.json")
+	now := time.Now().UTC()
+	tr, err := StartRun(path, 100, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	firstEnd := now
+	restore := blockRunRecordWrite(t, path)
+	if ending, err := tr.Stop(RunEndingSignal); err == nil || ending != RunEndingSignal {
+		t.Fatalf("Stop returned %q, %v, want signal and a write error", ending, err)
+	}
+	restore()
+	now = now.Add(time.Second)
+	(&Components{run: tr}).Shutdown()
+
+	prev, found, err := ReadPreviousRun(path)
+	if err != nil || !found || prev.Ending != RunEndingSignal || !prev.Record.EndedAt.Equal(firstEnd) {
+		t.Fatalf("read back: %+v found=%v err=%v, want signal at %s", prev, found, err, firstEnd)
+	}
+}
+
+func blockRunRecordWrite(t *testing.T, path string) func() {
+	t.Helper()
+	saved := path + ".saved"
+	if err := os.Rename(path, saved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		t.Helper()
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(saved, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRunRecordIsolatedByInstance(t *testing.T) {
+	for _, name := range []string{"database", "in-memory"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			first := config.Config{SocketPath: filepath.Join(dir, "first.sock")}
+			first.Firewall.Registry.SaltRef = filepath.Join(dir, "salt")
+			second := first
+			second.SocketPath = filepath.Join(dir, "second.sock")
+			if name == "database" {
+				first.DBPath = filepath.Join(dir, "first.db")
+				second.DBPath = filepath.Join(dir, "second.db")
+			}
+			firstPath, secondPath := RunRecordPath(first), RunRecordPath(second)
+			if _, err := StartRun(firstPath, 100, time.Now); err != nil {
+				t.Fatal(err)
+			}
+			tr, err := StartRun(secondPath, 200, time.Now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if prev, found := tr.Previous(); found {
+				t.Errorf("second instance found first instance's record: %+v", prev)
+			}
+			prev, found, err := ReadPreviousRun(firstPath)
+			if err != nil || !found || prev.Record.PID != 100 {
+				t.Fatalf("first instance record: %+v found=%v err=%v, want PID 100", prev, found, err)
+			}
+			if first.DBPath != "" {
+				first.SocketPath = second.SocketPath
+				if got := RunRecordPath(first); got != firstPath {
+					t.Fatalf("changing the socket moved the database's run record to %q, want %q", got, firstPath)
+				}
+			}
+		})
 	}
 }
