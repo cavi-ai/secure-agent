@@ -429,8 +429,15 @@ while [ $# -gt 1 ]; do [ "$1" = "-o" ] && printf 'Configured signing. ghp_TESTTO
 echo progress
 `)
 	a, st := testAgent(t, ol.URL, map[string]string{"codex": codex})
-	work := t.TempDir()
-	p, err := a.SavePlan(PlanInput{Title: "Sign", Harness: "codex", Mode: ModeHeadless, Workdir: work, Task: "Configure signing", Skills: []string{"signing", "bogus"}})
+	work, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "worktree")
+	if err := os.Symlink(work, alias); err != nil {
+		t.Fatal(err)
+	}
+	p, err := a.SavePlan(PlanInput{Title: "Sign", Harness: "codex", Mode: ModeHeadless, Workdir: alias, Task: "Configure signing", Skills: []string{"signing", "bogus"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +448,7 @@ echo progress
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "running" || !strings.Contains(run.Command, "CODEX_OSS_BASE_URL=") || !strings.Contains(run.Command, "<task>") {
+	if run.Status != "running" || run.Workdir != work || !strings.Contains(run.Command, "CODEX_OSS_BASE_URL=") || !strings.Contains(run.Command, "<task>") {
 		t.Fatalf("run = %+v", run)
 	}
 	if _, err := a.Dispatch(context.Background(), DispatchInput{PlanID: p.ID}); !errors.Is(err, ErrBusy) {
@@ -452,12 +459,13 @@ echo progress
 	if len(runs) != 1 || runs[0].Status != "done" || runs[0].Output != "Configured signing. [REDACTED:github-pat]" || runs[0].FinishedAt == nil {
 		t.Fatalf("runs = %+v", runs)
 	}
-	if p, _ = st.GetSysAgentPlan(p.ID); p.Status != "done" || p.RunID != run.ID || p.Model != "qwen3-coder" {
+	if p, _ = st.GetSysAgentPlan(p.ID); p.Status != "done" || p.RunID != run.ID || p.Model != "qwen3-coder" || p.Workdir != alias {
 		t.Fatalf("plan after run = %+v", p)
 	}
 	got, _ := os.ReadFile(record)
 	for _, want := range []string{"exec\n--oss\n--local-provider\nollama\n-m\nqwen3-coder\n--sandbox\nworkspace-write",
-		"CODEX_OSS_BASE_URL=" + ol.URL + "/v1", "<skill id=\"signing\">", "Task: Sign\nConfigure signing", "NO_PROXY=127.0.0.1,localhost,::1", work} {
+		"CODEX_OSS_BASE_URL=" + ol.URL + "/v1", "<skill id=\"signing\">", "Task: Sign\nConfigure signing", "NO_PROXY=127.0.0.1,localhost,::1",
+		"Work in " + work + ".", "\n" + work + "\n"} {
 		if !strings.Contains(string(got), want) {
 			t.Errorf("harness saw no %q in:\n%s", want, got)
 		}
@@ -564,7 +572,7 @@ func TestStatusReportsHarnessReadiness(t *testing.T) {
 }
 
 func TestComposeTask(t *testing.T) {
-	got := composeTask(model.SysAgentPlan{Workdir: "/w", Title: "T", Task: "Do it", Steps: []string{"one"}, Skills: []string{"ssh"}})
+	got := composeTask(model.SysAgentPlan{Title: "T", Task: "Do it", Steps: []string{"one"}, Skills: []string{"ssh"}}, "/w")
 	if strings.HasPrefix(got, "-") || !strings.Contains(got, "Work in /w.") || !strings.Contains(got, "1. one") ||
 		!strings.Contains(got, "<skill id=\"ssh\">") || !strings.Contains(got, "Never print, copy or send secret values") {
 		t.Fatalf("task = %s", got)

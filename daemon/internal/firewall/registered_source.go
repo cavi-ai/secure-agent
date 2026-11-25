@@ -1,12 +1,18 @@
 package firewall
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/unix"
+)
+
+var (
+	errRegisteredSourceNotRegular = errors.New("must be a regular file")
+	errRegisteredSourceTooLarge   = fmt.Errorf("exceeds %d bytes", maxIngestBytes)
 )
 
 // ValidateRegisteredSource checks the same boundary used on every ingest.
@@ -37,7 +43,7 @@ func openRegisteredSource(path string) (*os.File, error) {
 		}
 	}
 	if resolved == "/" {
-		return nil, fmt.Errorf("must be a regular file")
+		return nil, errRegisteredSourceNotRegular
 	}
 
 	// Walk the checked path without following links introduced after resolution.
@@ -57,7 +63,17 @@ func openRegisteredSource(path string) (*os.File, error) {
 		dir = next
 	}
 	defer unix.Close(dir)
-	fd, err := unix.Openat(dir, parts[len(parts)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+
+	name := parts[len(parts)-1]
+	// Opening a device can invoke its driver even without a read.
+	var entry unix.Stat_t
+	if err := unix.Fstatat(dir, name, &entry, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return nil, err
+	}
+	if entry.Mode&unix.S_IFMT != unix.S_IFREG {
+		return nil, errRegisteredSourceNotRegular
+	}
+	fd, err := unix.Openat(dir, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +86,11 @@ func openRegisteredSource(path string) (*os.File, error) {
 	}
 	if !fi.Mode().IsRegular() {
 		f.Close()
-		return nil, fmt.Errorf("must be a regular file")
+		return nil, errRegisteredSourceNotRegular
+	}
+	if fi.Size() > maxIngestBytes {
+		f.Close()
+		return nil, errRegisteredSourceTooLarge
 	}
 	return f, nil
 }
