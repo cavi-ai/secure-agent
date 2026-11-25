@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import ModelFilterCore
 import XCTest
 @testable import SecureAgentMenubar
 
@@ -76,6 +77,10 @@ private final class ControlEndpoint: @unchecked Sendable {
                 let n = Darwin.read(conn, &buf, buf.count)
                 if n <= 0 { break }
                 data.append(contentsOf: buf[0..<n])
+            }
+            guard data.range(of: Data("\r\n\r\n".utf8)) != nil else {
+                Darwin.close(conn)
+                continue
             }
             appendLine(String(decoding: data, as: UTF8.self).components(separatedBy: "\r\n").first ?? "", to: log)
             let body = #"{"recorded_at":"2026-01-01T00:00:00Z","valid_until":"2026-01-01T00:00:30Z"}"#
@@ -309,10 +314,59 @@ final class DaemonSupervisorTests: XCTestCase {
     }
 
     private func makeSupervisor(_ f: (dir: URL, script: String, starts: URL), socket: String,
-                            retryDelay: TimeInterval = 1) -> DaemonSupervisor {
-        DaemonSupervisor(pathProvider: { f.script }, logDir: f.dir.path,
-                         retryDelay: retryDelay, maxRetryDelay: retryDelay,
-                         stopIntent: { try await DaemonClient(socketPath: socket).postStopIntent() })
+                                reportsSocket: Bool = true, retryDelay: TimeInterval = 1) throws -> DaemonSupervisor {
+        if reportsSocket {
+            let path = String(decoding: try JSONEncoder().encode(socket), as: UTF8.self)
+                .replacingOccurrences(of: "'", with: "'\"'\"'")
+            let ready = #"printf '{"path":%s,"pid":%s,"uid":%s,"pidVersion":1}' '\#(path)' "$$" \#(getuid()) >&0"#
+            let url = URL(fileURLWithPath: f.script)
+            let script = try String(contentsOf: url, encoding: .utf8)
+            try script.replacingOccurrences(of: "#!/bin/sh\n", with: "#!/bin/sh\n\(ready)\n")
+                .write(to: url, atomically: false, encoding: .utf8)
+        }
+        // The test process serves ControlEndpoint. The child supplies the
+        // path, while this fixture supplies the listener's real credentials.
+        let peer = try KernelIdentity.current()
+        return DaemonSupervisor(pathProvider: { f.script }, logDir: f.dir.path,
+                                retryDelay: retryDelay, maxRetryDelay: retryDelay,
+                                stopIntent: { report in
+            try await DaemonClient(resolvedSocketPath: report.path).postStopIntent(expectedPeer: peer)
+        })
+    }
+
+    func testStopIntentWritesOnlyToMatchingProcessInstance() async throws {
+        let f = try fixture("exit 0")
+        defer { try? FileManager.default.removeItem(at: f.dir) }
+        let events = f.dir.appendingPathComponent("events")
+        let endpoint = try ControlEndpoint(log: events, answers: true)
+        defer { endpoint.close() }
+        let client = DaemonClient(resolvedSocketPath: endpoint.path)
+        let peer = try KernelIdentity.current()
+        let oldInstance = ProcessIdentity(pid: peer.pid, uid: peer.uid, pidVersion: peer.pidVersion ^ 1)
+        do {
+            try await client.postStopIntent(expectedPeer: oldInstance)
+            XCTFail("stop intent was sent to the wrong process instance")
+        } catch DaemonClientError.transport {
+            XCTAssertEqual(starts(events), [])
+        }
+        try await client.postStopIntent(expectedPeer: peer)
+        XCTAssertEqual(starts(events), ["POST /daemon/stop-intent HTTP/1.1"])
+    }
+
+    func testQuitSignalsChildWithoutPostingWhenChildDoesNotReportSocket() async throws {
+        let f = try fixture(Self.idleLoop, prefix: Self.trapTerm)
+        let events = f.dir.appendingPathComponent("events")
+        let endpoint = try ControlEndpoint(log: events, answers: true)
+        defer { endpoint.close() }
+        let supervisor = try makeSupervisor(f, socket: endpoint.path, reportsSocket: false)
+        defer { supervisor.stop(); try? FileManager.default.removeItem(at: f.dir) }
+        supervisor.start()
+        let ready = await waitUntil({ self.starts(f.starts).count == 1 })
+        XCTAssertTrue(ready)
+        supervisor.stop()
+        let stopped = await waitUntil({ !supervisor.isRunning })
+        XCTAssertTrue(stopped)
+        XCTAssertEqual(starts(events), ["TERM"])
     }
 
     func testOwnerRestartAndQuitPostStopIntentBeforeSignal() async throws {
@@ -320,7 +374,7 @@ final class DaemonSupervisorTests: XCTestCase {
         let events = f.dir.appendingPathComponent("events")
         let endpoint = try ControlEndpoint(log: events, answers: true)
         defer { endpoint.close() }
-        let supervisor = makeSupervisor(f, socket: endpoint.path)
+        let supervisor = try makeSupervisor(f, socket: endpoint.path)
         defer { supervisor.stop(); try? FileManager.default.removeItem(at: f.dir) }
         supervisor.start()
         let started = await waitUntil({ self.starts(f.starts).count == 1 })
@@ -341,14 +395,16 @@ final class DaemonSupervisorTests: XCTestCase {
         let events = f.dir.appendingPathComponent("events")
         let endpoint = try ControlEndpoint(log: events, answers: false)
         defer { endpoint.close() }
-        let supervisor = makeSupervisor(f, socket: endpoint.path)
+        let supervisor = try makeSupervisor(f, socket: endpoint.path)
         defer { supervisor.stop(); try? FileManager.default.removeItem(at: f.dir) }
         supervisor.start()
         let started = await waitUntil({ self.starts(f.starts).count == 1 })
         XCTAssertTrue(started)
         let before = ProcessInfo.processInfo.systemUptime
         supervisor.stop()
-        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - before, DaemonSupervisor.stopIntentBound + 0.5)
+        let elapsed = ProcessInfo.processInfo.systemUptime - before
+        XCTAssertGreaterThanOrEqual(elapsed, DaemonSupervisor.stopIntentBound - 0.1)
+        XCTAssertLessThan(elapsed, DaemonSupervisor.stopIntentBound + 0.5)
         let signalled = await waitUntil({ self.starts(events) == ["TERM"] }, timeout: 5)
         XCTAssertTrue(signalled, "an unanswered stop intent must not hold back SIGTERM")
     }
@@ -358,7 +414,7 @@ final class DaemonSupervisorTests: XCTestCase {
         let events = f.dir.appendingPathComponent("events")
         let endpoint = try ControlEndpoint(log: events, answers: true)
         defer { endpoint.close() }
-        let supervisor = makeSupervisor(f, socket: endpoint.path, retryDelay: 0.01)
+        let supervisor = try makeSupervisor(f, socket: endpoint.path, retryDelay: 0.01)
         defer { supervisor.stop(); try? FileManager.default.removeItem(at: f.dir) }
         supervisor.start()
         let started = await waitUntil({ self.starts(f.starts).count == 1 })

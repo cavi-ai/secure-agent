@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import ModelFilterCore
 
 /// Errors from the daemon transport. The distinction matters: a transport
 /// failure means "daemon unreachable" (flip the UI to disconnected), while a
@@ -100,6 +101,10 @@ public final class DaemonClient: Sendable {
             let home = FileManager.default.homeDirectoryForCurrentUser.path
             self.socketPath = "\(home)/.config/secure-agent/daemon.sock"
         }
+    }
+
+    init(resolvedSocketPath: String) {
+        self.socketPath = resolvedSocketPath
     }
 
     public func fetchStatus() async throws -> StatusResponse {
@@ -354,8 +359,8 @@ public final class DaemonClient: Sendable {
 
     /// Records that the owner is about to stop the daemon: a SIGTERM inside
     /// the daemon's intent window ends the run as an owner stop.
-    public func postStopIntent() async throws {
-        _ = try await request(method: "POST", path: "/daemon/stop-intent")
+    func postStopIntent(expectedPeer: ProcessIdentity) async throws {
+        _ = try await request(method: "POST", path: "/daemon/stop-intent", expectedPeer: expectedPeer)
     }
 
     public func deleteGuardRule(agent: String, ruleID: String) async throws {
@@ -394,7 +399,8 @@ public final class DaemonClient: Sendable {
         }
     }
 
-    func request(method: String, path: String, body: Data? = nil, includePolicyError: Bool = false) async throws -> Data {
+    func request(method: String, path: String, body: Data? = nil, includePolicyError: Bool = false,
+                 expectedPeer: ProcessIdentity? = nil) async throws -> Data {
         let socketPath = self.socketPath
         return try await Task.detached {
             let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
@@ -455,6 +461,23 @@ public final class DaemonClient: Sendable {
                 }
             }
             _ = fcntl(fd, F_SETFL, flags)
+
+            if let expectedPeer {
+                var token = audit_token_t()
+                var size = socklen_t(MemoryLayout<audit_token_t>.size)
+                guard getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &size) == 0,
+                      size == MemoryLayout<audit_token_t>.size,
+                      let peer = try? ProcessIdentity(auditToken: withUnsafeBytes(of: token) { Data($0) }),
+                      peer == expectedPeer else {
+                    throw DaemonClientError.transport("control socket is not served by the owned daemon")
+                }
+                // The child can exit after the peer check and before a write.
+                var noSigPipe: Int32 = 1
+                guard setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe,
+                                 socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+                    throw DaemonClientError.transport("could not configure the stop intent socket")
+                }
+            }
 
             var requestString = "\(method) \(path) HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
             if let bodyData = body {

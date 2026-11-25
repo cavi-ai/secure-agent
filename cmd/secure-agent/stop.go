@@ -41,7 +41,19 @@ type peerIdentity struct {
 }
 
 func handleStop(sockPath string, args []string) {
-	record := queryFlag(args, "--run-record", "")
+	const usage = "usage: secure-agent stop [--run-record path]"
+	var record string
+	switch {
+	case len(args) == 0:
+	case len(args) == 1 && (args[0] == "--help" || args[0] == "-h"):
+		fmt.Println(usage)
+		return
+	case len(args) == 2 && args[0] == "--run-record" && args[1] != "" && !strings.HasPrefix(args[1], "-"):
+		record = args[1]
+	default:
+		fmt.Fprintln(os.Stderr, usage)
+		os.Exit(2)
+	}
 	if record == "" {
 		var err error
 		if record, err = runRecordPath(); err != nil {
@@ -76,8 +88,8 @@ func runRecordPath() (string, error) {
 		return "", err
 	}
 	for _, p := range []string{db, sock} {
-		if p != "" {
-			return expandConfigPath(p) + runRecordSuffix, nil
+		if expanded := expandConfigPath(p); expanded != "" {
+			return expanded + runRecordSuffix, nil
 		}
 	}
 	return "", errors.New("config sets neither db_path nor socket_path")

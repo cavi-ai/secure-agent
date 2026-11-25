@@ -2,6 +2,16 @@ import Darwin
 import Foundation
 import ModelFilterCore
 
+/// The bound endpoint and its kernel identity, reported by the current child.
+struct DaemonSocketReport: Decodable, Sendable {
+    let path: String
+    let pid: Int32
+    let uid: UInt32
+    let pidVersion: UInt32
+
+    var peer: ProcessIdentity { ProcessIdentity(pid: pid, uid: uid, pidVersion: pidVersion) }
+}
+
 /// Owns the lifetime of the bundled `secure-agentd` as a child process of the
 /// menu bar app. The daemon runs only while the app runs:
 ///
@@ -15,13 +25,16 @@ import ModelFilterCore
 /// available even if macOS hides its menu bar status item.
 @MainActor
 public final class DaemonSupervisor: ObservableObject {
-    public static let shared = DaemonSupervisor(stopIntent: { try await DaemonClient().postStopIntent() })
+    public static let shared = DaemonSupervisor(stopIntent: { report in
+        try await DaemonClient(resolvedSocketPath: report.path).postStopIntent(expectedPeer: report.peer)
+    })
 
     /// Longest an owner stop waits for the stop intent before signalling; a
     /// failed or unanswered post never holds SIGTERM back past this bound.
     static let stopIntentBound: TimeInterval = 1.5
 
     private var process: Process?
+    private var socketReport: FileHandle?
     private var stopping = false
     private var consecutiveFailures = 0
     private var startedAt: TimeInterval?
@@ -40,7 +53,7 @@ public final class DaemonSupervisor: ObservableObject {
     private let maxRetryDelay: TimeInterval
     private let terminationTimeout: TimeInterval
     private let uptime: @Sendable () -> TimeInterval
-    private let stopIntent: (@Sendable () async throws -> Void)?
+    private let stopIntent: (@Sendable (DaemonSocketReport) async throws -> Void)?
 
     init(pathProvider: @escaping () -> String? = { bundledDaemonPath(in: Bundle.main.bundleURL) },
          logDir: String = NSHomeDirectory() + "/Library/Logs/secure-agent",
@@ -48,7 +61,7 @@ public final class DaemonSupervisor: ObservableObject {
          retryDelay: TimeInterval = 1, maxRetryDelay: TimeInterval = 16,
          terminationTimeout: TimeInterval = 10,
          uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
-         stopIntent: (@Sendable () async throws -> Void)? = nil) {
+         stopIntent: (@Sendable (DaemonSocketReport) async throws -> Void)? = nil) {
         self.stopIntent = stopIntent
         self.pathProvider = pathProvider
         self.logDir = logDir
@@ -136,8 +149,15 @@ public final class DaemonSupervisor: ObservableObject {
         do {
             let owner = try KernelIdentity.current()
             p.arguments = ["--owner-pid-version", String(owner.pidVersion)]
+            let report = makeSocketReportChannel()
+            if let report {
+                p.arguments?.append("--report-owner-socket")
+                p.standardInput = report.child
+            }
+            defer { try? report?.child.close() }
             try p.run()
             process = p
+            socketReport = report?.parent
             startedAt = uptime()
             NSLog("[secure-agent] daemon started (pid \(p.processIdentifier))")
             Task { @MainActor in
@@ -159,6 +179,7 @@ public final class DaemonSupervisor: ObservableObject {
         terminationTask = nil
         let uptime = startedAt.map { exitedAt - $0 } ?? 0
         process = nil
+        socketReport = nil
         startedAt = nil
         if stopping { return }
         if restartRequested {
@@ -205,13 +226,37 @@ public final class DaemonSupervisor: ObservableObject {
         NSLog("[secure-agent] daemon stop requested")
     }
 
+    /// A fresh socket pair binds the report channel to this launch and keeps
+    /// stdout and stderr available for logs.
+    private func makeSocketReportChannel() -> (parent: FileHandle, child: FileHandle)? {
+        guard stopIntent != nil else { return nil }
+        var descriptors: [Int32] = [-1, -1]
+        guard socketpair(AF_UNIX, SOCK_DGRAM, 0, &descriptors) == 0 else { return nil }
+        guard descriptors.allSatisfy({ fcntl($0, F_SETFD, FD_CLOEXEC) == 0 }) else {
+            descriptors.forEach { _ = Darwin.close($0) }
+            return nil
+        }
+        return (FileHandle(fileDescriptor: descriptors[0], closeOnDealloc: true),
+                FileHandle(fileDescriptor: descriptors[1], closeOnDealloc: true))
+    }
+
     /// Blocks the caller until the daemon answers the stop intent or the bound
     /// expires, so the SIGTERM that follows is recorded as an owner stop.
     private func postStopIntent(before p: Process) {
-        guard let stopIntent, p.isRunning else { return }
+        guard let stopIntent, let socketReport, p.isRunning else { return }
+        // The child sends one small datagram after binding its control socket.
+        // An unready child still receives SIGTERM without any socket request.
+        var bytes = Data(count: 2048)
+        let count = bytes.withUnsafeMutableBytes {
+            Darwin.recv(socketReport.fileDescriptor, $0.baseAddress, $0.count, MSG_DONTWAIT)
+        }
+        guard count > 0,
+              let report = try? JSONDecoder().decode(DaemonSocketReport.self, from: bytes.prefix(count)),
+              report.pid == p.processIdentifier, report.uid == getuid(), report.pidVersion != 0 else { return }
+        self.socketReport = nil
         let answered = DispatchSemaphore(value: 0)
         Task.detached {
-            do { try await stopIntent() } catch {
+            do { try await stopIntent(report) } catch {
                 NSLog("[secure-agent] stop intent not recorded: %@", error.localizedDescription)
             }
             answered.signal()
