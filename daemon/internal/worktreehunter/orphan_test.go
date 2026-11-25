@@ -56,6 +56,29 @@ func TestResolveBareRepoWithLegacyHEAD(t *testing.T) {
 	}
 }
 
+func TestResolveRepoWithExternalObjectDirectory(t *testing.T) {
+	isolateGit(t)
+	dir := canonical(t.TempDir())
+	repo := filepath.Join(dir, "repo")
+	run(t, dir, "init", "--initial-branch=main", repo)
+	commit(t, repo, "file", "contents\n", "initial commit")
+	gitDir := filepath.Join(repo, ".git")
+	objects := filepath.Join(gitDir, "objects")
+	external := filepath.Join(dir, "objects")
+	if err := os.Rename(objects, external); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, objects); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(t, repo, "cat-file", "-t", "HEAD"); got != "commit" {
+		t.Fatalf("git cat-file -t HEAD = %q, want commit", got)
+	}
+	if ref, orphan, ok := resolveRepo(repo); !ok || orphan != nil || ref != (repoRef{Common: gitDir, Main: repo}) {
+		t.Fatalf("resolveRepo(%q) = %+v, %+v, %v", repo, ref, orphan, ok)
+	}
+}
+
 // A repository that moved leaves its worktrees pointing at the old path:
 // the report groups them under the missing path, names the moved
 // repository as the reconnect candidate, and Reconnect links them again.

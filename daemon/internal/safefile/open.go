@@ -13,7 +13,7 @@ import (
 // regular file. os.Root.OpenFile may resolve links within its root.
 func OpenRegularNoFollow(path string) (*os.File, error) {
 	dir, name := filepath.Split(path)
-	parent, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	parent, err := unix.Open(dir, parentDirectoryAccess|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}

@@ -202,8 +202,9 @@ func isGitDirectory(dir string) bool {
 	} else if !head.Mode().IsRegular() {
 		return false
 	}
+	// Git permits these storage directories to link outside the metadata directory.
 	for _, name := range []string{"objects", "refs"} {
-		if info, err := root.Stat(name); err != nil || !info.IsDir() {
+		if info, err := os.Stat(filepath.Join(dir, name)); err != nil || !info.IsDir() {
 			return false
 		}
 	}
