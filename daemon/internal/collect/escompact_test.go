@@ -44,6 +44,7 @@ func esFullLines() map[string]string {
 		"open": esFullLine(10, "open", `{"fflag":16777218,"file":`+esFullFile("/Users/x/project/.env")+`}`),
 		"exec": esFullLine(9, "exec", `{"target":`+esFullProcess(4243, 4242, "/usr/bin/git")+`,"args":["git","status","--porcelain={v2}"],"script":null,`+
 			`"cwd":`+esFullFile("/Users/x/project")+`,"last_fd":3,"image_cputype":16777228,"image_cpusubtype":2}`),
+		"fork":              esFullLine(11, "fork", `{"child":`+esFullProcess(4243, 4242, "/usr/local/bin/node")+`}`),
 		"unlink":            esFullLine(32, "unlink", `{"target":`+esFullFile("/Users/x/project/old.txt")+`,"parent_dir":`+esFullFile("/Users/x/project")+`}`),
 		"rename existing":   esFullLine(25, "rename", `{"source":`+esFullFile("/Users/x/a.txt")+`,"destination_type":0,"destination":{"existing_file":`+esFullFile("/Users/x/b.txt")+`}}`),
 		"rename new path":   esFullLine(25, "rename", `{"source":`+esFullFile("/Users/x/a.txt")+`,"destination_type":1,"destination":{"new_path":{"dir":`+esFullFile("/Users/x/Library/LaunchAgents")+`,"filename":"com.example.plist"}}}`),
@@ -61,10 +62,10 @@ func esFullLines() map[string]string {
 
 func assertSameParse(t *testing.T, name string, line, compact []byte) {
 	t.Helper()
-	want, wv := parseESLine(line)
-	got, gv := parseESLine(compact)
-	if wv != gv || !reflect.DeepEqual(want, got) {
-		t.Fatalf("%s: compact line parses to %+v (%v), original to %+v (%v)\ncompact: %s", name, got, gv, want, wv, compact)
+	want, wl, wv := parseESLine(line)
+	got, gl, gv := parseESLine(compact)
+	if wv != gv || !reflect.DeepEqual(want, got) || !reflect.DeepEqual(wl, gl) {
+		t.Fatalf("%s: compact line parses to %+v %+v (%v), original to %+v %+v (%v)\ncompact: %s", name, got, gl, gv, want, wl, wv, compact)
 	}
 }
 

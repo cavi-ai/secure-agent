@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
@@ -23,11 +24,13 @@ type esProcess struct {
 	AuditToken struct {
 		PID int32 `json:"pid"`
 	} `json:"audit_token"`
-	PID        int32 `json:"pid"`
-	PPID       int32 `json:"ppid"`
-	Executable struct {
+	PID          int32 `json:"pid"`
+	PPID         int32 `json:"ppid"`
+	OriginalPPID int32 `json:"original_ppid"`
+	Executable   struct {
 		Path string `json:"path"`
 	} `json:"executable"`
+	StartTime string `json:"start_time"`
 }
 
 func (p esProcess) pid() int32 {
@@ -35,6 +38,15 @@ func (p esProcess) pid() int32 {
 		return p.AuditToken.PID
 	}
 	return p.PID
+}
+
+// started is the process's start time; zero when the record lacks it.
+func (p esProcess) started() time.Time {
+	t, err := time.Parse(time.RFC3339Nano, p.StartTime)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // esInstigated is the instigating-process part of the BTM and profile
@@ -98,6 +110,9 @@ type esEnvelope struct {
 				} `json:"executable"`
 			} `json:"target"`
 		} `json:"exec"`
+		Fork *struct {
+			Child esProcess `json:"child"`
+		} `json:"fork"`
 		Unlink *struct {
 			Target struct {
 				Path string `json:"path"`
@@ -148,38 +163,41 @@ const minESLineLen = 16
 
 // esLineVerdict is what parseESLine made of one line: an event, a valid
 // envelope that is deliberately not an event (the daemon's own file
-// activity), or a line that is not an ES envelope it handles.
+// activity, a fork record), or a line that is not an ES envelope it handles.
 type esLineVerdict int
 
 const (
 	esEvent esLineVerdict = iota
 	esOwn
+	esLineage
 	esGarbage
 )
 
 // ParseESLine decodes one eslogger line into an event; false for anything
 // that is not an agent-relevant event.
 func ParseESLine(line []byte) (event.Event, bool) {
-	e, v := parseESLine(line)
+	e, _, v := parseESLine(line)
 	return e, v == esEvent
 }
 
-func parseESLine(line []byte) (event.Event, esLineVerdict) {
+// parseESLine also returns the parent and child a fork or exec record names;
+// ChildPID is zero for every other line.
+func parseESLine(line []byte) (event.Event, agents.Lineage, esLineVerdict) {
 	if len(line) < minESLineLen {
-		return event.Event{}, esGarbage
+		return event.Event{}, agents.Lineage{}, esGarbage
 	}
 	if b := bytes.TrimLeft(line, " \t"); len(b) == 0 || b[0] != '{' {
-		return event.Event{}, esGarbage
+		return event.Event{}, agents.Lineage{}, esGarbage
 	}
 	var env esEnvelope
 	if err := unmarshalES(line, &env); err != nil {
-		return event.Event{}, esGarbage
+		return event.Event{}, agents.Lineage{}, esGarbage
 	}
 
 	pid := env.Process.pid()
 	// The daemon's own reads (transcript tailing) are not agent activity.
 	if pid == int32(os.Getpid()) {
-		return event.Event{}, esOwn
+		return event.Event{}, agents.Lineage{}, esOwn
 	}
 	ppid, exe := env.Process.PPID, env.Process.Executable.Path
 
@@ -196,10 +214,17 @@ func parseESLine(line []byte) (event.Event, esLineVerdict) {
 		}
 	}
 
+	// A fork record only names a parent and child for agent attribution.
+	if f := env.Event.Fork; f != nil {
+		return event.Event{}, agents.Lineage{ParentPID: pid, ParentStart: env.Process.started(),
+			ParentExe: exe, ChildPID: f.Child.pid(), ChildStart: f.Child.started(), At: ts}, esLineage
+	}
+
 	var kind event.Kind
 	var filePath string
 	var detail string
 	var open event.Event
+	var lineage agents.Lineage
 
 	if env.Event.Open != nil {
 		kind = event.KindFileOpen
@@ -212,6 +237,12 @@ func parseESLine(line []byte) (event.Event, esLineVerdict) {
 	} else if env.Event.Exec != nil {
 		kind = event.KindExec
 		filePath = env.Event.Exec.Target.Executable.Path
+		// The forking parent: original_ppid survives launchd adopting the process.
+		lineage = agents.Lineage{ParentPID: ppid, ChildPID: pid, ChildStart: env.Process.started(), At: ts, ExecPath: filePath}
+		if env.Process.OriginalPPID > 1 {
+			lineage.ParentPID = env.Process.OriginalPPID
+			lineage.OriginalParent = true
+		}
 	} else if env.Event.Unlink != nil {
 		kind = event.KindFileDelete
 		filePath = env.Event.Unlink.Target.Path
@@ -252,12 +283,12 @@ func parseESLine(line []byte) (event.Event, esLineVerdict) {
 		kind = event.KindGatekeeperOverride
 		filePath = gatekeeperFilePath(g.File)
 	} else {
-		return event.Event{}, esGarbage
+		return event.Event{}, agents.Lineage{}, esGarbage
 	}
 
 	open.Kind, open.TS, open.PID, open.PPID = kind, ts, pid, ppid
 	open.ExePath, open.Path, open.Detail = exe, filePath, detail
-	return open, esEvent
+	return open, lineage, esEvent
 }
 
 // instigatedBy attributes a BTM or profile event to the process that asked
