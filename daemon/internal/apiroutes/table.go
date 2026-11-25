@@ -157,6 +157,8 @@ var Table = []Route{
 	{Path: "/local-services/receipt", Handler: "API.handleLocalServiceReceipt", Console: true, NoAgent: true},
 	{Path: "/fleet", Handler: "API.handleFleet", Response: "api.FleetNodeStatus", Console: true},
 	{Path: "/kill", Handler: "API.handleKill", Console: true, MutatingMethods: []string{"POST"}},
+	// Owner-level, not a pinned-UI mutation: the UI and the owner uid record a stop intent.
+	{Path: "/daemon/stop-intent", Handler: "API.handleStopIntent", NoAgent: true},
 	{Path: "/firewall/mode", Handler: "API.handleFirewallMode", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/firewall/fingerprints/reload", Handler: "API.handleFingerprintReload", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/firewall/fingerprints/ingest", Handler: "API.handleFingerprintIngest", Console: true, MutatingMethods: []string{"POST"}},

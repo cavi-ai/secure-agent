@@ -90,6 +90,7 @@ Generated from `apiroutes.Table`, the same registry used by the daemon and conso
 | `/local-services/receipt` | GET, HEAD | — | no agents | — |
 | `/fleet` | GET, HEAD | — | — | `api.FleetNodeStatus` |
 | `/kill` | GET, HEAD, POST | POST | — | — |
+| `/daemon/stop-intent` | — | — | no agents | — |
 | `/firewall/mode` | GET, HEAD, POST | POST | — | — |
 | `/firewall/fingerprints/reload` | GET, HEAD, POST | POST | — | — |
 | `/firewall/fingerprints/ingest` | GET, HEAD, POST | POST | — | — |
