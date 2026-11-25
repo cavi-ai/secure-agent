@@ -921,8 +921,8 @@ def resolve_prompt(agent, tool, path, rule_id, command, event):
     d = _guard_query(agent, tool, path, rule_id, PROMPT_DEADLINE_S, _cwd_for_request())
     if hook_inactive():
         quiet_exit()
-    deny_msg = (f"DENIED by Directory Guard ({rule_id}). Approve it in the Secure Agent prompt, "
-                "or add an allow-always rule, then retry.")
+    deny_msg = guard_deny_reply(rule_id, path, "Approve it in the Secure Agent prompt, "
+                                "or add an allow-always rule, then retry.")
     if d is None:  # daemon unreachable
         if runtime() == "claude":
             emit_ask(f"Secure Agent: allow {agent} to access {os.path.basename(path)}?", command, event)
@@ -1040,6 +1040,20 @@ def _clip(value, limit: int = TAINT_FIELD_MAX) -> str:
     """One redacted line: control characters dropped, whitespace collapsed."""
     text = CONTROL_RE.sub(" ", str(value or ""))
     return redact_str(" ".join(text.split()))[:limit]
+
+
+GUARD_TARGET_MAX = 200
+
+
+def _guard_target(target) -> str:
+    """The matched target as one redacted line of at most GUARD_TARGET_MAX characters; '…' marks a cut."""
+    text = _clip(target, GUARD_TARGET_MAX + 1)
+    return text if len(text) <= GUARD_TARGET_MAX else text[:GUARD_TARGET_MAX - 1] + "…"
+
+
+def guard_deny_reply(rule_id: str, target, guidance: str) -> str:
+    """Directory Guard deny reply for the agent, naming the target the rule matched."""
+    return f"DENIED by Directory Guard ({rule_id}): {_guard_target(target)}. {guidance}"
 
 
 def untrusted_input(tool: str, tool_input: dict, command: str, cwd: str = "") -> dict | None:
@@ -2361,8 +2375,8 @@ def rule_directory_guard(seg: SegmentContext) -> Verdict | None:
                 return denied(
                     "guard-deny:" + rule_id,
                     f"Blocked: access to {norm(tok)} is denied by Directory Guard ({rule_id}).",
-                    f"DENIED by Directory Guard ({rule_id}). Propose the change to the "
-                    "user, or ask them to add an allow rule, then retry.",
+                    guard_deny_reply(rule_id, norm(tok), "Propose the change to the "
+                                     "user, or ask them to add an allow rule, then retry."),
                 )
 
 
@@ -2578,8 +2592,8 @@ def _check(data: dict) -> int:
     if file_path and tool in {"Read", "Grep", "Glob", "Write", "Edit", "MultiEdit", "NotebookEdit"}:
         rule_id, mode = match_rule(file_path)
         if mode == "deny":
-            deny_msg = (f"DENIED by Directory Guard ({rule_id}). Propose the change to the user, "
-                        "or ask them to add an allow rule, then retry.")
+            deny_msg = guard_deny_reply(rule_id, norm(file_path), "Propose the change to the user, "
+                                        "or ask them to add an allow rule, then retry.")
             deny(
                 "guard-deny:" + rule_id,
                 f"Blocked: access to {norm(file_path)} is denied by Directory Guard ({rule_id}).",
@@ -2606,7 +2620,7 @@ def _check(data: dict) -> int:
                 deny(
                     "guard-deny:" + scan_rid,
                     f"Blocked: a directory scan of {scan_target} is denied by Directory Guard ({scan_rid}).",
-                    f"DENIED by Directory Guard ({scan_rid}): scanning {scan_target} reaches "
+                    f"DENIED by Directory Guard ({scan_rid}): scanning {_guard_target(scan_target)} reaches "
                     "the protected files inside it. Ask the user for the specific value you "
                     "need instead of scanning the directory.",
                     command or search_root, event,
