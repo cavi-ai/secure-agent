@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -354,10 +355,7 @@ func (c *Collector) handleNodeEvents(w http.ResponseWriter, r *http.Request, wri
 	if k := r.URL.Query().Get("kind"); k != "" {
 		kinds[k] = true
 	}
-	limit := 100
-	if l := r.URL.Query().Get("limit"); l != "" {
-		fmt.Sscanf(l, "%d", &limit)
-	}
+	limit := eventsLimit(r.URL.Query().Get("limit"))
 
 	// The JSONL query can scan the whole history before returning a page.
 	// Start the write budget after the scan and JSON encoding.
@@ -369,6 +367,21 @@ func (c *Collector) handleNodeEvents(w http.ResponseWriter, r *http.Request, wri
 	events := c.store.Query(nodeID, kinds, limit)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(dst).Encode(events)
+}
+
+// Events page size: missing, unparsable, zero and negative values use the
+// default; values above the maximum are clamped to it.
+const (
+	defaultEventsLimit = 100
+	maxEventsLimit     = 1000
+)
+
+func eventsLimit(raw string) int {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return defaultEventsLimit
+	}
+	return min(n, maxEventsLimit)
 }
 
 type eventResponseWriter struct {

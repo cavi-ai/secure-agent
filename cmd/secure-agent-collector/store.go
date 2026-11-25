@@ -8,12 +8,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -217,7 +220,11 @@ type Store struct {
 }
 
 func NewStore(dir string) *Store {
-	s := &Store{log: &jsonlLog{dir: dir}, nodes: map[string]*nodeRuntime{}}
+	return newStoreWithLog(newJSONLLog(dir, logMaxBytes, logKeepRotated))
+}
+
+func newStoreWithLog(l *jsonlLog) *Store {
+	s := &Store{log: l, nodes: map[string]*nodeRuntime{}}
 	s.log.Replay(func(env Envelope, receivedAt string) {
 		s.applyOnce(env, receivedAt, false)
 	})
@@ -740,42 +747,157 @@ func livenessState(st *NodeState, now time.Time) string {
 
 // --- JSONL reference implementation of envelopeLog ---
 
+const (
+	// logMaxBytes: a node's live log never grows past this unless one line is larger.
+	logMaxBytes = 16 << 20
+	// logKeepRotated: at most this many rotated files are kept per node.
+	logKeepRotated = 8
+	// maxLogLine: lines longer than this are skipped on read.
+	maxLogLine = 2 << 20
+)
+
+// jsonlLog keeps one live file per node, <node>.jsonl, plus rotated files
+// <node>.<seq>.jsonl where a higher seq is newer. Node ids never contain a
+// dot, so the two name forms cannot collide. maxBytes <= 0 disables rotation.
 type jsonlLog struct {
-	dir string
+	dir      string
+	maxBytes int64
+	keep     int
+	mu       sync.RWMutex // Append/rotation hold it exclusively; Query shares it.
 }
 
-// Append writes the envelope as one JSON line to the node's file.
-func (l *jsonlLog) Append(env Envelope, receivedAt string) error {
-	path := filepath.Join(l.dir, sanitize(env.NodeID)+".jsonl")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+func newJSONLLog(dir string, maxBytes int64, keep int) *jsonlLog {
+	return &jsonlLog{dir: dir, maxBytes: maxBytes, keep: keep}
+}
+
+func (l *jsonlLog) livePath(node string) string {
+	return filepath.Join(l.dir, node+".jsonl")
+}
+
+func (l *jsonlLog) rotatedPath(node string, seq int) string {
+	return filepath.Join(l.dir, fmt.Sprintf("%s.%06d.jsonl", node, seq))
+}
+
+// rotatedSeqs lists the node's rotated sequence numbers, oldest first.
+func (l *jsonlLog) rotatedSeqs(node string) []int {
+	entries, err := os.ReadDir(l.dir)
 	if err != nil {
-		return fmt.Errorf("open append: %w", err)
+		return nil
 	}
-	defer f.Close()
+	var seqs []int
+	for _, e := range entries {
+		n, seq, rotated, ok := parseLogName(e.Name())
+		if ok && rotated && n == node && !e.IsDir() {
+			seqs = append(seqs, seq)
+		}
+	}
+	sort.Ints(seqs)
+	return seqs
+}
+
+// parseLogName splits a log file name into node id and rotation sequence.
+func parseLogName(name string) (node string, seq int, rotated, ok bool) {
+	base, found := strings.CutSuffix(name, ".jsonl")
+	if !found {
+		return "", 0, false, false
+	}
+	i := strings.LastIndexByte(base, '.')
+	if i < 0 {
+		return base, 0, false, true
+	}
+	n, err := strconv.Atoi(base[i+1:])
+	if err != nil || n < 0 {
+		return "", 0, false, false
+	}
+	return base[:i], n, true, true
+}
+
+// Append writes the envelope as one JSON line to the node's live file,
+// rotating it first when the line would take it past maxBytes.
+func (l *jsonlLog) Append(env Envelope, receivedAt string) error {
 	line, err := json.Marshal(envelopeFile{ReceivedAt: receivedAt, Envelope: env})
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(append(line, '\n'))
+	line = append(line, '\n')
+	node := sanitize(env.NodeID)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err := l.rotateIfNeeded(node, int64(len(line))); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(l.livePath(node), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("open append: %w", err)
+	}
+	defer f.Close()
+	_, err = f.Write(line)
 	return err
 }
 
-// Replay feeds every stored envelope to fn in chronological order.
+// rotateIfNeeded renames a non-empty live file that cannot take the incoming
+// bytes within maxBytes, then drops rotated files beyond keep. A crash after the
+// rename leaves no live file; the next Append creates it.
+func (l *jsonlLog) rotateIfNeeded(node string, incoming int64) error {
+	if l.maxBytes <= 0 {
+		return nil
+	}
+	st, err := os.Stat(l.livePath(node))
+	if err != nil || st.Size() == 0 || st.Size()+incoming <= l.maxBytes {
+		return nil
+	}
+	seqs := l.rotatedSeqs(node)
+	next := 1
+	if len(seqs) > 0 {
+		next = seqs[len(seqs)-1] + 1
+	}
+	if err := os.Rename(l.livePath(node), l.rotatedPath(node, next)); err != nil {
+		return fmt.Errorf("rotate: %w", err)
+	}
+	seqs = append(seqs, next)
+	for len(seqs) > l.keep {
+		_ = os.Remove(l.rotatedPath(node, seqs[0]))
+		seqs = seqs[1:]
+	}
+	return nil
+}
+
+// Replay feeds every kept envelope to fn, per node oldest first: rotated
+// files in sequence order, then the live file.
 func (l *jsonlLog) Replay(fn func(env Envelope, receivedAt string)) {
 	entries, err := os.ReadDir(l.dir)
 	if err != nil {
 		return
 	}
+	type logFile struct {
+		name, node string
+		seq        int
+	}
+	var files []logFile
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+		node, seq, rotated, ok := parseLogName(e.Name())
+		if e.IsDir() || !ok {
 			continue
 		}
-		f, err := os.Open(filepath.Join(l.dir, e.Name()))
+		if !rotated {
+			seq = math.MaxInt
+		}
+		files = append(files, logFile{e.Name(), node, seq})
+	}
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].node != files[j].node {
+			return files[i].node < files[j].node
+		}
+		return files[i].seq < files[j].seq
+	})
+	for _, lf := range files {
+		f, err := os.Open(filepath.Join(l.dir, lf.name))
 		if err != nil {
 			continue
 		}
 		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, 64*1024), 2<<20)
+		sc.Buffer(make([]byte, 0, 64*1024), maxLogLine)
 		for sc.Scan() {
 			var rec envelopeFile
 			if json.Unmarshal(sc.Bytes(), &rec) == nil {
@@ -786,35 +908,92 @@ func (l *jsonlLog) Replay(fn func(env Envelope, receivedAt string)) {
 	}
 }
 
-// Query replays one node's envelopes from disk, newest first.
+// Query returns up to limit matching envelopes, newest first (limit <= 0
+// means all). It reads each file backwards, live file first, then rotated
+// files newest to oldest, and stops once limit records are found.
 func (l *jsonlLog) Query(nodeID string, kinds map[string]bool, limit int) []envelopeFile {
-	path := filepath.Join(l.dir, sanitize(nodeID)+".jsonl")
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
+	node := sanitize(nodeID)
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 
-	var all []envelopeFile
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 2<<20)
-	for sc.Scan() {
-		var rec envelopeFile
-		if json.Unmarshal(sc.Bytes(), &rec) == nil {
-			if len(kinds) > 0 && !kinds[rec.Envelope.Kind] {
-				continue
+	paths := []string{l.livePath(node)}
+	seqs := l.rotatedSeqs(node)
+	for i := len(seqs) - 1; i >= 0; i-- {
+		paths = append(paths, l.rotatedPath(node, seqs[i]))
+	}
+	var out []envelopeFile
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			continue
+		}
+		done := scanLinesReverse(f, func(line []byte) bool {
+			var rec envelopeFile
+			if json.Unmarshal(line, &rec) != nil {
+				return false
 			}
-			all = append(all, rec)
+			if len(kinds) > 0 && !kinds[rec.Envelope.Kind] {
+				return false
+			}
+			out = append(out, rec)
+			return limit > 0 && len(out) >= limit
+		})
+		f.Close()
+		if done {
+			break
 		}
 	}
-	// Newest first.
-	for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
-		all[i], all[j] = all[j], all[i]
+	return out
+}
+
+// scanLinesReverse calls fn for each non-empty line of f, last line first,
+// reading 64 KiB blocks from the end. It returns true when fn asked to stop.
+// Lines longer than maxLogLine are skipped.
+func scanLinesReverse(f *os.File, fn func(line []byte) (stop bool)) bool {
+	st, err := f.Stat()
+	if err != nil {
+		return false
 	}
-	if limit > 0 && len(all) > limit {
-		all = all[:limit]
+	pos := st.Size()
+	buf := make([]byte, 64<<10)
+	var carry []byte // bytes after the last newline read so far (a line's head is still unread)
+	skipping := false
+	for pos > 0 {
+		n := int64(len(buf))
+		if pos < n {
+			n = pos
+		}
+		pos -= n
+		if _, err := f.ReadAt(buf[:n], pos); err != nil {
+			return false
+		}
+		data := buf[:n]
+		if skipping {
+			i := bytes.LastIndexByte(data, '\n')
+			if i < 0 {
+				continue
+			}
+			data = data[:i]
+			skipping = false
+		}
+		data = append(append(make([]byte, 0, len(data)+len(carry)), data...), carry...)
+		end := len(data)
+		for {
+			i := bytes.LastIndexByte(data[:end], '\n')
+			if i < 0 {
+				break
+			}
+			if line := data[i+1 : end]; len(line) > 0 && fn(line) {
+				return true
+			}
+			end = i
+		}
+		carry = data[:end]
+		if len(carry) > maxLogLine {
+			carry, skipping = nil, true
+		}
 	}
-	return all
+	return !skipping && len(carry) > 0 && fn(carry)
 }
 
 // sanitize keeps a node id from escaping the store directory (it arrives in a
