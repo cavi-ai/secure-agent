@@ -26,11 +26,11 @@ function renderCoverage() {
   const title=document.getElementById('coverage-title');
   if(title) title.textContent=monitoringIssue?'Monitoring needs attention':'Monitoring';
   if (badge) badge.textContent = items.length ? Number(p.coverage_count) || items.length : sessions.length ? `${sessions.length} sessions` : showHooks ? hooks.rows.length ? `${hooks.rows.length} runtime${hooks.rows.length===1?'':'s'}` : 'Hook diagnostics' : '0 sessions';
-  const html = items.map(it => {
+  const markup = items.map(it => {
     const hookIssue = ['hook_evidence_gap','hook_delivery_unknown'].includes(it.kind);
     const host = hookIssue && hooks.rows.flatMap(row=>row.reports).find(row => 'hook-gap:'+row.report.forwarder_id === it.id || 'hook-unknown:'+row.report.forwarder_id === it.id);
     const action = hookIssue
-      ? `<button type="button" class="btn btn-ghost btn-sm" ${host ? `data-action="hook-delivery-inspect" data-id="${escapeHTML(host.report.forwarder_id)}"` : 'data-action="hook-setup"'}>${host ? 'Inspect delivery' : 'Hook setup and verification'}</button>`
+      ? html`<button type="button" class="btn btn-ghost btn-sm" ${host ? raw(html`data-action="hook-delivery-inspect" data-id="${host.report.forwarder_id}"`) : raw('data-action="hook-setup"')}>${host ? 'Inspect delivery' : 'Hook setup and verification'}</button>`
       : it.kind === 'uninspected_egress'
       ? '<button type="button" class="btn btn-ghost btn-sm" data-action="open-uninspected">Review endpoints</button>'
       : it.kind === 'collector_down' && it.id === 'eslogger'
@@ -38,31 +38,31 @@ function renderCoverage() {
         : ['event_loss', 'storage_loss', 'storage_read_failure'].includes(it.kind) || it.id === 'eslogger'
           ? '<button type="button" class="btn btn-ghost btn-sm" data-action="monitoring-diagnostics">Inspect monitoring</button>'
         : '<span class="coverage-guidance">Check Setup &amp; Permissions in the menu bar</span>';
-    return `<div class="coverage-row"><span><strong>${escapeHTML(it.title)}</strong><span>${escapeHTML(it.detail || '')}</span></span>${action}</div>`;
+    return html`<div class="coverage-row"><span><strong>${it.title}</strong><span>${it.detail || ''}</span></span>${raw(action)}</div>`;
   }).join('');
-  renderCoverageContent(list, html);
+  renderCoverageContent(list, markup);
   const diagnostics = document.getElementById('monitoring-diagnostics');
   if (diagnostics) diagnostics.hidden = !showHooks && !sessions.length && !probes.length && !harnesses.length;
-  const diagnosticsHTML = (showHooks ? `<details class="coverage-diagnostics" data-hook-disclosure="monitoring"><summary>Hook monitoring details</summary>${hookMonitoringHTML(hooks)}</details>` : '') + (hookSetup ? '<button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button>' : '') + (sessions.length ? `<details class="coverage-harness" data-coverage-disclosure="sessions"><summary>Per-session coverage · ${sessions.length}</summary>${sessions.map(s => {
+  const diagnosticsHTML = (showHooks ? html`<details class="coverage-diagnostics" data-hook-disclosure="monitoring"><summary>Hook monitoring details</summary>${raw(hookMonitoringHTML(hooks))}</details>` : '') + (hookSetup ? '<button type="button" class="link-btn" data-action="hook-setup">Hook setup and verification</button>' : '') + (sessions.length ? html`<details class="coverage-harness" data-coverage-disclosure="sessions"><summary>Per-session coverage · ${sessions.length}</summary>${sessions.map(s => {
     const path = (name, p = {}) => {
       p = p || {};
-      return `<span>${name}: ${escapeHTML(coveragePathLabel(p))}${p.last_seen ? ` · ${escapeHTML(p.last_seen)}` : ''}</span><span class="coverage-guidance">${escapeHTML(p.detail || '')}</span>`;
+      return html`<span>${name}: ${coveragePathLabel(p)}${p.last_seen ? ` · ${p.last_seen}` : ''}</span><span class="coverage-guidance">${p.detail || ''}</span>`;
     };
-    return `<details class="coverage-session" data-coverage-disclosure="${escapeHTML(JSON.stringify(s.session_id ? ['session', s.session_id] : ['unresolved', s.harness || '', s.workspace || '']))}" data-session-id="${escapeHTML(s.session_id || '')}"><summary>${escapeHTML(s.workspace || s.harness || 'Unresolved session')} · Guard: ${escapeHTML(coveragePathLabel(s.guard))}</summary><div class="coverage-row"><span><strong>${escapeHTML(s.harness || '')}${s.session_id ? '' : ' · session identity unresolved'}</strong>${path('Trace', s.trace)}${path('Guard', s.guard)}${path('Payload inspection', s.payload)}</span></div></details>`;
-  }).join('')}<p class="coverage-guidance">Observations belong to each session. An installed-hook check and activity in another session do not prove this session is protected.</p>${status.coverage.sessions_truncated ? '<p class="coverage-guidance">More sessions are running than this list can show. Coverage for the remaining sessions is not shown.</p>' : ''}</details>` : '')
-  + (probes.length ? `<details class="coverage-harness" data-coverage-disclosure="probes"><summary>Installed hook checks</summary>${probes.map(p => `<div class="coverage-row"><span><strong>${escapeHTML(p.harness)} · ${escapeHTML(p.state)}</strong><span>${escapeHTML(p.hook_path)}</span><span>Checked ${escapeHTML(p.checked_at)}</span><span>${escapeHTML(p.detail)}</span></span></div>`).join('')}</details>` : '')
-  + (harnesses.length ? `<details class="coverage-harness" data-coverage-disclosure="agents"><summary>Per-agent coverage</summary>${harnesses.map(h => {
+    return raw(html`<details class="coverage-session" data-coverage-disclosure="${JSON.stringify(s.session_id ? ['session', s.session_id] : ['unresolved', s.harness || '', s.workspace || ''])}" data-session-id="${s.session_id || ''}"><summary>${s.workspace || s.harness || 'Unresolved session'} · Guard: ${coveragePathLabel(s.guard)}</summary><div class="coverage-row"><span><strong>${s.harness || ''}${s.session_id ? '' : ' · session identity unresolved'}</strong>${raw(path('Trace', s.trace))}${raw(path('Guard', s.guard))}${raw(path('Payload inspection', s.payload))}</span></div></details>`);
+  })}<p class="coverage-guidance">Observations belong to each session. An installed-hook check and activity in another session do not prove this session is protected.</p>${status.coverage.sessions_truncated ? raw('<p class="coverage-guidance">More sessions are running than this list can show. Coverage for the remaining sessions is not shown.</p>') : ''}</details>` : '')
+  + (probes.length ? html`<details class="coverage-harness" data-coverage-disclosure="probes"><summary>Installed hook checks</summary>${probes.map(p => raw(html`<div class="coverage-row"><span><strong>${p.harness} · ${p.state}</strong><span>${p.hook_path}</span><span>Checked ${p.checked_at}</span><span>${p.detail}</span></span></div>`))}</details>` : '')
+  + (harnesses.length ? html`<details class="coverage-harness" data-coverage-disclosure="agents"><summary>Per-agent coverage</summary>${harnesses.map(h => {
     const trace = !h.trace_supported ? 'not supported' : h.trace_last_seen ? 'activity observed in 24h' : 'supported; no activity observed in 24h';
     const guard = !h.guard_supported ? 'not supported' : h.hook_last_seen ? 'hook activity observed in 24h' : 'supported; no hook activity observed in 24h';
-    return `<div class="coverage-row"><span><strong>${escapeHTML(h.name)}</strong><span>Trace: ${escapeHTML(trace)} · Guard: ${escapeHTML(guard)}</span></span></div>`;
-  }).join('')}<p class="coverage-guidance">${status.proxy_enabled
+    return raw(html`<div class="coverage-row"><span><strong>${h.name}</strong><span>Trace: ${trace} · Guard: ${guard}</span></span></div>`);
+  })}<p class="coverage-guidance">${status.proxy_enabled
     ? 'Payload inspection covers connections routed through the proxy; review Egress for coverage.'
     : 'Payload inspection is off (proxy disabled).'} Recent harness activity does not prove every current session is guarded.</p></details>` : '');
   renderCoverageContent(document.getElementById('monitoring-diagnostic-list'), diagnosticsHTML);
 }
 
-function renderCoverageContent(list, html) {
-  if (!list || list.coverageHTML === html) return;
+function renderCoverageContent(list, markup) {
+  if (!list || list.coverageHTML === markup) return;
   const disclosures = '[data-hook-disclosure], [data-coverage-disclosure]';
   const key = el => el?.dataset.hookDisclosure ? 'hook:' + el.dataset.hookDisclosure : el?.dataset.coverageDisclosure ? 'coverage:' + el.dataset.coverageDisclosure : null;
   const open=new Set([...(list.querySelectorAll?.(disclosures) || [])].filter(el=>el.open).map(key));
@@ -70,8 +70,8 @@ function renderCoverageContent(list, html) {
   const action=focused?.closest?.('[data-action]');
   const focusKey=action && list.contains?.(action) ? JSON.stringify(action.dataset) : null;
   const summaryKey=focused?.matches?.('summary') && key(focused.parentElement);
-  list.innerHTML=html;
-  list.coverageHTML=html;
+  list.innerHTML=markup;
+  list.coverageHTML=markup;
   for(const el of list.querySelectorAll?.(disclosures) || []) if(open.has(key(el))) el.open=true;
   const replacement=focusKey ? [...(list.querySelectorAll?.('[data-action]') || [])].find(el=>JSON.stringify(el.dataset)===focusKey)
     : summaryKey ? [...(list.querySelectorAll?.(disclosures) || [])].find(el=>key(el)===summaryKey)?.querySelector('summary') : null;
@@ -125,25 +125,25 @@ function retriageItem(ctx, id) {
   if (!ctx.advisor) return null;
   if (ctx.SA.pendingRetriage && ctx.SA.pendingRetriage.has(id)) return { label: 'Advisor re-reading…', attrs: '', disabled: true };
   if (ctx.advisor.offline) return { label: 'Advisor offline', attrs: '', disabled: true, title: `Advisor offline — verdicts paused (${ctx.advisor.error})` };
-  return { label: 'Re-run advisor', attrs: `data-action="retriage" data-id="${escapeHTML(id)}"`, title: 'Ask the local model to re-read this flag' };
+  return { label: 'Re-run advisor', attrs: html`data-action="retriage" data-id="${id}"`, title: 'Ask the local model to re-read this flag' };
 }
 
 // bodyHTML: a row's detail — the lead sentence, the parts in between, the
 // actions, and the raw evidence behind a closed Details.
 function bodyHTML(attrs, b) {
-  return `<div class="row-body" ${attrs}>`
-    + (b.lead ? `<p class="body-lead">${escapeHTML(b.lead)}</p>` : '')
+  return html`<div class="row-body" ${raw(attrs)}>`
+    + (b.lead ? html`<p class="body-lead">${b.lead}</p>` : '')
     + (b.parts || '')
-    + (b.actions ? `<div class="body-actions">${b.actions}</div>` : '')
-    + (b.evidence ? `<details class="body-evidence"><summary>${escapeHTML(b.evidenceLabel || 'Evidence')}</summary>${b.evidence}</details>` : '')
+    + (b.actions ? html`<div class="body-actions">${raw(b.actions)}</div>` : '')
+    + (b.evidence ? html`<details class="body-evidence"><summary>${b.evidenceLabel || 'Evidence'}</summary>${raw(b.evidence)}</details>` : '')
     + '</div>';
 }
 
 function evidenceChainHTML(f) {
   const chain = buildEvidenceChain(f);
-  return chain.length ? `<div class="chain">${chain.map((n, j) => `${j > 0 ? '<span class="chain-link" aria-hidden="true"></span>' : ''}`
-    + `<div class="chain-node ${n.cls}"><span class="cn-icon"><svg class="icon"><use href="#${n.icon}"/></svg></span>`
-    + `<span class="cn-body"><span class="cn-label">${escapeHTML(n.label)}</span><span class="cn-sub">${escapeHTML(n.sub)}</span></span></div>`).join('')}</div>` : '';
+  return chain.length ? html`<div class="chain">${chain.map((n, j) => raw((j > 0 ? '<span class="chain-link" aria-hidden="true"></span>' : '')
+    + html`<div class="chain-node ${n.cls}"><span class="cn-icon"><svg class="icon"><use href="#${n.icon}"/></svg></span>`
+    + html`<span class="cn-body"><span class="cn-label">${n.label}</span><span class="cn-sub">${n.sub}</span></span></div>`))}</div>` : '';
 }
 
 // findingFactsHTML: the raw facts behind an explained flag — rule, file,
@@ -161,9 +161,9 @@ function findingFactsHTML(f) {
     ['PID', f.pid], ['Session', f.session_id || c.session_id], ['Raised', f.ts],
     ['Tool', c.tool ? c.tool + (c.tool_at ? ' at ' + c.tool_at : '') : ''], ['Model', c.model],
   ].filter(([, v]) => v !== undefined && v !== null && v !== '');
-  return `<dl class="finding-facts">${facts.map(([k, v]) => `<dt>${escapeHTML(k)}</dt><dd>${k === 'File'
-    ? `<button type="button" class="file-link" data-action="open-file" data-path="${escapeHTML(v)}">${escapeHTML(v)}</button>`
-    : escapeHTML(v)}</dd>`).join('')}</dl>`;
+  return html`<dl class="finding-facts">${facts.map(([k, v]) => raw(html`<dt>${k}</dt><dd>${k === 'File'
+    ? raw(html`<button type="button" class="file-link" data-action="open-file" data-path="${v}">${v}</button>`)
+    : v}</dd>`))}</dl>`;
 }
 
 // ---------- detail bodies, shared by both lists ----------
@@ -172,23 +172,21 @@ function findingFactsHTML(f) {
 // Re-run advisor and the session link; an unexplained flag gets the
 // console's own Dismiss, mutes and Kill.
 function flagActionItems(f, ctx) {
-  const id = escapeHTML(f.id);
   const retriage = retriageItem(ctx, f.id);
-  const session = f.session_id ? { label: 'View session in timeline', attrs: `data-action="filter-session" data-session="${escapeHTML(f.session_id)}"` } : null;
+  const session = f.session_id ? { label: 'View session in timeline', attrs: html`data-action="filter-session" data-session="${f.session_id}"` } : null;
   if (f.explain) {
-    return explainActionItems(f, [{ label: 'What to do', attrs: `data-action="open-plan" data-subject="flag:${id}"` }, retriage, session].filter(Boolean));
+    return explainActionItems(f, [{ label: 'What to do', attrs: html`data-action="open-plan" data-subject="flag:${f.id}"` }, retriage, session].filter(Boolean));
   }
-  const agent = escapeHTML(f.agent || '');
-  const rule = escapeHTML(f.rule);
+  const agent = f.agent || '';
   const host = flagHost(f);
   return [
-    { label: 'Dismiss', attrs: `data-action="dismiss-flag" data-id="${id}"`, title: 'Mark reviewed — this flag leaves the list; the rule keeps watching', bar: true },
+    { label: 'Dismiss', attrs: html`data-action="dismiss-flag" data-id="${f.id}"`, title: 'Mark reviewed — this flag leaves the list; the rule keeps watching', bar: true },
     retriage, session,
     f.advisor && f.advisor.assessment === 'benign' && host
-      ? { label: 'Mute rule+host', attrs: `data-action="mute-flag" data-rule="${rule}" data-host="${escapeHTML(host)}" data-agent="${agent}"`, title: `Stop flagging ${f.rule} for ${host} — reversible` } : null,
+      ? { label: 'Mute rule+host', attrs: html`data-action="mute-flag" data-rule="${f.rule}" data-host="${host}" data-agent="${agent}"`, title: `Stop flagging ${f.rule} for ${host} — reversible` } : null,
     isKeychainRule(f.rule)
-      ? { label: 'Dismiss this flag class', attrs: `data-action="mute-rule" data-rule="${rule}" data-agent="${agent}"`, title: `Stop flagging ${f.rule}${f.agent ? ' for ' + f.agent : ' entirely'} — reversible from the muted list below` } : null,
-    { label: `Kill ${f.agent || 'agent'}`, attrs: `data-action="kill" data-pid="${Number(f.pid) || 0}"`, kind: 'danger', title: `Terminate the agent process tree (pid ${Number(f.pid) || 0})` },
+      ? { label: 'Dismiss this flag class', attrs: html`data-action="mute-rule" data-rule="${f.rule}" data-agent="${agent}"`, title: `Stop flagging ${f.rule}${f.agent ? ' for ' + f.agent : ' entirely'} — reversible from the muted list below` } : null,
+    { label: `Kill ${f.agent || 'agent'}`, attrs: html`data-action="kill" data-pid="${Number(f.pid) || 0}"`, kind: 'danger', title: `Terminate the agent process tree (pid ${Number(f.pid) || 0})` },
   ].filter(Boolean);
 }
 
@@ -202,23 +200,23 @@ function flagBodyHTML(f, ctx, actions = true) {
   const l = explainLines(f, ctx.now);
   const bar = actions ? actionBarHTML(flagActionItems(f, ctx)) : '';
   if (!l) {
-    const lines = (f.evidence || []).map(ev => `<div>${escapeHTML(typeof ev === 'string' ? ev
-      : ev.text || (ev.sub ? (ev.label || '') + ' (' + ev.sub + ')' : ev.label))}</div>`).join('');
+    const lines = (f.evidence || []).map(ev => html`<div>${typeof ev === 'string' ? ev
+      : ev.text || (ev.sub ? (ev.label || '') + ' (' + ev.sub + ')' : ev.label)}</div>`).join('');
     const a = ctx.advisor && f.advisor && f.advisor.assessment;
-    return bodyHTML(`data-flag-id="${escapeHTML(f.id)}"`, {
+    return bodyHTML(html`data-flag-id="${f.id}"`, {
       lead: isKeychainRule(f.rule) ? 'Apps read the keychain to load their own credentials; this is usually routine.' : '',
-      parts: a ? `<p class="body-note"><span class="advisor-chip adv-${escapeHTML(a)}" title="${escapeHTML(f.advisor.rationale || '')}">advisor: ${escapeHTML(a)}</span></p>` : '',
-      actions: bar, evidence: evidenceChainHTML(f) + (lines ? `<div class="flag-evidence">${lines}</div>` : ''),
+      parts: a ? html`<p class="body-note"><span class="advisor-chip adv-${a}" title="${f.advisor.rationale || ''}">advisor: ${a}</span></p>` : '',
+      actions: bar, evidence: evidenceChainHTML(f) + (lines ? html`<div class="flag-evidence">${raw(lines)}</div>` : ''),
     });
   }
   const ex = f.explain;
-  return bodyHTML(`data-flag-id="${escapeHTML(f.id)}"`, {
+  return bodyHTML(html`data-flag-id="${f.id}"`, {
     lead: l.what,
     parts: factChipsHTML(f, l.who)
-      + (ex.assessment ? assessmentHTML(ex.assessment) : `<p class="body-verdict">${escapeHTML(l.verdict)}</p>`)
+      + (ex.assessment ? assessmentHTML(ex.assessment) : html`<p class="body-verdict">${l.verdict}</p>`)
       + labelsLineHTML(ex.labels),
     actions: bar,
-    evidence: evidenceChainHTML(f) + findingFactsHTML(f) + `<div class="body-marks">${markButtonsHTML('flag:' + f.id)}</div>`,
+    evidence: evidenceChainHTML(f) + findingFactsHTML(f) + html`<div class="body-marks">${raw(markButtonsHTML('flag:' + f.id))}</div>`,
   });
 }
 
@@ -241,8 +239,8 @@ function patternActionItems(p) {
     .map(a => (p.dismissed ? { ...a, disabled: true } : a));
   const attrs = a => {
     const host = a.body && typeof a.body.host === 'string' ? a.body.host : '';
-    return `data-action="explain-act" data-pattern-key="${escapeHTML(p.key)}" data-action-id="${escapeHTML(a.id)}"`
-      + (host ? ` data-host="${escapeHTML(host)}"` : '');
+    return html`data-action="explain-act" data-pattern-key="${p.key}" data-action-id="${a.id}"`
+      + (host ? html` data-host="${host}"` : '');
   };
   return actionItems(acts, [], attrs, a => patternActionLabel(p, a));
 }
@@ -260,21 +258,21 @@ function patternBodyHTML(p, ctx, actions = true) {
   const row = f => {
     const t = new Date(f.ts);
     const at = isNaN(t) ? String(f.ts || '') : t.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    return `<li><button type="button" class="pattern-flag-link" data-action="open-flag" data-id="${escapeHTML(f.id)}" aria-label="View security flag ${escapeHTML(f.id)}">`
-      + `<span>${escapeHTML(at)}</span><span>pid ${Number(f.pid) || 0}</span>`
-      + `${f.session_id ? `<span>session ${escapeHTML(sessionShort(f.session_id))}</span>` : ''}<code>${escapeHTML(f.id)}</code><span aria-hidden="true">↗</span></button></li>`;
+    return html`<li><button type="button" class="pattern-flag-link" data-action="open-flag" data-id="${f.id}" aria-label="View security flag ${f.id}">`
+      + html`<span>${at}</span><span>pid ${Number(f.pid) || 0}</span>`
+      + html`${f.session_id ? raw(html`<span>session ${sessionShort(f.session_id)}</span>`) : ''}<code>${f.id}</code><span aria-hidden="true">↗</span></button></li>`;
   };
   const procs = patternProcessesText(p.processes);
-  const cadence = [`${count}×`, patternWindowText(p, ctx.now), p.cadence].filter(Boolean).map(escapeHTML).join(' · ');
-  return bodyHTML(`data-pattern-key="${escapeHTML(p.key)}"`, {
+  const cadence = [`${count}×`, patternWindowText(p, ctx.now), p.cadence].filter(Boolean).join(' · ');
+  return bodyHTML(html`data-pattern-key="${p.key}"`, {
     lead: p.summary,
-    parts: (procs ? `<p class="body-note pattern-processes">${escapeHTML(procs)}</p>` : '')
-      + `<div class="pattern-cadence"><span class="pattern-bars" role="img" aria-label="Flags per bucket over the window, oldest first">${patternBarsHTML(p.hourly)}</span>`
-      + `<span class="pattern-cadence-text">${cadence} · <b class="pattern-open">${open} open</b></span></div>`
-      + (p.assessment ? assessmentHTML(p.assessment) : `<p class="body-verdict">${escapeHTML((d.text || '') + (d.why ? ': ' + d.why : ''))}</p>`),
+    parts: (procs ? html`<p class="body-note pattern-processes">${procs}</p>` : '')
+      + html`<div class="pattern-cadence"><span class="pattern-bars" role="img" aria-label="Flags per bucket over the window, oldest first">${raw(patternBarsHTML(p.hourly))}</span>`
+      + html`<span class="pattern-cadence-text">${cadence} · <b class="pattern-open">${open} open</b></span></div>`
+      + (p.assessment ? assessmentHTML(p.assessment) : html`<p class="body-verdict">${(d.text || '') + (d.why ? ': ' + d.why : '')}</p>`),
     actions: actions ? actionBarHTML(patternActionItems(p)) : '',
     evidenceLabel: `Individual flags (${Number(p.flags ?? count) || 0})`,
-    evidence: rows.length ? `<ul class="pattern-flag-list">${cap.shown.map(row).join('')}</ul>${cap.more}`
+    evidence: rows.length ? html`<ul class="pattern-flag-list">${cap.shown.map(f => raw(row(f)))}</ul>${raw(cap.more)}`
       : '<p class="pattern-flags-note">None of them is open in the loaded window.</p>',
   });
 }
@@ -285,7 +283,7 @@ const ROUTINE_CONSOLE_ACTIONS = ['expect-all', 'dismiss-all'];
 // handler from the served group (key + action id).
 function routineActionItems(rg) {
   const acts = assessmentActions(rg.actions, rg.assessment).filter(a => a && ROUTINE_CONSOLE_ACTIONS.includes(a.id));
-  const attrs = a => `data-action="routine-act" data-routine-key="${escapeHTML(rg.key)}" data-action-id="${escapeHTML(a.id)}"`;
+  const attrs = a => html`data-action="routine-act" data-routine-key="${rg.key}" data-action-id="${a.id}"`;
   return actionItems(acts, [], attrs, a => a.label || a.id);
 }
 
@@ -295,26 +293,25 @@ function routineBodyHTML(rg, actions = true) {
   const dests = rg.destinations || [];
   const more = (Number(rg.destination_count) || 0) - dests.length;
   const chips = [
-    rg.reader ? `<span class="fact"><svg class="icon"><use href="#i-terminal"/></svg>${escapeHTML(rg.reader)}</span>` : '',
-    `<span class="fact fact-file"><svg class="icon"><use href="#i-doc"/></svg>${escapeHTML(rg.area)}${rg.files > 1 ? ` · ${Number(rg.files)} files` : ''}</span>`,
-    `<span class="fact"><svg class="icon"><use href="#i-agent"/></svg>${escapeHTML((rg.agents || []).join(', '))}</span>`,
-    ...dests.map(x => `<span class="fact fact-dest" title="${escapeHTML(x.host)} · cited by ${Number(x.count)} flag${Number(x.count) === 1 ? '' : 's'}"><svg class="icon"><use href="#i-globe"/></svg>${escapeHTML(x.org || x.host)}</span>`),
-    more > 0 ? `<span class="fact">+${more} more</span>` : '',
+    rg.reader ? html`<span class="fact"><svg class="icon"><use href="#i-terminal"/></svg>${rg.reader}</span>` : '',
+    html`<span class="fact fact-file"><svg class="icon"><use href="#i-doc"/></svg>${rg.area}${rg.files > 1 ? ` · ${Number(rg.files)} files` : ''}</span>`,
+    html`<span class="fact"><svg class="icon"><use href="#i-agent"/></svg>${(rg.agents || []).join(', ')}</span>`,
+    ...dests.map(x => html`<span class="fact fact-dest" title="${x.host} · cited by ${Number(x.count)} flag${Number(x.count) === 1 ? '' : 's'}"><svg class="icon"><use href="#i-globe"/></svg>${x.org || x.host}</span>`),
+    more > 0 ? html`<span class="fact">+${more} more</span>` : '',
   ].filter(Boolean).join('');
-  return bodyHTML(`data-routine-key="${escapeHTML(rg.key)}"`, {
+  return bodyHTML(html`data-routine-key="${rg.key}"`, {
     lead: rg.summary,
-    parts: `<div class="facts">${chips}</div>${assessmentHTML(rg.assessment)}`,
+    parts: html`<div class="facts">${raw(chips)}</div>${raw(assessmentHTML(rg.assessment))}`,
     actions: actions ? actionBarHTML(routineActionItems(rg)) : '',
   });
 }
 
 function incidentActionItems(inc) {
-  const id = escapeHTML(inc.id);
   const status = (inc.workflow || {}).status || 'open';
   return [
-    { label: 'View report', attrs: `data-action="open-incident" data-id="${id}"`, bar: true },
-    status === 'open' ? { label: 'Dismiss', attrs: `data-action="incident-status" data-id="${id}" data-status="acknowledged" title="Remove from Needs you; keep the report and monitoring"`, bar: true } : null,
-    status !== 'resolved' ? { label: 'Report resolved', attrs: `data-action="incident-status" data-id="${id}" data-status="resolved"` } : null,
+    { label: 'View report', attrs: html`data-action="open-incident" data-id="${inc.id}"`, bar: true },
+    status === 'open' ? { label: 'Dismiss', attrs: html`data-action="incident-status" data-id="${inc.id}" data-status="acknowledged" title="Remove from Needs you; keep the report and monitoring"`, bar: true } : null,
+    status !== 'resolved' ? { label: 'Report resolved', attrs: html`data-action="incident-status" data-id="${inc.id}" data-status="resolved"` } : null,
   ].filter(Boolean);
 }
 
@@ -322,13 +319,13 @@ function incidentActionItems(inc) {
 // resolution, the workflow actions, and the secrets to rotate as evidence.
 function incidentBodyHTML(inc, ctx, actions = true) {
   const wf = inc.workflow || {};
-  const rotate = (inc.rotate_list || []).map(item => `<div class="rotate-item-row"><span class="rk"><svg class="icon"><use href="#i-key"/></svg>`
-    + `<strong>${escapeHTML(item.name)}</strong> (${escapeHTML(item.category)})</span></div>`).join('');
-  return bodyHTML(`data-incident-id="${escapeHTML(inc.id)}"`, {
+  const rotate = (inc.rotate_list || []).map(item => html`<div class="rotate-item-row"><span class="rk"><svg class="icon"><use href="#i-key"/></svg>`
+    + html`<strong>${item.name}</strong> (${item.category})</span></div>`).join('');
+  return bodyHTML(html`data-incident-id="${inc.id}"`, {
     lead: inc.summary,
     parts: payloadOutcomeHTML(inc.payload_outcomes || (inc.rule === 'proxy-secret-leak' ? { unknown: inc.aggregate_count || 1 } : null))
-      + (ctx.advisor && inc.advisor_narrative ? `<p class="body-note">${escapeHTML(inc.advisor_narrative)}</p>` : '')
-      + (wf.resolution_note ? `<p class="body-note">Reported resolution: ${escapeHTML(wf.resolution_note)}</p>` : ''),
+      + (ctx.advisor && inc.advisor_narrative ? html`<p class="body-note">${inc.advisor_narrative}</p>` : '')
+      + (wf.resolution_note ? html`<p class="body-note">Reported resolution: ${wf.resolution_note}</p>` : ''),
     actions: actions ? actionBarHTML(incidentActionItems(inc)) : '',
     evidenceLabel: inc.remediation && (inc.remediation.steps || []).length ? 'Remediation steps' : 'Secrets to rotate',
     evidence: incidentRemediationHTML(inc.id, inc.remediation, actions) || rotate,
@@ -352,7 +349,7 @@ function needsItems(posture) {
 // body when the item has one.
 function needView(item, ctx) {
   const g = item.group || {};
-  const id = escapeHTML(item.id);
+  const id = item.id;
   const a = item.assessment || (item.review || {}).assessment;
   const v = { key: `${item.kind}:${item.id}`, kind: item.kind, agent: g.agent || '', sev: 'sev-bad', word: a ? assessmentDisplay(a).text : 'critical', assessment: a,
     what: item.detail || item.title || '', why: '', at: '', items: [], body: null };
@@ -361,19 +358,19 @@ function needView(item, ctx) {
       const f = item.hook_finding;
       return { ...v, sev: 'sev-warn', word: 'hook repair', what: item.title || 'Hook needs repair', why: f ? f.detail : item.detail || '',
         at: f ? f.last_at : '', body: f ? () => hookFindingBodyHTML(f, item.session_id) : null,
-        items: item.session_id ? [{ label: 'Inspect session hooks', attrs: `data-action="session-current" data-session="${escapeHTML(item.session_id)}"`, bar: true }] : [] };
+        items: item.session_id ? [{ label: 'Inspect session hooks', attrs: html`data-action="session-current" data-session="${item.session_id}"`, bar: true }] : [] };
     }
     case 'hook_delivery': {
       const row = item.hook_delivery;
       if (!validHookForwarder(row)) return { ...v, sev:'sev-warn', word:'hook delivery', what:'Delivery evidence unavailable' };
       return { ...v, sev:'sev-warn', word:'hook delivery', what:item.title || 'Hook delivery needs attention', why:item.detail || '', at:row.received_at,
-        body:() => hookForwardersHTML([row],false), items:[{label:'Inspect delivery',attrs:`data-action="hook-delivery-inspect" data-id="${escapeHTML(row.report.forwarder_id)}"`,bar:true}] };
+        body:() => hookForwardersHTML([row],false), items:[{label:'Inspect delivery',attrs:html`data-action="hook-delivery-inspect" data-id="${row.report.forwarder_id}"`,bar:true}] };
     }
     case 'review': {
       const r = item.review;
       if (!r) return v;
       const c = r.context || {};
-      const attrs = action => `data-action="review-decision" data-id="${id}" data-revision="${Number(r.revision)}" data-decision="${action}"`;
+      const attrs = action => html`data-action="review-decision" data-id="${id}" data-revision="${Number(r.revision)}" data-decision="${action}"`;
       return { ...v, agent: r.agent || v.agent, what: (c.resources || []).join(', ') || item.title,
         why: (r.assessment || {}).reason || '', at: r.last_seen,
         items: r.evidence_available && validReviewRevision(r.revision) ? [
@@ -384,25 +381,25 @@ function needView(item, ctx) {
     }
     case 'guard': {
       const workspace = String(item.workspace || '').split('/').filter(Boolean).pop() || '';
-      const a = (verdict, scope, expiry, kind) => `data-action="guard-resolve" data-id="${id}" data-verdict="${verdict}" data-scope="${scope}"${expiry ? ` data-expiry="${escapeHTML(expiry)}"` : ''}${kind ? ' data-category="kind"' : ''}`;
-      const facts = `<dl class="finding-facts guard-request-facts"><dt>Operation</dt><dd>${escapeHTML(item.tool || 'Unknown')}</dd><dt>Resource</dt><dd>${escapeHTML(item.path || 'Unknown')}</dd><dt>Workspace</dt><dd>${escapeHTML(item.workspace || 'Unknown')}</dd><dt>Matched rule</dt><dd>${escapeHTML(item.rule || item.rule_id || 'Unknown')}</dd><dt>Executable path</dt><dd>${escapeHTML(item.reader_exe || 'Unknown; once only')}</dd></dl>`;
+      const a = (verdict, scope, expiry, kind) => html`data-action="guard-resolve" data-id="${id}" data-verdict="${verdict}" data-scope="${scope}"${expiry ? raw(html` data-expiry="${expiry}"`) : ''}${kind ? raw(' data-category="kind"') : ''}`;
+      const facts = html`<dl class="finding-facts guard-request-facts"><dt>Operation</dt><dd>${item.tool || 'Unknown'}</dd><dt>Resource</dt><dd>${item.path || 'Unknown'}</dd><dt>Workspace</dt><dd>${item.workspace || 'Unknown'}</dd><dt>Matched rule</dt><dd>${item.rule || item.rule_id || 'Unknown'}</dd><dt>Executable path</dt><dd>${item.reader_exe || 'Unknown; once only'}</dd></dl>`;
       return { ...v, sev: 'sev-warn', word: 'access request', facts,
         why: [`${v.agent || 'The agent'} is paused until you answer`, (item.available_scopes || []).some(s => s.kind !== 'once') ? 'Future access requires a chosen limit' : 'Identity incomplete; once only', workspace].filter(Boolean).join(' · '),
         items: [
           { label: 'Allow once', attrs: a('allow', 'once'), bar: true },
           { label: 'Deny', attrs: a('deny', 'once'), kind: 'danger', bar: true },
-          ...(item.session_id ? [{ label:'Inspect session',attrs:`data-action="guard-inspect" data-id="${id}"`,bar:true }] : []),
+          ...(item.session_id ? [{ label:'Inspect session',attrs:html`data-action="guard-inspect" data-id="${id}"`,bar:true }] : []),
           ...(item.available_scopes || []).filter(s => s.kind !== 'once').map(s => ({label:guardChoiceLabel(s,item.categories),attrs:a('allow',s.kind,s.expiry,s.category === true)})),
         ],
-        body: () => facts + `<p>Once answers only this request. Future access requires a separate confirmation.</p><p>${escapeHTML(item.scopeText || item.scope_text || '')}</p>${item.advisor ? '<p>Advisor interpretation; not proof of intent or safety.</p>' + advisorAdviceHTML(item.advisor) : ''}` };
+        body: () => facts + html`<p>Once answers only this request. Future access requires a separate confirmation.</p><p>${item.scopeText || item.scope_text || ''}</p>${item.advisor ? raw('<p>Advisor interpretation; not proof of intent or safety.</p>' + advisorAdviceHTML(item.advisor)) : ''}` };
     }
     case 'resource':
       return { ...v, sev: 'sev-warn', word: 'resource',
         why: [g.label, g.rssBytes ? `${fmtRSS(g.rssBytes)} memory` : '', g.cpuPercent ? `${fmtCPU(g.cpuPercent)} CPU` : '',
           g.processCount ? `${Number(g.processCount)} process${Number(g.processCount) === 1 ? '' : 'es'}` : ''].filter(Boolean).join(' · '),
         items: [
-          { label: 'Keep running', attrs: `data-action="resource-control" data-id="${id}" data-decision="dismiss"`, bar: true },
-          { label: `Apply ${String(item.action).replaceAll('_', ' ')}`, attrs: `data-action="resource-control" data-id="${id}" data-decision="apply" data-intervention="${escapeHTML(item.action)}"`, kind: 'danger', bar: true },
+          { label: 'Keep running', attrs: html`data-action="resource-control" data-id="${id}" data-decision="dismiss"`, bar: true },
+          { label: `Apply ${String(item.action).replaceAll('_', ' ')}`, attrs: html`data-action="resource-control" data-id="${id}" data-decision="apply" data-intervention="${item.action}"`, kind: 'danger', bar: true },
         ] };
     case 'incident': {
       const inc = ctx.incidents.get(item.id);
@@ -421,11 +418,11 @@ function needView(item, ctx) {
       if (!f) return { ...v, word: a ? v.word : item.disposition?.text || 'needs review',
         why: 'Evidence is outside the current event view. Dismiss marks this flag reviewed; the rule keeps watching.',
         items: [
-          { label: 'View evidence', attrs: `data-action="open-flag" data-id="${id}"`, bar: true },
-          { label: 'Dismiss', attrs: `data-action="dismiss-flag" data-id="${id}"`, title: 'Mark reviewed; the rule keeps watching', bar: true },
+          { label: 'View evidence', attrs: html`data-action="open-flag" data-id="${id}"`, bar: true },
+          { label: 'Dismiss', attrs: html`data-action="dismiss-flag" data-id="${id}"`, title: 'Mark reviewed; the rule keeps watching', bar: true },
         ] };
       const l = explainLines(f, ctx.now);
-      const plan = { label: 'What to do', attrs: `data-action="open-plan" data-subject="flag:${id}"` };
+      const plan = { label: 'What to do', attrs: html`data-action="open-plan" data-subject="flag:${id}"` };
       const assessment = (f.explain || {}).assessment || a;
       return { ...v, assessment, word: assessment ? assessmentDisplay(assessment).text : v.word,
         what: (l && l.what) || v.what, why: assessment ? '' : (l && (l.why || l.state)) || '', at: f.ts,
@@ -454,32 +451,32 @@ function needView(item, ctx) {
 function needRowHTML(v, open, nowMs) {
   const dom = 'need-' + v.key.replace(/[^A-Za-z0-9_-]/g, '_');
   const clock = clockText(v.at, nowMs);
-  const meta = `<span class="need-meta">${escapeHTML(v.word + (clock ? ' · ' + clock : ''))}`
-    + `${v.body ? '<svg class="icon need-chev" aria-hidden="true"><use href="#i-arrow"/></svg>' : ''}</span>`;
-  const inner = `${harnessChipHTML(v.agent)}<span class="need-what" title="${escapeHTML(v.what)}">${escapeHTML(v.what)}</span>`
-    + `<span class="need-why">${escapeHTML(v.why)}</span>${meta}`;
+  const meta = html`<span class="need-meta">${v.word + (clock ? ' · ' + clock : '')}`
+    + html`${v.body ? raw('<svg class="icon need-chev" aria-hidden="true"><use href="#i-arrow"/></svg>') : ''}</span>`;
+  const inner = html`${raw(harnessChipHTML(v.agent))}<span class="need-what" title="${v.what}">${v.what}</span>`
+    + html`<span class="need-why">${v.why}</span>${raw(meta)}`;
   const [kind, ...id] = v.key.split(':');
   const selected = !!v.selected;
-  const head = `<button type="button" class="need-head" data-action="select-attention" data-need-kind="${escapeHTML(kind)}" data-need-id="${escapeHTML(id.join(':'))}" aria-pressed="${selected}">${inner}</button>`;
+  const head = html`<button type="button" class="need-head" data-action="select-attention" data-need-kind="${kind}" data-need-id="${id.join(':')}" aria-pressed="${selected}">${raw(inner)}</button>`;
   const lead = (v.items || []).find(i => i.bar);
-  return `<li class="need need-row ${v.sev}${v.assessment ? ' need-assessed' : ''}${selected ? ' is-selected' : ''}" data-kind="${escapeHTML(v.kind)}" data-need-key="${escapeHTML(v.key)}">${head}`
-    + (v.assessment ? `<div class="need-assessment">${assessmentHTML(v.assessment)}</div>` : '')
-    + (v.facts ? `<div class="guard-request-summary">${v.facts}<p>Once answers only this request. Inspection leaves it unanswered; its timeout continues.</p></div>` : '')
-    + (lead && lead.title ? `<p class="need-consequence">${escapeHTML(lead.title)}</p>` : '')
-    + `<div class="need-actions">${actionBarHTML(v.items)}</div></li>`;
+  return html`<li class="need need-row ${v.sev}${v.assessment ? ' need-assessed' : ''}${selected ? ' is-selected' : ''}" data-kind="${v.kind}" data-need-key="${v.key}">${raw(head)}`
+    + (v.assessment ? html`<div class="need-assessment">${raw(assessmentHTML(v.assessment))}</div>` : '')
+    + (v.facts ? html`<div class="guard-request-summary">${raw(v.facts)}<p>Once answers only this request. Inspection leaves it unanswered; its timeout continues.</p></div>` : '')
+    + (lead && lead.title ? html`<p class="need-consequence">${lead.title}</p>` : '')
+    + html`<div class="need-actions">${raw(actionBarHTML(v.items))}</div></li>`;
 }
 
 function attentionSummaryHTML(posture, stale) {
   if (!validAttentionSummary(posture)) return '<p>Attention breakdown unavailable. Review the retained queue and monitoring details below.</p>';
   const titles = { decisions: 'Waiting for your decision', security: 'Security review', monitoring: 'Monitoring problems', other: 'Other attention' };
-  return `${stale ? '<p role="status">Last known attention breakdown; current counts and requests may have changed. Refresh telemetry before relying on these observations.</p>' : ''}<div class="attention-summary-grid">${posture.attention_summary.buckets.map(b => {
+  return html`${stale ? raw('<p role="status">Last known attention breakdown; current counts and requests may have changed. Refresh telemetry before relying on these observations.</p>') : ''}<div class="attention-summary-grid">${posture.attention_summary.buckets.map(b => {
     const first = b.first;
-    const inspect = !stale && first ? `<button type="button" class="link-btn" data-action="select-attention" data-need-kind="${escapeHTML(first.kind)}" data-need-id="${escapeHTML(first.id)}">${b.kind === 'decisions' ? 'Review request' : b.kind === 'security' ? 'Review evidence' : 'Inspect issue'}</button>` : '';
+    const inspect = !stale && first ? html`<button type="button" class="link-btn" data-action="select-attention" data-need-kind="${first.kind}" data-need-id="${first.id}">${b.kind === 'decisions' ? 'Review request' : b.kind === 'security' ? 'Review evidence' : 'Inspect issue'}</button>` : '';
     const gaps = b.coverage_count && !stale ? '<button type="button" class="link-btn" data-action="view-monitoring">View monitoring</button>' : '';
     const total = b.count + b.coverage_count;
     const count = b.kind === 'monitoring' ? `${total} current problem${total === 1 ? '' : 's'}` : `${b.count} queued item${b.count === 1 ? '' : 's'}`;
-    return `<article class="attention-summary-card"><h3>${titles[b.kind]}</h3><p>${count}</p>${first ? `<p>${escapeHTML(first.title)}</p>` : ''}${inspect}${gaps}</article>`;
-  }).join('')}</div><p>Zero queued items is not a safety verdict.</p>`;
+    return raw(html`<article class="attention-summary-card"><h3>${titles[b.kind]}</h3><p>${count}</p>${first ? raw(html`<p>${first.title}</p>`) : ''}${raw(inspect)}${raw(gaps)}</article>`);
+  })}</div><p>Zero queued items is not a safety verdict.</p>`;
 }
 
 function renderAttentionSummary(SA) {
@@ -490,11 +487,11 @@ function renderAttentionSummary(SA) {
   const panel = el.closest?.('.attention-overview');
   if (panel) panel.hidden = !stale && SA.t.posture?.state === 'all-clear' && validAttentionSummary(SA.t.posture)
     && SA.t.posture.needs_you === 0 && SA.t.posture.coverage_count === 0;
-  const html = attentionSummaryHTML(SA.t.posture, stale);
-  if (el._summaryHTML === html) return;
+  const markup = attentionSummaryHTML(SA.t.posture, stale);
+  if (el._summaryHTML === markup) return;
   const focused = document.activeElement;
   const key = el.contains(focused) && focused.dataset.action ? JSON.stringify(focused.dataset) : null;
-  el.innerHTML = html; el._summaryHTML = html;
+  el.innerHTML = markup; el._summaryHTML = markup;
   if (key) {
     const replacement = [...el.querySelectorAll('[data-action]')].find(button => JSON.stringify(button.dataset) === key);
     (replacement || document.getElementById('attention-summary-title'))?.focus({preventScroll:true});
@@ -552,8 +549,8 @@ function renderAttentionContent() {
   const result = document.getElementById('review-result');
   if (result) {
     result.hidden = !SA.reviewResult;
-    const html = SA.reviewResult ? reviewResultHTML(SA.reviewResult) : '';
-    if (result.innerHTML !== html) result.innerHTML = html;
+    const markup = SA.reviewResult ? reviewResultHTML(SA.reviewResult) : '';
+    if (result.innerHTML !== markup) result.innerHTML = markup;
   }
   const panel = document.getElementById('attention-center');
   const list = document.getElementById('attention-list');
@@ -575,9 +572,9 @@ function renderAttentionContent() {
     empty.hidden = count !== 0;
     const health = SA.postureHealth || {};
     const current = SA.t.posture && !health.error && health.lastSnapshotAt && Date.now() - health.lastSnapshotAt <= 120000;
-    const html = current ? '<strong>Nothing waiting for review</strong><p>Retained findings remain available in history below.</p>'
+    const markup = current ? '<strong>Nothing waiting for review</strong><p>Retained findings remain available in history below.</p>'
       : '<strong>Current queue unavailable</strong><p>Refresh telemetry before relying on the last loaded report.</p>';
-    if (empty.innerHTML !== html) empty.innerHTML = html;
+    if (empty.innerHTML !== markup) empty.innerHTML = markup;
   }
   const ctx = homeContext(SA);
   const views = needsItems(SA.t.posture).map(it => ({ ...needView(it, ctx), selected: SA.attentionKey === `${it.kind}:${it.id}` }));
@@ -654,26 +651,26 @@ function logRowHTML(row, open, nowMs) {
   const dom = 'log-' + rk.replace(/[^A-Za-z0-9_-]/g, '_');
   const when = clockText(row.at, nowMs);
   const count = row.count > 1 ? row.count + '×' : '1';
-  const finding = escapeHTML(row.title) + (row.sub ? ` <span class="c-sub-text">· ${escapeHTML(row.sub)}</span>` : '');
-  const bars = row.hourly ? `<span class="pattern-bars log-bars${row.risk.critical ? ' crit' : ''}" aria-hidden="true">${patternBarsHTML(row.hourly)}</span>` : '';
-  return `<li class="log-row${row.risk.critical ? ' crit' : ''}${open ? ' open' : ''}" data-row-key="${escapeHTML(rk)}">`
-    + `<div class="log-line"><input type="checkbox" class="log-check" data-action="history-select" data-row-key="${escapeHTML(rk)}" aria-label="Select: ${escapeHTML(row.title)}"${row.reviewed || row.selectable === false ? ' disabled' : ''}>`
-    + `<button type="button" class="log-head" data-action="toggle-row" data-key="log:${escapeHTML(rk)}" aria-expanded="${open}" aria-controls="${dom}">`
-    + `<span class="c-when">${escapeHTML(when)}</span>`
-    + `<span class="c-agent">${harnessChipHTML(row.agent)}<span>${escapeHTML(row.agent || '')}</span></span>`
-    + `<span class="c-finding"><span class="c-title" title="${escapeHTML(row.title + (row.sub ? ' · ' + row.sub : ''))}">${finding}</span>`
-    + `<span class="c-sub">${escapeHTML([row.agent, row.count > 1 ? count : '', when, row.risk.text].filter(Boolean).join(' · '))}</span></span>`
-    + `<span class="c-count">${count}</span><span class="c-bars">${bars}</span>`
-    + `<span class="c-verdict"><i class="vdot ${row.risk.cls}" aria-hidden="true"></i><span class="c-verdict-text">${escapeHTML(row.risk.text)}</span></span>`
+  const finding = html`${row.title}${row.sub ? raw(html` <span class="c-sub-text">· ${row.sub}</span>`) : ''}`;
+  const bars = row.hourly ? html`<span class="pattern-bars log-bars${row.risk.critical ? ' crit' : ''}" aria-hidden="true">${raw(patternBarsHTML(row.hourly))}</span>` : '';
+  return html`<li class="log-row${row.risk.critical ? ' crit' : ''}${open ? ' open' : ''}" data-row-key="${rk}">`
+    + html`<div class="log-line"><input type="checkbox" class="log-check" data-action="history-select" data-row-key="${rk}" aria-label="Select: ${row.title}"${row.reviewed || row.selectable === false ? ' disabled' : ''}>`
+    + html`<button type="button" class="log-head" data-action="toggle-row" data-key="log:${rk}" aria-expanded="${open}" aria-controls="${dom}">`
+    + html`<span class="c-when">${when}</span>`
+    + html`<span class="c-agent">${raw(harnessChipHTML(row.agent))}<span>${row.agent || ''}</span></span>`
+    + html`<span class="c-finding"><span class="c-title" title="${row.title + (row.sub ? ' · ' + row.sub : '')}">${raw(finding)}</span>`
+    + html`<span class="c-sub">${[row.agent, row.count > 1 ? count : '', when, row.risk.text].filter(Boolean).join(' · ')}</span></span>`
+    + html`<span class="c-count">${count}</span><span class="c-bars">${raw(bars)}</span>`
+    + html`<span class="c-verdict"><i class="vdot ${row.risk.cls}" aria-hidden="true"></i><span class="c-verdict-text">${row.risk.text}</span></span>`
     + '<svg class="icon log-chev" aria-hidden="true"><use href="#i-arrow"/></svg></button></div>'
-    + `<div class="log-detail" id="${dom}"${open ? '' : ' hidden'}>${open ? row.body() : ''}</div></li>`;
+    + html`<div class="log-detail" id="${dom}"${open ? '' : ' hidden'}>${open ? raw(row.body()) : ''}</div></li>`;
 }
 
 // patchLog: a capped history list patched row by row; extra parts follow.
 function patchLog(container, rows, capKey, SA, nowMs, extra) {
   const cap = cappedList(rows, 50, null, capKey, SA.expanded);
   const parts = cap.shown.map(r => ({ key: logKey(r), html: logRowHTML(r, SA.expanded.has('log:' + logKey(r)), nowMs) }));
-  if (cap.more) parts.push({ key: 'more', html: `<li class="log-more">${cap.more}</li>` });
+  if (cap.more) parts.push({ key: 'more', html: html`<li class="log-more">${raw(cap.more)}</li>` });
   patchList(container, parts.concat(extra || []), { key: p => p.key, html: p => p.html });
   return cap.shown;
 }
@@ -685,7 +682,7 @@ function renderIncidents() {
   const incidents = scopedBySession(SA.t.incidents || [], SA.timelineSession, SA.timelinePids);
   badge.textContent = incidents.length;
   if (incidents.length === 0) {
-    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-incident"/></svg><span>No incidents — nothing to contain right now</span></div>`;
+    container.innerHTML = html`<div class="empty"><svg class="icon"><use href="#i-incident"/></svg><span>No incidents — nothing to contain right now</span></div>`;
     return;
   }
   const ctx = homeContext(SA);
@@ -707,16 +704,16 @@ function renderAudit() {
   badge.textContent = audit.length;
 
   if (audit.length === 0) {
-    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>No policy changes yet — promotions and secret registrations are logged here</span></div>`;
+    container.innerHTML = html`<div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>No policy changes yet — promotions and secret registrations are logged here</span></div>`;
     return;
   }
 
   patchList(container, audit, { key: a => `${a.ts}|${a.action}|${a.rule || ''}|${a.detail || ''}`, html: a => {
     const timeStr = new Date(a.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    let label = escapeHTML(a.detail || '');
+    let label = html`${a.detail || ''}`;
     let cls = '';
     if (a.action === 'rule-mode') {
-      label = `${escapeHTML(a.rule)}: ${escapeHTML(a.from_mode)} → ${escapeHTML(a.to_mode)}`;
+      label = html`${a.rule}: ${a.from_mode} → ${a.to_mode}`;
       cls = a.to_mode === 'block' ? 'ok' : '';
     } else if (a.action === 'fingerprint-ingest') {
       cls = 'tool';
@@ -725,13 +722,13 @@ function renderAudit() {
       cls = 'tool';
     }
     const actionLabel = a.action.replace(/-/g, ' ').toUpperCase();
-    return `
+    return html`
       <div class="audit-item">
         <div class="audit-head">
           <span class="event-kind ${cls}">${actionLabel}</span>
           <span class="audit-t">${timeStr}</span>
         </div>
-        <div class="audit-dtl">${label}</div>
+        <div class="audit-dtl">${raw(label)}</div>
       </div>
     `;
   } });
@@ -790,9 +787,9 @@ function renderFlags() {
     historyOpenRows = new Map();
     paintHistoryBulk(SA);
     const msg = SA.sessionScopeOn()
-      ? `No flags for ${escapeHTML(SA.sessionScopeTag())} in the loaded window`
+      ? html`No flags for ${SA.sessionScopeTag()} in the loaded window`
       : SA.isFlagsFiltered() ? 'No flags match the current filter' : 'No findings in the loaded window';
-    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>${msg}</span></div>`;
+    container.innerHTML = html`<div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>${raw(msg)}</span></div>`;
     return;
   }
 
@@ -803,7 +800,7 @@ function renderFlags() {
   const mutes = SA.t.mutes || [];
   const extra = mutes.length ? [{ key: 'mutes', html: '<li class="mute-list"></li>' }] : [];
   if (reviewPage.degraded) extra.unshift({ key: 'review-degraded', html: '<li><p role="alert">Review storage is degraded. Original findings remain available.</p></li>' });
-  if (reviewPage.next) extra.push({ key: 'review-next', html: `<li><button class="btn btn-ghost" data-action="review-page" data-after="${escapeHTML(reviewPage.next)}">Next reviews</button></li>` });
+  if (reviewPage.next) extra.push({ key: 'review-next', html: html`<li><button class="btn btn-ghost" data-action="review-page" data-after="${reviewPage.next}">Next reviews</button></li>` });
   if (SA.reviewCursor) extra.push({ key: 'review-first', html: '<li><button class="btn btn-ghost" data-action="review-page">First reviews</button></li>' });
   const shown = patchLog(container, rows, 'history', SA, ctx.now, extra);
   const muteList = Array.from(container.children).find(el => el._saKey === 'mutes');
@@ -833,9 +830,9 @@ function paintHistoryBulk(SA) {
   const n = SA.historySelected.size;
   if (bulk) {
     bulk.hidden = n === 0;
-    bulk.innerHTML = n === 0 ? '' : `<span>${n} selected</span>`
-      + `<button type="button" class="btn btn-ghost btn-sm" data-action="history-bulk-review">Mark reviewed</button>`
-      + `<button type="button" class="btn btn-ghost btn-sm" data-action="history-bulk-clear">Clear</button>`;
+    bulk.innerHTML = n === 0 ? '' : html`<span>${n} selected</span>`
+      + html`<button type="button" class="btn btn-ghost btn-sm" data-action="history-bulk-review">Mark reviewed</button>`
+      + html`<button type="button" class="btn btn-ghost btn-sm" data-action="history-bulk-clear">Clear</button>`;
   }
   if (all) {
     const open = historyOpenRows.size;
@@ -848,11 +845,11 @@ function paintHistoryBulk(SA) {
 // muteRowHTML: one disposition in the Muted list — rule, host, and the agent
 // when the mute is scoped to one ("all agents" is implied when it is not).
 function muteRowHTML(m) {
-  const agent = m.agent ? ` · ${escapeHTML(m.agent)}` : '';
-  return `
+  const agent = m.agent ? ` · ${m.agent}` : '';
+  return html`
       <div class="mute-row">
-        <span class="mute-pair">${escapeHTML(m.rule)} · ${m.host === '*' ? 'all hosts' : escapeHTML(m.host)}${agent}</span>
-        <button class="source-remove" title="Unmute" data-action="unmute" data-rule="${escapeHTML(m.rule)}" data-host="${escapeHTML(m.host)}" data-agent="${escapeHTML(m.agent || '')}"><svg class="icon"><use href="#i-close"/></svg></button>
+        <span class="mute-pair">${m.rule} · ${m.host === '*' ? 'all hosts' : m.host}${agent}</span>
+        <button class="source-remove" title="Unmute" data-action="unmute" data-rule="${m.rule}" data-host="${m.host}" data-agent="${m.agent || ''}"><svg class="icon"><use href="#i-close"/></svg></button>
       </div>`;
 }
 
@@ -963,5 +960,5 @@ function patternWindowText(p, nowMs) {
 function patternBarsHTML(hourly) {
   const h = Array.from({ length: 24 }, (_, i) => Math.max(0, Number((hourly || [])[i]) || 0));
   const max = Math.max(1, ...h);
-  return h.map(n => `<i class="h${n ? Math.max(1, Math.round(n / max * 8)) : 0}"></i>`).join('');
+  return h.map(n => html`<i class="h${n ? Math.max(1, Math.round(n / max * 8)) : 0}"></i>`).join('');
 }
