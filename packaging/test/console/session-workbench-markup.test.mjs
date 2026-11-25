@@ -9,7 +9,10 @@ const H = `<img src=x onerror=1>"'&amp;`;
 const E = '&lt;img src=x onerror=1&gt;&quot;&#39;&amp;amp;';
 const J = '&quot;&lt;img src=x onerror=1&gt;\\&quot;&#39;&amp;amp;&quot;';
 
-const ctx = { Date, window: { SA: {} } };
+const NOW = Date.parse('2026-10-14T12:00:00Z');
+class FixedDate extends Date { static now() { return NOW; } }
+
+const ctx = { Date: FixedDate, window: { SA: {} } };
 const load = (context, files) => { vm.createContext(context); for (const file of files) vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/' + file, import.meta.url), 'utf8'), context); return context; };
 load(ctx, ['lib.js', 'tab-findings.js', 'tab-overview.js', 'session-layout.js', 'session-workbench.js', 'decision-permissions.js']);
 
@@ -96,7 +99,7 @@ const coverageHead = '<header class="sd-coverage-head"><h5>Observed paths</h5><b
 const guardIntro = '<p>Guard observations record invocations attributed to this session. No invocation observed does not by itself establish a broken installation.</p>';
 const guardTail = '<p>An installed-hook check establishes its manual monitor round trip. It does not prove that a running session invokes the guard or that traffic is inspected. Hook-completion reporting is a separate integration.</p>';
 
-const ago = ms => new Date(Date.now() - ms).toISOString();
+const ago = ms => new Date(NOW - ms).toISOString();
 const chip = (key, name, label) => `<span class="harness-chip" title="${name}"><span class="harness-tile hk-${key}" aria-hidden="true"><svg class="harness-logo" aria-hidden="true"><use href="#logo-${key}"/></svg></span>${label ? `<span class="harness-label">${name}</span>` : ''}</span>`;
 const EID = `${E}@${E} · ${E}`;
 const railCard = ({ cls, id, pressed = false, title, aria = title, label, branch, status, seen, kill = '' }) => `<div class="session-card ${cls}">
@@ -268,7 +271,7 @@ const withRecentWork = render => () => { ctx.window.SA.recentWorkReturn = true; 
 // The legacy process-tree board's empty states, written by the workbench's render.
 function legacyBoard(harnessFilter) {
   const board = {};
-  const context = load({ Date, window: { SA: { t: {}, harnessFilter, setTabBadge() {} }, addEventListener() {}, matchMedia: () => ({ matches: false }) },
+  const context = load({ Date: FixedDate, window: { SA: { t: {}, harnessFilter, setTabBadge() {} }, addEventListener() {}, matchMedia: () => ({ matches: false }) },
     document: { getElementById: id => id === 'session-rail' ? { dataset: {} } : id === 'session-board' ? board : null, querySelectorAll: () => [] } },
   ['lib.js', 'session-layout.js', 'session-workbench.js']);
   context.createSessionWorkbench({ apiFetch() {}, renderNow() {} }).render();
