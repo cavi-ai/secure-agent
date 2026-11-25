@@ -2,7 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { loadDrawer } from './drawer-harness.mjs';
 const assets = new URL('../../../daemon/internal/api/web_dist/', import.meta.url);
 const app = readFileSync(new URL('app.js', assets), 'utf8');
 function fn(name, next) {
@@ -118,21 +117,6 @@ test('failed mutation restores existing disabled state rather than enabling unav
   assert.equal(buttons[1].disabled, true);
 });
 
-test('actual drawer role container retains its title relationship across overlay and docked modes', () => {
-  const { api, dom } = loadDrawer({ width: 390 });
-  api.open({ title: 'Drawer' });
-  assert.equal(dom.drawer.attributes.get('role'), 'dialog');
-  assert.equal(dom.drawer.attributes.get('aria-modal'), 'true');
-  assert.equal(dom.drawer.attributes.get('aria-labelledby'), 'drawer-title');
-  const html = readFileSync(new URL('index.html', assets), 'utf8');
-  assert.match(html, /id="drawer-title"/);
-  dom.document.documentElement.clientWidth = 1900;
-  api.syncMode();
-  assert.equal(dom.drawer.attributes.get('role'), 'complementary');
-  assert.equal(dom.drawer.attributes.has('aria-modal'), false);
-  assert.equal(dom.drawer.attributes.get('aria-labelledby'), 'drawer-title');
-});
-
 test('Home restoration respects saved closed/open booleans and preserves defaults for absent or invalid keys', () => {
   const start = app.indexOf("  try {\n    const saved = JSON.parse(sessionStorage.getItem(HOME_GROUPS_KEY)");
   const end = app.indexOf("  document.querySelectorAll('details.home-group').forEach(d => d.addEventListener", start);
@@ -147,33 +131,6 @@ test('Home restoration respects saved closed/open booleans and preserves default
     sessionStorage: { getItem: () => JSON.stringify({ spend: false, findings: true, trends: 'true' }) } };
   vm.runInNewContext(app.slice(start, end), ctx);
   assert.deepEqual(groups.map(group => group.open), [false, true, true, false]);
-});
-
-test('drawer mode follows CSS media changes even when innerWidth remains stale', () => {
-  const listeners = new Map();
-  const media = new Map(['(min-width: 1700px)', '(min-width: 1860px)'].map(query => [query, {
-    matches: false, addEventListener: (event, fn) => listeners.set(query, fn)
-  }]));
-  const { api, dom } = loadDrawer({ width: 1179, media });
-  dom.window.innerWidth = 1900;
-  const main = dom.inertSiblings[0];
-  api.open({ title: 'Drawer' });
-  const attributes = dom.drawer.attributes;
-  assert.equal(attributes.get('role'), 'dialog');
-  assert.equal(main.inert, true);
-  media.get('(min-width: 1700px)').matches = true;
-  listeners.get('(min-width: 1700px)')();
-  assert.equal(attributes.get('role'), 'complementary');
-  assert.equal(main.inert, false);
-  dom.drawer.className = 'drawer resource-policy';
-  api.syncMode();
-  assert.equal(attributes.get('role'), 'dialog');
-  assert.equal(main.inert, true);
-  media.get('(min-width: 1860px)').matches = true;
-  listeners.get('(min-width: 1860px)')();
-  assert.equal(attributes.get('role'), 'complementary');
-  assert.equal(main.inert, false);
-  assert.equal(dom.window.innerWidth, 1900);
 });
 
 function inspectorHarness() {

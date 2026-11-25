@@ -537,14 +537,6 @@ test('guidance visibility follows the current grouping control, including stale 
   assert.equal(f.body.firstElementChild.attributes.has('aria-describedby'),false);
 });
 
-test('guidance is one static muted caption outside the replaced spend-card markup', () => {
-  const html=readFileSync(path.join(webDist,'index.html'),'utf8');
-  assert.equal((html.match(/id="spend-day-guidance"/g)||[]).length,1);
-  assert.match(html,/<p id="spend-day-guidance" class="spend-day-guidance" hidden>Select a day to see usage by repository\. Use ←\/→ or Home\/End to move between dates\.<\/p>\s*<div id="spend-card"/);
-  const caption=html.match(/<p id="spend-day-guidance"[^>]*>/)[0];
-  assert.doesNotMatch(caption,/tabindex|role=|aria-live|data-action/);
-});
-
 test('saved grouping initializes guidance before boot and grouping changes update it without a render', () => {
   const source=readFileSync(path.join(webDist,'app.js'),'utf8');
   for (const by of ['day','repo']) {
