@@ -161,7 +161,7 @@ func IngestSources(configured, registered []string, salt []byte) ([]config.Finge
 		var err error
 		if i >= len(configured) {
 			f, err = openRegisteredSource(src)
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
+			if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, errRegisteredSourceTooLarge) {
 				return nil, fmt.Errorf("ingest source %s: %w", src, err)
 			}
 		} else {

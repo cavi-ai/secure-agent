@@ -231,6 +231,41 @@ func TestRegisteredSourceIsCheckedAgainAtIngest(t *testing.T) {
 	}
 }
 
+func TestRegisteredSourceSizeLimit(t *testing.T) {
+	dir := t.TempDir()
+	growing := filepath.Join(dir, "growing.env")
+	healthy := filepath.Join(dir, "healthy.env")
+	for path, value := range map[string]string{growing: "growing-fixture-value", healthy: "healthy-fixture-value"} {
+		if err := os.WriteFile(path, []byte("FIXTURE="+value+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ValidateRegisteredSource(growing); err != nil {
+		t.Fatalf("validating source before growth: %v", err)
+	}
+	if err := os.Truncate(growing, maxIngestBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("reject on registration", func(t *testing.T) {
+		if err := ValidateRegisteredSource(growing); err == nil {
+			t.Fatal("registration accepted an oversized source")
+		}
+	})
+	t.Run("skip on rebuild with a healthy source", func(t *testing.T) {
+		salt := []byte("fixture-salt")
+		fps, err := IngestSources(nil, []string{growing, healthy}, salt)
+		if err != nil || len(fps) != 1 || fps[0].HMAC != Fingerprint(salt, "healthy-fixture-value") {
+			t.Fatalf("oversized source prevented healthy ingestion: %d fingerprints, %v", len(fps), err)
+		}
+	})
+	t.Run("refuse empty rebuild", func(t *testing.T) {
+		if fps, err := IngestSources(nil, []string{growing}, []byte("fixture-salt")); err == nil || fps != nil ||
+			!strings.Contains(err.Error(), "refusing to return an empty set") {
+			t.Fatalf("only oversized source: %d fingerprints, %v", len(fps), err)
+		}
+	})
+}
+
 func TestIngestRejectsDeviceSources(t *testing.T) {
 	healthy := filepath.Join(t.TempDir(), "healthy.env")
 	if err := os.WriteFile(healthy, []byte("FIXTURE=fixture-value-for-ingestion\n"), 0o600); err != nil {

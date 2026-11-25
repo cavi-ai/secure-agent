@@ -66,7 +66,6 @@ func (a *Agent) Dispatch(ctx context.Context, in DispatchInput) (model.SysAgentR
 	if err != nil {
 		return model.SysAgentRun{}, err
 	}
-	p.Workdir = workdir
 	h, _ := harnessByID(p.Harness)
 	info := probe(ctx, a.client, cfg.Endpoint)
 	modelName := harnessModel(cfg, info, p.Model)
@@ -87,8 +86,8 @@ func (a *Agent) Dispatch(ctx context.Context, in DispatchInput) (model.SysAgentR
 		}
 	}()
 	now := a.now()
-	task := composeTask(p)
-	l, err := buildLaunch(h.ID, p.Mode, launchSpec{Endpoint: cfg.Endpoint, Model: modelName, Workdir: p.Workdir, Task: task,
+	task := composeTask(p, workdir)
+	l, err := buildLaunch(h.ID, p.Mode, launchSpec{Endpoint: cfg.Endpoint, Model: modelName, Workdir: workdir, Task: task,
 		StateDir: taskDir, Tag: fmt.Sprintf("%d-%d", p.ID, now.UnixNano()), TimeoutSec: cfg.TimeoutMinutes * 60})
 	if err != nil {
 		return model.SysAgentRun{}, err
@@ -96,7 +95,7 @@ func (a *Agent) Dispatch(ctx context.Context, in DispatchInput) (model.SysAgentR
 	l.TaskDir = taskDir
 	l.Env = append(l.Env, "TMPDIR="+taskDir)
 	run := model.SysAgentRun{PlanID: p.ID, TS: now, Title: p.Title, Harness: h.ID, Mode: p.Mode, Model: modelName,
-		Workdir: p.Workdir, Command: commandLine(bin, l, task)}
+		Workdir: workdir, Command: commandLine(bin, l, task)}
 	if p.Mode == ModeTerminal {
 		run, err := a.dispatchTerminal(p, run, bin, l)
 		handedOff = err == nil
@@ -137,11 +136,11 @@ func (a *Agent) Dispatch(ctx context.Context, in DispatchInput) (model.SysAgentR
 // composeTask is what the harness receives: the ground rules, the plan and
 // the procedures of its skills. It never starts with "-", so no harness
 // reads it as a flag.
-func composeTask(p model.SysAgentPlan) string {
+func composeTask(p model.SysAgentPlan, workdir string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are running on a local model through secure-agent's system agent. Work in %s. "+
 		"Never print, copy or send secret values (passwords, tokens, private keys, passphrases); a command that needs one must prompt for it. "+
-		"Do not disable or bypass secure-agent, its hooks, guard or firewall.\n\n", p.Workdir)
+		"Do not disable or bypass secure-agent, its hooks, guard or firewall.\n\n", workdir)
 	fmt.Fprintf(&b, "Task: %s\n%s\n", p.Title, p.Task)
 	if len(p.Steps) > 0 {
 		b.WriteString("\nSteps:\n")
