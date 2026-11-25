@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 // Envelope mirrors the fleet webhook body (daemon/internal/fleet).
@@ -133,6 +134,13 @@ func main() {
 
 	c := &Collector{cfg: cfg, store: NewStore(cfg.StoreDir)}
 
+	log.Printf("secure-agent-collector listening on http://%s (nodes: %d)", cfg.Addr, len(cfg.Secrets))
+	srv := newServer(cfg.Addr, newMux(c), defaultServerTimeouts)
+	log.Fatal(srv.ListenAndServe())
+}
+
+// newMux registers every collector route.
+func newMux(c *Collector) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /hooks/secure-agent", c.handleHook)
 	mux.HandleFunc("GET /fleet", c.requireReadAuth(c.handleFleet))
@@ -144,10 +152,39 @@ func main() {
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte("ok"))
 	})
+	return mux
+}
 
-	log.Printf("secure-agent-collector listening on http://%s (nodes: %d)", cfg.Addr, len(cfg.Secrets))
-	srv := &http.Server{Addr: cfg.Addr, Handler: mux}
-	log.Fatal(srv.ListenAndServe())
+// serverTimeouts bounds how long a connection may hold server resources.
+type serverTimeouts struct {
+	ReadHeader     time.Duration
+	Read           time.Duration
+	Write          time.Duration
+	Idle           time.Duration
+	MaxHeaderBytes int
+}
+
+// defaultServerTimeouts fits a 2 MiB signed envelope post. No route streams,
+// so Write applies to every route.
+var defaultServerTimeouts = serverTimeouts{
+	ReadHeader:     5 * time.Second,
+	Read:           30 * time.Second,
+	Write:          30 * time.Second,
+	Idle:           60 * time.Second,
+	MaxHeaderBytes: 64 << 10,
+}
+
+// newServer builds the collector's HTTP server with the given limits.
+func newServer(addr string, h http.Handler, t serverTimeouts) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: t.ReadHeader,
+		ReadTimeout:       t.Read,
+		WriteTimeout:      t.Write,
+		IdleTimeout:       t.Idle,
+		MaxHeaderBytes:    t.MaxHeaderBytes,
+	}
 }
 
 func (c Config) validateReadAccess() error {
