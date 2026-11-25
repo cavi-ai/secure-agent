@@ -318,10 +318,12 @@ func TestSnapshotReadersSeeEveryCompletedWrite(t *testing.T) {
 	a, _ := cacheTestAPI(t, &clock)
 	const writes = 60
 	var done atomic.Int64
+	writerDone := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer close(writerDone)
 		for i := range writes {
 			if _, err := a.store.PutFlag(keychainFlag(fmt.Sprintf("r%03d", i), "codex", 7, clock.Add(-time.Duration(i+1)*time.Second), 3)); err != nil {
 				t.Error(err)
@@ -335,6 +337,12 @@ func TestSnapshotReadersSeeEveryCompletedWrite(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for {
+				finished := false
+				select {
+				case <-writerDone:
+					finished = true
+				default:
+				}
 				want := done.Load()
 				body, err := getBody(a, "/snapshot")
 				if err != nil {
@@ -350,7 +358,7 @@ func TestSnapshotReadersSeeEveryCompletedWrite(t *testing.T) {
 					t.Errorf("snapshot has %d flags after %d completed writes", len(v.Flags), want)
 					return
 				}
-				if want == writes {
+				if finished {
 					return
 				}
 			}
@@ -359,7 +367,12 @@ func TestSnapshotReadersSeeEveryCompletedWrite(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for done.Load() < writes {
+		for {
+			select {
+			case <-writerDone:
+				return
+			default:
+			}
 			if _, err := getBody(a, "/posture"); err != nil {
 				t.Error(err)
 				return
