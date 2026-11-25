@@ -61,7 +61,8 @@ func openRegisteredSource(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	f := os.NewFile(uintptr(fd), resolved)
+	// The descriptor is already open. NewFile's name is only for diagnostics.
+	f := os.NewFile(uintptr(fd), "registered fingerprint source")
 	fi, err := f.Stat()
 	if err != nil {
 		f.Close()
