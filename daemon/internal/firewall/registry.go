@@ -5,9 +5,11 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -146,31 +148,31 @@ const maxIngestLineBytes = 1 << 20 // 1 MiB
 // yielded fingerprints: a partial replacement would drop unread secrets.
 // Devices and pipes are rejected rather than treated as empty secret files.
 func Ingest(sources []string, salt []byte) ([]config.Fingerprint, error) {
+	return IngestSources(sources, nil, salt)
+}
+
+// IngestSources applies the registration policy again when opening a
+// console-registered file. Config-defined paths use the config's authority.
+func IngestSources(configured, registered []string, salt []byte) ([]config.Fingerprint, error) {
 	var out []config.Fingerprint
 	var failed []string
-	for _, src := range sources {
-		fi, err := os.Stat(src)
-		if err != nil || fi.IsDir() || fi.Size() > maxIngestBytes {
-			failed = append(failed, src)
-			continue
-		}
-		if !fi.Mode().IsRegular() {
-			return nil, fmt.Errorf("ingest source %s: must be a regular file", src)
-		}
-		// Non-blocking open prevents a replacement FIFO from stalling before
-		// we can verify the opened file. It has no effect on regular-file reads.
-		f, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-		if err != nil {
-			failed = append(failed, src)
-			continue
-		}
-		opened, statErr := f.Stat()
-		if statErr != nil || !opened.Mode().IsRegular() {
-			f.Close()
-			if statErr != nil {
-				return nil, fmt.Errorf("stat ingest source %s: %w", src, statErr)
+	for i, src := range slices.Concat(configured, registered) {
+		var f *os.File
+		var err error
+		if i >= len(configured) {
+			f, err = openRegisteredSource(src)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, fmt.Errorf("ingest source %s: %w", src, err)
 			}
-			return nil, fmt.Errorf("ingest source %s: must be a regular file", src)
+		} else {
+			f, err = openConfiguredSource(src)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if f == nil {
+			failed = append(failed, src)
+			continue
 		}
 		fps, scanErr := scanIngestSource(src, f, salt, len(out)+1)
 		f.Close()
@@ -183,6 +185,31 @@ func Ingest(sources []string, salt []byte) ([]config.Fingerprint, error) {
 		return nil, fmt.Errorf("ingest produced zero fingerprints and every source failed (%s); refusing to return an empty set that would purge the registered fingerprints", strings.Join(failed, ", "))
 	}
 	return out, nil
+}
+
+func openConfiguredSource(src string) (*os.File, error) {
+	fi, err := os.Stat(src)
+	if err != nil || fi.IsDir() || fi.Size() > maxIngestBytes {
+		return nil, nil
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("ingest source %s: must be a regular file", src)
+	}
+	// Non-blocking open prevents a replacement FIFO from stalling before stat.
+	f, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil
+	}
+	opened, statErr := f.Stat()
+	if statErr != nil {
+		f.Close()
+		return nil, fmt.Errorf("stat ingest source %s: %w", src, statErr)
+	}
+	if !opened.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("ingest source %s: must be a regular file", src)
+	}
+	return f, nil
 }
 
 // scanIngestSource parses one opened source. firstID preserves numbering across

@@ -1,8 +1,6 @@
 // Owns the console's stream and refresh timers. Delta handlers still own
 // telemetry and rendering; stopping this controller ends all future delivery.
-// prepareStream (optional) authorizes the stream before it opens; when it
-// fails the console keeps polling.
-function createConsoleLiveUpdates({ refresh, streamURL, prepareStream = null, handlers = {}, EventSourceImpl = globalThis.EventSource, timers = globalThis }) {
+function createConsoleLiveUpdates({ refresh, connectStream, handlers = {}, timers = globalThis }) {
   let started = false, stopped = false;
   let source = null, slowTimer = null, pollTimer = null;
   let guardTimer = null, flagTimer = null;
@@ -50,9 +48,8 @@ function createConsoleLiveUpdates({ refresh, streamURL, prepareStream = null, ha
       refreshFull();
       if (stopped) return;
       slowTimer = timers.setInterval(refreshFull, 30000);
-      if (!EventSourceImpl) { startPolling(); return; }
-      if (!prepareStream) { openStream(); return; }
-      new Promise(resolve => resolve(prepareStream())).then(() => openStream(), () => { if (!stopped) startPolling(); });
+      if (!connectStream) { startPolling(); return; }
+      openStream();
     },
     stop() {
       if (stopped) return;
@@ -67,7 +64,7 @@ function createConsoleLiveUpdates({ refresh, streamURL, prepareStream = null, ha
 
   function openStream() {
     if (stopped) return;
-    source = new EventSourceImpl(streamURL);
+    source = connectStream();
     source.onopen = () => {
       if (stopped) return;
       failures = 0;
@@ -81,7 +78,7 @@ function createConsoleLiveUpdates({ refresh, streamURL, prepareStream = null, ha
       failures++;
       // CONNECTING streams reconnect themselves; fall back only when
       // hard-closed or after more than five consecutive failures.
-      if (source.readyState === EventSourceImpl.CLOSED || failures > 5) startPolling();
+      if (source.closed || failures > 5) startPolling();
     };
     for (const kind of ['event', 'flag', 'incident', 'session', 'posture', 'review']) {
       source.addEventListener(kind, message => {
@@ -92,4 +89,66 @@ function createConsoleLiveUpdates({ refresh, streamURL, prepareStream = null, ha
     }
     for (const kind of ['guard-prompt', 'guard-resolved']) source.addEventListener(kind, scheduleGuard);
   }
+}
+
+// The console stream uses the same token header as the other API requests.
+// Its server sends LF-delimited frames with JSON on one data line.
+function connectConsoleStream(fetchStream, timers = globalThis) {
+  const controller = new AbortController();
+  const listeners = new Map();
+  let retryTimer;
+  const source = {
+    closed: false,
+    addEventListener(kind, handler) { listeners.set(kind, handler); },
+    close() {
+      source.closed = true;
+      controller.abort();
+      timers.clearTimeout(retryTimer);
+    }
+  };
+
+  async function connect() {
+    try {
+      const response = await fetchStream('/events/stream', {
+        headers: { Accept: 'text/event-stream' },
+        credentials: 'omit',
+        signal: controller.signal
+      });
+      if (source.closed) return;
+      if (!response.ok || !response.body || !response.headers.get('content-type')?.startsWith('text/event-stream')) {
+        source.close();
+        source.onerror();
+        return;
+      }
+      source.onopen();
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        while (!source.closed) {
+          const { value, done } = await reader.read();
+          if (done || source.closed) break;
+          buffer += decoder.decode(value, { stream: true });
+          let end;
+          while (!source.closed && (end = buffer.indexOf('\n\n')) !== -1) {
+            const frame = buffer.slice(0, end);
+            buffer = buffer.slice(end + 2);
+            const fields = /^event: ([^\n]+)\ndata: ([^\n]*)$/.exec(frame);
+            if (fields) listeners.get(fields[1])?.({ data: fields[2] });
+          }
+        }
+      } finally {
+        void reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+    } catch {
+      // An interrupted stream is retried without replaying any mutations.
+    }
+    if (source.closed) return;
+    source.onerror();
+    retryTimer = timers.setTimeout(connect, 3000);
+  }
+
+  void connect();
+  return source;
 }

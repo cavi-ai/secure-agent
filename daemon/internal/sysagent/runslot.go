@@ -27,12 +27,19 @@ func (a *Agent) runningID() int64 { return a.running }
 
 // launchFolder checks the folder a run starts in; a headless harness is
 // sandboxed to its folder, so / would scope it to the whole disk.
-func launchFolder(mode, workdir string) error {
-	if fi, err := os.Stat(workdir); err != nil || !fi.IsDir() {
-		return fmt.Errorf("%w: the folder %s does not exist", ErrInvalid, workdir)
+func launchFolder(mode, workdir string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(workdir)
+	if err != nil || !filepath.IsAbs(resolved) {
+		return "", fmt.Errorf("%w: the folder %s does not exist", ErrInvalid, workdir)
 	}
-	if mode == ModeHeadless && workdir == string(filepath.Separator) {
-		return fmt.Errorf("%w: a headless run needs a folder narrower than /; pick one, or open it in a terminal", ErrInvalid)
+	if fi, err := os.Lstat(resolved); err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("%w: the folder %s does not exist", ErrInvalid, workdir)
 	}
-	return nil
+	if mode == ModeTerminal {
+		return workdir, nil
+	}
+	if resolved == string(filepath.Separator) {
+		return "", fmt.Errorf("%w: a headless run needs a folder narrower than /; pick one, or open it in a terminal", ErrInvalid)
+	}
+	return resolved, nil
 }

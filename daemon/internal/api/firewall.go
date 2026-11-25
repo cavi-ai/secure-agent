@@ -4,49 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
-
-// systemDirs are locations a user secret file never legitimately lives; a source
-// under any of them would only turn the root daemon into a system-file reader.
-var systemDirs = []string{
-	"/etc", "/private/etc", "/System", "/Library",
-	"/usr", "/bin", "/sbin", "/var/db", "/private/var/db",
-}
-
-// validateSourcePath confines a registered ingest source to a plausible user
-// secret file: an absolute regular file, its real path (symlinks resolved) not
-// inside a system store. The daemon reads the source as root, so this is the
-// gate that keeps source-add from becoming an arbitrary-file-read.
-func validateSourcePath(raw string) error {
-	p := config.ExpandPath(strings.TrimSpace(raw))
-	if !filepath.IsAbs(p) {
-		return fmt.Errorf("path must be absolute or ~-relative")
-	}
-	resolved := filepath.Clean(p)
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		resolved = filepath.Clean(r)
-	}
-	for _, deny := range systemDirs {
-		if resolved == deny || strings.HasPrefix(resolved, deny+"/") {
-			return fmt.Errorf("refusing to ingest a system path: %s", resolved)
-		}
-	}
-	fi, err := os.Stat(resolved)
-	if err != nil {
-		return fmt.Errorf("not readable: %v", err)
-	}
-	if !fi.Mode().IsRegular() {
-		return fmt.Errorf("must be a regular file")
-	}
-	return nil
-}
 
 type fwModeRequest struct {
 	Rule string `json:"rule"`
@@ -210,10 +173,7 @@ func (a *API) handleFirewallSources(w http.ResponseWriter, r *http.Request) {
 
 		switch req.Op {
 		case "add":
-			// The daemon runs as root and reads whatever source is registered, so
-			// an unvalidated path is an arbitrary-file-read primitive. Confine adds
-			// to plausible user secret files: a regular file, not a system store.
-			if err := validateSourcePath(req.Source); err != nil {
+			if err := firewall.ValidateRegisteredSource(config.ExpandPath(req.Source)); err != nil {
 				http.Error(w, fmt.Sprintf("invalid source: %v", err), http.StatusBadRequest)
 				return
 			}

@@ -136,11 +136,10 @@ func setupFirewall(cfg config.Config) *firewallStack {
 		if err != nil {
 			return nil, err
 		}
-		sources := append([]string{}, cfg.Firewall.Registry.IngestSources...)
-		for _, s := range userSources {
-			sources = append(sources, config.ExpandPath(s))
+		for i, s := range userSources {
+			userSources[i] = config.ExpandPath(s)
 		}
-		fps, err := firewall.Ingest(sources, fwSalt)
+		fps, err := firewall.IngestSources(cfg.Firewall.Registry.IngestSources, userSources, fwSalt)
 		if err != nil {
 			return nil, err
 		}

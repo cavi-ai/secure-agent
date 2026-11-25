@@ -720,7 +720,7 @@ Scans configured ingest sources, registers HMAC fingerprints (never plaintext), 
 
 ### 11. `GET|POST /firewall/sources`
 
-Lists (GET) or edits (POST, `{"source":"<path>","op":"add|remove"}`) the fingerprint ingest sources. Config-defined sources are read-only; adds are validated against system paths.
+Lists (GET) or edits (POST, `{"source":"<path>","op":"add|remove"}`) the fingerprint ingest sources. Config-defined sources are read-only. Console-registered sources are checked against system paths at registration and each time the daemon opens them for ingestion.
 
 ### 12. `POST /guard/decision`
 
@@ -1476,7 +1476,7 @@ Live feed of every stored event as `event: <kind>` / `data: <json>`, with a 15s 
 
 The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/posture/flags/events/incidents/audit/fleet/firewall sources + guard pending/rules/resolve/path-allow + kill + rollup + mute + allowlist(+suggestions) + `/egress/uninspected` + `/notify/rules` + advisor retriage + `/sessions/{id}/timeline` and `/sessions/{id}/report` + `/flags/{id}/explain` + this SSE stream) behind the **console token**. The whitelist is kept in lockstep with the console's fetches by `TestConsoleAPIPathsCoverWebApp` — a path the console fetches but the listener doesn't whitelist 407s and the panel dies silently, which is exactly the drift that test exists to catch:
 
-- Header `X-SecureAgent-Console-Token: <token>` on every request. EventSource cannot set headers, so the console first sends `POST /console/stream-auth` with the header; the response sets an HttpOnly, SameSite=Strict cookie scoped to `/events/stream` and derived from the token, which admits only `GET /events/stream`. The token is never accepted in a URL.
+- Header `X-SecureAgent-Console-Token: <token>` on every request, including the streaming fetch to `GET /events/stream`.
 - The request's Host must be `127.0.0.1`, `localhost` or `::1`, and an `Origin` header, when present, must be that same `http://` host and port; anything else gets 403 (DNS rebinding).
 - The token lives at `~/.config/secure-agent/console-token` (0600), distinct from the proxy token on purpose: agents routed through the proxy carry the proxy token in their environment and must not be able to read telemetry or resolve guard prompts with it.
 - `/guard/decision` is **not** served on this listener at all — it stays on the peer-attested unix socket.

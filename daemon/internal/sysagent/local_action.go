@@ -48,11 +48,12 @@ func (a *Agent) RunLocal(messageID int64) (model.SysAgentRun, error) {
 	if (action.Mode != ModeHeadless && action.Mode != ModeTerminal) || strings.TrimSpace(action.Command) == "" || len(action.Command) > 2048 {
 		return model.SysAgentRun{}, fmt.Errorf("%w: invalid stored local command", ErrInvalid)
 	}
-	if err := launchFolder(action.Mode, action.Workdir); err != nil {
+	workdir, err := launchFolder(action.Mode, action.Workdir)
+	if err != nil {
 		return model.SysAgentRun{}, err
 	}
 	run := model.SysAgentRun{TS: a.now(), Title: "Local command", Harness: "local", Mode: action.Mode,
-		Workdir: action.Workdir, Command: action.Command, Model: cfg.Model, SessionID: m.SessionID}
+		Workdir: workdir, Command: action.Command, Model: cfg.Model, SessionID: m.SessionID}
 	var script string
 	taskDir, err := a.newTaskDir()
 	if err != nil {
@@ -66,7 +67,7 @@ func (a *Agent) RunLocal(messageID int64) (model.SysAgentRun, error) {
 	}()
 	if action.Mode == ModeTerminal {
 		script = filepath.Join(taskDir, "run"+scriptExt)
-		body := terminalPrelude(launch{TaskDir: taskDir}) + "cd -- " + shellQuote(action.Workdir) + " || exit 1\n" +
+		body := terminalPrelude(launch{TaskDir: taskDir}) + "cd -- " + shellQuote(workdir) + " || exit 1\n" +
 			"env -i PATH=" + localCommandPath + " HOME=" + shellQuote(a.home) +
 			" USER=" + shellQuote(os.Getenv("USER")) + " TMPDIR=" + shellQuote(taskDir) + " /bin/sh -c " + shellQuote(action.Command) + "\n"
 		if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
