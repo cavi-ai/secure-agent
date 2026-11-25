@@ -14,10 +14,10 @@ function createMonitoringDiagnostics({ request, drawer, generation, ended, refre
     const lost = status.bus_drops > 0 || es.bytes_lost > 0;
     const review = state.report?.loss_review;
     const canAcknowledge = state.report && lost && (review ? review.pending === true : status.bus_dropping || es.losing);
-    const fact = (name, value) => `<div><dt>${escapeHTML(name)}</dt><dd>${escapeHTML(String(value))}</dd></div>`;
+    const fact = (name, value) => raw(html`<div><dt>${name}</dt><dd>${String(value)}</dd></div>`);
     const checks = state.report?.checks || [];
-    const body = state.report ? `<p>${lost ? 'Monitoring history remains incomplete. Acknowledgement records that you reviewed the gap; it does not recover missing evidence.' : 'No delivery or file-event loss has been recorded in this daemon run.'}</p>
-      ${review?.seen_at ? `<p role="status">Reviewed through ${escapeHTML(date(review.seen_at))}. Current delivery health is reported separately below.</p>` : ''}
+    const body = state.report ? html`<p>${lost ? 'Monitoring history remains incomplete. Acknowledgement records that you reviewed the gap; it does not recover missing evidence.' : 'No delivery or file-event loss has been recorded in this daemon run.'}</p>
+      ${review?.seen_at ? raw(html`<p role="status">Reviewed through ${date(review.seen_at)}. Current delivery health is reported separately below.</p>`) : ''}
       <section><h3>Event delivery</h3><dl class="monitoring-diagnostic-facts">
       ${fact('Missed deliveries', Number(status.bus_drops || 0).toLocaleString())}${fact('Last loss', date(status.bus_drop_at))}
       ${fact('Delivery pressure', status.bus_dropping ? 'Active' : 'No current pressure reported')}
@@ -27,13 +27,13 @@ function createMonitoringDiagnostics({ request, drawer, generation, ended, refre
       ${es.loss_cause ? fact('Last loss cause', ({rotation:'Unread spool overwritten during rotation',truncation:'Unread spool truncated',restart:'Spool rotated past the saved position while stopped',invalid_record:'Unreadable spool record skipped',malformed_flood:'Malformed spool flood skipped'})[es.loss_cause] || 'Not recognized') : ''}
       ${fact('Collector', es.collector?.state || es.state || 'Not reported')}
       ${fact('Delivery lag', `${Number(es.lag_seconds || 0)} s`)}</dl></section>
-      <section><h3>Diagnostic checks</h3>${checks.filter(check => check.state !== 'pass' || ['bus','file-telemetry','storage'].includes(check.id)).map(check => `<article class="monitoring-diagnostic-check"><strong>${escapeHTML(check.title)} · ${escapeHTML(check.state)}</strong><p>${escapeHTML(check.detail || '')}</p>${check.fix ? `<p>${escapeHTML(check.fix)}</p>` : ''}</article>`).join('')}</section>`
+      <section><h3>Diagnostic checks</h3>${checks.filter(check => check.state !== 'pass' || ['bus','file-telemetry','storage'].includes(check.id)).map(check => raw(html`<article class="monitoring-diagnostic-check"><strong>${check.title} · ${check.state}</strong><p>${check.detail || ''}</p>${check.fix ? raw(html`<p>${check.fix}</p>`) : ''}</article>`))}</section>`
       : state.error ? '' : '<p role="status">Loading monitoring diagnostics…</p>';
     drawer.setMode('monitoring-diagnostics');
     drawer.open({ title: 'Monitoring diagnostics', icon: 'activity', back: state.back,
-      body: body + (state.error ? `<p class="monitoring-diagnostic-error" role="alert">${escapeHTML(state.error)}</p>` : ''),
-      foot: `<button type="button" class="btn btn-ghost" data-action="monitoring-diagnostics-refresh"${state.busy ? ' disabled' : ''}>Refresh diagnostics</button>`
-        + (canAcknowledge ? `<button type="button" class="btn btn-primary" data-action="monitoring-loss-seen"${state.busy ? ' disabled' : ''}>${state.busy ? 'Acknowledging…' : 'Acknowledge earlier losses'}</button>` : ''),
+      body: body + (state.error ? html`<p class="monitoring-diagnostic-error" role="alert">${state.error}</p>` : ''),
+      foot: html`<button type="button" class="btn btn-ghost" data-action="monitoring-diagnostics-refresh"${state.busy ? ' disabled' : ''}>Refresh diagnostics</button>`
+        + (canAcknowledge ? html`<button type="button" class="btn btn-primary" data-action="monitoring-loss-seen"${state.busy ? ' disabled' : ''}>${state.busy ? 'Acknowledging…' : 'Acknowledge earlier losses'}</button>` : ''),
     });
     state.seq = drawer.seq();
   }

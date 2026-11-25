@@ -117,23 +117,24 @@ function permissionWorkspaceOptions(records, selected = 'all') {
   const workspaces = new Set((records || []).map(r => r.workspace).filter(Boolean));
   if (selected.startsWith('workspace:')) workspaces.add(selected.slice(10));
   return [['all','All workspaces'],['unassigned','Workspace not recorded'], ...[...workspaces].sort().map(p => ['workspace:'+p,p])]
-    .map(([value,label]) => `<option value="${escapeHTML(value)}"${value === selected ? ' selected' : ''}>${escapeHTML(label)}</option>`).join('');
+    .map(([value,label]) => html`<option value="${value}"${value === selected ? ' selected' : ''}>${label}</option>`).join('');
 }
 
 function workspacePermissionsHTML(records, filters, state) {
   const st = state || {}, workspace = filters.workspace || 'all', status = filters.status || 'all';
   if (!records) return policyListHTML('scope', records, {...st,label:'Saved permissions'});
   const review = workspacePermissionReview(records, workspace, status, st.scopeMutations);
-  const readAt = Number.isFinite(st.lastSuccessAt) ? localTimestampHTML(st.lastSuccessAt) : 'Unavailable';
-  const health = st.error ? '<div class="policy-read-status" role="status"><p>Refresh failed. Showing last known records; current status is unavailable. Revocation is unavailable until a successful refresh.</p><button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh-report" data-kind="scope">Refresh saved permissions</button></div>'
-    : st.loading ? '<p role="status">Refreshing saved permissions… Showing the last successful read.</p>' : '';
+  const readAt = Number.isFinite(st.lastSuccessAt) ? raw(localTimestampHTML(st.lastSuccessAt)) : 'Unavailable';
+  const health = st.error ? raw('<div class="policy-read-status" role="status"><p>Refresh failed. Showing last known records; current status is unavailable. Revocation is unavailable until a successful refresh.</p><button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh-report" data-kind="scope">Refresh saved permissions</button></div>')
+    : st.loading ? raw('<p role="status">Refreshing saved permissions… Showing the last successful read.</p>') : '';
   const context = workspace === 'all' ? 'All recorded workspaces' : workspace === 'unassigned' ? 'Workspace not recorded' : workspace.slice(10);
   const feedback = status !== 'all' && status !== 'revoked' ? workspacePermissionReview(records,workspace,'revoked',st.scopeMutations).rows
     .filter(r => st.scopeMutations?.get(r.id)?.status === 'saved')
-    .map(r => `<p role="status">Revocation saved for <code>${escapeHTML(r.resource_path)}</code> (permission ${escapeHTML(r.id)}). Other permissions and policies may still apply.</p>`).join('') : '';
+    .map(r => raw(html`<p role="status">Revocation saved for <code>${r.resource_path}</code> (permission ${r.id}). Other permissions and policies may still apply.</p>`)) : '';
   const empty = st.error ? '<p>Matching records are unavailable for the current read.</p>'
-    : `<div class="empty"><span>${records.length ? 'No saved permissions match this workspace and status.' : 'No saved permissions recorded in this read.'}${workspace !== 'all' || status !== 'all' ? ' <button type="button" class="link-btn" data-action="permission-filter-clear">Clear filters</button>' : ''}</span></div>`;
-  return `<div class="permission-read-context"><p><strong>${escapeHTML(context)}</strong> · ${review.rows.length} of ${records.length} saved records</p><p>Last successful read: ${readAt}</p>${health}${feedback}</div>`
-    + (review.groups.length ? review.groups.map(g => `<section class="permission-group" data-permission-status="${g.key}"><h3>${g.label}<span class="badge">${g.rows.length}</span></h3>${policyListHTML('scope',g.rows,{...st,hideNotice:true})}</section>`).join('')
+    : html`<div class="empty"><span>${records.length ? 'No saved permissions match this workspace and status.' : 'No saved permissions recorded in this read.'}${workspace !== 'all' || status !== 'all' ? raw(' <button type="button" class="link-btn" data-action="permission-filter-clear">Clear filters</button>') : ''}</span></div>`;
+  // Group labels are constants from workspacePermissionReview; raw() keeps their '&' as authored.
+  return html`<div class="permission-read-context"><p><strong>${context}</strong> · ${review.rows.length} of ${records.length} saved records</p><p>Last successful read: ${readAt}</p>${health}${feedback}</div>`
+    + (review.groups.length ? review.groups.map(g => html`<section class="permission-group" data-permission-status="${g.key}"><h3>${raw(g.label)}<span class="badge">${g.rows.length}</span></h3>${raw(policyListHTML('scope',g.rows,{...st,hideNotice:true}))}</section>`).join('')
       : empty);
 }
