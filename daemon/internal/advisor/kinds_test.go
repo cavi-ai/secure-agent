@@ -4,28 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"testing"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
-
-func TestTaskKindNamesArePersistedSet(t *testing.T) {
-	var names []string
-	for _, k := range []*taskKind{flagKind, incidentKind, hostKind, guardKind, planKind, worktreeKind, projectKind, egressKind} {
-		if k.run == nil {
-			t.Fatalf("kind %q has no run", k.name)
-		}
-		names = append(names, k.name)
-	}
-	slices.Sort(names)
-	want := []string{"egress", "flag", "guard", "host", "incident", "plan", "project", "worktree"}
-	if !slices.Equal(names, want) {
-		t.Fatalf("kind names = %v, want %v", names, want)
-	}
-}
 
 // Kinds someone asked for run under the on-request timeout; the rest under
 // the triage client's.

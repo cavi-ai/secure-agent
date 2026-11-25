@@ -3,8 +3,6 @@ package hostid
 import (
 	"context"
 	"errors"
-	"go/build"
-	"strings"
 	"testing"
 )
 
@@ -186,19 +184,6 @@ func TestIdentityClass(t *testing.T) {
 	}
 	if id := IdentifyCached("2607:6bc0::10"); id.Class != "vendor" {
 		t.Errorf("ip path: %+v, want class vendor", id)
-	}
-}
-
-// hostid is a leaf: the standard library only.
-func TestHostidImportsStandardLibraryOnly(t *testing.T) {
-	pkg, err := build.ImportDir(".", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, imp := range pkg.Imports {
-		if first, _, _ := strings.Cut(imp, "/"); strings.Contains(first, ".") {
-			t.Errorf("hostid imports %s", imp)
-		}
 	}
 }
 

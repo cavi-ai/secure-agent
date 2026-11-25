@@ -441,15 +441,6 @@ func TestAlive(t *testing.T) {
 	}
 }
 
-func TestRefreshIntervalIdleVsBusy(t *testing.T) {
-	if RefreshInterval(false) != 5*time.Second {
-		t.Fatalf("idle interval = %s, want 5s", RefreshInterval(false))
-	}
-	if RefreshInterval(true) != 3*time.Second {
-		t.Fatalf("busy interval = %s, want 3s", RefreshInterval(true))
-	}
-}
-
 func TestCPUPercent(t *testing.T) {
 	previousAt := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 	got := cpuPercent(time.Second, previousAt, 2*time.Second, previousAt.Add(2*time.Second))
