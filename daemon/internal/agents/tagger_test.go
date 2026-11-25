@@ -48,6 +48,49 @@ func TestTagInheritsFromAgentParent(t *testing.T) {
 	}
 }
 
+func TestLiveAgentFamilyUsesCurrentProcessMetadata(t *testing.T) {
+	start := time.Now()
+	procs := fakeProcs{
+		1:   {PID: 1, Comm: "init", StartTime: start},
+		100: {PID: 100, PPID: 1, Exe: "/bin/sh", StartTime: start},
+		200: {PID: 200, PPID: 100, Exe: "/bin/sh", StartTime: start},
+	}
+	cfg := config.Config{Agents: []config.AgentDef{{Name: "harness", Match: []string{"/bin/harness"}}}}
+	tg := New(cfg, procs)
+	if _, tagged := tg.Tag(200); tagged {
+		t.Fatal("ordinary process should have a cached miss")
+	}
+	if agent, known := tg.LiveAgentFamily(200); agent || !known {
+		t.Fatalf("ordinary family = (%v, %v), want (false, true)", agent, known)
+	}
+
+	parent := procs[100]
+	parent.Exe = "/bin/harness"
+	procs[100] = parent
+	if agent, known := tg.LiveAgentFamily(200); !agent || !known {
+		t.Fatalf("current family = (%v, %v), want (true, true)", agent, known)
+	}
+	if _, tagged := tg.Tag(200); tagged {
+		t.Fatal("live family lookup changed telemetry attribution")
+	}
+}
+
+func TestLiveAgentFamilyRequiresCompleteAncestry(t *testing.T) {
+	start := time.Now()
+	procs := fakeProcs{
+		100: {PID: 100, PPID: 101, Exe: "/bin/sh", StartTime: start},
+		101: {PID: 101, PPID: 100, Exe: "/bin/sh", StartTime: start},
+		200: {PID: 200, PPID: 201, Exe: "/bin/sh", StartTime: start},
+		300: {PID: 300, Exe: "/bin/sh"},
+	}
+	tg := New(config.Config{}, procs)
+	for _, pid := range []int32{100, 200, 300, 400} {
+		if agent, known := tg.LiveAgentFamily(pid); agent || known {
+			t.Errorf("incomplete family for %d = (%v, %v), want (false, false)", pid, agent, known)
+		}
+	}
+}
+
 func TestParentPID(t *testing.T) {
 	fake := fakeProcs{
 		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/codex"},

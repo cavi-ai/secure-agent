@@ -336,6 +336,39 @@ func (t *Tagger) Tag(pid int32) (AgentInfo, bool) {
 	return t.tagLocked(pid)
 }
 
+// LiveAgentFamily checks whether pid should be treated as an agent for API
+// authorization. A tracked agent stays restricted. Confirming a non-agent
+// requires a complete live walk, independent of cached telemetry misses.
+func (t *Tagger) LiveAgentFamily(pid int32) (isAgent, known bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.tagged[pid] {
+		return true, true
+	}
+
+	seen := make(map[int32]bool)
+	for hops := 0; hops < 32 && pid > 0 && !seen[pid]; hops++ {
+		seen[pid] = true
+		p, ok := t.ps.Info(pid)
+		if !ok || (p.Exe == "" && p.Comm == "") {
+			return false, false
+		}
+		if _, matched := t.matchLocked(p); matched {
+			return true, true
+		}
+		// An executable can be readable even when the process metadata
+		// containing its parent is unavailable.
+		if p.StartTime.IsZero() {
+			return false, false
+		}
+		if p.PPID == 0 {
+			return false, true
+		}
+		pid = p.PPID
+	}
+	return false, false
+}
+
 // ParentPID returns pid's parent from the last process table, falling back to
 // the process source for a pid the table does not hold. 0, false when the pid
 // is unknown to both.

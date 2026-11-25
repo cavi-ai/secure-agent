@@ -178,7 +178,7 @@ func TestSessionFollowUpCLIInspectPermissions(t *testing.T) {
 	// This injected classifier treats every connected PID as an agent solely
 	// for this route-gate test. Kernel peer credentials still come from the
 	// platform's real Unix-socket PeerChecker.
-	stopAgentClassifiedServer := startSessionPermissionsServer(t, st, socket, func(int32) bool { return true })
+	stopAgentClassifiedServer := startSessionPermissionsServer(t, st, socket, func(int32) (bool, bool) { return true, true })
 	defer stopAgentClassifiedServer()
 	if allowed, err := runCLI("session", targetID, "--follow-up", "--json"); err != nil {
 		t.Fatalf("NoAgent classification unexpectedly blocked session outcomes: %v\n%s", err, allowed)
@@ -202,7 +202,7 @@ func TestSessionFollowUpCLIInspectPermissions(t *testing.T) {
 	}
 }
 
-func startSessionPermissionsServer(t *testing.T, st *store.Store, socket string, isAgentPID func(int32) bool) func() {
+func startSessionPermissionsServer(t *testing.T, st *store.Store, socket string, isAgentPID func(int32) (bool, bool)) func() {
 	t.Helper()
 	listener, err := net.Listen("unix", socket)
 	if err != nil {

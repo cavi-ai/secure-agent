@@ -472,7 +472,9 @@ func TestGateLiveAgentFamilyIsAgentOnEveryRoute(t *testing.T) {
 			deps.Peers.Checker = loopbackChecker{NewPeerChecker()}
 			deps.Peers.AgentPIDs = func() map[int32]struct{} { return nil }
 			var agentFamily atomic.Bool
-			deps.Peers.IsAgentPID = func(pid int32) bool { return agentFamily.Load() && pid == self }
+			var familyKnown atomic.Bool
+			familyKnown.Store(true)
+			deps.Peers.IsAgentPID = func(pid int32) (bool, bool) { return agentFamily.Load() && pid == self, familyKnown.Load() }
 			a := newTestAPI(deps)
 			a.peerRole.UIPID = tc.uiPID
 			ctx, cancel := contextWithCancel()
@@ -513,6 +515,16 @@ func TestGateLiveAgentFamilyIsAgentOnEveryRoute(t *testing.T) {
 				if code, body := do(c); code == http.StatusForbidden && strings.Contains(body, gateRefusal) {
 					t.Errorf("owner %s %s: refused by the gate, want the owner-level gate to pass", c.method, c.path)
 				}
+			}
+
+			familyKnown.Store(false)
+			for _, c := range tc.calls {
+				if code, body := do(c); code != http.StatusForbidden || !strings.Contains(body, gateRefusal) {
+					t.Errorf("unknown family %s %s: %d %q, want the gate's 403", c.method, c.path, code, strings.TrimSpace(body))
+				}
+			}
+			if code, _ := do(call{http.MethodGet, "/status", ""}); code != http.StatusOK {
+				t.Errorf("unknown family GET /status: %d, want 200", code)
 			}
 		})
 	}

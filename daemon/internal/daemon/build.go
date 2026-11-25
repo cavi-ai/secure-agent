@@ -405,10 +405,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			AgentPIDs:    agentPIDSet,
 			UIPID:        uiPID,
 			UIPIDVersion: opts.OwnerPIDVersion,
-			IsAgentPID: func(pid int32) bool {
-				_, isAgent := tagger.Tag(pid)
-				return isAgent
-			},
+			IsAgentPID:   tagger.LiveAgentFamily,
 		},
 		Telemetry: api.TelemetryDeps{
 			FleetSink:       fleetPub,

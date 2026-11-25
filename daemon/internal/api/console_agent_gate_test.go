@@ -61,7 +61,7 @@ func consoleMutations(t *testing.T) [][2]string {
 func TestConsoleMutationsRefuseAgentPeers(t *testing.T) {
 	deps := fileTestDeps(t)
 	deps.System.TCPClientPID = func(string) (int32, error) { return 777, nil }
-	deps.Peers.IsAgentPID = func(pid int32) bool { return pid == 777 }
+	deps.Peers.IsAgentPID = func(pid int32) (bool, bool) { return pid == 777, true }
 	h := newTestAPI(deps).ConsoleHandler()
 	mutations := consoleMutations(t)
 	if len(mutations) < 40 {
@@ -80,7 +80,7 @@ func TestConsoleMutationGateLetsNonAgentsThrough(t *testing.T) {
 	deps := fileTestDeps(t)
 	deps.System.TCPClientPID = func(string) (int32, error) { return 777, nil }
 	agent := false
-	deps.Peers.IsAgentPID = func(int32) bool { return agent }
+	deps.Peers.IsAgentPID = func(int32) (bool, bool) { return agent, true }
 	h := newTestAPI(deps).ConsoleHandler()
 	if code, body := serveConsole(h, http.MethodPost, "/guard/resolve"); code != http.StatusServiceUnavailable || !strings.Contains(body, "guard not enabled") {
 		t.Fatalf("browser POST /guard/resolve: %d %q, want the handler's 503", code, body)
@@ -96,7 +96,7 @@ func TestConsoleMutationGateLetsNonAgentsThrough(t *testing.T) {
 func TestConsoleMutationGateRefusesUnidentifiedPeers(t *testing.T) {
 	deps := fileTestDeps(t)
 	deps.System.TCPClientPID = func(string) (int32, error) { return 0, http.ErrNoLocation }
-	deps.Peers.IsAgentPID = func(int32) bool { return false }
+	deps.Peers.IsAgentPID = func(int32) (bool, bool) { return false, true }
 	h := newTestAPI(deps).ConsoleHandler()
 	if code, _ := serveConsole(h, http.MethodPost, "/kill"); code != http.StatusServiceUnavailable {
 		t.Fatalf("unidentified POST /kill: %d, want 503", code)

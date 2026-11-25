@@ -428,7 +428,13 @@ func (a *API) consoleNoAgent(h http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "the connecting process could not be identified; retry", http.StatusServiceUnavailable)
 			return
 		}
-		if a.isAgentPID(pid) {
+		isAgent, known := a.isAgentPID(pid)
+		if !known {
+			log.Printf("api: refused %s %s on the console listener: ancestry for peer %s pid=%d unavailable", r.Method, r.URL.Path, r.RemoteAddr, pid)
+			http.Error(w, "the connecting process could not be identified; retry", http.StatusServiceUnavailable)
+			return
+		}
+		if isAgent {
 			log.Printf("api: refused %s %s on the console listener: peer %s pid=%d is an agent", r.Method, r.URL.Path, r.RemoteAddr, pid)
 			http.Error(w, "forbidden: agent processes cannot use this endpoint", http.StatusForbidden)
 			return

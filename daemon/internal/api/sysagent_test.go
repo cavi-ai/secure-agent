@@ -526,7 +526,7 @@ func TestAgentWorktreeRefusesAnAgentPeer(t *testing.T) {
 	agentPeer := true
 	a := New(Deps{Store: st, Workspace: WorkspaceDeps{SysAgent: agent, Worktrees: testHunter(t, st, t.TempDir())},
 		System: SystemDeps{TCPClientPID: func(string) (int32, error) { return 777, nil }},
-		Peers:  PeerDeps{IsAgentPID: func(pid int32) bool { return agentPeer && pid == 777 }}})
+		Peers:  PeerDeps{IsAgentPID: func(pid int32) (bool, bool) { return agentPeer && pid == 777, true }}})
 	h := a.ConsoleHandler()
 	post := func() int {
 		w := httptest.NewRecorder()

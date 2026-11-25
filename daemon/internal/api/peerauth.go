@@ -105,10 +105,12 @@ func (a *API) gate(checker PeerChecker, next http.Handler) http.Handler {
 			return
 		}
 		role := a.peerRole.classify(cred)
-		// The tagged set lags a freshly spawned agent child; an owner-uid peer
-		// in an agent family is an agent on every route.
-		if role == roleOwner && a.isAgentPID != nil && a.isAgentPID(cred.PID) {
-			role = roleAgent
+		// The tagged set lags new agent children. Check the live family when
+		// a same-UID peer needs privileges that an agent doesn't have.
+		if role == roleOwner && a.isAgentPID != nil && !a.authorize(roleAgent, r.Method, r.URL.Path) {
+			if isAgent, known := a.isAgentPID(cred.PID); isAgent || !known {
+				role = roleAgent
+			}
 		}
 		if !a.authorize(role, r.Method, r.URL.Path) {
 			// Denials are logged with the kernel-attested identity: a mute or
