@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -132,7 +133,11 @@ func main() {
 		log.Fatal("collector: no node secrets configured — use -secrets n1=secret,n2=secret or a secrets file")
 	}
 
-	c := &Collector{cfg: cfg, store: NewStore(cfg.StoreDir)}
+	store, err := NewStore(cfg.StoreDir)
+	if err != nil {
+		log.Fatalf("collector: open store: %v", err)
+	}
+	c := &Collector{cfg: cfg, store: store}
 
 	log.Printf("secure-agent-collector listening on http://%s (nodes: %d)", cfg.Addr, len(cfg.Secrets))
 	srv := newServer(cfg.Addr, c, defaultServerTimeouts)
@@ -256,9 +261,11 @@ func verifySignature(header string, body []byte, secret string) error {
 	return nil
 }
 
+const maxEnvelopeBody = 2 << 20
+
 // handleHook receives, verifies, and stores one envelope.
 func (c *Collector) handleHook(w http.ResponseWriter, r *http.Request) {
-	body := http.MaxBytesReader(w, r.Body, 2<<20)
+	body := http.MaxBytesReader(w, r.Body, maxEnvelopeBody)
 	raw, err := io.ReadAll(body)
 	if err != nil {
 		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
@@ -354,10 +361,7 @@ func (c *Collector) handleNodeEvents(w http.ResponseWriter, r *http.Request, wri
 	if k := r.URL.Query().Get("kind"); k != "" {
 		kinds[k] = true
 	}
-	limit := 100
-	if l := r.URL.Query().Get("limit"); l != "" {
-		fmt.Sscanf(l, "%d", &limit)
-	}
+	limit := eventsLimit(r.URL.Query().Get("limit"))
 
 	// The JSONL query can scan the whole history before returning a page.
 	// Start the write budget after the scan and JSON encoding.
@@ -369,6 +373,21 @@ func (c *Collector) handleNodeEvents(w http.ResponseWriter, r *http.Request, wri
 	events := c.store.Query(nodeID, kinds, limit)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(dst).Encode(events)
+}
+
+// Events page size: missing, unparsable, zero and negative values use the
+// default; values above the maximum are clamped to it.
+const (
+	defaultEventsLimit = 100
+	maxEventsLimit     = 1000
+)
+
+func eventsLimit(raw string) int {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return defaultEventsLimit
+	}
+	return min(n, maxEventsLimit)
 }
 
 type eventResponseWriter struct {

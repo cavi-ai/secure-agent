@@ -278,43 +278,6 @@ func humanCollectorDetail(name, lastErr string) string {
 	return hint + " · " + lastErr
 }
 
-// humanFlagTitle maps rule ids to operator language (mirrors the menubar's
-// NotificationManager titles; kept in sync manually until a shared table).
-func humanFlagTitle(rule string) string {
-	switch rule {
-	case "proxy-secret-leak":
-		return "Secret leaving in agent traffic"
-	case "sensitive-read-then-connect":
-		return "Sensitive file read near an outside connection"
-	case "keychain-access":
-		return "Agent touched the keychain"
-	case "keychain-security-cli":
-		return "Agent ran the macOS keychain tool"
-	case "tcc-tamper":
-		return "Agent modified macOS privacy permissions (TCC)"
-	case "launch-item-change":
-		return "Agent changed a background item"
-	case "trust-change":
-		return "Agent changed what macOS trusts"
-	case "xprotect-detection":
-		return "XProtect detected malware"
-	case "proxy-prompt-injection":
-		return "Prompt injection in a response"
-	case "proxy-inspection-incomplete":
-		return "Proxy request inspection was incomplete"
-	case "secret-in-transcript":
-		return "Secret appeared in an agent transcript"
-	case "untrusted-egress":
-		return "Data sent after reading untrusted content"
-	case "proxy-untrusted-egress":
-		return "Connection refused after reading untrusted content"
-	case "proxy-untrusted-egress-monitored":
-		return "Connection after reading untrusted content"
-	default:
-		return rule
-	}
-}
-
 func uninspectedTitle(n int) string {
 	if n == 1 {
 		return "1 endpoint reached outside the inspection proxy"

@@ -1,15 +1,15 @@
-package api
+package posture
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/hookhealth"
+	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
-	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -21,57 +21,32 @@ import (
 // once as a headline item (Items) and once as an item in exactly one group,
 // so needs_you, the console hero and the menubar count the same set.
 
-// AttentionItem priorities (higher first): guard 5, resource 4, incident 3,
-// critical flag, pattern and routine 2.
-type AttentionItem struct {
-	Kind            string                `json:"kind"` // resource | guard | incident | flag | pattern | routine
-	Priority        int                   `json:"priority"`
-	ID              string                `json:"id,omitempty"`
-	Action          string                `json:"action,omitempty"`
-	Title           string                `json:"title"`
-	Detail          string                `json:"detail,omitempty"`
-	Rule            string                `json:"rule,omitempty"`
-	Path            string                `json:"path,omitempty"`
-	Tool            string                `json:"tool,omitempty"`
-	Workspace       string                `json:"workspace,omitempty"`
-	ScopeText       string                `json:"scopeText,omitempty"`
-	AvailableScopes []model.ScopeChoice   `json:"available_scopes,omitempty"`
-	ReaderExe       string                `json:"reader_exe,omitempty"`
-	Status          string                `json:"status,omitempty"`
-	Count           int                   `json:"count,omitempty"`
-	Hosts           []string              `json:"hosts,omitempty"`
-	Advisor         *model.AdvisorVerdict `json:"advisor,omitempty"`
-	// Disposition is set on flag items (the same verdict /flags/{id}/explain
-	// serves) and pattern items (the worst open flag's).
-	Disposition  *model.Disposition           `json:"disposition,omitempty"`
-	Assessment   *model.FindingAssessment     `json:"assessment,omitempty"`
-	Review       *model.ReviewRecord          `json:"review,omitempty"`
-	SessionID    string                       `json:"session_id,omitempty"`
-	HookFinding  *hookhealth.Finding          `json:"hook_finding,omitempty"`
-	HookDelivery *store.HookForwarderSnapshot `json:"hook_delivery,omitempty"`
+// Inputs is a snapshot of the facts needed for one derivation. Storage
+// and live-service reads happen at the boundary; ranking has no handler access.
+type Inputs struct {
+	Status              Status
+	Generated           time.Time
+	Patterns            []model.Pattern
+	Routine             []model.RoutineGroup
+	Resources           []resource.Session
+	HookGap             *PostureItem
+	Pending             []guard.Pending
+	Flags               []model.Flag
+	Reviews             []model.ReviewRecord
+	FlagReviews         map[string]model.ReviewRecord
+	Incidents           []model.IncidentReport
+	IncidentStates      map[string]string
+	IncidentAssessments map[string]model.FindingAssessment
+	FailedReads         []string
+	HookFindings        []store.SessionHookFinding
+	HookHealthTruncated bool
 }
 
-// AttentionGroup is one agent session, an explicit unattributed bucket, or
-// the machine group (Key "machine") for signals no agent owns, with its
-// pending decisions, worst first.
-type AttentionGroup struct {
-	Key          string  `json:"key"`
-	Label        string  `json:"label"`
-	Agent        string  `json:"agent"`
-	Workspace    string  `json:"workspace,omitempty"`
-	RootPID      int32   `json:"rootPid,omitempty"`
-	PIDs         []int32 `json:"pids,omitempty"`
-	RSSBytes     uint64  `json:"rssBytes,omitempty"`
-	CPUPercent   float64 `json:"cpuPercent,omitempty"`
-	ProcessCount int     `json:"processCount,omitempty"`
-	// Summary, on an agent-level group (Key "agent:…"), names the processes
-	// and sessions behind its findings and whether they still run.
-	Summary string          `json:"summary,omitempty"`
-	Items   []AttentionItem `json:"items"`
-}
+// ReadConnectRule is the rule id of a sensitive read followed by a connection.
+const ReadConnectRule = "sensitive-read-then-connect"
 
-// machineGroupKey is retained for the machine-level coverage section.
-const machineGroupKey = "machine"
+// RoutineGroupKey is the attention group that holds the routine items.
+const RoutineGroupKey = "routine"
 
 // attentionSession: a live session a signal can be attributed to.
 type attentionSession struct {
@@ -88,103 +63,16 @@ type attentionSession struct {
 	control      *resource.SessionControl
 }
 
-// machineAttentionItems are the signals no agent owns: dead collectors, and
-// while agents are active, silent collectors and missing hooks.
-func machineAttentionItems(now time.Time, st Status, hookGap *PostureItem) []PostureItem {
-	var items []PostureItem
-	if fileTelemetryDisabled(st) {
-		items = append(items, PostureItem{Kind: "collector_disabled", ID: "eslogger", Title: "File monitoring is off", Detail: "File telemetry is disabled in configuration."})
-	} else if fileTelemetryUnavailable(st) {
-		items = append(items, PostureItem{Kind: "collector_down", ID: "eslogger", Severity: 2, Title: "File monitoring is unavailable", Detail: "File telemetry is enabled but no file collector is available. Check Setup & Permissions in the menu bar."})
-	}
-	if h := st.EgressProjectionHealth; h != nil && (h.QueueDrops > 0 || h.WriteFailures > 0) {
-		detail := fmt.Sprintf("%d observations missed the summary queue; %d summary writes failed since daemon start. Recurring egress summaries may be incomplete. Connection evidence has separate storage health.", h.QueueDrops, h.WriteFailures)
-		if h.WriteFailing {
-			detail += " Summary writes are still failing."
-		} else if h.WriteFailures > 0 {
-			detail += " New summary writes have recovered."
-		}
-		items = append(items, PostureItem{Kind: "projection_loss", ID: "egress", Severity: 2, Title: "Recurring egress summary missed activity", Detail: detail})
-	}
-	if st.OTLPDropped > 0 {
-		items = append(items, PostureItem{Kind: "export_loss", ID: "otlp", Severity: 2, Title: "Trace export lost spans", Detail: fmt.Sprintf("%d spans could not be exported since daemon start. Local evidence is retained separately.", st.OTLPDropped)})
-	}
-	if st.BusDropping || st.BusDrops > 0 {
-		items = append(items, PostureItem{Kind: "event_loss", ID: "event-bus", Severity: 2,
-			Title:  "Telemetry was dropped",
-			Detail: fmt.Sprintf("%d subscriber deliveries dropped since daemon start. Monitoring history may be incomplete.", st.BusDrops)})
-	}
-	if s := st.ESService; s != nil && s.BytesLost > 0 && (!s.Losing || fileTelemetryDisabled(st)) {
-		items = append(items, PostureItem{Kind: "file_evidence_loss", ID: "es-history", Title: "Earlier file monitoring evidence was lost", Detail: posture.ESLossDetail(*s)})
-	}
-	if h := st.StorageHealth; h != nil && len(h.ReadActive) > 0 {
-		items = append(items, PostureItem{Kind: "storage_read_failure", ID: "storage-reads", Severity: 2, Title: "Evidence could not be read", Detail: "Last known activity may be stale. Reads failing: " + strings.Join(h.ReadActive, ", ") + "." + readIssueDetail(*h)})
-	}
-	if h := st.StorageHealth; h != nil && h.Failures > 0 {
-		detail := fmt.Sprintf("%d evidence persistence attempts failed since daemon start. Monitoring history may be incomplete.", h.Failures)
-		if len(h.Active) > 0 {
-			detail += " Writes still failing: " + strings.Join(h.Active, ", ") + "."
-		} else {
-			detail += " New writes have recovered; earlier evidence may remain incomplete."
-		}
-		items = append(items, PostureItem{Kind: "storage_loss", ID: "storage", Severity: 2,
-			Title: "Evidence could not be saved", Detail: detail})
-	}
-	// A monitor that stopped is a blind spot, not a detail.
-	for _, c := range st.Collectors {
-		if c.Name == "eslogger" && fileTelemetryDisabled(st) {
-			continue
-		}
-		if !c.Running || c.Abandoned {
-			items = append(items, PostureItem{
-				Kind: "collector_down", ID: c.Name,
-				Title:    humanCollectorTitle(c.Name, c.Abandoned),
-				Severity: 2,
-				Detail:   humanCollectorDetail(c.Name, c.LastError),
-			})
-		}
-	}
-	// Liveness is not coverage: the worst failure mode a monitor can have is
-	// reporting green while blind (both audited live: the eslogger spool
-	// untouched for days, zero hook events for 17h, all "healthy").
-	if st.ActiveAgents > 0 {
-		items = append(items, silentCollectorItems(now, st)...)
-		if st.Coverage != nil {
-			items = append(items, harnessUncoveredItems(st.Coverage.Harnesses)...)
-		}
-		if hookGap != nil {
-			items = append(items, *hookGap)
-		}
-	}
-	return items
-}
-
-// readIssueDetail adds the newest safe diagnostic for an active operation.
-// The complete per-operation history remains available in storage_health.
-func readIssueDetail(h store.WriteHealth) string {
-	var latest *store.ReadIssue
-	for i := range h.ReadIssues {
-		issue := &h.ReadIssues[i]
-		if issue.RecoveredAt != nil {
-			continue
-		}
-		if latest == nil || issue.LastFailureAt.After(latest.LastFailureAt) {
-			latest = issue
-		}
-	}
-	if latest == nil {
-		return ""
-	}
-	return " Last read failure: " + latest.Operation + " (" + latest.Category + ") at " + latest.LastFailureAt.UTC().Format(time.RFC3339) + "."
-}
-
-type attentionQueueResult struct {
+// AttentionQueue is the derived queue: headline items and their groups.
+type AttentionQueue struct {
 	Items  []PostureItem
 	Groups []AttentionGroup
 }
 
-func deriveAttention(in postureInputs) attentionQueueResult {
-	b := newAttentionBuilder(in)
+// DeriveAttention builds the attention queue from in; disposition supplies
+// the verdict of each flag no routine group or pattern covers.
+func DeriveAttention(in Inputs, disposition func(model.Flag) model.Disposition) AttentionQueue {
+	b := newAttentionBuilder(in, disposition)
 	b.addHookFindings()
 	b.addHookDeliveries()
 	b.addFlags(b.addReviews())
@@ -197,24 +85,26 @@ func deriveAttention(in postureInputs) attentionQueueResult {
 // attentionBuilder holds one derivation's sessions and groups; each add step
 // appends one source's items, in queue order.
 type attentionBuilder struct {
-	in       postureInputs
-	sessions []attentionSession
-	byPID    map[int32]*attentionSession
-	byAgent  map[string][]*attentionSession
-	groups   map[string]*AttentionGroup
-	facts    map[string]*agentGroupFacts
-	items    []PostureItem
+	in          Inputs
+	disposition func(model.Flag) model.Disposition
+	sessions    []attentionSession
+	byPID       map[int32]*attentionSession
+	byAgent     map[string][]*attentionSession
+	groups      map[string]*AttentionGroup
+	facts       map[string]*agentGroupFacts
+	items       []PostureItem
 }
 
-func newAttentionBuilder(in postureInputs) *attentionBuilder {
+func newAttentionBuilder(in Inputs, disposition func(model.Flag) model.Disposition) *attentionBuilder {
 	b := &attentionBuilder{
-		in:       in,
-		sessions: attentionSessions(in),
-		byPID:    map[int32]*attentionSession{},
-		byAgent:  map[string][]*attentionSession{},
-		groups:   map[string]*AttentionGroup{},
-		facts:    map[string]*agentGroupFacts{},
-		items:    []PostureItem{},
+		in:          in,
+		disposition: disposition,
+		sessions:    attentionSessions(in),
+		byPID:       map[int32]*attentionSession{},
+		byAgent:     map[string][]*attentionSession{},
+		groups:      map[string]*AttentionGroup{},
+		facts:       map[string]*agentGroupFacts{},
+		items:       []PostureItem{},
 	}
 	for i := range b.sessions {
 		s := &b.sessions[i]
@@ -233,14 +123,14 @@ func newAttentionBuilder(in postureInputs) *attentionBuilder {
 
 // attentionSessions lists the resource tracker's sessions, or one session
 // per process tree when it has none.
-func attentionSessions(in postureInputs) []attentionSession {
+func attentionSessions(in Inputs) []attentionSession {
 	var sessions []attentionSession
 	for _, s := range in.Resources {
 		sess := attentionSession{
-			key:          firstNonEmpty([]string{s.Key, fmt.Sprint(s.RootPID)}),
+			key:          cmp.Or(s.Key, fmt.Sprint(s.RootPID)),
 			agent:        s.Name,
 			workspace:    s.Workspace,
-			label:        firstNonEmpty([]string{cwdBase(s.Workspace), s.Name, "Unknown"}),
+			label:        cmp.Or(WorkspaceName(s.Workspace), s.Name, "Unknown"),
 			rootPID:      s.RootPID,
 			rssBytes:     s.RSSBytes,
 			cpuPercent:   s.CPUPercent,
@@ -264,7 +154,7 @@ func attentionSessions(in postureInputs) []attentionSession {
 			key:          fmt.Sprint(firstPID(t.Root.RootPID, t.Root.PID)),
 			agent:        t.Root.Name,
 			workspace:    t.Root.CWD,
-			label:        firstNonEmpty([]string{cwdBase(t.Root.CWD), t.Root.Name, "Unknown"}),
+			label:        cmp.Or(WorkspaceName(t.Root.CWD), t.Root.Name, "Unknown"),
 			rootPID:      t.Root.PID,
 			rssBytes:     t.RSSBytes,
 			processCount: 1 + len(t.Children),
@@ -297,9 +187,9 @@ func (b *attentionBuilder) groupFor(agent string, pid int32) *AttentionGroup {
 		}
 	}
 	if sess == nil {
-		return b.keyed("agent:"+firstNonEmpty([]string{agent, "unattributed"}), AttentionGroup{
-			Label: firstNonEmpty([]string{agent, "Unattributed"}) + " activity",
-			Agent: firstNonEmpty([]string{agent, "unknown"}),
+		return b.keyed("agent:"+cmp.Or(agent, "unattributed"), AttentionGroup{
+			Label: cmp.Or(agent, "Unattributed") + " activity",
+			Agent: cmp.Or(agent, "unknown"),
 		})
 	}
 	return b.keyed("session:"+sess.key, AttentionGroup{
@@ -357,12 +247,12 @@ func (b *attentionBuilder) addHookDeliveries() {
 			continue
 		}
 		r := row.Report
-		key, label := "hook-host:"+r.ForwarderID, familyTitle(r.Harness)+" forwarding host"
+		key, label := "hook-host:"+r.ForwarderID, FamilyTitle(r.Harness)+" forwarding host"
 		if r.SessionID != "" {
 			key, label = "durable-session:"+r.SessionID, "Host-reported session "+r.SessionID
 		}
 		g := b.keyed(key, AttentionGroup{Label: label, Agent: r.Harness})
-		id, title := "hook-delivery:"+r.ForwarderID, familyTitle(r.Harness)+" hook delivery needs attention"
+		id, title := "hook-delivery:"+r.ForwarderID, FamilyTitle(r.Harness)+" hook delivery needs attention"
 		detail := fmt.Sprintf("%d queued completions; inspect the host's current delivery diagnostics.", r.Pending)
 		b.add(g, PostureItem{Kind: "hook_delivery", ID: id, Title: title, Detail: detail, Severity: 1, Timestamp: row.ReceivedAt.UTC().Format(time.RFC3339Nano)}, AttentionItem{Kind: "hook_delivery", Priority: 1, ID: id, Title: title, Detail: detail, SessionID: r.SessionID, HookDelivery: &row})
 	}
@@ -382,8 +272,8 @@ func (b *attentionBuilder) addReviews() map[string]bool {
 		if severity < 3 {
 			continue
 		}
-		g := b.keyed("session:"+r.Context.SessionID, AttentionGroup{Label: firstNonEmpty([]string{cwdBase(r.Context.Workspace), r.Agent, "Session"}), Agent: r.Agent, Workspace: r.Context.Workspace, Summary: "Recorded session " + r.Context.SessionID})
-		b.add(g, PostureItem{Kind: "review", ID: r.ID, Title: humanFlagTitle(r.Context.Rule), Severity: severity, Detail: r.Assessment.Reason, Timestamp: r.LastSeen.UTC().Format(time.RFC3339)}, AttentionItem{Kind: "review", ID: r.ID, Priority: 1 + severity/3, Title: humanFlagTitle(r.Context.Rule), Detail: r.Assessment.Reason, Count: r.Count, Assessment: &r.Assessment, Review: &r})
+		g := b.keyed("session:"+r.Context.SessionID, AttentionGroup{Label: cmp.Or(WorkspaceName(r.Context.Workspace), r.Agent, "Session"), Agent: r.Agent, Workspace: r.Context.Workspace, Summary: "Recorded session " + r.Context.SessionID})
+		b.add(g, PostureItem{Kind: "review", ID: r.ID, Title: HumanFlagTitle(r.Context.Rule), Severity: severity, Detail: r.Assessment.Reason, Timestamp: r.LastSeen.UTC().Format(time.RFC3339)}, AttentionItem{Kind: "review", ID: r.ID, Priority: 1 + severity/3, Title: HumanFlagTitle(r.Context.Rule), Detail: r.Assessment.Reason, Count: r.Count, Assessment: &r.Assessment, Review: &r})
 	}
 	return covered
 }
@@ -408,7 +298,7 @@ func (b *attentionBuilder) addFlags(coveredReviews map[string]bool) {
 	}
 	routineAdded, patternAdded := map[int]bool{}, map[int]bool{}
 	for _, f := range b.in.Flags {
-		if f.Rule == readConnectRule {
+		if f.Rule == ReadConnectRule {
 			if r, ok := b.in.FlagReviews[f.ID]; ok && (coveredReviews[r.ID] || r.Context.Attribution == "stored-session" && r.ReviewState != "unreviewed") {
 				continue
 			}
@@ -441,7 +331,7 @@ func (b *attentionBuilder) addRoutine(rg model.RoutineGroup, f model.Flag) {
 	if severity < 3 {
 		return
 	}
-	g := b.keyed(routineGroupKey, AttentionGroup{Label: "Recurring across agents",
+	g := b.keyed(RoutineGroupKey, AttentionGroup{Label: "Recurring across agents",
 		Summary: "The same process reading the same files under several agents"})
 	b.add(g, PostureItem{
 		Kind: "routine", ID: rg.Key,
@@ -452,7 +342,7 @@ func (b *attentionBuilder) addRoutine(rg model.RoutineGroup, f model.Flag) {
 	}, AttentionItem{
 		Kind: "routine", Priority: 2, ID: rg.Key,
 		Count: rg.Count, Title: "Recurring read", Detail: rg.Summary,
-		Disposition: &d, Assessment: rg.Assessment, Rule: readConnectRule,
+		Disposition: &d, Assessment: rg.Assessment, Rule: ReadConnectRule,
 	})
 }
 
@@ -485,7 +375,7 @@ func (b *attentionBuilder) addPattern(p model.Pattern, f model.Flag) {
 
 // addFlag adds a flag no routine group or pattern covers.
 func (b *attentionBuilder) addFlag(f model.Flag) {
-	d := dispositionFor(f)
+	d := b.disposition(f)
 	assessment := model.AssessFinding(f)
 	severity := model.GroupFindingSeverity(assessment, f.Severity)
 	if severity < 3 {
@@ -505,7 +395,7 @@ func (b *attentionBuilder) addFlag(f model.Flag) {
 	}
 	b.add(g, PostureItem{
 		Kind: "flag", ID: f.ID,
-		Title:     humanFlagTitle(f.Rule),
+		Title:     HumanFlagTitle(f.Rule),
 		Severity:  severity,
 		Detail:    assessment.Reason,
 		Timestamp: f.TS.UTC().Format(time.RFC3339),
@@ -515,8 +405,8 @@ func (b *attentionBuilder) addFlag(f model.Flag) {
 // addGuardPending adds the guard prompts waiting on the operator.
 func (b *attentionBuilder) addGuardPending() {
 	for _, p := range b.in.Pending {
-		tool := firstNonEmpty([]string{p.Tool, "Tool"})
-		path := firstNonEmpty([]string{p.Path, "a protected path"})
+		tool := cmp.Or(p.Tool, "Tool")
+		path := cmp.Or(p.Path, "a protected path")
 		b.add(b.groupFor(p.Agent, 0), PostureItem{
 			Kind: "guard_pending", ID: p.ID,
 			Title:     p.Agent + " wants " + humanPath(p.Path),
@@ -552,16 +442,16 @@ func (b *attentionBuilder) addIncidents() {
 		if !found {
 			continue
 		}
-		status = firstNonEmpty([]string{status, "open"})
+		status = cmp.Or(status, "open")
 		critical := inc.Risk == model.RiskCritical
 		high := inc.Risk == model.RiskHigh
 		if status != "open" || (!critical && !high) {
 			continue
 		}
-		detail := firstNonEmpty([]string{inc.Summary, inc.Rule, "A security incident needs review."})
+		detail := cmp.Or(inc.Summary, inc.Rule, "A security incident needs review.")
 		headline := PostureItem{
 			Kind: "incident", ID: inc.ID,
-			Title:    "Open incident: " + humanFlagTitle(inc.Rule),
+			Title:    "Open incident: " + HumanFlagTitle(inc.Rule),
 			Severity: 2,
 			Detail:   detail,
 		}
@@ -595,7 +485,7 @@ func (b *attentionBuilder) addResourcePressure() {
 			Detail:   detail,
 		}, AttentionItem{
 			Kind: "resource", Priority: 4, ID: s.control.PendingID,
-			Action: firstNonEmpty([]string{string(s.control.NextAction), "intervention"}),
+			Action: cmp.Or(string(s.control.NextAction), "intervention"),
 			Title:  "Resource pressure", Detail: detail,
 		})
 	}
@@ -604,7 +494,7 @@ func (b *attentionBuilder) addResourcePressure() {
 // result summarizes agent groups against the live PIDs and orders the
 // non-empty groups: highest item priority, then the routine group, then more
 // items, then label.
-func (b *attentionBuilder) result() attentionQueueResult {
+func (b *attentionBuilder) result() AttentionQueue {
 	live := map[int32]bool{}
 	for pid := range b.byPID {
 		live[pid] = true
@@ -632,7 +522,7 @@ func (b *attentionBuilder) result() attentionQueueResult {
 		if pi != pj {
 			return pi > pj
 		}
-		if ri, rj := out[i].Key == routineGroupKey, out[j].Key == routineGroupKey; ri != rj {
+		if ri, rj := out[i].Key == RoutineGroupKey, out[j].Key == RoutineGroupKey; ri != rj {
 			return ri
 		}
 		if len(out[i].Items) != len(out[j].Items) {
@@ -640,10 +530,11 @@ func (b *attentionBuilder) result() attentionQueueResult {
 		}
 		return out[i].Label < out[j].Label
 	})
-	return attentionQueueResult{Items: b.items, Groups: out}
+	return AttentionQueue{Items: b.items, Groups: out}
 }
 
-func cwdBase(cwd string) string {
+// WorkspaceName is the last element of a workspace path; "" for an empty path.
+func WorkspaceName(cwd string) string {
 	s := strings.TrimRight(cwd, "/")
 	if s == "" {
 		return ""
@@ -654,10 +545,10 @@ func cwdBase(cwd string) string {
 	return s
 }
 
-// familyTitle title-cases a plain harness name ("claude" → "Claude"). Any
+// FamilyTitle title-cases a plain harness name ("claude" → "Claude"). Any
 // other id, e.g. "untagged:node", is returned unchanged: it names a process,
 // not a product.
-func familyTitle(name string) string {
+func FamilyTitle(name string) string {
 	if name == "" {
 		return "Unknown"
 	}
@@ -678,9 +569,47 @@ func firstPID(values ...int32) int32 {
 	return 0
 }
 
-func plural(n int) string {
-	if n == 1 {
-		return ""
+// humanPath shortens an absolute path to its tail for a headline.
+func humanPath(p string) string {
+	if i := strings.LastIndex(p, "/"); i >= 0 && i+1 < len(p) {
+		return p[i+1:]
 	}
-	return "s"
+	return p
+}
+
+// HumanFlagTitle maps rule ids to operator language (mirrors the menubar's
+// NotificationManager titles; kept in sync manually until a shared table).
+func HumanFlagTitle(rule string) string {
+	switch rule {
+	case "proxy-secret-leak":
+		return "Secret leaving in agent traffic"
+	case "sensitive-read-then-connect":
+		return "Sensitive file read near an outside connection"
+	case "keychain-access":
+		return "Agent touched the keychain"
+	case "keychain-security-cli":
+		return "Agent ran the macOS keychain tool"
+	case "tcc-tamper":
+		return "Agent modified macOS privacy permissions (TCC)"
+	case "launch-item-change":
+		return "Agent changed a background item"
+	case "trust-change":
+		return "Agent changed what macOS trusts"
+	case "xprotect-detection":
+		return "XProtect detected malware"
+	case "proxy-prompt-injection":
+		return "Prompt injection in a response"
+	case "proxy-inspection-incomplete":
+		return "Proxy request inspection was incomplete"
+	case "secret-in-transcript":
+		return "Secret appeared in an agent transcript"
+	case "untrusted-egress":
+		return "Data sent after reading untrusted content"
+	case "proxy-untrusted-egress":
+		return "Connection refused after reading untrusted content"
+	case "proxy-untrusted-egress-monitored":
+		return "Connection after reading untrusted content"
+	default:
+		return rule
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
@@ -37,7 +38,7 @@ func TestMonitoringNotesDoNotRequireAttention(t *testing.T) {
 		{"past export loss", Status{Running: true, OTLPDropped: 4}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := derivePosture(postureInputs{Status: tc.status, Generated: time.Now()})
+			p := derivePosture(posture.Inputs{Status: posture.Status(tc.status), Generated: time.Now()})
 			if p.State != "all-clear" || p.NeedsYou != 0 || p.CoverageCount != 0 {
 				t.Fatalf("a monitoring note became a warning: %+v", p)
 			}
@@ -67,7 +68,7 @@ func TestMonitoringBusRecoveryKeepsLossHistory(t *testing.T) {
 	}
 	<-sub
 	p := a.computePosture()
-	if p.State != "all-clear" || p.CoverageCount != 0 || len(p.CoverageItems) != 1 || p.CoverageItems[0].MonitoringState != monitoringHistorical || b.Dropped() != 1 {
+	if p.State != "all-clear" || p.CoverageCount != 0 || len(p.CoverageItems) != 1 || p.CoverageItems[0].MonitoringState != posture.MonitoringHistorical || b.Dropped() != 1 {
 		t.Fatalf("recovery erased history or kept the warning: %+v", p)
 	}
 	if state, _ := checkBus(a.doctorFacts(time.Now())); state != doctorPass {
@@ -76,7 +77,7 @@ func TestMonitoringBusRecoveryKeepsLossHistory(t *testing.T) {
 }
 
 func TestMonitoringCurrentFailureStillRequiresAttention(t *testing.T) {
-	p := derivePosture(postureInputs{Generated: time.Now(), Status: Status{
+	p := derivePosture(posture.Inputs{Generated: time.Now(), Status: posture.Status{
 		Running: true, StorageHealth: &store.WriteHealth{Failures: 3, Active: []string{"events"}},
 	}})
 	if p.State != "attention" || p.CoverageCount != 1 || p.AttentionSummary.Buckets[2].CoverageCount != 1 {
@@ -87,7 +88,7 @@ func TestMonitoringCurrentFailureStillRequiresAttention(t *testing.T) {
 func TestRequestedFileTelemetryRequiresACollector(t *testing.T) {
 	enabled := true
 	st := Status{Running: true, FileTelemetryEnabled: &enabled}
-	p := derivePosture(postureInputs{Generated: time.Now(), Status: st})
+	p := derivePosture(posture.Inputs{Generated: time.Now(), Status: posture.Status(st)})
 	if p.State != "attention" || p.CoverageCount != 1 || p.CoverageItems[0].Kind != "collector_down" {
 		t.Fatalf("an enabled but unavailable collector was hidden: %+v", p)
 	}
@@ -111,7 +112,7 @@ func TestMonitoringNoteChangesArePublishedWithoutWarnings(t *testing.T) {
 	select {
 	case d := <-ch:
 		p := d.Data.(Posture)
-		if p.State != "all-clear" || p.CoverageCount != 0 || len(p.CoverageItems) != 1 || p.CoverageItems[0].MonitoringState != monitoringDisabled {
+		if p.State != "all-clear" || p.CoverageCount != 0 || len(p.CoverageItems) != 1 || p.CoverageItems[0].MonitoringState != posture.MonitoringDisabled {
 			t.Fatalf("bad configuration delta: %+v", p)
 		}
 	default:

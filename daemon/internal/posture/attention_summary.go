@@ -1,27 +1,4 @@
-package api
-
-// AttentionSummary is an additive presentation of the existing queue. Queued
-// counts still sum to needs_you; coverage gaps are counted separately.
-type AttentionSummary struct {
-	Version int               `json:"version"`
-	Buckets []AttentionBucket `json:"buckets"`
-}
-
-type AttentionBucket struct {
-	Kind          string              `json:"kind"`
-	Count         int                 `json:"count"`
-	CoverageCount int                 `json:"coverage_count"`
-	First         *AttentionReference `json:"first,omitempty"`
-}
-
-// AttentionReference points to an existing group item, never a new authority
-// to approve access or a substitute for the item's current evidence.
-type AttentionReference struct {
-	Kind      string `json:"kind"`
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	SessionID string `json:"session_id,omitempty"`
-}
+package posture
 
 // AttentionBuckets are the summary's buckets in served order; clients
 // validate against this order (lib.js ATTENTION_BUCKETS, Models.swift
@@ -48,7 +25,9 @@ func attentionBucket(kind string) int {
 	return 3
 }
 
-func deriveAttentionSummary(groups []AttentionGroup, coverage []PostureItem) *AttentionSummary {
+// DeriveAttentionSummary counts group items per bucket, keeps each bucket's
+// highest-priority item, and counts active coverage gaps under monitoring.
+func DeriveAttentionSummary(groups []AttentionGroup, coverage []PostureItem) *AttentionSummary {
 	s := &AttentionSummary{Version: 1}
 	for _, kind := range AttentionBuckets {
 		s.Buckets = append(s.Buckets, AttentionBucket{Kind: kind})
@@ -66,7 +45,7 @@ func deriveAttentionSummary(groups []AttentionGroup, coverage []PostureItem) *At
 		}
 	}
 	for _, item := range coverage {
-		if isMonitoringGap(item) {
+		if IsMonitoringGap(item) {
 			s.Buckets[2].CoverageCount++
 		}
 	}
@@ -76,11 +55,12 @@ func deriveAttentionSummary(groups []AttentionGroup, coverage []PostureItem) *At
 	return s
 }
 
-func isMonitoringGap(item PostureItem) bool {
+// IsMonitoringGap reports whether item is a current monitoring failure.
+func IsMonitoringGap(item PostureItem) bool {
 	switch item.MonitoringState {
-	case monitoringHistorical, monitoringInformational, monitoringDisabled:
+	case MonitoringHistorical, MonitoringInformational, MonitoringDisabled:
 		return false
-	case monitoringActive:
+	case MonitoringActive:
 		return true
 	}
 	return item.Kind != "uninspected_egress" && item.Kind != "hook_analysis_limit" && item.Kind != "collector_idle"

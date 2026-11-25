@@ -85,6 +85,9 @@ type Components struct {
 	deltaHub         *api.DeltaHub
 	resourceEpisodes *resourceEpisodeWriter
 
+	// run persists this run's record: running marker, stop intent, ending.
+	run *RunTracker
+
 	cancel       context.CancelFunc
 	shutdownOnce sync.Once
 }
@@ -108,11 +111,18 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	ctx, cancel := context.WithCancel(parent)
 	c := &Components{cfg: cfg, cancel: cancel, apiErrors: make(chan error, 1)}
 
+	if path := RunRecordPath(cfg); path != "" {
+		run, err := StartRun(path, os.Getpid(), time.Now)
+		if err != nil {
+			log.Printf("secure-agentd: run record not written: %v", err)
+		}
+		c.run = run
+	}
 	writeCwdOverrides(cfg)
 
 	st, err := store.Open(cfg.DBPath, cfg.JSONLPath)
 	if err != nil {
-		cancel()
+		c.Shutdown()
 		return nil, fmt.Errorf("failed to open store: %w", err)
 	}
 	c.store = st
@@ -354,6 +364,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		Store:      st,
 		Killer:     &realKiller{},
 		Status:     statusFn,
+		StopIntent: c.run.RecordStopIntent,
 		Firewall: api.FirewallControl{
 			Engine:      fw.Engine,
 			Modes:       fw.Modes,
@@ -501,14 +512,35 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 // background process after its owner is gone. watchParentExit returns nil when
 // launched directly by pid 1 (no owning parent to outlive).
 func (c *Components) WaitForShutdown(ctx context.Context) error {
-	parentGone := watchParentExit(os.Getppid())
+	return c.waitForStop(ctx, watchParentExit(os.Getppid()))
+}
+
+// waitForStop blocks until a stop trigger fires (ctx is the signal context),
+// then durably writes the run's ending before returning.
+func (c *Components) waitForStop(ctx context.Context, parentGone <-chan struct{}) error {
 	select {
 	case <-ctx.Done():
+		c.endRun(RunEndingSignal)
 	case <-parentGone:
+		c.endRun(RunEndingParentExit)
 	case err := <-c.apiErrors:
+		c.endRun(RunEndingAPIFailure)
 		return fmt.Errorf("control API stopped: %w", err)
 	}
 	return nil
+}
+
+// endRun records the first ending, retrying any failed write.
+func (c *Components) endRun(cause RunEnding) {
+	if c.run == nil {
+		return
+	}
+	ending, err := c.run.Stop(cause)
+	if err != nil {
+		log.Printf("secure-agentd: run ending %s not recorded: %v", ending, err)
+		return
+	}
+	log.Printf("secure-agentd: run ended: %s", ending)
 }
 
 // Shutdown stops the daemon in the order shutdown depends on: stop the
@@ -517,6 +549,8 @@ func (c *Components) WaitForShutdown(ctx context.Context) error {
 // exporter, then release the store and episodic state. Idempotent.
 func (c *Components) Shutdown() {
 	c.shutdownOnce.Do(func() {
+		// Keep the stop trigger's ending, or record a Build failure.
+		c.endRun(RunEndingStartFailure)
 		log.Println("secure-agentd shutting down...")
 		if c.cancel != nil {
 			c.cancel() // stop collectors, API, and the tagger loop

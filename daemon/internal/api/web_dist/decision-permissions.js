@@ -39,11 +39,11 @@ function guardResultHTML(result) {
   const meaning = result.expired ? 'This answer was not submitted to a waiting request. Check session results for the recorded outcome.' : result.unconfirmed ? 'Check session results and permissions before deciding again. The answer may have reached the daemon.'
     : 'The daemon submitted this answer to the waiting request. This does not prove the tool received it, completed access, or saved request history.';
   const decision = r || result.request;
-  return `<div class="panel-head"><h2 id="guard-result-title">${title}</h2><button type="button" class="btn btn-ghost btn-sm" data-action="guard-result-dismiss">Dismiss</button></div>
-    <div class="panel-body"><p>${escapeHTML(decision.verdict)} · ${escapeHTML(decision.scope)}${r ? ` · ${escapeHTML(r.rule_id)} · ${escapeHTML(r.at)}` : ''}</p><p>${meaning}</p>
-    ${!r && !result.unconfirmed && !result.expired ? '<p>Detailed receipt unavailable from this daemon.</p>' : ''}
-    ${guardPermissionReceipt(r,r?.session_id) ? '<button type="button" class="btn btn-ghost btn-sm" data-action="guard-result-permissions">View permissions</button>' : ''}
-    ${(r?.session_id || result.sessionID) ? '<button type="button" class="btn btn-ghost btn-sm" data-action="guard-result-history">Check session results</button>' : '<p>Session identity unavailable; inspect Rules &amp; permissions for current policy.</p>'}</div>`;
+  return html`<div class="panel-head"><h2 id="guard-result-title">${title}</h2><button type="button" class="btn btn-ghost btn-sm" data-action="guard-result-dismiss">Dismiss</button></div>
+    <div class="panel-body"><p>${decision.verdict} · ${decision.scope}${r ? raw(html` · ${r.rule_id} · ${r.at}`) : ''}</p><p>${meaning}</p>
+    ${!r && !result.unconfirmed && !result.expired ? raw('<p>Detailed receipt unavailable from this daemon.</p>') : ''}
+    ${guardPermissionReceipt(r,r?.session_id) ? raw('<button type="button" class="btn btn-ghost btn-sm" data-action="guard-result-permissions">View permissions</button>') : ''}
+    ${(r?.session_id || result.sessionID) ? raw('<button type="button" class="btn btn-ghost btn-sm" data-action="guard-result-history">Check session results</button>') : raw('<p>Session identity unavailable; inspect Rules &amp; permissions for current policy.</p>')}</div>`;
 }
 
 function guardDurationText(scope, expiry) {
@@ -155,32 +155,32 @@ function decisionPermissionRows(receipt, records) {
 
 function sessionPermissionsHTML(receipt, state) {
   const st = state || {};
-  const refresh = `<button type="button" class="link-btn" data-action="session-permissions-refresh"${st.loading || st.busy ? ' disabled' : ''}>Refresh permissions</button>`;
+  const refresh = raw(html`<button type="button" class="link-btn" data-action="session-permissions-refresh"${st.loading || st.busy ? ' disabled' : ''}>Refresh permissions</button>`);
   const notice = st.error ? (st.rows ? 'Last known permission records. Current status unavailable.' : 'Permission records unavailable.')
     : st.loading ? 'Loading permission records…' : '';
-  const head = `<header class="policy-row-main" data-session-part="permissions-head">
+  const head = html`<header class="policy-row-main" data-session-part="permissions-head">
     <h4>Permissions from this decision</h4>
-    <p>${receipt.sessionID ? `Session ${escapeHTML(receipt.sessionID)}` : 'Session unavailable'} · ${receipt.kind === 'guard' ? 'Guard decision' : `decision for revision ${receipt.revision}`}<br>Recorded ${escapeHTML(receipt.at || 'time unavailable')}</p>
+    <p>${receipt.sessionID ? `Session ${receipt.sessionID}` : 'Session unavailable'} · ${receipt.kind === 'guard' ? 'Guard decision' : `decision for revision ${receipt.revision}`}<br>Recorded ${receipt.at || 'time unavailable'}</p>
     <p>The daemon rechecks live session and identity before applying a saved scope. These records do not establish that a request is currently allowed.</p>
     <p>Other permissions and legacy policies may still allow matching access. Revocation does not undo past access.</p>
-    ${st.readAt ? `<p>Read at ${localTimestampHTML(st.readAt)}</p>` : ''}
+    ${st.readAt ? raw(html`<p>Read at ${raw(localTimestampHTML(st.readAt))}</p>`) : ''}
     <p role="status">${notice}${st.mutationError ? ' Revocation confirmation unavailable. Refresh before retrying.' : ''}${st.busy ? ' Revocation awaiting confirmation or save.' : ''}</p>${refresh}
   </header>`;
   return head + (st.rows || decisionPermissionRows(receipt, [])).map(row => {
     const { id, record } = row;
-    const saved = st.revoked?.has(id) ? '<p role="status">Revocation saved. Other permissions or expectations may still apply; past exposure and the saved decision remain.</p>' : '';
-    if (!record) return `<section class="policy-row" data-session-part="permission:${escapeHTML(id)}"><div class="policy-row-main"><b>Current status unknown</b><p>Permission ${escapeHTML(id)}</p><p>The record is unavailable. This does not establish revocation or expiry.</p>${saved}</div></section>`;
+    const saved = st.revoked?.has(id) ? raw('<p role="status">Revocation saved. Other permissions or expectations may still apply; past exposure and the saved decision remain.</p>') : '';
+    if (!record) return html`<section class="policy-row" data-session-part="permission:${id}"><div class="policy-row-main"><b>Current status unknown</b><p>Permission ${id}</p><p>The record is unavailable. This does not establish revocation or expiry.</p>${saved}</div></section>`;
     // Keep the action's height while a read/save is pending, so short drawers
     // do not clamp their reading position to zero. The action stays disabled.
     const revoke = row.revoke && !st.error && !st.mutationError && !st.revoked?.has(id);
-    return `<section class="policy-row" data-session-part="permission:${escapeHTML(id)}"><div class="policy-row-main">
-      <h5>${escapeHTML(row.label)}</h5><p>${escapeHTML(record.agent || 'Agent unavailable')} · ${escapeHTML(row.operation)}</p>
-      <p>${escapeHTML(row.effect)}</p>
-      <p>${record.category ? `Covers <b>all ${escapeHTML(sendKindLabel(record.category))}</b>` : `Resource <code>${escapeHTML(record.resource_path || 'unavailable')}</code>`}${record.destination ? ` → ${escapeHTML(record.destination)}` : ''}</p>
-      <p>Workspace ${escapeHTML(record.workspace || 'unavailable')}<br>Executable path ${escapeHTML(record.reader_exe || 'unavailable')} (observed, not signature verified)</p>
-      <p>Created ${escapeHTML(record.created_at || 'unavailable')}${record.expires_at ? `<br>Expires ${escapeHTML(record.expires_at)}` : ''}${record.revoked_at ? `<br>Revoked ${escapeHTML(record.revoked_at)}` : ''}</p>${saved}
-      <details data-session-details><summary>Permission identifiers</summary><p>${escapeHTML(id)}<br>Rule ${escapeHTML(record.rule_id || 'unavailable')}<br>Originating session ${escapeHTML(record.session_id || 'unavailable')}</p></details>
-      ${revoke ? `<button type="button" class="btn btn-ghost btn-sm" data-action="session-permission-revoke" data-id="${escapeHTML(id)}"${st.loading || st.busy ? ' disabled' : ''}>Revoke this permission</button>` : ''}
+    return html`<section class="policy-row" data-session-part="permission:${id}"><div class="policy-row-main">
+      <h5>${row.label}</h5><p>${record.agent || 'Agent unavailable'} · ${row.operation}</p>
+      <p>${row.effect}</p>
+      <p>${record.category ? raw(html`Covers <b>all ${sendKindLabel(record.category)}</b>`) : raw(html`Resource <code>${record.resource_path || 'unavailable'}</code>`)}${record.destination ? raw(html` → ${record.destination}`) : ''}</p>
+      <p>Workspace ${record.workspace || 'unavailable'}<br>Executable path ${record.reader_exe || 'unavailable'} (observed, not signature verified)</p>
+      <p>Created ${record.created_at || 'unavailable'}${record.expires_at ? raw(html`<br>Expires ${record.expires_at}`) : ''}${record.revoked_at ? raw(html`<br>Revoked ${record.revoked_at}`) : ''}</p>${saved}
+      <details data-session-details><summary>Permission identifiers</summary><p>${id}<br>Rule ${record.rule_id || 'unavailable'}<br>Originating session ${record.session_id || 'unavailable'}</p></details>
+      ${revoke ? raw(html`<button type="button" class="btn btn-ghost btn-sm" data-action="session-permission-revoke" data-id="${id}"${st.loading || st.busy ? ' disabled' : ''}>Revoke this permission</button>`) : ''}
     </div></section>`;
   }).join('');
 }

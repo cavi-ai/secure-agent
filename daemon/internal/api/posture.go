@@ -12,28 +12,25 @@ import (
 // PostureItem is one thing the operator may need to act on.
 type PostureItem = posture.PostureItem
 
-// Posture is the single headline answer: "do I need to look at this machine,
-// and what is the one thing to look at first?" Every UI (console, menubar,
-// fleet collector) renders from this instead of re-deriving it from raw lists.
-//
-// Invariant: every pending decision in Items appears in exactly one Group,
-// and group item counts sum to NeedsYou (= len(Items)). CoverageItems retain
-// active faults, configuration notes and historical gaps. CoverageCount counts
-// only active faults; historical gaps do not claim current delivery is failing.
-type Posture struct {
-	State         string        `json:"state"` // all-clear | attention | critical
-	NeedsYou      int           `json:"needs_you"`
-	CoverageCount int           `json:"coverage_count"`
-	Summary       string        `json:"summary"`
-	Items         []PostureItem `json:"items"`
-	CoverageItems []PostureItem `json:"coverage_items"`
-	// Groups is the session-grouped attention queue every surface renders;
-	// agent-less items sit in the "machine" group.
-	Groups           []AttentionGroup  `json:"groups,omitempty"`
-	Generated        string            `json:"generated"`
-	Connected        bool              `json:"connected"`
-	AttentionSummary *AttentionSummary `json:"attention_summary,omitempty"`
-}
+type AttentionItem = posture.AttentionItem
+
+type AttentionGroup = posture.AttentionGroup
+
+type AttentionSummary = posture.AttentionSummary
+
+type AttentionBucket = posture.AttentionBucket
+
+type AttentionReference = posture.AttentionReference
+
+// AttentionBuckets and PostureItemAttentionKinds are the summary enumerations
+// the console and menu bar copy; posture defines them.
+var (
+	AttentionBuckets          = posture.AttentionBuckets
+	PostureItemAttentionKinds = posture.PostureItemAttentionKinds
+)
+
+// Posture is a defined type so the /posture response keeps the wire name api.Posture.
+type Posture posture.Posture
 
 // handlePosture serves the operator headline. The computation lives in
 // computePosture so the fleet heartbeat can ship the exact same headline the

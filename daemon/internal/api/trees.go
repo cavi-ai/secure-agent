@@ -1,16 +1,12 @@
 package api
 
-import "sort"
+import (
+	"sort"
 
-// AgentTree is one session: the tagged root plus its helpers. The daemon
-// emits this so the console and menubar do not regroup the flat agent list.
-type AgentTree struct {
-	Root       AgentSummary   `json:"root"`
-	Children   []AgentSummary `json:"children"`
-	RSSBytes   uint64         `json:"rss_bytes,omitempty"`
-	CPUPercent float64        `json:"cpu_percent,omitempty"`
-	LastSeen   string         `json:"last_seen_at,omitempty"`
-}
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
+)
+
+type AgentTree = posture.AgentTree
 
 // GroupAgentTrees folds a flat tagged-process list into session trees
 // (root_pid). Sort is last-activity descending — same glance order as the

@@ -16,7 +16,7 @@ func startCollectorServer(t *testing.T, timeouts serverTimeouts) string {
 	dir := t.TempDir()
 	c := &Collector{
 		cfg:   Config{Addr: "127.0.0.1:0", Secrets: map[string]string{"n1": "s3cret"}, StoreDir: dir},
-		store: NewStore(dir),
+		store: openTestStore(t, dir),
 	}
 	return serveCollector(t, c, timeouts)
 }
@@ -73,7 +73,7 @@ func (l delayedQueryLog) Query(nodeID string, kinds map[string]bool, limit int) 
 
 func TestServerServesNodeEventsAfterSlowQuery(t *testing.T) {
 	dir := t.TempDir()
-	store := NewStore(dir)
+	store := openTestStore(t, dir)
 	if err := store.Append(Envelope{NodeID: "n1", Kind: "flag", Payload: json.RawMessage(`{"rule":"test-rule"}`)}); err != nil {
 		t.Fatal(err)
 	}

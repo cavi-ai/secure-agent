@@ -16,9 +16,6 @@ import (
 // routineMin is the fewest open flags a routine group holds.
 const routineMin = 3
 
-// routineGroupKey is the attention group that holds the routine items.
-const routineGroupKey = "routine"
-
 // routineArea keys a read path: the home dot-directory it sits under
 // (~/.docker), else the file itself.
 func routineArea(path, home string) string {

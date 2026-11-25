@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"golang.org/x/sys/unix"
 )
 
@@ -25,15 +26,7 @@ type CoverageProbeChallenge struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// A receipt verifies this installed hook's manual round trip only. It never
-// becomes session activity or an authorization, and restart clears it.
-type CoverageProbeReceipt struct {
-	Harness   string    `json:"harness"`
-	HookPath  string    `json:"hook_path"`
-	CheckedAt time.Time `json:"checked_at"`
-	State     string    `json:"state"`
-	Detail    string    `json:"detail"`
-}
+type CoverageProbeReceipt = posture.CoverageProbeReceipt
 
 type pendingCoverageProbe struct {
 	CoverageProbeChallenge

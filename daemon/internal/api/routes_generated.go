@@ -87,6 +87,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/local-services/receipt":       a.handleLocalServiceReceipt,
 		"/fleet":                        a.handleFleet,
 		"/kill":                         a.handleKill,
+		"/daemon/stop-intent":           a.handleStopIntent,
 		"/firewall/mode":                a.handleFirewallMode,
 		"/firewall/fingerprints/reload": a.handleFingerprintReload,
 		"/firewall/fingerprints/ingest": a.handleFingerprintIngest,

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
@@ -12,8 +13,8 @@ import (
 
 func TestDerivePostureRetainsDecisionsWhenReadsFail(t *testing.T) {
 	health := store.WriteHealth{}
-	in := postureInputs{
-		Status:      Status{Running: true, StorageHealth: &health},
+	in := posture.Inputs{
+		Status:      posture.Status{Running: true, StorageHealth: &health},
 		Generated:   time.Now(),
 		FailedReads: []string{"flags", "flags", "finding reviews"},
 		Resources:   []resource.Session{mkResourceSession(42, "codex", "/work/repo")},
@@ -33,9 +34,9 @@ func TestDerivePostureRetainsDecisionsWhenReadsFail(t *testing.T) {
 
 func TestDerivePostureUsesSnapshotTimeForCollectorFreshness(t *testing.T) {
 	at := time.Date(2020, 1, 1, 12, 0, 0, 0, time.UTC)
-	in := postureInputs{
+	in := posture.Inputs{
 		Generated: at,
-		Status: Status{Running: true, ActiveAgents: 1, Uptime: "1h",
+		Status: posture.Status{Running: true, ActiveAgents: 1, Uptime: "1h",
 			Collectors: []supervise.Health{{Name: "transcript", Running: true, LastProduced: at.Format(time.RFC3339)}},
 		},
 	}

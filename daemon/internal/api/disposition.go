@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 )
 
 // benignConfidence is the advisor confidence at which a "benign" assessment
@@ -20,7 +21,7 @@ const benignConfidence = 0.85
 func dispositionFor(f model.Flag) model.Disposition {
 	switch {
 	case f.Acknowledged:
-		return model.Disposition{State: model.DispositionAcknowledged, Text: "Reviewed", Why: humanFlagTitle(f.Rule)}
+		return model.Disposition{State: model.DispositionAcknowledged, Text: "Reviewed", Why: posture.HumanFlagTitle(f.Rule)}
 	case f.Advisor != nil && f.Advisor.Assessment == "benign" && f.Advisor.Confidence >= benignConfidence:
 		return model.Disposition{
 			State: model.DispositionBenignLikely,
@@ -42,7 +43,7 @@ func ruleWhy(f model.Flag) string {
 			return why
 		}
 	}
-	return humanFlagTitle(f.Rule)
+	return posture.HumanFlagTitle(f.Rule)
 }
 
 // firstSentence is text up to and including the first ". " boundary (or the

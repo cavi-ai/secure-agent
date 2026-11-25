@@ -3,6 +3,15 @@ package posture
 
 import "github.com/cavi-ai/secure-agent/daemon/internal/model"
 
+// Monitoring classifications are derived by the daemon. Clients render these
+// facts rather than treating every coverage observation as a current failure.
+const (
+	MonitoringActive        = "active"
+	MonitoringHistorical    = "historical"
+	MonitoringInformational = "informational"
+	MonitoringDisabled      = "disabled"
+)
+
 // PostureItem is one thing the operator may need to act on.
 type PostureItem struct {
 	Kind       string                   `json:"kind"` // flag | incident | guard_pending | resource_pressure | coverage kinds
