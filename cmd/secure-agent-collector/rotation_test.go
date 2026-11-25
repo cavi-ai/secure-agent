@@ -161,6 +161,34 @@ func TestQueryReadsLinesLargerThanReadBlock(t *testing.T) {
 	assertNewestFirst(t, got, 4)
 }
 
+func TestSymlinkedLiveLogIsNotFollowed(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.jsonl")
+	seed := `{"received_at":"2026-01-01T00:00:00Z","envelope":{"node_id":"n1","kind":"flag","version":"v1","payload":{"i":99}}}` + "\n"
+	if err := os.WriteFile(outside, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "n1.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	s := newStoreWithLog(newJSONLLog(dir, testLogMaxBytes, 3))
+
+	if got := s.Query("n1", nil, 10); len(got) != 0 {
+		t.Fatalf("query read %d events through the symlink", len(got))
+	}
+	env := Envelope{NodeID: "n1", Kind: "flag", Version: "v1", Payload: json.RawMessage(`{"i":1}`)}
+	if err := s.Append(env); err == nil {
+		t.Fatal("append through a symlinked log returned nil")
+	}
+	after, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != seed {
+		t.Fatalf("outside file changed: %q", after)
+	}
+}
+
 func TestEventsLimitParameterRule(t *testing.T) {
 	c, srv := testCollector(t, map[string]string{"n1": "s3cret"})
 	appendIndexed(t, c.store, 0, maxEventsLimit+5)

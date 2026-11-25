@@ -12,13 +12,14 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -770,17 +771,17 @@ func newJSONLLog(dir string, maxBytes int64, keep int) *jsonlLog {
 	return &jsonlLog{dir: dir, maxBytes: maxBytes, keep: keep}
 }
 
-func (l *jsonlLog) livePath(node string) string {
-	return filepath.Join(l.dir, node+".jsonl")
+func liveName(node string) string {
+	return node + ".jsonl"
 }
 
-func (l *jsonlLog) rotatedPath(node string, seq int) string {
-	return filepath.Join(l.dir, fmt.Sprintf("%s.%06d.jsonl", node, seq))
+func rotatedName(node string, seq int) string {
+	return fmt.Sprintf("%s.%06d.jsonl", node, seq)
 }
 
 // rotatedSeqs lists the node's rotated sequence numbers, oldest first.
-func (l *jsonlLog) rotatedSeqs(node string) []int {
-	entries, err := os.ReadDir(l.dir)
+func rotatedSeqs(root *os.Root, node string) []int {
+	entries, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
 		return nil
 	}
@@ -812,6 +813,26 @@ func parseLogName(name string) (node string, seq int, rotated, ok bool) {
 	return base[:i], n, true, true
 }
 
+// openEnvelopeLog confines file access to the configured storage root and
+// admits only regular logs. Nonblocking open keeps a replaced file from
+// stalling the collector before its type can be checked.
+func openEnvelopeLog(root *os.Root, name string, flags int) (*os.File, error) {
+	f, err := root.OpenFile(name, flags|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("envelope log must be a regular file")
+	}
+	return f, nil
+}
+
 // Append writes the envelope as one JSON line to the node's live file,
 // rotating it first when the line would take it past maxBytes.
 func (l *jsonlLog) Append(env Envelope, receivedAt string) error {
@@ -824,10 +845,15 @@ func (l *jsonlLog) Append(env Envelope, receivedAt string) error {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if err := l.rotateIfNeeded(node, int64(len(line))); err != nil {
+	root, err := os.OpenRoot(l.dir)
+	if err != nil {
+		return fmt.Errorf("open log root: %w", err)
+	}
+	defer root.Close()
+	if err := l.rotateIfNeeded(root, node, int64(len(line))); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(l.livePath(node), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := openEnvelopeLog(root, liveName(node), os.O_CREATE|os.O_WRONLY|os.O_APPEND)
 	if err != nil {
 		return fmt.Errorf("open append: %w", err)
 	}
@@ -839,25 +865,25 @@ func (l *jsonlLog) Append(env Envelope, receivedAt string) error {
 // rotateIfNeeded renames a non-empty live file that cannot take the incoming
 // bytes within maxBytes, then drops rotated files beyond keep. A crash after the
 // rename leaves no live file; the next Append creates it.
-func (l *jsonlLog) rotateIfNeeded(node string, incoming int64) error {
+func (l *jsonlLog) rotateIfNeeded(root *os.Root, node string, incoming int64) error {
 	if l.maxBytes <= 0 {
 		return nil
 	}
-	st, err := os.Stat(l.livePath(node))
-	if err != nil || st.Size() == 0 || st.Size()+incoming <= l.maxBytes {
+	st, err := root.Lstat(liveName(node))
+	if err != nil || !st.Mode().IsRegular() || st.Size() == 0 || st.Size()+incoming <= l.maxBytes {
 		return nil
 	}
-	seqs := l.rotatedSeqs(node)
+	seqs := rotatedSeqs(root, node)
 	next := 1
 	if len(seqs) > 0 {
 		next = seqs[len(seqs)-1] + 1
 	}
-	if err := os.Rename(l.livePath(node), l.rotatedPath(node, next)); err != nil {
+	if err := root.Rename(liveName(node), rotatedName(node, next)); err != nil {
 		return fmt.Errorf("rotate: %w", err)
 	}
 	seqs = append(seqs, next)
 	for len(seqs) > l.keep {
-		_ = os.Remove(l.rotatedPath(node, seqs[0]))
+		_ = root.Remove(rotatedName(node, seqs[0]))
 		seqs = seqs[1:]
 	}
 	return nil
@@ -866,7 +892,12 @@ func (l *jsonlLog) rotateIfNeeded(node string, incoming int64) error {
 // Replay feeds every kept envelope to fn, per node oldest first: rotated
 // files in sequence order, then the live file.
 func (l *jsonlLog) Replay(fn func(env Envelope, receivedAt string)) {
-	entries, err := os.ReadDir(l.dir)
+	root, err := os.OpenRoot(l.dir)
+	if err != nil {
+		return
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
 		return
 	}
@@ -892,7 +923,7 @@ func (l *jsonlLog) Replay(fn func(env Envelope, receivedAt string)) {
 		return files[i].seq < files[j].seq
 	})
 	for _, lf := range files {
-		f, err := os.Open(filepath.Join(l.dir, lf.name))
+		f, err := openEnvelopeLog(root, lf.name, os.O_RDONLY)
 		if err != nil {
 			continue
 		}
@@ -916,14 +947,19 @@ func (l *jsonlLog) Query(nodeID string, kinds map[string]bool, limit int) []enve
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	paths := []string{l.livePath(node)}
-	seqs := l.rotatedSeqs(node)
+	root, err := os.OpenRoot(l.dir)
+	if err != nil {
+		return nil
+	}
+	defer root.Close()
+	names := []string{liveName(node)}
+	seqs := rotatedSeqs(root, node)
 	for i := len(seqs) - 1; i >= 0; i-- {
-		paths = append(paths, l.rotatedPath(node, seqs[i]))
+		names = append(names, rotatedName(node, seqs[i]))
 	}
 	var out []envelopeFile
-	for _, p := range paths {
-		f, err := os.Open(p)
+	for _, p := range names {
+		f, err := openEnvelopeLog(root, p, os.O_RDONLY)
 		if err != nil {
 			continue
 		}
