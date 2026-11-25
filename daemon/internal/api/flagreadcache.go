@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -29,7 +30,7 @@ type flagReadCache struct {
 	// snapshot and posture hold the store-derived parts of those responses,
 	// keyed by the store's write generation.
 	snapshot genCache[snapshotReads]
-	posture  genCache[postureReads]
+	posture  genCache[posture.Inputs]
 	// now is the clock of their windows and entry ages; nil means time.Now.
 	now func() time.Time
 }
@@ -45,6 +46,10 @@ func (a *API) clock() time.Time {
 // genCache holds one value read at a store write generation. It serves the
 // value only at that generation, under storeReadMaxAge after the read began
 // and in the same dayWindow minute. Callers treat the value as read-only.
+// Only values computed from store rows alone are cached, because the
+// generation tracks nothing else: whatever also reads live status, the
+// allowlist, expectations, mutes, the host identity cache or the price table
+// is computed on every request.
 type genCache[T any] struct {
 	mu  sync.Mutex
 	set bool

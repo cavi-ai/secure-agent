@@ -40,24 +40,26 @@ type Snapshot struct {
 // snapshotReads is the store-derived part of a snapshot, read at one store
 // write generation.
 type snapshotReads struct {
-	sessions  []model.Session
-	events    []event.Event // price classed
+	sessions []model.Session
+	// events are unclassed: the price class reads the operator's price table.
+	events    []event.Event
 	incidents []store.IncidentDetail
 	// flags carry finding review ids and titles; explanations read live
 	// status and are added per request.
-	flags   []model.Flag
-	reviews store.ReviewPage
+	flags         []model.Flag
+	reviewLinkErr error
+	reviews       store.ReviewPage
 	// egress is the correlator summary the suggestions were read for.
 	egress      []correlate.UninspectedSummary
 	suggestions []Suggestion
 	hostReadErr error
-	// failedReads are the read failures met before the posture reads.
+	// failedReads are the read failures met before the pattern reads.
 	failedReads []string
-	posture     postureReads
+	evidence    posture.Inputs
 }
 
 func (r snapshotReads) healthy() bool {
-	return len(r.failedReads) == 0 && !r.reviews.Degraded && r.hostReadErr == nil && r.posture.healthy()
+	return len(r.failedReads) == 0 && !r.reviews.Degraded && r.hostReadErr == nil && len(r.evidence.FailedReads) == 0
 }
 
 func (a *API) handleSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -75,21 +77,33 @@ func (a *API) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 
 // currentSnapshot serves the store reads cached for the current write
 // generation, or reads them; only reads without a failure are cached.
+// Patterns and routine groups are computed on every request, between the two
+// read groups as before, so each advisor health check follows its read.
 func (a *API) currentSnapshot() (Snapshot, error) {
 	now := a.clock()
 	gen := a.store.WriteGeneration()
-	reads, ok := a.flagReads.snapshot.get(gen, now)
-	if !ok {
+	reads, cached := a.flagReads.snapshot.get(gen, now)
+	if !cached {
 		var err error
-		if reads, err = a.readSnapshot(now); err != nil {
+		if reads, err = a.readSnapshotRecords(now); err != nil {
 			return Snapshot{}, err
 		}
+	}
+	flags := a.readPostureFlags(now)
+	if flags.patternErr != nil {
+		return Snapshot{}, flags.patternErr
+	}
+	if flags.routineErr != nil {
+		return Snapshot{}, flags.routineErr
+	}
+	if !cached {
+		a.readSnapshotRest(&reads, now)
 		if reads.healthy() {
 			a.flagReads.snapshot.put(gen, now, reads)
-			a.flagReads.posture.put(gen, now, reads.posture)
+			a.flagReads.posture.put(gen, now, reads.evidence)
 		}
 	}
-	return a.snapshotFrom(now, reads), nil
+	return a.snapshotFrom(now, reads, flags), nil
 }
 
 func (a *API) incidentListResult(limit int) ([]store.IncidentDetail, error) {
@@ -106,15 +120,14 @@ func (a *API) incidentListResult(limit int) ([]store.IncidentDetail, error) {
 	return incidents, nil
 }
 
-// readSnapshot performs the snapshot's store reads at now. Each advisor
-// health check follows the read it reports on.
-func (a *API) readSnapshot(now time.Time) (snapshotReads, error) {
+// readSnapshotRecords performs the snapshot's store reads that precede the
+// pattern reads. Each advisor health check follows the read it reports on.
+func (a *API) readSnapshotRecords(now time.Time) (snapshotReads, error) {
 	var r snapshotReads
 	var err error
 	if r.sessions, r.events, err = readSnapshotRows(a.store); err != nil {
 		return r, err
 	}
-	r.events = priceClassed(r.events)
 	if r.incidents, err = a.incidentListResult(10); err != nil {
 		return r, err
 	}
@@ -128,43 +141,42 @@ func (a *API) readSnapshot(now time.Time) (snapshotReads, error) {
 		return r, err
 	}
 	r.failedReads = append(r.failedReads, a.advisorReadFailures("flag")...)
-	reviewLinkErr := stampFindingReviewIDs(a.store, r.flags)
-	if reviewLinkErr != nil {
+	r.reviewLinkErr = stampFindingReviewIDs(a.store, r.flags)
+	if r.reviewLinkErr != nil {
 		r.failedReads = append(r.failedReads, "finding reviews")
 	}
 	for i := range r.flags {
 		r.flags[i].Title = posture.HumanFlagTitle(r.flags[i].Rule)
 	}
-	r.posture = a.readPostureFlags(now)
-	if r.posture.patternErr != nil {
-		return r, r.posture.patternErr
-	}
-	if r.posture.routineErr != nil {
-		return r, r.posture.routineErr
-	}
+	return r, nil
+}
+
+// readSnapshotRest performs the snapshot's store reads that follow the
+// pattern reads.
+func (a *API) readSnapshotRest(r *snapshotReads, now time.Time) {
 	reviews, reviewErr := a.store.ListFindingReviews("", 100)
-	if reviewErr != nil || reviewLinkErr != nil {
+	if reviewErr != nil || r.reviewLinkErr != nil {
 		reviews.Degraded = true
 	}
 	r.reviews = reviews
 	egress := a.uninspectedEgress()
 	r.egress = slices.Clone(egress)
 	r.suggestions, r.hostReadErr = a.suggestionsFor(egress)
-	r.posture.evidence = a.readPostureEvidence(now)
-	return r, nil
+	r.evidence = a.readPostureEvidence(now)
 }
 
 // snapshotFrom completes cached reads with the inputs read on every request:
-// live status, flag explanations, mutes and posture's live inputs.
-// Suggestions are read again when the correlator summary changed.
-func (a *API) snapshotFrom(now time.Time, r snapshotReads) Snapshot {
+// live status, flag explanations, price classes, mutes, patterns, routine
+// groups and posture's live inputs. Suggestions are read again when the
+// correlator summary changed.
+func (a *API) snapshotFrom(now time.Time, r snapshotReads, pf postureFlags) Snapshot {
 	flags := slices.Clone(r.flags)
 	a.stampExplains(flags)
 	suggestions, hostReadErr := r.suggestions, r.hostReadErr
 	if egress := a.uninspectedEgress(); !reflect.DeepEqual(egress, r.egress) {
 		suggestions, hostReadErr = a.suggestionsFor(egress)
 	}
-	failedReads := append(slices.Clone(r.failedReads), r.posture.failedReads...)
+	failedReads := append(slices.Clone(r.failedReads), pf.failedReads...)
 	if hostReadErr != nil {
 		failedReads = append(failedReads, "host advisor verdicts")
 	}
@@ -174,11 +186,11 @@ func (a *API) snapshotFrom(now time.Time, r snapshotReads) Snapshot {
 		Status:      a.currentStatus(),
 		Flags:       flags,
 		Reviews:     reviews,
-		Patterns:    slices.Clone(r.posture.patterns),
-		Routine:     slices.Clone(r.posture.routine),
+		Patterns:    pf.patterns,
+		Routine:     pf.routine,
 		Incidents:   slices.Clone(r.incidents),
-		Events:      slices.Clone(r.events),
-		Posture:     a.postureFrom(now, r.posture, failedReads),
+		Events:      priceClassed(slices.Clone(r.events)),
+		Posture:     a.postureFrom(now, pf, failedReads, r.evidence),
 		Suggestions: slices.Clone(suggestions),
 		Mutes:       a.mutePairs(),
 		Sessions:    slices.Clone(r.sessions),

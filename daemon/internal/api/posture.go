@@ -97,41 +97,43 @@ func (a *API) publishPosture(gen uint64, p Posture, force bool) {
 func (a *API) computePosture() Posture {
 	now := a.clock()
 	gen := a.store.WriteGeneration()
-	reads, ok := a.flagReads.posture.get(gen, now)
-	if !ok {
-		reads = a.readPostureFlags(now)
-		reads.evidence = a.readPostureEvidence(now)
-		if reads.healthy() {
-			a.flagReads.posture.put(gen, now, reads)
-		}
-	}
-	failedReads := slices.Clone(reads.failedReads)
-	if reads.patternErr != nil || reads.routineErr != nil {
+	flags := a.readPostureFlags(now)
+	failedReads := slices.Clone(flags.failedReads)
+	if flags.patternErr != nil || flags.routineErr != nil {
 		failedReads = append(failedReads, "flags")
 	}
-	return a.postureFrom(now, reads, failedReads)
+	return a.postureFrom(now, flags, failedReads, a.postureEvidenceAt(gen, now))
 }
 
-// postureReads is the store-derived part of a posture calculation.
-type postureReads struct {
-	patterns   []model.Pattern
-	routine    []model.RoutineGroup
-	patternErr error
-	routineErr error
-	// failedReads are the advisor read failures the flag reads left.
+// postureEvidenceAt serves the posture evidence cached for gen or reads it;
+// evidence that met a read failure is not cached.
+func (a *API) postureEvidenceAt(gen uint64, now time.Time) posture.Inputs {
+	if ev, ok := a.flagReads.posture.get(gen, now); ok {
+		return ev
+	}
+	ev := a.readPostureEvidence(now)
+	if len(ev.FailedReads) == 0 {
+		a.flagReads.posture.put(gen, now, ev)
+	}
+	return ev
+}
+
+// postureFlags are the 24 h patterns and routine groups with the advisor read
+// failures their flag reads left. They also read live status, the allowlist,
+// expectations, the host identity cache and the clock, so every request
+// computes them; their flag rows come from flagReads.
+type postureFlags struct {
+	patterns    []model.Pattern
+	routine     []model.RoutineGroup
+	patternErr  error
+	routineErr  error
 	failedReads []string
-	// evidence holds only the store-derived fields of posture.Inputs.
-	evidence posture.Inputs
 }
 
-func (r postureReads) healthy() bool {
-	return r.patternErr == nil && r.routineErr == nil && len(r.failedReads) == 0 && len(r.evidence.FailedReads) == 0
-}
-
-// readPostureFlags reads the 24 h patterns and routine groups at now.
-func (a *API) readPostureFlags(now time.Time) postureReads {
+// readPostureFlags computes the 24 h patterns and routine groups at now.
+func (a *API) readPostureFlags(now time.Time) postureFlags {
 	since := dayWindow(now)
-	var r postureReads
+	var r postureFlags
 	r.patterns, r.patternErr = a.computePatternsResult(since, patternDefaultMin)
 	r.failedReads = a.advisorReadFailures("flag")
 	r.routine, r.routineErr = a.routineGroupsResult(since)
@@ -148,10 +150,10 @@ func (a *API) advisorReadFailures(kind string) []string {
 	return advisorReadFailuresFrom(a.store, kind)
 }
 
-// postureFrom derives posture from reads with live status, resource controls
-// and pending prompts read now; reads stay unchanged.
-func (a *API) postureFrom(now time.Time, r postureReads, failedReads []string) Posture {
-	return derivePosture(a.postureInputsFrom(a.statusFn(), now, slices.Clone(r.patterns), slices.Clone(r.routine), failedReads, r.evidence))
+// postureFrom derives posture from flags and evidence with live status,
+// resource controls and pending prompts read now; ev stays unchanged.
+func (a *API) postureFrom(now time.Time, flags postureFlags, failedReads []string, ev posture.Inputs) Posture {
+	return derivePosture(a.postureInputsFrom(a.statusFn(), now, flags.patterns, flags.routine, failedReads, ev))
 }
 
 // derivePosture is posture.Derive with dispositionFor supplying flag verdicts.
