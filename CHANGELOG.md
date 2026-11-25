@@ -22,6 +22,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Control API: `POST /kill` maps errors to status codes by error type instead of message text.
 - Proxy: proxy credential headers and hop-by-hop headers are removed before a plain-HTTP request is forwarded; inspected CONNECT tunnels drop the proxy credential headers.
 - Fleet collector: HTTP connections have header, read, write and idle timeouts and a 64 KiB header limit; a redelivered envelope is acknowledged and not stored again.
+- Fleet collector: each node keeps at most 512 session records in memory and in the rollup checkpoint; ended sessions are dropped first.
 
 ## [1.7.0] - 2026-11-21
 
