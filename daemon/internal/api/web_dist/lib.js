@@ -1287,14 +1287,14 @@ function actionBarHTML(items) {
   const list = (items || []).filter(Boolean);
   const bar = list.filter(i => i.bar).slice(0, ACTION_BAR_MAX);
   const rest = list.filter(i => !bar.includes(i));
-  const extra = i => (i.title ? ` title="${escapeHTML(i.title)}"` : '') + (i.disabled ? ' disabled' : '');
-  const out = bar.map(i => `<button class="btn btn-${i.kind || 'ghost'} btn-sm" ${i.attrs}${extra(i)}>${escapeHTML(i.label)}</button>`);
+  const extra = i => raw(html`${i.title ? raw(html` title="${i.title}"`) : ''}${i.disabled ? raw(' disabled') : ''}`);
+  const out = bar.map(i => html`<button class="btn btn-${i.kind || 'ghost'} btn-sm" ${raw(i.attrs)}${extra(i)}>${i.label}</button>`);
   if (rest.length) {
-    const entry = i => `<button class="act-menu-item${i.kind === 'danger' ? ' danger' : ''}" ${i.attrs}${extra(i)}>${escapeHTML(i.label)}</button>`;
+    const entry = i => html`<button class="act-menu-item${i.kind === 'danger' ? ' danger' : ''}" ${raw(i.attrs)}${extra(i)}>${i.label}</button>`;
     const safe = rest.filter(i => i.kind !== 'danger').map(entry).join('');
     const danger = rest.filter(i => i.kind === 'danger').map(entry).join('');
-    out.push(`<details class="act-more"><summary class="btn btn-ghost btn-sm">More</summary>`
-      + `<div class="act-menu">${safe}${safe && danger ? '<hr>' : ''}${danger}</div></details>`);
+    out.push(html`<details class="act-more"><summary class="btn btn-ghost btn-sm">More</summary>`
+      + html`<div class="act-menu">${raw(safe)}${safe && danger ? raw(html`<hr>`) : ''}${raw(danger)}</div></details>`);
   }
   return out.join('');
 }
@@ -1336,7 +1336,6 @@ function explainActionsHTML(flag, extra) {
 function explainActionItems(flag, extra) {
   const ex = flag && flag.explain;
   if (!ex) return [];
-  const fid = escapeHTML(flag.id);
   const hostOf = a => (a.body && typeof a.body.host === 'string' ? a.body.host : '');
   const acts = assessmentActions(ex.actions, ex.assessment).filter(a => a && EXPLAIN_CONSOLE_ACTIONS.includes(a.id));
   const orgs = egressByOrg(flag);
@@ -1351,10 +1350,10 @@ function explainActionItems(flag, extra) {
   const merged = acts.filter(a => a.id !== 'allow-host').concat([...allows].map(([org, list]) => list.length === 1 ? list[0] : {
     id: 'allow-host', recommended: list.some(a => a.recommended), label: `Allow ${org} for ${agent} · ${list.length} addresses`,
     consequence: `Future connections from ${agent} to these ${list.length} ${org} addresses are trusted and stop being flagged: ${list.map(hostOf).join(', ')}. This finding is marked reviewed.`,
-    attrs: `data-action="explain-allow-org" data-flag-id="${fid}" data-org="${escapeHTML(org)}"`,
+    attrs: html`data-action="explain-allow-org" data-flag-id="${flag.id}" data-org="${org}"`,
   }));
-  const attrs = a => `data-action="explain-act" data-flag-id="${fid}" data-action-id="${escapeHTML(a.id)}"`
-    + (hostOf(a) ? ` data-host="${escapeHTML(hostOf(a))}"` : '');
+  const attrs = a => html`data-action="explain-act" data-flag-id="${flag.id}" data-action-id="${a.id}"`
+    + (hostOf(a) ? html` data-host="${hostOf(a)}"` : '');
   return actionItems(merged, extra, attrs, a => (a.attrs ? a.label : explainActionLabel(flag, a)));
 }
 
@@ -1437,11 +1436,11 @@ function hbarsHTML(rows, opts) {
 function hbarRowHTML(r, max, fmt) {
   fmt = fmt || (v => String(v));
   const pct = Math.max(2, (r.value / max) * 100);
-  return `<div class="hbar-row">
-      <span class="hbar-label" title="${escapeHTML(r.titleAttr || r.label)}">${escapeHTML(r.label)}</span>
+  return html`<div class="hbar-row">
+      <span class="hbar-label" title="${r.titleAttr || r.label}">${r.label}</span>
       <span class="hbar-track"><span class="hbar-fill ${r.cls || ''}" data-w="${pct.toFixed(1)}"></span></span>
-      <span class="hbar-val">${escapeHTML(fmt(r.value))}</span>
-      ${r.sub ? `<span class="hbar-sub">${escapeHTML(r.sub)}</span>` : ''}
+      <span class="hbar-val">${fmt(r.value)}</span>
+      ${r.sub ? raw(html`<span class="hbar-sub">${r.sub}</span>`) : ''}
     </div>`;
 }
 
@@ -1516,7 +1515,7 @@ function resourceDiagnosisText(diagnosis) {
     'runaway-child': 'One child dominates session memory',
     'orphan-drift': 'Detached processes are still consuming resources',
   };
-  return escapeHTML(diagnosis.summary || fallbacks[diagnosis.code] || 'Resource pressure detected');
+  return html`${diagnosis.summary || fallbacks[diagnosis.code] || 'Resource pressure detected'}`;
 }
 
 // familyLabel: a resource family by what it works on, never by pid. The
@@ -1590,7 +1589,7 @@ function cappedList(items, limit, renderRow, key, expanded) {
   const shown = open ? list : list.slice(0, Math.max(0, limit));
   const hidden = list.length - shown.length;
   const more = hidden > 0
-    ? `<button type="button" class="btn btn-ghost btn-sm show-more" data-action="show-more" data-key="${escapeHTML(key)}">Show ${hidden} more</button>`
+    ? html`<button type="button" class="btn btn-ghost btn-sm show-more" data-action="show-more" data-key="${key}">Show ${hidden} more</button>`
     : '';
   return { shown, hidden, more, html: (renderRow ? shown.map(renderRow).join('') : '') + more };
 }
@@ -1783,7 +1782,7 @@ function sessionWaterfallHTML(events) {
   const modelCalls = (events || []).filter(e => e.kind === 14);
   const dots = (events || []).filter(e => e.kind !== 12 && e.kind !== 13 && e.kind !== 14);
   if (!events || events.length === 0) {
-    return '<div class="empty"><span>No trace events for this session yet</span></div>';
+    return html`<div class="empty"><span>No trace events for this session yet</span></div>`;
   }
   const startOf = e => Date.parse(e.ts) || 0;
   const endOf = e => startOf(e) + (Number(e.duration_ms) || 0);
@@ -1805,7 +1804,7 @@ function sessionWaterfallHTML(events) {
   const bars = toolCalls.map(e => {
     const err = e.tool_status === 'error' ? ' error' : '';
     const dur = e.duration_ms ? fmtDurationMs(e.duration_ms) : '';
-    return `<div class="wf-row"><span class="wf-name">${escapeHTML(e.tool || 'tool')}<span class="wf-dur">${escapeHTML(dur)}</span></span><span class="wf-track"><span class="wf-bar${err}" data-left="${pct(startOf(e)).toFixed(2)}" data-w="${wid(startOf(e), endOf(e)).toFixed(2)}"></span></span></div>`;
+    return html`<div class="wf-row"><span class="wf-name">${e.tool || 'tool'}<span class="wf-dur">${dur}</span></span><span class="wf-track"><span class="wf-bar${err}" data-left="${pct(startOf(e)).toFixed(2)}" data-w="${wid(startOf(e), endOf(e)).toFixed(2)}"></span></span></div>`;
   }).join('');
 
   const dotCls = e => {
@@ -1814,18 +1813,18 @@ function sessionWaterfallHTML(events) {
     return '';
   };
   const dotRow = dots.length
-    ? `<div class="wf-row"><span class="wf-name">file · net · guard</span><span class="wf-track">${dots.map(e => `<span class="wf-dot ${dotCls(e)}" data-left="${pct(startOf(e)).toFixed(2)}"></span>`).join('')}</span></div>`
+    ? html`<div class="wf-row"><span class="wf-name">file · net · guard</span><span class="wf-track">${dots.map(e => raw(html`<span class="wf-dot ${dotCls(e)}" data-left="${pct(startOf(e)).toFixed(2)}"></span>`))}</span></div>`
     : '';
 
   const modelRows = modelCalls.map(e => {
     const tok = `${fmtCompact(e.tokens_in || 0)} in · ${fmtCompact(e.tokens_out || 0)} out`;
     const cost = e.cost_usd ? `$${e.cost_usd.toFixed(4)}` : '';
-    return `<div class="wf-model"><span><b>${escapeHTML(e.model || 'model')}</b> · ${escapeHTML(fmtClock(startOf(e)))}</span><span>${escapeHTML(tok)}${cost ? ' · ' + escapeHTML(cost) : ''}</span></div>`;
+    return html`<div class="wf-model"><span><b>${e.model || 'model'}</b> · ${fmtClock(startOf(e))}</span><span>${tok}${cost ? ' · ' + cost : ''}</span></div>`;
   }).join('');
 
-  return `<div class="wf">
-    <div class="wf-axis"><span>${escapeHTML(fmtClock(lo))}</span><span>${escapeHTML(fmtClock(hi))}</span></div>
-    ${bars}${dotRow}${modelRows}
+  return html`<div class="wf">
+    <div class="wf-axis"><span>${fmtClock(lo)}</span><span>${fmtClock(hi)}</span></div>
+    ${raw(bars)}${raw(dotRow)}${raw(modelRows)}
   </div>`;
 }
 
@@ -1993,17 +1992,17 @@ function sessionStripHTML(rows, total, now, flags) {
     const need = sessionNeedsYou(row, flags);
     const rss = fmtRSS(row.rss);
     const seen = row.lastSeen ? fmtAge(row.lastSeen, now) : '';
-    return `<button type="button" class="session-strip-row" data-action="goto-tab" data-tab="sessions">
-      <span class="session-strip-label">${escapeHTML(row.label)}</span>
-      ${rss ? `<span class="session-strip-meta">${escapeHTML(rss)}</span>` : ''}
-      ${seen ? `<span class="session-strip-meta">${escapeHTML(seen)}</span>` : ''}
-      ${need ? `<span class="session-strip-need">${need}</span>` : ''}
+    return html`<button type="button" class="session-strip-row" data-action="goto-tab" data-tab="sessions">
+      <span class="session-strip-label">${row.label}</span>
+      ${rss ? raw(html`<span class="session-strip-meta">${rss}</span>`) : ''}
+      ${seen ? raw(html`<span class="session-strip-meta">${seen}</span>`) : ''}
+      ${need ? raw(html`<span class="session-strip-need">${need}</span>`) : ''}
     </button>`;
   }).join('');
   const more = Number(total) > rows.length
-    ? `<button type="button" class="session-strip-more" data-action="goto-tab" data-tab="sessions">View all ${Number(total)}</button>`
+    ? html`<button type="button" class="session-strip-more" data-action="goto-tab" data-tab="sessions">View all ${Number(total)}</button>`
     : '';
-  return `<div class="session-strip">${items}${more}</div>`;
+  return html`<div class="session-strip">${raw(items)}${raw(more)}</div>`;
 }
 
 function renderProcessRow(a, now, nested) {
@@ -2014,23 +2013,23 @@ function renderProcessRow(a, now, nested) {
     ? (now - Date.parse(a.last_seen_at)) > 10 * 60 * 1000
     : true;
   const rss = fmtRSS(a.rss_bytes);
-  const cwd = a.cwd ? `<div class="agent-cwd">${escapeHTML(a.cwd)}</div>` : '';
+  const cwd = a.cwd ? html`<div class="agent-cwd">${a.cwd}</div>` : '';
   const status = a.is_orphan
-    ? '<span class="agent-status orphan">leftover</span>'
-    : '<span class="agent-status live">live</span>';
-  return `
+    ? html`<span class="agent-status orphan">leftover</span>`
+    : html`<span class="agent-status live">live</span>`;
+  return html`
       <div class="agent-instance${nested ? ' nested' : ''}${a.is_orphan ? ' orphan' : ''}${stale ? ' stale' : ''}">
         <div class="agent-info">
           <div class="agent-name">
             <span class="agent-pid">PID ${a.pid}</span>
-            ${status}
-            ${abs ? `<span class="agent-meta-item" title="started ${escapeHTML(a.started_at)}">${escapeHTML(abs)}${age ? ' · ' + age : ''}</span>` : ''}
-            ${seenAge ? `<span class="agent-meta-item agent-lastseen" title="last event ${escapeHTML(a.last_seen_at)}">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
-            ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
+            ${raw(status)}
+            ${abs ? raw(html`<span class="agent-meta-item" title="started ${a.started_at}">${abs}${age ? ' · ' + age : ''}</span>`) : ''}
+            ${raw(seenAge ? html`<span class="agent-meta-item agent-lastseen" title="last event ${a.last_seen_at}">active ${seenAge} ago</span>` : html`<span class="agent-meta-item agent-lastseen">no activity</span>`)}
+            ${rss ? raw(html`<span class="agent-meta-item">${rss}</span>`) : ''}
           </div>
-          ${cwd}
+          ${raw(cwd)}
         </div>
-        <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
+        <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${a.started_at || ''}" data-family="${a.name || ''}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
       </div>`;
 }
 
@@ -2041,20 +2040,20 @@ function sessionBoardHTML(rows, now, helpOpen) {
     const rss = fmtRSS(row.rss);
     const seenAge = row.lastSeen ? fmtAge(row.lastSeen, now) : '';
     const stale = row.lastSeen ? (now - Date.parse(row.lastSeen)) > 10 * 60 * 1000 : true;
-    const open = helpOpen[a.pid] ? ' open' : '';
+    const open = helpOpen[a.pid] ? raw(' open') : '';
     const helpers = row.children.length
-      ? `<details class="session-helpers"${open} data-pid="${a.pid}"><summary class="session-helpers-sum">${row.children.length} helper${row.children.length === 1 ? '' : 's'}</summary>${row.children.map(c => renderProcessRow(c, now, true)).join('')}</details>`
+      ? html`<details class="session-helpers"${open} data-pid="${a.pid}"><summary class="session-helpers-sum">${row.children.length} helper${row.children.length === 1 ? '' : 's'}</summary>${row.children.map(c => raw(renderProcessRow(c, now, true)))}</details>`
       : '';
-    return `
+    return html`
       <div class="session-row${a.is_orphan ? ' orphan' : ''}${stale ? ' stale' : ''}">
-        <button type="button" class="session-main" data-action="filter-pids" data-pids="${escapeHTML(row.pids.join(','))}" data-label="${escapeHTML(row.label)}" title="${escapeHTML(a.cwd || '')}">
-          <span class="session-label">${escapeHTML(row.label)}</span>
-          <span class="agent-pid">${escapeHTML(a.name)} · PID ${a.pid}</span>
-          ${seenAge ? `<span class="agent-meta-item agent-lastseen">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
-          ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
+        <button type="button" class="session-main" data-action="filter-pids" data-pids="${row.pids.join(',')}" data-label="${row.label}" title="${a.cwd || ''}">
+          <span class="session-label">${row.label}</span>
+          <span class="agent-pid">${a.name} · PID ${a.pid}</span>
+          ${raw(seenAge ? html`<span class="agent-meta-item agent-lastseen">active ${seenAge} ago</span>` : html`<span class="agent-meta-item agent-lastseen">no activity</span>`)}
+          ${rss ? raw(html`<span class="agent-meta-item">${rss}</span>`) : ''}
         </button>
-        <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
-        ${helpers}
+        <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${a.started_at || ''}" data-family="${a.name || ''}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
+        ${raw(helpers)}
       </div>`;
   }).join('');
 }
@@ -2076,7 +2075,7 @@ function inspectionVisible(status, audit) {
 function vendorKeyPromoteHTML(ids) {
   if (!ids || !ids.length) return '';
   const n = ids.length;
-  return `<div class="fw-promote-vendor">
+  return html`<div class="fw-promote-vendor">
     <div class="fw-rule-main">
       <span class="fw-rule-id">Catch secrets</span>
       <div class="fw-metrics"><span class="fw-metric">${n} vendor-key rule${n === 1 ? '' : 's'} still in monitor — they report leaks but do not stop them</span></div>
@@ -2249,14 +2248,14 @@ function validExpectedPatterns(records) {
 function policyListHTML(kind, rows, st) {
   const s = st || {};
   const removal = kind === 'expected' && s.expectedRemoval;
-  const saved = removal ? `<p role="status">Exception removal saved for <code>${escapeHTML(removal.path)}</code> (${escapeHTML(removal.agent)}). Remaining exceptions and policies still apply; past activity is unchanged.</p>` : '';
+  const saved = removal ? html`<p role="status">Exception removal saved for <code>${removal.path}</code> (${removal.agent}). Remaining exceptions and policies still apply; past activity is unchanged.</p>` : '';
   const label = s.label || { guard: 'Guard decisions', path: 'File exceptions', mute: 'Muted flag classes', expected: 'Expected secret reads', scope: 'Scoped permissions' }[kind];
-  const refreshed = rows != null && Number.isFinite(s.lastSuccessAt) ? ' Last successful refresh: ' + localTimestampHTML(s.lastSuccessAt) + '.' : '';
-  const notice = s.hideNotice ? '' : saved + (s.error ? `<div class="policy-read-status" role="status"><p>${escapeHTML(label)}: ${rows != null ? 'Refresh failed. Showing last known records; current status is unavailable.' : 'Unavailable. No successful read yet.'}${refreshed} ${escapeHTML(s.error)}</p><button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh-report" data-kind="${escapeHTML(kind)}"${s.loading ? ' disabled' : ''}>${escapeHTML('Refresh ' + label.toLowerCase())}</button></div>`
-    : s.loading && rows != null ? `<p class="policy-read-status" role="status">${escapeHTML('Refreshing ' + label.toLowerCase() + '…')}</p>` : '');
+  const refreshed = rows != null && Number.isFinite(s.lastSuccessAt) ? html` Last successful refresh: ${raw(localTimestampHTML(s.lastSuccessAt))}.` : '';
+  const notice = s.hideNotice ? '' : saved + (s.error ? html`<div class="policy-read-status" role="status"><p>${label}: ${rows != null ? 'Refresh failed. Showing last known records; current status is unavailable.' : 'Unavailable. No successful read yet.'}${raw(refreshed)} ${s.error}</p><button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh-report" data-kind="${kind}"${s.loading ? raw(' disabled') : ''}>${'Refresh ' + label.toLowerCase()}</button></div>`
+    : s.loading && rows != null ? html`<p class="policy-read-status" role="status">${'Refreshing ' + label.toLowerCase() + '…'}</p>` : '');
   if (!rows) {
     if (s.error) return notice;
-    return `<div class="loading">Loading…</div>`;
+    return html`<div class="loading">Loading…</div>`;
   }
   const EMPTY = {
     guard: 'No legacy guard decisions. Session and timed permissions are listed above.',
@@ -2265,9 +2264,9 @@ function policyListHTML(kind, rows, st) {
     expected: 'No expected secret reads. Expected, on a read-then-connect finding, adds one here.',
     scope: 'No scoped permissions. Choose a session or timed permission on a recorded finding or guard prompt.',
   };
-  if (!rows.length) return notice + (s.error ? '' : `<div class="empty"><span>${EMPTY[kind]}</span></div>`);
-  const row = (main, sub, meta) => `<div class="policy-row"><div class="policy-row-main">${main}</div>`
-    + `<div class="policy-row-sub">${sub}</div>${meta ? `<span class="policy-row-meta">${meta}</span>` : ''}</div>`;
+  if (!rows.length) return notice + (s.error ? '' : html`<div class="empty"><span>${EMPTY[kind]}</span></div>`);
+  const row = (main, sub, meta) => html`<div class="policy-row"><div class="policy-row-main">${raw(main)}</div>`
+    + html`<div class="policy-row-sub">${raw(sub)}</div>${meta ? raw(html`<span class="policy-row-meta">${raw(meta)}</span>`) : ''}</div>`;
   const when = r => r.created_at ? localTimestampHTML(r.created_at) : '';
   const items = rows.map(r => {
     if (kind === 'scope') {
@@ -2275,42 +2274,42 @@ function policyListHTML(kind, rows, st) {
       const saved = mutation?.status === 'saved', unconfirmed = mutation?.status === 'unconfirmed';
       const pending = mutation?.status === 'confirming' || mutation?.status === 'saving';
       const lifetime = saved ? 'Revoked' : applicability.label;
-      const duration = r.expires_at ? ` · Expires ${localTimestampHTML(r.expires_at)}` : r.kind === 'session' && r.session_id ? ` · Session ${escapeHTML(r.session_id)}` : '';
-      const feedback = saved ? '<p role="status">Revocation saved. Other permissions may still apply; past access is unchanged.</p>'
-        : unconfirmed ? '<p role="status">Revocation not confirmed. Refresh permissions before trying again.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh permissions</button>'
-        : mutation?.status === 'saving' ? '<p role="status">Saving revocation…</p>' : '';
+      const duration = r.expires_at ? html` · Expires ${raw(localTimestampHTML(r.expires_at))}` : r.kind === 'session' && r.session_id ? html` · Session ${r.session_id}` : '';
+      const feedback = saved ? html`<p role="status">Revocation saved. Other permissions may still apply; past access is unchanged.</p>`
+        : unconfirmed ? html`<p role="status">Revocation not confirmed. Refresh permissions before trying again.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh permissions</button>`
+        : mutation?.status === 'saving' ? html`<p role="status">Saving revocation…</p>` : '';
       const recipient = r.destination ? ` → ${r.destination}` : '';
       const operation = r.operation.startsWith('guard:') ? 'Guarded ' + r.operation.slice(6) + ' access' : r.operation === 'read-connect' ? 'Expected read/connect activity' : 'Operation unavailable';
-      return row(`<b>${escapeHTML(r.agent)}</b> · ${escapeHTML(operation)} <code>${escapeHTML(r.resource_path)}</code>${escapeHTML(recipient)}`,
-        `${escapeHTML(r.workspace || 'Workspace not recorded')} · executable path ${escapeHTML(r.reader_exe || 'Unknown')} (observed, not signature verified) · ${escapeHTML(lifetime)}${duration}<br>Saved ${localTimestampHTML(r.created_at)} · Permission ${escapeHTML(r.id)}${feedback}`,
-        `${r.session_id ? `<button type="button" class="btn btn-ghost btn-sm" data-action="permission-session" data-id="${escapeHTML(r.id)}">Inspect session</button>` : ''}${!applicability.revoke || saved || unconfirmed || s.error ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-action="revoke-scope" data-id="${escapeHTML(r.id)}"${s.loading || pending ? ' disabled' : ''}>Revoke</button>`}`);
+      return row(html`<b>${r.agent}</b> · ${operation} <code>${r.resource_path}</code>${recipient}`,
+        html`${r.workspace || 'Workspace not recorded'} · executable path ${r.reader_exe || 'Unknown'} (observed, not signature verified) · ${lifetime}${raw(duration)}<br>Saved ${raw(localTimestampHTML(r.created_at))} · Permission ${r.id}${raw(feedback)}`,
+        html`${r.session_id ? raw(html`<button type="button" class="btn btn-ghost btn-sm" data-action="permission-session" data-id="${r.id}">Inspect session</button>`) : ''}${!applicability.revoke || saved || unconfirmed || s.error ? '' : raw(html`<button type="button" class="btn btn-ghost btn-sm" data-action="revoke-scope" data-id="${r.id}"${s.loading || pending ? raw(' disabled') : ''}>Revoke</button>`)}`);
     }
     if (kind === 'guard') {
-      return row(`<span class="policy-decision ${r.decision === 'deny' ? 'deny' : 'allow'}">${escapeHTML(r.decision || '')}</span> `
-        + `<b>${escapeHTML(r.rule_id || '')}</b> for ${escapeHTML(r.agent || '')}`, `Legacy policy · no expiry · ${escapeHTML(r.source || '')}`, when(r));
+      return row(html`<span class="policy-decision ${r.decision === 'deny' ? 'deny' : 'allow'}">${r.decision || ''}</span> `
+        + html`<b>${r.rule_id || ''}</b> for ${r.agent || ''}`, html`Legacy policy · no expiry · ${r.source || ''}`, when(r));
     }
     if (kind === 'path') {
-      return row(`<code>${escapeHTML(r.path || '')}</code>`, `Legacy policy · includes descendants · no expiry · ${escapeHTML(r.rule_id || '')} for ${escapeHTML(r.agent || '')}`, when(r));
+      return row(html`<code>${r.path || ''}</code>`, html`Legacy policy · includes descendants · no expiry · ${r.rule_id || ''} for ${r.agent || ''}`, when(r));
     }
     if (kind === 'expected') {
       const mutation = s.expectedMutations?.get(r.key);
       const unconfirmed = mutation?.status === 'unconfirmed';
-      const feedback = unconfirmed ? '<p role="status">Removal not confirmed. Refresh exceptions before trying again.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh exceptions</button>'
-        : mutation?.status === 'saving' ? '<p role="status">Saving exception removal…</p>' : '';
+      const feedback = unconfirmed ? html`<p role="status">Removal not confirmed. Refresh exceptions before trying again.</p><button type="button" class="link-btn" data-action="policy-refresh">Refresh exceptions</button>`
+        : mutation?.status === 'saving' ? html`<p role="status">Saving exception removal…</p>` : '';
       const remove = s.error || unconfirmed || !validExpectedPatterns([r]) ? ''
-        : `<button type="button" class="btn btn-ghost btn-sm" data-action="forget-expected" data-key="${escapeHTML(r.key)}" aria-label="${escapeHTML('Remove exception for ' + r.agent + ': ' + r.path)}"${s.loading || mutation ? ' disabled' : ''}>Remove exception</button>`;
-      if (r.scope === 'file') return row(`<b>Non-secret file</b> <code>${escapeHTML(r.path || '')}</code>`,
-        `${escapeHTML(r.agent || '')} only · all readers and destinations · ${Number(r.hits) || 0} matches${feedback}`,
-        `${when(r)} ${remove}`);
+        : html`<button type="button" class="btn btn-ghost btn-sm" data-action="forget-expected" data-key="${r.key}" aria-label="${'Remove exception for ' + r.agent + ': ' + r.path}"${s.loading || mutation ? raw(' disabled') : ''}>Remove exception</button>`;
+      if (r.scope === 'file') return row(html`<b>Non-secret file</b> <code>${r.path || ''}</code>`,
+        html`${r.agent || ''} only · all readers and destinations · ${Number(r.hits) || 0} matches${raw(feedback)}`,
+        html`${raw(when(r))} ${raw(remove)}`);
       const legacy = r.dest && r.dest !== String(r.dest).toLowerCase();
       const reader = r.reader === 'tool'  ? 'an agent tool' : (r.reader || '');
       const hits = Number(r.hits) || 0;
-      return row(`<b>${escapeHTML(reader)}</b> reads <code>${escapeHTML(r.path || '')}</code>, then reaches <b>${escapeHTML(r.dest || '')}</b>`,
-        `${escapeHTML(r.agent || '')} · legacy policy · no expiry · ${legacy ? 'Legacy provider exception is inactive; review an exact host' : hits + ' since the daemon started'}${feedback}`,
-        `${when(r)} ${remove}`);
+      return row(html`<b>${reader}</b> reads <code>${r.path || ''}</code>, then reaches <b>${r.dest || ''}</b>`,
+        html`${r.agent || ''} · legacy policy · no expiry · ${legacy ? 'Legacy provider exception is inactive; review an exact host' : hits + ' since the daemon started'}${raw(feedback)}`,
+        html`${raw(when(r))} ${raw(remove)}`);
     }
-    const scope = (r.host === '*' ? 'all hosts' : escapeHTML(r.host || '')) + ' · ' + (r.agent ? escapeHTML(r.agent) : 'all agents');
-    return row(`<b>${escapeHTML(r.title || r.rule || '')}</b>`, scope, '');
+    const scope = html`${r.host === '*' ? 'all hosts' : r.host || ''} · ${r.agent || 'all agents'}`;
+    return row(html`<b>${r.title || r.rule || ''}</b>`, scope, '');
   });
   const groups = new Map();
   rows.forEach((r, i) => {
@@ -2320,8 +2319,8 @@ function policyListHTML(kind, rows, st) {
     groups.get(key).push(items[i]);
   });
   const grouped = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([harness, entries]) =>
-    `<section class="policy-harness-group"><div class="policy-harness-title">${harness === 'all' ? 'All harnesses' : harnessChipHTML(harness, { label: true })}</div>${entries.join('')}</section>`).join('');
-  return `${notice}<div class="policy-list" data-policy="${kind}">${grouped}</div>`;
+    html`<section class="policy-harness-group"><div class="policy-harness-title">${harness === 'all' ? 'All harnesses' : raw(harnessChipHTML(harness, { label: true }))}</div>${raw(entries.join(''))}</section>`).join('');
+  return html`${raw(notice)}<div class="policy-list" data-policy="${kind}">${raw(grouped)}</div>`;
 }
 // Durable review actions are revision-bound; none creates a permission.
 function permissionChoiceLabel(choice, prefix = 'Expected') {
@@ -2355,7 +2354,7 @@ function validReviewDecision(revision, action, scope) {
 function reviewPermissionItems(r) {
   if (!validReviewRevision(r.revision) || !r.evidence_available || r.review_state === 'closed_reported' || r.decision && r.decision.action === 'expect' && r.decision.revision === r.revision) return [];
   return (r.available_scopes || [{kind:'once'}]).filter(validReviewScope).map(choice => ({label:permissionChoiceLabel(choice),
-    attrs:`data-action="review-decision" data-id="${escapeHTML(r.id)}" data-revision="${Number(r.revision)}" data-decision="expect" data-scope="${escapeHTML(choice.kind)}"${choice.expiry ? ` data-expiry="${escapeHTML(choice.expiry)}"` : ''}`}));
+    attrs:html`data-action="review-decision" data-id="${r.id}" data-revision="${Number(r.revision)}" data-decision="expect" data-scope="${choice.kind}"${choice.expiry ? raw(html` data-expiry="${choice.expiry}"`) : ''}`}));
 }
 function validReviewReceipt(receipt, id, revision, action) {
   return !!receipt && receipt.id === id && Number.isSafeInteger(receipt.revision) && receipt.revision > 0 && receipt.revision === revision &&
@@ -2377,37 +2376,37 @@ function reviewResultHTML(result, details = false) {
       : 'This decision records expected activity once. No future permission was created.'
     : 'This records your review of the evidence; it does not establish remediation.';
   const target = (c.resources || []).join(', ') || c.rule || d.id;
-  const receipt = `<p>Decision for evidence revision ${d.revision} · <time datetime="${escapeHTML(d.at)}">${escapeHTML(new Date(d.at).toLocaleString())}</time></p>`;
-  if (!details) return `<div class="panel-head"><h2 id="review-result-title">${escapeHTML(reviewResultLabel(d))}</h2><button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-review-result">Dismiss</button></div>
-    <div class="panel-body"><p class="review-result-target">${escapeHTML(target)}</p>${receipt}<p>${escapeHTML(meaning)}</p><button type="button" class="btn btn-ghost btn-sm" data-action="open-review-result">View result</button></div>`;
-  const links = (r?.source_ids || []).map((id, index) => `<button type="button" class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${escapeHTML(id)}">Recorded evidence ${index + 1}</button>`).join('');
-  return `<div class="panel-body"><h3>${escapeHTML(reviewResultLabel(d))}</h3><p>${escapeHTML(target)}</p>${receipt}<p>${escapeHTML(meaning)}</p>
-    ${scopes.length ? `<p>Recorded permission IDs: ${scopes.map(escapeHTML).join(', ')}</p>` : ''}
-    ${d.action === 'expect' && scopes.length ? '<button type="button" class="btn btn-ghost btn-sm" data-action="open-review-result-permissions">View permissions</button>' : ''}
-    ${r ? `<h4>Evidence before this decision</h4><p>${escapeHTML(r.agent || 'Unknown agent')} · ${escapeHTML(c.session_id || 'Session unknown')}${c.workspace ? ` · ${escapeHTML(c.workspace)}` : ''}</p>
-      <p>${escapeHTML((c.destinations || []).join(', ') || 'Destination unknown')}</p><p>Recorded risk: ${escapeHTML(r.assessment?.risk || 'unknown')}</p><p>${escapeHTML(r.assessment?.reason || '')}</p>${assessmentHTML(r.assessment || {})}${links}`
-      : '<p>The evidence shown before this decision is unavailable. The server receipt remains.</p>'}</div>`;
+  const receipt = html`<p>Decision for evidence revision ${d.revision} · <time datetime="${d.at}">${new Date(d.at).toLocaleString()}</time></p>`;
+  if (!details) return html`<div class="panel-head"><h2 id="review-result-title">${reviewResultLabel(d)}</h2><button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-review-result">Dismiss</button></div>
+    <div class="panel-body"><p class="review-result-target">${target}</p>${raw(receipt)}<p>${meaning}</p><button type="button" class="btn btn-ghost btn-sm" data-action="open-review-result">View result</button></div>`;
+  const links = (r?.source_ids || []).map((id, index) => html`<button type="button" class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${id}">Recorded evidence ${index + 1}</button>`).join('');
+  return html`<div class="panel-body"><h3>${reviewResultLabel(d)}</h3><p>${target}</p>${raw(receipt)}<p>${meaning}</p>
+    ${scopes.length ? raw(html`<p>Recorded permission IDs: ${scopes.join(', ')}</p>`) : ''}
+    ${d.action === 'expect' && scopes.length ? raw(html`<button type="button" class="btn btn-ghost btn-sm" data-action="open-review-result-permissions">View permissions</button>`) : ''}
+    ${raw(r ? html`<h4>Evidence before this decision</h4><p>${r.agent || 'Unknown agent'} · ${c.session_id || 'Session unknown'}${c.workspace ? ` · ${c.workspace}` : ''}</p>
+      <p>${(c.destinations || []).join(', ') || 'Destination unknown'}</p><p>Recorded risk: ${r.assessment?.risk || 'unknown'}</p><p>${r.assessment?.reason || ''}</p>${raw(assessmentHTML(r.assessment || {}))}${raw(links)}`
+      : html`<p>The evidence shown before this decision is unavailable. The server receipt remains.</p>`)}</div>`;
 }
 function reviewHTML(r, draft, actions = true) {
   actions = actions && validReviewRevision(r.revision);
   const c = r.context || {}, a = r.assessment || {};
   const state = r.review_state || 'unreviewed';
-  const action = decision => `data-action="review-decision" data-id="${escapeHTML(r.id)}" data-revision="${Number(r.revision)}" data-decision="${decision}"`;
-  const links = (r.source_ids || []).map((id, index) => `<button class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${escapeHTML(id)}">Recorded evidence ${index + 1}</button>`).join('');
-  const incidents = (r.incident_ids || []).map(id => `<button class="btn btn-ghost btn-sm" data-action="open-incident" data-id="${escapeHTML(id)}">View report</button>`).join('');
-  return `<article class="finding-item ${a.risk === 'critical' ? 'critical' : ''}">
-    <div class="decision-head"><strong>${escapeHTML((c.resources || []).join(', ') || c.rule)}</strong><span class="disp-badge">${escapeHTML(state.replaceAll('_', ' '))}</span></div>
-    <p class="finding-why">${escapeHTML(r.agent || 'Unknown agent')} · ${Number(r.count)} occurrences · evidence revision ${Number(r.revision)}${r.reviewed_revision ? ` · reviewed revision ${Number(r.reviewed_revision)}` : ''}</p>
-    <p class="finding-why">${escapeHTML((c.destinations || []).join(', ') || 'Destination unknown')} · ${escapeHTML(c.session_id || 'Session unknown; this source only')}${c.workspace ? ` · ${escapeHTML(c.workspace)}` : ''}</p>
-    <p>${escapeHTML(a.reason || '')}</p>
-    ${assessmentHTML(a)}
+  const action = decision => raw(html`data-action="review-decision" data-id="${r.id}" data-revision="${Number(r.revision)}" data-decision="${decision}"`);
+  const links = (r.source_ids || []).map((id, index) => html`<button class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${id}">Recorded evidence ${index + 1}</button>`).join('');
+  const incidents = (r.incident_ids || []).map(id => html`<button class="btn btn-ghost btn-sm" data-action="open-incident" data-id="${id}">View report</button>`).join('');
+  return html`<article class="finding-item ${a.risk === 'critical' ? 'critical' : ''}">
+    <div class="decision-head"><strong>${(c.resources || []).join(', ') || c.rule}</strong><span class="disp-badge">${state.replaceAll('_', ' ')}</span></div>
+    <p class="finding-why">${r.agent || 'Unknown agent'} · ${Number(r.count)} occurrences · evidence revision ${Number(r.revision)}${r.reviewed_revision ? ` · reviewed revision ${Number(r.reviewed_revision)}` : ''}</p>
+    <p class="finding-why">${(c.destinations || []).join(', ') || 'Destination unknown'} · ${c.session_id || 'Session unknown; this source only'}${c.workspace ? ` · ${c.workspace}` : ''}</p>
+    <p>${a.reason || ''}</p>
+    ${raw(assessmentHTML(a))}
     <p>Expected once records this review only. Future permissions count matching observed activity as expected; they do not bypass firewall or payload checks. They use the recorded executable path, workspace, file and exact endpoint. Executable signatures are not verified. Revoke under Protection → Rules &amp; permissions.</p>
-    ${(r.available_scopes || []).some(s => s.kind !== 'once') ? '' : '<p>Future permission is unavailable because session, workspace, executable or recipient identity is incomplete or the session has ended.</p>'}
-    ${r.evidence_flag_available ? `<button class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${escapeHTML(r.evidence_flag_id)}">View supporting evidence</button>` : '<p>The source supporting this assessment has expired. The recorded risk remains in history.</p>'}
-    ${draft && draft.conflict ? `<p role="alert">Evidence changed. Your ${escapeHTML(draft.action.replaceAll('_', ' '))} choice is retained. Review the new facts and choose again.</p>` : ''}
-    ${r.evidence_available ? (actions ? `<div class="attention-actions">${state === 'unreviewed' ? `<button class="btn btn-primary btn-sm" ${action('acknowledge')}>Mark reviewed</button>` : ''}${state !== 'closed_reported' ? `<button class="btn btn-ghost btn-sm" ${action('close_reported')}>Report closure</button>` : ''}</div>` : '') : '<p>Source evidence has expired. Risk and review history remain; closure has not been verified.</p>'}
-    ${actions ? `<div class="attention-actions">${reviewPermissionItems(r).map(item => `<button class="btn btn-ghost btn-sm" ${item.attrs}>${item.label}</button>`).join('')}</div>` : ''}
-    <details><summary>Evidence and review history</summary><p>${r.decision ? `${escapeHTML(r.decision.action.replaceAll('_', ' '))} · revision ${Number(r.decision.revision)} · ${escapeHTML(r.decision.at)}` : 'No decision receipt recorded.'}</p>${links}${incidents}</details>
+    ${(r.available_scopes || []).some(s => s.kind !== 'once') ? '' : raw(html`<p>Future permission is unavailable because session, workspace, executable or recipient identity is incomplete or the session has ended.</p>`)}
+    ${raw(r.evidence_flag_available ? html`<button class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${r.evidence_flag_id}">View supporting evidence</button>` : html`<p>The source supporting this assessment has expired. The recorded risk remains in history.</p>`)}
+    ${draft && draft.conflict ? raw(html`<p role="alert">Evidence changed. Your ${draft.action.replaceAll('_', ' ')} choice is retained. Review the new facts and choose again.</p>`) : ''}
+    ${raw(r.evidence_available ? (actions ? html`<div class="attention-actions">${state === 'unreviewed' ? raw(html`<button class="btn btn-primary btn-sm" ${action('acknowledge')}>Mark reviewed</button>`) : ''}${state !== 'closed_reported' ? raw(html`<button class="btn btn-ghost btn-sm" ${action('close_reported')}>Report closure</button>`) : ''}</div>` : '') : html`<p>Source evidence has expired. Risk and review history remain; closure has not been verified.</p>`)}
+    ${actions ? raw(html`<div class="attention-actions">${reviewPermissionItems(r).map(item => raw(html`<button class="btn btn-ghost btn-sm" ${raw(item.attrs)}>${item.label}</button>`))}</div>`) : ''}
+    <details><summary>Evidence and review history</summary><p>${r.decision ? `${r.decision.action.replaceAll('_', ' ')} · revision ${Number(r.decision.revision)} · ${r.decision.at}` : 'No decision receipt recorded.'}</p>${raw(links)}${raw(incidents)}</details>
   </article>`;
 }
 
