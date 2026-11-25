@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -232,55 +231,4 @@ func claudeMarketplacePath(settings string) string {
 		}
 	}
 	return ""
-}
-
-// humanCollectorTitle maps collector process names to operator language —
-// "Monitor eslogger is abandoned" is jargon; "File monitoring is off" is not.
-func humanCollectorTitle(name string, abandoned bool) string {
-	what := map[string]string{
-		"eslogger":    "File monitoring",
-		"netsampler":  "Network sampling",
-		"transcript":  "Transcript scanning",
-		"proxyserver": "Egress inspection",
-		"advisor":     "Local advisor",
-	}[name]
-	if what == "" {
-		what = "Monitor " + name
-	}
-	if abandoned {
-		return what + " keeps stopping"
-	}
-	return what + " is off"
-}
-
-// humanCollectorDetail pairs the raw error with the likely fix.
-func humanCollectorDetail(name, lastErr string) string {
-	var hint string
-	switch name {
-	case "eslogger":
-		// eslogger crash-loops almost always mean Full Disk Access is missing.
-		hint = "usually missing Full Disk Access — open Setup & Permissions in the menu bar"
-	case "netsampler":
-		hint = "restart Secure Agent from the menu bar"
-	case "proxyserver":
-		hint = "check whether another process holds the proxy port"
-	case "transcript":
-		hint = "restart Secure Agent from the menu bar"
-	case "advisor":
-		hint = "check the local model server (default 127.0.0.1:8080)"
-	}
-	if lastErr == "" {
-		return hint
-	}
-	if hint == "" {
-		return lastErr
-	}
-	return hint + " · " + lastErr
-}
-
-func uninspectedTitle(n int) string {
-	if n == 1 {
-		return "1 endpoint reached outside the inspection proxy"
-	}
-	return fmt.Sprintf("%d endpoints reached outside the inspection proxy", n)
 }

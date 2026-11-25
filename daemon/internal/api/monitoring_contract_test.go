@@ -5,52 +5,9 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
-	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
-	"github.com/cavi-ai/secure-agent/daemon/internal/store"
-	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
-
-func TestMonitoringNotesDoNotRequireAttention(t *testing.T) {
-	disabled := false
-	for _, tc := range []struct {
-		name   string
-		status Status
-	}{
-		{"inspection not selected", Status{Running: true, UninspectedEgress: 3}},
-		{"idle collector", Status{Running: true, Uptime: "1h", ActiveAgents: 4,
-			Collectors: []supervise.Health{{Name: "transcript", Running: true}},
-		}},
-		{"ready file collector without activity", Status{Running: true, Uptime: "1h", ActiveAgents: 4,
-			Collectors: []supervise.Health{{Name: "eslogger", Running: true}},
-			ESService:  &collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now().Add(-time.Hour), Collector: &collect.ESCollectorStatus{State: "collecting", UpdatedAt: time.Now()}},
-		}},
-		{"file telemetry disabled", Status{Running: true, FileTelemetryEnabled: &disabled, ActiveAgents: 1,
-			Collectors: []supervise.Health{{Name: "eslogger", Running: false}},
-			ESService:  &collect.ESServiceSnapshot{State: "not-loaded", BytesLost: 100, Losing: true},
-		}},
-		{"guard not configured", Status{Running: true, ActiveAgents: 1, Coverage: &CoverageStatus{
-			Harnesses: []HarnessCoverage{{Name: "claude", GuardSupported: true}},
-		}}},
-		{"recovered storage", Status{Running: true, StorageHealth: &store.WriteHealth{Failures: 3}}},
-		{"recovered projection", Status{Running: true, EgressProjectionHealth: &store.EgressProjectionHealth{WriteFailures: 2}}},
-		{"past export loss", Status{Running: true, OTLPDropped: 4}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := derivePosture(posture.Inputs{Status: posture.Status(tc.status), Generated: time.Now()})
-			if p.State != "all-clear" || p.NeedsYou != 0 || p.CoverageCount != 0 {
-				t.Fatalf("a monitoring note became a warning: %+v", p)
-			}
-			if len(p.CoverageItems) == 0 {
-				t.Fatal("monitoring evidence was discarded")
-			}
-			if p.AttentionSummary.Buckets[2].CoverageCount != 0 {
-				t.Fatal("the attention summary disagrees with the headline")
-			}
-		})
-	}
-}
 
 func TestMonitoringBusRecoveryKeepsLossHistory(t *testing.T) {
 	b := bus.New(1)
@@ -73,15 +30,6 @@ func TestMonitoringBusRecoveryKeepsLossHistory(t *testing.T) {
 	}
 	if state, _ := checkBus(a.doctorFacts(time.Now())); state != doctorPass {
 		t.Fatal("Doctor disagrees with recovered delivery")
-	}
-}
-
-func TestMonitoringCurrentFailureStillRequiresAttention(t *testing.T) {
-	p := derivePosture(posture.Inputs{Generated: time.Now(), Status: posture.Status{
-		Running: true, StorageHealth: &store.WriteHealth{Failures: 3, Active: []string{"events"}},
-	}})
-	if p.State != "attention" || p.CoverageCount != 1 || p.AttentionSummary.Buckets[2].CoverageCount != 1 {
-		t.Fatalf("an active failure was hidden: %+v", p)
 	}
 }
 

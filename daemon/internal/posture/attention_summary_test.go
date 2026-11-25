@@ -1,6 +1,59 @@
 package posture
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
+)
+
+func TestPostureServesSummaryWithoutReclassifyingItsState(t *testing.T) {
+	p := derive(Inputs{Generated: time.Now(), Status: Status{Running: true}, Pending: []guard.Pending{{ID: "request", Agent: "claude", Tool: "Read", Path: "/work/.env"}}})
+	if p.AttentionSummary == nil || p.AttentionSummary.Buckets[0].Count != 1 || p.NeedsYou != 1 || p.State != "attention" {
+		t.Fatalf("posture: %+v", p)
+	}
+	empty := DeriveAttentionSummary(nil, nil)
+	if len(empty.Buckets) != 3 {
+		t.Fatal("missing canonical categories")
+	}
+	for _, b := range empty.Buckets {
+		if b.Count != 0 || b.CoverageCount != 0 || b.First != nil {
+			t.Fatalf("invented attention: %+v", b)
+		}
+	}
+}
+
+// Every headline item pairs with the group item the clients match it to:
+// the same kind, or the one PostureItemAttentionKinds names.
+func TestPostureItemsPairWithTheirGroupItems(t *testing.T) {
+	p := derive(Inputs{Generated: time.Now(), Status: Status{Running: true}, Pending: []guard.Pending{
+		{ID: "a", Agent: "claude", Tool: "Read", Path: "/work/.env"},
+		{ID: "b", Agent: "codex", Tool: "Read", Path: "/work/.aws/credentials"},
+	}})
+	if len(p.Items) != 2 {
+		t.Fatalf("items: %+v", p.Items)
+	}
+	for _, item := range p.Items {
+		want := item.Kind
+		if alias, ok := PostureItemAttentionKinds[item.Kind]; ok {
+			want = alias
+		}
+		matches := 0
+		for _, g := range p.Groups {
+			for _, gi := range g.Items {
+				if gi.Kind == want && gi.ID == item.ID {
+					matches++
+				}
+			}
+		}
+		if matches != 1 {
+			t.Errorf("posture item %s/%s pairs with %d group items of kind %q, want 1", item.Kind, item.ID, matches, want)
+		}
+	}
+	if s := DeriveAttentionSummary(nil, nil); len(s.Buckets) != 3 || s.Buckets[0].Kind != AttentionBuckets[0] {
+		t.Fatalf("buckets: %+v", s.Buckets)
+	}
+}
 
 func TestAttentionSummaryPreservesQueuePriorityAndCoverage(t *testing.T) {
 	groups := []AttentionGroup{{Items: []AttentionItem{

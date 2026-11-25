@@ -41,7 +41,7 @@ func TestStorageReadDiagnosticsAppearInDoctorAndPosture(t *testing.T) {
 	if !strings.Contains(detail, "deadline") || !strings.Contains(detail, now.Format(time.RFC3339)) {
 		t.Fatalf("doctor omitted diagnostic: %s", detail)
 	}
-	items := machineAttentionItems(now, status, nil)
+	items := posture.MachineAttentionItems(now, posture.Status(status), nil)
 	for _, item := range items {
 		if item.Kind == "storage_read_failure" {
 			if !strings.Contains(item.Detail, "deadline") || !strings.Contains(item.Detail, now.Format(time.RFC3339)) {

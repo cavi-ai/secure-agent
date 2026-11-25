@@ -1,12 +1,13 @@
-package api
+package posture
 
-import "github.com/cavi-ai/secure-agent/daemon/internal/posture"
-
-func fileTelemetryDisabled(st Status) bool {
+// FileTelemetryDisabled reports that configuration turned file telemetry off.
+func FileTelemetryDisabled(st Status) bool {
 	return st.FileTelemetryEnabled != nil && !*st.FileTelemetryEnabled
 }
 
-func fileTelemetryUnavailable(st Status) bool {
+// FileTelemetryUnavailable reports that file telemetry is enabled but neither
+// the root service nor an eslogger collector is present.
+func FileTelemetryUnavailable(st Status) bool {
 	if st.FileTelemetryEnabled == nil || !*st.FileTelemetryEnabled || st.ESService != nil {
 		return false
 	}
@@ -21,32 +22,32 @@ func fileTelemetryUnavailable(st Status) bool {
 func classifyMonitoring(items []PostureItem, st Status) []PostureItem {
 	for i := range items {
 		item := &items[i]
-		item.MonitoringState = posture.MonitoringActive
+		item.MonitoringState = MonitoringActive
 		switch item.Kind {
 		case "uninspected_egress", "hook_analysis_limit", "harness_uncovered", "guard_hook_unregistered", "collector_idle":
-			item.MonitoringState = posture.MonitoringInformational
+			item.MonitoringState = MonitoringInformational
 		case "collector_disabled":
-			item.MonitoringState = posture.MonitoringDisabled
+			item.MonitoringState = MonitoringDisabled
 		case "hook_evidence_gap", "file_evidence_loss":
-			item.MonitoringState = posture.MonitoringHistorical
+			item.MonitoringState = MonitoringHistorical
 		case "event_loss":
 			if !st.BusDropping {
-				item.MonitoringState = posture.MonitoringHistorical
+				item.MonitoringState = MonitoringHistorical
 			}
 		case "storage_loss":
 			if st.StorageHealth != nil && len(st.StorageHealth.Active) == 0 {
-				item.MonitoringState = posture.MonitoringHistorical
+				item.MonitoringState = MonitoringHistorical
 			}
 		case "projection_loss":
 			if h := st.EgressProjectionHealth; h != nil && !h.WriteFailing && !h.QueueDropping {
-				item.MonitoringState = posture.MonitoringHistorical
+				item.MonitoringState = MonitoringHistorical
 			}
 		case "export_loss":
 			if !st.OTLPFailing {
-				item.MonitoringState = posture.MonitoringHistorical
+				item.MonitoringState = MonitoringHistorical
 			}
 		}
-		if item.MonitoringState != posture.MonitoringActive {
+		if item.MonitoringState != MonitoringActive {
 			item.Severity = 0
 		}
 	}
