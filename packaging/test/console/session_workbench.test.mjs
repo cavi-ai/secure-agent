@@ -82,18 +82,20 @@ function statusFocusRender(options = {}) {
     querySelector: selector => selector === '.session-detail-body' ? body
       : selector === '.sd-current-head h4' ? current
       : selector === 'h3' || selector === 'summary' || selector.startsWith('[data-action="session-view"]') ? current : null};
-  const context = {selectedSessionId: 'a', sessionView: options.view || 'memory', sessionReadingState: new Map([['a|memory', {loaded: true}]]),
-    sessionTimeline: [], sessionOutcomes: null, sessionMemoryPage: {rows: []}, CSS: {escape: value => value},
-    document: {activeElement: focused}, snapshot: () => ({}), sessionDetailHTML: () => markup,
+  const context = {s: {selectedSessionId: 'a', sessionView: options.view || 'memory', sessionReadingState: new Map([['a|memory', {loaded: true}]]),
+    sessionTimeline: [], sessionOutcomes: null, sessionMemoryPage: {rows: []}}, CSS: {escape: value => value},
+    document: {activeElement: focused}, sessionDetailHTML: () => markup,
     applyInlineMetrics() {}, patchSessionDetail() {
       if (!options.connected && !options.outside) { context.document.activeElement.isConnected = false; context.document.activeElement = null; }
       current = options.missingHeading ? null : options.connected ? current : heading();
     }};
   vm.createContext(context);
-  const start = source.indexOf('  function renderSessionDetail(');
-  vm.runInContext(source.slice(start, source.indexOf('  function renderSessionBoard(', start)), context);
+  const start = source.indexOf('function sessionWorkbenchRenderDetail(');
+  vm.runInContext(source.slice(start, source.indexOf('function sessionWorkbenchRenderBoard(', start)), context);
+  const snapshotStart = source.indexOf('function sessionWorkbenchSnapshot(');
+  vm.runInContext(source.slice(snapshotStart, source.indexOf('\n}\n', snapshotStart) + 3), context);
   return {context, calls, body, original, outside, get current() { return current; },
-    render(nextMarkup) { markup = nextMarkup; context.renderSessionDetail(detail, {id: 'a'}, [], ''); }};
+    render(nextMarkup) { markup = nextMarkup; context.sessionWorkbenchRenderDetail(context.s, detail, {id: 'a'}, [], ''); }};
 }
 
 test('Current status focus follows replacement on refresh failure and recovery within the same session and view', () => {
