@@ -155,6 +155,18 @@ ALLOW = [
     "find ~/.ssh -name 'config'",
     # unbalanced quote must not brick the agent
     "echo \"unterminated",
+    # signalling other processes and inspecting the product's own stay allowed
+    "pkill node",
+    "killall Dock",
+    "kill 1234",
+    "kill -9 $(lsof -t -i :3000)",
+    "ps aux | grep secure-agent",
+    "pgrep secure-agentd",
+    "launchctl list",
+    "launchctl print system/com.cavi-ai.secure-agent-esd",
+    "osascript -e 'tell application \"Secure Agent\" to activate'",
+    "tail -n 50 /var/log/secure-agent-esd.log",
+    "cat \"/Applications/Secure Agent.app/Contents/Info.plist\"",
 ]
 
 # Must be DENIED.
@@ -248,6 +260,30 @@ DENY = [
     ("echo '{}' > ~/.claude/hooks/evil.py", "harness-config-redirect"),
     ("tee ~/.cursor/hooks.json", "harness-config-mutation"),
     ("sed -i '' 's/a/b/' ~/.config/opencode/hooks/guard.py", "harness-config-mutation"),
+    # stopping the product's own processes turns every hook off
+    ("pkill secure-agentd", "guard-control-stop"),
+    ("sudo pkill -9 -f secure-agent-esd", "guard-control-stop"),
+    ("pkill -f '[s]ecure.agent'", "guard-control-stop"),
+    ("pkill -f 'Agent.app/Contents'", "guard-control-stop"),
+    ("killall \"Secure Agent\"", "guard-control-stop"),
+    ("nohup killall -9 SecureAgent", "guard-control-stop"),
+    ("killall -m 'secure-agent.*'", "guard-control-stop"),
+    ("env FOO=1 killall secure-agent-collector", "guard-control-stop"),
+    ("kill $(pgrep secure-agentd)", "guard-control-stop"),
+    ("kill -9 `pgrep -f \"Secure Agent\"`", "guard-control-stop"),
+    ("kill -TERM $(pgrep -f '[s]ecure-agentd')", "guard-control-stop"),
+    ("pgrep secure-agentd | xargs kill", "guard-control-stop"),
+    ("ls && pkill secure-agent-menubar", "guard-control-stop"),
+    ("bash -c \"pkill secure-agentd\"", "guard-control-stop"),
+    ("osascript -e 'quit app \"Secure Agent\"'", "guard-control-stop"),
+    ("osascript -e 'tell application id \"com.cavi-ai.secure-agent\" to quit'", "guard-control-stop"),
+    ("osascript -e 'do shell script \"pkill secure-agentd\"'", "guard-control-stop"),
+    ("launchctl bootout gui/501/com.cavi-ai.secure-agentd", "guard-control-stop"),
+    ("launchctl unload -w ~/Library/LaunchAgents/com.cavi-ai.secure-agentd.plist", "guard-control-stop"),
+    ("sudo launchctl kill SIGTERM system/com.cavi-ai.secure-agent-esd", "guard-control-stop"),
+    ("launchctl stop com.cavi-ai.secure-agentd", "guard-control-stop"),
+    ("launchctl remove com.cavi-ai.secure-agentd", "guard-control-stop"),
+    ("launchctl disable gui/$(id -u)/com.cavi-ai.secure-agentd", "guard-control-stop"),
 ]
 
 WRITE_DENY = [

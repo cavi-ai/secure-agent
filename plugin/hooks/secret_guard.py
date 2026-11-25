@@ -116,6 +116,20 @@ NETWORK_CLIENTS = {"curl", "nc", "ncat", "socat", "wget", "http", "httpie"}
 # denied (the guard's control surface is a self-approval channel).
 READONLY_SOCKET_PATHS = ("/status", "/resources", "/healthz", "/posture")
 
+# The product's own processes and launchd jobs. Every hook allows once the app
+# is gone, so signalling or unloading any of them turns enforcement off.
+PRODUCT_RE = re.compile(r"secure[-_ ]?agent", re.I)
+PRODUCT_PROCESSES = (
+    "/Applications/Secure Agent.app/Contents/MacOS/SecureAgent",
+    "/Applications/Secure Agent.app/Contents/Helpers/secure-agentd",
+    "/Applications/Secure Agent.app/Contents/MacOS/secure-agent-esd",
+    "secure-agent-collector",
+    "secure-agent-menubar",
+)
+SIGNALLERS = {"kill", "pkill", "killall"}
+LAUNCHCTL_STOP_VERBS = {"bootout", "stop", "kill", "unload", "remove", "disable"}
+OSASCRIPT_STOP_RE = re.compile(r"\b(?:quit|terminate)\b|kill|launchctl", re.I)
+
 INTERPRETERS = {
     "python", "python3", "perl", "ruby", "node", "deno", "bun", "osascript",
     "php", "lua", "tclsh",
@@ -1828,6 +1842,54 @@ def cmd_name(argv: list) -> str:
     return os.path.basename(argv[0]) if argv else ""
 
 
+def selects_product(patterns, full: bool = False, regex: bool = True) -> bool:
+    """True when a process pattern names the product, or as a regex matches a
+    product process name (its full command line when ``full``, as pkill -f)."""
+    targets = PRODUCT_PROCESSES if full else tuple(os.path.basename(p) for p in PRODUCT_PROCESSES)
+    for pat in patterns:
+        if PRODUCT_RE.search(pat):
+            return True
+        if not regex:
+            continue
+        try:
+            rx = re.compile(pat, re.I)
+        except re.error:
+            continue
+        if any(rx.search(t) for t in targets):
+            return True
+    return False
+
+
+def stops_product(argv: list, raw: str, command: str) -> bool:
+    """True when a segment signals, quits or unloads one of the product's own
+    processes. kill resolves only command substitutions, never a bare PID."""
+    name = cmd_name(argv)
+    args = [t for t in argv[1:] if not t.startswith("-")]
+    opts = "".join(t[1:] for t in argv[1:] if t.startswith("-") and t[1:].isalpha() and t[1:].islower())
+    if name == "pkill":
+        return selects_product(args, full="f" in opts)
+    if name == "killall":
+        return selects_product(args, regex="m" in opts)
+    if name == "kill":
+        for m in SUBSHELL_RE.finditer(raw):
+            body = m.group(1) or m.group(2) or ""
+            if PRODUCT_RE.search(body) or any(
+                selects_product([t for t in sub[1:] if not t.startswith("-")], full=True)
+                for sub, _ in segments(body)
+            ):
+                return True
+        return False
+    if name == "xargs":
+        return any(os.path.basename(t) in SIGNALLERS for t in args) and bool(PRODUCT_RE.search(command))
+    if name == "launchctl":
+        return (len(argv) > 2 and argv[1].lower() in LAUNCHCTL_STOP_VERBS
+                and any(PRODUCT_RE.search(t) for t in argv[2:]))
+    if name == "osascript":
+        script = " ".join(argv[1:])
+        return bool(PRODUCT_RE.search(script) and OSASCRIPT_STOP_RE.search(script))
+    return False
+
+
 # --- main -------------------------------------------------------------------
 
 class Verdict(NamedTuple):
@@ -1951,6 +2013,18 @@ def evaluate_command(command: str) -> Verdict:
                 "Blocked: an agent tried to archive a protected directory.",
                 "DENIED: archiving/copying a protected directory (ssh keys, cloud creds, "
                 "keychain) is bulk exfiltration, whatever the stated purpose.",
+            )
+
+        # 1c. Stopping the product's own processes: kill/pkill/killall (also
+        #     via xargs), osascript quit, launchctl bootout/stop/unload/etc.
+        if stops_product(argv, raw, command):
+            return denied(
+                "guard-control-stop",
+                "Blocked: an agent tried to stop Secure Agent.",
+                "DENIED: killing, quitting or unloading Secure Agent's own processes "
+                "(secure-agentd, secure-agent-esd, the menu bar app) is how an agent "
+                "would turn off the guard that is watching it; every hook allows once "
+                "the app is gone. Ask the user to quit the app themselves.",
             )
 
         # 2. Anything pointed at the keychain files.
