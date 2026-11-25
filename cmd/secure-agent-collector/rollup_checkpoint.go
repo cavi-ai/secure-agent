@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"time"
 )
@@ -91,6 +92,19 @@ func (s *Store) restoreCheckpoint(root *os.Root, name string) (int, error) {
 			state: node.State, recent: node.Recent, sessions: node.Sessions, lastTrace: node.LastTrace,
 			maxSeq: node.MaxSeq, holes: node.Holes, retiredBoots: node.RetiredBoots,
 			confirmedGaps: node.ConfirmedGaps, applied: node.Applied,
+		}
+		// Apply the normal eviction rules, then release the backing storage
+		// of maps that were oversized when decoded.
+		sessionCount, traceCount := len(rt.sessions), len(rt.lastTrace)
+		rt.boundSessions("")
+		rt.boundTraces()
+		if sessionCount > maxNodeSessions {
+			rt.sessions = make(map[string]sessionPayload, len(node.Sessions))
+			maps.Copy(rt.sessions, node.Sessions)
+		}
+		if traceCount > maxNodeSessions {
+			rt.lastTrace = make(map[string]tracePayload, len(node.LastTrace))
+			maps.Copy(rt.lastTrace, node.LastTrace)
 		}
 		if len(rt.applied) > 0 {
 			rt.appliedAt = make(map[deliveryKey]time.Time, len(rt.applied))
