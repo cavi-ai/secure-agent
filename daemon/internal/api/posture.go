@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -91,17 +92,53 @@ func (a *API) publishPosture(gen uint64, p Posture, force bool) {
 
 // computePosture derives the operator headline from live status + stores.
 // Deliberately derived, not persisted: posture is a view over state, never a
-// second source of truth.
+// second source of truth. Store reads are cached for the current write
+// generation when none failed.
 func (a *API) computePosture() Posture {
-	since := dayWindow(time.Now())
-	patterns, patternErr := a.computePatternsResult(since, patternDefaultMin)
-	failedReads := a.advisorReadFailures("flag")
-	routine, routineErr := a.routineGroupsResult(since)
-	failedReads = append(failedReads, a.advisorReadFailures("flag")...)
-	if patternErr != nil || routineErr != nil {
+	now := a.clock()
+	gen := a.store.WriteGeneration()
+	flags := a.readPostureFlags(now)
+	failedReads := slices.Clone(flags.failedReads)
+	if flags.patternErr != nil || flags.routineErr != nil {
 		failedReads = append(failedReads, "flags")
 	}
-	return a.postureWithReadHealth(patterns, routine, failedReads)
+	return a.postureFrom(now, flags, failedReads, a.postureEvidenceAt(gen, now))
+}
+
+// postureEvidenceAt serves the posture evidence cached for gen or reads it;
+// evidence that met a read failure is not cached.
+func (a *API) postureEvidenceAt(gen uint64, now time.Time) posture.Inputs {
+	if ev, ok := a.flagReads.posture.get(gen, now); ok {
+		return ev
+	}
+	ev := a.readPostureEvidence(now)
+	if len(ev.FailedReads) == 0 {
+		a.flagReads.posture.put(gen, now, ev)
+	}
+	return ev
+}
+
+// postureFlags are the 24 h patterns and routine groups with the advisor read
+// failures their flag reads left. They also read live status, the allowlist,
+// expectations, the host identity cache and the clock, so every request
+// computes them; their flag rows come from flagReads.
+type postureFlags struct {
+	patterns    []model.Pattern
+	routine     []model.RoutineGroup
+	patternErr  error
+	routineErr  error
+	failedReads []string
+}
+
+// readPostureFlags computes the 24 h patterns and routine groups at now.
+func (a *API) readPostureFlags(now time.Time) postureFlags {
+	since := dayWindow(now)
+	var r postureFlags
+	r.patterns, r.patternErr = a.computePatternsResult(since, patternDefaultMin)
+	r.failedReads = a.advisorReadFailures("flag")
+	r.routine, r.routineErr = a.routineGroupsResult(since)
+	r.failedReads = append(r.failedReads, a.advisorReadFailures("flag")...)
+	return r
 }
 
 // Preserve optional-enrichment faults in this calculation even if a later,
@@ -113,10 +150,10 @@ func (a *API) advisorReadFailures(kind string) []string {
 	return advisorReadFailuresFrom(a.store, kind)
 }
 
-// postureWithReadHealth is computePosture over the 24 h patterns and routine
-// groups the caller already computed.
-func (a *API) postureWithReadHealth(patterns []model.Pattern, routine []model.RoutineGroup, failedReads []string) Posture {
-	return derivePosture(a.loadPostureInputs(a.statusFn(), patterns, routine, failedReads))
+// postureFrom derives posture from flags and evidence with live status,
+// resource controls and pending prompts read now; ev stays unchanged.
+func (a *API) postureFrom(now time.Time, flags postureFlags, failedReads []string, ev posture.Inputs) Posture {
+	return derivePosture(a.postureInputsFrom(a.statusFn(), now, flags.patterns, flags.routine, failedReads, ev))
 }
 
 // derivePosture is posture.Derive with dispositionFor supplying flag verdicts.

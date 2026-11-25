@@ -2,11 +2,14 @@ package api
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -77,5 +80,40 @@ func BenchmarkComputePostureAtThreeThousandFlags(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		a.computePosture()
+	}
+}
+
+// GET /snapshot repeated with no store write in between, at 3000 flags and
+// 3000 events.
+func BenchmarkSnapshotAtThreeThousandFlagsAndEvents(b *testing.B) {
+	dir := b.TempDir()
+	st, err := store.Open(filepath.Join(dir, "events.db"), "")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { st.Close() })
+	a := newTestAPI(Deps{Store: st, Killer: &fakeKiller{}, Status: func() Status { return Status{Running: true} },
+		Policy: PolicyDeps{Allowlist: correlate.NewAllowlistStore(filepath.Join(dir, "allowlist.json")),
+			Mutes: correlate.NewMuteStore(filepath.Join(dir, "mutes.json"))},
+		Guard: GuardDeps{Broker: guard.NewBroker(time.Minute)}})
+	now := time.Now()
+	for i := 0; i < 3000; i++ {
+		at := now.Add(-time.Duration(i) * time.Second)
+		f := keychainFlag(fmt.Sprintf("b%04d", i), fmt.Sprintf("agent%d", i%30), int32(1000+i%30), at, 2)
+		if _, err := st.PutFlag(f); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := st.PutEvent(event.Event{Kind: event.KindFileOpen, PID: int32(1000 + i%30), TS: at}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/snapshot", nil)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rec := httptest.NewRecorder()
+		a.handleSnapshot(rec, req)
+		if rec.Code != http.StatusOK {
+			b.Fatalf("status %d: %s", rec.Code, rec.Body)
+		}
 	}
 }

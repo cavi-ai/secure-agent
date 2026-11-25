@@ -100,6 +100,7 @@ func (s *Store) LockAgentHistory() {
 	s.agentCryptoMu.Lock()
 	defer s.agentCryptoMu.Unlock()
 	s.agentLocked = true
+	s.counters.writes.Add(1)
 }
 
 // EnableAgentEncryption migrates existing redacted history atomically. Call
@@ -169,6 +170,7 @@ func (s *Store) EnableAgentEncryption(key []byte) error {
 	}
 	s.agentCipher = a
 	s.agentLocked = false
+	s.counters.writes.Add(1)
 	// Expunge superseded WAL frames when no reader is holding them. This is
 	// not a promise of forensic erasure of backups or filesystem snapshots.
 	_, err = s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")

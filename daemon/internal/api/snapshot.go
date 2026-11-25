@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+	"reflect"
+	"slices"
 	"sort"
 	"time"
 
@@ -35,6 +37,31 @@ type Snapshot struct {
 	Sessions []model.Session `json:"sessions"`
 }
 
+// snapshotReads is the store-derived part of a snapshot, read at one store
+// write generation.
+type snapshotReads struct {
+	sessions []model.Session
+	// events are unclassed: the price class reads the operator's price table.
+	events    []event.Event
+	incidents []store.IncidentDetail
+	// flags carry finding review ids and titles; explanations read live
+	// status and are added per request.
+	flags         []model.Flag
+	reviewLinkErr error
+	reviews       store.ReviewPage
+	// egress is the correlator summary the suggestions were read for.
+	egress      []correlate.UninspectedSummary
+	suggestions []Suggestion
+	hostReadErr error
+	// failedReads are the read failures met before the pattern reads.
+	failedReads []string
+	evidence    posture.Inputs
+}
+
+func (r snapshotReads) healthy() bool {
+	return len(r.failedReads) == 0 && !r.reviews.Degraded && r.hostReadErr == nil && len(r.evidence.FailedReads) == 0
+}
+
 func (a *API) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -48,12 +75,35 @@ func (a *API) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, snapshot)
 }
 
+// currentSnapshot serves the store reads cached for the current write
+// generation, or reads them; only reads without a failure are cached.
+// Patterns and routine groups are computed on every request, between the two
+// read groups as before, so each advisor health check follows its read.
 func (a *API) currentSnapshot() (Snapshot, error) {
-	sessions, events, err := readSnapshotRows(a.store)
-	if err != nil {
-		return Snapshot{}, err
+	now := a.clock()
+	gen := a.store.WriteGeneration()
+	reads, cached := a.flagReads.snapshot.get(gen, now)
+	if !cached {
+		var err error
+		if reads, err = a.readSnapshotRecords(now); err != nil {
+			return Snapshot{}, err
+		}
 	}
-	return a.snapshotWithSessions(sessions, events)
+	flags := a.readPostureFlags(now)
+	if flags.patternErr != nil {
+		return Snapshot{}, flags.patternErr
+	}
+	if flags.routineErr != nil {
+		return Snapshot{}, flags.routineErr
+	}
+	if !cached {
+		a.readSnapshotRest(&reads, now)
+		if reads.healthy() {
+			a.flagReads.snapshot.put(gen, now, reads)
+			a.flagReads.posture.put(gen, now, reads.evidence)
+		}
+	}
+	return a.snapshotFrom(now, reads, flags), nil
 }
 
 func (a *API) incidentListResult(limit int) ([]store.IncidentDetail, error) {
@@ -70,61 +120,81 @@ func (a *API) incidentListResult(limit int) ([]store.IncidentDetail, error) {
 	return incidents, nil
 }
 
-func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Event) (Snapshot, error) {
-	out, err := a.incidentListResult(10)
-	if err != nil {
-		return Snapshot{}, err
+// readSnapshotRecords performs the snapshot's store reads that precede the
+// pattern reads. Each advisor health check follows the read it reports on.
+func (a *API) readSnapshotRecords(now time.Time) (snapshotReads, error) {
+	var r snapshotReads
+	var err error
+	if r.sessions, r.events, err = readSnapshotRows(a.store); err != nil {
+		return r, err
 	}
-	failedReads := a.advisorReadFailures("incident")
-	flags, err := a.store.QueryFlags(store.FlagFilter{
+	if r.incidents, err = a.incidentListResult(10); err != nil {
+		return r, err
+	}
+	r.failedReads = a.advisorReadFailures("incident")
+	r.flags, err = a.store.QueryFlags(store.FlagFilter{
 		Unacted: true,
-		Since:   time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
+		Since:   now.Add(-24 * time.Hour).UTC().Format(time.RFC3339),
 		Limit:   200,
 	})
 	if err != nil {
-		return Snapshot{}, err
+		return r, err
 	}
-	failedReads = append(failedReads, a.advisorReadFailures("flag")...)
-	reviewLinkErr := stampFindingReviewIDs(a.store, flags)
-	if reviewLinkErr != nil {
-		failedReads = append(failedReads, "finding reviews")
+	r.failedReads = append(r.failedReads, a.advisorReadFailures("flag")...)
+	r.reviewLinkErr = stampFindingReviewIDs(a.store, r.flags)
+	if r.reviewLinkErr != nil {
+		r.failedReads = append(r.failedReads, "finding reviews")
 	}
-	for i := range flags {
-		flags[i].Title = posture.HumanFlagTitle(flags[i].Rule)
+	for i := range r.flags {
+		r.flags[i].Title = posture.HumanFlagTitle(r.flags[i].Rule)
 	}
-	a.stampExplains(flags)
-	since := dayWindow(time.Now())
-	patterns, err := a.computePatternsResult(since, patternDefaultMin)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	failedReads = append(failedReads, a.advisorReadFailures("flag")...)
-	routine, err := a.routineGroupsResult(since)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	failedReads = append(failedReads, a.advisorReadFailures("flag")...)
+	return r, nil
+}
+
+// readSnapshotRest performs the snapshot's store reads that follow the
+// pattern reads.
+func (a *API) readSnapshotRest(r *snapshotReads, now time.Time) {
 	reviews, reviewErr := a.store.ListFindingReviews("", 100)
-	if reviewErr != nil || reviewLinkErr != nil {
+	if reviewErr != nil || r.reviewLinkErr != nil {
 		reviews.Degraded = true
 	}
-	suggestions, hostReadErr := a.suggestionListResult()
+	r.reviews = reviews
+	egress := a.uninspectedEgress()
+	r.egress = slices.Clone(egress)
+	r.suggestions, r.hostReadErr = a.suggestionsFor(egress)
+	r.evidence = a.readPostureEvidence(now)
+}
+
+// snapshotFrom completes cached reads with the inputs read on every request:
+// live status, flag explanations, price classes, mutes, patterns, routine
+// groups and posture's live inputs. Suggestions are read again when the
+// correlator summary changed.
+func (a *API) snapshotFrom(now time.Time, r snapshotReads, pf postureFlags) Snapshot {
+	flags := slices.Clone(r.flags)
+	a.stampExplains(flags)
+	suggestions, hostReadErr := r.suggestions, r.hostReadErr
+	if egress := a.uninspectedEgress(); !reflect.DeepEqual(egress, r.egress) {
+		suggestions, hostReadErr = a.suggestionsFor(egress)
+	}
+	failedReads := append(slices.Clone(r.failedReads), pf.failedReads...)
 	if hostReadErr != nil {
 		failedReads = append(failedReads, "host advisor verdicts")
 	}
+	reviews := r.reviews
+	reviews.Reviews = slices.Clone(reviews.Reviews)
 	return Snapshot{
 		Status:      a.currentStatus(),
 		Flags:       flags,
 		Reviews:     reviews,
-		Patterns:    patterns,
-		Routine:     routine,
-		Incidents:   out,
-		Events:      priceClassed(events),
-		Posture:     a.postureWithReadHealth(patterns, routine, failedReads),
-		Suggestions: suggestions,
+		Patterns:    pf.patterns,
+		Routine:     pf.routine,
+		Incidents:   slices.Clone(r.incidents),
+		Events:      priceClassed(slices.Clone(r.events)),
+		Posture:     a.postureFrom(now, pf, failedReads, r.evidence),
+		Suggestions: slices.Clone(suggestions),
 		Mutes:       a.mutePairs(),
-		Sessions:    sessions,
-	}, nil
+		Sessions:    slices.Clone(r.sessions),
+	}
 }
 
 func (a *API) mutePairs() []MutePair {
@@ -154,8 +224,20 @@ func mutePairsFrom(policy map[string][]correlate.Mute) []MutePair {
 }
 
 func (a *API) suggestionListResult() ([]Suggestion, error) {
+	return a.suggestionsFor(a.uninspectedEgress())
+}
+
+// uninspectedEgress is the correlator's live summary; nil without one.
+func (a *API) uninspectedEgress() []correlate.UninspectedSummary {
+	if a.correlator == nil {
+		return nil
+	}
+	return a.correlator.UninspectedEgressSummary()
+}
+
+func (a *API) suggestionsFor(egress []correlate.UninspectedSummary) ([]Suggestion, error) {
 	if a.correlator == nil {
 		return []Suggestion{}, nil
 	}
-	return readEgressSuggestions(a.store, a.correlator.UninspectedEgressSummary())
+	return readEgressSuggestions(a.store, egress)
 }
