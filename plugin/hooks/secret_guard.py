@@ -130,10 +130,19 @@ PRODUCT_PROCESSES = (
 SIGNALLERS = {"kill", "pkill", "killall"}
 LAUNCHCTL_STOP_VERBS = {"bootout", "stop", "kill", "unload", "remove", "disable"}
 OSASCRIPT_STOP_RE = re.compile(r"\b(?:quit|terminate)\b|kill|launchctl", re.I)
-# Agent-written process patterns run on a backtracking engine: one command gets
-# this much CPU time for all of them, and a longer pattern is unverifiable.
-PATTERN_CPU_BUDGET_S = 0.1
+# Bound native matching across all process patterns in one shell command.
+PATTERN_BUDGET_S = 0.1
 PATTERN_MAX_LEN = 256
+PROCESS_OPTION_VALUES = {
+    *"dFgGPtuUOsr",
+    "--delimiter", "--pidfile", "--pgroup", "--group", "--parent", "--terminal",
+    "--euid", "--uid", "--session", "--older", "--runstates", "--signal", "--queue",
+    "--cgroup", "--env", "--ns", "--nslist",
+}
+XARGS_OPTION_VALUES = {
+    *"adEIJLnPRSs", "--arg-file", "--delimiter",
+    "--max-args", "--max-procs", "--max-chars",
+}
 
 INTERPRETERS = {
     "python", "python3", "perl", "ruby", "node", "deno", "bun", "osascript",
@@ -175,14 +184,17 @@ REDIRECT_RE = re.compile(r"(?:\d?>>?|\d?<)\s*([^\s;|&()]+)")
 
 
 def split_segments(command: str) -> list:
-    """Split a command line on shell operators (|, ;, &&, ||, &, newline) —
-    but NOT inside quotes. A naive regex split on ';' breaks `python3 -c
-    "import os; ..."` mid-payload, hiding the payload from every later check."""
+    """Split on unquoted shell operators, retaining the one after each segment."""
     parts, buf = [], []
     quote = None
     i = 0
     while i < len(command):
         c = command[i]
+        if c == "\\" and quote != "'" and i + 1 < len(command):
+            if command[i + 1] != "\n":
+                buf.extend(command[i:i + 2])
+            i += 2
+            continue
         if quote:
             buf.append(c)
             if c == quote:
@@ -194,19 +206,20 @@ def split_segments(command: str) -> list:
             buf.append(c)
             i += 1
             continue
-        if command.startswith("&&", i) or command.startswith("||", i):
-            parts.append("".join(buf))
-            buf = []
-            i += 2
+        if c == "#" and (not buf or buf[-1].isspace()):
+            end = command.find("\n", i)
+            i = end if end != -1 else len(command)
             continue
         if c in "|;\n&":
-            parts.append("".join(buf))
+            pair = command[i:i + 2]
+            operator = pair if pair in ("&&", "||", "|&") else c
+            parts.append(("".join(buf), operator))
             buf = []
-            i += 1
+            i += len(operator)
             continue
         buf.append(c)
         i += 1
-    parts.append("".join(buf))
+    parts.append(("".join(buf), ""))
     return parts
 
 
@@ -1803,17 +1816,22 @@ def source_phrase(s: dict) -> str:
 # --- command parsing --------------------------------------------------------
 
 def segments(command: str, _depth: int = 0):
-    """Yield (argv, raw_segment) for every shell segment, including subshells
-    and shell `-c` payloads. `bash -c "rm ~/.zshrc"` is argv == [bash, -c, ...]
-    at the top level — the real command lives inside the payload string, so
-    recurse into it (depth-capped against `bash -c 'bash -c ...'` chains)."""
-    raw_parts = list(split_segments(command))
-    for m in SUBSHELL_RE.finditer(command):
-        raw_parts.extend(p for p in (m.group(1), m.group(2)) if p)
+    """Yield argv and raw text for every shell segment."""
+    for argv, raw, _ in _segments_with_pipeline(command, _depth):
+        yield argv, raw
 
-    for raw in raw_parts:
+
+def _segments_with_pipeline(command: str, depth: int = 0):
+    """Keep preceding stages of the same pipeline for each xargs invocation."""
+    raw_parts = split_segments(command)
+    for m in SUBSHELL_RE.finditer(command):
+        raw_parts.extend((p, "") for p in (m.group(1), m.group(2)) if p)
+
+    pipeline = []
+    for raw, operator in raw_parts:
         raw = raw.strip()
-        if not raw:
+        if not raw and operator == "\n" and pipeline:
+            # A newline following a pipe continues the same pipeline.
             continue
         try:
             argv = shlex.split(raw, comments=True)
@@ -1821,42 +1839,66 @@ def segments(command: str, _depth: int = 0):
             # Unbalanced quotes: fall back to whitespace tokens rather than
             # denying. The old hook's fail-everything behavior is the bug.
             argv = raw.split()
-        # strip leading env assignments and wrappers
-        i = 0
-        while i < len(argv):
-            head = argv[i]
-            if "=" in head and not head.startswith("-") and "/" not in head.split("=")[0]:
-                i += 1
-            elif os.path.basename(head) in WRAPPERS:
-                i += 1
-            else:
-                break
-        argv = argv[i:]
+        argv = _strip_wrappers(argv)
         if argv:
-            yield argv, raw
-            if _depth < 3 and os.path.basename(argv[0]) in SHELLS:
+            name = cmd_name(argv)
+            yield argv, raw, tuple(pipeline) if name == "xargs" else ()
+            if depth < 3 and name in SHELLS:
                 for flag in ("-c", "-ic", "-lc"):
                     if flag in argv[1:]:
                         payload = argv[argv.index(flag) + 1] if argv.index(flag) + 1 < len(argv) else ""
                         if payload:
-                            yield from segments(payload, _depth + 1)
+                            yield from _segments_with_pipeline(payload, depth + 1)
                         break
+        if argv and operator in ("|", "|&"):
+            pipeline.append((argv, raw))
+        else:
+            pipeline.clear()
+
+
+def _strip_wrappers(argv: list) -> list:
+    for i, token in enumerate(argv):
+        if "=" in token and not token.startswith("-") and "/" not in token.split("=", 1)[0]:
+            continue
+        if os.path.basename(token) not in WRAPPERS:
+            return argv[i:]
+    return []
 
 
 def cmd_name(argv: list) -> str:
     return os.path.basename(argv[0]) if argv else ""
 
 
-class _PatternBudgetExceeded(Exception):
-    pass
-
-
-def _pattern_budget_exceeded(signum, frame):
-    raise _PatternBudgetExceeded
+def _options_and_operands(tokens, value_options, *, interspersed=False):
+    """Parse option clusters and their values without treating values as operands."""
+    options, operands = set(), []
+    tokens = iter(tokens)
+    for token in tokens:
+        if token == "--":
+            operands.extend(tokens)
+            break
+        if not token.startswith("-") or token == "-":
+            operands.append(token)
+            if not interspersed:
+                operands.extend(tokens)
+                break
+        elif token.startswith("--"):
+            option, attached, _ = token.partition("=")
+            options.add(option)
+            if option in value_options and not attached:
+                next(tokens, None)
+        else:
+            for i, option in enumerate(token[1:], 1):
+                options.add(option)
+                if option in value_options:
+                    if i == len(token) - 1:
+                        next(tokens, None)
+                    break
+    return options, operands
 
 
 def selects_product(patterns, full: bool = False, regex: bool = True,
-                    deadline: float | None = None) -> bool:
+                    deadline: float | None = None, *, ignore_case: bool = True) -> bool:
     """True when a process pattern names the product, or as a regex matches a
     product process name (its full command line when ``full``, as pkill -f)."""
     patterns = list(patterns)
@@ -1864,59 +1906,89 @@ def selects_product(patterns, full: bool = False, regex: bool = True,
         return True
     if not regex or not patterns:
         return False
-    if any(len(p) > PATTERN_MAX_LEN for p in patterns):
+    if any(len(p) > PATTERN_MAX_LEN or "\n" in p or "\0" in p for p in patterns):
         return True
     targets = PRODUCT_PROCESSES if full else tuple(os.path.basename(p) for p in PRODUCT_PROCESSES)
-    return _regexes_select(patterns, targets, deadline)
+    return _regexes_select(patterns, targets, deadline, ignore_case)
 
 
-def _regexes_select(patterns: list, targets: tuple, deadline: float | None) -> bool:
-    """Run agent-written regexes under a SIGVTALRM CPU-time deadline. Hitting it or
-    any error counts as a match; the caller's handler and timer are restored."""
-    start = time.process_time()
-    budget = PATTERN_CPU_BUDGET_S if deadline is None else deadline - start
+def _regexes_select(patterns: list, targets: tuple, deadline: float | None, ignore_case: bool) -> bool:
+    """Match static process candidates with native ERE; deny on errors or timeout."""
+    budget = PATTERN_BUDGET_S if deadline is None else deadline - time.monotonic()
     if budget <= 0:
         return True
+    argv = ["/usr/bin/grep", "-Eq"]
+    if ignore_case:
+        argv.append("-i")
+    for pattern in patterns:
+        argv.extend(("-e", pattern))
+    locale_env = {k: v for k, v in os.environ.items() if k == "LANG" or k.startswith("LC_")}
     try:
-        prev_handler = signal.signal(signal.SIGVTALRM, _pattern_budget_exceeded)
-    except (ValueError, OSError):
-        return True  # off the main thread no deadline can be armed
-    prev_delay, prev_interval = signal.setitimer(signal.ITIMER_VIRTUAL, budget)
-    try:
-        try:
-            return any(re.compile(p, re.I).search(t) for p in patterns for t in targets)
-        finally:
-            signal.setitimer(signal.ITIMER_VIRTUAL, 0)
-    except Exception:
+        result = subprocess.run(argv, input="\n".join(targets) + "\n", text=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=budget, env=locale_env)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return True
-    finally:
-        signal.signal(signal.SIGVTALRM, prev_handler)
-        if prev_delay > 0:
-            used = time.process_time() - start
-            signal.setitimer(signal.ITIMER_VIRTUAL, max(prev_delay - used, 1e-6), prev_interval)
+    return result.returncode != 1
 
 
-def stops_product(argv: list, raw: str, command: str, deadline: float | None = None) -> bool:
+def _process_selector_targets_product(argv, deadline, *, from_xargs=False):
+    args = argv[1:]
+    if cmd_name(argv) == "pkill" and args and args[0].startswith("-"):
+        sig = args[0][1:].upper()
+        if sig.isdecimal() or f"SIG{sig.removeprefix('SIG')}" in signal.Signals.__members__:
+            args = args[1:]
+    options, patterns = _options_and_operands(args, PROCESS_OPTION_VALUES, interspersed=True)
+    # Inverse selection and filters without a pattern cannot rule out the guard.
+    if {"v", "--inverse"} & options or (not patterns and not from_xargs):
+        return True
+    return selects_product(patterns, full=bool({"f", "--full"} & options), deadline=deadline,
+                           ignore_case=bool({"i", "--ignore-case"} & options))
+
+
+def stops_product(argv: list, raw: str, pipeline: tuple, deadline: float | None = None) -> bool:
     """True when a segment signals, quits or unloads one of the product's own
     processes. kill resolves only command substitutions, never a bare PID."""
     name = cmd_name(argv)
-    args = [t for t in argv[1:] if not t.startswith("-")]
-    opts = "".join(t[1:] for t in argv[1:] if t.startswith("-") and t[1:].isalpha() and t[1:].islower())
+    from_xargs = name == "xargs"
+    if from_xargs:
+        _, utility = _options_and_operands(argv[1:], XARGS_OPTION_VALUES)
+        argv = _strip_wrappers(utility)
+        name = cmd_name(argv)
+        if name not in SIGNALLERS:
+            # A wrapper's options can hide its executable from the simple
+            # wrapper parser. Preserve the guard for these ambiguous invocations.
+            if (cmd_name(utility) not in WRAPPERS or not name.startswith("-")
+                    or not any(os.path.basename(t) in SIGNALLERS for t in argv[1:])):
+                return False
+        if PRODUCT_RE.search(raw):
+            return True
+        for stage, stage_raw in pipeline:
+            source = cmd_name(stage)
+            # The segment parser cannot resolve the output of a compound producer.
+            if source in ("}", ")", "fi", "done", "esac") or PRODUCT_RE.search(stage_raw):
+                return True
+            if source == "pgrep" and _process_selector_targets_product(stage, deadline):
+                return True
     if name == "pkill":
-        return selects_product(args, full="f" in opts, deadline=deadline)
+        return _process_selector_targets_product(argv, deadline, from_xargs=from_xargs)
     if name == "killall":
-        return selects_product(args, regex="m" in opts, deadline=deadline)
+        patterns = [t for t in argv[1:] if not t.startswith("-")]
+        regex = any("m" in t[1:] and t[1:].islower() for t in argv[1:] if t.startswith("-"))
+        return selects_product(patterns, regex=regex, deadline=deadline)
     if name == "kill":
         for m in SUBSHELL_RE.finditer(raw):
             body = m.group(1) or m.group(2) or ""
-            if PRODUCT_RE.search(body) or any(
-                selects_product([t for t in sub[1:] if not t.startswith("-")], full=True, deadline=deadline)
-                for sub, _ in segments(body)
-            ):
+            if PRODUCT_RE.search(body):
                 return True
+            for sub, _ in segments(body):
+                if cmd_name(sub) == "pgrep":
+                    if _process_selector_targets_product(sub, deadline):
+                        return True
+                elif selects_product([t for t in sub[1:] if not t.startswith("-")],
+                                     full=True, deadline=deadline):
+                    return True
         return False
-    if name == "xargs":
-        return any(os.path.basename(t) in SIGNALLERS for t in args) and bool(PRODUCT_RE.search(command))
     if name == "launchctl":
         return (len(argv) > 2 and argv[1].lower() in LAUNCHCTL_STOP_VERBS
                 and any(PRODUCT_RE.search(t) for t in argv[2:]))
@@ -1960,8 +2032,8 @@ def evaluate_command(command: str) -> Verdict:
     """Decide a shell command: the first matching rule denies, otherwise allow
     carrying the guarded surfaces it touched."""
     touched = []
-    pattern_deadline = time.process_time() + PATTERN_CPU_BUDGET_S
-    for argv, raw in segments(command):
+    pattern_deadline = time.monotonic() + PATTERN_BUDGET_S
+    for argv, raw, pipeline in _segments_with_pipeline(command):
         name = cmd_name(argv)
 
         # 1. security(1) — total ban from agent shells.
@@ -2054,7 +2126,7 @@ def evaluate_command(command: str) -> Verdict:
 
         # 1c. Stopping the product's own processes: kill/pkill/killall (also
         #     via xargs), osascript quit, launchctl bootout/stop/unload/etc.
-        if stops_product(argv, raw, command, pattern_deadline):
+        if stops_product(argv, raw, pipeline, pattern_deadline):
             return denied(
                 "guard-control-stop",
                 "Blocked: an agent tried to stop Secure Agent.",
