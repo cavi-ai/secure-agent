@@ -9,6 +9,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/hookhealth"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -114,7 +115,7 @@ func machineAttentionItems(now time.Time, st Status, hookGap *PostureItem) []Pos
 			Detail: fmt.Sprintf("%d subscriber deliveries dropped since daemon start. Monitoring history may be incomplete.", st.BusDrops)})
 	}
 	if s := st.ESService; s != nil && s.BytesLost > 0 && (!s.Losing || fileTelemetryDisabled(st)) {
-		items = append(items, PostureItem{Kind: "file_evidence_loss", ID: "es-history", Title: "Earlier file monitoring evidence was lost", Detail: esLossDetail(*s)})
+		items = append(items, PostureItem{Kind: "file_evidence_loss", ID: "es-history", Title: "Earlier file monitoring evidence was lost", Detail: posture.ESLossDetail(*s)})
 	}
 	if h := st.StorageHealth; h != nil && len(h.ReadActive) > 0 {
 		items = append(items, PostureItem{Kind: "storage_read_failure", ID: "storage-reads", Severity: 2, Title: "Evidence could not be read", Detail: "Last known activity may be stale. Reads failing: " + strings.Join(h.ReadActive, ", ") + "." + readIssueDetail(*h)})

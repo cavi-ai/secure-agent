@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -18,7 +19,7 @@ func TestCollectorPermissionFailureOverridesFreshSpoolAndGrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	es.SpoolMtime = now
-	items := esServiceItems(now, es)
+	items := posture.ESServiceItems(now, es)
 	if len(items) != 1 || !strings.Contains(items[0].Detail, "Full Disk Access") {
 		t.Fatalf("permission denial hidden behind parent liveness: %+v", items)
 	}
@@ -27,7 +28,7 @@ func TestCollectorPermissionFailureOverridesFreshSpoolAndGrace(t *testing.T) {
 		t.Fatalf("doctor hides permission denial: %s %s", state, detail)
 	}
 	es.Collector.UpdatedAt = now.Add(-2 * time.Minute)
-	if items := esServiceItems(now, es); len(items) != 0 {
+	if items := posture.ESServiceItems(now, es); len(items) != 0 {
 		t.Fatalf("stale authorization status remained current: %+v", items)
 	}
 }
