@@ -65,8 +65,8 @@ func TestRedeliveryAfterCollectorRestartIsDropped(t *testing.T) {
 	dir := t.TempDir()
 	env := seqEnv("n1", "b1", 1)
 	env.Payload = json.RawMessage(`{ "rule": "rule<>&" }`)
-	mustAppend(t, NewStore(dir), env)
-	store := NewStore(dir)
+	mustAppend(t, openTestStore(t, dir), env)
+	store := openTestStore(t, dir)
 	mustAppend(t, store, env)
 	assertDeliveryCount(t, store, 1)
 }
@@ -89,7 +89,7 @@ func TestDistinctEnvelopesWithSameSequenceAreKept(t *testing.T) {
 	}
 	assertDeliveryCount(t, c.store, len(deliveries))
 
-	store := NewStore(c.cfg.StoreDir)
+	store := openTestStore(t, c.cfg.StoreDir)
 	assertDeliveryCount(t, store, len(deliveries))
 	for _, env := range deliveries {
 		mustAppend(t, store, env)
@@ -114,7 +114,7 @@ func TestRedeliveryCoversPublisherRetryHorizon(t *testing.T) {
 			if err := log.Append(env, receivedAt); err != nil {
 				t.Fatal(err)
 			}
-			store := NewStore(dir)
+			store := openTestStore(t, dir)
 			mustAppend(t, store, env)
 			assertDeliveryCount(t, store, tc.want)
 		})

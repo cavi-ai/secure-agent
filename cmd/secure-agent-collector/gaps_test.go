@@ -24,7 +24,7 @@ func seqEnv(nodeID, boot string, seq uint64) Envelope {
 }
 
 func TestGapDetectionCountsMissingSeqs(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := openTestStore(t, t.TempDir())
 	old := time.Now().Add(-10 * time.Minute) // beyond gapGrace
 	applyAt(s, seqEnv("n1", "bootA", 1), old)
 	applyAt(s, seqEnv("n1", "bootA", 2), old)
@@ -42,7 +42,7 @@ func TestGapDetectionCountsMissingSeqs(t *testing.T) {
 }
 
 func TestGapDetectionBootResetIsNotLoss(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := openTestStore(t, t.TempDir())
 	old := time.Now().Add(-10 * time.Minute)
 	applyAt(s, seqEnv("n1", "bootA", 5), old)
 	// Daemon restarted: new boot starts at seq 1. The reset itself is not a
@@ -60,7 +60,7 @@ func TestGapDetectionBootResetIsNotLoss(t *testing.T) {
 }
 
 func TestGapDetectionIgnoresLegacyEnvelopes(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := openTestStore(t, t.TempDir())
 	old := time.Now().Add(-10 * time.Minute)
 	applyAt(s, Envelope{NodeID: "n1", Kind: "flag", Version: "v1", Payload: json.RawMessage(`{}`)}, old)
 	applyAt(s, Envelope{NodeID: "n1", Kind: "flag", Version: "v1", Payload: json.RawMessage(`{}`)}, old)
@@ -71,7 +71,7 @@ func TestGapDetectionIgnoresLegacyEnvelopes(t *testing.T) {
 
 // A hole younger than gapGrace is a retry in flight, not a confirmed loss.
 func TestGapGracePeriod(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := openTestStore(t, t.TempDir())
 	now := time.Now()
 	applyAt(s, seqEnv("n1", "bootA", 1), now)
 	applyAt(s, seqEnv("n1", "bootA", 3), now) // seq 2 missing but recent
@@ -81,7 +81,7 @@ func TestGapGracePeriod(t *testing.T) {
 }
 
 func TestRuleAggregatesCrossNode(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := openTestStore(t, t.TempDir())
 	mk := func(node, rule string, sev int) Envelope {
 		p, _ := json.Marshal(map[string]any{"rule": rule, "severity": sev})
 		return Envelope{NodeID: node, Kind: "flag", Version: "v1", Payload: p}

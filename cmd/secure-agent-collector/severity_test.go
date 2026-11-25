@@ -94,7 +94,7 @@ func TestFleetCriticalCountsFollowIntegerSeverityAfterReplay(t *testing.T) {
 			check()
 			// Stop serving before replacing the replayed state.
 			srv.Close()
-			c.store = NewStore(c.cfg.StoreDir)
+			c.store = openTestStore(t, c.cfg.StoreDir)
 			srv = httptest.NewServer(srv.Config.Handler)
 			defer srv.Close()
 			check()
