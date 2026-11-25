@@ -11,6 +11,7 @@ import contextlib
 import atexit
 import json
 import os
+import signal
 import socketserver
 import subprocess
 import sys
@@ -157,6 +158,7 @@ ALLOW = [
     "echo \"unterminated",
     # signalling other processes and inspecting the product's own stay allowed
     "pkill node",
+    "pkill -f 'node.*server'",
     "killall Dock",
     "kill 1234",
     "kill -9 $(lsof -t -i :3000)",
@@ -1014,6 +1016,46 @@ def _test_deny_reply_carries_the_verdict_texts():
         assert out.get("user_message") == verdict.user_msg, cmd
         assert out.get("agent_message") == verdict.agent_msg, cmd
         assert out.get("hookSpecificOutput", {}).get("permissionDecisionReason") == verdict.agent_msg, cmd
+
+
+REDOS_PATTERN = "([a-zA-Z/. -]+)+z"
+
+
+def _test_agent_process_patterns_are_bounded_and_fail_closed():
+    """A catastrophic pkill -f / killall -m pattern is denied within a second,
+    later segments included, and the caller's signal handler and timer survive."""
+    for flag in ("pkill -f", "killall -m"):
+        for tail in ("", "; pkill secure-agentd"):
+            cmd = f"{flag} '{REDOS_PATTERN}'{tail}"
+            t0 = time.monotonic()
+            try:
+                out = run(bash(cmd))
+            except subprocess.TimeoutExpired:
+                raise AssertionError(f"undecided after 10s: {cmd}")
+            elapsed = time.monotonic() - t0
+            assert out.get("permission") == "deny", f"allowed: {cmd}"
+            assert last_audit_rule() == "guard-control-stop", f"{last_audit_rule()}: {cmd}"
+            assert elapsed < 1.0, f"{elapsed:.2f}s: {cmd}"
+    fired = []
+    handler = lambda *_: fired.append(1)  # noqa: E731
+    prev = signal.signal(signal.SIGVTALRM, handler)
+    try:
+        signal.setitimer(signal.ITIMER_VIRTUAL, 30)
+        with in_process():
+            _assert_denied(secret_guard.evaluate_command(f"pkill -f '{REDOS_PATTERN}'"), "guard-control-stop")
+        remaining, _ = signal.getitimer(signal.ITIMER_VIRTUAL)
+        assert 0 < remaining <= 30 and not fired, (remaining, fired)
+        assert signal.getsignal(signal.SIGVTALRM) is handler
+        signal.setitimer(signal.ITIMER_VIRTUAL, 0)
+        with in_process():
+            _assert_denied(secret_guard.evaluate_command(f"killall -m '{REDOS_PATTERN}'"), "guard-control-stop")
+        assert signal.getitimer(signal.ITIMER_VIRTUAL) == (0.0, 0.0), signal.getitimer(signal.ITIMER_VIRTUAL)
+    finally:
+        signal.setitimer(signal.ITIMER_VIRTUAL, 0)
+        signal.signal(signal.SIGVTALRM, prev)
+
+
+EXTRA_TESTS.append(_test_agent_process_patterns_are_bounded_and_fail_closed)
 
 
 def _test_group_1_security_cli_and_control_plane_executors():

@@ -41,6 +41,7 @@ import os
 import re
 import select
 import shlex
+import signal
 import socket as _socket
 import subprocess
 import sys
@@ -129,6 +130,10 @@ PRODUCT_PROCESSES = (
 SIGNALLERS = {"kill", "pkill", "killall"}
 LAUNCHCTL_STOP_VERBS = {"bootout", "stop", "kill", "unload", "remove", "disable"}
 OSASCRIPT_STOP_RE = re.compile(r"\b(?:quit|terminate)\b|kill|launchctl", re.I)
+# Agent-written process patterns run on a backtracking engine: one command gets
+# this much CPU time for all of them, and a longer pattern is unverifiable.
+PATTERN_CPU_BUDGET_S = 0.1
+PATTERN_MAX_LEN = 256
 
 INTERPRETERS = {
     "python", "python3", "perl", "ruby", "node", "deno", "bun", "osascript",
@@ -1842,39 +1847,70 @@ def cmd_name(argv: list) -> str:
     return os.path.basename(argv[0]) if argv else ""
 
 
-def selects_product(patterns, full: bool = False, regex: bool = True) -> bool:
+class _PatternBudgetExceeded(Exception):
+    pass
+
+
+def _pattern_budget_exceeded(signum, frame):
+    raise _PatternBudgetExceeded
+
+
+def selects_product(patterns, full: bool = False, regex: bool = True,
+                    deadline: float | None = None) -> bool:
     """True when a process pattern names the product, or as a regex matches a
     product process name (its full command line when ``full``, as pkill -f)."""
+    patterns = list(patterns)
+    if any(PRODUCT_RE.search(p) for p in patterns):
+        return True
+    if not regex or not patterns:
+        return False
+    if any(len(p) > PATTERN_MAX_LEN for p in patterns):
+        return True
     targets = PRODUCT_PROCESSES if full else tuple(os.path.basename(p) for p in PRODUCT_PROCESSES)
-    for pat in patterns:
-        if PRODUCT_RE.search(pat):
-            return True
-        if not regex:
-            continue
+    return _regexes_select(patterns, targets, deadline)
+
+
+def _regexes_select(patterns: list, targets: tuple, deadline: float | None) -> bool:
+    """Run agent-written regexes under a SIGVTALRM CPU-time deadline. Hitting it or
+    any error counts as a match; the caller's handler and timer are restored."""
+    start = time.process_time()
+    budget = PATTERN_CPU_BUDGET_S if deadline is None else deadline - start
+    if budget <= 0:
+        return True
+    try:
+        prev_handler = signal.signal(signal.SIGVTALRM, _pattern_budget_exceeded)
+    except (ValueError, OSError):
+        return True  # off the main thread no deadline can be armed
+    prev_delay, prev_interval = signal.setitimer(signal.ITIMER_VIRTUAL, budget)
+    try:
         try:
-            rx = re.compile(pat, re.I)
-        except re.error:
-            continue
-        if any(rx.search(t) for t in targets):
-            return True
-    return False
+            return any(re.compile(p, re.I).search(t) for p in patterns for t in targets)
+        finally:
+            signal.setitimer(signal.ITIMER_VIRTUAL, 0)
+    except Exception:
+        return True
+    finally:
+        signal.signal(signal.SIGVTALRM, prev_handler)
+        if prev_delay > 0:
+            used = time.process_time() - start
+            signal.setitimer(signal.ITIMER_VIRTUAL, max(prev_delay - used, 1e-6), prev_interval)
 
 
-def stops_product(argv: list, raw: str, command: str) -> bool:
+def stops_product(argv: list, raw: str, command: str, deadline: float | None = None) -> bool:
     """True when a segment signals, quits or unloads one of the product's own
     processes. kill resolves only command substitutions, never a bare PID."""
     name = cmd_name(argv)
     args = [t for t in argv[1:] if not t.startswith("-")]
     opts = "".join(t[1:] for t in argv[1:] if t.startswith("-") and t[1:].isalpha() and t[1:].islower())
     if name == "pkill":
-        return selects_product(args, full="f" in opts)
+        return selects_product(args, full="f" in opts, deadline=deadline)
     if name == "killall":
-        return selects_product(args, regex="m" in opts)
+        return selects_product(args, regex="m" in opts, deadline=deadline)
     if name == "kill":
         for m in SUBSHELL_RE.finditer(raw):
             body = m.group(1) or m.group(2) or ""
             if PRODUCT_RE.search(body) or any(
-                selects_product([t for t in sub[1:] if not t.startswith("-")], full=True)
+                selects_product([t for t in sub[1:] if not t.startswith("-")], full=True, deadline=deadline)
                 for sub, _ in segments(body)
             ):
                 return True
@@ -1924,6 +1960,7 @@ def evaluate_command(command: str) -> Verdict:
     """Decide a shell command: the first matching rule denies, otherwise allow
     carrying the guarded surfaces it touched."""
     touched = []
+    pattern_deadline = time.process_time() + PATTERN_CPU_BUDGET_S
     for argv, raw in segments(command):
         name = cmd_name(argv)
 
@@ -2017,7 +2054,7 @@ def evaluate_command(command: str) -> Verdict:
 
         # 1c. Stopping the product's own processes: kill/pkill/killall (also
         #     via xargs), osascript quit, launchctl bootout/stop/unload/etc.
-        if stops_product(argv, raw, command):
+        if stops_product(argv, raw, command, pattern_deadline):
             return denied(
                 "guard-control-stop",
                 "Blocked: an agent tried to stop Secure Agent.",
