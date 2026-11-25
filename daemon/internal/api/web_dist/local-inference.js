@@ -1,9 +1,9 @@
 // Live local-model activity distinguishes residency, sockets and routed requests.
 function createLocalInference({request,drawer,generation,ended}) {
   let active=null, timer=null;
-  const text=value=>escapeHTML(String(value??'Not reported'));
+  const text=value=>String(value??'Not reported');
   const current=state=>active===state && !ended() && state.generation===generation() && state.seq===drawer.seq();
-  const stateName=value=>text(String(value||'unknown').replaceAll('_',' '));
+  const stateName=value=>String(value||'unknown').replaceAll('_',' ');
   function valid(report) {
     const string=value=>typeof value==='string';
     return report && Number.isFinite(Date.parse(report.generated_at)) && report.coverage?.requests==='routed_only'
@@ -16,31 +16,31 @@ function createLocalInference({request,drawer,generation,ended}) {
   }
   function paint(state) {
     let body='<p>Loaded models, connected apps and observed requests are separate signals. Request tracking covers configured gateways; direct traffic can contain inference that this view cannot identify.</p>';
-    if(state.error) body+=`<p role="alert">${text(state.error)}</p>`;
+    if(state.error) body+=html`<p role="alert">${text(state.error)}</p>`;
     if(state.report && !state.error) {
       const report=state.report, coverage=report.coverage;
-      body+=`<p>Discovery: ${stateName(coverage.discovery)} · Connections: ${stateName(coverage.connections)}</p>`;
+      body+=html`<p>Discovery: ${stateName(coverage.discovery)} · Connections: ${stateName(coverage.connections)}</p>`;
       if(coverage.truncated)body+='<p role="status">Observation limits were reached. Coverage is partial.</p>';
-      if(coverage.pending_endpoints)body+=`<p role="status">${text(coverage.pending_endpoints)} endpoint candidates await another metadata batch.</p>`;
-      if(coverage.unclassified_listeners)body+=`<p role="status">${text(coverage.unclassified_listeners)} other listeners remain unclassified. Add a model endpoint to the monitoring configuration to select it explicitly.</p>`;
+      if(coverage.pending_endpoints)body+=html`<p role="status">${text(coverage.pending_endpoints)} endpoint candidates await another metadata batch.</p>`;
+      if(coverage.unclassified_listeners)body+=html`<p role="status">${text(coverage.unclassified_listeners)} other listeners remain unclassified. Add a model endpoint to the monitoring configuration to select it explicitly.</p>`;
       body+='<section><h3>Loaded models</h3>';
       if(!report.servers.length)body+='<p>No model servers identified in the current observations.</p>';
       for(const server of report.servers) {
-        body+=`<article class="monitoring-diagnostic-check"><strong>${text(server.endpoint)}</strong><p>${text(server.runtime)} · Metadata: ${stateName(server.metadata)}</p>`;
-        body+=server.loaded_models.length?`<ul>${server.loaded_models.map(m=>`<li>${text(m.name)}</li>`).join('')}</ul>`:'<p>No loaded models reported.</p>';
-        if(Date.parse(server.observed_at)>0)body+=`<p>Metadata observed: ${text(new Date(server.observed_at).toLocaleString())}</p>`;
+        body+=html`<article class="monitoring-diagnostic-check"><strong>${text(server.endpoint)}</strong><p>${text(server.runtime)} · Metadata: ${stateName(server.metadata)}</p>`;
+        body+=server.loaded_models.length?html`<ul>${server.loaded_models.map(m=>raw(html`<li>${text(m.name)}</li>`))}</ul>`:'<p>No loaded models reported.</p>';
+        if(Date.parse(server.observed_at)>0)body+=html`<p>Metadata observed: ${text(new Date(server.observed_at).toLocaleString())}</p>`;
         body+='</article>';
       }
       body+='</section><section><h3>Connected clients</h3><p>A connection can be idle and does not prove inference.</p>';
-      body+=report.connections.length?report.connections.map(c=>`<p>PID ${text(c.pid)} ${text(c.process||'App not identified')} → ${text(c.endpoint)}</p>`).join(''):'<p>No client connections observed in the latest sample. Short requests can occur between samples.</p>';
+      body+=report.connections.length?report.connections.map(c=>html`<p>PID ${text(c.pid)} ${text(c.process||'App not identified')} → ${text(c.endpoint)}</p>`).join(''):'<p>No client connections observed in the latest sample. Short requests can occur between samples.</p>';
       const running=report.requests.filter(r=>!r.ended_at), recent=report.requests.filter(r=>r.ended_at).slice(-20).reverse();
-      const requestRow=r=>`<article class="monitoring-diagnostic-check"><strong>${text(r.model||'Model not identified')} · ${stateName(r.state)}</strong><p>${text(r.endpoint)} · ${r.pid?`PID ${text(r.pid)}`:'Client not attributed'}${r.session_id?` · Session ${text(r.session_id)}`:''}</p><p>Execution: ${stateName(r.execution)}${Number.isInteger(r.input_tokens)?` · Input tokens: ${text(r.input_tokens)}`:''}${Number.isInteger(r.output_tokens)?` · Output tokens: ${text(r.output_tokens)}`:''}${r.usage_parsing==='partial'?' · Usage parsing incomplete':''}</p></article>`;
+      const requestRow=r=>html`<article class="monitoring-diagnostic-check"><strong>${text(r.model||'Model not identified')} · ${stateName(r.state)}</strong><p>${text(r.endpoint)} · ${r.pid?`PID ${text(r.pid)}`:'Client not attributed'}${r.session_id?` · Session ${text(r.session_id)}`:''}</p><p>Execution: ${stateName(r.execution)}${Number.isInteger(r.input_tokens)?` · Input tokens: ${text(r.input_tokens)}`:''}${Number.isInteger(r.output_tokens)?` · Output tokens: ${text(r.output_tokens)}`:''}${r.usage_parsing==='partial'?' · Usage parsing incomplete':''}</p></article>`;
       body+='</section><section><h3>Requests in progress</h3>';
       body+=running.length?running.map(requestRow).join(''):'<p>No requests observed in progress through configured gateways.</p>';
       body+='</section><section><h3>Gateways</h3>';
-      body+=report.gateways.length?report.gateways.map(g=>`<article class="monitoring-diagnostic-check"><strong>${text(g.listen)} → ${text(g.upstream)}</strong><p>${stateName(g.state)} · Gateway authentication does not isolate the direct backend.</p></article>`).join(''):'<p>No gateway configured. Use the local inference configuration to enable request tracking.</p>';
+      body+=report.gateways.length?report.gateways.map(g=>html`<article class="monitoring-diagnostic-check"><strong>${text(g.listen)} → ${text(g.upstream)}</strong><p>${stateName(g.state)} · Gateway authentication does not isolate the direct backend.</p></article>`).join(''):'<p>No gateway configured. Use the local inference configuration to enable request tracking.</p>';
       body+='</section>';
-      if(recent.length)body+=`<details><summary>Recent requests in this daemon run</summary>${recent.map(requestRow).join('')}</details>`;
+      if(recent.length)body+=html`<details><summary>Recent requests in this daemon run</summary>${recent.map(r=>raw(requestRow(r)))}</details>`;
     } else if(!state.error)body+='<p role="status">Loading local inference activity…</p>';
     if(drawer.body && current(state)) {
       const scroll=drawer.body.scrollTop;drawer.body.innerHTML=body;drawer.body.scrollTop=scroll;

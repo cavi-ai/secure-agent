@@ -2,7 +2,6 @@
 function createServiceRemediation({request,drawer,generation,ended,confirm}) {
   let active=null;
   const current=state=>active===state&&!ended()&&state.generation===generation()&&state.seq===drawer.seq();
-  const text=value=>escapeHTML(String(value??''));
   const validPreview=value=>value&&['id','preview_hash','label','source','endpoint'].every(key=>typeof value[key]==='string'&&value[key].length>0)
     && ['authenticated_inference','browser_hardening'].includes(value.change?.scope)
     && Array.isArray(value.client_fields)&&value.client_fields.every(item=>typeof item==='string')
@@ -12,28 +11,28 @@ function createServiceRemediation({request,drawer,generation,ended,confirm}) {
     && (value.state!=='verified'||Number.isFinite(Date.parse(value.verified_at)));
   function paint(state) {
     const preview=state.preview,receipt=state.receipt;
-    const list=items=>`<ul>${items.map(item=>`<li>${text(item)}</li>`).join('')}</ul>`;
+    const list=items=>raw(html`<ul>${items.map(item=>raw(html`<li>${item}</li>`))}</ul>`);
     let body='<p>Review hardening for a running model service owned by your macOS user. Direct MLX-LM, llama.cpp and Ollama launchd jobs are supported. Other launchers are left unchanged.</p>';
     if(receipt) {
-      body+=`<section class="monitoring-diagnostic-check"><h3>${text(receipt.label)}</h3><p>${text(receipt.state)}</p>`;
-      if(receipt.state==='verified')body+=`<p>Last verified ${text(new Date(receipt.verified_at).toLocaleString())}. ${receipt.change.scope==='browser_hardening'?'Browser hardening only; the local API remains unauthenticated.':'Authentication and direct-backend checks passed for this service at that time.'}</p>${list(receipt.checks)}`;
+      body+=html`<section class="monitoring-diagnostic-check"><h3>${receipt.label}</h3><p>${receipt.state}</p>`;
+      if(receipt.state==='verified')body+=html`<p>Last verified ${new Date(receipt.verified_at).toLocaleString()}. ${receipt.change.scope==='browser_hardening'?'Browser hardening only; the local API remains unauthenticated.':'Authentication and direct-backend checks passed for this service at that time.'}</p>${list(receipt.checks)}`;
       if(receipt.state==='restored_stopped'||receipt.state==='failed_restored_stopped')body+='<p>Original settings were restored. The service is stopped; starting the original service is a separate owner action.</p>';
-      if(receipt.failure)body+=`<p role="alert">${text(receipt.failure)}</p>`;
+      if(receipt.failure)body+=html`<p role="alert">${receipt.failure}</p>`;
       body+='</section>';
     } else if(preview) {
-      body+=`<section><h3>Review before restart</h3><dl class="monitoring-diagnostic-facts"><div><dt>Service</dt><dd>${text(preview.label)}</dd></div><div><dt>Definition</dt><dd>${text(preview.source)}</dd></div><div><dt>Endpoint</dt><dd>${text(preview.endpoint)}</dd></div><div><dt>Protection scope</dt><dd>${text(preview.change.scope.replaceAll('_',' '))}</dd></div></dl>
-        <h4>Settings to apply</h4>${list(preview.settings||[])}<h4>Secure Agent client fields to update</h4>${preview.client_fields.length?list(preview.client_fields):'<p>No matching client fields require changes.</p>'}${list(preview.warnings)}</section>`;
+      body+=html`<section><h3>Review before restart</h3><dl class="monitoring-diagnostic-facts"><div><dt>Service</dt><dd>${preview.label}</dd></div><div><dt>Definition</dt><dd>${preview.source}</dd></div><div><dt>Endpoint</dt><dd>${preview.endpoint}</dd></div><div><dt>Protection scope</dt><dd>${preview.change.scope.replaceAll('_',' ')}</dd></div></dl>
+        <h4>Settings to apply</h4>${list(preview.settings||[])}<h4>Secure Agent client fields to update</h4>${preview.client_fields.length?list(preview.client_fields):raw('<p>No matching client fields require changes.</p>')}${list(preview.warnings)}</section>`;
     } else {
-      body+=`<label for="service-remediation-source">Launchd service definition file</label><input class="service-remediation-input" id="service-remediation-source" type="text" autocomplete="off" spellcheck="false" placeholder="Absolute path to model.plist" value="${text(state.source)}">
+      body+=html`<label for="service-remediation-source">Launchd service definition file</label><input class="service-remediation-input" id="service-remediation-source" type="text" autocomplete="off" spellcheck="false" placeholder="Absolute path to model.plist" value="${state.source}">
         <p>Only the selected running job is changed. A preview reads its definition and capabilities without restarting it.</p>
-        <label for="service-remediation-label">Previously remediated service label</label><input class="service-remediation-input" id="service-remediation-label" type="text" autocomplete="off" spellcheck="false" placeholder="com.example.model" value="${text(state.label)}">`;
+        <label for="service-remediation-label">Previously remediated service label</label><input class="service-remediation-input" id="service-remediation-label" type="text" autocomplete="off" spellcheck="false" placeholder="com.example.model" value="${state.label}">`;
     }
     if(state.busy)body+='<p role="status">Working on the selected service. Verification may load its existing local model.</p>';
-    if(state.error)body+=`<p role="alert">${text(state.error)}</p>`;
+    if(state.error)body+=html`<p role="alert">${state.error}</p>`;
     const disabled=state.busy?' disabled':'';
-    const foot=preview&&!receipt?`<button type="button" class="btn btn-primary" data-action="service-remediation-apply"${disabled}>Apply and verify</button>`
-      :receipt?(['verified','prepared','applying','failed_no_change','rollback_required'].includes(receipt.state)?`<button type="button" class="btn btn-danger" data-action="service-remediation-rollback"${disabled}>Restore original settings</button>`:'')
-      :`<button type="button" class="btn btn-primary" data-action="service-remediation-preview"${disabled}>Preview hardening</button><button type="button" class="btn btn-ghost" data-action="service-remediation-lookup"${disabled}>Read last result</button>`;
+    const foot=preview&&!receipt?html`<button type="button" class="btn btn-primary" data-action="service-remediation-apply"${disabled}>Apply and verify</button>`
+      :receipt?(['verified','prepared','applying','failed_no_change','rollback_required'].includes(receipt.state)?html`<button type="button" class="btn btn-danger" data-action="service-remediation-rollback"${disabled}>Restore original settings</button>`:'')
+      :html`<button type="button" class="btn btn-primary" data-action="service-remediation-preview"${disabled}>Preview hardening</button><button type="button" class="btn btn-ghost" data-action="service-remediation-lookup"${disabled}>Read last result</button>`;
     drawer.setMode('service-remediation');drawer.open({title:'Review service hardening',icon:'server',back:state.back,body,foot});state.seq=drawer.seq();
   }
   function open({back}={}) {active={back,generation:generation(),source:'',label:'',preview:null,receipt:null,error:'',busy:false};paint(active);}
