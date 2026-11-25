@@ -5,50 +5,44 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
 func TestResolveWakesRequest(t *testing.T) {
-	b := NewBroker(2 * time.Second)
-	done := make(chan Decision, 1)
-	go func() {
-		done <- b.Request(context.Background(), Pending{ID: "p1", Agent: "claude", RuleID: "cloud-creds"})
-	}()
+	synctest.Test(t, func(t *testing.T) {
+		b := NewBroker(2 * time.Second)
+		done := make(chan Decision, 1)
+		go func() {
+			done <- b.Request(context.Background(), Pending{ID: "p1", Agent: "claude", RuleID: "cloud-creds"})
+		}()
 
-	// Wait for it to register as pending, then resolve.
-	deadline := time.After(time.Second)
-	for {
-		if len(b.Pending()) == 1 {
-			break
+		// Wait for it to register as pending, then resolve.
+		waitPending(t, b, 1)
+		if !b.Resolve("p1", Decision{Verdict: "allow", Scope: "always"}) {
+			t.Fatal("resolve returned false")
 		}
-		select {
-		case <-deadline:
-			t.Fatal("request never became pending")
-		default:
-			time.Sleep(5 * time.Millisecond)
+		got := <-done
+		if got.Verdict != "allow" || got.Scope != "always" {
+			t.Fatalf("decision = %+v", got)
 		}
-	}
-	if !b.Resolve("p1", Decision{Verdict: "allow", Scope: "always"}) {
-		t.Fatal("resolve returned false")
-	}
-	got := <-done
-	if got.Verdict != "allow" || got.Scope != "always" {
-		t.Fatalf("decision = %+v", got)
-	}
-	if len(b.Pending()) != 0 {
-		t.Fatal("pending not cleared after resolve")
-	}
+		if len(b.Pending()) != 0 {
+			t.Fatal("pending not cleared after resolve")
+		}
+	})
 }
 
 func TestRequestTimesOutToDeny(t *testing.T) {
-	b := NewBroker(50 * time.Millisecond)
-	got := b.Request(context.Background(), Pending{ID: "p2", Agent: "claude", RuleID: "ssh-keys"})
-	if got.Verdict != "deny" || got.Scope != "once" || got.Reason != "timeout" {
-		t.Fatalf("timeout decision = %+v, want deny/once/timeout", got)
-	}
-	if len(b.Pending()) != 0 {
-		t.Fatal("timed-out request left dangling in pending")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		b := NewBroker(50 * time.Millisecond)
+		got := b.Request(context.Background(), Pending{ID: "p2", Agent: "claude", RuleID: "ssh-keys"})
+		if got.Verdict != "deny" || got.Scope != "once" || got.Reason != "timeout" {
+			t.Fatalf("timeout decision = %+v, want deny/once/timeout", got)
+		}
+		if len(b.Pending()) != 0 {
+			t.Fatal("timed-out request left dangling in pending")
+		}
+	})
 }
 
 // TestConcurrentRequestsWithDistinctIDsResolveIndependently guards against the
@@ -57,169 +51,151 @@ func TestRequestTimesOutToDeny(t *testing.T) {
 // calls prompting at the same time) must both surface in Pending() and each
 // must resolve to its own decision, not the other's.
 func TestConcurrentRequestsWithDistinctIDsResolveIndependently(t *testing.T) {
-	b := NewBroker(2 * time.Second)
-	done1 := make(chan Decision, 1)
-	done2 := make(chan Decision, 1)
-	go func() {
-		done1 <- b.Request(context.Background(), Pending{ID: "c1", Agent: "claude", RuleID: "cloud-creds"})
-	}()
-	go func() {
-		done2 <- b.Request(context.Background(), Pending{ID: "c2", Agent: "cursor", RuleID: "ssh-keys"})
-	}()
+	synctest.Test(t, func(t *testing.T) {
+		b := NewBroker(2 * time.Second)
+		done1 := make(chan Decision, 1)
+		done2 := make(chan Decision, 1)
+		go func() {
+			done1 <- b.Request(context.Background(), Pending{ID: "c1", Agent: "claude", RuleID: "cloud-creds"})
+		}()
+		go func() {
+			done2 <- b.Request(context.Background(), Pending{ID: "c2", Agent: "cursor", RuleID: "ssh-keys"})
+		}()
 
-	deadline := time.After(time.Second)
-	for {
-		if len(b.Pending()) == 2 {
-			break
+		waitPending(t, b, 2)
+
+		if !b.Resolve("c1", Decision{Verdict: "allow", Scope: "once"}) {
+			t.Fatal("resolve c1 returned false")
 		}
-		select {
-		case <-deadline:
-			t.Fatalf("both requests never became pending, got %d", len(b.Pending()))
-		default:
-			time.Sleep(5 * time.Millisecond)
+		if !b.Resolve("c2", Decision{Verdict: "deny", Scope: "always"}) {
+			t.Fatal("resolve c2 returned false")
 		}
-	}
 
-	if !b.Resolve("c1", Decision{Verdict: "allow", Scope: "once"}) {
-		t.Fatal("resolve c1 returned false")
-	}
-	if !b.Resolve("c2", Decision{Verdict: "deny", Scope: "always"}) {
-		t.Fatal("resolve c2 returned false")
-	}
-
-	got1 := <-done1
-	got2 := <-done2
-	if got1.Verdict != "allow" || got1.Scope != "once" {
-		t.Fatalf("c1 decision = %+v, want allow/once", got1)
-	}
-	if got2.Verdict != "deny" || got2.Scope != "always" {
-		t.Fatalf("c2 decision = %+v, want deny/always", got2)
-	}
-	if len(b.Pending()) != 0 {
-		t.Fatal("pending not cleared after both resolved")
-	}
+		got1 := <-done1
+		got2 := <-done2
+		if got1.Verdict != "allow" || got1.Scope != "once" {
+			t.Fatalf("c1 decision = %+v, want allow/once", got1)
+		}
+		if got2.Verdict != "deny" || got2.Scope != "always" {
+			t.Fatalf("c2 decision = %+v, want deny/always", got2)
+		}
+		if len(b.Pending()) != 0 {
+			t.Fatal("pending not cleared after both resolved")
+		}
+	})
 }
 
 // A request identical to one already in flight must block on the same waiter:
 // one resolution answers both, and only one prompt is queued.
 func TestDuplicateRequestsShareOneWaiter(t *testing.T) {
-	b := NewBroker(2 * time.Second)
-	d1 := make(chan Decision, 1)
-	d2 := make(chan Decision, 1)
-	p := Pending{ID: "a1", Agent: "claude", Tool: "Read", Path: "/Users/x/.aws/credentials", RuleID: "cloud-creds"}
-	go func() { d1 <- b.Request(context.Background(), p) }()
-	// Wait until the first is queued so the second is guaranteed a duplicate.
-	for len(b.Pending()) == 0 {
-		time.Sleep(2 * time.Millisecond)
-	}
-	dup := p
-	dup.ID = "a2"
-	go func() { d2 <- b.Request(context.Background(), dup) }()
-	time.Sleep(30 * time.Millisecond)
-	if got := len(b.Pending()); got != 1 {
-		t.Fatalf("pending = %d, want 1 (duplicates share a waiter)", got)
-	}
-	if !b.Resolve("a1", Decision{Verdict: "allow", Scope: "always"}) {
-		t.Fatal("resolve a1 returned false")
-	}
-	got1, got2 := <-d1, <-d2
-	if got1.Verdict != "allow" || got2.Verdict != "allow" {
-		t.Fatalf("duplicate got %+v / %+v, want both allow", got1, got2)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		b := NewBroker(2 * time.Second)
+		d1 := make(chan Decision, 1)
+		d2 := make(chan Decision, 1)
+		p := Pending{ID: "a1", Agent: "claude", Tool: "Read", Path: "/Users/x/.aws/credentials", RuleID: "cloud-creds"}
+		go func() { d1 <- b.Request(context.Background(), p) }()
+		// Wait until the first is queued so the second is guaranteed a duplicate.
+		waitPending(t, b, 1)
+		dup := p
+		dup.ID = "a2"
+		go func() { d2 <- b.Request(context.Background(), dup) }()
+		synctest.Wait()
+		if got := len(b.Pending()); got != 1 {
+			t.Fatalf("pending = %d, want 1 (duplicates share a waiter)", got)
+		}
+		b.mu.Lock()
+		joined := len(b.waiters["a1"].chs)
+		b.mu.Unlock()
+		if joined != 2 {
+			t.Fatalf("waiter channels = %d, want 2", joined)
+		}
+		if !b.Resolve("a1", Decision{Verdict: "allow", Scope: "always"}) {
+			t.Fatal("resolve a1 returned false")
+		}
+		got1, got2 := <-d1, <-d2
+		if got1.Verdict != "allow" || got2.Verdict != "allow" {
+			t.Fatalf("duplicate got %+v / %+v, want both allow", got1, got2)
+		}
+	})
 }
 
 func TestBrokerDedupKeyIncludesSession(t *testing.T) {
-	b := NewBroker(time.Second)
-	done := make(chan Decision, 2)
-	for _, sid := range []string{"one", "two"} {
-		p := Pending{ID: sid, SessionID: sid, Agent: "claude", Tool: "Read", Path: "/secret", RuleID: "rule"}
-		go func() { done <- b.Request(context.Background(), p) }()
-	}
-	deadline := time.Now().Add(time.Second)
-	for len(b.Pending()) != 2 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if got := len(b.Pending()); got != 2 {
-		t.Fatalf("pending = %d, want 2", got)
-	}
-	b.Resolve("one", Decision{Verdict: "deny", Scope: "once"})
-	b.Resolve("two", Decision{Verdict: "deny", Scope: "once"})
-	<-done
-	<-done
+	synctest.Test(t, func(t *testing.T) {
+		b := NewBroker(time.Second)
+		done := make(chan Decision, 2)
+		for _, sid := range []string{"one", "two"} {
+			p := Pending{ID: sid, SessionID: sid, Agent: "claude", Tool: "Read", Path: "/secret", RuleID: "rule"}
+			go func() { done <- b.Request(context.Background(), p) }()
+		}
+		waitPending(t, b, 2)
+		b.Resolve("one", Decision{Verdict: "deny", Scope: "once"})
+		b.Resolve("two", Decision{Verdict: "deny", Scope: "once"})
+		<-done
+		<-done
+	})
 }
 
 // A request naming other send kinds is its own prompt: an answer covers the
 // kinds its prompt showed.
 func TestBrokerDedupKeyIncludesSendKinds(t *testing.T) {
-	b := NewBroker(time.Second)
-	done := make(chan Decision, 2)
-	for i, kinds := range [][]string{{"git-push"}, {"git-push", "network-send"}} {
-		p := Pending{ID: []string{"one", "two"}[i], SessionID: "s", Agent: "codex", Tool: "Bash", Path: "git push origin", RuleID: "untrusted-egress", Categories: kinds}
-		go func() { done <- b.Request(context.Background(), p) }()
-	}
-	deadline := time.Now().Add(time.Second)
-	for len(b.Pending()) != 2 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if got := len(b.Pending()); got != 2 {
-		t.Fatalf("pending = %d, want 2", got)
-	}
-	b.Resolve("one", Decision{Verdict: "deny", Scope: "once"})
-	b.Resolve("two", Decision{Verdict: "deny", Scope: "once"})
-	<-done
-	<-done
+	synctest.Test(t, func(t *testing.T) {
+		b := NewBroker(time.Second)
+		done := make(chan Decision, 2)
+		for i, kinds := range [][]string{{"git-push"}, {"git-push", "network-send"}} {
+			p := Pending{ID: []string{"one", "two"}[i], SessionID: "s", Agent: "codex", Tool: "Bash", Path: "git push origin", RuleID: "untrusted-egress", Categories: kinds}
+			go func() { done <- b.Request(context.Background(), p) }()
+		}
+		waitPending(t, b, 2)
+		b.Resolve("one", Decision{Verdict: "deny", Scope: "once"})
+		b.Resolve("two", Decision{Verdict: "deny", Scope: "once"})
+		<-done
+		<-done
+	})
 }
 
 // Once the queue is full, further requests get an immediate explicit deny
 // instead of piling up.
 func TestRequestOverCapIsDeniedImmediately(t *testing.T) {
-	// Queued requests never time out here, so an overflow that waited for a
-	// slot or a timeout would block the test instead of returning.
-	b := NewBroker(time.Hour)
-	var wg sync.WaitGroup
-	queued := make(chan struct{}, MaxWaiters)
-	for i := 0; i < MaxWaiters; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			b.Request(context.Background(), Pending{ID: fmt.Sprintf("w%d", i), Agent: "claude", RuleID: "r", Path: fmt.Sprintf("/p%d", i), Tool: "Read"})
-			queued <- struct{}{}
-		}(i)
-	}
-	// Wait for the queue to fill.
-	deadline := time.After(2 * time.Second)
-	for len(b.Pending()) < MaxWaiters {
+	synctest.Test(t, func(t *testing.T) {
+		// Queued requests never time out here, so an overflow that waited for a
+		// slot or a timeout would block the test instead of returning.
+		b := NewBroker(time.Hour)
+		var wg sync.WaitGroup
+		for i := 0; i < MaxWaiters; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				b.Request(context.Background(), Pending{ID: fmt.Sprintf("w%d", i), Agent: "claude", RuleID: "r", Path: fmt.Sprintf("/p%d", i), Tool: "Read"})
+			}(i)
+		}
+		// Wait for the queue to fill.
+		waitPending(t, b, MaxWaiters)
+		// This one must be refused without waiting for a slot.
+		overflow := make(chan Decision, 1)
+		go func() {
+			overflow <- b.Request(context.Background(), Pending{ID: "overflow", Agent: "claude", RuleID: "r", Path: "/overflow", Tool: "Read"})
+		}()
+		synctest.Wait()
 		select {
-		case <-deadline:
-			t.Fatalf("queue never filled: %d", len(b.Pending()))
+		case d := <-overflow:
+			if d.Verdict != "deny" || d.Reason != "queue-full" {
+				t.Fatalf("overflow decision = %+v, want deny/queue-full", d)
+			}
 		default:
-			time.Sleep(2 * time.Millisecond)
+			t.Fatal("overflow request blocked behind a full queue")
 		}
-	}
-	// This one must be refused without waiting for a slot.
-	overflow := make(chan Decision, 1)
-	go func() {
-		overflow <- b.Request(context.Background(), Pending{ID: "overflow", Agent: "claude", RuleID: "r", Path: "/overflow", Tool: "Read"})
-	}()
-	select {
-	case d := <-overflow:
-		if d.Verdict != "deny" || d.Reason != "queue-full" {
-			t.Fatalf("overflow decision = %+v, want deny/queue-full", d)
+		// Drain: resolve everything so the goroutines exit.
+		b.mu.Lock()
+		ids := make([]string, 0, len(b.waiters))
+		for id := range b.waiters {
+			ids = append(ids, id)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("overflow request blocked behind a full queue")
-	}
-	// Drain: resolve everything so the goroutines exit.
-	b.mu.Lock()
-	ids := make([]string, 0, len(b.waiters))
-	for id := range b.waiters {
-		ids = append(ids, id)
-	}
-	b.mu.Unlock()
-	for _, id := range ids {
-		b.Resolve(id, Decision{Verdict: "deny", Scope: "once"})
-	}
-	wg.Wait()
+		b.mu.Unlock()
+		for _, id := range ids {
+			b.Resolve(id, Decision{Verdict: "deny", Scope: "once"})
+		}
+		wg.Wait()
+	})
 }
 
 // Resolve iterates w.chs while concurrent duplicate Requests append to it.
@@ -232,209 +208,186 @@ func TestRequestOverCapIsDeniedImmediately(t *testing.T) {
 // the duplicates have joined before resolving, and resolve the rest's fresh
 // waiters in the drain phase.
 func TestResolveConcurrentWithDuplicateRequests(t *testing.T) {
-	// Short broker timeout: any duplicate that ends up with its own waiter
-	// after the drain window fails fast instead of stalling the suite.
-	b := NewBroker(400 * time.Millisecond)
-	p := Pending{ID: "r1", Agent: "claude", Tool: "Read", Path: "/Users/x/.aws/credentials", RuleID: "cloud-creds"}
-	done := make(chan Decision, 1)
-	go func() { done <- b.Request(context.Background(), p) }()
-	for len(b.Pending()) == 0 {
-		time.Sleep(time.Millisecond)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		b := NewBroker(400 * time.Millisecond)
+		p := Pending{ID: "r1", Agent: "claude", Tool: "Read", Path: "/Users/x/.aws/credentials", RuleID: "cloud-creds"}
+		done := make(chan Decision, 1)
+		go func() { done <- b.Request(context.Background(), p) }()
+		waitPending(t, b, 1)
 
-	const dups = 64
-	const joined = dups / 2 // these MUST share r1's waiter
-	var wg sync.WaitGroup
-	results := make(chan Decision, dups)
-	for i := 0; i < dups; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			dup := p
-			dup.ID = fmt.Sprintf("r1-dup%d", i)
-			results <- b.Request(context.Background(), dup)
-		}(i)
-	}
+		const dups = 64
+		const joined = dups / 2 // these MUST share r1's waiter
+		var wg sync.WaitGroup
+		results := make(chan Decision, dups)
+		startDup := func(i int) {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				dup := p
+				dup.ID = fmt.Sprintf("r1-dup%d", i)
+				results <- b.Request(context.Background(), dup)
+			}()
+		}
+		for i := 0; i < joined; i++ {
+			startDup(i)
+		}
 
-	// Wait until `joined` duplicates have actually registered on r1's waiter
-	// (same-package access; this is what the race detector needs to see —
-	// appends concurrent with Resolve's iteration).
-	waitJoined := func(want int) {
-		deadline := time.After(5 * time.Second)
+		// Every duplicate in the first half has registered on r1's waiter
+		// (same-package access; this is what the race detector needs to see —
+		// appends concurrent with Resolve's iteration).
+		synctest.Wait()
+		b.mu.Lock()
+		n := len(b.waiters["r1"].chs)
+		b.mu.Unlock()
+		if n != joined+1 { // +1 for the primary's own channel
+			t.Fatalf("%d channels joined r1's waiter, want %d", n, joined+1)
+		}
+
+		// Resolve concurrently with the remaining appends — the race window. Note:
+		// once the primary's channel receives a decision, Request returns and the
+		// waiter is deleted; late duplicates then create their own waiters (a
+		// second prompt — correct). We don't require all 64 to share the waiter,
+		// only that appends overlap resolves.
+		resolverDone := make(chan struct{})
+		go func() {
+			defer close(resolverDone)
+			for i := 0; i < 1000; i++ {
+				b.Resolve("r1", Decision{Verdict: "allow", Scope: "once"})
+			}
+		}()
+		for i := joined; i < dups; i++ {
+			startDup(i)
+		}
+		<-resolverDone
+		// One final fan-out in case the waiter survived the window.
+		b.Resolve("r1", Decision{Verdict: "allow", Scope: "once"})
+
+		// Drain: late duplicates that created their own waiters get resolved too.
 		for {
+			synctest.Wait()
 			b.mu.Lock()
-			n := 0
-			if w, ok := b.waiters["r1"]; ok {
-				n = len(w.chs)
+			ids := make([]string, 0, len(b.waiters))
+			for id := range b.waiters {
+				ids = append(ids, id)
 			}
 			b.mu.Unlock()
-			if n >= want {
-				return
+			if len(ids) == 0 {
+				break
 			}
-			select {
-			case <-deadline:
-				t.Fatalf("only %d channels joined r1's waiter, want %d", n, want)
-			default:
-				time.Sleep(time.Millisecond)
+			for _, id := range ids {
+				b.Resolve(id, Decision{Verdict: "allow", Scope: "once"})
 			}
 		}
-	}
-	waitJoined(joined + 1) // +1 for the primary's own channel
 
-	// Resolve concurrently with the remaining appends — the race window. Note:
-	// once the primary's channel receives a decision, Request returns and the
-	// waiter is deleted; late duplicates then create their own waiters (a
-	// second prompt — correct). We don't require all 64 to share the waiter,
-	// only that appends overlap resolves.
-	stopResolving := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case <-stopResolving:
-				return
-			default:
-				b.Resolve("r1", Decision{Verdict: "allow", Scope: "once"})
-				time.Sleep(time.Millisecond)
+		wg.Wait()
+		close(results)
+		allowed := 0
+		for d := range results {
+			if d.Verdict == "allow" {
+				allowed++
 			}
 		}
-	}()
-	time.Sleep(150 * time.Millisecond)
-	close(stopResolving)
-	// One final fan-out in case the waiter survived the window.
-	b.Resolve("r1", Decision{Verdict: "allow", Scope: "once"})
-
-	// Drain: late duplicates that created their own waiters get resolved too.
-	deadline := time.After(5 * time.Second)
-	for {
-		b.mu.Lock()
-		ids := make([]string, 0, len(b.waiters))
-		for id := range b.waiters {
-			ids = append(ids, id)
+		if allowed < joined {
+			t.Fatalf("only %d/%d duplicates got the fanned-out decision, want at least %d", allowed, dups, joined)
 		}
-		b.mu.Unlock()
-		if len(ids) == 0 {
-			break
-		}
-		for _, id := range ids {
-			b.Resolve(id, Decision{Verdict: "allow", Scope: "once"})
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("waiters never drained: %v", ids)
-		default:
-			time.Sleep(5 * time.Millisecond)
-		}
-	}
-
-	wg.Wait()
-	close(results)
-	allowed := 0
-	for d := range results {
-		if d.Verdict == "allow" {
-			allowed++
-		}
-	}
-	if allowed < joined {
-		t.Fatalf("only %d/%d duplicates got the fanned-out decision, want at least %d", allowed, dups, joined)
-	}
-	<-done
+		<-done
+	})
 }
 
 // Pending must come back oldest-first so the menubar prompts the
 // longest-waiting request first. Distinct paths so the dedup key does not
 // collapse them into one waiter.
 func TestPendingReturnsOldestFirst(t *testing.T) {
-	b := NewBroker(2 * time.Second)
-	done := make(chan Decision, 3)
-	ids := []string{"first", "second", "third"}
-	for i, id := range ids {
-		path := fmt.Sprintf("/p%d", i)
-		go func(id, path string) {
-			done <- b.Request(context.Background(), Pending{ID: id, Agent: "a", RuleID: "r", Path: path, Tool: "Read"})
-		}(id, path)
-		waitPending(t, b, i+1) // arrival order: each request is queued before the next starts
-	}
-	p := b.Pending()
-	if len(p) != 3 || p[0].ID != "first" || p[2].ID != "third" {
-		t.Fatalf("pending order = %v, want first,second,third", p)
-	}
-	for _, id := range ids {
-		b.Resolve(id, Decision{Verdict: "allow", Scope: "once"})
-	}
+	synctest.Test(t, func(t *testing.T) {
+		b := NewBroker(2 * time.Second)
+		done := make(chan Decision, 3)
+		ids := []string{"first", "second", "third"}
+		for i, id := range ids {
+			path := fmt.Sprintf("/p%d", i)
+			go func(id, path string) {
+				done <- b.Request(context.Background(), Pending{ID: id, Agent: "a", RuleID: "r", Path: path, Tool: "Read"})
+			}(id, path)
+			waitPending(t, b, i+1) // arrival order: each request is queued before the next starts
+		}
+		p := b.Pending()
+		if len(p) != 3 || p[0].ID != "first" || p[2].ID != "third" {
+			t.Fatalf("pending order = %v, want first,second,third", p)
+		}
+		for _, id := range ids {
+			b.Resolve(id, Decision{Verdict: "allow", Scope: "once"})
+		}
+	})
 }
 
+// waitPending must run inside a synctest bubble: it returns once every other
+// goroutine is blocked, then checks the queue length.
 func waitPending(t *testing.T, b *Broker, n int) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for len(b.Pending()) != n {
-		if time.Now().After(deadline) {
-			t.Fatalf("pending = %d, want %d", len(b.Pending()), n)
-		}
-		time.Sleep(time.Millisecond)
+	synctest.Wait()
+	if got := len(b.Pending()); got != n {
+		t.Fatalf("pending = %d, want %d", got, n)
 	}
 }
 
 // A request whose hook stops waiting withdraws its prompt: nothing is left
 // to answer.
 func TestEndedRequestWithdrawsItsPrompt(t *testing.T) {
-	b := NewBroker(time.Minute)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan Decision, 1)
-	go func() {
-		done <- b.Request(ctx, Pending{ID: "w1", Agent: "claude", RuleID: "cloud-creds", Path: "/p", Tool: "Read"})
-	}()
-	waitPending(t, b, 1)
-	cancel()
-	if d := <-done; d.Verdict != "deny" || d.Reason != "withdrawn" {
-		t.Fatalf("decision = %+v, want deny/withdrawn", d)
-	}
-	if got := b.Pending(); len(got) != 0 {
-		t.Fatalf("pending after the request ended = %+v, want none", got)
-	}
-	if b.Resolve("w1", Decision{Verdict: "allow", Scope: "always"}) {
-		t.Fatal("Resolve reached a withdrawn prompt")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		b := NewBroker(time.Minute)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan Decision, 1)
+		go func() {
+			done <- b.Request(ctx, Pending{ID: "w1", Agent: "claude", RuleID: "cloud-creds", Path: "/p", Tool: "Read"})
+		}()
+		waitPending(t, b, 1)
+		cancel()
+		if d := <-done; d.Verdict != "deny" || d.Reason != "withdrawn" {
+			t.Fatalf("decision = %+v, want deny/withdrawn", d)
+		}
+		if got := b.Pending(); len(got) != 0 {
+			t.Fatalf("pending after the request ended = %+v, want none", got)
+		}
+		if b.Resolve("w1", Decision{Verdict: "allow", Scope: "always"}) {
+			t.Fatal("Resolve reached a withdrawn prompt")
+		}
+	})
 }
 
 // When the first of two identical requests leaves, the prompt stays for the
 // one still waiting, and the answer reaches it.
 func TestDuplicateKeepsThePromptAfterTheFirstLeaves(t *testing.T) {
-	b := NewBroker(time.Minute)
-	ctx, cancel := context.WithCancel(context.Background())
-	p := Pending{ID: "d1", Agent: "claude", RuleID: "cloud-creds", Path: "/p", Tool: "Read"}
-	first, second := make(chan Decision, 1), make(chan Decision, 1)
-	go func() { first <- b.Request(ctx, p) }()
-	waitPending(t, b, 1)
-	dup := p
-	dup.ID = "d2"
-	go func() { second <- b.Request(context.Background(), dup) }()
-	deadline := time.Now().Add(time.Second)
-	for {
+	synctest.Test(t, func(t *testing.T) {
+		b := NewBroker(time.Minute)
+		ctx, cancel := context.WithCancel(context.Background())
+		p := Pending{ID: "d1", Agent: "claude", RuleID: "cloud-creds", Path: "/p", Tool: "Read"}
+		first, second := make(chan Decision, 1), make(chan Decision, 1)
+		go func() { first <- b.Request(ctx, p) }()
+		waitPending(t, b, 1)
+		dup := p
+		dup.ID = "d2"
+		go func() { second <- b.Request(context.Background(), dup) }()
+		synctest.Wait()
 		b.mu.Lock()
 		n := len(b.waiters["d1"].chs)
 		b.mu.Unlock()
-		if n == 2 {
-			break
+		if n != 2 {
+			t.Fatalf("duplicate never joined: %d channels, want 2", n)
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("duplicate never joined")
+		cancel()
+		if d := <-first; d.Reason != "withdrawn" {
+			t.Fatalf("first = %+v, want withdrawn", d)
 		}
-		time.Sleep(time.Millisecond)
-	}
-	cancel()
-	if d := <-first; d.Reason != "withdrawn" {
-		t.Fatalf("first = %+v, want withdrawn", d)
-	}
-	if got := b.Pending(); len(got) != 1 || got[0].ID != "d1" {
-		t.Fatalf("pending after the first left = %+v, want d1", got)
-	}
-	if !b.Resolve("d1", Decision{Verdict: "allow", Scope: "once"}) {
-		t.Fatal("Resolve did not reach the remaining request")
-	}
-	if d := <-second; d.Verdict != "allow" {
-		t.Fatalf("second = %+v, want allow", d)
-	}
-	if got := b.Pending(); len(got) != 0 {
-		t.Fatalf("pending after resolve = %+v, want none", got)
-	}
+		if got := b.Pending(); len(got) != 1 || got[0].ID != "d1" {
+			t.Fatalf("pending after the first left = %+v, want d1", got)
+		}
+		if !b.Resolve("d1", Decision{Verdict: "allow", Scope: "once"}) {
+			t.Fatal("Resolve did not reach the remaining request")
+		}
+		if d := <-second; d.Verdict != "allow" {
+			t.Fatalf("second = %+v, want allow", d)
+		}
+		if got := b.Pending(); len(got) != 0 {
+			t.Fatalf("pending after resolve = %+v, want none", got)
+		}
+	})
 }
